@@ -18,12 +18,12 @@ Struct with enum field and array that grows.
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
-export union Op
+union Op
 		add(value Integer)
 		sub(value Integer)
 end 'Op'
 
-export type Block
+type Block
 		export var id as Integer
 		export var ops as IntArray
 		export var terminator as Op
@@ -51,13 +51,13 @@ Struct with nested enum and array that grows past initial capacity.
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
-export union Instruction
+union Instruction
 		load(slot Integer)
 		store(slot Integer)
 		nop
 end 'Instruction'
 
-export type Function
+type Function
 		export var name as Integer
 		export var body as IntArray
 		export var terminator as Instruction
@@ -87,12 +87,12 @@ Array of structs containing enum fields, with array growth.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-export union Tag
+union Tag
 		number(n Integer)
 		text(len Integer)
 end 'Tag'
 
-export type Entry
+type Entry
 		export var id as Integer
 		export var tag as Tag
 
@@ -127,19 +127,19 @@ Deeply nested struct with enum field and multiple arrays.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-export union CfOp
+union CfOp
 		br(target Integer)
 		condBr(cond Integer)
 end 'CfOp'
 
-export union IrOp
+union IrOp
 		cf(op CfOp)
 		arith(value Integer)
 end 'IrOp'
 
 typealias IrOpArray = Array with IrOp
 
-export type IrBlock
+type IrBlock
 		export var id as Integer
 		export var ops as IrOpArray
 		export var terminator as IrOp
@@ -152,7 +152,7 @@ end 'IrBlock'
 
 typealias DepArray = Array with Integer
 
-export type Database
+type Database
 		export var block as IrBlock
 		export var deps as DepArray
 
@@ -183,12 +183,12 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 typealias StringArray = Array with String
 
-export union Op
+union Op
 		add(value Integer)
 		nop
 end 'Op'
 
-export type Inner
+type Inner
 		export var revision as Integer
 		export var items as IntArray
 		export var names as StringArray
@@ -199,7 +199,7 @@ export type Inner
 		end 'create'
 end 'Inner'
 
-export type Outer
+type Outer
 		export var inner as Inner
 		export var tag as Op
 		export var data as IntArray
@@ -229,7 +229,7 @@ Same nested struct reference used for two fields of another struct.
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
-export type Inner
+type Inner
 		export var data as IntArray
 		export var value as Integer
 
@@ -238,7 +238,7 @@ export type Inner
 		end 'create'
 end 'Inner'
 
-export type Outer
+type Outer
 		export var first as Inner
 		export var second as Inner
 		export var deps as IntArray
@@ -272,17 +272,17 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 typealias StringArray = Array with String
 
-export union CfOp
+union CfOp
 		br(target Integer)
 end 'CfOp'
 
-export union IrOp
+union IrOp
 		cf(op CfOp)
 end 'IrOp'
 
 typealias OpArray = Array with IrOp
 
-export type Block
+type Block
 		export var id as Integer
 		export var label as String
 		export var ops as OpArray
@@ -294,7 +294,7 @@ export type Block
 		end 'create'
 end 'Block'
 
-export type Region
+type Region
 		export var blocks as IntArray
 		export var nextBlockId as Integer
 
@@ -303,7 +303,7 @@ export type Region
 		end 'create'
 end 'Region'
 
-export type Func
+type Func
 		export var name as String
 		export var returnType as String
 		export var region as Region
@@ -315,7 +315,7 @@ end 'Func'
 
 typealias FuncArray = Array with Func
 
-export type Module
+type Module
 		export var functions as FuncArray
 
 		static function create(functions FuncArray) returns Self
@@ -323,7 +323,7 @@ export type Module
 		end 'create'
 end 'Module'
 
-export type ModuleMemo
+type ModuleMemo
 		export var value as Module
 		export var computedAt as Integer
 		export var verifiedAt as Integer
@@ -333,7 +333,7 @@ export type ModuleMemo
 		end 'create'
 end 'ModuleMemo'
 
-export type CodeResult
+type CodeResult
 		export var code as IntArray
 		export var offset as Integer
 
@@ -342,7 +342,7 @@ export type CodeResult
 		end 'create'
 end 'CodeResult'
 
-export type CodeMemo
+type CodeMemo
 		export var value as CodeResult
 		export var computedAt as Integer
 		export var verifiedAt as Integer
@@ -352,7 +352,7 @@ export type CodeMemo
 		end 'create'
 end 'CodeMemo'
 
-export type QueryDatabase
+type QueryDatabase
 		export var currentRevision as Integer
 		export var sourcePaths as StringArray
 		export var allModuleCache as ModuleMemo
@@ -370,7 +370,7 @@ export type QueryDatabase
 		end 'create'
 end 'QueryDatabase'
 
-export type Project
+type Project
 		export var db as QueryDatabase
 		export var dbInitialized as bool
 		export var nextValueId as Integer
@@ -416,14 +416,14 @@ end 'main'
 <!-- test: array-of-struct-with-string-enum -->
 Array of structs where struct has enum fields with String associated values.
 ```maxon
-export union QueryKey
+union QueryKey
 		sourceFile(path String)
 		tokens(path String)
 		allModule
 		codeResult
 end 'QueryKey'
 
-export type Dependency
+type Dependency
 		export var dependent as QueryKey
 		export var dependency as QueryKey
 
@@ -455,7 +455,7 @@ Struct allocated in if-block scope and assigned to parameter field must survive 
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
-export type Inner
+type Inner
 		export var items as IntArray
 		export var value as Integer
 
@@ -464,7 +464,7 @@ export type Inner
 		end 'create'
 end 'Inner'
 
-export type Outer
+type Outer
 		export var inner as Inner
 		export var initialized as bool
 
@@ -499,7 +499,7 @@ Struct literal with function call result as field, assigned to parameter field.
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
-export type Module
+type Module
 		export var items as IntArray
 
 		static function create(items IntArray) returns Self
@@ -507,7 +507,7 @@ export type Module
 		end 'create'
 end 'Module'
 
-export type Memo
+type Memo
 		export var value as Module
 		export var rev as Integer
 
@@ -516,7 +516,7 @@ export type Memo
 		end 'create'
 end 'Memo'
 
-export type Database
+type Database
 		export var memo as Memo
 		export var deps as IntArray
 
@@ -525,7 +525,7 @@ export type Database
 		end 'create'
 end 'Database'
 
-export type Project
+type Project
 		export var db as Database
 		export var ready as bool
 
@@ -567,17 +567,17 @@ Returned struct with enum field and arrays that grow.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-export union CfOp
+union CfOp
 		br(target Integer)
 end 'CfOp'
 
-export union IrOp
+union IrOp
 		cf(op CfOp)
 end 'IrOp'
 
 typealias OpArray = Array with IrOp
 
-export type Block
+type Block
 		export var id as Integer
 		export var ops as OpArray
 		export var terminator as IrOp
@@ -590,7 +590,7 @@ end 'Block'
 
 typealias DepArray = Array with Integer
 
-export type QueryDatabase
+type QueryDatabase
 		export var revision as Integer
 		export var deps as DepArray
 		export var extra as DepArray
@@ -600,7 +600,7 @@ export type QueryDatabase
 		end 'create'
 end 'QueryDatabase'
 
-export type Project
+type Project
 		export var db as QueryDatabase
 		export var block as Block
 

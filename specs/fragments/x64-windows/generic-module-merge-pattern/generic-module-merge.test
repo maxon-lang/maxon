@@ -6,11 +6,11 @@ typealias Integer = int(i64.min to i64.max)
 type Item
 	export var value as Integer
 
-	export static function create(value Integer) returns Self
+	static function create(value Integer) returns Self
 		return Self{value: value}
 	end 'create'
 
-	export static function clone(src Self) returns Self
+	static function clone(src Self) returns Self
 		return Self{value: src.value}
 	end 'clone'
 end 'Item'
@@ -22,7 +22,7 @@ type Block
 	export var id as Integer
 	export var opRefs as IntList
 
-	export static function create(id Integer) returns Self
+	static function create(id Integer) returns Self
 		return Self{id: id, opRefs: IntList.create()}
 	end 'create'
 end 'Block'
@@ -41,7 +41,7 @@ end 'Mergeable'
 
 export extension Mergeable
 
-	export function merge(source Self)
+	function merge(source Self)
 		self.appendOps(source)
 
 		for i in 0 upto source.funcCount() 'eachFunc'
@@ -60,7 +60,7 @@ type GenModule uses Op implements Mergeable with Item
 	export var blocks as BlockArray
 	export var ops as OpArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{
 			functions: ItemArray.create(),
 			blocks: BlockArray.create(),
@@ -68,37 +68,37 @@ type GenModule uses Op implements Mergeable with Item
 		}
 	end 'create'
 
-	export function opCount() returns Count
+	function opCount() returns Count
 		return self.ops.count()
 	end 'opCount'
 
-	export function appendOps(source Self)
+	function appendOps(source Self)
 		self.ops.append(source.ops)
 	end 'appendOps'
 
-	export function blockCount() returns Count
+	function blockCount() returns Count
 		return self.blocks.count()
 	end 'blockCount'
 
-	export function funcCount() returns Count
+	function funcCount() returns Count
 		return self.functions.count()
 	end 'funcCount'
 
-	export function getFunc(index Count) returns Item
+	function getFunc(index Count) returns Item
 		return try self.functions.get(index) otherwise 'unreachable'
 			panic("getFunc: out of bounds")
 		end 'unreachable'
 	end 'getFunc'
 
-	export function pushFunc(func Item)
+	function pushFunc(func Item)
 		self.functions.push(func)
 	end 'pushFunc'
 
-	export function cloneFunc(src Item) returns Item
+	function cloneFunc(src Item) returns Item
 		return Item.clone(src)
 	end 'cloneFunc'
 
-	export function appendOp(block Block, op Op)
+	function appendOp(block Block, op Op)
 		let idx = self.ops.count()
 		self.ops.push(op)
 		block.opRefs.append(idx)
@@ -153,12 +153,19 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_console_probe_stdin@24 = i8 0
-  __mrt_console_probe_stdout@25 = i8 0
-  __mrt_console_probe_stderr@26 = i8 0
+  __sched_tls_teb_offset@0 = i64 0
+  __sched_allm@8 = i64 0
+  __sched_lock@16 = i64 0
+  __sched_preempt_ext_lock@24 = i64 0
+  __sched_preempt_context@32 = i64 0
+  __slab_arena_list@40 = i64 0
+  __slab_arena_map_l1@48 = i64 0
+  __slab_state@56 = i64 0
+  __ds_base@64 = i64 0
+  __dbg_ctl@72 = i64 0
+  __mrt_console_probe_stdin@80 = i8 0
+  __mrt_console_probe_stdout@81 = i8 0
+  __mrt_console_probe_stderr@82 = i8 0
 }
 
 func @Item.create {

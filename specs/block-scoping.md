@@ -227,7 +227,7 @@ type Foo
 	export var name as String
 	export var kind as Kind
 
-	export static function create(s String, k Kind) returns Foo
+	static function create(s String, k Kind) returns Foo
 		return Foo{name: s, kind: k}
 	end 'create'
 end 'Foo'

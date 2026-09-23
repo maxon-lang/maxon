@@ -43,20 +43,20 @@ end 'Digest'
 type Point implements Digest
 	export var x as Coord
 	export var y as Coord
-	export static function create(x Coord, y Coord) returns Self
+	static function create(x Coord, y Coord) returns Self
 		return Self{ x: x, y: y }
 	end 'create'
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x * 31 + self.y
 	end 'digest'
 end 'Point'
 
 type Box uses T where T is Digest
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function itemDigest() returns Code
+	function itemDigest() returns Code
 		return self.item.digest()
 	end 'itemDigest'
 end 'Box'
@@ -90,20 +90,20 @@ end 'Digest'
 type Point implements Digest
 	export var x as Coord
 	export var y as Coord
-	export static function create(x Coord, y Coord) returns Self
+	static function create(x Coord, y Coord) returns Self
 		return Self{ x: x, y: y }
 	end 'create'
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x + self.y
 	end 'digest'
 end 'Point'
 
 type Box uses T where T is Digest
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function itemDigest() returns Code
+	function itemDigest() returns Code
 		return self.item.digest()
 	end 'itemDigest'
 end 'Box'
@@ -147,23 +147,23 @@ end 'Tagged'
 type Point implements Digest, Tagged
 	export var x as Coord
 	export var y as Coord
-	export static function create(x Coord, y Coord) returns Self
+	static function create(x Coord, y Coord) returns Self
 		return Self{ x: x, y: y }
 	end 'create'
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x + self.y
 	end 'digest'
-	export function tag() returns Code
+	function tag() returns Code
 		return self.x * self.y
 	end 'tag'
 end 'Point'
 
 type Box uses T where T is Digest and Tagged
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function combined() returns Code
+	function combined() returns Code
 		return self.item.digest() + self.item.tag()
 	end 'combined'
 end 'Box'
@@ -197,23 +197,23 @@ end 'Digest'
 type Point implements Digest
 	export var x as Coord
 	export var y as Coord
-	export static function create(x Coord, y Coord) returns Self
+	static function create(x Coord, y Coord) returns Self
 		return Self{ x: x, y: y }
 	end 'create'
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x + self.y
 	end 'digest'
 end 'Point'
 
 type Box uses T where T is Digest
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function inner() returns Code
+	function inner() returns Code
 		return self.item.digest()
 	end 'inner'
-	export function outer() returns Code
+	function outer() returns Code
 		return self.inner()
 	end 'outer'
 end 'Box'
@@ -250,20 +250,20 @@ end 'Digest'
 type Point implements Digest
 	export var x as Coord
 	export var y as Coord
-	export static function create(x Coord, y Coord) returns Self
+	static function create(x Coord, y Coord) returns Self
 		return Self{ x: x, y: y }
 	end 'create'
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x * 31 + self.y
 	end 'digest'
 end 'Point'
 
 type Box uses T where T is Digest
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function itemDigest() returns Code
+	function itemDigest() returns Code
 		return self.item.digest()
 	end 'itemDigest'
 end 'Box'
@@ -300,23 +300,23 @@ end 'Scaled'
 
 type Point implements Scaled
 	export var x as Coord
-	export static function create(x Coord) returns Self
+	static function create(x Coord) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function scale(k Real) returns Real
+	function scale(k Real) returns Real
 		return k * 2.0
 	end 'scale'
 end 'Point'
 
 type Box uses T where T is Scaled
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function fromInt() returns Real
+	function fromInt() returns Real
 		return self.item.scale(2)
 	end 'fromInt'
-	export function fromFloat() returns Real
+	function fromFloat() returns Real
 		return self.item.scale(1.5)
 	end 'fromFloat'
 end 'Box'
@@ -352,20 +352,20 @@ end 'Mixed'
 
 type Point implements Mixed
 	export var x as Coord
-	export static function create(x Coord) returns Self
+	static function create(x Coord) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function combine(a Integer, k Real, b Integer) returns Real
+	function combine(a Integer, k Real, b Integer) returns Real
 		return k + a + b
 	end 'combine'
 end 'Point'
 
 type Box uses T where T is Mixed
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function go() returns Real
+	function go() returns Real
 		return self.item.combine(1, k: 3, b: 5)
 	end 'go'
 end 'Box'
@@ -400,20 +400,20 @@ end 'Adder'
 
 type Point implements Adder
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function add(a Code, b Code) returns Code
+	function add(a Code, b Code) returns Code
 		return self.x + a + b
 	end 'add'
 end 'Point'
 
 type Box uses T where T is Adder
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function go() returns Code
+	function go() returns Code
 		return self.item.add(1, b: 2)
 	end 'go'
 end 'Box'
@@ -445,20 +445,20 @@ end 'Mixer'
 
 type Point implements Mixer
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function combine(a Code, k Code, b Code) returns Code
+	function combine(a Code, k Code, b Code) returns Code
 		return self.x + a * 100 + k * 10 + b
 	end 'combine'
 end 'Point'
 
 type Box uses T where T is Mixer
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function go() returns Code
+	function go() returns Code
 		return self.item.combine(1, b: 5, k: 3)
 	end 'go'
 end 'Box'
@@ -492,20 +492,20 @@ end 'Adder'
 
 type Point implements Adder
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function add(a Code, b Code) returns Code
+	function add(a Code, b Code) returns Code
 		return self.x + a + b
 	end 'add'
 end 'Point'
 
 type Box uses T where T is Adder
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function go() returns Code
+	function go() returns Code
 		return self.item.add(a: 1, b: 2)
 	end 'go'
 end 'Box'
@@ -539,20 +539,20 @@ end 'Adder'
 
 type Point implements Adder
 	export var x as Small
-	export static function create(x Small) returns Self
+	static function create(x Small) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function add(a Small, b Small) returns Small
+	function add(a Small, b Small) returns Small
 		return self.x + a + b
 	end 'add'
 end 'Point'
 
 type Box uses T where T is Adder
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function go() returns Small
+	function go() returns Small
 		return self.item.add(1, b: 2)
 	end 'go'
 end 'Box'
@@ -602,20 +602,20 @@ end 'Coded'
 
 type Widget implements Coded
 	export var n as Num
-	export static function create(n Num) returns Self
+	static function create(n Num) returns Self
 		return Self{ n: n }
 	end 'create'
-	export function code() returns ExitCode
+	function code() returns ExitCode
 		return 4000000000
 	end 'code'
 end 'Widget'
 
 type Box uses T where T is Coded
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function show() returns ExitCode
+	function show() returns ExitCode
 		let v = self.item.code()
 		print("witness={v}\n")
 		return 0
@@ -647,14 +647,14 @@ end 'Digest'
 
 type Plain
 	export var v as Code
-	export static function create(v Code) returns Self
+	static function create(v Code) returns Self
 		return Self{ v: v }
 	end 'create'
 end 'Plain'
 
 type Box uses T where T is Digest
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
 end 'Box'
@@ -692,7 +692,7 @@ type Box uses T where T is Sized
 		return Self{item: v}
 	end 'create'
 
-	export function measure() returns Whole
+	function measure() returns Whole
 		return self.item.size()
 	end 'measure'
 end 'Box'
@@ -720,20 +720,20 @@ end 'Adder'
 
 type Point implements Adder
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function add(a Code, b Code) returns Code
+	function add(a Code, b Code) returns Code
 		return self.x + a + b
 	end 'add'
 end 'Point'
 
 type Box uses T where T is Adder
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function go() returns Code
+	function go() returns Code
 		return self.item.add(1, 2)
 	end 'go'
 end 'Box'
@@ -766,20 +766,20 @@ end 'Adder'
 
 type Point implements Adder
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function add(a Code, b Code) returns Code
+	function add(a Code, b Code) returns Code
 		return self.x + a + b
 	end 'add'
 end 'Point'
 
 type Box uses T where T is Adder
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function go() returns Code
+	function go() returns Code
 		return self.item.add(1)
 	end 'go'
 end 'Box'
@@ -811,20 +811,20 @@ end 'Adder'
 
 type Point implements Adder
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function add(a Code) returns Code
+	function add(a Code) returns Code
 		return self.x + a
 	end 'add'
 end 'Point'
 
 type Box uses T where T is Adder
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function go() returns Code
+	function go() returns Code
 		return self.item.add(1, b: 2)
 	end 'go'
 end 'Box'
@@ -856,20 +856,20 @@ end 'Adder'
 
 type Point implements Adder
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function add(a Code, b Code) returns Code
+	function add(a Code, b Code) returns Code
 		return self.x + a + b
 	end 'add'
 end 'Point'
 
 type Box uses T where T is Adder
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function go() returns Code
+	function go() returns Code
 		return self.item.add(1, zzz: 2)
 	end 'go'
 end 'Box'
@@ -900,20 +900,20 @@ end 'Adder'
 
 type Point implements Adder
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function add(a Code, b Code) returns Code
+	function add(a Code, b Code) returns Code
 		return self.x + a + b
 	end 'add'
 end 'Point'
 
 type Box uses T where T is Adder
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function go() returns Code
+	function go() returns Code
 		return self.item.add(1, a: 2)
 	end 'go'
 end 'Box'
@@ -951,10 +951,10 @@ end 'Weird'
 
 type Thing implements Weird
 	export var v as Integer
-	export static function create(v Integer) returns Self
+	static function create(v Integer) returns Self
 		return Self{ v: v }
 	end 'create'
-	export function equals(a Thing, b Thing) returns bool
+	function equals(a Thing, b Thing) returns bool
 		return a.v == b.v
 	end 'equals'
 end 'Thing'
@@ -962,10 +962,10 @@ end 'Thing'
 type Pair uses T where T is Weird
 	export var a as T
 	export var b as T
-	export static function create(a T, b T) returns Self
+	static function create(a T, b T) returns Self
 		return Self{ a: a, b: b }
 	end 'create'
-	export function eq() returns bool
+	function eq() returns bool
 		return self.a == self.b
 	end 'eq'
 end 'Pair'
@@ -1002,10 +1002,10 @@ end 'WeirdEq'
 
 type Thing implements WeirdEq
 	export var v as Integer
-	export static function create(v Integer) returns Self
+	static function create(v Integer) returns Self
 		return Self{ v: v }
 	end 'create'
-	export function equals(other Integer) returns bool
+	function equals(other Integer) returns bool
 		return other == 7
 	end 'equals'
 end 'Thing'
@@ -1013,10 +1013,10 @@ end 'Thing'
 type Pair uses T where T is WeirdEq
 	export var a as T
 	export var b as T
-	export static function create(a T, b T) returns Self
+	static function create(a T, b T) returns Self
 		return Self{ a: a, b: b }
 	end 'create'
-	export function eq() returns bool
+	function eq() returns bool
 		return self.a == self.b
 	end 'eq'
 end 'Pair'
@@ -1045,10 +1045,10 @@ end 'WeirdOrd'
 
 type Thing implements WeirdOrd
 	export var v as Integer
-	export static function create(v Integer) returns Self
+	static function create(v Integer) returns Self
 		return Self{ v: v }
 	end 'create'
-	export function compare(other Integer) returns Ordering
+	function compare(other Integer) returns Ordering
 		return Ordering.lessThan
 	end 'compare'
 end 'Thing'
@@ -1056,10 +1056,10 @@ end 'Thing'
 type Pair uses T where T is WeirdOrd
 	export var a as T
 	export var b as T
-	export static function create(a T, b T) returns Self
+	static function create(a T, b T) returns Self
 		return Self{ a: a, b: b }
 	end 'create'
-	export function lt() returns bool
+	function lt() returns bool
 		return self.a < self.b
 	end 'lt'
 end 'Pair'
@@ -1095,20 +1095,20 @@ end 'Grower'
 
 type Pusher implements Grower
 	export var n as Integer
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{ n: n }
 	end 'create'
-	export function grow(dest IntArray)
+	function grow(dest IntArray)
 		dest.push(9)
 	end 'grow'
 end 'Pusher'
 
 type Box uses T where T is Grower
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function run(dest IntArray)
+	function run(dest IntArray)
 		self.item.grow(dest)
 	end 'run'
 end 'Box'
@@ -1141,20 +1141,20 @@ end 'Grower'
 
 type Pusher implements Grower
 	export var n as Integer
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{ n: n }
 	end 'create'
-	export function grow(dest IntArray)
+	function grow(dest IntArray)
 		dest.push(9)
 	end 'grow'
 end 'Pusher'
 
 type Box uses T where T is Grower
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function run(dest IntArray)
+	function run(dest IntArray)
 		self.item.grow(dest)
 	end 'run'
 end 'Box'
@@ -1187,20 +1187,20 @@ end 'Reader'
 
 type Summer implements Reader
 	export var n as Integer
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{ n: n }
 	end 'create'
-	export function total(src IntArray) returns Integer
+	function total(src IntArray) returns Integer
 		return src.count() as Integer
 	end 'total'
 end 'Summer'
 
 type Box uses T where T is Reader
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function run(src IntArray) returns Integer
+	function run(src IntArray) returns Integer
 		return self.item.total(src)
 	end 'run'
 end 'Box'
@@ -1229,20 +1229,20 @@ typealias Coord = int(0 to 1000)
 type Point implements Digest
 	export var x as Coord
 	export var y as Coord
-	export static function create(x Coord, y Coord) returns Self
+	static function create(x Coord, y Coord) returns Self
 		return Self{ x: x, y: y }
 	end 'create'
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x * 31 + self.y
 	end 'digest'
 end 'Point'
 
 type Box uses T where T is Digest
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function itemDigest() returns Code
+	function itemDigest() returns Code
 		return self.item.digest()
 	end 'itemDigest'
 end 'Box'
@@ -1273,26 +1273,26 @@ a file can rescue it. It resolves because the interface index is built from EVER
 before ANY file is parsed.
 ```maxon
 // --- file: a.maxon
-typealias Code = int(0 to u32.max)
+export typealias Code = int(0 to u32.max)
 typealias Coord = int(0 to 1000)
 
 type Point implements Digest
-	export var x as Coord
-	export var y as Coord
-	export static function create(x Coord, y Coord) returns Self
+	var x as Coord
+	var y as Coord
+	static function create(x Coord, y Coord) returns Self
 		return Self{ x: x, y: y }
 	end 'create'
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x * 31 + self.y
 	end 'digest'
 end 'Point'
 
 type Box uses T where T is Digest
-	export var item as T
-	export static function create(item T) returns Self
+	var item as T
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function itemDigest() returns Code
+	function itemDigest() returns Code
 		return self.item.digest()
 	end 'itemDigest'
 end 'Box'
@@ -1359,10 +1359,10 @@ end 'Maker'
 
 type Builder implements Maker
 	export var seed as Integer
-	export static function create(seed Integer) returns Self
+	static function create(seed Integer) returns Self
 		return Self{ seed: seed }
 	end 'create'
-	export function make() returns IntArray
+	function make() returns IntArray
 		var xs = IntArray.create()
 		xs.push(self.seed)
 		return xs
@@ -1371,10 +1371,10 @@ end 'Builder'
 
 type Box uses T where T is Maker
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function first() returns Integer
+	function first() returns Integer
 		let xs = self.item.make()
 		return try xs.get(0) otherwise 0
 	end 'first'
@@ -1408,10 +1408,10 @@ end 'Summer'
 
 type Adder implements Summer
 	export var base as Integer
-	export static function create(base Integer) returns Self
+	static function create(base Integer) returns Self
 		return Self{ base: base }
 	end 'create'
-	export function total(xs IntArray) returns Integer
+	function total(xs IntArray) returns Integer
 		var sum = self.base
 		for x in xs 'each'
 			sum = sum + x
@@ -1422,10 +1422,10 @@ end 'Adder'
 
 type Box uses T where T is Summer
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function run(xs IntArray) returns Integer
+	function run(xs IntArray) returns Integer
 		return self.item.total(xs)
 	end 'run'
 end 'Box'
@@ -1466,20 +1466,20 @@ typealias Code = int(0 to u32.max)
 
 type Point implements Digest
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x
 	end 'digest'
 end 'Point'
 
 type Box uses T where T is Digest
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function go() returns Code
+	function go() returns Code
 		return self.item.digest()
 	end 'go'
 end 'Box'
@@ -1530,15 +1530,15 @@ end 'Derived'
 type Widget implements Derived
 	export var seed as Code
 
-	export static function create(seed Code) returns Self
+	static function create(seed Code) returns Self
 		return Self{ seed: seed }
 	end 'create'
 
-	export function label() returns Code
+	function label() returns Code
 		return self.seed
 	end 'label'
 
-	export function extra() returns Code
+	function extra() returns Code
 		return 1
 	end 'extra'
 end 'Widget'
@@ -1546,15 +1546,15 @@ end 'Widget'
 type Box uses T where T is Derived
 	export var item as T
 
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
 
-	export function callInherited() returns Code
+	function callInherited() returns Code
 		return self.item.label()
 	end 'callInherited'
 
-	export function callOwn() returns Code
+	function callOwn() returns Code
 		return self.item.extra()
 	end 'callOwn'
 end 'Box'
@@ -1595,15 +1595,15 @@ end 'Derived'
 type Widget implements Derived
 	export var seed as Code
 
-	export static function create(seed Code) returns Self
+	static function create(seed Code) returns Self
 		return Self{ seed: seed }
 	end 'create'
 
-	export function label() returns Code
+	function label() returns Code
 		return self.seed
 	end 'label'
 
-	export function label(width Code) returns Code
+	function label(width Code) returns Code
 		return self.seed * width
 	end 'label'
 end 'Widget'
@@ -1611,15 +1611,15 @@ end 'Widget'
 type Box uses T where T is Derived
 	export var item as T
 
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
 
-	export function zeroArg() returns Code
+	function zeroArg() returns Code
 		return self.item.label()
 	end 'zeroArg'
 
-	export function oneArg() returns Code
+	function oneArg() returns Code
 		return self.item.label(3)
 	end 'oneArg'
 end 'Box'
@@ -1674,23 +1674,23 @@ end 'Both'
 type Widget implements Both
 	export var seed as Code
 
-	export static function create(seed Code) returns Self
+	static function create(seed Code) returns Self
 		return Self{ seed: seed }
 	end 'create'
 
-	export function base() returns Code
+	function base() returns Code
 		return 1
 	end 'base'
 
-	export function left() returns Code
+	function left() returns Code
 		return 2
 	end 'left'
 
-	export function right() returns Code
+	function right() returns Code
 		return 3
 	end 'right'
 
-	export function both() returns Code
+	function both() returns Code
 		return 4
 	end 'both'
 end 'Widget'
@@ -1698,11 +1698,11 @@ end 'Widget'
 type Box uses T where T is Both
 	export var item as T
 
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
 
-	export function digits() returns Code
+	function digits() returns Code
 		return ((self.item.base() * SlotRadix + self.item.left()) * SlotRadix + self.item.right()) * SlotRadix + self.item.both()
 	end 'digits'
 end 'Box'
@@ -1754,19 +1754,19 @@ end 'Right'
 type Widget implements Left, Right
 	export var seed as Code
 
-	export static function create(seed Code) returns Self
+	static function create(seed Code) returns Self
 		return Self{ seed: seed }
 	end 'create'
 
-	export function base() returns Code
+	function base() returns Code
 		return 1
 	end 'base'
 
-	export function left() returns Code
+	function left() returns Code
 		return 2
 	end 'left'
 
-	export function right() returns Code
+	function right() returns Code
 		return 3
 	end 'right'
 end 'Widget'
@@ -1774,11 +1774,11 @@ end 'Widget'
 type Box uses T where T is Left and Right
 	export var item as T
 
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
 
-	export function go() returns Code
+	function go() returns Code
 		return self.item.base() * 100 + self.item.left() * 10 + self.item.right()
 	end 'go'
 end 'Box'
@@ -1817,19 +1817,19 @@ end 'EqR'
 type Widget implements EqL, EqR
 	export var seed as Code
 
-	export static function create(seed Code) returns Self
+	static function create(seed Code) returns Self
 		return Self{ seed: seed }
 	end 'create'
 
-	export function l() returns Code
+	function l() returns Code
 		return 1
 	end 'l'
 
-	export function r() returns Code
+	function r() returns Code
 		return 2
 	end 'r'
 
-	export function equals(other Self) returns bool
+	function equals(other Self) returns bool
 		return self.seed == other.seed
 	end 'equals'
 end 'Widget'
@@ -1838,11 +1838,11 @@ type Pair uses T where T is EqL and EqR
 	export var a as T
 	export var b as T
 
-	export static function create(a T, b T) returns Self
+	static function create(a T, b T) returns Self
 		return Self{ a: a, b: b }
 	end 'create'
 
-	export function go() returns Code
+	function go() returns Code
 		return (1 if self.a == self.b else 0) * 100 + self.a.l() * 10 + self.b.r()
 	end 'go'
 end 'Pair'
@@ -1879,15 +1879,15 @@ end 'Derived'
 type Widget implements Derived
 	export var seed as Code
 
-	export static function create(seed Code) returns Self
+	static function create(seed Code) returns Self
 		return Self{ seed: seed }
 	end 'create'
 
-	export function label() returns Code
+	function label() returns Code
 		return self.seed
 	end 'label'
 
-	export function extra() returns Code
+	function extra() returns Code
 		return 1
 	end 'extra'
 end 'Widget'
@@ -1895,11 +1895,11 @@ end 'Widget'
 type Box uses T where T is Derived
 	export var item as T
 
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
 
-	export function go() returns Code
+	function go() returns Code
 		return self.item.missing()
 	end 'go'
 end 'Box'
@@ -1938,11 +1938,11 @@ end 'Derived'
 type Widget implements Derived
 	export var seed as Code
 
-	export static function create(seed Code) returns Self
+	static function create(seed Code) returns Self
 		return Self{ seed: seed }
 	end 'create'
 
-	export function label() returns Code
+	function label() returns Code
 		return self.seed
 	end 'label'
 end 'Widget'
@@ -1950,11 +1950,11 @@ end 'Widget'
 type Box uses T where T is Derived
 	export var item as T
 
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
 
-	export function go() returns Code
+	function go() returns Code
 		return self.item.label()
 	end 'go'
 end 'Box'
@@ -1992,15 +1992,15 @@ end 'Derived'
 type Widget implements Derived
 	export var seed as Code
 
-	export static function create(seed Code) returns Self
+	static function create(seed Code) returns Self
 		return Self{ seed: seed }
 	end 'create'
 
-	export function label() returns Code
+	function label() returns Code
 		return self.seed
 	end 'label'
 
-	export function label(a Code, b Code) returns Code
+	function label(a Code, b Code) returns Code
 		return a + b
 	end 'label'
 end 'Widget'
@@ -2008,11 +2008,11 @@ end 'Widget'
 type Box uses T where T is Derived
 	export var item as T
 
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
 
-	export function go() returns Code
+	function go() returns Code
 		return self.item.label(1)
 	end 'go'
 end 'Box'
@@ -2047,11 +2047,11 @@ end 'AlsoEquatable'
 type Widget implements Equatable, AlsoEquatable
 	export var seed as Code
 
-	export static function create(seed Code) returns Self
+	static function create(seed Code) returns Self
 		return Self{ seed: seed }
 	end 'create'
 
-	export function equals(other Self) returns bool
+	function equals(other Self) returns bool
 		return self.seed == other.seed
 	end 'equals'
 end 'Widget'
@@ -2060,11 +2060,11 @@ type Pair uses T where T is Equatable and AlsoEquatable
 	export var a as T
 	export var b as T
 
-	export static function create(a T, b T) returns Self
+	static function create(a T, b T) returns Self
 		return Self{ a: a, b: b }
 	end 'create'
 
-	export function same() returns bool
+	function same() returns bool
 		return self.a == self.b
 	end 'same'
 end 'Pair'
@@ -2106,15 +2106,15 @@ end 'Origin'
 type Widget implements Origin
 	export var seed as Code
 
-	export static function create(seed Code) returns Self
+	static function create(seed Code) returns Self
 		return Self{ seed: seed }
 	end 'create'
 
-	export static function origin() returns Code
+	static function origin() returns Code
 		return 7
 	end 'origin'
 
-	export function digest() returns Code
+	function digest() returns Code
 		return self.seed
 	end 'digest'
 end 'Widget'
@@ -2122,11 +2122,11 @@ end 'Widget'
 type Box uses T where T is Origin
 	export var item as T
 
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
 
-	export function go() returns Code
+	function go() returns Code
 		return self.item.origin()
 	end 'go'
 end 'Box'
@@ -2160,15 +2160,15 @@ end 'Origin'
 type Widget implements Origin
 	export var seed as Code
 
-	export static function create(seed Code) returns Self
+	static function create(seed Code) returns Self
 		return Self{ seed: seed }
 	end 'create'
 
-	export static function origin() returns Code
+	static function origin() returns Code
 		return 7
 	end 'origin'
 
-	export function digest() returns Code
+	function digest() returns Code
 		return self.seed
 	end 'digest'
 end 'Widget'
@@ -2176,11 +2176,11 @@ end 'Widget'
 type Box uses T where T is Origin
 	export var item as T
 
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
 
-	export function go() returns Code
+	function go() returns Code
 		return self.item.digest() + Widget.origin()
 	end 'go'
 end 'Box'
@@ -2217,11 +2217,11 @@ end 'StaticEq'
 type Widget implements StaticEq
 	export var seed as Code
 
-	export static function create(seed Code) returns Self
+	static function create(seed Code) returns Self
 		return Self{ seed: seed }
 	end 'create'
 
-	export static function equals(other Self) returns bool
+	static function equals(other Self) returns bool
 		return other.seed == 7
 	end 'equals'
 end 'Widget'
@@ -2230,11 +2230,11 @@ type Pair uses T where T is StaticEq
 	export var a as T
 	export var b as T
 
-	export static function create(a T, b T) returns Self
+	static function create(a T, b T) returns Self
 		return Self{ a: a, b: b }
 	end 'create'
 
-	export function same() returns bool
+	function same() returns bool
 		return self.a == self.b
 	end 'same'
 end 'Pair'
@@ -2274,7 +2274,7 @@ end 'Origin'
 type Box uses T where T is Origin
 	export var item as T
 
-	export function go() returns Code
+	function go() returns Code
 		return self.item.origin()
 	end 'go'
 end 'Box'
@@ -2307,7 +2307,7 @@ end 'OriginB'
 type Box uses T where T is OriginA, T is OriginB
 	export var item as T
 
-	export function go() returns Code
+	function go() returns Code
 		return self.item.origin()
 	end 'go'
 end 'Box'
@@ -2344,7 +2344,7 @@ end 'InstanceOrigin'
 type Box uses T where T is StaticOrigin, T is InstanceOrigin
 	export var item as T
 
-	export function go() returns Code
+	function go() returns Code
 		return self.item.origin()
 	end 'go'
 end 'Box'
@@ -2584,7 +2584,7 @@ Using `==` or `!=` on a type parameter that isn't constrained with `where T is E
 type Box uses T
 		var item as T
 
-		export function eq(other T) returns bool
+		function eq(other T) returns bool
 				return item == other
 		end 'eq'
 end 'Box'
@@ -2610,7 +2610,7 @@ type Box uses T where T is Equatable
 			return Self{item: item}
 		end 'create'
 
-		export function eq(other T) returns bool
+		function eq(other T) returns bool
 				return item == other
 		end 'eq'
 end 'Box'
@@ -2646,7 +2646,7 @@ typealias Integer = int(i64.min to i64.max)
 type Holder uses T where T is Hashable and Equatable
 	var v as T
 
-	export static function of(v T) returns Self
+	static function of(v T) returns Self
 		var built = Self{v: v}
 		if built.matches(v) 'sameValue'
 			return built
@@ -2654,11 +2654,11 @@ type Holder uses T where T is Hashable and Equatable
 		panic("Holder.of: the value it was built from must equal itself")
 	end 'of'
 
-	export function matches(other T) returns bool
+	function matches(other T) returns bool
 		return v.equals(other)
 	end 'matches'
 
-	export function digest() returns HashValue
+	function digest() returns HashValue
 		return v.hash()
 	end 'digest'
 end 'Holder'
@@ -2687,11 +2687,11 @@ typealias Integer = int(i64.min to i64.max)
 type Holder uses T where T is Hashable and Equatable
 	var v as T
 
-	export function digest() returns HashValue
+	function digest() returns HashValue
 		return v.hash()
 	end 'digest'
 
-	export static function digestOf(v T) returns HashValue
+	static function digestOf(v T) returns HashValue
 		let h = Self{v: v}
 		return h.digest()
 	end 'digestOf'
@@ -2721,22 +2721,22 @@ typealias Integer = int(i64.min to i64.max)
 typealias Step = int(0 to u64.max)
 
 type Ticks uses T where T is Hashable and Equatable
-	typealias Items = Array with T
+	export typealias Items = Array with T
 	var items as Items
 	var at = 0
 
-	export static function create(items Items) returns Self throws IterationError
+	static function create(items Items) returns Self throws IterationError
 		if items.count() == 0 'empty'
 			throw IterationError.exhausted
 		end 'empty'
 		return Self{items: items}
 	end 'create'
 
-	export function current() returns T
+	function current() returns T
 		return try items.get(at) otherwise panic("Ticks.current: the positioning invariant holds")
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		at = at + 1
 		if at >= items.count() 'done'
 			throw IterationError.exhausted
@@ -2745,7 +2745,7 @@ type Ticks uses T where T is Hashable and Equatable
 end 'Ticks'
 
 extension Ticks
-	export function skip(n Step) throws IterationError
+	function skip(n Step) throws IterationError
 		var i = 0
 		while i < n 'loop'
 			try self.advance()

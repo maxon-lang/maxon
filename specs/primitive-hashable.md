@@ -315,7 +315,7 @@ its receiver, so the refusal is pinned here rather than left resting on `generic
 ```maxon
 type Box uses T where T is Hashable
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'

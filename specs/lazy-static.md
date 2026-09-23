@@ -62,7 +62,7 @@ type Config
 		return Config{n: 42}
 	end 'makeValue'
 
-	export static function getValue() returns Config
+	static function getValue() returns Config
 		return Config.value
 	end 'getValue'
 end 'Config'
@@ -92,11 +92,11 @@ type Counter
 		return Counter{id: Counter.initCount}
 	end 'createInstance'
 
-	export static function getInstance() returns Counter
+	static function getInstance() returns Counter
 		return Counter.cached
 	end 'getInstance'
 
-	export static function getInitCount() returns Count
+	static function getInitCount() returns Count
 		return Counter.initCount
 	end 'getInitCount'
 end 'Counter'
@@ -134,7 +134,7 @@ end 'Point'
 type Defaults
 	static var origin = Point.create(0, y: 0)
 
-	export static function getOrigin() returns Point
+	static function getOrigin() returns Point
 		return Defaults.origin
 	end 'getOrigin'
 end 'Defaults'
@@ -166,11 +166,11 @@ type State
 		return State{value: 0}
 	end 'makeDefault'
 
-	export static function get() returns State
+	static function get() returns State
 		return State.current
 	end 'get'
 
-	export static function set(s State)
+	static function set(s State)
 		State.current = s
 	end 'set'
 
@@ -214,7 +214,7 @@ type Cache
 		return Cache{n: 20}
 	end 'buildB'
 
-	export static function sum() returns Count
+	static function sum() returns Count
 		return Cache.a.n + Cache.b.n
 	end 'sum'
 end 'Cache'
@@ -236,7 +236,7 @@ typealias Integer = int(i64.min to i64.max)
 type Lookup
 	static var values = [10, 20, 30]
 
-	export static function get(index Integer) returns Integer
+	static function get(index Integer) returns Integer
 		return try Lookup.values.get(index) otherwise -1
 	end 'get'
 end 'Lookup'
@@ -260,7 +260,7 @@ end 'main'
 type WSCache
 	static let ws = CharacterSet.whitespacesAndNewlines()
 
-	export static function isWhitespace(c Character) returns bool
+	static function isWhitespace(c Character) returns bool
 		return WSCache.ws.contains(c)
 	end 'isWhitespace'
 end 'WSCache'
@@ -294,7 +294,7 @@ typealias CharSet = Set with Character
 type Vowels
 	static let vowelSet = CharSet from ['a', 'e', 'i', 'o', 'u']
 
-	export static function contains(c Character) returns bool
+	static function contains(c Character) returns bool
 		return Vowels.vowelSet.contains(c)
 	end 'contains'
 end 'Vowels'
@@ -329,11 +329,11 @@ end 'Pair'
 type Registry
 	static let cachedPair = buildPair()
 
-	export static function getX() returns Count
+	static function getX() returns Count
 		return Registry.cachedPair.x
 	end 'getX'
 
-	export static function getY() returns Count
+	static function getY() returns Count
 		return Registry.cachedPair.y
 	end 'getY'
 end 'Registry'
@@ -364,7 +364,7 @@ static twice, and both loads answer with the same value.
 type Vocab
 	static let indent = "  "
 
-	export static function describe(a String, b String) returns String
+	static function describe(a String, b String) returns String
 		var s = "{Vocab.indent}{a}\n"
 		s.append("{Vocab.indent}{b}\n")
 		return s
@@ -396,7 +396,7 @@ type Vocab
 	static let first = "A"
 	static let second = "B"
 
-	export static function mix(flag bool) returns String
+	static function mix(flag bool) returns String
 		var s = "{Vocab.first}1"
 
 		if flag 'withSecond'
@@ -448,7 +448,7 @@ type Pair
 
 	static var origin = Pair{a: 1, b: 2}
 
-	export static function get() returns Pair
+	static function get() returns Pair
 		return Pair.origin
 	end 'get'
 end 'Pair'
@@ -478,7 +478,7 @@ type Holder
 
 	static var greeting = Holder{name: "hi"}
 
-	export static function get() returns Holder
+	static function get() returns Holder
 		return Holder.greeting
 	end 'get'
 end 'Holder'
@@ -510,7 +510,7 @@ type Pair
 
 	static var origin = Pair{a: SEED, b: 2}
 
-	export static function get() returns Pair
+	static function get() returns Pair
 		return Pair.origin
 	end 'get'
 end 'Pair'
@@ -540,7 +540,7 @@ type Holder
 
 	static var seeded = Holder{xs: [1, 2, 3]}
 
-	export static function get() returns Holder
+	static function get() returns Holder
 		return Holder.seeded
 	end 'get'
 end 'Holder'
@@ -570,7 +570,7 @@ typealias Count = int(0 to u64.max)
 type Inner
 	export var n as Count
 
-	export static function create(n Count) returns Inner
+	static function create(n Count) returns Inner
 		return Inner{n: n}
 	end 'create'
 end 'Inner'
@@ -580,7 +580,7 @@ type Outer
 
 	static var base = Outer{inner: Inner.create(7)}
 
-	export static function get() returns Outer
+	static function get() returns Outer
 		return Outer.base
 	end 'get'
 end 'Outer'
@@ -610,7 +610,7 @@ type Pair
 
 	static var origin = Pair{a: 1}
 
-	export static function get() returns Pair
+	static function get() returns Pair
 		return Pair.origin
 	end 'get'
 end 'Pair'
@@ -640,11 +640,11 @@ type Pair
 
 	static var origin = Pair{a: 1, b: 2}
 
-	export static function bump()
+	static function bump()
 		Pair.origin = Pair{a: 9, b: 9}
 	end 'bump'
 
-	export static function get() returns Pair
+	static function get() returns Pair
 		return Pair.origin
 	end 'get'
 end 'Pair'
@@ -675,7 +675,7 @@ type A
 
 	static var one = A{n: 1}
 
-	export static function get() returns A
+	static function get() returns A
 		return A.one
 	end 'get'
 end 'A'
@@ -685,7 +685,7 @@ type B
 
 	static var two = B{n: 2}
 
-	export static function get() returns B
+	static function get() returns B
 		return B.two
 	end 'get'
 end 'B'
@@ -747,7 +747,7 @@ type Outer
 
 	static var base = Outer{inner: Inner{n: 7}}
 
-	export static function get() returns Outer
+	static function get() returns Outer
 		return Outer.base
 	end 'get'
 end 'Outer'
@@ -803,7 +803,7 @@ type Pair
 
 	static var origin = Pair{1, 2}
 
-	export static function get() returns Pair
+	static function get() returns Pair
 		return Pair.origin
 	end 'get'
 end 'Pair'
@@ -831,7 +831,7 @@ typealias Integer = int(i64.min to i64.max)
 type Box
 	export var v as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{v: 3}
 	end 'create'
 end 'Box'
@@ -839,7 +839,7 @@ end 'Box'
 type Holder
 	static var b = Box.create() zzz
 
-	export static function get() returns Integer
+	static function get() returns Integer
 		return Holder.b.v
 	end 'get'
 end 'Holder'

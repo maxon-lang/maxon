@@ -2098,7 +2098,7 @@ its value, so `h.buf`, `self.buf` and a bare `buf` inside a method all answer al
 type Holder
 	export var buf as __ManagedMemory
 
-	export static function create(buf __ManagedMemory) returns Self
+	static function create(buf __ManagedMemory) returns Self
 		return Self{buf: buf}
 	end 'create'
 end 'Holder'
@@ -2121,11 +2121,11 @@ the same place, which is why one column answers for both.
 type Holder
 	export var buf as __ManagedMemory
 
-	export static function create(buf __ManagedMemory) returns Self
+	static function create(buf __ManagedMemory) returns Self
 		return Self{buf: buf}
 	end 'create'
 
-	export function size() returns Integer
+	function size() returns Integer
 		return self.buf.length()
 	end 'size'
 end 'Holder'
@@ -2359,7 +2359,7 @@ typealias Int = int(i64.min to i64.max)
 type Holder
 	export var p as (__ManagedMemory, Int)
 
-	export static function create(p (__ManagedMemory, Int)) returns Self
+	static function create(p (__ManagedMemory, Int)) returns Self
 		return Self{p: p}
 	end 'create'
 end 'Holder'
@@ -2404,7 +2404,7 @@ typealias BufArray = Array with __ManagedMemory
 type Holder
 	export var bufs as BufArray
 
-	export static function create(bufs BufArray) returns Self
+	static function create(bufs BufArray) returns Self
 		return Self{bufs: bufs}
 	end 'create'
 end 'Holder'
@@ -3174,8 +3174,8 @@ time this file is swept the alias is registered and the field type has already r
 it.
 ```maxon
 // --- file: alias.maxon
-typealias Int = int(i64.min to i64.max)
-typealias BufArray = Array with __ManagedMemory
+export typealias Int = int(i64.min to i64.max)
+export typealias BufArray = Array with __ManagedMemory
 
 export function seed(x BufArray) returns Int
 	return x.count() as Int
@@ -3185,7 +3185,7 @@ end 'seed'
 type Holder
 	export var bufs as BufArray
 
-	export static function create() returns Holder
+	static function create() returns Holder
 		var a = BufArray.create()
 		a.push("hello".toByteArray())
 		return Self{bufs: a}
@@ -3213,7 +3213,7 @@ and this pair is what caught a review fix that had suppressed the first half.
 type Holder
 	export var bufs as BufArray
 
-	export static function create() returns Holder
+	static function create() returns Holder
 		var a = BufArray.create()
 		a.push("hello".toByteArray())
 		return Self{bufs: a}
@@ -3227,8 +3227,8 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: alias.maxon
-typealias Int = int(i64.min to i64.max)
-typealias BufArray = Array with __ManagedMemory
+export typealias Int = int(i64.min to i64.max)
+export typealias BufArray = Array with __ManagedMemory
 
 export function seed(x BufArray) returns Int
 	return x.count() as Int
@@ -3249,8 +3249,8 @@ order and in the next case's, which is the accepted gap (a tuple slot spelled wi
 works at the PARAMETER door only) rather than a coin toss between the gap and the feature.
 ```maxon
 // --- file: alias.maxon
-typealias Int = int(i64.min to i64.max)
-typealias BufArray = Array with __ManagedMemory
+export typealias Int = int(i64.min to i64.max)
+export typealias BufArray = Array with __ManagedMemory
 
 export function seed(x BufArray) returns Int
 	return x.count() as Int
@@ -3293,8 +3293,8 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: alias.maxon
-typealias Int = int(i64.min to i64.max)
-typealias BufArray = Array with __ManagedMemory
+export typealias Int = int(i64.min to i64.max)
+export typealias BufArray = Array with __ManagedMemory
 
 export function seed(x BufArray) returns Int
 	return x.count() as Int
@@ -3657,8 +3657,8 @@ by the time the union is swept, the payload's declared type has already resolved
 read-door derivation cannot fire, and the declaration's own token bit is what carries it.
 ```maxon
 // --- file: alias.maxon
-typealias Int = int(i64.min to i64.max)
-typealias BufArray = Array with __ManagedMemory
+export typealias Int = int(i64.min to i64.max)
+export typealias BufArray = Array with __ManagedMemory
 
 export function seed(x BufArray) returns Int
 	return x.count() as Int
@@ -3708,8 +3708,8 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: alias.maxon
-typealias Int = int(i64.min to i64.max)
-typealias BufArray = Array with __ManagedMemory
+export typealias Int = int(i64.min to i64.max)
+export typealias BufArray = Array with __ManagedMemory
 
 export function seed(x BufArray) returns Int
 	return x.count() as Int
@@ -3758,11 +3758,11 @@ typealias ByteBuffer = __ManagedMemory with Byte
 type Holder
 	export var buf as ByteBuffer
 
-	export static function create(buf ByteBuffer) returns Self
+	static function create(buf ByteBuffer) returns Self
 		return Self{buf: buf}
 	end 'create'
 
-	export function size() returns Int
+	function size() returns Int
 		return self.buf.length()
 	end 'size'
 end 'Holder'
@@ -3788,7 +3788,7 @@ typealias ByteBuffer = __ManagedMemory with Byte
 type Holder
 	export var buf as ByteBuffer
 
-	export static function create(buf ByteBuffer) returns Self
+	static function create(buf ByteBuffer) returns Self
 		return Self{buf: buf}
 	end 'create'
 end 'Holder'
@@ -3816,7 +3816,7 @@ typealias ByteArray = Array with Byte
 type Holder
 	export var buf as ByteArray
 
-	export static function create(buf ByteArray) returns Self
+	static function create(buf ByteArray) returns Self
 		return Self{buf: buf}
 	end 'create'
 end 'Holder'
@@ -3841,7 +3841,7 @@ typealias ByteArray = Array with Byte
 type Holder
 	export var buf as ByteArray
 
-	export static function create(buf ByteArray) returns Self
+	static function create(buf ByteArray) returns Self
 		return Self{buf: buf}
 	end 'create'
 end 'Holder'
@@ -3939,15 +3939,15 @@ typealias Byte = int(0 to u8.max)
 typealias Int = int(i64.min to i64.max)
 
 type Holder
-	typealias Mem = __ManagedMemory with Byte
+	export typealias Mem = __ManagedMemory with Byte
 
 	export var buf as Mem
 
-	export static function create(buf Mem) returns Self
+	static function create(buf Mem) returns Self
 		return Self{buf: buf}
 	end 'create'
 
-	export function size() returns Int
+	function size() returns Int
 		return self.buf.length()
 	end 'size'
 end 'Holder'
@@ -3970,9 +3970,9 @@ TOKEN bit is what carries the surface. Deleting the stored bit in favour of the 
 half wrong.
 ```maxon
 // --- file: alias.maxon
-typealias Byte = int(0 to u8.max)
-typealias Int = int(i64.min to i64.max)
-typealias ByteBuffer = __ManagedMemory with Byte
+export typealias Byte = int(0 to u8.max)
+export typealias Int = int(i64.min to i64.max)
+export typealias ByteBuffer = __ManagedMemory with Byte
 
 export function seed(x ByteBuffer) returns Int
 	return x.length()
@@ -3982,7 +3982,7 @@ end 'seed'
 type Holder
 	export var buf as ByteBuffer
 
-	export static function create(buf ByteBuffer) returns Self
+	static function create(buf ByteBuffer) returns Self
 		return Self{buf: buf}
 	end 'create'
 end 'Holder'
@@ -4008,7 +4008,7 @@ answer in one of the two orders, whichever one that is.
 type Holder
 	export var buf as ByteBuffer
 
-	export static function create(buf ByteBuffer) returns Self
+	static function create(buf ByteBuffer) returns Self
 		return Self{buf: buf}
 	end 'create'
 end 'Holder'
@@ -4019,9 +4019,9 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: alias.maxon
-typealias Byte = int(0 to u8.max)
-typealias Int = int(i64.min to i64.max)
-typealias ByteBuffer = __ManagedMemory with Byte
+export typealias Byte = int(0 to u8.max)
+export typealias Int = int(i64.min to i64.max)
+export typealias ByteBuffer = __ManagedMemory with Byte
 
 export function seed(x ByteBuffer) returns Int
 	return x.length()
@@ -4060,9 +4060,9 @@ parameter must reach `length` (its file spelled the buffer) and `arrayWidth`'s m
 did not), under one alias name.
 ```maxon
 // --- file: buffer.maxon
-typealias Byte = int(0 to u8.max)
-typealias Int = int(i64.min to i64.max)
-typealias B = __ManagedMemory with Byte
+export typealias Byte = int(0 to u8.max)
+export typealias Int = int(i64.min to i64.max)
+export typealias B = __ManagedMemory with Byte
 
 export function bufferWidth(m B) returns Int
 	return m.length()
@@ -4097,14 +4097,14 @@ in both file orders**: `b.items.count()`, on a field of the `Array` kind, was re
 roster.
 ```maxon
 // --- file: buffer.maxon
-typealias Byte = int(0 to u8.max)
-typealias Int = int(i64.min to i64.max)
-typealias B = __ManagedMemory with Byte
+export typealias Byte = int(0 to u8.max)
+export typealias Int = int(i64.min to i64.max)
+export typealias B = __ManagedMemory with Byte
 
 type Holder
 	export var buf as B
 
-	export static function create(buf B) returns Self
+	static function create(buf B) returns Self
 		return Self{buf: buf}
 	end 'create'
 end 'Holder'
@@ -4117,12 +4117,12 @@ end 'seed'
 // --- file: main.maxon
 typealias Int2 = int(i64.min to i64.max)
 typealias B = Array with Int2
-typealias Nums = Array with Int2
+export typealias Nums = Array with Int2
 
 type Bag
 	export var items as B
 
-	export static function create(items Nums) returns Self
+	static function create(items Nums) returns Self
 		return Self{items: items as B}
 	end 'create'
 end 'Bag'
@@ -4161,11 +4161,11 @@ The base case, and it needs two things at once: the FACTORY has to stamp the spe
 type Cell uses U
 	export var slot as U
 
-	export static function make(slot U) returns Self
+	static function make(slot U) returns Self
 		return Self{slot: slot}
 	end 'make'
 
-	export function get() returns U
+	function get() returns U
 		return slot
 	end 'get'
 end 'Cell'
@@ -4190,11 +4190,11 @@ alone decides the roster.
 type Cell uses U
 	export var slot as U
 
-	export static function make(slot U) returns Self
+	static function make(slot U) returns Self
 		return Self{slot: slot}
 	end 'make'
 
-	export function get() returns U
+	function get() returns U
 		return slot
 	end 'get'
 end 'Cell'
@@ -4220,11 +4220,11 @@ served to this one.
 type Cell uses U
 	export var slot as U
 
-	export static function make(slot U) returns Self
+	static function make(slot U) returns Self
 		return Self{slot: slot}
 	end 'make'
 
-	export function get() returns U
+	function get() returns U
 		return slot
 	end 'get'
 end 'Cell'
@@ -4250,11 +4250,11 @@ typed with the alias, in a function that never sees where the value was built.
 type Cell uses U
 	export var slot as U
 
-	export static function make(slot U) returns Self
+	static function make(slot U) returns Self
 		return Self{slot: slot}
 	end 'make'
 
-	export function get() returns U
+	function get() returns U
 		return slot
 	end 'get'
 end 'Cell'
@@ -4282,11 +4282,11 @@ declaration-side surface can never answer for it, and the read has to take the r
 type Cell uses U
 	export var slot as U
 
-	export static function make(slot U) returns Self
+	static function make(slot U) returns Self
 		return Self{slot: slot}
 	end 'make'
 
-	export function get() returns U
+	function get() returns U
 		return slot
 	end 'get'
 end 'Cell'
@@ -4312,24 +4312,24 @@ later. `createIterator()` / `current()` is this program with the names changed.
 type Cell uses U
 	export var slot as U
 
-	export static function make(slot U) returns Self
+	static function make(slot U) returns Self
 		return Self{slot: slot}
 	end 'make'
 
-	export function get() returns U
+	function get() returns U
 		return slot
 	end 'get'
 end 'Cell'
 
 type Holder uses T
-	typealias TCell = Cell with T
+	export typealias TCell = Cell with T
 	export var cell as TCell
 
-	export static function make(cell TCell) returns Self
+	static function make(cell TCell) returns Self
 		return Self{cell: cell}
 	end 'make'
 
-	export function inner() returns TCell
+	function inner() returns TCell
 		return cell
 	end 'inner'
 end 'Holder'
@@ -4354,24 +4354,24 @@ case, so a rule that leaked at either of them would serve the buffer's roster he
 type Cell uses U
 	export var slot as U
 
-	export static function make(slot U) returns Self
+	static function make(slot U) returns Self
 		return Self{slot: slot}
 	end 'make'
 
-	export function get() returns U
+	function get() returns U
 		return slot
 	end 'get'
 end 'Cell'
 
 type Holder uses T
-	typealias TCell = Cell with T
+	export typealias TCell = Cell with T
 	export var cell as TCell
 
-	export static function make(cell TCell) returns Self
+	static function make(cell TCell) returns Self
 		return Self{cell: cell}
 	end 'make'
 
-	export function inner() returns TCell
+	function inner() returns TCell
 		return cell
 	end 'inner'
 end 'Holder'
@@ -4397,24 +4397,24 @@ And its positive half, so the two-hop refusal is a roster boundary rather than a
 type Cell uses U
 	export var slot as U
 
-	export static function make(slot U) returns Self
+	static function make(slot U) returns Self
 		return Self{slot: slot}
 	end 'make'
 
-	export function get() returns U
+	function get() returns U
 		return slot
 	end 'get'
 end 'Cell'
 
 type Holder uses T
-	typealias TCell = Cell with T
+	export typealias TCell = Cell with T
 	export var cell as TCell
 
-	export static function make(cell TCell) returns Self
+	static function make(cell TCell) returns Self
 		return Self{cell: cell}
 	end 'make'
 
-	export function inner() returns TCell
+	function inner() returns TCell
 		return cell
 	end 'inner'
 end 'Holder'
@@ -4578,7 +4578,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Ints = Array with Int
 
 extension Array
-	export function doubled() returns Int
+	function doubled() returns Int
 		self.managed.append(managed)
 		return managed.length() as Int
 	end 'doubled'
@@ -4605,7 +4605,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Ints = Array with Int
 
 extension Array
-	export function doubled() returns Int
+	function doubled() returns Int
 		managed.append(managed)
 		return managed.length() as Int
 	end 'doubled'
@@ -4641,7 +4641,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Ints = Array with Int
 
 extension Array
-	export function survey() returns Int
+	function survey() returns Int
 		let bare = managed.length() as Int
 		let viaSelf = self.managed.length() as Int
 		let bareByte = (try managed.byteAt(0) otherwise 255) as Int

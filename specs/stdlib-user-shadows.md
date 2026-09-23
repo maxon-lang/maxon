@@ -261,7 +261,7 @@ free function has no type to shadow.
 type Clock
 	export var x as Integer
 
-	export static function nowMs() returns ExitCode
+	static function nowMs() returns ExitCode
 		return 11
 	end 'nowMs'
 end 'Clock'
@@ -313,7 +313,7 @@ type FilePath
 		return FilePath{tag: 2}
 	end 'make'
 
-	export function filename() returns ExitCode
+	function filename() returns ExitCode
 		return 7
 	end 'filename'
 end 'FilePath'
@@ -478,7 +478,7 @@ typealias Value = int(0 to 200)
 type ParsedInt
 	export let value as Value
 
-	export static function create(value Value) returns ParsedInt
+	static function create(value Value) returns ParsedInt
 		return Self{value: value}
 	end 'create'
 end 'ParsedInt'
@@ -544,11 +544,11 @@ interface Tolerance
 end 'Tolerance'
 
 type Fixed implements Tolerance
-	export static function create() returns Fixed
+	static function create() returns Fixed
 		return Self{}
 	end 'create'
 
-	export function score() returns ExitCode
+	function score() returns ExitCode
 		return 7
 	end 'score'
 end 'Fixed'
@@ -599,7 +599,7 @@ typealias Value = int(0 to 200)
 type ParsedInt
 	export let value as Value
 
-	export static function create(value Value) returns ParsedInt
+	static function create(value Value) returns ParsedInt
 		return Self{value: value}
 	end 'create'
 end 'ParsedInt'
@@ -638,7 +638,7 @@ typealias Value = int(0 to 200)
 type ParsedInt
 	export let value as Value
 
-	export static function create(value Value) returns ParsedInt
+	static function create(value Value) returns ParsedInt
 		return Self{value: value}
 	end 'create'
 end 'ParsedInt'
@@ -689,7 +689,7 @@ typealias Bits = int(0 to u64.max)
 type ParsedInt
 	export let value as Value
 
-	export static function create(value Value) returns ParsedInt
+	static function create(value Value) returns ParsedInt
 		return Self{value: value}
 	end 'create'
 end 'ParsedInt'
@@ -727,7 +727,7 @@ typealias Bits = int(0 to u64.max)
 type UserParsedInt
 	export let value as Value
 
-	export static function create(value Value) returns UserParsedInt
+	static function create(value Value) returns UserParsedInt
 		return Self{value: value}
 	end 'create'
 end 'UserParsedInt'

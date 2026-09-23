@@ -168,7 +168,7 @@ export function checkA() returns ExitCode
 end 'checkA'
 
 // --- file: b.maxon
-typealias Limit = int(0 to 2000)
+public typealias Limit = int(0 to 2000)
 
 public function checkB() returns Limit
 	return 0
@@ -229,14 +229,14 @@ to `int` inside `a.maxon` (file-scoped) while type resolution resolved it to `fl
 last-wins). Two deciders, and nothing made them agree.
 ```maxon
 // --- file: a.maxon
-typealias Measure = int(0 to 100)
+export typealias Measure = int(0 to 100)
 
 export function useInt(x Measure) returns Measure
 	return x + 1
 end 'useInt'
 
 // --- file: b.maxon
-typealias Measure = float(0.0 to 1.0)
+export typealias Measure = float(0.0 to 1.0)
 
 export function useFloat(x Measure) returns Measure
 	return x
@@ -248,7 +248,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3105: <fragment>:10:11: Typealias 'Measure' is declared over 'float' here and over 'int' in another file — two files may declare one alias name over different RANGES, but not over different underlying types
+error E3105: <fragment>:10:18: Typealias 'Measure' is declared over 'float' here and over 'int' in another file — two files may declare one alias name over different RANGES, but not over different underlying types
 ```
 
 
@@ -296,7 +296,7 @@ export function widen(c Codepoint) returns Integer
 	return c / 1000
 end 'widen'
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 typealias Codepoint = int(0 to 100)
 
@@ -327,7 +327,7 @@ so the conversion is `lib.maxon`'s, where the name means the exported declaratio
 export typealias Codepoint = int(0 to 1114111)
 
 // --- file: lib.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export function lift(n Integer) returns Codepoint
 	return n as Codepoint
@@ -373,7 +373,7 @@ export function widen(c Codepoint) returns Integer
 	return c
 end 'widen'
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 typealias Codepoint = int(0 to 100)
 
@@ -421,7 +421,7 @@ exercised beside it — `ownClamp(3)` and `libClamp(2)` — so the case cannot p
 disabled file-scoped resolution instead of correcting it.
 ```maxon
 // --- file: lib.maxon
-typealias ElementIndex = int(0 to 2)
+export typealias ElementIndex = int(0 to 2)
 
 export function libClamp(i ElementIndex) returns ElementIndex
 	return i
@@ -488,7 +488,7 @@ observable and the directory walk decides which. `int(0 to 100)` and `int(1000 t
 each other's values, so a name resolved to the wrong file is refused whichever file won.
 ```maxon
 // --- file: high.maxon
-typealias High = int(1000 to 2000)
+export typealias High = int(1000 to 2000)
 typealias Slots = Array with High
 
 export function fromHigh() returns High
@@ -525,7 +525,7 @@ PARAMETER and not a literal, so the guard it meets is the runtime one — which 
 form that compiles and then answers wrongly.
 ```maxon
 // --- file: wide.maxon
-typealias Byte = int(300 to 1000)
+export typealias Byte = int(300 to 1000)
 typealias Bytes = Array with Byte
 
 export function wide(v Byte) returns Byte
@@ -564,7 +564,7 @@ typealias Bag = Array with String
 type Words
 	export var items as Bag
 
-	export static function create() returns Words
+	static function create() returns Words
 		var b = Bag.create()
 		b.push("hi")
 		return Words{items: b}
@@ -583,7 +583,7 @@ typealias Bag = Array with Num
 type Nums
 	export var items as Bag
 
-	export static function create() returns Nums
+	static function create() returns Nums
 		var b = Bag.create()
 		b.push(7)
 		return Nums{items: b}
@@ -608,7 +608,7 @@ which is why the entire existing corpus, whose generic aliases are of exactly th
 instance and every emitted symbol it had.
 ```maxon
 // --- file: a.maxon
-typealias Count = int(0 to 1000)
+export typealias Count = int(0 to 1000)
 typealias Counts = Array with Count
 
 export function fromA() returns Count
@@ -642,7 +642,7 @@ arguments against its own file splits `Grid` in two, which is what makes `Grid` 
 the contest is a fixpoint and not a single walk.
 ```maxon
 // --- file: high.maxon
-typealias High = int(1000 to 2000)
+export typealias High = int(1000 to 2000)
 typealias Slots = Array with High
 typealias Grid = Array with Slots
 
@@ -682,7 +682,7 @@ which of the two an out-of-range value happened to meet — with the real bounds
 suffix that was supposed to carry them. Both sentences are now worded in one place and share the strip.
 ```maxon
 // --- file: narrow.maxon
-typealias Byte = int(0 to 255)
+export typealias Byte = int(0 to 255)
 
 export function narrowByte(v Byte) returns Byte
 	return v
@@ -781,7 +781,7 @@ export typealias Elem = int(1000 to 2000)
 export typealias Slots = Array with Elem
 
 // --- file: priv.maxon
-typealias Elem = int(0 to 100)
+export typealias Elem = int(0 to 100)
 typealias Slots = Array with Elem
 
 export function fromPriv() returns Elem
@@ -862,8 +862,8 @@ export type Wrapper uses T
 end 'Wrapper'
 
 // --- file: a.maxon
-typealias Elem = int(0 to 100)
-typealias W = Wrapper with Elem
+export typealias Elem = int(0 to 100)
+export typealias W = Wrapper with Elem
 
 export function fromA() returns W.Idx
 	let w = W.create(5)
@@ -923,7 +923,7 @@ export function fromHigh() returns Integer
 	return 1
 end 'fromHigh'
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 // --- file: cmain.maxon
 typealias Low = int(0 to 100)
 typealias Bag = Array with Low
@@ -983,7 +983,7 @@ export type Container uses Element
 end 'Container'
 
 // --- file: bhandles.maxon
-type Handle
+export type Handle
 	export var f as __ManagedFile
 
 	export static function create(f __ManagedFile) returns Self
@@ -1002,7 +1002,7 @@ export function useHandles() returns Integer
 	return 1
 end 'useHandles'
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 // --- file: cmain.maxon
 typealias Low = int(0 to 100)
 typealias Bag = Array with Low
@@ -1070,7 +1070,7 @@ export function useOther() returns Integer
 	return 1
 end 'useOther'
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 // --- file: cmain.maxon
 typealias N0 = Box with S0
 typealias N1 = Box with N0
@@ -1127,7 +1127,7 @@ export function useOther() returns Integer
 	return 1
 end 'useOther'
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 // --- file: cmain.maxon
 typealias N0 = Box with S0
 typealias N1 = Box with (Box with S0)
@@ -1160,7 +1160,7 @@ says: `Bag` denotes different things in them. A tuple stays STRUCTURAL where the
 per-file resolution then lands on identical element types and therefore on one canonical name.
 ```maxon
 // --- file: adef.maxon
-typealias Num = int(0 to 125)
+export typealias Num = int(0 to 125)
 typealias Bag = Array with Num
 typealias Pair = (Bag, Num)
 
@@ -1187,7 +1187,7 @@ export function useB() returns Integer
 	return b.count()
 end 'useB'
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 // --- file: cmain.maxon
 typealias Integer = int(i64.min to i64.max)
 function main() returns ExitCode
@@ -1211,8 +1211,8 @@ The element type is what discriminates: `theirs.get(1)` is an `int` only if `Bag
 ExitCode` would not compile.
 ```maxon
 // --- file: adef.maxon
-typealias Num = int(0 to 125)
-typealias Bag = Array with Num
+export typealias Num = int(0 to 125)
+export typealias Bag = Array with Num
 
 export function makeBag() returns Bag
 	var b = Bag.create()
@@ -1273,7 +1273,7 @@ export function useB() returns Integer
 	return (try h.q.0.get(0) otherwise "").count()
 end 'useB'
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 // --- file: cmain.maxon
 function main() returns ExitCode
 	return (useA() * 10 + useB()) as ExitCode
@@ -1297,7 +1297,7 @@ export function useA() returns Integer
 	var k = Keeper.make()
 	return (try k.p.0.get(0) otherwise 0)
 end 'useA'
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 72
@@ -1342,7 +1342,7 @@ export function relayA() returns Pair
 	return (9, 2)
 end 'relayA'
 
-typealias Pair = (int, int)
+export typealias Pair = (int, int)
 
 // --- file: z-gamma.maxon
 typealias Pair = (String, String)
@@ -1389,7 +1389,7 @@ export function relayA(p Pair) returns ExitCode
 	return (p.0 - p.1) as ExitCode
 end 'relayA'
 
-typealias Pair = (int, int)
+export typealias Pair = (int, int)
 
 // --- file: z-gamma.maxon
 typealias Pair = (String, String)
@@ -1453,7 +1453,7 @@ export function relayA() returns Pair
 	return (9, 2)
 end 'relayA'
 
-typealias Pair = (int, int)
+export typealias Pair = (int, int)
 ```
 ```exitcode
 0
@@ -1534,7 +1534,7 @@ end 'Box'
 type HolderA
 	export var p as Pair
 
-	export static function create() returns HolderA
+	static function create() returns HolderA
 		return Self{p: (9, 2)}
 	end 'create'
 end 'HolderA'
@@ -1571,7 +1571,7 @@ typealias BoxA = Box with Pair
 type HolderG
 	export var p as Pair
 
-	export static function create() returns HolderG
+	static function create() returns HolderG
 		return Self{p: ("a", "b")}
 	end 'create'
 end 'HolderG'
@@ -1642,7 +1642,7 @@ end 'Box'
 type HolderG
 	export var p as Pair
 
-	export static function create() returns HolderG
+	static function create() returns HolderG
 		return Self{p: ("a", "b")}
 	end 'create'
 end 'HolderG'
@@ -1679,7 +1679,7 @@ typealias BoxG = Box with Pair
 type HolderA
 	export var p as Pair
 
-	export static function create() returns HolderA
+	static function create() returns HolderA
 		return Self{p: (9, 2)}
 	end 'create'
 end 'HolderA'
@@ -2003,7 +2003,7 @@ unsized, so `fixedSize` is already `NoFixedSize` there and dropping it is a no-o
 `bytearray-element-size.md` are all `Array with Byte` and stayed green throughout.
 ```maxon
 // --- file: lib.maxon
-typealias W = int(i64.min to i64.max)
+export typealias W = int(i64.min to i64.max)
 typealias WVec = Vector with 8 W
 
 export function wideCount() returns W

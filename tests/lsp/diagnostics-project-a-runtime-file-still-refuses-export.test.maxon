@@ -1,0 +1,14 @@
+let ExportProbeFileName = "EditorExportProbe.maxon"
+let ExportProbeSource = "export function editorExportProbe() returns MachineWord\n\treturn 7\nend 'editorExportProbe'\n"
+let VisibilityWiderThanTheTierCode = "E3154"
+let ExportProbeLine = 0 as LspCoordinate
+
+test 'a runtime file exporting a declaration is refused in the editor as in a build'
+	let probe = probeRuntimeTierDiagnostics(ExportProbeFileName, content: ExportProbeSource)
+
+	let reported = try onlyProjectDiagnostic(probe, note: "a buffer under `runtime/` declares an `export` function. A build refuses a visibility wider than `module` in a runtime source file, and the editor must say what the build says.")
+
+	try Expect.equal(reported.code, expected: VisibilityWiderThanTheTierCode, message: "the refusal is the runtime tier's own ceiling; publishing nothing here means the editor checked the tier file as an author's file.")
+
+	try Expect.equal(reported.range.startLine as AssertedInt, expected: ExportProbeLine as AssertedInt, message: "the declaration is on line 0.")
+end 'a runtime file exporting a declaration is refused in the editor as in a build'

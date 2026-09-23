@@ -116,7 +116,7 @@ repair. A result typed from the wrong member here is a leak in one direction and
 callee never wrote in the other, which is why the pair is pinned by `exitcode` and not by `stdout` alone.
 ```maxon
 // --- file: a.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 function stripTrailingCR(bytes ByteArray) returns ByteArray
 	return bytes
@@ -153,7 +153,7 @@ result of each call is typed from the member its own argument means. It prints `
 then `ok!`.
 ```maxon
 // --- file: a.maxon
-typealias Cnt = int(0 to 100)
+export typealias Cnt = int(0 to 100)
 
 export function widen(n Cnt) returns Cnt
 	return n + 1
@@ -228,14 +228,14 @@ left naming it reaches `SemanticCheck.validateCall` and was reported **`E3004: c
 The ambiguous arm now points the op at a declared member exactly as the no-match arm does.
 ```maxon
 // --- file: a.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export function f(a Integer) returns Integer
 	return a
 end 'f'
 
 // --- file: b.maxon
-typealias Count = int(i64.min to i64.max)
+export typealias Count = int(i64.min to i64.max)
 
 export function f(a Count) returns Count
 	return a + 1
@@ -301,7 +301,7 @@ file-private, visibility alone would pick the member and the case would never en
 about. It prints `11` then `44`.
 ```maxon
 // --- file: a.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 public type Box
 	export var first as Integer
@@ -317,7 +317,7 @@ export function pick(n Integer) returns Box
 end 'pick'
 
 // --- file: b.maxon
-typealias Count = int(i64.min to i64.max)
+export typealias Count = int(i64.min to i64.max)
 
 public type Bag
 	export var second as Count
@@ -366,10 +366,10 @@ strictly better than the one `funcReturnDeclFiles` keeps per key, since that col
 overload set may span two files.
 ```maxon
 // --- file: adef.maxon
-typealias Num = int(0 to 125)
-typealias Bag = Array with Num
+export typealias Num = int(0 to 125)
+export typealias Bag = Array with Num
 
-public function makeBag() returns Bag
+export function makeBag() returns Bag
 	var b = Bag.create()
 	b.push(4)
 	b.push(9)

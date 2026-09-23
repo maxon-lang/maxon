@@ -487,7 +487,7 @@ exits 2 with the diagnostic, rather than reporting that file's tests as absent.
 
 ```maxon
 // pricing/pricing.maxon
-typealias Cents = int(0 to i64.max)
+export typealias Cents = int(0 to i64.max)
 
 /// What `quantity` items cost at `unitPrice`, with a tenth off from 10 items up.
 export function totalCost(unitPrice Cents, quantity Cents) returns Cents
@@ -741,6 +741,12 @@ myproject/
 The standard library is part of every compilation; the compiler finds it by walking up from its own
 executable, so nothing in the project refers to it. See the [Standard Library](STDLIB_REFERENCE.md).
 
+A file of the compiler's own `stdlib/` or `runtime/` that a build names — as its path, or in a manifest's
+`sources` beside a program — is read once, not a second time as part of the library. A `runtime/` file is
+compiled as runtime-tier source wherever it is named from, with the tier's rules
+([The runtime tier](STDLIB_REFERENCE.md#the-runtime-tier)); built on its own it has no `main`, so the
+build stops at [E3001](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3001).
+
 ### The build manifest
 
 `maxon build` with no path looks for **`project.maxon`** in the current directory, compiles it, runs it,
@@ -841,6 +847,10 @@ are separate on purpose:
   turned into a project by holding one.
 
 Neither is compiled into the program (see [Which files a build includes](#which-files-a-build-includes)).
+
+Every task `tasks.maxon` declares counts as an entry point, whichever one `maxon run` was asked for: the
+runner reaches the others by name, so an `export function` task is never reported as an unused export
+([E3092](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3092)).
 
 #### Named targets
 
@@ -1497,7 +1507,9 @@ a file the client named no root over, and a file inside `stdlib/` or `runtime/`,
 behaviour described below.
 
 **The project root is a ladder, and the client's workspace folders are one of its rungs.** A file inside
-the compiler's own `stdlib/` or `runtime/` gets those two tiers and nothing else. Any other document is
+the compiler's own `stdlib/` or `runtime/` gets those two tiers and nothing else, and a `runtime/` file is
+checked as the build checks tier source: its reserved names and `__Raw` calls are legal, its restrictions
+still apply, and a body no program reaches is not call-checked. Any other document is
 rooted at the nearest ancestor directory holding a `project.maxon`, searched no higher than the nearest
 root the client named that contains the document. Failing that it is rooted at that named root itself;
 failing that, at its own directory. **Every** entry of `workspaceFolders` is a root, and `rootUri` is
@@ -1526,8 +1538,9 @@ it as gone.
 
 **Diagnostics** are published with `textDocument/publishDiagnostics` after every `didOpen` and
 `didChange`, and cleared on `didClose`. Each has the error code (for example `E3005`) as `code`,
-`source: "maxon"` and severity Error. "No `main` function" (E3001) is not reported, because a single
-buffer is not a whole program.
+`source: "maxon"` and severity Error. "No `main` function" (E3001) and the unused-export diagnostics
+(E3092, E3093, E3094) are not reported, because a single buffer is not a whole program: an export the
+buffer never uses may be read by a sibling file the check cannot see.
 
 **Requests served:**
 

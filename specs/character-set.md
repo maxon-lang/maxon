@@ -485,7 +485,7 @@ it is the struct-field shape the class needs a witness at, and the next per-type
 type Trimmer
 	var chars as CharacterSet
 
-	export static function init(cs CharacterSet) returns Self
+	static function init(cs CharacterSet) returns Self
 		return Self{chars: cs}
 	end 'init'
 end 'Trimmer'
@@ -543,7 +543,7 @@ type Box uses T
 
 	// The instance is DISCARDED below, which is what runs the cascade — so the factory must have an effect
 	// or the discard is E3064 (`discarded-results.md`).
-	export static function init(x T) returns Self
+	static function init(x T) returns Self
 		inits = inits + 1
 		return Self{v: x}
 	end 'init'

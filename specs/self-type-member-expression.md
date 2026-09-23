@@ -55,7 +55,7 @@ enum Toggle
 	off
 	on
 
-	export function flipped() returns Toggle
+	function flipped() returns Toggle
 		if self == Self.off 'isOff'
 			return Self.on
 		end 'isOff'
@@ -84,11 +84,11 @@ typealias Num = int(0 to 1000)
 type Gate
 	export var n as Num
 
-	export static function make(v Num) returns Gate
+	static function make(v Num) returns Gate
 		return Self{n: v}
 	end 'make'
 
-	export function twin() returns Gate
+	function twin() returns Gate
 		return Self.make(self.n)
 	end 'twin'
 end 'Gate'
@@ -112,11 +112,11 @@ typealias Num = int(0 to 1000)
 type Gate
 	export var n as Num
 
-	export static function two(a Num, b Num) returns Gate
+	static function two(a Num, b Num) returns Gate
 		return Self{n: a + b}
 	end 'two'
 
-	export function twin() returns Num
+	function twin() returns Num
 		return Self.two(self.n, b: 1).n
 	end 'twin'
 end 'Gate'
@@ -139,11 +139,11 @@ typealias Num = int(0 to 1000)
 type Gate
 	export var n as Num
 
-	export static function make(v Num) returns Gate
+	static function make(v Num) returns Gate
 		return Self{n: v}
 	end 'make'
 
-	export static function twice(v Num) returns Gate
+	static function twice(v Num) returns Gate
 		return Self.make(v + v)
 	end 'twice'
 end 'Gate'
@@ -166,11 +166,11 @@ union Res
 	ok(v Num)
 	none
 
-	export function bump() returns Res
+	function bump() returns Res
 		return Self.ok(42)
 	end 'bump'
 
-	export function blank() returns Res
+	function blank() returns Res
 		return Self.none
 	end 'blank'
 end 'Res'
@@ -206,18 +206,18 @@ end 'Err'
 type Gate
 	export var n as Num
 
-	export static function make(v Num) returns Gate
+	static function make(v Num) returns Gate
 		return Self{n: v}
 	end 'make'
 
-	export static function check(v Num) returns Num throws Err
+	static function check(v Num) returns Num throws Err
 		if v == 0 'zero'
 			throw Err.bad
 		end 'zero'
 		return v
 	end 'check'
 
-	export function twin() returns Num
+	function twin() returns Num
 		return try Self.check(self.n) otherwise 3
 	end 'twin'
 end 'Gate'
@@ -240,15 +240,15 @@ typealias Num = int(0 to 1000)
 type Gate
 	export var n as Num
 
-	export static function make(v Num) returns Gate
+	static function make(v Num) returns Gate
 		return Self{n: v}
 	end 'make'
 
-	export static function dbl(v Num) returns Num
+	static function dbl(v Num) returns Num
 		return v + v
 	end 'dbl'
 
-	export function viaClosure() returns Num
+	function viaClosure() returns Num
 		let f = function(v Num) gives Self.dbl(v)
 		return f(21)
 	end 'viaClosure'
@@ -272,11 +272,11 @@ typealias Num = int(0 to 1000)
 type Box uses T
 	export var v as T
 
-	export static function make(x T) returns Self
+	static function make(x T) returns Self
 		return Self{v: x}
 	end 'make'
 
-	export static function twice(x T) returns Self
+	static function twice(x T) returns Self
 		return Self.make(x)
 	end 'twice'
 end 'Box'
@@ -300,15 +300,15 @@ enum Toggle
 	off
 	on
 
-	export function same() returns Self
+	function same() returns Self
 		return self
 	end 'same'
 
-	export function matches(other Self) returns bool
+	function matches(other Self) returns bool
 		return self == other
 	end 'matches'
 
-	export function isOff() returns bool
+	function isOff() returns bool
 		return self.matches(Self.off)
 	end 'isOff'
 end 'Toggle'
@@ -336,7 +336,7 @@ enum Toggle
 	off
 	on
 
-	export function bad() returns Toggle
+	function bad() returns Toggle
 		return Self{}
 	end 'bad'
 end 'Toggle'
@@ -362,7 +362,7 @@ enum Toggle
 	off
 	on
 
-	export function bad() returns Toggle
+	function bad() returns Toggle
 		return Toggle{}
 	end 'bad'
 end 'Toggle'
@@ -389,11 +389,11 @@ typealias Num = int(0 to 1000)
 type Gate
 	export var n as Num
 
-	export static function make(v Num) returns Gate
+	static function make(v Num) returns Gate
 		return Self{n: v}
 	end 'make'
 
-	export function bad() returns Num
+	function bad() returns Num
 		return Self.nope()
 	end 'bad'
 end 'Gate'
@@ -418,11 +418,11 @@ typealias Num = int(0 to 1000)
 type Gate
 	export var n as Num
 
-	export static function make(v Num) returns Gate
+	static function make(v Num) returns Gate
 		return Self{n: v}
 	end 'make'
 
-	export function bad() returns Num
+	function bad() returns Num
 		return Self.nope
 	end 'bad'
 end 'Gate'
@@ -461,11 +461,11 @@ typealias Num = int(0 to 1000)
 type Gate
 	export var n as Num
 
-	export static function make(v Num) returns Gate
+	static function make(v Num) returns Gate
 		return Self{n: v}
 	end 'make'
 
-	export function bad() returns Num
+	function bad() returns Num
 		Self.make(1)
 		return 1
 	end 'bad'
@@ -491,11 +491,11 @@ typealias Num = int(0 to 1000)
 type Gate
 	export var n as Num
 
-	export static function make(v Num) returns Gate
+	static function make(v Num) returns Gate
 		return Self{n: v}
 	end 'make'
 
-	export function bad() returns Num
+	function bad() returns Num
 		Gate.make(1)
 		return 1
 	end 'bad'
@@ -519,7 +519,7 @@ enum Kw
 	while
 	end
 
-	export function pick() returns Kw
+	function pick() returns Kw
 		if self == Self.while 'w'
 			return Self.end
 		end 'w'
@@ -551,7 +551,7 @@ union R
 	b(v Num)
 	c
 
-	export function norm() returns R
+	function norm() returns R
 		return match self 'k'
 			a(v) gives Self.b(v)
 			b(v) gives Self.a(v)
@@ -583,7 +583,7 @@ union Msg
 	text(s String)
 	silent
 
-	export function shout() returns Msg
+	function shout() returns Msg
 		return Self.text("hi")
 	end 'shout'
 end 'Msg'
@@ -615,11 +615,11 @@ end 'take'
 type Gate
 	export var n as Num
 
-	export static function make(v Num) returns Gate
+	static function make(v Num) returns Gate
 		return Self{n: v}
 	end 'make'
 
-	export function arg() returns Num
+	function arg() returns Num
 		return take(Self.make(42).n)
 	end 'arg'
 end 'Gate'
@@ -643,11 +643,11 @@ typealias Num = int(0 to 1000)
 type Gate
 	export var n as Num
 
-	export static function make(v Num) returns Gate
+	static function make(v Num) returns Gate
 		return Self{n: v}
 	end 'make'
 
-	export function twin() returns Num
+	function twin() returns Num
 		let Gate = 1
 		return Self.make(41).n + Gate
 	end 'twin'
@@ -671,11 +671,11 @@ typealias Num = int(0 to 1000)
 type Holder uses T
 	export var v as T
 
-	export static function make(x T) returns Self
+	static function make(x T) returns Self
 		return Self{v: x}
 	end 'make'
 
-	export function twin() returns T
+	function twin() returns T
 		return Self.make(self.v).v
 	end 'twin'
 end 'Holder'
@@ -698,7 +698,7 @@ interner, so a `Self.` resolved in one file must not leak an id the other file's
 access chain`) — a bootstrap gap in directory projects, not a divergence the compiler owes anything to.
 ```maxon
 // --- file: gate.maxon
-typealias Num = int(0 to 1000)
+export typealias Num = int(0 to 1000)
 
 export type Gate
 	export var n as Num
@@ -731,7 +731,7 @@ enum Toggle
 	off
 	on
 
-	export function bad() returns Toggle
+	function bad() returns Toggle
 		return Self.nope
 	end 'bad'
 end 'Toggle'
@@ -759,7 +759,7 @@ union Res
 	ok(v Num)
 	none
 
-	export function bad() returns Res
+	function bad() returns Res
 		return Self{}
 	end 'bad'
 end 'Res'
@@ -784,7 +784,7 @@ typealias Num = int(0 to 1000)
 type Gate
 	export var n as Num
 
-	export function bad() returns Num
+	function bad() returns Num
 		return Self
 	end 'bad'
 end 'Gate'
@@ -840,11 +840,11 @@ typealias Num = int(0 to 1000)
 type Gate
 	export var n as Num
 
-	export static function make(v Num) returns Gate
+	static function make(v Num) returns Gate
 		return Self{n: v}
 	end 'make'
 
-	export function twin(Self Num) returns Num
+	function twin(Self Num) returns Num
 		return Self.make(41).n + Self{n: 1}.n
 	end 'twin'
 end 'Gate'
@@ -854,7 +854,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/self-type-member-expression/parameter-named-Self-does-not-capture-a-static-call.test:11:23: unused variable: 'Self'
+error E3012: <fragment>:11:16: unused variable: 'Self'
 ```
 
 <!-- test: parameter-named-Self-does-not-capture-an-enum-case -->
@@ -876,7 +876,7 @@ enum Toggle
 	off
 	on
 
-	export function pick(Self Num) returns Toggle
+	function pick(Self Num) returns Toggle
 		return Self.on
 	end 'pick'
 end 'Toggle'
@@ -890,7 +890,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/self-type-member-expression/parameter-named-Self-does-not-capture-an-enum-case.test:8:23: unused variable: 'Self'
+error E3012: <fragment>:8:16: unused variable: 'Self'
 ```
 
 <!-- test: closure-parameter-named-Self-does-not-capture-Self -->
@@ -908,11 +908,11 @@ typealias Num = int(0 to 1000)
 type Gate
 	export var n as Num
 
-	export static function make(v Num) returns Gate
+	static function make(v Num) returns Gate
 		return Self{n: v}
 	end 'make'
 
-	export function twin() returns Num
+	function twin() returns Num
 		let f = function(Self Num) gives Self.make(35).n + 7
 		return f(7)
 	end 'twin'
@@ -944,7 +944,7 @@ union Msg
 	text(s String)
 	silent
 
-	export function shout(Self Num) returns Msg
+	function shout(Self Num) returns Msg
 		return Self.text("hi")
 	end 'shout'
 end 'Msg'
@@ -959,7 +959,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/self-type-member-expression/managed-payload-through-Self-under-a-Self-named-parameter.test:8:24: unused variable: 'Self'
+error E3012: <fragment>:8:17: unused variable: 'Self'
 ```
 
 <!-- test: managed-payload-through-Self-runs-without-a-Self-named-parameter -->
@@ -977,7 +977,7 @@ union Msg
 	text(s String)
 	silent
 
-	export function shout(volume Num) returns Msg
+	function shout(volume Num) returns Msg
 		return Self.text("hi{volume}")
 	end 'shout'
 end 'Msg'
@@ -1007,7 +1007,7 @@ typealias Num = int(0 to 1000)
 type Gate
 	export var n as Num
 
-	export function bad(Self Num) returns Num
+	function bad(Self Num) returns Num
 		return Self
 	end 'bad'
 end 'Gate'
@@ -1031,7 +1031,7 @@ enum Kw
 	Self
 	on
 
-	export function pick() returns Kw
+	function pick() returns Kw
 		return Self.Self
 	end 'pick'
 end 'Kw'
@@ -1058,15 +1058,15 @@ typealias Num = int(0 to 1000)
 type Gate
 	export var n as Num
 
-	export static function make(v Num) returns Gate
+	static function make(v Num) returns Gate
 		return Self{n: v}
 	end 'make'
 
-	export static function Self(v Num) returns Num
+	static function Self(v Num) returns Num
 		return v
 	end 'Self'
 
-	export function twin() returns Num
+	function twin() returns Num
 		return Self.Self(42)
 	end 'twin'
 end 'Gate'
@@ -1093,11 +1093,11 @@ typealias Num = int(0 to 1000)
 type Gate
 	export var n as Num
 
-	export static function make(v Num) returns Gate
+	static function make(v Num) returns Gate
 		return Self{n: v}
 	end 'make'
 
-	export function bad(Self Gate) returns Num
+	function bad(Self Gate) returns Num
 		Self.n = 5
 		return 1
 	end 'bad'
@@ -1121,7 +1121,7 @@ typealias Num = int(0 to 1000)
 type Gate
 	export var n as Num
 
-	export function bad() returns Num
+	function bad() returns Num
 		Gate.n = 5
 		return 1
 	end 'bad'

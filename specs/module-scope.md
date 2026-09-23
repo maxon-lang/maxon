@@ -59,7 +59,7 @@ let module = 5
 type Holder
 	export var module as Integer
 
-	export static function create(module Integer) returns Self
+	static function create(module Integer) returns Self
 		return Self{module: module}
 	end 'create'
 end 'Holder'
@@ -87,7 +87,7 @@ second `let` is the identifier `module`. It is NOT the modifier — a newline se
 `derived` therefore stays file-private, which the second file proves by failing to see it.
 ```maxon
 // --- file: one.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 let module = 5
 let alsoModule = module
@@ -110,7 +110,7 @@ error E2004: <fragment>:15:9: Undefined variable 'derived'
 `feature2/` is not a subdirectory of `feature/`. A character-prefix subtree test would admit it.
 ```maxon
 // --- file: feature/helper.maxon
-typealias Integer = int(i64.min to i64.max)
+module typealias Integer = int(i64.min to i64.max)
 
 module function helper() returns Integer
 	return 42
@@ -131,7 +131,7 @@ error E3088: feature2/<fragment>:11:9: function 'helper' is module-scoped and no
 directories admits it, and the separator guard that catches `feature2/` walks straight past.
 ```maxon
 // --- file: feature/helper.maxon
-typealias Integer = int(i64.min to i64.max)
+module typealias Integer = int(i64.min to i64.max)
 
 module function helper() returns Integer
 	return 42
@@ -151,7 +151,7 @@ error E3088: feature.extra/<fragment>:11:9: function 'helper' is module-scoped a
 reader is in neither the declaring directory nor beneath it.
 ```maxon
 // --- file: my.dir/helper.maxon
-typealias Integer = int(i64.min to i64.max)
+module typealias Integer = int(i64.min to i64.max)
 
 module function helper() returns Integer
 	return 42
@@ -171,7 +171,7 @@ The converse of the two refusals above: a dot in a directory name costs the dire
 own subdirectory is inside its module exactly as any other subdirectory is.
 ```maxon
 // --- file: feature.extra/helper.maxon
-typealias Integer = int(i64.min to i64.max)
+module typealias Integer = int(i64.min to i64.max)
 
 module function helper() returns Integer
 	return 42
@@ -191,7 +191,7 @@ The root directory contains every file, so a `module` declaration written there 
 program-wide.
 ```maxon
 // --- file: root.maxon
-typealias Integer = int(i64.min to i64.max)
+module typealias Integer = int(i64.min to i64.max)
 
 module function helper() returns Integer
 	return 42
@@ -284,7 +284,7 @@ error E2001: <fragment>:5:9: 'export' and 'module' cannot be combined
 The TYPE is exported and the FIELD is `module`, so the reader may name `Box` and may not read `v`.
 ```maxon
 // --- file: feature/box.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export type Box
 	module var v as Integer
@@ -307,7 +307,7 @@ error E3014: other/<fragment>:16:11: cannot access unexported field: 'v' outside
 <!-- test: a-module-field-is-readable-from-a-subdirectory -->
 ```maxon
 // --- file: feature/box.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 public type Box
 	module var v as Integer
@@ -367,12 +367,12 @@ The TYPE's visibility outranks the FIELD's: `v` is exported, and the reader stil
 because it may not name `Box`.
 ```maxon
 // --- file: feature/box.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 module type Box
 	export var v as Integer
 
-	export static function create(v Integer) returns Self
+	module static function create(v Integer) returns Self
 		return Self{v: v}
 	end 'create'
 end 'Box'
@@ -390,12 +390,12 @@ error E4006: other/<fragment>:16:11: Unknown type 'Box' in field access chain
 <!-- test: a-module-type-is-reachable-from-a-subdirectory -->
 ```maxon
 // --- file: feature/box.maxon
-typealias Integer = int(i64.min to i64.max)
+module typealias Integer = int(i64.min to i64.max)
 
 module type Box
 	export var v as Integer
 
-	export static function create(v Integer) returns Self
+	module static function create(v Integer) returns Self
 		return Self{v: v}
 	end 'create'
 end 'Box'

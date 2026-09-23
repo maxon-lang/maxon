@@ -30,7 +30,7 @@ pointer.
 ```maxon
 typealias Idx = int(0 to 1024)
 
-export union Op
+union Op
 		literal(payload Idx)
 		nop
 end 'Op'
@@ -38,7 +38,7 @@ end 'Op'
 type Holder
 		export var payload as Idx
 
-		export static function create() returns Self
+		static function create() returns Self
 				return Self{payload: 999}
 		end 'create'
 
@@ -66,7 +66,7 @@ typealias Idx = int(0 to 1024)
 type Counter
 		export var count as Idx
 
-		export static function create() returns Self
+		static function create() returns Self
 				return Self{count: 0}
 		end 'create'
 
@@ -93,7 +93,7 @@ typealias Idx = int(0 to 1024)
 type Holder
 		export var value as Idx
 
-		export static function create() returns Self
+		static function create() returns Self
 				return Self{value: 0}
 		end 'create'
 
@@ -121,7 +121,7 @@ type Holder
 		export var element as Idx
 		export var elements as IdxArray
 
-		export static function create() returns Self
+		static function create() returns Self
 				return Self{element: 0, elements: IdxArray.create()}
 		end 'create'
 

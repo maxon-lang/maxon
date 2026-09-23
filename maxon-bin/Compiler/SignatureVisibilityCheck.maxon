@@ -1,0 +1,354 @@
+typealias ReportedTypeNameSet = Set with ByteArray
+
+union SignatureSpelling
+	callee
+	inDeclaringFile
+end 'SignatureSpelling'
+
+type SignatureSubject
+	export let spelling as SignatureSpelling
+	export let tier as Visibility
+	export let readerFilePath as FilePath
+	export let nameLine as LineNumber
+	export let nameColumn as ColumnNumber
+	export let enclosing as EnclosingType
+	export let declaredName as ByteArray
+
+	static function create(spelling SignatureSpelling, tier Visibility, readerFilePath FilePath, nameLine LineNumber, nameColumn ColumnNumber, enclosing EnclosingType, declaredName ByteArray) returns SignatureSubject
+		return Self{spelling: spelling, tier: tier, readerFilePath: readerFilePath, nameLine: nameLine, nameColumn: nameColumn, enclosing: enclosing, declaredName: declaredName}
+	end 'create'
+end 'SignatureSubject'
+
+union EnclosingType
+	none
+	named(typeName ByteArray)
+end 'EnclosingType'
+
+function subjectDisplay(signatures ProgramSignatures, subject SignatureSubject) returns String
+	return match subject.spelling 'spelling'
+		callee gives String.from(signatures.diagnosticCalleeSpelling(subject.declaredName))
+		inDeclaringFile gives String.from(signatures.diagnosticNameInFile(subject.declaredName, declFilePath: subject.readerFilePath))
+	end 'spelling'
+end 'subjectDisplay'
+
+// Carried as a union and rendered only where a diagnostic is reported: the phrase is one String per
+// parameter of every audited signature, on a walk that reports nothing in nearly every compile.
+union SignaturePosition
+	parameter(name ByteArray)
+	returnType
+	throwsClause
+end 'SignaturePosition'
+
+function positionText(where SignaturePosition) returns String
+	return match where 'position'
+		parameter(name) gives "in the type of parameter '{String.from(name)}'"
+		returnType gives "in its return type"
+		throwsClause gives "in its throws clause"
+	end 'position'
+end 'positionText'
+
+function enclosingTypeOf(declaredName ByteArray) returns EnclosingType
+	return match splitQualifiedName(declaredName) 'split'
+		notQualified gives EnclosingType.none
+		parts(owner, _) gives EnclosingType.named(owner)
+	end 'split'
+end 'enclosingTypeOf'
+
+function namesTheEnclosingType(enclosing EnclosingType, name ByteArray) returns bool
+	return match enclosing 'enclosing'
+		none gives false
+		named(typeName) gives typeName.equals(name)
+	end 'enclosing'
+end 'namesTheEnclosingType'
+
+module function checkSignatureVisibility(project Project, module MaxonModule, signatures ProgramSignatures)
+	for func in module.functions 'eachFunc'
+		checkDeclaredSignature(project, signatures: signatures, func: func)
+	end 'eachFunc'
+
+	checkInterfaceRequirements(project, signatures: signatures)
+end 'checkSignatureVisibility'
+
+// An interface requirement is no `IrFunction` — it has no body and belongs to no module — so the walk
+// above cannot reach one. It is reached through the declaration site instead, at the tier the interface
+// itself was written with.
+function checkInterfaceRequirements(project Project, signatures ProgramSignatures)
+	let interfaces = signatures.interfaceMap()
+
+	for site in signatures.interfaceDeclarationSites() 'eachInterface'
+		if site.visibility == Visibility.file 'noTypeCanBeNarrowerThanAFilePrivateInterface'
+			continue
+		end 'noTypeCanBeNarrowerThanAFilePrivateInterface'
+
+		match lookupInterface(interfaces, name: site.name) 'declared'
+			notFound then continue
+			found(declared) then checkEveryRequirement(project, signatures: signatures, site: site, declared: declared)
+		end 'declared'
+	end 'eachInterface'
+end 'checkInterfaceRequirements'
+
+function checkEveryRequirement(project Project, signatures ProgramSignatures, site InterfaceDeclSite, declared IrInterface)
+	for method in declared.methods 'eachRequirement'
+		checkOneRequirement(project, signatures: signatures, site: site, method: method)
+	end 'eachRequirement'
+end 'checkEveryRequirement'
+
+function checkOneRequirement(project Project, signatures ProgramSignatures, site InterfaceDeclSite, method InterfaceMethodSig)
+	let subject = SignatureSubject.create(SignatureSpelling.inDeclaringFile, tier: site.visibility, readerFilePath: site.path, nameLine: method.nameLine, nameColumn: method.nameColumn, enclosing: EnclosingType.named(site.name), declaredName: qualifiedMethodName(site.name, methodName: method.name))
+
+	for position in 0 upto method.paramTypeNames.count() 'eachParam'
+		let typeName = try method.paramTypeNames.get(position) otherwise panic("checkOneRequirement: paramTypeNames.get OOB at {position} inside its own `upto` bound")
+		let paramName = try method.paramNames.get(position) otherwise panic("checkOneRequirement: '{String.from(method.name)}' names {method.paramTypeNames.count()} parameter type(s) and {method.paramNames.count()} parameter name(s) — `InterfaceMethodSig` carries the two columns in parallel")
+
+		if typeName.isEmpty() 'aPrimitiveNamesNoDeclaration'
+			continue
+		end 'aPrimitiveNamesNoDeclaration'
+
+		var seenInParam = ReportedTypeNameSet.create()
+		walkSignatureTypeName(project, signatures: signatures, subject: subject, where: SignaturePosition.parameter(paramName), name: typeName, seen: seenInParam)
+	end 'eachParam'
+
+	if not method.returnTypeName.isEmpty() 'aNamedReturnType'
+		var seenInReturn = ReportedTypeNameSet.create()
+		walkSignatureTypeName(project, signatures: signatures, subject: subject, where: SignaturePosition.returnType, name: method.returnTypeName, seen: seenInReturn)
+	end 'aNamedReturnType'
+
+	checkThrowsType(project, signatures: signatures, subject: subject, clause: method.throwsClause)
+end 'checkOneRequirement'
+
+// On a service's instance method `export` means "this is a message", and a message can be sent no
+// further than a handle to its service travels, so its surface is capped at the service type's tier.
+// Without the cap a file-private service could not name its own types in its messages.
+function declaredTierOf(signatures ProgramSignatures, func IrFunction) returns Visibility
+	if func.visibility == Visibility.file or not signatures.spawnsAnyService() 'noMessageTierCanNarrowIt'
+		return func.visibility
+	end 'noMessageTierCanNarrowIt'
+
+	match serviceMessageOwnerOf(signatures, callee: func.name) 'message'
+		notAMessage then return func.visibility
+		ofService(typeName, _) then return narrowerTier(func.visibility, other: spawnTargetLayoutOf(signatures, typeName: typeName).visibility)
+	end 'message'
+end 'declaredTierOf'
+
+function checkDeclaredSignature(project Project, signatures ProgramSignatures, func IrFunction)
+	let tier = declaredTierOf(signatures, func: func)
+
+	if tier == Visibility.file 'noTypeCanBeNarrowerThanAFilePrivateFunction'
+		return
+	end 'noTypeCanBeNarrowerThanAFilePrivateFunction'
+
+	if func.sourceFilePath.toString().isEmpty() 'synthesizedAndSpellsNothingAnAuthorWrote'
+		return
+	end 'synthesizedAndSpellsNothingAnAuthorWrote'
+
+	if isSynthesizedName(func.name) 'noSignatureAnAuthorWrote'
+		return
+	end 'noSignatureAnAuthorWrote'
+
+	if not project.funcSignatures.contains(func.name) 'noDeclaredSignatureToWalk'
+		return
+	end 'noDeclaredSignatureToWalk'
+
+	let sig = try project.funcSignatures.get(func.name) otherwise panic("checkSignatureVisibility: contains({String.from(func.name)}) is true on the line above but get failed")
+	let subject = SignatureSubject.create(SignatureSpelling.callee, tier: tier, readerFilePath: func.sourceFilePath, nameLine: func.nameLine, nameColumn: func.nameColumn, enclosing: enclosingTypeOf(func.name), declaredName: func.name)
+
+	checkParameterTypes(project, signatures: signatures, subject: subject, sig: sig)
+	checkReturnType(project, signatures: signatures, subject: subject, returned: func.maxonReturnType)
+	checkThrowsType(project, signatures: signatures, subject: subject, clause: func.throwsTypeName)
+end 'checkDeclaredSignature'
+
+function checkParameterTypes(project Project, signatures ProgramSignatures, subject SignatureSubject, sig FuncSignature)
+	for position in 0 upto sig.paramNames.count() 'eachParam'
+		let name = try sig.paramNames.get(position) otherwise panic("checkParameterTypes: paramNames.get OOB at {position} inside its own `upto` bound")
+
+		if name.equals(SelfParamName) 'theImplicitReceiverIsNotAWrittenSignatureType'
+			continue
+		end 'theImplicitReceiverIsNotAWrittenSignatureType'
+
+		let declared = try sig.paramTypes.get(position) otherwise panic("checkParameterTypes: '{String.from(subject.declaredName)}' names {sig.paramNames.count()} parameter(s) and carries {sig.paramTypes.count()} parameter type(s) — `FuncSignature` holds the two columns in parallel")
+		var seen = ReportedTypeNameSet.create()
+		walkSignatureType(project, signatures: signatures, subject: subject, where: SignaturePosition.parameter(name), declared: declared, typeNames: project.typeNames, seen: seen)
+	end 'eachParam'
+end 'checkParameterTypes'
+
+function checkReturnType(project Project, signatures ProgramSignatures, subject SignatureSubject, returned MaxonReturnType)
+	var seen = ReportedTypeNameSet.create()
+
+	match returned 'ret'
+		void then return
+		value(inner) then walkSignatureType(project, signatures: signatures, subject: subject, where: SignaturePosition.returnType, declared: inner, typeNames: project.typeNames, seen: seen)
+	end 'ret'
+end 'checkReturnType'
+
+function checkThrowsType(project Project, signatures ProgramSignatures, subject SignatureSubject, clause ThrowsClause)
+	var seen = ReportedTypeNameSet.create()
+
+	match clause 'clause'
+		none then return
+		throwing(declared) then walkSignatureTypeName(project, signatures: signatures, subject: subject, where: SignaturePosition.throwsClause, name: declared.toByteArray(), seen: seen)
+	end 'clause'
+end 'checkThrowsType'
+
+// ⚠ `typeNames` is the interner the type in hand was minted against, and the two that reach here are
+// different tables: a declared signature carries `project.typeNames`, a layout's element or a generic
+// instance's argument carries `signatures.indexTypeNames()`. One id names two different types across
+// them, so a caller that passed the other one would judge a type the signature never wrote.
+function walkSignatureType(project Project, signatures ProgramSignatures, subject SignatureSubject, where SignaturePosition, declared MaxonType, typeNames TypeNameInterner, seen ReportedTypeNameSet)
+	match declared 'type'
+		named(id) then walkSignatureTypeId(project, signatures: signatures, subject: subject, where: where, nameId: id, typeNames: typeNames, seen: seen)
+		structRef(id) then walkSignatureTypeId(project, signatures: signatures, subject: subject, where: where, nameId: id, typeNames: typeNames, seen: seen)
+		interfaceRef(id) then walkSignatureTypeId(project, signatures: signatures, subject: subject, where: where, nameId: id, typeNames: typeNames, seen: seen)
+		function(id) then walkSignatureTypeId(project, signatures: signatures, subject: subject, where: where, nameId: id, typeNames: typeNames, seen: seen)
+		genericInstance(id) then walkInstanceArguments(project, signatures: signatures, subject: subject, where: where, id: id, seen: seen)
+		typeParameter or
+			boolean or
+			integer or
+			float or
+			exitCode or
+			unresolved or
+			string or
+			character or
+			cstring then return
+	end 'type'
+end 'walkSignatureType'
+
+function walkSignatureTypeId(project Project, signatures ProgramSignatures, subject SignatureSubject, where SignaturePosition, nameId TypeNameId, typeNames TypeNameInterner, seen ReportedTypeNameSet)
+	if nameId == UnnamedTypeId 'namesNoDeclaration'
+		return
+	end 'namesNoDeclaration'
+
+	let name = try typeNames.nameOf(nameId) otherwise return
+	walkSignatureTypeName(project, signatures: signatures, subject: subject, where: where, name: name, seen: seen)
+end 'walkSignatureTypeId'
+
+function walkSignatureTypeName(project Project, signatures ProgramSignatures, subject SignatureSubject, where SignaturePosition, name ByteArray, seen ReportedTypeNameSet)
+	if seen.contains(name) 'alreadyAskedInThisPosition'
+		return
+	end 'alreadyAskedInThisPosition'
+
+	seen.insert(name)
+
+	if isTupleTypeName(name) 'aTupleNamesNoDeclarationOfItsOwn'
+		walkTupleElements(project, signatures: signatures, subject: subject, where: where, name: name, seen: seen)
+		return
+	end 'aTupleNamesNoDeclarationOfItsOwn'
+
+	match declarationDenotedBy(signatures, subject: subject, name: name) 'aDeclaration'
+		undeclared then return
+		declared(kind, visibility, declFilePath) then judgeDeclaredType(project, signatures: signatures, subject: subject, where: where, name: name, kind: kind, visibility: visibility, declFilePath: declFilePath, seen: seen)
+	end 'aDeclaration'
+end 'walkSignatureTypeName'
+
+// A signature that names its own enclosing type — `Self` in a factory — means that type's declaration and
+// no other. The reader-scoped door would answer with whatever alias of the name the declaring file can
+// see, which in a program where some other type nests an alias of that name is a different declaration
+// and a different tier.
+function declarationDenotedBy(signatures ProgramSignatures, subject SignatureSubject, name ByteArray) returns DeclaredTypeName
+	if not namesTheEnclosingType(subject.enclosing, name: name) 'notTheEnclosingTypesOwnName'
+		return signatures.declaredTypeNameIn(name, readerFilePath: subject.readerFilePath)
+	end 'notTheEnclosingTypesOwnName'
+
+	match signatures.nominalTypeNameIn(name) 'theEnclosingTypeItself'
+		undeclared then return signatures.declaredTypeNameIn(name, readerFilePath: subject.readerFilePath)
+		declared(kind, visibility, declFilePath) then return DeclaredTypeName.declared(kind, visibility: visibility, declFilePath: declFilePath)
+	end 'theEnclosingTypeItself'
+end 'declarationDenotedBy'
+
+function judgeDeclaredType(project Project, signatures ProgramSignatures, subject SignatureSubject, where SignaturePosition, name ByteArray, kind TypeDeclKind, visibility Visibility, declFilePath FilePath, seen ReportedTypeNameSet)
+	if declFilePath.equals(CompilerOwnedDeclFilePath) 'noAuthorWroteAModifierForIt'
+		return
+	end 'noAuthorWroteAModifierForIt'
+
+	if not signatures.isVisibleFrom(visibility, declFilePath: declFilePath, readerFilePath: subject.readerFilePath) 'theDeclaringFileCouldNotHaveWrittenThisName'
+		return
+	end 'theDeclaringFileCouldNotHaveWrittenThisName'
+
+	// A monomorphized library body carries its `stdlib/` file as its source with an author's type
+	// substituted into the signature, and no library source can have written that name down. Without this
+	// the author's own file-private type earns E3167 against a library function they never wrote.
+	if signatures.declaredByTheCorpus(subject.readerFilePath) and not signatures.declaredByTheCorpus(declFilePath) 'aLibrarySignatureCannotHaveWrittenAnAuthorsName'
+		return
+	end 'aLibrarySignatureCannotHaveWrittenAnAuthorsName'
+
+	project.signatureTypeDemands.push(SignatureTypeDemand.create(subject.declaredName, demandingTier: subject.tier, typeName: name))
+
+	if not tierIsAtLeastAsVisible(visibility, floor: subject.tier) 'narrowerThanTheFunctionThatNamesIt'
+		reportPositioned(project, code: ErrorCode.semanticSignatureTypeLessVisibleThanFunction, message: "{visibilityTierWord(subject.tier)} function '{subjectDisplay(signatures, subject: subject)}' names {visibilityTierWord(visibility)} {declaredTypeNoun(kind)} '{String.from(name)}' {positionText(where)}", line: subject.nameLine, column: subject.nameColumn, filePath: subject.readerFilePath)
+		return
+	end 'narrowerThanTheFunctionThatNamesIt'
+
+	walkThroughAlias(project, signatures: signatures, subject: subject, where: where, name: name, kind: kind, seen: seen)
+end 'judgeDeclaredType'
+
+function walkThroughAlias(project Project, signatures ProgramSignatures, subject SignatureSubject, where SignaturePosition, name ByteArray, kind TypeDeclKind, seen ReportedTypeNameSet)
+	match kind 'kind'
+		genericAlias then walkInstanceArguments(project, signatures: signatures, subject: subject, where: where, id: signatures.genericAliasInstanceFrom(name, readerFilePath: subject.readerFilePath), seen: seen)
+		functionAlias then walkFunctionAliasShape(project, signatures: signatures, subject: subject, where: where, name: name, seen: seen)
+		tupleAlias then walkSignatureTypeName(project, signatures: signatures, subject: subject, where: where, name: signatures.scopedTupleAlias(name, readerFilePath: subject.readerFilePath).tupleName, seen: seen)
+		structType or
+			enumType or
+			unionType or
+			interfaceType or
+			rangedAlias then return
+	end 'kind'
+end 'walkThroughAlias'
+
+function walkFunctionAliasShape(project Project, signatures ProgramSignatures, subject SignatureSubject, where SignaturePosition, name ByteArray, seen ReportedTypeNameSet)
+	match signatures.functionAliasFrom(name, readerFilePath: subject.readerFilePath) 'aFunctionAlias'
+		undeclared then return
+		declared(alias) then walkFunctionAliasComponents(project, signatures: signatures, subject: subject, where: where, alias: alias, seen: seen)
+	end 'aFunctionAlias'
+end 'walkFunctionAliasShape'
+
+function walkFunctionAliasComponents(project Project, signatures ProgramSignatures, subject SignatureSubject, where SignaturePosition, alias FunctionTypeAlias, seen ReportedTypeNameSet)
+	for param in alias.paramTypes 'eachParam'
+		if param.typeName.isEmpty() 'aPrimitiveNamesNoDeclaration'
+			continue
+		end 'aPrimitiveNamesNoDeclaration'
+
+		walkSignatureTypeName(project, signatures: signatures, subject: subject, where: where, name: param.typeName, seen: seen)
+	end 'eachParam'
+
+	if alias.returnTypeName.isEmpty() 'noNamedReturnType'
+		return
+	end 'noNamedReturnType'
+
+	walkSignatureTypeName(project, signatures: signatures, subject: subject, where: where, name: alias.returnTypeName, seen: seen)
+end 'walkFunctionAliasComponents'
+
+function walkTupleElements(project Project, signatures ProgramSignatures, subject SignatureSubject, where SignaturePosition, name ByteArray, seen ReportedTypeNameSet)
+	match signatures.structFor(name, readerFilePath: subject.readerFilePath) 'aTupleLayout'
+		undeclared then return
+		declared(layout) then walkEveryElement(project, signatures: signatures, subject: subject, where: where, layout: layout, seen: seen)
+	end 'aTupleLayout'
+end 'walkTupleElements'
+
+function walkEveryElement(project Project, signatures ProgramSignatures, subject SignatureSubject, where SignaturePosition, layout StructLayout, seen ReportedTypeNameSet)
+	let elementTypeNames = signatures.indexTypeNames()
+
+	for element in layout.fieldTypes 'eachElement'
+		walkSignatureType(project, signatures: signatures, subject: subject, where: where, declared: element, typeNames: elementTypeNames, seen: seen)
+	end 'eachElement'
+end 'walkEveryElement'
+
+function walkInstanceArguments(project Project, signatures ProgramSignatures, subject SignatureSubject, where SignaturePosition, id GenericInstanceId, seen ReportedTypeNameSet)
+	let argumentTypeNames = signatures.indexTypeNames()
+	walkSignatureTypeName(project, signatures: signatures, subject: subject, where: where, name: signatures.genericInstanceBaseName(id), seen: seen)
+
+	for position in 0 upto signatures.genericInstanceArgCount(id) 'eachArgument'
+		walkSignatureType(project, signatures: signatures, subject: subject, where: where, declared: signatures.substitutedInstanceArg(id, position: position), typeNames: argumentTypeNames, seen: seen)
+	end 'eachArgument'
+end 'walkInstanceArguments'
+
+function declaredTypeNoun(kind TypeDeclKind) returns String
+	return match kind 'kind'
+		structType gives "type"
+		enumType gives "enum"
+		unionType gives "union"
+		interfaceType gives "interface"
+		rangedAlias or
+			functionAlias or
+			genericAlias or
+			tupleAlias gives "typealias"
+	end 'kind'
+end 'declaredTypeNoun'

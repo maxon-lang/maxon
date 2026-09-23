@@ -146,7 +146,7 @@ type RecordField
 	export var storeType as StdType
 	export var source as RecordFieldSource
 
-	export static function create(offset ByteOffset, storeType StdType, source RecordFieldSource) returns RecordField
+	static function create(offset ByteOffset, storeType StdType, source RecordFieldSource) returns RecordField
 		return Self{offset: offset, storeType: storeType, source: source}
 	end 'create'
 end 'RecordField'
@@ -187,7 +187,7 @@ type PointerScan
 	export var forwardedCallees as FuncIndexArray
 	export var forwardedPositions as ParamCountArray
 
-	export static function create(valueBound ValueId) returns PointerScan
+	static function create(valueBound ValueId) returns PointerScan
 		var escapedLocally = BoolArray.create()
 		escapedLocally.growFilled(valueBound as ElementIndex, value: false)
 		var dropSites = ValueIdArray.create()
@@ -195,26 +195,26 @@ type PointerScan
 		return Self{escapedLocally: escapedLocally, dropSites: dropSites, forwardedPointers: ValueIdArray.create(), forwardedCallees: FuncIndexArray.create(), forwardedPositions: ParamCountArray.create()}
 	end 'create'
 
-	export function markEscaped(v ValueId)
+	function markEscaped(v ValueId)
 		try self.escapedLocally.set(v, value: true) otherwise panic("PointerScan.markEscaped: value {v} is outside the scanned value space")
 	end 'markEscaped'
 
-	export function noteDrop(v ValueId)
+	function noteDrop(v ValueId)
 		let seen = try self.dropSites.get(v) otherwise panic("PointerScan.noteDrop: value {v} is outside the scanned value space")
 		try self.dropSites.set(v, value: seen + 1) otherwise panic("PointerScan.noteDrop: dropSites.set OOB at {v}")
 	end 'noteDrop'
 
-	export function noteForward(v ValueId, calleeFuncIndex FuncIndex, position ParamCount)
+	function noteForward(v ValueId, calleeFuncIndex FuncIndex, position ParamCount)
 		self.forwardedPointers.push(v)
 		self.forwardedCallees.push(calleeFuncIndex)
 		self.forwardedPositions.push(position)
 	end 'noteForward'
 
-	export function escapedLocallyAt(v ValueId) returns bool
+	function escapedLocallyAt(v ValueId) returns bool
 		return try self.escapedLocally.get(v) otherwise panic("PointerScan.escapedLocallyAt: value {v} is outside the scanned value space")
 	end 'escapedLocallyAt'
 
-	export function dropSitesAt(v ValueId) returns ValueId
+	function dropSitesAt(v ValueId) returns ValueId
 		return try self.dropSites.get(v) otherwise panic("PointerScan.dropSitesAt: value {v} is outside the scanned value space")
 	end 'dropSitesAt'
 end 'PointerScan'
@@ -234,7 +234,7 @@ type RecordPromotion
 	export var fields as RecordFieldArray
 	export var callArgs as ValueIdArray
 
-	export static function create(callOpIndex OpIndex, recordValue ValueId, sizeBytes ByteOffset, fields RecordFieldArray, callArgs ValueIdArray) returns RecordPromotion
+	static function create(callOpIndex OpIndex, recordValue ValueId, sizeBytes ByteOffset, fields RecordFieldArray, callArgs ValueIdArray) returns RecordPromotion
 		return Self{callOpIndex: callOpIndex, recordValue: recordValue, sizeBytes: sizeBytes, slot: 0, fields: fields, callArgs: callArgs}
 	end 'create'
 end 'RecordPromotion'
@@ -547,14 +547,14 @@ type ConstructorScan
 	var slotWritten as BoolArray
 	var paramCount as ParamCount
 
-	export static function create(paramCount ParamCount) returns ConstructorScan
+	static function create(paramCount ParamCount) returns ConstructorScan
 		return Self{paramOfValue: ValueToParamMap.create(), constOfValue: ValueToConstMap.create(), constTypeOfValue: ValueToStdTypeMap.create(), allocSize: 0, allocSeen: false, fields: RecordFieldArray.create(), slotWritten: BoolArray.create(), paramCount: paramCount}
 	end 'create'
 
 	// Accept one body op, or refuse the whole function. Exhaustive over StdOp through named ranges, so an
 	// op variant appended tomorrow lands outside every range and fails to compile HERE rather than being
 	// waved into a constructor body this pass has never reasoned about.
-	export function admit(op StdOp, box ValueId) returns bool
+	function admit(op StdOp, box ValueId) returns bool
 		return match op 'op'
 			const(resultId, value, valueType) gives self.admitConst(resultId, value: value, valueType: valueType)
 			binOp or
@@ -770,7 +770,7 @@ type ConstructorScan
 
 	// The verdict, once every op has been admitted: the allocation must have happened and every slot of the
 	// record must have been written.
-	export function verdict() returns RecordConstructor
+	function verdict() returns RecordConstructor
 		if not self.allocSeen 'allocatedNothing'
 			return RecordConstructor.notAConstructor
 		end 'allocatedNothing'
@@ -806,7 +806,7 @@ type ParamNodeSpace
 	var base as CsrColumn
 	export var nodeCount as CsrIndex
 
-	export static function create(module StdModule) returns ParamNodeSpace
+	static function create(module StdModule) returns ParamNodeSpace
 		var base = CsrColumn.create()
 		var next = 0 as CsrIndex
 
@@ -818,7 +818,7 @@ type ParamNodeSpace
 		return Self{base: base, nodeCount: next}
 	end 'create'
 
-	export function nodeOf(funcIndex FuncIndex, param ParamCount) returns CsrIndex
+	function nodeOf(funcIndex FuncIndex, param ParamCount) returns CsrIndex
 		let first = try self.base.get(funcIndex) otherwise panic("ParamNodeSpace.nodeOf: function index {funcIndex} is outside the module")
 		return first + (param as CsrIndex)
 	end 'nodeOf'

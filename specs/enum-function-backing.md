@@ -181,7 +181,7 @@ Function-backed enums may reference functions defined in other files.
 
 ```maxon
 // --- file: api/ops.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export function doubleFn(x Integer) returns Integer
 	return x * 2
@@ -215,7 +215,7 @@ resolved at the reader would answer 30 + 3 instead of 20 + 3.
 
 ```maxon
 // --- file: alpha/a.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 function doubleFn(x Integer) returns Integer
 	return x * 3
@@ -227,7 +227,7 @@ export function viaEnum() returns Integer
 end 'viaEnum'
 
 // --- file: beta/ops.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export function doubleFn(x Integer) returns Integer
 	return x * 2
@@ -253,14 +253,14 @@ the case is refused rather than bound to either.
 
 ```maxon
 // --- file: alpha/a.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export function doubleFn(x Integer) returns Integer
 	return x * 3
 end 'doubleFn'
 
 // --- file: beta/ops.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export function doubleFn(x Integer) returns Integer
 	return x * 2
@@ -287,14 +287,14 @@ the declaration that directory holds.
 
 ```maxon
 // --- file: alpha/a.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export function doubleFn(x Integer) returns Integer
 	return x * 3
 end 'doubleFn'
 
 // --- file: beta/ops.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export function doubleFn(x Integer) returns Integer
 	return x * 2
@@ -322,7 +322,7 @@ The case's refusal quotes the function name the declaration wrote, though it res
 
 ```maxon
 // --- file: alpha/a.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 function doubleFn(x Integer) returns Integer
 	return x * 3
@@ -333,7 +333,7 @@ export function viaAlpha() returns Integer
 end 'viaAlpha'
 
 // --- file: beta/ops.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export enum OpError implements Error
 	overflow
@@ -370,7 +370,7 @@ directory, and `Box.make` names a type's method, which `let f = Box.make` does n
 type Box
 	export var n as Integer
 
-	export static function make(value Integer) returns Integer
+	static function make(value Integer) returns Integer
 		return value * 2
 	end 'make'
 end 'Box'

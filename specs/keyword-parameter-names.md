@@ -34,7 +34,7 @@ binding like any other word.
 <!-- test: type-as-parameter-name-crossfile -->
 ```maxon
 // --- file: api/shared.maxon
-module typealias StdType = int(i64.min to i64.max)
+export typealias StdType = int(i64.min to i64.max)
 
 // --- file: api/helper.maxon
 export function identity(type StdType) returns StdType
@@ -53,7 +53,7 @@ end 'main'
 <!-- test: enum-as-parameter-name-crossfile -->
 ```maxon
 // --- file: api/shared.maxon
-module typealias StdType = int(i64.min to i64.max)
+export typealias StdType = int(i64.min to i64.max)
 
 // --- file: api/helper.maxon
 export function pickOne(enum StdType) returns StdType
@@ -72,7 +72,7 @@ end 'main'
 <!-- test: union-as-parameter-name-crossfile -->
 ```maxon
 // --- file: api/shared.maxon
-module typealias StdType = int(i64.min to i64.max)
+export typealias StdType = int(i64.min to i64.max)
 
 // --- file: api/helper.maxon
 export function asis(union StdType) returns StdType
@@ -91,7 +91,7 @@ end 'main'
 <!-- test: interface-as-parameter-name-crossfile -->
 ```maxon
 // --- file: api/shared.maxon
-module typealias StdType = int(i64.min to i64.max)
+export typealias StdType = int(i64.min to i64.max)
 
 // --- file: api/helper.maxon
 export function passthrough(interface StdType) returns StdType

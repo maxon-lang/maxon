@@ -1,0 +1,15 @@
+let ProjectSiblingReaderDirName = "maxon-tests-lsp-diagnostics-project-sibling-reader"
+let ProjectSiblingReaderBufferFileName = "main.maxon"
+let ProjectSiblingReaderReadingFileName = "reader.maxon"
+let ProjectSiblingReaderBufferSource = "module typealias ProjectReadSlot = int(0 to u64.max)\n\nfunction main() returns ExitCode\n\tlet n = 1 as ProjectReadSlot\n\treturn n as ExitCode\nend 'main'\n"
+let ProjectSiblingReaderReadingSource = "function kept(n ProjectReadSlot) returns ProjectReadSlot\n\treturn n\nend 'kept'\n"
+
+test 'a declaration a sibling file reads is not reported unused'
+	let root = stagedProjectDiagnosticsRoot(ProjectSiblingReaderDirName)
+	writeCorpusFile(root, fileName: ProjectSiblingReaderBufferFileName, content: ProjectSiblingReaderBufferSource)
+	writeCorpusFile(root, fileName: ProjectSiblingReaderReadingFileName, content: ProjectSiblingReaderReadingSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: ProjectSiblingReaderBufferFileName, content: ProjectSiblingReaderBufferSource)
+
+	try expectNoProjectDiagnostics(probe, note: "`ProjectReadSlot` is `module` and the sibling `reader.maxon` names it, so a `maxon build` of the staged project reports nothing. The buffer is compiled against `stdlib/` and `runtime/` alone, which cannot see that reader, so an unused-export finding from that compile is a claim about files it never read.")
+end 'a declaration a sibling file reads is not reported unused'

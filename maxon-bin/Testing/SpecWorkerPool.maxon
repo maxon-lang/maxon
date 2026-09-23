@@ -472,7 +472,7 @@ typealias WorkerId = int(0 to u32.max)
 
 // A TALLY of workers, which — unlike a pool size — may legitimately be zero ("no worker exited
 // non-zero"). A separate alias precisely because `WorkerCount` may not be.
-typealias WorkerTally = int(0 to u32.max)
+export typealias WorkerTally = int(0 to u32.max)
 
 // A tally of JOBS — dispatched, completed, still queued. The dispatch loop's own bookkeeping, and
 // what the wedge report leads with.
@@ -485,7 +485,7 @@ typealias JobWeight = int(0 to u64.max)
 
 // A spec's index into the parent's plan array, which IS the report order. Every job carries it,
 // so an answer that comes back out of order still lands in its place.
-typealias PlanIndex = int(0 to u64.max)
+export typealias PlanIndex = int(0 to u64.max)
 
 // ⭐⭐ **HOW MANY WORKERS WHEN NOBODY SAID: THE WHOLE MACHINE — AND IT USED TO BE THE LITERAL `12`.**
 // That number was measured on an 8-core arm64-macOS host (this file's own timeout analysis says so), so
@@ -571,7 +571,7 @@ type SpecPlan
 	export let testNames as StringArray
 	export let weight as JobWeight
 
-	export static function create(specName String, runs SpecRuns, testNames StringArray, weight JobWeight) returns SpecPlan
+	static function create(specName String, runs SpecRuns, testNames StringArray, weight JobWeight) returns SpecPlan
 		return Self{specName: specName, runs: runs, testNames: testNames, weight: weight}
 	end 'create'
 end 'SpecPlan'
@@ -589,7 +589,7 @@ type SuitePlan
 	export let plans as SpecPlanArray
 	export let excluded as ExcludedCaseArray
 
-	export static function create(plans SpecPlanArray, excluded ExcludedCaseArray) returns SuitePlan
+	static function create(plans SpecPlanArray, excluded ExcludedCaseArray) returns SuitePlan
 		return Self{plans: plans, excluded: excluded}
 	end 'create'
 end 'SuitePlan'
@@ -658,7 +658,7 @@ type SpecJob
 	export let runs as SpecRuns
 	export let weight as JobWeight
 
-	export static function create(planIndex PlanIndex, specName String, runs SpecRuns, weight JobWeight) returns SpecJob
+	static function create(planIndex PlanIndex, specName String, runs SpecRuns, weight JobWeight) returns SpecJob
 		return Self{planIndex: planIndex, specName: specName, runs: runs, weight: weight}
 	end 'create'
 
@@ -666,18 +666,18 @@ type SpecJob
 	// as `busy` from the start and the two are indexed by the same slot number. Never sent and never
 	// read: `busy[slot]` is the guard, and `inFlight[slot]` is overwritten by a real job in the same
 	// breath as `busy[slot]` is set (see `sendAndDrain`, which orders those writes deliberately).
-	export static function idle() returns SpecJob
+	static function idle() returns SpecJob
 		return Self{planIndex: 0, specName: "", runs: SpecRuns.shared, weight: 0}
 	end 'idle'
 
 	// Shallow copy. `popHeaviestJob` and the drain path both need a value that has cut its borrow
 	// on the array's storage before they mutate that array.
-	export function clone() returns SpecJob
+	function clone() returns SpecJob
 		return Self{planIndex: planIndex, specName: specName, runs: runs, weight: weight}
 	end 'clone'
 
 	// The wire line the worker reads off its stdin.
-	export function toJobLine() returns String
+	function toJobLine() returns String
 		return "{jobPrefixOf(runs)}{specName}"
 	end 'toJobLine'
 end 'SpecJob'
@@ -1144,7 +1144,7 @@ type RecordSplit
 	export let field as String
 	export let rest as String
 
-	export static function create(field String, rest String) returns RecordSplit
+	static function create(field String, rest String) returns RecordSplit
 		return Self{field: field, rest: rest}
 	end 'create'
 end 'RecordSplit'
@@ -1453,7 +1453,7 @@ type PersistentWorkerHandle
 	// `--network` was added below and NOT added here, so the one header whose whole job is naming what a
 	// worker must hear about went a whole slice without mentioning the flag that changes what it selects.
 	// A new selection input belongs in this sentence in the same edit that gives it a parameter.
-	export static function spawnNoWait(harnessExe FilePath, workerId WorkerId, specDir FilePath, filter String, updateRequired bool, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandle throws SubprocessError
+	static function spawnNoWait(harnessExe FilePath, workerId WorkerId, specDir FilePath, filter String, updateRequired bool, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandle throws SubprocessError
 		var argv = StringArray.create()
 		argv.push(SpecTestCommandName)
 		argv.push(WorkerPersistentFlag)
@@ -1485,7 +1485,7 @@ type PersistentWorkerHandle
 	// which would otherwise propagate the read error with the handle still open. A worker that never says
 	// hello is a worker nobody will hold a handle to again, and the caller's job is to report that,
 	// not to clean up after this one.
-	export function awaitReady() throws SubprocessError
+	function awaitReady() throws SubprocessError
 		let hello = try child.readStdoutLine() otherwise (e) 'helloUnreadable'
 			child.release()
 			throw e
@@ -1497,7 +1497,7 @@ type PersistentWorkerHandle
 		end 'badHello'
 	end 'awaitReady'
 
-	export function sendJob(jobLine String) throws SubprocessError
+	function sendJob(jobLine String) throws SubprocessError
 		try child.writeStdinLine(jobLine)
 	end 'sendJob'
 
@@ -1516,7 +1516,7 @@ type PersistentWorkerHandle
 	// for the rest of the run — in a parent that is itself leak-gated. The stderr drain is skipped
 	// on that path: it terminates only because the child has EXITED, and a shutdown that failed is
 	// exactly the case where we cannot say that it has.
-	export function shutdownAndDrainStderr() returns ExitInt throws SubprocessError
+	function shutdownAndDrainStderr() returns ExitInt throws SubprocessError
 		let code = try requestExitAndWait() otherwise (e) 'shutdownFailed'
 			child.release()
 			throw e
@@ -1572,7 +1572,7 @@ type PersistentWorkerHandle
 	// ⚠ IT DOES NOT RELEASE. The parent still has to read this worker's stderr — the panic message and
 	// stack trace live there — and a released handle addresses whatever process next takes the slot.
 	// Killing DOES close the worker's stdout, which is what makes its drain complete.
-	export function terminateAndReap() returns WorkerExit
+	function terminateAndReap() returns WorkerExit
 		let code = try child.waitWithTimeout(JobKillGraceMs) otherwise (e) 'notReaped'
 			return WorkerExit.unavailable(e.displayReason())
 		end 'notReaped'
@@ -1584,7 +1584,7 @@ type PersistentWorkerHandle
 	// HAS NO SUCH STATUS.** A worker the progress bound gave up on was killed BY THIS PARENT, and the
 	// kill NAMES the code the handle must then report (`SubpKilledExitCode`), so reaping it would put
 	// the parent's own number into a sentence that says the worker chose it.
-	export function exitAfterDeath(killedByDeadline bool) returns WorkerExit
+	function exitAfterDeath(killedByDeadline bool) returns WorkerExit
 		if killedByDeadline 'theParentEndedIt'
 			return WorkerExit.terminatedByParent
 		end 'theParentEndedIt'
@@ -1599,7 +1599,7 @@ type PersistentWorkerHandle
 	// It terminates again rather than assuming: EOF on stdout is not the same fact as an exited
 	// process, and the wait costs nothing on a child that has already gone. The status is discarded
 	// here because the report already holds it — `exitAfterDeath` asked, one line earlier.
-	export function releaseAfterDeath()
+	function releaseAfterDeath()
 		_ = terminateAndReap()
 		child.release()
 	end 'releaseAfterDeath'

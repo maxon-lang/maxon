@@ -59,7 +59,7 @@ type MxdbgFieldDesc
 	export var offset as MxdbgIndex
 	export var typeName as ByteArray
 
-	export static function create(name ByteArray, offset MxdbgIndex, typeName ByteArray) returns MxdbgFieldDesc
+	static function create(name ByteArray, offset MxdbgIndex, typeName ByteArray) returns MxdbgFieldDesc
 		return Self{name: name, offset: offset, typeName: typeName}
 	end 'create'
 end 'MxdbgFieldDesc'
@@ -74,7 +74,7 @@ type MxdbgTypeDesc
 	export var elementTypeName as ByteArray
 	export var flags as MxdbgIndex
 
-	export static function create(kind MxdbgIndex, size MxdbgIndex, align MxdbgIndex, fields MxdbgFieldDescArray, elementTypeName ByteArray = ByteArray.create(), flags MxdbgIndex = 0) returns MxdbgTypeDesc
+	static function create(kind MxdbgIndex, size MxdbgIndex, align MxdbgIndex, fields MxdbgFieldDescArray, elementTypeName ByteArray = ByteArray.create(), flags MxdbgIndex = 0) returns MxdbgTypeDesc
 		return Self{kind: kind, size: size, align: align, fields: fields, elementTypeName: elementTypeName, flags: flags}
 	end 'create'
 end 'MxdbgTypeDesc'
@@ -86,7 +86,7 @@ type MxdbgTypeEntry
 	export var name as ByteArray
 	export var desc as MxdbgTypeDesc
 
-	export static function create(name ByteArray, desc MxdbgTypeDesc) returns MxdbgTypeEntry
+	static function create(name ByteArray, desc MxdbgTypeDesc) returns MxdbgTypeEntry
 		return Self{name: name, desc: desc}
 	end 'create'
 end 'MxdbgTypeEntry'
@@ -409,6 +409,7 @@ function mxdbgDescribeRangedAlias(alias RangedTypeAlias) returns MxdbgTypeDesc
 	end 'backing'
 
 	let bytes = rangedAliasStorageBytes(alias.low, high: alias.high) as MxdbgIndex
+
 	// A negative low bound is the only thing that makes an alias signed, and `LayoutDescriptor` gives
 	// every such alias all 8 bytes — so no reader has to sign-extend a narrow one.
 	let signed = kind == MxdbgTypeKindIntRanged and alias.low < 0

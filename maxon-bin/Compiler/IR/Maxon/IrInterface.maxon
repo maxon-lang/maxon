@@ -523,8 +523,11 @@ export type InterfaceMethodSig
 		return out
 	end 'noBufferParams'
 
-	export static function create(name ByteArray, paramNames ByteArrayArray, paramTypeNames ByteArrayArray, returnTypeName ByteArray, isStatic bool, throwsClause ThrowsClause, paramIsBuffer BoolArray) returns InterfaceMethodSig
-		return Self{name: name, paramNames: paramNames, paramTypeNames: paramTypeNames, returnTypeName: returnTypeName, isStatic: isStatic, throwsClause: throwsClause, paramIsBuffer: paramIsBuffer}
+	export var nameLine as LineNumber
+	export var nameColumn as ColumnNumber
+
+	export static function create(name ByteArray, paramNames ByteArrayArray, paramTypeNames ByteArrayArray, returnTypeName ByteArray, isStatic bool, throwsClause ThrowsClause, paramIsBuffer BoolArray, nameLine LineNumber, nameColumn ColumnNumber) returns InterfaceMethodSig
+		return Self{name: name, paramNames: paramNames, paramTypeNames: paramTypeNames, returnTypeName: returnTypeName, isStatic: isStatic, throwsClause: throwsClause, paramIsBuffer: paramIsBuffer, nameLine: nameLine, nameColumn: nameColumn}
 	end 'create'
 end 'InterfaceMethodSig'
 
@@ -1412,7 +1415,7 @@ end 'witnessTargetIsProtocol'
 // non-throwing — the builtin conformances (`int.hash()`, `String.equals(other)`) are compiler-emitted
 // runtime chunks with no error channel — so the throws clause is `none` at both helpers.
 function nullaryInterfaceMethod(name ByteArray, returnTypeName ByteArray) returns InterfaceMethodSig
-	return InterfaceMethodSig.create(name, paramNames: ByteArrayArray.create(), paramTypeNames: ByteArrayArray.create(), returnTypeName: returnTypeName, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: InterfaceMethodSig.noBufferParams(0))
+	return InterfaceMethodSig.create(name, paramNames: ByteArrayArray.create(), paramTypeNames: ByteArrayArray.create(), returnTypeName: returnTypeName, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: InterfaceMethodSig.noBufferParams(0), nameLine: 0, nameColumn: 0)
 end 'nullaryInterfaceMethod'
 
 // A one-parameter interface method (`equals(other Self)`, `toString(format String)`).
@@ -1421,7 +1424,7 @@ function unaryInterfaceMethod(name ByteArray, paramName ByteArray, paramTypeName
 	paramNames.push(paramName)
 	var paramTypeNames = ByteArrayArray.create()
 	paramTypeNames.push(paramTypeName)
-	return InterfaceMethodSig.create(name, paramNames: paramNames, paramTypeNames: paramTypeNames, returnTypeName: returnTypeName, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: InterfaceMethodSig.noBufferParams(paramNames.count()))
+	return InterfaceMethodSig.create(name, paramNames: paramNames, paramTypeNames: paramTypeNames, returnTypeName: returnTypeName, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: InterfaceMethodSig.noBufferParams(paramNames.count()), nameLine: 0, nameColumn: 0)
 end 'unaryInterfaceMethod'
 
 // An interface with exactly one method and no `extends`/`uses` — every synthesized

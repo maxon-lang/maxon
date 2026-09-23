@@ -66,7 +66,7 @@ typealias MaskWordCount = int(0 to u64.max)
 typealias MaskWordCountArray = Array with MaskWordCount
 
 // One root set of a walk, and one nonzero word of one (`RootSets`).
-typealias RootSetId = int(0 to u64.max)
+export typealias RootSetId = int(0 to u64.max)
 typealias RootChunk = int(0 to u64.max)
 typealias RootChunkArray = Array with RootChunk
 
@@ -99,7 +99,7 @@ end 'StoreSlotLookup'
 // literal of K fields costs K². MEASURED on one, `phase:semanticCheck` CPU per doubling of K at K = 1,600 →
 // 6,400: ×2.89 ×3.40 chained by address, ×1.77 ×2.04 keyed by the whole key. Reset empties only the buckets
 // this walk filled, so starting a walk costs the last walk's entries and never the table's size.
-type StoreSlotTable
+export type StoreSlotTable
 	var buckets as EntryIndexArray
 	var keys as StoreSlotKeyArray
 	var slots as RootSetIdArray
@@ -120,7 +120,7 @@ type StoreSlotTable
 		self.nexts.clear()
 	end 'reset'
 
-	export function setAt(key StoreSlotKey) returns RootSetId throws StoreSlotLookup
+	function setAt(key StoreSlotKey) returns RootSetId throws StoreSlotLookup
 		var entry = self.headAt(key)
 
 		while entry != NoStoreSlotEntry 'eachFiled'
@@ -134,7 +134,7 @@ type StoreSlotTable
 		throw StoreSlotLookup.unfiled
 	end 'setAt'
 
-	export function file(key StoreSlotKey, slot RootSetId)
+	function file(key StoreSlotKey, slot RootSetId)
 		self.spreadOverMoreBuckets()
 		let entry = self.keys.count()
 		let head = self.headAt(key)
@@ -248,7 +248,7 @@ type PendingRefusal
 	export let code as ErrorCode
 	export let message as String
 
-	export static function create(line LineNumber, column ColumnNumber, code ErrorCode, message String) returns PendingRefusal
+	static function create(line LineNumber, column ColumnNumber, code ErrorCode, message String) returns PendingRefusal
 		return Self{at: positionKey(line, column: column), line: line, column: column, code: code, message: message}
 	end 'create'
 end 'PendingRefusal'
@@ -268,7 +268,7 @@ type FreezeDoorAt
 	export let token as TokenIndex
 	export let point as FlowPoint
 
-	export static function create(value ValueId, door FreezeDoor, callee String, line LineNumber, column ColumnNumber, token TokenIndex, point FlowPoint) returns FreezeDoorAt
+	static function create(value ValueId, door FreezeDoor, callee String, line LineNumber, column ColumnNumber, token TokenIndex, point FlowPoint) returns FreezeDoorAt
 		return Self{value: value, door: door, callee: callee, line: line, column: column, token: token, point: point}
 	end 'create'
 end 'FreezeDoorAt'
@@ -307,7 +307,7 @@ type LentHandler
 	export let index as FuncIndex
 	export let param as ParamCount
 
-	export static function create(name ByteArray, index FuncIndex, param ParamCount) returns LentHandler
+	static function create(name ByteArray, index FuncIndex, param ParamCount) returns LentHandler
 		return Self{name: name, index: index, param: param}
 	end 'create'
 end 'LentHandler'
@@ -358,7 +358,7 @@ enum ProvenanceColumn
 end 'ProvenanceColumn'
 
 // What one trace of a function found, in the summary's bit order — the row `ProvenanceSummary.widen` ORs in.
-type TracedSummaryRow
+export type TracedSummaryRow
 	export var shares as ParamPositionMask = NoParamPositions
 	export var identity as ParamPositionMask = NoParamPositions
 	export var holds as ParamPositionMask = NoParamPositions
@@ -508,7 +508,7 @@ end 'RootSets'
 // it (`storesDeep`), into module storage (`escapes`) — and which it BINDS to a mutable name that outlives the
 // call, a module `var` or a by-reference parameter's cell (`binds`). `moduleLets` is what the result is to the
 // records module-level `let`s hold, in `ResultLiesWithinAModuleLet` and `ResultHoldsAModuleLet` bits.
-module type ProvenanceSummary
+export type ProvenanceSummary
 	var shares as ParamPositionMaskArray
 	var identity as ParamPositionMaskArray
 	var holds as ParamPositionMaskArray
@@ -766,7 +766,7 @@ end 'FunctionRowsLookup'
 
 let NoFiledRows = i64.max as ElementIndex
 
-type FunctionRows
+export type FunctionRows
 	var firstRows as EntryIndexArray
 	var stopRows as EntryIndexArray
 
@@ -785,7 +785,7 @@ type FunctionRows
 		try self.stopRows.set(funcIndex, value: stopRow) otherwise panic("FunctionRows.file: function {funcIndex} is past the tracer's function count")
 	end 'file'
 
-	export function firstRowOf(funcIndex FuncIndex) returns ElementIndex throws FunctionRowsLookup
+	function firstRowOf(funcIndex FuncIndex) returns ElementIndex throws FunctionRowsLookup
 		let first = try self.firstRows.get(funcIndex) otherwise panic("FunctionRows.firstRowOf: function {funcIndex} is past the tracer's function count")
 
 		if first == NoFiledRows 'nothingFiled'
@@ -822,7 +822,7 @@ typealias RuntimeStoreShapeArray = Array with RuntimeStoreShape
 // A body's rows are its `FunctionRows` range, in the order every pass of a walk meets its calls. A row is
 // DESCRIBED when a summary answers for its callee (`calleeHasSummary`) and then names an entry of the
 // described columns; otherwise it names an entry of the runtime columns.
-type CallSites
+export type CallSites
 	export var ranges as FunctionRows
 	var described as BoolArray
 	var entries as EntryIndexArray
@@ -915,7 +915,7 @@ end 'CallSites'
 // ends at 3,543 identity rows and 59,230 record rows, of which 999 and 22,198 are live — ~2 MB, and ~1.3 MB
 // of that superseded. Compacting the log costs more than it holds (+1,351 allocations and +6.1 MB over a
 // whole compile), so the log is kept whole and RELEASED once that pass has read it.
-type StagedEdgeRows
+export type StagedEdgeRows
 	export var rows as CallParamEdges
 	var ranges as FunctionRows
 
@@ -950,7 +950,7 @@ end 'StagedEdgeRows'
 //
 // A body with no record parameter is staged by no trace and reads back as empty here, which is the answer
 // that pass wants for it: the fixpoint's first pass traces every body that HAS one.
-type StagedParamEdges
+export type StagedParamEdges
 	export var alias as StagedEdgeRows
 	export var within as StagedEdgeRows
 	export var written as ParamPositionMaskArray
@@ -1614,13 +1614,13 @@ module type ProvenanceTracer
 		return self.bindingsRootCount
 	end 'bindingsTraceOf'
 
-	export function enterFunction(funcIndex FuncIndex)
+	module function enterFunction(funcIndex FuncIndex)
 		self.enteredIndex = funcIndex
 	end 'enterFunction'
 
 	// `value` is handed, in the entered function, by the call at `call`, to a parameter its callee writes —
 	// `paramName`, or the parameter at its position when that is unknown (empty).
-	export function noteArgumentWritten(value ValueId, call SourceRange, paramName ByteArray)
+	module function noteArgumentWritten(value ValueId, call SourceRange, paramName ByteArray)
 		self.writtenArgFuncs.push(self.enteredIndex)
 		self.writtenArgValues.push(value)
 		self.writtenArgCalls.push(call)
@@ -1630,7 +1630,7 @@ module type ProvenanceTracer
 
 	// The argument noted last was refused where it was noted (E3019 by name or by identity): the write-through door
 	// leaves it be.
-	export function noteLastArgumentJudged()
+	module function noteLastArgumentJudged()
 		try self.writtenArgJudged.set(self.writtenArgJudged.count() - 1, value: true) otherwise panic("ProvenanceTracer.noteLastArgumentJudged: no argument was noted")
 	end 'noteLastArgumentJudged'
 
@@ -1639,7 +1639,7 @@ module type ProvenanceTracer
 	// body no summary describes may write any argument (`unresolvedMayStore`); a compiler-synthesized witness is
 	// built to the requirement's shape and writes none. Asked, like `noteArgumentWritten`, only where a door will
 	// read the answer (`enteredFunctionAsksWrittenArguments`).
-	export function noteDispatchedArgumentsWritten(func IrFunction, op MaxonOp, opIndex OpIndex, mutationSummary ParamMutationSummary)
+	module function noteDispatchedArgumentsWritten(func IrFunction, op MaxonOp, opIndex OpIndex, mutationSummary ParamMutationSummary)
 		if not self.enteredFunctionAsksWrittenArguments(func) 'nothingAsks'
 			return
 		end 'nothingAsks'
@@ -1771,7 +1771,7 @@ module type ProvenanceTracer
 	// E3019's question of one argument of the entered function's call at `call`: the first `let` in declaration order
 	// live after the call whose own record it may be, or empty. A value a `var` holds answers empty: the door that
 	// bound it (E3078) answers for it, since that asks `identity` too.
-	export function immutableIdentityOf(func IrFunction, value ValueId, call SourceRange) returns ByteArray
+	module function immutableIdentityOf(func IrFunction, value ValueId, call SourceRange) returns ByteArray
 		if not func.filesImmutableBindings() or self.bindingsTraceOf(func, index: self.enteredIndex) == 0 or self.valueIsAVarsOwn(value) 'noImmutableRootToBlame'
 			return EmptySourceText
 		end 'noImmutableRootToBlame'
@@ -2914,7 +2914,7 @@ module type ProvenanceTracer
 	// edges and seeds alone.
 	//
 	// Answers (the identity relation, the record relation), each `base` itself when it gained no row.
-	export function collectProvenanceParamEdges(base CallParamEdges, funcNames FunctionNameIndex) returns (CallParamEdges, CallParamEdges)
+	module function collectProvenanceParamEdges(base CallParamEdges, funcNames FunctionNameIndex) returns (CallParamEdges, CallParamEdges)
 		var aliasRows = CallParamEdges.create()
 		var withinRows = CallParamEdges.create()
 
@@ -3111,7 +3111,7 @@ module type ProvenanceTracer
 	//
 	// A graph LENT to a service is frozen from its send on, liveness or not (`checkLentGraphs`), and asked first, so a
 	// door it refuses is not asked again as one of the doors above.
-	export function checkStorageDoors(mutationSummary ParamMutationSummary)
+	module function checkStorageDoors(mutationSummary ParamMutationSummary)
 		let ir = self.module
 		self.traceLentHandlers(mutationSummary)
 
@@ -3191,7 +3191,7 @@ module type ProvenanceTracer
 	// ⭐ **E3166: A `var` WHOSE INITIALIZER MAY HAND IT A MODULE-LEVEL `let`'S RECORD.** `__module_init` is traced like
 	// any body, so each value it stores into a `var`'s slot carries what its call tree may hand it — a nested call's
 	// result through the summary of the call it was handed to, and nothing for a number read out of a `let`.
-	export function checkVarInitializersTakeNoLetRecord(funcNames FunctionNameIndex)
+	module function checkVarInitializersTakeNoLetRecord(funcNames FunctionNameIndex)
 		if self.moduleLetRecordKinds.holdsNothing() 'noLetHoldsARecord'
 			return
 		end 'noLetHoldsARecord'
@@ -3309,7 +3309,7 @@ module type ProvenanceTracer
 
 	// Are the arguments a call of the entered function hands a writing parameter asked about — because it holds an
 	// immutable name, or because a call may hand it a module-level `let`'s record?
-	export function enteredFunctionAsksWrittenArguments(func IrFunction) returns bool
+	module function enteredFunctionAsksWrittenArguments(func IrFunction) returns bool
 		return func.filesImmutableBindings() or self.mayBeHandedAModuleLetsRecordAt(self.enteredIndex)
 	end 'enteredFunctionAsksWrittenArguments'
 

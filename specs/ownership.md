@@ -581,7 +581,7 @@ end 'Data'
 type Container
 	export var data as Data
 
-	export function setData(newData Data)
+	function setData(newData Data)
 		data = newData
 	end 'setData'
 
@@ -1323,7 +1323,7 @@ end 'Cell'
 type Holder implements Backref
 	export var cell as Cell
 
-	export function tag() returns Small
+	function tag() returns Small
 		return 1
 	end 'tag'
 end 'Holder'
@@ -1355,11 +1355,11 @@ end 'Tagged'
 type Box uses T implements Tagged
 	var payload as T
 
-	export static function create(p T) returns Self
+	static function create(p T) returns Self
 		return Self{payload: p}
 	end 'create'
 
-	export function tag() returns Small
+	function tag() returns Small
 		return 3
 	end 'tag'
 end 'Box'
@@ -1367,15 +1367,15 @@ end 'Box'
 type Holder
 	var t as Tagged
 
-	export static function create(t Tagged) returns Self
+	static function create(t Tagged) returns Self
 		return Self{t: t}
 	end 'create'
 
-	export function retarget(next Tagged)
+	function retarget(next Tagged)
 		self.t = next
 	end 'retarget'
 
-	export function go() returns Small
+	function go() returns Small
 		return self.t.tag()
 	end 'go'
 end 'Holder'
@@ -1383,11 +1383,11 @@ end 'Holder'
 type Leaf implements Tagged
 	let n as Small
 
-	export static function create(n Small) returns Self
+	static function create(n Small) returns Self
 		return Self{n: n}
 	end 'create'
 
-	export function tag() returns Small
+	function tag() returns Small
 		return self.n
 	end 'tag'
 end 'Leaf'
@@ -1418,11 +1418,11 @@ end 'Backref'
 type Plain implements Backref
 	let mark as Small
 
-	export static function create(m Small) returns Self
+	static function create(m Small) returns Self
 		return Self{mark: m}
 	end 'create'
 
-	export function tag() returns Small
+	function tag() returns Small
 		return self.mark
 	end 'tag'
 end 'Plain'
@@ -1430,11 +1430,11 @@ end 'Plain'
 type Cell
 	var back as Backref
 
-	export static function create(b Backref) returns Self
+	static function create(b Backref) returns Self
 		return Self{back: b}
 	end 'create'
 
-	export function tag() returns Small
+	function tag() returns Small
 		return self.back.tag()
 	end 'tag'
 end 'Cell'
@@ -1458,7 +1458,7 @@ local instead — and the argument's allocation outlives the program (exit **101
 type Wrap
 	export var v as String
 
-	export static function make(p String) returns Wrap
+	static function make(p String) returns Wrap
 		let p = "local value"
 		return Wrap{v: p}
 	end 'make'
@@ -1485,7 +1485,7 @@ type Wrap
 	export var v as String
 	export var mark as Tally
 
-	export static function make(p String) returns Wrap
+	static function make(p String) returns Wrap
 		var mark = 0
 		for p in 0 upto 2 'digits'
 			mark = mark + p
@@ -1521,7 +1521,7 @@ type Wrap
 	export var v as String
 	export var n as Tally
 
-	export static function make(p String) returns Wrap
+	static function make(p String) returns Wrap
 		let (p, q) = pairOf()
 		return Wrap{v: p, n: q.count() as Tally}
 	end 'make'
@@ -1553,7 +1553,7 @@ type Wrap
 	export var v as String
 	export var why as Fail
 
-	export static function make(p String) returns Wrap
+	static function make(p String) returns Wrap
 		try boom() otherwise (p) 'caught'
 			return Wrap{v: "handled", why: p}
 		end 'caught'
@@ -1586,7 +1586,7 @@ end 'Slot'
 type Wrap
 	export var v as String
 
-	export static function make(p String, s Slot) returns Wrap
+	static function make(p String, s Slot) returns Wrap
 		match s 'choose'
 			filled(p) then return Wrap{v: p}
 			empty then p = "replaced"
@@ -1618,7 +1618,7 @@ callee's field store takes its OWN reference off a borrow, the caller transfers 
 type Wrap
 	export var v as String
 
-	export static function make(p String) returns Wrap
+	static function make(p String) returns Wrap
 		p = "replaced"
 		return Wrap{v: p}
 	end 'make'
@@ -1641,7 +1641,7 @@ caller's `t` — and each owes exactly one release. `"second"` is 6 bytes and al
 type Wrap
 	export var v as String
 
-	export static function make(p String, q String) returns Wrap
+	static function make(p String, q String) returns Wrap
 		p = q
 		return Wrap{v: p}
 	end 'make'
@@ -1666,7 +1666,7 @@ caller sees too.
 type Wrap
 	export var v as String
 
-	export static function make(p String) returns Wrap
+	static function make(p String) returns Wrap
 		for i in 0 upto 3 'grow'
 			p = "{p}{i}"
 		end 'grow'
@@ -1693,7 +1693,7 @@ end 'main'
 type Wrap
 	export var v as String
 
-	export static function make(p String) returns Wrap
+	static function make(p String) returns Wrap
 		p = "replaced"
 		return Wrap{v: p}
 	end 'make'

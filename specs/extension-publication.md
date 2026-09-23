@@ -89,21 +89,21 @@ typealias Idx = int(0 to u64.max)
 type Box uses T
 	export var slot as T
 
-	export static function make(v T) returns Self
+	static function make(v T) returns Self
 		return Self{slot: v}
 	end 'make'
 
-	export function tag() returns Idx
+	function tag() returns Idx
 		return 5
 	end 'tag'
 end 'Box'
 
 export extension Box
-	export function bareCall() returns Idx
+	function bareCall() returns Idx
 		return tag()
 	end 'bareCall'
 
-	export function qualifiedCall() returns Idx
+	function qualifiedCall() returns Idx
 		return self.tag()
 	end 'qualifiedCall'
 end 'Box'
@@ -128,13 +128,13 @@ typealias Integer = int(i64.min to i64.max)
 type Box
 	export var v as Integer
 
-	export static function of(v Integer) returns Self
+	static function of(v Integer) returns Self
 		return Self{v: v}
 	end 'of'
 end 'Box'
 
 extension Box
-	export function twin() returns Integer
+	function twin() returns Integer
 		return of(7).v + self.v
 	end 'twin'
 end 'Box'
@@ -160,21 +160,21 @@ interface Tagged
 end 'Tagged'
 
 extension Tagged
-	export function score() returns Integer
+	function score() returns Integer
 		return tag() + bonus()
 	end 'score'
 end 'Tagged'
 
 type Five implements Tagged
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{}
 	end 'make'
 
-	export function tag() returns Integer
+	function tag() returns Integer
 		return 5
 	end 'tag'
 
-	export function bonus() returns Integer
+	function bonus() returns Integer
 		return 30
 	end 'bonus'
 end 'Five'
@@ -197,19 +197,19 @@ typealias Integer = int(i64.min to i64.max)
 type Box
 	export var v as Integer
 
-	export static function of(v Integer) returns Self
+	static function of(v Integer) returns Self
 		return Self{v: v}
 	end 'of'
 end 'Box'
 
 extension Box
-	export function tripled() returns Integer
+	function tripled() returns Integer
 		return self.v * 3
 	end 'tripled'
 end 'Box'
 
 extension Box
-	export function reported() returns Integer
+	function reported() returns Integer
 		return tripled() + 1
 	end 'reported'
 end 'Box'
@@ -233,21 +233,21 @@ typealias Integer = int(i64.min to i64.max)
 type Box
 	export var v as Integer
 
-	export static function of(v Integer) returns Self
+	static function of(v Integer) returns Self
 		return Self{v: v}
 	end 'of'
 
-	export function viaBare() returns Integer
+	function viaBare() returns Integer
 		return tripled()
 	end 'viaBare'
 
-	export function viaSelf() returns Integer
+	function viaSelf() returns Integer
 		return self.tripled()
 	end 'viaSelf'
 end 'Box'
 
 extension Box
-	export function tripled() returns Integer
+	function tripled() returns Integer
 		return self.v * 3
 	end 'tripled'
 end 'Box'
@@ -273,25 +273,25 @@ interface Holder
 end 'Holder'
 
 extension Holder
-	export function has() returns Integer
+	function has() returns Integer
 		return 1
 	end 'has'
 
-	export function report() returns Integer
+	function report() returns Integer
 		return has() + only()
 	end 'report'
 end 'Holder'
 
 type Bag implements Holder
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{}
 	end 'make'
 
-	export function only() returns Integer
+	function only() returns Integer
 		return 3
 	end 'only'
 
-	export function has() returns Integer
+	function has() returns Integer
 		return 40
 	end 'has'
 end 'Bag'
@@ -315,13 +315,13 @@ typealias Integer = int(i64.min to i64.max)
 type Box
 	export var v as Integer
 
-	export static function of(v Integer) returns Self
+	static function of(v Integer) returns Self
 		return Self{v: v}
 	end 'of'
 end 'Box'
 
 extension Box
-	export function broken() returns Integer
+	function broken() returns Integer
 		return missing() + self.v
 	end 'broken'
 end 'Box'

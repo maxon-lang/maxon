@@ -297,7 +297,7 @@ owned copy, so nothing dangles and nothing leaks.
 type Box
 	export var name as String
 
-	export function setName(n String)
+	function setName(n String)
 		name = n
 	end 'setName'
 

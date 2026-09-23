@@ -511,7 +511,7 @@ end 'nearestManifestDirectory'
 
 function climbReachedTheStatedRoot(current FilePath, stated StatedRoot) returns bool
 	return match stated 'stated'
-		named(dir) gives current.normalize().equals(dir)
+		named(dir) gives current.equals(dir)
 		unnamed gives false
 	end 'stated'
 end 'climbReachedTheStatedRoot'
@@ -528,7 +528,7 @@ extension Project
 	// It is also the expensive half. Lexing and folding signatures is what a name-to-file question
 	// actually needs; parse and merge cost more than the two of them together and answer nothing asked
 	// here.
-	module function sweptOver(walk SourceSweep, readerPath FilePath) returns LspCorpus
+	function sweptOver(walk SourceSweep, readerPath FilePath) returns LspCorpus
 		var kept = MaxonSourcePathSet.create()
 
 		// Seeded from the array the library loops index (`StdlibSource.growStdlibBodyDemand` and its two
@@ -547,7 +547,7 @@ extension Project
 			try loadOneSourceFileIfChanged(self, path: path) otherwise ignore
 		end 'eachSource'
 
-		let reader = corpusSpellingOf(self, reader: readerPath.resolve(Directory.currentPath()).normalize())
+		let reader = corpusSpellingOf(self, reader: readerPath.resolve(Directory.currentPath()))
 		kept.insert(reader)
 
 		unregisterWhatTheWalkNoLongerLists(self, walk: walk, kept: kept)

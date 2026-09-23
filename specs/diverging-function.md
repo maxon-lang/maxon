@@ -513,7 +513,7 @@ end 'FatalError'
 type Worker
 	export var id as Integer
 
-	export static function create(id Integer) returns Worker
+	static function create(id Integer) returns Worker
 		return Self{id: id}
 	end 'create'
 
@@ -529,7 +529,7 @@ type Worker
 		return 41
 	end 'drain'
 
-	export function collect(fail bool) returns Integer throws FatalError
+	function collect(fail bool) returns Integer throws FatalError
 		let lines = try self.drain(fail) otherwise 'workerDied'
 			try abandon()
 		end 'workerDied'

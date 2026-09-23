@@ -166,25 +166,25 @@ type TupleValueRow
 	export var storedLow as ValueId
 	export var storedHigh as ValueId
 
-	export static function create(value ValueId) returns TupleValueRow
+	static function create(value ValueId) returns TupleValueRow
 		return Self{value: value, origin: TupleValueOrigin.elsewhere, loadLow: 0, loadHigh: 0, storeLow: 0, storeHigh: 0, returnUses: 0, trivialDrops: 0, other: 0, storedLow: 0, storedHigh: 0}
 	end 'create'
 
 	// The FRESH-LITERAL shape: this box is written once at each half and returned, and nothing else in the
 	// function can see it. Both stores must be there or the `errorReturn` would have no second word.
-	export function isAnUnsharedFreshPair() returns bool
+	function isAnUnsharedFreshPair() returns bool
 		return self.storeLow == 1 and self.storeHigh == 1 and self.returnUses == 1 and self.loadLow == 0 and self.loadHigh == 0 and self.trivialDrops == 0 and self.other == 0
 	end 'isAnUnsharedFreshPair'
 
 	// The FRAME-LOCAL shape: built, read by whole-slot loads only, and dropped once, all in one frame. Any
 	// number of loads — each becomes a read of the stored value.
-	export function isAFrameLocalPair() returns bool
+	function isAFrameLocalPair() returns bool
 		return self.storeLow == 1 and self.storeHigh == 1 and self.trivialDrops == 1 and self.returnUses == 0 and self.other == 0
 	end 'isAFrameLocalPair'
 
 	// The CALL-SITE shape that needs no record: the halves are read out and the box is released by the one
 	// trivial decref. Zero loads is admitted — a result nobody reads still costs the call.
-	export function isReadThenDropped() returns bool
+	function isReadThenDropped() returns bool
 		return self.trivialDrops == 1 and self.returnUses == 0 and self.storeLow == 0 and self.storeHigh == 0 and self.other == 0
 	end 'isReadThenDropped'
 
@@ -194,12 +194,12 @@ type TupleValueRow
 	// convention this pass has not yet decided. Nothing reads either register there — `mrt_panic` does not
 	// return — but the block must still leave the function with the arity its type declares, or the wasm
 	// module does not validate, which is the X6 defect that door's own header records.
-	export function isAnUnreachableZero() returns bool
+	function isAnUnreachableZero() returns bool
 		return self.returnUses >= 1 and self.loadLow == 0 and self.loadHigh == 0 and self.storeLow == 0 and self.storeHigh == 0 and self.trivialDrops == 0 and self.other == 0
 	end 'isAnUnreachableZero'
 
 	// The FORWARDED shape: the pair's one use is the enclosing function's own return.
-	export function isForwardedToTheReturn() returns bool
+	function isForwardedToTheReturn() returns bool
 		return self.returnUses == 1 and self.trivialDrops == 0 and self.loadLow == 0 and self.loadHigh == 0 and self.storeLow == 0 and self.storeHigh == 0 and self.other == 0
 	end 'isForwardedToTheReturn'
 end 'TupleValueRow'
@@ -215,7 +215,7 @@ type FunctionTupleFlow
 	export var hasRow as BoolArray
 	export var rowAt as UseTallyArray
 
-	export static function create(valueBound ValueId) returns FunctionTupleFlow
+	static function create(valueBound ValueId) returns FunctionTupleFlow
 		var hasRow = BoolArray.create()
 		hasRow.growFilled(valueBound as ElementIndex, value: false)
 		var rowAt = UseTallyArray.create()
@@ -223,17 +223,17 @@ type FunctionTupleFlow
 		return Self{rows: TupleValueRowArray.create(), hasRow: hasRow, rowAt: rowAt}
 	end 'create'
 
-	export function tracks(value ValueId) returns bool
+	function tracks(value ValueId) returns bool
 		return columnMarks(self.hasRow, value: value)
 	end 'tracks'
 
-	export function rowOf(value ValueId) returns TupleValueRow
+	function rowOf(value ValueId) returns TupleValueRow
 		let rowIndex = try self.rowAt.get(value) otherwise panic("FunctionTupleFlow.rowOf: rowAt.get OOB at {value} — asked of a value `tracks` answered true for")
 		return try self.rows.get(rowIndex) otherwise panic("FunctionTupleFlow.rowOf: rows.get OOB at {rowIndex} — the row-index column is written only by `track`, which pushes the row it indexes")
 	end 'rowOf'
 
 	// Begin tracking `value`, or leave the row it already has alone.
-	export function track(value ValueId)
+	function track(value ValueId)
 		if self.tracks(value) 'alreadyTracked'
 			return
 		end 'alreadyTracked'
@@ -279,7 +279,7 @@ type ValueTupleRetVerdict
 	export let funcIndex as FuncIndex
 	export let kind as ValueTupleRetKind
 
-	export static function create(funcIndex FuncIndex, kind ValueTupleRetKind) returns ValueTupleRetVerdict
+	static function create(funcIndex FuncIndex, kind ValueTupleRetKind) returns ValueTupleRetVerdict
 		return Self{funcIndex: funcIndex, kind: kind}
 	end 'create'
 end 'ValueTupleRetVerdict'
@@ -304,7 +304,7 @@ type ValueTupleCallSite
 	export let calleeIndex as FuncIndex
 	export let shape as ValueTupleCallShape
 
-	export static function create(callerIndex FuncIndex, calleeIndex FuncIndex, shape ValueTupleCallShape) returns ValueTupleCallSite
+	static function create(callerIndex FuncIndex, calleeIndex FuncIndex, shape ValueTupleCallShape) returns ValueTupleCallSite
 		return Self{callerIndex: callerIndex, calleeIndex: calleeIndex, shape: shape}
 	end 'create'
 end 'ValueTupleCallSite'
@@ -1780,39 +1780,39 @@ type ValueTuplePlan
 	// holds it — so the ABI rewrite asks here before it writes.
 	export let onTheConvention as bool
 
-	export static function create(valueBound ValueId, onTheConvention bool) returns ValueTuplePlan
+	static function create(valueBound ValueId, onTheConvention bool) returns ValueTuplePlan
 		return Self{returnsAsAPair: markColumn(valueBound), elidedBox: markColumn(valueBound), registerPair: markColumn(valueBound), lowOf: halfColumn(valueBound), highOf: halfColumn(valueBound), anyRewrite: false, onTheConvention: onTheConvention}
 	end 'create'
 
-	export function returnsAPair(value ValueId) returns bool
+	function returnsAPair(value ValueId) returns bool
 		return columnMarks(self.returnsAsAPair, value: value)
 	end 'returnsAPair'
 
-	export function isAnElidedBox(value ValueId) returns bool
+	function isAnElidedBox(value ValueId) returns bool
 		return columnMarks(self.elidedBox, value: value)
 	end 'isAnElidedBox'
 
-	export function isARegisterPair(value ValueId) returns bool
+	function isARegisterPair(value ValueId) returns bool
 		return columnMarks(self.registerPair, value: value)
 	end 'isARegisterPair'
 
-	export function lowHalfOf(value ValueId) returns ValueId
+	function lowHalfOf(value ValueId) returns ValueId
 		return try self.lowOf.get(value) otherwise panic("ValueTuplePlan.lowHalfOf: lowOf.get OOB at {value} — asked of a value a mark column answered true for")
 	end 'lowHalfOf'
 
-	export function highHalfOf(value ValueId) returns ValueId
+	function highHalfOf(value ValueId) returns ValueId
 		return try self.highOf.get(value) otherwise panic("ValueTuplePlan.highHalfOf: highOf.get OOB at {value} — asked of a value a mark column answered true for")
 	end 'highHalfOf'
 
 	// The FRESH-LITERAL return: the box stops being built and its two stored words leave in the registers.
-	export function markFreshPair(box ValueId, low ValueId, high ValueId)
+	function markFreshPair(box ValueId, low ValueId, high ValueId)
 		self.mark(self.elidedBox, value: box)
 		self.markPairHalves(box, low: low, high: high)
 	end 'markFreshPair'
 
 	// Both ends in one frame: the box is not built (its allocation and stores go) and its loads and drop
 	// are those of a pair whose halves are the stored values.
-	export function markFrameLocalPair(box ValueId, low ValueId, high ValueId)
+	function markFrameLocalPair(box ValueId, low ValueId, high ValueId)
 		self.mark(self.elidedBox, value: box)
 		self.mark(self.registerPair, value: box)
 		self.markPairHalves(box, low: low, high: high)
@@ -1820,13 +1820,13 @@ type ValueTuplePlan
 
 	// The unreachable panic return: both registers take the same zero. Nothing reads either, and minting a
 	// second constant for a block that never runs would be one more op to keep in step with the first.
-	export function markUnreachableZero(zero ValueId)
+	function markUnreachableZero(zero ValueId)
 		self.markPairHalves(zero, low: zero, high: zero)
 	end 'markUnreachableZero'
 
 	// A captured pair's LOW half is the call's own result id, so only the high half is minted — which is
 	// what keeps every existing reader of the result naming the value it already named.
-	export function markRegisterPair(pair ValueId, high ValueId)
+	function markRegisterPair(pair ValueId, high ValueId)
 		self.mark(self.registerPair, value: pair)
 		self.markPairHalves(pair, low: pair, high: high)
 	end 'markRegisterPair'

@@ -2,12 +2,14 @@
 // --- file: a.maxon
 typealias Level = float(0.0 to 5.0)
 
-export function fromA() returns Level
-	return 2.5
-end 'fromA'
+export function scaledA() returns ExitCode
+	let v = 2.5 as Level
+
+	return trunc(v * 2.0) as ExitCode
+end 'scaledA'
 
 // --- file: b.maxon
-enum Level
+export enum Level
 	low = 1
 	high = 9
 end 'Level'
@@ -21,12 +23,8 @@ export function rankOf(l Level) returns ExitCode
 end 'rankOf'
 
 // --- file: main.maxon
-typealias Whole = int(0 to 100)
-
 function main() returns ExitCode
-	let scaled = trunc(fromA() * 2.0) as Whole
-
-	return (scaled as ExitCode) + rankOf(fromB())
+	return scaledA() + rankOf(fromB())
 end 'main'
 ---
 ExitCode: 14
@@ -35,29 +33,11 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
   __il_body:
-    x64.movsdRegRip xmm0, [rip + __fconst_2.5]
-  __il_cont#7:
-    x64.movsdRegRip xmm1, [rip + __fconst_2]
-    x64.mulsdRegReg xmm0, xmm0, xmm1
-    x64.cvttsd2siRegReg rax, xmm0
-    x64.cmpRegImm32 rax, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 rax, 100
-    x64.jcc greater, __rc_panic
-  __il_cont#9:
+    x64.movRegImm32 rax, 5
+  __il_cont:
     x64.leaRegRegImm32 r8, rax, 9
   __rc_ok:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at main.maxon:4: Range check failed: value outside typealias 'Whole'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

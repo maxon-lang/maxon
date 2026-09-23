@@ -76,7 +76,7 @@ type Conf
 	export var argv as StrArray
 	export var n as Integer
 
-	export static function create(n Integer) returns Conf
+	static function create(n Integer) returns Conf
 		return Conf{argv: StrArray.create(), n: try mayFail(n) otherwise panic("mayFail cannot fail for a small n")}
 	end 'create'
 end 'Conf'
@@ -114,7 +114,7 @@ type Conf
 	export var argv as StrArray
 	export var n as Integer
 
-	export static function create(n Integer) returns Conf
+	static function create(n Integer) returns Conf
 		return Conf{argv: StrArray.create(), n: try mayFail(n) otherwise 7}
 	end 'create'
 end 'Conf'
@@ -155,7 +155,7 @@ type Conf
 	export var argv as StrArray
 	export var n as Integer
 
-	export static function create(n Integer) returns Conf throws Boom
+	static function create(n Integer) returns Conf throws Boom
 		return Conf{argv: StrArray.create(), n: try mayFail(n) otherwise return Conf{argv: StrArray.create(), n: 0}}
 	end 'create'
 end 'Conf'

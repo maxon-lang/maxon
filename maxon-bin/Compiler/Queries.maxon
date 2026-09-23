@@ -17,7 +17,7 @@
 // Where a stream no memo holds comes from: lexed here, on the query's own thread, or already lexed by a
 // front-end pool worker (`FrontEndPool.lexEveryFile`), whose answer then lands through exactly the memo steps
 // a lex here takes — so a pooled file's memos, counters and diagnostics are the ones a serial query leaves.
-module union LexSource
+export union LexSource
 	onThisThread
 	pooled(outcome LexOutcome)
 end 'LexSource'
@@ -1081,7 +1081,7 @@ end 'foldDescriptorNeeds'
 
 // A file's parse as a compile asks for it: the memo's artifact, or everything a parse of the file reads beside
 // the settled index, and the key its artifact is stamped with.
-module union ParseQuery
+export union ParseQuery
 	memoized(artifact FileParseArtifact)
 	needed(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, keyHash HashDigest)
 end 'ParseQuery'
@@ -1541,34 +1541,20 @@ end 'probeOnePathCacheHits'
 //
 // ⚠ Resolve both sides first: `isInside` compares SPELLINGS, not files, so an unresolved path can
 // read the same file as the user's or as stdlib depending only on how the command line named it.
-//
-// The root-inside-`stdlib/` arm asks `Project.rootIsUnderStdlibDirectory` rather than spelling the
-// test out, because `livesUnderStdlibDirectory` below is derived from the same predicate and its
-// proof is a claim about this arm — two spellings would be two things free to drift while the proof
-// read as if it held.
 export function isStdlibSourceFile(project Project, path FilePath) returns bool
 	return fileProvenanceOf(project, path: path).isStdlibSource
 end 'isStdlibSourceFile'
 
-// The same question of the OTHER library root. Everything its stdlib twin's header says about resolving
-// both sides, and about a project ROOTED inside the root keeping its own files as the user's, holds here
-// unchanged — which is why one derivation answers both.
 export function isRuntimeSourceFile(project Project, path FilePath) returns bool
 	return fileProvenanceOf(project, path: path).isRuntimeSource
 end 'isRuntimeSourceFile'
 
-// ⭐⭐ **THE DERIVATION, ONCE PER SPELLING PER COMPILE (`QueryDatabase.fileProvenance`).** Resolving a
-// path and a project root against the working directory and testing containment allocates a String per
-// path component: MEASURED at ~150 allocations a question, against 88 files at the scale ladder's first
-// rung asking it two to three times each. The memo is keyed on the SPELLING the caller passed, which is
-// the same thing `isInside` compares, so a second spelling of one file derives its own answer exactly as
-// it does without the memo — the memo saves work and decides nothing.
+// Memoized once per spelling per compile (`QueryDatabase.fileProvenance`): resolving a path
+// allocates a String per component, and each file asks more than once. The key is the spelling the
+// caller passed, which is what `isInside` compares, so the memo saves work and decides nothing.
 //
-// ⚠ Never invalidated: the answer is a function of that spelling, `project.rootPath` and the two library
-// roots, and a compile moves none of them.
-//
-// Both bits come out of ONE resolve of the path because both need it. They stay INDEPENDENT — see
-// `FileProvenance`.
+// Never invalidated: the answer is a function of that spelling, `project.rootPath` and the two
+// library roots, and a compile moves none of them.
 function fileProvenanceOf(project Project, path FilePath) returns FileProvenance
 	if let memoized = try project.db.fileProvenance.get(path) 'alreadyDerived'
 		return memoized
@@ -1576,8 +1562,14 @@ function fileProvenanceOf(project Project, path FilePath) returns FileProvenance
 
 	let cwd = Directory.currentPath()
 	let resolvedPath = path.resolve(cwd)
-	let isStdlibSource = isInsideLibraryRoot(project, resolvedPath: resolvedPath, libraryDir: project.stdlibDir, rootIsInsideIt: rootIsUnderStdlibDirectory(project, cwd: cwd), cwd: cwd)
-	let isRuntimeSource = isInsideLibraryRoot(project, resolvedPath: resolvedPath, libraryDir: project.runtimeDir, rootIsInsideIt: rootIsUnderRuntimeDirectory(project, cwd: cwd), cwd: cwd)
+	let isStdlibSource = isStdlibRootFile(project, resolvedPath: resolvedPath, cwd: cwd)
+
+	// Containment alone, whatever the project root: every rule the runtime bit gates (the `__`
+	// exemption from E2051, E3004 and E3155, E3152, E3153, E3154, the tier's module anchor) is a fact
+	// about the file, and the language server and `maxon build <file>` root the project at the
+	// document itself. Subtracting that root would make an open `runtime/Clock.maxon` report E2051 on
+	// its own declarations.
+	let isRuntimeSource = resolvedPath.isInside(project.runtimeDir)
 	let derived = FileProvenance.create(isStdlibSource, isRuntimeSource: isRuntimeSource)
 
 	project.db.fileProvenance.upsert(path, value: derived)
@@ -1595,26 +1587,23 @@ export function isLibrarySourceFile(project Project, path FilePath) returns bool
 	return provenance.isStdlibSource or provenance.isRuntimeSource
 end 'isLibrarySourceFile'
 
-// ⚠ The path arrives ALREADY RESOLVED — `isInside` compares SPELLINGS, not files, so an unresolved path
-// can read the same file as the user's or as the library's depending only on how the command line named
-// it, and the caller resolves once for both roots.
-// ⛔ **CONTAINMENT IS ASKED FIRST AND OF THIS ROOT, AND THE PROJECT ROOT ONLY SUBTRACTS FROM IT.** A file
-// outside `libraryDir` is not this root's whatever the user's project root is — asked the other way round,
-// a project rooted under ONE library root answers "true" for every file outside it, and so hands the OTHER
-// root's files this root's privileges on top of their own.
-function isInsideLibraryRoot(project Project, resolvedPath FilePath, libraryDir FilePath, rootIsInsideIt bool, cwd FilePath) returns bool
-	if not resolvedPath.isInside(libraryDir) 'outsideThisRoot'
+// The path arrives resolved, because `isInside` compares spellings. Containment in `stdlib/` is
+// asked first and the project root only subtracts from it: asked the other way round, a project
+// rooted under `stdlib/` would answer true for every file outside that root, `runtime/`'s included.
+function isStdlibRootFile(project Project, resolvedPath FilePath, cwd FilePath) returns bool
+	if not resolvedPath.isInside(project.stdlibDir) 'outsideThisRoot'
 		return false
 	end 'outsideThisRoot'
 
-	if not rootIsInsideIt 'theUsersProjectIsElsewhere'
+	if not rootIsUnderStdlibDirectory(project, cwd: cwd) 'theUsersProjectIsElsewhere'
 		return true
 	end 'theUsersProjectIsElsewhere'
 
-	// The user named a file under this root as their project, so that file is THEIRS: its functions are
-	// user source and a diagnostic in it belongs at its own lines.
+	// A project rooted under `stdlib/` keeps its own files as the user's for visibility: their
+	// functions are user source and a diagnostic in them belongs at their own lines. The runtime bit
+	// has no such subtraction; see `fileProvenanceOf`.
 	return not resolvedPath.isInside(project.rootPath.resolve(cwd))
-end 'isInsideLibraryRoot'
+end 'isStdlibRootFile'
 
 // A library line may not be blamed for a library line. The gate that produces a blame knows the
 // body it refuses is the library's, but cannot know whether the construct it found is the user's,

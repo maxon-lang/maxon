@@ -70,11 +70,11 @@ end 'Cursor'
 type IntCur implements Cursor with Integer
 	var v as Integer
 
-	export static function create(v Integer) returns Self
+	static function create(v Integer) returns Self
 		return Self{v: v}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return self.v
 	end 'current'
 end 'IntCur'
@@ -82,11 +82,11 @@ end 'IntCur'
 type Wrap uses S, E where S is Cursor with E
 	var s as S
 
-	export static function create(s S) returns Self
+	static function create(s S) returns Self
 		return Self{s: s}
 	end 'create'
 
-	export function pair() returns (S, E)
+	function pair() returns (S, E)
 		return (self.s, self.s.current())
 	end 'pair'
 end 'Wrap'
@@ -123,11 +123,11 @@ end 'Cursor'
 type IntCur implements Cursor with Integer
 	var v as Integer
 
-	export static function create(v Integer) returns Self
+	static function create(v Integer) returns Self
 		return Self{v: v}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return self.v
 	end 'current'
 end 'IntCur'
@@ -135,11 +135,11 @@ end 'IntCur'
 type TextCur implements Cursor with String
 	var v as String
 
-	export static function create(v String) returns Self
+	static function create(v String) returns Self
 		return Self{v: v}
 	end 'create'
 
-	export function current() returns String
+	function current() returns String
 		return self.v
 	end 'current'
 end 'TextCur'
@@ -147,11 +147,11 @@ end 'TextCur'
 type Wrap uses S, E where S is Cursor with E
 	var s as S
 
-	export static function create(s S) returns Self
+	static function create(s S) returns Self
 		return Self{s: s}
 	end 'create'
 
-	export function only() returns E
+	function only() returns E
 		return self.s.current()
 	end 'only'
 end 'Wrap'
@@ -189,11 +189,11 @@ end 'Sized'
 type Leaf implements Sized
 	var n as Integer
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 
-	export function size() returns Integer
+	function size() returns Integer
 		return self.n
 	end 'size'
 end 'Leaf'
@@ -201,11 +201,11 @@ end 'Leaf'
 type Box uses T implements Sized where T is Sized
 	var t as T
 
-	export static function create(t T) returns Self
+	static function create(t T) returns Self
 		return Self{t: t}
 	end 'create'
 
-	export function size() returns Integer
+	function size() returns Integer
 		return self.t.size() + 1
 	end 'size'
 end 'Box'
@@ -243,11 +243,11 @@ end 'Sized'
 type Leaf implements Sized
 	var n as Integer
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 
-	export function size() returns Integer
+	function size() returns Integer
 		return self.n
 	end 'size'
 end 'Leaf'
@@ -255,11 +255,11 @@ end 'Leaf'
 type Twig implements Sized
 	var n as Integer
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 
-	export function size() returns Integer
+	function size() returns Integer
 		return self.n * 10
 	end 'size'
 end 'Twig'
@@ -267,11 +267,11 @@ end 'Twig'
 type Box uses T implements Sized where T is Sized
 	var t as T
 
-	export static function create(t T) returns Self
+	static function create(t T) returns Self
 		return Self{t: t}
 	end 'create'
 
-	export function size() returns Integer
+	function size() returns Integer
 		return self.t.size() + 1
 	end 'size'
 end 'Box'
@@ -309,11 +309,11 @@ end 'Cursor'
 type TextCur implements Cursor with String
 	var v as String
 
-	export static function create(v String) returns Self
+	static function create(v String) returns Self
 		return Self{v: v}
 	end 'create'
 
-	export function current() returns String
+	function current() returns String
 		return self.v
 	end 'current'
 end 'TextCur'
@@ -321,11 +321,11 @@ end 'TextCur'
 type Wrap uses S, E where S is Cursor with E
 	var s as S
 
-	export static function create(s S) returns Self
+	static function create(s S) returns Self
 		return Self{s: s}
 	end 'create'
 
-	export function only() returns E
+	function only() returns E
 		return self.s.current()
 	end 'only'
 end 'Wrap'
@@ -355,11 +355,11 @@ end 'Sized'
 type Box uses T where T is Sized with (Integer)
 	var t as T
 
-	export static function create(t T) returns Self
+	static function create(t T) returns Self
 		return Self{t: t}
 	end 'create'
 
-	export function size() returns Integer
+	function size() returns Integer
 		return self.t.size()
 	end 'size'
 end 'Box'
@@ -389,11 +389,11 @@ end 'Sized'
 type Leaf implements Sized
 	var n as Integer
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 
-	export function size() returns Integer
+	function size() returns Integer
 		return self.n
 	end 'size'
 end 'Leaf'
@@ -401,11 +401,11 @@ end 'Leaf'
 type Box uses T implements Sized where T is Sized
 	var t as T
 
-	export static function create(t T) returns Self
+	static function create(t T) returns Self
 		return Self{t: t}
 	end 'create'
 
-	export function size() returns Integer
+	function size() returns Integer
 		return self.t.size() + 1
 	end 'size'
 end 'Box'
@@ -413,11 +413,11 @@ end 'Box'
 type Holder uses S where S is Sized
 	var s as S
 
-	export static function create(s S) returns Self
+	static function create(s S) returns Self
 		return Self{s: s}
 	end 'create'
 
-	export function twice() returns Integer
+	function twice() returns Integer
 		return self.s.size() * 2
 	end 'twice'
 end 'Holder'
@@ -454,11 +454,11 @@ end 'Sized'
 type Leaf implements Sized
 	var n as Integer
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 
-	export function size() returns Integer
+	function size() returns Integer
 		return self.n
 	end 'size'
 end 'Leaf'
@@ -466,11 +466,11 @@ end 'Leaf'
 type Box uses T implements Sized where T is Sized
 	var t as T
 
-	export static function create(t T) returns Self
+	static function create(t T) returns Self
 		return Self{t: t}
 	end 'create'
 
-	export function size() returns Integer
+	function size() returns Integer
 		return self.t.size() + 1
 	end 'size'
 end 'Box'
@@ -478,15 +478,15 @@ end 'Box'
 type Holder uses S where S is Sized
 	var s as S
 
-	export static function create(s S) returns Self
+	static function create(s S) returns Self
 		return Self{s: s}
 	end 'create'
 
-	export function twice() returns Integer
+	function twice() returns Integer
 		return self.s.size() * 2
 	end 'twice'
 
-	export function tag() returns Integer
+	function tag() returns Integer
 		return 5
 	end 'tag'
 end 'Holder'
@@ -496,11 +496,11 @@ type Outer uses E where E is Sized
 	typealias Inner = Holder with BoxE
 	var e as E
 
-	export static function create(e E) returns Self
+	static function create(e E) returns Self
 		return Self{e: e}
 	end 'create'
 
-	export function tally() returns Integer
+	function tally() returns Integer
 		return Inner.create(BoxE.create(self.e)).tag() + self.e.size()
 	end 'tally'
 end 'Outer'
@@ -534,11 +534,11 @@ end 'Sized'
 type Leaf implements Sized
 	var n as Integer
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 
-	export function size() returns Integer
+	function size() returns Integer
 		return self.n
 	end 'size'
 end 'Leaf'
@@ -546,11 +546,11 @@ end 'Leaf'
 type Box uses T implements Sized where T is Sized
 	var t as T
 
-	export static function create(t T) returns Self
+	static function create(t T) returns Self
 		return Self{t: t}
 	end 'create'
 
-	export function size() returns Integer
+	function size() returns Integer
 		return self.t.size() + 1
 	end 'size'
 end 'Box'
@@ -558,15 +558,15 @@ end 'Box'
 type Holder uses S where S is Sized
 	var s as S
 
-	export static function create(s S) returns Self
+	static function create(s S) returns Self
 		return Self{s: s}
 	end 'create'
 
-	export function twice() returns Integer
+	function twice() returns Integer
 		return self.s.size() * 2
 	end 'twice'
 
-	export function tag() returns Integer
+	function tag() returns Integer
 		return 5
 	end 'tag'
 end 'Holder'
@@ -576,11 +576,11 @@ type Outer uses E where E is Sized
 	typealias Inner = Holder with BoxE
 	var e as E
 
-	export static function create(e E) returns Self
+	static function create(e E) returns Self
 		return Self{e: e}
 	end 'create'
 
-	export function tally() returns Integer
+	function tally() returns Integer
 		return Inner.create(BoxE.create(self.e)).twice() + self.e.size()
 	end 'tally'
 end 'Outer'
@@ -593,5 +593,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3132: <fragment>:57:18: 'Outer.tally' calls 'Holder.twice', whose `where` constraint requires a witness table for `Box` conforming to `Sized` at a generic instance written over this body's OWN type parameters — and 'Holder.twice' READS that witness. A conformance whose impls carry a hidden dictionary is given a table PER INSTANCE, whose slots supply that instantiation's layout descriptor; an instance that is still parametric names a descriptor the enclosing frame only holds at run time, so no static table exists to pass. Reach the constrained method through a concrete instance, or make the conformance's impls independent of their type argument
+error E3132: <fragment>:57:11: 'Outer.tally' calls 'Holder.twice', whose `where` constraint requires a witness table for `Box` conforming to `Sized` at a generic instance written over this body's OWN type parameters — and 'Holder.twice' READS that witness. A conformance whose impls carry a hidden dictionary is given a table PER INSTANCE, whose slots supply that instantiation's layout descriptor; an instance that is still parametric names a descriptor the enclosing frame only holds at run time, so no static table exists to pass. Reach the constrained method through a concrete instance, or make the conformance's impls independent of their type argument
 ```

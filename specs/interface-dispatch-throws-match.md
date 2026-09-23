@@ -44,7 +44,7 @@ type AlphaBackend implements Backend
 		return x + 1
 	end 'compute'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{tag: 0}
 	end 'create'
 end 'AlphaBackend'
@@ -56,7 +56,7 @@ type BetaBackend implements Backend
 		return x + 2
 	end 'compute'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{tag: 0}
 	end 'create'
 end 'BetaBackend'

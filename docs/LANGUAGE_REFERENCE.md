@@ -906,7 +906,7 @@ type Point
 	export var x as Coord
 	export var y as Coord
 
-	export static function create(x Coord, y Coord) returns Point
+	static function create(x Coord, y Coord) returns Point
 		return Point{x: x, y: y}
 	end 'create'
 end 'Point'
@@ -955,7 +955,7 @@ type Counter
 	export var value as Tally
 	export var version = 0
 
-	export static function create(initial Tally) returns Self
+	static function create(initial Tally) returns Self
 		self.value = initial     // rule 3
 		return Self{}            // version comes from its default
 	end 'create'
@@ -977,15 +977,15 @@ type Point
 	export var x as Coord
 	export var y as Coord
 
-	export static function create(x Coord, y Coord) returns Point
+	static function create(x Coord, y Coord) returns Point
 		return Point{x: x, y: y}
 	end 'create'
 
-	export function add(other Point) returns Point
+	function add(other Point) returns Point
 		return Point.create(x + other.x, y: y + other.y)
 	end 'add'
 
-	export function manhattan() returns Coord
+	function manhattan() returns Coord
 		return magnitudeOf(x) + magnitudeOf(y)    // sibling call: self.magnitudeOf(x)
 	end 'manhattan'
 
@@ -1098,7 +1098,7 @@ type Pair
 	export let lo as Half
 	export let hi as Half
 
-	export static function create(lo Half, hi Half) returns Pair
+	static function create(lo Half, hi Half) returns Pair
 		return Pair{lo: lo, hi: hi}
 	end 'create'
 end 'Pair'
@@ -1142,7 +1142,7 @@ end 'Shape'
 type Square implements Shape
 	export let side as Tally
 
-	export static function create(side Tally) returns Self
+	static function create(side Tally) returns Self
 		return Self{side: side}
 	end 'create'
 
@@ -1416,7 +1416,7 @@ type Tagged uses T where T is Digest
 		return Self{item: item}
 	end 'create'
 
-	export function itemDigest() returns Code
+	function itemDigest() returns Code
 		return item.digest()
 	end 'itemDigest'
 end 'Tagged'
@@ -1443,7 +1443,7 @@ end 'Container'
 type Scores implements Container with Score
 	export var base as Score
 
-	export static function create(base Score) returns Self
+	static function create(base Score) returns Self
 		return Self{base: base}
 	end 'create'
 
@@ -1473,11 +1473,11 @@ type Upto implements Seq with Integer
 	var pos as Integer
 	let limit as Integer
 
-	export static function create(limit Integer) returns Self
+	static function create(limit Integer) returns Self
 		return Self{pos: 1, limit: limit}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return self.pos
 	end 'current'
 
@@ -1596,7 +1596,7 @@ conformances. Inside, `self` is the value and `Self` the primitive:
 typealias Integer = int(i64.min to i64.max)
 
 extension int
-	export function doubled() returns Integer
+	function doubled() returns Integer
 		return self * 2
 	end 'doubled'
 end 'int'
@@ -1737,7 +1737,7 @@ enum Direction
 	north
 	south
 
-	export function opposite() returns Direction
+	function opposite() returns Direction
 		return match self 'flip'
 			north gives Self.south
 			south gives Self.north
@@ -2196,7 +2196,7 @@ union Shape
 	square(side Amount)
 	point
 
-	export function area() returns Amount
+	function area() returns Amount
 		return match self 'calc'
 			circle(r) gives 3 * r * r
 			square(s) gives s * s
@@ -2355,7 +2355,7 @@ end 'main'
   type Point
   	export var x as Coord
 
-  	export static function create(x Coord) returns Point
+  	static function create(x Coord) returns Point
   		return Point{x: x}
   	end 'create'
   end 'Point'
@@ -3738,8 +3738,8 @@ a compile error (**E3057**), never an assertion whose failure goes unnoticed.
 `temperature.maxon`:
 
 ```maxon
-typealias Celsius = int(-273 to 10000)
-typealias Fahrenheit = int(-460 to 18032)
+export typealias Celsius = int(-273 to 10000)
+export typealias Fahrenheit = int(-460 to 18032)
 
 /// Converts a Celsius reading to Fahrenheit, rounding toward zero.
 export function toFahrenheit(c Celsius) returns Fahrenheit
@@ -3887,10 +3887,22 @@ The same modifiers apply to members inside a type: fields, methods and static me
 type unless marked, independently of the type's own visibility. At most one modifier may be written;
 combining two is **E2001** (`'export' and 'public' cannot be combined`).
 
+**A signature may not name a type less visible than the function itself.** Whoever may call a function has to
+be able to name what the call takes and gives back, so every type its parameters, its return type and its
+`throws` clause name must carry at least the function's own modifier. For this rule the four tiers are ordered
+*(none)* < `module` < `export` < `public`: `public` outranks `export`, so a `public` function may not name an
+`export` type. The check is structural — a generic instance's base type and each of its type arguments, a
+tuple's elements, and a function typealias's parameter and return types are all asked; a type parameter and a
+primitive name no declaration and are asked nothing. A member is held to its own modifier rather than its
+type's, and an interface's members are held to the interface's. A [service](#services--spawn)'s message is
+held to the narrower of its own modifier and its service type's. Naming a narrower type is
+[E3167](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3167); the fix is to raise the type to the function's
+tier, or to narrow the function.
+
 ### `export`
 
 ```maxon
-typealias Score = int(i64.min to i64.max)
+export typealias Score = int(i64.min to i64.max)
 
 export function publicAdd(a Score, b Score) returns Score
 	return a + b
@@ -3907,8 +3919,11 @@ exported`).
 `export` also states an expectation: **this program uses the declaration from another file.** When
 nothing outside the declaring file refers to it, the compiler reports **E3092** (`exported function
 'geometry.perimeter' is never referenced outside its declaring file`), and when every use is inside the
-declaring directory it suggests `module` (**E3093**). These checks run on multi-file programs that
-otherwise compile.
+declaring directory it suggests `module` (**E3093**). These checks run on every program that otherwise
+compiles, a one-file program included. The entry point and every task a `tasks.maxon` declares are
+exempt, because nothing in the source calls them. A type an exported or `module` signature names is exempt while that function is itself
+referenced from another file: the signature requires the wider tier, so dropping the modifier would only
+trade E3092 for [E3167](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3167).
 
 ### `public`
 
@@ -3917,7 +3932,7 @@ exists for callers outside this program, so "nothing here uses it" is not a find
 surface `public`; the standard library does so throughout.
 
 ```maxon
-typealias Length = int(0 to 1000)
+public typealias Length = int(0 to 1000)
 
 public function area(width Length, height Length) returns Length
 	return width * height
@@ -3982,8 +3997,10 @@ is resolved from the file that declares the enum, whichever file reads the case.
 
 Two typealiases with the same name in **one** file are **E3061**, which qualification cannot resolve.
 
-The standard library's typealiases are usable from every file, including ones the standard library does not
-export, so a value can always be cast to the alias a library signature asks for (`x as AssertedInt`).
+Every typealias a `public` standard-library signature names is itself `public`, so a value can always be cast
+to the alias a library signature asks for (`x as AssertedInt`). A standard-library typealias with no modifier
+is private to its declaring file exactly as anyone's is — `Math.maxon`'s `SeriesTermLimit` is one — and
+naming it from another file is **E2003**.
 
 ### Multi-Project Workspaces
 
@@ -4206,11 +4223,11 @@ type Calc
 		return Self{count: 0}
 	end 'create'
 
-	export function bump(by Count)
+	function bump(by Count)
 		self.count = self.count + by
 	end 'bump'
 
-	export function total() returns Count
+	function total() returns Count
 		return self.count
 	end 'total'
 end 'Calc'
@@ -4243,6 +4260,10 @@ end 'main'
   handler's `match`.
 - **Private methods are not messages.** Calling a non-exported method or a static through a handle is
   **E3136**. A service cannot send to itself.
+- **A message is as visible as its service, and no more.** Its `export` makes it a message rather than
+  widening it past the type, so the types its signature names need only the service type's visibility
+  ([E3167](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3167)): a file-private service's messages may name
+  file-private types.
 - **Shutdown.** `h.shutdown()` stops the service after the messages already queued. Dropping the last
   handle does the same. Replies requested afterwards fail with `ServiceError.stopped`.
 - **The target** of `spawn` must be a static factory that returns its own type; anything else — including a
@@ -4501,7 +4522,7 @@ type Point
 	export var x as Coord
 	export var y as Coord
 
-	export static function create(x Coord, y Coord) returns Point
+	static function create(x Coord, y Coord) returns Point
 		return Point{x: x, y: y}
 	end 'create'
 end 'Point'
@@ -4555,7 +4576,7 @@ type Point
 	export var x as Coord
 	export var y as Coord
 
-	export static function create(x Coord, y Coord) returns Point
+	static function create(x Coord, y Coord) returns Point
 		return Point{x: x, y: y}
 	end 'create'
 end 'Point'
@@ -4603,7 +4624,7 @@ typealias Coord = int(i64.min to i64.max)
 type Point
 	export var x as Coord
 
-	export static function create(x Coord) returns Point
+	static function create(x Coord) returns Point
 		return Point{x: x}
 	end 'create'
 end 'Point'
@@ -4670,7 +4691,7 @@ typealias TokenId = int(0 to 1000)
 type Token
 	export let id as TokenId
 
-	export static function create(id TokenId) returns Token
+	static function create(id TokenId) returns Token
 		return Token{id: id}
 	end 'create'
 end 'Token'
@@ -4918,11 +4939,11 @@ end 'PercentError'
 type Progress
 	export let done as Percent
 
-	export static function create(done Percent) returns Self
+	static function create(done Percent) returns Self
 		return Self{done: done}
 	end 'create'
 
-	export static function parse(text String) returns Self throws PercentError
+	static function parse(text String) returns Self throws PercentError
 		let value = try int.fromString(text) otherwise throw PercentError.outOfRange
 		if value < 0 or value > 100 'range'
 			throw PercentError.outOfRange

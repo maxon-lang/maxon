@@ -25,26 +25,26 @@
 // `checkUnusedExports` at all.
 #if os(Windows) and arch(x64)
 	// How many samples something was given, and how many ticks the loop took.
-	module typealias ProfileTally = int(0 to i64.max)
+	export typealias ProfileTally = int(0 to i64.max)
 
 	// How many samples one capture carries: every tick's worth of CPU its thread was charged when it was taken.
-	module typealias ProfileCharges = int(1 to i64.max)
+	export typealias ProfileCharges = int(1 to i64.max)
 
 	// A share of the run, as the reporting floor and as a rendered percentage.
-	module typealias ProfileShare = float(0.0 to f64.max)
+	export typealias ProfileShare = float(0.0 to f64.max)
 
 	// Samples per second — asked for, and achieved.
-	module typealias ProfileRate = float(0.0 to f64.max)
+	export typealias ProfileRate = float(0.0 to f64.max)
 
 	// A measured duration in seconds.
-	module typealias ProfileSeconds = float(0.0 to f64.max)
+	export typealias ProfileSeconds = float(0.0 to f64.max)
 
 	// How deep a call-tree node sits. A POSITION in one of the report's tables is stdlib's own
 	// `ElementIndex` instead, because that is the type every `get` on those tables takes and a purpose-named
 	// alias of the same range would be a cast at each of them.
 	typealias ProfileDepth = int(0 to i64.max)
 
-	module typealias ProfileStackBase = int(0 to u64.max)
+	export typealias ProfileStackBase = int(0 to u64.max)
 
 	module typealias ProfileStringArray = Array with String
 	module typealias ProfileFunctionArray = Array with ProfileFunctionRow
@@ -120,7 +120,7 @@
 		export var selfSamples as ProfileTally
 		export var totalSamples as ProfileTally
 
-		export static function create(name String, selfSamples ProfileTally, totalSamples ProfileTally) returns ProfileFunctionRow
+		static function create(name String, selfSamples ProfileTally, totalSamples ProfileTally) returns ProfileFunctionRow
 			return Self{name: name, selfSamples: selfSamples, totalSamples: totalSamples}
 		end 'create'
 	end 'ProfileFunctionRow'
@@ -135,7 +135,7 @@
 		export var samples as ProfileTally
 		export var selfSamples as ProfileTally
 
-		export static function create(path String, name String, depth ProfileDepth, samples ProfileTally, selfSamples ProfileTally) returns ProfileNode
+		static function create(path String, name String, depth ProfileDepth, samples ProfileTally, selfSamples ProfileTally) returns ProfileNode
 			return Self{path: path, name: name, depth: depth, samples: samples, selfSamples: selfSamples}
 		end 'create'
 	end 'ProfileNode'
@@ -150,14 +150,14 @@
 		export var rootFunction as String
 		export var samples as ProfileTally
 
-		export static function create(rootFunction String, samples ProfileTally) returns ProfileStackRow
+		static function create(rootFunction String, samples ProfileTally) returns ProfileStackRow
 			return Self{rootFunction: rootFunction, samples: samples}
 		end 'create'
 	end 'ProfileStackRow'
 
 	// The status the measured program returned, or the absence of one. ABSENT — not zero — for a run that was
 	// still going when sampling stopped: printing a 0 there would be this tool inventing a status nobody saw.
-	module union ProfileTargetStatus
+	export union ProfileTargetStatus
 		notObserved
 		exited(code ProfileTargetExitCode)
 	end 'ProfileTargetStatus'
@@ -172,7 +172,7 @@
 	// how much of the profile landed in code this binary's sidecar cannot name, and therefore how much of the
 	// rest to trust; `stacksTruncated` matters more than its size suggests, because a walk runs leaf-to-ROOT
 	// and a truncated stack has lost its outermost frames.
-	module type ProfileReport
+	export type ProfileReport
 		export var exePath as String
 		export var targetStatus as ProfileTargetStatus
 		export var runCompleted as bool
@@ -189,7 +189,7 @@
 		export var nodes as ProfileNodeArray
 		export var stacks as ProfileStackArray
 
-		export static function create(exePath String, targetStatus ProfileTargetStatus, runCompleted bool, requestedRateHz ProfileRate, ticks ProfileTally, durationSeconds ProfileSeconds, samples ProfileTally, captures ProfileTally, samplesUnsymbolized ProfileTally, stacksUnreadable ProfileTally, stacksTruncated ProfileTally, minPercent ProfileShare, functions ProfileFunctionArray, nodes ProfileNodeArray, stacks ProfileStackArray) returns ProfileReport
+		static function create(exePath String, targetStatus ProfileTargetStatus, runCompleted bool, requestedRateHz ProfileRate, ticks ProfileTally, durationSeconds ProfileSeconds, samples ProfileTally, captures ProfileTally, samplesUnsymbolized ProfileTally, stacksUnreadable ProfileTally, stacksTruncated ProfileTally, minPercent ProfileShare, functions ProfileFunctionArray, nodes ProfileNodeArray, stacks ProfileStackArray) returns ProfileReport
 			return Self{exePath: exePath, targetStatus: targetStatus, runCompleted: runCompleted, requestedRateHz: requestedRateHz, ticks: ticks, durationSeconds: durationSeconds, samples: samples, captures: captures, samplesUnsymbolized: samplesUnsymbolized, stacksUnreadable: stacksUnreadable, stacksTruncated: stacksTruncated, minPercent: minPercent, functions: functions, nodes: nodes, stacks: stacks}
 		end 'create'
 
@@ -221,7 +221,7 @@
 	// ========================================================================================
 
 	// Turns captured stacks into the tables above, one call per capture from the tick loop.
-	module type ProfileAccumulator
+	export type ProfileAccumulator
 		var selfByName as ProfileTallyMap
 		var totalByName as ProfileTallyMap
 		var pathTotal as ProfileTallyMap

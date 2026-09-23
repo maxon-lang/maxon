@@ -1,11 +1,10 @@
-// Test: error.file-private-union-caught-cross-file
+// Test: error.union-caught-cross-file-declared-in-the-forward-file
 // --- file: liberr.maxon
-typealias Code = int(i64.min to i64.max)
+export typealias Code = int(i64.min to i64.max)
 
-// File-private (no `export`/`module`) error union: the catch site in another
-// file only ever learns of this type through `risky`'s `throws` clause, so it
-// is never seeded into the consumer file's type registry during pre-scan.
-union LibErr implements Error
+// The catch site in another file learns this type through `risky`'s `throws`
+// clause, which is what the union-payload adopt door re-interns by name.
+export union LibErr implements Error
 	bad(code Code)
 end 'LibErr'
 
@@ -13,6 +12,7 @@ export function risky(n Code) returns Code throws LibErr
 	if n > 5 'big'
 		throw LibErr.bad(42)
 	end 'big'
+
 	return n
 end 'risky'
 
@@ -24,6 +24,7 @@ function main() returns ExitCode
 			bad(code) then result = code
 		end 'check'
 	end 'handler'
+
 	return result
 end 'main'
 ---
@@ -104,7 +105,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at main.maxon:8: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at main.maxon:9: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40

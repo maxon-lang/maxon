@@ -94,7 +94,7 @@ union Outcome
 	pass
 	fail(reason String)
 
-	export function isPass() returns bool
+	function isPass() returns bool
 		return match self 'p'
 			pass gives true
 			fail gives false
@@ -126,7 +126,7 @@ union PathError
 	missing
 	unreadable(path String)
 
-	export function displayReason() returns String
+	function displayReason() returns String
 		return match self 'k'
 			missing gives "no path was given at all, and this literal is heap-long"
 			unreadable(path) gives "cannot open {path}"
@@ -158,7 +158,7 @@ union Record
 	pass(specName String, testName String)
 	fail(specName String, testName String, reason String)
 
-	export function spec() returns String
+	function spec() returns String
 		return match self 's'
 			pass(s, _) gives s
 			fail(s, _, _) gives s
@@ -190,7 +190,7 @@ union PathError
 	missing
 	unreadable(path String)
 
-	export function displayReason() returns String
+	function displayReason() returns String
 		return match self 'k'
 			missing gives "no path was given at all, and this literal is heap-long"
 			unreadable(path) gives "cannot open {path}"
@@ -226,7 +226,7 @@ union PathError
 	missing
 	unreadable(path String)
 
-	export function displayReason() returns String
+	function displayReason() returns String
 		return match self 'k'
 			missing gives "no path was given at all, and this literal is heap-long"
 			unreadable(path) gives "cannot open {path}"
@@ -263,7 +263,7 @@ union PathError
 	missing
 	unreadable(path String)
 
-	export function displayReason() returns String
+	function displayReason() returns String
 		return match self 'k'
 			missing gives "no path was given at all, and this literal is heap-long"
 			unreadable(path) gives "cannot open {path}"
@@ -295,7 +295,7 @@ union M
 	silent
 	text(body String)
 
-	export function spin(d Depth) returns Integer
+	function spin(d Depth) returns Integer
 		return match self 'k'
 			silent gives 0
 			text(s) gives 1 + self.spin((d - 1) if d > 0 else 0) if d > 0 and s.byteLength() > 0 else 1
@@ -318,7 +318,7 @@ union Outcome
 	pass
 	fail(reason String)
 
-	export function isPass() returns bool
+	function isPass() returns bool
 		return match self 'p'
 			pass gives true
 			fail gives false
@@ -346,7 +346,7 @@ union Outcome
 	pass
 	fail(reason String)
 
-	export function viaHelper() returns bool
+	function viaHelper() returns bool
 		return helper(self)
 	end 'viaHelper'
 end 'Outcome'
@@ -380,7 +380,7 @@ union Boxed
 	one(v Integer)
 	two(s String)
 
-	export function giveBack() returns Boxed
+	function giveBack() returns Boxed
 		return self
 	end 'giveBack'
 end 'Boxed'
@@ -404,7 +404,7 @@ typealias Integer = int(i64.min to i64.max)
 union Shape
 	circle(r Integer)
 
-	export static function unit() returns Integer
+	static function unit() returns Integer
 		return 1
 	end 'unit'
 end 'Shape'
@@ -415,7 +415,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E2015: <fragment>:5:9: Unsupported: a `static function` on `union Shape` (an INSTANCE method is supported — a static one has no receiver to name the enum through, and no `enum`/`union` in the corpus declares one)
+error E2015: <fragment>:5:2: Unsupported: a `static function` on `union Shape` (an INSTANCE method is supported — a static one has no receiver to name the enum through, and no `enum`/`union` in the corpus declares one)
 ```
 
 <!-- test: error.static-method-on-an-enum -->
@@ -423,7 +423,7 @@ error E2015: <fragment>:5:9: Unsupported: a `static function` on `union Shape` (
 enum Color
 	red
 
-	export static function best() returns Integer
+	static function best() returns Integer
 		return 1
 	end 'best'
 end 'Color'
@@ -434,7 +434,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E2015: <fragment>:5:9: Unsupported: a `static function` on `enum Color` (an INSTANCE method is supported — a static one has no receiver to name the enum through, and no `enum`/`union` in the corpus declares one)
+error E2015: <fragment>:5:2: Unsupported: a `static function` on `enum Color` (an INSTANCE method is supported — a static one has no receiver to name the enum through, and no `enum`/`union` in the corpus declares one)
 ```
 
 <!-- test: two-methods-and-the-second-ones-return-type -->
@@ -443,14 +443,14 @@ union Outcome
 	pass
 	fail(reason String)
 
-	export function isPass() returns bool
+	function isPass() returns bool
 		return match self 'p'
 			pass gives true
 			fail gives false
 		end 'p'
 	end 'isPass'
 
-	export function weight() returns Real
+	function weight() returns Real
 		return 2.5
 	end 'weight'
 end 'Outcome'
@@ -476,7 +476,7 @@ typealias Real = float(f64.min to f64.max)
 enum Order
 	alpha
 
-	export function bump() returns Integer
+	function bump() returns Integer
 		return 1
 	end 'bump'
 
@@ -506,7 +506,7 @@ enum Weird
 	alpha
 	function
 
-	export function mid() returns Integer
+	function mid() returns Integer
 		var total = 0
 		while total < 2 'spin'
 			total = total + 1
@@ -517,17 +517,17 @@ enum Weird
 	end
 	export
 
-	export function two() returns Integer
+	function two() returns Integer
 		return 20
 	end 'two'
 
-	export function three() returns Integer
+	function three() returns Integer
 		return 30
 	end 'three'
 
 	omega
 
-	export function tag() returns Integer
+	function tag() returns Integer
 		return match self 'w'
 			alpha gives 1
 			function gives 2
@@ -569,11 +569,11 @@ enum Sib
 	end
 	omega
 
-	export function outer() returns Integer
+	function outer() returns Integer
 		return inner() + 1
 	end 'outer'
 
-	export function inner() returns Integer
+	function inner() returns Integer
 		return 6
 	end 'inner'
 end 'Sib'
@@ -594,7 +594,7 @@ enum Sib
 	alpha
 	while
 
-	export function outer() returns Integer
+	function outer() returns Integer
 		return helper() + 1
 	end 'outer'
 end 'Sib'
@@ -602,7 +602,7 @@ end 'Sib'
 type Later
 	export var n as Integer
 
-	export function helper() returns Integer
+	function helper() returns Integer
 		return 99
 	end 'helper'
 end 'Later'
@@ -627,7 +627,7 @@ union Outcome
 	pass
 	fail(reason String)
 
-	export function why() returns bool
+	function why() returns bool
 		return self.reason.byteLength() > 0
 	end 'why'
 end 'Outcome'
@@ -650,7 +650,7 @@ union Outcome
 	pass
 	fail(reason String)
 
-	export function clobber() returns bool
+	function clobber() returns bool
 		self.reason = "nope"
 		return true
 	end 'clobber'
@@ -674,11 +674,11 @@ enum Plat
 	alpha
 
 #if testing(true)
-	export function tag() returns Integer
+	function tag() returns Integer
 		return 3
 	end 'tag'
 #else
-	export function tag() returns Integer
+	function tag() returns Integer
 		return 7
 	end 'tag'
 #endif
@@ -704,7 +704,7 @@ typealias Integer = int(i64.min to i64.max)
 enum Plat
 	alpha
 
-	export function tag() returns Integer
+	function tag() returns Integer
 #if testing(true)
 		return 3
 #else

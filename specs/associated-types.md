@@ -1647,7 +1647,7 @@ end 'Runner'
 type Box uses T where T is Taker
 	let item as T
 
-	export function run(c ExitCode) returns Integer
+	function run(c ExitCode) returns Integer
 		return self.item.take(c)
 	end 'run'
 
@@ -1729,7 +1729,7 @@ end 'Runner'
 type Box uses T where T is Taker
 	let item as T
 
-	export function run() returns Integer
+	function run() returns Integer
 		return self.item.take(20)
 	end 'run'
 
@@ -1813,7 +1813,7 @@ end 'Runner'
 type Box uses T where T is Taker
 	let item as T
 
-	export function run() returns Integer
+	function run() returns Integer
 		return self.item.take(20.0)
 	end 'run'
 
@@ -2507,11 +2507,11 @@ type Runner implements Taker with Integer
 end 'Runner'
 
 type Box uses T
-	typealias TakerOfT = Taker with T
+	export typealias TakerOfT = Taker with T
 
 	let seed as Integer
 
-	export function run(t TakerOfT, c T) returns Integer
+	function run(t TakerOfT, c T) returns Integer
 		return t.take(c) + self.seed
 	end 'run'
 
@@ -2562,11 +2562,11 @@ type Runner implements Taker with Integer
 end 'Runner'
 
 type Box uses T
-	typealias TakerOfT = Taker with T
+	export typealias TakerOfT = Taker with T
 
 	let seed as Integer
 
-	export function run(t TakerOfT) returns Integer
+	function run(t TakerOfT) returns Integer
 		return t.label() + self.seed
 	end 'run'
 
@@ -2653,11 +2653,11 @@ type Runner implements Taker with Integer
 end 'Runner'
 
 type Box uses T
-	typealias TakerOfT = Taker with T
+	export typealias TakerOfT = Taker with T
 
 	let seed as Integer
 
-	export function make() returns TakerOfT
+	function make() returns TakerOfT
 		return Runner.create(20 + self.seed)
 	end 'make'
 
@@ -2712,7 +2712,7 @@ type Box uses T
 
 	let t as TakerOfT
 
-	export function run() returns Integer
+	function run() returns Integer
 		return self.t.label()
 	end 'run'
 
@@ -2767,7 +2767,7 @@ type Box uses T
 
 	let t as TakerOfT
 
-	export function run() returns Integer
+	function run() returns Integer
 		return self.t.label()
 	end 'run'
 
@@ -2921,7 +2921,7 @@ type Box uses T
 
 	let t as TakerOfT
 
-	export function run() returns Integer
+	function run() returns Integer
 		return self.t.label()
 	end 'run'
 
@@ -2977,11 +2977,11 @@ type Holder uses E implements Taker with E
 end 'Holder'
 
 type Box uses T
-	typealias TakerOfT = Taker with T
+	export typealias TakerOfT = Taker with T
 
 	let extra as Integer
 
-	export function run(t TakerOfT) returns Integer
+	function run(t TakerOfT) returns Integer
 		return t.label() + self.extra
 	end 'run'
 
@@ -3032,11 +3032,11 @@ type Holder uses E implements Taker with E
 end 'Holder'
 
 type Box uses T
-	typealias TakerOfT = Taker with T
+	export typealias TakerOfT = Taker with T
 
 	let extra as Integer
 
-	export function run(t TakerOfT) returns Integer
+	function run(t TakerOfT) returns Integer
 		return t.label() + self.extra
 	end 'run'
 
@@ -3084,11 +3084,11 @@ type Runner implements Taker with Integer
 end 'Runner'
 
 type Box uses T
-	typealias TakerOfT = Taker with T
+	export typealias TakerOfT = Taker with T
 
 	let seed as Integer
 
-	export function run(t TakerOfT, c T) returns Integer
+	function run(t TakerOfT, c T) returns Integer
 		return t.take(c) + self.seed
 	end 'run'
 
@@ -3180,15 +3180,15 @@ type Runner implements Taker with Integer
 end 'Runner'
 
 type Box uses T
-	typealias TakerOfT = Taker with T
+	export typealias TakerOfT = Taker with T
 
 	let seed as Integer
 
-	export function pass(t Taker) returns TakerOfT
+	function pass(t Taker) returns TakerOfT
 		return t
 	end 'pass'
 
-	export function use(t TakerOfT, c T) returns Integer
+	function use(t TakerOfT, c T) returns Integer
 		return t.take(c) + self.seed
 	end 'use'
 
@@ -3451,15 +3451,15 @@ typealias Pos = int(0 to 100)
 type Walker implements Cursor with Pos, BiCursor
 	var pos as Pos
 
-	export static function create(p Pos) returns Self
+	static function create(p Pos) returns Self
 		return Self{pos: p}
 	end 'create'
 
-	export function current() returns Pos
+	function current() returns Pos
 		return pos
 	end 'current'
 
-	export function retreat()
+	function retreat()
 		pos = pos - 1
 	end 'retreat'
 end 'Walker'
@@ -3500,15 +3500,15 @@ typealias Pos = int(0 to 100)
 type Walker implements BiCursor, Cursor with Pos
 	var pos as Pos
 
-	export static function create(p Pos) returns Self
+	static function create(p Pos) returns Self
 		return Self{pos: p}
 	end 'create'
 
-	export function current() returns Pos
+	function current() returns Pos
 		return pos
 	end 'current'
 
-	export function retreat()
+	function retreat()
 		pos = pos - 1
 	end 'retreat'
 end 'Walker'
@@ -3549,15 +3549,15 @@ typealias Pos = int(0 to 100)
 type Walker implements Cursor with Pos
 	var pos as Pos
 
-	export static function create(p Pos) returns Self
+	static function create(p Pos) returns Self
 		return Self{pos: p}
 	end 'create'
 
-	export function current() returns Pos
+	function current() returns Pos
 		return pos
 	end 'current'
 
-	export function retreat()
+	function retreat()
 		pos = pos - 1
 	end 'retreat'
 end 'Walker'
@@ -3600,15 +3600,15 @@ typealias Pos = int(0 to 100)
 type Walker implements BiCursor
 	var pos as Pos
 
-	export static function create(p Pos) returns Self
+	static function create(p Pos) returns Self
 		return Self{pos: p}
 	end 'create'
 
-	export function current() returns Pos
+	function current() returns Pos
 		return pos
 	end 'current'
 
-	export function retreat()
+	function retreat()
 		pos = pos - 1
 	end 'retreat'
 end 'Walker'
@@ -3621,7 +3621,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/associated-types/error.extends.no-sibling-conformance-leaves-the-inherited-name-unbound.test:12:6: Partial interface implementation: type 'Walker' has 1 method(s) with wrong signature:
+error E3016: <fragment>:12:6: Partial interface implementation: type 'Walker' has 1 method(s) with wrong signature:
   - current() returns Pos (expected current() returns Element)
 ```
 
@@ -3657,15 +3657,15 @@ typealias Pos = int(0 to 100)
 type Walker implements Cursor with Pos, BiCursor
 	var pos as Pos
 
-	export static function create(p Pos) returns Self
+	static function create(p Pos) returns Self
 		return Self{pos: p}
 	end 'create'
 
-	export function current() returns String
+	function current() returns String
 		return "no"
 	end 'current'
 
-	export function retreat()
+	function retreat()
 		pos = pos - 1
 	end 'retreat'
 end 'Walker'
@@ -3678,9 +3678,9 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/associated-types/error.extends.wrong-signature-under-an-inherited-binding-names-the-substituted-type.test:12:6: Partial interface implementation: type 'Walker' has 1 method(s) with wrong signature:
+error E3016: <fragment>:12:6: Partial interface implementation: type 'Walker' has 1 method(s) with wrong signature:
   - current() returns String (expected current() returns Pos)
-error E3016: specs/fragments/associated-types/error.extends.wrong-signature-under-an-inherited-binding-names-the-substituted-type.test:12:6: Partial interface implementation: type 'Walker' has 1 method(s) with wrong signature:
+error E3016: <fragment>:12:6: Partial interface implementation: type 'Walker' has 1 method(s) with wrong signature:
   - current() returns String (expected current() returns Pos)
 ```
 
@@ -3714,7 +3714,7 @@ naming a type its program never wrote.
 typealias Num = int(0 to 1000)
 
 interface Holder uses Element
-	typealias ElementArray = Array with Element
+	export typealias ElementArray = Array with Element
 	function absorb(value ElementArray)
 end 'Holder'
 
@@ -3726,15 +3726,15 @@ type Bag uses Element implements Holder with Element, Maker
 	typealias ElementArray = Array with Element
 	var items as ElementArray = ElementArray.create()
 
-	export static function spawn() returns Self
+	static function spawn() returns Self
 		return Self{}
 	end 'spawn'
 
-	export function absorb(value ElementArray)
+	function absorb(value ElementArray)
 		items = value.clone()
 	end 'absorb'
 
-	export function count() returns Num
+	function count() returns Num
 		return items.count()
 	end 'count'
 end 'Bag'
@@ -3770,15 +3770,15 @@ typealias NumStore = Array with Num
 type Crate implements Holder with Num
 	var items as NumStore = NumStore.create()
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function absorb(value NumStore)
+	function absorb(value NumStore)
 		items = value.clone()
 	end 'absorb'
 
-	export function count() returns Num
+	function count() returns Num
 		return items.count()
 	end 'count'
 end 'Crate'
@@ -3814,7 +3814,7 @@ the requirement names (`nominal-generic-alias.md`). `single` hands `main` a `Byt
 typealias Byte = int(0 to 255)
 
 interface Sink
-	typealias Bytes = Array with Byte
+	export typealias Bytes = Array with Byte
 	function write(data Bytes)
 end 'Sink'
 
@@ -3822,21 +3822,21 @@ type Log implements Sink
 	typealias Bytes = Array with Byte
 	var kept as Bytes = Bytes.create()
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export static function single(v Byte) returns Bytes
+	static function single(v Byte) returns Bytes
 		var b = Bytes.create()
 		b.push(v)
 		return b
 	end 'single'
 
-	export function write(data Bytes)
+	function write(data Bytes)
 		kept = data.clone()
 	end 'write'
 
-	export function count() returns Byte
+	function count() returns Byte
 		return kept.count()
 	end 'count'
 end 'Log'
@@ -3877,15 +3877,15 @@ typealias NumStoreStore = Array with NumStore
 type Crate implements Holder with Num
 	var items as NumStoreStore = NumStoreStore.create()
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function absorb(value NumStoreStore)
+	function absorb(value NumStoreStore)
 		items = value.clone()
 	end 'absorb'
 
-	export function count() returns Num
+	function count() returns Num
 		return items.count()
 	end 'count'
 end 'Crate'
@@ -3928,11 +3928,11 @@ interface Holder uses Element
 end 'Holder'
 
 type Crate implements Holder with Num
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function absorb(value Num)
+	function absorb(value Num)
 		print("{value}\n")
 	end 'absorb'
 end 'Crate'
@@ -3969,11 +3969,11 @@ typealias OtherStore = Array with Other
 type Crate implements Holder with Num
 	var items as OtherStore = OtherStore.create()
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function absorb(value OtherStore)
+	function absorb(value OtherStore)
 		items = value.clone()
 	end 'absorb'
 end 'Crate'
@@ -3983,6 +3983,6 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/associated-types/error.w61.wrong-signature-under-an-expanded-alias-names-the-expanded-type.test:12:6: Partial interface implementation: type 'Crate' has 1 method(s) with wrong signature:
+error E3016: <fragment>:12:6: Partial interface implementation: type 'Crate' has 1 method(s) with wrong signature:
   - absorb(value OtherStore) returns void (expected absorb(value Array_Num) returns void)
 ```

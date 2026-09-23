@@ -604,11 +604,11 @@ typealias Int = int(i64.min to i64.max)
 type Counter
 	export var value = 0
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function bump() returns Int
+	function bump() returns Int
 		return self.value + 1
 	end 'bump'
 end 'Counter'
@@ -889,21 +889,21 @@ end 'main'
 42
 ```
 
-<!-- test: error.file-private-union-caught-cross-file -->
-A file-private error union declared in the FORWARD file (`liberr.maxon` sorts
-before `main.maxon`, so it is folded into the signatures index before the catch
-site is parsed) is caught across files. Its `bad(code Code)` payload type crosses
-by NAME through the union-payload adopt door (OPEN #52), so `(e)` recovers
-`LibErr` and `match e` dispatches — the wrong-interner misread that kept this
-disabled is gone.
+<!-- test: error.union-caught-cross-file-declared-in-the-forward-file -->
+An error union declared in the FORWARD file (`liberr.maxon` sorts before
+`main.maxon`, so it is folded into the signatures index before the catch site is
+parsed) is caught across files. Its `bad(code Code)` payload type crosses by NAME
+through the union-payload adopt door (OPEN #52), so `(e)` recovers `LibErr` and
+`match e` dispatches. The backward ordering is
+`error.cross-file-throws-caught-later-file`; this is the one that reaches the door
+with the declaration already in the index.
 ```maxon
 // --- file: liberr.maxon
-typealias Code = int(i64.min to i64.max)
+export typealias Code = int(i64.min to i64.max)
 
-// File-private (no `export`/`module`) error union: the catch site in another
-// file only ever learns of this type through `risky`'s `throws` clause, so it
-// is never seeded into the consumer file's type registry during pre-scan.
-union LibErr implements Error
+// The catch site in another file learns this type through `risky`'s `throws`
+// clause, which is what the union-payload adopt door re-interns by name.
+export union LibErr implements Error
 	bad(code Code)
 end 'LibErr'
 
@@ -911,6 +911,7 @@ export function risky(n Code) returns Code throws LibErr
 	if n > 5 'big'
 		throw LibErr.bad(42)
 	end 'big'
+
 	return n
 end 'risky'
 
@@ -922,6 +923,7 @@ function main() returns ExitCode
 			bad(code) then result = code
 		end 'check'
 	end 'handler'
+
 	return result
 end 'main'
 ```
@@ -959,7 +961,7 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: zzz.maxon
-typealias Code = int(i64.min to i64.max)
+export typealias Code = int(i64.min to i64.max)
 
 export union Woe implements Error
 	tooBig(by Code)
@@ -999,7 +1001,7 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: zzz.maxon
-typealias Code = int(i64.min to i64.max)
+export typealias Code = int(i64.min to i64.max)
 
 export union Woe implements Error
 	bad(msg String)
@@ -1038,7 +1040,7 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: zzz.maxon
-typealias Code = int(i64.min to i64.max)
+export typealias Code = int(i64.min to i64.max)
 
 export type Payload
 	export var mass as Code
@@ -1097,7 +1099,7 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: zzz.maxon
-typealias Code = int(i64.min to i64.max)
+export typealias Code = int(i64.min to i64.max)
 
 export type Payload
 	export var mass as Code
@@ -2077,11 +2079,11 @@ end 'BoxedError'
 type Holder
 	export var x as Code
 
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
 
-	export function get() returns Code throws Error
+	function get() returns Code throws Error
 		if self.x < 10 'small'
 			throw BoxedError.withMessage("nope")
 		end 'small'
@@ -2095,7 +2097,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3113: <fragment>:15:18: 'throws Error' names an INTERFACE. A caught error is decoded off the DECLARED clause, and an interface declares no case to decode — a payload-carrying conformer arrives as a heap box pointer that would be read back as an ordinal and never released. Name the error enum or union this function actually throws
+error E3113: <fragment>:15:11: 'throws Error' names an INTERFACE. A caught error is decoded off the DECLARED clause, and an interface declares no case to decode — a payload-carrying conformer arrives as a heap box pointer that would be read back as an ordinal and never released. Name the error enum or union this function actually throws
 ```
 
 <!-- test: error.throws-a-struct-type -->
@@ -2109,7 +2111,7 @@ typealias Code = int(0 to u32.max)
 type Payload
 	export var v as Code
 
-	export static function create(v Code) returns Self
+	static function create(v Code) returns Self
 		return Self{ v: v }
 	end 'create'
 end 'Payload'

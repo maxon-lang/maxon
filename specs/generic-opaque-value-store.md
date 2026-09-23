@@ -40,30 +40,30 @@ typealias Index = int(0 to u64.max)
 type Cell
 	export var n as Integer
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 
-	export function bump(by Integer)
+	function bump(by Integer)
 		n = n + by
 	end 'bump'
 end 'Cell'
 
 type Holder uses Element
 	typealias EArray = Array with Element
-	typealias Entry = (Element, Integer)
+	export typealias Entry = (Element, Integer)
 
 	var items as EArray = EArray.create()
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function add(item Element)
+	function add(item Element)
 		items.push(item)
 	end 'add'
 
-	export function entryAt(i Index) returns Entry
+	function entryAt(i Index) returns Entry
 		let v = try items.get(i) otherwise panic("Holder.entryAt: out of range")
 		return (v, 1)
 	end 'entryAt'
@@ -95,19 +95,19 @@ typealias Index = int(0 to u64.max)
 
 type Holder uses Element
 	typealias EArray = Array with Element
-	typealias Entry = (Element, Integer)
+	export typealias Entry = (Element, Integer)
 
 	var items as EArray = EArray.create()
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function add(item Element)
+	function add(item Element)
 		items.push(item)
 	end 'add'
 
-	export function entryAt(i Index) returns Entry
+	function entryAt(i Index) returns Entry
 		let v = try items.get(i) otherwise panic("Holder.entryAt: out of range")
 		return (v, 1)
 	end 'entryAt'
@@ -143,19 +143,19 @@ typealias SmallInt = int(0 to 100)
 
 type Holder uses Element
 	typealias EArray = Array with Element
-	typealias Entry = (Element, Integer)
+	export typealias Entry = (Element, Integer)
 
 	var items as EArray = EArray.create()
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function add(item Element)
+	function add(item Element)
 		items.push(item)
 	end 'add'
 
-	export function entryAt(i Index) returns Entry
+	function entryAt(i Index) returns Entry
 		let v = try items.get(i) otherwise panic("Holder.entryAt: out of range")
 		return (v, 1)
 	end 'entryAt'
@@ -192,11 +192,11 @@ typealias Integer = int(i64.min to i64.max)
 type Pack uses T
 	var n as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 40}
 	end 'create'
 
-	export function tag(t T) returns Integer
+	function tag(t T) returns Integer
 		let pair = (t, n)
 		return pair.1
 	end 'tag'
@@ -233,11 +233,11 @@ end 'Named'
 type Thing implements Named
 	var n as Integer
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 
-	export function label() returns String
+	function label() returns String
 		return "thing"
 	end 'label'
 end 'Thing'
@@ -245,11 +245,11 @@ end 'Thing'
 type Box uses T
 	var value as T
 
-	export static function create(value T) returns Self
+	static function create(value T) returns Self
 		return Self{value: value}
 	end 'create'
 
-	export function get() returns T
+	function get() returns T
 		return value
 	end 'get'
 end 'Box'
@@ -303,7 +303,7 @@ type Box uses T
 	let x as T
 	let tag as Integer
 
-	export function value() returns T
+	function value() returns T
 		return x
 	end 'value'
 
@@ -317,11 +317,11 @@ type Bag uses Element
 	typealias BoxArray = Array with EBox
 	var items as BoxArray
 
-	export function add(x Element, tag Integer)
+	function add(x Element, tag Integer)
 		items.push(EBox.create(x, tag: tag))
 	end 'add'
 
-	export function first() returns Element throws ArrayError
+	function first() returns Element throws ArrayError
 		let slot = try self.items.first() otherwise 'e'
 			throw ArrayError.indexOutOfBounds
 		end 'e'
@@ -373,7 +373,7 @@ type Box uses T
 	let x as T
 	let tag as Integer
 
-	export function value() returns T
+	function value() returns T
 		return x
 	end 'value'
 
@@ -388,15 +388,15 @@ type Bag
 	typealias BoxArray = Array with StrBox
 	var items as BoxArray = BoxArray.create()
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function add(x String, tag Integer)
+	function add(x String, tag Integer)
 		items.push(StrBox.create(x, tag: tag))
 	end 'add'
 
-	export function first() returns String throws ArrayError
+	function first() returns String throws ArrayError
 		let slot = try self.items.first() otherwise 'e'
 			throw ArrayError.indexOutOfBounds
 		end 'e'
@@ -453,7 +453,7 @@ typealias Integer = int(i64.min to i64.max)
 type Inner uses U
 	let x as U
 
-	export function value() returns U
+	function value() returns U
 		return x
 	end 'value'
 
@@ -467,7 +467,7 @@ type Box uses T
 	let inner as TInner
 	let tag as Integer
 
-	export function value() returns T
+	function value() returns T
 		return inner.value()
 	end 'value'
 
@@ -481,11 +481,11 @@ type Bag uses Element
 	typealias BoxArray = Array with EBox
 	var items as BoxArray
 
-	export function add(x Element, tag Integer)
+	function add(x Element, tag Integer)
 		items.push(EBox.create(x, tag: tag))
 	end 'add'
 
-	export function first() returns Element throws ArrayError
+	function first() returns Element throws ArrayError
 		let slot = try self.items.first() otherwise 'e'
 			throw ArrayError.indexOutOfBounds
 		end 'e'
@@ -536,7 +536,7 @@ typealias Small = int(0 to 100)
 type Inner uses U
 	let x as U
 
-	export function value() returns U
+	function value() returns U
 		return x
 	end 'value'
 
@@ -550,7 +550,7 @@ type Box uses T
 	let inner as TInner
 	let tag as Integer
 
-	export function value() returns T
+	function value() returns T
 		return inner.value()
 	end 'value'
 
@@ -564,11 +564,11 @@ type Bag uses Element
 	typealias BoxArray = Array with EBox
 	var items as BoxArray
 
-	export function add(x Element, tag Integer)
+	function add(x Element, tag Integer)
 		items.push(EBox.create(x, tag: tag))
 	end 'add'
 
-	export function first() returns Element throws ArrayError
+	function first() returns Element throws ArrayError
 		let slot = try self.items.first() otherwise 'e'
 			throw ArrayError.indexOutOfBounds
 		end 'e'
@@ -620,7 +620,7 @@ type Bag uses Element
 	typealias Items = Array with Element
 	var items as Items
 
-	export function fill(x Element, times Idx)
+	function fill(x Element, times Idx)
 		var n = 0 as Idx
 		while n < times 'fill'
 			items.push(x)
@@ -628,7 +628,7 @@ type Bag uses Element
 		end 'fill'
 	end 'fill'
 
-	export function at(i Idx) returns Element throws ArrayError
+	function at(i Idx) returns Element throws ArrayError
 		return try self.items.get(i)
 	end 'at'
 
@@ -678,7 +678,7 @@ type Box uses T
 	let x as T
 	let tag as Integer
 
-	export function value() returns T
+	function value() returns T
 		return x
 	end 'value'
 
@@ -692,11 +692,11 @@ type Bag uses Element
 	typealias BoxArray = Array with EBox
 	var items as BoxArray
 
-	export function add(x Element, tag Integer)
+	function add(x Element, tag Integer)
 		items.push(EBox.create(x, tag: tag))
 	end 'add'
 
-	export function first() returns Element throws ArrayError
+	function first() returns Element throws ArrayError
 		let slot = try self.items.first() otherwise 'e'
 			throw ArrayError.indexOutOfBounds
 		end 'e'
@@ -749,11 +749,11 @@ type Box uses T
 	export let x as T
 	export let tag as Integer
 
-	export function value() returns T
+	function value() returns T
 		return x
 	end 'value'
 
-	export static function create(x T, tag Integer) returns Self
+	static function create(x T, tag Integer) returns Self
 		return Self{x: x, tag: tag}
 	end 'create'
 end 'Box'
@@ -763,11 +763,11 @@ type Bag uses Element
 	typealias Store = List with EBox
 	var items as Store
 
-	export function add(x Element, tag Integer)
+	function add(x Element, tag Integer)
 		items.append(EBox.create(x, tag: tag))
 	end 'add'
 
-	export function first() returns Element
+	function first() returns Element
 		let slot = try items.first() otherwise panic("empty")
 		return slot.value()
 	end 'first'
@@ -812,11 +812,11 @@ type Box uses T
 	export let x as T
 	export let tag as Integer
 
-	export function value() returns T
+	function value() returns T
 		return x
 	end 'value'
 
-	export static function create(x T, tag Integer) returns Self
+	static function create(x T, tag Integer) returns Self
 		return Self{x: x, tag: tag}
 	end 'create'
 end 'Box'
@@ -826,11 +826,11 @@ type Bag uses Element
 	typealias Store = List with EBox
 	var items as Store
 
-	export function add(x Element, tag Integer)
+	function add(x Element, tag Integer)
 		items.append(EBox.create(x, tag: tag))
 	end 'add'
 
-	export function first() returns Element
+	function first() returns Element
 		let slot = try items.first() otherwise panic("empty")
 		return slot.value()
 	end 'first'
@@ -877,11 +877,11 @@ type Box uses T
 	export let x as T
 	export let tag as Integer
 
-	export function value() returns T
+	function value() returns T
 		return x
 	end 'value'
 
-	export static function create(x T, tag Integer) returns Self
+	static function create(x T, tag Integer) returns Self
 		return Self{x: x, tag: tag}
 	end 'create'
 end 'Box'
@@ -890,7 +890,7 @@ type Bag uses Element
 	typealias EBox = Box with Element
 	let one as EBox
 
-	export function first() returns Element
+	function first() returns Element
 		return one.value()
 	end 'first'
 
@@ -938,11 +938,11 @@ type Box uses T
 	export let x as T
 	export let tag as Integer
 
-	export function value() returns T
+	function value() returns T
 		return x
 	end 'value'
 
-	export static function create(x T, tag Integer) returns Self
+	static function create(x T, tag Integer) returns Self
 		return Self{x: x, tag: tag}
 	end 'create'
 end 'Box'
@@ -952,11 +952,11 @@ type Bag uses Element
 	typealias Items = Array with Element
 	var items as Items
 
-	export function add(x Element)
+	function add(x Element)
 		items.push(x)
 	end 'add'
 
-	export function tagOfFirst() returns Integer
+	function tagOfFirst() returns Integer
 		let w = EBox.create(try items.get(0 as Idx) otherwise panic("oob"), tag: 7)
 		return w.tag
 	end 'tagOfFirst'
@@ -1001,11 +1001,11 @@ type Box uses T
 	export let x as String
 	export let tag as Integer
 
-	export function value() returns String
+	function value() returns String
 		return x
 	end 'value'
 
-	export static function create(x String, tag Integer) returns Self
+	static function create(x String, tag Integer) returns Self
 		return Self{x: x, tag: tag}
 	end 'create'
 end 'Box'
@@ -1015,11 +1015,11 @@ type Bag uses Element
 	typealias Store = Array with EBox
 	var items as Store
 
-	export function add(x String, tag Integer)
+	function add(x String, tag Integer)
 		items.push(EBox.create(x, tag: tag))
 	end 'add'
 
-	export function first() returns String throws ArrayError
+	function first() returns String throws ArrayError
 		let slot = try self.items.first()
 		return slot.value()
 	end 'first'
@@ -1080,7 +1080,7 @@ type Box uses T
 	let x as T
 	let tag as Integer
 
-	export function value() returns T
+	function value() returns T
 		return x
 	end 'value'
 
@@ -1090,10 +1090,10 @@ type Box uses T
 end 'Box'
 
 type Bag uses Element
-	typealias EBox = Box with Element
+	export typealias EBox = Box with Element
 	var seed as Integer
 
-	export function wrap(x Element) returns EBox
+	function wrap(x Element) returns EBox
 		return EBox.create(x, tag: seed)
 	end 'wrap'
 
@@ -1149,7 +1149,7 @@ type Box uses T
 	let x as T
 	let tag as Integer
 
-	export function value() returns T
+	function value() returns T
 		return x
 	end 'value'
 
@@ -1159,10 +1159,10 @@ type Box uses T
 end 'Box'
 
 type Bag uses Element
-	typealias EBox = Box with Element
+	export typealias EBox = Box with Element
 	var seed as Integer
 
-	export function wrap(x Element) returns EBox
+	function wrap(x Element) returns EBox
 		return EBox.create(x, tag: seed)
 	end 'wrap'
 
@@ -1239,7 +1239,7 @@ type Outer uses T, U
 	typealias M = Mid with (T, U)
 	var n as Integer
 
-	export function build(t T, u U) returns Integer
+	function build(t T, u U) returns Integer
 		let m = M.create(t, z: u)
 		return n + m.tag
 	end 'build'
@@ -1320,7 +1320,7 @@ type Outer uses T, U
 	typealias M = Mid with (T, U)
 	var n as Integer
 
-	export function build(t T, u U) returns Integer
+	function build(t T, u U) returns Integer
 		let m = M.create(t, z: u)
 		return n + m.tag
 	end 'build'
@@ -1360,16 +1360,16 @@ over its own parameter, and `Outer` holds a `Holder` over `Outer`'s. Whether the
 the program, so it is the same whichever file is parsed first.
 ```maxon
 // --- file: a_holder.maxon
-typealias Int = int(0 to 1000)
+export typealias Int = int(0 to 1000)
 
-type Cell uses T
+export type Cell uses T
 	export var value as T
 	export static function create(value T) returns Self
 		return Self{value: value}
 	end 'create'
 end 'Cell'
 
-type Holder uses T
+export type Holder uses T
 	var cell as Cell
 	export static function create(value T) returns Self
 		return Self{cell: Cell.create(value)}
@@ -1412,16 +1412,16 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: b_holder.maxon
-typealias Int = int(0 to 1000)
+export typealias Int = int(0 to 1000)
 
-type Cell uses T
+export type Cell uses T
 	export var value as T
 	export static function create(value T) returns Self
 		return Self{value: value}
 	end 'create'
 end 'Cell'
 
-type Holder uses T
+export type Holder uses T
 	var cell as Cell
 	export static function create(value T) returns Self
 		return Self{cell: Cell.create(value)}
@@ -1467,21 +1467,21 @@ shared frame is the party that frees the box.
 typealias Small = int(0 to 1000)
 
 type Holder uses K, V
-	typealias Pair = (K, V)
+	export typealias Pair = (K, V)
 	let k as K
 	let v as V
 
-	export static function create(k K, v V) returns Self
+	static function create(k K, v V) returns Self
 		return Self{k: k, v: v}
 	end 'create'
 
-	export function pair() returns Pair
+	function pair() returns Pair
 		return (k, v)
 	end 'pair'
 
 	// The drop under test: this body is shared, so the tuple it takes back is typed
 	// at the parameters and the reference its first slot holds is a descriptor read.
-	export function second() returns V
+	function second() returns V
 		let p = pair()
 		return p.1
 	end 'second'
@@ -1521,19 +1521,19 @@ carries. A cure that balances one of the two modes is silent about the other, so
 typealias Small = int(0 to 1000)
 
 type Holder uses K, V
-	typealias Pair = (K, V)
+	export typealias Pair = (K, V)
 	let k as K
 	let v as V
 
-	export static function create(k K, v V) returns Self
+	static function create(k K, v V) returns Self
 		return Self{k: k, v: v}
 	end 'create'
 
-	export function pair() returns Pair
+	function pair() returns Pair
 		return (k, v)
 	end 'pair'
 
-	export function second() returns V
+	function second() returns V
 		let p = pair()
 		return p.1
 	end 'second'
@@ -1575,15 +1575,15 @@ two above.
 typealias Small = int(0 to 1000)
 
 type Holder uses K, V
-	typealias Pair = (K, V)
+	export typealias Pair = (K, V)
 	let k as K
 	let v as V
 
-	export static function create(k K, v V) returns Self
+	static function create(k K, v V) returns Self
 		return Self{k: k, v: v}
 	end 'create'
 
-	export function pair() returns Pair
+	function pair() returns Pair
 		return (k, v)
 	end 'pair'
 end 'Holder'

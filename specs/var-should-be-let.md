@@ -391,7 +391,7 @@ type Tag implements Named
 		return Self{label: label}
 	end 'create'
 
-	export function name() returns String
+	function name() returns String
 		return self.label
 	end 'name'
 end 'Tag'
@@ -601,11 +601,11 @@ type Box
 		return Self{item: item}
 	end 'create'
 
-	export function set(p Point)
+	function set(p Point)
 		self.item = p
 	end 'set'
 
-	export function get() returns Point
+	function get() returns Point
 		return self.item
 	end 'get'
 end 'Box'
@@ -1008,7 +1008,7 @@ type Point implements Bumpable
 		return Self{x: x}
 	end 'create'
 
-	export function bump()
+	function bump()
 		self.x = self.x + 1
 	end 'bump'
 end 'Point'

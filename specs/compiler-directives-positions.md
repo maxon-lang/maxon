@@ -112,7 +112,7 @@ type Box
 	#endif
 	export let second as ExitCode
 
-	export static function create(second ExitCode) returns Box
+	static function create(second ExitCode) returns Box
 		return Box{first: 2, second: second}
 	end 'create'
 end 'Box'
@@ -162,15 +162,15 @@ end 'Shape'
 type Square implements Shape
 	export let side as ExitCode
 
-	export static function create(side ExitCode) returns Square
+	static function create(side ExitCode) returns Square
 		return Square{side: side}
 	end 'create'
 
-	export function area() returns ExitCode
+	function area() returns ExitCode
 		return side
 	end 'area'
 
-	export function perimeter() returns ExitCode
+	function perimeter() returns ExitCode
 		return 29
 	end 'perimeter'
 end 'Square'
@@ -264,7 +264,7 @@ type Holder
 		end 'ghost'
 	#endif
 
-	export static function value() returns ExitCode
+	static function value() returns ExitCode
 		return 33
 	end 'value'
 end 'Holder'

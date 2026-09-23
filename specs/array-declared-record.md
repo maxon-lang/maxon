@@ -140,14 +140,14 @@ would have worked too and would have tested the declaration rather than the lite
 typealias Num = int(0 to 1000)
 
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 end 'Array'
@@ -176,14 +176,14 @@ took one owner too few or too many would exit **101**, not print.
 typealias Num = int(0 to 1000)
 
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 end 'Array'
@@ -217,14 +217,14 @@ the answer is a real one and not merely a compile.
 typealias Num = int(0 to 1000)
 
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 end 'Array'
@@ -253,18 +253,18 @@ observable — the elements read back, and the two arrays grow independently.
 typealias Num = int(0 to 1000)
 
 type Array uses Element implements BuiltinArrayLiteral, Cloneable
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function clone() returns Self
+	function clone() returns Self
 		let len = managed.length()
 		let copy = try managed.slice(0, len) otherwise panic("clone: 0..len is always in range")
 		return Self{managed: copy}
@@ -299,18 +299,18 @@ the wrong number of references exits **101** rather than answering — which is 
 answer the leak check as well as the value check.
 ```maxon
 type Array uses Element implements BuiltinArrayLiteral, Cloneable
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function clone() returns Self
+	function clone() returns Self
 		let len = managed.length()
 		let copy = try managed.slice(0, len) otherwise panic("clone: 0..len is always in range")
 		return Self{managed: copy}
@@ -343,18 +343,18 @@ declaration — three simultaneous `E3016`s said `Array_Te3315404e8d3fd14`, a ty
 typealias Num = int(0 to 1000)
 
 type Array uses Element implements BuiltinArrayLiteral, Cloneable
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function clone() returns Self
+	function clone() returns Self
 		let len = managed.length()
 		let copy = try managed.slice(0, len) otherwise panic("clone: 0..len is always in range")
 		return Self{managed: copy}
@@ -379,11 +379,11 @@ declared field would be dropped at construction and then read past the record's 
 drop cascades. The refusal names the SHAPE, because the name is not what is wrong here.
 ```maxon
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 	export var frozen as bool
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed, frozen: false}
 	end 'init'
 end 'Array'
@@ -410,7 +410,7 @@ typealias Num = int(0 to 1000)
 type Array uses Element implements BuiltinArrayLiteral
 	export var managed as Num
 
-	export static function init(managed Num) returns Self
+	static function init(managed Num) returns Self
 		return Self{managed: managed}
 	end 'init'
 end 'Array'
@@ -437,15 +437,15 @@ the whole test.
 typealias Num = int(0 to 1000)
 
 type Bag uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 end 'Bag'
@@ -471,15 +471,15 @@ instance. A leak or a double free here would exit 101 rather than fail an expect
 case pushes owned strings and reads one back.
 ```maxon
 type Bag uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 end 'Bag'
@@ -509,15 +509,15 @@ array's, and both carry the compiler's synthesized surface because both declarat
 single canonical fold target would have merged them, which is the merge `ARR5` measured and refused.
 ```maxon
 type Bag uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 end 'Bag'
@@ -548,7 +548,7 @@ gets the sentence about the two names the compiler owns a record for.
 type Holder implements BuiltinArrayLiteral
 	export var managed as __ManagedMemory
 
-	export static function init(managed __ManagedMemory) returns Self
+	static function init(managed __ManagedMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 end 'Holder'
@@ -570,19 +570,19 @@ method the program plainly has, sitting in the very declaration whose record the
 typealias Num = int(0 to 1000)
 
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function at(i Num) returns Element
+	function at(i Num) returns Element
 		return try managed.get(i) otherwise panic("at: the caller checked the bound")
 	end 'at'
 end 'Array'
@@ -608,23 +608,23 @@ spellings of one member disagreed about whether the member existed at all.
 typealias Num = int(0 to 1000)
 
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function at(i Num) returns Num
+	function at(i Num) returns Num
 		return try managed.get(i) otherwise panic("at: the caller checked the bound")
 	end 'at'
 
-	export function headPlusTail() returns Num
+	function headPlusTail() returns Num
 		return self.at(0) + self.at(1)
 	end 'headPlusTail'
 end 'Array'
@@ -654,23 +654,23 @@ return type can be compared against.
 typealias Num = int(0 to 1000)
 
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function count() returns Num
+	function count() returns Num
 		return 99 as Num
 	end 'count'
 
-	export function bareCount() returns Num
+	function bareCount() returns Num
 		return count()
 	end 'bareCount'
 end 'Array'
@@ -700,21 +700,21 @@ assertion, and `main` reports through the roster.
 typealias Num = int(0 to 1000)
 
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 end 'Array'
 
 export extension Array
-	export function total() returns Num
+	function total() returns Num
 		let slots = count()
 		var sum = 0 as Num
 		for i in 0 upto slots 'eachSlot'
@@ -755,19 +755,19 @@ invisible to a stdout-only case. Any authored case whose subject is OWNERSHIP mu
 typealias Slot = int(0 to 1000)
 
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function at(i Slot) returns Element
+	function at(i Slot) returns Element
 		return try managed.get(i) otherwise panic("at: the caller checked the bound")
 	end 'at'
 end 'Array'
@@ -818,23 +818,23 @@ merged. Nothing in the suite goes red either way: this is a cost, not a semantic
 typealias Slot = int(0 to 1000)
 
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function wipe()
+	function wipe()
 		managed.clear()
 	end 'wipe'
 
-	export function at(i Slot) returns Element
+	function at(i Slot) returns Element
 		return try managed.get(i) otherwise panic("at: the caller checked the bound")
 	end 'at'
 end 'Array'
@@ -869,19 +869,19 @@ Handing back the receiver's own `ValueId` uncounted here is the double free that
 and this case is what says `EC2` did not widen into it.
 ```maxon
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function buffer() returns ElementMemory
+	function buffer() returns ElementMemory
 		return managed
 	end 'buffer'
 end 'Array'
@@ -912,15 +912,15 @@ exists nowhere.
 typealias Num = int(0 to 1000)
 
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 end 'Array'
@@ -948,31 +948,31 @@ typealias Slot = int(0 to 1000)
 // The record-collapsed `Array`, exercised through a CORPUS-SERVED member that hands back a managed
 // element, in a loop, alongside a clone. Any reference taken one too few or one too many times exits 101.
 type Array uses Element implements BuiltinArrayLiteral, Cloneable
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function clone() returns Self
+	function clone() returns Self
 		let len = managed.length()
 		let copy = try managed.slice(0, len) otherwise panic("clone: 0..len is always in range")
 		return Self{managed: copy}
 	end 'clone'
 
 	// Off the roster, so this is the corpus door's own path.
-	export function at(i Slot) returns Element
+	function at(i Slot) returns Element
 		return try managed.get(i) otherwise panic("at: the caller checked the bound")
 	end 'at'
 
 	// The `self.` spelling of the same, plus a BARE roster call in the same body.
-	export function lastOne() returns Element
+	function lastOne() returns Element
 		return self.at((count() - 1) as Slot)
 	end 'lastOne'
 end 'Array'
@@ -1025,39 +1025,39 @@ program prints exactly what the same program prints with the record's method ren
 typealias Slot = int(0 to u64.max)
 
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
 	// A name the BUFFER surface also has. It is off the `Array` roster, so it is the corpus door's own.
-	export function elementSize() returns Slot
+	function elementSize() returns Slot
 		return 99
 	end 'elementSize'
 
 	// The buffer, reached bare — the spelling `stdlib/Array.maxon` writes throughout.
-	export function bufferBare() returns Slot
+	function bufferBare() returns Slot
 		return managed.elementSize()
 	end 'bufferBare'
 
 	// The buffer, reached through the explicit `self.` — the same receiver, one token longer.
-	export function bufferViaSelf() returns Slot
+	function bufferViaSelf() returns Slot
 		return self.managed.elementSize()
 	end 'bufferViaSelf'
 
 	// THE REVERSE DIRECTION: a bare sibling call still means the RECORD's own method.
-	export function ownBare() returns Slot
+	function ownBare() returns Slot
 		return elementSize()
 	end 'ownBare'
 
 	// And so does the `self.` spelling of it.
-	export function ownViaSelf() returns Slot
+	function ownViaSelf() returns Slot
 		return self.elementSize()
 	end 'ownViaSelf'
 end 'Array'
@@ -1100,26 +1100,26 @@ pinned because a leak lands after the last `print`.
 typealias Slot = int(0 to u64.max)
 
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
 	// `smallSort.maxon`'s own body: the record declares `swap`, and its `swap` calls the BUFFER's.
 	// Resolving the inner call to THIS method would be unbounded recursion, which is what the
 	// throws-mismatch was really reporting.
-	export function swap(i Slot, j Slot)
+	function swap(i Slot, j Slot)
 		try managed.swap(i, j: j) otherwise panic("swap: the caller pre-bounded i and j")
 	end 'swap'
 
 	// THE REVERSE DIRECTION, through `self.`: the record's own `swap` above, not the buffer's.
-	export function reverseRange(lo Slot, hi Slot)
+	function reverseRange(lo Slot, hi Slot)
 		if hi <= lo + 1 'trivial'
 			return
 		end 'trivial'
@@ -1133,11 +1133,11 @@ type Array uses Element implements BuiltinArrayLiteral
 	end 'reverseRange'
 
 	// THE REVERSE DIRECTION, bare: a sibling call to a name the buffer also has still means the record.
-	export function swapEnds()
+	function swapEnds()
 		swap(0 as Slot, j: (count() - 1) as Slot)
 	end 'swapEnds'
 
-	export function reverseAll()
+	function reverseAll()
 		reverseRange(0 as Slot, hi: count() as Slot)
 	end 'reverseAll'
 end 'Array'
@@ -1181,15 +1181,15 @@ is the count, and the three `String` records are freed by the same `__managed_de
 declaration named the array (a leak exits 101).
 ```maxon
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 end 'Array'
@@ -1217,15 +1217,15 @@ that matters most, because the library body then goes on to call `reserve`, `cou
 on it — members served from the library's declaration, on a record the program built.
 ```maxon
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 end 'Array'
@@ -1258,15 +1258,15 @@ this declaration). One program, one loop keyword, two lowerings.
 typealias Num = int(0 to 1000)
 
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 end 'Array'
@@ -1302,15 +1302,15 @@ see a `truncate` in the library source: *"that list IS the surface"* is true of 
 here.
 ```maxon
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 end 'Array'
@@ -1335,19 +1335,19 @@ receiver-scoped lookup this program was refused by the roster sentence alone, ab
 was looking straight at.
 ```maxon
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function at(i Integer) returns Element
+	function at(i Integer) returns Element
 		return try managed.get(i) otherwise panic("at: the caller checked the bound")
 	end 'at'
 end 'Array'
@@ -1373,15 +1373,15 @@ is declared on `stdlib/Array.maxon` and nowhere else here, so it is the whole qu
 oracle prints `false false` and exits 5.
 ```maxon
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 end 'Array'
@@ -1407,15 +1407,15 @@ only from the library's declaration. The two `String` records are freed by one `
 so a record identity that picked the wrong declaration exits 101 rather than 2.
 ```maxon
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 end 'Array'
@@ -1452,19 +1452,19 @@ declares no `Array`, so the contest gate returns before the defect; every other 
 an `Array` receiver.
 ```maxon
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function at(index Integer) returns Element throws ArrayError
+	function at(index Integer) returns Element throws ArrayError
 		return try managed.get(index)
 	end 'at'
 end 'Array'
@@ -1474,11 +1474,11 @@ type Bag uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 end 'Bag'
@@ -1504,15 +1504,15 @@ send the reader to a type their program does not have, which is the mistake `sur
 own rule forbids. The roster itself is unchanged: it is the surface's, and the surface is shared.
 ```maxon
 type Bag uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 end 'Bag'
@@ -1537,15 +1537,15 @@ from typing, about a type they cannot name. `nosuchmember` is on neither declara
 the two-declarations refusal to the roster one, which is the door that has to say `Array`.
 ```maxon
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 end 'Array'
@@ -1581,11 +1581,11 @@ with the container's own reason rather than the `String`/`Character` sentence a 
 typealias Num = int(0 to 100)
 
 type Vector uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 end 'Vector'
@@ -1628,11 +1628,11 @@ writable name. The refusal itself stays pinned by the `Vector` case directly abo
 typealias Num = int(0 to 100)
 
 type List uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 end 'List'
@@ -1682,11 +1682,11 @@ the NOUN the declaration gets once the skip has taken it off the array surface.
 typealias Num = int(0 to 100)
 
 type Vector uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Vector.init(managed)
 	end 'init'
 end 'Vector'
@@ -1731,7 +1731,7 @@ type Vector implements BuiltinStringLiteral
 	var managed as __ManagedMemory
 	var flag as bool
 
-	export static function init(value __ManagedMemory) returns Self
+	static function init(value __ManagedMemory) returns Self
 		return Self{managed: value, flag: false}
 	end 'init'
 end 'Vector'

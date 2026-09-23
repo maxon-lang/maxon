@@ -134,11 +134,11 @@ typealias IntNode = __ManagedListNode with Small
 type Cursor
 	var node as IntNode
 
-	export static function create(n IntNode) returns Self
+	static function create(n IntNode) returns Self
 		return Self{node: n}
 	end 'create'
 
-	export function read() returns Small
+	function read() returns Small
 		return self.node.value()
 	end 'read'
 end 'Cursor'
@@ -174,15 +174,15 @@ typealias IntNode = __ManagedListNode with Small
 type Cursor
 	var node as IntNode
 
-	export static function create(n IntNode) returns Self
+	static function create(n IntNode) returns Self
 		return Self{node: n}
 	end 'create'
 
-	export function retarget(n IntNode)
+	function retarget(n IntNode)
 		self.node = n
 	end 'retarget'
 
-	export function read() returns Small
+	function read() returns Small
 		return self.node.value()
 	end 'read'
 end 'Cursor'
@@ -331,11 +331,11 @@ typealias IntNode = __ManagedListNode with Small
 type Cursor
 	var node as IntNode
 
-	export static function create(n IntNode) returns Self
+	static function create(n IntNode) returns Self
 		return Self{node: n}
 	end 'create'
 
-	export function read() returns Small
+	function read() returns Small
 		return self.node.value()
 	end 'read'
 end 'Cursor'
@@ -427,11 +427,11 @@ typealias StrNode = __ManagedListNode with String
 type Keeper
 	export var node as StrNode
 
-	export static function create(n StrNode) returns Self
+	static function create(n StrNode) returns Self
 		return Self{node: n}
 	end 'create'
 
-	export function read() returns String
+	function read() returns String
 		return self.node.value()
 	end 'read'
 end 'Keeper'
@@ -489,15 +489,15 @@ typealias StrNode = __ManagedListNode with String
 type Keeper
 	var node as StrNode
 
-	export static function create(n StrNode) returns Self
+	static function create(n StrNode) returns Self
 		return Self{node: n}
 	end 'create'
 
-	export function held() returns StrNode
+	function held() returns StrNode
 		return self.node
 	end 'held'
 
-	export function read() returns String
+	function read() returns String
 		return self.node.value()
 	end 'read'
 end 'Keeper'
@@ -721,15 +721,15 @@ typealias StrNode = __ManagedListNode with String
 type Keeper
 	export var node as StrNode
 
-	export static function create(n StrNode) returns Self
+	static function create(n StrNode) returns Self
 		return Self{node: n}
 	end 'create'
 
-	export function held() returns StrNode
+	function held() returns StrNode
 		return self.node
 	end 'held'
 
-	export function read() returns String
+	function read() returns String
 		return self.node.value()
 	end 'read'
 end 'Keeper'
@@ -830,11 +830,11 @@ typealias StrNode = __ManagedListNode with String
 type Cursor
 	export var at as StrNode
 
-	export static function create(n StrNode) returns Self
+	static function create(n StrNode) returns Self
 		return Self{at: n}
 	end 'create'
 
-	export function step() throws ArrayError
+	function step() throws ArrayError
 		self.at = try self.at.next()
 	end 'step'
 end 'Cursor'
@@ -1034,11 +1034,11 @@ end 'Backref'
 type Nothing implements Backref
 	let mark as Small
 
-	export static function create(m Small) returns Self
+	static function create(m Small) returns Self
 		return Self{mark: m}
 	end 'create'
 
-	export function tag() returns Small
+	function tag() returns Small
 		return self.mark
 	end 'tag'
 end 'Nothing'
@@ -1046,11 +1046,11 @@ end 'Nothing'
 type Holder implements Backref
 	var back as CellNode
 
-	export static function create(n CellNode) returns Self
+	static function create(n CellNode) returns Self
 		return Self{back: n}
 	end 'create'
 
-	export function tag() returns Small
+	function tag() returns Small
 		return 1
 	end 'tag'
 end 'Holder'
@@ -1058,15 +1058,15 @@ end 'Holder'
 type Cell
 	var back as Backref
 
-	export static function create(b Backref) returns Self
+	static function create(b Backref) returns Self
 		return Self{back: b}
 	end 'create'
 
-	export function retarget(b Backref)
+	function retarget(b Backref)
 		self.back = b
 	end 'retarget'
 
-	export function tag() returns Small
+	function tag() returns Small
 		return self.back.tag()
 	end 'tag'
 end 'Cell'

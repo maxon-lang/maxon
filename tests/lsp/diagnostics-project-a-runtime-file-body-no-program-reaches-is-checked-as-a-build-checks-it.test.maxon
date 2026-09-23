@@ -1,0 +1,8 @@
+let UnreachedBodyProbeFileName = "EditorUnreachedBodyProbe.maxon"
+let UnreachedBodyProbeSource = "module typealias EditorProbeFlag = int(0 to 1)\n\nmodule function editorProbeHelper(flag EditorProbeFlag) returns MachineWord\n\treturn flag as MachineWord\nend 'editorProbeHelper'\n\nmodule function editorUnreachedBodyProbe() returns MachineWord\n\treturn editorProbeHelper(true)\nend 'editorUnreachedBodyProbe'\n"
+
+test 'a runtime body no program reaches is checked in the editor exactly as a build checks it'
+	let probe = probeRuntimeTierDiagnostics(UnreachedBodyProbeFileName, content: UnreachedBodyProbeSource)
+
+	try expectNoProjectDiagnostics(probe, note: "a buffer under `runtime/` passes a `bool` where its own helper takes an integer, inside a body no program reaches. A build call-checks a runtime-tier body only once a program reaches it, so a build of this file reports nothing; an E3005 here means the editor filed the buffer's functions outside the runtime tier while parsing the file as the tier's.")
+end 'a runtime body no program reaches is checked in the editor exactly as a build checks it'

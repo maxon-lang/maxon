@@ -43,7 +43,7 @@ type Holder
 		return Self{value: value}
 	end 'create'
 
-	export function readViaClosure() returns Integer
+	function readViaClosure() returns Integer
 		return apply(function(_ Integer) gives self.value, x: 0)
 	end 'readViaClosure'
 end 'Holder'
@@ -80,7 +80,7 @@ type Doubler
 		return self.base + self.base
 	end 'doubled'
 
-	export function run() returns Integer
+	function run() returns Integer
 		return apply(function(_ Integer) gives self.doubled(), x: 0)
 	end 'run'
 end 'Doubler'
@@ -114,7 +114,7 @@ type Widget
 		return Self{n: n, bump: bump}
 	end 'create'
 
-	export function compute() returns Integer
+	function compute() returns Integer
 		// `n` and `bump` are bare self-field names captured through `self`.
 		return callIt(function() gives n + bump)
 	end 'compute'

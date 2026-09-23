@@ -53,10 +53,10 @@ end 'Digest'
 
 type Point implements Digest
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function digest() returns Code throws DigestError
+	function digest() returns Code throws DigestError
 		if self.x < 10 'small'
 			throw DigestError.tooSmall
 		end 'small'
@@ -66,10 +66,10 @@ end 'Point'
 
 type Box uses T where T is Digest
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function itemDigest() returns Code throws DigestError
+	function itemDigest() returns Code throws DigestError
 		return try self.item.digest()
 	end 'itemDigest'
 end 'Box'
@@ -103,10 +103,10 @@ end 'Digest'
 
 type Point implements Digest
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function digest() returns Code throws DigestError
+	function digest() returns Code throws DigestError
 		if self.x < 10 'small'
 			throw DigestError.tooSmall
 		end 'small'
@@ -116,10 +116,10 @@ end 'Point'
 
 type Box uses T where T is Digest
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function itemDigest() returns Code throws DigestError
+	function itemDigest() returns Code throws DigestError
 		return try self.item.digest()
 	end 'itemDigest'
 end 'Box'
@@ -154,10 +154,10 @@ end 'Digest'
 
 type Point implements Digest
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function digest() returns Code throws DigestError
+	function digest() returns Code throws DigestError
 		if self.x < 10 'small'
 			throw DigestError.tooSmall
 		end 'small'
@@ -167,10 +167,10 @@ end 'Point'
 
 type Box uses T where T is Digest
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function itemDigest() returns Code throws DigestError
+	function itemDigest() returns Code throws DigestError
 		let d = try self.item.digest()
 		return d + 1
 	end 'itemDigest'
@@ -206,10 +206,10 @@ end 'Digest'
 
 type Point implements Digest
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function digest() returns Code throws DigestError
+	function digest() returns Code throws DigestError
 		if self.x < 10 'small'
 			throw DigestError.tooSmall
 		end 'small'
@@ -219,10 +219,10 @@ end 'Point'
 
 type Box uses T where T is Digest
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function itemDigest() returns Code
+	function itemDigest() returns Code
 		return try self.item.digest() otherwise 9
 	end 'itemDigest'
 end 'Box'
@@ -256,10 +256,10 @@ end 'Namer'
 
 type Point implements Namer
 	export var x as Count
-	export static function create(x Count) returns Self
+	static function create(x Count) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function name() returns String throws NameError
+	function name() returns String throws NameError
 		if self.x < 10 'small'
 			throw NameError.blank
 		end 'small'
@@ -269,10 +269,10 @@ end 'Point'
 
 type Box uses T where T is Namer
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function itemNameLength() returns Count throws NameError
+	function itemNameLength() returns Count throws NameError
 		let n = try self.item.name()
 		return n.byteLength() as Count
 	end 'itemNameLength'
@@ -309,10 +309,10 @@ end 'Checked'
 
 type Point implements Checked
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function check() returns Code throws CheckError
+	function check() returns Code throws CheckError
 		if self.x < 10 'small'
 			throw CheckError.tooSmall(7)
 		end 'small'
@@ -322,10 +322,10 @@ end 'Point'
 
 type Box uses T where T is Checked
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function itemCheck() returns Code
+	function itemCheck() returns Code
 		var out = 1 as Code
 		try self.item.check() otherwise (e) 'caught'
 			match e 'k'
@@ -364,10 +364,10 @@ end 'Digest'
 
 type Point implements Digest
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x
 	end 'digest'
 end 'Point'
@@ -398,10 +398,10 @@ end 'Digest'
 
 type Point implements Digest
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function digest() returns Code throws DigestError
+	function digest() returns Code throws DigestError
 		if self.x < 10 'small'
 			throw DigestError.tooSmall
 		end 'small'
@@ -443,10 +443,10 @@ end 'Digest'
 
 type Point implements Digest
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function digest() returns Code throws OtherError
+	function digest() returns Code throws OtherError
 		if self.x < 10 'small'
 			throw OtherError.one
 		end 'small'
@@ -485,10 +485,10 @@ end 'Digest'
 
 type Point implements Digest
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function digest() returns Code throws ScalarError
+	function digest() returns Code throws ScalarError
 		if self.x < 10 'small'
 			throw ScalarError.oops
 		end 'small'
@@ -520,10 +520,10 @@ end 'Digest'
 
 type Point implements Digest
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function digest() returns Code throws DigestError
+	function digest() returns Code throws DigestError
 		if self.x < 10 'small'
 			throw DigestError.tooSmall
 		end 'small'
@@ -533,10 +533,10 @@ end 'Point'
 
 type Box uses T where T is Digest
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function itemDigest() returns Code throws DigestError
+	function itemDigest() returns Code throws DigestError
 		return self.item.digest()
 	end 'itemDigest'
 end 'Box'
@@ -564,20 +564,20 @@ end 'Digest'
 
 type Point implements Digest
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x
 	end 'digest'
 end 'Point'
 
 type Box uses T where T is Digest
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function itemDigest() returns Code
+	function itemDigest() returns Code
 		return try self.item.digest()
 	end 'itemDigest'
 end 'Box'
@@ -611,10 +611,10 @@ end 'Digest'
 
 type Point implements Digest
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function digest() returns Code throws DigestError
+	function digest() returns Code throws DigestError
 		if self.x < 10 'small'
 			throw DigestError.tooSmall
 		end 'small'
@@ -624,10 +624,10 @@ end 'Point'
 
 type Box uses T where T is Digest
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function itemDigest() returns Code
+	function itemDigest() returns Code
 		return try self.item.digest()
 	end 'itemDigest'
 end 'Box'

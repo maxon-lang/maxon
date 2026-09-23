@@ -34,13 +34,19 @@ restores every file before `C1` builds `C2`.
 than a way of shipping a hobbled compiler: the seed accepts the compiler's own parser arm, runtime
 installer and name constants, so `C1` knows the builtin and compiles the unshimmed tree.
 
-There are two things a patch may withdraw. One is a `stdlib/` or `runtime/` declaration the seed refuses
-outright; only `C1`'s own copy of that function is then stubbed, and nothing in a build calls it. The
-other is a CALL SITE in the compiler's own source — the compiler is a Maxon program too, so it can call
+There are three things a patch may withdraw. One is a `stdlib/` or `runtime/` declaration the seed refuses
+outright; only `C1`'s own copy of that function is then stubbed, and nothing in a build calls it. Another
+is a CALL SITE in the compiler's own source — the compiler is a Maxon program too, so it can call
 an intrinsic this tree adds and the seed refuses it there with E3004 rather than at the declaration.
 Withdrawing the call leaves every table standing, and the first build is merely one whose instrument
 reports nothing. Keep such a patch to the single function that calls, so what the shimmed build loses is
 stated by the patch itself.
+
+The third is a VISIBILITY MODIFIER, and it is the one that spans many declarations rather than one site. A
+rule about what a signature may name decides a declaration's tier, so a seed that predates the rule audits
+those tiers by the older one and reports E3092/E3093/E3094 at every declaration the new rule widened.
+Withdrawing the modifier leaves the declaration, its body and every table standing, so `C1` is unaffected
+and compiles the unshimmed tree; what the first build loses is the wider tier and no code.
 
 ⛔ **Delete the patch in the release after the one that ships the entry.** It is inert from the moment a
 published seed accepts the declaration — the plain build succeeds and the directory is never read — and

@@ -52,7 +52,7 @@ typealias GroupKeyOrdinal = int(0 to u64.max)
 // A 0-based line index into `SourceLines`, and how many such lines a source has. DISTINCT from
 // `LineNumber`, which is the 1-based number a token carries and a reader sees in a diagnostic — the
 // comment index is keyed by the second, and the raw scan walks the first.
-typealias LineIndex = int(0 to u64.max)
+export typealias LineIndex = int(0 to u64.max)
 
 // What a line's group key IS. Two lines belong to one group when their keys are equal, and exactly one
 // blank line separates adjacent groups.
@@ -101,7 +101,7 @@ type GroupKey
 		return Self{kind: GroupKeyKind.unique, ordinal: ordinal}
 	end 'uniqueTo'
 
-	export function equals(other GroupKey) returns bool
+	function equals(other GroupKey) returns bool
 		return self.kind == other.kind and self.ordinal == other.ordinal
 	end 'equals'
 end 'GroupKey'
@@ -178,11 +178,11 @@ typealias FormatBlockKindArray = Array with FormatBlockKind
 /// A block comment with code BOTH before and after it on one line (`var y = /* note */ 5`) cannot be
 /// cleanly relocated by a formatter that does not parse; it comes out as a trailing comment. The
 /// comment is PRESERVED — only its position within the line is lost.
-type SourceComment
+export type SourceComment
 	export let text as String
 	export let wholeLine as bool
 
-	export static function create(text String, wholeLine bool) returns SourceComment
+	static function create(text String, wholeLine bool) returns SourceComment
 		return Self{text: text, wholeLine: wholeLine}
 	end 'create'
 end 'SourceComment'
@@ -233,22 +233,22 @@ type SourceLines
 		return Self{bytes: bytes, starts: starts, ends: ends}
 	end 'of'
 
-	export function count() returns LineIndex
+	function count() returns LineIndex
 		return starts.count()
 	end 'count'
 
-	export function length(index LineIndex) returns ByteOffset
+	function length(index LineIndex) returns ByteOffset
 		return self.endOf(index) - self.startOf(index)
 	end 'length'
 
 	// The byte at `offset` within line `index`. The callers bound `offset` by `length` first.
-	export function byteAt(index LineIndex, offset ByteOffset) returns Byte
+	function byteAt(index LineIndex, offset ByteOffset) returns Byte
 		let at = self.startOf(index) + offset
 		return try bytes.get(at) otherwise panic("SourceLines.byteAt: byte {at} outside the {bytes.count()}-byte source")
 	end 'byteAt'
 
 	// The text of `[from, to)` within line `index`.
-	export function textIn(index LineIndex, from ByteOffset, to ByteOffset) returns String
+	function textIn(index LineIndex, from ByteOffset, to ByteOffset) returns String
 		let lo = self.startOf(index) + from
 		let hi = self.startOf(index) + to
 		let span = try bytes.slice(lo as ElementIndex, endIndex: hi as ElementIndex) otherwise panic("SourceLines.textIn: [{lo}, {hi}) outside the {bytes.count()}-byte source")
@@ -257,7 +257,7 @@ type SourceLines
 
 	// Is `[from, to)` within line `index` nothing but layout? The test that decides whether a comment
 	// owns its line.
-	export function blankBetween(index LineIndex, from ByteOffset, to ByteOffset) returns bool
+	function blankBetween(index LineIndex, from ByteOffset, to ByteOffset) returns bool
 		var i = from
 
 		while i < to 'eachByte'
@@ -271,7 +271,7 @@ type SourceLines
 		return true
 	end 'blankBetween'
 
-	export function startOf(index LineIndex) returns ByteOffset
+	function startOf(index LineIndex) returns ByteOffset
 		return try starts.get(index) otherwise panic("SourceLines.startOf: line {index} of {starts.count()}")
 	end 'startOf'
 
@@ -314,7 +314,7 @@ type CommentScan
 		return Self{lines: lines, comments: SourceCommentMap.create(), nesting: ByteArray.create(), line: 0, at: 0}
 	end 'create'
 
-	function run() returns SourceCommentMap
+	export function run() returns SourceCommentMap
 		// The lexer skips a `#!` at byte 0 whole (`Lexer.skipShebang`), so no token carries it and the
 		// gap-emit path — which writes text no token carries — is the only thing that can put it back.
 		// Recorded as a whole-line comment on line 1, which is the only line it can legally occupy.
@@ -1696,11 +1696,11 @@ end 'blockKindOpenedBy'
 ///
 /// The two constructors are the only way in, so no caller can hand the emitter an indent unit that is
 /// not whitespace.
-module type FormatOptions
+export type FormatOptions
 	module let indentUnit as String
 
 	/// One tab per level — the language's own rule, and what `maxon fmt` always wants.
-	export static function tabs() returns FormatOptions
+	module static function tabs() returns FormatOptions
 		return Self{indentUnit: "\t"}
 	end 'tabs'
 
@@ -1888,7 +1888,7 @@ function libraryTierRoots() returns FilePathArray
 end 'libraryTierRoots'
 
 function isInsideAnyTier(dir FilePath, tiers FilePathArray, cwd FilePath) returns bool
-	let absolute = dir.resolve(cwd).normalize()
+	let absolute = dir.resolve(cwd)
 
 	for tier in tiers 'eachTier'
 		if absolute.isInside(tier) 'inside'

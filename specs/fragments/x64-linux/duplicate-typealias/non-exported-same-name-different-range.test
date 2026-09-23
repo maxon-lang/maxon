@@ -2,21 +2,29 @@
 // --- file: a.maxon
 typealias Limit = int(0 to 500)
 
-export function clampA(x Limit) returns Limit
+function clampA(x Limit) returns Limit
 	return x
 end 'clampA'
+
+export function fromA() returns ExitCode
+	return clampA(40) as ExitCode
+end 'fromA'
 
 // --- file: b.maxon
 typealias Limit = int(0 to 2000)
 
-export function clampB(x Limit) returns Limit
+function clampB(x Limit) returns Limit
 	return x
 end 'clampB'
 
+export function fromB() returns ExitCode
+	return clampB(60) as ExitCode
+end 'fromB'
+
 // --- file: main.maxon
 function main() returns ExitCode
-	let a = clampA(40)
-	let b = clampB(60)
+	let a = fromA()
+	let b = fromB()
 	return a + b
 end 'main'
 ---
@@ -26,10 +34,11 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
+  __rc_ok#7:
     x64.movRegImm32 rax, 40
   __il_cont:
     x64.leaRegRegImm32 r8, rax, 60
-  __rc_ok:
+  __rc_ok#1:
     x64.popReg rbp
     x64.ret
 }

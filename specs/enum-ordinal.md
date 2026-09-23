@@ -313,7 +313,7 @@ end 'Status'
 type Holder
 	export let s as Status
 
-	export static function create(s Status) returns Self
+	static function create(s Status) returns Self
 		return Self{s: s}
 	end 'create'
 end 'Holder'
@@ -343,7 +343,7 @@ end 'Color'
 type Inner
 	export let c as Color
 
-	export static function create(c Color) returns Self
+	static function create(c Color) returns Self
 		return Self{c: c}
 	end 'create'
 end 'Inner'
@@ -351,7 +351,7 @@ end 'Inner'
 type Outer
 	export let inner as Inner
 
-	export static function create(inner Inner) returns Self
+	static function create(inner Inner) returns Self
 		return Self{inner: inner}
 	end 'create'
 end 'Outer'
@@ -385,7 +385,7 @@ end 'Status'
 type Named
 	export let name as Integer
 
-	export static function create(name Integer) returns Self
+	static function create(name Integer) returns Self
 		return Self{name: name}
 	end 'create'
 end 'Named'
@@ -394,7 +394,7 @@ type Holder
 	export let s as Status
 	export let n as Named
 
-	export static function create(s Status, n Named) returns Self
+	static function create(s Status, n Named) returns Self
 		return Self{s: s, n: n}
 	end 'create'
 end 'Holder'

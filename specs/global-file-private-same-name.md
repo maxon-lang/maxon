@@ -39,7 +39,7 @@ files in the reference compiler (`E2003: Unknown type: Num`). The repetition is 
 an oversight.
 ```maxon
 // --- file: featA/a.maxon
-typealias Num = int(i64.min to i64.max)
+export typealias Num = int(i64.min to i64.max)
 
 var counter = 7
 
@@ -49,7 +49,7 @@ export function bumpA() returns Num
 end 'bumpA'
 
 // --- file: featB/b.maxon
-typealias Num = int(i64.min to i64.max)
+export typealias Num = int(i64.min to i64.max)
 
 var counter = 100
 

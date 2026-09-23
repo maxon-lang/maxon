@@ -577,7 +577,7 @@ type Flags
 	export let a as bool
 	export let b as bool
 
-	export static function make(a bool, b bool) returns Flags
+	static function make(a bool, b bool) returns Flags
 		return Flags{a: a, b: b}
 	end 'make'
 end 'Flags'
@@ -1267,11 +1267,11 @@ type Counter
 		return Self{n: n}
 	end 'create'
 
-	export function bump() returns Integer
+	function bump() returns Integer
 		return self.n + 1
 	end 'bump'
 
-	export function pick(threshold Integer) returns Integer
+	function pick(threshold Integer) returns Integer
 		let base = self.bump()
 		return n if n > threshold else base
 	end 'pick'
@@ -1300,11 +1300,11 @@ type Counter
 		return Self{n: n}
 	end 'create'
 
-	export function bump() returns Integer
+	function bump() returns Integer
 		return self.n + 1
 	end 'bump'
 
-	export function pick(threshold Integer) returns Integer
+	function pick(threshold Integer) returns Integer
 		let base = self.bump()
 		return n if n > threshold else base
 	end 'pick'

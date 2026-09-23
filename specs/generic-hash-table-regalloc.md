@@ -82,15 +82,15 @@ type Tbl uses Key where Key is Hashable and Equatable
 	var count = 0
 	var capacity = 0
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{keys: KeyArray{}, values: ValueArray{}, states: StateArray{}, hashes: HashSlotArray{}}
 	end 'create'
 
-	export function slots() returns Cap
+	function slots() returns Cap
 		return capacity
 	end 'slots'
 
-	export function entries() returns Cap
+	function entries() returns Cap
 		return count
 	end 'entries'
 
@@ -102,7 +102,7 @@ type Tbl uses Key where Key is Hashable and Equatable
 		count = count + 1
 	end 'insertAtSlot'
 
-	export function grow()
+	function grow()
 		let oldCapacity = capacity
 		var newCapacity = oldCapacity * 2
 		if newCapacity == 0 'handle_zero'
@@ -217,11 +217,11 @@ end 'bump'
 type Mixer uses T where T is Hashable and Equatable
 	var base as Integer
 
-	export static function create(base Integer) returns Self
+	static function create(base Integer) returns Self
 		return Self{base: base}
 	end 'create'
 
-	export function mix(key T) returns Integer
+	function mix(key T) returns Integer
 		var a1 = base + 1
 		var a2 = base + 2
 		var a3 = base + 3

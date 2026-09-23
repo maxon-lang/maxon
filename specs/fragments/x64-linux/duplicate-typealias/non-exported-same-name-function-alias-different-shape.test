@@ -3,21 +3,29 @@
 typealias Tally = int(0 to 1000)
 typealias Step = function(Tally, Tally) returns Tally
 
-export function foldA(start Tally, step Step) returns Tally
+function foldA(start Tally, step Step) returns Tally
 	return step(start, 3)
 end 'foldA'
+
+export function runA() returns ExitCode
+	return foldA(1, step: function(acc, more) gives acc + more) as ExitCode
+end 'runA'
 
 // --- file: b.maxon
 typealias Step = function(String) returns String
 
-export function foldB(label String, step Step) returns String
+function foldB(label String, step Step) returns String
 	return step(label)
 end 'foldB'
 
+export function runB(label String) returns String
+	return foldB(label, step: function(text) gives "{text}!")
+end 'runB'
+
 // --- file: main.maxon
 function main() returns ExitCode
-	let n = foldA(1, step: function(acc, more) gives acc + more)
-	let s = foldB("go", step: function(label) gives "{label}!")
+	let n = runA()
+	let s = runB("go")
 	print("{n} {s}\n")
 	return 0
 end 'main'
@@ -30,6 +38,93 @@ data {
   __slab_state@16 = i64 0
 }
 
+func @runA$closure_0 {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic#2
+  __rc_chk#3:
+    x64.cmpRegImm32 rcx, 1000
+    x64.jcc greater, __rc_panic#2
+  __rc_ok#1:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic#5
+  __rc_chk#6:
+    x64.cmpRegImm32 rdx, 1000
+    x64.jcc greater, __rc_panic#5
+  __rc_ok#4:
+    x64.leaRegRegReg r8, rcx, rdx
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at a.maxon:9: Range check failed: value outside typealias 'Tally'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at a.maxon:9: Range check failed: value outside typealias 'Tally'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @runB$closure_0 {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 56
+    x64.loadRegBaseDisp.word64 rbx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 r12, [rcx + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_4]  ; "!"
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.leaRegRegReg rax, r12, r14
+    x64.storeSlotReg slot0, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot1, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r14
+    x64.loadRegSlot r8, slot1
+    x64.storeBaseDispReg.word64 [r8 + 0], r15
+    x64.loadRegSlot rax, slot0
+    x64.storeBaseDispReg.word64 [r8 + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r8 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r8 + 24], rax
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
 func @main {
   entry:
     x64.pushReg rbp
@@ -40,22 +135,30 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 104
+  __il_body#5:
     x64.movRegImm32 rcx, 1
-    x64.leaRegFunc rsi, [rip + main$closure_0]
+    x64.leaRegFunc rsi, [rip + runA$closure_0]
     x64.movRegImm32 rax, 0
   __rc_ok:
     x64.movRegImm32 rdx, 3
     x64.callReg rsi
     x64.movRegReg rbx, r8
-  __il_cont#3:
-    x64.leaRegRdata rcx, [rip + __str_rec_4]  ; "go"
-    x64.leaRegFunc rax, [rip + main$closure_1]
+  __il_cont#9:
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 255
+    x64.jcc greater, __rc_panic
+  __il_cont#4:
+    x64.leaRegRdata rcx, [rip + __str_rec_5]  ; "go"
+  __il_body#14:
+    x64.leaRegFunc rax, [rip + runB$closure_0]
     x64.movRegImm32 rdx, 0
-  __il_body#8:
+  __il_body#16:
     x64.callReg rax
     x64.movRegReg r12, r8
     x64.storeSlotReg slot0, r12
-  __il_cont#2:
+  __il_cont#3:
     x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -65,14 +168,14 @@ func @main {
     x64.movRegReg rdx, r13
     x64.callDirect __uint_to_string
     x64.movRegReg rbx, r8
-    x64.leaRegRdata rax, [rip + __str_rec_5]  ; " "
+    x64.leaRegRdata rax, [rip + __str_rec_6]  ; " "
     x64.loadRegBaseDisp.word64 r14, [rax + 0]
     x64.loadRegBaseDisp.word64 r15, [rax + 8]
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.storeSlotReg slot7, rax
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.storeSlotReg slot6, rax
-    x64.leaRegRdata rcx, [rip + __str_rec_6]  ; "\x0a"
+    x64.leaRegRdata rcx, [rip + __str_rec_7]  ; "\x0a"
     x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
     x64.storeSlotReg slot5, rdx
     x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
@@ -118,7 +221,7 @@ func @main {
     x64.storeBaseDispReg.word64 [rax + 24], rcx
     x64.loadRegSlot rcx, slot1
     x64.callDirect __mm_decref
-  __il_body#9:
+  __il_body#2:
     x64.loadRegSlot rcx, slot3
     x64.callDirect __write_stdout
   __il_cont#1:
@@ -136,86 +239,11 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-}
-
-func @main$closure_0 {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __rc_panic#2
-  __rc_chk#3:
-    x64.cmpRegImm32 rcx, 1000
-    x64.jcc greater, __rc_panic#2
-  __rc_ok#1:
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic#5
-  __rc_chk#6:
-    x64.cmpRegImm32 rdx, 1000
-    x64.jcc greater, __rc_panic#5
-  __rc_ok#4:
-    x64.leaRegRegReg r8, rcx, rdx
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#2:
-    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at main.maxon:2: Range check failed: value outside typealias 'Tally'\x0a"
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at a.maxon:9: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#5:
-    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at main.maxon:2: Range check failed: value outside typealias 'Tally'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @main$closure_1 {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.pushReg r15
-    x64.prologue 56
-    x64.loadRegBaseDisp.word64 rbx, [rcx + 0]
-    x64.loadRegBaseDisp.word64 r12, [rcx + 8]
-    x64.leaRegRdata rax, [rip + __str_rec_7]  ; "!"
-    x64.loadRegBaseDisp.word64 r13, [rax + 0]
-    x64.loadRegBaseDisp.word64 r14, [rax + 8]
-    x64.leaRegRegReg rax, r12, r14
-    x64.storeSlotReg slot0, rax
-    x64.leaRegRegImm32 rcx, rax, 57
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeSlotReg slot1, r8
-    x64.leaRegRegImm32 r15, r8, 56
-    x64.movRegReg rcx, r15
-    x64.movRegReg rdx, rbx
-    x64.movRegReg rax, r12
-    x64.callDirect __str_copy
-    x64.leaRegRegReg rbx, r15, r12
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r13
-    x64.movRegReg rax, r14
-    x64.callDirect __str_copy
-    x64.leaRegRegReg rax, rbx, r14
-    x64.loadRegSlot r8, slot1
-    x64.storeBaseDispReg.word64 [r8 + 0], r15
-    x64.loadRegSlot rax, slot0
-    x64.storeBaseDispReg.word64 [r8 + 8], rax
-    x64.movRegImm rax, 18446744073709551613
-    x64.storeBaseDispReg.word64 [r8 + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 24], rax
-    x64.epilogue 56
+    x64.epilogue 104
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13

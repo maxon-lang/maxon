@@ -57,10 +57,10 @@ fi
   while [ "$c" -lt "$CONFORMERS" ]; do
     printf 'type C%d implements Shape\n' "$c"
     echo -e "\tvar v as Integer"
-    echo -e "\texport static function create(v Integer) returns Self"
+    echo -e "\tstatic function create(v Integer) returns Self"
     echo -e "\t\treturn Self{v: v}"
     echo -e "\tend 'create'"
-    echo -e "\texport function area() returns Integer"
+    echo -e "\tfunction area() returns Integer"
     echo -e "\t\treturn self.v"
     echo -e "\tend 'area'"
     printf "end 'C%d'\n" "$c"
@@ -72,7 +72,7 @@ fi
   while [ "$t" -lt "$TYPES" ]; do
     printf 'type Pad%d\n' "$t"
     echo -e "\texport var v as Integer"
-    echo -e "\texport static function create(v Integer) returns Self"
+    echo -e "\tstatic function create(v Integer) returns Self"
     echo -e "\t\treturn Self{v: v}"
     echo -e "\tend 'create'"
     printf "end 'Pad%d'\n" "$t"
@@ -90,9 +90,9 @@ fi
     fi
     echo -e "\texport var k as Integer"
     if [ "$MODE" = "gate" ]; then
-      echo -e "\texport static function create(s Shape, k Integer) returns Self"
+      echo -e "\tstatic function create(s Shape, k Integer) returns Self"
     else
-      echo -e "\texport static function create(s String, k Integer) returns Self"
+      echo -e "\tstatic function create(s String, k Integer) returns Self"
     fi
     echo -e "\t\treturn Self{s: s, k: k}"
     echo -e "\tend 'create'"

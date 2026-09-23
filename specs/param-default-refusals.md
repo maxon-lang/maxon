@@ -66,7 +66,7 @@ interface Greeter
 end 'Greeter'
 
 type Loud implements Greeter
-	export function greet(times Integer) returns Integer
+	function greet(times Integer) returns Integer
 		return times
 	end 'greet'
 end 'Loud'
@@ -146,15 +146,15 @@ typealias Num = int(i64.min to i64.max)
 type T
 	export var v as Num
 
-	export static function make(v Num) returns T
+	static function make(v Num) returns T
 		return Self{v: v}
 	end 'make'
 
-	export function m(b Num) returns Num
+	function m(b Num) returns Num
 		return self.v + b
 	end 'm'
 
-	export static function m(a Num = 7) returns Num
+	static function m(a Num = 7) returns Num
 		return a
 	end 'm'
 end 'T'
@@ -181,15 +181,15 @@ typealias Num = int(i64.min to i64.max)
 type T
 	export var v as Num
 
-	export static function make(v Num) returns T
+	static function make(v Num) returns T
 		return Self{v: v}
 	end 'make'
 
-	export static function m(a Num) returns Num
+	static function m(a Num) returns Num
 		return a
 	end 'm'
 
-	export function m(b Num = 4) returns Num
+	function m(b Num = 4) returns Num
 		return self.v + b
 	end 'm'
 end 'T'
@@ -217,7 +217,7 @@ one-parameter member. The compiler refuses it for the same reason it refuses the
 the fill happens while the call is parsed, a pass before the overload is resolved.
 ```maxon
 // --- file: alpha/a.maxon
-typealias Num = int(-1000 to 1000)
+export typealias Num = int(-1000 to 1000)
 
 export function pick(a Num) returns Num
 	return a
@@ -228,7 +228,7 @@ export function pick(a Num, b Num = 5) returns Num
 end 'pick'
 
 // --- file: beta/b.maxon
-typealias Small = int(-1000 to 1000)
+export typealias Small = int(-1000 to 1000)
 
 export function pick(a Small) returns Small
 	return a + 50
@@ -251,7 +251,7 @@ MEASURED before W78: **210 here too**, so the defect was not order-dependent —
 in one order would have looked identical from the case above.
 ```maxon
 // --- file: alpha/a.maxon
-typealias Num = int(-1000 to 1000)
+export typealias Num = int(-1000 to 1000)
 
 export function pick(a Num, b Num = 5) returns Num
 	return a * 100 + b + 5
@@ -262,7 +262,7 @@ export function pick(a Num) returns Num
 end 'pick'
 
 // --- file: beta/b.maxon
-typealias Small = int(-1000 to 1000)
+export typealias Small = int(-1000 to 1000)
 
 export function pick(a Small) returns Small
 	return a + 50
@@ -286,14 +286,14 @@ two different paths in the two arrangements, and only running both says whether 
 before W78: **210** here as well.
 ```maxon
 // --- file: alpha/a.maxon
-typealias Small = int(-1000 to 1000)
+export typealias Small = int(-1000 to 1000)
 
 export function pick(a Small) returns Small
 	return a + 50
 end 'pick'
 
 // --- file: beta/b.maxon
-typealias Num = int(-1000 to 1000)
+export typealias Num = int(-1000 to 1000)
 
 export function pick(a Num) returns Num
 	return a
@@ -329,7 +329,7 @@ green over. ⚠ **Still narrower than the language**: the oracle carries default
 answers **67**.
 ```maxon
 // --- file: alpha/a.maxon
-typealias Num = int(-1000 to 1000)
+export typealias Num = int(-1000 to 1000)
 
 export function pick(a Num, b Num = 5) returns Num
 	return a + b
@@ -340,7 +340,7 @@ export function pick(x bool, y Num = 5) returns Num
 end 'pick'
 
 // --- file: beta/b.maxon
-typealias Small = int(-1000 to 1000)
+export typealias Small = int(-1000 to 1000)
 
 export function pick(a Small) returns Small
 	return a + 50
@@ -371,14 +371,14 @@ verdict, and one that tests nothing about a synthesized helper's duplicate. It i
 `cross-file-overload-set.md`'s `error.two-spellings-of-one-type-are-ambiguous-at-the-call`.
 ```maxon
 // --- file: a.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export function f(a Integer = 1) returns Integer
 	return a
 end 'f'
 
 // --- file: b.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export function f(a Integer = 1) returns Integer
 	return a + 1

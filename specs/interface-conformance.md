@@ -876,11 +876,11 @@ end 'Wide'
 type Point implements Wide
 	export var x as Code
 
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
 
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x
 	end 'digest'
 end 'Point'
@@ -888,11 +888,11 @@ end 'Point'
 type Box uses T where T is Wide
 	export var item as T
 
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
 
-	export function run() returns Code
+	function run() returns Code
 		return self.item.digest()
 	end 'run'
 end 'Box'
@@ -925,11 +925,11 @@ end 'Wide'
 type Point implements Wide
 	export var x as Code
 
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
 
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x
 	end 'digest'
 end 'Point'
@@ -960,15 +960,15 @@ end 'Wide'
 type Point implements Wide
 	export var x as Code
 
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
 
-	export static function tag() returns Code
+	static function tag() returns Code
 		return 7
 	end 'tag'
 
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x
 	end 'digest'
 end 'Point'
@@ -976,11 +976,11 @@ end 'Point'
 type Box uses T where T is Wide
 	export var item as T
 
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
 
-	export function run() returns Code
+	function run() returns Code
 		return self.item.digest()
 	end 'run'
 end 'Box'
@@ -1012,15 +1012,15 @@ end 'Wide'
 type Point implements Wide
 	export var x as Code
 
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
 
-	export static function tag(extra Code) returns Code
+	static function tag(extra Code) returns Code
 		return extra
 	end 'tag'
 
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x
 	end 'digest'
 end 'Point'
@@ -1052,15 +1052,15 @@ end 'Wide'
 type Point implements Wide
 	export var x as Code
 
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
 
-	export function tag() returns Code
+	function tag() returns Code
 		return self.x
 	end 'tag'
 
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x
 	end 'digest'
 end 'Point'
@@ -1088,11 +1088,11 @@ end 'Wide'
 type Point implements Wide
 	export var x as Code
 
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
 
-	export static function digest() returns Code
+	static function digest() returns Code
 		return 7
 	end 'digest'
 end 'Point'
@@ -1187,15 +1187,15 @@ end 'Labeled'
 type Tag implements Labeled
 	export var x as Code
 
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
 
-	export function label(extra Code) returns Code
+	function label(extra Code) returns Code
 		return 7
 	end 'label'
 
-	export function label() returns Code
+	function label() returns Code
 		return 42
 	end 'label'
 end 'Tag'
@@ -1203,11 +1203,11 @@ end 'Tag'
 type Box uses T where T is Labeled
 	export var item as T
 
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
 
-	export function run() returns Code
+	function run() returns Code
 		return self.item.label()
 	end 'run'
 end 'Box'
@@ -1246,15 +1246,15 @@ end 'Second'
 type Tag implements First, Second
 	export var x as Code
 
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
 
-	export function label(extra Code) returns Code
+	function label(extra Code) returns Code
 		return 7
 	end 'label'
 
-	export function label() returns Code
+	function label() returns Code
 		return 40
 	end 'label'
 end 'Tag'
@@ -1262,11 +1262,11 @@ end 'Tag'
 type Box uses T where T is First and Second
 	export var item as T
 
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
 
-	export function run() returns Code
+	function run() returns Code
 		return self.item.label()
 	end 'run'
 end 'Box'
@@ -1309,19 +1309,19 @@ end 'Wide'
 type Point implements Wide
 	export var x as Code
 
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
 
-	export static function tag(extra Code) returns Code
+	static function tag(extra Code) returns Code
 		return extra
 	end 'tag'
 
-	export static function tag() returns Code
+	static function tag() returns Code
 		return 7
 	end 'tag'
 
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x
 	end 'digest'
 end 'Point'
@@ -1329,11 +1329,11 @@ end 'Point'
 type Box uses T where T is Wide
 	export var item as T
 
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
 
-	export function run() returns Code
+	function run() returns Code
 		return self.item.digest()
 	end 'run'
 end 'Box'
@@ -1366,19 +1366,19 @@ end 'Wide'
 type Point implements Wide
 	export var x as Code
 
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
 
-	export static function tag() returns Code
+	static function tag() returns Code
 		return 7
 	end 'tag'
 
-	export static function tag(extra Code) returns Code
+	static function tag(extra Code) returns Code
 		return extra
 	end 'tag'
 
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x
 	end 'digest'
 end 'Point'
@@ -1386,11 +1386,11 @@ end 'Point'
 type Box uses T where T is Wide
 	export var item as T
 
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
 
-	export function run() returns Code
+	function run() returns Code
 		return self.item.digest()
 	end 'run'
 end 'Box'
@@ -1431,15 +1431,15 @@ typealias Small = int(0 to 100)
 type Point implements Stringable, FormattedStringable
 	export var x as Small
 
-	export static function create(x Small) returns Self
+	static function create(x Small) returns Self
 		return Self{ x: x }
 	end 'create'
 
-	export function toString(format String) returns String
+	function toString(format String) returns String
 		return "F"
 	end 'toString'
 
-	export function toString() returns String
+	function toString() returns String
 		return "P"
 	end 'toString'
 end 'Point'
@@ -1472,15 +1472,15 @@ end 'Labeled'
 type Tag implements Labeled
 	export var x as Code
 
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
 
-	export function label(extra Code) returns Code
+	function label(extra Code) returns Code
 		return extra
 	end 'label'
 
-	export function label(a Code, b Code) returns Code
+	function label(a Code, b Code) returns Code
 		return a + b
 	end 'label'
 end 'Tag'
@@ -1510,15 +1510,15 @@ end 'Labeled'
 type Tag implements Labeled
 	export var x as Code
 
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
 
-	export function label(v Code) returns Code
+	function label(v Code) returns Code
 		return v
 	end 'label'
 
-	export function label(w Code) returns Code
+	function label(w Code) returns Code
 		return w + 1
 	end 'label'
 end 'Tag'
@@ -1548,15 +1548,15 @@ end 'Labeled'
 type Tag implements Labeled
 	export var x as Code
 
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
 
-	export function label(v Code) returns Code
+	function label(v Code) returns Code
 		return v
 	end 'label'
 
-	export function label(v Small) returns Code
+	function label(v Small) returns Code
 		return 7
 	end 'label'
 end 'Tag'
@@ -1600,15 +1600,15 @@ end 'Labeled'
 type Tag implements Labeled
 	export var x as Code
 
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
 
-	export function label(extra Code) returns Code
+	function label(extra Code) returns Code
 		return extra
 	end 'label'
 
-	export function label() returns Code
+	function label() returns Code
 		return 40
 	end 'label'
 end 'Tag'
@@ -1643,15 +1643,15 @@ end 'Conv'
 type Machine implements Conv with Whole, Conv with Real
 	export var tag as Whole
 
-	export static function create(tag Whole) returns Self
+	static function create(tag Whole) returns Self
 		return Self{tag: tag}
 	end 'create'
 
-	export function convert(v Whole) returns Whole
+	function convert(v Whole) returns Whole
 		return v
 	end 'convert'
 
-	export function convert(v Real) returns Whole
+	function convert(v Real) returns Whole
 		return 7
 	end 'convert'
 end 'Machine'
@@ -1687,19 +1687,19 @@ end 'Child'
 type Machine implements Child with Whole, Parent with Real
 	export var tag as Whole
 
-	export static function create(tag Whole) returns Self
+	static function create(tag Whole) returns Self
 		return Self{tag: tag}
 	end 'create'
 
-	export function marker() returns Whole
+	function marker() returns Whole
 		return 1
 	end 'marker'
 
-	export function convert(v Whole) returns Whole
+	function convert(v Whole) returns Whole
 		return v
 	end 'convert'
 
-	export function convert(v Real) returns Whole
+	function convert(v Real) returns Whole
 		return 7
 	end 'convert'
 end 'Machine'
@@ -1734,10 +1734,10 @@ end 'Digest'
 
 type Point implements Digest
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function digest() returns Code throws MyParseError
+	function digest() returns Code throws MyParseError
 		if self.x < 10 'small'
 			throw MyParseError.badInput
 		end 'small'
@@ -1747,10 +1747,10 @@ end 'Point'
 
 type Box uses T where T is Digest
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function itemDigest() returns Code
+	function itemDigest() returns Code
 		return try self.item.digest() otherwise 55
 	end 'itemDigest'
 end 'Box'
@@ -1786,10 +1786,10 @@ end 'Digest'
 
 type Point implements Digest
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function digest() returns Code throws Error
+	function digest() returns Code throws Error
 		if self.x < 10 'small'
 			throw DigestError.tooSmall
 		end 'small'
@@ -1835,10 +1835,10 @@ end 'Digest'
 
 type Point implements Digest
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function digest() returns Code throws BoxedError
+	function digest() returns Code throws BoxedError
 		if self.x < 10 'small'
 			throw BoxedError.withMessage("nope")
 		end 'small'
@@ -1872,10 +1872,10 @@ end 'Digest'
 
 type Point implements Digest
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function digest() returns Code throws DigestError
+	function digest() returns Code throws DigestError
 		if self.x < 10 'small'
 			throw DigestError.tooSmall
 		end 'small'
@@ -1916,10 +1916,10 @@ end 'Digest'
 
 type Point implements Digest
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function digest() returns Code throws OtherError
+	function digest() returns Code throws OtherError
 		if self.x < 10 'small'
 			throw OtherError.oops
 		end 'small'
@@ -1959,10 +1959,10 @@ end 'Digest'
 
 type Point implements Digest
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function digest() returns Code throws Bogus
+	function digest() returns Code throws Bogus
 		return self.x
 	end 'digest'
 end 'Point'
@@ -1999,7 +1999,7 @@ type Wrapped implements BuiltinStringLiteral
 	var flag as bool
 	var label as String = "tag"
 
-	export static function init(value __ManagedMemory) returns Self
+	static function init(value __ManagedMemory) returns Self
 		return Self{managed: value, flag: false}
 	end 'init'
 end 'Wrapped'
@@ -2027,7 +2027,7 @@ type Wrapped implements BuiltinStringLiteral
 	var flag as bool
 	var label as String = "tag"
 
-	export static function init(value __ManagedMemory) returns Self
+	static function init(value __ManagedMemory) returns Self
 		return Self{managed: value, flag: false}
 	end 'init'
 end 'Wrapped'
@@ -2035,11 +2035,11 @@ end 'Wrapped'
 type Box
 	var w as Wrapped
 
-	export static function init(x Wrapped) returns Self
+	static function init(x Wrapped) returns Self
 		return Self{w: x}
 	end 'init'
 
-	export function get() returns Wrapped
+	function get() returns Wrapped
 		return self.w
 	end 'get'
 end 'Box'
@@ -2070,11 +2070,11 @@ type Wrapped implements BuiltinStringLiteral
 	var managed as __ManagedMemory
 	var flag as bool
 
-	export static function init(value __ManagedMemory) returns Self
+	static function init(value __ManagedMemory) returns Self
 		return Self{managed: value, flag: false}
 	end 'init'
 
-	export function readFlag() returns bool
+	function readFlag() returns bool
 		return self.flag
 	end 'readFlag'
 end 'Wrapped'
@@ -2100,7 +2100,7 @@ refusal rather than one each — the record is the same 48 bytes and the defect 
 type Glyph implements BuiltinCharLiteral
 	var managed as __ManagedMemory
 
-	export static function init(value __ManagedMemory) returns Self
+	static function init(value __ManagedMemory) returns Self
 		return Self{managed: value}
 	end 'init'
 end 'Glyph'

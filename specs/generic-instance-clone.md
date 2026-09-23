@@ -33,7 +33,7 @@ type Box uses T
 	export var v as T
 	export var tag as Integer
 
-	export static function create(x T, tag Integer) returns Self
+	static function create(x T, tag Integer) returns Self
 		return Self{v: x, tag: tag}
 	end 'create'
 end 'Box'
@@ -79,7 +79,7 @@ type Box uses T
 	export var v as T
 	export var tag as Integer
 
-	export static function create(x T, tag Integer) returns Self
+	static function create(x T, tag Integer) returns Self
 		return Self{v: x, tag: tag}
 	end 'create'
 end 'Box'
@@ -157,26 +157,26 @@ type Box uses T
 	export var v as T
 	export var tag as Integer
 
-	export static function create(x T, tag Integer) returns Self
+	static function create(x T, tag Integer) returns Self
 		return Self{v: x, tag: tag}
 	end 'create'
 end 'Box'
 
 type Bag uses Element
-	typealias EBox = Box with Element
-	typealias EBoxArray = Array with EBox
+	export typealias EBox = Box with Element
+	export typealias EBoxArray = Array with EBox
 
 	var items as EBoxArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: EBoxArray.create()}
 	end 'create'
 
-	export function add(x Element, tag Integer)
+	function add(x Element, tag Integer)
 		self.items.push(EBox.create(x, tag: tag))
 	end 'add'
 
-	export function copy() returns EBoxArray
+	function copy() returns EBoxArray
 		return self.items.clone()
 	end 'copy'
 end 'Bag'
@@ -220,7 +220,7 @@ type Bucket
 	export var members as StringSet
 	export var tag as Integer
 
-	export static function create(tag Integer) returns Self
+	static function create(tag Integer) returns Self
 		return Self{members: StringSet.create(), tag: tag}
 	end 'create'
 end 'Bucket'
@@ -270,19 +270,19 @@ existed: the row count printed and the program died `0xC0000005` at teardown.**
 typealias Idx = int(0 to u64.max)
 
 type Bag uses Element
-	typealias Inner = Array with Element
-	typealias Outer = Array with Inner
+	export typealias Inner = Array with Element
+	export typealias Outer = Array with Inner
 	var rows as Outer
 
-	export function addRow(r Inner)
+	function addRow(r Inner)
 		rows.push(r)
 	end 'addRow'
 
-	export function copyRows() returns Outer
+	function copyRows() returns Outer
 		return rows.clone()
 	end 'copyRows'
 
-	export function count() returns Idx
+	function count() returns Idx
 		return rows.count()
 	end 'count'
 
@@ -307,7 +307,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:6:12: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned — a compiler-owned aggregate (`__ManagedFile`), a base-struct-less generic instance with no runtime copy of its own, an ELEMENT held at an interface type (an element slot is one machine word and a fat pointer is two), or a generic instance that owns one of those. String / struct / boxed-union / container (`Array with int`, `List with String`, `Array with (Array with String)`) / trivial instantiations, a record holding an interface-typed FIELD, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173, G18).
+error E2015: <fragment>:6:19: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned — a compiler-owned aggregate (`__ManagedFile`), a base-struct-less generic instance with no runtime copy of its own, an ELEMENT held at an interface type (an element slot is one machine word and a fat pointer is two), or a generic instance that owns one of those. String / struct / boxed-union / container (`Array with int`, `List with String`, `Array with (Array with String)`) / trivial instantiations, a record holding an interface-typed FIELD, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173, G18).
 note: stdlib/Array.maxon:79:32: raised inside the library, on behalf of the construct above
 ```
 
@@ -324,19 +324,19 @@ typealias Idx = int(0 to u64.max)
 typealias Small = int(0 to 100)
 
 type Bag uses Element
-	typealias Inner = Array with Element
-	typealias Outer = Array with Inner
+	export typealias Inner = Array with Element
+	export typealias Outer = Array with Inner
 	var rows as Outer
 
-	export function addRow(r Inner)
+	function addRow(r Inner)
 		rows.push(r)
 	end 'addRow'
 
-	export function copyRows() returns Outer
+	function copyRows() returns Outer
 		return rows.clone()
 	end 'copyRows'
 
-	export function count() returns Idx
+	function count() returns Idx
 		return rows.count()
 	end 'count'
 
@@ -385,15 +385,15 @@ type Bag uses Element
 
 	var items as EArr
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: EArr.create()}
 	end 'create'
 
-	export function add(x Element)
+	function add(x Element)
 		self.items.push(x)
 	end 'add'
 
-	export function holdsNinetyOne() returns bool
+	function holdsNinetyOne() returns bool
 		let e = try self.items.get(0) otherwise return false
 		return e.equals(91)
 	end 'holdsNinetyOne'
@@ -442,26 +442,26 @@ type Box uses T
 	export var v as T
 	export var tag as Integer
 
-	export static function create(x T, tag Integer) returns Self
+	static function create(x T, tag Integer) returns Self
 		return Self{v: x, tag: tag}
 	end 'create'
 end 'Box'
 
 type Bag uses Element
-	typealias EBox = Box with Element
-	typealias EBoxArray = Array with EBox
+	export typealias EBox = Box with Element
+	export typealias EBoxArray = Array with EBox
 
 	var items as EBoxArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: EBoxArray.create()}
 	end 'create'
 
-	export function add(x Element, tag Integer)
+	function add(x Element, tag Integer)
 		self.items.push(EBox.create(x, tag: tag))
 	end 'add'
 
-	export function copy() returns EBoxArray
+	function copy() returns EBoxArray
 		return self.items.clone()
 	end 'copy'
 end 'Bag'
@@ -493,26 +493,26 @@ type Box uses T
 	export var v as T
 	export var tag as Integer
 
-	export static function create(x T, tag Integer) returns Self
+	static function create(x T, tag Integer) returns Self
 		return Self{v: x, tag: tag}
 	end 'create'
 end 'Box'
 
 type Bag uses Element
-	typealias EBox = Box with Element
-	typealias EBoxArray = Array with EBox
+	export typealias EBox = Box with Element
+	export typealias EBoxArray = Array with EBox
 
 	export var items as EBoxArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: EBoxArray.create()}
 	end 'create'
 
-	export function add(x Element, tag Integer)
+	function add(x Element, tag Integer)
 		self.items.push(EBox.create(x, tag: tag))
 	end 'add'
 
-	export function copy() returns EBoxArray
+	function copy() returns EBoxArray
 		return self.items.clone()
 	end 'copy'
 end 'Bag'
@@ -549,14 +549,14 @@ typealias Integer = int(i64.min to i64.max)
 typealias Cyc = Array with Cyc
 
 type Holder uses T
-	typealias TArr = Array with T
+	export typealias TArr = Array with T
 	var items as TArr
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: TArr.create()}
 	end 'create'
 
-	export function all() returns TArr
+	function all() returns TArr
 		return self.items.clone()
 	end 'all'
 end 'Holder'
@@ -586,7 +586,7 @@ type Box uses T
 	export var v as T
 	export var tag as Integer
 
-	export static function create(x T, tag Integer) returns Self
+	static function create(x T, tag Integer) returns Self
 		return Self{v: x, tag: tag}
 	end 'create'
 end 'Box'

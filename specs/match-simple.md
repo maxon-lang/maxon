@@ -667,7 +667,7 @@ end 'Op'
 type State
 	export var flag = false
 
-	export static function make() returns State
+	static function make() returns State
 		return State{}
 	end 'make'
 end 'State'
@@ -708,17 +708,17 @@ typealias Idx = int(0 to 100)
 type Lookup
 	var names as StringArray
 
-	export static function make() returns Lookup
+	static function make() returns Lookup
 		var a = StringArray.create()
 		a.push("alpha")
 		return Lookup{names: a}
 	end 'make'
 
-	export function getName(i Idx) returns String
+	function getName(i Idx) returns String
 		return try self.names.get(i) otherwise "?"
 	end 'getName'
 
-	export function nameLen(t Idx) returns Idx
+	function nameLen(t Idx) returns Idx
 		let name = match t 'pick'
 			0 gives self.getName(0)
 			default panic("empty")

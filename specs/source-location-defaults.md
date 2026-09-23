@@ -102,7 +102,7 @@ type Site
 	export let line as SourceLineNumber
 	export let file as String
 
-	export static function here(at SourceLineNumber = __line__, from String = __file__) returns Site
+	static function here(at SourceLineNumber = __line__, from String = __file__) returns Site
 		return Self{line: at, file: from}
 	end 'here'
 end 'Site'
@@ -266,16 +266,16 @@ levelGiven level=5 main.maxon:10
 type Probe
 	let tag as String
 
-	export static function create(tag String) returns Self
+	static function create(tag String) returns Self
 		return Self{tag: tag}
 	end 'create'
 
-	export static function mark(tag String, at SourceLineNumber = __line__) returns SourceLineNumber
+	static function mark(tag String, at SourceLineNumber = __line__) returns SourceLineNumber
 		print("{tag}@{at}\n")
 		return at
 	end 'mark'
 
-	export function hit(at SourceLineNumber = __line__) returns SourceLineNumber
+	function hit(at SourceLineNumber = __line__) returns SourceLineNumber
 		print("{self.tag}#{at}\n")
 		return at
 	end 'hit'

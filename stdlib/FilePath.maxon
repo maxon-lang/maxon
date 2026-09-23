@@ -7,6 +7,7 @@
 
 	// ':' after a drive letter.
 	let DriveColonByte = 58
+	let DrivePrefixLength = 2
 #else
 	let pathSeparator = "/"
 	let pathSeparatorByte = 47
@@ -162,25 +163,15 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		#if os(Windows)
 			// file:///C:/path produces path "/C:/path" — strip leading slash before drive letter
 			let filePath = url.path()
-			let pathLen = filePath.byteLength()
 
-			if pathLen >= 3 'checkDrive'
-				// Check for /X: pattern (slash + alpha + colon)
-				let urlPathBytes = filePath.addressableBytes()
+			if filePath.byteLength() == 0 or filePath.byteAtOrPanic(0) != otherSeparatorByte 'noLeadingSlash'
+				return filePath
+			end 'noLeadingSlash'
 
-				if filePath.byteAtOrPanic(0) == 47 'leadingSlash'
-					let driveByte = filePath.byteAtOrPanic(1)
+			let afterSlash = try filePath.addressableBytes().slice(1, filePath.byteLength()) otherwise panic("FilePath: drive-strip slice — the path opens with a slash")
+			let unslashed = String.init(afterSlash)
 
-					if filePath.byteAtOrPanic(2) == 58 'hasColon'
-						if (driveByte >= 65 and driveByte <= 90) or (driveByte >= 97 and driveByte <= 122) 'isDrive'
-							let trimmed = try urlPathBytes.slice(1, pathLen) otherwise panic("FilePath: drive-strip slice — pathLen >= 3 guaranteed")
-							return String.init(trimmed)
-						end 'isDrive'
-					end 'hasColon'
-				end 'leadingSlash'
-			end 'checkDrive'
-
-			return filePath
+			return unslashed if hasDrivePrefix(unslashed) else filePath
 		#else
 			return url.path()
 		#endif
@@ -262,7 +253,7 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		end 'leadingSeparator'
 
 		#if os(Windows)
-			if hasDrivePrefix() and len >= 3 and path.byteAtOrPanic(2) == pathSeparatorByte 'driveRoot'
+			if hasDriveRoot() 'driveRoot'
 				return true
 			end 'driveRoot'
 		#endif
@@ -271,15 +262,19 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 	end 'isAbsolute'
 
 	#if os(Windows)
-		/// Does the path open with a drive letter and its colon (`C:`)?
-		function hasDrivePrefix() returns bool
-			if path.byteLength() < 2 'tooShort'
+		function hasDriveRoot() returns bool
+			return hasDrivePrefix(path) and path.byteLength() > DrivePrefixLength and path.byteAtOrPanic(DrivePrefixLength) == pathSeparatorByte
+		end 'hasDriveRoot'
+
+		/// Does `spelled` open with a drive letter and its colon (`C:`)?
+		static function hasDrivePrefix(spelled String) returns bool
+			if spelled.byteLength() < DrivePrefixLength 'tooShort'
 				return false
 			end 'tooShort'
 
-			let letter = path.byteAtOrPanic(0)
+			let letter = spelled.byteAtOrPanic(0)
 			let isLetter = (letter >= 'A' and letter <= 'Z') or (letter >= 'a' and letter <= 'z')
-			return isLetter and path.byteAtOrPanic(1) == DriveColonByte
+			return isLetter and spelled.byteAtOrPanic(1) == DriveColonByte
 		end 'hasDrivePrefix'
 	#endif
 
@@ -560,13 +555,13 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 	function rootByteLength() returns BytePos
 		let len = path.byteLength()
 		#if os(Windows)
-			if hasDrivePrefix() 'drive'
-				if len >= 3 and path.byteAtOrPanic(2) == pathSeparatorByte 'driveRoot'
-					return 3
-				end 'driveRoot'
+			if hasDriveRoot() 'driveRoot'
+				return DrivePrefixLength + 1
+			end 'driveRoot'
 
-				return 2
-			end 'drive'
+			if hasDrivePrefix(path) 'driveRelative'
+				return DrivePrefixLength
+			end 'driveRelative'
 
 			if len >= 2 and path.byteAtOrPanic(0) == pathSeparatorByte and path.byteAtOrPanic(1) == pathSeparatorByte 'unc'
 				let serverEnd = separatorAtOrEnd(2)
@@ -615,15 +610,45 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 
 	// --- Resolution ---
 
-	/// Resolve this path against a base directory, returning an absolute FilePath.
-	/// If this path is already absolute, returns self unchanged.
+	/// This path resolved against the directory `base`: a relative path is joined onto `base`, an
+	/// absolute one is kept, and either way the result is folded lexically as `normalize()` folds it,
+	/// so a `..` after a symbolic link cancels the link's name rather than stepping out of its target.
+	///
+	/// On Windows a drive-relative path (`C:foo`) resolves against a `base` rooted on the same drive
+	/// (`C:\…`). Against any other base it comes back normalized and still drive-relative, so
+	/// `isAbsolute()` is false: it names that drive's current directory, which a path value cannot
+	/// know.
 	public function resolve(base FilePath) returns FilePath
 		if isAbsolute() 'alreadyAbsolute'
-			return self
-		end 'alreadyAbsolute' else 'relative'
-			return base.join(path)
-		end 'relative'
+			return normalize()
+		end 'alreadyAbsolute'
+
+		#if os(Windows)
+			if hasDrivePrefix(path) 'driveRelative'
+				return resolvedOnItsDrive(base)
+			end 'driveRelative'
+		#endif
+
+		return base.join(path).normalize()
 	end 'resolve'
+
+	#if os(Windows)
+		function resolvedOnItsDrive(base FilePath) returns FilePath
+			if not base.hasDriveRoot() or canonicalForCompare(drivePrefix()) != canonicalForCompare(base.drivePrefix()) 'anotherDrivesDirectory'
+				return normalize()
+			end 'anotherDrivesDirectory'
+
+			let rest = try path.addressableBytes().slice(DrivePrefixLength, path.byteLength()) otherwise panic("FilePath.resolvedOnItsDrive: a drive prefix is the path's first two bytes")
+
+			return base.join(String.init(rest)).normalize()
+		end 'resolvedOnItsDrive'
+
+		function drivePrefix() returns String
+			let prefix = try path.addressableBytes().slice(0, DrivePrefixLength) otherwise panic("FilePath.drivePrefix: asked only of a path with a drive prefix")
+
+			return String.init(prefix)
+		end 'drivePrefix'
+	#endif
 
 	/// Compute this path relative to `base`. Returns the suffix of `self.path`
 	/// after stripping `base.path` and any trailing separator.

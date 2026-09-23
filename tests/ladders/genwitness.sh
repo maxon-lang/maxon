@@ -90,12 +90,12 @@ fi
   while [ "$i" -lt "$CONFORMERS" ]; do
     printf 'type P%06d implements Digest\n' "$i"
     printf '\texport var x as LadderInt\n'
-    printf '\texport static function create(x LadderInt) returns Self\n'
+    printf '\tstatic function create(x LadderInt) returns Self\n'
     printf '\t\treturn Self{ x: x }\n'
     printf "\tend 'create'\n"
     m=0
     while [ "$m" -lt "$METHODS" ]; do
-      printf '\texport function m%05d(other LadderInt) returns LadderInt\n' "$m"
+      printf '\tfunction m%05d(other LadderInt) returns LadderInt\n' "$m"
       printf '\t\treturn self.x + other\n'
       printf "\tend 'm%05d'\n" "$m"
       m=$(( m + 1 ))
@@ -108,10 +108,10 @@ fi
   # `witnessCall` ops live here and the per-instance cost is the WITNESS TABLE rather than a body copy.
   echo "type Box uses T where T is Digest"
   echo -e "\texport var item as T"
-  echo -e "\texport static function create(item T) returns Self"
+  echo -e "\tstatic function create(item T) returns Self"
   echo -e "\t\treturn Self{ item: item }"
   echo -e "\tend 'create'"
-  echo -e "\texport function run() returns LadderInt"
+  echo -e "\tfunction run() returns LadderInt"
   echo -e "\t\tvar acc = 0"
   m=0
   while [ "$m" -lt "$METHODS" ]; do

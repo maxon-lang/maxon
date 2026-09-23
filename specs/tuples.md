@@ -768,7 +768,7 @@ frees it. A leak exits 101 rather than 42.
 type Point
 	export let x as Integer
 
-	export static function create(x Integer) returns Point
+	static function create(x Integer) returns Point
 		return Self{x: x}
 	end 'create'
 end 'Point'
@@ -793,7 +793,7 @@ name can hold, so the two stay distinct. Returns 3 + 34.
 type A_B
 	export let alpha as Integer
 
-	export static function create(alpha Integer) returns Self
+	static function create(alpha Integer) returns Self
 		return Self{alpha: alpha}
 	end 'create'
 end 'A_B'
@@ -801,7 +801,7 @@ end 'A_B'
 type A
 	export let gamma as Integer
 
-	export static function create(gamma Integer) returns Self
+	static function create(gamma Integer) returns Self
 		return Self{gamma: gamma}
 	end 'create'
 end 'A'
@@ -809,7 +809,7 @@ end 'A'
 type C
 	export let beta as Integer
 
-	export static function create(beta Integer) returns Self
+	static function create(beta Integer) returns Self
 		return Self{beta: beta}
 	end 'create'
 end 'C'
@@ -817,7 +817,7 @@ end 'C'
 type B_C
 	export let delta as Integer
 
-	export static function create(delta Integer) returns Self
+	static function create(delta Integer) returns Self
 		return Self{delta: delta}
 	end 'create'
 end 'B_C'
@@ -1027,11 +1027,11 @@ is a failure of this case rather than a note.
 type Box uses T
 	export let v as T
 
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{v: v}
 	end 'create'
 
-	export function pack() returns Integer
+	function pack() returns Integer
 		let t = (self.v, 1)
 		return t.1
 	end 'pack'
@@ -1058,11 +1058,11 @@ instantiates it (here over a heap `String`, whose reference the tuple must relea
 type Box uses T
 	export let v as T
 
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{v: v}
 	end 'create'
 
-	export function pack() returns Integer
+	function pack() returns Integer
 		let t = (self.v, 1)
 		return t.1
 	end 'pack'
@@ -1095,11 +1095,11 @@ end 'main'
 type Box uses T
 	export let v as T
 
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{v: v}
 	end 'create'
 
-	export function pack() returns Integer
+	function pack() returns Integer
 		let t = (self.v, 1)
 		return t.1
 	end 'pack'
@@ -1117,11 +1117,11 @@ heap. Measured: exit 7, and no leak.
 type Box uses T
 	export let v as T
 
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{v: v}
 	end 'create'
 
-	export function pack() returns Integer
+	function pack() returns Integer
 		let t = (self.v, 1)
 		return t.1
 	end 'pack'
@@ -1330,11 +1330,11 @@ export typealias PairArray = Array with Pair
 type Holder
 	export var p as Pair
 
-	export static function create() returns Holder
+	static function create() returns Holder
 		return Self{p: (2, 4)}
 	end 'create'
 
-	export function pair() returns Pair
+	function pair() returns Pair
 		return (6, 8)
 	end 'pair'
 end 'Holder'
@@ -1381,11 +1381,11 @@ neither half is a ticket at all.
 type Holder
 	export var p as Pair
 
-	export static function create() returns Holder
+	static function create() returns Holder
 		return Self{p: (2, 4)}
 	end 'create'
 
-	export function pair() returns Pair
+	function pair() returns Pair
 		return (6, 8)
 	end 'pair'
 end 'Holder'
@@ -1654,11 +1654,11 @@ and runs.
 type Sizer uses T
 	export var dummy as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{dummy: 0}
 	end 'create'
 
-	export function typeSize() returns Integer
+	function typeSize() returns Integer
 		return sizeof(T)
 	end 'typeSize'
 end 'Sizer'
@@ -1696,7 +1696,7 @@ typealias Integer = int(i64.min to i64.max)
 type Box uses T
 	export var item as T
 
-	export static function create(item T) returns Box
+	static function create(item T) returns Box
 		return Self{item: item}
 	end 'create'
 end 'Box'
@@ -1727,11 +1727,11 @@ live without being constructed.
 type Box uses Element
 	export var saved as Element
 
-	export static function create(first Element) returns Self
+	static function create(first Element) returns Self
 		return Self{ saved: first }
 	end 'create'
 
-	export function replace(next Element)
+	function replace(next Element)
 		self.saved = next
 	end 'replace'
 end 'Box'
@@ -1742,7 +1742,7 @@ typealias PairBox = Box with TPair
 type Holder
 	export var b as PairBox
 
-	export static function create(b PairBox) returns Self
+	static function create(b PairBox) returns Self
 		return Self{b: b}
 	end 'create'
 end 'Holder'
@@ -1895,7 +1895,7 @@ the entry loop never ran.
 type Point
 	export var name as String
 
-	export static function create(name String) returns Self
+	static function create(name String) returns Self
 		return Self{name: name}
 	end 'create'
 end 'Point'
@@ -1958,7 +1958,7 @@ and a tuple type no signature spells is minted by the literal itself from elemen
 type A
 	export var n as Integer
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 end 'A'
@@ -1966,7 +1966,7 @@ end 'A'
 type B
 	export var m as Integer
 
-	export static function create(m Integer) returns Self
+	static function create(m Integer) returns Self
 		return Self{m: m}
 	end 'create'
 end 'B'
@@ -1993,7 +1993,7 @@ The scalar-element control.
 type A
 	export var n as Integer
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 end 'A'
@@ -2020,7 +2020,7 @@ tuple with no release of its own.
 type A
 	export var n as Integer
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 end 'A'
@@ -2028,7 +2028,7 @@ end 'A'
 type B
 	export var m as Integer
 
-	export static function create(m Integer) returns Self
+	static function create(m Integer) returns Self
 		return Self{m: m}
 	end 'create'
 end 'B'
@@ -2056,7 +2056,7 @@ behind is what the caller reads. Its twin below keeps `pair` a call.
 type A
 	export var n as Integer
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 end 'A'
@@ -2064,7 +2064,7 @@ end 'A'
 type B
 	export var m as Integer
 
-	export static function create(m Integer) returns Self
+	static function create(m Integer) returns Self
 		return Self{m: m}
 	end 'create'
 end 'B'
@@ -2092,7 +2092,7 @@ hands back. 10 + 12 + 9 + 11.
 type A
 	export var n as Integer
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 end 'A'
@@ -2100,7 +2100,7 @@ end 'A'
 type B
 	export var m as Integer
 
-	export static function create(m Integer) returns Self
+	static function create(m Integer) returns Self
 		return Self{m: m}
 	end 'create'
 end 'B'
@@ -2128,7 +2128,7 @@ Both elements are the SAME record type — the shape that released BOTH.
 type A
 	export var n as Integer
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 end 'A'
@@ -2155,7 +2155,7 @@ No locals at all: both elements are `create` results moved straight into the lit
 type A
 	export var n as Integer
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 end 'A'
@@ -2163,7 +2163,7 @@ end 'A'
 type B
 	export var m as Integer
 
-	export static function create(m Integer) returns Self
+	static function create(m Integer) returns Self
 		return Self{m: m}
 	end 'create'
 end 'B'
@@ -2188,7 +2188,7 @@ The literal is `(b, a)`, so the record the defect released sits at element 0.
 type A
 	export var n as Integer
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 end 'A'
@@ -2196,7 +2196,7 @@ end 'A'
 type B
 	export var m as Integer
 
-	export static function create(m Integer) returns Self
+	static function create(m Integer) returns Self
 		return Self{m: m}
 	end 'create'
 end 'B'
@@ -2224,7 +2224,7 @@ element moved to `a`, which located the decision in interner order rather than i
 type B
 	export var m as Integer
 
-	export static function create(m Integer) returns Self
+	static function create(m Integer) returns Self
 		return Self{m: m}
 	end 'create'
 end 'B'
@@ -2232,7 +2232,7 @@ end 'B'
 type A
 	export var n as Integer
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 end 'A'
@@ -2261,7 +2261,7 @@ read.
 type A
 	export var n as Integer
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 end 'A'
@@ -2269,7 +2269,7 @@ end 'A'
 type B
 	export var m as Integer
 
-	export static function create(m Integer) returns Self
+	static function create(m Integer) returns Self
 		return Self{m: m}
 	end 'create'
 end 'B'
@@ -2294,7 +2294,7 @@ literal's element classification rather than in `return`.
 type A
 	export var n as Integer
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 end 'A'
@@ -2302,7 +2302,7 @@ end 'A'
 type B
 	export var m as Integer
 
-	export static function create(m Integer) returns Self
+	static function create(m Integer) returns Self
 		return Self{m: m}
 	end 'create'
 end 'B'
@@ -2332,7 +2332,7 @@ layout. 40 + 2 + 0 + 0.
 type A
 	export var n as Integer
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 end 'A'
@@ -2340,7 +2340,7 @@ end 'A'
 type B
 	export var m as Integer
 
-	export static function create(m Integer) returns Self
+	static function create(m Integer) returns Self
 		return Self{m: m}
 	end 'create'
 end 'B'

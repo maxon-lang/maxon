@@ -92,10 +92,10 @@ typealias Integer = int(0 to u32.max)
 type Pair uses T where T is Comparable
 	export var a as T
 	export var b as T
-	export static function create(a T, b T) returns Self
+	static function create(a T, b T) returns Self
 		return Self{ a: a, b: b }
 	end 'create'
-	export function order() returns Integer
+	function order() returns Integer
 		let o = self.a.compare(self.b)
 		let r = match o 'check'
 			lessThan gives 1
@@ -153,10 +153,10 @@ typealias Coord = int(0 to 1000)
 
 type Point implements Comparable
 	export var x as Coord
-	export static function create(x Coord) returns Self
+	static function create(x Coord) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function compare(other Point) returns Ordering
+	function compare(other Point) returns Ordering
 		if self.x < other.x 'lt'
 			return Ordering.lessThan
 		end 'lt'
@@ -194,22 +194,22 @@ typealias Integer = int(0 to u32.max)
 type Pair uses T where T is Comparable
 	export var a as T
 	export var b as T
-	export static function create(a T, b T) returns Self
+	static function create(a T, b T) returns Self
 		return Self{ a: a, b: b }
 	end 'create'
-	export function lt() returns bool
+	function lt() returns bool
 		return self.a < self.b
 	end 'lt'
-	export function le() returns bool
+	function le() returns bool
 		return self.a <= self.b
 	end 'le'
-	export function gt() returns bool
+	function gt() returns bool
 		return self.a > self.b
 	end 'gt'
-	export function ge() returns bool
+	function ge() returns bool
 		return self.a >= self.b
 	end 'ge'
-	export function mask() returns Integer
+	function mask() returns Integer
 		var m = 0 as Integer
 		if self.lt() 'a1'
 			m = m + 1
@@ -259,13 +259,13 @@ typealias Integer = int(0 to u32.max)
 type Pair uses T where T is Comparable
 	export var a as T
 	export var b as T
-	export static function create(a T, b T) returns Self
+	static function create(a T, b T) returns Self
 		return Self{ a: a, b: b }
 	end 'create'
-	export function forwardLess() returns bool
+	function forwardLess() returns bool
 		return self.a < self.b
 	end 'forwardLess'
-	export function reverseLess() returns bool
+	function reverseLess() returns bool
 		return self.b < self.a
 	end 'reverseLess'
 end 'Pair'
@@ -297,10 +297,10 @@ typealias Integer = int(0 to u32.max)
 
 type Box uses T
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function get() returns T
+	function get() returns T
 		return self.item
 	end 'get'
 end 'Box'
@@ -332,10 +332,10 @@ typealias Counter = int(0 to 1000)
 type Pair uses T where T is Comparable
 	export var a as T
 	export var b as T
-	export static function create(a T, b T) returns Self
+	static function create(a T, b T) returns Self
 		return Self{ a: a, b: b }
 	end 'create'
-	export function isLess() returns bool
+	function isLess() returns bool
 		let o = self.a.compare(self.b)
 		let r = match o 'check'
 			lessThan gives true
@@ -344,7 +344,7 @@ type Pair uses T where T is Comparable
 		end 'check'
 		return r
 	end 'isLess'
-	export function opLess() returns bool
+	function opLess() returns bool
 		return self.a < self.b
 	end 'opLess'
 end 'Pair'
@@ -382,7 +382,7 @@ typealias Coord = int(0 to 1000)
 
 type BadPoint implements Comparable
 	export var x as Coord
-	export static function create(x Coord) returns Self
+	static function create(x Coord) returns Self
 		return Self{ x: x }
 	end 'create'
 end 'BadPoint'
@@ -405,10 +405,10 @@ typealias Integer = int(0 to u32.max)
 
 type WrongPoint implements Comparable
 	export var x as Coord
-	export static function create(x Coord) returns Self
+	static function create(x Coord) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function compare(other WrongPoint) returns Integer
+	function compare(other WrongPoint) returns Integer
 		return self.x
 	end 'compare'
 end 'WrongPoint'
@@ -430,7 +430,7 @@ typealias Coord = int(0 to 1000)
 
 type Plain
 	export var v as Coord
-	export static function create(v Coord) returns Self
+	static function create(v Coord) returns Self
 		return Self{ v: v }
 	end 'create'
 end 'Plain'
@@ -438,7 +438,7 @@ end 'Plain'
 type Pair uses T where T is Comparable
 	export var a as T
 	export var b as T
-	export static function create(a T, b T) returns Self
+	static function create(a T, b T) returns Self
 		return Self{ a: a, b: b }
 	end 'create'
 end 'Pair'
@@ -461,7 +461,7 @@ type argument. Target-independent.
 type Box uses T
 	var item as T
 
-	export function lt(other T) returns bool
+	function lt(other T) returns bool
 		return item < other
 	end 'lt'
 end 'Box'
@@ -485,10 +485,10 @@ typealias Coord = int(0 to 1000)
 
 type Point implements Comparable
 	export var x as Coord
-	export static function create(x Coord) returns Self
+	static function create(x Coord) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function compare(other Point) returns Ordering
+	function compare(other Point) returns Ordering
 		if self.x < other.x 'lt'
 			return Ordering.lessThan
 		end 'lt'
@@ -501,10 +501,10 @@ end 'Point'
 
 type Box uses T where T is Comparable
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function belowLiteral() returns bool
+	function belowLiteral() returns bool
 		return self.item < 42
 	end 'belowLiteral'
 end 'Box'
@@ -548,10 +548,10 @@ typealias Integer = int(0 to u32.max)
 
 type Box uses T where T is Hashable
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function itemHash() returns HashValue
+	function itemHash() returns HashValue
 		return self.item.hash()
 	end 'itemHash'
 end 'Box'
@@ -580,7 +580,7 @@ typealias Small = int(0 to 100)
 
 type HashValue
 	export var v as Small
-	export static function create(v Small) returns Self
+	static function create(v Small) returns Self
 		return Self{ v: v }
 	end 'create'
 end 'HashValue'
@@ -604,10 +604,10 @@ typealias Integer = int(0 to u32.max)
 
 type Point implements Comparable
 	export var x as Coord
-	export static function create(x Coord) returns Self
+	static function create(x Coord) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function compare(other Point) returns Ordering
+	function compare(other Point) returns Ordering
 		if self.x < other.x 'lt'
 			return Ordering.lessThan
 		end 'lt'
@@ -618,10 +618,10 @@ end 'Point'
 type Mix uses A, B where A is Comparable, B is Comparable
 	export var a as A
 	export var b as B
-	export static function create(a A, b B) returns Self
+	static function create(a A, b B) returns Self
 		return Self{ a: a, b: b }
 	end 'create'
-	export function cross() returns bool
+	function cross() returns bool
 		return self.a < self.b
 	end 'cross'
 end 'Mix'
@@ -647,10 +647,10 @@ typealias Integer = int(0 to u32.max)
 
 type Point implements Comparable
 	export var x as Coord
-	export static function create(x Coord) returns Self
+	static function create(x Coord) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function compare(other Point) returns Ordering
+	function compare(other Point) returns Ordering
 		if self.x < other.x 'lt'
 			return Ordering.lessThan
 		end 'lt'
@@ -661,10 +661,10 @@ end 'Point'
 type Mix uses A, B where A is Comparable, B is Comparable
 	export var a as A
 	export var b as B
-	export static function create(a A, b B) returns Self
+	static function create(a A, b B) returns Self
 		return Self{ a: a, b: b }
 	end 'create'
-	export function crossMethod() returns Ordering
+	function crossMethod() returns Ordering
 		return self.a.compare(self.b)
 	end 'crossMethod'
 end 'Mix'
@@ -694,10 +694,10 @@ end 'Weird'
 
 type Thing implements Weird
 	export var v as Integer
-	export static function create(v Integer) returns Self
+	static function create(v Integer) returns Self
 		return Self{ v: v }
 	end 'create'
-	export function compare(other Thing) returns Integer
+	function compare(other Thing) returns Integer
 		return 0
 	end 'compare'
 end 'Thing'
@@ -705,10 +705,10 @@ end 'Thing'
 type Pair uses T where T is Weird
 	export var a as T
 	export var b as T
-	export static function create(a T, b T) returns Self
+	static function create(a T, b T) returns Self
 		return Self{ a: a, b: b }
 	end 'create'
-	export function lt() returns bool
+	function lt() returns bool
 		return self.a < self.b
 	end 'lt'
 end 'Pair'

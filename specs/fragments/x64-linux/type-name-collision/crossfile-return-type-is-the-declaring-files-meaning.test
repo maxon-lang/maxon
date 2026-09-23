@@ -2,12 +2,14 @@
 // --- file: a.maxon
 typealias Widget = int(0 to 5)
 
-export function fromA() returns Widget
-	return 3
+export function fromA() returns ExitCode
+	let w = 3 as Widget
+
+	return w as ExitCode
 end 'fromA'
 
 // --- file: b.maxon
-typealias Slot = int(0 to 100)
+export typealias Slot = int(0 to 100)
 
 export type Widget
 	export var value as Slot
@@ -25,7 +27,7 @@ end 'fromB'
 function main() returns ExitCode
 	let boxed = fromB()
 
-	return fromA() + boxed.value
+	return fromA() + (boxed.value as ExitCode)
 end 'main'
 ---
 ExitCode: 12
@@ -52,14 +54,14 @@ func @main {
   __il_cont:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.leaRegRegImm32 rbx, rax, 3
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 rbx, 255
     x64.jcc greater, __rc_panic
   __rc_ok#1:
-    x64.movRegReg rcx, r8
-    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg rbx

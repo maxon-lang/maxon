@@ -499,7 +499,7 @@ type Counter
 		return Self{n: 0}
 	end 'create'
 
-	export function bump()
+	function bump()
 		self.n = self.n + 1
 	end 'bump'
 end 'Counter'
@@ -533,7 +533,7 @@ type Counter
 		return Self{n: 0}
 	end 'create'
 
-	export function bump()
+	function bump()
 		self.n = self.n + 1
 	end 'bump'
 end 'Counter'
@@ -570,7 +570,7 @@ type Counter
 		return Self{n: 0}
 	end 'create'
 
-	export function bump()
+	function bump()
 		self.n = self.n + 1
 	end 'bump'
 end 'Counter'
@@ -756,7 +756,7 @@ type Counter
 		return Self{n: 0}
 	end 'create'
 
-	export function bump()
+	function bump()
 		n = n + 1
 	end 'bump'
 end 'Counter'
@@ -782,7 +782,7 @@ type Counter
 		return Self{n: 0}
 	end 'create'
 
-	export function bump()
+	function bump()
 		n = n + 1
 	end 'bump'
 end 'Counter'
@@ -811,11 +811,11 @@ type Counter
 		return Self{n: 0}
 	end 'create'
 
-	export function bump()
+	function bump()
 		n = n + 1
 	end 'bump'
 
-	export function bumpTwice()
+	function bumpTwice()
 		bump()
 		bump()
 	end 'bumpTwice'
@@ -845,11 +845,11 @@ type Counter
 		return Self{n: 0}
 	end 'create'
 
-	export function bump()
+	function bump()
 		n = n + 1
 	end 'bump'
 
-	export function bumpTwice()
+	function bumpTwice()
 		bump()
 		bump()
 	end 'bumpTwice'
@@ -876,7 +876,7 @@ type Counter
 		return Self{n: 7}
 	end 'create'
 
-	export function value() returns Integer
+	function value() returns Integer
 		return n
 	end 'value'
 end 'Counter'
@@ -906,11 +906,11 @@ type Bag
 		return Self{items: IntArray.create()}
 	end 'create'
 
-	export function add(v Integer)
+	function add(v Integer)
 		items.push(v)
 	end 'add'
 
-	export function size() returns Integer
+	function size() returns Integer
 		return items.count()
 	end 'size'
 end 'Bag'
@@ -937,11 +937,11 @@ type Bag
 		return Self{items: IntArray.create()}
 	end 'create'
 
-	export function add(v Integer)
+	function add(v Integer)
 		items.push(v)
 	end 'add'
 
-	export function size() returns Integer
+	function size() returns Integer
 		return items.count()
 	end 'size'
 end 'Bag'
@@ -1000,12 +1000,12 @@ type Bag
 		return Self{items: IntArray.create()}
 	end 'create'
 
-	export function add(v Integer)
+	function add(v Integer)
 		items.push(v)
 		grow(items)
 	end 'add'
 
-	export function size() returns Integer
+	function size() returns Integer
 		return items.count()
 	end 'size'
 end 'Bag'
@@ -1040,11 +1040,11 @@ type Bag
 		return Self{items: IntArray.create()}
 	end 'create'
 
-	export function add()
+	function add()
 		grow(items)
 	end 'add'
 
-	export function size() returns Integer
+	function size() returns Integer
 		return items.count()
 	end 'size'
 end 'Bag'

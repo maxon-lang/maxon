@@ -110,10 +110,10 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
-	export function get() returns T
+	function get() returns T
 		return self.value
 	end 'get'
 end 'Box'

@@ -55,10 +55,10 @@ over the bytes. Three boxed Strings are constructed, hashed, and dropped at scop
 ```maxon
 type Box uses T where T is Hashable
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function itemHash() returns HashValue
+	function itemHash() returns HashValue
 		return self.item.hash()
 	end 'itemHash'
 end 'Box'
@@ -92,10 +92,10 @@ stays live and droppable across both comparisons.
 ```maxon
 type Box uses T where T is Equatable
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function sameAs(other T) returns bool
+	function sameAs(other T) returns bool
 		return self.item.equals(other)
 	end 'sameAs'
 end 'Box'
@@ -123,13 +123,13 @@ BOTH witnesses on a `String` argument, each to its synthesized impl.
 ```maxon
 type Key uses T where T is Hashable and Equatable
 	export var value as T
-	export static function create(value T) returns Self
+	static function create(value T) returns Self
 		return Self{ value: value }
 	end 'create'
-	export function digest() returns HashValue
+	function digest() returns HashValue
 		return self.value.hash()
 	end 'digest'
-	export function matches(other T) returns bool
+	function matches(other T) returns bool
 		return self.value.equals(other)
 	end 'matches'
 end 'Key'
@@ -165,7 +165,7 @@ type Box uses T where T is Equatable
 		return Self{item: item}
 	end 'create'
 
-	export function eq(other T) returns bool
+	function eq(other T) returns bool
 		return item == other
 	end 'eq'
 end 'Box'
@@ -192,10 +192,10 @@ would leak. Neither happens: `acc` reaches 100 and the leak gate stays green.
 ```maxon
 type Box uses T where T is Hashable
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function itemHash() returns HashValue
+	function itemHash() returns HashValue
 		return self.item.hash()
 	end 'itemHash'
 end 'Box'
@@ -258,10 +258,10 @@ holds a relocation to `String.hash`.
 ```maxon
 type Box uses T where T is Hashable
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function itemHash() returns HashValue
+	function itemHash() returns HashValue
 		return self.item.hash()
 	end 'itemHash'
 end 'Box'
@@ -397,7 +397,7 @@ anywhere: `Box with String`'s `itemHash()` of `""` returned **7** (the user's bo
 type String
 	export var value as ExitCode
 
-	export function hash() returns HashValue
+	function hash() returns HashValue
 		return 7
 	end 'hash'
 end 'String'

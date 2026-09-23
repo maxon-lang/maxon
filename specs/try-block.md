@@ -1439,21 +1439,21 @@ member names apart and dissolves the very collision this case is about — a mul
 batched (`FragmentGenerator.IsBatchable`), so this is the shape in which the case can still fail.
 ```maxon
 // --- file: errors.maxon
-typealias Score = int(0 to 100)
+export typealias Score = int(0 to 100)
 
-enum A_B implements Error
+export enum A_B implements Error
     kaboom
 end 'A_B'
 
-enum C implements Error
+export enum C implements Error
     splat
 end 'C'
 
-enum A implements Error
+export enum A implements Error
     zonk
 end 'A'
 
-enum B_C implements Error
+export enum B_C implements Error
     whap
 end 'B_C'
 

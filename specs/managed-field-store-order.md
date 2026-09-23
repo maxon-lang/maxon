@@ -64,7 +64,7 @@ typealias NumArray = Array with Num
 type Blk
 	export var args as NumArray
 
-	export static function create() returns Blk
+	static function create() returns Blk
 		return Self{args: NumArray.create()}
 	end 'create'
 end 'Blk'
@@ -103,11 +103,11 @@ typealias NumArray = Array with Num
 type Blk
 	export var args as NumArray
 
-	export static function create() returns Blk
+	static function create() returns Blk
 		return Self{args: NumArray.create()}
 	end 'create'
 
-	export function absorb(other Blk)
+	function absorb(other Blk)
 		self.args = other.args
 	end 'absorb'
 end 'Blk'
@@ -144,7 +144,7 @@ back its original text.
 type Rec
 	export var name as String
 
-	export static function create(n String) returns Rec
+	static function create(n String) returns Rec
 		return Self{name: n}
 	end 'create'
 end 'Rec'

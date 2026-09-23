@@ -11,12 +11,19 @@ ExitCode: 0
 ---
 data {
   __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
-  __slab_arena_list@8 = i64 0
-  __slab_arena_map_l1@16 = i64 0
-  __slab_state@24 = i64 0
-  __mrt_console_probe_stdin@32 = i8 0
-  __mrt_console_probe_stdout@33 = i8 0
-  __mrt_console_probe_stderr@34 = i8 0
+  __sched_tls_teb_offset@8 = i64 0
+  __sched_allm@16 = i64 0
+  __sched_lock@24 = i64 0
+  __sched_preempt_ext_lock@32 = i64 0
+  __sched_preempt_context@40 = i64 0
+  __slab_arena_list@48 = i64 0
+  __slab_arena_map_l1@56 = i64 0
+  __slab_state@64 = i64 0
+  __ds_base@72 = i64 0
+  __dbg_ctl@80 = i64 0
+  __mrt_console_probe_stdin@88 = i8 0
+  __mrt_console_probe_stdout@89 = i8 0
+  __mrt_console_probe_stderr@90 = i8 0
 }
 
 func @main {
@@ -34,10 +41,10 @@ func @main {
     x64.jcc notEqual, tryerr
   __il_body#12:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-  __il_body#36:
-    x64.loadRegBaseDisp.word64 r12, [rax + 8]
-  __il_cont#35:
-    x64.cmpRegImm32 r12, 1
+  __il_body#26:
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+  __il_cont#25:
+    x64.cmpRegImm32 rax, 1
     x64.movRegImm32 rax, 0
     x64.jcc below, scmerge#14
   andrhs#13:
@@ -48,83 +55,43 @@ func @main {
     x64.setccReg equal, rax
   scmerge#14:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __il_body#24
+    x64.jcc equal, __il_body#20
   leadingSeparator:
     x64.movRegImm32 rax, 1
     x64.jmp __il_cont#11
-  __il_body#24:
+  __il_body#20:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect FilePath.hasDrivePrefix
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, scmerge#22
+  andrhs#21:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-  __il_body#38:
+  __il_body#28:
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
-  __il_cont#37:
+  __il_cont#27:
     x64.cmpRegImm32 rax, 2
-    x64.jcc aboveEqual, ifcont#26
-  tooShort:
-    x64.movRegImm32 rax, 0
-    x64.jmp __il_cont#23
-  ifcont#26:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.movRegImm32 rdx, 0
-    x64.callDirect String.byteAtOrPanic
-    x64.cmpRegImm32 r8, 65
-    x64.movRegImm32 rax, 0
-    x64.jcc less, scmerge#28
-  andrhs#27:
-    x64.cmpRegImm32 r8, 90
-    x64.setccReg lessEqual, rax
-  scmerge#28:
-    x64.movRegImm32 rcx, 1
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, scmerge#32
-  orrhs:
-    x64.cmpRegImm32 r8, 97
-    x64.movRegImm32 rax, 0
-    x64.jcc less, scmerge#31
-  andrhs#30:
-    x64.cmpRegImm32 r8, 122
-    x64.setccReg lessEqual, rax
-  scmerge#31:
-    x64.movRegReg rcx, rax
-  scmerge#32:
-    x64.movRegImm32 rax, 0
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, __il_cont#23
-  andrhs#33:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.movRegImm32 rdx, 1
-    x64.callDirect String.byteAtOrPanic
-    x64.cmpRegImm32 r8, 58
-    x64.setccReg equal, rax
-  __il_cont#23:
+    x64.setccReg above, rax
+  scmerge#22:
     x64.movRegImm32 rcx, 0
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, critsplit#40
-  andrhs#17:
-    x64.cmpRegImm32 r12, 3
-    x64.setccReg aboveEqual, rax
-    x64.jmp scmerge#18
-  critsplit#40:
-    x64.movRegReg rax, rcx
-  scmerge#18:
-    x64.movRegImm32 rcx, 0
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, critsplit#39
-  andrhs#19:
+    x64.jcc equal, critsplit
+  andrhs#23:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.movRegImm32 rdx, 2
     x64.callDirect String.byteAtOrPanic
     x64.cmpRegImm32 r8, 92
     x64.setccReg equal, rax
-    x64.jmp scmerge#20
-  critsplit#39:
+    x64.jmp __il_cont#19
+  critsplit:
     x64.movRegReg rax, rcx
-  scmerge#20:
+  __il_cont#19:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#22
+    x64.jcc equal, ifcont#18
   driveRoot:
     x64.movRegImm32 rax, 1
     x64.jmp __il_cont#11
-  ifcont#22:
+  ifcont#18:
     x64.movRegImm32 rax, 0
   __il_cont#11:
     x64.xorRegImm32 rax, rax, 1
@@ -146,7 +113,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_31]  ; "panic at FilePath.maxon:34: FilePath: invalid path\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_31]  ; "panic at FilePath.maxon:35: FilePath: invalid path\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

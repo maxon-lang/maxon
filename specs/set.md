@@ -301,11 +301,11 @@ type Reg
 		return Self{seen: IntSet.create()}
 	end 'create'
 
-	export function add(v Int)
+	function add(v Int)
 		seen.insert(v)
 	end 'add'
 
-	export function size() returns Int
+	function size() returns Int
 		return seen.count()
 	end 'size'
 end 'Reg'

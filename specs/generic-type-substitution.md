@@ -110,12 +110,12 @@ Both bodies spell the composite as `TArr`: an alias is a brand, and the value `O
 typealias Integer = int(i64.min to i64.max)
 
 type Inner uses T
-	typealias TArr = Array with T
+	export typealias TArr = Array with T
 	var v as TArr
-	export static function make(v TArr) returns Self
+	static function make(v TArr) returns Self
 		return Self{v: v}
 	end 'make'
-	export function first() returns T throws ArrayError
+	function first() returns T throws ArrayError
 		return try v.get(0)
 	end 'first'
 end 'Inner'
@@ -123,10 +123,10 @@ end 'Inner'
 type Outer uses T
 	typealias TArr = Array with T
 	var items as TArr
-	export static function create(items TArr) returns Self
+	static function create(items TArr) returns Self
 		return Self{items: items}
 	end 'create'
-	export function wrap() returns Inner
+	function wrap() returns Inner
 		return Inner.make(items)
 	end 'wrap'
 end 'Outer'
@@ -153,20 +153,20 @@ typealias Integer = int(i64.min to i64.max)
 
 type Cell uses T
 	export var v as T
-	export static function make(v T) returns Self
+	static function make(v T) returns Self
 		return Self{v: v}
 	end 'make'
-	export function get() returns T
+	function get() returns T
 		return self.v
 	end 'get'
 end 'Cell'
 
 type Holder uses T
 	export var cell as Cell
-	export static function create(cell Cell) returns Self
+	static function create(cell Cell) returns Self
 		return Self{cell: cell}
 	end 'create'
-	export function value() returns T
+	function value() returns T
 		return self.cell.get()
 	end 'value'
 end 'Holder'
@@ -191,20 +191,20 @@ stranded heap record — exit 101, the leak gate — while the program prints th
 ```maxon
 type Cell uses T
 	export var v as T
-	export static function make(v T) returns Self
+	static function make(v T) returns Self
 		return Self{v: v}
 	end 'make'
-	export function get() returns T
+	function get() returns T
 		return self.v
 	end 'get'
 end 'Cell'
 
 type Holder uses T
 	export var cell as Cell
-	export static function create(cell Cell) returns Self
+	static function create(cell Cell) returns Self
 		return Self{cell: cell}
 	end 'create'
-	export function value() returns T
+	function value() returns T
 		return self.cell.get()
 	end 'value'
 end 'Holder'
@@ -231,21 +231,21 @@ UNSUBSTITUTED `Cell with Holder.T` — the trivial box drop, and a stranded stri
 ```maxon
 type Cell uses T
 	export var v as T
-	export static function make(v T) returns Self
+	static function make(v T) returns Self
 		return Self{v: v}
 	end 'make'
-	export function get() returns T
+	function get() returns T
 		return self.v
 	end 'get'
 end 'Cell'
 
 type Holder uses T
-	typealias Inner = Cell with T
+	export typealias Inner = Cell with T
 	export var cell as Inner
-	export static function create(cell Inner) returns Self
+	static function create(cell Inner) returns Self
 		return Self{cell: cell}
 	end 'create'
-	export function value() returns T
+	function value() returns T
 		return self.cell.get()
 	end 'value'
 end 'Holder'
@@ -269,30 +269,30 @@ Each level's field is a bare generic name at the level above's parameters, so th
 ```maxon
 type Cell uses T
 	export var v as T
-	export static function make(v T) returns Self
+	static function make(v T) returns Self
 		return Self{v: v}
 	end 'make'
-	export function get() returns T
+	function get() returns T
 		return self.v
 	end 'get'
 end 'Cell'
 
 type Mid uses T
 	export var cell as Cell
-	export static function create(cell Cell) returns Self
+	static function create(cell Cell) returns Self
 		return Self{cell: cell}
 	end 'create'
-	export function value() returns T
+	function value() returns T
 		return self.cell.get()
 	end 'value'
 end 'Mid'
 
 type Top uses T
 	export var mid as Mid
-	export static function create(mid Mid) returns Self
+	static function create(mid Mid) returns Self
 		return Self{mid: mid}
 	end 'create'
-	export function value() returns T
+	function value() returns T
 		return self.mid.value()
 	end 'value'
 end 'Top'
@@ -319,20 +319,20 @@ one that cannot.
 ```maxon
 type Cell uses T
 	export var v as T
-	export static function make(v T) returns Self
+	static function make(v T) returns Self
 		return Self{v: v}
 	end 'make'
-	export function get() returns T
+	function get() returns T
 		return self.v
 	end 'get'
 end 'Cell'
 
 type Holder uses T
 	export var cell as Cell
-	export static function create(cell Cell) returns Self
+	static function create(cell Cell) returns Self
 		return Self{cell: cell}
 	end 'create'
-	export function value() returns T
+	function value() returns T
 		return self.cell.get()
 	end 'value'
 end 'Holder'
@@ -361,17 +361,17 @@ all-trivial program — where `__mm_decref` really is every instantiation's drop
 ```maxon
 type Cell uses T
 	export var v as T
-	export static function make(v T) returns Self
+	static function make(v T) returns Self
 		return Self{v: v}
 	end 'make'
 end 'Cell'
 
 type Holder uses T
 	export var cell as Cell
-	export static function create(cell Cell) returns Self
+	static function create(cell Cell) returns Self
 		return Self{cell: cell}
 	end 'create'
-	export function replace(next Cell)
+	function replace(next Cell)
 		self.cell = next
 	end 'replace'
 end 'Holder'
@@ -397,14 +397,14 @@ element walk strands the same string when the cascade stops at the base.
 ```maxon
 type Cell uses T
 	export var v as T
-	export static function make(v T) returns Self
+	static function make(v T) returns Self
 		return Self{v: v}
 	end 'make'
 end 'Cell'
 
 type Holder uses T
 	export var cell as Cell
-	export static function create(cell Cell) returns Self
+	static function create(cell Cell) returns Self
 		return Self{cell: cell}
 	end 'create'
 end 'Holder'
@@ -444,14 +444,14 @@ other half of the same mistake.
 ```maxon
 type Cell uses T
 	export var v as T
-	export static function make(v T) returns Self
+	static function make(v T) returns Self
 		return Self{v: v}
 	end 'make'
 end 'Cell'
 
 type Holder uses T
 	export var cell as Cell
-	export static function create(cell Cell) returns Self
+	static function create(cell Cell) returns Self
 		return Self{cell: cell}
 	end 'create'
 end 'Holder'
@@ -493,20 +493,20 @@ typealias Integer = int(i64.min to i64.max)
 
 type Cell uses T
 	export var v as T
-	export static function make(v T) returns Self
+	static function make(v T) returns Self
 		return Self{v: v}
 	end 'make'
-	export function get() returns T
+	function get() returns T
 		return self.v
 	end 'get'
 end 'Cell'
 
 type Holder uses T
 	export var cell as Cell
-	export static function create(cell Cell) returns Self
+	static function create(cell Cell) returns Self
 		return Self{cell: cell}
 	end 'create'
-	export function value() returns T
+	function value() returns T
 		return self.cell.get()
 	end 'value'
 end 'Holder'
@@ -535,20 +535,20 @@ typealias Integer = int(i64.min to i64.max)
 type Slot uses Key, Value
 	export var k as Key
 	export var v as Value
-	export static function make(k Key, v Value) returns Self
+	static function make(k Key, v Value) returns Self
 		return Self{k: k, v: v}
 	end 'make'
-	export function value() returns Value
+	function value() returns Value
 		return self.v
 	end 'value'
 end 'Slot'
 
 type Table uses Key, Value
 	export var one as Slot
-	export static function create(one Slot) returns Self
+	static function create(one Slot) returns Self
 		return Self{one: one}
 	end 'create'
-	export function only() returns Slot
+	function only() returns Slot
 		return self.one
 	end 'only'
 end 'Table'
@@ -579,23 +579,23 @@ the value is the bare base, so calling it would be a second refusal of the same 
 typealias Integer = int(i64.min to i64.max)
 
 type Inner uses U
-	typealias UArr = Array with U
+	export typealias UArr = Array with U
 	var v as UArr
-	export static function make(v UArr) returns Self
+	static function make(v UArr) returns Self
 		return Self{v: v}
 	end 'make'
-	export function first() returns U throws ArrayError
+	function first() returns U throws ArrayError
 		return try v.get(0)
 	end 'first'
 end 'Inner'
 
 type Outer uses T
-	typealias OArr = Array with T
+	export typealias OArr = Array with T
 	var items as OArr
-	export static function create(items OArr) returns Self
+	static function create(items OArr) returns Self
 		return Self{items: items}
 	end 'create'
-	export function wrap() returns Inner
+	function wrap() returns Inner
 		return Inner.make(items)
 	end 'wrap'
 end 'Outer'
@@ -626,17 +626,17 @@ and the `String` is never released.
 ```maxon
 type Box uses Element
 	export var saved as Element
-	export static function create(first Element) returns Self
+	static function create(first Element) returns Self
 		return Self{saved: first}
 	end 'create'
-	export function replace(next Element)
+	function replace(next Element)
 		self.saved = next
 	end 'replace'
 end 'Box'
 
 type Outer uses T
 	export var inner as Box
-	export static function create(first T) returns Self
+	static function create(first T) returns Self
 		return Self{inner: Box.create(first)}
 	end 'create'
 end 'Outer'
@@ -665,11 +665,11 @@ type Holder uses Element
 
 	var slot as Slot
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{slot: Slot.create()}
 	end 'create'
 
-	export function size() returns Int
+	function size() returns Int
 		return slot.count()
 	end 'size'
 end 'Holder'
@@ -677,11 +677,11 @@ end 'Holder'
 type Outer uses T
 	var holder as Holder
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{holder: Holder.create()}
 	end 'create'
 
-	export function size() returns Int
+	function size() returns Int
 		return holder.size()
 	end 'size'
 end 'Outer'
@@ -707,11 +707,11 @@ typealias Int = int(i64.min to i64.max)
 type Tag uses Element
 	var n as Int
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 3}
 	end 'create'
 
-	export function accepts(_ Element) returns Int
+	function accepts(_ Element) returns Int
 		return n
 	end 'accepts'
 end 'Tag'
@@ -719,11 +719,11 @@ end 'Tag'
 type Outer uses T
 	var tag as Tag
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{tag: Tag.create()}
 	end 'create'
 
-	export function probe(x T) returns Int
+	function probe(x T) returns Int
 		return tag.accepts(x)
 	end 'probe'
 end 'Outer'
@@ -749,11 +749,11 @@ typealias Int = int(i64.min to i64.max)
 type Tag uses Element
 	var n as Int
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 3}
 	end 'create'
 
-	export function width() returns Int
+	function width() returns Int
 		return sizeof(Element)
 	end 'width'
 end 'Tag'
@@ -761,11 +761,11 @@ end 'Tag'
 type Outer uses T
 	var tag as Tag
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{tag: Tag.create()}
 	end 'create'
 
-	export function width() returns Int
+	function width() returns Int
 		return tag.width()
 	end 'width'
 end 'Outer'
@@ -793,11 +793,11 @@ type Holder uses Element
 
 	var slot as Slot
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{slot: Slot.create()}
 	end 'create'
 
-	export function size() returns Int
+	function size() returns Int
 		return slot.count()
 	end 'size'
 end 'Holder'
@@ -821,11 +821,11 @@ typealias Int = int(i64.min to i64.max)
 type Tag uses Element
 	var n as Int
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 3}
 	end 'create'
 
-	export function width() returns Int
+	function width() returns Int
 		return sizeof(Element)
 	end 'width'
 end 'Tag'
@@ -851,11 +851,11 @@ typealias IntArray = Array with Int
 type Box uses Element
 	export var n as Int
 
-	export static function create(_ Element) returns Self
+	static function create(_ Element) returns Self
 		return Self{n: 1}
 	end 'create'
 
-	export static function create(first IntArray) returns Self
+	static function create(first IntArray) returns Self
 		return Self{n: first.count()}
 	end 'create'
 end 'Box'
@@ -864,7 +864,7 @@ type Outer uses T
 	typealias TArr = Array with T
 	export var inner as Box
 
-	export static function create(first T) returns Self
+	static function create(first T) returns Self
 		var items = TArr.create()
 		items.push(first)
 		return Self{inner: Box.create(items)}
@@ -889,10 +889,10 @@ released with it — exit 0 rather than 101.
 ```maxon
 type Box uses Element
 	export var saved as Element
-	export static function create(first Element) returns Self
+	static function create(first Element) returns Self
 		return Self{saved: first}
 	end 'create'
-	export function replace(next Element)
+	function replace(next Element)
 		self.saved = next
 	end 'replace'
 end 'Box'
@@ -900,7 +900,7 @@ end 'Box'
 type Outer uses T
 	typealias Inner = Box with T
 	export var inner as Inner
-	export static function create(first T) returns Self
+	static function create(first T) returns Self
 		return Self{inner: Inner.create(first)}
 	end 'create'
 end 'Outer'
@@ -932,11 +932,11 @@ type Holder uses Element
 
 	var slot as Slot
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{slot: Slot.create()}
 	end 'create'
 
-	export function size() returns Int
+	function size() returns Int
 		return slot.count()
 	end 'size'
 end 'Holder'
@@ -945,11 +945,11 @@ type Outer uses T
 	typealias Held = Holder with T
 	var holder as Held
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{holder: Held.create()}
 	end 'create'
 
-	export function size() returns Int
+	function size() returns Int
 		return holder.size()
 	end 'size'
 end 'Outer'
@@ -984,11 +984,11 @@ type Holder uses Element
 
 	var slot as Slot
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{slot: Slot.create()}
 	end 'create'
 
-	export function size() returns Int
+	function size() returns Int
 		return slot.count()
 	end 'size'
 end 'Holder'
@@ -997,11 +997,11 @@ type Outer uses T
 	typealias Held = Holder with T
 	var holder as Held
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{holder: Held.create()}
 	end 'create'
 
-	export function size() returns Int
+	function size() returns Int
 		return holder.size()
 	end 'size'
 end 'Outer'
@@ -1027,11 +1027,11 @@ type Outer uses T
 	typealias Held = Holder with T
 	var holder as Held
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{holder: Held.create()}
 	end 'create'
 
-	export function size() returns Int
+	function size() returns Int
 		return holder.size()
 	end 'size'
 end 'Outer'
@@ -1049,11 +1049,11 @@ type Holder uses Element
 
 	var slot as Slot
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{slot: Slot.create()}
 	end 'create'
 
-	export function size() returns Int
+	function size() returns Int
 		return slot.count()
 	end 'size'
 end 'Holder'
@@ -1069,10 +1069,10 @@ typealias Integer = int(i64.min to i64.max)
 
 type Box uses T
 	export var v as T
-	export static function make(x T) returns Self
+	static function make(x T) returns Self
 		return Self{v: x}
 	end 'make'
-	export static function twice(x T) returns Box
+	static function twice(x T) returns Box
 		return Box.make(x)
 	end 'twice'
 end 'Box'
@@ -1096,19 +1096,19 @@ element off the instance.
 typealias Integer = int(i64.min to i64.max)
 
 type Walker uses T
-	typealias TArr = Array with T
+	export typealias TArr = Array with T
 	var items as TArr
 	var at = 0
 
-	export static function create(items TArr) returns Self
+	static function create(items TArr) returns Self
 		return Self{items: items}
 	end 'create'
 
-	export function current() returns T
+	function current() returns T
 		return try items.get(at) otherwise panic("oob")
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		at = at + 1
 		if at >= items.count() 'done'
 			throw IterationError.exhausted
@@ -1163,15 +1163,15 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 type Holder uses T
-	typealias Pair = (T, T)
-	typealias Items = Array with T
+	export typealias Pair = (T, T)
+	export typealias Items = Array with T
 	var items as Items
 
-	export static function create(items Items) returns Self
+	static function create(items Items) returns Self
 		return Self{items: items}
 	end 'create'
 
-	export function pair() returns Pair
+	function pair() returns Pair
 		let a = try items.get(0) otherwise panic("oob")
 		let b = try items.get(1) otherwise panic("oob")
 		return (a, b)
@@ -1203,15 +1203,15 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 type Labeller uses T
-	typealias Tagged = (String, T)
-	typealias Items = Array with T
+	export typealias Tagged = (String, T)
+	export typealias Items = Array with T
 	var items as Items
 
-	export static function create(items Items) returns Self
+	static function create(items Items) returns Self
 		return Self{items: items}
 	end 'create'
 
-	export function tagged() returns Tagged
+	function tagged() returns Tagged
 		let v = try items.get(0) otherwise panic("oob")
 		return ("ab{items.count()}", v)
 	end 'tagged'
@@ -1237,22 +1237,22 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type BoxIter uses T implements Iterator with T
-	typealias TArr = Array with T
+	export typealias TArr = Array with T
 	var items as TArr
 	var at = 0
 
-	export static function create(items TArr) returns Self throws IterationError
+	static function create(items TArr) returns Self throws IterationError
 		if items.count() == 0 'empty'
 			throw IterationError.exhausted
 		end 'empty'
 		return Self{items: items}
 	end 'create'
 
-	export function current() returns T
+	function current() returns T
 		return try items.get(at) otherwise panic("oob")
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		at = at + 1
 		if at >= items.count() 'done'
 			throw IterationError.exhausted
@@ -1264,11 +1264,11 @@ type Box uses T implements Iterable with (T, BoxIter)
 	typealias TArr = Array with T
 	var items as TArr
 
-	export static function create(items TArr) returns Self
+	static function create(items TArr) returns Self
 		return Self{items: items}
 	end 'create'
 
-	export function createIterator() returns BoxIter throws IterationError
+	function createIterator() returns BoxIter throws IterationError
 		return try BoxIter.create(items)
 	end 'createIterator'
 end 'Box'

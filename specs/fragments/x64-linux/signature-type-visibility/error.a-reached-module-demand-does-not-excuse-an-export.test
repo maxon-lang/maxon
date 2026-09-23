@@ -1,0 +1,26 @@
+// Test: error.a-reached-module-demand-does-not-excuse-an-export
+// --- file: pkg/lib.maxon
+export type Item
+	export var n as ExitCode
+
+	export static function create(n ExitCode) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Item'
+
+module function hold(it Item) returns ExitCode
+	return it.n
+end 'hold'
+
+// --- file: pkg/sub/user.maxon
+export function entry() returns ExitCode
+	return hold(Item.create(7))
+end 'entry'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return entry()
+end 'main'
+---
+CompilerError:
+error E3093: pkg/<fragment>:3:13: exported type 'Item' is only referenced inside its declaring module subtree; consider 'module' visibility

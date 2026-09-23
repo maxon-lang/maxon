@@ -239,11 +239,11 @@ typealias Doubler = function(Integer) returns Integer
 type Counter
 	var n as Integer
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 
-	export function map(transform Doubler) returns Integer
+	function map(transform Doubler) returns Integer
 		return transform(self.n)
 	end 'map'
 end 'Counter'
@@ -348,10 +348,10 @@ for a bare `T`, rather than typing `items` against a parameter nothing at this c
 typealias Tally = int(0 to 1000)
 
 type Batch uses T
-	typealias Items = Array with T
-	typealias Inspect = function(Items) returns Tally
+	export typealias Items = Array with T
+	export typealias Inspect = function(Items) returns Tally
 
-	export static function measure(seed Items, inspect Inspect) returns Tally
+	static function measure(seed Items, inspect Inspect) returns Tally
 		return inspect(seed)
 	end 'measure'
 end 'Batch'

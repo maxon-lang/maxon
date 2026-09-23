@@ -19,17 +19,15 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __mm_alloc_count@0 = i64 0
-  __mrt_envp@8 = i64 0
-  __slab_arena_list@16 = i64 0
-  __slab_arena_map_l1@24 = i64 0
-  __slab_state@32 = i64 0
-  __ds_base@40 = i64 0
-  __ds_buf_size@48 = i64 0
-  __ds_buf_mask@56 = i64 0
-  __ds_start_ts@64 = i64 0
-  __ds_lock@72 = i64 0
-  __mm_alloc_id@80 = i64 0
+  __mrt_envp@32768 = i64 0
+  __slab_arena_list@32776 = i64 0
+  __slab_arena_map_l1@32784 = i64 0
+  __slab_state@32792 = i64 0
+  __ds_base@32800 = i64 0
+  __ds_buf_size@32808 = i64 0
+  __ds_buf_mask@32816 = i64 0
+  __ds_start_ts@32824 = i64 0
+  __ds_lock@32832 = i64 0
 }
 
 func @main {
@@ -62,16 +60,7 @@ func @main {
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 r12, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-payload-free-union-case-let-costs-no-allocation.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
@@ -83,4 +72,13 @@ func @main {
     x64.ret
   matchdead:
   matchcont:
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-payload-free-union-case-let-costs-no-allocation.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
 }

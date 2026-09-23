@@ -931,7 +931,7 @@ end 'emitMcacheSlotAddr'
 
 // The scheduler word (`SlabStateSchedulerOffset`). A `singleMachine` target never publishes one, so the
 // read is a constant there and the TLS walk behind it is never emitted — the backend has no `tlsSlotLoad`.
-export function emitSlabSchedulerWord(module StdModule, block IrBlock, state ValueId, model MachineModel, ids ValueMinter) returns ValueId
+module function emitSlabSchedulerWord(module StdModule, block IrBlock, state ValueId, model MachineModel, ids ValueMinter) returns ValueId
 	return match model 'model'
 		singleMachine gives emitConst(module, block: block, value: 0, ids: ids)
 		multiMachine gives emitLoadField(module, block: block, record: state, offset: SlabStateSchedulerOffset, ids: ids)
@@ -1090,7 +1090,7 @@ end 'slabShardProc'
 // into it carry `SlabRawShardRow` — that is what "serialised" means here, a thread serialising exactly when
 // the row it takes is the shared one — so both of that row's addresses are emitted inside the arm and no
 // edge carries either.
-type SlabShardArms
+export type SlabShardArms
 	export let schedulerWord as ValueId
 	export let sole as SlabShardSite
 	export let serial as SlabShardSite
@@ -1224,7 +1224,7 @@ end 'ownSoleEdgeArgs'
 // if-converts the test and lengthens the walk by the multiplies, the `lea`s and a `setcc` a straight-line
 // block cannot skip. That lengthening sits between a door's entry and the arm every allocation in an
 // unscheduled program lands in, which is I-cache the hot path pays for on every call.
-export function emitSlabResolveShard(module StdModule, func IrFunction, cur IrBlock, state ValueId, model MachineModel, need SlabShardNeed, traffic ThreadTraffic, ids ValueMinter, label ByteArray, heat BlockHeat = BlockHeat.normal) returns SlabShardArms
+module function emitSlabResolveShard(module StdModule, func IrFunction, cur IrBlock, state ValueId, model MachineModel, need SlabShardNeed, traffic ThreadTraffic, ids ValueMinter, label ByteArray, heat BlockHeat = BlockHeat.normal) returns SlabShardArms
 	let schedulerWord = emitSlabSchedulerWord(module, block: cur, state: state, model: model, ids: ids)
 	let arms = SlabShardArms.create(module, func: func, state: state, schedulerWord: schedulerWord, need: need, ids: ids, label: label, heat: heat)
 
@@ -2896,7 +2896,7 @@ type SpanOwnerAccessCensus
 		return Self{freeReads: false, freeToFullReads: false, freeToRawReads: false, allocReads: false, allocRawReads: false, refillPublishes: false, allocPublishes: false, allocRawPublishes: false}
 	end 'create'
 
-	export function noteFunction(name ByteArray, reads bool, publishes bool)
+	function noteFunction(name ByteArray, reads bool, publishes bool)
 		self.freeReads = self.freeReads or (reads and name == SlabFreeName)
 		self.freeToFullReads = self.freeToFullReads or (reads and name == SlabFreeToFullName)
 		self.freeToRawReads = self.freeToRawReads or (reads and name == SlabFreeToRawName)

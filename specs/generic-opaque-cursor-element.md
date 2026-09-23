@@ -69,10 +69,10 @@ of the middle of the body — the trip's release has to happen on that exit as w
 ```maxon
 typealias Int = int(i64.min to i64.max)
 
-type BagIter uses Element implements Iterator with Element
+export type BagIter uses Element implements Iterator with Element
 	var slot as Element
 
-	export static function create(v Element) returns Self
+	static function create(v Element) returns Self
 		return Self{slot: v}
 	end 'create'
 
@@ -88,7 +88,7 @@ end 'BagIter'
 type Bag uses Element implements Iterable with (Element, BagIter)
 	var slot as Element
 
-	export static function create(v Element) returns Self
+	static function create(v Element) returns Self
 		return Self{slot: v}
 	end 'create'
 
@@ -127,10 +127,10 @@ unresolved every program whose cone reached `extension Iterable` was refused.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 
-type BagIterator uses Element implements Iterator with Element
+export type BagIterator uses Element implements Iterator with Element
 	var slot as Element
 
-	export static function create(v Element) returns Self
+	static function create(v Element) returns Self
 		return Self{slot: v}
 	end 'create'
 
@@ -144,10 +144,10 @@ type BagIterator uses Element implements Iterator with Element
 end 'BagIterator'
 
 type Bag uses Element implements Iterable with (Element, BagIter)
-	typealias BagIter = BagIterator with Element
+	export typealias BagIter = BagIterator with Element
 	var slot as Element
 
-	export static function create(v Element) returns Self
+	static function create(v Element) returns Self
 		return Self{slot: v}
 	end 'create'
 
@@ -184,11 +184,11 @@ surplus one frees the `String` the bag still holds.
 ```maxon
 typealias Count = int(0 to u32.max)
 
-type BagIterator uses Element implements Iterator with Element
+export type BagIterator uses Element implements Iterator with Element
 	var slot as Element
 	var remaining as Count
 
-	export static function create(v Element, remaining Count) returns Self
+	static function create(v Element, remaining Count) returns Self
 		return Self{slot: v, remaining: remaining}
 	end 'create'
 
@@ -205,11 +205,11 @@ type BagIterator uses Element implements Iterator with Element
 end 'BagIterator'
 
 type Bag uses Element implements Iterable with (Element, BagIter)
-	typealias BagIter = BagIterator with Element
+	export typealias BagIter = BagIterator with Element
 	var slot as Element
 	let repeats as Count
 
-	export static function create(v Element, repeats Count) returns Self
+	static function create(v Element, repeats Count) returns Self
 		return Self{slot: v, repeats: repeats}
 	end 'create'
 
@@ -248,10 +248,10 @@ bag still holds.
 
 <!-- test: contains-over-a-managed-element -->
 ```maxon
-type BagIter uses Element implements Iterator with Element
+export type BagIter uses Element implements Iterator with Element
 	var slot as Element
 
-	export static function create(v Element) returns Self
+	static function create(v Element) returns Self
 		return Self{slot: v}
 	end 'create'
 
@@ -267,7 +267,7 @@ end 'BagIter'
 type Bag uses Element implements Iterable with (Element, BagIter)
 	var slot as Element
 
-	export static function create(v Element) returns Self
+	static function create(v Element) returns Self
 		return Self{slot: v}
 	end 'create'
 
@@ -309,11 +309,11 @@ matches nothing, so every trip runs.
 ```maxon
 typealias Count = int(0 to u32.max)
 
-type BagIter uses Element implements Iterator with Element
+export type BagIter uses Element implements Iterator with Element
 	var slot as Element
 	var remaining as Count
 
-	export static function create(v Element, remaining Count) returns Self
+	static function create(v Element, remaining Count) returns Self
 		return Self{slot: v, remaining: remaining}
 	end 'create'
 
@@ -333,7 +333,7 @@ type Bag uses Element implements Iterable with (Element, BagIter)
 	var slot as Element
 	let repeats as Count
 
-	export static function create(v Element, repeats Count) returns Self
+	static function create(v Element, repeats Count) returns Self
 		return Self{slot: v, repeats: repeats}
 	end 'create'
 
@@ -389,15 +389,15 @@ end 'Bag'
 
 type Collector uses Element
 	typealias ElementArray = Array with Element
-	typealias ElementCursor = Cursor with Element
-	typealias ElementBag = Bag with (Element, ElementCursor)
+	export typealias ElementCursor = Cursor with Element
+	export typealias ElementBag = Bag with (Element, ElementCursor)
 	export var items as ElementArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: ElementArray.create()}
 	end 'create'
 
-	export function count(source ElementBag) returns Integer
+	function count(source ElementBag) returns Integer
 		var n = 0 as Integer
 		for item in source 'collect'
 			n = n + 1
@@ -416,5 +416,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:23:18: Unsupported: 'count' owns an opaque type-parameter value it must release on some path, but the method reserves no layout descriptor to release it through — the shared generic body compiles once for every instantiation, so the value's destructor is read from the enclosing instance's descriptor at run time, and the parameter carrying it is reserved only for the method shapes that are known ahead of the body to need one. Three shapes reach this: a type-parameter argument handed to a `push`/`set`/`insert` on something that is NOT an `Array` and so never takes ownership of it (move it into an `Array with <type parameter>` or a type-parameter field instead); a `pop`/`remove`/`removeFirst` of an opaque element in a `static function` (do it on an instance method, which can source the descriptor from `self`); a `for … in` over a value held at a PARAMETERIZED interface, whose element is the enclosing type's own parameter and is owned per trip (store it into an `Array with <type parameter>`, which reserves the descriptor, or iterate in a method of a concrete instantiation); and a CLOSURE written inside any of them, whose lifted body is a function of its own and reserves no descriptor however well served the method around it is (do the owning work in the method and hand the closure a value it need not release)
+error E2015: <fragment>:23:11: Unsupported: 'count' owns an opaque type-parameter value it must release on some path, but the method reserves no layout descriptor to release it through — the shared generic body compiles once for every instantiation, so the value's destructor is read from the enclosing instance's descriptor at run time, and the parameter carrying it is reserved only for the method shapes that are known ahead of the body to need one. Three shapes reach this: a type-parameter argument handed to a `push`/`set`/`insert` on something that is NOT an `Array` and so never takes ownership of it (move it into an `Array with <type parameter>` or a type-parameter field instead); a `pop`/`remove`/`removeFirst` of an opaque element in a `static function` (do it on an instance method, which can source the descriptor from `self`); a `for … in` over a value held at a PARAMETERIZED interface, whose element is the enclosing type's own parameter and is owned per trip (store it into an `Array with <type parameter>`, which reserves the descriptor, or iterate in a method of a concrete instantiation); and a CLOSURE written inside any of them, whose lifted body is a function of its own and reserves no descriptor however well served the method around it is (do the owning work in the method and hand the closure a value it need not release)
 ```

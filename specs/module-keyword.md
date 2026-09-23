@@ -77,7 +77,7 @@ error E2001: specs/fragments/module-keyword/error.module-and-export-conflict.tes
 <!-- test: module-function-same-file -->
 ```maxon
 // --- file: feature/helper.maxon
-typealias Integer = int(i64.min to i64.max)
+module typealias Integer = int(i64.min to i64.max)
 
 module function helper() returns Integer
 	return 42
@@ -95,7 +95,7 @@ end 'main'
 <!-- test: module-function-same-directory -->
 ```maxon
 // --- file: feature/helper.maxon
-typealias Integer = int(i64.min to i64.max)
+module typealias Integer = int(i64.min to i64.max)
 
 module function helper() returns Integer
 	return 42
@@ -113,7 +113,7 @@ end 'main'
 <!-- test: module-function-subdirectory -->
 ```maxon
 // --- file: feature/helper.maxon
-typealias Integer = int(i64.min to i64.max)
+module typealias Integer = int(i64.min to i64.max)
 
 module function helper() returns Integer
 	return 42
@@ -131,7 +131,7 @@ end 'main'
 <!-- test: error.module-function-different-directory -->
 ```maxon
 // --- file: dir_a/helper.maxon
-typealias Integer = int(i64.min to i64.max)
+module typealias Integer = int(i64.min to i64.max)
 
 module function helper() returns Integer
 	return 42
@@ -149,7 +149,7 @@ error E3088: dir_b/specs/fragments/module-keyword/error.module-function-differen
 <!-- test: error.module-function-parent-directory -->
 ```maxon
 // --- file: feature/helper.maxon
-typealias Integer = int(i64.min to i64.max)
+module typealias Integer = int(i64.min to i64.max)
 
 module function helper() returns Integer
 	return 42
@@ -167,7 +167,7 @@ error E3088: specs/fragments/module-keyword/error.module-function-parent-directo
 <!-- test: module-type-same-directory -->
 ```maxon
 // --- file: feature/point.maxon
-typealias Integer = int(i64.min to i64.max)
+module typealias Integer = int(i64.min to i64.max)
 
 module type Point
 	module var x as Integer
@@ -243,14 +243,14 @@ end 'main'
 <!-- test: module-with-nested-call -->
 ```maxon
 // --- file: feature/inner.maxon
-typealias Integer = int(i64.min to i64.max)
+module typealias Integer = int(i64.min to i64.max)
 
 module function inner() returns Integer
 	return 22
 end 'inner'
 
 // --- file: feature/outer.maxon
-typealias Int = int(i64.min to i64.max)
+module typealias Int = int(i64.min to i64.max)
 
 module function outer() returns Int
 	return inner() + 20

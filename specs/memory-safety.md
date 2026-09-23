@@ -324,7 +324,7 @@ type Item
 		return Self{label: label}
 	end 'create'
 
-	export function rename(to String)
+	function rename(to String)
 		self.label = to
 	end 'rename'
 end 'Item'
@@ -834,7 +834,7 @@ type Item
 		return Self{label: label}
 	end 'create'
 
-	export function rename(to String)
+	function rename(to String)
 		self.label = to
 	end 'rename'
 end 'Item'
@@ -1096,7 +1096,7 @@ type Holder
 		return Self{sites: IntArray.create()}
 	end 'create'
 
-	public function add(x Integer)
+	function add(x Integer)
 		sites.push(x)
 	end 'add'
 end 'Holder'
@@ -1131,7 +1131,7 @@ type Holder
 		return Self{sites: IntArray.create()}
 	end 'create'
 
-	public function add(x Integer)
+	function add(x Integer)
 		sites.push(x)
 	end 'add'
 end 'Holder'

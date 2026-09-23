@@ -15,18 +15,18 @@ type UpCursor uses Slot implements Cursor
 	let limit as Integer
 	let spare as Slot
 
-	export static function create(limit Integer, spare Slot) returns Self throws IterationError
+	static function create(limit Integer, spare Slot) returns Self throws IterationError
 		if limit < 1 'empty'
 			throw IterationError.exhausted
 		end 'empty'
 		return Self{pos: 1, limit: limit, spare: spare}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return self.pos
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.pos >= self.limit 'atTheLast'
 			throw IterationError.exhausted
 		end 'atTheLast'
@@ -39,11 +39,11 @@ typealias IntUpCursor = UpCursor with Integer
 type UpBag implements Bag with IntUpCursor
 	let limit as Integer
 
-	export static function create(limit Integer) returns Self
+	static function create(limit Integer) returns Self
 		return Self{limit: limit}
 	end 'create'
 
-	export function createIterator() returns IntUpCursor throws IterationError
+	function createIterator() returns IntUpCursor throws IterationError
 		return try IntUpCursor.create(self.limit, spare: 0)
 	end 'createIterator'
 end 'UpBag'
@@ -188,9 +188,9 @@ func @total {
     x64.pushReg r13
     x64.prologue 40
     x64.movRegImm32 rbx, 0
-    x64.loadRegBaseDisp.word64 rax, [rdx + 48]
+    x64.loadRegBaseDisp.word64 rax, [rdx + 56]
     x64.leaRegRegReg r12, rdx, rax
-    x64.callMem [rdx + 40]
+    x64.callMem [rdx + 48]
     x64.movRegReg r13, r8
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r10, 0
@@ -198,11 +198,11 @@ func @total {
     x64.jmp forempty
   walk:
     x64.movRegReg rcx, r13
-    x64.callMem [r12 + 40]
+    x64.callMem [r12 + 48]
     x64.leaRegRegReg rbx, rbx, r8
   forstep:
     x64.movRegReg rcx, r13
-    x64.callMem [r12 + 48]
+    x64.callMem [r12 + 56]
     x64.movRegReg rax, r10
   forhdr:
     x64.cmpRegImm32 rax, 0

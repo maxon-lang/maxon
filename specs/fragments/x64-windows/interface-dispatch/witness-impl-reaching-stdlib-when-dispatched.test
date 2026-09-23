@@ -8,11 +8,11 @@ end 'Printer'
 type Thing implements Printer
 	let label as Tag
 
-	export static function create(label Tag) returns Self
+	static function create(label Tag) returns Self
 		return Self{label: label}
 	end 'create'
 
-	export function show()
+	function show()
 		print("shown: {label}\n")
 	end 'show'
 end 'Thing'
@@ -21,7 +21,7 @@ type Holder
 	export let p as Printer
 	export let n as ExitCode
 
-	export static function create(p Printer, n ExitCode) returns Self
+	static function create(p Printer, n ExitCode) returns Self
 		return Self{p: p, n: n}
 	end 'create'
 end 'Holder'
@@ -35,12 +35,19 @@ end 'main'
 ExitCode: 3
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_console_probe_stdin@24 = i8 0
-  __mrt_console_probe_stdout@25 = i8 0
-  __mrt_console_probe_stderr@26 = i8 0
+  __sched_tls_teb_offset@0 = i64 0
+  __sched_allm@8 = i64 0
+  __sched_lock@16 = i64 0
+  __sched_preempt_ext_lock@24 = i64 0
+  __sched_preempt_context@32 = i64 0
+  __slab_arena_list@40 = i64 0
+  __slab_arena_map_l1@48 = i64 0
+  __slab_state@56 = i64 0
+  __ds_base@64 = i64 0
+  __dbg_ctl@72 = i64 0
+  __mrt_console_probe_stdin@80 = i8 0
+  __mrt_console_probe_stdout@81 = i8 0
+  __mrt_console_probe_stderr@82 = i8 0
 }
 
 func @Thing.show {
@@ -56,7 +63,8 @@ func @Thing.show {
     x64.leaRegRdata rax, [rip + __str_rec_2]  ; "shown: "
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
-    x64.loadRegBaseDisp.word64 r13, [rcx + 0]
+    x64.movRegReg r13, rcx
+    x64.andRegImm32 r13, rcx, 255
     x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -130,15 +138,10 @@ func @main {
     x64.pushReg r13
     x64.pushReg r14
     x64.prologue 32
-    x64.movRegImm32 rbx, 7
   __rc_ok#4:
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r12, r8
-    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.movRegImm32 rbx, 7
   __il_cont#2:
-    x64.movRegImm32 rbx, 3
+    x64.movRegImm32 r12, 3
     x64.leaRegRdata r13, [rip + __witness_Thing.Printer]
   __rc_ok#8:
     x64.movRegImm32 rcx, 24
@@ -146,18 +149,18 @@ func @main {
     x64.callDirect __mm_alloc
     x64.movRegReg r14, r8
     x64.movRegReg rcx, r13
-    x64.movRegReg rdx, r12
+    x64.movRegReg rdx, rbx
     x64.callDirect __retain_existential
     x64.storeBaseDispReg.word64 [r14 + 0], r8
     x64.storeBaseDispReg.word64 [r14 + 8], r13
-    x64.storeBaseDispReg.word64 [r14 + 16], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r12
     x64.movRegReg rcx, r13
-    x64.movRegReg rdx, r12
+    x64.movRegReg rdx, rbx
     x64.callDirect __drop_existential
   __il_cont#1:
     x64.loadRegBaseDisp.word64 rcx, [r14 + 0]
     x64.loadRegBaseDisp.word64 rax, [r14 + 8]
-    x64.callMem [rax + 40]
+    x64.callMem [rax + 48]
     x64.loadRegBaseDisp.word64 rbx, [r14 + 16]
     x64.movRegReg rcx, r14
     x64.callDirect __destruct_Holder

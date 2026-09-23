@@ -34,7 +34,7 @@
 // ⭐⭐ **ONE SPAWN TARGET AS THE DISCOVERY WALK READS IT — a TYPE and the FACTORY named on it.** Both halves
 // are needed to decide whether the type is a service: `spawn Calc.bump()` names a declared type and is not a
 // spawn at all, because `bump` is an instance method rather than a static factory returning `Calc`.
-module type ServiceSpawnCandidate
+export type ServiceSpawnCandidate
 	export let typeName as ByteArray
 	export let member as ByteArray
 
@@ -98,7 +98,7 @@ end 'ServiceTargetVerdict'
 // the factory's arguments fixed, and that instance is what resolves a `T` reply, names the per-instance
 // `<T>.__loop` and selects the state's own destructor. The companions are NOT among those decisions: one
 // `<T>.request` and one `<T>.handle` serve every instantiation.
-module union ServiceStateInstance
+export union ServiceStateInstance
 	monomorphic
 	at(id GenericInstanceId)
 end 'ServiceStateInstance'
@@ -289,9 +289,8 @@ function serviceLayoutOf(signatures ProgramSignatures, typeName ByteArray) retur
 	end 'lookup'
 end 'serviceLayoutOf'
 
-// The layout of a type a caller has already classified a spawn TARGET. Split from the door above so the
-// message names the invariant rather than repeating the `otherwise panic` at six call sites.
-function spawnTargetLayoutOf(signatures ProgramSignatures, typeName ByteArray) returns StructLayout
+// The layout of a type a caller has already classified a spawn TARGET.
+module function spawnTargetLayoutOf(signatures ProgramSignatures, typeName ByteArray) returns StructLayout
 	return try serviceLayoutOf(signatures, typeName: typeName) otherwise panic("spawnTargetLayoutOf: nothing declares `type {String.from(typeName)}` — every caller has already classified it a spawn target, which requires the declaration")
 end 'spawnTargetLayoutOf'
 

@@ -133,7 +133,7 @@ end 'main'
 <!-- test: same-name-methods.export -->
 ```maxon
 // --- file: lib.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export type Pair
 	export var a as Integer

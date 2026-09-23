@@ -26,7 +26,7 @@ interface Mergeable uses Func
 end 'Mergeable'
 
 extension Mergeable
-	export function merge(source Self)
+	function merge(source Self)
 		self.appendOps(source)
 		for i in 0 upto source.itemCount() 'eachItem'
 			let src = source.getItem(i)
@@ -38,7 +38,7 @@ end 'Mergeable'
 
 type Wrapper
 	export var value as Integer
-	export static function create(value Integer) returns Self
+	static function create(value Integer) returns Self
 		return Self{value: value}
 	end 'create'
 end 'Wrapper'
@@ -51,40 +51,40 @@ type Container uses Op implements Mergeable with Wrapper
 	export var ops as OpArray
 	export var items as WrapperArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{
 			ops: OpArray.create(),
 			items: WrapperArray.create()
 		}
 	end 'create'
 
-	export function opsCount() returns Count
+	function opsCount() returns Count
 		return self.ops.count()
 	end 'opsCount'
 
-	export function appendOps(source Self)
+	function appendOps(source Self)
 		self.ops.append(source.ops)
 	end 'appendOps'
 
-	export function itemCount() returns Count
+	function itemCount() returns Count
 		return self.items.count()
 	end 'itemCount'
 
-	export function getItem(index Count) returns Wrapper
+	function getItem(index Count) returns Wrapper
 		return try self.items.get(index) otherwise 'unreachable'
 			panic("getItem: index out of bounds")
 		end 'unreachable'
 	end 'getItem'
 
-	export function pushItem(item Wrapper)
+	function pushItem(item Wrapper)
 		self.items.push(item)
 	end 'pushItem'
 
-	export function cloneItem(src Wrapper) returns Wrapper
+	function cloneItem(src Wrapper) returns Wrapper
 		return Wrapper.create(src.value)
 	end 'cloneItem'
 
-	export function pushOp(op Op)
+	function pushOp(op Op)
 		self.ops.push(op)
 	end 'pushOp'
 end 'Container'

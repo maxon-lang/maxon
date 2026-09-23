@@ -71,13 +71,13 @@ type Holder uses Element
 
 	export var items as ElementArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		var n = ElementArray{}
 		n.resize(5)
 		return Self{ items: n }
 	end 'create'
 
-	export function count() returns Count
+	function count() returns Count
 		return self.items.count()
 	end 'count'
 end 'Holder'
@@ -113,13 +113,13 @@ type Bag
 
 	export var names as Names
 
-	export static function create() returns Self
+	static function create() returns Self
 		var n = Names{}
 		n.push("a string long enough to force a heap allocation")
 		return Self{names: n}
 	end 'create'
 
-	export function count() returns Count
+	function count() returns Count
 		return self.names.count()
 	end 'count'
 end 'Bag'
@@ -227,11 +227,11 @@ type Holder
 
 	export var seed = 0
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function count() returns Count
+	function count() returns Count
 		var n = Nums{}
 		n.resize(self.seed)
 		return n.count()
@@ -266,11 +266,11 @@ type Holder
 
 	export var seed as ExitCode
 
-	export static function create() returns Holder
+	static function create() returns Holder
 		return Self{seed: 4}
 	end 'create'
 
-	export function seedValue() returns ExitCode
+	function seedValue() returns ExitCode
 		return self.seed
 	end 'seedValue'
 end 'Holder'
@@ -393,7 +393,7 @@ typealias ExitCode = int(0 to 125)
 type Pair uses T
 	export var a as T
 
-	export static function create(a T) returns Self
+	static function create(a T) returns Self
 		return Self{a: a}
 	end 'create'
 end 'Pair'
@@ -435,7 +435,7 @@ typealias ExitCode = int(0 to 125)
 type Pair uses T
 	export var a as T
 
-	export static function create(a T) returns Self
+	static function create(a T) returns Self
 		return Self{a: a}
 	end 'create'
 end 'Pair'
@@ -472,25 +472,25 @@ typealias ExitCode = int(0 to 125)
 type Holder uses Held
 	let value as Held
 
-	export static function create(value Held) returns Self
+	static function create(value Held) returns Self
 		return Self{value: value}
 	end 'create'
 
-	export function get() returns Held
+	function get() returns Held
 		return value
 	end 'get'
 end 'Holder'
 
 type Wrap uses Item
-	typealias ItemHolder = Holder with Item
+	export typealias ItemHolder = Holder with Item
 
 	var seed as Item
 
-	export static function create(seed Item) returns Self
+	static function create(seed Item) returns Self
 		return Self{seed: seed}
 	end 'create'
 
-	export function boxed() returns ItemHolder
+	function boxed() returns ItemHolder
 		return ItemHolder.create(seed)
 	end 'boxed'
 end 'Wrap'
@@ -525,11 +525,11 @@ typealias ExitCode = int(0 to 125)
 type Wrapped uses T
 	let value as T
 
-	export static function create(value T) returns Self
+	static function create(value T) returns Self
 		return Self{value: value}
 	end 'create'
 
-	export function get() returns T
+	function get() returns T
 		return value
 	end 'get'
 end 'Wrapped'
@@ -539,9 +539,9 @@ interface Tagged uses Tag
 end 'Tagged'
 
 export extension Tagged
-	typealias WrappedTag = Wrapped with Tag
+	export typealias WrappedTag = Wrapped with Tag
 
-	export function wrapped() returns WrappedTag
+	function wrapped() returns WrappedTag
 		return WrappedTag.create(self.tag())
 	end 'wrapped'
 end 'Tagged'
@@ -549,11 +549,11 @@ end 'Tagged'
 type Box implements Tagged with ExitCode
 	export var v as ExitCode
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{v: 5}
 	end 'create'
 
-	export function tag() returns ExitCode
+	function tag() returns ExitCode
 		return self.v
 	end 'tag'
 end 'Box'
@@ -580,19 +580,19 @@ alias `Pair.Idx` is found. Both compilers answer **4**.
 typealias ExitCode = int(0 to 125)
 
 type Pair uses T
-	typealias Idx = int(0 to 100)
+	export typealias Idx = int(0 to 100)
 
 	export var a as T
 
-	export static function create(a T) returns Self
+	static function create(a T) returns Self
 		return Self{a: a}
 	end 'create'
 
-	export function firstIndex() returns Idx
+	function firstIndex() returns Idx
 		return 3
 	end 'firstIndex'
 
-	export function offsetBy(i Idx) returns Idx
+	function offsetBy(i Idx) returns Idx
 		return i + 1
 	end 'offsetBy'
 end 'Pair'
@@ -636,7 +636,7 @@ typealias ExitCode = int(0 to 125)
 type Pair uses T
 	export var a as T
 
-	export static function create(a T) returns Self
+	static function create(a T) returns Self
 		return Self{a: a}
 	end 'create'
 end 'Pair'
@@ -644,7 +644,7 @@ end 'Pair'
 type Other
 	export var b as ExitCode
 
-	export static function create(v ExitCode) returns Self
+	static function create(v ExitCode) returns Self
 		return Self{b: v}
 	end 'create'
 end 'Other'
@@ -680,7 +680,7 @@ typealias ExitCode = int(0 to 125)
 type Pair uses T
 	export var a as T
 
-	export static function create(a T) returns Self
+	static function create(a T) returns Self
 		return Self{a: a}
 	end 'create'
 end 'Pair'
@@ -690,11 +690,11 @@ type Holder
 
 	export var seed as ExitCode
 
-	export static function create() returns Holder
+	static function create() returns Holder
 		return Self{seed: 4}
 	end 'create'
 
-	export function seedValue() returns ExitCode
+	function seedValue() returns ExitCode
 		return self.seed
 	end 'seedValue'
 end 'Holder'
@@ -722,7 +722,7 @@ typealias ExitCode = int(0 to 125)
 type Pair uses T
 	export var a as T
 
-	export static function create(a T) returns Self
+	static function create(a T) returns Self
 		return Self{a: a}
 	end 'create'
 end 'Pair'
@@ -732,11 +732,11 @@ type Holder
 
 	export var seed as ExitCode
 
-	export static function create() returns Holder
+	static function create() returns Holder
 		return Self{seed: 4}
 	end 'create'
 
-	export static function probe() returns ExitCode
+	static function probe() returns ExitCode
 		let h = Holder.create()
 		return h.seed
 	end 'probe'
@@ -831,11 +831,11 @@ type Holder uses Element
 
 	export var items as ElementArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{ items: ElementArray.create() }
 	end 'create'
 
-	export function sized() returns Count
+	function sized() returns Count
 		let make = function() gives ElementArray{}.count()
 		return make()
 	end 'sized'
@@ -868,11 +868,11 @@ type Holder uses Element
 
 	export var items as ElementArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{ items: ElementArray.create() }
 	end 'create'
 
-	export function sized() returns Count
+	function sized() returns Count
 		let make = function() gives ElementArray.create().count()
 		return make()
 	end 'sized'
@@ -918,7 +918,7 @@ end 'Tagged'
 export extension Tagged
 	typealias TagArray = Array with ExitCode
 
-	export function tags() returns Count
+	function tags() returns Count
 		var result = TagArray{}
 		result.push(self.tag())
 		return result.count()
@@ -928,11 +928,11 @@ end 'Tagged'
 type Box implements Tagged
 	export var v as ExitCode
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{v: 2}
 	end 'create'
 
-	export function tag() returns ExitCode
+	function tag() returns ExitCode
 		return self.v
 	end 'tag'
 end 'Box'

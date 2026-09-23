@@ -193,11 +193,11 @@ typealias Integer = int(i64.min to i64.max)
 type Minter
 	export var next as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{next: 0}
 	end 'create'
 
-	export function mint() returns Integer
+	function mint() returns Integer
 		let id = self.next
 		self.next = self.next + 1
 		return id
@@ -228,11 +228,11 @@ typealias Percent = int(0 to 100)
 type Meter
 	export var level as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{level: 0}
 	end 'create'
 
-	export function record(p Percent) returns Integer
+	function record(p Percent) returns Integer
 		self.level = self.level + (p as Integer)
 		return self.level
 	end 'record'
@@ -382,11 +382,11 @@ type Box uses T
 	export var value as T
 	export var weight as Integer
 
-	export static function create(v T, weight Integer) returns Self
+	static function create(v T, weight Integer) returns Self
 		return Self{value: v, weight: weight}
 	end 'create'
 
-	export function weightOf() returns Integer
+	function weightOf() returns Integer
 		return self.weight
 	end 'weightOf'
 end 'Box'

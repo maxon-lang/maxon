@@ -1,0 +1,8 @@
+let RawFloorProbeFileName = "EditorRawFloorProbe.maxon"
+let RawFloorProbeSource = "module function editorRawFloorProbe() returns MachineWord\n\treturn __Raw.osTickCountMs()\nend 'editorRawFloorProbe'\n"
+
+test 'a runtime file may call the raw floor in the editor as in a build'
+	let probe = probeRuntimeTierDiagnostics(RawFloorProbeFileName, content: RawFloorProbeSource)
+
+	try expectNoProjectDiagnostics(probe, note: "a buffer under `runtime/` calls `__Raw.osTickCountMs()`, which only the runtime tier may. The document sits in the tier, so the call is the tier's and a build of the same file reports nothing.")
+end 'a runtime file may call the raw floor in the editor as in a build'

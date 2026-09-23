@@ -426,17 +426,17 @@ interpolation supplies the rendering, so one line reports both values.
 ```maxon
 // --- file: main.maxon
 type Money implements Equatable, Stringable
-	export let cents as MoneyAmount
+	let cents as MoneyAmount
 
-	export static function create(cents MoneyAmount) returns Self
+	static function create(cents MoneyAmount) returns Self
 		return Self{cents: cents}
 	end 'create'
 
-	export function equals(other Self) returns bool
+	function equals(other Self) returns bool
 		return self.cents == other.cents
 	end 'equals'
 
-	export function toString() returns String
+	function toString() returns String
 		return "{self.cents}c"
 	end 'toString'
 end 'Money'

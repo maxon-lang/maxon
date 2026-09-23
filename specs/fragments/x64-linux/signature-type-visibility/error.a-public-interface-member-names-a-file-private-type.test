@@ -1,0 +1,30 @@
+// Test: error.a-public-interface-member-names-a-file-private-type
+// --- file: api/lib.maxon
+typealias Count = int(0 to 100)
+
+public interface Sized
+	function size() returns Count
+end 'Sized'
+
+type Box implements Sized
+	function size() returns Count
+		return 7
+	end 'size'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Box'
+
+export function boxSize() returns ExitCode
+	let b = Box.create()
+	return b.size() as ExitCode
+end 'boxSize'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return boxSize()
+end 'main'
+---
+CompilerError:
+error E3167: api/<fragment>:6:11: public function 'api.Sized.size' names file-private typealias 'Count' in its return type

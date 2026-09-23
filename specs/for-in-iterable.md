@@ -52,18 +52,18 @@ type IntCursor
 	var items as IntArray
 	var pos as Integer
 
-	export static function create(items IntArray) returns Self throws IterationError
+	static function create(items IntArray) returns Self throws IterationError
 		if items.count() == 0 'empty'
 			throw IterationError.exhausted
 		end 'empty'
 		return Self{items: items, pos: 0}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return try self.items.get(self.pos) otherwise panic("oob")
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.pos + 1 >= self.items.count() 'atEnd'
 			throw IterationError.exhausted
 		end 'atEnd'
@@ -74,11 +74,11 @@ end 'IntCursor'
 type IntSeq
 	var items as IntArray
 
-	export static function create(items IntArray) returns Self
+	static function create(items IntArray) returns Self
 		return Self{items: items}
 	end 'create'
 
-	export function createIterator() returns IntCursor throws IterationError
+	function createIterator() returns IntCursor throws IterationError
 		return try IntCursor.create(self.items)
 	end 'createIterator'
 end 'IntSeq'
@@ -112,18 +112,18 @@ type IntCursor
 	var items as IntArray
 	var pos as Integer
 
-	export static function create(items IntArray) returns Self throws IterationError
+	static function create(items IntArray) returns Self throws IterationError
 		if items.count() == 0 'empty'
 			throw IterationError.exhausted
 		end 'empty'
 		return Self{items: items, pos: 0}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return try self.items.get(self.pos) otherwise panic("oob")
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.pos + 1 >= self.items.count() 'atEnd'
 			throw IterationError.exhausted
 		end 'atEnd'
@@ -134,11 +134,11 @@ end 'IntCursor'
 type IntSeq
 	var items as IntArray
 
-	export static function create(items IntArray) returns Self
+	static function create(items IntArray) returns Self
 		return Self{items: items}
 	end 'create'
 
-	export function createIterator() returns IntCursor throws IterationError
+	function createIterator() returns IntCursor throws IterationError
 		return try IntCursor.create(self.items)
 	end 'createIterator'
 end 'IntSeq'
@@ -181,18 +181,18 @@ type IntCursor
 	var items as IntArray
 	var pos as Integer
 
-	export static function create(items IntArray) returns Self throws IterationError
+	static function create(items IntArray) returns Self throws IterationError
 		if items.count() == 0 'empty'
 			throw IterationError.exhausted
 		end 'empty'
 		return Self{items: items, pos: 0}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return try self.items.get(self.pos) otherwise panic("oob")
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.pos + 1 >= self.items.count() 'atEnd'
 			throw IterationError.exhausted
 		end 'atEnd'
@@ -203,11 +203,11 @@ end 'IntCursor'
 type IntSeq
 	var items as IntArray
 
-	export static function create(items IntArray) returns Self
+	static function create(items IntArray) returns Self
 		return Self{items: items}
 	end 'create'
 
-	export function createIterator() returns IntCursor throws IterationError
+	function createIterator() returns IntCursor throws IterationError
 		return try IntCursor.create(self.items)
 	end 'createIterator'
 end 'IntSeq'
@@ -259,15 +259,15 @@ typealias Integer = int(i64.min to i64.max)
 type Countdown
 	var n as Integer
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return self.n
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.n <= 1 'done'
 			throw IterationError.exhausted
 		end 'done'
@@ -278,11 +278,11 @@ end 'Countdown'
 type Countable
 	var start as Integer
 
-	export static function create(start Integer) returns Self
+	static function create(start Integer) returns Self
 		return Self{start: start}
 	end 'create'
 
-	export function createIterator() returns Countdown
+	function createIterator() returns Countdown
 		return Countdown.create(self.start)
 	end 'createIterator'
 end 'Countable'
@@ -312,22 +312,22 @@ type Resumable
 	var items as IntArray
 	var pos as Integer
 
-	export static function create(items IntArray) returns Self
+	static function create(items IntArray) returns Self
 		return Self{items: items, pos: 0}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return try self.items.get(self.pos) otherwise panic("oob")
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.pos + 1 >= self.items.count() 'atEnd'
 			throw IterationError.exhausted
 		end 'atEnd'
 		self.pos = self.pos + 1
 	end 'advance'
 
-	export function createIterator() returns Resumable
+	function createIterator() returns Resumable
 		return Resumable.create(self.items)
 	end 'createIterator'
 end 'Resumable'
@@ -365,15 +365,15 @@ end 'BuildError'
 type Countdown
 	var n as Integer
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return self.n
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.n <= 1 'done'
 			throw IterationError.exhausted
 		end 'done'
@@ -384,11 +384,11 @@ end 'Countdown'
 type Countable
 	var start as Integer
 
-	export static function create(start Integer) returns Self
+	static function create(start Integer) returns Self
 		return Self{start: start}
 	end 'create'
 
-	export function createIterator() returns Countdown throws BuildError
+	function createIterator() returns Countdown throws BuildError
 		if self.start <= 0 'bad'
 			throw BuildError.broken
 		end 'bad'

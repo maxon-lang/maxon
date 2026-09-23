@@ -116,7 +116,7 @@ type Cfg
 	export var env as Env
 	export var input as In
 
-	export static function create() returns Cfg
+	static function create() returns Cfg
 		return Cfg{env: Env.inherit, input: In.none}
 	end 'create'
 end 'Cfg'
@@ -535,14 +535,14 @@ against its own `int(0 to 100)`. A whole-program fold over both declarations —
 declaring file of whichever `Byte` was recorded last — gets one of the two wrong.
 ```maxon
 // --- file: wide.maxon
-typealias Byte = int(0 to u8.max)
+export typealias Byte = int(0 to u8.max)
 
 export function anyByte(b Byte) returns Integer
 	var a = b"\xdf"
 	return (try a.get(0) otherwise 0) - b
 end 'anyByte'
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 typealias Byte = int(0 to 100)
 
@@ -565,14 +565,14 @@ typealias Integer = int(i64.min to i64.max)
 The half that proves the case above is not simply a lost refusal. One program, two files, two answers.
 ```maxon
 // --- file: wide.maxon
-typealias Byte = int(0 to u8.max)
+export typealias Byte = int(0 to u8.max)
 
 export function anyByte(b Byte) returns Integer
 	var a = b"\xdf"
 	return (try a.get(0) otherwise 0) - b
 end 'anyByte'
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 typealias Byte = int(0 to 100)
 
@@ -940,8 +940,8 @@ staged file's NAME away but keeps its directory, so a same-directory pair would 
 on both sides and say nothing about which instance won.
 ```maxon
 // --- file: api/wide.maxon
-typealias Byte = int(0 to 1000)
-typealias Bytes = Array with Byte
+export typealias Byte = int(0 to 1000)
+export typealias Bytes = Array with Byte
 
 export function makeWide() returns Bytes
 	var b = Bytes.create()
@@ -985,13 +985,13 @@ is legal. Under a whole-program fold `wide.maxon`'s `int(0 to 1000)` would widen
 breaks a file that never mentions it" failure the scoping exists to end, in its smallest form.
 ```maxon
 // --- file: wide.maxon
-typealias Byte = int(0 to 1000)
+export typealias Byte = int(0 to 1000)
 
 export function widen(b Byte) returns Integer
 	return b
 end 'widen'
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 function main() returns ExitCode
 	var a = b"hi"
@@ -1018,7 +1018,7 @@ export function widen() returns Integer
 	return try a.get(0) otherwise 0
 end 'widen'
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 function main() returns ExitCode
 	return widen() as ExitCode
@@ -1049,7 +1049,7 @@ export type Holder
 	end 'first'
 end 'Holder'
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 typealias Byte = int(0 to 1000)
 
@@ -1094,7 +1094,7 @@ export type Holder
 	end 'first'
 end 'Holder'
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 typealias Byte = int(0 to 1000)
 
@@ -1229,7 +1229,7 @@ typealias Bytes = Array with Byte
 type Holder
 	export var mem as __ManagedMemory
 
-	export static function create() returns Holder
+	static function create() returns Holder
 		return Holder{mem: try __ManagedDirectory.currentPath() otherwise panic("Holder.create: currentPath")}
 	end 'create'
 end 'Holder'
@@ -1237,7 +1237,7 @@ end 'Holder'
 type Box uses T
 	export var item as T
 
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{item: item}
 	end 'create'
 end 'Box'

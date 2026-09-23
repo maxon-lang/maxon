@@ -44,7 +44,7 @@ end 'EdgePlacement'
 // encoder, from `regClassOf` of the register (`emitRegRegMove` / `emitRegRegSwap` in X64Backend).
 // That is why floats needed no case here: a `mov` becomes a `movsd`, and a `swap` — which x64
 // has no `xchg` form of for XMMs — becomes a triple-`xorpd`, without this file knowing either.
-type EdgeMovePlan
+export type EdgeMovePlan
 	export var predLocal as CfgIndex
 	export var succLocal as CfgIndex
 	export var predBlockId as BlockId
@@ -60,23 +60,23 @@ type EdgeMovePlan
 	export var moveIsSwap as BoolArray
 	export var placement as EdgePlacement
 
-	export static function create(predLocal CfgIndex, succLocal CfgIndex, predBlockId BlockId, succBlockId BlockId, predBlockRef BlockRef, succBlockRef BlockRef, moves MoveSequence, placement EdgePlacement) returns EdgeMovePlan
+	static function create(predLocal CfgIndex, succLocal CfgIndex, predBlockId BlockId, succBlockId BlockId, predBlockRef BlockRef, succBlockRef BlockRef, moves MoveSequence, placement EdgePlacement) returns EdgeMovePlan
 		return Self{predLocal: predLocal, succLocal: succLocal, predBlockId: predBlockId, succBlockId: succBlockId, predBlockRef: predBlockRef, succBlockRef: succBlockRef, moveDsts: moves.dsts, moveSrcs: moves.srcs, moveIsSwap: moves.isSwap, placement: placement}
 	end 'create'
 
-	export function moveCount() returns MoveIndex
+	function moveCount() returns MoveIndex
 		return self.moveDsts.count()
 	end 'moveCount'
 
-	export function moveDstAt(i MoveIndex) returns RegNum
+	function moveDstAt(i MoveIndex) returns RegNum
 		return try self.moveDsts.get(i) otherwise panic("EdgeMovePlan.moveDstAt: OOB")
 	end 'moveDstAt'
 
-	export function moveSrcAt(i MoveIndex) returns RegNum
+	function moveSrcAt(i MoveIndex) returns RegNum
 		return try self.moveSrcs.get(i) otherwise panic("EdgeMovePlan.moveSrcAt: OOB")
 	end 'moveSrcAt'
 
-	export function moveIsSwapAt(i MoveIndex) returns bool
+	function moveIsSwapAt(i MoveIndex) returns bool
 		return try self.moveIsSwap.get(i) otherwise panic("EdgeMovePlan.moveIsSwapAt: OOB")
 	end 'moveIsSwapAt'
 end 'EdgeMovePlan'
@@ -89,17 +89,17 @@ type MoveSequence
 	export var srcs as RegNumColumn
 	export var isSwap as BoolArray
 
-	export static function create() returns MoveSequence
+	static function create() returns MoveSequence
 		return Self{dsts: RegNumColumn.create(), srcs: RegNumColumn.create(), isSwap: BoolArray.create()}
 	end 'create'
 
-	export function pushMove(dst RegNum, src RegNum, swap bool)
+	function pushMove(dst RegNum, src RegNum, swap bool)
 		self.dsts.push(dst)
 		self.srcs.push(src)
 		self.isSwap.push(swap)
 	end 'pushMove'
 
-	export function count() returns MoveIndex
+	function count() returns MoveIndex
 		return self.dsts.count()
 	end 'count'
 end 'MoveSequence'

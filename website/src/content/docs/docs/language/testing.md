@@ -45,8 +45,8 @@ a compile error (**E3057**), never an assertion whose failure goes unnoticed.
 `temperature.maxon`:
 
 ```maxon
-typealias Celsius = int(-273 to 10000)
-typealias Fahrenheit = int(-460 to 18032)
+export typealias Celsius = int(-273 to 10000)
+export typealias Fahrenheit = int(-460 to 18032)
 
 /// Converts a Celsius reading to Fahrenheit, rounding toward zero.
 export function toFahrenheit(c Celsius) returns Fahrenheit

@@ -153,11 +153,11 @@ type Counter
 		return Self{n: 0}
 	end 'create'
 
-	export function bump()
+	function bump()
 		setTo99(self.n)
 	end 'bump'
 
-	export function value() returns Integer
+	function value() returns Integer
 		return self.n
 	end 'value'
 end 'Counter'
@@ -240,11 +240,11 @@ type Outer
 		return Self{a: Inner.create()}
 	end 'create'
 
-	export function bumpOwn()
+	function bumpOwn()
 		setTo99(self.a.b)
 	end 'bumpOwn'
 
-	export function inner() returns Integer
+	function inner() returns Integer
 		return self.a.b
 	end 'inner'
 end 'Outer'

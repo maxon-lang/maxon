@@ -109,7 +109,7 @@ type FrontEndJob
 	// ⛔ **THE COPIES ARE TAKEN IN HERE, NOT BY THE CALLER.** A temporary the caller builds lives to the end of the
 	// sending statement, so the holder would share it with the sender's frame at the send's walk (exit 96); one
 	// built in this statement has died by the time the record is returned.
-	export static function lexing(content String) returns FrontEndJob
+	static function lexing(content String) returns FrontEndJob
 		var holder = FrontEndWorkArray.create()
 		holder.push(FrontEndWork.lex(content.clone()))
 		return Self{holder: holder}
@@ -117,7 +117,7 @@ type FrontEndJob
 
 	// The job's strings are the project's and the index's, the row-set answers are the database's, and the tokens
 	// are the memo's.
-	export static function parsing(query ParseQuery) returns FrontEndJob
+	static function parsing(query ParseQuery) returns FrontEndJob
 		var holder = FrontEndWorkArray.create()
 
 		match query 'query'
@@ -134,7 +134,7 @@ type FrontEndReply
 	export var outcome as FrontEndOutcome
 
 	// ⭐ **EVERY RETURN IS `Self{…}`**, which is what lets a reply carry one of these (E3137).
-	export static function create(outcome FrontEndOutcome) returns FrontEndReply
+	static function create(outcome FrontEndOutcome) returns FrontEndReply
 		return Self{outcome: outcome}
 	end 'create'
 end 'FrontEndReply'
@@ -143,7 +143,7 @@ end 'FrontEndReply'
 type FrontEndWorkerReport
 	export var costs as PoolPhaseCosts
 
-	export static function of(costs PoolPhaseCosts) returns FrontEndWorkerReport
+	static function of(costs PoolPhaseCosts) returns FrontEndWorkerReport
 		return Self{costs: PoolPhaseCosts.copyOf(costs)}
 	end 'of'
 end 'FrontEndWorkerReport'
@@ -196,22 +196,22 @@ type FrontEndWorkerState
 	// every row it measures.
 	var probe as PhaseProbe
 
-	export static function create(cpu CpuArch, os Os, debugStream bool) returns FrontEndWorkerState
+	static function create(cpu CpuArch, os Os, debugStream bool) returns FrontEndWorkerState
 		return Self{keywords: KeywordTable.create(), facts: ConditionFacts.create(Target.create(cpu, os: os), debugStream: debugStream), ownIndex: HeldIndexArray.create(), costs: PoolPhaseCosts.create(FrontEndStage.allCases.count()), probe: PhaseProbe.beginCounters()}
 	end 'create'
 
 	// The index every later parse reads, replacing any this worker held.
-	export function hold(index ProgramSignatures)
+	function hold(index ProgramSignatures)
 		self.ownIndex.clear()
 		self.ownIndex.push(index)
 	end 'hold'
 
-	export function releaseIndex()
+	function releaseIndex()
 		self.ownIndex.clear()
 	end 'releaseIndex'
 
 	// ⛔ **POPPED, NOT READ** — see `FrontEndJob`.
-	export function ran(job FrontEndJob) returns FrontEndOutcome
+	function ran(job FrontEndJob) returns FrontEndOutcome
 		let work = try job.holder.pop() otherwise panic("FrontEndWorkerState.ran: the job carried no work — `FrontEndJob` pushes exactly one")
 
 		match work 'work'

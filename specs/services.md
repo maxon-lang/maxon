@@ -245,7 +245,7 @@ export function serve(_ Calc.handle) returns Integer
 	return 1
 end 'serve'
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 function main() returns ExitCode
 	let h = spawn Calc.create()
@@ -288,7 +288,7 @@ export function serve(_ Calc.handle) returns Integer
 	return 1
 end 'serve'
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 // --- file: runner.maxon
 type Runner
 	var started as Integer
@@ -681,7 +681,7 @@ type Outer uses U
 		return Self{seed: seed}
 	end 'create'
 
-	export function go() returns Whole
+	function go() returns Whole
 		let h = spawn Box.create(self.seed)
 		return 0
 	end 'go'
@@ -1675,7 +1675,7 @@ export type Calc
 	end 'bump'
 end 'Calc'
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 function main() returns ExitCode
 	let h = spawn Calc.create()
@@ -1849,7 +1849,7 @@ type Point
 	export var x as Integer
 	export var y as Integer
 
-	export static function create(x Integer, y Integer) returns Self
+	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
 	end 'create'
 end 'Point'
@@ -1893,7 +1893,7 @@ record has one owner, so the whole graph moves and the service reads all of it.
 type Cell
 	export var n as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 1}
 	end 'create'
 end 'Cell'
@@ -1905,7 +1905,7 @@ type Holder
 	export var label as String
 	export var cells as CellArray
 
-	export static function create(k Integer) returns Self
+	static function create(k Integer) returns Self
 		var cells = CellArray.create()
 		cells.push(Cell.create())
 		cells.push(Cell.create())
@@ -1984,7 +1984,7 @@ it are both minted by the handler, so the walk finds nothing to refuse and the r
 type Note
 	export var text as String
 
-	export static function create(k Integer) returns Self
+	static function create(k Integer) returns Self
 		return Self{text: "note {k}"}
 	end 'create'
 end 'Note'
@@ -2026,7 +2026,7 @@ aborts with `RuntimeAbort` exit **96** and nothing reaches the awaiter.
 type Cell
 	export var n as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 1}
 	end 'create'
 end 'Cell'
@@ -2072,7 +2072,7 @@ array.
 type Cell
 	export var n as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 1}
 	end 'create'
 end 'Cell'
@@ -2125,7 +2125,7 @@ involved: nothing has crossed yet.
 type Cell
 	export var n as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 1}
 	end 'create'
 end 'Cell'
@@ -2432,7 +2432,7 @@ that descends into the NODE's element sees the second owner. Exit **96** on the 
 type Cell
 	export var n as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 1}
 	end 'create'
 end 'Cell'
@@ -2510,7 +2510,7 @@ back, and the walk finds that one record at two owners. Exit **96**.
 type Cell
 	export var n as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 1}
 	end 'create'
 end 'Cell'
@@ -2591,15 +2591,15 @@ keeps reading the record it removed.
 type Cell implements Hashable, Equatable
 	export var n as Integer
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 
-	export function hash() returns HashValue
+	function hash() returns HashValue
 		return n as HashValue
 	end 'hash'
 
-	export function equals(other Self) returns bool
+	function equals(other Self) returns bool
 		return n == other.n
 	end 'equals'
 end 'Cell'
@@ -2644,7 +2644,7 @@ only the entry it still owns.
 type Cell
 	export var n as Integer
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 end 'Cell'
@@ -2733,7 +2733,7 @@ A record built as the `value:` argument has no owner but the map, so the map cro
 type Cell
 	export var n as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 7}
 	end 'create'
 end 'Cell'
@@ -2816,7 +2816,7 @@ reads `cell` back, so the live case's payload has two owners. Exit **96**.
 type Cell
 	export var n as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 1}
 	end 'create'
 end 'Cell'
@@ -2867,7 +2867,7 @@ faults on the stack, with no output, on every run at this depth (MEASURED with t
 type S0
 	export var n as Level
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 0}
 	end 'create'
 end 'S0'
@@ -2876,7 +2876,7 @@ type S1
 	export var n as Level
 	export var inner as S0
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 1, inner: S0.create()}
 	end 'create'
 end 'S1'
@@ -2885,7 +2885,7 @@ type S2
 	export var n as Level
 	export var inner as S1
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 2, inner: S1.create()}
 	end 'create'
 end 'S2'
@@ -2894,7 +2894,7 @@ type S3
 	export var n as Level
 	export var inner as S2
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 3, inner: S2.create()}
 	end 'create'
 end 'S3'
@@ -2903,7 +2903,7 @@ type S4
 	export var n as Level
 	export var inner as S3
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 4, inner: S3.create()}
 	end 'create'
 end 'S4'
@@ -2912,7 +2912,7 @@ type S5
 	export var n as Level
 	export var inner as S4
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 5, inner: S4.create()}
 	end 'create'
 end 'S5'
@@ -2921,7 +2921,7 @@ type S6
 	export var n as Level
 	export var inner as S5
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 6, inner: S5.create()}
 	end 'create'
 end 'S6'
@@ -2930,7 +2930,7 @@ type S7
 	export var n as Level
 	export var inner as S6
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 7, inner: S6.create()}
 	end 'create'
 end 'S7'
@@ -2939,7 +2939,7 @@ type S8
 	export var n as Level
 	export var inner as S7
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 8, inner: S7.create()}
 	end 'create'
 end 'S8'
@@ -2948,7 +2948,7 @@ type S9
 	export var n as Level
 	export var inner as S8
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 9, inner: S8.create()}
 	end 'create'
 end 'S9'
@@ -2957,7 +2957,7 @@ type S10
 	export var n as Level
 	export var inner as S9
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 10, inner: S9.create()}
 	end 'create'
 end 'S10'
@@ -2966,7 +2966,7 @@ type S11
 	export var n as Level
 	export var inner as S10
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 11, inner: S10.create()}
 	end 'create'
 end 'S11'
@@ -2975,7 +2975,7 @@ type S12
 	export var n as Level
 	export var inner as S11
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 12, inner: S11.create()}
 	end 'create'
 end 'S12'
@@ -2984,7 +2984,7 @@ type S13
 	export var n as Level
 	export var inner as S12
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 13, inner: S12.create()}
 	end 'create'
 end 'S13'
@@ -2993,7 +2993,7 @@ type S14
 	export var n as Level
 	export var inner as S13
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 14, inner: S13.create()}
 	end 'create'
 end 'S14'
@@ -3002,7 +3002,7 @@ type S15
 	export var n as Level
 	export var inner as S14
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 15, inner: S14.create()}
 	end 'create'
 end 'S15'
@@ -3011,7 +3011,7 @@ type S16
 	export var n as Level
 	export var inner as S15
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 16, inner: S15.create()}
 	end 'create'
 end 'S16'
@@ -3020,7 +3020,7 @@ type S17
 	export var n as Level
 	export var inner as S16
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 17, inner: S16.create()}
 	end 'create'
 end 'S17'
@@ -3029,7 +3029,7 @@ type S18
 	export var n as Level
 	export var inner as S17
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 18, inner: S17.create()}
 	end 'create'
 end 'S18'
@@ -3038,7 +3038,7 @@ type S19
 	export var n as Level
 	export var inner as S18
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 19, inner: S18.create()}
 	end 'create'
 end 'S19'
@@ -3047,7 +3047,7 @@ type S20
 	export var n as Level
 	export var inner as S19
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 20, inner: S19.create()}
 	end 'create'
 end 'S20'
@@ -3056,7 +3056,7 @@ type S21
 	export var n as Level
 	export var inner as S20
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 21, inner: S20.create()}
 	end 'create'
 end 'S21'
@@ -3065,7 +3065,7 @@ type S22
 	export var n as Level
 	export var inner as S21
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 22, inner: S21.create()}
 	end 'create'
 end 'S22'
@@ -3074,7 +3074,7 @@ type S23
 	export var n as Level
 	export var inner as S22
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 23, inner: S22.create()}
 	end 'create'
 end 'S23'
@@ -3083,7 +3083,7 @@ type S24
 	export var n as Level
 	export var inner as S23
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 24, inner: S23.create()}
 	end 'create'
 end 'S24'
@@ -3092,7 +3092,7 @@ type S25
 	export var n as Level
 	export var inner as S24
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 25, inner: S24.create()}
 	end 'create'
 end 'S25'
@@ -3101,7 +3101,7 @@ type S26
 	export var n as Level
 	export var inner as S25
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 26, inner: S25.create()}
 	end 'create'
 end 'S26'
@@ -3110,7 +3110,7 @@ type S27
 	export var n as Level
 	export var inner as S26
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 27, inner: S26.create()}
 	end 'create'
 end 'S27'
@@ -3119,7 +3119,7 @@ type S28
 	export var n as Level
 	export var inner as S27
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 28, inner: S27.create()}
 	end 'create'
 end 'S28'
@@ -3128,7 +3128,7 @@ type S29
 	export var n as Level
 	export var inner as S28
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 29, inner: S28.create()}
 	end 'create'
 end 'S29'
@@ -3137,7 +3137,7 @@ type S30
 	export var n as Level
 	export var inner as S29
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 30, inner: S29.create()}
 	end 'create'
 end 'S30'
@@ -3146,7 +3146,7 @@ type S31
 	export var n as Level
 	export var inner as S30
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 31, inner: S30.create()}
 	end 'create'
 end 'S31'
@@ -3155,7 +3155,7 @@ type S32
 	export var n as Level
 	export var inner as S31
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 32, inner: S31.create()}
 	end 'create'
 end 'S32'
@@ -3164,7 +3164,7 @@ type S33
 	export var n as Level
 	export var inner as S32
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 33, inner: S32.create()}
 	end 'create'
 end 'S33'
@@ -3173,7 +3173,7 @@ type S34
 	export var n as Level
 	export var inner as S33
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 34, inner: S33.create()}
 	end 'create'
 end 'S34'
@@ -3182,7 +3182,7 @@ type S35
 	export var n as Level
 	export var inner as S34
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 35, inner: S34.create()}
 	end 'create'
 end 'S35'
@@ -3191,7 +3191,7 @@ type S36
 	export var n as Level
 	export var inner as S35
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 36, inner: S35.create()}
 	end 'create'
 end 'S36'
@@ -3200,7 +3200,7 @@ type S37
 	export var n as Level
 	export var inner as S36
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 37, inner: S36.create()}
 	end 'create'
 end 'S37'
@@ -3209,7 +3209,7 @@ type S38
 	export var n as Level
 	export var inner as S37
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 38, inner: S37.create()}
 	end 'create'
 end 'S38'
@@ -3218,7 +3218,7 @@ type S39
 	export var n as Level
 	export var inner as S38
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 39, inner: S38.create()}
 	end 'create'
 end 'S39'
@@ -3227,7 +3227,7 @@ type S40
 	export var n as Level
 	export var inner as S39
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 40, inner: S39.create()}
 	end 'create'
 end 'S40'
@@ -3236,7 +3236,7 @@ type S41
 	export var n as Level
 	export var inner as S40
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 41, inner: S40.create()}
 	end 'create'
 end 'S41'
@@ -3245,7 +3245,7 @@ type S42
 	export var n as Level
 	export var inner as S41
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 42, inner: S41.create()}
 	end 'create'
 end 'S42'
@@ -3254,7 +3254,7 @@ type S43
 	export var n as Level
 	export var inner as S42
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 43, inner: S42.create()}
 	end 'create'
 end 'S43'
@@ -3263,7 +3263,7 @@ type S44
 	export var n as Level
 	export var inner as S43
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 44, inner: S43.create()}
 	end 'create'
 end 'S44'
@@ -3272,7 +3272,7 @@ type S45
 	export var n as Level
 	export var inner as S44
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 45, inner: S44.create()}
 	end 'create'
 end 'S45'
@@ -3281,7 +3281,7 @@ type S46
 	export var n as Level
 	export var inner as S45
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 46, inner: S45.create()}
 	end 'create'
 end 'S46'
@@ -3290,7 +3290,7 @@ type S47
 	export var n as Level
 	export var inner as S46
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 47, inner: S46.create()}
 	end 'create'
 end 'S47'
@@ -3299,7 +3299,7 @@ type S48
 	export var n as Level
 	export var inner as S47
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 48, inner: S47.create()}
 	end 'create'
 end 'S48'
@@ -3308,7 +3308,7 @@ type S49
 	export var n as Level
 	export var inner as S48
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 49, inner: S48.create()}
 	end 'create'
 end 'S49'
@@ -3317,7 +3317,7 @@ type S50
 	export var n as Level
 	export var inner as S49
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 50, inner: S49.create()}
 	end 'create'
 end 'S50'
@@ -3326,7 +3326,7 @@ type S51
 	export var n as Level
 	export var inner as S50
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 51, inner: S50.create()}
 	end 'create'
 end 'S51'
@@ -3335,7 +3335,7 @@ type S52
 	export var n as Level
 	export var inner as S51
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 52, inner: S51.create()}
 	end 'create'
 end 'S52'
@@ -3344,7 +3344,7 @@ type S53
 	export var n as Level
 	export var inner as S52
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 53, inner: S52.create()}
 	end 'create'
 end 'S53'
@@ -3353,7 +3353,7 @@ type S54
 	export var n as Level
 	export var inner as S53
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 54, inner: S53.create()}
 	end 'create'
 end 'S54'
@@ -3362,7 +3362,7 @@ type S55
 	export var n as Level
 	export var inner as S54
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 55, inner: S54.create()}
 	end 'create'
 end 'S55'
@@ -3371,7 +3371,7 @@ type S56
 	export var n as Level
 	export var inner as S55
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 56, inner: S55.create()}
 	end 'create'
 end 'S56'
@@ -3380,7 +3380,7 @@ type S57
 	export var n as Level
 	export var inner as S56
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 57, inner: S56.create()}
 	end 'create'
 end 'S57'
@@ -3389,7 +3389,7 @@ type S58
 	export var n as Level
 	export var inner as S57
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 58, inner: S57.create()}
 	end 'create'
 end 'S58'
@@ -3398,7 +3398,7 @@ type S59
 	export var n as Level
 	export var inner as S58
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 59, inner: S58.create()}
 	end 'create'
 end 'S59'
@@ -3407,7 +3407,7 @@ type S60
 	export var n as Level
 	export var inner as S59
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 60, inner: S59.create()}
 	end 'create'
 end 'S60'
@@ -3416,7 +3416,7 @@ type S61
 	export var n as Level
 	export var inner as S60
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 61, inner: S60.create()}
 	end 'create'
 end 'S61'
@@ -3425,7 +3425,7 @@ type S62
 	export var n as Level
 	export var inner as S61
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 62, inner: S61.create()}
 	end 'create'
 end 'S62'
@@ -3434,7 +3434,7 @@ type S63
 	export var n as Level
 	export var inner as S62
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 63, inner: S62.create()}
 	end 'create'
 end 'S63'
@@ -3479,7 +3479,7 @@ is proved once however many paths reach it. The service's write through `left` i
 type Cell
 	export var n as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 1}
 	end 'create'
 end 'Cell'
@@ -3490,7 +3490,7 @@ type Bag
 	export var n as Integer
 	export var cells as CellArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		var cells = CellArray.create()
 		cells.push(Cell.create())
 		cells.push(Cell.create())
@@ -3502,7 +3502,7 @@ type Pair
 	export var left as Bag
 	export var right as Bag
 
-	export static function create() returns Self
+	static function create() returns Self
 		let bag = Bag.create()
 		return Self{left: bag, right: bag}
 	end 'create'
@@ -3542,7 +3542,7 @@ service's write through slot 0 is what slot 1 reads.
 type Cell
 	export var n as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 1}
 	end 'create'
 end 'Cell'
@@ -3594,7 +3594,7 @@ is what the payload reads.
 type Cell
 	export var n as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 1}
 	end 'create'
 end 'Cell'
@@ -3608,7 +3608,7 @@ type Frame
 	export var shape as Shape
 	export var cell as Cell
 
-	export static function create() returns Self
+	static function create() returns Self
 		let cell = Cell.create()
 		return Self{shape: Shape.held(cell), cell: cell}
 	end 'create'
@@ -3651,7 +3651,7 @@ awaiter's write through `left` is what `right` reads.
 type Cell
 	export var n as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 1}
 	end 'create'
 end 'Cell'
@@ -3662,7 +3662,7 @@ type Bag
 	export var n as Integer
 	export var cells as CellArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		var cells = CellArray.create()
 		cells.push(Cell.create())
 		cells.push(Cell.create())
@@ -3674,7 +3674,7 @@ type Pair
 	export var left as Bag
 	export var right as Bag
 
-	export static function create() returns Self
+	static function create() returns Self
 		let bag = Bag.create()
 		return Self{left: bag, right: bag}
 	end 'create'
@@ -3716,7 +3716,7 @@ one the walk meets: the move aborts with `RuntimeAbort` exit **96** before anyth
 type Cell
 	export var n as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 1}
 	end 'create'
 end 'Cell'
@@ -3727,7 +3727,7 @@ type Bag
 	export var n as Integer
 	export var cells as CellArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		var cells = CellArray.create()
 		cells.push(Cell.create())
 		cells.push(Cell.create())
@@ -3739,7 +3739,7 @@ type Pair
 	export var left as Bag
 	export var right as Bag
 
-	export static function around(bag Bag) returns Self
+	static function around(bag Bag) returns Self
 		return Self{left: bag, right: bag}
 	end 'around'
 end 'Pair'
@@ -3816,7 +3816,7 @@ crosses, and the service's write through one key is what the other reads.
 type Cell
 	export var n as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 1}
 	end 'create'
 end 'Cell'
@@ -3867,7 +3867,7 @@ service's write through the first node is what the second reads.
 type Cell
 	export var n as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 1}
 	end 'create'
 end 'Cell'
@@ -3920,7 +3920,7 @@ Forty records, each held by two slots of one array: every one of them is met twi
 type Cell
 	export var n as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 1}
 	end 'create'
 end 'Cell'
@@ -3978,7 +3978,7 @@ move aborts with exit **96** before anything is enqueued.
 type Cell
 	export var n as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 1}
 	end 'create'
 end 'Cell'
@@ -4130,7 +4130,7 @@ value read out of it, is allowed on both sides of the send.
 type Tag
 	export var text as String
 
-	export static function create(text String) returns Self
+	static function create(text String) returns Self
 		return Self{text: text}
 	end 'create'
 end 'Tag'
@@ -4147,7 +4147,7 @@ type Doc
 	export var tags as Tags
 	export var note as Note
 
-	export static function create(k Integer) returns Self
+	static function create(k Integer) returns Self
 		var tags = Tags.create()
 		tags.push(Tag.create("red {k}"))
 		tags.push(Tag.create("green {k}"))
@@ -4215,7 +4215,7 @@ mailbox's FIFO puts `report` behind the last of them. `main` reads the graph aga
 type Leaf
 	export var text as String
 
-	export static function create(text String) returns Self
+	static function create(text String) returns Self
 		return Self{text: text}
 	end 'create'
 end 'Leaf'
@@ -4226,7 +4226,7 @@ type Tree
 	export var name as String
 	export var leaves as Leaves
 
-	export static function create(size Integer) returns Self
+	static function create(size Integer) returns Self
 		var leaves = Leaves.create()
 		for i in 1 to size 'grow'
 			leaves.push(Leaf.create("leaf {i}"))
@@ -4289,7 +4289,7 @@ never preempted from, nothing runs on the service until `main` parks at its awai
 type Leaf
 	export var text as String
 
-	export static function create(text String) returns Self
+	static function create(text String) returns Self
 		return Self{text: text}
 	end 'create'
 end 'Leaf'
@@ -4300,7 +4300,7 @@ type Tree
 	export var name as String
 	export var leaves as Leaves
 
-	export static function create(size Integer) returns Self
+	static function create(size Integer) returns Self
 		var leaves = Leaves.create()
 		for i in 1 to size 'grow'
 			leaves.push(Leaf.create("leaf {i}"))
@@ -4357,7 +4357,7 @@ before anything is enqueued; the read of `s` after the send never runs.
 type Cell
 	export var n as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 1}
 	end 'create'
 end 'Cell'
@@ -4410,7 +4410,7 @@ type Box
 		return Self{n: 1}
 	end 'create'
 
-	export function bump()
+	function bump()
 		self.n = self.n + 1
 	end 'bump'
 end 'Box'
@@ -4459,7 +4459,7 @@ reads, not outside it, so the send's walk admits it and the sender reads the rec
 type Cell
 	export var n as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 1}
 	end 'create'
 end 'Cell'
@@ -4470,7 +4470,7 @@ type Bag
 	export var n as Integer
 	export var cells as CellArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		var cells = CellArray.create()
 		cells.push(Cell.create())
 		cells.push(Cell.create())
@@ -4482,7 +4482,7 @@ type Pair
 	export var left as Bag
 	export var right as Bag
 
-	export static function create() returns Self
+	static function create() returns Self
 		let bag = Bag.create()
 		return Self{left: bag, right: bag}
 	end 'create'
@@ -4525,7 +4525,7 @@ nothing left to count.
 type Cell
 	export var n as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 1}
 	end 'create'
 end 'Cell'
@@ -4536,7 +4536,7 @@ type Bag
 	export var n as Integer
 	export var cells as CellArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		var cells = CellArray.create()
 		cells.push(Cell.create())
 		cells.push(Cell.create())
@@ -4548,7 +4548,7 @@ type Pair
 	export var left as Bag
 	export var right as Bag
 
-	export static function create() returns Self
+	static function create() returns Self
 		let bag = Bag.create()
 		return Self{left: bag, right: bag}
 	end 'create'
@@ -4593,7 +4593,7 @@ against its owners.
 type Cell
 	export var n as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 1}
 	end 'create'
 end 'Cell'
@@ -4603,7 +4603,7 @@ typealias CellArray = Array with Cell
 type Shelf
 	export var cells as CellArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		var cells = CellArray.create()
 		let c = Cell.create()
 		cells.push(c)
@@ -4649,7 +4649,7 @@ the walk never meets, so the send aborts with exit **96** before anything is enq
 type Cell
 	export var n as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 1}
 	end 'create'
 end 'Cell'
@@ -4660,7 +4660,7 @@ type Bag
 	export var n as Integer
 	export var cells as CellArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		var cells = CellArray.create()
 		cells.push(Cell.create())
 		return Self{n: 3, cells: cells}
@@ -4671,7 +4671,7 @@ type Pair
 	export var left as Bag
 	export var right as Bag
 
-	export static function around(bag Bag) returns Self
+	static function around(bag Bag) returns Self
 		return Self{left: bag, right: bag}
 	end 'around'
 end 'Pair'
@@ -4944,7 +4944,7 @@ let leafCount = 64
 type Leaf
 	export var text as String
 
-	export static function create(text String) returns Self
+	static function create(text String) returns Self
 		return Self{text: text}
 	end 'create'
 end 'Leaf'
@@ -4955,7 +4955,7 @@ type Tree
 	export var name as String
 	export var leaves as Leaves
 
-	export static function create() returns Self
+	static function create() returns Self
 		var leaves = Leaves.create()
 		for i in 1 to leafCount 'grow'
 			leaves.push(Leaf.create("leaf {i}"))
@@ -5667,7 +5667,7 @@ type Box
 		return Self{n: 1}
 	end 'create'
 
-	export function bump()
+	function bump()
 		self.n = self.n + 1
 	end 'bump'
 end 'Box'
@@ -6079,7 +6079,7 @@ type Box
 		return Self{n: 1}
 	end 'create'
 
-	export function bump()
+	function bump()
 		self.n = self.n + 1
 	end 'bump'
 end 'Box'
@@ -6121,7 +6121,7 @@ type Box
 		return Self{n: 1}
 	end 'create'
 
-	export function bump()
+	function bump()
 		self.n = self.n + 1
 	end 'bump'
 end 'Box'
@@ -6171,7 +6171,7 @@ type Box
 		return Self{n: 1}
 	end 'create'
 
-	export function bump()
+	function bump()
 		self.n = self.n + 1
 	end 'bump'
 end 'Box'
@@ -6225,7 +6225,7 @@ type Box
 		return Self{n: 1}
 	end 'create'
 
-	export function bump()
+	function bump()
 		self.n = self.n + 1
 	end 'bump'
 end 'Box'
@@ -6325,7 +6325,7 @@ type Box implements Bumpable
 		return Self{n: 1}
 	end 'create'
 
-	export function bump()
+	function bump()
 		self.n = self.n + 1
 	end 'bump'
 end 'Box'
@@ -6339,11 +6339,11 @@ type Shelf uses T where T is Bumpable
 		return Self{items: Items.create()}
 	end 'create'
 
-	export function count() returns Integer
+	function count() returns Integer
 		return self.items.count()
 	end 'count'
 
-	export function kick()
+	function kick()
 		for item in self.items 'eachItem'
 			item.bump()
 		end 'eachItem'
@@ -6450,7 +6450,7 @@ type Box
 		return Self{n: 1}
 	end 'create'
 
-	export function bump()
+	function bump()
 		self.n = self.n + 1
 	end 'bump'
 end 'Box'
@@ -7726,7 +7726,7 @@ typealias Integer = int(i64.min to i64.max)
 type Tally
 	export var n as Integer
 
-	export static function create(n Integer) returns Tally
+	static function create(n Integer) returns Tally
 		return Self{n: n}
 	end 'create'
 end 'Tally'
@@ -7987,7 +7987,7 @@ type Item
 end 'Item'
 
 type Box uses T
-	typealias Items = List with T
+	export typealias Items = List with T
 	var seen as Count
 
 	static function create(first T) returns Self
@@ -8017,7 +8017,7 @@ An alias of the type parameter is refused where it is WRITTEN, which is what let
 bare `T` and nothing else: no message can reach the state through a second spelling of `T`.
 ```maxon
 type Box uses T
-	typealias Item = T
+	export typealias Item = T
 	var item as T
 
 	static function create(item T) returns Self
@@ -8036,7 +8036,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:19: Unsupported: a typealias over 'identifier' (only `int(low to high)`, `float(low to high)`, `bits(n)` and `function(...)` are parsed; generic and bare-sized aliases arrive with the milestones that give them meaning)
+error E2015: <fragment>:3:26: Unsupported: a typealias over 'identifier' (only `int(low to high)`, `float(low to high)`, `bits(n)` and `function(...)` are parsed; generic and bare-sized aliases arrive with the milestones that give them meaning)
 ```
 
 <!-- test: a-generic-service-handle-reaches-a-parameter-through-its-spelling -->
@@ -8377,7 +8377,7 @@ type Outer uses U
 		return Self{seed: seed}
 	end 'create'
 
-	export function go() returns Whole
+	function go() returns Whole
 		let h = spawn Calc.create(3)
 		return try await h.peek() otherwise 0
 	end 'go'
@@ -8421,7 +8421,7 @@ type Outer uses U
 		return Self{seed: 4}
 	end 'create'
 
-	export function go() returns Whole
+	function go() returns Whole
 		let h = spawn Calc.create(3)
 		return try await h.peek() otherwise 0
 	end 'go'
@@ -8584,11 +8584,11 @@ type Payload
 		return Self{n: 7}
 	end 'build'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return build()
 	end 'create'
 
-	export function count() returns Integer
+	function count() returns Integer
 		return n
 	end 'count'
 end 'Payload'
@@ -8951,7 +8951,7 @@ let WorkSleepMs = 10000
 type Probe
 	export var started as bool
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{started: false}
 	end 'create'
 end 'Probe'
@@ -9946,7 +9946,7 @@ reported first, so the case is pinned on the native lanes.
 typealias Integer = int(i64.min to i64.max)
 
 type Maker uses T
-	typealias Items = Array with T
+	export typealias Items = Array with T
 	var seen as Integer
 
 	static function create(seed T) returns Self
@@ -10257,11 +10257,11 @@ type Report implements Hashable, Equatable
 		return Self{total: total}
 	end 'create'
 
-	export function hash() returns HashValue
+	function hash() returns HashValue
 		return total
 	end 'hash'
 
-	export function equals(other Self) returns bool
+	function equals(other Self) returns bool
 		return total == other.total
 	end 'equals'
 end 'Report'
@@ -10564,7 +10564,7 @@ end 'Shape'
 type Cell
 	export var n as Tally
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 1}
 	end 'create'
 end 'Cell'

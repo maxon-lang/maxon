@@ -49,7 +49,7 @@ esac
   echo "type Pair uses A, B"
   echo -e "\tvar a as A"
   echo -e "\tvar b as B"
-  echo -e "\texport static function create(x A, y B) returns Self"
+  echo -e "\tstatic function create(x A, y B) returns Self"
   echo -e "\t\treturn Self{a: x, b: y}"
   echo -e "\tend 'create'"
   echo "end 'Pair'"

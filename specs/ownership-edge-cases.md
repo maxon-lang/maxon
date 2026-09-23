@@ -332,7 +332,7 @@ end 'Payload'
 type Container
 	export var payload as Payload
 
-	export function setPayload(p Payload)
+	function setPayload(p Payload)
 		payload = p
 	end 'setPayload'
 
@@ -368,7 +368,7 @@ end 'Val'
 type Holder
 	export var v as Val
 
-	export function set(newV Val)
+	function set(newV Val)
 		v = newV
 	end 'set'
 
@@ -1987,7 +1987,7 @@ Assigning a new struct to a struct field inside an if block must decref the old 
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
-export type Inner
+type Inner
 		export var items as IntArray
 		export var value as Integer
 
@@ -1996,7 +1996,7 @@ export type Inner
 		end 'create'
 end 'Inner'
 
-export type Outer
+type Outer
 		export var inner as Inner
 		export var initialized as bool
 
@@ -2173,12 +2173,12 @@ end 'main'
 <!-- test: rc-struct-with-string-enum-in-array -->
 Pushing structs that contain enums with string payloads into an array must not leak. The enum destructors must handle string payload cleanup during array destruction.
 ```maxon
-export union QueryKey
+union QueryKey
 		sourceFile(path String)
 		allModule
 end 'QueryKey'
 
-export type Dependency
+type Dependency
 		export var key as QueryKey
 
 		static function create(key QueryKey) returns Self
@@ -2590,7 +2590,7 @@ end 'Inner'
 type Outer
 	export var child as Inner
 
-	export function setChild(c Inner)
+	function setChild(c Inner)
 		child = c
 	end 'setChild'
 

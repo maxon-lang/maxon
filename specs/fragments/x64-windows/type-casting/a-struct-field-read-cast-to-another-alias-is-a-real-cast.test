@@ -5,7 +5,7 @@ typealias Wide = int(i64.min to i64.max)
 type Segment
 	export let base as Narrow
 
-	export static function create(base Narrow) returns Self
+	static function create(base Narrow) returns Self
 		return Self{base: base}
 	end 'create'
 end 'Segment'
@@ -19,48 +19,26 @@ end 'main'
 ExitCode: 7
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_console_probe_stdin@24 = i8 0
-  __mrt_console_probe_stdout@25 = i8 0
-  __mrt_console_probe_stderr@26 = i8 0
+  __sched_tls_teb_offset@0 = i64 0
+  __sched_allm@8 = i64 0
+  __sched_lock@16 = i64 0
+  __sched_preempt_ext_lock@24 = i64 0
+  __sched_preempt_context@32 = i64 0
+  __ds_base@40 = i64 0
+  __dbg_ctl@48 = i64 0
+  __mrt_console_probe_stdin@56 = i8 0
+  __mrt_console_probe_stdout@57 = i8 0
+  __mrt_console_probe_stderr@58 = i8 0
 }
 
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegImm32 rbx, 7
-  __rc_ok#6:
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
   __il_cont:
-    x64.loadRegBaseDisp.word64 rbx, [r8 + 0]
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-  __rc_ok#1:
-    x64.movRegReg rcx, r8
-    x64.callDirect __mm_decref
-    x64.movRegReg r8, rbx
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-struct-field-read-cast-to-another-alias-is-a-real-cast.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.movRegImm32 r8, 4294967295
+    x64.andRegImm32 r8, r8, 7
+  __rc_ok:
     x64.popReg rbp
     x64.ret
 }

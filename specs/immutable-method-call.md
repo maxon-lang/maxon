@@ -295,7 +295,7 @@ type Bag
 		return Self{items: IntArray.create()}
 	end 'create'
 
-	export function size() returns Integer
+	function size() returns Integer
 		return items.count()
 	end 'size'
 end 'Bag'
@@ -326,11 +326,11 @@ type Bag
 		return Self{items: IntArray.create()}
 	end 'create'
 
-	export function add(v Integer)
+	function add(v Integer)
 		items.push(v)
 	end 'add'
 
-	export function size() returns Integer
+	function size() returns Integer
 		return items.count()
 	end 'size'
 end 'Bag'
@@ -358,11 +358,11 @@ type Buf
 		return Self{s: "ab"}
 	end 'create'
 
-	export function grow()
+	function grow()
 		s.append("XY")
 	end 'grow'
 
-	export function size() returns Integer
+	function size() returns Integer
 		return s.byteLength()
 	end 'size'
 end 'Buf'
@@ -391,11 +391,11 @@ type Bag
 		return Self{items: IntArray.create()}
 	end 'create'
 
-	export function add(v Integer)
+	function add(v Integer)
 		items.push(v)
 	end 'add'
 
-	export function size() returns Integer
+	function size() returns Integer
 		return items.count()
 	end 'size'
 end 'Bag'
@@ -437,7 +437,7 @@ typealias CountArray = Array with Count
 type Facts
 	export var counts as CountArray = CountArray.create()
 
-	export static function create() returns Facts
+	static function create() returns Facts
 		return Self{}
 	end 'create'
 end 'Facts'

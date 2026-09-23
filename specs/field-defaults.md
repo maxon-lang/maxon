@@ -53,7 +53,7 @@ typealias IntArray = Array with Integer
 type Bag
 	export var items as IntArray = IntArray.create()
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 end 'Bag'
@@ -80,7 +80,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 type Bag
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
@@ -106,7 +106,7 @@ typealias IntArray = Array with Integer
 type Bag
 	export var items as IntArray = IntArray.create()
 
-	export static function createWith(items IntArray) returns Self
+	static function createWith(items IntArray) returns Self
 		return Self{items: items}
 	end 'createWith'
 end 'Bag'
@@ -131,7 +131,7 @@ typealias IntArray = Array with Integer
 type Bag
 	export var items as IntArray = IntArray.create()
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 end 'Bag'
@@ -157,7 +157,7 @@ type Point
 	export var x as Integer
 	export var y as Integer
 
-	export static function create(x Integer, y Integer) returns Self
+	static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
 	end 'create'
 end 'Point'
@@ -165,7 +165,7 @@ end 'Point'
 type Shape
 	export var origin as Point = Point.create(3, y: 4)
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 end 'Shape'
@@ -184,7 +184,7 @@ end 'main'
 type Person
 	export var name as String = "anon"
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 end 'Person'
@@ -211,7 +211,7 @@ type Bag
 	export var items as IntArray = IntArray.create()
 	export var total = 0
 
-	export static function createWithTotal(t Integer) returns Self
+	static function createWithTotal(t Integer) returns Self
 		return Self{total: t}
 	end 'createWithTotal'
 end 'Bag'
@@ -234,7 +234,7 @@ typealias IntArray = Array with Integer
 type Bag
 	var items = IntArray.create()
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 end 'Bag'
@@ -261,11 +261,11 @@ typealias Integer = int(i64.min to i64.max)
 type Box
 	var v as Integer = 7 zzz
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function get() returns Integer
+	function get() returns Integer
 		return self.v
 	end 'get'
 end 'Box'
@@ -297,16 +297,16 @@ type Bag uses Element
 	var items as ElementArray = ElementArray.create()
 	var seen = 0
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function add(item Element)
+	function add(item Element)
 		items.push(item)
 		seen = seen + 1
 	end 'add'
 
-	export function size() returns Count
+	function size() returns Count
 		return seen
 	end 'size'
 end 'Bag'
@@ -340,17 +340,17 @@ type Pairs uses Key, Value
 	var values as ValueArray = ValueArray.create()
 	var seen = 0
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function add(key Key, value Value)
+	function add(key Key, value Value)
 		keys.push(key)
 		values.push(value)
 		seen = seen + 1
 	end 'add'
 
-	export function size() returns Count
+	function size() returns Count
 		return seen
 	end 'size'
 end 'Pairs'
@@ -386,23 +386,23 @@ type Basket uses Element
 	var items as ElementArray = ElementArray.create()
 	var seen = 0
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export static function of(first Element, second Element) returns Self
+	static function of(first Element, second Element) returns Self
 		var result = Self{}
 		result.add(first)
 		result.add(second)
 		return result
 	end 'of'
 
-	export function add(item Element)
+	function add(item Element)
 		items.push(item)
 		seen = seen + 1
 	end 'add'
 
-	export function size() returns Count
+	function size() returns Count
 		return seen
 	end 'size'
 end 'Basket'
@@ -435,16 +435,16 @@ type Pairs uses Key, Value
 	var keys as KeyArray = KeyArray.create()
 	var values as ValueArray = ValueArray.create()
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function add(key Key, value Value)
+	function add(key Key, value Value)
 		keys.push(key)
 		values.push(value)
 	end 'add'
 
-	export function size() returns Count
+	function size() returns Count
 		return keys.count()
 	end 'size'
 end 'Pairs'
@@ -477,16 +477,16 @@ type Pairs uses Key, Value
 	var keys as KeyArray = KeyArray.create()
 	var values as ValueArray = ValueArray.create()
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function add(key Key, value Value)
+	function add(key Key, value Value)
 		keys.push(key)
 		values.push(value)
 	end 'add'
 
-	export function size() returns Count
+	function size() returns Count
 		return values.count()
 	end 'size'
 end 'Pairs'
@@ -519,16 +519,16 @@ type Pairs uses Key, Value
 	var keys as KeyArray = KeyArray.create()
 	var values as ValueArray = ValueArray.create()
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function add(key Key, value Value)
+	function add(key Key, value Value)
 		keys.push(key)
 		values.push(value)
 	end 'add'
 
-	export function size() returns Count
+	function size() returns Count
 		return keys.count() + values.count()
 	end 'size'
 end 'Pairs'

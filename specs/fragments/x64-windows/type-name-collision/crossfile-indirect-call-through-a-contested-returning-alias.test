@@ -4,12 +4,16 @@ typealias Token = int(0 to 5)
 
 export typealias Cb = function() returns Token
 
-export function three() returns Token
+function three() returns Token
 	return 3
 end 'three'
 
+export function goA() returns ExitCode
+	return callIt(three)
+end 'goA'
+
 // --- file: b.maxon
-typealias Slot = int(0 to 100)
+export typealias Slot = int(0 to 100)
 
 export type Token
 	export var value as Slot
@@ -32,18 +36,25 @@ end 'callIt'
 function main() returns ExitCode
 	let boxed = fromB()
 
-	return callIt(three) + (boxed.value as ExitCode)
+	return goA() + (boxed.value as ExitCode)
 end 'main'
 ---
 ExitCode: 12
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_console_probe_stdin@24 = i8 0
-  __mrt_console_probe_stdout@25 = i8 0
-  __mrt_console_probe_stderr@26 = i8 0
+  __sched_tls_teb_offset@0 = i64 0
+  __sched_allm@8 = i64 0
+  __sched_lock@16 = i64 0
+  __sched_preempt_ext_lock@24 = i64 0
+  __sched_preempt_context@32 = i64 0
+  __slab_arena_list@40 = i64 0
+  __slab_arena_map_l1@48 = i64 0
+  __slab_state@56 = i64 0
+  __ds_base@64 = i64 0
+  __dbg_ctl@72 = i64 0
+  __mrt_console_probe_stdin@80 = i8 0
+  __mrt_console_probe_stdout@81 = i8 0
+  __mrt_console_probe_stderr@82 = i8 0
 }
 
 func @three {
@@ -62,26 +73,26 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
-  __il_body#10:
+  __il_body#6:
     x64.movRegImm32 rbx, 9
-  __rc_ok#13:
+  __rc_ok#9:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
-  __il_cont#9:
+  __il_body#12:
     x64.leaRegFunc rax, [rip + __fnref_three]
     x64.movRegImm32 rcx, 0
-  __il_body#5:
+  __il_body#14:
     x64.callReg rax
     x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic#7
-  __rc_chk#8:
+    x64.jcc less, __rc_panic#16
+  __rc_chk#17:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic#7
-  __il_cont#4:
+    x64.jcc greater, __rc_panic#16
+  __il_cont:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.leaRegRegReg rbx, r8, rax
     x64.movRegReg rcx, r12
@@ -99,7 +110,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic#7:
+  __rc_panic#16:
     x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at c.maxon:2: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0

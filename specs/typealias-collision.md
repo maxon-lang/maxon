@@ -113,21 +113,24 @@ end 'main'
 
 
 <!-- test: project-export-shadows-stdlib-export -->
-A project file exports a typealias whose bare name is *also* exported by the
+A project file EXPORTS a typealias whose bare name is *also* exported by the
 stdlib (here `StringArray`, exported from `stdlib/Json.maxon`). A bare reference
-resolves to the project definition without E3063 — a project export shadows a
-stdlib export of the same name rather than colliding with it. Stdlib aliases are
-seeded as a lower-precedence library layer, so they never participate in
-cross-file ambiguity. Regression guard for self-hosting: the compiler's own
-source re-exports `StringArray` and `FilePathArray`, both of which the stdlib
-also exports.
+from another file resolves to the project definition without E3063 — a project
+export shadows a stdlib export of the same name rather than colliding with it.
+Stdlib aliases are seeded as a lower-precedence library layer, so they never
+participate in cross-file ambiguity. Regression guard for self-hosting: the
+compiler's own source re-exports `StringArray` and `FilePathArray`, both of which
+the stdlib also exports.
 ```maxon
+// --- file: lib/types.maxon
 export typealias StringArray = Array with String
 
+// --- file: app/main.maxon
 function main() returns ExitCode
 	var xs = StringArray.create()
 	xs.push("a")
 	xs.push("b")
+
 	return xs.count() as ExitCode
 end 'main'
 ```

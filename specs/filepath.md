@@ -807,6 +807,78 @@ C:\Users\file.txt
 C:/Other/C:/Users/file.txt
 ```
 
+<!-- test: filepath-resolve-folds-dot-segments -->
+```maxon
+function main() returns ExitCode
+	#if os(Windows)
+		let base = FilePath from "C:/work/project"
+		let absolute = FilePath from "C:/work/./runtime/../stdlib/Clock.maxon"
+	#else
+		let base = FilePath from "/work/project"
+		let absolute = FilePath from "/work/./runtime/../stdlib/Clock.maxon"
+	#endif
+
+	for spelled in ["./runtime/Clock.maxon", "runtime/./Clock.maxon", "../../runtime/Clock.maxon", "."] 'eachPath'
+		let p = try FilePath.from(spelled) otherwise panic("unspellable path '{spelled}'")
+		print("[{p.resolve(base)}]\n")
+	end 'eachPath'
+
+	print("[{absolute.resolve(base)}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```Stdout:x64-windows
+[C:\work\project\runtime\Clock.maxon]
+[C:\work\project\runtime\Clock.maxon]
+[C:\runtime\Clock.maxon]
+[C:\work\project]
+[C:\work\stdlib\Clock.maxon]
+```
+```stdout
+[/work/project/runtime/Clock.maxon]
+[/work/project/runtime/Clock.maxon]
+[/runtime/Clock.maxon]
+[/work/project]
+[/work/stdlib/Clock.maxon]
+```
+
+<!-- test: filepath-resolve-drive-relative -->
+```maxon
+function main() returns ExitCode
+	#if os(Windows)
+		let sameDrive = FilePath from "C:/work/project"
+		let otherDrive = FilePath from "D:/elsewhere"
+	#else
+		let sameDrive = FilePath from "/work/project"
+		let otherDrive = FilePath from "/elsewhere"
+	#endif
+
+	for spelled in ["C:src/main.maxon", "c:src/../lib", "C:"] 'eachPath'
+		let p = try FilePath.from(spelled) otherwise panic("unspellable path '{spelled}'")
+		let elsewhere = p.resolve(otherDrive)
+		print("[{p.resolve(sameDrive)}] [{elsewhere}] {elsewhere.isAbsolute()}\n")
+	end 'eachPath'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```Stdout:x64-windows
+[C:\work\project\src\main.maxon] [C:src\main.maxon] false
+[C:\work\project\lib] [c:lib] false
+[C:\work\project] [C:.] false
+```
+```stdout
+[/work/project/C:src/main.maxon] [/elsewhere/C:src/main.maxon] true
+[/work/project/lib] [/elsewhere/lib] true
+[/work/project/C:] [/elsewhere/C:] true
+```
+
 <!-- test: filepath-path-immutable -->
 ```maxon
 function main() returns ExitCode

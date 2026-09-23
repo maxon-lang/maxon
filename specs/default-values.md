@@ -372,7 +372,7 @@ type Box
 	export let n as Count
 	export let tag as String
 
-	export static function make(n Count, scale Count = 3, tag String = "d") returns Box
+	static function make(n Count, scale Count = 3, tag String = "d") returns Box
 		return Self{n: n * scale, tag: tag}
 	end 'make'
 end 'Box'
@@ -381,7 +381,7 @@ type Pair
 	export let a as Count
 	export let b as Count
 
-	export static function create(a Count, b Count = 9) returns Pair
+	static function create(a Count, b Count = 9) returns Pair
 		return Self{a: a, b: b}
 	end 'create'
 end 'Pair'
@@ -415,7 +415,7 @@ typealias Names = Array with String
 type Roster
 	export let names as Names
 
-	export static function of(names Names = Names.create()) returns Roster
+	static function of(names Names = Names.create()) returns Roster
 		return Self{names: names}
 	end 'of'
 end 'Roster'

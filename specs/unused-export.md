@@ -46,7 +46,7 @@ enums), typealiases, top-level constants, and top-level variables. The
 following declarations are skipped because they have no source-level caller
 or are reached through indirect dispatch:
 
-- `main` and module-init helpers
+- The entry point and module-init helpers, and every task a task file declares (the task runner enters each by name)
 - Compiler-synthesized helpers (`__construct_*`, `__field_init_*`, lifted
   closures, etc.)
 - Methods on a declared struct or enum — the declaring TYPE owns the
@@ -54,9 +54,8 @@ or are reached through indirect dispatch:
   separately
 - Every `public` declaration, which is the exemption above
 
-The audit runs only when the program has at least two files the author
-wrote: a one-file program's exports are its public surface and nothing
-outside it can name them. `stdlib/` files are not counted for that test.
+The file count is not part of the question: a one-file program is audited
+like any other, and an `export` nothing names is reported there too.
 
 The pass is scheduled after `semanticCheck` and the pipeline stops at the
 first pass that reports, so a program with any lexer, parser or semantic
@@ -73,7 +72,7 @@ different subdirectories (`api/` vs `app/`) so the call is genuinely
 <!-- test: error.unused-exported-function -->
 ```maxon
 // --- file: api/lib.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export function unusedHelper() returns Integer
 	return 42
@@ -95,7 +94,7 @@ error E3092: api/<fragment>:5:17: exported function 'api.unusedHelper' is never 
 <!-- test: error.unused-module-function -->
 ```maxon
 // --- file: api/lib.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 module function localHelper() returns Integer
 	return 7
@@ -121,7 +120,7 @@ internal helper of a public type as dead — and an un-`export`ed method of a `m
 E3093, advising a narrowing that cannot be written. The type owns the finding.
 ```maxon
 // --- file: api/shapes.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export type LocalPoint
 	export var x as Integer
@@ -157,7 +156,7 @@ E3092, because the question is whether anything OUTSIDE that file names it.
 // --- file: api/lib.maxon
 export typealias UnusedAlias = int(0 to 100)
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 function consumeAlias(value UnusedAlias) returns Integer
 	return value
@@ -179,7 +178,7 @@ error E3092: api/<fragment>:3:18: exported typealias 'UnusedAlias' is never refe
 <!-- test: error.unused-exported-var -->
 ```maxon
 // --- file: api/counter.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export var unusedCounter = 99
 
@@ -199,7 +198,7 @@ error E3092: api/<fragment>:5:12: exported variable 'unusedCounter' is never ref
 <!-- test: error.unused-exported-const -->
 ```maxon
 // --- file: api/limits.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export let MAX_UNUSED = 100
 
@@ -219,7 +218,7 @@ error E3092: api/<fragment>:5:12: exported constant 'MAX_UNUSED' is never refere
 <!-- test: error.unused-exported-enum -->
 ```maxon
 // --- file: api/status.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export enum LocalStatus
 	idle
@@ -265,7 +264,7 @@ end 'main'
 <!-- test: public-function-not-flagged -->
 ```maxon
 // --- file: api/lib.maxon
-typealias Integer = int(i64.min to i64.max)
+public typealias Integer = int(i64.min to i64.max)
 
 public function unusedHelper() returns Integer
 	return 42
@@ -287,7 +286,7 @@ end 'main'
 <!-- test: public-type-not-flagged -->
 ```maxon
 // --- file: api/shapes.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 public type LocalPoint
 	export var x as Integer
@@ -321,7 +320,7 @@ end 'main'
 // --- file: api/lib.maxon
 public typealias UnusedAlias = int(0 to 100)
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 function consumeAlias(value UnusedAlias) returns Integer
 	return value
@@ -343,7 +342,7 @@ end 'main'
 <!-- test: public-constant-not-flagged -->
 ```maxon
 // --- file: api/limits.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 public let MAX_UNUSED = 100
 
@@ -363,7 +362,7 @@ end 'main'
 <!-- test: public-var-not-flagged -->
 ```maxon
 // --- file: api/counter.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 public var unusedCounter = 99
 
@@ -385,7 +384,7 @@ A `module` declaration nothing outside its file reaches is E3094; promoted to `p
 which is the only way to silence that one — `module public` does not exist.
 ```maxon
 // --- file: api/lib.maxon
-typealias Integer = int(i64.min to i64.max)
+public typealias Integer = int(i64.min to i64.max)
 
 public function localHelper() returns Integer
 	return 7
@@ -566,7 +565,7 @@ line that DECIDES that visibility (`Parser.requireFieldAccessible`), so the audi
 resolver about it.
 ```maxon
 // --- file: api/store.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export type Item
 	export let n as Integer
@@ -617,7 +616,7 @@ needs `Rec` visible for `a.n` and never writes the name. E3092 reported it and E
 the advice was taken.
 ```maxon
 // --- file: api/project.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export type Rec
 	export let n as Integer
@@ -651,7 +650,7 @@ reference now comes from `Parser.emitEnumTagOf`, the one line that reads into a 
 enum/union.
 ```maxon
 // --- file: api/answer.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export union Answer
 	small
@@ -684,7 +683,7 @@ the same door, and was reported the same way. The two are kept apart because a b
 case and still report this one.
 ```maxon
 // --- file: api/color.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export enum Shade
 	dim
@@ -715,7 +714,7 @@ end 'main'
 narrowest: the whole program mentions `Shade` in exactly one file.
 ```maxon
 // --- file: api/color.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export enum Shade
 	dim
@@ -743,10 +742,14 @@ end 'main'
 ⭐⭐ **THE DISCRIMINATING CONTROL FOR THE TWO CASES ABOVE.** One line differs from
 `cross-file-element-member-access-is-a-reference` — the loop counts instead of reading `it.n` — and the
 verdict flips back. Nothing outside `api/store.maxon` reaches INTO an `Item`, so nothing outside needs it
-visible: dropping the `export` compiles (measured), and the finding is correct. Crediting every type merely
-REACHABLE from one a file names would delete this diagnostic and the three families beside it (a user
-generic's argument, a function alias's signature, a tuple alias's elements — each verified to compile once
-its `export` is dropped).
+visible, and the finding is correct. Crediting every type merely REACHABLE from one a file names would
+delete this diagnostic and the three families beside it (a user generic's argument, a function alias's
+signature, a tuple alias's elements).
+
+⚠ **BOTH FACTORIES ARE FILE-PRIVATE, AND THAT IS LOAD-BEARING.** A signature is asked for its types, and
+the answer is a reference to each of them: an `export` on `Holder.create` would name `ItemArray` — and
+`Item` through it — from the very file the audit is asking about, and the finding would disappear into the
+demand the signature rule makes. Both factories are reached only from `makeHolder`, beside them.
 ```maxon
 // --- file: api/store.maxon
 typealias Integer = int(i64.min to i64.max)
@@ -754,7 +757,7 @@ typealias Integer = int(i64.min to i64.max)
 export type Item
 	export let n as Integer
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 end 'Item'
@@ -764,7 +767,7 @@ export typealias ItemArray = Array with Item
 export type Holder
 	export let items as ItemArray
 
-	export static function create(items ItemArray) returns Self
+	static function create(items ItemArray) returns Self
 		return Self{items: items}
 	end 'create'
 end 'Holder'
@@ -780,9 +783,10 @@ typealias Count = int(i64.min to i64.max)
 
 function total(h Holder) returns Count
 	var t = 0
-	for it in h.items 'each'
+	for _ in h.items 'each'
 		t = t + 1
 	end 'each'
+
 	return t
 end 'total'
 
@@ -795,37 +799,45 @@ error E3092: api/<fragment>:5:13: exported type 'Item' is never referenced outsi
 ```
 
 <!-- test: error.unused-exported-union-nothing-outside-reaches -->
-⭐⭐ **THE DISCRIMINATING CONTROL FOR THE THREE `match` / ACCESSOR CASES ABOVE.** `app/main.maxon` HOLDS an
-`Answer` — it receives one from `classify` and hands it to `score` — and never reaches INTO it, so it never
-needs the type visible: dropping the `export` compiles under BOTH compilers (measured). Crediting a callee's
-declared RETURN type would delete this diagnostic, which is why the credit is taken where a value's tag is
-READ and not where its type is merely produced.
+⭐⭐ **THE DISCRIMINATING CONTROL FOR THE THREE `match` / ACCESSOR CASES ABOVE.** An `Answer` is produced,
+held and matched entirely inside `api/answer.maxon`; `app/main.maxon` gets a number. Nothing outside the
+declaring file names the union or reaches into one, so the finding is correct — and it is the credit taken
+where a value's TAG is read that the three cases above are about.
+
+⚠ `classify` and `score` are file-private, which is what leaves `Answer`'s name undemanded: a signature
+is asked for its types and the answer counts as a reference to each, so an `export` on either one would
+credit `Answer` from inside the file the audit is asking about.
 ```maxon
 // --- file: api/answer.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export union Answer
 	small
 	big(n Integer)
 end 'Answer'
 
-export function classify(n Integer) returns Answer
+function classify(n Integer) returns Answer
 	if n > 10 'big'
 		return Answer.big(n)
 	end 'big'
+
 	return Answer.small
 end 'classify'
 
-export function score(a Answer) returns Integer
+function score(a Answer) returns Integer
 	return match a 'm'
 		small gives 1
 		big(n) gives n
 	end 'm'
 end 'score'
 
+export function run(n Integer) returns Integer
+	return score(classify(n))
+end 'run'
+
 // --- file: app/main.maxon
 function main() returns ExitCode
-	return score(classify(42))
+	return run(42) as ExitCode
 end 'main'
 ```
 ```maxoncstderr
@@ -843,14 +855,14 @@ rule every flat two-file program would be advised to downgrade its exports, whic
 directory layout rather than about visibility.
 ```maxon
 // --- file: pkg/lib.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export function subtreeOnly() returns Integer
 	return 3
 end 'subtreeOnly'
 
 // --- file: pkg/sub/user.maxon
-typealias Num = int(i64.min to i64.max)
+export typealias Num = int(i64.min to i64.max)
 
 export function entry() returns Num
 	return subtreeOnly()
@@ -872,7 +884,7 @@ is outside the subtree entirely, reaches INTO an `Item` through `h.items`. Narro
 that advice makes E4006 refuse the access, so the advice was wrong in exactly the way E3092's was.
 ```maxon
 // --- file: pkg/store.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export type Item
 	export let n as Integer
@@ -899,7 +911,7 @@ export function makeHolder() returns Holder
 end 'makeHolder'
 
 // --- file: pkg/sub/user.maxon
-typealias Num = int(i64.min to i64.max)
+export typealias Num = int(i64.min to i64.max)
 
 export function itemValue(i Item) returns Num
 	return i.n
@@ -945,7 +957,7 @@ NEXT interned type, so `Victim` must be the one declared after `Holder`. Delete 
 two tables agree again and the diagnostic returns, which is the control that identified the mechanism.
 ```maxon
 // --- file: aliases/casts.maxon
-typealias Wide = int(i64.min to i64.max)
+export typealias Wide = int(i64.min to i64.max)
 typealias Narrow = int(0 to 100)
 
 export function clampish(v Wide) returns Wide
@@ -987,23 +999,22 @@ end 'main'
 error E3092: records/<fragment>:22:13: exported type 'Victim' is never referenced outside its declaring file
 ```
 
-## The audit needs two files the author wrote
+## A one-file program is audited like any other
 
-<!-- test: single-file-exports-are-not-flagged -->
-A one-file program's exports ARE its public surface, and nothing outside can name them — so every one
-would be E3092 and the diagnostic would be noise. The stdlib's own files are not counted, or the gate
-would never fire.
+<!-- test: error.a-single-file-program-is-audited -->
+⭐⭐ **A ONE-FILE PROGRAM IS AUDITED LIKE ANY OTHER.** `neverCalled` is `export` and nothing — inside the
+file or out — names it, which is exactly the fact E3092 reports; the file count was never part of the
+question. The declaration is at the fragment's root, so the diagnostic spells the name unqualified
+(`SignatureIndex.diagnosticNameInFile` returns the bare name where the namespace is empty).
 ```maxon
-typealias Integer = int(i64.min to i64.max)
-
-export function nobodyOutsideCanCallThis() returns Integer
-	return 5
-end 'nobodyOutsideCanCallThis'
+export function neverCalled() returns ExitCode
+	return 0
+end 'neverCalled'
 
 function main() returns ExitCode
-	return nobodyOutsideCanCallThis()
+	return 0
 end 'main'
 ```
-```exitcode
-5
+```maxoncstderr
+error E3092: <fragment>:2:17: exported function 'neverCalled' is never referenced outside its declaring file
 ```

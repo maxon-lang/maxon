@@ -538,15 +538,15 @@ end 'tagOf'
 type Holder
 	export var base as Integer
 
-	export static function create() returns Holder
+	static function create() returns Holder
 		return Self{base: tagOf(Kw.end)}
 	end 'create'
 
-	export function total() returns Integer
+	function total() returns Integer
 		return self.base + bonus()
 	end 'total'
 
-	export function bonus() returns Integer
+	function bonus() returns Integer
 		return 40
 	end 'bonus'
 end 'Holder'
@@ -580,11 +580,11 @@ end 'tagOf'
 type Holder
 	export var base as Integer
 
-	export static function create() returns Holder
+	static function create() returns Holder
 		return Self{base: tagOf(Kw.while)}
 	end 'create'
 
-	export function total() returns Integer
+	function total() returns Integer
 		return self.base + helper()
 	end 'total'
 end 'Holder'
@@ -924,11 +924,11 @@ end 'Kw'
 type Box
 	export var base as Idx
 
-	export static function create() returns Box
+	static function create() returns Box
 		return Self{base: 0}
 	end 'create'
 
-	export function total() returns Idx
+	function total() returns Idx
 		return self.base + helper()
 	end 'total'
 end

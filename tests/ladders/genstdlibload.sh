@@ -243,8 +243,8 @@ emit_synth_module() {
 	M="$1"
 	{
 		echo "// stdlib-load ladder: synthetic stdlib-shaped module $M — never called by the corpus"
-		echo "typealias LadderUnit${M} = int(0 to u16.max)"
-		echo "typealias LadderCount${M} = int(1 to 2)"
+		echo "export typealias LadderUnit${M} = int(0 to u16.max)"
+		echo "export typealias LadderCount${M} = int(1 to 2)"
 		echo ""
 		d=0
 		while [ "$d" -lt "$DECLS_PER_MODULE" ]; do

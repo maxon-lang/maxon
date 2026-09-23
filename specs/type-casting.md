@@ -709,7 +709,7 @@ typealias Narrow = int(0 to u32.max)
 type Segment
 	export let base as Narrow
 
-	export static function create(base Narrow) returns Self
+	static function create(base Narrow) returns Self
 		return Self{base: base}
 	end 'create'
 end 'Segment'
@@ -732,7 +732,7 @@ typealias Wide = int(i64.min to i64.max)
 type Segment
 	export let base as Narrow
 
-	export static function create(base Narrow) returns Self
+	static function create(base Narrow) returns Self
 		return Self{base: base}
 	end 'create'
 end 'Segment'

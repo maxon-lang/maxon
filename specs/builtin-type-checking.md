@@ -36,14 +36,14 @@ error E3005: specs/fragments/builtin-type-checking/builtin-type-checking.error-m
 
 <!-- test: builtin-type-checking.error-managed-file-write-int -->
 ```maxon
-export enum TestFileError implements Error
+enum TestFileError implements Error
 	openFailed
 end 'TestFileError'
 
 type TestFile
 	export var file as __ManagedFile
 
-	export static function open(path String) returns TestFile throws TestFileError
+	static function open(path String) returns TestFile throws TestFileError
 		let handle = try __ManagedFile.openRead(path.toByteArray().managed) otherwise 'f'
 			throw TestFileError.openFailed
 		end 'f'

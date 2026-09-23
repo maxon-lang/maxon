@@ -1,0 +1,27 @@
+// Test: error.a-type-argument-counts
+// --- file: api/lib.maxon
+type Secret
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Secret'
+
+export typealias SecretArray = Array with Secret
+
+export function all() returns SecretArray
+	var xs = SecretArray.create()
+	xs.push(Secret.create())
+	return xs
+end 'all'
+
+// --- file: app/main.maxon
+function sizeOf(xs SecretArray) returns ExitCode
+	return xs.count() as ExitCode
+end 'sizeOf'
+
+function main() returns ExitCode
+	return sizeOf(all())
+end 'main'
+---
+CompilerError:
+error E3167: api/<fragment>:11:17: exported function 'api.all' names file-private type 'Secret' in its return type

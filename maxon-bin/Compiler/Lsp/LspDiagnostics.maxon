@@ -189,7 +189,7 @@ extension Project
 		end 'sweptParse'
 	end 'refusalCorrectedBy'
 
-	module function sweptParseDiagnostics(reader FilePath, signatures ProgramSignatures, live TokenArray) returns SweptParse
+	function sweptParseDiagnostics(reader FilePath, signatures ProgramSignatures, live TokenArray) returns SweptParse
 		let swept = try queryActiveTokens(self, path: reader) otherwise return SweptParse.unavailable
 
 		if not tokenStreamsAgree(live, swept: swept) 'theAuthorHasTyped'
@@ -362,8 +362,8 @@ end 'theBufferBindsTheName'
 // `checkUnusedExports` bookkeeping — so asking it would let an editor query decide what a held corpus
 // later reports as unused.
 function declaringFileOfTheSubject(signatures ProgramSignatures, name ByteArray, reader FilePath) returns SubjectDeclaration
-	match signatures.typeNameDeclaredIn(name, readerFilePath: reader) 'aType'
-		declared(declFilePath) then return SubjectDeclaration.declared(declFilePath)
+	match signatures.declaredTypeNameIn(name, readerFilePath: reader) 'aType'
+		declared(_, _, declFilePath) then return SubjectDeclaration.declared(declFilePath)
 		undeclared then break 'aType'
 	end 'aType'
 
@@ -487,21 +487,19 @@ function identifierSubjectAt(tokens TokenArray, index TokenIndex) returns Diagno
 	return DiagnosticSubject.named(token.value, index: index)
 end 'identifierSubjectAt'
 
-// ⛔⛔ **A SINGLE-BUFFER COMPILE CANNOT HONESTLY PUBLISH A WHOLE-PROGRAM CLAIM.** "This program declares
-// no entry point" is a property of a PROGRAM, and the compile that raises it holds one FILE plus the
-// library tiers. A library file — most of what an editor has open — would otherwise carry a red squiggle
-// on its first line for ever, and the sentence would be TRUE of what this server compiled and FALSE of
-// the file the author is looking at. The corpus does not rescue it: it is lexed and folded, never
-// checked, so no road here ever compiles a whole program.
+// A single-buffer compile cannot honestly publish a whole-program claim: it holds one file plus the
+// library tiers, so each claim here is true of what this server compiled and false of the program the
+// author is editing. "This program declares no entry point" would sit on the first line of every
+// library file an editor opens. The unused-export family (E3092/E3093/E3094) says nothing else in the
+// program references a declaration, and none of the program's other files is in this compile. The
+// corpus does not rescue either: it is lexed and folded, never checked.
 //
-// ⚠ **A SECOND MEMBER IS ADDED BY MEASUREMENT, NEVER BY GUESSING.** Suppressing a diagnostic that is
-// genuinely about this file HIDES A REAL ERROR, which is a worse outcome than the squiggle this removes;
-// and the leading digit cannot stand in for the question, because it names the STAGE that raised the
-// diagnostic rather than the SCOPE it claims. The unused-export family (E3092/E3093/E3094) needs no
-// member here — `checkUnusedExports` returns before it seeds anything below `MinimumUserFilesToAudit`
-// author files, and a buffer is one.
+// ⚠ A member is added by measurement, never by guessing. Suppressing a diagnostic that is genuinely
+// about this file hides a real error, which is worse than the squiggle it removes; the leading digit
+// cannot stand in for the question, because it names the stage that raised a diagnostic rather than
+// the scope it claims.
 function claimsAboutTheWholeProgram(code ErrorCode) returns bool
-	return code == ErrorCode.noMainFunction
+	return code == ErrorCode.noMainFunction or code == ErrorCode.semanticUnusedExportedSymbol or code == ErrorCode.semanticExportableAsModule or code == ErrorCode.semanticUnusedModuleSymbol
 end 'claimsAboutTheWholeProgram'
 
 // Does this diagnostic report on THIS document's text?
@@ -522,7 +520,7 @@ end 'reportsOn'
 // owns that rule). A text compare drops every one of those diagnostics and publishes an empty array,
 // which reads as "this document is clean".
 function namesTheSameFile(one FilePath, other FilePath) returns bool
-	return one.resolve(Directory.currentPath()).normalize().equals(other.resolve(Directory.currentPath()).normalize())
+	return one.resolve(Directory.currentPath()).equals(other.resolve(Directory.currentPath()))
 end 'namesTheSameFile'
 
 function diagnosticNode(doc JsonDoc, diagnostic Diagnostic, source String, index LspLineIndex, tokens TokenArray) returns JsonNodeId

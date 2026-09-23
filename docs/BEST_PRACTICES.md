@@ -635,11 +635,11 @@ type Connection
 	var port as Port
 	var timeout as Milliseconds
 
-	export static function createDefault(host String) returns Connection
+	static function createDefault(host String) returns Connection
 		return Connection{host: host, port: 8080, timeout: 5000}
 	end 'createDefault'
 
-	export static function createSecure(host String) returns Connection
+	static function createSecure(host String) returns Connection
 		return Connection{host: host, port: 443, timeout: 10000}
 	end 'createSecure'
 end 'Connection'

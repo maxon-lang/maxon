@@ -329,11 +329,11 @@ compiled and RAN before the conversion existed, storing the integer's raw bytes 
 type Reading
 	export var value as Real
 
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{value: 3}
 	end 'make'
 
-	export function raw() returns Real
+	function raw() returns Real
 		return self.value
 	end 'raw'
 end 'Reading'
@@ -358,7 +358,7 @@ answer differently for the way the source spelled it.
 type Reading
 	export var value as Real = 0.0
 
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{}
 	end 'make'
 end 'Reading'
@@ -383,12 +383,12 @@ And the third spelling of that one write: the bare field name inside an instance
 type Reading
 	export var value as Real = 0.0
 
-	export function bump() returns Integer
+	function bump() returns Integer
 		value = 3
 		return 0
 	end 'bump'
 
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{}
 	end 'make'
 end 'Reading'
@@ -415,7 +415,7 @@ value: `as float = 3` records the f64 bit pattern of 3.0, not the integer 3.
 type Reading
 	export var value as Real = 3
 
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{}
 	end 'make'
 end 'Reading'
@@ -478,7 +478,7 @@ one it replaced. Seven rejections, one message.
 type Reading
 	export var value as Integer
 
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{value: 3.7}
 	end 'make'
 end 'Reading'
@@ -498,7 +498,7 @@ error E3009: specs/fragments/implicit-type-conversion/float-to-int-field-literal
 type Reading
 	export var value as Integer = 0
 
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{}
 	end 'make'
 end 'Reading'
@@ -519,12 +519,12 @@ error E3009: specs/fragments/implicit-type-conversion/float-to-int-field-write-r
 type Reading
 	export var value as Integer = 0
 
-	export function bump() returns Integer
+	function bump() returns Integer
 		value = 3.7
 		return 0
 	end 'bump'
 
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{}
 	end 'make'
 end 'Reading'
@@ -544,7 +544,7 @@ error E3009: specs/fragments/implicit-type-conversion/float-to-int-self-field-re
 type Reading
 	export var value as Integer = 3.7
 
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{}
 	end 'make'
 end 'Reading'
@@ -572,7 +572,7 @@ typealias Count = int(i64.min to i64.max)
 type Bag
 	export var n as Count = 2.5
 
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{}
 	end 'make'
 end 'Bag'

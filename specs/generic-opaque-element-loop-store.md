@@ -57,15 +57,15 @@ type Bag uses Element
 	typealias Items = Array with Element
 	export var items as Items
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: Items.create()}
 	end 'create'
 
-	export function count() returns Idx
+	function count() returns Idx
 		return items.count()
 	end 'count'
 
-	export function fillTo(newLength Idx, value Element)
+	function fillTo(newLength Idx, value Element)
 		items.resize(newLength)
 
 		var n = 0 as Idx
@@ -77,7 +77,7 @@ type Bag uses Element
 		end 'fill'
 	end 'fillTo'
 
-	export function at(i Idx) returns Element throws ArrayError
+	function at(i Idx) returns Element throws ArrayError
 		return try items.get(i)
 	end 'at'
 end 'Bag'
@@ -117,15 +117,15 @@ type Bag uses Element
 	typealias Items = Array with Element
 	export var items as Items
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: Items.create()}
 	end 'create'
 
-	export function count() returns Idx
+	function count() returns Idx
 		return items.count()
 	end 'count'
 
-	export function fillTo(newLength Idx, value Element)
+	function fillTo(newLength Idx, value Element)
 		items.resize(newLength)
 
 		var n = 0 as Idx
@@ -169,15 +169,15 @@ type Bag uses Element
 	typealias Items = Array with Element
 	export var items as Items
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: Items.create()}
 	end 'create'
 
-	export function count() returns Idx
+	function count() returns Idx
 		return items.count()
 	end 'count'
 
-	export function fillTo(newLength Idx, value Element)
+	function fillTo(newLength Idx, value Element)
 		items.resize(newLength)
 
 		var n = 0 as Idx
@@ -189,7 +189,7 @@ type Bag uses Element
 		end 'fill'
 	end 'fillTo'
 
-	export function at(i Idx) returns Element throws ArrayError
+	function at(i Idx) returns Element throws ArrayError
 		return try items.get(i)
 	end 'at'
 end 'Bag'
@@ -226,15 +226,15 @@ type Bag uses Element
 	typealias Items = Array with Element
 	export var items as Items
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: Items.create()}
 	end 'create'
 
-	export function count() returns Idx
+	function count() returns Idx
 		return items.count()
 	end 'count'
 
-	export function fillTo(newLength Idx, value Element)
+	function fillTo(newLength Idx, value Element)
 		items.resize(newLength)
 
 		var n = 0 as Idx
@@ -246,7 +246,7 @@ type Bag uses Element
 		end 'fill'
 	end 'fillTo'
 
-	export function at(i Idx) returns Element throws ArrayError
+	function at(i Idx) returns Element throws ArrayError
 		return try items.get(i)
 	end 'at'
 end 'Bag'
@@ -277,15 +277,15 @@ type Bag uses Element
 	typealias Items = Array with Element
 	export var items as Items
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: Items.create()}
 	end 'create'
 
-	export function count() returns Idx
+	function count() returns Idx
 		return items.count()
 	end 'count'
 
-	export function fillTo(newLength Idx, value Element) returns Element
+	function fillTo(newLength Idx, value Element) returns Element
 		items.resize(newLength)
 
 		var n = 0 as Idx
@@ -329,14 +329,14 @@ typealias Idx = int(0 to u64.max)
 typealias Strs = Array with String
 
 type Bag uses Element
-	typealias Items = Array with Element
+	export typealias Items = Array with Element
 	export var items as Items
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: Items.create()}
 	end 'create'
 
-	export function copyFrom(other Items, upTo Idx)
+	function copyFrom(other Items, upTo Idx)
 		items.resize(upTo)
 
 		var n = 0 as Idx
@@ -351,7 +351,7 @@ type Bag uses Element
 		end 'copy'
 	end 'copyFrom'
 
-	export function at(i Idx) returns Element throws ArrayError
+	function at(i Idx) returns Element throws ArrayError
 		return try items.get(i)
 	end 'at'
 end 'Bag'
@@ -406,15 +406,15 @@ type Bag uses Element
 	typealias Items = Array with Element
 	export var items as Items
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: Items.create()}
 	end 'create'
 
-	export function store(v Element)
+	function store(v Element)
 		items.push(v)
 	end 'store'
 
-	export function fill(n Idx, v Element)
+	function fill(n Idx, v Element)
 		var i = 0 as Idx
 		while i < n 'fill'
 			store(v)
@@ -422,11 +422,11 @@ type Bag uses Element
 		end 'fill'
 	end 'fill'
 
-	export function at(i Idx) returns Element throws ArrayError
+	function at(i Idx) returns Element throws ArrayError
 		return try items.get(i)
 	end 'at'
 
-	export function count() returns Idx
+	function count() returns Idx
 		return items.count()
 	end 'count'
 end 'Bag'
@@ -466,15 +466,15 @@ type Bag uses Element
 	typealias Items = Array with Element
 	export var items as Items
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: Items.create()}
 	end 'create'
 
-	export function store(v Element)
+	function store(v Element)
 		items.push(v)
 	end 'store'
 
-	export function fill(n Idx, v Element)
+	function fill(n Idx, v Element)
 		var i = 0 as Idx
 		while i < n 'fill'
 			store(v)
@@ -482,7 +482,7 @@ type Bag uses Element
 		end 'fill'
 	end 'fill'
 
-	export function count() returns Idx
+	function count() returns Idx
 		return items.count()
 	end 'count'
 end 'Bag'

@@ -117,7 +117,7 @@ type Node
 	export var a as Integer
 	export var next as Node
 
-	export function readNextA() returns Integer
+	function readNextA() returns Integer
 		return next.a
 	end 'readNextA'
 end 'Node'
@@ -142,11 +142,11 @@ type Node
 	export var a as Integer
 	export var next as Node
 
-	export function callNext() returns Integer
+	function callNext() returns Integer
 		return next.readA()
 	end 'callNext'
 
-	export function readA() returns Integer
+	function readA() returns Integer
 		return a
 	end 'readA'
 end 'Node'
@@ -172,7 +172,7 @@ type Node
 	export var a as Integer
 	export var next as Node
 
-	export function writeNextA()
+	function writeNextA()
 		next.a = 99
 	end 'writeNextA'
 end 'Node'
@@ -201,7 +201,7 @@ typealias Integer = int(i64.min to i64.max)
 type Counter
 	export var count as Integer
 
-	export function bad() returns Integer
+	function bad() returns Integer
 		return count.x
 	end 'bad'
 end 'Counter'
@@ -226,7 +226,7 @@ typealias Integer = int(i64.min to i64.max)
 type Inner
 	export var value as Integer
 
-	export function get() returns Integer
+	function get() returns Integer
 		return value
 	end 'get'
 
@@ -238,11 +238,11 @@ end 'Inner'
 type Outer
 	export var inner as Inner
 
-	export function readIt() returns Integer
+	function readIt() returns Integer
 		return inner.value
 	end 'readIt'
 
-	export function callIt() returns Integer
+	function callIt() returns Integer
 		return inner.get()
 	end 'callIt'
 
@@ -283,11 +283,11 @@ end 'Inner'
 type Outer
 	export var inner as Inner
 
-	export function writeIt(v Integer)
+	function writeIt(v Integer)
 		inner.value = v
 	end 'writeIt'
 
-	export function readIt() returns Integer
+	function readIt() returns Integer
 		return inner.value
 	end 'readIt'
 
@@ -325,7 +325,7 @@ end 'Inner'
 type Outer
 	export let inner as Inner
 
-	export function writeIt(v Integer)
+	function writeIt(v Integer)
 		inner.value = v
 	end 'writeIt'
 
@@ -377,15 +377,15 @@ end 'Inner'
 type Outer
 	export var inner as Inner
 
-	export function setViaAlias(n String)
+	function setViaAlias(n String)
 		inner.name = n
 	end 'setViaAlias'
 
-	export function setViaSelf(n String)
+	function setViaSelf(n String)
 		self.inner.name = n
 	end 'setViaSelf'
 
-	export function lenViaAlias() returns Small
+	function lenViaAlias() returns Small
 		return inner.name.byteLength() as Small
 	end 'lenViaAlias'
 
@@ -441,7 +441,7 @@ end 'Inner'
 type Outer
 	export var inner as Inner
 
-	export function probe() returns Small
+	function probe() returns Small
 		var n = 0 as Small
 		for it in inner.items 'loop'
 			inner.items = StringArray.create()

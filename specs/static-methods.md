@@ -88,11 +88,11 @@ typealias Integer = int(i64.min to i64.max)
 type Factory
 	export var id as Integer
 
-	export static function create(val Integer) returns Factory
+	static function create(val Integer) returns Factory
 		return Factory{id: val}
 	end 'create'
 
-	export static function zero() returns Factory
+	static function zero() returns Factory
 		return Factory.create(0)
 	end 'zero'
 end 'Factory'

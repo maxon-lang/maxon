@@ -198,11 +198,11 @@ type Calc
 		return Self{count: 0}
 	end 'create'
 
-	export function bump(by Count)
+	function bump(by Count)
 		self.count = self.count + by
 	end 'bump'
 
-	export function total() returns Count
+	function total() returns Count
 		return self.count
 	end 'total'
 end 'Calc'
@@ -235,6 +235,10 @@ end 'main'
   handler's `match`.
 - **Private methods are not messages.** Calling a non-exported method or a static through a handle is
   **E3136**. A service cannot send to itself.
+- **A message is as visible as its service, and no more.** Its `export` makes it a message rather than
+  widening it past the type, so the types its signature names need only the service type's visibility
+  ([E3167](/docs/cli/error-codes/#e3167--semanticsignaturetypelessvisiblethanfunction)): a file-private service's messages may name
+  file-private types.
 - **Shutdown.** `h.shutdown()` stops the service after the messages already queued. Dropping the last
   handle does the same. Replies requested afterwards fail with `ServiceError.stopped`.
 - **The target** of `spawn` must be a static factory that returns its own type; anything else — including a

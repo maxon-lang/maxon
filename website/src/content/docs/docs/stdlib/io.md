@@ -110,7 +110,7 @@ case-insensitive on Windows, byte-exact elsewhere.
 | `join(component String)` | `FilePath` | Append a component with the host separator. |
 | `join(component FilePath)` | `FilePath` | Append another path. |
 | `changeExtension(newExt String)` | `FilePath` | Replace or add an extension; include the dot (`".exe"`). |
-| `resolve(base FilePath)` | `FilePath` | A relative path joined onto `base`; an absolute path unchanged. |
+| `resolve(base FilePath)` | `FilePath` | A relative path joined onto `base`, or an absolute path kept, then folded as `normalize()` folds it — lexically, so a `..` after a symbolic link cancels the link's name. On Windows a drive-relative path (`C:foo`) is joined onto a `base` rooted on the same drive; against any other `base` it comes back normalized and still drive-relative, because it names that drive's current directory. |
 | `relativeTo(base FilePath)` | `FilePath` | The part after `base`. Throws `FilePathError.noParent` when the path is not inside `base`. |
 | `normalize()` | `FilePath` | The path folded lexically, without asking the filesystem: `.` components removed, each `..` cancelling the component before it, repeated separators collapsed and a trailing one dropped. A `..` above an absolute path's root is dropped; a leading one in a relative path is kept. A relative path that folds away entirely is `.`. |
 | `toString()` | `String` | The path text. |

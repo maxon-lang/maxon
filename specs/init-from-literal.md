@@ -88,7 +88,7 @@ type Wrapper implements InitableFromStringLiteral
 		return Wrapper{value: value}
 	end 'init'
 
-	export function len() returns Integer
+	function len() returns Integer
 		return value.byteLength()
 	end 'len'
 end 'Wrapper'
@@ -115,7 +115,7 @@ type Wrapper implements InitableFromStringLiteral
 		return Wrapper{value: value}
 	end 'init'
 
-	export function len() returns Integer
+	function len() returns Integer
 		return value.byteLength()
 	end 'len'
 end 'Wrapper'
@@ -150,7 +150,7 @@ type CharWrapper implements InitableFromCharLiteral
 		return CharWrapper{value: value}
 	end 'init'
 
-	export function len() returns Integer
+	function len() returns Integer
 		return value.byteLength()
 	end 'len'
 end 'CharWrapper'
@@ -179,7 +179,7 @@ type CharWrapper implements InitableFromCharLiteral
 		return CharWrapper{value: value}
 	end 'init'
 
-	export function len() returns Integer
+	function len() returns Integer
 		return value.byteLength()
 	end 'len'
 end 'CharWrapper'
@@ -215,7 +215,7 @@ type CharWrapper implements InitableFromCharLiteral
 		return CharWrapper{value: value}
 	end 'init'
 
-	export function len() returns Integer
+	function len() returns Integer
 		return value.byteLength()
 	end 'len'
 end 'CharWrapper'
@@ -247,7 +247,7 @@ type CharWrapper
 		return CharWrapper{value: value}
 	end 'init'
 
-	export function len() returns Integer
+	function len() returns Integer
 		return value.byteLength()
 	end 'len'
 end 'CharWrapper'

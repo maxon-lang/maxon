@@ -778,7 +778,7 @@ type Flags
 	export var b as bool
 	export var c as bool
 
-	export static function make(a bool, b bool, c bool) returns Flags
+	static function make(a bool, b bool, c bool) returns Flags
 		return Flags{a: a, b: b, c: c}
 	end 'make'
 end 'Flags'

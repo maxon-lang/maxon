@@ -66,7 +66,7 @@ type Point
 	export var x as Integer
 	export var y as Integer
 
-	export static function make(x Integer, y Integer) returns Self
+	static function make(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
 	end 'make'
 end 'Point'
@@ -86,7 +86,7 @@ type Defaults
 	export var a = 10
 	export var b = 32
 
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{}
 	end 'make'
 end 'Defaults'
@@ -105,7 +105,7 @@ end 'main'
 type Thing
 	export var value = 7
 
-	export static function make(value Integer) returns Self
+	static function make(value Integer) returns Self
 		return Self{value: value}
 	end 'make'
 end 'Thing'
@@ -130,7 +130,7 @@ type Mixed
 	export var a = 10
 	export var b as Integer
 
-	export static function make(b Integer) returns Self
+	static function make(b Integer) returns Self
 		return Self{b: b}
 	end 'make'
 end 'Mixed'
@@ -160,7 +160,7 @@ always-on leak gate makes this case a standing guard that the rejection frees ev
 type Box
 	export var name = "hello"
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 end 'Box'
@@ -194,7 +194,7 @@ typealias StrBox = Box with String
 type Box uses T
 	export var value as T = makeIt()
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 end 'Box'
@@ -223,7 +223,7 @@ typealias StrBox = Box with String
 type Box uses T
 	export var value as T = 0
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 end 'Box'
@@ -247,7 +247,7 @@ type P
 	export var x as Integer
 	export var y as Integer
 
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{}
 	end 'make'
 end 'P'
@@ -270,7 +270,7 @@ type P
 	export var x as Integer
 	export var y as Integer
 
-	export static function make(x Integer) returns Self
+	static function make(x Integer) returns Self
 		return Self{x: x}
 	end 'make'
 end 'P'
@@ -293,7 +293,7 @@ type Q
 	var hidden as Integer
 	export var shown as Integer
 
-	export static function make(s Integer) returns Self
+	static function make(s Integer) returns Self
 		return Self{shown: s}
 	end 'make'
 end 'Q'
@@ -316,7 +316,7 @@ type Counter
 	export var value as Integer
 	export var version as Integer
 
-	export static function make(initial Integer) returns Self
+	static function make(initial Integer) returns Self
 		self.value = initial
 		self.version = 1
 		return Self{}
@@ -340,7 +340,7 @@ typealias Integer = int(i64.min to i64.max)
 type Branched
 	export var value as Integer
 
-	export static function make(sign bool) returns Self
+	static function make(sign bool) returns Self
 		if sign 'br'
 			self.value = 42
 		end 'br' else 'other'
@@ -367,7 +367,7 @@ typealias Integer = int(i64.min to i64.max)
 type Broken
 	export var value as Integer
 
-	export static function make(sign bool) returns Self
+	static function make(sign bool) returns Self
 		if sign 'br'
 			self.value = 42
 		end 'br'
@@ -392,7 +392,7 @@ typealias Integer = int(i64.min to i64.max)
 type LoopOnly
 	export var value as Integer
 
-	export static function make(limit Integer) returns Self
+	static function make(limit Integer) returns Self
 		var i = 0
 		while i < limit 'loop'
 			self.value = i
@@ -419,7 +419,7 @@ typealias Integer = int(i64.min to i64.max)
 type TwoReturns
 	export var value as Integer
 
-	export static function make(sign bool) returns Self
+	static function make(sign bool) returns Self
 		if sign 'br'
 			self.value = 42
 			return Self{}
@@ -456,7 +456,7 @@ type Inner
 	export var a as Integer
 	export var b as Integer
 
-	export static function create(a Integer, b Integer) returns Inner
+	static function create(a Integer, b Integer) returns Inner
 		return Self{a: a, b: b}
 	end 'create'
 end 'Inner'
@@ -469,7 +469,7 @@ type Outer
 	export var found as bool
 	export var inner as Inner
 
-	export static function miss() returns Outer
+	static function miss() returns Outer
 		return Self{found: false, inner: Inner.create(0, b: try parseB() otherwise panic("miss: parseB failed"))}
 	end 'miss'
 end 'Outer'

@@ -257,10 +257,10 @@ typealias Integer = int(0 to u32.max)
 type Pair uses T where T is Equatable
 	export var a as T
 	export var b as T
-	export static function create(a T, b T) returns Self
+	static function create(a T, b T) returns Self
 		return Self{ a: a, b: b }
 	end 'create'
-	export function bothEqual() returns bool
+	function bothEqual() returns bool
 		return self.a.equals(self.b)
 	end 'bothEqual'
 end 'Pair'

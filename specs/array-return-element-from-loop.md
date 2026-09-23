@@ -25,7 +25,7 @@ Returning a for-loop iteration variable whose struct has a managed `String` fiel
 type Entry
 	export var key as String
 
-	export static function create(key String) returns Entry
+	static function create(key String) returns Entry
 		return Self{key: key}
 	end 'create'
 end 'Entry'

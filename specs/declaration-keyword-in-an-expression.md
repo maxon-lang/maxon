@@ -247,11 +247,11 @@ end 'Marker'
 type Holder
 	export var base as Idx
 
-	export static function create() returns Holder
+	static function create() returns Holder
 		return Self{base: 20}
 	end 'create'
 
-	export function trips(m Marker, flag bool) returns Idx
+	function trips(m Marker, flag bool) returns Idx
 		if m == Marker.function and (flag or not flag) 'both'
 			return self.base
 		end 'both'
@@ -296,25 +296,25 @@ end 'trips'
 type Holder
 	export var base as Idx
 
-	export static function create() returns Holder
+	static function create() returns Holder
 		return Self{base: 12}
 	end 'create'
 
-	export function total() returns Idx
+	function total() returns Idx
 		return self.base + bonus()
 	end 'total'
 
-	export function bonus() returns Idx
+	function bonus() returns Idx
 		return 10
 	end 'bonus'
 end 'Holder'
 
-export function exported() returns Idx
+function exported() returns Idx
 	let h = Holder.create()
 	return h.total()
 end 'exported'
 
-module function scoped() returns Idx
+function scoped() returns Idx
 	return 20
 end 'scoped'
 
@@ -448,11 +448,11 @@ end 'Marker'
 type Holder
 	export var base as Idx
 
-	export static function create() returns Holder
+	static function create() returns Holder
 		return Self{base: 20}
 	end 'create'
 
-	export function classify(m Marker) returns Idx
+	function classify(m Marker) returns Idx
 		let extra = match m 'm'
 			function gives (1 + 1)
 			other gives 3

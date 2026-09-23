@@ -320,7 +320,7 @@ end 'PressurePeak'
 //
 // One case, no fields: everything the renderer needs is the analysis state, which cannot be squeezed into
 // an error value and is left in a `RegAllocRefusalSite` instead.
-module enum RegAllocRefusal implements Error
+export enum RegAllocRefusal implements Error
 	hotOverflow
 end 'RegAllocRefusal'
 
@@ -338,7 +338,7 @@ end 'RefusedAllocation'
 
 // The one-slot mailbox a refusal writes into. A record rather than a return value because the refusal
 // leaves by a `throw`, and Maxon has no way to carry a second value out of one.
-module type RegAllocRefusalSite
+export type RegAllocRefusalSite
 	export var refused as RefusedAllocation
 
 	export static function create() returns RegAllocRefusalSite
@@ -357,7 +357,7 @@ end 'RegAllocRefusalSite'
 //
 // The row is derived ONCE, for the winner, by `fillLiveBeforeOp` — from the same backward transfer
 // function the sweep steps with, so it is bit-for-bit the row the snapshot would have taken.
-type PeakRank
+export type PeakRank
 	export var found as bool
 	export var pressure as RegCount
 	export var blockLocal as CfgIndex
@@ -462,7 +462,7 @@ end 'PeakRank'
 //    uses it serves. A value read only AFTER the clobber gets the store/reload bracket around it; one
 //    read on BOTH sides of the clobber, and so live across it around the back edge, gets a load at
 //    each use (`SplitScope.everyUse`) — still forced, still unsearched, just paid per use.
-enum SpillPlacement
+export enum SpillPlacement
 	cold
 	forced
 end 'SpillPlacement'
@@ -531,7 +531,7 @@ type SplitAnchor
 	// `placementOf` is the rule for a peak in AUTHORED code, and a full-pool peak in a function the
 	// compiler emitted overrides it (see `relievePressure`'s `noAuthorToRefuse`). Deriving it in here
 	// would put that decision in two places, and the one in here cannot see whose code it is.
-	export function takePeak(peak PressurePeak, cutPlacement SpillPlacement)
+	function takePeak(peak PressurePeak, cutPlacement SpillPlacement)
 		self.blockLocal = peak.blockLocal
 		self.seq = peak.peakSeq
 		self.placement = cutPlacement
@@ -540,7 +540,7 @@ type SplitAnchor
 	// Become a FORCED cut at one op — the colorer's repair, which has no peak. `forced` rather than
 	// derived: the value being cut is CONFINED (that is what made the colorer fail), and a confined
 	// value's only home across the clobber is memory, so the placement is the ABI's and not a choice.
-	export function takeForcedCutAt(cutBlock CfgIndex, pos BlockOpPos)
+	function takeForcedCutAt(cutBlock CfgIndex, pos BlockOpPos)
 		self.blockLocal = cutBlock
 		self.seq = seqAt(cutBlock, pos: pos)
 		self.placement = SpillPlacement.forced
@@ -867,7 +867,7 @@ type PeakTree
 
 	// Size the tree for a function, with every leaf empty. The full sweep then sets each leaf and calls
 	// `build`.
-	export function reset(blockCount CfgIndex)
+	function reset(blockCount CfgIndex)
 		self.numBlocks = blockCount
 		let base = roundUpToPowerOfTwo(blockCount as BytePos) as ColumnLength
 		self.leafBase = base
@@ -887,7 +887,7 @@ type PeakTree
 
 	// Record one block's rank at its leaf. `build` (a whole-function seed) or `promote` (an incremental
 	// repair) is what publishes it to the root.
-	export function setLeaf(blockLocal CfgIndex, rank PeakRank)
+	function setLeaf(blockLocal CfgIndex, rank PeakRank)
 		try self.found.set(blockLocal, value: rank.found) otherwise panic("PeakTree.setLeaf: found.set OOB for block {blockLocal}")
 		try self.pressure.set(blockLocal, value: rank.pressure) otherwise panic("PeakTree.setLeaf: pressure.set OOB for block {blockLocal}")
 		try self.forwardPos.set(blockLocal, value: rank.forwardPos) otherwise panic("PeakTree.setLeaf: forwardPos.set OOB for block {blockLocal}")
@@ -901,7 +901,7 @@ type PeakTree
 
 	// Build every internal node from the leaves, in DESCENDING node order so a node's children are
 	// always already combined. O(blocks), once per function.
-	export function build()
+	function build()
 		for ri in 0 upto self.leafBase - 1 'eachInternal'
 			self.combineAt(self.leafBase - 1 - ri)
 		end 'eachInternal'
@@ -909,7 +909,7 @@ type PeakTree
 
 	// Re-publish ONE block's leaf up to the root — O(log blocks), which is what keeps a split's cost
 	// proportional to what it dirtied.
-	export function promote(blockLocal CfgIndex)
+	function promote(blockLocal CfgIndex)
 		var node = (self.leafBase + (blockLocal as ColumnLength)) / 2
 
 		while node >= 1 'upToRoot'
@@ -982,7 +982,7 @@ type PeakTree
 	// nothing here states and nothing checks, and the first reader to move a use below that loop would
 	// read a rank belonging to some other block with no diagnostic anywhere. One allocation per
 	// analysis is the price of a value with no expiry date on it.
-	export function best() returns PeakRank
+	function best() returns PeakRank
 		var out = emptyRank()
 		self.fillBest(out)
 		return out
@@ -991,7 +991,7 @@ type PeakTree
 	// The root, into a rank the CALLER owns — for the one caller that already has an empty one to
 	// spend (`analyzePressure`'s fold seed, which the tournament path never uses). It is the same read
 	// `best` does, so the two cannot come to disagree about what an empty tree answers.
-	export function fillBest(into PeakRank)
+	function fillBest(into PeakRank)
 		let champion = try self.winner.get(1) otherwise panic("PeakTree.fillBest: the tree has no root — `reset` must run before any query")
 
 		if champion == self.numBlocks 'noPeak'
@@ -1070,7 +1070,7 @@ typealias PressureSlotColumn = Array with PressureSlot
 
 // A per-op contribution to the BACKWARD-running live population — SIGNED, because an op that defines a
 // value that outlives it LOWERS the population as the sweep steps back over it.
-typealias PressureDelta = int(i64.min to i64.max)
+export typealias PressureDelta = int(i64.min to i64.max)
 typealias PressureDeltaColumn = Array with PressureDelta
 
 // How many slots each op is given room in. A spliced op takes a FREE slot strictly between its
@@ -1105,7 +1105,7 @@ let NoOpInSubtree = -1152921504606846976 as PressureDelta
 
 // The winner of one block's max-suffix-sum: the peak's SLOT and the value there. `found` is false for a
 // block with no ops at all (nothing to rank).
-type BlockPeakSlot
+export type BlockPeakSlot
 	export var found as bool
 	export var slot as PressureSlot
 	export var pressure as PressureDelta
@@ -2794,7 +2794,7 @@ end 'refreshBlockDemands'
 // `zeroColumn` in TargetLiveness.maxon. The reason these buffers are refilled is that most of them want
 // a NON-zero value in every entry (`NoStoreAnchorPressure`, a `numBlocks` "unset", an out-of-file
 // register), which no invariant will hand you.
-type SplitScratch
+export type SplitScratch
 	// The pressure sweep's ONE dense working row, and the operand/op buffers it steps with — shared with
 	// the liveness sweep it re-runs on a dirty block (`sweepBlockPressure`). The row is zero on entry to
 	// a block and zero again on the way out, so it is never cleared wholesale.
@@ -3563,7 +3563,7 @@ type FailingPoint
 	// is live AT the op because the op reads it, so the reload that replaces it holds the register at
 	// exactly the point the register was wanted. It is the same exclusion `usesAtPeakOp` makes on
 	// `chooseVictim`'s candidate pool, and `findConfiningClobber` makes on its cut.
-	export function readsOccupant(module TargetModule, w ValueId, scratch SplitScratch) returns bool
+	function readsOccupant(module TargetModule, w ValueId, scratch SplitScratch) returns bool
 		if not self.atAnOp 'aBlockEntryReadsNothing'
 			return false
 		end 'aBlockEntryReadsNothing'
@@ -5096,14 +5096,14 @@ type BeladyBest
 	export var valueId as ValueId
 	var farthestNextUse as OpSeq
 
-	export static function create() returns BeladyBest
+	static function create() returns BeladyBest
 		return Self{found: false, valueId: 0, farthestNextUse: 0}
 	end 'create'
 
 	// Offer a candidate. It wins iff it is the first, or its next use is STRICTLY farther away —
 	// strict, and `chooseVictim` offers candidates in ascending id order, so ties resolve to the
 	// LOWEST value id and the choice is deterministic.
-	export function offer(candidate ValueId, nextUse OpSeq)
+	function offer(candidate ValueId, nextUse OpSeq)
 		if self.found and nextUse <= self.farthestNextUse 'noImprovement'
 			return
 		end 'noImprovement'
@@ -5936,7 +5936,7 @@ type ReachCache
 
 	// Aim the cache at the peak `chooseVictim` is about to ask about. Everything walked from a
 	// different peak is forgotten; a repeat of the same peak block keeps every row it already has.
-	export function retargetTo(peakBlock CfgIndex)
+	function retargetTo(peakBlock CfgIndex)
 		if self.hasPeak and self.peakBlockLocal == peakBlock 'samePeakBlock'
 			return
 		end 'samePeakBlock'
@@ -5949,7 +5949,7 @@ type ReachCache
 
 	// Is `block` — at or before the peak in layout order — reachable from the peak's SUCCESSORS without
 	// passing through `defBlock`?
-	export function reachableFromPeak(topo FuncTopology, peakBlock CfgIndex, defBlock CfgIndex, block CfgIndex) returns bool
+	function reachableFromPeak(topo FuncTopology, peakBlock CfgIndex, defBlock CfgIndex, block CfgIndex) returns bool
 		if (not self.hasPeak) or self.peakBlockLocal != peakBlock 'staleTarget'
 			panic("ReachCache.reachableFromPeak: the cached walks start at peak block {self.peakBlockLocal} but the caller is asking about peak block {peakBlock} — `retargetTo` must run once per peak, before any query. A row walked from a different peak would flip `killsValueAtPeak`, pick a different victim, and emit a different split.")
 		end 'staleTarget'

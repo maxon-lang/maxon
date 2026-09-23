@@ -354,7 +354,7 @@ function outputIsRunningImage(outputPath FilePath) returns bool
 		return false
 	end 'noIntrospection'
 
-	return outputPath.resolve(Directory.currentPath()).normalize().equals(running.normalize())
+	return outputPath.resolve(Directory.currentPath()).equals(running.normalize())
 end 'outputIsRunningImage'
 
 // ⭐⭐ **A COMPILER REBUILDING ITSELF WRITES OVER THE IMAGE IT IS EXECUTING, AND NO OS ALLOWS THAT.**
@@ -2088,7 +2088,7 @@ function isProjectManifestFileName(name String) returns bool
 	return equalsIgnoringAsciiCase(name.toByteArray(), b: ProjectManifestFileName.toByteArray())
 end 'isProjectManifestFileName'
 
-function isTaskFileName(name String) returns bool
+module function isTaskFileName(name String) returns bool
 	return equalsIgnoringAsciiCase(name.toByteArray(), b: TaskFileName.toByteArray())
 end 'isTaskFileName'
 
@@ -2296,7 +2296,7 @@ export typealias StagedSourceOriginArray = Array with StagedSourceOrigin
 // A call that returns at all lists at least the directory it was handed, so the answer is 1 or more; a
 // root that cannot be listed throws instead. The floor is 0 because the type has no narrower honest
 // bound to state, not because a walk reports it.
-typealias DirectoryWalkCount = int(0 to u64.max)
+export typealias DirectoryWalkCount = int(0 to u64.max)
 
 // The same paths where the question is MEMBERSHIP rather than order, so it is answered by one hash
 // instead of a scan — and each pair a scan would compare is about four String allocations, because
@@ -2340,7 +2340,7 @@ end 'resolveOutputPath'
 // directory and folded, so `.`, `..` and a trailing separator name the directory they lead to. A filesystem
 // root has no name.
 function directoryNameOf(dir FilePath) returns String throws CompileError
-	let name = dir.resolve(Directory.currentPath()).normalize().filename()
+	let name = dir.resolve(Directory.currentPath()).filename()
 
 	if name.isEmpty() 'aRoot'
 		throw CompileError.unnamedDirectory(dir)

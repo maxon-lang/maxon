@@ -1,0 +1,23 @@
+// Test: error.a-public-function-names-an-export-type
+// --- file: api/config.maxon
+export type Config
+	export var size as ExitCode
+
+	export static function create(size ExitCode) returns Self
+		return Self{size: size}
+	end 'create'
+end 'Config'
+
+public function make() returns Config
+	return Config.create(7)
+end 'make'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let c = Config.create(1)
+	let m = make()
+	return c.size + m.size
+end 'main'
+---
+CompilerError:
+error E3167: api/<fragment>:11:17: public function 'api.make' names exported type 'Config' in its return type

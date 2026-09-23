@@ -84,7 +84,7 @@ typealias Vec3 = Vector with 3 Int
 typealias Vec5 = Vector with 5 Int
 
 extension Vector
-	export function capacity() returns Int
+	function capacity() returns Int
 		return countof(Self)
 	end 'capacity'
 end 'Vector'
@@ -109,7 +109,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 
 extension Vector
-	export function byName() returns Int
+	function byName() returns Int
 		return countof(Vector)
 	end 'byName'
 end 'Vector'
@@ -153,7 +153,7 @@ typealias Vec5 = Vector with 5 Int
 var trips = 0
 
 extension Vector
-	export static function counted() returns Self
+	static function counted() returns Self
 		var i = 0
 		while i < countof(Self) 'each'
 			trips = trips + 1
@@ -162,7 +162,7 @@ extension Vector
 		return Self{}
 	end 'counted'
 
-	export function rebuild() returns Int
+	function rebuild() returns Int
 		let fresh = Self.counted()
 		var slots = 0
 		for _ in fresh 'countTheRecordsSlots'
@@ -196,14 +196,14 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 
 extension Vector
-	export static function elementBytes() returns Self
+	static function elementBytes() returns Self
 		if sizeof(Element) == 0 'impossible'
 			panic("a type has a size")
 		end 'impossible'
 		return Self{}
 	end 'elementBytes'
 
-	export function reach() returns Int
+	function reach() returns Int
 		var v = Self.elementBytes()
 		if v.count() > 0 'theStaticBuiltOne'
 			return 0
@@ -238,7 +238,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntHolder = Holder with Int
 
 extension Vector
-	export function capacity() returns Int
+	function capacity() returns Int
 		return countof(Self)
 	end 'capacity'
 end 'Vector'
@@ -248,11 +248,11 @@ type Holder uses Element
 
 	var slot as Slot
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{slot: Slot.create()}
 	end 'create'
 
-	export function size() returns Int
+	function size() returns Int
 		return slot.capacity()
 	end 'size'
 end 'Holder'
@@ -309,11 +309,11 @@ typealias IntBox = Box with Int
 type Box uses T
 	export var value as T
 
-	export static function create(value T) returns Self
+	static function create(value T) returns Self
 		return Self{value: value}
 	end 'create'
 
-	export function slots() returns Int
+	function slots() returns Int
 		return countof(Self)
 	end 'slots'
 end 'Box'
@@ -340,7 +340,7 @@ typealias Vec3 = Vector with 3 Int
 extension Vector
 	typealias Me = Vector with Element
 
-	export function viaAlias() returns Int
+	function viaAlias() returns Int
 		return countof(Me)
 	end 'viaAlias'
 end 'Vector'
@@ -369,11 +369,11 @@ typealias IntBox = Box with Int
 type Box uses T
 	export var value as T
 
-	export static function create(value T) returns Self
+	static function create(value T) returns Self
 		return Self{value: value}
 	end 'create'
 
-	export static function slots() returns Int
+	static function slots() returns Int
 		return countof(Self)
 	end 'slots'
 end 'Box'
@@ -402,11 +402,11 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 
 extension Vector
-	export function capacity() returns Int
+	function capacity() returns Int
 		return countof(Self)
 	end 'capacity'
 
-	export function pairWith(other Self) returns Int
+	function pairWith(other Self) returns Int
 		return other.capacity()
 	end 'pairWith'
 end 'Vector'
@@ -434,11 +434,11 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 
 extension Vector
-	export function capacity() returns Int
+	function capacity() returns Int
 		return countof(Self)
 	end 'capacity'
 
-	export function viaClosure() returns Int
+	function viaClosure() returns Int
 		let f = function() gives countof(Self)
 		return f()
 	end 'viaClosure'
@@ -471,15 +471,15 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 
 extension Vector
-	export function dup() returns Self
+	function dup() returns Self
 		return Self{}
 	end 'dup'
 
-	export function capacity() returns Int
+	function capacity() returns Int
 		return countof(Self)
 	end 'capacity'
 
-	export function chained() returns Int
+	function chained() returns Int
 		return self.dup().capacity()
 	end 'chained'
 end 'Vector'
@@ -515,15 +515,15 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 
 extension Vector
-	export function capacity() returns Int
+	function capacity() returns Int
 		return countof(Self)
 	end 'capacity'
 
-	export function dup() returns Self
+	function dup() returns Self
 		return Self{}
 	end 'dup'
 
-	export function twice() returns Int
+	function twice() returns Int
 		var other = self.dup()
 		return other.capacity()
 	end 'twice'
@@ -548,11 +548,11 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 
 extension Vector
-	export function capacity() returns Int
+	function capacity() returns Int
 		return countof(Self)
 	end 'capacity'
 
-	export function pairWith(other Self) returns Int
+	function pairWith(other Self) returns Int
 		var same = other
 		return same.capacity()
 	end 'pairWith'
@@ -581,11 +581,11 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 
 extension Vector
-	export function capacity() returns Int
+	function capacity() returns Int
 		return countof(Self)
 	end 'capacity'
 
-	export function viaClosure(other Self) returns Int
+	function viaClosure(other Self) returns Int
 		let f = function(v Self) gives v.capacity()
 		return f(other)
 	end 'viaClosure'

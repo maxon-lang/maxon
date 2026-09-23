@@ -37,7 +37,7 @@ was recognized a namespaced module could declare a void function that no file ou
 directory could ever call.
 ```maxon
 // --- file: lib/inner/deep.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function bump(v Integer) returns Integer
 	return v + 1
@@ -48,7 +48,7 @@ export function shout()
 end 'shout'
 
 // --- file: lib/top.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function twice(v Integer) returns Integer
 	return v + v
@@ -151,14 +151,14 @@ A directory `Point/` exports a free `make`, and a `type Point` declares a static
 after a type moves no existing call.
 ```maxon
 // --- file: Point/free.maxon
-typealias Integer = int(0 to 125)
+public typealias Integer = int(0 to 125)
 
 public function make() returns Integer
 	return 11
 end 'make'
 
 // --- file: app/main.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 public type Point
 	export var x as Integer
@@ -186,7 +186,7 @@ was refused `E3011: Unknown type 'lib'` — a wrong rejection quoting a fragment
 wrote, for a declaration filed under exactly that key. Both spellings appear here, in one program.
 ```maxon
 // --- file: lib/from/h.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export typealias Score = int(0 to 100)
 
@@ -211,7 +211,7 @@ directory is refused by the tier its declaration wrote, and the message is the o
 actually wrong rather than "no such function".
 ```maxon
 // --- file: utils/helper.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 function hiddenHelper() returns Integer
 	return 7
@@ -236,7 +236,7 @@ The same rule through a multi-segment qualifier and the middle tier: a `module` 
 from outside its directory subtree is refused with the tier's own diagnostic.
 ```maxon
 // --- file: lib/inner/deep.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 module function scopedHelper() returns Integer
 	return 7
@@ -264,7 +264,7 @@ than "unknown type" — and the tier then refuses it.
 // --- file: feature/types.maxon
 module typealias Level = int(0 to 50)
 
-export function seed() returns Level
+module function seed() returns Level
 	return 21
 end 'seed'
 
@@ -312,14 +312,14 @@ accepts the two declarations at decl time — which the language requires — bu
 one bare registration name, so a qualifier is a route rather than a name.
 ```maxon
 // --- file: alpha/a.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function pick() returns Integer
 	return 3
 end 'pick'
 
 // --- file: beta/b.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function pick() returns Integer
 	return 5
@@ -344,7 +344,7 @@ the diagnostic it would get instead is E3095, an ambiguity that is not one.
 Same 3/5/35 discrimination as the case above, reached through a bare call in each declaring file.
 ```maxon
 // --- file: alpha/a.maxon
-typealias Integer = int(0 to 125)
+public typealias Integer = int(0 to 125)
 
 public function pick() returns Integer
 	return 3
@@ -355,7 +355,7 @@ export function localCaller() returns Integer
 end 'localCaller'
 
 // --- file: beta/b.maxon
-typealias Integer = int(0 to 125)
+public typealias Integer = int(0 to 125)
 
 public function pick() returns Integer
 	return 5
@@ -390,14 +390,14 @@ minted name earns the sentence that explains where it came from, because told on
 source.
 ```maxon
 // --- file: dir/a.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function pick() returns Integer
 	return 3
 end 'pick'
 
 // --- file: dir/b.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function pick() returns Integer
 	return 5
@@ -424,14 +424,14 @@ on "different FILE" rather than "different DIRECTORY" would un-collide the whole
 spell one parameter list claim one registration name whichever directory they sit in.
 ```maxon
 // --- file: a.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function pick() returns Integer
 	return 3
 end 'pick'
 
 // --- file: b.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function pick() returns Integer
 	return 5
@@ -513,14 +513,14 @@ The helper's name has to follow the DECLARATION's identity, which the fold has j
 33, both reaching beta's gives 55.
 ```maxon
 // --- file: alpha/a.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function pick(n Integer = 3) returns Integer
 	return n
 end 'pick'
 
 // --- file: beta/b.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function pick(n Integer = 5) returns Integer
 	return n
@@ -550,14 +550,14 @@ one-dot spelling escaped only because `parseQualifiedCall`'s static arm builds t
 found the same declaration, so the two-dot shape is where it surfaced.
 ```maxon
 // --- file: lib/inner/x.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function pick() returns Integer
 	return 3
 end 'pick'
 
 // --- file: beta/y.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function pick() returns Integer
 	return 5
@@ -581,21 +581,21 @@ name already contested and has nothing left to move, so it takes a different arm
 produces the right total.
 ```maxon
 // --- file: alpha/f.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function pick() returns Integer
 	return 1
 end 'pick'
 
 // --- file: beta/f.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function pick() returns Integer
 	return 2
 end 'pick'
 
 // --- file: gamma/f.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function pick() returns Integer
 	return 4
@@ -619,14 +619,14 @@ finds it while the subdirectory's is reached through `beta.`. This is the arm
 in which a contested name still answers to bare bytes.
 ```maxon
 // --- file: r.maxon
-typealias Integer = int(0 to 125)
+public typealias Integer = int(0 to 125)
 
 public function pick() returns Integer
 	return 3
 end 'pick'
 
 // --- file: beta/b.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function pick() returns Integer
 	return 5
@@ -680,21 +680,21 @@ MEAN, and a file cannot mean a name it may not write — otherwise a `module` he
 alpha's helper answers 3 and beta's 7, so the exit code says which one was reached.
 ```maxon
 // --- file: alpha/a.maxon
-typealias Integer = int(0 to 125)
+module typealias Integer = int(0 to 125)
 
 module function helper() returns Integer
 	return 3
 end 'helper'
 
 // --- file: alpha/use.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function useAlpha() returns Integer
 	return helper()
 end 'useAlpha'
 
 // --- file: beta/b.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function helper() returns Integer
 	return 7
@@ -728,7 +728,7 @@ export function useAlpha() returns bool
 end 'useAlpha'
 
 // --- file: beta/b.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function helper(raw Integer) returns Integer
 	return raw + 7
@@ -755,7 +755,7 @@ The same pair with the exported declaration folded FIRST, so neither order of th
 answer.
 ```maxon
 // --- file: alpha/b.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function helper(raw Integer) returns Integer
 	return raw + 7
@@ -793,7 +793,7 @@ A ROOT declaration keeps the bare key, but a file-private one is still invisible
 no candidate there and beta's exported declaration is the one the bare call means.
 ```maxon
 // --- file: r.maxon
-typealias Integer = int(0 to 125)
+public typealias Integer = int(0 to 125)
 
 function helper() returns Integer
 	return 3
@@ -804,7 +804,7 @@ public function useRoot() returns Integer
 end 'useRoot'
 
 // --- file: beta/b.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function helper() returns Integer
 	return 7
@@ -825,7 +825,7 @@ The caller's OWN directory declares the name, but in another file and file-priva
 has nothing this file may name and the one visible declaration elsewhere is the answer.
 ```maxon
 // --- file: app/other.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 function helper() returns Integer
 	return 3
@@ -836,7 +836,7 @@ export function useOther() returns Integer
 end 'useOther'
 
 // --- file: beta/b.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function helper() returns Integer
 	return 7
@@ -868,7 +868,7 @@ export function useAlpha() returns bool
 end 'useAlpha'
 
 // --- file: beta/b.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function helper(raw Integer) returns Integer
 	return raw + 7
@@ -896,14 +896,14 @@ A function value is refused for the ambiguity a call is refused for, rather than
 declaration.
 ```maxon
 // --- file: alpha/a.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function helper(raw Integer) returns Integer
 	return raw + 3
 end 'helper'
 
 // --- file: beta/b.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function helper(raw Integer) returns Integer
 	return raw + 7
@@ -925,14 +925,14 @@ The remedy E3095 names is writable at the value door: a directory-qualified name
 declaration that directory holds, exactly as a qualified call does.
 ```maxon
 // --- file: alpha/a.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function helper(raw Integer) returns Integer
 	return raw + 3
 end 'helper'
 
 // --- file: beta/b.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function helper(raw Integer) returns Integer
 	return raw + 7
@@ -954,7 +954,7 @@ end 'main'
 An uncontested name qualified by its directory is a route to the one declaration, as a value as well as a call.
 ```maxon
 // --- file: lib/util.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function triple(raw Integer) returns Integer
 	return raw * 3
@@ -975,14 +975,14 @@ end 'main'
 A refusal at the value door quotes the name the author wrote, not the declaration it resolved to.
 ```maxon
 // --- file: alpha/a.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function risky(raw Integer) returns Integer
 	return raw
 end 'risky'
 
 // --- file: beta/b.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export enum Oops implements Error
 	bad
@@ -1013,7 +1013,7 @@ ambiguous between the two visible subdirectory declarations, and the root one is
 "not exported" nor listed.
 ```maxon
 // --- file: r.maxon
-typealias Integer = int(0 to 125)
+public typealias Integer = int(0 to 125)
 
 function pick() returns Integer
 	return 1
@@ -1024,14 +1024,14 @@ public function useRoot() returns Integer
 end 'useRoot'
 
 // --- file: alpha/f.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function pick() returns Integer
 	return 2
 end 'pick'
 
 // --- file: zulu/f.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function pick() returns Integer
 	return 4
@@ -1052,14 +1052,14 @@ Two VISIBLE declarations are still an ambiguity, and the invisible third is neit
 nor offered as a way out of it.
 ```maxon
 // --- file: alpha/f.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function pick() returns Integer
 	return 1
 end 'pick'
 
 // --- file: mid/f.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 function pick() returns Integer
 	return 2
@@ -1070,7 +1070,7 @@ export function useMid() returns Integer
 end 'useMid'
 
 // --- file: zulu/f.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function pick() returns Integer
 	return 4
@@ -1129,14 +1129,14 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: Point/p.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function create() returns Integer
 	return 3
 end 'create'
 
 // --- file: other/o.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function create() returns Integer
 	return 5
@@ -1165,7 +1165,7 @@ Declaring the type's file first states the order that makes the refusal name the
 is about.
 ```maxon
 // --- file: app/main.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export type Point
 	export var x as Integer
@@ -1180,14 +1180,14 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: Point/p.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function create() returns Integer
 	return 3
 end 'create'
 
 // --- file: other/o.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function create() returns Integer
 	return 5
@@ -1205,21 +1205,21 @@ and its `helper` is still contested with `other/`'s — but `type Point` declare
 static-call door, the directory's `helper` through the namespace door, in one expression. 9*10+3.
 ```maxon
 // --- file: Point/p.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function helper() returns Integer
 	return 3
 end 'helper'
 
 // --- file: other/o.maxon
-typealias Integer = int(0 to 125)
+public typealias Integer = int(0 to 125)
 
 public function helper() returns Integer
 	return 5
 end 'helper'
 
 // --- file: app/main.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 public type Point
 	export var x as Integer
@@ -1244,14 +1244,14 @@ type. It keeps its bare registration name and never goes near the `Type.method` 
 case the guard must not be able to reach however the contest logic changes.
 ```maxon
 // --- file: Point/p.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function helper() returns Integer
 	return 3
 end 'helper'
 
 // --- file: app/main.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 public type Point
 	export var x as Integer
@@ -1280,21 +1280,21 @@ differently, against a message pinned by this golden. The self-hosted reference 
 that is the one divergence, and it is what makes the message reproducible.
 ```maxon
 // --- file: zulu/f.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function pick() returns Integer
 	return 1
 end 'pick'
 
 // --- file: alpha/f.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function pick() returns Integer
 	return 2
 end 'pick'
 
 // --- file: mid/f.maxon
-typealias Integer = int(0 to 125)
+export typealias Integer = int(0 to 125)
 
 export function pick() returns Integer
 	return 4
@@ -1323,14 +1323,14 @@ byte-identical program with alpha's `= 5` removed, which has always reported exa
 below. **The only variable is a DIFFERENT directory's declaration.**
 ```maxon
 // --- file: alpha/a.maxon
-typealias Ms = int(0 to 125)
+export typealias Ms = int(0 to 125)
 
 export function pick(ms Ms = 5) returns Ms
 	return ms
 end 'pick'
 
 // --- file: beta/b.maxon
-typealias Slot = int(0 to 125)
+export typealias Slot = int(0 to 125)
 
 export function pick(slot Slot) returns Slot
 	return slot
@@ -1362,14 +1362,14 @@ by deleting its one call: this program **compiles and answers 13** — `pick(2)`
 incumbent is the root's own declaration and there is nothing stale to inherit.
 ```maxon
 // --- file: alpha/a.maxon
-typealias Num = int(-1000 to 1000)
+export typealias Num = int(-1000 to 1000)
 
 export function pick(a Num, b Num = 5) returns Num
 	return a + b
 end 'pick'
 
 // --- file: rootpick.maxon
-typealias Small = int(-1000 to 1000)
+export typealias Small = int(-1000 to 1000)
 
 export function pick(a Small, b Small) returns Small
 	return a + b
@@ -1393,7 +1393,7 @@ whether or not the by-name clear runs, for the reason above. MEASURED with the c
 correct answer is the E3055 below. Its twin fold order (root file first) refuses either way.
 ```maxon
 // --- file: alpha/a.maxon
-enum Boom
+export enum Boom
 	bad
 end 'Boom'
 
@@ -1401,13 +1401,13 @@ export function pick() returns Integer throws Boom
 	throw Boom.bad
 end 'pick'
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 // --- file: rootpick.maxon
 export function pick() returns Integer
 	return 5
 end 'pick'
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 // --- file: app/main.maxon
 function main() returns ExitCode
 	let v = try pick() otherwise 0
@@ -1426,14 +1426,14 @@ contestants declares a default here, which is precisely the asymmetry the refusa
 so a fix that stopped copying defaults altogether would turn this green case red.
 ```maxon
 // --- file: alpha/a.maxon
-typealias Ms = int(0 to 125)
+export typealias Ms = int(0 to 125)
 
 export function pick(ms Ms = 5) returns Ms
 	return ms
 end 'pick'
 
 // --- file: beta/b.maxon
-typealias Slot = int(0 to 125)
+export typealias Slot = int(0 to 125)
 
 export function pick(slot Slot) returns Slot
 	return slot
@@ -1462,7 +1462,7 @@ removed — reports exactly the refusal below. *(E3057, the other direction, is 
 sweep, so a call that omits a needed `try` was never decided by this registry.)*
 ```maxon
 // --- file: alpha/a.maxon
-enum Boom
+export enum Boom
 	case bad
 end 'Boom'
 
@@ -1470,13 +1470,13 @@ export function pick() returns Integer throws Boom
 	throw Boom.bad
 end 'pick'
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 // --- file: beta/b.maxon
 export function pick() returns Integer
 	return 5
 end 'pick'
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 // --- file: app/main.maxon
 function main() returns ExitCode
 	let v = try beta.pick() otherwise 0
@@ -1509,7 +1509,7 @@ declaration, while `__file__`/`__line__` prove the two skipped slots still answe
 `app/main.maxon` when main calls, each directory's own file when the sibling inside it does.
 ```maxon
 // --- file: alpha/a.maxon
-typealias Severity = int(0 to 9)
+export typealias Severity = int(0 to 9)
 
 export function note(tag String, level Severity = 3, file String = __file__, at SourceLineNumber = __line__) returns SourceLineNumber
 	print("{tag} lvl={level} {file}:{at}\n")
@@ -1521,7 +1521,7 @@ export function fromAlpha() returns SourceLineNumber
 end 'fromAlpha'
 
 // --- file: beta/b.maxon
-typealias Severity = int(0 to 9)
+export typealias Severity = int(0 to 9)
 
 export function note(tag String, level Severity = 5, file String = __file__, at SourceLineNumber = __line__) returns SourceLineNumber
 	print("{tag} lvl={level} {file}:{at}\n")

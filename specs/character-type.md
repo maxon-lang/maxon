@@ -450,10 +450,10 @@ directly through `__char_cmp`, which is what keeps the two doors from ordering C
 type Pair uses T where T is Comparable
 	export var a as T
 	export var b as T
-	export static function create(a T, b T) returns Self
+	static function create(a T, b T) returns Self
 		return Self{ a: a, b: b }
 	end 'create'
-	export function lt() returns bool
+	function lt() returns bool
 		return self.a < self.b
 	end 'lt'
 end 'Pair'

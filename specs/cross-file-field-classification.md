@@ -61,7 +61,7 @@ scalar field is COPIED, not borrowed, so reading it off a temporary is legal —
 in one file (below) has always run.
 ```maxon
 // --- file: gate.maxon
-typealias Num = int(0 to 1000)
+export typealias Num = int(0 to 1000)
 
 export type Gate
 	export var n as Num
@@ -93,11 +93,11 @@ typealias Num = int(0 to 1000)
 type Gate
 	export var n as Num
 
-	export static function make(v Num) returns Gate
+	static function make(v Num) returns Gate
 		return Gate{n: v}
 	end 'make'
 
-	export static function twice(v Num) returns Gate
+	static function twice(v Num) returns Gate
 		return Gate.make(v + v)
 	end 'twice'
 end 'Gate'
@@ -139,7 +139,7 @@ statement, so the guard never asks the classifier at all — which is what prove
 half that makes the misclassification visible, not the half that is wrong.
 ```maxon
 // --- file: gate.maxon
-typealias Num = int(0 to 1000)
+export typealias Num = int(0 to 1000)
 
 export type Gate
 	export var n as Num
@@ -170,7 +170,7 @@ different id. Under the defect this one COMPILED while the headline did not — 
 followed the id, not the type. Both must run.
 ```maxon
 // --- file: gate.maxon
-typealias Num = int(0 to 1000)
+export typealias Num = int(0 to 1000)
 
 export type Gate
 	export var n as Num
@@ -244,7 +244,7 @@ end 'Color'
 type Gate
 	export var c as Color
 
-	export static function make() returns Gate
+	static function make() returns Gate
 		return Gate{c: Color.green}
 	end 'make'
 end 'Gate'
@@ -266,14 +266,14 @@ The alias, the struct and the read in THREE different files. The name still cros
 answer is the same one the headline gives.
 ```maxon
 // --- file: num.maxon
-typealias Num = int(0 to 1000)
+export typealias Num = int(0 to 1000)
 
 export function double(v Num) returns Num
 	return v + v
 end 'double'
 
 // --- file: gate.maxon
-typealias Num = int(0 to 1000)
+export typealias Num = int(0 to 1000)
 
 export type Gate
 	export var n as Num
@@ -297,7 +297,7 @@ A `typealias` is FILE-SCOPED, so two files may each declare `Num`. The field's t
 visible where the STRUCT was declared, and a temporary read still copies it.
 ```maxon
 // --- file: gate.maxon
-typealias Num = int(0 to 1000)
+export typealias Num = int(0 to 1000)
 
 export type Gate
 	export var n as Num
@@ -355,7 +355,7 @@ skips it and the read copies it. Declared in a sibling file it is the same scala
 typealias Integer = int(i64.min to i64.max)
 typealias UnaryOp = function(Integer) returns Integer
 
-public function inc(v Integer) returns Integer
+function inc(v Integer) returns Integer
 	return v + 1
 end 'inc'
 
@@ -407,7 +407,7 @@ end 'main'
 `0x3F3F3F3F` as the program's answer when the box was not held.
 ```maxon
 // --- file: inner.maxon
-typealias Wide = int(i64.min to i64.max)
+export typealias Wide = int(i64.min to i64.max)
 
 export type Inner
 	export var v as Wide
@@ -449,7 +449,7 @@ measured, the classification held at 0–3 padding aliases and flipped from 4 up
 classification that changes at the fourth unrelated `typealias` is the defect stated as a test.
 ```maxon
 // --- file: shape.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export type Body
 	export var mass as Integer
@@ -527,7 +527,7 @@ end 'main'
 are declared in different files again — three files between the element's range and the read.
 ```maxon
 // --- file: elem.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export function seed() returns Integer
 	return 7

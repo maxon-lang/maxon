@@ -1083,7 +1083,7 @@ type ExtractedTests
 	export let tests as SpecTestArray
 	export let disabledCount as DisabledTestCount
 
-	export static function create(tests SpecTestArray, disabledCount DisabledTestCount) returns ExtractedTests
+	static function create(tests SpecTestArray, disabledCount DisabledTestCount) returns ExtractedTests
 		return Self{tests: tests, disabledCount: disabledCount}
 	end 'create'
 end 'ExtractedTests'
@@ -1096,7 +1096,7 @@ type FenceBlock
 	export let text as String
 	export let nextIndex as LineIndex
 
-	export static function create(text String, nextIndex LineIndex) returns FenceBlock
+	static function create(text String, nextIndex LineIndex) returns FenceBlock
 		return Self{text: text, nextIndex: nextIndex}
 	end 'create'
 end 'FenceBlock'
@@ -1128,25 +1128,25 @@ type TargetPreferredText
 	// A LATER block of the same kind replaces an earlier one, which is what a plain assignment always did
 	// here — two portable ```stdout blocks in one case are a spec-authoring mistake, not two claims, and
 	// unlike a section pin they cannot accumulate (a run has one stdout).
-	export function recordPortable(text String)
+	function recordPortable(text String)
 		portable = text
 		havePortable = true
 	end 'recordPortable'
 
-	export function recordQualified(text String)
+	function recordQualified(text String)
 		qualified = text
 		haveQualified = true
 	end 'recordQualified'
 
 	// Did the spec write EITHER block for this slot? The push condition, and what keeps `resolved` from
 	// being asked a question it has no answer to.
-	export function isPinned() returns bool
+	function isPinned() returns bool
 		return haveQualified or havePortable
 	end 'isPinned'
 
 	// The block naming THIS run's target when the spec wrote one, else the portable block — one fallback,
 	// spelled once for all three slots.
-	export function resolved() returns String
+	function resolved() returns String
 		if not self.isPinned() 'nothingWritten'
 			panic("SpecParser.TargetPreferredText.resolved: this slot holds no block. Callers gate on `isPinned` first, and an unwritten slot cannot fall back to the empty String — an EMPTY block is itself a claim (the stream was silent), so that value is already taken")
 		end 'nothingWritten'

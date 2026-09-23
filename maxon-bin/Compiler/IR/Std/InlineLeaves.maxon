@@ -82,7 +82,7 @@ typealias SiteCount = int(0 to u64.max)
 typealias SiteCountArray = Array with SiteCount
 
 // How many parameter cascades one callee carries — its arity at most, and one in nearly every case.
-typealias GuardCount = int(0 to u64.max)
+export typealias GuardCount = int(0 to u64.max)
 
 // The shared empties a `SiteSplicer` starts with and NEVER writes to — `seedSiteBuffers` replaces them
 // with real arrays at the first site, and `valueIds` replaces the minter at the first splice. The leaf
@@ -412,7 +412,7 @@ type LeafBodyScan
 	export var verdict as LeafVerdict
 	export var opCount as OpCount
 
-	export static function create(verdict LeafVerdict, opCount OpCount) returns LeafBodyScan
+	static function create(verdict LeafVerdict, opCount OpCount) returns LeafBodyScan
 		return Self{verdict: verdict, opCount: opCount}
 	end 'create'
 end 'LeafBodyScan'
@@ -509,19 +509,19 @@ type LeafPlan
 		try self.withinLargerBudget.set(funcIndex, value: true) otherwise panic("LeafPlan.recordTooManyOps: withinLargerBudget.set OOB at {funcIndex}")
 	end 'recordTooManyOps'
 
-	export function verdictOf(funcIndex FuncIndex) returns LeafVerdict
+	function verdictOf(funcIndex FuncIndex) returns LeafVerdict
 		return try self.verdicts.get(funcIndex) otherwise panic("LeafPlan.verdictOf: function index {funcIndex} is outside the {self.verdicts.count()}-function module this plan was built over")
 	end 'verdictOf'
 
-	export function isWithinLargerBudget(funcIndex FuncIndex) returns bool
+	function isWithinLargerBudget(funcIndex FuncIndex) returns bool
 		return try self.withinLargerBudget.get(funcIndex) otherwise panic("LeafPlan.isWithinLargerBudget: function index {funcIndex} is outside the {self.withinLargerBudget.count()}-function module this plan was built over")
 	end 'isWithinLargerBudget'
 
-	export function valueBoundOf(funcIndex FuncIndex) returns ValueId
+	function valueBoundOf(funcIndex FuncIndex) returns ValueId
 		return try self.valueBounds.get(funcIndex) otherwise panic("LeafPlan.valueBoundOf: function index {funcIndex} is outside the {self.valueBounds.count()}-function module this plan was built over")
 	end 'valueBoundOf'
 
-	export function blockCountOf(funcIndex FuncIndex) returns BlockRefIndex
+	function blockCountOf(funcIndex FuncIndex) returns BlockRefIndex
 		return try self.blockCounts.get(funcIndex) otherwise panic("LeafPlan.blockCountOf: function index {funcIndex} is outside the {self.blockCounts.count()}-function module this plan was built over")
 	end 'blockCountOf'
 end 'LeafPlan'
@@ -826,27 +826,27 @@ type InlineLeafStats
 	// compile being asked about rather than be re-derived from a corpus later.
 	export var declinedParamGuards as SiteCount
 
-	export static function create() returns InlineLeafStats
+	static function create() returns InlineLeafStats
 		return Self{inlinedSites: 0, sitesRefusedBySize: 0, sitesRefusedBySizeWithinLargerBudget: 0, selfCallSites: 0, sitesRefusedBySafePoint: 0, declinedParamGuards: 0}
 	end 'create'
 
-	export function noteDeclinedParamGuard()
+	function noteDeclinedParamGuard()
 		self.declinedParamGuards = self.declinedParamGuards + 1
 	end 'noteDeclinedParamGuard'
 
-	export function noteInlined()
+	function noteInlined()
 		self.inlinedSites = self.inlinedSites + 1
 	end 'noteInlined'
 
-	export function noteSelfCall()
+	function noteSelfCall()
 		self.selfCallSites = self.selfCallSites + 1
 	end 'noteSelfCall'
 
-	export function noteSafePointRefusal()
+	function noteSafePointRefusal()
 		self.sitesRefusedBySafePoint = self.sitesRefusedBySafePoint + 1
 	end 'noteSafePointRefusal'
 
-	export function noteSizeRefusal(withinLargerBudget bool)
+	function noteSizeRefusal(withinLargerBudget bool)
 		self.sitesRefusedBySize = self.sitesRefusedBySize + 1
 
 		if withinLargerBudget 'wouldFitLarger'
@@ -890,7 +890,7 @@ type DeclinedGuards
 
 	// ⚠ `export` for ONE reader that is not a method: `sharedDeclinesNothing`, a module-level `let`, which
 	// a file-private constructor may not initialize.
-	export static function create(blockIdSpace BlockId, guardCount GuardCount) returns DeclinedGuards
+	static function create(blockIdSpace BlockId, guardCount GuardCount) returns DeclinedGuards
 		return Self{declined: sharedEmptyDeclineColumn, forward: sharedEmptyForwardColumn, blockIdSpace: blockIdSpace, guardCount: guardCount, anyDeclined: false}
 	end 'create'
 
@@ -923,7 +923,7 @@ type DeclinedGuards
 		self.forward = forwardColumn
 	end 'seedColumns'
 
-	export function isDeclined(calleeBlockId BlockId) returns bool
+	function isDeclined(calleeBlockId BlockId) returns bool
 		if not self.anyDeclined 'noColumnToRead'
 			return false
 		end 'noColumnToRead'
@@ -935,7 +935,7 @@ type DeclinedGuards
 	// BOUNDED by the cascade count and panics rather than spinning: `forward` is written only at heads and
 	// only ever forward along one chain, so a cycle would mean the record is not the chain it claims to be —
 	// and the cost of believing it would be a splice branching into a block it never copied.
-	export function entryFrom(id BlockId) returns BlockId
+	function entryFrom(id BlockId) returns BlockId
 		if not self.anyDeclined 'noColumnToRead'
 			return id
 		end 'noColumnToRead'
@@ -991,7 +991,7 @@ type SpliceBlocks
 		return Self{blockSubst: blockSubst, copiedRefs: BlockRefArray.create(), guards: guards, spliceSite: spliceSite, siteSubst: InlineSiteRefArray.create()}
 	end 'create'
 
-	export function targetOf(calleeBlockId BlockId) returns BlockId
+	function targetOf(calleeBlockId BlockId) returns BlockId
 		return try self.blockSubst.get(calleeBlockId) otherwise panic("SpliceBlocks.targetOf: callee block id {calleeBlockId} is outside the {self.blockSubst.count()}-block id space this splice mapped")
 	end 'targetOf'
 
@@ -1014,7 +1014,7 @@ type SpliceBlocks
 	end 'mappedSite'
 
 	// The site a copy of a callee block carries in the caller.
-	export function siteOf(calleeBlockSite InlineSiteRef) returns InlineSiteRef
+	function siteOf(calleeBlockSite InlineSiteRef) returns InlineSiteRef
 		return match calleeBlockSite 's'
 			none gives self.spliceSite
 			site(index) gives self.mappedSite(index)
@@ -1132,7 +1132,7 @@ type AlwaysSplicedPlan
 	end 'of'
 
 	// Does this body hold a call the splice must carry out of it before the body is copied?
-	export function callsAnother(funcIndex FuncIndex) returns bool
+	function callsAnother(funcIndex FuncIndex) returns bool
 		return self.calls.degree(funcIndex as CsrIndex) != 0
 	end 'callsAnother'
 
@@ -1140,7 +1140,7 @@ type AlwaysSplicedPlan
 	// to itself. EXACT rather than a depth cap — a cap would refuse a legal chain at some arbitrary length
 	// and let a cycle one link longer through, which is a wrong answer at exactly the boundary the row
 	// cannot afford one.
-	export function cycleThrough(module StdModule, start FuncIndex, funcCount FuncIndex) returns AlwaysSplicedCycle
+	function cycleThrough(module StdModule, start FuncIndex, funcCount FuncIndex) returns AlwaysSplicedCycle
 		var visited = BoolArray.create()
 		visited.resize(funcCount)
 		var path = FuncIndexArray.create()
@@ -2874,7 +2874,7 @@ type SiteSplicer
 	// holds ops of the ORIGINAL block, every site in which `inlineSitesIn` has already collected before
 	// it split anything. So one pass over the original blocks IS the whole walk — no worklist, no
 	// "already expanded" marker column, and no chain to follow.
-	function run()
+	export function run()
 		let originalBlockCount = self.func.blockRefs.count()
 
 		for i in 0 upto originalBlockCount 'eachBlock'

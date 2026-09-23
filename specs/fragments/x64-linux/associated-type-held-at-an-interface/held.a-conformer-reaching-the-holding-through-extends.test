@@ -18,25 +18,25 @@ type Tally implements BiCursor
 	var pos as Integer
 	let limit as Integer
 
-	export static function create(limit Integer) returns Self throws IterationError
+	static function create(limit Integer) returns Self throws IterationError
 		if limit < 1 'empty'
 			throw IterationError.exhausted
 		end 'empty'
 		return Self{pos: 1, limit: limit}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return self.pos
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.pos >= self.limit 'atTheLast'
 			throw IterationError.exhausted
 		end 'atTheLast'
 		self.pos = self.pos + 1
 	end 'advance'
 
-	export function retreat() throws IterationError
+	function retreat() throws IterationError
 		throw IterationError.exhausted
 	end 'retreat'
 end 'Tally'
@@ -44,11 +44,11 @@ end 'Tally'
 type UpBag implements Bag with Tally
 	let limit as Integer
 
-	export static function create(limit Integer) returns Self
+	static function create(limit Integer) returns Self
 		return Self{limit: limit}
 	end 'create'
 
-	export function createIterator() returns Tally throws IterationError
+	function createIterator() returns Tally throws IterationError
 		return try Tally.create(self.limit)
 	end 'createIterator'
 end 'UpBag'
@@ -181,10 +181,10 @@ func @main {
     x64.leaRegRdata rax, [rip + __witness_UpBag.Bag]
   __il_body#5:
     x64.movRegImm32 rbx, 0
-    x64.loadRegBaseDisp.word64 rcx, [rax + 48]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 56]
     x64.leaRegRegReg r12, rax, rcx
     x64.movRegReg rcx, r8
-    x64.callMem [rax + 40]
+    x64.callMem [rax + 48]
     x64.movRegReg r13, r8
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r10, 0
@@ -192,11 +192,11 @@ func @main {
     x64.jmp __il_cont#2
   walk:
     x64.movRegReg rcx, r13
-    x64.callMem [r12 + 40]
+    x64.callMem [r12 + 48]
     x64.leaRegRegReg rbx, rbx, r8
   forstep:
     x64.movRegReg rcx, r13
-    x64.callMem [r12 + 48]
+    x64.callMem [r12 + 56]
     x64.movRegReg rax, r10
   forhdr:
     x64.cmpRegImm32 rax, 0

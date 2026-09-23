@@ -19,6 +19,13 @@ standing, so `C1` knows the intrinsic and compiles the unshimmed tree into `C2`;
 one whose instrument reports nothing. Keep such a patch to the single function that calls, so what the
 shimmed build loses is stated by the patch itself.
 
+⭐ **A VISIBILITY TIER IS THE THIRD CASE, AND IT SPANS MANY DECLARATIONS.** A rule about what a
+signature may name decides a declaration's tier, so a release that predates the rule audits those tiers
+by the older one and refuses the tree at every declaration the new rule widened — E3092/E3093/E3094, not
+E3004, and one finding per declaration rather than one call site. Such a patch withdraws the MODIFIER and
+nothing else: the declarations, their bodies and every table stay, which is what leaves `C1` able to
+compile the unshimmed tree.
+
 ⛔ **Delete a patch once a release has shipped the compiler that accepts what it withdraws.** It is dead
 from that moment — the plain build succeeds and nothing here is read — and a patch that no longer
 applies turns the next genuine refusal into a confusing failure.

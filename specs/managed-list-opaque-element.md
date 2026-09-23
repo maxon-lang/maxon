@@ -44,15 +44,15 @@ type Bag uses Element
 	typealias EChain = __ManagedList with Element
 	var chain as EChain
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{chain: EChain.create()}
 	end 'create'
 
-	export function add(v Element)
+	function add(v Element)
 		self.chain.insertLast(v)
 	end 'add'
 
-	export function size() returns Count
+	function size() returns Count
 		return self.chain.count()
 	end 'size'
 end 'Bag'
@@ -82,15 +82,15 @@ type Bag uses Element
 	typealias EChain = __ManagedList with Element
 	var chain as EChain
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{chain: EChain.create()}
 	end 'create'
 
-	export function add(v Element)
+	function add(v Element)
 		self.chain.insertLast(v)
 	end 'add'
 
-	export function size() returns Count
+	function size() returns Count
 		return self.chain.count()
 	end 'size'
 end 'Bag'
@@ -121,15 +121,15 @@ type Bag uses Element
 	typealias EChain = __ManagedList with Element
 	var chain as EChain
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{chain: EChain.create()}
 	end 'create'
 
-	export function add(v Element)
+	function add(v Element)
 		self.chain.insertLast(v)
 	end 'add'
 
-	export function size() returns Count
+	function size() returns Count
 		return self.chain.count()
 	end 'size'
 end 'Bag'
@@ -165,19 +165,19 @@ type Bag uses Element
 	typealias EChain = __ManagedList with Element
 	var chain as EChain
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{chain: EChain.create()}
 	end 'create'
 
-	export function add(v Element)
+	function add(v Element)
 		self.chain.insertLast(v)
 	end 'add'
 
-	export function drop()
+	function drop()
 		self.chain.clear()
 	end 'drop'
 
-	export function size() returns Count
+	function size() returns Count
 		return self.chain.count()
 	end 'size'
 end 'Bag'
@@ -213,19 +213,19 @@ type Twin uses First, Second
 	var left as FirstChain
 	var right as SecondChain
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{left: FirstChain.create(), right: SecondChain.create()}
 	end 'create'
 
-	export function addLeft(v First)
+	function addLeft(v First)
 		self.left.insertLast(v)
 	end 'addLeft'
 
-	export function addRight(v Second)
+	function addRight(v Second)
 		self.right.insertLast(v)
 	end 'addRight'
 
-	export function total() returns Count
+	function total() returns Count
 		return self.left.count() + self.right.count()
 	end 'total'
 end 'Twin'
@@ -260,20 +260,20 @@ type Bag uses Element
 	typealias EChain = List with Element
 	var chain as EChain
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{chain: EChain.create()}
 	end 'create'
 
-	export function add(v Element)
+	function add(v Element)
 		self.chain.append(v)
 	end 'add'
 
 	// Nothing else in this body needs a layout descriptor, so the move-out has to ask for one itself.
-	export function drainOne() throws ArrayError
+	function drainOne() throws ArrayError
 		_ = try self.chain.removeFirst()
 	end 'drainOne'
 
-	export function size() returns Count
+	function size() returns Count
 		return self.chain.count()
 	end 'size'
 end 'Bag'
@@ -309,20 +309,20 @@ type Bag uses Element
 	var chain as EChain
 	var spare as EChain
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{chain: EChain.create(), spare: EChain.create()}
 	end 'create'
 
-	export function add(v Element)
+	function add(v Element)
 		self.chain.append(v)
 	end 'add'
 
-	export function shift() throws ArrayError
+	function shift() throws ArrayError
 		let moved = try self.chain.removeFirst()
 		self.spare.append(moved)
 	end 'shift'
 
-	export function total() returns Count
+	function total() returns Count
 		return self.chain.count() + self.spare.count()
 	end 'total'
 end 'Bag'

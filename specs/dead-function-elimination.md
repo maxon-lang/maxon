@@ -131,20 +131,20 @@ end 'Digest'
 type Point implements Digest
 	export var x as Coord
 	export var y as Coord
-	export static function create(x Coord, y Coord) returns Self
+	static function create(x Coord, y Coord) returns Self
 		return Self{ x: x, y: y }
 	end 'create'
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x * 31 + self.y
 	end 'digest'
 end 'Point'
 
 type Box uses T where T is Digest
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function itemDigest() returns Code
+	function itemDigest() returns Code
 		return self.item.digest()
 	end 'itemDigest'
 end 'Box'
@@ -175,15 +175,15 @@ type Container uses Element
 
 	export var items as ElementArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{ items: ElementArray.create() }
 	end 'create'
 
-	export function count() returns Count
+	function count() returns Count
 		return self.items.count()
 	end 'count'
 
-	export function push(item Element)
+	function push(item Element)
 		self.items.push(item)
 	end 'push'
 end 'Container'

@@ -72,7 +72,7 @@ type Counter
 		return Counter{id: Counter.initCount}
 	end 'createInstance'
 
-	export static function getInitCount() returns Count
+	static function getInitCount() returns Count
 		return Counter.initCount
 	end 'getInitCount'
 end 'Counter'
@@ -108,7 +108,7 @@ type Counter
 		return Counter{id: Counter.initCount}
 	end 'createInstance'
 
-	export static function getInitCount() returns Count
+	static function getInitCount() returns Count
 		return Counter.initCount
 	end 'getInitCount'
 end 'Counter'
@@ -145,7 +145,7 @@ type Late
 		return Late{n: 7}
 	end 'build'
 
-	export static function get() returns Count
+	static function get() returns Count
 		return Late.value.n
 	end 'get'
 end 'Late'
@@ -183,11 +183,11 @@ type Once
 		return Once{n: 5}
 	end 'build'
 
-	export static function get() returns Count
+	static function get() returns Count
 		return Once.value.n
 	end 'get'
 
-	export static function runCount() returns Count
+	static function runCount() returns Count
 		return Once.runs
 	end 'runCount'
 end 'Once'
@@ -232,15 +232,15 @@ type Slot
 		return Self{n: n}
 	end 'of'
 
-	export static function set(s Slot)
+	static function set(s Slot)
 		Slot.value = s
 	end 'set'
 
-	export static function get() returns Count
+	static function get() returns Count
 		return Slot.value.n
 	end 'get'
 
-	export static function runCount() returns Count
+	static function runCount() returns Count
 		return Slot.runs
 	end 'runCount'
 end 'Slot'
@@ -281,15 +281,15 @@ type Reassigned
 		return Self{n: n}
 	end 'of'
 
-	export static function set(s Reassigned)
+	static function set(s Reassigned)
 		Reassigned.value = s
 	end 'set'
 
-	export static function get() returns Count
+	static function get() returns Count
 		return Reassigned.value.n
 	end 'get'
 
-	export static function runCount() returns Count
+	static function runCount() returns Count
 		return Reassigned.runs
 	end 'runCount'
 end 'Reassigned'
@@ -331,7 +331,7 @@ type Inner
 		return Inner{n: 3}
 	end 'build'
 
-	export static function get() returns Count
+	static function get() returns Count
 		return Inner.value.n
 	end 'get'
 end 'Inner'
@@ -345,7 +345,7 @@ type Outer
 		return Outer{n: Inner.get() + 1}
 	end 'build'
 
-	export static function get() returns Count
+	static function get() returns Count
 		return Outer.value.n
 	end 'get'
 end 'Outer'
@@ -382,7 +382,7 @@ type Outer
 		return Outer{n: Inner.get() + 1}
 	end 'build'
 
-	export static function get() returns Count
+	static function get() returns Count
 		return Outer.value.n
 	end 'get'
 end 'Outer'
@@ -396,7 +396,7 @@ type Inner
 		return Inner{n: 3}
 	end 'build'
 
-	export static function get() returns Count
+	static function get() returns Count
 		return Inner.value.n
 	end 'get'
 end 'Inner'
@@ -436,7 +436,7 @@ type Ping
 		return Ping{n: Pong.get() + 1}
 	end 'build'
 
-	export static function get() returns Count
+	static function get() returns Count
 		return Ping.value.n
 	end 'get'
 end 'Ping'
@@ -449,7 +449,7 @@ type Pong
 		return Pong{n: Ping.get() + 1}
 	end 'build'
 
-	export static function get() returns Count
+	static function get() returns Count
 		return Pong.value.n
 	end 'get'
 end 'Pong'
@@ -480,7 +480,7 @@ type Loop
 		return Loop{n: Loop.get() + 1}
 	end 'build'
 
-	export static function get() returns Count
+	static function get() returns Count
 		return Loop.value.n
 	end 'get'
 end 'Loop'
@@ -523,7 +523,7 @@ type A
 		return A{n: B.get() + seed}
 	end 'build'
 
-	export static function get() returns Count
+	static function get() returns Count
 		return A.value.n
 	end 'get'
 end 'A'
@@ -540,7 +540,7 @@ type B
 		return B{n: A.get() + seed}
 	end 'build'
 
-	export static function get() returns Count
+	static function get() returns Count
 		return B.value.n
 	end 'get'
 end 'B'
@@ -676,7 +676,7 @@ type Chain
 		return Chain{n: Chain.s19.n + 1}
 	end 'build20'
 
-	export static function top() returns Count
+	static function top() returns Count
 		return Chain.s20.n
 	end 'top'
 end 'Chain'
@@ -732,7 +732,7 @@ type Cached
 		return "held"
 	end 'build'
 
-	export static function get() returns String
+	static function get() returns String
 		return Cached.text
 	end 'get'
 end 'Cached'
@@ -773,7 +773,7 @@ type Cache
 		return Cache{n: 21}
 	end 'build'
 
-	export static function get() returns Count
+	static function get() returns Count
 		return Cache.value.n
 	end 'get'
 end 'Cache'
@@ -821,7 +821,7 @@ type Untouched
 		return "x"
 	end 'build'
 
-	export static function get() returns String
+	static function get() returns String
 		return Untouched.other
 	end 'get'
 end 'Untouched'

@@ -336,6 +336,49 @@ export function freshCaseDir(caseDirName String) returns FilePath
 	return dir
 end 'freshCaseDir'
 
+let BesideAProgramMainFileName = "main.maxon"
+let BesideAProgramMainSource = "function main() returns ExitCode\n\tlet started = WallClock.nowUnixSeconds()\n\treturn 0 if started > 0 else 1\nend 'main'\n"
+let BesideAProgramOutputStem = "program"
+let DuplicateDefinitionCode = "E3006"
+
+export type ProgramBuiltBesideALibraryFile
+	export let executable as FilePath
+	export let build as CollectedOutput
+
+	static function create(executable FilePath, build CollectedOutput) returns ProgramBuiltBesideALibraryFile
+		return Self{executable: executable, build: build}
+	end 'create'
+end 'ProgramBuiltBesideALibraryFile'
+
+export function buildAProgramBesideALibraryFile(caseDirName String, libraryFile String, options ListedWordArray) returns ProgramBuiltBesideALibraryFile
+	let dir = freshCaseDir(caseDirName)
+	let main = dir.join(BesideAProgramMainFileName)
+	try File.writeText(main, content: BesideAProgramMainSource) otherwise panic("{caseDirName}: the gate could not run - could not write {main.toString()}")
+
+	var arguments = ListedWordArray.create()
+	arguments.push(BuildCommandWord)
+	arguments.push(main.toString())
+	arguments.push(libraryFile)
+
+	for option in options 'eachOption'
+		arguments.push(option)
+	end 'eachOption'
+
+	arguments.push("{OutputOptionPrefix}{dir.join(BesideAProgramOutputStem).toString()}")
+
+	return ProgramBuiltBesideALibraryFile.create(dir.join("{BesideAProgramOutputStem}{executableSuffix()}"), build: runDriver(arguments))
+end 'buildAProgramBesideALibraryFile'
+
+export function expectALibraryFileBesideAProgramIsReadOnce(caseDirName String, libraryFile String, whoseFile String) throws TestFailure
+	let built = buildAProgramBesideALibraryFile(caseDirName, libraryFile: libraryFile, options: ListedWordArray.create())
+	let build = built.build
+	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+
+	try Expect.isFalse(build.stderr.contains(DuplicateDefinitionCode), message: "`{libraryFile}` was named on the command line and is also {whoseFile}, so the build loaded it twice and every declaration in it collided with itself. {said}")
+	try Expect.equal(build.exitCode() as AssertedInt, expected: 0, message: "a program built together with `{libraryFile}` did not build. The file is {whoseFile} whether or not a command line names it, and a build that reads it once compiles clean. {said}")
+	try Expect.isTrue(File.exists(built.executable), message: "the build exited 0 and wrote no executable. {said}")
+end 'expectALibraryFileBesideAProgramIsReadOnce'
+
 // ⭐ **A CASE DIRECTORY OUTSIDE THE CHECKOUT**, under the host's temp area, for a child that must find
 // NOTHING the checkout holds above its working directory — `vendor/` above all, which the driver walks up
 // to from there. Refused loudly when that premise does not hold, because a `vendor/` above it would let

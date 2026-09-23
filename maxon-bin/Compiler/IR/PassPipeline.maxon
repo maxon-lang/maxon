@@ -20,8 +20,10 @@
 
 // One arm per scheduled pass. Payload-free today; kept a `union` (not an enum)
 // to leave room for passes that carry configuration payloads.
-union PassKind
+export union PassKind
 	// Phase 2: Maxon-level.
+	reportDeferredNames
+	checkSignatureVisibility
 	resolveTypes
 	semanticCheck
 
@@ -279,6 +281,8 @@ end 'PassClassification'
 // Map a pass to its classification — THE membership table of the fan-out.
 function classifyPass(pass PassKind) returns PassClassification
 	return match pass 'classify'
+		reportDeferredNames gives PassClassification.wholeModule
+		checkSignatureVisibility gives PassClassification.wholeModule
 		resolveTypes gives PassClassification.wholeModule
 		semanticCheck gives PassClassification.wholeModule
 
@@ -400,6 +404,8 @@ end 'requireMembersArePerFunction'
 // pass grouping several phases would defeat the table's purpose.
 module function compilePhaseOfPass(pass PassKind) returns CompilePhase
 	return match pass 'phase'
+		reportDeferredNames gives CompilePhase.reportDeferredNames
+		checkSignatureVisibility gives CompilePhase.checkSignatureVisibility
 		resolveTypes gives CompilePhase.resolveTypes
 		semanticCheck gives CompilePhase.semanticCheck
 		checkUnusedExports gives CompilePhase.checkUnusedExports
@@ -429,6 +435,8 @@ end 'compilePhaseOfPass'
 // Human-readable pass name for logging (union has no `.name`, unlike an enum).
 function passKindToString(pass PassKind) returns String
 	return match pass 'name'
+		reportDeferredNames gives "reportDeferredNames"
+		checkSignatureVisibility gives "checkSignatureVisibility"
 		resolveTypes gives "resolveTypes"
 		semanticCheck gives "semanticCheck"
 		checkUnusedExports gives "checkUnusedExports"
@@ -486,6 +494,16 @@ end 'passBanner'
 // time a pass list exists the instrumentation is already in the IR.
 export function buildMaxonTierPasses() returns PassKindArray
 	var passes = PassKindArray.create()
+
+	// ⚠ The first two are ordered, and neither order is recoverable from the passes themselves.
+	// `reportDeferredNames` drains diagnostics the merge deferred, and the gate below fires only BETWEEN
+	// passes, so anything scheduled ahead of it that can report would swallow the whole drain — E3062 and
+	// the hidden-name E2003 go missing on any program that already earned a diagnostic at merge time.
+	// Both also run ahead of `resolveTypes`, which ERASES alias names (a `named` ranged alias becomes
+	// `integer`): behind it `checkSignatureVisibility` has no name left to judge and silently finds
+	// nothing, and the deferred diagnostics, two of which name a typealias, have nothing left to name.
+	passes.push(PassKind.reportDeferredNames)
+	passes.push(PassKind.checkSignatureVisibility)
 	passes.push(PassKind.resolveTypes)
 	passes.push(PassKind.semanticCheck)
 	passes.push(PassKind.checkUnusedExports)
@@ -773,6 +791,8 @@ export type PassPipeline
 		let probe = PhaseProbe.beginPhase(self.project, phase: compilePhaseOfPass(pass))
 
 		match pass 'dispatch'
+			reportDeferredNames then reportDeferredNameDiagnostics(self.project, signatures: self.signatures)
+			checkSignatureVisibility then checkSignatureVisibility(self.project, module: self.maxonModule, signatures: self.signatures)
 			resolveTypes then resolveTypes(self.project, module: self.maxonModule)
 			semanticCheck then semanticCheck(self.project, module: self.maxonModule, signatures: self.signatures, funcNames: self.funcNames)
 			checkUnusedExports then try checkUnusedExports(self.project, module: self.maxonModule, signatures: self.signatures)

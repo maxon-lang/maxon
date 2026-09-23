@@ -64,17 +64,17 @@ typealias IntArray = Array with Integer
 type Holder
 	var items as IntArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: IntArray.create()}
 	end 'create'
 
-	export function fill(n Integer)
+	function fill(n Integer)
 		for i in 0 upto n 'each'
 			items.push(i)
 		end 'each'
 	end 'fill'
 
-	export function swapAndRead() returns Integer
+	function swapAndRead() returns Integer
 		let old = items
 		var fresh = IntArray.create()
 		fresh.push(99)
@@ -110,11 +110,11 @@ typealias IntArray = Array with Integer
 type Holder
 	var items as IntArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: IntArray.create()}
 	end 'create'
 
-	export function swapAndRead() returns Integer
+	function swapAndRead() returns Integer
 		items.push(3)
 		items.push(4)
 		var old = items
@@ -173,11 +173,11 @@ typealias Len = int(0 to u64.max)
 type Holder
 	var name as String
 
-	export static function create(n String) returns Self
+	static function create(n String) returns Self
 		return Self{name: n}
 	end 'create'
 
-	export function swapAndRead(fresh String) returns Len
+	function swapAndRead(fresh String) returns Len
 		let old = name
 		name = fresh
 		return old.byteLength()
@@ -238,14 +238,14 @@ typealias IntArray = Array with Integer
 type Frozen
 	let items as IntArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		var a = IntArray.create()
 		a.push(4)
 		a.push(5)
 		return Self{items: a}
 	end 'create'
 
-	export function total() returns Integer
+	function total() returns Integer
 		let held = items
 
 		var sum = 0

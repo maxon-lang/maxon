@@ -83,7 +83,7 @@ The false-tag twin. `flag and crossFileInt()` used to mint a merge phi tagged `b
 int `7`; `if m` branched on `7` and the program returned 1.
 ```maxon
 // --- file: a.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export function seven() returns Integer
 	return 7
@@ -130,7 +130,7 @@ this — a correct program — and over-rejection is the worse failure. The fix 
 refuse.
 ```maxon
 // --- file: a.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export function crossFileInt() returns Integer
 	return 41
@@ -236,13 +236,13 @@ export typealias IntArray = Array with Int
 type Holder
 	export var nums as IntArray
 
-	export static function create() returns Holder
+	static function create() returns Holder
 		var a = IntArray.create()
 		a.push(12)
 		return Self{nums: a}
 	end 'create'
 
-	export function more() returns IntArray
+	function more() returns IntArray
 		var a = IntArray.create()
 		a.push(14)
 		return a
@@ -279,13 +279,13 @@ the order dependence coming back.
 type Holder
 	export var nums as IntArray
 
-	export static function create() returns Holder
+	static function create() returns Holder
 		var a = IntArray.create()
 		a.push(12)
 		return Self{nums: a}
 	end 'create'
 
-	export function more() returns IntArray
+	function more() returns IntArray
 		var a = IntArray.create()
 		a.push(14)
 		return a
@@ -334,7 +334,7 @@ end 'twice'
 type Holder
 	export var op as UnaryOp
 
-	export static function create() returns Holder
+	static function create() returns Holder
 		return Self{op: twice}
 	end 'create'
 end 'Holder'
@@ -365,7 +365,7 @@ end 'twice'
 type Holder
 	export var op as UnaryOp
 
-	export static function create() returns Holder
+	static function create() returns Holder
 		return Self{op: twice}
 	end 'create'
 end 'Holder'
@@ -404,7 +404,7 @@ verdict by deciding who interns first. Renaming `Schema.maxon` so it sorted ahea
 disappear, which is what a bug reported as *"identity depends on file order"* looks like from outside.
 ```maxon
 // --- file: thief.maxon
-typealias Small = int(0 to 10)
+export typealias Small = int(0 to 10)
 typealias SmallArray = Array with Small
 
 export function smallCount() returns Small
@@ -427,7 +427,7 @@ end 'Field'
 export typealias FieldArray = Array with Field
 
 // --- file: srv.maxon
-typealias Count = int(i64.min to i64.max)
+export typealias Count = int(i64.min to i64.max)
 typealias FieldsBuilder = function(Count) returns FieldArray
 
 function buildFields(n Count) returns FieldArray
@@ -477,7 +477,7 @@ end 'Field'
 export typealias FieldArray = Array with Field
 
 // --- file: srv.maxon
-typealias Count = int(i64.min to i64.max)
+export typealias Count = int(i64.min to i64.max)
 typealias FieldsBuilder = function(Count) returns FieldArray
 
 function buildFields(n Count) returns FieldArray
@@ -497,7 +497,7 @@ export function runBuilder() returns Count
 end 'runBuilder'
 
 // --- file: thief.maxon
-typealias Small = int(0 to 10)
+export typealias Small = int(0 to 10)
 typealias SmallArray = Array with Small
 
 export function smallCount() returns Small

@@ -32,7 +32,7 @@ type Point
 	export var x as Coord
 	export var y as Coord
 
-	export static function create(x Coord, y Coord) returns Point
+	static function create(x Coord, y Coord) returns Point
 		return Point{x: x, y: y}
 	end 'create'
 end 'Point'
@@ -86,7 +86,7 @@ type Point
 	export var x as Coord
 	export var y as Coord
 
-	export static function create(x Coord, y Coord) returns Point
+	static function create(x Coord, y Coord) returns Point
 		return Point{x: x, y: y}
 	end 'create'
 end 'Point'
@@ -134,7 +134,7 @@ typealias Coord = int(i64.min to i64.max)
 type Point
 	export var x as Coord
 
-	export static function create(x Coord) returns Point
+	static function create(x Coord) returns Point
 		return Point{x: x}
 	end 'create'
 end 'Point'
@@ -201,7 +201,7 @@ typealias TokenId = int(0 to 1000)
 type Token
 	export let id as TokenId
 
-	export static function create(id TokenId) returns Token
+	static function create(id TokenId) returns Token
 		return Token{id: id}
 	end 'create'
 end 'Token'

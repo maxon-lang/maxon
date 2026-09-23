@@ -94,16 +94,11 @@
 // DECLARATION it carries, and expect a golden to move when one of them is a name the COMPILER ITSELF
 // mints instances of.
 //
-// ⛔⛔ **AND `export` IS NOT THE DISCRIMINATOR — SAYING IT WAS IS A RULE THE NEXT MODULE WOULD FAIL BY
-// (N2 review). MEASURED: delete the `export` from `stdlib/File.maxon:45` and the moved golden below is
-// still emitted, byte-identically.** Two independent mechanisms make the keyword unreadable here, and
-// either one alone is enough:
-//   • `Parser.typeAliasVisibility` hands EVERY `typealias` in a stdlib source file `Visibility.global`,
-//     `export`ed or not — so for a STDLIB module the keyword is never consulted at all.
-//   • The whole-program folds that actually carried the golden — `RangedAliasRegistry.widenStorageBytesFor`
-//     ⇒ `storageBytesInEveryFile` (the stride) and `record`'s `multiplyDeclared` ⇒ `settleRangeContests`
-//     (the range contest) — are keyed on the NAME and consult visibility NOWHERE. They fold every
-//     declaration in the program, private ones included. This half holds for a USER file too.
+// ⛔ **AND `export` IS NOT THE DISCRIMINATOR — SAYING IT WAS IS A RULE THE NEXT MODULE WOULD FAIL BY.**
+// The whole-program folds that carry the golden — `RangedAliasRegistry.widenStorageBytesFor` ⇒
+// `storageBytesInEveryFile` (the stride) and `record`'s `multiplyDeclared` ⇒ `settleRangeContests` (the
+// range contest) — are keyed on the NAME and consult visibility NOWHERE. They fold every declaration in
+// the program, private ones included, which holds for a USER file too.
 // ⇒ **weigh every ranged `typealias` a candidate module declares, `export`ed or not.** A module audited on
 // its `export`s alone would wave a file-private `typealias Byte = int(0 to 1000)` straight through, and it
 // would move exactly the same goldens.
@@ -234,7 +229,7 @@
 // under this directory as library source" is one question, and two copies of the answer would be free to
 // drift on the walk, on the double-load guard and on the memo admission.
 export function loadLibrarySources(project Project) throws CompileError
-	let usersOwn = registeredPathsWhenTheRootIsInsideALibrary(project)
+	let usersOwn = setAsideTheUsersOwnLibraryFiles(project)
 
 	if not try loadLibraryRoot(project, root: project.stdlibDir, usersOwn: usersOwn) 'stdlibContributedNothing'
 		throw CompileError.stdlibNotFound
@@ -315,45 +310,42 @@ function loadLibraryRoot(project Project, root FilePath, usersOwn MaxonSourcePat
 	return true
 end 'loadLibraryRoot'
 
-// ⚠ **A FILE THE PROJECT ALREADY REGISTERED MUST NOT BE LOADED A SECOND TIME**, and the one way a
-// single file can be reached by BOTH walks is a user root that lies under a LIBRARY ROOT — which is
-// exactly what `maxon build stdlib/Clock.maxon` is, the command that compiles one library module on its
-// own to see what it still owes.
+// A library file the project already registered is not loaded a second time by the library walk.
+// The user registers one by naming it on the command line or in a manifest's `sources` beside a
+// program, or by rooting the project under `stdlib/`. The query database keys a source on its
+// `FilePath`, whose equality compares text, so the set holds each registered path resolved: a
+// second load of a `runtime/` file is E3006 against itself, and of a `stdlib/` file a silent
+// shadow.
 //
-// It matters because the query database keys a source on its `FilePath` and `FilePath.equals` compares
-// the path TEXT (case-insensitively on Windows) rather than resolving it — so a relative
-// `stdlib/Clock.maxon` and this loader's absolute spelling of the SAME FILE are two identities,
-// `fileChanged` dedups neither against the other, and the file is parsed twice: every function in it
-// then collides with ITSELF. MEASURED with the guard removed: FIVE `E3006 duplicate definition of
-// function 'Clock.nowMs'`, each pointing at Clock's own lines, while the ABSOLUTE spelling of the same
-// command is clean — which identifies the fault as the spelling and not the double load.
-//
-// ⚠ **ASKED ONCE PER COMPILE, OF THE ROOT** — every source the project loaded lies under it, so two
-// `isInside` calls settle it for the whole compile and an ordinary project pays nothing per file and
-// gets an empty set. That bound is the point and not an optimization: re-deriving stdlib-ness per FILE was
-// measured at +60…+1,920 allocations across the scale ladder and rejected (StdlibSource's header), and
-// making a compile's diagnostics carry resolved paths instead was measured HERE at +824…+5,009 — a
-// guard that cost either would be that decision undone.
-//
-// The file stays the USER's: they named it as their project, so its functions are user source and a
-// diagnostic raised in it belongs at its own lines — which are lines they asked to compile.
-function registeredPathsWhenTheRootIsInsideALibrary(project Project) returns MaxonSourcePathSet
-	var registered = MaxonSourcePathSet.create()
+// A registered file whose provenance is library is recorded as library source too, so the file has
+// one classification: parsed as tier but absent from `LibraryFacts.runtimeTier`, it would be
+// classified two ways. Under a `stdlib/` root the project's own files stay the user's and are not
+// recorded.
+function setAsideTheUsersOwnLibraryFiles(project Project) returns MaxonSourcePathSet
+	var setAside = MaxonSourcePathSet.create()
+	var libraryFiles = MaxonSourcePathArray.create()
 
 	// ⚠ `Project.rootIsUnderStdlibDirectory`, not a fourth spelling of the same `resolve` + `isInside`:
 	// `Queries.livesUnderStdlibDirectory`'s soundness proof is a claim about this exact predicate holding
-	// the same way here and in `isStdlibSourceFile`, so it is asked in ONE place. See its header. Its
-	// runtime twin is asked beside it and nowhere else: no parser privilege turns on that root, so the
-	// double-load guard is the whole of what it decides.
+	// the same way here and in `isStdlibSourceFile`, so it is asked in ONE place. See its header.
 	let cwd = Directory.currentPath()
-
-	if not rootIsUnderStdlibDirectory(project, cwd: cwd) and not rootIsUnderRuntimeDirectory(project, cwd: cwd) 'rootIsElsewhere'
-		return registered
-	end 'rootIsElsewhere'
+	let rootIsUnderStdlib = rootIsUnderStdlibDirectory(project, cwd: cwd)
 
 	for path in project.db.sourcePaths 'each'
-		registered.insert(path.resolve(cwd))
+		let isTheLibrarys = isLibrarySourceFile(project, path: path)
+
+		if isTheLibrarys 'theLibrarysOwnFile'
+			libraryFiles.push(path)
+		end 'theLibrarysOwnFile'
+
+		if isTheLibrarys or rootIsUnderStdlib 'aLibraryModuleTheUserNamed'
+			setAside.insert(path.resolve(cwd))
+		end 'aLibraryModuleTheUserNamed'
 	end 'each'
 
-	return registered
-end 'registeredPathsWhenTheRootIsInsideALibrary'
+	for path in libraryFiles 'record'
+		project.librarySourcePaths.push(path)
+	end 'record'
+
+	return setAside
+end 'setAsideTheUsersOwnLibraryFiles'

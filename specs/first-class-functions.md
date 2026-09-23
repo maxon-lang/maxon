@@ -578,20 +578,20 @@ typealias Integer = int(i64.min to i64.max)
 type Holder uses Element
 	export var value as Element
 
-	export static function create(v Element) returns Self
+	static function create(v Element) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Holder'
 
 export extension Holder
-	typealias Transform = function(Element) returns Element
-	typealias Predicate = function(Element) returns bool
+	export typealias Transform = function(Element) returns Element
+	export typealias Predicate = function(Element) returns bool
 
-	export function apply(f Transform) returns Element
+	function apply(f Transform) returns Element
 		return f(self.value)
 	end 'apply'
 
-	export function check(p Predicate) returns bool
+	function check(p Predicate) returns bool
 		return p(self.value)
 	end 'check'
 end 'Holder'
@@ -649,15 +649,15 @@ end 'Shade'
 type Holder uses Element
 	export var value as Element
 
-	export static function create(v Element) returns Self
+	static function create(v Element) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Holder'
 
 export extension Holder
-	typealias Transform = function(Element) returns Element
+	export typealias Transform = function(Element) returns Element
 
-	export function apply(f Transform) returns Element
+	function apply(f Transform) returns Element
 		return f(self.value)
 	end 'apply'
 end 'Holder'
@@ -702,9 +702,9 @@ interface Container uses Item
 end 'Container'
 
 extension Container
-	typealias ItemPredicate = function(Item) returns bool
+	export typealias ItemPredicate = function(Item) returns bool
 
-	export function checkOnly(p ItemPredicate) returns bool
+	function checkOnly(p ItemPredicate) returns bool
 		return p(self.only())
 	end 'checkOnly'
 end 'Container'
@@ -712,11 +712,11 @@ end 'Container'
 type Bag uses Element implements Container with Element
 	export var value as Element
 
-	export static function create(v Element) returns Self
+	static function create(v Element) returns Self
 		return Self{value: v}
 	end 'create'
 
-	export function only() returns Element
+	function only() returns Element
 		return self.value
 	end 'only'
 end 'Bag'
@@ -758,15 +758,15 @@ typealias Integer = int(i64.min to i64.max)
 type Holder uses Element
 	export var value as Element
 
-	export static function create(v Element) returns Self
+	static function create(v Element) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Holder'
 
 export extension Holder
-	typealias Transform = function(Element) returns Element
+	export typealias Transform = function(Element) returns Element
 
-	export function apply(f Transform) returns Element
+	function apply(f Transform) returns Element
 		return f(self.value)
 	end 'apply'
 end 'Holder'
@@ -800,15 +800,15 @@ typealias Integer = int(i64.min to i64.max)
 type Holder uses Element
 	export var value as Element
 
-	export static function create(v Element) returns Self
+	static function create(v Element) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Holder'
 
 export extension Holder
-	typealias Transform = function(Element) returns Element
+	export typealias Transform = function(Element) returns Element
 
-	export function apply(f Transform) returns Element
+	function apply(f Transform) returns Element
 		return f(self.value)
 	end 'apply'
 end 'Holder'
@@ -1771,7 +1771,7 @@ typealias UnaryOp = function(Integer) returns Integer
 type Handler
 	export var op as UnaryOp
 
-	export static function create(op UnaryOp) returns Self
+	static function create(op UnaryOp) returns Self
 		return Self{op: op}
 	end 'create'
 end 'Handler'
@@ -1863,7 +1863,7 @@ typealias UnaryOp = function(Integer) returns Integer
 type Handler
 	export var op as UnaryOp
 
-	export static function create(op UnaryOp) returns Self
+	static function create(op UnaryOp) returns Self
 		return Self{op: op}
 	end 'create'
 end 'Handler'
@@ -1902,7 +1902,7 @@ typealias UnaryOp = function(Integer) returns Integer
 type Holder
 	export var op as UnaryOp
 
-	export static function create(op UnaryOp) returns Self
+	static function create(op UnaryOp) returns Self
 		return Self{op: op}
 	end 'create'
 end 'Holder'
@@ -2839,11 +2839,11 @@ end 'Stasher'
 type Slot implements Stasher
 	export var op as UnaryOp
 
-	export static function create(op UnaryOp) returns Self
+	static function create(op UnaryOp) returns Self
 		return Self{op: op}
 	end 'create'
 
-	export function stash(fn UnaryOp) returns Integer
+	function stash(fn UnaryOp) returns Integer
 		self.op = fn
 		return 7
 	end 'stash'
@@ -2852,11 +2852,11 @@ end 'Slot'
 type W uses T where T is Stasher
 	export var inner as T
 
-	export static function create(inner T) returns Self
+	static function create(inner T) returns Self
 		return Self{inner: inner}
 	end 'create'
 
-	export function put(k Integer) returns Integer
+	function put(k Integer) returns Integer
 		return self.inner.stash(function(n Integer) gives n + k)
 	end 'put'
 end 'W'
@@ -3448,7 +3448,7 @@ type Pool uses T
 	export typealias Idx = int(0 to 15)
 	export var v as T
 
-	export static function create(v T) returns Pool
+	static function create(v T) returns Pool
 		return Self{v: v}
 	end 'create'
 end 'Pool'
@@ -4205,7 +4205,7 @@ typealias Thunk = function() returns ExitCode
 
 type Holder
 	export let cb as Thunk
-	export static function create(cb Thunk) returns Self
+	static function create(cb Thunk) returns Self
 		return Self{ cb: cb }
 	end 'create'
 end 'Holder'
@@ -4271,7 +4271,7 @@ typealias SmallArray = Array with Small
 type Field
 	export var v as Integer
 
-	export static function create(v Integer) returns Field
+	static function create(v Integer) returns Field
 		return Self{v: v}
 	end 'create'
 end 'Field'
@@ -4317,7 +4317,7 @@ typealias SmallArray = Array with Small
 type Field
 	export var v as Integer
 
-	export static function create(v Integer) returns Field
+	static function create(v Integer) returns Field
 		return Self{v: v}
 	end 'create'
 end 'Field'
@@ -4367,7 +4367,7 @@ typealias SmallArray = Array with Small
 type Field
 	export var v as Integer
 
-	export static function create(v Integer) returns Field
+	static function create(v Integer) returns Field
 		return Self{v: v}
 	end 'create'
 end 'Field'
@@ -4413,7 +4413,7 @@ typealias Integer = int(i64.min to i64.max)
 type Field
 	export var v as Integer
 
-	export static function create(v Integer) returns Field
+	static function create(v Integer) returns Field
 		return Self{v: v}
 	end 'create'
 end 'Field'
@@ -4476,7 +4476,7 @@ typealias SmallArray = Array with Small
 type Field
 	export var v as Integer
 
-	export static function create(v Integer) returns Field
+	static function create(v Integer) returns Field
 		return Self{v: v}
 	end 'create'
 end 'Field'
@@ -4484,9 +4484,9 @@ end 'Field'
 typealias FieldArray = Array with Field
 
 extension Field
-	typealias Builder = function(Integer) returns FieldArray
+	export typealias Builder = function(Integer) returns FieldArray
 
-	export function runIt(f Builder) returns Integer
+	function runIt(f Builder) returns Integer
 		let produced = f(7)
 		let first = try produced.get(0) otherwise panic("runIt: empty array")
 		return first.v
@@ -4525,7 +4525,7 @@ typealias SmallArray = Array with Small
 type Field
 	export var v as Integer
 
-	export static function create(v Integer) returns Field
+	static function create(v Integer) returns Field
 		return Self{v: v}
 	end 'create'
 end 'Field'
@@ -4533,9 +4533,9 @@ end 'Field'
 typealias FieldArray = Array with Field
 
 extension Field
-	typealias Builder = function(Integer) returns FieldArray
+	export typealias Builder = function(Integer) returns FieldArray
 
-	export function runIt(f Builder) returns Integer
+	function runIt(f Builder) returns Integer
 		let produced = f(7)
 		let first = try produced.get(0) otherwise panic("runIt: empty array")
 		return first.v

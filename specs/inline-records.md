@@ -56,7 +56,7 @@ type Pair
 	export let lo as Half
 	export let hi as Half
 
-	export static function create(lo Half, hi Half) returns Self
+	static function create(lo Half, hi Half) returns Self
 		return Self{lo: lo, hi: hi}
 	end 'create'
 end 'Pair'
@@ -80,7 +80,7 @@ type Pair
 	export let lo as Half
 	export let hi as Half
 
-	export static function create(lo Half, hi Half) returns Self
+	static function create(lo Half, hi Half) returns Self
 		return Self{lo: lo, hi: hi}
 	end 'create'
 end 'Pair'
@@ -130,7 +130,7 @@ type Mixed
 	export let b as Octet
 	export let w as Wide
 
-	export static function create(flag bool, q Quad, nib Nib, b Octet, w Wide) returns Self
+	static function create(flag bool, q Quad, nib Nib, b Octet, w Wide) returns Self
 		return Self{flag: flag, q: q, nib: nib, b: b, w: w}
 	end 'create'
 end 'Mixed'
@@ -168,7 +168,7 @@ type Packed
 	export let w as Word32
 	export let h as Half16
 
-	export static function create(a Nib4, b Nib4, w Word32, h Half16) returns Self
+	static function create(a Nib4, b Nib4, w Word32, h Half16) returns Self
 		return Self{a: a, b: b, w: w, h: h}
 	end 'create'
 end 'Packed'
@@ -198,7 +198,7 @@ type Pair
 	export let lo as Half
 	export let hi as Half
 
-	export static function create(lo Half, hi Half) returns Self
+	static function create(lo Half, hi Half) returns Self
 		return Self{lo: lo, hi: hi}
 	end 'create'
 end 'Pair'
@@ -251,15 +251,15 @@ type Point implements Hashable, Equatable
 	export let x as Coord
 	export let y as Coord
 
-	export static function create(x Coord, y Coord) returns Self
+	static function create(x Coord, y Coord) returns Self
 		return Self{x: x, y: y}
 	end 'create'
 
-	export function hash() returns HashValue
+	function hash() returns HashValue
 		return x * 31 + y
 	end 'hash'
 
-	export function equals(other Self) returns bool
+	function equals(other Self) returns bool
 		return x == other.x and y == other.y
 	end 'equals'
 end 'Point'
@@ -316,7 +316,7 @@ type Pair
 	export let lo as Half
 	export let hi as Half
 
-	export static function create(lo Half, hi Half) returns Self
+	static function create(lo Half, hi Half) returns Self
 		return Self{lo: lo, hi: hi}
 	end 'create'
 end 'Pair'
@@ -351,7 +351,7 @@ type Pair
 	export let lo as Half
 	export let hi as Half
 
-	export static function create(lo Half, hi Half) returns Self
+	static function create(lo Half, hi Half) returns Self
 		return Self{lo: lo, hi: hi}
 	end 'create'
 end 'Pair'
@@ -400,7 +400,7 @@ type Pair
 	export let lo as Half
 	export let hi as Half
 
-	export static function create(lo Half, hi Half) returns Self
+	static function create(lo Half, hi Half) returns Self
 		return Self{lo: lo, hi: hi}
 	end 'create'
 end 'Pair'
@@ -443,7 +443,7 @@ type Pair
 	export let lo as Half
 	export let hi as Half
 
-	export static function create(lo Half, hi Half) returns Self
+	static function create(lo Half, hi Half) returns Self
 		return Self{lo: lo, hi: hi}
 	end 'create'
 end 'Pair'
@@ -484,7 +484,7 @@ type Pair
 	export let lo as Half
 	export let hi as Half
 
-	export static function create(lo Half, hi Half) returns Self
+	static function create(lo Half, hi Half) returns Self
 		return Self{lo: lo, hi: hi}
 	end 'create'
 end 'Pair'
@@ -516,11 +516,11 @@ type Pair
 	export let lo as Half
 	export let hi as Half
 
-	export static function create(lo Half, hi Half) returns Self
+	static function create(lo Half, hi Half) returns Self
 		return Self{lo: lo, hi: hi}
 	end 'create'
 
-	export static function make(n Half) returns Self throws MakeError
+	static function make(n Half) returns Self throws MakeError
 		if n > 2 'refuse'
 			throw MakeError.tooBig
 		end 'refuse'
@@ -590,7 +590,7 @@ type Span
 	export let low as Signed
 	export let high as Signed
 
-	export static function create(low Signed, high Signed) returns Self
+	static function create(low Signed, high Signed) returns Self
 		return Self{low: low, high: high}
 	end 'create'
 end 'Span'
@@ -613,7 +613,7 @@ type Flagged
 	export let w as Word
 	export let flag as bool
 
-	export static function create(w Word, flag bool) returns Self
+	static function create(w Word, flag bool) returns Self
 		return Self{w: w, flag: flag}
 	end 'create'
 end 'Flagged'
@@ -640,7 +640,7 @@ type Box uses T
 	export let a as T
 	export let b as T
 
-	export static function create(a T, b T) returns Self
+	static function create(a T, b T) returns Self
 		return Self{a: a, b: b}
 	end 'create'
 end 'Box'
@@ -681,7 +681,7 @@ type Duo
 	export let a as Tri
 	export let b as Tri
 
-	export static function create(a Tri, b Tri) returns Self
+	static function create(a Tri, b Tri) returns Self
 		return Self{a: a, b: b}
 	end 'create'
 end 'Duo'
@@ -704,7 +704,7 @@ type Packed
 	export let q as Quad
 	export let r as Quad
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{q: 4, r: 0}
 	end 'create'
 end 'Packed'
@@ -729,7 +729,7 @@ type Duo
 	export let a as Nib
 	export let b as Nib
 
-	export static function create(a Nib, b Nib) returns Self
+	static function create(a Nib, b Nib) returns Self
 		return Self{a: a, b: b}
 	end 'create'
 end 'Duo'
@@ -763,7 +763,7 @@ type Pair
 	export let lo as Half
 	export let hi as Half
 
-	export static function create(lo Half, hi Half) returns Self
+	static function create(lo Half, hi Half) returns Self
 		return Self{lo: lo, hi: hi}
 	end 'create'
 end 'Pair'
@@ -772,7 +772,7 @@ type Outer
 	export var p as Pair
 	export var n as Integer
 
-	export static function create(p Pair, n Integer) returns Self
+	static function create(p Pair, n Integer) returns Self
 		return Self{p: p, n: n}
 	end 'create'
 end 'Outer'
@@ -794,11 +794,11 @@ type Pair
 	export let lo as Half
 	export let hi as Half
 
-	export static function create(lo Half, hi Half) returns Self
+	static function create(lo Half, hi Half) returns Self
 		return Self{lo: lo, hi: hi}
 	end 'create'
 
-	export function equals(other Self) returns bool
+	function equals(other Self) returns bool
 		return lo == other.lo and hi == other.hi
 	end 'equals'
 end 'Pair'
@@ -828,7 +828,7 @@ type Pair
 	export let lo as Half
 	export let hi as Half
 
-	export static function create(lo Half, hi Half) returns Self
+	static function create(lo Half, hi Half) returns Self
 		return Self{lo: lo, hi: hi}
 	end 'create'
 end 'Pair'
@@ -860,7 +860,7 @@ type Pair implements Describable
 	export let lo as Half
 	export let hi as Half
 
-	export static function create(lo Half, hi Half) returns Self
+	static function create(lo Half, hi Half) returns Self
 		return Self{lo: lo, hi: hi}
 	end 'create'
 
@@ -895,7 +895,7 @@ typealias Word = bits(64)
 type Handle
 	export let w as Word
 
-	export static function create(w Word) returns Self
+	static function create(w Word) returns Self
 		return Self{w: w}
 	end 'create'
 end 'Handle'
@@ -925,7 +925,7 @@ type Pair
 	export let lo as Half
 	export let hi as Half
 
-	export static function create(lo Half, hi Half) returns Self
+	static function create(lo Half, hi Half) returns Self
 		return Self{lo: lo, hi: hi}
 	end 'create'
 end 'Pair'
@@ -958,7 +958,7 @@ type Pair
 	export let lo as Half
 	export let hi as Half
 
-	export static function create(lo Half, hi Half) returns Self
+	static function create(lo Half, hi Half) returns Self
 		return Self{lo: lo, hi: hi}
 	end 'create'
 end 'Pair'
@@ -983,7 +983,7 @@ type Pair
 	export let lo as Half
 	export let hi as Half
 
-	export static function create(lo Half, hi Half) returns Self
+	static function create(lo Half, hi Half) returns Self
 		return Self{lo: lo, hi: hi}
 	end 'create'
 end 'Pair'
@@ -1028,14 +1028,14 @@ word. A width folded across both files would take the machine word for `Wide`, p
 and leave `Packed` a heap record.
 ```maxon
 // --- file: wide.maxon
-typealias Wide = int(i64.min to i64.max)
+export typealias Wide = int(i64.min to i64.max)
 
 export function widest(v Wide) returns Wide
 	return v - 1
 end 'widest'
 
 // --- file: packed.maxon
-typealias Wide = int(0 to u32.max)
+export typealias Wide = int(0 to u32.max)
 
 export type Packed
 	export let lo as Wide
@@ -1085,11 +1085,11 @@ type Pair
 	export let lo as Half
 	export let hi as Half
 
-	export static function create(lo Half, hi Half) returns Self
+	static function create(lo Half, hi Half) returns Self
 		return Self{lo: lo, hi: hi}
 	end 'create'
 
-	export static function scaled(lo Half, by Half = 3) returns Self
+	static function scaled(lo Half, by Half = 3) returns Self
 		return Self{lo: lo * by, hi: lo + by}
 	end 'scaled'
 end 'Pair'

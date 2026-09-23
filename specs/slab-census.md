@@ -732,7 +732,7 @@ type Widget
 	export var low as WidgetField
 	export var high as WidgetField
 
-	export static function create(low WidgetField, high WidgetField) returns Widget
+	static function create(low WidgetField, high WidgetField) returns Widget
 		return Widget{low: low, high: high}
 	end 'create'
 end 'Widget'
@@ -1020,7 +1020,7 @@ type Widget
 	export var low as WidgetField
 	export var high as WidgetField
 
-	export static function create(low WidgetField, high WidgetField) returns Widget
+	static function create(low WidgetField, high WidgetField) returns Widget
 		return Widget{low: low, high: high}
 	end 'create'
 end 'Widget'
@@ -1114,7 +1114,7 @@ type Widget
 	export var low as WidgetField
 	export var high as WidgetField
 
-	export static function create(low WidgetField, high WidgetField) returns Widget
+	static function create(low WidgetField, high WidgetField) returns Widget
 		return Widget{low: low, high: high}
 	end 'create'
 end 'Widget'
@@ -1199,7 +1199,7 @@ type Widget
 	export var low as WidgetField
 	export var high as WidgetField
 
-	export static function create(low WidgetField, high WidgetField) returns Widget
+	static function create(low WidgetField, high WidgetField) returns Widget
 		return Widget{low: low, high: high}
 	end 'create'
 end 'Widget'

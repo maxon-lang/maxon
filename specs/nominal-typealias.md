@@ -329,7 +329,7 @@ typealias Narrow = int(0 to 16)
 type Box uses T
 	export var item as T
 
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{item: v}
 	end 'create'
 end 'Box'
@@ -356,7 +356,7 @@ box and freed as a record.
 type ParsedInt
 	export var s as String
 
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'ParsedInt'
@@ -364,7 +364,7 @@ end 'ParsedInt'
 type Box uses T
 	export var value as T
 
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -894,14 +894,14 @@ Three files each declare `MyInt = int(0 to 1000)`; a value made under one declar
 other two with no cast.
 ```maxon
 // --- file: a.maxon
-typealias MyInt = int(0 to 1000)
+export typealias MyInt = int(0 to 1000)
 
 export function doubleIt(x MyInt) returns MyInt
 	return x + x
 end 'doubleIt'
 
 // --- file: b.maxon
-typealias MyInt = int(0 to 1000)
+export typealias MyInt = int(0 to 1000)
 
 export function tripleIt(x MyInt) returns MyInt
 	return x + x + x

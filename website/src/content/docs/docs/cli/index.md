@@ -490,7 +490,7 @@ exits 2 with the diagnostic, rather than reporting that file's tests as absent.
 
 ```maxon
 // pricing/pricing.maxon
-typealias Cents = int(0 to i64.max)
+export typealias Cents = int(0 to i64.max)
 
 /// What `quantity` items cost at `unitPrice`, with a tenth off from 10 items up.
 export function totalCost(unitPrice Cents, quantity Cents) returns Cents

@@ -569,7 +569,7 @@ end 'Container'
 type Holder implements Container with (Slot)
 	export var n as Index
 
-	export static function create(n Index) returns Self
+	static function create(n Index) returns Self
 		return Self{n: n}
 	end 'create'
 
@@ -599,7 +599,7 @@ end 'Size'
 type Box implements Sized
 	export var n as Coord
 
-	export static function create(n Coord) returns Self
+	static function create(n Coord) returns Self
 		return Self{n: n}
 	end 'create'
 

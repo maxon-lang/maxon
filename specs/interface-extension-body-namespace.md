@@ -53,10 +53,10 @@ program's field. Nothing connects them.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 
-type BagIter uses Element implements Iterator with Element
+export type BagIter uses Element implements Iterator with Element
 	var item as Element
 
-	export static function create(v Element) returns Self
+	static function create(v Element) returns Self
 		return Self{item: v}
 	end 'create'
 
@@ -72,7 +72,7 @@ end 'BagIter'
 type Bag uses Element implements Iterable with (Element, BagIter)
 	var item as Element
 
-	export static function create(v Element) returns Self
+	static function create(v Element) returns Self
 		return Self{item: v}
 	end 'create'
 
@@ -109,10 +109,10 @@ exit 101.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 
-type BagIter uses Element implements Iterator with Element
+export type BagIter uses Element implements Iterator with Element
 	var item as Element
 
-	export static function create(v Element) returns Self
+	static function create(v Element) returns Self
 		return Self{item: v}
 	end 'create'
 
@@ -129,7 +129,7 @@ type Bag uses Element implements Iterable with (Element, BagIter)
 	var item as Element
 	var result as Int
 
-	export static function create(v Element) returns Self
+	static function create(v Element) returns Self
 		return Self{item: v, result: 0}
 	end 'create'
 
@@ -177,7 +177,7 @@ interface Tagged
 end 'Tagged'
 
 extension Tagged
-	export function doubled() returns Int
+	function doubled() returns Int
 		return n * 2
 	end 'doubled'
 end 'Tagged'
@@ -185,11 +185,11 @@ end 'Tagged'
 type Counter implements Tagged
 	var n as Int
 
-	export static function create(n Int) returns Self
+	static function create(n Int) returns Self
 		return Self{n: n}
 	end 'create'
 
-	export function tag() returns Int
+	function tag() returns Int
 		return n
 	end 'tag'
 end 'Counter'

@@ -60,7 +60,7 @@ fi
   echo ""
   echo "type Box uses T"
   echo -e "\texport var v as T"
-  echo -e "\texport static function create(v T) returns Self"
+  echo -e "\tstatic function create(v T) returns Self"
   echo -e "\t\treturn Self{v: v}"
   echo -e "\tend 'create'"
   echo "end 'Box'"

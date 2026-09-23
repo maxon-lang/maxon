@@ -55,25 +55,25 @@ typealias Idx = int(0 to u64.max)
 typealias Strs = Array with String
 
 type Bag uses Element
-	typealias Items = Array with Element
+	export typealias Items = Array with Element
 	export var items as Items
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: Items.create()}
 	end 'create'
 
-	export function count() returns Idx
+	function count() returns Idx
 		return items.count()
 	end 'count'
 
-	export function takeFirstOf(other Items)
+	function takeFirstOf(other Items)
 		let borrowed = try other.get(0) otherwise 'getErr'
 			panic("Bag.takeFirstOf: get(0) OOB — the caller passed a non-empty container")
 		end 'getErr'
 		items.push(borrowed)
 	end 'takeFirstOf'
 
-	export function at(i Idx) returns Element throws ArrayError
+	function at(i Idx) returns Element throws ArrayError
 		return try items.get(i)
 	end 'at'
 end 'Bag'
@@ -111,18 +111,18 @@ typealias Idx = int(0 to u64.max)
 typealias Strs = Array with String
 
 type Bag uses Element
-	typealias Items = Array with Element
+	export typealias Items = Array with Element
 	export var items as Items
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: Items.create()}
 	end 'create'
 
-	export function count() returns Idx
+	function count() returns Idx
 		return items.count()
 	end 'count'
 
-	export function copyFrom(other Items)
+	function copyFrom(other Items)
 		let n = other.count()
 		for i in 0 upto n 'copy'
 			let value = try other.get(i) otherwise 'getErr'
@@ -132,7 +132,7 @@ type Bag uses Element
 		end 'copy'
 	end 'copyFrom'
 
-	export function at(i Idx) returns Element throws ArrayError
+	function at(i Idx) returns Element throws ArrayError
 		return try items.get(i)
 	end 'at'
 end 'Bag'
@@ -173,18 +173,18 @@ typealias Idx = int(0 to u64.max)
 typealias Strs = Array with String
 
 type Bag uses Element
-	typealias Items = Array with Element
+	export typealias Items = Array with Element
 	export var items as Items
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: Items.create()}
 	end 'create'
 
-	export function count() returns Idx
+	function count() returns Idx
 		return items.count()
 	end 'count'
 
-	export function fillFrom(other Items, times Idx)
+	function fillFrom(other Items, times Idx)
 		var n = 0 as Idx
 		while n < times 'fill'
 			let value = try other.get(0) otherwise 'getErr'
@@ -195,7 +195,7 @@ type Bag uses Element
 		end 'fill'
 	end 'fillFrom'
 
-	export function at(i Idx) returns Element throws ArrayError
+	function at(i Idx) returns Element throws ArrayError
 		return try items.get(i)
 	end 'at'
 end 'Bag'
@@ -231,16 +231,16 @@ typealias Idx = int(0 to u64.max)
 typealias Strs = Array with String
 
 type Bag uses Element
-	typealias Items = Array with Element
+	export typealias Items = Array with Element
 	export var items as Items
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: Items.create()}
 	end 'create'
 
 	// The scratch container never leaves this frame: it takes a reference at the store and releases it
 	// at the method's exit, so the count it reports is the only thing that survives.
-	export function scratchCountOf(other Items) returns Idx
+	function scratchCountOf(other Items) returns Idx
 		var scratch = Items.create()
 		let borrowed = try other.get(0) otherwise 'getErr'
 			panic("Bag.scratchCountOf: get(0) OOB — the caller passed a non-empty container")
@@ -283,19 +283,19 @@ type Bag uses Element
 	export var items as Items
 	export var saved as Element
 
-	export static function of(value Element) returns Self
+	static function of(value Element) returns Self
 		return Self{items: Items.create(), saved: value}
 	end 'of'
 
-	export function count() returns Idx
+	function count() returns Idx
 		return items.count()
 	end 'count'
 
-	export function keepSaved()
+	function keepSaved()
 		items.push(saved)
 	end 'keepSaved'
 
-	export function at(i Idx) returns Element throws ArrayError
+	function at(i Idx) returns Element throws ArrayError
 		return try items.get(i)
 	end 'at'
 end 'Bag'
@@ -331,18 +331,18 @@ typealias Num = int(0 to 1000)
 typealias Nums = Array with Num
 
 type Bag uses Element
-	typealias Items = Array with Element
+	export typealias Items = Array with Element
 	export var items as Items
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: Items.create()}
 	end 'create'
 
-	export function count() returns Idx
+	function count() returns Idx
 		return items.count()
 	end 'count'
 
-	export function copyFrom(other Items)
+	function copyFrom(other Items)
 		let n = other.count()
 		for i in 0 upto n 'copy'
 			let value = try other.get(i) otherwise 'getErr'
@@ -352,7 +352,7 @@ type Bag uses Element
 		end 'copy'
 	end 'copyFrom'
 
-	export function at(i Idx) returns Element throws ArrayError
+	function at(i Idx) returns Element throws ArrayError
 		return try items.get(i)
 	end 'at'
 end 'Bag'
@@ -384,25 +384,25 @@ typealias Idx = int(0 to u64.max)
 typealias Strs = Array with String
 
 type Bag uses Element
-	typealias Items = Array with Element
+	export typealias Items = Array with Element
 	export var items as Items
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: Items.create()}
 	end 'create'
 
-	export function count() returns Idx
+	function count() returns Idx
 		return items.count()
 	end 'count'
 
-	export function takeFirstOf(other Items)
+	function takeFirstOf(other Items)
 		let borrowed = try other.get(0) otherwise 'getErr'
 			panic("Bag.takeFirstOf: get(0) OOB — the caller passed a non-empty container")
 		end 'getErr'
 		items.push(borrowed)
 	end 'takeFirstOf'
 
-	export function at(i Idx) returns Element throws ArrayError
+	function at(i Idx) returns Element throws ArrayError
 		return try items.get(i)
 	end 'at'
 end 'Bag'
@@ -447,15 +447,15 @@ type Bag uses Element
 	typealias Items = Array with Element
 	export var items as Items
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: Items.create()}
 	end 'create'
 
-	export function count() returns Idx
+	function count() returns Idx
 		return items.count()
 	end 'count'
 
-	export function pushLiteral()
+	function pushLiteral()
 		items.push("a concrete literal written inside a shared generic body")
 	end 'pushLiteral'
 end 'Bag'

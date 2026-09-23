@@ -38,24 +38,24 @@ instance whose argument is `T`, so the caller adopts a `+1` on the enclosing `T`
 type Cell uses U
 	export var slot as U
 
-	export static function make(slot U) returns Self
+	static function make(slot U) returns Self
 		return Self{slot: slot}
 	end 'make'
 
-	export function get() returns U
+	function get() returns U
 		return slot
 	end 'get'
 end 'Cell'
 
 type Holder uses T where T is Equatable
-	typealias TCell = Cell with T
+	export typealias TCell = Cell with T
 	export var cell as TCell
 
-	export static function make(cell TCell) returns Self
+	static function make(cell TCell) returns Self
 		return Self{cell: cell}
 	end 'make'
 
-	export function holds(other T) returns bool
+	function holds(other T) returns bool
 		let mine = cell.get()
 		return mine == other
 	end 'holds'
@@ -95,24 +95,24 @@ typealias Num = int(0 to 1000)
 type Cell uses U
 	export var slot as U
 
-	export static function make(slot U) returns Self
+	static function make(slot U) returns Self
 		return Self{slot: slot}
 	end 'make'
 
-	export function get() returns U
+	function get() returns U
 		return slot
 	end 'get'
 end 'Cell'
 
 type Holder uses T where T is Equatable
-	typealias TCell = Cell with T
+	export typealias TCell = Cell with T
 	export var cell as TCell
 
-	export static function make(cell TCell) returns Self
+	static function make(cell TCell) returns Self
 		return Self{cell: cell}
 	end 'make'
 
-	export function holds(other T) returns bool
+	function holds(other T) returns bool
 		let mine = cell.get()
 		return mine == other
 	end 'holds'
@@ -159,28 +159,28 @@ enum BagError implements Error
 end 'BagError'
 
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function count() returns Idx
+	function count() returns Idx
 		return managed.length()
 	end 'count'
 
-	export function at(i Idx) returns Element throws BagError
+	function at(i Idx) returns Element throws BagError
 		return try managed.get(i) otherwise throw BagError.oob
 	end 'at'
 end 'Array'
 
 extension Array where Element is Equatable
-	export function contains(element Element) returns bool
+	function contains(element Element) returns bool
 		let mine = try at(0) otherwise return false
 		return mine == element
 	end 'contains'

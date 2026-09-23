@@ -388,7 +388,7 @@ typealias ByteArray = Array with Byte
 type Holder
 	export var bytes as ByteArray
 
-	export static function create(bytes ByteArray) returns Self
+	static function create(bytes ByteArray) returns Self
 		return Self{bytes: bytes}
 	end 'create'
 end 'Holder'
@@ -482,15 +482,15 @@ type Container uses Element
 
 	export var items as ElementArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: ElementArray.create()}
 	end 'create'
 
-	export function push(item Element)
+	function push(item Element)
 		self.items.push(item)
 	end 'push'
 
-	export function drain() returns Count
+	function drain() returns Count
 		let t = ElementArray.init(self.items)
 		self.items = ElementArray.create()
 		return t.count()
@@ -524,7 +524,7 @@ type Holder
 
 	export var bytes as Inner
 
-	export static function wrap(mm __ManagedMemory) returns Self
+	static function wrap(mm __ManagedMemory) returns Self
 		return Self{bytes: Inner.init(mm)}
 	end 'wrap'
 end 'Holder'

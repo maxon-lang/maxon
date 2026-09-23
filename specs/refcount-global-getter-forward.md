@@ -55,25 +55,25 @@ typealias Count = int(0 to 1000)
 type Item
 	export var v as String
 
-	export static function create(s String) returns Item
+	static function create(s String) returns Item
 		return Self{v: s}
 	end 'create'
 end 'Item'
 
-export type Box uses Elem
+type Box uses Elem
 	typealias ElemArray = Array with Elem
 
 	export var items as ElemArray = ElemArray.create()
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function add(e Elem)
+	function add(e Elem)
 		items.push(e)
 	end 'add'
 
-	export function size() returns Count
+	function size() returns Count
 		return items.count()
 	end 'size'
 end 'Box'

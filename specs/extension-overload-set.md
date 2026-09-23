@@ -73,23 +73,23 @@ interface Tagged
 end 'Tagged'
 
 extension Tagged
-	export function pick(n Integer) returns Integer
+	function pick(n Integer) returns Integer
 		return tag() + n
 	end 'pick'
 end 'Tagged'
 
 extension Tagged
-	export function pick(flag bool) returns Integer
+	function pick(flag bool) returns Integer
 		return tag() + (100 if flag else 0)
 	end 'pick'
 end 'Tagged'
 
 type Five implements Tagged
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{}
 	end 'make'
 
-	export function tag() returns Integer
+	function tag() returns Integer
 		return 5
 	end 'tag'
 end 'Five'
@@ -110,7 +110,7 @@ registered the bare name and the program was refused `E3006 duplicate definition
 argument picks between them: `7 + 105`.
 ```maxon
 // --- file: a.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export interface Tagged
 	function tag() returns Integer
@@ -133,7 +133,7 @@ export type Five implements Tagged
 end 'Five'
 
 // --- file: b.maxon
-typealias Count = int(i64.min to i64.max)
+export typealias Count = int(i64.min to i64.max)
 
 export extension Tagged
 	export function pick(flag bool) returns Count
@@ -156,7 +156,7 @@ The same rule on a **type** extension rather than an interface extension. The tw
 that held for only one of them would be a boundary nobody wrote down.
 ```maxon
 // --- file: a.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export type Box
 	export var v as Integer
@@ -173,7 +173,7 @@ export extension Box
 end 'Box'
 
 // --- file: b.maxon
-typealias Amount = int(i64.min to i64.max)
+export typealias Amount = int(i64.min to i64.max)
 
 export extension Box
 	export function widen(flag bool) returns Amount
@@ -197,7 +197,7 @@ express — each file knows only the members it declared — so the set has to b
 file's members meet. `5 + 11 + 7`.
 ```maxon
 // --- file: a.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export interface Counted
 	function base() returns Integer
@@ -224,7 +224,7 @@ export type Unit implements Counted
 end 'Unit'
 
 // --- file: b.maxon
-typealias Amount = int(i64.min to i64.max)
+export typealias Amount = int(i64.min to i64.max)
 
 public type Weight
 	export var w as Amount
@@ -261,21 +261,21 @@ interface Holder
 end 'Holder'
 
 extension Holder
-	export function has() returns Integer
+	function has() returns Integer
 		return 1
 	end 'has'
 end 'Holder'
 
 type Bag implements Holder
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{}
 	end 'make'
 
-	export function only() returns Integer
+	function only() returns Integer
 		return 3
 	end 'only'
 
-	export function has() returns Integer
+	function has() returns Integer
 		return 40
 	end 'has'
 end 'Bag'
@@ -301,7 +301,7 @@ method that is declared twice over.
 makes this a difference between two spellings of one program rather than a diagnostic anyone chose.
 ```maxon
 // --- file: a.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export interface Tagged
 	function tag() returns Integer
@@ -324,7 +324,7 @@ export type Five implements Tagged
 end 'Five'
 
 // --- file: b.maxon
-typealias Count = int(i64.min to i64.max)
+export typealias Count = int(i64.min to i64.max)
 
 export extension Tagged
 	export function pick(flag bool) returns Count
@@ -360,7 +360,7 @@ and a disagreement here is reported before the merge ever runs — it would mask
 about.
 ```maxon
 // --- file: a.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export interface Tagged
 	function tag() returns Integer
@@ -415,7 +415,7 @@ is judged SHADOWED, withheld without a word, and the program compiles and return
 therefore asks only about declarations an extension did NOT publish.
 ```maxon
 // --- file: a.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export interface Tagged
 	function tag() returns Integer
@@ -471,19 +471,19 @@ typealias Integer = int(i64.min to i64.max)
 type Holder uses Element
 	export var value as Element
 
-	export static function create(v Element) returns Self
+	static function create(v Element) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Holder'
 
 export extension Holder
-	export function rank() returns Integer
+	function rank() returns Integer
 		return 1
 	end 'rank'
 end 'Holder'
 
 export extension Holder
-	export function rank(bonus Integer) returns Integer
+	function rank(bonus Integer) returns Integer
 		return 1 + bonus
 	end 'rank'
 end 'Holder'
@@ -516,7 +516,7 @@ instance still reaches the conditional overload, and the non-conforming one reac
 typealias Integer = int(i64.min to i64.max)
 
 type Opaque
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 end 'Opaque'
@@ -524,19 +524,19 @@ end 'Opaque'
 type Holder uses Element
 	export var value as Element
 
-	export static function create(v Element) returns Self
+	static function create(v Element) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Holder'
 
 export extension Holder where Element is Comparable
-	export function beats(other Element) returns bool
+	function beats(other Element) returns bool
 		return self.value.compare(other) == Ordering.greaterThan
 	end 'beats'
 end 'Holder'
 
 export extension Holder
-	export function beats(assumed bool) returns bool
+	function beats(assumed bool) returns bool
 		return assumed
 	end 'beats'
 end 'Holder'
@@ -572,7 +572,7 @@ The post-resolution decider asks the same predicate the parse-time gate asks
 answered.
 ```maxon
 type Opaque
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 end 'Opaque'
@@ -580,19 +580,19 @@ end 'Opaque'
 type Holder uses Element
 	export var value as Element
 
-	export static function create(v Element) returns Self
+	static function create(v Element) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Holder'
 
 export extension Holder where Element is Comparable
-	export function beats(other Element) returns bool
+	function beats(other Element) returns bool
 		return self.value.compare(other) == Ordering.greaterThan
 	end 'beats'
 end 'Holder'
 
 export extension Holder
-	export function beats(assumed bool) returns bool
+	function beats(assumed bool) returns bool
 		return assumed
 	end 'beats'
 end 'Holder'

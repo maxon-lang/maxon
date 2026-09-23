@@ -506,7 +506,7 @@ type Counter
 		return Self{value: value}
 	end 'create'
 
-	export function bump() returns Counter
+	function bump() returns Counter
 		self.value = self.value + 1
 		return self
 	end 'bump'
@@ -539,7 +539,7 @@ type Counter
 		return Self{value: value}
 	end 'create'
 
-	export function bump() returns Counter
+	function bump() returns Counter
 		self.value = self.value + 1
 		return self
 	end 'bump'
@@ -570,7 +570,7 @@ type Tag
 		return Self{name: name}
 	end 'create'
 
-	export function itself() returns Tag
+	function itself() returns Tag
 		return self
 	end 'itself'
 end 'Tag'
@@ -605,11 +605,11 @@ type Point
 		return Self{x: x}
 	end 'create'
 
-	export function tally(p Point) returns Integer
+	function tally(p Point) returns Integer
 		return self.x + p.x
 	end 'tally'
 
-	export function combineWith(other Point) returns Integer
+	function combineWith(other Point) returns Integer
 		return other.tally(self)
 	end 'combineWith'
 end 'Point'
@@ -656,7 +656,7 @@ type Trunk
 		return Self{leaf: leaf}
 	end 'create'
 
-	export function branch() returns Leaf
+	function branch() returns Leaf
 		return self.leaf
 	end 'branch'
 end 'Trunk'
@@ -686,7 +686,7 @@ type Tally
 		return Self{n: n, label: "t"}
 	end 'create'
 
-	export function itself() returns Tally
+	function itself() returns Tally
 		return self
 	end 'itself'
 end 'Tally'
@@ -738,7 +738,7 @@ typealias Coord = int(0 to 100)
 type Point
 	export var x as Coord
 
-	export static function create(x Coord) returns Self
+	static function create(x Coord) returns Self
 		return Self{x: x}
 	end 'create'
 end 'Pointer'

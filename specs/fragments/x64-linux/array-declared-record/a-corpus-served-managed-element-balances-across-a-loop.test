@@ -4,31 +4,31 @@ typealias Slot = int(0 to 1000)
 // The record-collapsed `Array`, exercised through a CORPUS-SERVED member that hands back a managed
 // element, in a loop, alongside a clone. Any reference taken one too few or one too many times exits 101.
 type Array uses Element implements BuiltinArrayLiteral, Cloneable
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function clone() returns Self
+	function clone() returns Self
 		let len = managed.length()
 		let copy = try managed.slice(0, len) otherwise panic("clone: 0..len is always in range")
 		return Self{managed: copy}
 	end 'clone'
 
 	// Off the roster, so this is the corpus door's own path.
-	export function at(i Slot) returns Element
+	function at(i Slot) returns Element
 		return try managed.get(i) otherwise panic("at: the caller checked the bound")
 	end 'at'
 
 	// The `self.` spelling of the same, plus a BARE roster call in the same body.
-	export function lastOne() returns Element
+	function lastOne() returns Element
 		return self.at((count() - 1) as Slot)
 	end 'lastOne'
 end 'Array'

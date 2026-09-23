@@ -109,7 +109,9 @@ a file the client named no root over, and a file inside `stdlib/` or `runtime/`,
 behaviour described below.
 
 **The project root is a ladder, and the client's workspace folders are one of its rungs.** A file inside
-the compiler's own `stdlib/` or `runtime/` gets those two tiers and nothing else. Any other document is
+the compiler's own `stdlib/` or `runtime/` gets those two tiers and nothing else, and a `runtime/` file is
+checked as the build checks tier source: its reserved names and `__Raw` calls are legal, its restrictions
+still apply, and a body no program reaches is not call-checked. Any other document is
 rooted at the nearest ancestor directory holding a `project.maxon`, searched no higher than the nearest
 root the client named that contains the document. Failing that it is rooted at that named root itself;
 failing that, at its own directory. **Every** entry of `workspaceFolders` is a root, and `rootUri` is
@@ -138,8 +140,9 @@ it as gone.
 
 **Diagnostics** are published with `textDocument/publishDiagnostics` after every `didOpen` and
 `didChange`, and cleared on `didClose`. Each has the error code (for example `E3005`) as `code`,
-`source: "maxon"` and severity Error. "No `main` function" (E3001) is not reported, because a single
-buffer is not a whole program.
+`source: "maxon"` and severity Error. "No `main` function" (E3001) and the unused-export diagnostics
+(E3092, E3093, E3094) are not reported, because a single buffer is not a whole program: an export the
+buffer never uses may be read by a sibling file the check cannot see.
 
 **Requests served:**
 

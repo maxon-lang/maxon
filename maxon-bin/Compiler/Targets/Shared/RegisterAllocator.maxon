@@ -443,7 +443,7 @@ export typealias PressureFuncByClass = Array with String
 // these in when the function's result reaches the main thread.
 //
 // Every field is a scalar, which is also what lets one cross a message boundary whole.
-module type RegAllocCounters
+export type RegAllocCounters
 	export var copiesInserted as EventCount
 	export var hintsHonoured as EventCount
 	export var hintsMissed as EventCount
@@ -493,7 +493,7 @@ end 'RegAllocCounters'
 // maximum per register file and `livenessMarkSteps` feeds both a total and a maximum, so folding them
 // is the module report's job and measuring them is the core's. The NAME that goes with the pressure is
 // the main thread's to supply - the core has no `String` to spare and no report to write it into.
-module type RegAllocFacts
+export type RegAllocFacts
 	export var livenessMarkSteps as EventCount
 	export var rowWordsVisited as EventCount
 	export var maxPressure as RegCountColumn
@@ -1390,7 +1390,7 @@ type DebugTouch
 	export var slot as DebugSlotIndex
 	export var ordinal as DebugOpAnchor
 
-	export static function create(place ElementIndex, slot DebugSlotIndex, ordinal DebugOpAnchor) returns DebugTouch
+	static function create(place ElementIndex, slot DebugSlotIndex, ordinal DebugOpAnchor) returns DebugTouch
 		return Self{place: place, slot: slot, ordinal: ordinal}
 	end 'create'
 end 'DebugTouch'
@@ -1637,11 +1637,11 @@ type StuckValues
 	var occupantCount as ColumnLengthColumn
 	var occupants as ValueIdArray
 
-	export static function create() returns StuckValues
+	static function create() returns StuckValues
 		return Self{values: ValueIdArray.create(), freeMasks: RegMaskColumn.create(), occupantStart: ColumnLengthColumn.create(), occupantCount: ColumnLengthColumn.create(), occupants: ValueIdArray.create()}
 	end 'create'
 
-	export function clear()
+	function clear()
 		self.values.clear()
 		self.freeMasks.clear()
 		self.occupantStart.clear()
@@ -1652,7 +1652,7 @@ type StuckValues
 	// `allowedHeld` is `A(v)`, and every bit in it names a register some LIVE value is holding right now
 	// — which is exactly what makes the eviction cure total. The holders are read here, at the point,
 	// because `Allocation` is discarded with the pass.
-	export function record(v ValueId, free RegMask, allowedHeld RegMask, alloc Allocation)
+	function record(v ValueId, free RegMask, allowedHeld RegMask, alloc Allocation)
 		self.values.push(v)
 		self.freeMasks.push(free)
 		self.occupantStart.push(self.occupants.count())
@@ -1666,24 +1666,24 @@ type StuckValues
 		self.occupantCount.push(self.occupants.count() - (try self.occupantStart.get(self.occupantStart.count() - 1) otherwise panic("StuckValues.record: occupantStart.get OOB on the entry just pushed")))
 	end 'record'
 
-	export function count() returns ColumnLength
+	function count() returns ColumnLength
 		return self.values.count()
 	end 'count'
 
-	export function valueAt(k ColumnLength) returns ValueId
+	function valueAt(k ColumnLength) returns ValueId
 		return try self.values.get(k) otherwise panic("StuckValues.valueAt: no stuck value at {k} of {self.values.count()}")
 	end 'valueAt'
 
-	export function freeAt(k ColumnLength) returns RegMask
+	function freeAt(k ColumnLength) returns RegMask
 		return try self.freeMasks.get(k) otherwise panic("StuckValues.freeAt: no free mask at {k} of {self.freeMasks.count()}")
 	end 'freeAt'
 
-	export function occupantCountAt(k ColumnLength) returns ColumnLength
+	function occupantCountAt(k ColumnLength) returns ColumnLength
 		return try self.occupantCount.get(k) otherwise panic("StuckValues.occupantCountAt: no entry at {k} of {self.occupantCount.count()}")
 	end 'occupantCountAt'
 
 	// Occupant `j` of stuck value `k`, in ascending register order.
-	export function occupantAt(k ColumnLength, j ColumnLength) returns ValueId
+	function occupantAt(k ColumnLength, j ColumnLength) returns ValueId
 		let start = try self.occupantStart.get(k) otherwise panic("StuckValues.occupantAt: no entry at {k} of {self.occupantStart.count()}")
 		return try self.occupants.get(start + j) otherwise panic("StuckValues.occupantAt: occupant {j} of stuck value {k} is past the {self.occupantCountAt(k)} recorded for it")
 	end 'occupantAt'
@@ -1866,7 +1866,7 @@ type ColorHints
 	export var copyHint as ValueIdArray
 	export var noPartner as ValueId
 
-	export static function create(valueCount ValueId) returns ColorHints
+	static function create(valueCount ValueId) returns ColorHints
 		// `fixedHint` is BUILT as a `RegNumColumn` for the reason `Allocation.create`'s colour column is —
 		// element stride ONE against `filledColumn`'s EIGHT, so filling a `DenseColumn` and storing it here
 		// would hand every later read a stride the buffer was not written at. Nothing is narrowed:
@@ -1904,19 +1904,19 @@ type ColorHints
 		end 'unset'
 	end 'setCopyIfUnset'
 
-	export function fixedOf(v ValueId) returns RegNum
+	function fixedOf(v ValueId) returns RegNum
 		return try self.fixedHint.get(v) otherwise panic("ColorHints.fixedOf: OOB")
 	end 'fixedOf'
 
-	export function copyOf(v ValueId) returns ValueId
+	function copyOf(v ValueId) returns ValueId
 		return try self.copyHint.get(v) otherwise panic("ColorHints.copyOf: OOB")
 	end 'copyOf'
 
-	export function hasFixed(v ValueId) returns bool
+	function hasFixed(v ValueId) returns bool
 		return self.fixedOf(v) != NoFixedHint
 	end 'hasFixed'
 
-	export function hasCopy(v ValueId) returns bool
+	function hasCopy(v ValueId) returns bool
 		return self.copyOf(v) != self.noPartner
 	end 'hasCopy'
 end 'ColorHints'
@@ -2915,7 +2915,7 @@ type BlockDeaths
 
 	// True iff `v` dies at op position `pos`. A linear scan of the op's dying values — at most the
 	// op's operand count, so this is O(1) in practice.
-	export function dies(pos BlockOpPos, v ValueId) returns bool
+	function dies(pos BlockOpPos, v ValueId) returns bool
 		for k in 0 upto self.byPos.degree(pos as CsrIndex) 'each'
 			if self.byPos.neighbour(pos as CsrIndex, k: k) as ValueId == v 'match'
 				return true
@@ -2927,7 +2927,7 @@ type BlockDeaths
 
 	// The register mask of every COLORED value dying at op `pos` — the registers a def at this op
 	// may reuse. (An uncolored dead def is handled by the caller's live-def computation, not here.)
-	export function dyingRegsAt(pos BlockOpPos, alloc Allocation) returns RegMask
+	function dyingRegsAt(pos BlockOpPos, alloc Allocation) returns RegMask
 		var mask = 0 as RegMask
 
 		for k in 0 upto self.byPos.degree(pos as CsrIndex) 'each'

@@ -1,0 +1,27 @@
+// Test: error.an-export-function-names-a-module-type-declared-in-another-file
+// --- file: api/other.maxon
+module type Config
+	module var size as ExitCode
+
+	module static function create(size ExitCode) returns Self
+		return Self{size: size}
+	end 'create'
+end 'Config'
+
+// --- file: api/lib.maxon
+export function make() returns Config
+	return Config.create(7)
+end 'make'
+
+export function sizeOf(c Config) returns ExitCode
+	return c.size
+end 'sizeOf'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return sizeOf(make())
+end 'main'
+---
+CompilerError:
+error E3167: api/<fragment>:12:17: exported function 'api.make' names module type 'Config' in its return type
+error E3167: api/<fragment>:16:17: exported function 'api.sizeOf' names module type 'Config' in the type of parameter 'c'

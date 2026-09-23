@@ -1,6 +1,6 @@
 // Test: crossfile-type-and-file-private-typealias-coexist
 // --- file: a.maxon
-typealias Small = int(0 to 100)
+export typealias Small = int(0 to 100)
 
 export type Box
 	export var v as Small
@@ -13,15 +13,19 @@ end 'Box'
 // --- file: b.maxon
 typealias Box = int(0 to 10)
 
-export function useIt() returns Box
+function useIt() returns Box
 	return 5 as Box
 end 'useIt'
+
+export function fromB() returns ExitCode
+	return useIt() as ExitCode
+end 'fromB'
 
 // --- file: main.maxon
 function main() returns ExitCode
 	let boxed = Box.create(3)
 
-	return useIt() + boxed.v
+	return fromB() + (boxed.v as ExitCode)
 end 'main'
 ---
 ExitCode: 8
@@ -39,7 +43,7 @@ func @main {
     x64.pushReg rbx
     x64.prologue 40
     x64.movRegImm32 rbx, 3
-  __rc_ok#7:
+  __rc_ok#6:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -47,14 +51,14 @@ func @main {
   __il_cont:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.leaRegRegImm32 rbx, rax, 5
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 rbx, 255
     x64.jcc greater, __rc_panic
   __rc_ok#1:
-    x64.movRegReg rcx, r8
-    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg rbx

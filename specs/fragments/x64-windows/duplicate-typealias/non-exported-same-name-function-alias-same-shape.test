@@ -3,77 +3,49 @@
 typealias Tally = int(0 to 1000)
 typealias Step = function(Tally, Tally) returns Tally
 
-export function foldA(start Tally, step Step) returns Tally
+function foldA(start Tally, step Step) returns Tally
 	return step(start, 3)
 end 'foldA'
+
+export function runA() returns ExitCode
+	return foldA(1, step: function(acc, more) gives acc + more) as ExitCode
+end 'runA'
 
 // --- file: b.maxon
 typealias Tally = int(0 to 1000)
 typealias Step = function(Tally, Tally) returns Tally
 
-export function foldB(start Tally, step Step) returns Tally
+function foldB(start Tally, step Step) returns Tally
 	return step(start, 5)
 end 'foldB'
 
+export function runB() returns ExitCode
+	return foldB(1, step: function(acc, more) gives acc * more) as ExitCode
+end 'runB'
+
 // --- file: main.maxon
 function main() returns ExitCode
-	let a = foldA(1, step: function(acc, more) gives acc + more)
-	let b = foldB(1, step: function(acc, more) gives acc * more)
+	let a = runA()
+	let b = runB()
 	return a + b
 end 'main'
 ---
 ExitCode: 9
 ---
 data {
-  __mrt_console_probe_stdin@0 = i8 0
-  __mrt_console_probe_stdout@1 = i8 0
-  __mrt_console_probe_stderr@2 = i8 0
+  __sched_tls_teb_offset@0 = i64 0
+  __sched_allm@8 = i64 0
+  __sched_lock@16 = i64 0
+  __sched_preempt_ext_lock@24 = i64 0
+  __sched_preempt_context@32 = i64 0
+  __ds_base@40 = i64 0
+  __dbg_ctl@48 = i64 0
+  __mrt_console_probe_stdin@56 = i8 0
+  __mrt_console_probe_stdout@57 = i8 0
+  __mrt_console_probe_stderr@58 = i8 0
 }
 
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegImm32 rcx, 1
-    x64.leaRegFunc rsi, [rip + main$closure_0]
-    x64.movRegImm32 rax, 0
-  __rc_ok#7:
-    x64.movRegImm32 rdx, 3
-    x64.callReg rsi
-    x64.movRegReg rbx, r8
-  __il_cont#5:
-    x64.movRegImm32 rcx, 1
-    x64.leaRegFunc rsi, [rip + main$closure_1]
-    x64.movRegImm32 rax, 0
-  __rc_ok#11:
-    x64.movRegImm32 rdx, 5
-    x64.callReg rsi
-  __il_cont#4:
-    x64.leaRegRegReg r8, rbx, r8
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-  __rc_ok#1:
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at main.maxon:4: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @main$closure_0 {
+func @runA$closure_0 {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
@@ -95,14 +67,14 @@ func @main$closure_0 {
     x64.popReg rbp
     x64.ret
   __rc_panic#2:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at main.maxon:2: Range check failed: value outside typealias 'Tally'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a.maxon:9: Range check failed: value outside typealias 'Tally'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
   __rc_panic#5:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at main.maxon:2: Range check failed: value outside typealias 'Tally'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a.maxon:9: Range check failed: value outside typealias 'Tally'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -110,7 +82,7 @@ func @main$closure_0 {
     x64.ret
 }
 
-func @main$closure_1 {
+func @runB$closure_0 {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
@@ -133,17 +105,61 @@ func @main$closure_1 {
     x64.popReg rbp
     x64.ret
   __rc_panic#2:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at main.maxon:3: Range check failed: value outside typealias 'Tally'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at b.maxon:9: Range check failed: value outside typealias 'Tally'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
   __rc_panic#5:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at main.maxon:3: Range check failed: value outside typealias 'Tally'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at b.maxon:9: Range check failed: value outside typealias 'Tally'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+  __il_body#6:
+    x64.movRegImm32 rcx, 1
+    x64.leaRegFunc rsi, [rip + runA$closure_0]
+    x64.movRegImm32 rax, 0
+  __rc_ok#9:
+    x64.movRegImm32 rdx, 3
+    x64.callReg rsi
+    x64.movRegReg rbx, r8
+  __il_body#12:
+    x64.movRegImm32 rcx, 1
+    x64.leaRegFunc rsi, [rip + runB$closure_0]
+    x64.movRegImm32 rax, 0
+  __rc_ok#15:
+    x64.movRegImm32 rdx, 5
+    x64.callReg rsi
+  __il_cont:
+    x64.leaRegRegReg r8, rbx, r8
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok#1:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at main.maxon:4: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }

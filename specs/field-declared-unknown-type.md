@@ -178,7 +178,7 @@ typealias Small = int(0 to 1000)
 type Holder
 	export var v as Small
 
-	export static function make(n Small) returns Holder
+	static function make(n Small) returns Holder
 		return Self{v: n}
 	end 'make'
 end 'Holder'

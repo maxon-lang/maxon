@@ -1,0 +1,28 @@
+// Test: error.a-contested-generic-alias-is-judged-by-the-readers-own-declaration
+// --- file: alpha/lib.maxon
+export typealias Tally = int(0 to 100)
+export typealias TallyBag = Array with Tally
+
+export function count(b TallyBag) returns Tally
+	return b.count() as Tally
+end 'count'
+
+// --- file: pkg/lib.maxon
+typealias TallyBag = Array with Tally
+
+export typealias Handler = function(TallyBag) returns Tally
+
+export function apply(h Handler, b TallyBag) returns Tally
+	return h(b)
+end 'apply'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	var b = TallyBag.create()
+	b.push(7)
+
+	return (count(b) + apply(function(x TallyBag) gives x.count() as Tally, b: b)) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3167: pkg/<fragment>:15:17: exported function 'pkg.apply' names file-private typealias 'TallyBag' in the type of parameter 'h'

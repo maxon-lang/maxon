@@ -22,13 +22,18 @@
 // monomorphized `Array with Item` body carries `stdlib/Array.maxon` as its source file and cannot
 // possibly have named `Item`. The rule and what it cost are stated in full there.
 //
-// ⛔⛔ **THE RUNTIME TIER IS EXEMPT BY PATH, AND IT IS THE ONE EXEMPTION THIS PASS HAS.** The argument
-// above turns on every exported `stdlib/` declaration being `public`; a `runtime/` declaration is not,
-// so an `export`ed one would be audited like an author's. It cannot be: **every runtime declaration is
-// permanently "unused" to this pass BY CONSTRUCTION**, because a runtime entry is reached by the
-// COMPILER looking up a NAME, never by a source file referencing it. There is no program in which one of
-// them acquires a reader, so E3092/E3093/E3094 over that tier report nothing a change could ever fix.
-// Keyed on `isRuntimeSourceFile` so it fails CLOSED: a file outside `runtime/` is audited.
+// ⛔ **THE RUNTIME TIER IS EXEMPT BY PATH.** The argument above turns on every exported `stdlib/`
+// declaration being `public`; a `runtime/` declaration is not, so an `export`ed one would be audited like
+// an author's. It cannot be: every runtime declaration is permanently "unused" to this pass by
+// construction, because a runtime entry is reached by the COMPILER looking up a NAME, never by a source
+// file referencing it. There is no program in which one of them acquires a reader, so E3092/E3093/E3094
+// over that tier report nothing a change could ever fix. Keyed on `isRuntimeSourceFile` so it fails
+// CLOSED: a file outside `runtime/` is audited.
+//
+// ⛔ **THE SECOND EXEMPTION IS A SIGNATURE DEMAND, AND IT IS PER DECLARATION RATHER THAN BY PATH** — see
+// `reachedSignatureDemands`. A type that E3167 requires an exported or `module` function to be able to
+// name is credited at the tier E3167 judges that function at, so this pass and E3167 cannot contradict each other on one
+// program.
 //
 // ⚠ **WHAT IS STILL AUDITED IN `stdlib/`: its `module` declarations** (all in `String.maxon`).
 // That is deliberate — `module` is the marked, narrower tier there, and E3094 is exactly the signal its
@@ -42,14 +47,6 @@
 // pass reports a diagnostic, and this pass is scheduled after `semanticCheck`, so reaching it means the
 // project's diagnostic list is empty. Re-testing it here would be a second answer to a question the
 // driver has already answered.
-
-// A one-file program's exports are its public surface and nothing outside can name them, so every
-// `export` in one would be E3092 and the diagnostic would be noise rather than a finding.
-//
-// ⚠ **IT COUNTS USER FILES, NOT SOURCE PATHS.** `project.db.sourcePaths` holds every stdlib file the
-// loader pulled in, so the raw count is in the dozens for a one-file program and the gate would never
-// fire. The stdlib half is filtered here so the question stays "how many files did the AUTHOR write?".
-let MinimumUserFilesToAudit = 2
 
 // ── What is seeded ───────────────────────────────────────────────────────────────────────────────
 
@@ -84,7 +81,7 @@ type TrackedDecl
 	export var sawOutsideFile as bool
 	export var sawOutsideModule as bool
 
-	export static function create(kind TrackedDeclKind, key ByteArray, displayName String, noun String, visibility Visibility, declFile AuditedFile, nameLine LineNumber, nameColumn ColumnNumber) returns TrackedDecl
+	static function create(kind TrackedDeclKind, key ByteArray, displayName String, noun String, visibility Visibility, declFile AuditedFile, nameLine LineNumber, nameColumn ColumnNumber) returns TrackedDecl
 		return Self{kind: kind, key: key, displayName: displayName, noun: noun, visibility: visibility, declFile: declFile, nameLine: nameLine, nameColumn: nameColumn, sawOutsideFile: false, sawOutsideModule: false}
 	end 'create'
 end 'TrackedDecl'
@@ -148,7 +145,7 @@ type AuditedFile
 	export let moduleDirectory as String
 	export let isLibrary as bool
 
-	export static function create(index AuditedFileIndex, path FilePath, pathText String, moduleDirectory String, isLibrary bool) returns AuditedFile
+	static function create(index AuditedFileIndex, path FilePath, pathText String, moduleDirectory String, isLibrary bool) returns AuditedFile
 		return Self{index: index, path: path, pathText: pathText, moduleDirectory: moduleDirectory, isLibrary: isLibrary}
 	end 'create'
 end 'AuditedFile'
@@ -160,6 +157,8 @@ typealias AuditedFileMap = Map with (String, AuditedFile)
 // while this is asked of every reader and every declaration, and a String key hashes in place.
 typealias LibrarySourcePathSet = Set with String
 
+typealias EntryPointNameSet = Set with ByteArray
+
 // The author's files, the library's, and the runtime tier's, told apart in ONE walk over
 // `project.db.sourcePaths`. All three come from the same pair of answers per path, so the populations
 // cannot come to disagree about a file the way independently-filtered walks could. `runtimeFiles` is a
@@ -170,7 +169,7 @@ type SourcePathSplit
 	export let libraryFiles as LibrarySourcePathSet
 	export let runtimeFiles as LibrarySourcePathSet
 
-	export static function create(userFiles FilePathArray, libraryFiles LibrarySourcePathSet, runtimeFiles LibrarySourcePathSet) returns SourcePathSplit
+	static function create(userFiles FilePathArray, libraryFiles LibrarySourcePathSet, runtimeFiles LibrarySourcePathSet) returns SourcePathSplit
 		return Self{userFiles: userFiles, libraryFiles: libraryFiles, runtimeFiles: runtimeFiles}
 	end 'create'
 end 'SourcePathSplit'
@@ -196,11 +195,11 @@ type TrackedDecls
 	var creditedTypeNameIds as CreditedTypeNameIdMap
 	var creditedTypeNames as CreditedTypeNameKeySet
 
-	export static function create(libraryFiles LibrarySourcePathSet, globalLabels GlobalLabelIndexMap) returns TrackedDecls
+	static function create(libraryFiles LibrarySourcePathSet, globalLabels GlobalLabelIndexMap) returns TrackedDecls
 		return Self{entries: TrackedDeclArray.create(), functionIndex: TrackedDeclIndexMap.create(), typeIndex: TrackedDeclIndexMap.create(), bindingIndex: TrackedDeclIndexMap.create(), libraryFiles: libraryFiles, globalLabels: globalLabels, files: AuditedFileMap.create(), creditedTypeNameIds: CreditedTypeNameIdMap.create(), creditedTypeNames: CreditedTypeNameKeySet.create()}
 	end 'create'
 
-	export function fileOf(path FilePath, signatures ProgramSignatures) returns AuditedFile
+	function fileOf(path FilePath, signatures ProgramSignatures) returns AuditedFile
 		let pathText = path.toString()
 
 		if let known = try self.files.get(pathText) 'known'
@@ -213,7 +212,7 @@ type TrackedDecls
 	end 'fileOf'
 
 	// Whether `reader` is credited with `name` for the first time — see `CreditedTypeNameKey`.
-	export function creditsTypeNameFirst(name ByteArray, reader AuditedFile) returns bool
+	function creditsTypeNameFirst(name ByteArray, reader AuditedFile) returns bool
 		var nameId = self.creditedTypeNameIds.count() as CreditedTypeNameId
 
 		if let known = try self.creditedTypeNameIds.get(name) 'known'
@@ -232,7 +231,7 @@ type TrackedDecls
 		return true
 	end 'creditsTypeNameFirst'
 
-	export function add(decl TrackedDecl)
+	function add(decl TrackedDecl)
 		let at = self.entries.count()
 		self.entries.push(decl)
 
@@ -259,7 +258,7 @@ type TrackedDecls
 		index.upsert(key, value: claimants)
 	end 'indexUnder'
 
-	export function at(index TrackedDeclIndex) returns TrackedDecl
+	function at(index TrackedDeclIndex) returns TrackedDecl
 		return try self.entries.get(index) otherwise panic("TrackedDecls.at: OOB at {index} — every index handed out is one this seed minted")
 	end 'at'
 end 'TrackedDecls'
@@ -269,12 +268,10 @@ end 'TrackedDecls'
 module function checkUnusedExports(project Project, module MaxonModule, signatures ProgramSignatures) throws CompileError
 	let sources = try splitSourcePaths(project)
 
-	if sources.userFiles.count() < MinimumUserFilesToAudit 'tooFewFilesToHaveAnOutside'
-		return
-	end 'tooFewFilesToHaveAnOutside'
+	let entryPoints = try entryPointNamesOf(project, userFiles: sources.userFiles)
 
 	var tracked = TrackedDecls.create(sources.libraryFiles, globalLabels: indexGlobalLabels(signatures))
-	seedFunctions(project, module: module, signatures: signatures, tracked: tracked)
+	seedFunctions(module, signatures: signatures, entryPoints: entryPoints, tracked: tracked)
 	try seedTypes(project, signatures: signatures, userFiles: sources.userFiles, tracked: tracked)
 	seedBindings(signatures, tracked: tracked)
 
@@ -284,11 +281,9 @@ module function checkUnusedExports(project Project, module MaxonModule, signatur
 
 	collectReferences(module, signatures: signatures, tracked: tracked, moduleTypeNames: project.typeNames)
 	try collectFileTypeReferences(project, signatures: signatures, userFiles: sources.userFiles, tracked: tracked)
-	emitDiagnostics(project, tracked: tracked, runtimeFiles: sources.runtimeFiles)
+	emitDiagnostics(project, tracked: tracked, runtimeFiles: sources.runtimeFiles, demanded: reachedSignatureDemands(project, tracked: tracked))
 end 'checkUnusedExports'
 
-// The files the AUTHOR wrote, and the library's own — see `MinimumUserFilesToAudit` for why the gate above
-// cannot count the library half, and `noteRead` for what the library half is used for.
 function splitSourcePaths(project Project) returns SourcePathSplit throws CompileError
 	var paths = FilePathArray.create()
 	var libraryFiles = LibrarySourcePathSet.create()
@@ -351,23 +346,36 @@ end 'tierIsAudited'
 
 // ⭐ **THE NAMES NO SOURCE LINE DECLARES.** A synthesized helper has no `export` an author could drop, so
 // a finding about one is a finding about the compiler.
-function isSynthesizedName(name ByteArray) returns bool
+module function isSynthesizedName(name ByteArray) returns bool
 	let text = String.from(name)
 	return text.startsWith("__") or text.contains("$closure_") or text.contains(".unionCases")
 end 'isSynthesizedName'
 
-// The ENTRY is called by the entry stub and every module-init helper by the runtime, so neither has a
-// source-level caller to find.
-//
-// ⚠ **IT IS `Project.entryFunctionName` AND NOT THE LITERAL `main`, for that field's reason.** The
-// exemption is about the function nothing in the source calls, which is whatever this build enters at; a
-// `main` that some other entry has displaced really does need a caller like any other exported function.
-// For every build a person types the two are the same name and no verdict moves.
-function isEntrypointName(project Project, name ByteArray) returns bool
-	return name == project.entryFunctionName
-end 'isEntrypointName'
+// The functions nothing in the source calls. The entry is `Project.entryFunctionName` rather than the
+// literal `main`: a `main` that another entry has displaced needs a caller like any other export.
+// Every task of a task file counts, not only the one this build enters at: `maxon run <task>` compiles
+// the task file with that task as the entry, and the runner reaches the others by name. They are read
+// through the runner's own `taskNamesIn`, so the two cannot disagree on what a task is.
+function entryPointNamesOf(project Project, userFiles FilePathArray) returns EntryPointNameSet throws CompileError
+	var names = EntryPointNameSet.create()
+	names.insert(project.entryFunctionName)
 
-function seedFunctions(project Project, module MaxonModule, signatures ProgramSignatures, tracked TrackedDecls)
+	for path in userFiles 'eachFile'
+		if not isTaskFileName(path.filename()) 'notATaskFile'
+			continue
+		end 'notATaskFile'
+
+		let entry = try sourceEntryOf(project, path: path)
+
+		for task in taskNamesIn(entry.content) 'eachTask'
+			names.insert(task.toByteArray())
+		end 'eachTask'
+	end 'eachFile'
+
+	return names
+end 'entryPointNamesOf'
+
+function seedFunctions(module MaxonModule, signatures ProgramSignatures, entryPoints EntryPointNameSet, tracked TrackedDecls)
 	for func in module.functions 'eachFunc'
 		if not tierIsAudited(func.visibility) 'narrowEnoughAlready'
 			continue
@@ -377,7 +385,7 @@ function seedFunctions(project Project, module MaxonModule, signatures ProgramSi
 			continue
 		end 'synthesizedFunction'
 
-		if isSynthesizedName(func.name) or isEntrypointName(project, name: func.name) 'noSourceLevelCaller'
+		if isSynthesizedName(func.name) or entryPoints.contains(func.name) 'noSourceLevelCaller'
 			continue
 		end 'noSourceLevelCaller'
 
@@ -943,13 +951,79 @@ end 'noteRead'
 
 // ── Emission ─────────────────────────────────────────────────────────────────────────────────────
 
+typealias DemandedTierMap = Map with (ByteArray, Visibility)
+
+// The widest tier any REACHED signature demands of each type name. A demand is `checkSignatureVisibility`'s
+// record that some function's signature names the type and so needs it at the tier E3167 judges that
+// function at; it is reached when the demanding function is itself referenced from outside the type's
+// declaring file, since a function nothing outside reaches is an `export` the author may drop, and
+// crediting the type off it would
+// suppress the finding that says so.
+//
+// `Visibility.file` is the "no reached demand" value and no demand can carry it — the pass never judges a
+// file-private function.
+function reachedSignatureDemands(project Project, tracked TrackedDecls) returns DemandedTierMap
+	var demanded = DemandedTierMap.create()
+
+	for demand in project.signatureTypeDemands 'eachDemand'
+		if tierIsAtLeastAsVisible(try demanded.get(demand.typeName) otherwise Visibility.file, floor: demand.demandingTier) 'aWiderDemandIsAlreadyHeld'
+			continue
+		end 'aWiderDemandIsAlreadyHeld'
+
+		if not demandIsReached(tracked, demand: demand) 'itsDemanderIsReachedInItsOwnFileAlone'
+			continue
+		end 'itsDemanderIsReachedInItsOwnFileAlone'
+
+		demanded.upsert(demand.typeName, value: demand.demandingTier)
+	end 'eachDemand'
+
+	return demanded
+end 'reachedSignatureDemands'
+
+function demandIsReached(tracked TrackedDecls, demand SignatureTypeDemand) returns bool
+	match splitQualifiedName(demand.demandingFunction) 'split'
+		notQualified then return reachedFromOutsideItsFile(tracked.functionIndex, tracked: tracked, name: demand.demandingFunction)
+		parts(owner, _) then return memberDemandIsReached(tracked, demand: demand, owner: owner)
+	end 'split'
+end 'demandIsReached'
+
+// A method's OWNER TYPE stands in for it: this audit records no reference against a method at all — the
+// type owns the finding — so asking the member's own reach would answer false for every member demand and
+// credit nothing. A member the seed does track answers for itself.
+function memberDemandIsReached(tracked TrackedDecls, demand SignatureTypeDemand, owner ByteArray) returns bool
+	if owner.equals(demand.typeName) 'aMemberCannotWidenItsOwnType'
+		return false
+	end 'aMemberCannotWidenItsOwnType'
+
+	if tracked.functionIndex.contains(demand.demandingFunction) 'theMemberIsAuditedItself'
+		return reachedFromOutsideItsFile(tracked.functionIndex, tracked: tracked, name: demand.demandingFunction)
+	end 'theMemberIsAuditedItself'
+
+	return reachedFromOutsideItsFile(tracked.typeIndex, tracked: tracked, name: owner)
+end 'memberDemandIsReached'
+
+function reachedFromOutsideItsFile(index TrackedDeclIndexMap, tracked TrackedDecls, name ByteArray) returns bool
+	// A name the seed never tracked — a `public` declaration, an entry point, a task — is one whose reach
+	// this pass does not measure, so its demand stands. Answering true can only credit the type and so
+	// suppress a finding; it never invents one.
+	let claimants = try index.get(name) otherwise return true
+
+	for at in claimants 'eachClaimant'
+		if tracked.at(at).sawOutsideFile 'reachedFromOutside'
+			return true
+		end 'reachedFromOutside'
+	end 'eachClaimant'
+
+	return false
+end 'reachedFromOutsideItsFile'
+
 // In DECLARATION order, which is the order the seed was built in — see `TrackedDecls`.
 //
 // ⛔ The RUNTIME tier's declarations are dropped HERE rather than at seed time, and a set lookup rather
 // than a path probe, for the reason `LibrarySourcePathSet` states: this runs per tracked DECLARATION,
 // not per file, and the answer was already computed once per file by `splitSourcePaths`. See this
 // file's header for why the tier is exempt at all.
-function emitDiagnostics(project Project, tracked TrackedDecls, runtimeFiles LibrarySourcePathSet)
+function emitDiagnostics(project Project, tracked TrackedDecls, runtimeFiles LibrarySourcePathSet, demanded DemandedTierMap)
 	for i in 0 upto tracked.entries.count() 'eachTracked'
 		let decl = tracked.at(i)
 
@@ -957,27 +1031,46 @@ function emitDiagnostics(project Project, tracked TrackedDecls, runtimeFiles Lib
 			continue
 		end 'theRuntimeTiersOwn'
 
-		emitOne(project, decl: decl)
+		emitOne(project, decl: decl, demandedTier: demandedTierOf(decl, demanded: demanded))
 	end 'eachTracked'
 end 'emitDiagnostics'
 
-function emitOne(project Project, decl TrackedDecl)
+function demandedTierOf(decl TrackedDecl, demanded DemandedTierMap) returns Visibility
+	if decl.kind != TrackedDeclKind.trackedType 'onlyATypeIsNamedByASignature'
+		return Visibility.file
+	end 'onlyATypeIsNamedByASignature'
+
+	return try demanded.get(decl.key) otherwise Visibility.file
+end 'demandedTierOf'
+
+function emitOne(project Project, decl TrackedDecl, demandedTier Visibility)
 	match decl.visibility 'tier'
 		file then panic("checkUnusedExports: a `file` declaration reached emit ({decl.noun} '{decl.displayName}') — `tierIsAudited` filters it at seed time")
 		public then panic("checkUnusedExports: a `public` declaration reached emit ({decl.noun} '{decl.displayName}') — `tierIsAudited` filters it at seed time, which is the whole of the exemption")
-		module then emitForModuleTier(project, decl: decl)
-		global then emitForGlobalTier(project, decl: decl)
+		module then emitForModuleTier(project, decl: decl, demandedTier: demandedTier)
+		global then emitForGlobalTier(project, decl: decl, demandedTier: demandedTier)
 	end 'tier'
 end 'emitOne'
 
-function emitForModuleTier(project Project, decl TrackedDecl)
+function emitForModuleTier(project Project, decl TrackedDecl, demandedTier Visibility)
+	if tierIsAtLeastAsVisible(demandedTier, floor: Visibility.module) 'aReachedSignatureAsksForThisTier'
+		return
+	end 'aReachedSignatureAsksForThisTier'
+
 	if not decl.sawOutsideFile 'nothingOutsideNamesIt'
 		reportPositioned(project, code: ErrorCode.semanticUnusedModuleSymbol, message: "module {decl.noun} '{decl.displayName}' is never referenced outside its declaring file", line: decl.nameLine, column: decl.nameColumn, filePath: decl.declFile.path)
 	end 'nothingOutsideNamesIt'
 end 'emitForModuleTier'
 
-function emitForGlobalTier(project Project, decl TrackedDecl)
-	if not decl.sawOutsideFile 'nothingOutsideNamesIt'
+// The demand excuses each arm on its own terms, not the declaration as a whole: a `module` demand answers
+// "nothing outside names it" but leaves "`module` would do" true and worth saying, so only a program-wide
+// demand silences both arms.
+function emitForGlobalTier(project Project, decl TrackedDecl, demandedTier Visibility)
+	if isProgramWideTier(demandedTier) 'aReachedSignatureAsksForThisTier'
+		return
+	end 'aReachedSignatureAsksForThisTier'
+
+	if not decl.sawOutsideFile and demandedTier == Visibility.file 'nothingOutsideNamesIt'
 		reportPositioned(project, code: ErrorCode.semanticUnusedExportedSymbol, message: "exported {decl.noun} '{decl.displayName}' is never referenced outside its declaring file", line: decl.nameLine, column: decl.nameColumn, filePath: decl.declFile.path)
 		return
 	end 'nothingOutsideNamesIt'

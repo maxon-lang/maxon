@@ -76,7 +76,7 @@ typealias Integer = int(i64.min to i64.max)
 type Box
 	export let v as Integer
 
-	export static function from(n Integer) returns Self
+	static function from(n Integer) returns Self
 		return Self{v: n}
 	end 'from'
 end 'Box'
@@ -97,11 +97,11 @@ typealias Integer = int(i64.min to i64.max)
 type Counter
 	export let base as Integer
 
-	export static function create(base Integer) returns Self
+	static function create(base Integer) returns Self
 		return Self{base: base}
 	end 'create'
 
-	export function to() returns Integer
+	function to() returns Integer
 		return base + 2
 	end 'to'
 end 'Counter'
@@ -128,11 +128,11 @@ end 'Scaled'
 type Cell implements Scaled
 	export let n as Integer
 
-	export static function from(n Integer) returns Self
+	static function from(n Integer) returns Self
 		return Self{n: n}
 	end 'from'
 
-	export function to() returns Integer
+	function to() returns Integer
 		return n * 3
 	end 'to'
 end 'Cell'
@@ -202,15 +202,15 @@ enum Grade
 end 'Grade'
 
 type Ops
-	export static function while(n Integer) returns Integer
+	static function while(n Integer) returns Integer
 		return n * 2
 	end 'while'
 
-	export static function for(n Integer) returns Integer
+	static function for(n Integer) returns Integer
 		return n + 3
 	end 'for'
 
-	export static function end(n Integer) returns Integer
+	static function end(n Integer) returns Integer
 		return n - 1
 	end 'end'
 end 'Ops'
@@ -352,7 +352,7 @@ and the right answer. The monomorphic twin did not crash but emitted a spurious 
 type Box uses T
 	export var value as T
 
-	export static function create(from T) returns Self
+	static function create(from T) returns Self
 		return Self{value: from}
 	end 'create'
 end 'Box'
@@ -433,7 +433,7 @@ AT ALL is not an arm's business.
 typealias Integer = int(i64.min to i64.max)
 
 type Ops
-	export static function otherwise(n Integer) returns bool
+	static function otherwise(n Integer) returns bool
 		return n < 3
 	end 'otherwise'
 end 'Ops'
@@ -481,19 +481,19 @@ end 'Bounded'
 type Span implements Bounded
 	export let lo as Integer
 
-	export static function from(k Integer) returns Self
+	static function from(k Integer) returns Self
 		return Self{lo: k}
 	end 'from'
 
-	export function end(k Integer) returns Integer
+	function end(k Integer) returns Integer
 		return lo + k
 	end 'end'
 
-	export function while(k Integer) returns Integer
+	function while(k Integer) returns Integer
 		return k
 	end 'while'
 
-	export function match(k Integer) returns Integer
+	function match(k Integer) returns Integer
 		return k
 	end 'match'
 end 'Span'
@@ -539,7 +539,7 @@ typealias Integer = int(i64.min to i64.max)
 type Holder
 	export let n as Integer
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 end 'Holder'
@@ -688,14 +688,14 @@ end 'BoxError'
 type Box
 	export let n as Integer
 
-	export static function viaSelf(n Integer) returns Integer throws BoxError
+	static function viaSelf(n Integer) returns Integer throws BoxError
 		if n < 0 'bad'
 			throw BoxError.negative
 		end 'bad'
 		return n + 1
 	end 'viaSelf'
 
-	export static function checked(n Integer) returns Integer throws BoxError
+	static function checked(n Integer) returns Integer throws BoxError
 		return try Self.viaSelf(n) otherwise panic("self")
 	end 'checked'
 end 'Box'

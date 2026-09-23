@@ -240,7 +240,7 @@ typealias Word = int(i64.min to i64.max)
 type Cell
 	export var value as Word
 
-	export static function of(value Word) returns Cell
+	static function of(value Word) returns Cell
 		return Self{value: value}
 	end 'of'
 end 'Cell'
@@ -285,7 +285,7 @@ typealias Word = int(i64.min to i64.max)
 type Cell
 	export var value as Word
 
-	export static function of(value Word) returns Cell
+	static function of(value Word) returns Cell
 		return Self{value: value}
 	end 'of'
 end 'Cell'

@@ -82,11 +82,11 @@ end 'Payload'
 type Desc implements Payload
 	export var v as Integer
 
-	export static function create(x Integer) returns Desc
+	static function create(x Integer) returns Desc
 		return Self{v: x}
 	end 'create'
 
-	export function tag() returns Integer
+	function tag() returns Integer
 		return self.v
 	end 'tag'
 end 'Desc'
@@ -95,11 +95,11 @@ end 'Desc'
 type Holder
 	export var p as Payload
 
-	export static function create(p Payload) returns Holder
+	static function create(p Payload) returns Holder
 		return Holder{p: p}
 	end 'create'
 
-	export function run() returns Integer
+	function run() returns Integer
 		return self.p.tag()
 	end 'run'
 end 'Holder'
@@ -165,11 +165,11 @@ end 'Payload'
 type Desc implements Payload
 	export var v as Integer
 
-	export static function create(x Integer) returns Desc
+	static function create(x Integer) returns Desc
 		return Self{v: x}
 	end 'create'
 
-	export function tag() returns Integer
+	function tag() returns Integer
 		return self.v
 	end 'tag'
 end 'Desc'
@@ -177,11 +177,11 @@ end 'Desc'
 type Holder
 	export var p as Payload
 
-	export static function create(p Payload) returns Holder
+	static function create(p Payload) returns Holder
 		return Holder{p: p}
 	end 'create'
 
-	export function run() returns Integer
+	function run() returns Integer
 		return self.p.tag()
 	end 'run'
 end 'Holder'

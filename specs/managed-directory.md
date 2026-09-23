@@ -192,14 +192,14 @@ error E3057: specs/fragments/managed-directory/managed-directory.next-without-tr
 
 <!-- test: managed-directory.search-and-list -->
 ```maxon
-export enum TestFileError implements Error
+enum TestFileError implements Error
 	openFailed
 end 'TestFileError'
 
 type TestFile
 	export var file as __ManagedFile
 
-	export static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
+	static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
 		let wr = try __ManagedFile.openWrite(path) otherwise 'f'
 			throw TestFileError.openFailed
 		end 'f'
@@ -207,14 +207,14 @@ type TestFile
 	end 'openWrite'
 end 'TestFile'
 
-export enum TestDirError implements Error
+enum TestDirError implements Error
 	searchFailed
 end 'TestDirError'
 
 type TestDir
 	export var dir as __ManagedDirectory
 
-	export static function search(pattern __ManagedMemory) returns TestDir throws TestDirError
+	static function search(pattern __ManagedMemory) returns TestDir throws TestDirError
 		let handle = try __ManagedDirectory.openSearch(pattern) otherwise 'fail'
 			throw TestDirError.searchFailed
 		end 'fail'
@@ -343,7 +343,7 @@ This searches `*.txt` in a directory whose first match is a REAL file.
 MEASURED by sabotage: with the flag cleared at the open, this returns 1.
 
 ```maxon
-export enum ProbeError implements Error
+enum ProbeError implements Error
 	failed
 end 'ProbeError'
 
@@ -403,7 +403,7 @@ being read back into a `String`. The dot filter is checked here too: `.` and
 `..` never reach the caller, so every name this sees is a real entry.
 
 ```maxon
-export enum ProbeError implements Error
+enum ProbeError implements Error
 	failed
 end 'ProbeError'
 
@@ -488,7 +488,7 @@ end 'main'
 `not-exists` case above only covers a path that names nothing.
 
 ```maxon
-export enum ProbeError implements Error
+enum ProbeError implements Error
 	failed
 end 'ProbeError'
 
@@ -588,7 +588,7 @@ ordinals and reroute every handler arm with no diagnostic anywhere. The `__`
 prefix is what makes that impossible here, and this is the case that says so.
 
 ```maxon
-export enum __ManagedDirectoryError implements Error
+enum __ManagedDirectoryError implements Error
 	somethingElse
 end '__ManagedDirectoryError'
 
@@ -597,7 +597,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2051: <fragment>:2:13: identifier '__ManagedDirectoryError' is reserved: declarations starting with '__' are reserved for compiler internals
+error E2051: <fragment>:2:6: identifier '__ManagedDirectoryError' is reserved: declarations starting with '__' are reserved for compiler internals
 ```
 
 <!-- test: managed-directory.dotfiles-are-entries-not-dot-pseudo-entries -->
@@ -615,7 +615,7 @@ unconditionally back to the fetch, this returns 1 and the other seventeen stay
 green.
 
 ```maxon
-export enum ProbeError implements Error
+enum ProbeError implements Error
 	failed
 end 'ProbeError'
 

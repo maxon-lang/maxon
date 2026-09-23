@@ -59,11 +59,11 @@ type Inner uses T
 	typealias TArray = Array with T
 	var items as TArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: TArray.create()}
 	end 'create'
 
-	export function count() returns Int
+	function count() returns Int
 		return items.count()
 	end 'count'
 end 'Inner'
@@ -72,11 +72,11 @@ type Bag uses Element
 	typealias EChain = Inner with Element
 	var chain as EChain
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{chain: EChain.create()}
 	end 'create'
 
-	export function size() returns Int
+	function size() returns Int
 		return chain.count()
 	end 'size'
 end 'Bag'
@@ -105,11 +105,11 @@ typealias Int = int(i64.min to i64.max)
 type Inner uses T
 	var v as T
 
-	export static function create(x T) returns Self
+	static function create(x T) returns Self
 		return Self{v: x}
 	end 'create'
 
-	export function slotSize() returns Int
+	function slotSize() returns Int
 		return sizeof(T)
 	end 'slotSize'
 end 'Inner'
@@ -118,11 +118,11 @@ type Bag uses Element
 	typealias EChain = Inner with Element
 	var chain as EChain
 
-	export static function create(x Element) returns Self
+	static function create(x Element) returns Self
 		return Self{chain: EChain.create(x)}
 	end 'create'
 
-	export function probe() returns Int
+	function probe() returns Int
 		return chain.slotSize()
 	end 'probe'
 end 'Bag'
@@ -151,11 +151,11 @@ type Inner uses T
 	typealias TArray = Array with T
 	var items as TArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: TArray.create()}
 	end 'create'
 
-	export function count() returns Int
+	function count() returns Int
 		return items.count()
 	end 'count'
 end 'Inner'
@@ -164,12 +164,12 @@ type Bag uses Element
 	typealias EChain = Inner with Element
 	var n as Int
 
-	export static function make() returns Self
+	static function make() returns Self
 		var i = EChain.create()
 		return Self{n: i.count() + 5}
 	end 'make'
 
-	export function size() returns Int
+	function size() returns Int
 		return n
 	end 'size'
 end 'Bag'
@@ -200,15 +200,15 @@ type Inner uses T
 	typealias TArray = Array with T
 	var items as TArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: TArray.create()}
 	end 'create'
 
-	export function add(v T)
+	function add(v T)
 		items.push(v)
 	end 'add'
 
-	export function count() returns Int
+	function count() returns Int
 		return items.count()
 	end 'count'
 end 'Inner'
@@ -217,15 +217,15 @@ type Bag uses Element
 	typealias EChain = Inner with Element
 	var chain as EChain
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{chain: EChain.create()}
 	end 'create'
 
-	export function add(v Element)
+	function add(v Element)
 		chain.add(v)
 	end 'add'
 
-	export function size() returns Int
+	function size() returns Int
 		return chain.count()
 	end 'size'
 end 'Bag'
@@ -259,28 +259,28 @@ typealias Int = int(i64.min to i64.max)
 type Inner uses T
 	var v as T
 
-	export static function create(x T) returns Self
+	static function create(x T) returns Self
 		return Self{v: x}
 	end 'create'
 
-	export function slotSize() returns Int
+	function slotSize() returns Int
 		return sizeof(T)
 	end 'slotSize'
 end 'Inner'
 
 type Bag uses Element
-	typealias EChain = Inner with Element
+	export typealias EChain = Inner with Element
 	var chain as EChain
 
-	export static function create(x Element) returns Self
+	static function create(x Element) returns Self
 		return Self{chain: EChain.create(x)}
 	end 'create'
 
-	export function probeVia(c EChain) returns Int
+	function probeVia(c EChain) returns Int
 		return c.slotSize()
 	end 'probeVia'
 
-	export function probe() returns Int
+	function probe() returns Int
 		return self.probeVia(chain)
 	end 'probe'
 end 'Bag'
@@ -319,15 +319,15 @@ type BagIter uses E implements Iterator with Int
 	var items as EArray
 	var i as Int
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: EArray.create(), i: 3}
 	end 'create'
 
-	export function current() returns Int
+	function current() returns Int
 		return i
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		i = i - 1
 		if i <= 0 'exhausted'
 			throw IterationError.exhausted
@@ -336,18 +336,18 @@ type BagIter uses E implements Iterator with Int
 end 'BagIter'
 
 type Bag uses Element implements Iterable with (Int, BIter)
-	typealias BIter = BagIter with Element
+	export typealias BIter = BagIter with Element
 	var n as Int
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 0}
 	end 'create'
 
-	export function createIterator() returns BIter throws IterationError
+	function createIterator() returns BIter throws IterationError
 		return BIter.create()
 	end 'createIterator'
 
-	export function walk() returns Int
+	function walk() returns Int
 		var total = 0
 		for x in self 'loop'
 			total = total + x

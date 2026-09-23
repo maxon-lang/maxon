@@ -19,11 +19,11 @@ typealias Integer = int(i64.min to i64.max)
 type Sizer uses T
 	export var dummy as T
 
-	export static function create(dummy T) returns Self
+	static function create(dummy T) returns Self
 		return Self{dummy: dummy}
 	end 'create'
 
-	export function typeSize() returns Integer
+	function typeSize() returns Integer
 		return sizeof(T)
 	end 'typeSize'
 end 'Sizer'
@@ -55,11 +55,11 @@ end 'Pair'
 type Sizer uses T
 	export var dummy as T
 
-	export static function create(dummy T) returns Self
+	static function create(dummy T) returns Self
 		return Self{dummy: dummy}
 	end 'create'
 
-	export function typeSize() returns Integer
+	function typeSize() returns Integer
 		return sizeof(T)
 	end 'typeSize'
 end 'Sizer'
@@ -103,15 +103,15 @@ typealias Integer = int(i64.min to i64.max)
 type Sizer uses T
 	export var dummy as T
 
-	export static function create(dummy T) returns Self
+	static function create(dummy T) returns Self
 		return Self{dummy: dummy}
 	end 'create'
 
-	export function directSize() returns Integer
+	function directSize() returns Integer
 		return sizeof(T)
 	end 'directSize'
 
-	export function indirectSize() returns Integer
+	function indirectSize() returns Integer
 		return self.directSize()
 	end 'indirectSize'
 end 'Sizer'
@@ -143,19 +143,19 @@ end 'Pair'
 type Sizer uses T
 	export var dummy as T
 
-	export static function create(dummy T) returns Self
+	static function create(dummy T) returns Self
 		return Self{dummy: dummy}
 	end 'create'
 
-	export function level0() returns Integer
+	function level0() returns Integer
 		return sizeof(T)
 	end 'level0'
 
-	export function level1() returns Integer
+	function level1() returns Integer
 		return self.level0()
 	end 'level1'
 
-	export function level2() returns Integer
+	function level2() returns Integer
 		return self.level1()
 	end 'level2'
 end 'Sizer'
@@ -357,15 +357,15 @@ type Bag uses Element
 
 	var items as Items
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: Items.create()}
 	end 'create'
 
-	export function slotSize() returns Int
+	function slotSize() returns Int
 		return sizeof(Element)
 	end 'slotSize'
 
-	export function pairWith(other Self) returns Int
+	function pairWith(other Self) returns Int
 		return other.slotSize()
 	end 'pairWith'
 end 'Bag'

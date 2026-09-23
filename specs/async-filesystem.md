@@ -273,7 +273,7 @@ end 'HolderError'
 type Holder
 	export var f as __ManagedFile
 
-	export static function openRead(path __ManagedMemory) returns Holder throws HolderError
+	static function openRead(path __ManagedMemory) returns Holder throws HolderError
 		let handle = try __ManagedFile.openRead(path) otherwise 'fail'
 			throw HolderError.openFailed
 		end 'fail'

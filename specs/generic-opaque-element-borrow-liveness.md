@@ -55,18 +55,18 @@ same storage, and the first `set` destroys the record the OTHER one holds. Measu
 **`0xC0000005`** before this rule, with the suite green over it.
 ```maxon
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function rotateFirstTwo()
+	function rotateFirstTwo()
 		let a = try managed.get(0) otherwise panic("oob")
 		let b = try managed.get(1) otherwise panic("oob")
 		try managed.set(0, value: b) otherwise panic("oob")
@@ -97,18 +97,18 @@ draws none — by then every borrow's last use is behind it, and a borrow's use 
 argument does not outlive the write (`Parser.containerWriteToken`).
 ```maxon
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function rotateThree()
+	function rotateThree()
 		let a = try managed.get(0) otherwise panic("oob")
 		let b = try managed.get(1) otherwise panic("oob")
 		let c = try managed.get(2) otherwise panic("oob")
@@ -142,18 +142,18 @@ conflict is the borrow the write destroys on its way past. Measured **`0xC000000
 record was read again by the `return`'s own `retainFunc@64`.
 ```maxon
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function readThenDisplace(other Self) returns Element
+	function readThenDisplace(other Self) returns Element
 		let a = try managed.get(0) otherwise panic("oob")
 		let v = try other.managed.get(0) otherwise panic("oob")
 		try managed.set(0, value: v) otherwise panic("oob")
@@ -186,18 +186,18 @@ refused** — one storage under two keys, which is the shape the fix collapses
 parameter is bound under.
 ```maxon
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function rotateBare()
+	function rotateBare()
 		let a = try get(0) otherwise panic("oob")
 		let b = try get(1) otherwise panic("oob")
 		try set(0, value: b) otherwise panic("oob")
@@ -231,18 +231,18 @@ only sound one. **This case exists so the cost is a decision on the record rathe
 typealias Small = int(0 to 100)
 
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function rotateFirstTwo()
+	function rotateFirstTwo()
 		let a = try managed.get(0) otherwise panic("oob")
 		let b = try managed.get(1) otherwise panic("oob")
 		try managed.set(0, value: b) otherwise panic("oob")
@@ -272,18 +272,18 @@ is nothing to conflict with. This is the shape `stdlib/Array.maxon:283`'s `appen
 the rule must not reach it.
 ```maxon
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function setFrom(other Self)
+	function setFrom(other Self)
 		let v = try other.managed.get(0) otherwise panic("oob")
 		try managed.set(0, value: v) otherwise panic("oob")
 	end 'setFrom'
@@ -315,18 +315,18 @@ The element is read, used to write a DIFFERENT storage, and never named again �
 inventing a second rule is that its non-lexical lifetimes come with it.
 ```maxon
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function moveFirstInto(other Self)
+	function moveFirstInto(other Self)
 		let a = try managed.get(0) otherwise panic("oob")
 		try other.managed.set(0, value: a) otherwise panic("oob")
 		try managed.setLength(0) otherwise panic("length")
@@ -364,18 +364,18 @@ name instead, this whole family was refused.
 typealias Small = int(0 to 100)
 
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function compactDown(hi Small)
+	function compactDown(hi Small)
 		var w = 0 as Small
 		var i = 0 as Small
 		while i < hi 'scan'
@@ -412,18 +412,18 @@ before the call — so the borrow is dead at the write and the array simply gain
 reference to what it already owned. `stdlib/Array.maxon:284`'s `appendMemory` is this write.
 ```maxon
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function copyFirst()
+	function copyFirst()
 		let a = try managed.get(0) otherwise panic("oob")
 		push(a)
 	end 'copyFirst'
@@ -476,14 +476,14 @@ at all. Nothing about this program changed.
 typealias Small = int(0 to 100)
 
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 end 'Array'

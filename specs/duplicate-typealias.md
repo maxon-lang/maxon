@@ -24,6 +24,13 @@ A contested alias is always quoted by the name its author wrote. Where both side
 print the same bare name, the message adds a note in parentheses: the shape where the two shapes
 differ, otherwise the declaring files.
 
+A file-private alias never reaches another file THROUGH A SIGNATURE: a function visible outside its own
+file may only name types at least as visible as itself (E3167, `specs/signature-type-visibility.md`). So a
+program that carries a contested name ACROSS a boundary exports the declaration the DOOR is written with,
+and the file on the other side keeps its own private one — which is what the refusal cases below do. Every
+runnable case keeps BOTH declarations private and reaches each file's own meaning through a door that names
+neither.
+
 ## Tests
 
 <!-- test: non-exported-same-name-crossfile -->
@@ -31,21 +38,29 @@ differ, otherwise the declaring files.
 // --- file: a.maxon
 typealias MyInt = int(0 to 1000)
 
-export function doubleIt(x MyInt) returns MyInt
+function doubleIt(x MyInt) returns MyInt
 	return x + x
 end 'doubleIt'
+
+export function doubledFive() returns ExitCode
+	return doubleIt(5) as ExitCode
+end 'doubledFive'
 
 // --- file: b.maxon
 typealias MyInt = int(0 to 1000)
 
-export function tripleIt(x MyInt) returns MyInt
+function tripleIt(x MyInt) returns MyInt
 	return x + x + x
 end 'tripleIt'
 
+export function tripledThree() returns ExitCode
+	return tripleIt(3) as ExitCode
+end 'tripledThree'
+
 // --- file: main.maxon
 function main() returns ExitCode
-	let a = doubleIt(5)
-	let b = tripleIt(3)
+	let a = doubledFive()
+	let b = tripledThree()
 	return a + b
 end 'main'
 ```
@@ -58,21 +73,29 @@ end 'main'
 // --- file: a.maxon
 typealias Limit = int(0 to 500)
 
-export function clampA(x Limit) returns Limit
+function clampA(x Limit) returns Limit
 	return x
 end 'clampA'
+
+export function fromA() returns ExitCode
+	return clampA(40) as ExitCode
+end 'fromA'
 
 // --- file: b.maxon
 typealias Limit = int(0 to 2000)
 
-export function clampB(x Limit) returns Limit
+function clampB(x Limit) returns Limit
 	return x
 end 'clampB'
 
+export function fromB() returns ExitCode
+	return clampB(60) as ExitCode
+end 'fromB'
+
 // --- file: main.maxon
 function main() returns ExitCode
-	let a = clampA(40)
-	let b = clampB(60)
+	let a = fromA()
+	let b = fromB()
 	return a + b
 end 'main'
 ```
@@ -87,21 +110,29 @@ The headline case for the FUNCTION form: two files each declare a private `Step`
 typealias Tally = int(0 to 1000)
 typealias Step = function(Tally, Tally) returns Tally
 
-export function foldA(start Tally, step Step) returns Tally
+function foldA(start Tally, step Step) returns Tally
 	return step(start, 3)
 end 'foldA'
+
+export function runA() returns ExitCode
+	return foldA(1, step: function(acc, more) gives acc + more) as ExitCode
+end 'runA'
 
 // --- file: b.maxon
 typealias Step = function(String) returns String
 
-export function foldB(label String, step Step) returns String
+function foldB(label String, step Step) returns String
 	return step(label)
 end 'foldB'
 
+export function runB(label String) returns String
+	return foldB(label, step: function(text) gives "{text}!")
+end 'runB'
+
 // --- file: main.maxon
 function main() returns ExitCode
-	let n = foldA(1, step: function(acc, more) gives acc + more)
-	let s = foldB("go", step: function(label) gives "{label}!")
+	let n = runA()
+	let s = runB("go")
 	print("{n} {s}\n")
 	return 0
 end 'main'
@@ -120,22 +151,30 @@ Two files that AGREE about the shape are not split. A name is scoped per declari
 typealias Tally = int(0 to 1000)
 typealias Step = function(Tally, Tally) returns Tally
 
-export function foldA(start Tally, step Step) returns Tally
+function foldA(start Tally, step Step) returns Tally
 	return step(start, 3)
 end 'foldA'
+
+export function runA() returns ExitCode
+	return foldA(1, step: function(acc, more) gives acc + more) as ExitCode
+end 'runA'
 
 // --- file: b.maxon
 typealias Tally = int(0 to 1000)
 typealias Step = function(Tally, Tally) returns Tally
 
-export function foldB(start Tally, step Step) returns Tally
+function foldB(start Tally, step Step) returns Tally
 	return step(start, 5)
 end 'foldB'
 
+export function runB() returns ExitCode
+	return foldB(1, step: function(acc, more) gives acc * more) as ExitCode
+end 'runB'
+
 // --- file: main.maxon
 function main() returns ExitCode
-	let a = foldA(1, step: function(acc, more) gives acc + more)
-	let b = foldB(1, step: function(acc, more) gives acc * more)
+	let a = runA()
+	let b = runB()
 	return a + b
 end 'main'
 ```
@@ -151,12 +190,16 @@ typealias Tally = int(0 to 1000)
 typealias Step = function(Tally, Tally) returns Tally
 typealias Steps = Array with Step
 
-export function runA(start Tally) returns Tally
+function runA(start Tally) returns Tally
 	var steps = Steps.create()
 	steps.push(function(acc Tally, more Tally) gives acc + more)
 	let step = try steps.get(0) otherwise panic("no step")
 	return step(start, 3)
 end 'runA'
+
+export function goA() returns ExitCode
+	return runA(1) as ExitCode
+end 'goA'
 
 // --- file: b.maxon
 typealias Step = function(String) returns String
@@ -171,7 +214,9 @@ end 'runB'
 
 // --- file: main.maxon
 function main() returns ExitCode
-	print("{runA(1)} {runB("go")}\n")
+	let n = goA()
+	let s = runB("go")
+	print("{n} {s}\n")
 	return 0
 end 'main'
 ```
@@ -194,25 +239,31 @@ function pick() returns Step
 	return function(acc Tally, more Tally) gives acc + more
 end 'pick'
 
-export function runA(start Tally, f Other) returns Tally
+function runA(start Tally, f Other) returns Tally
 	return f(start, 3)
 end 'runA'
 
-export function goA() returns Tally
+export function goA() returns ExitCode
 	let s = pick()
-	return runA(1, f: s)
+	return runA(1, f: s) as ExitCode
 end 'goA'
 
 // --- file: b.maxon
 typealias Step = function(String) returns String
 
-export function runB(label String, step Step) returns String
+function runB(label String, step Step) returns String
 	return step(label)
 end 'runB'
 
+export function goB(label String) returns String
+	return runB(label, step: function(text) gives "{text}!")
+end 'goB'
+
 // --- file: main.maxon
 function main() returns ExitCode
-	print("{goA()} {runB("go", step: function(text) gives "{text}!")}\n")
+	let n = goA()
+	let s = goB("go")
+	print("{n} {s}\n")
 	return 0
 end 'main'
 ```
@@ -227,21 +278,31 @@ Both files spell `Step` identically — `function(Tally) returns Tally` — and 
 typealias Tally = int(0 to 1000)
 typealias Step = function(Tally) returns Tally
 
-export function foldA(start Tally, step Step) returns Tally
+function foldA(start Tally, step Step) returns Tally
 	return step(start)
 end 'foldA'
+
+export function goA() returns ExitCode
+	return foldA(7, step: function(n) gives n + 1) as ExitCode
+end 'goA'
 
 // --- file: b.maxon
 typealias Tally = int(0 to 5)
 typealias Step = function(Tally) returns Tally
 
-export function foldB(start Tally, step Step) returns Tally
+function foldB(start Tally, step Step) returns Tally
 	return step(start)
 end 'foldB'
 
+export function goB() returns ExitCode
+	return foldB(2, step: function(n) gives n * 2) as ExitCode
+end 'goB'
+
 // --- file: main.maxon
 function main() returns ExitCode
-	print("{foldA(7, step: function(n) gives n + 1)} {foldB(2, step: function(n) gives n * 2)}\n")
+	let a = goA()
+	let b = goB()
+	print("{a} {b}\n")
 	return 0
 end 'main'
 ```
@@ -260,22 +321,32 @@ typealias Tally = int(0 to 1000)
 typealias Step = function(Tally) returns Tally
 typealias Outer = function(Step) returns Tally
 
-export function applyA(outer Outer) returns Tally
+function applyA(outer Outer) returns Tally
 	return outer(function(n Tally) gives n + 1)
 end 'applyA'
+
+export function goA() returns ExitCode
+	return applyA(function(step) gives step(7)) as ExitCode
+end 'goA'
 
 // --- file: b.maxon
 typealias Tally = int(0 to 5)
 typealias Step = function(Tally) returns Tally
 typealias Outer = function(Step) returns Tally
 
-export function applyB(outer Outer) returns Tally
+function applyB(outer Outer) returns Tally
 	return outer(function(n Tally) gives n * 2)
 end 'applyB'
 
+export function goB() returns ExitCode
+	return applyB(function(step) gives step(2)) as ExitCode
+end 'goB'
+
 // --- file: main.maxon
 function main() returns ExitCode
-	print("{applyA(function(step) gives step(7))} {applyB(function(step) gives step(2))}\n")
+	let a = goA()
+	let b = goB()
+	print("{a} {b}\n")
 	return 0
 end 'main'
 ```
@@ -296,26 +367,36 @@ typealias Step = function(Tally) returns Tally
 export type Holder
 	var op as Step
 
-	export static function create(op Step) returns Self
+	static function create(op Step) returns Self
 		return Self{op: op}
 	end 'create'
 
-	export function run(start Tally) returns Tally
-		return self.op(start)
+	export static function incrementing() returns Holder
+		return Holder.create(function(n Tally) gives n + 1)
+	end 'incrementing'
+
+	export function run(start ExitCode) returns ExitCode
+		return self.op(start as Tally) as ExitCode
 	end 'run'
 end 'Holder'
 
 // --- file: b.maxon
 typealias Step = function(String) returns String
 
-export function foldB(label String, step Step) returns String
+function foldB(label String, step Step) returns String
 	return step(label)
 end 'foldB'
 
+export function goB(label String) returns String
+	return foldB(label, step: function(text) gives "{text}!")
+end 'goB'
+
 // --- file: main.maxon
 function main() returns ExitCode
-	let holder = Holder.create(function(n) gives n + 1)
-	print("{holder.run(1)} {foldB("go", step: function(text) gives "{text}!")}\n")
+	let holder = Holder.incrementing()
+	let n = holder.run(1)
+	let s = goB("go")
+	print("{n} {s}\n")
 	return 0
 end 'main'
 ```
@@ -328,6 +409,8 @@ end 'main'
 
 <!-- test: error.two-shapes-of-one-contested-name-are-told-apart-by-their-files -->
 When one file passes its own `Step` where another's is declared, both sides print the bare name `Step` — so the message carries a note. The SHAPES differ here, and the shape is what a reader needs, so the note is the shape.
+
+⚠ The DOOR is `b.maxon`'s, so `b.maxon` exports its `Step` and `a.maxon` keeps its own private one: a door another file calls may not be written with a file-private type (E3167). The contest is the same one — two files, one name, two shapes — and the message is what this case is about.
 ```maxon
 // --- file: a.maxon
 typealias Tally = int(0 to 1000)
@@ -342,7 +425,7 @@ export function goA() returns String
 end 'goA'
 
 // --- file: b.maxon
-typealias Step = function(String) returns String
+export typealias Step = function(String) returns String
 
 export function foldB(label String, step Step) returns String
 	return step(label)
@@ -366,22 +449,30 @@ typealias Tally = int(0 to 1000)
 typealias Pair = (Tally, String)
 typealias Step = function(Pair) returns Tally
 
-export function foldA(step Step) returns Tally
+function foldA(step Step) returns Tally
 	return step((700, "a"))
 end 'foldA'
+
+export function goA() returns String
+	return "{foldA(function(pair) gives pair.0 + 1)}"
+end 'goA'
 
 // --- file: b.maxon
 typealias Tally = int(0 to 5)
 typealias Pair = (String, Tally)
 typealias Step = function(Pair) returns Tally
 
-export function foldB(step Step) returns Tally
+function foldB(step Step) returns Tally
 	return step(("b", 3))
 end 'foldB'
 
+export function goB() returns String
+	return "{foldB(function(pair) gives pair.1 + 1)}"
+end 'goB'
+
 // --- file: main.maxon
 function main() returns ExitCode
-	print("{foldA(function(pair) gives pair.0 + 1)} {foldB(function(pair) gives pair.1 + 1)}\n")
+	print("{goA()} {goB()}\n")
 	return 0
 end 'main'
 ```
@@ -400,26 +491,34 @@ typealias Tally = int(0 to 1000)
 typealias Tallies = Array with Tally
 typealias Step = function(Tallies) returns Tally
 
-export function foldA(step Step) returns Tally
+function foldA(step Step) returns Tally
 	var xs = Tallies.create()
 	xs.push(700)
 	return step(xs)
 end 'foldA'
+
+export function goA() returns String
+	return "{foldA(function(xs) gives (try xs.get(0) otherwise 0) + 1)}"
+end 'goA'
 
 // --- file: b.maxon
 typealias Tally = int(0 to 5)
 typealias Tallies = Array with Tally
 typealias Step = function(Tallies) returns Tally
 
-export function foldB(step Step) returns Tally
+function foldB(step Step) returns Tally
 	var xs = Tallies.create()
 	xs.push(3)
 	return step(xs)
 end 'foldB'
 
+export function goB() returns String
+	return "{foldB(function(xs) gives (try xs.get(0) otherwise 0) + 1)}"
+end 'goB'
+
 // --- file: main.maxon
 function main() returns ExitCode
-	print("{foldA(function(xs) gives (try xs.get(0) otherwise 0) + 1)} {foldB(function(xs) gives (try xs.get(0) otherwise 0) + 1)}\n")
+	print("{goA()} {goB()}\n")
 	return 0
 end 'main'
 ```
@@ -432,6 +531,8 @@ end 'main'
 
 <!-- test: error.two-ranges-of-one-contested-name-are-told-apart-by-their-files -->
 The other tier of the same note. Here the two `Step`s render the SAME shape text — the difference is `Tally`'s range, which the rendering erases — so the note names the declaring files instead. The file is a provenance note beside the name and never part of it.
+
+⚠ `b.maxon` owns the door and exports its `Tally` and `Step`; `a.maxon`'s pair stays private. Both declarations still render the same shape text, which is what makes the note name the files.
 ```maxon
 // --- file: a.maxon
 typealias Tally = int(0 to 1000)
@@ -441,13 +542,13 @@ function pick() returns Step
 	return function(n Tally) gives n + 1
 end 'pick'
 
-export function goA() returns Tally
-	return foldB(2, step: pick())
+export function goA() returns ExitCode
+	return foldB(2, step: pick()) as ExitCode
 end 'goA'
 
 // --- file: b.maxon
-typealias Tally = int(0 to 5)
-typealias Step = function(Tally) returns Tally
+export typealias Tally = int(0 to 5)
+export typealias Step = function(Tally) returns Tally
 
 export function foldB(start Tally, step Step) returns Tally
 	return step(start)
@@ -471,26 +572,34 @@ typealias Integer = int(i64.min to i64.max)
 typealias Tallies = Array with Integer
 typealias Step = function(Tallies) returns Integer
 
-export function foldA(step Step) returns Integer
+function foldA(step Step) returns Integer
 	var xs = Tallies.create()
 	xs.push(700)
 	return step(xs)
 end 'foldA'
+
+export function goA() returns String
+	return "{foldA(function(xs) gives (try xs.get(0) otherwise 0) + 1)}"
+end 'goA'
 
 // --- file: b.maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Tallies = List with Integer
 typealias Step = function(Tallies) returns Integer
 
-export function foldB(step Step) returns Integer
+function foldB(step Step) returns Integer
 	var xs = Tallies.create()
 	xs.append(3)
 	return step(xs)
 end 'foldB'
 
+export function goB() returns String
+	return "{foldB(function(xs) gives (try xs.get(0) otherwise 0) + 1)}"
+end 'goB'
+
 // --- file: main.maxon
 function main() returns ExitCode
-	print("{foldA(function(xs) gives (try xs.get(0) otherwise 0) + 1)} {foldB(function(xs) gives (try xs.get(0) otherwise 0) + 1)}\n")
+	print("{goA()} {goB()}\n")
 	return 0
 end 'main'
 ```
@@ -503,10 +612,12 @@ end 'main'
 
 <!-- test: error.two-bases-of-one-contested-generic-alias-are-told-apart-by-their-files -->
 The provenance note is not a function-alias rule: a contested GENERIC alias earns it on the same terms. Both `Tallies` print bare, the two files sit in one namespace, so the declaring files are what separates them.
+
+⚠ The door is `countA`, so `a.maxon` exports `Tallies` and its element; `b.maxon` keeps its own private `Tallies` over `List` and passes it. One name, two bases, two files.
 ```maxon
 // --- file: a.maxon
-typealias Integer = int(i64.min to i64.max)
-typealias Tallies = Array with Integer
+export typealias Integer = int(i64.min to i64.max)
+export typealias Tallies = Array with Integer
 
 export function countA(xs Tallies) returns Integer
 	return xs.count()
@@ -516,10 +627,10 @@ end 'countA'
 typealias Integer = int(i64.min to i64.max)
 typealias Tallies = List with Integer
 
-export function goB() returns Integer
+export function goB() returns ExitCode
 	var xs = Tallies.create()
 	xs.append(3)
-	return countA(xs)
+	return countA(xs) as ExitCode
 end 'goB'
 
 // --- file: main.maxon
@@ -534,20 +645,22 @@ error E3005: <fragment>:17:9: argument type mismatch for 'xs': expected 'Tallies
 
 <!-- test: error.two-functions-over-a-contested-generic-alias-do-not-merge -->
 A ternary whose two arms are functions over a contested `Tallies`. The two arms render the same `fn(…)` caption, and they still do not merge — agreement is decided on the resolved shapes, and the note is what tells the reader which `Tallies` each caption means.
+
+⚠ Both files hand a function VALUE across, so both export their `Tallies` and its element — two exported declarations of one name over two ranges, which is legal (E3105 refuses only two underlying TYPES), and still two instances.
 ```maxon
 // --- file: a.maxon
-typealias Integer = int(i64.min to i64.max)
-typealias Tally = int(0 to 1000)
-typealias Tallies = Array with Tally
+export typealias Integer = int(i64.min to i64.max)
+export typealias Tally = int(0 to 1000)
+export typealias Tallies = Array with Tally
 
 export function sizeA(t Tallies) returns Integer
 	return t.count()
 end 'sizeA'
 
 // --- file: b.maxon
-typealias Integer = int(i64.min to i64.max)
-typealias Tally = int(0 to 5)
-typealias Tallies = Array with Tally
+export typealias Integer = int(i64.min to i64.max)
+export typealias Tally = int(0 to 5)
+export typealias Tallies = Array with Tally
 
 export function sizeB(t Tallies) returns Integer
 	return t.count()

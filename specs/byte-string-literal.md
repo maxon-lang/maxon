@@ -668,7 +668,7 @@ let Keyword = b"critsplit"
 type Holder
 		export var b as ByteArray
 
-		export static function create(b ByteArray) returns Self
+		static function create(b ByteArray) returns Self
 				return Self{b: b}
 		end 'create'
 end 'Holder'

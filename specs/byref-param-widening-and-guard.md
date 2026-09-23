@@ -101,7 +101,7 @@ type Holder
 		return Self{v: v}
 	end 'create'
 
-	export function compareAndSwap(n Node) returns Integer
+	function compareAndSwap(n Node) returns Integer
 		n = Node.create(99)
 		return n.tag
 	end 'compareAndSwap'

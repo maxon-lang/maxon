@@ -1324,7 +1324,7 @@ type SumWorker implements Worker
 		return total
 	end 'process'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{tag: 0}
 	end 'create'
 end 'SumWorker'
@@ -1497,11 +1497,11 @@ end 'run'
 type X64Query implements OpQuery
 	export var v as Num
 
-	export static function make(v Num) returns X64Query
+	static function make(v Num) returns X64Query
 		return X64Query{v: v}
 	end 'make'
 
-	export function value() returns Num
+	function value() returns Num
 		return self.v
 	end 'value'
 end 'X64Query'
@@ -2294,7 +2294,7 @@ end 'Runner'
 type Box uses T where T is Exiter
 	let item as T
 
-	export function run() returns Integer
+	function run() returns Integer
 		return self.item.take(11 as ExitCode)
 	end 'run'
 
@@ -2349,7 +2349,7 @@ end 'Runner'
 type Box uses T where T is Exiter
 	let item as T
 
-	export function run() returns Integer
+	function run() returns Integer
 		return try self.item.take(11 as ExitCode) otherwise 55
 	end 'run'
 
@@ -2427,7 +2427,7 @@ typealias Integer = int(i64.min to i64.max)
 type Wrapped implements Comparable
 	let v as Integer
 
-	export function compare(other Wrapped) returns Ordering
+	function compare(other Wrapped) returns Ordering
 		if self.v > other.v 'gt'
 			return Ordering.greaterThan
 		end 'gt'
@@ -2606,7 +2606,7 @@ end 'R'
 type Box uses T where T is Runner
 	let item as T
 
-	export function go() returns Integer
+	function go() returns Integer
 		return self.item.run(Sq.create(11))
 	end 'go'
 
@@ -2882,7 +2882,7 @@ type Holder
 		return Self{f: f}
 	end 'create'
 
-	export function run(v Sq) returns Integer
+	function run(v Sq) returns Integer
 		return self.f(v)
 	end 'run'
 end 'Holder'
@@ -3126,7 +3126,7 @@ type Pool uses T
 	export typealias Idx = int(0 to 15)
 	export var v as T
 
-	export static function create(v T) returns Pool
+	static function create(v T) returns Pool
 		return Self{v: v}
 	end 'create'
 end 'Pool'
@@ -3152,7 +3152,7 @@ end 'Impl'
 type Box uses T where T is Taker
 	let item as T
 
-	export function go(n Integer) returns Integer
+	function go(n Integer) returns Integer
 		return self.item.take(n)
 	end 'go'
 
@@ -3184,7 +3184,7 @@ type Pool uses T
 	export typealias Idx = int(0 to 15)
 	export var v as T
 
-	export static function create(v T) returns Pool
+	static function create(v T) returns Pool
 		return Self{v: v}
 	end 'create'
 end 'Pool'
@@ -3210,7 +3210,7 @@ end 'Impl'
 type Box uses T where T is Taker
 	let item as T
 
-	export function go() returns Integer
+	function go() returns Integer
 		return self.item.take(3 as IntPool.Idx)
 	end 'go'
 
@@ -3274,11 +3274,11 @@ end 'Printer'
 type Thing implements Printer
 	let label as Tag
 
-	export static function create(label Tag) returns Self
+	static function create(label Tag) returns Self
 		return Self{label: label}
 	end 'create'
 
-	export function show()
+	function show()
 		print("shown: {label}\n")
 	end 'show'
 end 'Thing'
@@ -3287,7 +3287,7 @@ type Holder
 	export let p as Printer
 	export let n as ExitCode
 
-	export static function create(p Printer, n ExitCode) returns Self
+	static function create(p Printer, n ExitCode) returns Self
 		return Self{p: p, n: n}
 	end 'create'
 end 'Holder'
@@ -3320,11 +3320,11 @@ end 'Printer'
 type Thing implements Printer
 	let label as Tag
 
-	export static function create(label Tag) returns Self
+	static function create(label Tag) returns Self
 		return Self{label: label}
 	end 'create'
 
-	export function show()
+	function show()
 		print("never shown\n")
 	end 'show'
 end 'Thing'
@@ -3333,7 +3333,7 @@ type Holder
 	let p as Printer
 	export let n as ExitCode
 
-	export static function create(p Printer, n ExitCode) returns Self
+	static function create(p Printer, n ExitCode) returns Self
 		return Self{p: p, n: n}
 	end 'create'
 end 'Holder'
@@ -3364,11 +3364,11 @@ end 'Printer'
 type Thing implements Printer
 	let label as Tag
 
-	export static function create(label Tag) returns Self
+	static function create(label Tag) returns Self
 		return Self{label: label}
 	end 'create'
 
-	export function show()
+	function show()
 		print("never shown\n")
 	end 'show'
 end 'Thing'
@@ -3407,11 +3407,11 @@ end 'Digest'
 type Point implements Digest
 	export var x as Code
 
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{x: x}
 	end 'create'
 
-	export function digest() returns Code
+	function digest() returns Code
 		print("never shown\n")
 		return self.x
 	end 'digest'
@@ -3420,11 +3420,11 @@ end 'Point'
 type Box uses T where T is Digest
 	export var item as T
 
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{item: item}
 	end 'create'
 
-	export function constantAnswer() returns Code
+	function constantAnswer() returns Code
 		return 3
 	end 'constantAnswer'
 end 'Box'
@@ -3456,11 +3456,11 @@ end 'Digest'
 type Point implements Digest
 	export var x as Code
 
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{x: x}
 	end 'create'
 
-	export function digest() returns Code
+	function digest() returns Code
 		print("digesting {self.x}\n")
 		return self.x
 	end 'digest'
@@ -3469,11 +3469,11 @@ end 'Point'
 type Box uses T where T is Digest
 	export var item as T
 
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{item: item}
 	end 'create'
 
-	export function itemDigest() returns Code
+	function itemDigest() returns Code
 		return self.item.digest()
 	end 'itemDigest'
 end 'Box'

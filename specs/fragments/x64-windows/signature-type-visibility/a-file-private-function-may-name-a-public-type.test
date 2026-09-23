@@ -1,0 +1,62 @@
+// Test: a-file-private-function-may-name-a-public-type
+// --- file: api/lib.maxon
+public typealias Score = int(0 to 100)
+
+public type Holder
+	public var score as Score
+
+	public static function create(score Score) returns Self
+		return Self{score: score}
+	end 'create'
+end 'Holder'
+
+// --- file: app/main.maxon
+function scoreOf(h Holder) returns Score
+	return h.score
+end 'scoreOf'
+
+function main() returns ExitCode
+	return scoreOf(Holder.create(11)) as ExitCode
+end 'main'
+---
+ExitCode: 11
+---
+data {
+  __sched_tls_teb_offset@0 = i64 0
+  __sched_allm@8 = i64 0
+  __sched_lock@16 = i64 0
+  __sched_preempt_ext_lock@24 = i64 0
+  __sched_preempt_context@32 = i64 0
+  __slab_arena_list@40 = i64 0
+  __slab_arena_map_l1@48 = i64 0
+  __slab_state@56 = i64 0
+  __ds_base@64 = i64 0
+  __dbg_ctl@72 = i64 0
+  __mrt_console_probe_stdin@80 = i8 0
+  __mrt_console_probe_stdout@81 = i8 0
+  __mrt_console_probe_stderr@82 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 11
+  __rc_ok:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+  __il_body:
+    x64.loadRegBaseDisp.word64 rbx, [r8 + 0]
+  __il_cont:
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

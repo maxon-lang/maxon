@@ -74,15 +74,15 @@ type Wrapper uses T
 	export var value as T
 	export var tag as Idx
 
-	export static function create(value T) returns Self
+	static function create(value T) returns Self
 		return Self{value: value, tag: 0}
 	end 'create'
 
-	export function getTag() returns Idx
+	function getTag() returns Idx
 		return self.tag
 	end 'getTag'
 
-	export function withTag(t Idx) returns Self
+	function withTag(t Idx) returns Self
 		return Self{value: self.value, tag: t}
 	end 'withTag'
 end 'Wrapper'
@@ -115,15 +115,15 @@ type Wrapper uses T
 	export var value as T
 	export var tag as Idx
 
-	export static function create(value T, tag Idx) returns Self
+	static function create(value T, tag Idx) returns Self
 		return Self{value: value, tag: tag}
 	end 'create'
 
-	export function getTag() returns Idx
+	function getTag() returns Idx
 		return self.tag
 	end 'getTag'
 
-	export function setTag(t Idx)
+	function setTag(t Idx)
 		self.tag = t
 	end 'setTag'
 end 'Wrapper'
@@ -155,11 +155,11 @@ type Wrapper uses T
 	export var value as T
 	export var tag as Idx
 
-	export static function create(value T, tag Idx) returns Self
+	static function create(value T, tag Idx) returns Self
 		return Self{value: value, tag: tag}
 	end 'create'
 
-	export function getTag() returns Idx
+	function getTag() returns Idx
 		return self.tag
 	end 'getTag'
 end 'Wrapper'
@@ -191,7 +191,7 @@ type Wrapper uses T
 	export var value as T
 	export var tag as Idx
 
-	export static function create(value T, tag Idx) returns Self
+	static function create(value T, tag Idx) returns Self
 		return Self{value: value, tag: tag}
 	end 'create'
 end 'Wrapper'
@@ -230,11 +230,11 @@ type Wrapper uses T
 	export var value as T
 	export var tag as Idx
 
-	export static function create(value T, tag Idx) returns Self
+	static function create(value T, tag Idx) returns Self
 		return Self{value: value, tag: tag}
 	end 'create'
 
-	export function getTag() returns Idx
+	function getTag() returns Idx
 		return self.tag
 	end 'getTag'
 end 'Wrapper'
@@ -270,15 +270,15 @@ type Wrapper uses T
 	export var value as T
 	export var tag as Idx
 
-	export static function create(value T, tag Idx) returns Self
+	static function create(value T, tag Idx) returns Self
 		return Self{value: value, tag: tag}
 	end 'create'
 
-	export function getTag() returns Idx
+	function getTag() returns Idx
 		return self.tag
 	end 'getTag'
 
-	export function setTag(t Idx)
+	function setTag(t Idx)
 		self.tag = t
 	end 'setTag'
 end 'Wrapper'
@@ -321,15 +321,15 @@ type Wrapper uses T
 	export var value as T
 	export var tag as Idx
 
-	export static function create(value T, tag Idx) returns Self
+	static function create(value T, tag Idx) returns Self
 		return Self{value: value, tag: tag}
 	end 'create'
 
-	export function getTag() returns Idx
+	function getTag() returns Idx
 		return self.tag
 	end 'getTag'
 
-	export function setTag(t Idx)
+	function setTag(t Idx)
 		self.tag = t
 	end 'setTag'
 end 'Wrapper'
@@ -367,11 +367,11 @@ type Wrapper uses T
 	export var value as T
 	export var tag as Idx
 
-	export static function create(value T, tag Idx) returns Self
+	static function create(value T, tag Idx) returns Self
 		return Self{value: value, tag: tag}
 	end 'create'
 
-	export function getTag() returns Idx
+	function getTag() returns Idx
 		return self.tag
 	end 'getTag'
 end 'Wrapper'
@@ -402,11 +402,11 @@ type Wrapper uses T
 	export var value as T
 	export var tag as Idx
 
-	export static function create(value T, tag Idx) returns Self
+	static function create(value T, tag Idx) returns Self
 		return Self{value: value, tag: tag}
 	end 'create'
 
-	export function getTag() returns Idx
+	function getTag() returns Idx
 		return self.tag
 	end 'getTag'
 end 'Wrapper'
@@ -458,7 +458,7 @@ by passes that both run after every extension's members are known
 parameter. Before this rule the second file answered `E3011 Unknown type 'Idx'`.
 ```maxon
 // --- file: a.maxon
-typealias Num = int(0 to 200)
+export typealias Num = int(0 to 200)
 
 export type Holder
 	export var v as Num
@@ -469,7 +469,7 @@ export type Holder
 end 'Holder'
 
 extension Holder
-	typealias Idx = int(0 to 100)
+	export typealias Idx = int(0 to 100)
 
 	export function fromA(i Idx) returns Num
 		return self.v + i
@@ -506,7 +506,7 @@ named from `b.maxon`'s — a different registry from the ranged case above
 (`genericAliases`, not `innerAliases`), which is why it is its own case.
 ```maxon
 // --- file: a.maxon
-typealias Num = int(0 to 200)
+export typealias Num = int(0 to 200)
 
 export type Holder
 	export var v as Num
@@ -517,7 +517,7 @@ export type Holder
 end 'Holder'
 
 extension Holder
-	typealias Bag = Array with Num
+	export typealias Bag = Array with Num
 
 	export function fill() returns Bag
 		var b = Bag.create()
@@ -556,7 +556,7 @@ member of `Holder`, so an `extension Other` naming it bare is still refused. Und
 compiler's flat bare-name table this program compiles.
 ```maxon
 // --- file: a.maxon
-typealias Num = int(0 to 200)
+export typealias Num = int(0 to 200)
 
 export type Holder
 	export var v as Num
@@ -567,7 +567,7 @@ export type Other
 end 'Other'
 
 extension Holder
-	typealias Idx = int(0 to 100)
+	export typealias Idx = int(0 to 100)
 
 	export function fromA(i Idx) returns Num
 		return self.v + i
@@ -599,7 +599,7 @@ reason — a `type` body's nested aliases are folded with their own file, before
 and it is pinned so the two directions cannot come apart.
 ```maxon
 // --- file: a.maxon
-typealias Num = int(0 to 200)
+export typealias Num = int(0 to 200)
 
 export type Holder
 	typealias Idx = int(0 to 100)
@@ -650,7 +650,7 @@ The alias and its user are in ONE file, in two `extension` bodies. This program 
 1 before the two doors were made one.
 ```maxon
 // --- file: a.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export type Wrapper uses T
 	export var value as T
@@ -662,7 +662,7 @@ export type Wrapper uses T
 end 'Wrapper'
 
 extension Wrapper
-	typealias Idx = int(0 to 100)
+	export typealias Idx = int(0 to 100)
 
 	export function getTag() returns Idx
 		return 1
@@ -697,7 +697,7 @@ The same program with the second `extension Wrapper` moved to its own file — t
 owes the same refusal: admitting the SPELLING must not quietly admit the wrong instance's value with it.
 ```maxon
 // --- file: a.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export type Wrapper uses T
 	export var value as T
@@ -709,7 +709,7 @@ export type Wrapper uses T
 end 'Wrapper'
 
 extension Wrapper
-	typealias Idx = int(0 to 100)
+	export typealias Idx = int(0 to 100)
 
 	export function getTag() returns Idx
 		return 1
@@ -774,10 +774,10 @@ names.
 and the `push` one line down was `E2015`.
 ```maxon
 // --- file: a.maxon
-typealias Num = int(0 to 200)
+export typealias Num = int(0 to 200)
 
 export type Holder
-	typealias Bag = Array with Num
+	export typealias Bag = Array with Num
 
 	export var v as Num
 
@@ -818,10 +818,10 @@ RETURN and a plain struct's FIELD all name the member. Before this rule each was
 `E3011 Unknown type 'Bag'`.
 ```maxon
 // --- file: a.maxon
-typealias Num = int(0 to 200)
+export typealias Num = int(0 to 200)
 
 export type Holder
-	typealias Bag = Array with Num
+	export typealias Bag = Array with Num
 
 	export var v as Num
 
@@ -907,7 +907,7 @@ type for the bare name to denote and it stays refused.
 typealias Num = int(0 to 200)
 
 export type Holder uses T
-	typealias Bag = Array with T
+	export typealias Bag = Array with T
 
 	export var v as T
 
@@ -947,7 +947,7 @@ about is settled the same way — each file reads its own declaration. `stdlib/B
 declares `StringArray` inside two different types.
 ```maxon
 // --- file: a.maxon
-typealias Num = int(0 to 200)
+export typealias Num = int(0 to 200)
 
 export type HolderA
 	typealias Bag = Array with Num
@@ -966,7 +966,7 @@ export function fromA() returns Num
 end 'fromA'
 
 // --- file: b.maxon
-typealias Num = int(0 to 200)
+export typealias Num = int(0 to 200)
 
 export type HolderB
 	typealias Bag = Array with String

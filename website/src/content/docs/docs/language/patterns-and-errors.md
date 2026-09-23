@@ -110,11 +110,11 @@ end 'PercentError'
 type Progress
 	export let done as Percent
 
-	export static function create(done Percent) returns Self
+	static function create(done Percent) returns Self
 		return Self{done: done}
 	end 'create'
 
-	export static function parse(text String) returns Self throws PercentError
+	static function parse(text String) returns Self throws PercentError
 		let value = try int.fromString(text) otherwise throw PercentError.outOfRange
 		if value < 0 or value > 100 'range'
 			throw PercentError.outOfRange

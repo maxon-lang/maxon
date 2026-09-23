@@ -1,0 +1,49 @@
+let CaseDirName = "build-naming-a-dot-prefixed-stdlib-file-beside-a-program-parses-it-once"
+let NamedStdlibFile = "./stdlib/Clock.maxon"
+let ParseLogFlag = "--log=compiler:debug"
+let ParseLineMarker = "DEBUG: typeNames "
+let ParsedPathEnd = ": "
+let StdlibDirName = "stdlib"
+let ClockFileName = "Clock.maxon"
+
+test 'a build naming a stdlib file with a leading dot segment beside a program parses that file under one identity'
+	let built = buildAProgramBesideALibraryFile(CaseDirName, libraryFile: NamedStdlibFile, options: [ParseLogFlag])
+	let build = built.build
+	let identities = stdlibClockIdentitiesParsed(build.stderr)
+	let said = "It exited {build.exitCode()} and parsed `stdlib/{ClockFileName}` as: {identitiesRendered(identities)}"
+
+	try Expect.equal(build.exitCode() as AssertedInt, expected: 0, message: "a program built together with `{NamedStdlibFile}` did not build. {said}")
+	try Expect.equal(identities.count(), expected: 1, message: "`{NamedStdlibFile}` is the standard library's own module, so the build parses it as one file. A second spelling means the leading `./` hid the file from the library loader, which read it again: the named copy then shadowed the library's, and no diagnostic reports that. {said}")
+end 'a build naming a stdlib file with a leading dot segment beside a program parses that file under one identity'
+
+function stdlibClockIdentitiesParsed(stderr String) returns StringArray
+	var identities = StringArray.create()
+
+	for line in stderr.split("\n") 'eachLine'
+		let afterMarker = try line.split(ParseLineMarker).get(1) otherwise continue
+		let spelled = try afterMarker.split(ParsedPathEnd).get(0) otherwise continue
+
+		if isTheStdlibClock(spelled) and not identities.contains(spelled) 'aNewIdentity'
+			identities.push(spelled)
+		end 'aNewIdentity'
+	end 'eachLine'
+
+	return identities
+end 'stdlibClockIdentitiesParsed'
+
+function isTheStdlibClock(spelled String) returns bool
+	let path = try FilePath.from(spelled) otherwise return false
+	let parent = try path.parent() otherwise return false
+
+	return path.filename() == ClockFileName and parent.filename() == StdlibDirName
+end 'isTheStdlibClock'
+
+function identitiesRendered(identities StringArray) returns String
+	var rendered = ""
+
+	for identity in identities 'eachIdentity'
+		rendered.append(" [{identity}]")
+	end 'eachIdentity'
+
+	return rendered
+end 'identitiesRendered'

@@ -77,19 +77,19 @@ function serviceHandleMainSource() returns String
 	return String.from(b"typealias CounterHandleArray = Array with Counter.handle
 
 type Desk
-    public var handles as CounterHandleArray
+    var handles as CounterHandleArray
 
-    public function tally(counter Counter.handle) returns Tally
+    function tally(counter Counter.handle) returns Tally
         counter.bump(1)
         return try await counter.total() otherwise 0
     end 'tally'
 
-    public function first() returns Tally
+    function first() returns Tally
         var h = try self.handles.get(0) otherwise panic(\"one handle\")
         return try await h.total() otherwise 0
     end 'first'
 
-    public static function create() returns Desk
+    static function create() returns Desk
         var handles = CounterHandleArray.create()
         handles.push(spawn Counter.create())
         return Desk{handles: handles}

@@ -596,7 +596,7 @@ typealias Integer = int(i64.min to i64.max)
 type Box
 	export var v as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{v: 3}
 	end 'create'
 end 'Box'

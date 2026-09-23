@@ -149,7 +149,7 @@ the blame edge once, for all four cases ARRH touched.
 ```maxon
 type Holder
 	export var f as __ManagedFile
-	export static function create(f __ManagedFile) returns Self
+	static function create(f __ManagedFile) returns Self
 		return Self{f: f}
 	end 'create'
 end 'Holder'
@@ -172,7 +172,7 @@ is legal.
 ```maxon
 type Holder
 	export var f as __ManagedFile
-	export static function create(f __ManagedFile) returns Self
+	static function create(f __ManagedFile) returns Self
 		return Self{f: f}
 	end 'create'
 end 'Holder'
@@ -262,7 +262,7 @@ typealias StrList = List with String
 type Holder
 	export var words as StrList
 
-	export static function create(words StrList) returns Self
+	static function create(words StrList) returns Self
 		return Self{words: words}
 	end 'create'
 end 'Holder'

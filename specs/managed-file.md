@@ -79,21 +79,21 @@ not found
 
 <!-- test: managed-file.write-and-read -->
 ```maxon
-export enum TestFileError implements Error
+enum TestFileError implements Error
 	openFailed
 end 'TestFileError'
 
 type TestFile
 	export var file as __ManagedFile
 
-	export static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
+	static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
 		let handle = try __ManagedFile.openWrite(path) otherwise 'fail'
 			throw TestFileError.openFailed
 		end 'fail'
 		return TestFile{file: handle}
 	end 'openWrite'
 
-	export static function openRead(path __ManagedMemory) returns TestFile throws TestFileError
+	static function openRead(path __ManagedMemory) returns TestFile throws TestFileError
 		let handle = try __ManagedFile.openRead(path) otherwise 'fail'
 			throw TestFileError.openFailed
 		end 'fail'
@@ -164,14 +164,14 @@ Hello Managed
 
 <!-- test: managed-file.exists -->
 ```maxon
-export enum TestFileError implements Error
+enum TestFileError implements Error
 	openFailed
 end 'TestFileError'
 
 type TestFile
 	export var file as __ManagedFile
 
-	export static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
+	static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
 		let handle = try __ManagedFile.openWrite(path) otherwise 'fail'
 			throw TestFileError.openFailed
 		end 'fail'
@@ -229,21 +229,21 @@ delete failed as expected
 
 <!-- test: managed-file.auto-close -->
 ```maxon
-export enum TestFileError implements Error
+enum TestFileError implements Error
 	openFailed
 end 'TestFileError'
 
 type TestFile
 	export var file as __ManagedFile
 
-	export static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
+	static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
 		let handle = try __ManagedFile.openWrite(path) otherwise 'fail'
 			throw TestFileError.openFailed
 		end 'fail'
 		return TestFile{file: handle}
 	end 'openWrite'
 
-	export static function openRead(path __ManagedMemory) returns TestFile throws TestFileError
+	static function openRead(path __ManagedMemory) returns TestFile throws TestFileError
 		let handle = try __ManagedFile.openRead(path) otherwise 'fail'
 			throw TestFileError.openFailed
 		end 'fail'
@@ -571,19 +571,19 @@ nothing was written through it.
 typealias Byte = int(0 to 255)
 typealias Bytes = Array with Byte
 
-export enum TestFileError implements Error
+enum TestFileError implements Error
 	openFailed
 end 'TestFileError'
 
 type TestFile
 	export var file as __ManagedFile
 
-	export static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
+	static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
 		let handle = try __ManagedFile.openWrite(path) otherwise throw TestFileError.openFailed
 		return TestFile{file: handle}
 	end 'openWrite'
 
-	export static function openRead(path __ManagedMemory) returns TestFile throws TestFileError
+	static function openRead(path __ManagedMemory) returns TestFile throws TestFileError
 		let handle = try __ManagedFile.openRead(path) otherwise throw TestFileError.openFailed
 		return TestFile{file: handle}
 	end 'openRead'
@@ -641,19 +641,19 @@ contract violation"*.
 ⚠ The file holds 10 bytes and the buffer 4, so the at-capacity read is bounded by the BUFFER and not by the
 file — `48` is `'0'`, the first byte written.
 ```maxon
-export enum TestFileError implements Error
+enum TestFileError implements Error
 	openFailed
 end 'TestFileError'
 
 type TestFile
 	export var file as __ManagedFile
 
-	export static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
+	static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
 		let handle = try __ManagedFile.openWrite(path) otherwise throw TestFileError.openFailed
 		return TestFile{file: handle}
 	end 'openWrite'
 
-	export static function openRead(path __ManagedMemory) returns TestFile throws TestFileError
+	static function openRead(path __ManagedMemory) returns TestFile throws TestFileError
 		let handle = try __ManagedFile.openRead(path) otherwise throw TestFileError.openFailed
 		return TestFile{file: handle}
 	end 'openRead'

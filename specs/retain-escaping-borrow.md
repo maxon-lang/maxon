@@ -47,20 +47,20 @@ end 'Digest'
 type Point implements Digest
 	export var x as Coord
 	export var y as Coord
-	export static function create(x Coord, y Coord) returns Self
+	static function create(x Coord, y Coord) returns Self
 		return Self{ x: x, y: y }
 	end 'create'
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x * 31 + self.y
 	end 'digest'
 end 'Point'
 
 type Box uses T where T is Digest
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function itemDigest() returns Code
+	function itemDigest() returns Code
 		return self.item.digest()
 	end 'itemDigest'
 end 'Box'
@@ -94,20 +94,20 @@ end 'Digest'
 type Point implements Digest
 	export var x as Coord
 	export var y as Coord
-	export static function create(x Coord, y Coord) returns Self
+	static function create(x Coord, y Coord) returns Self
 		return Self{ x: x, y: y }
 	end 'create'
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x * 31 + self.y
 	end 'digest'
 end 'Point'
 
 type Box uses T where T is Digest
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function itemDigest() returns Code
+	function itemDigest() returns Code
 		return self.item.digest()
 	end 'itemDigest'
 end 'Box'
@@ -142,20 +142,20 @@ end 'Digest'
 type Point implements Digest
 	export var x as Coord
 	export var y as Coord
-	export static function create(x Coord, y Coord) returns Self
+	static function create(x Coord, y Coord) returns Self
 		return Self{ x: x, y: y }
 	end 'create'
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x * 31 + self.y
 	end 'digest'
 end 'Point'
 
 type Box uses T where T is Digest
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function itemDigest() returns Code
+	function itemDigest() returns Code
 		return self.item.digest()
 	end 'itemDigest'
 end 'Box'
@@ -186,16 +186,16 @@ final container all drop once. Leak-free (a double-free faults, an under-release
 typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x as Integer
-	export static function create(x Integer) returns Self
+	static function create(x Integer) returns Self
 		return Self{x: x}
 	end 'create'
-	export function getX() returns Integer
+	function getX() returns Integer
 		return self.x
 	end 'getX'
 end 'Point'
 type Box uses T
 	export var item as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{item: v}
 	end 'create'
 end 'Box'
@@ -221,16 +221,16 @@ exactly once at scope exit.
 typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x as Integer
-	export static function create(x Integer) returns Self
+	static function create(x Integer) returns Self
 		return Self{x: x}
 	end 'create'
-	export function getX() returns Integer
+	function getX() returns Integer
 		return self.x
 	end 'getX'
 end 'Point'
 type Box uses T
 	export var item as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{item: v}
 	end 'create'
 end 'Box'
@@ -258,7 +258,7 @@ inner box's own scope drop frees it once. Leak-free under poisoning.
 typealias Integer = int(i64.min to i64.max)
 type Box uses T
 	export var item as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{item: v}
 	end 'create'
 end 'Box'
@@ -286,16 +286,16 @@ cleanly rather than leaked.
 typealias Coord = int(0 to 1000)
 type Point
 	export var x as Coord
-	export static function create(x Coord) returns Self
+	static function create(x Coord) returns Self
 		return Self{ x: x }
 	end 'create'
 end 'Point'
 type Box uses Element
 	export var saved as Element
-	export static function create(first Element) returns Self
+	static function create(first Element) returns Self
 		return Self{ saved: first }
 	end 'create'
-	export function replace(next Element)
+	function replace(next Element)
 		self.saved = next
 	end 'replace'
 end 'Box'
@@ -316,7 +316,7 @@ SECOND file calls a method through an `Outer with Point`. The shared body is ref
 first — the instantiation is a fact about the program, not about the files parsed before the body.
 ```maxon
 // --- file: a_box.maxon
-type Box uses T
+export type Box uses T
 	export var saved as T
 	export static function create(first T) returns Self
 		return Self{ saved: first }
@@ -335,8 +335,8 @@ export type Outer uses T
 	end 'swapInner'
 end 'Outer'
 // --- file: b_use.maxon
-typealias Coord = int(0 to 1000)
-type Point
+export typealias Coord = int(0 to 1000)
+export type Point
 	export var x as Coord
 	export static function create(x Coord) returns Self
 		return Self{ x: x }
@@ -356,8 +356,8 @@ error E2015: <fragment>:9:8: Unsupported: reassigning the type-parameter field '
 <!-- test: error.reassign-co-owned-trivial-instantiated-by-another-file-use-first -->
 ```maxon
 // --- file: a_use.maxon
-typealias Coord = int(0 to 1000)
-type Point
+export typealias Coord = int(0 to 1000)
+export type Point
 	export var x as Coord
 	export static function create(x Coord) returns Self
 		return Self{ x: x }
@@ -370,7 +370,7 @@ function main() returns ExitCode
 	return 0
 end 'main'
 // --- file: b_box.maxon
-type Box uses T
+export type Box uses T
 	export var saved as T
 	export static function create(first T) returns Self
 		return Self{ saved: first }

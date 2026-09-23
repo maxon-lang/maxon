@@ -35,7 +35,7 @@ whole-program index whether the BASE names a declared type, rather than consulti
 compiler-owned names, so a static is a statement wherever one is written. Prints `hi` and exits 0.
 ```maxon
 type Helper
-	export static function shout()
+	static function shout()
 		print("hi")
 	end 'shout'
 end 'Helper'
@@ -60,7 +60,7 @@ door that parsed a call and dropped it, or folded the pair into one, is caught h
 quietly.
 ```maxon
 type Announce
-	export static function line()
+	static function line()
 		print("tick")
 	end 'line'
 end 'Announce'
@@ -87,7 +87,7 @@ oracle.
 type Point
 	export var x as ExitCode
 
-	export static function create() returns Point
+	static function create() returns Point
 		return Self{x: 1}
 	end 'create'
 end 'Point'
@@ -112,7 +112,7 @@ member that resolves to nothing is refused by `parseCallNamed`, which names the 
 measured — so the rung removes a third spelling rather than adding one.
 ```maxon
 type Helper
-	export static function shout()
+	static function shout()
 		print("hi")
 	end 'shout'
 end 'Helper'
@@ -137,15 +137,15 @@ in front of the fix. The member half now asks `namesMemberAt`, the predicate `me
 at once. Prints `mut`.
 ```maxon
 type Helper
-	export static function match()
+	static function match()
 		print("m")
 	end 'match'
 
-	export static function upto()
+	static function upto()
 		print("u")
 	end 'upto'
 
-	export static function to()
+	static function to()
 		print("t")
 	end 'to'
 end 'Helper'
@@ -171,7 +171,7 @@ identifier-spelled one is, so it earns the positioned E3004 naming the callee ra
 message. Without this the widening would be provable only in its accepting direction.
 ```maxon
 type Helper
-	export static function shout()
+	static function shout()
 		print("hi")
 	end 'shout'
 end 'Helper'
@@ -203,11 +203,11 @@ same missing lookup.
 type Pair uses T
 	export var a as ExitCode
 
-	export static function create(a ExitCode) returns Self
+	static function create(a ExitCode) returns Self
 		return Self{a: a}
 	end 'create'
 
-	export static function shout()
+	static function shout()
 		print("hi")
 	end 'shout'
 end 'Pair'
@@ -215,7 +215,7 @@ end 'Pair'
 type Plain
 	typealias IntPair = Pair with ExitCode
 
-	export static function make() returns ExitCode
+	static function make() returns ExitCode
 		IntPair.shout()
 		let p = IntPair.create(0)
 		return p.a
@@ -243,7 +243,7 @@ only the whole-program key can produce.
 type Pair uses T
 	export var a as ExitCode
 
-	export static function create(a ExitCode) returns Self
+	static function create(a ExitCode) returns Self
 		return Self{a: a}
 	end 'create'
 end 'Pair'
@@ -251,7 +251,7 @@ end 'Pair'
 type Plain
 	typealias IntPair = Pair with ExitCode
 
-	export static function make() returns ExitCode
+	static function make() returns ExitCode
 		IntPair.nope()
 		return 0
 	end 'make'

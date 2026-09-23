@@ -65,11 +65,11 @@ end 'Named'
 type Wrapper uses T implements Named
 	export var v as T
 
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{v: v}
 	end 'create'
 
-	export function label() returns String
+	function label() returns String
 		return "wrapped"
 	end 'label'
 end 'Wrapper'
@@ -77,11 +77,11 @@ end 'Wrapper'
 type Holder uses N where N is Named
 	export var item as N
 
-	export static function create(item N) returns Self
+	static function create(item N) returns Self
 		return Self{item: item}
 	end 'create'
 
-	export function show() returns String
+	function show() returns String
 		return item.label()
 	end 'show'
 end 'Holder'
@@ -115,11 +115,11 @@ end 'Named'
 type Wrapper uses T implements Named
 	export var v as T
 
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{v: v}
 	end 'create'
 
-	export function label() returns String
+	function label() returns String
 		return "wrapped"
 	end 'label'
 end 'Wrapper'
@@ -127,11 +127,11 @@ end 'Wrapper'
 type Holder uses N where N is Named
 	export var item as N
 
-	export static function create(item N) returns Self
+	static function create(item N) returns Self
 		return Self{item: item}
 	end 'create'
 
-	export function show() returns String
+	function show() returns String
 		return item.label()
 	end 'show'
 end 'Holder'
@@ -165,7 +165,7 @@ end 'Named'
 type Plain uses T
 	export var v as T
 
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{v: v}
 	end 'create'
 end 'Plain'
@@ -173,7 +173,7 @@ end 'Plain'
 type Holder uses N where N is Named
 	export var item as N
 
-	export static function create(item N) returns Self
+	static function create(item N) returns Self
 		return Self{item: item}
 	end 'create'
 end 'Holder'

@@ -254,7 +254,7 @@ typealias Integer = int(i64.min to i64.max)
 type Color
 	export var v as Integer
 
-	export static function create(v Integer) returns Self
+	static function create(v Integer) returns Self
 		return Self{v: v}
 	end 'create'
 end 'Color'
@@ -262,7 +262,7 @@ end 'Color'
 type Shade
 	export var s as Integer
 
-	export static function create(s Integer) returns Self
+	static function create(s Integer) returns Self
 		return Self{s: s}
 	end 'create'
 end 'Shade'
@@ -296,7 +296,7 @@ end 'Shade'
 type Color
 	export var v as Integer
 
-	export static function create(v Integer) returns Self
+	static function create(v Integer) returns Self
 		return Self{v: v}
 	end 'create'
 end 'Color'

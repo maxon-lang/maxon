@@ -792,7 +792,7 @@ would land between `used` and the console probes, which is where a prefix compar
 ```maxon
 var used = 42
 
-module function dormant() returns MachineWord
+function dormant() returns MachineWord
 	return __Builtins.schedMaxActiveWorkers()
 end 'dormant'
 

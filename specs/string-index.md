@@ -436,20 +436,20 @@ still pins that the family composes inside a method, which is a different questi
 type Label
 	var text as String
 
-	export static function create(t String) returns Label
+	static function create(t String) returns Label
 		return Label{text: t}
 	end 'create'
 
-	export function head() returns String
+	function head() returns String
 		return text.slice(text.startIndex(), length: 2)
 	end 'head'
 
-	export function width() returns Integer
+	function width() returns Integer
 		let last = text.endIndex()
 		return last.charIndex()
 	end 'width'
 
-	export function upTo(needle String) returns String
+	function upTo(needle String) returns String
 		let hit = try text.findFirst(needle) otherwise text.endIndex()
 		return text.slice(text.startIndex(), endIndex: hit)
 	end 'upTo'

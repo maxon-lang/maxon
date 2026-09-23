@@ -246,7 +246,7 @@ typealias Integer = int(i64.min to i64.max)
 type Handle
 	export var f as __ManagedFile
 
-	export static function create(f __ManagedFile) returns Self
+	static function create(f __ManagedFile) returns Self
 		return Self{f: f}
 	end 'create'
 end 'Handle'
@@ -266,15 +266,15 @@ type Container uses Element where Element is Sizer
 
 	export var items as ElementArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{ items: ElementArray.create() }
 	end 'create'
 
-	export function push(item Element)
+	function push(item Element)
 		self.items.push(item)
 	end 'push'
 
-	export function duplicate() returns Self
+	function duplicate() returns Self
 		return Self{ items: self.items.clone() }
 	end 'duplicate'
 end 'Container'

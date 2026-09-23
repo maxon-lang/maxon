@@ -56,11 +56,11 @@ typealias Wide = int(i64.min to i64.max)
 type Inner
 	export var v as Wide
 
-	export static function make(v Wide) returns Self
+	static function make(v Wide) returns Self
 		return Self{v: v}
 	end 'make'
 
-	export function get() returns Wide
+	function get() returns Wide
 		return self.v
 	end 'get'
 end 'Inner'
@@ -82,11 +82,11 @@ typealias Wide = int(i64.min to i64.max)
 type Inner
 	export var v as Wide
 
-	export static function make(v Wide) returns Self
+	static function make(v Wide) returns Self
 		return Self{v: v}
 	end 'make'
 
-	export function get() returns Wide
+	function get() returns Wide
 		return self.v
 	end 'get'
 end 'Inner'
@@ -110,11 +110,11 @@ typealias Wide = int(i64.min to i64.max)
 type Inner
 	export var v as Wide
 
-	export static function make(v Wide) returns Self
+	static function make(v Wide) returns Self
 		return Self{v: v}
 	end 'make'
 
-	export function get() returns Wide
+	function get() returns Wide
 		return self.v
 	end 'get'
 end 'Inner'
@@ -122,7 +122,7 @@ end 'Inner'
 type Outer
 	export var inner as Inner
 
-	export static function make(inner Inner) returns Self
+	static function make(inner Inner) returns Self
 		return Self{inner: inner}
 	end 'make'
 end 'Outer'
@@ -145,7 +145,7 @@ typealias Wide = int(i64.min to i64.max)
 type Inner
 	export var v as Wide
 
-	export static function make(v Wide) returns Self
+	static function make(v Wide) returns Self
 		return Self{v: v}
 	end 'make'
 end 'Inner'
@@ -153,7 +153,7 @@ end 'Inner'
 type Outer
 	export var inner as Inner
 
-	export static function make(inner Inner) returns Self
+	static function make(inner Inner) returns Self
 		return Self{inner: inner}
 	end 'make'
 end 'Outer'
@@ -176,15 +176,15 @@ typealias Wide = int(i64.min to i64.max)
 type Leaf
 	export var tally as Wide
 
-	export static function make(tally Wide) returns Self
+	static function make(tally Wide) returns Self
 		return Self{tally: tally}
 	end 'make'
 
-	export function size() returns Wide
+	function size() returns Wide
 		return self.tally
 	end 'size'
 
-	export function bump() returns Leaf
+	function bump() returns Leaf
 		return Leaf{tally: self.tally + 1}
 	end 'bump'
 end 'Leaf'
@@ -206,7 +206,7 @@ typealias Wide = int(i64.min to i64.max)
 type Leaf
 	export var tally as Wide
 
-	export static function make(tally Wide) returns Self
+	static function make(tally Wide) returns Self
 		return Self{tally: tally}
 	end 'make'
 end 'Leaf'
@@ -375,7 +375,7 @@ union Outcome
 	pass
 	fail(reason String)
 
-	export function isPass() returns bool
+	function isPass() returns bool
 		return match self 'p'
 			pass gives true
 			fail gives false
@@ -462,7 +462,7 @@ when it is read.
 type Box
 	export var name as String
 
-	export static function make(n String) returns Self
+	static function make(n String) returns Self
 		return Self{name: n}
 	end 'make'
 end 'Box'
@@ -487,11 +487,11 @@ typealias Wide = int(i64.min to i64.max)
 type Inner
 	export var v as Wide
 
-	export static function make(v Wide) returns Self
+	static function make(v Wide) returns Self
 		return Self{v: v}
 	end 'make'
 
-	export function get() returns Wide
+	function get() returns Wide
 		return self.v
 	end 'get'
 end 'Inner'
@@ -499,7 +499,7 @@ end 'Inner'
 type Outer
 	export var inner as Inner
 
-	export static function make(i Inner) returns Self
+	static function make(i Inner) returns Self
 		return Self{inner: i}
 	end 'make'
 end 'Outer'
@@ -543,7 +543,7 @@ read. A guard that refused this too would have "fixed" the crash by deleting the
 type Box
 	export var name as String
 
-	export static function make(n String) returns Self
+	static function make(n String) returns Self
 		return Self{name: n}
 	end 'make'
 end 'Box'
@@ -567,11 +567,11 @@ which ends before the statement does. Measured against the oracle; a leak here w
 type Box
 	export var name as String
 
-	export static function make(n String) returns Self
+	static function make(n String) returns Self
 		return Self{name: n}
 	end 'make'
 
-	export function len() returns ExitCode
+	function len() returns ExitCode
 		return self.name.byteLength()
 	end 'len'
 end 'Box'
@@ -613,7 +613,7 @@ typealias Wide = int(i64.min to i64.max)
 type Leaf
 	export var tally as Wide
 
-	export static function make(t Wide) returns Self
+	static function make(t Wide) returns Self
 		return Self{tally: t}
 	end 'make'
 end 'Leaf'

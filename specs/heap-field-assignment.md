@@ -36,7 +36,7 @@ type Container
 	export var value as Integer
 	export var child as Inner
 
-	export function replaceChild(newChild Inner)
+	function replaceChild(newChild Inner)
 		child = newChild
 	end 'replaceChild'
 
@@ -101,11 +101,11 @@ typealias Tally = int(0 to u64.max)
 type Counter
 	var count as Tally
 
-	export function increment()
+	function increment()
 		count = count + 1
 	end 'increment'
 
-	export function value() returns Tally
+	function value() returns Tally
 		return count
 	end 'value'
 
@@ -142,11 +142,11 @@ type Container
 	export var value as Integer
 	export var child as Inner
 
-	export function replaceChild(newChild Inner)
+	function replaceChild(newChild Inner)
 		child = newChild
 	end 'replaceChild'
 
-	export function childValue() returns Integer
+	function childValue() returns Integer
 		return child.value
 	end 'childValue'
 

@@ -41,6 +41,12 @@ myproject/
 The standard library is part of every compilation; the compiler finds it by walking up from its own
 executable, so nothing in the project refers to it. See the [Standard Library](/docs/stdlib/).
 
+A file of the compiler's own `stdlib/` or `runtime/` that a build names — as its path, or in a manifest's
+`sources` beside a program — is read once, not a second time as part of the library. A `runtime/` file is
+compiled as runtime-tier source wherever it is named from, with the tier's rules
+([The runtime tier](/docs/stdlib/#the-runtime-tier)); built on its own it has no `main`, so the
+build stops at [E3001](/docs/cli/error-codes/#e3001--nomainfunction).
+
 ## The build manifest
 
 `maxon build` with no path looks for **`project.maxon`** in the current directory, compiles it, runs it,
@@ -141,6 +147,10 @@ are separate on purpose:
   turned into a project by holding one.
 
 Neither is compiled into the program (see [Which files a build includes](#which-files-a-build-includes)).
+
+Every task `tasks.maxon` declares counts as an entry point, whichever one `maxon run` was asked for: the
+runner reaches the others by name, so an `export function` task is never reported as an unused export
+([E3092](/docs/cli/error-codes/#e3092--semanticunusedexportedsymbol)).
 
 ### Named targets
 

@@ -207,7 +207,7 @@ typealias Small = int(0 to 100)
 
 type Box
 	export var v as Small
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{v: 7}
 	end 'make'
 end 'Box'
@@ -259,11 +259,14 @@ exported pair that genuinely does collide is the next test.
 
 `main.maxon` names `Box` too, and means the STRUCT — a's declaration is the only one it can see — while
 `b.maxon` means its own alias by the same spelling in the same program. That is the whole claim, and it
-is why main constructs one rather than merely calling `useIt`: a case where nobody outside `a.maxon`
-names `Box` would be answered by the compiler without ever deciding which declaration it meant.
+is why main constructs one rather than merely calling into `b.maxon`: a case where nobody outside
+`a.maxon` names `Box` would be answered by the compiler without ever deciding which declaration it meant.
+
+⚠ `b.maxon`'s door returns `ExitCode` and its private `Box` is read inside `useIt`: a file-private type
+may not be named in a signature another file calls (E3167).
 ```maxon
 // --- file: a.maxon
-typealias Small = int(0 to 100)
+export typealias Small = int(0 to 100)
 
 export type Box
 	export var v as Small
@@ -276,15 +279,19 @@ end 'Box'
 // --- file: b.maxon
 typealias Box = int(0 to 10)
 
-export function useIt() returns Box
+function useIt() returns Box
 	return 5 as Box
 end 'useIt'
+
+export function fromB() returns ExitCode
+	return useIt() as ExitCode
+end 'fromB'
 
 // --- file: main.maxon
 function main() returns ExitCode
 	let boxed = Box.create(3)
 
-	return useIt() + boxed.v
+	return fromB() + (boxed.v as ExitCode)
 end 'main'
 ```
 ```exitcode
@@ -470,7 +477,7 @@ and accepted — the duplicate compiled in silence. That is `stdlib/`'s own shap
 `Byte`), so it would have been open for every name the rule exists to protect.
 ```maxon
 // --- file: a.maxon
-typealias L = int(0 to 10)
+export typealias L = int(0 to 10)
 
 export function fromA() returns L
 	return 1
@@ -530,20 +537,20 @@ a file whose only `Handler` is an `int` alias, naming a declaration it never men
 are file-private, so each answers for its own file and neither is a duplicate.
 ```maxon
 // --- file: a.maxon
-typealias Handler = int(0 to 10)
+export typealias Handler = int(0 to 10)
 
 export function useA() returns Handler
 	return 5 as Handler
 end 'useA'
 
 // --- file: b.maxon
-typealias Handler = function() returns Integer
+export typealias Handler = function() returns Integer
 
 export function useB(h Handler) returns ExitCode
 	return h() as ExitCode
 end 'useB'
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 function zero() returns Integer
 	return 0
@@ -632,8 +639,8 @@ export type Bx uses T
 end 'Bx'
 
 // --- file: a.maxon
-typealias Small = int(0 to 100)
-typealias Thing = Bx with Small
+export typealias Small = int(0 to 100)
+export typealias Thing = Bx with Small
 
 export function makeA() returns Thing
 	return Thing.create(7)
@@ -644,7 +651,7 @@ export function take(t Thing) returns ExitCode
 end 'take'
 
 // --- file: d.maxon
-typealias Tag = int(0 to 50)
+export typealias Tag = int(0 to 50)
 
 export function take(n Tag) returns String
 	return "n{n}"
@@ -701,8 +708,8 @@ export type Bx uses T
 end 'Bx'
 
 // --- file: a.maxon
-typealias Small = int(0 to 100)
-typealias Thing = Bx with Small
+export typealias Small = int(0 to 100)
+export typealias Thing = Bx with Small
 
 export function makeA() returns Thing
 	return Thing.create(7)
@@ -713,7 +720,7 @@ export function take(t Thing) returns ExitCode
 end 'take'
 
 // --- file: d.maxon
-typealias Tag = int(0 to 50)
+export typealias Tag = int(0 to 50)
 
 export function take(n Tag) returns String
 	return "n{n}"
@@ -773,8 +780,8 @@ export type Bx uses T
 end 'Bx'
 
 // --- file: a.maxon
-typealias Small = int(0 to 100)
-typealias Thing = Bx with Small
+export typealias Small = int(0 to 100)
+export typealias Thing = Bx with Small
 
 export function makeA() returns Thing
 	return Thing.create(7)
@@ -966,10 +973,10 @@ typealias Num = int(0 to 100)
 
 type Box uses T
 	export var v as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{v: v}
 	end 'create'
-	export function tag() returns Num
+	function tag() returns Num
 		return 1
 	end 'tag'
 end 'Box'
@@ -979,10 +986,10 @@ typealias SBox = Box with String
 type Box_String
 	export var a as String
 	export var b as String
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{a: "x", b: "y"}
 	end 'make'
-	export function tag() returns Num
+	function tag() returns Num
 		return 2
 	end 'tag'
 end 'Box_String'
@@ -1011,17 +1018,17 @@ typealias Num = int(0 to 100)
 
 type Holder
 	export var s as String
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{s: "held"}
 	end 'make'
 end 'Holder'
 
 type Box uses T
 	export var v as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{v: v}
 	end 'create'
-	export function tag() returns Num
+	function tag() returns Num
 		return 3
 	end 'tag'
 end 'Box'
@@ -1030,10 +1037,10 @@ typealias SBox = Box with String
 
 type Box_String
 	export var h as Holder
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{h: Holder.make()}
 	end 'make'
-	export function tag() returns Num
+	function tag() returns Num
 		return 4
 	end 'tag'
 end 'Box_String'
@@ -1059,14 +1066,14 @@ that names the later instantiation, for the reason the whole file reports at the
 ```maxon
 type Str
 	export var s as String
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{s: "a"}
 	end 'make'
 end 'Str'
 
 type Box
 	export var s as String
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{s: "b"}
 	end 'make'
 end 'Box'
@@ -1075,7 +1082,7 @@ type Box_Int
 	export var s as String
 	export var t as String
 	export var u as String
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{s: "c", t: "cc", u: "ccc"}
 	end 'make'
 end 'Box_Int'
@@ -1084,7 +1091,7 @@ type Int_Str
 	export var s as String
 	export var t as String
 	export var u as String
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{s: "d", t: "dd", u: "ddd"}
 	end 'make'
 end 'Int_Str'
@@ -1092,7 +1099,7 @@ end 'Int_Str'
 type Pair uses A, B
 	export var first as A
 	export var second as B
-	export static function create(first A, second B) returns Self
+	static function create(first A, second B) returns Self
 		return Self{first: first, second: second}
 	end 'create'
 end 'Pair'
@@ -1122,10 +1129,10 @@ typealias Integer = int(i64.min to i64.max)
 
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
-	export function get() returns T
+	function get() returns T
 		return self.value
 	end 'get'
 end 'Box'
@@ -1347,7 +1354,7 @@ can see tells it that `Box_String` is taken, and nothing `b.maxon` can see tells
 instantiation wants the name.
 ```maxon
 // --- file: a.maxon
-typealias Num = int(0 to 100)
+export typealias Num = int(0 to 100)
 
 export type Box uses T
 	export var v as T
@@ -1362,7 +1369,7 @@ end 'Box'
 export typealias SBox = Box with String
 
 // --- file: b.maxon
-typealias Num = int(0 to 100)
+export typealias Num = int(0 to 100)
 
 export type Box_String
 	export var a as String
@@ -1399,7 +1406,7 @@ typealias Num = int(0 to 100)
 type Foo
 	export var n as Num
 
-	export static function create(v Num) returns Self
+	static function create(v Num) returns Self
 		return Self{n: v}
 	end 'create'
 end 'Foo'
@@ -1407,7 +1414,7 @@ end 'Foo'
 type Array_Foo
 	export var tag as Num
 
-	export static function create(v Num) returns Self
+	static function create(v Num) returns Self
 		return Self{tag: v}
 	end 'create'
 end 'Array_Foo'
@@ -1435,7 +1442,7 @@ typealias Num = int(0 to 100)
 type Foo
 	export var s as String
 
-	export static function create(v String) returns Self
+	static function create(v String) returns Self
 		return Self{s: v}
 	end 'create'
 end 'Foo'
@@ -1443,7 +1450,7 @@ end 'Foo'
 type Array_Foo
 	export var tag as Num
 
-	export static function create(v Num) returns Self
+	static function create(v Num) returns Self
 		return Self{tag: v}
 	end 'create'
 end 'Array_Foo'
@@ -1474,7 +1481,7 @@ typealias Num = int(0 to 100)
 type Bar
 	export var n as Num
 
-	export static function create(v Num) returns Self
+	static function create(v Num) returns Self
 		return Self{n: v}
 	end 'create'
 end 'Bar'
@@ -1482,7 +1489,7 @@ end 'Bar'
 type Foo
 	export var n as Num
 
-	export static function create(v Num) returns Self
+	static function create(v Num) returns Self
 		return Self{n: v}
 	end 'create'
 end 'Foo'
@@ -1490,7 +1497,7 @@ end 'Foo'
 type Array_Foo
 	export var tag as Num
 
-	export static function create(v Num) returns Self
+	static function create(v Num) returns Self
 		return Self{tag: v}
 	end 'create'
 end 'Array_Foo'
@@ -1528,7 +1535,7 @@ typealias Num = int(0 to 100)
 type Foo
 	export var n as Num
 
-	export static function create(v Num) returns Self
+	static function create(v Num) returns Self
 		return Self{n: v}
 	end 'create'
 end 'Foo'
@@ -1537,7 +1544,7 @@ type Array_Foo
 	export var s as String
 	export var tag as Num
 
-	export static function create(v Num) returns Self
+	static function create(v Num) returns Self
 		return Self{s: "held", tag: v}
 	end 'create'
 end 'Array_Foo'
@@ -1565,10 +1572,10 @@ typealias Num = int(0 to 100)
 
 type Box uses T
 	export var v as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{v: v}
 	end 'create'
-	export function tag() returns Num
+	function tag() returns Num
 		return 5
 	end 'tag'
 end 'Box'
@@ -1579,10 +1586,10 @@ type Box_String
 	export var a as String
 	export var b as String
 	export var c as String
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{a: "aa", b: "bb", c: "cc"}
 	end 'make'
-	export function tag() returns Num
+	function tag() returns Num
 		return 6
 	end 'tag'
 end 'Box_String'
@@ -1613,10 +1620,10 @@ typealias Num = int(0 to 100)
 
 type Box uses T
 	export var v as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{v: v}
 	end 'create'
-	export function tag() returns Num
+	function tag() returns Num
 		return 1
 	end 'tag'
 end 'Box'
@@ -1626,10 +1633,10 @@ typealias Outer = Box with (Box with String)
 
 type Box_String
 	export var a as String
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{a: "aa"}
 	end 'make'
-	export function tag() returns Num
+	function tag() returns Num
 		return 2
 	end 'tag'
 end 'Box_String'
@@ -1637,10 +1644,10 @@ end 'Box_String'
 type Box___Box_String
 	export var a as String
 	export var b as String
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{a: "bb", b: "cc"}
 	end 'make'
-	export function tag() returns Num
+	function tag() returns Num
 		return 4
 	end 'tag'
 end 'Box___Box_String'
@@ -1671,17 +1678,17 @@ typealias Num = int(0 to 100)
 type Held
 	export var s as String
 	export var n as Num
-	export static function create(n Num) returns Self
+	static function create(n Num) returns Self
 		return Self{s: "held", n: n}
 	end 'create'
 end 'Held'
 
 type Box uses T
 	export var v as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{v: v}
 	end 'create'
-	export function tag() returns Num
+	function tag() returns Num
 		return 5
 	end 'tag'
 end 'Box'
@@ -1718,10 +1725,10 @@ typealias Num = int(0 to 100)
 
 type Box uses T
 	export var v as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{v: v}
 	end 'create'
-	export function tag() returns Num
+	function tag() returns Num
 		return 5
 	end 'tag'
 end 'Box'
@@ -1762,10 +1769,10 @@ typealias Num = int(0 to 100)
 
 type Box uses T
 	export var v as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{v: v}
 	end 'create'
-	export function tag() returns Num
+	function tag() returns Num
 		return 5
 	end 'tag'
 end 'Box'
@@ -1778,10 +1785,10 @@ end 'Box_String'
 
 type Pen implements Box_String
 	export var ink as Num
-	export static function create(ink Num) returns Self
+	static function create(ink Num) returns Self
 		return Self{ink: ink}
 	end 'create'
-	export function draw() returns Num
+	function draw() returns Num
 		return self.ink
 	end 'draw'
 end 'Pen'
@@ -1808,7 +1815,7 @@ typealias Num = int(0 to 100)
 type __Array_Foo
 	export var n as Num
 
-	export static function create(v Num) returns Self
+	static function create(v Num) returns Self
 		return Self{n: v}
 	end 'create'
 end '__Array_Foo'
@@ -1843,40 +1850,40 @@ end 'B_C'
 
 type A_B implements C
 	export var x as Integer
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{ x: 0 }
 	end 'create'
-	export function idc() returns Integer
+	function idc() returns Integer
 		return 3
 	end 'idc'
 end 'A_B'
 
 type A implements B_C
 	export var x as Integer
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{ x: 0 }
 	end 'create'
-	export function idb() returns Integer
+	function idb() returns Integer
 		return 4
 	end 'idb'
 end 'A'
 
 type HoldC uses T where T is C
 	export var v as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{ v: v }
 	end 'create'
-	export function go() returns Integer
+	function go() returns Integer
 		return self.v.idc()
 	end 'go'
 end 'HoldC'
 
 type HoldB uses T where T is B_C
 	export var v as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{ v: v }
 	end 'create'
-	export function go() returns Integer
+	function go() returns Integer
 		return self.v.idb()
 	end 'go'
 end 'HoldB'
@@ -1911,10 +1918,10 @@ end 'B_C'
 
 type A implements B_C
 	export var x as Integer
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{ x: 0 }
 	end 'create'
-	export function idb() returns Integer
+	function idb() returns Integer
 		return 4
 	end 'idb'
 end 'A'
@@ -1925,30 +1932,30 @@ end 'C'
 
 type A_B implements C
 	export var x as Integer
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{ x: 0 }
 	end 'create'
-	export function idc() returns Integer
+	function idc() returns Integer
 		return 3
 	end 'idc'
 end 'A_B'
 
 type HoldB uses T where T is B_C
 	export var v as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{ v: v }
 	end 'create'
-	export function go() returns Integer
+	function go() returns Integer
 		return self.v.idb()
 	end 'go'
 end 'HoldB'
 
 type HoldC uses T where T is C
 	export var v as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{ v: v }
 	end 'create'
-	export function go() returns Integer
+	function go() returns Integer
 		return self.v.idc()
 	end 'go'
 end 'HoldC'
@@ -1990,60 +1997,60 @@ end 'B_C_D'
 
 type A_B_C implements D
 	export var v as Small
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{ v: 0 }
 	end 'create'
-	export function d() returns Small
+	function d() returns Small
 		return 1
 	end 'd'
 end 'A_B_C'
 
 type A_B implements C_D
 	export var v as Small
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{ v: 0 }
 	end 'create'
-	export function cd() returns Small
+	function cd() returns Small
 		return 2
 	end 'cd'
 end 'A_B'
 
 type A implements B_C_D
 	export var v as Small
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{ v: 0 }
 	end 'create'
-	export function bcd() returns Small
+	function bcd() returns Small
 		return 3
 	end 'bcd'
 end 'A'
 
 type HoldD uses T where T is D
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function go() returns Small
+	function go() returns Small
 		return self.item.d()
 	end 'go'
 end 'HoldD'
 
 type HoldCD uses T where T is C_D
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function go() returns Small
+	function go() returns Small
 		return self.item.cd()
 	end 'go'
 end 'HoldCD'
 
 type HoldBCD uses T where T is B_C_D
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function go() returns Small
+	function go() returns Small
 		return self.item.bcd()
 	end 'go'
 end 'HoldBCD'
@@ -2089,53 +2096,53 @@ end 'C'
 
 type A implements B, B_C
 	export var v as Small
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{ v: 0 }
 	end 'create'
-	export function b() returns Small
+	function b() returns Small
 		return 1
 	end 'b'
-	export function bc() returns Small
+	function bc() returns Small
 		return 4
 	end 'bc'
 end 'A'
 
 type A_B implements C
 	export var v as Small
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{ v: 0 }
 	end 'create'
-	export function c() returns Small
+	function c() returns Small
 		return 2
 	end 'c'
 end 'A_B'
 
 type HoldB uses T where T is B
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function go() returns Small
+	function go() returns Small
 		return self.item.b()
 	end 'go'
 end 'HoldB'
 
 type HoldBC uses T where T is B_C
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function go() returns Small
+	function go() returns Small
 		return self.item.bc()
 	end 'go'
 end 'HoldBC'
 
 type HoldC uses T where T is C
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function go() returns Small
+	function go() returns Small
 		return self.item.c()
 	end 'go'
 end 'HoldC'
@@ -2159,24 +2166,28 @@ end 'main'
 <!-- test: crossfile-return-type-is-the-declaring-files-meaning -->
 ⭐⭐ **A CALLEE'S RETURN TYPE IS A SLOT OF THE FILE THAT DECLARED IT, NEVER OF THE FILE CALLING IT** —
 the shape neither of the coexistence cases above reaches, and the one where getting it wrong is SILENT.
-`a.maxon` declares a file-private `typealias Widget` and `b.maxon` an `export type Widget`; the two
-coexist because neither can see the other. `main.maxon` declares NEITHER, so it is a stranger to the name
-— and a stranger that resolved each callee's return type in ITS OWN scope would give both functions one
-meaning, when the whole point is that they have two.
+`a.maxon` means a file-private `int(0 to 5)` by `Widget` and `b.maxon` an `export type` of the same name;
+the two coexist because neither declaration can see the other. `main.maxon` declares NEITHER, and the
+RECORD `fromB` hands it has to be read as `b.maxon`'s `Widget` — a name folded whole-program, or resolved
+in the caller's scope, would give `main.maxon` the integer meaning and dereference a record through it.
 
 Read with the caller's file it was **`E3005: Cannot return 'struct' from function declared to return
-'int'`** for `fromA`, and through the field read below it dereferenced the integer `3` as a record —
-**exit 139, clean compile, no diagnostic.**
+'int'`**, and through the field read below it dereferenced the integer as a record — **exit 139, clean
+compile, no diagnostic.**
+
+⚠ A file-private type may not be named in a signature another file calls (E3167), so the file whose meaning is private reads its own name INSIDE the body and hands the boundary an `ExitCode`. The contested pair is unchanged: one name, two files, two meanings.
 ```maxon
 // --- file: a.maxon
 typealias Widget = int(0 to 5)
 
-export function fromA() returns Widget
-	return 3
+export function fromA() returns ExitCode
+	let w = 3 as Widget
+
+	return w as ExitCode
 end 'fromA'
 
 // --- file: b.maxon
-typealias Slot = int(0 to 100)
+export typealias Slot = int(0 to 100)
 
 export type Widget
 	export var value as Slot
@@ -2194,7 +2205,7 @@ end 'fromB'
 function main() returns ExitCode
 	let boxed = fromB()
 
-	return fromA() + boxed.value
+	return fromA() + (boxed.value as ExitCode)
 end 'main'
 ```
 ```exitcode
@@ -2206,18 +2217,22 @@ end 'main'
 The same rule through the arm that has no nominal declaration in it at all — a RANGED alias in one file
 against a TUPLE alias in another. It is a different code path (a tuple alias resolves to the tuple's own
 `structRef`, not to a declared `type`), so narrowing only the nominal side of the cascade leaves it open:
-`fromA`'s `int` was read as `main.maxon`'s meaning and the result bound a tuple.
+the tuple `fromB` returns was read as `main.maxon`'s meaning of `Pair`, and a caller that folded the name
+would bind an integer to a two-slot destructuring.
+
+⚠ A file-private type may not be named in a signature another file calls (E3167), so the file whose meaning is private reads its own name INSIDE the body and hands the boundary an `ExitCode`. The contested pair is unchanged: one name, two files, two meanings.
 ```maxon
 // --- file: a.maxon
 typealias Pair = int(0 to 5)
 
-export function fromA() returns Pair
-	return 4
+export function fromA() returns ExitCode
+	let n = 4 as Pair
+
+	return n as ExitCode
 end 'fromA'
 
 // --- file: b.maxon
-typealias Coord = int(0 to 100)
-typealias Pair = (Coord, Coord)
+export typealias Pair = (ExitCode, ExitCode)
 
 export function fromB() returns Pair
 	return (7, 9)
@@ -2315,12 +2330,14 @@ still `named` at the crossing erases them too, **even when the reader and the de
 // --- file: a.maxon
 typealias Level = int(0 to 5)
 
-export function fromA() returns Level
-	return 3
+export function fromA() returns ExitCode
+	let n = 3 as Level
+
+	return n as ExitCode
 end 'fromA'
 
 // --- file: b.maxon
-enum Level
+export enum Level
 	low = 1
 	high = 9
 end 'Level'
@@ -2352,12 +2369,14 @@ returns a value that depends on the payload rather than merely compiling.
 // --- file: a.maxon
 typealias Container = int(0 to 5)
 
-export function fromA() returns Container
-	return 2
+export function fromA() returns ExitCode
+	let n = 2 as Container
+
+	return n as ExitCode
 end 'fromA'
 
 // --- file: b.maxon
-union Container
+export union Container
 	empty
 	holds(s String)
 end 'Container'
@@ -2392,12 +2411,14 @@ about a declaration its author never saw.**
 // --- file: a.maxon
 typealias Level = float(0.0 to 5.0)
 
-export function fromA() returns Level
-	return 2.5
-end 'fromA'
+export function scaledA() returns ExitCode
+	let v = 2.5 as Level
+
+	return trunc(v * 2.0) as ExitCode
+end 'scaledA'
 
 // --- file: b.maxon
-enum Level
+export enum Level
 	low = 1
 	high = 9
 end 'Level'
@@ -2411,12 +2432,8 @@ export function rankOf(l Level) returns ExitCode
 end 'rankOf'
 
 // --- file: main.maxon
-typealias Whole = int(0 to 100)
-
 function main() returns ExitCode
-	let scaled = trunc(fromA() * 2.0) as Whole
-
-	return (scaled as ExitCode) + rankOf(fromB())
+	return scaledA() + rankOf(fromB())
 end 'main'
 ```
 ```exitcode
@@ -2435,12 +2452,16 @@ typealias Token = int(0 to 5)
 
 export typealias Cb = function() returns Token
 
-export function three() returns Token
+function three() returns Token
 	return 3
 end 'three'
 
+export function goA() returns ExitCode
+	return callIt(three)
+end 'goA'
+
 // --- file: b.maxon
-typealias Slot = int(0 to 100)
+export typealias Slot = int(0 to 100)
 
 export type Token
 	export var value as Slot
@@ -2463,7 +2484,7 @@ end 'callIt'
 function main() returns ExitCode
 	let boxed = fromB()
 
-	return callIt(three) + (boxed.value as ExitCode)
+	return goA() + (boxed.value as ExitCode)
 end 'main'
 ```
 ```exitcode
@@ -2546,10 +2567,15 @@ inside one function body.
 // --- file: a.maxon
 typealias Container = int(0 to 5)
 
-export function useA(c Container) returns ExitCode
+function useA(c Container) returns ExitCode
 	c = 4
+
 	return c
 end 'useA'
+
+export function goA() returns ExitCode
+	return useA(1)
+end 'goA'
 
 // --- file: b.maxon
 union Container
@@ -2568,7 +2594,7 @@ end 'fromB'
 
 // --- file: main.maxon
 function main() returns ExitCode
-	return useA(2) + fromB()
+	return goA() + fromB()
 end 'main'
 ```
 ```exitcode
@@ -2583,10 +2609,15 @@ classifier through different arms of it and only one of them was measured the fi
 // --- file: a.maxon
 typealias Widget = int(0 to 5)
 
-export function useA(c Widget) returns ExitCode
+function useA(c Widget) returns ExitCode
 	c = 4
+
 	return c
 end 'useA'
+
+export function goA() returns ExitCode
+	return useA(2)
+end 'goA'
 
 // --- file: b.maxon
 typealias Slot = int(0 to 100)
@@ -2594,18 +2625,18 @@ typealias Slot = int(0 to 100)
 type Widget
 	export var value as Slot
 
-	export static function create(value Slot) returns Widget
+	static function create(value Slot) returns Widget
 		return Self{value: value}
 	end 'create'
 end 'Widget'
 
 export function fromB() returns ExitCode
-	return Widget.create(3).value
+	return Widget.create(3).value as ExitCode
 end 'fromB'
 
 // --- file: main.maxon
 function main() returns ExitCode
-	return useA(2) + fromB()
+	return goA() + fromB()
 end 'main'
 ```
 ```exitcode
@@ -2656,16 +2687,19 @@ error E3092: <fragment>:11:14: exported type 'Container' is never referenced out
 
 <!-- test: error.crossfile-a-service-throws-a-contested-name -->
 <!-- unsupported-targets: wasm32-wasi -->
-A `throws` clause is a MEANING question, so it is answered for the file that WROTE it. `b.maxon` declares
-its own ranged `Fault` and its service message declares `throws Fault`; `a.maxon`'s `enum Fault` is a
-different declaration that `b.maxon` cannot name. The clause therefore names no error type and the program
-is refused — even though an `enum Fault` does exist somewhere in it.
+⭐ **A SERVICE MESSAGE IS A SIGNATURE, AND IT ANSWERS AT THE SAME DOOR.** `divide` is on `Calc`'s message
+surface, so whoever spawns a `Calc` has to be able to name what the message takes, returns and throws —
+and `b.maxon` writes all three over declarations of its own that no other file can see. Four positions,
+four diagnostics, in signature order: the two parameters, the return type, then the throws clause.
 
-This case is load-bearing beyond its own message. `ServiceCompanions.mintServiceReplyErrorType` decides
-whether to mint a fused reply-error enum by asking the same reader; the bare whole-program door would
-answer "enum" here and mint one. That mint is harmless ONLY while this refusal holds, so if E3113 ever
-stops covering this shape, this case goes red and names the gate that would then be minting a companion
-for a live program.
+⛔ **THE E3113 ROAD THIS CASE USED TO PIN IS NO LONGER REACHABLE FROM A LEGAL PROGRAM.** The same program
+asked a sharper question — `b.maxon`'s ranged `Fault` names no enum or union, while `a.maxon`'s `enum
+Fault` is a declaration `b.maxon` cannot name, so the clause was refused E3113 even though an `enum Fault`
+exists in the program. E3167 now stands in front of that refusal, and the shape cannot be rebuilt: an
+EXPORTED `typealias Fault` beside an `enum Fault` anywhere in the program is a duplicate definition
+(E3006, measured, in one directory and in two), so the throws clause cannot name a visible ranged `Fault`
+while the enum exists. `ServiceCompanions.mintServiceReplyErrorType` asks the same reader and is harmless
+only while a refusal holds here; the refusal is now E3167's.
 ```maxon
 // --- file: a.maxon
 export enum Fault implements Error
@@ -2698,7 +2732,10 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3113: <fragment>:19:18: 'throws Fault' names no declared enum or union. A caught error is decoded off the DECLARED clause, so the clause has to name the type whose cases it decodes into
+error E3167: <fragment>:19:18: exported function 'Calc.divide' names file-private typealias 'Integer' in the type of parameter 'n'
+error E3167: <fragment>:19:18: exported function 'Calc.divide' names file-private typealias 'Integer' in the type of parameter 'by'
+error E3167: <fragment>:19:18: exported function 'Calc.divide' names file-private typealias 'Integer' in its return type
+error E3167: <fragment>:19:18: exported function 'Calc.divide' names file-private typealias 'Fault' in its throws clause
 ```
 
 <!-- test: error.extension-alias-pair-compiling-to-one-name -->
@@ -2769,7 +2806,7 @@ end 'Duo'
 extension Duo
 	typealias Both = Pair with (K, V)
 
-	export function packedSecond() returns Num
+	function packedSecond() returns Num
 		let p = Both.make(first(), y: second())
 		return p.y.only
 	end 'packedSecond'

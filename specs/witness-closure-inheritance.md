@@ -50,20 +50,20 @@ end 'Digest'
 
 type Point implements Digest
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x * 31
 	end 'digest'
 end 'Point'
 
 type Box uses T where T is Digest
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function itemDigest() returns Code
+	function itemDigest() returns Code
 		let f = function(v T) gives v.digest()
 		return f(self.item)
 	end 'itemDigest'
@@ -98,23 +98,23 @@ end 'Digest'
 
 type Point implements Digest
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x * 31
 	end 'digest'
 end 'Point'
 
 type Box uses T
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
 end 'Box'
 
 extension Box where T is Digest
-	export function itemDigest() returns Code
+	function itemDigest() returns Code
 		let f = function(v T) gives v.digest()
 		return f(self.item)
 	end 'itemDigest'
@@ -153,26 +153,26 @@ end 'Peek'
 
 type Point implements Digest
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x * 31
 	end 'digest'
 end 'Point'
 
 type Box uses T implements Peek where T is Digest
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function base() returns Code
+	function base() returns Code
 		return 1
 	end 'base'
 end 'Box'
 
 extension Peek
-	export function viaClosure() returns Code
+	function viaClosure() returns Code
 		let f = function(v T) gives v.digest()
 		return f(self.item) + self.base()
 	end 'viaClosure'
@@ -206,30 +206,30 @@ end 'Digest'
 
 type Times31 implements Digest
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x * 31
 	end 'digest'
 end 'Times31'
 
 type Times2 implements Digest
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x * 2
 	end 'digest'
 end 'Times2'
 
 type Box uses T where T is Digest
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function itemDigest() returns Code
+	function itemDigest() returns Code
 		let f = function(v T) gives v.digest()
 		return f(self.item)
 	end 'itemDigest'
@@ -265,24 +265,24 @@ end 'Digest'
 
 type Point implements Digest
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x * 31
 	end 'digest'
 end 'Point'
 
 type Box uses T where T is Digest
-	typealias TFn = function(T) returns Code
+	export typealias TFn = function(T) returns Code
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export static function applyStatic(f TFn, z T) returns Code
+	static function applyStatic(f TFn, z T) returns Code
 		return f(z)
 	end 'applyStatic'
-	export function itemDigest() returns Code
+	function itemDigest() returns Code
 		let outer = function(v T) gives Self.applyStatic(function(w T) gives w.digest(), z: v)
 		return outer(self.item)
 	end 'itemDigest'
@@ -317,20 +317,20 @@ end 'Digest'
 type Tag implements Digest
 	export var name as String
 	export var code as Code
-	export static function create(name String, code Code) returns Self
+	static function create(name String, code Code) returns Self
 		return Self{ name: name, code: code }
 	end 'create'
-	export function digest() returns Code
+	function digest() returns Code
 		return self.code * 31
 	end 'digest'
 end 'Tag'
 
 type Box uses T where T is Digest
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function itemDigest() returns Code
+	function itemDigest() returns Code
 		let f = function(v T) gives v.digest()
 		return f(self.item)
 	end 'itemDigest'
@@ -369,23 +369,23 @@ end 'Tagged'
 
 type Point implements Digest, Tagged
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x * 31
 	end 'digest'
-	export function tag() returns Code
+	function tag() returns Code
 		return self.x + 7
 	end 'tag'
 end 'Point'
 
 type Box uses T where T is Digest and Tagged
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function both() returns Code
+	function both() returns Code
 		let f = function(v T) gives v.tag() * 1000 + v.digest()
 		return f(self.item)
 	end 'both'
@@ -423,23 +423,23 @@ end 'Tagged'
 
 type Point implements Digest, Tagged
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x * 31
 	end 'digest'
-	export function tag() returns Code
+	function tag() returns Code
 		return self.x + 7
 	end 'tag'
 end 'Point'
 
 type Box uses T where T is Digest and Tagged
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function both(bias Code) returns Code
+	function both(bias Code) returns Code
 		let f = function(v T) gives v.tag() * 1000 + v.digest() + bias
 		return f(self.item)
 	end 'both'
@@ -472,10 +472,10 @@ end 'Digest'
 
 type Point implements Digest
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x * 31
 	end 'digest'
 end 'Point'
@@ -483,10 +483,10 @@ end 'Point'
 type Pair uses T where T is Digest
 	export var a as T
 	export var b as T
-	export static function create(a T, b T) returns Self
+	static function create(a T, b T) returns Self
 		return Self{ a: a, b: b }
 	end 'create'
-	export function sum() returns Code
+	function sum() returns Code
 		let f = function(p T, q T) gives p.digest() + q.digest()
 		return f(self.a, self.b)
 	end 'sum'
@@ -520,17 +520,17 @@ end 'Digest'
 
 type Point implements Digest
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x * 31
 	end 'digest'
 end 'Point'
 
 type Box uses T where T is Digest
 	export var item as T
-	export static function digestOf(v T) returns Code
+	static function digestOf(v T) returns Code
 		let f = function(w T) gives w.digest()
 		return f(v)
 	end 'digestOf'

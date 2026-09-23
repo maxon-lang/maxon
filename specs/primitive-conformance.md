@@ -58,10 +58,10 @@ typealias Integer = int(0 to u32.max)
 
 type Box uses T where T is Hashable
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function itemHash() returns HashValue
+	function itemHash() returns HashValue
 		return self.item.hash()
 	end 'itemHash'
 end 'Box'
@@ -88,10 +88,10 @@ typealias Wide = int(i64.min to i64.max)
 
 type Box uses T where T is Hashable
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function itemHash() returns HashValue
+	function itemHash() returns HashValue
 		return self.item.hash()
 	end 'itemHash'
 end 'Box'
@@ -125,10 +125,10 @@ typealias Integer = int(0 to u32.max)
 
 type Box uses T where T is Equatable
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function sameAs(other T) returns bool
+	function sameAs(other T) returns bool
 		return self.item.equals(other)
 	end 'sameAs'
 end 'Box'
@@ -158,13 +158,13 @@ typealias Integer = int(0 to u32.max)
 
 type Key uses T where T is Hashable and Equatable
 	export var value as T
-	export static function create(value T) returns Self
+	static function create(value T) returns Self
 		return Self{ value: value }
 	end 'create'
-	export function digest() returns HashValue
+	function digest() returns HashValue
 		return self.value.hash()
 	end 'digest'
-	export function matches(other T) returns bool
+	function matches(other T) returns bool
 		return self.value.equals(other)
 	end 'matches'
 end 'Key'
@@ -200,7 +200,7 @@ type Box uses T where T is Equatable
 		return Self{item: item}
 	end 'create'
 
-	export function eq(other T) returns bool
+	function eq(other T) returns bool
 		return item == other
 	end 'eq'
 end 'Box'
@@ -228,7 +228,7 @@ answer for a struct type argument. Target-independent: a compile error, no witne
 type Box uses T
 	var item as T
 
-	export function eq(other T) returns bool
+	function eq(other T) returns bool
 		return item == other
 	end 'eq'
 end 'Box'
@@ -251,20 +251,20 @@ typealias Coord = int(0 to 1000)
 
 type Point implements Equatable
 	export var x as Coord
-	export static function create(x Coord) returns Self
+	static function create(x Coord) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function equals(other Point) returns bool
+	function equals(other Point) returns bool
 		return self.x == other.x
 	end 'equals'
 end 'Point'
 
 type Box uses T where T is Equatable
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function matchesLiteral() returns bool
+	function matchesLiteral() returns bool
 		return self.item == 42
 	end 'matchesLiteral'
 end 'Box'
@@ -288,20 +288,20 @@ typealias Coord = int(0 to 1000)
 
 type Point implements Equatable
 	export var x as Coord
-	export static function create(x Coord) returns Self
+	static function create(x Coord) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function equals(other Point) returns bool
+	function equals(other Point) returns bool
 		return self.x == other.x
 	end 'equals'
 end 'Point'
 
 type Box uses T where T is Equatable
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function matchesLiteral() returns bool
+	function matchesLiteral() returns bool
 		return self.item.equals(42)
 	end 'matchesLiteral'
 end 'Box'
@@ -327,10 +327,10 @@ typealias Integer = int(0 to u32.max)
 
 type Point implements Equatable
 	export var x as Coord
-	export static function create(x Coord) returns Self
+	static function create(x Coord) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function equals(other Point) returns bool
+	function equals(other Point) returns bool
 		return self.x == other.x
 	end 'equals'
 end 'Point'
@@ -338,10 +338,10 @@ end 'Point'
 type Mix uses A, B where A is Equatable, B is Equatable
 	export var a as A
 	export var b as B
-	export static function create(a A, b B) returns Self
+	static function create(a A, b B) returns Self
 		return Self{ a: a, b: b }
 	end 'create'
-	export function cross() returns bool
+	function cross() returns bool
 		return self.a == self.b
 	end 'cross'
 end 'Mix'
@@ -370,10 +370,10 @@ end 'Weird'
 
 type Thing implements Weird
 	export var v as Integer
-	export static function create(v Integer) returns Self
+	static function create(v Integer) returns Self
 		return Self{ v: v }
 	end 'create'
-	export function equals(other Thing) returns Integer
+	function equals(other Thing) returns Integer
 		return 7
 	end 'equals'
 end 'Thing'
@@ -381,10 +381,10 @@ end 'Thing'
 type Pair uses T where T is Weird
 	export var a as T
 	export var b as T
-	export static function create(a T, b T) returns Self
+	static function create(a T, b T) returns Self
 		return Self{ a: a, b: b }
 	end 'create'
-	export function eq() returns bool
+	function eq() returns bool
 		return self.a == self.b
 	end 'eq'
 end 'Pair'

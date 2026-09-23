@@ -14,18 +14,18 @@ type UpCursor implements Cursor with Integer
 	var pos as Integer
 	let limit as Integer
 
-	export static function create(limit Integer) returns Self throws IterationError
+	static function create(limit Integer) returns Self throws IterationError
 		if limit < 1 'empty'
 			throw IterationError.exhausted
 		end 'empty'
 		return Self{pos: 1, limit: limit}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return self.pos
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.pos >= self.limit 'atTheLast'
 			throw IterationError.exhausted
 		end 'atTheLast'
@@ -36,18 +36,18 @@ end 'UpCursor'
 type DownCursor implements Cursor with Integer
 	var pos as Integer
 
-	export static function create(start Integer) returns Self throws IterationError
+	static function create(start Integer) returns Self throws IterationError
 		if start < 1 'empty'
 			throw IterationError.exhausted
 		end 'empty'
 		return Self{pos: start}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return self.pos * 100
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.pos <= 1 'atTheLast'
 			throw IterationError.exhausted
 		end 'atTheLast'
@@ -58,11 +58,11 @@ end 'DownCursor'
 type UpBag implements Bag with (Integer, UpCursor)
 	let limit as Integer
 
-	export static function create(limit Integer) returns Self
+	static function create(limit Integer) returns Self
 		return Self{limit: limit}
 	end 'create'
 
-	export function createIterator() returns UpCursor throws IterationError
+	function createIterator() returns UpCursor throws IterationError
 		return try UpCursor.create(self.limit)
 	end 'createIterator'
 end 'UpBag'
@@ -70,11 +70,11 @@ end 'UpBag'
 type DownBag implements Bag with (Integer, DownCursor)
 	let start as Integer
 
-	export static function create(start Integer) returns Self
+	static function create(start Integer) returns Self
 		return Self{start: start}
 	end 'create'
 
-	export function createIterator() returns DownCursor throws IterationError
+	function createIterator() returns DownCursor throws IterationError
 		return try DownCursor.create(self.start)
 	end 'createIterator'
 end 'DownBag'
@@ -327,9 +327,9 @@ func @total {
     x64.pushReg r13
     x64.prologue 40
     x64.movRegImm32 rbx, 0
-    x64.loadRegBaseDisp.word64 rax, [rdx + 56]
+    x64.loadRegBaseDisp.word64 rax, [rdx + 64]
     x64.leaRegRegReg r12, rdx, rax
-    x64.callMem [rdx + 40]
+    x64.callMem [rdx + 48]
     x64.movRegReg r13, r8
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r10, 0
@@ -337,11 +337,11 @@ func @total {
     x64.jmp forempty
   walk:
     x64.movRegReg rcx, r13
-    x64.callMem [r12 + 40]
+    x64.callMem [r12 + 48]
     x64.leaRegRegReg rbx, rbx, r8
   forstep:
     x64.movRegReg rcx, r13
-    x64.callMem [r12 + 48]
+    x64.callMem [r12 + 56]
     x64.movRegReg rax, r10
   forhdr:
     x64.cmpRegImm32 rax, 0

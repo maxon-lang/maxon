@@ -8,11 +8,11 @@ end 'Printer'
 type Thing implements Printer
 	let label as Tag
 
-	export static function create(label Tag) returns Self
+	static function create(label Tag) returns Self
 		return Self{label: label}
 	end 'create'
 
-	export function show()
+	function show()
 		print("never shown\n")
 	end 'show'
 end 'Thing'
@@ -34,9 +34,6 @@ ExitCode: 3
 ---
 data {
   __data_boxes@0 = i64 0
-  __slab_arena_list@8 = i64 0
-  __slab_arena_map_l1@16 = i64 0
-  __slab_state@24 = i64 0
 }
 
 func @Thing.show {
@@ -57,20 +54,12 @@ func @box {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
     x64.leaRegGlobal rax, __data_boxes
     x64.aluBaseDispImm32.add [rax + 0], 1
-    x64.movRegImm32 rbx, 7
   __rc_ok:
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.movRegImm32 r8, 7
   __il_cont:
     x64.leaRegRdata r10, [rip + __witness_Thing.Printer]
-    x64.epilogue 40
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }
@@ -97,7 +86,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at witness-impl-reaching-stdlib-through-a-returned-existential.test:30: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at witness-impl-reaching-stdlib-through-a-returned-existential.test:30: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

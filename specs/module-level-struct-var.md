@@ -113,7 +113,7 @@ typealias NameArray = Array with String
 type Facts
 	export var counts as CountArray = CountArray.create()
 	export var names as NameArray = NameArray.create()
-	export static function create() returns Facts
+	static function create() returns Facts
 		return Self{}
 	end 'create'
 end 'Facts'
@@ -150,10 +150,10 @@ typealias Tag = int(0 to 1000)
 
 type Inner
 	export var n as Tag = 5
-	export static function create() returns Inner
+	static function create() returns Inner
 		return Self{}
 	end 'create'
-	export function value() returns Tag
+	function value() returns Tag
 		return self.n
 	end 'value'
 end 'Inner'
@@ -161,10 +161,10 @@ end 'Inner'
 type Outer
 	export var inner as Inner = Inner.create()
 	export var extra as Tag = 100
-	export static function create() returns Outer
+	static function create() returns Outer
 		return Self{}
 	end 'create'
-	export function value() returns Tag
+	function value() returns Tag
 		return (self.inner.value() + self.extra) as Tag
 	end 'value'
 end 'Outer'
@@ -203,7 +203,7 @@ typealias CountArray = Array with Count
 type Facts
 	export var counts as CountArray = CountArray.create()
 
-	export static function create() returns Facts
+	static function create() returns Facts
 		return Self{}
 	end 'create'
 end 'Facts'

@@ -104,11 +104,11 @@ typealias Count = int(0 to 100)
 type Box
 	export let n as Count
 
-	export static function make(n Count) returns Box
+	static function make(n Count) returns Box
 		return Box{n: n}
 	end 'make'
 
-	export function equals(other Box) returns bool
+	function equals(other Box) returns bool
 		return n == other.n
 	end 'equals'
 end 'Box'
@@ -141,7 +141,7 @@ typealias Count = int(0 to 100)
 type Box
 	export let n as Count
 
-	export static function make(n Count) returns Box
+	static function make(n Count) returns Box
 		return Box{n: n}
 	end 'make'
 end 'Box'
@@ -166,11 +166,11 @@ typealias Count = int(0 to 100)
 type Box
 	export let n as Count
 
-	export static function make(n Count) returns Box
+	static function make(n Count) returns Box
 		return Box{n: n}
 	end 'make'
 
-	export function equals(other Box) returns bool
+	function equals(other Box) returns bool
 		return n == other.n
 	end 'equals'
 end 'Box'
@@ -195,11 +195,11 @@ typealias Count = int(0 to 100)
 type Box
 	export let n as Count
 
-	export static function make(n Count) returns Box
+	static function make(n Count) returns Box
 		return Box{n: n}
 	end 'make'
 
-	export function equals(other Box) returns String
+	function equals(other Box) returns String
 		return "not-a-bool"
 	end 'equals'
 end 'Box'
@@ -223,11 +223,11 @@ typealias Count = int(0 to 100)
 type Box
 	export let n as Count
 
-	export static function make(n Count) returns Box
+	static function make(n Count) returns Box
 		return Box{n: n}
 	end 'make'
 
-	export function equals(other Box) returns Count
+	function equals(other Box) returns Count
 		return 7
 	end 'equals'
 end 'Box'

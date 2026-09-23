@@ -39,13 +39,13 @@ type Box implements Sized
 		return Self{n: 3}
 	end 'create'
 
-	export function size() returns Count
+	function size() returns Count
 		return self.n
 	end 'size'
 end 'Box'
 
 extension Box
-	export function doubled() returns Count
+	function doubled() returns Count
 		return self.n * 2
 	end 'doubled'
 end 'Box'
@@ -205,7 +205,7 @@ type Box implements Sized
 		return Self{n: 3}
 	end 'create'
 
-	export function size() returns Count
+	function size() returns Count
 		return self.n
 	end 'size'
 end 'Box'
@@ -231,7 +231,7 @@ type Box
 end 'Box'
 
 extension Box
-	export function doubled() returns Count
+	function doubled() returns Count
 		return self.n * 2
 	end 'doubled'
 end 'Bag'

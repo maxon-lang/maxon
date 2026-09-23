@@ -42,7 +42,7 @@ type Blk
 	typealias NumArray = Array with Num
 	export var args as NumArray
 
-	export static function create() returns Blk
+	static function create() returns Blk
 		return Self{args: NumArray.create()}
 	end 'create'
 end 'Blk'
@@ -78,11 +78,11 @@ typealias NumArray = Array with Num
 type Blk
 	export var args as NumArray
 
-	export static function create() returns Blk
+	static function create() returns Blk
 		return Self{args: NumArray.create()}
 	end 'create'
 
-	export function setArgs(x NumArray)
+	function setArgs(x NumArray)
 		self.args = x
 	end 'setArgs'
 end 'Blk'
@@ -121,7 +121,7 @@ typealias NumArray = Array with Num
 type Blk
 	export var args as NumArray
 
-	export static function create() returns Blk
+	static function create() returns Blk
 		return Self{args: NumArray.create()}
 	end 'create'
 end 'Blk'

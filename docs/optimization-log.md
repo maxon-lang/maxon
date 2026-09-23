@@ -1479,3 +1479,65 @@ re-enqueue plus a `shortSleep` per refused dequeue, which is the documented cost
 and to hold them still, and `__ds_base`, which it reads at a stop for the DebugStream trace mark. The first
 four were previously laid out only under `usesGt` and the fifth only under `--debugstream`, so the
 `data {` block of every golden in the corpus moves by one label; the drift is that and nothing else.
+### Result — 2026-09-22, E3167's signature walk resolves a name by map rather than by scan
+
+`checkSignatureVisibility` resolves every named type in every audited signature through
+`ProgramSignatures.declaredTypeNameIn`, whose generic-alias and interface arms each SCANNED an
+append-only array — `genericAliasDecls` (1,035 entries in this tree) and `interfaceDeclSites` — so the
+new pass was O(signature positions × declarations), with the interface arm on the fallthrough that
+every name not held by another kind reaches. Both are now keyed by name through an index built
+LAZILY at the first lookup and extended from a watermark, which is what keeps the cost off the front
+end: built eagerly beside the two pushes, the populated maps travel with every worker's copy of
+`ProgramSignatures` and cost +3,144 (rung 0) to +10,071 (rung 5) allocations in `frontEndPool` —
+about twelve copies of their entries — which ate most of the win. Built lazily, the workers copy two
+empty maps (+~180 allocations, flat across the ladder) and the whole-module pass builds the index once.
+
+Two per-signature strings were also computed on the path where nothing is reported: the function's
+diagnostic spelling (`String.from(diagnosticCalleeSpelling(…))`, once per audited function) and the
+position phrase (`"in the type of parameter '…'"`, once per parameter). Both are now unions the walk
+carries and the message renders — `SignatureSpelling` and `SignaturePosition` — so a compile with no
+E3167 builds neither.
+
+**Ladder before/after on one host, same corpus, sequential (not an interleaved two-compiler A/B — the
+subject is an uncommitted change, so there is no control binary), `phase:checkSignatureVisibility`:**
+
+| rung | allocs before | allocs after | bytes before | bytes after | CPU before | CPU after |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | 43,371 | 37,683 | 3,406,567 | 2,838,604 | 22,244,731 | 18,291,117 |
+| 1 | 46,050 | 40,111 | 3,608,070 | 3,015,074 | 23,669,957 | 20,356,660 |
+| 2 | 51,408 | 44,967 | 4,011,588 | 3,368,294 | 26,514,668 | 21,363,417 |
+| 3 | 62,125 | 54,688 | 4,832,840 | 4,091,870 | 30,916,436 | 27,740,074 |
+| 4 | 83,558 | 74,113 | 6,466,556 | 5,524,056 | 42,785,888 | 36,213,880 |
+| 5 | 126,424 | 112,971 | 9,756,812 | 8,415,872 | 66,847,818 | 53,619,535 |
+
+The per-rung DELTA doubles on both curves (after: 2,428 / 4,856 / 9,721 / 19,425 / 38,858), so the
+phase was linear before and is linear after — what moved is its constant, by −11% in allocations,
+−14% in bytes and −20% in CPU at rung 5. Whole-compile allocations −5,497 (rung 0) to −13,271
+(rung 5); `phase:signatures` is unchanged to the allocation, and `codeBytes` is identical at every
+rung. The ladder's scan lengths are the stdlib's, not the corpus's — 8 interfaces and 19 generic
+aliases at rung 0 against this tree's 19 and 1,035 — so it understates what the scans cost a
+compiler-sized program.
+
+⚠ **The corpus generator itself was refused by E3167** and is fixed in the same change:
+`ScaleCorpus.maxon` declared `ScaleInt` file-private in every generated file while the driver
+functions naming it are `public`, and three generated helper types kept an `export` on a `create`
+returning their own file-private `Self`. 156 E3167 errors at rung 0, the run exiting 1 before any
+reading. `ScaleIntAliasDecl` is now `public`; the three members are file-private, which is what the
+types they return already were.
+
+**Filed, not fixed — two contest-only scans of the same shape.**
+`ProgramSignatures.scopedGenericAliasDecl` ranks every declaration filed under a name and
+`scopedTupleClaimant` ranks a name's claimant map, both per LOOKUP, and both sit behind a contest
+probe that misses in every program in the corpus and in the compiler's own sources
+(`settleGenericAliasContest`'s fixpoint does not run at all there). Measured: zero on every rung.
+The trigger that would make them bend is a program where a generic-alias or tuple-alias name is
+declared by two files that disagree AND is referenced across the program — then each reference pays
+the declaration count. Curing them means settling the winner per (name, reading file) at
+`recordGenericAliasContest` instead of ranking per read, which is the contested-name machinery this
+tree has had subtle wrong answers in before; it was left for a change that can gate it on the
+contested cases directly.
+
+⛔ **The scale corpus's TEXT moved in this commit, so a row logged before it is not a control for a row
+logged after it.** `ScaleCorpus.maxon` now emits `public` on `ScaleInt` and drops `export` from three
+generated members, which changes the bytes every rung compiles. Compare against a row minted from this
+commit or later, or re-mint the baseline.

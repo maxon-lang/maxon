@@ -69,7 +69,7 @@ esac
   if [ "$MODE" = "control" ]; then
     echo -e "\texport var tag as String"
   fi
-  echo -e "\texport static function create() returns Self"
+  echo -e "\tstatic function create() returns Self"
   printf '\t\treturn Self{'
   f=0
   while [ "$f" -lt "$FIELDS" ]; do
@@ -90,7 +90,7 @@ esac
   # exact position `coOwnBorrowedForConsume` gates.
   echo "type Cell"
   echo -e "\texport var n as Node"
-  echo -e "\texport static function create(n Node) returns Self"
+  echo -e "\tstatic function create(n Node) returns Self"
   echo -e "\t\treturn Self{n: n}"
   echo -e "\tend 'create'"
   echo "end 'Cell'"

@@ -63,7 +63,7 @@ illegal program has one diagnostic.
 <!-- test: public-function-is-visible-across-files -->
 ```maxon
 // --- file: api/lib.maxon
-typealias Integer = int(i64.min to i64.max)
+public typealias Integer = int(i64.min to i64.max)
 
 public function answer() returns Integer
 	return 42
@@ -81,7 +81,7 @@ end 'main'
 <!-- test: public-type-is-visible-across-files -->
 ```maxon
 // --- file: api/shapes.maxon
-typealias Integer = int(i64.min to i64.max)
+public typealias Integer = int(i64.min to i64.max)
 
 public type Point
 	public var x as Integer
@@ -169,7 +169,7 @@ end 'main'
 E3092. If `public` were merely a spelling of `export`, this pair could not both hold.
 ```maxon
 // --- file: api/lib.maxon
-typealias Integer = int(i64.min to i64.max)
+public typealias Integer = int(i64.min to i64.max)
 
 public function neverCalledFromOutside() returns Integer
 	return 5
@@ -191,7 +191,7 @@ end 'main'
 <!-- test: error.the-same-declaration-as-export-is-audited -->
 ```maxon
 // --- file: api/lib.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export function neverCalledFromOutside() returns Integer
 	return 5

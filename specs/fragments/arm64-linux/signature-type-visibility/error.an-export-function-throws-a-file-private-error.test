@@ -1,0 +1,23 @@
+// Test: error.an-export-function-throws-a-file-private-error
+// --- file: api/lib.maxon
+enum LibError implements Error
+	tooBig
+end 'LibError'
+
+export function f(flag bool) returns ExitCode throws LibError
+	if flag 'guard'
+		throw LibError.tooBig
+	end 'guard'
+
+	return 7
+end 'f'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let n = try f(false) otherwise 0
+	print("{n}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3167: api/<fragment>:7:17: exported function 'api.f' names file-private enum 'LibError' in its throws clause

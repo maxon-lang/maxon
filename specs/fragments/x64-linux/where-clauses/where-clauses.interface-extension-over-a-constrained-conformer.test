@@ -3,22 +3,22 @@ typealias Integer = int(i64.min to i64.max)
 typealias Step = int(0 to u64.max)
 
 type Ticks uses T where T is Hashable and Equatable
-	typealias Items = Array with T
+	export typealias Items = Array with T
 	var items as Items
 	var at = 0
 
-	export static function create(items Items) returns Self throws IterationError
+	static function create(items Items) returns Self throws IterationError
 		if items.count() == 0 'empty'
 			throw IterationError.exhausted
 		end 'empty'
 		return Self{items: items}
 	end 'create'
 
-	export function current() returns T
+	function current() returns T
 		return try items.get(at) otherwise panic("Ticks.current: the positioning invariant holds")
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		at = at + 1
 		if at >= items.count() 'done'
 			throw IterationError.exhausted
@@ -27,7 +27,7 @@ type Ticks uses T where T is Hashable and Equatable
 end 'Ticks'
 
 extension Ticks
-	export function skip(n Step) throws IterationError
+	function skip(n Step) throws IterationError
 		var i = 0
 		while i < n 'loop'
 			try self.advance()

@@ -644,15 +644,15 @@ type Point implements Hashable, Equatable
 	export var x as Val
 	export var y as Val
 
-	export static function create(x Val, y Val) returns Self
+	static function create(x Val, y Val) returns Self
 		return Self{x: x, y: y}
 	end 'create'
 
-	export function hash() returns HashValue
+	function hash() returns HashValue
 		return x * 31 + y
 	end 'hash'
 
-	export function equals(other Self) returns bool
+	function equals(other Self) returns bool
 		return x == other.x and y == other.y
 	end 'equals'
 end 'Point'
@@ -698,15 +698,15 @@ type Point implements Hashable, Equatable
 	export var x as Val
 	export var y as Val
 
-	export static function create(x Val, y Val) returns Self
+	static function create(x Val, y Val) returns Self
 		return Self{x: x, y: y}
 	end 'create'
 
-	export function hash() returns HashValue
+	function hash() returns HashValue
 		return x * 31 + y
 	end 'hash'
 
-	export function equals(other Self) returns bool
+	function equals(other Self) returns bool
 		return x == other.x and y == other.y
 	end 'equals'
 end 'Point'
@@ -758,15 +758,15 @@ type Point implements Hashable, Equatable
 	export var x as Val
 	export var y as Val
 
-	export static function create(x Val, y Val) returns Self
+	static function create(x Val, y Val) returns Self
 		return Self{x: x, y: y}
 	end 'create'
 
-	export function hash() returns HashValue
+	function hash() returns HashValue
 		return x * 31 + y
 	end 'hash'
 
-	export function equals(other Self) returns bool
+	function equals(other Self) returns bool
 		return x == other.x and y == other.y
 	end 'equals'
 end 'Point'
@@ -856,11 +856,11 @@ type Tagged
 	var label as String
 	var n as Count
 
-	export static function create(label String, n Count) returns Self
+	static function create(label String, n Count) returns Self
 		return Self{label: label, n: n}
 	end 'create'
 
-	export function score() returns Count
+	function score() returns Count
 		return n + (label.byteLength() as Count)
 	end 'score'
 end 'Tagged'
@@ -923,15 +923,15 @@ type Point implements Hashable, Equatable
 	export var x as Val
 	export var y as Val
 
-	export static function create(x Val, y Val) returns Self
+	static function create(x Val, y Val) returns Self
 		return Self{x: x, y: y}
 	end 'create'
 
-	export function hash() returns HashValue
+	function hash() returns HashValue
 		return x * 31 + y
 	end 'hash'
 
-	export function equals(other Self) returns bool
+	function equals(other Self) returns bool
 		return x == other.x and y == other.y
 	end 'equals'
 end 'Point'
@@ -973,15 +973,15 @@ type Point implements Hashable, Equatable
 	export var x as Val
 	export var y as Val
 
-	export static function create(x Val, y Val) returns Self
+	static function create(x Val, y Val) returns Self
 		return Self{x: x, y: y}
 	end 'create'
 
-	export function hash() returns HashValue
+	function hash() returns HashValue
 		return x * 31 + y
 	end 'hash'
 
-	export function equals(other Self) returns bool
+	function equals(other Self) returns bool
 		return x == other.x and y == other.y
 	end 'equals'
 end 'Point'
@@ -1032,11 +1032,11 @@ type Pair
 	export var a as Val
 	export var b as Val
 
-	export static function create(a Val, b Val) returns Self
+	static function create(a Val, b Val) returns Self
 		return Self{a: a, b: b}
 	end 'create'
 
-	export function sum() returns Val
+	function sum() returns Val
 		return a + b
 	end 'sum'
 end 'Pair'
@@ -1111,7 +1111,7 @@ typealias Val = int(i64.min to i64.max)
 type Opaque
 	export var x as Val
 
-	export static function create(x Val) returns Self
+	static function create(x Val) returns Self
 		return Self{x: x}
 	end 'create'
 end 'Opaque'
@@ -1327,7 +1327,7 @@ type Info
 	export var help as String
 	export var n as Integer
 
-	export static function create(help String, n Integer) returns Info
+	static function create(help String, n Integer) returns Info
 		return Self{help: help, n: n}
 	end 'create'
 end 'Info'

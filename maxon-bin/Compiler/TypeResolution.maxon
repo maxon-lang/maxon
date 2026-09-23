@@ -351,11 +351,6 @@ module function resolveTypes(project Project, module MaxonModule)
 	// reference, and the memoized query is a map probe that has no business being on that path.
 	let signatures = try queryProgramSignatures(project) otherwise panic("resolveTypes: queryProgramSignatures failed — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
 
-	// FIRST in the first pass — before a single name is erased. Two of them name a TYPEALIAS, and
-	// `resolveTypes` is what turns `Score` into `int`, so a drain that ran after it would have nothing
-	// left to name.
-	reportDeferredNameDiagnostics(project, signatures: signatures)
-
 	// Index-based so each function is a mutable binding (a `for x in ...` loop
 	// var is immutable; field assignment through it is rejected).
 	for i in 0 upto module.functions.count() 'eachFunc'
@@ -399,7 +394,7 @@ end 'resolveTypes'
 // ⚠ It runs in a pass, and the pipeline's gate fires only BETWEEN passes, so both lists are drained
 // before anything stops the build — which is the second half of the same requirement: two diagnostics
 // in one program, in one order.
-function reportDeferredNameDiagnostics(project Project, signatures ProgramSignatures)
+module function reportDeferredNameDiagnostics(project Project, signatures ProgramSignatures)
 	// ⚠ Captured BEFORE the loop, because the loop APPENDS to the very array `declarationAlreadyReported`
 	// scans: without the bound, each E3062 emitted here would be a row every later candidate compares
 	// against — turning k unused aliases into O(k²) comparisons, and (worse) letting one unused alias

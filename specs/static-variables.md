@@ -331,7 +331,7 @@ end 'Widget'
 extension Tagged
 	static let LIMIT = 4
 
-	export function tag() returns Integer
+	function tag() returns Integer
 		return 1
 	end 'tag'
 end 'Tagged'
@@ -384,7 +384,7 @@ type Pair
 
 	static var origin = Pair{a: 1, b: 2, c: 3}
 
-	export static function get() returns Pair
+	static function get() returns Pair
 		return Pair.origin
 	end 'get'
 end 'Pair'
@@ -409,7 +409,7 @@ type Pair
 
 	static var origin = Pair{a: 1}
 
-	export static function get() returns Pair
+	static function get() returns Pair
 		return Pair.origin
 	end 'get'
 end 'Pair'
@@ -442,7 +442,7 @@ type Pair
 
 	static var origin = Pair{a: "hi", b: 2}
 
-	export static function get() returns Pair
+	static function get() returns Pair
 		return Pair.origin
 	end 'get'
 end 'Pair'
@@ -466,7 +466,7 @@ type Pair
 
 	static var origin = Pair{a: 500}
 
-	export static function get() returns Pair
+	static function get() returns Pair
 		return Pair.origin
 	end 'get'
 end 'Pair'
@@ -507,7 +507,7 @@ type Paint
 
 	static var one = Paint{c: 7, n: 1}
 
-	export static function get() returns Paint
+	static function get() returns Paint
 		return Paint.one
 	end 'get'
 end 'Paint'
@@ -538,11 +538,11 @@ end 'Sized'
 type Square implements Sized
 	export let side as Integer
 
-	export static function create(side Integer) returns Self
+	static function create(side Integer) returns Self
 		return Self{side: side}
 	end 'create'
 
-	export function size() returns Integer
+	function size() returns Integer
 		return self.side * self.side
 	end 'size'
 end 'Square'
@@ -553,7 +553,7 @@ type Holder
 
 	static var one = Holder{s: Square.create(4), tag: 77}
 
-	export static function get() returns Holder
+	static function get() returns Holder
 		return Holder.one
 	end 'get'
 end 'Holder'
@@ -578,7 +578,7 @@ type Holder
 
 	static var one = Holder{key: "ab1cd"}
 
-	export static function get() returns Holder
+	static function get() returns Holder
 		return Holder.one
 	end 'get'
 end 'Holder'
@@ -608,7 +608,7 @@ type Holder
 
 	static var one = Holder{s: 5, tag: 77}
 
-	export static function get() returns Holder
+	static function get() returns Holder
 		return Holder.one
 	end 'get'
 end 'Holder'
@@ -630,7 +630,7 @@ typealias Integer = int(i64.min to i64.max)
 type Row
 	export var n as Integer
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 end 'Row'
@@ -705,7 +705,7 @@ typealias Integer = int(i64.min to i64.max)
 type Row
 	export var n as Integer
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 end 'Row'
@@ -1254,7 +1254,7 @@ type Box
 		return Box{n: 1}
 	end 'make'
 
-	export static function get() returns Box
+	static function get() returns Box
 		return Box.shared
 	end 'get'
 end 'Box'
@@ -1285,7 +1285,7 @@ type Box
 		return Box{n: 1}
 	end 'make'
 
-	export static function get() returns Box
+	static function get() returns Box
 		return Box.shared
 	end 'get'
 end 'Box'
@@ -1318,7 +1318,7 @@ type Box
 		return Box{n: 1}
 	end 'make'
 
-	export static function get() returns Box
+	static function get() returns Box
 		return Box.shared
 	end 'get'
 end 'Box'
@@ -1355,7 +1355,7 @@ type Box
 		return Box.shared
 	end 'inner'
 
-	export static function get() returns Box
+	static function get() returns Box
 		return Box.inner()
 	end 'get'
 end 'Box'
@@ -1381,7 +1381,7 @@ typealias Count = int(0 to u64.max)
 type Box
 	export var n as Count
 
-	export static function make() returns Box
+	static function make() returns Box
 		return Box{n: 1}
 	end 'make'
 end 'Box'
@@ -1412,11 +1412,11 @@ typealias Count = int(0 to u64.max)
 type Box
 	export var n as Count
 
-	export static function make() returns Box
+	static function make() returns Box
 		return Box{n: 1}
 	end 'make'
 
-	export function bump()
+	function bump()
 		self.n = self.n + 1
 	end 'bump'
 end 'Box'
@@ -1445,11 +1445,11 @@ typealias Count = int(0 to u64.max)
 type Box
 	export var n as Count
 
-	export static function make() returns Box
+	static function make() returns Box
 		return Box{n: 1}
 	end 'make'
 
-	export function bump()
+	function bump()
 		self.n = self.n + 1
 	end 'bump'
 end 'Box'
@@ -1457,7 +1457,7 @@ end 'Box'
 type Holder
 	export var inner as Box
 
-	export static function make() returns Holder
+	static function make() returns Holder
 		return Holder{inner: Box.make()}
 	end 'make'
 end 'Holder'
@@ -1487,7 +1487,7 @@ typealias CountArray = Array with Count
 type Holder
 	export var items as CountArray
 
-	export static function make() returns Holder
+	static function make() returns Holder
 		return Holder{items: CountArray.create()}
 	end 'make'
 end 'Holder'
@@ -1521,7 +1521,7 @@ typealias CountArray = Array with Count
 type Inner
 	export var items as CountArray
 
-	export static function make() returns Inner
+	static function make() returns Inner
 		return Inner{items: CountArray.create()}
 	end 'make'
 end 'Inner'
@@ -1529,7 +1529,7 @@ end 'Inner'
 type Holder
 	export var inner as Inner
 
-	export static function make() returns Holder
+	static function make() returns Holder
 		return Holder{inner: Inner.make()}
 	end 'make'
 end 'Holder'
@@ -1565,7 +1565,7 @@ typealias CountArray = Array with Count
 type Guards
 	export var cols as CountArray
 
-	export static function make() returns Guards
+	static function make() returns Guards
 		return Guards{cols: CountArray.create()}
 	end 'make'
 end 'Guards'
@@ -1576,7 +1576,7 @@ type Blocks
 	export var subst as CountArray
 	export var guards as Guards
 
-	export static function create(guards Guards) returns Blocks
+	static function create(guards Guards) returns Blocks
 		return Blocks{subst: CountArray.create(), guards: guards}
 	end 'create'
 end 'Blocks'
@@ -1612,7 +1612,7 @@ type Box
 		return Box{n: 1}
 	end 'make'
 
-	export static function get() returns Box
+	static function get() returns Box
 		return Box.shared
 	end 'get'
 end 'Box'
@@ -1641,7 +1641,7 @@ typealias Count = int(0 to u64.max)
 type Box
 	export var n as Count
 
-	export static function make() returns Box
+	static function make() returns Box
 		return Box{n: 1}
 	end 'make'
 end 'Box'
@@ -2345,7 +2345,7 @@ type FromLet implements Source
 		return Self{tag: 1}
 	end 'create'
 
-	export function box() returns Box
+	function box() returns Box
 		return a
 	end 'box'
 end 'FromLet'
@@ -2624,7 +2624,7 @@ let Widget = "abcdefghij"
 type Widget
 	export var v as Integer
 
-	export static function byteLength() returns Integer
+	static function byteLength() returns Integer
 		return 42
 	end 'byteLength'
 end 'Widget'
@@ -2649,7 +2649,7 @@ let Widget = "abcdefghij"
 type Widget
 	export var v as Integer
 
-	export static function create() returns Widget
+	static function create() returns Widget
 		return Self{v: 7}
 	end 'create'
 end 'Widget'
@@ -3348,7 +3348,7 @@ let sharedEmptyNames = Names.create()
 type Holder
 	export var names as Names = sharedEmptyNames
 
-	export static function make() returns Holder
+	static function make() returns Holder
 		return Self{}
 	end 'make'
 end 'Holder'
@@ -3394,7 +3394,7 @@ end 'InitableFromStringLiteral'
 type Tag implements InitableFromStringLiteral
 	export let text as String
 
-	export static function init(text String) returns Self
+	static function init(text String) returns Self
 		return Self{text: text}
 	end 'init'
 end 'Tag'
@@ -3422,7 +3422,7 @@ spelling.
 type Tag
 	export let text as String
 
-	export static function init(text String) returns Self
+	static function init(text String) returns Self
 		return Self{text: text}
 	end 'init'
 end 'Tag'
@@ -4016,7 +4016,7 @@ type KeywordInfo
 	export var kind as Kind
 	export var helpText as String
 
-	export static function create(kind Kind, helpText String) returns KeywordInfo
+	static function create(kind Kind, helpText String) returns KeywordInfo
 		return Self{kind: kind, helpText: helpText}
 	end 'create'
 end 'KeywordInfo'
@@ -4089,7 +4089,7 @@ type KeywordInfo
 	export var kind as Kind
 	export var helpText as String
 
-	export static function create(kind Kind, helpText String) returns KeywordInfo
+	static function create(kind Kind, helpText String) returns KeywordInfo
 		return Self{kind: kind, helpText: helpText}
 	end 'create'
 end 'KeywordInfo'
@@ -4306,15 +4306,15 @@ var hold = Hold.unowned
 type Cell uses T
 	export var item as T
 
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{item: item}
 	end 'create'
 
-	export function stash(v Small)
+	function stash(v Small)
 		hold = Hold.owned(v)
 	end 'stash'
 
-	export function readBack() returns Small
+	function readBack() returns Small
 		return match hold 'r'
 			unowned gives 0
 			owned(v) gives v
@@ -4358,7 +4358,7 @@ type Mixed
 	export var c as Colour
 	export var n as Num
 
-	export static function create(c Colour, n Num) returns Mixed
+	static function create(c Colour, n Num) returns Mixed
 		return Self{c: c, n: n}
 	end 'create'
 end 'Mixed'
@@ -4386,7 +4386,7 @@ typealias Counts = Map with (String, Num)
 type Holder
 	export var xs as NumArray
 
-	export static function create(xs NumArray) returns Holder
+	static function create(xs NumArray) returns Holder
 		return Self{xs: xs}
 	end 'create'
 end 'Holder'

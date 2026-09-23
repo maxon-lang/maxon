@@ -40,11 +40,11 @@ the leak gate reports as exit 101 while the program still prints the right answe
 type Holder uses Element
 	export var value as Element
 
-	export static function create(v Element) returns Self
+	static function create(v Element) returns Self
 		return Self{value: v}
 	end 'create'
 
-	export function remade() returns Element
+	function remade() returns Element
 		return fresh()
 	end 'remade'
 end 'Holder'
@@ -80,11 +80,11 @@ statement's temporary drop is the one that frees it — a hundred times, which m
 type Holder uses Element
 	export var value as Element
 
-	export static function create(v Element) returns Self
+	static function create(v Element) returns Self
 		return Self{value: v}
 	end 'create'
 
-	export function remade() returns Element
+	function remade() returns Element
 		return fresh()
 	end 'remade'
 end 'Holder'
@@ -128,15 +128,15 @@ type Container uses Element
 
 	export var items as ElementArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{ items: ElementArray.create() }
 	end 'create'
 
-	export function push(item Element)
+	function push(item Element)
 		self.items.push(item)
 	end 'push'
 
-	export function takeOne() returns Element
+	function takeOne() returns Element
 		return try self.items.pop() otherwise panic("takeOne: empty")
 	end 'takeOne'
 end 'Container'
@@ -173,11 +173,11 @@ end 'MakeError'
 type Holder uses Element
 	export var value as Element
 
-	export static function create(v Element) returns Self
+	static function create(v Element) returns Self
 		return Self{value: v}
 	end 'create'
 
-	export function remadeOrThrow(ok bool) returns Element throws MakeError
+	function remadeOrThrow(ok bool) returns Element throws MakeError
 		if not ok 'refuse'
 			throw MakeError.refused
 		end 'refuse'
@@ -267,11 +267,11 @@ missed reference a poison fault and a doubled one a leak.
 type Holder uses Element
 	export var value as Element
 
-	export static function create(v Element) returns Self
+	static function create(v Element) returns Self
 		return Self{value: v}
 	end 'create'
 
-	export function get() returns Element
+	function get() returns Element
 		return self.value
 	end 'get'
 end 'Holder'
@@ -310,15 +310,15 @@ typealias Integer = int(i64.min to i64.max)
 type Holder uses Element
 	export var value as Element
 
-	export static function create(v Element) returns Self
+	static function create(v Element) returns Self
 		return Self{value: v}
 	end 'create'
 
-	export function get() returns Element
+	function get() returns Element
 		return self.value
 	end 'get'
 
-	export function remade() returns Element
+	function remade() returns Element
 		return 7
 	end 'remade'
 end 'Holder'

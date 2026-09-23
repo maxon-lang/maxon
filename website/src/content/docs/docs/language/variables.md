@@ -61,7 +61,7 @@ end 'main'
   type Point
   	export var x as Coord
 
-  	export static function create(x Coord) returns Point
+  	static function create(x Coord) returns Point
   		return Point{x: x}
   	end 'create'
   end 'Point'

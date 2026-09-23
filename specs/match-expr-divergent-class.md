@@ -135,7 +135,7 @@ typealias Count = int(i64.min to i64.max)
 type Box
 	export var v as Count
 
-	export static function make() returns Box
+	static function make() returns Box
 		return Box{v: 1}
 	end 'make'
 end 'Box'
@@ -143,7 +143,7 @@ end 'Box'
 type Cup
 	export var w as Count
 
-	export static function make() returns Cup
+	static function make() returns Cup
 		return Cup{w: 2}
 	end 'make'
 end 'Cup'
@@ -195,7 +195,7 @@ typealias Num = int(i64.min to i64.max)
 type Boxed
 	export var v as Num
 
-	export static function create(n Num) returns Boxed
+	static function create(n Num) returns Boxed
 		return Boxed{v: n}
 	end 'create'
 end 'Boxed'

@@ -199,11 +199,11 @@ type Particle
 	export var mass as Real
 	export var velocity as Real
 
-	export static function make(mass Real, velocity Real) returns Self
+	static function make(mass Real, velocity Real) returns Self
 		return Self{mass: mass, velocity: velocity}
 	end 'make'
 
-	export function momentum() returns Real
+	function momentum() returns Real
 		return self.mass * self.velocity
 	end 'momentum'
 end 'Particle'
@@ -234,11 +234,11 @@ type Particle
 	export var mass as Weight
 	export var velocity as Weight
 
-	export static function make(mass Weight, velocity Weight) returns Self
+	static function make(mass Weight, velocity Weight) returns Self
 		return Self{mass: mass, velocity: velocity}
 	end 'make'
 
-	export function momentum() returns Weight
+	function momentum() returns Weight
 		return self.mass * self.velocity
 	end 'momentum'
 end 'Particle'
@@ -270,7 +270,7 @@ typealias Weight = float(f64.min to f64.max)
 type Particle
 	export var mass as Weight = 3
 
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{}
 	end 'make'
 end 'Particle'
@@ -301,7 +301,7 @@ typealias Weight = float(f64.min to f64.max)
 type Particle
 	export var mass as Weight = 2.5
 
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{}
 	end 'make'
 end 'Particle'
@@ -331,7 +331,7 @@ type Particle
 	export var mass as Weight = 0
 	export var vel as Weight = 0.0
 
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{}
 	end 'make'
 end 'Particle'

@@ -53,7 +53,7 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x as Integer
 
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{x: 1}
 	end 'make'
 end 'Point'
@@ -75,7 +75,7 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x as Integer
 
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{x: 1}
 	end 'make'
 end 'Point'

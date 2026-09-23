@@ -58,26 +58,26 @@ compaction cursor over the pivot's original slot, and both must still answer cor
 typealias Small = int(0 to 1000)
 
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
-	typealias Cmp = function(Element, Element) returns Ordering
+	export typealias ElementMemory = __ManagedMemory with Element
+	export typealias Cmp = function(Element, Element) returns Ordering
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
 	// `stdlib/Array.maxon:363`'s own one-line body. `clear` left the synthesized surface at ARR4, so a
 	// container declared here declares it exactly as the library does — the transcription stays in step
 	// with `driftQuicksort.maxon`, whose receiver is that library `Array`.
-	export function clear()
+	function clear()
 		managed.clear()
 	end 'clear'
 
-	export function stablePartition(lo Small, hi Small, pivotIndex Small, scratch Self, pivotHold Self, cmp Cmp) returns Small
+	function stablePartition(lo Small, hi Small, pivotIndex Small, scratch Self, pivotHold Self, cmp Cmp) returns Small
 		let pivotAtHome = try managed.get(pivotIndex) otherwise panic("get OOB at pivot")
 		pivotHold.clear()
 		pivotHold.push(pivotAtHome)
@@ -215,26 +215,26 @@ the first byte that the comparator cannot see. Both classes must come out in inp
 typealias Small = int(0 to 1000)
 
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
-	typealias Cmp = function(Element, Element) returns Ordering
+	export typealias ElementMemory = __ManagedMemory with Element
+	export typealias Cmp = function(Element, Element) returns Ordering
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
 	// `stdlib/Array.maxon:363`'s own one-line body. `clear` left the synthesized surface at ARR4, so a
 	// container declared here declares it exactly as the library does — the transcription stays in step
 	// with `driftQuicksort.maxon`, whose receiver is that library `Array`.
-	export function clear()
+	function clear()
 		managed.clear()
 	end 'clear'
 
-	export function stablePartition(lo Small, hi Small, pivotIndex Small, scratch Self, pivotHold Self, cmp Cmp) returns Small
+	function stablePartition(lo Small, hi Small, pivotIndex Small, scratch Self, pivotHold Self, cmp Cmp) returns Small
 		let pivotAtHome = try managed.get(pivotIndex) otherwise panic("get OOB at pivot")
 		pivotHold.clear()
 		pivotHold.push(pivotAtHome)

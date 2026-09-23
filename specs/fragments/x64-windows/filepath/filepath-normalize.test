@@ -10,12 +10,19 @@ ExitCode: 0
 ---
 data {
   __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
-  __slab_arena_list@8 = i64 0
-  __slab_arena_map_l1@16 = i64 0
-  __slab_state@24 = i64 0
-  __mrt_console_probe_stdin@32 = i8 0
-  __mrt_console_probe_stdout@33 = i8 0
-  __mrt_console_probe_stderr@34 = i8 0
+  __sched_tls_teb_offset@8 = i64 0
+  __sched_allm@16 = i64 0
+  __sched_lock@24 = i64 0
+  __sched_preempt_ext_lock@32 = i64 0
+  __sched_preempt_context@40 = i64 0
+  __slab_arena_list@48 = i64 0
+  __slab_arena_map_l1@56 = i64 0
+  __slab_state@64 = i64 0
+  __ds_base@72 = i64 0
+  __dbg_ctl@80 = i64 0
+  __mrt_console_probe_stdin@88 = i8 0
+  __mrt_console_probe_stdout@89 = i8 0
+  __mrt_console_probe_stderr@90 = i8 0
 }
 
 func @main {
@@ -46,65 +53,57 @@ func @main {
     x64.jmp __il_cont#9
   __il_body#50:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-  __il_body#117:
+  __il_body#113:
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
-  __il_cont#116:
+  __il_cont#112:
     x64.movRegReg rcx, rbx
-    x64.callDirect FilePath.hasDrivePrefix
+    x64.callDirect FilePath.hasDriveRoot
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, ifcont#56
-  drive:
-    x64.cmpRegImm32 r12, 3
-    x64.movRegImm32 rax, 0
-    x64.jcc below, scmerge#53
-  andrhs#52:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.movRegImm32 rdx, 2
-    x64.callDirect String.byteAtOrPanic
-    x64.cmpRegImm32 r8, 92
-    x64.setccReg equal, rax
-  scmerge#53:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#55
-  driveRoot#54:
+    x64.jcc equal, ifcont#52
+  driveRoot#51:
     x64.movRegImm32 r12, 3
     x64.jmp __il_cont#49
-  ifcont#55:
+  ifcont#52:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect FilePath.hasDrivePrefix
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont#54
+  driveRelative:
     x64.movRegImm32 r12, 2
     x64.jmp __il_cont#49
-  ifcont#56:
+  ifcont#54:
     x64.cmpRegImm32 r12, 2
     x64.movRegImm32 rax, 0
-    x64.jcc below, scmerge#58
-  andrhs#57:
+    x64.jcc below, scmerge#56
+  andrhs#55:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.movRegImm32 rdx, 0
     x64.callDirect String.byteAtOrPanic
     x64.cmpRegImm32 r8, 92
     x64.setccReg equal, rax
-  scmerge#58:
+  scmerge#56:
     x64.movRegImm32 rcx, 0
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, critsplit#127
-  andrhs#59:
+    x64.jcc equal, critsplit#122
+  andrhs#57:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.movRegImm32 rdx, 1
     x64.callDirect String.byteAtOrPanic
     x64.cmpRegImm32 r8, 92
     x64.setccReg equal, rax
-    x64.jmp scmerge#60
-  critsplit#127:
+    x64.jmp scmerge#58
+  critsplit#122:
     x64.movRegReg rax, rcx
-  scmerge#60:
+  scmerge#58:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#67
+    x64.jcc equal, ifcont#65
   unc:
     x64.movRegImm32 rdx, 2
     x64.movRegReg rcx, rbx
     x64.callDirect FilePath.separatorAtOrEnd
     x64.cmpRegReg r8, r12
     x64.jcc equal, __il_cont#49
-  ifcont#63:
+  ifcont#61:
     x64.leaRegRegImm32 rdx, r8, 1
     x64.movRegReg rcx, rbx
     x64.callDirect FilePath.separatorAtOrEnd
@@ -121,25 +120,25 @@ func @main {
   __rc_ok#73:
     x64.movRegReg r12, rax
     x64.jmp __il_cont#49
-  ifcont#67:
+  ifcont#65:
     x64.movRegImm32 r13, 0
-  whilehdr#68:
+  whilehdr#66:
     x64.cmpRegReg r13, r12
     x64.movRegImm32 rax, 0
-    x64.jcc greaterEqual, scmerge#70
-  andrhs#69:
+    x64.jcc greaterEqual, scmerge#68
+  andrhs#67:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.movRegReg rdx, r13
     x64.callDirect String.byteAtOrPanic
     x64.cmpRegImm32 r8, 92
     x64.setccReg equal, rax
-  scmerge#70:
+  scmerge#68:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, whileexit#72
+    x64.jcc equal, whileexit#70
   leadingSeparators:
     x64.leaRegRegImm32 r13, r13, 1
-    x64.jmp whilehdr#68
-  whileexit#72:
+    x64.jmp whilehdr#66
+  whileexit#70:
     x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic#76
   __rc_ok#75:
@@ -148,10 +147,10 @@ func @main {
     x64.storeSlotReg slot2, r12
   __il_body#77:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-  __il_body#119:
-    x64.loadRegBaseDisp.word64 r13, [rax + 8]
-  __il_cont#118:
-    x64.cmpRegImm32 r13, 1
+  __il_body#115:
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+  __il_cont#114:
+    x64.cmpRegImm32 rax, 1
     x64.movRegImm32 rax, 0
     x64.jcc below, scmerge#79
   andrhs#78:
@@ -168,33 +167,13 @@ func @main {
     x64.jmp __il_cont#48
   ifcont#81:
     x64.movRegReg rcx, rbx
-    x64.callDirect FilePath.hasDrivePrefix
-    x64.movRegImm32 rax, 0
+    x64.callDirect FilePath.hasDriveRoot
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, scmerge#83
-  andrhs#82:
-    x64.cmpRegImm32 r13, 3
-    x64.setccReg aboveEqual, rax
-  scmerge#83:
-    x64.movRegImm32 rcx, 0
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, critsplit#130
-  andrhs#84:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.movRegImm32 rdx, 2
-    x64.callDirect String.byteAtOrPanic
-    x64.cmpRegImm32 r8, 92
-    x64.setccReg equal, rax
-    x64.jmp scmerge#85
-  critsplit#130:
-    x64.movRegReg rax, rcx
-  scmerge#85:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#87
-  driveRoot#86:
+    x64.jcc equal, ifcont#83
+  driveRoot#82:
     x64.movRegImm32 rax, 1
     x64.jmp __il_cont#48
-  ifcont#87:
+  ifcont#83:
     x64.movRegImm32 rax, 0
   __il_cont#48:
     x64.storeSlotReg slot4, rax
@@ -202,9 +181,9 @@ func @main {
     x64.callDirect String.addressableBytes
     x64.movRegReg r13, r8
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-  __il_body#115:
+  __il_body#111:
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
-  __il_cont#114:
+  __il_cont#110:
     x64.movRegReg rcx, r13
     x64.movRegReg rdx, r12
     x64.callDirect __managed_slice
@@ -225,29 +204,29 @@ func @main {
     x64.callDirect String.init
     x64.movRegReg rbx, r8
     x64.leaRegRdata r12, [rip + __str_rec_34]  ; "\\"
-  __il_body#89:
+  __il_body#85:
     x64.movRegImm32 rcx, 8
     x64.leaRegFunc rdx, [rip + __str_decref]
     x64.callDirect __managed_create
     x64.movRegReg r13, r8
     x64.storeSlotReg slot8, r13
-  __il_body#121:
+  __il_body#117:
     x64.loadRegBaseDisp.word64 r14, [r12 + 8]
-  __il_cont#120:
+  __il_cont#116:
     x64.cmpRegImm32 r14, 0
-    x64.jcc notEqual, __il_body#123
+    x64.jcc notEqual, __il_body#119
   empty_delim:
     x64.movRegReg rcx, rbx
     x64.callDirect String.clone
     x64.movRegReg rcx, r13
     x64.movRegReg rdx, r8
     x64.callDirect __managed_push
-    x64.jmp __il_cont#88
-  __il_body#123:
+    x64.jmp __il_cont#84
+  __il_body#119:
     x64.loadRegBaseDisp.word64 r13, [rbx + 8]
-  __il_cont#122:
+  __il_cont#118:
     x64.movRegImm32 r15, 0
-    x64.jmp whilehdr#92
+    x64.jmp whilehdr#88
   search:
     x64.movRegReg rax, r13
     x64.subRegReg rax, r13, r15
@@ -256,7 +235,7 @@ func @main {
     x64.movRegReg r9, r12
     x64.callDirect findIn
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, whileexit#94
+    x64.jcc notEqual, whileexit#90
   try_find:
     x64.leaRegRegReg rax, r15, r8
     x64.storeSlotReg slot11, rax
@@ -270,14 +249,14 @@ func @main {
     x64.callDirect __managed_push
     x64.loadRegSlot rax, slot11
     x64.leaRegRegReg rax, rax, r14
-  ifcont#97:
+  ifcont#93:
     x64.movRegReg r15, rax
-  whilehdr#92:
+  whilehdr#88:
     x64.movRegReg rax, r13
     x64.subRegReg rax, r13, r14
     x64.cmpRegReg r15, rax
     x64.jcc lessEqual, search
-  whileexit#94:
+  whileexit#90:
     x64.loadRegBaseDisp.byte r9, [rbx + 48]
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r15
@@ -286,7 +265,7 @@ func @main {
     x64.loadRegSlot rcx, slot8
     x64.movRegReg rdx, r8
     x64.callDirect __managed_push
-  __il_cont#88:
+  __il_cont#84:
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
@@ -315,12 +294,12 @@ func @main {
     x64.callDirect __str_eq
     x64.cmpRegImm32 r8, 0
     x64.jcc equal, ifcont#34
-  __il_body#111:
+  __il_body#107:
     x64.loadRegSlot rax, slot6
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegImm32 rax, 0
     x64.setccReg equal, rax
-  __il_cont#110:
+  __il_cont#106:
     x64.xorRegImm32 rax, rax, 1
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, ifcont#31
@@ -393,11 +372,11 @@ func @main {
     x64.storeBaseDispReg.word64 [r13 + 16], rax
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r13 + 24], rax
-  __il_body#99:
+  __il_body#95:
     x64.loadRegSlot rax, slot2
     x64.cmpRegImm32 rax, 0
-    x64.jcc less, __rc_panic#103
-  __rc_ok#102:
+    x64.jcc less, __rc_panic#99
+  __rc_ok#98:
     x64.loadRegSlot rax, slot1
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.callDirect String.addressableBytes
@@ -408,8 +387,8 @@ func @main {
     x64.callDirect __managed_slice
     x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#101
-  tryok#100:
+    x64.jcc notEqual, tryerr#97
+  tryok#96:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg rcx, r12
@@ -419,7 +398,7 @@ func @main {
     x64.movRegReg rbx, r8
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
-  __il_cont#98:
+  __il_cont#94:
     x64.movRegReg rcx, r13
     x64.movRegReg rdx, rbx
     x64.callDirect String.append
@@ -431,14 +410,14 @@ func @main {
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, forhdr#35
-    x64.jmp __il_body#113
+    x64.jmp __il_body#109
   eachKept:
     x64.leaRegRdata r12, [rip + __layout_WithIterIterator_ArrayIterator_String_String]
     x64.leaRegRdata rax, [rip + __witness_ArrayIterator_String.Iterator]
-  __il_body#106:
+  __il_body#102:
     x64.loadRegBaseDisp.word64 r13, [rbx + 0]
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.callMem [rax + 40]
+    x64.callMem [rax + 48]
     x64.movRegReg r14, r8
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
@@ -449,15 +428,15 @@ func @main {
     x64.callDirect __retain_type_param
     x64.storeBaseDispReg.word64 [r15 + 0], r8
     x64.storeBaseDispReg.word64 [r15 + 8], r14
-  __il_cont#105:
+  __il_cont#101:
     x64.loadRegBaseDisp.word64 rax, [r15 + 0]
     x64.loadRegBaseDisp.word64 r12, [r15 + 8]
-  __il_body#107:
+  __il_body#103:
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.callDirect __managed_cursor_index
     x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic#109
-  __il_cont#104:
+    x64.jcc less, __rc_panic#105
+  __il_cont#100:
     x64.cmpRegImm32 r8, 0
     x64.jcc belowEqual, ifcont#41
   notFirst:
@@ -481,20 +460,20 @@ func @main {
   forexit#39:
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_WithIterIterator_ArrayIterator_String_String
-  __il_body#113:
+  __il_body#109:
     x64.loadRegSlot rax, slot6
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegImm32 rax, 0
     x64.setccReg equal, rax
-  __il_cont#112:
+  __il_cont#108:
     x64.movRegImm32 rcx, 0
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, critsplit#133
+    x64.jcc equal, critsplit#126
   andrhs#43:
     x64.loadRegSlot rax, slot4
     x64.xorRegImm32 rax, rax, 1
     x64.jmp scmerge#44
-  critsplit#133:
+  critsplit#126:
     x64.movRegReg rax, rcx
   scmerge#44:
     x64.cmpRegImm32 rax, 0
@@ -578,7 +557,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#6:
-    x64.leaRegRdata rcx, [rip + __str_blob_32]  ; "panic at FilePath.maxon:34: FilePath: invalid path\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_32]  ; "panic at FilePath.maxon:35: FilePath: invalid path\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 136
@@ -590,7 +569,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#74:
-    x64.leaRegRdata rcx, [rip + __str_blob_104]  ; "panic at FilePath.maxon:579: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_105]  ; "panic at FilePath.maxon:574: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 136
@@ -602,7 +581,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#76:
-    x64.leaRegRdata rcx, [rip + __str_blob_105]  ; "panic at FilePath.maxon:589: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_106]  ; "panic at FilePath.maxon:584: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 136
@@ -614,7 +593,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#14:
-    x64.leaRegRdata rcx, [rip + __str_blob_37]  ; "panic at FilePath.maxon:514: FilePath.normalize: the root is a prefix of the path\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_37]  ; "panic at FilePath.maxon:509: FilePath.normalize: the root is a prefix of the path\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 136
@@ -626,7 +605,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#26:
-    x64.leaRegRdata rcx, [rip + __str_blob_41]  ; "panic at FilePath.maxon:524: FilePath.normalize: a non-empty array has a last component\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_41]  ; "panic at FilePath.maxon:519: FilePath.normalize: a non-empty array has a last component\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 136
@@ -638,7 +617,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#29:
-    x64.leaRegRdata rcx, [rip + __str_blob_42]  ; "panic at FilePath.maxon:527: FilePath.normalize: a non-empty array has a last component\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_42]  ; "panic at FilePath.maxon:522: FilePath.normalize: a non-empty array has a last component\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 136
@@ -649,8 +628,8 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic#103:
-    x64.leaRegRdata rcx, [rip + __str_blob_106]  ; "panic at FilePath.maxon:593: Range check failed: value outside typealias 'BytePos'\x0a"
+  __rc_panic#99:
+    x64.leaRegRdata rcx, [rip + __str_blob_107]  ; "panic at FilePath.maxon:588: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 136
@@ -661,8 +640,8 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryerr#101:
-    x64.leaRegRdata rcx, [rip + __str_blob_43]  ; "panic at FilePath.maxon:595: FilePath.rootSpelling: the root is a prefix of the path\x0a"
+  tryerr#97:
+    x64.leaRegRdata rcx, [rip + __str_blob_43]  ; "panic at FilePath.maxon:590: FilePath.rootSpelling: the root is a prefix of the path\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 136
@@ -673,7 +652,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic#109:
+  __rc_panic#105:
     x64.leaRegRdata rcx, [rip + __str_blob_97]  ; "panic at Array.maxon:497: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0

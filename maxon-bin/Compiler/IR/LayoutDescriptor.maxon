@@ -668,7 +668,7 @@ module type LayoutDescriptor
 	export var elementSize as MachineWord
 	export var elementLogicalSize as MachineWord
 
-	export static function create(size MachineWord, alignment MachineWord, elementSize MachineWord, elementLogicalSize MachineWord) returns LayoutDescriptor
+	module static function create(size MachineWord, alignment MachineWord, elementSize MachineWord, elementLogicalSize MachineWord) returns LayoutDescriptor
 		return Self{size: size, alignment: alignment, elementSize: elementSize, elementLogicalSize: elementLogicalSize}
 	end 'create'
 end 'LayoutDescriptor'
@@ -757,26 +757,26 @@ export typealias LayoutLabelMap = Map with (GenericInstanceId, String)
 module type LayoutDescriptorRegistry
 	var labels as LayoutLabelMap
 
-	export static function create() returns LayoutDescriptorRegistry
+	module static function create() returns LayoutDescriptorRegistry
 		return Self{labels: LayoutLabelMap.create()}
 	end 'create'
 
 	// Has a descriptor already been emitted for `gid`? Callers gate `record` on this so the blob is
 	// registered exactly once per instance.
-	export function contains(gid GenericInstanceId) returns bool
+	module function contains(gid GenericInstanceId) returns bool
 		return self.labels.contains(gid)
 	end 'contains'
 
 	// The `.rdata` label naming `gid`'s descriptor blob. Precondition: a descriptor was emitted for it
 	// (`contains(gid)`) — a miss is a lowering-order bug (a call site reached before the emitter ran),
 	// not a state to paper over with a sentinel label.
-	export function labelFor(gid GenericInstanceId) returns String
+	module function labelFor(gid GenericInstanceId) returns String
 		return try self.labels.get(gid) otherwise panic("LayoutDescriptorRegistry.labelFor: no descriptor emitted for generic instance {gid} — the descriptor emitter must run before a call site references it")
 	end 'labelFor'
 
 	// Record that `gid`'s descriptor blob is registered under `label`. Idempotent by construction:
 	// callers gate on `contains`, so a gid is recorded once.
-	export function record(gid GenericInstanceId, label String)
+	module function record(gid GenericInstanceId, label String)
 		self.labels.upsert(gid, value: label)
 	end 'record'
 end 'LayoutDescriptorRegistry'

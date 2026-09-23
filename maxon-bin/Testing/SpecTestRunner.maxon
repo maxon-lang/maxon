@@ -812,7 +812,7 @@ type CompileAnswer
 	// Did this compile produce an executable? Asked by `runPreconditions` (a run expectation cannot
 	// proceed without one) and by `checkCompilerError` (a ```maxoncstderr case must NOT have one), and
 	// spelled once so the two cannot come to disagree about which of the two failure states counts.
-	export function isBuilt() returns bool
+	function isBuilt() returns bool
 		return match self.verdict 'v'
 			built gives true
 			reportedDiagnostics gives false
@@ -981,7 +981,7 @@ export type SuiteCpuTally
 		return Self{ticks: 0, reported: 0, unreported: 0}
 	end 'zero'
 
-	export function adding(cpu CompileCpu) returns SuiteCpuTally
+	function adding(cpu CompileCpu) returns SuiteCpuTally
 		return match cpu 'contribution'
 			reported(compileTicks) gives Self{ticks: self.ticks + compileTicks, reported: self.reported + 1, unreported: self.unreported}
 			unreported gives Self{ticks: self.ticks, reported: self.reported, unreported: self.unreported + 1}
@@ -1186,7 +1186,7 @@ end 'runOneSpec'
 // about the RUN rather than about the target: one is the operator's call, the other is the reach of an
 // instrument that lives on this host. Neither is a property of the program, which is why neither is a
 // marker in the spec text and why both owe the reader a sentence.
-union ExclusionReason
+export union ExclusionReason
 	// `<!-- network: live -->` and no `--network` — see `networkModeAllows`.
 	liveNetwork
 
@@ -3651,7 +3651,7 @@ type RunCommand
 	export let exe as Executable
 	export let argv as StringArray
 
-	export static function create(exe Executable, argv StringArray) returns RunCommand
+	static function create(exe Executable, argv StringArray) returns RunCommand
 		return Self{exe: exe, argv: argv}
 	end 'create'
 end 'RunCommand'

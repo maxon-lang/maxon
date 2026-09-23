@@ -38,7 +38,7 @@ module type LspPosition
 	export let line as LspLineNumber
 	export let character as LspCharacter
 
-	export static function create(line LspLineNumber, character LspCharacter) returns LspPosition
+	module static function create(line LspLineNumber, character LspCharacter) returns LspPosition
 		return Self{line: line, character: character}
 	end 'create'
 end 'LspPosition'
@@ -68,7 +68,7 @@ module type LspLineIndex
 	//
 	// The first line always starts at 0, including in an empty buffer: a document with no bytes still
 	// has one line, and an editor can put a cursor in it.
-	export static function build(source String) returns LspLineIndex
+	module static function build(source String) returns LspLineIndex
 		var starts = ByteOffsetArray.create()
 		var contentEnds = ByteOffsetArray.create()
 		starts.push(0)
@@ -155,7 +155,7 @@ module type LspLineIndex
 	end 'endOfLineContent'
 
 	/// The LSP position of a byte offset. An offset past the buffer clamps to its end.
-	export function positionOf(source String, offset ByteOffset) returns LspPosition
+	module function positionOf(source String, offset ByteOffset) returns LspPosition
 		let length = source.byteLength() as ByteOffset
 		let target = length if offset > length else offset
 		let line = lineContaining(target)
@@ -174,7 +174,7 @@ module type LspLineIndex
 	/// The byte offset of an LSP position. A line past the buffer clamps to its end; a character past
 	/// the line's content clamps to the end of that content — both of which an editor legitimately
 	/// sends, because a cursor sits one past the last character.
-	export function offsetOf(source String, position LspPosition) returns ByteOffset
+	module function offsetOf(source String, position LspPosition) returns ByteOffset
 		if position.line >= lineCount() 'linePastEnd'
 			return source.byteLength()
 		end 'linePastEnd'
@@ -202,7 +202,7 @@ module type LspSpan
 	export let startByte as ByteOffset
 	export let endByte as ByteOffset
 
-	export static function create(startByte ByteOffset, endByte ByteOffset) returns LspSpan
+	module static function create(startByte ByteOffset, endByte ByteOffset) returns LspSpan
 		return Self{startByte: startByte, endByte: endByte}
 	end 'create'
 
@@ -212,7 +212,7 @@ module type LspSpan
 		return Self{startByte: 0, endByte: 0}
 	end 'none'
 
-	export function isEmpty() returns bool
+	module function isEmpty() returns bool
 		return startByte == endByte
 	end 'isEmpty'
 end 'LspSpan'

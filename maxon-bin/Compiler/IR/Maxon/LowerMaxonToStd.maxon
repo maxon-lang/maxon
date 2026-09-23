@@ -634,7 +634,7 @@ type WitnessAdapterRequest
 	// the null dictionary `requireWitnessSlotImplIgnoresDictionary` proves nothing reads.
 	export let instance as WitnessTableInstance
 
-	export static function create(conformerType ByteArray, implName ByteArray, adapterName ByteArray, slotArity ParamCount, instance WitnessTableInstance) returns WitnessAdapterRequest
+	static function create(conformerType ByteArray, implName ByteArray, adapterName ByteArray, slotArity ParamCount, instance WitnessTableInstance) returns WitnessAdapterRequest
 		return Self{conformerType: conformerType, implName: implName, adapterName: adapterName, slotArity: slotArity, instance: instance}
 	end 'create'
 
@@ -643,7 +643,7 @@ type WitnessAdapterRequest
 	// very array — see the loop, which grows by design. A borrowed element may not be held across the
 	// write (E3070), and the three name columns are what the copy has to be deep in: they are the request's
 	// only managed fields, and the array owns the ones it holds.
-	export function clone() returns WitnessAdapterRequest
+	function clone() returns WitnessAdapterRequest
 		return Self{conformerType: self.conformerType.clone(), implName: self.implName.clone(), adapterName: self.adapterName.clone(), slotArity: self.slotArity, instance: self.instance}
 	end 'clone'
 end 'WitnessAdapterRequest'
@@ -689,7 +689,7 @@ type NullWitnessArgRequest
 	export let conformerType as ByteArray
 	export let interfaceName as ByteArray
 
-	export static function create(caller ByteArray, callee ByteArray, constraintIndex WitnessSlotIndex, conformerType ByteArray, interfaceName ByteArray) returns NullWitnessArgRequest
+	static function create(caller ByteArray, callee ByteArray, constraintIndex WitnessSlotIndex, conformerType ByteArray, interfaceName ByteArray) returns NullWitnessArgRequest
 		return Self{caller: caller, callee: callee, constraintIndex: constraintIndex, conformerType: conformerType, interfaceName: interfaceName}
 	end 'create'
 end 'NullWitnessArgRequest'
@@ -737,7 +737,7 @@ type RangeSiteWalk
 	// away. The three grouping columns are SCRATCH — cleared and refilled in place, exactly as
 	// `SplitScratch` and `HallScratch` are — and the ANSWER lands on the site objects themselves, so the
 	// whole mechanism costs FOUR allocations for the entire lowering rather than any per function.
-	export static function create() returns RangeSiteWalk
+	static function create() returns RangeSiteWalk
 		return Self{sites: RangeCheckSiteArray.create(), order: RangeSiteIndexArray.create(), cursor: RangeSiteIndexArray.create(), runEnd: RangeSiteIndexArray.create()}
 	end 'create'
 
@@ -748,7 +748,7 @@ type RangeSiteWalk
 	// because it is that function's own site list and clearing it would destroy the answer just written
 	// into it. Nothing reads it while `order` is empty, and the retention is one array its own
 	// `FunctionRangeChecks` owns anyway.
-	export function standDown()
+	function standDown()
 		self.order.clear()
 	end 'standDown'
 
@@ -756,7 +756,7 @@ type RangeSiteWalk
 	// one of its sites carries a real `stdOpPos` by the time the walk ends, which holds because the block
 	// walk that follows covers the whole function. `blockCount` is the function's `nextBlockId` — its
 	// block ids are exactly `0 .. blockCount-1`, the same dense id space `buildBlockIdIndex` keys on.
-	export function beginFunction(checks FunctionRangeChecks, blockCount BlockId)
+	function beginFunction(checks FunctionRangeChecks, blockCount BlockId)
 		self.sites = checks.sites
 		checks.positionsResolved = true
 

@@ -3992,15 +3992,15 @@ type RunqTaintChannel
 	// A value id means something only inside the function that minted it, so the ids go at each function.
 	// What crosses a boundary is the callee-and-parameter fact, which is module-wide and kept — dropping it
 	// here would stop the fixed point at the first call and the check would refuse nothing.
-	export function beginFunction()
+	function beginFunction()
 		self.values.clear()
 	end 'beginFunction'
 
-	export function beginRound()
+	function beginRound()
 		self.crossedAFunction = false
 	end 'beginRound'
 
-	export function paramIsTainted(funcName ByteArray, index ParsedInt) returns bool
+	function paramIsTainted(funcName ByteArray, index ParsedInt) returns bool
 		for i in 0 upto self.argCallees.count() 'eachPair'
 			let callee = try self.argCallees.get(i) otherwise panic("RunqTaintChannel.paramIsTainted: argCallees.get OOB at {i}, inside a loop bounded by its own count")
 
@@ -4018,7 +4018,7 @@ type RunqTaintChannel
 		return false
 	end 'paramIsTainted'
 
-	export function calleeReturnsTainted(callee ByteArray) returns bool
+	function calleeReturnsTainted(callee ByteArray) returns bool
 		for name in self.returningCallees 'eachCallee'
 			if name == callee 'itDoes'
 				return true
@@ -4028,7 +4028,7 @@ type RunqTaintChannel
 		return false
 	end 'calleeReturnsTainted'
 
-	export function noteArgument(callee ByteArray, index ParsedInt) returns bool
+	function noteArgument(callee ByteArray, index ParsedInt) returns bool
 		if self.paramIsTainted(callee, index: index) 'alreadyKnown'
 			return false
 		end 'alreadyKnown'
@@ -4039,7 +4039,7 @@ type RunqTaintChannel
 		return true
 	end 'noteArgument'
 
-	export function noteReturn(callee ByteArray) returns bool
+	function noteReturn(callee ByteArray) returns bool
 		if self.calleeReturnsTainted(callee) 'alreadyKnown'
 			return false
 		end 'alreadyKnown'
@@ -4064,7 +4064,7 @@ type RunqRingTaint
 		return Self{processorChannel: RunqTaintChannel.create(), machineChannel: RunqTaintChannel.create(), machineListGlobalAddrs: StdValueUseSet.createRecordingIds(), procsGlobalAddrs: StdValueUseSet.createRecordingIds(), procsArrayBases: StdValueUseSet.createRecordingIds(), procsSlotAddrs: StdValueUseSet.createRecordingIds(), runqWordAddrs: StdValueUseSet.createRecordingIds(), runqOffsetConsts: StdValueUseSet.createRecordingIds()}
 	end 'create'
 
-	export function beginFunction()
+	function beginFunction()
 		self.processorChannel.beginFunction()
 		self.machineChannel.beginFunction()
 		self.machineListGlobalAddrs.clear()
@@ -4075,12 +4075,12 @@ type RunqRingTaint
 		self.runqOffsetConsts.clear()
 	end 'beginFunction'
 
-	export function beginRound()
+	function beginRound()
 		self.processorChannel.beginRound()
 		self.machineChannel.beginRound()
 	end 'beginRound'
 
-	export function crossedAFunction() returns bool
+	function crossedAFunction() returns bool
 		return self.processorChannel.crossedAFunction or self.machineChannel.crossedAFunction
 	end 'crossedAFunction'
 end 'RunqRingTaint'

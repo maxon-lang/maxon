@@ -264,7 +264,7 @@ type FunctionRangeCheckEntry
 	export var name as ByteArray
 	export var checks as FunctionRangeChecks
 
-	export static function create(name ByteArray, checks FunctionRangeChecks) returns FunctionRangeCheckEntry
+	static function create(name ByteArray, checks FunctionRangeChecks) returns FunctionRangeCheckEntry
 		return Self{name: name, checks: checks}
 	end 'create'
 end 'FunctionRangeCheckEntry'
@@ -1042,7 +1042,7 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	// name reported here is one whose meaning the registries beneath cannot agree on, and reporting it
 	// first keeps a program's diagnostics in the order a reader meets the declarations.
 	commitTypeNameDecls(project, artifact: artifact)
-	commitTypeAliases(project, artifact: artifact)
+	commitTypeAliases(project, artifact: artifact, signatures: signatures)
 	commitFunctionTypeAliases(project, artifact: artifact, signatures: signatures)
 	commitStructTypes(project, artifact: artifact)
 	commitEnumTypes(project, artifact: artifact)
@@ -1552,9 +1552,11 @@ end 'commitRangeChecks'
 // mirror is a second entry for the same pair, so letting it report too would print the identical sentence
 // twice with a compiler-minted name in it. The registry still records it — the mirror must resolve — only
 // the diagnostic is the bare declaration's.
-function commitTypeAliases(project Project, artifact FileParseArtifact)
+function commitTypeAliases(project Project, artifact FileParseArtifact, signatures ProgramSignatures)
+	let declaredByTheCorpus = signatures.declaredByTheCorpus(artifact.filePath)
+
 	for alias in artifact.typeAliases 'each'
-		match project.typeAliases.record(alias) 'conflict'
+		match project.typeAliases.record(alias, declaredByTheCorpus: declaredByTheCorpus) 'conflict'
 			// Blames the DECLARATION THE USER JUST WROTE — its own name token, in its own file — and
 			// never the incumbent, which is the line that was fine.
 			//

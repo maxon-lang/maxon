@@ -22,14 +22,14 @@ When an array of managed structs is populated across multiple function calls, an
 Simulates the pattern from the query engine: recordDependency pushes elements
 between clearDepsFor calls.
 ```maxon
-export union QueryKey
+union QueryKey
 		sourceFile(path String)
 		tokens(path String)
 		allModule
 		codeResult
 end 'QueryKey'
 
-export type Dependency
+type Dependency
 		export var dependent as QueryKey
 		export var dependency as QueryKey
 
@@ -40,7 +40,7 @@ end 'Dependency'
 
 typealias DependencyArray = Array with Dependency
 
-export type Database
+type Database
 		export var dependencies as DependencyArray
 
 		static function create(dependencies DependencyArray) returns Self
@@ -94,7 +94,7 @@ then reassign the array field so the old array's destructor must clean up all el
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-export union Tag
+union Tag
 		label(name String)
 		index(n Integer)
 end 'Tag'
@@ -149,7 +149,7 @@ end 'main'
 ### Interleaved push and clear cycles on same array field
 Multiple rounds of push-then-reassign, each round the old array is freed.
 ```maxon
-export union Key
+union Key
 		file(path String)
 		module
 end 'Key'

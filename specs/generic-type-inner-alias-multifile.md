@@ -18,8 +18,8 @@ When a generic type declares an inner typealias using its type parameter (e.g., 
 <!-- test: inner-alias-cross-file -->
 ```maxon
 // --- file: types.maxon
-typealias Count = int(0 to u64.max)
-typealias Integer = int(i64.min to i64.max)
+export typealias Count = int(0 to u64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export type Item
 	export var value as Integer
@@ -87,8 +87,8 @@ end 'main'
 <!-- test: inner-alias-interpolation -->
 ```maxon
 // --- file: types.maxon
-typealias Count = int(0 to u64.max)
-typealias Integer = int(i64.min to i64.max)
+export typealias Count = int(0 to u64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 public type Item
 	export var value as Integer

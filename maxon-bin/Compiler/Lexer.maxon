@@ -1848,7 +1848,7 @@ type Lexer
 
 	// --- Main DFA loop ---
 
-	function run() returns TokenArray throws LexerError
+	export function run() returns TokenArray throws LexerError
 		// Drive the DFA until either stepDfa returns true (consumed everything
 		// cleanly) or a scanner unwinds via CursorError. CursorError with
 		// `emittedAtEof` set means a complete token landed on the last byte
@@ -1946,7 +1946,7 @@ type KeywordInfo
 	export var helpText as String
 	export var canHaveBlockLabel as bool
 
-	export static function create(kind TokenKind, helpText String, canHaveBlockLabel bool) returns KeywordInfo
+	static function create(kind TokenKind, helpText String, canHaveBlockLabel bool) returns KeywordInfo
 		return Self{kind: kind, helpText: helpText, canHaveBlockLabel: canHaveBlockLabel}
 	end 'create'
 end 'KeywordInfo'
@@ -1956,7 +1956,7 @@ typealias KeywordInfoMap = Map with (ByteArray, KeywordInfo)
 // ⭐ **THE RESERVED WORDS, AS A VALUE EACH OWNER BUILDS ONCE AND HANDS TO EVERY `tokenize` IT RUNS** — a compile's
 // `Project`, an LSP session, one formatting pass. Not a module `var`: a lexer on a pool worker may reach none
 // (E3143). It is the only place the set is written down; every keyword question is asked of it.
-module type KeywordTable
+export type KeywordTable
 	let byName as KeywordInfoMap
 
 	module static function create() returns KeywordTable

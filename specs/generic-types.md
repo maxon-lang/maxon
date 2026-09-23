@@ -74,10 +74,10 @@ base, or the wrong number of arguments, is rejected.
 typealias Integer = int(i64.min to i64.max)
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
-	export function get() returns T
+	function get() returns T
 		return self.value
 	end 'get'
 end 'Box'
@@ -100,7 +100,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -122,7 +122,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -146,13 +146,13 @@ typealias Integer = int(i64.min to i64.max)
 type Pair uses A, B
 	export var first as A
 	export var second as B
-	export static function create(a A, b B) returns Self
+	static function create(a A, b B) returns Self
 		return Self{first: a, second: b}
 	end 'create'
-	export function firstVal() returns A
+	function firstVal() returns A
 		return self.first
 	end 'firstVal'
-	export function secondVal() returns B
+	function secondVal() returns B
 		return self.second
 	end 'secondVal'
 end 'Pair'
@@ -176,16 +176,16 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x as Integer
-	export static function create(x Integer) returns Self
+	static function create(x Integer) returns Self
 		return Self{x: x}
 	end 'create'
-	export function getX() returns Integer
+	function getX() returns Integer
 		return self.x
 	end 'getX'
 end 'Point'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -240,7 +240,7 @@ error E2056: <fragment>:7:17: generic type 'Pair' expects 2 type argument(s), bu
 ```maxon
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -265,13 +265,13 @@ typealias Integer = int(i64.min to i64.max)
 type Holder
 	export var label as String
 	export var n as Integer
-	export static function create(l String, n Integer) returns Self
+	static function create(l String, n Integer) returns Self
 		return Self{label: l, n: n}
 	end 'create'
 end 'Holder'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -296,10 +296,10 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
-	export function get() returns T
+	function get() returns T
 		return self.value
 	end 'get'
 end 'Box'
@@ -324,7 +324,7 @@ end 'main'
 ```maxon
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -348,7 +348,7 @@ end 'main'
 ```maxon
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -373,7 +373,7 @@ end 'main'
 ```maxon
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -396,7 +396,7 @@ end 'main'
 ```maxon
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -424,7 +424,7 @@ typealias Integer = int(i64.min to i64.max)
 type Tagged uses T
 	export var value as T
 	export var tag as String
-	export static function create(v T, tag String) returns Self
+	static function create(v T, tag String) returns Self
 		return Self{value: v, tag: tag}
 	end 'create'
 end 'Tagged'
@@ -449,7 +449,7 @@ typealias Integer = int(i64.min to i64.max)
 type DPair uses T
 	export var a as T
 	export var b as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{a: v, b: v}
 	end 'create'
 end 'DPair'
@@ -469,7 +469,7 @@ typealias Integer = int(i64.min to i64.max)
 type IntPair
 	export var a as Integer
 	export var b as Integer
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{a: n, b: n}
 	end 'create'
 end 'IntPair'
@@ -489,10 +489,10 @@ with no drop — unchanged from before P1.7 slice 3b-vii, and exercised on all t
 ```maxon
 type Box uses Element
 	export var saved as Element
-	export static function create(first Element) returns Self
+	static function create(first Element) returns Self
 		return Self{ saved: first }
 	end 'create'
-	export function replace(next Element)
+	function replace(next Element)
 		self.saved = next
 	end 'replace'
 end 'Box'
@@ -517,10 +517,10 @@ This was a reachable `0xC0000005` fault before P1.7 Finding A.
 ```maxon
 type Box uses Element
 	export var saved as Element
-	export static function create(first Element) returns Self
+	static function create(first Element) returns Self
 		return Self{ saved: first }
 	end 'create'
-	export function replace(next Element)
+	function replace(next Element)
 		self.saved = next
 	end 'replace'
 end 'Box'
@@ -543,7 +543,7 @@ Leak-free under `__mm_free` poisoning.
 ```maxon
 type Box uses Element
 	export var saved as Element
-	export static function create(first Element) returns Self
+	static function create(first Element) returns Self
 		return Self{ saved: first }
 	end 'create'
 end 'Box'
@@ -566,10 +566,10 @@ poisoning.
 ```maxon
 type Box uses Element
 	export var saved as Element
-	export static function create(first Element) returns Self
+	static function create(first Element) returns Self
 		return Self{ saved: first }
 	end 'create'
-	export function replace(next Element)
+	function replace(next Element)
 		self.saved = next
 	end 'replace'
 end 'Box'
@@ -596,16 +596,16 @@ scope-exit drop free each Holder exactly once — leak-free under `__mm_free` po
 ```maxon
 type Holder
 	export var text as String
-	export static function create(t String) returns Self
+	static function create(t String) returns Self
 		return Self{ text: t }
 	end 'create'
 end 'Holder'
 type Box uses Element
 	export var saved as Element
-	export static function create(first Element) returns Self
+	static function create(first Element) returns Self
 		return Self{ saved: first }
 	end 'create'
-	export function replace(next Element)
+	function replace(next Element)
 		self.saved = next
 	end 'replace'
 end 'Box'
@@ -628,17 +628,17 @@ Leak-free under `__mm_free` poisoning.
 ```maxon
 type Box uses Element
 	export var saved as Element
-	export static function create(first Element) returns Self
+	static function create(first Element) returns Self
 		return Self{ saved: first }
 	end 'create'
-	export function replace(next Element)
+	function replace(next Element)
 		self.saved = next
 	end 'replace'
 end 'Box'
 type Outer uses T
 	typealias Inner = Box with T
 	export var inner as Inner
-	export static function create(first T) returns Self
+	static function create(first T) returns Self
 		return Self{ inner: Inner.create(first) }
 	end 'create'
 end 'Outer'
@@ -657,19 +657,19 @@ end 'main'
 ```maxon
 type Leaf
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'Leaf'
 type Other
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'Other'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -703,19 +703,19 @@ would be a bug; a mint here with no such declaration is the rule working.**
 ```maxon
 type Leaf
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'Leaf'
 type Other
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'Other'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -734,19 +734,19 @@ error E3005: <fragment>:23:23: argument type mismatch for 'v': expected 'Box_Lea
 ```maxon
 type Leaf
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'Leaf'
 type Other
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'Other'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -766,19 +766,19 @@ error E3005: <fragment>:24:23: argument type mismatch for 'v': expected 'Box_Lea
 ```maxon
 type Leaf
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'Leaf'
 type Other
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'Other'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -786,10 +786,10 @@ typealias LeafBox = Box with Leaf
 typealias OtherBox = Box with Other
 type Holder
 	export var b as LeafBox
-	export static function create(b LeafBox) returns Self
+	static function create(b LeafBox) returns Self
 		return Self{b: b}
 	end 'create'
-	export function replace(_ LeafBox) returns ExitCode
+	function replace(_ LeafBox) returns ExitCode
 		return 0
 	end 'replace'
 end 'Holder'
@@ -806,19 +806,19 @@ error E3005: <fragment>:33:11: argument type mismatch for '_': expected 'LeafBox
 ```maxon
 type Leaf
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'Leaf'
 type Other
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'Other'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -840,19 +840,19 @@ error E3005: <fragment>:23:2: Cannot return 'OtherBox' from function declared to
 ```maxon
 type Leaf
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'Leaf'
 type Other
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'Other'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -872,19 +872,19 @@ error E3005: <fragment>:24:2: cannot assign a value of type 'OtherBox' to variab
 ```maxon
 type Leaf
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'Leaf'
 type Other
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'Other'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -892,7 +892,7 @@ typealias LeafBox = Box with Leaf
 typealias OtherBox = Box with Other
 type Holder
 	export var b as LeafBox
-	export static function create(v OtherBox) returns Self
+	static function create(v OtherBox) returns Self
 		return Self{b: v}
 	end 'create'
 end 'Holder'
@@ -909,13 +909,13 @@ error E3005: <fragment>:25:15: cannot assign a value of type 'OtherBox' to field
 ```maxon
 type Leaf
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'Leaf'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -935,20 +935,20 @@ error E3005: <fragment>:19:9: argument type mismatch for '_': expected 'LeafBox'
 ```maxon
 type Leaf
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'Leaf'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
 type Pair uses A, B
 	export var first as A
 	export var second as B
-	export static function create(first A, second B) returns Self
+	static function create(first A, second B) returns Self
 		return Self{first: first, second: second}
 	end 'create'
 end 'Pair'
@@ -970,13 +970,13 @@ unasked (`nominal-generic-alias.md`); `create` returns `Self`, so its result car
 ```maxon
 type Leaf
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'Leaf'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -999,13 +999,13 @@ The legal twin: the two names denote ONE instance, so `as LeafBox` is a re-brand
 ```maxon
 type Leaf
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'Leaf'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -1030,13 +1030,13 @@ a
 ```maxon
 type Leaf
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'Leaf'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -1061,13 +1061,13 @@ a
 ```maxon
 type S0
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'S0'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -1092,13 +1092,13 @@ x
 ```maxon
 type S0
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'S0'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -1193,13 +1193,13 @@ a `var` REASSIGNMENT, and a `return`.
 ```maxon
 type S0
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'S0'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -1242,13 +1242,13 @@ extractor rather than the value extractor — and the two diverge at depth 2 if 
 ```maxon
 type S0
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'S0'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -1289,16 +1289,16 @@ tuple-alias half A3e's review closed.
 ```maxon
 type S0
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'S0'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
-	export function swap(v T)
+	function swap(v T)
 		self.value = v
 	end 'swap'
 end 'Box'
@@ -1322,16 +1322,16 @@ a fresh `N0` into the box and drops the one it replaces. A retain that no longer
 ```maxon
 type S0
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'S0'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
-	export function swap(v T)
+	function swap(v T)
 		self.value = v
 	end 'swap'
 end 'Box'
@@ -1359,13 +1359,13 @@ consume was a MOVE; the classification they pin is unchanged, only its refcount 
 ```maxon
 type S0
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'S0'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -1396,13 +1396,13 @@ already correct and did not move.
 ```maxon
 type S0
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'S0'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -1441,13 +1441,13 @@ record is dropped.
 ```maxon
 type S0
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'S0'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -1469,13 +1469,13 @@ identically, so neither the leak nor its cure depended on the argument being a t
 ```maxon
 type S0
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'S0'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -1512,18 +1512,18 @@ type Wrapper uses T
 	export var value as T
 	export var tag as Idx
 
-	export static function create(value T, tag Idx) returns Self
+	static function create(value T, tag Idx) returns Self
 		return Self{value: value, tag: tag}
 	end 'create'
 
-	export function getTag() returns Idx
+	function getTag() returns Idx
 		return self.tag
 	end 'getTag'
 end 'Wrapper'
 
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -1555,13 +1555,13 @@ end 'main'
 ```maxon
 type S0
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'S0'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -1578,13 +1578,13 @@ error E2012: <fragment>:14:24: Circular typealias dependency: A
 ```maxon
 type S0
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'S0'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -1602,13 +1602,13 @@ error E2012: <fragment>:14:11: Circular typealias dependency: A -> B -> A
 ```maxon
 type S0
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'S0'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -1818,7 +1818,7 @@ all along.
 ```maxon
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -1844,7 +1844,7 @@ milestone there is none.
 ```maxon
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -1892,7 +1892,7 @@ who believed it would never look for the value door at all.
 typealias Real = float(f64.min to f64.max)
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -1994,7 +1994,7 @@ wrong and not merely that one of them is.
 ```maxon
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -2017,10 +2017,10 @@ builtin `Array`.
 ```maxon
 type Sizer uses T
 	export var v as T
-	export static function create(x T) returns Self
+	static function create(x T) returns Self
 		return Self{v: x}
 	end 'create'
-	export function get() returns T
+	function get() returns T
 		return self.v
 	end 'get'
 end 'Sizer'
@@ -2046,13 +2046,13 @@ suite is built on; the rule may not touch one of them.
 ```maxon
 type Leaf
 	export var s as String
-	export static function make(t String) returns Self
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'Leaf'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -2086,10 +2086,10 @@ resolved by the same `denotedNamedType` cascade every other name goes through.
 typealias Integer = int(i64.min to i64.max)
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
-	export function get() returns T
+	function get() returns T
 		return self.value
 	end 'get'
 end 'Box'
@@ -2117,7 +2117,7 @@ program whose only defect was an ordinary lossy conversion.
 typealias Integer = int(i64.min to i64.max)
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -2139,7 +2139,7 @@ that only taught the numeric arm would leave half the defect live.
 ```maxon
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -2161,7 +2161,7 @@ refuses this would break every generic call in the corpus.
 typealias Integer = int(i64.min to i64.max)
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -2201,16 +2201,16 @@ type Wrapper uses T
 	export typealias Idx = int(0 to u64.max)
 	export var value as T
 	export var tag as Idx
-	export static function create(v T, tag Idx) returns Self
+	static function create(v T, tag Idx) returns Self
 		return Self{value: v, tag: tag}
 	end 'create'
-	export function getTag() returns Idx
+	function getTag() returns Idx
 		return self.tag
 	end 'getTag'
 end 'Wrapper'
 type Box uses T
 	export var item as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{item: v}
 	end 'create'
 end 'Box'
@@ -2238,13 +2238,13 @@ why the suite could be green over it.
 typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x as Integer
-	export static function create(x Integer) returns Self
+	static function create(x Integer) returns Self
 		return Self{x: x}
 	end 'create'
 end 'Point'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -2273,13 +2273,13 @@ an operand of `+`.
 typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x as Integer
-	export static function create(x Integer) returns Self
+	static function create(x Integer) returns Self
 		return Self{x: x}
 	end 'create'
 end 'Point'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -2304,13 +2304,13 @@ the same door, it is the instance, and `q.value` reaches `Box`'s field.
 typealias Integer = int(i64.min to i64.max)
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
 type Holder uses U
 	export var item as U
-	export static function hold(v U) returns Self
+	static function hold(v U) returns Self
 		return Self{item: v}
 	end 'hold'
 end 'Holder'
@@ -2340,13 +2340,13 @@ typealias Integer = int(i64.min to i64.max)
 type Label
 	export var text as String
 	export var n as Integer
-	export static function create(t String, n Integer) returns Self
+	static function create(t String, n Integer) returns Self
 		return Self{text: t, n: n}
 	end 'create'
 end 'Label'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -2378,13 +2378,13 @@ A4i, so A4i is what turned a clean refusal into this.
 typealias Integer = int(i64.min to i64.max)
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
 type Holder uses U
 	export var item as U
-	export static function hold(v U) returns Self
+	static function hold(v U) returns Self
 		return Self{item: v}
 	end 'hold'
 end 'Holder'
@@ -2416,13 +2416,13 @@ typealias Integer = int(i64.min to i64.max)
 type Label
 	export var text as String
 	export var n as Integer
-	export static function create(t String, n Integer) returns Self
+	static function create(t String, n Integer) returns Self
 		return Self{text: t, n: n}
 	end 'create'
 end 'Label'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -2456,19 +2456,19 @@ typealias Integer = int(i64.min to i64.max)
 type Label
 	export var text as String
 	export var n as Integer
-	export static function create(t String, n Integer) returns Self
+	static function create(t String, n Integer) returns Self
 		return Self{text: t, n: n}
 	end 'create'
 end 'Label'
 type Other
 	export var k as Integer
-	export static function create(k Integer) returns Self
+	static function create(k Integer) returns Self
 		return Self{k: k}
 	end 'create'
 end 'Other'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -2498,16 +2498,16 @@ which is its own defect and not a verdict.
 typealias Integer = int(i64.min to i64.max)
 type Label
 	export var n as Integer
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 end 'Label'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
-	export function clobber()
+	function clobber()
 		self.value = Label.create(77)
 	end 'clobber'
 end 'Box'
@@ -2534,7 +2534,7 @@ struct field and another to a payload.
 typealias Num = int(0 to 1000)
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -2600,13 +2600,13 @@ either as a failure.
 ```maxon
 type Label
 	export var text as String
-	export static function create(t String) returns Self
+	static function create(t String) returns Self
 		return Self{text: t}
 	end 'create'
 end 'Label'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -2645,13 +2645,13 @@ the cascade frees it exactly once.
 ```maxon
 type Label
 	export var text as String
-	export static function create(t String) returns Self
+	static function create(t String) returns Self
 		return Self{text: t}
 	end 'create'
 end 'Label'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -2720,14 +2720,14 @@ runnable oracle, which prints 7.
 typealias Integer = int(i64.min to i64.max)
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
 typealias IntBox = Box with Integer
 type Outer
 	export var b as IntBox
-	export static function create(v IntBox) returns Self
+	static function create(v IntBox) returns Self
 		return Self{b: v}
 	end 'create'
 end 'Outer'
@@ -2757,13 +2757,13 @@ oracle: 7.
 typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x as Integer
-	export static function create(x Integer) returns Self
+	static function create(x Integer) returns Self
 		return Self{x: x}
 	end 'create'
 end 'Point'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -2789,20 +2789,20 @@ or the third one reads an integer. MEASURED on the oracle: 9.
 typealias Integer = int(i64.min to i64.max)
 type Leaf
 	export var n as Integer
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 end 'Leaf'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
 typealias LeafBox = Box with Leaf
 type Outer
 	export var b as LeafBox
-	export static function create(v LeafBox) returns Self
+	static function create(v LeafBox) returns Self
 		return Self{b: v}
 	end 'create'
 end 'Outer'
@@ -2851,7 +2851,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 type Holder
 	export var a as IntArray
-	export static function create(a IntArray) returns Self
+	static function create(a IntArray) returns Self
 		return Self{a: a}
 	end 'create'
 end 'Holder'
@@ -2880,16 +2880,16 @@ AFTER the retype makes both halves true at once. MEASURED on the oracle: `a=1`.
 typealias Integer = int(i64.min to i64.max)
 type Alpha
 	export var a as Integer
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{a: 1}
 	end 'create'
 end 'Alpha'
 type Box uses T
 	export var tag as Integer
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{tag: 0}
 	end 'create'
-	export function echo(v T) returns T
+	function echo(v T) returns T
 		return v
 	end 'echo'
 end 'Box'
@@ -2920,16 +2920,16 @@ leak (the runner reports exit 101); a doubled one faults on the poisoned box.
 typealias Integer = int(i64.min to i64.max)
 type Alpha
 	export var a as Integer
-	export static function create(a Integer) returns Self
+	static function create(a Integer) returns Self
 		return Self{a: a}
 	end 'create'
 end 'Alpha'
 type Box uses T
 	export var tag as Integer
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{tag: 0}
 	end 'create'
-	export function echo(v T) returns T
+	function echo(v T) returns T
 		return v
 	end 'echo'
 end 'Box'
@@ -2959,10 +2959,10 @@ of the shared body and dropped once; the byte lengths of `0`…`99` sum to 190.
 typealias Integer = int(i64.min to i64.max)
 type Box uses T
 	export var tag as Integer
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{tag: 0}
 	end 'create'
-	export function echo(v T) returns T
+	function echo(v T) returns T
 		return v
 	end 'echo'
 end 'Box'
@@ -2996,22 +2996,22 @@ which reads back 5.
 typealias Integer = int(i64.min to i64.max)
 type Alpha
 	export var a as Integer
-	export static function create(a Integer) returns Self
+	static function create(a Integer) returns Self
 		return Self{a: a}
 	end 'create'
 end 'Alpha'
 type Wrap
 	export var held as Alpha
-	export static function create(v Alpha) returns Self
+	static function create(v Alpha) returns Self
 		return Self{held: v}
 	end 'create'
 end 'Wrap'
 type Box uses T
 	export var tag as Integer
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{tag: 0}
 	end 'create'
-	export function echo(v T) returns T
+	function echo(v T) returns T
 		return v
 	end 'echo'
 end 'Box'
@@ -3044,19 +3044,19 @@ would pass every other case in this file.
 typealias Integer = int(i64.min to i64.max)
 type Alpha
 	export var a as Integer
-	export static function create(a Integer) returns Self
+	static function create(a Integer) returns Self
 		return Self{a: a}
 	end 'create'
 end 'Alpha'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
-	export function get() returns T
+	function get() returns T
 		return self.value
 	end 'get'
-	export function relay() returns T
+	function relay() returns T
 		return self.get()
 	end 'relay'
 end 'Box'
@@ -3086,16 +3086,16 @@ to the non-generic control `over(Alpha.create(3))`, which this program must agre
 typealias Integer = int(i64.min to i64.max)
 type Alpha
 	export var a as Integer
-	export static function create(a Integer) returns Self
+	static function create(a Integer) returns Self
 		return Self{a: a}
 	end 'create'
 end 'Alpha'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
-	export function get() returns T
+	function get() returns T
 		return self.value
 	end 'get'
 end 'Box'
@@ -3137,10 +3137,10 @@ union Shape
 end 'Shape'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
-	export function get() returns T
+	function get() returns T
 		return self.value
 	end 'get'
 end 'Box'
@@ -3189,10 +3189,10 @@ non-generic control `let s = "hi"`, whose `byteLength()` is 2.
 typealias Integer = int(i64.min to i64.max)
 type Box uses T
 	export var tag as Integer
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{tag: 0}
 	end 'create'
-	export function echo(v T) returns T
+	function echo(v T) returns T
 		return v
 	end 'echo'
 end 'Box'
@@ -3225,16 +3225,16 @@ enum Boom implements Error
 end 'Boom'
 type Alpha
 	export var a as Integer
-	export static function create(a Integer) returns Self
+	static function create(a Integer) returns Self
 		return Self{a: a}
 	end 'create'
 end 'Alpha'
 type Box uses T
 	export var tag as Integer
-	export static function create(t Integer) returns Self
+	static function create(t Integer) returns Self
 		return Self{tag: t}
 	end 'create'
-	export function echo(v T) returns T throws Boom
+	function echo(v T) returns T throws Boom
 		if self.tag > 0 'blows'
 			throw Boom.bad
 		end 'blows'
@@ -3297,16 +3297,16 @@ enum Boom implements Error
 end 'Boom'
 type Alpha
 	export var a as Integer
-	export static function create(v Integer) returns Self
+	static function create(v Integer) returns Self
 		return Self{a: v}
 	end 'create'
 end 'Alpha'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
-	export function fetch() returns T throws Boom
+	function fetch() returns T throws Boom
 		return self.value
 	end 'fetch'
 end 'Box'
@@ -3345,10 +3345,10 @@ enum Boom implements Error
 end 'Boom'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
-	export function fetch() returns T throws Boom
+	function fetch() returns T throws Boom
 		return self.value
 	end 'fetch'
 end 'Box'
@@ -3386,10 +3386,10 @@ enum Boom implements Error
 end 'Boom'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
-	export function fetch() returns T throws Boom
+	function fetch() returns T throws Boom
 		return self.value
 	end 'fetch'
 end 'Box'
@@ -3422,16 +3422,16 @@ enum Boom implements Error
 end 'Boom'
 type Alpha
 	export var a as Integer
-	export static function create(v Integer) returns Self
+	static function create(v Integer) returns Self
 		return Self{a: v}
 	end 'create'
 end 'Alpha'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
-	export function fetch() returns T throws Boom
+	function fetch() returns T throws Boom
 		return self.value
 	end 'fetch'
 end 'Box'
@@ -3470,16 +3470,16 @@ enum Boom implements Error
 end 'Boom'
 type Alpha
 	export var a as Integer
-	export static function create(v Integer) returns Self
+	static function create(v Integer) returns Self
 		return Self{a: v}
 	end 'create'
 end 'Alpha'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
-	export function get() returns T
+	function get() returns T
 		return self.value
 	end 'get'
 end 'Box'
@@ -3522,17 +3522,17 @@ enum Boom implements Error
 end 'Boom'
 type Alpha
 	export var a as Integer
-	export static function create(v Integer) returns Self
+	static function create(v Integer) returns Self
 		return Self{a: v}
 	end 'create'
 end 'Alpha'
 type Box uses T
 	export var value as T
 	export var fail as bool
-	export static function create(v T, f bool) returns Self
+	static function create(v T, f bool) returns Self
 		return Self{value: v, fail: f}
 	end 'create'
-	export function fetch() returns T throws Boom
+	function fetch() returns T throws Boom
 		if self.fail 'boom'
 			throw Boom.bad
 		end 'boom'
@@ -3579,17 +3579,17 @@ enum Boom implements Error
 end 'Boom'
 type Alpha
 	export var a as Integer
-	export static function create(v Integer) returns Self
+	static function create(v Integer) returns Self
 		return Self{a: v}
 	end 'create'
 end 'Alpha'
 type Box uses T
 	export var value as T
 	export var fail as bool
-	export static function create(v T, f bool) returns Self
+	static function create(v T, f bool) returns Self
 		return Self{value: v, fail: f}
 	end 'create'
-	export function fetch() returns T throws Boom
+	function fetch() returns T throws Boom
 		if self.fail 'boom'
 			throw Boom.bad
 		end 'boom'
@@ -3674,7 +3674,7 @@ type HoldA uses U
 		return HoldA{items: xs}
 	end 'of'
 
-	export function total(other Nums) returns Num
+	function total(other Nums) returns Num
 		return other.count()
 	end 'total'
 end 'HoldA'
@@ -3736,7 +3736,7 @@ type HoldA uses U
 		return HoldA{items: xs}
 	end 'of'
 
-	export function total(other Nums) returns Num
+	function total(other Nums) returns Num
 		return other.count()
 	end 'total'
 end 'HoldA'
@@ -3776,18 +3776,18 @@ failure.
 typealias Num = int(i64.min to i64.max)
 
 type HoldA uses T
-	typealias Items = Array with T
+	export typealias Items = Array with T
 	export var items as Items
-	export static function create(seed T) returns Self
+	static function create(seed T) returns Self
 		var arr = Items.create()
 		arr.resize(1)
 		try arr.set(0, value: seed) otherwise panic("seeded slot 0 must exist after resize(1)")
 		return Self{items: arr}
 	end 'create'
-	export function adopt(other Items)
+	function adopt(other Items)
 		self.items = other
 	end 'adopt'
-	export function isSingle() returns bool
+	function isSingle() returns bool
 		return self.items.count() == 1
 	end 'isSingle'
 end 'HoldA'
@@ -3822,16 +3822,16 @@ typealias NumArray = Array with Num
 
 type HoldConcrete
 	export var items as NumArray
-	export static function create(seed Num) returns Self
+	static function create(seed Num) returns Self
 		var arr = NumArray.create()
 		arr.resize(1)
 		try arr.set(0, value: seed) otherwise panic("seeded slot 0 must exist after resize(1)")
 		return Self{items: arr}
 	end 'create'
-	export function adopt(other NumArray)
+	function adopt(other NumArray)
 		self.items = other
 	end 'adopt'
-	export function isSingle() returns bool
+	function isSingle() returns bool
 		return self.items.count() == 1
 	end 'isSingle'
 end 'HoldConcrete'
@@ -3890,7 +3890,7 @@ type Inner uses P
 	let p as P
 	let s as String
 
-	export function tag() returns Integer
+	function tag() returns Integer
 		return s.count()
 	end 'tag'
 
@@ -3903,7 +3903,7 @@ type Outer uses T
 	typealias I = Inner with T
 	var n as Integer
 
-	export function build(t T) returns Integer
+	function build(t T) returns Integer
 		let i = I.create(t, s: t)
 		return n + i.tag()
 	end 'build'
@@ -3939,7 +3939,7 @@ end 'takeText'
 type Outer uses T
 	var n as Integer
 
-	export function build(t T) returns Integer
+	function build(t T) returns Integer
 		return takeText(t) + n
 	end 'build'
 
@@ -3971,7 +3971,7 @@ var slot = "x"
 type Outer uses T
 	var n as Integer
 
-	export function put(t T) returns Integer
+	function put(t T) returns Integer
 		slot = t
 		return n
 	end 'put'
@@ -4007,7 +4007,7 @@ type Inner uses P
 	let p as P
 	let s as String
 
-	export function tag() returns Integer
+	function tag() returns Integer
 		return s.count()
 	end 'tag'
 
@@ -4020,7 +4020,7 @@ type Outer uses T
 	typealias I = Inner with T
 	var n as Integer
 
-	export function build(t T) returns Integer
+	function build(t T) returns Integer
 		let i = I.create(t, s: t)
 		return n + i.tag()
 	end 'build'
@@ -4057,7 +4057,7 @@ typealias Integer = int(i64.min to i64.max)
 type Outer uses T
 	var n as Integer
 
-	export static function pick(t T) returns String
+	static function pick(t T) returns String
 		return t
 	end 'pick'
 
@@ -4101,7 +4101,7 @@ end 'takeMsg'
 type Outer uses T
 	var n as Integer
 
-	export function build(t T) returns Integer
+	function build(t T) returns Integer
 		return takeMsg(t) + n
 	end 'build'
 
@@ -4158,11 +4158,11 @@ type Box uses T
 		return Self{value: v}
 	end 'create'
 
-	export function put(v T) returns T
+	function put(v T) returns T
 		return v
 	end 'put'
 
-	export function clobber() returns T
+	function clobber() returns T
 		return put(Label.create(77))
 	end 'clobber'
 end 'Box'

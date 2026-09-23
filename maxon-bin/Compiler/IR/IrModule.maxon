@@ -10,10 +10,10 @@
 
 export typealias OpCount = int(0 to u64.max)
 export typealias BlockCount = int(0 to u64.max)
-module typealias FuncCount = int(0 to u64.max)
+export typealias FuncCount = int(0 to u64.max)
 export typealias FuncIndex = int(0 to u64.max)
 
-module typealias BlockRefIndex = int(0 to u64.max)
+export typealias BlockRefIndex = int(0 to u64.max)
 
 // The result of `IrModule.blockIndexById`: a function's `BlockId` to its position in
 // `func.blockRefs`. Named here beside `BlockRefIndex`, which is what it holds.
@@ -344,7 +344,7 @@ export type IrModule uses Op
 	// list rather than `getBlockByIdIn` per lookup, which is a scan and would make a per-block splice
 	// quadratic in a function's block count. The id space is dense per function but not gap-free, so the
 	// holes are real.
-	export function prepareSplice(func IrFunction, scratch SpliceScratch)
+	module function prepareSplice(func IrFunction, scratch SpliceScratch)
 		self.collectLiveOpIndices(func, into: scratch.slots.recycled)
 		scratch.slots.taken = 0
 		scratch.absent = self.blocks.count()
@@ -649,7 +649,7 @@ export type IrModule uses Op
 	// (an `ops.set`, which the column mirrors with a `set` of its own) or APPENDED (a push past the tail,
 	// which it mirrors with a push) — and a caller that had to mirror that choice itself would be the one
 	// place the two halves could disagree.
-	export function placeOp(slots OpSlotSupply, op Op, spanId SpanId) returns OpIndex
+	module function placeOp(slots OpSlotSupply, op Op, spanId SpanId) returns OpIndex
 		if slots.taken < slots.recycled.count() 'reuseThisFunctionsOwnSlot'
 			let recycledIdx = try slots.recycled.get(slots.taken) otherwise panic("IrModule.placeOp: recycled.get OOB at {slots.taken} below count {slots.recycled.count()}")
 			slots.taken = slots.taken + 1
@@ -779,7 +779,7 @@ module type OpSlotSupply
 	export var recycled as OpIndexArray
 	export var taken as ElementIndex
 
-	export static function create() returns OpSlotSupply
+	module static function create() returns OpSlotSupply
 		return Self{recycled: OpIndexArray.create(), taken: 0}
 	end 'create'
 end 'OpSlotSupply'
@@ -796,12 +796,12 @@ module type SpliceScratch
 	// which no block of the function has.
 	export var absent as BlockRef
 
-	export static function create() returns SpliceScratch
+	module static function create() returns SpliceScratch
 		return Self{slots: OpSlotSupply.create(), blockRefById: BlockRefArray.create(), absent: 0}
 	end 'create'
 
 	// The function's ref for block `id`, or `absent`.
-	export function blockRefOf(id BlockId) returns BlockRef
+	module function blockRefOf(id BlockId) returns BlockRef
 		return try self.blockRefById.get(id) otherwise self.absent
 	end 'blockRefOf'
 end 'SpliceScratch'
@@ -822,7 +822,7 @@ type OpCompactionPlan
 	export var liveCount as OpCount
 	export var deadMarker as OpIndex
 
-	export static function create(forward OpIndexArray, liveCount OpCount, deadMarker OpIndex) returns OpCompactionPlan
+	static function create(forward OpIndexArray, liveCount OpCount, deadMarker OpIndex) returns OpCompactionPlan
 		return Self{forward: forward, liveCount: liveCount, deadMarker: deadMarker}
 	end 'create'
 end 'OpCompactionPlan'

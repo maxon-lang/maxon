@@ -45,7 +45,7 @@ enum Direction
 	north
 	south
 
-	export function opposite() returns Direction
+	function opposite() returns Direction
 		return match self 'flip'
 			north gives Self.south
 			south gives Self.north
@@ -500,7 +500,7 @@ union Shape
 	square(side Amount)
 	point
 
-	export function area() returns Amount
+	function area() returns Amount
 		return match self 'calc'
 			circle(r) gives 3 * r * r
 			square(s) gives s * s

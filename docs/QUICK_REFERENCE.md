@@ -302,16 +302,19 @@ key.
 
 ## Visibility
 
-All declarations are file-scoped by default. Maxon has three visibility tiers:
+All declarations are file-scoped by default. Maxon has four visibility tiers:
 
 - **default** (no keyword) — visible only within the declaring file.
 - **`module`** — visible to every file in the same directory and any subdirectory.
 - **`export`** — visible everywhere in the compilation.
+- **`public`** — visible everywhere, and declared API surface, so the unused-export checks skip it.
 
-`module` and `export` are mutually exclusive. `module` is a contextual keyword, so it can still be used as an identifier in other positions.
+At most one modifier may be written. `module` is a contextual keyword, so it can still be used as an identifier in other positions.
+
+A signature may not name a type less visible than the function itself — the tiers order default < `module` < `export` < `public`, and naming a narrower type is **E3167**.
 
 ```maxon
-typealias Score = int(i64.min to i64.max)
+export typealias Score = int(i64.min to i64.max)
 export function publicFunc() returns Score     // visible to other files
 module function packageFunc() returns Score    // visible to files in this directory subtree
 function privateFunc() returns Score           // only this file
@@ -486,7 +489,7 @@ type Point implements Hashable, Describable   // interface conformance
 				return "{name}({x}, {y})"
 		end 'describe'
 
-		export static function create(x Coord, y Coord) returns Point      // factory
+		static function create(x Coord, y Coord) returns Point      // factory
 				return Point{x: x, y: y}
 		end 'create'
 
@@ -515,7 +518,7 @@ type Counter
 	export var value as Tally        // no default
 	export var version = 0         // default
 
-	export static function create(initial Tally) returns Self
+	static function create(initial Tally) returns Self
 		self.value = initial         // proof of initialization
 		return Self{}                // OK: value proven; version defaulted
 	end 'create'

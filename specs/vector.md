@@ -623,11 +623,11 @@ type Holder uses Element
 
 	var slot as Slot
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{slot: Slot.create()}
 	end 'create'
 
-	export function size() returns Int
+	function size() returns Int
 		return slot.count()
 	end 'size'
 end 'Holder'
@@ -655,11 +655,11 @@ type Holder4 uses Element
 
 	var quad as Slot4
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{quad: Slot4.create()}
 	end 'create'
 
-	export function size() returns Int
+	function size() returns Int
 		return quad.count()
 	end 'size'
 end 'Holder4'
@@ -669,11 +669,11 @@ type Holder7 uses Element
 
 	var septet as Slot7
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{septet: Slot7.create()}
 	end 'create'
 
-	export function size() returns Int
+	function size() returns Int
 		return septet.count()
 	end 'size'
 end 'Holder7'
@@ -872,7 +872,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 
 extension Vector
-	export function grow() returns Int
+	function grow() returns Int
 		push(4)
 		return 0
 	end 'grow'
@@ -897,7 +897,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 
 extension Vector
-	export function grow() returns Int
+	function grow() returns Int
 		managed.push(4)
 		return 0
 	end 'grow'
@@ -1108,19 +1108,19 @@ type Holder uses Element
 
 	var slot as Slot
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{slot: Slot.create()}
 	end 'create'
 
-	export function put(index Int, value Element)
+	function put(index Int, value Element)
 		try slot.set(index as ElementIndex, value: value) otherwise panic("put")
 	end 'put'
 
-	export function at(index Int) returns Element
+	function at(index Int) returns Element
 		return try slot.get(index as ElementIndex) otherwise panic("at")
 	end 'at'
 
-	export function size() returns Int
+	function size() returns Int
 		return slot.count()
 	end 'size'
 end 'Holder'
@@ -1155,11 +1155,11 @@ type Holder uses Element
 
 	var slot as Slot
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{slot: Slot.create()}
 	end 'create'
 
-	export function size() returns Int
+	function size() returns Int
 		return slot.count()
 	end 'size'
 end 'Holder'
@@ -1186,11 +1186,11 @@ type Holder uses Element
 
 	var slot as Slot
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{slot: Slot.create()}
 	end 'create'
 
-	export function size() returns Int
+	function size() returns Int
 		return slot.count()
 	end 'size'
 end 'Holder'
@@ -1215,9 +1215,9 @@ refused whichever file is parsed first — an instantiation is a fact about the 
 parsed before the body.
 ```maxon
 // --- file: a_holder.maxon
-typealias Int = int(i64.min to i64.max)
+export typealias Int = int(i64.min to i64.max)
 
-type Holder uses T
+export type Holder uses T
 	typealias Slot = Vector with 4 T
 
 	var slot as Slot
@@ -1266,9 +1266,9 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: b_holder.maxon
-typealias Int = int(i64.min to i64.max)
+export typealias Int = int(i64.min to i64.max)
 
-type Holder uses T
+export type Holder uses T
 	typealias Slot = Vector with 4 T
 
 	var slot as Slot
@@ -1314,7 +1314,7 @@ interface Sized uses Element
 end 'Sized'
 
 extension Sized
-	export function tallyTwice() returns Int
+	function tallyTwice() returns Int
 		var v = Slot.create()
 		return (v.count() as Int) + tally()
 	end 'tallyTwice'
@@ -1324,11 +1324,11 @@ type Bag uses Element implements Sized with Element
 	typealias Slot = Vector with 4 Element
 	var n as Int
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 1}
 	end 'create'
 
-	export function tally() returns Int
+	function tally() returns Int
 		return n
 	end 'tally'
 end 'Bag'
@@ -1396,7 +1396,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 
 extension Vector
-	export function bust()
+	function bust()
 		managed.clear()
 	end 'bust'
 end 'Vector'
@@ -1419,7 +1419,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 
 extension Vector
-	export function stretch()
+	function stretch()
 		try managed.setLength(2) otherwise ignore
 	end 'stretch'
 end 'Vector'
@@ -1441,7 +1441,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 
 extension Vector
-	export function drop()
+	function drop()
 		try managed.remove(0) otherwise ignore
 	end 'drop'
 end 'Vector'
@@ -1484,7 +1484,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 
 extension Vector
-	export function double()
+	function double()
 		try managed.append(managed) otherwise ignore
 	end 'double'
 end 'Vector'
@@ -1508,7 +1508,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 
 extension Vector
-	export function bust()
+	function bust()
 		self.managed.clear()
 	end 'bust'
 end 'Vector'
@@ -1533,7 +1533,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 
 extension Vector
-	export function bust()
+	function bust()
 		var m = managed
 		m.clear()
 	end 'bust'
@@ -1563,7 +1563,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 
 extension Vector
-	export function buf() returns ElementMemory
+	function buf() returns ElementMemory
 		return managed
 	end 'buf'
 end 'Vector'
@@ -1590,7 +1590,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 
 extension Vector
-	export function survey() returns Int
+	function survey() returns Int
 		try managed.grow(64) otherwise ignore
 		try managed.swap(0, 1) otherwise ignore
 		try managed.shiftRight(0, 1) otherwise ignore
@@ -1652,7 +1652,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 
 extension Vector
-	export function bust()
+	function bust()
 		wipe(managed)
 	end 'bust'
 
@@ -1687,7 +1687,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 
 extension Vector
-	export function sliceThenClear() returns Int
+	function sliceThenClear() returns Int
 		var s = try managed.slice(0, 2) otherwise panic("slice")
 		return wipe(s) + (10 * (managed.length() as Int))
 	end 'sliceThenClear'
@@ -1718,7 +1718,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 
 extension Vector
-	export function part() returns ElementMemory
+	function part() returns ElementMemory
 		return try managed.slice(0, 2) otherwise panic("slice")
 	end 'part'
 end 'Vector'
@@ -1757,7 +1757,7 @@ typealias Vec3 = Vector with 3 Int
 extension Vector
 	typealias Bufs = Array with ElementMemory
 
-	export function bust() returns Int
+	function bust() returns Int
 		var b = Bufs.create()
 		b.push(managed)
 		var got = try b.get(0) otherwise panic("no element")
@@ -1785,7 +1785,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 
 extension Vector
-	export function bust() returns Int
+	function bust() returns Int
 		let t = (managed, 1)
 		t.0.clear()
 		return (managed.length() as Int) + t.1
@@ -1821,7 +1821,7 @@ typealias Vec3 = Vector with 3 Int
 extension Vector
 	typealias Arr = Array with Element
 
-	export function bust() returns Int
+	function bust() returns Int
 		var a = Arr.create()
 		a.managed = managed
 		a.managed.clear()
@@ -1857,7 +1857,7 @@ type Box uses T
 		return Self{held: held}
 	end 'create'
 
-	export function get() returns T
+	function get() returns T
 		return held
 	end 'get'
 end 'Box'
@@ -1865,7 +1865,7 @@ end 'Box'
 extension Vector
 	typealias BufBox = Box with ElementMemory
 
-	export function bust() returns Int
+	function bust() returns Int
 		let b = BufBox.create(managed)
 		let got = b.get()
 		got.clear()
@@ -1899,7 +1899,7 @@ type Box uses T
 		return Self{held: held}
 	end 'create'
 
-	export function get() returns T
+	function get() returns T
 		return held
 	end 'get'
 end 'Box'
@@ -1908,7 +1908,7 @@ extension Vector
 	typealias Bufs = Array with ElementMemory
 	typealias BufBox = Box with ElementMemory
 
-	export function survey() returns Int
+	function survey() returns Int
 		var b = Bufs.create()
 		b.push(try managed.slice(0, 2) otherwise panic("slice"))
 		var fromContainer = try b.get(0) otherwise panic("no element")
@@ -1957,7 +1957,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 
 extension Vector
-	export function bust(flag bool) returns Int
+	function bust(flag bool) returns Int
 		var m = managed if flag else managed
 		m.clear()
 		return managed.length() as Int
@@ -1982,7 +1982,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 
 extension Vector
-	export function bust() returns Int
+	function bust() returns Int
 		var m = try managed.slice(0, 99) otherwise managed
 		m.clear()
 		return managed.length() as Int
@@ -2036,7 +2036,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 
 extension Vector
-	export function walkedTwoWays() returns Int
+	function walkedTwoWays() returns Int
 		var viaSelf = 0
 		for e in self 'eachOwn'
 			viaSelf = viaSelf + (e - e) + 1
@@ -2189,11 +2189,11 @@ type Cell
 	export var content as Content
 	export var mask as Flags
 
-	export static function create(content Content, mask Flags) returns Self
+	static function create(content Content, mask Flags) returns Self
 		return Self{content: content, mask: mask}
 	end 'create'
 
-	export function describe() returns String
+	function describe() returns String
 		let first = match self.content 'kind'
 			empty gives false
 			marked(flags) gives try flags.get(0) otherwise false

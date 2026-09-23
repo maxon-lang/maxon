@@ -258,11 +258,11 @@ type DefaultArgOrigins
 	var definedAt as OpIndexArray
 	var isDefined as BoolArray
 
-	export static function create() returns DefaultArgOrigins
+	static function create() returns DefaultArgOrigins
 		return Self{filled: false, definedAt: OpIndexArray.create(), isDefined: BoolArray.create()}
 	end 'create'
 
-	export function beginFunction()
+	function beginFunction()
 		self.filled = false
 	end 'beginFunction'
 
@@ -270,7 +270,7 @@ type DefaultArgOrigins
 	// asks only about a value `Parser.emitDefaultArgValue` synthesized — the result of a nullary helper
 	// `call`, and of nothing else: `retypeOpaqueMethodResult` answers `asItStands` on an empty argument
 	// list, so no reinterpretation is ever wrapped around it and the call's own result IS the argument.
-	export function definingOp(module MaxonModule, func IrFunction, value ValueId) returns OpIndex
+	function definingOp(module MaxonModule, func IrFunction, value ValueId) returns OpIndex
 		if not self.filled 'theFirstAskInThisFunction'
 			self.fill(module, func: func)
 		end 'theFirstAskInThisFunction'
@@ -1853,7 +1853,7 @@ end 'ParamMutationSummary'
 // Dense columns rather than an `Array with <a record>`: a `type` has reference semantics, so an array of
 // them is an array of POINTERS to heap-boxed records — one live allocation per edge, on a pass that runs
 // over every call in the program. The same discipline `SourceRangeTable` and `ValueOriginTable` state.
-module type CallParamEdges
+export type CallParamEdges
 	export var calleeIndices as CsrColumn
 	export var callerIndices as FuncIndexArray
 	export var callerParams as ParamCountArray
@@ -2218,7 +2218,7 @@ end 'addWitnessParamEdges'
 // module declares none of, which no summary describes (`unresolved`): its result may be anything the operands
 // reach, and unless it is a compiler-synthesized witness it may also store any operand into any other
 // (`unresolvedMayStore`).
-module type CallLandingBodies
+export type CallLandingBodies
 	export var impls as FuncIndexArray
 	export var unresolved as bool
 	export var unresolvedMayStore as bool
@@ -2512,7 +2512,7 @@ type AwaitSite
 	// `p.cancel()` would be describing a line the author did not write.
 	export let kind as PromiseConsume
 
-	export static function create(block IrBlock, pos BlockOpPos, promise ValueId, kind PromiseConsume) returns AwaitSite
+	static function create(block IrBlock, pos BlockOpPos, promise ValueId, kind PromiseConsume) returns AwaitSite
 		return Self{block: block, pos: pos, promise: promise, kind: kind}
 	end 'create'
 end 'AwaitSite'
@@ -4608,7 +4608,7 @@ typealias WitnessTargetsByRequirement = Map with (ByteArray, ByteArrayArray)
 // The two MEMOS and the two stores they are derived from, carried together because both must outlive the
 // per-op walk: one transitive slot walk per interface and one candidate scan per requirement, never one per
 // dispatch (`checkCalls` keeps the slot memo for that exact reason, stated there).
-module type WitnessDispatchTargets
+export type WitnessDispatchTargets
 	let signatures as ProgramSignatures
 	let functions as IrFunctionArray
 
@@ -4964,7 +4964,7 @@ end 'ioYieldingRuntimeCallee'
 // ⚠ **`module` SINCE SV2**, whose acyclic blocking graph is a third whole-program summary over the same
 // relation — see `ServiceCallCycleCheck`, which builds its own edges from its own seed walk exactly as the
 // two summaries here do, and closes them through `markSeededCallers` rather than re-deriving the closure.
-module type CallGraphEdges
+export type CallGraphEdges
 	export var calleeIndices as CsrColumn
 	export var callerIndices as CsrColumn
 
@@ -5213,7 +5213,7 @@ end 'effectFreeRuntimeCallee'
 //
 // ⛔ **CLOSED, FOR `effectFreeRuntimeCallee`'s REASON AND IN ITS DIRECTION.** A callee named nowhere here may
 // store any operand into any other, so a new mutator is at worst over-refused until it is added.
-module enum RuntimeStoreShape
+export enum RuntimeStoreShape
 	intoAnyOperand
 	intoTheReceiver
 	intoTheReceiverPastAnAnchor
@@ -6981,7 +6981,7 @@ type ExistentialSiteClaim
 	// The same verdict, re-anchored on the HELD position it was reached through — what
 	// `heldPositionNestedClaim` returns once the recursion has answered. The verdict's own three names stay
 	// exactly as the nested level found them; what this adds is where that level came from.
-	export function throughHeldPosition(route ByteArray, at ByteArray, binding ByteArray) returns Self
+	function throughHeldPosition(route ByteArray, at ByteArray, binding ByteArray) returns Self
 		return Self{status: self.status, associatedName: self.associatedName, siteBinding: self.siteBinding, conformerBinding: self.conformerBinding, heldRoute: route, heldAt: at, heldBinding: binding}
 	end 'throughHeldPosition'
 end 'ExistentialSiteClaim'

@@ -66,6 +66,41 @@ end 'main'
 | `BuildConfigArray` | `Array with BuildConfig` | Build |
 | `SegmentByteCount`, `SegmentOffset`, `SegmentWord` | see [SharedMemory](#sharedmemory) | SharedMemory |
 
+### Names a library signature asks for
+
+A signature may not name a type less visible than the function itself, so every alias and type a `public`
+library signature mentions is `public` too and can be written down in your own code — as a cast target, or
+to declare a value you are about to pass in. They are listed here because they are part of the surface, not
+because a program normally spells them: a value cast to the alias the signature asks for is the usual reason
+to name one.
+
+| Name | Definition | Declared by |
+|------|------------|-------------|
+| `ElementIndex` | `int(0 to u64.max)` | Array, Vector |
+| `ReportedCapacity` | `int(i64.min to i64.max)` | Array |
+| `NodeCount`, `NodeIndex` | `int(0 to u64.max)` | List |
+| `EntryCount` | `int(0 to 4611686018427387904)` | Map |
+| `MemberCount` | `int(0 to 4611686018427387904)` | Set |
+| `IterPos` | `int(0 to u64.max)` | Range |
+| `ElementTransform`, `ElementPredicate` | `function(Element) returns Element` / `returns bool`, on the `Iterable` extension | Interfaces |
+| `Utf8ByteCount` | `int(0 to u64.max)` | Character |
+| `JsonInt` | `int(i64.min to i64.max)` | Json |
+| `JsonFloat` | `float(f64.min to f64.max)` | Json |
+| `ChildCount`, `ChildIndex` | `int(0 to u64.max)` | Json |
+| `Milliseconds` | `int(0 to u64.max)` | Sleep |
+| `Milliseconds` | `int(0 to 4294967295)` — a socket timeout | TcpClient |
+| `Pid`, `ByteLimit` | `int(0 to u64.max)` | Subprocess |
+| `ExitInt` | `int(0 to u32.max)` | Subprocess |
+| `EnvSourceValue` | `int(0 to 1)` | Subprocess |
+| `StdioKindValue` | `int(0 to 5)` | Subprocess |
+| `SpawnEnvironment`, `StdioRuntimeTriple` | the records `Subprocess` hands the runtime | Subprocess |
+| `PortNumber` | `int(0 to 65535)` | URL |
+| `AssertedInt` | `int(i64.min to i64.max)` | Testing |
+| `AssertedReal` | `float(f64.min to f64.max)` | Testing |
+| `Tolerance` | `float(0.0 to f64.max)` | Testing |
+
+`Byte` and `BytePos` are declared by several modules at one definition each; see the table above.
+
 ### Target support
 
 Everything that is pure computation (strings, collections, `Json`, `Sha256`, `Hasher`, `Math`, `URL`
@@ -1112,7 +1147,7 @@ case-insensitive on Windows, byte-exact elsewhere.
 | `join(component String)` | `FilePath` | Append a component with the host separator. |
 | `join(component FilePath)` | `FilePath` | Append another path. |
 | `changeExtension(newExt String)` | `FilePath` | Replace or add an extension; include the dot (`".exe"`). |
-| `resolve(base FilePath)` | `FilePath` | A relative path joined onto `base`; an absolute path unchanged. |
+| `resolve(base FilePath)` | `FilePath` | A relative path joined onto `base`, or an absolute path kept, then folded as `normalize()` folds it — lexically, so a `..` after a symbolic link cancels the link's name. On Windows a drive-relative path (`C:foo`) is joined onto a `base` rooted on the same drive; against any other `base` it comes back normalized and still drive-relative, because it names that drive's current directory. |
 | `relativeTo(base FilePath)` | `FilePath` | The part after `base`. Throws `FilePathError.noParent` when the path is not inside `base`. |
 | `normalize()` | `FilePath` | The path folded lexically, without asking the filesystem: `.` components removed, each `..` cancelling the component before it, repeated separators collapsed and a trailing one dropped. A `..` above an absolute path's root is dropped; a leading one in a relative path is kept. A relative path that folds away entirely is `.`. |
 | `toString()` | `String` | The path text. |

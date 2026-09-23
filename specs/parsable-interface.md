@@ -518,7 +518,7 @@ readings of one call site cannot come to disagree about what "the user declared 
 type byte
 	export let n as Integer
 
-	export static function fromString(_ String) returns Integer
+	static function fromString(_ String) returns Integer
 		return 7
 	end 'fromString'
 end 'byte'
@@ -551,11 +551,11 @@ THROWING, so it cannot even be written without `try`.)
 type Box
 	export let n as Integer
 
-	export static function create(n Integer) returns Box
+	static function create(n Integer) returns Box
 		return Self{n: n}
 	end 'create'
 
-	export function fromString(_ String) returns Integer
+	function fromString(_ String) returns Integer
 		return self.n
 	end 'fromString'
 end 'Box'

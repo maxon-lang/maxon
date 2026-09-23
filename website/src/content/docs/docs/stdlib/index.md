@@ -71,6 +71,41 @@ end 'main'
 | `BuildConfigArray` | `Array with BuildConfig` | Build |
 | `SegmentByteCount`, `SegmentOffset`, `SegmentWord` | see [SharedMemory](/docs/stdlib/io/#sharedmemory) | SharedMemory |
 
+### Names a library signature asks for
+
+A signature may not name a type less visible than the function itself, so every alias and type a `public`
+library signature mentions is `public` too and can be written down in your own code — as a cast target, or
+to declare a value you are about to pass in. They are listed here because they are part of the surface, not
+because a program normally spells them: a value cast to the alias the signature asks for is the usual reason
+to name one.
+
+| Name | Definition | Declared by |
+|------|------------|-------------|
+| `ElementIndex` | `int(0 to u64.max)` | Array, Vector |
+| `ReportedCapacity` | `int(i64.min to i64.max)` | Array |
+| `NodeCount`, `NodeIndex` | `int(0 to u64.max)` | List |
+| `EntryCount` | `int(0 to 4611686018427387904)` | Map |
+| `MemberCount` | `int(0 to 4611686018427387904)` | Set |
+| `IterPos` | `int(0 to u64.max)` | Range |
+| `ElementTransform`, `ElementPredicate` | `function(Element) returns Element` / `returns bool`, on the `Iterable` extension | Interfaces |
+| `Utf8ByteCount` | `int(0 to u64.max)` | Character |
+| `JsonInt` | `int(i64.min to i64.max)` | Json |
+| `JsonFloat` | `float(f64.min to f64.max)` | Json |
+| `ChildCount`, `ChildIndex` | `int(0 to u64.max)` | Json |
+| `Milliseconds` | `int(0 to u64.max)` | Sleep |
+| `Milliseconds` | `int(0 to 4294967295)` — a socket timeout | TcpClient |
+| `Pid`, `ByteLimit` | `int(0 to u64.max)` | Subprocess |
+| `ExitInt` | `int(0 to u32.max)` | Subprocess |
+| `EnvSourceValue` | `int(0 to 1)` | Subprocess |
+| `StdioKindValue` | `int(0 to 5)` | Subprocess |
+| `SpawnEnvironment`, `StdioRuntimeTriple` | the records `Subprocess` hands the runtime | Subprocess |
+| `PortNumber` | `int(0 to 65535)` | URL |
+| `AssertedInt` | `int(i64.min to i64.max)` | Testing |
+| `AssertedReal` | `float(f64.min to f64.max)` | Testing |
+| `Tolerance` | `float(0.0 to f64.max)` | Testing |
+
+`Byte` and `BytePos` are declared by several modules at one definition each; see the table above.
+
 ### Target support
 
 Everything that is pure computation (strings, collections, `Json`, `Sha256`, `Hasher`, `Math`, `URL`

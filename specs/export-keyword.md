@@ -105,7 +105,7 @@ The same model applies to **typealiases**: two exported typealiases with the sam
 <!-- test: export-function-basic -->
 ```maxon
 // --- file: api/lib.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export function helper() returns Integer
 	return 21
@@ -123,7 +123,7 @@ end 'main'
 <!-- test: export-type-basic -->
 ```maxon
 // --- file: api/shapes.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export type Point
 	var x as Integer
@@ -168,7 +168,7 @@ end 'main'
 <!-- test: mixed-export-and-non-export -->
 ```maxon
 // --- file: api/lib.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export function publicFunc() returns Integer
 	return privateFunc() + 20
@@ -212,7 +212,7 @@ end 'main'
 <!-- test: export-typealias-in-type-field -->
 ```maxon
 // --- file: api/types.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export typealias IntArray = Array with Integer
 
@@ -254,7 +254,7 @@ the `export` keyword is inert here, so what this gates is the instance typealias
 resolving to one type across a file boundary.
 ```maxon
 // --- file: api/types.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export typealias IntArray = Array with Integer
 
@@ -292,7 +292,7 @@ end 'main'
 <!-- test: exported-function-cross-file -->
 ```maxon
 // --- file: api/helper.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export function helper() returns Integer
 	return 42
@@ -361,7 +361,7 @@ error E3011: specs/fragments/export-keyword/error.typealias-with-unknown-element
 <!-- test: exported-type-cross-file -->
 ```maxon
 // --- file: api/point.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export type Point
 	export var x as Integer
@@ -532,7 +532,7 @@ end 'main'
 Cross-file access to an exported module-level struct var.
 ```maxon
 // --- file: api/state.maxon
-typealias SmallInt = int(0 to u8.max)
+export typealias SmallInt = int(0 to u8.max)
 
 export type Counter
 		export var value as SmallInt
@@ -603,14 +603,14 @@ exported one must still be found.
 // --- file: a.maxon
 export typealias Score = int(0 to 100)
 
-public function fromA() returns Score
+function fromA() returns Score
 	return 7
 end 'fromA'
 
 // --- file: b.maxon
 typealias Score = int(0 to 50)
 
-public function fromB() returns Score
+function fromB() returns Score
 	return 3
 end 'fromB'
 
@@ -667,7 +667,7 @@ a future change to how a synthesized member is registered cannot reintroduce it 
 row, not to this one.
 ```maxon
 // --- file: holder.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export type Holder
 	export var count as Integer

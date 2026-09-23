@@ -4140,7 +4140,7 @@ end 'StdLoadOperands'
 
 // How many bytes past its address a load reads — an ordinary non-negative byte count, named because
 // `ByteOffset` is where the read STARTS and this is where it ENDS.
-module typealias LoadCoverage = int(0 to u64.max)
+export typealias LoadCoverage = int(0 to u64.max)
 
 // Fill `load` with the memory operands `op` carries, or with "not a load" — the plain-load view of
 // `classifyAccessOperands`, which is where the enumeration over `StdOp` is written.
@@ -4181,7 +4181,7 @@ module type StdStoreOperands
 		return Self{store: false, access: StdAccessOperands.create(), addrId: 0, offset: 0, valueId: 0, valueType: StdType.i64}
 	end 'create'
 
-	export function isStore() returns bool
+	module function isStore() returns bool
 		return self.store
 	end 'isStore'
 
@@ -4247,12 +4247,12 @@ module type StdCallOperands
 		return Self{shape: StdCallShape.other, resultId: 0, errorFlagId: 0, callee: ByteArray.create(), argCount: 0, firstArg: 0, secondArg: 0}
 	end 'create'
 
-	export function namesACallee() returns bool
+	module function namesACallee() returns bool
 		return self.shape != StdCallShape.other
 	end 'namesACallee'
 
 	// Whether the call is a `tryCall`, whose `errorFlagId` is meaningful.
-	export function throwsToAFlag() returns bool
+	module function throwsToAFlag() returns bool
 		return self.shape == StdCallShape.throwingCall
 	end 'throwsToAFlag'
 
@@ -5100,7 +5100,7 @@ module enum StdDefinedValueKind
 	pair
 end 'StdDefinedValueKind'
 
-module type StdDefinedValues
+export type StdDefinedValues
 	// ⚠ `first`/`second` are meaningless until `kind` says the last classification filled them, and
 	// neither may be read as a sentinel: ValueId 0 is a real id (a zero-user-parameter generic method's
 	// layout-descriptor slot holds it).
@@ -6482,7 +6482,7 @@ module enum StdBranchShape
 	condBranch
 end 'StdBranchShape'
 
-module type StdBranchOperands
+export type StdBranchOperands
 	var shape as StdBranchShape
 
 	// `branch` only.

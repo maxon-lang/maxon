@@ -398,7 +398,7 @@ interface Tagger
 end 'Tagger'
 
 extension Tagger
-	export function bump() returns Integer
+	function bump() returns Integer
 		let one = 1 as Integer
 		let inc = function(x Integer) gives x + one
 		return inc(tag())
@@ -406,10 +406,10 @@ extension Tagger
 end 'Tagger'
 
 type Three implements Tagger
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{}
 	end 'make'
-	export function tag() returns Integer
+	function tag() returns Integer
 		return 3
 	end 'tag'
 end 'Three'
@@ -449,26 +449,26 @@ interface Tagger
 end 'Tagger'
 
 extension Tagger
-	export function callTag() returns Integer
+	function callTag() returns Integer
 		let inner = function() gives tag() * 2
 		return inner()
 	end 'callTag'
 end 'Tagger'
 
 type Three implements Tagger
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{}
 	end 'make'
-	export function tag() returns Integer
+	function tag() returns Integer
 		return 3
 	end 'tag'
 end 'Three'
 
 type Seven implements Tagger
-	export static function make() returns Self
+	static function make() returns Self
 		return Self{}
 	end 'make'
-	export function tag() returns Integer
+	function tag() returns Integer
 		return 7
 	end 'tag'
 end 'Seven'
@@ -514,7 +514,7 @@ interface Seq uses Element
 end 'Seq'
 
 extension Seq
-	export function twice() returns Element
+	function twice() returns Element
 		return self.firstOne()
 	end 'twice'
 end 'Seq'
@@ -545,11 +545,11 @@ typealias Num = int(0 to 1000)
 type Box uses T
 	export var v as T
 
-	export static function of(x T) returns Box
+	static function of(x T) returns Box
 		return Box{v: x}
 	end 'of'
 
-	export function get() returns T
+	function get() returns T
 		return self.v
 	end 'get'
 end 'Box'
@@ -561,7 +561,7 @@ interface Seq uses Element
 end 'Seq'
 
 extension Seq
-	export function twice() returns Element
+	function twice() returns Element
 		return self.firstOne()
 	end 'twice'
 end 'Seq'
@@ -607,7 +607,7 @@ interface Held uses Item
 end 'Held'
 
 extension Held
-	export function heldPlusOne() returns Item
+	function heldPlusOne() returns Item
 		return self.held() + 1
 	end 'heldPlusOne'
 end 'Held'
@@ -615,15 +615,15 @@ end 'Held'
 type MarkerFirst implements Tagged with Integer, Held with Integer
 	export var n as Integer
 
-	export static function of(n Integer) returns Self
+	static function of(n Integer) returns Self
 		return MarkerFirst{n: n}
 	end 'of'
 
-	export function tag() returns Integer
+	function tag() returns Integer
 		return self.n
 	end 'tag'
 
-	export function held() returns Integer
+	function held() returns Integer
 		return self.n
 	end 'held'
 end 'MarkerFirst'
@@ -631,15 +631,15 @@ end 'MarkerFirst'
 type HeldFirst implements Held with Integer, Tagged with Integer
 	export var n as Integer
 
-	export static function of(n Integer) returns Self
+	static function of(n Integer) returns Self
 		return HeldFirst{n: n}
 	end 'of'
 
-	export function tag() returns Integer
+	function tag() returns Integer
 		return self.n
 	end 'tag'
 
-	export function held() returns Integer
+	function held() returns Integer
 		return self.n
 	end 'held'
 end 'HeldFirst'
@@ -674,7 +674,7 @@ end 'Tagged'
 enum Slow implements Tagged with Code, Error
 	tooSmall
 
-	export function tag() returns Code
+	function tag() returns Code
 		return 1
 	end 'tag'
 end 'Slow'
@@ -686,11 +686,11 @@ end 'Digest'
 type Point implements Digest
 	export var x as Code
 
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{x: x}
 	end 'create'
 
-	export function digest() returns Code throws Slow
+	function digest() returns Code throws Slow
 		if self.x < 10 'small'
 			throw Slow.tooSmall
 		end 'small'
@@ -701,11 +701,11 @@ end 'Point'
 type Box uses T where T is Digest
 	export var item as T
 
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{item: item}
 	end 'create'
 
-	export function itemDigest() returns Code
+	function itemDigest() returns Code
 		return try self.item.digest() otherwise 55
 	end 'itemDigest'
 end 'Box'
@@ -786,7 +786,7 @@ interface Both extends Forward
 end 'Both'
 
 extension Forward
-	export function back() returns Integer
+	function back() returns Integer
 		return 0 - self.step()
 	end 'back'
 end 'Forward'
@@ -794,11 +794,11 @@ end 'Forward'
 type Walker implements Both
 	export var stride as Integer
 
-	export static function of(stride Integer) returns Self
+	static function of(stride Integer) returns Self
 		return Walker{stride: stride}
 	end 'of'
 
-	export function step() returns Integer
+	function step() returns Integer
 		return self.stride
 	end 'step'
 end 'Walker'

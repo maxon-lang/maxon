@@ -62,7 +62,7 @@ module type ServiceAwaitRoster
 		return self.sites.count()
 	end 'rowCount'
 
-	export function siteAt(row CsrIndex) returns ServiceAwaitSite
+	module function siteAt(row CsrIndex) returns ServiceAwaitSite
 		return try self.sites.get(row) otherwise panic("ServiceAwaitRoster.siteAt: sites.get OOB at {row} below count {self.rowCount()}")
 	end 'siteAt'
 
@@ -73,7 +73,7 @@ module type ServiceAwaitRoster
 	// Mark every function whose OWN body awaits a reply from `awaitedName`. ⚡ ONE sweep of the roster per
 	// SERVICE, rather than one test per (function, service) pair — which is why carrying every await costs
 	// less than the single-site column it replaced, not more.
-	export function seedFunctionsAwaiting(awaitedName ByteArray, seeds BoolArray)
+	module function seedFunctionsAwaiting(awaitedName ByteArray, seeds BoolArray)
 		for row in 0 upto self.rowCount() 'eachRow'
 			if not self.siteAt(row).serviceTypeName.equals(awaitedName) 'anotherService'
 				continue
@@ -86,7 +86,7 @@ module type ServiceAwaitRoster
 
 	// The FIRST row in which `funcIndex` itself awaits `awaitedName`, or `NoAwaitRow` when it blocks on that
 	// service only through a helper.
-	export function rowWhere(funcIndex FuncIndex, awaitedName ByteArray) returns CsrIndex
+	module function rowWhere(funcIndex FuncIndex, awaitedName ByteArray) returns CsrIndex
 		for row in 0 upto self.rowCount() 'eachRow'
 			if self.funcIndexAt(row) == funcIndex and self.siteAt(row).serviceTypeName.equals(awaitedName) 'awaitsItHere'
 				return row
@@ -99,7 +99,7 @@ module type ServiceAwaitRoster
 	// The first row ANYWHERE that awaits `awaitedName` — the anchor for a message that blocks only through a
 	// helper. It panics rather than answering a default: a caller reaches it only for a function the closure
 	// marked, and a mark reaches a caller only from a seed.
-	export function firstRowAwaiting(awaitedName ByteArray) returns CsrIndex
+	module function firstRowAwaiting(awaitedName ByteArray) returns CsrIndex
 		for row in 0 upto self.rowCount() 'eachRow'
 			if self.siteAt(row).serviceTypeName.equals(awaitedName) 'awaitsIt'
 				return row
@@ -111,7 +111,7 @@ module type ServiceAwaitRoster
 end 'ServiceAwaitRoster'
 
 // A global's position in the list a slot roster files its ops against, and that list keyed by its slot's label.
-module typealias SlotSubjectIndex = int(0 to u64.max)
+export typealias SlotSubjectIndex = int(0 to u64.max)
 typealias SlotSubjectIndexArray = Array with SlotSubjectIndex
 module typealias SlotSubjectByLabel = Map with (ByteArray, SlotSubjectIndex)
 
@@ -130,15 +130,15 @@ module type OpRoster
 		self.ops.push(opIndex)
 	end 'note'
 
-	export function rowCount() returns CsrIndex
+	module function rowCount() returns CsrIndex
 		return self.ops.count()
 	end 'rowCount'
 
-	export function funcAt(row CsrIndex) returns FuncIndex
+	module function funcAt(row CsrIndex) returns FuncIndex
 		return try self.funcs.get(row) otherwise panic("OpRoster.funcAt: funcs.get OOB at {row} below count {self.rowCount()}")
 	end 'funcAt'
 
-	export function opAt(row CsrIndex) returns OpIndex
+	module function opAt(row CsrIndex) returns OpIndex
 		return try self.ops.get(row) otherwise panic("OpRoster.opAt: ops.get OOB at {row} below count {self.rowCount()}")
 	end 'opAt'
 end 'OpRoster'
@@ -160,7 +160,7 @@ module type SlotRoster
 		end 'aListedSlot'
 	end 'noteIfListed'
 
-	export function subjectAt(row CsrIndex) returns SlotSubjectIndex
+	module function subjectAt(row CsrIndex) returns SlotSubjectIndex
 		return try self.subjects.get(row) otherwise panic("SlotRoster.subjectAt: subjects.get OOB at {row} below count {self.sites.rowCount()}")
 	end 'subjectAt'
 end 'SlotRoster'
@@ -217,32 +217,32 @@ module type ServiceProgramSurvey
 		return Self{edges: CallGraphEdges.create(), ownerPerFunc: ByteArrayArray.create(), messageSeeds: BoolArray.create(), awaits: ServiceAwaitRoster.create(), callsAClosure: BoolArray.create(), dispatchesThroughAWitness: BoolArray.create(), witnessDispatchFuncs: FuncIndexArray.create(), witnessDispatchRequirements: ByteArrayArray.create(), witnessDispatchStarts: EntryIndexArray.create(), calleeGraph: buildCsr(CsrColumn.create(), to: CsrColumn.create(), nodeCount: 0), addressTaken: CsrColumn.create(), accessFuncs: FuncIndexArray.create(), accessSites: ModuleVarAccessSiteArray.create(), globalUses: SlotRoster.create(), spawns: OpRoster.create()}
 	end 'create'
 
-	export function funcCount() returns CsrIndex
+	module function funcCount() returns CsrIndex
 		return self.messageSeeds.count()
 	end 'funcCount'
 
-	export function isAMessage(funcIndex FuncIndex) returns bool
+	module function isAMessage(funcIndex FuncIndex) returns bool
 		return try self.messageSeeds.get(funcIndex) otherwise panic("ServiceProgramSurvey.isAMessage: messageSeeds.get OOB at {funcIndex} below count {self.funcCount()}")
 	end 'isAMessage'
 
-	export function serviceOf(funcIndex FuncIndex) returns ByteArray
+	module function serviceOf(funcIndex FuncIndex) returns ByteArray
 		return try self.ownerPerFunc.get(funcIndex) otherwise panic("ServiceProgramSurvey.serviceOf: ownerPerFunc.get OOB at {funcIndex} below count {self.funcCount()}")
 	end 'serviceOf'
 
-	export function accessRowCount() returns CsrIndex
+	module function accessRowCount() returns CsrIndex
 		return self.accessSites.count()
 	end 'accessRowCount'
 
-	export function accessFuncAt(row CsrIndex) returns FuncIndex
+	module function accessFuncAt(row CsrIndex) returns FuncIndex
 		return try self.accessFuncs.get(row) otherwise panic("ServiceProgramSurvey.accessFuncAt: accessFuncs.get OOB at {row} below count {self.accessRowCount()}")
 	end 'accessFuncAt'
 
-	export function accessSiteAt(row CsrIndex) returns ModuleVarAccessSite
+	module function accessSiteAt(row CsrIndex) returns ModuleVarAccessSite
 		return try self.accessSites.get(row) otherwise panic("ServiceProgramSurvey.accessSiteAt: accessSites.get OOB at {row} below count {self.accessRowCount()}")
 	end 'accessSiteAt'
 
 	// Does this function choose a callee at run time — a closure call or a witness dispatch?
-	export function dispatchesAtRunTime(funcIndex FuncIndex) returns bool
+	module function dispatchesAtRunTime(funcIndex FuncIndex) returns bool
 		let closure = try self.callsAClosure.get(funcIndex) otherwise panic("ServiceProgramSurvey.dispatchesAtRunTime: callsAClosure.get OOB at {funcIndex} below count {self.funcCount()}")
 		let witness = try self.dispatchesThroughAWitness.get(funcIndex) otherwise panic("ServiceProgramSurvey.dispatchesAtRunTime: dispatchesThroughAWitness.get OOB at {funcIndex} below count {self.funcCount()}")
 		return closure or witness
@@ -267,7 +267,7 @@ module type ServiceProgramSurvey
 	//
 	// ⚠ **THE SAFE DIRECTION IS KEPT WITHIN EACH SET**: every function in one is queued, so the walk goes on to
 	// what it calls — which may itself dispatch.
-	export function widenFrom(funcIndex FuncIndex, walk CalleeWalk, widening DispatchWidening, dispatch WitnessDispatchTargets, funcIndexByName FuncIndexByName)
+	module function widenFrom(funcIndex FuncIndex, walk CalleeWalk, widening DispatchWidening, dispatch WitnessDispatchTargets, funcIndexByName FuncIndexByName)
 		let bodyCallsAClosure = try self.callsAClosure.get(funcIndex) otherwise panic("ServiceProgramSurvey.widenFrom: callsAClosure.get OOB at {funcIndex} below count {self.funcCount()}")
 
 		if bodyCallsAClosure and not widening.closureTargetsMarked 'aClosureIsCalled'
@@ -298,7 +298,7 @@ module type ServiceProgramSurvey
 		end 'eachWitnessDispatch'
 	end 'widenFrom'
 
-	export function settleCallGraph()
+	module function settleCallGraph()
 		self.calleeGraph = buildCsr(self.edges.callerIndices, to: self.edges.calleeIndices, nodeCount: self.funcCount())
 	end 'settleCallGraph'
 
@@ -368,7 +368,7 @@ module type ServiceProgramSurvey
 end 'ServiceProgramSurvey'
 
 // What a walk's widening has already marked, so each target set is marked once.
-module type DispatchWidening
+export type DispatchWidening
 	export var closureTargetsMarked as bool
 	export var requirements as RequirementNameSet
 

@@ -1,0 +1,22 @@
+// Test: error.a-method-outranks-its-parameter-type
+// --- file: api/lib.maxon
+typealias Slot = int(0 to 100)
+
+export type Box
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	public function get(index Slot) returns bool
+		return index > 3
+	end 'get'
+end 'Box'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let b = Box.create()
+	return 7 if b.get(7) else 0
+end 'main'
+---
+CompilerError:
+error E3167: api/<fragment>:10:18: public function 'api.Box.get' names file-private typealias 'Slot' in the type of parameter 'index'

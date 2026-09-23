@@ -858,11 +858,11 @@ end 'Digest'
 type Quiet implements Digest
 	export var x as Code
 
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
 
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x
 	end 'digest'
 end 'Quiet'
@@ -870,15 +870,15 @@ end 'Quiet'
 type Loud implements Digest
 	export var x as Code
 
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
 
-	export function digest(salt Code) returns Code
+	function digest(salt Code) returns Code
 		return self.x + salt
 	end 'digest'
 
-	export function digest() returns Code
+	function digest() returns Code
 		noise = noise + 1
 		return self.x
 	end 'digest'
@@ -887,11 +887,11 @@ end 'Loud'
 type Box uses T where T is Digest
 	export var item as T
 
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
 
-	export function itemDigest() returns Code
+	function itemDigest() returns Code
 		return self.item.digest()
 	end 'itemDigest'
 end 'Box'
@@ -938,7 +938,7 @@ typealias Tally = int(0 to u64.max)
 type Counter
 	export var count as Tally
 
-	export static function create(count Tally) returns Self
+	static function create(count Tally) returns Self
 		return Self{count: count}
 	end 'create'
 end 'Counter'

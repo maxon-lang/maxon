@@ -12,12 +12,11 @@ let DriverVersionOffset = 8 as SegmentOffset
 let AgentVersionOffset = 16 as SegmentOffset
 let FlagsOffset = 24 as SegmentOffset
 let AgentPidOffset = 32 as SegmentOffset
-let HeartbeatOffset = 40 as SegmentOffset
+let DriverPidOffset = 40 as SegmentOffset
 let StopAtEntryOffset = 48 as SegmentOffset
 
 let DriverVersion = 1
 let AgentAliveBit = 1
-let FirstHeartbeat = 1
 let RunToCompletion = 0
 let ChildExitCode = 5
 
@@ -44,7 +43,7 @@ function main() returns ExitCode
 	try segment.writeWord(MagicOffset, value: controlMagic()) otherwise return 4
 	try segment.writeWord(DriverVersionOffset, value: DriverVersion) otherwise return 5
 	try segment.writeWord(StopAtEntryOffset, value: RunToCompletion) otherwise return 6
-	try segment.writeWord(HeartbeatOffset, value: FirstHeartbeat) otherwise return 7
+	try segment.writeWord(DriverPidOffset, value: __Builtins.currentProcessId() as SegmentWord) otherwise return 7
 
 	let me = try Process.executablePath() otherwise return 8
 	var argv = StringArray.create()
@@ -131,10 +130,11 @@ data {
   __slab_arena_list@480 = i64 0
   __slab_arena_map_l1@488 = i64 0
   __slab_state@496 = i64 0
-  __dbg_ctl@504 = i64 0
-  __mrt_console_probe_stdin@512 = i8 0
-  __mrt_console_probe_stdout@513 = i8 0
-  __mrt_console_probe_stderr@514 = i8 0
+  __ds_base@504 = i64 0
+  __dbg_ctl@512 = i64 0
+  __mrt_console_probe_stdin@520 = i8 0
+  __mrt_console_probe_stdout@521 = i8 0
+  __mrt_console_probe_stderr@522 = i8 0
 }
 
 func @main {
@@ -193,7 +193,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.leaRegRdata rax, [rip + __str_rec_37]  ; "maxon-spec-dbg-stamp"
+    x64.leaRegRdata rax, [rip + __str_rec_39]  ; "maxon-spec-dbg-stamp"
     x64.movRegImm32 rbx, 8192
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
@@ -234,7 +234,7 @@ func @main {
     x64.movRegImm32 rax, 0
     x64.storeSlotReg slot41, rax
     x64.movRegImm32 r12, 0
-    x64.leaRegRdata rcx, [rip + __str_rec_35]  ; "MXDBGCTL"
+    x64.leaRegRdata rcx, [rip + __str_rec_37]  ; "MXDBGCTL"
     x64.callDirect String.bytes
     x64.movRegReg r13, r8
     x64.movRegReg rcx, r13
@@ -343,9 +343,11 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryok#9:
-    x64.movRegImm32 rdx, 40
-    x64.movRegImm32 rax, 1
+    x64.movRegImm32 r12, 40
+    x64.callDirect __proc_pid
     x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r8
     x64.callDirect SharedSegment.writeWord
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#11
@@ -387,7 +389,7 @@ func @main {
     x64.callDirect __managed_create
     x64.movRegReg r13, r8
     x64.storeSlotReg slot2, r13
-    x64.leaRegRdata rcx, [rip + __str_rec_38]  ; "child"
+    x64.leaRegRdata rcx, [rip + __str_rec_40]  ; "child"
     x64.callDirect __str_retain
     x64.movRegReg rcx, r13
     x64.movRegReg rdx, r8
@@ -406,7 +408,7 @@ func @main {
     x64.leaRegFunc rdx, [rip + __str_decref]
     x64.callDirect __managed_create
     x64.storeSlotReg slot37, r8
-    x64.leaRegRdata rcx, [rip + __str_rec_125]  ; ""
+    x64.leaRegRdata rcx, [rip + __str_rec_70]  ; ""
     x64.callDirect FilePath.from
     x64.storeSlotReg slot32, r8
     x64.cmpRegImm32 r10, 0
@@ -489,7 +491,7 @@ func @main {
     x64.callDirect __managed_decref
     x64.loadRegSlot rax, slot40
     x64.storeBaseDispReg.word64 [r15 + 8], rax
-    x64.leaRegRdata r14, [rip + __str_rec_39]  ; "MAXON_DEBUG"
+    x64.leaRegRdata r14, [rip + __str_rec_41]  ; "MAXON_DEBUG"
   __il_body#40:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
     x64.callDirect __str_retain
@@ -666,7 +668,7 @@ func @main {
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.byte [rbx + 32], rax
   __il_cont#42:
-    x64.leaRegRdata rax, [rip + __str_rec_40]  ; "version="
+    x64.leaRegRdata rax, [rip + __str_rec_42]  ; "version="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot19, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
@@ -680,7 +682,7 @@ func @main {
     x64.callDirect __int_to_string
     x64.movRegReg rbx, r8
     x64.storeSlotReg slot33, rbx
-    x64.leaRegRdata rax, [rip + __str_rec_41]  ; " alive="
+    x64.leaRegRdata rax, [rip + __str_rec_43]  ; " alive="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot15, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
@@ -696,7 +698,7 @@ func @main {
     x64.callDirect __int_to_string
     x64.movRegReg r12, r8
     x64.storeSlotReg slot28, r12
-    x64.leaRegRdata rax, [rip + __str_rec_42]  ; " samePid="
+    x64.leaRegRdata rax, [rip + __str_rec_44]  ; " samePid="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot10, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
@@ -714,7 +716,7 @@ func @main {
     x64.callDirect __bool_to_string
     x64.movRegReg r13, r8
     x64.storeSlotReg slot5, r13
-    x64.leaRegRdata rax, [rip + __str_rec_43]  ; " child="
+    x64.leaRegRdata rax, [rip + __str_rec_45]  ; " child="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot8, rcx
     x64.loadRegBaseDisp.word64 r15, [rax + 8]
@@ -742,7 +744,7 @@ func @main {
     x64.movRegReg rdx, r8
     x64.callDirect __uint_to_string
     x64.storeSlotReg slot38, r8
-    x64.leaRegRdata rax, [rip + __str_rec_44]  ; "\x0a"
+    x64.leaRegRdata rax, [rip + __str_rec_46]  ; "\x0a"
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot11, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
@@ -860,7 +862,7 @@ func @main {
     x64.ret
   matchdead:
   shiftneg:
-    x64.leaRegRdata rcx, [rip + __str_blob_36]  ; "panic at debug-agent.a-child-named-a-segment-stamps-its-version-and-pid.test:31: negative shift count\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_38]  ; "panic at debug-agent.a-child-named-a-segment-stamps-its-version-and-pid.test:30: negative shift count\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 376
@@ -872,7 +874,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#50:
-    x64.leaRegRdata rcx, [rip + __str_blob_126]  ; "panic at Subprocess.maxon:438: Configuration.create: empty path is the sentinel for 'inherit cwd'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_136]  ; "panic at Subprocess.maxon:438: Configuration.create: empty path is the sentinel for 'inherit cwd'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 376

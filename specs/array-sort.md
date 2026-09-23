@@ -320,11 +320,11 @@ type KeyTag implements Comparable
 	export var key as Integer
 	export var tag as Integer
 
-	export static function init(key Integer, tag Integer) returns Self
+	static function init(key Integer, tag Integer) returns Self
 		return Self{key: key, tag: tag}
 	end 'init'
 
-	export function compare(other Self) returns Ordering
+	function compare(other Self) returns Ordering
 		return key.compare(other.key)
 	end 'compare'
 end 'KeyTag'
@@ -627,11 +627,11 @@ type KeyTag implements Comparable
 	export var key as Integer
 	export var tag as Integer
 
-	export static function init(key Integer, tag Integer) returns Self
+	static function init(key Integer, tag Integer) returns Self
 		return Self{key: key, tag: tag}
 	end 'init'
 
-	export function compare(other Self) returns Ordering
+	function compare(other Self) returns Ordering
 		return key.compare(other.key)
 	end 'compare'
 end 'KeyTag'

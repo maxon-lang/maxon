@@ -269,7 +269,7 @@ typing (`pickOperandType` panic). Mirrors the compiler's own
 type Row
 	export var label as String
 
-	export static function create(label String) returns Row
+	static function create(label String) returns Row
 		return Self{label: label}
 	end 'create'
 end 'Row'

@@ -71,15 +71,15 @@ type Upto implements Seq
 	var pos as Integer
 	let limit as Integer
 
-	export static function create(limit Integer) returns Self
+	static function create(limit Integer) returns Self
 		return Self{pos: 1, limit: limit}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return self.pos
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.pos >= self.limit 'atTheLast'
 			throw IterationError.exhausted
 		end 'atTheLast'
@@ -127,19 +127,19 @@ type Upto implements Counted
 	var pos as Integer
 	let limit as Integer
 
-	export static function create(limit Integer) returns Self
+	static function create(limit Integer) returns Self
 		return Self{pos: 1, limit: limit}
 	end 'create'
 
-	export function size() returns Integer
+	function size() returns Integer
 		return self.limit
 	end 'size'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return self.pos
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.pos >= self.limit 'atTheLast'
 			throw IterationError.exhausted
 		end 'atTheLast'
@@ -185,15 +185,15 @@ type Tagged uses T implements Seq
 	let limit as Integer
 	let tag as T
 
-	export static function create(limit Integer, tag T) returns Self
+	static function create(limit Integer, tag T) returns Self
 		return Self{pos: 1, limit: limit, tag: tag}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return self.pos
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.pos >= self.limit 'atTheLast'
 			throw IterationError.exhausted
 		end 'atTheLast'
@@ -240,15 +240,15 @@ type Numbered implements Lines
 	var pos as Integer
 	let limit as Integer
 
-	export static function create(limit Integer) returns Self
+	static function create(limit Integer) returns Self
 		return Self{pos: 1, limit: limit}
 	end 'create'
 
-	export function current() returns String
+	function current() returns String
 		return "line number {self.pos} of this managed sequence"
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.pos >= self.limit 'atTheLast'
 			throw IterationError.exhausted
 		end 'atTheLast'
@@ -294,15 +294,15 @@ type Upto implements Seq
 	var pos as Integer
 	let limit as Integer
 
-	export static function create(limit Integer) returns Self
+	static function create(limit Integer) returns Self
 		return Self{pos: 1, limit: limit}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return self.pos
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.pos >= self.limit 'atTheLast'
 			throw IterationError.exhausted
 		end 'atTheLast'
@@ -313,7 +313,7 @@ end 'Upto'
 type Holder
 	export var seq as Seq
 
-	export static function create(seq Seq) returns Self
+	static function create(seq Seq) returns Self
 		return Self{seq: seq}
 	end 'create'
 end 'Holder'
@@ -375,18 +375,18 @@ type IntCursor
 	let items as IntArray
 	var pos as Integer
 
-	export static function create(items IntArray) returns Self throws IterationError
+	static function create(items IntArray) returns Self throws IterationError
 		if items.count() == 0 'empty'
 			throw IterationError.exhausted
 		end 'empty'
 		return Self{items: items, pos: 0}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return try self.items.get(self.pos) otherwise 0
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.pos + 1 >= self.items.count() 'atTheLast'
 			throw IterationError.exhausted
 		end 'atTheLast'
@@ -401,11 +401,11 @@ end 'Bag'
 type Numbers implements Bag
 	let items as IntArray
 
-	export static function create(items IntArray) returns Self
+	static function create(items IntArray) returns Self
 		return Self{items: items}
 	end 'create'
 
-	export function createIterator() returns IntCursor throws IterationError
+	function createIterator() returns IntCursor throws IterationError
 		return try IntCursor.create(self.items)
 	end 'createIterator'
 end 'Numbers'
@@ -453,19 +453,19 @@ end 'Labelled'
 type Widget implements Labelled
 	let id as Integer
 
-	export static function create(id Integer) returns Self
+	static function create(id Integer) returns Self
 		return Self{id: id}
 	end 'create'
 
-	export function label() returns Integer
+	function label() returns Integer
 		return self.id
 	end 'label'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return self.id
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		throw IterationError.exhausted
 	end 'advance'
 end 'Widget'
@@ -510,15 +510,15 @@ type Upto implements Derived
 	var pos as Integer
 	let limit as Integer
 
-	export static function create(limit Integer) returns Self
+	static function create(limit Integer) returns Self
 		return Self{pos: 1, limit: limit}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return self.pos
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.pos >= self.limit 'atTheLast'
 			throw IterationError.exhausted
 		end 'atTheLast'
@@ -561,15 +561,15 @@ type Upto implements Seq
 	var pos as Integer
 	let limit as Integer
 
-	export static function create(limit Integer) returns Self
+	static function create(limit Integer) returns Self
 		return Self{pos: 1, limit: limit}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return self.pos
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.pos >= self.limit 'atTheLast'
 			throw IterationError.exhausted
 		end 'atTheLast'
@@ -580,15 +580,15 @@ end 'Upto'
 type Down implements Seq
 	var pos as Integer
 
-	export static function create(start Integer) returns Self
+	static function create(start Integer) returns Self
 		return Self{pos: start}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return self.pos
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.pos <= 1 'atTheLast'
 			throw IterationError.exhausted
 		end 'atTheLast'
@@ -647,15 +647,15 @@ type Upto implements Seq
 	var pos as Integer
 	let limit as Integer
 
-	export static function create(limit Integer) returns Self
+	static function create(limit Integer) returns Self
 		return Self{pos: 1, limit: limit}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return self.pos
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.pos >= self.limit 'atTheLast'
 			throw IterationError.exhausted
 		end 'atTheLast'
@@ -666,11 +666,11 @@ end 'Upto'
 type Wrap uses T where T is Seq
 	export var item as T
 
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{item: item}
 	end 'create'
 
-	export function total() returns Integer
+	function total() returns Integer
 		var sum = 0 as Integer
 		for v in self.item 'walk'
 			sum = sum + v
@@ -712,15 +712,15 @@ type Numbered implements Lines
 	var pos as Integer
 	let limit as Integer
 
-	export static function create(limit Integer) returns Self
+	static function create(limit Integer) returns Self
 		return Self{pos: 1, limit: limit}
 	end 'create'
 
-	export function current() returns String
+	function current() returns String
 		return "a managed line long enough to live on the heap, number {self.pos}"
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.pos >= self.limit 'atTheLast'
 			throw IterationError.exhausted
 		end 'atTheLast'

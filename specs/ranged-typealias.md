@@ -2327,7 +2327,7 @@ type Box uses T
 		return Self{v: seed}
 	end 'create'
 
-	export function put(value T)
+	function put(value T)
 		self.v = value
 	end 'put'
 end 'Box'
@@ -2393,7 +2393,7 @@ type Box uses T
 		return Self{v: seed}
 	end 'create'
 
-	export function put(value T)
+	function put(value T)
 		self.v = value
 	end 'put'
 end 'Box'
@@ -2437,7 +2437,7 @@ type Box uses T
 		return Self{v: seed}
 	end 'create'
 
-	export function put(value T)
+	function put(value T)
 		self.v = value
 	end 'put'
 end 'Box'
@@ -2476,7 +2476,7 @@ type Box uses T
 		return Self{v: seed}
 	end 'create'
 
-	export function put(value T)
+	function put(value T)
 		self.v = value
 	end 'put'
 end 'Box'
@@ -2507,7 +2507,7 @@ type Box uses T
 		return Self{v: seed}
 	end 'create'
 
-	export function put(value T)
+	function put(value T)
 		self.v = value
 	end 'put'
 end 'Box'
@@ -2538,7 +2538,7 @@ typealias Byte = int(0 to 255)
 typealias BA = Array with Byte
 
 export extension Array
-	export function pushTwice(value Element)
+	function pushTwice(value Element)
 		push(value)
 		push(value)
 	end 'pushTwice'
@@ -2599,7 +2599,7 @@ callee's path.
 <!-- test: error.crossfile-call-argument-uses-callee-range -->
 ```maxon
 // --- file: lib.maxon
-typealias Limit = int(0 to 10)
+export typealias Limit = int(0 to 10)
 
 export function narrow(x Limit) returns Limit
 	return x
@@ -2796,7 +2796,7 @@ typealias Wide = int(0 to 100000)
 type Box
 	export var v as Percent = 1
 
-	export static function make() returns Box
+	static function make() returns Box
 		return Self{}
 	end 'make'
 end 'Box'
@@ -2919,11 +2919,11 @@ typealias Wide = int(0 to 100000)
 type Box
 	export var v as Percent = 7
 
-	export static function make() returns Box
+	static function make() returns Box
 		return Self{}
 	end 'make'
 
-	export static function holding(n Percent) returns Box
+	static function holding(n Percent) returns Box
 		return Self{v: n}
 	end 'holding'
 end 'Box'
@@ -3099,7 +3099,7 @@ type Box
 	export var f22 as Small = 1
 	export var f23 as Small = 1
 
-	export static function make() returns Box
+	static function make() returns Box
 		return Self{}
 	end 'make'
 end 'Box'

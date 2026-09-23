@@ -55,7 +55,7 @@ The base case: a new method, no conformance, an `int` receiver.
 typealias Integer = int(i64.min to i64.max)
 
 extension int
-	export function doubled() returns Integer
+	function doubled() returns Integer
 		return self * 2
 	end 'doubled'
 end 'int'
@@ -74,7 +74,7 @@ end 'main'
 extension anywhere in sight, so the cast form would have tested that rule instead of this one.
 ```maxon
 extension float
-	export function tripled() returns Real
+	function tripled() returns Real
 		return self * 3.0
 	end 'tripled'
 end 'float'
@@ -94,7 +94,7 @@ typealias Real = float(f64.min to f64.max)
 typealias Integer = int(i64.min to i64.max)
 
 extension bool
-	export function asCount() returns Integer
+	function asCount() returns Integer
 		if self 'yes'
 			return 7
 		end 'yes'
@@ -117,7 +117,7 @@ end 'main'
 ordinary `int`.
 ```maxon
 extension int
-	export function twin() returns Self
+	function twin() returns Self
 		return self + 1
 	end 'twin'
 end 'int'
@@ -136,7 +136,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 extension int
-	export function plus(other Self) returns Integer
+	function plus(other Self) returns Integer
 		return self + other
 	end 'plus'
 end 'int'
@@ -156,7 +156,7 @@ answers the receiver masked to 32 bits — for a receiver of `5` it answers `5`.
 for every receiver, so `77` can only come from the declaration.
 ```maxon
 extension int implements Hashable
-	export function hash() returns HashValue
+	function hash() returns HashValue
 		return 77
 	end 'hash'
 end 'int'
@@ -183,17 +183,17 @@ is a differing line rather than two green runs nobody put side by side.
 typealias Integer = int(0 to u32.max)
 
 extension int implements Hashable
-	export function hash() returns HashValue
+	function hash() returns HashValue
 		return 77
 	end 'hash'
 end 'int'
 
 type Box uses T where T is Hashable
 	export var a as T
-	export static function create(a T) returns Self
+	static function create(a T) returns Self
 		return Self{ a: a }
 	end 'create'
-	export function digest() returns HashValue
+	function digest() returns HashValue
 		return self.a.hash()
 	end 'digest'
 end 'Box'
@@ -221,17 +221,17 @@ and it is the sharper test of the witness road: the table cannot be inherited fr
 because there is none to inherit. Both roads are compared in one program for the case above's reason.
 ```maxon
 extension bool implements Hashable
-	export function hash() returns HashValue
+	function hash() returns HashValue
 		return 9 if self else 4
 	end 'hash'
 end 'bool'
 
 type Box uses T where T is Hashable
 	export var a as T
-	export static function create(a T) returns Self
+	static function create(a T) returns Self
 		return Self{ a: a }
 	end 'create'
-	export function digest() returns HashValue
+	function digest() returns HashValue
 		return self.a.hash()
 	end 'digest'
 end 'Box'
@@ -256,7 +256,7 @@ for it can be published, type-checked, and never run — a wrong answer rather t
 synthesized lowering would print `5`; this body prints `five`.
 ```maxon
 extension int implements Stringable
-	export function toString() returns String
+	function toString() returns String
 		return "five"
 	end 'toString'
 end 'int'
@@ -276,7 +276,7 @@ five
 receiver unchanged; this one does not.
 ```maxon
 extension int implements Cloneable
-	export function clone() returns Self
+	function clone() returns Self
 		return self + 100
 	end 'clone'
 end 'int'
@@ -319,7 +319,7 @@ closes. **Refused with a position rather than compiled to nothing**, which is wh
 typealias Integer = int(i64.min to i64.max)
 
 extension byte
-	export function widened() returns Integer
+	function widened() returns Integer
 		return 1
 	end 'widened'
 end 'byte'
@@ -341,7 +341,7 @@ arm.
 typealias Integer = int(i64.min to i64.max)
 
 extension int
-	export function peek() returns Integer
+	function peek() returns Integer
 		return self.v
 	end 'peek'
 end 'int'
@@ -372,13 +372,13 @@ interface Doubler
 end 'Doubler'
 
 extension int implements Doubler
-	export function doubled() returns Integer
+	function doubled() returns Integer
 		return self * 2
 	end 'doubled'
 end 'int'
 
 extension Doubler
-	export function quadrupled() returns Integer
+	function quadrupled() returns Integer
 		return self.doubled() * 2
 	end 'quadrupled'
 end 'Doubler'

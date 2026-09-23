@@ -405,7 +405,39 @@ export function tierOrdinal(visibility Visibility) returns VisibilityTier
 	end 'tier'
 end 'tierOrdinal'
 
-typealias VisibilityTier = int(0 to 3)
+export typealias VisibilityTier = int(0 to 3)
+
+// ⚠ **THE ONE READER THAT RANKS `public` ABOVE `global`** — E3167 asks a CLAIM question, not a REACH one,
+// so the equivalence `isProgramWideTier` states does not hold here: a `public` signature naming an
+// `export` type is refused. Folding this into that predicate makes `public` unenforceable in a signature,
+// with nothing to fail.
+//
+// Written as a match rather than as `tierOrdinal(tier) >= tierOrdinal(floor)` so no ordering is read off
+// `tierOrdinal`: those numbers are mixed into the incremental-build hash, and a renumbering made to suit a
+// comparison would silently serve every cached signature under a name that still looks current.
+export function tierIsAtLeastAsVisible(tier Visibility, floor Visibility) returns bool
+	return match floor 'floor'
+		file gives true
+		module gives tier != Visibility.file
+		global gives isProgramWideTier(tier)
+		public gives tier == Visibility.public
+	end 'floor'
+end 'tierIsAtLeastAsVisible'
+
+export function narrowerTier(tier Visibility, other Visibility) returns Visibility
+	return other if tierIsAtLeastAsVisible(tier, floor: other) else tier
+end 'narrowerTier'
+
+// The word E3167's message calls each tier. Pinned byte-for-byte by `specs/signature-type-visibility.md`,
+// so these are not the source-level modifiers and may not be re-spelled as them.
+export function visibilityTierWord(tier Visibility) returns String
+	return match tier 'word'
+		file gives "file-private"
+		module gives "module"
+		global gives "exported"
+		public gives "public"
+	end 'word'
+end 'visibilityTierWord'
 
 // One `Visibility` per struct field, in declaration order. See `StructLayout.fieldVisibility`.
 export typealias VisibilityArray = Array with Visibility
@@ -1488,8 +1520,12 @@ end 'seedDeclFile'
 // read them (E3061 same-file redeclaration, E3105 cross-file primitive conflict) cannot fire against one —
 // a user redeclaring the name is in a different file, and over `int`, which is a compiler-supplied alias's
 // primitive too. That argument covers BOTH callers, which is why it is stated once, here.
+//
+// ⚠ `public`, not `global`: these are language API surface, and a `public` library signature names them
+// (`Codepoint`, `ElementIndex`, `BytePos`, `GraphemeIndex`). The two tiers reach identically, so nothing
+// but E3167 can tell them apart — and at `global` every such signature would be refused by it.
 function compilerSuppliedIntAlias(name ByteArray, low ParsedInt, high ParsedInt, declFilePath FilePath) returns RangedTypeAlias
-	return RangedTypeAlias.create(name, underlying: MaxonType.integer, low: low, high: high, visibility: Visibility.global, declFilePath: declFilePath, nameLine: 0, nameColumn: 0)
+	return RangedTypeAlias.create(name, underlying: MaxonType.integer, low: low, high: high, visibility: Visibility.public, declFilePath: declFilePath, nameLine: 0, nameColumn: 0)
 end 'compilerSuppliedIntAlias'
 
 // One stdlib seed — an alias the compiler supplies ON A STDLIB FILE'S BEHALF, so it carries that file's
@@ -1663,13 +1699,12 @@ end 'builtinExitCodeAlias'
 // `Visibility` case added to one copy and not the other hands that file a declaration `visibleFrom`
 // says it may not name — which is `A1f-aliasclash` itself, restored, and SILENT: the range would be
 // wrong and E2003 would agree with whichever copy was wrong, because it reads the same map.
-// `Visibility` has three cases today (`file`/`module`/`global`) and a fourth is the edit this guards.
+// A fifth `Visibility` case is the edit this guards.
 //
-// ⚠ **IT IS `== global`, NOT `!= file` (N1a).** The two were the same sentence while `export` minted
-// `Visibility.module`; they are not once `module` means a DIRECTORY SUBTREE, because "may ANY file name
-// this?" is false for a subtree-scoped declaration. Membership of `nameable` is unchanged for every
-// program that existed before the `module` modifier — an `export`ed alias is now `global` and still in,
-// a plain one is still out — so this is a widening of the QUESTION, not a change of the answer.
+// ⚠ **IT IS THE PROGRAM-WIDE TIERS, NOT `!= file`.** "May ANY file name this?" is false for a
+// subtree-scoped declaration, so `module` is out, and it is true for `public` as well as `export` — an
+// alias a library states as API surface is nameable from everywhere, and reading only `global` here left
+// a `public` alias nameable from nowhere. `isProgramWideTier` owns that set.
 //
 // ⚠ **IT TAKES A `Visibility`, NOT A DECLARATION, AND N3 IS WHY.** The generic-instance alias registry needs
 // the identical tier-2 question (`ProgramSignatures.settleGenericAliasContest`, deciding which declaration a
@@ -1677,9 +1712,46 @@ end 'builtinExitCodeAlias'
 // one-line predicate over `GenericAliasEntry` it was the third copy of the rule this header exists to keep
 // at one — and the fourth `Visibility` case would now hand a file an INSTANCE it may not name, not merely a
 // wrong diagnostic. The rule is about a tier; the record it was read off was never part of it.
-export function nameableFromAnywhere(visibility Visibility) returns bool
-	return visibility == Visibility.global
+function nameableFromAnywhere(visibility Visibility) returns bool
+	return isProgramWideTier(visibility)
 end 'nameableFromAnywhere'
+
+export typealias ScopedAliasTier = int(0 to 3)
+
+let ScopedAliasTierHiddenFromTheReader = 0 as ScopedAliasTier
+let ScopedAliasTierSomeAuthors = 1 as ScopedAliasTier
+let ScopedAliasTierTheLibrarys = 2 as ScopedAliasTier
+let ScopedAliasTierReadersOwnFile = 3 as ScopedAliasTier
+
+// How near a claimant of a contested alias name is to the file reading it — the ONE ranking behind every
+// scoped alias door, so the four of them cannot come to disagree about which declaration a stranger means.
+//
+// ⚠ **THE LIBRARY OUTRANKS ANOTHER AUTHOR'S FILE FOR EVERY READER, THE LIBRARY'S OWN FILES INCLUDED.** A
+// file that declares no `Byte` of its own means the library's, not a sibling user file's, which
+// `specs/bytearray-element-size.md`'s `readers-own-byte-decides-the-literal-not-the-whole-program-fold`
+// pins: the element width a literal is folded at follows this answer.
+//
+// ⛔ **EVERY WALK THAT RANKS BY THIS SEEDS FROM THE DECLARATION RECORDED LAST AND REPLACES IT ONLY ON A
+// STRICTLY HIGHER TIER, so the tie-break is a property of the SEED and never of the comparison.** A walk
+// that took the later claimant on a tie would be reading a hash map's bucket order, which is no fact
+// about the program; that a stranger means the last-RECORDED declaration is pinned by
+// `specs/namespace-qualified-resolution.md`'s
+// `same-directory-alias-pair-is-not-offered-as-its-own-disambiguation`. The seed also settles the reader
+// who may name NONE of the claimants: it gets the same last-wins answer the bare door would have given
+// it, rather than a hidden declaration dressed as a scoped one.
+export function scopedAliasTier(declPath String, readerPath String, declaredByTheCorpus bool, visibility Visibility) returns ScopedAliasTier
+	if declPath.equals(readerPath) 'theReadersOwnDeclaration'
+		return ScopedAliasTierReadersOwnFile
+	end 'theReadersOwnDeclaration'
+
+	if not nameableFromAnywhere(visibility) 'hiddenFromEveryOtherFile'
+		return ScopedAliasTierHiddenFromTheReader
+	end 'hiddenFromEveryOtherFile'
+
+	return ScopedAliasTierTheLibrarys if declaredByTheCorpus else ScopedAliasTierSomeAuthors
+end 'scopedAliasTier'
+
+export typealias CorpusDeclaringFileSet = Set with String
 
 export type RangedAliasRegistry
 	// Every alias under its BARE name — the fallback, and on its own exactly the pre-existing
@@ -1719,6 +1791,7 @@ export type RangedAliasRegistry
 	//
 	// ⭐ **AND IT IS ALSO THE DOOR A THIRD FILE RESOLVES A CONTESTED NAME THROUGH** — see `lookup`.
 	var nameable as NameableAliasMap
+	var corpusDeclaringFiles as CorpusDeclaringFileSet
 
 	// ⭐⭐ **THE NAMES WHOSE DECLARATIONS DISAGREE ABOUT THE RANGE (N2)** — a THIRD derived index over the
 	// same declarations, and the only one that cannot be maintained by `record`: it is a fact about ALL of a
@@ -1775,11 +1848,11 @@ export type RangedAliasRegistry
 	export static function create(os Os) returns RangedAliasRegistry
 		let exitCodeHigh = exitCodeAliasHigh(os)
 		requireExitCodeRangeFitsItsWidth(exitCodeHigh)
-		var registry = Self{byName: RangedTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredAliasMap.create(), storageBytes: AliasStorageBytesMap.create(), packedBits: AliasPackedBitsMap.create(), nameable: NameableAliasMap.create(), rangeContested: sharedEmptyRangeContests, exitCodeHigh: exitCodeHigh}
-		_ = registry.record(builtinStdlibAlias(CodepointTypeName, low: CodepointAliasLow, high: CodepointAliasHigh, declPathText: CodepointAliasDeclPath))
-		_ = registry.record(builtinStdlibAlias(ElementIndexAliasName, low: ElementIndexAliasLow, high: ElementIndexAliasHigh, declPathText: ElementIndexAliasDeclPath))
-		_ = registry.record(builtinStdlibAlias(BytePosAliasName, low: StringPositionAliasLow, high: StringPositionAliasHigh, declPathText: StringPositionAliasDeclPath))
-		_ = registry.record(builtinStdlibAlias(GraphemeIndexAliasName, low: StringPositionAliasLow, high: StringPositionAliasHigh, declPathText: StringPositionAliasDeclPath))
+		var registry = Self{byName: RangedTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredAliasMap.create(), storageBytes: AliasStorageBytesMap.create(), packedBits: AliasPackedBitsMap.create(), nameable: NameableAliasMap.create(), corpusDeclaringFiles: CorpusDeclaringFileSet.create(), rangeContested: sharedEmptyRangeContests, exitCodeHigh: exitCodeHigh}
+		_ = registry.record(builtinStdlibAlias(CodepointTypeName, low: CodepointAliasLow, high: CodepointAliasHigh, declPathText: CodepointAliasDeclPath), declaredByTheCorpus: true)
+		_ = registry.record(builtinStdlibAlias(ElementIndexAliasName, low: ElementIndexAliasLow, high: ElementIndexAliasHigh, declPathText: ElementIndexAliasDeclPath), declaredByTheCorpus: true)
+		_ = registry.record(builtinStdlibAlias(BytePosAliasName, low: StringPositionAliasLow, high: StringPositionAliasHigh, declPathText: StringPositionAliasDeclPath), declaredByTheCorpus: true)
+		_ = registry.record(builtinStdlibAlias(GraphemeIndexAliasName, low: StringPositionAliasLow, high: StringPositionAliasHigh, declPathText: StringPositionAliasDeclPath), declaredByTheCorpus: true)
 		return registry
 	end 'create'
 
@@ -1790,6 +1863,7 @@ export type RangedAliasRegistry
 		fingerprint.note("storageBytes", value: self.storageBytes.count())
 		fingerprint.note("packedBits", value: self.packedBits.count())
 		fingerprint.note("nameable", value: self.nameable.count())
+		fingerprint.note("corpusDeclaringFiles", value: self.corpusDeclaringFiles.count() as EntryCount)
 		fingerprint.note("rangeContested", value: self.rangeContested.count())
 		fingerprint.closeGroup()
 	end 'noteFingerprint'
@@ -1797,7 +1871,8 @@ export type RangedAliasRegistry
 	// File one declaration, and answer whether its UNDERLYING PRIMITIVE conflicts with the one every
 	// earlier declaration of the name shares — the one place that decides it, so the conflict test and
 	// the insert sit on one structure and cannot come to disagree about which declarations conflict.
-	export function record(alias RangedTypeAlias) returns AliasRecordOutcome
+	export function record(alias RangedTypeAlias, declaredByTheCorpus bool) returns AliasRecordOutcome
+		self.noteDeclaringLayer(alias.declFilePath, declaredByTheCorpus: declaredByTheCorpus)
 		self.widenElementWidthFor(alias)
 
 		// Recorded here, ABOVE the first-declaration early return below, so every declaration passes
@@ -1910,6 +1985,39 @@ export type RangedAliasRegistry
 		return self.nameable.contains(name)
 	end 'nameableFromAnyFile'
 
+	// The layer bit arrives from the caller rather than being derived from the path here: only
+	// `ProgramSignatures.declaredByTheCorpus` answers it for a compiler-owned declaration and for a project
+	// rooted under `stdlib/`, and a second derivation would hand `scopedAliasTier` a different layer from
+	// the one every other provenance reader sees. Kept as the set of declaring FILES so the rank costs no
+	// per-claimant field.
+	function noteDeclaringLayer(declFilePath FilePath, declaredByTheCorpus bool)
+		if not declaredByTheCorpus 'anAuthorsOwnFile'
+			return
+		end 'anAuthorsOwnFile'
+
+		self.corpusDeclaringFiles.insert(declFilePath.toString())
+	end 'noteDeclaringLayer'
+
+	function scopedClaimant(byFile RangedAliasByDeclaringFile, readerPath String, lastRecorded RangedTypeAlias) returns RangedTypeAlias
+		var best = lastRecorded
+		var bestTier = self.claimantTier(lastRecorded.declFilePath.toString(), readerPath: readerPath, visibility: lastRecorded.visibility)
+
+		for (declPath, claimant) in byFile 'eachClaimant'
+			let tier = self.claimantTier(declPath, readerPath: readerPath, visibility: claimant.visibility)
+
+			if tier > bestTier 'nearerThanTheBestSoFar'
+				best = claimant
+				bestTier = tier
+			end 'nearerThanTheBestSoFar'
+		end 'eachClaimant'
+
+		return best
+	end 'scopedClaimant'
+
+	function claimantTier(declPath String, readerPath String, visibility Visibility) returns ScopedAliasTier
+		return scopedAliasTier(declPath, readerPath: readerPath, declaredByTheCorpus: self.corpusDeclaringFiles.contains(declPath), visibility: visibility)
+	end 'claimantTier'
+
 	// The alias `name` denotes when read FROM `readerFilePath`.
 	//
 	// ⚠ **THE CONTESTED TEST AND THE SCOPED ANSWER ARE ONE PROBE, and that is the point.** This is
@@ -1940,17 +2048,17 @@ export type RangedAliasRegistry
 	// ⚠⚠ **TWO BOUNDARIES THE PARAGRAPH ABOVE HIDES, both MEASURED (BATCH6 review), because "a user's
 	// private alias decided what a stdlib function accepts" reads wider than what moved:**
 	//
-	//   • **A contest ENTIRELY INSIDE `stdlib/` is untouched — the fix is a no-op there.**
-	//     `Parser.typeAliasVisibility` gives EVERY alias in a stdlib source file `Visibility.global`,
-	//     `export`ed or not, so every candidate is nameable and `nameable`'s last-wins winner IS
-	//     `byName`'s. The `Byte`/`BytePos`/`Utf16UnitCount` contests this file cites elsewhere are all
-	//     of that shape. The case actually repaired is stdlib-vs-user-PRIVATE.
-	//   • **A user `export`ed alias still displaces the stdlib seed, exactly as before.** `record`'s
-	//     `nameable` is last-wins too, so `export typealias Codepoint = int(0 to 100)` in a user file
-	//     still wins for any file that declares no `Codepoint` of its own. That is NOT a regression —
-	//     `byName` did the same — and stdlib files that declare the name are unaffected, because
-	//     `readersOwnFile` runs first. It is the same E3063 contest, and it is the reason the bullet
-	//     above says "narrows", not "closes".
+	//   • **A contest ENTIRELY INSIDE `stdlib/` turns on what each declaration WROTE.** An alias a public
+	//     library signature names is written `public` and is a candidate; an unmarked one is the
+	//     library's own business and is hidden from every other file, its own neighbours included. The
+	//     `Byte`/`BytePos`/`Utf16UnitCount` contests this file cites elsewhere are all between `public`
+	//     declarations, so every candidate is nameable and the scoped winner is `byName`'s.
+	//   • **A user `export`ed alias does NOT displace the library's.** `scopedAliasTier` ranks the
+	//     library above another author's file for every reader, so `export typealias Codepoint =
+	//     int(0 to 100)` in a user file loses to `stdlib/Character.maxon`'s for any file that declares no
+	//     `Codepoint` of its own — the reader's OWN declaration still wins, because `readersOwnFile` runs
+	//     first. It is still the E3063 contest, and it is the reason the bullet above says "narrows",
+	//     not "closes".
 	//
 	// ⚠ **AND THE FALLBACK TO `byName` IS NOT DEAD CODE — it is what the visibility diagnostics rest on.**
 	// A name whose every declaration is file-private must still be FOUND from another file, because that
@@ -1958,33 +2066,38 @@ export type RangedAliasRegistry
 	// and did not export it" (E2003 — see `visibleFrom`). Hiding it here would collapse the two into the
 	// blunter one's wording.
 	//
-	// ⚠ The extra probe is paid ONLY by a contested name whose reader declares none of it. An uncontested
-	// name — nearly every name in any program — short-circuits on the `multiplyDeclared` miss exactly as
-	// it did, so the hot path is unchanged.
+	// ⚠ The extra walk — one pass over that name's claimants, which are the few files declaring it — is
+	// paid ONLY by a contested name whose reader declares none of it. An uncontested name, nearly every
+	// name in any program, short-circuits on the `multiplyDeclared` miss, so the hot path never reaches it.
 	//
-	// ⛔⛔ **THIS DOOR HOLDS THE ROSTER: THE SAME THREE TIERS ARE SPELLED FOUR TIMES, AND EDITING ONE MEANS
-	// EDITING ALL FOUR.** Here over `multiplyDeclared`/`nameable`, at `FunctionAliasRegistry.lookup` over a
-	// FUNCTION alias, at `ProgramSignatures.scopedGenericAliasInstance` over a GENERIC-INSTANCE alias, and at
-	// `ProgramSignatures.scopedTupleAlias` over a TUPLE alias. They cannot be merged: the tiers are identical
-	// but the VALUES are not — a `RangedTypeAlias`, a `FunctionTypeAlias`, a `GenericInstanceId`, a
+	// ⛔⛔ **THIS DOOR HOLDS THE ROSTER: FOUR WALKS ANSWER "WHICH DECLARATION DOES THIS READER MEAN?", AND
+	// EDITING ONE MEANS EDITING ALL FOUR.** Here over `multiplyDeclared`, at `FunctionAliasRegistry.lookup`
+	// over a FUNCTION alias, at `ProgramSignatures.scopedTupleClaimant` over a TUPLE alias, and at
+	// `ProgramSignatures.scopedGenericAliasDecl` — which `scopedGenericAliasInstance` and
+	// `genericAliasDeclaredIn` both read — over a GENERIC-INSTANCE alias. They cannot be merged into one
+	// body: the ranking is shared (`Project.scopedAliasTier`, which also owns the seed rule every walk
+	// obeys) but the VALUES are not — a `RangedTypeAlias`, a `FunctionTypeAlias`, a `GenericAliasEntry`, a
 	// `DeclaredTupleAlias` — and this compiler's source has no generic FUNCTION to abstract over that. An
 	// interface-constrained row would put a witness call on the type-reference hot path, which is the other
 	// reason.
 	//
-	// ⚠ **THE ROSTER IS NAMED HERE AND NOWHERE ELSE, AND THE OTHER THREE POINT BACK AT IT.** Pairwise
-	// pointers are what let a further copy be written without any of the others learning of it. The next
-	// change is already known to be coming to all four: the E3063 boundary each stops at — choosing between
-	// two LEGAL candidates by module-directory precedence — is owed by every alias form, and teaching only
-	// one is a wrong answer at whichever door was missed, with no compile error at any of them.
+	// ⇒ What each walk owns is its value type, where its claimants come from and what it falls through to;
+	// the ORDER is stated nowhere but `scopedAliasTier`, so a tier added there reaches every door at once.
+	//
+	// ⚠ **THE ROSTER IS NAMED HERE AND NOWHERE ELSE, AND THE OTHERS POINT BACK AT IT.** Pairwise pointers
+	// are what let a further copy be written without any of the others learning of it. The next change is
+	// already known to be coming to all of them: the E3063 boundary each stops at — choosing between two
+	// LEGAL candidates by module-directory precedence — is owed by every alias form, and teaching only one
+	// is a wrong answer at whichever door was missed, with no compile error at any of them.
 	export function lookup(name ByteArray, readerFilePath FilePath) returns DeclaredAlias
 		if let byFile = try self.multiplyDeclared.get(name) 'contested'
 			if let own = try byFile.get(readerFilePath.toString()) 'readersOwnFile'
 				return DeclaredAlias.declared(own)
 			end 'readersOwnFile'
 
-			if let nameableHere = try self.nameable.get(name) 'someDeclarationIsNameable'
-				return DeclaredAlias.declared(nameableHere)
-			end 'someDeclarationIsNameable'
+			if let lastRecorded = try self.byName.get(name) 'theLastDeclarationRecordedUnderTheName'
+				return DeclaredAlias.declared(self.scopedClaimant(byFile, readerPath: readerFilePath.toString(), lastRecorded: lastRecorded))
+			end 'theLastDeclarationRecordedUnderTheName'
 		end 'contested'
 
 		if let any = try self.byName.get(name) 'declaredSomewhere'
@@ -2445,7 +2558,7 @@ export type RangedAliasRegistry
 			// blame for one: two claimants of ONE spelling share a range, hence a primitive, and the only way
 			// two ranges could mint one spelling is an `int`/`float` pair whose bounds share a bit pattern —
 			// which the BASE name has already earned E3105 for, against the line the author wrote.
-			_ = self.record(mint)
+			_ = self.record(mint, declaredByTheCorpus: true)
 		end 'eachMint'
 
 		// The PUBLISH. Guarded on `count()` so an uncontested program never reassigns the field at all — it
@@ -2570,7 +2683,7 @@ function scopedSpellingsOf(name ByteArray, claimants RangedTypeAliasArray, mints
 end 'scopedSpellingsOf'
 
 function rangeQualifiedMint(claimant RangedTypeAlias, spelling ByteArray) returns RangedTypeAlias
-	return RangedTypeAlias.create(spelling, underlying: claimant.underlying, low: claimant.low, high: claimant.high, visibility: Visibility.global, declFilePath: claimant.declFilePath, nameLine: claimant.nameLine, nameColumn: claimant.nameColumn, rawBitWidth: claimant.rawBitWidth)
+	return RangedTypeAlias.create(spelling, underlying: claimant.underlying, low: claimant.low, high: claimant.high, visibility: Visibility.public, declFilePath: claimant.declFilePath, nameLine: claimant.nameLine, nameColumn: claimant.nameColumn, rawBitWidth: claimant.rawBitWidth)
 end 'rangeQualifiedMint'
 
 // Has an earlier claimant already taken this RANGE? A LINEAR scan and not a set, because the list holds one
@@ -2718,17 +2831,16 @@ export type TypeNameClaim
 	export let kind as TypeDeclKind
 	export let declFilePath as FilePath
 
-	// ⚠ **THE *EFFECTIVE* TIER, NOT THE MODIFIER THE SOURCE WROTE.** `Parser.typeAliasVisibility` has
-	// already promoted every `stdlib/` alias to `global` by the time a claim is built, and this rule
-	// must read that answer rather than re-derive it — a second derivation is exactly how the shadow
-	// contest and the alias registry once came to disagree about which declarations are reachable.
+	// ⚠ **THE MODIFIER THE SOURCE WROTE, AND THE LIBRARY IS NOT EXEMPT FROM IT.** An unmarked `stdlib/`
+	// alias claims its name at `file`, exactly as anyone's does; what makes the library's surface
+	// nameable is the `public` its declarations carry.
 	//
 	// ⚠ It is NOT `UnusedExportCheck.declaredTypeVisibility`'s answer, which deliberately reports
 	// `file` for the kinds that audit does not track. That one answers "is this worth auditing"; this
 	// one answers "can another file see it".
 	export let visibility as Visibility
 
-	// ⭐ **WHICH LAYER DECLARED IT — `Parser.isStdlibSource`, the same bit `typeAliasVisibility` reads.**
+	// ⭐ **WHICH LAYER DECLARED IT — `Parser.isStdlibSource`.**
 	// A pair drawn from two layers can never meet, and that is the half of the rule a FORM test cannot
 	// express: user code names a `stdlib/` declaration it never knew was there, and a `stdlib/` file
 	// cannot see a user file at all.
@@ -2763,6 +2875,18 @@ end 'TypeNameDecl'
 // and `typealias Box` came SECOND is a fact none of them holds. Blaming the wrong one of a pair is
 // exactly the misdiagnosis this rule exists to remove.
 export typealias TypeNameDeclArray = Array with TypeNameDecl
+
+export type SignatureTypeDemand
+	export let demandingFunction as ByteArray
+	export let demandingTier as Visibility
+	export let typeName as ByteArray
+
+	export static function create(demandingFunction ByteArray, demandingTier Visibility, typeName ByteArray) returns SignatureTypeDemand
+		return Self{demandingFunction: demandingFunction, demandingTier: demandingTier, typeName: typeName}
+	end 'create'
+end 'SignatureTypeDemand'
+
+export typealias SignatureTypeDemandArray = Array with SignatureTypeDemand
 
 // Type name -> the most recent ACCEPTED declaration of it. See `TypeNameRegistry`.
 typealias TypeNameDeclMap = Map with (ByteArray, TypeNameDecl)
@@ -3465,7 +3589,7 @@ module type RangeCheckParamGuard
 	// the one place that cannot get it wrong — the emitter, out of the ids it minted.
 	export var ownedBlockIds as BlockIdArray
 
-	export static function create(index ParamCount, alias RangedTypeAlias, headBlockId BlockId, okBlockId BlockId, ownedBlockIds BlockIdArray) returns RangeCheckParamGuard
+	module static function create(index ParamCount, alias RangedTypeAlias, headBlockId BlockId, okBlockId BlockId, ownedBlockIds BlockIdArray) returns RangeCheckParamGuard
 		return Self{index: index, alias: alias, headBlockId: headBlockId, okBlockId: okBlockId, ownedBlockIds: ownedBlockIds}
 	end 'create'
 end 'RangeCheckParamGuard'
@@ -3628,8 +3752,8 @@ export type FunctionTypeAlias
 	// question**: which of two same-named declarations a given file may mean. This registry is keyed by the
 	// bare name and answers for the whole program, so without these a file whose own `Handler` is a ranged
 	// alias had `5 as Handler` refused *"Cannot cast from int to function"* against a declaration it never
-	// names. Both are the effective values — `Parser.typeAliasVisibility` has already promoted a `stdlib/`
-	// alias to `global` — because a second derivation of a tier is how two deciders come to disagree.
+	// names. The tier is the modifier the source wrote, a `stdlib/` declaration included, because a second
+	// derivation of a tier is how two deciders come to disagree.
 	//
 	// ⚠ EMPTY / `file` on the NESTED copy `scopedToEnclosingType` mints only if its source was: that copy
 	// carries everything through unchanged, for the reason stated there.
@@ -3768,20 +3892,22 @@ export type FunctionAliasRegistry
 	// on the first. Its one reader is `lookup`'s contested branch, and an eager upsert would cost a
 	// `FunctionTypeAlias` allocation per alias per fold for a column no uncontested name ever reads.
 	var nameable as FunctionTypeAliasMap
+	var corpusDeclaringFiles as CorpusDeclaringFileSet
 
 	// The per-(name, declaring file) MINT of every name whose declarations disagree about the shape, so
 	// `shapeScopedName` is a map read rather than a re-derivation at each of the name-resolution doors.
 	var shapeScoped as MultiplyDeclaredFunctionAliasMap
 
 	export static function create() returns FunctionAliasRegistry
-		return Self{byName: FunctionTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredFunctionAliasMap.create(), nameable: FunctionTypeAliasMap.create(), shapeScoped: MultiplyDeclaredFunctionAliasMap.create()}
+		return Self{byName: FunctionTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredFunctionAliasMap.create(), nameable: FunctionTypeAliasMap.create(), corpusDeclaringFiles: CorpusDeclaringFileSet.create(), shapeScoped: MultiplyDeclaredFunctionAliasMap.create()}
 	end 'create'
 
 	export function contains(name ByteArray) returns bool
 		return self.byName.contains(name)
 	end 'contains'
 
-	export function record(alias FunctionTypeAlias)
+	export function record(alias FunctionTypeAlias, declaredByTheCorpus bool)
+		self.noteDeclaringLayer(alias.declFilePath, declaredByTheCorpus: declaredByTheCorpus)
 		let sole = try self.byName.get(alias.name) otherwise 'firstDeclarationOfThisName'
 			self.byName.upsert(alias.name, value: alias)
 			return
@@ -3820,6 +3946,34 @@ export type FunctionAliasRegistry
 		self.nameable.upsert(alias.name, value: alias)
 	end 'noteNameable'
 
+	function noteDeclaringLayer(declFilePath FilePath, declaredByTheCorpus bool)
+		if not declaredByTheCorpus 'anAuthorsOwnFile'
+			return
+		end 'anAuthorsOwnFile'
+
+		self.corpusDeclaringFiles.insert(declFilePath.toString())
+	end 'noteDeclaringLayer'
+
+	function scopedClaimant(byFile FunctionAliasByDeclaringFile, readerPath String, lastRecorded FunctionTypeAlias) returns FunctionTypeAlias
+		var best = lastRecorded
+		var bestTier = self.claimantTier(lastRecorded.declFilePath.toString(), readerPath: readerPath, visibility: lastRecorded.visibility)
+
+		for (declPath, claimant) in byFile 'eachClaimant'
+			let tier = self.claimantTier(declPath, readerPath: readerPath, visibility: claimant.visibility)
+
+			if tier > bestTier 'nearerThanTheBestSoFar'
+				best = claimant
+				bestTier = tier
+			end 'nearerThanTheBestSoFar'
+		end 'eachClaimant'
+
+		return best
+	end 'scopedClaimant'
+
+	function claimantTier(declPath String, readerPath String, visibility Visibility) returns ScopedAliasTier
+		return scopedAliasTier(declPath, readerPath: readerPath, declaredByTheCorpus: self.corpusDeclaringFiles.contains(declPath), visibility: visibility)
+	end 'claimantTier'
+
 	// One of the four copies of the own-file → nameable → any cascade. `RangedAliasRegistry.lookup` holds
 	// the roster and the whole argument for why they are four bodies; editing this one means editing those.
 	export function lookup(name ByteArray, readerFilePath FilePath) returns DeclaredFunctionAlias
@@ -3828,9 +3982,9 @@ export type FunctionAliasRegistry
 				return DeclaredFunctionAlias.declared(own)
 			end 'readersOwnFile'
 
-			if let nameableHere = try self.nameable.get(name) 'someDeclarationIsNameable'
-				return DeclaredFunctionAlias.declared(nameableHere)
-			end 'someDeclarationIsNameable'
+			if let lastRecorded = try self.byName.get(name) 'theLastDeclarationRecordedUnderTheName'
+				return DeclaredFunctionAlias.declared(self.scopedClaimant(byFile, readerPath: readerFilePath.toString(), lastRecorded: lastRecorded))
+			end 'theLastDeclarationRecordedUnderTheName'
 		end 'contested'
 
 		if let any = try self.byName.get(name) 'declaredSomewhere'
@@ -3913,7 +4067,7 @@ export type FunctionAliasRegistry
 
 		for (_, byFile) in self.shapeScoped 'eachContestedName'
 			for (_, mint) in byFile 'eachDeclaringFile'
-				self.record(mint)
+				self.record(mint, declaredByTheCorpus: true)
 			end 'eachDeclaringFile'
 		end 'eachContestedName'
 	end 'settleShapeContests'
@@ -3949,6 +4103,7 @@ export type FunctionAliasRegistry
 		fingerprint.note("byName", value: self.byName.count())
 		fingerprint.note("multiplyDeclared", value: self.multiplyDeclared.count())
 		fingerprint.note("nameable", value: self.nameable.count())
+		fingerprint.note("corpusDeclaringFiles", value: self.corpusDeclaringFiles.count() as EntryCount)
 		fingerprint.note("shapeScoped", value: self.shapeScoped.count())
 		fingerprint.closeGroup()
 	end 'noteFingerprint'
@@ -6577,13 +6732,13 @@ module type BuiltinErrorOrdinalCheck
 	// gave it a real declaration and moved its check to `overDeclared` — so this sentence spent a while
 	// naming a caller that was not one, beside a count of them. Both are stated as *"today"* now: the SET is
 	// a consequence of which modules the loader lists, and that changes without this line being read.
-	export static function overSynthesized(project Project, declaration EnumLayout, installer ByteArray) returns BuiltinErrorOrdinalCheck
+	module static function overSynthesized(project Project, declaration EnumLayout, installer ByteArray) returns BuiltinErrorOrdinalCheck
 		return BuiltinErrorOrdinalCheck.over(project, declaration: declaration, source: BuiltinErrorDeclarationSource.synthesized, installer: installer)
 	end 'overSynthesized'
 
 	// A check over a layout parsed from `stdlib/Builtins.maxon`, reached through `declaredBuiltinErrorEnum`
 	// — which is what turns an ABSENT declaration into one E4016 rather than into a silently-empty enum.
-	export static function overDeclared(project Project, declaration EnumLayout, installer ByteArray) returns BuiltinErrorOrdinalCheck
+	module static function overDeclared(project Project, declaration EnumLayout, installer ByteArray) returns BuiltinErrorOrdinalCheck
 		return BuiltinErrorOrdinalCheck.over(project, declaration: declaration, source: BuiltinErrorDeclarationSource.declared, installer: installer)
 	end 'overDeclared'
 
@@ -6605,14 +6760,14 @@ module type BuiltinErrorOrdinalCheck
 
 	// One claim — "`installer` throws `caseName` as `ordinal`" — verified against the declaration on the
 	// spot. THE only way to state a claim, so a name can never be recorded without the ordinal it belongs to.
-	export function claim(caseName ByteArray, ordinal ParsedInt)
+	module function claim(caseName ByteArray, ordinal ParsedInt)
 		self.recordCase(caseName, ordinal: ordinal, use: BuiltinErrorCaseUse.thrown)
 	end 'claim'
 
 	// One case the runtime NEVER throws, at the ordinal the declaration gives it (W135) — an exemption
 	// STATED rather than an omission left to be read as one. See this type's header for why the ordinal is
 	// named when the throw is not, and each caller for the per-case evidence that nothing produces it.
-	export function neverThrown(caseName ByteArray, ordinal ParsedInt)
+	module function neverThrown(caseName ByteArray, ordinal ParsedInt)
 		self.recordCase(caseName, ordinal: ordinal, use: BuiltinErrorCaseUse.neverThrown)
 	end 'neverThrown'
 
@@ -6669,7 +6824,7 @@ module type BuiltinErrorOrdinalCheck
 	// them and the walk that closes them are one function by construction. A family that adds a case to its
 	// enum and no verb to that function is refused HERE, which is the point at which the omission is still
 	// one edit old.
-	export function requireTotal()
+	module function requireTotal()
 		let known = self.accountedPrefixLength()
 
 		for index in 0 upto known 'eachCase'
@@ -7475,7 +7630,7 @@ type MintedHelperNameParts
 	export let head as ByteArray
 	export let tail as ByteArray
 
-	export static function create(head ByteArray, tail ByteArray) returns MintedHelperNameParts
+	static function create(head ByteArray, tail ByteArray) returns MintedHelperNameParts
 		return Self{head: head, tail: tail}
 	end 'create'
 end 'MintedHelperNameParts'
@@ -8152,6 +8307,8 @@ export type Project
 	// artifact interners at merge time (see TypeNameInterner.maxon).
 	export var typeNames as TypeNameInterner
 
+	export var signatureTypeDemands as SignatureTypeDemandArray
+
 	// Source span of every op in the whole-program Maxon module, parallel by op
 	// index. Folded from the per-file artifact tables by `mergeArtifact`, in the
 	// same source-path order the module itself merges. A MAXON-TIER table: the Std
@@ -8543,6 +8700,7 @@ export type Project
 			// Aimed at the TARGET this project was created for, never the host — see `exitCodeHigh`.
 			typeAliases: RangedAliasRegistry.create(target.os),
 			typeNameDecls: TypeNameRegistry.create(),
+			signatureTypeDemands: SignatureTypeDemandArray.create(),
 			rangeChecks: RangeCheckPlanMap.create(),
 			functionTypeAliases: FunctionTypeAliasMap.create(),
 			functionAliasShapes: FunctionShapeMap.create(),
@@ -8613,46 +8771,28 @@ export function createProject(rootPath FilePath, target Target, stdlibDir FilePa
 	return Project.create(QueryDatabase.create(target.os), rootPath: rootPath, target: target, stdlibDir: stdlibDir, runtimeDir: runtimeDir, debugStream: debugStream)
 end 'createProject'
 
-// ⭐⭐ **IS THE PROJECT ROOT ITSELF UNDER `stdlib/`? — ONE HOME, BECAUSE THREE RULES REST ON IT AND TWO
-// OF THEM ARE EACH OTHER'S PROOF.** The question is `maxon build stdlib/URL.maxon`: the user named
-// a file inside the toolchain's own `stdlib/` as their project. Three separate rules turn on it, and
-// one home is what keeps them from each spelling it out for themselves:
+// Is the project root itself under `stdlib/`, as in `maxon build stdlib/URL.maxon`? Asked in this
+// one place because three rules turn on it:
 //
-//   * `StdlibLoader.registeredPathsWhenTheRootIsInsideStdlib` — do not load a file the project already
-//     registered, or every function in it collides with itself.
-//   * `Queries.isStdlibSourceFile` — such a project keeps its OWN files as the USER's (A1t bar 2), so
-//     only what the loader pulled in from outside the root is stdlib for VISIBILITY.
-//   * `Queries.livesUnderStdlibDirectory` — but for the two `module`-visible `String` methods those same
-//     files ARE under `stdlib/`, which is a fact about the PATH and not about visibility.
+//   * `StdlibLoader.setAsideTheUsersOwnLibraryFiles` — the library walk does not load the
+//     project's own files a second time.
+//   * `Queries.isStdlibRootFile` — such a project keeps its own files as the user's, so only what
+//     the loader pulled in from outside the root is stdlib for visibility.
+//   * `Queries.livesUnderStdlibDirectory` — for the two `module`-visible `String` methods those
+//     same files are under `stdlib/`, a fact about the path and not about visibility.
 //
-// ⚠ **THE THIRD ONE'S SOUNDNESS IS A CLAIM ABOUT THE SECOND, so a drift between their two spellings is
-// not a style problem — it is a wrong answer with nothing to catch it.** `livesUnderStdlibDirectory` is
-// derived (`isStdlibSource OR rootIsUnderStdlibDirectory`) and its proof is *"the two differ in exactly
-// ONE situation: when the root is under `stdlib/`"* — i.e. exactly when THIS predicate is true. Written
-// twice, one of them could be taught about symlinks, or case, or a trailing separator, and the proof
-// would go on reading as if it held while the stdlib-only gate quietly refused `stdlib/URL.maxon` (or,
-// the other way, opened for a user file). Written once, the proof is about one function.
+// ⚠ The third rule's soundness is a claim about the second: `livesUnderStdlibDirectory` is
+// `isStdlibSource OR rootIsUnderStdlibDirectory`, and the two differ exactly when this predicate
+// holds. A second spelling taught about symlinks, case or a trailing separator would leave that
+// proof reading as if it held while the stdlib-only gate refused `stdlib/URL.maxon`, or opened for
+// a user file.
 //
-// ⚠ `cwd` is passed IN, never probed here. `isStdlibSourceFile` already resolves the PATH against it and
-// runs per file inside two O(files) loops, so probing again would put a second `Directory.currentPath()`
-// on the per-file path — the shape `isStdlibSourceFile`'s own header rules out. Resolving at all is not
-// optional: `isInside` compares SPELLINGS, so a relative `stdlib/URL.maxon` and an absolute one would
-// otherwise be two different answers about one file.
+// `cwd` is passed in because the per-file provenance derivation already holds it, and a second
+// `Directory.currentPath()` would sit on that per-file path. Resolving is not optional: `isInside`
+// compares spellings, so a relative and an absolute spelling of one root would answer differently.
 export function rootIsUnderStdlibDirectory(project Project, cwd FilePath) returns bool
 	return project.rootPath.resolve(cwd).isInside(project.stdlibDir)
 end 'rootIsUnderStdlibDirectory'
-
-// The same question of the OTHER library root, and it has TWO readers: the loader's double-load guard,
-// which must not register `runtime/Word.maxon` twice when the user named it as their project, and
-// `Queries.fileProvenanceOf`, where it is what subtracts the user's own root from the tier.
-//
-// ⛔ **A FILE THE USER NAMES AS THEIR PROJECT IS THEIRS, AND THAT COSTS IT THE TIER'S PRIVILEGES.**
-// `isInsideLibraryRoot` answers `isRuntimeSource = false` for that one file, so a runtime module that
-// spells a `__Raw` call (E3152) or declares a `__` name (E2051) cannot be compiled on its own the way
-// `maxon build stdlib/Clock.maxon` compiles one stdlib module — it is reached through the tier walk.
-export function rootIsUnderRuntimeDirectory(project Project, cwd FilePath) returns bool
-	return project.rootPath.resolve(cwd).isInside(project.runtimeDir)
-end 'rootIsUnderRuntimeDirectory'
 
 // Append a diagnostic to the project's sink. The single funnel every reporting
 // pass routes through, so diagnostic bookkeeping lives in one place — which is

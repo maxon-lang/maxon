@@ -483,7 +483,7 @@ enum TaskError implements Error
 		timedOut
 		crashed
 
-		export function code() returns Code
+		function code() returns Code
 				return match self 'e'
 						timedOut gives 7
 						crashed gives 9
@@ -1784,11 +1784,11 @@ typealias Tally = int(0 to 1000)
 type Counter
 	export var n as Tally
 
-	export static function create() returns Counter
+	static function create() returns Counter
 		return Counter{n: 0}
 	end 'create'
 
-	export function bump() returns Tally
+	function bump() returns Tally
 		self.n = self.n + 1
 		return self.n
 	end 'bump'
@@ -1834,7 +1834,7 @@ type.
 type Box uses T
 	export var value as T
 
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
@@ -1870,7 +1870,7 @@ namespace qualifier is a NAME LOOKUP resolving to a free function the program de
 has exactly what it needs: a linked address and no receiver.
 ```maxon
 // --- file: lib/api.maxon
-typealias Tally = int(0 to 125)
+export typealias Tally = int(0 to 125)
 
 export function bump(v Tally) returns Tally
 	_ = File.exists(FilePath from "noyield.txt")

@@ -131,7 +131,7 @@ end 'deltaSum'
 
 // Index into a dense per-phase column. Bounded by the enums it indexes, both of which are
 // a couple of dozen arms.
-typealias PhaseIndex = int(0 to 1024)
+export typealias PhaseIndex = int(0 to 1024)
 
 typealias ColumnCell = int(0 to u64.max)
 typealias PhaseColumnArray = Array with ColumnCell
@@ -278,8 +278,8 @@ let TagTableBytesColumnTitle = "bytes"
 let TagLabelWidth = 34 as ColumnWidth
 let TagCensusRuleWidth = (TagLabelWidth + MemAllocsWidth + MemBytesWidth) as ColumnWidth
 
-typealias TagBucketIndex = int(0 to 2047)
-typealias TagCensusMode = int(0 to 1)
+export typealias TagBucketIndex = int(0 to 2047)
+export typealias TagCensusMode = int(0 to 1)
 typealias TagRowCount = int(0 to 5)
 typealias ColumnSlot = int(0 to 2099199)
 typealias ColumnLength = int(0 to 2099200)
@@ -405,14 +405,14 @@ export type TagBucketColumns
 		return total
 	end 'totalBytesAt'
 
-	export function setBucket(index PhaseIndex, bucket TagBucketIndex, countCell ColumnCell, bytesCell ColumnCell)
+	function setBucket(index PhaseIndex, bucket TagBucketIndex, countCell ColumnCell, bytesCell ColumnCell)
 		let slot = tagCensusSlotOf(index, bucket: bucket)
 
 		writeColumn(self.counts, index: slot, value: countCell)
 		writeColumn(self.bytes, index: slot, value: bytesCell)
 	end 'setBucket'
 
-	export function addToBucket(index PhaseIndex, bucket TagBucketIndex, countCell ColumnCell, bytesCell ColumnCell)
+	function addToBucket(index PhaseIndex, bucket TagBucketIndex, countCell ColumnCell, bytesCell ColumnCell)
 		let slot = tagCensusSlotOf(index, bucket: bucket)
 
 		writeColumn(self.counts, index: slot, value: readColumn(self.counts, index: slot) + countCell)
@@ -766,7 +766,7 @@ type TagCensusRow
 	export var count as AllocCount
 	export var bytes as HeapByteCount
 
-	export static function create(bucket TagBucketIndex, count AllocCount, bytes HeapByteCount) returns TagCensusRow
+	static function create(bucket TagBucketIndex, count AllocCount, bytes HeapByteCount) returns TagCensusRow
 		return Self{bucket: bucket, count: count, bytes: bytes}
 	end 'create'
 end 'TagCensusRow'
@@ -992,7 +992,7 @@ type TagRowStyle
 	export var kind as TagRowLine
 	export var whenEmpty as String
 
-	export static function create(order TagRowOrder, skip TagRowSkip, kind TagRowLine, whenEmpty String) returns TagRowStyle
+	static function create(order TagRowOrder, skip TagRowSkip, kind TagRowLine, whenEmpty String) returns TagRowStyle
 		return Self{order: order, skip: skip, kind: kind, whenEmpty: whenEmpty}
 	end 'create'
 end 'TagRowStyle'

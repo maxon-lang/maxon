@@ -20,7 +20,7 @@ type Point
 	export var x as Coord
 	export var y as Coord
 
-	export static function create(x Coord, y Coord) returns Point
+	static function create(x Coord, y Coord) returns Point
 		return Point{x: x, y: y}
 	end 'create'
 end 'Point'
@@ -69,7 +69,7 @@ type Counter
 	export var value as Tally
 	export var version = 0
 
-	export static function create(initial Tally) returns Self
+	static function create(initial Tally) returns Self
 		self.value = initial     // rule 3
 		return Self{}            // version comes from its default
 	end 'create'
@@ -91,15 +91,15 @@ type Point
 	export var x as Coord
 	export var y as Coord
 
-	export static function create(x Coord, y Coord) returns Point
+	static function create(x Coord, y Coord) returns Point
 		return Point{x: x, y: y}
 	end 'create'
 
-	export function add(other Point) returns Point
+	function add(other Point) returns Point
 		return Point.create(x + other.x, y: y + other.y)
 	end 'add'
 
-	export function manhattan() returns Coord
+	function manhattan() returns Coord
 		return magnitudeOf(x) + magnitudeOf(y)    // sibling call: self.magnitudeOf(x)
 	end 'manhattan'
 
@@ -212,7 +212,7 @@ type Pair
 	export let lo as Half
 	export let hi as Half
 
-	export static function create(lo Half, hi Half) returns Pair
+	static function create(lo Half, hi Half) returns Pair
 		return Pair{lo: lo, hi: hi}
 	end 'create'
 end 'Pair'
@@ -256,7 +256,7 @@ end 'Shape'
 type Square implements Shape
 	export let side as Tally
 
-	export static function create(side Tally) returns Self
+	static function create(side Tally) returns Self
 		return Self{side: side}
 	end 'create'
 
@@ -530,7 +530,7 @@ type Tagged uses T where T is Digest
 		return Self{item: item}
 	end 'create'
 
-	export function itemDigest() returns Code
+	function itemDigest() returns Code
 		return item.digest()
 	end 'itemDigest'
 end 'Tagged'
@@ -557,7 +557,7 @@ end 'Container'
 type Scores implements Container with Score
 	export var base as Score
 
-	export static function create(base Score) returns Self
+	static function create(base Score) returns Self
 		return Self{base: base}
 	end 'create'
 
@@ -587,11 +587,11 @@ type Upto implements Seq with Integer
 	var pos as Integer
 	let limit as Integer
 
-	export static function create(limit Integer) returns Self
+	static function create(limit Integer) returns Self
 		return Self{pos: 1, limit: limit}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return self.pos
 	end 'current'
 
@@ -710,7 +710,7 @@ conformances. Inside, `self` is the value and `Self` the primitive:
 typealias Integer = int(i64.min to i64.max)
 
 extension int
-	export function doubled() returns Integer
+	function doubled() returns Integer
 		return self * 2
 	end 'doubled'
 end 'int'

@@ -64,18 +64,18 @@ type UpCursor implements Cursor with Integer
 	var pos as Integer
 	let limit as Integer
 
-	export static function create(limit Integer) returns Self throws IterationError
+	static function create(limit Integer) returns Self throws IterationError
 		if limit < 1 'empty'
 			throw IterationError.exhausted
 		end 'empty'
 		return Self{pos: 1, limit: limit}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return self.pos
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.pos >= self.limit 'atTheLast'
 			throw IterationError.exhausted
 		end 'atTheLast'
@@ -86,11 +86,11 @@ end 'UpCursor'
 type UpBag implements Bag with (Integer, UpCursor)
 	let limit as Integer
 
-	export static function create(limit Integer) returns Self
+	static function create(limit Integer) returns Self
 		return Self{limit: limit}
 	end 'create'
 
-	export function createIterator() returns UpCursor throws IterationError
+	function createIterator() returns UpCursor throws IterationError
 		return try UpCursor.create(self.limit)
 	end 'createIterator'
 end 'UpBag'
@@ -141,18 +141,18 @@ type UpCursor implements Cursor with Integer
 	var pos as Integer
 	let limit as Integer
 
-	export static function create(limit Integer) returns Self throws IterationError
+	static function create(limit Integer) returns Self throws IterationError
 		if limit < 1 'empty'
 			throw IterationError.exhausted
 		end 'empty'
 		return Self{pos: 1, limit: limit}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return self.pos
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.pos >= self.limit 'atTheLast'
 			throw IterationError.exhausted
 		end 'atTheLast'
@@ -163,18 +163,18 @@ end 'UpCursor'
 type DownCursor implements Cursor with Integer
 	var pos as Integer
 
-	export static function create(start Integer) returns Self throws IterationError
+	static function create(start Integer) returns Self throws IterationError
 		if start < 1 'empty'
 			throw IterationError.exhausted
 		end 'empty'
 		return Self{pos: start}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return self.pos * 100
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.pos <= 1 'atTheLast'
 			throw IterationError.exhausted
 		end 'atTheLast'
@@ -185,11 +185,11 @@ end 'DownCursor'
 type UpBag implements Bag with (Integer, UpCursor)
 	let limit as Integer
 
-	export static function create(limit Integer) returns Self
+	static function create(limit Integer) returns Self
 		return Self{limit: limit}
 	end 'create'
 
-	export function createIterator() returns UpCursor throws IterationError
+	function createIterator() returns UpCursor throws IterationError
 		return try UpCursor.create(self.limit)
 	end 'createIterator'
 end 'UpBag'
@@ -197,11 +197,11 @@ end 'UpBag'
 type DownBag implements Bag with (Integer, DownCursor)
 	let start as Integer
 
-	export static function create(start Integer) returns Self
+	static function create(start Integer) returns Self
 		return Self{start: start}
 	end 'create'
 
-	export function createIterator() returns DownCursor throws IterationError
+	function createIterator() returns DownCursor throws IterationError
 		return try DownCursor.create(self.start)
 	end 'createIterator'
 end 'DownBag'
@@ -270,18 +270,18 @@ type NumberedLines implements Lines
 	var pos as Integer
 	let limit as Integer
 
-	export static function create(limit Integer) returns Self throws IterationError
+	static function create(limit Integer) returns Self throws IterationError
 		if limit < 1 'empty'
 			throw IterationError.exhausted
 		end 'empty'
 		return Self{pos: 1, limit: limit}
 	end 'create'
 
-	export function current() returns String
+	function current() returns String
 		return "a managed line long enough to live on the heap, number {self.pos}"
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.pos >= self.limit 'atTheLast'
 			throw IterationError.exhausted
 		end 'atTheLast'
@@ -293,18 +293,18 @@ type ShoutedLines implements Lines
 	var pos as Integer
 	let limit as Integer
 
-	export static function create(limit Integer) returns Self throws IterationError
+	static function create(limit Integer) returns Self throws IterationError
 		if limit < 1 'empty'
 			throw IterationError.exhausted
 		end 'empty'
 		return Self{pos: 1, limit: limit}
 	end 'create'
 
-	export function current() returns String
+	function current() returns String
 		return "A MANAGED LINE LONG ENOUGH TO LIVE ON THE HEAP, NUMBER {self.pos}!!"
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.pos >= self.limit 'atTheLast'
 			throw IterationError.exhausted
 		end 'atTheLast'
@@ -315,11 +315,11 @@ end 'ShoutedLines'
 type PlainDoc implements Doc with NumberedLines
 	let lineCount as Integer
 
-	export static function create(lineCount Integer) returns Self
+	static function create(lineCount Integer) returns Self
 		return Self{lineCount: lineCount}
 	end 'create'
 
-	export function createIterator() returns NumberedLines throws IterationError
+	function createIterator() returns NumberedLines throws IterationError
 		return try NumberedLines.create(self.lineCount)
 	end 'createIterator'
 end 'PlainDoc'
@@ -327,11 +327,11 @@ end 'PlainDoc'
 type LoudDoc implements Doc with ShoutedLines
 	let lineCount as Integer
 
-	export static function create(lineCount Integer) returns Self
+	static function create(lineCount Integer) returns Self
 		return Self{lineCount: lineCount}
 	end 'create'
 
-	export function createIterator() returns ShoutedLines throws IterationError
+	function createIterator() returns ShoutedLines throws IterationError
 		return try ShoutedLines.create(self.lineCount)
 	end 'createIterator'
 end 'LoudDoc'
@@ -385,15 +385,15 @@ end 'Sink'
 type OneCursor implements Cursor
 	var pos as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{pos: 7}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return self.pos
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		throw IterationError.exhausted
 	end 'advance'
 end 'OneCursor'
@@ -401,11 +401,11 @@ end 'OneCursor'
 type Adder implements Sink with OneCursor
 	let base as Integer
 
-	export static function create(base Integer) returns Self
+	static function create(base Integer) returns Self
 		return Self{base: base}
 	end 'create'
 
-	export function take(it OneCursor) returns Integer
+	function take(it OneCursor) returns Integer
 		return self.base + it.current()
 	end 'take'
 end 'Adder'
@@ -444,11 +444,11 @@ end 'Bag'
 type Tally
 	var pos as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{pos: 3}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return self.pos
 	end 'current'
 end 'Tally'
@@ -456,11 +456,11 @@ end 'Tally'
 type OddBag implements Bag with Tally
 	let seed as Integer
 
-	export static function create(seed Integer) returns Self
+	static function create(seed Integer) returns Self
 		return Self{seed: seed}
 	end 'create'
 
-	export function createIterator() returns Tally throws IterationError
+	function createIterator() returns Tally throws IterationError
 		return Tally.create()
 	end 'createIterator'
 end 'OddBag'
@@ -507,7 +507,7 @@ end 'Bag'
 type Tally
 	var pos as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{pos: 3}
 	end 'create'
 end 'Tally'
@@ -515,11 +515,11 @@ end 'Tally'
 type OddBag implements Bag with Tally
 	let seed as Integer
 
-	export static function create(seed Integer) returns Self
+	static function create(seed Integer) returns Self
 		return Self{seed: seed}
 	end 'create'
 
-	export function createIterator() returns Tally throws IterationError
+	function createIterator() returns Tally throws IterationError
 		return Tally.create()
 	end 'createIterator'
 end 'OddBag'
@@ -562,11 +562,11 @@ end 'Bag'
 type OneCursor implements Cursor
 	var pos as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{pos: 5}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return self.pos
 	end 'current'
 end 'OneCursor'
@@ -574,11 +574,11 @@ end 'OneCursor'
 type WeirdBag implements Bag with Cursor
 	let seed as Integer
 
-	export static function create(seed Integer) returns Self
+	static function create(seed Integer) returns Self
 		return Self{seed: seed}
 	end 'create'
 
-	export function makeIt() returns Cursor
+	function makeIt() returns Cursor
 		return OneCursor.create()
 	end 'makeIt'
 end 'WeirdBag'
@@ -628,15 +628,15 @@ end 'Bag'
 
 type Collector uses Element
 	typealias ElementArray = Array with Element
-	typealias ElementCursor = Cursor with Element
-	typealias ElementBag = Bag with (Element, ElementCursor)
+	export typealias ElementCursor = Cursor with Element
+	export typealias ElementBag = Bag with (Element, ElementCursor)
 	export var items as ElementArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: ElementArray.create()}
 	end 'create'
 
-	export static function from (source ElementBag) returns Self
+	static function from (source ElementBag) returns Self
 		var result = ElementArray.create()
 		for item in source 'collect'
 			result.push(item)
@@ -687,22 +687,22 @@ type UpCursor implements Cursor with Integer
 	var pos as Integer
 	let limit as Integer
 
-	export static function create(limit Integer) returns Self throws IterationError
+	static function create(limit Integer) returns Self throws IterationError
 		if limit < 1 'empty'
 			throw IterationError.exhausted
 		end 'empty'
 		return Self{pos: 1, limit: limit}
 	end 'create'
 
-	export function tag() returns Integer
+	function tag() returns Integer
 		return self.limit
 	end 'tag'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return self.pos
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.pos >= self.limit 'atTheLast'
 			throw IterationError.exhausted
 		end 'atTheLast'
@@ -711,10 +711,10 @@ type UpCursor implements Cursor with Integer
 end 'UpCursor'
 
 type Counter uses Element
-	typealias ElementCursor = Cursor with Element
+	export typealias ElementCursor = Cursor with Element
 	export var seen as Integer
 
-	export static function of (source ElementCursor) returns Self
+	static function of (source ElementCursor) returns Self
 		return Self{seen: source.tag()}
 	end 'of'
 end 'Counter'
@@ -768,18 +768,18 @@ type UpCursor uses Slot implements Cursor
 	let limit as Integer
 	let spare as Slot
 
-	export static function create(limit Integer, spare Slot) returns Self throws IterationError
+	static function create(limit Integer, spare Slot) returns Self throws IterationError
 		if limit < 1 'empty'
 			throw IterationError.exhausted
 		end 'empty'
 		return Self{pos: 1, limit: limit, spare: spare}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return self.pos
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.pos >= self.limit 'atTheLast'
 			throw IterationError.exhausted
 		end 'atTheLast'
@@ -792,11 +792,11 @@ typealias IntUpCursor = UpCursor with Integer
 type UpBag implements Bag with IntUpCursor
 	let limit as Integer
 
-	export static function create(limit Integer) returns Self
+	static function create(limit Integer) returns Self
 		return Self{limit: limit}
 	end 'create'
 
-	export function createIterator() returns IntUpCursor throws IterationError
+	function createIterator() returns IntUpCursor throws IterationError
 		return try IntUpCursor.create(self.limit, spare: 0)
 	end 'createIterator'
 end 'UpBag'
@@ -852,25 +852,25 @@ type UpCursor uses Element implements BiCursor with Element
 	var pos as Integer
 	let limit as Integer
 
-	export static function create(limit Integer) returns Self throws IterationError
+	static function create(limit Integer) returns Self throws IterationError
 		if limit < 1 'empty'
 			throw IterationError.exhausted
 		end 'empty'
 		return Self{pos: 1, limit: limit}
 	end 'create'
 
-	export function current() returns Element
+	function current() returns Element
 		return self.pos
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.pos >= self.limit 'atTheLast'
 			throw IterationError.exhausted
 		end 'atTheLast'
 		self.pos = self.pos + 1
 	end 'advance'
 
-	export function retreat() throws IterationError
+	function retreat() throws IterationError
 		throw IterationError.exhausted
 	end 'retreat'
 end 'UpCursor'
@@ -880,11 +880,11 @@ typealias IntUpCursor = UpCursor with Integer
 type UpBag implements Bag with (Integer, IntUpCursor)
 	let limit as Integer
 
-	export static function create(limit Integer) returns Self
+	static function create(limit Integer) returns Self
 		return Self{limit: limit}
 	end 'create'
 
-	export function createIterator() returns IntUpCursor throws IterationError
+	function createIterator() returns IntUpCursor throws IterationError
 		return try IntUpCursor.create(self.limit)
 	end 'createIterator'
 end 'UpBag'
@@ -937,25 +937,25 @@ type Tally implements BiCursor
 	var pos as Integer
 	let limit as Integer
 
-	export static function create(limit Integer) returns Self throws IterationError
+	static function create(limit Integer) returns Self throws IterationError
 		if limit < 1 'empty'
 			throw IterationError.exhausted
 		end 'empty'
 		return Self{pos: 1, limit: limit}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return self.pos
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.pos >= self.limit 'atTheLast'
 			throw IterationError.exhausted
 		end 'atTheLast'
 		self.pos = self.pos + 1
 	end 'advance'
 
-	export function retreat() throws IterationError
+	function retreat() throws IterationError
 		throw IterationError.exhausted
 	end 'retreat'
 end 'Tally'
@@ -963,11 +963,11 @@ end 'Tally'
 type UpBag implements Bag with Tally
 	let limit as Integer
 
-	export static function create(limit Integer) returns Self
+	static function create(limit Integer) returns Self
 		return Self{limit: limit}
 	end 'create'
 
-	export function createIterator() returns Tally throws IterationError
+	function createIterator() returns Tally throws IterationError
 		return try Tally.create(self.limit)
 	end 'createIterator'
 end 'UpBag'
@@ -1015,11 +1015,11 @@ end 'Bag'
 type Tally uses Element
 	var pos as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{pos: 3}
 	end 'create'
 
-	export function current() returns Integer
+	function current() returns Integer
 		return self.pos
 	end 'current'
 end 'Tally'
@@ -1029,11 +1029,11 @@ typealias IntTally = Tally with Integer
 type OddBag implements Bag with IntTally
 	let seed as Integer
 
-	export static function create(seed Integer) returns Self
+	static function create(seed Integer) returns Self
 		return Self{seed: seed}
 	end 'create'
 
-	export function createIterator() returns IntTally throws IterationError
+	function createIterator() returns IntTally throws IterationError
 		return IntTally.create()
 	end 'createIterator'
 end 'OddBag'

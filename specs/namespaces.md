@@ -127,7 +127,7 @@ end 'main'
 A bare call from `app/main.maxon` finds an exported function in a sibling directory `utils/helper.maxon` via cross-file resolution.
 ```maxon
 // --- file: utils/helper.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export function bareHelper() returns Integer
 	return 42
@@ -147,7 +147,7 @@ end 'main'
 A qualified call `utils.helper()` from `app/main.maxon` resolves to the function declared in `utils/helper.maxon`. The directory name is the module namespace.
 ```maxon
 // --- file: utils/helper.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export function qualifiedHelper() returns Integer
 	return 42
@@ -167,14 +167,14 @@ end 'main'
 Two files in the same directory `utils/` share a module namespace. A function in `utils/b.maxon` calls a function in `utils/a.maxon` with no qualifier because they belong to the same module. The producer uses `module` visibility so it is visible across files inside the `utils/` subtree but not to callers outside it; the consumer (`export`ed) is the only entry point from `app/main.maxon`.
 ```maxon
 // --- file: utils/a.maxon
-typealias Integer = int(i64.min to i64.max)
+module typealias Integer = int(i64.min to i64.max)
 
 module function siblingProducer() returns Integer
 	return 21
 end 'siblingProducer'
 
 // --- file: utils/b.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export function siblingConsumer() returns Integer
 	return siblingProducer() + siblingProducer()
@@ -194,7 +194,7 @@ end 'main'
 A function declared in a nested user directory `lib/inner/leaf.maxon` is reachable via its full multi-segment qualified name `lib.inner.deepHelper`. The parser walks the dotted chain greedily and resolves against the registered function name; if the qualified callee matches `funcReturnTypes` it routes through the qualified-call path without first looking for a struct or local variable.
 ```maxon
 // --- file: lib/inner/leaf.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export function deepHelper() returns Integer
 	return 42
@@ -214,14 +214,14 @@ end 'main'
 When two different directories both export a function with the same bare name, a third file's unqualified call is ambiguous. E3095 instructs the user to qualify the call with the appropriate directory namespace. The compiler emits exactly the message pinned below and this suite runs the case (measured 2026-08-06, BATCH29/A3a).
 ```maxon
 // --- file: alpha/dup.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export function duplicate() returns Integer
 	return 1
 end 'duplicate'
 
 // --- file: beta/dup.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export function duplicate() returns Integer
 	return 2
@@ -261,7 +261,7 @@ type Counter
 		return self.total
 	end 'bump'
 
-	export function bumpTwice(amount Count) returns Count
+	function bumpTwice(amount Count) returns Count
 		let first = bump(amount)
 		return bump(first)
 	end 'bumpTwice'
@@ -288,14 +288,14 @@ file resolves to the free function. Mirrors the compiler's own `set(arr, index:,
 value:, sentinel:)` free function coexisting with the `Array.set` method.
 ```maxon
 // --- file: lib/free.maxon
-typealias Code = int(0 to 125)
+export typealias Code = int(0 to 125)
 
 export function store(base Code, offset Code, scale Code) returns Code
 	return base + offset + scale
 end 'store'
 
 // --- file: lib/cache.maxon
-typealias Code = int(0 to 125)
+export typealias Code = int(0 to 125)
 
 export type Cache
 	export var last as Code
@@ -363,7 +363,7 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: sub/helper.maxon
-typealias Slot = int(0 to 100)
+public typealias Slot = int(0 to 100)
 
 public function pick(slot Slot)
 	print("sub {slot}\n")
@@ -383,7 +383,7 @@ while the case above failed, which is precisely what identified the bare key's l
 the fault rather than the contest itself.
 ```maxon
 // --- file: sub/helper.maxon
-typealias Slot = int(0 to 100)
+public typealias Slot = int(0 to 100)
 
 public function pick(slot Slot)
 	print("sub {slot}\n")
@@ -441,11 +441,11 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: sub/helper.maxon
-enum SubError
+public enum SubError
 	subBad
 end 'SubError'
 
-typealias Slot = int(0 to 100)
+public typealias Slot = int(0 to 100)
 
 public function pick(slot Slot) returns Slot throws SubError
 	if slot > 50 'tooBig'
@@ -482,7 +482,7 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: sub/helper.maxon
-typealias Slot = int(0 to 100)
+export typealias Slot = int(0 to 100)
 
 export function pick(slot Slot = 90) returns Slot
 	return slot

@@ -37,10 +37,22 @@ The same modifiers apply to members inside a type: fields, methods and static me
 type unless marked, independently of the type's own visibility. At most one modifier may be written;
 combining two is **E2001** (`'export' and 'public' cannot be combined`).
 
+**A signature may not name a type less visible than the function itself.** Whoever may call a function has to
+be able to name what the call takes and gives back, so every type its parameters, its return type and its
+`throws` clause name must carry at least the function's own modifier. For this rule the four tiers are ordered
+*(none)* < `module` < `export` < `public`: `public` outranks `export`, so a `public` function may not name an
+`export` type. The check is structural — a generic instance's base type and each of its type arguments, a
+tuple's elements, and a function typealias's parameter and return types are all asked; a type parameter and a
+primitive name no declaration and are asked nothing. A member is held to its own modifier rather than its
+type's, and an interface's members are held to the interface's. A [service](/docs/language/async/#services--spawn)'s message is
+held to the narrower of its own modifier and its service type's. Naming a narrower type is
+[E3167](/docs/cli/error-codes/#e3167--semanticsignaturetypelessvisiblethanfunction); the fix is to raise the type to the function's
+tier, or to narrow the function.
+
 ## `export`
 
 ```maxon
-typealias Score = int(i64.min to i64.max)
+export typealias Score = int(i64.min to i64.max)
 
 export function publicAdd(a Score, b Score) returns Score
 	return a + b
@@ -57,8 +69,11 @@ exported`).
 `export` also states an expectation: **this program uses the declaration from another file.** When
 nothing outside the declaring file refers to it, the compiler reports **E3092** (`exported function
 'geometry.perimeter' is never referenced outside its declaring file`), and when every use is inside the
-declaring directory it suggests `module` (**E3093**). These checks run on multi-file programs that
-otherwise compile.
+declaring directory it suggests `module` (**E3093**). These checks run on every program that otherwise
+compiles, a one-file program included. The entry point and every task a `tasks.maxon` declares are
+exempt, because nothing in the source calls them. A type an exported or `module` signature names is exempt while that function is itself
+referenced from another file: the signature requires the wider tier, so dropping the modifier would only
+trade E3092 for [E3167](/docs/cli/error-codes/#e3167--semanticsignaturetypelessvisiblethanfunction).
 
 ## `public`
 
@@ -67,7 +82,7 @@ exists for callers outside this program, so "nothing here uses it" is not a find
 surface `public`; the standard library does so throughout.
 
 ```maxon
-typealias Length = int(0 to 1000)
+public typealias Length = int(0 to 1000)
 
 public function area(width Length, height Length) returns Length
 	return width * height
@@ -132,8 +147,10 @@ is resolved from the file that declares the enum, whichever file reads the case.
 
 Two typealiases with the same name in **one** file are **E3061**, which qualification cannot resolve.
 
-The standard library's typealiases are usable from every file, including ones the standard library does not
-export, so a value can always be cast to the alias a library signature asks for (`x as AssertedInt`).
+Every typealias a `public` standard-library signature names is itself `public`, so a value can always be cast
+to the alias a library signature asks for (`x as AssertedInt`). A standard-library typealias with no modifier
+is private to its declaring file exactly as anyone's is — `Math.maxon`'s `SeriesTermLimit` is one — and
+naming it from another file is **E2003**.
 
 ## Multi-Project Workspaces
 

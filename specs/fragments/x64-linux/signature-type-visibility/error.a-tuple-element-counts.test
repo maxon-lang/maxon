@@ -1,0 +1,20 @@
+// Test: error.a-tuple-element-counts
+// --- file: api/lib.maxon
+type Secret
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Secret'
+
+export function pair() returns (Secret, ExitCode)
+	return (Secret.create(), 7)
+end 'pair'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let t = pair()
+	return t.1
+end 'main'
+---
+CompilerError:
+error E3167: api/<fragment>:9:17: exported function 'api.pair' names file-private type 'Secret' in its return type

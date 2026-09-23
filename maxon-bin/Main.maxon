@@ -380,7 +380,7 @@ let BuildDescriptionSuffix = ".build.json"
 
 let MaxDelegationDepth = 8 as DelegationDepth
 
-typealias DelegationDepth = int(0 to 64)
+module typealias DelegationDepth = int(0 to 64)
 
 module union ManifestBase
 	workingDirectory
@@ -1334,7 +1334,7 @@ module function refusedPositionalBeyond(args MaxonArgs, allowed PositionalCount,
 	return true
 end 'refusedPositionalBeyond'
 
-typealias PositionalCount = int(0 to 1)
+module typealias PositionalCount = int(0 to 1)
 
 // A command's streams belong to its subject: at the default INFO level every compile announces the
 // bytes it wrote, which is noise on `test`'s fixture-compared stdout, on `run`'s program streams,
@@ -1603,15 +1603,15 @@ type CommandReference
 
 	export var audience as CommandAudience
 
-	export static function create(word String, arguments String, summary String, detail String, audience CommandAudience) returns CommandReference
+	static function create(word String, arguments String, summary String, detail String, audience CommandAudience) returns CommandReference
 		return Self{word: word, arguments: arguments, summary: summary, detail: detail, audience: audience}
 	end 'create'
 
-	export function label() returns String
+	function label() returns String
 		return self.word if self.arguments.isEmpty() else "{self.word} {self.arguments}"
 	end 'label'
 
-	export function description() returns String
+	function description() returns String
 		return self.summary if self.detail.isEmpty() else "{self.summary} {self.detail}"
 	end 'description'
 end 'CommandReference'
@@ -1696,7 +1696,7 @@ type OptionReference
 	export var description as String
 	export var commands as MaxonCommandArray
 
-	export static function create(spelling String, description String, commands MaxonCommandArray) returns OptionReference
+	static function create(spelling String, description String, commands MaxonCommandArray) returns OptionReference
 		return Self{spelling: spelling, description: description, commands: commands}
 	end 'create'
 end 'OptionReference'
@@ -1967,7 +1967,7 @@ end 'noCommandGiven'
 // Declaration order is listing order, alphabetical by command word: `tests/cli` asserts the
 // advertised list is sorted, and no usage-frequency order could be checked. Nothing reads a case's
 // ordinal or raw value.
-enum MaxonCommand
+module enum MaxonCommand
 	build
 
 	cache
@@ -2010,7 +2010,7 @@ end 'MaxonCommand'
 export typealias SourcePathSpellingArray = Array with String
 
 // `module` because `Testing/ScaleTestRunner` takes the parsed args.
-module type MaxonArgs
+export type MaxonArgs
 	export var command as MaxonCommand
 
 	// The order is load-bearing: `build` compiles every positional, and `Compiler.loadSourceFiles`
@@ -2123,18 +2123,18 @@ module type MaxonArgs
 	// The defaults live here rather than in `parse`'s locals: `parse` accumulates into a record (see
 	// its note), and a default at the declaration is one no arm can forget. Every field is `var` for
 	// `parse`; nothing else can mutate a `MaxonArgs` through the `let` binding `main` holds (E3063).
-	export static function create() returns MaxonArgs
+	module static function create() returns MaxonArgs
 		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, censusByTag: false, censusPhase: TagCensusPhases.everyPhase, allocationsByTag: false, allocationsPhase: TagCensusPhases.everyPhase, debugInfo: true, noDebugAgent: false, coverage: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metricsPath: "", defines: DefineArray.create(), emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(), badOption: "", dryRun: false, devMode: false}
 	end 'create'
 
 	// A command that takes no options refuses by this.
-	export function anyOption() returns String
+	module function anyOption() returns String
 		return try self.optionsSeen.get(0) otherwise ""
 	end 'anyOption'
 
 	// A command that takes exactly one option refuses by this (`upgrade`, `mcp-server`); both are
 	// exempt from `main`'s `badOption` gate because their own flag trips it.
-	export function firstOptionOtherThan(allowed String) returns String
+	module function firstOptionOtherThan(allowed String) returns String
 		for option in self.optionsSeen 'each'
 			if option != allowed 'notMine'
 				return option
@@ -2146,7 +2146,7 @@ module type MaxonArgs
 
 	// A second positional never reaches this: its callers call `refusedPositionalBeyond` first, so
 	// empty means only absent.
-	export function solePositional() returns String
+	module function solePositional() returns String
 		return try self.paths.get(0) otherwise ""
 	end 'solePositional'
 
@@ -2154,7 +2154,7 @@ module type MaxonArgs
 	// positional (see `laterCommandWordIsAPath`). An unrecognized `-`-leading argument is recorded as
 	// a bad option, never absorbed as a positional: `spec-test --mm-trace` must not look for a spec
 	// directory named `--mm-trace`.
-	export static function parse() returns MaxonArgs
+	module static function parse() returns MaxonArgs
 		// The working set is one record, not a `var` per flag: a `var` assigned in one arm becomes a phi
 		// on the loop header, and one register per flag exceeds x64's GPRs (E5001) — a refusal, not a
 		// slowdown. A field store keeps the loop carrying one value, so adding a flag means adding a

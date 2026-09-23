@@ -192,12 +192,12 @@ type UpgradeStep
 	export var executable as Executable
 	export var arguments as StringArray
 
-	export static function create(executable Executable, arguments StringArray) returns UpgradeStep
+	static function create(executable Executable, arguments StringArray) returns UpgradeStep
 		return Self{executable: executable, arguments: arguments}
 	end 'create'
 
 	// A clone: `shellWord` may hand back the executable's own String, which the appends would rewrite.
-	export function rendered() returns String
+	function rendered() returns String
 		var line = shellWord(self.executable.displayName()).clone()
 
 		for argument in self.arguments 'eachArgument'
@@ -216,7 +216,7 @@ type UpgradeVariable
 	export var name as String
 	export var value as String
 
-	export static function create(name String, value String) returns UpgradeVariable
+	static function create(name String, value String) returns UpgradeVariable
 		return Self{name: name, value: value}
 	end 'create'
 end 'UpgradeVariable'
@@ -231,15 +231,15 @@ typealias UpgradeVariableArray = Array with UpgradeVariable
 type UpgradeEnvironment
 	var variables as UpgradeVariableArray
 
-	export static function create() returns UpgradeEnvironment
+	static function create() returns UpgradeEnvironment
 		return Self{variables: UpgradeVariableArray.create()}
 	end 'create'
 
-	export function set(name String, value String)
+	function set(name String, value String)
 		self.variables.push(UpgradeVariable.create(name, value: value))
 	end 'set'
 
-	export function rendered() returns String
+	function rendered() returns String
 		var line = ""
 
 		for variable in self.variables 'eachVariable'
@@ -250,7 +250,7 @@ type UpgradeEnvironment
 		return line
 	end 'rendered'
 
-	export function childEnvironment() returns Environment
+	function childEnvironment() returns Environment
 		var overrides = EnvMap.create()
 
 		for variable in self.variables 'eachVariable'

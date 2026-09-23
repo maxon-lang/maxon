@@ -302,7 +302,7 @@ type P
 	export var x as Integer
 	export var y as Integer
 
-	export static function create(x Integer) returns Self
+	static function create(x Integer) returns Self
 		return Self{x: x}       // E3086: 'y' not initialized
 	end 'create'
 end 'P'
@@ -329,7 +329,7 @@ end 'Bag'
 type Thing
 	export var value as Integer
 
-	export static function make(v Integer) returns Self
+	static function make(v Integer) returns Self
 		self.value = v          // proof of initialization
 		return Self{}           // OK: value deferred to self-assign
 	end 'make'
@@ -400,7 +400,7 @@ export type Point
 	export var y as Coord
 	var visits as VisitCount = 0    // private, declaration default
 
-	export static function create(x Coord, y Coord) returns Point
+	static function create(x Coord, y Coord) returns Point
 		return Point{x: x, y: y}
 	end 'create'
 
@@ -974,13 +974,17 @@ p.cancel()                         // cancellation
 
 ### Visibility
 
-All declarations are file-private by default. Three tiers exist:
+All declarations are file-private by default. Four tiers exist:
 
 - **default** — visible only within the declaring file.
 - **`module`** — visible to every file in the same directory and any subdirectory of that directory.
 - **`export`** — visible everywhere in the compilation.
+- **`public`** — visible everywhere, and declared API surface, so it is exempt from the unused-export checks.
 
-`module` and `export` are mutually exclusive. `module` is a contextual keyword: it is recognised only immediately before a declaration token (`function`, `type`, `enum`, `var`, `let`, etc.), so user code can still use `module` as a parameter or local variable name.
+A signature may not name a type less visible than the function itself; for that rule the tiers are ordered
+default < `module` < `export` < `public`, and naming a narrower type is E3167.
+
+At most one modifier may be written. `module` is a contextual keyword: it is recognised only immediately before a declaration token (`function`, `type`, `enum`, `var`, `let`, etc.), so user code can still use `module` as a parameter or local variable name.
 
 ```maxon
 export function publicFunc() returns Tally ...

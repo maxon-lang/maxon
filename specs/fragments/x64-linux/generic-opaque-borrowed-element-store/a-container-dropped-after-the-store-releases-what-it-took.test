@@ -3,16 +3,16 @@ typealias Idx = int(0 to u64.max)
 typealias Strs = Array with String
 
 type Bag uses Element
-	typealias Items = Array with Element
+	export typealias Items = Array with Element
 	export var items as Items
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: Items.create()}
 	end 'create'
 
 	// The scratch container never leaves this frame: it takes a reference at the store and releases it
 	// at the method's exit, so the count it reports is the only thing that survives.
-	export function scratchCountOf(other Items) returns Idx
+	function scratchCountOf(other Items) returns Idx
 		var scratch = Items.create()
 		let borrowed = try other.get(0) otherwise 'getErr'
 			panic("Bag.scratchCountOf: get(0) OOB — the caller passed a non-empty container")

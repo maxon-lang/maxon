@@ -669,7 +669,7 @@ enum Toggle
 	on
 	off
 
-	export function isOn() returns bool
+	function isOn() returns bool
 		return match self 'check'
 			on gives true
 			off gives false
@@ -704,7 +704,7 @@ enum Signal
 		end 'check'
 	end 'isStop'
 
-	export function action() returns bool
+	function action() returns bool
 		return self.isStop()
 	end 'action'
 end 'Signal'

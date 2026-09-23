@@ -1893,11 +1893,11 @@ typealias StringList = List with String
 type Bag
 	export var items as StringList
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self { items: StringList.create() }
 	end 'create'
 
-	export function reset()
+	function reset()
 		items = StringList.create()
 	end 'reset'
 end 'Bag'
@@ -1935,7 +1935,7 @@ typealias StringList = List with String
 type Bag
 	export var items as StringList
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self { items: StringList.create() }
 	end 'create'
 end 'Bag'
@@ -1977,7 +1977,7 @@ typealias StringArray = Array with String
 type Inner
 	export var items as StringArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self { items: StringArray.create() }
 	end 'create'
 end 'Inner'
@@ -1985,11 +1985,11 @@ end 'Inner'
 type Bag
 	export var inner as Inner
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self { inner: Inner.create() }
 	end 'create'
 
-	export function reset()
+	function reset()
 		inner = Inner.create()
 	end 'reset'
 end 'Bag'
@@ -2027,11 +2027,11 @@ type Bag
 	export var items as StringArray
 	export var name as String
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self { items: StringArray.create(), name: "tag" }
 	end 'create'
 
-	export function retag()
+	function retag()
 		name = "another tag entirely"
 	end 'retag'
 end 'Bag'
@@ -2084,11 +2084,11 @@ typealias Count = int(0 to 1000)
 type Cell
 	export var s as String
 
-	export static function create() returns Cell
+	static function create() returns Cell
 		return Cell{s: ""}
 	end 'create'
 
-	export function fill(n Count)
+	function fill(n Count)
 		var t = ""
 		for _ in 0 upto n 'grow'
 			t = "{t}x"
@@ -2097,7 +2097,7 @@ type Cell
 	end 'fill'
 
 	// The callee reassigns the very field its own argument was read out of.
-	export function replace(other String) returns String
+	function replace(other String) returns String
 		self.s = "replaced"
 		return "[{other}]"
 	end 'replace'
@@ -2129,11 +2129,11 @@ typealias Count = int(0 to 1000)
 type Cell
 	export var s as String
 
-	export static function create() returns Cell
+	static function create() returns Cell
 		return Cell{s: ""}
 	end 'create'
 
-	export function fill(n Count)
+	function fill(n Count)
 		var t = ""
 		for _ in 0 upto n 'grow'
 			t = "{t}x"
@@ -2217,11 +2217,11 @@ typealias Count = int(0 to 1000)
 type Cell
 	export var s as String
 
-	export static function create() returns Cell
+	static function create() returns Cell
 		return Cell{s: ""}
 	end 'create'
 
-	export function fill(n Count)
+	function fill(n Count)
 		var t = ""
 		for _ in 0 upto n 'grow'
 			t = "{t}x"
@@ -2305,11 +2305,11 @@ typealias Count = int(0 to 1000)
 type Inner
 	export var s as String
 
-	export static function create() returns Inner
+	static function create() returns Inner
 		return Inner{s: ""}
 	end 'create'
 
-	export function fill(n Count)
+	function fill(n Count)
 		var t = ""
 		for _ in 0 upto n 'grow'
 			t = "{t}x"
@@ -2317,7 +2317,7 @@ type Inner
 		self.s = t
 	end 'fill'
 
-	export function measure() returns String
+	function measure() returns String
 		g = Inner.create()
 		return "[{self.s}]"
 	end 'measure'
@@ -2354,11 +2354,11 @@ typealias Count = int(0 to 1000)
 type Cell
 	export var s as String
 
-	export static function create() returns Cell
+	static function create() returns Cell
 		return Cell{s: ""}
 	end 'create'
 
-	export function fill(n Count)
+	function fill(n Count)
 		var t = ""
 		for _ in 0 upto n 'grow'
 			t = "{t}x"

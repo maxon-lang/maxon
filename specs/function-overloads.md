@@ -454,7 +454,7 @@ typealias Integer = int(i64.min to i64.max)
 type Registry
 	export var seed as Integer
 
-	export static function make(seed Integer) returns Registry
+	static function make(seed Integer) returns Registry
 		return Registry{seed: seed}
 	end 'make'
 end 'Registry'
@@ -581,11 +581,11 @@ typealias Wide = int(i64.min to i64.max)
 type Leaf
 	export var tally as Wide
 
-	export static function make(tally Wide) returns Self
+	static function make(tally Wide) returns Self
 		return Self{tally: tally}
 	end 'make'
 
-	export function size() returns Wide
+	function size() returns Wide
 		return self.tally
 	end 'size'
 end 'Leaf'
@@ -593,11 +593,11 @@ end 'Leaf'
 type Trunk
 	export var leaf as Leaf
 
-	export static function make(leaf Leaf) returns Self
+	static function make(leaf Leaf) returns Self
 		return Self{leaf: leaf}
 	end 'make'
 
-	export function branch() returns Leaf
+	function branch() returns Leaf
 		return self.leaf
 	end 'branch'
 end 'Trunk'
@@ -628,11 +628,11 @@ typealias Wide = int(i64.min to i64.max)
 type Leaf
 	export var tally as Wide
 
-	export static function make(tally Wide) returns Self
+	static function make(tally Wide) returns Self
 		return Self{tally: tally}
 	end 'make'
 
-	export function size() returns Wide
+	function size() returns Wide
 		return self.tally
 	end 'size'
 end 'Leaf'
@@ -640,7 +640,7 @@ end 'Leaf'
 type Trunk
 	export var leaf as Leaf
 
-	export static function make(leaf Leaf) returns Self
+	static function make(leaf Leaf) returns Self
 		return Self{leaf: leaf}
 	end 'make'
 end 'Trunk'
@@ -673,11 +673,11 @@ typealias Wide = int(i64.min to i64.max)
 type Leaf
 	export var tally as Wide
 
-	export static function make(tally Wide) returns Self
+	static function make(tally Wide) returns Self
 		return Self{tally: tally}
 	end 'make'
 
-	export function label() returns String
+	function label() returns String
 		return "leaf"
 	end 'label'
 end 'Leaf'
@@ -710,11 +710,11 @@ typealias Wide = int(i64.min to i64.max)
 type Cell uses T
 	export var value as T
 
-	export static function create(value T) returns Self
+	static function create(value T) returns Self
 		return Self{value: value}
 	end 'create'
 
-	export function unwrap() returns T
+	function unwrap() returns T
 		return self.value
 	end 'unwrap'
 end 'Cell'
@@ -750,11 +750,11 @@ typealias Wide = int(i64.min to i64.max)
 type Widget
 	export var id as Wide
 
-	export static function make(id Wide) returns Self
+	static function make(id Wide) returns Self
 		return Self{id: id}
 	end 'make'
 
-	export function bump() returns Self
+	function bump() returns Self
 		return Widget{id: self.id + 1}
 	end 'bump'
 end 'Widget'
@@ -923,7 +923,7 @@ type Spec
 	export var width as Wide
 	export var height as Wide
 
-	export static function make(width Wide, height Wide) returns Spec
+	static function make(width Wide, height Wide) returns Spec
 		return Spec{width: width, height: height}
 	end 'make'
 end 'Spec'
@@ -1026,7 +1026,7 @@ end 'main'
 <!-- test: overloads-with-caller-location-defaults -->
 ```maxon
 // --- file: main.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 type Expect
 
@@ -1120,14 +1120,14 @@ end 'Boom'
 
 type Chk
 
-	export static function want(actual Num, expected Num) returns Num throws Boom
+	static function want(actual Num, expected Num) returns Num throws Boom
 		if actual != expected 'differ'
 			throw Boom.bad
 		end 'differ'
 		return 5
 	end 'want'
 
-	export static function want(actual bool, expected bool) returns Num throws Boom
+	static function want(actual bool, expected bool) returns Num throws Boom
 		if actual != expected 'differ'
 			throw Boom.bad
 		end 'differ'
@@ -1159,21 +1159,21 @@ end 'TestFailure'
 
 type Expect
 
-	export static function equal(actual Num, expected Num) returns Num throws TestFailure
+	static function equal(actual Num, expected Num) returns Num throws TestFailure
 		if actual != expected 'differ'
 			throw TestFailure.mismatch
 		end 'differ'
 		return 1
 	end 'equal'
 
-	export static function equal(actual String, expected String) returns Num throws TestFailure
+	static function equal(actual String, expected String) returns Num throws TestFailure
 		if actual.count() != expected.count() 'differ'
 			throw TestFailure.mismatch
 		end 'differ'
 		return 2
 	end 'equal'
 
-	export static function equal(actual bool, expected bool) returns Num throws TestFailure
+	static function equal(actual bool, expected bool) returns Num throws TestFailure
 		if actual != expected 'differ'
 			throw TestFailure.mismatch
 		end 'differ'
@@ -1433,15 +1433,15 @@ end 'Boom'
 type T
 	export var v as Num
 
-	export static function make(v Num) returns T
+	static function make(v Num) returns T
 		return Self{v: v}
 	end 'make'
 
-	export function m(b Num) returns Num
+	function m(b Num) returns Num
 		return self.v + b
 	end 'm'
 
-	export static function m(a Num) returns Num throws Boom
+	static function m(a Num) returns Num throws Boom
 		if a < 0 'neg'
 			throw Boom.bad
 		end 'neg'
@@ -1475,18 +1475,18 @@ end 'Boom'
 type T
 	export var v as Num
 
-	export static function make(v Num) returns T
+	static function make(v Num) returns T
 		return Self{v: v}
 	end 'make'
 
-	export static function m(a Num) returns Num throws Boom
+	static function m(a Num) returns Num throws Boom
 		if a < 0 'neg'
 			throw Boom.bad
 		end 'neg'
 		return a
 	end 'm'
 
-	export function m(b Num) returns Num
+	function m(b Num) returns Num
 		return self.v + b
 	end 'm'
 end 'T'
@@ -1516,18 +1516,18 @@ end 'Boom'
 type T
 	export var v as Num
 
-	export static function make(v Num) returns T
+	static function make(v Num) returns T
 		return Self{v: v}
 	end 'make'
 
-	export function m(b Num) returns Num throws Boom
+	function m(b Num) returns Num throws Boom
 		if b < 0 'neg'
 			throw Boom.bad
 		end 'neg'
 		return self.v + b
 	end 'm'
 
-	export static function m(a Num) returns Num
+	static function m(a Num) returns Num
 		return a
 	end 'm'
 end 'T'
@@ -1553,9 +1553,9 @@ the parser asks with (`ProgramSignatures.sweepRegistrationKey`), so this set is 
 like any other and answers **18** — which is what the oracle has always answered (MEASURED).
 ```maxon
 // --- file: alpha/x.maxon
-typealias Num = int(-1000 to 1000)
+export typealias Num = int(-1000 to 1000)
 
-enum Boom
+export enum Boom
 	bad
 end 'Boom'
 
@@ -1574,7 +1574,7 @@ export function want(actual bool) returns Num throws Boom
 end 'want'
 
 // --- file: beta/y.maxon
-typealias Small = int(-1000 to 1000)
+export typealias Small = int(-1000 to 1000)
 
 export function want(actual Small) returns Small
 	return actual + 1
@@ -1600,13 +1600,13 @@ per-key tally actually FIRES rather than merely being absent. ⚠ **Still narrow
 oracle carries its throws facts per declaration and compiles this too.
 ```maxon
 // --- file: alpha/x.maxon
-typealias Num = int(-1000 to 1000)
+export typealias Num = int(-1000 to 1000)
 
-enum Boom
+export enum Boom
 	bad
 end 'Boom'
 
-enum Splat
+export enum Splat
 	worse
 end 'Splat'
 
@@ -1625,7 +1625,7 @@ export function want(actual bool) returns Num throws Splat
 end 'want'
 
 // --- file: beta/y.maxon
-typealias Small = int(-1000 to 1000)
+export typealias Small = int(-1000 to 1000)
 
 export function want(actual Small) returns Small
 	return actual + 1
@@ -1652,7 +1652,7 @@ kept per registration key, or the cure has bought its correctness by refusing wh
 The oracle answers **65** too.
 ```maxon
 // --- file: alpha/a.maxon
-typealias Num = int(-1000 to 1000)
+export typealias Num = int(-1000 to 1000)
 
 export function pick(a Num, b Num = 5) returns Num
 	return a + b
@@ -1663,7 +1663,7 @@ export function pick(a bool, b Num = 5) returns Num
 end 'pick'
 
 // --- file: beta/b.maxon
-typealias Small = int(-1000 to 1000)
+export typealias Small = int(-1000 to 1000)
 
 export function pick(a Small) returns Small
 	return a + 50

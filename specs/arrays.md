@@ -2837,7 +2837,7 @@ typealias Reals = Array with Real
 type Samples
 	export var values as Reals
 
-	export static function create() returns Self
+	static function create() returns Self
 		var v = Reals.create()
 		v.push(2.5)
 		return Self{values: v}

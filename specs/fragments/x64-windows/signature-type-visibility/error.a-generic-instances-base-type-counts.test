@@ -1,0 +1,24 @@
+// Test: error.a-generic-instances-base-type-counts
+// --- file: api/lib.maxon
+type Box uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+export typealias IntBox = Box with ExitCode
+
+export function wrap(n ExitCode) returns IntBox
+	return IntBox.create(n)
+end 'wrap'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	_ = wrap(7)
+	return 7
+end 'main'
+---
+CompilerError:
+error E3167: api/<fragment>:13:17: exported function 'api.wrap' names file-private type 'Box' in its return type

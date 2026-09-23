@@ -250,7 +250,7 @@ typealias LRArray = Array with LiveRange
 type LiveRange
 	export var valueId as ValId
 
-	export static function create(v ValId) returns LiveRange
+	static function create(v ValId) returns LiveRange
 		return Self{valueId: v}
 	end 'create'
 end 'LiveRange'
@@ -258,7 +258,7 @@ end 'LiveRange'
 type SlotRange
 	export var off as ValId
 
-	export static function create(o ValId) returns SlotRange
+	static function create(o ValId) returns SlotRange
 		return Self{off: o}
 	end 'create'
 end 'SlotRange'
@@ -313,11 +313,11 @@ typealias IntThunk = function() returns ExitCode
 type Box
 	export var n as ExitCode
 
-	export static function create(n ExitCode) returns Box
+	static function create(n ExitCode) returns Box
 		return Self{n: n}
 	end 'create'
 
-	export function doubled() returns ExitCode
+	function doubled() returns ExitCode
 		return self.n + self.n
 	end 'doubled'
 end 'Box'
@@ -574,7 +574,7 @@ type Counter
 		return Self{n: 3}
 	end 'create'
 
-	export function via() returns Integer
+	function via() returns Integer
 		return apply(function(k Integer) gives k + n, x: 1)
 	end 'via'
 end 'Counter'
@@ -785,11 +785,11 @@ end 'Named'
 type W implements Named
 	export var n as Integer
 
-	export function label() returns Integer
+	function label() returns Integer
 		return self.n
 	end 'label'
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 end 'W'
@@ -797,11 +797,11 @@ end 'W'
 type Holder uses T where T is Named
 	export var item as T
 
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{item: item}
 	end 'create'
 
-	export function go() returns Integer
+	function go() returns Integer
 		let viaClosure = apply(function(n Integer) gives n + 1, x: 0)
 		return self.item.label() + viaClosure
 	end 'go'
@@ -855,11 +855,11 @@ typealias LazyMessage = function() returns String
 type Box uses T
 	export let v as T
 
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{v: v}
 	end 'create'
 
-	export function get() returns T
+	function get() returns T
 		return self.v
 	end 'get'
 end 'Box'
@@ -897,11 +897,11 @@ typealias LazyMessage = function() returns String
 type Plain
 	export let n as Integer
 
-	export static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 
-	export function doubled() returns Integer
+	function doubled() returns Integer
 		return self.n * 2
 	end 'doubled'
 end 'Plain'
