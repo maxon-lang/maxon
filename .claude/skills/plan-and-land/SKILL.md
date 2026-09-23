@@ -1,6 +1,6 @@
 ---
 name: plan-and-land
-description: Plan a change, get the design approved, then orchestrate it to a pushed commit — survey the sources and the spec surface with dispatched agents, choose the approach yourself, halt for the user's approval, then run `/land` with the scout already satisfied and every agent pinned to Opus. Use for a change whose APPROACH is not yet decided, or where the user wants to approve the design before any code is written. When the approach is already known, use `/land` directly. Invoke as `/plan-and-land <the problem>`, or with the path to an existing plan file to resume one.
+description: Plan a change, get the design approved, then orchestrate it to a pushed commit — survey the sources and the spec surface with dispatched agents, choose the approach yourself, halt for the user's approval, then run `/land` with the scout already satisfied. Use for a change whose APPROACH is not yet decided, or where the user wants to approve the design before any code is written. When the approach is already known, use `/land` directly. Invoke as `/plan-and-land <the problem>`, or with the path to an existing plan file to resume one.
 ---
 
 # Plan it, approve it, then land it
@@ -8,15 +8,6 @@ description: Plan a change, get the design approved, then orchestrate it to a pu
 **One invocation = one approved design, carried to one pushed commit.** You plan; dispatched agents
 read; `/land` does everything from the red set onward. This skill adds the three things `/land` lacks —
 **approach selection, an approval halt, and a way for an implementer to say the design is wrong.**
-
-> ## ⛔⛔ EVERY `Agent` DISPATCH — HERE **AND INSIDE THE `/land` RUN YOU START** — CARRIES `model: "opus"`
->
-> **This session is Fable, and a dispatch that omits `model` INHERITS THE PARENT'S MODEL.** The order is:
-> the per-call `model` parameter, then the agent definition's, then `CLAUDE_CODE_SUBAGENT_MODEL`, then
-> **the main conversation's model**. `general-purpose` and `Explore` pin none of their own, so an
-> unpinned dispatch is a Fable implementer, a Fable reviewer, a Fable documenter — and **that is
-> undetectable from the returned report.** The parameter is the only control.
-> ⭐ **Re-read your own tool call before you send it.**
 
 > ## ⛔ YOU PLAN. YOU DO NOT READ THE CODEBASE.
 >
@@ -30,7 +21,7 @@ read; `/land` does everything from the red set onward. This skill adds the three
 |---|---|---|
 | **0** | Orient — `main`, clean, record `BASE` | **you** |
 | **1** | State the problem and what would prove it | **you** |
-| **2** | **SURVEY** — sources, and `/land` §1's scout fields | **2–3 agents**, `model: "opus"` |
+| **2** | **SURVEY** — sources, and `/land` §1's scout fields | **2–3 agents** |
 | **3** | **CHOOSE** — approach · blast radius · obligations · candidate acceptance · staging | **you, never delegated** |
 | **4** | Write the plan file | **you** |
 | **5** | ⛔ **HALT** — present it and wait | **the user** |
@@ -61,7 +52,7 @@ program** — never as something you ran.
 > Verification lives in cases and nowhere else (NO MANUAL TESTS, user directive). A planning-phase run is
 > a claim nobody can attribute and a red nobody watched.
 
-## 2. Dispatch the surveys — `model: "opus"`, in parallel
+## 2. Dispatch the surveys — in parallel
 
 Two briefs; three when the change spans unrelated subsystems. ⚠ **Agents run in the background by
 default — pass `run_in_background: false`**: the plan cannot be written without their answers.
@@ -139,11 +130,6 @@ BASE:   <sha>, tree clean, <date>  <- the staleness anchor for the scout skip
 7. **The plan-file path.**
 8. **The question, explicitly:** approve as planned · change the approach · change the staging · change the acceptance.
 
-⚠ **Effort.** Planning wants high; implementing and gating want medium. `.claude/settings.json` sets that
-per model, but **whether `modelSettings` reaches subagents is undocumented** — until it is confirmed,
-add one line: *"plan is at high; `/effort medium` before approving if you want the implementers at
-medium."* Drop the line once confirmed.
-
 Resume in the **same session** by default; a fresh session resumes off the plan file.
 
 ## 6. Land it — `/land`, once per stage
@@ -161,12 +147,6 @@ precedent for substituting into `/land`.)*
 
 ```
 Substitutions for this invocation (from /plan-and-land):
-
-MODEL. This session is Fable, and an `Agent` dispatch that omits `model` INHERITS IT.
-   Everywhere your text says "send a `general-purpose` agent", it means
-   Agent(subagent_type: "general-purpose", model: "opus", ...). That binds the
-   spec-author (S1), every implementer (S2/S3), the optimizer (S4), the reviewer (S5)
-   and the documenter (S6). No exceptions, no judgement call.
 
 S0 - the "say what the change is" sentence is DISCHARGED: the user approved
    <planfile> rev <n> on <date>. S0 is `git status` clean plus build-if-stale, nothing else.
@@ -199,12 +179,6 @@ STAGE <n> of <N>. Your unit is the WHOLE of this stage. Your "ONE CHANGE, ONE CH
 ⛔ **Three things the skip does NOT skip**, because each would move a gate: the **set decision** (*"The
 scout returns FACTS; the set is yours"*), the **spec-author dispatch**, and the **RED read**. The skip
 expires at the first commit — a multi-stage plan re-scouts before the next stage.
-
-⚠ **Every dispatched agent is Opus, uniformly** — the spec-author writes the text that *is* the
-acceptance, the reviewer is the last gate before the commit, and a per-agent judgement call is a call
-that gets got wrong under inheritance. ⛔ Do **not** swap the agent *type* for a user-level agent that
-pins Opus: `/land` says `general-purpose`, so swapping the type creates a second place where this skill
-contradicts its text. Pinning the model is additive; swapping the type is not.
 
 > ### ⛔ FROM HERE YOU ARE NO LONGER A PLANNER. YOU READ EXIT CODES, NOT REPORTS.
 > §2–§4 were spent believing agent reports, which is right for facts and fatal for gates. `/land`:
@@ -301,7 +275,6 @@ wrong about a file" (amend §2a and carry on) · "this would be cleaner in two c
 
 ## Anti-patterns, each cheaper to name than to pay for
 
-- **A dispatch with no `model`.** A Fable agent reports success exactly like an Opus one.
 - **A plan with code in it.** The implementer follows the plan instead of the red.
 - **An implementer that worked around the design instead of halting.** The user approved something else.
 - **A survey re-run in §1.** Those facts were already bought; read them.
