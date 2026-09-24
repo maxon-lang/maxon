@@ -858,12 +858,15 @@ export enum ErrorCode
 	semanticUnusedModuleSymbol = "E3094"
 
 	// A bare function name has more than one reachable definition; qualify it as 'dir.name'.
-	// Two or more directories declare a free function of the name and this file may name more than one of those
-	// declarations, none in its own directory or at the root. It is refused at each door a bare function name is
-	// written at — a call, a function value (`let f = helper`) and a function-backed enum case
-	// (`op = helper`) — and each accepts the directory-qualified form (`beta.helper`) as the remedy. Decided by
-	// `ProgramSignatures.resolveFunctionName`; a call is reported by `SemanticCheck.validateCall`, the other two
-	// doors by the parser.
+	// Two or more directories declare a free function of the name and this file may name more than one
+	// of those declarations, each in a directory other than its own or the root. It is refused at each
+	// door a bare function name is written at — a call, a function value (`let f = helper`) and a
+	// function-backed enum case (`op = helper`) — and each accepts the directory-qualified form
+	// (`beta.helper`) as the remedy. A call is refused in every form it takes: as a statement or with
+	// its result used, under `try` or `if let … = try`, and spawned with `async`, awaited or stored.
+	// An enum case refused here is reported once, in the file that declares the enum, whichever file
+	// calls through it. Decided by `ProgramSignatures.resolveFunctionName`; a call is reported by
+	// `SemanticCheck.validateCall`, the other two doors by the parser.
 	semanticAmbiguousCrossFileCall = "E3095"
 
 	// `==`/`!=` against an enum/union value's `.name`, `.ordinal`, or
@@ -2132,4 +2135,12 @@ export enum ErrorCode
 	// stops; the declaration's own file, line and column are named in the message, because that is what has
 	// to be read to fix it.
 	internalDroppedSignature = "E9002"
+
+	// A function declaration is missing from the whole-program declaration index. This is a compiler bug.
+	// Before any file is parsed in full, the compiler sweeps every file for the functions it declares,
+	// so that a call can be typed from a declaration in a file not yet parsed. The full parse of the
+	// declaration at this position found a function the sweep did not record, and a call to it would
+	// be compiled as a call to a function nobody declared. The fault is the compiler's: report it to
+	// the Maxon project with the source that produces it.
+	internalDeclarationTheSweepMissed = "E9003"
 end 'ErrorCode'

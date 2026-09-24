@@ -281,6 +281,62 @@ end 'main'
 error E3095: api/<fragment>:18:13: Ambiguous bare function name 'doubleFn' backing an enum case: multiple visible definitions found. Qualify with a directory name. Candidates: alpha.doubleFn, beta.doubleFn
 ```
 
+<!-- test: function-backing.error.contested-name-with-different-results-is-called-from-another-file -->
+When the candidates disagree about the result, calling the refused case's value from another file reports
+the ambiguity alone — the call's result is not typed from either candidate.
+
+```maxon
+// --- file: alpha/a.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+export function doubleFn(x Integer) returns Integer
+	return x * 3
+end 'doubleFn'
+
+// --- file: beta/ops.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+export function doubleFn(x Integer) returns String
+	return "{x}"
+end 'doubleFn'
+
+// --- file: api/dispatch.maxon
+export enum Op
+	doubleOp = doubleFn
+end 'Op'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let f = Op.doubleOp.rawValue
+	return f(10).byteLength() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3095: api/<fragment>:18:13: Ambiguous bare function name 'doubleFn' backing an enum case: multiple visible definitions found. Qualify with a directory name. Candidates: alpha.doubleFn, beta.doubleFn
+```
+
+<!-- test: function-backing.error.undeclared-name-is-called-from-another-file -->
+A case backed by a function no file declares is refused where it is declared, and calling its value from
+another file adds nothing to that refusal.
+
+```maxon
+// --- file: api/dispatch.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+export enum Op
+	doubleOp = nosuchFn
+end 'Op'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let f = Op.doubleOp.rawValue
+	return f(10) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2004: api/<fragment>:6:2: Undefined variable 'nosuchFn'
+```
+
 <!-- test: function-backing.contested-name-qualified-by-its-directory -->
 The remedy E3095 names is writable in the declaration: a directory-qualified function name backs the case with
 the declaration that directory holds.

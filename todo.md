@@ -41,10 +41,24 @@
 - ensure static/const unions/enums exist in rdata not the heap (like strings)
 - tokenkind should be a type
 - multiline string literals using multiple quotes
-- `SemanticCheck.traceDeferredDefiner` (SemanticCheck.maxon ~:508) asks "is this callee internal or
-  declared" of `project.funcSignatures`, while the parser's `calleeHasADefinition` asks it of
-  `ProgramSignatures`. Nothing makes the two registries agree, and E3004's tracing of a deferred value
-  depends on the answer. Found by reading, 2026-09-24.
+- One sweep drop is reported by two internal codes: a signature `recordAttributableDrop` drops
+  (`tupleElementRejected`) gets E9003 at its declaration (`Parser.requireSweptDeclaration`) and E9002 at
+  each Array-member use (Parser.maxon ~:73985). One should own it, or E9003 should carry the drop's
+  reason. No known program reaches a drop. Found by reading, 2026-09-24.
+- `ProgramSignatures.methodInnerAliasParams` is filed under the swept METHOD name as written, not the
+  registration key, so a static and an instance member of the same name in one generic type share one
+  entry (last wins). No wrong answer reached. Found by reading, 2026-09-24.
+- `extensionMethodConstraints` / `unconstrainedExtensionMethods` (`noteTypeExtensionWitnessConstraints`,
+  SignatureIndex ~:21794) are keyed `T.m` whatever the member's kind, so a static/instance pair in
+  constrained type extensions overwrite each other, and the static is later looked up at `T.m#__static`.
+  The cross-file extension contest maps (`extensionMethodDeclFiles`, `contestedExtensionMethods`,
+  `stdlibPublishedExtensionMethods`, `stdlibExtensionMethodsBeatenByUser`, ~:13496-13530) are name-keyed
+  too, so a static `m` in one file's extension and an instance `m` in another's read as a contest. Found by
+  reading, 2026-09-24; no wrong answer reached yet.
+- `SemanticCheck.validateCall` (~:3913) reports E3004 from the real parse's `project.funcSignatures`
+  (post-overload-resolution names), while the parser's deferral and SemanticCheck's trace ask
+  `ProgramSignatures.definesCallee` (the sweep). E9003 enforces that the sweep holds every declaration the
+  parse registers; nothing states the converse as one fact. Found by reading, 2026-09-24.
 
 ## TODO
 - code coverage during spec tests

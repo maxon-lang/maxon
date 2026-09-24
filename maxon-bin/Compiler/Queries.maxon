@@ -2072,9 +2072,10 @@ module function parseErrorDiagnostic(error ParseError, path FilePath, keywords K
 		// new to the reader, so it may not read any differently.
 		tupleElementRejected(feature, line, column) gives unsupportedFeatureDiagnostic(feature, line: line, column: column, path: path)
 
-		// The one 9xxx the parser raises. Positioned at the USE, because that is where the compile stops;
-		// the DECLARATION is named in the sentence, because that is what has to be read.
+		// Positioned at the use, where the compile stops; the declaration is named in the sentence,
+		// because that is what has to be read.
 		droppedSignature(name, declaredIn, declLine, declColumn, line, column) gives Diagnostic.create(ErrorCode.internalDroppedSignature, message: "'{name}' is declared at {declaredIn}:{declLine}:{declColumn}, but the declaration sweep could not read its signature and the whole-program index does not carry it — so every use of it is refused as though nothing had been declared. This is a compiler bug: the sweep's tolerance exists for MALFORMED source, which the real parse then reports with a position, and a declaration the real parse reads is not that", line: line, column: column, filePath: path)
+		declarationTheSweepMissed(name, line, column) gives Diagnostic.create(ErrorCode.internalDeclarationTheSweepMissed, message: "'{name}' is declared here, but the whole-program declaration index carries no function of that name — so a call to it would be compiled as a call to a function nobody declared. This is a compiler bug: the declaration sweep and the parse read this declaration differently", line: line, column: column, filePath: path)
 		duplicateParameter(name, line, column) gives Diagnostic.create(ErrorCode.duplicateParameter, message: "duplicate parameter name '{name}'", line: line, column: column, filePath: path)
 		undefinedVariable(name, line, column) gives Diagnostic.create(ErrorCode.parserExpressionError, message: "Undefined variable '{name}'", line: line, column: column, filePath: path)
 		ambiguousBareFunctionName(name, candidates, use, line, column) gives Diagnostic.create(ErrorCode.semanticAmbiguousCrossFileCall, message: ambiguousBareFunctionNameMessage(name, candidates: candidates, use: use), line: line, column: column, filePath: path)

@@ -1,0 +1,32 @@
+// Test: error.two-visible-candidates-are-ambiguous-when-a-spawn-is-stored
+// --- file: r.maxon
+public enum Oops implements Error
+	bad
+end 'Oops'
+
+public typealias Integer = int(0 to 125)
+
+// --- file: alpha/f.maxon
+export function pick() returns Integer throws Oops
+	throw Oops.bad
+end 'pick'
+
+// --- file: zulu/f.maxon
+export function pick() returns Integer throws Oops
+	return 4
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	var ps = IntPromises.create()
+	ps.push(async pick())
+	let p = try ps.pop() otherwise return 8
+	let v = try await p otherwise 9
+	return v as ExitCode
+end 'main'
+
+typealias IntPromise = Promise with (Integer, Oops)
+typealias IntPromises = Array with IntPromise
+---
+CompilerError:
+error E3095: app/<fragment>:22:16: Ambiguous bare-name call to 'pick': multiple visible definitions found. Qualify with a directory name. Candidates: alpha.pick, zulu.pick

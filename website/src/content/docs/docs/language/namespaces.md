@@ -133,16 +133,18 @@ bypasses visibility. Types are referred to by their bare name.
 ## Bare Names and Ambiguity
 
 A bare name resolves when exactly one visible declaration has it. Only a declaration the referring file may
-name is a candidate: a file-private function in another file and a `module` function outside the caller's
-subtree never count, and the candidate list an error prints names only visible ones. A bare call or a bare
+name is a candidate: a file-private function counts only in its own file and a `module` function only
+inside its subtree, and the candidate list an error prints names only visible ones. A bare call or a bare
 function value takes the type of the declaration it resolves to, and a function-backed enum case's function
-is resolved from the file that declares the enum, whichever file reads the case. When several do:
+is resolved from the file that declares the enum, whichever file reads the case; a case that resolves to no
+single declaration is reported in that file. When several do:
 
 - a declaration at the project root, or in an enclosing directory, takes precedence over one in a nested
   directory, and a project declaration takes precedence over a standard-library one;
-- otherwise the reference is ambiguous. A function call is **E3095** (`Ambiguous bare-name call to 'describe':
+- otherwise the reference is ambiguous. A function call is **E3095** in every form it takes — plain, under
+  `try`, or spawned with `async` (`Ambiguous bare-name call to 'describe':
   multiple visible definitions found. Qualify with a directory name. Candidates: alpha.describe,
-  beta.describe`), worded for a function value or an enum case's backing where the name is one, and a
+  beta.describe`) — worded for a function value or an enum case's backing where the name is one, and a
   typealias is **E3063** — in every alias form, including `export typealias Step = function(…) returns …`.
   Qualify the name to resolve it — a call (`api.format(...)`), a function value
   (`let f = api.format`) and a function-backed enum case (`plain = api.format`) all accept the qualified form.

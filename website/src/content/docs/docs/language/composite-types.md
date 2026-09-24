@@ -132,8 +132,9 @@ A `static function` belongs to the type rather than an instance. It has no `self
 | Receiver | `self` (implicit) | none |
 | Call | `value.name()` | `Type.name()` |
 
-A type may declare a static and an instance method with the same name; `Type.name()` calls the static one
-and `value.name()` the instance one.
+A type may declare a static and an instance method with the same name, in its body or in an `extension` of
+it; `Type.name()` calls the static one and `value.name()` the instance one. A method the type's own body
+declares takes precedence over an extension's method of the same name and kind.
 
 ### Static Fields
 

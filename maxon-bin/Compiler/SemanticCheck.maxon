@@ -45,7 +45,7 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// declaration only — so `checkCalls` would validate every one of them against that member's signature and
 	// `lowerMaxonToStd` would emit a call to it. It rewrites the ops in place, so every pass below (and the
 	// whole backend) sees the member the call actually meant.
-	resolveOverloadedCalls(project, module: module)
+	resolveOverloadedCalls(project, module: module, signatures: signatures)
 	checkMainFunction(project)
 	checkMainCannotThrow(project, module: module)
 
@@ -93,7 +93,7 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	checkCalls(project, module: module, signatures: signatures, funcNames: funcNames, throwsMap: throwsMap, escapeSummary: escapeSummary, mutationSummary: mutationSummary, provenance: provenance)
 
 	// After `checkCalls`: the E3004 explaining an undefined call precedes the refusal it caused.
-	reportDeferredParseErrors(project, module: module)
+	reportDeferredParseErrors(project, module: module, signatures: signatures)
 
 	// The doors a value reaches a `let`'s storage through that the parser could not judge by name — E3019 at a
 	// receiver written through a `let`'s record, E3078 at a `var`, E3160 past the send that lent a graph — after
@@ -185,7 +185,7 @@ end 'semanticCheck'
 // information this pass already holds, and an enclosing-type tie-break would break ties between same-named
 // methods of DIFFERENT types, which are not one overload set at all — a method is registered `Type.method`,
 // so `Box.contains` and `Bag.contains` never contend.
-function resolveOverloadedCalls(project Project, module MaxonModule)
+function resolveOverloadedCalls(project Project, module MaxonModule, signatures ProgramSignatures)
 	// A program that declares no overload has nothing here to do and does not walk.
 	//
 	// ⚠⚠ **THAT GATE CANNOT CARRY THE COST ARGUMENT — `stdlib/FilePath.maxon` OVERLOADS `join`, so EVERY
@@ -207,7 +207,7 @@ function resolveOverloadedCalls(project Project, module MaxonModule)
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for fnIndex in 0 upto module.functions.count() 'eachFunc'
 		valueDefiners.beginFunction()
-		resolveOverloadedCallsInFunc(project, module: module, func: try module.functions.get(fnIndex) otherwise panic("resolveOverloadedCalls: fnIndex {fnIndex} is below module.functions.count()"), funcIndex: fnIndex, valueDefiners: valueDefiners)
+		resolveOverloadedCallsInFunc(project, module: module, signatures: signatures, func: try module.functions.get(fnIndex) otherwise panic("resolveOverloadedCalls: fnIndex {fnIndex} is below module.functions.count()"), funcIndex: fnIndex, valueDefiners: valueDefiners)
 	end 'eachFunc'
 end 'resolveOverloadedCalls'
 
@@ -219,7 +219,7 @@ end 'resolveOverloadedCalls'
 // per use — one fact, three copies, in a shape where a future edit to one of them reads as deliberate.
 // A parameter carries no borrow of `module`, so each use is just `func`. It is also the shape the two Std
 // passes already take (`foldConstOperandsInFunc`, `elimTrivialBlockArgsInFunc`).
-function resolveOverloadedCallsInFunc(project Project, module MaxonModule, func IrFunction, funcIndex FuncIndex, valueDefiners FunctionValueOrigins)
+function resolveOverloadedCallsInFunc(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndex FuncIndex, valueDefiners FunctionValueOrigins)
 	for opIdx in module.liveOpIndices(func) 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("resolveOverloadedCallsInFunc: opIdx {opIdx} from liveOpIndices is not in module.ops")
 
@@ -233,7 +233,7 @@ function resolveOverloadedCallsInFunc(project Project, module MaxonModule, func 
 		match maxonOpCalleeKind(op) 'callee'
 			noCallee then break 'callee'
 			functionValue then refuseOverloadedFunctionValue(project, func: func, opIndex: opIdx, name: maxonOpCalleeName(op))
-			direct then resolveOneOverloadedCall(project, module: module, func: func, funcIndex: funcIndex, opIndex: opIdx, valueDefiners: valueDefiners)
+			direct then resolveOneOverloadedCall(project, module: module, signatures: signatures, func: func, funcIndex: funcIndex, opIndex: opIdx, valueDefiners: valueDefiners)
 		end 'callee'
 	end 'eachOp'
 end 'resolveOverloadedCallsInFunc'
@@ -324,14 +324,14 @@ end 'FunctionValueOrigins'
 // op handed IN would leave its caller holding a released pointer, and an op held ACROSS the rewrite here
 // would be read after free. The rule this pass now keeps, once: **no function both holds an op borrow and
 // replaces that op.** E3070 is what named it, on this compiler's own source.
-function resolveOneOverloadedCall(project Project, module MaxonModule, func IrFunction, funcIndex FuncIndex, opIndex OpIndex, valueDefiners FunctionValueOrigins)
+function resolveOneOverloadedCall(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndex FuncIndex, opIndex OpIndex, valueDefiners FunctionValueOrigins)
 	let op = try module.ops.get(opIndex) otherwise panic("resolveOneOverloadedCall: ops.get({opIndex}) OOB — the index came from liveOpIndices")
 	let callee = maxonOpCalleeName(op)
 	let members = try project.overloadSets.get(callee) otherwise return
 	let candidates = overloadCandidates(project, members: members)
 
 	if candidates.count() > 1 and callPassesOpaqueArg(func, op: op) 'cannotDiscriminate'
-		refuseOpaqueOverloadArgument(project, module: module, func: func, funcIndex: funcIndex, opIndex: opIndex, callee: callee, origins: valueDefiners)
+		refuseOpaqueOverloadArgument(project, module: module, signatures: signatures, func: func, funcIndex: funcIndex, opIndex: opIndex, callee: callee, origins: valueDefiners)
 		return
 	end 'cannotDiscriminate'
 
@@ -413,7 +413,7 @@ end 'leaveUnmatchedCallOnFirstCandidate'
 //
 // The refusal carries the undeclared calls an `unresolved` argument derives from (`deferralCause`),
 // so the editor can drop it when it compiled a buffer alone and a sibling file declares them all.
-function refuseOpaqueOverloadArgument(project Project, module MaxonModule, func IrFunction, funcIndex FuncIndex, opIndex OpIndex, callee ByteArray, origins FunctionValueOrigins)
+function refuseOpaqueOverloadArgument(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndex FuncIndex, opIndex OpIndex, callee ByteArray, origins FunctionValueOrigins)
 	let range = project.opRanges.get(opIndex)
 	let args = match overloadCallArgs(try module.ops.get(opIndex) otherwise panic("refuseOpaqueOverloadArgument: ops.get({opIndex}) OOB — the index is the call being refused")) 'args'
 		supplied(supplied, _, _) gives supplied
@@ -421,7 +421,7 @@ function refuseOpaqueOverloadArgument(project Project, module MaxonModule, func 
 
 	let refusal = Diagnostic.create(ErrorCode.parserUnsupportedFeature, message: opaqueOverloadArgumentMessage(callee, typeParameterArgument: valueTagsInclude(func, args: args, tag: ValueTypeTag.typeParameter)), line: range.line, column: range.column, filePath: func.sourceFilePath)
 
-	reportDiagnostic(project, diagnostic: refusal.withCause(deferralCause(project, module: module, funcIndex: funcIndex, seeds: args, origins: origins)))
+	reportDiagnostic(project, diagnostic: refusal.withCause(deferralCause(project, module: module, signatures: signatures, funcIndex: funcIndex, seeds: args, origins: origins)))
 end 'refuseOpaqueOverloadArgument'
 
 function opaqueOverloadArgumentMessage(callee ByteArray, typeParameterArgument bool) returns String
@@ -436,17 +436,17 @@ end 'opaqueOverloadArgumentMessage'
 // to a declared function, a definer with no opaque operand — makes the diagnostic `standsAlone`,
 // and the editor publishes it. A cause naming calls the refusal does not rest on would hide a real
 // error.
-function deferralCause(project Project, module MaxonModule, funcIndex FuncIndex, seeds ValueIdArray, origins FunctionValueOrigins) returns DiagnosticCause
+function deferralCause(project Project, module MaxonModule, signatures ProgramSignatures, funcIndex FuncIndex, seeds ValueIdArray, origins FunctionValueOrigins) returns DiagnosticCause
 	var calls = SourceRangeArray.create()
 
-	if not traceUndeclaredCalls(project, module: module, funcIndex: funcIndex, seeds: seeds, origins: origins, calls: calls) or calls.isEmpty() 'noUndeclaredCallExplainsIt'
+	if not traceUndeclaredCalls(project, module: module, signatures: signatures, funcIndex: funcIndex, seeds: seeds, origins: origins, calls: calls) or calls.isEmpty() 'noUndeclaredCallExplainsIt'
 		return DiagnosticCause.standsAlone
 	end 'noUndeclaredCallExplainsIt'
 
 	return DiagnosticCause.undeclaredCalls(calls, filePath: module.getFunc(funcIndex).sourceFilePath)
 end 'deferralCause'
 
-function traceUndeclaredCalls(project Project, module MaxonModule, funcIndex FuncIndex, seeds ValueIdArray, origins FunctionValueOrigins, calls SourceRangeArray) returns bool
+function traceUndeclaredCalls(project Project, module MaxonModule, signatures ProgramSignatures, funcIndex FuncIndex, seeds ValueIdArray, origins FunctionValueOrigins, calls SourceRangeArray) returns bool
 	let func = module.getFunc(funcIndex)
 	var pending = ValueIdArray.create()
 	pending.append(seeds)
@@ -470,7 +470,7 @@ function traceUndeclaredCalls(project Project, module MaxonModule, funcIndex Fun
 			continue
 		end 'identified'
 
-		if not traceDeferredValue(project, module: module, func: func, funcIndex: funcIndex, value: value, origins: origins, calls: calls, pending: pending) 'untraceable'
+		if not traceDeferredValue(project, module: module, signatures: signatures, func: func, funcIndex: funcIndex, value: value, origins: origins, calls: calls, pending: pending) 'untraceable'
 			return false
 		end 'untraceable'
 	end 'eachValue'
@@ -478,34 +478,37 @@ function traceUndeclaredCalls(project Project, module MaxonModule, funcIndex Fun
 	return true
 end 'traceUndeclaredCalls'
 
-function traceDeferredValue(project Project, module MaxonModule, func IrFunction, funcIndex FuncIndex, value ValueId, origins FunctionValueOrigins, calls SourceRangeArray, pending ValueIdArray) returns bool
+function traceDeferredValue(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndex FuncIndex, value ValueId, origins FunctionValueOrigins, calls SourceRangeArray, pending ValueIdArray) returns bool
 	match project.deferralSources.sourceOf(funcIndex, valueId: value) 'recorded'
-		value(sourceFuncIndex, sourceId) then return followDeferralSource(project, module: module, funcIndex: funcIndex, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId, calls: calls, pending: pending)
+		value(sourceFuncIndex, sourceId) then return followDeferralSource(project, module: module, signatures: signatures, funcIndex: funcIndex, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId, calls: calls, pending: pending)
 		none then break 'recorded'
 	end 'recorded'
 
 	match origins.originOf(module, func: func, value: value) 'origin'
-		found(definer) then return traceDeferredDefiner(project, module: module, func: func, definer: definer, calls: calls, pending: pending)
+		found(definer) then return traceDeferredDefiner(project, module: module, signatures: signatures, func: func, definer: definer, calls: calls, pending: pending)
 		none then return pushBlockArgumentInputs(module, func: func, value: value, pending: pending)
 	end 'origin'
 end 'traceDeferredValue'
 
-function followDeferralSource(project Project, module MaxonModule, funcIndex FuncIndex, sourceFuncIndex FuncIndex, sourceId ValueId, calls SourceRangeArray, pending ValueIdArray) returns bool
+function followDeferralSource(project Project, module MaxonModule, signatures ProgramSignatures, funcIndex FuncIndex, sourceFuncIndex FuncIndex, sourceId ValueId, calls SourceRangeArray, pending ValueIdArray) returns bool
 	if sourceFuncIndex == funcIndex 'thisFunctionsValue'
 		pending.push(sourceId)
 		return true
 	end 'thisFunctionsValue'
 
-	return traceUndeclaredCalls(project, module: module, funcIndex: sourceFuncIndex, seeds: singletonArgs(sourceId), origins: FunctionValueOrigins.create(), calls: calls)
+	return traceUndeclaredCalls(project, module: module, signatures: signatures, funcIndex: sourceFuncIndex, seeds: singletonArgs(sourceId), origins: FunctionValueOrigins.create(), calls: calls)
 end 'followDeferralSource'
 
-function traceDeferredDefiner(project Project, module MaxonModule, func IrFunction, definer OpIndex, calls SourceRangeArray, pending ValueIdArray) returns bool
+function traceDeferredDefiner(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, definer OpIndex, calls SourceRangeArray, pending ValueIdArray) returns bool
 	let op = try module.ops.get(definer) otherwise panic("traceDeferredDefiner: ops.get({definer}) OOB — the index came from liveOpIndices")
 
 	if maxonOpCalleeKind(op) == MaxonCalleeKind.direct 'aCall'
 		let callee = maxonOpCalleeName(op)
 
-		if project.funcSignatures.contains(callee) or isCompilerInternalCallee(callee) 'notAnAuthorsUndeclaredCallee'
+		// The question the parser's deferral doors asked, so the call named here is the one the parser
+		// deferred. `validateCall` asks `project.funcSignatures` instead: it runs after overload
+		// resolution, on `#`-mangled names the sweep never holds.
+		if signatures.definesCallee(callee) 'notAnAuthorsUndeclaredCallee'
 			return false
 		end 'notAnAuthorsUndeclaredCallee'
 
@@ -3137,15 +3140,15 @@ end 'blameTargetErrorsIn'
 
 // An INDEX loop whose reads are inline and bind nothing off the borrow — the ruling is at
 // `TypeResolution.reportDeferredNameDiagnostics`, which drains its own lists the same way.
-function reportDeferredParseErrors(project Project, module MaxonModule)
+function reportDeferredParseErrors(project Project, module MaxonModule, signatures ProgramSignatures)
 	for entryIndex in 0 upto project.deferredParseErrors.count() 'eachEntry'
-		reportDiagnostic(project, diagnostic: deferredParseErrorDiagnostic(project, module: module, entryIndex: entryIndex))
+		reportDiagnostic(project, diagnostic: deferredParseErrorDiagnostic(project, module: module, signatures: signatures, entryIndex: entryIndex))
 	end 'eachEntry'
 end 'reportDeferredParseErrors'
 
-function deferredParseErrorDiagnostic(project Project, module MaxonModule, entryIndex ElementIndex) returns Diagnostic
+function deferredParseErrorDiagnostic(project Project, module MaxonModule, signatures ProgramSignatures, entryIndex ElementIndex) returns Diagnostic
 	let deferred = try project.deferredParseErrors.get(entryIndex) otherwise panic("deferredParseErrorDiagnostic: entryIndex {entryIndex} is below project.deferredParseErrors.count()")
-	let cause = deferralCause(project, module: module, funcIndex: deferred.funcIndex, seeds: singletonArgs(deferred.value), origins: FunctionValueOrigins.create())
+	let cause = deferralCause(project, module: module, signatures: signatures, funcIndex: deferred.funcIndex, seeds: singletonArgs(deferred.value), origins: FunctionValueOrigins.create())
 
 	return parseErrorDiagnostic(deferred.error, path: deferred.filePath, keywords: project.keywords).withCause(cause)
 end 'deferredParseErrorDiagnostic'

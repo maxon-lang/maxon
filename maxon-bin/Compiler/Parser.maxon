@@ -293,13 +293,13 @@ export union ParseError implements Error
 	// (`recordAttributableDrop`). A second minter would be a second thing claiming the sweep may blame it.
 	tupleElementRejected(feature String, line LineNumber, column ColumnNumber)
 
-	// ⭐⭐ **A MEMBER THE PROGRAM DECLARES AND THE INDEX LOST (E9002).** The declaration sweep read this
-	// declaration's head, could not read its return type, and dropped the signature — see
-	// `SignatureIndex.DroppedSignature` for what that tolerance is for and what it was absorbing. The POSITION
-	// is the USE, because that is where the compile stops; `declaredIn`/`declLine`/`declColumn` name the
-	// declaration, because that is what has to be read to fix it. It is a COMPILER BUG wherever it fires,
-	// which is why it is the only 9xxx code the parser raises.
+	// E9002: the declaration sweep read this declaration's head, could not read its return type, and
+	// dropped the signature — see `SignatureIndex.DroppedSignature` for that tolerance. The position
+	// is the use, where the compile stops; `declaredIn`/`declLine`/`declColumn` name the declaration,
+	// which is what has to be read to fix it. A compiler bug wherever it fires.
 	droppedSignature(name String, declaredIn String, declLine LineNumber, declColumn ColumnNumber, line LineNumber, column ColumnNumber)
+
+	declarationTheSweepMissed(name String, line LineNumber, column ColumnNumber)
 
 	// A parameter list that repeats a name (`function f(x int, x int)`). The second
 	// binding would be a dead, uncallable parameter, so it is rejected at parse time.
@@ -4736,54 +4736,29 @@ function noSuchCompilerOwnedStaticMessage(typeTok Token, memberTok Token, surfac
 	return "'{String.from(typeTok.value)}' has no static method named '{String.from(memberTok.value)}' — {surfaceClause}"
 end 'noSuchCompilerOwnedStaticMessage'
 
-// ⛔⛔ **AN UNRESOLVED STATIC ON A TYPE THE *COMPILER* OWNS IS REFUSED AT THE CALL — the door W55 needed
-// after it retired `parseStringStaticCall`, and the sibling of `requirePrimitiveStaticIsResolvable` above.**
+// An unknown static on any other base is left to mangle, and `SemanticCheck.validateCall` reports
+// E3004 — pinned by `method-calls`, `self-type-member-expression` and `static-method-statement`.
+// That works only while the call's result is unused: an undeclared callee types its result
+// `unknown`, so a use of it is refused first (E2015 on a member access, naming neither type nor
+// member) and the parse error ends the file before SemanticCheck runs. A compiler-owned type name
+// cannot be declared, so `String.<member>` cannot mean a type not yet written, and an unknown
+// static on it is refused here, at the call.
 //
-// `parseQualifiedCall`'s standing rule is that an unknown static is NOT the parser's to refuse: the callee
-// simply mangles, and `SemanticCheck.validateCall` reports E3004 off the whole-program registry the real
-// parse built. **That rule is the corpus's, not a preference** — `method-calls`' `Counter.incrementt`,
-// `self-type-member-expression`'s `Gate.nope` and `static-method-statement`'s `Helper.nope`/`Pair.nope` all
-// pin that E3004 — and it stays for every base a program declares.
-//
-// ⚠ **BUT DEFERRING ONLY WORKS WHILE THE CALL'S RESULT IS UNUSED, AND THAT IS WHAT MADE THIS A REGRESSION.**
-// An undeclared callee types its result `unknown`, so the moment the author does anything with it the parser
-// refuses the USE first — and a parse error ends the file before SemanticCheck ever runs. MEASURED on W55's
-// base, for `let s = String.create()` then `s.byteLength()`:
-// **`E2015 :4:11: a member access 'byteLength' on a 'unknown' value`** — one line past the mistake, naming
-// neither `String` nor `create`. Until W55 the bespoke `String` static door hid it; the door is gone and the
-// masking is not W55's to leave behind, because retiring the door is what exposed it.
-//
-// ⇒ **WHY THE EXCEPTION IS DRAWN AT `isCompilerOwnedTypeName` AND NOT MADE GENERAL.** Those names are the
-// ones no file may DECLARE, so `String.<member>` cannot mean "a type you have not written yet"; the parser
-// resolves values of those types itself, exactly as it does `int.`'s statics one door up, and it is the tier
-// holding both tokens at a source span. A general refusal would also contradict the ported cases named
-// above, which are the corpus stating that a USER base's unknown static belongs to SemanticCheck.
-//
-// ⚠⚠ **THE `declaresCallee` CONJUNCTION IS LOAD-BEARING, AND MEASURED RATHER THAN ASSUMED.** "The compiler
-// owns the NAME" does NOT mean the program cannot declare members on it: an `extension String` with a
-// `static function create()` COMPILES AND RUNS on this tree today (measured, exit 7), and the corpus's own
-// `stdlib/String.maxon` declares thirty. So the question asked here is only ever *"does the program have this
-// function?"*, which is the same question the primitive door asks at its own mint site.
-//
-// A callee the compiler MINTED under one of these qualifiers is not this door's to describe: a synthesized
-// conformance impl (`String.hash`) is refused for BEING one by `requireCalleeIsNotReservedName`, whose
-// sentence says so. Asked through `isCompilerInternalCallee` so that "which callees are the compiler's own"
-// stays one predicate.
+// The program can still declare members on such a type (an `extension String`;
+// `stdlib/String.maxon` declares thirty), so the question is only whether the program has this
+// function. A synthesized conformance impl (`String.hash`) is `requireCalleeIsNotReservedName`'s to
+// refuse.
 function requireCompilerOwnedStaticIsResolvable(typeTok Token, memberTok Token, declaredCallee ByteArray, signatures ProgramSignatures) throws ParseError
 	if not isCompilerOwnedTypeName(typeTok.value) 'ordinaryQualifier'
 		return
 	end 'ordinaryQualifier'
 
-	if calleeHasADefinition(declaredCallee, signatures: signatures) 'theCompilersOwnSymbolOrTheProgramsOwnDeclaration'
+	if signatures.definesCallee(declaredCallee) 'theCompilersOwnSymbolOrTheProgramsOwnDeclaration'
 		return
 	end 'theCompilersOwnSymbolOrTheProgramsOwnDeclaration'
 
 	throw ParseError.unsupported(noSuchCompilerOwnedStaticMessage(typeTok, memberTok: memberTok, surfaceClause: "the compiler owns that type name, so a static of its own can only come from the module that declares it or from an `extension` of it, and no declaration of that name exists"), line: memberTok.line, column: memberTok.column)
 end 'requireCompilerOwnedStaticIsResolvable'
-
-function calleeHasADefinition(callee ByteArray, signatures ProgramSignatures) returns bool
-	return isCompilerInternalCallee(callee) or signatures.declaresCallee(callee)
-end 'calleeHasADefinition'
 
 // Every function name this FILE has registered — bare names and mangled overload members alike. THE answer
 // to "is this name already claimed here?", which is the whole contest test `overloadRegistrationNameFor`
@@ -7317,6 +7292,23 @@ let YieldIntrinsicArity = 0 as ParamCount
 // the runtime function that uses them (`ClockRuntime.maxon`).
 let NanosPerMillisecond = 1000000
 
+// ⭐ **DID THE COMPILER SPELL THE CALLEE'S HEAD?** — the provenance question the shadow-mint exemption
+// asks, over the two mints that join a RESOLVED type name to something: a method dispatch's receiver type
+// (`p.join(…)` ⇒ `__FilePath.join`) and a range operator's stdlib type (`a upto b` ⇒ `__OpenRange.create`).
+// A roster rather than `!= notMinted` for `mintSpellsTheWholeCallee`'s reason: the arms that mint a `__`
+// HELPER name are a different fact and must not be swept in by a negation.
+function mintHeadIsTheCompilers(mint CalleeMint) returns bool
+	return match mint 'm'
+		notMinted gives false
+		primitiveStatic gives false
+		paramDefaultHelper gives false
+		stringLiteralInit gives false
+		fieldDefaultHelper gives false
+		resolvedTypeQualifier gives true
+		rangeOperator gives true
+	end 'm'
+end 'mintHeadIsTheCompilers'
+
 // ⭐ **THE "UNKNOWN INTRINSIC" ARM OF THE `__Builtins` TABLE — AND OF EVERY OTHER RESERVED CALLEE.**
 //
 // `__` is reserved for compiler internals: `E2051` refuses to DECLARE such a name, and the compiler emits
@@ -7359,33 +7351,14 @@ let NanosPerMillisecond = 1000000
 // The file facts arrive as PARAMETERS because this sits outside `type Parser` and has no `self`; both call
 // sites are Parser methods and hand it the same ones, so there is still exactly one copy of the rule.
 //
-// ⚠⚠ **THIS DOOR AND THE CHECK BEHIND IT READ TWO DIFFERENT REGISTRIES, AND THEY MUST AGREE.** Here the
-// question is put to `ProgramSignatures` (swept from every file's TOKENS, the only registry a parser may
-// hold — it takes no `Project`, by design); `SemanticCheck.validateCall` puts the same question to
-// `project.funcSignatures` (folded from PARSED declarations by `mergeArtifact`), and skips arity/label/type
-// validation when the answer is no. So a `__` name this door admits and that registry lacks would be
-// admitted AND unvalidated — the very hole A1r closed, reopened by a disagreement rather than by a rule.
-// They agree because both are derived from the same thing, a function DECLARATION: the sweep records one
-// per declaration it sees, and the parse contributes one per declaration it registers. There is no check
-// available for it — SemanticCheck cannot tell a source-written `__` callee from a compiler-emitted one,
-// which is this whole function's reason for existing — so it is stated at both ends instead.
-// ⭐ **DID THE COMPILER SPELL THE CALLEE'S HEAD?** — the provenance question the shadow-mint exemption
-// asks, over the two mints that join a RESOLVED type name to something: a method dispatch's receiver type
-// (`p.join(…)` ⇒ `__FilePath.join`) and a range operator's stdlib type (`a upto b` ⇒ `__OpenRange.create`).
-// A roster rather than `!= notMinted` for `mintSpellsTheWholeCallee`'s reason: the arms that mint a `__`
-// HELPER name are a different fact and must not be swept in by a negation.
-function mintHeadIsTheCompilers(mint CalleeMint) returns bool
-	return match mint 'm'
-		notMinted gives false
-		primitiveStatic gives false
-		paramDefaultHelper gives false
-		stringLiteralInit gives false
-		fieldDefaultHelper gives false
-		resolvedTypeQualifier gives true
-		rangeOperator gives true
-	end 'm'
-end 'mintHeadIsTheCompilers'
-
+// ⚠ This door asks `ProgramSignatures` (swept from every file's tokens; a parser holds no
+// `Project`), and `SemanticCheck.validateCall` asks `project.funcSignatures` (folded from parsed
+// declarations), skipping arity/label/type validation when the answer is no. So a `__` name this
+// door admits and that registry lacks would be admitted and unvalidated. Both registries are
+// derived from function declarations. `Parser.requireSweptDeclaration` (E9003) refuses a parsed
+// declaration the sweep lacks; the direction this door relies on, a swept name the parse does not
+// register, has no check, because SemanticCheck cannot tell a source-written `__` callee from a
+// compiler-emitted one.
 function requireCalleeIsNotReservedName(callee ByteArray, anchor Token, fileDeclaresReservedNames bool, isStdlibSource bool, isRuntimeSource bool, mint CalleeMint, signatures ProgramSignatures) throws ParseError
 	// ⭐⭐ **THE `__Raw` PRIVILEGE IS THE TIER'S, AND THIS IS THE ONE DOOR BOTH CALL FORMS FUNNEL THROUGH**
 	// — `emitCall` and `emitAsyncCall` — so the refusal cannot hold at one spelling and lapse at the other.
@@ -7405,23 +7378,14 @@ function requireCalleeIsNotReservedName(callee ByteArray, anchor Token, fileDecl
 		return
 	end 'ordinaryCallee'
 
-	// ⛔⛔ **THE SYNTHESIZED-IMPL CLAUSE IS ONLY THE COMPILER'S WHILE NO FILE DECLARES THE METHOD — AND
-	// LEFT UNCONDITIONAL IT REFUSED A PROGRAM THE ORACLE RUNS (W55).** `<conformer>.<method>` names the
-	// symbol `BuiltinConformanceRuntime` mints for a witness slot AND the ordinary spelling of the corpus's
-	// own instance method named statically, which `parseQualifiedCall`'s header settles as LEGAL
-	// (`Adder.bump(a)` IS `a.bump()`). `stdlib/String.maxon` declares both `hash()` and `equals()`
-	// (`:351,355`), so from W17 onwards every callee this clause could reach was one the corpus had — and
-	// MEASURED against the runnable oracle, `String.hash("a")` COMPILES AND PRINTS 177670 there, the same
-	// value `"a".hash()` gives on this tree. A clause that could only ever fire on a correct program was
-	// refusing every one of them.
-	//
-	// ⇒ Conjoined with `declaresCallee` exactly as the four clauses below are, and for their reason: the
-	// classifier says the compiler owns the SPELLING, and this says the program actually has that function.
-	// It is safe because the two registries agree by construction — a callee `funcSignatures` contains is
-	// not `isSignaturelessCompilerCallee`, so SemanticCheck gives it the full arity/label/type battery and
-	// `lowerCall` slots its arguments against the declaration, rather than treating it as one the compiler
-	// wrote positionally. What is left refused is the case the clause was actually written for: a
-	// `<conformer>.<method>` no file declares, which no signature could ever validate.
+	// `<conformer>.<method>` names both the symbol `BuiltinConformanceRuntime` mints for a witness
+	// slot and the legal static spelling of a declared instance method (`String.hash("a")` is
+	// `"a".hash()`, and `stdlib/String.maxon` declares `hash()` and `equals()`). So the
+	// synthesized-impl clause is the compiler's only while no file declares the method; conjoined with
+	// `declaresCallee` like the clauses below, it refuses a `<conformer>.<method>` no file declares,
+	// which no signature could validate. Sound while the two registries agree (see this function's
+	// header): a callee `funcSignatures` contains is not `isSignaturelessCompilerCallee`, so
+	// SemanticCheck validates it and `lowerCall` slots its arguments against the declaration.
 	if reason == ReservedCalleeReason.synthesizedConformanceImpl and signatures.declaresCallee(callee) 'theCorpusOwnDeclarationNamedStatically'
 		return
 	end 'theCorpusOwnDeclarationNamedStatically'
@@ -23086,12 +23050,12 @@ export type Parser
 					break
 				end 'closesExtension'
 
-				// The member header is read through the SAME two readers `parseTypeMember` reads it through —
-				// `consumeOptionalVisibility` (so a contextual `module` is recognized identically) and the bare
-				// `static` test — so the sweep and the real parse cannot disagree about which member takes a
-				// receiver. A member neither understands ends the scan for this conformer rather than being
-				// stepped over: half a signature set is worse than none, and the real parse refuses the
-				// declaration with a position moments later.
+				// The member header is read through the readers the real parse uses —
+				// `consumeOptionalVisibility` (a contextual `module` is recognized identically) and
+				// `extensionMemberTakesReceiverAt` — so the sweep and the real parse cannot disagree about
+				// which member takes a receiver. A member neither understands ends the scan for this conformer
+				// rather than being stepped over: half a signature set is worse than none, and the real parse
+				// refuses the declaration with a position.
 				let memberVisibility = try self.consumeOptionalVisibility() otherwise break
 
 				// A NESTED TYPEALIAS, read exactly as `recordScannedType` reads one and keyed under the SAME
@@ -23143,7 +23107,9 @@ export type Parser
 					continue
 				end 'nestedTypeAlias'
 
-				if self.at(TokenKind.static) 'staticMember'
+				let memberTakesReceiver = self.extensionMemberTakesReceiverAt(self.pos)
+
+				if not memberTakesReceiver 'staticMember'
 					self.advance()
 				end 'staticMember'
 
@@ -23160,40 +23126,26 @@ export type Parser
 				// the withheld path at all.
 				self.noteTypeExtensionWitnessConstraints(index, header: header, conformer: conformer, methodName: methodName)
 
-				// ⚠ **A WITHHELD METHOD IS STILL READ, INTO ARRAYS THAT ARE THROWN AWAY.** What must not
-				// happen is that it is PUBLISHED; what must not happen either is that the cursor lands anywhere
-				// but where a published one leaves it, and the only way to guarantee that is to run the same
-				// reader over it. A second, shorter walk of a signature is exactly the resume point one token
-				// off that `advanceToOutermostBlockEnd`'s header warns about.
-				// ⭐⭐ **THE CONFORMER'S OWN DECLARATION SHADOWS THE EXTENSION'S (W43), AND THE DECISION IS TAKEN
-				// HERE AND RECORDED.** `stdlib/Map.maxon` declares `contains(key Key)` and
-				// `stdlib/Interfaces.maxon`'s `extension Iterable` declares `contains(predicate …)`: both wanted
-				// to be `Map.contains`, and the result was `E3006 duplicate definition of function
-				// 'Map.contains'` — with the extension's signature having ALREADY overwritten the type's in the
-				// index on the way there, which is the wrong-answer half nothing reported.
+				// A withheld method is still read, into arrays that are thrown away: the cursor must land where
+				// a published one leaves it, and only the same reader guarantees that.
 				//
-				// ⚖ **AN EXTENSION METHOD SHADOWS RATHER THAN OVERLOADS.** Making it an overload needs a
-				// WHOLE-PROGRAM registry; this one is deliberately PER FILE — `overloadRegistrationNameFor`'s
-				// own header states the boundary, "two FILES declaring one name still collide at the merge" —
-				// and a conformer and the extension over it are in different files by construction here.
-				// Distinguishing `contains(self, key)` from `contains(self, predicate)` therefore needs the
-				// per-member whole-program facts that header names as a rung of its own.
-				//
-				// So the rule the compiler takes is the one an interface extension already means: its methods are
-				// DEFAULT implementations, and a conformer that declares the name has said what it means there.
-				// The rule — skip an extension method if the same specific overload already has a body —
-				// applies to every extension rather than to one arm of them. ⚠ The capability it costs is real
-				// and is named: a conformer's own `contains` HIDES `Iterable.contains(predicate)` on that type.
-				// Nothing in `/specs` calls the hidden one.
+				// The conformer's own member of the same kind shadows the extension's (see
+				// `conformerDeclaresOwnMethod`), and the decision is taken here and recorded for the real
+				// parse. `stdlib/Map.maxon`'s `contains(key Key)` and `extension Iterable`'s
+				// `contains(predicate …)` both claim `Map.contains`; without the shadow that is E3006, after
+				// the extension's signature has already overwritten the type's in the index. An extension
+				// method shadows rather than overloads because an overload needs a whole-program registry and
+				// this one is per file (`overloadRegistrationNameFor`). The cost: a conformer's own `contains`
+				// hides `Iterable.contains(predicate)` on that type.
 				let qualifiedMethodName = qualifiedMethodName(conformer, methodName: methodName)
-				let shadowed = index.conformerDeclaresOwnMethod(qualifiedMethodName)
+				let shadowed = index.conformerDeclaresOwnMethod(qualifiedMethodName, takesReceiver: memberTakesReceiver)
 
 				if shadowed 'theConformerDeclaresItsOwn'
-					index.noteExtensionShadowedMethod(qualifiedMethodName)
+					index.noteExtensionShadowedMethod(qualifiedMethodName, takesReceiver: memberTakesReceiver)
 				end 'theConformerDeclaresItsOwn'
 
 				match verdict 'verdict'
-					satisfied then self.publishOrShadowExtensionMethod(index, shadowed: shadowed, qualifiedMethodName: qualifiedMethodName, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
+					satisfied then self.publishOrShadowExtensionMethod(index, shadowed: shadowed, qualifiedMethodName: qualifiedMethodName, takesReceiver: memberTakesReceiver, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
 					unmet(unmetInterfaceName, bindingName) then self.foldWithheldExtensionMethod(index, conformer: conformer, methodName: methodName, clause: clause, unmetInterfaceName: unmetInterfaceName, bindingName: bindingName)
 				end 'verdict'
 
@@ -23491,7 +23443,7 @@ export type Parser
 	// The published name is noted so `conformerDeclaresOwnMethod` can tell a conformer's own declaration from
 	// an extension's the next time it is asked — see that door for why the distinction is what keeps the
 	// verdict independent of fold order.
-	function publishOrShadowExtensionMethod(index ProgramSignatures, shadowed bool, qualifiedMethodName ByteArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, bodyFacts SweptBodyFactEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray)
+	function publishOrShadowExtensionMethod(index ProgramSignatures, shadowed bool, qualifiedMethodName ByteArray, takesReceiver bool, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, bodyFacts SweptBodyFactEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray)
 		if shadowed 'theConformerDeclaresItsOwn'
 			self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramReassigns: ParamReassignEntryArray.create(), globalAliasReturns: GlobalAliasReturnEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), bodyFacts: SweptBodyFactEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create(), messageMethodNameOut: ByteArrayArray.create())
 			return
@@ -23505,7 +23457,7 @@ export type Parser
 		// ⚠ **THE NOTE COMES FIRST, AND THE ORDER IS THE POINT** — it is what answers whether THIS declaration
 		// is the one being withheld, and a signature published before asking would be a corpus signature
 		// standing where the user's belongs whenever the sweep folds `stdlib/` last.
-		let beaten = index.noteExtensionPublishedMethod(qualifiedMethodName, declFilePath: self.filePath, isStdlibSource: self.isStdlibSource)
+		let beaten = index.noteExtensionPublishedMethod(qualifiedMethodName, takesReceiver: takesReceiver, declFilePath: self.filePath, isStdlibSource: self.isStdlibSource)
 
 		if beaten 'aUserFileDeclaresIt'
 			self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramReassigns: ParamReassignEntryArray.create(), globalAliasReturns: GlobalAliasReturnEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), bodyFacts: SweptBodyFactEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create(), messageMethodNameOut: ByteArrayArray.create())
@@ -26783,7 +26735,7 @@ export type Parser
 				// WON must go on emitting its body.
 				let extensionMemberName = qualifiedMethodName(conformer, methodName: self.extensionMemberMethodNameAt(self.pos))
 
-				if self.signatures.extensionMethodIsShadowed(extensionMemberName) or (self.isStdlibSource and self.signatures.stdlibExtensionMethodIsBeatenByUser(extensionMemberName)) 'anotherDeclarationWearsTheName'
+				if self.signatures.extensionMethodIsShadowed(extensionMemberName, takesReceiver: self.extensionMemberTakesReceiverAt(self.pos)) or (self.isStdlibSource and self.signatures.stdlibExtensionMethodIsBeatenByUser(extensionMemberName)) 'anotherDeclarationWearsTheName'
 					self.skipPastExtensionMember()
 					continue
 				end 'anotherDeclarationWearsTheName'
@@ -26813,7 +26765,7 @@ export type Parser
 	function extensionMemberMethodNameAt(index TokenIndex) returns ByteArray
 		var at = self.pastVisibilityModifier(index)
 
-		if self.kindAt(at) == TokenKind.static 'staticMember'
+		if not self.extensionMemberTakesReceiverAt(index) 'staticMember'
 			at = at + 1
 		end 'staticMember'
 
@@ -26823,6 +26775,13 @@ export type Parser
 
 		return self.tokenAt(at + 1).value
 	end 'extensionMemberMethodNameAt'
+
+	// The one test of an extension member's kind, past its visibility modifier. The fold's shadow note
+	// and the real parse's query are both keyed by kind, so a second spelling of this test would file
+	// them apart.
+	function extensionMemberTakesReceiverAt(index TokenIndex) returns bool
+		return self.kindAt(self.pastVisibilityModifier(index)) != TokenKind.static
+	end 'extensionMemberTakesReceiverAt'
 
 	// Step the cursor past a whole extension MEMBER, leaving it exactly where `parseTypeMember` would have.
 	// The member's own `end` is found by `skipPastBlockEnd`, which needs the cursor INSIDE the one block that
@@ -29099,6 +29058,10 @@ export type Parser
 
 		try self.requireDeclarationHeaderLineEnd()
 
+		// After the whole head, so a malformed head is reported by the parse's own positioned error
+		// rather than as a compiler bug.
+		try self.requireSweptDeclaration(sweptOwnerName, nameTok: nameTok)
+
 		// ⭐ **THE NAME EVERY REGISTRY BELOW IS KEYED BY** — the source name for the first declaration of it,
 		// a mangled variant for a later overload (D7). Decided HERE: the parameter list is complete and
 		// struct-resolved, and nothing has yet been recorded under a name.
@@ -29608,6 +29571,17 @@ export type Parser
 		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: self.returnExistentialSitesOf(returnType, returnTypeStart: returnTypeStart), extensionConstraints: self.enclosingExtensionConstraints), nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.filePath, synthesized: false)
 		self.commitRangeChecks(name)
 	end 'parseFunction'
+
+	// The parser's deferral doors read the sweep, so a declaration it lacks has every call to it
+	// deferred, and no E3004 follows because the function exists — an `unresolved` value would survive
+	// with no error.
+	function requireSweptDeclaration(sweptOwnerName ByteArray, nameTok Token) throws ParseError
+		if self.signatures.declaresCallee(sweptOwnerName) 'theSweepFiledIt'
+			return
+		end 'theSweepFiledIt'
+
+		throw ParseError.declarationTheSweepMissed(String.from(sweptOwnerName), line: nameTok.line, column: nameTok.column)
+	end 'requireSweptDeclaration'
 
 	// ⭐⭐ **READ A `test` DECLARATION'S HEAD — `test '<prose>'` and the line break behind it — and hand back
 	// the NAME TOKEN, which is what every position in the declaration is then anchored at.**
@@ -38935,7 +38909,7 @@ export type Parser
 	// undeclared one is compiler-internal — `tryTargetNamedNoun` and `requireThrowingNamedTryTarget`
 	// rest on that.
 	function tryTargetOfCallee(callee ByteArray) returns TryTarget
-		if calleeHasADefinition(callee, signatures: self.signatures) 'theSignaturesAnswerForIt'
+		if self.signatures.definesCallee(callee) 'theSignaturesAnswerForIt'
 			return TryTarget.named(callee)
 		end 'theSignaturesAnswerForIt'
 
@@ -91102,57 +91076,50 @@ export type Parser
 		return self.mintValue(ValueTypeTag.void, nameId: UnnamedTypeId)
 	end 'mintIndirectCallResult'
 
-	// The RETURN type of a function VALUE, recovered from its governing name (see MaxonType's `function`
-	// arm): a function-TYPEALIAS value reads its return from the function-alias registry; a functionRef
-	// value's governing name IS a function, so its return is `returnTypeOf`. The two are disjoint — a name
-	// is a function alias or a function, never both — so trying the alias first and the function second is
-	// unambiguous.
-	// ⭐⭐ **ONE WALK, TWO ANSWERS — the TYPE a function value returns and WHOSE SLOT that type is.** The two
-	// were a pair of walks over the same three sources in the same order, held in step by a header saying
-	// they were twins; that is a promise nothing enforces, and this project's review priority is exactly
-	// that shape. Returning the pair makes the agreement structural: a fourth source cannot be given a type
-	// without being given a scope in the same arm.
+	// The return type of a function value, recovered from its governing name (see `MaxonType`'s
+	// `function` arm), paired with the file whose scope that type is resolved in. One walk answers
+	// both, so a new source cannot be given a type without a scope.
 	//
-	// A function-TYPEALIAS value reads its return from the function-alias registry; a functionRef value's
-	// governing name IS a function, so its return is `returnTypeOf`. The two are disjoint — a name is a
-	// function alias or a function, never both — so trying the alias first and the function second is
-	// unambiguous.
-	//
-	// ⛔ **THE SCOPE HALF IS MEMORY SAFETY, not bookkeeping.** An indirect call's result is repaired like any
-	// other swept type, scoped by the file that DECLARED the slot. MEASURED with `self.filePath` for all
-	// three: `export typealias Cb = function() returns Token` where the alias's file means
-	// `Token = int(0 to 5)` and another declares `type Token` — a THIRD file calling through a `Cb` value
-	// got the struct, and reading `.value` off the returned integer was **exit 139 on a clean compile**.
-	//
-	//   • a LIFTED CLOSURE is this parse's own (`closureReturns` is file-local), so its slot is this file's;
-	//   • a FUNCTION ALIAS carries its declaring file (`FunctionTypeAlias.declFilePath`);
-	//   • a functionRef's governing name is a DECLARED FUNCTION, whose return slot is
-	//     `recordedReturnDeclFileOf`'s answer — the same door a DIRECT call asks.
+	// ⚠ The scope is memory safety: an indirect call's result is repaired like any other swept type,
+	// in the scope of the file that declared the slot. Resolved in the calling file, an alias's
+	// `Token` can name a different declaration there, and the call's result is typed as the wrong
+	// type.
+	//   • a lifted closure is this parse's own (`closureReturns` is file-local), so its slot is this
+	//     file's;
+	//   • a function alias carries its declaring file (`FunctionTypeAlias.declFilePath`);
+	//   • a declared function's slot is `recordedReturnDeclFileOf`'s answer, the door a direct call
+	//     asks.
+	// A name is a function alias or a function, never both, so the order of those two lookups is
+	// immaterial.
 	function functionValueReturn(callee ValueId) returns FunctionValueReturn
 		let name = self.internedName(self.valueNameId(callee))
 
-		// ⭐ **A LIFTED CLOSURE first (P1.5-A2a).** Its return type is FILE-LOCAL — the whole-program index
-		// never saw it (see `closureReturns`) — so an indirect call through a closure bound to a local
-		// (`let f = function(x) gives x*2; f(8)`) recovers it from here. Its `$`-suffixed name is unwritable
-		// in source, so this can shadow no real function or alias; a non-closure name misses and falls
-		// through to the two whole-program lookups below.
+		// A closure's `$`-suffixed name is unwritable in source, so it shadows no function or alias.
 		if let closureReturn = try self.closureReturns.get(name) 'closure'
 			return FunctionValueReturn.create(closureReturn, scopeFilePath: self.filePath)
 		end 'closure'
 
 		match self.signatures.functionAliasInAnyFile(name) 'alias'
-			// ⭐ The rebuild is `maxonTypeOfStoredAliasReturn`, shared with the resolution tier's caller, which
-			// does the same job against the PROJECT's merged interner — this site supplies only the interner.
-			// That is what recovers `ExitCode`'s u32 width from the stored NAME rather than dropping it to a
-			// `named` i64; see `builtinTypeNameTag` for the wasm trap the third spelling of that rule cost (W1).
+			// `maxonTypeOfStoredAliasReturn` is the one rebuild of a stored alias return; it recovers
+			// `ExitCode`'s u32 width from the stored name, which a second spelling would drop to a `named`
+			// i64.
 			declared(alias) then return FunctionValueReturn.create(maxonTypeOfStoredAliasReturn(alias, typeNames: self.artifact.typeNames), scopeFilePath: alias.declFilePath)
 			undeclared then break 'alias'
 		end 'alias'
 
 		match self.signatures.returnTypeOf(name, into: self.artifact.typeNames) 'fn'
 			declared(returnType) then return FunctionValueReturn.create(returnType, scopeFilePath: self.signatures.recordedReturnDeclFileOf(name))
-			undeclared then panic("functionValueReturn: a `function`-tagged value's governing name '{String.from(name)}' is neither a lifted closure, a function alias, nor a declared function — every function value is minted from one of the three (parseClosureExpression / parseTypeReference / emitFunctionRef)")
+			undeclared then break 'fn'
 		end 'fn'
+
+		// A function-backed enum's `.rawValue` is the one mint whose name is not checked in the reading
+		// file. When the declaring file refused the case (E3095, E2004), the call defers and that refusal
+		// reports it.
+		if self.signatures.backsAFunctionBackedEnumCase(name) 'aRefusedEnumCaseBacking'
+			return FunctionValueReturn.create(MaxonReturnType.value(MaxonType.unresolved), scopeFilePath: self.filePath)
+		end 'aRefusedEnumCaseBacking'
+
+		panic("functionValueReturn: a `function`-tagged value's governing name '{String.from(name)}' is neither a lifted closure, a function alias, a declared function, nor a function-backed enum case's backing name — every function value is minted from one of the four (parseClosureExpression / parseTypeReference / emitFunctionRef / a function-backed enum's `.rawValue`)")
 	end 'functionValueReturn'
 
 	// Parse an integer literal token into a `literal` op, and return the value it defines.

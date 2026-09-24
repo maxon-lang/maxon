@@ -1047,6 +1047,280 @@ error E3095: app/<fragment>:29:10: Ambiguous bare-name call to 'pick': multiple 
 ```
 
 
+<!-- test: error.two-visible-candidates-are-ambiguous-under-try -->
+A `try` over the contested bare call gets the same ambiguity. Both candidates throw, so no claim about
+whether "the" function throws can be made before the call is resolved.
+```maxon
+// --- file: r.maxon
+public enum Oops implements Error
+	bad
+end 'Oops'
+
+public typealias Integer = int(0 to 125)
+
+// --- file: alpha/f.maxon
+export function pick() returns Integer throws Oops
+	throw Oops.bad
+end 'pick'
+
+// --- file: zulu/f.maxon
+export function pick() returns Integer throws Oops
+	return 4
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let v = try pick() otherwise 9
+	return v as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3095: app/<fragment>:21:14: Ambiguous bare-name call to 'pick': multiple visible definitions found. Qualify with a directory name. Candidates: alpha.pick, zulu.pick
+```
+
+
+<!-- test: error.two-visible-candidates-with-different-results-are-ambiguous -->
+The candidates disagree about the result, so the call's result is not typed from either of them ahead of
+the ambiguity.
+```maxon
+// --- file: r.maxon
+public enum Oops implements Error
+	bad
+end 'Oops'
+
+public typealias Integer = int(0 to 125)
+
+// --- file: alpha/f.maxon
+export function pick() returns Integer
+	return 3
+end 'pick'
+
+// --- file: zulu/f.maxon
+export function pick() returns String
+	return "abcd"
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let v = pick()
+	return v.byteLength() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3095: app/<fragment>:21:10: Ambiguous bare-name call to 'pick': multiple visible definitions found. Qualify with a directory name. Candidates: alpha.pick, zulu.pick
+```
+
+
+<!-- test: error.two-visible-candidates-are-ambiguous-under-if-try -->
+An `if let … = try` over the contested bare call gets the ambiguity.
+```maxon
+// --- file: r.maxon
+public enum Oops implements Error
+	bad
+end 'Oops'
+
+public typealias Integer = int(0 to 125)
+
+// --- file: alpha/f.maxon
+export function pick() returns Integer throws Oops
+	throw Oops.bad
+end 'pick'
+
+// --- file: zulu/f.maxon
+export function pick() returns Integer throws Oops
+	return 4
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	if let v = try pick() 'ok'
+		return v as ExitCode
+	end 'ok'
+
+	return 9
+end 'main'
+```
+```maxoncstderr
+error E3095: app/<fragment>:21:17: Ambiguous bare-name call to 'pick': multiple visible definitions found. Qualify with a directory name. Candidates: alpha.pick, zulu.pick
+```
+
+
+<!-- test: error.two-visible-candidates-are-ambiguous-when-spawned-and-awaited-under-try -->
+A spawn of the contested bare call gets the ambiguity, not a claim about whether its promise throws.
+```maxon
+// --- file: r.maxon
+public enum Oops implements Error
+	bad
+end 'Oops'
+
+public typealias Integer = int(0 to 125)
+
+// --- file: alpha/f.maxon
+export function pick() returns Integer throws Oops
+	throw Oops.bad
+end 'pick'
+
+// --- file: zulu/f.maxon
+export function pick() returns Integer throws Oops
+	return 4
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let p = async pick()
+	let v = try await p otherwise 9
+	return v as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3095: app/<fragment>:21:16: Ambiguous bare-name call to 'pick': multiple visible definitions found. Qualify with a directory name. Candidates: alpha.pick, zulu.pick
+```
+
+
+<!-- test: error.two-visible-candidates-are-ambiguous-when-spawned-inside-try-await -->
+The same spawn written inside the `try await` gets the ambiguity.
+```maxon
+// --- file: r.maxon
+public enum Oops implements Error
+	bad
+end 'Oops'
+
+public typealias Integer = int(0 to 125)
+
+// --- file: alpha/f.maxon
+export function pick() returns Integer throws Oops
+	throw Oops.bad
+end 'pick'
+
+// --- file: zulu/f.maxon
+export function pick() returns Integer throws Oops
+	return 4
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let v = try await async pick() otherwise 9
+	return v as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3095: app/<fragment>:21:26: Ambiguous bare-name call to 'pick': multiple visible definitions found. Qualify with a directory name. Candidates: alpha.pick, zulu.pick
+```
+
+
+<!-- test: error.two-visible-candidates-are-ambiguous-when-a-spawn-is-stored -->
+Storing the spawn's promise gets the ambiguity, not a mismatch with the storage's throws clause.
+```maxon
+// --- file: r.maxon
+public enum Oops implements Error
+	bad
+end 'Oops'
+
+public typealias Integer = int(0 to 125)
+
+// --- file: alpha/f.maxon
+export function pick() returns Integer throws Oops
+	throw Oops.bad
+end 'pick'
+
+// --- file: zulu/f.maxon
+export function pick() returns Integer throws Oops
+	return 4
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	var ps = IntPromises.create()
+	ps.push(async pick())
+	let p = try ps.pop() otherwise return 8
+	let v = try await p otherwise 9
+	return v as ExitCode
+end 'main'
+
+typealias IntPromise = Promise with (Integer, Oops)
+typealias IntPromises = Array with IntPromise
+```
+```maxoncstderr
+error E3095: app/<fragment>:22:16: Ambiguous bare-name call to 'pick': multiple visible definitions found. Qualify with a directory name. Candidates: alpha.pick, zulu.pick
+```
+
+
+<!-- test: contested-free-function-root-declaration-does-not-inherit-a-subdirectory-candidates-facts -->
+The root declaration keeps the bare name, and what is true of another directory's `pick` — here that it
+never returns — is not true of it: the call returns and the statement after it runs.
+```maxon
+// --- file: alpha/f.maxon
+function pick()
+	panic("alpha never returns")
+end 'pick'
+
+// --- file: beta/f.maxon
+function pick()
+	print("beta pick\n")
+end 'pick'
+
+// --- file: main.maxon
+function pick()
+	print("root pick\n")
+end 'pick'
+
+function main() returns ExitCode
+	pick()
+	print("after\n")
+	return 0
+end 'main'
+```
+```stdout
+root pick
+after
+```
+```exitcode
+0
+```
+
+
+<!-- test: contested-free-function-root-declaration-does-not-inherit-always-throwing -->
+The same holds for "always throws": the root `pick` returns normally, so a propagating `try pick()` is
+followed by the next statement.
+```maxon
+// --- file: alpha/f.maxon
+function pick() throws Oops
+	throw Oops.bad
+end 'pick'
+
+// --- file: beta/f.maxon
+function pick()
+	print("beta pick\n")
+end 'pick'
+
+// --- file: main.maxon
+module enum Oops implements Error
+	bad
+end 'Oops'
+
+function pick() throws Oops
+	print("root pick\n")
+end 'pick'
+
+function run() throws Oops
+	try pick()
+	print("after\n")
+end 'run'
+
+function main() returns ExitCode
+	try run() otherwise return 3
+	return 0
+end 'main'
+```
+```stdout
+root pick
+after
+```
+```exitcode
+0
+```
+
+
 <!-- test: error.two-visible-candidates-are-ambiguous-past-an-invisible-third -->
 Two VISIBLE declarations are still an ambiguity, and the invisible third is neither what makes it one
 nor offered as a way out of it.

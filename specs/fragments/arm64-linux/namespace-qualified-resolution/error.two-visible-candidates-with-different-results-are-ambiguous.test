@@ -1,0 +1,26 @@
+// Test: error.two-visible-candidates-with-different-results-are-ambiguous
+// --- file: r.maxon
+public enum Oops implements Error
+	bad
+end 'Oops'
+
+public typealias Integer = int(0 to 125)
+
+// --- file: alpha/f.maxon
+export function pick() returns Integer
+	return 3
+end 'pick'
+
+// --- file: zulu/f.maxon
+export function pick() returns String
+	return "abcd"
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let v = pick()
+	return v.byteLength() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3095: app/<fragment>:21:10: Ambiguous bare-name call to 'pick': multiple visible definitions found. Qualify with a directory name. Candidates: alpha.pick, zulu.pick

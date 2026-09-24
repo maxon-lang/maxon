@@ -1,0 +1,16 @@
+// Test: function-backing.error.undeclared-name-is-called-from-another-file
+// --- file: api/dispatch.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+export enum Op
+	doubleOp = nosuchFn
+end 'Op'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let f = Op.doubleOp.rawValue
+	return f(10) as ExitCode
+end 'main'
+---
+CompilerError:
+error E2004: api/<fragment>:6:2: Undefined variable 'nosuchFn'

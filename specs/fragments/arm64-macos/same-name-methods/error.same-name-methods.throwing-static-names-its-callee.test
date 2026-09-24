@@ -1,0 +1,34 @@
+// Test: error.same-name-methods.throwing-static-names-its-callee
+typealias Integer = int(i64.min to i64.max)
+
+enum BoxError implements Error
+	empty
+end 'BoxError'
+
+type Box
+	export var value as Integer
+
+	static function create(v Integer) returns Box
+		return Box{value: v}
+	end 'create'
+
+	static function getValue() returns Integer throws BoxError
+		throw BoxError.empty
+	end 'getValue'
+
+	function getValue() returns Integer
+		return value
+	end 'getValue'
+end 'Box'
+
+function read() returns Integer
+	return Box.getValue()
+end 'read'
+
+function main() returns ExitCode
+	let b = Box.create(4)
+	return b.getValue() + read()
+end 'main'
+---
+CompilerError:
+error E3057: <fragment>:25:13: throwing function requires try: 'Box.getValue'

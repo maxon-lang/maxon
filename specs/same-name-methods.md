@@ -68,6 +68,117 @@ end 'main'
 51
 ```
 
+<!-- test: same-name-methods.instance-in-an-extension -->
+The instance method may be declared in an extension of the type, beside the type body's static of the
+same name.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(v Integer) returns Box
+		return Box{value: v}
+	end 'create'
+
+	static function getValue() returns Integer
+		return 9
+	end 'getValue'
+end 'Box'
+
+extension Box
+	function getValue() returns Integer
+		return self.value
+	end 'getValue'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create(42)
+	return b.getValue() + Box.getValue()
+end 'main'
+```
+```exitcode
+51
+```
+
+<!-- test: same-name-methods.instance-in-another-file-does-not-inherit-the-statics-facts -->
+The static and the instance method are two declarations, and a fact about one — here that the static never
+returns — is not a fact about the other, whichever file each is in.
+```maxon
+// --- file: box.maxon
+module type Box
+	var tag = 0
+
+	module static function create() returns Box
+		return Box{}
+	end 'create'
+
+	static function ping()
+		panic("the static never returns")
+	end 'ping'
+end 'Box'
+
+// --- file: ext.maxon
+extension Box
+	module function ping()
+		print("instance ping\n")
+	end 'ping'
+end 'Box'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let b = Box.create()
+	b.ping()
+	print("after\n")
+	return 0
+end 'main'
+```
+```stdout
+instance ping
+after
+```
+```exitcode
+0
+```
+
+<!-- test: same-name-methods.an-extension-static-beside-the-types-own-static-is-withheld -->
+The type's own static withholds an extension's static of the same name, whatever another extension
+publishes under that name for the instance.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type T
+	export var v as Num
+
+	static function make(v Num) returns T
+		return Self{v: v}
+	end 'make'
+
+	static function m() returns Num
+		return 7
+	end 'm'
+end 'T'
+
+extension T
+	function m() returns Num
+		return self.v
+	end 'm'
+end 'T'
+
+extension T
+	static function m() returns Num
+		return 99
+	end 'm'
+end 'T'
+
+function main() returns ExitCode
+	return (T.m() + T.make(1).m()) as ExitCode
+end 'main'
+```
+```exitcode
+8
+```
+
 <!-- test: same-name-methods.with-params -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
