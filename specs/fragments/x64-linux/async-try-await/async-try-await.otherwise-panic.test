@@ -3,13 +3,18 @@ enum WorkError implements Error
 	failed
 end 'WorkError'
 
-function succeeds() returns Integer throws WorkError
+function succeeds(n Integer) returns Integer throws WorkError
 	Scheduler.yield()
-	return 7
+
+	if n > 1000 'big'
+		throw WorkError.failed
+	end 'big'
+
+	return n
 end 'succeeds'
 
 function main() returns ExitCode
-	let p = async succeeds()
+	let p = async succeeds(7)
 	let r = try await p otherwise panic("should not fail")
 	return r as ExitCode
 end 'main'
@@ -84,13 +89,26 @@ func @succeeds {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
   __il_body:
     x64.callDirect __gt_resched
   __il_cont:
-    x64.movRegImm32 r8, 7
+    x64.cmpRegImm32 rbx, 1000
+    x64.jcc lessEqual, ifcont
+  big:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
     x64.movRegImm32 r10, 0
-    x64.epilogue 32
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }
@@ -100,13 +118,16 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 40
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rbx, 7
     x64.leaRegFunc rcx, [rip + succeeds]
     x64.callDirect __gt_spawn
-    x64.movRegReg rbx, r8
-    x64.movRegReg rcx, rbx
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 200], rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __gt_ready
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
@@ -117,23 +138,26 @@ func @main {
     x64.cmpRegImm32 r8, 255
     x64.jcc greater, __rc_panic
   __rc_ok:
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at async-try-await.otherwise-panic.test:13: should not fail\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at async-try-await.otherwise-panic.test:18: should not fail\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at async-try-await.otherwise-panic.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at async-try-await.otherwise-panic.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret

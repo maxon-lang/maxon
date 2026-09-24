@@ -381,7 +381,7 @@ end 'name'
 
 // Throwing:
 function load(path FilePath) returns Config throws FileError
-	// ...
+	// ... throws FileError on some path
 end 'load'
 
 // Void (no returns clause):
@@ -690,8 +690,11 @@ enum FileError implements Error
 	permissionDenied
 end 'FileError'
 
-// Throwing function with no result
+// Throwing function with no result. A `throws` clause the body can never throw through is E3168.
 function remove(path FilePath) throws FileError
+	if not path.fileExists() 'missing'
+		throw FileError.notFound
+	end 'missing'
 	// ...
 end 'remove'
 

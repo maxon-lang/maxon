@@ -431,7 +431,7 @@ function markCompilerOwnedRoot(root CompilerOwnedRoot, project Project, index Fu
 	end 'notAModuleFunction'
 
 	if not func.sourceFilePath.isEmpty() 'declared'
-		reportPositioned(project, code: ErrorCode.declarationTakesCompilerOwnedName, message: "declaration of '{String.from(root.name)}' takes a name the compiler owns: it roots that name into every program's reachability set, for a function it emits itself. This program installs no runtime under it, so the declaration is what the root would keep — with an EMPTY body, since the passes that lower bodies were told the name was unreachable. Rename the declaration", line: func.nameLine, column: func.nameColumn, filePath: func.sourceFilePath)
+		reportAtFunctionName(project, func: func, code: ErrorCode.declarationTakesCompilerOwnedName, message: "declaration of '{String.from(root.name)}' takes a name the compiler owns: it roots that name into every program's reachability set, for a function it emits itself. This program installs no runtime under it, so the declaration is what the root would keep — with an EMPTY body, since the passes that lower bodies were told the name was unreachable. Rename the declaration")
 		throw CompileError.compileError
 	end 'declared'
 
@@ -766,7 +766,7 @@ module function stdFunctionReferenceOf(op StdOp, byName FuncIndexByName, into St
 			osPathQuery or
 			osSocketOverlapped or
 			osSocketServe then break 'op'
-			osDebugHost then break 'op'
+		osDebugHost then break 'op'
 	end 'op'
 end 'stdFunctionReferenceOf'
 

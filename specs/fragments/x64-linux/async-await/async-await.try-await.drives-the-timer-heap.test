@@ -6,7 +6,10 @@ enum LeafError implements Error
 end 'LeafError'
 
 function timedThrowing() returns Integer throws LeafError
-		_ = File.exists(FilePath from "noyield.txt")
+		if File.exists(FilePath from "noyield.txt") 'present'
+				throw LeafError.failed
+		end 'present'
+
 		sleep(10)
 		return 1
 end 'timedThrowing'
@@ -116,19 +119,33 @@ func @timedThrowing {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 40
+    x64.pushReg r12
+    x64.prologue 32
     x64.leaRegRdata rcx, [rip + __str_rec_20]  ; "noyield.txt"
     x64.callDirect FilePath.init
     x64.movRegReg rbx, r8
     x64.movRegReg rcx, rbx
     x64.callDirect File.exists
+    x64.movRegReg r12, r8
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_FilePath
+    x64.cmpRegImm32 r12, 0
+    x64.jcc equal, ifcont
+  present:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
     x64.movRegImm32 rcx, 10
     x64.callDirect sleep
     x64.movRegImm32 r8, 1
     x64.movRegImm32 r10, 0
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret

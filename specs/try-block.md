@@ -1183,6 +1183,11 @@ function dispatch(k Kind) returns Count throws MyError
             barErr then result = 80
         end 'he'
     end 'h'
+
+    if result == 0 'unset'
+        throw MyError.fooErr
+    end 'unset'
+
     return result
 end 'dispatch'
 
@@ -1643,7 +1648,11 @@ function callA(which Score) returns Score throws ErrA
 	return 5
 end 'callA'
 
-function callB() returns Score throws ErrB
+function callB(which Score) returns Score throws ErrB
+	if which > 100 'big'
+		throw ErrB.splat
+	end 'big'
+
 	return 6
 end 'callB'
 
@@ -1652,7 +1661,7 @@ function classify(which Score) returns Score
 
 	try 'work'
 		let a = callA(which)
-		let b = callB()
+		let b = callB(which)
 		sum = a + b
 	end 'work'
 	otherwise (e) 'h'

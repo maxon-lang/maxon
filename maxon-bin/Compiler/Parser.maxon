@@ -33168,7 +33168,7 @@ export type Parser
 			let methodTempFloor = self.pendingTempDrops.count()
 			let methodOpFloor = self.artifact.module.ops.count()
 			let methodResult = try self.parsePostfix(func, value: try self.parseMethodCall(func, resultUsed: false), resultUsed: false)
-			try self.finishCallStatement(func, result: methodResult, opFloor: methodOpFloor, tempFloor: methodTempFloor, anchor: methodAnchor)
+			self.finishCallStatement(func, result: methodResult, opFloor: methodOpFloor, tempFloor: methodTempFloor, anchor: methodAnchor)
 		end 'methodCallStmt' else if self.fieldChainMethodCallAt(self.pos) 'fieldChainMethodStmt'
 			// `b.ops.push(1)` / `o.inner.op()` — a call reached through a ≥2-hop field chain, on an ARRAY FIELD's
 			// method or a FUNCTION-typed FIELD (#97). `methodCallsAt` covers only the one-hop `b.push(…)` / `h.op()`;
@@ -33178,7 +33178,7 @@ export type Parser
 			let chainTempFloor = self.pendingTempDrops.count()
 			let chainOpFloor = self.artifact.module.ops.count()
 			let chainResult = try self.parseFieldChainCall(func, resultUsed: false)
-			try self.finishCallStatement(func, result: chainResult, opFloor: chainOpFloor, tempFloor: chainTempFloor, anchor: chainAnchor)
+			self.finishCallStatement(func, result: chainResult, opFloor: chainOpFloor, tempFloor: chainTempFloor, anchor: chainAnchor)
 		end 'fieldChainMethodStmt' else if self.staticMemberCallsAt(self.pos) 'staticMemberCallStmt'
 			// `Names.items.push(9)` — a method called for its EFFECT on a static member's record (W65). The
 			// expression door reaches the same reader through `parseDottedPrimary`'s static arm; a statement
@@ -33189,7 +33189,7 @@ export type Parser
 			let staticTempFloor = self.pendingTempDrops.count()
 			let staticOpFloor = self.artifact.module.ops.count()
 			let staticResult = try self.parseStaticMemberAccess(func, baseTok: try self.typeBaseTokenAt(self.pos), resultUsed: false)
-			try self.finishCallStatement(func, result: staticResult, opFloor: staticOpFloor, tempFloor: staticTempFloor, anchor: staticAnchor)
+			self.finishCallStatement(func, result: staticResult, opFloor: staticOpFloor, tempFloor: staticTempFloor, anchor: staticAnchor)
 		end 'staticMemberCallStmt' else if self.qualifiedStaticCallsAt(self.pos) 'qualifiedStaticCallStmt'
 			// ⭐ `Clock.tick()` / `__Builtins.sleep(ms)` / `__ManagedFile.statFree(buffer)` — A STATIC CALLED
 			// ON A LINE OF ITS OWN, and `statFree` is the case that makes the position load-bearing rather
@@ -33217,7 +33217,7 @@ export type Parser
 			let staticCallTempFloor = self.pendingTempDrops.count()
 			let staticCallOpFloor = self.artifact.module.ops.count()
 			let staticCallResult = try self.parseQualifiedCall(func, resultUsed: false)
-			try self.finishCallStatement(func, result: staticCallResult, opFloor: staticCallOpFloor, tempFloor: staticCallTempFloor, anchor: staticCallAnchor)
+			self.finishCallStatement(func, result: staticCallResult, opFloor: staticCallOpFloor, tempFloor: staticCallTempFloor, anchor: staticCallAnchor)
 		end 'qualifiedStaticCallStmt' else if self.namespaceQualifiedChainDotsAt(self.pos, minimumDots: MethodQualifierDots, use: QualifiedChainUse.call) > 0 'namespaceQualifiedCallStmt'
 			// ⭐ **`utils.shout()` / `lib.inner.shout()` ON A LINE OF ITS OWN (N1b)** — a FREE call written with
 			// a directory qualifier, and a free call is exactly what `callStmt` below already admits: the
@@ -33240,7 +33240,7 @@ export type Parser
 			let qualifiedTempFloor = self.pendingTempDrops.count()
 			let qualifiedOpFloor = self.artifact.module.ops.count()
 			let qualifiedResult = try self.parsePostfix(func, value: try self.parseNamespaceQualifiedCall(func, resultUsed: false), resultUsed: false)
-			try self.finishCallStatement(func, result: qualifiedResult, opFloor: qualifiedOpFloor, tempFloor: qualifiedTempFloor, anchor: qualifiedAnchor)
+			self.finishCallStatement(func, result: qualifiedResult, opFloor: qualifiedOpFloor, tempFloor: qualifiedTempFloor, anchor: qualifiedAnchor)
 		end 'namespaceQualifiedCallStmt' else if self.atSpawnPrefix() 'spawnStmt'
 			// ⭐ **`spawn Calc.create()` ON A LINE OF ITS OWN** — a service started for its EFFECT, its handle
 			// discarded. It needs an arm of its own for `namespaceQualifiedCallStmt`'s reason one arm up: the
@@ -33280,7 +33280,7 @@ export type Parser
 				// E3064's bare-call door: the statement took none of what the call produced. Probed before
 				// `terminateAfterDivergingCall` moves the parser into a dead block the probe would read
 				// instead.
-				try self.finishCallStatement(func, result: callResult, opFloor: callOpFloor, tempFloor: callTempFloor, anchor: calleeTok)
+				self.finishCallStatement(func, result: callResult, opFloor: callOpFloor, tempFloor: callTempFloor, anchor: calleeTok)
 				self.terminateAfterDivergingCall(func, calleeTok: calleeTok, tempFloor: callTempFloor)
 			end 'directCallStmt'
 		end 'callStmt' else if self.peekKind() == TokenKind.dot 'memberExprStmt'
@@ -38297,7 +38297,7 @@ export type Parser
 	// (E3064/E3065), which must find a routed call's `tryCall`, and G18 for the implied route — an
 	// always-throwing callee's unreachable ok edge is closed, as `desugarTry` closes it for a
 	// propagating `try`.
-	function finishCallStatement(func IrFunction, result ValueId, opFloor OpIndex, tempFloor TempDropMark, anchor Token) throws ParseError
+	function finishCallStatement(func IrFunction, result ValueId, opFloor OpIndex, tempFloor TempDropMark, anchor Token)
 		self.recordDiscardedCallResult(result, opFloor: opFloor, anchor: anchor, door: DiscardDoor.statement)
 
 		if self.throwRouteDestination() != ThrowRouteDestination.impliedTestHandler 'theImpliedHandlerIsNotHere'
@@ -40330,7 +40330,7 @@ export type Parser
 		var errEnd = self.currentBlock
 		let handlerMoveMark = self.captureMoveMark()
 
-		return try self.finishTryBlock(func, bodyEnd: bodyEnd, errEnd: errEnd, bodyVals: bodyVals, handler: handler, bodyMoveMark: bodyMoveMark, handlerMoveMark: handlerMoveMark, tryTok: tryTok)
+		return self.finishTryBlock(func, bodyEnd: bodyEnd, errEnd: errEnd, bodyVals: bodyVals, handler: handler, bodyMoveMark: bodyMoveMark, handlerMoveMark: handlerMoveMark, tryTok: tryTok)
 	end 'parseTryBlockStatement'
 
 	// **E3083 — a block-form `try` whose body holds no throwing call**, and the MOVED-BETWEEN-EDGES refusal
@@ -40775,7 +40775,7 @@ export type Parser
 	// bits would keep answering correctly while silently leaking or double-freeing. A handler that
 	// moves an outer owned binding and then returns would otherwise leave it marked moved on the
 	// BODY's continuation, so its function-end drop is skipped: exit 101.
-	function finishTryBlock(func IrFunction, bodyEnd IrBlock, errEnd IrBlock, bodyVals ValueIdArray, handler TryHandler, bodyMoveMark MoveMark, handlerMoveMark MoveMark, tryTok Token) returns IrBlock throws ParseError
+	function finishTryBlock(func IrFunction, bodyEnd IrBlock, errEnd IrBlock, bodyVals ValueIdArray, handler TryHandler, bodyMoveMark MoveMark, handlerMoveMark MoveMark, tryTok Token) returns IrBlock
 		let bodyFellThrough = not bodyEnd.isTerminated()
 
 		// ⚠ Read off the HANDLER's own verdict rather than re-asking `errEnd.isTerminated()`. The two agree
@@ -45293,7 +45293,7 @@ export type Parser
 		let (target, flag) = try self.rewriteLastCallToTryCall(result, tryTok: tryTok, targetDeferralFloor: targetDeferralFloor, targetOpFloor: targetOpFloor)
 		try self.requireThrowingTryTarget(target, tryTok: tryTok)
 		try self.requireCaughtResultIsSpokenFor(result, target: target, binder: binder, tryTok: tryTok)
-		try self.recordCatchingDiscard(binder, opFloor: targetOpFloor)
+		self.recordCatchingDiscard(binder, opFloor: targetOpFloor)
 
 		// The success value is owned on the then edge alone, so it leaves the pending list here, as it
 		// does at `openTryFork`: on the error edge its register is NULL, and `parseIfStatement` drains
@@ -45313,10 +45313,10 @@ export type Parser
 	//
 	// A NAMED binding is a use and files nothing; a bare `if try f()` has no result to discard at all, which
 	// is E3124's own refusal one function up.
-	function recordCatchingDiscard(binder IfBinder, opFloor OpIndex) throws ParseError
+	function recordCatchingDiscard(binder IfBinder, opFloor OpIndex)
 		match binder 'b'
 			none then return
-			binding(nameIndex, _) then try self.recordDiscardedBinderResult(nameIndex, opFloor: opFloor)
+			binding(nameIndex, _) then self.recordDiscardedBinderResult(nameIndex, opFloor: opFloor)
 		end 'b'
 	end 'recordCatchingDiscard'
 
@@ -45326,7 +45326,7 @@ export type Parser
 	// The producer is found by the `tryCall` walk (`tryChannelCallAbove`), not by the last-op probe:
 	// the target has already been rewritten (`rewriteLastCallToTryCall`) by the time this runs, and
 	// `directCallDefining` answers only for a plain `call`.
-	function recordDiscardedBinderResult(nameIndex TokenIndex, opFloor OpIndex) throws ParseError
+	function recordDiscardedBinderResult(nameIndex TokenIndex, opFloor OpIndex)
 		let nameTok = self.tokenAt(nameIndex)
 
 		if not nameTok.value.equals(DiscardBindingName) 'aNamedBinding'
@@ -53477,7 +53477,7 @@ export type Parser
 		let table = self.planDispatchTable(from, to: to, intervals: intervals)
 
 		if table.isTable 'dense'
-			try self.emitDispatchTable(from, to: to, block: block, subject: subject, intervals: intervals, plan: table, missTarget: missTarget, missArgs: missArgs, opTok: opTok)
+			self.emitDispatchTable(from, to: to, block: block, subject: subject, intervals: intervals, plan: table, missTarget: missTarget, missArgs: missArgs, opTok: opTok)
 			return
 		end 'dense'
 
@@ -53568,7 +53568,7 @@ export type Parser
 	// slots; holes are the default), record the phi edges for the distinct arm bodies and the default, then
 	// emit the `switch` terminator. The bias subtract is elided when the minimum is 0 (a zero-based enum or
 	// scalar match), so `match Color` over `red=0…` biases nothing.
-	function emitDispatchTable(from ElementIndex, to ElementIndex, block IrBlock, subject ValueId, intervals DispatchIntervalArray, plan DispatchTablePlan, missTarget BlockId, missArgs ValueIdArray, opTok Token) throws ParseError
+	function emitDispatchTable(from ElementIndex, to ElementIndex, block IrBlock, subject ValueId, intervals DispatchIntervalArray, plan DispatchTablePlan, missTarget BlockId, missArgs ValueIdArray, opTok Token)
 		self.currentBlock = block
 
 		var index = subject
@@ -73493,7 +73493,7 @@ export type Parser
 			return self.mintValue(ValueTypeTag.void, nameId: UnnamedTypeId)
 		end 'voidReturn'
 
-		let result = try self.witnessDispatchValueResult(target, receiver: receiver, methodTok: methodTok)
+		let result = self.witnessDispatchValueResult(target, receiver: receiver, methodTok: methodTok)
 		self.enrolOwnedCallTemp(result)
 		return result
 	end 'mintWitnessDispatchResult'
@@ -73501,14 +73501,14 @@ export type Parser
 	// The three spellings a NON-void interface return has, split from the door above so the drop enrolment is
 	// written once across all three rather than once per arm — the same one-rule-one-site reason
 	// `enrolOwnedCallTemp` exists at all.
-	function witnessDispatchValueResult(target WitnessDispatchTarget, receiver ValueId, methodTok Token) returns ValueId throws ParseError
+	function witnessDispatchValueResult(target WitnessDispatchTarget, receiver ValueId, methodTok Token) returns ValueId
 		// A `Self` return is the receiver's own type (the shared body cannot know the concrete one).
 		if target.returnTypeName.equals(InterfaceSelfTypeName) 'selfReturn'
 			return self.mintSelfReturnedWitnessResult(receiver)
 		end 'selfReturn'
 
 		if let held = try self.heldAssociatedReturnOf(target) 'heldAtAnInterface'
-			return try self.mintHeldAssociatedWitnessResult(target, held: held, receiver: receiver, methodTok: methodTok)
+			return self.mintHeldAssociatedWitnessResult(target, held: held, receiver: receiver, methodTok: methodTok)
 		end 'heldAtAnInterface'
 
 		// ⭐⭐ **AN ASSOCIATED-TYPE RETURN THE RECEIVER'S OWN INSTANTIATION BINDS (W57)** — asked BELOW the held
@@ -73684,7 +73684,7 @@ export type Parser
 	// either an existential or a value of a CONSTRAINED TYPE PARAMETER, and only the first has a paired
 	// witness half. The table address is what this needs and `witnessValue` is it for both, which is the whole
 	// reason `WitnessDispatchTarget` names a value rather than a constraint.
-	function mintHeldAssociatedWitnessResult(target WitnessDispatchTarget, held HeldAssociatedReturn, receiver ValueId, methodTok Token) returns ValueId throws ParseError
+	function mintHeldAssociatedWitnessResult(target WitnessDispatchTarget, held HeldAssociatedReturn, receiver ValueId, methodTok Token) returns ValueId
 		let range = SourceRange.ofToken(methodTok)
 		let distance = self.emitIndirectLoad(MaxonType.integer, box: target.witnessValue, offset: held.slotOffset, storageType: MaxonType.integer, range: range)
 		let nested = self.emitMachineWordBinOp(target.witnessValue, rhs: distance, op: MaxonBinOp.add, resultType: MaxonType.integer, range: range)
@@ -83149,7 +83149,7 @@ export type Parser
 
 		try self.consumeConstToken(TokenKind.rightParen)
 
-		try self.fillConstFactoryArgDefaults(calls, callee: callee, args: args)
+		self.fillConstFactoryArgDefaults(calls, callee: callee, args: args)
 
 		let node = try self.constFactoryNode(callee, args: args, calls: calls)
 
@@ -83170,7 +83170,7 @@ export type Parser
 	// ⚠ **A SLOT WITH NEITHER AN ARGUMENT NOR A DEFAULT IS LEFT EMPTY ON PURPOSE**, and so is a call whose
 	// label resolves to no parameter: E3036 and E3037 own those, from the RESOLVED signature rather than from
 	// this tolerant sweep. Reporting either here would be a second opinion built on the weaker registry.
-	function fillConstFactoryArgDefaults(calls ConstFactoryCallArray, callee ConstInitializerCallee, args ConstFactoryArgumentArray) throws ConstEvalError
+	function fillConstFactoryArgDefaults(calls ConstFactoryCallArray, callee ConstInitializerCallee, args ConstFactoryArgumentArray)
 		// ⚡ The allocation-free presence test first, for `fillOmittedArgDefaults`' reason: a payload-free
 		// union case still heap-allocates, so only a callee that genuinely declares a default pays.
 		if not self.signatures.declaresParamDefaults(callee.name) 'everyParameterRequired'
@@ -83179,14 +83179,14 @@ export type Parser
 
 		match self.signatures.defaultsOf(callee.name) 'defaults'
 			allRequired then return
-			defaults(info) then try self.appendConstFactoryArgDefaults(info, calls: calls, anchor: callee.anchor, args: args)
+			defaults(info) then self.appendConstFactoryArgDefaults(info, calls: calls, anchor: callee.anchor, args: args)
 		end 'defaults'
 	end 'fillConstFactoryArgDefaults'
 
 	// Each filled slot is appended with the parameter's own NAME as its label, so it lands in the right
 	// position whatever order the written arguments came in — the same device the body fill uses, and the
 	// reason neither needs the defaults to be a trailing run of the declaration.
-	function appendConstFactoryArgDefaults(info ParamDefaultInfo, calls ConstFactoryCallArray, anchor Token, args ConstFactoryArgumentArray) throws ConstEvalError
+	function appendConstFactoryArgDefaults(info ParamDefaultInfo, calls ConstFactoryCallArray, anchor Token, args ConstFactoryArgumentArray)
 		let paramCount = info.paramNames.count()
 
 		if args.count() >= paramCount 'nothingOmitted'
@@ -84666,7 +84666,7 @@ export type Parser
 			// ⭐ The mark `parseUnary`'s two integer neg arms make, made once here because this tier has ONE:
 			// a written `-` whose value is negative (`ConstValue.writtenNegative`). `-0` and `-(-1)` are not
 			// negative numbers and are not marked, which is the value test rather than the token.
-			let folded = try self.foldConstUnary(MaxonUnaryOp.neg, operand: operand.payload, opTok: opTok)
+			let folded = self.foldConstUnary(MaxonUnaryOp.neg, operand: operand.payload, opTok: opTok)
 			return ConstValue.create(folded, tag: operand.tag, writtenNegative: folded < 0)
 		end 'neg'
 
@@ -84860,7 +84860,7 @@ export type Parser
 	// they exist for.
 	function foldConstNot(operand ConstValue, opTok Token) returns ConstValue throws ConstEvalError
 		match notOperatorFor(operand.tag) 'which'
-			op(kind, resultTag) then return ConstValue.create(try self.foldConstUnary(kind, operand: operand.payload, opTok: opTok), tag: resultTag)
+			op(kind, resultTag) then return ConstValue.create(self.foldConstUnary(kind, operand: operand.payload, opTok: opTok), tag: resultTag)
 
 			// Unreachable from a constant: `unresolved` is a call to a function no file declares and
 			// `void` a call to one returning nothing, and NO call reaches this evaluator at all — a call
@@ -84877,7 +84877,7 @@ export type Parser
 
 	// The unary folds, both routed through TypeRules. `neg` and `bitNot` are `foldIntUnaryOp`'s;
 	// `logicalNot` is `foldLogicalNot`'s (see `foldConstNot`).
-	function foldConstUnary(op MaxonUnaryOp, operand ParsedInt, opTok Token) returns ParsedInt throws ConstEvalError
+	function foldConstUnary(op MaxonUnaryOp, operand ParsedInt, opTok Token) returns ParsedInt
 		if op == MaxonUnaryOp.logicalNot 'logical'
 			return foldLogicalNot(operand)
 		end 'logical'
@@ -85596,7 +85596,7 @@ export type Parser
 		// E3070's write site is the METHOD's. See `prependReceiverArg`.
 		match receiver 'prependReceiver'
 			none then break 'prependReceiver'
-			value(id, immutableName, subjectName, receiverTok) then try self.prependReceiverArg(func, callee: callee, callAnchor: anchor, receiverTok: receiverTok, id: id, immutableName: immutableName, subjectName: subjectName, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, receiverIndex: self.pos)
+			value(id, immutableName, subjectName, receiverTok) then self.prependReceiverArg(func, callee: callee, callAnchor: anchor, receiverTok: receiverTok, id: id, immutableName: immutableName, subjectName: subjectName, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, receiverIndex: self.pos)
 		end 'prependReceiver'
 
 		// ⭐ THE ONE DOOR WHERE A BUILTIN — BARE OR `__Builtins.`-QUALIFIED — CAN ARRIVE, so it is the one
@@ -87546,7 +87546,7 @@ export type Parser
 	// mutator blame a different column from the parser-intrinsic mutator on the line above it: MEASURED when
 	// `insert` left the roster, `arr.insert(…)` moved from `5:6` to `5:2` while `arr.push(…)` stayed at `5:6`,
 	// and the runnable oracle anchors `insert` at the method too.
-	function prependReceiverArg(func IrFunction, callee ByteArray, callAnchor Token, receiverTok Token, id ValueId, immutableName ByteArray, subjectName ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argAnchors TokenIndexArray, receiverIndex TokenIndex) throws ParseError
+	function prependReceiverArg(func IrFunction, callee ByteArray, callAnchor Token, receiverTok Token, id ValueId, immutableName ByteArray, subjectName ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argAnchors TokenIndexArray, receiverIndex TokenIndex)
 		self.noteReceiverBorrowSubjects(func, callee: callee, display: EmptySourceText, anchor: callAnchor, argColumn: args.count(), id: id, subjectName: subjectName)
 		self.noteStorageReachingCall(func, callee: callee, argColumn: args.count(), id: id, subjectName: subjectName)
 		pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, value: id, label: EmptySourceText, range: SourceRange.ofToken(receiverTok), immutableName: immutableName, anchorIndex: receiverIndex)

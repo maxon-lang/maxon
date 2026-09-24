@@ -769,6 +769,10 @@ A module-level `var`'s initializer calls a function whose result may be, lie wit
 
 A function's signature names a type less visible than the function itself. Whoever may call a function must be able to name what the call takes and gives back, so every type the signature names -- each parameter type, the return type, the throws type -- must carry a written visibility at least the function's own. The tiers, narrowest first: no modifier (file-private), `module`, `export`, `public`. The signature is walked structurally, through a generic instance's base type and its type arguments, a tuple's elements and a function typealias's parameter and return shapes; a type parameter, a primitive and a tuple itself name no declaration and are asked nothing. A member's OWN modifier decides, not its enclosing type's, so an `export type` may hold a `public` method and that method is held to the `public` bar. An interface's members take the interface's modifier, because a conformer's caller reaches the requirement through the interface. A service's message is held to the narrower of its own modifier and its service type's, because it can be sent only through a handle to that service. Reported at the function's name, once per offending type and position. Raise the type to the function's tier, or narrow the function to the type's.
 
+### E3168 — `throwsFunctionNeverThrows`
+
+A function declares `throws E`, but nothing in its body can throw. An error leaves a function through a `throw`, a `default throws`, an `otherwise` that throws, or a bare `try` that passes the callee's error on; a handled `try … otherwise`, an `if try`, and a `throw` caught by a block-form `try` handler stay inside it. The clause would make every caller write `try` for an error that cannot arrive. Remove the clause, or throw from the body. Reported once per declaration, at the function's name. A service message is held to it like any function. The entry function (E3054), a `test` body, and a method implementing an interface requirement whose clause E3016 fixes are exempt; a clause E3113 refuses is reported by E3113 alone.
+
 ## Intermediate Representation (E4xxx)
 
 IR generation.

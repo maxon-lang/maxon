@@ -106,13 +106,18 @@ enum WorkError implements Error
 	failed
 end 'WorkError'
 
-function succeeds() returns Integer throws WorkError
+function succeeds(n Integer) returns Integer throws WorkError
 	Scheduler.yield()
-	return 7
+
+	if n > 1000 'big'
+		throw WorkError.failed
+	end 'big'
+
+	return n
 end 'succeeds'
 
 function main() returns ExitCode
-	let p = async succeeds()
+	let p = async succeeds(7)
 	let r = try await p otherwise panic("should not fail")
 	return r as ExitCode
 end 'main'

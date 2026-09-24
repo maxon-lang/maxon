@@ -475,7 +475,7 @@ type Outer
 end 'Outer'
 
 function parseB() returns Integer throws ParseFailure
-	return 7
+	return try int.fromString("7") otherwise throw ParseFailure.badDigit
 end 'parseB'
 
 function main() returns ExitCode

@@ -510,10 +510,6 @@ direct call is — the flag would be dropped and the impl's throw-path primary r
 ```maxon
 typealias Code = int(0 to u32.max)
 
-enum DigestError implements Error
-	tooSmall
-end 'DigestError'
-
 interface Digest
 	function digest() returns Code throws DigestError
 end 'Digest'
@@ -536,7 +532,11 @@ type Box uses T where T is Digest
 	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	function itemDigest() returns Code throws DigestError
+	function itemDigest(strict bool) returns Code throws DigestError
+		if strict 'strict'
+			throw DigestError.tooSmall
+		end 'strict'
+
 		return self.item.digest()
 	end 'itemDigest'
 end 'Box'
@@ -545,8 +545,12 @@ typealias PointBox = Box with Point
 
 function main() returns ExitCode
 	let b = PointBox.create(Point.create(3))
-	return (try b.itemDigest() otherwise 55)
+	return (try b.itemDigest(false) otherwise 55)
 end 'main'
+
+enum DigestError implements Error
+	tooSmall
+end 'DigestError'
 ```
 ```maxoncstderr
 error E3057: <fragment>:31:20: throwing interface method requires try: wrap the witness dispatch as `try <receiver>.<method>(…)` — a bare call drops the error flag the method returns

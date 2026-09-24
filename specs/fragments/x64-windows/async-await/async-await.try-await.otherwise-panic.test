@@ -6,7 +6,10 @@ enum TestError implements Error
 end 'TestError'
 
 function succeeds() returns Integer throws TestError
-		_ = File.exists(FilePath from "noyield.txt")
+		if File.exists(FilePath from "noyield.txt") 'present'
+				throw TestError.failed
+		end 'present'
+
 		return 7
 end 'succeeds'
 
@@ -94,12 +97,12 @@ func @succeeds {
     x64.pushReg r13
     x64.prologue 40
     x64.leaRegRdata rcx, [rip + __str_rec_17]  ; "noyield.txt"
-  __il_body#3:
+  __il_body#5:
     x64.callDirect FilePath.create
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
-  __il_body#6:
+  __il_body#8:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.callDirect String.addressableBytes
     x64.movRegReg r12, r8
@@ -109,9 +112,22 @@ func @succeeds {
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
     x64.cmpRegImm32 r13, 0
+    x64.setccReg notEqual, r12
   __il_cont:
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_FilePath
+    x64.cmpRegImm32 r12, 0
+    x64.jcc equal, ifcont
+  present:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
     x64.movRegImm32 r8, 7
     x64.movRegImm32 r10, 0
     x64.epilogue 40
@@ -161,7 +177,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_18]  ; "panic at async-await.try-await.otherwise-panic.test:15: should not fail\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_18]  ; "panic at async-await.try-await.otherwise-panic.test:18: should not fail\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -169,7 +185,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_88]  ; "panic at async-await.try-await.otherwise-panic.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_88]  ; "panic at async-await.try-await.otherwise-panic.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40

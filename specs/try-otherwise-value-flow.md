@@ -33,6 +33,10 @@ enum E
 end 'E'
 
 function double(x ExitCode) returns ExitCode throws E
+	if x > 100 'big'
+		throw E.bad
+	end 'big'
+
 	return x * 2
 end 'double'
 
@@ -78,6 +82,10 @@ enum E
 end 'E'
 
 function ident(x ExitCode) returns ExitCode throws E
+	if x > 100 'big'
+		throw E.bad
+	end 'big'
+
 	return x
 end 'ident'
 
@@ -102,6 +110,10 @@ enum E
 end 'E'
 
 function double(x ExitCode) returns ExitCode throws E
+	if x > 100 'big'
+		throw E.bad
+	end 'big'
+
 	return x * 2
 end 'double'
 

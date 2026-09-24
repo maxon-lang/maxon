@@ -3306,14 +3306,17 @@ type Box uses T
 	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
-	function fetch() returns T throws Boom
+	function fetch(strict bool) returns T throws Boom
+		if strict 'strict'
+			throw Boom.bad
+		end 'strict'
 		return self.value
 	end 'fetch'
 end 'Box'
 typealias AlphaBox = Box with Alpha
 function main() returns ExitCode
 	let bx = AlphaBox.create(Alpha.create(9))
-	let got = try bx.fetch() otherwise Alpha.create(0)
+	let got = try bx.fetch(false) otherwise Alpha.create(0)
 	print("v={got.a}\n")
 	return 0
 end 'main'
@@ -3348,14 +3351,17 @@ type Box uses T
 	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
-	function fetch() returns T throws Boom
+	function fetch(strict bool) returns T throws Boom
+		if strict 'strict'
+			throw Boom.bad
+		end 'strict'
 		return self.value
 	end 'fetch'
 end 'Box'
 typealias StrBox = Box with String
 function main() returns ExitCode
 	let bx = StrBox.create("hi")
-	let got = try bx.fetch() otherwise "no"
+	let got = try bx.fetch(false) otherwise "no"
 	print("v={got}\n")
 	return 0
 end 'main'
@@ -3389,14 +3395,17 @@ type Box uses T
 	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
-	function fetch() returns T throws Boom
+	function fetch(strict bool) returns T throws Boom
+		if strict 'strict'
+			throw Boom.bad
+		end 'strict'
 		return self.value
 	end 'fetch'
 end 'Box'
 typealias IntBox = Box with Integer
 function main() returns ExitCode
 	let bx = IntBox.create(9)
-	let got = try bx.fetch() otherwise 0
+	let got = try bx.fetch(false) otherwise 0
 	print("v={got}\n")
 	return 0
 end 'main'
@@ -3431,14 +3440,17 @@ type Box uses T
 	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
-	function fetch() returns T throws Boom
+	function fetch(strict bool) returns T throws Boom
+		if strict 'strict'
+			throw Boom.bad
+		end 'strict'
 		return self.value
 	end 'fetch'
 end 'Box'
 typealias AlphaBox = Box with Alpha
 function main() returns ExitCode
 	let bx = AlphaBox.create(Alpha.create(9))
-	if let got = try bx.fetch() 'ok'
+	if let got = try bx.fetch(false) 'ok'
 		print("v={got.a}\n")
 	end 'ok' else 'bad'
 		print("boom\n")

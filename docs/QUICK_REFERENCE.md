@@ -815,7 +815,7 @@ enum FileError implements Error
 		permissionDenied
 end 'FileError'
 
-// Throwing function
+// Throwing function. A `throws` clause the body can never throw through is E3168.
 function readFile(path String) returns String throws FileError
 		if not exists(path) 'c' throw FileError.notFound end 'c'
 		return contents

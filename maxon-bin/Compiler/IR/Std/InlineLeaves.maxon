@@ -383,7 +383,7 @@ function inlineOpRole(op StdOp, meta StdOpMetaMemo) returns InlineOpRole
 			osPathQuery or
 			osSocketOverlapped or
 			osSocketServe then break 'kind'
-			osDebugHost then break 'kind'
+		osDebugHost then break 'kind'
 	end 'kind'
 
 	return InlineOpRole.refusing if meta.isUnsupportedInInlineBody(op) else meta.bodyRole(op)
@@ -1469,7 +1469,7 @@ end 'alwaysSplicedBodyNamed'
 // door found the reference.
 function refuseAlwaysSplicedBodyStillReached(project Project, module StdModule, calleeIndex FuncIndex, reachedBy String, reason String) throws CompileError
 	let callee = module.getFunc(calleeIndex)
-	reportPositioned(project, code: ErrorCode.alwaysSplicedBodyIsStillCalled, message: "'{String.from(callee.name)}' declares '__Raw.splicedAtEverySite()', so it must be left at no call site, but {reachedBy}: {reason}. The row overrides the inliner's cost rules — the op budget, the pressure budget, the inline-frame-record rule — and never its correctness rules, so a body one of those refuses is a body that must not declare it", line: callee.nameLine, column: callee.nameColumn, filePath: callee.sourceFilePath)
+	reportAtFunctionName(project, func: callee, code: ErrorCode.alwaysSplicedBodyIsStillCalled, message: "'{String.from(callee.name)}' declares '__Raw.splicedAtEverySite()', so it must be left at no call site, but {reachedBy}: {reason}. The row overrides the inliner's cost rules — the op budget, the pressure budget, the inline-frame-record rule — and never its correctness rules, so a body one of those refuses is a body that must not declare it")
 	throw CompileError.compileError
 end 'refuseAlwaysSplicedBodyStillReached'
 
@@ -3147,7 +3147,7 @@ type SiteSplicer
 					osPathQuery or
 					osSocketOverlapped or
 					osSocketServe then break 'kind'
-					osDebugHost then break 'kind'
+				osDebugHost then break 'kind'
 			end 'kind'
 		end 'eachOp'
 
@@ -3355,7 +3355,7 @@ type SiteSplicer
 				osPathQuery or
 				osSocketOverlapped or
 				osSocketServe then self.refuseNotTheSplitCall()
-				osDebugHost then self.refuseNotTheSplitCall()
+			osDebugHost then self.refuseNotTheSplitCall()
 		end 'site'
 
 		var pred = self.blockAt(predRef)
@@ -3864,7 +3864,7 @@ type SiteSplicer
 				osPathQuery or
 				osSocketOverlapped or
 				osSocketServe then refuseNotATerminator(calleeFunc)
-				osDebugHost then refuseNotATerminator(calleeFunc)
+			osDebugHost then refuseNotATerminator(calleeFunc)
 		end 'exit'
 	end 'copyBlockExit'
 
@@ -4088,7 +4088,7 @@ function assertParamOpMatchesConvention(op StdOp, calleeFunc IrFunction)
 			osPathQuery or
 			osSocketOverlapped or
 			osSocketServe then refuseNotAParamOp()
-			osDebugHost then refuseNotAParamOp()
+		osDebugHost then refuseNotAParamOp()
 	end 'p'
 end 'assertParamOpMatchesConvention'
 

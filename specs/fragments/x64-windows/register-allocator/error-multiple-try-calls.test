@@ -6,12 +6,20 @@ enum MyError implements Error
 	failed
 end 'MyError'
 
-function getA() returns Integer throws MyError
-	return 10
+function getA(n Integer) returns Integer throws MyError
+	if n > 1000 'big'
+		throw MyError.failed
+	end 'big'
+
+	return n
 end 'getA'
 
-function getB() returns Integer throws MyError
-	return 20
+function getB(n Integer) returns Integer throws MyError
+	if n > 1000 'big'
+		throw MyError.failed
+	end 'big'
+
+	return n
 end 'getB'
 
 function getC() returns Integer throws MyError
@@ -19,8 +27,8 @@ function getC() returns Integer throws MyError
 end 'getC'
 
 function main() returns ExitCode
-	let a = try getA() otherwise 0
-	let b = try getB() otherwise 0
+	let a = try getA(10) otherwise 0
+	let b = try getB(20) otherwise 0
 	let c = try getC() otherwise 12
 	return a + b + c
 end 'main'
@@ -44,8 +52,16 @@ func @getA {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 10
+    x64.cmpRegImm32 rcx, 1000
+    x64.jcc lessEqual, ifcont
+  big:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
     x64.movRegImm32 r10, 0
+    x64.movRegReg r8, rcx
     x64.popReg rbp
     x64.ret
 }
@@ -54,8 +70,16 @@ func @getB {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 20
+    x64.cmpRegImm32 rcx, 1000
+    x64.jcc lessEqual, ifcont
+  big:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
     x64.movRegImm32 r10, 0
+    x64.movRegReg r8, rcx
     x64.popReg rbp
     x64.ret
 }
@@ -77,6 +101,7 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
+    x64.movRegImm32 rcx, 10
     x64.callDirect getA
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#1
@@ -86,6 +111,7 @@ func @main {
   tryok#1:
     x64.movRegReg rbx, r8
   trycont#3:
+    x64.movRegImm32 rcx, 20
     x64.callDirect getB
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#4
@@ -119,7 +145,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at error-multiple-try-calls.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at error-multiple-try-calls.test:33: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

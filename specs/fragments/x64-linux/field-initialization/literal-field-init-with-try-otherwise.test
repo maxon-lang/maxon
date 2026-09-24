@@ -24,7 +24,7 @@ type Outer
 end 'Outer'
 
 function parseB() returns Integer throws ParseFailure
-	return 7
+	return try int.fromString("7") otherwise throw ParseFailure.badDigit
 end 'parseB'
 
 function main() returns ExitCode
@@ -44,8 +44,20 @@ func @parseB {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 7
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_2]  ; "7"
+    x64.callDirect __int_fromString
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  tryok:
     x64.movRegImm32 r10, 0
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }
@@ -99,7 +111,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at literal-field-init-with-try-otherwise.test:22: miss: parseB failed\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at literal-field-init-with-try-otherwise.test:22: miss: parseB failed\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -110,7 +122,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at literal-field-init-with-try-otherwise.test:32: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_12]  ; "panic at literal-field-init-with-try-otherwise.test:32: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

@@ -713,15 +713,19 @@ function tryA() returns Integer throws MyError
 	throw MyError.failed
 end 'tryA'
 
-function tryB() returns Integer throws MyError
-	return 42
+function tryB(n Integer) returns Integer throws MyError
+	if n > 1000 'big'
+		throw MyError.failed
+	end 'big'
+
+	return n
 end 'tryB'
 
 function main() returns ExitCode
 	var result = 0
 	if let a = try tryA() 'a'
 		result = a
-	end 'a' else if let b = try tryB() 'b'
+	end 'a' else if let b = try tryB(42) 'b'
 		result = b
 	end 'b'
 	return result

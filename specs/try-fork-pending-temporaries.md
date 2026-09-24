@@ -156,6 +156,10 @@ type Conf
 	export var n as Integer
 
 	static function create(n Integer) returns Conf throws Boom
+		if n < 0 'negative'
+			throw Boom.bad
+		end 'negative'
+
 		return Conf{argv: StrArray.create(), n: try mayFail(n) otherwise return Conf{argv: StrArray.create(), n: 0}}
 	end 'create'
 end 'Conf'

@@ -522,6 +522,7 @@ assertion whose failure nothing observes unwritable.
 // --- file: main.maxon
 function check() throws TestFailure
 	Expect.equal(1, expected: 2)
+	try Expect.equal(2, expected: 2)
 end 'check'
 
 function main() returns ExitCode
@@ -541,6 +542,7 @@ overload does. An overload's internal signature key is not something the author 
 // --- file: main.maxon
 function check() throws TestFailure
 	Expect.equal("a", expected: "b")
+	try Expect.equal("b", expected: "b")
 end 'check'
 
 function main() returns ExitCode

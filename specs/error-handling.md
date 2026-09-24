@@ -183,8 +183,12 @@ enum MyError implements Error
 end 'MyError'
 
 // This function signature declares it throws MyError
-function mayFail() returns Integer throws MyError
-	return 10
+function mayFail(n Integer) returns Integer throws MyError
+	if n > 1000 'big'
+		throw MyError.failed
+	end 'big'
+
+	return n
 end 'mayFail'
 
 function main() returns ExitCode
@@ -458,6 +462,153 @@ end 'main'
 error E3054: specs/fragments/error-handling/error.main-cannot-throw.test:7:10: main cannot throw: 'main'
 ```
 
+<!-- test: error.throws-but-can-never-throw -->
+A function that declares `throws` must be able to throw. This one only returns, so every caller is made to
+handle an error that can never arrive.
+```maxon
+enum Failure implements Error
+	broken
+end 'Failure'
+
+typealias Code = int(0 to 255)
+
+function answer() returns Code throws Failure
+	return 42
+end 'answer'
+
+function main() returns ExitCode
+	return try answer() otherwise 1
+end 'main'
+```
+```maxoncstderr
+error E3168: <fragment>:8:10: 'throws Failure' is declared but nothing in the body throws — no 'throw', no bare 'try' and no 'otherwise throw' reaches a caller. Remove the clause
+```
+
+<!-- test: error.throws-but-every-call-it-makes-is-handled -->
+Calling a throwing function is not throwing. `careful`'s one throwing call handles its error with
+`otherwise`, so nothing leaves the body.
+```maxon
+enum Failure implements Error
+	broken
+end 'Failure'
+
+typealias Code = int(0 to 255)
+
+function risky(n Code) returns Code throws Failure
+	if n > 10 'big'
+		throw Failure.broken
+	end 'big'
+	return n
+end 'risky'
+
+function careful(n Code) returns Code throws Failure
+	return try risky(n) otherwise 0
+end 'careful'
+
+function main() returns ExitCode
+	return try careful(3) otherwise 1
+end 'main'
+```
+```maxoncstderr
+error E3168: <fragment>:15:10: 'throws Failure' is declared but nothing in the body throws — no 'throw', no bare 'try' and no 'otherwise throw' reaches a caller. Remove the clause
+```
+
+<!-- test: error.throws-but-its-only-throw-is-caught-by-a-try-block -->
+A `throw` inside a block-form `try` goes to that block's handler, not to the caller. The handler here
+returns, so the function's error can never reach a caller.
+```maxon
+enum Failure implements Error
+	broken
+end 'Failure'
+
+typealias Code = int(0 to 255)
+
+function guarded(n Code) returns Code throws Failure
+	try 'work'
+		if n > 10 'big'
+			throw Failure.broken
+		end 'big'
+	end 'work'
+	otherwise (e) 'handled'
+		match e 'kind'
+			broken then return 0
+		end 'kind'
+	end 'handled'
+	return n
+end 'guarded'
+
+function main() returns ExitCode
+	return try guarded(3) otherwise 1
+end 'main'
+```
+```maxoncstderr
+error E3168: <fragment>:8:10: 'throws Failure' is declared but nothing in the body throws — no 'throw', no bare 'try' and no 'otherwise throw' reaches a caller. Remove the clause
+```
+
+<!-- test: error.throws-method-can-never-throw -->
+The rule covers methods as well as top-level functions.
+```maxon
+enum Failure implements Error
+	broken
+end 'Failure'
+
+typealias Code = int(0 to 255)
+
+type Gauge
+	var level as Code
+
+	static function create() returns Self
+		return Self{level: 7}
+	end 'create'
+
+	function read() returns Code throws Failure
+		return self.level
+	end 'read'
+end 'Gauge'
+
+function main() returns ExitCode
+	let g = Gauge.create()
+	return try g.read() otherwise 1
+end 'main'
+```
+```maxoncstderr
+error E3168: <fragment>:15:11: 'throws Failure' is declared but nothing in the body throws — no 'throw', no bare 'try' and no 'otherwise throw' reaches a caller. Remove the clause
+```
+
+<!-- test: error.throws-service-message-can-never-throw -->
+<!-- unsupported-targets: wasm32-wasi -->
+A service message is checked like any other function. A `throws` clause gives the message a reply slot, but a
+body that cannot throw still makes the clause false. wasm32-wasi is excluded for the diagnostic, not the rule:
+it has no service substrate, so the spawn earns E3104 first.
+```maxon
+enum Failure implements Error
+	broken
+end 'Failure'
+
+typealias Integer = int(i64.min to i64.max)
+
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function wipe() throws Failure
+		self.n = 0
+	end 'wipe'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	h.wipe()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3168: <fragment>:15:18: 'throws Failure' is declared but nothing in the body throws — no 'throw', no bare 'try' and no 'otherwise throw' reaches a caller. Remove the clause
+```
+
 <!-- test: error.otherwise-type-mismatch -->
 ```maxon
 
@@ -519,7 +670,7 @@ enum MyError implements Error
 end 'MyError'
 
 function mayFail() returns Integer throws MyError
-	return 42
+	return try int.fromString("42") otherwise throw MyError.failed
 end 'mayFail'
 
 function main() returns ExitCode
@@ -540,7 +691,7 @@ enum MyError implements Error
 end 'MyError'
 
 function mayFail() returns Integer throws MyError
-	return 42
+	return try int.fromString("42") otherwise throw MyError.failed
 end 'mayFail'
 
 function main() returns ExitCode

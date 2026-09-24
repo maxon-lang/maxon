@@ -765,6 +765,10 @@ enum ForwardError implements Error
 end 'ForwardError'
 
 function reassign(cur Node, replacement Node) returns Integer throws ForwardError
+	if replacement.id < 0 'negative'
+		throw ForwardError.failed
+	end 'negative'
+
 	cur = replacement
 	return cur.id
 end 'reassign'
@@ -926,6 +930,10 @@ type Forwarder
 	end 'create'
 
 	function reassign(cur Node, replacement Node) returns Integer throws ForwardError
+		if replacement.id < 0 'negative'
+			throw ForwardError.failed
+		end 'negative'
+
 		cur = replacement
 		return cur.id
 	end 'reassign'

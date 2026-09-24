@@ -1028,12 +1028,20 @@ enum MyError implements Error
 	failed
 end 'MyError'
 
-function getA() returns Integer throws MyError
-	return 10
+function getA(n Integer) returns Integer throws MyError
+	if n > 1000 'big'
+		throw MyError.failed
+	end 'big'
+
+	return n
 end 'getA'
 
-function getB() returns Integer throws MyError
-	return 20
+function getB(n Integer) returns Integer throws MyError
+	if n > 1000 'big'
+		throw MyError.failed
+	end 'big'
+
+	return n
 end 'getB'
 
 function getC() returns Integer throws MyError
@@ -1041,8 +1049,8 @@ function getC() returns Integer throws MyError
 end 'getC'
 
 function main() returns ExitCode
-	let a = try getA() otherwise 0
-	let b = try getB() otherwise 0
+	let a = try getA(10) otherwise 0
+	let b = try getB(20) otherwise 0
 	let c = try getC() otherwise 12
 	return a + b + c
 end 'main'

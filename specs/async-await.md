@@ -305,7 +305,10 @@ enum TestError implements Error
 end 'TestError'
 
 function succeeds() returns Integer throws TestError
-		_ = File.exists(FilePath from "noyield.txt")
+		if File.exists(FilePath from "noyield.txt") 'present'
+				throw TestError.failed
+		end 'present'
+
 		return 7
 end 'succeeds'
 
@@ -1539,7 +1542,10 @@ enum LeafError implements Error
 end 'LeafError'
 
 function timedThrowing() returns Integer throws LeafError
-		_ = File.exists(FilePath from "noyield.txt")
+		if File.exists(FilePath from "noyield.txt") 'present'
+				throw LeafError.failed
+		end 'present'
+
 		sleep(10)
 		return 1
 end 'timedThrowing'
@@ -1606,7 +1612,10 @@ enum DrainError implements Error
 end 'DrainError'
 
 function drainThunk() returns StringArray throws DrainError
-	_ = File.exists(FilePath from "noyield.txt")
+	if File.exists(FilePath from "noyield.txt") 'present'
+		throw DrainError.broken
+	end 'present'
+
 	var lines = StringArray.create()
 	lines.push("one")
 	lines.push("two")
@@ -1699,7 +1708,10 @@ enum DrainError implements Error
 end 'DrainError'
 
 function countThunk() returns Tally throws DrainError
-	_ = File.exists(FilePath from "noyield.txt")
+	if File.exists(FilePath from "noyield.txt") 'present'
+		throw DrainError.broken
+	end 'present'
+
 	return 2 as Tally
 end 'countThunk'
 

@@ -384,7 +384,7 @@ function refuseDuplicateChunkName(name ByteArray, project Project, funcNames Fun
 		panic("refuseDuplicateChunkName: the Std function named '{spelled}' is SYNTHESIZED, and a Target-tier chunk claims the same name — an `install*Runtime` and a hand-assembled chunk both supply this symbol, which is a compiler bug rather than anything a program can cause")
 	end 'bothSynthesized'
 
-	reportPositioned(project, code: ErrorCode.declarationTakesCompilerOwnedName, message: "declaration of '{spelled}' collides with a symbol the compiler EMITS into this program, and a program cannot hold two bodies under one `.text` label. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls and the runtime's own call sites — so the declaration is the side that must move: rename it", line: declared.nameLine, column: declared.nameColumn, filePath: declared.sourceFilePath)
+	reportAtFunctionName(project, func: declared, code: ErrorCode.declarationTakesCompilerOwnedName, message: "declaration of '{spelled}' collides with a symbol the compiler EMITS into this program, and a program cannot hold two bodies under one `.text` label. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls and the runtime's own call sites — so the declaration is the side that must move: rename it")
 	throw CompileError.compileError
 end 'refuseDuplicateChunkName'
 

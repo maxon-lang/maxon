@@ -194,7 +194,7 @@ function refuseDuplicateFunctionName(functions IrFunctionArray, project Project,
 		// The parsed side carries the author's position; the synthesized side's is blank by construction,
 		// and an unpositioned diagnostic is barely better than the panic it replaces.
 		let declared = later if earlier.sourceFilePath.isEmpty() else earlier
-		reportPositioned(project, code: ErrorCode.declarationTakesCompilerOwnedName, message: "declaration of '{name}' collides with a symbol the compiler EMITS into this program, and a program cannot hold two functions of one name. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls, the runtime's own call sites, and every call it lowers to that name — so the declaration is the side that must move: rename it", line: declared.nameLine, column: declared.nameColumn, filePath: declared.sourceFilePath)
+		reportAtFunctionName(project, func: declared, code: ErrorCode.declarationTakesCompilerOwnedName, message: "declaration of '{name}' collides with a symbol the compiler EMITS into this program, and a program cannot hold two functions of one name. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls, the runtime's own call sites, and every call it lowers to that name — so the declaration is the side that must move: rename it")
 		throw CompileError.compileError
 	end 'oneOfEachProvenance'
 

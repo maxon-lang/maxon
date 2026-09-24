@@ -3432,6 +3432,13 @@ end 'requireName'
 
 `throw` is legal only in a function that declares `throws`, and the value must be of the declared type.
 
+A function that declares `throws` must be able to throw: its body needs a `throw`, a `default throws`, an
+`otherwise` that throws, or a bare `try` that passes an error on (see [Error Propagation](#error-propagation)).
+A clause with none of these is [E3168](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3168), since every
+caller would handle an error that cannot arrive. A handled `try … otherwise`, an `if try`, and a `throw`
+caught by a [`try` block](#try-blocks) keep the error inside the function. A method implementing an interface
+requirement keeps the clause the requirement fixes (**E3016**).
+
 ### Panic
 
 `panic("message")` stops the program. The message may be interpolated. The program writes the message with

@@ -23,6 +23,10 @@ type Forwarder
 	end 'create'
 
 	function reassign(cur Node, replacement Node) returns Integer throws ForwardError
+		if replacement.id < 0 'negative'
+			throw ForwardError.failed
+		end 'negative'
+
 		cur = replacement
 		return cur.id
 	end 'reassign'
@@ -86,6 +90,18 @@ func @Forwarder.reassign {
     x64.pushReg r12
     x64.prologue 32
     x64.movRegReg rbx, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc greaterEqual, ifcont
+  negative:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
     x64.movRegReg rcx, rax
     x64.callDirect __mm_own
     x64.movRegReg r12, r8

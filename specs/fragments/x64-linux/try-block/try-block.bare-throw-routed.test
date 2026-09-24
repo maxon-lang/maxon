@@ -26,6 +26,11 @@ function dispatch(k Kind) returns Count throws MyError
             barErr then result = 80
         end 'he'
     end 'h'
+
+    if result == 0 'unset'
+        throw MyError.fooErr
+    end 'unset'
+
     return result
 end 'dispatch'
 
@@ -46,7 +51,7 @@ func @dispatch {
     x64.jcc notEqual, matchnext
   matcharm#2:
     x64.movRegImm32 r8, 1
-    x64.jmp tryblkcont
+    x64.jmp ifcont
   matchnext:
     x64.cmpRegImm32 rcx, 1
     x64.jcc notEqual, matchdefault
@@ -66,7 +71,7 @@ func @dispatch {
     x64.movRegImm32 rax, 80
   matchcont:
     x64.movRegReg r8, rax
-  tryblkcont:
+  ifcont:
     x64.movRegImm32 r10, 0
   __rc_ok:
     x64.popReg rbp
@@ -111,7 +116,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#2:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at try-block.bare-throw-routed.test:33: alpha escaped\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at try-block.bare-throw-routed.test:38: alpha escaped\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -120,7 +125,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#4:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at try-block.bare-throw-routed.test:34: beta escaped\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at try-block.bare-throw-routed.test:39: beta escaped\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -129,7 +134,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#6:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at try-block.bare-throw-routed.test:35: gamma escaped\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at try-block.bare-throw-routed.test:40: gamma escaped\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -138,7 +143,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at try-block.bare-throw-routed.test:36: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at try-block.bare-throw-routed.test:41: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

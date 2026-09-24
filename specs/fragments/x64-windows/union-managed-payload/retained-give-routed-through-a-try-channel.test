@@ -8,7 +8,11 @@ union M
 	text(body String)
 end 'M'
 
-function grab(m M) returns String throws Fail
+function grab(m M, strict bool) returns String throws Fail
+	if strict 'strict'
+		throw Fail.because("strict")
+	end 'strict'
+
 	return match m 'k'
 		silent gives "a fallback literal long enough to be a real heap string"
 		text(s) gives s
@@ -17,7 +21,7 @@ end 'grab'
 
 function main() returns ExitCode
 	let m = M.text("a payload string routed through a try channel, heap-long")
-	let out = try grab(m) otherwise "an otherwise literal long enough to be a heap string"
+	let out = try grab(m, strict: false) otherwise "an otherwise literal long enough to be a heap string"
 	print(out)
 	return 0
 end 'main'
@@ -45,25 +49,48 @@ func @grab {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 40
+    x64.pushReg r12
+    x64.prologue 32
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc equal, ifcont
+  strict:
+    x64.leaRegRdata rbx, [rip + __str_rec_4]  ; "strict"
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r12 + 0], rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r12 + 8], r8
+    x64.movRegImm32 r8, 0
+    x64.movRegReg r10, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, matchnext
-  matcharm#1:
-    x64.leaRegRdata rcx, [rip + __str_rec_3]  ; "a fallback literal long enough to be a real heap string"
+  matcharm#3:
+    x64.leaRegRdata rcx, [rip + __str_rec_5]  ; "a fallback literal long enough to be a real heap string"
     x64.callDirect __str_retain
     x64.jmp matchcont
   matchnext:
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, matchdead
-  matcharm#2:
+  matcharm#4:
     x64.loadRegBaseDisp.word64 rbx, [rcx + 8]
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_incref
     x64.movRegReg r8, rbx
   matchcont:
     x64.movRegImm32 r10, 0
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -78,7 +105,7 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.prologue 40
-    x64.leaRegRdata rbx, [rip + __str_rec_4]  ; "a payload string routed through a try channel, heap-long"
+    x64.leaRegRdata rbx, [rip + __str_rec_6]  ; "a payload string routed through a try channel, heap-long"
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -88,12 +115,13 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __str_retain
     x64.storeBaseDispReg.word64 [r12 + 8], r8
+    x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, r12
     x64.callDirect grab
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
   tryerr:
-    x64.leaRegRdata rbx, [rip + __str_rec_5]  ; "an otherwise literal long enough to be a heap string"
+    x64.leaRegRdata rbx, [rip + __str_rec_7]  ; "an otherwise literal long enough to be a heap string"
     x64.movRegReg rcx, r10
     x64.callDirect __destruct_Fail
     x64.movRegReg rcx, rbx

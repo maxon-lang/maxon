@@ -1,13 +1,17 @@
 // Test: throws-plain-return-is-guarded
 typealias Integer = int(i64.min to i64.max)
 
+function getValue(v Integer) returns ExitCode throws MatchError
+	if v > 1000 'big'
+		throw MatchError.unmatched
+	end 'big'
+
+	return v
+end 'getValue'
+
 enum MatchError
 	unmatched
 end 'MatchError'
-
-function getValue(v Integer) returns ExitCode throws MatchError
-	return v
-end 'getValue'
 
 function main() returns ExitCode
 	let result = try getValue(-5) otherwise 0
@@ -38,12 +42,17 @@ func @getValue {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
+    x64.cmpRegImm32 rcx, 1000
+    x64.jcc lessEqual, ifcont
+  big:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg rcx, rax
-    x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegImm32 r10, 0
     x64.movRegReg r8, rcx

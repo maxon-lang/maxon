@@ -696,6 +696,10 @@ type Box
 	end 'viaSelf'
 
 	static function checked(n Integer) returns Integer throws BoxError
+		if n < 0 'bad'
+			throw BoxError.negative
+		end 'bad'
+
 		return try Self.viaSelf(n) otherwise panic("self")
 	end 'checked'
 end 'Box'

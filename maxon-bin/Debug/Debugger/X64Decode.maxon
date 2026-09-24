@@ -302,21 +302,21 @@ function decodedOperation(cursor X64Cursor, at X64Offset, address X64Address, ha
 	try cursor.skip(relativeBytes)
 
 	let length = try cursor.spanFrom(at)
-	let instructionClass = try classOf(family, modRmReg: modRmReg, ripRelative: ripRelative)
+	let instructionClass = classOf(family, modRmReg: modRmReg, ripRelative: ripRelative)
 	let taken = condition if instructionClass == DbgClassConditionalJump else 0
 	let target = try targetOf(cursor, at: at, address: address, instructionClass: instructionClass, length: length, relativeBytes: relativeBytes, displacementPosition: displacementPosition)
 
 	return X64Decode.decoded(X64Instruction.create(length, instructionClass: instructionClass, condition: taken, displacementPosition: displacementPosition, target: target))
 end 'decodedOperation'
 
-function classOf(family X64Family, modRmReg X64ModRmField, ripRelative bool) returns X64Class throws X64DecodeError
+function classOf(family X64Family, modRmReg X64ModRmField, ripRelative bool) returns X64Class
 	match family 'which'
 		directCall then return DbgClassDirectCall as X64Class
 		directJump then return DbgClassDirectJump as X64Class
 		conditionalJump then return DbgClassConditionalJump as X64Class
 		returning then return DbgClassReturn as X64Class
 		modRmGroupFive then return groupFiveClass(modRmReg, ripRelative: ripRelative)
-		ordinary then return (DbgClassPcRelativeData if ripRelative else DbgClassPlain) as X64Class
+		ordinary then return dataOperandClass(ripRelative)
 	end 'which'
 end 'classOf'
 
@@ -329,8 +329,12 @@ function groupFiveClass(modRmReg X64ModRmField, ripRelative bool) returns X64Cla
 		return DbgClassIndirectJump as X64Class
 	end 'anIndirectJump'
 
-	return (DbgClassPcRelativeData if ripRelative else DbgClassPlain) as X64Class
+	return dataOperandClass(ripRelative)
 end 'groupFiveClass'
+
+function dataOperandClass(ripRelative bool) returns X64Class
+	return (DbgClassPcRelativeData if ripRelative else DbgClassPlain) as X64Class
+end 'dataOperandClass'
 
 function targetOf(cursor X64Cursor, at X64Offset, address X64Address, instructionClass X64Class, length X64Length, relativeBytes X64Length, displacementPosition X64Length) returns X64Address throws X64DecodeError
 	if instructionClass == DbgClassPcRelativeData 'aRebasedOperand'

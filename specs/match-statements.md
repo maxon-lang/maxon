@@ -873,13 +873,17 @@ enum Err implements Error
 	bad
 end 'Err'
 
-function ok() throws Err
+function ok(strict bool) throws Err
+	if strict 'strict'
+		throw Err.bad
+	end 'strict'
+
 	return
 end 'ok'
 
 function dispatch(kind Tally)
 	match kind 'k'
-		1 then try ok() otherwise panic("unreachable")
+		1 then try ok(false) otherwise panic("unreachable")
 		default panic("unreachable")
 	end 'k'
 end 'dispatch'

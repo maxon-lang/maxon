@@ -4,7 +4,10 @@ enum DrainError implements Error
 end 'DrainError'
 
 function drainThunk() returns StringArray throws DrainError
-	_ = File.exists(FilePath from "noyield.txt")
+	if File.exists(FilePath from "noyield.txt") 'present'
+		throw DrainError.broken
+	end 'present'
+
 	var lines = StringArray.create()
 	lines.push("one")
 	lines.push("two")
@@ -98,12 +101,12 @@ func @drainThunk {
     x64.pushReg r13
     x64.prologue 40
     x64.leaRegRdata rcx, [rip + __str_rec_20]  ; "noyield.txt"
-  __il_body#3:
+  __il_body#5:
     x64.callDirect FilePath.create
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
-  __il_body#6:
+  __il_body#8:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.callDirect String.addressableBytes
     x64.movRegReg r12, r8
@@ -113,9 +116,22 @@ func @drainThunk {
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
     x64.cmpRegImm32 r13, 0
+    x64.setccReg notEqual, r12
   __il_cont:
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_FilePath
+    x64.cmpRegImm32 r12, 0
+    x64.jcc equal, ifcont
+  present:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
     x64.movRegImm32 rcx, 8
     x64.leaRegFunc rdx, [rip + __str_decref]
     x64.callDirect __managed_create

@@ -17,6 +17,10 @@ type Box
 	end 'viaSelf'
 
 	static function checked(n Integer) returns Integer throws BoxError
+		if n < 0 'bad'
+			throw BoxError.negative
+		end 'bad'
+
 		return try Self.viaSelf(n) otherwise panic("self")
 	end 'checked'
 end 'Box'
@@ -66,6 +70,15 @@ func @Box.checked {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc greaterEqual, ifcont
+  bad:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
     x64.callDirect Box.viaSelf
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
@@ -75,7 +88,7 @@ func @Box.checked {
     x64.popReg rbp
     x64.ret
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at a-try-target-may-be-a-keyword-named-receiver.test:20: self\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at a-try-target-may-be-a-keyword-named-receiver.test:24: self\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
@@ -242,7 +255,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, critsplit
   tryerr#8:
-    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at a-try-target-may-be-a-keyword-named-receiver.test:25: oob\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at a-try-target-may-be-a-keyword-named-receiver.test:29: oob\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 120
@@ -257,7 +270,7 @@ func @main {
     x64.movRegReg rbx, r8
     x64.jmp __il_cont#5
   tryerr#2:
-    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at a-try-target-may-be-a-keyword-named-receiver.test:32: parse\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at a-try-target-may-be-a-keyword-named-receiver.test:36: parse\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 120
@@ -269,7 +282,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#4:
-    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at a-try-target-may-be-a-keyword-named-receiver.test:33: checked\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at a-try-target-may-be-a-keyword-named-receiver.test:37: checked\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 120

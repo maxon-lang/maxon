@@ -1065,7 +1065,7 @@ end 'pick'
 
 // --- file: zulu/f.maxon
 export function pick() returns Integer throws Oops
-	return 4
+	return try int.fromString("4") otherwise throw Oops.bad
 end 'pick'
 
 // --- file: app/main.maxon
@@ -1128,7 +1128,7 @@ end 'pick'
 
 // --- file: zulu/f.maxon
 export function pick() returns Integer throws Oops
-	return 4
+	return try int.fromString("4") otherwise throw Oops.bad
 end 'pick'
 
 // --- file: app/main.maxon
@@ -1162,7 +1162,7 @@ end 'pick'
 
 // --- file: zulu/f.maxon
 export function pick() returns Integer throws Oops
-	return 4
+	return try int.fromString("4") otherwise throw Oops.bad
 end 'pick'
 
 // --- file: app/main.maxon
@@ -1194,7 +1194,7 @@ end 'pick'
 
 // --- file: zulu/f.maxon
 export function pick() returns Integer throws Oops
-	return 4
+	return try int.fromString("4") otherwise throw Oops.bad
 end 'pick'
 
 // --- file: app/main.maxon
@@ -1225,7 +1225,7 @@ end 'pick'
 
 // --- file: zulu/f.maxon
 export function pick() returns Integer throws Oops
-	return 4
+	return try int.fromString("4") otherwise throw Oops.bad
 end 'pick'
 
 // --- file: app/main.maxon
@@ -1299,6 +1299,10 @@ module enum Oops implements Error
 end 'Oops'
 
 function pick() throws Oops
+	if File.exists(FilePath from "pick-fails.txt") 'present'
+		throw Oops.bad
+	end 'present'
+
 	print("root pick\n")
 end 'pick'
 

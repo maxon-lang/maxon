@@ -590,20 +590,25 @@ end 'main'
 
 <!-- test: throws-plain-return-is-guarded -->
 ⭐ **THE GENERAL FORM OF THE CASE ABOVE, AND THE ONE THAT NAMES THE REAL TRIGGER.** No `match`, no
-join, no branch — one `return v` in a function whose only distinguishing feature is a `throws` clause.
+join — one `return v`, past a guard the program never trips, in a function whose only distinguishing
+feature is a `throws` clause.
 It is worth more than its `match` sibling because the sibling could be read as a statement about match
 arms, and this cannot be read as anything but a statement about the terminator: `errorReturn` is what a
 throwing function returns through, and a site resolver that knows only `ret` finds nothing to guard.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
+function getValue(v Integer) returns ExitCode throws MatchError
+	if v > 1000 'big'
+		throw MatchError.unmatched
+	end 'big'
+
+	return v
+end 'getValue'
+
 enum MatchError
 	unmatched
 end 'MatchError'
-
-function getValue(v Integer) returns ExitCode throws MatchError
-	return v
-end 'getValue'
 
 function main() returns ExitCode
 	let result = try getValue(-5) otherwise 0

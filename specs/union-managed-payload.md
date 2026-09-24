@@ -1021,7 +1021,11 @@ union M
 	text(body String)
 end 'M'
 
-function grab(m M) returns String throws Fail
+function grab(m M, strict bool) returns String throws Fail
+	if strict 'strict'
+		throw Fail.because("strict")
+	end 'strict'
+
 	return match m 'k'
 		silent gives "a fallback literal long enough to be a real heap string"
 		text(s) gives s
@@ -1030,7 +1034,7 @@ end 'grab'
 
 function main() returns ExitCode
 	let m = M.text("a payload string routed through a try channel, heap-long")
-	let out = try grab(m) otherwise "an otherwise literal long enough to be a heap string"
+	let out = try grab(m, strict: false) otherwise "an otherwise literal long enough to be a heap string"
 	print(out)
 	return 0
 end 'main'
