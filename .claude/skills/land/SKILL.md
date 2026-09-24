@@ -148,7 +148,7 @@ feeding a gate that is going to run anyway beats a run nobody can attribute.
 > A build's inputs are the sources compiled into the compiler; a run's are the binary, the tree and the
 > filter. Same inputs, same answer — so a repeat buys nothing and costs minutes.
 > - **Build only when the binary is STALE** — a compiled-in source (`maxon-bin/**.maxon`) is newer than
->   it: `find maxon-bin -name '*.maxon' -newer maxon-bin/.maxon/maxon.exe | head -1` (`maxon` off
+>   it: `find maxon-bin -type f -name '*.maxon' -newer maxon-bin/.maxon/maxon.exe | head -1` (`maxon` off
 >   Windows) prints nothing when it is current, and a missing binary is stale. ⛔ **Never build "to be
 >   safe"**: `spec-test` and `scale-test` refuse a stale binary by themselves
 >   (`Testing/CompilerFreshness.maxon`). A `stdlib/` or `runtime/` edit needs no build for the SUITE,
