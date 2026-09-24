@@ -41,12 +41,13 @@
 - ensure static/const unions/enums exist in rdata not the heap (like strings)
 - tokenkind should be a type
 - multiline string literals using multiple quotes
-- A misleading diagnostic masks the real one: `var inv = Inventory.create()` then
-  `try inv.apply(3) otherwise return 1`, with `Inventory` declared nowhere, reports only E2015 "`try`
-  must be applied to a call … the expression after `try` is not a call" at the `try` — the parse-time
-  refusal pre-empts E3004 "call to undefined function 'Inventory.create'", which the same program
-  without the `try` statement reports. Seen 2026-09-23 compiling a `main.maxon` alone that used
-  another file's types.
+- `SemanticCheck.traceDeferredDefiner` (SemanticCheck.maxon ~:508) asks "is this callee internal or
+  declared" of `project.funcSignatures`, while the parser's `calleeHasADefinition` asks it of
+  `ProgramSignatures`. Nothing makes the two registries agree, and E3004's tracing of a deferred value
+  depends on the answer. Found by reading, 2026-09-24.
+- `Parser.skipDeferredMemberChain` skips a deferred chain's argument lists without parsing them, so an
+  error inside `c.describe(<bad>)` on a deferred `c` is never reported once E3004 is fixed. Found by
+  reading, 2026-09-24.
 
 ## TODO
 - code coverage during spec tests

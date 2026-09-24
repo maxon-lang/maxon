@@ -3024,7 +3024,7 @@ export function slotStorageType(signatures ProgramSignatures, declared MaxonType
 			float then return declared
 		exitCode then return declared
 		structRef then return declared
-		unresolved then panic("slotStorageType: a slot is declared `unresolved` — `parseTypeReference` produces only `named`, `structRef` and the three primitive keywords, and the one other producer of the sentinel is a VOID callee's result type, which `voidCallResultUsed` refuses to bind; so neither a field declaration nor a captured binding can carry one")
+		unresolved then panic("slotStorageType: a slot is declared `unresolved` — a DECLARED slot type comes from `parseTypeReference`, which produces only `named`, `structRef` and the three primitive keywords, a word slot typed by a VALUE (a cell, a closure's env slot) answers a deferred value at `Parser.wordSlotStorageType` without asking here, and a global's type comes from a top-level initializer, which admits no call to an undeclared function")
 
 		// A String field stores an i64 POINTER, exactly like a struct-ref field — `maxonTypeToStdType`
 		// gives it the machine word. A managed field IS now constructed (`moveInPayload`), and its
@@ -27377,12 +27377,6 @@ export type ProgramSignatures
 		return MaxonType.named(self.typeNames.intern(instanceQualifiedAliasName(name, canonicalInstance: self.canonicalInstanceName(instance))))
 	end 'contestScopedDeclaredType'
 
-	// ⭐ **THE `__ManagedMemory` INSTANCE EVERY COMPILER-SYNTHESIZED BYTE BUFFER WEARS.**
-	// `internArrayByteInstance`'s twin, differing only in its element — see `SynthesizedByteElementName` for
-	// why a compiler-owned element rather than `Byte`, and for the two measurements that chose it. Its
-	// producers are `String.addressableBytes()` (BATCH2 slice 1) and `emitOwnedManagedMemoryResult`'s three
-	// OS runtime entries (`__md_filename`, `__md_current_path`, `__cl_arg`). Not memoized like its twin:
-	// it is asked once per such call site, never on a hot parser path.
 	// ⭐⭐ **THE TYPE A SPAWN'S PROMISE IS BORN WITH — `Promise with T` / `Promise with (T, E)` read off
 	// the CALLEE.** `Parser.emitAsyncCall` mints its result at this instance, which is what makes every
 	// integer position refuse a promise through the type check it already has, rather than through a roster
@@ -27398,9 +27392,13 @@ export type ProgramSignatures
 	// ⚠ **THE RESULT POSITION IS ALWAYS FILLED** — see `PromiseVoidResultName` for why a void thunk gets a
 	// stand-in argument rather than a shorter instance.
 	export function internPromiseInstanceForCallee(callee ByteArray) returns GenericInstanceId
-		// An undeclared callee is typed `Integer` everywhere else this index answers for one
-		// (`Parser.calleeReturnType` says so in as many words), so the promise over it agrees.
-		var args = self.promiseInstanceArgsFor(callee, undeclaredResult: MaxonType.integer)
+		let result = match self.returnTypeOf(callee, into: self.typeNames) 'result'
+			declared(returnType) gives returnType
+			undeclared panic("internPromiseInstanceForCallee: '{String.from(callee)}' is declared by no file — `Parser.mintSpawnPromise` gives such a spawn an `unresolved` value and asks for no instance")
+		end 'result'
+
+		var args = MaxonTypeArray.create()
+		args.push(self.promiseResultArgFor(result))
 
 		let clause = self.throwsOf(callee)
 
@@ -27430,8 +27428,13 @@ export type ProgramSignatures
 		// An undeclared MESSAGE is the compiler's own `<T>.__shutdown` pill — a legal send whose reply really
 		// does carry nothing — which is the one arm where the reply road and the spawn road part.
 		// `Parser.serviceReplyResultType` states the same split in the parser's own interner.
-		var args = self.promiseInstanceArgsFor(messageKey, undeclaredResult: self.promiseResultArgFor(MaxonReturnType.void))
-		try args.set(PromiseResultArgPosition, value: self.replyResultArgThrough(try args.get(PromiseResultArgPosition) otherwise panic("internPromiseInstanceForReply: `promiseInstanceArgsFor` always pushes the result argument first"), messageKey: messageKey, serviceInstance: serviceInstance)) otherwise panic("internPromiseInstanceForReply: args.set OOB at the result position of a list that just answered it")
+		let result = match self.returnTypeOf(messageKey, into: self.typeNames) 'result'
+			declared(returnType) gives returnType
+			undeclared gives MaxonReturnType.void
+		end 'result'
+
+		var args = MaxonTypeArray.create()
+		args.push(self.replyResultArgThrough(self.promiseResultArgFor(result), messageKey: messageKey, serviceInstance: serviceInstance))
 		args.push(MaxonType.named(self.typeNames.intern(self.serviceReplyErrorName(messageKey))))
 		return self.genericInstances.intern(self.typeNames.intern(PromiseTypeName), args: args)
 	end 'internPromiseInstanceForReply'
@@ -27479,21 +27482,6 @@ export type ProgramSignatures
 	export function internGenericInstanceOf(baseName ByteArray, args MaxonTypeArray) returns GenericInstanceId
 		return self.genericInstances.intern(self.typeNames.intern(baseName), args: args)
 	end 'internGenericInstanceOf'
-
-	// The RESULT half of either instance — the half the two roads share, so a reply and a spawn cannot come
-	// to disagree about how a declared or a void thunk is typed. That equality is what
-	// `internPromiseInstanceForCallee`'s header rests the whole storage rule on. Only the UNDECLARED arm
-	// differs, which is why it arrives as an argument rather than being decided here.
-	function promiseInstanceArgsFor(callee ByteArray, undeclaredResult MaxonType) returns MaxonTypeArray
-		var args = MaxonTypeArray.create()
-
-		match self.returnTypeOf(callee, into: self.typeNames) 'result'
-			declared(returnType) then args.push(self.promiseResultArgFor(returnType))
-			undeclared then args.push(undeclaredResult)
-		end 'result'
-
-		return args
-	end 'promiseInstanceArgsFor'
 
 	// The result TYPE ARGUMENT for a promise over a thunk returning `returnType`. Split out so the void
 	// stand-in has exactly one home; see `PromiseVoidResultName`.

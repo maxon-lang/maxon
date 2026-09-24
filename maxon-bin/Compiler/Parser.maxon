@@ -4770,12 +4770,16 @@ function requireCompilerOwnedStaticIsResolvable(typeTok Token, memberTok Token, 
 		return
 	end 'ordinaryQualifier'
 
-	if isCompilerInternalCallee(declaredCallee) or signatures.declaresCallee(declaredCallee) 'theCompilersOwnSymbolOrTheProgramsOwnDeclaration'
+	if calleeHasADefinition(declaredCallee, signatures: signatures) 'theCompilersOwnSymbolOrTheProgramsOwnDeclaration'
 		return
 	end 'theCompilersOwnSymbolOrTheProgramsOwnDeclaration'
 
 	throw ParseError.unsupported(noSuchCompilerOwnedStaticMessage(typeTok, memberTok: memberTok, surfaceClause: "the compiler owns that type name, so a static of its own can only come from the module that declares it or from an `extension` of it, and no declaration of that name exists"), line: memberTok.line, column: memberTok.column)
 end 'requireCompilerOwnedStaticIsResolvable'
+
+function calleeHasADefinition(callee ByteArray, signatures ProgramSignatures) returns bool
+	return isCompilerInternalCallee(callee) or signatures.declaresCallee(callee)
+end 'calleeHasADefinition'
 
 // Every function name this FILE has registered — bare names and mangled overload members alike. THE answer
 // to "is this name already claimed here?", which is the whole contest test `overloadRegistrationNameFor`
@@ -10825,15 +10829,11 @@ union TryTarget
 	// interface's own declared `throws` clause — the only carrier of that fact.
 	witness(methodName ByteArray, throwsClause ThrowsClause)
 
-	// ⭐ An `await` of a promise out of STORAGE (P1.5-B2c): the storage TYPE's name for diagnostics, and the
-	// `throws` clause its `ErrorType` argument spells — the only carrier of that fact, exactly as the
-	// interface's own clause is for a witness. There is no `asyncCall` to recover a callee from: the promise
-	// came out of a container, whose element type is the whole of what is known about it.
-	//
-	// ⚠ **A SPAWN AWAITED DIRECTLY STAYS ON THE `named` ARM, AND THAT IS NOT AN INCONSISTENCY.** It has a
-	// callee name, and a name can be UNDECLARED — `requireThrowingNamedTryTarget` waves that case through so
-	// SemanticCheck's E3004 reports the real mistake rather than an E3055 about a function that does not
-	// exist. A storage type has no such case: its clause is read off the type, which is always there.
+	// An `await` of a promise out of storage: the storage type's name for diagnostics, and the
+	// `throws` clause its `ErrorType` argument spells, the only carrier of that fact — a container
+	// holds no `asyncCall` to recover a callee from. A spawn awaited directly has a callee, so it
+	// takes `named` or `deferred` from `tryTargetOfCallee`, and an undeclared one is reported as E3004
+	// rather than E3055.
 	promise(storageName ByteArray, throwsClause ThrowsClause)
 
 	// ⭐⭐ **A SERVICE REPLY (SV2): the MESSAGE's name, and nothing else.** Unlike `witness` and `promise` it
@@ -10846,6 +10846,10 @@ union TryTarget
 	// can carry it in an ordinary clause — see `caughtErrorFormFor`, which routes them to this arm's dispatch
 	// table by asking the registry rather than by re-deriving anything.
 	serviceReply(messageName ByteArray)
+
+	// A call to a callee nothing defines: its `unresolved` result is a deferral to E3004, so every
+	// door passes it through (see `deferredUnresolvedMemberResult`).
+	deferred
 end 'TryTarget'
 
 // ⭐⭐ **WHAT AN `await` NEEDS TO KNOW ABOUT ITS PROMISE, FROM WHICHEVER SOURCE HAS IT (P1.5-B2c).** A
@@ -10879,6 +10883,7 @@ function tryTargetNoun(target TryTarget, signatures ProgramSignatures) returns B
 		witness(methodName, _) gives methodName
 		promise(storageName, _) gives storageName
 		serviceReply(messageName) gives messageName
+		deferred panic("tryTargetNoun: a deferred `try` target reached a diagnostic about what it produces — `requireCaughtResultIsSpokenFor` returns before asking for one, and `parseTry` asks only of a `void` result, which no deferred target has")
 	end 'kind'
 end 'tryTargetNoun'
 
@@ -10899,11 +10904,7 @@ function tryTargetNamedNoun(callee ByteArray, signatures ProgramSignatures) retu
 		return callee
 	end 'declared'
 
-	// ⚠ **AN UNDECLARED CALLEE REACHING HERE IS ALWAYS A THROWING COMPILER-EMITTED ONE, AND A TYPO CANNOT
-	// ARRIVE — the VOID TAG is what excludes it, not `requireThrowingTryTarget`.** A name no file declares gets
-	// `mintCallResult`'s `ValueTypeTag.unresolved` result, never `void`, so the `voidInValue` test that is the
-	// sole route to this function is false for it and SemanticCheck reports its E3004 undisturbed. That is the
-	// same `returnTypes` table `declaresCallee` reads one line above, so the two cannot come to disagree.
+	// An undeclared callee here is compiler-internal (see `tryTargetOfCallee`).
 	match runtimeCalleeSourceMethod(callee) 'sourceMethod'
 		found(method) then return method
 
@@ -34247,34 +34248,6 @@ export type Parser
 		return tokenCanBeAName(tok) and self.scope.contains(tok.value)
 	end 'rhsIsABareBinding'
 
-	// A member chain off a deferred call result was SKIPPED rather than emitted
-	// (`deferredUnresolvedMemberResult`), so `statementCallsOrAwaits` sees no call op for `_ = c.describe()`
-	// and the discard door would refuse the statement instead of letting E3004 be reported. The spelling is
-	// what is left to go on, which is why this scans the tokens for a `(` rather than asking the ops.
-	function rhsIsADeferredCallMemberAccess(rhsStart TokenIndex) returns bool
-		let tok = self.tokenAt(rhsStart)
-
-		if not tokenCanBeAName(tok) or not self.scope.contains(tok.value) 'notABoundBase'
-			return false
-		end 'notABoundBase'
-
-		if not self.baseBindingIsADeferredCallResult(self.scope.getInfo(tok.value)) 'notADeferredCallResult'
-			return false
-		end 'notADeferredCallResult'
-
-		var q = rhsStart
-
-		while q < self.pos 'scanForACallSpelling'
-			if self.kindAt(q) == TokenKind.leftParen 'aCallWasWritten'
-				return true
-			end 'aCallWasWritten'
-
-			q = (q + 1) as TokenIndex
-		end 'scanForACallSpelling'
-
-		return false
-	end 'rhsIsADeferredCallMemberAccess'
-
 	// Which call produced the right-hand side: the half of E3064's door the parser can answer.
 	// `(_, _) = makePair(10, b: 32)` uses nothing the call produced, so the statement is a call written for an
 	// effect; whether the callee has one is a whole-program question, judged by
@@ -34784,18 +34757,20 @@ export type Parser
 		// any `_ = f(…)`.
 		if nameTok.value.equals(DiscardBindingName) 'discardResult'
 			let discardOpFloor = self.artifact.module.ops.count()
+			let discardDeferralFloor = self.artifact.deferralSources.count()
 			let rhsStart = self.pos
 			let discarded = try self.parseExpression(func, block: block)
 
-			// ⭐⭐ **E3067's `_ =` door — THE DISCARD IS AN OPT-OUT OF A VERDICT ON AN EFFECT, SO THERE MUST BE
-			// ONE.** `_ = 42`, `_ = c.name`, `_ = a + b` and `_ = round(1.5)` each compute a value nothing was
-			// ever going to complain about, so the statement claims an exemption from a rule it is not under
-			// and does nothing whatever. The oracle refuses all four and this matches it, message and column.
+			// E3067's `_ =` door: the discard opts out of a verdict on an effect, so there must be one.
+			// `_ = 42`, `_ = c.name`, `_ = a + b` and `_ = round(1.5)` compute a value nothing would
+			// complain about. A call on a deferred value emits no op, so its `deferralSources` row counts
+			// as one. Any call in the statement counts, as any op does for `statementCallsOrAwaits`, where
+			// the `try` door asks whether the target value itself is a call.
 			//
-			// ⚠ A `void` right-hand side cannot reach here — `_ = f()` on a void callee is E2004 from the
-			// expression itself — so the void guard `recordDiscardedCallResult` carries for the bare-statement
-			// door would be dead weight.
-			if not self.statementCallsOrAwaits(discardOpFloor) and not self.rhsIsABareBinding(rhsStart) and not self.rhsIsADeferredCallMemberAccess(rhsStart) 'nothingWasCalled'
+			// A `void` right-hand side cannot reach here — `_ = f()` on a void callee is E2004 from the
+			// expression itself — so the void guard `recordDiscardedCallResult` carries for the
+			// bare-statement door is not repeated.
+			if not self.statementCallsOrAwaits(discardOpFloor) and not self.rhsIsABareBinding(rhsStart) and not self.artifact.deferralSources.recordsACallAbove(discardDeferralFloor) 'nothingWasCalled'
 				throw ParseError.discardExpectsACall(nameTok.line, column: nameTok.column)
 			end 'nothingWasCalled'
 
@@ -38361,7 +38336,7 @@ export type Parser
 	function routedCallNeverComesBack(routed DiscardedCallee) returns bool
 		return match routed 'routed'
 			notACall gives false
-			named(callee, _) gives self.tryTargetAlwaysThrows(TryTarget.named(callee))
+			named(callee, _) gives self.signatures.functionAlwaysThrows(callee)
 		end 'routed'
 	end 'routedCallNeverComesBack'
 
@@ -38424,15 +38399,17 @@ export type Parser
 		self.currentBlock = self.newDeadBlock(func, label: b"afterdiverge", line: anchor.line)
 	end 'endBlockAfterUnreachableTail'
 
-	// Does this `try` target name a callee that can only ever throw (G18)? Only a DIRECT call has a declaration
-	// to ask about: a witness dispatch resolves to a conformer this call site does not know, and an awaited
-	// promise names a storage type rather than a body — and every uncertainty here must resolve to "it comes
-	// back", which is exactly what those two arms answering `false` gives.
+	// Does this `try` target name a callee that can only ever throw? Only a `named` target has a
+	// declaration to ask about: a witness dispatch resolves to a conformer this call site does not
+	// know, an awaited promise names a storage type rather than a body, and a deferred target names
+	// nothing. Every uncertainty here must resolve to "it comes back", which those arms answering
+	// `false` give.
 	function tryTargetAlwaysThrows(target TryTarget) returns bool
 		return match target 'shape'
 			named(callee) gives self.signatures.functionAlwaysThrows(callee)
-			witness gives false
-			promise gives false
+			witness or
+				promise or
+				deferred gives false
 
 			// ⚠ **A REPLY ALWAYS THROWS `ServiceError` AND STILL ANSWERS `false` HERE, WHICH IS NOT A
 			// CONTRADICTION.** This asks whether the target throws on EVERY path — the fact that lets the ok
@@ -38488,9 +38465,9 @@ export type Parser
 		// sit above it — what `endBlockAfterUnreachableTail` drains if the ok edge turns out to be unreachable
 		// (G18). Read only on that path; every other `try` ignores it.
 		let tempFloor = self.pendingTempDrops.count()
+		let targetDeferralFloor = self.artifact.deferralSources.count()
 		let result = try self.parseTryCallTarget(func)
-		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
-		let target = try self.rewriteLastCallToTryCall(flag, tryTok: tryTok, targetOpFloor: targetOpFloor)
+		let (target, flag) = try self.rewriteLastCallToTryCall(result, tryTok: tryTok, targetDeferralFloor: targetDeferralFloor, targetOpFloor: targetOpFloor)
 
 		try self.requireThrowingTryTarget(target, tryTok: tryTok)
 
@@ -38910,7 +38887,14 @@ export type Parser
 		end 'producer'
 	end 'directCallDefining'
 
-	function rewriteLastCallToTryCall(flag ValueId, tryTok Token, targetOpFloor OpIndex) returns TryTarget throws ParseError
+	function rewriteLastCallToTryCall(target ValueId, tryTok Token, targetDeferralFloor DeferralRowCount, targetOpFloor OpIndex) returns (TryTarget, ValueId) throws ParseError
+		// Asked before `opProducingTheValue`: a deferred chain whose base emits an op of its own (a
+		// captured `var` read through its cell) would otherwise have that unrelated op rewritten as the
+		// target.
+		if self.artifact.deferralSources.lastLinkIsACallAbove(targetDeferralFloor, funcIndex: self.artifact.currentFuncIndex, valueId: target) 'aDeferredCall'
+			return (TryTarget.deferred, self.deferredValueFrom(self.artifact.currentFuncIndex, sourceId: target, chainCalls: DeferredChainCalls.noCall))
+		end 'aDeferredCall'
+
 		// `try (a)`, which emits nothing, and `try (a + b)` are refused with one sentence
 		// (`notACallTryTarget`): to the author they are one mistake, and one sentence keeps the two
 		// spellings from drifting apart. Rewriting in place is what makes nested tries work (`try
@@ -38918,31 +38902,43 @@ export type Parser
 		// is its own call.
 		match self.opProducingTheValue(targetOpFloor) 'producer'
 			noOwnOp then throw self.notACallTryTarget(tryTok)
-			at(opIdx) then return try self.commitTryTargetRewrite(opIdx, flag: flag, tryTok: tryTok)
+			at(opIdx) then return try self.commitTryTargetRewrite(opIdx, tryTok: tryTok)
 		end 'producer'
 	end 'rewriteLastCallToTryCall'
 
-	function commitTryTargetRewrite(opIdx OpIndex, flag ValueId, tryTok Token) returns TryTarget throws ParseError
+	function commitTryTargetRewrite(opIdx OpIndex, tryTok Token) returns (TryTarget, ValueId) throws ParseError
+		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
 		let op = self.routableOpAt(opIdx)
 
 		match op 'rewrite'
 			notRoutable or
-				tryChannelCall then return try self.rejectNonRoutableTryTarget(opIdx, tryTok: tryTok)
+				tryChannelCall then return (try self.rejectNonRoutableTryTarget(opIdx, tryTok: tryTok), flag)
 			call or
 				witness or
-				await then return self.rewriteToTryChannel(opIdx, op: op, flag: flag)
+				await then return (self.rewriteToTryChannel(opIdx, op: op, flag: flag), flag)
 		end 'rewrite'
 	end 'commitTryTargetRewrite'
 
 	function rewriteToTryChannel(opIdx OpIndex, op RoutableOp, flag ValueId) returns TryTarget
 		return match op 'rewrite'
-			call gives TryTarget.named(self.commitTryCallRewrite(opIdx, errorFlag: flag))
+			call gives self.tryTargetOfCallee(self.commitTryCallRewrite(opIdx, errorFlag: flag))
 			witness gives self.commitWitnessTryDispatchRewrite(opIdx, flag: flag)
 			await (result, promise) gives self.commitTryAwaitRewrite(opIdx, result: result, flag: flag, promise: promise)
 			notRoutable or
 				tryChannelCall panic("rewriteToTryChannel: the op at {opIdx} is neither a call, a witness dispatch nor an await — both callers classify it with `routableOpAt` first")
 		end 'rewrite'
 	end 'rewriteToTryChannel'
+
+	// The one builder of `TryTarget.named`, so a `named` callee always has a definition and an
+	// undeclared one is compiler-internal — `tryTargetNamedNoun` and `requireThrowingNamedTryTarget`
+	// rest on that.
+	function tryTargetOfCallee(callee ByteArray) returns TryTarget
+		if calleeHasADefinition(callee, signatures: self.signatures) 'theSignaturesAnswerForIt'
+			return TryTarget.named(callee)
+		end 'theSignaturesAnswerForIt'
+
+		return TryTarget.deferred
+	end 'tryTargetOfCallee'
 
 	function rejectNonRoutableTryTarget(opIdx OpIndex, tryTok Token) returns TryTarget throws ParseError
 		match try self.artifact.module.ops.get(opIdx) otherwise panic("rejectNonRoutableTryTarget: opRef {opIdx} not in module.ops") 'refused'
@@ -39128,13 +39124,16 @@ export type Parser
 			witness(methodName, throwsClause) then try requireThrowingClauseTryTarget(methodName, throwsClause: throwsClause, tryTok: tryTok)
 			promise(storageName, throwsClause) then try requireThrowingClauseTryTarget(storageName, throwsClause: throwsClause, tryTok: tryTok)
 
-			// A reply ALWAYS throws `ServiceError`, whatever the message declares, so there is no
-			// non-throwing reply for E3055 to refuse — `tryTargetThrows` answers `throwing` for every one.
-			serviceReply then break 'kind'
+			// A reply always throws `ServiceError`, whatever the message declares, so there is no
+			// non-throwing reply for E3055 to refuse — `tryTargetThrows` answers `throwing` for every one. A
+			// `deferred` target is the undeclared callee above, left to E3004.
+			serviceReply or
+				deferred then break 'kind'
 		end 'kind'
 	end 'requireThrowingTryTarget'
 
-	// The NAMED half of the check above — a direct callee or an awaited one, asked of the signature index.
+	// The `named` half of the check above. An undeclared callee here is compiler-internal (see
+	// `tryTargetOfCallee`), so the builtin roster answers for it.
 	function requireThrowingNamedTryTarget(callee ByteArray, tryTok Token) throws ParseError
 		if self.signatures.declaresCallee(callee) 'declared'
 			if not throwsClauseIsThrowing(self.signatures.throwsOf(callee)) 'nonThrowing'
@@ -39144,29 +39143,26 @@ export type Parser
 			return
 		end 'declared'
 
-		if isCompilerInternalCallee(callee) 'builtin'
-			if isThrowingRuntimeCallee(callee) 'throwingAccessor'
-				return
-			end 'throwingAccessor'
+		if isThrowingRuntimeCallee(callee) 'throwingAccessor'
+			return
+		end 'throwingAccessor'
 
-			// ⚠ **A DIVISION ANSWERS AS A DIVISION (A1x).** A1x's total remainder is the one non-throwing callee
-			// the author did not write the NAME of — they wrote an operator — so the builtin sentence below would
-			// describe their `mod` as "this builtin call". Asked before it, and only for a division the compiler
-			// expanded: every other `__` callee here is a method or a `print` the author DID spell.
-			let divisionKind = divisionKindOf(callee)
+		// A total remainder is the one non-throwing callee whose name the author did not write — they
+		// wrote an operator — so the builtin sentence below would call their `mod` "this builtin call".
+		// Every other `__` callee here is a method or a `print` the author spelled.
+		let divisionKind = divisionKindOf(callee)
 
-			match divisionKind 'totalDivision'
-				guardedRemainder then throw ParseError.tryOnTotalDivision(divisionOperatorSpellingForKind(divisionKind), line: tryTok.line, column: tryTok.column)
+		match divisionKind 'totalDivision'
+			guardedRemainder then throw ParseError.tryOnTotalDivision(divisionOperatorSpellingForKind(divisionKind), line: tryTok.line, column: tryTok.column)
 
-				// The two `__checked_*` names are throwing and returned above; `notCheckedDivision` is every other
-				// builtin, which the sentence below is for.
-				quotient or
-					remainder then panic("requireThrowingNamedTryTarget: '{String.from(callee)}' is a THROWING division, so `isThrowingRuntimeCallee` must have accepted the `try` already — reaching here means `divisionKindThrows` and that predicate disagree")
-				notCheckedDivision then break 'totalDivision'
-			end 'totalDivision'
+			// The two `__checked_*` names are throwing and returned above; `notCheckedDivision` is every other
+			// builtin, which the sentence below is for.
+			quotient or
+				remainder then panic("requireThrowingNamedTryTarget: '{String.from(callee)}' is a THROWING division, so `isThrowingRuntimeCallee` must have accepted the `try` already — reaching here means `divisionKindThrows` and that predicate disagree")
+			notCheckedDivision then break 'totalDivision'
+		end 'totalDivision'
 
-			throw ParseError.tryOnNonThrowingBuiltin(tryTok.line, column: tryTok.column)
-		end 'builtin'
+		throw ParseError.tryOnNonThrowingBuiltin(tryTok.line, column: tryTok.column)
 	end 'requireThrowingNamedTryTarget'
 
 	function notACallTryTarget(tryTok Token) returns ParseError
@@ -40496,7 +40492,8 @@ export type Parser
 		match target 'kind'
 			named or
 				witness or
-				promise then break 'kind'
+				promise or
+				deferred then break 'kind'
 			serviceReply(messageName) then return self.serviceReplyCaughtForm(messageName, flag: flag)
 		end 'kind'
 
@@ -41574,6 +41571,7 @@ export type Parser
 			witness(_, throwsClause) gives throwsClause
 			promise(_, throwsClause) gives throwsClause
 			serviceReply(messageName) gives ThrowsClause.throwing(String.from(self.signatures.serviceReplyErrorName(messageName)))
+			deferred gives ThrowsClause.none
 		end 'kind'
 	end 'tryTargetThrows'
 
@@ -45272,6 +45270,14 @@ export type Parser
 	// `if try` parsed and `tryTargetNoun` + `String.from` allocate: the two refusals are cold, and a
 	// diagnostic's words must not be paid for by the programs that have nothing wrong with them.
 	function requireCaughtResultIsSpokenFor(result ValueId, target TryTarget, binder IfBinder, tryTok Token) throws ParseError
+		match target 'kind'
+			deferred then return
+			named or
+				witness or
+				promise or
+				serviceReply then break 'kind'
+		end 'kind'
+
 		let producesNothing = self.tagOf(result) == ValueTypeTag.void
 		let bound = match binder 'b'
 			none gives false
@@ -45306,9 +45312,9 @@ export type Parser
 		let tryTok = try self.consume(TokenKind.try)
 
 		let targetOpFloor = self.artifact.module.ops.count()
+		let targetDeferralFloor = self.artifact.deferralSources.count()
 		let result = try self.parseTryCallTarget(func)
-		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
-		let target = try self.rewriteLastCallToTryCall(flag, tryTok: tryTok, targetOpFloor: targetOpFloor)
+		let (target, flag) = try self.rewriteLastCallToTryCall(result, tryTok: tryTok, targetDeferralFloor: targetDeferralFloor, targetOpFloor: targetOpFloor)
 		try self.requireThrowingTryTarget(target, tryTok: tryTok)
 		try self.requireCaughtResultIsSpokenFor(result, target: target, binder: binder, tryTok: tryTok)
 		try self.recordCatchingDiscard(binder, opFloor: targetOpFloor)
@@ -45938,7 +45944,7 @@ export type Parser
 			for i in 0 upto nameToks.count() 'eachDeferredName'
 				let deferredNameTok = try nameToks.get(i) otherwise panic("declareDestructuredLoopVariables: nameToks.get OOB at {i} below count {nameToks.count()}")
 
-				try self.declareLoopVariable(func, nameTok: deferredNameTok, value: self.deferredValueFrom(self.artifact.currentFuncIndex, sourceId: loopValue), bodyEndIndex: bodyEndIndex)
+				try self.declareLoopVariable(func, nameTok: deferredNameTok, value: self.deferredValueFrom(self.artifact.currentFuncIndex, sourceId: loopValue, chainCalls: DeferredChainCalls.noCall), bodyEndIndex: bodyEndIndex)
 			end 'eachDeferredName'
 
 			return
@@ -46037,6 +46043,7 @@ export type Parser
 		// (`absorbThrowingCursorSource`) nor a release of the claimed op (`releaseHeldThrowingOp`) may
 		// reach below it, so neither touches a call the previous statement emitted.
 		let sourceOpFloor = self.artifact.module.ops.count()
+		let sourceDeferralFloor = self.artifact.deferralSources.count()
 
 		// `var` for the ONE rewrite a collection source can undergo: a `Map` is replaced by its materialized
 		// entries below, which is what makes every question after this point an ARRAY's question.
@@ -46211,7 +46218,7 @@ export type Parser
 			// the token the USER wrote — so `for pair in m` locks `m` and blames `m`, not a temporary that has
 			// no name in the source at all. See `materializeIterableIterationSource` for why the ENTRY SEED
 			// travels with the cursor.
-			let iterable = try self.materializeIterableIterationSource(source, sourceOpFloor: sourceOpFloor, forTok: forTok)
+			let iterable = try self.materializeIterableIterationSource(source, sourceDeferralFloor: sourceDeferralFloor, sourceOpFloor: sourceOpFloor, forTok: forTok)
 			source = match iterable 'walkedValue'
 				notIterable gives source
 				cursor(iterator, _) gives iterator
@@ -46438,7 +46445,7 @@ export type Parser
 		// `unresolved`, where an `int` element earns a refusal of its own — a destructuring pattern rejects
 		// "a 'int' element", a method call "'int' has no method" — in front of E3004.
 		match src.deferredSource 'deferredCallElement'
-			value(sourceFuncIndex, sourceId) then loopValue = self.deferredValueFrom(sourceFuncIndex, sourceId: sourceId)
+			value(sourceFuncIndex, sourceId) then loopValue = self.deferredValueFrom(sourceFuncIndex, sourceId: sourceId, chainCalls: DeferredChainCalls.noCall)
 			none then break 'deferredCallElement'
 		end 'deferredCallElement'
 
@@ -47002,6 +47009,7 @@ export type Parser
 		// The floor `rewriteLastCallToTryCall` measures "the target's own op" against — see `parseTry`, which
 		// captures it at the same point and for the same reason.
 		let targetOpFloor = self.artifact.module.ops.count()
+		let targetDeferralFloor = self.artifact.deferralSources.count()
 
 		// Claimed for every destination: this function rewrites the call into the try channel itself, so
 		// no router may rewrite it first, or `rewriteLastCallToTryCall` would meet a `tryCall` it must
@@ -47009,8 +47017,7 @@ export type Parser
 		let savedRouteClaim = self.swapClaim(ThrowRouteClaim.everyDestination)
 		let value = try self.emitReceiverProtocolCall(surface, methodName: methodName, anchor: anchor, resultUsed: resultUsed)
 		self.restoreClaim(savedRouteClaim)
-		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
-		_ = try self.rewriteLastCallToTryCall(flag, tryTok: anchor, targetOpFloor: targetOpFloor)
+		let (_, flag) = try self.rewriteLastCallToTryCall(value, tryTok: anchor, targetDeferralFloor: targetDeferralFloor, targetOpFloor: targetOpFloor)
 		return (value, flag)
 	end 'emitProtocolTryCall'
 
@@ -47048,7 +47055,7 @@ export type Parser
 	// constructor throw `exhausted` for an empty collection — so the factory's own error flag becomes the
 	// value the header starts from, and the loop's ordinary exit test does the rest. An INFALLIBLE factory
 	// cannot report emptiness at all, so its seed is the literal 0 the bare cursor form uses.
-	function materializeIterableIterationSource(source ValueId, sourceOpFloor OpIndex, forTok Token) returns IterableIterationSource throws ParseError
+	function materializeIterableIterationSource(source ValueId, sourceDeferralFloor DeferralRowCount, sourceOpFloor OpIndex, forTok Token) returns IterableIterationSource throws ParseError
 		// The surface gate is `methodSurfaceOf`'s and is there for its reason: a source with no
 		// method surface has no `createIterator` to find, and no store to ask for one.
 		let surface = self.methodSurfaceOf(source)
@@ -47059,7 +47066,7 @@ export type Parser
 		end 'theLoopAbsorbsNothing'
 
 		if alreadyACursor 'walksItself'
-			return try self.absorbThrowingCursorSource(source, sourceOpFloor: sourceOpFloor, forTok: forTok)
+			return try self.absorbThrowingCursorSource(source, sourceDeferralFloor: sourceDeferralFloor, sourceOpFloor: sourceOpFloor, forTok: forTok)
 		end 'walksItself'
 
 		// ⭐⭐ **AN `Array` INSTANCE IS NOT REWRITTEN — THE LOOP WALKS ITS BUFFER WITH A COUNTER (EC3).** The
@@ -47140,13 +47147,12 @@ export type Parser
 	// `call` for this rewrite. A call an enclosing `try` block routed at emission is no longer a
 	// `call`, so `sourceCameFromAnIterationThrowingCall` does not match it and it is left alone: the
 	// author asked for that handler by writing the block.
-	function absorbThrowingCursorSource(source ValueId, sourceOpFloor OpIndex, forTok Token) returns IterableIterationSource throws ParseError
+	function absorbThrowingCursorSource(source ValueId, sourceDeferralFloor DeferralRowCount, sourceOpFloor OpIndex, forTok Token) returns IterableIterationSource throws ParseError
 		if not self.sourceCameFromAnIterationThrowingCall(source, sourceOpFloor: sourceOpFloor) 'nothingToAbsorb'
 			return IterableIterationSource.notIterable
 		end 'nothingToAbsorb'
 
-		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
-		_ = try self.rewriteLastCallToTryCall(flag, tryTok: forTok, targetOpFloor: sourceOpFloor)
+		let (_, flag) = try self.rewriteLastCallToTryCall(source, tryTok: forTok, targetDeferralFloor: sourceDeferralFloor, targetOpFloor: sourceOpFloor)
 		return IterableIterationSource.cursor(source, entrySeed: flag)
 	end 'absorbThrowingCursorSource'
 
@@ -76887,11 +76893,19 @@ export type Parser
 	// `(returns, throws)` pair, so the storage rule cannot come to mean two different things by road.
 	function requirePromiseStorageDescribesSource(source AsyncCalleeLookup, cell ValueId, storage GenericInstanceId, anchor Token) throws ParseError
 		match source 'road'
-			found(callee) then try self.requirePromiseStorageDescribes(self.calleeReturnType(callee), throwsClause: self.signatures.throwsOf(callee), subject: PromiseStorageSubjectIsTheCallee, storage: storage, anchor: anchor)
+			found(callee) then try self.requirePromiseStorageDescribesSpawn(callee, storage: storage, anchor: anchor)
 			serviceReply(messageName) then try self.requirePromiseStorageDescribesReply(messageName, cell: cell, storage: storage, anchor: anchor)
 			none then panic("requirePromiseStorageDescribesSource: `promiseSourceStoredHere` throws on `none` and is this function's only caller")
 		end 'road'
 	end 'requirePromiseStorageDescribesSource'
+
+	function requirePromiseStorageDescribesSpawn(callee ByteArray, storage GenericInstanceId, anchor Token) throws ParseError
+		if not self.signatures.declaresCallee(callee) 'undeclaredCallee'
+			return
+		end 'undeclaredCallee'
+
+		try self.requirePromiseStorageDescribes(self.calleeReturnType(callee), throwsClause: self.signatures.throwsOf(callee), subject: PromiseStorageSubjectIsTheCallee, storage: storage, anchor: anchor)
+	end 'requirePromiseStorageDescribesSpawn'
 
 	// ⭐⭐ **EVERY REPLY MAY BE STORED SINCE SV4, AND THIS DOOR USED TO REFUSE HALF OF THEM.** It carried an
 	// arm reading *"a reply from 'X' throws 'X.errors' — two members with no declaration between them — so no
@@ -78449,7 +78463,7 @@ export type Parser
 	function parseFieldAssignment(func IrFunction, block IrBlock) throws ParseError
 		if (try self.chainBaseDeferralSource()).isDeferred() 'deferredCallError'
 			self.advance()
-			self.skipDeferredMemberChain()
+			_ = self.skipDeferredMemberChain()
 			try self.consume(TokenKind.equals)
 			_ = try self.parseExpression(func, block: block)
 			return
@@ -80623,7 +80637,7 @@ export type Parser
 
 	function carryCapturedDeferral(binding VarInfo, captured ValueId)
 		match self.deferralSourceOfBinding(binding, frame: self.enclosingFrameFuncIndex()) 'deferredBinding'
-			value(sourceFuncIndex, sourceId) then self.artifact.recordDeferralSource(captured, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId)
+			value(sourceFuncIndex, sourceId) then self.artifact.recordDeferralSource(captured, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId, chainCalls: DeferredChainCalls.noCall)
 			none then break 'deferredBinding'
 		end 'deferredBinding'
 	end 'carryCapturedDeferral'
@@ -82452,38 +82466,30 @@ export type Parser
 		self.markCapturingClosure(closureValue, env: env)
 	end 'buildClosureEnv'
 
-	// ⭐ **THE WIDTH OF ONE FULL-WORD SLOT — `fieldStorageType`, except that an `exitCode` occupies a FULL
-	// MACHINE WORD.** The one door for every store and load into a slot that has no neighbour to pack against:
-	// a closure ENV slot (`buildClosureEnv` / `emitCaptureRead`) and a PBR-2 CELL (`emitCellLoad` /
-	// `emitCellStore`). They address the same kind of slot, so a second spelling is a silent corruption of it.
+	// The width of one full-word slot: `fieldStorageType`, except that an `exitCode` occupies the
+	// whole machine word. It is the one door for every store and load into a slot with no neighbour to
+	// pack against — a closure env slot (`buildClosureEnv`, `emitCaptureRead`) and a PBR-2 cell
+	// (`emitCellLoad`, `emitCellStore`) — so a second spelling would silently corrupt the slot.
 	//
-	// An env slot is `EnvSlotBytes` wide BY CONSTRUCTION — `envSlotOffset` strides by it — so unlike a struct
-	// field there is no packing to respect: a scalar capture has a whole word to itself whatever its declared
-	// width. `exitCode` is the ONE scalar whose `StdType` is narrower than the word (u32), and `accessWidthFor`
-	// refuses a u32 memory access outright. That refusal is deliberate and it is about a DIFFERENT question: a
-	// narrow SIGNED integer's load form depends on its signedness, which is P1.9's `as` cast. It does not reach
-	// here — the slot is a word and the value is UNSIGNED, so zero-extension is unambiguous, the IDENTICAL
-	// reason `accessWidthFor` already admits `u8` one line above the refusal. The machine word is the slot's
-	// real width, not a widening hack.
+	// An env slot is `EnvSlotBytes` wide by construction (`envSlotOffset` strides by it). `exitCode`
+	// is the one scalar whose `StdType` (u32) is narrower than the word, and `accessWidthFor` refuses
+	// a u32 memory access; the value is unsigned, so a word access zero-extends it unambiguously. Not
+	// folded into `fieldStorageType`: a struct field is packed against its neighbours, and widening it
+	// there would move every following field.
 	//
-	// ⚠ **NOT folded into `fieldStorageType`.** A STRUCT field is packed against its neighbours, so it may
-	// legitimately want 4 bytes the day u32 memory access lands, and widening it there would move every
-	// following field. The env slot has no neighbour constraint.
-	//
-	// ⭐⭐ **TWO ENTRANCES, ONE SINK — AND W1 OPENED ONLY ONE OF THEM.** W1 was right to make a function
-	// alias's `ExitCode` return a real `exitCode`; that is what fixed the wasm functype. But
-	// `mintIndirectCallResult` types an indirect call's SSA RESULT from the same `functionAliasReturnType`, so
-	// the result VALUE became `exitCode`-tagged too and a capture of it reached this store — W1 guarded the
-	// SIGNATURE column and the VALUE column came along with it. The OTHER entrance is older:
-	// `interfaceReturnMaxonType` has minted `exitCode` results since P1.7a, so an interface method
-	// `returns ExitCode` whose result is captured panicked before W1 as well. Fixing either DOOR would have
-	// left the other live, which is why the fix is at the SINK. Probed: struct-field assign, array push,
-	// loop-carried var, plain return and direct call never reach a width door with a value's own tag.
-	//
-	// Pinned by `closure-capture.capture-exitcode-from-alias-call`, `.capture-exitcode-from-interface-method`
-	// and `.capture-exitcode-wide-value` — the last because the first two carry `9`, which survives even a
-	// 1-byte slot, so they pin THAT the capture works and not the width it works at.
+	// An `exitCode` value arrives from two producers — an indirect call through a function alias
+	// (`mintIndirectCallResult`) and an interface method (`interfaceReturnMaxonType`) — so the
+	// widening is at this sink rather than at either. Pinned by
+	// `closure-capture.capture-exitcode-from-alias-call`, `.capture-exitcode-from-interface-method`
+	// and `.capture-exitcode-wide-value`; only the last carries a value wider than one byte, so only
+	// it pins the width.
 	function wordSlotStorageType(declared MaxonType) returns MaxonType
+		// An `unresolved` value comes only from an undeclared callee, and E3004 rejects the program
+		// before anything lowers, so no width is ever read off it; `slotStorageType` panics on one.
+		if tagIsUnresolved(maxonTypeTag(declared)) 'aDeferredValue'
+			return declared
+		end 'aDeferredValue'
+
 		let stored = self.fieldStorageType(declared)
 
 		return MaxonType.integer if maxonTypeTag(stored) == ValueTypeTag.exitCode else stored
@@ -89326,7 +89332,7 @@ export type Parser
 		// both gates, so only arguments that fit the channel are ever transferred — and after
 		// `fillOmittedArgDefaults`, so a MANAGED default is transferred exactly as a written argument is.
 		try self.transferAsyncSpawnArgs(args, anchor: anchor)
-		let result = self.mintValue(ValueTypeTag.genericInstance, nameId: self.signatures.internPromiseInstanceForCallee(callee) as TypeNameId)
+		let result = self.mintSpawnPromise(callee)
 		self.markValuePromise(result)
 
 		// ⭐ P1.5-B2 #88: the spawn OWNS a green thread. Enrol it as a statement-scoped pending temporary,
@@ -89342,13 +89348,19 @@ export type Parser
 		return result
 	end 'emitAsyncCall'
 
-	// Refuse a `async callee(…)` whose awaited RESULT is not scalar-or-void (a managed/float result has no
-	// GPR channel). It asks `asyncCarriedResultTag`, NOT the raw pre-resolution tag: `returnTypeOf` answers
-	// before resolution, so `returns Integer` over a ranged int alias arrives as a bare `named` — the same
-	// tag a `String` and a struct arrive with — and asking the tag directly refused a result that fits the
-	// R8 channel exactly. A union/struct return is still `named`/`structRef` after the alias resolution and
-	// is still refused; an UNDECLARED callee defers to SemanticCheck's E3004 (its `integer` placeholder
-	// passes). Void passes (P1.5-B2b — the awaiter discards a void async's R8 garbage).
+	function mintSpawnPromise(callee ByteArray) returns ValueId
+		if not self.signatures.declaresCallee(callee) 'undeclaredCallee'
+			return self.mintValue(ValueTypeTag.unresolved, nameId: UnnamedTypeId)
+		end 'undeclaredCallee'
+
+		return self.mintValue(ValueTypeTag.genericInstance, nameId: self.signatures.internPromiseInstanceForCallee(callee) as TypeNameId)
+	end 'mintSpawnPromise'
+
+	// Refuse an `async callee(…)` whose awaited result has no GPR channel (`tagRidesAsyncGprChannel`).
+	// It asks `asyncCarriedResultTag`, not the raw tag: `returnTypeOf` answers before alias
+	// resolution, so a ranged int alias arrives as the same `named` a `String` and a struct do. An
+	// undeclared callee's `unresolved` result passes, leaving the program to E3004. Void passes: the
+	// awaiter discards a void async's R8.
 	function requireAsyncResult(callee ByteArray, anchor Token) throws ParseError
 		let resultTag = self.asyncCarriedResultTag(callee)
 
@@ -89444,17 +89456,17 @@ export type Parser
 		end 'fromStorage'
 
 		match source 'callee'
-			found(callee) then return AwaitedPromise.create(self.calleeReturnType(callee), tryTarget: TryTarget.named(callee))
+			found(callee) then return AwaitedPromise.create(self.calleeReturnType(callee), tryTarget: self.tryTargetOfCallee(callee))
 			serviceReply then panic("awaitedPromiseFacts: promise v{promise} took the reply arm above, which returns")
 			none then panic("awaitedPromiseFacts: promise v{promise} is neither a stored promise nor defined by an `asyncCall` or a `serviceReplyCell` — `valueIsPromise` admits exactly those three, and every caller gates on it")
 		end 'callee'
 	end 'awaitedPromiseFacts'
 
-	// ⭐ **WHAT `await <reply>` YIELDS.** The message's declared return type, repaired through the same swept
-	// walk `calleeReturnType` uses — and VOID for a message nothing declares, which is the compiler's own
-	// `<T>.shutdown` pill rather than a doomed program. That is the one place the two differ:
-	// `calleeReturnType`'s undeclared arm is an `integer` PLACEHOLDER for a program SemanticCheck is about to
-	// reject with E3004, and the pill is a legal send whose reply really does carry nothing.
+	// What `await <reply>` yields: the message's declared return type, repaired through the same swept
+	// walk `calleeReturnType` uses. A message nothing declares is the compiler's own `<T>.shutdown`
+	// pill, a legal send whose reply carries nothing, so it answers void — the one place the two
+	// differ, since `calleeReturnType`'s undeclared arm answers `unresolved` for a program E3004
+	// rejects.
 	function serviceReplyResultType(messageName ByteArray, cell ValueId) returns MaxonReturnType
 		return match self.signatures.returnTypeOf(messageName, into: self.artifact.typeNames) 'r'
 			declared(declaredReturn) gives self.fixedReplyResultType(declaredReturn, messageName: messageName, cell: cell)
@@ -89509,39 +89521,28 @@ export type Parser
 		return self.rangedAliasResolvedTag(self.tagOf(value), nameId: self.valueNameId(value)).name
 	end 'awaitOperandKindName'
 
-	// The declared return type of `callee`, VOID included (an undeclared callee → an `integer` placeholder,
-	// its doomed program rejected before lowering by SemanticCheck's E3004). **THE ONE REGISTRY READ both
-	// async result questions are answered from** — what TAGS the await's result value (`calleeReturnTag`)
-	// and what the spawn's result channel must CARRY (`asyncCarriedResultTag`) — so the two cannot come to
-	// disagree about which callee they are describing.
+	// The declared return type of `callee`, void included, and `unresolved` for an undeclared callee —
+	// the deferral its direct call's result gets, so an `async` of it reaches E3004 as the call does.
+	// The one registry read both async result questions are answered from — the type the await's
+	// result carries (`awaitedPromiseFacts`) and what the spawn's result channel must carry
+	// (`asyncCarriedResultTag`) — so the two cannot come to describe different callees.
 	//
-	// ⭐⭐ **AND IT IS A SWEPT TYPE, SO IT IS REPAIRED HERE — THE ASYNC ROAD'S HALF OF THE ONE THE ORDINARY
-	// CALL ALREADY TAKES.** The whole-program sweep records a return type before the aliases are known
-	// (`parseTypeReference`'s generic-alias arm is gated on `allFilesFolded`, and `adoptType` re-interns by
-	// NAME), so `returns StringArray` arrives here as a bare `named`. An ordinary call's result is repaired
-	// at its READ door (`mintOwnedCallResult` → `repairSweptType`) and the await road was not: `await`ing
-	// such a spawn bound a `named` value under a name no member read could resolve — MEASURED as
-	// `E3011: Unknown type 'StringArray'` at the first `.count()` on it.
+	// The whole-program sweep records a return type before the aliases are known
+	// (`parseTypeReference`'s generic-alias arm is gated on `allFilesFolded`, and `adoptType`
+	// re-interns by name), so `returns StringArray` arrives here as a bare `named` and is repaired
+	// here, as an ordinary call's result is at its read door (`mintOwnedCallResult` →
+	// `repairSweptType`). `requirePromiseStorageResult` resolves the claimed type through
+	// `resolvedSlotType` and compares it with this answer, so repairing at this one read is what keeps
+	// both sides of that comparison the same question.
 	//
-	// ⚠ **THE STORAGE-AGREEMENT CHECK IS THE SECOND ASKER, AND IT WAS COMPARING ONE REPAIRED SIDE AGAINST
-	// ONE RAW ONE.** `requirePromiseStorageResult` resolves the CLAIMED type through `resolvedSlotType` and
-	// read the RETURNED one from here unrepaired, so `Promise with (StringArray, …)` was refused with
-	// *"this promise's function returns 'int'"* — a type the program does not contain. Repairing at this ONE
-	// read is what makes both sides the same question; repairing at `emitAwaitOp` alone would have left the
-	// refusal saying `int`.
-	//
-	// ⚠ A RANGED int alias is deliberately untouched by the repair (`repairSweptType` resolves a struct, a
-	// float alias, a function alias, a generic alias or a tuple alias — never a ranged int), so
-	// `calleeReturnTag` keeps the `named` tag its own header requires and the alias name stays available to
-	// every downstream range check. That is why the ranged spelling compiled the whole time
-	// (`async-await.ranged-alias-result-control`) while this one did not.
+	// A ranged int alias is untouched by the repair (`repairSweptType` never resolves one), so the
+	// await's result keeps its `named` tag and the alias name stays available to every downstream
+	// range check.
 	function calleeReturnType(callee ByteArray) returns MaxonReturnType
-		let swept = match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'r'
-			declared(returnType) gives returnType
-			undeclared gives MaxonReturnType.value(MaxonType.integer)
+		return match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'r'
+			declared(returnType) gives self.repairSweptReturnType(returnType, scopeFilePath: self.signatures.recordedReturnDeclFileOf(callee))
+			undeclared gives MaxonReturnType.value(MaxonType.unresolved)
 		end 'r'
-
-		return self.repairSweptReturnType(swept, scopeFilePath: self.signatures.recordedReturnDeclFileOf(callee))
 	end 'calleeReturnType'
 
 	// The swept-type repair applied to a RETURN type — see `calleeReturnType`'s header for the two wrong
@@ -89554,25 +89555,15 @@ export type Parser
 		end 'repair'
 	end 'repairSweptReturnType'
 
-	// The declared return type of `callee` as a value tag, VOID included. The tag that TYPES the awaited
-	// value, so a ranged alias deliberately stays `named` here — see `asyncCarriedResultTag`.
-	function calleeReturnTag(callee ByteArray) returns ValueTypeTag
-		return returnTypeTagOrVoid(self.calleeReturnType(callee))
-	end 'calleeReturnTag'
-
-	// ⭐ **WHAT THE SPAWN'S RESULT CHANNEL ACTUALLY CARRIES** — `calleeReturnTag`'s answer with a ranged
-	// alias REDUCED to the primitive it underlies (`Integer` → `integer`, `Percent` → `float`). Void
-	// answers `void`, which the gate admits.
+	// What the spawn's result channel carries: `calleeReturnType`'s answer with a ranged alias reduced
+	// to the primitive it underlies (`Integer` → `integer`, `Percent` → `float`). Void answers `void`,
+	// which the gate admits.
 	//
-	// ⚠ **IT IS DELIBERATELY NOT `calleeReturnTag`, AND COLLAPSING THE TWO WOULD LOSE THE ALIAS.**
-	// `calleeReturnTag` TYPES the await's result value, and a ranged-int result must keep its `named` tag
-	// there or the alias name is gone and every downstream reader of it — `declaredAliasOfValue`, the
-	// range-check sites — sees a plain unaliased int. The REFUSAL below asks the opposite question, which
-	// register file the result travels in, and `named` is far too coarse to answer that: it covers a
-	// `String`, a struct AND `typealias Integer = int(i64.min to i64.max)` alike. Refusing all three
-	// together is why nearly every case in `specs/async-await.md` was rejected for a channel its `Integer`
-	// result fits exactly — the alias resolver this now asks through (`rangedAliasResolvedTag`) had existed
-	// the whole time and was simply never wired to this door.
+	// ⚠ Kept apart from the type the await's result carries (`awaitedPromiseFacts`), which must keep a
+	// ranged int's `named` tag or every downstream reader of the alias — `declaredAliasOfValue`, the
+	// range-check sites — sees a plain int. The refusal asks which register file the result travels
+	// in, and `named` is too coarse for that: it covers a `String`, a struct and a ranged-int alias
+	// alike.
 	function asyncCarriedResultTag(callee ByteArray) returns ValueTypeTag
 		return match self.calleeReturnType(callee) 'r'
 			void gives ValueTypeTag.void
@@ -89697,7 +89688,8 @@ export type Parser
 		match facts.tryTarget 'target'
 			named or
 				witness or
-				promise then return
+				promise or
+				deferred then return
 			serviceReply(messageName) then self.artifact.recordServiceAwaitSite(ServiceAwaitSite.create(serviceTypeOfMessage(self.signatures, messageName: messageName), line: awaitTok.line, column: awaitTok.column, declFilePath: self.filePath))
 		end 'target'
 	end 'recordServiceReplyAwait'
@@ -90625,9 +90617,9 @@ export type Parser
 	// `__ManagedSocket`, `__ManagedDirectory`) still throw, which only a file allowed to spell those names
 	// reaches.
 	function deferredUnresolvedMemberResult(sourceFuncIndex FuncIndex, sourceId ValueId) returns ValueId
-		self.skipDeferredMemberChain()
+		let chainCalls = self.skipDeferredMemberChain()
 
-		return self.deferredValueFrom(sourceFuncIndex, sourceId: sourceId)
+		return self.deferredValueFrom(sourceFuncIndex, sourceId: sourceId, chainCalls: chainCalls)
 	end 'deferredUnresolvedMemberResult'
 
 	function deferredMemberResultPastTheBase(sourceFuncIndex FuncIndex, sourceId ValueId) returns ValueId
@@ -90636,9 +90628,9 @@ export type Parser
 		return self.deferredUnresolvedMemberResult(sourceFuncIndex, sourceId: sourceId)
 	end 'deferredMemberResultPastTheBase'
 
-	function deferredValueFrom(sourceFuncIndex FuncIndex, sourceId ValueId) returns ValueId
+	function deferredValueFrom(sourceFuncIndex FuncIndex, sourceId ValueId, chainCalls DeferredChainCalls) returns ValueId
 		let derived = self.mintValue(ValueTypeTag.unresolved, nameId: UnnamedTypeId)
-		self.artifact.recordDeferralSource(derived, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId)
+		self.artifact.recordDeferralSource(derived, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId, chainCalls: chainCalls)
 
 		return derived
 	end 'deferredValueFrom'
@@ -90655,15 +90647,22 @@ export type Parser
 		return try self.closureEnclosingFuncIndices.get(self.closureEnclosingFuncIndices.count() - 1) otherwise panic("enclosingFrameFuncIndex: asked for a capture's frame outside any closure body — `captureScopeOf` finds an enclosing scope only while one is pushed")
 	end 'enclosingFrameFuncIndex'
 
-	function skipDeferredMemberChain()
+	function skipDeferredMemberChain() returns DeferredChainCalls
+		var chainCalls = DeferredChainCalls.noCall
+
 		while self.at(TokenKind.dot) 'chain'
 			self.advance()
 			self.advance()
 
 			if self.at(TokenKind.leftParen) 'anArgumentList'
 				self.pos = (self.groupCloserAt(self.pos) + 1) as TokenIndex
-			end 'anArgumentList'
+				chainCalls = DeferredChainCalls.lastLinkIsACall
+			end 'anArgumentList' else if chainCalls == DeferredChainCalls.lastLinkIsACall 'aMemberAfterACall'
+				chainCalls = DeferredChainCalls.callBeforeTheLastLink
+			end 'aMemberAfterACall'
 		end 'chain'
+
+		return chainCalls
 	end 'skipDeferredMemberChain'
 
 	function baseBindingIsADeferredCallResult(binding VarInfo) returns bool

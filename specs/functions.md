@@ -491,6 +491,366 @@ end 'main'
 error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
 ```
 
+<!-- test: unknown-function-result-method-call-under-try -->
+A `try` over a method called on the result names the CALL. The member call is a call even though its
+receiver's type is unknown, so it is not refused as "not a call" ahead of E3004.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	try c.describe() otherwise return 1
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-method-call-under-try-with-a-fallback-value -->
+The same `try` as a value with a fallback names the CALL.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	let d = try c.describe() otherwise 0
+	print("{d}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-method-call-under-if-try -->
+An `if let … = try` over a method called on the result names the CALL.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	if let d = try c.describe() 'ok'
+		print("{d}\n")
+	end 'ok'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-method-call-under-bare-if-try -->
+A bare `if try` over a method called on the result names the CALL. Whether the call produces a value
+is unknown, so the form is not refused for discarding one.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	if try c.describe() 'ok'
+		print("ok\n")
+	end 'ok'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-under-bare-if-try -->
+A bare `if try` over the undefined call itself names the CALL, not a discarded result it cannot know
+it has.
+```maxon
+function main() returns ExitCode
+	if try frobnicate(2) 'ok'
+		print("ok\n")
+	end 'ok'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:9: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-method-call-under-if-try-discarding-the-value -->
+An `if let _ = try` over a method called on the result names the CALL.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	if let _ = try c.describe() 'ok'
+		print("ok\n")
+	end 'ok'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-awaited-under-bare-if-try -->
+A bare `if try await` over a promise of the undefined call names the CALL.
+```maxon
+function main() returns ExitCode
+	let p = async frobnicate(2)
+	if try await p 'ok'
+		print("ok\n")
+	end 'ok'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:16: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-awaited-under-if-try -->
+An `if let … = try await` over a promise of the undefined call names the CALL.
+```maxon
+function main() returns ExitCode
+	let p = async frobnicate(2)
+	if let x = try await p 'ok'
+		print("{x}\n")
+	end 'ok'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:16: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-awaited-under-try-with-a-fallback-value -->
+A `try await` with a fallback over a promise of the undefined call names the CALL.
+```maxon
+function main() returns ExitCode
+	let p = async frobnicate(2)
+	let x = try await p otherwise 0
+	print("{x}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:16: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-spawn-stored -->
+Storing a promise of the undefined call names the CALL, not a mismatch with the storage's type.
+```maxon
+function main() returns ExitCode
+	let p = async frobnicate(2)
+	var ps = PendingArray.create()
+	ps.push(p)
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+typealias Pending = Promise with Integer
+typealias PendingArray = Array with Pending
+```
+```maxoncstderr
+error E3004: <fragment>:3:16: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-spawn-stored-as-throwing -->
+Storage typed as a throwing promise is not refused for a callee whose throws clause is unknown.
+```maxon
+function main() returns ExitCode
+	let p = async frobnicate(2)
+	var ps = PendingArray.create()
+	ps.push(p)
+	return 0
+end 'main'
+enum Failure implements Error
+	broken
+end 'Failure'
+typealias Integer = int(i64.min to i64.max)
+typealias Pending = Promise with (Integer, Failure)
+typealias PendingArray = Array with Pending
+```
+```maxoncstderr
+error E3004: <fragment>:3:16: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-method-call-under-parenthesized-try -->
+Parentheses around the method call do not make it a non-call.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	let d = try (c.describe()) otherwise 0
+	print("{d}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-method-call-on-a-parenthesized-receiver-under-try -->
+Parentheses around the receiver alone do not make the method call a non-call.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	let d = try (c).describe() otherwise 0
+	print("{d}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-method-call-on-a-parenthesized-receiver-discarded -->
+A discarded method call on a parenthesized receiver names the CALL.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	_ = (c).describe()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-field-discarded-in-arithmetic -->
+A discard whose right side calls nothing is refused whatever its operand is — a grouping parenthesis
+is not a call.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	_ = c.width + (1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3067: <fragment>:4:2: expected a function call
+```
+
+<!-- test: unknown-function-result-element-method-call-under-try -->
+A `try` over a method called on a loop element of the result names the CALL.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	for x in c.items() 'each'
+		let d = try x.describe() otherwise 0
+		print("{d}\n")
+	end 'each'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-method-call-under-try-in-a-closure -->
+A closure capturing the result and trying a method on it names the CALL.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	let peek = function(_ Tally) gives try c.describe() otherwise 0
+	_ = peek(1)
+	return 0
+end 'main'
+typealias Tally = int(0 to u64.max)
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-in-a-captured-var -->
+A reassigned `var` a closure captures lives in a cell, and a cell holding the result names both CALLS
+rather than refusing a storage type nobody can know.
+```maxon
+function main() returns ExitCode
+	var c = frobnicate(2)
+	c = frobnicate(3)
+	let peek = function(_ Tally) gives c.width
+	_ = peek(1)
+	return 0
+end 'main'
+typealias Tally = int(0 to u64.max)
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+error E3004: <fragment>:4:6: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-captured-and-returned -->
+A closure returning the captured result itself names the CALL.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	let peek = function(_ Tally) gives c
+	_ = peek(1)
+	return 0
+end 'main'
+typealias Tally = int(0 to u64.max)
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-in-a-captured-var-returned -->
+A closure returning a captured, reassigned `var` holding the result names both CALLS.
+```maxon
+function main() returns ExitCode
+	var c = frobnicate(2)
+	c = frobnicate(3)
+	let peek = function(_ Tally) gives c
+	_ = peek(1)
+	return 0
+end 'main'
+typealias Tally = int(0 to u64.max)
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+error E3004: <fragment>:4:6: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-method-call-on-a-captured-var-under-try -->
+A `try` over a method called on a reassigned, captured result names both CALLS. The captured read
+emits an op of its own, and that op is not the call the `try` is applied to.
+```maxon
+function main() returns ExitCode
+	var c = frobnicate(2)
+	c = frobnicate(3)
+	let peek = function(_ Tally) gives try c.describe() otherwise 0
+	_ = peek(1)
+	return 0
+end 'main'
+typealias Tally = int(0 to u64.max)
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+error E3004: <fragment>:4:6: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-method-call-under-propagating-try -->
+A propagating `try` in a throwing function names the CALL.
+```maxon
+enum Failure implements Error
+	broken
+end 'Failure'
+
+function run() throws Failure
+	let c = frobnicate(2)
+	try c.describe()
+end 'run'
+
+function main() returns ExitCode
+	try run() otherwise return 1
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:7:10: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-method-call-under-try-binding-the-error -->
+An `otherwise (e)` handler over a method called on the result names the CALL.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	try c.describe() otherwise (e) 'failed'
+		print("{e}\n")
+	end 'failed'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+```
+
 <!-- test: unknown-function-result-captured-by-a-closure -->
 A closure capturing the result names the CALL, not the capture.
 ```maxon

@@ -1,0 +1,16 @@
+// Test: unknown-function-spawn-stored-as-throwing
+function main() returns ExitCode
+	let p = async frobnicate(2)
+	var ps = PendingArray.create()
+	ps.push(p)
+	return 0
+end 'main'
+enum Failure implements Error
+	broken
+end 'Failure'
+typealias Integer = int(i64.min to i64.max)
+typealias Pending = Promise with (Integer, Failure)
+typealias PendingArray = Array with Pending
+---
+CompilerError:
+error E3004: <fragment>:3:16: call to undefined function 'frobnicate'

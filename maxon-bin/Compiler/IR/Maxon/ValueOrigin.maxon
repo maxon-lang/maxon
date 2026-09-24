@@ -909,42 +909,96 @@ export union DeferralSource
 	end 'isDeferred'
 end 'DeferralSource'
 
+// A call on a deferred value emits no op, so the `try` and `_ =` doors read this where they would
+// read the ops. `Parser.skipDeferredMemberChain`, the one walker of a deferred chain, decides it.
+export enum DeferredChainCalls
+	noCall
+	callBeforeTheLastLink
+	lastLinkIsACall
+end 'DeferredChainCalls'
+
+typealias DeferredChainCallsArray = Array with DeferredChainCalls
+
+export typealias DeferralRowCount = int(0 to u64.max)
+
+union DeferralRowLookup
+	absent
+	at(row DeferralRowCount)
+end 'DeferralRowLookup'
+
 export type DeferralSourceTable
 	var funcIndices as FuncIndexArray
 	var valueIds as ValueIdArray
 	var sourceFuncIndices as FuncIndexArray
 	var sourceIds as ValueIdArray
+	var chainCallKinds as DeferredChainCallsArray
 
 	export static function create() returns DeferralSourceTable
-		return Self{funcIndices: FuncIndexArray.create(), valueIds: ValueIdArray.create(), sourceFuncIndices: FuncIndexArray.create(), sourceIds: ValueIdArray.create()}
+		return Self{funcIndices: FuncIndexArray.create(), valueIds: ValueIdArray.create(), sourceFuncIndices: FuncIndexArray.create(), sourceIds: ValueIdArray.create(), chainCallKinds: DeferredChainCallsArray.create()}
 	end 'create'
 
-	export function count() returns OpCount
+	export function count() returns DeferralRowCount
 		return self.funcIndices.count()
 	end 'count'
 
-	export function record(funcIndex FuncIndex, valueId ValueId, sourceFuncIndex FuncIndex, sourceId ValueId)
+	export function record(funcIndex FuncIndex, valueId ValueId, sourceFuncIndex FuncIndex, sourceId ValueId, chainCalls DeferredChainCalls)
 		self.funcIndices.push(funcIndex)
 		self.valueIds.push(valueId)
 		self.sourceFuncIndices.push(sourceFuncIndex)
 		self.sourceIds.push(sourceId)
+		self.chainCallKinds.push(chainCalls)
 	end 'record'
+
+	// Both readers scan only the rows from `floor` up, a count the caller takes just before the
+	// expression it asks about: a row below it is an earlier statement's (`let v = c.describe()` then
+	// `try (v)` stays E2015), and the bound keeps each scan to one statement's rows.
+	export function lastLinkIsACallAbove(floor DeferralRowCount, funcIndex FuncIndex, valueId ValueId) returns bool
+		return match self.rowOf(funcIndex, valueId: valueId, floor: floor) 'row'
+			absent gives false
+			at(row) gives self.chainCallsAt(row) == DeferredChainCalls.lastLinkIsACall
+		end 'row'
+	end 'lastLinkIsACallAbove'
+
+	export function recordsACallAbove(floor DeferralRowCount) returns bool
+		for i in floor upto self.count() 'each'
+			if self.chainCallsAt(i) != DeferredChainCalls.noCall 'aCallWasDeferred'
+				return true
+			end 'aCallWasDeferred'
+		end 'each'
+
+		return false
+	end 'recordsACallAbove'
+
+	function chainCallsAt(row DeferralRowCount) returns DeferredChainCalls
+		return try self.chainCallKinds.get(row) otherwise panic("DeferralSourceTable.chainCallsAt: chainCallKinds.get OOB at {row}")
+	end 'chainCallsAt'
 
 	// A linear scan: it is asked only while tracing the cause of a refusal.
 	export function sourceOf(funcIndex FuncIndex, valueId ValueId) returns DeferralSource
-		for i in 0 upto self.count() 'each'
-			let f = try self.funcIndices.get(i) otherwise panic("DeferralSourceTable.sourceOf: funcIndices.get OOB at {i}")
-			let v = try self.valueIds.get(i) otherwise panic("DeferralSourceTable.sourceOf: valueIds.get OOB at {i}")
+		return match self.rowOf(funcIndex, valueId: valueId, floor: 0) 'row'
+			absent gives DeferralSource.none
+			at(row) gives self.sourceAt(row)
+		end 'row'
+	end 'sourceOf'
+
+	function sourceAt(row DeferralRowCount) returns DeferralSource
+		let sourceFunc = try self.sourceFuncIndices.get(row) otherwise panic("DeferralSourceTable.sourceAt: sourceFuncIndices.get OOB at {row}")
+		let sourceId = try self.sourceIds.get(row) otherwise panic("DeferralSourceTable.sourceAt: sourceIds.get OOB at {row}")
+		return DeferralSource.value(sourceFunc, valueId: sourceId)
+	end 'sourceAt'
+
+	function rowOf(funcIndex FuncIndex, valueId ValueId, floor DeferralRowCount) returns DeferralRowLookup
+		for row in floor upto self.count() 'each'
+			let f = try self.funcIndices.get(row) otherwise panic("DeferralSourceTable.rowOf: funcIndices.get OOB at {row}")
+			let v = try self.valueIds.get(row) otherwise panic("DeferralSourceTable.rowOf: valueIds.get OOB at {row}")
 
 			if f == funcIndex and v == valueId 'match'
-				let sourceFunc = try self.sourceFuncIndices.get(i) otherwise panic("DeferralSourceTable.sourceOf: sourceFuncIndices.get OOB at {i}")
-				let sourceId = try self.sourceIds.get(i) otherwise panic("DeferralSourceTable.sourceOf: sourceIds.get OOB at {i}")
-				return DeferralSource.value(sourceFunc, valueId: sourceId)
+				return DeferralRowLookup.at(row)
 			end 'match'
 		end 'each'
 
-		return DeferralSource.none
-	end 'sourceOf'
+		return DeferralRowLookup.absent
+	end 'rowOf'
 
 	export function appendFrom(source DeferralSourceTable, funcOffset FuncIndex)
 		for i in 0 upto source.count() 'each'
@@ -952,7 +1006,7 @@ export type DeferralSourceTable
 			let v = try source.valueIds.get(i) otherwise panic("DeferralSourceTable.appendFrom: valueIds.get OOB at {i}")
 			let sourceFunc = try source.sourceFuncIndices.get(i) otherwise panic("DeferralSourceTable.appendFrom: sourceFuncIndices.get OOB at {i}")
 			let sourceId = try source.sourceIds.get(i) otherwise panic("DeferralSourceTable.appendFrom: sourceIds.get OOB at {i}")
-			self.record(f + funcOffset, valueId: v, sourceFuncIndex: sourceFunc + funcOffset, sourceId: sourceId)
+			self.record(f + funcOffset, valueId: v, sourceFuncIndex: sourceFunc + funcOffset, sourceId: sourceId, chainCalls: source.chainCallsAt(i))
 		end 'each'
 	end 'appendFrom'
 end 'DeferralSourceTable'
