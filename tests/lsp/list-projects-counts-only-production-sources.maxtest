@@ -17,7 +17,7 @@ test 'project roots: a session that opens only a test file counts the production
 	discardOutsideCheckoutDir(root)
 
 	match probe 'probe'
-		answered(result) then requireOnlyTheProductionSourceCounted(result)
+		answered(result, _) then requireOnlyTheProductionSourceCounted(result)
 		unanswered(reason) then Expect.fail(reason)
 	end 'probe'
 end 'project roots: a session that opens only a test file counts the production sources'
@@ -25,5 +25,5 @@ end 'project roots: a session that opens only a test file counts the production 
 function requireOnlyTheProductionSourceCounted(result ListProjectsResult) throws TestFailure
 	let project = try soleProject(result, note: "one staged project holding `{TestOnlyCountMainFileName}` and `{TestOnlyCountTestFileName}` was opened through its test file alone, and the client named that directory as its workspace folder.")
 
-	try Expect.equal(project.fileCount as AssertedInt, expected: TestOnlyCountProductionFileCount, message: "the project reported {project.fileCount} files. `maxon/listProjects` counts the sources a `maxon build` compiles, which is `{TestOnlyCountMainFileName}` alone — the corpus a test document is read against also holds `{TestOnlyCountTestFileName}`, and that corpus is the only one this session built.")
+	try Expect.equal(project.fileCount as AssertedInt, expected: TestOnlyCountProductionFileCount, message: "the project reported {project.fileCount} files. `maxon/listProjects` counts the sources a `maxon build` compiles, which is `{TestOnlyCountMainFileName}` alone. Opening a test document builds the corpus a test document is read against, which also holds `{TestOnlyCountTestFileName}`, and that corpus is the only one this session built.")
 end 'requireOnlyTheProductionSourceCounted'

@@ -218,7 +218,7 @@ type LspSession
 		let (_, textDocument, uri) = try notifiedDocument(doc)
 		let text = try lspMemberText(doc, of: textDocument, key: TextKey)
 		self.documents.upsert(uri, value: text)
-		publishBufferDiagnostics(uri, text: text)
+		publishBufferDiagnostics(uri, text: text, arrival: BufferArrival.opened)
 	end 'openDocument'
 
 	function changeDocument(doc JsonDoc) throws LspParamsError
@@ -234,7 +234,7 @@ type LspSession
 		let latest = try doc.arrayAt(changes, index: ((changeCount - 1) as ChildIndex)) otherwise throw LspParamsError.malformed
 		let text = try lspMemberText(doc, of: latest, key: TextKey)
 		self.documents.upsert(uri, value: text)
-		publishBufferDiagnostics(uri, text: text)
+		publishBufferDiagnostics(uri, text: text, arrival: BufferArrival.edited)
 	end 'changeDocument'
 
 	// ⭐ **A CLOSED DOCUMENT IS PUBLISHED AS EMPTY, WHICH IS HOW AN EDITOR IS TOLD TO CLEAR IT.** Nothing

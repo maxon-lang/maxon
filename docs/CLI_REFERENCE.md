@@ -1560,6 +1560,12 @@ handles `workspace/didChangeWorkspaceFolders`: a folder added to the window beco
 one removed from it stops being one, with no restart of the editor. Nothing else in the workspace is
 renegotiated.
 
+**A project is built when a document in it opens.** On `didOpen` the server builds the index that
+document reads, before it publishes the document's diagnostics, when the document's root is a known
+project: a directory holding a `.maxproj`, `stdlib/` or `runtime/`, or a workspace folder the client named
+that contains the document. A document rooted at its own directory has its project built by its first
+hover, definition or completion.
+
 Projects are held across requests, the eight most recently used roots at a time, and a source is re-read
 when its size or modification time changes on disk. Removing a workspace folder also drops every project
 held under it. The list of files under a root is re-walked at most once a second, so a file created on
@@ -1624,17 +1630,20 @@ tier directory. `isSingleFile` is true where the ladder roots a document at its 
 a volume root — and then `rootPath` is that file. A document resolves to a root when its uri spells a
 filesystem path with a directory above it, so the list can name fewer projects than there are open
 documents. `fileCount` is the number of production `.maxon` sources under that root, whether the open
-document is a `.maxon` or a `.maxtest` file, and is **0** for a root whose corpus the server has yet to
-build. This request reads only the projects
-already built; the first hover, definition, completion or diagnostic that needs a project builds it, and
-the next answer carries the real count. The projects are listed in path order.
+document is a `.maxon` or a `.maxtest` file. This request reads the projects the server holds, and
+counts **0** for a root it holds no build of: a root at a document's own directory until that document's
+first hover, definition or completion, a root whose walk or build failed, and a root that has left the
+held projects until an open or a request builds it again. The answer after a build carries the real
+count. The projects are listed in path order.
 
 **`maxon/projectLoading`** is a Maxon-specific notification the server sends around each build of a
 project: `loading: true` immediately before the build and `loading: false` immediately after it, on
 every outcome, and each `true` is followed by its `false` before the next build begins. A project is
-built the first time a hover, definition, completion or diagnostic needs it, and again once it has left
-the held projects; a build that yields no project is repeated by each request that needs it. A root is
-held as two views, the production sources and the sources with the test files, and each view's build is
+built when a document in it opens, and the pair arrives before that document's
+`textDocument/publishDiagnostics`; a root at a document's own directory is built by the first hover,
+definition or completion there. A project that has left the held projects is built again by the next
+open or request that needs it, and a build that yields no project is repeated each time the project is
+needed. A root is held as two views, the production sources and the sources with the test files, and each view's build is
 announced, so opening a `.maxtest` document in a project already loaded for a `.maxon` one announces
 the same `rootPath` again. `stdlib/` and `runtime/` are announced the same way, once each. `rootPath`
 is spelled exactly as `maxon/listProjects` reports that root. The VS Code status bar turns yellow while

@@ -1,0 +1,61 @@
+let OpenAnnouncedDirName = "project-loading-on-open"
+let OpenAnnouncedFirstFileName = "main.maxon"
+let OpenAnnouncedSecondFileName = "helper.maxon"
+let OpenAnnouncedFirstSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let OpenAnnouncedSecondSource = "export function openAnnouncedHelper() returns ExitCode\n\treturn 0\nend 'openAnnouncedHelper'\n"
+
+union OpenAnnouncedProbe
+	observed(firstOpen ProjectLoadingNoticeArray, secondOpen ProjectLoadingNoticeArray)
+	broke(detail String)
+end 'OpenAnnouncedProbe'
+
+test 'project loading is announced when a document of an unheld project opens, and not again for its sibling'
+	let root = stagedProjectDiagnosticsRoot(OpenAnnouncedDirName)
+
+	writeCorpusFile(root, fileName: OpenAnnouncedFirstFileName, content: OpenAnnouncedFirstSource)
+	writeCorpusFile(root, fileName: OpenAnnouncedSecondFileName, content: OpenAnnouncedSecondSource)
+
+	var client = LspClient.start()
+	let probe = collectOpenAnnouncedNotices(client, root: root)
+	client.release()
+
+	discardOutsideCheckoutDir(root)
+
+	match probe 'probe'
+		observed(firstOpen, secondOpen) then requireLoadAnnouncedOnlyByTheFirstOpen(firstOpen, secondOpen: secondOpen)
+		broke(detail) then Expect.fail("the session broke before the `maxon/projectLoading` notices could be read: {detail}")
+	end 'probe'
+end 'project loading is announced when a document of an unheld project opens, and not again for its sibling'
+
+function collectOpenAnnouncedNotices(client LspClient, root FilePath) returns OpenAnnouncedProbe
+	var probe = OpenAnnouncedProbe.broke(UnreportedSessionEnding)
+	let firstUri = fileUriOf(root.join(OpenAnnouncedFirstFileName))
+	let secondUri = fileUriOf(root.join(OpenAnnouncedSecondFileName))
+
+	try 'session'
+		_ = client.initializeAtRoot(root)
+		client.initialized()
+
+		client.openDocument(firstUri, content: OpenAnnouncedFirstSource)
+		_ = client.awaitPublishedDiagnostics(firstUri)
+		let firstOpen = client.takeProjectLoadingNotices()
+
+		client.openDocument(secondUri, content: OpenAnnouncedSecondSource)
+		_ = client.awaitPublishedDiagnostics(secondUri)
+		probe = OpenAnnouncedProbe.observed(firstOpen, secondOpen: client.takeProjectLoadingNotices())
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed or
+				malformedResponse or
+				serverRefused then probe = OpenAnnouncedProbe.broke(e.explained())
+		end 'reason'
+	end 'failed'
+
+	return probe
+end 'collectOpenAnnouncedNotices'
+
+function requireLoadAnnouncedOnlyByTheFirstOpen(firstOpen ProjectLoadingNoticeArray, secondOpen ProjectLoadingNoticeArray) throws TestFailure
+	try requireOneAnnouncedLoad(firstOpen, expectedTail: outsideCheckoutDirName(OpenAnnouncedDirName), note: "`{OpenAnnouncedFirstFileName}`, a clean document in a project the server did not yet hold, was opened and nothing else was asked. The notices were read once its `textDocument/publishDiagnostics` had arrived, and the project is built before the document is checked.")
+
+	try requireNoAnnouncedLoad(secondOpen, note: "`{OpenAnnouncedSecondFileName}`, a second document of the project the first open built, and of the same production view, was opened.")
+end 'requireLoadAnnouncedOnlyByTheFirstOpen'

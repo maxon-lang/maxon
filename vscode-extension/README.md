@@ -240,8 +240,9 @@ at your option.
 - Language server errors are written to the **Maxon Language Server** output channel, and the status bar
   item turns red while the server is stopped. If the server fails to start, that channel says which
   compiler it found, or that it found none. See [Finding the compiler](#finding-the-compiler).
-- The status bar item turns yellow while the server loads a project, which happens the first time a
-  hover, definition, completion or diagnostic needs that project's other files. Its tooltip lists the
+- The status bar item turns yellow while the server loads a project, which happens when a document of
+  that project opens, or, for a file whose project is its own directory, at its first hover, definition
+  or completion. Its tooltip lists the
   projects loading and loaded, and ends with **Restart** and **Show Output** links (also the commands
   **Maxon: Restart Language Server** and **Maxon: Show Language Server Output**).
 - For LSP server issues, the embedded server code is in `maxon-bin/Compiler/Lsp/`.

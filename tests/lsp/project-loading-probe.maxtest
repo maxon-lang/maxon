@@ -1,0 +1,45 @@
+let ProjectLoadingNoNotices = "none"
+let ProjectLoadingNoticeSeparator = ", "
+
+typealias ProjectLoadingNoticePosition = int(0 to 1)
+
+let ProjectLoadingOpeningNotice = 0 as ProjectLoadingNoticePosition
+let ProjectLoadingClosingNotice = 1 as ProjectLoadingNoticePosition
+let ProjectLoadingNoticesAroundALoad = 2 as AssertedInt
+let ProjectLoadingNoticesFromAHeldProject = 0 as AssertedInt
+
+export function requireOneAnnouncedLoad(notices ProjectLoadingNoticeArray, expectedTail String, note String) throws TestFailure
+	try Expect.equal(notices.count() as AssertedInt, expected: ProjectLoadingNoticesAroundALoad, message: "{note} That builds the project once, bracketed by exactly {ProjectLoadingNoticesAroundALoad} `maxon/projectLoading` notifications — `loading: true` before the build, then `loading: false` after it — each naming a rootPath ending with {expectedTail}; {notices.count()} arrived: {renderedProjectLoadingNotices(notices)}")
+
+	let opening = try notices.get(ProjectLoadingOpeningNotice) otherwise panic("project loading: the count was just held to two")
+	let closing = try notices.get(ProjectLoadingClosingNotice) otherwise panic("project loading: the count was just held to two")
+
+	try Expect.isTrue(opening.loading, message: "{note} The first `maxon/projectLoading` notice said `loading: false`, and the one that opens a load must say `loading: true`. Arrived in order: {renderedProjectLoadingNotices(notices)}")
+	try Expect.isFalse(closing.loading, message: "{note} The second `maxon/projectLoading` notice said `loading: true`, and the one that closes a load must say `loading: false`. Arrived in order: {renderedProjectLoadingNotices(notices)}")
+	try requireNoticeNamesTheRoot(opening, expectedTail: expectedTail, note: note)
+	try requireNoticeNamesTheRoot(closing, expectedTail: expectedTail, note: note)
+end 'requireOneAnnouncedLoad'
+
+export function requireNoAnnouncedLoad(notices ProjectLoadingNoticeArray, note String) throws TestFailure
+	try Expect.equal(notices.count() as AssertedInt, expected: ProjectLoadingNoticesFromAHeldProject, message: "{note} That builds nothing, so it should send {ProjectLoadingNoticesFromAHeldProject} `maxon/projectLoading` notifications; {notices.count()} arrived: {renderedProjectLoadingNotices(notices)}")
+end 'requireNoAnnouncedLoad'
+
+function requireNoticeNamesTheRoot(notice ProjectLoadingNotice, expectedTail String, note String) throws TestFailure
+	try Expect.isTrue(foldedRootPath(notice.rootPath).endsWith(expectedTail), message: "{note} A `maxon/projectLoading` notice (`loading: {notice.loading}`) names the rootPath {notice.rootPath}, which does not end with {expectedTail}")
+end 'requireNoticeNamesTheRoot'
+
+function renderedProjectLoadingNotices(notices ProjectLoadingNoticeArray) returns String
+	if notices.isEmpty() 'noNotices'
+		return ProjectLoadingNoNotices
+	end 'noNotices'
+
+	var rendered = ""
+	var separator = ""
+
+	for notice in notices 'eachNotice'
+		rendered.append("{separator}(rootPath: {notice.rootPath}, loading: {notice.loading})")
+		separator = ProjectLoadingNoticeSeparator
+	end 'eachNotice'
+
+	return rendered
+end 'renderedProjectLoadingNotices'

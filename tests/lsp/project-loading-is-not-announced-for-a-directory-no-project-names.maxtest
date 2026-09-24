@@ -1,0 +1,34 @@
+let BareDirectoryDirName = "project-loading-bare-directory"
+let BareDirectoryMainFileName = "main.maxon"
+let BareDirectoryHelperFileName = "helper.maxon"
+let BareDirectoryMainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let BareDirectoryHelperSource = "export function bareDirectoryHelper() returns ExitCode\n\treturn 0\nend 'bareDirectoryHelper'\n"
+let BareDirectoryUnsweptFileCount = 0 as AssertedInt
+
+test 'project loading: opening a document in a directory no maxproj and no workspace folder names builds nothing'
+	let root = freshOutsideCheckoutDir(BareDirectoryDirName)
+
+	writeCorpusFile(root, fileName: BareDirectoryMainFileName, content: BareDirectoryMainSource)
+	writeCorpusFile(root, fileName: BareDirectoryHelperFileName, content: BareDirectoryHelperSource)
+
+	let probe = listProjectsIn(ProjectRootsSession.unrooted, documents: projectRootsDocument(fileUriOf(root.join(BareDirectoryMainFileName)), content: BareDirectoryMainSource))
+
+	discardOutsideCheckoutDir(root)
+
+	match probe 'probe'
+		answered(projects, notices) then requireTheDirectoryWasLeftUnbuilt(notices, projects: projects)
+		unanswered(reason) then Expect.fail(reason)
+	end 'probe'
+end 'project loading: opening a document in a directory no maxproj and no workspace folder names builds nothing'
+
+function requireTheDirectoryWasLeftUnbuilt(notices ProjectLoadingNoticeArray, projects ListProjectsResult) throws TestFailure
+	let note = "`{BareDirectoryMainFileName}` was opened in a session that named no workspace folder, in a staged directory holding a sibling `{BareDirectoryHelperFileName}` and no `.maxproj`, and `maxon/listProjects` was asked after it. Nothing states a project there, so the only root the ladder has for it is the document's own directory — which for a file in a home directory is a walk of everything under it, on the single thread every other request waits behind. A document with no known project loads nothing on open; its first hover, definition or completion builds it."
+
+	try requireNoAnnouncedLoad(notices, note: note)
+
+	let project = try soleProject(projects, note: note)
+	let expectedTail = outsideCheckoutDirName(BareDirectoryDirName)
+
+	try Expect.isTrue(foldedRootPath(project.rootPath).endsWith(expectedTail), message: "{note} The project is rooted at {project.rootPath}, not at the document's own directory (a rootPath ending {expectedTail}).")
+	try Expect.equal(project.fileCount as AssertedInt, expected: BareDirectoryUnsweptFileCount, message: "{note} The project reported {project.fileCount} files, and {BareDirectoryUnsweptFileCount} is the count of a root the server has not built.")
+end 'requireTheDirectoryWasLeftUnbuilt'

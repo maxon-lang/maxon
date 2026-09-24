@@ -1,9 +1,9 @@
 let UnrootedProjectDirName = "projects-unrooted"
 let UnrootedProjectFileName = "main.maxon"
 let UnrootedProjectSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
-let UnrootedProjectSweptFileCount = 0 as AssertedInt
+let UnrootedProjectSweptFileCount = 1 as AssertedInt
 
-test 'project roots: an unrooted session answers the project a document sits in, with nothing swept yet'
+test 'project roots: an unrooted session answers the project a document sits in, built when the document opened'
 	let root = stagedProjectDiagnosticsRoot(UnrootedProjectDirName)
 
 	writeCorpusFile(root, fileName: UnrootedProjectFileName, content: UnrootedProjectSource)
@@ -14,15 +14,15 @@ test 'project roots: an unrooted session answers the project a document sits in,
 	discardOutsideCheckoutDir(root)
 
 	match probe 'probe'
-		answered(result) then requireTheUnsweptProject(result, uri: uri)
+		answered(result, _) then requireTheOpenedProject(result, uri: uri)
 		unanswered(reason) then Expect.fail(reason)
 	end 'probe'
-end 'project roots: an unrooted session answers the project a document sits in, with nothing swept yet'
+end 'project roots: an unrooted session answers the project a document sits in, built when the document opened'
 
-function requireTheUnsweptProject(result ListProjectsResult, uri String) throws TestFailure
+function requireTheOpenedProject(result ListProjectsResult, uri String) throws TestFailure
 	let project = try soleProject(result, note: "one document ({uri}) was opened in a session that named NO root at all — `rootUri: null` and no `workspaceFolders` — which is the window an author gets by opening a single file.")
 
 	try requireProjectRootedAtADirectory(project, expectedTail: outsideCheckoutDirName(UnrootedProjectDirName), note: "one document ({uri}) was opened in a session that named no root at all, and the `.maxproj` beside it is the only thing that says where its project begins.")
 
-	try Expect.equal(project.fileCount as AssertedInt, expected: UnrootedProjectSweptFileCount, message: "the project reported {project.fileCount} files. A status-bar poll is answered out of the projects already HELD, and an unrooted session that has been asked for no hover, definition or completion has built none — so {UnrootedProjectSweptFileCount} is the honest count until something asks. Sweeping a corpus to answer a poll is the alternative, and it costs an author a whole-project walk for a number in the corner of the window.")
-end 'requireTheUnsweptProject'
+	try Expect.equal(project.fileCount as AssertedInt, expected: UnrootedProjectSweptFileCount, message: "the project reported {project.fileCount} files. The staged root holds {UnrootedProjectSweptFileCount} `.maxon` source beside its `.maxproj`, and opening a document builds a project a `.maxproj` states whether or not the client named a root, so the count is real with no hover, definition or completion asked. An unrooted session corrects no diagnostic against a project, so nothing but the open could have built it.")
+end 'requireTheOpenedProject'

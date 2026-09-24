@@ -39,14 +39,19 @@ let QuotedNameSegment = 1
 // not locate `stdlib/`, or was handed a uri spelling no path, has checked nothing and knows
 // nothing. Saying nothing leaves the editor showing what it already had, which is what "not
 // checked" looks like.
-module function publishBufferDiagnostics(uri String, text String)
+module function publishBufferDiagnostics(uri String, text String, arrival BufferArrival)
 	let path = try lspDocumentPathOrThrow(uri) otherwise return
 
 	match lspDocumentProject(path, content: text) 'buffer'
-		loaded(project, tiers) then project.publishDocumentDiagnostics(uri, reader: LspReaderSearch.of(path, tiers: tiers), path: path, text: text)
+		loaded(project, tiers) then project.publishDocumentDiagnostics(uri, reader: LspReaderSearch.of(path, tiers: tiers), arrival: arrival, path: path, text: text)
 		unavailable then return
 	end 'buffer'
 end 'publishBufferDiagnostics'
+
+module enum BufferArrival
+	opened
+	edited
+end 'BufferArrival'
 
 union BufferParse
 	refused(reported DiagnosticArray)
@@ -109,7 +114,14 @@ extension Project
 		return outcome
 	end 'compileBufferCaptured'
 
-	function publishDocumentDiagnostics(uri String, reader LspReaderSearch, path FilePath, text String)
+	function publishDocumentDiagnostics(uri String, reader LspReaderSearch, arrival BufferArrival, path FilePath, text String)
+		// Built before the check: a correction then reuses the held project, and the
+		// `maxon/projectLoading` pair reaches the client ahead of this document's diagnostics.
+		match arrival 'arrival'
+			opened then _ = lspKnownProjectCorpus(reader)
+			edited then break 'arrival'
+		end 'arrival'
+
 		let tokens = lspDocumentTokens(text, keywords: self.keywords)
 
 		writeDocumentDiagnostics(uri, text: text, tokens: tokens, diagnostics: self.documentDiagnostics(reader, path: path, text: text, tokens: tokens), path: path)

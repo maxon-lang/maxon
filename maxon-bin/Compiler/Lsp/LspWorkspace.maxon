@@ -93,7 +93,8 @@ function directoryHolding(path FilePath) returns DocumentDirectory
 end 'directoryHolding'
 
 union WorkspaceRoot
-	userDirectory(dir FilePath)
+	projectDirectory(dir FilePath)
+	documentDirectory(dir FilePath)
 	libraryTier(dir FilePath)
 	singleFile
 end 'WorkspaceRoot'
@@ -367,7 +368,8 @@ function factsUnderTheRootOf(reader LspReaderSearch) returns LspProjectFacts
 	let root = workspaceRootOf(reader)
 
 	return match root 'root'
-		userDirectory or
+		projectDirectory or
+			documentDirectory or
 			libraryTier gives heldProjectFacts(root, readerPath: reader.document.path)
 		singleFile gives LspProjectFacts.singleFile(reader.document.path)
 	end 'root'
@@ -395,22 +397,30 @@ end 'lspDocumentCorpus'
 
 // The corpus a diagnostic may be corrected against, admitted only where the project is stated: a
 // library tier, or a root the client named holding this document (`lspProjectIsStated`). Without
-// one the ladder roots a document at its own directory, so an unrelated neighbouring file would
-// count as a sibling and could silence a real error about a name no part of the author's project
+// one the root can be the document's own directory, so an unrelated neighbouring file would count
+// as a sibling and could silence a real error about a name no part of the author's project
 // declares.
 module function lspProjectCorpus(reader LspReaderSearch) returns LspCorpus
 	if not lspProjectIsStated(reader) 'unstated'
 		return LspCorpus.unavailable
 	end 'unstated'
 
+	return lspKnownProjectCorpus(reader)
+end 'lspProjectCorpus'
+
+// A document-directory root is left unbuilt: nothing states it is a project, it can be a whole home
+// directory, and the server is single-threaded, so opening a file there would hold every request
+// behind a walk of it. `lspDocumentCorpus` builds it for a hover, definition or completion.
+module function lspKnownProjectCorpus(reader LspReaderSearch) returns LspCorpus
 	let root = workspaceRootOf(reader)
 
 	return match root 'root'
-		userDirectory or
+		projectDirectory or
 			libraryTier gives capturedCorpus(root, tiers: reader.tiers, readerPath: reader.document.path)
-		singleFile gives LspCorpus.unavailable
+		documentDirectory or
+			singleFile gives LspCorpus.unavailable
 	end 'root'
-end 'lspProjectCorpus'
+end 'lspKnownProjectCorpus'
 
 module function lspProjectIsStated(reader LspReaderSearch) returns bool
 	return match reader.tier 'tier'
@@ -529,7 +539,8 @@ end 'touchHeldProject'
 
 function heldRootOf(root WorkspaceRoot, readerPath FilePath) returns FilePath
 	return match root 'root'
-		userDirectory(dir) or
+		projectDirectory(dir) or
+			documentDirectory or
 			libraryTier gives dir
 		singleFile gives readerPath
 	end 'root'
@@ -542,14 +553,16 @@ end 'heldRootOf'
 function buildRootOf(root WorkspaceRoot, readerPath FilePath) returns FilePath
 	return match root 'root'
 		libraryTier(dir) gives try dir.parent() otherwise panic("buildRootOf: '{dir.toString()}' is a library tier, a directory `LibraryTiers.locate` found by name inside another")
-		userDirectory or
+		projectDirectory or
+			documentDirectory or
 			singleFile gives heldRootOf(root, readerPath: readerPath)
 	end 'root'
 end 'buildRootOf'
 
 function sourcesUnder(root WorkspaceRoot, selection SourceSelection) returns SourceSweep
 	return match root 'root'
-		userDirectory(dir) or
+		projectDirectory(dir) or
+			documentDirectory or
 			libraryTier gives maxonSourcesIn(dir, selection: selection)
 		singleFile gives SourceSweep.swept(MaxonSourcePathArray.create())
 	end 'root'
@@ -594,8 +607,8 @@ end 'tierHolding'
 
 function rootAround(document ReaderDocument, directory FilePath, workingDirectory FilePath) returns WorkspaceRoot
 	return match nearestProjectFile(directory.resolve(workingDirectory), ceiling: climbCeilingOf(document.stated)) 'manifest'
-		found(projectFile) gives sweepableRoot(directoryHoldingProjectFile(projectFile))
-		none gives rootWithoutAManifest(document.stated, directory: directory)
+		found(projectFile) gives sweepableRoot(WorkspaceRoot.projectDirectory(directoryHoldingProjectFile(projectFile)))
+		none gives sweepableRoot(rootWithoutAManifest(document.stated, directory: directory))
 	end 'manifest'
 end 'rootAround'
 
@@ -623,19 +636,28 @@ end 'projectLayoutOf'
 
 function rootWithoutAManifest(stated StatedRoot, directory FilePath) returns WorkspaceRoot
 	return match stated 'stated'
-		named(dir) gives sweepableRoot(dir)
-		unnamed gives sweepableRoot(directory)
+		named(dir) gives WorkspaceRoot.projectDirectory(dir)
+		unnamed gives WorkspaceRoot.documentDirectory(directory)
 	end 'stated'
 end 'rootWithoutAManifest'
 
-// A directory with no parent is a volume root — `/`, `C:\`, or a `\\server\share`. Rooting a
-// project there sweeps the whole volume to answer one request, so a document sitting at one gets
-// the library tiers instead.
-function sweepableRoot(dir FilePath) returns WorkspaceRoot
-	_ = try dir.parent() otherwise return WorkspaceRoot.singleFile
-
-	return WorkspaceRoot.userDirectory(dir)
+// A root at a volume root — `/`, `C:\`, or a `\\server\share` — would sweep the whole volume to
+// answer one request, so a document sitting at one is a single file checked against the library
+// tiers.
+function sweepableRoot(root WorkspaceRoot) returns WorkspaceRoot
+	return match root 'root'
+		projectDirectory(dir) or
+			documentDirectory or
+			libraryTier gives WorkspaceRoot.singleFile if isAVolumeRoot(dir) else root
+		singleFile gives root
+	end 'root'
 end 'sweepableRoot'
+
+function isAVolumeRoot(dir FilePath) returns bool
+	_ = try dir.parent() otherwise return true
+
+	return false
+end 'isAVolumeRoot'
 
 function climbCeilingOf(stated StatedRoot) returns ProjectClimbCeiling
 	return match stated 'stated'

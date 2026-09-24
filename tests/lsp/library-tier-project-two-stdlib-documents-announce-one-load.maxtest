@@ -1,18 +1,7 @@
-let LibraryTierOneLoadNotices = 2 as AssertedInt
-let LibraryTierOpeningNotice = 0
-let LibraryTierClosingNotice = 1
-
-test 'library tier project: cross-file requests in two stdlib documents announce one load'
+test 'library tier project: opening two stdlib documents and asking in each announces one load'
 	let first = libraryTierFilePathDocument()
 	let second = libraryTierPrintDocument()
-	let notices = libraryTierNotices(libraryTierSession(libraryTierDocumentPair(first, second: second)))
-	let expectedTail = libraryTierDirTail(first)
+	let notices = libraryTierNotices(libraryTierSession(libraryTierDocumentPair(first, second: second), asking: LibraryTierAsking.aDefinitionInEach))
 
-	Expect.equal(notices.count() as AssertedInt, expected: LibraryTierOneLoadNotices, message: "a `textDocument/definition` in `{first.uri}` and then one in `{second.uri}` reach ONE project, `stdlib/`, so the server builds it once and brackets that build with exactly {LibraryTierOneLoadNotices} `maxon/projectLoading` notifications naming the stdlib directory. {notices.count()} arrived: {renderedLibraryTierNotices(notices)}")
-
-	let opening = try notices.get(LibraryTierOpeningNotice) otherwise panic("library tier project: the count was just held to two")
-	let closing = try notices.get(LibraryTierClosingNotice) otherwise panic("library tier project: the count was just held to two")
-
-	Expect.isTrue(opening.loading and not closing.loading, message: "the load was not announced `loading: true` then `loading: false`: {renderedLibraryTierNotices(notices)}")
-	Expect.isTrue(foldedRootPath(opening.rootPath).endsWith(expectedTail) and foldedRootPath(closing.rootPath).endsWith(expectedTail), message: "the one load's notices do not name the stdlib directory (a rootPath ending {expectedTail}): {renderedLibraryTierNotices(notices)}")
-end 'library tier project: cross-file requests in two stdlib documents announce one load'
+	requireOneAnnouncedLoad(notices, expectedTail: libraryTierDirTail(first), note: "`{first.uri}` and `{second.uri}` were opened, each followed by a `textDocument/definition` there. Both reach ONE project, `stdlib/`, which the first open builds and nothing after it builds again.")
+end 'library tier project: opening two stdlib documents and asking in each announces one load'

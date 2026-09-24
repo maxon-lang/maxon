@@ -1,0 +1,31 @@
+let OpenedCountDirName = "projects-counted-on-open"
+let OpenedCountMainFileName = "main.maxon"
+let OpenedCountHelperFileName = "helper.maxon"
+let OpenedCountMainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let OpenedCountHelperSource = "export function openedCountHelper() returns ExitCode\n\treturn 0\nend 'openedCountHelper'\n"
+let OpenedCountSourceFileCount = 2 as AssertedInt
+
+test 'project roots: a project one clean document was opened in is listed with its sources counted'
+	let root = stagedProjectDiagnosticsRoot(OpenedCountDirName)
+
+	writeCorpusFile(root, fileName: OpenedCountMainFileName, content: OpenedCountMainSource)
+	writeCorpusFile(root, fileName: OpenedCountHelperFileName, content: OpenedCountHelperSource)
+
+	let documents = projectRootsDocument(fileUriOf(root.join("{OpenedCountMainFileName}")), content: OpenedCountMainSource)
+	let probe = listProjectsIn(ProjectRootsSession.atFolders(projectRootsFolders(root)), documents: documents)
+
+	discardOutsideCheckoutDir(root)
+
+	match probe 'probe'
+		answered(result, _) then requireBothSourcesCounted(result)
+		unanswered(reason) then Expect.fail(reason)
+	end 'probe'
+end 'project roots: a project one clean document was opened in is listed with its sources counted'
+
+function requireBothSourcesCounted(result ListProjectsResult) throws TestFailure
+	let project = try soleProject(result, note: "one staged project holding `{OpenedCountMainFileName}` and `{OpenedCountHelperFileName}` was opened through `{OpenedCountMainFileName}` alone, and the client named that directory as its workspace folder.")
+
+	try requireProjectRootedAtADirectory(project, expectedTail: outsideCheckoutDirName(OpenedCountDirName), note: "one document of a staged project was opened and nothing else was asked.")
+
+	try Expect.equal(project.fileCount as AssertedInt, expected: OpenedCountSourceFileCount, message: "the project reported {project.fileCount} files. The staged root holds exactly {OpenedCountSourceFileCount} `.maxon` sources, and opening a document builds the project it sits in, so `maxon/listProjects` answers the real count with no hover, definition or completion asked first. `{OpenedCountMainFileName}` is clean, so no diagnostic correction built the project either: a count of 0 is a server that left the project unbuilt until something asked.")
+end 'requireBothSourcesCounted'

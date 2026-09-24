@@ -15,10 +15,8 @@ export let ProjectRootsCallLine = 1 as LspCoordinate
 export let ProjectRootsCallCharacter = 12 as LspCoordinate
 export let ProjectRootsDeclarationLine = 0 as LspCoordinate
 
-let ProjectRootsUnreportedSession = "the session ended without saying how"
-
 export union ListProjectsProbe
-	answered(result ListProjectsResult)
+	answered(result ListProjectsResult, notices ProjectLoadingNoticeArray)
 	unanswered(reason String)
 end 'ListProjectsProbe'
 
@@ -32,13 +30,23 @@ export union WorkspaceFolderDefinitionOutcome
 	broke(detail String)
 end 'WorkspaceFolderDefinitionOutcome'
 
+export union WorkspaceFolderFollowUp
+	none
+	definitionAt(line LspCoordinate, character LspCoordinate)
+end 'WorkspaceFolderFollowUp'
+
 export type WorkspaceFolderDocument
 	export var uri as String
 	export var content as String
+	export var followUp as WorkspaceFolderFollowUp
 
 	export static function create(uri String, content String) returns WorkspaceFolderDocument
-		return Self{uri: uri, content: content}
+		return Self{uri: uri, content: content, followUp: WorkspaceFolderFollowUp.none}
 	end 'create'
+
+	export static function followedByDefinition(uri String, content String, line LspCoordinate, character LspCoordinate) returns WorkspaceFolderDocument
+		return Self{uri: uri, content: content, followUp: WorkspaceFolderFollowUp.definitionAt(line, character: character)}
+	end 'followedByDefinition'
 end 'WorkspaceFolderDocument'
 
 export type WorkspaceFolderProbePosition
@@ -97,7 +105,7 @@ end 'crossDirectoryHelperTail'
 
 export function listProjectsIn(session ProjectRootsSession, documents WorkspaceFolderDocumentArray) returns ListProjectsProbe
 	var client = LspClient.start()
-	var probe = ListProjectsProbe.unanswered(ProjectRootsUnreportedSession)
+	var probe = ListProjectsProbe.unanswered(UnreportedSessionEnding)
 
 	try 'session'
 		openProjectRootsSession(client, session: session)
@@ -105,9 +113,13 @@ export function listProjectsIn(session ProjectRootsSession, documents WorkspaceF
 
 		for document in documents 'eachDocument'
 			client.openDocument(document.uri, content: document.content)
+			followUpTheOpen(client, document: document)
 		end 'eachDocument'
 
-		probe = ListProjectsProbe.answered(client.listProjects())
+		// Asked before the stash is read: its reply follows every notice the opens sent, and a stash
+		// read first can miss them, which a test expecting no load reads as a pass.
+		let projects = client.listProjects()
+		probe = ListProjectsProbe.answered(projects, notices: client.takeProjectLoadingNotices())
 	end 'session' otherwise (e) 'failed'
 		match e 'reason'
 			transportFailed or
@@ -128,6 +140,13 @@ function openProjectRootsSession(client LspClient, session ProjectRootsSession) 
 	end 'session'
 end 'openProjectRootsSession'
 
+function followUpTheOpen(client LspClient, document WorkspaceFolderDocument) throws LspClientError
+	match document.followUp 'followUp'
+		none then return
+		definitionAt(line, character) then _ = try client.definition(document.uri, line: line, character: character)
+	end 'followUp'
+end 'followUpTheOpen'
+
 export function projectRootsPosition(position WorkspaceFolderProbePosition) returns WorkspaceFolderProbePositionArray
 	var positions = WorkspaceFolderProbePositionArray.create()
 	positions.push(position)
@@ -147,7 +166,7 @@ end 'probesAnswered'
 export function definitionsAcrossWorkspaceFolders(initialFolders WorkspaceFolderRootArray, addedFolders WorkspaceFolderRootArray, removedFolders WorkspaceFolderRootArray, documents WorkspaceFolderDocumentArray, positions WorkspaceFolderProbePositionArray) returns WorkspaceFolderDefinitionOutcome
 	var client = LspClient.start()
 	var probes = CorpusDefinitionProbeArray.create()
-	var outcome = WorkspaceFolderDefinitionOutcome.broke(ProjectRootsUnreportedSession)
+	var outcome = WorkspaceFolderDefinitionOutcome.broke(UnreportedSessionEnding)
 
 	try 'session'
 		_ = client.initializeAtWorkspaceFolders(initialFolders)

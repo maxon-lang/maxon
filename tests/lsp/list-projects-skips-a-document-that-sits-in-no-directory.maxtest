@@ -2,38 +2,28 @@ let UnlocatedProjectsUri = "untitled:Untitled-1"
 let UnlocatedProjectsUriScheme = "untitled:"
 let UnlocatedProjectsSource = "function unlocatedProjectsMain() returns ExitCode\n\treturn 0\nend 'unlocatedProjectsMain'\n"
 
-let UnlocatedProjectsStdlibDirTail = "/stdlib"
-let UnlocatedProjectsUnsweptFileCount = 0 as AssertedInt
-
 test 'non-file document: an untitled buffer is no project, and a stdlib document still is one'
-	let libraryUri = fileUriOf(corpusStdlibFilePath())
-	let probe = listProjectsIn(ProjectRootsSession.unrooted, documents: unlocatedProjectsDocuments(libraryUri))
+	let library = libraryTierFilePathDocument()
+	let probe = listProjectsIn(ProjectRootsSession.unrooted, documents: unlocatedProjectsDocuments(library))
 
 	match probe 'probe'
-		answered(result) then requireOnlyTheLibraryDocumentIsAProject(result, libraryUri: libraryUri)
-		unanswered(reason) then Expect.fail("`maxon/listProjects` did not answer with `{UnlocatedProjectsUri}` and `{libraryUri}` open: {reason}.")
+		answered(result, _) then requireOnlyTheLibraryDocumentIsAProject(result, library: library)
+		unanswered(reason) then Expect.fail("`maxon/listProjects` did not answer with `{UnlocatedProjectsUri}` and `{library.uri}` open: {reason}.")
 	end 'probe'
 end 'non-file document: an untitled buffer is no project, and a stdlib document still is one'
 
-function unlocatedProjectsDocuments(libraryUri String) returns WorkspaceFolderDocumentArray
+function unlocatedProjectsDocuments(library LibraryTierDocument) returns WorkspaceFolderDocumentArray
 	var documents = projectRootsDocument(UnlocatedProjectsUri, content: UnlocatedProjectsSource)
-	documents.push(WorkspaceFolderDocument.create(libraryUri, content: unlocatedProjectsLibraryText()))
+	documents.push(WorkspaceFolderDocument.create(library.uri, content: library.content))
 
 	return documents
 end 'unlocatedProjectsDocuments'
 
-function unlocatedProjectsLibraryText() returns String
-	return try File.readText(corpusStdlibFilePath()) otherwise panic("list projects: could not read {corpusStdlibFilePath().toString()}, which an editor opening it would have sent as the buffer's text")
-end 'unlocatedProjectsLibraryText'
-
-function requireOnlyTheLibraryDocumentIsAProject(result ListProjectsResult, libraryUri String) throws TestFailure
+function requireOnlyTheLibraryDocumentIsAProject(result ListProjectsResult, library LibraryTierDocument) throws TestFailure
 	try requireNoProjectIsSpelledFromTheUri(result, scheme: UnlocatedProjectsUriScheme)
 
-	let project = try soleProject(result, note: "two documents were open: `{UnlocatedProjectsUri}`, the unsaved scratch buffer every editor opens with a keystroke, and `{libraryUri}`, a real file with a real directory above it. ⛔ `{UnlocatedProjectsUri}` SPELLS A PATH `FilePath.from` ACCEPTS — it carries no `://`, so nothing refuses it — and the only thing wrong with that path is that it sits in no directory, which is why the skip is keyed on having no parent rather than on the scheme.")
+	let note = "two documents were open: `{UnlocatedProjectsUri}`, the unsaved scratch buffer every editor opens with a keystroke, and `{library.uri}`, a real file with a real directory above it. ⛔ `{UnlocatedProjectsUri}` SPELLS A PATH `FilePath.from` ACCEPTS — it carries no `://`, so nothing refuses it — and the only thing wrong with that path is that it sits in no directory, which is why the skip is keyed on having no parent rather than on the scheme. ⭐ The `stdlib/` half must not change: a fix that dropped every document the ladder roots in no project directory would leave an author editing `stdlib/` with a status bar reporting nothing at all."
+	let project = try soleProject(result, note: note)
 
-	try Expect.isTrue(foldedRootPath(project.rootPath).endsWith(UnlocatedProjectsStdlibDirTail), message: "the one project reported is rooted at `{project.rootPath}` rather than at the `stdlib/` directory. ⭐ THIS IS THE HALF THAT MUST NOT CHANGE: a library-tier document is the stdlib project, and a fix that dropped every document the ladder does not root in a user directory would leave an author editing `stdlib/` with a status bar reporting nothing at all.")
-
-	try Expect.isFalse(project.isSingleFile, message: "the `stdlib/` document was reported as a SINGLE FILE. It sits in `stdlib/`, which is one project the server locates itself, and `isSingleFile` is the flag the extension reads to decide whether to offer cross-file answers for it.")
-
-	try Expect.equal(project.fileCount as AssertedInt, expected: UnlocatedProjectsUnsweptFileCount, message: "the `stdlib/` project reported {project.fileCount} files. No hover, definition or completion was asked in this session, so nothing has built the project and a status-bar poll sweeps none: {UnlocatedProjectsUnsweptFileCount} is the count of a project not yet built.")
+	try requireTheLibraryTierProject(project, document: library, note: note)
 end 'requireOnlyTheLibraryDocumentIsAProject'

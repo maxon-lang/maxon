@@ -1,0 +1,16 @@
+let UnannouncedUri = "untitled:Untitled-1"
+let UnannouncedSource = "function unannouncedMain() returns ExitCode\n\treturn 0\nend 'unannouncedMain'\n"
+let UnannouncedProjectCount = 0 as AssertedInt
+
+test 'project loading: opening a document that sits in no directory builds nothing and announces nothing'
+	match listProjectsIn(ProjectRootsSession.unrooted, documents: projectRootsDocument(UnannouncedUri, content: UnannouncedSource)) 'probe'
+		answered(projects, notices) then requireNothingWasBuilt(notices, projects: projects)
+		unanswered(reason) then Expect.fail(reason)
+	end 'probe'
+end 'project loading: opening a document that sits in no directory builds nothing and announces nothing'
+
+function requireNothingWasBuilt(notices ProjectLoadingNoticeArray, projects ListProjectsResult) throws TestFailure
+	try requireNoAnnouncedLoad(notices, note: "`{UnannouncedUri}`, the unsaved scratch buffer an editor opens with a keystroke, was opened and then `maxon/listProjects` was asked, so every notification the open sent had arrived. The buffer sits in no directory, so it belongs to no project and the open has none to build.")
+
+	try Expect.equal(projects.projects.count() as AssertedInt, expected: UnannouncedProjectCount, message: "`maxon/listProjects` answered {projects.projects.count()} projects with only `{UnannouncedUri}` open. A document in no directory is no project, so the list is empty.")
+end 'requireNothingWasBuilt'

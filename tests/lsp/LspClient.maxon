@@ -28,9 +28,10 @@
 //    `maxon test`'s shard deadline reports as timed out. The cure is a drain on the server's side.
 //
 // 3. A notification can arrive before the response. The server publishes diagnostics on every
-//    `didOpen`, and announces a project load ahead of the reply to the request that caused it, so
-//    correlation is strict on the integer `id`: a message carrying another id is dropped, and one
-//    carrying no id is stashed for `awaitPublishedDiagnostics` and `takeProjectLoadingNotices`.
+//    `didOpen`, and announces a project load ahead of the diagnostics of the open or the reply to
+//    the request that caused it, so correlation is strict on the integer `id`: a message carrying
+//    another id is dropped, and one carrying no id is stashed for `awaitPublishedDiagnostics` and
+//    `takeProjectLoadingNotices`.
 //
 // JSON is parsed and serialized by `stdlib/Json.maxon`, not here.
 
@@ -87,6 +88,10 @@ public typealias ProcessExitCode = int(i64.min to i64.max)
 // The `kind` a server may omit. LSP numbers both `SymbolKind` and `CompletionItemKind` from 1, so 0 is
 // outside either enumeration and cannot be mistaken for one of its members.
 public let UnspecifiedKind = 0 as JsonInteger
+
+// An outcome starts broken with one of these, so a path that never reports fails, never passes.
+public let UnreportedSessionEnding = "the session ended without saying how"
+public let UnreportedRequestEnding = "the request ended without saying how"
 
 public typealias CompletionItemArray = Array with CompletionItem
 public typealias TextEditArray = Array with TextEdit
@@ -652,9 +657,9 @@ public type LspClient
 		return taken
 	end 'takeStashedPublish'
 
-	// Reads the stash alone. A load's notices arrive ahead of the reply to the request that caused it,
-	// and a request served from a held project sends none, so a read off the wire would wait for
-	// nothing.
+	// Reads the stash alone. A load's notices arrive ahead of the diagnostics of the open or the reply
+	// to the request that caused it, and a held project sends none, so a read off the wire would wait
+	// for nothing.
 	public function takeProjectLoadingNotices() returns ProjectLoadingNoticeArray throws LspClientError
 		var notices = ProjectLoadingNoticeArray.create()
 

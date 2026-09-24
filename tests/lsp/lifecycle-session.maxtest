@@ -21,10 +21,6 @@ let LifecycleSecondVersion = 2 as DocumentVersion
 // `shutdown`, and 1 for both `exit` without one and stdin EOF.
 let LifecycleCleanExitCode = 0 as ProcessExitCode
 
-// The sentence a session that never reached its observation is reported with. It is the initial value of
-// every outcome, so a path added later that reports nothing says so instead of reading as a pass.
-let LifecycleUnreportedSession = "the session ended without saying how"
-
 union LifecycleCapabilitiesOutcome
 	observed(textDocumentSync bool, completionProvider bool)
 	broke(detail String)
@@ -47,7 +43,7 @@ end 'LifecycleDocumentOutcome'
 
 test 'initialize returns capabilities'
 	var client = LspClient.start()
-	var outcome = LifecycleCapabilitiesOutcome.broke(LifecycleUnreportedSession)
+	var outcome = LifecycleCapabilitiesOutcome.broke(UnreportedSessionEnding)
 
 	try 'session'
 		let advertised = client.initialize()
@@ -71,7 +67,7 @@ end 'initialize returns capabilities'
 
 test 'shutdown and exit terminate cleanly'
 	var client = LspClient.start()
-	var outcome = LifecycleTerminationOutcome.broke(LifecycleUnreportedSession)
+	var outcome = LifecycleTerminationOutcome.broke(UnreportedSessionEnding)
 
 	try 'session'
 		_ = client.initialize()
@@ -97,7 +93,7 @@ end 'shutdown and exit terminate cleanly'
 
 test 'server handles full workflow'
 	var client = LspClient.start()
-	var outcome = LifecycleWorkflowOutcome.broke(LifecycleUnreportedSession)
+	var outcome = LifecycleWorkflowOutcome.broke(UnreportedSessionEnding)
 
 	try 'session'
 		_ = client.initialize()
@@ -127,7 +123,7 @@ end 'server handles full workflow'
 
 test 'full lifecycle with document'
 	var client = LspClient.start()
-	var outcome = LifecycleDocumentOutcome.broke(LifecycleUnreportedSession)
+	var outcome = LifecycleDocumentOutcome.broke(UnreportedSessionEnding)
 
 	try 'session'
 		_ = client.initialize()
