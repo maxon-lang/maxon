@@ -69,8 +69,8 @@ end 'main'
 ### Note on the four expected-error blocks
 
 The four `error-*` cases below carry the compiler's own diagnostics. Each is ratified by
-`docs/error-codes.txt` — the single error-code registry — and by specs already ported, not decided
-here:
+`maxon-bin/Compiler/ErrorCodeRegistry.maxon` — the single error-code registry — and by other specs,
+not decided here:
 
 - **The two unnamed-argument cases are `E2053`, not `E3005`.** The registry defines **E2053**
   (`callArgMissingLabel`) for exactly this rule. The compiler anchors on the

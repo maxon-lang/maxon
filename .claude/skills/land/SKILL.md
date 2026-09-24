@@ -349,9 +349,7 @@ deliverable stays one chunk and one commit.)*
   caught only by `website/scripts/sync-docs.mjs`, which §8's documentation row runs. Never write a bare
   `"E3010"` in source — a diagnostic names `ErrorCode.<case>`.
   ⛔ **`docs/error-codes.txt` and `maxon error-codes generate` DO NOT EXIST** — no such file was ever
-  tracked in git and `MaxonCommand` has no such case. Stale citations of both survive —
-  `git grep -E 'docs/error-codes\.txt|error-codes (generate|check)'` lists them. Follow the enum, not
-  them.
+  tracked in git and `MaxonCommand` has no such case. Follow the enum.
 - **A mechanism that does not exist yet gets BUILT** — a builtin, a runtime slice, an opcode on every
   target. Size is never a reason to stop; see the two boxes at the top of this file.
 - **Documentation is §6's, not theirs** — the `docs/` source, the site regeneration and the doc-coverage

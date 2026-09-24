@@ -75,9 +75,9 @@ A user call to any of the five is refused as module-scoped and not visible from 
 (`E3088`).
 
 ⚠ The expected stderr below must keep
-it that way. A 4-digit code written outside `docs/error-codes.txt` is a copy of the number space, and
-this one cannot even be a checked copy: the compiler does not claim that code, so its generated
-`ErrorCodeRegistry` has no member to derive the spelling from.
+it that way. A 4-digit code written outside `ErrorCodeRegistry.maxon` is a copy of the number space,
+and this one cannot even be a checked copy: the compiler does not claim that code, so the `ErrorCode`
+enum has no member to derive the spelling from.
 
 User code that wants a string's bytes uses `toByteArray()`, which COPIES, so nothing it is handed can
 alias the string.

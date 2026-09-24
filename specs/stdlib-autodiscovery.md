@@ -46,9 +46,9 @@ compiler points at the absent argument — `3:20` is the member name `pow` and `
 whole qualified callee `Math.pow`, so the column moves only because the compiler includes the qualifier in the
 callee's range. The difference is ratified by the registry and by specs already ported, not decided here:
 
-- `docs/error-codes.txt` names E3036 **`SemanticWrongArgCount`** and documents it as *"a call passes a
-  different number of arguments than the callee declares parameters"* — an ARITY rule. the compiler's member is
-  `callArgCountMismatch` and its sentence is that rule stated directly. The bootstrap folds a
+- `ErrorCodeRegistry.maxon` names E3036 **`callArgCountMismatch`** and documents it as *"A call passes a
+  different number of arguments than the callee declares parameters."* — an ARITY rule, and the
+  compiler's sentence is that rule stated directly. The bootstrap folds a
   named-parameter diagnostic (*"missing argument for parameter 'exponent'"*) into the same code; The compiler
   does not have a second sentence for it.
 - **Eight live cases across seven already-ported specs pin the compiler's spelling**, so it is the settled one

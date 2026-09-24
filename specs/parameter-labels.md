@@ -73,7 +73,7 @@ end 'main'
 ### the compiler note on the four expected-error blocks
 
 The four `error-*` cases below carry the compiler's own DEDICATED codes rather than generic ones.
-`docs/error-codes.txt` defines **E2053** (`callArgMissingLabel`) and **E3037**
+`ErrorCodeRegistry.maxon` defines **E2053** (`callArgMissingLabel`) and **E3037**
 (`callUnknownArgLabel`) for exactly these two rules and claims them for the compiler alone. The compiler also
 positions the missing-label error at the OFFENDING ARGUMENT rather than at the call, which is what
 `consumeArgLabel`'s per-argument anchor buys. The two E2052 cases keep their registered code and

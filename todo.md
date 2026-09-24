@@ -47,12 +47,6 @@
   refusal pre-empts E3004 "call to undefined function 'Inventory.create'", which the same program
   without the `try` statement reports. Seen 2026-09-23 compiling a `main.maxon` alone that used
   another file's types.
-- 13 files still cite the nonexistent `docs/error-codes.txt` or a `maxon error-codes check`/`generate`
-  command, where the registry is `maxon-bin/Compiler/ErrorCodeRegistry.maxon`:
-  `git grep -E 'docs/error-codes\.txt|error-codes (generate|check)'` lists them (6 compiler sources,
-  4 specs, 3 `tests/lsp` failure messages).
-- `scripts/analyze_mm_trace.py` parses `--mm-trace` output, which no build produces (the flag does not
-  exist); nothing in the tree calls it. Delete it, or give it an input.
 
 ## TODO
 - code coverage during spec tests
