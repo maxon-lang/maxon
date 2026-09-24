@@ -45,9 +45,6 @@
   declared" of `project.funcSignatures`, while the parser's `calleeHasADefinition` asks it of
   `ProgramSignatures`. Nothing makes the two registries agree, and E3004's tracing of a deferred value
   depends on the answer. Found by reading, 2026-09-24.
-- `Parser.skipDeferredMemberChain` skips a deferred chain's argument lists without parsing them, so an
-  error inside `c.describe(<bad>)` on a deferred `c` is never reported once E3004 is fixed. Found by
-  reading, 2026-09-24.
 
 ## TODO
 - code coverage during spec tests

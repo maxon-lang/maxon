@@ -2900,25 +2900,29 @@ union ParamDefaultOwner
 	interfaceRequirement
 end 'ParamDefaultOwner'
 
-// ⭐⭐ **THE PARAMETER TYPES A CALL ARGUMENT OFFERS AN UNTYPED CLOSURE LITERAL WRITTEN AT IT** —
-// `scores.sort(function(left, right) gives right.compare(left))`, where neither parameter is annotated.
+// The parameter types a call argument offers an untyped closure literal written at it:
+// `scores.sort(function(left, right) gives right.compare(left))`.
 //
-// ⭐ **THEY ARE NOT INFERRED; THE PARAMETER'S DECLARED FUNCTION TYPE HANDS THEM DOWN.** This parser is
-// single-pass, so a closure's parameter types must be known before its body is read. A call argument whose
-// parameter is declared with a function type knows them already — `Array.sort(cmp SortComparator)` names
-// `function(Element, Element) returns Ordering` — so they are read off the callee's declaration
-// (`closureParamOfferAt`) rather than solved for. Every other position offers nothing.
+// They are read off the callee's declaration, not inferred: the parser is single-pass, so a
+// closure's parameter types must be known before its body is read. `Array.sort(cmp SortComparator)`
+// names `function(Element, Element) returns Ordering`, and `closureParamOfferAt` hands those down.
 //
-// ⛔⛔ **THE OFFER IS POSITIONAL AND ITS ARITY IS THE DECLARED ONE.** Parameter k takes type k, and a parameter
-// past the end has no type to take — E2003, even when an earlier parameter declared its own. Typing it from
-// some other slot would lift a closure with more ABI slots than its caller passes: `nums.map(function(a, b)
-// gives a + b)` would read the env POINTER as `b` and print a plausible number.
+// ⚠ The offer is positional and its arity is the declared one. Parameter k takes type k, and a
+// parameter past the end is E2003, even when an earlier parameter declared its own. Typing it from
+// another slot would lift a closure with more ABI slots than its caller passes:
+// `nums.map(function(a, b) gives a + b)` would read the env pointer as `b` and print a plausible
+// number.
 union ClosureParamOffer
 	// One type per parameter of the function type the argument's parameter is declared with, in order.
 	offered(paramTypes MaxonTypeArray)
 
 	// No position is offering a type, so an omitted parameter type is a parse error.
 	none
+
+	// An argument of a member called on an undeclared call's result: the member, and so its parameter
+	// types, cannot be known, and each omitted type is `unresolved`. Sound only because E3004 at that
+	// call rejects the program before lowering.
+	deferred(sourceFuncIndex FuncIndex, sourceId ValueId)
 end 'ClosureParamOffer'
 
 // The one `none`, shared: a payload-free union case is still a heap object, and this is the answer for nearly
@@ -5916,32 +5920,29 @@ function requireBinOpOperands(op MaxonBinOp, left ValueTypeTag, right ValueTypeT
 	end 'operands'
 end 'requireBinOpOperands'
 
-// ⭐⭐ **THE THREE `name:` LABEL REGIMES A CALL SITE CAN BE PARSED UNDER** — the one enumeration of
-// them, read by `consumeArgLabel` and by nothing else, and passed down by every caller that opens an
-// argument list.
-//
-// It replaced a bare `allowFirstNamed bool`, and it had to: a boolean can carry two regimes and there
-// are three, so a second boolean beside the first would have made a fourth combination
-// (`allowFirstNamed and positionalOnly`) that means nothing and that nothing would have refused. A
-// three-case enum has exactly the three states that exist. It is an `enum` rather than a `union` for
-// the reason `BinOpOperands`' header measures: no arm has a payload, and a payload-free union case
-// still heap-allocates — one allocation per parsed argument, on the parser's hottest path.
+// The `name:` label regimes a call site can be parsed under, read only by `consumeArgLabel`. One
+// enum rather than booleans, so no combination of flags can mean nothing; an `enum` rather than a
+// `union` because a payload-free union case still heap-allocates, once per parsed argument.
 enum ArgLabelRule
-	// The rule for every ordinary call, method call and enum-payload argument list: the FIRST argument
-	// is positional (a label there is E2052) and every later one must be labelled (a bare value there
+	// Every ordinary call, method call and enum-payload argument list: the first argument is
+	// positional (a label there is E2052) and every later one must be labelled (a bare value there
 	// is E2053).
 	ordinary
 
-	// A WITNESS DISPATCH through an interface / type-parameter receiver, where the first argument MAY
-	// also carry a label — the concrete receiver whose declaration would forbid it is exactly what the
-	// shared body does not know (P1.7a slice 2b-vi). The E2053 half is unchanged.
+	// A witness dispatch through an interface / type-parameter receiver, where the first argument may
+	// also carry a label: the concrete receiver whose declaration would forbid it is what the shared
+	// body does not know. Later arguments follow `ordinary`.
 	firstMayBeNamed
 
-	// A callee with NO DECLARATION — a bare compiler BUILTIN or a `__Builtins.` intrinsic — whose
-	// arguments are ALL positional and none of which may be labelled (E2067). Not a relaxation of the
-	// other two but a different rule: with no declaration there are no parameter names for a label to
-	// name. See `argLabelRuleForCallee`, which is where the two families are decided.
+	// A callee with no declaration — a bare compiler builtin or a `__Builtins.` intrinsic — whose
+	// arguments are all positional and none of which may be labelled (E2067): there are no parameter
+	// names for a label to name. See `argLabelRuleForCallee`, which decides the families.
 	allPositional
+
+	// A member called on an undeclared call's result. It may be an ordinary method, a witness dispatch
+	// or a builtin-style member with positional later arguments, so no label and no absence of one is
+	// refused; E3004 at the call rejects the program.
+	unknownMember
 end 'ArgLabelRule'
 
 // **THE `trunc` BUILTIN'S NAME**, and the whole of what makes it one. A `b""` literal, matched
@@ -30610,6 +30611,7 @@ export type Parser
 
 		match offer 'offer'
 			offered(paramTypes) then return try paramTypes.get(paramIndex) otherwise throw ParseError.uninferrableClosureParam(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
+			deferred then return MaxonType.unresolved
 			none then break 'offer'
 		end 'offer'
 
@@ -62483,7 +62485,7 @@ export type Parser
 		end 'enumAccessor'
 
 		if self.baseNamesAValueInScope(self.current()) 'valueBase'
-			return try self.parseFieldAccess()
+			return try self.parseFieldAccess(func)
 		end 'valueBase'
 
 		// ⭐ **EVERY FORM BELOW NAMES A TYPE, AND ITS BASE IS READ THROUGH `typeBaseTokenAt` — WHICH IS WHERE
@@ -62609,7 +62611,7 @@ export type Parser
 		// one value base that is neither in scope nor captured. Asked HERE, below every type-based arm, and
 		// that placement is the rule rather than an accident: see `chainBaseNamesAValue`.
 		if self.managedTopLevelBaseAt(self.pos) 'managedTopLevelField'
-			return try self.parseFieldAccess()
+			return try self.parseFieldAccess(func)
 		end 'managedTopLevelField'
 
 		// `beta.helper` READ AS A VALUE — asked below every type-named arm, so the type reading keeps every chain
@@ -66002,7 +66004,7 @@ export type Parser
 		self.noteMethodCallMutabilityUses(recv)
 
 		if tagIsUnresolved(recv.tag) 'deferredCallError'
-			return self.deferredUnresolvedMemberResult(self.artifact.currentFuncIndex, sourceId: recv.value)
+			return try self.deferredUnresolvedMemberResult(func, sourceFuncIndex: self.artifact.currentFuncIndex, sourceId: recv.value)
 		end 'deferredCallError'
 
 		try self.consume(TokenKind.dot)
@@ -67788,7 +67790,7 @@ export type Parser
 		self.advance()
 
 		match self.deferralSourceOfBinding(enclosing.getInfo(self.baseBindingName(baseTok)), frame: self.enclosingFrameFuncIndex()) 'deferredBase'
-			value(sourceFuncIndex, sourceId) then return self.deferredUnresolvedMemberResult(sourceFuncIndex, sourceId: sourceId)
+			value(sourceFuncIndex, sourceId) then return try self.deferredUnresolvedMemberResult(func, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId)
 			none then break 'deferredBase'
 		end 'deferredBase'
 
@@ -69944,14 +69946,22 @@ export type Parser
 	// body parses. Only an argument that OPENS with `function` pays the lookup, and it answers whether it stated
 	// an offer, so the argument loop clears exactly the offers it made.
 	function stateClosureParamOfferForArgument(callee ByteArray, sourceIndex ParamCount, label ByteArray, valueStart TokenIndex, args ValueIdArray, receiverArgs ParamCount) returns bool
-		if self.kindAt(valueStart) != TokenKind.function 'noClosureLiteral'
+		if not self.argumentOpensAClosure(valueStart) 'noClosureLiteral'
 			return false
 		end 'noClosureLiteral'
 
-		self.closureParamOfferTokenIndex = valueStart
-		self.closureParamOffer = self.closureParamOfferAt(callee, sourceIndex: sourceIndex, label: label, args: args, receiverArgs: receiverArgs)
+		self.stateClosureParamOfferAt(valueStart, offer: self.closureParamOfferAt(callee, sourceIndex: sourceIndex, label: label, args: args, receiverArgs: receiverArgs))
 		return true
 	end 'stateClosureParamOfferForArgument'
+
+	function argumentOpensAClosure(valueStart TokenIndex) returns bool
+		return self.kindAt(valueStart) == TokenKind.function
+	end 'argumentOpensAClosure'
+
+	function stateClosureParamOfferAt(valueStart TokenIndex, offer ClosureParamOffer)
+		self.closureParamOfferTokenIndex = valueStart
+		self.closureParamOffer = offer
+	end 'stateClosureParamOfferAt'
 
 	// The offer stated for the argument opening at `index`, taken — so a closure literal nested in this one's body,
 	// which opens at another token, sees none.
@@ -73846,7 +73856,7 @@ export type Parser
 		// (`iterationLockNameAt`). ONE derivation, read ONCE: handing `iterationLockNameOf` the answer keeps
 		// a chain from resolving its base through `Scope` twice per method call.
 		let baseIndex = self.pos
-		let receiver = try self.parseFieldAccess()
+		let receiver = try self.parseFieldAccess(func)
 		let subjectName = self.borrowSubjectNameAt(baseIndex)
 		return try self.parsePostfix(func, value: try self.dispatchMethodOnReceiver(func, recv: self.valueReceiver(receiver, immutableName: self.fieldChainImmutableNameAt(baseIndex, subjectName: subjectName), subjectName: subjectName), resultUsed: resultUsed), resultUsed: resultUsed)
 	end 'parseFieldChainCall'
@@ -77571,9 +77581,9 @@ export type Parser
 	// `structRef` carrying the struct's interned name id, and that name is what the layout registry
 	// is keyed by. So `p.x` resolves through the same two steps a human does — which type is `p`,
 	// and which slot does that type call `x`.
-	function parseFieldAccess() returns ValueId throws ParseError
+	function parseFieldAccess(func IrFunction) returns ValueId throws ParseError
 		match try self.chainBaseDeferralSource() 'deferredBase'
-			value(sourceFuncIndex, sourceId) then return self.deferredMemberResultPastTheBase(sourceFuncIndex, sourceId: sourceId)
+			value(sourceFuncIndex, sourceId) then return try self.deferredMemberResultPastTheBase(func, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId)
 			none then break 'deferredBase'
 		end 'deferredBase'
 
@@ -78225,7 +78235,7 @@ export type Parser
 		end 'methodCall'
 
 		if self.selfFieldChainHandsOverACell() 'chainedFieldCell'
-			return try self.parseFieldAccess()
+			return try self.parseFieldAccess(func)
 		end 'chainedFieldCell'
 
 		return try self.parseExplicitSelfFieldRead()
@@ -78412,63 +78422,46 @@ export type Parser
 		return Token.create(TokenKind.identifier, line: fieldTok.line, column: fieldTok.column, value: nascentSelfSlotName(fieldTok.value))
 	end 'nascentSelfSlotToken'
 
-	// `p.x = <expr>` — write field `x` of the box `p` points at. The exact mirror of
-	// `parseFieldAccess`: the same three tokens resolved through the same two steps (which type is
-	// `p`, which slot does that type call `x`), landing on `storeIndirect` where that one lands on
-	// `loadIndirect`. There is no `fieldStore` op for the same reason there is no `fieldLoad`.
-	//
-	// ⭐ **TWO THINGS MUST BE WRITABLE AND THEY ARE TWO DIFFERENT FACTS**: the INSTANCE (`let p` is not
-	// writable through) and the FIELD (`export let version` is not writable). Both report E2013 — one
-	// code, because it is one defect from two sides: a write to something declared not to accept one.
-	// Both anchor at the ROOT VARIABLE token and not at the field, pinned by `structs.md`'s two
-	// `error.*` cases at `:16:2`.
-	//
-	// ⚠ **THE INSTANCE RANK IS NOT `requireMutableBinding` — A PARAMETER PASSES IT AND STILL REFUSES A
-	// REBIND** (rung PBR-1). `let p` is refused here exactly as before; a parameter is not, because it
-	// BORROWS the caller's box and a borrow's pointee fields are writable. The two doors and the ruling
-	// behind the split are at `requireMutableBinding` / `requireWritableInstance`.
-	//
-	// ⭐ **RESOLVE, THEN PERMIT — AND THE ORDER IS THE WHOLE DIAGNOSTIC CONTRACT.** The checks below
-	// run in two bands, and the band boundary is what makes every message name a change that
-	// actually fixes the program:
-	//
-	//   1. RESOLUTION — is `p` a struct, and does it have a field `x`? Asked FIRST, and asked in the
-	//      same order and through the same two helpers `parseFieldAccess` asks them, so a field
-	//      WRITE and a field READ can never come to disagree about what `p.x` even DENOTES.
-	//   2. PERMISSION — may this write happen? The instance, then the field.
-	//
-	// ⚠ A PERMISSION message can only ever advise "declare it `var`", so asking permission about a
-	// write that does not RESOLVE names a change that does not work: `let n = 5` then `n.x = 1` once
-	// reported *"cannot assign to immutable variable: 'n'"*, sending the reader to write `var n` —
-	// which changes nothing, because an `int` has no fields. It now reports the not-a-struct error
-	// the READ path always reported for the same three tokens. Same defect, same message, whichever
-	// way the program touches the field.
-	//
-	// ⚠ **WITHIN the permission band, THE INSTANCE STILL OUTRANKS THE FIELD, and that too is a
-	// decision.** When both fail — a `let` instance holding a `let` field — telling a reader to write
-	// `var version` would not fix `let p`. `struct-field-assign-precedence.md` pins BOTH ranks,
-	// because a rule stated only in the order of two `if`s is a rule the next edit reorders.
-	//
-	// ⭐ **VISIBILITY (E3014) LANDS BETWEEN THE TWO, AND THE WHOLE BAND IS ONE CHAIN: EACH RANK IS THE
-	// FIX THAT ACTUALLY WORKS NEXT.** The instance, then whether the field can be SEEN, then whether
-	// it can be WRITTEN — because `export private` does not fix `let p`, and `var private` does not
-	// fix a field the caller cannot reach at all. The three ranks:
-	//
-	//   • `var v` + `let` unexported field  → **E3014** (visibility outranks field mutability)
-	//   • `let v` + `var` unexported field  → **E2013 'v'** (the instance outranks visibility)
-	//   • `v.nosuch`                        → **E3018** (resolution outranks all of it)
-	//
-	// The READ path asks the same chain minus its middle: it has no instance to write through, so
-	// resolution is followed directly by visibility (`parseFieldAccess`).
-	function parseFieldAssignment(func IrFunction, block IrBlock) throws ParseError
-		if (try self.chainBaseDeferralSource()).isDeferred() 'deferredCallError'
-			self.advance()
-			_ = self.skipDeferredMemberChain()
-			try self.consume(TokenKind.equals)
-			_ = try self.parseExpression(func, block: block)
-			return
-		end 'deferredCallError'
+	function parseDeferredFieldAssignment(func IrFunction, block IrBlock, sourceFuncIndex FuncIndex, sourceId ValueId) throws ParseError
+		self.advance()
+		_ = try self.parseDeferredMemberChain(func, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId)
+		try self.consume(TokenKind.equals)
+		_ = try self.parseExpression(func, block: block)
+	end 'parseDeferredFieldAssignment'
 
+	function parseFieldAssignment(func IrFunction, block IrBlock) throws ParseError
+		match try self.chainBaseDeferralSource() 'deferredBase'
+			value(sourceFuncIndex, sourceId) then try self.parseDeferredFieldAssignment(func, block: block, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId)
+			none then try self.parseResolvedFieldAssignment(func, block: block)
+		end 'deferredBase'
+	end 'parseFieldAssignment'
+
+	// `p.x = <expr>` — write field `x` of the box `p` points at. The mirror of `parseFieldAccess`: the
+	// same tokens resolved through the same two steps (which type is `p`, which slot does that type
+	// call `x`), landing on `storeIndirect` where the read lands on `loadIndirect`.
+	//
+	// Two things must be writable, and they are two facts: the instance (`let p` is not writable
+	// through) and the field (`export let version` is not writable). Both report E2013 at the root
+	// variable token, pinned by `structs.md`'s two `error.*` cases at `:16:2`.
+	//
+	// The instance rank is not `requireMutableBinding`: a parameter borrows the caller's box, and a
+	// borrow's pointee fields are writable, so a parameter passes here and still refuses a rebind.
+	// The two doors are `requireMutableBinding` and `requireWritableInstance`.
+	//
+	// Resolve, then permit; each rank is the fix that works next, so every message names a change
+	// that fixes the program:
+	//   1. Resolution — is `p` a struct with a field `x`? Asked first, through the same two helpers
+	//      `parseFieldAccess` asks, so a write and a read cannot disagree about what `p.x` denotes.
+	//      A permission message can only advise "declare it `var`", which cannot fix `n.x = 1` on an
+	//      `int`.
+	//   2. Permission — the instance, then visibility (E3014), then the field's mutability:
+	//        • `var v` + `let` unexported field → E3014
+	//        • `let v` + `var` unexported field → E2013 'v'
+	//        • `v.nosuch`                       → E3018
+	//      `struct-field-assign-precedence.md` pins the ranks.
+	//
+	// The read path asks the same chain without the instance rank (`parseFieldAccess`).
+	function parseResolvedFieldAssignment(func IrFunction, block IrBlock) throws ParseError
 		// The base's own token index, taken before the chain walk moves the cursor, so the E3070 subject below
 		// comes through the shared `borrowSubjectNameAt` — ONE derivation of "which storage does this write go
 		// through", asked identically at every door (`parseAssignment` captures it for the same reason).
@@ -78562,7 +78555,7 @@ export type Parser
 
 		self.noteWriteThroughAField(func, target: step.box, baseIndex: baseIndex, lastDotIndex: lastDotIndex, anchor: step.baseTok)
 		try self.emitFieldWrite(func, box: step.box, layout: step.layout, index: index, value: value, argBareLocal: self.rhsWasBareLocalReference(valueStart), anchor: step.lastFieldTok, range: SourceRange.between(step.baseTok, last: step.lastFieldTok), valueTok: self.tokenAt(valueStart))
-	end 'parseFieldAssignment'
+	end 'parseResolvedFieldAssignment'
 
 	// ⭐ **A FIELD WRITE WRITES THE RECORD BEFORE ITS LAST `.`** — `box.item.x = 9` writes the record `box.item`, and
 	// `e.x = 9` the record `e` holds, either of which a live `let` may still be reading, whichever of the two names
@@ -81642,6 +81635,17 @@ export type Parser
 		end 'existentialParam'
 	end 'requireNoInterfaceClosureParam'
 
+	// A refusal traced through a parameter the `deferred` offer typed is then attributed to the
+	// undeclared call, which is what lets the editor withhold it once a sibling file declares the
+	// callee.
+	function recordDeferredClosureParams(paramTypes MaxonTypeArray, sourceFuncIndex FuncIndex, sourceId ValueId)
+		for (iter, paramType) in paramTypes.withIterator() 'eachParam'
+			if tagIsUnresolved(maxonTypeTag(paramType)) 'typedByTheOffer'
+				self.artifact.recordDeferralSource(iter.index() as ValueId, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId, chainCalls: DeferredChainCalls.noCall)
+			end 'typedByTheOffer'
+		end 'eachParam'
+	end 'recordDeferredClosureParams'
+
 	function parseClosureExpression(func IrFunction) returns ValueId throws ParseError
 		let paramTypeOffer = self.takeClosureParamOfferAt(self.pos)
 		let functionTok = try self.consume(TokenKind.function)
@@ -82149,6 +82153,12 @@ export type Parser
 		// (`savedCellLocalNames` above).
 		self.collectCellLocalNames(self.pos)
 		try self.bindParameters(lifted, funcName: closureName, paramNames: paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts)
+
+		match paramTypeOffer 'offer'
+			deferred(sourceFuncIndex, sourceId) then self.recordDeferredClosureParams(paramTypes, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId)
+			offered or
+				none then break 'offer'
+		end 'offer'
 
 		// Parse the single body expression, then close the lifted function like a value `return`: the
 		// body IS the closure's returned value, so `emitOwnedValueReturn` promotes a borrowed String to
@@ -87816,15 +87826,7 @@ export type Parser
 				// well-formed until that diagnostic is reported, exactly as every other recovery here does).
 				let passed = try self.byRefArgumentValue(value, byRefPosition: byRefPosition, handedTheCell: handedTheCell, anchor: valueTok)
 
-				// ⭐ **E3077's ARGUMENT DOOR.** `f(x)` may write `x` — whether it does is the callee's
-				// `writtenParamMask`, a whole-program fact SemanticCheck settles a phase after this diagnostic
-				// is decided — so a `var` handed to a call has exercised its mutability. Asked HERE, with the
-				// argument's own tokens still in hand and before anything moves the cursor, for the reason
-				// `bareArgImmutableName` gives. See `VarInfo.mutabilityExercised` for why the conservative
-				// choice is load-bearing.
-				if self.argWasBareName(valueTok, valueStart: valueStart) 'bareNameArgument'
-					self.markNameMutabilityExercised(valueTok.value)
-				end 'bareNameArgument'
+				self.noteArgumentMayWriteItsBinding(valueTok, valueStart: valueStart)
 
 				// A capturing closure handed DOWN to a direct callee is now SUPPORTED (P1.5-A2b-2): its environment
 				// travels as the companion argument the lowering appends at the function-typed parameter position
@@ -87914,6 +87916,17 @@ export type Parser
 		return tokenCanBeAName(valueTok) and self.pos == valueStart + 1
 	end 'argWasBareName'
 
+	// E3077's argument door. `f(x)` may write `x`: whether it does is the callee's `writtenParamMask`,
+	// settled a phase after E3077 is decided, or unknowable for an `ArgLabelRule.unknownMember`
+	// callee. So a `var` handed to a call has exercised its mutability; see
+	// `VarInfo.mutabilityExercised` for why the conservative answer is load-bearing. Asked before
+	// anything moves the cursor off the argument, which `argWasBareName` reads.
+	function noteArgumentMayWriteItsBinding(valueTok Token, valueStart TokenIndex)
+		if self.argWasBareName(valueTok, valueStart: valueStart) 'bareNameArgument'
+			self.markNameMutabilityExercised(valueTok.value)
+		end 'bareNameArgument'
+	end 'noteArgumentMayWriteItsBinding'
+
 	// ⭐⭐ **THE E3019 BLAME OF AN EXPRESSION JUST PARSED — the one-token test, OR the merge it came out of.**
 	//
 	// ⭐ **A LAUNDER IS NOT A LOOPHOLE.** `grow(g)` on a `let` is refused, so `grow(g if flag else g)` — the
@@ -87961,26 +87974,15 @@ export type Parser
 		return EmptySourceText
 	end 'expressionImmutableBlame'
 
-	// Consume and validate an optional `name:` label on the next argument, returning the
-	// label text (the empty string when unlabelled). The FIRST argument (`argIndex == 0`)
-	// must be positional — a label there is E2052; every later argument must be labelled —
-	// a bare value there is E2053. A `name:` label is two tokens (identifier + colon); a
-	// bare value leaves the cursor untouched. (Whether the label names a real parameter
-	// is checked later — by SemanticCheck for a direct call, by `slottedWitnessArgs` for a
-	// witness dispatch.)
+	// Which positions may or must carry a `name:` label is `rule`'s regime (`ArgLabelRule`). A label
+	// is two tokens; a bare value leaves the cursor untouched. Whether a label names a real parameter
+	// is checked later — by SemanticCheck for a direct call, by `slottedWitnessArgs` for a witness
+	// dispatch.
 	//
-	// ⭐ **`rule` RELAXES THE FIRST-ARGUMENT RULE FOR AN INTERFACE / TYPE-PARAMETER RECEIVER**
-	// (`firstMayBeNamed`). `specs/interface-dispatch.md` makes the E2052 check apply only to
-	// concrete-struct / enum / builtin receivers, so a witness dispatch's first argument may carry a
-	// label (`self.item.add(a: 1, b: 2)`) — the concrete receiver whose declaration would forbid it is
-	// exactly what the shared body does not know. It is a PARAMETER rather than a fork of this
-	// function because the E2053 half is unrelaxed and must stay one copy: only the first argument's
-	// verdict moves.
-	// ⭐ **A LABEL MAY BE SPELLED WITH A KEYWORD (D8), because the PARAMETER it names may be** —
-	// `combine(1, enum: 2)` against `function combine(type Integer, enum Integer, …)`. A parameter that
-	// cannot be labelled cannot be passed, so the declaration position and this one are one rule; the
-	// trailing `:` is what makes the reading unambiguous, since no argument VALUE is a bare keyword
-	// followed by a colon.
+	// A label may be spelled with a keyword because the parameter it names may be:
+	// `combine(1, enum: 2)` against `function combine(type Integer, enum Integer, …)`. The trailing
+	// `:` makes the reading unambiguous, since no argument value is a bare keyword followed by a
+	// colon.
 	function consumeArgLabel(argIndex ParamCount, rule ArgLabelRule) returns ByteArray throws ParseError
 		let labelTok = self.current()
 		let isNamed = tokenCanBeAName(labelTok) and self.peekKind() == TokenKind.colon
@@ -87999,34 +88001,30 @@ export type Parser
 			return EmptySourceText
 		end 'builtinArgs'
 
-		// ⭐ **EVERY REGIME IS NAMED, and that is the whole reason this is an enum and not a boolean.**
-		// A bare `rule == ArgLabelRule.ordinary` would leave `firstMayBeNamed` as whatever fell through —
-		// never mentioned, never checked — so a FOURTH regime added later would silently inherit its
-		// behaviour instead of failing to compile. Read as a `match`, the enum keeps the promise its
-		// header makes: exactly the states that exist, each with an answer someone wrote down.
+		// Matched rather than compared, so a regime added later fails to compile here instead of silently
+		// inheriting whichever answer a comparison let it fall through to.
 		let firstArgMayBeNamed = match rule 'firstArgRegime'
 			ordinary gives false
-
-			// A witness dispatch through an interface / type-parameter receiver: the concrete receiver
-			// whose declaration would forbid a labelled first argument is exactly what the shared body
-			// does not know (P1.7a slice 2b-vi).
-			firstMayBeNamed gives true
-
-			// Unreachable — the builtin regime is decided WHOLE and returned above, before position is
-			// looked at, because for a builtin no position takes a label.
+			firstMayBeNamed or
+				unknownMember gives true
 			allPositional panic("consumeArgLabel: `allPositional` returns above — a builtin's label verdict is decided whole, before argIndex is consulted, so it must never reach the first-argument rule")
 		end 'firstArgRegime'
+
+		let laterArgMayBeUnlabelled = match rule 'laterArgRegime'
+			ordinary or
+				firstMayBeNamed gives false
+			unknownMember gives true
+			allPositional panic("consumeArgLabel: `allPositional` returns above — a builtin's label verdict is decided whole, before argIndex is consulted, so it must never reach the later-argument rule")
+		end 'laterArgRegime'
 
 		if argIndex == 0 and isNamed and not firstArgMayBeNamed 'firstNamed'
 			throw ParseError.firstArgNamed(labelTok.line, column: labelTok.column)
 		end 'firstNamed'
 
-		if argIndex > 0 and not isNamed 'missingLabel'
+		if argIndex > 0 and not isNamed and not laterArgMayBeUnlabelled 'missingLabel'
 			throw ParseError.argMissingLabel(labelTok.line, column: labelTok.column)
 		end 'missingLabel'
 
-		// Unlabelled past those two rejects means a legal POSITIONAL first argument; the cursor still sits
-		// on the value, so nothing is consumed.
 		if not isNamed 'positional'
 			return EmptySourceText
 		end 'positional'
@@ -90606,26 +90604,25 @@ export type Parser
 		end 'callee'
 	end 'mintCallResult'
 
-	// ⛔ **`unresolved` IS A DEFERRAL AND NEVER A SENTINEL, WHICH IS WHY EVERY DOOR THAT MEETS ONE ANSWERS
-	// HERE RATHER THAN REFUSING.** The parser's token sweep is the tolerant half of a pair: whether a callee
-	// is declared anywhere in the program is `SemanticCheck.validateCall`'s question, and it reports E3004 at
-	// the call. A door that threw instead would end the file before that ran, so the author would be shown a
-	// symptom at an unrelated line — and a sweep that had merely MISSED a declaration would refuse a correct
-	// program.
+	// `unresolved` is a deferral, never a sentinel, so every door that meets a member on one answers
+	// here rather than refusing. Whether a callee is declared anywhere is
+	// `SemanticCheck.validateCall`'s question, reported as E3004 at the call; a refusal here would end
+	// the file first, showing a symptom at an unrelated line, and would refuse a correct program whose
+	// declaration the sweep missed.
 	//
-	// ⚠ The doors whose parameter type is a `__`-reserved builtin (`__ManagedMemory`, `__ManagedFile`,
-	// `__ManagedSocket`, `__ManagedDirectory`) still throw, which only a file allowed to spell those names
-	// reaches.
-	function deferredUnresolvedMemberResult(sourceFuncIndex FuncIndex, sourceId ValueId) returns ValueId
-		let chainCalls = self.skipDeferredMemberChain()
+	// The doors whose parameter type is a `__`-reserved builtin (`__ManagedMemory`, `__ManagedFile`,
+	// `__ManagedSocket`, `__ManagedDirectory`) throw instead; only a file allowed to spell those names
+	// reaches them.
+	function deferredUnresolvedMemberResult(func IrFunction, sourceFuncIndex FuncIndex, sourceId ValueId) returns ValueId throws ParseError
+		let chainCalls = try self.parseDeferredMemberChain(func, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId)
 
 		return self.deferredValueFrom(sourceFuncIndex, sourceId: sourceId, chainCalls: chainCalls)
 	end 'deferredUnresolvedMemberResult'
 
-	function deferredMemberResultPastTheBase(sourceFuncIndex FuncIndex, sourceId ValueId) returns ValueId
+	function deferredMemberResultPastTheBase(func IrFunction, sourceFuncIndex FuncIndex, sourceId ValueId) returns ValueId throws ParseError
 		self.advance()
 
-		return self.deferredUnresolvedMemberResult(sourceFuncIndex, sourceId: sourceId)
+		return try self.deferredUnresolvedMemberResult(func, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId)
 	end 'deferredMemberResultPastTheBase'
 
 	function deferredValueFrom(sourceFuncIndex FuncIndex, sourceId ValueId, chainCalls DeferredChainCalls) returns ValueId
@@ -90647,7 +90644,7 @@ export type Parser
 		return try self.closureEnclosingFuncIndices.get(self.closureEnclosingFuncIndices.count() - 1) otherwise panic("enclosingFrameFuncIndex: asked for a capture's frame outside any closure body — `captureScopeOf` finds an enclosing scope only while one is pushed")
 	end 'enclosingFrameFuncIndex'
 
-	function skipDeferredMemberChain() returns DeferredChainCalls
+	function parseDeferredMemberChain(func IrFunction, sourceFuncIndex FuncIndex, sourceId ValueId) returns DeferredChainCalls throws ParseError
 		var chainCalls = DeferredChainCalls.noCall
 
 		while self.at(TokenKind.dot) 'chain'
@@ -90655,7 +90652,7 @@ export type Parser
 			self.advance()
 
 			if self.at(TokenKind.leftParen) 'anArgumentList'
-				self.pos = (self.groupCloserAt(self.pos) + 1) as TokenIndex
+				try self.parseDeferredMemberArguments(func, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId)
 				chainCalls = DeferredChainCalls.lastLinkIsACall
 			end 'anArgumentList' else if chainCalls == DeferredChainCalls.lastLinkIsACall 'aMemberAfterACall'
 				chainCalls = DeferredChainCalls.callBeforeTheLastLink
@@ -90663,7 +90660,42 @@ export type Parser
 		end 'chain'
 
 		return chainCalls
-	end 'skipDeferredMemberChain'
+	end 'parseDeferredMemberChain'
+
+	// Parsed rather than skipped, so an error inside the arguments is reported. It cannot share
+	// `parseCallArgs`, which records by-reference, array-literal, E3070 borrow and anchor facts
+	// against a declared callee; a member of an undeclared call's result has none to record them
+	// against.
+	function parseDeferredMemberArguments(func IrFunction, sourceFuncIndex FuncIndex, sourceId ValueId) throws ParseError
+		try self.consume(TokenKind.leftParen)
+		var argIndex = 0 as ParamCount
+
+		while not self.at(TokenKind.rightParen) 'eachArgument'
+			if argIndex > 0 'afterTheFirst'
+				try self.consume(TokenKind.comma)
+			end 'afterTheFirst'
+
+			_ = try self.consumeArgLabel(argIndex, rule: ArgLabelRule.unknownMember)
+			let valueTok = self.current()
+			let valueStart = self.pos
+			let offersAClosure = self.argumentOpensAClosure(valueStart)
+
+			if offersAClosure 'aClosureLiteral'
+				self.stateClosureParamOfferAt(valueStart, offer: ClosureParamOffer.deferred(sourceFuncIndex, sourceId: sourceId))
+			end 'aClosureLiteral'
+
+			_ = try self.parseValueExpression(func)
+
+			if offersAClosure 'anOfferMustNotOutliveItsArgument'
+				self.closureParamOffer = noClosureParamOffer
+			end 'anOfferMustNotOutliveItsArgument'
+
+			self.noteArgumentMayWriteItsBinding(valueTok, valueStart: valueStart)
+			argIndex = argIndex + 1
+		end 'eachArgument'
+
+		try self.consume(TokenKind.rightParen)
+	end 'parseDeferredMemberArguments'
 
 	function baseBindingIsADeferredCallResult(binding VarInfo) returns bool
 		return tagIsUnresolved(maxonTypeTag(binding.varType))

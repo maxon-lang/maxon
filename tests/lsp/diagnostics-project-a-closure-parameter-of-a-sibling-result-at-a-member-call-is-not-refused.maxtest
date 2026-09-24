@@ -1,0 +1,17 @@
+let ProjectClosureParamDirName = "diagnostics-project-closure-parameter-of-a-sibling-result-at-a-member-call"
+let ProjectClosureParamHelperFileName = "helper.maxon"
+let ProjectClosureParamBufferFileName = "main.maxon"
+let ProjectClosureParamHelperSource = "module typealias FrobnicatedVisit = function(String) returns ExitCode\n\nmodule type Frobnicated\n\tvar word as String\n\n\tstatic function create(word String) returns Frobnicated\n\t\treturn Self\{word: word\}\n\tend 'create'\n\n\tmodule function each(visit FrobnicatedVisit) returns ExitCode\n\t\treturn visit(self.word)\n\tend 'each'\nend 'Frobnicated'\n\nmodule function frobnicate(word String) returns Frobnicated\n\treturn Frobnicated.create(word)\nend 'frobnicate'\n"
+let ProjectClosureParamBufferSource = "function takesString(s String) returns ExitCode\n\treturn 1 if s.isEmpty() else 0\nend 'takesString'\n\nfunction main() returns ExitCode\n\tlet c = frobnicate(\"two\")\n\t_ = c.each(function(x) gives takesString(x))\n\treturn 0\nend 'main'\n"
+
+test 'an untyped closure parameter at a member call on a sibling function result is not an opaque argument'
+	let root = stagedProjectDiagnosticsRoot(ProjectClosureParamDirName)
+	writeCorpusFile(root, fileName: ProjectClosureParamHelperFileName, content: ProjectClosureParamHelperSource)
+	writeCorpusFile(root, fileName: ProjectClosureParamBufferFileName, content: ProjectClosureParamBufferSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: ProjectClosureParamBufferFileName, content: ProjectClosureParamBufferSource)
+
+	discardOutsideCheckoutDir(root)
+
+	expectNoProjectDiagnostics(probe, note: "`frobnicate` is a `module function` the sibling file declares, returning the sibling's `Frobnicated`, whose `each` takes a `function(String) returns ExitCode`. `main` binds its result and hands `each` an untyped closure whose parameter `x` it passes to the buffer's own `takesString(s String)`. The buffer compiled alone cannot see `frobnicate`, so `x` defers with the undeclared call, and a refusal about `x` must be traced back to that call and withheld.")
+end 'an untyped closure parameter at a member call on a sibling function result is not an opaque argument'

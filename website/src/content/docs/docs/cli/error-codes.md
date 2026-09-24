@@ -237,7 +237,7 @@ The program declares no 'main' function.
 
 ### E3004 — `callUnknownFunction`
 
-A call names a function that does not exist -- a typo, or a callee not visible from here.
+A call names a function that does not exist -- a typo, or a callee not visible from here. A member called on its result has parameters no declaration states, so it accepts any argument labels and an untyped closure argument; errors inside its arguments are reported as usual.
 
 ### E3005 — `typeMismatch`
 

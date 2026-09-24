@@ -851,6 +851,248 @@ end 'main'
 error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
 ```
 
+<!-- test: unknown-function-result-method-call-argument-calls-an-undefined-function -->
+The arguments of a method called on the result are still compiled, so an undefined call among them is
+named as well.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	_ = c.describe(missing(1))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+error E3004: <fragment>:4:17: call to undefined function 'missing'
+```
+
+<!-- test: unknown-function-result-method-call-argument-names-an-undefined-variable -->
+An undefined name among those arguments is reported where it is written.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	_ = c.describe(nowhere)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:4:17: Undefined variable 'nowhere'
+```
+
+<!-- test: unknown-function-result-method-call-under-try-argument-calls-an-undefined-function -->
+Under a `try`, the arguments are compiled too.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	let d = try c.describe(missing(1)) otherwise 0
+	print("{d}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+error E3004: <fragment>:4:25: call to undefined function 'missing'
+```
+
+<!-- test: unknown-function-result-chained-method-call-argument-calls-an-undefined-function -->
+The arguments of every link of the chain are compiled, not only the first link's.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	_ = c.first().then(missing(1))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+error E3004: <fragment>:4:21: call to undefined function 'missing'
+```
+
+<!-- test: unknown-function-result-method-call-named-argument-calls-an-undefined-function -->
+A named argument is compiled like a positional one.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	_ = c.describe(1, with: missing(2))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+error E3004: <fragment>:4:26: call to undefined function 'missing'
+```
+
+<!-- test: unknown-function-result-nested-method-call-argument-calls-an-undefined-function -->
+A method call on the result nested in another's arguments has its own arguments compiled.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	_ = c.describe(c.other(missing(1)))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+error E3004: <fragment>:4:25: call to undefined function 'missing'
+```
+
+<!-- test: unknown-function-result-method-call-arguments-each-call-an-undefined-function -->
+Every argument is compiled, and a second unlabelled argument is not refused: the member is unknown, so
+its labelling rule is too.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	_ = c.describe(missing(1), missing(2))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+error E3004: <fragment>:4:17: call to undefined function 'missing'
+error E3004: <fragment>:4:29: call to undefined function 'missing'
+```
+
+<!-- test: unknown-function-result-method-call-labelled-first-argument -->
+A labelled first argument is not refused either.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	_ = c.describe(with: 1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-method-call-argument-var-may-be-written -->
+A `var` passed to the unknown member may be written by it, so it is not reported as never mutated.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	var n = 1
+	_ = c.bump(n)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-method-call-typed-closure-argument -->
+A typed closure passed to the unknown member compiles.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	_ = c.each(function(x Tally) gives x)
+	return 0
+end 'main'
+typealias Tally = int(0 to u64.max)
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-method-call-untyped-closure-argument -->
+An untyped closure parameter passed to the unknown member is not refused: its type would come from the
+member, which is unknown, so it defers with the member rather than hiding E3004.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	_ = c.each(function(x) gives x)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-untyped-closure-argument-member-read -->
+A member read off the deferred closure parameter defers with it.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	_ = c.each(function(x) gives x.width)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-untyped-closure-argument-calls-an-undefined-function -->
+The closure's body is still compiled, so an undefined call in it is named.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	_ = c.each(function(x) gives missing(x))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+error E3004: <fragment>:4:31: call to undefined function 'missing'
+```
+
+<!-- test: unknown-function-result-untyped-closure-argument-with-two-parameters -->
+Every untyped parameter of that closure defers.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	_ = c.each(function(x, y) gives y)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-untyped-closure-argument-names-an-undefined-variable -->
+An undefined name in that closure's body is reported where it is written.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	_ = c.each(function(x) gives nowhere)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:4:31: Undefined variable 'nowhere'
+```
+
+<!-- test: unknown-function-result-untyped-closure-as-a-labelled-argument -->
+An untyped closure passed as a later, labelled argument defers too.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	_ = c.pair(1, with: function(x) gives x)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-untyped-closure-nested-in-a-declared-call-is-refused -->
+The deferral reaches only a closure written directly as the unknown member's argument. One passed to a
+declared function whose parameter is not function-typed still has to type its parameter.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	_ = c.each(apply(function(x) gives x))
+	return 0
+end 'main'
+
+function apply(n Tally) returns Tally
+	return n
+end 'apply'
+
+typealias Tally = int(0 to u64.max)
+```
+```maxoncstderr
+error E2015: <fragment>:4:28: Unsupported: parameter 'x' with no type — the compiler infers an omitted parameter type only for a closure literal passed where the parameter is declared with a function type; every other parameter declares its type
+```
+
 <!-- test: unknown-function-result-captured-by-a-closure -->
 A closure capturing the result names the CALL, not the capture.
 ```maxon

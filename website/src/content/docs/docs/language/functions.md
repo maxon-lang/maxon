@@ -268,7 +268,9 @@ end 'main'
   is declared with a function type: the closure's parameters take that type's parameter types, in order —
   `scores.sort(function(a, b) gives b.compare(a))`. A parameter past that function type's arity is **E2003**,
   and an omitted type anywhere else is **E2015**. When overloads of the callee declare different function
-  types at that argument, none is offered.
+  types at that argument, the closure writes its parameter types. A member called on an undefined
+  function's result accepts an untyped closure argument, and the call's
+  [E3004](/docs/cli/error-codes/#e3004--callunknownfunction) is the error reported.
 - Closure parameters must be used (**E3012**); write `_` for an unused one.
 - Inside an instance method a closure may use `self`; elsewhere `self` is **E2001**.
 - Assigning to a captured `let` is an error, as it is outside the closure.

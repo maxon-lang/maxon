@@ -1,8 +1,7 @@
-// TypeResolution — the Maxon-tier `resolveTypes` pass. Replaces every
-// unresolved / named `MaxonType` with a concrete one so that `lowerMaxonToStd`
-// (whose `maxonTypeToStdType` panics on `named`/`unresolved`) never sees an
-// unresolved type, and keeps the `funcReturnTypes` registry in sync with the
-// resolved module so SemanticCheck reads resolved types.
+// TypeResolution — the Maxon-tier `resolveTypes` pass. Replaces every named `MaxonType` with a
+// concrete one, because `lowerMaxonToStd`'s `maxonTypeToStdType` panics on `named`/`unresolved`,
+// and keeps the `funcReturnTypes` registry in sync with the resolved module so SemanticCheck reads
+// resolved types.
 //
 // ⭐ **THE CASCADE BELOW IS `denotedNamedType`, AND IT HAS THREE READERS, NOT ONE.** "What does this
 // name denote?" is asked by this pass (whose `unknown` verdict IS its E3011) AND by the two places a
@@ -343,9 +342,11 @@ export enum UnknownTypeName implements Error
 	notDeclared
 end 'UnknownTypeName'
 
-// Resolve every unresolved/named type in `module`'s function signatures to a
-// concrete `MaxonType`, and re-sync each function's resolved return type into
-// the project's `funcReturnTypes` registry (SemanticCheck's source of truth).
+// Resolve every named type in `module`'s function signatures to a concrete `MaxonType`, and
+// re-sync each function's resolved return type into the project's `funcReturnTypes` registry
+// (SemanticCheck's source of truth). A closure parameter typed by `ClosureParamOffer.deferred`
+// stays `unresolved`: E3004 rejects its program before lowering, and
+// `requireNoUnresolvedTagsSurvivedTheMaxonTier` guards that.
 module function resolveTypes(project Project, module MaxonModule)
 	// Fetched ONCE for the whole pass, not per named type: `denotedNamedType` reads it for every
 	// reference, and the memoized query is a map probe that has no business being on that path.
@@ -360,7 +361,7 @@ module function resolveTypes(project Project, module MaxonModule)
 		var resolvedParams = MaxonTypeArray.create()
 
 		for pt in func.maxonParamTypes 'eachParam'
-			resolvedParams.push(resolveType(project, signatures: signatures, t: pt, readerFilePath: func.sourceFilePath))
+			resolvedParams.push(resolveParamType(project, signatures: signatures, t: pt, readerFilePath: func.sourceFilePath))
 		end 'eachParam'
 
 		func.maxonParamTypes = resolvedParams
@@ -966,6 +967,14 @@ function sourceParamTypesOf(func IrFunction, declaredCount ParamCount) returns M
 	return sourceParams
 end 'sourceParamTypesOf'
 
+function resolveParamType(project Project, signatures ProgramSignatures, t MaxonType, readerFilePath FilePath) returns MaxonType
+	if tagIsUnresolved(maxonTypeTag(t)) 'aDeferredClosureParameter'
+		return t
+	end 'aDeferredClosureParameter'
+
+	return resolveType(project, signatures: signatures, t: t, readerFilePath: readerFilePath)
+end 'resolveParamType'
+
 function resolveReturnType(project Project, signatures ProgramSignatures, ret MaxonReturnType, readerFilePath FilePath) returns MaxonReturnType
 	return match ret 'r'
 		void gives MaxonReturnType.void
@@ -986,7 +995,7 @@ export function resolveType(project Project, signatures ProgramSignatures, t Max
 		float then return t
 		exitCode then return t
 		named(id) then return resolveNamedType(project, signatures: signatures, id: id, readerFilePath: readerFilePath)
-		unresolved then panic("resolveTypes: `unresolved` reached type resolution — the parser emits no unresolved placeholders at M1")
+		unresolved then panic("resolveTypes: `unresolved` reached type resolution — a declared type is never `unresolved`, and the one signature slot that may be (a closure parameter typed by a deferred member's argument) is passed through by `resolveParamType` before it reaches here")
 
 		// Already resolved, and by the PARSER: `Parser.parseTypeReference` mints a `structRef`
 		// directly for `Self` (and for the enclosing type's own name) inside a `type` body, because
