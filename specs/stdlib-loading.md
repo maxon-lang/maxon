@@ -42,9 +42,9 @@ every function in it then collides with itself. (The harness stages every fragme
 outside the checkout's `stdlib/`, so no case below pins this.)
 
 `stdlib/` is located by walking UP from the COMPILER's own executable directory, not from the
-current working directory: the spec runner and `run_program` compile in a throwaway temp dir, so the
-working directory has no `stdlib/` above it, while the compiler binary always lives inside the
-checkout. A missing `stdlib/` is a loud, hard error — never a silent skip.
+current working directory: the compiler may be run from any directory — the spec runner compiles in a
+throwaway temp dir — so the working directory need have no `stdlib/` above it, while the compiler binary
+always lives inside the checkout. A missing `stdlib/` is a loud, hard error — never a silent skip.
 
 ### An unused stdlib module changes NOTHING
 

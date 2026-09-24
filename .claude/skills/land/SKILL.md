@@ -249,7 +249,8 @@ case that touches it with file + line, every `disabled-test:` in range, whether 
 
 **Then hand the writing out**: give an agent the exact list — file, case name, program, expected
 `exitcode`/`stdout`/`maxoncstderr`, and the marker to flip for anything already present — and let it
-write them into `specs/`. *(For one or two cases, writing them yourself is cheaper than the brief.
+write them into `specs/`, and **tell it to invoke the `maxon-coder` skill before writing a case**. *(For
+one or two cases, writing them yourself is cheaper than the brief — invoke `maxon-coder` yourself first.
 That is a cost call, not a rule.)*
 
 **Where the cases come from, in this order:**
@@ -314,9 +315,10 @@ fine on **disjoint** files, sequentially when they overlap: never two agents in 
 overlapping files. That is a scheduling rule about LABOUR — you integrate as their work arrives, and the
 deliverable stays one chunk and one commit.)*
 
-**What the agents must be told, beyond the standard six:**
+**What the agents must be told, beyond the standard eight:**
 
-- **Run `maxon-coder` before writing any Maxon.**
+- **Invoke the `maxon-coder` skill before writing any Maxon**, and hand back only code its compile
+  loop has passed.
 - ⛔ **WRITE NO COMMENTS** — not a `//`, not a `///`, not the doc block above a registry case. The code
   is still moving, so a comment written now is written and rewritten and mostly thrown away. **§6
   authors every comment the change gets**, once, after the review. A reason worth keeping goes in the

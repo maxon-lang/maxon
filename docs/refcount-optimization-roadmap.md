@@ -52,15 +52,17 @@ small synthetic program. It's the right regression harness but a bad
 at realistic volume. For a prioritization signal, measure the compiler
 compiling itself:
 
-1. **Refcount-traffic baseline.** `scripts/analyze_mm_trace.py` — what the
-   `mcp__maxon__mm_trace_analyze` tool drives — reads an `--mm-trace`
-   capture into op counts, per-tag / per-scope breakdowns and pointless-pair
-   candidates. It needs a workload that builds.
-2. **Build-time and exe-size baseline.** `scripts/self-host-ab.sh` builds
-   stage-2 and stage-3, `cmp`s them, times both self-compiles and prints the
-   per-phase allocation / byte / CPU ratio table. That is the one instrument
-   that measures the QUALITY OF THE EMITTED CODE rather tha compiler's
-   own logic.
+1. **Allocation baseline.** Self-compile with a `--debugstream` build of the
+   compiler, passing `--allocations-by-tag --metrics=<path>`: per-phase
+   allocation counts and bytes by type. `--census-by-tag` gives what each
+   phase leaves live. The refcount *op*-count scoreboard is the spec file
+   above.
+2. **Build-time and exe-size baseline.** `--metrics=<path>` on a
+   self-compile gives per-phase time and memory, `run_scale_test` the
+   doubling ladder (the `compiler-workflow` skill reads it), and the slot
+   binary's size the exe size. `scripts/fixpoint.sh` confirms stage 2 and
+   stage 3 are byte-identical, so a difference measured there is the
+   emitted code's and not a bootstrap artifact.
 
 A landed optimization has to move those numbers. One that changes none of
 op counts, build time or exe size is either not firing on real code or

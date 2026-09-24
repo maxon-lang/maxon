@@ -774,7 +774,7 @@ no doc comment, which is how it finds them.
   does not check this.
 - **The stage is derived from the leading digit** (1xxx lexer … 9xxx internal) and is never written
   down, so it cannot disagree.
-- **NEVER REFERENCE A CODE BY ITS NUMBER OUTSIDE THE REGISTRY.** Use the generated member
+- **NEVER REFERENCE A CODE BY ITS NUMBER OUTSIDE THE REGISTRY.** Use the registry's member
   (`ErrorCode.semanticUnneededCast`, plus `.rawValue` for the `"E3010"` spelling). A literal `"E3010"`
   in a source file is a second copy of the number space: renumber the code and every gate stays green
   while the code that matched it silently stops matching anything.

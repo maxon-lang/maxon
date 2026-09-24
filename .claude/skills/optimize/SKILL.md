@@ -15,6 +15,9 @@ genuinely must exist, **state in your REPORT why the two cannot be one** — oth
 **Optimize code you did not write where you can.** When another process dispatched you here, that
 independence is already true and is part of why the step exists.
 
+**Invoke the `maxon-coder` skill before rewriting any Maxon**; a rewrite goes through its compile loop like
+any other edit.
+
 ## First: who is running you
 
 - **Dispatched as a step of another process** (`/land` §4, or any caller that owns the gates): **you do

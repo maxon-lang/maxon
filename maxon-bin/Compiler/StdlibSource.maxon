@@ -59,13 +59,10 @@ let MaxStdlibSearchDepth = 64
 // `stdlib/` is. Not exported: `locateRuntimeDir` below is the only thing that spells it.
 let RuntimeDirName = "runtime"
 
-// Locate the checkout's `stdlib/` by walking UP from the COMPILER's own executable directory.
-//
-// ⚠ NOT from `Directory.currentPath()`: the spec runner and `run_program` compile a program in a
-// throwaway temp dir, so the working directory has no `stdlib/` above it. The compiler binary always
-// lives inside the checkout, so its own path is the reliable anchor. A failure to locate it is a hard,
-// LOUD error rather than a silent skip: every compile loads stdlib source, so a missing stdlib is a real
-// environment problem the user must see, not a `Clock.nowMs()` that mysteriously reports E3004.
+// Anchored on the executable, not `Directory.currentPath()`: the compiler may run from any
+// directory (the spec runner compiles in a throwaway temp dir), while its binary always lives inside
+// the checkout. A missing `stdlib/` must throw: every compile loads stdlib source, and a skip would
+// surface as an unexplained E3004 on the first stdlib call.
 export function locateStdlibDir() returns FilePath throws CompileError
 	let exePath = try Process.executablePath() otherwise throw CompileError.stdlibNotFound
 	let exeDir = try exePath.parent() otherwise throw CompileError.stdlibNotFound

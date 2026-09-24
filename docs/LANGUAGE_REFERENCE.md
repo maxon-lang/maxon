@@ -3902,8 +3902,10 @@ file** unless marked. Three modifiers widen that:
 | `export` | every file | yes (**E3092**, **E3093**) |
 | `public` | every file | no |
 
-The same modifiers apply to members inside a type: fields, methods and static members are private to the
-type unless marked, independently of the type's own visibility. At most one modifier may be written;
+The same modifiers apply to members inside a type, independently of the type's own visibility. An unmarked
+field is private to the type: reading or writing it anywhere else is **E3014**. An unmarked method or
+static member is private to the file, like a top-level declaration: calling it from another file is
+**E3008**. At most one modifier may be written;
 combining two is **E2001** (`'export' and 'public' cannot be combined`).
 
 **A signature may not name a type less visible than the function itself.** Whoever may call a function has to

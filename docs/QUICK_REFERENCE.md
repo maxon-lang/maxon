@@ -7,7 +7,6 @@
 | `int` | 64-bit signed integer | `42`, `-17` |
 | `float` | Floating-point | `3.14`, `-2.5` |
 | `bool` | Boolean | `true`, `false` |
-| `byte` | 0-255 | `255 as Octet` (where `typealias Octet = byte(0 to u8.max)`) |
 | `character literal` | Grapheme cluster | `'A'`, `'é'` |
 | `string literal` | UTF-8 string | `"hello"` |
 | `byte string literal` | ByteArray from string | `b"hello"` |
@@ -680,7 +679,7 @@ var s4 = try Status.fromRawValue("CLOSED") otherwise Status.active  // Status.cl
 
 ### Implicit Coercion to a Numeric Primitive
 
-A simple or int/float-backed enum case coerces implicitly to a numeric primitive (`int`, `byte`, `short`, `float`) wherever that type is expected — a function/method argument, a collection element, or a `return` value — using the case's backing value, with no `.rawValue` or cast. Extends the `byte == EnumCase` comparison rule to value positions. String/char/function/struct-backed enums are excluded (their runtime value is the ordinal — use `.rawValue`).
+A simple or int/float-backed enum case coerces implicitly to a numeric primitive (`int` or `float`) wherever that type is expected — a function/method argument, a collection element, or a `return` value — using the case's backing value, with no `.rawValue` or cast. Extends the `Byte == EnumCase` comparison rule to value positions. String/char/function/struct-backed enums are excluded (their runtime value is the ordinal — use `.rawValue`).
 
 ```maxon
 enum JsonByte
@@ -1062,14 +1061,13 @@ Math.pow(base, exponent: e)  // base raised to exponent
 // Implicit: int -> float in arithmetic
 // Implicit: 'A' -> 65 (char literal to codepoint when used with int)
 
-// Explicit with 'as' — bare `int`/`float`/`byte` are rejected;
+// Explicit with 'as' — a bare `int`/`float` target is rejected (E3005);
 // route every primitive cast through a named ranged typealias.
-// An `as` that doesn't narrow (target alias already covers the source's
-// range) is rejected with E3010 "unneeded cast".
+// Narrowing is checked at run time; a cast to the value's own alias is E3010.
 typealias Real = float(f64.min to f64.max)
-typealias Octet = byte(0 to u8.max)
-var f = 5 as Real
-var by = 255 as Octet
+typealias Octet = int(0 to u8.max)
+let f = 5 as Real
+let by = 255 as Octet
 
 // Float to int (no direct cast)
 trunc(x)   // toward zero

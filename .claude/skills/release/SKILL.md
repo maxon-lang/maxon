@@ -153,9 +153,9 @@ and every command after it then runs on `main`. ⛔ If `origin/release/X.Y.Z` is
 it by hand: push it back from the tag BEFORE step 3, or nothing on origin reaches the release commits
 once the tag is gone — `git push origin 'vX.Y.Z^{commit}:refs/heads/release/X.Y.Z'`.
 
-**4. Make the changes on the branch.** A fix already on `main` is cherry-picked. A change to compiler
-source still owes its case red then green before it goes on: the tagged run is a battery, not an
-acceptance. Then, where they apply:
+**4. Make the changes on the branch.** A fix already on `main` is cherry-picked. A new fix is written
+under the `maxon-coder` skill — invoke it first — and a change to compiler source still owes its case red
+then green before it goes on: the tagged run is a battery, not an acceptance. Then, where they apply:
 
 - ⛔ **The VS Code extension, if the failed attempt published it** — its `vscode-extension` run logs
   `Published maxon-lang.maxon-lsp-client v<version>`. That version is spent: bump PATCH, with a line in

@@ -47,12 +47,14 @@ the main checkout and get a green about a tree containing none of the work.
 
 Create a task list to perform these steps.
 
-## 1. Read `docs/WRITING_MAXON_CODE.md`
+## 1. Invoke the `maxon-coder` skill
+
+Its rulebook is part of the review criteria, and every fix you make goes through its compile loop.
 
 ## 2. Format modified `.maxon` files
 
-`mcp__maxon__fmt`, the **file** form. ⚠ **`fmt` with NO PATH formats the whole current directory** —
-that is its documented default, so name the file you mean. Check `git status` after formatting.
+With `fmt`'s **file** form, as `maxon-coder` says — one call per changed file. Check `git status` after
+formatting.
 
 ## 3. ⭐ ELIMINATE DUPLICATED CODE — the top priority, by user directive
 
