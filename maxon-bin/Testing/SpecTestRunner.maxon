@@ -1672,7 +1672,7 @@ export function tallyResults(results SpecTestResultArray) returns ResultTally
 end 'tallyResults'
 
 // The words the golden-drift report is recognised by, carried by both the stdout summary and the
-// stderr trailer. `tests/spec-harness/gates/drifted-golden.test.maxon` spells them, and
+// stderr trailer. `tests/spec-harness/gates/drifted-golden.maxtest` spells them, and
 // `goldenDriftSummary`'s whole sentence, as literals, so rewording either fails that corpus, which
 // `spec-test` does not run.
 let GoldenDriftHeadline = "DRIFTED from what the compiler emits"
@@ -2336,6 +2336,8 @@ function compileVerdictOf(e CompileError) returns CompileVerdict
 			noSourceFiles or
 			readError or
 			noCommonRoot or
+			twoDriverFiles or
+			nestedProjectFile or
 			unnamedDirectory or
 			invalidOutputPath or
 			stdlibNotFound or
@@ -3043,16 +3045,12 @@ end 'sourceTiersFor'
 // encounter in order to exclude it; `stdlibOverlays` is the same distinction one step further out,
 // staged and never named.
 //
-// ⛔⛔ **IT ASKS ONE EXCLUSION, NOT ALL OF THEM, AND THE DIFFERENCE COST A GREEN SUITE.** The first
-// draft narrowed `buildTargets` to *whatever `collectMaxonSources` returns*, which reads as the tighter
-// and more principled rule and is wrong: that walk drops **two** kinds of file and only one of them
-// means *not part of the program*. A `.maxonignore`d subtree is out by every route. A `project.maxon` is
-// a MANIFEST — out of the SWEEP, and compiled when you NAME it, which is exactly what
-// `unused-export.md`'s `api/project.maxon` section does. The walk-derived rule dropped that file and the
-// case lost the type it needed: `E2015 … 'a' … is declared 'unknown'`, one FAIL in 6,655, caught by the
-// full suite and by nothing smaller.
+// ⛔ It asks one exclusion, not everything the walk leaves out. `collectMaxonSources` also leaves
+// out every file that is not a `.maxon` source, and a named file of any kind is compiled, so
+// narrowing `buildTargets` to what the walk returns would drop a file the case compiles. A
+// `.maxonignore`d subtree is the one exclusion that holds on every route.
 //
-// ⇒ The predicate is `Compiler.isIgnoredDirectory`, the walk's OWN, called rather than re-spelled — so
+// The predicate is `Compiler.isIgnoredDirectory`, the walk's own, called rather than re-spelled — so
 // this is not a second copy of the marker rule, it is the same one asked a second time.
 //
 // ⚠ Asked only after every file is on disk — never per file inside the staging loop. A `.maxonignore`
@@ -3190,7 +3188,7 @@ end 'stageSourceTiers'
 // first and trip the second, either way delivering an answer about a file nothing reads.
 function copySourceTier(from FilePath, into FilePath, written FilePathArray) throws TierStagingError
 	var sources = MaxonSourcePathArray.create()
-	_ = try collectMaxonSources(from, into: sources, selection: SourceSelection.libraryTier) otherwise throw TierStagingError.refused("could not walk {from.toString()} to stage a private copy of it")
+	_ = try collectMaxonSources(from, into: sources) otherwise throw TierStagingError.refused("could not walk {from.toString()} to stage a private copy of it")
 
 	for source in sources 'eachSource'
 		let relative = try source.relativeTo(from) otherwise throw TierStagingError.refused("{source.toString()} is not under {from.toString()}, though that walk is what found it")
@@ -3872,7 +3870,7 @@ end 'findWasmtimePath'
 // whatever cwd the VM inherited; hand it `/tmp/x` and it looks in a directory that is not the one
 // the file is in. (Measured: `/private/tmp/probe` ran and exited 7, `/tmp/probe` failed 127.)
 //
-// Resolving against the cwd fixes the relative half outright. It cannot rewrite a symlinked prefix —
+// Anchoring at the cwd fixes the relative half outright. It cannot rewrite a symlinked prefix —
 // the stdlib has no realpath — but it does not need to: `Directory.currentPath()` is `getcwd`, which
 // is already the PHYSICAL path, and the runner's binaries live under the spec directory, which is
 // itself derived from that cwd (`Main.resolveSpecDir`). The one way back into the trap is an
@@ -3891,7 +3889,7 @@ function buildLinuxVmRunCommand(exePath FilePath) returns RunCommand
 	argv.push(OrbRunSubcommand)
 	argv.push(OrbMachineFlag)
 	argv.push(OrbMachineName)
-	argv.push(exePath.resolve(Directory.currentPath()).toString())
+	argv.push(exePath.anchoredAt(Directory.currentPath()).toString())
 
 	return RunCommand.create(Executable.name(OrbExecutableName), argv: argv)
 end 'buildLinuxVmRunCommand'
@@ -3973,7 +3971,7 @@ end 'guestCompilerUnder'
 // compilers from each other and from the host's, and an extension between them would read as part of
 // the name.
 function guestCompilerPath(projectRoot FilePath, harnessExe FilePath, effectiveTarget Target) returns FilePath
-	let outputDir = try FilePath.from(CompilerOutputDirName) otherwise panic("SpecTestRunner: '{CompilerOutputDirName}' is not a valid path component")
+	let outputDir = try FilePath.from(ProjectProductsDirName) otherwise panic("SpecTestRunner: '{ProjectProductsDirName}' is not a valid path component")
 	let exeName = try FilePath.from("{harnessExe.stem()}-{targetToString(effectiveTarget)}") otherwise panic("SpecTestRunner: '{harnessExe.stem()}-{targetToString(effectiveTarget)}' is not a valid file name")
 
 	return projectRoot.join(outputDir).join(exeName)
@@ -4668,12 +4666,13 @@ end 'batchStdinToken'
 // argument WSL translates, so every other path the script names is built here: relative to the root the
 // guest stands in, with the host's separator swapped for the guest's.
 //
-// Resolved against the process cwd first because `tempDir` is composed from the caller's spec directory,
-// which may be relative — and `relativeTo` compares BYTES, not what two paths mean, so an unresolved
-// path would not be seen as under the root it is in fact under.
+// Anchored at the process cwd first because `tempDir` is composed from the caller's spec directory,
+// which may be relative — and `relativeTo` compares BYTES, not what two paths mean, so an unanchored
+// path would not be seen as under the root it is in fact under. Its `..` components are kept, because
+// the guest opens the path and must reach the directory the filesystem answers.
 function guestSpecTempPrefix(tempDir FilePath) returns String
 	let root = Directory.currentPath()
-	let relative = try tempDir.resolve(root).relativeTo(root) otherwise 'notUnderRoot'
+	let relative = try tempDir.anchoredAt(root).relativeTo(root) otherwise 'notUnderRoot'
 		panic("SpecTestRunner: the spec scratch directory {tempDir.toString()} is not under the checkout root {root.toString()}, so the {WslExecutableName} guest cannot name it")
 	end 'notUnderRoot'
 

@@ -4,10 +4,6 @@
 public type BuildConfig
 	typealias StringArray = Array with String
 
-	/// What SELECTS this build: `maxon build <name>` picks it out of a manifest describing several.
-	/// ⚠ NOT the product name — `Build.build` sets it from the SOURCE PATH, so it is `.` for a project
-	/// built from its own directory. A binary's product name is its own file name.
-	public var name as String
 	public var output as String
 	public var sources as StringArray
 	public var debug_info as bool
@@ -24,41 +20,37 @@ public type BuildConfig
 	/// compiler the file is needed to build.
 	public var defines as StringArray
 
-	/// The directory whose own `project.maxon` describes this build, for a manifest that hands the
-	/// work to another one. Empty for an ordinary build, which states its own `sources`.
+	/// The directory whose own `.maxproj` file describes this build, for a build that hands the work
+	/// to another project. Empty for an ordinary build, which states its own `sources`.
 	public var directory as String
 
-	/// Which of the delegated manifest's targets to build. Empty means its sole target.
+	/// Which of the delegated project's targets to build. Empty means its sole target.
 	public var delegateTarget as String
 
-	public static function create(name String, output String, sources StringArray, debug_info bool, version String = "", defines StringArray = StringArray.create(), directory String = "", delegateTarget String = "") returns BuildConfig
-		return BuildConfig{name: name, output: output, sources: sources, debug_info: debug_info, version: version, defines: defines, directory: directory, delegateTarget: delegateTarget}
+	public static function create(sources StringArray, output String = "", debug_info bool = true, version String = "", defines StringArray = StringArray.create(), directory String = "", delegateTarget String = "") returns BuildConfig
+		return BuildConfig{output: output, sources: sources, debug_info: debug_info, version: version, defines: defines, directory: directory, delegateTarget: delegateTarget}
 	end 'create'
 end 'BuildConfig'
-
-/// A list of named build targets, for `Build.buildTargets`.
-public typealias BuildConfigArray = Array with BuildConfig
 
 // The file a described build is written to, named by the driver before it runs a manifest. The
 // compiler spells this name too (`Main.BuildDescriptionVariable`) and cannot share this constant:
 // the two must agree, or every manifest describes nothing.
 let BuildDescriptionVariable = "MAXON_BUILD_DESCRIPTION"
 
+let DescribedBuildSeparator = ",\n"
+
 public type Build
 	typealias StringArray = Array with String
 
-	/// Build ONE source path to ONE output. The common shape, and the one that keeps a manifest to a
-	/// single call: a caller naming a single directory should not have to build an array to say so,
-	/// which in a manifest means declaring an `Array with String` typealias to hold it.
-	/// source: the file or directory to compile. output: where the executable goes, extension omitted
-	/// (the compiler appends `.exe` on Windows, `.wasm` on wasm32-wasi and nothing elsewhere). debugInfo:
-	/// whether the build writes the `<output>.mxdbg` sidecar; `maxon build --no-debug-info` turns it off
-	/// whatever this says.
-	public static function build(source String, output String, debugInfo bool = true, version String = "", defines StringArray = StringArray.create())
+	/// Build one source path. A target or task describes one build, so call this once per run. source:
+	/// the file or directory to compile. output: where the executable goes, extension omitted (the
+	/// compiler appends `.exe` on Windows, `.wasm` on wasm32-wasi and nothing elsewhere); empty means
+	/// `.maxon/<name>`, `<name>` being the driver file's. debugInfo: whether the build writes the
+	/// `<output>.mxdbg` sidecar; `maxon build --no-debug-info` turns it off whatever this says.
+	public static function build(source String, output String = "", debugInfo bool = true, version String = "", defines StringArray = StringArray.create())
 		var sources = StringArray.create()
 		sources.push(source)
-		let config = BuildConfig.create(source, output: output, sources: sources, debug_info: debugInfo, version: version, defines: defines)
-		Build.emitBuildConfig(config)
+		Build.emitBuildConfig(BuildConfig.create(sources, output: output, debug_info: debugInfo, version: version, defines: defines))
 	end 'build'
 
 	/// Custom build - full control via BuildConfig
@@ -66,62 +58,22 @@ public type Build
 		Build.emitBuildConfig(config)
 	end 'buildWithConfig'
 
-	/// One NAMED target, for a manifest that describes more than one thing to build. The name is what
-	/// `maxon build <name>` selects; with a single target the name is not needed and `maxon build`
-	/// builds it, and with several `maxon build` lists them rather than guessing.
-	/// source: the file or directory to compile. output: where the executable goes, extension omitted.
-	/// debugInfo: as for `build`.
-	public static function target(name String, source String, output String, debugInfo bool = true, version String = "", defines StringArray = StringArray.create()) returns BuildConfig
-		var sources = StringArray.create()
-		sources.push(source)
-		return BuildConfig.create(name, output: output, sources: sources, debug_info: debugInfo, version: version, defines: defines)
-	end 'target'
-
-	/// One target whose description comes from ANOTHER directory's `project.maxon`. The compiler runs
-	/// that manifest with the directory as its working directory and resolves the relative paths it
-	/// states against it, so the delegated project builds the same way from either end.
-	/// target: which of the delegated manifest's targets to build; empty means its sole one.
-	public static function delegate(name String, directory String, target String = "")
-		Build.emitBuildConfig(BuildConfig.create(name, output: "", sources: StringArray.create(), debug_info: true, directory: directory, delegateTarget: target))
+	/// Hand the build to another directory's `.maxproj` file. The compiler runs that file with the
+	/// directory as its working directory and resolves the relative paths it states against it, so the
+	/// delegated project builds the same way from either end. target: which of its targets to build,
+	/// named as `maxon build` names one; empty means its sole target.
+	public static function delegate(directory String, target String = "")
+		Build.emitBuildConfig(BuildConfig.create(StringArray.create(), directory: directory, delegateTarget: target))
 	end 'delegate'
 
-	/// One delegated target among several, for `Build.buildTargets`. Prints nothing.
-	public static function delegateTarget(name String, directory String, target String = "") returns BuildConfig
-		return BuildConfig.create(name, output: "", sources: StringArray.create(), debug_info: true, directory: directory, delegateTarget: target)
-	end 'delegateTarget'
-
-	/// Emit several named targets as a JSON array. One target is emitted as a bare object by the calls
-	/// above, and the compiler accepts either shape.
-	public static function buildTargets(targets BuildConfigArray)
-		var text = "[\n"
-		var i = 0
-		let count = targets.count()
-
-		for t in targets 'emitTargets'
-			text.append(Build.renderBuildConfig(t))
-
-			if i < count - 1 'targetComma'
-				text.append(",\n")
-			end 'targetComma' else 'lastTarget'
-				text.append("\n")
-			end 'lastTarget'
-
-			i = i + 1
-		end 'emitTargets'
-
-		text.append("]\n")
-		writeBuildDescription(text)
-	end 'buildTargets'
-
 	/// Emit one build configuration as JSON. Every string is JSON-escaped, so a `"` or a Windows `\`
-	/// in a name or path reaches the compiler's JSON reader intact.
+	/// in a path reaches the compiler's JSON reader intact.
 	public static function emitBuildConfig(config BuildConfig)
 		writeBuildDescription("{Build.renderBuildConfig(config)}\n")
 	end 'emitBuildConfig'
 
 	static function renderBuildConfig(config BuildConfig) returns String
 		var text = "\{\n"
-		text.append("  \"name\": {Json.quote(config.name)},\n")
 		text.append("  \"output\": {Json.quote(config.output)},\n")
 		text.append("  \"directory\": {Json.quote(config.directory)},\n")
 		text.append("  \"target\": {Json.quote(config.delegateTarget)},\n")
@@ -171,6 +123,15 @@ function writeBuildDescription(text String)
 
 		let path = try FilePath.from(destination) otherwise panic("Build: {BuildDescriptionVariable} names '{destination}', which is not a path")
 
-		try File.writeText(path, content: text) otherwise panic("Build: the described build could not be written to '{destination}'")
+		// Appended rather than overwritten, so a run that describes two builds reaches the compiler as
+		// two and is refused, instead of building only the last.
+		var described = text
+
+		if File.exists(path) 'anotherBuild'
+			let earlier = try File.readText(path) otherwise panic("Build: the builds already described could not be read back from '{destination}'")
+			described = "{earlier}{DescribedBuildSeparator}{text}"
+		end 'anotherBuild'
+
+		try File.writeText(path, content: described) otherwise panic("Build: the described build could not be written to '{destination}'")
 	#endif
 end 'writeBuildDescription'

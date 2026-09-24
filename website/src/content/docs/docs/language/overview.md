@@ -32,7 +32,7 @@ needs no `main`; a program compiled with `maxon build` or `maxon execute` withou
 - A program is one `.maxon` file or a directory of them, compiled together. There are no `import`
   statements.
 - A file contains top-level declarations: functions, types, enums, unions, interfaces, extensions,
-  typealiases, variables and — in `*.test.maxon` files — tests. There are no top-level statements.
+  typealiases, variables and — in `*.maxtest` files — tests. There are no top-level statements.
 - A file's namespace comes from its directory (see [Namespaces](/docs/language/namespaces/)).
 - Declarations are private to their file unless marked `export`, `public` or `module`.
 - Declaration order does not matter: a function may call one declared later or in another file.

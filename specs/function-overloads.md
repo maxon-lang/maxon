@@ -246,6 +246,25 @@ end 'main'
 error E3007: specs/fragments/function-overloads/error.ambiguous-same-signature.test:13:9: Ambiguous overload for 'create': multiple overloads match. Candidates: (name String), (label String)
 ```
 
+<!-- test: error.an-argument-from-an-undefined-call-picks-no-overload -->
+```maxon
+function pick(x ExitCode) returns ExitCode
+	return x
+end 'pick'
+
+function pick(x String) returns ExitCode
+	return 1 if x.isEmpty() else 0
+end 'pick'
+
+function main() returns ExitCode
+	return pick(undefinedAnswer())
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/function-overloads/error.an-argument-from-an-undefined-call-picks-no-overload.test:11:9: resolving an overload of 'pick' against an argument whose type is not known — it derives from a name no file of the program declares, so no overload can be picked by it
+error E3004: specs/fragments/function-overloads/error.an-argument-from-an-undefined-call-picks-no-overload.test:11:14: call to undefined function 'undefinedAnswer'
+```
+
 <!-- test: a-void-overload-beside-a-value-one-resolves-by-argument -->
 ```maxon
 function emit(flag bool)

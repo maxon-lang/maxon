@@ -201,17 +201,15 @@ export function executeBuildTool(reqDoc JsonDoc, idNode JsonNodeId, args Optiona
 		argv.push("{OutputFlagPrefix}{outputArg}")
 	end 'hasOut'
 
-	// ⛔ A TRIPLE IS A FLAG, NOT A POSITIONAL. `maxon build` reads a bare word as another SOURCE PATH,
-	// so a target pushed positionally compiles a file named `wasm32-wasi`. A name declared in
-	// project.maxon IS a positional, and is told apart by carrying no `-`.
+	// A triple is a flag and a target name a positional: `maxon build` reads a bare word as a target
+	// or else a source path, so a triple pushed positionally would compile a file named `wasm32-wasi`.
 	let targetArg = getOptionalStringArg(reqDoc, args: args, key: "target", defaultVal: "")
 
 	if not targetArg.isEmpty() 'hasTgt'
-		if targetArg.contains("-") 'isTriple'
-			argv.push("--target={targetArg}")
-		end 'isTriple' else 'isManifestTarget'
-			argv.push(targetArg)
-		end 'isManifestTarget'
+		match parseBuildTarget(targetArg) 'targetKind'
+			resolved then argv.push("{TargetFlagPrefix}{targetArg}")
+			unrecognized then argv.push(targetArg)
+		end 'targetKind'
 	end 'hasTgt'
 
 	if getOptionalBoolArg(reqDoc, args: args, key: "emitIr", defaultVal: false) 'hasIr'

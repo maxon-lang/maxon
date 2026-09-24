@@ -58,7 +58,7 @@ function queryTokens(project Project, path FilePath, lexing LexSource = LexSourc
 	end 'sharedHit'
 
 	let tokens = try lexedTokens(project, content: entry.content, lexing: lexing) otherwise (lexErr) 'lexFail'
-		reportLexerError(project, path: path, error: lexErr)
+		reportDiagnostic(project, diagnostic: lexerErrorDiagnostic(lexErr, path: path))
 
 		// A failed tokenize is NOT cached — the diagnostic gates the build, and the next attempt must
 		// re-run against corrected source.
@@ -1154,8 +1154,8 @@ end 'landParseOutcome'
 // stopped — see `Parser.abortedParseArtifact` for why that one registry crosses an abort and the rest cannot.
 function reportFailedParse(project Project, path FilePath, error ParseError, blame LibraryBlame, salvaged FileParseArtifact) returns FileParseArtifact
 	// The only span in the compiler over which `project.libraryBlame` is set, exactly one reporting
-	// call wide — written where the diagnostic is stored rather than at each of `reportParseError`'s
-	// ~200 match arms.
+	// call wide — written where the diagnostic is stored rather than at each of
+	// `parseErrorDiagnostic`'s match arms.
 	project.libraryBlame = blameOutsideTheLibrary(project, blame: blame)
 	reportParseError(project, path: path, error: error)
 	project.libraryBlame = LibraryBlame.unblamed
@@ -1729,10 +1729,10 @@ end 'declaresReservedNamesAs'
 // (`Parser.fileMayUseReservedNames`), because a generated fragment has to reach names its own file
 // does not declare.
 //
-// ⚠ That asymmetry is load-bearing: a staged `*.test.maxon` is the author's bytes with a dispatcher
-// appended, so "this compiler wrote this file" is true of the file and false of most of its lines.
-// Granting the whole file the reserved space on the declaration side would let an author's
-// `function __sneaky()` through. The call side keeps the per-file shape because its own
+// ⚠ That asymmetry is load-bearing: a staged `.maxtest` file is the author's bytes with a
+// dispatcher appended, so "this compiler wrote this file" is true of the file and false of most of
+// its lines. Granting the whole file the reserved space on the declaration side would let an
+// author's `function __sneaky()` through. The call side keeps the per-file shape because its own
 // `declaresCallee` conjunction already bounds it to names some file in the program really declares.
 //
 // An empty list is not a sentinel for "author-written" — it is the same fact: a generated fragment
@@ -1904,20 +1904,21 @@ function resetMergeTargets(project Project)
 	project.debugStreamNameSites = DebugStreamNameSiteMap.create()
 	project.immortalConstArraySites = ImmortalConstArraySiteMap.create()
 	project.valueOrigins = ValueOriginTable.create()
+	project.deferralSources = DeferralSourceTable.create()
 end 'resetMergeTargets'
 
-function reportLexerError(project Project, path FilePath, error LexerError)
-	match error 'kind'
-		unexpectedEof(line, column) then reportPositioned(project, code: ErrorCode.lexerUnexpectedEof, message: "Unexpected end of input", line: line, column: column, filePath: path)
-		unterminatedString(line, column) then reportPositioned(project, code: ErrorCode.lexerUnterminatedString, message: "Unterminated string literal", line: line, column: column, filePath: path)
-		unterminatedBlockComment(line, column) then reportPositioned(project, code: ErrorCode.lexerUnterminatedBlockComment, message: "Unterminated block comment", line: line, column: column, filePath: path)
+module function lexerErrorDiagnostic(error LexerError, path FilePath) returns Diagnostic
+	return match error 'kind'
+		unexpectedEof(line, column) gives Diagnostic.create(ErrorCode.lexerUnexpectedEof, message: "Unexpected end of input", line: line, column: column, filePath: path)
+		unterminatedString(line, column) gives Diagnostic.create(ErrorCode.lexerUnterminatedString, message: "Unterminated string literal", line: line, column: column, filePath: path)
+		unterminatedBlockComment(line, column) gives Diagnostic.create(ErrorCode.lexerUnterminatedBlockComment, message: "Unterminated block comment", line: line, column: column, filePath: path)
 
 		// The sentence carries the cure: `specs/string-interpolation.md`'s `error.unescaped-brace` pins
 		// it verbatim, so changing this wording fails that suite.
-		unescapedBrace(line, column) then reportPositioned(project, code: ErrorCode.lexerUnescapedBrace, message: "Unescaped '\{' in string literal — use '\\\{' for a literal brace", line: line, column: column, filePath: path)
-		unknownDirective(name, line, column) then reportPositioned(project, code: ErrorCode.lexerUnknownDirective, message: "Unknown compiler directive '#{name}'", line: line, column: column, filePath: path)
+		unescapedBrace(line, column) gives Diagnostic.create(ErrorCode.lexerUnescapedBrace, message: "Unescaped '\{' in string literal — use '\\\{' for a literal brace", line: line, column: column, filePath: path)
+		unknownDirective(name, line, column) gives Diagnostic.create(ErrorCode.lexerUnknownDirective, message: "Unknown compiler directive '#{name}'", line: line, column: column, filePath: path)
 	end 'kind'
-end 'reportLexerError'
+end 'lexerErrorDiagnostic'
 
 // THREE codes, split by what the author got wrong rather than by where the filter noticed:
 //
@@ -1969,9 +1970,9 @@ end 'reservedNameReason'
 
 // The E2015 sentence, written once for the two `ParseError` cases that carry it — see
 // `tupleElementRejected` for why there are two cases and only one sentence.
-function reportUnsupportedFeature(project Project, feature String, line LineNumber, column ColumnNumber, path FilePath)
-	reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: unsupportedFeatureMessage(feature), line: line, column: column, filePath: path)
-end 'reportUnsupportedFeature'
+function unsupportedFeatureDiagnostic(feature String, line LineNumber, column ColumnNumber, path FilePath) returns Diagnostic
+	return Diagnostic.create(ErrorCode.parserUnsupportedFeature, message: unsupportedFeatureMessage(feature), line: line, column: column, filePath: path)
+end 'unsupportedFeatureDiagnostic'
 
 // E3078's one wire format: the parser refuses a source it can name, `StorageProvenance` one it cannot.
 module function varFromImmutableMessage(subject String, binding String) returns String
@@ -1999,390 +2000,394 @@ module function varShouldBeLetMessage(name String) returns String
 	return "variable '{name}' is never reassigned; use 'let' instead of 'var'"
 end 'varShouldBeLetMessage'
 
-module function reportParseError(project Project, path FilePath, error ParseError)
-	match error 'kind'
+function reportParseError(project Project, path FilePath, error ParseError)
+	reportDiagnostic(project, diagnostic: parseErrorDiagnostic(error, path: path, keywords: project.keywords))
+end 'reportParseError'
+
+module function parseErrorDiagnostic(error ParseError, path FilePath, keywords KeywordTable) returns Diagnostic
+	return match error 'kind'
 		// ⚠ The `expected` half is NOT quoted here — `Lexer.expectationDisplayText` decides that, and it
 		// is the only place that does: a bare lexical CATEGORY (`identifier`) is written bare and
 		// everything else quoted, which is canonical `/specs`' own rule. See there. This text is compared
 		// byte-for-byte by `variables.md`'s type-annotation-rejection tests.
-		unexpectedToken(expected, got, line, column) then reportPositioned(project, code: ErrorCode.parserExpectedToken, message: "Expected {expectationDisplayText(expected, keywords: project.keywords)} but got '{got}'", line: line, column: column, filePath: path)
-		expectedExpression(got, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Expected expression but got '{got}'", line: line, column: column, filePath: path)
+		unexpectedToken(expected, got, line, column) gives Diagnostic.create(ErrorCode.parserExpectedToken, message: "Expected {expectationDisplayText(expected, keywords: keywords)} but got '{got}'", line: line, column: column, filePath: path)
+		expectedExpression(got, line, column) gives Diagnostic.create(ErrorCode.parserExpressionError, message: "Expected expression but got '{got}'", line: line, column: column, filePath: path)
 
 		// The fifth E2004 family (see the registry's `doc`): the initializer parsed fine and is simply
 		// not CONSTANT. Pinned byte-for-byte by `lexer-edge-cases.md`.
-		expectedConstantExpression(got, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Expected constant expression, got '{got}'", line: line, column: column, filePath: path)
+		expectedConstantExpression(got, line, column) gives Diagnostic.create(ErrorCode.parserExpressionError, message: "Expected constant expression, got '{got}'", line: line, column: column, filePath: path)
 
 		// A shorthand field default whose raw tokens name no type — one more E2004 family than the
 		// registry's `doc` enumerates, a stale count there rather than a wrong code here. Pinned
 		// byte-for-byte by `field-defaults.missing-type-annotation-errors`.
-		uninferrableFieldDefault(line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Expected default value: literal (int, float, bool, or enum case). For other expressions, add a type with 'as': 'var name as Type = expr'.", line: line, column: column, filePath: path)
+		uninferrableFieldDefault(line, column) gives Diagnostic.create(ErrorCode.parserExpressionError, message: "Expected default value: literal (int, float, bool, or enum case). For other expressions, add a type with 'as': 'var name as Type = expr'.", line: line, column: column, filePath: path)
 
 		// E2060, pinned byte-for-byte by `source-location-defaults`' three refusal cases. The cure it
 		// names is the feature's only legal spelling, which is why it names both keywords whichever one
 		// was written.
-		callerLocationOutsideDefault(name, line, column) then reportPositioned(project, code: ErrorCode.parserCallerLocationOutsideDefault, message: "'{name}' is only valid as a function parameter's default value, where it expands to the caller's location at each call site. Declare a parameter such as 'at SourceLineNumber = __line__' or 'from String = __file__' and read the value from there.", line: line, column: column, filePath: path)
-		unexpectedEof(line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedEof, message: "Unexpected end of input", line: line, column: column, filePath: path)
+		callerLocationOutsideDefault(name, line, column) gives Diagnostic.create(ErrorCode.parserCallerLocationOutsideDefault, message: "'{name}' is only valid as a function parameter's default value, where it expands to the caller's location at each call site. Declare a parameter such as 'at SourceLineNumber = __line__' or 'from String = __file__' and read the value from there.", line: line, column: column, filePath: path)
+		unexpectedEof(line, column) gives Diagnostic.create(ErrorCode.parserUnexpectedEof, message: "Unexpected end of input", line: line, column: column, filePath: path)
 
 		// The literal is quoted VERBATIM — separators and radix prefix intact — because the source's own
 		// spelling is what the reader has to find, and the decoded value does not exist. The span is
 		// `I64MinBound`/`I64MaxBound`, the very constants `parseInt` enforces, so the limit the message
 		// names cannot drift from the limit that fired.
-		integerOverflow(literal, line, column) then reportPositioned(project, code: ErrorCode.parserLiteralOverflow, message: "Integer literal '{literal}' is outside the range of int ({I64MinBound} to {I64MaxBound})", line: line, column: column, filePath: path)
+		integerOverflow(literal, line, column) gives Diagnostic.create(ErrorCode.parserLiteralOverflow, message: "Integer literal '{literal}' is outside the range of int ({I64MinBound} to {I64MaxBound})", line: line, column: column, filePath: path)
 
 		// The same code as its integer twin — a literal outside its type's range is one meaning — with a
 		// message naming the right type and limit. `1e400`'s limit is `f64.max`, which no i64 span
 		// describes, so the float wording names the TYPE and stops there rather than spelling out a
 		// bound.
-		floatLiteralOverflow(literal, line, column) then reportPositioned(project, code: ErrorCode.parserLiteralOverflow, message: "Float literal '{literal}' is outside the range of float", line: line, column: column, filePath: path)
+		floatLiteralOverflow(literal, line, column) gives Diagnostic.create(ErrorCode.parserLiteralOverflow, message: "Float literal '{literal}' is outside the range of float", line: line, column: column, filePath: path)
 
 		// The third variant on the overflow code: a width past `PadWidth` is a number outside the range
 		// of its type, and the type is neither `int` nor `float` but `stdlib`'s own field width, so the
 		// message names ITS limit.
-		formatFieldOverflow(spec, line, column) then reportPositioned(project, code: ErrorCode.parserLiteralOverflow, message: "A width or precision in format specifier '{spec}' is larger than {MaxFormatFieldWidth}", line: line, column: column, filePath: path)
+		formatFieldOverflow(spec, line, column) gives Diagnostic.create(ErrorCode.parserLiteralOverflow, message: "A width or precision in format specifier '{spec}' is larger than {MaxFormatFieldWidth}", line: line, column: column, filePath: path)
 
 		// E2068 — not an overflow. The message says what is wrong with the TEXT, because there is no
 		// value to talk about a range of.
-		malformedNumericLiteral(literal, line, column) then reportPositioned(project, code: ErrorCode.parserMalformedNumericLiteral, message: "Numeric literal '{literal}' is not a number", line: line, column: column, filePath: path)
+		malformedNumericLiteral(literal, line, column) gives Diagnostic.create(ErrorCode.parserMalformedNumericLiteral, message: "Numeric literal '{literal}' is not a number", line: line, column: column, filePath: path)
 
 		// A type mismatch, not a missing feature. Reads "requires integer operands" rather than "does not
 		// support floats" because that is the permanent shape of the rule: `mod` and the bit operators
 		// have no float meaning to add later.
-		nonIntegralOperands(op, operand, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "operator '{op}' requires integer operands, but this one is {operand}", line: line, column: column, filePath: path)
+		nonIntegralOperands(op, operand, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "operator '{op}' requires integer operands, but this one is {operand}", line: line, column: column, filePath: path)
 
 		// E3009, the SAME code the explicit `5.0 as int` gets, because it is the same fact:
 		// `SemanticCheck.checkArgTypes` emits this exact code and message for a call argument, so the
 		// four coercion sites speak with one voice.
-		implicitNarrowing(sourceType, targetType, line, column) then reportPositioned(project, code: ErrorCode.semanticUnsafeCast, message: implicitNarrowingMessage(sourceType, targetType: targetType), line: line, column: column, filePath: path)
-		builtinArity(name, expected, got, line, column) then reportPositioned(project, code: ErrorCode.callArgCountMismatch, message: "'{name}' takes exactly {expected} argument, but {got} were given", line: line, column: column, filePath: path)
-		builtinOperandType(name, required, got, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "'{name}' requires a {required}, but its argument is {got}", line: line, column: column, filePath: path)
+		implicitNarrowing(sourceType, targetType, line, column) gives Diagnostic.create(ErrorCode.semanticUnsafeCast, message: implicitNarrowingMessage(sourceType, targetType: targetType), line: line, column: column, filePath: path)
+		builtinArity(name, expected, got, line, column) gives Diagnostic.create(ErrorCode.callArgCountMismatch, message: "'{name}' takes exactly {expected} argument, but {got} were given", line: line, column: column, filePath: path)
+		builtinOperandType(name, required, got, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "'{name}' requires a {required}, but its argument is {got}", line: line, column: column, filePath: path)
 
 		// The SIGNATURE-checked builtins (the `__Managed*` family) report through the sentence used for
 		// an ordinary call argument, not the operand wording above, because their arguments ARE a
 		// signature check. Pinned by `builtin-type-checking`.
-		builtinArgumentType(paramName, expected, got, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchSentence(quotedParamLabel(paramName), expected: expected, got: got), line: line, column: column, filePath: path)
-		unsupported(feature, line, column) then reportUnsupportedFeature(project, feature: feature, line: line, column: column, path: path)
+		builtinArgumentType(paramName, expected, got, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: argTypeMismatchSentence(quotedParamLabel(paramName), expected: expected, got: got), line: line, column: column, filePath: path)
+		unsupported(feature, line, column) gives unsupportedFeatureDiagnostic(feature, line: line, column: column, path: path)
 
 		// The SAME sentence and code, deliberately: `tupleElementRejected` exists so the declaration
 		// sweep can tell a whole-program element refusal from a malformed return type; it says nothing
 		// new to the reader, so it may not read any differently.
-		tupleElementRejected(feature, line, column) then reportUnsupportedFeature(project, feature: feature, line: line, column: column, path: path)
+		tupleElementRejected(feature, line, column) gives unsupportedFeatureDiagnostic(feature, line: line, column: column, path: path)
 
 		// The one 9xxx the parser raises. Positioned at the USE, because that is where the compile stops;
 		// the DECLARATION is named in the sentence, because that is what has to be read.
-		droppedSignature(name, declaredIn, declLine, declColumn, line, column) then reportPositioned(project, code: ErrorCode.internalDroppedSignature, message: "'{name}' is declared at {declaredIn}:{declLine}:{declColumn}, but the declaration sweep could not read its signature and the whole-program index does not carry it — so every use of it is refused as though nothing had been declared. This is a compiler bug: the sweep's tolerance exists for MALFORMED source, which the real parse then reports with a position, and a declaration the real parse reads is not that", line: line, column: column, filePath: path)
-		duplicateParameter(name, line, column) then reportPositioned(project, code: ErrorCode.duplicateParameter, message: "duplicate parameter name '{name}'", line: line, column: column, filePath: path)
-		undefinedVariable(name, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Undefined variable '{name}'", line: line, column: column, filePath: path)
-		ambiguousBareFunctionName(name, candidates, use, line, column) then reportPositioned(project, code: ErrorCode.semanticAmbiguousCrossFileCall, message: ambiguousBareFunctionNameMessage(name, candidates: candidates, use: use), line: line, column: column, filePath: path)
+		droppedSignature(name, declaredIn, declLine, declColumn, line, column) gives Diagnostic.create(ErrorCode.internalDroppedSignature, message: "'{name}' is declared at {declaredIn}:{declLine}:{declColumn}, but the declaration sweep could not read its signature and the whole-program index does not carry it — so every use of it is refused as though nothing had been declared. This is a compiler bug: the sweep's tolerance exists for MALFORMED source, which the real parse then reports with a position, and a declaration the real parse reads is not that", line: line, column: column, filePath: path)
+		duplicateParameter(name, line, column) gives Diagnostic.create(ErrorCode.duplicateParameter, message: "duplicate parameter name '{name}'", line: line, column: column, filePath: path)
+		undefinedVariable(name, line, column) gives Diagnostic.create(ErrorCode.parserExpressionError, message: "Undefined variable '{name}'", line: line, column: column, filePath: path)
+		ambiguousBareFunctionName(name, candidates, use, line, column) gives Diagnostic.create(ErrorCode.semanticAmbiguousCrossFileCall, message: ambiguousBareFunctionNameMessage(name, candidates: candidates, use: use), line: line, column: column, filePath: path)
 
 		// E3008 / E3088 by tier, through the same producer `SemanticCheck.reportCalleeNotVisible` reports
 		// a BODY's hidden call with, applied to the refusals a parse-time door has to decide for itself:
 		// a top-level initializer's call and a hidden static member.
-		symbolNotVisible(kind, symbol, tier, line, column) then reportHiddenSymbol(project, kind: kind, noun: symbol, tier: tier, line: line, column: column, filePath: path)
+		symbolNotVisible(kind, symbol, tier, line, column) gives hiddenSymbolDiagnostic(kind, noun: symbol, tier: tier, line: line, column: column, filePath: path)
 
 		// The wording rhymes with the FIELD refusal one tier down, because the author's mistake is the
 		// same one about a different roster.
-		unknownStaticMember(typeName, member, line, column) then reportPositioned(project, code: ErrorCode.unknownStaticMember, message: "type '{typeName}' has no static member named '{member}'", line: line, column: column, filePath: path)
-		missingReturn(name, line, column) then reportPositioned(project, code: ErrorCode.missingReturn, message: "missing return statement: '{name}'", line: line, column: column, filePath: path)
-		returnValueFromVoid(name, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "type mismatch: '{name}' declares no return type, so it cannot return a value", line: line, column: column, filePath: path)
-		returnWithoutValue(name, line, column) then reportPositioned(project, code: ErrorCode.missingReturn, message: "missing return value: '{name}' declares a return type, so every 'return' must carry a value", line: line, column: column, filePath: path)
-		assignToImmutable(name, line, column) then reportPositioned(project, code: ErrorCode.assignToImmutable, message: "cannot assign to immutable variable: '{name}'", line: line, column: column, filePath: path)
-		useAfterMove(name, line, column) then reportPositioned(project, code: ErrorCode.useAfterMove, message: useOfMovedValueMessage(name), line: line, column: column, filePath: path)
-		promiseCannotBeBorrowed(door, cure, line, column) then reportPositioned(project, code: ErrorCode.semanticPromiseCannotBeBorrowed, message: "a promise cannot be borrowed through '{door}': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. {cure}", line: line, column: column, filePath: path)
-		promiseAlreadyConsumed(door, line, column) then reportPositioned(project, code: ErrorCode.semanticPromiseAlreadyConsumed, message: "this promise was already consumed by an earlier '{door}': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again", line: line, column: column, filePath: path)
+		unknownStaticMember(typeName, member, line, column) gives Diagnostic.create(ErrorCode.unknownStaticMember, message: "type '{typeName}' has no static member named '{member}'", line: line, column: column, filePath: path)
+		missingReturn(name, line, column) gives Diagnostic.create(ErrorCode.missingReturn, message: "missing return statement: '{name}'", line: line, column: column, filePath: path)
+		returnValueFromVoid(name, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "type mismatch: '{name}' declares no return type, so it cannot return a value", line: line, column: column, filePath: path)
+		returnWithoutValue(name, line, column) gives Diagnostic.create(ErrorCode.missingReturn, message: "missing return value: '{name}' declares a return type, so every 'return' must carry a value", line: line, column: column, filePath: path)
+		assignToImmutable(name, line, column) gives Diagnostic.create(ErrorCode.assignToImmutable, message: "cannot assign to immutable variable: '{name}'", line: line, column: column, filePath: path)
+		useAfterMove(name, line, column) gives Diagnostic.create(ErrorCode.useAfterMove, message: useOfMovedValueMessage(name), line: line, column: column, filePath: path)
+		promiseCannotBeBorrowed(door, cure, line, column) gives Diagnostic.create(ErrorCode.semanticPromiseCannotBeBorrowed, message: "a promise cannot be borrowed through '{door}': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. {cure}", line: line, column: column, filePath: path)
+		promiseAlreadyConsumed(door, line, column) gives Diagnostic.create(ErrorCode.semanticPromiseAlreadyConsumed, message: "this promise was already consumed by an earlier '{door}': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again", line: line, column: column, filePath: path)
 
 		// `subject` rather than a hardcoded name: a field-chain spelling has no single source name to
 		// blame. Pinned by `specs/var-should-be-let.md`.
-		varFromImmutable(subject, binding, line, column) then reportPositioned(project, code: ErrorCode.semanticVarFromImmutable, message: varFromImmutableMessage(subject, binding: binding), line: line, column: column, filePath: path)
+		varFromImmutable(subject, binding, line, column) gives Diagnostic.create(ErrorCode.semanticVarFromImmutable, message: varFromImmutableMessage(subject, binding: binding), line: line, column: column, filePath: path)
 
 		// `targets` rather than a hardcoded "loop": a `break` may also leave a MATCH statement.
-		controlOutsideLoop(keyword, targets, line, column) then reportPositioned(project, code: ErrorCode.controlOutsideLoop, message: "'{keyword}' can only be used inside a {targets}", line: line, column: column, filePath: path)
-		labelTargetsOwnLoop(keyword, label, line, column) then reportPositioned(project, code: ErrorCode.labelTargetsOwnLoop, message: "'{keyword}' with label '{label}' targets its own loop; use '{keyword}' without a label, or '{keyword}' with the label of an outer loop", line: line, column: column, filePath: path)
-		unknownLoopLabel(keyword, targets, label, line, column) then reportPositioned(project, code: ErrorCode.controlOutsideLoop, message: "'{keyword}' targets no enclosing {targets} with label '{label}'", line: line, column: column, filePath: path)
-		firstArgNamed(line, column) then reportPositioned(project, code: ErrorCode.callFirstArgNamed, message: "the first argument cannot be named; only the second and later arguments take 'name:' labels", line: line, column: column, filePath: path)
-		argMissingLabel(line, column) then reportPositioned(project, code: ErrorCode.callArgMissingLabel, message: "the second and later arguments must be named ('name: value')", line: line, column: column, filePath: path)
+		controlOutsideLoop(keyword, targets, line, column) gives Diagnostic.create(ErrorCode.controlOutsideLoop, message: "'{keyword}' can only be used inside a {targets}", line: line, column: column, filePath: path)
+		labelTargetsOwnLoop(keyword, label, line, column) gives Diagnostic.create(ErrorCode.labelTargetsOwnLoop, message: "'{keyword}' with label '{label}' targets its own loop; use '{keyword}' without a label, or '{keyword}' with the label of an outer loop", line: line, column: column, filePath: path)
+		unknownLoopLabel(keyword, targets, label, line, column) gives Diagnostic.create(ErrorCode.controlOutsideLoop, message: "'{keyword}' targets no enclosing {targets} with label '{label}'", line: line, column: column, filePath: path)
+		firstArgNamed(line, column) gives Diagnostic.create(ErrorCode.callFirstArgNamed, message: "the first argument cannot be named; only the second and later arguments take 'name:' labels", line: line, column: column, filePath: path)
+		argMissingLabel(line, column) gives Diagnostic.create(ErrorCode.callArgMissingLabel, message: "the second and later arguments must be named ('name: value')", line: line, column: column, filePath: path)
 
 		// The THIRD label verdict, and the one neither sentence above can carry: both promise that SOME
 		// argument position takes a 'name:' label, which is false for a callee that has no declaration
 		// and therefore no parameters to name.
-		builtinArgNamed(line, column) then reportPositioned(project, code: ErrorCode.builtinArgNamed, message: "a builtin's arguments are all positional and cannot be named ('name:' labels a parameter, and a builtin has no declaration to have one)", line: line, column: column, filePath: path)
+		builtinArgNamed(line, column) gives Diagnostic.create(ErrorCode.builtinArgNamed, message: "a builtin's arguments are all positional and cannot be named ('name:' labels a parameter, and a builtin has no declaration to have one)", line: line, column: column, filePath: path)
 
 		// The three codes AND messages are the ones a DIRECT call's slotting failure gets, because it is
 		// the same rule met at a witness dispatch.
-		witnessArgCountMismatch(callee, expected, got, line, column) then reportPositioned(project, code: ErrorCode.callArgCountMismatch, message: argArityMismatchMessage(callee, expected: expected, got: got), line: line, column: column, filePath: path)
-		witnessUnknownArgLabel(callee, label, line, column) then reportPositioned(project, code: ErrorCode.callUnknownArgLabel, message: argUnknownLabelMessage(callee, label: label), line: line, column: column, filePath: path)
-		witnessDuplicateArg(callee, paramName, line, column) then reportPositioned(project, code: ErrorCode.callDuplicateArg, message: argDuplicateMessage(callee, paramName: paramName), line: line, column: column, filePath: path)
+		witnessArgCountMismatch(callee, expected, got, line, column) gives Diagnostic.create(ErrorCode.callArgCountMismatch, message: argArityMismatchMessage(callee, expected: expected, got: got), line: line, column: column, filePath: path)
+		witnessUnknownArgLabel(callee, label, line, column) gives Diagnostic.create(ErrorCode.callUnknownArgLabel, message: argUnknownLabelMessage(callee, label: label), line: line, column: column, filePath: path)
+		witnessDuplicateArg(callee, paramName, line, column) gives Diagnostic.create(ErrorCode.callDuplicateArg, message: argDuplicateMessage(callee, paramName: paramName), line: line, column: column, filePath: path)
 
 		// Both name the DECLARING interface of every requirement they mention, which is the interface the
 		// author has to edit.
-		ambiguousWitnessDispatch(method, provider, argCount, first, second, line, column) then reportPositioned(project, code: ErrorCode.semanticAmbiguousWitnessDispatch, message: "'{method}' taking {argCount} argument(s) is provided by both {first} and {second} through {provider} — a witness dispatch binds ONE table slot, and these are two, so there is nothing to choose by. Rename one requirement, or drop one of the constraints", line: line, column: column, filePath: path)
-		noWitnessRequirementOfArity(method, provider, argCount, available, line, column) then reportPositioned(project, code: ErrorCode.semanticNoWitnessRequirementForArgCount, message: "no requirement named '{method}' provided by {provider} takes {argCount} argument(s); they provide {available}", line: line, column: column, filePath: path)
-		staticRequirementNotDispatchable(requirement, receiver, line, column) then reportPositioned(project, code: ErrorCode.semanticStaticRequirementNotDispatchable, message: "'{requirement}' is a `static` requirement, and a `static` member has no receiver to dispatch on — so a value of {receiver} cannot reach it. Call a `static` member on a concrete type", line: line, column: column, filePath: path)
-		operandTypeMismatch(op, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "operator '{op}' requires both operands to be the same type (both bool or both int)", line: line, column: column, filePath: path)
-		operandAliasMismatch(op, left, right, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "operator '{op}' requires both operands to be the same type: '{left}' and '{right}' are different typealiases — cast one side with 'as'", line: line, column: column, filePath: path)
-		undefinedOperatorForType(op, typeName, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "operator '{op}' is not defined for type '{typeName}'", line: line, column: column, filePath: path)
-		enumNoSuchRawValue(value, enumName, line, column) then reportPositioned(project, code: ErrorCode.enumUnknownCase, message: "no enum case with raw value '{value}': '{enumName}'", line: line, column: column, filePath: path)
-		fieldsNotInitialized(typeName, fields, plural, line, column) then reportPositioned(project, code: ErrorCode.semanticFieldNotInitialized, message: "Field{"s" if plural else ""} {fields} of type '{typeName}' {"are" if plural else "is"} not initialized (provide in literal, add a default value on the declaration, or assign via self.field in a static factory)", line: line, column: column, filePath: path)
-		fieldsNotDefinitelyAssigned(typeName, fields, firstField, plural, line, column) then reportPositioned(project, code: ErrorCode.semanticFieldNotInitialized, message: "field{"s" if plural else ""} {fields} of type '{typeName}' {"are" if plural else "is"} not definitely assigned: the 'self.{firstField} = ...' assignment does not reach this Self\{...\} literal on all control-flow paths", line: line, column: column, filePath: path)
-		enumAccessorComparison(member, op, line, column) then reportPositioned(project, code: ErrorCode.semanticEnumAccessorComparison, message: "cannot compare an enum's '.{member}' with '{op}' — compare the value directly (e.g. `value == Type.case`), or use `match` for a union variant", line: line, column: column, filePath: path)
-		nonNumericOperands(left, right, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Cannot operate on {left} and {right}", line: line, column: column, filePath: path)
-		nonNumericNegation(operand, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Cannot negate {operand}", line: line, column: column, filePath: path)
+		ambiguousWitnessDispatch(method, provider, argCount, first, second, line, column) gives Diagnostic.create(ErrorCode.semanticAmbiguousWitnessDispatch, message: "'{method}' taking {argCount} argument(s) is provided by both {first} and {second} through {provider} — a witness dispatch binds ONE table slot, and these are two, so there is nothing to choose by. Rename one requirement, or drop one of the constraints", line: line, column: column, filePath: path)
+		noWitnessRequirementOfArity(method, provider, argCount, available, line, column) gives Diagnostic.create(ErrorCode.semanticNoWitnessRequirementForArgCount, message: "no requirement named '{method}' provided by {provider} takes {argCount} argument(s); they provide {available}", line: line, column: column, filePath: path)
+		staticRequirementNotDispatchable(requirement, receiver, line, column) gives Diagnostic.create(ErrorCode.semanticStaticRequirementNotDispatchable, message: "'{requirement}' is a `static` requirement, and a `static` member has no receiver to dispatch on — so a value of {receiver} cannot reach it. Call a `static` member on a concrete type", line: line, column: column, filePath: path)
+		operandTypeMismatch(op, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "operator '{op}' requires both operands to be the same type (both bool or both int)", line: line, column: column, filePath: path)
+		operandAliasMismatch(op, left, right, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "operator '{op}' requires both operands to be the same type: '{left}' and '{right}' are different typealiases — cast one side with 'as'", line: line, column: column, filePath: path)
+		undefinedOperatorForType(op, typeName, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "operator '{op}' is not defined for type '{typeName}'", line: line, column: column, filePath: path)
+		enumNoSuchRawValue(value, enumName, line, column) gives Diagnostic.create(ErrorCode.enumUnknownCase, message: "no enum case with raw value '{value}': '{enumName}'", line: line, column: column, filePath: path)
+		fieldsNotInitialized(typeName, fields, plural, line, column) gives Diagnostic.create(ErrorCode.semanticFieldNotInitialized, message: "Field{"s" if plural else ""} {fields} of type '{typeName}' {"are" if plural else "is"} not initialized (provide in literal, add a default value on the declaration, or assign via self.field in a static factory)", line: line, column: column, filePath: path)
+		fieldsNotDefinitelyAssigned(typeName, fields, firstField, plural, line, column) gives Diagnostic.create(ErrorCode.semanticFieldNotInitialized, message: "field{"s" if plural else ""} {fields} of type '{typeName}' {"are" if plural else "is"} not definitely assigned: the 'self.{firstField} = ...' assignment does not reach this Self\{...\} literal on all control-flow paths", line: line, column: column, filePath: path)
+		enumAccessorComparison(member, op, line, column) gives Diagnostic.create(ErrorCode.semanticEnumAccessorComparison, message: "cannot compare an enum's '.{member}' with '{op}' — compare the value directly (e.g. `value == Type.case`), or use `match` for a union variant", line: line, column: column, filePath: path)
+		nonNumericOperands(left, right, line, column) gives Diagnostic.create(ErrorCode.parserExpressionError, message: "Cannot operate on {left} and {right}", line: line, column: column, filePath: path)
+		nonNumericNegation(operand, line, column) gives Diagnostic.create(ErrorCode.parserExpressionError, message: "Cannot negate {operand}", line: line, column: column, filePath: path)
 
 		// Pinned byte-for-byte by the shift-count specs, in both suites. Names what is still LEGAL as
 		// well as what is not: a count of `{ShiftCountBits}` or more is a perfectly good way to say
 		// "shift every bit out".
-		shiftCountNegative(count, line, column) then reportPositioned(project, code: ErrorCode.shiftCountNegative, message: "Shift count {count} is negative: a shift distance must be {MinShiftCount} or greater (a count of {ShiftCountBits} or more is legal — it shifts every bit out)", line: line, column: column, filePath: path)
-		comparisonTypeMismatch(left, right, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "type mismatch: 'cannot compare {left} with {right}'", line: line, column: column, filePath: path)
-		literalInitDoesNotConform(typeName, interfaceName, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "Type '{typeName}' does not conform to {interfaceName}", line: line, column: column, filePath: path)
-		operatorRequiresConformance(op, typeParamName, interfaceName, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "Operator '{op}' requires type parameter '{typeParamName}' to be constrained with 'where {typeParamName} is {interfaceName}'", line: line, column: column, filePath: path)
-		witnessSelfArgNotTypeParam(what, typeParamName, got, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "'{what}' on type parameter '{typeParamName}' requires an argument of type '{typeParamName}' (the `Self` its constraint provides), not {got}", line: line, column: column, filePath: path)
-		structEqualsResultNotBool(structName, got, op, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "Operator '{op}' dispatches '{structName}.equals', which returns '{got}' — an equality operator requires the 'bool' result 'Equatable' declares", line: line, column: column, filePath: path)
-		nonBoolCondition(keyword, got, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "'{keyword}' requires a bool condition, got '{got}'", line: line, column: column, filePath: path)
-		assignTypeMismatch(place, got, expected, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "cannot assign a value of type '{got}' to {place}, which holds '{expected}'", line: line, column: column, filePath: path)
-		typeMismatchExpectedGot(expected, got, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "type mismatch: 'expected {expected}, got {got}'", line: line, column: column, filePath: path)
+		shiftCountNegative(count, line, column) gives Diagnostic.create(ErrorCode.shiftCountNegative, message: "Shift count {count} is negative: a shift distance must be {MinShiftCount} or greater (a count of {ShiftCountBits} or more is legal — it shifts every bit out)", line: line, column: column, filePath: path)
+		comparisonTypeMismatch(left, right, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "type mismatch: 'cannot compare {left} with {right}'", line: line, column: column, filePath: path)
+		literalInitDoesNotConform(typeName, interfaceName, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "Type '{typeName}' does not conform to {interfaceName}", line: line, column: column, filePath: path)
+		operatorRequiresConformance(op, typeParamName, interfaceName, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "Operator '{op}' requires type parameter '{typeParamName}' to be constrained with 'where {typeParamName} is {interfaceName}'", line: line, column: column, filePath: path)
+		witnessSelfArgNotTypeParam(what, typeParamName, got, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "'{what}' on type parameter '{typeParamName}' requires an argument of type '{typeParamName}' (the `Self` its constraint provides), not {got}", line: line, column: column, filePath: path)
+		structEqualsResultNotBool(structName, got, op, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "Operator '{op}' dispatches '{structName}.equals', which returns '{got}' — an equality operator requires the 'bool' result 'Equatable' declares", line: line, column: column, filePath: path)
+		nonBoolCondition(keyword, got, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "'{keyword}' requires a bool condition, got '{got}'", line: line, column: column, filePath: path)
+		assignTypeMismatch(place, got, expected, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "cannot assign a value of type '{got}' to {place}, which holds '{expected}'", line: line, column: column, filePath: path)
+		typeMismatchExpectedGot(expected, got, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "type mismatch: 'expected {expected}, got {got}'", line: line, column: column, filePath: path)
 
 		// `specs/tuple-assign.md`'s wording verbatim — it says "bindings" of what this compiler calls
 		// targets, and the spec is the language definition here.
-		tupleAssignArityMismatch(elements, targets, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "Tuple has {elements} elements but destructuring has {targets} bindings", line: line, column: column, filePath: path)
-		returnTypeMismatch(got, expected, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "Cannot return '{got}' from function declared to return '{expected}'", line: line, column: column, filePath: path)
-		functionValueIntoNonFunction(noun, name, heldType, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "cannot assign a value of type 'function' to {noun} '{name}', which holds '{heldType}': {FunctionValueMisuseSuffix}", line: line, column: column, filePath: path)
-		functionValueReturned(returnType, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "Cannot return 'function' from function declared to return '{returnType}': {FunctionValueMisuseSuffix}", line: line, column: column, filePath: path)
+		tupleAssignArityMismatch(elements, targets, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "Tuple has {elements} elements but destructuring has {targets} bindings", line: line, column: column, filePath: path)
+		returnTypeMismatch(got, expected, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "Cannot return '{got}' from function declared to return '{expected}'", line: line, column: column, filePath: path)
+		functionValueIntoNonFunction(noun, name, heldType, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "cannot assign a value of type 'function' to {noun} '{name}', which holds '{heldType}': {FunctionValueMisuseSuffix}", line: line, column: column, filePath: path)
+		functionValueReturned(returnType, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "Cannot return 'function' from function declared to return '{returnType}': {FunctionValueMisuseSuffix}", line: line, column: column, filePath: path)
 
 		// E3009, the SAME code the explicit lossy `5.0 as int` gets — one fact (a cast that is not a
 		// legal conversion), one code.
-		invalidCast(sourceType, targetType, line, column) then reportPositioned(project, code: ErrorCode.semanticUnsafeCast, message: "Cannot cast from {sourceType} to {targetType}", line: line, column: column, filePath: path)
-		castTargetIsAContainer(sourceType, targetType, line, column) then reportPositioned(project, code: ErrorCode.castTargetIsAContainer, message: "Cannot cast to '{targetType}': a container's elements have a storage layout of their own, so '{sourceType}' cannot be retagged as one — build the container with the element type you need, or convert it element by element", line: line, column: column, filePath: path)
+		invalidCast(sourceType, targetType, line, column) gives Diagnostic.create(ErrorCode.semanticUnsafeCast, message: "Cannot cast from {sourceType} to {targetType}", line: line, column: column, filePath: path)
+		castTargetIsAContainer(sourceType, targetType, line, column) gives Diagnostic.create(ErrorCode.castTargetIsAContainer, message: "Cannot cast to '{targetType}': a container's elements have a storage layout of their own, so '{sourceType}' cannot be retagged as one — build the container with the element type you need, or convert it element by element", line: line, column: column, filePath: path)
 
 		// E3011 and `unknownTypeMessage` — the SAME code and wording `TypeResolution` gives an undeclared
 		// type met at a parameter, a return type or a field, because it is ONE FACT met wherever a type
 		// name can be written. Only the ANCHOR differs: the declaration sites record no span for a type
 		// REFERENCE, and every raiser of this arm holds a token.
-		unknownTypeName(typeName, line, column) then reportPositioned(project, code: ErrorCode.unknownType, message: unknownTypeMessage(typeName), line: line, column: column, filePath: path)
-		throwingFunctionAsValue(name, errorType, line, column) then reportPositioned(project, code: ErrorCode.throwingFunctionAsValue, message: "Cannot use throwing function '{name}' as a value: it throws '{errorType}', and a function type cannot express 'throws'. Wrap the call in a non-throwing function that handles the error with 'try'.", line: line, column: column, filePath: path)
-		capturingClosureEscapes(message, line, column) then reportPositioned(project, code: ErrorCode.capturingClosureEscapes, message: message, line: line, column: column, filePath: path)
-		giveTypeMismatch(got, gotNote, expected, expectedNote, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "match arms give incompatible types: '{got}'{gotNote} vs '{expected}'{expectedNote}", line: line, column: column, filePath: path)
-		ternaryValueTypeMismatch(trueType, trueNote, falseType, falseNote, line, column) then reportPositioned(project, code: ErrorCode.matchTypeMismatch, message: "ternary expression type mismatch: true branch is '{trueType}'{trueNote} but false branch is '{falseType}'{falseNote}", line: line, column: column, filePath: path)
-		ternaryNonBoolCondition(got, line, column) then reportPositioned(project, code: ErrorCode.matchTypeMismatch, message: "ternary expression requires a bool condition, got '{got}'", line: line, column: column, filePath: path)
-		invalidCharacterLiteral(reason, line, column) then reportPositioned(project, code: ErrorCode.parserInvalidCharacterLiteral, message: "invalid character literal: {reason}", line: line, column: column, filePath: path)
+		unknownTypeName(typeName, line, column) gives Diagnostic.create(ErrorCode.unknownType, message: unknownTypeMessage(typeName), line: line, column: column, filePath: path)
+		throwingFunctionAsValue(name, errorType, line, column) gives Diagnostic.create(ErrorCode.throwingFunctionAsValue, message: "Cannot use throwing function '{name}' as a value: it throws '{errorType}', and a function type cannot express 'throws'. Wrap the call in a non-throwing function that handles the error with 'try'.", line: line, column: column, filePath: path)
+		capturingClosureEscapes(message, line, column) gives Diagnostic.create(ErrorCode.capturingClosureEscapes, message: message, line: line, column: column, filePath: path)
+		giveTypeMismatch(got, gotNote, expected, expectedNote, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "match arms give incompatible types: '{got}'{gotNote} vs '{expected}'{expectedNote}", line: line, column: column, filePath: path)
+		ternaryValueTypeMismatch(trueType, trueNote, falseType, falseNote, line, column) gives Diagnostic.create(ErrorCode.matchTypeMismatch, message: "ternary expression type mismatch: true branch is '{trueType}'{trueNote} but false branch is '{falseType}'{falseNote}", line: line, column: column, filePath: path)
+		ternaryNonBoolCondition(got, line, column) gives Diagnostic.create(ErrorCode.matchTypeMismatch, message: "ternary expression requires a bool condition, got '{got}'", line: line, column: column, filePath: path)
+		invalidCharacterLiteral(reason, line, column) gives Diagnostic.create(ErrorCode.parserInvalidCharacterLiteral, message: "invalid character literal: {reason}", line: line, column: column, filePath: path)
 
 		// The message is built at the decode site (`Parser.invalidDigitEscapeError`) because the LITERAL
 		// FORM is known there and not here. `specs/unicode-escape.md` compares stderr byte-for-byte.
-		invalidDigitEscape(message, line, column) then reportPositioned(project, code: ErrorCode.lexerInvalidEscape, message: message, line: line, column: column, filePath: path)
-		notOnUnknownType(line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "'not' needs its operand's type: `not` is a bit-flip on a bool and a 64-bit complement on an int, and this operand's type is not known (it is a call to a function no file in the program declares)", line: line, column: column, filePath: path)
-		voidCallResultUsed(name, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Function '{name}' does not return a value", line: line, column: column, filePath: path)
-		duplicateTopLevelDeclaration(name, line, column) then reportPositioned(project, code: ErrorCode.duplicateDefinition, message: "duplicate definition of '{name}'", line: line, column: column, filePath: path)
+		invalidDigitEscape(message, line, column) gives Diagnostic.create(ErrorCode.lexerInvalidEscape, message: message, line: line, column: column, filePath: path)
+		notOnUnknownType(line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "'not' needs its operand's type: `not` is a bit-flip on a bool and a 64-bit complement on an int, and this operand's type is not known (it is a call to a function no file in the program declares)", line: line, column: column, filePath: path)
+		voidCallResultUsed(name, line, column) gives Diagnostic.create(ErrorCode.parserExpressionError, message: "Function '{name}' does not return a value", line: line, column: column, filePath: path)
+		duplicateTopLevelDeclaration(name, line, column) gives Diagnostic.create(ErrorCode.duplicateDefinition, message: "duplicate definition of '{name}'", line: line, column: column, filePath: path)
 
 		// The three top-level-constant arms are pinned byte-for-byte by `specs/top-level-let.md`,
 		// and both suites compare this stderr exactly.
-		circularConstants(names, line, column) then reportPositioned(project, code: ErrorCode.parserCircularDependency, message: "Circular dependency detected among global constants: {names}", line: line, column: column, filePath: path)
-		functionCallInConstant(callee, line, column) then reportPositioned(project, code: ErrorCode.parserNonConstantInitializer, message: "Function calls are not allowed in global variable initializers; '{callee}()' is not a constant expression", line: line, column: column, filePath: path)
-		nonConstantInitializer(name, leftover, line, column) then reportPositioned(project, code: ErrorCode.parserNonConstantInitializer, message: "Global initializer for '{name}' is not a constant expression: '{leftover}' cannot be evaluated at compile time", line: line, column: column, filePath: path)
-		undefinedConstant(name, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Undefined constant '{name}'", line: line, column: column, filePath: path)
-		constantDivisionByZero(op, line, column) then reportPositioned(project, code: ErrorCode.parserNonConstantInitializer, message: "'{op}' by zero has no value: a global initializer is folded at compile time, so there is no run time for it to trap in", line: line, column: column, filePath: path)
+		circularConstants(names, line, column) gives Diagnostic.create(ErrorCode.parserCircularDependency, message: "Circular dependency detected among global constants: {names}", line: line, column: column, filePath: path)
+		functionCallInConstant(callee, line, column) gives Diagnostic.create(ErrorCode.parserNonConstantInitializer, message: "Function calls are not allowed in global variable initializers; '{callee}()' is not a constant expression", line: line, column: column, filePath: path)
+		nonConstantInitializer(name, leftover, line, column) gives Diagnostic.create(ErrorCode.parserNonConstantInitializer, message: "Global initializer for '{name}' is not a constant expression: '{leftover}' cannot be evaluated at compile time", line: line, column: column, filePath: path)
+		undefinedConstant(name, line, column) gives Diagnostic.create(ErrorCode.parserExpressionError, message: "Undefined constant '{name}'", line: line, column: column, filePath: path)
+		constantDivisionByZero(op, line, column) gives Diagnostic.create(ErrorCode.parserNonConstantInitializer, message: "'{op}' by zero has no value: a global initializer is folded at compile time, so there is no run time for it to trap in", line: line, column: column, filePath: path)
 
 		// E3103 for a BODY divide whose divisor the compiler holds as 0. Pinned byte-for-byte; both
 		// suites compare this stderr exactly.
-		divisionByProvableZero(op, line, column) then reportPositioned(project, code: ErrorCode.semanticDivisionByZero, message: "division by zero: the divisor of '{op}' is always 0", line: line, column: column, filePath: path)
+		divisionByProvableZero(op, line, column) gives Diagnostic.create(ErrorCode.semanticDivisionByZero, message: "division by zero: the divisor of '{op}' is always 0", line: line, column: column, filePath: path)
 
 		// E3005 for a top-level `let` cast whose literal is outside its ranged alias — the same code, the
 		// same words and the same anchor a body cast gets from `InsertRangeChecks`; only the tier that
 		// noticed differs.
-		constantCastOutOfRange(value, aliasName, low, high, isFloat, rawBitWidth, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: literalOutOfRangeMessage(value, aliasName: aliasName, low: low, high: high, isFloat: isFloat, rawBitWidth: rawBitWidth), line: line, column: column, filePath: path)
+		constantCastOutOfRange(value, aliasName, low, high, isFloat, rawBitWidth, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: literalOutOfRangeMessage(value, aliasName: aliasName, low: low, high: high, isFloat: isFloat, rawBitWidth: rawBitWidth), line: line, column: column, filePath: path)
 
 		// E3005 for a `b"…"` byte the element's declared range does not admit — the same code and range
 		// fact as the arm above, with the OFFSET its subject needs.
-		byteStringByteOutOfRange(value, offset, aliasName, low, high, isFloat, rawBitWidth, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: byteStringByteOutOfRangeMessage(value, offset: offset, aliasName: aliasName, low: low, high: high, isFloat: isFloat, rawBitWidth: rawBitWidth), line: line, column: column, filePath: path)
+		byteStringByteOutOfRange(value, offset, aliasName, low, high, isFloat, rawBitWidth, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: byteStringByteOutOfRangeMessage(value, offset: offset, aliasName: aliasName, low: low, high: high, isFloat: isFloat, rawBitWidth: rawBitWidth), line: line, column: column, filePath: path)
 
 		// E3117 for a RAW-BYTE fill of an element that cannot hold every byte — the same range fact as
 		// the two arms above asked PER TYPE rather than per value, so it takes its own code: E3005 says a
 		// value does not fit, and here there is no value to say it about.
-		rawByteFillNarrowElement(member, aliasName, low, high, isFloat, line, column) then reportPositioned(project, code: ErrorCode.rawByteFillNarrowElement, message: rawByteFillNarrowElementMessage(member, aliasName: aliasName, low: low, high: high, isFloat: isFloat), line: line, column: column, filePath: path)
+		rawByteFillNarrowElement(member, aliasName, low, high, isFloat, line, column) gives Diagnostic.create(ErrorCode.rawByteFillNarrowElement, message: rawByteFillNarrowElementMessage(member, aliasName: aliasName, low: low, high: high, isFloat: isFloat), line: line, column: column, filePath: path)
 
 		// E3118 for a RAW-BYTE WRITE into a slot its element does not fill — the arm above's question
 		// asked of the SLOT rather than of a byte, which is the same question only where a slot IS a
 		// byte.
-		rawByteWriteSlotDomain(member, elementDisplay, slotBytes, line, column) then reportPositioned(project, code: ErrorCode.rawByteWriteSlotDomain, message: rawByteWriteSlotDomainMessage(member, elementDisplay: elementDisplay, slotBytes: slotBytes), line: line, column: column, filePath: path)
+		rawByteWriteSlotDomain(member, elementDisplay, slotBytes, line, column) gives Diagnostic.create(ErrorCode.rawByteWriteSlotDomain, message: rawByteWriteSlotDomainMessage(member, elementDisplay: elementDisplay, slotBytes: slotBytes), line: line, column: column, filePath: path)
 
 		// The struct arms. Each carries the code its meaning is registered under in
 		// `docs/error-codes.txt` — never a number spelled here. ⚠ Pinned byte-for-byte by
 		// `specs/struct-construction-restriction.md`, in every suite that reads that file.
-		constructorRestricted(typeName, line, column) then reportPositioned(project, code: ErrorCode.semanticConstructorRestriction, message: "type '{typeName}' can only be constructed from within its own methods; use a static factory method instead", line: line, column: column, filePath: path)
-		builtinTypeConstruction(typeName, line, column) then reportPositioned(project, code: ErrorCode.semanticBuiltinTypeConstruction, message: "'{typeName}' is a compiler builtin type and cannot be constructed directly", line: line, column: column, filePath: path)
-		unknownField(typeName, fieldName, line, column) then reportPositioned(project, code: ErrorCode.semanticUnknownField, message: "type '{typeName}' has no field named '{fieldName}'", line: line, column: column, filePath: path)
+		constructorRestricted(typeName, line, column) gives Diagnostic.create(ErrorCode.semanticConstructorRestriction, message: "type '{typeName}' can only be constructed from within its own methods; use a static factory method instead", line: line, column: column, filePath: path)
+		builtinTypeConstruction(typeName, line, column) gives Diagnostic.create(ErrorCode.semanticBuiltinTypeConstruction, message: "'{typeName}' is a compiler builtin type and cannot be constructed directly", line: line, column: column, filePath: path)
+		unknownField(typeName, fieldName, line, column) gives Diagnostic.create(ErrorCode.semanticUnknownField, message: "type '{typeName}' has no field named '{fieldName}'", line: line, column: column, filePath: path)
 
 		// The conditional-extension refusal (see the union arm for why it is not the E3004 above it). The
 		// sentence names the CONDITION and then the one binding that fails it, in that order, because
 		// that is the order the author has to read them in to decide what to change.
-		conditionalExtensionWithheld(typeName, methodName, clause, unmetInterfaceName, bindingName, line, column) then reportPositioned(project, code: ErrorCode.invalidFieldAccess, message: conditionalExtensionWithheldMessage(typeName, methodName: methodName, clause: clause, unmetInterfaceName: unmetInterfaceName, bindingName: bindingName), line: line, column: column, filePath: path)
-		fieldNotInitialized(typeName, fieldName, line, column) then reportPositioned(project, code: ErrorCode.semanticFieldNotInitialized, message: "field '{fieldName}' of '{typeName}' is not initialized by this literal, and it has no default value", line: line, column: column, filePath: path)
+		conditionalExtensionWithheld(typeName, methodName, clause, unmetInterfaceName, bindingName, line, column) gives Diagnostic.create(ErrorCode.invalidFieldAccess, message: conditionalExtensionWithheldMessage(typeName, methodName: methodName, clause: clause, unmetInterfaceName: unmetInterfaceName, bindingName: bindingName), line: line, column: column, filePath: path)
+		fieldNotInitialized(typeName, fieldName, line, column) gives Diagnostic.create(ErrorCode.semanticFieldNotInitialized, message: "field '{fieldName}' of '{typeName}' is not initialized by this literal, and it has no default value", line: line, column: column, filePath: path)
 
 		// The SAME code as `unknownField`, and deliberately: a literal whose field list does not
 		// correspond one-to-one with the type's is one defect, seen from its two sides.
-		duplicateFieldInitializer(typeName, fieldName, line, column) then reportPositioned(project, code: ErrorCode.semanticUnknownField, message: "field '{fieldName}' of '{typeName}' is initialized twice by this literal", line: line, column: column, filePath: path)
+		duplicateFieldInitializer(typeName, fieldName, line, column) gives Diagnostic.create(ErrorCode.semanticUnknownField, message: "field '{fieldName}' of '{typeName}' is initialized twice by this literal", line: line, column: column, filePath: path)
 
 		// The SAME code as `assignToImmutable` — one rule, two sides. Pinned byte-for-byte by
 		// `structs.md` and `challenge-struct-field-assign.md`, in both suites.
-		assignToImmutableField(typeName, fieldName, line, column) then reportPositioned(project, code: ErrorCode.assignToImmutable, message: "cannot assign to field '{typeName}.{fieldName}' because it is immutable (declare with 'var' to make it mutable)", line: line, column: column, filePath: path)
+		assignToImmutableField(typeName, fieldName, line, column) gives Diagnostic.create(ErrorCode.assignToImmutable, message: "cannot assign to field '{typeName}.{fieldName}' because it is immutable (declare with 'var' to make it mutable)", line: line, column: column, filePath: path)
 
 		// The instance-method arms. Pinned byte-for-byte by `export-var-fields.md` for both, and the two
 		// suites run the same spec file.
-		localShadowsSelfField(name, typeName, line, column) then reportPositioned(project, code: ErrorCode.duplicateDefinition, message: "local '{name}' shadows self field '{typeName}.{name}' — rename the local to avoid silent type confusion at every read/write keyed on the name", line: line, column: column, filePath: path)
-		unexportedFieldAccess(typeName, fieldName, line, column) then reportPositioned(project, code: ErrorCode.unexportedFieldAccess, message: "cannot access unexported field: '{fieldName}' outside of type '{typeName}'", line: line, column: column, filePath: path)
-		immutableMutatingCall(name, functionName, line, column) then reportPositioned(project, code: ErrorCode.semanticImmutableRefToMutatingParam, message: immutableMutatingCallMessage(name, paramName: String.from(ReceiverSourceSpelling), functionName: functionName), line: line, column: column, filePath: path)
+		localShadowsSelfField(name, typeName, line, column) gives Diagnostic.create(ErrorCode.duplicateDefinition, message: "local '{name}' shadows self field '{typeName}.{name}' — rename the local to avoid silent type confusion at every read/write keyed on the name", line: line, column: column, filePath: path)
+		unexportedFieldAccess(typeName, fieldName, line, column) gives Diagnostic.create(ErrorCode.unexportedFieldAccess, message: "cannot access unexported field: '{fieldName}' outside of type '{typeName}'", line: line, column: column, filePath: path)
+		immutableMutatingCall(name, functionName, line, column) gives Diagnostic.create(ErrorCode.semanticImmutableRefToMutatingParam, message: immutableMutatingCallMessage(name, paramName: String.from(ReceiverSourceSpelling), functionName: functionName), line: line, column: column, filePath: path)
 
 		// Pinned byte-for-byte by the `maxoncstderr` goldens in `match-statements.md`/`match-simple.md`
 		// and `function-declaration.md`. Its raisers are listed on the union arm and deliberately not
 		// here — a copy of that list here would go stale silently as it grows.
-		strayToken(got, line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedToken, message: "unexpected token: '{got}'", line: line, column: column, filePath: path)
+		strayToken(got, line, column) gives Diagnostic.create(ErrorCode.parserUnexpectedToken, message: "unexpected token: '{got}'", line: line, column: column, filePath: path)
 
 		// The FILE-SCOPE shape of the same code, pinned byte-for-byte by `lexer-edge-cases.md`'s
 		// `maxoncstderr` goldens. Why it is a second variant rather than another raiser on `strayToken`
 		// is argued on the union arm.
-		expectedDeclaration(got, line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedToken, message: "Expected function declaration, got '{got}'", line: line, column: column, filePath: path)
-		expectedNewlineAfterBlockLabel(got, line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedToken, message: "Expected newline after block label, got '{got}'", line: line, column: column, filePath: path)
+		expectedDeclaration(got, line, column) gives Diagnostic.create(ErrorCode.parserUnexpectedToken, message: "Expected function declaration, got '{got}'", line: line, column: column, filePath: path)
+		expectedNewlineAfterBlockLabel(got, line, column) gives Diagnostic.create(ErrorCode.parserUnexpectedToken, message: "Expected newline after block label, got '{got}'", line: line, column: column, filePath: path)
 
 		// The FOURTH shape of E2001. See `ParseError.bareTryInAClosure` for why a closure earns a
 		// different sentence from the one a declared function earns for the same situation, and why the
 		// difference is the REMEDY rather than the rule.
-		bareTryInAClosure(line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedToken, message: "try without otherwise requires the enclosing function to have 'throws'", line: line, column: column, filePath: path)
-		mismatchedEndLabel(expected, got, line, column) then reportPositioned(project, code: ErrorCode.parserMismatchedEndLabel, message: "Mismatched end label: expected '{expected}', got '{got}'", line: line, column: column, filePath: path)
-		testOutsideTestFile(fileName, testFileName, line, column) then reportPositioned(project, code: ErrorCode.parserTestOutsideTestFile, message: "a 'test' declaration is only allowed in a file whose name ends in '.test.maxon'; rename '{fileName}' to '{testFileName}', or move this declaration into one", line: line, column: column, filePath: path)
-		testEmptyName(line, column) then reportPositioned(project, code: ErrorCode.parserTestEmptyName, message: "a 'test' declaration's name cannot be empty", line: line, column: column, filePath: path)
-		duplicateTestName(first, second, symbol, line, column) then reportPositioned(project, code: ErrorCode.semanticDuplicateTestName, message: "duplicate test name: '{first}' and '{second}' both compile to '{symbol}'", line: line, column: column, filePath: path)
+		bareTryInAClosure(line, column) gives Diagnostic.create(ErrorCode.parserUnexpectedToken, message: "try without otherwise requires the enclosing function to have 'throws'", line: line, column: column, filePath: path)
+		mismatchedEndLabel(expected, got, line, column) gives Diagnostic.create(ErrorCode.parserMismatchedEndLabel, message: "Mismatched end label: expected '{expected}', got '{got}'", line: line, column: column, filePath: path)
+		testOutsideTestFile(fileName, testFileName, line, column) gives Diagnostic.create(ErrorCode.parserTestOutsideTestFile, message: "a 'test' declaration is only allowed in a file whose name ends in '{TestSourceExtension}'; rename '{fileName}' to '{testFileName}', or move this declaration into one", line: line, column: column, filePath: path)
+		testEmptyName(line, column) gives Diagnostic.create(ErrorCode.parserTestEmptyName, message: "a 'test' declaration's name cannot be empty", line: line, column: column, filePath: path)
+		duplicateTestName(first, second, symbol, line, column) gives Diagnostic.create(ErrorCode.semanticDuplicateTestName, message: "duplicate test name: '{first}' and '{second}' both compile to '{symbol}'", line: line, column: column, filePath: path)
 
 		// The THIRD shape of E2001. Pinned byte-for-byte by
 		// `closure-self/error-self-in-free-function-closure`'s `maxoncstderr` golden. Why it is a variant
 		// of its own rather than another raiser on `strayToken` is argued on the union arm.
-		selfOutsideInstanceMethod(line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedToken, message: "'self' can only be used inside instance methods", line: line, column: column, filePath: path)
+		selfOutsideInstanceMethod(line, column) gives Diagnostic.create(ErrorCode.parserUnexpectedToken, message: "'self' can only be used inside instance methods", line: line, column: column, filePath: path)
 
 		// The `@heap` annotation's three refusals — all E2001. The first two are pinned byte-for-byte;
 		// the third states the compiler's own rule, and the union arms carry the reason for each.
-		unknownAnnotation(got, line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedToken, message: "Unknown annotation '@{got}' (expected '@heap')", line: line, column: column, filePath: path)
-		heapAnnotationWithoutBinding(line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedToken, message: "@heap must be followed by 'var' or 'let'", line: line, column: column, filePath: path)
-		heapAnnotationOnNonRecord(name, tag, line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedToken, message: "@heap can only annotate a binding whose value is a heap record; '{name}' binds a '{tag}'", line: line, column: column, filePath: path)
+		unknownAnnotation(got, line, column) gives Diagnostic.create(ErrorCode.parserUnexpectedToken, message: "Unknown annotation '@{got}' (expected '@heap')", line: line, column: column, filePath: path)
+		heapAnnotationWithoutBinding(line, column) gives Diagnostic.create(ErrorCode.parserUnexpectedToken, message: "@heap must be followed by 'var' or 'let'", line: line, column: column, filePath: path)
+		heapAnnotationOnNonRecord(name, tag, line, column) gives Diagnostic.create(ErrorCode.parserUnexpectedToken, message: "@heap can only annotate a binding whose value is a heap record; '{name}' binds a '{tag}'", line: line, column: column, filePath: path)
 
 		// The SAME code as `strayToken` above — E2001 is "the parser met a token that cannot appear at
 		// this point in the grammar", and a second `module` after an `export` is exactly that. Pinned
 		// byte-for-byte by `module-keyword/error.module-and-export-conflict`.
-		visibilityModifiersCombined(earlier, later, line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedToken, message: "{visibilityModifierSpelling(earlier)} and {visibilityModifierSpelling(later)} cannot be combined", line: line, column: column, filePath: path)
-		hiddenTypeName(typeName, line, column) then reportPositioned(project, code: ErrorCode.invalidFieldAccess, message: "Unknown type '{typeName}' in field access chain", line: line, column: column, filePath: path)
+		visibilityModifiersCombined(earlier, later, line, column) gives Diagnostic.create(ErrorCode.parserUnexpectedToken, message: "{visibilityModifierSpelling(earlier)} and {visibilityModifierSpelling(later)} cannot be combined", line: line, column: column, filePath: path)
+		hiddenTypeName(typeName, line, column) gives Diagnostic.create(ErrorCode.invalidFieldAccess, message: "Unknown type '{typeName}' in field access chain", line: line, column: column, filePath: path)
 
 		// Pinned byte-for-byte by `typealias-collision/error.exported-typealias-collision`.
-		ambiguousTypeAlias(name, candidates, line, column) then reportPositioned(project, code: ErrorCode.semanticAmbiguousTypeAlias, message: "Ambiguous typealias '{name}': multiple visible definitions found. Qualify with a directory name. Candidates: {candidates}", line: line, column: column, filePath: path)
+		ambiguousTypeAlias(name, candidates, line, column) gives Diagnostic.create(ErrorCode.semanticAmbiguousTypeAlias, message: "Ambiguous typealias '{name}': multiple visible definitions found. Qualify with a directory name. Candidates: {candidates}", line: line, column: column, filePath: path)
 
 		// The scalar-match arms. Each carries the code its meaning is registered under in
 		// `docs/error-codes.txt`, and each message is pinned byte-for-byte by the `maxoncstderr` goldens
 		// in `match-statements.md`/`match-simple.md`.
-		matchFallthroughWithReturn(line, column) then reportPositioned(project, code: ErrorCode.matchFallthroughWithReturn, message: "match fallthrough with return: 'cannot combine 'fallthrough' with 'return''", line: line, column: column, filePath: path)
-		matchNotExhaustive(subject, line, column) then reportPositioned(project, code: ErrorCode.matchNotExhaustive, message: "{subject} is not exhaustive: add a 'default' arm", line: line, column: column, filePath: path)
-		matchDuplicatePattern(pattern, line, column) then reportPositioned(project, code: ErrorCode.matchDuplicatePattern, message: "duplicate pattern in match: '{pattern}'", line: line, column: column, filePath: path)
-		matchPatternTypeMismatch(patternType, scrutineeType, line, column) then reportPositioned(project, code: ErrorCode.matchTypeMismatch, message: "pattern type '{patternType}' does not match scrutinee type '{scrutineeType}'", line: line, column: column, filePath: path)
-		matchDefaultNotLast(line, column) then reportPositioned(project, code: ErrorCode.matchDefaultNotLast, message: "'default' case must be the last case in match", line: line, column: column, filePath: path)
-		matchMissingBlockId(line, column) then reportPositioned(project, code: ErrorCode.matchMissingBlockId, message: "missing block identifier", line: line, column: column, filePath: path)
-		matchMismatchedBlockId(expected, got, line, column) then reportPositioned(project, code: ErrorCode.matchMismatchedBlockId, message: "block identifier mismatch: expected '{expected}', got '{got}'", line: line, column: column, filePath: path)
-		matchBlockStatement(keyword, line, column) then reportPositioned(project, code: ErrorCode.matchBlockStatement, message: "block-opening statement '{keyword}' is not allowed in a match arm; use a function call instead", line: line, column: column, filePath: path)
+		matchFallthroughWithReturn(line, column) gives Diagnostic.create(ErrorCode.matchFallthroughWithReturn, message: "match fallthrough with return: 'cannot combine 'fallthrough' with 'return''", line: line, column: column, filePath: path)
+		matchNotExhaustive(subject, line, column) gives Diagnostic.create(ErrorCode.matchNotExhaustive, message: "{subject} is not exhaustive: add a 'default' arm", line: line, column: column, filePath: path)
+		matchDuplicatePattern(pattern, line, column) gives Diagnostic.create(ErrorCode.matchDuplicatePattern, message: "duplicate pattern in match: '{pattern}'", line: line, column: column, filePath: path)
+		matchPatternTypeMismatch(patternType, scrutineeType, line, column) gives Diagnostic.create(ErrorCode.matchTypeMismatch, message: "pattern type '{patternType}' does not match scrutinee type '{scrutineeType}'", line: line, column: column, filePath: path)
+		matchDefaultNotLast(line, column) gives Diagnostic.create(ErrorCode.matchDefaultNotLast, message: "'default' case must be the last case in match", line: line, column: column, filePath: path)
+		matchMissingBlockId(line, column) gives Diagnostic.create(ErrorCode.matchMissingBlockId, message: "missing block identifier", line: line, column: column, filePath: path)
+		matchMismatchedBlockId(expected, got, line, column) gives Diagnostic.create(ErrorCode.matchMismatchedBlockId, message: "block identifier mismatch: expected '{expected}', got '{got}'", line: line, column: column, filePath: path)
+		matchBlockStatement(keyword, line, column) gives Diagnostic.create(ErrorCode.matchBlockStatement, message: "block-opening statement '{keyword}' is not allowed in a match arm; use a function call instead", line: line, column: column, filePath: path)
 
 		// The enum/union arms. For an ENUM every message is pinned byte-for-byte by
 		// `maxoncstderr` goldens. For a UNION the messages that name the construct print the DECLARED
 		// keyword via `kindWord`: E3034 (unknown-case) is conditional and so matches; E2026/E2046 print
 		// "union" rather than a hardcoded "enum". No union `maxoncstderr` golden gates these yet.
-		enumDuplicateCase(caseName, line, column) then reportPositioned(project, code: ErrorCode.enumDuplicateCase, message: "duplicate enum case: '{caseName}'", line: line, column: column, filePath: path)
-		enumDuplicateRawValue(rawValue, line, column) then reportPositioned(project, code: ErrorCode.enumDuplicateRawValue, message: "duplicate raw value: '{rawValue}'", line: line, column: column, filePath: path)
-		enumRawValueTypeMismatch(detail, line, column) then reportPositioned(project, code: ErrorCode.enumRawValueTypeMismatch, message: "raw value type mismatch: '{detail}'", line: line, column: column, filePath: path)
-		enumUnknownCase(kindWord, caseName, line, column) then reportPositioned(project, code: ErrorCode.enumUnknownCase, message: "unknown {kindWord} case: '{caseName}'", line: line, column: column, filePath: path)
+		enumDuplicateCase(caseName, line, column) gives Diagnostic.create(ErrorCode.enumDuplicateCase, message: "duplicate enum case: '{caseName}'", line: line, column: column, filePath: path)
+		enumDuplicateRawValue(rawValue, line, column) gives Diagnostic.create(ErrorCode.enumDuplicateRawValue, message: "duplicate raw value: '{rawValue}'", line: line, column: column, filePath: path)
+		enumRawValueTypeMismatch(detail, line, column) gives Diagnostic.create(ErrorCode.enumRawValueTypeMismatch, message: "raw value type mismatch: '{detail}'", line: line, column: column, filePath: path)
+		enumUnknownCase(kindWord, caseName, line, column) gives Diagnostic.create(ErrorCode.enumUnknownCase, message: "unknown {kindWord} case: '{caseName}'", line: line, column: column, filePath: path)
 
 		// E3034 again, and deliberately a SECOND sentence rather than a second caller of the one above: a
 		// `fromName` argument is not a case reference, and `/specs/constants.md`'s
 		// `error.fromName-invalid-case` pins these words. See the arm's declaration for why `kindWord` is
 		// the compiler's and not the references'.
-		enumNoCaseNamed(kindWord, caseName, typeName, line, column) then reportPositioned(project, code: ErrorCode.enumUnknownCase, message: "no {kindWord} case named '{caseName}': '{typeName}'", line: line, column: column, filePath: path)
-		enumFromNamePayloadArity(caseName, expected, line, column) then reportPositioned(project, code: ErrorCode.callArgCountMismatch, message: "wrong argument count: 'case '{caseName}' requires {expected} associated value(s)'", line: line, column: column, filePath: path)
+		enumNoCaseNamed(kindWord, caseName, typeName, line, column) gives Diagnostic.create(ErrorCode.enumUnknownCase, message: "no {kindWord} case named '{caseName}': '{typeName}'", line: line, column: column, filePath: path)
+		enumFromNamePayloadArity(caseName, expected, line, column) gives Diagnostic.create(ErrorCode.callArgCountMismatch, message: "wrong argument count: 'case '{caseName}' requires {expected} associated value(s)'", line: line, column: column, filePath: path)
 
 		// E4006, and NOT the E3034 above it: refused in these exact words rather than as an unknown case.
 		// Its sibling `fromRawValue` is disposed differently; see `Parser.parseEnumLiteral`.
-		allCasesOnUnion(line, column) then reportPositioned(project, code: ErrorCode.invalidFieldAccess, message: "allCases is not available on unions", line: line, column: column, filePath: path)
-		matchQualifiedCaseName(bare, qualified, line, column) then reportPositioned(project, code: ErrorCode.matchQualifiedCaseName, message: "use '{bare}' instead of '{qualified}' in match", line: line, column: column, filePath: path)
-		matchDiscardedBindings(caseName, discardList, line, column) then reportPositioned(project, code: ErrorCode.semanticMatchDiscardedBindings, message: "use '{caseName}' instead of '{caseName}({discardList})' to ignore associated values", line: line, column: column, filePath: path)
-		matchDefaultEnumMustThrow(kindWord, typeName, line, column) then reportPositioned(project, code: ErrorCode.matchDefaultEnumMustThrow, message: "'default' in a match on {kindWord} '{typeName}' must be followed by 'throws <error>' or 'panic(\"message\")'", line: line, column: column, filePath: path)
-		enumMatchNotExhaustive(kindWord, typeName, missing, line, column) then reportPositioned(project, code: ErrorCode.matchNotExhaustive, message: "match on {kindWord} '{typeName}' is not exhaustive, missing: {missing}", line: line, column: column, filePath: path)
+		allCasesOnUnion(line, column) gives Diagnostic.create(ErrorCode.invalidFieldAccess, message: "allCases is not available on unions", line: line, column: column, filePath: path)
+		matchQualifiedCaseName(bare, qualified, line, column) gives Diagnostic.create(ErrorCode.matchQualifiedCaseName, message: "use '{bare}' instead of '{qualified}' in match", line: line, column: column, filePath: path)
+		matchDiscardedBindings(caseName, discardList, line, column) gives Diagnostic.create(ErrorCode.semanticMatchDiscardedBindings, message: "use '{caseName}' instead of '{caseName}({discardList})' to ignore associated values", line: line, column: column, filePath: path)
+		matchDefaultEnumMustThrow(kindWord, typeName, line, column) gives Diagnostic.create(ErrorCode.matchDefaultEnumMustThrow, message: "'default' in a match on {kindWord} '{typeName}' must be followed by 'throws <error>' or 'panic(\"message\")'", line: line, column: column, filePath: path)
+		enumMatchNotExhaustive(kindWord, typeName, missing, line, column) gives Diagnostic.create(ErrorCode.matchNotExhaustive, message: "match on {kindWord} '{typeName}' is not exhaustive, missing: {missing}", line: line, column: column, filePath: path)
 
 		// The synthesized error union's five, plus E3084. `/specs/try-block.md` pins four of them as
 		// `maxoncstderr` goldens, so this text IS the contract.
-		errorUnionMatchNotExhaustive(missing, line, column) then reportPositioned(project, code: ErrorCode.matchNotExhaustive, message: "match on error union is not exhaustive, missing: {missing}", line: line, column: column, filePath: path)
-		errorUnionMatchDefaultMustThrow(line, column) then reportPositioned(project, code: ErrorCode.matchDefaultEnumMustThrow, message: "'default' in a match on an error union must be followed by 'throws <error>' or 'panic(\"message\")'", line: line, column: column, filePath: path)
-		errorUnionAmbiguousBareCase(caseName, line, column) then reportPositioned(project, code: ErrorCode.unionMatchPatternAmbiguous, message: "case '{caseName}' is shared by multiple union members; qualify with 'EnumName.{caseName}'", line: line, column: column, filePath: path)
-		errorUnionUnknownCase(caseName, line, column) then reportPositioned(project, code: ErrorCode.enumUnknownCase, message: "no case '{caseName}' in the error union", line: line, column: column, filePath: path)
-		errorUnionUnknownMember(memberName, line, column) then reportPositioned(project, code: ErrorCode.enumUnknownCase, message: "'{memberName}' is not a member of the error union", line: line, column: column, filePath: path)
-		unknownPayloadName(unionName, caseName, payloadName, line, column) then reportPositioned(project, code: ErrorCode.semanticUnknownPayloadName, message: "case '{caseName}' of `union {unionName}` has no payload named '{payloadName}'", line: line, column: column, filePath: path)
-		enumWrongBindingCount(caseName, expected, got, line, column) then reportPositioned(project, code: ErrorCode.enumWrongBindingCount, message: "wrong binding count: '{caseName}' expects {expected} associated value(s), got {got}", line: line, column: column, filePath: path)
-		matchArmPayloadBindingConflict(bindingName, reason, line, column) then reportPositioned(project, code: ErrorCode.matchArmPayloadBindingConflict, message: "the payload binding '{bindingName}' cannot be honoured: {reason}", line: line, column: column, filePath: path)
-		tryBlockBindingNotMatched(bindingName, line, column) then reportPositioned(project, code: ErrorCode.tryBlockBindingNotMatched, message: "otherwise block must contain a match on the error binding '{bindingName}'", line: line, column: column, filePath: path)
-		errorMatchNotExactlyOnce(bindingName, reason, line, column) then reportPositioned(project, code: ErrorCode.errorMatchNotExactlyOnce, message: "'{bindingName}' may hold a boxed error, which only the arm of the match that runs releases, so every path through its handler must match '{bindingName}' exactly once: {reason}. Match '{bindingName}' once, and bind in its arms whatever the rest of the handler needs", line: line, column: column, filePath: path)
-		matchOverlappingCase(caseName, line, column) then reportPositioned(project, code: ErrorCode.matchDuplicatePattern, message: "overlapping pattern in match: '{caseName}' is already covered", line: line, column: column, filePath: path)
-		matchEnumCaseRange(pattern, line, column) then reportPositioned(project, code: ErrorCode.matchEnumCaseRange, message: "'{pattern}' is not a match pattern: name each case in an 'or'-chain, one per line", line: line, column: column, filePath: path)
-		matchOrChainNeedsOwnLine(line, column) then reportPositioned(project, code: ErrorCode.matchOrChainNeedsOwnLine, message: "each alternative of a match arm's 'or'-chain needs its own line: break the line after 'or'", line: line, column: column, filePath: path)
-		matchSingleValueRange(pattern, line, column) then reportPositioned(project, code: ErrorCode.matchDuplicatePattern, message: "range pattern '{pattern}' covers a single value; use the bare value instead", line: line, column: column, filePath: path)
+		errorUnionMatchNotExhaustive(missing, line, column) gives Diagnostic.create(ErrorCode.matchNotExhaustive, message: "match on error union is not exhaustive, missing: {missing}", line: line, column: column, filePath: path)
+		errorUnionMatchDefaultMustThrow(line, column) gives Diagnostic.create(ErrorCode.matchDefaultEnumMustThrow, message: "'default' in a match on an error union must be followed by 'throws <error>' or 'panic(\"message\")'", line: line, column: column, filePath: path)
+		errorUnionAmbiguousBareCase(caseName, line, column) gives Diagnostic.create(ErrorCode.unionMatchPatternAmbiguous, message: "case '{caseName}' is shared by multiple union members; qualify with 'EnumName.{caseName}'", line: line, column: column, filePath: path)
+		errorUnionUnknownCase(caseName, line, column) gives Diagnostic.create(ErrorCode.enumUnknownCase, message: "no case '{caseName}' in the error union", line: line, column: column, filePath: path)
+		errorUnionUnknownMember(memberName, line, column) gives Diagnostic.create(ErrorCode.enumUnknownCase, message: "'{memberName}' is not a member of the error union", line: line, column: column, filePath: path)
+		unknownPayloadName(unionName, caseName, payloadName, line, column) gives Diagnostic.create(ErrorCode.semanticUnknownPayloadName, message: "case '{caseName}' of `union {unionName}` has no payload named '{payloadName}'", line: line, column: column, filePath: path)
+		enumWrongBindingCount(caseName, expected, got, line, column) gives Diagnostic.create(ErrorCode.enumWrongBindingCount, message: "wrong binding count: '{caseName}' expects {expected} associated value(s), got {got}", line: line, column: column, filePath: path)
+		matchArmPayloadBindingConflict(bindingName, reason, line, column) gives Diagnostic.create(ErrorCode.matchArmPayloadBindingConflict, message: "the payload binding '{bindingName}' cannot be honoured: {reason}", line: line, column: column, filePath: path)
+		tryBlockBindingNotMatched(bindingName, line, column) gives Diagnostic.create(ErrorCode.tryBlockBindingNotMatched, message: "otherwise block must contain a match on the error binding '{bindingName}'", line: line, column: column, filePath: path)
+		errorMatchNotExactlyOnce(bindingName, reason, line, column) gives Diagnostic.create(ErrorCode.errorMatchNotExactlyOnce, message: "'{bindingName}' may hold a boxed error, which only the arm of the match that runs releases, so every path through its handler must match '{bindingName}' exactly once: {reason}. Match '{bindingName}' once, and bind in its arms whatever the rest of the handler needs", line: line, column: column, filePath: path)
+		matchOverlappingCase(caseName, line, column) gives Diagnostic.create(ErrorCode.matchDuplicatePattern, message: "overlapping pattern in match: '{caseName}' is already covered", line: line, column: column, filePath: path)
+		matchEnumCaseRange(pattern, line, column) gives Diagnostic.create(ErrorCode.matchEnumCaseRange, message: "'{pattern}' is not a match pattern: name each case in an 'or'-chain, one per line", line: line, column: column, filePath: path)
+		matchOrChainNeedsOwnLine(line, column) gives Diagnostic.create(ErrorCode.matchOrChainNeedsOwnLine, message: "each alternative of a match arm's 'or'-chain needs its own line: break the line after 'or'", line: line, column: column, filePath: path)
+		matchSingleValueRange(pattern, line, column) gives Diagnostic.create(ErrorCode.matchDuplicatePattern, message: "range pattern '{pattern}' covers a single value; use the bare value instead", line: line, column: column, filePath: path)
 
 		// Pinned byte-for-byte by `enum-match-only.md` `maxoncstderr` goldens.
-		unionNotComparable(op, line, column) then reportPositioned(project, code: ErrorCode.semanticEnumNotComparable, message: "cannot compare union values using '{op}', use 'match' instead", line: line, column: column, filePath: path)
+		unionNotComparable(op, line, column) gives Diagnostic.create(ErrorCode.semanticEnumNotComparable, message: "cannot compare union values using '{op}', use 'match' instead", line: line, column: column, filePath: path)
 
 		// The OPERATOR half of the existential-identity rule; its METHOD half is the `unsupported` arm
 		// `Parser.requireWitnessSelfArgs` throws, and both messages end in the same shared sentence.
-		existentialNotComparable(op, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "cannot compare values held at an interface type using '{op}': {ExistentialPairUnprovableReason}, so the comparison would be answered by the two fat pointers' ADDRESSES rather than by their values. Compare concrete values, or dispatch a requirement the interface declares", line: line, column: column, filePath: path)
-		stringNotOrderable(op, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "cannot order String values using '{op}': a String is a byte record with no ordering, so its only comparisons are '==' and '!='", line: line, column: column, filePath: path)
+		existentialNotComparable(op, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "cannot compare values held at an interface type using '{op}': {ExistentialPairUnprovableReason}, so the comparison would be answered by the two fat pointers' ADDRESSES rather than by their values. Compare concrete values, or dispatch a requirement the interface declares", line: line, column: column, filePath: path)
+		stringNotOrderable(op, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "cannot order String values using '{op}': a String is a byte record with no ordering, so its only comparisons are '==' and '!='", line: line, column: column, filePath: path)
 
 		// ⚠ The E3068 sentence is pinned byte-for-byte only in its NON-NEGATED form —
 		// `reference-identity.md`'s `primitive-error` `maxoncstderr` golden pins `'is'` for `a is b`. For
 		// `a is not b` this interpolates the operator and says `'is not'`, naming what was written; that
 		// is deliberate, not an oversight, and only the non-negated form is gated.
-		refIdentityOnPrimitive(op, line, column) then reportPositioned(project, code: ErrorCode.refIdentityOnPrimitive, message: "'{op}' requires reference types (structs), not primitive values", line: line, column: column, filePath: path)
-		refIdentityTypeMismatch(op, left, right, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "'{op}' requires both operands to be the same type, got '{left}' and '{right}'", line: line, column: column, filePath: path)
+		refIdentityOnPrimitive(op, line, column) gives Diagnostic.create(ErrorCode.refIdentityOnPrimitive, message: "'{op}' requires reference types (structs), not primitive values", line: line, column: column, filePath: path)
+		refIdentityTypeMismatch(op, left, right, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "'{op}' requires both operands to be the same type, got '{left}' and '{right}'", line: line, column: column, filePath: path)
 
 		// Pinned byte-for-byte by `reserved-double-underscore.md` `maxoncstderr` goldens.
-		reservedIdentifier(name, line, column) then reportPositioned(project, code: ErrorCode.reservedIdentifier, message: "identifier '{name}' is reserved: declarations starting with '__' are reserved for compiler internals", line: line, column: column, filePath: path)
+		reservedIdentifier(name, line, column) gives Diagnostic.create(ErrorCode.reservedIdentifier, message: "identifier '{name}' is reserved: declarations starting with '__' are reserved for compiler internals", line: line, column: column, filePath: path)
 
 		// The reservation's SECOND arm — same code, a different name set and a different reason. Pinned
 		// byte-for-byte by `reserved-self.md`'s `maxoncstderr` golden.
-		reservedReceiverName(line, column) then reportPositioned(project, code: ErrorCode.reservedIdentifier, message: "identifier 'self' is reserved: it is the implicit instance receiver and cannot be bound by user code", line: line, column: column, filePath: path)
-		reservedFaultProbeName(line, column) then reportPositioned(project, code: ErrorCode.reservedIdentifier, message: "identifier 'maxon_force_segfault' is reserved: it is the compiler's own fault-probe entry point, which a program reaches through `__Builtins.forceSegfault()`", line: line, column: column, filePath: path)
+		reservedReceiverName(line, column) gives Diagnostic.create(ErrorCode.reservedIdentifier, message: "identifier 'self' is reserved: it is the implicit instance receiver and cannot be bound by user code", line: line, column: column, filePath: path)
+		reservedFaultProbeName(line, column) gives Diagnostic.create(ErrorCode.reservedIdentifier, message: "identifier 'maxon_force_segfault' is reserved: it is the compiler's own fault-probe entry point, which a program reaches through `__Builtins.forceSegfault()`", line: line, column: column, filePath: path)
 
 		// Not every name here is synthesized by the compiler — `Ordering` and `IterationError` are read
 		// from `stdlib/Interfaces.maxon`. What is true of all of them is that the name has ONE meaning
 		// this compile did not get from the file being refused.
-		declarationTakesCompilerOwnedTypeName(name, line, column) then reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "Unsupported: a declaration of the type name '{name}', which the compiler owns — its one meaning comes from the compiler itself or from the stdlib module that declares it, and the compiler has no namespace to tell a user declaration of the name apart from that one", line: line, column: column, filePath: path)
+		declarationTakesCompilerOwnedTypeName(name, line, column) gives Diagnostic.create(ErrorCode.parserUnsupportedFeature, message: "Unsupported: a declaration of the type name '{name}', which the compiler owns — its one meaning comes from the compiler itself or from the stdlib module that declares it, and the compiler has no namespace to tell a user declaration of the name apart from that one", line: line, column: column, filePath: path)
 
 		// E3058/E3059/E2049 render the parser's error-handling diagnostics (the `ParseError` variants are
 		// declared in `Parser.maxon`; this is their render half). Pinned by the
 		// `error-handling.md`/`match-statements.md` `maxoncstderr` goldens.
-		otherwiseWithoutTry(line, column) then reportPositioned(project, code: ErrorCode.otherwiseRequiresTry, message: "otherwise requires try expression", line: line, column: column, filePath: path)
-		errorTypeMismatch(detail, line, column) then reportPositioned(project, code: ErrorCode.errorTypeMismatch, message: "type mismatch: '{detail}'", line: line, column: column, filePath: path)
-		tryBlockFormInMatchArm(isOtherwiseForm, line, column) then reportPositioned(project, code: ErrorCode.matchBlockStatement, message: tryBlockFormMessage(isOtherwiseForm), line: line, column: column, filePath: path)
+		otherwiseWithoutTry(line, column) gives Diagnostic.create(ErrorCode.otherwiseRequiresTry, message: "otherwise requires try expression", line: line, column: column, filePath: path)
+		errorTypeMismatch(detail, line, column) gives Diagnostic.create(ErrorCode.errorTypeMismatch, message: "type mismatch: '{detail}'", line: line, column: column, filePath: path)
+		tryBlockFormInMatchArm(isOtherwiseForm, line, column) gives Diagnostic.create(ErrorCode.matchBlockStatement, message: tryBlockFormMessage(isOtherwiseForm), line: line, column: column, filePath: path)
 
 		// The two block-form `try` refusals. The first sentence is pinned byte-for-byte by
 		// `try-block.md`'s `maxoncstderr` golden.
-		tryBlockNoThrows(label, line, column) then reportPositioned(project, code: ErrorCode.tryBlockNoThrows, message: "try block contains no throwing calls: '{label}'", line: line, column: column, filePath: path)
-		tryBlockMissingOtherwise(missingBinding, line, column) then reportPositioned(project, code: ErrorCode.otherwiseBlockMissingBinding, message: tryBlockMissingOtherwiseMessage(missingBinding), line: line, column: column, filePath: path)
-		tryOnNonThrowing(callee, line, column) then reportPositioned(project, code: ErrorCode.tryRequiresThrowingFunction, message: "try requires a throwing function: '{callee}' does not throw'", line: line, column: column, filePath: path)
-		ifTryDiscardsResult(callee, line, column) then reportPositioned(project, code: ErrorCode.ifTryDiscardsResult, message: "'if try' discards the result of '{callee}': only a call that returns nothing may be tested bare — bind the result with 'if let'", line: line, column: column, filePath: path)
-		redundantContainsGet(message, line, column) then reportPositioned(project, code: ErrorCode.redundantContainsGet, message: message, line: line, column: column, filePath: path)
+		tryBlockNoThrows(label, line, column) gives Diagnostic.create(ErrorCode.tryBlockNoThrows, message: "try block contains no throwing calls: '{label}'", line: line, column: column, filePath: path)
+		tryBlockMissingOtherwise(missingBinding, line, column) gives Diagnostic.create(ErrorCode.otherwiseBlockMissingBinding, message: tryBlockMissingOtherwiseMessage(missingBinding), line: line, column: column, filePath: path)
+		tryOnNonThrowing(callee, line, column) gives Diagnostic.create(ErrorCode.tryRequiresThrowingFunction, message: "try requires a throwing function: '{callee}' does not throw'", line: line, column: column, filePath: path)
+		ifTryDiscardsResult(callee, line, column) gives Diagnostic.create(ErrorCode.ifTryDiscardsResult, message: "'if try' discards the result of '{callee}': only a call that returns nothing may be tested bare — bind the result with 'if let'", line: line, column: column, filePath: path)
+		redundantContainsGet(message, line, column) gives Diagnostic.create(ErrorCode.redundantContainsGet, message: message, line: line, column: column, filePath: path)
 
 		// The BUILTIN half of E3055 — one code, a second message: The compiler holds only the emitted runtime
 		// symbol (`__managed_count`), which is reserved namespace the user never wrote, so it names the
 		// class instead of the builtin.
-		tryOnNonThrowingBuiltin(line, column) then reportPositioned(project, code: ErrorCode.tryRequiresThrowingFunction, message: "try requires a throwing function: this builtin call cannot fail", line: line, column: column, filePath: path)
+		tryOnNonThrowingBuiltin(line, column) gives Diagnostic.create(ErrorCode.tryRequiresThrowingFunction, message: "try requires a throwing function: this builtin call cannot fail", line: line, column: column, filePath: path)
 
 		// Names the OPERATOR and the reason the divide is total, because the divisor's range is the thing
 		// the author would have to change to make it fallible, and there is nothing here to catch.
-		tryOnTotalDivision(operator, line, column) then reportPositioned(project, code: ErrorCode.tryRequiresThrowingFunction, message: "try requires a throwing function: this `{operator}` cannot fail — its divisor is already proven non-zero, so there is no divide-by-zero error to catch", line: line, column: column, filePath: path)
+		tryOnTotalDivision(operator, line, column) gives Diagnostic.create(ErrorCode.tryRequiresThrowingFunction, message: "try requires a throwing function: this `{operator}` cannot fail — its divisor is already proven non-zero, so there is no divide-by-zero error to catch", line: line, column: column, filePath: path)
 
 		// A plain `await` of a throwing promise (E3057), and a `try …` propagate whose error type differs
 		// from the enclosing function's (E3059). E3057 shares SemanticCheck's throwing-call-needs-try
 		// code; E3059 shares the `errorTypeMismatch` code with its own full-sentence message.
-		awaitThrowingPromiseNeedsTry(errorType, line, column) then reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: "throwing function requires try: 'await' on a promise from a function that throws '{errorType}' drops the error and leaks its payload — use 'try await'", line: line, column: column, filePath: path)
-		awaitNonPromise(got, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "'await' requires a promise value from 'async', got {got}", line: line, column: column, filePath: path)
-		promiseStorageMismatch(detail, line, column) then reportPositioned(project, code: ErrorCode.promiseErrorTypeMismatch, message: detail, line: line, column: column, filePath: path)
-		byteStringCodepointRange(message) then reportPositioned(project, code: ErrorCode.lexerInvalidEscape, message: message, line: 0, column: 0, filePath: path)
-		propagateTypeMismatch(propagated, enclosing, line, column) then reportPositioned(project, code: ErrorCode.errorTypeMismatch, message: "try propagates '{propagated}' but enclosing function throws '{enclosing}' — add 'otherwise' to convert", line: line, column: column, filePath: path)
-		thrownValueNotAnErrorEnum(line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "throw requires an error enum value", line: line, column: column, filePath: path)
+		awaitThrowingPromiseNeedsTry(errorType, line, column) gives Diagnostic.create(ErrorCode.throwingFunctionRequiresTry, message: "throwing function requires try: 'await' on a promise from a function that throws '{errorType}' drops the error and leaks its payload — use 'try await'", line: line, column: column, filePath: path)
+		awaitNonPromise(got, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "'await' requires a promise value from 'async', got {got}", line: line, column: column, filePath: path)
+		promiseStorageMismatch(detail, line, column) gives Diagnostic.create(ErrorCode.promiseErrorTypeMismatch, message: detail, line: line, column: column, filePath: path)
+		byteStringCodepointRange(message) gives Diagnostic.create(ErrorCode.lexerInvalidEscape, message: message, line: 0, column: 0, filePath: path)
+		propagateTypeMismatch(propagated, enclosing, line, column) gives Diagnostic.create(ErrorCode.errorTypeMismatch, message: "try propagates '{propagated}' but enclosing function throws '{enclosing}' — add 'otherwise' to convert", line: line, column: column, filePath: path)
+		thrownValueNotAnErrorEnum(line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "throw requires an error enum value", line: line, column: column, filePath: path)
 
 		// E3004, the SAME code `SemanticCheck.validateCall` gives an undeclared ordinary function,
 		// because it is the same fact — the call names something that does not exist. It shares the code
@@ -2395,93 +2400,93 @@ module function reportParseError(project Project, path FilePath, error ParseErro
 		// every refusal it was about a `__` prefix — which is false for a synthesized conformance impl
 		// that wears no prefix at all. Both clauses forbid a DECLARATION as well as a call, so neither
 		// reading sends the author off to define the function.
-		unknownCompilerIntrinsic(callee, reason, line, column) then reportPositioned(project, code: ErrorCode.callUnknownFunction, message: "call to undefined function '{callee}': {reservedNameReason(callee, reason: reason)}", line: line, column: column, filePath: path)
+		unknownCompilerIntrinsic(callee, reason, line, column) gives Diagnostic.create(ErrorCode.callUnknownFunction, message: "call to undefined function '{callee}': {reservedNameReason(callee, reason: reason)}", line: line, column: column, filePath: path)
 
 		// E3155, the arm above one position over: the same name, the same classifier's reason, no call. It
 		// carries its own code because E3004's subject is a call — see the registry entry, which argues it.
-		reservedNameAsFunctionValue(name, reason, line, column) then reportPositioned(project, code: ErrorCode.reservedNameAsFunctionValue, message: "reference to undefined function '{name}': {reservedNameReason(name, reason: reason)}", line: line, column: column, filePath: path)
+		reservedNameAsFunctionValue(name, reason, line, column) gives Diagnostic.create(ErrorCode.reservedNameAsFunctionValue, message: "reference to undefined function '{name}': {reservedNameReason(name, reason: reason)}", line: line, column: column, filePath: path)
 
 		// ⭐ The three rules that hold only inside `runtime/`. The first says the name IS defined and this
 		// file may not reach it — deliberately not the "undefined function" wording above, which would send
 		// the author looking for a typo. The second names the BINDING and its type, because both halves are
 		// what has to change. The third says which of `public`/`export` is wrong, since only one is.
-		rawIntrinsicOutsideRuntimeTier(callee, line, column) then reportPositioned(project, code: ErrorCode.rawIntrinsicOutsideRuntimeTier, message: "call to '{callee}' from outside the runtime source tier: '__Raw' names a raw runtime intrinsic, callable only from a source file under runtime/", line: line, column: column, filePath: path)
-		managedValueInRuntimeSource(name, typeName, line, column) then reportPositioned(project, code: ErrorCode.managedValueInRuntimeSource, message: "'{name}' has managed type '{typeName}': a runtime source file may not name a managed value, because the reference-counting pass would emit calls into the very runtime this tier defines", line: line, column: column, filePath: path)
-		bareGenericSubjectUnbound(message, line, column) then reportPositioned(project, code: ErrorCode.bareGenericSubjectUnbound, message: message, line: line, column: column, filePath: path)
-		contradictoryFrameDirectives(line, column) then reportPositioned(project, code: ErrorCode.contradictoryFrameDirectives, message: "a runtime body may not spell both '__Raw.ownFrame()' and '__Raw.splicedAtEverySite()': the first says this function's frame is its product and nothing may splice the body away, the second that it has none worth keeping and the inliner must splice it into every call site", line: line, column: column, filePath: path)
-		wideVisibilityInRuntimeSource(keyword, line, column) then reportPositioned(project, code: ErrorCode.wideVisibilityInRuntimeSource, message: "{visibilityModifierSpelling(keyword)} is not allowed in a runtime source file: runtime/ is loaded into every program, so a declaration visible outside the tier contests names with the programs it is linked into — the compiler compiling itself among them; 'module' is the widest visibility the tier's own file-to-file sharing needs", line: line, column: column, filePath: path)
-		managedTypeInRuntimeSource(typeName, line, column) then reportPositioned(project, code: ErrorCode.managedValueInRuntimeSource, message: "managed type '{typeName}' is not allowed in a runtime source file: the reference-counting pass would emit calls into the very runtime this tier defines", line: line, column: column, filePath: path)
-		managedValueBuiltInRuntimeSource(typeName, line, column) then reportPositioned(project, code: ErrorCode.managedValueInRuntimeSource, message: "a managed value of type '{typeName}' is built in a runtime source file: the reference-counting pass would emit calls into the very runtime this tier defines", line: line, column: column, filePath: path)
+		rawIntrinsicOutsideRuntimeTier(callee, line, column) gives Diagnostic.create(ErrorCode.rawIntrinsicOutsideRuntimeTier, message: "call to '{callee}' from outside the runtime source tier: '__Raw' names a raw runtime intrinsic, callable only from a source file under runtime/", line: line, column: column, filePath: path)
+		managedValueInRuntimeSource(name, typeName, line, column) gives Diagnostic.create(ErrorCode.managedValueInRuntimeSource, message: "'{name}' has managed type '{typeName}': a runtime source file may not name a managed value, because the reference-counting pass would emit calls into the very runtime this tier defines", line: line, column: column, filePath: path)
+		bareGenericSubjectUnbound(message, line, column) gives Diagnostic.create(ErrorCode.bareGenericSubjectUnbound, message: message, line: line, column: column, filePath: path)
+		contradictoryFrameDirectives(line, column) gives Diagnostic.create(ErrorCode.contradictoryFrameDirectives, message: "a runtime body may not spell both '__Raw.ownFrame()' and '__Raw.splicedAtEverySite()': the first says this function's frame is its product and nothing may splice the body away, the second that it has none worth keeping and the inliner must splice it into every call site", line: line, column: column, filePath: path)
+		wideVisibilityInRuntimeSource(keyword, line, column) gives Diagnostic.create(ErrorCode.wideVisibilityInRuntimeSource, message: "{visibilityModifierSpelling(keyword)} is not allowed in a runtime source file: runtime/ is loaded into every program, so a declaration visible outside the tier contests names with the programs it is linked into — the compiler compiling itself among them; 'module' is the widest visibility the tier's own file-to-file sharing needs", line: line, column: column, filePath: path)
+		managedTypeInRuntimeSource(typeName, line, column) gives Diagnostic.create(ErrorCode.managedValueInRuntimeSource, message: "managed type '{typeName}' is not allowed in a runtime source file: the reference-counting pass would emit calls into the very runtime this tier defines", line: line, column: column, filePath: path)
+		managedValueBuiltInRuntimeSource(typeName, line, column) gives Diagnostic.create(ErrorCode.managedValueInRuntimeSource, message: "a managed value of type '{typeName}' is built in a runtime source file: the reference-counting pass would emit calls into the very runtime this tier defines", line: line, column: column, filePath: path)
 
 		// Omits the `growFilled`/`truncate` suggestions: The compiler synthesizes neither method, so naming them
 		// would send the reader to something that is not there.
-		arrayResizeManagedElement(elementType, line, column) then reportPositioned(project, code: ErrorCode.semanticArrayResizeManagedElement, message: "'resize' cannot grow an array of '{elementType}': a grown slot holds NO element — Maxon has no default constructor — so 'count()' would not agree with 'get()'. Append with 'push(value)'", line: line, column: column, filePath: path)
+		arrayResizeManagedElement(elementType, line, column) gives Diagnostic.create(ErrorCode.semanticArrayResizeManagedElement, message: "'resize' cannot grow an array of '{elementType}': a grown slot holds NO element — Maxon has no default constructor — so 'count()' would not agree with 'get()'. Append with 'push(value)'", line: line, column: column, filePath: path)
 
 		// ⭐ It names the REPLACEMENT, not just the refusal, because there is an exact one: the array
 		// surface's own `set` covers `[0, length)` and owns what it stores. See `E3109`'s registry entry.
-		bufferSetManagedElement(elementType, line, column) then reportPositioned(project, code: ErrorCode.semanticBufferSetManagedElement, message: "'managed.set' cannot store an element of '{elementType}': it is bounded by the CAPACITY, so it writes slots no length has published, and nothing owns a managed element staged there until 'setLength' publishes it. Use the array's own 'set(index, value:)', which is bounded by the length", line: line, column: column, filePath: path)
+		bufferSetManagedElement(elementType, line, column) gives Diagnostic.create(ErrorCode.semanticBufferSetManagedElement, message: "'managed.set' cannot store an element of '{elementType}': it is bounded by the CAPACITY, so it writes slots no length has published, and nothing owns a managed element staged there until 'setLength' publishes it. Use the array's own 'set(index, value:)', which is bounded by the length", line: line, column: column, filePath: path)
 
 		// ⚠ It names NO replacement, and the omission is the message: byte access to a pointer is not a
 		// thing a correct program wants, so there is nothing to redirect the reader to. Contrast the arm
 		// above, which has an exact one. Same predicate, different reason — see
 		// `requireBufferBytesAreNotAPointer`.
-		bufferByteAccessManagedElement(member, elementType, line, column) then reportPositioned(project, code: ErrorCode.semanticBufferByteAccessManagedElement, message: "'managed.{member}' cannot address the bytes of an element of '{elementType}': a managed element is stored as a POINTER, so those bytes are a heap ADDRESS, not data — reading them discloses one and writing them corrupts it. Raw byte access is for a buffer of trivial elements", line: line, column: column, filePath: path)
+		bufferByteAccessManagedElement(member, elementType, line, column) gives Diagnostic.create(ErrorCode.semanticBufferByteAccessManagedElement, message: "'managed.{member}' cannot address the bytes of an element of '{elementType}': a managed element is stored as a POINTER, so those bytes are a heap ADDRESS, not data — reading them discloses one and writing them corrupts it. Raw byte access is for a buffer of trivial elements", line: line, column: column, filePath: path)
 
 		// E3082 sits in the SEMANTIC band because that is where the registry homes it; The compiler raises it in
 		// the parser only because `parseBlockBody` is the one place that knows a nested block consumed no
 		// statements.
-		emptyBlock(label, line, column) then reportPositioned(project, code: ErrorCode.semanticEmptyBlock, message: "empty block: '{label}'", line: line, column: column, filePath: path)
+		emptyBlock(label, line, column) gives Diagnostic.create(ErrorCode.semanticEmptyBlock, message: "empty block: '{label}'", line: line, column: column, filePath: path)
 
 		// Pinned as `maxoncstderr` goldens by `specs/return-statement.md` and `specs/break.md`, for
 		// `return`, `break` and `continue` alike — the keyword is interpolated rather than the sentence
 		// written three times. Raised from the parser for `emptyBlock`'s reason: the statement-list loop
 		// is the one place that knows a terminator was not the last statement of its block.
-		unreachableCode(terminator, line, column) then reportPositioned(project, code: ErrorCode.semanticUnreachableCode, message: "unreachable code after '{terminator}'", line: line, column: column, filePath: path)
+		unreachableCode(terminator, line, column) gives Diagnostic.create(ErrorCode.semanticUnreachableCode, message: "unreachable code after '{terminator}'", line: line, column: column, filePath: path)
 
 		// E3067's two messages, pinned by `self-assignment.md`. ONE code, TWO sentences: the mistake is
 		// one — a statement that computes nothing — but what the author has to change differs, so a
 		// single sentence could only describe one of them. One door each:
 		// `Parser.rejectDegenerateAssignment` and `Parser.parseAssignment`'s `_` arm.
-		selfAssignmentHasNoEffect(place, line, column) then reportPositioned(project, code: ErrorCode.semanticSelfAssignment, message: "self-assignment has no effect: '{place} = {place}'", line: line, column: column, filePath: path)
-		discardExpectsACall(line, column) then reportPositioned(project, code: ErrorCode.semanticSelfAssignment, message: "expected a function call", line: line, column: column, filePath: path)
+		selfAssignmentHasNoEffect(place, line, column) gives Diagnostic.create(ErrorCode.semanticSelfAssignment, message: "self-assignment has no effect: '{place} = {place}'", line: line, column: column, filePath: path)
+		discardExpectsACall(line, column) gives Diagnostic.create(ErrorCode.semanticSelfAssignment, message: "expected a function call", line: line, column: column, filePath: path)
 
 		// A SECURITY guard, since the label is a file name. The message names the table the intrinsic
 		// DOES read, because the pairing is the fact the author got wrong. See
 		// `Parser.parseUcdTableLoad`.
-		ucdTableLabelUnknown(intrinsic, table, label, line, column) then reportPositioned(project, code: ErrorCode.ucdTableLabelUnknown, message: "'{intrinsic}' reads the compiler-owned table '{table}'; the label '{label}' names no table it can read", line: line, column: column, filePath: path)
+		ucdTableLabelUnknown(intrinsic, table, label, line, column) gives Diagnostic.create(ErrorCode.ucdTableLabelUnknown, message: "'{intrinsic}' reads the compiler-owned table '{table}'; the label '{label}' names no table it can read", line: line, column: column, filePath: path)
 
 		// An intrinsic WITH parameter names, given a label naming none of them — the same code and words
 		// the direct-call and witness-dispatch doors give the identical mistake.
-		builtinUnknownArgLabel(intrinsic, label, line, column) then reportPositioned(project, code: ErrorCode.callUnknownArgLabel, message: argUnknownLabelMessage(intrinsic, label: label), line: line, column: column, filePath: path)
+		builtinUnknownArgLabel(intrinsic, label, line, column) gives Diagnostic.create(ErrorCode.callUnknownArgLabel, message: argUnknownLabelMessage(intrinsic, label: label), line: line, column: column, filePath: path)
 
 		// The DECLARATION-SITE typealias arms. Pinned byte-for-byte by `ranged-typealias.md` and
 		// `export-keyword.md`, in both suites.
-		bareSizedTypeAlias(typeName, line, column) then reportPositioned(project, code: ErrorCode.parserExpectedType, message: "Bare sized type '{typeName}' is not allowed. Use explicit range syntax, e.g. 'int({typeName}.min to {typeName}.max)'", line: line, column: column, filePath: path)
-		illegalBitWidth(width, line, column) then reportPositioned(project, code: ErrorCode.semanticIllegalBitWidth, message: "'bits({width})' is not a legal width: bits(n) takes 1, 2, 4, 8, 16, 32 or 64 — the widths a slot or a sub-byte packed field can hold", line: line, column: column, filePath: path)
-		barePrimitiveType(spelling, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: barePrimitiveTypeMessage(spelling), line: line, column: column, filePath: path)
-		barePrimitiveCastTarget(spelling, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: barePrimitiveCastMessage(spelling), line: line, column: column, filePath: path)
-		mismatchedRangeBoundTypes(low, high, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "Mismatched type bounds: '{low}' and '{high}' must reference the same type", line: line, column: column, filePath: path)
-		unrepresentableIntegerRange(low, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "Integer range cannot span both negative values and above i64.max: 'int({low} to u64.max)' is not representable in 64 bits; use 'i64.min to i64.max' or '0 to u64.max' instead", line: line, column: column, filePath: path)
+		bareSizedTypeAlias(typeName, line, column) gives Diagnostic.create(ErrorCode.parserExpectedType, message: "Bare sized type '{typeName}' is not allowed. Use explicit range syntax, e.g. 'int({typeName}.min to {typeName}.max)'", line: line, column: column, filePath: path)
+		illegalBitWidth(width, line, column) gives Diagnostic.create(ErrorCode.semanticIllegalBitWidth, message: "'bits({width})' is not a legal width: bits(n) takes 1, 2, 4, 8, 16, 32 or 64 — the widths a slot or a sub-byte packed field can hold", line: line, column: column, filePath: path)
+		barePrimitiveType(spelling, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: barePrimitiveTypeMessage(spelling), line: line, column: column, filePath: path)
+		barePrimitiveCastTarget(spelling, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: barePrimitiveCastMessage(spelling), line: line, column: column, filePath: path)
+		mismatchedRangeBoundTypes(low, high, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "Mismatched type bounds: '{low}' and '{high}' must reference the same type", line: line, column: column, filePath: path)
+		unrepresentableIntegerRange(low, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "Integer range cannot span both negative values and above i64.max: 'int({low} to u64.max)' is not representable in 64 bits; use 'i64.min to i64.max' or '0 to u64.max' instead", line: line, column: column, filePath: path)
 
 		// Worded beside its narrowing twin rather than inline here, so the two E3005s that quote one
 		// alias's bounds share the range renderer and the name strip.
-		otherwiseOutsideRangedReturn(value, aliasName, low, high, rawBitWidth, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: otherwiseOutOfRangeMessage(value, aliasName: aliasName, low: low, high: high, rawBitWidth: rawBitWidth), line: line, column: column, filePath: path)
-		hiddenCastTargetType(line, column) then reportPositioned(project, code: ErrorCode.parserExpectedType, message: HiddenTypeNameMessage, line: line, column: column, filePath: path)
-		uninferrableClosureParam(paramName, line, column) then reportPositioned(project, code: ErrorCode.parserExpectedType, message: "Cannot infer type for closure parameter '{paramName}'. Add an explicit type annotation.", line: line, column: column, filePath: path)
+		otherwiseOutsideRangedReturn(value, aliasName, low, high, rawBitWidth, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: otherwiseOutOfRangeMessage(value, aliasName: aliasName, low: low, high: high, rawBitWidth: rawBitWidth), line: line, column: column, filePath: path)
+		hiddenCastTargetType(line, column) gives Diagnostic.create(ErrorCode.parserExpectedType, message: HiddenTypeNameMessage, line: line, column: column, filePath: path)
+		uninferrableClosureParam(paramName, line, column) gives Diagnostic.create(ErrorCode.parserExpectedType, message: "Cannot infer type for closure parameter '{paramName}'. Add an explicit type annotation.", line: line, column: column, filePath: path)
 
 		// The SENTENCE arrives rendered — see the three arms' own note in `ParseError`. These mapper
 		// lines carry the CODE and nothing else, which is what keeps the words beside the rule that chose
 		// them.
-		serviceNotASpawnTarget(explanation, line, column) then reportPositioned(project, code: ErrorCode.semanticServiceNotASpawnTarget, message: explanation, line: line, column: column, filePath: path)
-		serviceValueNotTransferable(explanation, line, column) then reportPositioned(project, code: ErrorCode.semanticServiceValueNotTransferable, message: explanation, line: line, column: column, filePath: path)
-		serviceArgumentNotUnique(explanation, line, column) then reportPositioned(project, code: ErrorCode.semanticServiceArgumentNotUnique, message: explanation, line: line, column: column, filePath: path)
-		serviceNotAMessage(explanation, line, column) then reportPositioned(project, code: ErrorCode.semanticServiceNotAMessage, message: explanation, line: line, column: column, filePath: path)
-		serviceReplyNotCarriable(explanation, line, column) then reportPositioned(project, code: ErrorCode.semanticServiceReplyNotCarriable, message: explanation, line: line, column: column, filePath: path)
-		serviceReplyAliasesState(explanation, line, column, note) then reportPositionedWithNote(project, code: ErrorCode.semanticServiceReplyAliasesState, message: explanation, line: line, column: column, filePath: path, note: note)
-		serviceReplyInstanceUnknown(explanation, line, column) then reportPositioned(project, code: ErrorCode.semanticServiceReplyInstanceUnknown, message: explanation, line: line, column: column, filePath: path)
-		lentGraphEscapes(explanation, line, column) then reportPositioned(project, code: ErrorCode.semanticLentGraphEscapes, message: explanation, line: line, column: column, filePath: path)
+		serviceNotASpawnTarget(explanation, line, column) gives Diagnostic.create(ErrorCode.semanticServiceNotASpawnTarget, message: explanation, line: line, column: column, filePath: path)
+		serviceValueNotTransferable(explanation, line, column) gives Diagnostic.create(ErrorCode.semanticServiceValueNotTransferable, message: explanation, line: line, column: column, filePath: path)
+		serviceArgumentNotUnique(explanation, line, column) gives Diagnostic.create(ErrorCode.semanticServiceArgumentNotUnique, message: explanation, line: line, column: column, filePath: path)
+		serviceNotAMessage(explanation, line, column) gives Diagnostic.create(ErrorCode.semanticServiceNotAMessage, message: explanation, line: line, column: column, filePath: path)
+		serviceReplyNotCarriable(explanation, line, column) gives Diagnostic.create(ErrorCode.semanticServiceReplyNotCarriable, message: explanation, line: line, column: column, filePath: path)
+		serviceReplyAliasesState(explanation, line, column, note) gives Diagnostic.create(ErrorCode.semanticServiceReplyAliasesState, message: explanation, line: line, column: column, filePath: path).withNote(note)
+		serviceReplyInstanceUnknown(explanation, line, column) gives Diagnostic.create(ErrorCode.semanticServiceReplyInstanceUnknown, message: explanation, line: line, column: column, filePath: path)
+		lentGraphEscapes(explanation, line, column) gives Diagnostic.create(ErrorCode.semanticLentGraphEscapes, message: explanation, line: line, column: column, filePath: path)
 	end 'kind'
-end 'reportParseError'
+end 'parseErrorDiagnostic'
 
 // Two E2049 messages: a block-form `try 'label' … end` (grouping multiple calls) versus a
 // block-handler `otherwise 'label' … end` — both name the single-statement alternatives an arm may

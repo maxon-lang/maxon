@@ -1,0 +1,18 @@
+let ProjectUndeclaredOverloadDirName = "diagnostics-project-undeclared-result-at-an-overload"
+let ProjectUndeclaredOverloadHelperFileName = "helper.maxon"
+let ProjectUndeclaredOverloadBufferFileName = "main.maxon"
+let ProjectUndeclaredOverloadHelperSource = "module function projectUndeclaredOverloadHelper() returns ExitCode\n\treturn 0\nend 'projectUndeclaredOverloadHelper'\n"
+let ProjectUndeclaredOverloadBufferSource = "function projectUndeclaredOverloadPick(x ExitCode) returns ExitCode\n\treturn x\nend 'projectUndeclaredOverloadPick'\n\nfunction projectUndeclaredOverloadPick(x String) returns ExitCode\n\treturn 1 if x.isEmpty() else 0\nend 'projectUndeclaredOverloadPick'\n\nfunction main() returns ExitCode\n\treturn projectUndeclaredOverloadPick(projectUndeclaredOverloadNowhere())\nend 'main'\n"
+let ProjectUndeclaredOverloadPublished = "E2015@9 E3004@9"
+
+test 'a result no file declares handed to an overloaded function is still refused'
+	let root = stagedProjectDiagnosticsRoot(ProjectUndeclaredOverloadDirName)
+	writeCorpusFile(root, fileName: ProjectUndeclaredOverloadHelperFileName, content: ProjectUndeclaredOverloadHelperSource)
+	writeCorpusFile(root, fileName: ProjectUndeclaredOverloadBufferFileName, content: ProjectUndeclaredOverloadBufferSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: ProjectUndeclaredOverloadBufferFileName, content: ProjectUndeclaredOverloadBufferSource)
+
+	discardOutsideCheckoutDir(root)
+
+	expectProjectDiagnosticCodesAndLines(probe, expected: ProjectUndeclaredOverloadPublished, note: "`projectUndeclaredOverloadNowhere` is declared nowhere — not in the buffer, not in the sibling file, not in `stdlib/` — and `main` hands its result to `projectUndeclaredOverloadPick`, which the buffer overloads on `ExitCode` and `String`. A `maxon build` of the staged project refuses the overload it cannot pick by that result and reports the undefined function, both on the call's line. Forgiving the refusal here would mean the sibling rule had widened from `the project declares the name the argument came from` to `the argument's type is unknown`.")
+end 'a result no file declares handed to an overloaded function is still refused'

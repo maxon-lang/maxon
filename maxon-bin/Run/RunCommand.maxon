@@ -6,7 +6,7 @@
 // by name. That is also why `quietTheBuildChatter` takes the build down to ERROR: a compiler announcing
 // the bytes it wrote onto a program's own stdout is output nobody asked for and nothing downstream can
 // filter back out. ⚠ **SILENCED IS NOT SILENT — the ERROR level is deliberately left speaking**, so a
-// compile that fails still says why on stderr (`compile-error.test.maxon` asserts exactly that), and so
+// compile that fails still says why on stderr (`compile-error.maxtest` asserts exactly that), and so
 // does a build the emitter could not complete.
 //
 // ⭐⭐ **TWO DOORS, ONE COMMAND.** The word (`maxon run f.maxon a b`) and a first argument ending in
@@ -27,19 +27,15 @@ export function runExecute(args MaxonArgs) returns ExitCode
 		return OwnFailureExit
 	end 'noProgram'
 
-	let typed = try FilePath.from(spelling) otherwise 'badPath'
+	let program = try FilePath.from(spelling) otherwise 'badPath'
 		printError("error: invalid path: {spelling}\n")
 		return OwnFailureExit
 	end 'badPath'
 
-	// ⚠ **ABSOLUTE FROM HERE ON, AND THE REFUSAL BELOW STILL NAMES WHAT WAS TYPED.** The cache is keyed by
-	// this path, so two runs from different directories must reach one slot; the reader who mistyped a name
-	// needs their own spelling back.
-	let program = typed.resolve(Directory.currentPath())
 	let isProject = Directory.isDirectory(program)
 
 	if not isProject and not File.exists(program) 'nothingThere'
-		reportCompileError(CompileError.fileNotFound(typed))
+		reportCompileError(CompileError.fileNotFound(program))
 		return OwnFailureExit
 	end 'nothingThere'
 
@@ -97,9 +93,10 @@ export type CachedProgram
 	end 'create'
 end 'CachedProgram'
 
-// The run cache's build of `program` from `entryFunction`: the one already published under these inputs'
-// key, or a fresh one compiled and published first. `maxon execute`, `maxon run` and a `project.maxon` manifest all come
-// through here, so neither writes a compiled program into the project it was run from.
+// The run cache's build of `program` from `entryFunction`: the one already published under these
+// inputs' key, or a fresh one compiled and published first. `maxon execute`, `maxon run` and a
+// path-less `maxon build` all come through here, so none writes a compiled program into the project
+// it was run from.
 //
 // A hit is the file being THERE. Its name is the key, so there is nothing beside it to read and nothing
 // to compare — a build under that name was made from these very inputs.
@@ -113,7 +110,7 @@ export function cachedBuild(program FilePath, isProject bool, target Target, ent
 		return CachedProgram.create(slot.executable, compiled: false)
 	end 'alreadyCached'
 
-	try fillSlot(program, slot: slot, target: target, entryFunction: entryFunction, speaker: speaker)
+	try fillSlot(slot, target: target, entryFunction: entryFunction, speaker: speaker)
 
 	return CachedProgram.create(slot.executable, compiled: true)
 end 'cachedBuild'
@@ -130,7 +127,9 @@ end 'cachedBuild'
 // ⚠ **`debugInfo` DEFAULTS TO FALSE ON `compileToProduct` AND MUST NOT HERE.** A program launched this way
 // is one somebody is developing, and a crash with no sidecar beside the binary is a stack trace nobody can
 // read.
-function fillSlot(program FilePath, slot RunSlot, target Target, entryFunction ByteArray, speaker String) throws CachedBuildError
+function fillSlot(slot RunSlot, target Target, entryFunction ByteArray, speaker String) throws CachedBuildError
+	let program = slot.program
+
 	var inputPaths = MaxonSourcePathArray.create()
 	inputPaths.push(program)
 

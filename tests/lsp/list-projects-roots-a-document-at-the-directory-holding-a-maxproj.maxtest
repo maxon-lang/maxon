@@ -1,0 +1,30 @@
+let MaxprojRootDirName = "projects-maxproj-root"
+let MaxprojFileName = "app.maxproj"
+let MaxprojSource = "export function app() returns ExitCode\n\tBuild.build(\".\")\n\treturn 0\nend 'app'\n"
+let MaxprojSourceDirName = "src"
+let MaxprojDocumentFileName = "main.maxon"
+let MaxprojDocumentSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+
+test 'project roots: a document below a .maxproj is rooted at the directory holding it'
+	let root = freshOutsideCheckoutDir(MaxprojRootDirName)
+	writeCorpusFile(root, fileName: MaxprojFileName, content: MaxprojSource)
+
+	let sources = createdStagingDirectory(MaxprojSourceDirName, under: root)
+	writeCorpusFile(sources, fileName: MaxprojDocumentFileName, content: MaxprojDocumentSource)
+
+	let uri = fileUriOf(sources.join("{MaxprojDocumentFileName}"))
+	let probe = listProjectsIn(ProjectRootsSession.unrooted, documents: projectRootsDocument(uri, content: MaxprojDocumentSource))
+
+	discardOutsideCheckoutDir(root)
+
+	match probe 'probe'
+		answered(result) then requireRootedAtTheMaxproj(result, uri: uri)
+		unanswered(reason) then Expect.fail(reason)
+	end 'probe'
+end 'project roots: a document below a .maxproj is rooted at the directory holding it'
+
+function requireRootedAtTheMaxproj(result ListProjectsResult, uri String) throws TestFailure
+	let project = try soleProject(result, note: "one document ({uri}) was opened, in a session that named no root, one directory below `{MaxprojFileName}`.")
+
+	try requireProjectRootedAtADirectory(project, expectedTail: outsideCheckoutDirName(MaxprojRootDirName), note: "one document ({uri}) sits in `{MaxprojSourceDirName}/` below `{MaxprojFileName}`, which is the only thing that says where its project begins.")
+end 'requireRootedAtTheMaxproj'

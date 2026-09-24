@@ -1,0 +1,19 @@
+let CaseDirName = "run-lists-the-tasks-a-directory-declares"
+let TaskFileName = "tasks.maxtasks"
+let RunCommandWord = "run"
+
+let TasksSource = "export typealias ExitCode = int(0 to 255)\n\nexport function greet() returns ExitCode\n\tprint(\"greeted\\n\")\n\treturn 0\nend 'greet'\n\nexport function tidy() returns ExitCode\n\treturn 0\nend 'tidy'\n\nfunction helper() returns ExitCode\n\treturn 0\nend 'helper'\n"
+
+test 'a bare run lists the exported tasks and nothing else'
+	let dir = freshCaseDir(CaseDirName)
+	let tasks = dir.join(TaskFileName)
+	try File.writeText(tasks, content: TasksSource) otherwise panic("run-lists-the-tasks-a-directory-declares: the gate could not run - could not write {tasks.toString()}")
+
+	let listed = runDriver([RunCommandWord], workingDirectory: dir)
+	let said = "It wrote to stdout: {listed.stdout} and to stderr: {listed.stderr}"
+
+	Expect.equal(listed.exitCode() as AssertedInt, expected: 0, message: "a bare `maxon {RunCommandWord}` over a {TaskFileName} declaring two tasks did not succeed. {said}")
+	Expect.contains(listed.stdout, needle: "greet", message: "the listing left out an exported task. {said}")
+	Expect.contains(listed.stdout, needle: "tidy", message: "the listing left out an exported task. {said}")
+	Expect.isFalse(listed.stdout.contains("helper"), message: "the listing offered a file-private function as a task: only an exported one can be asked for by name. {said}")
+end 'a bare run lists the exported tasks and nothing else'

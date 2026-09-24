@@ -1,0 +1,18 @@
+let ProjectMethodUndeclaredDirName = "diagnostics-project-method-on-an-undeclared-result-at-an-overload"
+let ProjectMethodUndeclaredHelperFileName = "helper.maxon"
+let ProjectMethodUndeclaredBufferFileName = "main.maxon"
+let ProjectMethodUndeclaredHelperSource = "module function projectMethodUndeclaredHelper() returns String\n\treturn \"\"\nend 'projectMethodUndeclaredHelper'\n"
+let ProjectMethodUndeclaredBufferSource = "function projectMethodUndeclaredPick(x ExitCode) returns ExitCode\n\treturn x\nend 'projectMethodUndeclaredPick'\n\nfunction projectMethodUndeclaredPick(x String) returns ExitCode\n\treturn 1 if x.isEmpty() else 0\nend 'projectMethodUndeclaredPick'\n\nfunction main() returns ExitCode\n\treturn projectMethodUndeclaredPick(projectMethodUndeclaredNowhere().trim())\nend 'main'\n"
+let ProjectMethodUndeclaredPublished = "E2015@9 E3004@9"
+
+test 'a method called on a result no file declares and handed to an overloaded function is still refused'
+	let root = stagedProjectDiagnosticsRoot(ProjectMethodUndeclaredDirName)
+	writeCorpusFile(root, fileName: ProjectMethodUndeclaredHelperFileName, content: ProjectMethodUndeclaredHelperSource)
+	writeCorpusFile(root, fileName: ProjectMethodUndeclaredBufferFileName, content: ProjectMethodUndeclaredBufferSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: ProjectMethodUndeclaredBufferFileName, content: ProjectMethodUndeclaredBufferSource)
+
+	discardOutsideCheckoutDir(root)
+
+	expectProjectDiagnosticCodesAndLines(probe, expected: ProjectMethodUndeclaredPublished, note: "`projectMethodUndeclaredNowhere` is declared nowhere, and `main` hands `.trim()` of its result to `projectMethodUndeclaredPick`, which the buffer overloads on `ExitCode` and `String`. A `maxon build` of the staged project refuses the overload it cannot pick by that value and reports the undefined function, both on the call's line.")
+end 'a method called on a result no file declares and handed to an overloaded function is still refused'

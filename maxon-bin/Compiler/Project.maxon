@@ -4477,13 +4477,13 @@ end 'whereConstraintListReserves'
 // condition a conditional extension was withheld under has to name the WHOLE condition, and re-spelling the
 // grammar at the message site is how a `where` form grows a second, stale renderer.
 //
-// `paramNames` is the declaration the indices are positions in — a type's `uses` list, or an interface's
-// associated-type names.
-// ⭐ **THE E4006 A CONDITIONAL TYPE EXTENSION'S UNMET CLAUSE EARNS — written once because TWO parties now
-// render it.** `Queries.reportParseError` renders the parser's `conditionalExtensionWithheld` arm and
-// `SemanticCheck.checkResolvedExtensionConstraints` renders the post-resolution one; they are the same
-// refusal asked at two points (see `ConformanceCheck.receiverMeetsExtensionConstraints`), so the sentence
-// lives beside `renderWhereConstraints`, which builds the `clause` both of them quote.
+// `paramNames` is the declaration the indices are positions in — a type's `uses` list, or an
+// interface's associated-type names. ⭐ **THE E4006 A CONDITIONAL TYPE EXTENSION'S UNMET CLAUSE
+// EARNS — written once because TWO parties now render it.** `Queries.parseErrorDiagnostic` renders
+// the parser's `conditionalExtensionWithheld` arm and
+// `SemanticCheck.checkResolvedExtensionConstraints` renders the post-resolution one; they are the
+// same refusal asked at two points (see `ConformanceCheck.receiverMeetsExtensionConstraints`), so
+// the sentence lives beside `renderWhereConstraints`, which builds the `clause` both of them quote.
 export function conditionalExtensionWithheldMessage(typeName String, methodName String, clause String, unmetInterfaceName String, bindingName String) returns String
 	return "Type '{typeName}' has no field named '{methodName}' ('{methodName}' is available as a conditional extension {clause}, but '{bindingName}' does not implement '{unmetInterfaceName}')"
 end 'conditionalExtensionWithheldMessage'
@@ -8452,7 +8452,7 @@ export type Project
 	// `CompilerWrittenSource`, which carries the measurement). CALLING a `__` name is a per-FILE
 	// exemption — the generated dispatcher has to reach names other files declare, and the call door
 	// conjoins `declaresCallee`, so what it grants is "a `__` name some file in this program declares"
-	// and never "any `__` name". DECLARING one is per-NAME, because a staged `*.test.maxon` is the
+	// and never "any `__` name". DECLARING one is per-NAME, because a staged `.maxtest` file is the
 	// author's bytes with a dispatcher appended, and a per-file exemption there would hand the author
 	// the reserved space.
 	//
@@ -8618,6 +8618,7 @@ export type Project
 	// (register-pressure) diagnostic maps a Target ValueId back to its source span
 	// through it; M6's ownership checker reuses it.
 	export var valueOrigins as ValueOriginTable
+	export var deferralSources as DeferralSourceTable
 
 	// The compile root: the file or directory this build was invoked on. Used to
 	// derive per-file namespaces and the default output path.
@@ -8639,7 +8640,7 @@ export type Project
 
 	// ⭐ **THE USER CONSTRUCT THE DIAGNOSTICS REPORTED RIGHT NOW ARE ON BEHALF OF** — see
 	// `LibraryBlame`. Ambient rather than a parameter on `reportDiagnostic` because the front-end
-	// mappers reach that sink through ~200 `reportParseError` match arms, and threading a blame
+	// mappers reach that sink through `parseErrorDiagnostic`'s ~200 match arms, and threading a blame
 	// through every one of them would put the rule in 200 places instead of one; it is SET at exactly
 	// one site (`Queries.queryParseOps`' parse-failure arm) and cleared on the next line, so the only
 	// diagnostic it can reach is the one that arm reports.
@@ -8748,6 +8749,7 @@ export type Project
 			stdOpElementStrides: StdOpElementStrideMap.create(),
 			stdOpTrivialElementSites: StdOpTrivialElementSiteSet.create(),
 			valueOrigins: ValueOriginTable.create(),
+			deferralSources: DeferralSourceTable.create(),
 			rootPath: rootPath,
 			target: target,
 			diagnostics: DiagnosticArray.create(),

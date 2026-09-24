@@ -1,0 +1,64 @@
+// generate-ir.maxtest — `maxon/generateIR`, the Compiler Explorer panel's request: a well-formed program
+// answers with its Target IR and no errors. `generate-ir-errors.maxtest` is the other half, and drives
+// its session through the probe this file exports.
+//
+// Release discipline — why every session is driven into a VALUE before anything is asserted — is stated
+// once, in `LspClient.maxon`'s hazard 1.
+
+// The filename the panel sends. The source travels in the request, so it names no file on disk.
+let ExplorerFilename = "compiler_explorer.maxon"
+
+// How the Target IR printer opens a function (`TargetPrinter.FuncHeaderPrefix`), followed by the name.
+let MainFunctionHeader = "func @main"
+
+let WellFormedSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+
+export union GenerateIrProbe
+	answered(result GenerateIrResult)
+	unanswered(reason String)
+end 'GenerateIrProbe'
+
+// Spawn, drive, release. The probe is a VALUE, so no assertion can run before the handle is freed.
+export function probeGenerateIr(source String) returns GenerateIrProbe
+	var client = LspClient.start()
+	var probe = GenerateIrProbe.unanswered("the request ended without saying how")
+
+	try 'session'
+		_ = client.initialize()
+		client.initialized()
+		probe = GenerateIrProbe.answered(client.generateIr(source, filename: ExplorerFilename))
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed or
+				malformedResponse or
+				serverRefused then probe = GenerateIrProbe.unanswered("`maxon/generateIR`, which the Compiler Explorer panel sends, got no answer it can show: {e.explained()}")
+		end 'reason'
+	end 'failed'
+
+	client.release()
+	return probe
+end 'probeGenerateIr'
+
+// Every error an answer carried, for a report.
+export function renderedIrErrors(result GenerateIrResult) returns String
+	var rendered = ""
+
+	for entry in result.errors 'eachError'
+		rendered.append("[{entry.line}:{entry.column} {entry.message}] ")
+	end 'eachError'
+
+	return rendered.trim()
+end 'renderedIrErrors'
+
+test 'generateIR answers a well-formed program with its IR and no errors'
+	match probeGenerateIr(WellFormedSource) 'probe'
+		answered(result) then requireIrOfMain(result)
+		unanswered(reason) then Expect.fail(reason)
+	end 'probe'
+end 'generateIR answers a well-formed program with its IR and no errors'
+
+function requireIrOfMain(result GenerateIrResult) throws TestFailure
+	let errors = renderedIrErrors(result)
+	try Expect.isEmpty(errors, message: "a program that compiles was answered with errors: {errors}")
+	try Expect.contains(result.ir, needle: MainFunctionHeader, message: "the IR does not render `main`, the one function the program declares.")
+end 'requireIrOfMain'

@@ -1,5 +1,5 @@
-// RunCache.maxon — where `maxon execute`, `maxon run` and a `project.maxon` manifest keep a compiled program, and how the
-// cache decides the one it kept is still the program it was asked for.
+// RunCache.maxon — where `maxon execute`, `maxon run` and a path-less `maxon build` keep a compiled
+// program, and how the cache decides the one it kept is still the program it was asked for.
 //
 // ⭐⭐ **THE KEY IS THE BUILD'S FILENAME, WHICH IS WHAT MAKES A WRONG ANSWER UNREACHABLE.** Nothing is
 // recorded beside the executable and nothing is compared: a build named after the inputs it was made from
@@ -121,27 +121,30 @@ export union RunCacheError implements Error
 	unavailable(reason String)
 end 'RunCacheError'
 
-// One program's place in the cache: the build the current inputs name, and the private path a fresh one
-// is written to before it takes that name.
+// One program's place in the cache: the path its key was computed over, the build the current inputs
+// name, and the private path a fresh one is written to before it takes that name.
 module type RunSlot
+	export let program as FilePath
 	export let directory as FilePath
 	export let executable as FilePath
 	export let pending as FilePath
 	export let binarySuffix as String
 	export let formatsRoot as FilePath
 
-	static function create(directory FilePath, executable FilePath, pending FilePath, binarySuffix String, formatsRoot FilePath) returns RunSlot
-		return Self{directory: directory, executable: executable, pending: pending, binarySuffix: binarySuffix, formatsRoot: formatsRoot}
+	static function create(program FilePath, directory FilePath, executable FilePath, pending FilePath, binarySuffix String, formatsRoot FilePath) returns RunSlot
+		return Self{program: program, directory: directory, executable: executable, pending: pending, binarySuffix: binarySuffix, formatsRoot: formatsRoot}
 	end 'create'
 end 'RunSlot'
 
 // The slot this program's build belongs in, and the name a build made from the current inputs carries
 // there.
 //
-// ⛔ **THE PATH SPELLING IS THE SLOT'S IDENTITY AND IS NOT CANONICALIZED.** Nothing here folds `.` or `..`,
-// so `./x.maxon` and `x.maxon` get two slots. That is the SAFE direction — an extra compile, never a cached
-// binary served for a different program — because a lexical fold (`FilePath.normalize`) is not the
-// filesystem's answer: `link/..` folds to `.` while the directory it names is the link target's parent.
+// ⛔ The slot's identity is the program's path anchored at the working directory, and the compile
+// reads that same path (`RunSlot.program`). Anchored, because a relative spelling is the same text
+// in every checkout, and every checkout's `maxon.maxproj` would then share one slot and evict the
+// others' builds. Its `..` components are never folded: `link/..` folds lexically to `.` while the
+// filesystem answers the link target's parent, so a folded key would describe a different file from
+// the one compiled.
 //
 // ⚠ **THE STEM IS THERE FOR A READER AND FOR THE PROGRAM'S OWN `argv[0]`**, never for finding the build:
 // one slot directory holds one program's builds, so the key alone would locate them.
@@ -150,7 +153,8 @@ end 'RunSlot'
 // processes share an id, and a process fills at most one slot per program: `maxon run` builds its one
 // program and `maxon build` its one manifest, each once. A pending file a DEAD process left under a reused
 // id is overwritten, which costs nothing — its writer is gone.
-module function locateRunSlot(program FilePath, isProject bool, target Target, entryFunction ByteArray) returns RunSlot throws RunCacheError
+module function locateRunSlot(spelled FilePath, isProject bool, target Target, entryFunction ByteArray) returns RunSlot throws RunCacheError
+	let program = spelled.anchoredAt(Directory.currentPath())
 	let key = try freshnessKey(program, isProject: isProject, target: target, entryFunction: entryFunction)
 	let stem = try slotStem(program, isProject: isProject)
 	let formatsRoot = try runCacheRoot()
@@ -158,7 +162,7 @@ module function locateRunSlot(program FilePath, isProject bool, target Target, e
 	let binarySuffix = executableExtension(target.os)
 	let built = "{stem}{SlotKeySeparator}{key}"
 
-	return RunSlot.create(dir, executable: dir.join("{built}{binarySuffix}"), pending: dir.join("{built}.{__Builtins.currentProcessId()}{PendingBuildMarker}{binarySuffix}"), binarySuffix: binarySuffix, formatsRoot: formatsRoot)
+	return RunSlot.create(program, directory: dir, executable: dir.join("{built}{binarySuffix}"), pending: dir.join("{built}.{__Builtins.currentProcessId()}{PendingBuildMarker}{binarySuffix}"), binarySuffix: binarySuffix, formatsRoot: formatsRoot)
 end 'locateRunSlot'
 
 // Take the built program's key-name, which IS publishing it: from that moment every other run reads it as
@@ -531,8 +535,8 @@ end 'cacheFormatName'
 // exactly that way against a directory that now EXISTS — so the creation alone is not the question to ask.
 //
 // ⚠ **ONE SLOT PER PROGRAM AND ENTRY POINT.** A slot sweeps every build but its newest
-// (`discardSupersededBuilds`), so a `project.maxon` run from `main` and built as a manifest from `build`
-// sharing one slot would evict each other on every use.
+// (`discardSupersededBuilds`), so two targets or two tasks of one driver file sharing one slot would
+// evict each other on every use.
 function slotDirectory(program FilePath, entryFunction ByteArray, formatsRoot FilePath) returns FilePath throws RunCacheError
 	let identity = manifestLine(program.toString(), fields: [String.from(entryFunction)])
 	let dir = formatsRoot.join(cacheFormatName()).join(hexDigest(sha256(identity.toByteArray())))
@@ -550,7 +554,8 @@ end 'slotDirectory'
 // FILE: that name depends on walk order, so two builds of one project can produce two names, and a slot's
 // contents must be findable by anybody reading the directory.
 function slotStem(program FilePath, isProject bool) returns String throws RunCacheError
-	let name = program.filename() if isProject else program.stem()
+	let named = program.normalize()
+	let name = named.filename() if isProject else named.stem()
 
 	if name.isEmpty() 'unnameable'
 		throw RunCacheError.unavailable("{program.toString()} has no name a cached build could be called after")
@@ -684,8 +689,8 @@ function stdlibSources() returns MaxonSourcePathArray throws RunCacheError
 	let runtimeDir = try runtimeDirBeside(stdlibDir) otherwise throw RunCacheError.unavailable("could not locate the runtime/ directory beside stdlib/, which the build cache key is computed over")
 
 	var walked = MaxonSourcePathArray.create()
-	_ = try collectMaxonSources(stdlibDir, into: walked, selection: SourceSelection.libraryTier) otherwise throw RunCacheError.unavailable("could not walk {stdlibDir.toString()} for the sources the build cache key is computed over")
-	_ = try collectMaxonSources(runtimeDir, into: walked, selection: SourceSelection.libraryTier) otherwise throw RunCacheError.unavailable("could not walk {runtimeDir.toString()} for the sources the build cache key is computed over")
+	_ = try collectMaxonSources(stdlibDir, into: walked) otherwise throw RunCacheError.unavailable("could not walk {stdlibDir.toString()} for the sources the build cache key is computed over")
+	_ = try collectMaxonSources(runtimeDir, into: walked) otherwise throw RunCacheError.unavailable("could not walk {runtimeDir.toString()} for the sources the build cache key is computed over")
 
 	return walked
 end 'stdlibSources'

@@ -1,0 +1,14 @@
+let CaseDirName = "maxproj-target-without-output-writes-the-project-name"
+let ProjectName = "app"
+
+test 'a .maxproj target that states no output builds .maxon/<project name>'
+	let staged = stagedProject(CaseDirName, fixture: MaxprojDefaultOutputFixtureName)
+
+	let build = spawnManifestBuild(staged, options: StringArray.create())
+	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+
+	Expect.equal(build.exitCode() as AssertedInt, expected: 0, message: "a bare `maxon build` beside `{ProjectName}.maxproj`, whose one exported target builds `.` with no output, did not succeed. {said}")
+
+	let product = executableIn(staged.join(ProjectProductsDirName), stem: ProjectName)
+	Expect.isTrue(File.exists(product), message: "the build wrote no {product.toString()}: a target that states no output is named for the `.maxproj` stem, under the project's `{ProjectProductsDirName}/`. {said}")
+end 'a .maxproj target that states no output builds .maxon/<project name>'

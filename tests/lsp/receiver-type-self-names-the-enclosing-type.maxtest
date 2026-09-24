@@ -1,0 +1,17 @@
+// receiver-type-self-names-the-enclosing-type.maxtest — a cursor on `items` in `self.items` hovers
+// as the field the enclosing type declares.
+//
+// ⛔ **`self` CARRIES NO INITIALIZER TO READ A TYPE OFF, SO THE ONLY THING THAT CAN NAME IT IS THE
+// CONTAINER THE CURSOR SITS INSIDE.** It is also the receiver an ordinary method writes more than any
+// other, which is what makes a silence here a hover that is dead in ordinary code rather than at an edge.
+
+let ReceiverSelfFieldLine = 4 as LspCoordinate
+let ReceiverSelfFieldCharacter = 21 as LspCoordinate
+
+test 'receiver type: self names the enclosing type'
+	let rendering = hoverRendering(receiverSelfFixture(), line: ReceiverSelfFieldLine, character: ReceiverSelfFieldCharacter)
+
+	Expect.contains(rendering, needle: "items", message: "hovering `items` in `self.items` did not name the field. `self` is the receiver a method writes more than any other, so a hover that cannot type it is dead in ordinary code rather than at an edge.")
+
+	Expect.contains(rendering, needle: "StringArray", message: "the hover did not render the field's DECLARED type. Naming the field without its type would leave an editor user knowing only what they already typed. It rendered: {rendering}")
+end 'receiver type: self names the enclosing type'

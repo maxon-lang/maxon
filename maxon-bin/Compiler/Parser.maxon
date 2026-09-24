@@ -274,10 +274,11 @@ export union ParseError implements Error
 	builtinArgumentType(paramName String, expected String, got String, line LineNumber, column ColumnNumber)
 	unsupported(feature String, line LineNumber, column ColumnNumber)
 
-	// ⭐⭐ **A TUPLE ELEMENT THE WHOLE-PROGRAM INDEX REFUSED — `unsupported`'s payload, under a case of its
-	// own, and the ONE thing that distinguishes them is WHO CAN RAISE IT.** It renders byte-identically
-	// (`Queries.reportParseError` routes both arms through one sentence, so no message and no code moves);
-	// what it adds is that `recordScannedSignature` can tell this failure apart from a token-level one.
+	// ⭐⭐ **A TUPLE ELEMENT THE WHOLE-PROGRAM INDEX REFUSED — `unsupported`'s payload, under a case of
+	// its own, and the ONE thing that distinguishes them is WHO CAN RAISE IT.** It renders
+	// byte-identically (`Queries.parseErrorDiagnostic` routes both arms through one sentence, so no
+	// message and no code moves); what it adds is that `recordScannedSignature` can tell this failure
+	// apart from a token-level one.
 	//
 	// ⚠⚠ **THAT DISTINCTION IS LOAD-BEARING AND IT WAS BEING ERASED.** A malformed return type is the REAL
 	// PARSE's to report, with a position, and the sweep's tolerance exists for exactly that. A tuple-element
@@ -741,8 +742,8 @@ export union ParseError implements Error
 	// escape with no single-byte Latin-1 encoding (`b"Ā"`, `b"Ā"`, an emoji). Renders as E1004,
 	// `LexerInvalidEscape`. It carries the FULLY-BUILT message (`byteStringCodepointRangeMessage`,
 	// with the codepoint hex-formatted at the decode site): the diagnostic is rendered ANCHOR-LESS
-	// (see `reportParseError`) because the /specs codepoint-range spec pins a message-only expected
-	// with no `<file>:line:col:` prefix, so there is no line/column to carry.
+	// (see `parseErrorDiagnostic`) because the /specs codepoint-range spec pins a message-only
+	// expected with no `<file>:line:col:` prefix, so there is no line/column to carry.
 	byteStringCodepointRange(message String)
 
 	// A top-level name DECLARED more than once in the PROGRAM — `let A = 1` then `let A = 2` in one file, a
@@ -758,12 +759,12 @@ export union ParseError implements Error
 
 	// --- The top-level constant arms (P1.0d.5a) ---
 	//
-	// All three are raised by the CONSTANT EVALUATOR, which runs inside the whole-program
-	// declaration sweep and so has no business reporting anything itself (`foldDeclaredSignaturesInto`
-	// is deliberately tolerant). They are recorded on the declaration and re-thrown here, by the real
+	// All three are raised by the CONSTANT EVALUATOR, which runs inside the whole-program declaration
+	// sweep and so has no business reporting anything itself (`foldDeclaredSignaturesInto` is
+	// deliberately tolerant). They are recorded on the declaration and re-thrown here, by the real
 	// parse, when it reaches the `let` that owns them — see `TopLevelConstant.failed`. That they are
-	// ParseErrors and not a private error space is the point: `reportParseError` is already the one
-	// place a parse-time diagnostic becomes a project diagnostic, and a second mapper would be a
+	// ParseErrors and not a private error space is the point: `parseErrorDiagnostic` is already the
+	// one place a parse-time diagnostic becomes a project diagnostic, and a second mapper would be a
 	// second opinion about which code means what.
 	//
 	// A set of top-level constants that reference each other in a closed chain, so none of them can
@@ -1029,9 +1030,9 @@ export union ParseError implements Error
 	// `consumeBlockEnd`, which the `EndLabelRule` picks between.
 	mismatchedEndLabel(expected String, got String, line LineNumber, column ColumnNumber)
 
-	// ⭐ **A `test` DECLARATION OUTSIDE A `*.test.maxon` FILE.** Renders as **E2059**'s neighbour **E2058**,
-	// positioned at the `test` keyword. It carries BOTH spellings of the file's name because the message
-	// names the fix rather than the rule: rename `regular.maxon` to `regular.test.maxon`.
+	// A `test` declaration outside a `.maxtest` file. Renders as E2058, positioned at the `test` keyword.
+	// It carries both spellings of the file's name because the message names the fix rather than the
+	// rule: rename `regular.maxon` to `regular.maxtest`.
 	testOutsideTestFile(fileName String, testFileName String, line LineNumber, column ColumnNumber)
 
 	// ⭐ **`test ''`.** Renders as **E2059**, positioned at the empty name literal. The name is the test's
@@ -1432,11 +1433,12 @@ export union ParseError implements Error
 	// unexpected token after a complete expression, and only the parser knows there was no `try`.
 	otherwiseWithoutTry(line LineNumber, column ColumnNumber)
 
-	// An error-handling TYPE MISMATCH at a `try … otherwise …`. Renders as **E3059**, ONE code with three
-	// message variants (all built by `reportParseError` as `type mismatch: '<detail>'`): an `otherwise`
-	// value whose type differs from the try's success type; an `otherwise ignore` used in value position;
-	// or a value-position `try` on a VOID callee. `detail` is the inner message. Parse-time because each is
-	// a fact about the `otherwise` syntax and the assignment context, which only the parser sees.
+	// An error-handling TYPE MISMATCH at a `try … otherwise …`. Renders as **E3059**, ONE code with
+	// three message variants (all built by `parseErrorDiagnostic` as `type mismatch: '<detail>'`): an
+	// `otherwise` value whose type differs from the try's success type; an `otherwise ignore` used in
+	// value position; or a value-position `try` on a VOID callee. `detail` is the inner message.
+	// Parse-time because each is a fact about the `otherwise` syntax and the assignment context, which
+	// only the parser sees.
 	errorTypeMismatch(detail String, line LineNumber, column ColumnNumber)
 
 	// A BLOCK-FORM `try` inside a `match` arm — a `try 'label' … end` (grouping multiple calls) or a
@@ -1902,10 +1904,16 @@ export typealias ParseErrorArray = Array with ParseError
 export type DeferredParseError
 	export let error as ParseError
 	export let filePath as FilePath
+	export let funcIndex as FuncIndex
+	export let value as ValueId
 
-	export static function create(error ParseError, filePath FilePath) returns DeferredParseError
-		return Self{error: error, filePath: filePath}
+	export static function create(error ParseError, filePath FilePath, funcIndex FuncIndex, value ValueId) returns DeferredParseError
+		return Self{error: error, filePath: filePath, funcIndex: funcIndex, value: value}
 	end 'create'
+
+	export function relocated(funcOffset FuncIndex) returns DeferredParseError
+		return Self{error: self.error, filePath: self.filePath, funcIndex: self.funcIndex + funcOffset, value: self.value}
+	end 'relocated'
 end 'DeferredParseError'
 
 export typealias DeferredParseErrorArray = Array with DeferredParseError
@@ -2492,8 +2500,9 @@ type ForSourceFacts
 	// A String source, iterated by grapheme.
 	export var isString as bool
 
-	// The source is a call to no declared function, so the body's element is a fresh `unresolved`.
-	export var sourceIsADeferredCall as bool
+	// Set when the source is a call to no declared function: the body's element is then an
+	// `unresolved` value derived from it.
+	export var deferredSource as DeferralSource
 
 	// The cursor protocol this source is walked through, when it is walked by one.
 	export var cursorSurface as MethodSurface
@@ -2512,7 +2521,7 @@ type ForSourceFacts
 	export var claimsWithIteratorPromise as bool
 
 	static function create(limit ValueId, testAnchorIndex TokenIndex) returns ForSourceFacts
-		return Self{isRange: false, rangeInclusive: false, limit: limit, testAnchorIndex: testAnchorIndex, isCharacterRange: false, isString: false, sourceIsADeferredCall: false, cursorSurface: MethodSurface.none, cursorEntrySeed: CursorEntrySeed.atTheFirstElement, sourceLock: false, elementBorrowSubject: EmptySourceText, claimsWithIteratorPromise: false}
+		return Self{isRange: false, rangeInclusive: false, limit: limit, testAnchorIndex: testAnchorIndex, isCharacterRange: false, isString: false, deferredSource: DeferralSource.none, cursorSurface: MethodSurface.none, cursorEntrySeed: CursorEntrySeed.atTheFirstElement, sourceLock: false, elementBorrowSubject: EmptySourceText, claimsWithIteratorPromise: false}
 	end 'create'
 end 'ForSourceFacts'
 
@@ -12167,7 +12176,7 @@ end 'tokenCanBeAName'
 // STRUCTURAL.** `export`/`public` are real lexer keywords, so `consumeOptionalVisibility` takes them before
 // the head fork is reached; `module` is a CONTEXTUAL keyword gated on `declarationOpensAt(TokenKind)`,
 // which structurally cannot see another contextual one, so it is never consumed and the `test` arm never
-// runs — `module test 'a name'` gives `error E2001: probe.test.maxon:1:1: Expected function declaration,
+// runs — `module test 'a name'` gives `error E2001: probe.maxtest:1:1: Expected function declaration,
 // got 'module'`.
 // ⇒ **Do not "fix" it.** A test's visibility means nothing, because nothing calls a test.
 //
@@ -13907,8 +13916,8 @@ let BinaryHalfRadix = 1 as FormatHalfRadix
 // failure here instead of a guard that admits a value the `as` then panics on — the E2011 this code
 // exists to raise, turned into a compiler crash.
 //
-// Exported because the diagnostic quotes it (`Queries.reportParseError`): a limit named at an author
-// must be the limit that fired.
+// Exported because the diagnostic quotes it (`Queries.parseErrorDiagnostic`): a limit named at an
+// author must be the limit that fired.
 export let MaxFormatFieldWidth = u32.max as FormatFieldWidth
 
 // ⭐⭐ **WHAT A DECLARED TYPE'S STATIC ROSTER SAYS ABOUT `<Type>.<member>` ONCE EVERY ARM THAT COULD HAVE
@@ -15674,6 +15683,7 @@ export type Parser
 	// closure nested inside a closure detects a capture of any enclosing frame, not just its immediate
 	// parent — which is what stops an outer local silently resolving to a same-named global.
 	var closureCaptureScopes as ScopeArray
+	var closureEnclosingFuncIndices as FuncIndexArray
 
 	// ⭐⭐ **THE LOCAL NAMES THIS BODY MUST GIVE A CELL (PBR-2)** — filled once per function by
 	// `collectCellLocalNames` and read at every `var` declaration. Stays `unwritten` for every body that needs
@@ -15793,12 +15803,13 @@ export type Parser
 	// `maxon test` build stages; empty for every file of every other compile, which is what says the author
 	// wrote every byte of it.
 	//
-	// ⚠ **THE TWO DOORS READ IT AT DIFFERENT GRAIN, AND THAT IS THE WHOLE POINT.** The CALL door asks only
-	// whether the list is non-empty (`fileMayUseReservedNames`), because a generated fragment has to reach
-	// names OTHER files declare and that door already conjoins `declaresCallee`. The DECLARATION door asks
-	// whether the name being declared is IN the list (`requireUnreservedName`), because a staged
-	// `*.test.maxon` is the author's own bytes with a dispatcher appended — so a per-file answer there
-	// hands the author the reserved space, which is exactly what it did until this list existed.
+	// ⚠ **THE TWO DOORS READ IT AT DIFFERENT GRAIN, AND THAT IS THE WHOLE POINT.** The CALL door asks
+	// only whether the list is non-empty (`fileMayUseReservedNames`), because a generated fragment has
+	// to reach names OTHER files declare and that door already conjoins `declaresCallee`. The
+	// DECLARATION door asks whether the name being declared is IN the list (`requireUnreservedName`),
+	// because a staged `.maxtest` file is the author's own bytes with a dispatcher appended — so a
+	// per-file answer there hands the author the reserved space, which is exactly what it did until
+	// this list existed.
 	//
 	// ⚠ **IT IS SEPARATE FROM `declaresCompilerInternalNames` EVEN THOUGH THE CALL DOOR TAKES THEIR
 	// DISJUNCTION.** The two are different FACTS — "this is one of the two stdlib modules that declare the
@@ -16166,6 +16177,7 @@ export type Parser
 			lastFieldReadOffset: 0,
 			closureReturns: FuncReturnTypeMap.create(),
 			closureCaptureScopes: ScopeArray.create(),
+			closureEnclosingFuncIndices: FuncIndexArray.create(),
 			cellLocalNames: noCellLocalNames,
 			fileHasClosureLiteral: false,
 			cellArgumentTokenIndex: NoCellArgumentRequest,
@@ -16327,7 +16339,7 @@ export type Parser
 		var entries = FuncReturnTypeEntryArray.create()
 
 		// ⭐ Every `test` this file declares, for the ROSTER rather than for the type system — see
-		// `recordScannedTest`. EMPTY for every file that is not a `*.test.maxon`, which is every file of
+		// `recordScannedTest`. EMPTY for every file that is not a `.maxtest` file, which is every file of
 		// every program that does not run `maxon test`.
 		var testDecls = DiscoveredTestArray.create()
 
@@ -24851,7 +24863,7 @@ export type Parser
 				throw ParseError.bareSizedTypeAlias(String.from(tok.value), line: tok.line, column: tok.column)
 			end 'bareSizedType'
 
-			throw ParseError.unsupported("a typealias over '{tok.kind.rawValue}' (only `int(low to high)`, `float(low to high)`, `bits(n)` and `function(...)` are parsed; generic and bare-sized aliases arrive with the milestones that give them meaning)", line: tok.line, column: tok.column)
+			throw ParseError.unsupported("a typealias over '{tok.kind.rawValue}' (a typealias names `int(low to high)`, `float(low to high)`, `bits(n)`, `function(...)`, a tuple `(A, B)` or a generic instance `Base with …`)", line: tok.line, column: tok.column)
 		end 'notNumeric'
 
 		// The `int`/`float` keyword itself — the anchor for both range diagnostics below, taken before it
@@ -35821,14 +35833,14 @@ export type Parser
 	// the per-file runner one file over), so a per-name answer here would refuse the very calls the
 	// generator exists to make.
 	//
-	// ⛔⛔ **AND THAT IS WHY THIS IS *NOT* THE DECLARATION DOOR'S PREDICATE, THOUGH IT WAS.** A1r's lesson
-	// is that a rule stated on one side of a name lapses on the other — but the rules are not the same
-	// rule, and reading one predicate at both doors was how the wider one won. A staged `*.test.maxon` is
-	// the AUTHOR's bytes with a dispatcher appended: file-grained here is bounded by `declaresCallee`,
-	// while file-grained at the declaration door simply handed the author the reserved space. MEASURED:
-	// an author's `function __sneaky()` compiled clean under `maxon test` while `maxon build` refused the
-	// identical file with E2051. `requireUnreservedName` therefore asks about the NAME
-	// (`mintedThisReservedName`), and only this door asks about the file.
+	// ⛔⛔ **AND THAT IS WHY THIS IS *NOT* THE DECLARATION DOOR'S PREDICATE, THOUGH IT WAS.** A1r's
+	// lesson is that a rule stated on one side of a name lapses on the other — but the rules are not
+	// the same rule, and reading one predicate at both doors was how the wider one won. A staged
+	// `.maxtest` file is the AUTHOR's bytes with a dispatcher appended: file-grained here is bounded
+	// by `declaresCallee`, while file-grained at the declaration door simply handed the author the
+	// reserved space. MEASURED: an author's `function __sneaky()` compiled clean under `maxon test`
+	// while `maxon build` refused the identical file with E2051. `requireUnreservedName` therefore
+	// asks about the NAME (`mintedThisReservedName`), and only this door asks about the file.
 	function fileMayUseReservedNames() returns bool
 		return self.declaresCompilerInternalNames or not self.compilerMintedNames.isEmpty()
 	end 'fileMayUseReservedNames'
@@ -35860,11 +35872,12 @@ export type Parser
 		// compiler already learns each of these names by parsing the declaration, so a second copy could
 		// only ever be the stale one.
 		//
-		// ⛔⛔ **AND IT IS THIS ONE FILE-GRAINED PROVENANCE, NOT `fileMayUseReservedNames`.** That predicate
-		// is the CALL door's, and reading it here was a hole: it also answers yes for a file this compile
-		// merely wrote PART of, and every `maxon test` build stages exactly such a file — the author's own
-		// `*.test.maxon` with a generated dispatcher appended. See `mintedThisReservedName`, whose arm below
-		// is what a staged file's own generated declarations now pass through.
+		// ⛔⛔ **AND IT IS THIS ONE FILE-GRAINED PROVENANCE, NOT `fileMayUseReservedNames`.** That
+		// predicate is the CALL door's, and reading it here was a hole: it also answers yes for a file
+		// this compile merely wrote PART of, and every `maxon test` build stages exactly such a file —
+		// the author's own `.maxtest` file with a generated dispatcher appended. See
+		// `mintedThisReservedName`, whose arm below is what a staged file's own generated declarations
+		// now pass through.
 		if self.declaresCompilerInternalNames 'aFileWhoseEveryByteIsTheCompilersBridge'
 			// ⛔ **THE ONE THING AN EXEMPT MODULE STILL MAY NOT DECLARE (W72).** `__line__` and `__file__` are
 			// reserved WORDS, not merely reserved-prefix names — `specs/source-location-defaults.md`: "no
@@ -35953,7 +35966,7 @@ export type Parser
 		// declaring `__MaxonTestRun`, `__MaxonTestIndex` and `__maxon_test_main`
 		// (`TestDispatcher.mintedNamesForDispatcher` / `mintedNamesForEntry`).
 		//
-		// ⛔⛔ **PER-NAME, AND THE FILE-GRAINED VERSION OF IT WAS A HOLE.** A staged `*.test.maxon` is the
+		// ⛔⛔ **PER-NAME, AND THE FILE-GRAINED VERSION OF IT WAS A HOLE.** A staged `.maxtest` file is the
 		// AUTHOR's bytes with generated bytes appended, so "this compiler wrote this file" licenses the
 		// author's own lines too: MEASURED, an author's `function __sneaky()` compiled clean under
 		// `maxon test` while `maxon build` refused the identical file with E2051. Keyed on the names the
@@ -36997,7 +37010,7 @@ export type Parser
 	// ⭐⭐ **A COMPILER-MINTED MACHINE WORD IS PROVEN OVER `[0, 2^64-1]` AS A NAMELESS INTERVAL, NEVER BY
 	// RESOLVING `MachineWord` BY NAME — AND THE DIFFERENCE IS A FORGEABLE PROOF.** The by-name alias
 	// registry falls through to LAST-WINS across the whole program (`Project.maxon`'s tier note), and
-	// `fileMayUseReservedNames` admits a staged `*.test.maxon` into the reserved space, so a file
+	// `fileMayUseReservedNames` admits a staged `.maxtest` file into the reserved space, so a file
 	// declaring `typealias MachineWord = int(0 to 10)` would hand this door a range it never meant and
 	// delete a real guard from code that never saw that file. An interval names nothing and nothing can
 	// contest it.
@@ -38925,7 +38938,7 @@ export type Parser
 		return match op 'rewrite'
 			call gives TryTarget.named(self.commitTryCallRewrite(opIdx, errorFlag: flag))
 			witness gives self.commitWitnessTryDispatchRewrite(opIdx, flag: flag)
-			await(result, promise) gives self.commitTryAwaitRewrite(opIdx, result: result, flag: flag, promise: promise)
+			await (result, promise) gives self.commitTryAwaitRewrite(opIdx, result: result, flag: flag, promise: promise)
 			notRoutable or
 				tryChannelCall panic("rewriteToTryChannel: the op at {opIdx} is neither a call, a witness dispatch nor an await — both callers classify it with `routableOpAt` first")
 		end 'rewrite'
@@ -41005,7 +41018,7 @@ export type Parser
 				tryChannelCall then return
 			call(result, callee) then self.routeThrowingOp(destination, opIdx: opIdx, clause: self.signatures.throwsOf(callee), result: result)
 			witness(result) then self.routeThrowingOp(destination, opIdx: opIdx, clause: self.tryTargetThrows(recordedTryTargetOf(self.lastWitnessDispatch, opIdx: opIdx)), result: result)
-			await(result, _) then self.routeThrowingOp(destination, opIdx: opIdx, clause: self.heldAwaitClause(opIdx), result: result)
+			await (result, _) then self.routeThrowingOp(destination, opIdx: opIdx, clause: self.heldAwaitClause(opIdx), result: result)
 		end 'held'
 	end 'routeHeldOp'
 
@@ -41026,7 +41039,7 @@ export type Parser
 			call(result, callee, _, _, _, _, _, _) gives RoutableOp.call(result, callee: callee)
 			tryCall(result, _, callee, _, _, _, _, _, _) gives RoutableOp.tryChannelCall(result, callee: callee)
 			witnessDispatch(result, _, _, _, _, _, _) gives RoutableOp.witness(result)
-			await(result, promise) gives RoutableOp.await(result, promise: promise)
+			await (result, promise) gives RoutableOp.await(result, promise: promise)
 			literal or
 				ret or
 				retVoid or
@@ -45925,7 +45938,7 @@ export type Parser
 			for i in 0 upto nameToks.count() 'eachDeferredName'
 				let deferredNameTok = try nameToks.get(i) otherwise panic("declareDestructuredLoopVariables: nameToks.get OOB at {i} below count {nameToks.count()}")
 
-				try self.declareLoopVariable(func, nameTok: deferredNameTok, value: self.mintValue(ValueTypeTag.unresolved, nameId: UnnamedTypeId), bodyEndIndex: bodyEndIndex)
+				try self.declareLoopVariable(func, nameTok: deferredNameTok, value: self.deferredValueFrom(self.artifact.currentFuncIndex, sourceId: loopValue), bodyEndIndex: bodyEndIndex)
 			end 'eachDeferredName'
 
 			return
@@ -46052,10 +46065,10 @@ export type Parser
 		// with E3004 at the call, and a refusal here would land in front of that one, at the `for`.
 		// Earlier and `src` does not exist; later and `requireIterableSource` has already spoken.
 		if tagIsUnresolved(self.tagOf(source)) 'deferredCallSource'
+			src.deferredSource = DeferralSource.value(self.artifact.currentFuncIndex, valueId: source)
 			source = self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok))
 			src.isRange = true
 			src.limit = source
-			src.sourceIsADeferredCall = true
 		end 'deferredCallSource'
 
 		// ⭐⭐ **A RANGE WHOSE BOUNDS ARE BOTH CHARACTER LITERALS IS A RANGE OF `Character`S** (A5m-ab), and
@@ -46424,8 +46437,9 @@ export type Parser
 		// The element is not the counter the stand-in range steps: every body consumer already has an arm for
 		// `unresolved`, where an `int` element earns a refusal of its own — a destructuring pattern rejects
 		// "a 'int' element", a method call "'int' has no method" — in front of E3004.
-		if src.sourceIsADeferredCall 'deferredCallElement'
-			loopValue = self.mintValue(ValueTypeTag.unresolved, nameId: UnnamedTypeId)
+		match src.deferredSource 'deferredCallElement'
+			value(sourceFuncIndex, sourceId) then loopValue = self.deferredValueFrom(sourceFuncIndex, sourceId: sourceId)
+			none then break 'deferredCallElement'
 		end 'deferredCallElement'
 
 		// ⭐ **A CHARACTER RANGE MINTS ITS ELEMENT FROM THE COUNTER**, where a String mints it from a byte
@@ -54671,6 +54685,7 @@ export type Parser
 
 		if self.at(TokenKind.if) 'ternary'
 			self.releaseCompletedOperand()
+
 			// The TRUE arm's blame, taken while its own tokens are still the ones the cursor last moved over
 			// — the condition and the false arm both clobber that answer, and both parse below.
 			return try self.parseTernaryExpression(func, trueValue: value, trueBlame: self.expressionImmutableBlame(armTok, valueStart: armStart, value: value), startBlock: block, markOpRefCount: markOpRefCount, markBlockRefCount: markBlockRefCount, markRangeSiteCount: markRangeSiteCount, markTempCount: markTempCount, markOwnedCount: markOwnedCount, preMoveMark: preMoveMark, armSlot: armSlot)
@@ -61521,17 +61536,18 @@ export type Parser
 		try self.requireManagedValueMatches(payloadValueTypeOf(class, declared: declared), isString: payloadClassIsString(class), value: value, placeDoor: placeDoor, placeName: placeName, placeOwner: placeOwner, placeBrand: placeBrand, voice: voice, anchor: anchor)
 	end 'requireManagedSlotValueMatches'
 
-	// A refusal earned by a call NO file declares is recorded rather than thrown: `unresolved` is
-	// the deferral such a call mints, and a throw ends the file's parse, so
-	// `SemanticCheck.checkCalls` never reports the E3004 that explains it and the author is shown
-	// only this symptom, at a consumer line. Only the report is deferred — the entry is the finished
-	// `ParseError` — and `mintCallResult` owns the rule.
-	function deferredTheRefusal(error ParseError, argTag ValueTypeTag) returns bool
-		if argTag != ValueTypeTag.unresolved 'notADeferredCallResult'
+	// A refusal earned by an `unresolved` value — a call no file declares, or a value derived from one
+	// — is recorded rather than thrown: a throw ends the file's parse, so `SemanticCheck.checkCalls`
+	// never reports the E3004 that explains it and the author is shown only this symptom, at a
+	// consumer line. Only the report is deferred: the entry carries the finished `ParseError`, and the
+	// value, so `SemanticCheck.deferralCause` can trace the refusal to the calls it rests on.
+	// `mintCallResult` owns the rule.
+	function deferredTheRefusal(error ParseError, value ValueId) returns bool
+		if not tagIsUnresolved(self.tagOf(value)) 'notADeferredCallResult'
 			return false
 		end 'notADeferredCallResult'
 
-		self.artifact.deferredParseErrors.push(error)
+		self.artifact.deferredParseErrors.push(DeferredParseError.create(error, filePath: self.artifact.filePath, funcIndex: self.artifact.currentFuncIndex, value: value))
 		return true
 	end 'deferredTheRefusal'
 
@@ -61552,7 +61568,7 @@ export type Parser
 			// 'Item'`.
 			let mismatch = self.slotMismatchError(voice, placeDoor: placeDoor, placeName: placeName, placeOwner: placeOwner, placeBrand: placeBrand, got: self.valueDisplayTypeName(value), gotTag: got, resolvedExpected: typeTagName(wantTag), declared: wantTag, declaredNameId: typeNameIdOf(storage), line: anchor.line, column: anchor.column)
 
-			if self.deferredTheRefusal(mismatch, argTag: got) 'aDeferredCallResult'
+			if self.deferredTheRefusal(mismatch, value: value) 'aDeferredCallResult'
 				return
 			end 'aDeferredCallResult'
 
@@ -63366,7 +63382,7 @@ export type Parser
 		if not self.rawValueArgumentSuits(raw, expected: expected) 'wrongDomain'
 			let mismatch = ParseError.typeMismatchExpectedGot(typeTagName(expected), got: self.valueDisplayTypeName(raw), line: argTok.line, column: argTok.column)
 
-			if not self.deferredTheRefusal(mismatch, argTag: self.tagOf(raw)) 'notADeferredCallResult'
+			if not self.deferredTheRefusal(mismatch, value: raw) 'notADeferredCallResult'
 				throw mismatch
 			end 'notADeferredCallResult'
 		end 'wrongDomain'
@@ -63489,7 +63505,7 @@ export type Parser
 		if not tagIsText(self.tagOf(name)) 'notAString'
 			let mismatch = ParseError.typeMismatchExpectedGot(typeTagName(ValueTypeTag.string), got: self.valueDisplayTypeName(name), line: memberTok.line, column: memberTok.column)
 
-			if not self.deferredTheRefusal(mismatch, argTag: self.tagOf(name)) 'notADeferredCallResult'
+			if not self.deferredTheRefusal(mismatch, value: name) 'notADeferredCallResult'
 				throw mismatch
 			end 'notADeferredCallResult'
 		end 'notAString'
@@ -65980,7 +65996,7 @@ export type Parser
 		self.noteMethodCallMutabilityUses(recv)
 
 		if tagIsUnresolved(recv.tag) 'deferredCallError'
-			return self.deferredUnresolvedMemberResult()
+			return self.deferredUnresolvedMemberResult(self.artifact.currentFuncIndex, sourceId: recv.value)
 		end 'deferredCallError'
 
 		try self.consume(TokenKind.dot)
@@ -67765,9 +67781,10 @@ export type Parser
 	function capturedMethodCall(func IrFunction, baseTok Token, enclosing Scope, resultUsed bool) returns ValueId throws ParseError
 		self.advance()
 
-		if self.baseBindingIsADeferredCallResult(enclosing.getInfo(self.baseBindingName(baseTok))) 'deferredCallError'
-			return self.deferredUnresolvedMemberResult()
-		end 'deferredCallError'
+		match self.deferralSourceOfBinding(enclosing.getInfo(self.baseBindingName(baseTok)), frame: self.enclosingFrameFuncIndex()) 'deferredBase'
+			value(sourceFuncIndex, sourceId) then return self.deferredUnresolvedMemberResult(sourceFuncIndex, sourceId: sourceId)
+			none then break 'deferredBase'
+		end 'deferredBase'
 
 		try self.consume(TokenKind.dot)
 		return try self.dispatchMethodOnBase(func, base: try self.capturedStructBase(baseTok, enclosing: enclosing), baseTok: baseTok, resultUsed: resultUsed)
@@ -76505,7 +76522,7 @@ export type Parser
 
 		let mismatch = self.appendArgMismatch(other, arr: arr, methodTok: methodTok, bufferSurface: bufferSurface)
 
-		if self.deferredTheRefusal(mismatch, argTag: self.tagOf(other)) 'aDeferredCallResult'
+		if self.deferredTheRefusal(mismatch, value: other) 'aDeferredCallResult'
 			return
 		end 'aDeferredCallResult'
 
@@ -77541,13 +77558,10 @@ export type Parser
 	// is keyed by. So `p.x` resolves through the same two steps a human does — which type is `p`,
 	// and which slot does that type call `x`.
 	function parseFieldAccess() returns ValueId throws ParseError
-		let baseIsADeferredCall = try self.chainBaseIsADeferredCallResult()
-
-		if baseIsADeferredCall 'deferredCallError'
-			self.advance()
-
-			return self.deferredUnresolvedMemberResult()
-		end 'deferredCallError'
+		match try self.chainBaseDeferralSource() 'deferredBase'
+			value(sourceFuncIndex, sourceId) then return self.deferredMemberResultPastTheBase(sourceFuncIndex, sourceId: sourceId)
+			none then break 'deferredBase'
+		end 'deferredBase'
 
 		let step = try self.resolveFieldChain()
 		let fieldIndex = self.lastConsumedTokenIndex()
@@ -78433,9 +78447,7 @@ export type Parser
 	// The READ path asks the same chain minus its middle: it has no instance to write through, so
 	// resolution is followed directly by visibility (`parseFieldAccess`).
 	function parseFieldAssignment(func IrFunction, block IrBlock) throws ParseError
-		let baseIsADeferredCall = try self.chainBaseIsADeferredCallResult()
-
-		if baseIsADeferredCall 'deferredCallError'
+		if (try self.chainBaseDeferralSource()).isDeferred() 'deferredCallError'
 			self.advance()
 			self.skipDeferredMemberChain()
 			try self.consume(TokenKind.equals)
@@ -80580,12 +80592,14 @@ export type Parser
 			let cell = self.emitIndirectLoad(MaxonType.integer, box: self.closureEnvParamId, offset: envSlotOffset(self.captureSlotFor(name, enclosingValue: binding.boundValue, captureType: MaxonType.integer, anchor: anchor)), storageType: self.wordSlotStorageType(MaxonType.integer), range: range)
 			let occupant = self.emitIndirectLoad(captureType, box: cell, offset: CellContentOffset, storageType: self.wordSlotStorageType(captureType), range: range)
 			self.carryImmutableGlobalMark(self.capturedImmutableGlobalReads, from: binding.boundValue, to: occupant)
+			self.carryCapturedDeferral(binding, captured: occupant)
 			return occupant
 		end 'capturedByItsCell'
 
 		let slot = self.captureSlotFor(name, enclosingValue: binding.boundValue, captureType: captureType, anchor: anchor)
 		let captured = self.emitIndirectLoad(captureType, box: self.closureEnvParamId, offset: envSlotOffset(slot), storageType: self.wordSlotStorageType(captureType), range: range)
 		self.carryImmutableGlobalMark(self.capturedImmutableGlobalReads, from: binding.boundValue, to: captured)
+		self.carryCapturedDeferral(binding, captured: captured)
 		return captured
 	end 'emitCaptureRead'
 
@@ -80606,6 +80620,13 @@ export type Parser
 			self.markImmutableGlobalRead(to)
 		end 'sourceMayAliasAnImmutableGlobal'
 	end 'carryImmutableGlobalMark'
+
+	function carryCapturedDeferral(binding VarInfo, captured ValueId)
+		match self.deferralSourceOfBinding(binding, frame: self.enclosingFrameFuncIndex()) 'deferredBinding'
+			value(sourceFuncIndex, sourceId) then self.artifact.recordDeferralSource(captured, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId)
+			none then break 'deferredBinding'
+		end 'deferredBinding'
+	end 'carryCapturedDeferral'
 
 	// The env slot for `name`, appending a fresh one (recording the enclosing value + type to store) on first
 	// sight and reusing it thereafter. Dedup keeps `multiple-captures` (`x + a + b`) at one slot per distinct
@@ -82079,6 +82100,7 @@ export type Parser
 		// into it (an enclosing local/param/self-field, not the closure's own params) is a capture. Pushed
 		// here, popped just before the restore.
 		self.closureCaptureScopes.push(savedScope)
+		self.closureEnclosingFuncIndices.push(savedFuncIndex)
 
 		// Seed the closure's value-type columns with its parameter types (ids 0..paramCount-1), exactly as
 		// `parseFunction` seeds a function's, so `tagOf(param)` answers the operators before any op runs. A
@@ -82217,6 +82239,7 @@ export type Parser
 
 		// --- Restore the enclosing function's parse context. ---
 		_ = try self.closureCaptureScopes.pop() otherwise panic("parseClosureExpression: closureCaptureScopes underflow — the enclosing scope pushed at entry is missing")
+		_ = try self.closureEnclosingFuncIndices.pop() otherwise panic("parseClosureExpression: closureEnclosingFuncIndices underflow — the enclosing frame pushed at entry is missing")
 		self.cellLocalNames = savedCellLocalNames
 		self.scope = savedScope
 		self.valueIds = savedValueIds
@@ -90601,11 +90624,36 @@ export type Parser
 	// ⚠ The doors whose parameter type is a `__`-reserved builtin (`__ManagedMemory`, `__ManagedFile`,
 	// `__ManagedSocket`, `__ManagedDirectory`) still throw, which only a file allowed to spell those names
 	// reaches.
-	function deferredUnresolvedMemberResult() returns ValueId
+	function deferredUnresolvedMemberResult(sourceFuncIndex FuncIndex, sourceId ValueId) returns ValueId
 		self.skipDeferredMemberChain()
 
-		return self.mintValue(ValueTypeTag.unresolved, nameId: UnnamedTypeId)
+		return self.deferredValueFrom(sourceFuncIndex, sourceId: sourceId)
 	end 'deferredUnresolvedMemberResult'
+
+	function deferredMemberResultPastTheBase(sourceFuncIndex FuncIndex, sourceId ValueId) returns ValueId
+		self.advance()
+
+		return self.deferredUnresolvedMemberResult(sourceFuncIndex, sourceId: sourceId)
+	end 'deferredMemberResultPastTheBase'
+
+	function deferredValueFrom(sourceFuncIndex FuncIndex, sourceId ValueId) returns ValueId
+		let derived = self.mintValue(ValueTypeTag.unresolved, nameId: UnnamedTypeId)
+		self.artifact.recordDeferralSource(derived, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId)
+
+		return derived
+	end 'deferredValueFrom'
+
+	function deferralSourceOfBinding(binding VarInfo, frame FuncIndex) returns DeferralSource
+		if not self.baseBindingIsADeferredCallResult(binding) 'aResolvedBinding'
+			return DeferralSource.none
+		end 'aResolvedBinding'
+
+		return DeferralSource.value(frame, valueId: binding.boundValue)
+	end 'deferralSourceOfBinding'
+
+	function enclosingFrameFuncIndex() returns FuncIndex
+		return try self.closureEnclosingFuncIndices.get(self.closureEnclosingFuncIndices.count() - 1) otherwise panic("enclosingFrameFuncIndex: asked for a capture's frame outside any closure body — `captureScopeOf` finds an enclosing scope only while one is pushed")
+	end 'enclosingFrameFuncIndex'
 
 	function skipDeferredMemberChain()
 		while self.at(TokenKind.dot) 'chain'
@@ -90622,24 +90670,24 @@ export type Parser
 		return tagIsUnresolved(maxonTypeTag(binding.varType))
 	end 'baseBindingIsADeferredCallResult'
 
-	function chainBaseIsADeferredCallResult() returns bool throws ParseError
+	function chainBaseDeferralSource() returns DeferralSource throws ParseError
 		let baseTok = self.current()
 
 		if not self.baseNamesAValueInScope(baseTok) 'notAValueBase'
-			return false
+			return DeferralSource.none
 		end 'notAValueBase'
 
 		let baseName = self.baseBindingName(baseTok)
 
 		if self.scope.contains(baseName) 'localBase'
-			return self.baseBindingIsADeferredCallResult(self.scope.getInfo(baseName))
+			return self.deferralSourceOfBinding(self.scope.getInfo(baseName), frame: self.artifact.currentFuncIndex)
 		end 'localBase'
 
 		match try self.captureScopeOf(baseName, anchor: baseTok) 'captured'
-			found(enclosing) then return self.baseBindingIsADeferredCallResult(enclosing.getInfo(baseName))
-			notCaptured then return false
+			found(enclosing) then return self.deferralSourceOfBinding(enclosing.getInfo(baseName), frame: self.enclosingFrameFuncIndex())
+			notCaptured then return DeferralSource.none
 		end 'captured'
-	end 'chainBaseIsADeferredCallResult'
+	end 'chainBaseDeferralSource'
 
 	// The result of a call to a callee some file DOES declare — where the void/value split is
 	// finally a split and not a sentinel.

@@ -1,0 +1,36 @@
+// build-header.maxtest - every `maxon build` opens with the compiler's version and the early-preview
+// warning, on stdout, whether the build succeeds or fails.
+//
+// The failing build is the half a check of stdout alone cannot see: the header must stay off stderr, which
+// is exactly the build's diagnostics. Non-ASCII in the header is caught by `no-arguments`, which prints the
+// same two lines.
+
+let CaseDirName = "build-header"
+let GoodStem = "good"
+let BadStem = "bad"
+let SourceExtension = ".maxon"
+let GoodSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let BadSource = "function main() returns ExitCode\n\treturn undeclaredName\nend 'main'\n"
+
+let CompiledPrefix = "Compiled -> "
+
+test 'build opens with the version and the early-preview warning, and keeps them off stderr'
+	let dir = freshCaseDir(CaseDirName)
+
+	let good = buildSource(dir, stem: GoodStem, source: GoodSource)
+	Expect.equal(good.exitCode() as AssertedInt, expected: 0, message: "a one-line program did not build. It said: {good.stdout}{good.stderr}")
+	requireVersionHeader(good.stdout, which: "a successful build")
+	Expect.contains(good.stdout, needle: CompiledPrefix, message: "a successful build no longer says where it wrote the binary. It printed: {good.stdout}")
+
+	let bad = buildSource(dir, stem: BadStem, source: BadSource)
+	Expect.equal(bad.exitCode() as AssertedInt, expected: 1, message: "a program naming an undeclared value built. It said: {bad.stdout}{bad.stderr}")
+	requireVersionHeader(bad.stdout, which: "a failing build")
+	Expect.isFalse(bad.stderr.isEmpty(), message: "a failing build wrote no diagnostic to stderr, so there is nothing to keep the header apart from")
+	Expect.isFalse(bad.stderr.contains(EarlyPreviewWords) or bad.stderr.contains(versionLine()), message: "a failing build's stderr carries the header; it must be exactly the diagnostics. It was: {bad.stderr}")
+end 'build opens with the version and the early-preview warning, and keeps them off stderr'
+
+function buildSource(dir FilePath, stem String, source String) returns CollectedOutput
+	let sourcePath = dir.join("{stem}{SourceExtension}")
+	writeStagedFile(sourcePath, content: source)
+	return runDriver([BuildCommandWord, sourcePath.toString(), "{OutputOptionPrefix}{dir.join(stem).toString()}"])
+end 'buildSource'

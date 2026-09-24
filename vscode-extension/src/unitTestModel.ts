@@ -4,10 +4,15 @@ import * as path from 'path';
 // Everything the Test Explorer decides about `maxon test` that does not need VS Code, so it runs under
 // plain mocha.
 
-export const TestFileSuffix = '.test.maxon';
+const TestFileSuffix = '.maxtest';
+export const TestFileGlob = `**/*${TestFileSuffix}`;
 const MaxonSourceSuffix = '.maxon';
+const ProjectFileSuffix = '.maxproj';
 const IgnoreMarkerName = '.maxonignore';
-const DriverFileNames = ['project.maxon', 'tasks.maxon'];
+
+export function isTestFileName(file: string): boolean {
+	return path.basename(file).endsWith(TestFileSuffix);
+}
 
 export interface DeclaredTest {
 	name: string;
@@ -112,27 +117,45 @@ export function isIgnoredDirectory(dir: string): boolean {
 	}
 }
 
-function holdsMaxonSource(dir: string): boolean {
+function holdsFile(dir: string, matches: (name: string) => boolean): boolean {
 	try {
-		return fs.readdirSync(dir, { withFileTypes: true })
-			.some(entry => entry.isFile() && !DriverFileNames.includes(entry.name.toLowerCase()) && entry.name.endsWith(MaxonSourceSuffix));
+		return fs.readdirSync(dir, { withFileTypes: true }).some(entry => entry.isFile() && matches(entry.name));
 	} catch {
 		return false;
+	}
+}
+
+function holdsMaxonSource(dir: string): boolean {
+	return holdsFile(dir, name => name.endsWith(MaxonSourceSuffix) || isTestFileName(name));
+}
+
+function nearestProjectFileDirectory(start: string, root: string): string | undefined {
+	let current = start;
+
+	while (true) {
+		if (holdsFile(current, name => name.endsWith(ProjectFileSuffix))) return current;
+		if (!isWithin(current, root)) return undefined;
+		current = path.dirname(current);
 	}
 }
 
 /**
  * The directory `maxon test` is pointed at for this test file.
  *
- * `maxon test <dir>` compiles every `.maxon` file beneath `<dir>` as one program, and nothing on disk marks
- * where a project begins. The project is therefore the highest directory reachable from the test file's own
- * directory through parents that each hold a `.maxon` file, never above the workspace folder: sources that
- * sit together are compiled together, and a directory holding none (`tests/` above `tests/cli/`) separates
- * independent projects. A `project.maxon` or `tasks.maxon`, in any letter case, is not counted: `maxon test` compiles neither.
+ * `maxon test <dir>` compiles every `.maxon` and `.maxtest` file beneath `<dir>` as one program.
+ * The project is the nearest directory holding a `.maxproj`, from the test file's own directory up to
+ * the workspace folder — the root the language server gives the same file. Without one, it is the
+ * highest directory reachable through parents that each hold a source, never above the workspace
+ * folder: sources that sit together are compiled together, and a directory holding none (`tests/`
+ * above `tests/cli/`) separates independent projects.
  */
 export function testProjectDirectory(testFile: string, workspaceFolder: string): string {
 	const root = path.resolve(workspaceFolder);
-	let project = path.dirname(path.resolve(testFile));
+	const start = path.dirname(path.resolve(testFile));
+	const marked = nearestProjectFileDirectory(start, root);
+	if (marked !== undefined) return marked;
+
+	let project = start;
 
 	while (isWithin(project, root)) {
 		const above = path.dirname(project);

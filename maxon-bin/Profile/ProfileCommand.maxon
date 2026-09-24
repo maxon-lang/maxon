@@ -327,7 +327,7 @@
 	function launchAndSampleCalibrated(request ProfileRequest, target FilePath, placement ProfilePlacement, sidecar MxdbgReader, cyclesPerTick ProfileCyclesPerTick) returns ExitCode
 		// ⚠ ROOTED, because a spawn resolves a bare program name against PATH rather than against the working
 		// directory — so `dir/prog.exe` would be reported missing by the OS moments after this file found it.
-		var child = try StreamingSubprocess.spawnWithEnvironment(Executable.path(target.resolve(Directory.currentPath())), arguments: request.targetArgs, workingDirectory: inheritedWorkingDir(), environment: profileChildEnvironment(request)) otherwise (e) 'didNotStart'
+		var child = try StreamingSubprocess.spawnWithEnvironment(Executable.path(target.anchoredAt(Directory.currentPath())), arguments: request.targetArgs, workingDirectory: inheritedWorkingDir(), environment: profileChildEnvironment(request)) otherwise (e) 'didNotStart'
 			return refuseProfile("could not run {reportPathDisplay(request.exePath)}: {e.displayReason()}")
 		end 'didNotStart'
 

@@ -1,0 +1,23 @@
+let NestedMaxprojRootDirName = "diagnostics-nested-maxproj"
+let NestedMaxprojOuterFileName = "app.maxproj"
+let NestedMaxprojInnerDirName = "inner"
+let NestedMaxprojInnerFileName = "inner.maxproj"
+let NestedMaxprojSource = "export function app() returns ExitCode\n\tBuild.build(\".\")\n\treturn 0\nend 'app'\n"
+let NestedMaxprojRefusalCode = "E2074"
+
+test 'project diagnostics: a .maxproj below another project is refused, naming the outer one'
+	let root = freshOutsideCheckoutDir(NestedMaxprojRootDirName)
+	writeCorpusFile(root, fileName: NestedMaxprojOuterFileName, content: NestedMaxprojSource)
+
+	let inner = createdStagingDirectory(NestedMaxprojInnerDirName, under: root)
+	writeCorpusFile(inner, fileName: NestedMaxprojInnerFileName, content: NestedMaxprojSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: "{NestedMaxprojInnerDirName}/{NestedMaxprojInnerFileName}", content: NestedMaxprojSource)
+
+	discardOutsideCheckoutDir(root)
+
+	let reported = onlyProjectDiagnostic(probe, note: "`{NestedMaxprojInnerDirName}/{NestedMaxprojInnerFileName}` sits below `{NestedMaxprojOuterFileName}`, and projects do not nest: `maxon build` in the outer directory refuses the layout, so the nested project file owes that refusal where its author is looking.")
+
+	Expect.equal(reported.code, expected: NestedMaxprojRefusalCode, message: "the one diagnostic published on the nested project file is not the nested-project refusal: {reported.message}")
+	Expect.contains(reported.message, needle: NestedMaxprojOuterFileName, message: "the refusal did not name the project the file is nested in.")
+end 'project diagnostics: a .maxproj below another project is refused, naming the outer one'

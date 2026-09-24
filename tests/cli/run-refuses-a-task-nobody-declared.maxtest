@@ -1,0 +1,19 @@
+let CaseDirName = "run-refuses-a-task-nobody-declared"
+let TaskFileName = "tasks.maxtasks"
+let RunCommandWord = "run"
+let AskedFor = "nosuchtask"
+
+let TasksSource = "export typealias ExitCode = int(0 to 255)\n\nexport function report() returns ExitCode\n\treturn 0\nend 'report'\n"
+
+test 'a task nobody declared is refused and the tasks that are there are listed'
+	let dir = freshCaseDir(CaseDirName)
+	let tasks = dir.join(TaskFileName)
+	try File.writeText(tasks, content: TasksSource) otherwise panic("run-refuses-a-task-nobody-declared: the gate could not run - could not write {tasks.toString()}")
+
+	let refused = runDriver([RunCommandWord, AskedFor], workingDirectory: dir)
+	let said = "It wrote to stdout: {refused.stdout} and to stderr: {refused.stderr}"
+
+	Expect.equal(refused.exitCode() as AssertedInt, expected: 1, message: "`maxon {RunCommandWord}` accepted a task the {TaskFileName} does not declare. {said}")
+	Expect.contains(refused.stderr, needle: AskedFor, message: "the refusal did not name the task that was asked for. {said}")
+	Expect.contains(refused.stdout, needle: "report", message: "the refusal did not list the tasks that ARE there, which is the only thing that tells the reader what to type instead. {said}")
+end 'a task nobody declared is refused and the tasks that are there are listed'

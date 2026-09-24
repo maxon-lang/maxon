@@ -8036,7 +8036,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:26: Unsupported: a typealias over 'identifier' (only `int(low to high)`, `float(low to high)`, `bits(n)` and `function(...)` are parsed; generic and bare-sized aliases arrive with the milestones that give them meaning)
+error E2015: <fragment>:3:26: Unsupported: a typealias over 'identifier' (a typealias names `int(low to high)`, `float(low to high)`, `bits(n)`, `function(...)`, a tuple `(A, B)` or a generic instance `Base with …`)
 ```
 
 <!-- test: a-generic-service-handle-reaches-a-parameter-through-its-spelling -->

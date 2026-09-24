@@ -891,3 +891,68 @@ function indexRowsByFunction(funcIndices FuncIndexArray, selected BoolArray, fun
 
 	return FunctionRowCsr.create(rowStarts, rows: rows)
 end 'indexRowsByFunction'
+
+// The value an `unresolved` value was derived from, so a refusal raised over it can be traced back
+// to the undeclared call at its root (`SemanticCheck.deferralCause`). The parser records one
+// wherever it derives an unresolved value from another — a member chain, a loop element, a capture
+// read inside a closure — and it names a function as well as a value because a capture's source is
+// in the enclosing function.
+export union DeferralSource
+	none
+	value(funcIndex FuncIndex, valueId ValueId)
+
+	export function isDeferred() returns bool
+		return match self 'source'
+			none gives false
+			value gives true
+		end 'source'
+	end 'isDeferred'
+end 'DeferralSource'
+
+export type DeferralSourceTable
+	var funcIndices as FuncIndexArray
+	var valueIds as ValueIdArray
+	var sourceFuncIndices as FuncIndexArray
+	var sourceIds as ValueIdArray
+
+	export static function create() returns DeferralSourceTable
+		return Self{funcIndices: FuncIndexArray.create(), valueIds: ValueIdArray.create(), sourceFuncIndices: FuncIndexArray.create(), sourceIds: ValueIdArray.create()}
+	end 'create'
+
+	export function count() returns OpCount
+		return self.funcIndices.count()
+	end 'count'
+
+	export function record(funcIndex FuncIndex, valueId ValueId, sourceFuncIndex FuncIndex, sourceId ValueId)
+		self.funcIndices.push(funcIndex)
+		self.valueIds.push(valueId)
+		self.sourceFuncIndices.push(sourceFuncIndex)
+		self.sourceIds.push(sourceId)
+	end 'record'
+
+	// A linear scan: it is asked only while tracing the cause of a refusal.
+	export function sourceOf(funcIndex FuncIndex, valueId ValueId) returns DeferralSource
+		for i in 0 upto self.count() 'each'
+			let f = try self.funcIndices.get(i) otherwise panic("DeferralSourceTable.sourceOf: funcIndices.get OOB at {i}")
+			let v = try self.valueIds.get(i) otherwise panic("DeferralSourceTable.sourceOf: valueIds.get OOB at {i}")
+
+			if f == funcIndex and v == valueId 'match'
+				let sourceFunc = try self.sourceFuncIndices.get(i) otherwise panic("DeferralSourceTable.sourceOf: sourceFuncIndices.get OOB at {i}")
+				let sourceId = try self.sourceIds.get(i) otherwise panic("DeferralSourceTable.sourceOf: sourceIds.get OOB at {i}")
+				return DeferralSource.value(sourceFunc, valueId: sourceId)
+			end 'match'
+		end 'each'
+
+		return DeferralSource.none
+	end 'sourceOf'
+
+	export function appendFrom(source DeferralSourceTable, funcOffset FuncIndex)
+		for i in 0 upto source.count() 'each'
+			let f = try source.funcIndices.get(i) otherwise panic("DeferralSourceTable.appendFrom: funcIndices.get OOB at {i}")
+			let v = try source.valueIds.get(i) otherwise panic("DeferralSourceTable.appendFrom: valueIds.get OOB at {i}")
+			let sourceFunc = try source.sourceFuncIndices.get(i) otherwise panic("DeferralSourceTable.appendFrom: sourceFuncIndices.get OOB at {i}")
+			let sourceId = try source.sourceIds.get(i) otherwise panic("DeferralSourceTable.appendFrom: sourceIds.get OOB at {i}")
+			self.record(f + funcOffset, valueId: v, sourceFuncIndex: sourceFunc + funcOffset, sourceId: sourceId)
+		end 'each'
+	end 'appendFrom'
+end 'DeferralSourceTable'

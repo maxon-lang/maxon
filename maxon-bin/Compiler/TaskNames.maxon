@@ -6,10 +6,62 @@ typealias TokenCursor = int(0 to u64.max)
 // offered as tasks, and asking for one compiles a manifest whose entry point is a method.
 let TopLevelColumn = 1
 
-export function taskNamesIn(source String) returns TaskNameArray
+let ReservedEntryPrefix = "__"
+let EntryWordSeparator = "-"
+let EntryNameSeparator = "_"
+
+export union EntryRosterError implements Error
+	unreadable(driverFile FilePath)
+	unlexable(diagnostic Diagnostic)
+end 'EntryRosterError'
+
+export function entryNamesDeclaredIn(driverFile FilePath) returns TaskNameArray throws EntryRosterError
+	let source = try File.readText(driverFile) otherwise throw EntryRosterError.unreadable(driverFile)
+
+	let declared = try taskNamesIn(source) otherwise (e) 'unlexable'
+		throw EntryRosterError.unlexable(lexerErrorDiagnostic(e, path: driverFile))
+	end 'unlexable'
+
+	var offered = TaskNameArray.create()
+
+	for named in declared 'eachDeclaration'
+		if not named.startsWith(ReservedEntryPrefix) 'anOfferedEntry'
+			offered.push(named)
+		end 'anOfferedEntry'
+	end 'eachDeclaration'
+
+	return offered
+end 'entryNamesDeclaredIn'
+
+export function entryNameOf(word String) returns String
+	return word.replace(EntryWordSeparator, with: EntryNameSeparator)
+end 'entryNameOf'
+
+// Leading underscores stay underscores, so a listed word never begins with `-` and reads as an
+// option.
+function entryWordOf(name String) returns String
+	var word = ""
+	var leading = true
+
+	for character in name 'eachCharacter'
+		let spelled = "{character}"
+		leading = leading and spelled == EntryNameSeparator
+		word.append(EntryWordSeparator if spelled == EntryNameSeparator and not leading else spelled)
+	end 'eachCharacter'
+
+	return word
+end 'entryWordOf'
+
+export function printEntryWords(declared TaskNameArray)
+	for offered in declared 'eachEntry'
+		print("{entryWordOf(offered)}\n")
+	end 'eachEntry'
+end 'printEntryWords'
+
+export function taskNamesIn(source String) returns TaskNameArray throws LexerError
 	var names = TaskNameArray.create()
 
-	let tokens = try tokenize(source, keywords: KeywordTable.create()) otherwise return names
+	let tokens = try tokenize(source, keywords: KeywordTable.create())
 	let count = tokens.count()
 
 	if count < 4 'tooShortToDeclareOne'
@@ -38,7 +90,7 @@ end 'TaskScanError'
 function taskNameAt(tokens TokenArray, at TokenCursor) returns String throws TaskScanError
 	let keyword = try tokens.get(at) otherwise throw TaskScanError.notATaskDeclaration
 
-	if keyword.kind != TokenKind.export or keyword.column != TopLevelColumn 'notAnExportedTopLevelDeclaration'
+	if (keyword.kind != TokenKind.export and keyword.kind != TokenKind.public) or keyword.column != TopLevelColumn 'notAnExportedTopLevelDeclaration'
 		throw TaskScanError.notATaskDeclaration
 	end 'notAnExportedTopLevelDeclaration'
 

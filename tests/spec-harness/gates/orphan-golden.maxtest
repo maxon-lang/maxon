@@ -1,0 +1,81 @@
+let OrphanGateSpecName = "orphan-gate"
+let OrphanGateLane = "x64-windows"
+
+let OrphanGateMissingCase = "a-case-this-spec-no-longer-declares"
+let OrphanGateRestrictedCase = "orphan-gate.restricted-elsewhere"
+let OrphanGateVanishedSpec = "a-spec-that-no-longer-exists"
+let OrphanGateVanishedCase = "a-case-of-a-spec-that-is-gone"
+let OrphanGatePinnableCase = "orphan-gate.selected"
+
+let OrphanGatePlantedContent = "planted by tests/spec-harness/gates/orphan-golden.maxtest and removed by it; never compared\n"
+let OrphanGateCensusHeadline = "are COMPARED BY NOTHING"
+
+test 'a golden no case compares is named by the run, and a golden its lane compares is not'
+	let staged = stagedGateFixture()
+	let laneDir = staged.join(FragmentsDirName).join(OrphanGateLane)
+
+	var planted = PathArray.create()
+	planted.push(plantOrphanGolden(laneDir.join(OrphanGateSpecName), caseName: OrphanGateMissingCase))
+	planted.push(plantOrphanGolden(laneDir.join(OrphanGateSpecName), caseName: OrphanGateRestrictedCase))
+	planted.push(plantOrphanGolden(laneDir.join(OrphanGateVanishedSpec), caseName: OrphanGateVanishedCase))
+	planted.push(plantOrphanGolden(laneDir.join(OrphanGateSpecName), caseName: OrphanGatePinnableCase))
+
+	let withOrphans = everythingSaid(runSpecTest(staged, includeNetwork: false))
+
+	for path in planted 'eachPlanted'
+		try File.delete(path) otherwise panic("spec-harness tests: the gate could not run - could not remove the planted golden {path.toString()}.")
+	end 'eachPlanted'
+
+	let withoutOrphans = everythingSaid(runSpecTest(staged, includeNetwork: false))
+	discardStaging(staged)
+
+	var broken = StringArray.create()
+
+	if not withOrphans.contains(OrphanGateCensusHeadline) 'noHeadline'
+		broken.push("a run over the fixture with planted goldens did NOT print the census headline '{OrphanGateCensusHeadline}', so the silence asked of the run without them proves nothing. It said:\n{withOrphans}\n")
+	end 'noHeadline'
+
+	for expected in expectedOrphanEntries() 'eachExpected'
+		if not withOrphans.contains(expected) 'notNamed'
+			broken.push("a run over the fixture did NOT name a planted golden. Expected its report to contain:\n{expected}and it said:\n{withOrphans}\n")
+		end 'notNamed'
+	end 'eachExpected'
+
+	let pinnableEntryPath = orphanRelativePath(OrphanGateSpecName, caseName: OrphanGatePinnableCase)
+
+	if withOrphans.contains(pinnableEntryPath) 'namedAGoldenItsLaneCompares'
+		broken.push("the census NAMED '{pinnableEntryPath}', a golden for a case this fixture declares and this lane can select. It said:\n{withOrphans}\n")
+	end 'namedAGoldenItsLaneCompares'
+
+	if withoutOrphans.contains(OrphanGateCensusHeadline) 'reportedACleanTree'
+		broken.push("the SAME fixture, with the planted goldens removed, still printed the census. It said:\n{withoutOrphans}\n")
+	end 'reportedACleanTree'
+
+	requireNothingBroken(broken, headline: "the orphaned-golden census")
+end 'a golden no case compares is named by the run, and a golden its lane compares is not'
+
+function expectedOrphanEntries() returns StringArray
+	var expected = StringArray.create()
+	expected.push(orphanEntry(orphanRelativePath(OrphanGateSpecName, caseName: OrphanGateMissingCase), reason: "{OrphanGateSpecName} declares no case named `{OrphanGateMissingCase}`"))
+	expected.push(orphanEntry(orphanRelativePath(OrphanGateSpecName, caseName: OrphanGateRestrictedCase), reason: "{OrphanGateSpecName} declares `{OrphanGateRestrictedCase}`, but no run on {OrphanGateLane} can select it — read its markers and its spec's status"))
+	expected.push(orphanEntry(orphanRelativePath(OrphanGateVanishedSpec, caseName: OrphanGateVanishedCase), reason: "no spec named `{OrphanGateVanishedSpec}` exists, so nothing on any lane declares this case"))
+	return expected
+end 'expectedOrphanEntries'
+
+function orphanRelativePath(specName String, caseName String) returns String
+	return "{OrphanGateLane}/{specName}/{caseName}{GoldenExtension}"
+end 'orphanRelativePath'
+
+function orphanEntry(relativePath String, reason String) returns String
+	return "{ResultNoteIndent}{relativePath} — {reason}\n"
+end 'orphanEntry'
+
+function plantOrphanGolden(specGoldenDir FilePath, caseName String) returns FilePath
+	if not Directory.create(specGoldenDir) 'noDirectory'
+		panic("spec-harness tests: the gate could not run - could not create {specGoldenDir.toString()} to plant an orphaned golden in.")
+	end 'noDirectory'
+
+	let path = specGoldenDir.join("{caseName}{GoldenExtension}")
+	try File.writeText(path, content: OrphanGatePlantedContent) otherwise panic("spec-harness tests: the gate could not run - could not plant {path.toString()}.")
+	return path
+end 'plantOrphanGolden'

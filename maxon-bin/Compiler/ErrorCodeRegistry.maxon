@@ -174,10 +174,10 @@ export enum ErrorCode
 	// where 'type Pair uses A, B' expects two (P1.6-A).
 	genericArityMismatch = "E2056"
 
-	// A `test` declaration appears in a file whose name does not end in `.test.maxon`. Tests are
-	// confined to those files by ONE rule checked in ONE place, so which declarations a build
-	// carries is answerable from the file list alone -- no flag, no attribute, nothing to read the
-	// body for. The message names the fix: rename the file, or move the declaration.
+	// A `test` declaration appears in a file whose name does not end in `.maxtest`. Tests belong
+	// only in test files, so which declarations a build carries is answerable from the file list
+	// alone -- no flag, no attribute, nothing to read the body for. The message names the fix:
+	// rename the file to its `.maxtest` name, or move the declaration into a `.maxtest` file.
 	parserTestOutsideTestFile = "E2058"
 
 	// A `test` declaration's name is the empty character literal (`test ''`). The name is the
@@ -370,6 +370,12 @@ export enum ErrorCode
 	// The runnable oracle answers the same programs E3018 "Type 'Config' has no static member
 	// 'MIN_SIZE'" -- one subject, each compiler in its own house spelling.
 	unknownStaticMember = "E2073"
+
+	// A `.maxproj` file sits below another project's directory: a directory above it holds a
+	// `.maxproj` of its own. Projects do not nest, so a build refuses the pair from either end --
+	// building the outer project, or building the inner one -- and the editor reports it on the
+	// inner `.maxproj`. Move the inner project out of the outer project's directory.
+	nestedProjectFile = "E2074"
 
 	// The program declares no 'main' function.
 	noMainFunction = "E3001"
@@ -825,8 +831,9 @@ export enum ErrorCode
 	// That distinction is what makes this diagnostic answerable at all: see
 	// `Visibility` in maxon-bin/Compiler/Project.maxon.
 	// A one-file program is audited like any other. The entry point and every
-	// task a `tasks.maxon` declares are exempt: nothing in the source calls
-	// them, because the runtime or `maxon run` enters them by name.
+	// target or task a `.maxproj` or `.maxtasks` file declares are exempt:
+	// nothing in the source calls them, because the runtime, `maxon build` or
+	// `maxon run` enters them by name.
 	// A type a SIGNATURE names is credited at the naming function's tier while
 	// that function is itself referenced from outside the type's declaring
 	// file, because dropping the modifier would then earn E3167. So "drop the

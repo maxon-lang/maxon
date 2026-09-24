@@ -715,7 +715,7 @@ the compiler had to be told to lower.
 ```maxon
 typealias Sources = Array with String
 
-var cfg = BuildConfig.create(name: "app", output: "app.exe", sources: Sources.create(), debug_info: false)
+var cfg = BuildConfig.create(Sources.create(), output: "app.exe", debug_info: false)
 
 function main() returns ExitCode
 	return cfg.sources.count() as ExitCode

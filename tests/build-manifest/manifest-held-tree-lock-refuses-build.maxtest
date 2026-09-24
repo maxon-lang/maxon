@@ -1,0 +1,10 @@
+// manifest-held-tree-lock-refuses-build.maxtest — a manifest build of a project in a checkout whose tree
+// lock another command holds is refused before it writes anything, exactly as a path build is: the
+// manifest is how `maxon build maxon-bin` reaches the compiler's own slot.
+
+test 'a manifest build is refused while the checkout is busy'
+	let staged = stagedProject("held-tree-lock-refuses-build", fixture: DefaultFixtureName)
+	plantHeldTreeLock(staged)
+
+	requireRefused(staged, options: StringArray.create(), exitCode: NothingRanExitCode, wordings: [TreeLockBusyWording, TreeLockLivenessProbeWording], what: "maxon build")
+end 'a manifest build is refused while the checkout is busy'

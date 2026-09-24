@@ -1,0 +1,23 @@
+// cache-clear-with-nothing-to-remove.maxtest - a cache root nothing has ever been cached under is not
+// an error: `maxon cache clear` succeeds and says so.
+//
+// ⭐ **AN EMPTY CACHE IS THE ORDINARY STATE, NOT A FAILURE.** The second clear a caller types, and the
+// first one on a fresh machine, both find nothing; a command that exits non-zero there breaks every
+// script that runs it before something else.
+
+let CaseDirName = "cache-clear-nothing-to-remove"
+
+test 'cache clear over a cache that holds nothing succeeds and says so'
+	let dir = freshCaseDir(CaseDirName)
+	let cacheRoot = cacheRootIn(dir)
+
+	let owned = cacheRoot.join(CacheVendorDirName)
+	Expect.isFalse(Directory.exists(owned), message: "the gate could not run - {owned.toString()} is there before anything cached into it, so this case is not about an empty cache")
+
+	let cleared = runWithCacheRoot([CacheCommandWord, CacheClearVerb], cacheRoot: cacheRoot, workingDirectory: dir)
+	let said = "It wrote to stdout: {cleared.stdout} and to stderr: {cleared.stderr}"
+
+	Expect.equal(cleared.exitCode() as AssertedInt, expected: 0, message: "`maxon {CacheCommandWord} {CacheClearVerb}` did not succeed over a cache holding nothing. Nothing to remove is the ordinary state, not a failure. {said}")
+	Expect.isFalse(cleared.stdout.trim().isEmpty(), message: "`maxon {CacheCommandWord} {CacheClearVerb}` said nothing at all over a cache holding nothing. A caller cannot tell a silent success from a command that did not run. {said}")
+	Expect.isEmpty(cleared.stderr.trim(), message: "`maxon {CacheCommandWord} {CacheClearVerb}` wrote to stderr while succeeding. {said}")
+end 'cache clear over a cache that holds nothing succeeds and says so'

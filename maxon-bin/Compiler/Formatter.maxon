@@ -888,9 +888,9 @@ type FormatState
 		// `if cond 'label'` — but it is a CONTEXTUAL keyword with no `TokenKind`, so it cannot join
 		// `labeledBlockOpener` and has to be recognized by SHAPE. That shape is asked of the parser's own
 		// predicate rather than respelled here: a fourth spelling would be the one that kept accepting
-		// `test 'x'` after the grammar moved, silently re-indenting every `*.test.maxon` on save, which no
-		// spec fragment runs the formatter to notice. The line-start guard is the half this caller owns:
-		// mid-line, `test 'x'` is `match test 'check'`, not a declaration.
+		// `test 'x'` after the grammar moved, silently re-indenting every `.maxtest` file on save, which
+		// no spec fragment runs the formatter to notice. The line-start guard is the half this caller
+		// owns: mid-line, `test 'x'` is `match test 'check'`, not a declaration.
 		if wasAtLineStart and testDeclarationAt(self.tokens, index: index) 'testDeclaration'
 			self.lineHasLabeledOpener = true
 		end 'testDeclaration'
@@ -1795,38 +1795,27 @@ end 'sliceOf'
 
 // --- The directory walk -----------------------------------------------------------------------
 
-/// The `.maxon` files `maxon fmt` will rewrite under `root`, in the order it visits them.
+/// The Maxon files `maxon fmt` will rewrite under `root`, in the order it visits them.
 ///
-/// ⚠ **IT IS NOT `Compiler.collectMaxonSources`, AND THE TWO DIFFERENCES ARE BOTH REQUIRED.** That walk
-/// defaults to `SourceSelection.productionOnly`, which drops every `*.test.maxon` — files `fmt` MUST
-/// format — and it prunes nothing for `.git`, because pruning there would change which files get
-/// COMPILED. Everything the two walks DO share is reached through the shared names rather than
-/// respelled here.
+/// ⚠ It is not `Compiler.collectMaxonSources`, and both differences are required. That walk admits
+/// no driver file and, by default, no test file — files `fmt` must format — and it prunes nothing
+/// for `.git`, because pruning there would change which files get compiled. Everything the two
+/// walks share is reached through the shared names rather than respelled here.
 ///
-/// ⭐ **A DIRECTORY HOLDING `.git` IS ITS OWN CHECKOUT AND IS PRUNED — file or directory.** A nested
-/// clone spells it as a directory; a git worktree spells it as a file holding a gitdir pointer. `fmt`
-/// rewrites in place, so descending through that boundary edits files the caller never named and cannot
-/// see in their own `git status`: one accidental whole-tree run rewrote 92 files across two agent
-/// worktrees. **The traversal ROOT is deliberately exempt** — every checkout contains `.git`, so pruning
-/// it there would make `maxon fmt` inside a repo format nothing at all.
-///
-/// ⭐ **A LIBRARY TIER HOLDS NO MANIFEST.** Inside the `stdlib/` and `runtime/` this compiler reads, a file
-/// named like a manifest is library source — `stdlib/Build.maxon` is the `Build` API — exactly as the build
-/// walk reads it (`SourceSelection.libraryTier`).
+/// A directory holding `.git` is its own checkout and is pruned, whether `.git` is a directory (a
+/// nested clone) or a file (a git worktree's gitdir pointer). `fmt` rewrites in place, so
+/// descending through that boundary edits files the caller never named and cannot see in their own
+/// `git status`. The traversal root is exempt: every checkout contains `.git`, so pruning it there
+/// would make `maxon fmt` inside a repo format nothing at all.
 export function collectFormattableFiles(root FilePath) returns FilePathArray
 	var files = FilePathArray.create()
 
-	// Compared as absolute, normalized paths, because the walk keeps the spelling it was handed — relative
-	// for `fmt stdlib` — and that spelling is what the `formatted:` lines print.
-	let cwd = Directory.currentPath()
-	let tiers = libraryTierRoots()
-
-	var pending = PendingFormatDirectoryArray.create()
-	pending.push(PendingFormatDirectory.create(root, inLibraryTier: isInsideAnyTier(root, tiers: tiers, cwd: cwd), atProjectRoot: true))
+	var pending = FilePathArray.create()
+	pending.push(root)
 
 	while pending.count() > 0 'walk'
 		let dir = try pending.pop() otherwise panic("collectFormattableFiles: the stack is non-empty on the line above")
-		let entries = try Directory.list(dir.path) otherwise panic("collectFormattableFiles: {dir.path} was listed as a directory and cannot now be unlistable")
+		let entries = try Directory.list(dir) otherwise panic("collectFormattableFiles: {dir} was listed as a directory and cannot now be unlistable")
 
 		var subdirectories = FilePathArray.create()
 		var here = FilePathArray.create()
@@ -1837,7 +1826,7 @@ export function collectFormattableFiles(root FilePath) returns FilePathArray
 					subdirectories.push(entry)
 				end 'kept'
 			end 'isSubdirectory' else 'isFile'
-				if formattableFileName(entry.filename(), inLibraryTier: dir.inLibraryTier, atProjectRoot: dir.atProjectRoot) 'isASource'
+				if formattableFileName(entry.filename()) 'isASource'
 					here.push(entry)
 				end 'isASource'
 			end 'isFile'
@@ -1849,10 +1838,8 @@ export function collectFormattableFiles(root FilePath) returns FilePathArray
 		subdirectories.sort(function(a FilePath, b FilePath) gives comparePathSpelling(b, right: a))
 		here.sort(function(a FilePath, b FilePath) gives comparePathSpelling(a, right: b))
 
-		// A subdirectory enters a tier only at the tier's own root; below that it inherits its parent's answer.
 		for subdirectory in subdirectories 'eachSubdirectory'
-			let inLibraryTier = dir.inLibraryTier or isInsideAnyTier(subdirectory, tiers: tiers, cwd: cwd)
-			pending.push(PendingFormatDirectory.create(subdirectory, inLibraryTier: inLibraryTier, atProjectRoot: false))
+			pending.push(subdirectory)
 		end 'eachSubdirectory'
 
 		for file in here 'eachFile'
@@ -1863,42 +1850,6 @@ export function collectFormattableFiles(root FilePath) returns FilePathArray
 	return files
 end 'collectFormattableFiles'
 
-// A directory the walk has still to list, and whether it lies in a library tier.
-type PendingFormatDirectory
-	module let path as FilePath
-	module let inLibraryTier as bool
-	module let atProjectRoot as bool
-
-	static function create(path FilePath, inLibraryTier bool, atProjectRoot bool) returns PendingFormatDirectory
-		return Self{path: path, inLibraryTier: inLibraryTier, atProjectRoot: atProjectRoot}
-	end 'create'
-end 'PendingFormatDirectory'
-
-typealias PendingFormatDirectoryArray = Array with PendingFormatDirectory
-
-// The library tiers this compiler reads: the `stdlib/` above its own executable and the `runtime/` beside
-// it. A compiler with no `stdlib/` above it reads no tier, so no directory is inside one.
-function libraryTierRoots() returns FilePathArray
-	var roots = FilePathArray.create()
-	let stdlibDir = try locateStdlibDir() otherwise return roots
-	let runtimeDir = try runtimeDirBeside(stdlibDir) otherwise panic("libraryTierRoots: {stdlibDir} was found by joining a name onto a directory, so it has a parent")
-	roots.push(stdlibDir.normalize())
-	roots.push(runtimeDir.normalize())
-	return roots
-end 'libraryTierRoots'
-
-function isInsideAnyTier(dir FilePath, tiers FilePathArray, cwd FilePath) returns bool
-	let absolute = dir.resolve(cwd)
-
-	for tier in tiers 'eachTier'
-		if absolute.isInside(tier) 'inside'
-			return true
-		end 'inside'
-	end 'eachTier'
-
-	return false
-end 'isInsideAnyTier'
-
 // A subtree `fmt` must not descend into: another checkout, or a directory taken out of every project.
 function prunedSubdirectory(dir FilePath) returns bool
 	// Interpolated so the argument is a committed `String` — a bare module-`let` is ambiguous between
@@ -1907,13 +1858,8 @@ function prunedSubdirectory(dir FilePath) returns bool
 	return holdsIgnoreMarker(dir) or Directory.exists(marker) or File.exists(marker)
 end 'prunedSubdirectory'
 
-// A file the walk formats. The walk ROOT's own manifest and task file are left alone — it is a build SCRIPT the compiler
-// runs, not part of the program; a library tier has none.
-//
-// ⚠ Naming a path OUTRIGHT escapes this, exactly as it escapes `.maxonignore`: `maxon fmt project.maxon`
-// formats it. See `runFmt`.
-function formattableFileName(name String, inLibraryTier bool, atProjectRoot bool) returns bool
-	return name.endsWith(MaxonSourceExtension) and (inLibraryTier or not atProjectRoot or not isDriverFileName(name))
+function formattableFileName(name String) returns bool
+	return name.endsWith(MaxonSourceExtension) or isTestSourceName(name) or isDriverFileName(name)
 end 'formattableFileName'
 
 // Order two discovered paths by their spelling. A `FilePath` is not `Comparable`, and the ordering wanted

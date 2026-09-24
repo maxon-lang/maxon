@@ -1,0 +1,17 @@
+let MaxtestDocumentDirName = "diagnostics-maxtest-document"
+let MaxtestHelperFileName = "helper.maxon"
+let MaxtestHelperSource = "export function sharedAnswer() returns ExitCode\n\treturn 0\nend 'sharedAnswer'\n"
+let MaxtestFileName = "suite.maxtest"
+let MaxtestSource = "test 'the shared answer is reachable'\n\tExpect.equal(sharedAnswer() as AssertedInt, expected: 0)\nend 'the shared answer is reachable'\n"
+
+test 'project diagnostics: an open .maxtest publishes nothing about its test or its project names'
+	let root = stagedProjectDiagnosticsRoot(MaxtestDocumentDirName)
+	writeCorpusFile(root, fileName: MaxtestHelperFileName, content: MaxtestHelperSource)
+	writeCorpusFile(root, fileName: MaxtestFileName, content: MaxtestSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: MaxtestFileName, content: MaxtestSource)
+
+	discardOutsideCheckoutDir(root)
+
+	expectNoProjectDiagnostics(probe, note: "`{MaxtestFileName}` declares a `test`, which is where a test belongs, and hands the result of `sharedAnswer`, which `{MaxtestHelperFileName}` beside it exports, to the overloaded `Expect.equal`. `maxon test` over this project compiles and runs it.")
+end 'project diagnostics: an open .maxtest publishes nothing about its test or its project names'

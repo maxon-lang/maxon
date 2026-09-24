@@ -1,0 +1,17 @@
+let ProjectLoopOverloadDirName = "diagnostics-project-loop-element-of-a-sibling-result-at-an-overload"
+let ProjectLoopOverloadHelperFileName = "helper.maxon"
+let ProjectLoopOverloadBufferFileName = "main.maxon"
+let ProjectLoopOverloadHelperSource = "export typealias ProjectLoopOverloadCodes = Array with ExitCode\n\nmodule function projectLoopOverloadCodes() returns ProjectLoopOverloadCodes\n\treturn ProjectLoopOverloadCodes.create()\nend 'projectLoopOverloadCodes'\n"
+let ProjectLoopOverloadBufferSource = "function projectLoopOverloadPick(x ExitCode) returns ExitCode\n\treturn x\nend 'projectLoopOverloadPick'\n\nfunction projectLoopOverloadPick(x String) returns ExitCode\n\treturn 1 if x.isEmpty() else 0\nend 'projectLoopOverloadPick'\n\nfunction main() returns ExitCode\n\tfor code in projectLoopOverloadCodes() 'each'\n\t\treturn projectLoopOverloadPick(code)\n\tend 'each'\n\n\treturn 0\nend 'main'\n"
+
+test 'an element of a sibling function result, handed to an overloaded function in a loop, is not an opaque argument'
+	let root = stagedProjectDiagnosticsRoot(ProjectLoopOverloadDirName)
+	writeCorpusFile(root, fileName: ProjectLoopOverloadHelperFileName, content: ProjectLoopOverloadHelperSource)
+	writeCorpusFile(root, fileName: ProjectLoopOverloadBufferFileName, content: ProjectLoopOverloadBufferSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: ProjectLoopOverloadBufferFileName, content: ProjectLoopOverloadBufferSource)
+
+	discardOutsideCheckoutDir(root)
+
+	expectNoProjectDiagnostics(probe, note: "`projectLoopOverloadCodes` is a `module function` the sibling file declares, returning an array of `ExitCode`, and `main` walks it and hands each element to `projectLoopOverloadPick`, which the buffer overloads on `ExitCode` and `String`. A `maxon build` of the staged project exits 0. The loop element has no defining op in the buffer compile, so the refusal must be traced through it to the sibling call it came from.")
+end 'an element of a sibling function result, handed to an overloaded function in a loop, is not an opaque argument'

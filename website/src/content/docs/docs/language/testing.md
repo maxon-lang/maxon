@@ -26,14 +26,15 @@ end 'adds two numbers'
 
 ## Test Files
 
-Tests live in files whose names end in **`.test.maxon`**. A `test` in any other file is **E2058**. A regular
-build skips `*.test.maxon` files, and `maxon test` compiles them together with the rest of the project and
-a generated entry point — the project does not need a `main`.
+Tests live in files whose names end in **`.maxtest`**. A `test` in any other file is **E2058**, and its
+message names the file to rename it to (`pricing.maxon` becomes `pricing.maxtest`). A regular build
+compiles `.maxon` files only, and `maxon test` compiles the `*.maxtest` files together with the rest of
+the project and a generated entry point — the project needs no `main`.
 
 ```text
 temperature/
 ├── temperature.maxon          # the code
-└── temperature.test.maxon     # its tests
+└── temperature.maxtest        # its tests
 ```
 
 ## Assertions
@@ -65,7 +66,7 @@ export function describe(c Celsius) returns String
 end 'describe'
 ```
 
-`temperature.test.maxon`:
+`temperature.maxtest`:
 
 ```maxon
 test 'boiling point converts'
@@ -84,7 +85,7 @@ end 'body temperature'
 
 ```text
 $ maxon test temperature --no-timing
-temperature/temperature.test.maxon:
+temperature/temperature.maxtest:
   ✓ boiling point converts
   ✓ zero is freezing
   ✓ body temperature
@@ -112,8 +113,8 @@ assertion itself. A failing assertion prints what it expected and what it receiv
 expected `99`, the run would report:
 
 ```text
-FAIL  temperature/temperature.test.maxon > body temperature
-  FAIL temperature.test.maxon:11: Expect.equal
+FAIL  temperature/temperature.maxtest > body temperature
+  FAIL temperature.maxtest:11: Expect.equal
     expected: 99
     received: 98
     message: rounds toward zero
@@ -136,9 +137,9 @@ end 'a missing user throws'
 ```
 
 ```text
-FAIL  users/lookup.test.maxon > a missing user throws
+FAIL  users/lookup.maxtest > a missing user throws
   threw LookupError.notFound
-  at lookup.test.maxon:2
+  at lookup.maxtest:2
 ```
 
 - A bare `try` means the same thing, and an `otherwise` clause you write always takes precedence. An
@@ -154,7 +155,7 @@ FAIL  users/lookup.test.maxon > a missing user throws
 | Code | Cause |
 |------|-------|
 | E2008 | the `end` label does not repeat the test's name |
-| E2058 | a `test` declaration outside a `*.test.maxon` file |
+| E2058 | a `test` declaration outside a `*.maxtest` file |
 | E2059 | an empty test name |
 | E3057 | an assertion (or other throwing call) without `try` outside a test body — in a helper function, or in a closure written inside a test |
 | E3107 | two tests in one file whose names compile to the same symbol — each character outside `A–Z`, `a–z`, `0–9` and `_` becomes `_`, so `'adds two'` and `'adds-two'` collide |

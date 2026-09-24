@@ -1,0 +1,183 @@
+// diagnostics-project-probe.maxtest — one scripted `publishDiagnostics` session driven against a
+// project STAGED ON DISK and initialized AT that project's root, for every `diagnostics-project-*` file.
+// It declares no tests.
+//
+// ⛔ `diagnostics-probe.maxtest` cannot express these cases: its `runSession` sends `rootUri: null`
+// and its document sits at a uri with no parent directory, so `workspaceRootOf` falls through to
+// `WorkspaceRoot.singleFile` and the session has NO project corpus at all — which is the very thing
+// a cross-file claim is about.
+//
+// The staging, the client, and the release discipline — why a session is driven into a VALUE before
+// anything is asserted — are `definition-corpus-probe.maxtest`'s and `LspClient.maxon`'s.
+
+export union ProjectDiagnosticsProbe
+	published(items PublishedDiagnosticArray)
+	broke(detail String)
+end 'ProjectDiagnosticsProbe'
+
+let ProjectDiagnosticsBuildFileName = "app.maxproj"
+let ProjectDiagnosticsBuildFileContent = ""
+let ProjectDiagnosticsUnreportedSession = "the session ended without saying how"
+let ProjectDiagnosticsNothingRendering = "nothing at all"
+
+// A staged project root with its own `.maxproj` marker, which is what stops the project-file climb there.
+export function stagedProjectDiagnosticsRoot(dirName String) returns FilePath
+	let directory = freshOutsideCheckoutDir(dirName)
+	writeCorpusFile(directory, fileName: ProjectDiagnosticsBuildFileName, content: ProjectDiagnosticsBuildFileContent)
+
+	return directory
+end 'stagedProjectDiagnosticsRoot'
+
+// Open `content` at `root`/`fileName` in a session rooted at `root`, and hand back the one publish that
+// arrives. The buffer text is what the server is told the document holds, whatever the file on disk says.
+export function probeProjectDiagnostics(root FilePath, fileName String, content String) returns ProjectDiagnosticsProbe
+	var client = LspClient.start()
+	let probe = collectProjectDiagnostics(client, root: root, uri: fileUriOf(root.join(fileName)), content: content)
+	client.release()
+
+	return probe
+end 'probeProjectDiagnostics'
+
+let RuntimeTierDirName = "runtime"
+
+export function runtimeTierDocumentName(fileName String) returns String
+	return "{RuntimeTierDirName}/{fileName}"
+end 'runtimeTierDocumentName'
+
+export function runtimeTierFileText(fileName String) returns String
+	let file = Directory.currentPath().join(runtimeTierDocumentName(fileName))
+
+	return try File.readText(file) otherwise panic("runtime tier diagnostics: could not read {file.toString()}, which an editor opening it would have sent as the buffer's text")
+end 'runtimeTierFileText'
+
+export function probeRuntimeTierDiagnostics(fileName String, content String) returns ProjectDiagnosticsProbe
+	return probeProjectDiagnostics(Directory.currentPath(), fileName: runtimeTierDocumentName(fileName), content: content)
+end 'probeRuntimeTierDiagnostics'
+
+function collectProjectDiagnostics(client LspClient, root FilePath, uri String, content String) returns ProjectDiagnosticsProbe
+	var probe = ProjectDiagnosticsProbe.broke(ProjectDiagnosticsUnreportedSession)
+
+	try 'session'
+		_ = client.initializeAtRoot(root)
+		client.initialized()
+		client.openDocument(uri, content: content)
+		probe = ProjectDiagnosticsProbe.published(client.awaitPublishedDiagnostics(uri).items)
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed or
+				malformedResponse or
+				serverRefused then probe = ProjectDiagnosticsProbe.broke(e.explained())
+		end 'reason'
+	end 'failed'
+
+	return probe
+end 'collectProjectDiagnostics'
+
+export typealias ProjectDiagnosticsProbeArray = Array with ProjectDiagnosticsProbe
+
+export typealias ProjectPublishIndex = int(0 to 1)
+
+export let ProjectDiagnosticsAtOpen = 0 as ProjectPublishIndex
+export let ProjectDiagnosticsAfterTheEdit = 1 as ProjectPublishIndex
+
+let ProjectDiagnosticsEditedVersion = 2 as DocumentVersion
+
+export function probeProjectDiagnosticsAcrossAnEdit(root FilePath, fileName String, content String, editedContent String) returns ProjectDiagnosticsProbeArray
+	var client = LspClient.start()
+	let probes = collectProjectDiagnosticsAcrossAnEdit(client, root: root, uri: fileUriOf(root.join(fileName)), content: content, editedContent: editedContent)
+	client.release()
+
+	return probes
+end 'probeProjectDiagnosticsAcrossAnEdit'
+
+function collectProjectDiagnosticsAcrossAnEdit(client LspClient, root FilePath, uri String, content String, editedContent String) returns ProjectDiagnosticsProbeArray
+	var probes = ProjectDiagnosticsProbeArray.create()
+
+	try 'session'
+		_ = client.initializeAtRoot(root)
+		client.initialized()
+		client.openDocument(uri, content: content)
+		probes.push(ProjectDiagnosticsProbe.published(client.awaitPublishedDiagnostics(uri).items))
+		client.changeDocument(uri, content: editedContent, version: ProjectDiagnosticsEditedVersion)
+		probes.push(ProjectDiagnosticsProbe.published(client.awaitPublishedDiagnostics(uri).items))
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed or
+				malformedResponse or
+				serverRefused then probes = brokenProjectDiagnosticsPair(e.explained())
+		end 'reason'
+	end 'failed'
+
+	return probes
+end 'collectProjectDiagnosticsAcrossAnEdit'
+
+function brokenProjectDiagnosticsPair(detail String) returns ProjectDiagnosticsProbeArray
+	var probes = ProjectDiagnosticsProbeArray.create()
+	probes.push(ProjectDiagnosticsProbe.broke(detail.clone()))
+	probes.push(ProjectDiagnosticsProbe.broke(detail))
+
+	return probes
+end 'brokenProjectDiagnosticsPair'
+
+export function projectDiagnosticsPublish(probes ProjectDiagnosticsProbeArray, index ProjectPublishIndex) returns ProjectDiagnosticsProbe throws TestFailure
+	return try probes.get(index) otherwise 'missing'
+		try Expect.fail("the session was driven open → publish → didChange → publish, and this assertion needs publish {index}, of which only {probes.count()} arrived. ⛔ A SERVER THAT PANICS ENDS THE PROCESS, so a missing publish here is a DEAD SESSION rather than a wrong count.")
+		panic("projectDiagnosticsPublish: `Expect.fail` always throws")
+	end 'missing'
+end 'projectDiagnosticsPublish'
+
+export function expectNoProjectDiagnostics(probe ProjectDiagnosticsProbe, note String) throws TestFailure
+	let items = try projectDiagnosticItems(probe, note: note)
+
+	try Expect.equal(items.count(), expected: 0, message: "{note} The server published {items.count()}: {projectDiagnosticsRendering(items)}")
+end 'expectNoProjectDiagnostics'
+
+// The single diagnostic a fixture must publish. ⭐ The COUNT is asserted rather than the presence: a
+// second diagnostic is one a `maxon build` of the same project does not report, and reading element 0
+// alone would hide it.
+export function onlyProjectDiagnostic(probe ProjectDiagnosticsProbe, note String) returns PublishedDiagnostic throws TestFailure
+	let items = try projectDiagnosticItems(probe, note: note)
+
+	try Expect.equal(items.count(), expected: 1, message: "{note} The server published {items.count()}: {projectDiagnosticsRendering(items)}")
+
+	return try items.get(0) otherwise 'noItem'
+		try Expect.fail("the count above was 1, so element 0 exists.")
+		panic("onlyProjectDiagnostic: `Expect.fail` always throws")
+	end 'noItem'
+end 'onlyProjectDiagnostic'
+
+export function expectProjectDiagnosticCodesAndLines(probe ProjectDiagnosticsProbe, expected String, note String) throws TestFailure
+	let items = try projectDiagnosticItems(probe, note: note)
+	var published = ""
+
+	for item in items 'eachItem'
+		published = "{published} {item.code}@{item.range.startLine}"
+	end 'eachItem'
+
+	try Expect.equal(published.trim(), expected: expected, message: "{note} The server published: {projectDiagnosticsRendering(items)}")
+end 'expectProjectDiagnosticCodesAndLines'
+
+function projectDiagnosticItems(probe ProjectDiagnosticsProbe, note String) returns PublishedDiagnosticArray throws TestFailure
+	match probe 'probe'
+		published(items) then return items
+		broke(detail) then try Expect.fail("{note} The session broke before a publish arrived: {detail}. An editor learns about an error ONLY from this notification — there is no request it can send to ask.")
+	end 'probe'
+
+	panic("projectDiagnosticItems: the `broke` arm always throws, so this line is unreachable")
+end 'projectDiagnosticItems'
+
+// ⭐ What was ACTUALLY published, verbatim, so a failure reads without a second run. A bare count says a
+// rule fired and nothing about which claim it let through.
+function projectDiagnosticsRendering(items PublishedDiagnosticArray) returns String
+	if items.isEmpty() 'nothing'
+		return ProjectDiagnosticsNothingRendering
+	end 'nothing'
+
+	var rendered = ""
+
+	for item in items 'eachItem'
+		rendered = "{rendered} [{item.code} at {item.range.startLine}:{item.range.startCharacter} — {item.message}]"
+	end 'eachItem'
+
+	return rendered.trim()
+end 'projectDiagnosticsRendering'

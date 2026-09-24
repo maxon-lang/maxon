@@ -1,6 +1,6 @@
 """Smoke test for the LSP E3010 quick fix in a multi-file project.
 
-Creates a temp project directory containing project.maxon and two .maxon files,
+Creates a temp project directory containing app.maxproj and two .maxon files,
 each with multiple unneeded casts. Opens one of them in the LSP and verifies
 that:
   - per-diagnostic fixes are produced for the diagnostics in scope,
@@ -22,8 +22,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 MAXON_EXE = ROOT / "bin" / "maxon.exe"
 
-# A project.maxon marks where a project begins. Without one, each .maxon file
-# is treated as its own single-file project.
+# A .maxproj file marks where a project begins, so the two .maxon files beside
+# it are one project.
 PROJECT_MAXON = """export function build() returns ExitCode
 	return 0
 end 'build'
@@ -93,7 +93,7 @@ def main():
     shutil.rmtree(tmp_dir)
   tmp_dir.mkdir(parents=True)
 
-  (tmp_dir / "project.maxon").write_text(PROJECT_MAXON, encoding="utf-8")
+  (tmp_dir / "app.maxproj").write_text(PROJECT_MAXON, encoding="utf-8")
   file_a = tmp_dir / "a.maxon"
   file_b = tmp_dir / "b.maxon"
   file_a.write_text(FILE_A, encoding="utf-8")

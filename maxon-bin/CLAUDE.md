@@ -36,7 +36,7 @@ spelling one earns E3004. The allocator's own migration is what admits it.
 `Parser.requireCalleeIsNotReservedName` admits a reserved CALLEE, and
 `Parser.requireFunctionValueNameIsNotReserved` a reserved name in VALUE position, only where
 `Parser.fileMayUseReservedNames` holds — `runtime/` itself, `stdlib/Builtins.maxon` and
-`stdlib/Testing.maxon`, **and any file this compile WROTE part of, which is a staged `*.test.maxon` under
+`stdlib/Testing.maxon`, **and any file this compile WROTE part of, which is a staged `*.maxtest` under
 `maxon test`** — and in both doors conjoined with `declaresCallee`. An ordinary stdlib or user file calling
 one earns E3004 and naming one as a value earns E3155, which is what keeps the visibility admit-list below
 sound. The value door is cured at `requireNameIsUsableAsFunctionValue`, the one site both producers of an
@@ -438,11 +438,12 @@ Four doors are still standing open rather than shut:
   emits nothing. `targetProvidesFacility` spells wasm32-wasi as its OWN BLOCK rather than reaching the
   fallthrough `false`, which is what lets that row be stated at all.
 
-- **Build it:** `./maxon-bin/.maxon/maxon run build` at the repo root. The root `tasks.maxon`'s `build`
-  task delegates to `maxon-bin/project.maxon`, which is where the git-derived version comes from;
-  `cd maxon-bin && maxon build` is the same build said from inside. ⛔ **`maxon build maxon-bin` is now
-  a PATH build** — it compiles the same sources and stamps NO version, which is what the seed rule
-  below relies on and what you do not want for the slot.
+- **Build it:** `./maxon-bin/.maxon/maxon run build` at the repo root. The root `maxon.maxtasks`'s
+  `build` task delegates to `maxon-bin/maxon.maxproj`, whose `build` target is where the git-derived
+  version comes from; `cd maxon-bin && maxon build` is the same build said from inside. ⛔ **`maxon build
+  maxon-bin` from the root is a PATH build** — the root holds no `.maxproj`, so the word is a path: it
+  compiles the same sources and stamps NO version, which is what the seed rule below relies on and what
+  you keep away from the slot.
 - **Get a compiler to build it WITH:** `scripts/fetch-seed.sh` places the latest release's binary at
   `.bootstrap/maxon.exe`, which you run directly when the slot is empty. **Re-run it after every
   release:** the stdlib may call a `__Builtins` intrinsic once a published release has it, so an older
@@ -532,7 +533,7 @@ restart the MCP server when you need the new one to answer.
 > `success: true` about a tree containing none of your work.**
 >
 > ⇒ **In a worktree, pass `repoRoot` — the ABSOLUTE path of your worktree root — to EVERY tool call
-> that acts in a tree**: `build`, `run_spec_test`, `run_scale_test`, `spec_test_outcome`, and `run`,
+> that acts in a tree**: `build`, `run_spec_test`, `run_scale_test`, `spec_test_outcome`, and `execute`,
 > `test` and `fmt` when you mean YOUR tree's compiler to answer. Those last three default to the
 > host's working directory and name no tree, which is right for a path you wrote yourself and wrong
 > for a worktree whose compiler you want exercised. `check`, `dump_ir`, `lookup_error_code` and `info`
@@ -566,7 +567,7 @@ restart the MCP server when you need the new one to answer.
 | Run the spec suite | `run_spec_test` |
 | Per-test PASS/FAIL detail | `spec_test_outcome` (requires `filter`) |
 | MEASURE per-phase memory + CPU scaling — an instrument, **no verdict** | `run_scale_test` |
-| Run an inline snippet or a file | `run` — `source:` for a snippet, `path:` for a file |
+| Run an inline snippet or a file | `execute` — `source:` for a snippet, `path:` for a file |
 | Dump IR | `dump_ir` |
 | Format a file or snippet | `fmt` — `source:` returns the formatted text; `path:` rewrites in place |
 | Look up a 4-digit error code | `lookup_error_code` — number, `"E3014"`, or the case name |
@@ -579,9 +580,10 @@ refused the same way.
 
 Always pair `updateRequired` with a `filter` — unfiltered, it rewrites every golden in the suite.
 
-⛔ **`build`'s `target:` TELLS A TRIPLE FROM A MANIFEST TARGET BY THE DASH.** `wasm32-wasi` becomes
-`--target=wasm32-wasi`; a bare word becomes a positional naming a target in `project.maxon`. `maxon
-build` reads a bare word as another SOURCE PATH, so the two cannot be passed the same way.
+⛔ **`build`'s `target:` IS A TRIPLE WHEN IT PARSES AS ONE OF THE FIVE, AND A PROJECT TARGET OTHERWISE.**
+`wasm32-wasi` becomes `--target=wasm32-wasi`; any other value becomes a positional naming a target of
+the `.maxproj` file, each `_` written `-` (`my-app` is `my_app`). A word naming no target is a SOURCE
+PATH to `maxon build`, so a triple has to travel as `--target=`.
 
 **A `spec-test` filter is ONE CASE-SENSITIVE substring** of the `<spec>/<test>` label (`maxon test`
 lowercases its own, and takes a comma-separated union). Neither is a list here —
@@ -721,7 +723,7 @@ root `fmt` rewrites `website/src/examples/*.maxon` in place and walks every dire
 and it is silently reformatted. The marker is a FLAG whose contents are never read, and both walks
 honour it — `fmt`'s and the compiler's own `collectMaxonSources`.
 
-⚠ **THE FORMATTER ENGINE'S GATE IS `tests/fmt/engine-cases.test.maxon`, NOT `spec-test`.** It formats
+⚠ **THE FORMATTER ENGINE'S GATE IS `tests/fmt/engine-cases.maxtest`, NOT `spec-test`.** It formats
 the 28 sources in `tests/fmt/engine-cases/` (4 of them unlexable) with the real `maxon fmt`, twice, and
 goes red if an answer differs from its `.expected`, a comment is lost or duplicated, a lexer-error
 sentinel is written into a file, or a second run moves anything. `UrlInPlainString`,
@@ -802,5 +804,5 @@ overwriting it (an OS will not let a running executable be deleted, but will let
 the process serves on from the vacated image. **RESTART THE MCP SERVER after a build whose result you
 want the tools to reflect.**
 
-`tests/mcp/rebuild.test.maxon` pins the surviving half of that: the process keeps answering across the
+`tests/mcp/rebuild.maxtest` pins the surviving half of that: the process keeps answering across the
 replacement rather than dying mid-session.

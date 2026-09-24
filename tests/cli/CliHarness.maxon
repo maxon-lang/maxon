@@ -350,7 +350,7 @@ end 'ProgramBuiltBesideALibraryFile'
 export function buildAProgramBesideALibraryFile(caseDirName String, libraryFile String, options ListedWordArray) returns ProgramBuiltBesideALibraryFile
 	let dir = freshCaseDir(caseDirName)
 	let main = dir.join(BesideAProgramMainFileName)
-	try File.writeText(main, content: BesideAProgramMainSource) otherwise panic("{caseDirName}: the gate could not run - could not write {main.toString()}")
+	writeStagedFile(main, content: BesideAProgramMainSource)
 
 	var arguments = ListedWordArray.create()
 	arguments.push(BuildCommandWord)
@@ -414,6 +414,10 @@ export function createdStagedDirectory(path FilePath) returns FilePath
 	return path
 end 'createdStagedDirectory'
 
+export function writeStagedFile(path FilePath, content String)
+	try File.writeText(path, content: content) otherwise panic("CliHarness: the gate could not run - could not write {path.toString()}")
+end 'writeStagedFile'
+
 // For a child that must find nothing the checkout holds above its working directory — `vendor/`
 // above all, which the driver walks up to from there — so a `vendor/` above it is refused rather
 // than let the case pass or fail about a toolchain it was built to be without. Named per process,
@@ -462,7 +466,7 @@ end 'homeCacheRoot'
 let BlockedRootFileContent = "a regular file, so nothing can be created at this path or under it\n"
 
 export function blockCacheRootAt(path FilePath)
-	try File.writeText(path, content: BlockedRootFileContent) otherwise panic("CliHarness: the gate could not run - could not write {path.toString()}, the regular file that blocks a cache root.")
+	writeStagedFile(path, content: BlockedRootFileContent)
 end 'blockCacheRootAt'
 
 let BlockedRootFileName = "a-file-where-a-directory-would-go"
@@ -658,7 +662,7 @@ end 'publishCachedBuildInHome'
 
 function publishCachedBuildUnder(dir FilePath, naming EnvMap, owned FilePath, program String)
 	let source = dir.join(program)
-	try File.writeText(source, content: CachedProgramSource) otherwise panic("CliHarness: the gate could not run - could not write {source.toString()}, the program a case caches a build of.")
+	writeStagedFile(source, content: CachedProgramSource)
 
 	let run = runWithCacheRoots([ExecuteCommandWord, source.toString()], naming: naming, workingDirectory: dir)
 

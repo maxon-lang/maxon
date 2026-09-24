@@ -1,0 +1,18 @@
+// filed-type-reuse.maxtest — an edit leaves every other file's parse reused in a program whose only instance of a
+// generic type is minted by a parse, which the front end files and settles the signature index again with.
+//
+// ⛔ **THE FIXTURE IS THE CASE.** The filed type is a key of the index every parse memo reads, so a warm compile
+// that forgot it would rebuild the index without it and re-parse every file; the driver's invalidation property
+// counts the re-parses a bytes-only edit to the last file causes, and the answer must be that one file.
+
+// What the driver prints when the invalidation property holds.
+let InvalidationPassLine = "PASS invalidation:"
+
+test 'a bytes-only edit re-parses one file in a program with a parse-filed type'
+	let staged = stagedFixture("filed", caseLabel: "filed-type-reuse")
+	let run = spawnVerify(staged)
+
+	Expect.contains(run.stdout, needle: InvalidationPassLine, message: "`{TestedCompilerStem} {VerifyCommandName}` did not report the invalidation property as holding on a program whose only instance of `Box` is minted by a parse. It printed: {run.stdout} — and wrote to stderr: {run.stderr}")
+	Expect.contains(run.stdout, needle: VerdictPassLine, message: "`{TestedCompilerStem} {VerifyCommandName}` did not pass as a whole. It printed: {run.stdout} — and wrote to stderr: {run.stderr}")
+	Expect.equal(run.exitCode() as AssertedInt, expected: 0, message: "`{TestedCompilerStem} {VerifyCommandName}` exited {run.exitCode()}. It wrote to stderr: {run.stderr}")
+end 'a bytes-only edit re-parses one file in a program with a parse-filed type'

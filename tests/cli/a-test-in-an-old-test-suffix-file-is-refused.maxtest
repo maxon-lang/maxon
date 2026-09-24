@@ -1,0 +1,32 @@
+let CaseDirName = "a-test-in-an-old-test-suffix-file-is-refused"
+let ProjectDirName = "project"
+let OutputStem = "program"
+let TestCommandWord = "test"
+let MainFileName = "main.maxon"
+let OldTestFileName = "pricing.test.maxon"
+let TestOutsideTestFileCode = "E2058"
+let SuggestedTestFileName = "pricing.maxtest"
+let MainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let OldTestSource = "test 'a test in a file the old suffix names'\n\tExpect.isTrue(true)\nend 'a test in a file the old suffix names'\n"
+
+test 'a test declared in a *.test.maxon is refused by a build and by maxon test'
+	let dir = freshCaseDir(CaseDirName)
+	let project = createdStagedDirectory(dir.join(ProjectDirName))
+
+	for (name, content) in [(MainFileName, MainSource), (OldTestFileName, OldTestSource)] 'eachFile'
+		writeStagedFile(project.join(name), content: content)
+	end 'eachFile'
+
+	let build = runDriver([BuildCommandWord, project.toString(), "{OutputOptionPrefix}{dir.join(OutputStem).toString()}"])
+	let built = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+
+	Expect.equal(build.exitCode() as AssertedInt, expected: 1, message: "a directory build over `{OldTestFileName}` did not refuse the `test` it declares: the name marks nothing, so the file is an ordinary source and a `test` in it is out of place. {built}")
+	Expect.contains(build.stderr, needle: TestOutsideTestFileCode, message: "the build did not refuse with {TestOutsideTestFileCode}. {built}")
+	Expect.contains(build.stderr, needle: "rename '{OldTestFileName}' to '{SuggestedTestFileName}'", message: "the refusal must name the file the author should rename `{OldTestFileName}` to — the whole old suffix `.test.maxon` gives way to `.maxtest`, not only its last `.maxon`. {built}")
+
+	let tested = runDriver([TestCommandWord, project.toString()])
+	let testedSaid = "It wrote to stdout: {tested.stdout} and to stderr: {tested.stderr}"
+
+	Expect.notEqual(tested.exitCode() as AssertedInt, expected: 0, message: "`maxon {TestCommandWord}` ran the `test` a `{OldTestFileName}` declares as though the file were a test file. {testedSaid}")
+	Expect.contains(tested.stderr, needle: TestOutsideTestFileCode, message: "`maxon {TestCommandWord}` did not refuse with {TestOutsideTestFileCode}. {testedSaid}")
+end 'a test declared in a *.test.maxon is refused by a build and by maxon test'

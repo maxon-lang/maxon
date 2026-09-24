@@ -1123,10 +1123,11 @@ info.isReadOnly        // bool
 ### Commands
 ```bash
 maxon build <file|dir>       # Compile a file or a directory to an executable
-maxon build                  # Run the project.maxon in the current directory
+maxon build [target]         # Build a target of the .maxproj file in the current directory
+maxon run [task]             # Run a task of the .maxtasks file in the current directory, or list them
 maxon execute <file|dir> [args] # Compile (or reuse a cached build) and run; args are the PROGRAM's
 maxon <file>.maxon [args]    # The same, with no word — what a `#!/usr/bin/env maxon` script arrives as
-maxon test [dir]             # Run a PROJECT's unit tests (its *.test.maxon files)
+maxon test [dir]             # Run a PROJECT's unit tests (its *.maxtest files)
 maxon fmt [file|dir]         # Re-print sources in canonical layout, in place
 maxon spec-test              # Run spec fragment tests (the COMPILER's own suite)
 maxon lsp-server             # Start LSP server for IDE integration
@@ -1134,7 +1135,7 @@ maxon mcp-server             # Start the MCP server for AI coding agents
 ```
 
 ### Unit tests
-A `test` is a top-level declaration, legal only in a `*.test.maxon` file. It implicitly
+A `test` is a top-level declaration, legal only in a `*.maxtest` file. It implicitly
 `throws TestFailure`, and its body needs no `try`: a throwing call there fails the test on error.
 
 ```maxon

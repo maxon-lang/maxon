@@ -1,0 +1,18 @@
+let ProjectTestOnlyDirName = "diagnostics-project-maxon-calling-a-test-file-helper"
+let ProjectTestOnlyMainFileName = "main.maxon"
+let ProjectTestOnlyHelperFileName = "probe.maxtest"
+let ProjectTestOnlyHelperSource = "export function projectTestOnlyAnswer() returns ExitCode\n\treturn 0\nend 'projectTestOnlyAnswer'\n"
+let ProjectTestOnlyMainSource = "function main() returns ExitCode\n\treturn projectTestOnlyAnswer()\nend 'main'\n"
+let ProjectTestOnlyPublished = "E3004@1"
+
+test 'a .maxon calling a helper only a test file declares is still an undefined function'
+	let root = stagedProjectDiagnosticsRoot(ProjectTestOnlyDirName)
+	writeCorpusFile(root, fileName: ProjectTestOnlyHelperFileName, content: ProjectTestOnlyHelperSource)
+	writeCorpusFile(root, fileName: ProjectTestOnlyMainFileName, content: ProjectTestOnlyMainSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: ProjectTestOnlyMainFileName, content: ProjectTestOnlyMainSource)
+
+	discardOutsideCheckoutDir(root)
+
+	expectProjectDiagnosticCodesAndLines(probe, expected: ProjectTestOnlyPublished, note: "`projectTestOnlyAnswer` is declared only by the test file `{ProjectTestOnlyHelperFileName}`, and a `maxon build` of this project compiles no test file, so `main.maxon`'s call to it is to an undefined function. A production file must not see a name only the tests declare.")
+end 'a .maxon calling a helper only a test file declares is still an undefined function'

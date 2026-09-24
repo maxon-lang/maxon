@@ -1,0 +1,119 @@
+// reference-documents-only-real-options.maxtest — every `--option` the CLI reference shows a reader typing
+// is one the driver lists: in `maxon help`, or in the usage of a subcommand that prints its own.
+//
+// ⭐ WHICH TOKENS COUNT AS A CLAIM. A line is scanned (a) from its first `maxon ` to its end, which is an
+// invocation or prose about one, and (b) in the first cell of a table row whose first cell is an option.
+// Anything else - a `--` in narrative, a foreign tool's command line - is not a claim about this driver.
+//
+// ⚠ Only where `profile` exists: elsewhere it is refused by name and prints no usage, so its options would
+// have no roster to be read from.
+
+#if os(Windows) and arch(x64)
+	let LongOptionPrefix = "--"
+	let TableCellSeparator = "|"
+
+	// A Markdown table's rule, which starts like a long option and is not one.
+	let TableRuleSpelling = "---"
+
+	// What keeps the claimed pieces of two lines from running into one spelling.
+	let ClaimSeparator = "\n"
+
+	// ⭐ SUBCOMMANDS WHOSE BARE INVOCATION REFUSES WITH A USAGE OF THEIR OWN, listing options `maxon help`
+	// does not. Not derivable from help: a bare `build`, `fmt`, `test` or `spec-test` does real work in the
+	// checkout instead of refusing.
+	function usageCarryingCommands() returns ListedWordArray
+		return ["coverage", "debug", "monitor", "profile"]
+	end 'usageCarryingCommands'
+
+	// Options the reference legitimately shows that no listing names, one reason each.
+	function optionsNoListingNames() returns ListedWordArray
+		return [
+			// The driver's own logging flag, accepted ahead of any command word and so under no command's section.
+			"--log=",
+			// A PROGRAM's argument after `maxon run <path>`, which the driver forwards untouched.
+			"--verbose"
+		]
+	end 'optionsNoListingNames'
+
+	test 'every option the CLI reference shows is one the driver lists'
+		let reference = runOneArgument(HelpCommandWord)
+
+		let observedExit = reference.exitCode() as AssertedInt
+		try Expect.equal(observedExit, expected: 0, message: "`maxon {HelpCommandWord}` printed the reference and then failed. It said: {reference.stdout}{reference.stderr}")
+
+		var listedOptions = optionNamesIn(optionSpellingsIn(reference.stdout))
+		try Expect.isTrue(listedOptions.count() > 0, message: "no option was read off `maxon {HelpCommandWord}`, so every option the reference shows would read as unknown. It said: {reference.stdout}")
+
+		for command in usageCarryingCommands() 'eachCommand'
+			let refusal = runOneArgument(command)
+			let usage = usageLinesIn(refusal.stderr)
+			try Expect.isTrue(usage.count() > 0, message: "`maxon {command}` with no arguments printed no `{UsageLinePrefix}` line, so its options have no roster here. It said: {refusal.stdout}{refusal.stderr}")
+
+			for name in optionNamesIn(spellingsIn(refusal.stderr)) 'eachName'
+				listedOptions.push(name)
+			end 'eachName'
+		end 'eachCommand'
+
+		for name in optionNamesIn(optionsNoListingNames()) 'eachExempt'
+			listedOptions.push(name)
+		end 'eachExempt'
+
+		let claims = optionNamesIn(spellingsIn(claimedText(cliReferenceText())))
+		try Expect.isTrue(claims.count() > 0, message: "no option claim was read off {CliReferenceDocument}, so the comparison below would be vacuous.")
+
+		var unknown = ListedWordArray.create()
+
+		for claim in claims 'eachClaim'
+			if not listedOptions.contains(claim) and not unknown.contains(claim) 'listedNowhere'
+				unknown.push(claim)
+			end 'listedNowhere'
+		end 'eachClaim'
+
+		try Expect.isEmpty(listed(unknown), message: "{CliReferenceDocument} shows these options and no listing of the driver names them: {listed(unknown)}. Either the document names an option that does not exist, or the driver's listing is missing it.")
+	end 'every option the CLI reference shows is one the driver lists'
+
+	// The long options among `spellings`, compared by name: whether a document writes `--rungs` or
+	// `--rungs=<n>` it names the same option.
+	function optionNamesIn(spellings ListedWordArray) returns ListedWordArray
+		var names = ListedWordArray.create()
+
+		for spelling in spellings 'eachSpelling'
+			if not spelling.startsWith(LongOptionPrefix) or spelling.startsWith(TableRuleSpelling) 'notALongOption'
+				continue
+			end 'notALongOption'
+
+			names.push(spelling.replace(OptionValueSeparator, with: ""))
+		end 'eachSpelling'
+
+		return names
+	end 'optionNamesIn'
+
+	// The parts of the document that claim an option exists — see the header.
+	function claimedText(document String) returns String
+		var claimed = ""
+
+		for line in document.split("\n") 'eachLine'
+			claimed.append("{firstOptionCell(line)}{ClaimSeparator}")
+
+			let invocation = try line.findFirst(DriverInvocation) otherwise continue
+			claimed.append("{line.slice(invocation, endIndex: line.endIndex())}{ClaimSeparator}")
+		end 'eachLine'
+
+		return claimed
+	end 'claimedText'
+
+	// A table row's first cell when that cell is an option, else nothing.
+	function firstOptionCell(line String) returns String
+		let row = line.trim()
+
+		if not row.startsWith(TableCellSeparator) 'notARow'
+			return ""
+		end 'notARow'
+
+		let cells = row.split(TableCellSeparator)
+		let first = try cells.get(1) otherwise panic("reference-options: a row starting with its separator splits into at least two parts")
+		let cell = first.trim().replace(CodeSpanMark, with: "")
+
+		return cell if cell.startsWith(LongOptionPrefix) else ""
+	end 'firstOptionCell'
+#endif

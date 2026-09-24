@@ -33,6 +33,25 @@ export union DiagnosticNote
 	end 'reportedUnder'
 end 'DiagnosticNote'
 
+// The calls to undeclared functions a diagnostic rests on, when it rests on some. Compiling a
+// buffer alone makes a sibling file's call opaque, so the editor drops a diagnostic whose every
+// such call a sibling declares (`LspDiagnostics.theProjectDeclaresEveryCallee`). A build never
+// reads it.
+//
+// ⚠ Attached when the diagnostic is created, never after it is reported: the sink rewrites a staged
+// path to the author's (`reportedUnder`), and a cause attached later would keep the staged one.
+export union DiagnosticCause
+	standsAlone
+	undeclaredCalls(calls SourceRangeArray, filePath FilePath)
+
+	function reportedUnder(origins StagedSourceOriginArray) returns DiagnosticCause
+		return match self 'cause'
+			standsAlone gives DiagnosticCause.standsAlone
+			undeclaredCalls(calls, filePath) gives DiagnosticCause.undeclaredCalls(calls, filePath: authoredPathFor(origins, staged: filePath))
+		end 'cause'
+	end 'reportedUnder'
+end 'DiagnosticCause'
+
 // ⭐⭐ **THE NAME A DIAGNOSTIC MUST CARRY FOR A FILE THIS COMPILE READ FROM A COPY.** Unknown paths
 // — every file in an ordinary build — come back untouched, so a compile that staged nothing renders
 // byte for byte what it always did.
@@ -93,9 +112,10 @@ export type Diagnostic
 	export let column as ColumnNumber
 	export let filePath as FilePath
 	export let note as DiagnosticNote
+	export let cause as DiagnosticCause
 
 	export static function create(code ErrorCode, message String, line LineNumber = 0, column ColumnNumber = 0, filePath FilePath = FilePath from "") returns Diagnostic
-		return Self{code: code, message: message, line: line, column: column, filePath: filePath, note: DiagnosticNote.none}
+		return Self{code: code, message: message, line: line, column: column, filePath: filePath, note: DiagnosticNote.none, cause: DiagnosticCause.standsAlone}
 	end 'create'
 
 	// ⭐ **THE ONE PRODUCER OF A NOTED DIAGNOSTIC — the blame SWAP, in one place.**
@@ -107,7 +127,7 @@ export type Diagnostic
 	export function blamedAt(blame LibraryBlame) returns Diagnostic
 		match blame 'blame'
 			unblamed then return self
-			userSite(blamedPath, blamedLine, blamedColumn) then return Self{code: self.code, message: self.message, line: blamedLine, column: blamedColumn, filePath: blamedPath, note: DiagnosticNote.at(LibraryBlameNoteText, line: self.line, column: self.column, filePath: self.filePath)}
+			userSite(blamedPath, blamedLine, blamedColumn) then return Self{code: self.code, message: self.message, line: blamedLine, column: blamedColumn, filePath: blamedPath, note: DiagnosticNote.at(LibraryBlameNoteText, line: self.line, column: self.column, filePath: self.filePath), cause: self.cause}
 		end 'blame'
 	end 'blamedAt'
 
@@ -115,8 +135,12 @@ export type Diagnostic
 	// exception rather than a parameter every one of the hundreds of `create` calls would have to answer —
 	// and split from `blamedAt` because that one SWAPS and this one ADDS (see `reportPositionedWithNote`).
 	export function withNote(second DiagnosticNote) returns Diagnostic
-		return Self{code: self.code, message: self.message, line: self.line, column: self.column, filePath: self.filePath, note: second}
+		return Self{code: self.code, message: self.message, line: self.line, column: self.column, filePath: self.filePath, note: second, cause: self.cause}
 	end 'withNote'
+
+	export function withCause(origin DiagnosticCause) returns Diagnostic
+		return Self{code: self.code, message: self.message, line: self.line, column: self.column, filePath: self.filePath, note: self.note, cause: origin}
+	end 'withCause'
 
 	// ⭐⭐ **THE SAME DIAGNOSTIC, NAMING THE AUTHOR'S FILE RATHER THAN THE COPY THIS COMPILE READ.**
 	// Applied by the single sink `Project.reportDiagnostic`, AFTER `blamedAt`, so both slots a blame swap
@@ -129,7 +153,7 @@ export type Diagnostic
 			return self
 		end 'nothingWasStaged'
 
-		return Self{code: self.code, message: self.message, line: self.line, column: self.column, filePath: authoredPathFor(origins, staged: self.filePath), note: self.note.reportedUnder(origins)}
+		return Self{code: self.code, message: self.message, line: self.line, column: self.column, filePath: authoredPathFor(origins, staged: self.filePath), note: self.note.reportedUnder(origins), cause: self.cause.reportedUnder(origins)}
 	end 'reportedUnder'
 
 	// Render as `error <code>: <message>` — the exact wire format the spec's
@@ -185,6 +209,10 @@ export union CompileError implements Error
 	// the disagreement, because naming only one of them leaves the reader to guess which pair failed to meet.
 	noCommonRoot(first FilePath, other FilePath)
 
+	twoDriverFiles(first FilePath, second FilePath)
+
+	nestedProjectFile(outer FilePath, nested FilePath)
+
 	// A directory built without `--output=` whose executable has no name to take: the directory is a
 	// filesystem root, and an executable is named for the directory it is built from.
 	unnamedDirectory(directory FilePath)
@@ -207,11 +235,8 @@ export union CompileError implements Error
 	compileError
 end 'CompileError'
 
-// Construct and report a positioned diagnostic in one call. The single funnel
-// the front-end error mappers (reportLexerError / reportParseError) route each
-// match arm through, so the `Diagnostic.create` + `reportDiagnostic` pairing is
-// not respelled at every arm. (`reportDiagnostic` — the raw sink — lives in
-// Project.maxon alongside the diagnostics field.)
+// Construct and report a positioned diagnostic in one call. `reportDiagnostic`, the sink itself,
+// lives in Project.maxon beside the diagnostics field.
 export function reportPositioned(project Project, code ErrorCode, message String, line LineNumber, column ColumnNumber, filePath FilePath)
 	reportDiagnostic(project, diagnostic: Diagnostic.create(code, message: message, line: line, column: column, filePath: filePath))
 end 'reportPositioned'

@@ -38,7 +38,7 @@ preserves the line verbatim — see `tests/fmt/engine-cases/ShebangFirstLine.in`
 this suite runs. They CANNOT prove a kernel will exec such a file: this harness compiles a program and
 runs the executable, so nothing here ever hands the SOURCE file to `execve`. NOTHING IN THIS TREE
 gates that: it needs a real file on disk with the executable bit set and a kernel that reads its first
-line, which Windows does not have. What `tests/run/wordless.test.maxon` gates is the DRIVER's half —
+line, which Windows does not have. What `tests/execute/wordless.maxtest` gates is the DRIVER's half —
 that a first argument ending in `.maxon` is `run`, which is the command line such an exec produces.
 The two are different facts and neither substitutes for the other — which is also why the control
 below matters: no exec test could ever catch the rule widening past byte 0.

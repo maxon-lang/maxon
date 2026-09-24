@@ -385,6 +385,14 @@ public union LspClientError implements Error
 
 	// A well-formed JSON-RPC error object. `-32601` is what an unimplemented method answers.
 	serverRefused(code JsonRpcErrorCode, message String)
+
+	public function explained() returns String
+		return match self 'error'
+			transportFailed(detail) gives "the framed stream broke — {detail}"
+			malformedResponse(detail) gives "a message was not the shape its method defines — {detail}"
+			serverRefused(code, message) gives "the server refused with {code}: {message}"
+		end 'error'
+	end 'explained'
 end 'LspClientError'
 
 // ============================================================================================
@@ -1087,9 +1095,6 @@ export function outsideCheckoutDirName(caseDirName String) returns String
 	return "{OutsideCheckoutStagingDirNamePrefix}-{__Builtins.currentProcessId()}-{caseDirName}"
 end 'outsideCheckoutDirName'
 
-// Outside the checkout, which a case about a project's root needs: this checkout holds a
-// `project.maxon` at its own root, so a tree staged under it has a manifest above it whatever the
-// case writes, and the manifest rung would decide the root before the client's ever came up.
 export function freshOutsideCheckoutDir(caseDirName String) returns FilePath
 	let dir = hostTempDir().join(outsideCheckoutDirName(caseDirName))
 

@@ -1,0 +1,38 @@
+let CaseDirName = "run-a-maxtasks-task-that-delegates-to-a-maxproj"
+let TaskFileName = "repo.maxtasks"
+let RunCommandWord = "run"
+let AskedFor = "build"
+let ProjectDirName = "app"
+let ProjectFileName = "app.maxproj"
+let MainFileName = "main.maxon"
+let ProductsDirName = ".maxon"
+
+let TasksSource = "export function build() returns ExitCode\n\tBuild.delegate(\"app\")\n\treturn 0\nend 'build'\n"
+let ProjectSource = "export function app() returns ExitCode\n\tBuild.build(\".\")\n\treturn 0\nend 'app'\n"
+let MainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+
+test 'a .maxtasks task that delegates hands the build to the directory holding a .maxproj'
+	requireHeldOutsideCheckout(CaseDirName, check: DelegatedToTheProject.create())
+end 'a .maxtasks task that delegates hands the build to the directory holding a .maxproj'
+
+type DelegatedToTheProject implements OutsideCheckoutCase
+	static function create() returns DelegatedToTheProject
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		writeStagedFile(dir.join(TaskFileName), content: TasksSource)
+
+		let project = createdStagedDirectory(dir.join(ProjectDirName))
+		writeStagedFile(project.join(ProjectFileName), content: ProjectSource)
+		writeStagedFile(project.join(MainFileName), content: MainSource)
+
+		let ran = runDriver([RunCommandWord, AskedFor], workingDirectory: dir)
+		let said = "It wrote to stdout: {ran.stdout} and to stderr: {ran.stderr}"
+
+		try Expect.equal(ran.exitCode() as AssertedInt, expected: 0, message: "`maxon {RunCommandWord} {AskedFor}`, whose task delegates to `{ProjectDirName}/`, did not succeed. {said}")
+
+		let product = project.join(ProductsDirName).join("{ProjectDirName}{executableSuffix()}")
+		try Expect.isTrue(File.exists(product), message: "the delegated build wrote no {product.toString()}: `{ProjectFileName}`'s one target states no output, so it builds `{ProductsDirName}/<project name>` in its own directory. {said}")
+	end 'requireHeldIn'
+end 'DelegatedToTheProject'

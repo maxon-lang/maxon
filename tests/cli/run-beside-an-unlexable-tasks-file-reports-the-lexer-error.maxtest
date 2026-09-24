@@ -1,0 +1,20 @@
+let CaseDirName = "run-beside-an-unlexable-tasks-file-reports-the-lexer-error"
+let TaskFileName = "dev.maxtasks"
+let RunCommandWord = "run"
+let LexerWording = "Unterminated string literal"
+let NoTasksWording = "declares no tasks"
+
+let TasksSource = "export function build() returns ExitCode\n\tprint(\"never closed\n\treturn 0\nend 'build'\n"
+
+test 'a tasks file that does not lex is reported as a lexer error, not as declaring no tasks'
+	let dir = freshCaseDir(CaseDirName)
+	writeStagedFile(dir.join(TaskFileName), content: TasksSource)
+
+	let refused = runDriver([RunCommandWord], workingDirectory: dir)
+	let said = "It wrote to stdout: {refused.stdout} and to stderr: {refused.stderr}"
+
+	Expect.equal(refused.exitCode() as AssertedInt, expected: 1, message: "a bare `maxon {RunCommandWord}` beside a `{TaskFileName}` that does not lex did not refuse. {said}")
+	Expect.contains(refused.stderr, needle: LexerWording, message: "the refusal did not report the lexer error that kept the tasks from being read. {said}")
+	Expect.contains(refused.stderr, needle: TaskFileName, message: "the refusal did not name the file that does not lex. {said}")
+	Expect.isFalse(refused.stderr.contains(NoTasksWording), message: "the refusal said the file declares no tasks, which nobody could know of a file that does not lex. {said}")
+end 'a tasks file that does not lex is reported as a lexer error, not as declaring no tasks'

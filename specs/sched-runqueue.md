@@ -1361,7 +1361,7 @@ because an acquire load lowers there to the same plain `mov`. ⇒ **what this ca
 `hits=1` and exit 0** — that a spawned service still answers its one message.
 
 ⇒ **THE ORDERING IS GATED TWICE, AND NEITHER GATE IS HERE.**
-`tests/emitted-runtime/steal-reads-the-victim-ring-with-acquire-loads.test.maxon` cross-builds this
+`tests/emitted-runtime/steal-reads-the-victim-ring-with-acquire-loads.maxtest` cross-builds this
 same shape for `arm64-macos` and `arm64-linux`, cuts `func @__sched_steal` out of the printed Target
 IR and FAILS on a plain `ldr` of any of the three words, naming it. And the compiler refuses one
 before it is ever emitted, on every target and so on lanes no golden here can show:

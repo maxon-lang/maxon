@@ -351,23 +351,25 @@ module function isSynthesizedName(name ByteArray) returns bool
 	return text.startsWith("__") or text.contains("$closure_") or text.contains(".unionCases")
 end 'isSynthesizedName'
 
-// The functions nothing in the source calls. The entry is `Project.entryFunctionName` rather than the
-// literal `main`: a `main` that another entry has displaced needs a caller like any other export.
-// Every task of a task file counts, not only the one this build enters at: `maxon run <task>` compiles
-// the task file with that task as the entry, and the runner reaches the others by name. They are read
-// through the runner's own `taskNamesIn`, so the two cannot disagree on what a task is.
+// The functions nothing in the source calls. The entry is `Project.entryFunctionName` rather than
+// the literal `main`: a `main` that another entry has displaced needs a caller like any other
+// export. Every target of a `.maxproj` and every task of a `.maxtasks` counts, not only the one
+// this build enters at: the driver compiles the file with one of them as the entry and reaches the
+// others by name. They are read through the driver's own `taskNamesIn`, so the two cannot disagree
+// on what one is.
 function entryPointNamesOf(project Project, userFiles FilePathArray) returns EntryPointNameSet throws CompileError
 	var names = EntryPointNameSet.create()
 	names.insert(project.entryFunctionName)
 
 	for path in userFiles 'eachFile'
-		if not isTaskFileName(path.filename()) 'notATaskFile'
+		if not isDriverFileName(path.filename()) 'notADriverFile'
 			continue
-		end 'notATaskFile'
+		end 'notADriverFile'
 
 		let entry = try sourceEntryOf(project, path: path)
+		let declared = try taskNamesIn(entry.content) otherwise continue
 
-		for task in taskNamesIn(entry.content) 'eachTask'
+		for task in declared 'eachTask'
 			names.insert(task.toByteArray())
 		end 'eachTask'
 	end 'eachFile'

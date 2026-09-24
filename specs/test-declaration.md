@@ -45,9 +45,9 @@ gets an implied handler that propagates a `TestFailure` and reports any other er
 the test (`specs/test-uncaught-throw.md`). It is also what lets a test body use a bare `try` with
 no `otherwise` — outside a throwing function that is an error.
 
-### Tests live in `*.test.maxon` files
+### Tests live in `*.maxtest` files
 
-A `test` declaration is legal only in a file whose name ends in `.test.maxon`. One rule, one
+A `test` declaration is legal only in a file whose name ends in `.maxtest`. One rule, one
 place: which declarations a build carries is answerable from the file list alone.
 
 ### Two names
@@ -71,7 +71,7 @@ THIS compiler emits rather than what v1 did. The `/specs` copy keeps its blocks.
 
 <!-- test: basic -->
 ```maxon
-// --- file: example.test.maxon
+// --- file: example.maxtest
 test 'adds two numbers'
 	let sum = 2 + 2
 	print("sum is {sum}")
@@ -89,7 +89,7 @@ end 'main'
 <!-- test: multi-word-name-round-trip -->
 A prose name may contain spaces, digits and punctuation; `end` must repeat it verbatim.
 ```maxon
-// --- file: example.test.maxon
+// --- file: example.maxtest
 test 'rejects a negative index (regression, issue #42)'
 	print("ran")
 end 'rejects a negative index (regression, issue #42)'
@@ -105,7 +105,7 @@ end 'main'
 
 <!-- test: error.mismatched-end-label -->
 ```maxon
-// --- file: example.test.maxon
+// --- file: example.maxtest
 test 'adds two numbers'
 	print("ran")
 end 'adds three numbers'
@@ -130,7 +130,7 @@ export function assertTrue(ok bool) throws TestFailure
 	end 'bad'
 end 'assertTrue'
 
-// --- file: example.test.maxon
+// --- file: example.maxtest
 test 'a bare try needs no otherwise'
 	try assertTrue(true)
 end 'a bare try needs no otherwise'
@@ -155,7 +155,7 @@ export function assertTrue(ok bool) throws TestFailure
 	end 'bad'
 end 'assertTrue'
 
-// --- file: example.test.maxon
+// --- file: example.maxtest
 test 'forgets its try'
 	assertTrue(true)
 end 'forgets its try'
@@ -171,7 +171,7 @@ end 'main'
 
 <!-- test: error.rejects-parameters -->
 ```maxon
-// --- file: example.test.maxon
+// --- file: example.maxtest
 test 'takes an argument'(value int)
 	print("ran")
 end 'takes an argument'
@@ -187,7 +187,7 @@ error E2001: specs/fragments/test-declaration/error.rejects-parameters.test:3:25
 
 <!-- test: error.rejects-returns -->
 ```maxon
-// --- file: example.test.maxon
+// --- file: example.maxtest
 test 'returns something' returns int
 	return 1
 end 'returns something'
@@ -214,13 +214,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2058: specs/fragments/test-declaration/error.outside-test-file.test:3:1: a 'test' declaration is only allowed in a file whose name ends in '.test.maxon'; rename 'regular.maxon' to 'regular.test.maxon', or move this declaration into one
+error E2058: specs/fragments/test-declaration/error.outside-test-file.test:3:1: a 'test' declaration is only allowed in a file whose name ends in '.maxtest'; rename 'regular.maxon' to 'regular.maxtest', or move this declaration into one
 ```
 
 <!-- test: error.duplicate-sanitized-name -->
 Two prose names that sanitize to the same symbol are refused, naming both.
 ```maxon
-// --- file: example.test.maxon
+// --- file: example.maxtest
 test 'adds two'
 	print("first")
 end 'adds two'
@@ -240,7 +240,7 @@ error E3107: specs/fragments/test-declaration/error.duplicate-sanitized-name.tes
 
 <!-- test: error.empty-name -->
 ```maxon
-// --- file: example.test.maxon
+// --- file: example.maxtest
 test ''
 	print("ran")
 end ''
@@ -314,7 +314,7 @@ lane that mints one, so the reference read `-> u32` and failed on arm64-macos ag
 identical compiler. A fixed range makes every lane's golden say the same thing. Do not
 "simplify" this back to the stdlib alias.
 ```maxon
-// --- file: kept.test.maxon
+// --- file: kept.maxtest
 test 'is kept alive'
 	throw TestFailure.assertion
 end 'is kept alive'
@@ -333,7 +333,7 @@ end 'main'
 <!-- test: namespace-qualified-name -->
 A test in a subdirectory takes that directory's namespace, exactly as a function does.
 ```maxon
-// --- file: suite/deep.test.maxon
+// --- file: suite/deep.maxtest
 test 'lives in a subdirectory'
 	print("ran")
 end 'lives in a subdirectory'

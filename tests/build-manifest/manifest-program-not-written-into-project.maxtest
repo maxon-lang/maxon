@@ -1,0 +1,16 @@
+// manifest-program-not-written-into-project.maxtest — the compiled manifest program is kept in the run
+// cache, never in the project, so two builds in one project never write it to one path. The project's
+// `.maxon/` is where a shared one would land; a build naming its output elsewhere leaves nothing there.
+
+test 'a manifest build keeps its manifest program in the run cache, not the project'
+	let staged = stagedProject("program-not-written-into-project", fixture: DefaultFixtureName)
+
+	let build = spawnManifestBuild(staged, options: StringArray.create())
+	Expect.equal(build.exitCode() as AssertedInt, expected: 0, message: "`maxon build` over the default manifest exited {build.exitCode()}. It wrote to stderr: {build.stderr}")
+
+	let written = filesInProjectProducts(staged)
+	Expect.isEmpty(written, message: "`maxon build` wrote into the project's products directory, where concurrent builds of one project would contend: {written}")
+
+	let cached = manifestProgramsCached(staged)
+	Expect.isFalse(cached.isEmpty(), message: "`maxon build` exited 0 and left no build of the manifest program in the run cache it was pointed at, so it was compiled somewhere else.")
+end 'a manifest build keeps its manifest program in the run cache, not the project'

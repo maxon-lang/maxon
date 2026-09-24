@@ -1,0 +1,29 @@
+let CaseDirName = "maxproj-bare-build-with-two-targets-lists-them"
+let FirstTargetWord = "first-target"
+let SecondTargetWord = "second-target"
+let FirstTargetFunction = "first_target"
+let SecondTargetFunction = "second_target"
+let FirstTargetStem = "first"
+let SecondTargetStem = "second"
+
+test 'a bare maxon build over two targets lists them in dash form and builds nothing'
+	let staged = stagedProject(CaseDirName, fixture: MaxprojTwoTargetsFixtureName)
+
+	let build = spawnManifestBuild(staged, options: StringArray.create())
+	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+	let reported = "{build.stdout}{build.stderr}"
+
+	Expect.equal(build.exitCode() as AssertedInt, expected: RefusedExitCode, message: "a bare `maxon build` beside a .maxproj exporting two targets did not refuse to choose between them. {said}")
+
+	for dashed in [FirstTargetWord, SecondTargetWord] 'eachTarget'
+		Expect.contains(reported, needle: dashed, message: "the listing left out `{dashed}`, the name `maxon build` accepts for that target. {said}")
+	end 'eachTarget'
+
+	for underscored in [FirstTargetFunction, SecondTargetFunction] 'eachFunction'
+		Expect.isFalse(reported.contains(underscored), message: "the listing spelled the function `{underscored}` rather than the dashed name a reader types. {said}")
+	end 'eachFunction'
+
+	for stem in [FirstTargetStem, SecondTargetStem] 'eachOutput'
+		Expect.isFalse(File.exists(executableIn(staged, stem: stem)), message: "a bare `maxon build` that could not choose a target still built `{stem}`. {said}")
+	end 'eachOutput'
+end 'a bare maxon build over two targets lists them in dash form and builds nothing'

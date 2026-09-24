@@ -1,0 +1,114 @@
+// regalloc-splitting-allocates-per-split-not-per-op.maxtest - the register allocator's `splitting`
+// sub-phase allocates per function and per split, never per op of the pressure sweep.
+//
+// Two fixture sizes rather than one budget: an absolute allocation count drifts with every unrelated
+// change and would have to be re-blessed, while the SLOPE across two bodies of the same shape is the
+// property itself. A per-op term makes the extra allocations grow at least as fast as the extra
+// statements, which is exactly what the assertion refuses.
+typealias BlockRepetition = int(0 to 4096)
+typealias StatementTally = int(0 to u32.max)
+
+let CaseDirName = "regalloc-splitting"
+let SmallAppDirName = "small"
+let LargeAppDirName = "large"
+
+let SmallRepetitions = 8 as BlockRepetition
+let LargeRepetitions = 64 as BlockRepetition
+
+let MainFileName = "main.maxon"
+let MetricsFileSuffix = "-metrics.tsv"
+let MetricsFlagPrefix = "--metrics="
+
+let MetricsRowSeparator = "\n"
+let MetricsFieldSeparator = "\t"
+let MetricsCommentPrefix = "#"
+let MetricsFieldCount = 12
+let MetricsKindField = 0
+let MetricsNameField = 1
+let MetricsAllocsField = 3
+let MetricsRegAllocKind = "regalloc"
+let SplittingPhaseName = "splitting"
+
+let StatementsPerBlock = 10 as StatementTally
+let FixtureSetupStatements = 10 as StatementTally
+
+let FixtureHeader = "typealias Word = int(0 to u32.max)\n\nfunction work(seed Word) returns Word\n\tvar v0 = (seed shr 0) and 0xFFFF\n\tvar v1 = (seed shr 1) and 0xFFFF\n\tvar v2 = (seed shr 2) and 0xFFFF\n\tvar v3 = (seed shr 3) and 0xFFFF\n\tvar v4 = (seed shr 4) and 0xFFFF\n\tvar v5 = (seed shr 5) and 0xFFFF\n\tvar v6 = (seed shr 6) and 0xFFFF\n\tvar v7 = (seed shr 7) and 0xFFFF\n\tvar v8 = (seed shr 8) and 0xFFFF\n\tvar v9 = (seed shr 9) and 0xFFFF\n"
+let FixtureBlock = "\n\tv0 = (v0 + v1) and 0xFFFF\n\tv1 = (v1 xor v2) and 0xFFFF\n\tv2 = (v2 + v3) and 0xFFFF\n\tv3 = (v3 shl 1) and 0xFFFF\n\tv4 = (v4 + v5) and 0xFFFF\n\tv5 = (v5 xor v6) and 0xFFFF\n\tv6 = (v6 + v7) and 0xFFFF\n\tv7 = (v7 shl 1) and 0xFFFF\n\tv8 = (v8 + v9) and 0xFFFF\n\tv9 = (v9 xor v0) and 0xFFFF\n"
+let FixtureFooter = "\n\treturn v0 + v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8 + v9\nend 'work'\n\nfunction main() returns ExitCode\n\tlet spelled = try Process.environmentVariable(\"PATH\") otherwise \"\"\n\tlet answer = work((spelled.byteLength() and 0xFFFF) as Word)\n\n\tif answer > 0 'produced'\n\t\treturn 0\n\tend 'produced'\n\n\treturn 1\nend 'main'\n"
+
+function fixtureSource(repetitions BlockRepetition) returns String
+	var out = FixtureHeader
+
+	for _ in 0 upto repetitions 'eachBlock'
+		out.append(FixtureBlock)
+	end 'eachBlock'
+
+	out.append(FixtureFooter)
+	return out
+end 'fixtureSource'
+
+function fixtureStatements(repetitions BlockRepetition) returns StatementTally
+	return FixtureSetupStatements + StatementsPerBlock * repetitions
+end 'fixtureStatements'
+
+function splittingAllocationsIn(table String) returns AssertedInt
+	for row in table.split(MetricsRowSeparator) 'eachRow'
+		let line = row.trimEnd()
+
+		if line.isEmpty() or line.startsWith(MetricsCommentPrefix) 'notARow'
+			continue
+		end 'notARow'
+
+		let fields = line.split(MetricsFieldSeparator)
+
+		if fields.count() != MetricsFieldCount 'malformed'
+			panic("regalloc-splitting: the gate could not run - a metrics row carries {fields.count()} fields rather than {MetricsFieldCount}: {line}")
+		end 'malformed'
+
+		let kind = try fields.get(MetricsKindField) otherwise panic("regalloc-splitting: kind field OOB after the field count was checked")
+		let name = try fields.get(MetricsNameField) otherwise panic("regalloc-splitting: name field OOB after the field count was checked")
+
+		if kind != MetricsRegAllocKind or name != SplittingPhaseName 'namesAnother'
+			continue
+		end 'namesAnother'
+
+		let allocs = try fields.get(MetricsAllocsField) otherwise panic("regalloc-splitting: allocs field OOB after the field count was checked")
+		return try reportedTally(allocs) otherwise panic("regalloc-splitting: the gate could not run - the allocs column of the {SplittingPhaseName} row states no count: {line}")
+	end 'eachRow'
+
+	panic("regalloc-splitting: the gate could not run - the metrics table carries no `{MetricsRegAllocKind}` row named `{SplittingPhaseName}`, so the pressure sweep's allocations were never measured. The table was: {table}")
+end 'splittingAllocationsIn'
+
+function splittingAllocationsFor(dir FilePath, appDirName String, repetitions BlockRepetition) returns AssertedInt throws TestFailure
+	let app = createdStagedDirectory(dir.join(appDirName))
+
+	try File.writeText(app.join(MainFileName), content: fixtureSource(repetitions)) otherwise panic("regalloc-splitting: the gate could not run - could not write the {repetitions}-block fixture source")
+
+	let metricsFileName = "{appDirName}{MetricsFileSuffix}"
+	let built = runDriver([BuildCommandWord, appDirName, "{MetricsFlagPrefix}{metricsFileName}"], workingDirectory: dir)
+
+	try Expect.equal(built.exitCode() as AssertedInt, expected: 0, message: "the {repetitions}-block fixture did not build, so the sweep was never measured over it. It wrote to stderr: {built.stderr}")
+
+	let table = try File.readText(dir.join(metricsFileName)) otherwise panic("regalloc-splitting: the gate could not run - the {repetitions}-block build wrote no metrics table at {metricsFileName}")
+	return splittingAllocationsIn(table)
+end 'splittingAllocationsFor'
+
+test 'the pressure sweep allocates per function rather than per op'
+	requireHeldOutsideCheckout(CaseDirName, check: SplittingAllocatesPerSplit.create())
+end 'the pressure sweep allocates per function rather than per op'
+
+type SplittingAllocatesPerSplit implements OutsideCheckoutCase
+	static function create() returns SplittingAllocatesPerSplit
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let smallAllocs = try splittingAllocationsFor(dir, appDirName: SmallAppDirName, repetitions: SmallRepetitions)
+		let largeAllocs = try splittingAllocationsFor(dir, appDirName: LargeAppDirName, repetitions: LargeRepetitions)
+
+		let smallStatements = fixtureStatements(SmallRepetitions) as AssertedInt
+		let largeStatements = fixtureStatements(LargeRepetitions) as AssertedInt
+
+		try Expect.isTrue(largeAllocs - smallAllocs < largeStatements - smallStatements, message: "the `{SplittingPhaseName}` sub-phase allocated {smallAllocs} boxes over a body of {smallStatements} statements and {largeAllocs} over a body of {largeStatements}, so {largeStatements - smallStatements} more statements cost {largeAllocs - smallAllocs} more allocations: the pressure sweep allocates at least one box per op it visits. Its verdicts must cost nothing per op - only per function and per split.")
+	end 'requireHeldIn'
+end 'SplittingAllocatesPerSplit'

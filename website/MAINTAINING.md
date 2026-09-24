@@ -159,13 +159,13 @@ and have no upstream source.
 
 **The doc-coverage gates catch what a source is missing**, and run with `maxon test`, not with the site:
 
-- `tests/cli/reference-documents-every-command.test.maxon` — every command and option `maxon help` lists
+- `tests/cli/reference-documents-every-command.maxtest` — every command and option `maxon help` lists
   is in `docs/CLI_REFERENCE.md`;
-- `tests/cli/reference-documents-only-real-options.test.maxon` — every option that document shows is one
+- `tests/cli/reference-documents-only-real-options.maxtest` — every option that document shows is one
   the driver has;
-- `tests/mcp/reference-documents-every-tool.test.maxon` — its MCP Server section names every tool the
+- `tests/mcp/reference-documents-every-tool.maxtest` — its MCP Server section names every tool the
   server advertises and every argument each declares;
-- `tests/docs/stdlib-reference-documents-every-public-api.test.maxon` — `docs/STDLIB_REFERENCE.md` names
+- `tests/docs/stdlib-reference-documents-every-public-api.maxtest` — `docs/STDLIB_REFERENCE.md` names
   every `public` declaration in `stdlib/`.
 
 When writing a source:
@@ -192,7 +192,7 @@ commands.** Both are published once and never revised, and the commands change b
 
 ⚠ **The compiler prints the install commands too.** `maxon upgrade` gives this host's one-liner when it
 refuses an install it does not manage, from `maxon-bin/Upgrade/UpgradeCommand.maxon`. Change it on the
-site and change it there as well. `tests/cli/upgrade-refuses-an-unrecognised-layout.test.maxon` reads the
+site and change it there as well. `tests/cli/upgrade-refuses-an-unrecognised-layout.maxtest` reads the
 one-liner out of `src/install.ts` and fails until the two agree.
 
 ## Positioning & copy decisions (keep these consistent)

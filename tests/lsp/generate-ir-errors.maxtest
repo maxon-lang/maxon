@@ -1,0 +1,28 @@
+// generate-ir-errors.maxtest — `maxon/generateIR` over a program that does not compile answers no IR and
+// the error, at the line it is on. The session is `generate-ir.maxtest`'s probe.
+
+// The undeclared name sits on the second line, ONE-based: the panel shows `Line <line>:<column>` to a reader.
+let BrokenSource = "function main() returns ExitCode\n\treturn undeclaredName\nend 'main'\n"
+let BrokenLine = 2
+
+test 'generateIR answers a program that does not compile with its error and no IR'
+	match probeGenerateIr(BrokenSource) 'probe'
+		answered(result) then requireErrorOnBrokenLine(result)
+		unanswered(reason) then Expect.fail(reason)
+	end 'probe'
+end 'generateIR answers a program that does not compile with its error and no IR'
+
+function requireErrorOnBrokenLine(result GenerateIrResult) throws TestFailure
+	let errors = renderedIrErrors(result)
+	try Expect.isEmpty(result.ir, message: "a program that does not compile was answered with IR as well as errors ({errors}).")
+
+	var reported = false
+
+	for entry in result.errors 'eachError'
+		if entry.line == BrokenLine and not entry.message.isEmpty() 'onTheBrokenLine'
+			reported = true
+		end 'onTheBrokenLine'
+	end 'eachError'
+
+	try Expect.isTrue(reported, message: "no error with a message was reported on line {BrokenLine}, where the undeclared name is. The errors were: [{errors}]")
+end 'requireErrorOnBrokenLine'

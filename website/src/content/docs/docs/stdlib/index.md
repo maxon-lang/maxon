@@ -68,7 +68,6 @@ end 'main'
 | `NetworkPort` | `int(0 to 65535)` | TcpClient |
 | `EnvMap` | `Map with String, String` | Subprocess |
 | `JsonNodeId` / `JsonNodeIdArray` | `int(0 to u64.max)` / `Array with JsonNodeId` | Json |
-| `BuildConfigArray` | `Array with BuildConfig` | Build |
 | `SegmentByteCount`, `SegmentOffset`, `SegmentWord` | see [SharedMemory](/docs/stdlib/io/#sharedmemory) | SharedMemory |
 
 ### Names a library signature asks for

@@ -22,7 +22,7 @@ three lines:
 
 The first line is pinned here. The second and third are properties of a spawned compiler's stderr and
 output file, which a spec case cannot observe, so they are gated by the driver corpus
-`tests/parallel-compile/` (`log-order.test.maxon` and `byte-identical.test.maxon`).
+`tests/parallel-compile/` (`log-order.maxtest` and `byte-identical.maxtest`).
 
 **Which pass the case exercises, and why.** None of the passes from `pruneDeadBlockArgs` through
 `refineVersionedRanges` has a diagnostic site: they rewrite, they never refuse. The per-function pass

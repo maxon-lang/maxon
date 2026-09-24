@@ -1,0 +1,45 @@
+// manifest-reports-the-build-runner.maxtest — a path-less `maxon build` says which of the two things
+// happened to the program that runs its manifest, and makes no progress line of its own for it.
+//
+// ⭐⭐ **THE SILENCE IS ASSERTED THROUGH A COUNT, NOT AN ABSENCE.** The build the caller asked for logs
+// the same sentence the runner's compile would, so "stderr holds no such line" would be satisfied by a
+// build that compiled nothing at all. One occurrence is the property: the caller's build, and no second.
+//
+// ⭐ **BOTH LINES ARE ASSERTED AGAINST EACH OTHER**, because a report that always says `Compiled` is
+// indistinguishable from a correct one over a cold build alone.
+//
+// ⛔ **THE CACHE IS FILLED BY A REAL BUILD, NEVER PLANTED.** Staging clears the case's private run cache,
+// so the first spawn is a cold one by construction and the second is a hit on what it published.
+
+let CaseDirName = "manifest-reports-the-build-runner"
+
+// The two halves of the one line, which the driver prints exactly one of.
+let CompiledTheRunner = "Compiled the build runner"
+let UsedTheCachedRunner = "Used the cached build runner"
+
+// A stable fragment of the line the backend logs for every compile it finishes. A copy of the driver's
+// wording, like every other fragment in this corpus.
+let WroteCodeWording = "bytes of code to"
+
+// A text holding ONE occurrence of a needle splits into two parts. The caller's own build is that one.
+let OneOccurrenceSplitsInto = 2 as AssertedInt
+
+test 'a path-less build names the build runner once and compiles it silently'
+	let staged = stagedProject(CaseDirName, fixture: DefaultFixtureName)
+
+	let cold = spawnManifestBuild(staged, options: StringArray.create())
+	let coldSaid = "It wrote to stdout: {cold.stdout} and to stderr: {cold.stderr}"
+
+	Expect.equal(cold.exitCode() as AssertedInt, expected: 0, message: "the first `maxon build` over the staged manifest failed, so there is no report to read. {coldSaid}")
+	Expect.contains(cold.stdout, needle: CompiledTheRunner, message: "the first `maxon build` over a cache holding nothing did not say it compiled the build runner. {coldSaid}")
+	Expect.isFalse(cold.stdout.contains(UsedTheCachedRunner), message: "the first `maxon build` over a cache holding nothing claimed it used a cached build runner. {coldSaid}")
+	Expect.equal(cold.stderr.split(WroteCodeWording).count() as AssertedInt, expected: OneOccurrenceSplitsInto, message: "a cold `maxon build` logged a compile other than the one it was asked for: the build runner's own compile is scaffolding and owes the caller one line, not a second build's worth of output. {coldSaid}")
+
+	let warm = spawnManifestBuild(staged, options: StringArray.create())
+	let warmSaid = "It wrote to stdout: {warm.stdout} and to stderr: {warm.stderr}"
+
+	Expect.equal(warm.exitCode() as AssertedInt, expected: 0, message: "the second `maxon build` over the staged manifest failed. {warmSaid}")
+	Expect.contains(warm.stdout, needle: UsedTheCachedRunner, message: "the second `maxon build` did not say it used the build runner the first one published. {warmSaid}")
+	Expect.isFalse(warm.stdout.contains(CompiledTheRunner), message: "the second `maxon build` claimed it compiled the build runner the first one had already published. {warmSaid}")
+	Expect.equal(warm.stderr.split(WroteCodeWording).count() as AssertedInt, expected: OneOccurrenceSplitsInto, message: "a warm `maxon build` logged a compile other than the one it was asked for. {warmSaid}")
+end 'a path-less build names the build runner once and compiles it silently'

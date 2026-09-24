@@ -1,0 +1,86 @@
+// regalloc-live-row-walks-scale-with-the-live-set.maxtest - a live row's set words are enumerated
+// through a summary word, so a clobber op costs the LIVE population rather than the whole value space.
+//
+// Two fixture sizes rather than one budget: a walk over the value space costs `values/64` words per
+// clobber op, so the words visited per extra statement grow with the program, while a walk over the
+// live set costs the live population plus one summary word per 64 row words - a constant this
+// fixture's shape fixes. The SLOPE across two bodies of that one shape is the property itself.
+typealias BlockRepetition = int(0 to 4096)
+typealias StatementTally = int(0 to u32.max)
+
+let CaseDirName = "regalloc-live-row"
+let SmallAppDirName = "small"
+let LargeAppDirName = "large"
+
+let SmallRepetitions = 8 as BlockRepetition
+let LargeRepetitions = 512 as BlockRepetition
+
+let MainFileName = "main.maxon"
+let LogFlag = "--log=codegen:debug"
+let RowWordsFieldPrefix = "row-words visited total="
+
+let StatementsPerBlock = 4 as StatementTally
+let FixtureSetupStatements = 4 as StatementTally
+let RowWordsPerStatementBound = 16
+
+let FixtureHeader = "typealias Word = int(0 to u32.max)\n\nfunction sink(x Word) returns Word\n\treturn (x + (((try Process.environmentVariable(\"PATH\") otherwise \"\").byteLength() and 0xFF) as Word)) and 0xFFFF\nend 'sink'\n\nfunction work(seed Word) returns Word\n\tvar v0 = (seed shr 0) and 0xFFFF\n\tvar v1 = (seed shr 1) and 0xFFFF\n\tvar v2 = (seed shr 2) and 0xFFFF\n\tvar v3 = (seed shr 3) and 0xFFFF\n"
+let FixtureBlock = "\n\tv0 = (v0 + sink(v1)) and 0xFFFF\n\tv1 = (v1 xor sink(v2)) and 0xFFFF\n\tv2 = (v2 + sink(v3)) and 0xFFFF\n\tv3 = (v3 xor sink(v0)) and 0xFFFF\n"
+let FixtureFooter = "\n\treturn v0 + v1 + v2 + v3\nend 'work'\n\nfunction main() returns ExitCode\n\tlet spelled = try Process.environmentVariable(\"PATH\") otherwise \"\"\n\tlet answer = work((spelled.byteLength() and 0xFFFF) as Word)\n\n\tif answer > 0 'produced'\n\t\treturn 0\n\tend 'produced'\n\n\treturn 1\nend 'main'\n"
+
+function rowWalkFixtureSource(repetitions BlockRepetition) returns String
+	var out = FixtureHeader
+
+	for _ in 0 upto repetitions 'eachBlock'
+		out.append(FixtureBlock)
+	end 'eachBlock'
+
+	out.append(FixtureFooter)
+	return out
+end 'rowWalkFixtureSource'
+
+function rowWalkFixtureStatements(repetitions BlockRepetition) returns StatementTally
+	return FixtureSetupStatements + StatementsPerBlock * repetitions
+end 'rowWalkFixtureStatements'
+
+function rowWordsIn(stderr String) returns AssertedInt
+	let parts = stderr.split(RowWordsFieldPrefix)
+
+	if parts.count() < 2 'namesNoField'
+		panic("regalloc-live-row-walks: the gate could not run - the `{LogFlag}` report carries no `{RowWordsFieldPrefix}` field, so the allocator's row walks were never measured. It wrote to stderr: {stderr}")
+	end 'namesNoField'
+
+	let tail = try parts.get(1) otherwise panic("regalloc-live-row-walks: the field's tail is OOB after the part count was checked")
+	return try reportedTally(tail) otherwise panic("regalloc-live-row-walks: the gate could not run - `{RowWordsFieldPrefix}` states no count. It wrote to stderr: {stderr}")
+end 'rowWordsIn'
+
+function rowWordsFor(dir FilePath, appDirName String, repetitions BlockRepetition) returns AssertedInt throws TestFailure
+	let app = createdStagedDirectory(dir.join(appDirName))
+
+	try File.writeText(app.join(MainFileName), content: rowWalkFixtureSource(repetitions)) otherwise panic("regalloc-live-row-walks: the gate could not run - could not write the {repetitions}-block fixture source")
+
+	let built = runDriver([BuildCommandWord, appDirName, LogFlag], workingDirectory: dir)
+
+	try Expect.equal(built.exitCode() as AssertedInt, expected: 0, message: "the {repetitions}-block fixture did not build under {LogFlag}, so its row walks were never measured. It wrote to stderr: {built.stderr}")
+
+	return rowWordsIn(built.stderr)
+end 'rowWordsFor'
+
+test 'a live row walk costs its live values, not the value space'
+	requireHeldOutsideCheckout(CaseDirName, check: RowWalksScaleWithTheLiveSet.create())
+end 'a live row walk costs its live values, not the value space'
+
+type RowWalksScaleWithTheLiveSet implements OutsideCheckoutCase
+	static function create() returns RowWalksScaleWithTheLiveSet
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let smallWords = try rowWordsFor(dir, appDirName: SmallAppDirName, repetitions: SmallRepetitions)
+		let largeWords = try rowWordsFor(dir, appDirName: LargeAppDirName, repetitions: LargeRepetitions)
+
+		let smallStatements = rowWalkFixtureStatements(SmallRepetitions) as AssertedInt
+		let largeStatements = rowWalkFixtureStatements(LargeRepetitions) as AssertedInt
+
+		try Expect.isTrue(largeWords - smallWords < RowWordsPerStatementBound * (largeStatements - smallStatements), message: "the allocator visited {smallWords} row words over a body of {smallStatements} statements and {largeWords} over a body of {largeStatements}, so {largeStatements - smallStatements} more statements cost {largeWords - smallWords} more words - more than {RowWordsPerStatementBound} per statement, which is a walk over the value space rather than over the live set. A clobber op must cost the live population, not `values/64` words.")
+	end 'requireHeldIn'
+end 'RowWalksScaleWithTheLiveSet'

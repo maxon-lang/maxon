@@ -1,0 +1,12 @@
+let CaseDirName = "maxproj-public-target-is-a-target"
+let ProjectName = "app"
+
+test 'a public function in a .maxproj is a target exactly as an exported one is'
+	let staged = stagedProject(CaseDirName, fixture: MaxprojPublicTargetFixtureName)
+
+	let build = spawnManifestBuild(staged, options: StringArray.create())
+	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+
+	Expect.equal(build.exitCode() as AssertedInt, expected: 0, message: "a bare `maxon build` beside `{ProjectName}.maxproj`, whose one target is a `public function`, did not build it. {said}")
+	Expect.isTrue(File.exists(executableIn(staged.join(ProjectProductsDirName), stem: ProjectName)), message: "the build wrote no `{ProjectProductsDirName}/{ProjectName}`. {said}")
+end 'a public function in a .maxproj is a target exactly as an exported one is'

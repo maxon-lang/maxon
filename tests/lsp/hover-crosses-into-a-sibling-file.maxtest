@@ -1,0 +1,28 @@
+// hover-crosses-into-a-sibling-file.maxtest — a cursor on a call whose `export`ed declaration
+// lives in ANOTHER file of the same staged project hovers as that declaration, which is the half of
+// hover that no amount of reading the open buffer can answer.
+// `definition-crosses-into-a-sibling-file.maxtest` is the same shape for the jump and its
+// staging is reused. The session is `hover-probe.maxtest`'s `hoverRenderingAtUri`, which this
+// case needs rather than `hoverRendering` because a project's declarations are reached through the
+// filesystem and the fixed `HoverDocumentUri` names nothing on it.
+
+let HoverSiblingDirName = "temp/lsp/hover-crosses-into-a-sibling-file"
+let HoverSiblingHelperFileName = "helper.maxon"
+let HoverSiblingMainFileName = "main.maxon"
+let HoverSiblingHelperSource = "export function hoverSharedHelper() returns ExitCode\n\treturn 0\nend 'hoverSharedHelper'\n"
+let HoverSiblingMainSource = "function main() returns ExitCode\n\treturn hoverSharedHelper()\nend 'main'\n"
+let HoverSiblingCallLine = 1 as LspCoordinate
+let HoverSiblingCallCharacter = 12 as LspCoordinate
+
+test 'hover crosses into a sibling file'
+	let directory = stagedCorpusDirectory(HoverSiblingDirName)
+	writeCorpusFile(directory, fileName: HoverSiblingHelperFileName, content: HoverSiblingHelperSource)
+	writeCorpusFile(directory, fileName: HoverSiblingMainFileName, content: HoverSiblingMainSource)
+
+	let uri = fileUriOf(directory.join(HoverSiblingMainFileName))
+	let rendering = hoverRenderingAtUri(uri, source: HoverSiblingMainSource, line: HoverSiblingCallLine, character: HoverSiblingCallCharacter)
+
+	Expect.contains(rendering, needle: "hoverSharedHelper", message: "a call to an `export`ed declaration in a sibling file did not hover as that declaration. The declaration is in the file staged beside the open document, under a `.maxproj` that marks them one project.")
+
+	Expect.contains(rendering, needle: "function hoverSharedHelper() returns ExitCode", message: "the hover did not render the declaration the sibling file holds. A hover that only ever reads the open buffer answers nothing about every name a project declares elsewhere, which is most of them.")
+end 'hover crosses into a sibling file'

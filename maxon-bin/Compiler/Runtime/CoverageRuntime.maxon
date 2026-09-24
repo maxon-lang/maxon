@@ -43,16 +43,16 @@ let CoverageScratchSlot = 0 as SpillSlot
 // The open's failure answer, which every lane's host surface reports in Win32's vocabulary.
 let CoverageInvalidHandle = -1 as ParsedInt
 
-// ⭐ **WHERE THE COUNTERS WILL BE WRITTEN, RESOLVED THE MOMENT THE OUTPUT PATH IS.** ABSOLUTE, because the
-// measured program may be launched from anywhere and must still publish beside its own binary — the
-// reference driver takes the same decision (`Path.GetFullPath(outputPath) + ".mxcov"`). A build that was not
+// ⭐ **WHERE THE COUNTERS WILL BE WRITTEN, ANCHORED THE MOMENT THE OUTPUT PATH IS.** ABSOLUTE, because the
+// measured program may be launched from anywhere and must still publish beside its own binary; no `..` is
+// folded, so through a symbolic link that is the directory the binary was written to. A build that was not
 // asked to instrument records nothing, so the `.rdata` cstring exists only where something reads it.
 export function recordCoverageDataPath(project Project, outputPath FilePath)
 	if not project.coverage 'notInstrumented'
 		return
 	end 'notInstrumented'
 
-	project.coverageDataPath = coverageDataPathOf(outputPath.resolve(Directory.currentPath()))
+	project.coverageDataPath = coverageDataPathOf(outputPath.anchoredAt(Directory.currentPath()))
 end 'recordCoverageDataPath'
 
 // The counter file beside `outputPath`: the WHOLE output name with the suffix appended, extension and all

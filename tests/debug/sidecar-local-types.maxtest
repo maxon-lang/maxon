@@ -1,0 +1,89 @@
+// sidecar-local-types.maxtest — every local of a MULTI-FILE program is described under the type its own
+// file declared it with.
+//
+// ⭐ **ONE FILE CANNOT SEE THIS, AND THAT IS WHY THE FIXTURE HAS TWO.** Each file interns its type names into
+// a table of its own, and the merge renumbers every file but the first into the project's table — so a
+// local whose declared type kept its file's number names whatever type the project table holds at that
+// number. A one-file program's numbers are the project's, and it reads correct either way.
+//
+// ⛔ **THE DEMAND IS READ OUT OF THE STAGED SOURCES**: every `let <name> = <Type>.create(` binding is a local
+// whose declared type the source spells, so a fixture that grows one grows what is asked of the sidecar.
+
+let LocalTypesCaseLabel = "sidecar-local-types"
+let TwoFilesFixtureName = "twofiles"
+let LocalTypesBuildLabel = "two-files"
+
+// How a binding whose type the source spells is recognized: `let <name> = <Type>.create(`.
+let BindingPrefix = "let "
+let BindingInitializer = " = "
+let FactoryCall = ".create("
+
+// A local row ends `: <type>`, and nothing else in a row is a lone colon.
+let TypeSeparatorToken = ":"
+
+test 'every local of a two-file program names the type its own file declared it with'
+	let staged = stagedFixture(LocalTypesCaseLabel, fixture: TwoFilesFixtureName)
+	let build = spawnBuild(staged, staged: staged, label: LocalTypesBuildLabel, extraArguments: StringArray.create())
+
+	if build.exitCode() != 0 'didNotBuild'
+		panic("sidecar-local-types.test: the gate could not run — the build of the staged two-file project exited {build.exitCode()}, so there is no sidecar to ask anything about. It wrote to stderr: {build.stderr}")
+	end 'didNotBuild'
+
+	let dumpRun = spawnDumpInfo(builtExecutable(staged), staged: staged, sections: StringArray.create())
+	Expect.equal(dumpRun.exitCode() as AssertedInt, expected: 0, message: "`{TestedCompilerStem} {DebugSubcommandName} {DumpInfoOptionName} <exe>` did not print the sidecar. It wrote to stderr: {dumpRun.stderr}")
+
+	let functionRows = dumpSectionRows(withoutCarriageReturns(dumpRun.stdout), heading: DumpFunctionsHeading)
+	var asked = 0
+	var wrong = StringArray.create()
+
+	for rawLine in everyStagedSourceLine(staged) 'eachSourceLine'
+		let line = rawLine.trim()
+
+		if not line.startsWith(BindingPrefix) or not line.contains(BindingInitializer) or not line.contains(FactoryCall) 'notATypedBinding'
+			continue
+		end 'notATypedBinding'
+
+		let name = textBetween(line, opening: BindingPrefix, closing: BindingInitializer)
+		let declaredType = textBetween(line, opening: BindingInitializer, closing: FactoryCall)
+		asked = asked + 1
+
+		let described = describedLocalType(functionRows, name: name)
+
+		if described != declaredType 'describedAsAnotherType'
+			wrong.push("`{name}` is declared `{declaredType}` and the sidecar describes it as `{described}`")
+		end 'describedAsAnotherType'
+	end 'eachSourceLine'
+
+	Expect.notEqual(asked as AssertedInt, expected: 0, message: "sidecar-local-types.test: no `{BindingPrefix}<name>{BindingInitializer}<Type>{FactoryCall}` binding was found in the staged fixture, so this case would assert nothing at all.")
+	Expect.isEmpty(renderedRows(wrong), message: "these locals are described under a type their declaration does not name — a debugger would print one type's fields over another's bytes. The functions section held: {renderedRows(functionRows)}")
+end 'every local of a two-file program names the type its own file declared it with'
+
+// The type a local row names: its last word, which follows a lone `:`. EMPTY when no local row carries the
+// name, which the caller reports as a mismatch naming what it expected.
+function describedLocalType(rows StringArray, name String) returns String
+	for row in rows 'eachRow'
+		let tokens = whitespaceTokens(row)
+		let first = try tokens.get(0) otherwise continue
+
+		if first != name or tokens.count() < 3 'notThisLocal'
+			continue
+		end 'notThisLocal'
+
+		let separator = try tokens.get(tokens.count() - 2) otherwise continue
+
+		if separator == TypeSeparatorToken 'aLocalRow'
+			return try tokens.get(tokens.count() - 1) otherwise ""
+		end 'aLocalRow'
+	end 'eachRow'
+
+	return ""
+end 'describedLocalType'
+
+// The text strictly between the first `opening` and the first `closing` after it. Both are known present:
+// the caller asked `contains` of each before it came here.
+function textBetween(line String, opening String, closing String) returns String
+	let afterOpening = line.slice(try line.findFirst(opening) otherwise panic("textBetween: '{opening}' was asked present before this call"), endIndex: line.endIndex()).replaceFirst(opening, with: "")
+	let closingAt = try afterOpening.findFirst(closing) otherwise panic("textBetween: '{closing}' was asked present before this call")
+
+	return afterOpening.slice(afterOpening.startIndex(), endIndex: closingAt)
+end 'textBetween'

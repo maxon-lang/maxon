@@ -13,9 +13,10 @@ and the VS Code extension runs it.
 Install **Maxon** from the
 [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=maxon-lang.maxon-lsp-client)
 or [Open VSX](https://open-vsx.org/extension/maxon-lang/maxon-lsp-client) (extension id
-`maxon-lang.maxon-lsp-client`). It activates in a workspace containing `.maxon` files and provides syntax
+`maxon-lang.maxon-lsp-client`). It activates in a workspace containing Maxon files and provides syntax
 highlighting, diagnostics, hover, completion, go-to-definition, rename, formatting, the Compiler
-Explorer and a Test Explorer.
+Explorer and a Test Explorer. `.maxon` sources, `.maxproj` project files, `.maxtasks` task files and
+`.maxtest` test files are all Maxon documents, served by the language server.
 
 **Finding the compiler.** The extension runs `maxon lsp-server` from the first compiler it finds:
 
@@ -58,9 +59,10 @@ the lowered Target IR, the same text `maxon build --emit-ir` writes, or the comp
 so it needs a `main`.
 
 **Test Explorer.** The **Maxon Tests** controller lists the `test` declarations in the workspace's
-`*.test.maxon` files, one node per file, and runs them with the compiler the extension found, one
-`maxon test <project> --json` per project the selection touches. A test file's project is the highest
-directory above it, never above the workspace folder, whose every level holds a `.maxon` source. When the
+`*.maxtest` files (the extension matched case and all, as the compiler matches it), one node per file,
+and runs them with the compiler the extension found, one `maxon test <project> --json` per project the
+selection touches. A test file's project is the highest directory above it, up to the workspace folder,
+whose every level holds a `.maxon` source. When the
 workspace folder is the Maxon source checkout, a second controller, **Maxon Spec Suite**, lists the spec
 tests in `specs/*.md` and runs them with the checkout's own compiler
 (`maxon-bin/.maxon/maxon spec-test --filter=…`).
@@ -82,47 +84,53 @@ it does when stdin closes or a message cannot be framed).
 document. The server handles `didOpen`, `didChange` and `didClose`. Each buffer is analysed from its
 in-memory text, for the host target.
 
-**Every feature reads the project, where the document has one, and diagnostics are still checked per
+**Every feature reads the project, where the document has one, and diagnostics are checked per
 buffer.** Hover, definition and completion resolve names through a separate index built by lexing every
-source under the document's project root and folding its declarations — never a full compile — so a name
-declared in another file resolves, and a type declared there offers its members. Diagnostics use that
-same index, but only to stop the server claiming a name is undeclared when a sibling file declares it.
-The *checking* is still done on the buffer together with the standard library alone, so a diagnostic that
-needs the whole program merged across files is out of reach: an error only the larger program could
-raise — two sibling files contesting one name, for example — is not reported, and the build remains the
-authority.
+source under the document's project root and folding its declarations — a lexing pass, far lighter than
+a compile — so a name declared in another file resolves, and a type declared there offers its members.
+The index matches what the matching command compiles: for a `.maxon` document it holds the project's
+`.maxon` sources, and for a `.maxtest` document the project's `.maxtest` files as well, so a test file
+sees the helpers its sibling test files declare and a production source sees production sources only.
+Diagnostics use that same index for two corrections: a name a sibling file declares counts as declared,
+and a refusal that exists only because the buffer was compiled alone is dropped — an overload call, or a
+held-back parse error, whose argument derives from a call a sibling file declares. The *checking* runs
+on the buffer together with the standard library, so an error only the whole program merged across files
+could raise — two sibling files contesting one name, for example — is the build's to report, and the
+build remains the authority.
 
 **A document's uri may carry any scheme, and what the server can do with a document turns on the path
-that uri spells rather than on the scheme.** No scheme is refused, so an editor that forwards whatever
-uri a buffer carries is served. Document symbols, folding ranges, formatting, linked editing, rename,
-code actions and semantic tokens read the buffer alone and answer for every open document. The project
-half needs a path with a directory above it: a uri without one names no place in any project, so the
-document contributes no `maxon/listProjects` entry. An unsaved scratch buffer (`untitled:Untitled-1`) is
-checked and resolved against `stdlib/` and `runtime/` alone — the treatment a file inside those tiers
-gets. A uri that spells no filesystem path at all (`git://host/repo/file.maxon`) leaves hover, definition
-and completion with nothing beyond the buffer, and no diagnostics are published for it.
+that uri spells.** Every scheme is accepted, so an editor that forwards whatever uri a buffer carries is
+served. Document symbols, folding ranges, formatting, linked editing, rename, code actions and semantic
+tokens read the buffer alone and answer for every open document. The project half needs a path with a
+directory above it, and a document whose uri has one is the kind `maxon/listProjects` lists. An unsaved
+scratch buffer (`untitled:Untitled-1`) is checked and resolved against `stdlib/` and `runtime/` alone. A
+uri that spells a path outside the filesystem (`git://host/repo/file.maxon`) gets hover, definition and
+completion from the buffer alone, and diagnostics are published for filesystem documents only.
 
 **While a buffer is unsaved, some diagnostics are withheld.** As long as the buffer matches the file on
 disk, the server reports what a build of that file reports. Once it has been edited, diagnostics about
 the buffer's own text — syntax, tokens, literals — are still published immediately, while diagnostics
 that turn on what a declaration says are held back until the buffer matches disk again. That is what
 stops an editor inventing errors about names it cannot see, and it applies only when the buffer does use
-a name that only the project declares. This project view needs a workspace folder that contains the file:
-a file the client named no root over, and a file inside `stdlib/` or `runtime/`, get the per-buffer
+a name that only the project declares. This project view needs a workspace folder that contains the
+file, or a file inside `stdlib/` or `runtime/`; a file the client named no root over gets the per-buffer
 behaviour described below.
 
-**The project root is a ladder, and the client's workspace folders are one of its rungs.** A file inside
-the compiler's own `stdlib/` or `runtime/` gets those two tiers and nothing else, and a `runtime/` file is
-checked as the build checks tier source: its reserved names and `__Raw` calls are legal, its restrictions
-still apply, and a body no program reaches is not call-checked. Any other document is
-rooted at the nearest ancestor directory holding a `project.maxon`, searched no higher than the nearest
-root the client named that contains the document. Failing that it is rooted at that named root itself;
-failing that, at its own directory. **Every** entry of `workspaceFolders` is a root, and `rootUri` is
-read only when the folders name none — so a multi-root window has as many roots as it has folders, each
-deciding for the documents inside it and for no others. A client that sends no root, or one whose root is
-not a `file:` uri — what Remote-SSH, WSL, dev containers and Codespaces send — leaves the manifest search
-and the document's own directory. The manifest is used only as a marker of where a project begins — it is
-never read and never run.
+**The project root is a ladder, and the client's workspace folders are one of its rungs.** The compiler's
+own `stdlib/` and `runtime/` are one project each, rooted at the tier directory, which the server
+locates itself: every file inside a tier belongs to that tier's project, and a `runtime/` file is checked
+as the build checks tier source — its reserved names and `__Raw` calls are legal, its restrictions still
+apply, and a body no program reaches is exempt from the call checks. Any other document is rooted at the
+nearest ancestor directory holding a `.maxproj` file, searched up to the nearest root the client named
+that contains the document. Failing that it is rooted at that named root itself; failing that, at its
+own directory. **Every** entry of `workspaceFolders` is a root, and `rootUri` is read when the folders
+name none — so a multi-root window has as many roots as it has folders, each deciding for the documents
+inside it alone. A client that sends no root, or one whose root is a uri of another scheme than `file:` —
+what Remote-SSH, WSL, dev containers and Codespaces send — leaves the `.maxproj` search, unbounded, and
+the document's own directory. The `.maxproj` file marks where a project begins, and the server runs
+none of it. A `.maxproj` file inside another project's tree is published with
+[E2074](/docs/cli/error-codes/#e2074--nestedprojectfile), and the outer project's walk skips the
+directory holding it.
 
 **The roots are not fixed for the session.** The `initialize` response advertises
 `workspace.workspaceFolders` with `supported` and `changeNotifications` both true, and the server then
@@ -189,12 +197,13 @@ two files of one project are one entry, and two sibling projects are two:
 { "projects": [ { "rootPath": "/home/me/app", "isSingleFile": false, "fileCount": 12 } ] }
 ```
 
-`rootPath` is that root directory, as a filesystem path. `isSingleFile` is true where the ladder roots a
-document at its own file — a file inside `stdlib/` or `runtime/`, or one sitting at a volume root — and
-then `rootPath` is that file. A document resolves to a root only when its uri spells a filesystem path
-with a directory above it, so the list can name fewer projects than there are open documents.
-`fileCount` is the number of `.maxon` sources under that root — `*.test.maxon` and the manifest aside —
-and is **0** for a root whose corpus the server has yet to build. This request reads only the projects
+`rootPath` is that root directory, as a filesystem path; for a file of `stdlib/` or `runtime/` it is that
+tier directory. `isSingleFile` is true where the ladder roots a document at its own file — one sitting at
+a volume root — and then `rootPath` is that file. A document resolves to a root when its uri spells a
+filesystem path with a directory above it, so the list can name fewer projects than there are open
+documents. `fileCount` is the number of production `.maxon` sources under that root, whether the open
+document is a `.maxon` or a `.maxtest` file, and is **0** for a root whose corpus the server has yet to
+build. This request reads only the projects
 already built; the first hover, definition, completion or diagnostic that needs a project builds it, and
 the next answer carries the real count. The projects are listed in path order.
 
@@ -202,7 +211,10 @@ the next answer carries the real count. The projects are listed in path order.
 project: `loading: true` immediately before the build and `loading: false` immediately after it, on
 every outcome, and each `true` is followed by its `false` before the next build begins. A project is
 built the first time a hover, definition, completion or diagnostic needs it, and again once it has left
-the held projects; a build that yields no project is repeated by each request that needs it. `rootPath`
+the held projects; a build that yields no project is repeated by each request that needs it. A root is
+held as two views, the production sources and the sources with the test files, and each view's build is
+announced, so opening a `.maxtest` document in a project already loaded for a `.maxon` one announces
+the same `rootPath` again. `stdlib/` and `runtime/` are announced the same way, once each. `rootPath`
 is spelled exactly as `maxon/listProjects` reports that root. The VS Code status bar turns yellow while
 any project is loading.
 
@@ -213,5 +225,5 @@ any project is loading.
 ## Other editors
 
 Any editor with an LSP client can use the server. Configure it to start the command `maxon` with the
-argument `lsp-server` over stdio for files with the `.maxon` extension (language id `maxon`), and to
-send full-document synchronization.
+argument `lsp-server` over stdio for files with the `.maxon`, `.maxproj`, `.maxtasks` and `.maxtest`
+extensions (language id `maxon`), and to send full-document synchronization.

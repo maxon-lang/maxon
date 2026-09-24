@@ -1,0 +1,13 @@
+// rdata-order.maxtest — the `.rdata` section the backend pool emits does not depend on how many
+// workers lowered the functions that registered its content. Every function of the fixture registers
+// a jump table and two float islands, and a jump table's label and every island's offset are minted off
+// ONE counter in registration order: a pool that registered in arrival order would rename and move them
+// between two builds, and the images would differ in the section and in every load that names it.
+//
+// Two compiles in one file is the budget `test-command/reserved-name-refused.maxtest` prices against
+// the 5,000 ms deadline; a third case here would need its own file.
+
+test 'the rdata section is byte-identical at one processor and at the default'
+	let staged = stagedProgram("rdata-program", caseLabel: "rdata-order")
+	requireIdenticalImagesAcrossProcessorCounts(staged, programName: "rdata program")
+end 'the rdata section is byte-identical at one processor and at the default'

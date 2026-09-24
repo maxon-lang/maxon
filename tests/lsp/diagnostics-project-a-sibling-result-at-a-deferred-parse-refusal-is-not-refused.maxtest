@@ -1,0 +1,17 @@
+let ProjectDeferredRefusalDirName = "diagnostics-project-sibling-result-at-a-deferred-parse-refusal"
+let ProjectDeferredRefusalHelperFileName = "helper.maxon"
+let ProjectDeferredRefusalBufferFileName = "main.maxon"
+let ProjectDeferredRefusalHelperSource = "module function projectDeferredRefusalName() returns String\n\treturn \"green\"\nend 'projectDeferredRefusalName'\n"
+let ProjectDeferredRefusalBufferSource = "enum ProjectDeferredRefusalColour\n\tred\n\tgreen\nend 'ProjectDeferredRefusalColour'\n\nfunction main() returns ExitCode\n\tlet colour = try ProjectDeferredRefusalColour.fromName(projectDeferredRefusalName()) otherwise return 2\n\n\treturn 1 if colour == ProjectDeferredRefusalColour.green else 0\nend 'main'\n"
+
+test 'a sibling function result at a door the parse refuses by type is not refused'
+	let root = stagedProjectDiagnosticsRoot(ProjectDeferredRefusalDirName)
+	writeCorpusFile(root, fileName: ProjectDeferredRefusalHelperFileName, content: ProjectDeferredRefusalHelperSource)
+	writeCorpusFile(root, fileName: ProjectDeferredRefusalBufferFileName, content: ProjectDeferredRefusalBufferSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: ProjectDeferredRefusalBufferFileName, content: ProjectDeferredRefusalBufferSource)
+
+	discardOutsideCheckoutDir(root)
+
+	expectNoProjectDiagnostics(probe, note: "`projectDeferredRefusalName` is a `module function` the sibling file declares, returning `String`, and `main` hands its result to the buffer enum's `fromName`, whose argument must be a `String`. A `maxon build` of the staged project exits 0. The buffer compile cannot type the sibling's result, so the parse records its `expected String` refusal and reports it after the undefined-function error — and both are artefacts of compiling the buffer alone.")
+end 'a sibling function result at a door the parse refuses by type is not refused'

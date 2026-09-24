@@ -1,0 +1,17 @@
+let ProjectFieldOverloadDirName = "diagnostics-project-field-of-a-sibling-result-at-an-overload"
+let ProjectFieldOverloadHelperFileName = "helper.maxon"
+let ProjectFieldOverloadBufferFileName = "main.maxon"
+let ProjectFieldOverloadHelperSource = "export type ProjectFieldOverloadBox\n\texport var count as ExitCode\n\n\tstatic function create() returns ProjectFieldOverloadBox\n\t\treturn Self\{count: 0\}\n\tend 'create'\nend 'ProjectFieldOverloadBox'\n\nmodule function projectFieldOverloadBox() returns ProjectFieldOverloadBox\n\treturn ProjectFieldOverloadBox.create()\nend 'projectFieldOverloadBox'\n"
+let ProjectFieldOverloadBufferSource = "function projectFieldOverloadPick(x ExitCode) returns ExitCode\n\treturn x\nend 'projectFieldOverloadPick'\n\nfunction projectFieldOverloadPick(x String) returns ExitCode\n\treturn 1 if x.isEmpty() else 0\nend 'projectFieldOverloadPick'\n\nfunction main() returns ExitCode\n\tlet box = projectFieldOverloadBox()\n\treturn projectFieldOverloadPick(box.count)\nend 'main'\n"
+
+test 'a field of a binding holding a sibling function result, handed to an overloaded function, is not an opaque argument'
+	let root = stagedProjectDiagnosticsRoot(ProjectFieldOverloadDirName)
+	writeCorpusFile(root, fileName: ProjectFieldOverloadHelperFileName, content: ProjectFieldOverloadHelperSource)
+	writeCorpusFile(root, fileName: ProjectFieldOverloadBufferFileName, content: ProjectFieldOverloadBufferSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: ProjectFieldOverloadBufferFileName, content: ProjectFieldOverloadBufferSource)
+
+	discardOutsideCheckoutDir(root)
+
+	expectNoProjectDiagnostics(probe, note: "`projectFieldOverloadBox` is a `module function` the sibling file declares, returning the sibling's `ProjectFieldOverloadBox`, and `main` binds its result and hands the box's `count` to `projectFieldOverloadPick`, which the buffer overloads on `ExitCode` and `String`. A `maxon build` of the staged project exits 0.")
+end 'a field of a binding holding a sibling function result, handed to an overloaded function, is not an opaque argument'

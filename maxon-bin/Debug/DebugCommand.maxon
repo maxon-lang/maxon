@@ -355,7 +355,7 @@ function runDebuggerRequest(request DebuggerRequest) returns ExitCode
 		return refuseDebugCommand("there is no program at {request.exePath}")
 	end 'notThere'
 
-	let program = named.resolve(Directory.currentPath())
+	let program = named.anchoredAt(Directory.currentPath())
 
 	match debugImageCheckFor(program, spelled: request.exePath) 'checked'
 		refused(reason) then return refuseDebugCommand(reason)
@@ -537,7 +537,7 @@ function dumpSectionNames() returns String
 end 'dumpSectionNames'
 
 // ⛔ The wording of this refusal, the program name in it included, is pinned by
-// `tests/debug/dump-info-sections.test.maxon` — changing it fails that gate.
+// `tests/debug/dump-info-sections.maxtest` — changing it fails that gate.
 function refuseUnknownSection(name String) returns ExitCode
 	printError("maxon debug {DumpInfoOption}: '{name}' is not a section ({dumpSectionNames()}).\n")
 
@@ -979,7 +979,7 @@ function decodedDigit(code AsciiValue) returns DigitParse
 end 'decodedDigit'
 
 // The ASCII runs a hex digit comes from, and the value the letters start at. Spelled as numbers rather
-// than as character literals for `tests/debug/sidecar-dump.test.maxon`'s stated reason: a character
+// than as character literals for `tests/debug/sidecar-dump.maxtest`'s stated reason: a character
 // literal RECEIVER makes the resolver lose the declarations that follow it.
 //
 // Typed as stdlib's `AsciiValue` and NOT a local alias over the same range: these bound a code that comes

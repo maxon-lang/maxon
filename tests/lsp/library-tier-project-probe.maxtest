@@ -1,0 +1,148 @@
+let LibraryTierStdlibDirName = "stdlib"
+let LibraryTierRuntimeDirName = "runtime"
+let LibraryTierLineSeparator = "\n"
+let LibraryTierPathSlash = "/"
+let LibraryTierUnreportedSession = "the session ended without saying how"
+
+let LibraryTierFilePathFileName = "FilePath.maxon"
+let LibraryTierFilePathLine = "\tstatic function normalizeSeparators(path String) returns String"
+let LibraryTierPrintFileName = "Print.maxon"
+let LibraryTierPrintLine = "public function print(value String)"
+let LibraryTierClockFileName = "Clock.maxon"
+let LibraryTierClockLine = "module function __uptime_ms() returns MachineWord"
+let LibraryTierStringName = "String"
+let LibraryTierMachineWordName = "MachineWord"
+
+let LibraryTierSingleFileCount = 1 as JsonInteger
+
+export union LibraryTierSession
+	observed(projects ListProjectsResult, notices ProjectLoadingNoticeArray)
+	broke(detail String)
+end 'LibraryTierSession'
+
+export type LibraryTierDocument
+	module let uri as String
+	module let content as String
+	module let line as LspCoordinate
+	module let character as LspCoordinate
+	export let tierDirName as String
+
+	static function at(tierDirName String, fileName String, lineNeedle String, name String) returns LibraryTierDocument
+		let file = Directory.currentPath().join(tierDirName).join(fileName)
+		let content = try File.readText(file) otherwise panic("library tier project: could not read {file.toString()}, which an editor opening it would have sent as the buffer's text")
+		var line = 0 as LspCoordinate
+
+		for candidate in content.split(LibraryTierLineSeparator) 'eachLine'
+			if candidate.startsWith(lineNeedle) 'thisOne'
+				let before = try candidate.split(name).get(0) otherwise panic("library tier project: the line of {file.toString()} beginning '{lineNeedle}' was split on '{name}', which it holds")
+
+				return Self{uri: fileUriOf(file), content: content, line: line, character: before.count() as LspCoordinate, tierDirName: tierDirName}
+			end 'thisOne'
+
+			line = line + 1
+		end 'eachLine'
+
+		panic("library tier project: no line of {file.toString()} begins with '{lineNeedle}'")
+	end 'at'
+end 'LibraryTierDocument'
+
+export typealias LibraryTierDocumentArray = Array with LibraryTierDocument
+
+export function libraryTierFilePathDocument() returns LibraryTierDocument
+	return LibraryTierDocument.at(LibraryTierStdlibDirName, fileName: LibraryTierFilePathFileName, lineNeedle: LibraryTierFilePathLine, name: LibraryTierStringName)
+end 'libraryTierFilePathDocument'
+
+export function libraryTierPrintDocument() returns LibraryTierDocument
+	return LibraryTierDocument.at(LibraryTierStdlibDirName, fileName: LibraryTierPrintFileName, lineNeedle: LibraryTierPrintLine, name: LibraryTierStringName)
+end 'libraryTierPrintDocument'
+
+export function libraryTierClockDocument() returns LibraryTierDocument
+	return LibraryTierDocument.at(LibraryTierRuntimeDirName, fileName: LibraryTierClockFileName, lineNeedle: LibraryTierClockLine, name: LibraryTierMachineWordName)
+end 'libraryTierClockDocument'
+
+export function libraryTierDocuments(first LibraryTierDocument) returns LibraryTierDocumentArray
+	var documents = LibraryTierDocumentArray.create()
+	documents.push(first)
+
+	return documents
+end 'libraryTierDocuments'
+
+export function libraryTierDocumentPair(first LibraryTierDocument, second LibraryTierDocument) returns LibraryTierDocumentArray
+	var documents = libraryTierDocuments(first)
+	documents.push(second)
+
+	return documents
+end 'libraryTierDocumentPair'
+
+export function libraryTierSession(documents LibraryTierDocumentArray) returns LibraryTierSession
+	var client = LspClient.start()
+	let session = collectLibraryTierSession(client, documents: documents)
+	client.release()
+
+	return session
+end 'libraryTierSession'
+
+function collectLibraryTierSession(client LspClient, documents LibraryTierDocumentArray) returns LibraryTierSession
+	var session = LibraryTierSession.broke(LibraryTierUnreportedSession)
+
+	try 'session'
+		_ = client.initializeAtWorkspaceFolders(projectRootsFolders(Directory.currentPath()))
+		client.initialized()
+
+		for document in documents 'eachDocument'
+			client.openDocument(document.uri, content: document.content)
+			_ = client.definition(document.uri, line: document.line, character: document.character)
+		end 'eachDocument'
+
+		let notices = client.takeProjectLoadingNotices()
+		session = LibraryTierSession.observed(client.listProjects(), notices: notices)
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed or
+				malformedResponse or
+				serverRefused then session = LibraryTierSession.broke(e.explained())
+		end 'reason'
+	end 'failed'
+
+	return session
+end 'collectLibraryTierSession'
+
+export function libraryTierProjects(session LibraryTierSession) returns ListProjectsResult throws TestFailure
+	match session 'session'
+		observed(projects, _) then return projects
+		broke(detail) then try Expect.fail("the session broke before `maxon/listProjects` answered: {detail}")
+	end 'session'
+
+	panic("library tier project: the `broke` arm always throws, so this line is unreachable")
+end 'libraryTierProjects'
+
+export function libraryTierNotices(session LibraryTierSession) returns ProjectLoadingNoticeArray throws TestFailure
+	match session 'session'
+		observed(_, notices) then return notices
+		broke(detail) then try Expect.fail("the session broke before the `maxon/projectLoading` notices could be read: {detail}")
+	end 'session'
+
+	panic("library tier project: the `broke` arm always throws, so this line is unreachable")
+end 'libraryTierNotices'
+
+export function libraryTierDirTail(document LibraryTierDocument) returns String
+	return "{LibraryTierPathSlash}{document.tierDirName}"
+end 'libraryTierDirTail'
+
+export function requireTheLibraryTierProject(project ProjectEntry, document LibraryTierDocument, note String) throws TestFailure
+	let expectedTail = libraryTierDirTail(document)
+
+	try Expect.isTrue(foldedRootPath(project.rootPath).endsWith(expectedTail), message: "{note} The project is rooted at {project.rootPath}, not at the `{document.tierDirName}/` directory: a library tier is ONE project, and a root naming a source file files every library document as a program of its own.")
+	try Expect.isFalse(project.isSingleFile, message: "{note} The `{document.tierDirName}/` project was answered as a SINGLE FILE, although it is the whole tier.")
+	try Expect.isTrue(project.fileCount > LibraryTierSingleFileCount, message: "{note} The `{document.tierDirName}/` project reported {project.fileCount} files after a cross-file request had built it; the tier holds many.")
+end 'requireTheLibraryTierProject'
+
+export function renderedLibraryTierNotices(notices ProjectLoadingNoticeArray) returns String
+	var rendered = ""
+
+	for notice in notices 'eachNotice'
+		rendered.append("(rootPath: {notice.rootPath}, loading: {notice.loading})")
+	end 'eachNotice'
+
+	return rendered
+end 'renderedLibraryTierNotices'

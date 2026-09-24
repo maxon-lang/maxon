@@ -1,0 +1,32 @@
+// cache-clear-keeps-what-maxon-did-not-put-there.maxtest - a clear removes the directory Maxon owns
+// under the root the caller named, and NOTHING ELSE in that root.
+//
+// ⭐⭐ **`MAXON_RUN_CACHE_ROOT` MAY NAME A DIRECTORY THAT IS ALREADY SOMEBODY'S.** A build server points it
+// at a shared scratch area, a developer at their own; a clear that emptied the root itself would delete
+// files it never wrote, and the caller finds out afterwards. What Maxon may remove is what Maxon created.
+
+let CaseDirName = "cache-clear-keeps-foreign"
+let ForeignFileName = "not-maxons.txt"
+let ForeignFileContent = "a file the caller put in the directory it named"
+
+test 'cache clear keeps a file Maxon did not write into the root it was given'
+	let dir = freshCaseDir(CaseDirName)
+	let cacheRoot = cacheRootIn(dir)
+
+	let foreign = cacheRoot.join(ForeignFileName)
+	try File.writeText(foreign, content: ForeignFileContent) otherwise panic("cache-clear-keeps-foreign: the gate could not run - could not write {foreign.toString()}")
+
+	publishCachedBuild(dir, cacheRoot: cacheRoot)
+
+	let cleared = runWithCacheRoot([CacheCommandWord, CacheClearVerb], cacheRoot: cacheRoot, workingDirectory: dir)
+	let said = "It wrote to stdout: {cleared.stdout} and to stderr: {cleared.stderr}"
+	Expect.equal(cleared.exitCode() as AssertedInt, expected: 0, message: "`maxon {CacheCommandWord} {CacheClearVerb}` did not succeed. {said}")
+
+	Expect.isTrue(Directory.isDirectory(cacheRoot), message: "`maxon {CacheCommandWord} {CacheClearVerb}` removed {cacheRoot.toString()} itself, which the caller named through {CacheRootVariable}. {said}")
+	Expect.isTrue(File.exists(foreign), message: "`maxon {CacheCommandWord} {CacheClearVerb}` deleted {foreign.toString()}, which Maxon never wrote. {said}")
+
+	let kept = try File.readText(foreign) otherwise ""
+	Expect.equal(kept, expected: ForeignFileContent, message: "`maxon {CacheCommandWord} {CacheClearVerb}` changed the contents of {foreign.toString()}, which Maxon never wrote. {said}")
+
+	Expect.isFalse(Directory.exists(cacheRoot.join(CacheVendorDirName)), message: "`maxon {CacheCommandWord} {CacheClearVerb}` kept the foreign file and its own directory with it, so it removed nothing at all. {said}")
+end 'cache clear keeps a file Maxon did not write into the root it was given'

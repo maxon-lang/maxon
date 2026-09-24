@@ -70,8 +70,8 @@ exported`).
 nothing outside the declaring file refers to it, the compiler reports **E3092** (`exported function
 'geometry.perimeter' is never referenced outside its declaring file`), and when every use is inside the
 declaring directory it suggests `module` (**E3093**). These checks run on every program that otherwise
-compiles, a one-file program included. The entry point and every task a `tasks.maxon` declares are
-exempt, because nothing in the source calls them. A type an exported or `module` signature names is exempt while that function is itself
+compiles, a one-file program included. The entry point, every target a `.maxproj` file declares and every
+task a `.maxtasks` file declares are exempt, because the driver calls them by name. A type an exported or `module` signature names is exempt while that function is itself
 referenced from another file: the signature requires the wider tier, so dropping the modifier would only
 trade E3092 for [E3167](/docs/cli/error-codes/#e3167--semanticsignaturetypelessvisiblethanfunction).
 
@@ -154,24 +154,25 @@ naming it from another file is **E2003**.
 
 ## Multi-Project Workspaces
 
-Several projects can share a workspace. Each is a directory, and the directory you build is the one that is
-compiled:
+Several projects can share a workspace. Each is a directory marked by its own `.maxproj` file, and the
+directory you build is the one that is compiled:
 
 ```text
 workspace/
 ├── project-a/
-│   ├── project.maxon    # how project A is built
+│   ├── project-a.maxproj    # how project A is built
 │   └── main.maxon
 └── project-b/
-    ├── project.maxon    # how project B is built
+    ├── project-b.maxproj    # how project B is built
     └── main.maxon
 ```
 
-See [Build System](/docs/language/build-system/) and [Project Structure](/docs/cli/project-structure/) for
-what a project directory contains.
+The projects sit side by side: a `.maxproj` file inside another project's tree is **E2074**. See
+[Build System](/docs/language/build-system/) and [Project Structure](/docs/cli/project-structure/) for what a
+project directory contains.
 
-**The language server checks open files.** It checks a document together with the standard library, not with the sibling files a
-`maxon build` of its directory would compile. It does read the rest of the project to find out which names
-those files declare, so it no longer reports an error the build does not — but it can still miss one: a
-diagnostic that only the merged program raises is out of reach, and while a buffer is unsaved the
-name-dependent diagnostics are withheld until it matches disk again. The build remains the authority.
+**The language server checks open files.** It checks a document together with the standard library, and
+reads the rest of the project to learn which names its other files declare, so it reports what the build
+reports about the names a buffer uses. A diagnostic that only the merged program raises is the build's to
+report, and while a buffer is unsaved the name-dependent diagnostics are withheld until it matches disk
+again. The build remains the authority.

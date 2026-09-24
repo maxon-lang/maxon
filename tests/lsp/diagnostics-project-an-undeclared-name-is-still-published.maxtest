@@ -1,0 +1,33 @@
+// diagnostics-project-an-undeclared-name-is-still-published.maxtest — a name NO file of the project
+// declares is still reported, with its own code, at its own position.
+//
+// ⭐⭐ **THIS IS WHAT STOPS THE PROJECT-WIDE RULE BECOMING A BLANKET MUTE.** Suppressing a diagnostic that
+// is genuinely about this buffer HIDES A REAL ERROR, which is a worse outcome than the false squiggle the
+// two sibling cases remove — so a project that has a corpus, and a buffer naming something neither the
+// corpus nor the buffer declares, must still publish it. `diagnostics-scope.maxtest`'s second test
+// exists for the identical reason against a different predicate.
+//
+// The staged project has a real sibling file, so the corpus is genuinely consulted and genuinely lacks the
+// name; `maxon build` of it reports this one diagnostic and no other. The session, the staging and the
+// assertions are `diagnostics-project-probe.maxtest`'s.
+
+let ProjectUndeclaredNameDirName = "diagnostics-project-undeclared-name"
+let ProjectUndeclaredNameHelperFileName = "helper.maxon"
+let ProjectUndeclaredNameBufferFileName = "main.maxon"
+let ProjectUndeclaredNameHelperSource = "export function projectUndeclaredHelper() returns ExitCode\n\treturn 0\nend 'projectUndeclaredHelper'\n"
+let ProjectUndeclaredNameBufferSource = "function main() returns ExitCode\n\tlet n = 1 as ProjectUndeclaredNowhere\n\treturn n as ExitCode\nend 'main'\n"
+let ProjectUndeclaredNameCode = "E3011"
+
+test 'a name no file of the project declares is still published'
+	let root = stagedProjectDiagnosticsRoot(ProjectUndeclaredNameDirName)
+	writeCorpusFile(root, fileName: ProjectUndeclaredNameHelperFileName, content: ProjectUndeclaredNameHelperSource)
+	writeCorpusFile(root, fileName: ProjectUndeclaredNameBufferFileName, content: ProjectUndeclaredNameBufferSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: ProjectUndeclaredNameBufferFileName, content: ProjectUndeclaredNameBufferSource)
+
+	discardOutsideCheckoutDir(root)
+
+	let reported = onlyProjectDiagnostic(probe, note: "`ProjectUndeclaredNowhere` is declared nowhere — not in the buffer, not in the sibling file, not in `stdlib/`. A `maxon build` of this very project reports it and nothing else.")
+
+	Expect.equal(reported.code, expected: ProjectUndeclaredNameCode, message: "a typo is exactly what an editor is for. A publish of nothing here would mean the project-wide rule had become `if a name is unknown, say nothing`, which hides every misspelling in every file — a far worse outcome than the false squiggle the rule was written to remove.")
+end 'a name no file of the project declares is still published'

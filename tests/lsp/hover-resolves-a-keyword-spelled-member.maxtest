@@ -1,0 +1,18 @@
+// hover-resolves-a-keyword-spelled-member.maxtest — a cursor on `from` in `FilePath.from("x")`
+// hovers as the `public static function from` that `stdlib/FilePath.maxon` declares. `from` is BOTH
+// a lexer keyword and a declared stdlib member, so the case pins the generic "Maxon language
+// keyword." OUT as well as the declaration in: a resolver that takes the reserved-word arm before
+// member resolution is confidently wrong rather than silent. The source is the one that
+// `definition-crosses-into-the-stdlib.maxtest` drives; the session is `hover-probe`'s.
+
+let HoverKeywordMemberLine = 1 as LspCoordinate
+let HoverKeywordMemberCharacter = 23 as LspCoordinate
+let HoverKeywordMemberWrongAnswer = "Maxon language keyword."
+
+test 'hover resolves a keyword-spelled member'
+	let rendering = hoverRendering(corpusFilePathSource(), line: HoverKeywordMemberLine, character: HoverKeywordMemberCharacter)
+
+	Expect.isFalse(rendering.contains(HoverKeywordMemberWrongAnswer), message: "the hover over `from` in `FilePath.from(\"x\")` answered the generic keyword note. `from` is a lexer keyword AND a declared stdlib member, so a resolver that takes the keyword arm before member resolution answers the wrong question — and it is confidently wrong rather than silent. It rendered: {rendering}")
+
+	Expect.contains(rendering, needle: "function from", message: "the hover over `from` in `FilePath.from(\"x\")` did not render the declaration `stdlib/FilePath.maxon` holds for it. `specs/keyword-as-a-declared-name.md` is the rule the language admits this name under.")
+end 'hover resolves a keyword-spelled member'

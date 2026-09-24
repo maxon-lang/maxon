@@ -2,7 +2,7 @@
 //
 // ⭐⭐ **THE BUFFER'S OWN TOKEN STREAM ANSWERS FIRST, AND THAT IS THE DESIGN RATHER THAN A SHORTCUT.**
 // An editor asks for a definition while the buffer is mid-edit, so the text a server holds usually does
-// not compile — and every fixture in `tests/lsp/definition-*.test.maxon` is such a buffer (`returns
+// not compile — and every fixture in `tests/lsp/definition-*.maxtest` is such a buffer (`returns
 // int`, `var x int`: E3005 and E2010 respectively). A resolver built on `loadProject` +
 // `queryAllModule` would answer nothing for exactly the buffers an editor asks about. `tokenize`
 // succeeds on all of them, so the names, the keywords and the block labels are all there.
@@ -14,7 +14,7 @@
 // ⇒ **A NAME NOBODY DECLARES THROWS RATHER THAN RESOLVING TO A POSITION**, because an answer carrying
 // `0:0` is indistinguishable from a real declaration at `0:0` — and the same rule holds one layer up,
 // where LSP's own spelling for "nothing here" is a `null` result. `definition on keyword returns nothing`
-// in `tests/lsp/definition-scope.test.maxon` is what says so from the client's side.
+// in `tests/lsp/definition-scope.maxtest` is what says so from the client's side.
 
 module function definitionServedMethods() returns LspMethodArray
 	var served = LspMethodArray.create()
@@ -336,7 +336,7 @@ extension Project
 	//
 	// ⚠ And an index position is not in the unit an answer is spelled in. `lspSpanRangeNode` converts a
 	// byte span to LSP's UTF-16 coordinates, while the index holds 1-based compiler coordinates; a second
-	// converter here is the defect `tests/lsp/position-characters.test.maxon` exists to catch.
+	// converter here is the defect `tests/lsp/position-characters.maxtest` exists to catch.
 	module function definitionInTheCorpus(corpus LspCorpus, text String, tokens TokenArray, cursor TokenIndex) returns LspAnswer
 		let declFile = try lspDeclaringFileOfTheCursor(corpus, text: text, tokens: tokens, keywords: self.keywords, cursor: cursor) otherwise return LspAnswer.nothing()
 		return self.definitionInAnotherFile(declFile, name: lspTokenAt(tokens, index: cursor).value)

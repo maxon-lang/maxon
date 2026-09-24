@@ -17,7 +17,7 @@ The examples below use output from real runs; addresses, counts and timings vary
 ## The `.mxdbg` debug-info sidecar
 
 Every `maxon build` writes a sidecar named after the full output file, beside it, unless you pass
-`--no-debug-info` or the manifest sets `debugInfo: false`:
+`--no-debug-info` or the described build sets `debugInfo: false`:
 
 ```text
 [CMP] INFO: Wrote 35598 bytes of debug info to app.exe.mxdbg

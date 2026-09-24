@@ -43,7 +43,7 @@ module function publishBufferDiagnostics(uri String, text String)
 	let path = try lspDocumentPathOrThrow(uri) otherwise return
 
 	match lspDocumentProject(path, content: text) 'buffer'
-		loaded(project) then project.publishDocumentDiagnostics(uri, path: path, text: text)
+		loaded(project, tiers) then project.publishDocumentDiagnostics(uri, reader: LspReaderSearch.of(path, tiers: tiers), path: path, text: text)
 		unavailable then return
 	end 'buffer'
 end 'publishBufferDiagnostics'
@@ -109,20 +109,25 @@ extension Project
 		return outcome
 	end 'compileBufferCaptured'
 
-	function publishDocumentDiagnostics(uri String, path FilePath, text String)
+	function publishDocumentDiagnostics(uri String, reader LspReaderSearch, path FilePath, text String)
 		let tokens = lspDocumentTokens(text, keywords: self.keywords)
 
-		writeDocumentDiagnostics(uri, text: text, tokens: tokens, diagnostics: self.documentDiagnostics(path, text: text, tokens: tokens), path: path)
+		writeDocumentDiagnostics(uri, text: text, tokens: tokens, diagnostics: self.documentDiagnostics(reader, path: path, text: text, tokens: tokens), path: path)
 	end 'publishDocumentDiagnostics'
 
-	function documentDiagnostics(path FilePath, text String, tokens TokenArray) returns DiagnosticArray
-		if not clientNamedARootOver(path) 'noStatedWorkspace'
+	function documentDiagnostics(reader LspReaderSearch, path FilePath, text String, tokens TokenArray) returns DiagnosticArray
+		match projectLayoutOf(reader) 'layout'
+			nestedIn(outer) then return [nestedProjectFileDiagnostic(outer, nested: path)]
+			standsAlone then break 'layout'
+		end 'layout'
+
+		if not lspProjectIsStated(reader) 'noStatedWorkspace'
 			return self.checkedDiagnostics()
 		end 'noStatedWorkspace'
 
 		match self.bufferParse(path) 'parse'
-			compilable then return self.correctedCheck(path, text: text, tokens: tokens)
-			refused(reported) then return self.correctedRefusal(reported, buffer: path, text: text, tokens: tokens)
+			compilable then return self.correctedCheck(reader, buffer: path, text: text, tokens: tokens)
+			refused(reported) then return self.correctedRefusal(reported, reader: reader, buffer: path, text: text, tokens: tokens)
 		end 'parse'
 	end 'documentDiagnostics'
 
@@ -132,18 +137,18 @@ extension Project
 		return self.diagnostics.clone()
 	end 'checkedDiagnostics'
 
-	function correctedCheck(buffer FilePath, text String, tokens TokenArray) returns DiagnosticArray
+	function correctedCheck(reader LspReaderSearch, buffer FilePath, text String, tokens TokenArray) returns DiagnosticArray
 		let reported = thisDocumentsOwn(self.checkedDiagnostics(), path: buffer)
 
 		if reported.isEmpty() 'nothingToExplain'
 			return reported
 		end 'nothingToExplain'
 
-		return self.explainedByTheCorpus(reported, buffer: buffer, text: text, tokens: tokens)
+		return self.explainedByTheCorpus(reported, reader: reader, buffer: buffer, text: text, tokens: tokens)
 	end 'correctedCheck'
 
-	function explainedByTheCorpus(reported DiagnosticArray, buffer FilePath, text String, tokens TokenArray) returns DiagnosticArray
-		match lspProjectCorpus(buffer) 'corpus'
+	function explainedByTheCorpus(reported DiagnosticArray, reader LspReaderSearch, buffer FilePath, text String, tokens TokenArray) returns DiagnosticArray
+		match lspProjectCorpus(reader) 'corpus'
 			loaded(_, signatures, readerPath) then return self.unsuppressedRefusals(reported, signatures: signatures, reader: readerPath, buffer: buffer, text: text, tokens: tokens, road: RefusalRoad.aCleanParsesCheck)
 			unavailable then return reported
 		end 'corpus'
@@ -167,8 +172,8 @@ extension Project
 		return BufferParse.refused(thisDocumentsOwn(reported, path: path))
 	end 'bufferParse'
 
-	function correctedRefusal(reported DiagnosticArray, buffer FilePath, text String, tokens TokenArray) returns DiagnosticArray
-		match lspProjectCorpus(buffer) 'corpus'
+	function correctedRefusal(reported DiagnosticArray, reader LspReaderSearch, buffer FilePath, text String, tokens TokenArray) returns DiagnosticArray
+		match lspProjectCorpus(reader) 'corpus'
 			loaded(corpus, signatures, readerPath) then return self.refusalCorrectedBy(corpus, signatures: signatures, reader: readerPath, buffer: buffer, reported: reported, text: text, tokens: tokens)
 			unavailable then return reported
 		end 'corpus'
@@ -315,11 +320,38 @@ end 'aNameOnlyTheProjectDeclares'
 // ⚠ No confident subject means PUBLISH: a diagnostic nothing can be attributed to is shown rather than
 // dropped, because a suppression that guesses hides a real error and a squiggle that survives does not.
 function theProjectDeclaresTheRefusedName(diagnostic Diagnostic, verdicts SiblingVerdictMap, buffer FilePath, document HoverDocument, tokens TokenArray, corpus ProgramSignatures, reader FilePath, own ProgramSignatures) returns bool
-	match diagnosticSubject(diagnostic, tokens: tokens) 'subject'
+	match diagnostic.cause 'cause'
+		standsAlone then return theProjectDeclaresTheSubject(diagnosticSubject(diagnostic, tokens: tokens), verdicts: verdicts, buffer: buffer, document: document, corpus: corpus, reader: reader, own: own)
+		undeclaredCalls(calls, filePath) then return theProjectDeclaresEveryCallee(calls, filePath: filePath, verdicts: verdicts, buffer: buffer, document: document, tokens: tokens, corpus: corpus, reader: reader, own: own)
+	end 'cause'
+end 'theProjectDeclaresTheRefusedName'
+
+// Each undeclared call is judged exactly as the E3004 at that call is, and one that no sibling
+// declares keeps the diagnostic.
+function theProjectDeclaresEveryCallee(calls SourceRangeArray, filePath FilePath, verdicts SiblingVerdictMap, buffer FilePath, document HoverDocument, tokens TokenArray, corpus ProgramSignatures, reader FilePath, own ProgramSignatures) returns bool
+	if not namesTheSameFile(filePath, other: buffer) 'anotherFilesCalls'
+		return false
+	end 'anotherFilesCalls'
+
+	if calls.isEmpty() 'noCallToAttribute'
+		panic("theProjectDeclaresEveryCallee: a diagnostic caused by undeclared calls names none of them — `SemanticCheck.deferralCause` answers `standsAlone` rather than an empty list")
+	end 'noCallToAttribute'
+
+	for call in calls 'eachUndeclaredCall'
+		if not theProjectDeclaresTheSubject(subjectAnchoredAt(tokens, line: call.line, column: call.column), verdicts: verdicts, buffer: buffer, document: document, corpus: corpus, reader: reader, own: own) 'declaredNowhereElse'
+			return false
+		end 'declaredNowhereElse'
+	end 'eachUndeclaredCall'
+
+	return true
+end 'theProjectDeclaresEveryCallee'
+
+function theProjectDeclaresTheSubject(subject DiagnosticSubject, verdicts SiblingVerdictMap, buffer FilePath, document HoverDocument, corpus ProgramSignatures, reader FilePath, own ProgramSignatures) returns bool
+	match subject 'subject'
 		unattributable then return false
 		named(name, index) then return settledVerdictFor(name, verdicts: verdicts, index: index, buffer: buffer, document: document, corpus: corpus, reader: reader, own: own)
 	end 'subject'
-end 'theProjectDeclaresTheRefusedName'
+end 'theProjectDeclaresTheSubject'
 
 function settledVerdictFor(name ByteArray, verdicts SiblingVerdictMap, index TokenIndex, buffer FilePath, document HoverDocument, corpus ProgramSignatures, reader FilePath, own ProgramSignatures) returns bool
 	if let settled = try verdicts.get(name) 'askedAlready'
@@ -397,12 +429,16 @@ function diagnosticSubject(diagnostic Diagnostic, tokens TokenArray) returns Dia
 		return reconstructedUnknownTypeSubject(diagnostic, tokens: tokens)
 	end 'noAnchorToReadFrom'
 
+	return subjectAnchoredAt(tokens, line: diagnostic.line, column: diagnostic.column)
+end 'diagnosticSubject'
+
+function subjectAnchoredAt(tokens TokenArray, line LineNumber, column ColumnNumber) returns DiagnosticSubject
 	for (iter, token) in tokens.withIterator() 'eachToken'
-		if token.line > diagnostic.line 'pastTheAnchorsLine'
+		if token.line > line 'pastTheAnchorsLine'
 			break
 		end 'pastTheAnchorsLine'
 
-		if token.line != diagnostic.line or token.column != diagnostic.column 'notTheAnchor'
+		if token.line != line or token.column != column 'notTheAnchor'
 			continue
 		end 'notTheAnchor'
 
@@ -410,7 +446,7 @@ function diagnosticSubject(diagnostic Diagnostic, tokens TokenArray) returns Dia
 	end 'eachToken'
 
 	return DiagnosticSubject.unattributable
-end 'diagnosticSubject'
+end 'subjectAnchoredAt'
 
 function reconstructedUnknownTypeSubject(diagnostic Diagnostic, tokens TokenArray) returns DiagnosticSubject
 	match quotedNameIn(diagnostic.message) 'quoted'
@@ -523,8 +559,8 @@ function diagnosticNode(doc JsonDoc, diagnostic Diagnostic, source String, index
 	item.putNode(LspRangeKey, value: lspSpanRangeNode(doc, source: source, index: index, span: diagnosticSpan(diagnostic, source: source, index: index, tokens: tokens)))
 	item.put(DiagnosticSeverityKey, value: JsonNode.numberNode(LspErrorSeverity))
 
-	// ⭐ THE CODE, because it is the field a Maxon author can act on: `E3005` is greppable against
-	// `docs/error-codes.txt`, where the message alone is not. `rawValue` is the registry's own spelling
+	// The code, because it is the field a Maxon author can act on: `E3005` can be looked up in the
+	// error code reference, where the message alone cannot. `rawValue` is the registry's own spelling
 	// of it, so no source file writes the number down a second time.
 	item.put(DiagnosticCodeKey, value: JsonNode.stringNode(diagnostic.code.rawValue))
 	item.put(DiagnosticSourceKey, value: JsonNode.stringNode(DiagnosticSourceName))

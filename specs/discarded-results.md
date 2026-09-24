@@ -1048,7 +1048,7 @@ end 'main'
 A bare call to a pure throwing function, written as a statement in a `test` body, takes the test's implied
 handler and still discards the value it produced. The discard is refused exactly as it is outside a test.
 ```maxon
-// --- file: suite.test.maxon
+// --- file: suite.maxtest
 typealias Integer = int(i64.min to i64.max)
 
 enum ParseError implements Error

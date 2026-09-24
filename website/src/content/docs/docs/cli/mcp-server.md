@@ -47,7 +47,7 @@ maxon mcp-server --dev   # also exposes the compiler-development tools
 
 | Option | Description |
 |--------|-------------|
-| `--dev` | Enable the tools for working on the Maxon compiler: `run_spec_test`, `run_scale_test`, `spec_test_outcome`, the `repoRoot` argument of `build`, `run`, `test` and `fmt`, and the `from` argument of `build` |
+| `--dev` | Enable the tools for working on the Maxon compiler: `run_spec_test`, `run_scale_test`, `spec_test_outcome`, the `repoRoot` argument of `build`, `execute`, `test` and `fmt`, and the `from` argument of `build` |
 
 The server reads newline-delimited JSON-RPC 2.0 messages on stdin and writes responses to stdout. It
 implements `initialize` (protocol version `2024-11-05`, server name `maxon`), `tools/list` and
@@ -55,7 +55,7 @@ implements `initialize` (protocol version `2024-11-05`, server name `maxon`), `t
 
 | Mode | Invocation | Tools |
 |------|------------|-------|
-| Standard | `maxon mcp-server` | 8: `build`, `run`, `test`, `fmt`, `check`, `dump_ir`, `lookup_error_code`, `info` |
+| Standard | `maxon mcp-server` | 8: `build`, `execute`, `test`, `fmt`, `check`, `dump_ir`, `lookup_error_code`, `info` |
 | Developer | `maxon mcp-server --dev` | 11: the standard tools plus `run_spec_test`, `run_scale_test`, `spec_test_outcome` |
 
 **An argument a tool does not declare is refused** with `invalidParams`, never ignored, so the arguments
@@ -70,17 +70,17 @@ under each. Every tool acts in the server's working directory, which is normally
 
 ### `build`
 
-Compiles a source file, a directory, a manifest target or an inline snippet, as `maxon build` does.
+Compiles a source file, a directory, a project target or an inline snippet, as `maxon build` does.
 
 | Argument | Type | Description |
 |----------|------|-------------|
-| `path` | string | Source file or project directory. Omitted, the working directory's `project.maxon` runs. |
+| `path` | string | Source file or project directory. Omitted, the working directory's `.maxproj` file builds its target. |
 | `source` | string | Inline Maxon source to build instead of a path. Give `path` or `source`, not both. |
 | `output` | string | Output executable path (`--output=<path>`) |
-| `target` | string | A target such as `wasm32-wasi` (a value containing `-` is passed as `--target=`), or the name of a target declared in `project.maxon` (a bare word) |
+| `target` | string | A target triple such as `wasm32-wasi`, passed as `--target=` when it is one of the five; any other value names a target of the `.maxproj` file, each `_` written `-` |
 | `emitIr` | boolean | Also write the Target IR (`--emit-ir`) |
 
-### `run`
+### `execute`
 
 Compiles, or reuses a cached build of, a program and runs it, as `maxon execute` does.
 
@@ -165,8 +165,8 @@ These tools are for working on the Maxon compiler itself, in a checkout of its r
 
 ### Which tree, and which compiler
 
-One server can serve several checkouts or worktrees, so every developer tool, and `build`, `run`, `test` and
-`fmt` in developer mode, takes a `repoRoot` argument:
+One server can serve several checkouts or worktrees, so every developer tool, and `build`, `execute`, `test`
+and `fmt` in developer mode, takes a `repoRoot` argument:
 
 | Argument | Type | Description |
 |----------|------|-------------|
@@ -178,7 +178,7 @@ One server can serve several checkouts or worktrees, so every developer tool, an
   the compiler finds its standard library by walking up from its own executable. A tree whose compiler
   has not been built is refused, naming the `build` tool.
 - **Omitted, the default differs by tool.** `build`, `run_spec_test`, `run_scale_test` and
-  `spec_test_outcome` act on the checkout the server's own compiler sits in. `run`, `test` and `fmt` act in
+  `spec_test_outcome` act on the checkout the server's own compiler sits in. `execute`, `test` and `fmt` act in
   the host's working directory, driven by the server's own compiler and naming no tree — their `path`
   arguments are the caller's, and are resolved against the caller's directory.
 - **An answer echoes the `repoRoot` it used** whenever it acted on a named tree, on success and on refusal.

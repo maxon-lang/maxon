@@ -96,7 +96,7 @@ the checkout, never the `maxon` on your PATH.
 After a change, rebuild and re-run the suite:
 
 ```bash
-maxon-bin/.maxon/maxon build maxon-bin     # the compiler rebuilds itself
+maxon-bin/.maxon/maxon run build           # the compiler rebuilds itself
 maxon-bin/.maxon/maxon spec-test           # or --filter=<spec> for one area
 scripts/fixpoint.sh                        # does the compiler still reproduce itself?
 ```

@@ -12,7 +12,7 @@ category: tooling
 out. The sidecar is METADATA ONLY — it never decides which ops are produced, their order or their
 operands — so the executable is byte-identical either way. That property is what lets a case be
 compiled with debug info on without changing anything the case pins about emitted code, and it is
-gated where it can be observed: `tests/debug/byte-identical-debug-info.test.maxon` builds one staged
+gated where it can be observed: `tests/debug/byte-identical-debug-info.maxtest` builds one staged
 source path twice, to two outputs, differing only by the flag.
 
 ### What a span IS here, and where it stops

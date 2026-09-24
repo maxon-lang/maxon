@@ -1,0 +1,18 @@
+let ProjectCapturedUndeclaredDirName = "diagnostics-project-captured-undeclared-result-at-an-overload"
+let ProjectCapturedUndeclaredHelperFileName = "helper.maxon"
+let ProjectCapturedUndeclaredBufferFileName = "main.maxon"
+let ProjectCapturedUndeclaredHelperSource = "module function projectCapturedUndeclaredHelper() returns String\n\treturn \"\"\nend 'projectCapturedUndeclaredHelper'\n"
+let ProjectCapturedUndeclaredBufferSource = "function projectCapturedUndeclaredPick(x ExitCode) returns ExitCode\n\treturn x\nend 'projectCapturedUndeclaredPick'\n\nfunction projectCapturedUndeclaredPick(x String) returns ExitCode\n\treturn 1 if x.isEmpty() else 0\nend 'projectCapturedUndeclaredPick'\n\nfunction main() returns ExitCode\n\tlet text = projectCapturedUndeclaredNowhere()\n\tlet pick = function() gives projectCapturedUndeclaredPick(text.trim())\n\n\treturn pick()\nend 'main'\n"
+let ProjectCapturedUndeclaredPublished = "E2015@10 E3004@9"
+
+test 'a result no file declares, captured by a closure and handed to an overloaded function, is still refused'
+	let root = stagedProjectDiagnosticsRoot(ProjectCapturedUndeclaredDirName)
+	writeCorpusFile(root, fileName: ProjectCapturedUndeclaredHelperFileName, content: ProjectCapturedUndeclaredHelperSource)
+	writeCorpusFile(root, fileName: ProjectCapturedUndeclaredBufferFileName, content: ProjectCapturedUndeclaredBufferSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: ProjectCapturedUndeclaredBufferFileName, content: ProjectCapturedUndeclaredBufferSource)
+
+	discardOutsideCheckoutDir(root)
+
+	expectProjectDiagnosticCodesAndLines(probe, expected: ProjectCapturedUndeclaredPublished, note: "`projectCapturedUndeclaredNowhere` is declared nowhere. `main` binds its result, and a closure captures the binding and hands `.trim()` of it to `projectCapturedUndeclaredPick`, which the buffer overloads on `ExitCode` and `String`. A `maxon build` of the staged project refuses the overload inside the closure and reports the undefined function on the `let` line above it.")
+end 'a result no file declares, captured by a closure and handed to an overloaded function, is still refused'

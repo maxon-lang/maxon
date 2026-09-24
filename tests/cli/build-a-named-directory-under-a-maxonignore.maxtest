@@ -1,0 +1,69 @@
+// build-a-named-directory-under-a-maxonignore.maxtest - a `.maxonignore` excludes a directory the walk
+// DISCOVERS; it does not override a root the caller NAMED. `vendor/` carries the marker and `vendor/deep`
+// is named on the command line, so the build compiles it.
+//
+// The `fmt` half of the same rule is `tests/fmt`'s `maxonignore-above-root`; these cases are the build
+// walk's, because the two ask through different entry points.
+//
+// TWO cases, and the second is the surprising one: the marker sits ON the directory being named, not above
+// it. A walk that restored the root probe would still pass the first and fail only this one.
+
+let CaseDirName = "build-named-dir-under-maxonignore"
+let MarkedRootCaseDirName = "build-the-marked-dir-itself"
+let VendorDirName = "vendor"
+let DeepDirName = "deep"
+let NamedRootSpelling = "vendor/deep"
+let IgnoreMarkerFileName = ".maxonignore"
+let ProgramSourceName = "main.maxon"
+let ProgramSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+
+test 'a named directory under a .maxonignore is built'
+	requireHeldOutsideCheckout(CaseDirName, check: NamedDirectoryUnderAMarkerBuilt.create())
+end 'a named directory under a .maxonignore is built'
+
+test 'a directory carrying its own .maxonignore is built when it is named'
+	requireHeldOutsideCheckout(MarkedRootCaseDirName, check: MarkedDirectoryBuiltWhenNamed.create())
+end 'a directory carrying its own .maxonignore is built when it is named'
+
+type NamedDirectoryUnderAMarkerBuilt implements OutsideCheckoutCase
+	static function create() returns NamedDirectoryUnderAMarkerBuilt
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let vendor = createdStagedDirectory(dir.join(VendorDirName))
+		let deep = createdStagedDirectory(vendor.join(DeepDirName))
+
+		writeStagedFile(vendor.join(IgnoreMarkerFileName), content: "")
+		writeStagedFile(deep.join(ProgramSourceName), content: ProgramSource)
+
+		let build = runDriver([BuildCommandWord, NamedRootSpelling], workingDirectory: dir)
+		let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+
+		try Expect.equal(build.exitCode() as AssertedInt, expected: 0, message: "`maxon build {NamedRootSpelling}` did not build a directory the caller NAMED, though the marker sits above it in {VendorDirName}/. {said}")
+
+		let named = deep.join("{DeepDirName}{executableSuffix()}")
+		try Expect.isTrue(File.exists(named), message: "`maxon build {NamedRootSpelling}` wrote no {named.toString()}. {said}")
+	end 'requireHeldIn'
+end 'NamedDirectoryUnderAMarkerBuilt'
+
+type MarkedDirectoryBuiltWhenNamed implements OutsideCheckoutCase
+	static function create() returns MarkedDirectoryBuiltWhenNamed
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let vendor = createdStagedDirectory(dir.join(VendorDirName))
+
+		writeStagedFile(vendor.join(IgnoreMarkerFileName), content: "")
+		writeStagedFile(vendor.join(ProgramSourceName), content: ProgramSource)
+
+		let build = runDriver([BuildCommandWord, VendorDirName], workingDirectory: dir)
+		let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+
+		try Expect.equal(build.exitCode() as AssertedInt, expected: 0, message: "`maxon build {VendorDirName}` did not build the directory the caller NAMED, though the marker it carries excludes only a directory the walk DISCOVERS. {said}")
+
+		let named = vendor.join("{VendorDirName}{executableSuffix()}")
+		try Expect.isTrue(File.exists(named), message: "`maxon build {VendorDirName}` wrote no {named.toString()}. {said}")
+	end 'requireHeldIn'
+end 'MarkedDirectoryBuiltWhenNamed'

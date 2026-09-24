@@ -1,0 +1,18 @@
+let ProjectMixedOverloadDirName = "diagnostics-project-sibling-beside-undeclared-at-an-overload"
+let ProjectMixedOverloadHelperFileName = "helper.maxon"
+let ProjectMixedOverloadBufferFileName = "main.maxon"
+let ProjectMixedOverloadHelperSource = "module function projectMixedOverloadAnswer() returns ExitCode\n\treturn 0\nend 'projectMixedOverloadAnswer'\n"
+let ProjectMixedOverloadBufferSource = "function projectMixedOverloadPick(x ExitCode, y ExitCode) returns ExitCode\n\treturn x if y == 0 else y\nend 'projectMixedOverloadPick'\n\nfunction projectMixedOverloadPick(x String, y ExitCode) returns ExitCode\n\treturn y if x.isEmpty() else 0\nend 'projectMixedOverloadPick'\n\nfunction main() returns ExitCode\n\treturn projectMixedOverloadPick(projectMixedOverloadAnswer(), y: projectMixedOverloadNowhere())\nend 'main'\n"
+let ProjectMixedOverloadPublished = "E2015@9 E3004@9"
+
+test 'an overload refusal behind a sibling result and an undeclared one is still published'
+	let root = stagedProjectDiagnosticsRoot(ProjectMixedOverloadDirName)
+	writeCorpusFile(root, fileName: ProjectMixedOverloadHelperFileName, content: ProjectMixedOverloadHelperSource)
+	writeCorpusFile(root, fileName: ProjectMixedOverloadBufferFileName, content: ProjectMixedOverloadBufferSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: ProjectMixedOverloadBufferFileName, content: ProjectMixedOverloadBufferSource)
+
+	discardOutsideCheckoutDir(root)
+
+	expectProjectDiagnosticCodesAndLines(probe, expected: ProjectMixedOverloadPublished, note: "`main` hands `projectMixedOverloadPick` two results: `projectMixedOverloadAnswer`'s, which the sibling file declares, and `projectMixedOverloadNowhere`'s, which no file declares. A `maxon build` of the staged project types the first and still cannot pick an overload by the second, so it refuses the call and reports `projectMixedOverloadNowhere` undefined, both on the call's line. The refusal is an artefact of compiling the buffer alone only when EVERY opaque argument comes from a name the project declares.")
+end 'an overload refusal behind a sibling result and an undeclared one is still published'

@@ -16,8 +16,8 @@
 # index, a guard, a report line). A ladder that doubled both would read ×4 for a linear cost and could
 # never tell the two apart. Hold one, double the other.
 #
-#   files   <F> <testsPerFile>  — F `*.test.maxon` files with `testsPerFile` tests each.
-#   onefile <S> <T>             — S−1 ordinary `.maxon` sources + ONE `*.test.maxon` holding T tests.
+#   files   <F> <testsPerFile>  — F `*.maxtest` files with `testsPerFile` tests each.
+#   onefile <S> <T>             — S−1 ordinary `.maxon` sources + ONE `*.maxtest` holding T tests.
 #                                 ⭐ **THE ATTRIBUTION CONTROL.** Same source count, same test count,
 #                                 same token volume, same staging IO — and exactly ONE group. Anything
 #                                 that costs more under `files` than under `onefile` at matched S and
@@ -118,7 +118,7 @@ case "$MODE" in
     if [ "$MODE" = "broken" ]; then broken="yes"; fi
     f=0
     while [ "$f" -lt "$N" ]; do
-      emit_test_file "$f" "$M" "$broken" "$OUT/mod${f}.test.maxon"
+      emit_test_file "$f" "$M" "$broken" "$OUT/mod${f}.maxtest"
       f=$(( f + 1 ))
     done
     ;;
@@ -130,6 +130,6 @@ case "$MODE" in
       emit_ordinary_file "$f" "$OUT/ord${f}.maxon"
       f=$(( f + 1 ))
     done
-    emit_test_file 0 "$M" "no" "$OUT/solo.test.maxon"
+    emit_test_file 0 "$M" "no" "$OUT/solo.maxtest"
     ;;
 esac

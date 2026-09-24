@@ -1,7 +1,7 @@
 // Test: stdlib-factory-with-arguments-reached-from-the-initializer
 typealias Sources = Array with String
 
-var cfg = BuildConfig.create(name: "app", output: "app.exe", sources: Sources.create(), debug_info: false)
+var cfg = BuildConfig.create(Sources.create(), output: "app.exe", debug_info: false)
 
 function main() returns ExitCode
 	return cfg.sources.count() as ExitCode
@@ -33,7 +33,7 @@ func @main {
     x64.prologue 32
     x64.leaRegGlobal rax, __data_cfg
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.loadRegBaseDisp.word64 rax, [rax + 16]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.loadRegBaseDisp.word64 r8, [rax + 8]
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
@@ -46,7 +46,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at stdlib-factory-with-arguments-reached-from-the-initializer.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at stdlib-factory-with-arguments-reached-from-the-initializer.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

@@ -181,7 +181,7 @@ function launchTarget(request CoverageRequest, dataPath String) returns Coverage
 
 	// ⚠ ROOTED, because a spawn resolves a bare program name against PATH rather than against the working
 	// directory — so `dir/prog.exe` would be reported missing by the OS moments after this file found it.
-	let capture = try runProcess(Executable.path(target.resolve(Directory.currentPath())), argv: request.targetArgs, workingDirectory: inheritedWorkingDir(), timeoutMs: deadlineMs(request.timeoutSeconds)) otherwise (e) 'didNotFinish'
+	let capture = try runProcess(Executable.path(target.anchoredAt(Directory.currentPath())), argv: request.targetArgs, workingDirectory: inheritedWorkingDir(), timeoutMs: deadlineMs(request.timeoutSeconds)) otherwise (e) 'didNotFinish'
 		return CoverageLaunch.refused(launchFailureText(request, error: e))
 	end 'didNotFinish'
 

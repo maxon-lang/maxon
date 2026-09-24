@@ -26,6 +26,11 @@ let ParentDirectoryComponent = ".."
 
 typealias PathComponentArray = Array with String
 
+enum ParentComponentRule
+	cancelsThePreviousName
+	keptForTheFilesystem
+end 'ParentComponentRule'
+
 public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, Stringable
 	public let path as String
 
@@ -500,13 +505,22 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 	///
 	/// Lexical, so a `..` after a symbolic link cancels the link's name rather than stepping out of its target.
 	public function normalize() returns FilePath
+		return folded(ParentComponentRule.cancelsThePreviousName)
+	end 'normalize'
+
+	function folded(parents ParentComponentRule) returns FilePath
 		if path.isEmpty() 'emptyPath'
 			return self
 		end 'emptyPath'
 
+		let cancelsParents = match parents 'rule'
+			cancelsThePreviousName gives true
+			keptForTheFilesystem gives false
+		end 'rule'
+
 		let rootLength = rootByteLength()
 		let rooted = isAbsolute()
-		let rest = try path.addressableBytes().slice(rootLength, path.byteLength()) otherwise panic("FilePath.normalize: the root is a prefix of the path")
+		let rest = try path.addressableBytes().slice(rootLength, path.byteLength()) otherwise panic("FilePath.folded: the root is a prefix of the path")
 		var kept = PathComponentArray.create()
 
 		for component in String.init(rest).split(pathSeparator) 'eachComponent'
@@ -514,12 +528,12 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 				continue
 			end 'noStep'
 
-			if component == ParentDirectoryComponent 'climb'
+			if cancelsParents and component == ParentDirectoryComponent 'climb'
 				if not kept.isEmpty() 'hasAPrevious'
-					let previous = try kept.last() otherwise panic("FilePath.normalize: a non-empty array has a last component")
+					let previous = try kept.last() otherwise panic("FilePath.folded: a non-empty array has a last component")
 
 					if previous != ParentDirectoryComponent 'cancelsAName'
-						_ = try kept.pop() otherwise panic("FilePath.normalize: a non-empty array has a last component")
+						_ = try kept.pop() otherwise panic("FilePath.folded: a non-empty array has a last component")
 						continue
 					end 'cancelsAName'
 				end 'hasAPrevious'
@@ -532,23 +546,23 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 			kept.push(component)
 		end 'eachComponent'
 
-		var folded = ""
-		folded.append(rootSpelling(rootLength))
+		var spelling = ""
+		spelling.append(rootSpelling(rootLength))
 
 		for (iter, component) in kept.withIterator() 'eachKept'
 			if iter.index() > 0 'notFirst'
-				folded.append(pathSeparator)
+				spelling.append(pathSeparator)
 			end 'notFirst'
 
-			folded.append(component)
+			spelling.append(component)
 		end 'eachKept'
 
 		if kept.isEmpty() and not rooted 'foldedAway'
-			folded.append(CurrentDirectoryComponent)
+			spelling.append(CurrentDirectoryComponent)
 		end 'foldedAway'
 
-		return FilePath{path: folded}
-	end 'normalize'
+		return FilePath{path: spelling}
+	end 'folded'
 
 	/// How many leading bytes of the path are its root, which `normalize` keeps as it is: `/` (every leading
 	/// separator) on POSIX; on Windows `C:\`, a drive-relative `C:`, a UNC `\\server\share\` or a rooted `\`.
@@ -610,38 +624,48 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 
 	// --- Resolution ---
 
-	/// This path resolved against the directory `base`: a relative path is joined onto `base`, an
-	/// absolute one is kept, and either way the result is folded lexically as `normalize()` folds it,
-	/// so a `..` after a symbolic link cancels the link's name rather than stepping out of its target.
+	/// This path anchored at the directory `base`: a relative path is joined onto `base` and an absolute
+	/// one is kept. Only what cannot change the file named is folded — `.` components, repeated
+	/// separators and a trailing one — and every `..` is kept for the filesystem to answer, so through a
+	/// symbolic link the result names the same file the spelling does.
 	///
-	/// On Windows a drive-relative path (`C:foo`) resolves against a `base` rooted on the same drive
-	/// (`C:\…`). Against any other base it comes back normalized and still drive-relative, so
-	/// `isAbsolute()` is false: it names that drive's current directory, which a path value cannot
-	/// know.
-	public function resolve(base FilePath) returns FilePath
+	/// On Windows a drive-relative path (`C:foo`) is joined onto a `base` rooted on the same drive
+	/// (`C:\…`). Against any other base it stays drive-relative, so `isAbsolute()` is false: it names
+	/// that drive's current directory, which a path value cannot know.
+	public function anchoredAt(base FilePath) returns FilePath
+		return joinedOnto(base).folded(ParentComponentRule.keptForTheFilesystem)
+	end 'anchoredAt'
+
+	function joinedOnto(base FilePath) returns FilePath
 		if isAbsolute() 'alreadyAbsolute'
-			return normalize()
+			return self
 		end 'alreadyAbsolute'
 
 		#if os(Windows)
 			if hasDrivePrefix(path) 'driveRelative'
-				return resolvedOnItsDrive(base)
+				return joinedOntoItsDrive(base)
 			end 'driveRelative'
 		#endif
 
-		return base.join(path).normalize()
+		return base.join(path)
+	end 'joinedOnto'
+
+	/// `anchoredAt(base)` folded lexically as `normalize()` folds it, so a `..` after a symbolic link
+	/// cancels the link's name rather than stepping out of its target.
+	public function resolve(base FilePath) returns FilePath
+		return joinedOnto(base).normalize()
 	end 'resolve'
 
 	#if os(Windows)
-		function resolvedOnItsDrive(base FilePath) returns FilePath
+		function joinedOntoItsDrive(base FilePath) returns FilePath
 			if not base.hasDriveRoot() or canonicalForCompare(drivePrefix()) != canonicalForCompare(base.drivePrefix()) 'anotherDrivesDirectory'
-				return normalize()
+				return self
 			end 'anotherDrivesDirectory'
 
-			let rest = try path.addressableBytes().slice(DrivePrefixLength, path.byteLength()) otherwise panic("FilePath.resolvedOnItsDrive: a drive prefix is the path's first two bytes")
+			let rest = try path.addressableBytes().slice(DrivePrefixLength, path.byteLength()) otherwise panic("FilePath.joinedOntoItsDrive: a drive prefix is the path's first two bytes")
 
-			return base.join(String.init(rest)).normalize()
-		end 'resolvedOnItsDrive'
+			return base.join(String.init(rest))
+		end 'joinedOntoItsDrive'
 
 		function drivePrefix() returns String
 			let prefix = try path.addressableBytes().slice(0, DrivePrefixLength) otherwise panic("FilePath.drivePrefix: asked only of a path with a drive prefix")

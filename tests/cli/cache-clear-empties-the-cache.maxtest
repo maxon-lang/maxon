@@ -1,0 +1,29 @@
+// cache-clear-empties-the-cache.maxtest - `maxon cache clear` removes everything Maxon put in the
+// cache: the build, the slot holding it, the format directory above that, and the one directory Maxon
+// owns under the root the caller named.
+//
+// ⭐⭐ **THE DIRECTORY'S ABSENCE IS THE ASSERTION, NOT THE FILE'S.** A clear that removed only files would
+// leave a tree of empty slot directories standing, one per program ever run, for the life of the install
+// — and every comparison made over FILES is satisfied perfectly by it.
+//
+// ⛔ The build is put there by the driver, never planted: only the driver knows the layout it publishes
+// into, and a clear asked to remove what the test itself wrote proves nothing about the real one.
+
+let CaseDirName = "cache-clear-empties"
+
+test 'cache clear leaves nothing Maxon put in the cache'
+	let dir = freshCaseDir(CaseDirName)
+	let cacheRoot = cacheRootIn(dir)
+	publishCachedBuild(dir, cacheRoot: cacheRoot)
+
+	let owned = cacheRoot.join(CacheVendorDirName)
+	Expect.isTrue(Directory.isDirectory(owned), message: "the gate could not run - a cached build did not land under {owned.toString()}, so there is nothing for a clear to remove")
+
+	let cleared = runWithCacheRoot([CacheCommandWord, CacheClearVerb], cacheRoot: cacheRoot, workingDirectory: dir)
+	let said = "It wrote to stdout: {cleared.stdout} and to stderr: {cleared.stderr}"
+	Expect.equal(cleared.exitCode() as AssertedInt, expected: 0, message: "`maxon {CacheCommandWord} {CacheClearVerb}` did not succeed over a cache holding one build. {said}")
+
+	Expect.isFalse(Directory.exists(owned), message: "`maxon {CacheCommandWord} {CacheClearVerb}` left {owned.toString()} standing. Removing the builds and keeping the directories that held them grows a tree of empty slots for the life of the install. {said}")
+
+	Expect.isTrue(Directory.isDirectory(cacheRoot), message: "`maxon {CacheCommandWord} {CacheClearVerb}` removed {cacheRoot.toString()}, which the CALLER named through {CacheRootVariable} and Maxon did not create. {said}")
+end 'cache clear leaves nothing Maxon put in the cache'

@@ -62,7 +62,7 @@ export typealias FileParseArtifactArray = Array with FileParseArtifact
 export typealias SourceByteCount = int(0 to u32.max)
 
 // Calibrated so no file of this tree regrows its table;
-// `tests/cli/interner-presize-never-regrows.test.maxon` fails when one does.
+// `tests/cli/interner-presize-never-regrows.maxtest` fails when one does.
 let MinimumInternedTypeNames = 128 as NameId
 let SourceBytesPerTypeName = 512
 let ArenaBytesPerTypeName = 20
@@ -353,6 +353,7 @@ export type FileParseArtifact
 	// `mergeArtifact` with the merge's function + op offsets. What lets the backend's
 	// E5001 map a Target ValueId back to its source span.
 	export var valueOrigins as ValueOriginTable
+	export var deferralSources as DeferralSourceTable
 
 	// This file's `funcReturnTypes` registry contributions, in declaration order.
 	export var funcReturnTypes as FuncReturnTypeEntryArray
@@ -498,10 +499,11 @@ export type FileParseArtifact
 	export var unusedTypeAliases as DeferredNameDiagnosticRoster
 	export var hiddenTypeNames as DeferredNameDiagnosticRoster
 
-	// Refusals a door RECORDED instead of throwing, because a throw ends this file's parse and the
+	// Refusals a door recorded instead of throwing, because a throw ends this file's parse and the
 	// check that would explain the cause never runs (`Parser.deferredTheRefusal`). Only the report
-	// is deferred: the entry is the finished `ParseError`, so each sentence keeps its one producer.
-	export var deferredParseErrors as ParseErrorArray
+	// is deferred: each entry carries the finished `ParseError`, so each sentence keeps its one
+	// producer.
+	export var deferredParseErrors as DeferredParseErrorArray
 
 	// ⭐ THE DECLARATION-HYGIENE DIAGNOSTICS this file's function bodies earned (E3012 unused, E3077
 	// var-should-be-let), kept OUT of `diagnostics` above so they cannot gate the pipeline ahead of the
@@ -538,6 +540,7 @@ export type FileParseArtifact
 			debugStreamNameSites: DebugStreamNameSiteMap.create(),
 			immortalConstArraySites: ImmortalConstArraySiteMap.create(),
 			valueOrigins: ValueOriginTable.create(),
+			deferralSources: DeferralSourceTable.create(),
 			funcReturnTypes: FuncReturnTypeEntryArray.create(),
 			funcSignatures: FuncSignatureEntryArray.create(),
 			overloadSets: noOverloadSets,
@@ -561,7 +564,7 @@ export type FileParseArtifact
 			diagnostics: DiagnosticArray.create(),
 			unusedTypeAliases: noDeferredNameDiagnostics,
 			hiddenTypeNames: noDeferredNameDiagnostics,
-			deferredParseErrors: ParseErrorArray.create(),
+			deferredParseErrors: DeferredParseErrorArray.create(),
 			bindingHygieneDiagnostics: DiagnosticArray.create(),
 			parseMints: ParseMints.none,
 			instanceIdsInUse: sharedNoInstanceIds
@@ -709,6 +712,10 @@ export type FileParseArtifact
 	export function recordParamOrigin(valueId ValueId, range SourceRange)
 		self.valueOrigins.recordParam(self.currentFuncIndex, valueId: valueId, range: range)
 	end 'recordParamOrigin'
+
+	export function recordDeferralSource(valueId ValueId, sourceFuncIndex FuncIndex, sourceId ValueId)
+		self.deferralSources.record(self.currentFuncIndex, valueId: valueId, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId)
+	end 'recordDeferralSource'
 
 	// Stamp the local index of the function whose body the parser is about to emit into — the value
 	// `recordValueOrigin`/`recordParamOrigin` file every origin under. `parseFunction` calls this with the
@@ -1015,6 +1022,7 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 		requireOpKeyedTableIsEmpty("debugStreamNameSites", held: project.debugStreamNameSites.count() as OpCount)
 		requireOpKeyedTableIsEmpty("immortalConstArraySites", held: project.immortalConstArraySites.count() as OpCount)
 		requireOpKeyedTableIsEmpty("valueOrigins", held: project.valueOrigins.count())
+		requireOpKeyedTableIsEmpty("deferralSources", held: project.deferralSources.count())
 	end 'theFirstFileOfARound'
 
 	// The function offset for the ValueOrigin fold: `IrModule.merge` appends the
@@ -1030,6 +1038,7 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	commitDebugStreamNameSites(project, artifact: artifact, opOffset: opOffset)
 	commitImmortalConstArraySites(project, artifact: artifact, opOffset: opOffset)
 	project.valueOrigins.appendFrom(artifact.valueOrigins, funcOffset: funcOffset as FuncIndex, opOffset: opOffset)
+	project.deferralSources.appendFrom(artifact.deferralSources, funcOffset: funcOffset as FuncIndex)
 	commitFuncReturnTypes(project, artifact: artifact)
 	commitFuncSignatures(project, artifact: artifact)
 	commitOverloadSets(project, artifact: artifact)
@@ -1052,7 +1061,7 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	commitInferredInstantiationSites(project, artifact: artifact)
 	commitDiagnostics(project, artifact: artifact)
 	commitDeferredNameDiagnostics(project, artifact: artifact)
-	commitDeferredParseErrors(project, artifact: artifact)
+	commitDeferredParseErrors(project, artifact: artifact, funcOffset: funcOffset as FuncIndex)
 	commitWrittenGenericAliasNames(project, artifact: artifact, signatures: signatures)
 end 'mergeArtifact'
 
@@ -1090,11 +1099,11 @@ function commitDeferredNameDiagnostics(project Project, artifact FileParseArtifa
 	end 'hidden'
 end 'commitDeferredNameDiagnostics'
 
-function commitDeferredParseErrors(project Project, artifact FileParseArtifact)
+function commitDeferredParseErrors(project Project, artifact FileParseArtifact, funcOffset FuncIndex)
 	var target = project.deferredParseErrors
 
-	for error in artifact.deferredParseErrors 'each'
-		target.push(DeferredParseError.create(error, filePath: artifact.filePath))
+	for deferred in artifact.deferredParseErrors 'each'
+		target.push(deferred.relocated(funcOffset))
 	end 'each'
 end 'commitDeferredParseErrors'
 

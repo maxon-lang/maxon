@@ -39,7 +39,7 @@ had to write:
 
 ```text
 try Api.lookup("nobody") otherwise (e) 'uncaught throw in test'
-	__TestReport.threw("ApiError", errorCase: "{e}", file: "api.test.maxon", line: 12)
+	__TestReport.threw("ApiError", errorCase: "{e}", file: "api.maxtest", line: 12)
 	throw TestFailure.assertion
 end 'uncaught throw in test'
 ```
@@ -76,7 +76,7 @@ operation is. So is `await`: an awaited thunk's `throws` type is the type of the
 call's is, and one check reads both.
 
 > The `line` in the reports below counts from the top of the file the report NAMES — here
-> `suite.test.maxon`, the file this spec's `// --- file:` marker creates — so it does not match the
+> `suite.maxtest`, the file this spec's `// --- file:` marker creates — so it does not match the
 > line of the surrounding `.test` fragment, which carries a header and the marker itself. The pair
 > is self-consistent, which is what a reader opening the named file needs.
 
@@ -158,7 +158,7 @@ returns 0 and nothing invokes the test — so the minted fragment golden is what
 `__test_tolerates_a_foreign_error` reports through `__TestReport.threw` and then throws
 `TestFailure.assertion`, rather than propagating `ApiError`. Read it when you mint it.
 ```maxon
-// --- file: suite.test.maxon
+// --- file: suite.maxtest
 enum ApiError implements Error
 	notFound
 end 'ApiError'
@@ -195,7 +195,7 @@ The callee can RETURN as well as throw, so the ok edge is reachable and the gold
 report, the `__str_decref` of the interpolation, the `__destruct_ApiError` of the box and the
 `TestFailure` throw on one; the statement after the `try`, with no drop of anything, on the other.
 ```maxon
-// --- file: suite.test.maxon
+// --- file: suite.maxtest
 union ApiError implements Error
 	notFound(detail String)
 end 'ApiError'
@@ -225,7 +225,7 @@ The most important test in this spec. The identical `try` inside an ordinary `fu
 file, same callee — still gets the propagation-type error. The relaxation is a narrowing of that
 one check, so there is nowhere else it could leak from.
 ```maxon
-// --- file: suite.test.maxon
+// --- file: suite.maxtest
 enum ApiError implements Error
 	notFound
 end 'ApiError'
@@ -256,7 +256,7 @@ A closure inside a test body is a separate function, and a function type cannot 
 (E3101) — so there is no error channel to relax and a bare `try` inside one is refused, exactly as
 it is anywhere else. The relaxation does not follow the `test` keyword down into nested functions.
 ```maxon
-// --- file: suite.test.maxon
+// --- file: suite.maxtest
 enum ApiError implements Error
 	notFound
 end 'ApiError'
@@ -291,7 +291,7 @@ The no-`try` twin of `bare-try-on-a-foreign-error-compiles`: the test body is an
 bare throwing call compiles to the same handler. The golden must show the same `__TestReport.threw`
 report and `TestFailure` throw as the `try` form.
 ```maxon
-// --- file: suite.test.maxon
+// --- file: suite.maxtest
 enum ApiError implements Error
 	notFound
 end 'ApiError'
@@ -317,7 +317,7 @@ end 'main'
 The no-`try` twin of `bare-try-on-a-boxed-foreign-error-compiles`: a payload-carrying union reaches the
 implied handler as a box the handler owns, releases, and un-enrols on the terminated error edge.
 ```maxon
-// --- file: suite.test.maxon
+// --- file: suite.maxtest
 union ApiError implements Error
 	notFound(detail String)
 end 'ApiError'
@@ -346,7 +346,7 @@ end 'main'
 A bare throwing call in value position: the implied handler guards the binding's initializer, and the
 ok edge binds the returned value.
 ```maxon
-// --- file: suite.test.maxon
+// --- file: suite.maxtest
 typealias Tally = int(0 to 100)
 
 enum ApiError implements Error
@@ -379,7 +379,7 @@ end 'main'
 The throwing call is an ARGUMENT evaluated after a managed `String` temporary already exists in the same
 statement, so the implied handler's error edge must release that temporary before it reports.
 ```maxon
-// --- file: suite.test.maxon
+// --- file: suite.maxtest
 typealias Tally = int(0 to 100)
 
 enum ApiError implements Error
@@ -419,7 +419,7 @@ end 'main'
 A throwing compiler-owned callee, the array accessor, written bare in a test body takes the implied
 handler exactly as a user function does.
 ```maxon
-// --- file: suite.test.maxon
+// --- file: suite.maxtest
 test 'reads an element bare'
 	let a = [10, 20, 30]
 	let x = a.get(1)
@@ -439,7 +439,7 @@ end 'main'
 A throwing interface requirement dispatched through an existential in a test body, with no `try`: the
 witness dispatch takes the implied handler exactly as a direct call does.
 ```maxon
-// --- file: suite.test.maxon
+// --- file: suite.maxtest
 typealias Code = int(0 to u32.max)
 
 enum DigestError implements Error
@@ -489,7 +489,7 @@ end 'main'
 An `await` of a throwing promise written without `try` in a test body takes the implied handler, as a
 `try await` does.
 ```maxon
-// --- file: suite.test.maxon
+// --- file: suite.maxtest
 typealias Integer = int(i64.min to i64.max)
 
 enum WorkError implements Error
@@ -525,7 +525,7 @@ end 'main'
 An explicit `try` covers its own target call only. A throwing call in that target's ARGUMENT list is a
 separate call, so its foreign error goes to the test body's implied handler.
 ```maxon
-// --- file: suite.test.maxon
+// --- file: suite.maxtest
 enum ApiError implements Error
 	notFound
 end 'ApiError'
@@ -556,7 +556,7 @@ A parenthesized `try` target claims the operation that produces the group's valu
 division. The throwing call that is an OPERAND of that division is a separate call, so its foreign
 error goes to the test body's implied handler.
 ```maxon
-// --- file: suite.test.maxon
+// --- file: suite.maxtest
 enum ApiError implements Error
 	notFound
 end 'ApiError'
@@ -592,7 +592,7 @@ A `for` loop absorbs the `IterationError` of the call that hands it its cursor, 
 source is a RANGE whose lower bound is `peek`, which throws `IterationError` but hands the loop no cursor, so
 the loop has nothing to absorb and the call takes the test body's implied handler like any other.
 ```maxon
-// --- file: suite.test.maxon
+// --- file: suite.maxtest
 test 'counts up from a peeked bound'
 	let steps = [1, 2, 3]
 	let it = steps.cursor()
@@ -618,7 +618,7 @@ end 'main'
 An `await` that is a range's lower bound hands the loop no cursor, so the loop absorbs nothing and the
 awaited error takes the test body's implied handler, as a bare `await` does anywhere else in the body.
 ```maxon
-// --- file: suite.test.maxon
+// --- file: suite.maxtest
 typealias Integer = int(i64.min to i64.max)
 
 enum WorkError implements Error
@@ -659,7 +659,7 @@ end 'main'
 An explicit `try` on `(await p).check()` covers the chain's last call. The awaited promise is the
 RECEIVER, a separate throwing operation, so its error goes to the test body's implied handler.
 ```maxon
-// --- file: suite.test.maxon
+// --- file: suite.maxtest
 typealias Tally = int(0 to 100)
 
 enum WorkError implements Error
@@ -708,7 +708,7 @@ end 'main'
 A ternary `for` source hands the loop the value of whichever arm ran. Neither arm's call is the loop's
 cursor, so the TRUE arm's throwing call takes the test body's implied handler exactly as the false arm's does.
 ```maxon
-// --- file: suite.test.maxon
+// --- file: suite.maxtest
 typealias Tally = int(0 to 100)
 typealias TallyArray = Array with Tally
 
@@ -751,7 +751,7 @@ end 'main'
 An explicit `try` on `(a upto b).createIterator()` covers the chain's last call. The range's BOUNDS are
 operands of the range operator, so a throwing call in either takes the test body's implied handler.
 ```maxon
-// --- file: suite.test.maxon
+// --- file: suite.maxtest
 enum ApiError implements Error
 	notFound
 end 'ApiError'
@@ -791,7 +791,7 @@ A narrow signed enum element is read back through a sign extension the accessor 
 That extension is part of the call's result, so when the element read is the receiver of `.rawValue` in a
 range's lower bound, the receiver is still the throwing call and it takes the test body's implied handler.
 ```maxon
-// --- file: suite.test.maxon
+// --- file: suite.maxtest
 enum Level
 	low = -1
 	high = 2
@@ -824,7 +824,7 @@ end 'main'
 The call that hands a `for` loop its cursor throws `IterationError` for an EMPTY collection, and the loop
 absorbs it: the loop runs zero trips and the test goes on. The implied handler must not claim that call.
 ```maxon
-// --- file: suite.test.maxon
+// --- file: suite.maxtest
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
@@ -851,7 +851,7 @@ end 'main'
 The same loop with its source written in parentheses. A group is transparent, so the loop still absorbs
 the empty collection's `IterationError` and runs zero trips.
 ```maxon
-// --- file: suite.test.maxon
+// --- file: suite.maxtest
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
@@ -878,7 +878,7 @@ end 'main'
 A cast that emits an op makes its operand an operand like any other. The throwing call under the cast is a
 range's lower bound, so it takes the test body's implied handler.
 ```maxon
-// --- file: suite.test.maxon
+// --- file: suite.maxtest
 typealias Integer = int(i64.min to i64.max)
 typealias Small = int(0 to 100)
 
@@ -917,7 +917,7 @@ end 'main'
 An explicit `try` on a postfix chain covers the chain's last call. The RECEIVER is a separate throwing
 call, so its foreign error goes to the test body's implied handler.
 ```maxon
-// --- file: suite.test.maxon
+// --- file: suite.maxtest
 typealias Tally = int(0 to 100)
 
 enum ApiError implements Error
@@ -963,7 +963,7 @@ end 'main'
 The implied `try` belongs to the test body alone. A closure inside it is a separate function with no
 error channel, so a bare throwing call there is still E3057.
 ```maxon
-// --- file: suite.test.maxon
+// --- file: suite.maxtest
 enum ApiError implements Error
 	notFound
 end 'ApiError'
@@ -997,7 +997,7 @@ An explicit `try` on a parenthesized call renamed to another brand of the same i
 the rebrand emits no op, so the call IS the value the group produces, and the author's `otherwise` owns its
 error.
 ```maxon
-// --- file: suite.test.maxon
+// --- file: suite.maxtest
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 typealias Scores = Array with Integer
@@ -1036,7 +1036,7 @@ An explicit `try` on a parenthesized checked division narrowed to a ranged alias
 the division's own: the cast emits no op and only records its range site, so the division IS the value the
 group produces and the author's `otherwise` owns its divide-by-zero.
 ```maxon
-// --- file: suite.test.maxon
+// --- file: suite.maxtest
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 typealias Wide = int(-1000000000000 to 1000000000000)
@@ -1060,7 +1060,7 @@ end 'main'
 A cursor-producing call renamed to another brand of the same instance is still the call that hands the loop
 its cursor: the rebrand emits no op, so the loop absorbs the empty collection's `IterationError`.
 ```maxon
-// --- file: suite.test.maxon
+// --- file: suite.maxtest
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 typealias Walk = ArrayIterator with Integer

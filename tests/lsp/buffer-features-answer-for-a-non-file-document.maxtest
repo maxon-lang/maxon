@@ -1,0 +1,69 @@
+let NonFileBufferUri = "git://host/repo/buffer-features.maxon"
+
+let NonFileBufferStructKind = 23 as SymbolKindCode
+let NonFileBufferFunctionKind = 12 as SymbolKindCode
+
+let NonFileBufferStructName = "NonFileBufferPoint"
+let NonFileBufferFunctionName = "nonFileBufferMain"
+
+let NonFileBufferQuintupleWidth = 5
+
+let NonFileBufferUnreportedSession = "the session ended without saying how"
+
+union NonFileBufferOutcome
+	observed(symbols DocumentSymbolArray, tokens SemanticTokenValueArray)
+	broke(detail String)
+end 'NonFileBufferOutcome'
+
+test 'non-file document: documentSymbol and semanticTokens answer out of the buffer alone'
+	var client = LspClient.start()
+	var outcome = NonFileBufferOutcome.broke(NonFileBufferUnreportedSession)
+
+	try 'session'
+		_ = client.initialize()
+		client.initialized()
+		client.openDocument(NonFileBufferUri, content: nonFileBufferFixture())
+
+		let symbols = client.documentSymbols(NonFileBufferUri).symbols
+		outcome = NonFileBufferOutcome.observed(symbols, tokens: client.semanticTokensFull(NonFileBufferUri).data)
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed or
+				malformedResponse or
+				serverRefused then outcome = NonFileBufferOutcome.broke(e.explained())
+		end 'reason'
+	end 'failed'
+
+	client.release()
+
+	match outcome 'outcome'
+		observed(symbols, tokens) then requireTheBufferWasRead(symbols, tokens: tokens)
+		broke(detail) then Expect.fail("a document opened at `{NonFileBufferUri}` was asked for its outline and its semantic tokens, and the session did not answer: {detail}. ⭐ NEITHER REQUEST NEEDS A PATH: both are computed from the buffer's own text and tokens, with no project, no corpus and no file on disk anywhere in them. A document whose URI names no file is a document with no path, and that is a reason to answer nothing about its PROJECT — it is not a reason to stop reading the text the client just sent.")
+	end 'outcome'
+end 'non-file document: documentSymbol and semanticTokens answer out of the buffer alone'
+
+function requireTheBufferWasRead(symbols DocumentSymbolArray, tokens SemanticTokenValueArray) throws TestFailure
+	try Expect.equal(symbols.count(), expected: 2, message: "the buffer declares one type and one function at the top level, and the outline held {symbols.count()} symbols. ⭐ ANSWERING IS NOT ENOUGH — an empty outline is a well-formed reply that leaves the editor's breadcrumb bar and outline pane blank, which is exactly what a server that quietly gave up on a path-less document would send.")
+
+	try Expect.isTrue(nonFileBufferHolds(symbols, name: NonFileBufferStructName, kind: NonFileBufferStructKind), message: "the outline did not carry `{NonFileBufferStructName}` as a struct (LSP SymbolKind {NonFileBufferStructKind}). The name and the kind are asserted together because a symbol with the right name and the wrong kind draws the wrong icon and sorts into the wrong group.")
+
+	try Expect.isTrue(nonFileBufferHolds(symbols, name: NonFileBufferFunctionName, kind: NonFileBufferFunctionKind), message: "the outline did not carry `{NonFileBufferFunctionName}` as a function (LSP SymbolKind {NonFileBufferFunctionKind}).")
+
+	try Expect.isTrue(tokens.count() > 0, message: "`semanticTokens/full` answered {tokens.count()} integers for a buffer full of keywords and identifiers. An empty token array is a legal reply meaning 'nothing to colour', so a server that dropped this document would leave the author looking at unhighlighted text with no error to explain it.")
+
+	try Expect.equal((tokens.count() mod NonFileBufferQuintupleWidth) as AssertedInt, expected: 0, message: "the semantic-tokens wire format is quintuples of (deltaLine, deltaStartChar, length, tokenType, tokenModifiers), and {tokens.count()} is not a multiple of {NonFileBufferQuintupleWidth}. A truncated run decodes into positions that drift further from the text with every token after the break.")
+end 'requireTheBufferWasRead'
+
+function nonFileBufferHolds(symbols DocumentSymbolArray, name String, kind SymbolKindCode) returns bool
+	for symbol in symbols 'eachSymbol'
+		if symbol.name == name and symbol.kind == kind 'hit'
+			return true
+		end 'hit'
+	end 'eachSymbol'
+
+	return false
+end 'nonFileBufferHolds'
+
+function nonFileBufferFixture() returns String
+	return "type NonFileBufferPoint\n\tvar x as NonFileBufferCoord\n\tvar y as NonFileBufferCoord\nend 'NonFileBufferPoint'\n\nfunction nonFileBufferMain() returns ExitCode\n\treturn 0\nend 'nonFileBufferMain'\n"
+end 'nonFileBufferFixture'

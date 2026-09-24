@@ -20,8 +20,9 @@ description: One round of the fannkuch-redux Maxon-vs-C loop — build the tree'
 
 - `git branch --show-current` is `main`; `git status` is clean; `git fetch` shows nothing behind
   `origin/main`. `PRE=$(git rev-parse --short HEAD)`.
-- Build the compiler from the tree: `./maxon-bin/.maxon/maxon.exe build maxon-bin` (from
-  `.bootstrap/maxon.exe build maxon-bin` if the slot is empty). One self-compile is enough for the
+- Build the compiler from the tree: `./maxon-bin/.maxon/maxon.exe run build` at the repository root
+  (from `./.bootstrap/maxon.exe build maxon-bin --output=maxon-bin/.maxon/maxon` if the slot is
+  empty). One self-compile is enough for the
   PROGRAMS it emits; the two-build rule applies only when the compiler itself is the program under
   test.
 - Nothing else may be building or running the suite on the box while a measurement runs.

@@ -36,7 +36,7 @@
 #   CHECK 5  newer EXCLUDED source, in-tree binary -> RUNS      (it is not in the binary), three times:
 #            5a  under a `.maxonignore`d directory
 #            5b  inside the compiler's own `.maxon/` output directory
-#            5c  a `*.Test.maxon` — the suffix matched case-insensitively, the way the compiler does
+#            5c  a `*.maxtest` — a test file, which no build compiles
 #   CHECK 6  restored tree, in-tree binary         -> RUNS      (the refusal was the edit)
 #
 # CHECKS 3 and 4 are the ones that cost something to get right, and they are why the copies are made
@@ -49,24 +49,11 @@
 # is the case that reaches the "are this project's sources actually here" question rather than
 # stopping at "was this built in place".
 #
-# CHECK 5 is the false-refusal control, and it is not a hypothetical: `maxon build` does not compile
-# `.maxonignore`d directories, `*.test.maxon` files, or anything inside its OWN `.maxon/` output
-# directory, so none of those are "sources of this binary". 5b is the sharp one — that directory is
-# where the build writes, so every file in it is newer than the binary beside it BY CONSTRUCTION, and
-# a check that swept it would refuse every run forever. 5c is the one an eye passes over: the compiler
-# matches that suffix CASE-INSENSITIVELY, so a mirror that matched it byte-exactly would leave a
-# `*.Test.maxon` excluded from the build and counted as a source of it at the same time — refusing the
-# suite over a file the compiler had never read. Both were found by REVIEW, after the tree was green.
-#
-# ⚠ VERIFIED TO GO RED, twice, and the two reds are different shapes:
-#   * against the binary built from this script's parent commit — the tree with no check in it at all
-#     — CHECK 2 fails (`exit=0`, `4 passed, 0 failed`: the suite ran a whole filtered pass off the
-#     stale binary) and CHECK 7 fails with it, while 1, 3, 4, 5, 6 pass. That split is the
-#     discriminator: everything that should RUN already ran; what did not exist was the refusal.
-#   * against the binary built from the commit that ADDED the refusal, CHECK 5c fails on its own
-#     (`exit=2`, naming `maxon-bin/Testing/Probe.Test.maxon`) — a check present, working, and one
-#     clause narrower than the rule it mirrors. A refusal is not enough; it has to refuse the right
-#     files.
+# CHECK 5 is the false-refusal control: `maxon build` does not compile `.maxonignore`d directories,
+# `*.maxtest` files, or anything inside its own `.maxon/` output directory, so none of those are
+# "sources of this binary". 5b is the sharp one — that directory is where the build writes, so every
+# file in it is newer than the binary beside it by construction, and a check that swept it would
+# refuse every run forever.
 #
 # ⚠ WHAT THIS CANNOT CATCH, and the message must not claim otherwise: the check ships INSIDE the
 #   binary it reports on, so a stale binary runs the OLD check. That is fine for the case that
@@ -159,12 +146,10 @@ EXCLUDED_BACKUP="$WORK/excluded.bak"
 # is a build artifact and is gitignored, so nothing here can dirty the working tree.
 SCRATCH="maxon-bin/.maxon/stale-binary-gate-scratch.maxon"
 
-# CHECK 5c's file, and it must sit in a directory the source walk DOES sweep — the exclusion under
-# test is the SUFFIX, so putting it anywhere already excluded would prove nothing. `Test` is
-# capitalised deliberately: the compiler matches the suffix case-insensitively, and this file is
-# what makes the mirror match it the same way. Untracked in a tracked directory, so `cleanup` must
-# remove it or the working tree comes back dirty.
-TEST_SCRATCH="maxon-bin/Testing/stale-binary-gate-scratch.Test.maxon"
+# CHECK 5c's file. It sits in a directory the source walk does sweep, because the exclusion under
+# test is the extension and putting it anywhere already excluded would prove nothing. Untracked in a
+# tracked directory, so `cleanup` must remove it or the working tree comes back dirty.
+TEST_SCRATCH="maxon-bin/Testing/stale-binary-gate-scratch.maxtest"
 
 restore_mtimes() {
 	[ -f "$VICTIM_BACKUP" ] && touch -r "$VICTIM_BACKUP" "$VICTIM" 2>/dev/null
@@ -391,13 +376,10 @@ else
 	     "exit=$code; ${got:-no summary line}  <-- the compiler's own output is not its source"
 fi
 
-# ---- CHECK 5c: ... and neither does a *.Test.maxon, matched the compiler's way ---------------------
+# ---- CHECK 5c: ... and neither does a *.maxtest ---------------------------------------------------
 #
-# The suffix is matched case-insensitively by `isTestSourceName` in `maxon-bin/Compiler/Compiler.maxon`,
-# so `Api.Test.maxon` is left out of the build on every platform — while a byte-exact mirror here would
-# call it a source of the very binary it was excluded from.
-# The file goes in `Testing/` — a directory the walk really does
-# sweep — because the exclusion under test is the SUFFIX and nothing else.
+# The file goes in `Testing/` — a directory the walk really does sweep — because the exclusion under
+# test is the extension and nothing else.
 : > "$TEST_SCRATCH" || exit 2
 if ! age_forward "$TEST_SCRATCH"; then
 	printf 'stale-binary-gate: could not make %s newer than %s\n' "$TEST_SCRATCH" "$MAXON" >&2
@@ -409,10 +391,10 @@ got="$(summary)"
 rm -f "$TEST_SCRATCH"
 
 if [ "$code" = "0" ] && [ "$got" = "$EXPECTED_SUMMARY" ]; then
-	pass "CHECK 5c: a newer *.Test.maxon does not refuse — the suffix is matched case-insensitively ($got)"
+	pass "CHECK 5c: a newer *.maxtest does not refuse — a test file is not a source of the binary ($got)"
 else
-	fail "CHECK 5c: a newer *.Test.maxon does not refuse — the suffix is matched case-insensitively" \
-	     "exit=$code; ${got:-no summary line}  <-- the compiler excludes *.test.maxon case-insensitively, so this file is not in the binary"
+	fail "CHECK 5c: a newer *.maxtest does not refuse — a test file is not a source of the binary" \
+	     "exit=$code; ${got:-no summary line}  <-- a build compiles no *.maxtest, so this file is not in the binary"
 fi
 
 # ---- CHECK 6: and the tree comes back ---------------------------------------------------------------

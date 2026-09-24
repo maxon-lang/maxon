@@ -93,7 +93,7 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	checkCalls(project, module: module, signatures: signatures, funcNames: funcNames, throwsMap: throwsMap, escapeSummary: escapeSummary, mutationSummary: mutationSummary, provenance: provenance)
 
 	// After `checkCalls`: the E3004 explaining an undefined call precedes the refusal it caused.
-	reportDeferredParseErrors(project)
+	reportDeferredParseErrors(project, module: module)
 
 	// The doors a value reaches a `let`'s storage through that the parser could not judge by name — E3019 at a
 	// receiver written through a `let`'s record, E3078 at a `var`, E3160 past the send that lent a graph — after
@@ -198,16 +198,16 @@ function resolveOverloadedCalls(project Project, module MaxonModule)
 		return
 	end 'noOverloadInThisProgram'
 
-	// ONE column for the whole pass, re-keyed to each function and FILLED only by a call that actually has a
-	// defaulted argument to re-point — see `DefaultArgOrigins`.
-	var defaultArgOrigins = DefaultArgOrigins.create()
+	// One column for the whole pass, re-keyed to each function and filled only by a call that asks it —
+	// see `FunctionValueOrigins`.
+	var valueDefiners = FunctionValueOrigins.create()
 
 	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
 	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for fnIndex in 0 upto module.functions.count() 'eachFunc'
-		defaultArgOrigins.beginFunction()
-		resolveOverloadedCallsInFunc(project, module: module, func: try module.functions.get(fnIndex) otherwise panic("resolveOverloadedCalls: fnIndex {fnIndex} is below module.functions.count()"), defaultArgOrigins: defaultArgOrigins)
+		valueDefiners.beginFunction()
+		resolveOverloadedCallsInFunc(project, module: module, func: try module.functions.get(fnIndex) otherwise panic("resolveOverloadedCalls: fnIndex {fnIndex} is below module.functions.count()"), funcIndex: fnIndex, valueDefiners: valueDefiners)
 	end 'eachFunc'
 end 'resolveOverloadedCalls'
 
@@ -219,7 +219,7 @@ end 'resolveOverloadedCalls'
 // per use — one fact, three copies, in a shape where a future edit to one of them reads as deliberate.
 // A parameter carries no borrow of `module`, so each use is just `func`. It is also the shape the two Std
 // passes already take (`foldConstOperandsInFunc`, `elimTrivialBlockArgsInFunc`).
-function resolveOverloadedCallsInFunc(project Project, module MaxonModule, func IrFunction, defaultArgOrigins DefaultArgOrigins)
+function resolveOverloadedCallsInFunc(project Project, module MaxonModule, func IrFunction, funcIndex FuncIndex, valueDefiners FunctionValueOrigins)
 	for opIdx in module.liveOpIndices(func) 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("resolveOverloadedCallsInFunc: opIdx {opIdx} from liveOpIndices is not in module.ops")
 
@@ -233,32 +233,31 @@ function resolveOverloadedCallsInFunc(project Project, module MaxonModule, func 
 		match maxonOpCalleeKind(op) 'callee'
 			noCallee then break 'callee'
 			functionValue then refuseOverloadedFunctionValue(project, func: func, opIndex: opIdx, name: maxonOpCalleeName(op))
-			direct then resolveOneOverloadedCall(project, module: module, func: func, opIndex: opIdx, defaultArgOrigins: defaultArgOrigins)
+			direct then resolveOneOverloadedCall(project, module: module, func: func, funcIndex: funcIndex, opIndex: opIdx, valueDefiners: valueDefiners)
 		end 'callee'
 	end 'eachOp'
 end 'resolveOverloadedCallsInFunc'
 
-// ⭐⭐ **WHICH OP DEFINES EACH VALUE OF THE FUNCTION BEING WALKED (W74)** — the one thing
-// `repointDefaultedArgHelpers` needs and the op stream does not offer: a synthesized default argument is
-// named to the call by its `ValueId`, and re-pointing it means rewriting the op that PRODUCED it.
+// Which op defines each value of the function being walked, which the op stream does not offer.
+// `repointDefaultedArgHelpers` rewrites the op that produced a synthesized default argument, and
+// `deferralCause` follows a refused argument back to the call it came from.
 //
-// ⚠ **`Project.valueOrigins` ALREADY ANSWERS THIS AND MAY NOT BE USED FOR IT.** That table is
-// whole-program and its `lookup` is a linear scan its own header calls THE COLD PATH — one diagnostic
-// asks it, once. Asked once per re-pointed argument it would be O(program values) per call, which is a
-// quadratic in a test file whose every assertion is an overloaded defaulted call. This is the same
-// question asked per FUNCTION, off the walk that is happening anyway.
+// ⚠ `Project.valueOrigins` already answers this and may not be used for it. That table is
+// whole-program and its `lookup` is a linear scan meant for a single diagnostic. Asked once per
+// re-pointed argument it would be O(program values) per call, which is quadratic in a test file
+// whose every assertion is an overloaded defaulted call. This is the same question asked per
+// function, off the walk that is happening anyway.
 //
-// ⚠ **AND IT IS FILLED LAZILY, so a program that re-points nothing pays nothing.** `beginFunction` only
-// clears a flag; the two columns are built by the first lookup in a function, which happens only for a
-// function containing a call that both resolved to an overload member and omitted a defaulted argument.
-type DefaultArgOrigins
+// ⚠ It is filled lazily, so a program that asks nothing pays nothing: `beginFunction` only clears a
+// flag, and the two columns are built by the first lookup in a function.
+type FunctionValueOrigins
 	// Do the columns below describe the function currently being walked? Cleared as each function is
 	// entered, set by the fill.
 	var filled as bool
 	var definedAt as OpIndexArray
 	var isDefined as BoolArray
 
-	static function create() returns DefaultArgOrigins
+	static function create() returns FunctionValueOrigins
 		return Self{filled: false, definedAt: OpIndexArray.create(), isDefined: BoolArray.create()}
 	end 'create'
 
@@ -271,16 +270,23 @@ type DefaultArgOrigins
 	// `call`, and of nothing else: `retypeOpaqueMethodResult` answers `asItStands` on an empty argument
 	// list, so no reinterpretation is ever wrapped around it and the call's own result IS the argument.
 	function definingOp(module MaxonModule, func IrFunction, value ValueId) returns OpIndex
+		match self.originOf(module, func: func, value: value) 'origin'
+			found(opIndex) then return opIndex
+			none then panic("FunctionValueOrigins.definingOp: value v{value} of '{String.from(func.name)}' is defined by no live op — it was read back as a synthesized default ARGUMENT, which `Parser.emitDefaultArgValue` produces as a nullary call's result")
+		end 'origin'
+	end 'definingOp'
+
+	function originOf(module MaxonModule, func IrFunction, value ValueId) returns ValueOriginLookup
 		if not self.filled 'theFirstAskInThisFunction'
 			self.fill(module, func: func)
 		end 'theFirstAskInThisFunction'
 
-		if not (try self.isDefined.get(value) otherwise panic("DefaultArgOrigins.definingOp: value v{value} is past '{String.from(func.name)}'s own value count — every SSA value is minted through Parser.mintValue, which is what sizes this column")) 'noOpDefinesIt'
-			panic("DefaultArgOrigins.definingOp: value v{value} of '{String.from(func.name)}' is defined by no live op — it was read back as a synthesized default ARGUMENT, which `Parser.emitDefaultArgValue` produces as a nullary call's result")
+		if not (try self.isDefined.get(value) otherwise panic("FunctionValueOrigins.originOf: value v{value} is past '{String.from(func.name)}'s own value count — every SSA value is minted through Parser.mintValue, which is what sizes this column")) 'noOpDefinesIt'
+			return ValueOriginLookup.none
 		end 'noOpDefinesIt'
 
-		return try self.definedAt.get(value) otherwise panic("DefaultArgOrigins.definingOp: definedAt.get OOB at v{value} — the two columns are pushed in lockstep")
-	end 'definingOp'
+		return ValueOriginLookup.found(try self.definedAt.get(value) otherwise panic("FunctionValueOrigins.originOf: definedAt.get OOB at v{value} — the two columns are pushed in lockstep"))
+	end 'originOf'
 
 	function fill(module MaxonModule, func IrFunction)
 		self.definedAt = OpIndexArray.create()
@@ -294,7 +300,7 @@ type DefaultArgOrigins
 		end 'oneSlotPerValue'
 
 		for opIdx in module.liveOpIndices(func) 'eachOp'
-			let op = try module.ops.get(opIdx) otherwise panic("DefaultArgOrigins.fill: opIdx {opIdx} from liveOpIndices is not in module.ops")
+			let op = try module.ops.get(opIdx) otherwise panic("FunctionValueOrigins.fill: opIdx {opIdx} from liveOpIndices is not in module.ops")
 
 			match maxonOpResultValue(op) 'result'
 				value(id) then self.record(id, at: opIdx, func: func)
@@ -306,10 +312,10 @@ type DefaultArgOrigins
 	end 'fill'
 
 	function record(value ValueId, at OpIndex, func IrFunction)
-		try self.definedAt.set(value, value: at) otherwise panic("DefaultArgOrigins.record: op {at} of '{String.from(func.name)}' defines v{value}, which is past the function's own value count")
-		try self.isDefined.set(value, value: true) otherwise panic("DefaultArgOrigins.record: isDefined.set OOB at v{value} — the two columns are pushed in lockstep")
+		try self.definedAt.set(value, value: at) otherwise panic("FunctionValueOrigins.record: op {at} of '{String.from(func.name)}' defines v{value}, which is past the function's own value count")
+		try self.isDefined.set(value, value: true) otherwise panic("FunctionValueOrigins.record: isDefined.set OOB at v{value} — the two columns are pushed in lockstep")
 	end 'record'
-end 'DefaultArgOrigins'
+end 'FunctionValueOrigins'
 
 // One call. A callee that names no overload set is left exactly as the parser wrote it, which is every call
 // in the program but the handful this rung is about.
@@ -318,19 +324,19 @@ end 'DefaultArgOrigins'
 // op handed IN would leave its caller holding a released pointer, and an op held ACROSS the rewrite here
 // would be read after free. The rule this pass now keeps, once: **no function both holds an op borrow and
 // replaces that op.** E3070 is what named it, on this compiler's own source.
-function resolveOneOverloadedCall(project Project, module MaxonModule, func IrFunction, opIndex OpIndex, defaultArgOrigins DefaultArgOrigins)
+function resolveOneOverloadedCall(project Project, module MaxonModule, func IrFunction, funcIndex FuncIndex, opIndex OpIndex, valueDefiners FunctionValueOrigins)
 	let op = try module.ops.get(opIndex) otherwise panic("resolveOneOverloadedCall: ops.get({opIndex}) OOB — the index came from liveOpIndices")
 	let callee = maxonOpCalleeName(op)
 	let members = try project.overloadSets.get(callee) otherwise return
 	let candidates = overloadCandidates(project, members: members)
 
 	if candidates.count() > 1 and callPassesOpaqueArg(func, op: op) 'cannotDiscriminate'
-		refuseOpaqueOverloadArgument(project, func: func, opIndex: opIndex, callee: callee)
+		refuseOpaqueOverloadArgument(project, module: module, func: func, funcIndex: funcIndex, opIndex: opIndex, callee: callee, origins: valueDefiners)
 		return
 	end 'cannotDiscriminate'
 
 	match selectOverload(project, func: func, op: op, candidates: candidates) 'pick'
-		chosen(member) then bindOverloadChoice(project, module: module, func: func, opIndex: opIndex, callee: callee, member: member, defaultArgOrigins: defaultArgOrigins)
+		chosen(member) then bindOverloadChoice(project, module: module, func: func, opIndex: opIndex, callee: callee, member: member, valueDefiners: valueDefiners)
 
 		// ⛔⛔ **AN AMBIGUOUS CALL IS *ALSO* LEFT ON A DECLARED MEMBER, AND LEAVING IT ON THE BARE NAME
 		// EARNS THE AUTHOR A SECOND, WRONG DIAGNOSTIC.** A CONTESTED set has no member under the bare
@@ -389,28 +395,159 @@ function leaveUnmatchedCallOnFirstCandidate(project Project, module MaxonModule,
 	try module.ops.set(opIndex, value: rewritten) otherwise panic("leaveUnmatchedCallOnFirstCandidate: ops.set({opIndex}) OOB — the index came from liveOpIndices")
 end 'leaveUnmatchedCallOnFirstCandidate'
 
-// ⭐⭐ **AN OPAQUE ARGUMENT CANNOT DISCRIMINATE, AND "CANNOT DISCRIMINATE" IS NOT "IS A SCALAR".**
+// An opaque argument cannot discriminate, and "cannot discriminate" is not "is a scalar".
 //
-// A `typeParameter` value is a generic's `T` that `retypeOpaqueMethodResult` could not make concrete — which
-// it declines to do exactly when the concrete type is MANAGED, because the drop decision the tag governs is
-// already emitted. An `unresolved` value is the same shape by deferral. Neither NAMES an aggregate, and that
-// is the trap: `aggregateNameFor` answers EMPTY for both, `namedAggregatesConflict` reads empty as "a
-// scalar", and the candidate with a SCALAR parameter therefore matched while the candidate with the
-// genuinely correct AGGREGATE parameter was refused for disagreeing with it. The answer inverted.
+// A `typeParameter` value is a generic's `T` that `retypeOpaqueMethodResult` could not make
+// concrete — which it declines to do exactly when the concrete type is managed, because the drop
+// decision the tag governs is already emitted. An `unresolved` value is the same shape by deferral.
+// Neither names an aggregate: `aggregateNameFor` answers empty for both and
+// `namedAggregatesConflict` reads empty as "a scalar", so the candidate with a scalar parameter
+// would match while the one with the correct aggregate parameter was refused for disagreeing with
+// it.
 //
-// MEASURED, on a `Box with Shape` for a boxed union `Shape`, `over(x Shape)` beside `over(x Integer)`:
-// `over(b.get())` selected the `Integer` member and did arithmetic on the payload word — exit 25 where 7 was
-// correct, and it stayed exit 25 once the scalar-vs-aggregate quadrant was closed, because an opaque
-// argument is not an aggregate at either end.
+// So a set of two or more candidates and an argument nothing can identify is refused. It cannot be
+// a selection (there is no fact to select on) and it must not be a silent one: `noMatch` would
+// leave the bare name, which is the first member's registration name, so whichever overload
+// happened to be written first would take the call. A single candidate needs no discrimination and
+// is left alone.
 //
-// So a set of two or more candidates and an argument nothing can identify is REFUSED. It cannot be a
-// selection (there is no fact to select on) and it must not be a silent one: `noMatch` would leave the bare
-// name, which is the FIRST member's registration name, so whichever overload happened to be written first
-// would take the call. A single candidate needs no discrimination and is left alone.
-function refuseOpaqueOverloadArgument(project Project, func IrFunction, opIndex OpIndex, callee ByteArray)
+// The refusal carries the undeclared calls an `unresolved` argument derives from (`deferralCause`),
+// so the editor can drop it when it compiled a buffer alone and a sibling file declares them all.
+function refuseOpaqueOverloadArgument(project Project, module MaxonModule, func IrFunction, funcIndex FuncIndex, opIndex OpIndex, callee ByteArray, origins FunctionValueOrigins)
 	let range = project.opRanges.get(opIndex)
-	reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "resolving an overload of '{bareMethodName(callee)}' against an argument of opaque generic type — the value is a type parameter whose concrete type is managed, so its type is not known at the call and no overload can be picked by it. Bind the argument to a concretely-typed local first, or give the overloads distinct names", line: range.line, column: range.column, filePath: func.sourceFilePath)
+	let args = match overloadCallArgs(try module.ops.get(opIndex) otherwise panic("refuseOpaqueOverloadArgument: ops.get({opIndex}) OOB — the index is the call being refused")) 'args'
+		supplied(supplied, _, _) gives supplied
+	end 'args'
+
+	let refusal = Diagnostic.create(ErrorCode.parserUnsupportedFeature, message: opaqueOverloadArgumentMessage(callee, typeParameterArgument: valueTagsInclude(func, args: args, tag: ValueTypeTag.typeParameter)), line: range.line, column: range.column, filePath: func.sourceFilePath)
+
+	reportDiagnostic(project, diagnostic: refusal.withCause(deferralCause(project, module: module, funcIndex: funcIndex, seeds: args, origins: origins)))
 end 'refuseOpaqueOverloadArgument'
+
+function opaqueOverloadArgumentMessage(callee ByteArray, typeParameterArgument bool) returns String
+	if typeParameterArgument 'aTypeParameter'
+		return "resolving an overload of '{bareMethodName(callee)}' against an argument of opaque generic type — the value is a type parameter whose concrete type is managed, so its type is not known at the call and no overload can be picked by it. Bind the argument to a concretely-typed local first, or give the overloads distinct names"
+	end 'aTypeParameter'
+
+	return "resolving an overload of '{bareMethodName(callee)}' against an argument whose type is not known — it derives from a name no file of the program declares, so no overload can be picked by it"
+end 'opaqueOverloadArgumentMessage'
+
+// ⚠ Fails closed: a value the trace cannot follow to an undeclared call — a type parameter, a call
+// to a declared function, a definer with no opaque operand — makes the diagnostic `standsAlone`,
+// and the editor publishes it. A cause naming calls the refusal does not rest on would hide a real
+// error.
+function deferralCause(project Project, module MaxonModule, funcIndex FuncIndex, seeds ValueIdArray, origins FunctionValueOrigins) returns DiagnosticCause
+	var calls = SourceRangeArray.create()
+
+	if not traceUndeclaredCalls(project, module: module, funcIndex: funcIndex, seeds: seeds, origins: origins, calls: calls) or calls.isEmpty() 'noUndeclaredCallExplainsIt'
+		return DiagnosticCause.standsAlone
+	end 'noUndeclaredCallExplainsIt'
+
+	return DiagnosticCause.undeclaredCalls(calls, filePath: module.getFunc(funcIndex).sourceFilePath)
+end 'deferralCause'
+
+function traceUndeclaredCalls(project Project, module MaxonModule, funcIndex FuncIndex, seeds ValueIdArray, origins FunctionValueOrigins, calls SourceRangeArray) returns bool
+	let func = module.getFunc(funcIndex)
+	var pending = ValueIdArray.create()
+	pending.append(seeds)
+	var visited = ValueMarkSet.create()
+
+	while not pending.isEmpty() 'eachValue'
+		let value = try pending.pop() otherwise panic("traceUndeclaredCalls: the loop runs only while `pending` holds a value")
+
+		if visited.contains(value) 'tracedAlready'
+			continue
+		end 'tracedAlready'
+
+		visited.insert(value)
+		let tag = try func.valueTags.get(value) otherwise panic("traceUndeclaredCalls: value v{value} of '{String.from(func.name)}' has no recorded type — every SSA value is minted through Parser.mintValue")
+
+		if tag == ValueTypeTag.typeParameter 'opaqueInEveryCompile'
+			return false
+		end 'opaqueInEveryCompile'
+
+		if tag != ValueTypeTag.unresolved 'identified'
+			continue
+		end 'identified'
+
+		if not traceDeferredValue(project, module: module, func: func, funcIndex: funcIndex, value: value, origins: origins, calls: calls, pending: pending) 'untraceable'
+			return false
+		end 'untraceable'
+	end 'eachValue'
+
+	return true
+end 'traceUndeclaredCalls'
+
+function traceDeferredValue(project Project, module MaxonModule, func IrFunction, funcIndex FuncIndex, value ValueId, origins FunctionValueOrigins, calls SourceRangeArray, pending ValueIdArray) returns bool
+	match project.deferralSources.sourceOf(funcIndex, valueId: value) 'recorded'
+		value(sourceFuncIndex, sourceId) then return followDeferralSource(project, module: module, funcIndex: funcIndex, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId, calls: calls, pending: pending)
+		none then break 'recorded'
+	end 'recorded'
+
+	match origins.originOf(module, func: func, value: value) 'origin'
+		found(definer) then return traceDeferredDefiner(project, module: module, func: func, definer: definer, calls: calls, pending: pending)
+		none then return pushBlockArgumentInputs(module, func: func, value: value, pending: pending)
+	end 'origin'
+end 'traceDeferredValue'
+
+function followDeferralSource(project Project, module MaxonModule, funcIndex FuncIndex, sourceFuncIndex FuncIndex, sourceId ValueId, calls SourceRangeArray, pending ValueIdArray) returns bool
+	if sourceFuncIndex == funcIndex 'thisFunctionsValue'
+		pending.push(sourceId)
+		return true
+	end 'thisFunctionsValue'
+
+	return traceUndeclaredCalls(project, module: module, funcIndex: sourceFuncIndex, seeds: singletonArgs(sourceId), origins: FunctionValueOrigins.create(), calls: calls)
+end 'followDeferralSource'
+
+function traceDeferredDefiner(project Project, module MaxonModule, func IrFunction, definer OpIndex, calls SourceRangeArray, pending ValueIdArray) returns bool
+	let op = try module.ops.get(definer) otherwise panic("traceDeferredDefiner: ops.get({definer}) OOB — the index came from liveOpIndices")
+
+	if maxonOpCalleeKind(op) == MaxonCalleeKind.direct 'aCall'
+		let callee = maxonOpCalleeName(op)
+
+		if project.funcSignatures.contains(callee) or isCompilerInternalCallee(callee) 'notAnAuthorsUndeclaredCallee'
+			return false
+		end 'notAnAuthorsUndeclaredCallee'
+
+		calls.push(project.opRanges.get(definer))
+		return true
+	end 'aCall'
+
+	var operands = ValueIdArray.create()
+	maxonOpOperandValues(op, into: operands)
+
+	if not valueTagsIncludeOpaque(func, args: operands) 'opaqueWithoutAnOpaqueOperand'
+		return false
+	end 'opaqueWithoutAnOpaqueOperand'
+
+	pending.append(operands)
+	return true
+end 'traceDeferredDefiner'
+
+function pushBlockArgumentInputs(module MaxonModule, func IrFunction, value ValueId, pending ValueIdArray) returns bool
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = module.getBlock(blockRef)
+
+		for (iter, argument) in block.blockArgs.withIterator() 'eachArgument'
+			if argument.valueId == value 'theDefiningBlock'
+				pushEdgeInputs(module, func: func, target: block.id, position: iter.index(), pending: pending)
+				return true
+			end 'theDefiningBlock'
+		end 'eachArgument'
+	end 'eachBlock'
+
+	return false
+end 'pushBlockArgumentInputs'
+
+function pushEdgeInputs(module MaxonModule, func IrFunction, target BlockId, position ElementIndex, pending ValueIdArray)
+	for blockRef in func.blockRefs 'eachPredecessor'
+		for edge in module.getBlock(blockRef).branchEdges 'eachEdge'
+			if edge.targetBlockId == target 'intoTheDefiningBlock'
+				pending.push(try edge.argIds.get(position) otherwise panic("pushEdgeInputs: an edge into block {target} carries {edge.argIds.count()} arguments, and the block's argument {position} is one of them"))
+			end 'intoTheDefiningBlock'
+		end 'eachEdge'
+	end 'eachPredecessor'
+end 'pushEdgeInputs'
 
 // Does this call supply an argument whose type nothing can identify? See `refuseOpaqueOverloadArgument`.
 function callPassesOpaqueArg(func IrFunction, op MaxonOp) returns bool
@@ -420,16 +557,20 @@ function callPassesOpaqueArg(func IrFunction, op MaxonOp) returns bool
 end 'callPassesOpaqueArg'
 
 function valueTagsIncludeOpaque(func IrFunction, args ValueIdArray) returns bool
-	for argId in args 'each'
-		let tag = try func.valueTags.get(argId) otherwise panic("valueTagsIncludeOpaque: value v{argId} of '{String.from(func.name)}' has no recorded type — every SSA value is minted through Parser.mintValue")
+	return valueTagsInclude(func, args: args, tag: ValueTypeTag.typeParameter) or valueTagsInclude(func, args: args, tag: ValueTypeTag.unresolved)
+end 'valueTagsIncludeOpaque'
 
-		if tag == ValueTypeTag.typeParameter or tag == ValueTypeTag.unresolved 'opaque'
+function valueTagsInclude(func IrFunction, args ValueIdArray, tag ValueTypeTag) returns bool
+	for argId in args 'each'
+		let argTag = try func.valueTags.get(argId) otherwise panic("valueTagsInclude: value v{argId} of '{String.from(func.name)}' has no recorded type — every SSA value is minted through Parser.mintValue")
+
+		if argTag == tag 'present'
 			return true
-		end 'opaque'
+		end 'present'
 	end 'each'
 
 	return false
-end 'valueTagsIncludeOpaque'
+end 'valueTagsInclude'
 
 // ⭐ **A FUNCTION VALUE OF AN OVERLOADED NAME HAS NO ARGUMENTS TO PICK BY, so it is REFUSED rather than bound
 // to whichever member happens to have registered first.** `let f = process` names a set, not a function, and
@@ -687,7 +828,7 @@ end 'overloadArgTypeFit'
 // sites are then indistinguishable, so the second claim is refused rather than allowed to overwrite the
 // first. The cure for that residual is to key the site by its call's op index, which is a change to the P1.9
 // record and its pass, not to this one.
-function bindOverloadChoice(project Project, module MaxonModule, func IrFunction, opIndex OpIndex, callee ByteArray, member ByteArray, defaultArgOrigins DefaultArgOrigins)
+function bindOverloadChoice(project Project, module MaxonModule, func IrFunction, opIndex OpIndex, callee ByteArray, member ByteArray, valueDefiners FunctionValueOrigins)
 	// ⛔⛔ **THE ARGUMENT COLUMNS ARE READ OFF THE OP BEFORE THE COMMIT, AND READING THEM AFTER IT IS A
 	// USE-AFTER-FREE.** `commitOverloadChoice` stores a rewritten op at this index, which RELEASES the
 	// record `overloadCallArgs` reads its `args`/`defaultSlots` columns out of — and a freed box still holds
@@ -696,7 +837,7 @@ function bindOverloadChoice(project Project, module MaxonModule, func IrFunction
 	let op = try module.ops.get(opIndex) otherwise panic("bindOverloadChoice: ops.get({opIndex}) OOB — the index came from liveOpIndices")
 
 	match overloadCallArgs(op) 'args'
-		supplied(args, _, defaultSlots) then bindOverloadChoiceArguments(project, module: module, func: func, opIndex: opIndex, callee: callee, member: member, args: args, defaultSlots: defaultSlots, origins: defaultArgOrigins)
+		supplied(args, _, defaultSlots) then bindOverloadChoiceArguments(project, module: module, func: func, opIndex: opIndex, callee: callee, member: member, args: args, defaultSlots: defaultSlots, origins: valueDefiners)
 	end 'args'
 
 	commitOverloadChoice(project, module: module, func: func, opIndex: opIndex, member: member, disagreement: sharedCallResultSubject)
@@ -712,7 +853,7 @@ end 'bindOverloadChoice'
 // that kept the bare name has nothing to move — while a defaulted argument's TYPE was read off a by-name
 // registry that is LAST-WINS over the whole set, so that member's argument may still be tagged as another
 // member's and owes the same reconcile every other member owes.
-function bindOverloadChoiceArguments(project Project, module MaxonModule, func IrFunction, opIndex OpIndex, callee ByteArray, member ByteArray, args ValueIdArray, defaultSlots ParamCountArray, origins DefaultArgOrigins)
+function bindOverloadChoiceArguments(project Project, module MaxonModule, func IrFunction, opIndex OpIndex, callee ByteArray, member ByteArray, args ValueIdArray, defaultSlots ParamCountArray, origins FunctionValueOrigins)
 	repointDefaultedArgHelpers(project, module: module, func: func, callee: callee, member: member, args: args, defaultSlots: defaultSlots, origins: origins)
 
 	if member.equals(callee) 'firstMemberKeptTheBareName'
@@ -791,7 +932,7 @@ end 'valueIdArrayContains'
 //
 // A CALLER-LOCATION slot is skipped: nothing was synthesized for it, and the constant the fill emitted is
 // the caller's own line or path — the same value whichever member wins.
-function repointDefaultedArgHelpers(project Project, module MaxonModule, func IrFunction, callee ByteArray, member ByteArray, args ValueIdArray, defaultSlots ParamCountArray, origins DefaultArgOrigins)
+function repointDefaultedArgHelpers(project Project, module MaxonModule, func IrFunction, callee ByteArray, member ByteArray, args ValueIdArray, defaultSlots ParamCountArray, origins FunctionValueOrigins)
 	if defaultSlots.count() == 0 'thisCallOmittedNothingTheCalleeDefaults'
 		return
 	end 'thisCallOmittedNothingTheCalleeDefaults'
@@ -2996,11 +3137,18 @@ end 'blameTargetErrorsIn'
 
 // An INDEX loop whose reads are inline and bind nothing off the borrow — the ruling is at
 // `TypeResolution.reportDeferredNameDiagnostics`, which drains its own lists the same way.
-function reportDeferredParseErrors(project Project)
+function reportDeferredParseErrors(project Project, module MaxonModule)
 	for entryIndex in 0 upto project.deferredParseErrors.count() 'eachEntry'
-		reportParseError(project, path: (try project.deferredParseErrors.get(entryIndex) otherwise panic("reportDeferredParseErrors: entryIndex {entryIndex} is below project.deferredParseErrors.count()")).filePath, error: (try project.deferredParseErrors.get(entryIndex) otherwise panic("reportDeferredParseErrors: entryIndex {entryIndex} is below project.deferredParseErrors.count()")).error)
+		reportDiagnostic(project, diagnostic: deferredParseErrorDiagnostic(project, module: module, entryIndex: entryIndex))
 	end 'eachEntry'
 end 'reportDeferredParseErrors'
+
+function deferredParseErrorDiagnostic(project Project, module MaxonModule, entryIndex ElementIndex) returns Diagnostic
+	let deferred = try project.deferredParseErrors.get(entryIndex) otherwise panic("deferredParseErrorDiagnostic: entryIndex {entryIndex} is below project.deferredParseErrors.count()")
+	let cause = deferralCause(project, module: module, funcIndex: deferred.funcIndex, seeds: singletonArgs(deferred.value), origins: FunctionValueOrigins.create())
+
+	return parseErrorDiagnostic(deferred.error, path: deferred.filePath, keywords: project.keywords).withCause(cause)
+end 'deferredParseErrorDiagnostic'
 
 function checkCalls(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, throwsMap FuncThrowsMap, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, provenance ProvenanceTracer)
 	// ⚠ **THE MEMO IS NOT AN OPTIMIZATION** — the note `LowerMaxonToStd.witnessSlotsOf` carries, one pass
@@ -3974,7 +4122,7 @@ end 'renderAmbiguousCandidates'
 // reached only when it answered `false` — so it panics rather than inventing a third sentence.
 function reportCalleeNotVisible(project Project, funcNames FunctionNameIndex, callee ByteArray, noun ByteArray, callRange SourceRange, filePath FilePath)
 	let declared = try funcNames.funcNamed(callee) otherwise panic("reportCalleeNotVisible: '{String.from(callee)}' has no declaration — `calleeVisibleFrom` answered `false`, which it can only do for a callee it found")
-	reportHiddenSymbol(project, kind: HiddenSymbolKind.functionDeclaration, noun: String.from(noun), tier: declared.visibility, line: callRange.line, column: callRange.column, filePath: filePath)
+	reportDiagnostic(project, diagnostic: hiddenSymbolDiagnostic(HiddenSymbolKind.functionDeclaration, noun: String.from(noun), tier: declared.visibility, line: callRange.line, column: callRange.column, filePath: filePath))
 end 'reportCalleeNotVisible'
 
 // ⭐ **WHICH KIND OF DECLARATION A HIDDEN-SYMBOL REFUSAL IS ABOUT — the ONE axis on which its two sentences
@@ -3985,29 +4133,28 @@ export enum HiddenSymbolKind
 	staticMember
 end 'HiddenSymbolKind'
 
-// ⭐ **THE CODE AND THE SENTENCE A HIDDEN SYMBOL IS REFUSED WITH — one producer for every position a hidden
-// name can be written in.** A call in a function BODY reaches it from `validateCall` above, off
-// `FunctionNameIndex`; a call in a TOP-LEVEL INITIALIZER and a read or store of a hidden STATIC MEMBER reach
-// it from `Queries.reportParseError`'s `symbolNotVisible` arm, off the sweep's own visibility column,
-// because both are decided before this pass exists. Several askers, one wording — the discipline the
-// `unknownTypeName` arm states, and the reason a static and a function cannot come to disagree about what
-// `module` means.
+// The code and the sentence a hidden symbol is refused with — one producer for every position a
+// hidden name can be written in. A call in a function body reaches it from `validateCall` above,
+// off `FunctionNameIndex`; a call in a top-level initializer and a read or store of a hidden static
+// member reach it from `Queries.parseErrorDiagnostic`'s `symbolNotVisible` arm, off the sweep's own
+// visibility column, because both are decided before this pass exists. Several askers, one wording,
+// so a static and a function cannot come to disagree about what `module` means.
 //
 // A program-wide symbol (`global` or `public`) cannot be refused by any door, so reaching here with one is
 // an invariant break.
-export function reportHiddenSymbol(project Project, kind HiddenSymbolKind, noun String, tier Visibility, line LineNumber, column ColumnNumber, filePath FilePath)
+export function hiddenSymbolDiagnostic(kind HiddenSymbolKind, noun String, tier Visibility, line LineNumber, column ColumnNumber, filePath FilePath) returns Diagnostic
 	let word = match kind 'kind'
 		functionDeclaration gives "function"
 		staticMember gives "static"
 	end 'kind'
 
-	match tier 'tier'
-		file then reportPositioned(project, code: ErrorCode.symbolNotExported, message: "{word} '{noun}' is not exported", line: line, column: column, filePath: filePath)
-		module then reportPositioned(project, code: ErrorCode.symbolNotInModuleScope, message: "{word} '{noun}' is module-scoped and not visible from this directory", line: line, column: column, filePath: filePath)
+	return match tier 'tier'
+		file gives Diagnostic.create(ErrorCode.symbolNotExported, message: "{word} '{noun}' is not exported", line: line, column: column, filePath: filePath)
+		module gives Diagnostic.create(ErrorCode.symbolNotInModuleScope, message: "{word} '{noun}' is module-scoped and not visible from this directory", line: line, column: column, filePath: filePath)
 		global or
-			public then panic("reportHiddenSymbol: '{noun}' is program-wide and visible from every file — no visibility door can have refused it")
+			public panic("hiddenSymbolDiagnostic: '{noun}' is program-wide and visible from every file — no visibility door can have refused it")
 	end 'tier'
-end 'reportHiddenSymbol'
+end 'hiddenSymbolDiagnostic'
 
 // ⭐ **VALIDATE AN INDIRECT CALL AGAINST THE FUNCTION TYPE ITS CALLEE VALUE WAS DECLARED WITH.** The
 // declared type is the authority: the call site derives its argument count, its per-argument register file

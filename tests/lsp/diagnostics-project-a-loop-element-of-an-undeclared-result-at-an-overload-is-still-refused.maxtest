@@ -1,0 +1,18 @@
+let ProjectLoopUndeclaredDirName = "diagnostics-project-loop-element-of-an-undeclared-result-at-an-overload"
+let ProjectLoopUndeclaredHelperFileName = "helper.maxon"
+let ProjectLoopUndeclaredBufferFileName = "main.maxon"
+let ProjectLoopUndeclaredHelperSource = "module function projectLoopUndeclaredHelper() returns ExitCode\n\treturn 0\nend 'projectLoopUndeclaredHelper'\n"
+let ProjectLoopUndeclaredBufferSource = "function projectLoopUndeclaredPick(x ExitCode) returns ExitCode\n\treturn x\nend 'projectLoopUndeclaredPick'\n\nfunction projectLoopUndeclaredPick(x String) returns ExitCode\n\treturn 1 if x.isEmpty() else 0\nend 'projectLoopUndeclaredPick'\n\nfunction main() returns ExitCode\n\tfor code in projectLoopUndeclaredNowhere() 'each'\n\t\treturn projectLoopUndeclaredPick(code)\n\tend 'each'\n\n\treturn 0\nend 'main'\n"
+let ProjectLoopUndeclaredPublished = "E2015@10 E3004@9"
+
+test 'an element of a result no file declares, handed to an overloaded function in a loop, is still refused'
+	let root = stagedProjectDiagnosticsRoot(ProjectLoopUndeclaredDirName)
+	writeCorpusFile(root, fileName: ProjectLoopUndeclaredHelperFileName, content: ProjectLoopUndeclaredHelperSource)
+	writeCorpusFile(root, fileName: ProjectLoopUndeclaredBufferFileName, content: ProjectLoopUndeclaredBufferSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: ProjectLoopUndeclaredBufferFileName, content: ProjectLoopUndeclaredBufferSource)
+
+	discardOutsideCheckoutDir(root)
+
+	expectProjectDiagnosticCodesAndLines(probe, expected: ProjectLoopUndeclaredPublished, note: "`projectLoopUndeclaredNowhere` is declared nowhere, and `main` walks its result and hands each element to `projectLoopUndeclaredPick`, which the buffer overloads on `ExitCode` and `String`. A `maxon build` of the staged project refuses the overload inside the loop and reports the undefined function on the `for` line.")
+end 'an element of a result no file declares, handed to an overloaded function in a loop, is still refused'

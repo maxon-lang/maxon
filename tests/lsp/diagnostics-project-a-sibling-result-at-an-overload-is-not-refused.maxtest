@@ -1,0 +1,17 @@
+let ProjectSiblingOverloadDirName = "diagnostics-project-sibling-result-at-an-overload"
+let ProjectSiblingOverloadHelperFileName = "helper.maxon"
+let ProjectSiblingOverloadBufferFileName = "main.maxon"
+let ProjectSiblingOverloadHelperSource = "module function projectSiblingOverloadAnswer() returns ExitCode\n\treturn 0\nend 'projectSiblingOverloadAnswer'\n"
+let ProjectSiblingOverloadBufferSource = "function projectSiblingOverloadPick(x ExitCode) returns ExitCode\n\treturn x\nend 'projectSiblingOverloadPick'\n\nfunction projectSiblingOverloadPick(x String) returns ExitCode\n\treturn 1 if x.isEmpty() else 0\nend 'projectSiblingOverloadPick'\n\nfunction main() returns ExitCode\n\treturn projectSiblingOverloadPick(projectSiblingOverloadAnswer())\nend 'main'\n"
+
+test 'a sibling function result handed to an overloaded function is not an opaque argument'
+	let root = stagedProjectDiagnosticsRoot(ProjectSiblingOverloadDirName)
+	writeCorpusFile(root, fileName: ProjectSiblingOverloadHelperFileName, content: ProjectSiblingOverloadHelperSource)
+	writeCorpusFile(root, fileName: ProjectSiblingOverloadBufferFileName, content: ProjectSiblingOverloadBufferSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: ProjectSiblingOverloadBufferFileName, content: ProjectSiblingOverloadBufferSource)
+
+	discardOutsideCheckoutDir(root)
+
+	expectNoProjectDiagnostics(probe, note: "`projectSiblingOverloadAnswer` is a `module function` the sibling file declares, returning `ExitCode`, and `main` hands its result to `projectSiblingOverloadPick`, which the buffer overloads on `ExitCode` and `String`. A `maxon build` of the staged project exits 0. The buffer compiled alone cannot type the sibling's result, so its refusal to pick an overload by that argument is as invented as the `call to undefined function` behind it.")
+end 'a sibling function result handed to an overloaded function is not an opaque argument'

@@ -7,11 +7,12 @@ import { isMaxonCheckout, registerSpecTestController } from './specTestControlle
 import { appendRunOutput, childList, pipeLines } from './testItems';
 import {
 	isIgnoredDirectory,
+	isTestFileName,
 	parseTestDeclarations,
 	parseTestRunDocument,
 	pathKey,
 	resultKey,
-	TestFileSuffix,
+	TestFileGlob,
 	testFilterFor,
 	testKey,
 	TestProjectExitCode,
@@ -21,8 +22,6 @@ import {
 	verdictFor
 } from './unitTestModel';
 
-// The compiler folds case when it recognises a test file, so the glob does too.
-const TEST_FILE_GLOB = '**/*.[tT][eE][sS][tT].maxon';
 const IGNORE_MARKER_GLOB = '**/.maxonignore';
 
 interface DeclaredTestItem {
@@ -31,7 +30,7 @@ interface DeclaredTestItem {
 }
 
 /**
- * The Test Explorer: every `test` declaration in the workspace's `*.test.maxon` files, run by the compiler the
+ * The Test Explorer: every `test` declaration in the workspace's `.maxtest` files, run by the compiler the
  * language server uses. The checkout's spec suite gets a controller of its own, only in the checkout.
  *
  * `compilerExecutable` is asked at run time, because the compiler is found (or installed) after activation
@@ -60,7 +59,7 @@ function registerUnitTestController(compilerExecutable: () => string | undefined
 		const folder = vscode.workspace.getWorkspaceFolder(uri);
 
 		// `maxon test` never compiles a file beneath a `.maxonignore`, so it has no tests to show.
-		if (!folder || !path.basename(file).toLowerCase().endsWith(TestFileSuffix) || isIgnoredDirectory(path.dirname(file))) {
+		if (!folder || !isTestFileName(file) || isIgnoredDirectory(path.dirname(file))) {
 			removeFile(uri);
 			return;
 		}
@@ -109,7 +108,7 @@ function registerUnitTestController(compilerExecutable: () => string | undefined
 	}
 
 	async function discoverAll(): Promise<void> {
-		const uris = await vscode.workspace.findFiles(TEST_FILE_GLOB);
+		const uris = await vscode.workspace.findFiles(TestFileGlob);
 		const found = new Set(uris.map(uri => pathKey(uri.fsPath)));
 
 		for (const [key, item] of [...fileItems]) {
@@ -123,7 +122,7 @@ function registerUnitTestController(compilerExecutable: () => string | undefined
 	controller.refreshHandler = () => discoverAll();
 	discoverAll().catch(err => log(`Test discovery failed: ${err}`));
 
-	const testFileWatcher = vscode.workspace.createFileSystemWatcher(TEST_FILE_GLOB);
+	const testFileWatcher = vscode.workspace.createFileSystemWatcher(TestFileGlob);
 	testFileWatcher.onDidCreate(syncFile);
 	testFileWatcher.onDidChange(syncFile);
 	testFileWatcher.onDidDelete(removeFile);

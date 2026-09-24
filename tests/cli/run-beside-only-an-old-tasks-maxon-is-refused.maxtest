@@ -1,0 +1,18 @@
+let CaseDirName = "run-beside-only-an-old-tasks-maxon-is-refused"
+let OldTaskFileName = "tasks.maxon"
+let TasksFileExtension = ".maxtasks"
+let RunCommandWord = "run"
+let AskedFor = "report"
+
+let OldTasksSource = "export function report() returns ExitCode\n\treturn 0\nend 'report'\n"
+
+test 'a directory holding a tasks.maxon and no .maxtasks has no tasks'
+	let dir = freshCaseDir(CaseDirName)
+	writeStagedFile(dir.join(OldTaskFileName), content: OldTasksSource)
+
+	let refused = runDriver([RunCommandWord, AskedFor], workingDirectory: dir)
+	let said = "It wrote to stdout: {refused.stdout} and to stderr: {refused.stderr}"
+
+	Expect.equal(refused.exitCode() as AssertedInt, expected: 1, message: "`maxon {RunCommandWord} {AskedFor}` beside a `{OldTaskFileName}` and no `{TasksFileExtension}` file did not refuse: `{OldTaskFileName}` is an ordinary source and declares no tasks. {said}")
+	Expect.contains(refused.stderr, needle: TasksFileExtension, message: "the refusal did not name the `{TasksFileExtension}` file it looked for. {said}")
+end 'a directory holding a tasks.maxon and no .maxtasks has no tasks'

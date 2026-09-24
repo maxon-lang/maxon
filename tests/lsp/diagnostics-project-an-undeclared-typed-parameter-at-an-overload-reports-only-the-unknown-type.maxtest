@@ -1,0 +1,18 @@
+let ProjectTypeUndeclaredDirName = "diagnostics-project-undeclared-typed-parameter-at-an-overload"
+let ProjectTypeUndeclaredHelperFileName = "helper.maxon"
+let ProjectTypeUndeclaredBufferFileName = "count.maxon"
+let ProjectTypeUndeclaredHelperSource = "module function projectTypeUndeclaredHelper() returns ExitCode\n\treturn 0\nend 'projectTypeUndeclaredHelper'\n"
+let ProjectTypeUndeclaredBufferSource = "function projectTypeUndeclaredPick(x ExitCode) returns ExitCode\n\treturn x\nend 'projectTypeUndeclaredPick'\n\nfunction projectTypeUndeclaredPick(x String) returns ExitCode\n\treturn 1 if x.isEmpty() else 0\nend 'projectTypeUndeclaredPick'\n\nmodule function projectTypeUndeclaredCount(code ProjectTypeUndeclaredNowhere) returns ExitCode\n\treturn projectTypeUndeclaredPick(code)\nend 'projectTypeUndeclaredCount'\n"
+let ProjectTypeUndeclaredPublished = "E3011@0"
+
+test 'a parameter typed by a name no file declares, handed to an overloaded function, reports the unknown type and nothing behind it'
+	let root = stagedProjectDiagnosticsRoot(ProjectTypeUndeclaredDirName)
+	writeCorpusFile(root, fileName: ProjectTypeUndeclaredHelperFileName, content: ProjectTypeUndeclaredHelperSource)
+	writeCorpusFile(root, fileName: ProjectTypeUndeclaredBufferFileName, content: ProjectTypeUndeclaredBufferSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: ProjectTypeUndeclaredBufferFileName, content: ProjectTypeUndeclaredBufferSource)
+
+	discardOutsideCheckoutDir(root)
+
+	expectProjectDiagnosticCodesAndLines(probe, expected: ProjectTypeUndeclaredPublished, note: "`ProjectTypeUndeclaredNowhere` is declared nowhere, and the buffer's `projectTypeUndeclaredCount` takes one and hands it to `projectTypeUndeclaredPick`, which the buffer overloads on `ExitCode` and `String`. `resolveTypes` reports the unknown type without a position, and the pipeline's error gate stops before `semanticCheck`, so no overload is ever resolved against the parameter — a `maxon build` of the staged project reports the unknown type and nothing else.")
+end 'a parameter typed by a name no file declares, handed to an overloaded function, reports the unknown type and nothing behind it'

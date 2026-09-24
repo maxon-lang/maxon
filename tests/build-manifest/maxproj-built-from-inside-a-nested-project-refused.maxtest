@@ -1,0 +1,15 @@
+let CaseDirName = "maxproj-built-from-inside-a-nested-project-refused"
+let NestedDirName = "inner"
+let NestedProjectFileName = "inner.maxproj"
+let OuterProjectFileName = "app.maxproj"
+let NestedOutputStem = "inner"
+
+test 'a bare maxon build inside a project nested below another is refused, naming both project files'
+	let staged = stagedProject(CaseDirName, fixture: MaxprojNestedFixtureName)
+	let nested = staged.join(NestedDirName)
+
+	try requireRefused(nested, options: StringArray.create(), exitCode: RefusedExitCode, wordings: [NestedProjectFileName, OuterProjectFileName], what: "maxon build")
+
+	let product = executableIn(nested, stem: NestedOutputStem)
+	Expect.isFalse(File.exists(product), message: "`maxon build` inside the nested project was refused and still wrote {product.toString()}.")
+end 'a bare maxon build inside a project nested below another is refused, naming both project files'

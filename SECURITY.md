@@ -20,9 +20,9 @@ Maxon is a compiler, so the interesting cases are about what it *emits* and what
 **A compiler crash on malformed input is a bug, not usually a vulnerability.** Report it as an
 ordinary issue — that path is faster and gets the same attention.
 
-Compiling untrusted source is not a sandbox and is not treated as one: a Maxon program can run
-arbitrary code the moment you run it, and the build manifest (`project.maxon`) is itself a program the
-compiler executes. Treat compiling an untrusted project exactly as you would treat running one.
+Compiling untrusted source runs outside any sandbox: a Maxon program can run arbitrary code the moment
+you run it, and a project's `.maxproj` file and a `.maxtasks` file are themselves programs the compiler
+executes. Treat compiling an untrusted project exactly as you would treat running one.
 
 ## Releases
 

@@ -24,7 +24,7 @@ end 'splits on commas'
 A failure prints a report to stderr at the assertion, naming the caller's file and line:
 
 ```text
-FAIL split.test.maxon:20: Expect.equal
+FAIL split.maxtest:20: Expect.equal
   expected: 5
   received: 4
   message: two plus two

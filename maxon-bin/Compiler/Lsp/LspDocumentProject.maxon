@@ -221,19 +221,21 @@ end 'uriByteAt'
 // broken installation — a library tier missing beside the binary, or one that will not load — and each
 // caller says what it does with the absence; there is no half-built project to hand back.
 module union LspDocumentProject
-	loaded(project Project)
+	loaded(project Project, tiers LibraryTiers)
 	unavailable
 end 'LspDocumentProject'
 
 module type LibraryTiers
 	module let stdlibDir as FilePath
 	module let runtimeDir as FilePath
+	module let normalizedStdlibDir as FilePath
+	module let normalizedRuntimeDir as FilePath
 
 	module static function locate() returns LibraryTiers throws CompileError
 		let stdlibDir = try locateStdlibDir()
 		let runtimeDir = try runtimeDirBeside(stdlibDir)
 
-		return Self{stdlibDir: stdlibDir, runtimeDir: runtimeDir}
+		return Self{stdlibDir: stdlibDir, runtimeDir: runtimeDir, normalizedStdlibDir: stdlibDir.normalize(), normalizedRuntimeDir: runtimeDir.normalize()}
 	end 'locate'
 end 'LibraryTiers'
 
@@ -268,5 +270,5 @@ module function lspDocumentProject(path FilePath, content String) returns LspDoc
 	let tiers = try LibraryTiers.locate() otherwise return LspDocumentProject.unavailable
 	let project = try libraryTierProject(path, tiers: tiers, buffer: OpenBuffer.held(path, content: content)) otherwise return LspDocumentProject.unavailable
 
-	return LspDocumentProject.loaded(project)
+	return LspDocumentProject.loaded(project, tiers: tiers)
 end 'lspDocumentProject'

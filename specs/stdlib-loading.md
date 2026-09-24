@@ -35,11 +35,11 @@ populate the signature registry, and a user program can call `Clock.nowMs()` /
 
 That sameness runs one level deeper: which files under a directory are Maxon sources is decided by
 ONE enumerator (`Compiler.collectMaxonSources`), which walks the user's own root and `stdlib/` alike,
-so the extension, the excluded build manifest and every ignore rule either walk grows are stated once.
+so the `.maxon` extension it admits and every ignore rule either walk grows are stated once.
 The loader also skips a file the project has ALREADY registered — the one case being a user root that
 lies under `stdlib/` — because a source registered under two spellings of its path is parsed twice and
-every function in it then collides with itself. (Not pinned by a test below: the harness stages every
-fragment in a temp directory and cannot place one inside the checkout's `stdlib/`.)
+every function in it then collides with itself. (The harness stages every fragment in a temp directory,
+outside the checkout's `stdlib/`, so no case below pins this.)
 
 `stdlib/` is located by walking UP from the COMPILER's own executable directory, not from the
 current working directory: the spec runner and `run_program` compile in a throwaway temp dir, so the
@@ -686,7 +686,7 @@ ideographic
 ```
 
 <!-- test: stdlib-loading.build-config-from-stdlib -->
-`Build.build(source, output:)` emits the JSON a `project.maxon` hands the compiler. It is the one new entry that
+`Build.build(source, output:)` emits the JSON a `.maxproj` target hands the compiler. It is the one new entry that
 is neither a byte walk nor a classifier — a `type` with fields, a `static`, and an `Array with
 String` — so what it pins is that a stdlib module of ordinary shape reaches user code intact.
 
@@ -703,7 +703,6 @@ end 'main'
 ```
 ```stdout
 {
-  "name": "src",
   "output": ".maxon/demo",
   "directory": "",
   "target": "",
@@ -715,13 +714,13 @@ end 'main'
 ```
 
 <!-- test: stdlib-loading.build-config-escapes-strings -->
-⛔ **EVERY STRING THE CONFIG PRINTS IS JSON-ESCAPED.** A `"` in a target's name would otherwise close the
+⛔ **EVERY STRING THE CONFIG PRINTS IS JSON-ESCAPED.** A `"` in an output path would otherwise close the
 JSON string early, and a Windows path's `\` would start an escape the compiler's JSON reader rejects or
-misreads — so the name comes out as `a\"b` and the source as `src\\app`, and the document stays the same
-shape `build-config-from-stdlib` pins.
+misreads — so the output comes out as `.maxon/a\"b` and the source as `src\\app`, and the document stays
+the same shape `build-config-from-stdlib` pins.
 ```maxon
 function main() returns ExitCode
-	Build.buildWithConfig(Build.target("a\"b", source: "src\\app", output: ".maxon/demo"))
+	Build.build("src\\app", output: ".maxon/a\"b")
 	return 0
 end 'main'
 ```
@@ -730,8 +729,7 @@ end 'main'
 ```
 ```stdout
 {
-  "name": "a\"b",
-  "output": ".maxon/demo",
+  "output": ".maxon/a\"b",
   "directory": "",
   "target": "",
   "sources": ["src\\app"],

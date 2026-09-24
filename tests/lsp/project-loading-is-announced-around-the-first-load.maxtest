@@ -1,0 +1,100 @@
+let AnnouncedLoadDirName = "project-loading-announced"
+let AnnouncedLoadHelperFileName = "helper.maxon"
+let AnnouncedLoadMainFileName = "main.maxon"
+let AnnouncedLoadHelperSource = "export function announcedLoadHelper() returns ExitCode\n\treturn 0\nend 'announcedLoadHelper'\n"
+let AnnouncedLoadMainSource = "function main() returns ExitCode\n\treturn announcedLoadHelper()\nend 'main'\n"
+let AnnouncedLoadCallLine = 1 as LspCoordinate
+let AnnouncedLoadCallCharacter = 12 as LspCoordinate
+let AnnouncedLoadUnreportedSession = "the session ended without saying how"
+let AnnouncedLoadNoNotices = "none"
+let AnnouncedLoadNoticeSeparator = ", "
+
+typealias AnnouncedLoadNoticePosition = int(0 to 1)
+
+let AnnouncedLoadOpeningNotice = 0 as AnnouncedLoadNoticePosition
+let AnnouncedLoadClosingNotice = 1 as AnnouncedLoadNoticePosition
+let AnnouncedLoadNoticesAroundALoad = 2 as AssertedInt
+let AnnouncedLoadNoticesFromAHeldProject = 0 as AssertedInt
+
+union AnnouncedLoadProbe
+	observed(firstLoad ProjectLoadingNoticeArray, heldProject ProjectLoadingNoticeArray)
+	broke(detail String)
+end 'AnnouncedLoadProbe'
+
+test 'project loading is announced around the first load'
+	let root = stagedProjectDiagnosticsRoot(AnnouncedLoadDirName)
+
+	writeCorpusFile(root, fileName: AnnouncedLoadHelperFileName, content: AnnouncedLoadHelperSource)
+	writeCorpusFile(root, fileName: AnnouncedLoadMainFileName, content: AnnouncedLoadMainSource)
+
+	var client = LspClient.start()
+	let probe = collectAnnouncedLoadNotices(client, root: root, uri: fileUriOf(root.join(AnnouncedLoadMainFileName)))
+	client.release()
+
+	discardOutsideCheckoutDir(root)
+
+	match probe 'probe'
+		observed(firstLoad, heldProject) then requireLoadAnnouncedOnlyAroundTheFirstLoad(firstLoad, heldProject: heldProject)
+		broke(detail) then Expect.fail("the session broke before the `maxon/projectLoading` notices could be read: {detail}")
+	end 'probe'
+end 'project loading is announced around the first load'
+
+function collectAnnouncedLoadNotices(client LspClient, root FilePath, uri String) returns AnnouncedLoadProbe
+	var probe = AnnouncedLoadProbe.broke(AnnouncedLoadUnreportedSession)
+
+	try 'session'
+		_ = client.initializeAtRoot(root)
+		client.initialized()
+		client.openDocument(uri, content: AnnouncedLoadMainSource)
+		_ = client.definition(uri, line: AnnouncedLoadCallLine, character: AnnouncedLoadCallCharacter)
+
+		let firstLoad = client.takeProjectLoadingNotices()
+
+		_ = client.definition(uri, line: AnnouncedLoadCallLine, character: AnnouncedLoadCallCharacter)
+		probe = AnnouncedLoadProbe.observed(firstLoad, heldProject: client.takeProjectLoadingNotices())
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed or
+				malformedResponse or
+				serverRefused then probe = AnnouncedLoadProbe.broke(e.explained())
+		end 'reason'
+	end 'failed'
+
+	return probe
+end 'collectAnnouncedLoadNotices'
+
+function requireLoadAnnouncedOnlyAroundTheFirstLoad(firstLoad ProjectLoadingNoticeArray, heldProject ProjectLoadingNoticeArray) throws TestFailure
+	let expectedTail = outsideCheckoutDirName(AnnouncedLoadDirName)
+
+	try Expect.equal(firstLoad.count() as AssertedInt, expected: AnnouncedLoadNoticesAroundALoad, message: "opening a document in a project the server did not yet hold and asking a `textDocument/definition` there should build that project once, bracketed by exactly {AnnouncedLoadNoticesAroundALoad} `maxon/projectLoading` notifications — `loading: true` before the build, then `loading: false` after it — each naming a rootPath ending with {expectedTail}; {firstLoad.count()} arrived: {renderedAnnouncedLoadNotices(firstLoad)}")
+
+	let opening = try firstLoad.get(AnnouncedLoadOpeningNotice) otherwise panic("project loading: the count was just held to two")
+	let closing = try firstLoad.get(AnnouncedLoadClosingNotice) otherwise panic("project loading: the count was just held to two")
+
+	try Expect.isTrue(opening.loading, message: "the first `maxon/projectLoading` notice said `loading: false`, and the one that opens a load must say `loading: true`. Arrived in order: {renderedAnnouncedLoadNotices(firstLoad)}")
+	try Expect.isFalse(closing.loading, message: "the second `maxon/projectLoading` notice said `loading: true`, and the one that closes a load must say `loading: false`. Arrived in order: {renderedAnnouncedLoadNotices(firstLoad)}")
+	try requireAnnouncedLoadNamesTheStagedRoot(opening, expectedTail: expectedTail)
+	try requireAnnouncedLoadNamesTheStagedRoot(closing, expectedTail: expectedTail)
+
+	try Expect.equal(heldProject.count() as AssertedInt, expected: AnnouncedLoadNoticesFromAHeldProject, message: "the same `textDocument/definition` repeated against the project the server already holds builds nothing, so it should send {AnnouncedLoadNoticesFromAHeldProject} `maxon/projectLoading` notifications; {heldProject.count()} arrived: {renderedAnnouncedLoadNotices(heldProject)}")
+end 'requireLoadAnnouncedOnlyAroundTheFirstLoad'
+
+function requireAnnouncedLoadNamesTheStagedRoot(notice ProjectLoadingNotice, expectedTail String) throws TestFailure
+	try Expect.isTrue(foldedRootPath(notice.rootPath).endsWith(expectedTail), message: "a `maxon/projectLoading` notice (`loading: {notice.loading}`) names the rootPath {notice.rootPath}, which does not end with the staged project directory {expectedTail}")
+end 'requireAnnouncedLoadNamesTheStagedRoot'
+
+function renderedAnnouncedLoadNotices(notices ProjectLoadingNoticeArray) returns String
+	if notices.isEmpty() 'noNotices'
+		return AnnouncedLoadNoNotices
+	end 'noNotices'
+
+	var rendered = ""
+	var separator = ""
+
+	for notice in notices 'eachNotice'
+		rendered.append("{separator}(rootPath: {notice.rootPath}, loading: {notice.loading})")
+		separator = AnnouncedLoadNoticeSeparator
+	end 'eachNotice'
+
+	return rendered
+end 'renderedAnnouncedLoadNotices'

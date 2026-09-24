@@ -879,6 +879,102 @@ end 'main'
 [/work/project/C:] [/elsewhere/C:] true
 ```
 
+<!-- test: filepath-anchored-at-keeps-parent-components -->
+```maxon
+function main() returns ExitCode
+	#if os(Windows)
+		let base = FilePath from "C:/work/project"
+		let absolute = FilePath from "C:/work/./runtime/../stdlib//Clock.maxon/"
+	#else
+		let base = FilePath from "/work/project"
+		let absolute = FilePath from "/work/./runtime/../stdlib//Clock.maxon/"
+	#endif
+
+	for spelled in ["./runtime/Clock.maxon", "runtime/./Clock.maxon", "a//b/", "../../runtime/Clock.maxon", "a/../b", ".", ""] 'eachPath'
+		let p = try FilePath.from(spelled) otherwise panic("unspellable path '{spelled}'")
+		print("[{p.anchoredAt(base)}]\n")
+	end 'eachPath'
+
+	print("[{absolute.anchoredAt(base)}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```Stdout:x64-windows
+[C:\work\project\runtime\Clock.maxon]
+[C:\work\project\runtime\Clock.maxon]
+[C:\work\project\a\b]
+[C:\work\project\..\..\runtime\Clock.maxon]
+[C:\work\project\a\..\b]
+[C:\work\project]
+[C:\work\project]
+[C:\work\runtime\..\stdlib\Clock.maxon]
+```
+```stdout
+[/work/project/runtime/Clock.maxon]
+[/work/project/runtime/Clock.maxon]
+[/work/project/a/b]
+[/work/project/../../runtime/Clock.maxon]
+[/work/project/a/../b]
+[/work/project]
+[/work/project]
+[/work/runtime/../stdlib/Clock.maxon]
+```
+
+<!-- test: filepath-anchored-at-roots-and-drives -->
+```maxon
+function main() returns ExitCode
+	#if os(Windows)
+		let sameDrive = FilePath from "C:/work/project"
+		let otherDrive = FilePath from "D:/elsewhere"
+		let roots = ["C:/..", "C:/", "//server/share", "//server/share/x/..", "/x/./"]
+	#else
+		let sameDrive = FilePath from "/work/project"
+		let otherDrive = FilePath from "/elsewhere"
+		let roots = ["/..", "/", "//a/./b", "/x/./"]
+	#endif
+
+	for spelled in roots 'eachRoot'
+		let p = try FilePath.from(spelled) otherwise panic("unspellable path '{spelled}'")
+		print("[{p.anchoredAt(sameDrive)}]\n")
+	end 'eachRoot'
+
+	for spelled in ["C:src/main.maxon", "c:src/../lib", "C:", "C:./x"] 'eachPath'
+		let p = try FilePath.from(spelled) otherwise panic("unspellable path '{spelled}'")
+		let elsewhere = p.anchoredAt(otherDrive)
+		print("[{p.anchoredAt(sameDrive)}] [{elsewhere}] {elsewhere.isAbsolute()}\n")
+	end 'eachPath'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```Stdout:x64-windows
+[C:\..]
+[C:\]
+[\\server\share]
+[\\server\share\x\..]
+[\x]
+[C:\work\project\src\main.maxon] [C:src\main.maxon] false
+[C:\work\project\src\..\lib] [c:src\..\lib] false
+[C:\work\project] [C:.] false
+[C:\work\project\x] [C:x] false
+```
+```stdout
+[/..]
+[/]
+[/a/b]
+[/x]
+[/work/project/C:src/main.maxon] [/elsewhere/C:src/main.maxon] true
+[/work/project/c:src/../lib] [/elsewhere/c:src/../lib] true
+[/work/project/C:] [/elsewhere/C:] true
+[/work/project/C:./x] [/elsewhere/C:./x] true
+```
+
 <!-- test: filepath-path-immutable -->
 ```maxon
 function main() returns ExitCode

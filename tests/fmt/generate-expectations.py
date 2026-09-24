@@ -40,7 +40,7 @@ DOT_PREFIX = "dot-"
 #
 #     <name>.fixture -> <name>            dot-<name> -> .<name>
 #
-# `tests/fmt/fixtures.test.maxon` implements the identical two rules so the harness
+# `tests/fmt/fixtures.maxtest` implements the identical two rules so the harness
 # and this generator stage the same tree. They must agree.
 def stored_to_real(name):
     trimmed = name[: -len(FIXTURE_SUFFIX)] if name.endswith(FIXTURE_SUFFIX) else name
@@ -100,7 +100,7 @@ def normalize(text, tree):
       the case could never be pinned, and it is the ONLY case that exercises the cwd
       default that every flag-refusal case exists to protect.
 
-    `tests/fmt/fixtures.test.maxon` performs the identical three substitutions against
+    `tests/fmt/fixtures.maxtest` performs the identical three substitutions against
     its own staging directory. They must agree.
     """
     folded = text.replace(chr(13), "").replace(BACKSLASH, "/")
@@ -121,7 +121,7 @@ ENGINE_CASES = os.path.join(HERE, "engine-cases")
 def generate_engine_case_expectations(exe):
     """Mint `<Case>.expected` beside every `<Case>.in` by formatting it.
 
-    These pin LAYOUT byte-exact. `tests/fmt/engine-cases.test.maxon` compares
+    These pin LAYOUT byte-exact. `tests/fmt/engine-cases.maxtest` compares
     them, and also asks invariants that pin no layout (comment multiplicity,
     idempotence): a golden says "the layout moved", the invariants say "something
     was destroyed", and the second reads far better when it fires.

@@ -5,18 +5,19 @@
 // still CHECKED there and never here: this corpus is lexed and its declarations folded, never compiled,
 // so it can say what a name means and never what is wrong with a program.
 //
-// A document's project root is a ladder, and the ORDER of its rungs is the design. `workspaceRootOf`
-// holds it: a library tier's file gets the tiers alone; otherwise the nearest ancestor holding a
-// `project.maxon`, climbed no higher than the nearest client-named root that holds this document; then
-// that named root, for a document inside it; then the document's own directory. The manifest climb is
-// unbounded, and a directory ABOVE the one the client opened may hold a `project.maxon` of its own, so a
-// named root consulted after an uncapped climb would decide nothing, while one consulted before the
-// climb would root a document under `<root>/sub/project.maxon` at `<root>`. Capping the climb is what
-// leaves both rungs right. A client that names no root leaves the climb and the document's own directory.
+// A document's project root is a ladder, and the order of its rungs is the design.
+// `workspaceRootOf` holds it: a document under `stdlib/` or `runtime/` is held as one project
+// rooted at that tier directory; otherwise the nearest ancestor holding a `.maxproj`, climbed no
+// higher than the nearest client-named root that holds this document; then that named root, for a
+// document inside it; then the document's own directory. A directory above the one the client
+// opened may hold a `.maxproj` of its own, so a named root consulted after an uncapped climb would
+// decide nothing, while one consulted before the climb would root a document under
+// `<root>/sub/x.maxproj` at `<root>`. Capping the climb is what leaves both rungs right. A client
+// that names no root leaves the climb and the document's own directory.
 //
 // The named roots change mid-session: `workspace/didChangeWorkspaceFolders` adds and removes them, and
-// a removed root takes every project held under it. The sweep under a root is never pruned at a nested
-// `project.maxon` — the build system has no nested projects, so two projects are siblings.
+// a removed root takes every project held under it. The sweep under a root prunes a directory holding
+// a `.maxproj`: projects do not nest, and a nested one must not change the outer project's index.
 //
 // ⚠ Answering `unavailable` costs a feature its cross-file half and leaves the in-buffer half standing,
 // which is what an editor should see: fewer answers, never a refused request.
@@ -64,6 +65,23 @@ type ReaderDocument
 	end 'of'
 end 'ReaderDocument'
 
+// Made once per request and handed down: the tier probe and the tier directories' normalisation
+// would otherwise be repeated by every step of one diagnostics publish.
+module type LspReaderSearch
+	module let document as ReaderDocument
+	module let tiers as LibraryTiers
+	module let workingDirectory as FilePath
+	module let tier as TierMembership
+
+	static function create(document ReaderDocument, tiers LibraryTiers, workingDirectory FilePath) returns LspReaderSearch
+		return Self{document: document, tiers: tiers, workingDirectory: workingDirectory, tier: tierHolding(document, tiers: tiers)}
+	end 'create'
+
+	module static function of(readerPath FilePath, tiers LibraryTiers) returns LspReaderSearch
+		return LspReaderSearch.create(ReaderDocument.of(readerPath), tiers: tiers, workingDirectory: Directory.currentPath())
+	end 'of'
+end 'LspReaderSearch'
+
 // A uri that carries no `://` is kept verbatim, so `untitled:Untitled-1` arrives here as a path. A
 // path with no directory above it is not a place: the document gets no project rather than one
 // rooted at the uri's own text. The test is the parent and not the uri's scheme, because a library
@@ -76,13 +94,14 @@ end 'directoryHolding'
 
 union WorkspaceRoot
 	userDirectory(dir FilePath)
-	libraryTierOnly
+	libraryTier(dir FilePath)
+	singleFile
 end 'WorkspaceRoot'
 
-union ManifestDirectory
-	found(dir FilePath)
-	none
-end 'ManifestDirectory'
+union TierMembership
+	inTier(dir FilePath)
+	outside
+end 'TierMembership'
 
 // A walk that could not list a directory answers `walkFailed`, never an empty list: the sweep's
 // result is what decides which files are unregistered, and one folder that cannot be listed — a
@@ -101,14 +120,15 @@ end 'SourceSweep'
 // A file created on disk and a file deleted from it are both noticed at that walk and not before,
 // while a file's content is re-read every request.
 //
-// `tests/lsp/definition-notices-a-file-created-on-disk.test.maxon` holds the re-walk in place.
-type HeldWorkspace
+// `tests/lsp/definition-notices-a-file-created-on-disk.maxtest` holds the re-walk in place.
+type HeldCorpus
 	let project as Project
+	let selection as SourceSelection
 	module var sweep as SourceSweep
 	var sweptAtMs as InstantMs
 
-	static function create(project Project, sweep SourceSweep, sweptAtMs InstantMs) returns HeldWorkspace
-		return Self{project: project, sweep: sweep, sweptAtMs: sweptAtMs}
+	static function create(project Project, selection SourceSelection, sweep SourceSweep, sweptAtMs InstantMs) returns HeldCorpus
+		return Self{project: project, selection: selection, sweep: sweep, sweptAtMs: sweptAtMs}
 	end 'create'
 
 	function corpusFor(root WorkspaceRoot, readerPath FilePath) returns LspCorpus
@@ -122,7 +142,7 @@ type HeldWorkspace
 			return
 		end 'sweptRecently'
 
-		let walk = sourcesUnder(root)
+		let walk = sourcesUnder(root, selection: self.selection)
 
 		match walk 'walk'
 			swept then holdCompletedWalk(walk)
@@ -141,18 +161,93 @@ type HeldWorkspace
 		self.sweep = walk
 		self.sweptAtMs = Clock.nowMs()
 	end 'holdCompletedWalk'
+
+	function facts(root FilePath) returns LspProjectFacts
+		return match self.sweep 'sweep'
+			swept(sources) gives LspProjectFacts.swept(root, fileCount: productionSourceCount(sources))
+			walkFailed gives LspProjectFacts.unswept(root)
+		end 'sweep'
+	end 'facts'
+end 'HeldCorpus'
+
+// The production sources only, whichever corpus is held, so a project's count does not depend on
+// the kind of document that loaded it first.
+function productionSourceCount(sources MaxonSourcePathArray) returns LspProjectFileCount
+	var count = 0 as LspProjectFileCount
+
+	for path in sources 'eachSource'
+		if selectionAdmits(SourceSelection.productionOnly, name: path.filename()) 'aProductionSource'
+			count = count + 1
+		end 'aProductionSource'
+	end 'eachSource'
+
+	return count
+end 'productionSourceCount'
+
+typealias HeldCorpusMap = Map with (SourceSelection, HeldCorpus)
+
+// One corpus per `SourceSelection`, chosen by the reader (`readerSelectionOf`): a `.maxtest` reader
+// sees the project's test files, as `maxon test` compiles them, and a production reader never sees
+// a name only a test file declares.
+type HeldWorkspace
+	var corpora as HeldCorpusMap
+
+	static function create() returns HeldWorkspace
+		return Self{corpora: HeldCorpusMap.create()}
+	end 'create'
+
+	function corpusFor(root WorkspaceRoot, key String, tiers LibraryTiers, readerPath FilePath) returns LspCorpus
+		let selection = readerSelectionOf(readerPath)
+
+		if self.corpora.contains(selection) 'heldAlready'
+			var held = try self.corpora.get(selection) otherwise panic("HeldWorkspace.corpusFor: the corpus for this selection was found one line above")
+
+			return held.corpusFor(root, readerPath: readerPath)
+		end 'heldAlready'
+
+		writeProjectLoadingNotification(key, loading: true)
+		let corpus = self.builtCorpus(root, selection: selection, tiers: tiers, readerPath: readerPath)
+		writeProjectLoadingNotification(key, loading: false)
+
+		return corpus
+	end 'corpusFor'
+
+	// Every return here reaches the `loading: false` in `corpusFor`; one that skipped it would leave
+	// the client showing this project as loading for the rest of the session.
+	function builtCorpus(root WorkspaceRoot, selection SourceSelection, tiers LibraryTiers, readerPath FilePath) returns LspCorpus
+		let project = try libraryTierProject(buildRootOf(root, readerPath: readerPath), tiers: tiers, buffer: OpenBuffer.none) otherwise return LspCorpus.unavailable
+		var fresh = HeldCorpus.create(project, selection: selection, sweep: sourcesUnder(root, selection: selection), sweptAtMs: Clock.nowMs())
+
+		let corpus = fresh.corpusFor(root, readerPath: readerPath)
+
+		match corpus 'outcome'
+			loaded then self.corpora.upsert(selection, value: fresh)
+			unavailable then return LspCorpus.unavailable
+		end 'outcome'
+
+		return corpus
+	end 'builtCorpus'
+
+	function facts(root FilePath) returns LspProjectFacts
+		for selection in SourceSelection.allCases 'eachSelection'
+			if let held = try self.corpora.get(selection) 'heldForThisSelection'
+				return held.facts(root)
+			end 'heldForThisSelection'
+		end 'eachSelection'
+
+		panic("HeldWorkspace.facts: '{root.toString()}' is held, and a workspace is held only once one of its corpora has loaded")
+	end 'facts'
 end 'HeldWorkspace'
 
 typealias HeldProjectMap = Map with (String, HeldWorkspace)
 typealias HeldProjectKeyArray = Array with String
 
 // Projects are held across requests because building one costs a sweep, a lex of every file and a
-// signature fold. Eight rather than one: a jump from a user file into `stdlib/` and back crosses two
-// roots, and a library file is keyed by its OWN path, so a cache of one turns every round trip into two
-// cold rebuilds. Least recently used out, so a session that wanders cannot grow the process without
-// bound and the root the author is working in is not evicted by a detour through the library.
-// Overflowing this costs a re-fold rather than a re-read: a rebuilt `Project` still hits `QueryEngine`'s
-// process-wide file memos.
+// signature fold. Eight rather than one: a jump from a user file into `stdlib/` and back crosses
+// two roots, so a cache of one turns every round trip into two cold rebuilds. Least recently used
+// out, so a session that wanders cannot grow the process without bound and the root the author is
+// working in is not evicted by a detour through the library. Overflowing this costs a re-fold
+// rather than a re-read: a rebuilt `Project` still hits `QueryEngine`'s process-wide file memos.
 let HeldProjectCapacity = 8
 
 let WorkspaceResweepIntervalMs = 1000 as DurationMs
@@ -263,31 +358,29 @@ end 'lspProjectFactsOf'
 
 function locatedFacts(document ReaderDocument, search LspRootSearch) returns LspProjectFacts
 	return match search 'search'
-		ready(tiers, workingDirectory) gives factsUnderTheRootOf(document, tiers: tiers, workingDirectory: workingDirectory)
+		ready(tiers, workingDirectory) gives factsUnderTheRootOf(LspReaderSearch.create(document, tiers: tiers, workingDirectory: workingDirectory))
 		unavailable gives LspProjectFacts.singleFile(document.path)
 	end 'search'
 end 'locatedFacts'
 
-function factsUnderTheRootOf(document ReaderDocument, tiers LibraryTiers, workingDirectory FilePath) returns LspProjectFacts
-	let root = workspaceRootOf(document, tiers: tiers, workingDirectory: workingDirectory)
+function factsUnderTheRootOf(reader LspReaderSearch) returns LspProjectFacts
+	let root = workspaceRootOf(reader)
 
 	return match root 'root'
-		userDirectory gives heldProjectFacts(root, readerPath: document.path)
-		libraryTierOnly gives LspProjectFacts.singleFile(document.path)
+		userDirectory or
+			libraryTier gives heldProjectFacts(root, readerPath: reader.document.path)
+		singleFile gives LspProjectFacts.singleFile(reader.document.path)
 	end 'root'
 end 'factsUnderTheRootOf'
 
-// The key is `compileRootOf`'s answer, which is the derivation `sweptWorkspace` files a project under. A
+// The key is `heldRootOf`'s answer, which is the derivation `sweptWorkspace` files a project under. A
 // second spelling of it here reads a miss for every root and reports every project unswept, with nothing
 // failing to say so.
 function heldProjectFacts(root WorkspaceRoot, readerPath FilePath) returns LspProjectFacts
-	let compileRoot = compileRootOf(root, readerPath: readerPath)
-	let held = try heldProjects.get(compileRoot.toString()) otherwise return LspProjectFacts.unswept(compileRoot)
+	let heldRoot = heldRootOf(root, readerPath: readerPath)
+	let held = try heldProjects.get(heldRoot.toString()) otherwise return LspProjectFacts.unswept(heldRoot)
 
-	return match held.sweep 'sweep'
-		swept(sources) gives LspProjectFacts.swept(compileRoot, fileCount: sources.count() as LspProjectFileCount)
-		walkFailed gives LspProjectFacts.unswept(compileRoot)
-	end 'sweep'
+	return held.facts(heldRoot)
 end 'heldProjectFacts'
 
 module function lspDocumentCorpus(uri String) returns LspCorpus
@@ -295,47 +388,43 @@ module function lspDocumentCorpus(uri String) returns LspCorpus
 	let document = ReaderDocument.of(readerPath)
 
 	return match lspRootSearch() 'search'
-		ready(tiers, workingDirectory) gives capturedCorpus(workspaceRootOf(document, tiers: tiers, workingDirectory: workingDirectory), tiers: tiers, readerPath: readerPath)
+		ready(tiers, workingDirectory) gives capturedCorpus(workspaceRootOf(LspReaderSearch.create(document, tiers: tiers, workingDirectory: workingDirectory)), tiers: tiers, readerPath: readerPath)
 		unavailable gives LspCorpus.unavailable
 	end 'search'
 end 'lspDocumentCorpus'
 
-// The corpus a diagnostic may be corrected against, admitted only where the author has STATED the
-// project: a root the client named, holding this document. Without one the ladder roots a document at
-// its OWN DIRECTORY, so an unrelated neighbouring file would count as a sibling and could silence a real
-// error about a name no part of the author's project declares. A library-tier document answers
-// `unavailable` because its corpus is the two tiers the buffer compile already holds.
-module function lspProjectCorpus(readerPath FilePath) returns LspCorpus
-	let document = ReaderDocument.of(readerPath)
+// The corpus a diagnostic may be corrected against, admitted only where the project is stated: a
+// library tier, or a root the client named holding this document (`lspProjectIsStated`). Without
+// one the ladder roots a document at its own directory, so an unrelated neighbouring file would
+// count as a sibling and could silence a real error about a name no part of the author's project
+// declares.
+module function lspProjectCorpus(reader LspReaderSearch) returns LspCorpus
+	if not lspProjectIsStated(reader) 'unstated'
+		return LspCorpus.unavailable
+	end 'unstated'
 
-	return match document.stated 'stated'
-		named gives statedProjectCorpus(document)
-		unnamed gives LspCorpus.unavailable
-	end 'stated'
-end 'lspProjectCorpus'
-
-function statedProjectCorpus(document ReaderDocument) returns LspCorpus
-	return match lspRootSearch() 'search'
-		ready(tiers, workingDirectory) gives statedRootCorpus(document, tiers: tiers, workingDirectory: workingDirectory)
-		unavailable gives LspCorpus.unavailable
-	end 'search'
-end 'statedProjectCorpus'
-
-function statedRootCorpus(document ReaderDocument, tiers LibraryTiers, workingDirectory FilePath) returns LspCorpus
-	let root = workspaceRootOf(document, tiers: tiers, workingDirectory: workingDirectory)
+	let root = workspaceRootOf(reader)
 
 	return match root 'root'
-		userDirectory gives capturedCorpus(root, tiers: tiers, readerPath: document.path)
-		libraryTierOnly gives LspCorpus.unavailable
+		userDirectory or
+			libraryTier gives capturedCorpus(root, tiers: reader.tiers, readerPath: reader.document.path)
+		singleFile gives LspCorpus.unavailable
 	end 'root'
-end 'statedRootCorpus'
+end 'lspProjectCorpus'
 
-module function clientNamedARootOver(readerPath FilePath) returns bool
-	return match nearestNamedRootOver(readerPath.normalize()) 'stated'
+module function lspProjectIsStated(reader LspReaderSearch) returns bool
+	return match reader.tier 'tier'
+		inTier gives true
+		outside gives clientNamedTheRoot(reader.document.stated)
+	end 'tier'
+end 'lspProjectIsStated'
+
+function clientNamedTheRoot(stated StatedRoot) returns bool
+	return match stated 'stated'
 		named gives true
 		unnamed gives false
 	end 'stated'
-end 'clientNamedARootOver'
+end 'clientNamedTheRoot'
 
 function nearestNamedRootOver(document FilePath) returns StatedRoot
 	var nearest = StatedRoot.unnamed
@@ -378,39 +467,30 @@ function capturedCorpus(root WorkspaceRoot, tiers LibraryTiers, readerPath FileP
 end 'capturedCorpus'
 
 function sweptWorkspace(root WorkspaceRoot, tiers LibraryTiers, readerPath FilePath) returns LspCorpus
-	let compileRoot = compileRootOf(root, readerPath: readerPath)
-	let key = compileRoot.toString()
+	let key = heldRootOf(root, readerPath: readerPath).toString()
 
 	if heldProjects.contains(key) 'alreadySeenThisRoot'
 		touchHeldProject(key)
 
 		var held = try heldProjects.get(key) otherwise panic("sweptWorkspace: '{key}' was found among the held projects two lines above")
 
-		return held.corpusFor(root, readerPath: readerPath)
+		return held.corpusFor(root, key: key, tiers: tiers, readerPath: readerPath)
 	end 'alreadySeenThisRoot'
 
-	writeProjectLoadingNotification(key, loading: true)
-	let corpus = builtWorkspace(root, compileRoot: compileRoot, key: key, tiers: tiers, readerPath: readerPath)
-	writeProjectLoadingNotification(key, loading: false)
+	var fresh = HeldWorkspace.create()
+	let corpus = fresh.corpusFor(root, key: key, tiers: tiers, readerPath: readerPath)
+
+	match corpus 'outcome'
+		loaded then rememberProject(key, held: fresh)
+		unavailable then break 'outcome'
+	end 'outcome'
 
 	return corpus
 end 'sweptWorkspace'
 
-// Every return here passes through the one `loading: false` in `sweptWorkspace`; a return that
-// skipped it would leave the client showing this project as loading for the rest of the session.
-function builtWorkspace(root WorkspaceRoot, compileRoot FilePath, key String, tiers LibraryTiers, readerPath FilePath) returns LspCorpus
-	let project = try libraryTierProject(compileRoot, tiers: tiers, buffer: OpenBuffer.none) otherwise return LspCorpus.unavailable
-	var fresh = HeldWorkspace.create(project, sweep: sourcesUnder(root), sweptAtMs: Clock.nowMs())
-
-	let corpus = fresh.corpusFor(root, readerPath: readerPath)
-
-	match corpus 'outcome'
-		loaded then rememberProject(key, held: fresh)
-		unavailable then return LspCorpus.unavailable
-	end 'outcome'
-
-	return corpus
-end 'builtWorkspace'
+function readerSelectionOf(readerPath FilePath) returns SourceSelection
+	return SourceSelection.productionAndTests if isTestSourceName(readerPath.filename()) else SourceSelection.productionOnly
+end 'readerSelectionOf'
 
 function writeProjectLoadingNotification(rootPath String, loading bool)
 	var doc = JsonDoc.create()
@@ -447,51 +527,99 @@ function touchHeldProject(key String)
 	heldProjectKeys = kept
 end 'touchHeldProject'
 
-function compileRootOf(root WorkspaceRoot, readerPath FilePath) returns FilePath
+function heldRootOf(root WorkspaceRoot, readerPath FilePath) returns FilePath
 	return match root 'root'
-		userDirectory(dir) gives dir
-		libraryTierOnly gives readerPath
+		userDirectory(dir) or
+			libraryTier gives dir
+		singleFile gives readerPath
 	end 'root'
-end 'compileRootOf'
+end 'heldRootOf'
 
-function sourcesUnder(root WorkspaceRoot) returns SourceSweep
+// A tier corpus is built rooted at the tier's parent. Rooted at `stdlib/` itself,
+// `rootIsUnderStdlibDirectory` would hold and the tier's files would be the project's own rather
+// than library source, which they are in every whole-program compile. It is still held and listed
+// under the tier directory (`heldRootOf`).
+function buildRootOf(root WorkspaceRoot, readerPath FilePath) returns FilePath
 	return match root 'root'
-		userDirectory(dir) gives maxonSourcesIn(dir)
-		libraryTierOnly gives SourceSweep.swept(MaxonSourcePathArray.create())
+		libraryTier(dir) gives try dir.parent() otherwise panic("buildRootOf: '{dir.toString()}' is a library tier, a directory `LibraryTiers.locate` found by name inside another")
+		userDirectory or
+			singleFile gives heldRootOf(root, readerPath: readerPath)
+	end 'root'
+end 'buildRootOf'
+
+function sourcesUnder(root WorkspaceRoot, selection SourceSelection) returns SourceSweep
+	return match root 'root'
+		userDirectory(dir) or
+			libraryTier gives maxonSourcesIn(dir, selection: selection)
+		singleFile gives SourceSweep.swept(MaxonSourcePathArray.create())
 	end 'root'
 end 'sourcesUnder'
 
-function maxonSourcesIn(dir FilePath) returns SourceSweep
+function maxonSourcesIn(dir FilePath, selection SourceSelection) returns SourceSweep
 	var sources = MaxonSourcePathArray.create()
 
-	_ = try collectMaxonSources(dir, into: sources, selection: SourceSelection.productionOnly) otherwise return SourceSweep.walkFailed
+	_ = try collectMaxonSources(dir, into: sources, selection: selection, nestedProjects: NestedProjectRule.pruned) otherwise return SourceSweep.walkFailed
 
 	return SourceSweep.swept(sources)
 end 'maxonSourcesIn'
 
-// ⚠ The tier test comes FIRST, and a library file must never reach the manifest climb: a `stdlib/` file
-// climbing for a manifest would root its project at whatever tree the tier sits in and sweep every source
-// in it to answer one jump.
+// ⚠ The tier test comes first, and a library file must never reach the project-file climb: a `stdlib/`
+// file climbing for a `.maxproj` would root its project at whatever tree the tier sits in and sweep
+// every source in it to answer one jump.
 //
-// `project.maxon` is used purely as a MARKER of where a project begins — it is never read and never run,
-// and a `tasks.maxon` beside it marks nothing at all.
-function workspaceRootOf(document ReaderDocument, tiers LibraryTiers, workingDirectory FilePath) returns WorkspaceRoot
-	if document.normalized.isInside(tiers.stdlibDir.normalize()) or document.normalized.isInside(tiers.runtimeDir.normalize()) 'aLibraryFile'
-		return WorkspaceRoot.libraryTierOnly
-	end 'aLibraryFile'
+// A `.maxproj` is only a marker here, never read or run; a `.maxtasks` beside it marks nothing.
+function workspaceRootOf(reader LspReaderSearch) returns WorkspaceRoot
+	match reader.tier 'tier'
+		inTier(dir) then return WorkspaceRoot.libraryTier(dir)
+		outside then break 'tier'
+	end 'tier'
 
-	return match document.directory 'directory'
-		at(dir) gives rootAround(document, directory: dir, workingDirectory: workingDirectory)
-		none gives WorkspaceRoot.libraryTierOnly
+	return match reader.document.directory 'directory'
+		at(dir) gives rootAround(reader.document, directory: dir, workingDirectory: reader.workingDirectory)
+		none gives WorkspaceRoot.singleFile
 	end 'directory'
 end 'workspaceRootOf'
 
+function tierHolding(document ReaderDocument, tiers LibraryTiers) returns TierMembership
+	if document.normalized.isInside(tiers.normalizedStdlibDir) 'aStdlibFile'
+		return TierMembership.inTier(tiers.stdlibDir)
+	end 'aStdlibFile'
+
+	if document.normalized.isInside(tiers.normalizedRuntimeDir) 'aRuntimeFile'
+		return TierMembership.inTier(tiers.runtimeDir)
+	end 'aRuntimeFile'
+
+	return TierMembership.outside
+end 'tierHolding'
+
 function rootAround(document ReaderDocument, directory FilePath, workingDirectory FilePath) returns WorkspaceRoot
-	return match nearestManifestDirectory(directory, noHigherThan: document.stated, workingDirectory: workingDirectory) 'manifest'
-		found(dir) gives sweepableRoot(dir)
+	return match nearestProjectFile(directory.resolve(workingDirectory), ceiling: climbCeilingOf(document.stated)) 'manifest'
+		found(projectFile) gives sweepableRoot(directoryHoldingProjectFile(projectFile))
 		none gives rootWithoutAManifest(document.stated, directory: directory)
 	end 'manifest'
 end 'rootAround'
+
+function directoryHoldingProjectFile(projectFile FilePath) returns FilePath
+	return try projectFile.parent() otherwise panic("directoryHoldingProjectFile: '{projectFile.toString()}' was found by listing a directory, so that directory holds it")
+end 'directoryHoldingProjectFile'
+
+module union ProjectLayout
+	nestedIn(outer FilePath)
+	standsAlone
+end 'ProjectLayout'
+
+module function projectLayoutOf(reader LspReaderSearch) returns ProjectLayout
+	let document = reader.document.path.resolve(reader.workingDirectory)
+
+	if not document.filename().endsWith(ProjectFileExtension) 'notAProjectFile'
+		return ProjectLayout.standsAlone
+	end 'notAProjectFile'
+
+	return match projectFileEnclosing(document) 'enclosing'
+		found(outer) gives ProjectLayout.nestedIn(outer)
+		none gives ProjectLayout.standsAlone
+	end 'enclosing'
+end 'projectLayoutOf'
 
 function rootWithoutAManifest(stated StatedRoot, directory FilePath) returns WorkspaceRoot
 	return match stated 'stated'
@@ -504,39 +632,17 @@ end 'rootWithoutAManifest'
 // project there sweeps the whole volume to answer one request, so a document sitting at one gets
 // the library tiers instead.
 function sweepableRoot(dir FilePath) returns WorkspaceRoot
-	_ = try dir.parent() otherwise return WorkspaceRoot.libraryTierOnly
+	_ = try dir.parent() otherwise return WorkspaceRoot.singleFile
 
 	return WorkspaceRoot.userDirectory(dir)
 end 'sweepableRoot'
 
-function nearestManifestDirectory(directory FilePath, noHigherThan StatedRoot, workingDirectory FilePath) returns ManifestDirectory
-	var current = directory.resolve(workingDirectory).clone()
-
-	while true 'upwards'
-		if File.exists(current.join("{ProjectManifestFileName}")) 'holdsAManifest'
-			return ManifestDirectory.found(current)
-		end 'holdsAManifest'
-
-		if climbReachedTheStatedRoot(current, stated: noHigherThan) 'noHigher'
-			break
-		end 'noHigher'
-
-		let above = try current.parent() otherwise 'atTheRoot'
-			break
-		end 'atTheRoot'
-
-		current = above
-	end 'upwards'
-
-	return ManifestDirectory.none
-end 'nearestManifestDirectory'
-
-function climbReachedTheStatedRoot(current FilePath, stated StatedRoot) returns bool
+function climbCeilingOf(stated StatedRoot) returns ProjectClimbCeiling
 	return match stated 'stated'
-		named(dir) gives current.equals(dir)
-		unnamed gives false
+		named(dir) gives ProjectClimbCeiling.at(dir)
+		unnamed gives ProjectClimbCeiling.none
 	end 'stated'
-end 'climbReachedTheStatedRoot'
+end 'climbCeilingOf'
 
 extension Project
 	// ⛔ The pipeline stops at LEX plus SIGNATURES, and `queryAllModule` is never called here. Two
@@ -634,12 +740,11 @@ end 'corpusSpellingOf'
 // Every visibility question is asked ON BEHALF OF a file, and a file the sweep never saw has no module
 // directory, so the reader has to be in the corpus before the fold runs.
 //
-// ⛔ The CORPUS is asked first and the disk second. `fileChanged(…, "")` overwrites whatever is
-// registered, and a tier sweep contributes no sources of its own — so keying this off sweep membership
-// blanks a `stdlib/` reader's own file out of the corpus it is reading from, and a library file missing
-// from the corpus surfaces as a panic in another file entirely (see `loadLibrarySources`). The empty
-// registration is for the one case that has no other answer: a path in no corpus entry that also cannot
-// be read, which is an unsaved buffer or a uri a client invented.
+// ⛔ The corpus is asked first and the disk second. `fileChanged(…, "")` overwrites whatever is
+// registered, and a library file blanked out of the corpus surfaces as a panic in another file
+// entirely (see `loadLibrarySources`). The empty registration is for the one case that has no other
+// answer: a path in no corpus entry that also cannot be read, which is an unsaved buffer or a uri a
+// client invented.
 function registerTheReader(project Project, readerPath FilePath)
 	if project.db.sourceFiles.contains(readerPath) 'theCorpusAlreadyHoldsIt'
 		return

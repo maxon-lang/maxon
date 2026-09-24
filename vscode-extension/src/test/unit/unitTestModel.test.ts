@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import {
 	isIgnoredDirectory,
+	isTestFileName,
 	parseTestDeclarations,
 	parseTestRunDocument,
 	resultKey,
@@ -15,10 +16,10 @@ import {
 } from '../../unitTestModel';
 
 // `tests/test-fixtures/json-face/expected.txt`: what `maxon test --json` printed for a real run.
-const JSON_FACE_DOCUMENT = '{"total":2,"passed":1,"failed":1,"files":1,"results":[{"file":"tests/test-fixtures/json-face/parity.test.maxon","name":"halving four gives two","symbol":"__test_halving_four_gives_two","line":14,"state":"passed"},{"file":"tests/test-fixtures/json-face/parity.test.maxon","name":"halving five gives three","symbol":"__test_halving_five_gives_three","line":19,"state":"failed","output":"FAIL parity.test.maxon:20: Expect.equal\\n  expected: 3\\n  received: 2"}]}\n';
+const JSON_FACE_DOCUMENT = '{"total":2,"passed":1,"failed":1,"files":1,"results":[{"file":"tests/test-fixtures/json-face/parity.maxtest","name":"halving four gives two","symbol":"__test_halving_four_gives_two","line":14,"state":"passed"},{"file":"tests/test-fixtures/json-face/parity.maxtest","name":"halving five gives three","symbol":"__test_halving_five_gives_three","line":19,"state":"failed","output":"FAIL parity.maxtest:20: Expect.equal\\n  expected: 3\\n  received: 2"}]}\n';
 
 function result(fields: Partial<TestResult>): TestResult {
-	return { file: 'a.test.maxon', name: 'a test', symbol: '__test_a_test', line: 1, state: 'passed', ...fields };
+	return { file: 'a.maxtest', name: 'a test', symbol: '__test_a_test', line: 1, state: 'passed', ...fields };
 }
 
 function withTree(files: string[], body: (root: string) => void): void {
@@ -100,7 +101,7 @@ suite('parseTestRunDocument', () => {
 
 suite('verdictFor', () => {
 	const cwd = path.resolve('/workspace');
-	const testFile = path.join(cwd, 'tests', 'parity.test.maxon');
+	const testFile = path.join(cwd, 'tests', 'parity.maxtest');
 
 	test('a pass carries its duration in milliseconds', () => {
 		assert.deepStrictEqual(verdictFor(result({ nanos: 2_500_000 }), testFile, cwd), { kind: 'passed', durationMs: 2.5 });
@@ -111,7 +112,7 @@ suite('verdictFor', () => {
 		const failed = parseTestRunDocument(JSON_FACE_DOCUMENT).results[1];
 		assert.deepStrictEqual(verdictFor(failed, testFile, cwd), {
 			kind: 'failed',
-			message: 'FAIL parity.test.maxon:20: Expect.equal\n  expected: 3\n  received: 2',
+			message: 'FAIL parity.maxtest:20: Expect.equal\n  expected: 3\n  received: 2',
 			durationMs: undefined,
 			location: { file: testFile, line: 19 }
 		});
@@ -146,7 +147,7 @@ suite('verdictFor', () => {
 				threw: { errorType: 'PriceError', errorCase: 'negative', file: 'src/pricing.maxon', line: 7 }
 			});
 
-			assert.deepStrictEqual(verdictFor(thrown, path.join(root, 'pricing.test.maxon'), root), {
+			assert.deepStrictEqual(verdictFor(thrown, path.join(root, 'pricing.maxtest'), root), {
 				kind: 'failed',
 				message: 'Threw PriceError.negative at src/pricing.maxon:7\nthe program said this',
 				durationMs: undefined,
@@ -159,9 +160,9 @@ suite('verdictFor', () => {
 suite('matching results to tests', () => {
 	test('a reported path is relative to where maxon test ran', () => {
 		const cwd = path.resolve('/workspace');
-		const reported = result({ file: 'tests/cli/help.test.maxon', name: 'help lists commands' });
-		assert.strictEqual(resultKey(reported, cwd), testKey(path.join(cwd, 'tests', 'cli', 'help.test.maxon'), 'help lists commands'));
-		assert.notStrictEqual(resultKey(reported, cwd), testKey(path.join(cwd, 'tests', 'cli', 'help.test.maxon'), 'help lists'));
+		const reported = result({ file: 'tests/cli/help.maxtest', name: 'help lists commands' });
+		assert.strictEqual(resultKey(reported, cwd), testKey(path.join(cwd, 'tests', 'cli', 'help.maxtest'), 'help lists commands'));
+		assert.notStrictEqual(resultKey(reported, cwd), testKey(path.join(cwd, 'tests', 'cli', 'help.maxtest'), 'help lists'));
 	});
 });
 
@@ -174,10 +175,10 @@ suite('testFilterFor', () => {
 
 	test('whole files by reported path, then single tests by name', () => {
 		const filter = testFilterFor({
-			wholeFiles: [path.join(cwd, 'src', 'a.test.maxon')],
+			wholeFiles: [path.join(cwd, 'src', 'a.maxtest')],
 			testNames: ['adds, then subtracts']
 		}, cwd, false);
-		assert.strictEqual(filter, 'src/a.test.maxon,adds, then subtracts');
+		assert.strictEqual(filter, 'src/a.maxtest,adds, then subtracts');
 	});
 
 	test('a partial run selecting nothing is refused', () => {
@@ -185,30 +186,55 @@ suite('testFilterFor', () => {
 	});
 });
 
+suite('isTestFileName', () => {
+	test('a .maxtest file is a test file, and an old *.test.maxon file is an ordinary source', () => {
+		assert.strictEqual(isTestFileName(path.join('src', 'pricing.maxtest')), true);
+		assert.strictEqual(isTestFileName(path.join('src', 'pricing.test.maxon')), false);
+		assert.strictEqual(isTestFileName(path.join('src', 'pricing.maxon')), false);
+	});
+
+	test('the extension is matched as the compiler matches it, case and all', () => {
+		assert.strictEqual(isTestFileName(path.join('src', 'pricing.MAXTEST')), false);
+	});
+});
+
 suite('testProjectDirectory', () => {
 	test('climbs through directories holding sources, stopping at one that holds none', () => {
-		withTree(['project.maxon', 'tests/README.md', 'tests/cli/Harness.maxon', 'tests/cli/help.test.maxon'], root => {
-			assert.strictEqual(testProjectDirectory(path.join(root, 'tests', 'cli', 'help.test.maxon'), root), path.join(root, 'tests', 'cli'));
+		withTree(['tests/README.md', 'tests/cli/Harness.maxon', 'tests/cli/help.maxtest'], root => {
+			assert.strictEqual(testProjectDirectory(path.join(root, 'tests', 'cli', 'help.maxtest'), root), path.join(root, 'tests', 'cli'));
+		});
+	});
+
+	test('the nearest directory holding a .maxproj is the project, past a directory holding no source', () => {
+		withTree(['app.maxproj', 'main.maxon', 'src/README.md', 'src/pricing/pricing.maxon', 'src/pricing/pricing.maxtest'], root => {
+			assert.strictEqual(testProjectDirectory(path.join(root, 'src', 'pricing', 'pricing.maxtest'), root), root);
+		});
+	});
+
+	test('a .maxproj above the workspace folder is not consulted', () => {
+		withTree(['app.maxproj', 'workspace/README.md', 'workspace/cli/help.maxtest'], root => {
+			const workspace = path.join(root, 'workspace');
+			assert.strictEqual(testProjectDirectory(path.join(workspace, 'cli', 'help.maxtest'), workspace), path.join(workspace, 'cli'));
 		});
 	});
 
 	test('a test beneath the sources it tests runs with them', () => {
-		withTree(['main.maxon', 'lib/math.maxon', 'lib/math.test.maxon'], root => {
-			assert.strictEqual(testProjectDirectory(path.join(root, 'lib', 'math.test.maxon'), root), root);
+		withTree(['main.maxon', 'lib/math.maxon', 'lib/math.maxtest'], root => {
+			assert.strictEqual(testProjectDirectory(path.join(root, 'lib', 'math.maxtest'), root), root);
 		});
 	});
 
 	test('never climbs above the workspace folder', () => {
-		withTree(['outer.maxon', 'workspace/main.maxon', 'workspace/main.test.maxon'], root => {
+		withTree(['outer.maxon', 'workspace/main.maxon', 'workspace/main.maxtest'], root => {
 			const workspace = path.join(root, 'workspace');
-			assert.strictEqual(testProjectDirectory(path.join(workspace, 'main.test.maxon'), workspace), workspace);
+			assert.strictEqual(testProjectDirectory(path.join(workspace, 'main.maxtest'), workspace), workspace);
 		});
 	});
 });
 
 suite('isIgnoredDirectory', () => {
 	test('a marker excludes its directory and everything beneath it', () => {
-		withTree(['fixtures/.maxonignore', 'fixtures/deep/a.test.maxon', 'src/a.test.maxon'], root => {
+		withTree(['fixtures/.maxonignore', 'fixtures/deep/a.maxtest', 'src/a.maxtest'], root => {
 			assert.strictEqual(isIgnoredDirectory(path.join(root, 'fixtures')), true);
 			assert.strictEqual(isIgnoredDirectory(path.join(root, 'fixtures', 'deep')), true);
 			assert.strictEqual(isIgnoredDirectory(path.join(root, 'src')), false);

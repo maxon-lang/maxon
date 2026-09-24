@@ -1,0 +1,30 @@
+// diagnostics-project-a-sibling-enum-is-not-an-unknown-bound.maxtest — an `enum` a SIBLING FILE
+// declares is a type this buffer may name, so `Phase.load` publishes NOTHING.
+//
+// ⛔⛔ **THE FALSE ERROR IS A PARSE ERROR ABOUT A RANGED BOUND, WHICH IS WHY IT READS AS NONSENSE.**
+// Every type-named arm of `parseDottedPrimary` declines when the index lacks the enum, so control reaches
+// the LAST-RESORT ranged-bound arm and `boundFieldIsMax("load")` throws `E2010: Expected 'min or max' but
+// got 'load'`. MEASURED on this repository's own source, at `maxon-bin/Compiler/Compiler.maxon:163:61`,
+// against `enum CompilePhase` in `maxon-bin/Compiler/CompileTimings.maxon`. The real build accepts that
+// line — the self-compile emits no E2010 — so the squiggle exists only in the editor.
+//
+// The staged project is a REAL one: it builds, so a red here cannot mean the fixture is broken. The
+// session, the staging and the assertions are `diagnostics-project-probe.maxtest`'s.
+
+let ProjectSiblingEnumDirName = "diagnostics-project-sibling-enum"
+let ProjectSiblingEnumDeclaringFileName = "phase.maxon"
+let ProjectSiblingEnumBufferFileName = "main.maxon"
+let ProjectSiblingEnumDeclaringSource = "export enum ProjectSiblingPhase\n\tload\n\tcheck\nend 'ProjectSiblingPhase'\n\nexport function projectSiblingPhaseCode(phase ProjectSiblingPhase) returns ExitCode\n\tlet code = match phase 'phase'\n\t\tload gives 0\n\t\tcheck gives 1\n\tend 'phase'\n\n\treturn code as ExitCode\nend 'projectSiblingPhaseCode'\n"
+let ProjectSiblingEnumBufferSource = "function main() returns ExitCode\n\treturn projectSiblingPhaseCode(ProjectSiblingPhase.load)\nend 'main'\n"
+
+test 'an enum a sibling file declares is not an unknown ranged bound'
+	let root = stagedProjectDiagnosticsRoot(ProjectSiblingEnumDirName)
+	writeCorpusFile(root, fileName: ProjectSiblingEnumDeclaringFileName, content: ProjectSiblingEnumDeclaringSource)
+	writeCorpusFile(root, fileName: ProjectSiblingEnumBufferFileName, content: ProjectSiblingEnumBufferSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: ProjectSiblingEnumBufferFileName, content: ProjectSiblingEnumBufferSource)
+
+	discardOutsideCheckoutDir(root)
+
+	expectNoProjectDiagnostics(probe, note: "`ProjectSiblingPhase.load` names an `enum` the sibling file of this project declares, and a `maxon build` of the staged project compiles it. The buffer alone cannot see the declaration, so the parser reaches its last-resort ranged-bound arm and invents a complaint about `min or max` — a red squiggle in the editor on a line that is correct.")
+end 'an enum a sibling file declares is not an unknown ranged bound'

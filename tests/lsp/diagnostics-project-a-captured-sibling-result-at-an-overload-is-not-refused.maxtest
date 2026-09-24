@@ -1,0 +1,17 @@
+let ProjectCapturedOverloadDirName = "diagnostics-project-captured-sibling-result-at-an-overload"
+let ProjectCapturedOverloadHelperFileName = "helper.maxon"
+let ProjectCapturedOverloadBufferFileName = "main.maxon"
+let ProjectCapturedOverloadHelperSource = "module function projectCapturedOverloadText() returns String\n\treturn \"\"\nend 'projectCapturedOverloadText'\n"
+let ProjectCapturedOverloadBufferSource = "function projectCapturedOverloadPick(x ExitCode) returns ExitCode\n\treturn x\nend 'projectCapturedOverloadPick'\n\nfunction projectCapturedOverloadPick(x String) returns ExitCode\n\treturn 1 if x.isEmpty() else 0\nend 'projectCapturedOverloadPick'\n\nfunction main() returns ExitCode\n\tlet text = projectCapturedOverloadText()\n\tlet pick = function() gives projectCapturedOverloadPick(text.trim())\n\n\treturn pick()\nend 'main'\n"
+
+test 'a sibling function result captured by a closure and handed to an overloaded function is not an opaque argument'
+	let root = stagedProjectDiagnosticsRoot(ProjectCapturedOverloadDirName)
+	writeCorpusFile(root, fileName: ProjectCapturedOverloadHelperFileName, content: ProjectCapturedOverloadHelperSource)
+	writeCorpusFile(root, fileName: ProjectCapturedOverloadBufferFileName, content: ProjectCapturedOverloadBufferSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: ProjectCapturedOverloadBufferFileName, content: ProjectCapturedOverloadBufferSource)
+
+	discardOutsideCheckoutDir(root)
+
+	expectNoProjectDiagnostics(probe, note: "`projectCapturedOverloadText` is a `module function` the sibling file declares, returning `String`. `main` binds its result, and a closure captures the binding and hands `.trim()` of it to `projectCapturedOverloadPick`, which the buffer overloads on `ExitCode` and `String`. A `maxon build` of the staged project exits 0. The closure is a function of its own, so the refusal must be traced out of it to the call in `main`.")
+end 'a sibling function result captured by a closure and handed to an overloaded function is not an opaque argument'

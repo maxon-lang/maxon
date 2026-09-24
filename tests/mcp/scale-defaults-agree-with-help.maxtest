@@ -1,0 +1,88 @@
+// scale-defaults-agree-with-help.maxtest — the `run_scale_test` tool and `maxon help scale-test` state
+// the same default for each option they share. The tool describes the command it runs, so a default that
+// differs between the two is one of them telling its reader something false.
+//
+// One server and one `help` run, both short.
+
+let ScaleToolName = "run_scale_test"
+let ScaleCommandWord = "scale-test"
+let HelpCommandWord = "help"
+
+// Each pair is one option: the tool's property, and the command's spelling of it up to its value.
+let RungsProperty = "rungs"
+let RungsOption = "--rungs="
+let RepeatProperty = "repeat"
+let RepeatOption = "--repeat="
+
+// Both texts state a default as `default <n>`.
+let DefaultWord = "default "
+
+// A help entry's first line is indented two spaces and its wrapped lines further.
+let EntryIndent = "  "
+let ContinuationIndent = "   "
+
+test 'run_scale_test states the defaults maxon help scale-test states'
+	let tools = listTools(true)
+
+	let helpRun = runIn(Directory.currentPath(), binary: testedCompilerPath(), arguments: [HelpCommandWord, ScaleCommandWord])
+	Expect.equal(helpRun.exitCode() as AssertedInt, expected: 0, message: "`maxon {HelpCommandWord} {ScaleCommandWord}` was refused. It said: {helpRun.stdout}{helpRun.stderr}")
+
+	requireSameDefault(tools, help: helpRun.stdout, property: RungsProperty, option: RungsOption)
+	requireSameDefault(tools, help: helpRun.stdout, property: RepeatProperty, option: RepeatOption)
+end 'run_scale_test states the defaults maxon help scale-test states'
+
+function requireSameDefault(tools JsonDoc, help String, property String, option String) throws TestFailure
+	let description = toolPropertyDescription(tools, toolName: ScaleToolName, property: property)
+	let entry = helpEntryFor(help, option: option)
+	try Expect.isFalse(entry.isEmpty(), message: "`maxon {HelpCommandWord} {ScaleCommandWord}` has no entry for `{option}`. It printed: {help}")
+
+	let toolDefault = try statedDefault(description, where: "`{ScaleToolName}`'s `{property}` description")
+	let helpDefault = try statedDefault(entry, where: "`maxon {HelpCommandWord} {ScaleCommandWord}`'s `{option}` entry")
+	try Expect.equal(toolDefault, expected: helpDefault, message: "`{ScaleToolName}` says `{property}` defaults to {toolDefault} and `maxon {HelpCommandWord} {ScaleCommandWord}` says `{option}` defaults to {helpDefault}. The tool: {description} The help: {entry}")
+end 'requireSameDefault'
+
+// The option's entry: its own line and the wrapped lines under it.
+function helpEntryFor(help String, option String) returns String
+	var entry = ""
+	var inEntry = false
+
+	for line in help.split("\n") 'eachLine'
+		if line.startsWith("{EntryIndent}{option}") 'theEntry'
+			inEntry = true
+			entry.append(line.trim())
+			continue
+		end 'theEntry'
+
+		if not inEntry 'notYet'
+			continue
+		end 'notYet'
+
+		if not line.startsWith(ContinuationIndent) 'pastTheEntry'
+			break
+		end 'pastTheEntry'
+
+		entry.append(" {line.trim()}")
+	end 'eachLine'
+
+	return entry
+end 'helpEntryFor'
+
+function statedDefault(text String, where String) returns AssertedInt throws TestFailure
+	let parts = text.split(DefaultWord)
+	try Expect.isTrue(parts.count() >= 2, message: "{where} states no `{DefaultWord}<n>`: {text}")
+
+	let tail = try parts.get(1) otherwise panic("scale-defaults: a stated default was just asserted")
+	var digits = ""
+
+	for c in tail 'eachCharacter'
+		if not Ascii.isDigit(c) 'pastTheNumber'
+			break
+		end 'pastTheNumber'
+
+		digits.append("{c}")
+	end 'eachCharacter'
+
+	try Expect.isFalse(digits.isEmpty(), message: "{where} states `{DefaultWord}` followed by no number: {text}")
+
+	return try int.fromString(digits) otherwise panic("scale-defaults: '{digits}' is a run of decimal digits")
+end 'statedDefault'

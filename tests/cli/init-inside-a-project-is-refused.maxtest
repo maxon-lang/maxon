@@ -1,0 +1,22 @@
+let CaseDirName = "init-inside-a-project-is-refused"
+let InitCommandWord = "init"
+let OuterProjectFileName = "outer.maxproj"
+let NestedDirName = "inner"
+let NestedProjectFileName = "inner.maxproj"
+let EntryFileName = "main.maxon"
+let OuterSource = "export function outer() returns ExitCode\n\tBuild.build(\".\")\n\treturn 0\nend 'outer'\n"
+
+test 'init below a directory holding a .maxproj is refused and writes nothing'
+	let dir = freshCaseDir(CaseDirName)
+	writeStagedFile(dir.join(OuterProjectFileName), content: OuterSource)
+
+	let nested = dir.join(NestedDirName)
+	let refused = runDriver([InitCommandWord, nested.toString()])
+	let said = "It wrote to stdout: {refused.stdout} and to stderr: {refused.stderr}"
+
+	Expect.equal(refused.exitCode() as AssertedInt, expected: 1, message: "`maxon {InitCommandWord}` below a directory holding `{OuterProjectFileName}` did not refuse: projects do not nest, so the project it would scaffold could not be built. {said}")
+	Expect.contains(refused.stderr, needle: NestedProjectFileName, message: "the refusal did not name the project file it declined to write. {said}")
+	Expect.contains(refused.stderr, needle: OuterProjectFileName, message: "the refusal did not name the project the new one would sit below. {said}")
+	Expect.isFalse(File.exists(nested.join(NestedProjectFileName)), message: "`maxon {InitCommandWord}` refused and still wrote {NestedProjectFileName}. {said}")
+	Expect.isFalse(File.exists(nested.join(EntryFileName)), message: "`maxon {InitCommandWord}` refused and still wrote {EntryFileName}. {said}")
+end 'init below a directory holding a .maxproj is refused and writes nothing'

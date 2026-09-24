@@ -1,0 +1,17 @@
+// help-lists-trace-flags.maxtest — `maxon help build` documents `--async-trace` and `--debugstream`,
+// which the argument parser accepts on a build. An option that is accepted and documented nowhere is one
+// a reader can only find by reading the driver's source.
+
+let AsyncTraceFlag = "--async-trace"
+let DebugStreamFlag = "--debugstream"
+
+test 'help build lists the trace flags the parser accepts'
+	let run = runHelpFor(BuildCommandWord)
+
+	let observedExit = run.exitCode() as AssertedInt
+	Expect.equal(observedExit, expected: 0, message: "`maxon {HelpCommandWord} {BuildCommandWord}` was refused. It said: {run.stdout}{run.stderr}")
+
+	let options = labelsWhereOptionhoodIs(labelledWordsIn(run.stdout), isOption: true)
+	let undocumented = wordsNotIn([AsyncTraceFlag, DebugStreamFlag], right: options)
+	Expect.isEmpty(listed(undocumented), message: "`maxon {HelpCommandWord} {BuildCommandWord}` does not list these options the parser accepts: {listed(undocumented)}. It listed: {listed(options)}")
+end 'help build lists the trace flags the parser accepts'

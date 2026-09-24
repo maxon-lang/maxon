@@ -1,0 +1,120 @@
+// reference-documents-every-tool.maxtest — the CLI reference's MCP section names every tool the server
+// advertises and every argument each tool declares.
+//
+// ⭐ THE ROSTER IS READ OFF `tools/list` in `--dev` mode, the superset: a tool or argument added to the
+// server is demanded of the document without this file naming it.
+//
+// The section runs from the line `## MCP Server` to the next line starting `## `. A name is documented when
+// it appears there as a whole word — a run of letters, digits and `_` — so `run` is not satisfied by
+// `run_spec_test`.
+
+let CliReferenceDocument = "docs/CLI_REFERENCE.md"
+let McpSectionHeading = "## MCP Server"
+let TopLevelHeadingPrefix = "## "
+let WordUnderscore = "_"
+let CarriageReturn = "\r"
+let LineFeed = "\n"
+
+test 'the CLI reference MCP section names every tool and every argument'
+	let tools = listTools(true)
+	let names = toolNames(tools)
+	Expect.isTrue(names.count() > 0, message: "`tools/list` advertised no tool, so the comparison below would be vacuous: {Json.stringify(tools)}")
+
+	var required = StringArray.create()
+	var roster = StringArray.create()
+
+	for tool in names 'eachTool'
+		pushOnce(required, name: tool)
+		let properties = toolPropertyKeys(tools, toolName: tool)
+
+		for property in properties 'eachProperty'
+			pushOnce(required, name: property)
+		end 'eachProperty'
+
+		roster.push("{tool}({spaced(properties)})")
+	end 'eachTool'
+
+	let path = try FilePath.from(CliReferenceDocument) otherwise panic("reference-documents-every-tool: '{CliReferenceDocument}' is not a spellable path")
+	let document = try File.readText(path) otherwise panic("reference-documents-every-tool: could not read '{CliReferenceDocument}'. This corpus's paths are relative to the CHECKOUT ROOT; run it from there.")
+	let section = sectionOf(document.replace(CarriageReturn, with: ""))
+
+	Expect.isFalse(section.isEmpty(), message: "{CliReferenceDocument} has no `{McpSectionHeading}` section. It must exist and name every tool and argument the server declares: {spaced(roster)}")
+
+	let documented = wordsIn(section)
+	var missing = StringArray.create()
+
+	for name in required 'eachName'
+		if not documented.contains(name) 'undocumented'
+			missing.push(name)
+		end 'undocumented'
+	end 'eachName'
+
+	Expect.isEmpty(spaced(missing), message: "{CliReferenceDocument}'s `{McpSectionHeading}` section does not name these tools or arguments: {spaced(missing)}")
+end 'the CLI reference MCP section names every tool and every argument'
+
+// The section's text from its heading on, so it is empty exactly when the document has no such heading.
+function sectionOf(document String) returns String
+	var section = ""
+	var inSection = false
+
+	for line in document.split(LineFeed) 'eachLine'
+		if line == McpSectionHeading 'opens'
+			inSection = true
+			section.append("{line}{LineFeed}")
+			continue
+		end 'opens'
+
+		if not inSection 'notYet'
+			continue
+		end 'notYet'
+
+		if line.startsWith(TopLevelHeadingPrefix) 'closes'
+			break
+		end 'closes'
+
+		section.append("{line}{LineFeed}")
+	end 'eachLine'
+
+	return section
+end 'sectionOf'
+
+function wordsIn(text String) returns StringArray
+	var words = StringArray.create()
+	var current = ""
+
+	for c in text 'eachCharacter'
+		let spelled = c.toString()
+
+		if Ascii.isAlphanumeric(c) or spelled == WordUnderscore 'insideAWord'
+			current.append(spelled)
+			continue
+		end 'insideAWord'
+
+		if not current.isEmpty() 'wordEnds'
+			pushOnce(words, name: current)
+			current = ""
+		end 'wordEnds'
+	end 'eachCharacter'
+
+	if not current.isEmpty() 'wordAtTheEnd'
+		pushOnce(words, name: current)
+	end 'wordAtTheEnd'
+
+	return words
+end 'wordsIn'
+
+function pushOnce(names StringArray, name String)
+	if not names.contains(name) 'unseen'
+		names.push(name)
+	end 'unseen'
+end 'pushOnce'
+
+function spaced(names StringArray) returns String
+	var rendered = ""
+
+	for name in names 'eachName'
+		rendered.append("{name} ")
+	end 'eachName'
+
+	return rendered.trim()
+end 'spaced'

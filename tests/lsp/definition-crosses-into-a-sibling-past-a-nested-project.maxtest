@@ -1,0 +1,24 @@
+let PastNestedDirName = "temp/lsp/definition-crosses-into-a-sibling-past-a-nested-project"
+let PastNestedInnerDirName = "temp/lsp/definition-crosses-into-a-sibling-past-a-nested-project/inner"
+let PastNestedInnerProjectFileName = "inner.maxproj"
+let PastNestedInnerProjectSource = "export function inner() returns ExitCode\n\tBuild.build(\".\")\n\treturn 0\nend 'inner'\n"
+let PastNestedHelperFileName = "helper.maxon"
+let PastNestedMainFileName = "main.maxon"
+let PastNestedHelperSource = "export function sharedHelper() returns ExitCode\n\treturn 0\nend 'sharedHelper'\n"
+let PastNestedMainSource = "function main() returns ExitCode\n\treturn sharedHelper()\nend 'main'\n"
+let PastNestedHelperTail = "definition-crosses-into-a-sibling-past-a-nested-project/helper.maxon"
+let PastNestedCallLine = 1 as LspCoordinate
+let PastNestedCallCharacter = 12 as LspCoordinate
+let PastNestedDeclarationLine = 0 as LspCoordinate
+
+test 'definition crosses into a sibling file while a nested project sits below'
+	let directory = stagedCorpusDirectory(PastNestedDirName)
+	writeCorpusFile(directory, fileName: PastNestedHelperFileName, content: PastNestedHelperSource)
+
+	let inner = createdStagingDirectory(PastNestedInnerDirName, under: Directory.currentPath())
+	writeCorpusFile(inner, fileName: PastNestedInnerProjectFileName, content: PastNestedInnerProjectSource)
+
+	let probe = probeCorpusDefinition(directory, fileName: PastNestedMainFileName, content: PastNestedMainSource, line: PastNestedCallLine, character: PastNestedCallCharacter)
+
+	expectDefinitionInFile(probe, fileTail: PastNestedHelperTail, startLine: PastNestedDeclarationLine, note: "a call to an `export`ed declaration in a sibling file did not resolve while `inner/{PastNestedInnerProjectFileName}` sits below the project: the nested project is refused on its own project file, and the outer project's documents keep their index.")
+end 'definition crosses into a sibling file while a nested project sits below'

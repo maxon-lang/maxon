@@ -222,9 +222,9 @@ next token is a `TEST_NAME`; anywhere else it lexes as an identifier. The positi
 half matters as much as the word: `match expression LABEL` makes `match test 'check'`
 the same two tokens, and only the declaration position separates them.
 
-Every test implicitly declares `throws TestFailure` (`stdlib/Testing.maxon`); the
-clause is never written and cannot be. A `test_decl` is legal only in a file whose
-name ends in `.test.maxon`. Inside a test body a throwing call, interface call or `await`
+Every test implicitly declares `throws TestFailure` (`stdlib/Testing.maxon`), and
+the grammar gives a test no place to write the clause. A `test_decl` is legal only in a file whose
+name ends in `.maxtest`. Inside a test body a throwing call, interface call or `await`
 needs no `try`: the test handles the error.
 
 ### 3.1 Function Declaration

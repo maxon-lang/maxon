@@ -1,0 +1,25 @@
+let CaseDirName = "run-a-task-whose-name-leads-with-an-underscore"
+let TaskFileName = "dev.maxtasks"
+let RunCommandWord = "run"
+let ListedWord = "_warm-up"
+let TaskExitCode = 5
+let TaskGreeting = "the warm-up task spoke"
+
+let TasksSource = "export function _warm_up() returns ExitCode\n\tprint(\"the warm-up task spoke\\n\")\n\treturn 5\nend '_warm_up'\n"
+
+test 'a task whose name leads with an underscore is listed by a word that runs it'
+	let dir = freshCaseDir(CaseDirName)
+	writeStagedFile(dir.join(TaskFileName), content: TasksSource)
+
+	let listed = runDriver([RunCommandWord], workingDirectory: dir)
+	let listedSaid = "It wrote to stdout: {listed.stdout} and to stderr: {listed.stderr}"
+
+	Expect.equal(listed.exitCode() as AssertedInt, expected: 0, message: "a bare `maxon {RunCommandWord}` beside `{TaskFileName}` did not succeed. {listedSaid}")
+	Expect.contains(listed.stdout, needle: ListedWord, message: "the listing did not offer `{ListedWord}`: a leading `_` stays one, because a word leading with `-` is read as an option. {listedSaid}")
+
+	let ran = runDriver([RunCommandWord, ListedWord], workingDirectory: dir)
+	let ranSaid = "It wrote to stdout: {ran.stdout} and to stderr: {ran.stderr}"
+
+	Expect.equal(ran.exitCode() as AssertedInt, expected: TaskExitCode as AssertedInt, message: "`maxon {RunCommandWord} {ListedWord}`, the word the listing offered, did not run `_warm_up`. {ranSaid}")
+	Expect.contains(ran.stdout, needle: TaskGreeting, message: "the task's own stdout did not reach the caller. {ranSaid}")
+end 'a task whose name leads with an underscore is listed by a word that runs it'

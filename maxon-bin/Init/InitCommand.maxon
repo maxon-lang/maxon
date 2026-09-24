@@ -14,36 +14,44 @@ export function runInit(args MaxonArgs) returns ExitCode
 		return 1
 	end 'badPath'
 
-	let root = stated.resolve(Directory.currentPath())
-	let named = projectNameOf(root)
+	let root = stated.anchoredAt(Directory.currentPath())
+	let named = stated.resolve(Directory.currentPath()).filename()
 
 	if named.isEmpty() 'unnameable'
 		printError("error: `{spelling}` names no directory a project can be called after.\n")
 		return 1
 	end 'unnameable'
 
-	if not nameIsWritable(named) 'unwritableName'
-		printError("error: `{named}` holds a character a {ProjectManifestFileName} cannot state: {UnwritableNameCharacters}\n")
-		return 1
-	end 'unwritableName'
-
-	let manifest = root.join(ProjectManifestFileName)
+	let manifest = root.join("{named}{ProjectFileExtension}")
 	let entry = root.join(MainSourceFileName)
 
-	if File.exists(manifest) 'manifestIsThere'
-		return refuseExistingFile(manifest)
-	end 'manifestIsThere'
+	if Directory.isDirectory(root) 'anExistingDirectory'
+		let existing = try driverFileIn(root, extension: ProjectFileExtension) otherwise (e) 'unreadableLayout'
+			reportCompileError(e)
+			return 1
+		end 'unreadableLayout'
+
+		match existing 'existing'
+			found(projectFile) then return refuseExistingFile(projectFile)
+			none then break 'existing'
+		end 'existing'
+	end 'anExistingDirectory'
 
 	if File.exists(entry) 'entryIsThere'
 		return refuseExistingFile(entry)
 	end 'entryIsThere'
+
+	try requireNoProjectEncloses(manifest) otherwise (e) 'nested'
+		reportCompileError(e)
+		return 1
+	end 'nested'
 
 	if not Directory.create(root) 'noDirectory'
 		printError("error: {root.toString()} could not be created\n")
 		return 1
 	end 'noDirectory'
 
-	try File.writeText(manifest, content: manifestSourceFor(named)) otherwise 'manifestNotWritten'
+	try File.writeText(manifest, content: ManifestSource) otherwise 'manifestNotWritten'
 		printError("error: {manifest.toString()} could not be written\n")
 		return 1
 	end 'manifestNotWritten'
@@ -65,32 +73,6 @@ function refuseExistingFile(path FilePath) returns ExitCode
 	return 1
 end 'refuseExistingFile'
 
-function projectNameOf(root FilePath) returns String
-	return root.filename()
-end 'projectNameOf'
-
-// The name is interpolated into a Maxon string literal, so a `"` or a brace in it would scaffold a
-// manifest that does not compile.
-let UnwritableNameCharacters = "\" \{ \} \\ and a control character"
-
-function nameIsWritable(named String) returns bool
-	for b in named.bytes() 'eachByte'
-		if b == DoubleQuoteByte or b == OpenBraceByte or b == CloseBraceByte or b == BackslashByte or b < SpaceByte 'unwritable'
-			return false
-		end 'unwritable'
-	end 'eachByte'
-
-	return true
-end 'nameIsWritable'
-
-let DoubleQuoteByte = 34 as Byte
-let OpenBraceByte = 123 as Byte
-let CloseBraceByte = 125 as Byte
-let BackslashByte = 92 as Byte
-let SpaceByte = 32 as Byte
-
-function manifestSourceFor(named String) returns String
-	return "export function build() returns ExitCode\n\tBuild.build(\".\", output: \".maxon/{named}\")\n\treturn 0\nend 'build'\n"
-end 'manifestSourceFor'
+let ManifestSource = "export function build() returns ExitCode\n\tBuild.build(\".\")\n\treturn 0\nend 'build'\n"
 
 let EntrySource = "function main() returns ExitCode\n\tprint(\"Hello, world!\\n\")\n\treturn 0\nend 'main'\n"

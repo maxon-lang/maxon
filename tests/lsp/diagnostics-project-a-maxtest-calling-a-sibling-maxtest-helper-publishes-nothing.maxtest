@@ -1,0 +1,20 @@
+let ProjectSiblingProbeDirName = "diagnostics-project-maxtest-calling-a-sibling-maxtest-helper"
+let ProjectSiblingProbeMainFileName = "main.maxon"
+let ProjectSiblingProbeHelperFileName = "probe.maxtest"
+let ProjectSiblingProbeSuiteFileName = "suite.maxtest"
+let ProjectSiblingProbeMainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let ProjectSiblingProbeHelperSource = "export function projectSiblingProbeAnswer() returns ExitCode\n\treturn 0\nend 'projectSiblingProbeAnswer'\n"
+let ProjectSiblingProbeSuiteSource = "test 'the sibling probe answers'\n\tExpect.equal(projectSiblingProbeAnswer() as AssertedInt, expected: 0)\nend 'the sibling probe answers'\n"
+
+test 'a .maxtest calling a helper a sibling .maxtest declares publishes nothing'
+	let root = stagedProjectDiagnosticsRoot(ProjectSiblingProbeDirName)
+	writeCorpusFile(root, fileName: ProjectSiblingProbeMainFileName, content: ProjectSiblingProbeMainSource)
+	writeCorpusFile(root, fileName: ProjectSiblingProbeHelperFileName, content: ProjectSiblingProbeHelperSource)
+	writeCorpusFile(root, fileName: ProjectSiblingProbeSuiteFileName, content: ProjectSiblingProbeSuiteSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: ProjectSiblingProbeSuiteFileName, content: ProjectSiblingProbeSuiteSource)
+
+	discardOutsideCheckoutDir(root)
+
+	expectNoProjectDiagnostics(probe, note: "`{ProjectSiblingProbeSuiteFileName}` calls `projectSiblingProbeAnswer`, which the sibling test file `{ProjectSiblingProbeHelperFileName}` declares. `maxon test` over this project compiles every test file with the project, so it compiles and runs, and an editor reading a test file must see the other test files too.")
+end 'a .maxtest calling a helper a sibling .maxtest declares publishes nothing'

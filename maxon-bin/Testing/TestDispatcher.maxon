@@ -47,10 +47,11 @@ let MaxonTestIndexAlias = "__MaxonTestIndex"
 // differ only outside `[A-Za-z0-9_]` share a namespace and sanitize alike.
 let MaxonTestFileRunnerPrefix = "__maxon_test_file_"
 
-// File name given to the synthesized root-entry source. It is deliberately NOT a `*.test.maxon` — it holds
-// no `test` declaration, and E2058 refuses one outside such a file — and it sits at the staged root so its
-// `export`s are visible to every directory below. The name is never opened by a person, but it is what a
-// compile error in generated source is reported against, so it says what it is.
+// File name given to the synthesized root-entry source. It is deliberately NOT a `.maxtest` file —
+// it holds no `test` declaration, and E2058 refuses one outside such a file — and it sits at the
+// staged root so its `export`s are visible to every directory below. The name is never opened by a
+// person, but it is what a compile error in generated source is reported against, so it says what
+// it is.
 let MaxonTestEntryFileName = "__maxon_test_entry.maxon"
 
 // ⭐ **THE CEILING ON A RUN'S TEST COUNT, and the upper bound of the GENERATED index typealias.** Stated
@@ -95,7 +96,7 @@ export typealias IndexedTestArray = Array with IndexedTest
 // ⭐ **ONE TEST FILE AND THE TESTS IN IT, IN DISCOVERY ORDER** — the unit both the compile and the run are
 // organized around: a file is what a dispatcher is generated for, and what a report groups by.
 export type TestFileGroup
-	// The `*.test.maxon` file as the COMPILER recorded it — the user's own path, not the staged copy's. It
+	// The `.maxtest` file as the COMPILER recorded it — the user's own path, not the staged copy's. It
 	// is what a report names and what the staging maps FROM, so it is identity.
 	export let file as FilePath
 
@@ -120,7 +121,7 @@ export typealias TestFileGroupArray = Array with TestFileGroup
 // Everything a staged test build hands its compile.
 export type StagedTestBuild
 	// ⭐ **EVERY STAGED SOURCE, NAMED, WITH THE STAGED ROOT LAST.** Naming each file is what makes the
-	// `*.test.maxon` copies compile at all — a path the caller named escapes every walk exclusion
+	// `.maxtest` copies compile at all — a path the caller named escapes every walk exclusion
 	// (`Compiler.loadSourceFiles`) — and the root rides along at the end to FIX the project root, exactly as
 	// `SpecTestRunner.stageSourceFiles` does and for its reason: with one file named, `commonAncestorOf`
 	// would answer that FILE, and every namespace and every `__file__` would be measured from it.
@@ -128,7 +129,7 @@ export type StagedTestBuild
 
 	// The subset of those this compiler WROTE, each with the reserved names it minted there — handed to
 	// `Compiler.compileToProduct` as `compilerWrittenSources`, which is what lets those names be DECLARED
-	// and lets the generated code CALL `__` names at all. A `*.test.maxon` copy that got no dispatcher is
+	// and lets the generated code CALL `__` names at all. A `.maxtest` copy that got no dispatcher is
 	// NOT in here: its bytes are the author's, unchanged.
 	export let compilerWrittenSources as CompilerWrittenSourceArray
 
@@ -365,9 +366,9 @@ function stageOneSource(stagingRoot FilePath, projectRoot FilePath, source FileP
 	let stagedPath = stagingRoot.join(relative)
 	let content = try File.readText(source) otherwise throw TestStagingError.refused("could not read {source.toString()}")
 
-	// Everything with no group — the project's ordinary sources, and any `*.test.maxon` that declares no
-	// `test` — is copied byte for byte. Its bytes stay the AUTHOR's, which is exactly what keeps it out of
-	// `compilerWrittenSources` and so out of the reserved-name exemption.
+	// Everything with no group — the project's ordinary sources, and any `.maxtest` file that declares
+	// no `test` — is copied byte for byte. Its bytes stay the AUTHOR's, which is exactly what keeps it
+	// out of `compilerWrittenSources` and so out of the reserved-name exemption.
 	let holder = groupOfFile(groups, file: source)
 	let dispatcher = match holder 'holdsTests'
 		found(group) gives fileDispatcherSource(group)

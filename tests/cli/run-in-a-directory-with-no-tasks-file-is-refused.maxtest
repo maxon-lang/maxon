@@ -1,0 +1,13 @@
+let CaseDirName = "run-in-a-directory-with-no-tasks-file-is-refused"
+let TasksFileExtension = ".maxtasks"
+let RunCommandWord = "run"
+
+test 'a directory holding no tasks file is refused by name'
+	let dir = freshCaseDir(CaseDirName)
+
+	let refused = runDriver([RunCommandWord, "anything"], workingDirectory: dir)
+	let said = "It wrote to stdout: {refused.stdout} and to stderr: {refused.stderr}"
+
+	Expect.equal(refused.exitCode() as AssertedInt, expected: 1, message: "`maxon {RunCommandWord}` in a directory holding no `{TasksFileExtension}` file did not refuse. {said}")
+	Expect.contains(refused.stderr, needle: TasksFileExtension, message: "the refusal did not name the file it looked for, so the reader is not told what to write. {said}")
+end 'a directory holding no tasks file is refused by name'

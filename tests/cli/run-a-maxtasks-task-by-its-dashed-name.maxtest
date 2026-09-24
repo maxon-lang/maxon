@@ -1,0 +1,19 @@
+let CaseDirName = "run-a-maxtasks-task-by-its-dashed-name"
+let TaskFileName = "dev.maxtasks"
+let RunCommandWord = "run"
+let AskedFor = "build-ext"
+let TaskExitCode = 7
+let TaskGreeting = "the extension task spoke"
+
+let TasksSource = "export function build_ext() returns ExitCode\n\tprint(\"the extension task spoke\\n\")\n\treturn 7\nend 'build_ext'\n\nexport function tidy_up() returns ExitCode\n\treturn 0\nend 'tidy_up'\n"
+
+test 'maxon run <dashed-name> runs the .maxtasks task whose underscored name it spells'
+	let dir = freshCaseDir(CaseDirName)
+	writeStagedFile(dir.join(TaskFileName), content: TasksSource)
+
+	let ran = runDriver([RunCommandWord, AskedFor], workingDirectory: dir)
+	let said = "It wrote to stdout: {ran.stdout} and to stderr: {ran.stderr}"
+
+	Expect.equal(ran.exitCode() as AssertedInt, expected: TaskExitCode as AssertedInt, message: "`maxon {RunCommandWord} {AskedFor}` beside a `{TaskFileName}` exporting `build_ext` did not exit with the code that task returned. `tidy_up`, which nothing ran, is a task too and so is no unused export. {said}")
+	Expect.contains(ran.stdout, needle: TaskGreeting, message: "the task's own stdout did not reach the caller. {said}")
+end 'maxon run <dashed-name> runs the .maxtasks task whose underscored name it spells'

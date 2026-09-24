@@ -1,0 +1,25 @@
+let CaseDirName = "build-compiles-an-old-project-maxon-as-ordinary-source"
+let ProjectDirName = "project"
+let OutputStem = "program"
+let MainFileName = "main.maxon"
+let OldManifestFileName = "project.maxon"
+let OldTaskFileName = "tasks.maxon"
+let MainSource = "function main() returns ExitCode\n\tif taskAnswer() != 0 'failed'\n\t\treturn 1\n\tend 'failed'\n\n\treturn manifestAnswer()\nend 'main'\n"
+let OldManifestSource = "export function manifestAnswer() returns ExitCode\n\treturn 0\nend 'manifestAnswer'\n"
+let OldTaskSource = "export function taskAnswer() returns ExitCode\n\treturn 0\nend 'taskAnswer'\n"
+
+test 'a directory build compiles a project.maxon and a tasks.maxon as ordinary sources'
+	let dir = freshCaseDir(CaseDirName)
+	let project = createdStagedDirectory(dir.join(ProjectDirName))
+
+	for (name, content) in [(MainFileName, MainSource), (OldManifestFileName, OldManifestSource), (OldTaskFileName, OldTaskSource)] 'eachFile'
+		writeStagedFile(project.join(name), content: content)
+	end 'eachFile'
+
+	let output = dir.join(OutputStem)
+	let build = runDriver([BuildCommandWord, project.toString(), "{OutputOptionPrefix}{output.toString()}"])
+	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+
+	Expect.equal(build.exitCode() as AssertedInt, expected: 0, message: "a directory whose `{MainFileName}` calls functions declared in `{OldManifestFileName}` and `{OldTaskFileName}` did not build: neither name marks anything, so both are sources of the program. {said}")
+	Expect.isTrue(File.exists(dir.join("{OutputStem}{executableSuffix()}")), message: "the build exited 0 and wrote no executable. {said}")
+end 'a directory build compiles a project.maxon and a tasks.maxon as ordinary sources'

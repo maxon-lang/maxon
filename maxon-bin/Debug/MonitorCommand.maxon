@@ -92,18 +92,18 @@ export function runMonitor(args MaxonArgs) returns ExitCode
 		unknown(named) then return refuseUnknownFilter(named)
 	end 'chosen'
 
-	// ⚠ **RESOLVED TO AN ABSOLUTE PATH, AND THE TRACE ITSELF DEPENDS ON IT.** The path handed to the spawn
+	// ⚠ **ANCHORED TO AN ABSOLUTE PATH, AND THE TRACE ITSELF DEPENDS ON IT.** The path handed to the spawn
 	// becomes the child's OWN `argv[0]`, so a program that reads its command line allocates a buffer whose
 	// SIZE is this spelling's length — and an `mm-trace` golden pins that number. Measured: monitoring
 	// `temp/x/out.exe` by a relative spelling shifted three `ElementBuffer` sizes by 26 bytes against the
-	// reference, which resolves the same way. The REFUSAL still names what was typed.
+	// reference, whose path is absolute as well. The REFUSAL still names what was typed.
 	let target = try FilePath.from(spelling) otherwise return refuseMissingTarget(spelling)
 
 	if not File.exists(target) 'notThere'
 		return refuseMissingTarget(spelling)
 	end 'notThere'
 
-	let resolved = target.resolve(Directory.currentPath())
+	let resolved = target.anchoredAt(Directory.currentPath())
 
 	var decoder = try DebugStreamDecoder.create(resolved, filter: filter) otherwise (e) 'noRing'
 		printError("maxon monitor: {e.displayReason()}\n")

@@ -1,0 +1,30 @@
+let CaseDirName = "run-lists-maxtasks-tasks-in-dash-form"
+let TaskFileName = "dev.maxtasks"
+let RunCommandWord = "run"
+let FirstTaskWord = "build-ext"
+let SecondTaskWord = "tidy-up"
+let FirstTaskFunction = "build_ext"
+let SecondTaskFunction = "tidy_up"
+let PrivateFunctionWord = "private"
+
+let TasksSource = "export function build_ext() returns ExitCode\n\treturn 0\nend 'build_ext'\n\nexport function tidy_up() returns ExitCode\n\treturn 0\nend 'tidy_up'\n\nfunction private_helper() returns ExitCode\n\treturn 0\nend 'private_helper'\n"
+
+test 'a bare run lists the .maxtasks tasks in the dashed form it accepts'
+	let dir = freshCaseDir(CaseDirName)
+	writeStagedFile(dir.join(TaskFileName), content: TasksSource)
+
+	let listed = runDriver([RunCommandWord], workingDirectory: dir)
+	let said = "It wrote to stdout: {listed.stdout} and to stderr: {listed.stderr}"
+
+	Expect.equal(listed.exitCode() as AssertedInt, expected: 0, message: "a bare `maxon {RunCommandWord}` beside a `{TaskFileName}` declaring two tasks did not succeed. {said}")
+
+	for dashed in [FirstTaskWord, SecondTaskWord] 'eachTask'
+		Expect.contains(listed.stdout, needle: dashed, message: "the listing left out `{dashed}`, the name `maxon {RunCommandWord}` accepts for that task. {said}")
+	end 'eachTask'
+
+	for underscored in [FirstTaskFunction, SecondTaskFunction] 'eachFunction'
+		Expect.isFalse(listed.stdout.contains(underscored), message: "the listing spelled the function `{underscored}` rather than the dashed name a reader types. {said}")
+	end 'eachFunction'
+
+	Expect.isFalse(listed.stdout.contains(PrivateFunctionWord), message: "the listing offered a file-private function as a task. {said}")
+end 'a bare run lists the .maxtasks tasks in the dashed form it accepts'

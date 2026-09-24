@@ -35,21 +35,12 @@
 // `.maxon/` — so the paragraph above says why nothing needs excluding, not what a filter does. A tier
 // moved under the compiler's own project would enter the sweep and produce exactly that false refusal.
 //
-// ⚠ NOT every `.maxon` file under the project root either — only the ones `maxon build` actually
-// compiles. `maxon-bin/excluded-source-fixture/` carries a `.maxonignore` and its source is not in the
-// binary, so an edit to it cannot change a single verdict. `collectMaxonSources` is what answers that, and is used
-// here rather than re-spelled: it excludes the build manifest, every `.maxonignore`d subtree AND —
-// since the `test` declaration landed — every `*.test.maxon`, which is three of the four clauses. The
-// one it does NOT carry, the compiler's own `.maxon/` output directory, is applied on top, HERE,
-// because it is what is left of the gap between "a source of this project" and "a source of THIS
-// BINARY".
-//
-// ⚠ **THE `*.test.maxon` CLAUSE IS STILL ASKED HERE, AND IT IS NOW A BELT ON TOP OF THE WALK'S BRACES —
-// BUT IT IS ASKED THROUGH `Compiler.isTestSourceName` RATHER THAN SPELLED AGAIN.** The walk excludes
-// those files today, so this arm cannot fire; what it must never become is a SECOND answer to "is this
-// a test file?", because the two would then be free to drift on the case rule stated at
-// `CompilerOutputDirName`. One predicate, two readers — the shape the walk and the parser's own E2058
-// already share.
+// ⚠ Not every `.maxon` file under the project root either — only the ones `maxon build` actually
+// compiles. `maxon-bin/excluded-source-fixture/` carries a `.maxonignore` and its source is not in
+// the binary, so an edit to it cannot change a single verdict. `collectMaxonSources` answers that
+// and is used here rather than re-spelled. The one clause it does not carry, the compiler's own
+// `.maxon/` output directory, is applied on top here, because it is what is left of the gap between
+// "a source of this project" and "a source of this binary".
 //
 // ⭐ **THE `.maxonignore` CLAUSE IS NOT APPLIED HERE.** The walk carries it (see
 // `Compiler.collectMaxonSources`), so a copy here could only ever be a second answer waiting to
@@ -79,24 +70,6 @@
 // because its refusal costs one rebuild of a small tool nobody else is waiting on, while this one
 // wedges an entire suite for a rebuild measured in minutes. Same question, different price on being
 // wrong, so a different tie-break — not a rule that drifted.
-
-// `maxon build` writes a project's executable into `<project>/.maxon/`, so a binary whose parent
-// directory is NOT that one was not built in place and has no project above it to compare against.
-// It is also what a file the compiler WROTE lives under, at any depth, and such a file is not a
-// source to anybody — `collectMaxonSources` walks straight into it.
-//
-// Written in lower case because every comparison against it lower-cases the path component first.
-//
-// ⚠ **THE AUTHORITY FOLDS CASE ON EVERY PLATFORM, AND A MIRROR THAT DOES NOT IS A FALSE REFUSAL.**
-// A test-file name and an output directory are both matched case-insensitively — the first by
-// `Compiler.isTestSourceName`, the second here — so `Api.Test.maxon` is NOT in the binary. A byte-exact
-// comparison would call it a source of this binary, find it newer and REFUSE THE WHOLE SUITE over a file
-// the build never read, and a false refusal has no workaround.
-//
-// `module` because the guest-compiler delegation names the same directory when it decides where to put
-// the binary it builds (`SpecTestRunner.guestCompilerPath`) — the output directory is one fact, and a
-// second spelling of it is a binary written where nothing looks for it.
-module let CompilerOutputDirName = ".maxon"
 
 // The directory whose presence in the project root says this is a DEVELOPMENT CHECKOUT rather than an
 // installed copy. Detected, never guessed from the path's spelling: a released binary's own path can
@@ -152,8 +125,8 @@ end 'BinarySourceRoot'
 export function binarySourceRootOf(binary FilePath) returns BinarySourceRoot
 	let outputDir = try binary.parent() otherwise return BinarySourceRoot.elsewhere("{binary.toString()} has no parent directory")
 
-	if outputDir.filename().toLower() != CompilerOutputDirName 'notBuiltInPlace'
-		return BinarySourceRoot.elsewhere("{binary.toString()} was not built in place — `maxon build` writes a project's executable into its own {CompilerOutputDirName}/ directory, and this one is not in such a directory")
+	if outputDir.filename().toLower() != ProjectProductsDirName 'notBuiltInPlace'
+		return BinarySourceRoot.elsewhere("{binary.toString()} was not built in place — `maxon build` writes a project's executable into its own {ProjectProductsDirName}/ directory, and this one is not in such a directory")
 	end 'notBuiltInPlace'
 
 	let sourceRoot = try outputDir.parent() otherwise return BinarySourceRoot.elsewhere("{outputDir.toString()} has no parent directory")
@@ -206,16 +179,9 @@ function stalenessUnder(binary FilePath, sourceRoot FilePath) returns StalenessV
 	return StalenessVerdict.mayProceed
 end 'stalenessUnder'
 
-// Whether `maxon build` compiled `source` into the binary, given that `collectMaxonSources` has
-// already dropped the build manifest, every `.maxonignore`d subtree and every `*.test.maxon`. See this
-// file's header for why the output-directory clause lives here rather than in that walk, and for why
-// the test-file clause is still asked — through that walk's OWN predicate — although the walk now
-// answers it first.
+// Whether `maxon build` compiled `source`, which `collectMaxonSources` found, into the binary. See
+// this file's header for why the output-directory clause lives here rather than in that walk.
 function isCompiledInto(source FilePath, sourceRoot FilePath) returns bool
-	if isTestSourceName(source.filename()) 'testFile'
-		return false
-	end 'testFile'
-
 	return not isUnderCompilerOutputDirectory(source, sourceRoot: sourceRoot)
 end 'isCompiledInto'
 
@@ -232,7 +198,7 @@ function isUnderCompilerOutputDirectory(source FilePath, sourceRoot FilePath) re
 	var dir = try source.parent() otherwise panic("CompilerFreshness: {source.toString()} has no parent directory, though a directory walk found it inside one")
 
 	while true 'upwards'
-		if dir.filename().toLower() == CompilerOutputDirName 'compilerOutput'
+		if dir.filename().toLower() == ProjectProductsDirName 'compilerOutput'
 			return true
 		end 'compilerOutput'
 

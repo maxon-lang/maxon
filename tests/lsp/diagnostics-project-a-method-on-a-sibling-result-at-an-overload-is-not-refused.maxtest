@@ -1,0 +1,17 @@
+let ProjectMethodOverloadDirName = "diagnostics-project-method-on-a-sibling-result-at-an-overload"
+let ProjectMethodOverloadHelperFileName = "helper.maxon"
+let ProjectMethodOverloadBufferFileName = "main.maxon"
+let ProjectMethodOverloadHelperSource = "module function projectMethodOverloadText() returns String\n\treturn \"\"\nend 'projectMethodOverloadText'\n"
+let ProjectMethodOverloadBufferSource = "function projectMethodOverloadPick(x ExitCode) returns ExitCode\n\treturn x\nend 'projectMethodOverloadPick'\n\nfunction projectMethodOverloadPick(x String) returns ExitCode\n\treturn 1 if x.isEmpty() else 0\nend 'projectMethodOverloadPick'\n\nfunction main() returns ExitCode\n\treturn projectMethodOverloadPick(projectMethodOverloadText().trim())\nend 'main'\n"
+
+test 'a method called on a sibling function result and handed to an overloaded function is not an opaque argument'
+	let root = stagedProjectDiagnosticsRoot(ProjectMethodOverloadDirName)
+	writeCorpusFile(root, fileName: ProjectMethodOverloadHelperFileName, content: ProjectMethodOverloadHelperSource)
+	writeCorpusFile(root, fileName: ProjectMethodOverloadBufferFileName, content: ProjectMethodOverloadBufferSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: ProjectMethodOverloadBufferFileName, content: ProjectMethodOverloadBufferSource)
+
+	discardOutsideCheckoutDir(root)
+
+	expectNoProjectDiagnostics(probe, note: "`projectMethodOverloadText` is a `module function` the sibling file declares, returning `String`, and `main` hands `.trim()` of its result to `projectMethodOverloadPick`, which the buffer overloads on `ExitCode` and `String`. A `maxon build` of the staged project exits 0. The member call has no defining op of its own in the buffer compile, so the refusal must be traced through it to the sibling call it came from.")
+end 'a method called on a sibling function result and handed to an overloaded function is not an opaque argument'

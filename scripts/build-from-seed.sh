@@ -10,8 +10,8 @@
 #     so a suite run by `C1` exercises last release's scheduler, subprocess and console handling.
 #   * **ITS FRONT END RUNS IN PROCESS.** A seed never binds `FrontEndPool.RuntimeMovesSharedRecords`, so `C1`
 #     lexes and parses serially, and only a compile `C2` runs reports the pool under `--log=compiler:debug`.
-#   * **IT REPORTS `dev`.** A seed older than named manifest targets reads `maxon-bin` as a PATH, so
-#     `project.maxon` — where the version is derived from the ref and handed to `--define` — never runs.
+#   * **IT REPORTS `dev`.** The seed builds `maxon-bin` as a PATH, so `maxon-bin/maxon.maxproj` —
+#     where the version is derived from the ref and handed to `--define` — never runs.
 #     MEASURED on the 0.1.1 rehearsal: the x64-windows archive came out as `maxon-dev-x64-windows`.
 #
 # ⛔ **THE SEED'S OUTPUT IS NAMED EXPLICITLY** for the same reason: a seed reading `maxon-bin` as a path

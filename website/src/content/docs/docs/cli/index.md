@@ -19,20 +19,20 @@ agents, and reads back what a program did.
 |---------|-------------|
 | `maxon <file>.maxon [args...]` | Run a Maxon file as a script: [`maxon execute`](#maxon-execute) without the command word |
 | `maxon build <file\|directory>...` | Compile a Maxon program to an executable |
-| `maxon init [<directory>]` | Scaffold a new project: `project.maxon` and `main.maxon` |
+| `maxon init [<directory>]` | Scaffold a new project: `<directory>.maxproj` and `main.maxon` |
 | `maxon cache [clear]` | Report what this compiler has cached on the host, or remove it |
 | `maxon coverage <run\|report> <exe>` | Run a `--coverage` binary and report line and branch coverage ([Debugging and Profiling](/docs/cli/debugging/)) |
 | `maxon debug <exe> [-- args...]` | Debug a program interactively: breakpoints, stepping, backtraces and locals ([Debugging and Profiling](/docs/cli/debugging/)) |
 | `maxon debug --dump-info <exe>` | Print the `.mxdbg` debug-info sidecar beside a binary ([Debugging and Profiling](/docs/cli/debugging/)) |
 | `maxon debug --symbolize <exe> <offset...>` | Resolve code offsets to `file:line:col` ([Debugging and Profiling](/docs/cli/debugging/)) |
-| `maxon fmt [file\|directory]` | Re-print `.maxon` sources in canonical layout, in place |
+| `maxon fmt [file\|directory]` | Re-print Maxon sources in canonical layout, in place |
 | `maxon help [<command>]` | Print the command and option reference, whole or for one command |
 | `maxon lsp-server` | Speak the Language Server Protocol over stdio ([Editor Support](/docs/cli/editor/)) |
 | `maxon mcp-server [--dev]` | Speak the Model Context Protocol over stdio ([MCP Server](/docs/cli/mcp-server/)) |
 | `maxon monitor [--filter=…] <exe> [args...]` | Run a `--debugstream` binary and print its trace events ([Debugging and Profiling](/docs/cli/debugging/)) |
 | `maxon profile run <exe>` | Sample a running program and report where its CPU time went ([Debugging and Profiling](/docs/cli/debugging/)) |
 | `maxon execute <file\|directory> [args...]` | Compile a program, or reuse a cached build of it, and run it |
-| `maxon run [<task> [args...]]` | Run a task declared in `tasks.maxon`, or list the tasks |
+| `maxon run [<task> [args...]]` | Run a task declared in the directory's `.maxtasks` file, or list the tasks |
 | `maxon test [directory]` | Run a project's own `test` declarations |
 | `maxon upgrade [--dry-run]` | Update this compiler's install to the newest release |
 | `maxon version` | Print the version, the commit it was built from, and the host target |
@@ -87,8 +87,10 @@ built from changes:
   serve each other a stale build. A fresh build is written under a temporary name and renamed into
   place, so simultaneous cold runs never share an output path. Superseded builds, and builds an older
   cache format left, are removed on a best-effort basis.
-- **The path is resolved against the working directory but not canonicalized.** `x.maxon`, `./x.maxon`
-  and `a/../x.maxon` get three cache slots. That costs an extra compile, never a wrong binary.
+- **The path is anchored at the working directory, and only its `.` components, repeated separators and
+  a trailing separator are folded.** `x.maxon` and `./x.maxon` share one cache slot, and `a/../x.maxon` gets another: through
+  a symbolic link, `a/..` need not be the working directory. That costs an extra compile, never a wrong
+  binary.
 
 `<cache>` is the directory Maxon owns on this host. It is the first of these whose variable names a
 directory this compiler can create:
@@ -162,32 +164,36 @@ MAXON_RUN_CACHE_ROOT=/build/cache maxon execute hello.maxon
 
 ## `maxon run`
 
-Runs a **task** declared in the `tasks.maxon` in the current directory.
+Runs a **task** declared in the `.maxtasks` file in the current directory.
 
 ```bash
 maxon run                     # list the tasks
 maxon run <task> [args...]    # run one
 ```
 
-A task is an exported function of no parameters returning `ExitCode`. `tasks.maxon` is an ordinary
-Maxon program with the whole standard library available, and it is **not** part of any build: it marks
-no project, and no walk compiles it into one. See [The task file](/docs/cli/project-structure/#the-task-file).
+A task is an exported (or `public`) function of no parameters returning `ExitCode`. It is asked for by
+its name with each `_` written `-`: `maxon run build-extension` runs `build_extension`. The `.maxtasks`
+file is an ordinary Maxon program with the whole standard library available, and it stands apart from
+every build: it marks no project, and a build compiles `.maxon` files only. See
+[The task file](/docs/cli/project-structure/#the-task-file).
 
-**With no task named, the tasks are listed**, one per line on stdout, and the command exits 0. A name
-the file does not declare is refused, exit 1, with the list printed so the reader can see what to type
-instead. A directory holding no `tasks.maxon` is refused the same way. A name beginning `__` is
-reserved and is neither listed nor runnable.
+**With no task named, the tasks are listed**, one per line on stdout in that dashed form, and the
+command exits 0. A name the file leaves undeclared is refused, exit 1, with the list printed so the
+reader can see what to type. A directory holding no `.maxtasks` file prints a usage line and exits 1,
+and a directory holding two is refused, naming both. A name beginning `__` is reserved: it is left off
+the list and refused as a task name.
 
 **The task's streams and exit code are the command's own.** stdin, stdout and stderr are inherited, so
 a long task prints as it goes, and everything after the task name reaches it as its own command line.
 The task program is compiled for the host and kept in the [run cache](#the-run-cache), keyed by the
-file and the task name, so two tasks of one file never share a build.
+file and the task name, so each task of a file has a build of its own.
 
-**A task may describe a build**, by calling `Build.build`, `Build.target`, `Build.buildTargets`,
-`Build.buildWithConfig` or `Build.delegate` — the same calls a `project.maxon` makes (see
-[Describing a build](/docs/cli/project-structure/#describing-a-build)). The build is performed once the task exits 0, and
-`--output=`, `--target`, `--define` and `--no-debug-info` apply to it exactly as they do to
-`maxon build`.
+**A task may describe a build**, by calling `Build.build`, `Build.buildWithConfig` or `Build.delegate` —
+the same calls a `.maxproj` target makes (see [Describing a build](/docs/cli/project-structure/#describing-a-build)). The build is
+performed once the task exits 0, and `--output=`, `--target`, `--define` and `--no-debug-info` apply to
+it exactly as they do to `maxon build`. A task's build that states no output is written to
+`.maxon/<stem>` in the working directory, `<stem>` being the `.maxtasks` file's name without its
+extension.
 
 ```bash
 maxon run build --output=dist/maxon --target=x64-linux
@@ -202,13 +208,14 @@ maxon init [<directory>]
 ```
 
 With no directory it initializes the working directory; with one it creates that directory. It writes
-exactly two files — `project.maxon` and `main.maxon` — and the project is named after the directory,
-which is the output name the manifest builds to:
+exactly two files — `<directory>.maxproj` and `main.maxon` — and the project is named after the
+directory. The project file's one target, `build`, states no output, so `maxon build` writes
+`.maxon/<directory>`:
 
 ```maxon
-// project.maxon
+// myapp.maxproj
 export function build() returns ExitCode
-	Build.build(".", output: ".maxon/myapp")
+	Build.build(".")
 	return 0
 end 'build'
 ```
@@ -221,10 +228,11 @@ function main() returns ExitCode
 end 'main'
 ```
 
-**It never overwrites.** If either file is already there, **nothing is written at all**: the existing
-path is named and the command exits 1. Other files in the directory are left alone. A directory whose
-name holds a character the manifest cannot state (`"`, `{`, `}`, `\`, a control character) is refused
-before anything is written.
+**It writes only into a directory where both files are new.** If the directory already holds a `.maxproj`
+file or a `main.maxon`, **nothing is written at all**: the existing path is named and the command exits
+1. Other files in the directory are left alone. A directory inside an existing project's tree is
+refused the same way, with [E2074](/docs/cli/error-codes/#e2074--nestedprojectfile): a project's
+tree holds one project.
 
 On success it prints the two paths it wrote and the command that builds them, and exits 0.
 
@@ -238,15 +246,16 @@ maxon build [<target name>] [options]
 ```
 
 **Arguments.** One or more paths. **Several paths are compiled as one program, in the order given.** A
-directory contributes every `.maxon` file beneath it, except `project.maxon` (in any letter case),
-`*.test.maxon` files and subtrees marked with a `.maxonignore`. A `.maxonignore` excludes a directory the
-walk **discovers**; it does not override a path you **named**. So a file or a directory you name
-explicitly is compiled whatever a `.maxonignore` above it — or on it — says.
+directory contributes every `.maxon` file beneath it, minus the subtrees marked with a `.maxonignore`;
+`.maxproj`, `.maxtasks` and `.maxtest` files are left to the commands that read them. A `.maxonignore`
+excludes a directory the walk **discovers**, and a path you **named** is compiled whatever a
+`.maxonignore` above it — or on it — says.
 
-**No path** runs the `project.maxon` manifest in the current directory, and a bare word that names one of
-its targets builds that target. See [Project Structure](/docs/cli/project-structure/). A directory
-with no `project.maxon` prints a usage line and exits 1.
-
+**No path** builds the target of the `.maxproj` file in the current directory. With several targets it
+lists them and exits 1. **A single word naming a target** builds that target, each `_` of the target's
+name written `-`: `maxon build my-app` builds the target function `my_app`. A word naming no target is
+a path. See [Project Structure](/docs/cli/project-structure/). A directory with no `.maxproj` file prints a usage
+line and exits 1.
 **Options:**
 
 | Option | Description |
@@ -272,16 +281,16 @@ A build prints the compiler's version and an early-preview warning to stdout, th
 `Compiled -> <path>` on success, and exits 0. Progress lines (`[CMP] INFO: Wrote … bytes of code to …`)
 go to stderr; `--log=error` silences them. A compile error prints its diagnostics to stderr and exits 1.
 
-A path-less build has one more line, between the two: whether it compiled the `project.maxon` runner or
-reused the cached one. That compile makes no progress lines of its own — see
-[The build manifest](/docs/cli/project-structure/#the-build-manifest).
+A build of a project target has one more line, between the two: whether it compiled the `.maxproj`
+runner or reused the cached one. That compile is silent apart from that line — see
+[The project file](/docs/cli/project-structure/#the-project-file).
 
 ```bash
 maxon build hello.maxon                       # → hello.exe on Windows, hello elsewhere
 maxon build src/ --output=build/app           # a whole directory, named output
 maxon build a.maxon b.maxon                   # one program from two files, in that order
-maxon build                                   # run project.maxon
-maxon build app                               # project.maxon's target named "app"
+maxon build                                   # the .maxproj file's only target
+maxon build my-app                            # the .maxproj file's target my_app
 maxon build app.maxon --target=wasm32-wasi
 maxon build app.maxon --define=Version=1.4.2
 ```
@@ -315,8 +324,8 @@ the build stops:
 | **E3150** | the name matches more than one declaration (both are named, with their files) |
 | **E3151** | the initializer is not a plain string literal |
 
-A `project.maxon` manifest can supply defines too; a `--define` on the command line wins over the
-manifest's.
+A described build can supply defines too; a `--define` on the command line wins over the described
+build's.
 
 ## `maxon cache`
 
@@ -380,18 +389,17 @@ nothing looks again, and only a clear that visits every row can still reach it. 
 
 ## `maxon fmt`
 
-Re-prints `.maxon` sources in canonical layout, **in place**.
+Re-prints Maxon sources in canonical layout, **in place**.
 
 ```bash
 maxon fmt [<file|directory>]
 ```
 
 With **no path it formats the whole working directory**. A named **file** is formatted whatever it is
-called. A **directory** is walked for `.maxon` files, skipping a project's `project.maxon` (in any letter case;
-the compiler's own `stdlib/` and `runtime/` hold no manifest, so their `Build.maxon` is formatted), any
-subdirectory the walk finds under a `.maxonignore`, and any subdirectory that holds a `.git` (a nested
-clone or worktree), so a run never rewrites another repository's files. As with `build`, a `.maxonignore`
-on or above the directory you **named** does not exclude it — naming it is the explicit act.
+called. A **directory** is walked for `.maxon`, `.maxtest`, `.maxproj` and `.maxtasks` files, skipping
+any subdirectory the walk finds under a `.maxonignore` and any subdirectory that holds a `.git` (a nested
+clone or worktree), so a run leaves another repository's files alone. As with `build`, the directory you
+**named** is formatted whatever a `.maxonignore` on or above it says — naming it is the explicit act.
 
 **It takes no options.** Any `-`-leading argument is refused with exit 1 and nothing written, and so
 is a second path.
@@ -424,8 +432,8 @@ maxon fmt src/         # one directory
 
 ## `maxon test`
 
-Runs a project's unit tests: every `test` declaration in its `*.test.maxon` files. How to write tests
-is covered in [Testing](/docs/language/testing/).
+Runs a project's unit tests: every `test` declaration in its `*.maxtest` files, compiled together with
+the project's `.maxon` sources. How to write tests is covered in [Testing](/docs/language/testing/).
 
 ```bash
 maxon test [directory] [options]
@@ -504,7 +512,7 @@ end 'totalCost'
 ```
 
 ```maxon
-// pricing/pricing.test.maxon
+// pricing/pricing.maxtest
 test 'a small order pays full price'
 	Expect.equal(totalCost(250, quantity: 4) as AssertedInt, expected: 1000)
 end 'a small order pays full price'
@@ -516,12 +524,12 @@ end 'ten items take the bulk discount'
 
 ```text
 $ maxon test pricing
-pricing/pricing.test.maxon:
+pricing/pricing.maxtest:
   ✓ a small order pays full price                    0.00ms
   ✗ ten items take the bulk discount                 0.00ms
 
-FAIL  pricing/pricing.test.maxon > ten items take the bulk discount
-  FAIL pricing.test.maxon:6: Expect.equal
+FAIL  pricing/pricing.maxtest > ten items take the bulk discount
+  FAIL pricing.maxtest:6: Expect.equal
     expected: 2500
     received: 2250
 
@@ -684,11 +692,11 @@ driver's own. `maxon monitor`, `maxon coverage` and `maxon profile` have their o
 
 | Variable | Read by | Effect |
 |----------|---------|--------|
-| `MAXON_RUN_CACHE_ROOT` | `run`, `build` (manifest), `cache` | Maxon caches under `<value>/maxon`. Consulted first |
-| `USERPROFILE` | `run`, `build` (manifest), `cache` on Windows | Maxon caches under `<value>\.maxon\cache` when `MAXON_RUN_CACHE_ROOT` is unset or cannot be created |
-| `HOME` | `run`, `build` (manifest), `cache` elsewhere | Maxon caches under `<value>/.maxon/cache` when `MAXON_RUN_CACHE_ROOT` is unset or cannot be created |
-| `LOCALAPPDATA`, then `TEMP` | `run`, `build` (manifest), `cache` on Windows | Last resort, under `<value>\maxon`, when neither of the two above names a directory Maxon can create |
-| `TMPDIR` | `run`, `build` (manifest), `cache` elsewhere | Last resort, under `<value>/maxon`, when neither of the two above names a directory Maxon can create |
+| `MAXON_RUN_CACHE_ROOT` | `run`, `build` (project target), `cache` | Maxon caches under `<value>/maxon`. Consulted first |
+| `USERPROFILE` | `run`, `build` (project target), `cache` on Windows | Maxon caches under `<value>\.maxon\cache` when `MAXON_RUN_CACHE_ROOT` is unset or cannot be created |
+| `HOME` | `run`, `build` (project target), `cache` elsewhere | Maxon caches under `<value>/.maxon/cache` when `MAXON_RUN_CACHE_ROOT` is unset or cannot be created |
+| `LOCALAPPDATA`, then `TEMP` | `run`, `build` (project target), `cache` on Windows | Last resort, under `<value>\maxon`, when the two above name no directory Maxon can create |
+| `TMPDIR` | `run`, `build` (project target), `cache` elsewhere | Last resort, under `<value>/maxon`, when the two above name no directory Maxon can create |
 | `NO_COLOR`, `TERM` | `test --color=auto` | Set `NO_COLOR`, or `TERM=dumb`, to turn colour off |
 | `MAXON_IMAGE` | `upgrade` | Marks the container image; `upgrade` refuses and names `docker pull` |
 | `MAXON_INSTALL` | `upgrade` (written, not read) | `upgrade` sets it for the install script to the install the running compiler sits in, whatever your shell says |

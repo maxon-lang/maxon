@@ -1,0 +1,15 @@
+let CaseDirName = "maxproj-named-target-runs-its-underscored-function"
+let AskedFor = "second-target"
+let AskedForStem = "second"
+let OtherStem = "first"
+
+test 'maxon build <dashed-name> runs the target whose underscored name it spells'
+	let staged = stagedProject(CaseDirName, fixture: MaxprojTwoTargetsFixtureName)
+
+	let build = spawnManifestBuild(staged, options: [AskedFor])
+	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+
+	Expect.equal(build.exitCode() as AssertedInt, expected: 0, message: "`maxon build {AskedFor}` beside a .maxproj exporting `second_target` did not succeed. `first_target`, which nothing ran, is a target too and so is no unused export. {said}")
+	Expect.isTrue(File.exists(executableIn(staged, stem: AskedForStem)), message: "`maxon build {AskedFor}` did not write the `{AskedForStem}` output `second_target` describes. {said}")
+	Expect.isFalse(File.exists(executableIn(staged, stem: OtherStem)), message: "`maxon build {AskedFor}` also built `first_target`'s `{OtherStem}`: a named target is the only one built. {said}")
+end 'maxon build <dashed-name> runs the target whose underscored name it spells'

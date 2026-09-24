@@ -1,0 +1,29 @@
+let TestOnlyCountDirName = "projects-counted-without-tests"
+let TestOnlyCountMainFileName = "main.maxon"
+let TestOnlyCountTestFileName = "probe.maxtest"
+let TestOnlyCountMainSource = "export function countedAnswer() returns ExitCode\n\treturn 0\nend 'countedAnswer'\n"
+let TestOnlyCountTestSource = "export function countedTestHelper() returns ExitCode\n\treturn countedAnswer()\nend 'countedTestHelper'\n"
+let TestOnlyCountProductionFileCount = 1 as AssertedInt
+
+test 'project roots: a session that opens only a test file counts the production sources'
+	let root = stagedProjectDiagnosticsRoot(TestOnlyCountDirName)
+
+	writeCorpusFile(root, fileName: TestOnlyCountMainFileName, content: TestOnlyCountMainSource)
+	writeCorpusFile(root, fileName: TestOnlyCountTestFileName, content: TestOnlyCountTestSource)
+
+	let documents = projectRootsDocument(fileUriOf(root.join("{TestOnlyCountTestFileName}")), content: TestOnlyCountTestSource)
+	let probe = listProjectsIn(ProjectRootsSession.atFolders(projectRootsFolders(root)), documents: documents)
+
+	discardOutsideCheckoutDir(root)
+
+	match probe 'probe'
+		answered(result) then requireOnlyTheProductionSourceCounted(result)
+		unanswered(reason) then Expect.fail(reason)
+	end 'probe'
+end 'project roots: a session that opens only a test file counts the production sources'
+
+function requireOnlyTheProductionSourceCounted(result ListProjectsResult) throws TestFailure
+	let project = try soleProject(result, note: "one staged project holding `{TestOnlyCountMainFileName}` and `{TestOnlyCountTestFileName}` was opened through its test file alone, and the client named that directory as its workspace folder.")
+
+	try Expect.equal(project.fileCount as AssertedInt, expected: TestOnlyCountProductionFileCount, message: "the project reported {project.fileCount} files. `maxon/listProjects` counts the sources a `maxon build` compiles, which is `{TestOnlyCountMainFileName}` alone — the corpus a test document is read against also holds `{TestOnlyCountTestFileName}`, and that corpus is the only one this session built.")
+end 'requireOnlyTheProductionSourceCounted'

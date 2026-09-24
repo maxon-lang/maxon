@@ -1,0 +1,67 @@
+// receiver-type-a-local-from-a-try-otherwise.maxtest — a local bound by `try … otherwise panic(…)`
+// carries the callee's declared return type, exactly as a plain call does. The fixture is the shape
+// `maxon-bin/Compiler/FrontEndPool.maxon` writes at line 384 — a holder with an array field, a throwing
+// accessor over it, and the result panicked into a local.
+//
+// ⛔ **`try` MUST NOT HIDE THE CALL IT GUARDS.** A local's type is read off the FIRST token of its
+// initializer, and here that token is `try` rather than the call whose declared return type `w` carries
+// — so both answers rest on the walk stepping over the keyword and asking the call behind it.
+//
+// ⭐ The receiver `holder` is bound by a RECORD LITERAL, which the walk types directly. That is
+// deliberate: it leaves `try` as the only thing between the cursor and an answer, so a red here cannot
+// be a second defect wearing this one's name.
+//
+// ⚠ A `b"…"` byte literal, closing quote IMMEDIATELY after the last source character: byte-exact, no
+// indentation stripped or added and no trailing newline. Both columns below are counted against these
+// bytes.
+//
+// ⭐ The buffer COMPILES — `create` and `main` are here for no other reason. A fixture the project
+// cannot build would leave a red saying only that, and say nothing about the receiver walk.
+
+let ReceiverTryLine = 12 as LspCoordinate
+let ReceiverTryMemberListCharacter = 17 as LspCoordinate
+let ReceiverTryMemberNameCharacter = 20 as LspCoordinate
+
+test 'receiver type: a local from a try otherwise offers its members'
+	let labels = completionLabelsFor(receiverTryFixture(), line: ReceiverTryLine, character: ReceiverTryMemberListCharacter, after: "`w.`, where `w` is bound by `try holder.at(0) otherwise panic(…)`")
+
+	Expect.greaterThan(labels.count(), than: 0, message: "completion after `w.` offered nothing at all. `try … otherwise panic(…)` is how this tree binds a local from any accessor that can fail, and the initializer opening with `try` does not change what the call returns.")
+
+	Expect.isTrue(completionOffersLabel(labels, label: "toUpper"), message: "completion after `w.` did not offer `toUpper`. `at` is declared `returns String` five lines above the cursor, so the member list is `String`'s.")
+end 'receiver type: a local from a try otherwise offers its members'
+
+test 'receiver type: a member of a local from a try otherwise hovers'
+	let rendering = hoverRendering(receiverTryFixture(), line: ReceiverTryLine, character: ReceiverTryMemberNameCharacter)
+
+	Expect.contains(rendering, needle: "toUpper", message: "hovering `toUpper` in `w.toUpper()` did not name it. The member is reachable only through `w`'s type, and `w`'s initializer opens with `try`.")
+
+	Expect.contains(rendering, needle: "function toUpper", message: "the hover did not render the declaration `stdlib/String.maxon` holds for `toUpper`. It rendered: {rendering}")
+end 'receiver type: a member of a local from a try otherwise hovers'
+
+function receiverTryFixture() returns String
+	return String.from(b"typealias NameSlot = int(0 to u64.max)
+
+type ReceiverHolder
+    var names as StringArray
+
+    function at(slot NameSlot) returns String throws ArrayError
+        return try self.names.get(slot)
+    end 'at'
+
+    function loudest() returns String
+        let holder = ReceiverHolder{names: StringArray.create()}
+        let w = try holder.at(0) otherwise panic(\"the fixture holds one name\")
+        return w.toUpper()
+    end 'loudest'
+
+    static function create() returns ReceiverHolder
+        return ReceiverHolder{names: StringArray.create()}
+    end 'create'
+end 'ReceiverHolder'
+
+function main() returns ExitCode
+    let holder = ReceiverHolder.create()
+    print(holder.loudest())
+    return 0
+end 'main'")
+end 'receiverTryFixture'

@@ -94,12 +94,11 @@ end 'CompileProduct'
 // is its sibling for the RUNTIME tier; empty ⇒ the directory beside the `stdlib/` this compile resolved
 // (see `runtimeDirFor`).
 //
-// ⭐ **THE LAST THREE ARGUMENTS ARE ONE CALLER'S, AND THEIR DEFAULTS ARE EVERY OTHER BUILD'S ANSWER.**
-// `entryFunction` is where this build begins (`Project.entryFunctionName`), `compilerWrittenSources` names the
-// inputs this compiler WROTE, each with the reserved names it minted there (`Project.compilerWrittenSources`), and `sourceSelection` says whether a
-// directory walk yields the `*.test.maxon` files too (`SourceSelection`). All three are what a
-// `maxon test` build states and what nothing else has any reason to; defaulted, this signature means
-// exactly what it meant before them.
+// The last three arguments are `maxon test`'s, and their defaults are every other build's answer.
+// `entryFunction` is where this build begins (`Project.entryFunctionName`),
+// `compilerWrittenSources` names the inputs this compiler wrote, each with the reserved names it
+// minted there (`Project.compilerWrittenSources`), and `sourceSelection` says whether a directory
+// walk yields the `.maxtest` files too (`SourceSelection`).
 //
 // ⭐ **IT OWNS THE TOTAL: it is the only entry that spans a whole build**, so it is the only one that
 // can measure the denominator every phase's share is taken against (the warm-rebuild gate drives
@@ -376,7 +375,7 @@ end 'outputIsRunningImage'
 // When the image cannot be vacated the refusal is made HERE: `discardPreviousOutput`'s would blame a
 // spec-test.
 function vacateRunningImage(project Project, outputPath FilePath) throws CompileError
-	sweepRetiredImages(outputPath.resolve(Directory.currentPath()))
+	sweepRetiredImages(outputPath.anchoredAt(Directory.currentPath()))
 
 	let previous = siblingImagePath(outputPath, infix: PreviousImageSuffix)
 
@@ -424,7 +423,7 @@ end 'retireHeldImage'
 // Best-effort and silent per entry: an image still running stays for a later sweep, and debris must never
 // fail a build.
 function sweepRetiredImages(outputPath FilePath)
-	let dir = try outputPath.parent() otherwise panic("sweepRetiredImages: a resolved image path has a parent")
+	let dir = try outputPath.parent() otherwise panic("sweepRetiredImages: an anchored image path has a parent")
 	let entries = try Directory.list(dir) otherwise return
 	let stem = outputPath.stem()
 	let ext = outputPath.fileExtension()
@@ -1786,37 +1785,23 @@ end 'reportBindingHygieneDiagnostics'
 
 // --- Source loading ---
 
-// ⭐⭐ **REGISTER EVERY SOURCE THE CALLER NAMED, IN THE ORDER THE CALLER NAMED IT (A3m).** A single
-// `.maxon` file loads directly; a directory loads every `.maxon` file beneath it (except
-// a `project.maxon` or `tasks.maxon` AT THAT DIRECTORY, and except the subtrees a `.maxonignore`
-// excludes — see `collectMaxonSources`).
-// Throws when a path does not exist or the whole list yields no sources. (`.test`-fragment stripping
-// grows back when the spec runner needs it.)
+// Registers every source the caller named, in the order the caller named it. A named file loads
+// whatever it is called; a directory loads what `collectMaxonSources` finds beneath it.
 //
-// ⭐ **A PATH THE CALLER NAMED IS LOADED WHATEVER A `.maxonignore` SAYS.** `maxon build
-// <ignored>/prog.maxon` compiles that file, and `maxon fmt <file>` likewise reaches a fixture inside a
-// marked directory. The marker says *"do not SWEEP me into somebody else's
-// program"*, never *"this file may not be compiled"*, so it is a property of the WALK and belongs to
-// `collectMaxonSources` alone; naming a path is the explicit act it cannot override.
+// A named path is loaded whatever a `.maxonignore` says: `maxon build <ignored>/prog.maxon`
+// compiles that file. The marker keeps a directory out of a walk and never forbids compiling a
+// file, so it belongs to `collectMaxonSources` alone.
 //
-// ⚠⚠ **THE ORDER IS THE CALLER'S INPUT, AND IT IS NEVER A POLICY THIS LOADER APPLIES — SO NOTHING
-// HERE SORTS, AND NOTHING BELOW IT SORTS EITHER.** That is exactly the shape `StdlibLoader`'s header
-// asks for (user ruling 2026-07-24): a canonical input order imposed by the loader would HIDE an
-// order dependence instead of surfacing it, so *"where an ORDER genuinely matters it is canonicalized
-// at the point of emission … never by constraining what the loader was handed"*. Before A3m a
-// multi-file build had no way to STATE an order at all — `build` kept the first positional and
-// silently dropped the rest — so the answer came from raw `Directory.list`, i.e. from the staging
-// directory's on-disk state. Five `-either-order` spec pairs were written to pin BOTH walk orders of
-// one program and could pin neither: whichever order the host served, both halves got it, and the
-// pair was two tickets in one lottery (`specs/tuples.md`, `managed-memory-methods.md`,
-// `cross-file-signatures.md`).
+// ⚠ The order is the caller's input and never a policy this loader applies, so nothing here sorts
+// and nothing below it may. A canonical order imposed by the loader would hide an order dependence
+// rather than surface it (see `StdlibLoader`'s header); where an order matters it is canonicalized
+// at the point of emission.
 //
-// ⚠ A path named twice — directly and again through a directory that contains it — is registered
-// ONCE, at its FIRST position. That is not a rule this function applies: `fileChanged` upserts by
-// path and pushes onto `sourcePaths` only for a path it has not seen, so re-registering identical
-// content is a no-op all the way down. It is what makes `build a.maxon b.maxon <theirDirectory>`
-// mean "these two first, then whatever else is under there" — the form the spec runner uses to state
-// a case's declared file order while keeping the project rooted at the case's own directory.
+// A path named twice — directly and again through a directory that contains it — is registered
+// once, at its first position, because `fileChanged` upserts by path. That is what lets `build
+// a.maxon b.maxon <theirDirectory>` mean "these two first, then whatever else is under there", the
+// form the spec runner uses to state a case's file order while rooting the project at the case's
+// own directory.
 function loadSourceFiles(project Project, paths MaxonSourcePathArray, selection SourceSelection) throws CompileError
 	for path in paths 'eachNamed'
 		if File.exists(path) 'isFile'
@@ -1903,56 +1888,63 @@ function loadSourceDirectory(project Project, dir FilePath, selection SourceSele
 	end 'each'
 end 'loadSourceDirectory'
 
-// ⭐ **WHAT COUNTS AS A MAXON SOURCE FILE UNDER A DIRECTORY — asked in ONE place.** Every `.maxon`
-// file beneath `dir`, subdirectories included, minus every subtree a `.maxonignore` marker excludes, and
-// minus what `selection` leaves out: a project's build manifests (a project description, not a
-// compilation unit) and, for an ordinary build, every `*.test.maxon`. See `SourceSelection` for why it is
-// a parameter rather than a second walk.
+// What counts as a Maxon source file under a directory, asked in one place: every file `selection`
+// admits beneath `dir`, minus every subtree a `.maxonignore` marker excludes. The user's own root
+// (`loadSourceDirectory`), the library tiers (`StdlibLoader.loadLibraryRoot`) and the editor's
+// project sweep all walk through it, because two copies of the answer can come to disagree about
+// which files a build contains.
 //
-// ⚠ BOTH of a compile's directory walks go through it — the USER's own root (`loadSourceDirectory`)
-// and the checkout's `stdlib/` (`loadLibrarySources`) — because that is ONE question, and two copies
-// of the answer are two copies that can come to disagree. The remaining clause this rule owes is
-// named in `loadSourceFiles`: `.test`-fragment stripping. Added to one walk and not the other, it
-// would read as correct at BOTH sites while a file was silently compiled on one side and silently
-// skipped on the other.
+// ⚠ `maxon fmt` has its own walk (`Formatter.collectFormattableFiles`), because it asks a different
+// question: it formats test and driver files too, and it prunes any subdirectory holding a `.git`,
+// which this walk must not do — pruning there would change which files get compiled. What the two
+// share it reaches through the same names: `holdsIgnoreMarker` and the file-kind predicates.
 //
-// ⚠ **`maxon fmt` HAS ITS OWN WALK AND IS NOT A THIRD CALLER OF THIS ONE**
-// (`Formatter.collectFormattableFiles`), because it is asking a DIFFERENT question: it formats
-// `*.test.maxon`, which no `selection` here admits alongside a plain build root, and it prunes any
-// subdirectory holding a `.git`, which this walk must NOT do — pruning there would change which files
-// get COMPILED. What the two DO share — `isDriverFileName`, `MaxonSourceExtension`,
-// `holdsIgnoreMarker` — it reaches through those same names rather than respelling any of them.
+// Projects do not nest. Under `NestedProjectRule.refused`, a build's rule, a directory holding a
+// `.maxproj` throws `nestedProjectFile` when another project's `.maxproj` lies above it, which
+// catches a nested project met below the walk root and a root nested in another alike. The upward
+// search runs only for a directory that holds a `.maxproj`. `NestedProjectRule.pruned`, the
+// editor's rule, leaves a nested project's directory out instead, so the outer project keeps its
+// index.
 //
 // The `.maxonignore` rule, in three facts:
 //
-//   • the marker is a FLAG — its contents are never read. A `.maxonignore` whose text is
-//     `!Skipped.maxon` still excludes `Skipped.maxon`, so the markers in this repo carrying prose
-//     carry it for the human reading the tree and for nothing else.
+//   • the marker is a flag — its contents are never read. A `.maxonignore` whose text is
+//     `!Skipped.maxon` still excludes `Skipped.maxon`.
 //   • it excludes its directory and everything beneath it, at any depth.
-//   • it excludes a directory this walk DISCOVERS, and it does not override a root the CALLER NAMED.
-//     Naming a path is the explicit act a marker cannot override, the same rule `loadSourceFiles`
-//     applies to a named file — so there is no ancestry probe and `dir` itself is never asked. On the
-//     outermost call `dir` is the root somebody named; on a recursive one the level above already
-//     asked `holdsIgnoreMarker` before descending. `specs/maxonignore.md` states the rule, and
-//     `tests/cli/build-a-named-directory-under-a-maxonignore.test.maxon` pins both halves: a named
-//     directory UNDER a marker, and a named directory CARRYING one.
+//   • it excludes a directory this walk discovers, and it does not override a root the caller
+//     named, the same rule `loadSourceFiles` applies to a named file — so `dir` itself is never
+//     asked. On the outermost call `dir` is the root somebody named; on a recursive one the level
+//     above already asked `holdsIgnoreMarker` before descending. `specs/maxonignore.md` states the
+//     rule, and `tests/cli/build-a-named-directory-under-a-maxonignore.maxtest` pins both halves: a
+//     named directory under a marker, and a named directory carrying one.
 //
-// It COLLECTS rather than loading, because the callers do different things with the answer: the user
-// walk registers every path it is given, while the stdlib loader filters first and records what it
-// kept.
+// It collects rather than loading, because the callers do different things with the answer: the
+// user walk registers every path it is given, while the library loader filters first and records
+// what it kept.
 //
-// ⚠ IT RETURNS THE DIRECTORIES IT LISTED, WHICH IS A FACT ONLY THE WALK HOLDS. The files it found are
-// in `into`, and the parents of those files are NOT the same set: an EMPTY directory is walked, costs
-// a `Directory.list`, and contributes no path anybody outside can see. `scale-test` reports both
-// numbers so that a GITIGNORED directory — invisible to git, visible here, and not the same thing as a
-// `.maxonignore`d one, which this walk does not list at all — cannot go on being an unattributed
-// constant in the trend log (see `printLibraryWalkCensus`), and the count is returned from
-// the recursion rather than re-derived by a second traversal because a second traversal would be free
-// to disagree the moment this one grows an exclusion.
-export function collectMaxonSources(dir FilePath, into MaxonSourcePathArray, selection SourceSelection = SourceSelection.productionOnly, atProjectRoot bool = true) returns DirectoryWalkCount throws CompileError
+// ⚠ It returns the directories it listed, which only the walk knows: an empty directory is walked
+// and costs a `Directory.list` while contributing no path. `scale-test` reports both numbers so
+// that a gitignored directory — invisible to git, visible here — is attributed in the trend log
+// (see `printLibraryWalkCensus`). The count comes from the recursion rather than a second
+// traversal, which would be free to disagree the moment this one grows an exclusion.
+export function collectMaxonSources(dir FilePath, into MaxonSourcePathArray, selection SourceSelection = SourceSelection.productionOnly, nestedProjects NestedProjectRule = NestedProjectRule.refused) returns DirectoryWalkCount throws CompileError
 	let entries = try Directory.list(dir) otherwise throw CompileError.directoryNotFound(dir)
 
-	// `dir` itself was listed, so a leaf directory answers 1.
+	match nestedProjects 'rule'
+		refused then try requireProjectStandsAlone(entries)
+		pruned then break 'rule'
+	end 'rule'
+
+	return try collectListedSources(entries, into: into, selection: selection, nestedProjects: nestedProjects)
+end 'collectMaxonSources'
+
+export enum NestedProjectRule
+	refused
+	pruned
+end 'NestedProjectRule'
+
+function collectListedSources(entries FilePathArray, into MaxonSourcePathArray, selection SourceSelection, nestedProjects NestedProjectRule) returns DirectoryWalkCount throws CompileError
+	// The directory these entries list counts itself, so a leaf directory answers 1.
 	var walked = 1 as DirectoryWalkCount
 
 	for entry in entries 'each'
@@ -1964,19 +1956,152 @@ export function collectMaxonSources(dir FilePath, into MaxonSourcePathArray, sel
 				continue
 			end 'ignoredSubtree'
 
-			let below = try collectMaxonSources(entry, into: into, selection: selection, atProjectRoot: false)
+			let below = try collectSubdirectorySources(entry, into: into, selection: selection, nestedProjects: nestedProjects)
 			walked = walked + below
 		end 'isSubdir' else 'isFile'
-			let name = entry.filename()
-
-			if name.endsWith(MaxonSourceExtension) and selectionAdmits(selection, name: name, atProjectRoot: atProjectRoot) 'isSource'
+			if selectionAdmits(selection, name: entry.filename()) 'isSource'
 				into.push(entry)
 			end 'isSource'
 		end 'isFile'
 	end 'each'
 
 	return walked
-end 'collectMaxonSources'
+end 'collectListedSources'
+
+function collectSubdirectorySources(dir FilePath, into MaxonSourcePathArray, selection SourceSelection, nestedProjects NestedProjectRule) returns DirectoryWalkCount throws CompileError
+	match nestedProjects 'rule'
+		refused then return try collectMaxonSources(dir, into: into, selection: selection, nestedProjects: nestedProjects)
+		pruned then return try collectUnlessAProject(dir, into: into, selection: selection)
+	end 'rule'
+end 'collectSubdirectorySources'
+
+function collectUnlessAProject(dir FilePath, into MaxonSourcePathArray, selection SourceSelection) returns DirectoryWalkCount throws CompileError
+	let entries = try Directory.list(dir) otherwise throw CompileError.directoryNotFound(dir)
+
+	match driverFilesAmong(entries, extension: ProjectFileExtension) 'declared'
+		none then return try collectListedSources(entries, into: into, selection: selection, nestedProjects: NestedProjectRule.pruned)
+		one or
+			several then return 1
+	end 'declared'
+end 'collectUnlessAProject'
+
+function requireProjectStandsAlone(entries FilePathArray) throws CompileError
+	let declared = try soleDriverFile(driverFilesAmong(entries, extension: ProjectFileExtension))
+
+	match declared 'declared'
+		found(projectFile) then try requireNoProjectEncloses(projectFile)
+		none then return
+	end 'declared'
+end 'requireProjectStandsAlone'
+
+export function requireNoProjectEncloses(projectFile FilePath) throws CompileError
+	match projectFileEnclosing(projectFile) 'enclosing'
+		found(outer) then throw CompileError.nestedProjectFile(outer, nested: projectFile)
+		none then return
+	end 'enclosing'
+end 'requireNoProjectEncloses'
+
+module function projectFileEnclosing(projectFile FilePath) returns DriverFileSearch
+	let absolute = projectFile.resolve(Directory.currentPath())
+	let holding = try absolute.parent() otherwise panic("projectFileEnclosing: '{absolute.toString()}' names a file, so a directory holds it")
+	let above = try holding.parent() otherwise return DriverFileSearch.none
+
+	return nearestProjectFile(above, ceiling: ProjectClimbCeiling.none)
+end 'projectFileEnclosing'
+
+module union ProjectClimbCeiling
+	at(dir FilePath)
+	none
+end 'ProjectClimbCeiling'
+
+module function nearestProjectFile(directory FilePath, ceiling ProjectClimbCeiling) returns DriverFileSearch
+	var current = directory.clone()
+
+	while true 'upwards'
+		match firstProjectFileIn(current) 'here'
+			found(projectFile) then return DriverFileSearch.found(projectFile)
+			none then break 'here'
+		end 'here'
+
+		if climbReachedTheCeiling(current, ceiling: ceiling) 'noHigher'
+			break
+		end 'noHigher'
+
+		let above = try current.parent() otherwise 'atTheRoot'
+			break
+		end 'atTheRoot'
+
+		current = above
+	end 'upwards'
+
+	return DriverFileSearch.none
+end 'nearestProjectFile'
+
+function climbReachedTheCeiling(current FilePath, ceiling ProjectClimbCeiling) returns bool
+	return match ceiling 'ceiling'
+		at(dir) gives current.equals(dir)
+		none gives false
+	end 'ceiling'
+end 'climbReachedTheCeiling'
+
+export union DriverFileSearch
+	found(path FilePath)
+	none
+end 'DriverFileSearch'
+
+union DriverFilesAmong
+	none
+	one(path FilePath)
+	several(first FilePath, second FilePath)
+end 'DriverFilesAmong'
+
+export function driverFileIn(dir FilePath, extension String) returns DriverFileSearch throws CompileError
+	let entries = try Directory.list(dir) otherwise throw CompileError.directoryNotFound(dir)
+	return try soleDriverFile(driverFilesAmong(entries, extension: extension))
+end 'driverFileIn'
+
+// An upward search takes the first of two: the directory is a project either way, and refusing the
+// pair (`twoDriverFiles`) is the job of the build that walks that directory.
+function firstProjectFileIn(dir FilePath) returns DriverFileSearch
+	let entries = try Directory.list(dir) otherwise return DriverFileSearch.none
+
+	return match driverFilesAmong(entries, extension: ProjectFileExtension) 'among'
+		none gives DriverFileSearch.none
+		one(path) gives DriverFileSearch.found(path)
+		several(first, _) gives DriverFileSearch.found(first)
+	end 'among'
+end 'firstProjectFileIn'
+
+function soleDriverFile(among DriverFilesAmong) returns DriverFileSearch throws CompileError
+	match among 'among'
+		none then return DriverFileSearch.none
+		one(path) then return DriverFileSearch.found(path)
+		several(first, second) then throw CompileError.twoDriverFiles(first, second: second)
+	end 'among'
+end 'soleDriverFile'
+
+function driverFilesAmong(entries FilePathArray, extension String) returns DriverFilesAmong
+	var seen = DriverFilesAmong.none
+
+	for entry in entries 'each'
+		if not entry.filename().endsWith(extension) or Directory.isDirectory(entry) 'notADriverFile'
+			continue
+		end 'notADriverFile'
+
+		match seen 'earlier'
+			none then seen = DriverFilesAmong.one(entry)
+			one(first) then return DriverFilesAmong.several(first, second: entry)
+			several then panic("driverFilesAmong: the scan returns at the second driver file it meets")
+		end 'earlier'
+	end 'each'
+
+	return seen
+end 'driverFilesAmong'
+
+// Anchored in the nested project file, which is the document the editor publishes it on.
+export function nestedProjectFileDiagnostic(outer FilePath, nested FilePath) returns Diagnostic
+	return Diagnostic.create(ErrorCode.nestedProjectFile, message: "'{nested.filename()}' is a project file below the project '{outer.toString()}', and projects do not nest: move the nested project out of that project's directory", line: 1, column: 1, filePath: nested)
+end 'nestedProjectFileDiagnostic'
 
 // Does `dir` ITSELF carry the marker that takes it, and everything beneath it, out of every project?
 //
@@ -1994,15 +2119,16 @@ export function holdsIgnoreMarker(dir FilePath) returns bool
 	return File.exists(dir.join("{IgnoreMarkerName}"))
 end 'holdsIgnoreMarker'
 
-// Is `dir` excluded — by its own marker, or by one in ANY directory above it?
+// Is `dir` excluded — by its own marker, or by one in any directory above it?
 //
 // ⚠ This is not the question `maxon build` and `maxon fmt` ask of a root they were handed, and
 // putting it back in front of either walk is what `specs/maxonignore.md` and
-// `tests/cli/build-a-named-directory-under-a-maxonignore.test.maxon` refuse: a named path escapes
+// `tests/cli/build-a-named-directory-under-a-maxonignore.maxtest` refuse: a named path escapes
 // every marker. `Testing/SpecTestRunner.compilationUnitsAmong` is the one caller, and the ancestry
 // half is there for it — a staged spec fragment is asked about by path, with no walk to have pruned
 // it, and it must be asked with this predicate rather than with "did a walk return it", because a
-// walk also drops the root's `project.maxon` and `tasks.maxon`, which naming DOES compile. See there.
+// walk also leaves out every file that is not a `.maxon` source, which naming does compile. See
+// there.
 export function isIgnoredDirectory(dir FilePath) returns bool
 	// Resolved first: the climb runs out of parents at a relative spelling's own first component while
 	// the directories that could hold a marker are still above it, so a relative `dir` would ask about
@@ -2074,115 +2200,64 @@ end 'stampRegisteredSource'
 let PreviousImageSuffix = ".previous"
 let RetiredImageInfix = ".retired-"
 
-// What a build manifest and a Maxon source are called, and what says a directory holds none: file-discovery
-// contracts stated once for every walk over a source tree — `collectMaxonSources` below and `maxon fmt`'s
-// separate walk, `Formatter.collectFormattableFiles` — and the driver, which runs the manifest.
-export let ProjectManifestFileName = "project.maxon"
+export let ProjectFileExtension = ".maxproj"
 
-export let TaskFileName = "tasks.maxon"
+export let TaskFileExtension = ".maxtasks"
 
-// Case-insensitive, because on the filesystem most checkouts live on, `PROJECT.maxon` IS the file
-// `maxon build` would run. A library tier holds no manifest and does not ask
-// (`SourceSelection.libraryTier`).
-function isProjectManifestFileName(name String) returns bool
-	return equalsIgnoringAsciiCase(name.toByteArray(), b: ProjectManifestFileName.toByteArray())
-end 'isProjectManifestFileName'
+export let ProjectProductsDirName = ".maxon"
 
-module function isTaskFileName(name String) returns bool
-	return equalsIgnoringAsciiCase(name.toByteArray(), b: TaskFileName.toByteArray())
-end 'isTaskFileName'
-
-module function isDriverFileName(name String) returns bool
-	return isProjectManifestFileName(name) or isTaskFileName(name)
+export function isDriverFileName(name String) returns bool
+	return name.endsWith(ProjectFileExtension) or name.endsWith(TaskFileExtension)
 end 'isDriverFileName'
 
-// ⭐ **`export` BECAUSE WHAT A MAXON SOURCE IS CALLED IS NOT ONLY A COMPILER'S QUESTION.**
-// `Main.MaxonArgs.parse` reads a first argument ending in it as `maxon run`, which is how a
-// `#!/usr/bin/env maxon` script arrives, and `Lsp/LspHover` names a stdlib file from a type's name.
-// Neither is under this directory.
 export let MaxonSourceExtension = ".maxon"
 
-// ⭐⭐ **A `test` DECLARATION'S FILE IS A SOURCE CATEGORY, NOT A FLAG INSIDE THE FILE** (see
-// `docs/LANGUAGE_REFERENCE.md`, "Test Declarations"). A `*.test.maxon` file carries the project's tests and
-// is therefore NOT swept into an ordinary build: which declarations a build carries is answerable from the
-// file list alone, with nothing to read a body for. `maxon test` names those files explicitly, which is the
-// same act that lets `maxon build <ignored>/prog.maxon` compile an ignored file — naming a path overrides
-// every exclusion this walk applies (`loadSourceFiles`), and it is how the spec runner compiles a case's
-// `example.test.maxon` at all.
-//
-// ⚠ **MATCHED CASE-INSENSITIVELY**, so `Suite.TEST.maxon` is a test file and does not join an ordinary
-// build. A byte-exact match would be one clause NARROWER, which is the shape
-// `scripts/stale-binary-gate.sh`'s CHECK 5c exists to catch.
-let TestSourceSuffix = ".test.maxon"
+export let TestSourceExtension = ".maxtest"
 
-// ⭐⭐ **WHICH KIND OF SOURCE FILE A WALK IS BEING ASKED FOR — the ONE thing that differs between the two
-// questions `collectMaxonSources` answers.**
-//
-// ⛔ **A SECOND WALK WAS THE ALTERNATIVE AND IT IS THE ONE THIS FILE'S HEADER ALREADY REFUSES.** That header
-// says of the `.maxonignore` clause that both of a compile's directory walks go through one function
-// "because that is ONE question, and two copies of the answer are two copies that can come to disagree" —
-// and every clause a test-file walk needs is that same list: the build manifest, the `.maxon` extension,
-// the pruned `.maxonignore` subtrees, the directory count it returns. A `collectTestSources` beside this
-// one would restate all four to vary the fifth, and the day a sixth exclusion lands it goes into whichever
-// copy the author was looking at.
-//
-// ⇒ The selection is a PARAMETER, and it is the only thing the two answers differ by.
+// Which kind of source file a walk is asked for. It is a parameter of `collectMaxonSources` rather
+// than a second walk, which would restate every other clause of that one to vary this.
 export enum SourceSelection
-	// An ordinary build: `*.test.maxon` is NOT part of the program. This is the default at every existing
-	// call site and the reason the exclusion exists at all — a test file joins a build only when something
-	// asks for it by name or asks for it here.
 	productionOnly
 
 	// A `maxon test` build: the test files ARE the program, alongside everything an ordinary build compiles.
 	// The tests still have to be compiled WITH their project, because a `test` body calls the very
 	// declarations that project makes.
 	productionAndTests
-
-	// A library tier's own sources, `stdlib/` or `runtime/`. A library is not a project and holds no
-	// manifest, so no name there is one — `stdlib/Build.maxon` is the `Build` API, and the case-insensitive
-	// manifest match would otherwise drop it.
-	libraryTier
 end 'SourceSelection'
 
-// Does this walk want a file with this name? Every OTHER clause of "is this a source file" is asked at the
-// walk itself and is the same for both selections; this is the one that varies, so it is the one that is
-// asked here — through `isTestSourceName`, so neither answer restates the rule.
-// ⚠ A driver file is excluded only AT THE WALK ROOT, which is the one directory `maxon build` looks
-// for a manifest in. Excluded at any depth, `Compiler/Project.maxon` — an ordinary source whose name
-// folds onto the manifest's — is dropped from every build of this compiler, and what surfaces is a
-// hundred unknown-type errors in the files that read it rather than a word about the file that went
-// missing.
-function selectionAdmits(selection SourceSelection, name String, atProjectRoot bool) returns bool
-	let aDriverFile = atProjectRoot and isDriverFileName(name)
-
+module function selectionAdmits(selection SourceSelection, name String) returns bool
 	return match selection 'selection'
-		productionOnly gives not isTestSourceName(name) and not aDriverFile
-		productionAndTests gives not aDriverFile
-		libraryTier gives not isTestSourceName(name)
+		productionOnly gives name.endsWith(MaxonSourceExtension)
+		productionAndTests gives name.endsWith(MaxonSourceExtension) or isTestSourceName(name)
 	end 'selection'
 end 'selectionAdmits'
 
-// ⭐ **THE ONE PLACE THAT ANSWERS "IS THIS FILE A TEST FILE?"** — the WALK asks it to leave such a file out
-// of an ordinary build, and `Parser.readTestDeclarationHead` asks it to refuse a `test` written anywhere
-// else (E2058). Two readers, one rule: a walk and a diagnostic that disagreed about which files may hold a
-// test would let a declaration be legal in a file no build compiles.
+// The one answer to "is this a test file?": the walk admits by it and E2058 refuses a `test`
+// outside it (`Parser.readTestDeclarationHead`), so no file can hold a test that no build compiles.
 export function isTestSourceName(name String) returns bool
-	return name.toLower().endsWith(TestSourceSuffix)
+	return name.endsWith(TestSourceExtension)
 end 'isTestSourceName'
 
-// ⭐ **THE NAME A FILE WOULD HAVE TO TAKE FOR A `test` TO BE LEGAL IN IT** — the fix E2058 names, derived
-// from the rule above rather than spelled a second time in the diagnostic. `regular.maxon` becomes
-// `regular.test.maxon`; a name carrying no `.maxon` at all (a path the caller named outright) simply gains
-// the whole suffix, which is still the true answer to "what would this have to be called?".
-export function testSourceNameFor(name String) returns String
-	if not name.endsWith(MaxonSourceExtension) 'noExtensionToReplace'
-		return "{name}{TestSourceSuffix}"
-	end 'noExtensionToReplace'
+let LegacyTestSourceSuffix = ".test.maxon"
 
-	let bytes = name.toByteArray()
-	let stem = try bytes.slice(0, endIndex: bytes.count() - MaxonSourceExtension.toByteArray().count()) otherwise panic("testSourceNameFor: '{name}' ends with '{MaxonSourceExtension}', so it is at least that many bytes long")
-	return "{String.from(stem)}{TestSourceSuffix}"
+export function testSourceNameFor(name String) returns String
+	if name.endsWith(LegacyTestSourceSuffix) 'theOldTestSuffix'
+		return "{nameWithoutSuffix(name, suffix: LegacyTestSourceSuffix)}{TestSourceExtension}"
+	end 'theOldTestSuffix'
+
+	if name.endsWith(MaxonSourceExtension) 'aSourceExtension'
+		return "{nameWithoutSuffix(name, suffix: MaxonSourceExtension)}{TestSourceExtension}"
+	end 'aSourceExtension'
+
+	return "{name}{TestSourceExtension}"
 end 'testSourceNameFor'
+
+function nameWithoutSuffix(name String, suffix String) returns String
+	let bytes = name.toByteArray()
+	let stem = try bytes.slice(0, endIndex: bytes.count() - suffix.toByteArray().count()) otherwise panic("nameWithoutSuffix: '{name}' ends with '{suffix}', so it is at least that many bytes long")
+
+	return String.from(stem)
+end 'nameWithoutSuffix'
 
 // A directory holding this file is not part of any program, and neither is anything beneath it. The
 // file's CONTENTS are never read; `collectMaxonSources` owns the rule.
@@ -2215,13 +2290,12 @@ export typealias MaxonSourcePathArray = Array with FilePath
 // `Parser.fileMayUseReservedNames` for the call side and `Parser.requireUnreservedName` for the
 // declaration side.
 //
-// ⛔⛔ **THE NAMES ARE HERE BECAUSE A STAGED FILE IS HALF THE AUTHOR'S BYTES.** `maxon test` appends
-// its dispatcher to a COPY of the author's own `*.test.maxon`, so "this compiler wrote this file" is
-// true of the file and false of most of its lines. A per-FILE exemption on the DECLARATION door
-// therefore hands the author the reserved space: MEASURED without this list, an author's
-// `function __sneaky()` in a `*.test.maxon` compiles clean under `maxon test` while `maxon build`
-// refuses the identical file with E2051. The stager knows exactly which names it minted; nothing
-// else may claim them.
+// ⛔ The names are here because a staged file is half the author's bytes. `maxon test` appends its
+// dispatcher to a copy of the author's own `.maxtest` file, so "this compiler wrote this file" is
+// true of the file and false of most of its lines. A per-file exemption on the declaration door
+// would hand the author the reserved space: an author's `function __sneaky()` would compile under
+// `maxon test` while `maxon build` refuses the identical file with E2051. The stager knows exactly
+// which names it minted; nothing else may claim them.
 //
 // ⛔ **IT IS KEYED ON THE NAME AND NOT ON A LINE THRESHOLD.** "Everything below the author's last
 // line" is true only because the dispatcher is APPENDED, and it would invert silently the day

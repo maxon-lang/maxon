@@ -63,7 +63,7 @@ done
 maxon="$(maxon_compiler_path .)"
 [ -x "$maxon" ] || { echo "release.sh: no compiler at $maxon — build one first (see CONTRIBUTING.md)" >&2; exit 1; }
 
-# ⛔ THE VERSION IS READ OFF THE BINARY, NOT OFF THE REF. `project.maxon` derives it from git at build
+# ⛔ THE VERSION IS READ OFF THE BINARY, NOT OFF THE REF. `maxon.maxproj` derives it from git at build
 # time — a `vX.Y.Z` tag or a `release/X.Y.Z` branch gives the number, anything else is `dev` — so what
 # ships is whatever the BINARY says, and a binary built before the branch was cut still says `dev`.
 # Asking the artifact removes the one disagreement this whole scheme exists to prevent.

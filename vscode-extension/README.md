@@ -3,13 +3,15 @@
 Visual Studio Code extension that provides syntax highlighting and Language Server Protocol (LSP) support for the Maxon programming language.
 
 ## Features
-- Syntax highlighting for `.maxon` files using a TextMate grammar
+- Syntax highlighting for `.maxon` sources, `.maxproj` project files, `.maxtasks` task files and
+  `.maxtest` test files using a TextMate grammar
 - Language Server Protocol support (completion, diagnostics, go-to-definition, etc.) from the compiler's own `maxon lsp-server`
 - **Go to definition and hover across files, and into their members**: F12 on a name declared in another
   file of your project, or in the standard library, opens that file, and hovering one renders its
   declaration, whether top-level or a field or method of such a type. The project is the nearest
-  directory above the file that holds a `project.maxon`, searched up to the workspace folder that
-  contains the file; failing that, that folder itself. In a multi-root window every folder is a root of
+  directory above the file that holds a `.maxproj` file, searched up to the workspace folder that
+  contains the file; failing that, that folder itself. A file of the standard library's `stdlib/` or
+  `runtime/` belongs to that directory's project. In a multi-root window every folder is a root of
   its own, and a folder added to the window is served at once. Hover and completion also resolve a
   receiver typed by `self`, by a call, by a `try … otherwise`, by a field of the enclosing type, by a
   `for … in` loop variable, by a chain of any of these (`a.b.c`, `a.m().n()`), by a generic-instance type alias, by
@@ -23,7 +25,7 @@ Visual Studio Code extension that provides syntax highlighting and Language Serv
 - Language configuration: comment support, bracket pairing, and auto-closing pairs
 - **Code formatting**: the language server's formatter, applied on save by default
 - **Compiler Explorer**: View the Target IR the compiler lowers a program to
-- **Test Explorer**: Discover the `test` declarations in your `*.test.maxon` files and run them with `maxon test`
+- **Test Explorer**: Discover the `test` declarations in your `*.maxtest` files and run them with `maxon test`
 
 The language features come from the Maxon compiler itself, which serves the Language Server
 Protocol (`maxon lsp-server`). This extension is its client.
@@ -71,17 +73,19 @@ npm run compile
 3. Package and install it, from the repository root:
 
 ```powershell
-./maxon-bin/.maxon/maxon run buildExtension     # vscode-extension/maxon-lsp-client.vsix
-./maxon-bin/.maxon/maxon run installExtension   # packages it, then installs it into VS Code
+./maxon-bin/.maxon/maxon run build-extension     # vscode-extension/maxon-lsp-client.vsix
+./maxon-bin/.maxon/maxon run install-extension   # packages it, then installs it into VS Code
 ```
 
-Both run `npm install` first. `installExtension` installs with the `code` command, replacing any
+Both are tasks of the repository root's `maxon.maxtasks`, and both run `npm install` first.
+`install-extension` installs with the `code` command, replacing any
 installed copy; VS Code puts `code` on `PATH` (on macOS, through **Shell Command: Install 'code' command
 in PATH**).
 
 ## Usage
 - Open a `.maxon` file in VS Code. If the LSP server binary is available and runs correctly, you should get diagnostics, code completion, and basic navigation features.
-- A `.test` file (a spec fragment in the Maxon checkout) is highlighted as Maxon and sent to the language server whole, exactly like a `.maxon` file; nothing in it is split off or skipped.
+- `.maxproj`, `.maxtasks` and `.maxtest` files are Maxon documents too. A `.maxtest` file is checked with its project's other test files in view, and a `.maxon` file with the production sources only.
+- A `.test` file (a spec fragment in the Maxon checkout) is highlighted as Maxon and sent to the language server whole, exactly like a `.maxon` file.
 - If you only want syntax highlighting, no LSP server is required.
 
 ## Development
@@ -97,7 +101,7 @@ npm run watch
 ### Extension build and packaging
 - `npm run compile` — compile TypeScript to JavaScript (output is `out/`)
 - `npm run package` — build a `.vsix` package using `vsce`
-- `maxon run buildExtension` and `maxon run installExtension`, at the repository root — package the
+- `maxon run build-extension` and `maxon run install-extension`, at the repository root — package the
   extension, and package then install it into VS Code
 
 ## Testing

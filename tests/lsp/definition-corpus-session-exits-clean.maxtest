@@ -1,0 +1,62 @@
+// definition-corpus-session-exits-clean.maxtest — a session that built the cross-file CORPUS shuts down
+// with exit 0.
+//
+// ⭐⭐ **THE LEAK GATE, AND THIS IS THE ONLY CASE THAT CAN SEE IT.** Answering a cross-file definition holds a
+// whole `Project` — its source entries, its token memos and its signature index — in a module `var` for the
+// life of the server process, which is the first long-lived managed value this server has ever held. The
+// runtime reports a leak as **exit 101**, and `LspClient.release()` discards the server's exit code
+// (`waitWithTimeout … otherwise ignore`), so every other definition test would pass over a leaking server
+// without noticing. Only a case that asks for the exit code can gate it.
+//
+// The session, the release discipline and the staging helpers are `definition-corpus-probe.maxtest`'s.
+
+let CorpusExitCaseName = "temp/lsp/definition-corpus-session-exits-clean"
+let CorpusExitCleanCode = 0 as ProcessExitCode
+
+let CorpusExitHelperName = "helper.maxon"
+let CorpusExitHelperSource = "export function exitCaseHelper() returns ExitCode\n\treturn 0\nend 'exitCaseHelper'\n"
+let CorpusExitMainName = "main.maxon"
+let CorpusExitMainSource = "function main() returns ExitCode\n\treturn exitCaseHelper()\nend 'main'\n"
+
+// What the shutdown reported, or why it could not be asked.
+union CorpusExitProbe
+	exited(code ProcessExitCode)
+	broke(detail String)
+end 'CorpusExitProbe'
+
+test 'a session that answered a cross-file definition exits clean'
+	let root = stagedCorpusDirectory(CorpusExitCaseName)
+	writeCorpusFile(root, fileName: CorpusExitHelperName, content: CorpusExitHelperSource)
+	writeCorpusFile(root, fileName: CorpusExitMainName, content: CorpusExitMainSource)
+	let openedUri = fileUriOf(root.join(CorpusExitMainName))
+
+	var client = LspClient.start()
+	var probe = CorpusExitProbe.broke("the session ended without saying how")
+
+	try 'session'
+		_ = client.initialize()
+		client.initialized()
+		client.openDocument(openedUri, content: CorpusExitMainSource)
+
+		// The request that builds the corpus. Its ANSWER is another case's subject; what this one needs is
+		// only that the corpus was built at all before the shutdown below.
+		_ = client.definition(openedUri, line: 1, character: 12)
+
+		client.shutdown()
+		client.exit()
+		probe = CorpusExitProbe.exited(client.waitForExit())
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed or
+				malformedResponse or
+				serverRefused then probe = CorpusExitProbe.broke("during the session's lifecycle: {e.explained()}")
+		end 'reason'
+	end 'failed'
+
+	client.release()
+
+	match probe 'probe'
+		exited(code) then Expect.equal(code as AssertedInt, expected: CorpusExitCleanCode as AssertedInt, message: "a server that answered a cross-file definition exited {code} after a clean shutdown. Exit 101 is the runtime's LEAK verdict, and the corpus this request builds is held for the life of the process — so a 101 here names that `Project` and nothing else.")
+		broke(detail) then Expect.fail(detail)
+	end 'probe'
+end 'a session that answered a cross-file definition exits clean'

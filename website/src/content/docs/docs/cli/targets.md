@@ -36,8 +36,8 @@ Commands that take `--target=`:
 | [`maxon test`](/docs/cli/#maxon-test) | The test binary, which it then runs; on a host that cannot execute that target, every test is reported as not run |
 | [`maxon spec-test`](/docs/cli/compiler-development/#maxon-spec-test) | Each spec test, run under the checkout's vendored runtime where needed |
 
-`maxon execute` always builds for the host, and so does a `project.maxon` manifest program (the builds it
-describes follow `--target`). An executable copied from Windows to a Linux or macOS machine may need
+`maxon execute` always builds for the host, and so do a `.maxproj` project file and a `.maxtasks` task
+file (the builds they describe follow `--target`). An executable copied from Windows to a Linux or macOS machine may need
 `chmod +x` before it runs.
 
 ## Running a `wasm32-wasi` program
