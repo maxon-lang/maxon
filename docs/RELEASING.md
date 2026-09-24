@@ -314,8 +314,12 @@ scripts/announce.sh 0.1.1
 ```
 
 It writes three files under `website/` — the announcement post, the changelog page, and the
-`RELEASE_VERSION` the download links are built from — and **commits nothing**. Commit them with
-everything else this branch carries.
+`RELEASE_VERSION` the download links are built from — and **commits nothing**. Commit them with the
+changelog entry and everything else this branch carries, before the preflight:
+
+```bash
+git add -A && git commit -m 'changelog: 0.1.1'
+```
 
 ### 3b. Run the preflight
 
@@ -332,13 +336,14 @@ costs seconds and moves all of it before the tag exists.
 ⚠ **A SKIPPED CHECK IS NOT A PASS** and the script says so: shellcheck absent, `gh` unauthenticated,
 no CI run yet. Read the skips before deciding the list is clean.
 
-⛔ Run it AFTER the rebuild, not before — `compiler-version` reads the built binary, and the number
-comes from the ref at BUILD time.
+⛔ Run it AFTER the rebuild and the commit — `compiler-version` reads the built binary, whose number
+comes from the ref at BUILD time, and `worktree-clean` fails on anything uncommitted, because the tag
+carries only the committed tree. A fix made after the preflight is committed and the preflight run
+again.
 
 ### 4. Tag it
 
 ```bash
-git add -A && git commit -m 'changelog: 0.1.1'
 git tag -a v0.1.1 -m 'Maxon v0.1.1'
 git push origin release/0.1.1 v0.1.1
 ```

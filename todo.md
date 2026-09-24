@@ -21,9 +21,10 @@
   17,098,080/13,355,420/1,366,120,165). ⭐ THREE SEPARATE PROCESSES AGREE BIT FOR BIT
   (`scale-test --rungs=4 --result-json` x3, identical), so the difference is state carried from one
   compile to the NEXT INSIDE ONE PROCESS, and it grows rather than shrinks — not a lazily-built cache
-  the first compile pays for. Consequence: `scripts/self-host-ab.sh` cannot produce its ratio table
-  (its default is `--repeat=3`), so the emitted-code A/B is unavailable until this is fixed. The
-  FIXPOINT half of that script does run and passes.
+  the first compile pays for. Still failing 2026-09-24 with a different signature, at rung 0:
+  7,719,592 / 7,242,211 / 771,993,049 then 7,719,580 / 7,242,199 / 771,996,347 (allocs / frees /
+  bytes). Consequence: no two-compiler `scale-test` ratio table can be built, and a CPU A/B has to take
+  its samples as separate processes.
 - `tests/ladders/` generators are in the state `genrangesites.sh` documents for itself: several emit
   programs that no longer compile. Measured 2026-09-07 against BOTH this tree and origin HEAD, so
   none of it is new — `genshareddag` (E3012 unused variable `base`), `genclosure` in both `ranged`
@@ -40,6 +41,18 @@
 - ensure static/const unions/enums exist in rdata not the heap (like strings)
 - tokenkind should be a type
 - multiline string literals using multiple quotes
+- A misleading diagnostic masks the real one: `var inv = Inventory.create()` then
+  `try inv.apply(3) otherwise return 1`, with `Inventory` declared nowhere, reports only E2015 "`try`
+  must be applied to a call … the expression after `try` is not a call" at the `try` — the parse-time
+  refusal pre-empts E3004 "call to undefined function 'Inventory.create'", which the same program
+  without the `try` statement reports. Seen 2026-09-23 compiling a `main.maxon` alone that used
+  another file's types.
+- 13 files still cite the nonexistent `docs/error-codes.txt` or a `maxon error-codes check`/`generate`
+  command, where the registry is `maxon-bin/Compiler/ErrorCodeRegistry.maxon`:
+  `git grep -E 'docs/error-codes\.txt|error-codes (generate|check)'` lists them (6 compiler sources,
+  4 specs, 3 `tests/lsp` failure messages).
+- `scripts/analyze_mm_trace.py` parses `--mm-trace` output, which no build produces (the flag does not
+  exist); nothing in the tree calls it. Delete it, or give it an input.
 
 ## TODO
 - code coverage during spec tests

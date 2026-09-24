@@ -478,8 +478,9 @@ Four doors are still standing open rather than shut:
 > images nothing holds any longer.
 >
 >
-> ⛔ **A CHANGE UNDER `Compiler/Runtime/` NEEDS *TWO* SELF-COMPILES BEFORE THE COMPILER ITSELF BEHAVES
-> THAT WAY.** The compiler EMITS the runtime into every program it builds — including into itself — so
+> ⛔ **A CHANGE TO EMITTED RUNTIME — `Compiler/Runtime/` OR `Compiler/Targets/*/*Runtime*.maxon` — NEEDS
+> *TWO* SELF-COMPILES BEFORE THE COMPILER ITSELF BEHAVES THAT WAY.** The compiler EMITS the runtime
+> into every program it builds — including into itself — so
 > with `C0` the old compiler and `S` the fixed sources:
 >
 > - `C0` builds `S` → `C1`. `C1`'s emitter logic is fixed, so **programs C1 builds get the new
@@ -491,7 +492,7 @@ Four doors are still standing open rather than shut:
 > HARNESS does until the second build. MEASURED: a delayed-stdin fix looked like a Windows-only lane bug
 > for exactly this reason — the case failed 3/3 against `C1` and passed 3/3 against `C2`.
 >
-> ⚠ **`fixpoint.sh` DOES NOT CATCH THIS.** It builds `stage2` and `stage3` under `temp/` and compares
+> ⚠ **`fixpoint.sh` DOES NOT CATCH THIS.** It builds two stages under `temp/fixpoint/` and compares
 > them — both are past the convergence point, so they agree while the SLOT still holds `C1`.
 >
 > ⭐⭐ **DO NOT GUESS WHICH CASE YOU ARE IN — ASK, BEFORE YOU BUILD:**
@@ -500,10 +501,9 @@ Four doors are still standing open rather than shut:
 > ```
 > The compiler stamps the commit it was built from, so *"has any runtime file changed since the slot
 > binary was built"* is a `git diff` rather than a judgement — and it counts uncommitted changes too.
-> ⛔ **THIS RULE IS ONLY ABOUT `Compiler/Runtime/`. EVERY OTHER CHANGE NEEDS ONE BUILD.** The old
-> wording asked whether "the seed you built with predates a runtime change", which nobody can evaluate
-> in their head, so the safe answer was always twice — and a needless self-compile is ninety seconds
-> off every task that touches the compiler.
+> ⛔ **THIS RULE IS ONLY ABOUT EMITTED RUNTIME. EVERY OTHER CHANGE NEEDS ONE BUILD**, and a needless
+> self-compile is a minute off every task that touches the compiler. The script's own header says why
+> the per-target half counts.
 > ⛔ **THE COMPILER THAT BUILDS THIS TREE MUST LIVE INSIDE IT.** `stdlib/` and its sibling `runtime/` are
 > found by walking up from the EXECUTABLE, so an installed `maxon` on PATH compiles this repository
 > against the RELEASE's sources — MEASURED: it succeeds and exits 0, having built a compiler from a
@@ -635,8 +635,8 @@ vendored wasmtime. By hand, for ONE program:
 ./vendor/wasm-tools/wasm-tools print out.wasm      # attribute a wrong answer to an instruction
 ```
 
-⛔ **`vendor/` IS GITIGNORED AND A CLONE HAS NONE OF IT** — `scripts/fetch-vendor.sh` stages it; see the
-`compiler-workflow` skill.
+⛔ **`vendor/` IS GITIGNORED EXCEPT `vendor/wasi-wit/`, SO A CLONE HAS NONE OF THE TOOL BINARIES** —
+`scripts/fetch-vendor.sh` stages them; see the `compiler-workflow` skill.
 
 ⚠ **THE wasm LANE IS NOT "SCALAR ONLY".** Heap, `String`, `print`, structs, arrays, closures,
 interfaces and **floats** (arithmetic AND shortest-round-trip printing) all work there; the two lanes

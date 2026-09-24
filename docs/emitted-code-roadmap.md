@@ -5,13 +5,9 @@ compiler's own speed, which is `docs/optimization-log.md`'s axis and a different
 
 ## Why this document exists at all
 
-`maxon-bin/PLAN.md`'s **`EC` rows are the claim registry** and stay that way: a rung is taken by
-editing a row there and pushing. What the board has never held is the **ranking and the readings
-behind it**. `EC5`'s row cites *"the plan: coordinator's `temp/ec5-plan.md`"* and *"R6 of the
-emitted-code plan"* — both are gone, `temp/` is scratch, and the R1…Rn list they refer to exists
-nowhere in the tree. So the ranking below was re-derived from scratch to write this file. **That is
-the failure this document fixes:** the measurements live here, committed; a row is filed onto the
-board when it is taken, and cites this file rather than restating it.
+A ranking held in scratch files is lost with them. **This file holds the ranking and the readings
+behind it, committed**, and a row is taken with `/land` (see [How a row gets taken](#how-a-row-gets-taken)),
+citing this file rather than restating it.
 
 ## The baseline, and why the motivation is not what `EC1` said
 
@@ -2077,9 +2073,8 @@ weigh it against the compile time it costs before building it.
 
 The compiler forms a jump table for **dense** arms only; choosing among linear chain / table /
 binary search over *intervals* would need thresholds of its own.
-⚠ **Re-measure PLAN.md's "tree-wide
-tension" entry first** — it cites a file that no longer exists, so its claim that CLAUDE.md's
-"consolidate redundant match arms" rule demotes jump tables may already be false.
+⚠ **Measure first whether CLAUDE.md's "consolidate redundant match arms" rule demotes jump tables** —
+the claim that it does rests on a source that no longer exists.
 
 #### `EC22` · Short-jump (rel8) relaxation
 
@@ -2108,13 +2103,11 @@ range checks. **Measure the corpus first**; this may be a row with nothing behin
 
 ## How a row gets taken
 
-1. **Re-measure.** ⛔ Every number above is dated **2026-08-28**. Rows rot
-   ([[rung-rows-rot-measure-before-planning]]), and `W222` is the cautionary case in this very
-   workstream: three rows sat for two days quoting a headline that landing rungs had already
-   falsified, because nothing was asked to re-measure it.
-2. **File the row** onto `maxon-bin/PLAN.md`'s slice board with its lane, citing this file rather
-   than restating it, and push — the push is the lock.
-3. `/rung EC<n>`.
+1. **Re-measure.** ⛔ Every number above is dated **2026-08-28**. Rows rot, and `W222` is the
+   cautionary case in this very workstream: three rows sat for two days quoting a headline that later
+   changes had already falsified, because nothing was asked to re-measure it.
+2. **Land it** with `/land EC<n>` — or `/fannkuch-iterate`, when the row is a fannkuch candidate —
+   citing this file rather than restating it.
 
 **The instrument is a REAL A/B**: build a control binary from this tree with the change stashed and an
 experiment binary with it applied, IN ONE SESSION; compile the SAME source with both; run the two

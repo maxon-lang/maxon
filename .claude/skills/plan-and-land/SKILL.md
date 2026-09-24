@@ -59,13 +59,13 @@ default — pass `run_in_background: false`**: the plan cannot be written withou
 
 **A — SOURCE** (`Explore`). FACTS, not a recommendation: which passes and files own the behaviour, with
 `file:line`; the call sites; what each existing mechanism already does; which targets have an arm;
-whether this lands in `Compiler/Runtime/`, `runtime/`, `stdlib/` or plain compiler source, **and which of
+whether this lands in emitted runtime (`Compiler/Runtime/`, `Targets/*/*Runtime*.maxon`), `runtime/`,
+`stdlib/` or plain compiler source, **and which of
 `maxon-bin/CLAUDE.md`'s obligations that triggers**.
 
-**B — SPEC SURFACE** (`Explore`), briefed with `/land` §1's five fields **verbatim**: which `specs` files
-own this behaviour; every existing case that touches it with file + line; every `disabled-test:` in
-range; whether `/specs` pins it and **the verbatim text** of the case that does; what the neighbouring
-cases look like.
+**B — SPEC SURFACE** (`Explore`), briefed with `/land` §1's four fields **verbatim**: which `specs` files
+own this behaviour; every existing case that touches it with file + line and **the verbatim text** of any
+that already pins it; every `disabled-test:` in range; what the neighbouring cases look like.
 
 Both: read-only · write nothing into the checkout · run nothing · `file:line` for every claim.
 
@@ -102,11 +102,11 @@ BASE:   <sha>, tree clean, <date>  <- the staleness anchor for the scout skip
 | § | Section | Feeds |
 |---|---|---|
 | 1 | The problem, as a program with actual-vs-expected | §5 |
-| 2a | **SOURCE facts**, `file:line` per claim | `/land` §2 — *"the DIAGNOSIS you already did"* |
-| **2b** | **SPEC-SURFACE facts** — §1's five fields, field for field | **`/land` §1 — this IS the scout report** |
+| 2a | **SOURCE facts**, `file:line` per claim | `/land` §2 — *"the diagnosis you already did while reading the red"* |
+| **2b** | **SPEC-SURFACE facts** — §1's four fields, field for field | **`/land` §1 — this IS the scout report** |
 | 3 | The approach; the alternatives and why they lost | the approval; §2's brief |
-| 4 | Blast radius — file list; disjoint partition if >1 implementer | `/land` §2's *"EXCLUSIVE file list"* |
-| 5 | Obligations — cross-target arms · `ErrorCodeRegistry` case + band · `Compiler/Runtime/` ⇒ two self-compiles · `runtime/` tier roster · which `docs/` source owns the surface | every brief; `/land` §8 |
+| 4 | Blast radius — file list; disjoint partition if >1 implementer | `/land`'s brief item 3, the *"EXCLUSIVE file list"* |
+| 5 | Obligations — cross-target arms · `ErrorCodeRegistry` case + band · emitted runtime (`Compiler/Runtime/`, `Targets/*/*Runtime*.maxon`) ⇒ two self-compiles, per `scripts/self-compiles-needed.sh` · `runtime/` tier roster · which `docs/` source owns the surface | every brief; `/land` §8 |
 | 6 | Candidate acceptance — file, case, assertion, **why RED today** | `/land` §1, as a candidate |
 | 7 | Staging — `ONE /land` (default), or N stages with justification | §6 |
 | 8 | Open questions — what approval is actually being asked for | §5 |
@@ -126,7 +126,7 @@ BASE:   <sha>, tree clean, <date>  <- the staleness anchor for the scout skip
 3. **Alternatives rejected**, one line each. *(This is what makes the approval mean something.)*
 4. **Blast radius** — file count, notable files by name.
 5. **The candidate acceptance** — spec file + case names, one line on why each is red today.
-6. **Obligations** — cross-target arms; a new error code and its band; is this `Compiler/Runtime/`; which `docs/` surface it owes.
+6. **Obligations** — cross-target arms; a new error code and its band; is this emitted runtime (two self-compiles); which `docs/` surface it owes.
 7. **The plan-file path.**
 8. **The question, explicitly:** approve as planned · change the approach · change the staging · change the acceptance.
 
@@ -139,7 +139,7 @@ re-survey narrowly on what moved and amend §2b first; the failure mode of a sta
 case, and a missing case reads green.
 
 ```
-git diff --stat <BASE>..HEAD -- specs/ /specs/
+git diff --stat <BASE>..HEAD -- specs/
 ```
 
 Then invoke `/land` with the change's one line, followed by this block. *(`/fannkuch-iterate` §4 is the
@@ -152,7 +152,7 @@ S0 - the "say what the change is" sentence is DISCHARGED: the user approved
    <planfile> rev <n> on <date>. S0 is `git status` clean plus build-if-stale, nothing else.
 
 S1 - THE SCOUT IS ALREADY RUN. Its FACTS are <planfile> section 2b, taken at <BASE> on a
-   clean tree; `git diff --stat <BASE>..HEAD -- specs/ /specs/` is empty. Do NOT dispatch
+   clean tree; `git diff --stat <BASE>..HEAD -- specs/` is empty. Do NOT dispatch
    the `Explore` scout. Resume at "Then YOU pick the set" - the set is still YOURS.
    <planfile> section 6 is a CANDIDATE list, not the set. The spec-author dispatch and
    the RED read are unchanged.
@@ -191,6 +191,9 @@ expires at the first commit — a multi-stage plan re-scouts before the next sta
 Stamp `STATUS:` — `LANDED <sha>`, `STAGE n/N LANDED <sha>`, or `ABANDONED — <reason>`. ⛔ The plan file
 is outside the repo; this is never a commit.
 
+⛔ **Do not wait for CI** — not after the last stage, and not between stages: the next stage starts from
+the pushed commit (`/land` §9's ruling).
+
 ---
 
 ## The design-flaw halt — an agent can send the design back
@@ -200,7 +203,7 @@ chose the mechanism itself. Here it is **approved before the agent exists**, whi
 `/land` never had to name: an implementer that discovers the approved design cannot work. Without a halt
 it grinds on against a refuted design, or silently substitutes one the user never approved — and **the
 substitution is invisible in the report.** ⇒ **the ninth brief item, §6.** It binds every dispatched
-agent; the reviewer counts, since §5 is often where a design flaw is first visible.
+agent; the reviewer counts, since `/land` §5 is often where a design flaw is first visible.
 
 > ⭐ **THE TEST IS REFUTATION, NOT DIFFICULTY: the approved mechanism CANNOT produce the acceptance
 > cases**, and something in the tree — named, with `file:line` — is why. Cost, size and elegance are not

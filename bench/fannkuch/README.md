@@ -140,7 +140,8 @@ EC22 rel8 (size only), EC21/EC23 (measured empty by `docs/emitted-code-roadmap.m
 
 - Instruction count is not time: the roadmap's `EC14` deleted two loads and measured zero. A row
   claims a speedup only from the harness's interleaved A/B.
-- Attribute the shape before predicting the win: one change was ×1.90 on fannkuch and −5.8% on nbody.
+- Attribute the shape before predicting the win: the eight-row EC workstream was ×1.90 on fannkuch and
+  −5.8% on nbody.
 - A before/after across a source change is not an A/B; build the control from the pre-change commit
   with `--ref` and run both arms in one session.
 - `scripts/sample_profile.py` is the other profiler (per-sample, call edges); `maxon profile run` is

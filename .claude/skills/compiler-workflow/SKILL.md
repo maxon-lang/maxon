@@ -24,11 +24,14 @@ the compiler indexes by, and READ it.
 - **The ladder DOUBLES, so the RATIO between rungs IS the growth** — ×2 linear, ×4 quadratic. Read it
   off the **ALLOCATION** columns, which are exact and bit-for-bit reproducible; the CPU column carries a
   few-percent noise band and a platform-defined unit, and there is no wall time at all.
-- **The artifact is the trend: `docs/optimization-log.md`.** Record WHY a number moved at the one moment
-  it is still known — the instrument sees exactly WHAT moved and can never see WHY. **Write no row you
-  did not measure.**
+- **The artifact is the trend: `docs/optimization-log.md`.** A run writes a row there only when given a
+  reason — `note:` (`--note=` on the CLI) — and that reason is the WHY, recorded at the one moment it
+  is still known: the instrument sees exactly WHAT moved and can never see WHY. **Write no row you did
+  not measure.**
+- Through MCP the ladder comes back as `result`, the `--result-json` document (per rung and phase:
+  `allocs`, `frees`, `bytes`, `cpuTicks`), with the printed tables in `rawTail`.
 
-⇒ **The full reading guide — the three columns, the two blind spots, A/B methodology — is
+⇒ **The full reading guide — the memory and CPU columns, the two blind spots, A/B methodology — is
 the `optimize` skill.** Load it before acting on a ladder.
 
 ⚠ The compiler's own per-phase timing is a **different thing**: `--metrics=<path>` writes a TSV whose
@@ -64,12 +67,17 @@ wsl -- ./temp/linux-lane/maxon build maxon-bin --output=temp/linux-lane/maxon2  
 wsl -- ./temp/linux-lane/maxon2 spec-test
 ```
 
-`C1` is emitted by the Windows compiler and `C2` by `C1`, so `C2` is the first binary whose own
-runtime came from this tree — the same two-stage rule `Compiler/Runtime/` follows everywhere else.
+`C1` is built by the Windows compiler and `C2` by `C1` running on Linux, so `C2` is the first binary a
+Linux-HOSTED compiler produced — the defect class the cross lane cannot reach. When
+`scripts/self-compiles-needed.sh` says `twice` for the Windows slot, it is also the first whose own
+emitted runtime is this tree's.
 
 ## Staging `vendor/`
 
-⛔ **`vendor/` IS GITIGNORED AND A CLONE HAS NONE OF IT.** `scripts/fetch-vendor.sh` downloads THIS
+⛔ **`vendor/` IS GITIGNORED EXCEPT `vendor/wasi-wit/`**, the committed WIT source the compiler reads to
+build a Preview2 component — so a clone has none of the tool BINARIES. (`vendor/go/`, a local copy of
+Go's source, is optional and fetched by nothing: `scripts/gen-slab-classes.sh --check` reads it and
+skips when it is absent.) `scripts/fetch-vendor.sh` downloads THIS
 host's build of `wasmtime` and `wasm-tools`, verifies each against a pinned SHA256 or refuses, and
 stamps what it placed so a re-run is a no-op. A machine therefore holds one platform's binaries under
 their natural names — `wasmtime` on unix, `wasmtime.exe` on Windows — and nothing has to remember which

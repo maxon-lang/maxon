@@ -29,13 +29,15 @@ a statement. Found a bug, or a comment describing a shape the code no longer has
 **2. Generated files are refused outright.** Rewriting one is reverted by the next generator run *and*
 fails that generator's own drift check — for `SlabClasses.maxon` that is
 `scripts/gen-slab-classes.sh --check`. Refuse the path
-`maxon-bin/Compiler/Runtime/SlabClasses.maxon`, and any file whose first 20 lines say `GENERATED` or
-`DO NOT EDIT`; the second test is the one that holds as generators are added.
+`maxon-bin/Compiler/Runtime/SlabClasses.maxon`, and any file whose header declares ITSELF generated
+(`SlabClasses.maxon`'s `GENERATED — DO NOT EDIT BY HAND`); the second test is the one that holds as
+generators are added. A file that merely MENTIONS a generated sibling (`SlabClassTable.maxon`) or says it
+is not regenerated (`UnicodeCategoryRuntime.maxon`) is hand-written and in scope.
 ⚠ **`maxon-bin/Compiler/ErrorCodeRegistry.maxon` is NOT one of these.** It is hand-authored, has no
 generator, and the `//` block above each case is the text `lookup_error_code` serves — it is a primary
 work item here.
 
-**3. `/specs/**` is read-only.** It is the canonical definition of the language.
+**3. `specs/` is read-only.** It is the canonical definition of the language.
 
 **4. A generated site page is never edited by hand.** Everything under
 `website/src/content/docs/docs/{cli,language,stdlib,spec,best-practices}/` is built from a source; edit
@@ -346,8 +348,8 @@ stdlib API; a runtime environment variable; target support; LSP, VS Code or MCP 
    states that in the report — a claim someone can check, not a step quietly skipped.
 2. **Find the owning source** through `website/MAINTAINING.md`'s "what changed → which source" map. It
    is the one map of where the site's documentation comes from. ⛔ Edit the source, never the page.
-3. ⭐ **Grep `docs/` for every name the change moved, renamed or removed.** The doc-coverage gates
-   check names, not truth: a sentence the change made FALSE is found only this way, and finding it is
+3. ⭐ **Grep `docs/` and `vscode-extension/README.md` for every name the change moved, renamed or
+   removed.** The doc-coverage gates check names, not truth: a sentence the change made FALSE is found only this way, and finding it is
    the part of this step that cannot be automated.
 4. **Link forms**, from `MAINTAINING.md`: `[text](#anchor)` within a file,
    `[text](CLI_REFERENCE.md#anchor)` across synced files,
@@ -396,7 +398,7 @@ Two things precede the build. Both cost seconds, and both catch what a build can
    never see. A deleted CODE line is still caught: stripped of its comment it is non-blank. Both sides
    get identical mangling of any `//` inside a string. Put the output in the report verbatim; **an
    empty diff is the only acceptable result** — do not argue around a non-empty one.
-3. **`mcp__maxon__build`** — ~4 min, exit 0. ⛔ Skip only when the caller says it is batching the build.
+3. **`mcp__maxon__build`** — about a minute, exit 0. ⛔ Skip only when the caller says it is batching the build.
 
 `node website/scripts/sync-docs.mjs` still **runs** — it is the regeneration this pass owes, not a
 check. Its `--check` form is the caller's gate and is not run here.

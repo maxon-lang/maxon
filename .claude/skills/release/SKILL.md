@@ -34,9 +34,11 @@ gh workflow run release.yml --ref release/X.Y.Z
 git checkout -b release/X.Y.Z
 ```
 
-⛔ **THEN REBUILD, BEFORE ANYTHING ELSE.** The version comes from the ref at BUILD time, so a compiler
-built before the branch existed still reports `dev`, and `release.sh --publish` refuses that. Ask
-`scripts/self-compiles-needed.sh` whether this needs one build or two.
+⛔ **THEN REBUILD, BEFORE ANYTHING ELSE** — `./maxon-bin/.maxon/maxon run build` at the repo root, the
+build that stamps a version (`maxon build maxon-bin` is a path build and stamps none). The version comes
+from the ref at BUILD time, so a compiler built before the branch existed still reports `dev`, and
+§3b's `compiler-version` check refuses it. Ask `scripts/self-compiles-needed.sh` whether this needs one
+build or two.
 
 ## 2 · Write the changelog entry, by hand
 
@@ -64,8 +66,19 @@ scripts/announce.sh X.Y.Z
 ```
 
 Three files under `website/` — the announcement post, the changelog page, and the `RELEASE_VERSION`
-the download links are built from. It **commits nothing**; the files are committed with everything
-else this branch carries.
+the download links are built from. It **commits nothing**.
+
+⛔ **EVERY `### Added` AND `### Changed` ITEM HAS A PAGE THAT DESCRIBES IT.** The tag deploys maxon.dev, and
+a feature the changelog announces but no page explains sends its reader nowhere. For each item, find the
+section of the `docs/` source that describes the shipped behaviour (`website/MAINTAINING.md`'s map says
+which); a missing or false one is written on this branch and synced with
+`node website/scripts/sync-docs.mjs`.
+
+Then commit everything the branch carries — the changelog entry, the website material, any page:
+
+```bash
+git add -A && git commit -m 'changelog: X.Y.Z'
+```
 
 ## 3b · Preflight — the checks the tag would otherwise apply
 
@@ -73,22 +86,16 @@ else this branch carries.
 scripts/release-preflight.sh X.Y.Z
 ```
 
-⛔ **RUN IT, AND RUN IT AFTER THE REBUILD.** Every check here also runs at the tag, where a failure
-costs a re-tag or a release whose links 404. It reads the worktree, the copied docs, the extension
-gate, the changelog entry, shellcheck, CI at this commit, and the built binary's version.
+⛔ **RUN IT, AND RUN IT AFTER THE REBUILD AND THE COMMIT.** Every check here also runs at the tag, where a
+failure costs a re-tag or a release whose links 404. It reads the worktree (`worktree-clean` fails on
+anything uncommitted), the copied docs, the extension gate, the changelog entry, shellcheck, CI at this
+commit, and the built binary's version. A fix made after it is committed and the preflight run again.
 
 ⚠ **SKIPPED IS NOT PASSED.** The summary names every skip; read them rather than the exit code alone.
-
-⛔ **EVERY `### Added` AND `### Changed` ITEM HAS A PAGE THAT DESCRIBES IT.** The tag deploys maxon.dev, and
-a feature the changelog announces but no page explains sends its reader nowhere. For each item, find the
-section of the `docs/` source that describes the shipped behaviour (`website/MAINTAINING.md`'s map says
-which); a missing or false one is written on this branch, synced with `node website/scripts/sync-docs.mjs`,
-and committed before the tag.
 
 ## 4 · Tag
 
 ```bash
-git add -A && git commit -m 'changelog: X.Y.Z'
 git tag -a vX.Y.Z -m 'Maxon vX.Y.Z'
 git push origin release/X.Y.Z vX.Y.Z
 ```
@@ -107,7 +114,8 @@ fires no `release: published`. `install-script` green is what says both one-line
 install the new release.
 
 **Report what actually happened**, per job, and read the deploy step's log rather than its exit code:
-a missing credential SKIPS with a notice and still reports success.
+on a missing credential the maxon.dev deploy SKIPS with a notice and the Homebrew tap with a warning,
+and both still report success. (The VS Code extension fails loudly on one instead.)
 
 **Then verify what actually shipped**, which is not the same question as whether the jobs are green:
 

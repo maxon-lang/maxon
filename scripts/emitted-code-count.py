@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """emitted-code-count.py - count the compiler's emitted-code defects on a fixed corpus.
 
-The companion instrument to scripts/self-host-ab.sh, and a different question.
-self-host-ab.sh asks "how fast is the code the compiler emits" and takes ~15 minutes;
-this asks "how much of what it emits is known debris" and takes ~10 seconds, so
-it can be run after every edit rather than once per rung.
+A timed A/B (scripts/bench-fannkuch.py) asks "how fast is the code the compiler emits"
+and takes minutes; this asks "how much of what it emits is known debris" and takes
+~10 seconds, so it can be run after every edit.
 
 ⚠⚠ THE UNIT CHANGED ON 2026-08-29 AND NUMBERS DO NOT COMPARE ACROSS IT.
 Upstream's "a fragment renders the PROGRAM, and the LIBRARY is not the program"

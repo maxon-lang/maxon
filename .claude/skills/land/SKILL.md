@@ -56,7 +56,7 @@ that answers wrong, a feature however large. There is no heavier sibling to esca
 >
 > **Three things go wrong, and the first is the one that made this process worth writing:**
 > - **The battery multiplies.** §8 is the expensive part and it runs ONCE precisely because the change
->   is one chunk. Four slices is four rebases, four full suites, four wasm lanes, four ~3-minute
+>   is one chunk. Four slices is four rebases, four full suites, four wasm lanes, four
 >   self-compiles and four reviews — **four times the gate cost**, for the same code.
 > - **`main` carries half a mechanism between slices**, and the next agent builds on it. An `export`
 >   without its consumer is an E3092 that breaks the self-compile; a diagnostic no case reaches is dead
@@ -91,7 +91,8 @@ gates and the commit.** Agents do the reading and the typing.
 | **8** | THE BATTERY, once: full suite · wasm lane · **self-compile** | **you** | **stop** |
 | **9** | Commit and push | **you** | a rejected push re-runs §8 |
 
-**Everything before §8 runs on one `--filter`.** That is what makes this lightweight — and it is only
+**Everything before §8 runs on `--filter`ed specs** — one filter when the set's names share a substring,
+one per spec file otherwise. That is what makes this lightweight — and it is only
 honest because §1's red was real. The filter is a *proxy* for the suite, and a proxy you never saw fail
 is a proxy for nothing.
 
@@ -150,8 +151,13 @@ feeding a gate that is going to run anyway beats a run nobody can attribute.
 >   it: `find maxon-bin -name '*.maxon' -newer maxon-bin/.maxon/maxon.exe | head -1` (`maxon` off
 >   Windows) prints nothing when it is current, and a missing binary is stale. ⛔ **Never build "to be
 >   safe"**: `spec-test` and `scale-test` refuse a stale binary by themselves
->   (`Testing/CompilerFreshness.maxon`), and a `stdlib/` edit needs no build at all — the suite
->   compiles the stdlib from source.
+>   (`Testing/CompilerFreshness.maxon`). A `stdlib/` or `runtime/` edit needs no build for the SUITE,
+>   which compiles both from source — but the compiler's own driver commands (`fmt`, `test`, the LSP)
+>   carry the stdlib they were built with, so a change the tree corpora exercise does need one.
+> - **The one second build that is not a repeat: emitted runtime.** A change to `Compiler/Runtime/` or
+>   `Compiler/Targets/*/*Runtime*.maxon` takes TWO self-compiles before the compiler itself — which is
+>   also the spec harness — runs the new runtime. Ask `scripts/self-compiles-needed.sh` before you
+>   build; it prints `once` or `twice`.
 > - **A run already done on the same binary and tree is READ, not repeated.** Agents write every build
 >   and run to a file under `temp/` and report its path and exit code; you read that file. Re-run only
 >   when something it depended on has changed since.
@@ -219,9 +225,11 @@ cheapest moment to ask.
   another. (Goldens the suite touches along the way are not a concern — §8.)
 - **BUILD — IF, AND ONLY IF, THE BINARY IS STALE** (the check in the box under the gate table). The
   compiler binary is gitignored and nothing rebuilds it, so a stale one lies in *both* directions.
-  `build` compiles `maxon-bin/` with the compiler already in the slot and renames the result into
-  place, falling back to a released binary at `.bootstrap/maxon` when the slot is empty. A current
-  binary is already what every red in §1 is read off: rebuilding it is minutes spent to learn nothing.
+  `./maxon-bin/.maxon/maxon run build` at the repo root (or MCP `build` with `path: "maxon-bin"`)
+  compiles `maxon-bin/` with the compiler already in the slot and renames the result into place. An
+  EMPTY slot is refused, not seeded: fetch the seed with `scripts/fetch-seed.sh` and build with it as
+  `maxon-bin/CLAUDE.md` says. A current binary is already what every red in §1 is read off: rebuilding
+  it is minutes spent to learn nothing.
 - **No baseline suite run.** The §8 gate is `failed: 0`, not a delta from a remembered total, so there is
   nothing to measure yet. (When §8 comes back red you therefore may not assume the red is yours — §8 says
   how to attribute it.)
@@ -242,8 +250,8 @@ large, that is the set telling you the size of the work, and the answer is §2, 
 **Send a read-only survey agent first** (`Explore`). It reads; it does not run probes — what the
 compiler does today is what §1's red run of the chosen cases shows.
 Ask it for **FACTS, not a recommendation**: which `specs` files own this behaviour, every existing
-case that touches it with file + line, every `disabled-test:` in range, whether `/specs` pins it and the
-**verbatim text** of the case that does, and what the neighbouring cases in that file look like.
+case that touches it with file + line and the **verbatim text** of any that already pins it, every
+`disabled-test:` in range, and what the neighbouring cases in that file look like.
 
 **Then YOU pick the set** — from its facts, against the criterion above. That decision never moves.
 
@@ -260,13 +268,6 @@ That is a cost call, not a rule.)*
    **enable**: those markers are DEBT, not precedent.
 2. **A new case in the `specs/*.md` file that already owns the behaviour.** Format:
    `docs/SPECS.md`. Follow the neighbouring cases' shape.
-3. **A case lifted from an unported `/specs` file** — copy it VERBATIM (program, `exitcode`, `stdout`,
-   `maxoncstderr`, name), never paraphrased and never renamed. A real compiler passed those cases
-   unedited, so a copied case is a claim someone already satisfied; a case you reworded is a claim you
-   made up. ⚠ **Do not port the rest of that file here** — take the cases your change needs and leave
-   the others where they are. That is a queue position, not a decision, and it needs no note anywhere.
-
-⛔ **Cases go in `specs/`.**
 
 **A user-visible change also names its documentation gate — but not as a red-first case.** When it adds a
 command, option, MCP tool or `public` stdlib API, the doc-coverage gate that owns the surface
@@ -297,9 +298,12 @@ run_spec_test filter=<pattern>
 > grep -c '<!-- disabled-test:' specs/<file>.md   # cases you did not enable — you may write none
 > grep -o '<!-- \(disabled-\)\?test: [^ ]*' specs/<file>.md | sed 's/.*test: //' | sort | uniq -d
 > ```
-> 1. **A shortfall against the runner's total is a defect in the spec, never a pass.** The two causes are
->    `status: draft` in the frontmatter (returns ZERO tests for the whole file) and a `## ` heading, which
->    **ENDS the active-test region** — every case below a stray `## Notes` silently disappears.
+> 1. **A shortfall against the runner's total is a defect in the spec, never a pass** — once you have
+>    subtracted the cases an `<!-- unsupported-targets: -->` marker excludes on the lane you ran, and
+>    added any other spec file your filter substring also selects. The causes: `status: draft` in the
+>    frontmatter (ZERO tests for the whole file), no `## Tests` heading, a case written above
+>    `## Tests`, or a case below `## Deferred` — the one heading that **ENDS the active-test region**
+>    (`SpecParser.RegionEndHeadings`). Any other `## ` heading is walked over.
 > 2. **The `uniq -d` must print nothing** — a name spelled both `test:` and `disabled-test:` reads as
 >    disabled while it still runs.
 > 3. ⛔ **You may not write a `disabled-test:`.** A case you cannot make pass is a HALT, not a marker.
@@ -326,10 +330,10 @@ deliverable stays one chunk and one commit.)*
 - **They work in the MAIN checkout, so the `maxon` MCP tools need no `repoRoot`** — and they do not
   commit, do not `git add`, do not push, and leave every golden the runs touch exactly as it lies —
   golden drift is not theirs to measure, investigate or worry about. You commit everything, once, at §9.
-- ⛔ **`/specs/**` is READ-ONLY — not one byte.** It is the canonical definition of the language; an edit
-  there does not adjust a test, it redefines Maxon. Cases go in `specs/`,
-  and a fix that would falsify another spec's committed expectation is a STOP-and-report, never an edit
-  to that spec.
+- ⛔ **`specs/` is READ-ONLY to an implementer — not one byte.** It is the canonical definition of the
+  language; an edit to an existing case does not adjust a test, it redefines Maxon. §1's author is the
+  one writer of cases, and a fix that would falsify another spec's committed expectation is a
+  STOP-and-report, never an edit to that spec.
 - **Root causes, no workarounds** — and a defect is fixed whether or not it predates you (CLAUDE.md).
 - **Cross-target consistency**: an x64 change needs its arm64 equivalent. The wasm lane runs in §8 and
   is not scalar-only — a float or `String` case failing there is a bug on that lane.
@@ -345,9 +349,9 @@ deliverable stays one chunk and one commit.)*
   caught only by `website/scripts/sync-docs.mjs`, which §8's documentation row runs. Never write a bare
   `"E3010"` in source — a diagnostic names `ErrorCode.<case>`.
   ⛔ **`docs/error-codes.txt` and `maxon error-codes generate` DO NOT EXIST** — no such file was ever
-  tracked in git and `MaxonCommand` has no such case. Stale citations of both survive in
-  `GlobalInitOrder.maxon`, `Lsp/LspDiagnostics.maxon`, `Parser.maxon`, `Queries.maxon`,
-  `Runtime/RuntimeAbort.maxon` and six files under `specs/`. Follow the enum, not them.
+  tracked in git and `MaxonCommand` has no such case. Stale citations of both survive —
+  `git grep -E 'docs/error-codes\.txt|error-codes (generate|check)'` lists them. Follow the enum, not
+  them.
 - **A mechanism that does not exist yet gets BUILT** — a builtin, a runtime slice, an opcode on every
   target. Size is never a reason to stop; see the two boxes at the top of this file.
 - **Documentation is §6's, not theirs** — the `docs/` source, the site regeneration and the doc-coverage
@@ -415,8 +419,9 @@ situation:
 - **Say this is a `/land` change** — the diff is uncommitted in the main checkout, there is no worktree
   and no branch, and the battery is YOURS, minutes later. The skill's steps 6–7 (gates, commit) are
   standalone-only and it must skip them.
-- **There is no backlog file**, so anything it leaves for triage arrives in its REPORT and you decide it
-  here.
+- **Anything it leaves for triage arrives in its REPORT, and you decide it here**: a defect this change
+  owns is fixed now; a real finding outside it is appended to `todo.md` (a `- ` bullet naming the defect,
+  its file:line and how it was seen) and committed with the change.
 - ⛔ **COMMENTS ARE NOT ITS CONCERN** — the tree it reads has none by design and §6 writes them all,
   minutes later. Do not brief one in: this file's own warning applies, and a specific instruction in
   your brief outranks the skill's rules.
@@ -487,12 +492,12 @@ during changes; a battery run before the rebase measured a tree that no longer e
 
 | Gate | |
 |---|---|
-| **Build** exit 0 | **Only if stale** — §6 built last, so this is stale only if the rebase moved a compiled-in source. A current binary is not rebuilt: the SELF-COMPILE below is the one build of it the battery runs |
+| **Build** exit 0 | **Only if stale** — §6 built last, so this is stale only if the rebase moved a compiled-in source. A current binary is not rebuilt: the SELF-COMPILE below is the one build of it the battery runs. The exception is emitted runtime: when `scripts/self-compiles-needed.sh` says `twice` and the slot was built only once since the change, build it again now, before the suite rows |
 | **Full `run_spec_test`** | **`failed: 0`**, and no exit **101**. The gate is zero failures *including every pre-existing test*, never a total |
 | **`run_spec_test target=wasm32-wasi`** | `failed: 0`. Default battery, not an extra (user ruling, 2026-08-29) |
-| **SELF-COMPILE** — `maxon-bin/.maxon/maxon.exe build maxon-bin --output=temp/land-selfcompile` | exit 0, ~5 min. Output discarded; only the exit code matters. The tree binary is stage-2, so this is its stage-3 build and it is slower than the seed's |
-| **The tree corpora** — `maxon test tests/fmt`, `maxon test tests/spec-harness --timeout=15000`, `maxon test tests/ladders` | each `0 fail`, and read each count. These are the formatter's engine corpus, the spec harness's own refusals and gates, and the ladder index — tree-level gates `spec-test` does not run. CI runs the same three on every lane |
-| **Documentation** — `node website/scripts/sync-docs.mjs --check` | exit 0 — §6 regenerated the pages but ran no check, so this is where they are gated. And for a user-visible change, each doc-coverage gate its surface owns (`maxon test tests/cli --filter=reference-documents`, `tests/mcp --filter=reference-documents`, `tests/docs`): `0 fail`. A change with nothing user-visible states that instead. ⚠ A red here after a new diagnostic means §6 did not write the registry doc comment |
+| **SELF-COMPILE** — `./maxon-bin/.maxon/maxon build maxon-bin --output=temp/land-selfcompile` | exit 0, about a minute. Output discarded; only the exit code matters |
+| **The tree corpora** — `./maxon-bin/.maxon/maxon test` on `tests/fmt`, `tests/spec-harness --timeout=15000` and `tests/ladders` | each `0 fail`, and read each count. These are the formatter's engine corpus, the spec harness's own refusals and gates, and the ladder index — tree-level gates `spec-test` does not run. CI runs the same three on every lane |
+| **Documentation** — `node website/scripts/sync-docs.mjs --check` | exit 0 — §6 regenerated the pages but ran no check, so this is where they are gated. And for a user-visible change, each doc-coverage gate its surface owns (`./maxon-bin/.maxon/maxon test tests/cli --filter=reference-documents`, `tests/mcp --filter=reference-documents`, `tests/docs`): `0 fail`. A change with nothing user-visible states that instead. ⚠ A red here after a new diagnostic means §6 did not write the registry doc comment |
 | **Golden drift staged, as it is** | `git add -A specs/` — whatever the runs minted, modified or deleted, with no further thought. See the box below |
 | **§1's count check** on the final tree | markers == ran, none disabled, no name spelled twice |
 
@@ -501,15 +506,17 @@ during changes; a battery run before the rebase measured a tree that no longer e
 > only program that names every `export` in `maxon-bin/Compiler/` is the compiler itself. **A three-line
 > commit once broke stage-2 with the suite at 6673/0.**
 > Run it after any change that adds or removes an `export` or a `module`, or adds a file declaring
-> TYPES; run it anyway, it is three minutes. An E3092 here is a declaration more visible than its uses:
+> TYPES; run it anyway, it is a minute. An E3092 here is a declaration more visible than its uses:
 > narrow it, or land it *with* its first consumer.
 
 > ### ⭐ GOLDEN DRIFT IS NOT A CONCERN. COMMIT IT AND MOVE ON.
 > A run MINTS a golden a case has none of, on the host where the case passed, and never rewrites one that
 > exists: a golden whose bytes differ is REPORTED as drift, not rewritten, and only `--update-required
-> --filter=<spec>` rewrites it. Re-mint the specs whose runtime bodies your change moved, on every lane
-> you can run, and mint the arm64 lanes on the Mac (CI fails a lane that leaves untracked goldens and
-> uploads them as an artifact to unpack at the repository root). Whatever the runs minted or rewrote — by
+> --filter=<spec>` rewrites it. Re-mint the specs whose runtime bodies your change moved on every lane
+> you can host — x64-windows here, x64-linux under WSL (the `compiler-workflow` skill), arm64-macos on
+> the Mac. arm64-linux has no local host: CI fails that lane while it leaves untracked goldens and
+> uploads them as `minted-fragments-arm64-linux`, to unpack at the repository root and commit — name it
+> in §9's report as a lane CI still owes. Whatever the runs minted or rewrote — by
 > your change or anyone else's — goes into the commit with `git add -A specs/`, and that is the whole of
 > it. **Do not measure it, investigate it, attribute it, explain it or review it**, and do not mention it
 > in the message. Never revert it: a `git checkout --` to tidy `git status` is the one wrong thing to do
@@ -520,13 +527,14 @@ before yours (CLAUDE.md). To attribute it: do the failures touch what you change
 cases alone, by filter** — never the whole suite for them. If that still does not settle it, **measure
 the control** on that same filter — `git stash -u`, re-run, `git stash pop`. ⚠ **A lane that
 did not RUN is not a red gate** (remote arm64 is outside this battery): that is a SKIP you report, never
-folded into the green — and §9's CI watch is where every lane you skipped is answered.
+folded into the green — CI answers it after the push, and §9's report names it.
 
 ## 9. Commit and push
 
 **ONE commit, on `main`** — this repo develops there; do not branch. The whole change lands together:
 the compiler source, the spec cases, **the documentation and the site pages it regenerates**, **every
-golden the runs touched — minted, modified or deleted** — and any `optimization-log.md` row.
+golden the runs touched — minted, modified or deleted** — any `optimization-log.md` row, and any
+`todo.md` bullet §5 filed.
 ⛔ **Not a commit per piece, and never a partial landing with the rest "to follow"** — the battery you just ran was run on the whole tree, so the whole tree is what it
 licensed you to push.
 
@@ -541,29 +549,24 @@ git push origin main
 ⛔ **A REJECTED PUSH IS NOT A RETRY.** Someone landed while you were running, so the tree you tested is
 not the tree you would push: **rebase and RE-RUN §8** before pushing again.
 
-> ### ⭐ THE PUSH IS NOT THE END OF THE GATE — WATCH CI SETTLE
-> ```bash
-> gh run watch "$(gh run list --limit 1 --json databaseId --jq '.[0].databaseId')"
-> ```
-> **CI hosts every target on its own architecture and runs the two-stage seed build, and your battery
-> runs neither.** `--target=` cross-compiles the PROGRAMS while the compiler stays a host process, so a
-> defect that only appears when the compiler itself runs on that platform is invisible to you and
-> certain on CI (CLAUDE.md's Targets box carries the measurement). ⛔ **Do not report the rung done
-> until all four lanes are green.** A red `main` is inherited by whoever lands next, and by then the
-> break is no longer attributable to the commit that caused it.
->
-> A red lane is yours to fix whether or not you caused it (CLAUDE.md), in its own commit — and reproduce
-> it on that platform's own host, never on the cross lane that missed it.
+> ### ⛔ DO NOT WAIT FOR CI (user ruling)
+> **The push ends the change.** Do not watch, poll or schedule a check on the CI run; report and stop.
+> CI hosts the four native targets on their own architecture, runs the two-stage seed build and
+> `scripts/fixpoint.sh`, none of which your battery does, so a lane can still go red after you have
+> reported — that is why the report names every lane your battery did not run. (wasm32-wasi is the
+> reverse: only your battery runs it.) When a red lane is reported to you, it is yours to fix whether or not
+> you caused it (CLAUDE.md), in its own commit, reproduced on that platform's own host — never on the
+> cross lane that missed it.
 
 Then report in a few lines: the change, the cases that went red → green, each gate's number, and
-anything skipped with the reason.
+anything skipped with the reason — including the lanes only CI runs.
 
 ## ⛔ HALT AND ASK
 
 Everything above runs unattended. Stop and report, without landing, when:
 
 - **A gate is red and the fix is not yours to make.**
-- **A DESIGN RULING is needed** — the specs and the compiler disagree about what is *correct*, or `/specs`
+- **A DESIGN RULING is needed** — the specs and the compiler disagree about what is *correct*, or `specs/`
   contradicts itself. **Do not guess, and never edit a spec to match the compiler**: that is how a
   compiler bug becomes a specification.
 - **A case would have to be disabled**, or **an existing `specs` expectation rewritten**. The first
@@ -571,10 +574,10 @@ Everything above runs unattended. Stop and report, without landing, when:
   change and belongs to whoever owns that behaviour.
 
 **Each of those is a QUESTION, answered in place — never a reroute.** You stop, report, and wait; you do
-not start a rung, open a worktree, or hand the work to another process. When the answer comes you carry
+not open a worktree, or hand the work to another process. When the answer comes you carry
 on from where you stopped, in this file.
 
-⚠ **NOT on that list, ever:** "this is big"; "this deserves a rung"; "I could not find the gap" (that is
+⚠ **NOT on that list, ever:** "this is big"; "I could not find the gap" (that is
 diagnosis you have not finished); "a contract would be cleaner"; **"I will land this part now and the
 rest after"** — there is no partial landing, and no slice. **The only honest stop is a question the user
 has to answer.**

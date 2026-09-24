@@ -31,19 +31,19 @@ CLAUDE.md is explicit that you do not care whether an issue predates the change.
 
 > ### ⛔ IF ANOTHER PROCESS DISPATCHED YOU, DO NOT RUN THE FULL SUITE AND DO NOT COMMIT.
 >
-> `/land` §5 and any caller that owns its own gates will run the full unfiltered suite **on the
-> identical tree, minutes later**, and commit everything as one commit. A full run here is not extra
+> `/land` dispatches you at its §5 and runs its battery at §8 — like any caller that owns its own gates,
+> it runs the full unfiltered suite **on the identical tree, minutes later**, and commits everything as
+> one commit. A full run here is not extra
 > assurance — it is the same run twice, and it is the single largest piece of duplicated work these
 > processes have ever paid for. **Your `--filter`ed runs are yours; the battery is the caller's, once,
 > after you.** If a refactor you make spans files, **say so in your report** — the caller's battery is
 > where a broken caller three files away surfaces, and it is already going to run.
 
-**Invoked standalone**, steps 6–8 below are yours: the gates and the commit. Skip them when you were
+**Invoked standalone**, steps 6–7 below are yours: the gates and the commit. Skip them when you were
 dispatched.
 
-Prefer the `maxon` MCP tools for build/test/format (see CLAUDE.md for the mapping). ⚠ **In a
-worktree, pass `repoRoot`** — the absolute path of your worktree root — to every tool call, or you drive
-the main checkout and get a green about a tree containing none of the work.
+Prefer the `maxon` MCP tools for build/test/format — `maxon-bin/CLAUDE.md` has the task→tool table. You
+work in the main checkout, so no tool needs `repoRoot`.
 
 Create a task list to perform these steps.
 
@@ -97,7 +97,9 @@ it to every changed file, do not restate it.** The three that get missed:
   by READING. Never ask for it to be RUN**: the arm64 lanes are remote and are not in the battery, so
   "unverified on arm64" is never a review finding and never blocks the change.
 
-**DOCUMENTATION IS A FINDING, NOT A SUGGESTION** (`.claude/CLAUDE.md`'s Documentation section):
+**DOCUMENTATION IS A FINDING, NOT A SUGGESTION** (`.claude/CLAUDE.md`'s Documentation section). ⚠ When
+`/land` dispatched you, its §6 documenter writes the docs AFTER you, so the diff you read has none yet:
+name what the change owes in your report for §6 rather than writing it. Standalone, these are yours:
 
 - **A user-visible change with no update to its `docs/` source** — per `website/MAINTAINING.md`'s
   "what changed → which source" map — is a finding, fixed before the commit.
@@ -108,8 +110,9 @@ it to every changed file, do not restate it.** The three that get missed:
 
 ## 6. Rebuild and re-run the gates — STANDALONE ONLY
 
-- **Build:** `mcp__maxon__build`.
-- **Suite:** `mcp__maxon__run_spec_test` — all green.
+- **The battery:** every row of `/land` §8's table — build if stale (twice when
+  `scripts/self-compiles-needed.sh` says so), the full suite, the wasm lane, the self-compile, the tree
+  corpora and the documentation gates. It is one battery, kept in one place.
 - **Scaling:** `mcp__maxon__run_scale_test` if the change touched a pass, the IR, or a data
   structure the compiler indexes by. ⚠ **It is an INSTRUMENT with no verdict — there is no green one,
   and you never touch it to make a number look better.** Read the doubling ladder straight off the
@@ -142,7 +145,8 @@ message.
 - If you find something real but genuinely OUTSIDE this change — a **compiler bug this change does
   not own**, a **distinct feature**, or a **measured-linear perf debt** — **say so and leave
   it for your caller to triage**, rather than smuggling it in OR deferring it on your own authority.
-  There is no backlog file, so it goes in your REPORT and the caller decides. ⚠ **"Too big to ride
+  It goes in your REPORT and the caller files it in `todo.md`; standalone, append it to `todo.md`
+  yourself — a `- ` bullet naming the defect, its file:line and how it was seen. ⚠ **"Too big to ride
   along" is NOT the same as "a wrong answer in the files I just reviewed"** — that one you fix, exactly
   like a leak. Do not let this bullet become an escape hatch for a defect the change owns.
 

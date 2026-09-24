@@ -30,18 +30,20 @@ exactly as it lies, for whoever commits to commit as it is. Do not measure, inve
 
 ## The mandate — UNSCALABLE ALGORITHMS (user directive)
 
-**Hunt for anything superlinear.** The compiler must stay **LINEAR** in program size; the whole budget
-(≤30 s / ≤1.7 GB on self-compile) depends on it. Look for:
+**Hunt for anything superlinear.** The compiler must stay **LINEAR** in program size, and a change that
+slows the self-compile by more than 5% is a HALT for the user's ruling. `docs/optimization-log.md` holds
+the current figures. Look for:
 
 - **Nested scans** over compiler-sized collections (`ops`, values, blocks, symbols) — an O(n) lookup
   inside an O(n) walk is the classic, and this project has shipped it more than once.
 - **Linear lookups that want a hash/index** — `findFirst` over an array in a loop.
 - **Repeated rebuilds** — recomputing a fixpoint, liveness, or a dominator tree per element instead of
-  once. (The register allocator's splitter recomputes liveness after every split.)
+  once. (The register allocator builds liveness once per function and repairs it incrementally after
+  each split, `refreshAfterSplit`; a rebuild per split is the shape to catch.)
 - **Iterating a dense index space when you should walk set BITS** — `0 upto valueCount` instead of the
   live-set's set bits. Making exactly this change is what turned the compiler's allocator linear.
 - **Allocation in a hot path**, especially anything that allocates into the very `mm` stream being
-  traced. (`contentHash()` allocates. `String.hash` walks the bytes in place.)
+  traced. (Hashing through a `toByteArray()` copy allocates; `String.hash` walks the bytes in place.)
 
 **Scope the hunt to the change.** A new pass, a new IR op, or a new collection the compiler indexes by
 earns the full hunt above. A change that added none of those gives the hunt structurally nothing to
@@ -55,28 +57,28 @@ micro-optimize to look busy.
 **No verdict. No goldens. No gate. Nothing to pass.** This is easy to get backwards, and getting it
 backwards makes you optimize the instrument instead of the compiler.
 
-**`.claude/CLAUDE.md` carries the short form; this is the full reading guide.**
+**The `compiler-workflow` skill carries the short form; this is the full reading guide.**
 
 - **Do NOT chase a green scale-test. There isn't one.** A curve that looks wrong is a **reading to
   explain**, not a light to turn green.
 - **NEVER touch the instrument to make a number look better.** The right response to a curve that bends
-  is to say WHY it bends. (`regalloc:liveness` bills two call sites into one bucket: one per function,
-  linear; one after every split, superlinear. It is a *sum of two exponents*, so it bends on a perfectly
-  idle machine.) Write it down; do not launder it.
+  is to say WHY it bends — a bucket that bills two call sites of different growth is a *sum of two
+  exponents*, and bends on a perfectly idle machine. Write it down; do not launder it.
 - **The per-rung MEMORY numbers are EXACT and bit-for-bit reproducible** — load cannot move them. A
   change in allocations/frees/bytes for the same input is **real, every time**, and is the single most
-  informative thing in your report. It has already caught `traceUnitOf` calling `contentHash()` (which
-  *allocates*, into the very `mm` stream it was added to trace), and a fix whose first cut cost +4
-  allocations/function because a field store boxed a union. **Explain any movement. Attribute it.**
-- ⚠ **A/B-ing two binaries' CPU needs `--repeat=3`** (the default is 1); a single sample's per-phase
-  ratios wobble up to ±0.5 run to run. And **an A/B must be INTERLEAVED** — a stable sign can come from
-  the schedule alone.
+  informative thing in your report. It has caught a trace hook that *allocated* into the very `mm`
+  stream it was added to trace, and a field store that boxed a union at +4 allocations per function.
+  **Explain any movement. Attribute it.**
+- ⚠ **An A/B of two binaries' CPU needs several samples per arm**, since a single sample's per-phase
+  ratios wobble up to ±0.5 run to run — but **`--repeat=N` for N≥2 fails as a BROKEN RUN** (the defect
+  below), so take them as separate single-repeat processes, which agree bit for bit on memory, and read
+  the minimum yourself. And **an A/B must be INTERLEAVED** — a stable sign can come from the schedule
+  alone.
 - **The CPU unit is platform-defined and the platforms do not agree** (TSC ticks on Windows,
   nanoseconds on macOS) and there is **no honest conversion** — `QueryPerformanceFrequency` is the
   *performance counter's* rate, not the TSC's. ⇒ **Compare RATIOS between rungs, which are unit-free;
   compare absolutes only within one platform.** ⚠ `DefaultRepeatCount` is **1**, so a logged CPU row is
-  a single sample; rows logged before 2026-07-28 are minima instead (~+9–10% apart at rung 5) — do not
-  read that step as a regression.
+  a single sample.
 - **There is no WALL time, deliberately.** It counts every other process on the box, so a dated table of
   it would compare a loaded machine against an idle one. (Measured: allocation deltas read 0.000 on an
   unchanged compiler while time deltas read +0.09…+0.29, and one run read `phase:parse` at ×5.03 then
@@ -118,18 +120,19 @@ it is answered by four instruments, none of which is a single command:
   bootstrap's `.symtab` placement and this compiler's `.text`-closing one. ⚠ Windows x64 only. It takes
   the command to profile as its trailing arguments; it is not a flag of anything.
 
-⛔ **THERE IS NO TWO-COMPILER A/B HARNESS, AND NO `scripts/self-host-ab.sh`** — that path has never been
-tracked in git, and neither has any predecessor. The per-phase ratio table it was described as printing
-(stage-1 and stage-2 `scale-test`ed interleaved, so any allocation ratio above 1.00 is a construct this
-tree's codegen allocates for and the seed's does not) is a real and useful measurement that **nothing in
-the tree performs**. Building one is blocked on a separate defect: `scale-test --repeat=N` for N>=2
-reports the compiler nondeterministic, and the REPEAT is what is nondeterministic — state carried from
-one compile to the next inside one process, +4 allocs and +4,453 bytes per rung, reproduced on
-origin HEAD as well as locally. Fix that first or the ratio table cannot be trusted.
+⛔ **THERE IS NO TWO-COMPILER `scale-test` RATIO TABLE, AND NO `scripts/self-host-ab.sh`** — that path
+has never been tracked in git. The per-phase ratio table it was described as printing (stage-1 and
+stage-2 `scale-test`ed interleaved, so any allocation ratio above 1.00 is a construct this tree's codegen
+allocates for and the seed's does not) is a real and useful measurement that **nothing in the tree
+performs**. Building one is blocked on a separate defect, filed in `todo.md`: `scale-test --repeat=N`
+for N≥2 reports the compiler nondeterministic, and the REPEAT is what is nondeterministic — state carried
+from one compile to the next inside one process. Fix that first or the ratio table cannot be trusted.
 
-⚠ **A control compiler is still available** where the question is runtime speed rather than emitted
-bytes: `bench/fannkuch/out/ref-<sha>/tree/` holds complete checkouts at prior commits, which the
-`fannkuch-iterate` skill builds and runs against. It measures ONE benchmark's wall time, not code size.
+⚠ **The one two-compiler harness is `scripts/bench-fannkuch.py`**, which the `fannkuch-iterate` skill
+drives. Against `--ref <sha>` it reports, per arm, fannkuch's wall time, the executable's bytes, the
+emitted-code census and (`--self-compile`) the self-compile time. Each ref is a git worktree under
+`bench/fannkuch/out/ref-<sha>/tree/`, built by ONE seed build — a C1 carrying the seed's runtime, not a
+like-for-like control until it is rebuilt with itself.
 
 ⚠ **Measure on an IDLE machine, and measure the instrument before the subject.** This project has had a
 dominant cost hide in the *wrong timing bucket* four separate times. Load can MASK a bug, not just
@@ -147,13 +150,13 @@ making it. **Write no row you did not measure.**
 - **Do not micro-optimize.** Constant factors are not the mandate; growth curves are. A tidy O(n) beats
   a clever O(n).
 - **A superlinearity you can TRIGGER on a realistic input is FIXED, not filed.** Only a term you have
-  **measured** linear-in-practice across the real corpus (like `SplitLiveRanges`' K², max K = 8) is filed
-  as debt — reported to your caller, and to `docs/optimization-log.md`, WITH the measurement that shows
-  it linear today and the trigger that would make it bend (an inliner, a machine-generated wide type). A
-  curve you have not measured is not yet a debt; it is a defect to run down. **There is no backlog
-  file**, so a debt you cannot fix goes in your REPORT and in the trend log, and the caller decides.
+  **measured** linear-in-practice across the real corpus is filed as debt — WITH the measurement that
+  shows it linear today and the trigger that would make it bend (an inliner, a machine-generated wide
+  type). A curve you have not measured is not yet a debt; it is a defect to run down. A debt goes in
+  your REPORT and in `docs/optimization-log.md`, and your caller files it in `todo.md` (standalone, you
+  append the `- ` bullet yourself).
 - **Check exit codes; never grep for a success string.** Exit **101** = memory leak.
-- ⚠ Redirecting suite runs by hand, `--workers=1` and `fmt`'s path argument are in `.claude/CLAUDE.md`,
+- ⚠ Redirecting suite runs by hand, `--workers=1` and `fmt`'s path argument are in `maxon-bin/CLAUDE.md`,
   once — not repeated here.
 
 ## Report
