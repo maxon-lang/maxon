@@ -1,169 +1,690 @@
-/// Internal helpers for HTTP request building and response parsing.
+/// Internal helpers that build and parse HTTP/1.1 messages for `HttpClient` and `HttpServer`.
 /// @category Internal
+typealias HeaderLineIndex = int(0 to u64.max)
+typealias IgnoredLineTally = int(0 to 4)
+typealias StatusNumber = int(i64.min to i64.max)
+
+public let HttpContentTypeHeaderName = "content-type"
+public let HttpReadChunkBytes = 8192
+public let HttpLineBreak = "\r\n"
+public let HttpLargestBodyBytes = 1099511627776 as BytePos
+let MaxIgnoredLeadingEmptyLines = 4 as IgnoredLineTally
+let FirstInterimStatus = 100 as StatusNumber
+let SwitchingProtocolsStatus = 101 as StatusNumber
+let LastInterimStatus = 199 as StatusNumber
+let ChunkedCoding = "chunked"
+let CodingListSeparator = ","
+
+let HeaderNameTerminator = ":"
+let HeaderNameValueSeparator = ": "
+let StartLineSeparator = " "
+let HeadBlockTerminator = "\r\n\r\n"
+let HostHeaderName = "host"
+let ConnectionHeaderName = "connection"
+let ContentLengthHeaderName = "content-length"
+let TransferEncodingHeaderName = "transfer-encoding"
+let SetCookieHeaderName = "set-cookie"
+let SentHostName = "Host"
+let SentConnectionName = "Connection"
+let SentContentLengthName = "Content-Length"
+let ClosingConnection = "close"
+let RepeatedListSeparator = ", "
+let RepeatedLineSeparator = "\n"
+let ObsFoldReplacement = " "
+let DefaultHttpPort = 80
+let HttpScheme = "http"
+let HttpVersionPrefix = "HTTP/"
+let HttpSentVersion = "HTTP/1.1"
+let HttpVersionBytes = 8
+let HttpVersionMajorAt = 5
+let HttpVersionDotAt = 6
+let HttpVersionMinorAt = 7
+let HttpVersionDot = 46 as Byte
+let SupportedHttpMajor = 49 as Byte
+let HostlessHttpMinor = 48 as Byte
+let RequestLineParts = 3
+let AsteriskForm = "*"
+let TokenMarkBytes = "!#$%&'*+-.^_`|~"
+let FieldWhitespaceBytes = " \t"
+let HorizontalTab = 9 as Byte
+let FirstPrintableByte = 32 as Byte
+let DeleteByte = 127 as Byte
+
+enum HeaderBlockFault implements Error
+	malformed
+end 'HeaderBlockFault'
+
+enum HttpMessageSide
+	request
+	response
+end 'HttpMessageSide'
+
+enum HeaderRepeatRule
+	refused
+	mustAgree
+	joinedByLine
+	joinedByComma
+end 'HeaderRepeatRule'
+
+public union HttpRequestHead
+	resource(method HttpMethod, url URL, headers HttpHeaders)
+	wholeServer(headers HttpHeaders)
+end 'HttpRequestHead'
+
+public type HttpConnectTarget
+	public let host as String
+	public let port as NetworkPort
+
+	static function create(host String, port NetworkPort) returns HttpConnectTarget
+		return HttpConnectTarget{host: host, port: port}
+	end 'create'
+
+	public function authority() returns String
+		return self.host if self.port == DefaultHttpPort else "{self.host}:{self.port}"
+	end 'authority'
+end 'HttpConnectTarget'
+
 public function httpMethodToString(method HttpMethod) returns String
 	return method.name.toUpper()
 end 'httpMethodToString'
 
-public function httpBuildRequest(request HttpRequest) returns String
+public function httpConnectTargetOf(url URL) returns HttpConnectTarget throws HttpError
+	// There is no TLS here, so an `https` request sent as plaintext would leak what it meant to protect.
+	if url.scheme() != HttpScheme 'notPlainHttp'
+		throw HttpError.unsupportedScheme
+	end 'notPlainHttp'
+
+	let host = try url.host() otherwise throw HttpError.invalidUrl
+	let port = try url.port() otherwise DefaultHttpPort
+
+	return HttpConnectTarget.create(host, port: port as NetworkPort)
+end 'httpConnectTargetOf'
+
+public function httpBuildRequest(request HttpRequest, target HttpConnectTarget) returns String
 	let url = request.url()
 	var path = request.url().path()
 
 	if path.isEmpty() 'noPath'
-		path = "/"
+		path = UrlOriginFormRoot
 	end 'noPath'
 
-	// Include query string if present
 	if let query = try url.query() 'hasQuery'
 		path = "{path}?{query}"
 	end 'hasQuery'
 
-	let method = httpMethodToString(request.method())
-
 	var raw = StringBuilder.create()
+	raw.append("{httpMethodToString(request.method())} {path} {HttpSentVersion}{HttpLineBreak}")
 
-	// Request line
-	raw.append("{method} {path} HTTP/1.1\r\n")
-
-	// Host header (auto-add if not set by user)
-	let host = try url.host() otherwise ""
-
-	if not request.headers().has("host") 'addHost'
-		let portNum = try url.port() otherwise 0
-
-		if portNum != 0 and portNum != 80 'nonDefaultPort'
-			raw.append("Host: {host}:{portNum}\r\n")
-		end 'nonDefaultPort' else 'defaultPort'
-			raw.append("Host: {host}\r\n")
-		end 'defaultPort'
+	if not request.headers().has(HostHeaderName) 'addHost'
+		appendHeaderLine(raw, name: SentHostName, value: target.authority())
 	end 'addHost'
 
-	// Connection: close so server closes after response
-	if not request.headers().has("connection") 'addConn'
-		raw.append("Connection: close\r\n")
+	if not request.headers().has(ConnectionHeaderName) 'addConn'
+		appendHeaderLine(raw, name: SentConnectionName, value: ClosingConnection)
 	end 'addConn'
 
-	// Content-Length
 	let bodyLen = request.body().byteLength()
 
 	if bodyLen > 0 'hasBodyLen'
-		raw.append("Content-Length: {bodyLen}\r\n")
+		appendHeaderLine(raw, name: SentContentLengthName, value: "{bodyLen}")
 	end 'hasBodyLen'
 
-	// User-set headers
-	for (hdrName, hdrValue) in request.headers().headers 'headerLoop'
-		// Skip headers we already handled
-		if hdrName != "host" and hdrName != "connection" and hdrName != "content-length" 'custom'
-			raw.append("{hdrName}: {hdrValue}\r\n")
-		end 'custom'
-	end 'headerLoop'
-
-	// End of headers
-	raw.append("\r\n")
-
-	// Body
-	if bodyLen > 0 'hasBody'
-		raw.append(request.body())
-	end 'hasBody'
+	appendHeaderLines(raw, headers: request.headers(), skipping: ContentLengthHeaderName)
+	raw.append(HttpLineBreak)
+	raw.append(request.body())
 
 	return raw.build()
 end 'httpBuildRequest'
 
-public function httpParseResponse(data String) returns HttpResponse throws HttpError
-	// Find header/body separator \r\n\r\n
-	let separatorIdx = try data.findFirst("\r\n\r\n") otherwise 'noSep'
-		throw HttpError.invalidResponse
-	end 'noSep'
+public function httpStatusAllowsContent(code StatusCode) returns bool
+	return match code 'which'
+		noContent or
+			notModified gives false
+		ok or
+			created or
+			accepted or
+			movedPermanently or
+			found or
+			badRequest or
+			unauthorized or
+			forbidden or
+			notFound or
+			methodNotAllowed or
+			requestTimeout or
+			conflict or
+			gone or
+			lengthRequired or
+			payloadTooLarge or
+			tooManyRequests or
+			headerFieldsTooLarge or
+			internalServerError or
+			notImplemented or
+			badGateway or
+			serviceUnavailable or
+			httpVersionNotSupported gives true
+	end 'which'
+end 'httpStatusAllowsContent'
 
-	let headerSection = data.slice(data.startIndex(), endIndex: separatorIdx)
-	let headerBytes = headerSection.byteLength()
-	let totalBytes = data.byteLength()
+public function httpBuildResponseHead(response HttpResponse) returns String throws HttpServerError
+	let carriesContent = httpStatusAllowsContent(response.statusCode())
 
-	// Body starts after \r\n\r\n (4 bytes past end of header section)
-	var body = ""
+	if not carriesContent and not response.body().isEmpty() 'bodyOnABodilessStatus'
+		throw HttpServerError.invalidResponse
+	end 'bodyOnABodilessStatus'
 
-	if headerBytes + 4 < totalBytes 'hasBody'
-		let bodySlice = try data.addressableBytes().slice(headerBytes + 4, totalBytes) otherwise 'sliceErr'
-			throw HttpError.invalidResponse
-		end 'sliceErr'
+	if not isFieldContent(response.reason()) 'badReason'
+		throw HttpServerError.invalidResponse
+	end 'badReason'
 
-		body = String.init(bodySlice)
-	end 'hasBody'
+	var raw = StringBuilder.create()
+	raw.append("{HttpSentVersion} {response.statusCode().rawValue} {response.reason()}{HttpLineBreak}")
 
-	// Split header section into lines
-	let lines = headerSection.split("\r\n")
+	if carriesContent 'statesItsLength'
+		appendHeaderLine(raw, name: SentContentLengthName, value: "{response.body().byteLength()}")
+	end 'statesItsLength'
 
-	if lines.count() == 0 'empty'
-		throw HttpError.invalidResponse
-	end 'empty'
+	appendHeaderLine(raw, name: SentConnectionName, value: ClosingConnection)
 
-	// Parse status line: "HTTP/1.x STATUS REASON"
-	let statusLine = try lines.get(0) otherwise 'noLine'
-		throw HttpError.invalidResponse
-	end 'noLine'
+	// A CR or LF in a handler's header would end its line early and let the text forge more of the
+	// response.
+	for (name, value) in response.headers().headers 'eachHeader'
+		if not isToken(name) or not isFieldContent(value) 'unsendable'
+			throw HttpServerError.invalidResponse
+		end 'unsendable'
+	end 'eachHeader'
 
-	let statusParts = statusLine.split(" ")
+	appendHeaderLines(raw, headers: response.headers(), skipping: ConnectionHeaderName)
+	raw.append(HttpLineBreak)
 
-	if statusParts.count() < 2 'badStatus'
-		throw HttpError.invalidResponse
-	end 'badStatus'
+	return raw.build()
+end 'httpBuildResponseHead'
 
-	// Parse status code
-	let codeStr = try statusParts.get(1) otherwise 'noCode'
-		throw HttpError.invalidResponse
-	end 'noCode'
+function appendHeaderLine(raw StringBuilder, name String, value String)
+	raw.append("{name}{HeaderNameValueSeparator}{value}{HttpLineBreak}")
+end 'appendHeaderLine'
 
-	let codeInt = try int.fromString(codeStr) otherwise 'badCode'
-		throw HttpError.invalidResponse
-	end 'badCode'
+function appendHeaderLines(raw StringBuilder, headers HttpHeaders, skipping String)
+	for (name, value) in headers.headers 'eachHeader'
+		if name == skipping or name == ContentLengthHeaderName 'stated'
+			continue
+		end 'stated'
 
-	let code = try StatusCode.fromRawValue(codeInt) otherwise 'unknownCode'
-		throw HttpError.invalidResponse
-	end 'unknownCode'
+		appendHeaderLine(raw, name: name, value: value)
+	end 'eachHeader'
+end 'appendHeaderLines'
 
-	// Reason phrase (everything after second space) — the split parts rejoined with the single spaces
-	// that separated them.
-	var reasonText = StringBuilder.create()
-	var i = 2
-
-	while i < statusParts.count() 'joinReason'
-		if i > 2 'separator'
-			reasonText.append(" ")
-		end 'separator'
-
-		reasonText.append(try statusParts.get(i) otherwise "")
-		i = i + 1
-	end 'joinReason'
-
-	let reason = reasonText.build()
-
-	// Parse headers
+public function httpResponseWith(code StatusCode, body String, contentType String) returns HttpResponse
 	var headers = HttpHeaders.create()
-	var lineIdx = 1
+	headers.set(HttpContentTypeHeaderName, value: contentType)
 
-	while lineIdx < lines.count() 'parseHeaders'
-		let line = try lines.get(lineIdx) otherwise ""
+	return HttpResponse.create(code, reasonPhrase: reasonPhraseOf(code), responseHeaders: headers, responseBody: body)
+end 'httpResponseWith'
 
-		if line.isEmpty() 'emptyLine'
-			lineIdx = lineIdx + 1
+union HttpFound
+	at(bytePos BytePos)
+	absent
+end 'HttpFound'
+
+public type HttpInbound
+	public let connection as TcpClient
+	var received as String
+	var consumed as BytePos
+
+	public static function over(connection TcpClient) returns HttpInbound
+		return HttpInbound{connection: connection, received: "", consumed: 0}
+	end 'over'
+
+	public function unreadBytes() returns BytePos
+		return self.received.byteLength() - self.consumed
+	end 'unreadBytes'
+
+	public function receiveMore() throws NetworkError
+		let arrived = try self.connection.recv(HttpReadChunkBytes)
+
+		if self.consumed > 0 'compact'
+			self.received = urlByteRange(self.received, from: self.consumed, until: self.received.byteLength())
+			self.consumed = 0
+		end 'compact'
+
+		self.received.append(arrived)
+	end 'receiveMore'
+
+	public function take(byteCount BytePos) returns String
+		let taken = urlByteRange(self.received, from: self.consumed, until: self.consumed + byteCount)
+		self.consumed = self.consumed + byteCount
+
+		return taken
+	end 'take'
+
+	function skip(byteCount BytePos)
+		self.consumed = self.consumed + byteCount
+	end 'skip'
+
+	function unreadStartsWith(text String) returns bool
+		if self.unreadBytes() < text.byteLength() 'tooShort'
+			return false
+		end 'tooShort'
+
+		for pos in 0 upto text.byteLength() 'eachByte'
+			if self.received.byteAtOrPanic(self.consumed + pos) != text.byteAtOrPanic(pos) 'differs'
+				return false
+			end 'differs'
+		end 'eachByte'
+
+		return true
+	end 'unreadStartsWith'
+
+	// Resumes `needle - 1` bytes before where the last search stopped: a terminator split across two
+	// receives is still found, and the bytes already searched are not scanned again.
+	function find(needle String, searchedTo BytePos) returns HttpFound
+		let overlap = needle.byteLength() - 1
+		let windowStart = searchedTo - overlap if searchedTo > overlap else 0
+		let found = try self.received.bytePosOf(needle, from: self.consumed + windowStart) otherwise (cause) 'search'
+			if cause == StringError.notFound 'absent'
+				return HttpFound.absent
+			end 'absent'
+
+			panic("HttpInbound.find: the search starts inside what was received")
+		end 'search'
+
+		return HttpFound.at(found - self.consumed)
+	end 'find'
+end 'HttpInbound'
+
+public enum HttpDelimiter
+	head
+	line
+end 'HttpDelimiter'
+
+function delimiterText(delimiter HttpDelimiter) returns String
+	return match delimiter 'which'
+		head gives HeadBlockTerminator
+		line gives HttpLineBreak
+	end 'which'
+end 'delimiterText'
+
+function leadingEmptyLinesSkipped(delimiter HttpDelimiter) returns IgnoredLineTally
+	return match delimiter 'which'
+		head gives MaxIgnoredLeadingEmptyLines
+		line gives 0
+	end 'which'
+end 'leadingEmptyLinesSkipped'
+
+public union HttpDelimitedRead
+	delimited(text String)
+	pastTheCap
+end 'HttpDelimitedRead'
+
+public function httpReadDelimited(inbound HttpInbound, delimiter HttpDelimiter, cap BytePos) returns HttpDelimitedRead throws NetworkError
+	let terminator = delimiterText(delimiter)
+	let overlap = terminator.byteLength() - 1
+	var skippable = leadingEmptyLinesSkipped(delimiter)
+	var searchedTo = 0 as BytePos
+
+	while true 'fill'
+		while skippable > 0 and inbound.unreadStartsWith(HttpLineBreak) 'leadingEmptyLine'
+			inbound.skip(HttpLineBreak.byteLength())
+			skippable = skippable - 1
+			searchedTo = 0
+		end 'leadingEmptyLine'
+
+		match inbound.find(terminator, searchedTo: searchedTo) 'terminator'
+			at(textEnd) then return delimitedAt(inbound, textEnd: textEnd, terminator: terminator, cap: cap)
+			absent then searchedTo = inbound.unreadBytes()
+		end 'terminator'
+
+		if searchedTo > cap + overlap 'alreadyPastTheCap'
+			return HttpDelimitedRead.pastTheCap
+		end 'alreadyPastTheCap'
+
+		try inbound.receiveMore()
+	end 'fill'
+
+	panic("httpReadDelimited: the fill loop ends only by returning what it read or throwing")
+end 'httpReadDelimited'
+
+function delimitedAt(inbound HttpInbound, textEnd BytePos, terminator String, cap BytePos) returns HttpDelimitedRead
+	if textEnd > cap 'endedPastTheCap'
+		return HttpDelimitedRead.pastTheCap
+	end 'endedPastTheCap'
+
+	let text = inbound.take(textEnd)
+	inbound.skip(terminator.byteLength())
+
+	return HttpDelimitedRead.delimited(text)
+end 'delimitedAt'
+
+public function httpReadDeclared(inbound HttpInbound, length BytePos) returns String throws NetworkError
+	while inbound.unreadBytes() < length 'fill'
+		try inbound.receiveMore()
+	end 'fill'
+
+	return inbound.take(length)
+end 'httpReadDeclared'
+
+public function httpParseRequestHead(head String) returns HttpRequestHead throws HttpServerError
+	let lines = head.split(HttpLineBreak)
+	let requestLine = try lines.get(0) otherwise panic("httpParseRequestHead: a split answers at least one part")
+	let parts = requestLine.split(StartLineSeparator)
+
+	if parts.count() != RequestLineParts 'notARequestLine'
+		throw HttpServerError.malformedRequest
+	end 'notARequestLine'
+
+	let spelledMethod = try parts.get(0) otherwise panic("httpParseRequestHead: a request line of {parts.count()} words has a first")
+	let target = try parts.get(1) otherwise panic("httpParseRequestHead: a request line of {parts.count()} words has a second")
+	let version = try parts.get(2) otherwise panic("httpParseRequestHead: a request line of {parts.count()} words has a third")
+
+	if not isToken(spelledMethod) or target.isEmpty() 'notARequestLine2'
+		throw HttpServerError.malformedRequest
+	end 'notARequestLine2'
+
+	let hostRequired = try hostRequiredBy(version)
+	let method = try knownMethodSpelled(spelledMethod)
+
+	var headers = HttpHeaders.create()
+	try parseHeaderLines(lines, from: 1, into: headers, side: HttpMessageSide.request) otherwise throw HttpServerError.malformedRequest
+
+	if headers.has(TransferEncodingHeaderName) 'chunked'
+		throw HttpServerError.unsupportedTransferEncoding
+	end 'chunked'
+
+	if hostRequired and not headers.has(HostHeaderName) 'noHost'
+		throw HttpServerError.malformedRequest
+	end 'noHost'
+
+	if target == AsteriskForm 'asteriskForm'
+		if method != HttpMethod.options 'notServerWide'
+			throw HttpServerError.malformedRequest
+		end 'notServerWide'
+
+		return HttpRequestHead.wholeServer(headers)
+	end 'asteriskForm'
+
+	let url = try requestUrlOf(target, headers: headers) otherwise throw HttpServerError.malformedRequest
+
+	return HttpRequestHead.resource(method, url: url, headers: headers)
+end 'httpParseRequestHead'
+
+function requestUrlOf(target String, headers HttpHeaders) returns URL throws URLError
+	if not target.startsWith(UrlOriginFormRoot) 'absoluteForm'
+		return try URL.forAbsoluteForm(HttpScheme, target: target)
+	end 'absoluteForm'
+
+	if not headers.has(HostHeaderName) 'hostless'
+		return try URL.forHostlessOriginForm(HttpScheme, target: target)
+	end 'hostless'
+
+	let authority = try headers.get(HostHeaderName) otherwise panic("requestUrlOf: `{HostHeaderName}` was just found present")
+
+	return try URL.forOriginForm(HttpScheme, authority: authority, target: target)
+end 'requestUrlOf'
+
+function hostRequiredBy(version String) returns bool throws HttpServerError
+	if version.byteLength() != HttpVersionBytes or not version.startsWith(HttpVersionPrefix) 'notAVersion'
+		throw HttpServerError.malformedRequest
+	end 'notAVersion'
+
+	let major = version.byteAtOrPanic(HttpVersionMajorAt)
+	let minor = version.byteAtOrPanic(HttpVersionMinorAt)
+
+	if not urlIsDigit(major) or version.byteAtOrPanic(HttpVersionDotAt) != HttpVersionDot or not urlIsDigit(minor) 'notAVersionNumber'
+		throw HttpServerError.malformedRequest
+	end 'notAVersionNumber'
+
+	if major != SupportedHttpMajor 'anotherMajor'
+		throw HttpServerError.unsupportedVersion
+	end 'anotherMajor'
+
+	return minor != HostlessHttpMinor
+end 'hostRequiredBy'
+
+function knownMethodSpelled(spelled String) returns HttpMethod throws HttpServerError
+	for method in HttpMethod.allCases 'eachMethod'
+		if httpMethodToString(method) == spelled 'named'
+			return method
+		end 'named'
+	end 'eachMethod'
+
+	throw HttpServerError.unsupportedMethod
+end 'knownMethodSpelled'
+
+public function httpDeclaredBodyLength(headers HttpHeaders, cap HttpByteCap) returns BytePos throws HttpServerError
+	if not headers.has(ContentLengthHeaderName) 'noBody'
+		return 0
+	end 'noBody'
+
+	match declaredContentLength(headers, bound: cap as UrlDecimalBound) 'declared'
+		value(length) then return length as BytePos
+		notADecimal then throw HttpServerError.malformedRequest
+		aboveTheBound then throw HttpServerError.bodyTooLarge
+	end 'declared'
+end 'httpDeclaredBodyLength'
+
+function declaredContentLength(headers HttpHeaders, bound UrlDecimalBound) returns UrlDecimalReading
+	let spelled = try headers.get(ContentLengthHeaderName) otherwise panic("declaredContentLength: every caller asks only after finding `{ContentLengthHeaderName}` present")
+
+	return urlDecimalWithin(spelled, from: 0, until: spelled.byteLength(), bound: bound)
+end 'declaredContentLength'
+
+public union HttpResponseFraming
+	bodiless
+	declared(length BytePos)
+	chunked
+	closeDelimited
+end 'HttpResponseFraming'
+
+public function httpResponseFramingOf(response HttpResponse, method HttpMethod) returns HttpResponseFraming throws HttpError
+	if method == HttpMethod.head or not httpStatusAllowsContent(response.statusCode()) 'noContent'
+		return HttpResponseFraming.bodiless
+	end 'noContent'
+
+	// Asked before `Content-Length`: a response carrying both is framed by its coding (RFC 9112
+	// section 6.3), and reading the declared length instead would end the body at the wrong byte.
+	if response.headers().has(TransferEncodingHeaderName) 'transferCoded'
+		return HttpResponseFraming.chunked if finalCodingIsChunked(response.headers()) else HttpResponseFraming.closeDelimited
+	end 'transferCoded'
+
+	if not response.headers().has(ContentLengthHeaderName) 'undeclared'
+		return HttpResponseFraming.closeDelimited
+	end 'undeclared'
+
+	match declaredContentLength(response.headers(), bound: HttpLargestBodyBytes as UrlDecimalBound) 'declared'
+		value(length) then return HttpResponseFraming.declared(length as BytePos)
+		notADecimal or
+			aboveTheBound then throw HttpError.invalidResponse
+	end 'declared'
+end 'httpResponseFramingOf'
+
+function finalCodingIsChunked(headers HttpHeaders) returns bool
+	let codings = (try headers.get(TransferEncodingHeaderName) otherwise panic("finalCodingIsChunked: `{TransferEncodingHeaderName}` was just found present")).split(CodingListSeparator)
+	var finalCoding = ""
+
+	for element in codings 'eachElement'
+		var coding = withoutFieldWhitespaceEnds(element, from: 0)
+
+		if not coding.isEmpty() 'aCoding'
+			finalCoding = coding.toLower()
+		end 'aCoding'
+	end 'eachElement'
+
+	return finalCoding == ChunkedCoding
+end 'finalCodingIsChunked'
+
+public union HttpResponseStatus
+	interim
+	final(response HttpResponse)
+end 'HttpResponseStatus'
+
+public function httpResponseStatusOf(head String) returns HttpResponseStatus throws HttpError
+	let lines = head.split(HttpLineBreak)
+	let statusLine = try lines.get(0) otherwise panic("httpResponseStatusOf: a split answers at least one part")
+	let afterVersion = try statusLine.findFirst(StartLineSeparator) otherwise throw HttpError.invalidResponse
+	let codeStart = try statusLine.indexAfter(afterVersion) otherwise panic("httpResponseStatusOf: a space the search found has an index after it")
+	let codeAndReason = statusLine.slice(codeStart, endIndex: statusLine.endIndex())
+
+	let codeEnd = try codeAndReason.findFirst(StartLineSeparator) otherwise codeAndReason.endIndex()
+	let codeText = codeAndReason.slice(codeAndReason.startIndex(), endIndex: codeEnd)
+	let reason = urlByteRange(codeAndReason, from: codeEnd.bytePos() + 1, until: codeAndReason.byteLength())
+
+	let codeInt = try int.fromString(codeText) otherwise throw HttpError.invalidResponse
+
+	var headers = HttpHeaders.create()
+	try parseHeaderLines(lines, from: 1, into: headers, side: HttpMessageSide.response) otherwise throw HttpError.invalidResponse
+
+	// Asked before the interim range, which holds 101: the bytes after a 101 are another protocol's,
+	// and skipping it would parse them as the next response head.
+	if codeInt == SwitchingProtocolsStatus 'anotherProtocol'
+		throw HttpError.invalidResponse
+	end 'anotherProtocol'
+
+	if codeInt >= FirstInterimStatus and codeInt <= LastInterimStatus 'interim'
+		return HttpResponseStatus.interim
+	end 'interim'
+
+	let code = try StatusCode.fromRawValue(codeInt) otherwise throw HttpError.invalidResponse
+
+	return HttpResponseStatus.final(HttpResponse.create(code, reasonPhrase: reason, responseHeaders: headers, responseBody: ""))
+end 'httpResponseStatusOf'
+
+function parseHeaderLines(lines StringArray, from HeaderLineIndex, into HttpHeaders, side HttpMessageSide) throws HeaderBlockFault
+	let fieldLines = try unfoldedFieldLines(lines, from: from, side: side)
+
+	for line in fieldLines 'eachLine'
+		let colon = try line.findFirst(HeaderNameTerminator) otherwise throw HeaderBlockFault.malformed
+		let name = line.slice(line.startIndex(), endIndex: colon)
+
+		if not isToken(name) 'notAFieldName'
+			throw HeaderBlockFault.malformed
+		end 'notAFieldName'
+
+		let value = try fieldValueOf(line, from: colon.bytePos() + 1)
+		try appendHeaderField(into, name: name, value: value, side: side)
+	end 'eachLine'
+end 'parseHeaderLines'
+
+function unfoldedFieldLines(lines StringArray, from HeaderLineIndex, side HttpMessageSide) returns StringArray throws HeaderBlockFault
+	var logical = StringArray.create()
+	var lineIdx = from
+
+	while lineIdx < lines.count() 'eachLine'
+		let line = try lines.get(lineIdx) otherwise panic("unfoldedFieldLines: line {lineIdx} is below the count the loop just checked")
+
+		if line.isEmpty() 'endOfHeaders'
 			break
-		end 'emptyLine'
+		end 'endOfHeaders'
 
-		// Find first ": " separator
-		if let colonIdx = try line.findFirst(": ") 'hasColon'
-			let name = line.slice(line.startIndex(), endIndex: colonIdx)
-			let colonBytePos = colonIdx.bytePos()
-
-			// Value starts 2 bytes after colon position (past ": ")
-			let valueSlice = try line.addressableBytes().slice(colonBytePos + 2, line.byteLength()) otherwise 'sliceErr2'
-				throw HttpError.invalidResponse
-			end 'sliceErr2'
-
-			let value = String.init(valueSlice)
-			headers.set(name, value: value)
-		end 'hasColon'
+		if urlByteIsOneOf(line.byteAtOrPanic(0), bytes: FieldWhitespaceBytes) 'foldedOrIndented'
+			try unfoldInto(logical, continuation: line, side: side)
+		end 'foldedOrIndented' else 'aFieldLine'
+			logical.push(line)
+		end 'aFieldLine'
 
 		lineIdx = lineIdx + 1
-	end 'parseHeaders'
+	end 'eachLine'
 
-	return HttpResponse.create(code, reasonPhrase: reason, responseHeaders: headers, responseBody: body)
-end 'httpParseResponse'
+	return logical
+end 'unfoldedFieldLines'
+
+// RFC 9112 section 5.2: a server refuses obs-fold in a request, and a client reading a response replaces
+// each fold with a space.
+function unfoldInto(logical StringArray, continuation String, side HttpMessageSide) throws HeaderBlockFault
+	if side == HttpMessageSide.request 'refusedOnARequest'
+		throw HeaderBlockFault.malformed
+	end 'refusedOnARequest'
+
+	let folded = try logical.pop() otherwise throw HeaderBlockFault.malformed
+	logical.push("{folded}{ObsFoldReplacement}{withoutFieldWhitespaceEnds(continuation, from: 0)}")
+end 'unfoldInto'
+
+function isToken(text String) returns bool
+	if text.isEmpty() 'empty'
+		return false
+	end 'empty'
+
+	for b in text.bytes() 'eachByte'
+		if not (urlIsAlpha(b) or urlIsDigit(b) or urlByteIsOneOf(b, bytes: TokenMarkBytes)) 'notATokenByte'
+			return false
+		end 'notATokenByte'
+	end 'eachByte'
+
+	return true
+end 'isToken'
+
+function isFieldContentByte(b Byte) returns bool
+	return (b >= FirstPrintableByte or b == HorizontalTab) and b != DeleteByte
+end 'isFieldContentByte'
+
+function isFieldContent(text String, from BytePos = 0) returns bool
+	for pos in from upto text.byteLength() 'eachByte'
+		if not isFieldContentByte(text.byteAtOrPanic(pos)) 'aControl'
+			return false
+		end 'aControl'
+	end 'eachByte'
+
+	return true
+end 'isFieldContent'
+
+function fieldValueOf(line String, from BytePos) returns String throws HeaderBlockFault
+	if not isFieldContent(line, from: from) 'aControl'
+		throw HeaderBlockFault.malformed
+	end 'aControl'
+
+	return withoutFieldWhitespaceEnds(line, from: from)
+end 'fieldValueOf'
+
+function withoutFieldWhitespaceEnds(line String, from BytePos) returns String
+	let len = line.byteLength()
+	var first = len
+	var last = from
+
+	for pos in from upto len 'eachByte'
+		if not urlByteIsOneOf(line.byteAtOrPanic(pos), bytes: FieldWhitespaceBytes) 'content'
+			first = pos if first == len else first
+			last = pos + 1
+		end 'content'
+	end 'eachByte'
+
+	return urlByteRange(line, from: first, until: last)
+end 'withoutFieldWhitespaceEnds'
+
+function headerRepeatRuleOf(lowered String, side HttpMessageSide) returns HeaderRepeatRule
+	if lowered == HostHeaderName and side == HttpMessageSide.request 'host'
+		return HeaderRepeatRule.refused
+	end 'host'
+
+	if lowered == ContentLengthHeaderName 'contentLength'
+		return HeaderRepeatRule.mustAgree
+	end 'contentLength'
+
+	// A `Set-Cookie` value carries commas of its own (an `Expires` date), so a comma cannot separate two.
+	if lowered == SetCookieHeaderName 'setCookie'
+		return HeaderRepeatRule.joinedByLine
+	end 'setCookie'
+
+	return HeaderRepeatRule.joinedByComma
+end 'headerRepeatRuleOf'
+
+function appendHeaderField(headers HttpHeaders, name String, value String, side HttpMessageSide) throws HeaderBlockFault
+	let lowered = name.toLower()
+
+	if not headers.has(lowered) 'firstLine'
+		headers.set(lowered, value: value)
+		return
+	end 'firstLine'
+
+	let earlier = try headers.get(lowered) otherwise panic("appendHeaderField: `{lowered}` was just found present")
+
+	match headerRepeatRuleOf(lowered, side: side) 'rule'
+		refused then throw HeaderBlockFault.malformed
+		mustAgree then try requireAgreeingRepeat(earlier, value: value)
+		joinedByLine then headers.set(lowered, value: "{earlier}{RepeatedLineSeparator}{value}")
+		joinedByComma then headers.set(lowered, value: "{earlier}{RepeatedListSeparator}{value}")
+	end 'rule'
+end 'appendHeaderField'
+
+function requireAgreeingRepeat(earlier String, value String) throws HeaderBlockFault
+	if not earlier.equals(value) 'conflicting'
+		throw HeaderBlockFault.malformed
+	end 'conflicting'
+end 'requireAgreeingRepeat'

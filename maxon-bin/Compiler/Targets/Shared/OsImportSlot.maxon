@@ -363,6 +363,7 @@ export enum OsImportSlot
 	listen
 	accept
 	getsockname
+	shutdown
 end 'OsImportSlot'
 
 // The import slot index a call site records and the writer patches against. One accessor
@@ -370,3 +371,96 @@ end 'OsImportSlot'
 export function osImportSlotIndex(slot OsImportSlot) returns RelocSlotIndex
 	return slot.ordinal as RelocSlotIndex
 end 'osImportSlotIndex'
+
+// Filed by the C return type, as `PeWriter.importAnswerOf` files Win32's.
+export function osImportAnswerOf(slot OsImportSlot) returns ImportAnswer
+	return match slot 'answer'
+		exit or
+			free or
+			freeaddrinfo gives ImportAnswer.nothing
+		write or
+			mmap or
+			clockGettimeNsecNp or
+			sysconf or
+			realpath or
+			malloc or
+			getenv or
+			errnoLocation or
+			read or
+			getcwd or
+			opendir or
+			readdir or
+			nsGetEnviron or
+			send or
+			recv or
+			pthreadSelf gives ImportAnswer.fullWord
+		munmap or
+			madvise or
+			nanosleep or
+			nsGetExecutablePath or
+			getpid or
+			setpriority or
+			getpriority or
+			pthreadKeyCreate or
+			pthreadSetspecific or
+			pthreadMutexInit or
+			pthreadMutexLock or
+			pthreadMutexUnlock or
+			pthreadMutexDestroy or
+			pthreadCondInit or
+			pthreadCondSignal or
+			pthreadCondWait or
+			pthreadCondTimedwaitRelativeNp or
+			pthreadCondDestroy or
+			pthreadCreate or
+			pthreadJoin or
+			pthreadMutexattrInit or
+			pthreadMutexattrSettype or
+			pthreadMutexattrDestroy or
+			open or
+			creat or
+			close or
+			fsync or
+			stat or
+			fstat or
+			fstatat or
+			unlink or
+			rename or
+			mkdir or
+			rmdir or
+			closedir or
+			dirfd or
+			fnmatch or
+			pipe or
+			poll or
+			waitpid or
+			kill or
+			posixSpawnp or
+			posixSpawnFileActionsInit or
+			posixSpawnFileActionsAdddup2 or
+			posixSpawnFileActionsAddfchdirNp or
+			posixSpawnFileActionsDestroy or
+			posixSpawnattrInit or
+			posixSpawnattrSetflags or
+			posixSpawnattrDestroy or
+			isatty or
+			getaddrinfo or
+			socket or
+			connect or
+			shmOpen or
+			shmUnlink or
+			ftruncate or
+			sigaction or
+			sigaltstack or
+			pthreadKill or
+			kqueue or
+			kevent or
+			getsockopt or
+			fcntl or
+			bind or
+			listen or
+			accept or
+			getsockname or
+			shutdown gives ImportAnswer.signedDword
+	end 'answer'
+end 'osImportAnswerOf'

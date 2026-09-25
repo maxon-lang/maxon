@@ -1,0 +1,36 @@
+let ExactOffsetCaseLabel = "break-at-an-exact-offset"
+
+let LaterRowOfThePrintLine = 1
+let StatementRowsOfThePrintLine = 2
+let PrintLineFunctionName = "main"
+
+test 'a breakpoint at an exact offset is armed there, stops there, and reports the line that contains it'
+	let staged = builtFixture(ExactOffsetCaseLabel, fixture: SteppingFixtureName)
+	let printLine = anchorLine(staged, anchor: "main-print")
+	let executable = builtExecutable(staged)
+	let rows = statementOffsetsOfLine(executable, staged: staged, line: printLine)
+
+	try Expect.atLeast(rows.count() as AssertedInt, than: StatementRowsOfThePrintLine, message: "this case arms a statement row of the print line that `{BreakCommand} {lineTarget(printLine)}` does not, so the line needs more than one; the line table gives it {rows.count()}")
+
+	let offset = try rows.get(LaterRowOfThePrintLine) otherwise panic("break-at-an-exact-offset: the row count was asserted on the line above")
+	let commands = debugCommandLine(["{BreakCommand} {exactOffsetTarget(offset)}", RunCommand, ContinueCommand])
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let breakpoints = eventsOfKind(events, kind: BreakpointEventName)
+	let stops = eventsOfKind(events, kind: StopEventName)
+
+	try Expect.equal(breakpoints.count() as AssertedInt, expected: 1, message: "`{BreakCommand} {exactOffsetTarget(offset)}` printed no `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let armed = eventAt(breakpoints, index: 0)
+	try Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: SetAction, message: "an offset inside the program's own code is armed. {said}")
+	try Expect.equal(textOf(armed, node: armed.root, key: OffsetKey), expected: hexSpelling(offset), message: "the breakpoint is armed at exactly the offset it names, not at the first statement of its line. {said}")
+	try Expect.equal(numberOf(armed, node: armed.root, key: LineKey) as AssertedInt, expected: printLine as AssertedInt, message: "the event reports the source line the armed offset belongs to. {said}")
+	try Expect.equal(textOf(armed, node: armed.root, key: FunctionKey), expected: PrintLineFunctionName, message: "the event names the function the armed offset is in. {said}")
+	try Expect.equal(stops.count() as AssertedInt, expected: 1, message: "the print line runs once, so the breakpoint stops once. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let stopped = eventAt(stops, index: 0)
+	try Expect.equal(textOf(stopped, node: stopped.root, key: OffsetKey), expected: hexSpelling(offset), message: "the stop is at the armed offset. {said}")
+	try Expect.equal(numberOf(stopped, node: stopped.root, key: LineKey) as AssertedInt, expected: printLine as AssertedInt, message: "the stop names the line the armed offset belongs to. {said}")
+	try Expect.equal(eventsOfKind(events, kind: ExitEventName).count() as AssertedInt, expected: 1, message: "`{ContinueCommand}` from the one stop runs the program to its exit. {said}")
+end 'a breakpoint at an exact offset is armed there, stops there, and reports the line that contains it'

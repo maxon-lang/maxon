@@ -34,6 +34,9 @@ let RawOsThreadCpuTicksName = b"__Raw.osThreadCpuTicks"
 let RawOsCpuCountName = b"__Raw.osCpuCount"
 let RawOsGetPidName = b"__Raw.osGetPid"
 let RawOsEnterBackgroundPriorityName = b"__Raw.osEnterBackgroundPriority"
+let RawOsProcessProbeName = b"__Raw.osProcessProbe"
+let RawOsWaitHandleName = b"__Raw.osWaitHandle"
+let RawOsCloseHandleName = b"__Raw.osCloseHandle"
 let RawOsExitName = b"__Raw.osExit"
 let RawScratchName = b"__Raw.scratch"
 let RawSchedNumProcsAddrName = b"__Raw.schedNumProcsAddr"
@@ -89,6 +92,10 @@ export enum RawIntrinsic
 	// sets the priority and READS IT BACK; the word is the second reading. See
 	// `StdOp.osEnterBackgroundPriority`, which owns that argument.
 	osEnterBackgroundPriority
+
+	osProcessProbe
+	osWaitHandle
+	osCloseHandle
 
 	// ⭐⭐ **THE TIER'S ONLY WAY OUT, AND IT IS AN EXIT RATHER THAN A PANIC.** A `panic` builds a message
 	// and walks a stack, and both allocate — which the allocator cannot do while reporting that allocation
@@ -302,6 +309,18 @@ function rawIntrinsicLookupOf(callee ByteArray) returns RawIntrinsicLookup
 		return RawIntrinsicLookup.found(RawIntrinsic.osEnterBackgroundPriority)
 	end 'osEnterBackgroundPriority'
 
+	if callee.equals(RawOsProcessProbeName) 'osProcessProbe'
+		return RawIntrinsicLookup.found(RawIntrinsic.osProcessProbe)
+	end 'osProcessProbe'
+
+	if callee.equals(RawOsWaitHandleName) 'osWaitHandle'
+		return RawIntrinsicLookup.found(RawIntrinsic.osWaitHandle)
+	end 'osWaitHandle'
+
+	if callee.equals(RawOsCloseHandleName) 'osCloseHandle'
+		return RawIntrinsicLookup.found(RawIntrinsic.osCloseHandle)
+	end 'osCloseHandle'
+
 	if callee.equals(RawOsExitName) 'osExit'
 		return RawIntrinsicLookup.found(RawIntrinsic.osExit)
 	end 'osExit'
@@ -502,6 +521,9 @@ export function rawIntrinsicCalleeName(intrinsic RawIntrinsic) returns ByteArray
 		osCpuCount gives RawOsCpuCountName
 		osGetPid gives RawOsGetPidName
 		osEnterBackgroundPriority gives RawOsEnterBackgroundPriorityName
+		osProcessProbe gives RawOsProcessProbeName
+		osWaitHandle gives RawOsWaitHandleName
+		osCloseHandle gives RawOsCloseHandleName
 		osExit gives RawOsExitName
 		scratch gives RawScratchName
 		schedNumProcsAddr gives RawSchedNumProcsAddrName
@@ -549,15 +571,11 @@ end 'rawIntrinsicCalleeName'
 
 export function rawArgShapeOf(intrinsic RawIntrinsic) returns RawArgShape
 	return match intrinsic 'shape'
-		osTickCountMs gives RawArgShape.nothing
-		osReadWallClock gives RawArgShape.oneWord
-		osThreadCpuTicks gives RawArgShape.twoWords
-		osCpuCount or
+		osTickCountMs or
+			osCpuCount or
 			osGetPid or
-			osEnterBackgroundPriority gives RawArgShape.nothing
-		osExit gives RawArgShape.oneWord
-		scratch gives RawArgShape.oneConstant
-		schedNumProcsAddr or
+			osEnterBackgroundPriority or
+			schedNumProcsAddr or
 			schedMaxActiveWorkersAddr or
 			slabArenaListAddr or
 			slabArenaMapL1Addr or
@@ -566,28 +584,8 @@ export function rawArgShapeOf(intrinsic RawIntrinsic) returns RawArgShape
 			slabSizeToClass128Addr or
 			slabClassGeomAddr or
 			dsBaseAddr or
-			dsAllocIdAddr gives RawArgShape.nothing
-		tlsSlotLoad gives RawArgShape.oneWord
-		loadWord or
-			loadByte gives RawArgShape.wordThenConstant
-		storeWord or
-			storeByte gives RawArgShape.wordConstantWord
-		atomicAddWord gives RawArgShape.twoWords
-		atomicCas gives RawArgShape.threeWords
-		memFill gives RawArgShape.twoWordsThenConstant
-		osAllocPages or
-			osReservePages or
-			osLockInit or
-			osLockEnter or
-			osLockLeave gives RawArgShape.oneWord
-		osCommitPages or
-			osDecommitPages or
-			osFreePages gives RawArgShape.twoWords
-		osDebugHost gives RawArgShape.constantThenFourWords
-		dbgEnvironmentValue gives RawArgShape.threeWords
-		dbgAttachSegment gives RawArgShape.fourWords
-		osThreadCreate gives RawArgShape.twoWords
-		dbgCtlAddr or
+			dsAllocIdAddr or
+			dbgCtlAddr or
 			dbgTextBase or
 			dbgTextLimit or
 			dbgServiceEntryAddr or
@@ -597,18 +595,44 @@ export function rawArgShapeOf(intrinsic RawIntrinsic) returns RawArgShape
 			schedLockAddr or
 			ownFrame or
 			splicedAtEverySite gives RawArgShape.nothing
+		osReadWallClock or
+			osExit or
+			tlsSlotLoad or
+			osAllocPages or
+			osReservePages or
+			osLockInit or
+			osLockEnter or
+			osLockLeave or
+			osProcessProbe or
+			osCloseHandle gives RawArgShape.oneWord
+		osThreadCpuTicks or
+			atomicAddWord or
+			osCommitPages or
+			osDecommitPages or
+			osFreePages or
+			osWaitHandle or
+			osThreadCreate gives RawArgShape.twoWords
+		scratch gives RawArgShape.oneConstant
+		loadWord or
+			loadByte gives RawArgShape.wordThenConstant
+		storeWord or
+			storeByte gives RawArgShape.wordConstantWord
+		atomicCas or
+			dbgEnvironmentValue gives RawArgShape.threeWords
+		memFill gives RawArgShape.twoWordsThenConstant
+		osDebugHost gives RawArgShape.constantThenFourWords
+		dbgAttachSegment gives RawArgShape.fourWords
 	end 'shape'
 end 'rawArgShapeOf'
 
 export function rawResultKindOf(intrinsic RawIntrinsic) returns RawResultKind
 	return match intrinsic 'result'
-		osTickCountMs gives RawResultKind.machineWord
-		osReadWallClock or
-			osThreadCpuTicks or
-			osExit gives RawResultKind.nothing
-		osCpuCount or
+		osTickCountMs or
+			osCpuCount or
 			osGetPid or
 			osEnterBackgroundPriority or
+			osProcessProbe or
+			osWaitHandle or
 			scratch or
 			schedNumProcsAddr or
 			schedMaxActiveWorkersAddr or
@@ -640,7 +664,10 @@ export function rawResultKindOf(intrinsic RawIntrinsic) returns RawResultKind
 			schedAllMachinesAddr or
 			schedPreemptExtLockAddr or
 			schedLockAddr gives RawResultKind.machineWord
-		storeWord or
+		osReadWallClock or
+			osThreadCpuTicks or
+			osExit or
+			storeWord or
 			storeByte or
 			memFill or
 			osDecommitPages or
@@ -648,6 +675,7 @@ export function rawResultKindOf(intrinsic RawIntrinsic) returns RawResultKind
 			osLockInit or
 			osLockEnter or
 			osLockLeave or
+			osCloseHandle or
 			ownFrame or
 			splicedAtEverySite gives RawResultKind.nothing
 	end 'result'
@@ -659,10 +687,10 @@ end 'rawResultKindOf'
 export function rawArgCountOf(shape RawArgShape) returns ParamCount
 	return match shape 'count'
 		nothing gives 0 as ParamCount
-		oneWord gives 1 as ParamCount
-		oneConstant gives 1 as ParamCount
-		twoWords gives 2 as ParamCount
-		wordThenConstant gives 2 as ParamCount
+		oneWord or
+			oneConstant gives 1 as ParamCount
+		twoWords or
+			wordThenConstant gives 2 as ParamCount
 		threeWords or
 			wordConstantWord or
 			twoWordsThenConstant gives 3 as ParamCount
@@ -710,11 +738,12 @@ end 'rawArgumentIsTheConstant'
 // `TargetFacilities.machineModel` before it mints anything. ⇒ **A ROW SPELLED FROM SUCH A BODY OWES THAT
 // FORK, and the row's facility column is the statement of which lanes the fork must exclude.**
 //
-// ⚠ **THREE ROWS NAME A FACILITY A SUPPORTED LANE DOES NOT PROVIDE AND ARE MET EARLIER BY A SECOND
-// ROUTE.** `osCpuCount`, `osGetPid` and `osEnterBackgroundPriority` have no wasm lowering, and a program
-// asking for one is refused at the call to `__cpu_count`, `__proc_pid` or `__proc_bg_priority` by
-// `calleeHostFacility`'s CALLEE bands, which rank above a raw seed (`SemanticCheck.substrateEntryRank`) so
-// the sharper sentence wins. `osThreadCpuTicks` is spelled by no REACHED tier body at all.
+// ⚠ Four rows name a facility a supported lane does not provide and are met earlier by a second
+// route. `osCpuCount`, `osGetPid`, `osEnterBackgroundPriority` and `osProcessProbe` have no wasm
+// lowering, and a program asking for one is refused at the call to `__cpu_count`, `__proc_pid`,
+// `__proc_bg_priority` or `__proc_alive` by `calleeHostFacility`'s callee bands, which rank above a
+// raw seed (`SemanticCheck.substrateEntryRank`) so the sharper sentence wins. `osThreadCpuTicks` is
+// spelled by no reached tier body at all.
 //
 // ⚠ **`none` IS "NO HOST FACILITY", NOT "EVERY TARGET", AND ONE ROW IS STILL OUTSIDE WHAT THIS COLUMN CAN
 // SAY.** The word and address rows are pure code generation on the lanes that have an addressable frame, and
@@ -735,26 +764,15 @@ export function rawHostFacilityOf(intrinsic RawIntrinsic) returns RawHostFacilit
 		osCpuCount gives RawHostFacility.required(HostFacility.cpuCount)
 		osGetPid gives RawHostFacility.required(HostFacility.processInfo)
 		osEnterBackgroundPriority gives RawHostFacility.required(HostFacility.processPriority)
+		osProcessProbe gives RawHostFacility.required(HostFacility.processLiveness)
+		osWaitHandle or
+			osCloseHandle gives RawHostFacility.required(HostFacility.subprocess)
 
-		// Every supported lane lowers `StdOp.osExit` unconditionally — it is the floor under every `panic`
-		// and every range check, so a target that could not end its own process could compile no program at
-		// all. There is no facility to name and no lane to withhold it.
-		osExit gives RawHostFacility.none
-
-		osAllocPages or
-			osReservePages or
-			osCommitPages or
-			osDecommitPages or
-			osFreePages gives RawHostFacility.required(HostFacility.pageMemory)
-		osLockInit or
-			osLockEnter or
-			osLockLeave gives RawHostFacility.required(HostFacility.hostMutex)
-		tlsSlotLoad gives RawHostFacility.required(HostFacility.threadLocalSlot)
-		osDebugHost gives RawHostFacility.required(HostFacility.debugAgent)
-		dbgEnvironmentValue gives RawHostFacility.required(HostFacility.debugAgent)
-		osThreadCreate gives RawHostFacility.required(HostFacility.debugAgent)
-		dbgAttachSegment gives RawHostFacility.required(HostFacility.sharedMemory)
-		scratch or
+		// `osExit` names no facility: every supported lane lowers it unconditionally, because it is the
+		// floor under every `panic` and every range check, and a target that could not end its own
+		// process could compile no program at all.
+		osExit or
+			scratch or
 			schedNumProcsAddr or
 			schedMaxActiveWorkersAddr or
 			slabArenaListAddr or
@@ -782,5 +800,19 @@ export function rawHostFacilityOf(intrinsic RawIntrinsic) returns RawHostFacilit
 			memFill or
 			ownFrame or
 			splicedAtEverySite gives RawHostFacility.none
+
+		osAllocPages or
+			osReservePages or
+			osCommitPages or
+			osDecommitPages or
+			osFreePages gives RawHostFacility.required(HostFacility.pageMemory)
+		osLockInit or
+			osLockEnter or
+			osLockLeave gives RawHostFacility.required(HostFacility.hostMutex)
+		tlsSlotLoad gives RawHostFacility.required(HostFacility.threadLocalSlot)
+		osDebugHost or
+			dbgEnvironmentValue or
+			osThreadCreate gives RawHostFacility.required(HostFacility.debugAgent)
+		dbgAttachSegment gives RawHostFacility.required(HostFacility.sharedMemory)
 	end 'facility'
 end 'rawHostFacilityOf'

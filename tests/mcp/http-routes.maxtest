@@ -1,0 +1,43 @@
+let OkStatus = 200 as HttpStatusNumber
+let AcceptedStatus = 202 as HttpStatusNumber
+let NotFoundStatus = 404 as HttpStatusNumber
+let MethodNotAllowedStatus = 405 as HttpStatusNumber
+
+let StrayPath = "/tools"
+
+test 'a GET on the mcp route is refused 405'
+	var server = StreamingHttpMcpServer.start(StringArray.create())
+	let (initialized, sessionId) = server.initializeSession()
+	let got = server.request("GET", target: McpRoutePath, host: server.authority(), origin: "", sessionId: sessionId, body: "")
+	let posted = server.post(toolsListRequest(2), sessionId: sessionId)
+	try server.stop()
+
+	try Expect.equal(initialized.statusCode as AssertedInt, expected: OkStatus as AssertedInt)
+	try Expect.equal(got.statusCode as AssertedInt, expected: MethodNotAllowedStatus as AssertedInt, message: "this transport carries no server-to-client stream, so `GET {McpRoutePath}` must be 405 rather than a stream that never speaks; it answered {got.statusCode}")
+	try Expect.equal(posted.statusCode as AssertedInt, expected: OkStatus as AssertedInt, message: "a POST on the same route and session must still be served")
+end 'a GET on the mcp route is refused 405'
+
+test 'a path other than the mcp route is 404'
+	var server = StreamingHttpMcpServer.start(StringArray.create())
+	let (initialized, sessionId) = server.initializeSession()
+	let stray = server.request("POST", target: StrayPath, host: server.authority(), origin: "", sessionId: sessionId, body: toolsListRequest(2))
+	let onRoute = server.post(toolsListRequest(3), sessionId: sessionId)
+	try server.stop()
+
+	try Expect.equal(initialized.statusCode as AssertedInt, expected: OkStatus as AssertedInt)
+	try Expect.equal(stray.statusCode as AssertedInt, expected: NotFoundStatus as AssertedInt, message: "`POST {StrayPath}` must be 404: only `{McpRoutePath}` exists. It answered {stray.statusCode} with {stray.body}")
+	try Expect.equal(onRoute.statusCode as AssertedInt, expected: OkStatus as AssertedInt, message: "the same message on `{McpRoutePath}` must be served — a transport refusing both says nothing about routing")
+end 'a path other than the mcp route is 404'
+
+test 'a notification is accepted 202 with no body'
+	var server = StreamingHttpMcpServer.start(StringArray.create())
+	let (initialized, sessionId) = server.initializeSession()
+	let notified = server.post(initializedNotification(), sessionId: sessionId)
+	let request = server.post(toolsListRequest(2), sessionId: sessionId)
+	try server.stop()
+
+	try Expect.equal(initialized.statusCode as AssertedInt, expected: OkStatus as AssertedInt)
+	try Expect.equal(notified.statusCode as AssertedInt, expected: AcceptedStatus as AssertedInt, message: "JSON-RPC forbids answering a notification, so the transport must answer 202 and no envelope; it answered {notified.statusCode}")
+	try Expect.isTrue(notified.body.trim().isEmpty(), message: "a 202 must carry an empty body; it carried {notified.body}")
+	try Expect.equal(request.statusCode as AssertedInt, expected: OkStatus as AssertedInt, message: "the session must go on serving requests after a notification")
+end 'a notification is accepted 202 with no body'

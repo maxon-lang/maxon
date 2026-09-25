@@ -1,6 +1,6 @@
 // `maxon mcp-server` — the mode that serves someone WRITING Maxon.
 //
-// Gates the handshake, the eight tools it advertises, their schemas, and the two refusals that keep a
+// Gates the handshake, the tools it advertises, their schemas, and the two refusals that keep a
 // wrong answer from reading as a right one: an argument no tool declares, and an error code no case
 // claims.
 
@@ -32,41 +32,49 @@ test 'standard mcp-server notifications/initialized produces no response'
 	Expect.equal((try doc2.getInt(doc2.root, key: "id") otherwise 0) as AssertedInt, expected: 2)
 end 'standard mcp-server notifications/initialized produces no response'
 
-test 'standard mcp-server advertises exactly the eight user-facing tools'
+let DebugToolNames = ["debug_start", "debug_break", "debug_clear", "debug_continue", "debug_step", "debug_pause", "debug_backtrace", "debug_locals", "debug_eval", "debug_threads", "debug_gt", "debug_trace", "debug_stop"]
+
+test 'standard mcp-server advertises exactly the twenty-one user-facing tools'
 	let names = toolNames(listTools())
-	Expect.equal(names.count() as AssertedInt, expected: 8, message: "standard mode must advertise exactly 8 tools")
+	Expect.equal(names.count() as AssertedInt, expected: 21, message: "standard mode must advertise exactly 21 tools: the eight that serve someone writing Maxon, and the thirteen that hold a debug session")
 
-	Expect.isTrue(containsString(names, target: "build"), message: "missing build")
-	Expect.isTrue(containsString(names, target: "execute"), message: "missing execute")
-	Expect.isTrue(containsString(names, target: "test"), message: "missing test")
-	Expect.isTrue(containsString(names, target: "fmt"), message: "missing fmt")
-	Expect.isTrue(containsString(names, target: "check"), message: "missing check")
-	Expect.isTrue(containsString(names, target: "dump_ir"), message: "missing dump_ir")
-	Expect.isTrue(containsString(names, target: "lookup_error_code"), message: "missing lookup_error_code")
-	Expect.isTrue(containsString(names, target: "info"), message: "missing info")
+	Expect.isTrue(names.contains(BuildTool), message: "missing build")
+	Expect.isTrue(names.contains(ExecuteTool), message: "missing execute")
+	Expect.isTrue(names.contains(TestTool), message: "missing test")
+	Expect.isTrue(names.contains(FmtTool), message: "missing fmt")
+	Expect.isTrue(names.contains("check"), message: "missing check")
+	Expect.isTrue(names.contains("dump_ir"), message: "missing dump_ir")
+	Expect.isTrue(names.contains("lookup_error_code"), message: "missing lookup_error_code")
+	Expect.isTrue(names.contains("info"), message: "missing info")
 
-	Expect.isFalse(containsString(names, target: "run_spec_test"), message: "run_spec_test is contributor-only")
-	Expect.isFalse(containsString(names, target: "run_scale_test"), message: "run_scale_test is contributor-only")
-	Expect.isFalse(containsString(names, target: "spec_test_outcome"), message: "spec_test_outcome is contributor-only")
-end 'standard mcp-server advertises exactly the eight user-facing tools'
+	// Standard mode, not `--dev`: debugging a program serves someone writing Maxon, not someone
+	// driving this checkout.
+	for tool in DebugToolNames 'eachDebugTool'
+		Expect.isTrue(names.contains(tool), message: "missing {tool}")
+	end 'eachDebugTool'
+
+	Expect.isFalse(names.contains("run_spec_test"), message: "run_spec_test is contributor-only")
+	Expect.isFalse(names.contains("run_scale_test"), message: "run_scale_test is contributor-only")
+	Expect.isFalse(names.contains("spec_test_outcome"), message: "spec_test_outcome is contributor-only")
+end 'standard mcp-server advertises exactly the twenty-one user-facing tools'
 
 test 'standard mcp-server build schema hides the contributor arguments'
-	let props = toolPropertyKeys(listTools(), toolName: "build")
+	let props = toolPropertyKeys(listTools(), toolName: BuildTool)
 
-	Expect.isTrue(containsString(props, target: "path"))
-	Expect.isTrue(containsString(props, target: "source"))
-	Expect.isTrue(containsString(props, target: "output"))
-	Expect.isTrue(containsString(props, target: "target"))
-	Expect.isTrue(containsString(props, target: "emitIr"))
+	Expect.isTrue(props.contains("path"))
+	Expect.isTrue(props.contains("source"))
+	Expect.isTrue(props.contains("output"))
+	Expect.isTrue(props.contains("target"))
+	Expect.isTrue(props.contains("emitIr"))
 
-	Expect.isFalse(containsString(props, target: "repoRoot"), message: "repoRoot is contributor-only")
-	Expect.isFalse(containsString(props, target: "from"), message: "from is contributor-only")
+	Expect.isFalse(props.contains("repoRoot"), message: "repoRoot is contributor-only")
+	Expect.isFalse(props.contains("from"), message: "from is contributor-only")
 
-	// `run`, `test` and `fmt` take `repoRoot` too, and it is contributor-only on them for the same reason it
-	// is on `build`: it names a CHECKOUT and runs that tree's own compiler, which is not a thing a user of
-	// the language has.
-	for tool in ["execute", "test", "fmt"] 'eachUserFacingTool'
-		Expect.isFalse(containsString(toolPropertyKeys(listTools(), toolName: tool), target: "repoRoot"), message: "{tool} must not advertise repoRoot in user mode")
+	// `execute`, `test` and `fmt` take `repoRoot` too, and it is contributor-only on them for the same
+	// reason it is on `build`: it names a checkout and runs that tree's own compiler, which a user of
+	// the language has no use for.
+	for tool in [ExecuteTool, TestTool, FmtTool] 'eachUserFacingTool'
+		Expect.isFalse(toolPropertyKeys(listTools(), toolName: tool).contains("repoRoot"), message: "{tool} must not advertise repoRoot in user mode")
 	end 'eachUserFacingTool'
 end 'standard mcp-server build schema hides the contributor arguments'
 
@@ -110,34 +118,34 @@ test 'standard mcp-server refuses a tools/call missing a required argument'
 	let doc = callTool("lookup_error_code")
 
 	Expect.isTrue(hasChildKey(doc, parent: doc.root, key: "error"), message: "a missing required argument is a protocol error")
-	Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: -32602)
+	Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: RpcInvalidParamsCode)
 	Expect.contains(rpcErrorMessage(doc), needle: "requires the `code` argument")
 end 'standard mcp-server refuses a tools/call missing a required argument'
 
-// ⛔ Silently dropping an argument the caller SET is the worse failure: the run reports clean having
+// Silently dropping an argument the caller set is the worse failure: the run reports clean having
 // never honoured it.
 test 'standard mcp-server refuses an argument no tool declares'
 	let doc = callTool("run_spec_test_typo", argumentsJson: "\{\}")
-	Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: -32601)
+	Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: RpcMethodNotFoundCode)
 
-	let stray = callTool("fmt", argumentsJson: "\{\"mmTrace\":true\}")
-	Expect.equal(rpcErrorCode(stray) as AssertedInt, expected: -32602)
+	let stray = callTool(FmtTool, argumentsJson: "\{\"mmTrace\":true\}")
+	Expect.equal(rpcErrorCode(stray) as AssertedInt, expected: RpcInvalidParamsCode)
 	Expect.contains(rpcErrorMessage(stray), needle: "has no argument `mmTrace`")
 end 'standard mcp-server refuses an argument no tool declares'
 
 test 'standard mcp-server refuses a contributor argument in user mode'
-	for tool in ["build", "execute", "test", "fmt"] 'eachToolTakingARepoRoot'
+	for tool in [BuildTool, ExecuteTool, TestTool, FmtTool] 'eachToolTakingARepoRoot'
 		let doc = callTool(tool, argumentsJson: "\{\"repoRoot\":\"/somewhere\"\}")
 
-		Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: -32602, message: "{tool} answered a user-mode repoRoot instead of refusing it")
+		Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: RpcInvalidParamsCode, message: "{tool} answered a user-mode repoRoot instead of refusing it")
 		Expect.contains(rpcErrorMessage(doc), needle: "started without --dev")
 	end 'eachToolTakingARepoRoot'
 end 'standard mcp-server refuses a contributor argument in user mode'
 
 test 'standard mcp-server refuses an argument of the wrong JSON type'
-	let doc = callTool("fmt", argumentsJson: "\{\"path\":42\}")
+	let doc = callTool(FmtTool, argumentsJson: "\{\"path\":42\}")
 
-	Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: -32602)
+	Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: RpcInvalidParamsCode)
 	Expect.contains(rpcErrorMessage(doc), needle: "must be of type string")
 end 'standard mcp-server refuses an argument of the wrong JSON type'
 
@@ -154,13 +162,13 @@ end 'standard mcp-server info reports this compiler'
 test 'standard mcp-server refuses the contributor tools by name'
 	let doc = callTool("run_spec_test")
 
-	Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: -32601)
+	Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: RpcMethodNotFoundCode)
 	Expect.contains(rpcErrorMessage(doc), needle: "Unknown tool: run_spec_test")
 end 'standard mcp-server refuses the contributor tools by name'
 
 test 'standard mcp-server answers unknown methods and malformed input'
 	let unknown = try responseDocs(runMcpSingle(unknownMethodRequest())).get(0) otherwise panic("no response")
-	Expect.equal(rpcErrorCode(unknown) as AssertedInt, expected: -32601)
+	Expect.equal(rpcErrorCode(unknown) as AssertedInt, expected: RpcMethodNotFoundCode)
 	Expect.contains(rpcErrorMessage(unknown), needle: "Method not found: unknown/method")
 
 	let malformed = try responseDocs(runMcpSingle("not valid json at all")).get(0) otherwise panic("no response")

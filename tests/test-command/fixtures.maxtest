@@ -71,11 +71,6 @@
 // where its top-level names join the constants above — fold anything the tests need into a
 // `.maxtest` file, where an ordinary declaration is perfectly legal.
 
-// ⭐ **EXACTLY ONE DECLARATION HERE IS `export`ed, AND IT IS THE ONE A CASE FILE NAMES:**
-// `checkFixture`. A declaration in a `.maxtest` file takes the file tier unless it says otherwise,
-// just as a `test` itself does, and the compiler REFUSES an export nothing outside the declaring
-// file reads (E3092 / E3093) — so the export list is not a matter of taste here, it is checked.
-
 // Where the fixture projects live, relative to the checkout root — see the working-directory contract
 // above. This file sits beside that directory, but a path relative to THIS file is not something a
 // running binary has, so it is spelled from the root like every other path here.
@@ -129,9 +124,6 @@ typealias FixtureCaseTally = int(0 to i64.max)
 // both are cast to the alias `Expect` compares.
 typealias RunExitCode = int(i64.min to i64.max)
 
-// A list of paths one directory walk produced. Declared HERE rather than reached for: stdlib's own
-// `FilePathArray` is a member of `Directory` and has no file-scope spelling, so it resolves only inside
-// programs that export one of their own.
 typealias FixturePathArray = Array with FilePath
 
 // ============================================================================================
@@ -181,16 +173,6 @@ test 'no corpus directory holds a source that is not a test'
 	Expect.isEmpty(sweepable, message: "these files under {FixturesDir} or {ProjectDir} are ORDINARY Maxon sources, which `maxon test` compiles into the project they sit in — failing that case for a reason having nothing to do with the command under test. Fold each declaration into a `*{TestSourceSuffix}` file; do NOT add a `.maxonignore`, which would hide them from the command this corpus exists to test.")
 end 'no corpus directory holds a source that is not a test'
 
-// ⭐⭐ **A COMPILE ERROR NAMES THE FILE THE AUTHOR WROTE, NOT THE COPY THE RUN IS ABOUT TO DELETE.**
-//
-// `maxon test` compiles a STAGED COPY of the project, so every path the compiler knows is a path under
-// `<project>/.maxon/test/staged/` — a directory the author never wrote in, that the next run purges, and
-// that this compiler itself marks as not part of the project. Without `Compiler.StagedSourceOrigin`
-// this exact fixture reports `…/.maxon/test/staged/sneaky.maxtest:11:10` for a file the author
-// spelled `sneaky.maxtest`.
-//
-// ⛔ **THE FIXTURE CANNOT CATCH THIS AND MUST NOT BE ASKED TO.** Its `expected.txt` compares STDOUT,
-// and a diagnostic goes to STDERR — so `reserved-name-refused` passed, byte for byte, throughout. The
 // ============================================================================================
 // RUNNING ONE CASE
 // ============================================================================================
@@ -217,13 +199,10 @@ export function checkFixture(caseName String) throws TestFailure
 	try Expect.equal(observedStdout, expected: expectedStdout)
 end 'checkFixture'
 
-// Spawn this checkout's `maxon` at one case and collect everything it said.
-//
-// ⛔ **EVERYTHING THAT WOULD ⛔ THE CASE BEING RUN AT ALL PANICS RATHER THAN FAILING AN ASSERTION.**
-// A missing binary, an unspellable path, a spawn that never happened — none of those is the command
-// answering wrongly, and a report that made them read alike would send a reader looking for a defect in
-// the thing that never ran.
-export function runFixture(caseName String) returns CollectedOutput
+// A missing binary, an unspellable path or a failed spawn panics rather than failing an assertion:
+// none is the command answering wrongly, and a report that read alike would send a reader after a
+// defect in a command that never ran.
+export function runFixture(caseName String, extraArguments StringArray = StringArray.create()) returns CollectedOutput
 	let binary = testedCompilerPath()
 
 	if not File.exists(binary) 'noBinary'
@@ -231,14 +210,18 @@ export function runFixture(caseName String) returns CollectedOutput
 	end 'noBinary'
 
 	let caseDir = readableDir("{FixturesDir}/{caseName}")
+	var argv = fixtureArgv(caseDir, caseName: caseName)
 
-	return try Subprocess.run(Executable.path(binary), arguments: fixtureArgv(caseDir, caseName: caseName)) otherwise (e) 'spawnFailed'
+	for extra in extraArguments 'eachExtra'
+		argv.push(extra)
+	end 'eachExtra'
+
+	return try Subprocess.run(Executable.path(binary), arguments: argv) otherwise (e) 'spawnFailed'
 		panic("fixtures.test: the gate could not run — could not spawn the '{caseName}' case ({e.displayReason()}). It pins what `{TestedCommandName}` prints, and a report nothing compares is a claim.")
 	end 'spawnFailed'
 end 'runFixture'
 
-// The binary under test, with the suffix this host can actually spawn.
-function testedCompilerPath() returns FilePath
+export function testedCompilerPath() returns FilePath
 	#if os(Windows)
 		let spelled = "{TestedCompilerStem}.exe"
 	#else

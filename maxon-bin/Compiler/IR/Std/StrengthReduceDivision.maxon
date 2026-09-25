@@ -570,10 +570,8 @@ function opIsIntegerDivision(op StdOp) returns bool
 			unaryOp or
 			cmp or
 			binOpImm or
-			cmpImm gives false
-		div or
-			mod gives true
-		condBranch or
+			cmpImm or
+			condBranch or
 			branch or
 			ret or
 			param or
@@ -596,6 +594,7 @@ function opIsIntegerDivision(op StdOp) returns bool
 			osProcessExitCode or
 			osCloseHandle or
 			osWaitHandle or
+			osWaitChild or
 			osFreePages or
 			switch or
 			witnessCall or
@@ -663,14 +662,15 @@ function opIsIntegerDivision(op StdOp) returns bool
 			tlsSetValue or
 			tlsSlotLoad or
 			osSetEvent or
-			osEnterBackgroundPriority gives false
-		osFileOpenWriteExecutable gives false
-		osEnvBlock or
-			osEnvBlockFree gives false
-		loadAcquire or
-			storeRelease gives false
-		osHandleFileType gives false
-		osCreateNamedSegment or
+			osEnterBackgroundPriority or
+			osFileOpenWriteExecutable or
+			osEnvBlock or
+			osEnvBlockFree or
+			loadAcquire or
+			storeRelease or
+			osHandleFileType or
+			osProcessProbe or
+			osCreateNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
@@ -678,8 +678,10 @@ function opIsIntegerDivision(op StdOp) returns bool
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe gives false
+			osSocketServe or
 			osDebugHost gives false
+		div or
+			mod gives true
 	end 'k'
 end 'opIsIntegerDivision'
 
@@ -694,10 +696,8 @@ function appendReducedOp(module StdModule, opIdx OpIndex, constMap ConstValueMap
 			unaryOp or
 			cmp or
 			binOpImm or
-			cmpImm then rebuilt.push(opIdx)
-		div(resultId, lhs, rhs, signedness) then reduceOneDivision(module, opIdx: opIdx, resultId: resultId, dividend: lhs, divisorId: rhs, signedness: signedness, isRemainder: false, constMap: constMap, reduction: reduction, magic: magic, mint: mint, rebuilt: rebuilt, detached: detached)
-		mod(resultId, lhs, rhs, signedness) then reduceOneDivision(module, opIdx: opIdx, resultId: resultId, dividend: lhs, divisorId: rhs, signedness: signedness, isRemainder: true, constMap: constMap, reduction: reduction, magic: magic, mint: mint, rebuilt: rebuilt, detached: detached)
-		condBranch or
+			cmpImm or
+			condBranch or
 			branch or
 			ret or
 			param or
@@ -720,6 +720,7 @@ function appendReducedOp(module StdModule, opIdx OpIndex, constMap ConstValueMap
 			osProcessExitCode or
 			osCloseHandle or
 			osWaitHandle or
+			osWaitChild or
 			osFreePages or
 			switch or
 			witnessCall or
@@ -787,14 +788,15 @@ function appendReducedOp(module StdModule, opIdx OpIndex, constMap ConstValueMap
 			tlsSetValue or
 			tlsSlotLoad or
 			osSetEvent or
-			osEnterBackgroundPriority then rebuilt.push(opIdx)
-		osFileOpenWriteExecutable then rebuilt.push(opIdx)
-		osEnvBlock or
-			osEnvBlockFree then rebuilt.push(opIdx)
-		loadAcquire or
-			storeRelease then rebuilt.push(opIdx)
-		osHandleFileType then rebuilt.push(opIdx)
-		osCreateNamedSegment or
+			osEnterBackgroundPriority or
+			osFileOpenWriteExecutable or
+			osEnvBlock or
+			osEnvBlockFree or
+			loadAcquire or
+			storeRelease or
+			osHandleFileType or
+			osProcessProbe or
+			osCreateNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
@@ -802,8 +804,10 @@ function appendReducedOp(module StdModule, opIdx OpIndex, constMap ConstValueMap
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe then rebuilt.push(opIdx)
+			osSocketServe or
 			osDebugHost then rebuilt.push(opIdx)
+		div(resultId, lhs, rhs, signedness) then reduceOneDivision(module, opIdx: opIdx, resultId: resultId, dividend: lhs, divisorId: rhs, signedness: signedness, isRemainder: false, constMap: constMap, reduction: reduction, magic: magic, mint: mint, rebuilt: rebuilt, detached: detached)
+		mod(resultId, lhs, rhs, signedness) then reduceOneDivision(module, opIdx: opIdx, resultId: resultId, dividend: lhs, divisorId: rhs, signedness: signedness, isRemainder: true, constMap: constMap, reduction: reduction, magic: magic, mint: mint, rebuilt: rebuilt, detached: detached)
 	end 'site'
 end 'appendReducedOp'
 

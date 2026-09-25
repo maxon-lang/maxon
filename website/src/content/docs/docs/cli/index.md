@@ -22,13 +22,14 @@ agents, and reads back what a program did.
 | `maxon init [<directory>]` | Scaffold a new project: `<directory>.maxproj` and `main.maxon` |
 | `maxon cache [clear]` | Report what this compiler has cached on the host, or remove it |
 | `maxon coverage <run\|report> <exe>` | Run a `--coverage` binary and report line and branch coverage ([Debugging and Profiling](/docs/cli/debugging/)) |
+| `maxon dap-server` | Speak the Debug Adapter Protocol over stdio ([Editor Support](/docs/cli/editor/)) |
 | `maxon debug <exe> [-- args...]` | Debug a program interactively: breakpoints, stepping, backtraces and locals ([Debugging and Profiling](/docs/cli/debugging/)) |
 | `maxon debug --dump-info <exe>` | Print the `.mxdbg` debug-info sidecar beside a binary ([Debugging and Profiling](/docs/cli/debugging/)) |
 | `maxon debug --symbolize <exe> <offset...>` | Resolve code offsets to `file:line:col` ([Debugging and Profiling](/docs/cli/debugging/)) |
 | `maxon fmt [file\|directory]` | Re-print Maxon sources in canonical layout, in place |
 | `maxon help [<command>]` | Print the command and option reference, whole or for one command |
 | `maxon lsp-server` | Speak the Language Server Protocol over stdio ([Editor Support](/docs/cli/editor/)) |
-| `maxon mcp-server [--dev]` | Speak the Model Context Protocol over stdio ([MCP Server](/docs/cli/mcp-server/)) |
+| `maxon mcp-server [--dev] [--http[=<port>]]` | Speak the Model Context Protocol over stdio, or over loopback HTTP ([MCP Server](/docs/cli/mcp-server/)) |
 | `maxon monitor [--filter=…] <exe> [args...]` | Run a `--debugstream` binary and print its trace events ([Debugging and Profiling](/docs/cli/debugging/)) |
 | `maxon profile run <exe>` | Sample a running program and report where its CPU time went ([Debugging and Profiling](/docs/cli/debugging/)) |
 | `maxon execute <file\|directory> [args...]` | Compile a program, or reuse a cached build of it, and run it |
@@ -261,6 +262,11 @@ lists them and exits 1. **A single word naming a target** builds that target, ea
 name written `-`: `maxon build my-app` builds the target function `my_app`. A word naming no target is
 a path. See [Project Structure](/docs/cli/project-structure/). A directory with no `.maxproj` file prints a usage
 line and exits 1.
+
+**A path inside the compiler's `runtime/` directory** is refused with exit 1 and an error naming it as part
+of the `runtime/` tier: every program compiles that tier, so a file of it is built through a program that
+uses it.
+
 **Options:**
 
 | Option | Description |
@@ -369,8 +375,20 @@ act on.
 
 `clear` removes the compiled programs [`maxon execute`](#maxon-execute) and a path-less
 [`maxon build`](#maxon-build) keep, the directories holding them, the inline snippets the
-[MCP server](/docs/cli/mcp-server/) stages, and the Maxon directory above all of those. The next `run` or
-path-less `build` compiles from scratch and fills the cache again.
+[MCP server](/docs/cli/mcp-server/) stages, the programs `debug_start` and `maxon dap-server` build for debugging,
+and the Maxon directory above all of those. The next `run` or path-less `build` compiles from scratch
+and fills the cache again.
+
+**A debug build a live session is using stays**, with its sidecar and the directories above it, and
+`clear` ends its report with a `Kept <n> files a live debug session is using` line. Each debug build's
+file name carries the process id of the `maxon mcp-server` or `maxon dap-server` that built it, and the
+build belongs to a live session while a process with that id exists. A server removes the debug builds
+and the staged snippets it made when the session or call that needed them ends, and each
+`maxon mcp-server` and `maxon dap-server` removes, as it starts, those whose owning process has ended —
+the leftovers of a server that was killed. The owner is known by its process id alone, so an owner in another pid
+namespace, such as a container sharing this cache directory, reads as ended when no process here has
+its id and as alive when an unrelated process here does; an ended owner whose id the system has reused
+reads as alive until that process ends.
 
 It removes **only what Maxon created**. `MAXON_RUN_CACHE_ROOT` may name a directory that is already
 somebody's — a shared build area, or your own scratch directory — so the clear reaches only the Maxon
@@ -456,7 +474,9 @@ normally with `maxon build`.
 | Option | Description |
 |--------|-------------|
 | `--filter=P` | Run only tests whose name or file path contains `P` (case-insensitive). Repeatable, and one value may hold comma-separated patterns; the run takes every test any pattern selects. A pattern that selects no test ends the run with `no test matched 'P'` and exit 1, and a value naming no pattern (`--filter=,`) is refused with exit 2. |
-| `--list` | Print the tests that would run, and compile nothing. A project whose sources do not all tokenize is still refused, so the list is never quietly short a file. |
+| `--list` | Print the tests that would run. It compiles only with `--build`. A project whose sources do not all tokenize is still refused, so the list holds every file's tests. |
+| `--build` | With `--list`: also build the test binary, with its debug-info sidecar, and stop before any test runs. The build happens when at least one test is selected, and `--build` without `--list` is refused. The listing names the absolute path of the binary (`binary` under `--json`) and, under `--json`, gives each test a `select` value: see [Running the test binary](#running-the-test-binary). |
+| `--no-debug-info` | Build the test binary without its `.mxdbg` debug-info sidecar, as [`maxon build --no-debug-info`](#maxon-build) does. |
 | `--json` | Emit the report as JSON instead of text. |
 | `--isolate` | Run every test in its own process, instead of one process per test file. |
 | `--bail`, `--bail=N` | Stop starting new work after `N` failures (`--bail` alone means 1). Work already running finishes, so the count may exceed `N`. Without it, every test runs. |
@@ -498,6 +518,21 @@ process from the start.
 A run that finds no tests exits 1 on purpose, so a suite that silently stopped containing tests does
 not read as green. A source file that does not tokenize is a compile error like any other: the run
 exits 2 with the diagnostic, rather than reporting that file's tests as absent.
+
+### Running the test binary
+
+`maxon test --list --build --json` builds the test binary without running it, for a tool that runs it
+itself, such as a debugger. Run from the directory `maxon test` would run it in, the binary given
+`--select=<select>` (a listed test's `select` value) runs that test alone, and exits:
+
+| Code | Meaning |
+|------|---------|
+| `0` | Every test it ran passed |
+| `3` | A test failed |
+| `101` | A test leaked (see [The leak check](/docs/cli/debugging/#the-leak-check)) |
+| `1` | A panic |
+
+The VS Code extension's **Debug Test** runs it this way.
 
 **Example.** A failing expectation, then the fix:
 

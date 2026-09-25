@@ -1,8 +1,5 @@
-// McpHarness.maxon — Shared test harness for testing `maxon mcp-server`
-// and `maxon mcp-server --dev`.
-//
-// Spawns the compiler under test, pipes newline-delimited JSON-RPC requests
-// to stdin, and collects and parses the JSON-RPC responses from stdout.
+// Shared harness for `maxon mcp-server`: spawns the compiler under test and drives it over stdio
+// (newline-delimited JSON-RPC) or over the `--http` transport.
 
 let TestedCompilerStem = "maxon-bin/.maxon/maxon"
 
@@ -78,28 +75,51 @@ end 'stagedProgram'
 
 // `arguments` for a tool that takes a `path`, naming `file`.
 export function pathArgument(file FilePath) returns String
-	return "\{\"path\":{Json.quote(file.toString())}\}"
+	return argumentsOf([pathMember(file)])
 end 'pathArgument'
 
 // Every file under `dir` at any depth other than `kept`, for a report. Empty is what a tool that writes
 // nothing leaves.
 export function filesWrittenBeside(kept FilePath, dir FilePath) returns String
-	var found = ""
+	var written = FilePathArray.create()
+
+	for entry in filesUnder(dir) 'eachFile'
+		if entry.toString() != kept.toString() 'written'
+			written.push(entry)
+		end 'written'
+	end 'eachFile'
+
+	return renderedPaths(written)
+end 'filesWrittenBeside'
+
+export function filesUnder(dir FilePath) returns FilePathArray
+	var found = FilePathArray.create()
 	let entries = try Directory.list(dir) otherwise panic("McpHarness: could not list {dir.path}")
 
 	for entry in entries 'eachEntry'
 		if Directory.isDirectory(entry) 'aDirectory'
-			found.append(filesWrittenBeside(kept, dir: entry))
+			for nested in filesUnder(entry) 'eachNested'
+				found.push(nested)
+			end 'eachNested'
+
 			continue
 		end 'aDirectory'
 
-		if entry.toString() != kept.toString() 'written'
-			found.append("{entry.path} ")
-		end 'written'
+		found.push(entry)
 	end 'eachEntry'
 
 	return found
-end 'filesWrittenBeside'
+end 'filesUnder'
+
+export function renderedPaths(paths FilePathArray) returns String
+	var rendered = ""
+
+	for path in paths 'eachPath'
+		rendered.append("{path.path} ")
+	end 'eachPath'
+
+	return rendered
+end 'renderedPaths'
 
 // A program that prints `line` and exits 0, written into `temp/` by a case so no live `.maxon` sits under
 // `tests/`.
@@ -156,7 +176,7 @@ export function unknownMethodRequest(method String = "unknown/method", id Reques
 	return "\{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"{method}\",\"params\":\{\}\}"
 end 'unknownMethodRequest'
 
-export function runMcp(requests StringArray, devMode bool = false) returns McpRun
+export function runMcp(requests StringArray, devMode bool = false, environment Environment = Environment.inherit) returns McpRun
 	var argv = StringArray.create()
 	argv.push("mcp-server")
 
@@ -175,6 +195,7 @@ export function runMcp(requests StringArray, devMode bool = false) returns McpRu
 	var config = Configuration.create(Executable.path(testedCompilerPath()))
 	config.arguments = argv
 	config.standardInput = InputSource.bytes(stdin)
+	config.environment = environment
 
 	let out = try config.run() otherwise (e) 'fail'
 		panic("runMcp: failed to spawn: {e.displayReason()}")
@@ -214,7 +235,7 @@ export type StreamingMcpSession
 	end 'sendLine'
 
 	export function readResponseDoc() returns JsonDoc throws SubprocessError
-		let line = try self.server.readStdoutLine()
+		let line = try self.server.readStdoutLineCapped(ResponseLineByteCap)
 		return try Json.parse(line) otherwise panic("StreamingMcpSession: invalid JSON response: {line}")
 	end 'readResponseDoc'
 
@@ -274,20 +295,6 @@ export function toolNames(doc JsonDoc) returns StringArray
 
 	return names
 end 'toolNames'
-
-export function containsString(arr StringArray, target String) returns bool
-	let n = arr.count()
-
-	for i in 0 upto n 'each'
-		let s = try arr.get(i) otherwise continue
-
-		if s.equals(target) 'match'
-			return true
-		end 'match'
-	end 'each'
-
-	return false
-end 'containsString'
 
 union SchemaLookup
 	found(properties JsonNodeId)
@@ -466,3 +473,612 @@ export function listTools(devMode bool = false) returns JsonDoc
 	let docs = responseDocs(runMcp(reqs, devMode: devMode))
 	return try docs.get(1) otherwise panic("no response to tools/list")
 end 'listTools'
+
+typealias HeaderMap = Map with (String, String)
+
+// Not `StatusCode`: parsing a status line into that enum throws on a code it does not name, and a
+// transport case must be able to read back any code the server sends.
+export typealias HttpStatusNumber = int(0 to 999)
+
+export typealias SourceLine = int(1 to u32.max)
+
+export let McpHttpOption = "--http"
+export let McpExitOnStdinEofOption = "--exit-on-stdin-eof"
+export let McpIdleTimeoutOptionPrefix = "--idle-timeout="
+export let McpMaxSessionsOptionPrefix = "--max-sessions="
+let McpSessionHeaderName = "mcp-session-id"
+export let McpRoutePath = "/mcp"
+
+let EndpointKey = "endpoint"
+let HeaderSeparator = "\r\n"
+let HeaderEnd = "\r\n\r\n"
+let StatusLineFieldSeparator = " "
+let HeaderNameSeparator = ": "
+let RecvChunkBytes = 65536
+let RecvAttemptBudget = 4096
+let ServerExitDeadlineMs = 5000
+let TerminateWaitMs = 1
+let AnchorMarker = "// anchor: "
+let LineFeed = "\n"
+let ContentLengthHeaderName = "content-length"
+let NoContentStatus = 204 as HttpStatusNumber
+let NotModifiedStatus = 304 as HttpStatusNumber
+
+export type HttpAnswer
+	export var statusCode as HttpStatusNumber
+	export var headers as HeaderMap
+	export var body as String
+
+	export static function create(statusCode HttpStatusNumber, headers HeaderMap, body String) returns HttpAnswer
+		return HttpAnswer{statusCode: statusCode, headers: headers, body: body}
+	end 'create'
+
+	export function session() returns McpSession
+		let id = try self.headers.get(McpSessionHeaderName) otherwise return McpSession.none
+
+		return McpSession.minted(id)
+	end 'session'
+
+	export function bodyDoc() returns JsonDoc
+		return try Json.parse(self.body) otherwise panic("McpHarness: an HTTP response body is not JSON: {self.body}")
+	end 'bodyDoc'
+end 'HttpAnswer'
+
+export union McpSession
+	none
+	minted(id String)
+end 'McpSession'
+
+export function describedSession(session McpSession) returns String
+	return match session 'which'
+		none gives "no `Mcp-Session-Id`"
+		minted(id) gives "`Mcp-Session-Id: {id}`"
+	end 'which'
+end 'describedSession'
+
+function mcpRequestText(method String, target String, host String, origin String, sessionId McpSession, body String) returns String
+	var text = "{method} {target} HTTP/1.1{HeaderSeparator}"
+	text.append("Host: {host}{HeaderSeparator}")
+
+	if not origin.isEmpty() 'hasOrigin'
+		text.append("Origin: {origin}{HeaderSeparator}")
+	end 'hasOrigin'
+
+	match sessionId 'hasSession'
+		none then break 'hasSession'
+		minted(id) then text.append("Mcp-Session-Id: {id}{HeaderSeparator}")
+	end 'hasSession'
+
+	text.append("Content-Type: application/json{HeaderSeparator}")
+	text.append("Content-Length: {body.byteLength()}{HeaderSeparator}")
+	text.append("Connection: close{HeaderSeparator}")
+	text.append(HeaderSeparator)
+	text.append(body)
+
+	return text
+end 'mcpRequestText'
+
+// Anything that stops the exchange happening at all panics: none of it is the server answering
+// wrongly.
+function httpExchange(port NetworkPort, requestText String) returns HttpAnswer
+	var client = try TcpClient.connect("127.0.0.1", port: port) otherwise (e) 'noConnection'
+		panic("McpHarness: could not connect to the MCP HTTP transport on port {port}: {e.name}")
+	end 'noConnection'
+
+	_ = try client.send(requestText) otherwise (e) 'sendFailed'
+		client.close()
+		panic("McpHarness: could not send to the MCP HTTP transport: {e.name}")
+	end 'sendFailed'
+
+	var raw = ""
+	var reads = 0
+	var open = true
+
+	while open 'drain'
+		if reads >= RecvAttemptBudget 'neverClosed'
+			client.close()
+			panic("McpHarness: the MCP HTTP transport sent {reads} reads of an answer without closing the connection. What arrived: {raw}")
+		end 'neverClosed'
+
+		let chunk = try client.recv(RecvChunkBytes) otherwise (e) 'ended'
+			match e 'why'
+				connectionClosed then open = false
+				default panic("McpHarness: reading the MCP HTTP transport's answer failed ({e.name}) after {raw.byteLength()} bytes: {raw}")
+			end 'why'
+
+			continue
+		end 'ended'
+
+		raw.append(chunk)
+		reads = reads + 1
+	end 'drain'
+
+	client.close()
+
+	return parseHttpAnswer(raw)
+end 'httpExchange'
+
+function parseHttpAnswer(raw String) returns HttpAnswer
+	let sections = raw.split(HeaderEnd)
+	let head = try sections.get(0) otherwise panic("McpHarness: an HTTP answer is empty")
+
+	if sections.count() < 2 'noBody'
+		panic("McpHarness: an HTTP answer has no header terminator: {raw}")
+	end 'noBody'
+
+	var body = ""
+	var sectionIndex = 1
+
+	while sectionIndex < sections.count() 'rejoin'
+		if sectionIndex > 1 'separator'
+			body.append(HeaderEnd)
+		end 'separator'
+
+		body.append(try sections.get(sectionIndex) otherwise "")
+		sectionIndex = sectionIndex + 1
+	end 'rejoin'
+
+	var headers = HeaderMap.create()
+	var statusCode = 0 as HttpStatusNumber
+	var lineIndex = 0
+
+	for line in head.split(HeaderSeparator) 'eachLine'
+		if lineIndex == 0 'statusLine'
+			let field = try line.split(StatusLineFieldSeparator).get(1) otherwise panic("McpHarness: an HTTP answer has no status code: {line}")
+			let parsed = try int.fromString(field) otherwise panic("McpHarness: an HTTP answer's status code is not a number: {line}")
+			statusCode = parsed as HttpStatusNumber
+		end 'statusLine' else 'headerLine'
+			let parts = line.split(HeaderNameSeparator)
+
+			if parts.count() >= 2 'named'
+				let name = (try parts.get(0) otherwise "").toLower()
+				let value = try parts.get(1) otherwise ""
+				headers.upsert(name, value: value)
+			end 'named'
+		end 'headerLine'
+
+		lineIndex = lineIndex + 1
+	end 'eachLine'
+
+	if statusCode == NoContentStatus or statusCode == NotModifiedStatus 'contentless'
+		if headers.contains(ContentLengthHeaderName) or not body.isEmpty() 'carriesContent'
+			panic("McpHarness: a {statusCode} answer carries a Content-Length or a body, which that status forbids: {raw}")
+		end 'carriesContent'
+
+		return HttpAnswer.create(statusCode, headers: headers, body: body)
+	end 'contentless'
+
+	let declared = try headers.get(ContentLengthHeaderName) otherwise panic("McpHarness: an HTTP answer carries no Content-Length, so a truncated one cannot be told from a whole one: {raw}")
+	let declaredBytes = try int.fromString(declared.trim()) otherwise panic("McpHarness: an HTTP answer's Content-Length is not a number: {raw}")
+
+	if (body.byteLength() as ParsedInt) != declaredBytes 'truncated'
+		panic("McpHarness: an HTTP answer declares {declaredBytes} body bytes and {body.byteLength()} arrived: {raw}")
+	end 'truncated'
+
+	return HttpAnswer.create(statusCode, headers: headers, body: body)
+end 'parseHttpAnswer'
+
+// Polled, not read: a blocking read of a stderr a live server never writes to would hang instead of
+// reporting.
+function drainedStderr(child StreamingSubprocess) returns String
+	var said = ""
+	var reads = 0
+
+	while reads < StderrDrainBudget 'drain'
+		match child.tryReadStderrLine() 'polled'
+			line(text) then said.append("{text} ")
+			none then break
+		end 'polled'
+
+		reads = reads + 1
+	end 'drain'
+
+	return said if not said.isEmpty() else "nothing on stderr"
+end 'drainedStderr'
+
+let StderrDrainBudget = 32
+let ResponseLineByteCap = 16777216
+
+// Every path owes `stop` or `terminate`: an unreleased `StreamingSubprocess` leaks and the run
+// exits 101.
+export type StreamingHttpMcpServer
+	export var server as StreamingSubprocess
+	export var endpoint as String
+	export var endpointHost as String
+	export var endpointPort as NetworkPort
+
+	export static function start(extraOptions StringArray, environment Environment = Environment.inherit, endsWithItsStdin bool = true) returns StreamingHttpMcpServer
+		var argv = StringArray.create()
+		argv.push("mcp-server")
+		argv.push(McpHttpOption)
+
+		if endsWithItsStdin 'watchesItsStdin'
+			argv.push(McpExitOnStdinEofOption)
+		end 'watchesItsStdin'
+
+		for option in extraOptions 'eachOption'
+			argv.push(option)
+		end 'eachOption'
+
+		var spawned = try StreamingSubprocess.spawnWithEnvironment(Executable.path(testedCompilerPath()), arguments: argv, workingDirectory: Directory.currentPath(), environment: environment) otherwise (e) 'spawnFailed'
+			panic("StreamingHttpMcpServer: `mcp-server {McpHttpOption}` did not spawn: {e.displayReason()}")
+		end 'spawnFailed'
+
+		let line = try spawned.readStdoutLine() otherwise (e) 'noEndpoint'
+			let said = drainedStderr(spawned)
+			spawned.release()
+			panic("StreamingHttpMcpServer: the server printed no endpoint line ({e.displayReason()}). It said: {said}")
+		end 'noEndpoint'
+
+		let doc = try Json.parse(line.trim()) otherwise 'notJson'
+			let said = drainedStderr(spawned)
+			spawned.release()
+			panic("StreamingHttpMcpServer: the endpoint line is not JSON. Stdout: `{line}`. It said: {said}")
+		end 'notJson'
+
+		let endpointText = try doc.getString(doc.root, key: EndpointKey) otherwise 'noKey'
+			spawned.release()
+			panic("StreamingHttpMcpServer: the endpoint line has no `{EndpointKey}`: {line}")
+		end 'noKey'
+
+		let url = try URL.parse(endpointText) otherwise 'notAUrl'
+			spawned.release()
+			panic("StreamingHttpMcpServer: the endpoint is not a URL: {endpointText}")
+		end 'notAUrl'
+
+		let parsedHost = try url.host() otherwise 'noHost'
+			spawned.release()
+			panic("StreamingHttpMcpServer: the endpoint names no host: {endpointText}")
+		end 'noHost'
+
+		let parsedPort = try url.port() otherwise 'noPort'
+			spawned.release()
+			panic("StreamingHttpMcpServer: the endpoint names no port: {endpointText}")
+		end 'noPort'
+
+		return StreamingHttpMcpServer{server: spawned, endpoint: endpointText, endpointHost: parsedHost, endpointPort: parsedPort as NetworkPort}
+	end 'start'
+
+	export function authority() returns String
+		return "{self.endpointHost}:{self.endpointPort}"
+	end 'authority'
+
+	export function loopbackOrigin() returns String
+		return "http://{self.authority()}"
+	end 'loopbackOrigin'
+
+	export function post(body String, sessionId McpSession) returns HttpAnswer
+		return self.request("POST", target: McpRoutePath, host: self.authority(), origin: "", sessionId: sessionId, body: body)
+	end 'post'
+
+	export function request(method String, target String, host String, origin String, sessionId McpSession, body String) returns HttpAnswer
+		return httpExchange(self.endpointPort, requestText: mcpRequestText(method, target: target, host: host, origin: origin, sessionId: sessionId, body: body))
+	end 'request'
+
+	export function initializeSession() returns (HttpAnswer, McpSession)
+		let answer = self.post(initRequest(1), sessionId: McpSession.none)
+		return (answer, answer.session())
+	end 'initializeSession'
+
+	export function stop() throws TestFailure
+		self.server.closeStdin()
+
+		let code = try self.server.waitWithTimeout(ServerExitDeadlineMs) otherwise (e) 'noExit'
+			self.server.release()
+			try Expect.fail("`mcp-server {McpHttpOption}` did not exit within {ServerExitDeadlineMs} ms of its stdin closing ({e.displayReason()}), so it was terminated")
+
+			return
+		end 'noExit'
+
+		self.server.release()
+		try Expect.equal(code as AssertedInt, expected: 0, message: "`mcp-server {McpHttpOption}` must exit 0 when its stdin closes; it exited {code}")
+	end 'stop'
+
+	export function closeItsStdin()
+		self.server.closeStdin()
+	end 'closeItsStdin'
+
+	// For a server started without `endsWithItsStdin`: the HTTP transport has no shutdown route, so
+	// `release` ends it and its exit code says nothing. No case may assert one.
+	export function terminate()
+		_ = try self.server.waitWithTimeout(TerminateWaitMs) otherwise 0
+		self.server.release()
+	end 'terminate'
+end 'StreamingHttpMcpServer'
+
+export let RpcInvalidParamsCode = -32602
+export let RpcMethodNotFoundCode = -32601
+
+export typealias OwnerId = int(0 to u64.max)
+
+export function endedProcessId() returns OwnerId
+	#if os(Windows)
+		let exe = Executable.name("cmd")
+		let argv = ["/c", "exit", "0"]
+	#else
+		let exe = Executable.path(try FilePath.from("/bin/sh") otherwise panic("mcp tests: /bin/sh is a spellable path"))
+		let argv = ["-c", "exit 0"]
+	#endif
+
+	let finished = try Subprocess.run(exe, arguments: argv) otherwise panic("mcp tests: could not run a child to learn an ended process's id")
+
+	return finished.pid
+end 'endedProcessId'
+
+export typealias ProgramSleepMillis = int(0 to 60000)
+
+export let SleepingProgramStartedLine = "started sleeping"
+
+export function sleepingProgramSource(sleepMs ProgramSleepMillis) returns String
+	var source = ""
+	source.append("function main() returns ExitCode\n")
+	source.append("\tprint(\"{SleepingProgramStartedLine}\\n\")\n")
+	source.append("\tsleep({sleepMs})\n")
+	source.append("\tprint(\"slept\\n\")\n")
+	source.append("\n")
+	source.append("\treturn 0\n")
+	source.append("end 'main'\n")
+
+	return source
+end 'sleepingProgramSource'
+
+export function debuggableProgramSource() returns String
+	var lines = StringArray.create()
+	lines.push("typealias Step = int(0 to 1000000)")
+	lines.push("")
+	lines.push("function work(seed Step) returns Step")
+	lines.push("\tvar total = seed")
+	lines.push("\tvar i = 0")
+	lines.push("")
+	lines.push("\twhile i < 4 'grind'")
+	lines.push("\t\ttotal = total + i {AnchorMarker}{DebuggableProgramAnchor}")
+	lines.push("\t\ti = i + 1")
+	lines.push("\tend 'grind'")
+	lines.push("")
+	lines.push("\treturn total")
+	lines.push("end 'work'")
+	lines.push("")
+	lines.push("function main() returns ExitCode")
+	lines.push("\tvar total = 0")
+	lines.push("\ttotal = total + work(1)")
+	lines.push("\ttotal = total + work(2)")
+	lines.push("\tprint(\"total \{total\}\\n\")")
+	lines.push("")
+	lines.push("\treturn 0")
+	lines.push("end 'main'")
+
+	var source = ""
+
+	for line in lines 'eachLine'
+		source.append("{line}\n")
+	end 'eachLine'
+
+	return source
+end 'debuggableProgramSource'
+
+export let DebuggableProgramLocalName = "total"
+
+export function stdioToolCall(session StreamingMcpSession, id RequestId, name String, argumentsJson String = "\{\}") returns JsonDoc
+	try session.sendLine(toolCallRequest(id, name: name, argumentsJson: argumentsJson)) otherwise (e) 'writeFailed'
+		panic("McpHarness: could not send `{name}`: {e.displayReason()}")
+	end 'writeFailed'
+
+	return try session.readResponseDoc() otherwise (e) 'readFailed'
+		panic("McpHarness: no answer to `{name}`: {e.displayReason()}")
+	end 'readFailed'
+end 'stdioToolCall'
+
+export function stdioHandshake(session StreamingMcpSession)
+	try session.sendLine(initRequest(1)) otherwise (e) 'writeFailed'
+		panic("McpHarness: could not send `initialize`: {e.displayReason()}")
+	end 'writeFailed'
+
+	_ = try session.readResponseDoc() otherwise (e) 'readFailed'
+		panic("McpHarness: no answer to `initialize`: {e.displayReason()}")
+	end 'readFailed'
+end 'stdioHandshake'
+
+export function anchorLineIn(program FilePath, anchor String) returns SourceLine
+	let body = try File.readText(program) otherwise panic("McpHarness: could not read {program.path}")
+	let marker = "{AnchorMarker}{anchor}"
+	var found = 0
+	var carriers = 0
+
+	for (iter, line) in body.split(LineFeed).withIterator() 'eachLine'
+		if line.trim().endsWith(marker) 'thisAnchor'
+			found = iter.index() + 1
+			carriers = carriers + 1
+		end 'thisAnchor'
+	end 'eachLine'
+
+	if carriers != 1 'notExactlyOne'
+		panic("McpHarness: {carriers} lines of {program.path} carry `{marker}`; exactly one must, or the case names a line it is not about")
+	end 'notExactlyOne'
+
+	return found as SourceLine
+end 'anchorLineIn'
+
+export function buildStagedProgram(program FilePath) returns FilePath
+	let directory = try program.parent() otherwise panic("McpHarness: {program.path} has no directory to build into")
+	let executable = directory.join("debuggee{executableSuffix()}")
+	let out = runIn(directory, binary: testedCompilerPath(), arguments: [BuildCommandName, program.toString(), "{OutputOptionPrefix}{executable.toString()}"])
+
+	if out.exitCode() != 0 'buildFailed'
+		panic("McpHarness: could not build {program.path} for a debug session: {out.stdout} {out.stderr}")
+	end 'buildFailed'
+
+	return executable
+end 'buildStagedProgram'
+
+let DebugStateKey = "state"
+let DebugEventsKey = "events"
+let DebugEventKindKey = "event"
+let DebugOutputKey = "output"
+
+function debugToolPayload(doc JsonDoc) returns JsonDoc
+	let text = toolCallText(doc)
+	return try Json.parse(text) otherwise panic("McpHarness: a debug tool answered text that is not JSON: {text}")
+end 'debugToolPayload'
+
+export function debugToolState(doc JsonDoc) returns String
+	let payload = debugToolPayload(doc)
+	return try payload.getString(payload.root, key: DebugStateKey) otherwise panic("McpHarness: a debug tool answered no `{DebugStateKey}`: {toolCallText(doc)}")
+end 'debugToolState'
+
+function debugPayloadArray(payload JsonDoc, doc JsonDoc, key String) returns JsonNodeIdArray
+	let arrayId = try payload.getChild(payload.root, key: key) otherwise panic("McpHarness: a debug tool answered no `{key}`: {toolCallText(doc)}")
+	let count = try payload.arrayLength(arrayId) otherwise panic("McpHarness: `{key}` is not an array: {toolCallText(doc)}")
+	var elements = JsonNodeIdArray.create()
+
+	for i in 0 upto count 'eachElement'
+		elements.push(try payload.arrayAt(arrayId, index: i) otherwise panic("McpHarness: `{key}` has no element {i} of its {count}"))
+	end 'eachElement'
+
+	return elements
+end 'debugPayloadArray'
+
+export function debugEventKinds(doc JsonDoc) returns StringArray
+	let payload = debugToolPayload(doc)
+	var kinds = StringArray.create()
+
+	for eventId in debugPayloadArray(payload, doc: doc, key: DebugEventsKey) 'eachEvent'
+		let kind = try payload.getString(eventId, key: DebugEventKindKey) otherwise continue
+		kinds.push(kind)
+	end 'eachEvent'
+
+	return kinds
+end 'debugEventKinds'
+
+export function debugEventLines(doc JsonDoc, kind String) returns StringArray
+	let payload = debugToolPayload(doc)
+	var lines = StringArray.create()
+
+	for eventId in debugPayloadArray(payload, doc: doc, key: DebugEventsKey) 'eachEvent'
+		let eventKind = try payload.getString(eventId, key: DebugEventKindKey) otherwise continue
+
+		if eventKind.equals(kind) 'wanted'
+			let line = try payload.getInt(eventId, key: "line") otherwise panic("McpHarness: a `{kind}` event carries no `line`: {toolCallText(doc)}")
+			lines.push("{line}")
+		end 'wanted'
+	end 'eachEvent'
+
+	return lines
+end 'debugEventLines'
+
+export function debugOutputLines(doc JsonDoc) returns StringArray
+	let payload = debugToolPayload(doc)
+	var lines = StringArray.create()
+
+	for lineId in debugPayloadArray(payload, doc: doc, key: DebugOutputKey) 'eachLine'
+		let line = payload.get(lineId)
+
+		if line.kind != JsonKind.jsonString 'notText'
+			panic("McpHarness: a `{DebugOutputKey}` element is not a string: {toolCallText(doc)}")
+		end 'notText'
+
+		lines.push(line.stringValue)
+	end 'eachLine'
+
+	return lines
+end 'debugOutputLines'
+
+export function debugLocalNames(doc JsonDoc) returns StringArray
+	let payload = debugToolPayload(doc)
+	var names = StringArray.create()
+
+	for eventId in debugPayloadArray(payload, doc: doc, key: DebugEventsKey) 'eachEvent'
+		let localsId = try payload.getChild(eventId, key: "locals") otherwise continue
+		let localCount = try payload.arrayLength(localsId) otherwise continue
+
+		for j in 0 upto localCount 'eachLocal'
+			let localId = try payload.arrayAt(localsId, index: j) otherwise continue
+			let name = try payload.getString(localId, key: "name") otherwise continue
+			names.push(name)
+		end 'eachLocal'
+	end 'eachEvent'
+
+	return names
+end 'debugLocalNames'
+
+export let DebugStartTool = "debug_start"
+export let DebugBreakTool = "debug_break"
+export let DebugContinueTool = "debug_continue"
+export let DebugLocalsTool = "debug_locals"
+export let DebugStopTool = "debug_stop"
+export let ExecuteTool = "execute"
+export let BuildTool = "build"
+export let TestTool = "test"
+export let FmtTool = "fmt"
+
+export let TimeoutSecondsArgument = "timeoutSeconds"
+export let StopTimeoutArgument = "stopTimeoutSeconds"
+export let BoundStoppedMarker = "stopped waiting"
+
+export let DebuggableProgramAnchor = "hot"
+export let DebugStoppedState = "stopped"
+export let DebugStopEventName = "stop"
+let HttpOkStatus = 200 as HttpStatusNumber
+
+let ArgumentMemberSeparator = ","
+
+export function argumentsOf(members StringArray) returns String
+	var joined = ""
+
+	for member in members 'eachMember'
+		joined = member if joined.isEmpty() else "{joined}{ArgumentMemberSeparator}{member}"
+	end 'eachMember'
+
+	return "\{{joined}\}"
+end 'argumentsOf'
+
+export function executableMember(executable FilePath) returns String
+	return "\"executable\":{Json.quote(executable.toString())}"
+end 'executableMember'
+
+export function sourceMember(source String) returns String
+	return "\"source\":{Json.quote(source)}"
+end 'sourceMember'
+
+function pathMember(file FilePath) returns String
+	return "\"path\":{Json.quote(file.toString())}"
+end 'pathMember'
+
+export function targetMember(target String) returns String
+	return "\"target\":{Json.quote(target)}"
+end 'targetMember'
+
+export function secondsMember(key String, seconds String) returns String
+	return "\"{key}\":{seconds}"
+end 'secondsMember'
+
+export function debugExecutableArgument(executable FilePath) returns String
+	return argumentsOf([executableMember(executable)])
+end 'debugExecutableArgument'
+
+export function sourceArgument(source String) returns String
+	return argumentsOf([sourceMember(source)])
+end 'sourceArgument'
+
+export function debugBreakTargetArgument(line SourceLine) returns String
+	return argumentsOf([targetMember("main.maxon:{line}")])
+end 'debugBreakTargetArgument'
+
+export function renderedStrings(values StringArray) returns String
+	var rendered = ""
+
+	for value in values 'eachValue'
+		rendered.append("{value} ")
+	end 'eachValue'
+
+	return rendered
+end 'renderedStrings'
+
+export function httpToolCall(server StreamingHttpMcpServer, sessionId McpSession, id RequestId, name String, argumentsJson String = "\{\}") returns JsonDoc
+	let answer = server.post(toolCallRequest(id, name: name, argumentsJson: argumentsJson), sessionId: sessionId)
+
+	if answer.statusCode != HttpOkStatus 'refused'
+		panic("mcp http tests: `{name}` over HTTP answered {answer.statusCode}: {answer.body}")
+	end 'refused'
+
+	return answer.bodyDoc()
+end 'httpToolCall'

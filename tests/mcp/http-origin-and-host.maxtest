@@ -1,0 +1,96 @@
+let OkStatus = 200 as HttpStatusNumber
+let ForbiddenStatus = 403 as HttpStatusNumber
+let BadRequestStatus = 400 as HttpStatusNumber
+
+let ForeignOrigin = "http://evil.example"
+let ForeignHost = "evil.example"
+let LoopbackAddress = "127.0.0.1"
+let LocalhostName = "localhost"
+
+let HostSpelledOption = "--http=0.0.0.0:80"
+let RefusedExitCode = 1
+let LoopbackWord = "loopback"
+let CliDeadlineMs = 10000
+
+test 'a foreign Origin is refused 403 and a loopback one is served'
+	var server = StreamingHttpMcpServer.start(StringArray.create())
+	let (initialized, sessionId) = server.initializeSession()
+	let foreign = server.request("POST", target: McpRoutePath, host: server.authority(), origin: ForeignOrigin, sessionId: sessionId, body: toolsListRequest(2))
+	let loopback = server.request("POST", target: McpRoutePath, host: server.authority(), origin: server.loopbackOrigin(), sessionId: sessionId, body: toolsListRequest(3))
+	try server.stop()
+
+	try Expect.equal(initialized.statusCode as AssertedInt, expected: OkStatus as AssertedInt, message: "the control `initialize` did not succeed, so nothing below says anything about `Origin`")
+	try Expect.equal(foreign.statusCode as AssertedInt, expected: ForbiddenStatus as AssertedInt, message: "an `Origin: {ForeignOrigin}` must be 403; it answered {foreign.statusCode} with {foreign.body}")
+	try Expect.equal(loopback.statusCode as AssertedInt, expected: OkStatus as AssertedInt, message: "the same request with `Origin: {server.loopbackOrigin()}` must be served")
+end 'a foreign Origin is refused 403 and a loopback one is served'
+
+test 'a loopback Origin without the server own port is refused 403, because it is another origin'
+	var server = StreamingHttpMcpServer.start(StringArray.create())
+	let (initialized, sessionId) = server.initializeSession()
+	let portlessLocalhost = server.request("POST", target: McpRoutePath, host: server.authority(), origin: "http://{LocalhostName}", sessionId: sessionId, body: toolsListRequest(2))
+	let portlessLoopback = server.request("POST", target: McpRoutePath, host: server.authority(), origin: "http://{LoopbackAddress}", sessionId: sessionId, body: toolsListRequest(3))
+	let ownPort = server.request("POST", target: McpRoutePath, host: server.authority(), origin: "http://{LocalhostName}:{server.endpointPort}", sessionId: sessionId, body: toolsListRequest(4))
+	try server.stop()
+
+	try Expect.equal(initialized.statusCode as AssertedInt, expected: OkStatus as AssertedInt, message: "the control `initialize` did not succeed, so nothing below says anything about `Origin`")
+	try Expect.equal(portlessLocalhost.statusCode as AssertedInt, expected: ForbiddenStatus as AssertedInt, message: "`Origin: http://{LocalhostName}` is port 80, a different origin from this server's; it answered {portlessLocalhost.statusCode}")
+	try Expect.equal(portlessLoopback.statusCode as AssertedInt, expected: ForbiddenStatus as AssertedInt, message: "`Origin: http://{LoopbackAddress}` is port 80, a different origin from this server's; it answered {portlessLoopback.statusCode}")
+	try Expect.equal(ownPort.statusCode as AssertedInt, expected: OkStatus as AssertedInt, message: "`Origin: http://{LocalhostName}:<port>` carries this server's own port and must be served")
+end 'a loopback Origin without the server own port is refused 403, because it is another origin'
+
+test 'a foreign Host header is refused 403 and localhost is served'
+	var server = StreamingHttpMcpServer.start(StringArray.create())
+	let (initialized, sessionId) = server.initializeSession()
+	let foreign = server.request("POST", target: McpRoutePath, host: "{ForeignHost}:{server.endpointPort}", origin: "", sessionId: sessionId, body: toolsListRequest(2))
+	let named = server.request("POST", target: McpRoutePath, host: "{LocalhostName}:{server.endpointPort}", origin: "", sessionId: sessionId, body: toolsListRequest(3))
+	try server.stop()
+
+	try Expect.equal(initialized.statusCode as AssertedInt, expected: OkStatus as AssertedInt, message: "the control `initialize` did not succeed, so nothing below says anything about `Host`")
+	try Expect.equal(foreign.statusCode as AssertedInt, expected: ForbiddenStatus as AssertedInt, message: "a `Host: {ForeignHost}:<port>` must be 403 — it is how a DNS name pointed at 127.0.0.1 reaches a loopback server; it answered {foreign.statusCode}")
+	try Expect.equal(named.statusCode as AssertedInt, expected: OkStatus as AssertedInt, message: "`Host: {LocalhostName}:<port>` names this very server and must be served")
+end 'a foreign Host header is refused 403 and localhost is served'
+
+test 'a request target that is not a path cannot carry a loopback authority past a foreign Host'
+	var server = StreamingHttpMcpServer.start(StringArray.create())
+	let (initialized, sessionId) = server.initializeSession()
+	let smuggled = server.request("POST", target: "@{server.authority()}{McpRoutePath}", host: "{ForeignHost}:{server.endpointPort}", origin: "", sessionId: sessionId, body: toolsListRequest(2))
+	let control = server.request("POST", target: McpRoutePath, host: server.authority(), origin: "", sessionId: sessionId, body: toolsListRequest(3))
+	try server.stop()
+
+	try Expect.equal(initialized.statusCode as AssertedInt, expected: OkStatus as AssertedInt, message: "the control `initialize` did not succeed, so nothing below says anything about the target")
+	try Expect.equal(smuggled.statusCode as AssertedInt, expected: BadRequestStatus as AssertedInt, message: "a target that is not a path is not a request this server reads; it answered {smuggled.statusCode} with {smuggled.body}")
+	try Expect.equal(control.statusCode as AssertedInt, expected: OkStatus as AssertedInt, message: "the same request with the target `{McpRoutePath}` and a loopback `Host` must be served")
+end 'a request target that is not a path cannot carry a loopback authority past a foreign Host'
+
+test 'an HTTP-only option without --http is refused by the CLI'
+	let binary = testedCompilerPath()
+
+	for option in ["{McpIdleTimeoutOptionPrefix}5", "{McpMaxSessionsOptionPrefix}2"] 'eachHttpOnlyOption'
+		let out = try Subprocess.run(Executable.path(binary), arguments: ["mcp-server", option], workingDirectory: Directory.currentPath(), timeoutMs: CliDeadlineMs) otherwise (e) 'spawnFailed'
+			panic("mcp http tests: the gate could not run — `mcp-server {option}` did not run: {e.displayReason()}")
+		end 'spawnFailed'
+
+		try Expect.equal(out.exitCode() as AssertedInt, expected: RefusedExitCode as AssertedInt, message: "`{option}` governs HTTP sessions and must be refused without `{McpHttpOption}` rather than ignored over stdio. It exited {out.exitCode()} saying {out.stdout} {out.stderr}")
+		try Expect.contains(out.stderr, needle: McpHttpOption, message: "the refusal must name `{McpHttpOption}`, the option `{option}` needs; it said {out.stderr}")
+	end 'eachHttpOnlyOption'
+end 'an HTTP-only option without --http is refused by the CLI'
+
+test 'the endpoint the server prints is on loopback'
+	var server = StreamingHttpMcpServer.start(StringArray.create())
+	let host = server.endpointHost
+	let endpoint = server.endpoint
+	try server.stop()
+
+	try Expect.equal(host, expected: LoopbackAddress, message: "`{McpHttpOption}` must bind {LoopbackAddress} and nothing else; it printed the endpoint {endpoint}")
+	try Expect.endsWith(endpoint, needle: McpRoutePath, message: "the endpoint must name the one route the transport serves; it printed {endpoint}")
+end 'the endpoint the server prints is on loopback'
+
+test 'a host spelling given to --http is refused by the CLI'
+	let binary = testedCompilerPath()
+	let out = try Subprocess.run(Executable.path(binary), arguments: ["mcp-server", HostSpelledOption], workingDirectory: Directory.currentPath(), timeoutMs: CliDeadlineMs) otherwise (e) 'spawnFailed'
+		panic("mcp http tests: the gate could not run — `mcp-server {HostSpelledOption}` did not run: {e.displayReason()}")
+	end 'spawnFailed'
+
+	try Expect.equal(out.exitCode() as AssertedInt, expected: RefusedExitCode as AssertedInt, message: "`{HostSpelledOption}` must be refused: the transport binds {LoopbackAddress} only and there is no host option. It exited {out.exitCode()} saying {out.stdout} {out.stderr}")
+	try Expect.contains("{out.stdout}{out.stderr}".toLower(), needle: LoopbackWord, message: "the refusal must say WHY there is no host to choose — that the transport is {LoopbackWord}-only — or the reader tries another spelling")
+end 'a host spelling given to --http is refused by the CLI'

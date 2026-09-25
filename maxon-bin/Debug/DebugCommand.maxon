@@ -45,8 +45,7 @@ let CodeSectionName = ".text"
 let MachoTextSegmentName = "__TEXT"
 let MachoTextSectionName = "__text"
 
-// How a code offset may be written on the command line.
-let HexOffsetPrefix = "0x"
+module let HexOffsetPrefix = "0x"
 let HexBase = 16
 module let DecimalBase = 10
 
@@ -140,15 +139,11 @@ end 'printDebugUsage'
 let ProgramArgumentsSeparator = "--"
 let LongOptionPrefix = "--"
 
-let MillisecondsPerSecond = 1000.0
-
 let SupportedDebugTriple = "x64-windows"
 let RefusedWasmTarget = "wasm32-wasi"
 
 let WasmMagic = b"\x00asm"
 let PeMagic = b"MZ"
-
-typealias DebugTimeoutMs = int(0 to i64.max)
 
 union DebuggerFaceRequest
 	session
@@ -162,13 +157,13 @@ type DebuggerRequest
 	export var script as String
 	export var scriptGiven as bool
 	export var face as DebuggerFaceRequest
-	export var stopTimeoutMs as DebugTimeoutMs
+	export var stopTimeoutMs as StopTimeoutMs
 	export var targetEnv as EnvMap
 	export var programArguments as StringArray
 	export var traced as bool
 
 	static function create() returns DebuggerRequest
-		return Self{exePath: "", exeGiven: false, batch: false, script: "", scriptGiven: false, face: DebuggerFaceRequest.session, stopTimeoutMs: trunc(DefaultStopTimeoutSeconds * MillisecondsPerSecond) as DebugTimeoutMs, targetEnv: EnvMap.create(), programArguments: StringArray.create(), traced: false}
+		return Self{exePath: "", exeGiven: false, batch: false, script: "", scriptGiven: false, face: DebuggerFaceRequest.session, stopTimeoutMs: stopTimeoutMsOf(DefaultStopTimeoutSeconds), targetEnv: EnvMap.create(), programArguments: StringArray.create(), traced: false}
 	end 'create'
 end 'DebuggerRequest'
 
@@ -178,7 +173,7 @@ union DebuggerRequestParse
 	noExecutable
 end 'DebuggerRequestParse'
 
-union DebugImageCheck
+module union DebugImageCheck
 	usable(code ByteArray, reader MxdbgReader)
 	refused(reason String)
 end 'DebugImageCheck'
@@ -191,7 +186,7 @@ function runClassify(spelling String) returns ExitCode
 	if spelling.isEmpty() 'nothingToClassify'
 		printError("maxon debug {ClassifyOptionPrefix} needs one or more comma-separated hex byte sequences.\n")
 
-		return 1
+		return OwnFailureExit
 	end 'nothingToClassify'
 
 	for sequence in spelling.split(ClassifySequenceSeparator) 'eachSequence'
@@ -201,7 +196,7 @@ function runClassify(spelling String) returns ExitCode
 		end 'read'
 	end 'eachSequence'
 
-	return 0
+	return SucceededExit
 end 'runClassify'
 
 union HexByteRead
@@ -241,9 +236,21 @@ end 'hexByteSequence'
 function printClassification(code ByteArray)
 	match decodeX64Instruction(code, at: 0, address: ClassifyProbeAddress) 'classified'
 		unclassified then print("{DebugUnclassifiedReason}\n")
-		decoded(instruction) then print("len={instruction.length} class={instruction.instructionClass} cond={instruction.condition} disp={instruction.displacementPosition} target=0x{instruction.target:x}\n")
+		decoded(instruction) then print("len={instruction.length} class={instruction.instructionClass} cond={instruction.condition} disp={instruction.displacementPosition} target=0x{instruction.target:x}{spelledClassOperand(instruction)}\n")
 	end 'classified'
 end 'printClassification'
+
+function spelledClassOperand(instruction X64Instruction) returns String
+	if instruction.instructionClass == DbgClassIndirectCall 'anOperandToName'
+		return " operand={instruction.callOperand.spelled()}"
+	end 'anOperandToName'
+
+	if instruction.instructionClass == DbgClassReturn 'argumentsToRelease'
+		return " rel={instruction.releasePosition}"
+	end 'argumentsToRelease'
+
+	return ""
+end 'spelledClassOperand'
 
 function runDebugger(args MaxonArgs) returns ExitCode
 	match parsedDebuggerRequest(args) 'asked'
@@ -254,7 +261,7 @@ function runDebugger(args MaxonArgs) returns ExitCode
 
 	printDebugUsage()
 
-	return 1
+	return OwnFailureExit
 end 'runDebugger'
 
 function parsedDebuggerRequest(args MaxonArgs) returns DebuggerRequestParse
@@ -329,8 +336,8 @@ function recordedDebuggerOption(request DebuggerRequest, argument String) return
 
 	if argument.startsWith(StopTimeoutOptionPrefix) 'aDeadline'
 		match parsePositiveSeconds(argument.replaceFirst(StopTimeoutOptionPrefix, with: "")) 'read'
-			refused then return DebuggerOptionParse.refused("'{StopTimeoutOptionPrefix}' needs a positive number of seconds, and '{argument}' does not name one")
-			reading(value) then request.stopTimeoutMs = trunc(value.seconds * MillisecondsPerSecond) as DebugTimeoutMs
+			refused then return DebuggerOptionParse.refused(targetSecondsMisreadRefusal("'{StopTimeoutOptionPrefix}'", asked: "'{argument}'"))
+			reading(value) then request.stopTimeoutMs = stopTimeoutMsOf(value.seconds)
 		end 'read'
 
 		return DebuggerOptionParse.accepted
@@ -363,7 +370,7 @@ function runDebuggerRequest(request DebuggerRequest) returns ExitCode
 	end 'checked'
 end 'runDebuggerRequest'
 
-function debugImageCheckFor(program FilePath, spelled String) returns DebugImageCheck
+module function debugImageCheckFor(program FilePath, spelled String) returns DebugImageCheck
 	let opening = try File.readBinary(program) otherwise return DebugImageCheck.refused("cannot read {spelled}")
 
 	if startsWithBytes(opening, magic: WasmMagic) 'aWasmModule'
@@ -423,14 +430,13 @@ function printDebugCompletions(line String, program FilePath, code ByteArray, re
 		print("{completion}\n")
 	end 'eachCompletion'
 
-	return 0
+	return SucceededExit
 end 'printDebugCompletions'
 
 function runDebugSessionFor(request DebuggerRequest, program FilePath, code ByteArray, reader MxdbgReader) returns ExitCode
-	let inheritCwd = try FilePath.from("") otherwise panic("runDebugSessionFor: the empty path is the 'inherit cwd' sentinel and must be spellable")
 	let face = DebugFace.batch if request.batch else DebugFace.conversational
 
-	match DebugSession.launch(program, reader: reader, code: code, arguments: request.programArguments, workingDirectory: inheritCwd, targetEnv: request.targetEnv, stopTimeoutMs: request.stopTimeoutMs as StopTimeoutMs, face: face, traced: request.traced) 'started'
+	match DebugSession.launch(program, reader: reader, code: code, arguments: request.programArguments, workingDirectory: inheritedWorkingDirectory(), targetEnv: request.targetEnv, stopTimeoutMs: request.stopTimeoutMs, face: face, traced: request.traced) 'started'
 		refused(reason) then return refuseDebugCommand(reason)
 		noAgent(reason) then return refuseDebugCommand("{reason} {NoDebugAgentFlag}, or its agent never attached")
 		ready(session) then return drivenDebugSession(session, request: request)
@@ -459,12 +465,11 @@ function runDumpInfo(args MaxonArgs) returns ExitCode
 
 	if spelled.isEmpty() 'noPath'
 		printError("maxon debug {DumpInfoOption} needs a path to an executable or .mxdbg sidecar.\n")
-		return 1
+		return OwnFailureExit
 	end 'noPath'
 
-	// ⭐ **THE SECTION NAMES ARE READ BEFORE THE SIDECAR IS.** A name that is not a section is refused
-	// whatever the file turns out to hold, so a misspelling is answered by name rather than by whichever
-	// failure the path happens to produce first.
+	// Section names are read before the sidecar, so a misspelled one is refused by name whatever the
+	// file holds, rather than by whichever failure the path happens to produce first.
 	var sections = BoolArray.create()
 
 	match parseDumpSections(args) 'request'
@@ -536,12 +541,12 @@ function dumpSectionNames() returns String
 	return rendered
 end 'dumpSectionNames'
 
-// ⛔ The wording of this refusal, the program name in it included, is pinned by
-// `tests/debug/dump-info-sections.maxtest` — changing it fails that gate.
+// The wording of this refusal, the program name in it included, is pinned by
+// `tests/debug/dump-info-sections.maxtest`; changing it fails that gate.
 function refuseUnknownSection(name String) returns ExitCode
 	printError("maxon debug {DumpInfoOption}: '{name}' is not a section ({dumpSectionNames()}).\n")
 
-	return 1
+	return OwnFailureExit
 end 'refuseUnknownSection'
 
 // Asked by NAME, resolved through the roster — the one place a section's position is stated.
@@ -557,7 +562,7 @@ function runSymbolize(args MaxonArgs) returns ExitCode
 
 	if spelled.isEmpty() or args.paths.count() < 3 'notEnough'
 		printError("maxon debug {SymbolizeOption} needs a path and at least one code offset.\n")
-		return 1
+		return OwnFailureExit
 	end 'notEnough'
 
 	match loadSidecarFor(spelled) 'sidecar'
@@ -569,7 +574,7 @@ end 'runSymbolize'
 function refuseDebugCommand(reason String) returns ExitCode
 	printError("maxon debug: {reason}\n")
 
-	return 1
+	return OwnFailureExit
 end 'refuseDebugCommand'
 
 // ============================================================================================
@@ -581,6 +586,7 @@ function dumpSidecar(reader MxdbgReader, path String, sections BoolArray) return
 		print("Debug info: {path}\n")
 		print("  target:   {reader.triple}\n")
 		print("  build-id: 0x{reader.buildId:016x}\n")
+		print("  root:     {reader.sourceRoot}\n")
 	end 'theHead'
 
 	if sectionIsPrinted(sections, section: FilesSection) 'theFiles'
@@ -620,11 +626,9 @@ function dumpSidecar(reader MxdbgReader, path String, sections BoolArray) return
 		dumpInlineFrames(reader)
 	end 'theInlineFrames'
 
-	return 0
+	return SucceededExit
 end 'dumpSidecar'
 
-// The spliced bodies and the code each occupies: a site row names its callee and the site it nests under,
-// a range row the site its bytes belong to.
 function dumpInlineFrames(reader MxdbgReader)
 	print("  inline sites ({reader.inlineSiteCount()}):\n")
 
@@ -635,7 +639,12 @@ function dumpInlineFrames(reader MxdbgReader)
 			site(index) gives "  under [{index}]"
 		end 'p'
 
-		print("    [{i}] {site.name}{parent}\n")
+		let call = match site.call 'c'
+			none gives ""
+			at(file, line, column) gives "  called at {file}:{line}:{column}"
+		end 'c'
+
+		print("    [{i}] {site.name}{parent}{call}  origin={site.origin.name}\n")
 	end 'eachSite'
 
 	print("  inline ranges ({reader.inlineRangeCount()}):\n")
@@ -660,8 +669,6 @@ function inlineRangeStarts(reader MxdbgReader) returns MxdbgCodeOffsetArray
 	return starts
 end 'inlineRangeStarts'
 
-// ⭐ **A FUNCTION'S LOCALS NEST UNDER ITS ROW**, which is why there is no `locals` section to ask for: the
-// records belong to the function that owns them, and a stop is inside one function.
 function dumpFunctions(reader MxdbgReader)
 	let framePointer = framePointerRegisterFor(reader.triple)
 
@@ -669,11 +676,17 @@ function dumpFunctions(reader MxdbgReader)
 
 	for i in 0 upto reader.functionCount() 'eachFunction'
 		let fn = reader.functionRecord(i as MxdbgIndex)
-		print("    {padRight(fn.name, width: FunctionNameColumn)} [0x{fn.codeStart:04x}, 0x{fn.codeEnd:04x})  frame=0x{fn.frameSize:x}  params={fn.paramCount}  lines={fn.lineCount}  locals={fn.localCount}\n")
+		let displayed = "" if fn.displayName == fn.name else "  as {fn.displayName}"
+		print("    {padRight(fn.name, width: FunctionNameColumn)} [0x{fn.codeStart:04x}, 0x{fn.codeEnd:04x})  frame=0x{fn.frameSize:x}  params={fn.paramCount}  lines={fn.lineCount}  locals={fn.localCount}  origin={fn.origin.name}{displayed}\n")
 
 		for k in fn.localFirst upto fn.localFirst + fn.localCount 'eachLocal'
 			let local = reader.localRecord(k as MxdbgIndex)
-			print("        {padRight(local.name, width: LocalNameColumn)} [0x{local.scopeStart:04x}, 0x{local.scopeEnd:04x})  {formatLocation(reader, local: local, framePointer: framePointer)}{PointerHolderMark if local.holdsAPointer() else ""}  : {reader.typeName(local.typeId)}\n")
+			let site = match local.site 's'
+				none gives ""
+				site(index) gives "  in [{index}]"
+			end 's'
+
+			print("        {padRight(local.name, width: LocalNameColumn)} [0x{local.scopeStart:04x}, 0x{local.scopeEnd:04x})  {formatLocation(reader, local: local, framePointer: framePointer)}{PointerHolderMark if local.holdsAPointer() else ""}{site}  : {reader.typeRecord(local.typeId).name}\n")
 		end 'eachLocal'
 	end 'eachFunction'
 end 'dumpFunctions'
@@ -686,12 +699,12 @@ function dumpTypes(reader MxdbgReader)
 		print("    [{i}] {padRight(entry.name, width: TypeNameColumn)} {mxdbgTypeKindName(entry.kind)}{SignedTypeMark if entry.isSigned() else ""}  size={entry.size} align={entry.align}  fields={entry.fieldCount}\n")
 
 		if entry.describesAnElement() 'anArray'
-			print("        +0x{ElementRowOffset:02x}  {padRight(ElementRowName, width: FieldNameColumn)} : {reader.typeName(entry.elementTypeId)}\n")
+			print("        +0x{ElementRowOffset:02x}  {padRight(ElementRowName, width: FieldNameColumn)} : {reader.typeRecord(entry.elementTypeId).name}\n")
 		end 'anArray'
 
 		for k in entry.fieldFirst upto entry.fieldFirst + entry.fieldCount 'eachField'
 			let field = reader.fieldRecord(k as MxdbgIndex)
-			print("        +0x{field.offset:02x}  {padRight(field.name, width: FieldNameColumn)} : {reader.typeName(field.typeId)}\n")
+			print("        +0x{field.offset:02x}  {padRight(field.name, width: FieldNameColumn)} : {reader.typeRecord(field.typeId).name}\n")
 		end 'eachField'
 	end 'eachType'
 end 'dumpTypes'
@@ -756,25 +769,22 @@ function formatFoldedAggregate(reader MxdbgReader, local MxdbgLocalInfo) returns
 	return "= \{{rendered}\}"
 end 'formatFoldedAggregate'
 
-// The tag list a line row's flags render as. `coverage` is a flag this compiler never sets and renders
-// anyway: the `.mxdbg` format is shared, so a sidecar carrying it must still print it.
 function lineFlagTags(flags MxdbgIndex) returns String
-	let statement = (flags and MxdbgLineFlagStatement) != 0
-	let coverage = (flags and MxdbgLineFlagCoverage) != 0
+	var tags = ""
 
-	if statement and coverage 'both'
-		return "  [statement, coverage]"
-	end 'both'
+	for (flag, tag) in [(MxdbgLineFlagStatement, "statement"), (MxdbgLineFlagCoverage, "coverage"), (MxdbgLineFlagLineEntry, "line-entry")] 'eachFlag'
+		if (flags and flag) != 0 'set'
+			tags.append(tag if tags.isEmpty() else "{LineFlagTagSeparator}{tag}")
+		end 'set'
+	end 'eachFlag'
 
-	if statement 'statementOnly'
-		return "  [statement]"
-	end 'statementOnly'
-
-	return "  [coverage]" if coverage else ""
+	return "" if tags.isEmpty() else "  [{tags}]"
 end 'lineFlagTags'
 
+let LineFlagTagSeparator = ", "
+
 function symbolizeOffsets(reader MxdbgReader, args MaxonArgs) returns ExitCode
-	var exitCode = 0 as ExitCode
+	var exitCode = SucceededExit
 
 	for i in 2 upto args.paths.count() 'eachOffset'
 		let spelled = try args.paths.get(i) otherwise ""
@@ -791,7 +801,7 @@ end 'symbolizeOffsets'
 function reportUnparsableOffset(spelled String) returns ExitCode
 	printError("Not a code offset: '{spelled}' (use decimal or 0x-prefixed hex).\n")
 
-	return 1
+	return OwnFailureExit
 end 'reportUnparsableOffset'
 
 function printSymbolizedOffset(reader MxdbgReader, offset ParsedCodeOffset)
@@ -904,13 +914,12 @@ end 'binaryCodeSection'
 // COMMAND-LINE OFFSETS
 // ============================================================================================
 
-// A code offset written in decimal or as `0x`-prefixed hex. A token carrying no digits at all is
-// INVALID rather than 0 — an offset nobody wrote must not be answered for.
+// A token carrying no digits at all is invalid rather than 0: an offset nobody wrote must not be
+// answered for.
 //
-// ⚠ **THE PREFIX IS SKIPPED BY LENGTH, NEVER STRIPPED BY SUBSTITUTION.** A substitution removes EVERY
-// `0x` in the token, so `0x120x34` would read back as a perfectly good 0x1234 — a confident wrong answer
-// where the refusal below exists precisely to give a plain one.
-function parseCodeOffset(spelled String) returns OffsetParse
+// ⚠ The prefix is skipped by length, never stripped by substitution. A substitution removes every
+// `0x` in the token, so `0x120x34` would read back as 0x1234 instead of being refused.
+module function parseCodeOffset(spelled String) returns OffsetParse
 	let text = spelled.trim()
 
 	if text.startsWith(HexOffsetPrefix) 'hex'

@@ -1,0 +1,18 @@
+let MalformedProjectsUri = "file://[malformed/list-projects.maxon"
+let MalformedProjectsUriSpelling = "[malformed"
+let MalformedProjectsSource = "function malformedProjectsMain() returns ExitCode\n\treturn 0\nend 'malformedProjectsMain'\n"
+
+test 'malformed uri: maxon/listProjects reports no project spelled from a file uri that does not parse'
+	let probe = listProjectsIn(ProjectRootsSession.unrooted, documents: projectRootsDocument(MalformedProjectsUri, content: MalformedProjectsSource))
+
+	match probe 'probe'
+		answered(result, _) then requireNoProjectFromTheMalformedUri(result)
+		unanswered(reason) then Expect.fail("`maxon/listProjects` did not answer with one document open at `{MalformedProjectsUri}`: {reason}.")
+	end 'probe'
+end 'malformed uri: maxon/listProjects reports no project spelled from a file uri that does not parse'
+
+function requireNoProjectFromTheMalformedUri(result ListProjectsResult) throws TestFailure
+	for project in result.projects 'eachProject'
+		try Expect.isFalse(project.rootPath.contains(MalformedProjectsUriSpelling), message: "`maxon/listProjects` reported a project rooted at `{project.rootPath}`, which is the text of the uri `{MalformedProjectsUri}` taken as a path. A `file:` uri that does not parse names no file, so it has no project to report — `FilePath.from` refuses it as `malformedURL` rather than handing its text back as a path.")
+	end 'eachProject'
+end 'requireNoProjectFromTheMalformedUri'

@@ -1,0 +1,13 @@
+let StdlibTierDirName = "stdlib"
+let StdlibTierFileName = "URL.maxon"
+
+test 'a stdlib file opened in the editor publishes no diagnostics'
+	let tier = try FilePath.from(StdlibTierDirName) otherwise panic("stdlib tier: '{StdlibTierDirName}' is not a spellable path")
+	let root = tier.resolve(Directory.currentPath())
+	let file = root.join(StdlibTierFileName)
+	let content = try File.readText(file) otherwise panic("stdlib tier: could not read {file.toString()}")
+
+	let probe = probeProjectDiagnostics(root, fileName: StdlibTierFileName, content: content)
+
+	try expectNoProjectDiagnostics(probe, note: "`{StdlibTierDirName}/{StdlibTierFileName}` is compiled into every program that reaches it as it stands on disk, so a buffer holding exactly those bytes has nothing wrong with it. A diagnostic here is the editor checking the file as a program of its own rather than as the library it is.")
+end 'a stdlib file opened in the editor publishes no diagnostics'

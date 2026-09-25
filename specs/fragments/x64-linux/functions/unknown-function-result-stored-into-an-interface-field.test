@@ -1,0 +1,44 @@
+// Test: unknown-function-result-stored-into-an-interface-field
+typealias Side = int(0 to 100)
+
+interface Shape
+	function area() returns Side
+end 'Shape'
+
+type Square implements Shape
+	var side as Side
+
+	static function create(side Side) returns Square
+		return Square{side: side}
+	end 'create'
+
+	function area() returns Side
+		return self.side
+	end 'area'
+end 'Square'
+
+type Frame
+	var shape as Shape
+
+	static function create() returns Frame
+		return Frame{shape: Square.create(2)}
+	end 'create'
+
+	function reshape()
+		self.shape = frobnicate(2)
+	end 'reshape'
+
+	function area() returns Side
+		return self.shape.area()
+	end 'area'
+end 'Frame'
+
+function main() returns ExitCode
+	var frame = Frame.create()
+	frame.reshape()
+	return frame.area() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3004: <fragment>:28:16: call to undefined function 'frobnicate'
+error E3005: <fragment>:28:3: field type mismatch for 'Frame.shape': type 'unknown' does not implement interface 'Shape'

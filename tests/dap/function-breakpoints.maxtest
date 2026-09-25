@@ -1,0 +1,42 @@
+let FunctionBreakpointCaseLabel = "function-breakpoints"
+let InnerFunctionName = "inner"
+
+type FunctionBreakpointSession implements DapSession
+	let executable as FilePath
+	export var verified as bool
+	export var stopReason as String
+	export var frameNames as StringArray
+
+	static function create(executable FilePath) returns FunctionBreakpointSession
+		return Self{executable: executable, verified: false, stopReason: "", frameNames: StringArray.create()}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+		_ = try client.request(LaunchCommand, argumentsJson: dapLaunchArguments(self.executable))
+		_ = try client.awaitEvent(InitializedEvent)
+
+		let placed = try client.request(SetFunctionBreakpointsCommand, argumentsJson: dapSetFunctionBreakpointsArguments(InnerFunctionName))
+		self.verified = dapBreakpointVerified(placed, index: 0)
+
+		_ = try client.request(ConfigurationDoneCommand)
+
+		let stopped = try client.awaitEvent(StoppedEvent)
+		self.stopReason = dapBodyString(stopped, key: "reason")
+
+		let threadId = dapBodyNumber(stopped, key: "threadId")
+		self.frameNames = dapStackFrameNames(try client.request(StackTraceCommand, argumentsJson: dapThreadArguments(threadId)))
+
+		_ = try client.request(DisconnectCommand)
+	end 'drive'
+end 'FunctionBreakpointSession'
+
+test 'a function breakpoint is verified and stops inside the function it names'
+	let staged = dapStagedFixture(FunctionBreakpointCaseLabel, fixture: SteppingFixtureName)
+	var session = FunctionBreakpointSession.create(dapBuildFixture(staged))
+	try dapRunSession(session, completing: "complete")
+
+	try Expect.isTrue(session.verified, message: "`{SetFunctionBreakpointsCommand}` did not verify the name `{InnerFunctionName}`, which the fixture declares")
+	try Expect.equal(session.stopReason, expected: BreakpointReason, message: "a function breakpoint's stop is a breakpoint stop; it said `{session.stopReason}`")
+	try Expect.equal(dapFrameNameAt(session.frameNames, frame: 0), expected: InnerFunctionName, message: "the stop must be INSIDE `{InnerFunctionName}` — a name resolved to some other function stops somewhere just as plausible-looking; it stopped in {dapRendered(session.frameNames)}")
+end 'a function breakpoint is verified and stops inside the function it names'

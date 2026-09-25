@@ -1,0 +1,23 @@
+let NextInPrologueCaseLabel = "next-from-inside-a-prologue-stays-in-the-frame"
+let CalleeFunctionName = "countdown"
+let PushedFramePointerBytes = 1
+let FramesOfTheOutermostCall = 2
+
+test 'a next from a stop between push rbp and mov rbp, rsp lands on the first positioned row of that same frame'
+	let staged = builtFixture(NextInPrologueCaseLabel, fixture: RecursionFixtureName)
+	let executable = builtExecutable(staged)
+	let declarationLine = anchorLine(staged, anchor: "countdown-declaration")
+	let afterThePush = exactOffsetTarget(functionCodeStart(executable, staged: staged, name: CalleeFunctionName) + PushedFramePointerBytes)
+	let commands = debugCommandLine(["{BreakCommand} {afterThePush}", RunCommand, "{ClearCommand} {afterThePush}", NextCommand])
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let stops = eventsOfKind(events, kind: StopEventName)
+
+	try Expect.equal(stops.count() as AssertedInt, expected: 2, message: "the exact-offset breakpoint and the `{NextCommand}` are two stops. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let landed = eventAt(stops, index: 1)
+	try Expect.equal(textOf(landed, node: landed.root, key: FunctionKey), expected: CalleeFunctionName, message: "`{NextCommand}` stays in the frame it was issued from. {said}")
+	try Expect.equal(numberOf(landed, node: landed.root, key: LineKey) as AssertedInt, expected: declarationLine as AssertedInt, message: "⛔ ONCE `mov rbp, rsp` RUNS THE FRAME POINTER IS THE ONE THIS FRAME OWNS, and a walk that took the caller's rbp for its own reads every later instruction as a callee's and never arrives in the frame it started in. The prologue has no line, so the frame's first positioned row — its parameter, on the declaration line — is where `{NextCommand}` lands. {said}")
+	try Expect.equal(childrenOf(landed, node: landed.root, key: BacktraceKey).count() as AssertedInt, expected: FramesOfTheOutermostCall, message: "the landing is in the outermost `{CalleeFunctionName}`, called from `main`, not in a deeper recursion. {said}")
+end 'a next from a stop between push rbp and mov rbp, rsp lands on the first positioned row of that same frame'

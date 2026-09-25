@@ -1,0 +1,30 @@
+let NarrowingCastCaseLabel = "break-on-a-narrowing-cast-line-stops"
+
+test 'a line whose only code is a narrowing cast arms and stops there, and a walk from the line before stops on it'
+	let staged = builtFixture(NarrowingCastCaseLabel, fixture: CastLineFixtureName)
+	let plannedLine = anchorLine(staged, anchor: "planned")
+	let castLine = anchorLine(staged, anchor: "narrowing")
+	let executable = builtExecutable(staged)
+
+	let breakSession = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine(["{BreakCommand} {lineTarget(castLine)}", RunCommand]), extraOptions: StringArray.create())
+	let breakEvents = batchEvents(breakSession.stdout)
+	let breakSaid = renderedEvents(breakSession.stdout, stderr: breakSession.stderr)
+	let answers = eventsOfKind(breakEvents, kind: BreakpointEventName)
+
+	try Expect.equal(answers.count() as AssertedInt, expected: 1, message: "`{BreakCommand} {lineTarget(castLine)}` answers one `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(breakEvents))}. {breakSaid}")
+
+	let armed = eventAt(answers, index: 0)
+	try Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: SetAction, message: "the range check a narrowing cast runs is that line's code, so the line arms rather than answering that it has none. {breakSaid}")
+
+	let breakStops = eventsOfKind(breakEvents, kind: StopEventName)
+	try Expect.equal(breakStops.count() as AssertedInt, expected: 1, message: "the cast line runs once, so it stops once. It printed: {renderedRows(eventKinds(breakEvents))}. {breakSaid}")
+	try Expect.equal(numberOf(eventAt(breakStops, index: 0), node: eventAt(breakStops, index: 0).root, key: LineKey) as AssertedInt, expected: castLine as AssertedInt, message: "the stop is on the cast line. {breakSaid}")
+
+	let walkSession = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine(["{BreakCommand} {lineTarget(plannedLine)}", RunCommand, NextCommand]), extraOptions: StringArray.create())
+	let walkEvents = batchEvents(walkSession.stdout)
+	let walkSaid = renderedEvents(walkSession.stdout, stderr: walkSession.stderr)
+	let walkStops = eventsOfKind(walkEvents, kind: StopEventName)
+
+	try Expect.equal(walkStops.count() as AssertedInt, expected: 2, message: "the breakpoint on the line before and the `{NextCommand}` from it are two stops. It printed: {renderedRows(eventKinds(walkEvents))}. {walkSaid}")
+	try Expect.equal(numberOf(eventAt(walkStops, index: 1), node: eventAt(walkStops, index: 1).root, key: LineKey) as AssertedInt, expected: castLine as AssertedInt, message: "`{NextCommand}` from the line before stops on the cast line, whose range check is the next statement to run — it is not the line before's code. {walkSaid}")
+end 'a line whose only code is a narrowing cast arms and stops there, and a walk from the line before stops on it'

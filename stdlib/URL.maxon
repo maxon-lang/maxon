@@ -10,9 +10,8 @@ public enum URLError implements Error
 	emptyInput
 	relativeWithoutBase
 	fieldNotPresent
+	invalidPath
 end 'URLError'
-
-// Caller guarantees index is in bounds
 
 public type URL implements Equatable, Stringable
 	var scheme as String
@@ -112,39 +111,21 @@ public type URL implements Equatable, Stringable
 		var hasFragment = false
 
 		// 4. Extract scheme
-		// For the SLICES alone — the scans go through `trimmed.byteAtOrPanic`, which needs no record.
-		// Every component below is cut out by slicing these bytes, and `slice` hands back a buffer,
-		// so it genuinely needs one. Hoisted: Stage 4b materializes it once per parse, not per cut.
+		// For the slices alone; the scans read `trimmed` directly. Asked once per parse rather than once
+		// per cut, because asking a string for its bytes allocates and copies.
 		let urlBytes = trimmed.addressableBytes()
 
 		// First byte: if it's ':', that's invalid (://missing-scheme)
 		let firstByte = trimmed.byteAtOrPanic(0)
 
-		if firstByte == 58 'colonFirst'
+		if urlByteIsOneOf(firstByte, bytes: SchemeColon) 'colonFirst'
 			throw URLError.invalidScheme
 		end 'colonFirst'
 
-		// Scan for ':' to find potential scheme
-		var colonPos = 0
-		var foundColon = false
-		var scanPos = 0
-
-		while scanPos < len 'schemeSearch'
-			let b = trimmed.byteAtOrPanic(scanPos)
-
-			if b == 58 'colon'
-				colonPos = scanPos
-				foundColon = true
-				break
-			end 'colon'
-
-			// Stop scanning at characters that can't be in a scheme
-			if b == 47 or b == 63 or b == 35 'delimiter'
-				break
-			end 'delimiter'
-
-			scanPos = scanPos + 1
-		end 'schemeSearch'
+		// A scheme's ':' comes before the first '/', '?' or '#'.
+		let schemeLimit = urlFirstOfBytes(trimmed, from: 0, until: len, bytes: AuthorityEndBytes)
+		let colonPos = urlFirstOfBytes(trimmed, from: 0, until: schemeLimit, bytes: SchemeColon)
+		let foundColon = colonPos < schemeLimit
 
 		if foundColon and colonPos > 0 'hasScheme'
 			// Validate scheme: first char must be alpha
@@ -172,123 +153,34 @@ public type URL implements Equatable, Stringable
 
 		// 5. Check for authority ("//")
 		if pos + 1 < len 'checkAuth'
-			if trimmed.byteAtOrPanic(pos) == 47 'slash1'
-				if trimmed.byteAtOrPanic(pos + 1) == 47 'slash2'
+			if trimmed.byteAtOrPanic(pos) == UrlSlashByte 'slash1'
+				if trimmed.byteAtOrPanic(pos + 1) == UrlSlashByte 'slash2'
 					pos = pos + 2
 					hasHost = true
 
 					// Find end of authority: first '/', '?', '#', or end
-					var authEnd = pos
-
-					while authEnd < len 'findAuthEnd'
-						let ab = trimmed.byteAtOrPanic(authEnd)
-
-						if ab == 47 or ab == 63 or ab == 35 'delim'
-							break
-						end 'delim'
-
-						authEnd = authEnd + 1
-					end 'findAuthEnd'
+					let authEnd = urlFirstOfBytes(trimmed, from: pos, until: len, bytes: AuthorityEndBytes)
 
 					// Parse authority from pos to authEnd
 					var authStart = pos
 
 					// Check for userinfo: scan for '@'
-					var atPos = authStart
-					var foundAt = false
+					let atPos = urlFirstOfBytes(trimmed, from: authStart, until: authEnd, bytes: UserinfoEndBytes)
 
-					while atPos < authEnd 'findAt'
-						if trimmed.byteAtOrPanic(atPos) == 64 'at'
-							foundAt = true
-							break
-						end 'at'
-
-						atPos = atPos + 1
-					end 'findAt'
-
-					if foundAt 'hasUserinfo'
+					if atPos < authEnd 'hasUserinfo'
 						hasUserinfo = true
 						let uiSlice = try urlBytes.slice(authStart, atPos) otherwise panic("URL.parse: userinfo slice — atPos from scan, always valid")
 						userinfo = String.init(uiSlice)
 						authStart = atPos + 1
 					end 'hasUserinfo'
 
-					// Parse host
 					if authStart < authEnd 'hasHostChars'
-						let hostFirstByte = trimmed.byteAtOrPanic(authStart)
-
-						if hostFirstByte == 91 'ipv6'
-							// IPv6: scan for ']'
-							var bracketEnd = authStart + 1
-							var foundBracket = false
-
-							while bracketEnd < authEnd 'findBracket'
-								if trimmed.byteAtOrPanic(bracketEnd) == 93 'closeBracket'
-									foundBracket = true
-									break
-								end 'closeBracket'
-
-								bracketEnd = bracketEnd + 1
-							end 'findBracket'
-
-							if not foundBracket 'noBracket'
-								throw URLError.invalidHost
-							end 'noBracket'
-
-							let hostSlice = try urlBytes.slice(authStart, bracketEnd + 1) otherwise panic("URL.parse: IPv6 host slice — bracketEnd from scan, always valid")
-							host = String.init(hostSlice)
-							authStart = bracketEnd + 1
-						end 'ipv6' else 'notIpv6'
-							// Regular host: scan until ':' or end of authority
-							var hostEnd = authStart
-
-							while hostEnd < authEnd 'findHostEnd'
-								if trimmed.byteAtOrPanic(hostEnd) == 58 'colon2'
-									break
-								end 'colon2'
-
-								hostEnd = hostEnd + 1
-							end 'findHostEnd'
-
-							let hostSlice = try urlBytes.slice(authStart, hostEnd) otherwise panic("URL.parse: host slice — hostEnd from scan, always valid")
-							host = String.init(hostSlice)
-							authStart = hostEnd
-						end 'notIpv6'
+						let hostPortSlice = try urlBytes.slice(authStart, authEnd) otherwise panic("URL.parse: host slice — authStart and authEnd from scan, always valid")
+						let authority = try urlHostAuthorityOf(String.init(hostPortSlice))
+						host = authority.host
+						hasPort = authority.hasPort
+						portNum = authority.port
 					end 'hasHostChars'
-
-					// Parse port
-					if authStart < authEnd 'maybePort'
-						if trimmed.byteAtOrPanic(authStart) == 58 'colonPort'
-							authStart = authStart + 1
-
-							// Port: remaining chars in authority must be digits
-							if authStart < authEnd 'hasPortDigits'
-								var portVal = 0
-								var pi = authStart
-
-								while pi < authEnd 'parsePort'
-									let pb = trimmed.byteAtOrPanic(pi)
-
-									if not urlIsDigit(pb) 'notDigit'
-										throw URLError.invalidPort
-									end 'notDigit'
-
-									portVal = portVal * 10 + (pb - 48)
-
-									if portVal > 65535 'overflow'
-										throw URLError.invalidPort
-									end 'overflow'
-
-									pi = pi + 1
-								end 'parsePort'
-
-								hasPort = true
-								portNum = portVal
-							end 'hasPortDigits'
-
-							// If no digits after ':', port is absent (edge case: http://host:/)
-						end 'colonPort'
-					end 'maybePort'
 
 					pos = authEnd
 				end 'slash2'
@@ -297,16 +189,7 @@ public type URL implements Equatable, Stringable
 
 		// 6. Parse path: collect until '?', '#', or end
 		let pathStart = pos
-
-		while pos < len 'parsePath'
-			let pb = trimmed.byteAtOrPanic(pos)
-
-			if pb == 63 or pb == 35 'delim2'
-				break
-			end 'delim2'
-
-			pos = pos + 1
-		end 'parsePath'
+		pos = urlFirstOfBytes(trimmed, from: pos, until: len, bytes: PathEndBytes)
 
 		if pos > pathStart 'hasPath'
 			let pathSlice = try urlBytes.slice(pathStart, pos) otherwise panic("URL.parse: path slice — pathStart and pos within len")
@@ -315,18 +198,11 @@ public type URL implements Equatable, Stringable
 
 		// 7. Parse query
 		if pos < len 'checkQuery'
-			if trimmed.byteAtOrPanic(pos) == 63 'questionMark'
+			if trimmed.byteAtOrPanic(pos) == QueryMarkByte 'questionMark'
 				hasQuery = true
 				pos = pos + 1
 				let queryStart = pos
-
-				while pos < len 'parseQuery'
-					if trimmed.byteAtOrPanic(pos) == 35 'hash'
-						break
-					end 'hash'
-
-					pos = pos + 1
-				end 'parseQuery'
+				pos = urlFirstOfBytes(trimmed, from: pos, until: len, bytes: QueryEndBytes)
 
 				let querySlice = try urlBytes.slice(queryStart, pos) otherwise panic("URL.parse: query slice — queryStart and pos within len")
 				query = String.init(querySlice)
@@ -335,7 +211,7 @@ public type URL implements Equatable, Stringable
 
 		// 8. Parse fragment
 		if pos < len 'checkFragment'
-			if trimmed.byteAtOrPanic(pos) == 35 'hashMark'
+			if trimmed.byteAtOrPanic(pos) == FragmentMarkByte 'hashMark'
 				hasFragment = true
 				pos = pos + 1
 				let fragSlice = try urlBytes.slice(pos, len) otherwise panic("URL.parse: fragment slice — pos within len")
@@ -358,6 +234,52 @@ public type URL implements Equatable, Stringable
 			hasFragment: hasFragment
 		}
 	end 'parse'
+
+	module static function forOriginForm(scheme String, authority String, target String) returns URL throws URLError
+		let host = try urlHostAuthorityOf(authority)
+		let path = try urlOriginFormOf(target)
+
+		return URL.ofRequestTarget(scheme, host: host.host, port: host.port, hasHost: true, hasPort: host.hasPort, path: path)
+	end 'forOriginForm'
+
+	module static function forHostlessOriginForm(scheme String, target String) returns URL throws URLError
+		let path = try urlOriginFormOf(target)
+
+		return URL.ofRequestTarget(scheme, host: "", port: 0, hasHost: false, hasPort: false, path: path)
+	end 'forHostlessOriginForm'
+
+	module static function forAbsoluteForm(scheme String, target String) returns URL throws URLError
+		let prefix = "{scheme}{SchemeAuthorityMark}"
+
+		if not target.toLower().startsWith(prefix) 'anotherScheme'
+			throw URLError.invalidScheme
+		end 'anotherScheme'
+
+		let afterScheme = urlByteRange(target, from: prefix.byteLength(), until: target.byteLength())
+		let authorityEnd = urlFirstOfBytes(afterScheme, from: 0, until: afterScheme.byteLength(), bytes: AuthorityEndBytes)
+		let authority = urlByteRange(afterScheme, from: 0, until: authorityEnd)
+		let rest = urlByteRange(afterScheme, from: authorityEnd, until: afterScheme.byteLength())
+		let originTarget = rest if rest.startsWith(UrlOriginFormRoot) else "{UrlOriginFormRoot}{rest}"
+
+		return try URL.forOriginForm(scheme, authority: authority, target: originTarget)
+	end 'forAbsoluteForm'
+
+	static function ofRequestTarget(scheme String, host String, port PortNumber, hasHost bool, hasPort bool, path URLOriginForm) returns URL
+		return URL{
+			scheme: scheme,
+			path: path.path,
+			userinfo: "",
+			host: host,
+			port: port,
+			query: path.query,
+			fragment: "",
+			hasHost: hasHost,
+			hasUserinfo: false,
+			hasPort: hasPort,
+			hasQuery: path.hasQuery,
+			hasFragment: false
+		}
+	end 'ofRequestTarget'
 
 	// --- Serialization ---
 
@@ -473,7 +395,7 @@ public type URL implements Equatable, Stringable
 					end 'noRefQuery'
 				end 'emptyPath' else 'hasRefPath'
 					if r.path.byteLength() > 0 'checkAbsolute'
-						if r.path.byteAtOrPanic(0) == 47 'absolutePath'
+						if r.path.byteAtOrPanic(0) == UrlSlashByte 'absolutePath'
 							tPath = urlRemoveDotSegments(r.path)
 						end 'absolutePath' else 'relativePath'
 							let merged = urlMergeBasePath(base.path, hasAuthority: base.hasHost, refPath: r.path)
@@ -578,3 +500,283 @@ public type URL implements Equatable, Stringable
 		return true
 	end 'equals'
 end 'URL'
+
+typealias Ipv6WordCount = int(0 to 9)
+
+let MaxPortNumber = 65535 as PortNumber
+let SchemeAuthorityMark = "://"
+let AuthorityEndBytes = "/?#"
+let PathEndBytes = "?#"
+let QueryEndBytes = "#"
+let UserinfoEndBytes = "@"
+let SchemeColon = ":"
+let QueryMarkByte = 63 as Byte
+let FragmentMarkByte = 35 as Byte
+let PortSeparator = ":"
+let IpLiteralOpen = "["
+let IpLiteralClose = "]"
+let QueryMark = "?"
+let FutureVersionLower = 118 as Byte
+let FutureVersionUpper = 86 as Byte
+let FutureVersionSeparator = "."
+let NoExtraBytes = ""
+let PathExtraBytes = ":@/"
+let QueryExtraBytes = ":@/?"
+let FutureExtraBytes = ":"
+let UnreservedMarkBytes = "-._~"
+let SubDelimBytes = "!$&'()*+,;="
+let Ipv6Compression = "::"
+let Ipv6GroupSeparator = ":"
+let Ipv6FullWords = 8
+let Ipv6CompressedMaxWords = 7
+let Ipv6MaxGroupDigits = 4
+let Ipv6WordsPerEmbeddedIpv4 = 2
+let Ipv4OctetSeparator = "."
+let Ipv4Octets = 4
+let Ipv4MaxOctet = 255
+
+type URLHostAuthority
+	export let host as String
+	export let port as PortNumber
+	export let hasPort as bool
+
+	static function create(host String, port PortNumber, hasPort bool) returns URLHostAuthority
+		return URLHostAuthority{host: host, port: port, hasPort: hasPort}
+	end 'create'
+end 'URLHostAuthority'
+
+type URLOriginForm
+	export let path as String
+	export let query as String
+	export let hasQuery as bool
+
+	static function create(path String, query String, hasQuery bool) returns URLOriginForm
+		return URLOriginForm{path: path, query: query, hasQuery: hasQuery}
+	end 'create'
+end 'URLOriginForm'
+
+function urlHostAuthorityOf(authority String) returns URLHostAuthority throws URLError
+	if authority.isEmpty() 'noHost'
+		throw URLError.invalidHost
+	end 'noHost'
+
+	let hostEnd = try urlHostEndOf(authority)
+	let host = authority.slice(authority.startIndex(), endIndex: hostEnd)
+
+	if hostEnd.bytePos() == authority.byteLength() 'noPort'
+		return URLHostAuthority.create(host, port: 0, hasPort: false)
+	end 'noPort'
+
+	let portStart = try authority.indexAfter(hostEnd) otherwise panic("urlHostAuthorityOf: a host ending before the authority's end has a character after it")
+
+	if not authority.slice(hostEnd, endIndex: portStart).equals(PortSeparator) 'trailingAfterHost'
+		throw URLError.invalidHost
+	end 'trailingAfterHost'
+
+	if portStart.bytePos() == authority.byteLength() 'emptyPort'
+		return URLHostAuthority.create(host, port: 0, hasPort: false)
+	end 'emptyPort'
+
+	return URLHostAuthority.create(host, port: try urlPortOf(authority, from: portStart.bytePos()), hasPort: true)
+end 'urlHostAuthorityOf'
+
+function urlHostEndOf(authority String) returns StringIndex throws URLError
+	if authority.startsWith(IpLiteralOpen) 'ipLiteral'
+		let close = try authority.findFirst(IpLiteralClose) otherwise throw URLError.invalidHost
+		let inside = try authority.indexAfter(authority.startIndex()) otherwise panic("urlHostEndOf: an authority that opens with `[` has a character after it")
+
+		try urlRequireIpLiteral(authority.slice(inside, endIndex: close))
+
+		return try authority.indexAfter(close) otherwise panic("urlHostEndOf: a `]` the search found has an index after it")
+	end 'ipLiteral'
+
+	let hostEnd = try authority.findFirst(PortSeparator) otherwise authority.endIndex()
+
+	if hostEnd.bytePos() == 0 'emptyHost'
+		throw URLError.invalidHost
+	end 'emptyHost'
+
+	try urlRequireComponent(authority, from: 0, until: hostEnd.bytePos(), extra: NoExtraBytes) otherwise throw URLError.invalidHost
+
+	return hostEnd
+end 'urlHostEndOf'
+
+function urlRequireIpLiteral(inside String) throws URLError
+	if inside.isEmpty() 'empty'
+		throw URLError.invalidHost
+	end 'empty'
+
+	let first = inside.byteAtOrPanic(0)
+
+	if first == FutureVersionLower or first == FutureVersionUpper 'future'
+		try urlRequireIpFuture(inside)
+
+		return
+	end 'future'
+
+	if not urlIsIpv6Address(inside) 'notIpv6'
+		throw URLError.invalidHost
+	end 'notIpv6'
+end 'urlRequireIpLiteral'
+
+function urlRequireIpFuture(inside String) throws URLError
+	let separator = try inside.findFirst(FutureVersionSeparator) otherwise throw URLError.invalidHost
+	let separatorAt = separator.bytePos()
+	let len = inside.byteLength()
+
+	if separatorAt < 2 or separatorAt + 1 == len 'emptyPart'
+		throw URLError.invalidHost
+	end 'emptyPart'
+
+	for pos in 1 upto separatorAt 'eachVersionDigit'
+		if not urlIsHexDigit(inside.byteAtOrPanic(pos)) 'notHex'
+			throw URLError.invalidHost
+		end 'notHex'
+	end 'eachVersionDigit'
+
+	for pos in separatorAt + 1 upto len 'eachAddressByte'
+		if not urlIsComponentByte(inside.byteAtOrPanic(pos), extra: FutureExtraBytes) 'notAnAddressByte'
+			throw URLError.invalidHost
+		end 'notAnAddressByte'
+	end 'eachAddressByte'
+end 'urlRequireIpFuture'
+
+function urlIsIpv6Address(text String) returns bool
+	let halves = text.split(Ipv6Compression)
+
+	if halves.count() > 2 'twoCompressions'
+		return false
+	end 'twoCompressions'
+
+	let compressed = halves.count() == 2
+	let left = try halves.get(0) otherwise panic("urlIsIpv6Address: a split answers at least one part")
+	let right = try halves.get(1) otherwise ""
+
+	let leftWords = try urlIpv6WordsOf(left, endsTheAddress: not compressed) otherwise return false
+	let rightWords = try urlIpv6WordsOf(right, endsTheAddress: compressed) otherwise return false
+	let words = leftWords + rightWords
+
+	return words <= Ipv6CompressedMaxWords if compressed else words == Ipv6FullWords
+end 'urlIsIpv6Address'
+
+function urlIpv6WordsOf(half String, endsTheAddress bool) returns Ipv6WordCount throws URLError
+	if half.isEmpty() 'noGroups'
+		return 0
+	end 'noGroups'
+
+	let groups = half.split(Ipv6GroupSeparator)
+
+	if groups.count() > Ipv6FullWords 'tooManyGroups'
+		throw URLError.invalidHost
+	end 'tooManyGroups'
+
+	var words = 0 as Ipv6WordCount
+
+	for (iter, group) in groups.withIterator() 'eachGroup'
+		if endsTheAddress and iter.index() + 1 == groups.count() and urlIsIpv4Address(group) 'embeddedIpv4'
+			words = words + Ipv6WordsPerEmbeddedIpv4
+			continue
+		end 'embeddedIpv4'
+
+		if group.isEmpty() or group.byteLength() > Ipv6MaxGroupDigits 'notAGroup'
+			throw URLError.invalidHost
+		end 'notAGroup'
+
+		for b in group.bytes() 'eachDigit'
+			if not urlIsHexDigit(b) 'notHex'
+				throw URLError.invalidHost
+			end 'notHex'
+		end 'eachDigit'
+
+		words = words + 1
+	end 'eachGroup'
+
+	return words
+end 'urlIpv6WordsOf'
+
+function urlIsIpv4Address(text String) returns bool
+	let octets = text.split(Ipv4OctetSeparator)
+
+	if octets.count() != Ipv4Octets 'notFourOctets'
+		return false
+	end 'notFourOctets'
+
+	for octet in octets 'eachOctet'
+		if not urlIsDecOctet(octet) 'notAnOctet'
+			return false
+		end 'notAnOctet'
+	end 'eachOctet'
+
+	return true
+end 'urlIsIpv4Address'
+
+function urlIsDecOctet(octet String) returns bool
+	let len = octet.byteLength()
+
+	if len > 1 and octet.byteAtOrPanic(0) == UrlDecimalZeroByte 'leadingZero'
+		return false
+	end 'leadingZero'
+
+	return match urlDecimalWithin(octet, from: 0, until: len, bound: Ipv4MaxOctet) 'octet'
+		value gives true
+		notADecimal or
+			aboveTheBound gives false
+	end 'octet'
+end 'urlIsDecOctet'
+
+function urlPortOf(authority String, from BytePos) returns PortNumber throws URLError
+	match urlDecimalWithin(authority, from: from, until: authority.byteLength(), bound: MaxPortNumber as UrlDecimalBound) 'port'
+		value(number) then return number as PortNumber
+		notADecimal or
+			aboveTheBound then throw URLError.invalidPort
+	end 'port'
+end 'urlPortOf'
+
+function urlOriginFormOf(target String) returns URLOriginForm throws URLError
+	if not target.startsWith(UrlOriginFormRoot) 'notAnAbsolutePath'
+		throw URLError.invalidPath
+	end 'notAnAbsolutePath'
+
+	let len = target.byteLength()
+
+	if let mark = try target.findFirst(QueryMark) 'hasQuery'
+		let markAt = mark.bytePos()
+		try urlRequireComponent(target, from: 0, until: markAt, extra: PathExtraBytes)
+		try urlRequireComponent(target, from: markAt + 1, until: len, extra: QueryExtraBytes)
+
+		let queryStart = try target.indexAfter(mark) otherwise panic("urlOriginFormOf: a `?` the search found has an index after it")
+
+		return URLOriginForm.create(target.slice(target.startIndex(), endIndex: mark), query: target.slice(queryStart, endIndex: target.endIndex()), hasQuery: true)
+	end 'hasQuery'
+
+	try urlRequireComponent(target, from: 0, until: len, extra: PathExtraBytes)
+
+	return URLOriginForm.create(target, query: "", hasQuery: false)
+end 'urlOriginFormOf'
+
+function urlRequireComponent(text String, from BytePos, until BytePos, extra String) throws URLError
+	var pos = from
+
+	while pos < until 'scan'
+		let b = text.byteAtOrPanic(pos)
+
+		if b == UrlPercentByte 'escape'
+			if not urlPercentTripletAt(text, at: pos, until: until) 'notAnEscape'
+				throw URLError.invalidEncoding
+			end 'notAnEscape'
+
+			pos = pos + UrlPercentTripletBytes
+			continue
+		end 'escape'
+
+		if not urlIsComponentByte(b, extra: extra) 'notAComponentByte'
+			throw URLError.invalidEncoding
+		end 'notAComponentByte'
+
+		pos = pos + 1
+	end 'scan'
+end 'urlRequireComponent'
+
+function urlIsComponentByte(b Byte, extra String) returns bool
+	return urlIsAlpha(b) or urlIsDigit(b) or urlByteIsOneOf(b, bytes: UnreservedMarkBytes) or urlByteIsOneOf(b, bytes: SubDelimBytes) or urlByteIsOneOf(b, bytes: extra)
+end 'urlIsComponentByte'

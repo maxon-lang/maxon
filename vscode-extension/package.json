@@ -2,7 +2,7 @@
   "name": "maxon-lsp-client",
   "displayName": "Maxon",
   "description": "Language support for Maxon: diagnostics, completion, go-to-definition, rename and formatting.",
-  "version": "2026.9.4",
+  "version": "2026.9.5",
   "publisher": "maxon-lang",
   "license": "MIT OR Apache-2.0",
   "homepage": "https://maxon.dev",
@@ -23,7 +23,9 @@
     "workspaceContains:**/*.maxtasks",
     "workspaceContains:**/*.maxtest",
     "workspaceContains:**/*.test",
-    "workspaceContains:specs/*.md"
+    "workspaceContains:specs/*.md",
+    "onDebugResolve:maxon",
+    "onDebugDynamicConfigurations:maxon"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -104,6 +106,104 @@
         "command": "maxon.generateIR",
         "title": "Generate IR (internal)",
         "category": "Maxon"
+      }
+    ],
+    "breakpoints": [
+      {
+        "language": "maxon"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "maxon",
+        "label": "Maxon",
+        "languages": [
+          "maxon"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "The program to debug: a .maxon file, a project directory, or an executable built with debug info. A source is built for debugging first. Defaults to the .maxon file in the active editor, else the workspace folder when it holds a .maxproj file."
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "default": [],
+                "description": "Command-line arguments passed to the program."
+              },
+              "env": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "default": {},
+                "description": "Environment variables added to the program's environment."
+              },
+              "cwd": {
+                "type": "string",
+                "description": "The program's working directory. Defaults to the workspace folder."
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "default": false,
+                "description": "Stop at the program's entry before it runs any of its own code."
+              },
+              "maxProcs": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 4294967295,
+                "description": "How many processors the program's green-thread scheduler may use (MAXON_MAX_PROCS). Unset leaves the scheduler its default."
+              },
+              "trace": {
+                "type": "boolean",
+                "default": false,
+                "description": "Create the DebugStream ring the Debug Console's trace command reads. A .maxon program is then built with --debugstream; a built executable must already have been."
+              },
+              "stopTimeoutSeconds": {
+                "type": "number",
+                "minimum": 0.001,
+                "maximum": 922337203685,
+                "default": 10,
+                "description": "Seconds to wait for a stop, and the budget for one step (default 10)."
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "maxon",
+            "request": "launch",
+            "name": "Debug the current file",
+            "program": "${file}"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "Maxon: Debug the current file",
+            "description": "Build the .maxon file in the active editor and debug it.",
+            "body": {
+              "type": "maxon",
+              "request": "launch",
+              "name": "Debug the current file",
+              "program": "^\"\\${file}\""
+            }
+          },
+          {
+            "label": "Maxon: Debug a project",
+            "description": "Build the project in the workspace folder and debug it.",
+            "body": {
+              "type": "maxon",
+              "request": "launch",
+              "name": "Debug the project",
+              "program": "^\"\\${workspaceFolder}\"",
+              "args": []
+            }
+          }
+        ]
       }
     ],
     "configuration": {

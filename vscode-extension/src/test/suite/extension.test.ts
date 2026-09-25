@@ -1,6 +1,8 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import * as myExtension from '../../extension';
+import { initLogger } from '../../logger';
+import { registerAll } from '../../registration';
 import { activateMaxonExtension, maxonExtension, openFixture, stageProject } from './fixtures';
 
 suite('Extension Test Suite', () => {
@@ -27,6 +29,48 @@ suite('Extension Test Suite', () => {
 	test('Extension exports activate and deactivate functions', () => {
 		assert.strictEqual(typeof myExtension.activate, 'function');
 		assert.strictEqual(typeof myExtension.deactivate, 'function');
+	});
+});
+
+suite('Registration Test Suite', () => {
+	test('a feature that fails to register is reported, and does not stop the registrations after it', async function () {
+		this.timeout(90000);
+		await activateMaxonExtension();
+
+		const logged: string[] = [];
+		initLogger({ appendLine: (line: string) => logged.push(line) } as unknown as vscode.OutputChannel);
+		const ctx = { subscriptions: [] as vscode.Disposable[] } as unknown as vscode.ExtensionContext;
+
+		try {
+			assert.doesNotThrow(
+				() => myExtension.registerCompilerIndependentFeatures(ctx),
+				'registering a feature the running extension already registered escaped activation'
+			);
+
+			for (const feature of ['the Test Explorer', 'the debugger']) {
+				assert.ok(
+					logged.some(line => line.includes(`Failed to register ${feature}`)),
+					`the failure to register ${feature} was not reported. The log said:\n${logged.join('\n')}`
+				);
+			}
+		} finally {
+			ctx.subscriptions.forEach(registration => registration.dispose());
+		}
+	});
+
+	test('a registration that fails disposes the registrations made before it, and is rethrown', () => {
+		const disposed: string[] = [];
+		const refusal = new Error('the second registration is refused');
+
+		assert.throws(
+			() => registerAll([
+				() => new vscode.Disposable(() => disposed.push('first')),
+				() => { throw refusal; },
+				() => new vscode.Disposable(() => disposed.push('third'))
+			]),
+			(error: unknown) => error === refusal
+		);
+		assert.deepStrictEqual(disposed, ['first'], 'the registration made before the failure was left registered, or one after it was made');
 	});
 });
 

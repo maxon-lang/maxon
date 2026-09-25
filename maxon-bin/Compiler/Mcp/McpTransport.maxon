@@ -1,7 +1,4 @@
-// JSON-RPC 2.0 framing over newline-delimited stdio, and the JSON shapes every tool answers in.
-//
-// One JSON object per line in each direction. The MCP spec does not use the LSP's Content-Length
-// framing on stdio, so a response is written whole and terminated by a newline.
+// JSON-RPC 2.0 envelopes, and the JSON shapes every tool answers in.
 
 export let McpProtocolVersion = "2024-11-05"
 export let ServerName = "maxon"
@@ -9,6 +6,13 @@ export let ServerName = "maxon"
 export enum McpError implements Error
 	notFound
 end 'McpError'
+
+// A notification is owed no reply, which is not an empty body: stdio prints nothing and HTTP
+// answers 202 rather than 200.
+export union RpcReply
+	none
+	body(text String)
+end 'RpcReply'
 
 // A `JsonNodeId` that may be absent. A JSON null is a VALUE the protocol distinguishes from an
 // omitted key — a request carrying `"id": null` is a notification — so absence needs its own case.
@@ -152,9 +156,8 @@ end 'objectHasKey'
 // Argument readers
 // =============================================================================
 //
-// A missing key reads as the default. That is safe only because the roster has already refused any key
-// the tool does not declare and any value of the wrong shape (`validateToolArguments`); without that
-// gate, a default here silently ignores an argument the caller set.
+// A read defaults, or answers absent, on a miss. That is sound only because `validateToolArguments`
+// has already refused any key the tool does not declare and any value of the wrong shape.
 
 export function argumentsGiven(args OptionalNode) returns bool
 	return match args 'a'
@@ -178,12 +181,24 @@ export function getOptionalStringArg(doc JsonDoc, args OptionalNode, key String,
 	end 'a'
 end 'getOptionalStringArg'
 
-export function getOptionalIntArg(doc JsonDoc, args OptionalNode, key String, defaultVal JsonInt) returns JsonInt
-	return match args 'a'
-		none gives defaultVal
-		some(id) gives (try doc.getInt(id, key: key) otherwise defaultVal)
+export union WholeArgument
+	absent
+	given(value JsonInt)
+end 'WholeArgument'
+
+export function optionalWholeArg(doc JsonDoc, args OptionalNode, key String) returns WholeArgument
+	match args 'a'
+		none then return WholeArgument.absent
+		some(id) then return wholeArgumentIn(doc, node: id, key: key)
 	end 'a'
-end 'getOptionalIntArg'
+end 'optionalWholeArg'
+
+function wholeArgumentIn(doc JsonDoc, node JsonNodeId, key String) returns WholeArgument
+	_ = try doc.getChild(node, key: key) otherwise return WholeArgument.absent
+	let value = try doc.getInt(node, key: key) otherwise panic("wholeArgumentIn: `{key}` passed the roster's whole-number check before it was read")
+
+	return WholeArgument.given(value)
+end 'wholeArgumentIn'
 
 export function getOptionalBoolArg(doc JsonDoc, args OptionalNode, key String, defaultVal bool) returns bool
 	return match args 'a'
@@ -234,7 +249,7 @@ end 'getOptionalStringListArg'
 // Responses
 // =============================================================================
 
-export function sendRpcResult(reqDoc JsonDoc, idNode JsonNodeId, resultDoc JsonDoc, resultRoot JsonNodeId)
+export function rpcResultText(reqDoc JsonDoc, idNode JsonNodeId, resultDoc JsonDoc, resultRoot JsonNodeId) returns String
 	var envelope = JsonDoc.create()
 	var response = JsonObjectBuilder.create()
 	response.addString(envelope, key: "jsonrpc", value: "2.0")
@@ -242,10 +257,10 @@ export function sendRpcResult(reqDoc JsonDoc, idNode JsonNodeId, resultDoc JsonD
 	response.addNode("result", node: copyJsonNode(resultDoc, srcId: resultRoot, dst: envelope))
 	envelope.root = response.build(envelope)
 
-	print("{Json.stringify(envelope)}\n")
-end 'sendRpcResult'
+	return Json.stringify(envelope)
+end 'rpcResultText'
 
-export function sendRpcError(reqDoc JsonDoc, idNode JsonNodeId, code RpcStandardErrorCode, message String)
+export function rpcErrorText(reqDoc JsonDoc, idNode JsonNodeId, code RpcStandardErrorCode, message String) returns String
 	var envelope = JsonDoc.create()
 
 	var err = JsonObjectBuilder.create()
@@ -258,12 +273,10 @@ export function sendRpcError(reqDoc JsonDoc, idNode JsonNodeId, code RpcStandard
 	response.addNode("error", node: err.build(envelope))
 	envelope.root = response.build(envelope)
 
-	print("{Json.stringify(envelope)}\n")
-end 'sendRpcError'
+	return Json.stringify(envelope)
+end 'rpcErrorText'
 
-// A tool answer. `isError` is the MCP-level flag a client reads to colour the result; the payload
-// itself is the JSON text a caller parses.
-export function sendToolResult(reqDoc JsonDoc, idNode JsonNodeId, payloadText String, isError bool)
+export function toolResultText(reqDoc JsonDoc, idNode JsonNodeId, payloadText String, isError bool) returns String
 	var envelope = JsonDoc.create()
 
 	var item = JsonObjectBuilder.create()
@@ -278,8 +291,8 @@ export function sendToolResult(reqDoc JsonDoc, idNode JsonNodeId, payloadText St
 	result.addBool(envelope, key: "isError", value: isError)
 	let resultRoot = result.build(envelope)
 
-	sendRpcResult(reqDoc, idNode: idNode, resultDoc: envelope, resultRoot: resultRoot)
-end 'sendToolResult'
+	return rpcResultText(reqDoc, idNode: idNode, resultDoc: envelope, resultRoot: resultRoot)
+end 'toolResultText'
 
 // =============================================================================
 // Payloads
@@ -288,7 +301,7 @@ end 'sendToolResult'
 // What tree a tool acted in is the single most consequential fact about a dev-mode call, and the
 // caller cannot see it any other way: one server process serves every worktree. Every answer carries
 // it back so a caller can read it against the tree they meant.
-export function addRepoRootIfKnown(doc JsonDoc, payload JsonObjectBuilder, repoRoot String)
+function addRepoRootIfKnown(doc JsonDoc, payload JsonObjectBuilder, repoRoot String)
 	if repoRoot.isEmpty() 'namesNoTree'
 		return
 	end 'namesNoTree'
@@ -296,23 +309,27 @@ export function addRepoRootIfKnown(doc JsonDoc, payload JsonObjectBuilder, repoR
 	payload.addString(doc, key: "repoRoot", value: repoRoot)
 end 'addRepoRootIfKnown'
 
-export function sendToolError(reqDoc JsonDoc, idNode JsonNodeId, message String, repoRoot String)
+export function toolErrorText(reqDoc JsonDoc, idNode JsonNodeId, message String, repoRoot String) returns String
 	var doc = JsonDoc.create()
 	var payload = JsonObjectBuilder.create()
 	payload.addBool(doc, key: "success", value: false)
 	payload.addString(doc, key: "error", value: message)
 	addRepoRootIfKnown(doc, payload: payload, repoRoot: repoRoot)
 
-	sendToolResult(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: true)
-end 'sendToolError'
+	return toolResultText(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: true)
+end 'toolErrorText'
+
+export function addRunFields(doc JsonDoc, payload JsonObjectBuilder, command String, repoRoot String, res CollectedOutput)
+	payload.addString(doc, key: "command", value: command)
+	addRepoRootIfKnown(doc, payload: payload, repoRoot: repoRoot)
+	payload.addNumber(doc, key: "exitCode", value: res.exitCode() as JsonFloat)
+end 'addRunFields'
 
 export function formatSubprocessResult(res CollectedOutput, command String, repoRoot String) returns String
 	var doc = JsonDoc.create()
 	var payload = JsonObjectBuilder.create()
 	payload.addBool(doc, key: "success", value: res.succeeded())
-	payload.addString(doc, key: "command", value: command)
-	addRepoRootIfKnown(doc, payload: payload, repoRoot: repoRoot)
-	payload.addNumber(doc, key: "exitCode", value: res.exitCode() as JsonFloat)
+	addRunFields(doc, payload: payload, command: command, repoRoot: repoRoot, res: res)
 	payload.addString(doc, key: "stdout", value: res.stdout)
 	payload.addString(doc, key: "stderr", value: res.stderr)
 

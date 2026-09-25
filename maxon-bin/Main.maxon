@@ -6,7 +6,7 @@ let UsageEntryColumnWidth = 32 as ColumnWidth
 let UsageLineWidth = 100
 
 // Resolved against the process cwd: the runner is invoked from the repo root.
-let DefaultSpecDir = "specs"
+module let DefaultSpecDir = "specs"
 
 // Distinct from 1 (a command ran and reported failures) and from 101 (a leak): a caller reading
 // only the exit code, such as a shell script or CI, must be able to tell "nothing ran" from
@@ -28,10 +28,20 @@ module let BuildSubcommandName = "build"
 let VerifyWarmRebuildCommandName = "verify-warm-rebuild"
 let VerifyRecheckCommandName = "verify-recheck"
 let LspServerCommandName = "lsp-server"
+let DapServerCommandName = "dap-server"
 let DevFlag = "--dev"
+let McpHttpFlag = "--http"
+let McpHttpFlagPrefix = "--http="
+let McpIdleTimeoutFlagPrefix = "--idle-timeout="
+let McpMaxSessionsFlagPrefix = "--max-sessions="
+let McpExitOnStdinEofFlag = "--exit-on-stdin-eof"
 let ScaleTestCommandName = "scale-test"
 
 module let OutputFlagPrefix = "--output="
+
+// A spec run with nothing filtered takes a while, and a cold-cache compile spikes well past the
+// usual. Ten minutes gives head room without making a runaway run silent.
+module let CompilerChildTimeoutMs = 600000 as DurationMs
 
 // `fmt` takes no options, including flags other commands implement: `runFmt` refuses any
 // `-`-leading argument (`anyOption`). Silently dropping one is destructive — `maxon fmt --check`
@@ -139,7 +149,8 @@ end 'specSelectionArgv'
 
 // Matched by `MaxonArgs.parse`, the one reader of this driver's command line: a second parser would
 // silently swallow a flag the first understood.
-let TestListFlag = "--list"
+module let TestListFlag = "--list"
+module let TestBuildFlag = "--build"
 let TestJsonFlag = "--json"
 let TestNoTimingFlag = "--no-timing"
 let TestIsolateFlag = "--isolate"
@@ -184,6 +195,7 @@ module let TargetEnvOptionPrefix = "--target-env="
 module let ClassifyOptionPrefix = "--classify="
 module let DebugTraceOption = "--trace"
 module let DefaultStopTimeoutSeconds = 10.0 as TargetSeconds
+module let MillisecondsPerSecond = 1000
 
 // Changes the emitted code, so it is a separate build from the one you ship. It requires the
 // sidecar: a counter is an anonymous index and what it counts lives in the `.mxdbg` coverage-point
@@ -264,8 +276,8 @@ function main() returns ExitCode
 	// A refused option aborts before any command runs: proceeding as though it had been honoured is the
 	// one outcome a caller can neither see nor recover from. The first is reported, being the flag a
 	// reader looks at first. `fmt`, `upgrade` and `mcp-server` are exempt because each refuses what it
-	// does not take itself, and the latter two must be: their own flag is recorded as refused so that no
-	// other command silently accepts it.
+	// does not take itself, and the latter two must be: their own flags are recorded as refused so that no
+	// other command silently accepts them.
 	if not args.refusedOptions.isEmpty() and args.command != MaxonCommand.fmt and args.command != MaxonCommand.upgrade and args.command != MaxonCommand.mcpServer 'badOption'
 		let refusal = try args.refusedOptions.get(0) otherwise panic("main: refusedOptions is not empty and has no first entry")
 
@@ -281,6 +293,7 @@ function main() returns ExitCode
 		build gives runBuild(args)
 		cache gives runCache(args)
 		coverage gives runCoverage(args)
+		dapServer gives runDapServerCommand(args)
 		debug gives runDebugCommand(args)
 		execute gives runExecute(args)
 		fmt gives runFmt(args)
@@ -448,7 +461,7 @@ end 'buildNamedTarget'
 function chosenTarget(projectFile FilePath, word String) returns TargetChoice
 	let declared = try entryNamesDeclaredIn(projectFile) otherwise (e) 'noRoster'
 		reportEntryRosterError(e)
-		return TargetChoice.refused(1)
+		return TargetChoice.refused(OwnFailureExit)
 	end 'noRoster'
 
 	if not word.isEmpty() 'aTargetNamed'
@@ -458,13 +471,13 @@ function chosenTarget(projectFile FilePath, word String) returns TargetChoice
 
 	if declared.count() == 0 'noTargets'
 		printError("error: {projectFile.filename()} declares no targets.\n")
-		return TargetChoice.refused(1)
+		return TargetChoice.refused(OwnFailureExit)
 	end 'noTargets'
 
 	if declared.count() > 1 'severalTargets'
 		printError("error: {projectFile.filename()} declares {declared.count()} targets. Name one:\n")
 		printEntryWords(declared)
-		return TargetChoice.refused(1)
+		return TargetChoice.refused(OwnFailureExit)
 	end 'severalTargets'
 
 	return TargetChoice.named(try declared.get(0) otherwise panic("chosenTarget: the count was just held to one"))
@@ -476,13 +489,13 @@ function buildThroughProject(projectFile FilePath, target String, args MaxonArgs
 	return match outcome 'outcome'
 		described(text) gives buildFromManifestOutput(text, args: args, manifest: projectFile, base: base, depth: depth)
 		describedNothing(code) gives describedNoBuild(projectFile, code: code)
-		notRun gives 1
+		notRun gives OwnFailureExit
 	end 'outcome'
 end 'buildThroughProject'
 
 function describedNoBuild(manifest FilePath, code ExitCode) returns ExitCode
 	printError("error: {manifest.filename()} exited {code} and described no build\n")
-	return 1 if code == 0 else code
+	return OwnFailureExit if exitSucceeded(code) else code
 end 'describedNoBuild'
 
 // Built for this host whatever `--target` says: this machine is about to run it, and the flag
@@ -515,13 +528,13 @@ module function runManifestProgram(manifest FilePath, entry ByteArray, speaker S
 
 	let code = spawnForwarding(Executable.path(runner.executable), arguments: arguments, environment: Environment.inheritUpdating(overrides), standardInput: InputSource.inherit, workingDirectory: baseDirectory(base), speaker: speaker)
 
-	if code != 0 'taskFailed'
+	if not exitSucceeded(code) 'taskFailed'
 		discardDescription(description)
 		return ManifestProgramRun.describedNothing(code)
 	end 'taskFailed'
 
 	if not File.exists(description) 'describedNothing'
-		return ManifestProgramRun.describedNothing(0)
+		return ManifestProgramRun.describedNothing(SucceededExit)
 	end 'describedNothing'
 
 	let text = try File.readText(description) otherwise 'unreadable'
@@ -593,7 +606,7 @@ function refuseWhatIsNotABuild(described String, manifest FilePath) returns Exit
 	printError("error: {manifest.filename()} described something that is not a build.\n")
 	printError("It must write what `Build.build(source)` or `Build.buildWithConfig(config)` writes. It wrote:\n")
 	printError("{described}\n")
-	return 1
+	return OwnFailureExit
 end 'refuseWhatIsNotABuild'
 
 function statedOrDefaultOutput(stated String, manifest FilePath) returns String
@@ -612,7 +625,7 @@ module function buildFromManifestOutput(described String, args MaxonArgs, manife
 
 	if describedCount > 1 'severalBuilds'
 		printError("error: {manifest.filename()} described {describedCount} builds in one run, and a target or a task describes one. Give each build its own.\n")
-		return 1
+		return OwnFailureExit
 	end 'severalBuilds'
 
 	let chosen = try doc.arrayAt(doc.root, index: 0) otherwise return refuseWhatIsNotABuild(described, manifest: manifest)
@@ -633,7 +646,7 @@ module function buildFromManifestOutput(described String, args MaxonArgs, manife
 		if statedSources.count() != 0 'bothWays'
 			printError("error: {manifest.filename()} states both a `{ManifestDirectoryKey}` and `{ManifestSourcesKey}`.\n")
 			printError("A delegated build hands the whole description to that directory's `{ProjectFileExtension}` file; it cannot also name sources of its own.\n")
-			return 1
+			return OwnFailureExit
 		end 'bothWays'
 
 		let delegateTarget = try manifestDelegateTarget(doc, build: chosen) otherwise (e) 'badDelegateTarget'
@@ -650,14 +663,14 @@ module function buildFromManifestOutput(described String, args MaxonArgs, manife
 	if inputPaths.count() == 0 'noPaths'
 		printError("error: {manifest.filename()} named no sources to compile.\n")
 		printError("Use `Build.buildWithConfig` with a non-empty `{ManifestSourcesKey}`.\n")
-		return 1
+		return OwnFailureExit
 	end 'noPaths'
 
 	// `--output=` outranks the manifest: the person typing answers a narrower question than the file
 	// does.
 	let outputOverride = chosenOutput(rebasedOnManifest(statedOrDefaultOutput(output, manifest: manifest), base: base), fromFlag: args.outputOverride)
 
-	let target = try commandLineTarget(args.targetSpec) otherwise return 1
+	let target = try commandLineTarget(args.targetSpec) otherwise return OwnFailureExit
 
 	// Either side can turn the sidecar off and neither can force it on: `--no-debug-info` has no
 	// positive twin, and a manifest saying `false` means the project never wants one.
@@ -706,7 +719,7 @@ function reportMalformedManifestField(key String, error ManifestFieldError, mani
 	end 'whatIsWrong'
 
 	printError("error: {manifest.filename()}'s `{key}` {problem}\n")
-	return 1
+	return OwnFailureExit
 end 'reportMalformedManifestField'
 
 // The readers below look a key up with `getChild`, whose one failure besides an absent key is a
@@ -744,17 +757,17 @@ end 'manifestDelegateTarget'
 function delegateBuild(directory String, args MaxonArgs, targetWord String, manifest FilePath, base ManifestBase, depth DelegationDepth) returns ExitCode
 	if depth >= MaxDelegationDepth 'tooDeep'
 		printError("error: {manifest.filename()} delegates more than {MaxDelegationDepth} deep, which is a cycle.\n")
-		return 1
+		return OwnFailureExit
 	end 'tooDeep'
 
 	let stated = try FilePath.from(rebasedOnManifest(directory, base: base)) otherwise 'notAPath'
 		printError("error: {manifest.filename()}'s `{ManifestDirectoryKey}` holds `{directory}`, which is not a path\n")
-		return 1
+		return OwnFailureExit
 	end 'notAPath'
 
 	let search = try driverFileIn(stated, extension: ProjectFileExtension) otherwise (e) 'unreadableLayout'
 		reportCompileError(e)
-		return 1
+		return OwnFailureExit
 	end 'unreadableLayout'
 
 	match search 'search'
@@ -765,7 +778,7 @@ end 'delegateBuild'
 
 function refuseDelegationToNoProject(manifest FilePath, directory String) returns ExitCode
 	printError("error: {manifest.filename()} delegates to `{directory}`, which holds no `{ProjectFileExtension}` file\n")
-	return 1
+	return OwnFailureExit
 end 'refuseDelegationToNoProject'
 
 function buildDelegatedTarget(projectFile FilePath, word String, args MaxonArgs, directory FilePath, depth DelegationDepth) returns ExitCode
@@ -779,7 +792,7 @@ end 'buildDelegatedTarget'
 function refuseUndeclaredDelegatedTarget(projectFile FilePath, word String, offered TaskNameArray) returns ExitCode
 	printError("error: {projectFile.toString()} declares no target `{word}`.\n")
 	printEntryWords(offered)
-	return 1
+	return OwnFailureExit
 end 'refuseUndeclaredDelegatedTarget'
 
 module function reportEntryRosterError(e EntryRosterError)
@@ -887,13 +900,13 @@ function runBuildPaths(args MaxonArgs) returns ExitCode
 	for spelling in args.paths 'eachPositional'
 		let path = try FilePath.from(spelling) otherwise 'badPath'
 			printError("error: invalid path: {spelling}\n")
-			return 1
+			return OwnFailureExit
 		end 'badPath'
 
 		inputPaths.push(path)
 	end 'eachPositional'
 
-	let target = try commandLineTarget(args.targetSpec) otherwise return 1
+	let target = try commandLineTarget(args.targetSpec) otherwise return OwnFailureExit
 
 	return buildAndReport(inputPaths, target: target, args: args, outputOverride: args.outputOverride, debugInfo: args.debugInfo, productVersion: VersionComponentArray.create(), defines: args.defines)
 end 'runBuildPaths'
@@ -902,12 +915,12 @@ end 'runBuildPaths'
 // `output`, which says nothing about who else writes the tree.
 function buildAndReport(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs, outputOverride String, debugInfo bool, productVersion VersionComponentArray, defines DefineArray) returns ExitCode
 	if refusedBuildOptions(args, target: target, debugInfo: debugInfo) 'refusedOptions'
-		return 1
+		return OwnFailureExit
 	end 'refusedOptions'
 
 	let lockExit = acquireBuildTreeLock(inputPaths, outputOverride: args.outputOverride)
 
-	if lockExit != 0 'busyTree'
+	if not exitSucceeded(lockExit) 'busyTree'
 		return lockExit
 	end 'busyTree'
 
@@ -958,18 +971,18 @@ end 'refusedBuildOptions'
 // it takes no lock: `acquireTreeLock` answers that itself.
 function acquireBuildTreeLock(inputPaths MaxonSourcePathArray, outputOverride String) returns ExitCode
 	if not outputOverride.isEmpty() 'callerOwnsTheOutput'
-		return 0
+		return SucceededExit
 	end 'callerOwnsTheOutput'
 
 	// A list with no common root is refused by the compile moments later, with a message naming both
 	// ends (`CompileError.noCommonRoot`). Taking no lock is right for it: there is no one tree it
 	// writes into, which is the very thing that makes it unbuildable.
 	let root = try commonAncestorOf(inputPaths) otherwise 'noTreeToLock'
-		return 0
+		return SucceededExit
 	end 'noTreeToLock'
 
 	if not Directory.isDirectory(root) 'writesBesideOneNamedFile'
-		return 0
+		return SucceededExit
 	end 'writesBesideOneNamedFile'
 
 	return acquireTreeLock(root)
@@ -979,11 +992,11 @@ end 'acquireBuildTreeLock'
 function compileAndReport(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs, outputOverride String, debugInfo bool, productVersion VersionComponentArray, defines DefineArray) returns ExitCode
 	let outputPath = try compile(inputPaths, target: target, outputOverride: outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath, runtimeIrNames: args.runtimeIrNames, asyncTrace: args.asyncTrace, debugStream: args.debugStream, debugInfo: debugInfo, coverage: args.coverage, censusByTag: args.censusByTag, censusPhase: args.censusPhase, allocationsByTag: args.allocationsByTag, allocationsPhase: args.allocationsPhase, noDebugAgent: args.noDebugAgent, productVersion: productVersion, defines: defines) otherwise (e) 'compileErr'
 		reportCompileError(e)
-		return 1
+		return OwnFailureExit
 	end 'compileErr'
 
 	print("Compiled -> {outputPath}\n")
-	return 0
+	return SucceededExit
 end 'compileAndReport'
 
 // Exit 0 iff the query spine is deterministic and incremental for `<file>`.
@@ -991,64 +1004,64 @@ function runVerifyWarmRebuild(args MaxonArgs) returns ExitCode
 	let usage = "maxon verify-warm-rebuild <file>"
 
 	if refusedPositionalBeyond(args, allowed: 1, usage: usage) 'tooManyPaths'
-		return 1
+		return OwnFailureExit
 	end 'tooManyPaths'
 
 	let spelling = args.solePositional()
 
 	if spelling.isEmpty() 'noPath'
 		printError("Usage: {usage}\n")
-		return 1
+		return OwnFailureExit
 	end 'noPath'
 
 	let inputPath = try FilePath.from(spelling) otherwise 'badPath'
 		printError("error: invalid path: {spelling}\n")
-		return 1
+		return OwnFailureExit
 	end 'badPath'
 
 	let target = detectHostTarget()
 	let bothPass = try verifyWarmRebuild(inputPath, target: target) otherwise (e) 'verifyErr'
 		reportCompileError(e)
-		return 1
+		return OwnFailureExit
 	end 'verifyErr'
 
 	if bothPass 'passed'
-		return 0
+		return SucceededExit
 	end 'passed'
 
-	return 1
+	return OwnFailureExit
 end 'runVerifyWarmRebuild'
 
 function runVerifyRecheck(args MaxonArgs) returns ExitCode
 	let usage = "maxon verify-recheck <file|dir>"
 
 	if refusedPositionalBeyond(args, allowed: 1, usage: usage) 'tooManyPaths'
-		return 1
+		return OwnFailureExit
 	end 'tooManyPaths'
 
 	let spelling = args.solePositional()
 
 	if spelling.isEmpty() 'noPath'
 		printError("Usage: {usage}\n")
-		return 1
+		return OwnFailureExit
 	end 'noPath'
 
 	let inputPath = try FilePath.from(spelling) otherwise 'badPath'
 		printError("error: invalid path: {spelling}\n")
-		return 1
+		return OwnFailureExit
 	end 'badPath'
 
 	let target = detectHostTarget()
 	let allPass = try verifyRecheck(inputPath, target: target, defines: args.defines) otherwise (e) 'verifyErr'
 		reportCompileError(e)
-		return 1
+		return OwnFailureExit
 	end 'verifyErr'
 
 	if allPass 'passed'
-		return 0
+		return SucceededExit
 	end 'passed'
 
-	return 1
+	return OwnFailureExit
 end 'runVerifyRecheck'
 
 // `harnessExe` is both what a pool worker is relaunched as and what compiles every selected test:
@@ -1058,23 +1071,23 @@ end 'runVerifyRecheck'
 // would be a second implementation of running the suite, free to drift.
 function runSpecTest(args MaxonArgs) returns ExitCode
 	if refusedPositionalBeyond(args, allowed: 1, usage: "maxon spec-test [dir] [--filter=<pattern>]... [--update-required] [--network] [--workers=<n>] [--target=<cpu>-<os>]") 'tooManyPaths'
-		return 1
+		return OwnFailureExit
 	end 'tooManyPaths'
 
 	let specDir = try resolveSpecDir(args) otherwise 'badSpecDir'
 		printError("error: invalid spec directory: {args.solePositional()}\n")
-		return 1
+		return OwnFailureExit
 	end 'badSpecDir'
 
 	let harnessExe = try Process.executablePath() otherwise 'noExe'
 		printError("error: could not determine the running executable's path\n")
-		return 1
+		return OwnFailureExit
 	end 'noExe'
 
 	// Resolved up front so the dispatcher and a relaunched worker, which re-parses the forwarded
 	// `--target`, run the same target. Prints nothing on success, so a worker's stdout wire stays
 	// untouched.
-	let effectiveTarget = try commandLineTarget(args.targetSpec) otherwise return 1
+	let effectiveTarget = try commandLineTarget(args.targetSpec) otherwise return OwnFailureExit
 
 	// A worker speaks the job protocol on stdout, so this is checked before anything is printed.
 	if args.workerPersistent 'isPoolWorker'
@@ -1098,7 +1111,7 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	// phrase because `refuseIfStale` makes it the subject of "<role> is STALE".
 	let freshnessExit = refuseIfStale(harnessExe, role: "the spec-test harness (which is also the compiler it tests)")
 
-	if freshnessExit != 0 'staleBinary'
+	if not exitSucceeded(freshnessExit) 'staleBinary'
 		return freshnessExit
 	end 'staleBinary'
 
@@ -1133,7 +1146,7 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	// check, so a refusal is instant and precedes any worker.
 	let lockExit = acquireTreeLock(specDir)
 
-	if lockExit != 0 'busyTree'
+	if not exitSucceeded(lockExit) 'busyTree'
 		return lockExit
 	end 'busyTree'
 
@@ -1149,12 +1162,12 @@ function runFmt(args MaxonArgs) returns ExitCode
 	if not args.anyOption().isEmpty() 'refusedOption'
 		printError("fmt: unrecognized option: {args.anyOption()}\n")
 		printError("{FmtUsageLine}\n")
-		return 1
+		return OwnFailureExit
 	end 'refusedOption'
 
 	if args.paths.count() > 1 'refusedSecondPath'
-		printError("fmt: expected at most one path, got {args.paths.count()}: {commaJoined(args.paths)}\n")
-		return 1
+		printError("fmt: expected at most one path, got {args.paths.count()}: {joinedWith(args.paths as StringArray, separator: ListSeparator)}\n")
+		return OwnFailureExit
 	end 'refusedSecondPath'
 
 	let spelling = args.solePositional()
@@ -1199,7 +1212,7 @@ function formatEachFile(files FilePathArray) returns ExitCode
 	for file in files 'eachFile'
 		let original = try File.readText(file) otherwise 'unreadable'
 			printError("fmt: could not read {file}\n")
-			return 1
+			return OwnFailureExit
 		end 'unreadable'
 
 		let formatted = format(original)
@@ -1207,7 +1220,7 @@ function formatEachFile(files FilePathArray) returns ExitCode
 		if formatted != original 'differs'
 			try File.writeText(file, content: formatted) otherwise 'unwritable'
 				printError("fmt: could not write {file}\n")
-				return 1
+				return OwnFailureExit
 			end 'unwritable'
 
 			print("formatted: {file}\n")
@@ -1216,26 +1229,26 @@ function formatEachFile(files FilePathArray) returns ExitCode
 	end 'eachFile'
 
 	print("fmt: {changed} file(s) changed, {files.count() - changed} unchanged.\n")
-	return 0
+	return SucceededExit
 end 'formatEachFile'
 
 function refusedFmtPath(spelling String) returns ExitCode
 	printError("fmt: path not found: {spelling}\n")
-	return 1
+	return OwnFailureExit
 end 'refusedFmtPath'
 
 typealias FormattedFileCount = int(0 to u64.max)
 
-let ListSeparator = ", "
+module let ListSeparator = ", "
 
 // A free function because the library carries no `String.join`.
-module function commaJoined(values SourcePathSpellingArray) returns String
+module function joinedWith(values StringArray, separator String) returns String
 	var out = StringBuilder.create()
 	var first = true
 
 	for value in values 'eachValue'
 		if not first 'needsSeparator'
-			out.append(ListSeparator)
+			out.append(separator)
 		end 'needsSeparator'
 
 		out.append(value)
@@ -1243,13 +1256,23 @@ module function commaJoined(values SourcePathSpellingArray) returns String
 	end 'eachValue'
 
 	return out.build()
-end 'commaJoined'
+end 'joinedWith'
+
+module function backQuoted(words StringArray) returns StringArray
+	var quoted = StringArray.create()
+
+	for word in words 'eachWord'
+		quoted.push("`{word}`")
+	end 'eachWord'
+
+	return quoted
+end 'backQuoted'
 
 // Separate so `runSpecTest` has one exit that releases the tree lock; see `compileAndReport`.
 function runSpecSuite(args MaxonArgs, specDir FilePath, harnessExe FilePath, effectiveTarget Target) returns ExitCode
 	let run = try runSpecPool(harnessExe, specDir: specDir, filterPatterns: args.filterPatterns, updateRequired: args.updateRequired, workerCount: args.workers, effectiveTarget: effectiveTarget, includeNetwork: args.includeNetwork) otherwise (e) 'runErr'
 		reportCompileError(e)
-		return 1
+		return OwnFailureExit
 	end 'runErr'
 
 	// A run fails when it selected nothing or when any one pattern did: a mistyped member of a set of
@@ -1261,7 +1284,7 @@ function runSpecSuite(args MaxonArgs, specDir FilePath, harnessExe FilePath, eff
 		reportExclusions(run.excluded, effectiveTarget: effectiveTarget)
 
 		printError("error: no tests selected{filterSuffix(run.unmatchedPatterns)}\n")
-		return 1
+		return OwnFailureExit
 	end 'selectedNothing'
 
 	let testsExit = reportResults(run.results)
@@ -1293,7 +1316,7 @@ function runSpecSuite(args MaxonArgs, specDir FilePath, harnessExe FilePath, eff
 	// because the answer comes from the spec text.
 	reportUncomparedGoldens(specDir, effectiveTarget: effectiveTarget)
 
-	if testsExit != 0 'someTestFailed'
+	if not exitSucceeded(testsExit) 'someTestFailed'
 		return testsExit
 	end 'someTestFailed'
 
@@ -1302,10 +1325,10 @@ function runSpecSuite(args MaxonArgs, specDir FilePath, harnessExe FilePath, eff
 	// servicing its tests. Green tests must never be allowed to mask that.
 	if run.failedWorkers > 0 'workerFailed'
 		printError("error: {run.failedWorkers} spec worker(s) exited non-zero (see above) — failing the suite despite {run.results.count()} passing tests\n")
-		return 1
+		return OwnFailureExit
 	end 'workerFailed'
 
-	return 0
+	return SucceededExit
 end 'runSpecSuite'
 
 // Empty when no pattern went unmatched: an empty spec directory and a filter that matched nothing are
@@ -1315,13 +1338,13 @@ function filterSuffix(unmatchedPatterns FilterPatternArray) returns String
 		return ""
 	end 'noFilter'
 
-	var flags = SourcePathSpellingArray.create()
+	var flags = StringArray.create()
 
 	for pattern in unmatchedPatterns 'eachPattern'
 		flags.push("{FilterFlagPrefix}{pattern}")
 	end 'eachPattern'
 
-	return " matching {commaJoined(flags)}"
+	return " matching {joinedWith(flags, separator: ListSeparator)}"
 end 'filterSuffix'
 
 // Absolute whichever way it was spelled, and that is a correctness requirement: every path the run
@@ -1383,10 +1406,12 @@ module function quietTheBuildChatter(args MaxonArgs) returns LogLevel
 	return inForce
 end 'quietTheBuildChatter'
 
-// What `run` and `upgrade` exit with when the failure is their own; otherwise they forward the
-// child's exit code. `refusedCommandLineExit` uses it for both, so the two refusals cannot exit
-// differently.
 module let OwnFailureExit = 1 as ExitCode
+module let SucceededExit = 0 as ExitCode
+
+module function exitSucceeded(code ExitCode) returns bool
+	return code == SucceededExit
+end 'exitSucceeded'
 
 typealias SignalNumber = int(0 to u32.max)
 
@@ -1464,14 +1489,14 @@ function reportResults(results SpecTestResultArray) returns ExitCode
 	// should every case start answering E3104.
 	if tally.provedNothing() 'nothingRan'
 		printError("error: every selected test was SKIPPED or NOT RUN on this host, so this run proved nothing — the notes below name the constructs this target has no implementation for and the binaries this host cannot execute\n")
-		return 1
+		return OwnFailureExit
 	end 'nothingRan'
 
 	if tally.failed > 0 'anyFailed'
-		return 1
+		return OwnFailureExit
 	end 'anyFailed'
 
-	return 0
+	return SucceededExit
 end 'reportResults'
 
 // A SKIP prints no reason: E3104's diagnostic names a scratch path and spans lines, so the stderr
@@ -1522,6 +1547,7 @@ module function reportCompileError(e CompileError)
 		readError(p) then emitDiagnosticLine("error: could not read {p}")
 		stdlibNotFound then emitDiagnosticLine("error: could not locate the stdlib/ directory (every compile loads stdlib source)")
 		runtimeNotFound then emitDiagnosticLine("error: could not locate the runtime/ directory beside stdlib/ (every compile loads runtime source)")
+		runtimeTierIsNotAProgram(r) then emitDiagnosticLine("error: {r} is in the runtime/ tier, which every program compiles; it is not a program of its own. Build a program that uses it")
 		compileError then break 'report'
 	end 'report'
 end 'reportCompileError'
@@ -1548,26 +1574,27 @@ end 'driverFileKindOf'
 function refusedCommandLineExit(command MaxonCommand) returns ExitCode
 	return match command 'whichCommand'
 		test gives NothingRanExitCode
-		build gives 1
-		cache gives 1
-		coverage gives 1
-		debug gives 1
-		execute gives OwnFailureExit
-		fmt gives 1
-		help gives 1
-		init gives 1
-		lspServer gives 1
-		mcpServer gives 1
-		monitor gives 1
-		profile gives 1
-		run gives 1
-		scaleTest gives 1
-		specTest gives 1
-		upgrade gives OwnFailureExit
-		verifyRecheck gives 1
-		verifyWarmRebuild gives 1
-		version gives 1
-		unknown gives 1
+		build or
+			cache or
+			coverage or
+			dapServer or
+			debug or
+			fmt or
+			help or
+			init or
+			lspServer or
+			mcpServer or
+			monitor or
+			profile or
+			run or
+			scaleTest or
+			specTest or
+			verifyRecheck or
+			verifyWarmRebuild or
+			version or
+			unknown or
+			execute or
+			upgrade gives OwnFailureExit
 	end 'whichCommand'
 end 'refusedCommandLineExit'
 
@@ -1577,34 +1604,149 @@ function versionLine() returns String
 	return "maxon {CompilerVersion} ({CompilerCommit} {CompilerCommitDate}) ({targetToString(detectHostTarget())})"
 end 'versionLine'
 
-// It refuses every option but `--dev`, including ones this driver implements elsewhere: it speaks a
-// protocol on stdout, so a flag honoured silently would corrupt a session no caller can inspect.
-// The refusal goes to stderr before the first frame.
-function runMcpServerCommand(args MaxonArgs) returns ExitCode
-	if refusedPositionalBeyond(args, allowed: 0, usage: "maxon {McpServerCommandName} [{DevFlag}]") 'unexpectedArgument'
-		return 1
-	end 'unexpectedArgument'
+function runDapServerCommand(args MaxonArgs) returns ExitCode
+	let usage = "maxon {DapServerCommandName}"
 
-	let stray = args.firstOptionOtherThan(DevFlag)
+	if not args.anyOption().isEmpty() 'refusedOption'
+		printError("error: {DapServerCommandName} takes no options: {args.anyOption()}\n")
+		printError("Usage: {usage}\n")
 
-	if not stray.isEmpty() 'refusedOption'
-		printError("error: {McpServerCommandName} takes no option but {DevFlag}: {stray}\n")
-		return 1
+		return OwnFailureExit
 	end 'refusedOption'
 
-	return runMcpServer(args.devMode)
+	if refusedPositionalBeyond(args, allowed: 0, usage: usage) 'unexpectedArgument'
+		return OwnFailureExit
+	end 'unexpectedArgument'
+
+	return runDapServer()
+end 'runDapServerCommand'
+
+// Every option it does not name is refused, including ones this driver implements elsewhere: it
+// speaks a protocol on stdout, so a flag honoured silently would corrupt a session no caller can
+// inspect.
+function runMcpServerCommand(args MaxonArgs) returns ExitCode
+	if refusedPositionalBeyond(args, allowed: 0, usage: "maxon {McpServerCommandName} {mcpServerArguments()}") 'unexpectedArgument'
+		return refusedCommandLineExit(MaxonCommand.mcpServer)
+	end 'unexpectedArgument'
+
+	var options = McpHttpOptions.create()
+	var overHttp = false
+	var httpOnlyOption = McpHttpOnlyOption.none
+
+	for option in args.optionsSeen 'eachOption'
+		if option == DevFlag 'contributorMode'
+			continue
+		end 'contributorMode'
+
+		if option == McpHttpFlag 'aFreePort'
+			overHttp = true
+			continue
+		end 'aFreePort'
+
+		if option.startsWith(McpHttpFlagPrefix) 'aChosenPort'
+			overHttp = true
+
+			match mcpOptionNumberOf(option.replaceFirst(McpHttpFlagPrefix, with: ""), atMost: HighestMcpPort as McpOptionWhole) 'read'
+				refused then return refusedMcpOption(option)
+				value(chosen) then options.port = chosen as NetworkPort
+			end 'read'
+
+			continue
+		end 'aChosenPort'
+
+		if option.startsWith(McpIdleTimeoutFlagPrefix) 'anIdleTimeout'
+			httpOnlyOption = McpHttpOnlyOption.given(option)
+
+			match mcpOptionNumberOf(option.replaceFirst(McpIdleTimeoutFlagPrefix, with: ""), atMost: McpMaxIdleSeconds as McpOptionWhole) 'read'
+				refused then return refusedMcpOption(option)
+				value(seconds) then options.idleTimeoutSeconds = seconds as McpIdleSeconds
+			end 'read'
+
+			continue
+		end 'anIdleTimeout'
+
+		if option == McpExitOnStdinEofFlag 'endsWithItsStdin'
+			httpOnlyOption = McpHttpOnlyOption.given(option)
+			options.exitOnStdinEof = true
+
+			continue
+		end 'endsWithItsStdin'
+
+		if option.startsWith(McpMaxSessionsFlagPrefix) 'aSessionCap'
+			httpOnlyOption = McpHttpOnlyOption.given(option)
+
+			match mcpOptionNumberOf(option.replaceFirst(McpMaxSessionsFlagPrefix, with: ""), atMost: McpMaxSessionCap as McpOptionWhole) 'read'
+				refused then return refusedMcpOption(option)
+				value(sessions) then options.maxSessions = sessions as McpSessionLimit
+			end 'read'
+
+			continue
+		end 'aSessionCap'
+
+		return refusedMcpOption(option)
+	end 'eachOption'
+
+	if overHttp 'overHttp'
+		return runMcpServer(args.devMode, transport: McpTransportChoice.http(options))
+	end 'overHttp'
+
+	match httpOnlyOption 'unheeded'
+		none then return runMcpServer(args.devMode, transport: McpTransportChoice.stdio)
+		given(option) then return refusedStdioMcpOption(option)
+	end 'unheeded'
 end 'runMcpServerCommand'
+
+union McpHttpOnlyOption
+	none
+	given(option String)
+end 'McpHttpOnlyOption'
+
+union McpOptionNumberParse
+	value(number McpOptionWhole)
+	refused
+end 'McpOptionNumberParse'
+
+typealias McpOptionWhole = int(1 to i64.max)
+
+let LowestMcpOptionNumber = 1 as McpOptionWhole
+let HighestMcpPort = 65535 as NetworkPort
+
+function refusedStdioMcpOption(option String) returns ExitCode
+	printError("error: {McpServerCommandName} takes {option} only with {McpHttpFlag}: it governs HTTP sessions, and over stdio the process is the one session.\n")
+
+	return refusedCommandLineExit(MaxonCommand.mcpServer)
+end 'refusedStdioMcpOption'
+
+function mcpServerArguments() returns String
+	return "[{DevFlag}] [{McpHttpFlag}[=<port>]] [{McpIdleTimeoutFlagPrefix}<seconds>] [{McpMaxSessionsFlagPrefix}<n>] [{McpExitOnStdinEofFlag}]"
+end 'mcpServerArguments'
+
+function refusedMcpOption(option String) returns ExitCode
+	printError("error: {McpServerCommandName} does not take {option}. It takes {mcpServerArguments()}. The HTTP transport binds loopback only — 127.0.0.1 on a port — so there is no host or interface to name.\n")
+
+	return refusedCommandLineExit(MaxonCommand.mcpServer)
+end 'refusedMcpOption'
+
+function mcpOptionNumberOf(spelling String, atMost McpOptionWhole) returns McpOptionNumberParse
+	let parsed = try int.fromString(spelling) otherwise return McpOptionNumberParse.refused
+
+	if parsed < LowestMcpOptionNumber or parsed > (atMost as ParsedInt) 'outOfRange'
+		return McpOptionNumberParse.refused
+	end 'outOfRange'
+
+	return McpOptionNumberParse.value(parsed as McpOptionWhole)
+end 'mcpOptionNumberOf'
 
 // To stdout, because scripts read it (the release workflow compares it against the tag). A
 // positional is refused: `maxon version 1.2.3` must not print an answer that ignores half of what
 // was typed.
 function runVersion(args MaxonArgs) returns ExitCode
 	if refusedPositionalBeyond(args, allowed: 0, usage: "maxon {VersionCommandName}") 'unexpectedArgument'
-		return 1
+		return OwnFailureExit
 	end 'unexpectedArgument'
 
 	print("{versionLine()}\n")
-	return 0
+	return SucceededExit
 end 'runVersion'
 
 // `unknown` is the absence of a command and has no reference. Every roster walk goes through
@@ -1668,12 +1810,13 @@ function commandReference(command MaxonCommand) returns CommandReference throws 
 		build gives CommandReference.create(BuildSubcommandName, arguments: "<file|directory>...", summary: "Compile a Maxon program to an executable.", detail: "Several paths are compiled as ONE program, in the order given.{ParagraphSeparator}With no path it builds a target of the `{ProjectFileExtension}` file in the working directory: its only target, or the one a single word names, each `_` in the target's name written `-` (`maxon {BuildSubcommandName} my-app` builds the exported function `my_app`). With several targets and no word, the targets are listed. A word naming no target is a path. A target that states no output builds `{ProjectProductsDirName}/<name>`, `<name>` being the `{ProjectFileExtension}` file's.", audience: CommandAudience.usingTheCompiler)
 		cache gives CommandReference.create(CacheCommandName, arguments: "[{CacheClearVerb}]", summary: "Report what this compiler has cached on the host, or remove it.", detail: "With no verb it reports, on stdout: a line per cache directory this host keeps, naming the one a run will use, how many builds it holds and how much disk. A build is the executable; the debug sidecar beside one is not a build, and its bytes are counted in the size because clearing gives them back. A directory that cannot be read says so and the command exits 1.{ParagraphSeparator}`{CacheClearVerb}` removes the compiled programs `{ExecuteCommandName}` and a path-less `{BuildSubcommandName}` keep, the directories holding them, and the Maxon directory above those. It removes nothing else in a directory you named through {RunCacheRootVariable}, which Maxon does not own. Nothing to remove is an ordinary state and is reported as success.{ParagraphSeparator}The cache is the first of {cacheRootChain()} whose variable names a directory this compiler can create, and both the report and `{CacheClearVerb}` reach every one of them this host names, because a build published while a different one ranked first is stranded under it otherwise.", audience: CommandAudience.usingTheCompiler)
 		coverage gives CommandReference.create(CoverageCommandName, arguments: "<run|report> <exe>", summary: "Run a {CoverageFlag} binary and report line + branch coverage.", detail: "Everything after the executable is the CHILD's command line and reaches it untouched.", audience: CommandAudience.usingTheCompiler)
-		debug gives CommandReference.create(DebugCommandName, arguments: "[<subcommand>] <exe>", summary: "Debug a program interactively, or read back its `.mxdbg` sidecar.", detail: "`maxon debug <exe>` opens a command prompt over the running program: `break`, `run`, `continue`, `step`, `next`, `finish`, `until`, `backtrace`, `print`, `locals`, `clear`, `pause`, `threads`, `gt`, `gt-backtrace`, `gt-park`, `gt-resume`, `trace`, `help` and `quit`, with the usual short aliases. `break <target> if <local> <op> <literal>` arms a conditional breakpoint the agent evaluates itself; `pause` interrupts a program that stops on nothing; the `gt` words list, walk, select and hold green threads; and `trace` prints the DebugStream events committed before the stop when the session was started with {DebugTraceOption}. `{BatchOption} {CommandsOptionPrefix}<cmd;cmd;...>` runs a script instead and writes one JSON object per line on stdout, with the program's own two streams on stderr; `{CompleteOptionPrefix}<partial line>` answers the completions for a line and runs nothing.{ParagraphSeparator}The debugger needs the in-process agent, which is emitted by default on x64-windows only: a binary built {NoDebugAgentFlag}, one built for another target and a wasm module are each refused by name. The driver finds the agent through the {DbgEnvVarName} environment variable it sets on the program it launches.{ParagraphSeparator}`{DumpInfoOption} <exe>` prints the sidecar; `{SymbolizeOption} <exe> <offset>...` resolves `.text` code offsets to file:line:col.", audience: CommandAudience.usingTheCompiler)
+		debug gives CommandReference.create(DebugCommandName, arguments: "[<subcommand>] <exe>", summary: "Debug a program interactively, or read back its `.mxdbg` sidecar.", detail: "`maxon debug <exe>` opens a command prompt over the running program: `break`, `run`, `continue`, `step`, `next`, `finish`, `until`, `backtrace`, `print`, `locals`, `clear`, `pause`, `threads`, `gt`, `gt-backtrace`, `gt-park`, `gt-resume`, `trace`, `help` and `quit`, with the usual short aliases. `break <target> if <local> <op> <literal>` arms a conditional breakpoint the agent evaluates itself; `break *0x<offset>` arms one exact `.text` offset; `pause` interrupts a program that stops on nothing; the `gt` words list, walk, select and hold green threads; and `trace` prints the DebugStream events committed before the stop when the session was started with {DebugTraceOption}. `{BatchOption} {CommandsOptionPrefix}<cmd;cmd;...>` runs a script instead and writes one JSON object per line on stdout, with the program's own two streams on stderr; `{CompleteOptionPrefix}<partial line>` answers the completions for a line and runs nothing.{ParagraphSeparator}The debugger needs the in-process agent, which is emitted by default on x64-windows only: a binary built {NoDebugAgentFlag}, one built for another target and a wasm module are each refused by name. The driver finds the agent through the {DbgEnvVarName} environment variable it sets on the program it launches.{ParagraphSeparator}`{DumpInfoOption} <exe>` prints the sidecar; `{SymbolizeOption} <exe> <offset>...` resolves `.text` code offsets to file:line:col.", audience: CommandAudience.usingTheCompiler)
 		fmt gives CommandReference.create(FmtCommandName, arguments: "[<file|directory>]", summary: "Re-print Maxon sources in canonical layout, IN PLACE.", detail: "With no path it formats the working directory. A named FILE is formatted whatever it is called; a DIRECTORY is walked for `{MaxonSourceExtension}`, `{TestSourceExtension}`, `{ProjectFileExtension}` and `{TaskFileExtension}` files, skipping anything under a `.maxonignore`, and any subdirectory that is its own checkout. Takes no options.", audience: CommandAudience.usingTheCompiler)
 		help gives CommandReference.create(HelpCommandName, arguments: "[<command>]", summary: "Print this reference: every command's options, or one command's.", detail: "`maxon` with no arguments prints the short list instead.", audience: CommandAudience.usingTheCompiler)
 		init gives CommandReference.create(InitCommandName, arguments: "[<directory>]", summary: "Scaffold a new project: `<directory>{ProjectFileExtension}` and `{MainSourceFileName}`.", detail: "With no directory it initializes the working directory, and with one it creates that directory. The project is named after the directory: its `{ProjectFileExtension}` file takes that name, and its one target builds `{ProjectProductsDirName}/<name>`.{ParagraphSeparator}It never overwrites: if the directory already holds a `{ProjectFileExtension}` file or a `{MainSourceFileName}`, NOTHING is written and the existing path is named.", audience: CommandAudience.usingTheCompiler)
+		dapServer gives CommandReference.create(DapServerCommandName, arguments: "", summary: "Speak the Debug Adapter Protocol over stdio.", detail: "Content-Length framed DAP messages, so an editor such as VS Code can debug a Maxon program: `launch` names a built executable, a `.maxon` file or a project directory, and a source is built with debug info first. Breakpoints, stepping, pause, threads, stacks, variables and evaluation are the interactive debugger's, and the program's own output arrives as `output` events. Takes no options.", audience: CommandAudience.usingTheCompiler)
 		lspServer gives CommandReference.create(LspServerCommandName, arguments: "", summary: "Speak the Language Server Protocol over stdio.", detail: "JSON-RPC bodies under Content-Length framing, the initialize / shutdown / exit lifecycle, and full text-document synchronisation.", audience: CommandAudience.usingTheCompiler)
-		mcpServer gives CommandReference.create(McpServerCommandName, arguments: "[{DevFlag}]", summary: "Speak the Model Context Protocol over stdio.", detail: "JSON-RPC bodies over newline-delimited stdio, providing MCP tools for compiling, testing, inspecting, and formatting Maxon code. With {DevFlag}, also exposes compiler development tools.", audience: CommandAudience.usingTheCompiler)
+		mcpServer gives CommandReference.create(McpServerCommandName, arguments: mcpServerArguments(), summary: "Speak the Model Context Protocol, over stdio or loopback HTTP.", detail: "JSON-RPC bodies over newline-delimited stdio by default, providing MCP tools for compiling, testing, inspecting, formatting and DEBUGGING Maxon code. With {DevFlag}, also exposes compiler development tools.{ParagraphSeparator}With {McpHttpFlag} it serves the SAME tool roster over HTTP on 127.0.0.1 instead, at the one route `/mcp`, and prints the endpoint it chose as one JSON line on stdout before falling silent. There is no host option: the transport binds loopback only, refuses a request whose `Origin` or `Host` is not loopback, and holds one session per `Mcp-Session-Id`, which `initialize` mints and `DELETE /mcp` ends.", audience: CommandAudience.usingTheCompiler)
 		monitor gives CommandReference.create(MonitorCommandName, arguments: "<exe> [args...]", summary: "Launch an executable with the debug-stream monitor attached.", detail: "Everything after the executable is the CHILD's command line and reaches it untouched.", audience: CommandAudience.usingTheCompiler)
 		profile gives CommandReference.create(ProfileCommandName, arguments: "run <exe>", summary: "Launch a program and sample where its CPU time goes.", detail: "It needs no instrumentation and no rebuild: only the `.mxdbg` sidecar is read.", audience: CommandAudience.usingTheCompiler)
 		execute gives CommandReference.create(ExecuteCommandName, arguments: "<file|directory> [args...]", summary: "Compile a program and run it, reusing a cached build when nothing changed.", detail: "Everything after the path is the PROGRAM's command line and reaches it untouched; its stdin, stdout, stderr and exit code are this command's own, and the build itself says nothing.{ParagraphSeparator}A first argument ending in `{MaxonSourceExtension}` selects this command with no word at all, which is what a kernel hands the interpreter for a file whose first line is `#!/usr/bin/env maxon`.{ParagraphSeparator}The build is kept in a per-program directory under the first of {cacheRootChain()} whose variable names a directory this compiler can create, and reused while the program's sources, the standard library and this compiler all still hash the same. `{CacheCommandName} {CacheClearVerb}` empties it. Freshness is a CONTENT hash rather than a timestamp: a file's modification time is whole seconds, so an edit landing in the same second as a build would tie.", audience: CommandAudience.usingTheCompiler)
@@ -1723,6 +1866,7 @@ enum HelpOption
 	resultJson
 	testFilter
 	testList
+	testBuild
 	testJson
 	testIsolate
 	testBail
@@ -1731,6 +1875,10 @@ enum HelpOption
 	testColor
 	dryRun
 	devMode
+	mcpHttp
+	mcpIdleTimeout
+	mcpMaxSessions
+	mcpExitOnStdinEof
 end 'HelpOption'
 
 // The commands are a field so the option is printed under each command that reads it, making `maxon
@@ -1761,7 +1909,7 @@ function optionReference(option HelpOption) returns OptionReference
 		debugStopTimeout gives OptionReference.create("{StopTimeoutOptionPrefix}<seconds>", description: "How long to wait for the program to stop, and how long a driver-walked `step`, `next`, `finish` or `until` may run (default {DefaultStopTimeoutSeconds:.0} seconds). A wait that expires is a `timeout` event and a failed session; the program keeps running and the session stays open, so `break`, `pause` and `continue` still apply.", commands: [MaxonCommand.debug])
 		debugTargetEnv gives OptionReference.create("{TargetEnvOptionPrefix}NAME=VALUE", description: "Set NAME in the DEBUGGED program's environment, repeatable; everything past the first `=` is the value. The program otherwise inherits this driver's environment plus {DbgEnvVarName}.", commands: [MaxonCommand.debug])
 		debugTrace gives OptionReference.create(DebugTraceOption, description: "Create the DebugStream ring `{MonitorCommandName}` reads and name it to the debugged program, so the `trace` command can print the events it committed before a stop. The program must have been built with {DebugStreamFlag}; without it `trace` says so rather than printing an empty list.", commands: [MaxonCommand.debug])
-		noDebugInfo gives OptionReference.create(NoDebugInfoFlag, description: "Do NOT write the <output>.mxdbg debug-info sidecar. It is written BY DEFAULT, and the executable is byte-identical either way: the sidecar never decides which instructions are emitted, so the binary you debug is the binary you shipped.", commands: [MaxonCommand.build])
+		noDebugInfo gives OptionReference.create(NoDebugInfoFlag, description: "Do NOT write the <output>.mxdbg debug-info sidecar. It is written BY DEFAULT, and the executable is byte-identical either way: the sidecar never decides which instructions are emitted, so the binary you debug is the binary you shipped.", commands: [MaxonCommand.build, MaxonCommand.test])
 		coverageInstrumentation gives OptionReference.create(CoverageFlag, description: "Instrument for code coverage: the binary counts each statement and branch arm it executes and writes them to <output>{MxcovDataExtension} as it exits. It CHANGES the emitted code, so it is a separate build; read it back with `{CoverageCommandName}`. It requires the debug-info sidecar, which carries what each counter counts.", commands: [MaxonCommand.build])
 		asyncTrace gives OptionReference.create(AsyncTraceFlag, description: "Write the green-thread trace to stderr as the program runs: one line per spawn, io_yield, io_resume and await. Opt-in per build: a build without it emits no trace calls at all.", commands: [MaxonCommand.build])
 		debugStream gives OptionReference.create(DebugStreamFlag, description: "Emit the DebugStream producer that `{MonitorCommandName}` reads: the memory manager writes its events into a shared-memory ring. Opt-in per build: a build without it is unchanged. Refused on a target that cannot provide one.", commands: [MaxonCommand.build])
@@ -1779,7 +1927,8 @@ function optionReference(option HelpOption) returns OptionReference
 		emitCorpus gives OptionReference.create("{EmitCorpusFlagPrefix}<dir>", description: "Write the generated corpus to <dir> and compile nothing.", commands: [MaxonCommand.scaleTest])
 		resultJson gives OptionReference.create("{ResultJsonFlagPrefix}<path>", description: "Write the whole run (per-rung and per-phase memory, and the deltas from the last recorded run) to <path> as JSON, so a tool never has to scrape the human report.", commands: [MaxonCommand.scaleTest])
 		testFilter gives OptionReference.create("{FilterFlagPrefix}P", description: "Run only tests whose NAME or FILE contains P (case-insensitive). Repeatable, and each value may hold comma-separated patterns: the run takes every test any pattern selects, and a pattern that selects nothing refuses the run.", commands: [MaxonCommand.test])
-		testList gives OptionReference.create(TestListFlag, description: "Print the tests that would run and compile nothing.", commands: [MaxonCommand.test])
+		testList gives OptionReference.create(TestListFlag, description: "Print the tests that would run, and compile nothing unless {TestBuildFlag} is given.", commands: [MaxonCommand.test])
+		testBuild gives OptionReference.create(TestBuildFlag, description: "With {TestListFlag}, also build the test binary, with its debug-info sidecar, and run nothing.", commands: [MaxonCommand.test])
 		testJson gives OptionReference.create(TestJsonFlag, description: "Emit the report as JSON instead of text.", commands: [MaxonCommand.test])
 		testIsolate gives OptionReference.create(TestIsolateFlag, description: "Run every test in its own process, rather than one process per test FILE.", commands: [MaxonCommand.test])
 		testBail gives OptionReference.create("{TestBailFlag}, {TestBailFlagPrefix}N", description: "Stop claiming new work after N failures (default {DefaultBailAfter}); the shard already running finishes, so the total may exceed N.", commands: [MaxonCommand.test])
@@ -1788,6 +1937,10 @@ function optionReference(option HelpOption) returns OptionReference
 		testColor gives OptionReference.create("{TestColorFlagPrefix}{reportColorChoices()}", description: "Colour the report; `auto` means only when stdout is a terminal: not redirected, NO_COLOR unset, TERM not `dumb`. Only wasm32-wasi cannot detect a terminal; there `auto` degrades to `never`, so use `always` to force colour.", commands: [MaxonCommand.test])
 		dryRun gives OptionReference.create(DryRunFlag, description: "Print the install root and the command that would update it, and run nothing. It never bypasses a refusal.", commands: [MaxonCommand.upgrade])
 		devMode gives OptionReference.create(DevFlag, description: "Enable compiler development tools (run_spec_test, run_scale_test, spec_test_outcome, worktree targeting).", commands: [MaxonCommand.mcpServer])
+		mcpHttp gives OptionReference.create("{McpHttpFlagPrefix}<port>", description: "Serve the tool roster over loopback HTTP instead of stdio, on <port>; written bare as `{McpHttpFlag}` it takes whichever free port the kernel gives. The chosen endpoint is printed once on stdout as one JSON line naming it, and nothing else is ever written there. Loopback only: there is no host to choose.", commands: [MaxonCommand.mcpServer])
+		mcpIdleTimeout gives OptionReference.create("{McpIdleTimeoutFlagPrefix}<seconds>", description: "Close an HTTP session untouched for this long, reaping any debug session it held (default {DefaultMcpIdleTimeoutSeconds}).", commands: [MaxonCommand.mcpServer])
+		mcpMaxSessions gives OptionReference.create("{McpMaxSessionsFlagPrefix}<n>", description: "How many HTTP sessions may be live at once (default {DefaultMcpMaxSessions}); an `initialize` past the cap is answered 429.", commands: [MaxonCommand.mcpServer])
+		mcpExitOnStdinEof gives OptionReference.create(McpExitOnStdinEofFlag, description: "With {McpHttpFlag}, close the listener and end every session once this process's stdin reaches end of file, so a server a parent started ends with that parent. Refused without {McpHttpFlag}: over stdio the end of input already ends the server.", commands: [MaxonCommand.mcpServer])
 	end 'whichOption'
 end 'optionReference'
 
@@ -1963,18 +2116,18 @@ function runHelp(args MaxonArgs) returns ExitCode
 	if not args.anyOption().isEmpty() 'refusedOption'
 		printError("error: {HelpCommandName} takes no options: {args.anyOption()}\n")
 		printError("Usage: {helpUsageLine()}\n")
-		return 1
+		return OwnFailureExit
 	end 'refusedOption'
 
 	if refusedPositionalBeyond(args, allowed: 1, usage: helpUsageLine()) 'unexpectedArgument'
-		return 1
+		return OwnFailureExit
 	end 'unexpectedArgument'
 
 	let named = args.solePositional()
 
 	if named.isEmpty() 'theWholeReference'
 		printFullReference()
-		return 0
+		return SucceededExit
 	end 'theWholeReference'
 
 	let command = commandFromWord(named)
@@ -1982,11 +2135,11 @@ function runHelp(args MaxonArgs) returns ExitCode
 	if command == MaxonCommand.unknown 'noSuchCommand'
 		printError("error: unknown command: {named}\n")
 		printCommandList()
-		return 1
+		return OwnFailureExit
 	end 'noSuchCommand'
 
 	printCommandSection(command)
-	return 0
+	return SucceededExit
 end 'runHelp'
 
 // Nothing typed is a question: `maxon` alone answers with the version and the command list and
@@ -1995,7 +2148,7 @@ end 'runHelp'
 function noCommandGiven(args MaxonArgs) returns ExitCode
 	if args.paths.isEmpty() and args.anyOption().isEmpty() 'nothingWasTyped'
 		printOverview()
-		return 0
+		return SucceededExit
 	end 'nothingWasTyped'
 
 	if args.paths.isEmpty() 'anOptionWithNoCommand'
@@ -2005,7 +2158,7 @@ function noCommandGiven(args MaxonArgs) returns ExitCode
 	end 'aWordThatNamesNoCommand'
 
 	printCommandList()
-	return 1
+	return OwnFailureExit
 end 'noCommandGiven'
 
 // Declaration order is listing order, alphabetical by command word: `tests/cli` asserts the
@@ -2017,6 +2170,8 @@ module enum MaxonCommand
 	cache
 
 	coverage
+
+	dapServer
 
 	debug
 
@@ -2131,6 +2286,8 @@ export type MaxonArgs
 
 	export var listOnly as bool
 
+	export var buildTestBinary as bool
+
 	export var jsonReport as bool
 
 	// True by default; the field names what it controls rather than the flag.
@@ -2154,8 +2311,8 @@ export type MaxonArgs
 	// --emit-ir fmt` would format the current directory in place. A command-gated arm cannot replace
 	// this: the parser is order-independent, so a flag may precede the command word.
 	//
-	// Every arrival is kept so a command taking one option can ask for any option other than its own
-	// (`firstOptionOtherThan`).
+	// Every arrival is kept so a command with options of its own can refuse the rest
+	// (`firstOptionOtherThan`, `runMcpServerCommand`).
 	export var optionsSeen as SourcePathSpellingArray
 
 	// Non-empty when an option was unknown or took a bad value: `main` refuses to run on a partly parsed
@@ -2170,7 +2327,7 @@ export type MaxonArgs
 	// its note), and a default at the declaration is one no arm can forget. Every field is `var` for
 	// `parse`; nothing else can mutate a `MaxonArgs` through the `let` binding `main` holds (E3063).
 	module static function create() returns MaxonArgs
-		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, censusByTag: false, censusPhase: TagCensusPhases.everyPhase, allocationsByTag: false, allocationsPhase: TagCensusPhases.everyPhase, debugInfo: true, noDebugAgent: false, coverage: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filterPatterns: FilterPatternArray.create(), updateRequired: false, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metricsPath: "", defines: DefineArray.create(), emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(), refusedOptions: OptionRefusalArray.create(), dryRun: false, devMode: false}
+		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, censusByTag: false, censusPhase: TagCensusPhases.everyPhase, allocationsByTag: false, allocationsPhase: TagCensusPhases.everyPhase, debugInfo: true, noDebugAgent: false, coverage: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filterPatterns: FilterPatternArray.create(), updateRequired: false, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metricsPath: "", defines: DefineArray.create(), emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, buildTestBinary: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(), refusedOptions: OptionRefusalArray.create(), dryRun: false, devMode: false}
 	end 'create'
 
 	// A command that takes no options refuses by this.
@@ -2178,8 +2335,7 @@ export type MaxonArgs
 		return try self.optionsSeen.get(0) otherwise ""
 	end 'anyOption'
 
-	// A command that takes exactly one option refuses by this (`upgrade`, `mcp-server`); both are
-	// exempt from `main`'s refused-option gate because their own flag trips it.
+	// `upgrade` refuses by this: its one option trips `main`'s refused-option gate, which exempts it.
 	module function firstOptionOtherThan(allowed String) returns String
 		for option in self.optionsSeen 'each'
 			if option != allowed 'notMine'
@@ -2393,7 +2549,9 @@ export type MaxonArgs
 				parsed.targetSpec = try CommandLine.optionValue(arg) otherwise ""
 			end 'targetFlag' else if arg == TestListFlag 'listFlag'
 				parsed.listOnly = true
-			end 'listFlag' else if arg == TestJsonFlag 'jsonFlag'
+			end 'listFlag' else if arg == TestBuildFlag 'buildFlag'
+				parsed.buildTestBinary = true
+			end 'buildFlag' else if arg == TestJsonFlag 'jsonFlag'
 				parsed.jsonReport = true
 			end 'jsonFlag' else if arg == TestNoTimingFlag 'noTimingFlag'
 				parsed.showTiming = false

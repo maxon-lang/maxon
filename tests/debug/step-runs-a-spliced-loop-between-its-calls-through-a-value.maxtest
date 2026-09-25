@@ -1,0 +1,22 @@
+let SplicedLibraryCallCaseLabel = "step-runs-a-spliced-loop-between-its-calls-through-a-value"
+let MainFunctionName = "main"
+
+test 'a step on a line whose spliced library loop calls library code through a value runs the loop between those calls'
+	let staged = builtFixture(SplicedLibraryCallCaseLabel, fixture: SplicedLibraryCallFixtureName)
+	let scanLine = anchorLine(staged, anchor: "spliced-scan")
+	let afterLine = anchorLine(staged, anchor: "after-scan")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(scanLine)}", RunCommand, StepCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	try Expect.equal(eventsOfKind(events, kind: TimeoutEventName).count() as AssertedInt, expected: 0, message: "⛔ A SPLICED LIBRARY LOOP IS RUN BETWEEN ITS CALLS THROUGH A VALUE, NOT SINGLE-STEPPED. `bytes.contains(urlIsDigit)` is spliced into `{MainFunctionName}` and calls the library's `urlIsDigit` through a function value once for each of fifty bytes; the step stops at each such call to see where it goes, and a step that walks the loop one instruction at a time cannot come back inside the stop timeout. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let stops = eventsOfKind(events, kind: StopEventName)
+	try Expect.equal(stops.count() as AssertedInt, expected: 2, message: "the breakpoint on the scan line and the `{StepCommand}` are two stops. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let landed = eventAt(stops, index: 1)
+	try Expect.equal(textOf(landed, node: landed.root, key: FunctionKey), expected: MainFunctionName, message: "no call the loop makes reaches the program's own code, so the step comes back into the frame that made the call. {said}")
+	try Expect.equal(numberOf(landed, node: landed.root, key: LineKey) as AssertedInt, expected: afterLine as AssertedInt, message: "the step lands on the program's next line. {said}")
+	try Expect.equal(textOf(landed, node: landed.root, key: ReasonKey), expected: StepStopReason, message: "the landing is the step's own. {said}")
+end 'a step on a line whose spliced library loop calls library code through a value runs the loop between those calls'

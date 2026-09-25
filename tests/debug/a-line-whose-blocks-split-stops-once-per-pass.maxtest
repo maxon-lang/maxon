@@ -1,0 +1,15 @@
+let SplitLineCaseLabel = "a-line-whose-blocks-split-stops-once-per-pass"
+let PassesThroughTheLine = 3
+let ContinuesPastEveryPass = 10
+
+test 'a breakpoint on a line whose code the compiler splits into blocks stops once each time control passes through it'
+	let staged = builtFixture(SplitLineCaseLabel, fixture: LogicLineFixtureName)
+	let splitLine = anchorLine(staged, anchor: "split-line")
+	let commands = debugCommandLine(appendedCommands(["{BreakCommand} {lineTarget(splitLine)}", RunCommand], rest: repeatedCommand(ContinueCommand, times: ContinuesPastEveryPass)))
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	try Expect.equal(eventsOfKind(events, kind: StopEventName).count() as AssertedInt, expected: PassesThroughTheLine, message: "⛔ THE LOOP PASSES THROUGH THE LINE {PassesThroughTheLine} TIMES, SO THE BREAKPOINT STOPS {PassesThroughTheLine} TIMES. The `try … otherwise` joins its two arms in a block the compiler splits out with no source position, and a block with no position that counts as a line of its own makes the code after it look like a second arrival on this line. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(eventsOfKind(events, kind: ExitEventName).count() as AssertedInt, expected: 1, message: "the program runs to its own end. {said}")
+end 'a breakpoint on a line whose code the compiler splits into blocks stops once each time control passes through it'

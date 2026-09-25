@@ -4100,48 +4100,33 @@ function emitDictionaryFieldDrop(module StdModule, block IrBlock, callee ByteArr
 	module.appendOp(block, op: StdOp.call(dropped, callee: callee, args: twoArgs(blockAddr, second: value)))
 end 'emitDictionaryFieldDrop'
 
-// --- The per-type deep-cloner cascade (P1.7 slice 3b-vi-b): the DUAL of the destructor cascade ---
-//
-// ⭐ **IT LIVES BESIDE ITS DUAL, AND IT DID NOT USED TO (ARR6).** `__clone_<T>` synthesizes deep cloners for
-// STRUCTS and UNIONS; it has nothing to do with the element buffer, and it sat in `ArrayRuntime.maxon` only
-// because the managed-element array copy was the first thing that needed one. Everything it mirrors is in
-// this file — `DestructorPrefix`/`destructorSymbol`, `noteDestructorUsage`, `closeDestructorNeeds`,
-// `installStructDestructors`/`installUnionDestructors`, `synthesizeStructDestructor`/`synthesizeUnionDestructor`
-// — and `noteRelocatedFunctionUsage` (also here) already re-enters this closure, so the drop side and the
-// clone side of one field graph are now one file apart from nothing rather than one file apart from each other.
+// --- The per-type cascades, the deep cloner and the two walks: the destructor cascade's dual ---
 
-// ⭐ **NOTE WHAT THE REFERENCED CLONERS TRANSITIVELY NEED**, the clone twin of `noteDestructorUsage`. A
-// `__clone_<Struct>` whose field is a String calls `__str_clone`, whose field is a nested struct/union calls
-// that field's OWN `__clone_<T>`, whose field is a trivial/managed Array calls `__managed_clone`/`__managed_clone_managed`
-// — all inside the SYNTHESIZED body the Maxon-module scan cannot see. So this closes `neededCloners` over that
-// nesting (a fixpoint, monotonic → terminates) and turns on the transitive `usesStrClone`/`usesManagedMemory`/
-// `usesManagedElementCopy`/`usesHeap` bits. Called after `scanRuntimeUsage` (which seeds `neededCloners` from the
-// `funcAddr(__clone_<T>)` element-cloner stamps), before `.data` layout reads `usesHeap` and `installStringRuntime`
-// reads `usesStrClone`.
+// Close what `action`'s referenced entries transitively need; the twin of `noteDestructorUsage`. A
+// `__clone_<Struct>` calls `__str_clone` for a String field, a nested struct's or union's own
+// `__clone_<T>`, and `__managed_clone`/`__managed_clone_managed` for an Array field, all inside a
+// synthesized body the Maxon-module scan cannot see. So this closes the needed set over that
+// nesting and turns on the transitive `usesStrClone`, `usesManagedMemory`, `usesManagedElementCopy`
+// and `usesHeap` bits.
 //
-// ⛔ **ITS OWN OPAQUE-ELEMENT ROOT IS GONE, WITH THE DROP TWIN IT MIRRORED (W17-c).** It rooted every instance
-// for which `genericInstanceOpaqueArrayElementIsCopyable` held — a PREDICTION of which `copyFunc@32` relocs
-// lowering would stamp, made before lowering, and true of instances no program reaches (the four
-// `WithIterIterator_*` the `String` cone puts in every registry). `noteRelocatedFunctionUsage` reads
-// the stamps themselves and now re-enters THIS closure when they grow `neededCloners`, so the measured set
-// replaces the predicted one on both sides at once. See `noteDestructorUsage` above for the measurement.
+// Called after `scanRuntimeUsage`, which seeds `neededCloners` from the `funcAddr(__clone_<T>)`
+// element-cloner stamps, and before `.data` layout reads `usesHeap` and `installStringRuntime`
+// reads `usesStrClone`. `noteRelocatedFunctionUsage` re-enters it when the stamps lowering makes
+// grow the set.
 export function noteCascadeUsage(usage RuntimeUsage, project Project, signatures ProgramSignatures, action CascadeAction)
-	// The overwhelmingly common program (and the entire generic/managed-free scale corpus) references neither
-	// cascade, so the set is empty and can only STAY empty (nothing seeds a nested need). Early-out then, so
-	// the per-type symbol allocations of the registration below are paid only by a program that actually
-	// deep-clones or actually hands a graph to a green thread.
+	// Most programs reference no cascade, and an empty set can only stay empty, so the per-type
+	// symbol allocations below are paid only by a program that deep-clones or hands a graph to a
+	// green thread.
 	if cascadeNeededSet(usage, action: action).count() == 0 'noneReferenced'
 		return
 	end 'noneReferenced'
 
-	// ⭐ Closed by the SHARED `CascadeWorklist` (`CascadeNeeds.maxon`) — the same engine that closes the DROP
-	// dual (`closeDestructorNeeds` above), so each referenced node is expanded exactly once. A `while changed`
-	// re-scan of every declared type instead would cost D passes over all T types for a cascade chain of depth
-	// D, and re-mint every type's symbol on each — one quadratic per action.
+	// Closed by the shared `CascadeWorklist`, the engine that closes the drop dual
+	// (`closeDestructorNeeds`), so each referenced node is expanded once. A `while changed` re-scan of
+	// every declared type would be quadratic in the depth of a cascade chain.
 	//
-	// ⭐ The node space is the DROP side's exactly (W162): a generic instance has a `__clone_<mangled>` beside
-	// its `__destruct_<mangled>`, so the drain's instance arm is reachable here and the closures register one
-	// node space rather than one apiece.
+	// The node space is the drop side's exactly: a generic instance has a `__clone_<mangled>` beside
+	// its `__destruct_<mangled>`, so the drain's instance arm is reachable here.
 	var work = CascadeWorklist.create()
 
 	for (_, layout) in project.structTypes 'eachStruct'
@@ -4152,19 +4137,19 @@ export function noteCascadeUsage(usage RuntimeUsage, project Project, signatures
 		work.register(perTypeCascadeSymbol(action, typeName: layout.name), node: CascadeNode.declaredUnion(layout))
 	end 'eachUnion'
 
-	// ⚠ The instance node space is registered under the SAME symbol-key discipline the drop side states at
-	// `closeDestructorNeeds` — a declaration and an instance cannot mint one symbol (P1.7's `reservedIfDeclared`),
-	// and two instances that do are E3006 and fail the build before this runs.
+	// The instance node space is registered under the symbol-key discipline the drop side states at
+	// `closeDestructorNeeds`: a declaration and an instance cannot mint one symbol
+	// (`reservedIfDeclared`), and two instances that do are E3006 and fail the build before this runs.
 	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
 		work.register(perTypeCascadeSymbol(action, typeName: signatures.mangleGenericInstance(id)), node: CascadeNode.genericInstance(id))
 	end 'eachInstance'
 
 	work.seed(cascadeNeededSet(usage, action: action))
 
-	// Every cloner ALLOCATES a fresh box, so one referenced cloner anywhere means the program touches the
-	// heap — a fact about the queue being non-empty, not about any single node in it. A walk declares nothing
-	// here: its visit table's heap is declared by every `__mm_walk_settle` call, and the entries
-	// it calls are recorded through `recordCallUsage` as the drain below reaches them.
+	// Every cloner allocates a fresh box, so one referenced cloner anywhere means the program touches
+	// the heap — a fact about the queue being non-empty, not about any single node in it. A walk
+	// declares nothing here: its visit table's heap is declared by every `__mm_walk_settle` call, and
+	// the entries it calls are recorded through `recordCallUsage` as the drain below reaches them.
 	if action == CascadeAction.clone and work.hasPending() 'anyClonerReferenced'
 		usage.usesHeap = true
 	end 'anyClonerReferenced'
@@ -4177,21 +4162,13 @@ export function noteCascadeUsage(usage RuntimeUsage, project Project, signatures
 			declaredUnion(layout) then noteUnionCascadeNeeds(usage, layout: layout, project: project, signatures: signatures, work: work, action: action)
 			genericInstance(id) then noteInstanceCascadeNeeds(usage, id: id, signatures: signatures, work: work, action: action)
 
-			// ⭐ A DICTIONARY node names a drop cascade and no cloner at all (BATCH41, and W183 for the
-			// declared-record twin), so the clone closure has nothing to expand through either of them. They
-			// are registered by the shared node space rather than by either driver, so these arms are where
-			// that is SAID — a `declaredStruct`/`genericInstance` fallthrough would silently give the same
-			// layout's clone needs a second, redundant expansion.
-			//
-			// ⚠ **TWO ARMS RATHER THAN THE RANGE THAT STOOD HERE, AND THE REDUNDANCY IS THE POINT.** A range
-			// makes the ORDER of two `CascadeNode` variants load-bearing with nothing but a comment holding
-			// it: a variant inserted between them joins this `continue` silently, which for a node that DOES
-			// need expanding is a missing cloner and no diagnostic. Spelled out, a new variant is an
-			// unhandled case and the compiler refuses it. This is a deliberate exception to the
-			// consolidate-identical-arms rule — one duplicated `continue` against a hand-maintained
-			// adjacency, and the adjacency is the more expensive of the two.
-			declaredStructDictionary then continue
-			genericInstanceDictionary then continue
+			// A dictionary node names a drop cascade and no cloner, so the clone closure has nothing to
+			// expand through either. They are registered by the shared node space rather than by either
+			// driver, so this arm is where that is said: a `declaredStruct`/`genericInstance` fallthrough
+			// would give the same layout's clone needs a second, redundant expansion. Each variant is named
+			// rather than spanned by a range, so a new variant is an unhandled case the compiler refuses.
+			declaredStructDictionary or
+				genericInstanceDictionary then continue
 		end 'node'
 	end 'drain'
 end 'noteCascadeUsage'
@@ -4364,33 +4341,21 @@ function structEntryKindOf(action CascadeAction) returns StructRuntimeEntryKind
 	end 'action'
 end 'structEntryKindOf'
 
-// One layout's cascade, or nothing when it is unreferenced — `installOneStructDestructor`'s twin, and it exists
-// for that one's reason: the project walk and the substituted-tuple walk above share ONE admission test rather
-// than each spelling it, which is the shape where one of them comes to admit a layout the other would decline.
-// ONE test for BOTH actions, for the same reason one door out: a clone and a walk that admitted different
-// layouts would let a strategy name a symbol no installer builds.
-//
-// ⚠ There is NO managed-field gate here and the drop twin has one, which is not an omission: a scalar-only box
-// still needs a fresh-box clone, because a clone must ALLOCATE where a trivial drop is just `__mm_decref`.
+// One admission test for both of `installStructRuntimeEntries`' walks and every non-drop action: an
+// installer that admitted a layout another declined would let a strategy name a symbol nobody
+// builds. It has no managed-field gate, unlike `installOneStructDestructor`: a scalar-only box
+// still needs a fresh-box clone, because a clone must allocate where a trivial drop is just
+// `__mm_decref`.
 function installOneStructCascade(module StdModule, layout StructLayout, typeNames TypeNameInterner, project Project, signatures ProgramSignatures, needed CascadeSymbolSet, action CascadeAction)
 	if not needed.contains(perTypeCascadeSymbol(action, typeName: layout.name)) 'notReferenced'
 		return
 	end 'notReferenced'
 
-	module.spans.current = declarationSpanOf(project, declFilePath: layout.declFilePath, line: layout.declLine, column: layout.declColumn)
+	module.spans.current = sourceSpanOf(project, filePath: layout.declFilePath, line: layout.declLine, column: layout.declColumn)
 	synthesizeStructCascade(module, layout: layout, typeNames: typeNames, project: project, signatures: signatures, action: action)
 	module.spans.current = NoSpanId
 end 'installOneStructCascade'
 
-function declarationSpanOf(project Project, declFilePath FilePath, line LineNumber, column ColumnNumber) returns SpanId
-	if not project.debugInfo or declFilePath.isEmpty() or line == 0 'positionless'
-		return NoSpanId
-	end 'positionless'
-
-	return project.debugSpanTable.intern(project.debugSpanTable.fileId(declFilePath.toString()), line: line, column: column)
-end 'declarationSpanOf'
-
-// The union twin of `installStructCascades`.
 function installUnionCascades(module StdModule, project Project, signatures ProgramSignatures, needed CascadeSymbolSet, action CascadeAction)
 	if needed.count() == 0 'noneReferenced'
 		return
@@ -4398,7 +4363,7 @@ function installUnionCascades(module StdModule, project Project, signatures Prog
 
 	for (_, layout) in project.enumTypes 'each'
 		if needed.contains(perTypeCascadeSymbol(action, typeName: layout.name)) 'referenced'
-			module.spans.current = declarationSpanOf(project, declFilePath: layout.declFilePath, line: layout.declLine, column: layout.declColumn)
+			module.spans.current = sourceSpanOf(project, filePath: layout.declFilePath, line: layout.declLine, column: layout.declColumn)
 			synthesizeUnionCascade(module, layout: layout, project: project, signatures: signatures, action: action)
 			module.spans.current = NoSpanId
 		end 'referenced'
@@ -4971,11 +4936,6 @@ function buildMmLeakCheck(module StdModule, usage RuntimeUsage)
 		module.setTerminator(entry, op: StdOp.condBranch(isLeaked, thenBlockId: leaked.id, elseBlockId: clean.id))
 	end 'noGt'
 
-	// The exit code a leaked program reports lives in `RuntimeAbort` with every other abort code the
-	// emitted runtime spends, so the number space has one home and one duplicate check. ⚠ It is ALSO
-	// spelled by `SpecWorkerPool.LeakCheckExitCode`, which reads it from the other end (a spec-test worker
-	// is itself a leak-gated Maxon program) — that file is outside this rung's list, so the two are still
-	// two spellings of one number.
 	let leakCode = RuntimeAbort.leakDetected.rawValue as ParsedInt
 	let leakConst = ids.mint()
 	module.appendOp(leaked, op: StdOp.const(leakConst, value: leakCode, valueType: StdType.i64))

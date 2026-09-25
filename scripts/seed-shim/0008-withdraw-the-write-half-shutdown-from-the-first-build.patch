@@ -1,0 +1,23 @@
+# The seed knows no `ManagedSocket.shutdownWrite`, so it refuses `stdlib/TcpClient.maxon` at
+# `TcpClient.shutdownWrite`'s call to it. Only that call is withdrawn: the parser arm that admits the method
+# and the `__ms_shutdown_write` body behind it are left standing, so `C1` knows the entry and compiles the
+# unshimmed tree into `C2`.
+#
+# The shimmed `shutdownWrite` closes the socket instead of half-closing it. `C1` only builds `C2` and serves no
+# connection, so nothing reaches the difference.
+diff --git a/stdlib/TcpClient.maxon b/stdlib/TcpClient.maxon
+--- a/stdlib/TcpClient.maxon
++++ b/stdlib/TcpClient.maxon
+@@ -152,11 +152,5 @@ public type TcpClient
+ 	/// `connectionClosed` when the socket is already closed.
+ 	public function shutdownWrite() throws NetworkError
+-		try socket.shutdownWrite() otherwise (e) 'shutdownErr'
+-			match e 'why'
+-				closed then throw NetworkError.connectionClosed
+-				sendFailed then throw NetworkError.sendFailed
+-				default panic("TcpClient.shutdownWrite: `__ms_shutdown_write` raises only `closed` and `sendFailed`")
+-			end 'why'
+-		end 'shutdownErr'
++		socket.close()
+ 	end 'shutdownWrite'
+ 

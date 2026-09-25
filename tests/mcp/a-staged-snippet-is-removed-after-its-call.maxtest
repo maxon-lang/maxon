@@ -1,0 +1,32 @@
+let SnippetCacheStagingDir = "temp/mcp-snippet-cache-root"
+let CacheRootVariable = "MAXON_RUN_CACHE_ROOT"
+let ExtensionlessTarget = "x64-linux"
+let PrintingSnippet = "function main() returns ExitCode\n\tprint(\"staged\\n\")\n\n\treturn 0\nend 'main'\n"
+
+test 'a snippet staged for a tool call, and everything the call built from it, is gone once the call has answered'
+	let cacheRoot = stagingDir(SnippetCacheStagingDir)
+	clearStagedFiles(cacheRoot)
+
+	var environment = EnvMap.create()
+	environment.upsert(CacheRootVariable, value: cacheRoot.toString())
+
+	var requests = StringArray.create()
+	requests.push(initRequest(1))
+	requests.push(toolCallRequest(2, name: ExecuteTool, argumentsJson: sourceArgument(PrintingSnippet)))
+	requests.push(toolCallRequest(3, name: BuildTool, argumentsJson: sourceArgument(PrintingSnippet)))
+	requests.push(toolCallRequest(4, name: FmtTool, argumentsJson: sourceArgument(PrintingSnippet)))
+	requests.push(toolCallRequest(5, name: BuildTool, argumentsJson: argumentsOf([sourceMember(PrintingSnippet), targetMember(ExtensionlessTarget)])))
+
+	let docs = responseDocs(runMcp(requests, environment: Environment.inheritUpdating(environment)))
+	let executed = try docs.get(1) otherwise panic("a-staged-snippet-is-removed-after-its-call: no answer to `{ExecuteTool}`")
+	let built = try docs.get(2) otherwise panic("a-staged-snippet-is-removed-after-its-call: no answer to `{BuildTool}`")
+	let formatted = try docs.get(3) otherwise panic("a-staged-snippet-is-removed-after-its-call: no answer to `{FmtTool}`")
+	let crossBuilt = try docs.get(4) otherwise panic("a-staged-snippet-is-removed-after-its-call: no answer to the {ExtensionlessTarget} `{BuildTool}`")
+	let left = filesUnder(cacheRoot)
+
+	try Expect.isFalse(toolCallIsError(executed), message: "the control: `{ExecuteTool}` must run the staged snippet: {toolCallText(executed)}")
+	try Expect.isFalse(toolCallIsError(built), message: "the control: `{BuildTool}` must build the staged snippet: {toolCallText(built)}")
+	try Expect.isFalse(toolCallIsError(formatted), message: "the control: `{FmtTool}` must format the staged snippet: {toolCallText(formatted)}")
+	try Expect.isFalse(toolCallIsError(crossBuilt), message: "the control: `{BuildTool}` must build the staged snippet for {ExtensionlessTarget}: {toolCallText(crossBuilt)}")
+	try Expect.equal(left.count() as AssertedInt, expected: 0, message: "⛔ A SNIPPET'S NAME IS UNIQUE PER CALL, SO NOTHING BUILT FROM IT IS EVER REACHED AGAIN. The staged source, the executable and sidecar `{BuildTool}` wrote beside it and the cached build `{ExecuteTool}` published under {cacheRoot.path} must all be gone once the call answered, or every call leaves a build behind for the life of the install; {left.count()} file(s) remained: {renderedPaths(left)}")
+end 'a snippet staged for a tool call, and everything the call built from it, is gone once the call has answered'

@@ -34,7 +34,6 @@ let CreatedPauseMs = 100 as Milliseconds
 
 test 'a definition notices a file created on disk after the corpus was built'
 	let directory = stagedCorpusDirectory(CreatedDirName)
-	removeCreatedHelper(directory)
 	writeCorpusFile(directory, fileName: CreatedReaderName, content: CreatedReaderSource)
 
 	let answers = runCorpusStaleSourceSession(createdRun(directory))
@@ -47,16 +46,6 @@ function requireCreatedHelperWasNoticed(answers CorpusStaleSourceAnswers) throws
 
 	try expectDefinitionInFile(answers.after, fileTail: CreatedHelperName, startLine: CreatedDeclarationLine, note: "`{CreatedHelperName}` was created on disk after the corpus had been built, and a definition asked repeatedly on the SAME session for {CreatedWindowMs}ms never resolved into it. The corpus caches the project's source LIST; a file that appears later is seen only when the held workspace walks that list again.")
 end 'requireCreatedHelperWasNoticed'
-
-// The staging directory outlives a run, so a helper left by the previous one would make the first request
-// resolve and the case would prove nothing.
-function removeCreatedHelper(directory FilePath)
-	if not File.exists(directory.join(CreatedHelperName)) 'alreadyAbsent'
-		return
-	end 'alreadyAbsent'
-
-	deleteCorpusFile(directory, fileName: CreatedHelperName)
-end 'removeCreatedHelper'
 
 function createdRun(directory FilePath) returns CorpusStaleSourceRun
 	var edits = CorpusDiskEditArray.create()

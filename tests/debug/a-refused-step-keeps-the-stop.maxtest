@@ -1,0 +1,18 @@
+let RefusedStepCaseLabel = "a-refused-step-keeps-the-stop"
+
+test 'a step the agent refuses leaves the session stopped where it was'
+	let staged = builtFixture(RefusedStepCaseLabel, fixture: CrashFixtureName)
+	let commands = debugCommandLine([RunCommand, NextCommand, BacktraceCommand, LocalsCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let stops = eventsOfKind(events, kind: StopEventName)
+
+	try Expect.equal(stops.count() as AssertedInt, expected: 1, message: "the fault is the session's one stop. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let stopped = eventAt(stops, index: 0)
+	try Expect.equal(textOf(stopped, node: stopped.root, key: ReasonKey), expected: FaultStopReason, message: "the stop is the fault. {said}")
+	try Expect.equal(eventsOfKind(events, kind: ErrorEventName).count() as AssertedInt, expected: 1, message: "a fault is terminal, so the agent refuses the `{NextCommand}` from it, and that refusal is the session's one error. {said}")
+	try Expect.equal(eventsOfKind(events, kind: BacktraceEventName).count() as AssertedInt, expected: 1, message: "the refused `{NextCommand}` moved nothing, so `{BacktraceCommand}` still walks the stop; a session that forgot the stop answers that the program is running. {said}")
+	try Expect.equal(eventsOfKind(events, kind: LocalsEventName).count() as AssertedInt, expected: 1, message: "`{LocalsCommand}` after the refusal still reads the stop. {said}")
+end 'a step the agent refuses leaves the session stopped where it was'

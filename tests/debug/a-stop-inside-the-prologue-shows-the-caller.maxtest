@@ -1,0 +1,27 @@
+let InsidePrologueCaseLabel = "a-stop-inside-the-prologue-shows-the-caller"
+let CalleeFunctionName = "countdown"
+let CallerFunctionName = "main"
+let PushedFramePointerBytes = 1
+
+test 'a stop after the callee pushed its frame pointer and before it set the new one still names the caller'
+	let staged = builtFixture(InsidePrologueCaseLabel, fixture: RecursionFixtureName)
+	let executable = builtExecutable(staged)
+	let afterThePush = exactOffsetTarget(functionCodeStart(executable, staged: staged, name: CalleeFunctionName) + PushedFramePointerBytes)
+	let commands = debugCommandLine(["{BreakCommand} {afterThePush}", RunCommand, BacktraceCommand])
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let walks = eventsOfKind(events, kind: BacktraceEventName)
+
+	try Expect.equal(walks.count() as AssertedInt, expected: 1, message: "the `{BacktraceCommand}` at `{afterThePush}` printed no walk. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let walked = eventAt(walks, index: 0)
+	let frames = childrenOf(walked, node: walked.root, key: FramesKey)
+	var names = StringArray.create()
+
+	for frame in frames 'eachFrame'
+		names.push(textOf(walked, node: frame, key: FunctionKey))
+	end 'eachFrame'
+
+	try Expect.equal(renderedRows(names), expected: renderedRows([CalleeFunctionName, CallerFunctionName]), message: "⛔ BETWEEN `push rbp` AND `mov rbp, rsp` THE FRAME CHAIN STILL STARTS AT THE CALLER'S RECORD, so a walk from rbp names the caller's caller and the return address into `{CallerFunctionName}` sits one word above the stack pointer. {said}")
+end 'a stop after the callee pushed its frame pointer and before it set the new one still names the caller'

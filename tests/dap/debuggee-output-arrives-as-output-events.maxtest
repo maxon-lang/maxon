@@ -1,0 +1,30 @@
+let OutputCaseLabel = "debuggee-output-arrives-as-output-events"
+let PrintedByTheFixture = "answer "
+
+type OutputSession implements DapSession
+	let executable as FilePath
+	export var collected as String
+
+	static function create(executable FilePath) returns OutputSession
+		return Self{executable: executable, collected: ""}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+		_ = try client.request(LaunchCommand, argumentsJson: dapLaunchArguments(self.executable))
+		_ = try client.awaitEvent(InitializedEvent)
+		_ = try client.request(ConfigurationDoneCommand)
+
+		self.collected = dapOutputOf(try client.collectOutputUntil(ExitedEvent), category: StdoutCategory)
+
+		_ = try client.request(DisconnectCommand)
+	end 'drive'
+end 'OutputSession'
+
+test 'the debuggee stdout arrives as output events before the program exits'
+	let staged = dapStagedFixture(OutputCaseLabel, fixture: ValuesFixtureName)
+	var session = OutputSession.create(dapBuildFixture(staged))
+	try dapRunSession(session, completing: "run the program to its exit")
+
+	try Expect.contains(session.collected, needle: PrintedByTheFixture, message: "the fixture prints `{PrintedByTheFixture}…` on its way out, and every byte of it must reach the client as `{OutputEvent}` events of category `{StdoutCategory}` BEFORE `{ExitedEvent}`. What arrived was: {session.collected}")
+end 'the debuggee stdout arrives as output events before the program exits'

@@ -1,0 +1,42 @@
+let ThreadsCaseLabel = "threads-lists-green-threads"
+let WorkerLoopAnchor = "worker-loop"
+let SpawnedWorkerCount = 4 as DapNumber
+
+// One processor, so an adapter listing OS threads rather than green threads cannot reach four.
+let SingleProcessorEnv = "\{\"MAXON_MAX_PROCS\":\"1\"\}"
+
+type ThreadsSession implements DapSession
+	let executable as FilePath
+	let source as FilePath
+	let anchored as SourceLine
+	export var stopReason as String
+	export var threads as JsonDoc
+
+	static function create(executable FilePath, source FilePath, anchored SourceLine) returns ThreadsSession
+		return Self{executable: executable, source: source, anchored: anchored, stopReason: "", threads: JsonDoc.create()}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+		_ = try client.request(LaunchCommand, argumentsJson: dapLaunchArgumentsWithEnv(self.executable, envJson: SingleProcessorEnv))
+		_ = try client.awaitEvent(InitializedEvent)
+		_ = try client.request(SetBreakpointsCommand, argumentsJson: dapSetBreakpointsArguments(self.source, line: self.anchored))
+		_ = try client.request(ConfigurationDoneCommand)
+
+		self.stopReason = dapBodyString(try client.awaitEvent(StoppedEvent), key: "reason")
+		self.threads = try client.request(ThreadsCommand)
+
+		_ = try client.request(DisconnectCommand)
+	end 'drive'
+end 'ThreadsSession'
+
+test 'threads lists the fixtures green threads at a stop, under one processor'
+	let staged = dapStagedFixture(ThreadsCaseLabel, fixture: WorkersFixtureName)
+	var session = ThreadsSession.create(dapBuildFixture(staged), source: dapStagedSource(staged), anchored: dapAnchorLine(staged, anchor: WorkerLoopAnchor))
+	try dapRunSession(session, completing: "complete")
+
+	let threadCount = dapListLength(session.threads, key: ThreadsKey)
+
+	try Expect.equal(session.stopReason, expected: BreakpointReason, message: "the roster is only answerable at a stop, and this stop did not happen: `{session.stopReason}`")
+	try Expect.isTrue(threadCount >= SpawnedWorkerCount, message: "the fixture spawns {SpawnedWorkerCount} workers that outlive the stop, so `{ThreadsCommand}` must list at least that many. It listed {threadCount}: {dapRendered(dapThreadNames(session.threads))}")
+end 'threads lists the fixtures green threads at a stop, under one processor'

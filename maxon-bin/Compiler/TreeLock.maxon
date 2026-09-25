@@ -52,28 +52,18 @@
 // LIVENESS IS A HEARTBEAT, NOT A PID PROBE. THIS IS A DELIBERATE DIVERGENCE.
 // ============================================================================================
 //
-// A stale lock that outlives its holder blocks every later command forever, and the orphan case is
-// GUARANTEED rather than hypothetical: the MCP `build` tool times out at `McpTools.LongRunTimeoutMs`
-// and a timed-out call does not kill the process — that is how a pid comes to hold this tree long
-// after its caller is gone.
+// A stale lock that outlives its holder blocks every later command forever, and a holder can die
+// without releasing it: killed by hand, or ended with its process tree when an MCP tool call
+// reaches its timeout.
 //
 // So the record is REWRITTEN while its holder works (`touchTreeLock`, throttled to one write every
 // `TouchIntervalMs`), and its FILE MTIME is the liveness signal: a lock nothing has touched for
 // `AbandonedAfterSeconds` is broken automatically, with a printed line saying so.
 //
-// ⚠ **A PID PROBE WAS THE OBVIOUS DESIGN AND IT IS THE WRONG ONE HERE, twice over.** The pid itself is
-// free (`__Builtins.currentProcessId`) and IS recorded, because a reader needs it to end the holder.
-// Testing it is what this does not do:
-//
-//   * **Neither the stdlib nor the emitted runtime can ask "is pid N alive".** `subprocessKill` and
-//     `subprocessSendSignal` take a subprocess HANDLE, which nobody has for a process they did not
-//     spawn. Adding the primitive means hand-written assembly in four runtime emitters — wholly
-//     disproportionate to a lock file.
-//   * **And it would answer the wrong question anyway.** A pid is REUSED, so "alive" can be a
-//     stranger; and this repo has a documented history of WEDGED `maxon` processes (`STAT=UE`,
-//     unkillable) for which "alive" is true forever and progress has stopped for good. The heartbeat
-//     asks the question that actually matters — *is the holder still getting anywhere?* — and answers
-//     it correctly for both.
+// ⚠ A pid probe answers the wrong question here. The pid is recorded, because a reader needs it to
+// end the holder, but it is never tested: a pid is reused, so "alive" can be a stranger, and a
+// wedged `maxon` process is alive forever while making no progress. The heartbeat asks whether the
+// holder is still getting anywhere, which is right for both.
 //
 // ⚠ **THE MTIME IS A WALL CLOCK, AND A WALL CLOCK CAN STEP BACKWARDS** (NTP, a timezone change, a VM
 // resuming from a snapshot — see `WallClock`'s header). That is forced, not chosen: two processes
@@ -106,6 +96,7 @@ let HeldField = "heldSeconds"
 let ArgvField = "argv"
 let FieldSeparator = "="
 let RecordLineSeparator = "\n"
+let ArgvWordSeparator = " "
 
 // How often the holder rewrites the record, and how long without one before it is treated as
 // abandoned. The gap between them is the whole margin: the interval must be far smaller than the
@@ -167,18 +158,16 @@ union LockRecord
 	present(text String, untouchedSeconds LockSeconds)
 end 'LockRecord'
 
-// ⭐ Take this checkout's tree lock, or REFUSE. Returns the exit code the command should return: 0 to
-// go ahead, `NothingRanExitCode` to stop — the same contract, and the same code, as
-// `refuseIfStale`, because both mean the identical thing to a caller reading only the number:
-// NOTHING RAN.
+// Stopping answers `NothingRanExitCode`, the code `refuseIfStale` answers, because both mean the
+// same thing to a caller reading only the number: nothing ran.
 //
-// A refusal is IMMEDIATE and never a wait. A silent wait is exactly the 12-minute mystery this exists
-// to end: it converts a fast, legible error into a hang indistinguishable from a wedge.
+// A refusal is immediate and never a wait: a silent wait turns a fast, legible error into a hang
+// indistinguishable from a wedge.
 export function acquireTreeLock(operand FilePath) returns ExitCode
 	let lockPath = try lockPathFor(operand) otherwise 'noCheckout'
 		// Nothing shared to guard. `operand` has no `stdlib/` above it, so no other command in any
 		// tree writes what this one is about to write.
-		return 0
+		return SucceededExit
 	end 'noCheckout'
 
 	return match readLockRecord(lockPath) 'existing'
@@ -264,20 +253,14 @@ function claimOverExisting(lockPath FilePath, record String, untouchedSeconds Lo
 	return takeLock(lockPath)
 end 'claimOverExisting'
 
-// Write this process's record, then read it back to make sure it is the one that stuck.
+// ⚠ The read-back is the mutual exclusion, and the pause is what makes it work. Neither the stdlib
+// nor the emitted runtime offers an exclusive create (`O_EXCL`), an `flock`, or a `rename` that
+// fails on an existing target, so two processes that both find the path free both write it. After
+// the pause both read the later writer's bytes, so exactly one survives.
 //
-// ⚠ **THE READ-BACK IS THE MUTUAL EXCLUSION, AND THE PAUSE IS WHAT MAKES IT WORK.** Neither the stdlib
-// nor the emitted runtime offers an exclusive create (`O_EXCL`), an `flock`, or a `rename` that fails
-// on an existing target, so two processes that both find the path free will both write it. Writing,
-// PAUSING, and then reading resolves that: the later writer's bytes are what both of them read, so the
-// later writer wins and the earlier one backs off — exactly one survivor, never two.
-//
-// The residual is stated rather than hidden: a process that stalls for longer than
-// `AcquireVerifyDelayMs` BETWEEN finding the path free and writing it can still overwrite a lock the
-// winner has already verified. That window is microseconds wide and the contention this guards is
-// human-scale — two agents, two MCP calls, seconds to minutes apart. Closing it needs an atomic
-// primitive that does not exist here, and the failure it leaves is the status quo (two runs), never a
-// worse one.
+// A process that stalls longer than `AcquireVerifyDelayMs` between finding the path free and
+// writing it can still overwrite a lock the winner has verified. The contention guarded is
+// human-scale, and the failure left is two runs, never a worse one.
 function takeLock(lockPath FilePath) returns ExitCode
 	let sinceUnix = WallClock.nowUnixSeconds()
 	let pid = __Builtins.currentProcessId()
@@ -286,12 +269,10 @@ function takeLock(lockPath FilePath) returns ExitCode
 	// and the two clocks separate a REUSED pid from the one that held this lock before it.
 	let token = "{pid}-{sinceUnix}-{Clock.nowNanos()}"
 
-	// ⛔ **THE REMEDY IS IN THE MESSAGE, BECAUSE THE LIKELIEST READER OF THIS LINE OWNS NEITHER THE
-	// DIRECTORY NOR THE PROBLEM.** An installed Maxon can live somewhere a user cannot write — a
-	// container image, a directory an administrator unpacked — and `stdlibDirAbove` finds THAT
-	// install's `stdlib/` for any file placed beneath it, so dropping a `hello.maxon` there and
-	// building it lands exactly here. Naming only the path told that reader their "checkout" was broken: a checkout they do not
-	// have, holding a lock they have never heard of. The word is gone for the same reason.
+	// The remedy is in the message because the likeliest reader owns neither the directory nor the
+	// problem: an installed Maxon can live somewhere a user cannot write, and `stdlibDirAbove` finds
+	// that install's `stdlib/` for any file placed beneath it, so building a `hello.maxon` there lands
+	// here. The message says "directory", not "checkout": that reader has no checkout.
 	if not writeRecord(lockPath, token: token, sinceUnix: sinceUnix, heldSeconds: 0) 'unwritable'
 		printError("error: could not write the tree lock at {lockPath.toString()} — that directory is not writable by you. The lock guards the shared output directories two commands would otherwise corrupt, so nothing was run.\n")
 		printError("  If you are building inside an installed copy of Maxon, build from a directory you own instead.\n")
@@ -307,7 +288,7 @@ function takeLock(lockPath FilePath) returns ExitCode
 
 	ownedLocks.push(OwnedLock.create(lockPath, token: token, sinceUnix: sinceUnix))
 	lastTouchMs = Clock.nowMs()
-	return 0
+	return SucceededExit
 end 'takeLock'
 
 // Rewrite the record with a fresh mtime and a fresh `heldSeconds`. A failed write is IGNORED: the tree
@@ -353,17 +334,13 @@ end 'appendField'
 // are flattened to spaces — an argument holding one is not a thing this compiler's CLI accepts, and a
 // record whose fields can be forged by an argument is not a record.
 function joinArgs() returns String
-	var out = StringBuilder.create()
+	var words = StringArray.create()
 
-	for (iter, arg) in CommandLine.args().withIterator() 'each'
-		if iter.index() > 0 'separator'
-			out.append(" ")
-		end 'separator'
-
-		out.append(arg.replace(RecordLineSeparator, with: " "))
+	for arg in CommandLine.args() 'each'
+		words.push(arg.replace(RecordLineSeparator, with: ArgvWordSeparator))
 	end 'each'
 
-	return out.build()
+	return joinedWith(words, separator: ArgvWordSeparator)
 end 'joinArgs'
 
 // Does the record at `lockPath` still name `token` as its holder? The token is the ONE field parsed

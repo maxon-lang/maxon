@@ -400,32 +400,28 @@ function undefinedImplNames(module StdModule, impls ByteArrayArray) returns Byte
 	return undefined
 end 'undefinedImplNames'
 
-// The function NAME one `StdOp` spells, credited if it is one of the candidate impls. THREE variants carry
-// one — `call`, `tryCall` and `funcAddr` — the same three `DeadFunctionElimination.markCalleeOf` walks for
-// its reachability edges, and for the same reason: those are the ops that can make a symbol required.
+// The function name one `StdOp` spells, credited if it is one of the candidate impls. Three
+// variants carry one, `call`, `tryCall` and `funcAddr`: the same three
+// `DeadFunctionElimination.markCalleeOf` walks for its reachability edges, because those are the
+// ops that can make a symbol required.
 //
-// ⚠ **YES, THAT MATCH IS WRITTEN TWICE OVER THE SAME UNION, AND THE FOLD IS REFUSED FOR A COST REASON, NOT
-// A TIDINESS ONE.** The shared half is *"which variant carries a callee name, and in which field"*; the
-// halves that differ are what each does with it (mark-and-queue there, credit-into-a-set here). Sharing it
-// needs a per-op extractor answering "a name, or nothing", and this language has no free spelling of that:
-// a payload union BOXES (16 bytes per op — the exact cost the optimizer just deleted from this rung's
-// receiver classifier, see `BuiltinConformer`'s header), an out-`ByteArrayArray` pushes a MANAGED ByteArray
-// per hit, a closure parameter captures, and an empty-name sentinel is a wrong answer waiting for a callee
-// the module really does not name. `markCalleeOf` walks every LIVE op of every function; a box per op there
-// is not a refactor, it is a regression.
+// That match is written twice over the same union, and the fold is refused for cost. Sharing it
+// needs a per-op extractor answering "a name, or nothing", and every spelling of that costs per op:
+// a payload union boxes (16 bytes per op), an out-`ByteArrayArray` pushes a managed ByteArray per
+// hit, a closure parameter captures, and an empty-name sentinel is a wrong answer waiting for a
+// callee the module does not name. `markCalleeOf` walks every live op of every function, so a box
+// per op there is a regression.
 //
-// What binds the copies instead is a COMPILE-TIME CHECK, not this comment. The arms RANGE over the whole
-// union in declaration order, ending at the current last variant, so a variant appended past it makes BOTH
-// matches non-exhaustive — E2026, at this function's own `match` and at 30-odd others, naming the variant.
-// (The noun in that message is derived from `EnumLayout.kindWord()`, so `StdOp` reads "union" — pinned by
-// `enum-match-exhaustive/error.union-not-exhaustive`.) A new variant carrying a callee name must be added
-// as its own arm in both, and neither can be forgotten silently. (The residual is the human who
-// *extends the last band* instead of adding an
-// arm; that mistake is equally available in `markCalleeOf` and is what these per-band comments exist to
-// make loud in review.)
+// A compile-time check binds the copies: every arm names its variants, so a variant added to the
+// union makes both matches non-exhaustive (E2026, naming the variant). A new variant carrying a
+// callee name must get its own arm in both; the one mistake nothing catches is adding it to the
+// no-name arm instead.
 function noteOpBuiltinImplReference(op StdOp, impls ByteArrayArray, referenced FunctionNameSet)
 	match op 'op'
-		// arith + control + the call band up to `call`: pure computation, branches, `ret`, `param`.
+		// None of these names a Maxon function: computation, branches, returns, `.data`/`.rdata`
+		// addresses, loads and stores, code pointers a `funcAddr` or `.rdata` slot already produced
+		// (`callIndirect` and the witness calls), inline machine code, and OS primitives that reach
+		// an import or a raw syscall.
 		const or
 			binOp or
 			unaryOp or
@@ -437,34 +433,24 @@ function noteOpBuiltinImplReference(op StdOp, impls ByteArrayArray, referenced F
 			condBranch or
 			branch or
 			ret or
-			param then break 'op'
-		call(_, callee, _) then noteBuiltinImplReference(callee, impls: impls, referenced: referenced)
-
-		// `retVoid` … `rdataAddr`: returns, `.data`/`.rdata` ADDRESSES (labels, not functions), loads,
-		// stores, and the two OS primitives that name no Maxon function.
-		retVoid or
+			param or
+			retVoid or
 			globalAddr or
 			loadIndirect or
 			storeIndirect or
 			osAllocPages or
 			osWriteStdout or
-			rdataAddr then break 'op'
-		tryCall(_, _, callee, _) then noteBuiltinImplReference(callee, impls: impls, referenced: referenced)
-
-		// `errorReturn` reads two local virtuals; `osExit` is an OS primitive.
-		errorReturn or
-			osExit then break 'op'
-		funcAddr(_, funcName) then noteBuiltinImplReference(funcName, impls: impls, referenced: referenced)
-
-		// `callIndirect`/`witnessCall` consume a code pointer some `funcAddr` or `.rdata` slot already
-		// produced, so they name no symbol; nor do the appended `os*` primitives or `switch`.
-		callIndirect or
+			rdataAddr or
+			errorReturn or
+			osExit or
+			callIndirect or
 			osPanic or
 			osReadClock or
 			osProcessSpawn or
 			osProcessExitCode or
 			osCloseHandle or
 			osWaitHandle or
+			osWaitChild or
 			osFreePages or
 			switch or
 			witnessCall or
@@ -480,17 +466,10 @@ function noteOpBuiltinImplReference(op StdOp, impls ByteArrayArray, referenced F
 			osCancelIo or
 			osGetPid or
 			osPipeCreateOutbound or
-			osWriteFile then break 'op'
-
-		// The wall-clock read names no Maxon function either — its callee is a Win32 import slot.
-		osReadWallClock then break 'op'
-
-		// The THROWING witness call consumes a `.rdata` code pointer and names no symbol, exactly as
-		// `witnessCall` does not.
-		witnessTryCall then break 'op'
-
-		// Every file op takes buffers and handles and names no Maxon function (R4.1 + R4.2).
-		osFileOpenRead or
+			osWriteFile or
+			osReadWallClock or
+			witnessTryCall or
+			osFileOpenRead or
 			osFileClose or
 			osReadFile or
 			osFileOpenWrite or
@@ -503,33 +482,17 @@ function noteOpBuiltinImplReference(op StdOp, impls ByteArrayArray, referenced F
 			osDirCreate or
 			osDirRemove or
 			osDirCurrentPath or
-			osFileAttributes then break 'op'
-
-		// A3n: the RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
-		osPanicValue then break 'op'
-		osCommandLine then break 'op'
-
-		// W5. Both take an immediate selector or a caller's buffer and name no Maxon function.
-		osStdHandle then break 'op'
-		osExecutablePath then break 'op'
-
-		// W35. A stream write takes a buffer and a length and names no Maxon function — `osWriteStdout`'s
-		// own case, one stream over.
-		osWriteStderr then break 'op'
-
-		// A frame address names no Maxon function.
-		stackRecordAddr then break 'op'
-
-		// O3: the three DebugStream host primitives call Win32 IMPORTS, never a Maxon function — the file
-		// band's reason one line up.
-		osOpenNamedSegment or
+			osFileAttributes or
+			osPanicValue or
+			osCommandLine or
+			osStdHandle or
+			osExecutablePath or
+			osWriteStderr or
+			stackRecordAddr or
+			osOpenNamedSegment or
 			osMapNamedSegment or
-			osTickCountMs then break 'op'
-
-		// The rest of the appended band — the four attached-subprocess host primitives, the `ws2_32` socket
-		// band, the machine query AND the thread-CPU read — are import calls too, for the band's reason one
-		// line up.
-		osHandleSetInherit or
+			osTickCountMs or
+			osHandleSetInherit or
 			osPipePeek or
 			osEnvRead or
 			osProcessTerminate or
@@ -543,37 +506,27 @@ function noteOpBuiltinImplReference(op StdOp, impls ByteArrayArray, referenced F
 			osSocketRecv or
 			osSocketClose or
 			osCpuCount or
-			osThreadCpuTicks then break 'op'
-
-		// F1a: the decommit calls a Win32 import or a raw syscall, never a Maxon function — the band's reason
-		// one line up.
-		osDecommitPages then break 'op'
-
-		// F1b: a fill is inline machine code and names no callee at all, so it references no builtin impl.
-		memFill then break 'op'
-
-		// F1c: a reserve and a commit reach the same kind of import or syscall, so neither names a Maxon callee.
-		osCommitPages or
-			osReservePages then break 'op'
-
-		// F2 + G1: the two atomics and the `gs:` TLS read are inline machine code; the thread token, the two TLS
-		// entry points and the event signal are a raw syscall or an import. No member of this range names a Maxon
-		// callee. (Count them off the range rather than off this sentence.)
-		atomicCas or
+			osThreadCpuTicks or
+			osDecommitPages or
+			memFill or
+			osCommitPages or
+			osReservePages or
+			atomicCas or
 			atomicRmw or
 			currentThreadToken or
 			tlsAlloc or
 			tlsSetValue or
 			tlsSlotLoad or
 			osSetEvent or
-			osEnterBackgroundPriority then break 'op'
-		osFileOpenWriteExecutable then break 'op'
-		osEnvBlock or
-			osEnvBlockFree then break 'op'
-		loadAcquire or
-			storeRelease then break 'op'
-		osHandleFileType then break 'op'
-		osCreateNamedSegment or
+			osEnterBackgroundPriority or
+			osFileOpenWriteExecutable or
+			osEnvBlock or
+			osEnvBlockFree or
+			loadAcquire or
+			storeRelease or
+			osHandleFileType or
+			osProcessProbe or
+			osCreateNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
@@ -581,8 +534,11 @@ function noteOpBuiltinImplReference(op StdOp, impls ByteArrayArray, referenced F
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe then break 'op'
+			osSocketServe or
 			osDebugHost then break 'op'
+		call(_, callee, _) then noteBuiltinImplReference(callee, impls: impls, referenced: referenced)
+		tryCall(_, _, callee, _) then noteBuiltinImplReference(callee, impls: impls, referenced: referenced)
+		funcAddr(_, funcName) then noteBuiltinImplReference(funcName, impls: impls, referenced: referenced)
 	end 'op'
 end 'noteOpBuiltinImplReference'
 

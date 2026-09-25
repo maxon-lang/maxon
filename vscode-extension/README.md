@@ -26,6 +26,8 @@ Visual Studio Code extension that provides syntax highlighting and Language Serv
 - **Code formatting**: the language server's formatter, applied on save by default
 - **Compiler Explorer**: View the Target IR the compiler lowers a program to
 - **Test Explorer**: Discover the `test` declarations in your `*.maxtest` files and run them with `maxon test`
+- **Debugging** (x64-windows): F5 on a `.maxon` file, breakpoints in the gutter, the Variables and Call
+  Stack panes, stepping and Pause, through the compiler's own `maxon dap-server`
 
 The language features come from the Maxon compiler itself, which serves the Language Server
 Protocol (`maxon lsp-server`). This extension is its client.
@@ -228,6 +230,97 @@ Verdicts are read from the `PASS`, `FAIL`, `SKIP` and `NOTRUN` lines on stdout; 
 verdict is skipped when the run reached its `<n> passed, <m> failed` summary, and errored with the
 runner's stderr when it did not. A filter that selects nothing on this host refuses the whole run, so
 every selected test is then errored with the runner's message.
+
+## Debugging
+
+The extension contributes a **Maxon** debugger. The debug adapter is the compiler it finds (see
+[Finding the compiler](#finding-the-compiler)), run as `maxon dap-server`, so the compiler is the whole
+debugger.
+
+⚠ **x64-windows programs.** The debugger debugs x64-windows programs, and `maxon dap-server` refuses a
+program built for any other target, naming the one it debugs.
+
+### Starting a session
+
+Press **F5** with a `.maxon` file in the active editor to debug it. A configuration without a
+`program`, or none at all, debugs the active editor's `.maxon` file, or else the workspace folder when it
+holds a `.maxproj` file. With neither, the session is refused with a message saying so.
+
+A source file or a project directory is built with debug info before it runs. The executable goes to the
+host's Maxon cache, and `maxon cache clear` removes it once its session has ended. `program` can also
+name an executable already built with debug info (its `.mxdbg` sidecar beside it). A build that fails
+refuses the session with the compiler's diagnostics.
+
+**Run and Debug → create a launch.json file** writes a configuration for the current file, and the
+**Add Configuration…** button offers one for the current file and one for the project. A `launch`
+configuration takes:
+
+| Attribute | Meaning |
+|-----------|---------|
+| `program` | A `.maxon` file, a project directory, or an executable built with debug info |
+| `args` | The program's command-line arguments |
+| `env` | Environment variables added to the program's environment |
+| `cwd` | The program's working directory (default: the workspace folder) |
+| `stopOnEntry` | Stop before the program runs any of its own code (default `false`) |
+| `maxProcs` | How many processors its green-thread scheduler may use (`MAXON_MAX_PROCS`) |
+| `trace` | Create the DebugStream ring the Debug Console's `trace` command reads. A `.maxon` program is then built with `--debugstream`; a built executable must already have been |
+| `stopTimeoutSeconds` | Seconds to wait for a stop, and the budget for one step: fractions honoured, from 0.001 to 922337203685 (default `10`) |
+
+```json
+{
+  "type": "maxon",
+  "request": "launch",
+  "name": "Debug the server",
+  "program": "${workspaceFolder}",
+  "args": ["--port=8080"],
+  "env": { "LOG_LEVEL": "debug" },
+  "stopOnEntry": false
+}
+```
+
+### While it runs
+
+- **Breakpoints**: click in the gutter of a `.maxon` file. A breakpoint on a line without code is shown
+  unverified, with the reason. **Edit Condition** gives a breakpoint a condition, which the debugger
+  checks before it stops; a condition beyond what the debugger evaluates leaves the breakpoint
+  unverified, with the reason. Function breakpoints (**+** in the Breakpoints pane) stop at a function's
+  entry. Breakpoints can be added and removed while the program runs.
+- **Call Stack**: every green thread is a thread of its own. Frames of inlined functions are listed,
+  dimmed.
+- **Variables**: the stopped frame's locals; a value with fields or elements expands into them. A value
+  unreadable at that point shows the reason in its place: `<optimized out>`, `<not live here>`,
+  `<read failed>` or `<layout not described>`.
+- **Hover and Watch** evaluate an expression in the stopped frame, and the **Debug Console** takes any
+  command `maxon debug` takes (`help` lists them — `gt-park` and `gt-resume` hold and release one green
+  thread, `trace` reads the DebugStream ring).
+- **Stepping**: Step Over, Step Into and Step Out, by source line. **Pause** stops every thread wherever
+  it is.
+- A hardware fault or a `trap` stops the session as an exception, saying what faulted. The program's stdout and
+  stderr appear in the Debug Console, and its exit code ends the session.
+
+### Debugging a test
+
+The [Test Explorer](#test-explorer) has a **Debug Test** action beside **Run Test**. It debugs the
+selected tests under the same test binary `maxon test` runs. Each project the selection touches is built
+once:
+
+```text
+maxon test <project> --list --build --json [--filter=<the selection>]
+```
+
+builds the project's tests with debug info without running them, and names the binary and, for each
+listed test, the value that selects it alone. The extension copies the binary and its `.mxdbg` sidecar
+into a temporary directory, then debugs each selected test in turn as a session of
+`<copy> --select=<value>` in the workspace folder, where `maxon test` runs it too. Debugging the copy
+leaves the original free, so **Run Test** can rebuild and run the project while a session is live. The
+copy is deleted when the project's last session ends. Breakpoints in the test, and in the code it
+calls, stop as in any other session. Cancelling the test run stops the session in progress and ends the
+run there.
+
+The test is marked passed when the binary exits 0 and failed when it exits 3 (or 101, when the test
+leaked); what it printed, including the failed assertion, is in the Debug Console. Any other exit code
+(1 is a panic), a build that fails, or a session that ends before the binary exits marks the test
+errored, saying why.
 
 ## License
 

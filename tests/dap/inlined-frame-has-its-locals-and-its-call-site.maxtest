@@ -1,0 +1,67 @@
+let InlinedFrameCaseLabel = "inlined-frame-has-its-locals-and-its-call-site"
+let InlinedPrintAnchor = "render-print"
+let InlinedCallAnchor = "main-call"
+let InlinedCalleeName = "render"
+let InlinedCallerName = "main"
+let InlinedCallSpelling = "render("
+let InlinedLabelName = "label"
+let InlinedLabelText = "parcel"
+let CalleeFrame = 0
+let CallerFrame = 1
+
+type InlinedFrameSession implements DapSession
+	let executable as FilePath
+	let source as FilePath
+	let printedAt as SourceLine
+	export var frameNames as StringArray
+	export var frameLines as DapNumberArray
+	export var frameColumns as DapNumberArray
+	export var variableNames as StringArray
+	export var labelValue as String
+
+	static function create(executable FilePath, source FilePath, printedAt SourceLine) returns InlinedFrameSession
+		return Self{executable: executable, source: source, printedAt: printedAt, frameNames: StringArray.create(), frameLines: DapNumberArray.create(), frameColumns: DapNumberArray.create(), variableNames: StringArray.create(), labelValue: ""}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+		_ = try client.request(LaunchCommand, argumentsJson: dapLaunchArguments(self.executable))
+		_ = try client.awaitEvent(InitializedEvent)
+		_ = try client.request(SetBreakpointsCommand, argumentsJson: dapSetBreakpointsArguments(self.source, line: self.printedAt))
+		_ = try client.request(ConfigurationDoneCommand)
+
+		let stopped = try client.awaitEvent(StoppedEvent)
+		let frames = try client.request(StackTraceCommand, argumentsJson: dapThreadArguments(dapBodyNumber(stopped, key: "threadId")))
+		self.frameNames = dapStackFrameNames(frames)
+		self.frameLines = dapStackFrameLines(frames)
+		self.frameColumns = dapStackFrameColumns(frames)
+
+		let scopes = try client.request(ScopesCommand, argumentsJson: dapScopesArguments(dapTopFrameId(frames)))
+		let variables = try client.request(VariablesCommand, argumentsJson: dapVariablesArguments(dapScopeReference(scopes, name: LocalsScopeName)))
+		self.variableNames = dapVariableNames(variables)
+
+		if self.variableNames.contains(InlinedLabelName) 'labelListed'
+			self.labelValue = dapVariableValue(variables, name: InlinedLabelName)
+		end 'labelListed'
+
+		_ = try client.request(DisconnectCommand)
+	end 'drive'
+end 'InlinedFrameSession'
+
+test 'a spliced frame lists its own variables, and its caller stands at the call'
+	let staged = dapStagedFixture(InlinedFrameCaseLabel, fixture: SplicedFixtureName)
+	let printedAt = dapAnchorLine(staged, anchor: InlinedPrintAnchor)
+	let calledAt = dapAnchorLine(staged, anchor: InlinedCallAnchor)
+	let callColumn = dapSourceColumnOf(staged, line: calledAt, spelling: InlinedCallSpelling)
+	var session = InlinedFrameSession.create(dapBuildFixture(staged), source: dapStagedSource(staged), printedAt: printedAt)
+	try dapRunSession(session, completing: "complete")
+
+	try Expect.equal(dapFrameNameAt(session.frameNames, frame: CalleeFrame), expected: InlinedCalleeName, message: "frame {CalleeFrame} is the body the inliner spliced into `{InlinedCallerName}`; the frames were {dapRendered(session.frameNames)}")
+	try Expect.equal(dapFrameNameAt(session.frameNames, frame: CallerFrame), expected: InlinedCallerName, message: "frame {CallerFrame} is the function the body was spliced into; the frames were {dapRendered(session.frameNames)}")
+	try Expect.equal(dapFrameNumberAt(session.frameLines, frame: CalleeFrame) as AssertedInt, expected: printedAt as AssertedInt, message: "the spliced frame stands at the stopped line")
+	try Expect.equal(dapFrameNumberAt(session.frameLines, frame: CallerFrame) as AssertedInt, expected: calledAt as AssertedInt, message: "`{InlinedCallerName}` is stopped at its call of `{InlinedCalleeName}` on line {calledAt}; an editor that opens the caller frame must land on that call, not on a line of the callee")
+	try Expect.atLeast(dapFrameNumberAt(session.frameColumns, frame: CalleeFrame) as AssertedInt, than: 1, message: "a frame's column comes from the line table, which knows it; a `column` of 0 tells an editor nothing")
+	try Expect.equal(dapFrameNumberAt(session.frameColumns, frame: CallerFrame) as AssertedInt, expected: callColumn as AssertedInt, message: "the caller frame's column is where its call of `{InlinedCalleeName}` begins")
+	try Expect.isTrue(session.variableNames.contains(InlinedLabelName), message: "the `{LocalsScopeName}` scope of the spliced `{InlinedCalleeName}` must name its own local `{InlinedLabelName}`; it named {dapRendered(session.variableNames)}")
+	try Expect.contains(session.labelValue, needle: InlinedLabelText, message: "`{InlinedLabelName}` holds `{InlinedLabelText}` at that line; it said {session.labelValue}")
+end 'a spliced frame lists its own variables, and its caller stands at the call'

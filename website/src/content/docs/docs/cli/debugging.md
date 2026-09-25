@@ -29,10 +29,13 @@ On Linux and macOS the executable is `app` and the sidecar `app.mxdbg`. No sidec
 `wasm32-wasi`. The executable is **byte-identical** with or without the sidecar, so the binary you debug is
 the binary you ship.
 
-The sidecar maps machine code back to the source. It records the target and a **build id** (a hash of
-the executable's code section), then the source files, functions with their frame size and local
-variables, types, the line table and inlining records. `maxon debug` prints it; `maxon profile` and
-`maxon coverage` read it, and a `--coverage` build requires it.
+The sidecar maps machine code back to the source. It records the target, a **build id** (a hash of
+the executable's code section) and the directory the build ran in, then the source files, functions with
+their frame size, local variables and origin, types, the line table and inlining records. `maxon debug`
+prints it; `maxon profile` and `maxon coverage` read it, and a `--coverage` build requires it.
+
+The sidecar format is versioned (version 7), and a reader refuses a sidecar of any other version: after
+upgrading the compiler, rebuild before debugging, profiling or reporting coverage.
 
 ## Panics and backtraces
 
@@ -81,7 +84,7 @@ maxon debug --symbolize <exe|.mxdbg> <codeOffset...>
 | `--complete=` | Print the completions for a partially typed debugger line, one per line, and run nothing |
 | `--classify=` | Classify raw x64 instruction bytes the way arming a breakpoint does, and run nothing |
 | `--trace` | Create the DebugStream ring the `trace` command reads, and name it to the debugged program |
-| `--stop-timeout=` | Seconds to wait for a stop, and the budget for one driver-walked step (default 10) |
+| `--stop-timeout=` | Seconds to wait for a stop, and the budget for one driver-walked step (default 10). A fraction is honoured to the millisecond; a value outside 0.001 to 922337203685 is refused, naming the option. |
 | `--target-env=` | Set a variable in the DEBUGGED program's environment; repeatable |
 | `--dump-info` | Print the sidecar, or only the sections named after the path |
 | `--symbolize` | Resolve offsets into the executable's code section to `file:line:col` |
@@ -120,15 +123,30 @@ narrows to the threads whose entry function has that name — a batch script can
 Stepping is refused while a `gt` selection is on, a register-located local of a selected thread reads
 `unavailable: "register-of-parked-thread"`, and an id names a thread only for as long as that thread
 lives: every word that names one re-lists the roster first, and an id whose thread has ended is
-`no-such-thread`. The other
-refusals are `hold-table-full` (16 threads may be held at once), `thread-is-running` for a thread on a
-machine, `not-pausable` for a program the agent could not interrupt, and `not-running` for a word that
-needs a stop while the program is running.
+`no-such-thread`. The other refusals are:
 
-A `stop` carries a `reason`: `entry` before `main`, `breakpoint`, `step`, `pause`, and `trap` for an `int3`
-the agent did not plant — a stop like any other, with a register file and a stack to walk, which
-`continue` resumes past instead of the program dying on a breakpoint nobody owns. It also carries the
-`machine` (the OS thread id that took it) and, when a green thread was running, its `thread` id.
+- `hold-table-full` — 16 threads may be held at once.
+- `thread-is-running` — for a thread on a machine.
+- `not-pausable` — for a program the agent could not interrupt.
+- `not-running` — for a word that needs a stop while the program is running.
+- `fault-is-terminal` — for a step from a `fault` stop.
+- `table-full` — for a `break` when 64 instructions are already armed, counting the temporary
+  breakpoints a step plants, or when every out-of-line slot the agent runs a displaced instruction in is
+  still in use. A step that meets a full table walks one instruction at a time.
+- `return-hold-taken` — for a conditional `break` on the instruction of a running step's temporary
+  breakpoint, when another of that step's temporary breakpoints already shares its instruction with a
+  condition. One such instruction at a time may carry a condition.
+
+A `stop` carries a `reason`: `entry` before `main`, `breakpoint`, `step`, `pause`, `trap` and `fault`.
+`trap` is an `int3` the agent did not plant — a stop like any other, with a register file and a stack to
+walk, which `continue` resumes past. `fault` is a hardware fault the program would otherwise panic on (an
+access violation, a stack overflow, an integer divide by zero or an integer overflow), stopped at the
+faulting instruction with a `fault` field naming it in the words its panic line uses; a fault inside
+library code is positioned at the program's own call into it. The faulting instruction would fault
+again, so a step from a fault stop is refused `fault-is-terminal`, and `continue` hands the fault to the
+runtime, which ends the program with the same panic line, backtrace and exit code it has undebugged,
+reported as a `crash`. A stop also carries the `machine` (the OS thread id that took it), its `thread`
+id when a green thread was running, and its `function` when its position lies in one.
 
 **Every stop stops the whole program.** The agent suspends every other machine before it publishes a word
 of the stop and resumes them all on `continue` or a step, so the roster, a parked thread's stack and the
@@ -147,16 +165,49 @@ are serviced live by the agent's own service thread and `continue` waits again; 
 `locals` and the steps answer an error until something stops. The session's exit code is still 1 once
 anything has timed out, and the program is reaped when the session closes.
 
-A break target is `file.maxon:LINE`, a bare `LINE` in the file that declares `main`, or a function name
-resolved exact → `Type.method` → leaf name → word prefix. More than one match is reported as an
-ambiguity with the candidates, never a silent pick; a name nothing answers to names the nearest function.
-A line the inliner copied into several places is armed at every copy.
+A stop that lands while the program runs is reported ahead of the next command's answer: a stop that
+came before the command, or one the agent was already parked in when it answered, precedes that answer
+in the transcript, so each event sits where it happened.
+
+A break target is `file.maxon:LINE`, a bare `LINE` in the file that declares `main`, `*0x<offset>`, or a
+function name resolved exact → `Type.method` → leaf name → word prefix. More than one match answers
+`ambiguous` with the candidates; a name nothing answers to names the nearest function.
+
+- **A file** is named by the most specific spelling given: a full path names that one file; a relative
+  path with a directory names the file it reaches from the directory the program was built in, or else
+  every source file whose path ends in it; and a bare file name matches every source file of that name.
+  A spelling that matches more than one file answers `ambiguous` with the candidates.
+- **`*0x<offset>`** arms the instruction at that offset into the code section, the offsets
+  `--dump-info` and `--symbolize` print. An offset past the code, or in no function, is refused
+  `out-of-text`; one that falls inside an instruction, past its first byte, is refused
+  `not-an-instruction-start`.
+- **A line** arms wherever control enters it: the `line-entry` rows of the line table. A line the inliner
+  copied into several places is armed at every copy. A line whose only code is an inlined call arms at
+  the call: the stop is at the call line in the caller's frame, `next` runs over the inlined body and
+  `step` enters it. As in gdb, the inlined body joins that stop's backtrace once it is entered. A line
+  whose only code is a narrowing cast's range check is a line with code. A line with none answers
+  `no-code`.
+- **The runtime's own code** — the debug agent, the entry stub and the rest of the compiler's scaffolding
+  — is refused `inside-runtime-symbol`. Which code is the runtime's is recorded by the build. A `test`
+  body is the program's own, and is named `test '<prose>'` in stops, backtraces and break answers, as
+  `maxon test` names it.
 
 `step` enters a callee, `next` stays in the frame it was issued from, `finish` runs to the return of its
-frame and `until` runs forward past the current line. All four are walked one instruction at a time, so
-each honours any breakpoint it passes — except the one it started on — and each is bounded by
-`--stop-timeout=`. A `finish` from the outermost frame is refused rather than run off the end of the
-stack.
+frame and `until` runs forward past the current line. Each walks the program's own code one instruction
+at a time, and runs other code at full speed to a temporary breakpoint:
+
+- `next` and `until` run a call they reach, direct or through a value, to its return address.
+- `finish` from a function's own frame runs to that frame's return address. A recursive call that
+  reaches the address in a deeper frame runs on.
+- `step` into a library function runs it to the return into the program's code.
+- Library code the compiler inlined into the program's frame runs to the one place control leaves it.
+  Under `step` it does so when the inlined code, and every function it calls directly, is library
+  code, and a temporary breakpoint also stands on each call it makes through a value, so a closure of
+  the program's that the library calls is still stepped into. Inlined code with more than one way out
+  is walked.
+
+Each honours any breakpoint it passes — except the one it started on — and each is bounded by
+`--stop-timeout=`. A `finish` from the outermost frame is refused.
 
 ```text
 $ maxon debug --batch --commands="break app.maxon:12;run;locals;next;backtrace;continue" app.exe
@@ -164,21 +215,22 @@ $ maxon debug --batch --commands="break app.maxon:12;run;locals;next;backtrace;c
 {"event":"stop","reason":"breakpoint","function":"work","file":"app.maxon","line":12,"col":9,"offset":"0x7a","machine":5312,"thread":1,"source":[…],"backtrace":[…]}
 {"event":"locals","function":"work","locals":[{"name":"total","type":"Amount","kind":"int","display":"42"}]}
 {"event":"stop","reason":"step","function":"work","file":"app.maxon","line":13,"col":3,"offset":"0x7e","machine":5312,"thread":1,"source":[…],"backtrace":[…]}
-{"event":"backtrace","frames":[{"frame":0,"function":"work","file":"app.maxon","line":13,"offset":"0x7e"}]}
+{"event":"backtrace","frames":[{"frame":0,"function":"work","file":"app.maxon","line":13,"col":3,"offset":"0x7e"}]}
 {"event":"exit","code":0}
 ```
 
 **In `--batch`** stdout is pure JSON, one object per line, and the debugged program's own stdout and
 stderr both go to this driver's stderr. The events are `breakpoint`, `stop`, `backtrace`, `locals`,
 `value`, `threads`, `gt-backtrace`, `gt-select`, `gt-park`, `gt-resume`, `trace`, `exit`, `crash`,
-`timeout` and `error`; a list that cannot be produced is `null` beside a
-`<name>Unavailable` reason rather than an empty array, and a value that cannot be read carries
-`unavailable` with one of `optimized-out`, `not-live-here`, `read-failed` or `layout-not-described`. A
-`trace` event carries `since`, the previous stop's position in the ring, and leaves it out when there was
-no previous stop.
+`timeout` and `error`. A list that cannot be produced is `null` beside a `<name>Unavailable` reason, and a
+value that cannot be read carries `unavailable` with one of `optimized-out`, `not-live-here`,
+`read-failed` or `layout-not-described`. A `stop`, `breakpoint`, `locals` or thread row carries
+`function` when its position lies in a function, and a backtrace frame carries its `col` beside its
+`line`. A `trace` event carries `since`, the previous stop's position in the ring, when there was a
+previous stop.
 The driver exits 0 when the session completed — the program's own exit code is DATA in the `exit` event —
 and 1 on a timeout, an unacknowledged command, a refused session or a crash. A command issued after the
-program has ended is an `error` and does not change that verdict.
+program has ended is an `error`, and the verdict stands.
 
 **Without `--batch`** the same commands are read from stdin, one per line, and answered as text for a
 person; end of input quits. The debugged program's streams pass through to this driver's own.
@@ -187,48 +239,69 @@ person; end of input quits. The debugged program's streams pass through to this 
 on. It reads no program:
 
 ```text
-$ maxon debug --classify=488d0dce6f0000,c3,62
+$ maxon debug --classify=488d0dce6f0000,c21000,ff5008,62
 len=7 class=2 cond=0 disp=3 target=0x7fd5
-len=1 class=6 cond=0 disp=0 target=0x0
+len=3 class=6 cond=0 disp=0 target=0x0 rel=1
+len=3 class=7 cond=0 disp=2 target=0x0 operand=mem:base=0,index=none,scale=1,disp=+0x8
 unclassified
 ```
 
 The classes are 1 plain, 2 pc-relative data, 3 direct call, 4 direct jump, 5 conditional jump, 6 return,
-7 indirect call and 8 indirect jump; the agent places a breakpoint on the first six only. `target` is the
-absolute branch target for 3, 4 and 5 and the absolute referent for 2, computed against a fixed probe
-address, and `disp` is the byte position of a pc-relative displacement.
+7 indirect call and 8 indirect jump. The agent places a breakpoint on classes 1 to 7 and refuses an
+indirect jump `unclassified`. Every address is computed against a fixed probe address, `0x1000`:
+
+- `target` is the absolute branch target for 3, 4 and 5 and the absolute referent for 2.
+- `disp` is the byte position of the displacement of a memory operand, and `cond` the condition code of
+  a conditional jump.
+- `rel=` on a return is the byte position of the immediate a `ret imm16` releases, and `0` for a `ret`
+  that releases nothing.
+- `operand=` on an indirect call names what it calls through: `reg:<n>` a register; `word:0x<address>` a
+  pc-relative word at that absolute address; `mem:base=<n>,index=<n>,scale=<s>,disp=<±0x…>` a memory
+  word, with `none` for an absent base or index; and `overridden:form=<n>` an operand behind a segment
+  or address-size prefix, whose word the classifier leaves unresolved (`form` 1 register, 2 memory,
+  3 pc-relative).
 
 **Sections** of `--dump-info` (with none named, all are printed):
 
 | Section | Contents |
 |---------|----------|
-| `header` | The file, target and build id |
+| `header` | The file, target, build id and `root`, the directory the build ran in, from which the recorded relative source paths are read |
 | `files` | The source files, including the standard-library and runtime files the program uses |
-| `functions` | Each function's code range, frame size, parameter, line and local counts, and, per local, the code range `[start, end)` it is live over, its location and its type. A location is a frame slot, a register, `<optimized out>`, `= v` for a value folded to a constant or `= {…}` for a whole record folded to one; a `*` after it means the location holds a pointer to the value rather than the value. A name with several live runs has a row per run. |
+| `functions` | Each function's code range, frame size, parameter, line and local counts and `origin`, then `as <name>` when the debugger shows it under another name (a test body is shown as `test '<prose>'`); and, per local, the code range `[start, end)` it is live over, its location, `in [n]` when it belongs to inline site `n`, and its type. A location is a frame slot, a register, `<optimized out>`, `= v` for a value folded to a constant or `= {…}` for a whole record folded to one; a `*` after it means the location holds a pointer to the value rather than the value. A name with several live runs has a row per run. |
 | `types` | Each type's kind, size, alignment and fields, with `(signed)` on a type whose values are signed and an `element` row on an array's |
-| `lines` | The line table: code offset and source position |
-| `statements` | The same table, source positions only |
-| `inline` | Inlined call sites and the code ranges they occupy |
+| `lines` | The line table: code offset, source position and flags — `statement`, `coverage`, and `line-entry` on a row where control enters its source line: falling in from a different line, at the function's entry, or through a branch from another line |
+| `statements` | The same table, without the code offsets |
+| `inline` | Inlined call sites, each with the site it nests under, the position of its call and its `origin`, then the code ranges they occupy |
+
+An `origin` says where a function or an inlined body came from: `authored` (the program's own source),
+`test` (a `test` body), `library` (the standard library or the runtime), `generated` (source the compiler
+wrote for this build) or `synthesized` (code with no source, such as the entry stub). The debugger treats
+`authored` and `test` code as the program's own.
 
 ```text
 $ maxon debug --dump-info app.exe header
 Debug info: app.exe
   target:   x64-windows
-  build-id: 0xc9c1ee8ee7dd71e0
+  build-id: 0xb1c1a21a3d5126c2
+  root:     C:\work\app
 
 $ maxon debug --dump-info app.exe functions
-  functions (136):
-    mrt_start                        [0x0000, 0x003b)  frame=0x20  params=0  lines=0  locals=0
-    worker                           [0x0060, 0x00de)  frame=0x28  params=1  lines=4  locals=1
-        base                 [0x0064, 0x00a8)  reg3  : Integer
-    main                             [0x00e0, 0x053d)  frame=0x88  params=0  lines=50  locals=3
-        points               [0x0104, 0x053d)  [rbp-0x60]*  : Array_Amount
-        limit                [0x00e0, 0x053d)  = 64  : Amount
+  functions (109):
+    mrt_start                        [0x0000, 0x002e)  frame=0x20  params=0  lines=0  locals=0  origin=synthesized
+    main                             [0x0040, 0x021c)  frame=0x48  params=0  lines=21  locals=9  origin=authored
+        limit                [0x0040, 0x021c)  = 64  : Amount
+        points               [0x0065, 0x021c)  [rbp-0x50]*  : Array_Amount
+        total                [0x0085, 0x0089)  reg2  in [0]  : Amount
+
+$ maxon debug --dump-info app.exe inline
+  inline sites (385):
+    [0] worker  called at app.maxon:17:15  origin=authored
+    [1] print  called at app.maxon:20:2  origin=library
 
 $ maxon debug --dump-info app.exe lines
-  line table (390):
-    0x00c9  app.maxon:16:8  [statement]
-    0x0151  app.maxon:25:15  [statement]
+  line table (2484):
+    0x0051  app.maxon:14:15  [statement]
+    0x0078  app.maxon:6:11  [statement, line-entry]
 ```
 
 A word that is not a section is refused before the file is read:

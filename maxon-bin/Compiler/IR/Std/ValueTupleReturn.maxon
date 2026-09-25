@@ -482,15 +482,15 @@ function noteAddressTakenByOp(op StdOp, taken FnRefThunkSet)
 			rdataAddr or
 			tryCall or
 			errorReturn or
-			osExit then break 'op'
-		funcAddr(_, funcName) then taken.insert(funcName)
-		callIndirect or
+			osExit or
+			callIndirect or
 			osPanic or
 			osReadClock or
 			osProcessSpawn or
 			osProcessExitCode or
 			osCloseHandle or
 			osWaitHandle or
+			osWaitChild or
 			osFreePages or
 			switch or
 			witnessCall or
@@ -565,6 +565,7 @@ function noteAddressTakenByOp(op StdOp, taken FnRefThunkSet)
 			loadAcquire or
 			storeRelease or
 			osHandleFileType or
+			osProcessProbe or
 			osCreateNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
@@ -573,8 +574,9 @@ function noteAddressTakenByOp(op StdOp, taken FnRefThunkSet)
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe then break 'op'
+			osSocketServe or
 			osDebugHost then break 'op'
+		funcAddr(_, funcName) then taken.insert(funcName)
 	end 'op'
 end 'noteAddressTakenByOp'
 
@@ -732,9 +734,8 @@ function opCallsACandidate(op StdOp, byName FunctionNameIndex, onTheConvention B
 			condBranch or
 			branch or
 			ret or
-			param gives false
-		call(_, callee, _) gives isCandidateCallee(byName, callee: callee, onTheConvention: onTheConvention)
-		retVoid or
+			param or
+			retVoid or
 			globalAddr or
 			loadIndirect or
 			storeIndirect or
@@ -752,6 +753,7 @@ function opCallsACandidate(op StdOp, byName FunctionNameIndex, onTheConvention B
 			osProcessExitCode or
 			osCloseHandle or
 			osWaitHandle or
+			osWaitChild or
 			osFreePages or
 			switch or
 			witnessCall or
@@ -826,6 +828,7 @@ function opCallsACandidate(op StdOp, byName FunctionNameIndex, onTheConvention B
 			loadAcquire or
 			storeRelease or
 			osHandleFileType or
+			osProcessProbe or
 			osCreateNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
@@ -834,8 +837,9 @@ function opCallsACandidate(op StdOp, byName FunctionNameIndex, onTheConvention B
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe gives false
+			osSocketServe or
 			osDebugHost gives false
+		call(_, callee, _) gives isCandidateCallee(byName, callee: callee, onTheConvention: onTheConvention)
 	end 'op'
 end 'opCallsACandidate'
 
@@ -916,11 +920,10 @@ function trackValueOrigin(op StdOp, byName FunctionNameIndex, onTheConvention Bo
 			div or
 			mod or
 			condBranch or
-			branch then break 'op'
-		ret then break 'op'
-		param then break 'op'
-		call(resultId, callee, args) then trackCallResult(resultId, callee: callee, args: args, byName: byName, onTheConvention: onTheConvention, flow: flow, consts: consts)
-		retVoid or
+			branch or
+			ret or
+			param or
+			retVoid or
 			globalAddr or
 			loadIndirect or
 			storeIndirect or
@@ -938,6 +941,7 @@ function trackValueOrigin(op StdOp, byName FunctionNameIndex, onTheConvention Bo
 			osProcessExitCode or
 			osCloseHandle or
 			osWaitHandle or
+			osWaitChild or
 			osFreePages or
 			switch or
 			witnessCall or
@@ -1012,6 +1016,7 @@ function trackValueOrigin(op StdOp, byName FunctionNameIndex, onTheConvention Bo
 			loadAcquire or
 			storeRelease or
 			osHandleFileType or
+			osProcessProbe or
 			osCreateNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
@@ -1020,8 +1025,9 @@ function trackValueOrigin(op StdOp, byName FunctionNameIndex, onTheConvention Bo
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe then break 'op'
+			osSocketServe or
 			osDebugHost then break 'op'
+		call(resultId, callee, args) then trackCallResult(resultId, callee: callee, args: args, byName: byName, onTheConvention: onTheConvention, flow: flow, consts: consts)
 	end 'op'
 end 'trackValueOrigin'
 
@@ -1077,15 +1083,11 @@ function classifyOneOp(op StdOp, flow FunctionTupleFlow, readByOneOp StdValueUse
 			div or
 			mod or
 			condBranch or
-			branch then break 'op'
-		ret(retValId) then noteReturnedValue(flow, retValId: retValId)
-		param then break 'op'
-		call(_, callee, args) then noteTrivialDrop(flow, callee: callee, args: args)
-		retVoid or
-			globalAddr then break 'op'
-		loadIndirect(_, addrId, offset, valueType) then noteHalfLoad(flow, addrId: addrId, offset: offset, valueType: valueType)
-		storeIndirect(addrId, offset, valueId, valueType) then noteHalfStore(flow, addrId: addrId, offset: offset, valueId: valueId, valueType: valueType)
-		osAllocPages or
+			branch or
+			param or
+			retVoid or
+			globalAddr or
+			osAllocPages or
 			osWriteStdout or
 			rdataAddr or
 			tryCall or
@@ -1099,6 +1101,7 @@ function classifyOneOp(op StdOp, flow FunctionTupleFlow, readByOneOp StdValueUse
 			osProcessExitCode or
 			osCloseHandle or
 			osWaitHandle or
+			osWaitChild or
 			osFreePages or
 			switch or
 			witnessCall or
@@ -1173,6 +1176,7 @@ function classifyOneOp(op StdOp, flow FunctionTupleFlow, readByOneOp StdValueUse
 			loadAcquire or
 			storeRelease or
 			osHandleFileType or
+			osProcessProbe or
 			osCreateNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
@@ -1181,8 +1185,12 @@ function classifyOneOp(op StdOp, flow FunctionTupleFlow, readByOneOp StdValueUse
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe then break 'op'
+			osSocketServe or
 			osDebugHost then break 'op'
+		ret(retValId) then noteReturnedValue(flow, retValId: retValId)
+		call(_, callee, args) then noteTrivialDrop(flow, callee: callee, args: args)
+		loadIndirect(_, addrId, offset, valueType) then noteHalfLoad(flow, addrId: addrId, offset: offset, valueType: valueType)
+		storeIndirect(addrId, offset, valueId, valueType) then noteHalfStore(flow, addrId: addrId, offset: offset, valueId: valueId, valueType: valueType)
 	end 'op'
 
 	// ⚠ **OVER THE OP'S READS, NEVER OVER THE CENSUS ROWS.** The two enumerate the same intersection, but
@@ -1216,15 +1224,11 @@ function opAccountsForTheValue(op StdOp, value ValueId) returns bool
 			div or
 			mod or
 			condBranch or
-			branch gives false
-		ret(retValId) gives retValId == value
-		param gives false
-		call(_, callee, args) gives callIsTheTrivialDropOf(callee, args: args, value: value)
-		retVoid or
-			globalAddr gives false
-		loadIndirect(_, addrId, offset, valueType) gives addrId == value and isAWholeHalf(offset, valueType: valueType)
-		storeIndirect(addrId, offset, valueId, valueType) gives addrId == value and valueId != value and isAWholeHalf(offset, valueType: valueType)
-		osAllocPages or
+			branch or
+			param or
+			retVoid or
+			globalAddr or
+			osAllocPages or
 			osWriteStdout or
 			rdataAddr or
 			tryCall or
@@ -1238,6 +1242,7 @@ function opAccountsForTheValue(op StdOp, value ValueId) returns bool
 			osProcessExitCode or
 			osCloseHandle or
 			osWaitHandle or
+			osWaitChild or
 			osFreePages or
 			switch or
 			witnessCall or
@@ -1312,6 +1317,7 @@ function opAccountsForTheValue(op StdOp, value ValueId) returns bool
 			loadAcquire or
 			storeRelease or
 			osHandleFileType or
+			osProcessProbe or
 			osCreateNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
@@ -1320,8 +1326,12 @@ function opAccountsForTheValue(op StdOp, value ValueId) returns bool
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe gives false
+			osSocketServe or
 			osDebugHost gives false
+		ret(retValId) gives retValId == value
+		call(_, callee, args) gives callIsTheTrivialDropOf(callee, args: args, value: value)
+		loadIndirect(_, addrId, offset, valueType) gives addrId == value and isAWholeHalf(offset, valueType: valueType)
+		storeIndirect(addrId, offset, valueId, valueType) gives addrId == value and valueId != value and isAWholeHalf(offset, valueType: valueType)
 	end 'op'
 end 'opAccountsForTheValue'
 
@@ -1517,9 +1527,8 @@ function noteCallSite(op StdOp, funcIndex FuncIndex, byName FunctionNameIndex, f
 			condBranch or
 			branch or
 			ret or
-			param then break 'op'
-		call(resultId, callee, _) then noteCandidateCallSite(resultId, callee: callee, funcIndex: funcIndex, byName: byName, flow: flow, onTheConvention: onTheConvention, sites: sites)
-		retVoid or
+			param or
+			retVoid or
 			globalAddr or
 			loadIndirect or
 			storeIndirect or
@@ -1537,6 +1546,7 @@ function noteCallSite(op StdOp, funcIndex FuncIndex, byName FunctionNameIndex, f
 			osProcessExitCode or
 			osCloseHandle or
 			osWaitHandle or
+			osWaitChild or
 			osFreePages or
 			switch or
 			witnessCall or
@@ -1611,6 +1621,7 @@ function noteCallSite(op StdOp, funcIndex FuncIndex, byName FunctionNameIndex, f
 			loadAcquire or
 			storeRelease or
 			osHandleFileType or
+			osProcessProbe or
 			osCreateNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
@@ -1619,8 +1630,9 @@ function noteCallSite(op StdOp, funcIndex FuncIndex, byName FunctionNameIndex, f
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe then break 'op'
+			osSocketServe or
 			osDebugHost then break 'op'
+		call(resultId, callee, _) then noteCandidateCallSite(resultId, callee: callee, funcIndex: funcIndex, byName: byName, flow: flow, onTheConvention: onTheConvention, sites: sites)
 	end 'op'
 end 'noteCallSite'
 
@@ -1696,18 +1708,18 @@ end 'settleTheConvention'
 function collectDependencyEdges(dependedOn CsrColumn, dependent CsrColumn, retVerdicts ValueTupleRetVerdictArray, callSites ValueTupleCallSiteArray)
 	for verdict in retVerdicts 'eachReturn'
 		match verdict.kind 'kind'
-			freshPair then break 'kind'
+			freshPair or
+				unreachableZero or
+				unusable then break 'kind'
 			forwarded(calleeIndex) then noteDependency(dependedOn, dependent: dependent, dependedOnIndex: calleeIndex, dependentIndex: verdict.funcIndex)
-			unreachableZero then break 'kind'
-			unusable then break 'kind'
 		end 'kind'
 	end 'eachReturn'
 
 	for site in callSites 'eachSite'
 		match site.shape 'shape'
-			readThenDropped then break 'shape'
+			readThenDropped or
+				unusable then break 'shape'
 			forwardedByCaller then noteDependency(dependedOn, dependent: dependent, dependedOnIndex: site.callerIndex, dependentIndex: site.calleeIndex)
-			unusable then break 'shape'
 		end 'shape'
 	end 'eachSite'
 end 'collectDependencyEdges'
@@ -1721,17 +1733,17 @@ end 'noteDependency'
 function seedRefusals(seeds BoolArray, retVerdicts ValueTupleRetVerdictArray, callSites ValueTupleCallSiteArray)
 	for verdict in retVerdicts 'eachReturn'
 		match verdict.kind 'kind'
-			freshPair then break 'kind'
-			forwarded then break 'kind'
-			unreachableZero then break 'kind'
+			freshPair or
+				forwarded or
+				unreachableZero then break 'kind'
 			unusable then markSeed(seeds, funcIndex: verdict.funcIndex)
 		end 'kind'
 	end 'eachReturn'
 
 	for site in callSites 'eachSite'
 		match site.shape 'shape'
-			readThenDropped then break 'shape'
-			forwardedByCaller then break 'shape'
+			readThenDropped or
+				forwardedByCaller then break 'shape'
 			unusable then markSeed(seeds, funcIndex: site.calleeIndex)
 		end 'shape'
 	end 'eachSite'
@@ -1950,6 +1962,7 @@ function noteOrphanedConstant(op StdOp, stillRead StdValueUseSet, orphaned StdVa
 			osProcessExitCode or
 			osCloseHandle or
 			osWaitHandle or
+			osWaitChild or
 			osFreePages or
 			switch or
 			witnessCall or
@@ -2024,6 +2037,7 @@ function noteOrphanedConstant(op StdOp, stillRead StdValueUseSet, orphaned StdVa
 			loadAcquire or
 			storeRelease or
 			osHandleFileType or
+			osProcessProbe or
 			osCreateNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
@@ -2032,7 +2046,7 @@ function noteOrphanedConstant(op StdOp, stillRead StdValueUseSet, orphaned StdVa
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe then break 'op'
+			osSocketServe or
 			osDebugHost then break 'op'
 	end 'op'
 end 'noteOrphanedConstant'
@@ -2059,11 +2073,9 @@ function planOneOp(op StdOp, funcIndex FuncIndex, flow FunctionTupleFlow, onTheC
 			div or
 			mod or
 			condBranch or
-			branch then break 'op'
-		ret(retValId) then planOneReturn(retValId, funcIndex: funcIndex, flow: flow, onTheConvention: onTheConvention, plan: plan)
-		param then break 'op'
-		call(resultId, _, _) then planOneCallResult(resultId, flow: flow, onTheConvention: onTheConvention, plan: plan, mint: mint)
-		retVoid or
+			branch or
+			param or
+			retVoid or
 			globalAddr or
 			loadIndirect or
 			storeIndirect or
@@ -2081,6 +2093,7 @@ function planOneOp(op StdOp, funcIndex FuncIndex, flow FunctionTupleFlow, onTheC
 			osProcessExitCode or
 			osCloseHandle or
 			osWaitHandle or
+			osWaitChild or
 			osFreePages or
 			switch or
 			witnessCall or
@@ -2155,6 +2168,7 @@ function planOneOp(op StdOp, funcIndex FuncIndex, flow FunctionTupleFlow, onTheC
 			loadAcquire or
 			storeRelease or
 			osHandleFileType or
+			osProcessProbe or
 			osCreateNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
@@ -2163,8 +2177,10 @@ function planOneOp(op StdOp, funcIndex FuncIndex, flow FunctionTupleFlow, onTheC
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe then break 'op'
+			osSocketServe or
 			osDebugHost then break 'op'
+		ret(retValId) then planOneReturn(retValId, funcIndex: funcIndex, flow: flow, onTheConvention: onTheConvention, plan: plan)
+		call(resultId, _, _) then planOneCallResult(resultId, flow: flow, onTheConvention: onTheConvention, plan: plan, mint: mint)
 	end 'op'
 end 'planOneOp'
 
@@ -2200,8 +2216,8 @@ function planOneCallResult(resultId ValueId, flow FunctionTupleFlow, onTheConven
 	match flow.rowOf(resultId).origin 'origin'
 		freshBox then markTheBoxIfFrameLocal(resultId, flow: flow, plan: plan)
 		directCall(calleeIndex) then markThePairIfTheCalleeKeptTheConvention(resultId, calleeIndex: calleeIndex, onTheConvention: onTheConvention, plan: plan, mint: mint)
-		constant then break 'origin'
-		elsewhere then break 'origin'
+		constant or
+			elsewhere then break 'origin'
 	end 'origin'
 end 'planOneCallResult'
 
@@ -2237,15 +2253,11 @@ function rewriteOneOp(module StdModule, opIdx OpIndex, plan ValueTuplePlan, subs
 			div or
 			mod or
 			condBranch or
-			branch then break 'op'
-		ret(retValId) then rewriteOneReturn(module, opIdx: opIdx, retValId: retValId, plan: plan)
-		param then break 'op'
-		call(resultId, callee, args) then rewriteOneCall(module, opIdx: opIdx, resultId: resultId, callee: callee, args: args, plan: plan, doomed: doomed)
-		retVoid or
-			globalAddr then break 'op'
-		loadIndirect(resultId, addrId, offset, _) then rewriteOneHalfLoad(opIdx, resultId: resultId, addrId: addrId, offset: offset, plan: plan, subst: subst, doomed: doomed)
-		storeIndirect(addrId, _, _, _) then doomAStoreIntoAnElidedBox(opIdx, addrId: addrId, plan: plan, doomed: doomed)
-		osAllocPages or
+			branch or
+			param or
+			retVoid or
+			globalAddr or
+			osAllocPages or
 			osWriteStdout or
 			rdataAddr or
 			tryCall or
@@ -2259,6 +2271,7 @@ function rewriteOneOp(module StdModule, opIdx OpIndex, plan ValueTuplePlan, subs
 			osProcessExitCode or
 			osCloseHandle or
 			osWaitHandle or
+			osWaitChild or
 			osFreePages or
 			switch or
 			witnessCall or
@@ -2333,6 +2346,7 @@ function rewriteOneOp(module StdModule, opIdx OpIndex, plan ValueTuplePlan, subs
 			loadAcquire or
 			storeRelease or
 			osHandleFileType or
+			osProcessProbe or
 			osCreateNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
@@ -2341,8 +2355,12 @@ function rewriteOneOp(module StdModule, opIdx OpIndex, plan ValueTuplePlan, subs
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe then break 'op'
+			osSocketServe or
 			osDebugHost then break 'op'
+		ret(retValId) then rewriteOneReturn(module, opIdx: opIdx, retValId: retValId, plan: plan)
+		call(resultId, callee, args) then rewriteOneCall(module, opIdx: opIdx, resultId: resultId, callee: callee, args: args, plan: plan, doomed: doomed)
+		loadIndirect(resultId, addrId, offset, _) then rewriteOneHalfLoad(opIdx, resultId: resultId, addrId: addrId, offset: offset, plan: plan, subst: subst, doomed: doomed)
+		storeIndirect(addrId, _, _, _) then doomAStoreIntoAnElidedBox(opIdx, addrId: addrId, plan: plan, doomed: doomed)
 	end 'op'
 end 'rewriteOneOp'
 

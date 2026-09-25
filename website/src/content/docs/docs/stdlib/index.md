@@ -38,7 +38,7 @@ end 'main'
 | [Text](/docs/stdlib/text/#string) | String, Character, Ascii, Unicode, CharacterSet |
 | [Collections](/docs/stdlib/collections/#array) | Array, List, Map, Set, Vector, Range, Iterators, Interfaces |
 | [I/O and processes](/docs/stdlib/io/#file) | File, FilePath, Directory, Console, CommandLine, Log, Process, Subprocess, SharedMemory |
-| [Network](/docs/stdlib/network/#tcpclient) | TcpClient, TcpListener, HttpClient, URL |
+| [Network](/docs/stdlib/network/#tcpclient) | TcpClient, TcpListener, HttpClient, HttpServer, URL |
 | [Data](/docs/stdlib/data/#json) | Json, Sha256, Hasher |
 | [System](/docs/stdlib/runtime/#clock) | Clock, Scheduler, Math, Primitive Extensions |
 | [Testing](/docs/stdlib/testing/) | Testing |
@@ -92,7 +92,10 @@ to name one.
 | `JsonFloat` | `float(f64.min to f64.max)` | Json |
 | `ChildCount`, `ChildIndex` | `int(0 to u64.max)` | Json |
 | `Milliseconds` | `int(0 to u64.max)` | Sleep |
-| `Milliseconds` | `int(0 to 4294967295)` — a socket timeout | TcpClient |
+| `SocketDeadlineMs` | `int(0 to 4294967295)` — a socket deadline | TcpClient |
+| `RecvCapacity` | `int(1 to i64.max)` | TcpClient |
+| `HttpByteCap` | `int(0 to 1099511627776)` | HttpServer |
+| `HttpAcceptRetryMs` | `int(0 to 1000)` | HttpServer |
 | `Pid`, `ByteLimit` | `int(0 to u64.max)` | Subprocess |
 | `ExitInt` | `int(0 to u32.max)` | Subprocess |
 | `EnvSourceValue` | `int(0 to 1)` | Subprocess |
@@ -103,7 +106,8 @@ to name one.
 | `AssertedReal` | `float(f64.min to f64.max)` | Testing |
 | `Tolerance` | `float(0.0 to f64.max)` | Testing |
 
-`Byte` and `BytePos` are declared by several modules at one definition each; see the table above.
+`Byte` is declared by several modules at one definition each; `BytePos` is declared once, in `String`.
+See the table above.
 
 ### Target support
 
@@ -118,7 +122,7 @@ at the call site, rather than failing at run time:
 |--------------------------|-------|
 | `File`, `Directory`, `Console`, `CommandLine` | E3104 |
 | `Clock`, `WallClock`, `sleep`, `Scheduler.yield`, `Scheduler.processorCount` | E3104 |
-| `TcpClient`, `TcpListener`, `HttpClient` | E3104 |
+| `TcpClient`, `TcpListener`, `HttpClient`, `HttpServer` | E3104 |
 | `Process.executablePath`, `SharedSegment` | E3104 |
 | `Subprocess`, `StreamingSubprocess`, `Configuration`, `Process.environmentVariable` | E3074 |
 

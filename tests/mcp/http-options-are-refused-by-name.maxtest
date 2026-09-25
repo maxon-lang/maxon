@@ -1,0 +1,16 @@
+let McpServerCommand = "mcp-server"
+let RefusedExit = 1
+
+function refusedOptions() returns StringArray
+	return ["{McpHttpOption}=0", "{McpHttpOption}=70000", "{McpHttpOption}=abc", "{McpIdleTimeoutOptionPrefix}5", "{McpMaxSessionsOptionPrefix}2", McpExitOnStdinEofOption]
+end 'refusedOptions'
+
+test 'a port that is not one, and an http-only option without --http, are refused by name with exit 1'
+	for option in refusedOptions() 'eachOption'
+		let run = runIn(Directory.currentPath(), binary: testedCompilerPath(), arguments: [McpServerCommand, option])
+
+		try Expect.equal(run.exitCode() as AssertedInt, expected: RefusedExit, message: "`{McpServerCommand} {option}` must be refused with exit {RefusedExit}; it exited {run.exitCode()}. Stderr: {run.stderr}")
+		try Expect.isEmpty(run.stdout, message: "a refused `{McpServerCommand} {option}` serves nothing, so it prints no endpoint and no JSON-RPC: {run.stdout}")
+		try Expect.contains(run.stderr, needle: option, message: "the refusal of `{McpServerCommand} {option}` names the option it refused: {run.stderr}")
+	end 'eachOption'
+end 'a port that is not one, and an http-only option without --http, are refused by name with exit 1'

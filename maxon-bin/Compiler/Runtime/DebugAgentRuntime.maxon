@@ -11,11 +11,13 @@ export let DebugReleaseStackName = b"__dbg_release_stack"
 // is the edge that keeps it alive, so it needs no root of its own.
 export let DbgServiceLoopName = b"__dbg_service_loop"
 
-// The two the scheduler calls, both behind a `__dbg_ctl` test it emits: the carve's roster append and the
-// hand-over's hold question. Those calls are minted long after the reach walk, so
-// `StdlibSource.runtimeTierFileIsTheDebugAgent` is what credits them reached.
+// The three the scheduler calls: the carve's roster append and the hand-over's hold question, each
+// behind a `__dbg_ctl` test it emits, and the preempt-safe check's planted-trap lookback. Those
+// calls are minted long after the reach walk, so `StdlibSource.runtimeTierFileIsTheDebugAgent` is
+// what credits them reached.
 export let DbgGtCarvedName = b"__dbg_gt_carved"
 export let DbgGtShouldHoldName = b"__dbg_gt_should_hold"
+export let DbgTrapPlantedAtName = b"__dbg_trap_planted_at"
 
 export function debugAgentRuntimeGlobals(usage RuntimeUsage) returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
@@ -31,90 +33,73 @@ end 'debugAgentRuntimeGlobals'
 export function checkDebugAgentGeometry(signatures ProgramSignatures, tierPath FilePath)
 	requireTierGeometryAgrees(debugAgentTierPins(), signatures: signatures, tierPath: tierPath, emitterFile: "Compiler/Debug/DebugControlLayout.maxon", layer: "debug agent")
 
-	if DbgOffRegisters + DbgRegisterSlots * DbgWordBytes > DbgOffBtCount 'registersOverrunTheBacktrace'
-		panic("debug agent: {DbgRegisterSlots} register slots at {DbgOffRegisters} run past the backtrace header at {DbgOffBtCount}")
-	end 'registersOverrunTheBacktrace'
+	requireRegionBetween(DbgOffStopFault, bytes: DbgWordBytes, what: "the stop's fault word", after: DbgOffStopFp + DbgWordBytes, afterWhat: "the stop's frame pointer at {DbgOffStopFp}", before: DbgOffRegisters, beforeWhat: "the register file")
+	requireRegionBetween(DbgOffStopConditionMissed, bytes: DbgWordBytes, what: "the stop's missed-condition word", after: DbgOffStopFault + DbgWordBytes, afterWhat: "the stop's fault word at {DbgOffStopFault}", before: DbgOffRegisters, beforeWhat: "the register file")
+	requireRegionBetween(DbgOffBtOuterFrame, bytes: DbgWordBytes, what: "the walk's outer frame word", after: DbgOffStopConditionMissed + DbgWordBytes, afterWhat: "the stop's missed-condition word at {DbgOffStopConditionMissed}", before: DbgOffRegisters, beforeWhat: "the register file")
+	requireRegionBetween(DbgOffAckStopSeq, bytes: DbgWordBytes, what: "the answering stop's sequence word", after: DbgOffBtOuterFrame + DbgWordBytes, afterWhat: "the walk's outer frame word at {DbgOffBtOuterFrame}", before: DbgOffRegisters, beforeWhat: "the register file")
 
-	if DbgOffBtFrames + DbgMaxBacktraceFrames * DbgBacktraceFrameWords * DbgWordBytes > DbgOffReadLen 'framesOverrunTheReadHeader'
-		panic("debug agent: {DbgMaxBacktraceFrames} backtrace frames at {DbgOffBtFrames} run past the read header at {DbgOffReadLen}")
-	end 'framesOverrunTheReadHeader'
-
-	if DbgOffReadBuf + DbgReadBufBytes > DbgOffConditionRecord 'readBufferOverrunsTheConditionRecord'
-		panic("debug agent: a {DbgReadBufBytes}-byte read buffer at {DbgOffReadBuf} runs past the condition record at {DbgOffConditionRecord}")
-	end 'readBufferOverrunsTheConditionRecord'
-
-	if DbgOffConditionRecord + DbgConditionRecordWords * DbgWordBytes > DbgOffGtCount 'conditionRecordOverrunsTheTallies'
-		panic("debug agent: a {DbgConditionRecordWords}-word condition record at {DbgOffConditionRecord} runs past the green-thread count at {DbgOffGtCount}")
-	end 'conditionRecordOverrunsTheTallies'
+	requireRegionBefore(DbgOffRegisters, bytes: DbgRegisterSlots * DbgWordBytes, what: "{DbgRegisterSlots} register slots", before: DbgOffBtCount, beforeWhat: "the backtrace header")
+	requireRegionBefore(DbgOffBtFrames, bytes: DbgMaxBacktraceFrames * DbgBacktraceFrameWords * DbgWordBytes, what: "{DbgMaxBacktraceFrames} backtrace frames", before: DbgOffReadLen, beforeWhat: "the read header")
+	requireRegionBefore(DbgOffReadBuf, bytes: DbgReadBufBytes, what: "a {DbgReadBufBytes}-byte read buffer", before: DbgOffConditionRecord, beforeWhat: "the condition record")
+	requireRegionBefore(DbgOffConditionRecord, bytes: DbgConditionRecordWords * DbgWordBytes, what: "a {DbgConditionRecordWords}-word condition record", before: DbgOffGtCount, beforeWhat: "the green-thread count")
 
 	// These two words belong to a spec program and the agent never writes them: a case that needs the parent
 	// and the child to name one word has nowhere else to put it, since a spec program cannot take the address
 	// of its own variable and the mapped base of a `SharedSegment` is private to the stdlib.
-	if DbgOffGtTruncated + DbgWordBytes > DbgOffSpecScratch or DbgOffSpecScratch + DbgSpecScratchWords * DbgWordBytes > DbgOffGtRecords 'theSpecBandIsNotWhereItWasReserved'
-		panic("debug agent: the {DbgSpecScratchWords} words reserved for a spec program at {DbgOffSpecScratch} do not lie between the green-thread tallies ending at {DbgOffGtTruncated + DbgWordBytes} and the record array at {DbgOffGtRecords}")
-	end 'theSpecBandIsNotWhereItWasReserved'
+	requireRegionBetween(DbgOffSpecScratch, bytes: DbgSpecScratchWords * DbgWordBytes, what: "the {DbgSpecScratchWords} words reserved for a spec program", after: DbgOffGtTruncated + DbgWordBytes, afterWhat: "the green-thread tallies", before: DbgOffGtRecords, beforeWhat: "the record array")
 
-	if DbgOffGtRecords + DbgGtRecordCapacity * DbgGtRecordStride > DbgOffAgentPrivate 'recordsOverrunThePrivateWord'
-		panic("debug agent: {DbgGtRecordCapacity} green-thread records of {DbgGtRecordStride} bytes at {DbgOffGtRecords} run past the agent's private word at {DbgOffAgentPrivate}")
-	end 'recordsOverrunThePrivateWord'
-
-	if DbgGtRecOffMachine + DbgWordBytes > DbgGtRecordStride 'aRecordDoesNotFitItsStride'
-		panic("debug agent: a green-thread record's machine field at {DbgGtRecOffMachine} runs past its own {DbgGtRecordStride}-byte stride")
-	end 'aRecordDoesNotFitItsStride'
-
-	if DbgOffAgentPrivate + DbgWordBytes > DbgSegmentBytes 'privateWordOutsideTheSegment'
-		panic("debug agent: the agent's private word at {DbgOffAgentPrivate} lies outside a {DbgSegmentBytes}-byte segment")
-	end 'privateWordOutsideTheSegment'
+	requireRegionBefore(DbgOffGtRecords, bytes: DbgGtRecordCapacity * DbgGtRecordStride, what: "{DbgGtRecordCapacity} green-thread records of {DbgGtRecordStride} bytes", before: DbgOffAgentPrivate, beforeWhat: "the agent's private word")
+	requireRegionBefore(DbgGtRecOffMachine, bytes: DbgWordBytes, what: "a green-thread record's machine field", before: DbgGtRecordStride, beforeWhat: "the end of its own stride")
+	requireRegionBefore(DbgOffAgentPrivate, bytes: DbgWordBytes, what: "the agent's private word", before: DbgSegmentBytes, beforeWhat: "the end of the segment")
 
 	requireTierGeometryAgrees(debugAgentSymbolTablePins(), signatures: signatures, tierPath: tierPath, emitterFile: "Compiler/Targets/Shared/BacktraceFormat.maxon", layer: "debug agent")
 
-	if DbgPrivOffHold + DbgHoldCapacity * DbgHoldSlotBytes > DbgPrivOffContext 'theHoldTableOverrunsTheContextBuffer'
-		panic("debug agent: {DbgHoldCapacity} hold slots of {DbgHoldSlotBytes} bytes at {DbgPrivOffHold} run past the CONTEXT buffer at {DbgPrivOffContext}")
-	end 'theHoldTableOverrunsTheContextBuffer'
+	requireRegionBefore(DbgPrivOffHold, bytes: DbgHoldCapacity * DbgHoldSlotBytes, what: "{DbgHoldCapacity} hold slots of {DbgHoldSlotBytes} bytes", before: DbgPrivOffContext, beforeWhat: "the CONTEXT buffer")
+	requireRegionBefore(DbgHoldOffStackBase, bytes: DbgWordBytes, what: "a hold's stack-base witness", before: DbgHoldSlotBytes, beforeWhat: "the end of the slot it lives in")
+	requireRegionBefore(DbgPrivOffContext, bytes: DbgCtxBytes, what: "a {DbgCtxBytes}-byte CONTEXT", before: DbgPrivOffHoldsPlaced, beforeWhat: "the placed-hold count")
 
-	if DbgHoldOffStackBase + DbgWordBytes > DbgHoldSlotBytes 'aHoldsEpochOverrunsItsSlot'
-		panic("debug agent: a hold's stack-base witness at {DbgHoldOffStackBase} runs past the {DbgHoldSlotBytes}-byte slot it lives in")
-	end 'aHoldsEpochOverrunsItsSlot'
+	requireRegionBetween(DbgPrivOffStopLockOwner, bytes: DbgWordBytes, what: "the stop lock's owner word", after: DbgPrivOffContext + DbgCtxBytes, afterWhat: "the CONTEXT buffer ending at {DbgPrivOffContext + DbgCtxBytes}", before: DbgPrivOffHoldsPlaced, beforeWhat: "the placed-hold count")
+	requireRegionBetween(DbgPrivOffReturnHold, bytes: DbgWordBytes, what: "the return point's hold word", after: DbgPrivOffContext + DbgCtxBytes, afterWhat: "the CONTEXT buffer ending at {DbgPrivOffContext + DbgCtxBytes}", before: DbgPrivOffStopLockOwner, beforeWhat: "the stop lock's owner word")
 
-	if DbgPrivOffContext + DbgCtxBytes > DbgPrivOffHoldsPlaced 'theContextBufferOverrunsThePlacedHoldCount'
-		panic("debug agent: a {DbgCtxBytes}-byte CONTEXT at {DbgPrivOffContext} runs past the placed-hold count at {DbgPrivOffHoldsPlaced}")
-	end 'theContextBufferOverrunsThePlacedHoldCount'
+	if DbgPreemptClaimStep == PreemptClaimFree or DbgPreemptClaimStep == PreemptClaimHeld 'aStepHoldTheSchedulerCouldMistake'
+		panic("debug agent: a step's hold on a machine's signal claim is {DbgPreemptClaimStep}, which the scheduler already means as a free ({PreemptClaimFree}) or a held ({PreemptClaimHeld}) claim")
+	end 'aStepHoldTheSchedulerCouldMistake'
 
-	if DbgPrivOffHoldsPlaced + DbgWordBytes > DbgPrivOffBreakpoints 'thePlacedHoldCountOverrunsTheBreakpoints'
-		panic("debug agent: the placed-hold count at {DbgPrivOffHoldsPlaced} runs past the breakpoint table at {DbgPrivOffBreakpoints}")
-	end 'thePlacedHoldCountOverrunsTheBreakpoints'
+	if DbgClaimDeclined != 0 'theThunkTestsForZero'
+		panic("debug agent: a declined stack claim is {DbgClaimDeclined}, but the trap thunk recognises a decline by testing the answer for zero")
+	end 'theThunkTestsForZero'
 
-	if DbgBpOffCondition + DbgCondRecOffLiteral + DbgWordBytes > DbgPrivBreakpointStride 'theConditionOverrunsTheEntry'
-		panic("debug agent: a breakpoint's condition literal at {DbgBpOffCondition + DbgCondRecOffLiteral} runs past the {DbgPrivBreakpointStride}-byte entry it lives in")
-	end 'theConditionOverrunsTheEntry'
-
-	if DbgPrivOffBreakpoints + DbgBreakpointCapacity * DbgPrivBreakpointStride > DbgPrivOffGtRoster 'breakpointsOverrunTheRoster'
-		panic("debug agent: {DbgBreakpointCapacity} breakpoint entries at {DbgPrivOffBreakpoints} run past the green-thread roster at {DbgPrivOffGtRoster}")
-	end 'breakpointsOverrunTheRoster'
-
-	if DbgPrivOffGtRoster + DbgGtRosterCapacity * DbgWordBytes > DbgPrivStackBase 'theRosterOverrunsTheAgentStack'
-		panic("debug agent: a {DbgGtRosterCapacity}-entry roster at {DbgPrivOffGtRoster} runs past the agent stack at {DbgPrivStackBase}")
-	end 'theRosterOverrunsTheAgentStack'
+	requireRegionBefore(DbgPrivOffHoldsPlaced, bytes: DbgWordBytes, what: "the placed-hold count", before: DbgPrivOffBreakpoints, beforeWhat: "the breakpoint table")
+	requireRegionBefore(DbgBpOffCondition + DbgCondRecOffLiteral, bytes: DbgWordBytes, what: "a breakpoint's condition literal", before: DbgPrivBreakpointStride, beforeWhat: "the end of the entry it lives in")
+	requireRegionBefore(DbgPrivOffBreakpoints, bytes: DbgBreakpointCapacity * DbgPrivBreakpointStride, what: "{DbgBreakpointCapacity} breakpoint entries", before: DbgPrivOffGtRoster, beforeWhat: "the green-thread roster")
+	requireRegionBefore(DbgPrivOffGtRoster, bytes: DbgGtRosterCapacity * DbgWordBytes, what: "a {DbgGtRosterCapacity}-entry roster", before: DbgPrivStackBase, beforeWhat: "the agent stack")
 
 	if DbgPrivStackBase >= DbgPrivBytes - DbgAgentShadowBytes 'noStackLeft'
 		panic("debug agent: the agent stack's floor at {DbgPrivStackBase} leaves no room below the top of a {DbgPrivBytes}-byte private block")
 	end 'noStackLeft'
 
-	if DbgBreakpointCapacity * DbgSlotBytes > DbgSlotPoolBytes 'slotsOverrunThePool'
-		panic("debug agent: {DbgBreakpointCapacity} slots of {DbgSlotBytes} bytes do not fit a {DbgSlotPoolBytes}-byte pool")
+	requireRegionBetween(DbgPrivOffPlantedMap, bytes: DbgWordBytes, what: "the planted map's word", after: DbgPrivOffContext + DbgCtxBytes, afterWhat: "the CONTEXT buffer ending at {DbgPrivOffContext + DbgCtxBytes}", before: DbgPrivOffReturnHold, beforeWhat: "the return point's hold word")
+
+	if DbgSlotCapacity * DbgSlotBytes > DbgSlotPoolBytes 'slotsOverrunThePool'
+		panic("debug agent: {DbgSlotCapacity} slots of {DbgSlotBytes} bytes do not fit a {DbgSlotPoolBytes}-byte pool")
 	end 'slotsOverrunThePool'
 
-	if DbgCallSlotBytes > DbgSlotBytes 'noRoomForADisplacedCall'
-		panic("debug agent: a displaced direct call needs {DbgCallSlotBytes} bytes and a slot is {DbgSlotBytes}")
-	end 'noRoomForADisplacedCall'
+	if DbgSlotCapacity < DbgBreakpointCapacity 'fewerSlotsThanBreakpoints'
+		panic("debug agent: {DbgSlotCapacity} slots cannot give each of {DbgBreakpointCapacity} live breakpoints one of its own")
+	end 'fewerSlotsThanBreakpoints'
 
-	if DbgJmpAbsoluteBytes >= DbgSlotBytes 'noRoomForADisplacedInstruction'
-		panic("debug agent: an absolute jump of {DbgJmpAbsoluteBytes} bytes leaves no room in a {DbgSlotBytes}-byte slot for the instruction it returns from")
-	end 'noRoomForADisplacedInstruction'
+	requireSlotHeadsFit()
+	requireRegionBefore(DbgSlotTailAt, bytes: DbgSlotTailEnd - DbgSlotTailAt, what: "a slot's tail", before: DbgSlotBackAt, beforeWhat: "its return word")
+	requireRegionBefore(DbgSlotBackAt, bytes: DbgWordBytes, what: "a slot's return word", before: DbgSlotExitsAt, beforeWhat: "its exit count")
+	requireRegionBefore(DbgSlotExitsAt, bytes: DbgWordBytes, what: "a slot's exit count", before: DbgSlotSendsAt, beforeWhat: "its send count")
+	requireRegionBefore(DbgSlotSendsAt, bytes: DbgWordBytes, what: "a slot's send count", before: DbgSlotOriginAt, beforeWhat: "its origin word")
+	requireRegionBefore(DbgSlotOriginAt, bytes: DbgWordBytes, what: "a slot's origin word", before: DbgSlotClassWordAt, beforeWhat: "its class word")
+	requireRegionBefore(DbgSlotClassWordAt, bytes: DbgWordBytes, what: "a slot's class word", before: DbgSlotFixupAt, beforeWhat: "its fixup word")
+	requireRegionBefore(DbgSlotFixupAt, bytes: DbgWordBytes, what: "a slot's fixup word", before: DbgSlotBytes, beforeWhat: "the end of the slot")
 
-	if DbgClassIndirectCall <= DbgClassReturn or DbgClassIndirectJump <= DbgClassIndirectCall 'indirectClassesAreNotAboveTheSimulableOnes'
-		panic("debug agent: the indirect classes {DbgClassIndirectCall} and {DbgClassIndirectJump} do not both lie above the simulable classes, which end at {DbgClassReturn} — the agent refuses every class above that bound, so an indirect one inside it would be armed and then run out of line")
-	end 'indirectClassesAreNotAboveTheSimulableOnes'
+	if DbgClassIndirectJump <= DbgClassIndirectCall 'theIndirectJumpIsNotAboveTheArmableClasses'
+		panic("debug agent: the indirect-jump class {DbgClassIndirectJump} does not lie above the indirect-call class {DbgClassIndirectCall}, the last class the agent arms — the agent refuses every class above that bound, so an indirect jump inside it would be armed and then run out of line")
+	end 'theIndirectJumpIsNotAboveTheArmableClasses'
 
 	if cStringBytes(DbgEnvVarName).count() > DbgEnvNameWords * DbgWordBytes or DbgEnvNameWords * DbgWordBytes > DbgEnvNameBufferBytes 'theEnvNameDoesNotFitItsBuffer'
 		panic("debug agent: `{DbgEnvVarName}` and its terminator do not fit the {DbgEnvNameWords} words the tier writes into a {DbgEnvNameBufferBytes}-byte buffer")
@@ -124,6 +109,33 @@ export function checkDebugAgentGeometry(signatures ProgramSignatures, tierPath F
 		panic("debug agent: a read of up to {DbgMaxReadLength} bytes does not fit the {DbgReadBufBytes}-byte buffer")
 	end 'readCapAboveTheBuffer'
 end 'checkDebugAgentGeometry'
+
+function requireSlotHeadsFit()
+	if DbgCallTrailEnd > DbgSlotHeadTrailBytes or DbgJmpShortBytes > DbgSlotHeadTrailBytes 'aTrailPastItsAllowance'
+		panic("debug agent: a slot head may append {DbgSlotHeadTrailBytes} bytes to the instruction it displaces, and an indirect call's trail is {DbgCallTrailEnd}")
+	end 'aTrailPastItsAllowance'
+
+	requireRegionBefore(0, bytes: DbgMaxInstructionBytes + DbgSlotHeadTrailBytes, what: "the longest slot head", before: DbgSlotTailAt, beforeWhat: "the slot's tail")
+	requireRegionBefore(0, bytes: DbgCallHeadEnd, what: "a displaced direct call's head", before: DbgSlotTailAt, beforeWhat: "the slot's tail")
+
+	if DbgSlotTailFlagsAt > DbgShortJumpReach 'theTailIsPastAShortJump'
+		panic("debug agent: a slot tail's flags push at {DbgSlotTailFlagsAt} is past the {DbgShortJumpReach} bytes a short jump from its head reaches")
+	end 'theTailIsPastAShortJump'
+end 'requireSlotHeadsFit'
+
+function requireRegionBetween(start ParsedInt, bytes ParsedInt, what String, after ParsedInt, afterWhat String, before ParsedInt, beforeWhat String)
+	if start < after 'belowItsGap'
+		panic("debug agent: {what} at {start} lies below {afterWhat}, which ends at {after}")
+	end 'belowItsGap'
+
+	requireRegionBefore(start, bytes: bytes, what: what, before: before, beforeWhat: beforeWhat)
+end 'requireRegionBetween'
+
+function requireRegionBefore(start ParsedInt, bytes ParsedInt, what String, before ParsedInt, beforeWhat String)
+	if start + bytes > before 'runsPastIt'
+		panic("debug agent: {what} at {start} runs past {beforeWhat} at {before}")
+	end 'runsPastIt'
+end 'requireRegionBefore'
 
 let DbgWordBytes = 8
 
@@ -153,6 +165,7 @@ function debugAgentSymbolTablePins() returns TierGeometryPinArray
 	out.push(TierGeometryPin.create("a symbol table column's bytes", here: SymbolTableColumnBytes, named: "DbgSymtabColumnBytes"))
 	out.push(TierGeometryPin.create("a symbol table entry's bytes", here: SymbolTableEntryBytes, named: "DbgSymtabEntryBytes"))
 	out.push(TierGeometryPin.create("a symbol table entry's code-offset mask", here: SymtabEntryCodeOffsetMask, named: "DbgSymtabEntryCodeOffsetMask"))
+	out.push(TierGeometryPin.create("the symbol table's compiler-scaffolding bit", here: SymtabScaffoldingBit, named: "DbgSymtabScaffoldingBit"))
 	return out
 end 'debugAgentSymbolTablePins'
 
@@ -188,10 +201,17 @@ function debugAgentTierPins() returns TierGeometryPinArray
 	out.push(TierGeometryPin.create("the stop pc's offset", here: DbgOffStopPc, named: "DbgOffStopPc"))
 	out.push(TierGeometryPin.create("the stop sp's offset", here: DbgOffStopSp, named: "DbgOffStopSp"))
 	out.push(TierGeometryPin.create("the stop fp's offset", here: DbgOffStopFp, named: "DbgOffStopFp"))
+	out.push(TierGeometryPin.create("the stop fault's offset", here: DbgOffStopFault, named: "DbgOffStopFault"))
+	out.push(TierGeometryPin.create("the stop's missed-condition offset", here: DbgOffStopConditionMissed, named: "DbgOffStopConditionMissed"))
+	out.push(TierGeometryPin.create("a stop whose condition was met", here: DbgStopConditionMet, named: "DbgStopConditionMet"))
+	out.push(TierGeometryPin.create("a stop whose condition was missed", here: DbgStopConditionMissedYes, named: "DbgStopConditionMissedYes"))
 	out.push(TierGeometryPin.create("the register file's offset", here: DbgOffRegisters, named: "DbgOffRegisters"))
 	out.push(TierGeometryPin.create("the backtrace count's offset", here: DbgOffBtCount, named: "DbgOffBtCount"))
 	out.push(TierGeometryPin.create("the backtrace truncation flag's offset", here: DbgOffBtTruncated, named: "DbgOffBtTruncated"))
 	out.push(TierGeometryPin.create("the backtrace frames' offset", here: DbgOffBtFrames, named: "DbgOffBtFrames"))
+	out.push(TierGeometryPin.create("the backtrace's outer frame offset", here: DbgOffBtOuterFrame, named: "DbgOffBtOuterFrame"))
+	out.push(TierGeometryPin.create("the answering stop's sequence offset", here: DbgOffAckStopSeq, named: "DbgOffAckStopSeq"))
+	out.push(TierGeometryPin.create("a command answered with nothing parked", here: DbgAnsweredLive, named: "DbgAnsweredLive"))
 	out.push(TierGeometryPin.create("the read length's offset", here: DbgOffReadLen, named: "DbgOffReadLen"))
 	out.push(TierGeometryPin.create("the read status's offset", here: DbgOffReadStatus, named: "DbgOffReadStatus"))
 	out.push(TierGeometryPin.create("the read buffer's offset", here: DbgOffReadBuf, named: "DbgOffReadBuf"))
@@ -236,9 +256,34 @@ function debugAgentTierPins() returns TierGeometryPinArray
 	out.push(TierGeometryPin.create("the class word's shift", here: DbgClassShift, named: "DbgClassShift"))
 	out.push(TierGeometryPin.create("the class word's byte mask", here: DbgClassByteMask, named: "DbgClassByteMask"))
 	out.push(TierGeometryPin.create("the condition nibble's shift", here: DbgCondShift, named: "DbgCondShift"))
+	out.push(TierGeometryPin.create("the indirect-call class", here: DbgClassIndirectCall, named: "DbgClassIndirectCall"))
+	out.push(TierGeometryPin.create("an indirect call's form shift", here: DbgCallFormShift, named: "DbgCallFormShift"))
+	out.push(TierGeometryPin.create("the call-through-a-pc-relative-word form", here: DbgCallFormPcRelative, named: "DbgCallFormPcRelative"))
+	out.push(TierGeometryPin.create("an indirect call's mod/rm position shift", here: DbgCallModRmShift, named: "DbgCallModRmShift"))
 
 	out.push(TierGeometryPin.create("the breakpoint table's capacity", here: DbgBreakpointCapacity, named: "DbgBreakpointCapacity"))
+	out.push(TierGeometryPin.create("the slot pool's capacity", here: DbgSlotCapacity, named: "DbgSlotCapacity"))
 	out.push(TierGeometryPin.create("an out-of-line slot's bytes", here: DbgSlotBytes, named: "DbgSlotBytes"))
+	out.push(TierGeometryPin.create("a slot's tail offset", here: DbgSlotTailAt, named: "DbgSlotTailAt"))
+	out.push(TierGeometryPin.create("a slot tail's flags push", here: DbgSlotTailFlagsAt, named: "DbgSlotTailFlagsAt"))
+	out.push(TierGeometryPin.create("a slot tail's exit increment", here: DbgSlotTailIncAt, named: "DbgSlotTailIncAt"))
+	out.push(TierGeometryPin.create("a slot tail's flags pop", here: DbgSlotTailPopAt, named: "DbgSlotTailPopAt"))
+	out.push(TierGeometryPin.create("a slot tail's return", here: DbgSlotTailReturnAt, named: "DbgSlotTailReturnAt"))
+	out.push(TierGeometryPin.create("a displaced direct call's target push", here: DbgCallHeadTargetAt, named: "DbgCallHeadTargetAt"))
+	out.push(TierGeometryPin.create("a displaced direct call's jump to the tail", here: DbgCallHeadJumpAt, named: "DbgCallHeadJumpAt"))
+	out.push(TierGeometryPin.create("an indirect call trail's return push", here: DbgCallTrailBackAt, named: "DbgCallTrailBackAt"))
+	out.push(TierGeometryPin.create("an indirect call trail's target pop", here: DbgCallTrailPopAt, named: "DbgCallTrailPopAt"))
+	out.push(TierGeometryPin.create("an indirect call trail's jump to the tail", here: DbgCallTrailJumpAt, named: "DbgCallTrailJumpAt"))
+	out.push(TierGeometryPin.create("the bytes a slot head appends", here: DbgSlotHeadTrailBytes, named: "DbgSlotHeadTrailBytes"))
+	out.push(TierGeometryPin.create("a slot's return word", here: DbgSlotBackAt, named: "DbgSlotBackAt"))
+	out.push(TierGeometryPin.create("a slot's exit count", here: DbgSlotExitsAt, named: "DbgSlotExitsAt"))
+	out.push(TierGeometryPin.create("a slot's send count", here: DbgSlotSendsAt, named: "DbgSlotSendsAt"))
+	out.push(TierGeometryPin.create("a slot's origin word", here: DbgSlotOriginAt, named: "DbgSlotOriginAt"))
+	out.push(TierGeometryPin.create("a slot's class word", here: DbgSlotClassWordAt, named: "DbgSlotClassWordAt"))
+	out.push(TierGeometryPin.create("a slot's fixup word", here: DbgSlotFixupAt, named: "DbgSlotFixupAt"))
+	out.push(TierGeometryPin.create("the planted map's private offset", here: DbgPrivOffPlantedMap, named: "DbgPrivOffPlantedMap"))
+	out.push(TierGeometryPin.create("the planted map's byte shift", here: DbgPlantedMapShift, named: "DbgPlantedMapShift"))
+	out.push(TierGeometryPin.create("the planted map's bits per byte", here: DbgPlantedBitsPerByte, named: "DbgPlantedBitsPerByte"))
 
 	out.push(TierGeometryPin.create("the orphaned exit code", here: DbgOrphanedExitCode, named: "DbgOrphanedExitCode"))
 	out.push(TierGeometryPin.create("the park poll interval", here: DbgParkPollIntervalMs, named: "DbgParkPollIntervalMs"))
@@ -273,7 +318,6 @@ function debugAgentTierPins() returns TierGeometryPinArray
 	out.push(TierGeometryPin.create("a breakpoint's state field", here: DbgBpOffState, named: "DbgBpOffState"))
 	out.push(TierGeometryPin.create("a free breakpoint slot", here: DbgBpStateFree, named: "DbgBpStateFree"))
 	out.push(TierGeometryPin.create("a live breakpoint", here: DbgBpStateLive, named: "DbgBpStateLive"))
-	out.push(TierGeometryPin.create("a retired breakpoint", here: DbgBpStateRetired, named: "DbgBpStateRetired"))
 
 	out.push(TierGeometryPin.create("the continue-search disposition", here: DbgVehContinueSearch, named: "DbgVehContinueSearch"))
 	out.push(TierGeometryPin.create("the continue-execution disposition", here: DbgVehContinueExecution, named: "DbgVehContinueExecution"))
@@ -293,19 +337,33 @@ function debugAgentTierPins() returns TierGeometryPinArray
 	out.push(TierGeometryPin.create("the flags' register slot", here: DbgRegEFlags, named: "DbgRegEFlags"))
 
 	out.push(TierGeometryPin.create("the breakpoint byte", here: DbgBreakpointByte, named: "DbgBreakpointByte"))
-	out.push(TierGeometryPin.create("the indirect-jump opcode", here: DbgJmpIndirectOpcode, named: "DbgJmpIndirectOpcode"))
-	out.push(TierGeometryPin.create("the indirect-jump mod/rm byte", here: DbgJmpIndirectModRm, named: "DbgJmpIndirectModRm"))
-	out.push(TierGeometryPin.create("an absolute jump's bytes", here: DbgJmpAbsoluteBytes, named: "DbgJmpAbsoluteBytes"))
 	out.push(TierGeometryPin.create("the indirect-push opcode", here: DbgPushIndirectOpcode, named: "DbgPushIndirectOpcode"))
 	out.push(TierGeometryPin.create("the indirect-push mod/rm byte", here: DbgPushIndirectModRm, named: "DbgPushIndirectModRm"))
-	out.push(TierGeometryPin.create("a displaced call's push", here: DbgCallSlotPushAt, named: "DbgCallSlotPushAt"))
-	out.push(TierGeometryPin.create("a displaced call's jump", here: DbgCallSlotJumpAt, named: "DbgCallSlotJumpAt"))
-	out.push(TierGeometryPin.create("a displaced call's return address", here: DbgCallSlotReturnAt, named: "DbgCallSlotReturnAt"))
-	out.push(TierGeometryPin.create("a displaced call's target", here: DbgCallSlotTargetAt, named: "DbgCallSlotTargetAt"))
-	out.push(TierGeometryPin.create("a displaced call's bytes", here: DbgCallSlotBytes, named: "DbgCallSlotBytes"))
+	out.push(TierGeometryPin.create("an indirect push's bytes", here: DbgPushIndirectBytes, named: "DbgPushIndirectBytes"))
+	out.push(TierGeometryPin.create("the push-of-the-stack-top mod/rm byte", here: DbgPushStackTopModRm, named: "DbgPushStackTopModRm"))
+	out.push(TierGeometryPin.create("the stack-pointer SIB base", here: DbgSibStackPointerBase, named: "DbgSibStackPointerBase"))
+	out.push(TierGeometryPin.create("a push of the stack top's bytes", here: DbgPushStackTopBytes, named: "DbgPushStackTopBytes"))
+	out.push(TierGeometryPin.create("the indirect-pop opcode", here: DbgPopIndirectOpcode, named: "DbgPopIndirectOpcode"))
+	out.push(TierGeometryPin.create("the stack-relative pop's mod/rm byte", here: DbgPopStackDisp8ModRm, named: "DbgPopStackDisp8ModRm"))
+	out.push(TierGeometryPin.create("a stack-relative pop's bytes", here: DbgPopStackDisp8Bytes, named: "DbgPopStackDisp8Bytes"))
+	out.push(TierGeometryPin.create("the push-flags opcode", here: DbgPushFlagsOpcode, named: "DbgPushFlagsOpcode"))
+	out.push(TierGeometryPin.create("the pop-flags opcode", here: DbgPopFlagsOpcode, named: "DbgPopFlagsOpcode"))
+	out.push(TierGeometryPin.create("the lock prefix", here: DbgLockPrefix, named: "DbgLockPrefix"))
+	out.push(TierGeometryPin.create("the wide REX prefix", here: DbgRexWide, named: "DbgRexWide"))
+	out.push(TierGeometryPin.create("the increment group opcode", here: DbgIncGroupOpcode, named: "DbgIncGroupOpcode"))
+	out.push(TierGeometryPin.create("the rip-relative increment's mod/rm byte", here: DbgIncRipRelativeModRm, named: "DbgIncRipRelativeModRm"))
+	out.push(TierGeometryPin.create("a locked increment's bytes", here: DbgLockIncBytes, named: "DbgLockIncBytes"))
+	out.push(TierGeometryPin.create("the return opcode", here: DbgReturnOpcode, named: "DbgReturnOpcode"))
+	out.push(TierGeometryPin.create("the short-jump opcode", here: DbgJmpShortOpcode, named: "DbgJmpShortOpcode"))
+	out.push(TierGeometryPin.create("a short jump's bytes", here: DbgJmpShortBytes, named: "DbgJmpShortBytes"))
+	out.push(TierGeometryPin.create("the mod/rm bits a push keeps", here: DbgModRmKeepMask, named: "DbgModRmKeepMask"))
+	out.push(TierGeometryPin.create("the push's mod/rm reg field", here: DbgModRmPushReg, named: "DbgModRmPushReg"))
+	out.push(TierGeometryPin.create("a return's release position when it releases nothing", here: DbgReturnReleasesNothing, named: "DbgReturnReleasesNothing"))
+	out.push(TierGeometryPin.create("a one-byte opcode", here: DbgOneByte, named: "DbgOneByte"))
 	out.push(TierGeometryPin.create("the least representable displacement", here: DbgDisplacementMin, named: "DbgDisplacementMin"))
 	out.push(TierGeometryPin.create("the greatest representable displacement", here: DbgDisplacementMax, named: "DbgDisplacementMax"))
 	out.push(TierGeometryPin.create("a displacement's bytes", here: DbgDisplacementBytes, named: "DbgDisplacementBytes"))
+	out.push(TierGeometryPin.create("a return's release immediate's bytes", here: DbgReleaseImmediateBytes, named: "DbgReleaseImmediateBytes"))
 	out.push(TierGeometryPin.create("the execute/read-write protection", here: DbgPageExecuteReadWrite, named: "DbgPageExecuteReadWrite"))
 	out.push(TierGeometryPin.create("the execute/read protection", here: DbgPageExecuteRead, named: "DbgPageExecuteRead"))
 	out.push(TierGeometryPin.create("the trap flag's bit in the high flags byte", here: DbgTrapFlagByteBit, named: "DbgTrapFlagByteBit"))
@@ -320,7 +378,7 @@ function debugAgentTierPins() returns TierGeometryPinArray
 	out.push(TierGeometryPin.create("the committed-region state", here: DbgMemCommit, named: "DbgMemCommit"))
 	out.push(TierGeometryPin.create("the no-access protection", here: DbgPageNoAccess, named: "DbgPageNoAccess"))
 	out.push(TierGeometryPin.create("the guard-page protection", here: DbgPageGuard, named: "DbgPageGuard"))
-	out.push(TierGeometryPin.create("a double word's mask", here: DbgDwordMask, named: "DbgDwordMask"))
+	out.push(TierGeometryPin.create("a double word's mask", here: DwordMask, named: "DbgDwordMask"))
 	out.push(TierGeometryPin.create("a double word's bits", here: DbgDwordBits, named: "DbgDwordBits"))
 	out.push(TierGeometryPin.create("the segment name buffer's bytes", here: DbgSegmentNameBytes, named: "DbgSegmentNameBytes"))
 	out.push(TierGeometryPin.create("the env name buffer's bytes", here: DbgEnvNameBufferBytes, named: "DbgEnvNameBufferBytes"))
@@ -355,21 +413,26 @@ function debugAgentTierPins() returns TierGeometryPinArray
 	out.push(TierGeometryPin.create("the green-thread hold command", here: DbgCmdGtHold, named: "DbgCmdGtHold"))
 	out.push(TierGeometryPin.create("the green-thread release command", here: DbgCmdGtRelease, named: "DbgCmdGtRelease"))
 	out.push(TierGeometryPin.create("the pause command", here: DbgCmdPause, named: "DbgCmdPause"))
+	out.push(TierGeometryPin.create("the hold-return-point command", here: DbgCmdHoldReturnPoint, named: "DbgCmdHoldReturnPoint"))
+	out.push(TierGeometryPin.create("the release-return-point command", here: DbgCmdReleaseReturnPoint, named: "DbgCmdReleaseReturnPoint"))
 
 	out.push(TierGeometryPin.create("the pause stop reason", here: DbgStopReasonPause, named: "DbgStopReasonPause"))
 	out.push(TierGeometryPin.create("the unowned-trap stop reason", here: DbgStopReasonTrap, named: "DbgStopReasonTrap"))
+	out.push(TierGeometryPin.create("the fault stop reason", here: DbgStopReasonFault, named: "DbgStopReasonFault"))
 
 	out.push(TierGeometryPin.create("the no-such-thread refusal", here: DbgRefusalNoSuchThread, named: "DbgRefusalNoSuchThread"))
 	out.push(TierGeometryPin.create("the hold-table-full refusal", here: DbgRefusalHoldTableFull, named: "DbgRefusalHoldTableFull"))
 	out.push(TierGeometryPin.create("the thread-is-running refusal", here: DbgRefusalThreadIsRunning, named: "DbgRefusalThreadIsRunning"))
 	out.push(TierGeometryPin.create("the not-running refusal", here: DbgRefusalNotRunning, named: "DbgRefusalNotRunning"))
 	out.push(TierGeometryPin.create("the not-pausable refusal", here: DbgRefusalNotPausable, named: "DbgRefusalNotPausable"))
+	out.push(TierGeometryPin.create("the fault-is-terminal refusal", here: DbgRefusalFaultIsTerminal, named: "DbgRefusalFaultIsTerminal"))
 
 	out.push(TierGeometryPin.create("the running green-thread status", here: DbgGtStatusRunning, named: "DbgGtStatusRunning"))
 	out.push(TierGeometryPin.create("the ready green-thread status", here: DbgGtStatusReady, named: "DbgGtStatusReady"))
 	out.push(TierGeometryPin.create("the waiting green-thread status", here: DbgGtStatusWaiting, named: "DbgGtStatusWaiting"))
 	out.push(TierGeometryPin.create("the held green-thread status", here: DbgGtStatusHeld, named: "DbgGtStatusHeld"))
 
+	out.push(TierGeometryPin.create("the unconditional condition kind", here: DbgCondKindNone, named: "DbgCondKindNone"))
 	out.push(TierGeometryPin.create("the register condition kind", here: DbgCondKindRegister, named: "DbgCondKindRegister"))
 	out.push(TierGeometryPin.create("the stack-slot condition kind", here: DbgCondKindStackSlot, named: "DbgCondKindStackSlot"))
 	out.push(TierGeometryPin.create("the equality operator", here: DbgCondOpEqual, named: "DbgCondOpEqual"))
@@ -406,6 +469,10 @@ function debugAgentTierPins() returns TierGeometryPinArray
 	out.push(TierGeometryPin.create("the scheduler-lock-held flag's private offset", here: DbgPrivOffSchedLockHeld, named: "DbgPrivOffSchedLockHeld"))
 	out.push(TierGeometryPin.create("the hold table's private offset", here: DbgPrivOffHold, named: "DbgPrivOffHold"))
 	out.push(TierGeometryPin.create("the context buffer's private offset", here: DbgPrivOffContext, named: "DbgPrivOffContext"))
+	out.push(TierGeometryPin.create("the stop lock owner's private offset", here: DbgPrivOffStopLockOwner, named: "DbgPrivOffStopLockOwner"))
+	out.push(TierGeometryPin.create("the return point hold's private offset", here: DbgPrivOffReturnHold, named: "DbgPrivOffReturnHold"))
+	out.push(TierGeometryPin.create("no return point held", here: DbgNoReturnHold, named: "DbgNoReturnHold"))
+	out.push(TierGeometryPin.create("the declined stack claim", here: DbgClaimDeclined, named: "DbgClaimDeclined"))
 	out.push(TierGeometryPin.create("the placed-hold count's private offset", here: DbgPrivOffHoldsPlaced, named: "DbgPrivOffHoldsPlaced"))
 	out.push(TierGeometryPin.create("the green-thread roster's private offset", here: DbgPrivOffGtRoster, named: "DbgPrivOffGtRoster"))
 	out.push(TierGeometryPin.create("the hold table's capacity", here: DbgHoldCapacity, named: "DbgHoldCapacity"))
@@ -420,7 +487,6 @@ function debugAgentTierPins() returns TierGeometryPinArray
 	out.push(TierGeometryPin.create("the CONTEXT's request field", here: DbgCtxOffFlagsRequest, named: "DbgCtxOffFlagsRequest"))
 	out.push(TierGeometryPin.create("the CONTEXT's control request", here: DbgCtxControlRequest, named: "DbgCtxControlRequest"))
 
-	out.push(TierGeometryPin.create("the return byte", here: DbgReturnByte, named: "DbgReturnByte"))
 	out.push(TierGeometryPin.create("the pause trampoline's bytes", here: DbgPauseTrampolineBytes, named: "DbgPauseTrampolineBytes"))
 	out.push(TierGeometryPin.create("a failed suspend", here: DbgSuspendFailed, named: "DbgSuspendFailed"))
 	out.push(TierGeometryPin.create("the DebugStream ring's write cursor", here: DbgDsOffWriteCursor, named: "DbgDsOffWriteCursor"))
@@ -446,6 +512,7 @@ function debugAgentTierPins() returns TierGeometryPinArray
 	out.push(TierGeometryPin.create("the cooperative preemption request", here: GtStackGuardPreempt, named: "DbgGtStackGuardPreempt"))
 	out.push(TierGeometryPin.create("a free signal claim", here: PreemptClaimFree, named: "DbgPreemptClaimFree"))
 	out.push(TierGeometryPin.create("a held signal claim", here: PreemptClaimHeld, named: "DbgPreemptClaimHeld"))
+	out.push(TierGeometryPin.create("a step's hold on the signal claim", here: DbgPreemptClaimStep, named: "DbgPreemptClaimStep"))
 
 	return out
 end 'debugAgentTierPins'

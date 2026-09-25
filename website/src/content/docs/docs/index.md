@@ -23,8 +23,8 @@ in it.
 - [Standard Library](/docs/stdlib/) — strings, collections, files, networking, and more.
 - [CLI Reference](/docs/cli/) — every `maxon` command and flag.
 - [Targets](/docs/cli/targets/) — the platforms Maxon compiles for, and cross-compiling.
-- [Debugging and Profiling](/docs/cli/debugging/) — debug info, coverage, profiling and the memory monitor.
-- [Editor Support](/docs/cli/editor/) — the VS Code extension and the language server.
+- [Debugging and Profiling](/docs/cli/debugging/) — the interactive debugger, debug info, coverage, profiling and the memory monitor.
+- [Editor Support](/docs/cli/editor/) — the VS Code extension, the language server and the debug adapter.
 - [Error Codes](/docs/cli/error-codes/) — what each compiler diagnostic means.
 - [Best Practices](/docs/best-practices/writing-maxon-code/) — how to write idiomatic Maxon.
 - [BNF Specification](/docs/spec/bnf-syntax/) — the formal grammar.

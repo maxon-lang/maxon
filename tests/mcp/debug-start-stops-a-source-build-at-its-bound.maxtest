@@ -1,0 +1,20 @@
+let SourceBoundStagingDir = "temp/mcp-debug-source-build-bound"
+let LeastBoundSeconds = "0.001"
+
+test 'debug_start stops the build of a source at its bound and answers instead of launching'
+	let program = stagedProgram(SourceBoundStagingDir, fileName: "main.maxon", source: debuggableProgramSource())
+
+	var session = StreamingMcpSession.startFrom(testedCompilerPath())
+	stdioHandshake(session)
+
+	let bounded = stdioToolCall(session, id: 2, name: DebugStartTool, argumentsJson: argumentsOf([sourceMember(program.toString()), secondsMember(TimeoutSecondsArgument, seconds: LeastBoundSeconds)]))
+	let unbounded = stdioToolCall(session, id: 3, name: DebugStartTool, argumentsJson: sourceArgument(program.toString()))
+	let stopped = stdioToolCall(session, id: 4, name: DebugStopTool)
+
+	_ = try session.close() otherwise 0
+
+	try Expect.isTrue(toolCallIsError(bounded), message: "a build bounded at {LeastBoundSeconds} s cannot finish, so `{DebugStartTool}` must answer a failure rather than launch: {toolCallText(bounded)}")
+	try Expect.contains(toolCallText(bounded), needle: BoundStoppedMarker, message: "the failure must say the build was stopped at its bound: {toolCallText(bounded)}")
+	try Expect.isFalse(toolCallIsError(unbounded), message: "the control: the same `source` without `{TimeoutSecondsArgument}` must build and launch: {toolCallText(unbounded)}")
+	try Expect.isFalse(toolCallIsError(stopped), message: "`{DebugStopTool}` refused to end the control's session: {toolCallText(stopped)}")
+end 'debug_start stops the build of a source at its bound and answers instead of launching'

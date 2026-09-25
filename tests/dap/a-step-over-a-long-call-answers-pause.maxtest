@@ -1,0 +1,59 @@
+let StepOverPauseCaseLabel = "a-step-over-a-long-call-answers-pause"
+let MainGrindAnchor = "main-grind"
+let StepWalkBudgetSeconds = 20
+let PauseAnswerBudgetMs = 5000
+let WalkHeadStartMs = 300
+
+type StepOverPauseSession implements DapSession
+	let launchArguments as String
+	let source as FilePath
+	let anchored as SourceLine
+	export var breakpointReason as String
+	export var nextAnswered as bool
+	export var pauseAnswered as bool
+	export var pauseAnsweredAfterMs as DurationMs
+	export var pauseReason as String
+
+	static function create(launchArguments String, source FilePath, anchored SourceLine) returns StepOverPauseSession
+		return Self{launchArguments: launchArguments, source: source, anchored: anchored, breakpointReason: "", nextAnswered: false, pauseAnswered: false, pauseAnsweredAfterMs: 0, pauseReason: ""}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+		_ = try client.request(LaunchCommand, argumentsJson: self.launchArguments)
+		_ = try client.awaitEvent(InitializedEvent)
+		_ = try client.request(SetBreakpointsCommand, argumentsJson: dapSetBreakpointsArguments(self.source, line: self.anchored))
+		_ = try client.request(ConfigurationDoneCommand)
+
+		let atTheCall = try client.awaitEvent(StoppedEvent)
+		self.breakpointReason = dapBodyString(atTheCall, key: "reason")
+		let threadId = dapBodyNumber(atTheCall, key: "threadId")
+
+		_ = try client.request(SetBreakpointsCommand, argumentsJson: dapClearBreakpointsArguments(self.source))
+		self.nextAnswered = dapSuccess(try client.request(NextCommand, argumentsJson: dapThreadArguments(threadId)))
+
+		sleep(WalkHeadStartMs)
+
+		let asked = Clock.nowMs()
+		self.pauseAnswered = dapSuccess(try client.request(PauseCommand, argumentsJson: dapThreadArguments(threadId)))
+		self.pauseAnsweredAfterMs = Clock.elapsedMs(asked)
+
+		self.pauseReason = dapBodyString(try client.awaitEvent(StoppedEvent), key: "reason")
+
+		_ = try client.request(DisconnectCommand)
+	end 'drive'
+end 'StepOverPauseSession'
+
+test 'a pause sent while next walks over a long call is answered at once and stops the program'
+	let staged = dapStagedFixture(StepOverPauseCaseLabel, fixture: SpinFixtureName)
+	let executable = dapBuildFixture(staged)
+	let launchArguments = "\{\"program\":{Json.quote(executable.toString())},\"stopTimeoutSeconds\":{StepWalkBudgetSeconds}\}"
+	var session = StepOverPauseSession.create(launchArguments, source: dapStagedSource(staged), anchored: dapAnchorLine(staged, anchor: MainGrindAnchor))
+	try dapRunSession(session, completing: "complete")
+
+	try Expect.equal(session.breakpointReason, expected: BreakpointReason, message: "the session must first stop on the breakpoint at the call; it stopped for `{session.breakpointReason}`")
+	try Expect.isTrue(session.nextAnswered, message: "`{NextCommand}` must answer its own request successfully before the walk settles")
+	try Expect.isTrue(session.pauseAnswered, message: "`{PauseCommand}` sent while `{NextCommand}` walks must be answered successfully")
+	try Expect.isTrue(session.pauseAnsweredAfterMs < PauseAnswerBudgetMs, message: "`{PauseCommand}` must be answered while the step is still walking, not after its {StepWalkBudgetSeconds} s budget; it was answered after {session.pauseAnsweredAfterMs} ms")
+	try Expect.equal(session.pauseReason, expected: PauseReason, message: "the walk over a call that never returns never settles by itself, so the stop that follows the pause is the pause's; it said `{session.pauseReason}`")
+end 'a pause sent while next walks over a long call is answered at once and stops the program'

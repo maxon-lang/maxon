@@ -1,0 +1,42 @@
+let FaultWalksCaseLabel = "every-walk-from-a-fault-is-refused"
+let FaultIsTerminalText = "fault-is-terminal"
+let RefusedWalks = 4
+
+test 'finish, next, until and step at a fault stop are each refused and the stop stays'
+	let staged = builtFixture(FaultWalksCaseLabel, fixture: FaultCalleeFixtureName)
+	let commands = debugCommandLine([RunCommand, FinishCommand, NextCommand, UntilCommand, StepCommand, BacktraceCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let kinds = eventKinds(events)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let stops = eventsOfKind(events, kind: StopEventName)
+
+	try Expect.equal(stops.count() as AssertedInt, expected: 1, message: "the fault is the session's one stop. It printed: {renderedRows(kinds)}. {said}")
+
+	let stopped = eventAt(stops, index: 0)
+	try Expect.equal(textOf(stopped, node: stopped.root, key: ReasonKey), expected: FaultStopReason, message: "the stop is the fault. {said}")
+
+	let errors = eventsOfKind(events, kind: ErrorEventName)
+	try Expect.equal(errors.count() as AssertedInt, expected: RefusedWalks, message: "⛔ A FAULT IS TERMINAL FOR EVERY WALK, NOT ONLY FOR THE AGENT'S ONE-INSTRUCTION STEP. `{FinishCommand}` plants a return point and resumes, and a resumed fault re-runs the faulting instruction and ends the program; each of the four walks must be refused where it stands. It printed: {renderedRows(kinds)}. {said}")
+
+	for error in errors 'eachRefusal'
+		try Expect.contains(textOf(error, node: error.root, key: MessageKey), needle: FaultIsTerminalText, message: "each refusal names why: the fault is terminal. {said}")
+	end 'eachRefusal'
+
+	try Expect.equal(eventsOfKind(events, kind: BacktraceEventName).count() as AssertedInt, expected: 1, message: "the refused walks moved nothing, so `{BacktraceCommand}` still walks the fault. {said}")
+	try Expect.isFalse(crashedBeforeTheWalk(kinds), message: "the program must not have crashed before the `{BacktraceCommand}` that follows the refusals. It printed: {renderedRows(kinds)}. {said}")
+end 'finish, next, until and step at a fault stop are each refused and the stop stays'
+
+function crashedBeforeTheWalk(kinds StringArray) returns bool
+	for kind in kinds 'eachEvent'
+		if kind == BacktraceEventName 'theWalkCameFirst'
+			return false
+		end 'theWalkCameFirst'
+
+		if kind == CrashEventName 'theCrashCameFirst'
+			return true
+		end 'theCrashCameFirst'
+	end 'eachEvent'
+
+	return false
+end 'crashedBeforeTheWalk'

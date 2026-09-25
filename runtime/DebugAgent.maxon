@@ -44,6 +44,11 @@ let DbgOffTextSize = 0x0A8
 let DbgOffStopPc = 0x0B0
 let DbgOffStopSp = 0x0B8
 let DbgOffStopFp = 0x0C0
+let DbgOffStopFault = 0x0C8
+let DbgOffStopConditionMissed = 0x0D0
+let DbgOffBtOuterFrame = 0x0D8
+let DbgOffAckStopSeq = 0x0E0
+let DbgAnsweredLive = 0
 let DbgOffRegisters = 0x100
 let DbgOffBtCount = 0x380
 let DbgOffBtTruncated = 0x388
@@ -97,6 +102,8 @@ let DbgCmdGtBacktrace = 10
 let DbgCmdGtHold = 11
 let DbgCmdGtRelease = 12
 let DbgCmdPause = 13
+let DbgCmdHoldReturnPoint = 14
+let DbgCmdReleaseReturnPoint = 15
 
 let DbgCmdResultDone = 1
 let DbgCmdResultRefused = 0
@@ -106,6 +113,15 @@ let DbgStopReasonBreakpoint = 2
 let DbgStopReasonStep = 3
 let DbgStopReasonPause = 4
 let DbgStopReasonTrap = 5
+let DbgStopReasonFault = 6
+
+let DbgStopConditionMet = 0
+let DbgStopConditionMissedYes = 1
+
+let DbgLandingNotArmed = 0
+let DbgLandingHit = 1
+let DbgLandingHeldOpen = 2
+let DbgLandingConditionFalse = 3
 
 let DbgStopKindRunning = 0
 let DbgStopKindNoThread = 1
@@ -116,6 +132,7 @@ let DbgGtStatusReady = 2
 let DbgGtStatusWaiting = 3
 let DbgGtStatusHeld = 5
 
+let DbgCondKindNone = 0
 let DbgCondKindRegister = 1
 let DbgCondKindStackSlot = 2
 
@@ -140,6 +157,7 @@ let DbgRefusalHoldTableFull = 9
 let DbgRefusalThreadIsRunning = 10
 let DbgRefusalNotRunning = 11
 let DbgRefusalNotPausable = 12
+let DbgRefusalFaultIsTerminal = 13
 
 let DbgClassPlain = 1
 let DbgClassPcRelativeData = 2
@@ -147,13 +165,27 @@ let DbgClassDirectCall = 3
 let DbgClassDirectJump = 4
 let DbgClassConditionalJump = 5
 let DbgClassReturn = 6
+let DbgClassIndirectCall = 7
 
 let DbgClassShift = 8
 let DbgClassByteMask = 0xFF
 let DbgCondShift = 16
 
+let DbgCallFormShift = 24
+let DbgCallFormPcRelative = 3
+let DbgCallModRmShift = 32
+
 let DbgBreakpointCapacity = 64
-let DbgSlotBytes = 32
+let DbgSlotCapacity = 128
+let DbgSlotBytes = 128
+let DbgSlotTailAt = 32
+let DbgSlotHeadTrailBytes = 15
+let DbgSlotBackAt = 56
+let DbgSlotExitsAt = 64
+let DbgSlotSendsAt = 72
+let DbgSlotOriginAt = 80
+let DbgSlotClassWordAt = 88
+let DbgSlotFixupAt = 96
 
 let DbgOrphanedExitCode = 97
 let DbgParkPollIntervalMs = 5
@@ -195,12 +227,18 @@ let DbgPrivOffPauseAttempts = 0x070
 let DbgPrivOffSchedLockHeld = 0x078
 let DbgPrivOffHold = 0x080
 let DbgPrivOffContext = 0x280
+let DbgPrivOffPlantedMap = 0x7E0
+let DbgPrivOffReturnHold = 0x7E8
+let DbgNoReturnHold = 0
+let DbgPrivOffStopLockOwner = 0x7F0
 let DbgPrivOffHoldsPlaced = 0x7F8
 let DbgPrivOffBreakpoints = 0x800
 let DbgPrivOffGtRoster = 0x2000
 let DbgPrivBreakpointStride = 96
 let DbgPrivBytes = 0x40000
-let DbgSlotPoolBytes = 4096
+let DbgSlotPoolBytes = 16384
+let DbgAllocationGranule = 0x10000
+let DbgSlotPoolReach = 0x40000000
 let DbgAgentShadowBytes = 32
 
 let DbgHoldCapacity = 16
@@ -220,12 +258,12 @@ let DbgBpOffCondition = 48
 
 let DbgBpStateFree = 0
 let DbgBpStateLive = 1
-let DbgBpStateRetired = 2
 
 let DbgVehContinueSearch = 0
 let DbgVehContinueExecution = -1
 let DbgExcCodeBreakpoint = 0x80000003
 let DbgExcCodeSingleStep = 0x80000004
+let DbgNoFault = 0
 
 let DbgCtxOffGpr0 = 0x078
 let DbgCtxOffXmm0 = 0x1A0
@@ -243,21 +281,35 @@ let DbgRegRbp = 5
 let DbgRegEFlags = 32
 
 let DbgBreakpointByte = 0xCC
-let DbgReturnByte = 0xC3
-let DbgPauseTrampolineBytes = 2
-let DbgJmpIndirectOpcode = 0xFF
-let DbgJmpIndirectModRm = 0x25
-let DbgJmpAbsoluteBytes = 14
+let DbgPauseTrampolineBytes = 1
 let DbgPushIndirectOpcode = 0xFF
 let DbgPushIndirectModRm = 0x35
-let DbgCallSlotPushAt = 0
-let DbgCallSlotJumpAt = 6
-let DbgCallSlotReturnAt = 12
-let DbgCallSlotTargetAt = 20
-let DbgCallSlotBytes = 28
+let DbgPushIndirectBytes = 6
+let DbgPushStackTopModRm = 0x34
+let DbgSibStackPointerBase = 0x24
+let DbgPushStackTopBytes = 3
+let DbgPopIndirectOpcode = 0x8F
+let DbgPopStackDisp8ModRm = 0x44
+let DbgPopStackDisp8Bytes = 4
+let DbgPushFlagsOpcode = 0x9C
+let DbgPopFlagsOpcode = 0x9D
+let DbgLockPrefix = 0xF0
+let DbgRexWide = 0x48
+let DbgIncGroupOpcode = 0xFF
+let DbgIncRipRelativeModRm = 0x05
+let DbgLockIncBytes = 8
+let DbgReturnOpcode = 0xC3
+let DbgJmpShortOpcode = 0xEB
+let DbgJmpShortBytes = 2
+let DbgPlantedMapShift = 3
+let DbgPlantedBitsPerByte = 8
+let DbgModRmKeepMask = 0xC7
+let DbgModRmPushReg = 0x30
+let DbgReturnReleasesNothing = 0
 let DbgDisplacementMin = -2147483648
 let DbgDisplacementMax = 2147483647
 let DbgDisplacementBytes = 4
+let DbgReleaseImmediateBytes = 2
 let DbgPageExecuteReadWrite = 0x40
 let DbgPageExecuteRead = 0x20
 let DbgTrapFlagByteBit = 1
@@ -279,6 +331,7 @@ let DbgSymtabOffEntries = 8
 let DbgSymtabColumnBytes = 4
 let DbgSymtabEntryBytes = 8
 let DbgSymtabEntryCodeOffsetMask = 0xFFFFFFFF
+let DbgSymtabScaffoldingBit = 0x80
 
 let DbgSuspendFailed = 0xFFFFFFFF
 
@@ -316,21 +369,29 @@ let DbgGtStackGuardPreempt = -1314
 
 let DbgPreemptClaimFree = 0
 let DbgPreemptClaimHeld = 1
+let DbgPreemptClaimStep = 2
 
 let DbgWordBytes = 8
 let DbgNothing = 0 as MachineWord
+let DbgTrapPlanted = 1 as MachineWord
 let DbgLockFree = 0
 let DbgLockHeld = 1
+let DbgNoOwner = 0
+let DbgClaimDeclined = 0
 let DbgNotFound = -1
 let DbgByteBits = 8
 let DbgByteMask = 0xFF
 let DbgLowNibbleMask = 0xF
 let DbgOneByte = 1
-
-let DbgCharUnderscore = 95
-let DbgCharM = 109
-let DbgCharR = 114
-let DbgCharT = 116
+let DbgSlotTailFlagsAt = DbgSlotTailAt + DbgPushIndirectBytes
+let DbgSlotTailIncAt = DbgSlotTailFlagsAt + DbgOneByte
+let DbgSlotTailPopAt = DbgSlotTailIncAt + DbgLockIncBytes
+let DbgSlotTailReturnAt = DbgSlotTailPopAt + DbgOneByte
+let DbgCallHeadTargetAt = DbgPushIndirectBytes
+let DbgCallHeadJumpAt = DbgCallHeadTargetAt + DbgPushIndirectBytes
+let DbgCallTrailBackAt = DbgPushStackTopBytes
+let DbgCallTrailPopAt = DbgCallTrailBackAt + DbgPushIndirectBytes
+let DbgCallTrailJumpAt = DbgCallTrailPopAt + DbgPopStackDisp8Bytes
 
 let DbgCondOverflow = 0x0
 let DbgCondNoOverflow = 0x1
@@ -354,6 +415,25 @@ let DbgFlagParityMask = 0x04
 let DbgFlagZeroMask = 0x40
 let DbgFlagSignMask = 0x80
 let DbgFlagOverflowInHighByteMask = 0x08
+
+// Near `.text` so a displaced pc-relative operand can still reach its referent from a slot; one
+// that cannot is refused by `dbgSetBreakpoint`'s reach check.
+function dbgSlotPoolNear(textBase DbgWord) returns DbgWord
+	let lowestReachable = textBase - DbgSlotPoolReach
+	var candidate = textBase - (textBase and (DbgAllocationGranule - 1)) - DbgAllocationGranule
+
+	while candidate > lowestReachable and candidate > 0 'eachCandidate'
+		let pool = __Raw.osDebugHost(DbgVerbAllocExecPages, a0: DbgSlotPoolBytes as MachineWord, a1: candidate as MachineWord, a2: DbgNothing, a3: DbgNothing) as DbgWord
+
+		if pool != 0 'placed'
+			return pool
+		end 'placed'
+
+		candidate = candidate - DbgAllocationGranule
+	end 'eachCandidate'
+
+	return __Raw.osDebugHost(DbgVerbAllocExecPages, a0: DbgSlotPoolBytes as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing) as DbgWord
+end 'dbgSlotPoolNear'
 
 // Every program reaches this before `main`. The dark path — nothing named in `MAXON_DEBUG` — is one
 // environment lookup and a return: no page is opened or mapped ahead of a name.
@@ -397,14 +477,24 @@ module function __dbg_init()
 
 	// The displaced instructions live in pages of their own rather than in a chunk of `.text`: anything
 	// inside the image sits within `__symtable`'s range and is walked as the program's own code.
-	let pool = __Raw.osDebugHost(DbgVerbAllocExecPages, a0: DbgSlotPoolBytes as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing) as DbgWord
+	let textBase = __Raw.dbgTextBase() as DbgWord
+	let pool = dbgSlotPoolNear(textBase)
 
 	if pool == 0 'noSlotPool'
 		return
 	end 'noSlotPool'
 
+	let textSize = (__Raw.dbgTextLimit() as DbgWord) - textBase
+	let plantedMap = __Raw.osAllocPages(((textSize shr DbgPlantedMapShift) + 1) as MachineWord) as DbgWord
+
+	if plantedMap <= 0 'noPlantedMap'
+		return
+	end 'noPlantedMap'
+
+	dbgWriteSlotTails(pool)
 	dbgStore(private, offset: DbgPrivOffAgentSp, value: private + DbgPrivBytes - DbgAgentShadowBytes)
 	dbgStore(private, offset: DbgPrivOffSlotPoolBase, value: pool)
+	dbgStore(private, offset: DbgPrivOffPlantedMap, value: plantedMap)
 	dbgStore(private, offset: DbgPrivOffResumeAction, value: DbgResumeContinue)
 
 	let driverHandle = __Raw.osDebugHost(DbgVerbOpenDriverProcess, a0: dbgLoad(base, offset: DbgOffDriverPid) as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing) as DbgWord
@@ -414,10 +504,8 @@ module function __dbg_init()
 	end 'theDriverIsAlreadyGone'
 
 	dbgStore(private, offset: DbgPrivOffDriverHandle, value: driverHandle)
-
-	let textBase = __Raw.dbgTextBase() as DbgWord
 	dbgStore(base, offset: DbgOffTextBase, value: textBase)
-	dbgStore(base, offset: DbgOffTextSize, value: (__Raw.dbgTextLimit() as DbgWord) - textBase)
+	dbgStore(base, offset: DbgOffTextSize, value: textSize)
 	dbgStore(base, offset: DbgOffAgentPid, value: __Raw.osDebugHost(DbgVerbProcessId, a0: DbgNothing, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing) as DbgWord)
 	dbgStore(base, offset: DbgOffAgentPrivate, value: private)
 
@@ -425,17 +513,13 @@ module function __dbg_init()
 	dbgStore(private, offset: DbgPrivOffMainThreadId, value: mainThreadId)
 	dbgStore(private, offset: DbgPrivOffMainThreadHandle, value: __Raw.osDebugHost(DbgVerbOpenThread, a0: mainThreadId as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing) as DbgWord)
 
-	// An `int3; ret` pair of its own, outside the image: a pause lands the interrupted thread on a byte the
-	// trap thunk recognises, and the `ret` behind it is where the resume sends it back through the return
-	// address the injection pushed.
-	let trampoline = __Raw.osDebugHost(DbgVerbAllocExecPages, a0: DbgSlotPoolBytes as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing) as DbgWord
+	let trampoline = __Raw.osDebugHost(DbgVerbAllocExecPages, a0: DbgPauseTrampolineBytes as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing) as DbgWord
 
 	if trampoline == 0 'noTrampoline'
 		return
 	end 'noTrampoline'
 
 	dbgStoreByte(trampoline, offset: 0, value: DbgBreakpointByte)
-	dbgStoreByte(trampoline, offset: DbgOneByte, value: DbgReturnByte)
 	dbgFlushCode(trampoline, length: DbgPauseTrampolineBytes)
 	dbgStore(private, offset: DbgPrivOffPauseTrampoline, value: trampoline)
 
@@ -449,7 +533,7 @@ module function __dbg_init()
 	if dbgLoad(base, offset: DbgOffStopAtEntry) == DbgStopAtEntryYes 'parkBeforeMain'
 		dbgTakeStopLock(private)
 		dbgStopTheWorld(private)
-		dbgPublishStop(base, reason: DbgStopReasonEntry)
+		dbgPublishStop(base, reason: DbgStopReasonEntry, fault: DbgNoFault, conditionMissed: false)
 		dbgPark(base, private: private, stopKind: DbgStopKindNoThread)
 		dbgStartTheWorld(private)
 		dbgDropStopLock(private)
@@ -525,28 +609,73 @@ module function __dbg_gt_should_hold(gt MachineWord) returns MachineWord
 		return DbgNothing
 	end 'nothingIsHeldAtAll'
 
-	let handle = gt as DbgWord
-	let slot = dbgHoldSlotOf(private, handle: handle)
-
-	if slot == DbgNotFound 'nobodyHoldsThisAddress'
+	if not dbgHoldsThisLife(private, gt: gt as DbgWord) 'notHeldInThisLife'
 		return DbgNothing
-	end 'nobodyHoldsThisAddress'
-
-	let at = dbgHoldSlotAddr(private, slot: slot)
-
-	if dbgLoad(at, offset: DbgHoldOffFuncPtr) != dbgLoad(handle, offset: DbgGtOffFuncPtr) or dbgLoad(at, offset: DbgHoldOffStackBase) != dbgLoad(handle, offset: DbgGtOffStackBase) 'aDifferentLifeAtTheSameAddress'
-		return DbgNothing
-	end 'aDifferentLifeAtTheSameAddress'
+	end 'notHeldInThisLife'
 
 	return 1 as MachineWord
 end '__dbg_gt_should_hold'
 
+module function __dbg_trap_planted_at(address MachineWord) returns MachineWord
+	let base = dbgControlSegment()
+
+	if base == 0 'dark'
+		return DbgNothing
+	end 'dark'
+
+	let textOffset = (address as DbgWord) - dbgLoad(base, offset: DbgOffTextBase)
+
+	if textOffset < 0 or textOffset >= dbgLoad(base, offset: DbgOffTextSize) 'outsideTheCode'
+		return DbgNothing
+	end 'outsideTheCode'
+
+	if (dbgLoadByte(dbgPlantedMapByte(dbgPrivateBlock(), textOffset: textOffset), offset: 0) and dbgPlantedBitOf(textOffset)) == 0 'neverPlantedThere'
+		return DbgNothing
+	end 'neverPlantedThere'
+
+	return DbgTrapPlanted
+end '__dbg_trap_planted_at'
+
+function dbgPlantedMapByte(private DbgWord, textOffset DbgWord) returns DbgWord
+	return dbgLoad(private, offset: DbgPrivOffPlantedMap) + (textOffset shr DbgPlantedMapShift)
+end 'dbgPlantedMapByte'
+
+function dbgPlantedBitOf(textOffset DbgWord) returns DbgWord
+	var remaining = textOffset and (DbgPlantedBitsPerByte - 1)
+	var bit = 1 as DbgWord
+
+	while remaining > 0 'eachDoubling'
+		bit = bit + bit
+		remaining = remaining - 1
+	end 'eachDoubling'
+
+	return bit
+end 'dbgPlantedBitOf'
+
+function dbgMarkPlanted(private DbgWord, textOffset DbgWord)
+	let at = dbgPlantedMapByte(private, textOffset: textOffset)
+	dbgStoreByte(at, offset: 0, value: dbgLoadByte(at, offset: 0) or dbgPlantedBitOf(textOffset))
+end 'dbgMarkPlanted'
+
 // The one agent-owned stack, handed out under a lock spun here over the compare-and-swap the encoder
-// already emits, so serializing two stopped machines asks nothing new of it. Trap code runs on it so
-// that stopping a green thread costs it only the OS dispatch frame its reserve already covers, which
-// `requireDebugTrapFitsItsReserve` certifies.
+// already emits, so serializing two stopped machines asks nothing new of it. The claim runs on the
+// trapping thread's own stack, inside the reserve `requireDebugTrapFitsItsReserve` certifies.
 module function __dbg_claim_stack() returns MachineWord
 	let private = dbgPrivateBlock()
+
+	// A thread that traps again while it owns the stop would spin on its own lock for ever. The
+	// decline passes the exception on, and the world is let go first so a handler that ends the
+	// process can take the locks the stop holds (see `dbgExitOrphaned`).
+	if dbgLoad(private, offset: DbgPrivOffStopLockOwner) == dbgCurrentThreadId() 'thisThreadAlreadyOwnsTheStop'
+		dbgLetGoOfTheWorld(private)
+		return DbgClaimDeclined as MachineWord
+	end 'thisThreadAlreadyOwnsTheStop'
+
+	// `dbgStopTheWorld` takes the suspend window first, so a thread holding it would spin for ever.
+	if (__Raw.loadWord(__Raw.schedPreemptExtLockAddr(), offset: 0) as DbgWord) == dbgCurrentThreadId() 'thisThreadHoldsTheSuspendWindow'
+		return DbgClaimDeclined as MachineWord
+	end 'thisThreadHoldsTheSuspendWindow'
+
 	dbgTakeStopLock(private)
 	return dbgLoad(private, offset: DbgPrivOffAgentSp) as MachineWord
 end '__dbg_claim_stack'
@@ -558,24 +687,24 @@ end '__dbg_release_stack'
 // The same lock the service thread takes, which is what makes the two servicers one: a parked stop holds it
 // for the whole park, so the thread's poll finds it taken and answers nothing while a machine is stopped.
 function dbgTakeStopLock(private DbgWord)
-	var claimed = false
-
-	while not claimed 'spin'
-		if __Raw.atomicCas((private + DbgPrivOffStopLock) as MachineWord, expected: DbgLockFree as MachineWord, replacement: DbgLockHeld as MachineWord) != DbgNothing 'won'
-			claimed = true
-			continue
-		end 'won'
-
+	while not dbgTryStopLock(private) 'spin'
 		dbgSinkHostAnswer(__Raw.osDebugHost(DbgVerbParkWait, a0: DbgParkPollIntervalMs as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing))
 	end 'spin'
 end 'dbgTakeStopLock'
 
+// The owner is cleared before the lock is freed, or it could erase the next taker's claim.
 function dbgDropStopLock(private DbgWord)
+	dbgStore(private, offset: DbgPrivOffStopLockOwner, value: DbgNoOwner)
 	dbgStore(private, offset: DbgPrivOffStopLock, value: DbgLockFree)
 end 'dbgDropStopLock'
 
 function dbgTryStopLock(private DbgWord) returns bool
-	return __Raw.atomicCas((private + DbgPrivOffStopLock) as MachineWord, expected: DbgLockFree as MachineWord, replacement: DbgLockHeld as MachineWord) != DbgNothing
+	if __Raw.atomicCas((private + DbgPrivOffStopLock) as MachineWord, expected: DbgLockFree as MachineWord, replacement: DbgLockHeld as MachineWord) == DbgNothing 'anotherThreadHoldsIt'
+		return false
+	end 'anotherThreadHoldsIt'
+
+	dbgStore(private, offset: DbgPrivOffStopLockOwner, value: dbgCurrentThreadId())
+	return true
 end 'dbgTryStopLock'
 
 function dbgCurrentThreadId() returns DbgWord
@@ -607,7 +736,7 @@ function dbgAllMachines() returns DbgWord
 end 'dbgAllMachines'
 
 function dbgTryTakeExtLock() returns bool
-	return __Raw.atomicCas(__Raw.schedPreemptExtLockAddr(), expected: DbgPreemptClaimFree as MachineWord, replacement: DbgPreemptClaimHeld as MachineWord) != DbgNothing
+	return __Raw.atomicCas(__Raw.schedPreemptExtLockAddr(), expected: DbgPreemptClaimFree as MachineWord, replacement: dbgCurrentThreadId() as MachineWord) != DbgNothing
 end 'dbgTryTakeExtLock'
 
 function dbgTakeExtLock()
@@ -657,18 +786,20 @@ end 'dbgDropSchedLock'
 // The preemption window must be open before the process may end: `osExit` routes through
 // `__gt_exit_process`, which takes `__sched_preempt_ext_lock` and never gives it back, so an exit from
 // inside a stop that holds the same lock spins for ever with nothing printed.
-//
-// Only the thread that owns the stop may drop its locks. `__sched_lock` is a host mutex and leaving one
-// this thread does not hold is undefined; the service thread reaches this exit while another thread is
-// parked holding both, and must let go of neither.
 function dbgExitOrphaned(private DbgWord)
+	dbgLetGoOfTheWorld(private)
+	__Raw.osExit(DbgOrphanedExitCode as MachineWord)
+end 'dbgExitOrphaned'
+
+// Only the thread that owns the stop may drop its locks. `__sched_lock` is a host mutex and leaving
+// one this thread does not hold is undefined; the service thread reaches `dbgExitOrphaned` while
+// another thread is parked holding both, and must let go of neither.
+function dbgLetGoOfTheWorld(private DbgWord)
 	if dbgLoad(private, offset: DbgPrivOffWorldStopped) != 0 and dbgLoad(private, offset: DbgPrivOffStopThreadId) == dbgCurrentThreadId() 'thisThreadOwnsTheStop'
 		dbgDropSchedLock(private)
 		dbgDropExtLock()
 	end 'thisThreadOwnsTheStop'
-
-	__Raw.osExit(DbgOrphanedExitCode as MachineWord)
-end 'dbgExitOrphaned'
+end 'dbgLetGoOfTheWorld'
 
 // A stop is a stop of the program, not of a thread: every machine but this one is suspended before a word
 // of the stop is published, and both locks are held across the park, so nothing runs user code while a
@@ -740,42 +871,70 @@ module function __dbg_on_trap(contextPtr MachineWord, excCode MachineWord) retur
 
 	var stopPc = rip
 	var reason = DbgStopReasonStep
+	var landing = DbgLandingNotArmed
+
+	dbgReleaseTheStepsPreemptionHold()
 
 	// Windows hands a breakpoint trap a `CONTEXT.Rip` already backed onto the `int3` — the opposite of the
 	// POSIX convention — so the pc as delivered IS the breakpoint's address and is not adjusted here.
 	if code == DbgExcCodeBreakpoint and rip == dbgLoad(private, offset: DbgPrivOffPauseTrampoline) 'aPauseLanded'
-		return dbgPauseStop(base, private: private, context: context, trampoline: rip)
-	end 'aPauseLanded'
-
-	if code == DbgExcCodeBreakpoint 'aPlantedByte'
+		stopPc = dbgPoppedInterruptedPc(context)
+		reason = DbgStopReasonPause
+		landing = dbgLandingAt(private, context: context, pc: stopPc, textBase: textBase)
+		dbgHandBackSignalPending(dbgCurrentMachine())
+	end 'aPauseLanded' else if code == DbgExcCodeBreakpoint 'aPlantedByte'
 		let armed = dbgFindBreakpoint(private, textOffset: rip - textBase)
+
+		if armed == DbgNotFound and dbgLoadByte(rip, offset: 0) != DbgBreakpointByte 'clearedWhileWeWereReachingThisHandler'
+			return DbgVehContinueExecution as MachineWord
+		end 'clearedWhileWeWereReachingThisHandler'
 
 		// An `int3` the agent does not own is reported, never declined. Declining hands the exception to a
 		// chain that does not want it either and the process dies of `STATUS_BREAKPOINT` with the address —
 		// the one fact worth having — printed nowhere.
 		if armed == DbgNotFound 'anInt3NobodyHereOwns'
-			return dbgTrapStop(base, private: private, context: context, rip: rip)
+			return dbgTrapStop(base, private: private, context: context, rip: rip, textBase: textBase)
 		end 'anInt3NobodyHereOwns'
 
-		if not dbgBreakpointIsLive(private, index: armed) 'clearedWhileWeWereReachingThisHandler'
-			return DbgVehContinueExecution as MachineWord
-		end 'clearedWhileWeWereReachingThisHandler'
+		landing = dbgLandingOn(private, index: armed, context: context, pc: rip)
 
 		// A condition is judged before a single machine is suspended and before a word is published: a hit
 		// the driver did not ask for costs one trap and the program never notices it.
-		if not dbgConditionAllows(private, index: armed, context: context) 'notThisTime'
+		if landing == DbgLandingConditionFalse 'notThisTime'
 			dbgCaptureRegisters(base, context: context)
-			dbgResume(base, private: private, context: context, stopPc: rip, index: armed)
+			dbgResume(base, private: private, context: context, stopPc: rip, index: armed, action: DbgResumeContinue)
 			return DbgVehContinueExecution as MachineWord
 		end 'notThisTime'
-
-		reason = DbgStopReasonBreakpoint
 	end 'aPlantedByte' else if code == DbgExcCodeSingleStep 'oneInstructionDone'
+		let slot = dbgSlotHolding(private, pc: rip)
+
+		// A step into a displaced call runs the slot's pushes and tail before it reaches the callee,
+		// and a thread past a tail's exit count is already counted out. Neither is at a program
+		// instruction, so the thread is stepped on until it leaves the slot.
+		if slot != DbgNotFound and (dbgPastTheExitCount(slot, pc: rip) or dbgSlotSendsACall(slot)) 'midwayThroughADisplacedCall'
+			dbgSetTrapFlag(context, armed: true)
+			dbgHoldPreemptionForTheStep()
+			return DbgVehContinueExecution as MachineWord
+		end 'midwayThroughADisplacedCall'
+
 		dbgSetTrapFlag(context, armed: false)
-		stopPc = dbgPcAfterASlot(private, textBase: textBase, pc: rip)
-	end 'oneInstructionDone' else 'someoneElsesTrap'
+		stopPc = dbgPcAfterASlot(slot, textBase: textBase, pc: rip)
+		dbgLeaveTheSlot(slot)
+		landing = dbgLandingAt(private, context: context, pc: stopPc, textBase: textBase)
+	end 'oneInstructionDone' else 'theProgramFaulted'
+		// After the park the exception goes on down the chain: resuming would only re-run the faulting
+		// instruction, so the program's own handler reports the fault and ends it.
+		let slot = dbgSlotHolding(private, pc: rip)
+		let faultPc = dbgPcOfASlot(slot, textBase: textBase, pc: rip)
+
+		if slot != DbgNotFound and not dbgPastTheExitCount(slot, pc: rip) 'itFaultedBeforeCountingItsExit'
+			dbgLeaveTheSlot(slot)
+		end 'itFaultedBeforeCountingItsExit'
+		dbgStopAt(base, private: private, context: context, pc: faultPc, reason: DbgStopReasonFault, fault: code)
+		dbgStore(context, offset: DbgCtxOffRip, value: faultPc)
+
 		return DbgVehContinueSearch as MachineWord
-	end 'someoneElsesTrap'
+	end 'theProgramFaulted'
 
 	var pc = stopPc
 	var currentReason = reason
@@ -786,20 +945,26 @@ module function __dbg_on_trap(contextPtr MachineWord, excCode MachineWord) retur
 	while not settled 'stopAndGo'
 		dbgCaptureRegisters(base, context: context)
 		dbgStore(base, offset: DbgOffStopPc, value: pc)
-		dbgPublishStop(base, reason: currentReason)
+		dbgPublishStop(base, reason: dbgReasonOfLanding(landing, otherwise: currentReason), fault: DbgNoFault, conditionMissed: dbgLandingMissedItsCondition(landing))
 		dbgPark(base, private: private, stopKind: DbgStopKindThread)
 
+		let action = dbgLoad(private, offset: DbgPrivOffResumeAction)
 		let index = dbgFindBreakpoint(private, textOffset: pc - textBase)
+		var simulated = DbgNotFound
 
-		if dbgStepLandsOnASimulatedTarget(private, index: index) 'theTargetIsTheNextInstruction'
-			let entry = dbgBreakpointEntry(private, index: index)
-			let classWord = dbgLoad(entry, offset: DbgBpOffClassWord)
-			pc = dbgSimulate(base, entry: entry, stopPc: pc, classWord: classWord, instructionClass: dbgInstructionClassOf(classWord))
+		if action == DbgResumeStep 'aStep'
+			simulated = dbgSimulatedStep(base, private: private, index: index, stopPc: pc)
+		end 'aStep'
+
+		if simulated != DbgNotFound 'theTargetIsTheNextInstruction'
+			dbgWriteRegistersBack(base, context: context)
+			pc = simulated
 			currentReason = DbgStopReasonStep
+			landing = dbgLandingAt(private, context: context, pc: pc, textBase: textBase)
 			continue
 		end 'theTargetIsTheNextInstruction'
 
-		dbgResume(base, private: private, context: context, stopPc: pc, index: index)
+		dbgResume(base, private: private, context: context, stopPc: pc, index: index, action: action)
 		settled = true
 	end 'stopAndGo'
 
@@ -808,39 +973,50 @@ module function __dbg_on_trap(contextPtr MachineWord, excCode MachineWord) retur
 	return DbgVehContinueExecution as MachineWord
 end '__dbg_on_trap'
 
-// A pause arrives on the agent's own trampoline rather than on a byte of the program, and the injection
-// pushed the interrupted pc below the thread's stack pointer. So the reported pc is that pushed word, the
-// reported sp is the one the thread really had, and the resume goes to the `ret` behind the trap — which
-// pops the word and returns the thread to the instruction it was on.
-function dbgPauseStop(base DbgWord, private DbgWord, context DbgWord, trampoline DbgWord) returns MachineWord
+// A pause arrives on the agent's own trampoline, and `dbgInjectThread` pushed the interrupted pc
+// below the thread's stack pointer. The word is popped here, so the reported sp is the one the
+// thread really had and the resume leaves nothing on its stack.
+function dbgPoppedInterruptedPc(context DbgWord) returns DbgWord
 	let sp = dbgLoad(context, offset: DbgCtxOffRsp)
-	let interrupted = dbgLoad(sp, offset: 0)
+	dbgStore(context, offset: DbgCtxOffRsp, value: sp + DbgWordBytes)
 
-	dbgHandBackSignalPending(dbgCurrentMachine())
-	dbgStopTheWorld(private)
-	dbgCaptureRegisters(base, context: context)
-	dbgStore(base, offset: DbgOffStopPc, value: interrupted)
-	dbgStore(base, offset: DbgOffStopSp, value: sp + DbgWordBytes)
-	dbgPublishStop(base, reason: DbgStopReasonPause)
-	dbgPark(base, private: private, stopKind: DbgStopKindThread)
-	dbgStartTheWorld(private)
+	return dbgLoad(sp, offset: 0)
+end 'dbgPoppedInterruptedPc'
 
-	dbgWriteRegistersBack(base, context: context)
-	dbgStore(context, offset: DbgCtxOffRip, value: trampoline + DbgOneByte)
-	dbgSetTrapFlag(context, armed: false)
+// Every landing is judged here (a pause, a single step, a simulated jump, and an `int3` through
+// `dbgLandingOn`), so a thread that comes to rest on an armed byte reports that breakpoint however
+// it got there.
+function dbgLandingAt(private DbgWord, context DbgWord, pc DbgWord, textBase DbgWord) returns DbgWord
+	let index = dbgFindBreakpoint(private, textOffset: pc - textBase)
 
-	return DbgVehContinueExecution as MachineWord
-end 'dbgPauseStop'
+	if index == DbgNotFound 'nothingIsArmedHere'
+		return DbgLandingNotArmed
+	end 'nothingIsArmedHere'
+
+	return dbgLandingOn(private, index: index, context: context, pc: pc)
+end 'dbgLandingAt'
+
+function dbgLandingOn(private DbgWord, index DbgWord, context DbgWord, pc DbgWord) returns DbgWord
+	if dbgConditionAllows(private, index: index, context: context) 'itsConditionHolds'
+		return DbgLandingHit
+	end 'itsConditionHolds'
+
+	return DbgLandingHeldOpen if pc == dbgLoad(private, offset: DbgPrivOffReturnHold) else DbgLandingConditionFalse
+end 'dbgLandingOn'
+
+function dbgReasonOfLanding(landing DbgWord, otherwise DbgWord) returns DbgWord
+	return DbgStopReasonBreakpoint if landing == DbgLandingHit or landing == DbgLandingHeldOpen else otherwise
+end 'dbgReasonOfLanding'
+
+function dbgLandingMissedItsCondition(landing DbgWord) returns bool
+	return landing == DbgLandingHeldOpen or landing == DbgLandingConditionFalse
+end 'dbgLandingMissedItsCondition'
 
 // The agent planted no byte here, so there is nothing to displace and nothing to put back: the trap was one
 // byte wide and the resume is `rip + 1`, which is the only convention an unowned `int3` has.
-function dbgTrapStop(base DbgWord, private DbgWord, context DbgWord, rip DbgWord) returns MachineWord
-	dbgStopTheWorld(private)
-	dbgCaptureRegisters(base, context: context)
-	dbgStore(base, offset: DbgOffStopPc, value: rip)
-	dbgPublishStop(base, reason: DbgStopReasonTrap)
-	dbgPark(base, private: private, stopKind: DbgStopKindThread)
-	dbgStartTheWorld(private)
+function dbgTrapStop(base DbgWord, private DbgWord, context DbgWord, rip DbgWord, textBase DbgWord) returns MachineWord
+	let trapPc = dbgPcOfASlot(dbgSlotHolding(private, pc: rip), textBase: textBase, pc: rip)
+	dbgStopAt(base, private: private, context: context, pc: trapPc, reason: DbgStopReasonTrap, fault: DbgNoFault)
 
 	dbgWriteRegistersBack(base, context: context)
 	dbgStore(context, offset: DbgCtxOffRip, value: rip + DbgOneByte)
@@ -848,6 +1024,15 @@ function dbgTrapStop(base DbgWord, private DbgWord, context DbgWord, rip DbgWord
 
 	return DbgVehContinueExecution as MachineWord
 end 'dbgTrapStop'
+
+function dbgStopAt(base DbgWord, private DbgWord, context DbgWord, pc DbgWord, reason DbgWord, fault DbgWord)
+	dbgStopTheWorld(private)
+	dbgCaptureRegisters(base, context: context)
+	dbgStore(base, offset: DbgOffStopPc, value: pc)
+	dbgPublishStop(base, reason: reason, fault: fault, conditionMissed: false)
+	dbgPark(base, private: private, stopKind: DbgStopKindThread)
+	dbgStartTheWorld(private)
+end 'dbgStopAt'
 
 // Every road out of a claimed stop owes the claim back, or the monitor never preempts this machine again.
 function dbgHandBackSignalPending(machine DbgWord)
@@ -890,10 +1075,12 @@ end 'dbgStoreByte'
 // `stopMachine` is an OS thread id and never an index, so a driver can name it against anything else the
 // host reports. The trace mark is read here rather than at attach because `__dbg_init` runs ahead of
 // `__ds_init`.
-function dbgPublishStop(base DbgWord, reason DbgWord)
+function dbgPublishStop(base DbgWord, reason DbgWord, fault DbgWord, conditionMissed bool)
 	let machine = dbgCurrentMachine()
 
 	dbgStore(base, offset: DbgOffStopReason, value: reason)
+	dbgStore(base, offset: DbgOffStopFault, value: fault)
+	dbgStore(base, offset: DbgOffStopConditionMissed, value: DbgStopConditionMissedYes if conditionMissed else DbgStopConditionMet)
 	dbgStore(base, offset: DbgOffStopMachine, value: 0 if machine == 0 else dbgCurrentThreadId())
 	dbgStore(base, offset: DbgOffStopGreenThread, value: dbgRunningGreenThread(machine))
 	dbgStore(base, offset: DbgOffStopTraceMark, value: dbgTraceMark())
@@ -936,6 +1123,7 @@ function dbgPark(base DbgWord, private DbgWord, stopKind DbgWord)
 
 		if sequence != lastCommand 'aCommandArrived'
 			let leaves = dbgDispatch(base, private: private, command: dbgLoad(base, offset: DbgOffCmd), stopKind: stopKind)
+			dbgStore(base, offset: DbgOffAckStopSeq, value: dbgLoad(base, offset: DbgOffStopSeq))
 			dbgStore(base, offset: DbgOffAckSeq, value: sequence)
 			lastCommand = sequence
 
@@ -982,6 +1170,11 @@ function dbgDispatch(base DbgWord, private DbgWord, command DbgWord, stopKind Db
 			return false
 		end 'noThreadIsStopped'
 
+		if dbgLoad(base, offset: DbgOffStopReason) == DbgStopReasonFault 'theInstructionWouldFaultAgain'
+			dbgRefuse(base, reason: DbgRefusalFaultIsTerminal)
+			return false
+		end 'theInstructionWouldFaultAgain'
+
 		dbgStore(private, offset: DbgPrivOffResumeAction, value: DbgResumeStep)
 		dbgAnswerDone(base)
 		return true
@@ -1026,6 +1219,17 @@ function dbgDispatch(base DbgWord, private DbgWord, command DbgWord, stopKind Db
 		dbgClearCondition(base, private: private)
 		return false
 	end 'dropACondition'
+
+	if command == DbgCmdHoldReturnPoint 'holdAReturnPoint'
+		dbgHoldReturnPoint(base, private: private)
+		return false
+	end 'holdAReturnPoint'
+
+	if command == DbgCmdReleaseReturnPoint 'releaseTheReturnPoint'
+		dbgStore(private, offset: DbgPrivOffReturnHold, value: DbgNoReturnHold)
+		dbgAnswerDone(base)
+		return false
+	end 'releaseTheReturnPoint'
 
 	if command == DbgCmdGtList 'roster'
 		dbgGtList(base, private: private, stopKind: stopKind)
@@ -1095,26 +1299,140 @@ function dbgFindBreakpoint(private DbgWord, textOffset DbgWord) returns DbgWord
 	return DbgNotFound
 end 'dbgFindBreakpoint'
 
-// The index can come from a driver-named entry, so it is bounded here: an index past the table reads the
-// roster behind it, and a word there that happens to equal the live state would arm a condition on memory
-// nobody owns.
-function dbgBreakpointIsLive(private DbgWord, index DbgWord) returns bool
-	if index < 0 or index >= DbgBreakpointCapacity 'outsideTheTable'
-		return false
-	end 'outsideTheTable'
+function dbgNamedBreakpointOrRefuse(base DbgWord, private DbgWord) returns DbgWord
+	let index = dbgFindBreakpoint(private, textOffset: dbgLoad(base, offset: DbgOffCmdArg0))
 
-	return dbgLoad(dbgBreakpointEntry(private, index: index), offset: DbgBpOffState) == DbgBpStateLive
-end 'dbgBreakpointIsLive'
+	if index == DbgNotFound 'nothingArmedThere'
+		dbgRefuse(base, reason: DbgRefusalNoSuchBreakpoint)
+	end 'nothingArmedThere'
 
-function dbgFreeBreakpointSlot(private DbgWord) returns DbgWord
-	for index in 0 upto DbgBreakpointCapacity 'eachSlot'
+	return index
+end 'dbgNamedBreakpointOrRefuse'
+
+function dbgFreeBreakpointRow(private DbgWord) returns DbgWord
+	for index in 0 upto DbgBreakpointCapacity 'eachRow'
 		if dbgLoad(dbgBreakpointEntry(private, index: index as DbgWord), offset: DbgBpOffState) == DbgBpStateFree 'free'
 			return index as DbgWord
 		end 'free'
+	end 'eachRow'
+
+	return DbgNotFound
+end 'dbgFreeBreakpointRow'
+
+function dbgSlotAt(private DbgWord, index DbgWord) returns DbgWord
+	return dbgLoad(private, offset: DbgPrivOffSlotPoolBase) + index * DbgSlotBytes
+end 'dbgSlotAt'
+
+function dbgSlotIsBound(private DbgWord, slot DbgWord) returns bool
+	for index in 0 upto DbgBreakpointCapacity 'eachRow'
+		let entry = dbgBreakpointEntry(private, index: index as DbgWord)
+
+		if dbgLoad(entry, offset: DbgBpOffState) == DbgBpStateLive and dbgLoad(entry, offset: DbgBpOffSlotAddr) == slot 'aLiveRowUsesIt'
+			return true
+		end 'aLiveRowUsesIt'
+	end 'eachRow'
+
+	return false
+end 'dbgSlotIsBound'
+
+// A slot may be refilled only when every thread sent into it has left. `dbgEnterTheSlot` counts a
+// send at each resume into it, under the stop lock; the tail's `lock inc` counts an exit, and
+// `dbgLeaveTheSlot` counts one for a thread the handler moves out any other way. A road out that
+// counts no exit strands the slot for good, and one that counts twice lets it be rewritten under a
+// running thread.
+function dbgSlotIsDrained(slot DbgWord) returns bool
+	return dbgLoad(slot, offset: DbgSlotExitsAt) == dbgLoad(slot, offset: DbgSlotSendsAt)
+end 'dbgSlotIsDrained'
+
+function dbgSlotHoldsTheSame(slot DbgWord, textOffset DbgWord, classWord DbgWord, fixup DbgWord) returns bool
+	return dbgLoad(slot, offset: DbgSlotClassWordAt) == classWord and dbgLoad(slot, offset: DbgSlotOriginAt) == textOffset and dbgLoad(slot, offset: DbgSlotFixupAt) == fixup
+end 'dbgSlotHoldsTheSame'
+
+function dbgUnboundSlotHolding(private DbgWord, textOffset DbgWord, classWord DbgWord, fixup DbgWord) returns DbgWord
+	for index in 0 upto DbgSlotCapacity 'eachSlot'
+		let slot = dbgSlotAt(private, index: index as DbgWord)
+
+		if dbgSlotHoldsTheSame(slot, textOffset: textOffset, classWord: classWord, fixup: fixup) and not dbgSlotIsBound(private, slot: slot) 'alreadyDisplacedHere'
+			return slot
+		end 'alreadyDisplacedHere'
 	end 'eachSlot'
 
 	return DbgNotFound
-end 'dbgFreeBreakpointSlot'
+end 'dbgUnboundSlotHolding'
+
+function dbgDrainedUnboundSlot(private DbgWord) returns DbgWord
+	for index in 0 upto DbgSlotCapacity 'eachSlot'
+		let slot = dbgSlotAt(private, index: index as DbgWord)
+
+		if dbgSlotIsDrained(slot) and not dbgSlotIsBound(private, slot: slot) 'reusable'
+			return slot
+		end 'reusable'
+	end 'eachSlot'
+
+	return DbgNotFound
+end 'dbgDrainedUnboundSlot'
+
+function dbgSlotHolding(private DbgWord, pc DbgWord) returns DbgWord
+	let poolBase = dbgLoad(private, offset: DbgPrivOffSlotPoolBase)
+
+	if pc < poolBase or pc >= poolBase + DbgSlotCapacity * DbgSlotBytes 'notInThePool'
+		return DbgNotFound
+	end 'notInThePool'
+
+	for index in 0 upto DbgSlotCapacity 'eachSlot'
+		let slot = dbgSlotAt(private, index: index as DbgWord)
+
+		if pc < slot + DbgSlotBytes 'thisSlot'
+			return slot
+		end 'thisSlot'
+	end 'eachSlot'
+
+	return DbgNotFound
+end 'dbgSlotHolding'
+
+function dbgSlotSendsACall(slot DbgWord) returns bool
+	let instructionClass = dbgInstructionClassOf(dbgLoad(slot, offset: DbgSlotClassWordAt))
+
+	return instructionClass == DbgClassDirectCall or instructionClass == DbgClassIndirectCall
+end 'dbgSlotSendsACall'
+
+function dbgEnterTheSlot(slot DbgWord)
+	dbgStore(slot, offset: DbgSlotSendsAt, value: dbgLoad(slot, offset: DbgSlotSendsAt) + 1)
+end 'dbgEnterTheSlot'
+
+function dbgPastTheExitCount(slot DbgWord, pc DbgWord) returns bool
+	return pc - slot >= DbgSlotTailPopAt
+end 'dbgPastTheExitCount'
+
+function dbgLeaveTheSlot(slot DbgWord)
+	if slot == DbgNotFound 'neverInOne'
+		return
+	end 'neverInOne'
+
+	dbgSinkHostAnswer(__Raw.atomicAddWord((slot + DbgSlotExitsAt) as MachineWord, delta: 1 as MachineWord))
+end 'dbgLeaveTheSlot'
+
+// The tail is `push [back]; pushfq; lock inc [exits]; popfq; ret`, written once here. A thread
+// counted out may still be on its `popfq; ret`, which read only the stack: a refill writes the head
+// and the data words and nothing the tail reads after the count. The flags are saved around the
+// count because the displaced instruction's flags are still live.
+function dbgWriteSlotTails(pool DbgWord)
+	for index in 0 upto DbgSlotCapacity 'eachSlot'
+		let slot = pool + (index as DbgWord) * DbgSlotBytes
+
+		dbgWriteRipPush(slot, at: DbgSlotTailAt, word: DbgSlotBackAt)
+		dbgStoreByte(slot, offset: DbgSlotTailFlagsAt, value: DbgPushFlagsOpcode)
+		dbgStoreByte(slot, offset: DbgSlotTailIncAt, value: DbgLockPrefix)
+		dbgStoreByte(slot, offset: DbgSlotTailIncAt + 1, value: DbgRexWide)
+		dbgStoreByte(slot, offset: DbgSlotTailIncAt + 2, value: DbgIncGroupOpcode)
+		dbgStoreByte(slot, offset: DbgSlotTailIncAt + 3, value: DbgIncRipRelativeModRm)
+		dbgWriteDisplacement(slot, offset: DbgSlotTailIncAt + 4, value: DbgSlotExitsAt - DbgSlotTailPopAt)
+		dbgStoreByte(slot, offset: DbgSlotTailPopAt, value: DbgPopFlagsOpcode)
+		dbgStoreByte(slot, offset: DbgSlotTailReturnAt, value: DbgReturnOpcode)
+	end 'eachSlot'
+
+	dbgFlushCode(pool, length: DbgSlotCapacity * DbgSlotBytes)
+end 'dbgWriteSlotTails'
 
 function dbgSetBreakpoint(base DbgWord, private DbgWord)
 	let textOffset = dbgLoad(base, offset: DbgOffCmdArg0)
@@ -1130,15 +1448,20 @@ function dbgSetBreakpoint(base DbgWord, private DbgWord)
 		return
 	end 'outsideTheCode'
 
-	if instructionClass < DbgClassPlain or instructionClass > DbgClassReturn 'notSimulable'
+	if instructionClass < DbgClassPlain or instructionClass > DbgClassIndirectCall 'notSimulable'
 		dbgRefuse(base, reason: DbgRefusalUnclassified)
 		return
 	end 'notSimulable'
 
-	if length < 1 or length > DbgSlotBytes - DbgJmpAbsoluteBytes 'noSlotFitsIt'
+	if length < 1 or length > DbgSlotTailAt - DbgSlotHeadTrailBytes 'noSlotFitsIt'
 		dbgRefuse(base, reason: DbgRefusalUnclassified)
 		return
 	end 'noSlotFitsIt'
+
+	if not dbgOperandsLieInside(classWord, instructionClass: instructionClass, length: length) 'anOperandPastTheInstruction'
+		dbgRefuse(base, reason: DbgRefusalUnclassified)
+		return
+	end 'anOperandPastTheInstruction'
 
 	if dbgInsideRuntimeSymbol(textOffset) 'theCompilersOwnCode'
 		dbgRefuse(base, reason: DbgRefusalInsideRuntimeSymbol)
@@ -1147,40 +1470,48 @@ function dbgSetBreakpoint(base DbgWord, private DbgWord)
 
 	let existing = dbgFindBreakpoint(private, textOffset: textOffset)
 
-	if dbgBreakpointIsLive(private, index: existing) 'alreadyArmed'
-		dbgStore(dbgBreakpointEntry(private, index: existing), offset: DbgBpOffCondition + DbgCondRecOffKind, value: 0)
+	if existing != DbgNotFound 'alreadyArmed'
+		dbgStore(dbgBreakpointEntry(private, index: existing), offset: DbgBpOffCondition + DbgCondRecOffKind, value: DbgCondKindNone)
+		dbgDropTheReturnHoldAt(private, address: textBase + textOffset)
 		dbgAnswerDone(base)
 		return
 	end 'alreadyArmed'
 
-	let index = existing if existing != DbgNotFound else dbgFreeBreakpointSlot(private)
+	let index = dbgFreeBreakpointRow(private)
 
-	if index == DbgNotFound 'noRoom'
+	if index == DbgNotFound 'noRow'
 		dbgRefuse(base, reason: DbgRefusalTableFull)
 		return
-	end 'noRoom'
+	end 'noRow'
+
+	let displaced = dbgUnboundSlotHolding(private, textOffset: textOffset, classWord: classWord, fixup: fixup)
+	let slot = displaced if displaced != DbgNotFound else dbgDrainedUnboundSlot(private)
+
+	if slot == DbgNotFound 'noSlot'
+		dbgRefuse(base, reason: DbgRefusalTableFull)
+		return
+	end 'noSlot'
 
 	let address = textBase + textOffset
-	let slot = dbgLoad(private, offset: DbgPrivOffSlotPoolBase) + index * DbgSlotBytes
 	let entry = dbgBreakpointEntry(private, index: index)
 
-	// The jump back out of a slot is absolute, so the pool needs no proximity to the code it displaces —
-	// but a pc-relative operand still has to reach its referent from the slot. One that cannot is refused
-	// here rather than displaced into an instruction that would read a different address.
-	if instructionClass == DbgClassPcRelativeData 'anOperandTheSlotMustStillReach'
-		let displaced = fixup - (slot + length)
+	// The way back out of a slot is an absolute return, so the only reach a slot needs is a rebased
+	// operand's. One out of reach is refused rather than displaced into an instruction that would
+	// read a different address.
+	if dbgSlotRebasesAnOperand(instructionClass, classWord: classWord) 'anOperandTheSlotMustStillReach'
+		let reach = fixup - (slot + length)
 
-		if displaced < DbgDisplacementMin or displaced > DbgDisplacementMax 'outOfReach'
+		if reach < DbgDisplacementMin or reach > DbgDisplacementMax 'outOfReach'
 			dbgRefuse(base, reason: DbgRefusalUnclassified)
 			return
 		end 'outOfReach'
 	end 'anOperandTheSlotMustStillReach'
 
-	// A retired entry re-armed at its own address already holds exactly these bytes, and a thread sent out of
-	// line by an earlier hit may be inside the slot at this instant. Rewriting it would change code under a
-	// running thread for no gain.
-	if dbgLoad(entry, offset: DbgBpOffState) != DbgBpStateRetired or dbgLoad(entry, offset: DbgBpOffClassWord) != classWord 'theSlotDoesNotAlreadyHoldThis'
-		dbgFillSlot(slot, private: private, textBase: textBase, address: address, length: length, instructionClass: instructionClass, classWord: classWord, fixup: fixup)
+	// A slot already holding exactly these bytes is bound again without a write: a thread sent out
+	// of line by an earlier hit may be inside it at this instant, and a refill would write over the
+	// code it is running.
+	if displaced == DbgNotFound 'theSlotDoesNotAlreadyHoldThis'
+		dbgFillSlot(slot, private: private, textBase: textBase, address: address, textOffset: textOffset, classWord: classWord, fixup: fixup)
 	end 'theSlotDoesNotAlreadyHoldThis'
 
 	dbgStore(entry, offset: DbgBpOffTextOffset, value: textOffset)
@@ -1188,70 +1519,147 @@ function dbgSetBreakpoint(base DbgWord, private DbgWord)
 	dbgStore(entry, offset: DbgBpOffSlotAddr, value: slot)
 	dbgStore(entry, offset: DbgBpOffClassWord, value: classWord)
 	dbgStore(entry, offset: DbgBpOffFixup, value: fixup)
-	dbgStore(entry, offset: DbgBpOffCondition + DbgCondRecOffKind, value: 0)
+	dbgStore(entry, offset: DbgBpOffCondition + DbgCondRecOffKind, value: DbgCondKindNone)
 	dbgStore(entry, offset: DbgBpOffState, value: DbgBpStateLive)
 
+	dbgMarkPlanted(private, textOffset: textOffset)
 	dbgPatchCode(address, value: DbgBreakpointByte)
 	dbgAnswerDone(base)
 end 'dbgSetBreakpoint'
 
-// The displaced bytes are read through the breakpoint table, never raw. One line can resolve to several
-// offsets inside one instruction's span, so what this displaces may already carry a neighbouring
-// breakpoint's `0xCC`; copied verbatim, that trap would fire from inside the slot pool, at an address no
-// breakpoint entry claims.
-function dbgFillSlot(slot DbgWord, private DbgWord, textBase DbgWord, address DbgWord, length DbgWord, instructionClass DbgWord, classWord DbgWord, fixup DbgWord)
+function dbgFillSlot(slot DbgWord, private DbgWord, textBase DbgWord, address DbgWord, textOffset DbgWord, classWord DbgWord, fixup DbgWord)
+	let length = classWord and DbgClassByteMask
+	let instructionClass = dbgInstructionClassOf(classWord)
+
+	dbgWriteWord(slot, offset: DbgSlotBackAt, value: address + length)
+	dbgWriteWord(slot, offset: DbgSlotOriginAt, value: textOffset)
+	dbgWriteWord(slot, offset: DbgSlotClassWordAt, value: classWord)
+	dbgWriteWord(slot, offset: DbgSlotFixupAt, value: fixup)
+
 	if instructionClass == DbgClassDirectCall 'aDisplacedCallIsSynthesized'
-		dbgFillCallSlot(slot, returnAddress: address + length, target: fixup)
-		return
-	end 'aDisplacedCallIsSynthesized'
+		dbgFillDirectCallHead(slot)
+	end 'aDisplacedCallIsSynthesized' else 'theInstructionItself'
+		dbgFillDisplacedHead(slot, private: private, textBase: textBase, address: address, classWord: classWord, fixup: fixup)
+	end 'theInstructionItself'
+
+	dbgFlushCode(slot, length: DbgSlotBytes)
+end 'dbgFillSlot'
+
+// The displaced bytes are read through the breakpoint table, never raw. One line can resolve to
+// several offsets inside one instruction's span, so what this displaces may already carry a
+// neighbouring breakpoint's `0xCC`; copied verbatim, that trap would fire from inside the slot
+// pool, at an address no breakpoint entry claims.
+function dbgFillDisplacedHead(slot DbgWord, private DbgWord, textBase DbgWord, address DbgWord, classWord DbgWord, fixup DbgWord)
+	let length = classWord and DbgClassByteMask
+	let instructionClass = dbgInstructionClassOf(classWord)
 
 	for position in 0 upto length 'eachByte'
 		dbgStoreByte(slot, offset: position as DbgWord, value: dbgProgramByteAt(private, textBase: textBase, address: address + (position as DbgWord)))
 	end 'eachByte'
 
-	if instructionClass == DbgClassPcRelativeData 'rebasedOperand'
-		let displacementAt = (classWord shr DbgCondShift) and DbgClassByteMask
-		dbgWriteDisplacement(slot, offset: displacementAt, value: fixup - (slot + length))
+	if dbgSlotRebasesAnOperand(instructionClass, classWord: classWord) 'rebasedOperand'
+		dbgWriteDisplacement(slot, offset: dbgOperandPositionOf(classWord), value: fixup - (slot + length))
 	end 'rebasedOperand'
 
-	if instructionClass == DbgClassReturn 'aReturnCarriesItsOwnDestination'
-		dbgFlushCode(slot, length: DbgSlotBytes)
+	if instructionClass == DbgClassIndirectCall 'itCallsThroughItsOperand'
+		dbgFillIndirectCallTrail(slot, classWord: classWord)
 		return
-	end 'aReturnCarriesItsOwnDestination'
+	end 'itCallsThroughItsOperand'
 
-	dbgStoreByte(slot, offset: length, value: DbgJmpIndirectOpcode)
-	dbgStoreByte(slot, offset: length + 1, value: DbgJmpIndirectModRm)
-	dbgWriteDisplacement(slot, offset: length + 2, value: 0)
-	dbgWriteWord(slot, offset: length + DbgJmpAbsoluteBytes - DbgWordBytes, value: address + length)
-	dbgFlushCode(slot, length: DbgSlotBytes)
-end 'dbgFillSlot'
+	dbgWriteShortJump(slot, at: length, to: DbgSlotTailAt)
+end 'dbgFillDisplacedHead'
+
+// A displaced call, direct or indirect, runs through its slot rather than being simulated: the slot
+// pushes the return address and the target, and the tail's `ret` enters the callee. The handler
+// cannot write the debuggee's stack itself, since Win64 has no red zone and the dispatcher's own
+// frame already occupies the memory below rsp.
+function dbgFillDirectCallHead(slot DbgWord)
+	dbgWriteRipPush(slot, at: 0, word: DbgSlotBackAt)
+	dbgWriteRipPush(slot, at: DbgCallHeadTargetAt, word: DbgSlotFixupAt)
+	dbgWriteShortJump(slot, at: DbgCallHeadJumpAt, to: DbgSlotTailFlagsAt)
+end 'dbgFillDirectCallHead'
+
+// The displaced instruction, turned from `call` into `push`, pushes the target first, so an operand
+// that addresses through rsp reads the stack the call saw; the return address is then swapped in
+// beneath it.
+function dbgFillIndirectCallTrail(slot DbgWord, classWord DbgWord)
+	let length = classWord and DbgClassByteMask
+	let modRmAt = dbgModRmPositionOf(classWord)
+	let backAt = length + DbgCallTrailBackAt
+	let popAt = length + DbgCallTrailPopAt
+
+	dbgStoreByte(slot, offset: modRmAt, value: (dbgLoadByte(slot, offset: modRmAt) and DbgModRmKeepMask) or DbgModRmPushReg)
+	dbgStoreByte(slot, offset: length, value: DbgPushIndirectOpcode)
+	dbgStoreByte(slot, offset: length + 1, value: DbgPushStackTopModRm)
+	dbgStoreByte(slot, offset: length + 2, value: DbgSibStackPointerBase)
+	dbgWriteRipPush(slot, at: backAt, word: DbgSlotBackAt)
+	dbgStoreByte(slot, offset: popAt, value: DbgPopIndirectOpcode)
+	dbgStoreByte(slot, offset: popAt + 1, value: DbgPopStackDisp8ModRm)
+	dbgStoreByte(slot, offset: popAt + 2, value: DbgSibStackPointerBase)
+	dbgStoreByte(slot, offset: popAt + 3, value: DbgWordBytes)
+	dbgWriteShortJump(slot, at: length + DbgCallTrailJumpAt, to: DbgSlotTailFlagsAt)
+end 'dbgFillIndirectCallTrail'
+
+function dbgWriteRipPush(slot DbgWord, at DbgWord, word DbgWord)
+	dbgStoreByte(slot, offset: at, value: DbgPushIndirectOpcode)
+	dbgStoreByte(slot, offset: at + 1, value: DbgPushIndirectModRm)
+	dbgWriteDisplacement(slot, offset: at + 2, value: word - (at + DbgPushIndirectBytes))
+end 'dbgWriteRipPush'
+
+function dbgWriteShortJump(slot DbgWord, at DbgWord, to DbgWord)
+	dbgStoreByte(slot, offset: at, value: DbgJmpShortOpcode)
+	dbgStoreByte(slot, offset: at + 1, value: to - (at + DbgJmpShortBytes))
+end 'dbgWriteShortJump'
+
+function dbgSlotRebasesAnOperand(instructionClass DbgWord, classWord DbgWord) returns bool
+	if instructionClass == DbgClassPcRelativeData 'aPcRelativeOperand'
+		return true
+	end 'aPcRelativeOperand'
+
+	return instructionClass == DbgClassIndirectCall and dbgCallFormOf(classWord) == DbgCallFormPcRelative
+end 'dbgSlotRebasesAnOperand'
+
+function dbgCallFormOf(classWord DbgWord) returns DbgWord
+	return (classWord shr DbgCallFormShift) and DbgClassByteMask
+end 'dbgCallFormOf'
+
+function dbgOperandPositionOf(classWord DbgWord) returns DbgWord
+	return (classWord shr DbgCondShift) and DbgClassByteMask
+end 'dbgOperandPositionOf'
+
+function dbgModRmPositionOf(classWord DbgWord) returns DbgWord
+	return (classWord shr DbgCallModRmShift) and DbgClassByteMask
+end 'dbgModRmPositionOf'
+
+function dbgOperandsLieInside(classWord DbgWord, instructionClass DbgWord, length DbgWord) returns bool
+	let operandAt = dbgOperandPositionOf(classWord)
+
+	if instructionClass == DbgClassReturn 'aRelease'
+		return operandAt == DbgReturnReleasesNothing or operandAt + DbgReleaseImmediateBytes <= length
+	end 'aRelease'
+
+	if instructionClass == DbgClassIndirectCall and dbgModRmPositionOf(classWord) >= length 'aModRmPastTheInstruction'
+		return false
+	end 'aModRmPastTheInstruction'
+
+	if dbgSlotRebasesAnOperand(instructionClass, classWord: classWord) 'aRebasedDisplacement'
+		return operandAt + DbgDisplacementBytes <= length
+	end 'aRebasedDisplacement'
+
+	return true
+end 'dbgOperandsLieInside'
 
 // The byte the program has at this address, which is not always the byte in memory: a live breakpoint has
 // replaced its own first byte, and the entry remembers what stood there.
 function dbgProgramByteAt(private DbgWord, textBase DbgWord, address DbgWord) returns DbgWord
 	let index = dbgFindBreakpoint(private, textOffset: address - textBase)
 
-	if dbgBreakpointIsLive(private, index: index) 'oneOfOurOwnTrapsStandsHere'
+	if index != DbgNotFound 'oneOfOurOwnTrapsStandsHere'
 		return dbgLoad(dbgBreakpointEntry(private, index: index), offset: DbgBpOffOriginalByte)
 	end 'oneOfOurOwnTrapsStandsHere'
 
 	return dbgLoadByte(address, offset: 0)
 end 'dbgProgramByteAt'
-
-// A displaced call is rebuilt as a push of its return address and a jump, rather than simulated: the
-// handler cannot write the debuggee's stack itself, since Win64 has no red zone and the dispatcher's own
-// frame already occupies the memory below rsp.
-function dbgFillCallSlot(slot DbgWord, returnAddress DbgWord, target DbgWord)
-	dbgStoreByte(slot, offset: DbgCallSlotPushAt, value: DbgPushIndirectOpcode)
-	dbgStoreByte(slot, offset: DbgCallSlotPushAt + 1, value: DbgPushIndirectModRm)
-	dbgWriteDisplacement(slot, offset: DbgCallSlotPushAt + 2, value: DbgCallSlotReturnAt - DbgCallSlotJumpAt)
-	dbgStoreByte(slot, offset: DbgCallSlotJumpAt, value: DbgJmpIndirectOpcode)
-	dbgStoreByte(slot, offset: DbgCallSlotJumpAt + 1, value: DbgJmpIndirectModRm)
-	dbgWriteDisplacement(slot, offset: DbgCallSlotJumpAt + 2, value: DbgCallSlotTargetAt - DbgCallSlotReturnAt)
-	dbgWriteWord(slot, offset: DbgCallSlotReturnAt, value: returnAddress)
-	dbgWriteWord(slot, offset: DbgCallSlotTargetAt, value: target)
-	dbgFlushCode(slot, length: DbgSlotBytes)
-end 'dbgFillCallSlot'
 
 function dbgWriteWord(base DbgWord, offset DbgWord, value DbgWord)
 	var remaining = value
@@ -1284,21 +1692,25 @@ function dbgFlushCode(address DbgWord, length DbgWord)
 end 'dbgFlushCode'
 
 function dbgClearBreakpoint(base DbgWord, private DbgWord)
-	let index = dbgFindBreakpoint(private, textOffset: dbgLoad(base, offset: DbgOffCmdArg0))
+	let index = dbgNamedBreakpointOrRefuse(base, private: private)
 
-	if not dbgBreakpointIsLive(private, index: index) 'nothingArmedThere'
-		dbgRefuse(base, reason: DbgRefusalNoSuchBreakpoint)
+	if index == DbgNotFound 'nothingArmedThere'
 		return
 	end 'nothingArmedThere'
 
-	// Retired, not freed: another machine may be inside this breakpoint's trap at this moment, and a slot
-	// re-let to a different address would make that handler decline the trap and take the process down.
-	// A retired slot is reused only by an arm at the same address, which `dbgSetBreakpoint` finds first.
 	let entry = dbgBreakpointEntry(private, index: index)
-	dbgPatchCode(dbgLoad(base, offset: DbgOffTextBase) + dbgLoad(entry, offset: DbgBpOffTextOffset), value: dbgLoad(entry, offset: DbgBpOffOriginalByte))
-	dbgStore(entry, offset: DbgBpOffState, value: DbgBpStateRetired)
+	let address = dbgLoad(base, offset: DbgOffTextBase) + dbgLoad(entry, offset: DbgBpOffTextOffset)
+	dbgPatchCode(address, value: dbgLoad(entry, offset: DbgBpOffOriginalByte))
+	dbgStore(entry, offset: DbgBpOffState, value: DbgBpStateFree)
+	dbgDropTheReturnHoldAt(private, address: address)
 	dbgAnswerDone(base)
 end 'dbgClearBreakpoint'
+
+function dbgDropTheReturnHoldAt(private DbgWord, address DbgWord)
+	if dbgLoad(private, offset: DbgPrivOffReturnHold) == address 'theWalkHeldThisByte'
+		dbgStore(private, offset: DbgPrivOffReturnHold, value: DbgNoReturnHold)
+	end 'theWalkHeldThisByte'
+end 'dbgDropTheReturnHoldAt'
 
 function dbgCaptureRegisters(base DbgWord, context DbgWord)
 	for index in 0 upto DbgGprCount 'eachGeneral'
@@ -1348,92 +1760,131 @@ function dbgSetTrapFlag(context DbgWord, armed bool)
 	end 'runOn'
 end 'dbgSetTrapFlag'
 
-function dbgPcAfterASlot(private DbgWord, textBase DbgWord, pc DbgWord) returns DbgWord
-	let poolBase = dbgLoad(private, offset: DbgPrivOffSlotPoolBase)
-
-	if pc < poolBase or pc >= poolBase + DbgSlotPoolBytes 'notInThePool'
+function dbgPcAfterASlot(slot DbgWord, textBase DbgWord, pc DbgWord) returns DbgWord
+	if slot == DbgNotFound 'notInASlot'
 		return pc
-	end 'notInThePool'
+	end 'notInASlot'
 
-	for index in 0 upto DbgBreakpointCapacity 'eachSlot'
-		let entry = dbgBreakpointEntry(private, index: index as DbgWord)
-
-		if dbgLoad(entry, offset: DbgBpOffState) != DbgBpStateFree 'taken'
-			let slot = dbgLoad(entry, offset: DbgBpOffSlotAddr)
-
-			if pc >= slot and pc < slot + DbgSlotBytes 'thisSlot'
-				let classWord = dbgLoad(entry, offset: DbgBpOffClassWord)
-
-				if dbgInstructionClassOf(classWord) == DbgClassDirectCall 'theCallHasPushedItsReturn'
-					return dbgLoad(entry, offset: DbgBpOffFixup)
-				end 'theCallHasPushedItsReturn'
-
-				return textBase + dbgLoad(entry, offset: DbgBpOffTextOffset) + (classWord and DbgClassByteMask)
-			end 'thisSlot'
-		end 'taken'
-	end 'eachSlot'
-
-	return pc
+	return textBase + dbgLoad(slot, offset: DbgSlotOriginAt) + (dbgLoad(slot, offset: DbgSlotClassWordAt) and DbgClassByteMask)
 end 'dbgPcAfterASlot'
+
+function dbgPcOfASlot(slot DbgWord, textBase DbgWord, pc DbgWord) returns DbgWord
+	if slot == DbgNotFound or dbgPastTheExitCount(slot, pc: pc) 'notInASlotItStillHolds'
+		return pc
+	end 'notInASlotItStillHolds'
+
+	return textBase + dbgLoad(slot, offset: DbgSlotOriginAt)
+end 'dbgPcOfASlot'
 
 function dbgInstructionClassOf(classWord DbgWord) returns DbgWord
 	return (classWord shr DbgClassShift) and DbgClassByteMask
 end 'dbgInstructionClassOf'
 
-// Only the two jump classes are answered without executing anything: they move the pc and write no
-// memory, so the handler can state where they land.
-function dbgClassIsSimulated(instructionClass DbgWord) returns bool
-	return instructionClass == DbgClassDirectJump or instructionClass == DbgClassConditionalJump
-end 'dbgClassIsSimulated'
-
-function dbgStepLandsOnASimulatedTarget(private DbgWord, index DbgWord) returns bool
-	if not dbgBreakpointIsLive(private, index: index) 'nothingIsArmedHere'
-		return false
+function dbgSimulatedStep(base DbgWord, private DbgWord, index DbgWord, stopPc DbgWord) returns DbgWord
+	if index == DbgNotFound 'nothingIsArmedHere'
+		return DbgNotFound
 	end 'nothingIsArmedHere'
 
-	if dbgLoad(private, offset: DbgPrivOffResumeAction) != DbgResumeStep 'notSteppingAtAll'
-		return false
-	end 'notSteppingAtAll'
+	let entry = dbgBreakpointEntry(private, index: index)
+	let classWord = dbgLoad(entry, offset: DbgBpOffClassWord)
 
-	return dbgClassIsSimulated(dbgInstructionClassOf(dbgLoad(dbgBreakpointEntry(private, index: index), offset: DbgBpOffClassWord)))
-end 'dbgStepLandsOnASimulatedTarget'
+	return dbgSimulate(base, entry: entry, stopPc: stopPc, classWord: classWord, instructionClass: dbgInstructionClassOf(classWord))
+end 'dbgSimulatedStep'
 
 // A breakpoint's byte is never lifted to step over it. The scheduler preempts machines asynchronously, so
 // any window in which the original byte is back is a window in which another machine runs past the
 // breakpoint unseen; the displaced instruction is executed out of line instead.
-function dbgResume(base DbgWord, private DbgWord, context DbgWord, stopPc DbgWord, index DbgWord)
+function dbgResume(base DbgWord, private DbgWord, context DbgWord, stopPc DbgWord, index DbgWord, action DbgWord)
 	var nextPc = stopPc
-	var singleStep = dbgLoad(private, offset: DbgPrivOffResumeAction) == DbgResumeStep
+	var singleStep = action == DbgResumeStep
 
-	if dbgBreakpointIsLive(private, index: index) 'displacedByAnArmedByte'
+	if index != DbgNotFound 'displacedByAnArmedByte'
 		let entry = dbgBreakpointEntry(private, index: index)
 		let classWord = dbgLoad(entry, offset: DbgBpOffClassWord)
-		let instructionClass = dbgInstructionClassOf(classWord)
+		let simulated = dbgSimulate(base, entry: entry, stopPc: stopPc, classWord: classWord, instructionClass: dbgInstructionClassOf(classWord))
 
-		if dbgClassIsSimulated(instructionClass) 'simulated'
-			nextPc = dbgSimulate(base, entry: entry, stopPc: stopPc, classWord: classWord, instructionClass: instructionClass)
+		if simulated != DbgNotFound 'simulated'
+			nextPc = simulated
 			singleStep = false
 		end 'simulated' else 'runItOutOfLine'
 			nextPc = dbgLoad(entry, offset: DbgBpOffSlotAddr)
+			dbgEnterTheSlot(nextPc)
 		end 'runItOutOfLine'
 	end 'displacedByAnArmedByte'
 
 	dbgWriteRegistersBack(base, context: context)
 	dbgStore(context, offset: DbgCtxOffRip, value: nextPc)
 	dbgSetTrapFlag(context, armed: singleStep)
+
+	if singleStep 'oneInstruction'
+		dbgHoldPreemptionForTheStep()
+	end 'oneInstruction'
 end 'dbgResume'
 
+function dbgHoldPreemptionForTheStep()
+	let machine = dbgCurrentMachine()
+
+	if machine == 0 'notAMachine'
+		return
+	end 'notAMachine'
+
+	while __Raw.atomicCas((machine + DbgMOffSignalPending) as MachineWord, expected: DbgPreemptClaimFree as MachineWord, replacement: DbgPreemptClaimStep as MachineWord) == DbgNothing 'theMonitorHoldsTheClaim'
+		dbgSinkHostAnswer(__Raw.osDebugHost(DbgVerbParkWait, a0: DbgParkPollIntervalMs as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing))
+	end 'theMonitorHoldsTheClaim'
+end 'dbgHoldPreemptionForTheStep'
+
+function dbgReleaseTheStepsPreemptionHold()
+	let machine = dbgCurrentMachine()
+
+	if machine == 0 'notAMachine'
+		return
+	end 'notAMachine'
+
+	dbgSinkHostAnswer(__Raw.atomicCas((machine + DbgMOffSignalPending) as MachineWord, expected: DbgPreemptClaimStep as MachineWord, replacement: DbgPreemptClaimFree as MachineWord))
+end 'dbgReleaseTheStepsPreemptionHold'
+
+// Only the two jump classes and a return are answered without executing anything: they write no
+// memory, so the handler can state where they land. A return only reads its address and moves rsp
+// in the register file, which the resume writes back.
 function dbgSimulate(base DbgWord, entry DbgWord, stopPc DbgWord, classWord DbgWord, instructionClass DbgWord) returns DbgWord
 	let length = classWord and DbgClassByteMask
 	let fallThrough = stopPc + length
-	let target = dbgLoad(entry, offset: DbgBpOffFixup)
+	let fixup = dbgLoad(entry, offset: DbgBpOffFixup)
 
 	if instructionClass == DbgClassDirectJump 'jump'
-		return target
+		return fixup
 	end 'jump'
 
-	return target if dbgConditionHolds(base, condition: (classWord shr DbgCondShift) and DbgLowNibbleMask) else fallThrough
+	if instructionClass == DbgClassConditionalJump 'conditionalJump'
+		return fixup if dbgConditionHolds(base, condition: (classWord shr DbgCondShift) and DbgLowNibbleMask) else fallThrough
+	end 'conditionalJump'
+
+	if instructionClass == DbgClassReturn 'aReturn'
+		return dbgPoppedReturn(base, stopPc: stopPc, classWord: classWord)
+	end 'aReturn'
+
+	return DbgNotFound
 end 'dbgSimulate'
+
+function dbgPoppedReturn(base DbgWord, stopPc DbgWord, classWord DbgWord) returns DbgWord
+	let sp = dbgRegister(base, number: DbgRegRsp)
+	let releaseAt = dbgOperandPositionOf(classWord)
+	var released = 0 as DbgWord
+
+	if not dbgRegionIsReadable(sp, length: DbgWordBytes) 'noReturnAddressToRead'
+		return DbgNotFound
+	end 'noReturnAddressToRead'
+
+	if releaseAt != DbgReturnReleasesNothing 'itReleasesArguments'
+		let private = dbgPrivateBlock()
+		let textBase = dbgLoad(base, offset: DbgOffTextBase)
+		released = dbgProgramByteAt(private, textBase: textBase, address: stopPc + releaseAt) or (dbgProgramByteAt(private, textBase: textBase, address: stopPc + releaseAt + DbgOneByte) shl DbgByteBits)
+	end 'itReleasesArguments'
+
+	dbgSetRegister(base, number: DbgRegRsp, value: sp + DbgWordBytes + released)
+
+	return dbgLoad(sp, offset: 0)
+end 'dbgPoppedReturn'
 
 function dbgConditionHolds(base DbgWord, condition DbgWord) returns bool
 	let low = dbgRegisterFlagsLow(base)
@@ -1528,6 +1979,7 @@ function dbgWalkFrames(base DbgWord, frame DbgWord)
 	var cursor = frame
 	var count = 0 as DbgWord
 	var truncated = 0 as DbgWord
+	var outerFrame = 0 as DbgWord
 	var walking = true
 
 	while walking 'eachFrame'
@@ -1555,6 +2007,7 @@ function dbgWalkFrames(base DbgWord, frame DbgWord)
 		count = count + 1
 
 		let next = dbgLoad(cursor, offset: 0)
+		outerFrame = next
 
 		if next <= cursor 'notAnAscendingChain'
 			walking = false
@@ -1566,6 +2019,7 @@ function dbgWalkFrames(base DbgWord, frame DbgWord)
 
 	dbgStore(base, offset: DbgOffBtCount, value: count)
 	dbgStore(base, offset: DbgOffBtTruncated, value: truncated)
+	dbgStore(base, offset: DbgOffBtOuterFrame, value: outerFrame)
 	dbgAnswerDone(base)
 end 'dbgWalkFrames'
 
@@ -1647,14 +2101,9 @@ function dbgInsideRuntimeSymbol(textOffset DbgWord) returns bool
 		high = middle - 1
 	end 'search'
 
-	let entry = dbgLoad(table, offset: DbgSymtabOffEntries + best * DbgSymtabEntryBytes)
-	let name = table + ((entry shr (DbgSymtabColumnBytes * DbgByteBits)) and DbgSymtabEntryCodeOffsetMask)
+	let flags = table + ((dbgLoad(table, offset: 0) shr (DbgSymtabColumnBytes * DbgByteBits)) and DbgSymtabEntryCodeOffsetMask)
 
-	if dbgLoadByte(name, offset: 0) == DbgCharUnderscore and dbgLoadByte(name, offset: 1) == DbgCharUnderscore 'theCompilersBand'
-		return true
-	end 'theCompilersBand'
-
-	return dbgLoadByte(name, offset: 0) == DbgCharM and dbgLoadByte(name, offset: 1) == DbgCharR and dbgLoadByte(name, offset: 2) == DbgCharT and dbgLoadByte(name, offset: 3) == DbgCharUnderscore
+	return (dbgLoadByte(flags, offset: best) and DbgSymtabScaffoldingBit) != 0
 end 'dbgInsideRuntimeSymbol'
 
 // A command posted while a machine is parked finds the stop lock taken and is left for the park loop; one
@@ -1686,6 +2135,7 @@ function dbgServiceMailbox(base DbgWord, private DbgWord)
 		dbgRefuse(base, reason: DbgRefusalNotRunning)
 	end 'aResumeWithNothingParked'
 
+	dbgStore(base, offset: DbgOffAckStopSeq, value: DbgAnsweredLive)
 	dbgStore(base, offset: DbgOffAckSeq, value: sequence)
 	dbgDropStopLock(private)
 end 'dbgServiceMailbox'
@@ -1708,15 +2158,16 @@ function dbgAdvancePause(base DbgWord, private DbgWord)
 end 'dbgAdvancePause'
 
 function dbgPauseAttempt(base DbgWord, private DbgWord)
-	let machines = dbgAllMachines()
+	if dbgEveryMachineIsIdle() 'theProgramIsIdle'
+		let stopped = dbgServiceStop(base, private: private)
 
-	if machines != 0 and not dbgSomeMachineRunsUserCode(machines) 'nothingIsRunning'
-		dbgServiceStop(base, private: private)
-		return
-	end 'nothingIsRunning'
+		if stopped 'servedWhereItIdled'
+			return
+		end 'servedWhereItIdled'
+	end 'theProgramIsIdle'
 
 	if dbgTryInject(base, private: private) 'landed'
-		dbgFinishPause(base, private: private, result: DbgCmdResultDone, reason: 0)
+		dbgFinishPause(base, private: private, result: DbgCmdResultDone, reason: 0, answeredUnder: DbgAnsweredLive)
 		return
 	end 'landed'
 
@@ -1727,15 +2178,22 @@ function dbgPauseAttempt(base DbgWord, private DbgWord)
 		return
 	end 'tryAgainOnTheNextPoll'
 
-	let stillRunning = dbgAllMachines()
+	var paused = false
 
-	if stillRunning == 0 or dbgSomeMachineRunsUserCode(stillRunning) 'noSafePointWasEverReached'
-		dbgFinishPause(base, private: private, result: DbgCmdResultRefused, reason: DbgRefusalNotPausable)
-		return
+	if dbgEveryMachineIsIdle() 'idleAtLast'
+		paused = dbgServiceStop(base, private: private)
+	end 'idleAtLast'
+
+	if not paused 'noSafePointWasEverReached'
+		dbgFinishPause(base, private: private, result: DbgCmdResultRefused, reason: DbgRefusalNotPausable, answeredUnder: DbgAnsweredLive)
 	end 'noSafePointWasEverReached'
-
-	dbgServiceStop(base, private: private)
 end 'dbgPauseAttempt'
+
+function dbgEveryMachineIsIdle() returns bool
+	let machines = dbgAllMachines()
+
+	return machines != 0 and not dbgSomeMachineRunsUserCode(machines)
+end 'dbgEveryMachineIsIdle'
 
 function dbgRequestYield(machine DbgWord)
 	if machine == 0 'notAMachine'
@@ -1771,10 +2229,18 @@ function dbgSomeMachineRunsUserCode(machines DbgWord) returns bool
 	return false
 end 'dbgSomeMachineRunsUserCode'
 
-// The page reports no pc, sp or fp: no thread of the program was at an instruction anyone asked about. The
-// pause is acknowledged before the park, so the driver can post the commands this stop exists to answer.
-function dbgServiceStop(base DbgWord, private DbgWord)
+// The pause is acknowledged before the park, so the driver can post the commands this stop exists
+// to answer.
+function dbgServiceStop(base DbgWord, private DbgWord) returns bool
 	dbgStopTheWorld(private)
+
+	// The caller judged the machines idle with the world running, and a green thread between two
+	// machines looks idle then. Judged again under the stop, such a thread declines the stop rather
+	// than running on under one.
+	if dbgSomeGreenThreadCanRun(private) 'aGreenThreadIsBetweenMachines'
+		dbgStartTheWorld(private)
+		return false
+	end 'aGreenThreadIsBetweenMachines'
 
 	// No thread of the program is stopped at an instruction, so there are no registers to report; a file
 	// still holding the previous stop's would be read as this one's.
@@ -1782,17 +2248,36 @@ function dbgServiceStop(base DbgWord, private DbgWord)
 	dbgStore(base, offset: DbgOffStopPc, value: 0)
 	dbgStore(base, offset: DbgOffStopSp, value: 0)
 	dbgStore(base, offset: DbgOffStopFp, value: 0)
-	dbgPublishStop(base, reason: DbgStopReasonPause)
-	dbgFinishPause(base, private: private, result: DbgCmdResultDone, reason: 0)
+	dbgPublishStop(base, reason: DbgStopReasonPause, fault: DbgNoFault, conditionMissed: false)
+	dbgFinishPause(base, private: private, result: DbgCmdResultDone, reason: 0, answeredUnder: dbgLoad(base, offset: DbgOffStopSeq))
 
 	dbgPark(base, private: private, stopKind: DbgStopKindNoThread)
 	dbgStartTheWorld(private)
+	return true
 end 'dbgServiceStop'
 
-function dbgFinishPause(base DbgWord, private DbgWord, result DbgWord, reason DbgWord)
+function dbgSomeGreenThreadCanRun(private DbgWord) returns bool
+	let count = dbgLoad(private, offset: DbgPrivOffRosterCount)
+	var index = 0 as DbgWord
+
+	while index < count 'eachRecord'
+		let gt = dbgRosterEntry(private, index: index)
+
+		if dbgGtIsLive(gt) and dbgLoad(gt, offset: DbgGtOffStatus) != DbgGtStatusWaitingWord and not dbgHoldsThisLife(private, gt: gt) 'itIsRunnable'
+			return true
+		end 'itIsRunnable'
+
+		index = index + 1
+	end 'eachRecord'
+
+	return false
+end 'dbgSomeGreenThreadCanRun'
+
+function dbgFinishPause(base DbgWord, private DbgWord, result DbgWord, reason DbgWord, answeredUnder DbgWord)
 	dbgStore(private, offset: DbgPrivOffPauseAttempts, value: 0)
 	dbgStore(base, offset: DbgOffCmdRefusal, value: reason)
 	dbgStore(base, offset: DbgOffCmdResult, value: result)
+	dbgStore(base, offset: DbgOffAckStopSeq, value: answeredUnder)
 	dbgStore(base, offset: DbgOffAckSeq, value: dbgLoad(base, offset: DbgOffCmdSeq))
 end 'dbgFinishPause'
 
@@ -1834,7 +2319,7 @@ function dbgInjectThread(base DbgWord, private DbgWord, machine DbgWord, handle 
 
 	let suspended = __Raw.osDebugHost(DbgVerbSuspendThread, a0: handle as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing) as DbgWord
 
-	if (suspended and DbgDwordMask) == DbgSuspendFailed 'theThreadIsGone'
+	if suspended == DbgSuspendFailed 'theThreadIsGone'
 		dbgDropExtLock()
 		dbgHandBackSignalPending(machine)
 		return false
@@ -1875,8 +2360,8 @@ function dbgInjectThread(base DbgWord, private DbgWord, machine DbgWord, handle 
 	return injected
 end 'dbgInjectThread'
 
-// With a scheduler the six conjuncts of `__gt_preempt_safe` are the answer. Without one there is no machine
-// and no green-thread stack to judge, and what is left is the pc: inside the image's own code, and outside
+// With a scheduler `__gt_preempt_safe` is the answer. Without one there is no machine and no
+// green-thread stack to judge, and what is left is the pc: inside the image's own code, and outside
 // the runtime's band, which is where a stop would land on a frame no walk can describe.
 function dbgPauseIsSafe(base DbgWord, machine DbgWord, pc DbgWord, sp DbgWord) returns bool
 	if machine != 0 'askTheScheduler'
@@ -1893,10 +2378,9 @@ function dbgPauseIsSafe(base DbgWord, machine DbgWord, pc DbgWord, sp DbgWord) r
 end 'dbgPauseIsSafe'
 
 function dbgSetCondition(base DbgWord, private DbgWord)
-	let index = dbgFindBreakpoint(private, textOffset: dbgLoad(base, offset: DbgOffCmdArg0))
+	let index = dbgNamedBreakpointOrRefuse(base, private: private)
 
-	if not dbgBreakpointIsLive(private, index: index) 'nothingArmedThere'
-		dbgRefuse(base, reason: DbgRefusalNoSuchBreakpoint)
+	if index == DbgNotFound 'nothingArmedThere'
 		return
 	end 'nothingArmedThere'
 
@@ -1913,15 +2397,23 @@ function dbgSetCondition(base DbgWord, private DbgWord)
 	dbgAnswerDone(base)
 end 'dbgSetCondition'
 
-function dbgClearCondition(base DbgWord, private DbgWord)
-	let index = dbgFindBreakpoint(private, textOffset: dbgLoad(base, offset: DbgOffCmdArg0))
-
-	if not dbgBreakpointIsLive(private, index: index) 'nothingArmedThere'
-		dbgRefuse(base, reason: DbgRefusalNoSuchBreakpoint)
+function dbgHoldReturnPoint(base DbgWord, private DbgWord)
+	if dbgNamedBreakpointOrRefuse(base, private: private) == DbgNotFound 'nothingArmedThere'
 		return
 	end 'nothingArmedThere'
 
-	dbgStore(dbgBreakpointEntry(private, index: index), offset: DbgBpOffCondition + DbgCondRecOffKind, value: 0)
+	dbgStore(private, offset: DbgPrivOffReturnHold, value: dbgLoad(base, offset: DbgOffTextBase) + dbgLoad(base, offset: DbgOffCmdArg0))
+	dbgAnswerDone(base)
+end 'dbgHoldReturnPoint'
+
+function dbgClearCondition(base DbgWord, private DbgWord)
+	let index = dbgNamedBreakpointOrRefuse(base, private: private)
+
+	if index == DbgNotFound 'nothingArmedThere'
+		return
+	end 'nothingArmedThere'
+
+	dbgStore(dbgBreakpointEntry(private, index: index), offset: DbgBpOffCondition + DbgCondRecOffKind, value: DbgCondKindNone)
 	dbgAnswerDone(base)
 end 'dbgClearCondition'
 
@@ -1932,7 +2424,7 @@ function dbgConditionAllows(private DbgWord, index DbgWord, context DbgWord) ret
 	let entry = dbgBreakpointEntry(private, index: index)
 	let kind = dbgLoad(entry, offset: DbgBpOffCondition + DbgCondRecOffKind)
 
-	if kind == 0 'unconditional'
+	if kind == DbgCondKindNone 'unconditional'
 		return true
 	end 'unconditional'
 
@@ -2179,7 +2671,7 @@ function dbgReportedStatus(private DbgWord, gt DbgWord, machine DbgWord, status 
 		return DbgGtStatusRunning
 	end 'onAMachine'
 
-	if dbgHoldSlotOf(private, handle: gt) != DbgNotFound 'theDriverIsHoldingIt'
+	if dbgHoldsThisLife(private, gt: gt) 'theDriverIsHoldingIt'
 		return DbgGtStatusHeld
 	end 'theDriverIsHoldingIt'
 
@@ -2224,12 +2716,13 @@ function dbgGtHold(base DbgWord, private DbgWord)
 		return
 	end 'itIsRunningRightNow'
 
-	if dbgHoldSlotOf(private, handle: handle) != DbgNotFound 'alreadyHeld'
+	if dbgHoldsThisLife(private, gt: handle) 'alreadyHeld'
 		dbgAnswerDone(base)
 		return
 	end 'alreadyHeld'
 
-	let free = dbgFreeHoldSlot(private)
+	let lapsed = dbgHoldSlotOf(private, handle: handle)
+	let free = lapsed if lapsed != DbgNotFound else dbgFreeHoldSlot(private)
 
 	if free == DbgNotFound 'noRoom'
 		dbgRefuse(base, reason: DbgRefusalHoldTableFull)
@@ -2242,9 +2735,25 @@ function dbgGtHold(base DbgWord, private DbgWord)
 	dbgStore(at, offset: DbgHoldOffFuncPtr, value: dbgLoad(handle, offset: DbgGtOffFuncPtr))
 	dbgStore(at, offset: DbgHoldOffStackBase, value: dbgLoad(handle, offset: DbgGtOffStackBase))
 	dbgStore(at, offset: DbgHoldOffHandle, value: handle)
-	dbgStore(private, offset: DbgPrivOffHoldsPlaced, value: dbgLoad(private, offset: DbgPrivOffHoldsPlaced) + 1)
+
+	if lapsed == DbgNotFound 'aNewSlot'
+		dbgStore(private, offset: DbgPrivOffHoldsPlaced, value: dbgLoad(private, offset: DbgPrivOffHoldsPlaced) + 1)
+	end 'aNewSlot'
+
 	dbgAnswerDone(base)
 end 'dbgGtHold'
+
+function dbgHoldsThisLife(private DbgWord, gt DbgWord) returns bool
+	let slot = dbgHoldSlotOf(private, handle: gt)
+
+	if slot == DbgNotFound 'nobodyHoldsThisAddress'
+		return false
+	end 'nobodyHoldsThisAddress'
+
+	let at = dbgHoldSlotAddr(private, slot: slot)
+
+	return dbgLoad(at, offset: DbgHoldOffFuncPtr) == dbgLoad(gt, offset: DbgGtOffFuncPtr) and dbgLoad(at, offset: DbgHoldOffStackBase) == dbgLoad(gt, offset: DbgGtOffStackBase)
+end 'dbgHoldsThisLife'
 
 function dbgGtRelease(base DbgWord, private DbgWord)
 	let slot = dbgHoldSlotOf(private, handle: dbgLoad(base, offset: DbgOffCmdArg0))

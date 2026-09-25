@@ -4,27 +4,129 @@ export typealias X64Length = int(0 to 15)
 export typealias X64Class = int(0 to 8)
 export typealias X64Condition = int(0 to 15)
 
+export typealias X64RegisterNumber = int(0 to 15)
+export typealias X64Scale = int(1 to 8)
+
 typealias X64ByteValue = int(0 to 255)
 typealias X64ModRmField = int(0 to 7)
+
+export enum X64CallForm
+	register
+	memory
+	programCounterRelative
+end 'X64CallForm'
+
+function callFormCode(form X64CallForm) returns X64Address
+	return match form 'form'
+		register gives DbgCallFormRegister as X64Address
+		memory gives DbgCallFormMemory as X64Address
+		programCounterRelative gives DbgCallFormPcRelative as X64Address
+	end 'form'
+end 'callFormCode'
+
+export union X64RegisterLookup
+	none
+	register(number X64RegisterNumber)
+
+	function spelled() returns String
+		return match self 'lookup'
+			none gives NoRegisterSpelling
+			register(number) gives "{number}"
+		end 'lookup'
+	end 'spelled'
+end 'X64RegisterLookup'
+
+export union X64CallOperand
+	none
+	register(number X64RegisterNumber)
+	memory(base X64RegisterLookup, index X64RegisterLookup, scale X64Scale, displacement X64Relative)
+	programCounterRelative(address X64Address)
+	addressOverridden(form X64CallForm, referent X64Address)
+
+	function callForm() returns X64CallForm
+		match self 'operand'
+			none then panic("X64CallOperand.callForm: only an indirect call is asked for its form, and every indirect call decodes the operand it calls through")
+			register then return X64CallForm.register
+			memory then return X64CallForm.memory
+			programCounterRelative then return X64CallForm.programCounterRelative
+			addressOverridden(form, _) then return form
+		end 'operand'
+	end 'callForm'
+
+	/// The operand as `maxon debug --classify` prints it after `operand=`, compared byte for byte by
+	/// `tests/debug/x64-classifies-each-instruction-class.maxtest`.
+	export function spelled() returns String
+		match self 'operand'
+			none then panic("X64CallOperand.spelled: only an indirect call is asked for its operand, and every indirect call decodes the operand it calls through")
+			register(number) then return "reg:{number}"
+			memory(base, index, scale, displacement) then return "mem:base={base.spelled()},index={index.spelled()},scale={scale},disp={spelledRelative(displacement)}"
+			programCounterRelative(address) then return "word:0x{address:x}"
+			addressOverridden(form, _) then return "overridden:form={callFormCode(form)}"
+		end 'operand'
+	end 'spelled'
+
+	function rebasedReferent() returns X64Address
+		match self 'operand'
+			none then panic("X64CallOperand.rebasedReferent: only an indirect call is asked for its operand, and every indirect call decodes the operand it calls through")
+
+			register or
+				memory then return 0
+
+			programCounterRelative(address) then return address
+			addressOverridden(_, referent) then return referent
+		end 'operand'
+	end 'rebasedReferent'
+end 'X64CallOperand'
+
+function spelledRelative(displacement X64Relative) returns String
+	return match displacement 'direction'
+		forward(magnitude) gives "+0x{magnitude:x}"
+		backward(magnitude) gives "-0x{magnitude:x}"
+	end 'direction'
+end 'spelledRelative'
 
 export type X64Instruction
 	export var length as X64Length
 	export var instructionClass as X64Class
 	export var condition as X64Condition
 	export var displacementPosition as X64Length
+	export var releasePosition as X64Length
 	export var target as X64Address
+	export var pushesARegister as bool
+	export var callOperand as X64CallOperand
+	export var modRmPosition as X64Length
 
-	export static function create(length X64Length, instructionClass X64Class, condition X64Condition, displacementPosition X64Length, target X64Address) returns X64Instruction
-		return Self{length: length, instructionClass: instructionClass, condition: condition, displacementPosition: displacementPosition, target: target}
+	export static function create(length X64Length, instructionClass X64Class, condition X64Condition, displacementPosition X64Length, releasePosition X64Length, target X64Address, pushesARegister bool, callOperand X64CallOperand, modRmPosition X64Length) returns X64Instruction
+		return Self{length: length, instructionClass: instructionClass, condition: condition, displacementPosition: displacementPosition, releasePosition: releasePosition, target: target, pushesARegister: pushesARegister, callOperand: callOperand, modRmPosition: modRmPosition}
 	end 'create'
 
 	export function classWord() returns X64Address
-		let byteTwo = self.condition as X64Address if self.instructionClass == DbgClassConditionalJump else self.displacementPosition as X64Address
+		let word = (self.length as X64Address) or ((self.instructionClass as X64Address) shl DbgClassShift) or (self.operandByte() shl DbgCondShift)
 
-		return (self.length as X64Address) or ((self.instructionClass as X64Address) shl DbgClassShift) or (byteTwo shl DbgCondShift)
+		if self.instructionClass == DbgClassIndirectCall 'callsThroughAnOperand'
+			return word or (callFormCode(self.callOperand.callForm()) shl DbgCallFormShift) or ((self.modRmPosition as X64Address) shl DbgCallModRmShift)
+		end 'callsThroughAnOperand'
+
+		return word
 	end 'classWord'
 
+	function operandByte() returns X64Address
+		if self.instructionClass == DbgClassConditionalJump 'aCondition'
+			return self.condition as X64Address
+		end 'aCondition'
+
+		if self.instructionClass == DbgClassReturn 'anArgumentRelease'
+			return self.releasePosition as X64Address
+		end 'anArgumentRelease'
+
+		return self.displacementPosition as X64Address
+	end 'operandByte'
+
 	export function fixupWord() returns X64Address
+		if self.instructionClass == DbgClassIndirectCall 'callsThroughAnOperand'
+			return self.callOperand.rebasedReferent()
+		end 'callsThroughAnOperand'
+
 		if self.instructionClass == DbgClassPcRelativeData or self.instructionClass == DbgClassDirectCall or self.instructionClass == DbgClassDirectJump or self.instructionClass == DbgClassConditionalJump 'carriesATarget'
 			return self.target
 		end 'carriesATarget'
@@ -37,6 +139,44 @@ export union X64Decode
 	unclassified
 	decoded(instruction X64Instruction)
 end 'X64Decode'
+
+export union X64FrameStep
+	pushesAWord(length X64Length)
+	setsTheFramePointer
+	neither
+end 'X64FrameStep'
+
+let SetFramePointerBytes = b"\x48\x89\xE5"
+let PushRegisterLow = 0x50 as X64ByteValue
+let PushRegisterHigh = 0x57 as X64ByteValue
+let PopRegisterHigh = 0x5F as X64ByteValue
+
+/// What the prologue instruction at `at` does to the frame: `mov rbp, rsp` exactly, a push of a
+/// register, or neither.
+export function x64FrameStepAt(code ByteArray, at X64Offset) returns X64FrameStep
+	if codeHoldsAt(code, at: at, bytes: SetFramePointerBytes) 'set'
+		return X64FrameStep.setsTheFramePointer
+	end 'set'
+
+	return match decodeX64Instruction(code, at: at, address: at as X64Address) 'decoded'
+		unclassified gives X64FrameStep.neither
+		decoded(instruction) gives X64FrameStep.pushesAWord(instruction.length) if instruction.pushesARegister else X64FrameStep.neither
+	end 'decoded'
+end 'x64FrameStepAt'
+
+function codeHoldsAt(code ByteArray, at X64Offset, bytes ByteArray) returns bool
+	if at + (bytes.count() as X64Offset) > (code.count() as X64Offset) 'pastTheCode'
+		return false
+	end 'pastTheCode'
+
+	for (iter, expected) in bytes.withIterator() 'eachByte'
+		if (try code.get(at + (iter.index() as X64Offset)) otherwise panic("codeHoldsAt: offset {at} plus {iter.index()} was bounds-checked against {code.count()} bytes")) != expected 'aDifferentByte'
+			return false
+		end 'aDifferentByte'
+	end 'eachByte'
+
+	return true
+end 'codeHoldsAt'
 
 union X64Immediate
 	none
@@ -53,6 +193,7 @@ end 'X64Shape'
 
 enum X64Family
 	ordinary
+	pushingRegister
 	directCall
 	directJump
 	conditionalJump
@@ -131,12 +272,12 @@ type X64Cursor
 	end 'signedAt'
 end 'X64Cursor'
 
-union X64Relative
+export union X64Relative
 	forward(magnitude X64Address)
 	backward(magnitude X64Address)
 end 'X64Relative'
 
-enum X64DecodeError implements Error
+module enum X64DecodeError implements Error
 	pastTheCode
 	notAnInstructionThisBuildDecodes
 end 'X64DecodeError'
@@ -145,10 +286,15 @@ typealias X64BitPosition = int(0 to 63)
 
 let ByteBits = 8
 let SignBitByteValue = 128 as X64ByteValue
+let NoRegisterSpelling = "none"
 
 let RexLow = 0x40 as X64ByteValue
 let RexHigh = 0x4F as X64ByteValue
 let RexWideBit = 0x08
+let RexIndexBit = 0x02 as X64ByteValue
+let RexBaseBit = 0x01 as X64ByteValue
+let RexExtendedRegisters = 8
+let NoRex = 0 as X64ByteValue
 
 let OperandSizePrefix = 0x66 as X64ByteValue
 let AddressSizePrefix = 0x67 as X64ByteValue
@@ -174,6 +320,11 @@ let ModRmDisp32 = 2
 let ModRmSibRm = 4
 let ModRmRipRm = 5
 let SibNoBase = 5
+let SibNoIndex = 4
+let SibIndexShift = 3
+let SibScaleShift = 6
+let SibScaleMask = 3
+let NoSib = 0 as X64ByteValue
 
 let Disp8Bytes = 1 as X64Length
 let Disp32Bytes = 4 as X64Length
@@ -204,31 +355,29 @@ end 'twoToThe'
 // It decodes what this compiler emits, and nothing else: VEX, EVEX, the 0F38/0F3A maps and x87 all answer
 // `unclassified`, which refuses the breakpoint rather than displacing bytes it has measured wrongly.
 export function decodeX64Instruction(code ByteArray, at X64Offset, address X64Address) returns X64Decode
-	return try decodedX64Instruction(code, at: at, address: address) otherwise X64Decode.unclassified
+	return X64Decode.decoded(try x64InstructionAt(code, at: at, address: address) otherwise return X64Decode.unclassified)
 end 'decodeX64Instruction'
 
-function decodedX64Instruction(code ByteArray, at X64Offset, address X64Address) returns X64Decode throws X64DecodeError
+module function x64InstructionAt(code ByteArray, at X64Offset, address X64Address) returns X64Instruction throws X64DecodeError
 	var cursor = X64Cursor.create(code, at: at)
-	var wideOperand = false
+	var rex = NoRex
 	var narrowOperand = false
+	var addressOverridden = false
 	var scanningPrefixes = true
 
 	while scanningPrefixes 'eachPrefix'
 		let byte = try cursor.peek()
 
-		if byte == OperandSizePrefix 'sixteenBit'
-			narrowOperand = true
+		if isLegacyPrefix(byte) 'aLegacyPrefix'
+			narrowOperand = narrowOperand or byte == OperandSizePrefix
+			addressOverridden = addressOverridden or overridesTheAddress(byte)
+			rex = NoRex
 			try cursor.skip(1)
 			continue
-		end 'sixteenBit'
-
-		if isIgnorablePrefix(byte) 'noEffectOnLength'
-			try cursor.skip(1)
-			continue
-		end 'noEffectOnLength'
+		end 'aLegacyPrefix'
 
 		if byte >= RexLow and byte <= RexHigh 'aRexByte'
-			wideOperand = (byte and RexWideBit) != 0
+			rex = byte
 			try cursor.skip(1)
 			continue
 		end 'aRexByte'
@@ -241,43 +390,47 @@ function decodedX64Instruction(code ByteArray, at X64Offset, address X64Address)
 	if primary == TwoByteEscape 'theSecondMap'
 		let secondary = try cursor.take()
 
-		return try decodedTwoByteInstruction(cursor, at: at, address: address, secondary: secondary, narrowOperand: narrowOperand, wideOperand: wideOperand)
+		return try decodedTwoByteInstruction(cursor, at: at, address: address, secondary: secondary, narrowOperand: narrowOperand, addressOverridden: addressOverridden, rex: rex)
 	end 'theSecondMap'
 
-	return try decodedShapedInstruction(cursor, at: at, address: address, shape: oneByteShape(primary), condition: (primary and ConditionNibbleMask) as X64Condition, relativeBytes: oneByteRelativeBytes(primary), narrowOperand: narrowOperand, wideOperand: wideOperand)
-end 'decodedX64Instruction'
+	return try decodedShapedInstruction(cursor, at: at, address: address, shape: oneByteShape(primary), condition: (primary and ConditionNibbleMask) as X64Condition, relativeBytes: oneByteRelativeBytes(primary), narrowOperand: narrowOperand, addressOverridden: addressOverridden, rex: rex)
+end 'x64InstructionAt'
 
-function decodedTwoByteInstruction(cursor X64Cursor, at X64Offset, address X64Address, secondary X64ByteValue, narrowOperand bool, wideOperand bool) returns X64Decode throws X64DecodeError
+function decodedTwoByteInstruction(cursor X64Cursor, at X64Offset, address X64Address, secondary X64ByteValue, narrowOperand bool, addressOverridden bool, rex X64ByteValue) returns X64Instruction throws X64DecodeError
 	if secondary >= 0x80 and secondary <= 0x8F 'aLongConditionalJump'
-		return try decodedShapedInstruction(cursor, at: at, address: address, shape: X64Shape.operation(false, immediate: X64Immediate.none, family: X64Family.conditionalJump), condition: (secondary and ConditionNibbleMask) as X64Condition, relativeBytes: Disp32Bytes, narrowOperand: narrowOperand, wideOperand: wideOperand)
+		return try decodedShapedInstruction(cursor, at: at, address: address, shape: X64Shape.operation(false, immediate: X64Immediate.none, family: X64Family.conditionalJump), condition: (secondary and ConditionNibbleMask) as X64Condition, relativeBytes: Disp32Bytes, narrowOperand: narrowOperand, addressOverridden: addressOverridden, rex: rex)
 	end 'aLongConditionalJump'
 
-	return try decodedShapedInstruction(cursor, at: at, address: address, shape: twoByteShape(secondary), condition: 0, relativeBytes: 0, narrowOperand: narrowOperand, wideOperand: wideOperand)
+	return try decodedShapedInstruction(cursor, at: at, address: address, shape: twoByteShape(secondary), condition: 0, relativeBytes: 0, narrowOperand: narrowOperand, addressOverridden: addressOverridden, rex: rex)
 end 'decodedTwoByteInstruction'
 
-function decodedShapedInstruction(cursor X64Cursor, at X64Offset, address X64Address, shape X64Shape, condition X64Condition, relativeBytes X64Length, narrowOperand bool, wideOperand bool) returns X64Decode throws X64DecodeError
+function decodedShapedInstruction(cursor X64Cursor, at X64Offset, address X64Address, shape X64Shape, condition X64Condition, relativeBytes X64Length, narrowOperand bool, addressOverridden bool, rex X64ByteValue) returns X64Instruction throws X64DecodeError
 	match shape 'known'
 		unknown then throw X64DecodeError.notAnInstructionThisBuildDecodes
-		operation(hasModRm, immediate, family) then return try decodedOperation(cursor, at: at, address: address, hasModRm: hasModRm, immediate: immediate, family: family, condition: condition, relativeBytes: relativeBytes, narrowOperand: narrowOperand, wideOperand: wideOperand)
+		operation(hasModRm, immediate, family) then return try decodedOperation(cursor, at: at, address: address, hasModRm: hasModRm, immediate: immediate, family: family, condition: condition, relativeBytes: relativeBytes, narrowOperand: narrowOperand, addressOverridden: addressOverridden, rex: rex)
 	end 'known'
 end 'decodedShapedInstruction'
 
-function decodedOperation(cursor X64Cursor, at X64Offset, address X64Address, hasModRm bool, immediate X64Immediate, family X64Family, condition X64Condition, relativeBytes X64Length, narrowOperand bool, wideOperand bool) returns X64Decode throws X64DecodeError
+function decodedOperation(cursor X64Cursor, at X64Offset, address X64Address, hasModRm bool, immediate X64Immediate, family X64Family, condition X64Condition, relativeBytes X64Length, narrowOperand bool, addressOverridden bool, rex X64ByteValue) returns X64Instruction throws X64DecodeError
 	var ripRelative = false
 	var displacementPosition = 0 as X64Length
+	var displacementBytes = 0 as X64Length
 	var modRmReg = 0 as X64ModRmField
+	var addressing = ModRmDirect as X64ByteValue
+	var rm = 0 as X64ModRmField
+	var sib = NoSib
+	var modRmPosition = 0 as X64Length
 
 	if hasModRm 'anAddressingByte'
+		modRmPosition = try cursor.spanFrom(at)
 		let modRm = try cursor.take()
-		let addressing = (modRm shr ModRmModShift) and ModRmModMask
-		let rm = modRm and ModRmLowMask
+		addressing = (modRm shr ModRmModShift) and ModRmModMask
+		rm = (modRm and ModRmLowMask) as X64ModRmField
 		modRmReg = ((modRm shr ModRmRegShift) and ModRmLowMask) as X64ModRmField
 
 		if addressing != ModRmDirect 'aMemoryOperand'
-			var displacementBytes = 0 as X64Length
-
 			if rm == ModRmSibRm 'aScaledIndex'
-				let sib = try cursor.take()
+				sib = try cursor.take()
 
 				if addressing == 0 and (sib and ModRmLowMask) == SibNoBase 'anAbsoluteBase'
 					displacementBytes = Disp32Bytes
@@ -298,16 +451,88 @@ function decodedOperation(cursor X64Cursor, at X64Offset, address X64Address, ha
 		end 'aMemoryOperand'
 	end 'anAddressingByte'
 
-	try cursor.skip(immediateBytesOf(immediate, modRmReg: modRmReg, narrowOperand: narrowOperand, wideOperand: wideOperand))
+	let immediateBytes = immediateBytesOf(immediate, modRmReg: modRmReg, narrowOperand: narrowOperand, wideOperand: (rex and RexWideBit) != 0)
+	var releasePosition = DbgReturnReleasesNothing as X64Length
+
+	if family == X64Family.returning and immediateBytes > 0 'releasesArguments'
+		releasePosition = try cursor.spanFrom(at)
+	end 'releasesArguments'
+
+	try cursor.skip(immediateBytes)
 	try cursor.skip(relativeBytes)
 
 	let length = try cursor.spanFrom(at)
 	let instructionClass = classOf(family, modRmReg: modRmReg, ripRelative: ripRelative)
+
+	if narrowOperand and isABranch(instructionClass) 'aSixteenBitBranch'
+		throw X64DecodeError.notAnInstructionThisBuildDecodes
+	end 'aSixteenBitBranch'
+
 	let taken = condition if instructionClass == DbgClassConditionalJump else 0
 	let target = try targetOf(cursor, at: at, address: address, instructionClass: instructionClass, length: length, relativeBytes: relativeBytes, displacementPosition: displacementPosition)
+	var callOperand = X64CallOperand.none
 
-	return X64Decode.decoded(X64Instruction.create(length, instructionClass: instructionClass, condition: taken, displacementPosition: displacementPosition, target: target))
+	if instructionClass == DbgClassIndirectCall 'anIndirectCall'
+		callOperand = try X64CallOperandReader.create(cursor, at: at, address: address, length: length, rex: rex, addressOverridden: addressOverridden).operandOf(addressing, rm: rm, sib: sib, displacementPosition: displacementPosition, displacementBytes: displacementBytes)
+	end 'anIndirectCall'
+
+	return X64Instruction.create(length, instructionClass: instructionClass, condition: taken, displacementPosition: displacementPosition, releasePosition: releasePosition, target: target, pushesARegister: family == X64Family.pushingRegister, callOperand: callOperand, modRmPosition: modRmPosition)
 end 'decodedOperation'
+
+type X64CallOperandReader
+	let cursor as X64Cursor
+	let at as X64Offset
+	let address as X64Address
+	let length as X64Length
+	let rex as X64ByteValue
+	let addressOverridden as bool
+
+	static function create(cursor X64Cursor, at X64Offset, address X64Address, length X64Length, rex X64ByteValue, addressOverridden bool) returns X64CallOperandReader
+		return Self{cursor: cursor, at: at, address: address, length: length, rex: rex, addressOverridden: addressOverridden}
+	end 'create'
+
+	function operandOf(addressing X64ByteValue, rm X64ModRmField, sib X64ByteValue, displacementPosition X64Length, displacementBytes X64Length) returns X64CallOperand throws X64DecodeError
+		if addressing == ModRmDirect 'aRegister'
+			return X64CallOperand.register(self.extended(rm, by: RexBaseBit))
+		end 'aRegister'
+
+		let operand = try self.memoryOperandOf(addressing, rm: rm, sib: sib, displacementPosition: displacementPosition, displacementBytes: displacementBytes)
+
+		return X64CallOperand.addressOverridden(operand.callForm(), referent: operand.rebasedReferent()) if self.addressOverridden else operand
+	end 'operandOf'
+
+	function memoryOperandOf(addressing X64ByteValue, rm X64ModRmField, sib X64ByteValue, displacementPosition X64Length, displacementBytes X64Length) returns X64CallOperand throws X64DecodeError
+		let displacement = try self.displacementOf(displacementPosition, bytes: displacementBytes)
+
+		if addressing == 0 and rm == ModRmRipRm 'programCounterRelative'
+			return X64CallOperand.programCounterRelative(relativeTo(self.address + (self.length as X64Address), by: displacement))
+		end 'programCounterRelative'
+
+		if rm != ModRmSibRm 'aBaseRegister'
+			return X64CallOperand.memory(X64RegisterLookup.register(self.extended(rm, by: RexBaseBit)), index: X64RegisterLookup.none, scale: 1, displacement: displacement)
+		end 'aBaseRegister'
+
+		let baseField = (sib and ModRmLowMask) as X64ModRmField
+		let indexField = ((sib shr SibIndexShift) and ModRmLowMask) as X64ModRmField
+		let index = self.extended(indexField, by: RexIndexBit)
+		let base = X64RegisterLookup.none if addressing == 0 and baseField == SibNoBase else X64RegisterLookup.register(self.extended(baseField, by: RexBaseBit))
+		let scaled = X64RegisterLookup.none if index == SibNoIndex else X64RegisterLookup.register(index)
+
+		return X64CallOperand.memory(base, index: scaled, scale: (1 shl ((sib shr SibScaleShift) and SibScaleMask)) as X64Scale, displacement: displacement)
+	end 'memoryOperandOf'
+
+	function extended(field X64ModRmField, by X64ByteValue) returns X64RegisterNumber
+		return (field + (RexExtendedRegisters if (self.rex and by) != 0 else 0)) as X64RegisterNumber
+	end 'extended'
+
+	function displacementOf(position X64Length, bytes X64Length) returns X64Relative throws X64DecodeError
+		if bytes == 0 'noDisplacement'
+			return X64Relative.forward(0)
+		end 'noDisplacement'
+
+		return try self.cursor.signedAt(self.at + (position as X64Offset), bytes: bytes)
+	end 'displacementOf'
+end 'X64CallOperandReader'
 
 function classOf(family X64Family, modRmReg X64ModRmField, ripRelative bool) returns X64Class
 	match family 'which'
@@ -316,9 +541,15 @@ function classOf(family X64Family, modRmReg X64ModRmField, ripRelative bool) ret
 		conditionalJump then return DbgClassConditionalJump as X64Class
 		returning then return DbgClassReturn as X64Class
 		modRmGroupFive then return groupFiveClass(modRmReg, ripRelative: ripRelative)
-		ordinary then return dataOperandClass(ripRelative)
+
+		ordinary or
+			pushingRegister then return dataOperandClass(ripRelative)
 	end 'which'
 end 'classOf'
+
+function isABranch(instructionClass X64Class) returns bool
+	return instructionClass == DbgClassDirectCall or instructionClass == DbgClassDirectJump or instructionClass == DbgClassConditionalJump or instructionClass == DbgClassReturn or instructionClass == DbgClassIndirectCall or instructionClass == DbgClassIndirectJump
+end 'isABranch'
 
 function groupFiveClass(modRmReg X64ModRmField, ripRelative bool) returns X64Class
 	if modRmReg == GroupFiveCallReg 'anIndirectCall'
@@ -377,9 +608,13 @@ function registerSizedImmediateBytes(narrowOperand bool, wideOperand bool) retur
 	return Immediate16Bytes if narrowOperand else Immediate32Bytes
 end 'registerSizedImmediateBytes'
 
-function isIgnorablePrefix(byte X64ByteValue) returns bool
-	return byte == AddressSizePrefix or byte == LockPrefix or byte == RepnePrefix or byte == RepPrefix or byte == SegmentCsPrefix or byte == SegmentSsPrefix or byte == SegmentDsPrefix or byte == SegmentEsPrefix or byte == SegmentFsPrefix or byte == SegmentGsPrefix
-end 'isIgnorablePrefix'
+function isLegacyPrefix(byte X64ByteValue) returns bool
+	return byte == OperandSizePrefix or byte == AddressSizePrefix or byte == LockPrefix or byte == RepnePrefix or byte == RepPrefix or byte == SegmentCsPrefix or byte == SegmentSsPrefix or byte == SegmentDsPrefix or byte == SegmentEsPrefix or byte == SegmentFsPrefix or byte == SegmentGsPrefix
+end 'isLegacyPrefix'
+
+function overridesTheAddress(byte X64ByteValue) returns bool
+	return byte == AddressSizePrefix or byte == SegmentFsPrefix or byte == SegmentGsPrefix
+end 'overridesTheAddress'
 
 function oneByteRelativeBytes(opcode X64ByteValue) returns X64Length
 	if opcode == 0xE8 or opcode == 0xE9 'aWordBranch'
@@ -406,9 +641,13 @@ function oneByteShape(opcode X64ByteValue) returns X64Shape
 		return X64Shape.operation(false, immediate: X64Immediate.operandSized, family: X64Family.ordinary)
 	end 'arithEaxImm32'
 
-	if opcode >= 0x50 and opcode <= 0x5F 'pushPopRegister'
+	if opcode >= PushRegisterLow and opcode <= PushRegisterHigh 'pushRegister'
+		return X64Shape.operation(false, immediate: X64Immediate.none, family: X64Family.pushingRegister)
+	end 'pushRegister'
+
+	if opcode > PushRegisterHigh and opcode <= PopRegisterHigh 'popRegister'
 		return X64Shape.operation(false, immediate: X64Immediate.none, family: X64Family.ordinary)
-	end 'pushPopRegister'
+	end 'popRegister'
 
 	if opcode >= 0x70 and opcode <= 0x7F 'shortConditionalJump'
 		return X64Shape.operation(false, immediate: X64Immediate.none, family: X64Family.conditionalJump)

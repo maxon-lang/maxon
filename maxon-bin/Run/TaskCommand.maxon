@@ -1,7 +1,7 @@
 export function runTask(args MaxonArgs) returns ExitCode
 	let search = try driverFileIn(Directory.currentPath(), extension: TaskFileExtension) otherwise (e) 'unreadableDirectory'
 		reportCompileError(e)
-		return 1
+		return OwnFailureExit
 	end 'unreadableDirectory'
 
 	match search 'search'
@@ -14,13 +14,13 @@ function refuseWithoutATaskFile() returns ExitCode
 	printError("Usage: maxon {RunCommandName} [<task> [args...]]\n")
 	printError("\n")
 	printError("A task is an exported function of no parameters returning ExitCode, declared in the `{TaskFileExtension}` file in the current directory. There is none here.\n")
-	return 1
+	return OwnFailureExit
 end 'refuseWithoutATaskFile'
 
 function runTaskFrom(taskFile FilePath, args MaxonArgs) returns ExitCode
 	let declared = try entryNamesDeclaredIn(taskFile) otherwise (e) 'noRoster'
 		reportEntryRosterError(e)
-		return 1
+		return OwnFailureExit
 	end 'noRoster'
 
 	if args.paths.count() == 0 'noTaskNamed'
@@ -33,7 +33,7 @@ function runTaskFrom(taskFile FilePath, args MaxonArgs) returns ExitCode
 	if not declared.contains(named) 'noSuchTask'
 		printError("error: {taskFile.filename()} declares no task `{word}`.\n")
 		_ = listTasks(declared, taskFile: taskFile)
-		return 1
+		return OwnFailureExit
 	end 'noSuchTask'
 
 	return runDeclaredTask(taskFile, named: named, args: args)
@@ -67,9 +67,9 @@ end 'taskArguments'
 function listTasks(declared TaskNameArray, taskFile FilePath) returns ExitCode
 	if declared.count() == 0 'noTasks'
 		printError("{taskFile.filename()} declares no tasks.\n")
-		return 1
+		return OwnFailureExit
 	end 'noTasks'
 
 	printEntryWords(declared)
-	return 0
+	return SucceededExit
 end 'listTasks'

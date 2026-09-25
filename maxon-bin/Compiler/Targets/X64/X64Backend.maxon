@@ -1947,6 +1947,15 @@ export function encodeIatCall(code ByteArray, iatRelocs RelocationArray, slotInd
 	writeDword(code, value: 0)
 end 'encodeIatCall'
 
+export function encodeImportAnswerWidth(code ByteArray, slot IatSlot)
+	match importAnswerOf(slot) 'width'
+		nothing then panic("encodeImportAnswerWidth: `{slot.name}` returns VOID, so RAX holds no answer of it to widen — a chunk reading one after this import reads whatever the callee left there")
+		fullWord then return
+		unsignedDword then encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: X64Register.rax, wide: false)
+		signedDword then encodeRmRegDirect(code, opcode: OpcodeMovsxd, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	end 'width'
+end 'encodeImportAnswerWidth'
+
 // `mov gs:[disp32], srcReg` (64-bit) — a store to an ABSOLUTE address in the GS segment. On Win64 GS points at
 // the Thread Information Block, so this writes NT_TIB.StackBase (disp 0x08) or StackLimit (disp 0x10) — the GT
 // syscall shim's TIB repoint. Encoding: the GS prefix, REX.W (+REX.R for an r8-r15 source), `89 /r`, a ModR/M
@@ -2770,18 +2779,12 @@ end 'emitUnit'
 // Per-function chunk emission
 // ==========================================================================
 
-// Emit one function into a FunctionCodeChunk with CHUNK-LOCAL fixup offsets. The
-// caller (concat) shifts every inter-function fixup (call/IAT) by the chunk's start
-// offset. Intra-function block branches (`jmp`/`jcc`), by contrast, are resolved
-// HERE: a function's blocks are contiguous within its one chunk, so a block branch's
-// rel32 is chunk-local and independent of where concat places the chunk. Each block's
-// chunk-local start offset is recorded as it is emitted, then `resolveChunkRel32Fixups`
-// patches every pending branch (including forward jumps to blocks emitted later).
-// `usesGt` (whether the program carries the GT scheduler) is passed in — it is `RuntimeUsage.usesGt`, the
-// bit `installGtRuntime` was gated on, read once by the caller and never re-derived per function, so this
-// stays O(1) per function. It gates the Win32 syscall shim on every `iatCall` (see `emitGtGatedIatCall`)
-// and the per-function morestack guard below.
-export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt bool, target Target, runtimeTier FunctionNameSet) returns FunctionCodeChunk
+// Fixup offsets are chunk-local: concat shifts every inter-function fixup (call/IAT) by the chunk's
+// start. Block branches are resolved here, because a function's blocks are contiguous within its
+// one chunk. `usesGt` is `RuntimeUsage.usesGt`, read once by the caller rather than re-derived per
+// function; it gates the syscall shim on every `iatCall` (`emitGtGatedIatCall`) and the stack guard
+// below.
+export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt bool, target Target, runtimeTier FunctionNameSet, spanTable DebugSpanTable) returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
 	var iatRelocs = RelocationArray.create()
@@ -2805,22 +2808,12 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 	// `slot * SpillSlotBytes` to it. See spillSlotBaseDisp for the frame-layout rationale.
 	let spillBaseDisp = spillSlotBaseDisp(module, func: func)
 
-	// ⭐ THE GT STACK GUARD. Emitted at the very START of the entry block — before `push rbp` — for a
-	// USER function of a GT module that reserves a frame, so a green thread whose stack would overflow grows +
-	// relocates it first. It is EXEMPT for the compiler's own SCAFFOLDING: the scheduler core must never trigger
-	// the grower, and their kernel calls are already shimmed onto the system stack. ⚠ The exemption is
-	// asked of the FUNCTION's provenance, never of its NAME — a `__`-name test hands it to a user function
-	// declared in `stdlib/Builtins.maxon` and SEGFAULTS a green thread; see `isRuntimeFunction`'s header for the
-	// measurement. ⛔ And the question is `skipsGreenThreadStackGuard`, NOT `isRuntimeFunction`: a synthesized
-	// function whose frame depth is the user's data graph (a `__destruct_<T>` cascade) satisfies the second
-	// and NEEDS the guard — see that predicate, which states why provenance and stack behaviour are
-	// different questions. Emitted here at the
-	// byte level (not as a TargetOp), exactly like the syscall shim — so it is invisible to the Target-IR goldens
-	// and verified by the RUN + disassembly instead. `x64PrologueFrameOf` answers the SAME frame the prologue
-	// reserves, so the guard projects rsp by exactly what the function consumes.
-	// Only a GT module's non-runtime functions can be guarded, so `x64PrologueFrameOf` (which allocates a
-	// callee-saved scan) is called ONLY for those — a non-GT module (the common case, and the whole scale corpus)
-	// pays nothing here.
+	// The green-thread stack guard, emitted before `push rbp` in the entry block of a function that
+	// reserves a frame, so a thread whose stack would overflow grows and relocates it first. The
+	// exemption is `skipsGreenThreadStackGuard`, asked of the function's provenance and never its
+	// name; a `__destruct_<T>` cascade is scaffolding and still needs the guard (see that predicate).
+	// The guard is bytes, not a TargetOp, so the Target-IR goldens cannot see it. `x64PrologueFrameOf`
+	// allocates a callee-saved scan, so it is asked only of a function that can be guarded.
 	let mightGuard = usesGt and not skipsGreenThreadStackGuard(func, runtimeTier: runtimeTier)
 	var guardFrameBytes = 0 as StackSize
 
@@ -2832,10 +2825,9 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 	var unsafePrefixBytes = 0 as CodeOffset
 	var isFirstBlock = true
 
-	// ⭐ **THE DEBUG-INFO PATH IS ONE BOOL TEST PER OP AND NOTHING ELSE WHEN IT IS OFF.** Hoisted out of
-	// the loop so an ordinary build never reads the span column at all.
+	// Hoisted so a build without debug info pays one bool test per op and never reads the span column.
 	let captureSpans = module.spans.armed
-	var lineRows = DebugLineRowBuilder.create(captureSpans)
+	var lineRows = DebugLineRowBuilder.forFunction(module, func: func, armed: captureSpans, spanTable: spanTable)
 	var runOffsets = DebugRunOffsets.forFunction(func, armed: captureSpans)
 	var chunkBlockEnds = BlockOffsetTable.forBlockCount(func.nextBlockId)
 
@@ -2857,6 +2849,8 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 		// (from any block) can resolve to it. Blocks are emitted in blockRefs order.
 		let blockStart = code.count()
 		chunkLabelOffsets.place(block.id, value: blockStart)
+
+		lineRows.openBlock(block.id, site: block.inlineSite)
 
 		if isFirstBlock and emitGuard 'guard'
 			emitGtStackGuard(code, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: guardFrameBytes, margin: gtStackGuardMargin(target), site: GtGuardSite.functionEntry, target: target)
@@ -2907,18 +2901,15 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 	var chunk = FunctionCodeChunk.createWith(func.name, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs)
 	chunk.jumpTableRelocs = resolveJumpTableRelocs(jumpTables, blockOffsets: chunkLabelOffsets)
 
-	// ⭐⭐ **A FUNCTION MAY BE STOPPED WHERE IT STANDS EXACTLY WHEN IT IS CODE A GREEN THREAD RUNS AND NOT THE
-	// COMPILER'S OWN SCAFFOLDING** — `mightGuard`, which is `skipsGreenThreadStackGuard` asked of the
-	// function's provenance. The scheduler core, the memory manager and the cascades' machinery are what a
-	// stop must never land in; everything else is ordinary code with a coherent register file at every
-	// instruction.
-	//
-	// ⛔ **NOT `emitGuard`, AND THE DIFFERENCE IS THE WHOLE POINT OF THIS MECHANISM.** A call-free loop that
-	// spills nothing RESERVES NO FRAME, so it carries no guard — and that is precisely the function
-	// asynchronous preemption exists to stop. The room the trampoline needs is not the guard's to promise
-	// here: the safe-point predicate tests the stack pointer against `GtRuntime.gtAsyncPreemptMargin` itself.
+	// A function may be stopped where it stands exactly when the stack guard applies to it
+	// (`mightGuard`). Not `emitGuard`: a call-free loop that spills nothing reserves no frame and
+	// carries no guard, and it is exactly the function asynchronous preemption exists to stop. The
+	// safe-point predicate tests the stack pointer against `GtRuntime.gtAsyncPreemptMargin` itself.
 	chunk.asyncPreemptible = mightGuard
 	chunk.asyncUnsafePrefixBytes = unsafePrefixBytes
+
+	// Provenance, not `mightGuard`: a guarded cascade is still scaffolding to the debugger.
+	chunk.compilerScaffolding = isRuntimeFunction(func, runtimeTier: runtimeTier)
 
 	// Gated on `--coverage` rather than on debug info: the two are independent channels, and this one is
 	// empty for an ordinary build because no `covInc` was emitted to fill it.
@@ -2937,20 +2928,18 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 	return chunk
 end 'emitFunctionChunk'
 
-// ⭐ **THE FRAME THIS FUNCTION RESERVES, READ OFF THE PROLOGUE OP RATHER THAN DERIVED A SECOND TIME.**
-// `x64PrologueFrameOf` arrives at the same number by recomputing it; two derivations of one fact can
-// come to disagree, and this one is only ever reported, never acted on.
+// Read off the prologue op rather than derived a second time as `x64PrologueFrameOf` derives it;
+// this one is only reported, never acted on.
 //
-// ⚠ **IT SCANS THE ENTRY BLOCK RATHER THAN READING INDEX 0** — x64's prologue is PREPENDED in reverse,
-// so the `sub rsp` sits after the frame-pointer setup and the callee-saved pushes. And ABSENT means 0,
-// which is correct rather than a fallback: `insertPrologueAtEntry` emits no `prologue` op at all for a
-// function that reserves nothing.
+// It scans the entry block because x64's prologue is prepended in reverse, so the `sub rsp` follows
+// the frame-pointer setup and the callee-saved pushes. No prologue op means 0:
+// `insertPrologueAtEntry` emits none for a function that reserves nothing.
 function x64PrologueFrameBytes(module TargetModule, func IrFunction) returns StackSize
-	let entryRef = try func.blockRefs.get(0) otherwise return 0
-	let entry = try module.blocks.get(entryRef) otherwise return 0
+	let entryRef = try func.blockRefs.get(0) otherwise panic("x64PrologueFrameBytes: '{String.from(func.name)}' has no entry block — every function the backend lowers has one, and a prologue, when there is one, is in it")
+	let entry = try module.blocks.get(entryRef) otherwise panic("x64PrologueFrameBytes: blockRef {entryRef} of '{String.from(func.name)}' not in module.blocks")
 
 	for opIdx in entry.opRefs 'eachOp'
-		let reserved = x64OpFrameBytes(try module.ops.get(opIdx) otherwise return 0)
+		let reserved = x64OpFrameBytes(try module.ops.get(opIdx) otherwise panic("x64PrologueFrameBytes: opIdx {opIdx} not in module.ops"))
 
 		if reserved > 0 'thePrologue'
 			return reserved
@@ -3127,11 +3116,6 @@ export let EntryPointName = b"mrt_start"
 // name and its serializer live in `Targets/Shared/BacktraceFormat` because the arm64 panic runtime
 // reads the identical table. Concat below appends it to close `.text`.
 
-// Concatenate every function chunk into the final `.text`, rebase each chunk's
-// CHUNK-LOCAL fixups to absolute `.text` offsets, resolve intra-module direct
-// calls to rel32, and package the result as a format-neutral CodeResult. Chunk
-// iteration order (which augmentWithRuntime arranges so `mrt_start` is first)
-// fixes the `.text` byte layout.
 export function concatX64FunctionChunks(targetModule TargetModule, stdModule StdModule, chunks FunctionCodeChunkArray, globalData GlobalDataTable, project Project, funcNames FunctionNameIndex) returns CodeResult throws CompileError
 	var code = ByteArray.create()
 	var relocations = RelocationArray.create()
@@ -3159,10 +3143,10 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 		try recordChunkLabel(labelOffsets, name: chunk.funcName, offset: funcStart, laidOut: labelsLaid, project: project, funcNames: funcNames)
 		labelsLaid = labelsLaid + 1
 		recordChunkSymbol(debugSymbols, chunk: chunk, codeOffset: funcStart)
-		inlineFrames.appendChunk(chunk, funcStart: funcStart)
+		let inlineSiteBase = inlineFrames.appendChunk(chunk, funcStart: funcStart)
 
 		if captureSpans 'debugInfo'
-			foldChunkDebugInfo(chunk, funcStart: funcStart, functions: debugFunctions, lineRows: debugLineRows, covPointOffsets: covPointOffsets)
+			foldChunkDebugInfo(chunk, funcStart: funcStart, inlineSiteBase: inlineSiteBase, functions: debugFunctions, lineRows: debugLineRows, covPointOffsets: covPointOffsets)
 		end 'debugInfo'
 
 		code.append(chunk.code)
@@ -3196,22 +3180,14 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 		end 'rebaseJumpTables'
 	end 'eachChunk'
 
-	// `__symtable` CLOSES `.text`, after the last function chunk — the placement the panic
-	// runtime's `textSize = __symtable - mrt_start` depends on. Appending it here, from the
-	// loop's own output, is what makes that structural: every symbol's offset is known
-	// because the loop just assigned it, and nothing can be laid out after it because
-	// nothing follows. It is registered in `labelOffsets` (so the runtime's `lea rax, [rip
-	// + __symtable]` resolves like any other chunk reference) but deliberately NOT in
-	// `debugSymbols` — it is data, not a function, and an entry for it would let a walk
-	// symbolize a stray return address INTO the table.
-	// ⚠ It is DATA, not a function — which is why it has no chunk and no `debugSymbols` entry — but it does
-	// CLAIM A NAME in this map, so it goes through the same door and is counted like any other label. It is
-	// exempt from being a function, not from being unique: a second claim on `__symtable` would move the
-	// bound `textSize = __symtable - mrt_start` reads, silently mis-sizing every backtrace.
+	// ⚠ `__symtable` closes `.text`, and the panic runtime's `textSize = __symtable - mrt_start`
+	// depends on it: a second claim on the label would move that bound and silently mis-size every
+	// backtrace, so it claims its label through the same door as every chunk. It is data, so it has no
+	// `debugSymbols` entry; one would let a walk symbolize a stray return address into the table.
 	padTo(code, size: alignUp(code.count(), alignment: SymbolTableAlignment))
 	try recordChunkLabel(labelOffsets, name: SymbolTableName, offset: code.count(), laidOut: labelsLaid, project: project, funcNames: funcNames)
 	labelsLaid = labelsLaid + 1
-	code.append(buildSymbolTableBytes(debugSymbols))
+	code.append(buildSymbolTableBytes(debugSymbols, target: project.target))
 
 	// The inline frame tables follow the whole of `__symtable` — names and flag run both — under their own
 	// label (`BacktraceFormat`), past the `[mrt_start, __symtable)` window the walkers symbolize in.
@@ -3232,10 +3208,6 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 		panic("concatX64FunctionChunks: '{String.from(EntryPointName)}' must be laid out FIRST in .text but is at offset {entryOffset} — the panic runtime takes its address as `text_base` and symbolizes every frame relative to it, so anything below it would silently drop out of all backtraces")
 	end 'entryNotFirst'
 
-	// symdata is still empty — the backtrace's own table already closes `.text` instead. `.rdata` is NOT:
-	// it holds the f64 constant islands `lowerFloatConst` registered and the String literal records, and
-	// `rdataRelocations` carries the code -> .rdata references resolved above alongside the .data ones
-	// (`dataPrelude` lays `.data` itself down). The IAT relocations remain for the PE writer to patch.
 	var result = CodeResult.create(code, mainCallFixupOffset: entryOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, stdModule: stdModule, rdata: globalData.rdataImage(), rdataRelocations: rdataRelocations, symdata: globalData.symdataImage)
 	result.debugSymbols = debugSymbols
 	result.dataPrelude = globalData.dataSectionImage()

@@ -35,6 +35,16 @@ export let DbgOffTextSize = 0x0A8
 export let DbgOffStopPc = 0x0B0
 export let DbgOffStopSp = 0x0B8
 export let DbgOffStopFp = 0x0C0
+export let DbgOffStopFault = 0x0C8
+export let DbgOffStopConditionMissed = 0x0D0
+export let DbgOffBtOuterFrame = 0x0D8
+
+// The stop a command was answered under, or `DbgAnsweredLive` when the service thread answered it
+// with nothing parked; the first stop publishes sequence 1, so no stop equals it. The agent writes
+// it before `DbgOffAckSeq`, which the driver reads first, so an answer is never paired with an
+// earlier one's stop.
+export let DbgOffAckStopSeq = 0x0E0
+export let DbgAnsweredLive = 0
 export let DbgOffRegisters = 0x100
 export let DbgOffBtCount = 0x380
 export let DbgOffBtTruncated = 0x388
@@ -94,6 +104,8 @@ export let DbgCmdGtBacktrace = 10
 export let DbgCmdGtHold = 11
 export let DbgCmdGtRelease = 12
 export let DbgCmdPause = 13
+export let DbgCmdHoldReturnPoint = 14
+export let DbgCmdReleaseReturnPoint = 15
 
 export let DbgCmdResultDone = 1
 export let DbgCmdResultRefused = 0
@@ -103,6 +115,10 @@ export let DbgStopReasonBreakpoint = 2
 export let DbgStopReasonStep = 3
 export let DbgStopReasonPause = 4
 export let DbgStopReasonTrap = 5
+export let DbgStopReasonFault = 6
+
+export let DbgStopConditionMet = 0
+export let DbgStopConditionMissedYes = 1
 
 export let DbgRefusalOutOfText = 1
 export let DbgRefusalInsideRuntimeSymbol = 2
@@ -116,12 +132,14 @@ export let DbgRefusalHoldTableFull = 9
 export let DbgRefusalThreadIsRunning = 10
 export let DbgRefusalNotRunning = 11
 export let DbgRefusalNotPausable = 12
+export let DbgRefusalFaultIsTerminal = 13
 
 export let DbgGtStatusRunning = 1
 export let DbgGtStatusReady = 2
 export let DbgGtStatusWaiting = 3
 export let DbgGtStatusHeld = 5
 
+export let DbgCondKindNone = 0
 export let DbgCondKindRegister = 1
 export let DbgCondKindStackSlot = 2
 
@@ -152,14 +170,29 @@ export let DbgClassShift = 8
 export let DbgClassByteMask = 0xFF
 export let DbgCondShift = 16
 
+export let DbgCallFormShift = 24
+export let DbgCallFormRegister = 1
+export let DbgCallFormMemory = 2
+export let DbgCallFormPcRelative = 3
+export let DbgCallModRmShift = 32
+
 export let DbgBreakpointCapacity = 64
+export let DbgSlotCapacity = 128
+export let DbgSlotTailAt = 32
+export let DbgSlotHeadTrailBytes = 15
+export let DbgSlotBackAt = 56
+export let DbgSlotExitsAt = 64
+export let DbgSlotSendsAt = 72
+export let DbgSlotOriginAt = 80
+export let DbgSlotClassWordAt = 88
+export let DbgSlotFixupAt = 96
 
 export let DbgOrphanedExitCode = 97
 export let DbgParkPollIntervalMs = 5
 export let DbgHoldRefusePauseUs = 1000
 export let DbgPauseAttemptLimit = 200
 
-export let DbgSlotBytes = 32
+export let DbgSlotBytes = 128
 
 export let DbgPrivOffStopLock = 0x000
 export let DbgPrivOffSavedRsp = 0x008
@@ -179,13 +212,18 @@ export let DbgPrivOffPauseAttempts = 0x070
 export let DbgPrivOffSchedLockHeld = 0x078
 export let DbgPrivOffHold = 0x080
 export let DbgPrivOffContext = 0x280
+export let DbgPrivOffPlantedMap = 0x7E0
+export let DbgPrivOffReturnHold = 0x7E8
+export let DbgNoReturnHold = 0
+export let DbgPrivOffStopLockOwner = 0x7F0
 export let DbgPrivOffHoldsPlaced = 0x7F8
 export let DbgPrivOffBreakpoints = 0x800
 export let DbgPrivOffGtRoster = 0x2000
 export let DbgPrivBreakpointStride = 96
 export let DbgPrivStackBase = 0xA000
+export let DbgClaimDeclined = 0
 export let DbgPrivBytes = 0x40000
-export let DbgSlotPoolBytes = 4096
+export let DbgSlotPoolBytes = 16384
 export let DbgAgentShadowBytes = 32
 
 export let DbgHoldCapacity = 16
@@ -205,7 +243,6 @@ export let DbgBpOffCondition = 48
 
 export let DbgBpStateFree = 0
 export let DbgBpStateLive = 1
-export let DbgBpStateRetired = 2
 
 export let DbgWaitSignalled = 0
 
@@ -231,18 +268,46 @@ export let DbgRegRbp = 5
 export let DbgRegEFlags = 32
 
 export let DbgBreakpointByte = 0xCC
-export let DbgReturnByte = 0xC3
-export let DbgPauseTrampolineBytes = 2
-export let DbgJmpIndirectOpcode = 0xFF
-export let DbgJmpIndirectModRm = 0x25
-export let DbgJmpAbsoluteBytes = 14
+export let DbgPauseTrampolineBytes = 1
 export let DbgPushIndirectOpcode = 0xFF
 export let DbgPushIndirectModRm = 0x35
-export let DbgCallSlotPushAt = 0
-export let DbgCallSlotJumpAt = 6
-export let DbgCallSlotReturnAt = 12
-export let DbgCallSlotTargetAt = 20
-export let DbgCallSlotBytes = 28
+export let DbgPushIndirectBytes = 6
+export let DbgPushStackTopModRm = 0x34
+export let DbgSibStackPointerBase = 0x24
+export let DbgPushStackTopBytes = 3
+export let DbgPopIndirectOpcode = 0x8F
+export let DbgPopStackDisp8ModRm = 0x44
+export let DbgPopStackDisp8Bytes = 4
+export let DbgPushFlagsOpcode = 0x9C
+export let DbgPopFlagsOpcode = 0x9D
+export let DbgLockPrefix = 0xF0
+export let DbgRexWide = 0x48
+export let DbgIncGroupOpcode = 0xFF
+export let DbgIncRipRelativeModRm = 0x05
+export let DbgLockIncBytes = 8
+export let DbgReturnOpcode = 0xC3
+export let DbgJmpShortOpcode = 0xEB
+export let DbgJmpShortBytes = 2
+export let DbgShortJumpReach = 127
+export let DbgMaxInstructionBytes = 15
+export let DbgOneByte = 1
+export let DbgSlotTailFlagsAt = DbgSlotTailAt + DbgPushIndirectBytes
+export let DbgSlotTailIncAt = DbgSlotTailFlagsAt + DbgOneByte
+export let DbgSlotTailPopAt = DbgSlotTailIncAt + DbgLockIncBytes
+export let DbgSlotTailReturnAt = DbgSlotTailPopAt + DbgOneByte
+export let DbgSlotTailEnd = DbgSlotTailReturnAt + DbgOneByte
+export let DbgCallHeadTargetAt = DbgPushIndirectBytes
+export let DbgCallHeadJumpAt = DbgCallHeadTargetAt + DbgPushIndirectBytes
+export let DbgCallHeadEnd = DbgCallHeadJumpAt + DbgJmpShortBytes
+export let DbgCallTrailBackAt = DbgPushStackTopBytes
+export let DbgCallTrailPopAt = DbgCallTrailBackAt + DbgPushIndirectBytes
+export let DbgCallTrailJumpAt = DbgCallTrailPopAt + DbgPopStackDisp8Bytes
+export let DbgCallTrailEnd = DbgCallTrailJumpAt + DbgJmpShortBytes
+export let DbgPlantedMapShift = 3
+export let DbgPlantedBitsPerByte = 8
+export let DbgModRmKeepMask = 0xC7
+export let DbgModRmPushReg = 0x30
+export let DbgReturnReleasesNothing = 0
 export let DbgDisplacementMin = -2147483648
 export let DbgDisplacementMax = 2147483647
 export let DbgPageExecuteReadWrite = 0x40
@@ -252,6 +317,8 @@ export let DbgTrapFlagByteBit = 1
 export let DbgResumeContinue = 0
 export let DbgResumeStep = 1
 
+export let DbgPreemptClaimStep = 2
+
 export let DbgMbiBytes = 48
 export let DbgMbiOffBaseAddress = 0x00
 export let DbgMbiOffRegionSize = 0x18
@@ -259,14 +326,14 @@ export let DbgMbiOffStateAndProtect = 0x20
 export let DbgMemCommit = 0x1000
 export let DbgPageNoAccess = 0x01
 export let DbgPageGuard = 0x100
-export let DbgDwordMask = 0xFFFFFFFF
 export let DbgDwordBits = 32
 
 export let DbgSegmentNameBytes = 256
 export let DbgEnvNameBufferBytes = 16
 
 export let DbgDisplacementBytes = 4
+export let DbgReleaseImmediateBytes = 2
 
-export let DbgSuspendFailed = 0xFFFFFFFF
+export let DbgSuspendFailed = SuspendThreadFailed
 
 export let DbgDsOffWriteCursor = 24

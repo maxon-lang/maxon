@@ -432,6 +432,12 @@ export type RuntimeUsage
 	// managed-memory runtime, and this declares neither.
 	export var usesBackgroundPriority as bool
 
+	// The program asks whether a process is alive (`__Builtins.processIsAlive` ⇒ `__proc_alive`). Its
+	// body is runtime source, so the bit installs nothing of its own; it still gates the Windows
+	// optional import band and the arm64 lanes' probe chunk, which a program without it must not
+	// carry.
+	export var usesProcessLiveness as bool
+
 	// The program asks whether its report is going to a terminal that wants colour
 	// (`__Builtins.stdoutWantsAnsiColor` ⇒ `__tty_stdout_wants_color`). Its own bit rather than a corner of
 	// `usesConsoleStdin`, on this file's standing rule: a prefix answers "may this target run it", a bit
@@ -537,7 +543,7 @@ export type RuntimeUsage
 	export var parksOnIo as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesChildPipes: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesCloneExistential: false, usesCloneUncloneable: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededShareWalks: ShareWalkSet.create(), usesShareWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesManagedListener: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesBackgroundPriority: false, usesTerminalDetection: false, usesCpuCount: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, usesDebugAgent: false, parksOnIo: true}
+		return Self{usesHeap: false, usesGt: false, usesChildPipes: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesCloneExistential: false, usesCloneUncloneable: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededShareWalks: ShareWalkSet.create(), usesShareWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesManagedListener: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesBackgroundPriority: false, usesProcessLiveness: false, usesTerminalDetection: false, usesCpuCount: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, usesDebugAgent: false, parksOnIo: true}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -575,6 +581,13 @@ end 'scanRuntimeUsage'
 function classifyRuntimeCall(op MaxonOp, usage RuntimeUsage, funcSignatures FuncSignatureMap)
 	match op 'op'
 		call(_, callee, _, _, _, _, _, _) then recordCallUsage(callee, usage: usage)
+
+		// None of these names a runtime callee or pulls in a runtime floor: each lowers to plain
+		// instructions, a `.rdata` read or a direct exit, and the impls a witness dispatch or table
+		// names are scanned on their own. An imaged struct record deliberately records nothing, unlike
+		// `constArrayLiteral`: it is a `lea` at a `.rdata` payload with no allocation, no
+		// `__ManagedMemory` and no element walk, so crediting it with the array runtime would install a
+		// floor it cannot reach.
 		literal or
 			ret or
 			retVoid or
@@ -586,81 +599,45 @@ function classifyRuntimeCall(op MaxonOp, usage RuntimeUsage, funcSignatures Func
 			globalAddr or
 			loadIndirect or
 			storeIndirect or
-			stringLiteral then break 'op'
-
-		// A throwing call names a user callee whose runtime usage is scanned exactly as `call`'s is; the
-		// throw/propagate terminators and `panicAbort` name no user callee (panic exits directly) (P1.4b).
-		tryCall(_, _, callee, _, _, _, _, _, _) then recordCallUsage(callee, usage: usage)
-		throwError or
+			stringLiteral or
+			throwError or
 			propagateError or
-			panicAbort then break 'op'
+			panicAbort or
+			indirectCall or
+			sizeofType or
+			switch or
+			witnessDispatch or
+			witnessTryDispatch or
+			panicAbortValue or
+			errorFlagEncode or
+			immortalStructRecord or
+			covPoint or
+			rawIntrinsic or
+			existentialWitness then break 'op'
 
-		// P1.5-A1: an `indirectCall` calls through a code POINTER and names no runtime callee, so it records
-		// nothing. A `functionRef` naming a USER function is likewise a bare `lea` of no runtime consequence —
-		// but one naming a COMPILER-EMITTED callee is the address of an array element destructor
-		// stamped into `element_destroy@40` (P1.7 slice 3), and THAT reference must install its target (a
-		// `__str_decref`/`__destruct_<T>`/`__mm_decref`/`__managed_decref`) exactly as a direct `call` to it would —
-		// its transitive needs then close through `noteDestructorUsage`. Recorded through the same `recordCallUsage`.
+		tryCall(_, _, callee, _, _, _, _, _, _) then recordCallUsage(callee, usage: usage)
+
+		// A `functionRef` naming a user function is a bare `lea`, but one naming a compiler-emitted
+		// callee is an array element destructor's address stamped into `element_destroy@40`, and must
+		// install its target exactly as a direct `call` would; its transitive needs then close through
+		// `noteDestructorUsage`.
 		functionRef(_, funcName) then recordFunctionRefUsage(funcName, usage: usage, funcSignatures: funcSignatures)
-		indirectCall then break 'op'
 
-		// `async`/`await`/`try await` carry the green-thread scheduler. Detected by OP KIND (their `__gt_*`
-		// calls do not exist until lowering), and imply the HEAP too — see `recordGtUsage`.
+		// These carry the green-thread scheduler and imply the heap (`recordGtUsage`), detected by op
+		// kind because the calls that need it do not exist until lowering: `async`'s `__gt_*` calls,
+		// and a service's `__svc_spawn` and `__mbox_send`, which reach `__gt_spawn_green`, `__gt_ready`
+		// and the slab.
 		asyncCall or
 			await or
-			tryAwait then recordGtUsage(usage)
-
-		// `sizeof(T)` lowers to a plain `loadIndirect` of the layout descriptor — it names no runtime callee
-		// and pulls in no runtime floor (the descriptor is pure `.rdata`), so it records no usage (P1.6-B1).
-		sizeofType then break 'op'
-		constArrayLiteral then recordConstArrayLiteralUsage(usage)
-
-		// The jump table names no runtime callee and pulls in no runtime floor — a bare indexed branch.
-		switch then break 'op'
-
-		// A witness dispatch names no runtime callee and pulls in no runtime floor — the fused call reads a
-		// `.rdata` witness table and jumps; the dispatched user impl is scanned on its own (P1.7a slice 2a).
-		// The throwing form adds an error flag, not a runtime callee.
-		witnessDispatch or
-			witnessTryDispatch then break 'op'
-
-		// A panic names no runtime callee under either spelling — it exits directly.
-		panicAbortValue then break 'op'
-
-		// The error-flag encode names no runtime callee and pulls in no runtime floor — it lowers to a `const`
-		// and an `add`.
-		errorFlagEncode then break 'op'
-
-		// ⭐⭐ **A SERVICE CARRIES THE WHOLE GREEN-THREAD FLOOR, AND IT IS DECLARED HERE BECAUSE THE CALLS ARE
-		// NOT WRITTEN YET.** `serviceSpawn` lowers to `__svc_spawn` and `serviceSend` to `__mbox_send`, and
-		// both of those reach `__gt_spawn_green`, `__gt_ready` and the slab — none of which exists as a
-		// call op for this walk to see. It is rule 2 of this file's header (a synthesized body's calls are
-		// DECLARED, never discovered), one tier up: here the body is the LOWERING's rather than an installer's.
-		serviceSpawn or
+			tryAwait or
+			serviceSpawn or
 			serviceSend or
 			serviceReplyCell then recordGtUsage(usage)
 
-		// ⛔ **AN IMAGED STRUCT RECORD RECORDS NOTHING, AND DELIBERATELY NOT WHAT `constArrayLiteral` RECORDS.**
-		// It is a `lea` at a `.rdata` payload — no allocation, no `__ManagedMemory`, no element walk — so
-		// crediting it with the array runtime would install a floor the op cannot reach.
-		immortalStructRecord then break 'op'
-
-		// ⭐ **AN IMAGED STRING TABLE RECORDS WHAT `constArrayLiteral` RECORDS, AND THAT IS THE DIFFERENCE FROM
-		// THE ARM ABOVE.** Its record IS a `__ManagedMemory`, so every accessor a read of the table reaches is a
-		// buffer-runtime entry — and a copy of it, which a mutable sink is handed, allocates.
-		immortalStringTable then recordConstArrayLiteralUsage(usage)
-
-		// A coverage counter is a bare atomic increment against a fixed address: it calls nothing and turns
-		// no runtime family on.
-		covPoint then break 'op'
-
-		// A raw intrinsic turns no runtime family on either, and for a sharper reason: it lowers to a Std op
-		// the backend selects directly, which is the whole point of the `__Raw` floor — it is what a runtime
-		// family would be BUILT out of, never a call into one.
-		rawIntrinsic then break 'op'
-
-		// A witness table is `.rdata` addressed by a `lea`; the impls its slots name are scanned on their own.
-		existentialWitness then break 'op'
+		// An imaged string table's record is a `__ManagedMemory`, so every accessor a read of it
+		// reaches is a buffer-runtime entry, and a copy handed to a mutable sink allocates.
+		constArrayLiteral or
+			immortalStringTable then recordConstArrayLiteralUsage(usage)
 	end 'op'
 end 'classifyRuntimeCall'
 
@@ -875,10 +852,9 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesManagedMemory = true
 	end 'consoleStdin'
 
-	// ⚠ **BY NAME, NOT BY THE `__proc_` PREFIX.** The entries in that family cost nothing alike:
-	// `__proc_exe_path` is a doubling retry loop whose answer is an `Array` record built one tier down, while
-	// `__proc_pid` and `__proc_bg_priority` are a single op each. A prefix test would make the cheap ones
-	// declare the expensive one's whole transitive closure.
+	// By name, not by the `__proc_` prefix: `__proc_exe_path` is a doubling retry loop whose answer
+	// is an `Array` record built one tier down, while the other `__proc_` entries declare nothing, and
+	// a prefix test would make them declare its whole transitive closure.
 	if callee.equals(ProcessExecutablePathName) 'executablePath'
 		usage.usesExecutablePath = true
 		usage.usesHeap = true
@@ -891,6 +867,10 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(ProcessBackgroundPriorityName) 'backgroundPriority'
 		usage.usesBackgroundPriority = true
 	end 'backgroundPriority'
+
+	if callee.equals(ProcessAliveName) 'processLiveness'
+		usage.usesProcessLiveness = true
+	end 'processLiveness'
 
 	// The terminal question. A PREFIX test rather than a name, so a second entry point in the band is carried
 	// here by construction rather than remembered — `isTerminalRuntimeCallee` is the one spelling, and since

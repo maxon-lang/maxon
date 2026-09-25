@@ -339,9 +339,9 @@ end 'parseRepeatCount'
 // Entry point
 // ===========================================================================================
 
-// The command, wrapped so the checkout's TREE LOCK is taken for its whole duration and released
-// through ONE exit — `measureScaleLadder` below has a dozen returns, and a release written at each of
-// them is a release the next one forgets (see `Main.compileAndReport`).
+// The command, wrapped so the checkout's tree lock is taken for its whole duration and released
+// through one exit — `measureScaleLadder` below has a dozen returns, and a release written at each
+// of them is a release the next one forgets (see `Main.compileAndReport`).
 //
 // A scale run compiles a generated ladder with the in-tree binary and writes its corpus into the
 // checkout, so it contends with a `build` (which replaces that binary mid-ladder) and with a suite
@@ -350,7 +350,7 @@ end 'parseRepeatCount'
 // suite is a recorded row of noise, and a recorded row is permanent.
 export function runScaleTest(args MaxonArgs) returns ExitCode
 	if refusedPositionalBeyond(args, allowed: 0, usage: ScaleTestUsage) 'noPositional'
-		return 1
+		return OwnFailureExit
 	end 'noPositional'
 
 	let corpusRoot = try corpusRootPath(args) otherwise 'badCorpus'
@@ -359,7 +359,7 @@ export function runScaleTest(args MaxonArgs) returns ExitCode
 
 	let lockExit = acquireTreeLock(corpusRoot)
 
-	if lockExit != 0 'busyTree'
+	if not exitSucceeded(lockExit) 'busyTree'
 		return lockExit
 	end 'busyTree'
 
@@ -374,39 +374,34 @@ end 'runScaleTest'
 let ScaleTestUsage = "maxon scale-test [--rungs=<n>] [--repeat=<n>] [--note=<text>] [--emit-corpus=<dir>] [--result-json=<path>]"
 
 function measureScaleLadder(args MaxonArgs, corpusRoot FilePath) returns ExitCode
-	// `--update-required` is REFUSED by this command, and saying so is worth four lines. It rewrites
-	// committed memory goldens; this suite has none. It is still a spec-test flag, and the driver
-	// parses the command line before it knows which command is running — so without this it would be
-	// accepted here and silently do nothing.
+	// `--update-required` is a spec-test flag, and the driver parses the command line before it knows
+	// which command is running, so without this refusal it would be accepted here and silently do
+	// nothing: this suite has no goldens.
 	if args.updateRequired 'noGoldens'
 		printError("scale-test: --update-required is gone. It rewrote the committed memory goldens, and there are none:\n")
 		printError("            this suite renders no verdict and has nothing to accept.\n")
 		printError("            To RECORD a run in {OptimizationLogRelativePath}, use --note=\"<what changed and why>\".\n")
-		return 1
+		return OwnFailureExit
 	end 'noGoldens'
 
-	// WHERE THIS RUN IS MEASURED is resolved FIRST, because it is two things at once: what each rung is
-	// compiled BY and FROM, and the provenance every recorded row carries.
+	// Where this run is measured is resolved first, because it is two things at once: what each rung
+	// is compiled by and from, and the provenance every recorded row carries.
 	//
-	// BOTH PATHS, and neither is optional. A compile derives every stdlib source path from the compiler's
-	// own executable path, and it resolves every RUNG source path against the working directory
-	// (`Queries.fileProvenanceOf`, per file) — so the BYTE column of this run is comparable only with a
-	// logged row that had the same two. Keyed on the executable alone, one binary run from a second
-	// directory read `comparable` and printed a +203,310-byte fiction at rung 5. See ScaleHistory's header
-	// for both measurements.
+	// Both paths, and neither is optional. A compile derives every stdlib source path from the
+	// compiler's own executable path, and it resolves every rung source path against the working
+	// directory (`Queries.fileProvenanceOf`, per file), so the byte column of this run is comparable
+	// only with a logged row that had the same two. See ScaleHistory's header.
 	let compilerExe = try Process.executablePath() otherwise 'noExe'
 		return brokenRun("the running compiler's own path could not be determined", detail: "Process.executablePath() failed")
 	end 'noExe'
 
-	// ⚠ AND WHETHER THAT BINARY IS OLDER THAN THE TREE IT WAS BUILT FROM, before a rung is generated.
-	// A ladder read off the previous binary is what filed this check: a build failed `error-codes
-	// check`, its exit code went unread, and a whole run's numbers were attributed to a change that
-	// was not in the binary that produced them. A recorded row is permanent, so the wrong provenance
-	// outlives the session that made it — see ScaleHistory on why every row states where it was
-	// measured. This is the same question one level up: WHAT was measured.
+	// ⚠ And whether that binary is older than the tree it was built from, before a rung is generated:
+	// a ladder read off a stale binary attributes its numbers to a change that binary does not
+	// contain, and a recorded row is permanent, so the wrong provenance outlives the session that made
+	// it. This is the same question one level up: what was measured.
 	let freshnessExit = refuseIfStale(compilerExe, role: "the scale-test compiler")
 
-	if freshnessExit != 0 'staleBinary'
+	if not exitSucceeded(freshnessExit) 'staleBinary'
 		return freshnessExit
 	end 'staleBinary'
 
@@ -438,17 +433,18 @@ function measureScaleLadder(args MaxonArgs, corpusRoot FilePath) returns ExitCod
 		return brokenRun("the corpus could not be generated", detail: scaleErrorText(error))
 	end 'genErr'
 
-	// SAY WHAT THIS CORPUS COVERS AND WHAT IT CANNOT, on every run and before any number. An instrument
-	// that cannot state its blind spots produces confident zeros — see `printCorpusManifest`.
+	// Say what this corpus covers and what it cannot, on every run and before any number. An
+	// instrument that cannot state its blind spots produces confident zeros — see
+	// `printCorpusManifest`.
 	printCorpusManifest()
 
 	if not args.emitCorpus.isEmpty() 'corpusOnly'
 		print("scale-test: corpus written to {corpusRoot.toString()} (--emit-corpus: not compiling)\n")
-		return 0
+		return SucceededExit
 	end 'corpusOnly'
 
-	// AND SAY WHAT THE COMPILER'S OWN INPUT WAS — the corpus is only half of what each rung compiles.
-	// Asked here rather than beside the manifest above because it describes the COMPILES, and the
+	// And say what the compiler's own input was — the corpus is only half of what each rung compiles.
+	// Asked here rather than beside the manifest above because it describes the compiles, and the
 	// `--emit-corpus` run just above this line makes none.
 	try printLibraryWalkCensus() otherwise (error) 'noLibraryWalk'
 		return brokenRun("the checkout's library sources could not be walked", detail: scaleErrorText(error))
@@ -469,11 +465,10 @@ function measureScaleLadder(args MaxonArgs, corpusRoot FilePath) returns ExitCod
 			// one's shapes, so there is nothing left to measure and nothing the rungs below it can be
 			// compared against.
 			//
-			// ⚠ THE HEADLINE SAYS "did not deliver a rung to measure" AND NOT "failed to compile", because
-			// this arm has TWO causes and naming only the first lies about the second:
-			// a rung that compiles cleanly and then exits with a failed witness would report itself as a
-			// COMPILE failure, with an empty compiler stderr underneath it to prove it had not. The detail
-			// line is where the two are told apart, and it always names which happened.
+			// The headline says "did not deliver a rung to measure" and not "failed to compile", because
+			// this arm has two causes: a rung that compiles cleanly and then exits with a failed witness
+			// would otherwise report itself as a compile failure, with an empty compiler stderr underneath
+			// it. The detail line always names which happened.
 			return brokenRun("rung {rung.index} did not deliver a rung to measure", detail: scaleErrorText(error))
 		end 'rungFailed'
 
@@ -504,9 +499,9 @@ function measureScaleLadder(args MaxonArgs, corpusRoot FilePath) returns ExitCod
 	printPhaseTable(results, measure: ScaleMeasure.bytes, repeat: args.repeat)
 	printPhaseTable(results, measure: ScaleMeasure.cpuTicks, repeat: args.repeat)
 
-	// DID ANYTHING MOVE — decided ONCE, like the comparability above it, and for the same reason: the
-	// report's closing sentence and the recording sentence are two statements of one fact, and two
-	// answers to one question is how they come to contradict each other in the output of one run.
+	// Whether anything moved is decided once, like the comparability above it, and for the same
+	// reason: the report's closing sentence and the recording sentence are two statements of one
+	// fact, and two answers to one question is how they come to contradict each other in one run.
 	let memoryMoved = anyMemoryMoved(trend, results: results, bytes: bytesComparable)
 
 	printMemoryTrend(results, trend: trend, mintedAt: mintedAt, bytes: bytesComparable, moved: memoryMoved)
@@ -521,45 +516,37 @@ function measureScaleLadder(args MaxonArgs, corpusRoot FilePath) returns ExitCod
 	if not args.note.isEmpty() 'record'
 		let recorded = recordRun(results, note: args.note, mintedAt: mintedAt, bytes: bytesComparable, moved: memoryMoved)
 
-		if recorded != 0 'recordFailed'
+		if not exitSucceeded(recorded) 'recordFailed'
 			return recorded
 		end 'recordFailed'
 	end 'record'
 
-	return 0
+	return SucceededExit
 end 'measureScaleLadder'
 
-// The ONE way this instrument fails: the RUN broke — it could not measure, or could not deliver what
-// it measured. It says so in those words, so that a reader can never mistake it for a judgement about
-// the numbers; there is no judgement about the numbers.
+// The one way this instrument fails: the run broke — it could not measure, or could not deliver
+// what it measured. It says so in those words, so that a reader can never mistake it for a
+// judgement about the numbers; there is no judgement about the numbers.
 //
-// Each caller names what broke, and the causes are not interchangeable: a degenerate corpus measured
-// NOTHING, while a result document that could not be written measured everything and could not hand
-// it over. This line therefore says "the run", which is true of both, rather than "nothing was
-// measured", which was written for the first and is a lie about the second.
+// Each caller names what broke, and the causes are not interchangeable: a degenerate corpus
+// measured nothing, while a result document that could not be written measured everything and could
+// not hand it over. This line therefore says "the run", which is true of both.
 function brokenRun(what String, detail String) returns ExitCode
 	printError("\nscale-test: BROKEN RUN — {what}.\n")
 	printError("  {detail}\n")
 	printError("  The RUN failed. This is not a verdict about the compiler's numbers. Fix it and re-run.\n")
-	return 1
+	return OwnFailureExit
 end 'brokenRun'
 
-// Record this run in the trend log.
+// `--note` is an instruction, not a request: if it was given, the row is written, even when
+// allocations and bytes both match the last logged row. Declining would fail silently, leaving the
+// operator who asked for the datapoint a line of prose and no row, and the operator is the only
+// party who knows why the run was made. The report stays honest: an unmoved run is told it did not
+// move.
 //
-// `--note` IS AN INSTRUCTION, NOT A REQUEST. If it was given, the row is written — full stop.
-//
-// Declining when allocations and bytes both match the last logged row — on the theory that a row
-// about nothing is noise — is the wrong theory, and it fails SILENTLY, which is the
-// worse half: the operator who typed `--note` asking for the datapoint gets a line of prose and no
-// row. A tool that second-guesses an explicit instruction from its operator, and then leaves the
-// history it was told to write simply absent, is worse than one that logs a dull row — and the
-// operator is the only party who knows why the run was made.
-//
-// The REPORT stays honest — an unmoved run is told it did not move — but the row is written.
-//
-// (Every guard that protects the log's INTEGRITY still refuses: a note carrying a `|` or a forged
+// Every guard that protects the log's integrity still refuses: a note carrying a `|` or a forged
 // marker, a duplicate marker, a ladder of the wrong width, a curve set that is not this compiler's.
-// Those reject BAD INPUT, which is a different thing entirely from overruling a valid one.)
+// Those reject bad input, which is a different thing from overruling a valid instruction.
 function recordRun(results RungResultArray, note String, mintedAt String, bytes ByteDelta, moved bool) returns ExitCode
 	if not moved 'unchanged'
 		print("\nscale-test: {unchangedColumnsText(bytes)} since the last logged run — recording anyway, because --note was given.\n")
@@ -569,7 +556,7 @@ function recordRun(results RungResultArray, note String, mintedAt String, bytes 
 		return brokenRun("the run could not be recorded in the trend log", detail: scaleErrorText(error))
 	end 'writeFailed'
 
-	return 0
+	return SucceededExit
 end 'recordRun'
 
 // WHICH columns that "nothing moved" is a claim about. When the byte delta is withheld the sentence may
@@ -607,11 +594,11 @@ function compileRung(compilerExe FilePath, root FilePath, rung ScaleRung) return
 	argv.push("{OutputFlagPrefix}{outputBase.toString()}")
 	argv.push("{MetricsFlagPrefix}{metricsPath.toString()}")
 
-	let compile = try runProcess(Executable.path(compilerExe), argv: argv, workingDirectory: inheritedWorkingDir()) otherwise (e) 'spawnFailed'
+	let compile = try runProcess(Executable.path(compilerExe), argv: argv, workingDirectory: inheritedWorkingDirectory()) otherwise (e) 'spawnFailed'
 		throw ScaleError.reason("compiler spawn failed: {e.displayReason()}")
 	end 'spawnFailed'
 
-	if compile.exitCode != 0 'compileFailed'
+	if not exitSucceeded(compile.exitCode as ExitCode) 'compileFailed'
 		throw ScaleError.reason("compiler exited {compile.exitCode}: {compile.stderr.trim()}")
 	end 'compileFailed'
 
@@ -624,30 +611,26 @@ function compileRung(compilerExe FilePath, root FilePath, rung ScaleRung) return
 	return try parseRungMetrics(text, rung: rung)
 end 'compileRung'
 
-// ⭐⭐ **THE RUNG IS RUN, AND ITS EXIT CODE IS THE ONE THING THIS INSTRUMENT ASSERTS ABOUT WHAT IT
-// COMPILES.** A ladder that writes an executable and never opens it measures what compiling a program
-// COST and has no opinion whatever on whether that program is correct. MEASURED on rung 0 without this
-// run: the accumulator wrapped i64 by the seventh driver, which turned `ownedSiteBlock`'s
-// `if acc > 0` false and SKIPPED every heap-creating site in the corpus, and rung 1 did not terminate.
-// Neither could be seen from a metrics file.
+// The rung is run, and its exit code is the one thing this instrument asserts about what it
+// compiles: a ladder that writes an executable and never opens it measures what compiling a program
+// cost and has no opinion on whether that program is correct. A corpus that computes the wrong
+// thing, skipping the very sites it was built to exercise, or a rung that never terminates, cannot
+// be seen from a metrics file.
 //
-// ⚠ **THIS IS NOT A GATE AND DOES NOT BECOME ONE.** A wrong exit code is a BROKEN RUN — the same channel
-// a rung that fails to compile already uses, and for the same reason: the instrument did not measure a
-// surprising number, it measured a program that is not the program this generator describes, so there is
-// nothing to read. There is still no verdict about any number here, and `scale-test` still exits 0
-// whatever the numbers say.
+// This is not a gate. A wrong exit code is a broken run, the channel a rung that fails to compile
+// already uses: the instrument measured a program that is not the one this generator describes, so
+// there is nothing to read. `scale-test` still exits 0 whatever the numbers say.
 //
-// The witnesses themselves are `ScaleCorpus`'s (`driverWitnessTail`); this end only has to spawn the
-// binary and insist on `CorpusOkExit`.
+// The witnesses themselves are `ScaleCorpus`'s (`driverWitnessTail`); this end only has to spawn
+// the binary and insist on `CorpusOkExit`.
 //
-// ⚠ The host's executable suffix comes from `Target.hostExecutableExtension` — the compiler's OWN
-// target model, spelled once for the whole tree. `SpecTestRunner` asks
-// `executableExtension(effectiveTarget.os)` instead, which is the TARGET's extension and a different
-// question.
+// ⚠ The host's executable suffix comes from `Target.hostExecutableExtension`, the compiler's own
+// target model. `SpecTestRunner` asks `executableExtension(effectiveTarget.os)` instead, which is
+// the target's extension and a different question.
 function runRung(outputBase FilePath, rung ScaleRung) throws ScaleError
 	let executable = try FilePath.from("{outputBase.toString()}{hostExecutableExtension()}") otherwise throw ScaleError.reason("rung {rung.index}'s output path is not a valid executable path")
 
-	let run = try runProcess(Executable.path(executable), argv: StringArray.create(), workingDirectory: inheritedWorkingDir()) otherwise (e) 'spawnFailed'
+	let run = try runProcess(Executable.path(executable), argv: StringArray.create(), workingDirectory: inheritedWorkingDirectory()) otherwise (e) 'spawnFailed'
 		throw ScaleError.reason("rung {rung.index} compiled but its binary {executable.toString()} could not be started: {e.displayReason()}")
 	end 'spawnFailed'
 
@@ -989,7 +972,7 @@ function measureHeading(measure ScaleMeasure) returns String
 	end 'm'
 end 'measureHeading'
 
-// WHICH COMPILE THE COLUMN CAME FROM — printed under EVERY table, not under the CPU one alone.
+// Which compile the column came from, printed under every table, not under the CPU one alone.
 //
 // The rung was compiled `--repeat` times and the two kinds of column took opposite things from
 // that: the exact ones took the first and re-checked the rest, the CPU one took the smallest (see
@@ -997,8 +980,8 @@ end 'measureHeading'
 // two carry very different licences to act on a small movement.
 function repeatNote(measure ScaleMeasure, repeat RepeatCount) returns String
 	return match measure 'm'
-		allocations gives exactColumnNote(repeat)
-		bytes gives exactColumnNote(repeat)
+		allocations or
+			bytes gives exactColumnNote(repeat)
 		cpuTicks gives leastCpuNote(repeat)
 	end 'm'
 end 'repeatNote'

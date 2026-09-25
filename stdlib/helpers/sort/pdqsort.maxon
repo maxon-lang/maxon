@@ -247,7 +247,7 @@ public extension Array
 		var allowance = badAllowance
 		var prevSame = prevPivotSame
 
-		while curHi - curLo > 32 'loop'
+		while curHi - curLo > SmallSortThreshold 'loop'
 			let n = curHi - curLo
 
 			if allowance == 0 'fallback'
@@ -315,29 +315,14 @@ public extension Array
 		self.smallSortRange(curLo, hi: curHi, cmp: cmp)
 	end 'pdqsortRecurse'
 
-	// Public entry into pdqsort. Computes an initial badAllowance budget
-	// of ⌊log2(n)⌋ × 2 and recurses. For n ≤ 32 short-circuits to
-	// smallSortRange — pdqsort's pivot/partition overhead beats insertion
-	// sort only on bigger inputs.
 	public function pdqsortRange(lo SortIndex, hi SortIndex, cmp SortComparator)
 		let n = hi - lo
 
-		if n <= 32 'small'
+		if n <= SmallSortThreshold 'small'
 			self.smallSortRange(lo, hi: hi, cmp: cmp)
 			return
 		end 'small'
 
-		// Bad-allowance budget: 2 × ⌊log2(n)⌋. Once exhausted, heapsort
-		// takes over and guarantees O(n log n).
-		var budget = 0 as SortIndex
-		var v = n
-
-		while v > 1 'log2'
-			budget = budget + 1
-			v = v / 2
-		end 'log2'
-
-		budget = budget * 2
-		self.pdqsortRecurse(lo, hi: hi, badAllowance: budget, prevPivotSame: false, cmp: cmp)
+		self.pdqsortRecurse(lo, hi: hi, badAllowance: self.sortDepthBudget(n), prevPivotSame: false, cmp: cmp)
 	end 'pdqsortRange'
 end 'Array'

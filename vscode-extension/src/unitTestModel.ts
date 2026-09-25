@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 
 // Everything the Test Explorer decides about `maxon test` that does not need VS Code, so it runs under
@@ -12,6 +13,10 @@ const IgnoreMarkerName = '.maxonignore';
 
 export function isTestFileName(file: string): boolean {
 	return path.basename(file).endsWith(TestFileSuffix);
+}
+
+export function isProgramSource(file: string): boolean {
+	return path.basename(file).endsWith(MaxonSourceSuffix);
 }
 
 export interface DeclaredTest {
@@ -129,11 +134,15 @@ function holdsMaxonSource(dir: string): boolean {
 	return holdsFile(dir, name => name.endsWith(MaxonSourceSuffix) || isTestFileName(name));
 }
 
+export function holdsProjectFile(dir: string): boolean {
+	return holdsFile(dir, name => name.endsWith(ProjectFileSuffix));
+}
+
 function nearestProjectFileDirectory(start: string, root: string): string | undefined {
 	let current = start;
 
 	while (true) {
-		if (holdsFile(current, name => name.endsWith(ProjectFileSuffix))) return current;
+		if (holdsProjectFile(current)) return current;
 		if (!isWithin(current, root)) return undefined;
 		current = path.dirname(current);
 	}
@@ -343,12 +352,120 @@ function failureLocation(result: TestResult, testFile: string, workingDirectory:
 	return undefined;
 }
 
+export enum TestListExitCode {
+	Listed = 0,
+	NoneListed = 1,
+	BuildFailed = 2
+}
+
+export interface ListedTest {
+	file: string;
+	name: string;
+	symbol: string;
+	line: number;
+	select: string;
+}
+
+export interface TestListDocument {
+	binary: string;
+	tests: ListedTest[];
+}
+
+export function parseTestListDocument(stdout: string): TestListDocument {
+	const parsed: unknown = JSON.parse(stdout.trim());
+	if (!isObject(parsed) || typeof parsed.binary !== 'string' || !Array.isArray(parsed.tests)) {
+		throw new Error('maxon test --list --build --json printed JSON without a "binary" path and a "tests" array');
+	}
+
+	for (const listed of parsed.tests) {
+		if (!isObject(listed) || typeof listed.file !== 'string' || typeof listed.name !== 'string'
+			|| typeof listed.select !== 'string') {
+			throw new Error(`maxon test --list --build --json listed a test without file, name and select: ${JSON.stringify(listed)}`);
+		}
+	}
+
+	return parsed as unknown as TestListDocument;
+}
+
+export function listedTestFor(document: TestListDocument, testFile: string, testName: string, workingDirectory: string): ListedTest | undefined {
+	const wanted = testKey(testFile, testName);
+	return document.tests.find(listed => resultKey(listed, workingDirectory) === wanted);
+}
+
+export enum TestBinaryExitCode {
+	AllPassed = 0,
+	TestFailed = 3,
+	Leaked = 101
+}
+
+export const DebugInfoSidecarSuffix = '.mxdbg';
+export const StagedTestBinaryDirectoryPrefix = 'maxon-debugged-test-';
+const StagedTestBinaryRemovalRetries = 20;
+const StagedTestBinaryRemovalRetryDelayMs = 100;
+
+export interface StagedTestBinary {
+	directory: string;
+	program: string;
+}
+
+// Copied out of the project because the next `maxon test` there rebuilds the binary at the same path
+// while this copy is still being debugged.
+export function stageTestBinary(binary: string): StagedTestBinary {
+	const directory = fs.mkdtempSync(path.join(os.tmpdir(), StagedTestBinaryDirectoryPrefix));
+	const program = path.join(directory, path.basename(binary));
+
+	try {
+		fs.copyFileSync(binary, program);
+		fs.copyFileSync(binary + DebugInfoSidecarSuffix, program + DebugInfoSidecarSuffix);
+	} catch (error) {
+		fs.rmSync(directory, { recursive: true, force: true });
+		throw error;
+	}
+
+	return { directory, program };
+}
+
+export async function removeStagedTestBinary(staged: StagedTestBinary): Promise<void> {
+	await fs.promises.rm(staged.directory, {
+		recursive: true,
+		force: true,
+		maxRetries: StagedTestBinaryRemovalRetries,
+		retryDelay: StagedTestBinaryRemovalRetryDelayMs
+	});
+}
+
+function namedTestBinaryExit(exitCode: number): TestBinaryExitCode | undefined {
+	return Object.values(TestBinaryExitCode).includes(exitCode) ? exitCode as TestBinaryExitCode : undefined;
+}
+
+export function debuggedTestVerdict(exitCode: number): TestVerdict {
+	const named = namedTestBinaryExit(exitCode);
+
+	if (named === undefined) {
+		return { kind: 'errored', message: `The test binary exited with code ${exitCode}, which is neither a pass nor a failure.` };
+	}
+
+	switch (named) {
+		case TestBinaryExitCode.AllPassed:
+			return { kind: 'passed' };
+		case TestBinaryExitCode.TestFailed:
+			return { kind: 'failed', message: 'The test failed. What it printed, and the failed assertion, are in the Debug Console.' };
+		case TestBinaryExitCode.Leaked:
+			return { kind: 'failed', message: STATE_PREAMBLE.leaked };
+		default:
+			throw new Error(`debuggedTestVerdict: unhandled test binary exit ${JSON.stringify(named)}`);
+	}
+}
+
 /** The identity a result and a discovered test share: the declaring file and the test's name. */
 export function testKey(file: string, name: string): string {
 	return JSON.stringify([pathKey(file), name]);
 }
 
-/** The key of a reported result, whose `file` is relative to where `maxon test` ran unless it climbed out. */
-export function resultKey(result: TestResult, workingDirectory: string): string {
+/**
+ * The key of a reported or listed test, whose `file` is relative to where `maxon test` ran unless
+ * it climbed out.
+ */
+export function resultKey(result: { file: string; name: string }, workingDirectory: string): string {
 	return testKey(path.resolve(workingDirectory, result.file), result.name);
 }

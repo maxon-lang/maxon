@@ -1,0 +1,22 @@
+let NextOverLongCallBreakCaseLabel = "next-over-a-long-call-stops-at-a-breakpoint-inside-it"
+
+let ChurnFunctionName = "churn"
+
+test 'a next over a long call stops at a breakpoint the call reaches after its loop'
+	let staged = builtFixture(NextOverLongCallBreakCaseLabel, fixture: LongCallFixtureName)
+	let callLine = anchorLine(staged, anchor: "main-long-call")
+	let doneLine = anchorLine(staged, anchor: "churn-done")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(callLine)}", RunCommand, "{BreakCommand} {lineTarget(doneLine)}", NextCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let stops = eventsOfKind(events, kind: StopEventName)
+
+	try Expect.equal(eventsOfKind(events, kind: TimeoutEventName).count() as AssertedInt, expected: 0, message: "the breakpoint sits behind fifty million iterations, which only a call run at full speed reaches inside the stop timeout. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(stops.count() as AssertedInt, expected: 2, message: "the breakpoint on the call line and the one inside the call the `{NextCommand}` ran into are two stops. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let landed = eventAt(stops, index: 1)
+	try Expect.equal(textOf(landed, node: landed.root, key: FunctionKey), expected: ChurnFunctionName, message: "a call a `{NextCommand}` runs at full speed still stops at a breakpoint inside it. {said}")
+	try Expect.equal(numberOf(landed, node: landed.root, key: LineKey) as AssertedInt, expected: doneLine as AssertedInt, message: "the `{NextCommand}` did not stop on the breakpoint's line. {said}")
+	try Expect.equal(textOf(landed, node: landed.root, key: ReasonKey), expected: BreakpointStopReason, message: "a stop inside a stepped-over call is the BREAKPOINT's, never a step's. {said}")
+end 'a next over a long call stops at a breakpoint the call reaches after its loop'

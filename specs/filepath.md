@@ -1120,6 +1120,42 @@ end 'main'
 /home/user/file.txt
 ```
 
+<!-- test: filepath-file-url-escapes-are-decoded -->
+```maxon
+function main() returns ExitCode
+	let p = try FilePath.from("file:///tmp/a%20b/%C3%A9t%C3%A9.txt") otherwise panic("bad path")
+	print("{p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```Stdout:x64-windows
+\tmp\a b\été.txt
+```
+```stdout
+/tmp/a b/été.txt
+```
+
+<!-- test: filepath-file-url-escaped-drive-colon -->
+```maxon
+function main() returns ExitCode
+	let p = try FilePath.from("file:///c%3A/Users/file.txt") otherwise panic("bad path")
+	print("{p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```Stdout:x64-windows
+c:\Users\file.txt
+```
+```stdout
+/c:/Users/file.txt
+```
+
 <!-- test: filepath-not-file-url -->
 ```maxon
 function main() returns ExitCode
@@ -1135,6 +1171,23 @@ end 'main'
 ```
 ```stdout
 caught notFileURL
+```
+
+<!-- test: filepath-malformed-url -->
+```maxon
+function main() returns ExitCode
+	try FilePath.from("file://[unclosed/path.txt") otherwise (e) 'err'
+		print("caught {e.name}\n")
+		return 0
+	end 'err'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+caught malformedURL
 ```
 
 <!-- test: filepath-regular-string-unchanged -->

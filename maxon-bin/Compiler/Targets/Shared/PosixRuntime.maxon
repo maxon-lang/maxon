@@ -10,12 +10,12 @@
 // `Targets/Shared/LinuxRuntime.maxon`, and the emit fragments that consume all three stay with their
 // assembler.
 //
-// ⭐ **THE SYMBOLS ARE `mrt_host_*`, NOT `mrt_darwin_*`/`mrt_linux_*`, AND THAT IS WHY NO ISEL HAS A NAME
-// TABLE.** Exactly ONE lane's chunks are appended to any image (each backend's builder picks by
-// `target.os`), so a shared name cannot collide — it can only ever have one body — and it is what lets
-// `lowerHostChunkValue(chunk: HostReadFileName)` stay a single unconditional lowering. The alternative,
-// per-lane names, needs a second table mapping `(os, verb)` to a symbol, which is a table that can disagree
-// with the builders. `mrt_start` and `mrt_panic` already work this way: one name, a per-OS body.
+// The symbols are `mrt_host_*`, not `mrt_darwin_*`/`mrt_linux_*`, so no isel needs a name table.
+// Exactly one lane's chunks are appended to any image (each backend's builder picks by
+// `target.os`), so a shared name cannot collide, and a lowering names `HostReadFileName`
+// unconditionally. Per-lane names would need a second table mapping `(os, verb)` to a symbol, which
+// could disagree with the builders. `mrt_start` and `mrt_panic` work the same way: one name, a
+// per-OS body.
 //
 // ⚠ **A LANE-PRIVATE HELPER KEEPS ITS LANE'S INFIX.** `mrt_darwin_dup_cstring` is a `malloc` and
 // `mrt_linux_glob_match` exists only because a raw static image has no `fnmatch`; neither has a counterpart
@@ -68,10 +68,9 @@ export let HostCpuCountName = b"mrt_host_cpu_count"
 
 // --- Is this descriptor a TERMINAL? ---
 //
-// ⭐ **A CHUNK ON EVERY POSIX LANE, WHERE THE Std OP IS ONE IMPORT CALL ON WINDOWS.** `GetFileType` takes a
-// handle and answers a word; the POSIX question needs either a call whose upper half must be narrowed
-// (`isatty`) or an `ioctl` with a `struct termios` the CALLER must own — and a frame for that buffer is
-// exactly what a chunk has and an isel lowering does not.
+// A chunk on every POSIX lane, where the Std op is one import call on Windows: the POSIX question
+// is an `isatty` import or an `ioctl` with a `struct termios` the caller must own, and a frame for
+// that buffer is what a chunk has and an isel lowering does not.
 export let HostHandleFileTypeName = b"mrt_host_handle_file_type"
 
 // --- The GREEN-THREAD FLOOR's host objects, and the two clocks the scheduler reaches ---
@@ -155,6 +154,7 @@ export let HostProcReapName = b"mrt_host_proc_reap"
 export let HostProcAwaitName = b"mrt_host_proc_await"
 export let HostProcExitCodeName = b"mrt_host_proc_exit_code"
 export let HostProcTerminateName = b"mrt_host_proc_terminate"
+export let HostProcProbeName = b"mrt_host_proc_probe"
 export let HostTickMsName = b"mrt_host_tick_ms"
 
 // ⚠ **THE MILLISECOND STOPWATCH HAS THREE PRODUCERS AND ONLY ONE IS IN THE PIPE BAND.** A subprocess
@@ -238,32 +238,40 @@ export let PosixCreateExecutableFileMode = 0o755
 // taking it here.
 export let PosixDirectoryMode = 0o777
 
-// ⭐⭐ **THE errno VALUES `mrt_host_last_error` TRANSLATES — AND ALL FIVE AGREE ACROSS EVERY LANE.**
-// MEASURED on Darwin (`<errno.h>`) and read off Linux's `asm-generic/errno-base.h`: `EPERM = 1`,
-// `ENOENT = 2`, `EACCES = 13`, `ENOTDIR = 20`, `ERANGE = 34` on both. Neither AArch64 nor x86-64 overrides
-// that header — each arch's `asm/errno.h` is a bare include of it — so the Linux half is one table, not two.
-// That agreement is what lets the TRANSLATION be shared while the FETCH stays per-lane (`*__error()` on
-// Darwin, a `.data` word or a scheduler slot on Linux).
+// The errno numbers that agree across every POSIX lane: Darwin's `<errno.h>` and Linux's
+// `asm-generic/errno-base.h`, which neither AArch64 nor x86-64 overrides. That agreement is what
+// lets the translation `mrt_host_last_error` performs be shared while the fetch of errno stays per
+// lane.
 //
-// ⛔⛔ **ONLY `ENOENT` AGREES WITH ITS Win32 TWIN BY LUCK, AND THE OTHER TWO WOULD MISCLASSIFY.** The Std
-// tier tests 2 / 3 / 5 (`ManagedFileRuntime.emitErrnoClassifiedThrow`); 3 is `ESRCH` and 5 is `EIO` under
-// POSIX, so handing it a raw errno would report a hardware read error as `accessDenied` and would never
-// report a missing directory component at all. The translation therefore happens in the CHUNK, exactly as
-// `mrt_host_wall_clock` translates nanoseconds into a FILETIME — one lane's vocabulary becoming the op's
-// contract, rather than the op's contract becoming per-lane.
-export let PosixErrnoNoSuchFileOrDirectory = 2
-export let PosixErrnoOperationNotPermitted = 1
-export let PosixErrnoPermissionDenied = 13
-export let PosixErrnoNotADirectory = 20
-export let PosixErrnoResultTooLarge = 34
+// Only `ENOENT` agrees with its Win32 twin. The Std tier tests 2 / 3 / 5
+// (`ManagedFileRuntime.emitErrnoClassifiedThrow`), and under POSIX 3 is `ESRCH` and 5 is `EIO`, so
+// a raw errno would report a read error as `accessDenied` and never report a missing directory
+// component. The translation therefore happens in the chunk.
+export enum PosixErrno
+	noSuchFileOrDirectory = 2
+	operationNotPermitted = 1
+	permissionDenied = 13
+	notADirectory = 20
+	resultTooLarge = 34
 
-// ⭐⭐ **A CLEARED errno MEANS "THE WALK RAN OUT", AND THAT IS WHAT MAKES `ERROR_NO_MORE_FILES` REACHABLE
-// WITHOUT A PRIVATE SENTINEL.** `FindNextFileA` reports end-of-iteration by FAILING with
-// `ERROR_NO_MORE_FILES`; POSIX reports it by an exhausted enumeration that sets no errno at all. So each
-// lane's walk clears errno before every step and the classifier reads a zero as exactly that
-// end-of-iteration — which is sound because `osLastError` is only ever consumed on a path where a call has
-// just FAILED, and the one failure in this whole surface that sets no errno is this one.
-export let PosixErrnoCleared = 0
+	// End of iteration. `FindNextFileA` reports it by failing with `ERROR_NO_MORE_FILES`; a POSIX
+	// enumeration sets no errno, so each lane's walk clears errno before every step and the classifier
+	// reads a zero as that end. Sound because `osLastError` is consumed only after a call failed, and
+	// this is the one failure in the surface that sets no errno.
+	cleared = 0
+
+	// Not a failure from a wait: `wait` reports it as no entries.
+	interrupted = 4
+
+	// From a child-source open (`pidfd_open` on a reaped pid, an `EVFILT_PROC` registration on a task
+	// that is gone) it is an answer: the child has already exited. Treating it as a refusal aborts a
+	// correct program whenever the child wins the race.
+	noSuchProcess = 3
+
+	badDescriptor = 9
+	badAddress = 14
+	invalidArgument = 22
+end 'PosixErrno'
 
 // The catch-all an errno with no Win32 twin becomes — `ERROR_GEN_FAILURE`. It deliberately is not one of the
 // three the Std classifier tests, so every unmapped failure takes that classification's per-operation
@@ -583,13 +591,16 @@ export let PosixWaitStatusSignalMask = 0x7F
 export let PosixWaitStatusExitShift = 8 as ShiftCount
 export let PosixWaitStatusExitMask = 0xFF
 
-// ⚠ **A SIGNAL-KILLED CHILD REPORTS `128 + signal`, WHICH IS THE SHELL'S CONVENTION AND NOT WIN32's.** There
-// is no exit code for a process the kernel killed, and every POSIX shell answers this. The one place the two
-// lanes WOULD have disagreed with Windows is the deadline kill, and they do not:
-// `TerminateProcess(h, code)` names the code the handle must then report, and `mrt_host_proc_terminate`
-// records it (`childKilled`) so the reap below hands back that code rather than `128 + SIGKILL`.
+// A signal-killed child reports `128 + signal`, the POSIX shell's convention, because the kernel
+// gives no exit code for it. The deadline kill is the exception: `TerminateProcess(h, code)` names
+// the code the handle then reports, so `mrt_host_proc_terminate` records it (`childKilled`) and the
+// reap hands back that code for a SIGKILL status. Any other status is decoded, so a child that
+// exited before the kill landed reports its own code.
 export let PosixSignalExitCodeBase = 128
 export let PosixSigKill = 9
+
+export let PosixProbeSignal = 0
+export let PosixShutdownWrite = 1
 
 // The two answers the reap gives, named because a bare 0/1 at four call sites says nothing about which
 // direction it reads.
@@ -742,29 +753,15 @@ export let LinuxONonBlock = 0x800
 export let LinuxEventfdCounterBytes = 8
 export let LinuxEventfdRaise = 1
 
-// The two answers a wait may give that are not failures: `EINTR` (the kernel's `-4`), which `wait` reports as
-// no entries, and every non-negative count.
-export let PosixErrnoInterrupted = 4
+// Darwin's twins of `LinuxErrno`, which number these differently; a consumer asks the target's OS
+// for the number rather than reading one table.
+export enum DarwinErrno
+	wouldBlock = 35
+	inProgress = 36
+	notASocket = 38
+	directoryNotEmpty = 66
+end 'DarwinErrno'
 
-// ⭐⭐⭐ **`ESRCH` FROM A CHILD-SOURCE OPEN IS AN ANSWER, NOT A REFUSAL: THE CHILD HAS ALREADY EXITED.**
-// Both POSIX kernels report it that way — `pidfd_open` on a pid that has been reaped, and an `EVFILT_PROC`
-// registration on a task that is gone — and there is nothing left to wait for in either case, because the
-// thing the wait exists to observe has happened. Treating it as a host refusal aborts a program that did
-// everything right, and it is a RACE, so it aborts only sometimes: MEASURED on a 3-vCPU `macos-15` runner,
-// ten spec workers died on it while the same tree was green on every developer machine.
-export let PosixErrnoNoSuchProcess = 3
-
-// ⭐ **DARWIN's TWO NON-BLOCKING ANSWERS AND ITS `getsockopt` VOCABULARY.** `EAGAIN`/`EWOULDBLOCK` is 35 and
-// `EINPROGRESS` 36 there where Linux has 11 and 115, which is why `ManagedSocketRuntime` asks the TARGET rather
-// than reading one pair (`LinuxRuntime.LinuxErrnoWouldBlock` is the other).
-export let DarwinErrnoWouldBlock = 35
-export let DarwinErrnoInProgress = 36
-
-// ⛔ **`ENOTEMPTY` IS THE ONE FILESYSTEM errno THE TWO OSes NUMBER DIFFERENTLY** — 39 on Linux, 66 on
-// Darwin — so it is supplied by the calling lane exactly as `EWOULDBLOCK` is, and there is no shared
-// constant for it. Its Win32 twin is `ErrorDirNotEmpty`, and the Std tier reads that code to tell a
-// directory that still holds an entry from one that could not be removed for any other reason.
-export let DarwinErrnoDirectoryNotEmpty = 66
 let DarwinSolSocket = 0xFFFF
 let DarwinSoError = 0x1007
 
@@ -795,22 +792,16 @@ export function posixSoError(os Os) returns MachineWord
 	end 'os'
 end 'posixSoError'
 
-// The `fcntl` chunk both of those go through — a chunk rather than an import lowering because `fcntl` is
-// VARIADIC on Darwin's arm64 ABI and its third argument is passed on the STACK, which a frame-less isel
-// sequence has nowhere to put.
-// ⭐⭐ **THREE DARWIN-ONLY CHUNKS, AND THEY EXIST BECAUSE libSystem KEEPS ITS REASON SOMEWHERE ELSE.** A raw
-// `svc` answers `-errno` in the return register; a libSystem call answers -1 and leaves the reason in
-// `*__error()`, which no frame-less isel sequence can fetch (it is a CALL). Each takes the raw libSystem
-// answer and gives back the op's contract:
-//
-//   • `mrt_host_socket_birth` — `socket(2)`'s answer: widen, then set `O_NONBLOCK` and `FD_CLOEXEC`, which
-//     Darwin cannot pass to `socket` and Linux can.
-//   • `mrt_host_socket_int_status` — a C `int` answer (`connect`, `getsockopt`): widen, then fold.
-//   • `mrt_host_socket_size_status` — a `ssize_t` answer (`send`, `recv`): fold WITHOUT widening, because the
-//     count is already 64 bits and bit 31 is a byte count's, not a sign.
+// The two Darwin-only socket chunks. A raw `svc` answers `-errno`; a libSystem call answers -1 and
+// leaves the reason in `*__error()`, which a frame-less isel sequence cannot fetch because that is
+// a call. Each chunk takes the libSystem answer, already widened by the import's `ImportAnswer`,
+// and gives back the op's `-errno` contract:
+//   `mrt_host_socket_birth` — `socket(2)`'s answer, then `O_NONBLOCK` and `FD_CLOEXEC`, which
+//   Darwin cannot pass to `socket`. `fcntl` is variadic on Darwin's arm64 ABI with its third
+//   argument on the stack, which a frame-less sequence has nowhere to put.
+//   `mrt_host_socket_status` — every other socket status.
 export let HostSocketBirthName = b"mrt_host_socket_birth"
-export let HostSocketIntStatusName = b"mrt_host_socket_int_status"
-export let HostSocketSizeStatusName = b"mrt_host_socket_size_status"
+export let HostSocketStatusName = b"mrt_host_socket_status"
 
 // `kqueue`'s user event: `EVFILT_USER`, registered `EV_ADD | EV_CLEAR` so a receive consumes it, and fired
 // with `NOTE_TRIGGER`.
@@ -880,20 +871,19 @@ end 'posixNetpollChunk'
 export function posixNetpollOperandCount(verb NetpollVerb) returns ParamCount
 	return match verb 'v'
 		openPoller gives 0
-		openBreak gives 1
-		wait gives 4
-		raiseBreak gives 2
-		drainBreak gives 1
-		sleepOnTimer or
-			shortSleep gives 1
-		armSource gives 2
-		openChildSource or
+		openBreak or
+			drainBreak or
+			sleepOnTimer or
+			shortSleep or
+			openChildSource or
 			closeChildSource or
 			armPipeSource gives 1
-
-		// The child handle is the third operand and only Windows reads it: these lanes register the SOURCE the
-		// open already answered.
-		armChildSource gives 2
+		wait gives 4
+		raiseBreak or
+			armSource or
+			// The child handle is the third operand and only Windows reads it: these lanes register the SOURCE the
+			// open already answered.
+			armChildSource gives 2
 		openTimer panic("posixNetpollOperandCount: `openTimer` has no chunk on a POSIX lane — see `posixNetpollChunk`")
 		postChildExit panic("posixNetpollOperandCount: `postChildExit` has no chunk on a POSIX lane — see `posixNetpollChunk`")
 	end 'v'

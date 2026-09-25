@@ -1,22 +1,32 @@
-// The two PROCESS-CONTROL entry points a program reaches through `__Builtins.currentProcessId()` and
-// `__Builtins.enterBackgroundPriority()`.
+// The process-control entry points a program reaches through `__Builtins.currentProcessId()`,
+// `__Builtins.enterBackgroundPriority()` and `__Builtins.processIsAlive()`.
 //
-// ⭐⭐ **TWO ENTRIES, TWO HOST FACILITIES, AND THE SPLIT IS WHAT DECIDES WHICH TARGETS MAY RUN EACH.** One
-// READS an identity the kernel already holds; the other WRITES the scheduling priority of the running
-// process and then reads it back. A lane can serve the read long before it can serve the write — a POSIX
-// `setpriority` scopes to the process on Darwin and to the calling thread on Linux — so
-// `TargetFacilities.calleeHostFacility` answers `processPriority` for `__proc_bg_priority` by NAME, ahead of
-// the `__proc_` band that answers `processInfo` for the identity reads.
+// Each entry answers its own host facility, and that split decides which targets may run it: a lane
+// can serve the identity read long before the priority write, because a POSIX `setpriority` scopes
+// to the process on Darwin and to the calling thread on Linux.
+// `TargetFacilities.calleeHostFacility` names `__proc_bg_priority` and `__proc_alive` individually,
+// ahead of the `__proc_` band that answers `processInfo`.
 //
-// ⛔⛔ **THE FAMILY'S THIRD ENTRY POINT, `__proc_exe_path`, IS NOT HERE AND IS NOT MISSING BY NEGLECT.**
-// Its body is a doubling grow-and-retry loop that allocates a raw buffer and builds an `__ManagedMemory`
-// answer, so as tier source it would CALL other runtime entries — and `scanRuntimeUsage` walks every runtime
-// body in every program, so a call inside one sets that family's bit for a program dead-function elimination
-// sweeps the body out of. That vacuity holds only while every tier body calls nothing but `__Raw`, which
-// names no callee. The allocator's own migration is what answers it; until then the path walk stays IR the
-// compiler builds (`Compiler/Runtime/ProcessRuntime.maxon`).
+// `__proc_exe_path` is IR the compiler builds (`Compiler/Runtime/ProcessRuntime.maxon`), not tier
+// source. Its body allocates and builds an `__ManagedMemory`, so here it would call other runtime
+// entries, and `scanRuntimeUsage` walks every runtime body in every program: that call would set
+// its family's bit for a program dead-function elimination sweeps the body out of.
 
 module typealias ProcessId = int(0 to u64.max)
+
+typealias ProbeWord = int(i64.min to i64.max)
+
+let HighestProbedProcessId = 2147483647 as ProbeWord
+
+#if os(Windows)
+	let ProcessIdGranuleMask = 3 as ProbeWord
+	let NoHandle = 0 as ProbeWord
+	let ErrorInvalidParameter = 87 as ProbeWord
+	let WaitTimeout = 0x102 as ProbeWord
+	let NoWaitMs = 0 as ProbeWord
+#else
+	let ProbeNoSuchProcess = -3 as ProbeWord
+#endif
 
 // ⭐⭐ **`__proc_pid()` — THE OS-ASSIGNED ID OF THE RUNNING PROCESS.**
 //
@@ -46,3 +56,37 @@ end '__proc_pid'
 module function __proc_bg_priority() returns MachineWord
 	return __Raw.osEnterBackgroundPriority()
 end '__proc_bg_priority'
+
+// A probe refused for any reason but "no such process" names a process that exists and is not ours
+// to open or signal, so it answers alive.
+module function __proc_alive(pid ProbeWord) returns bool
+	// To `kill`, zero and negative ids name process groups; both hosts truncate the word to 32 bits,
+	// so a wider one would probe some other id.
+	if pid <= 0 or pid > HighestProbedProcessId 'noProcessHasThisId'
+		return false
+	end 'noProcessHasThisId'
+
+	#if os(Windows)
+		// The kernel ignores a process id's low two bits, so an id with them set would open the process
+		// at the multiple of four below it.
+		if (pid and ProcessIdGranuleMask) != 0 'notAProcessId'
+			return false
+		end 'notAProcessId'
+
+		// The probe answers the opened handle, or the negated `GetLastError` of a refused open.
+		let answer = __Raw.osProcessProbe(pid as MachineWord) as ProbeWord
+
+		if answer <= NoHandle 'notOpened'
+			return NoHandle - answer != ErrorInvalidParameter
+		end 'notOpened'
+
+		// An exited process stays openable while any handle to it is held, so only a wait that times out
+		// proves it is still running.
+		let waited = __Raw.osWaitHandle(answer as MachineWord, timeoutMs: NoWaitMs as MachineWord) as ProbeWord
+		__Raw.osCloseHandle(answer as MachineWord)
+
+		return waited == WaitTimeout
+	#else
+		return __Raw.osProcessProbe(pid as MachineWord) as ProbeWord != ProbeNoSuchProcess
+	#endif
+end '__proc_alive'

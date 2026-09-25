@@ -40,10 +40,10 @@ let QuotedNameSegment = 1
 // nothing. Saying nothing leaves the editor showing what it already had, which is what "not
 // checked" looks like.
 module function publishBufferDiagnostics(uri String, text String, arrival BufferArrival)
-	let path = try lspDocumentPathOrThrow(uri) otherwise return
+	let path = try FilePath.from(uri) otherwise return
 
 	match lspDocumentProject(path, content: text) 'buffer'
-		loaded(project, tiers) then project.publishDocumentDiagnostics(uri, reader: LspReaderSearch.of(path, tiers: tiers), arrival: arrival, path: path, text: text)
+		loaded(project, reader) then project.publishDocumentDiagnostics(uri, reader: reader, arrival: arrival, path: path, text: text)
 		unavailable then return
 	end 'buffer'
 end 'publishBufferDiagnostics'
@@ -437,8 +437,12 @@ function visibleCalleeDeclaringFile(signatures ProgramSignatures, callee ByteArr
 end 'visibleCalleeDeclaringFile'
 
 function diagnosticSubject(diagnostic Diagnostic, tokens TokenArray) returns DiagnosticSubject
-	if diagnostic.line == 0 'noAnchorToReadFrom'
+	if diagnostic.code == ErrorCode.unknownType 'anUnknownType'
 		return reconstructedUnknownTypeSubject(diagnostic, tokens: tokens)
+	end 'anUnknownType'
+
+	if diagnostic.line == 0 'noAnchorToReadFrom'
+		return DiagnosticSubject.unattributable
 	end 'noAnchorToReadFrom'
 
 	return subjectAnchoredAt(tokens, line: diagnostic.line, column: diagnostic.column)
@@ -559,9 +563,9 @@ module function reportsOn(diagnostic Diagnostic, path FilePath) returns bool
 end 'reportsOn'
 
 // Resolved and normalized rather than compared as text: the corpus reports under the spelling it
-// registered a file by, which is not always the spelling the request arrived with (`corpusSpellingOf`
-// owns that rule). A text compare drops every one of those diagnostics and publishes an empty array,
-// which reads as "this document is clean".
+// registered a file by, which is not always the spelling the request arrived with
+// (`registeredSpellingOf` owns that rule). A text compare drops every one of those diagnostics and
+// publishes an empty array, which reads as "this document is clean".
 function namesTheSameFile(one FilePath, other FilePath) returns bool
 	return one.resolve(Directory.currentPath()).equals(other.resolve(Directory.currentPath()))
 end 'namesTheSameFile'

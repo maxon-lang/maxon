@@ -1,0 +1,22 @@
+let LibraryStepCaseLabel = "step-into-a-library-call-comes-back-to-the-program"
+let MainFunctionName = "main"
+
+test 'a step on a line that calls into the library comes back at the next line of the program'
+	let staged = builtFixture(LibraryStepCaseLabel, fixture: WalksFixtureName)
+	let callLine = anchorLine(staged, anchor: "library-call")
+	let afterLine = anchorLine(staged, anchor: "after-library-call")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(callLine)}", RunCommand, StepCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let stops = eventsOfKind(events, kind: StopEventName)
+
+	try Expect.equal(eventsOfKind(events, kind: TimeoutEventName).count() as AssertedInt, expected: 0, message: "`values.sort()` over three hundred thousand elements is library code from its first instruction — the sort is spliced into `{MainFunctionName}` and calls on into the library — so a `{StepCommand}` runs it at full speed and resumes stepping where it returns; one that single-steps the sort cannot come back inside the stop timeout. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(stops.count() as AssertedInt, expected: 2, message: "the breakpoint on the call line and the `{StepCommand}` are two stops. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let landed = eventAt(stops, index: 1)
+	try Expect.equal(textOf(landed, node: landed.root, key: FileKey), expected: StagedProgramFileName, message: "the library's code is never a place a `{StepCommand}` stops, spliced into the program or not. {said}")
+	try Expect.equal(textOf(landed, node: landed.root, key: FunctionKey), expected: MainFunctionName, message: "the step comes back into the frame that made the call. {said}")
+	try Expect.equal(numberOf(landed, node: landed.root, key: LineKey) as AssertedInt, expected: afterLine as AssertedInt, message: "the step lands on the program's next line. {said}")
+	try Expect.equal(textOf(landed, node: landed.root, key: ReasonKey), expected: StepStopReason, message: "the landing is the step's own. {said}")
+end 'a step on a line that calls into the library comes back at the next line of the program'

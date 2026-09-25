@@ -1,0 +1,64 @@
+let MainThreadCaseLabel = "green-thread-ids-never-name-the-main-thread-main"
+let GreenThreadsCaseLabel = "green-thread-ids-never-name-the-main-thread-green"
+let HotAnchor = "hot"
+let WorkerLoopAnchor = "worker-loop"
+let SingleProcessorEnv = "\{\"MAXON_MAX_PROCS\":\"1\"\}"
+let ThreadIdKey = "threadId"
+
+type StoppedThreadsSession implements DapSession
+	let launchArguments as String
+	let source as FilePath
+	let anchored as SourceLine
+	export var stoppedThread as DapNumber
+	export var threads as JsonDoc
+	export var otherStacks as JsonDocArray
+
+	static function create(launchArguments String, source FilePath, anchored SourceLine) returns StoppedThreadsSession
+		return Self{launchArguments: launchArguments, source: source, anchored: anchored, stoppedThread: 0, threads: JsonDoc.create(), otherStacks: JsonDocArray.create()}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+		_ = try client.request(LaunchCommand, argumentsJson: self.launchArguments)
+		_ = try client.awaitEvent(InitializedEvent)
+		_ = try client.request(SetBreakpointsCommand, argumentsJson: dapSetBreakpointsArguments(self.source, line: self.anchored))
+		_ = try client.request(ConfigurationDoneCommand)
+
+		self.stoppedThread = dapBodyNumber(try client.awaitEvent(StoppedEvent), key: ThreadIdKey)
+		self.threads = try client.request(ThreadsCommand)
+
+		for id in dapThreadIds(self.threads) 'eachListed'
+			if id == self.stoppedThread 'theStoppedOne'
+				continue
+			end 'theStoppedOne'
+
+			self.otherStacks.push(try client.request(StackTraceCommand, argumentsJson: dapThreadArguments(id)))
+		end 'eachListed'
+
+		_ = try client.request(DisconnectCommand)
+	end 'drive'
+end 'StoppedThreadsSession'
+
+test 'the id of a program with no scheduler is never the id of a green thread, and every green thread id walks'
+	let plain = dapStagedFixture(MainThreadCaseLabel, fixture: HeaplessFixtureName)
+	var mainOnly = StoppedThreadsSession.create(dapLaunchArguments(dapBuildFixture(plain)), source: dapStagedSource(plain), anchored: dapAnchorLine(plain, anchor: HotAnchor))
+	try dapRunSession(mainOnly, completing: "stop the program with no scheduler")
+
+	let green = dapStagedFixture(GreenThreadsCaseLabel, fixture: WorkersFixtureName)
+	var workers = StoppedThreadsSession.create(dapLaunchArgumentsWithEnv(dapBuildFixture(green), envJson: SingleProcessorEnv), source: dapStagedSource(green), anchored: dapAnchorLine(green, anchor: WorkerLoopAnchor))
+	try dapRunSession(workers, completing: "stop the program with green threads")
+
+	let mainIds = dapThreadIds(mainOnly.threads)
+	let greenIds = dapThreadIds(workers.threads)
+
+	try Expect.equal(mainIds.count() as AssertedInt, expected: 1, message: "a program with no scheduler lists its one thread; it listed {dapDescribed(mainOnly.threads)}")
+	try Expect.isTrue(greenIds.contains(workers.stoppedThread), message: "the stop names a thread the listing lists; it named {workers.stoppedThread} and listed {dapDescribed(workers.threads)}")
+
+	for id in mainIds 'eachMain'
+		try Expect.isFalse(greenIds.contains(id), message: "thread {id} is the id the adapter gives a program with no scheduler, and a green thread was listed under it too, so a stop on one reads as a stop on the other: {dapDescribed(workers.threads)}")
+	end 'eachMain'
+
+	for stack in workers.otherStacks 'eachOtherThread'
+		try Expect.isTrue(dapSuccess(stack), message: "every green thread the listing names must walk under the id it was listed with; one answered {dapDescribed(stack)}")
+	end 'eachOtherThread'
+end 'the id of a program with no scheduler is never the id of a green thread, and every green thread id walks'

@@ -133,11 +133,6 @@ let SubpKilledExitCode = 1 as ParsedInt
 let WaitObjectSignalled = 0 as ParsedInt
 let WaitTimedOut = 0x102 as ParsedInt
 
-// `GetFileAttributesA`'s "there is nothing at this path" answer, and the directory bit within a real one. A
-// candidate that names a DIRECTORY is not an executable, which is what makes the second test necessary.
-let InvalidFileAttributes = 0xFFFFFFFF as ParsedInt
-let FileAttributeDirectory = 0x10 as ParsedInt
-
 // The three `dwCreationFlags` bits `stdlib/Subprocess.maxon`'s `SpawnFlag` surface maps onto. The SURFACE
 // values (bit 0 hide window, bit 1 new process group, bit 2 detach) are the corpus's; these are Win32's, and
 // the translation between them lives in one place (`emitSubpCreationFlags`).
@@ -155,6 +150,7 @@ let SpawnFlagDetachShift = 2 as ParsedInt
 // (`__gt_sleep`), so the whole scheduler runs while it waits. One millisecond is the smallest value a Win32
 // timer resolves at all.
 let SubpPollMs = 1 as ParsedInt
+let SubpNoWaitMs = 0 as ParsedInt
 
 // ⭐ **HOW LONG `delayed` HOLDS THE PIPE AFTER THE CHILD'S FIRST STDOUT BYTE BEFORE FEEDING IT.** Fixed rather
 // than a spawn argument because the spawn contract carries a `limit` slot for stdout and stderr and NONE for
@@ -1369,13 +1365,41 @@ function buildSubpReadBytes(module StdModule, name ByteArray, readerName ByteArr
 	module.functions.push(func)
 end 'buildSubpReadBytes'
 
+// A timeout terminates the child's whole tree, as `waitWithTimeout`'s doc comment promises;
+// otherwise live processes hold the write ends of pipes nobody drains. Terminating only starts the
+// teardown, so the wait holds the caller until the child is gone, and an exit code read afterwards
+// is the kill's. A refused terminate is confirmed by a wait that does not block, so a child the
+// terminate never reached goes to `unconfirmed` rather than hanging the caller.
+function emitSubpTerminateChild(module StdModule, func IrFunction, cur IrBlock, ids ValueMinter, handle ValueId, unconfirmed IrBlock) returns IrBlock
+	var awaitTheEnd = module.addBlock(func, label: b"subpkillwait", heat: BlockHeat.normal)
+	var endedAlready = module.addBlock(func, label: b"subpkillgone", heat: BlockHeat.normal)
+	var gone = module.addBlock(func, label: b"subpkilled", heat: BlockHeat.normal)
+
+	let slot = emitSubpSlotOf(module, block: cur, ids: ids, handle: handle)
+	let tree = emitLoadField(module, block: cur, record: slot, offset: SubpSlotProcessTree, ids: ids)
+	let hProcess = emitLoadField(module, block: cur, record: slot, offset: SubpSlotHProcess, ids: ids)
+	let killCode = emitConst(module, block: cur, value: SubpKilledExitCode, ids: ids)
+	let delivered = ids.mint()
+	module.appendOp(cur, op: StdOp.osProcessTerminate(delivered, handleId: tree, exitCodeId: killCode))
+	let refused = emitCmp(module, block: cur, a: delivered, b: emitConst(module, block: cur, value: Win32False, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(refused, thenBlockId: endedAlready.id, elseBlockId: awaitTheEnd.id))
+
+	emitSubpWaitForTheChild(module, block: awaitTheEnd, hProcess: hProcess, timeoutMs: SubpWaitInfinite, ended: gone, stillRunning: unconfirmed, ids: ids)
+	emitSubpWaitForTheChild(module, block: endedAlready, hProcess: hProcess, timeoutMs: SubpNoWaitMs, ended: gone, stillRunning: unconfirmed, ids: ids)
+
+	return gone
+end 'emitSubpTerminateChild'
+
+function emitSubpWaitForTheChild(module StdModule, block IrBlock, hProcess ValueId, timeoutMs ParsedInt, ended IrBlock, stillRunning IrBlock, ids ValueMinter)
+	let settled = ids.mint()
+	module.appendOp(block, op: StdOp.osWaitChild(settled, handleId: hProcess, timeoutMsId: emitConst(module, block: block, value: timeoutMs, ids: ids)))
+	let signalled = emitCmp(module, block: block, a: settled, b: emitConst(module, block: block, value: WaitObjectSignalled, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(block, op: StdOp.condBranch(signalled, thenBlockId: ended.id, elseBlockId: stillRunning.id))
+end 'emitSubpWaitForTheChild'
+
 // `__gt_subp_wait_exit(handle, timeoutMs) -> exitCode | -2 (timed out) | -1 (bad handle)` —
-// `__Builtins.subprocessWaitExit`. `timeoutMs == 0` means wait for ever, which is
-// `stdlib/Subprocess.maxon`'s documented convention for the whole family.
-//
-// ⚠ **A TIMEOUT TERMINATES THE CHILD'S WHOLE TREE**, which is what `waitWithTimeout`'s doc-comment promises:
-// *"the runtime forcibly terminates the child's whole process tree in that case"*. Without it a timed-out
-// wait leaves live processes holding the write ends of pipes nobody is draining.
+// `__Builtins.subprocessWaitExit`. `timeoutMs == 0` means wait for ever,
+// `stdlib/Subprocess.maxon`'s convention for the whole family.
 function buildSubpWaitExit(module StdModule)
 	var func = IrFunction.createFromStd(SubpWaitExitName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
@@ -1398,11 +1422,9 @@ function buildSubpWaitExit(module StdModule)
 
 	var good = emitSubpRequireHandle(module, func: func, ids: ids, cur: entry, handle: handle, whenBad: bad)
 
-	// The wait's DURATION, carried to `doWait` as its one block argument. This is the one place in the file
-	// where a block argument beats the scratch record the header argues for: it is a single value across a
-	// single merge with no loop anywhere near it, so it costs one register and nothing else — and the
-	// collect loop's `WcDeadline` is an ABSOLUTE tick-count, which this is not, so borrowing that field
-	// would have made its own comment false.
+	// The wait's duration rides into `doWait` as a block argument rather than the scratch record: one
+	// value across one merge with no loop near it, and `WcDeadline` is an absolute tick count, which
+	// this is not.
 	let zeroT = emitConst(module, block: good, value: 0, ids: ids)
 	let waitForever = emitCmp(module, block: good, a: timeoutMs, b: zeroT, pred: StdCmpPred.eq, ids: ids)
 	let infinite = emitConst(module, block: good, value: SubpWaitInfinite, ids: ids)
@@ -1417,15 +1439,14 @@ function buildSubpWaitExit(module StdModule)
 	let slot = emitSubpSlotOf(module, block: doWait, ids: ids, handle: handle)
 	let hProcess = emitLoadField(module, block: doWait, record: slot, offset: SubpSlotHProcess, ids: ids)
 	let waitResult = ids.mint()
-	module.appendOp(doWait, op: StdOp.osWaitHandle(waitResult, handleId: hProcess, timeoutMsId: waitMs))
+	module.appendOp(doWait, op: StdOp.osWaitChild(waitResult, handleId: hProcess, timeoutMsId: waitMs))
 	let signalled = emitConst(module, block: doWait, value: WaitObjectSignalled, ids: ids)
 	let didExit = emitCmp(module, block: doWait, a: waitResult, b: signalled, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(doWait, op: StdOp.condBranch(didExit, thenBlockId: exited.id, elseBlockId: waitVerdict.id))
 
-	// ⚠ **`WAIT_TIMEOUT` AND `WAIT_FAILED` ARE DIFFERENT ANSWERS, AND THE CONTRACT DISTINGUISHES THEM.**
-	// `waitWithTimeout` maps `-2` to `SubprocessError.timeout` and `-1` to `ioFailed`, so a wait that
-	// FAILED — a closed handle, a handle the OS refuses — must not be reported as a deadline nobody set,
-	// and must not TERMINATE a child it knows nothing about.
+	// `WAIT_TIMEOUT` and `WAIT_FAILED` are different answers: `waitWithTimeout` maps `-2` to
+	// `SubprocessError.timeout` and `-1` to `ioFailed`, so a failed wait must neither report a
+	// deadline nobody set nor terminate a child it knows nothing about.
 	let timedOutConst = emitConst(module, block: waitVerdict, value: WaitTimedOut, ids: ids)
 	let deadlineFired = emitCmp(module, block: waitVerdict, a: waitResult, b: timedOutConst, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(waitVerdict, op: StdOp.condBranch(deadlineFired, thenBlockId: timedOut.id, elseBlockId: waitFailed.id))
@@ -1434,12 +1455,9 @@ function buildSubpWaitExit(module StdModule)
 	let failure2 = emitConst(module, block: waitFailed, value: SubpFailure, ids: ids)
 	module.setTerminator(waitFailed, op: StdOp.ret(failure2))
 
-	let slotK = emitSubpSlotOf(module, block: timedOut, ids: ids, handle: handle)
-	let treeK = emitLoadField(module, block: timedOut, record: slotK, offset: SubpSlotProcessTree, ids: ids)
-	let killCode = emitConst(module, block: timedOut, value: SubpKilledExitCode, ids: ids)
-	module.appendOp(timedOut, op: StdOp.osProcessTerminate(treeK, exitCodeId: killCode))
-	let timedOutRc = emitConst(module, block: timedOut, value: SubpTimedOutRc, ids: ids)
-	module.setTerminator(timedOut, op: StdOp.ret(timedOutRc))
+	var killed = emitSubpTerminateChild(module, func: func, cur: timedOut, ids: ids, handle: handle, unconfirmed: waitFailed)
+	let timedOutRc = emitConst(module, block: killed, value: SubpTimedOutRc, ids: ids)
+	module.setTerminator(killed, op: StdOp.ret(timedOutRc))
 
 	let slotE = emitSubpSlotOf(module, block: exited, ids: ids, handle: handle)
 	let hProcessE = emitLoadField(module, block: exited, record: slotE, offset: SubpSlotHProcess, ids: ids)
@@ -1455,10 +1473,9 @@ end 'buildSubpWaitExit'
 // Answered with a ZERO-timeout wait, so it never blocks, and with no terminate on any path, so it never
 // changes what it is asking about.
 //
-// ⭐⭐ **-1 CANNOT COLLIDE WITH AN EXIT CODE, AND THE DWORD LOAD IS WHAT MAKES THAT TRUE.** Reading only the
-// low 32 bits of the shared scratch word (see `SubpSlotBytesOut`, which owns that rule) puts the answer in
-// [0, 2^32), so every negative value is out of band — which is what lets one entry carry both "it exited
-// with this code" and "it has not". `StdOp.osHandleFileType` records the same hazard from the other end.
+// -1 cannot collide with an exit code because the DWORD load reads only the low 32 bits of the
+// shared scratch word (see `SubpSlotBytesOut`, which owns that rule): the answer is in [0, 2^32),
+// so every negative value is out of band.
 //
 // ⚠ A handle naming no live child also answers -1, which `stdlib/Subprocess.maxon` reads as `running`: after
 // `release()` there is no child left to report an exit for, and the throwing methods refuse a released handle
@@ -1508,33 +1525,24 @@ function emitSubpChildHasExited(module StdModule, block IrBlock, ids ValueMinter
 	return emitCmp(module, block: block, a: waitResult, b: emitConst(module, block: block, value: WaitObjectSignalled, ids: ids), pred: StdCmpPred.eq, ids: ids)
 end 'emitSubpChildHasExited'
 
-// ⭐⭐ `__gt_subp_wait_collect(handle, timeoutMs) -> resultPtr | -1` — wait for the child while DRAINING BOTH
-// of its output pipes, and answer a result struct holding what they produced.
+// `__gt_subp_wait_collect(handle, timeoutMs) -> resultPtr | -1` — wait for the child while draining
+// both of its output pipes, and answer a result struct holding what they produced.
 //
-// ⭐⭐ **DRAINING BOTH IS THE WHOLE DIFFICULTY, AND IT IS WHY `osPipePeek` EXISTS.** A child that fills the
-// 64 KiB stderr pipe blocks for ever if the parent is committed to a read on stdout, and the compiler's yielding read
-// parks the calling green thread on the GT's own single OVERLAPPED — so it cannot hold two reads in flight.
-// The loop therefore ASKS each pipe whether it has bytes before committing to read it: a peek that answers 0
-// costs one call and no wait, and a peek that answers N makes the overlapped read complete SYNCHRONOUSLY.
-// A pass that moved nothing and did not find the run finished is the ONE case that waits, and it waits GREEN —
-// a `__gt_sleep` on the completion-port lane, a park on the wait's own sources elsewhere — so the whole
-// scheduler runs meanwhile.
+// Draining both is why `osPipePeek` exists. A child that fills the 64 KiB stderr pipe blocks for
+// ever if the parent is committed to a read on stdout, and the yielding read parks the green thread
+// on its one OVERLAPPED, so two reads cannot be in flight. The loop asks each pipe whether it has
+// bytes before reading it: a peek answering 0 costs no wait, and one answering N makes the read
+// complete synchronously. Only a pass that moved nothing and did not find the run finished waits,
+// and it waits green, so the scheduler runs meanwhile. The same structure is what lets a deadline
+// be honoured at all: a committed blocking read cannot observe one.
 //
-// ⚠ **THE SAME STRUCTURE IS WHAT LETS A DEADLINE BE HONOURED AT ALL**: a committed blocking read cannot
-// observe one. `timeoutMs == 0` means "wait for ever", the corpus's convention for the whole family.
+// The stdin payload is pushed from inside this loop, between drains, as a synchronous `WriteFile`.
+// A payload larger than the pipe buffer handed to a child that never reads its stdin blocks the OS
+// thread, and with it the whole scheduler and this function's deadline; lifting that needs an
+// overlapped write end.
 //
-// ⚠⚠ **THE STDIN PAYLOAD IS PUSHED FROM INSIDE THIS LOOP** (`StdinKind.bytes`, and `StdinKind.delayed` once
-// the stdout drain has armed its feed), between drains, so a child that reads its input while writing its
-// output makes progress on both. The write is a synchronous
-// `WriteFile` on the outbound pipe — NOT the yielding read — so if it ever blocks it blocks **the OS THREAD,
-// and therefore the WHOLE SCHEDULER**: every other green thread stops too, and the deadline this function
-// exists to honour cannot fire either. It takes a payload larger than the pipe buffer (64 KiB) handed to a
-// child that never reads its stdin. That is the one bound this design cannot lift without an overlapped
-// write end, and it is stated rather than discovered.
-//
-// ⚠ **AND THE PAYLOAD CROSSES AS A `cstring`**, which is the CONTRACT's shape and not this runtime's
-// choice: `stdinData` is a `cstring`, as `cwd` and both file paths are. So an `InputSource.bytes(s)` whose
-// String contains a 0x00 is truncated at it, silently. Same for a path or a working directory holding one.
+// ⚠ The payload crosses as a `cstring`, the contract's shape: an `InputSource.bytes(s)` whose
+// String holds a 0x00 is truncated there, silently, as is a path or working directory holding one.
 function buildSubpWaitCollect(module StdModule, target Target)
 	if WcGroupMembers > NetpollGroupMaxMembers 'groupFitsTheAnswer'
 		panic("buildSubpWaitCollect: a collect group of {WcGroupMembers} members outgrows the {NetpollGroupMaxMembers} bits `__np_pd_wait_any` answers in")
@@ -1550,6 +1558,8 @@ function buildSubpWaitCollect(module StdModule, target Target)
 	var exitCheck = module.addBlock(func, label: b"wcexit", heat: BlockHeat.normal)
 	var deadlineCheck = module.addBlock(func, label: b"wcdl", heat: BlockHeat.normal)
 	var killIt = module.addBlock(func, label: b"wckill", heat: BlockHeat.normal)
+	var killUnconfirmed = module.addBlock(func, label: b"wckillunconfirmed", heat: BlockHeat.normal)
+	var abandon = module.addBlock(func, label: b"wcabandon", heat: BlockHeat.normal)
 	var idleCheck = module.addBlock(func, label: b"wcidle", heat: BlockHeat.normal)
 	var doSleep = module.addBlock(func, label: b"wcsleep", heat: BlockHeat.normal)
 	var finish = module.addBlock(func, label: b"wcfinish", heat: BlockHeat.normal)
@@ -1562,8 +1572,9 @@ function buildSubpWaitCollect(module StdModule, target Target)
 	let failure = emitConst(module, block: bad, value: SubpFailure, ids: ids)
 	module.setTerminator(bad, op: StdOp.ret(failure))
 
-	// ⛔ **THE SLOT IS TAKEN BEFORE ANY OF ITS HANDLES IS READ** (`GtRuntime.SubpSlotCollector`): a release or
-	// another collect that holds it is the stop, and `reap` — the one road out with a result — gives it back.
+	// The collector slot is taken before any of its handles is read (`GtRuntime.SubpSlotCollector`): a
+	// release or another collect holding it stops this one, and `reap`, the one road out with a
+	// result, gives it back.
 	var good = emitSubpRequireHandle(module, func: func, ids: ids, cur: entry, handle: handle, whenBad: bad)
 	let slotS = emitSubpSlotOf(module, block: good, ids: ids, handle: handle)
 	var held = emitSubpRequireCollectorTaken(module, func: func, cur: good, slot: slotS, replacement: SubpCollectorHeld, ids: ids)
@@ -1583,9 +1594,9 @@ function buildSubpWaitCollect(module StdModule, target Target)
 	let statusExited = emitConst(module, block: held, value: SubpStatusExited, ids: ids)
 	emitStoreField(module, block: held, record: state, offset: WcStatus, value: statusExited)
 
-	// ⭐⭐ **THE CHILD JOINS THE POLLER FOR THE LENGTH OF THIS WAIT**, so an idle pass has something to
-	// suspend on that is not a clock. On a lane whose pipes ride a completion port the drain still yields, so
-	// there is no source to open — `emitSubpOpenChildSource` emits nothing there.
+	// The child joins the poller for the length of this wait, so an idle pass has something other than
+	// a clock to suspend on. On a lane whose pipes ride a completion port the drain still yields, and
+	// `emitSubpOpenChildSource` emits nothing.
 	var opened = emitSubpOpenChildSource(module, func: func, ids: ids, cur: held, target: target, state: state, handle: handle)
 
 	let zeroD = emitConst(module, block: opened, value: 0, ids: ids)
@@ -1608,8 +1619,8 @@ function buildSubpWaitCollect(module StdModule, target Target)
 	var afterErr = emitSubpDrainStream(module, func: func, ids: ids, cur: afterArm, state: state, streamBase: SubpStderrBase, bufOffset: WcErrBuf, lenOffset: WcErrLen, capOffset: WcErrCap, doneOffset: WcErrDone, slotLimitOffset: SubpSlotErrLimit)
 	module.setTerminator(afterErr, op: StdOp.branch(exitCheck.id))
 
-	// exitCheck: the child is finished ONLY when both streams are drained AND its exit is known — a child can
-	// close its pipes and go on running, and a child can exit with bytes still sitting in a pipe.
+	// exitCheck: the child is finished only when both streams are drained and its exit is known. A
+	// child can close its pipes and go on running, and can exit with bytes still sitting in a pipe.
 	var bothDone = module.addBlock(func, label: b"wcboth", heat: BlockHeat.normal)
 	let outDone = emitLoadField(module, block: exitCheck, record: state, offset: WcOutDone, ids: ids)
 	let errDone = emitLoadField(module, block: exitCheck, record: state, offset: WcErrDone, ids: ids)
@@ -1618,10 +1629,10 @@ function buildSubpWaitCollect(module StdModule, target Target)
 	let notBoth = emitCmp(module, block: exitCheck, a: bothFlags, b: zeroX, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(exitCheck, op: StdOp.condBranch(notBoth, thenBlockId: deadlineCheck.id, elseBlockId: bothDone.id))
 
-	// ⛔⛔ **A CHILD WHOSE EXIT HAS BEEN LEARNED GOES STRAIGHT TO THE REAP, AND IS NEVER POLLED.** XNU can
-	// report the exit before `waitpid(WNOHANG)` is able to reap the child, so the poll below can answer
-	// "running" for a child whose source has nothing left to report — and the idle pass would then park on it
-	// for ever (`NetpollRuntime.NetpollPdWaitAnyName`'s band). `finish`'s reap blocks, which is bounded here:
+	// A child whose exit has been learned goes straight to the reap and is never polled: XNU can
+	// report the exit before `waitpid(WNOHANG)` can reap the child, so the poll could answer "running"
+	// for a child whose source has nothing left to report, and the idle pass would park on it for ever
+	// (`NetpollRuntime.NetpollPdWaitAnyName`'s band). `finish`'s reap blocks, which is bounded here:
 	// the kernel completes an exit it has already reported without waiting on this process.
 	var pollExit = module.addBlock(func, label: b"wcpollexit", heat: BlockHeat.normal)
 	let reported = emitLoadField(module, block: bothDone, record: state, offset: WcChildExited, ids: ids)
@@ -1647,14 +1658,18 @@ function buildSubpWaitCollect(module StdModule, target Target)
 	let expired = emitCmp(module, block: deadlineSet, a: nowMs, b: deadlineS, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(deadlineSet, op: StdOp.condBranch(expired, thenBlockId: killIt.id, elseBlockId: idleCheck.id))
 
-	let handleK = emitLoadField(module, block: killIt, record: state, offset: WcHandle, ids: ids)
-	let slotK = emitSubpSlotOf(module, block: killIt, ids: ids, handle: handleK)
-	let treeK = emitLoadField(module, block: killIt, record: slotK, offset: SubpSlotProcessTree, ids: ids)
-	let killCode = emitConst(module, block: killIt, value: SubpKilledExitCode, ids: ids)
-	module.appendOp(killIt, op: StdOp.osProcessTerminate(treeK, exitCodeId: killCode))
-	let timedOutStatus = emitConst(module, block: killIt, value: SubpStatusTimedOut, ids: ids)
-	emitStoreField(module, block: killIt, record: state, offset: WcStatus, value: timedOutStatus)
-	module.setTerminator(killIt, op: StdOp.branch(finish.id))
+	var killed = emitSubpTerminateChild(module, func: func, cur: killIt, ids: ids, handle: emitLoadField(module, block: killIt, record: state, offset: WcHandle, ids: ids), unconfirmed: killUnconfirmed)
+	let timedOutStatus = emitConst(module, block: killed, value: SubpStatusTimedOut, ids: ids)
+	emitStoreField(module, block: killed, record: state, offset: WcStatus, value: timedOutStatus)
+	module.setTerminator(killed, op: StdOp.branch(finish.id))
+
+	emitSubpRecordLastError(module, block: killUnconfirmed, ids: ids)
+	emitSubpCloseChildSource(module, func: func, block: killUnconfirmed, target: target, state: state, cont: abandon, ids: ids)
+	emitRawFree(module, block: abandon, ptr: emitLoadField(module, block: abandon, record: state, offset: WcOutBuf, ids: ids), ids: ids)
+	emitRawFree(module, block: abandon, ptr: emitLoadField(module, block: abandon, record: state, offset: WcErrBuf, ids: ids), ids: ids)
+	emitSubpCollectorFree(module, block: abandon, slot: emitSubpSlotOf(module, block: abandon, ids: ids, handle: emitLoadField(module, block: abandon, record: state, offset: WcHandle, ids: ids)), ids: ids)
+	emitSlabFree(module, block: abandon, ptr: state, ids: ids)
+	module.setTerminator(abandon, op: StdOp.ret(emitConst(module, block: abandon, value: SubpFailure, ids: ids)))
 
 	// idleCheck: a pass that moved bytes goes straight round again; one that moved none yields.
 	let progress = emitLoadField(module, block: idleCheck, record: state, offset: WcProgress, ids: ids)
@@ -1670,8 +1685,9 @@ function buildSubpWaitCollect(module StdModule, target Target)
 		inlineCompletion then emitSubpWaitForAnySource(module, func: func, ids: ids, cur: doSleep, state: state, cont: loopHdr)
 	end 'idle'
 
-	// finish: give the child's poll source back, then read its exit code — after a TERMINATE too, where it is
-	// the code the kill supplied — and pack the result the six `subprocessResult*` readers decode.
+	// finish: give the child's poll source back, then read its exit code (after a terminate too,
+	// where it is the code the kill supplied) and pack the result the `subprocessResult*` readers
+	// decode.
 	emitSubpCloseChildSource(module, func: func, block: finish, target: target, state: state, cont: reap, ids: ids)
 
 	let handleF = emitLoadField(module, block: reap, record: state, offset: WcHandle, ids: ids)
@@ -2747,9 +2763,8 @@ function buildSubpResolvePath(module StdModule, shape PathSearchShape)
 	let startM = emitLoadField(module, block: measuredDir, record: state, offset: RpDirStart, ids: ids)
 	emitStoreField(module, block: measuredDir, record: state, offset: RpDirPtr, value: emitBin(module, block: measuredDir, a: pathM, b: startM, opcode: StdBinOpcode.add, ids: ids))
 
-	// ⛔ **AN EMPTY `PATH` MEMBER IS SKIPPED, ON EVERY PLATFORM.** `PATH=:/usr/bin` or `;C:\bin` would
-	// otherwise join nothing and a separator onto the name — `/git`, `\git` — and search the ROOT of the
-	// filesystem, which is no directory anybody put on `PATH`.
+	// An empty `PATH` member is skipped on every platform: `PATH=:/usr/bin` or `;C:\bin` would
+	// otherwise join a bare separator onto the name (`/git`, `\git`) and search the filesystem root.
 	let dirLenM = emitLoadField(module, block: measuredDir, record: state, offset: RpDirLen, ids: ids)
 	let zeroM = emitConst(module, block: measuredDir, value: 0, ids: ids)
 	let emptyMember = emitCmp(module, block: measuredDir, a: dirLenM, b: zeroM, pred: StdCmpPred.eq, ids: ids)
@@ -2786,7 +2801,7 @@ function buildSubpResolvePath(module StdModule, shape PathSearchShape)
 	let nothingThere = emitCmp(module, block: testCand, a: attrs, b: invalid, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(testCand, op: StdOp.condBranch(nothingThere, thenBlockId: extNext.id, elseBlockId: attrOk.id))
 
-	// A DIRECTORY of the right name is not an executable — the one attribute bit this walk reads.
+	// A directory of the right name is not an executable.
 	let dirBit = emitConst(module, block: attrOk, value: FileAttributeDirectory, ids: ids)
 	let masked = emitBin(module, block: attrOk, a: attrs, b: dirBit, opcode: StdBinOpcode.bitAnd, ids: ids)
 	let zeroB = emitConst(module, block: attrOk, value: 0, ids: ids)

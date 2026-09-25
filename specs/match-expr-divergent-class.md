@@ -113,6 +113,21 @@ end 'main'
 error E3005: specs/fragments/match-expr-divergent-class/error.match-gives-string-and-int.test:4:10: match arms give incompatible types: 'int' vs 'String'
 ```
 
+<!-- test: error.match-gives-float-and-string -->
+```maxon
+function main() returns ExitCode
+	let c = 1
+	let r = match c 'pick'
+		0 gives "hello"
+		default gives 2.5
+	end 'pick'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/match-expr-divergent-class/error.match-gives-float-and-string.test:4:10: match arms give incompatible types: 'String' vs 'float'
+```
+
 <!-- test: error.match-gives-bool-and-int -->
 ```maxon
 function main() returns ExitCode

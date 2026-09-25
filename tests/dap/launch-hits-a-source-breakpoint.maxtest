@@ -1,0 +1,54 @@
+let LaunchCaseLabel = "launch-hits-a-source-breakpoint"
+let OuterCallAnchor = "outer-call"
+
+type LaunchSession implements DapSession
+	let executable as FilePath
+	let source as FilePath
+	let anchored as SourceLine
+	export var sawInitialized as bool
+	export var verified as bool
+	export var verifiedLine as DapNumber
+	export var stopReason as String
+	export var stopThreadId as DapNumber
+	export var threadNames as StringArray
+	export var disconnected as bool
+
+	static function create(executable FilePath, source FilePath, anchored SourceLine) returns LaunchSession
+		return Self{executable: executable, source: source, anchored: anchored, sawInitialized: false, verified: false, verifiedLine: 0, stopReason: "", stopThreadId: 0, threadNames: StringArray.create(), disconnected: false}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+		_ = try client.request(LaunchCommand, argumentsJson: dapLaunchArguments(self.executable))
+		_ = try client.awaitEvent(InitializedEvent)
+		self.sawInitialized = true
+
+		let placed = try client.request(SetBreakpointsCommand, argumentsJson: dapSetBreakpointsArguments(self.source, line: self.anchored))
+		self.verified = dapBreakpointVerified(placed, index: 0)
+		self.verifiedLine = dapBreakpointLine(placed, index: 0)
+
+		_ = try client.request(ConfigurationDoneCommand)
+
+		let stopped = try client.awaitEvent(StoppedEvent)
+		self.stopReason = dapBodyString(stopped, key: "reason")
+		self.stopThreadId = dapBodyNumber(stopped, key: "threadId")
+
+		self.threadNames = dapThreadNames(try client.request(ThreadsCommand))
+		self.disconnected = dapSuccess(try client.request(DisconnectCommand))
+	end 'drive'
+end 'LaunchSession'
+
+test 'a launched executable stops on a source breakpoint at the anchored line'
+	let staged = dapStagedFixture(LaunchCaseLabel, fixture: SteppingFixtureName)
+	let anchored = dapAnchorLine(staged, anchor: OuterCallAnchor)
+	var session = LaunchSession.create(dapBuildFixture(staged), source: dapStagedSource(staged), anchored: anchored)
+	try dapRunSession(session, completing: "complete the launch sequence")
+
+	try Expect.isTrue(session.sawInitialized, message: "`{LaunchCommand}` must be followed by an `{InitializedEvent}` event — it is the client's signal that breakpoints may now be sent")
+	try Expect.isTrue(session.verified, message: "the breakpoint on `main.maxon:{anchored}` was not verified, so nothing below could have stopped there")
+	try Expect.equal(session.verifiedLine as AssertedInt, expected: anchored as AssertedInt, message: "a verified breakpoint must report the line it was actually placed on; a client draws its marker there")
+	try Expect.equal(session.stopReason, expected: BreakpointReason, message: "the stop must say it was a breakpoint, not a step or an entry park; it said `{session.stopReason}`")
+	try Expect.isFalse(session.stopThreadId == 0, message: "a `{StoppedEvent}` must name the thread that stopped, or a client has nothing to ask `stackTrace` about")
+	try Expect.isFalse(session.threadNames.count() == 0, message: "`{ThreadsCommand}` must list at least the thread that stopped; it listed {dapRendered(session.threadNames)}")
+	try Expect.isTrue(session.disconnected, message: "`{DisconnectCommand}` must succeed and end the session")
+end 'a launched executable stops on a source breakpoint at the anchored line'

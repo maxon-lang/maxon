@@ -1,0 +1,53 @@
+let CaseDirName = "cache-clear-keeps-live-debug-builds"
+let DebugBuildDirName = "debug-builds"
+let PlantedStem = "planted-main-maxon"
+let PlantedBytes = "not really an image"
+let SidecarSuffix = ".mxdbg"
+let KeptReport = "a live debug session is using"
+let MintedAt = 1700000000
+
+typealias OwnerId = int(0 to u64.max)
+
+function plantedName(owner OwnerId) returns String
+	return "{PlantedStem}-{owner}-{MintedAt}-1{executableSuffix()}"
+end 'plantedName'
+
+function endedProcessId() returns OwnerId
+	#if os(Windows)
+		let exe = Executable.name("cmd")
+		let argv = ["/c", "exit", "0"]
+	#else
+		let exe = Executable.path(try FilePath.from("/bin/sh") otherwise panic("cache clear live-build test: /bin/sh is a spellable path"))
+		let argv = ["-c", "exit 0"]
+	#endif
+
+	let finished = try Subprocess.run(exe, arguments: argv) otherwise panic("cache clear live-build test: could not run a child to learn an ended process's id")
+
+	return finished.pid
+end 'endedProcessId'
+
+test 'cache clear keeps the debug build of a session that is still running, and says so'
+	let dir = freshCaseDir(CaseDirName)
+	let cacheRoot = cacheRootIn(dir)
+	let owned = cacheRoot.join(CacheVendorDirName)
+	let builds = owned.join(DebugBuildDirName)
+
+	try Expect.isTrue(Directory.create(owned) and Directory.create(builds), message: "the gate could not run - {builds.toString()} could not be created")
+
+	let live = builds.join(plantedName(__Builtins.currentProcessId()))
+	let liveSidecar = builds.join("{plantedName(__Builtins.currentProcessId())}{SidecarSuffix}")
+	let ended = builds.join(plantedName(endedProcessId()))
+
+	try File.writeText(live, content: PlantedBytes)
+	try File.writeText(liveSidecar, content: PlantedBytes)
+	try File.writeText(ended, content: PlantedBytes)
+
+	let cleared = runWithCacheRoot([CacheCommandWord, CacheClearVerb], cacheRoot: cacheRoot, workingDirectory: dir)
+	let said = "It wrote to stdout: {cleared.stdout} and to stderr: {cleared.stderr}"
+
+	try Expect.equal(cleared.exitCode() as AssertedInt, expected: 0, message: "`maxon {CacheCommandWord} {CacheClearVerb}` must succeed when the only thing it leaves is a live session's build. {said}")
+	try Expect.isTrue(File.exists(live), message: "`maxon {CacheCommandWord} {CacheClearVerb}` removed {live.toString()}, the image a running debug session was built into. {said}")
+	try Expect.isTrue(File.exists(liveSidecar), message: "`maxon {CacheCommandWord} {CacheClearVerb}` removed {liveSidecar.toString()}, the sidecar a running debug session reads. {said}")
+	try Expect.isFalse(File.exists(ended), message: "`maxon {CacheCommandWord} {CacheClearVerb}` kept {ended.toString()}, whose owner has ended. {said}")
+	try Expect.isTrue(cleared.stdout.contains(KeptReport), message: "`maxon {CacheCommandWord} {CacheClearVerb}` kept files without saying so. {said}")
+end 'cache clear keeps the debug build of a session that is still running, and says so'

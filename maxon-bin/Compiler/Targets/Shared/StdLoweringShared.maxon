@@ -106,16 +106,14 @@ let FillByteBroadcast = 0x0101010101010101 as MachineWord
 // the integer or FP form is decided at emit time by the register's class, in each backend.
 export function accessWidthFor(t StdType) returns X64AccessWidth
 	match t 'w'
-		i1 then return X64AccessWidth.byte
-		i64 then return X64AccessWidth.word64
-		f64 then return X64AccessWidth.word64
+		i1 or
+			// A `u8` access is unambiguous because it is unsigned: zero-extension is always correct.
+			u8 then return X64AccessWidth.byte
+		i64 or
+			f64 then return X64AccessWidth.word64
 		i8 or
 			i16 or
 			i32 then panic("accessWidthFor: no memory-access form for {t.name} — a narrow integer needs the `as` cast (P1.9), and its SIGNEDNESS then decides the sign/zero-extending load rather than defaulting to a width")
-
-		// A `u8` access is unambiguous BECAUSE it is unsigned: zero-extension is always correct, so no
-		// signed/unsigned choice is deferred. Wider unsigned types stay deferred.
-		u8 then return X64AccessWidth.byte
 		u16 or
 			u32 or
 			u64 then panic("accessWidthFor: no memory-access form for {t.name} — an unsigned type wider than a byte needs the `as` cast (P1.9)")
@@ -238,48 +236,26 @@ function regClassForStdType(t StdType) returns RegClass
 	return RegClass.xmm if stdTypeIsFloat(t) else RegClass.gpr
 end 'regClassForStdType'
 
-// The class of a UNARY op's result, which is NOT its operand's whenever the op CROSSES files.
+// The class of a unary op's result, which is not its operand's whenever the op crosses files.
 //
-// ⚠⚠ THE CONVERSIONS INVERT. `siToFp`'s operand is an INT and its result is an f64; `fpToSi`'s operand
-// is an f64 and its result is an int. `operandType` is the SOURCE by definition, so the conversion band
-// — and `bitcastF64ToI64`, which crosses the same boundary without converting — are the ops whose
-// result type is not on the op at all. `neg`/`bitNot`/`logicalNot` stay in their operand's file: they
-// compute what they consume.
+// ⚠ `operandType` is the source, so reading it answers wrongly for the conversions and both
+// bitcasts, which move a value between the integer and float files. The math intrinsics are
+// f64 → f64 by definition (`stdUnaryOperandIsFloat`), so their class is stated outright.
 function unaryResultClass(opcode StdUnaryOpcode, operandType StdType) returns RegClass
 	return match opcode 'k'
 		neg or
 			bitNot or
 			logicalNot gives regClassForStdType(operandType)
-
-		// int -> f64: the result lives in an XMM/SIMD register though `operandType` is an integer.
-		siToFp gives RegClass.xmm
-
-		// f64 -> int: the result lives in a GPR though `operandType` is f64.
-		fpToSi gives RegClass.gpr
-
-		// ⚠ The MATH INTRINSICS need their OWN arm even though their result class IS their operand's,
-		// and that is the whole trap of appending past `fpToSi`: `regClassForStdType(operandType)` would
-		// be the right answer, but the arm that computes it stops at `logicalNot` and cannot be extended
-		// to reach here without swallowing both conversions on the way. Stating `xmm` outright is also
-		// the stronger claim — these are f64 → f64 by definition (`stdUnaryOperandIsFloat`), so the
-		// class does not depend on `operandType` at all.
-		floor or
+		siToFp or
+			floor or
 			ceil or
 			round or
 			sqrt or
 			abs or
-			fneg gives RegClass.xmm
-
-		// ⚠ The BITCAST is the THIRD shape this table has to answer for, and the only one whose
-		// operand and result differ in FILE without differing in BITS: `bitcastF64ToI64` moves an
-		// f64's pattern into a GPR unchanged. `operandType` is the f64 SOURCE, so — exactly as for
-		// `fpToSi` — reading it as the result would put a 64-bit integer in an XMM register.
-		bitcastF64ToI64 gives RegClass.gpr
-
-		// The INBOUND bitcast is the same claim mirrored, and it is the reason the arm above may not
-		// simply become a range: `operandType` here is the i64 SOURCE, so reading it would put an f64
-		// in a GPR — the exact inverse mistake, from the exact same misreading.
-		bitcastI64ToF64 gives RegClass.xmm
+			fneg or
+			bitcastI64ToF64 gives RegClass.xmm
+		fpToSi or
+			bitcastF64ToI64 gives RegClass.gpr
 	end 'k'
 end 'unaryResultClass'
 
@@ -639,46 +615,93 @@ end 'recordBlockOpClasses'
 function recordOpResultClass(op StdOp, column ValueClassColumn, abi CalleeAbiTable)
 	match op 'result'
 		// The op's own type IS the result's.
-		const(resultId, _, valueType) then setValueClass(column, valueId: resultId, class: regClassForStdType(valueType))
+		const(resultId, _, valueType) or
+			param then setValueClass(column, valueId: resultId, class: regClassForStdType(valueType))
 
 		// add/sub/mul/div all produce what they consume.
 		binOp(resultId, _, _, _, operandType) then setValueClass(column, valueId: resultId, class: regClassForStdType(operandType))
 		unaryOp(resultId, _, opcode, operandType) then setValueClass(column, valueId: resultId, class: unaryResultClass(opcode, operandType: operandType))
 
-		// ⚠ AN i1, NEVER THE OPERAND TYPE. A float compare's answer is a bool in a GPR.
-		cmp(resultId, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-
-		// The immediate forms are INTEGER by construction — no float op takes an immediate, so
-		// `foldConstOperands` cannot produce a float one. Their `operandType` is read for the
-		// WIDTH and never for the class, which is why it is `_` here and a GPR outright:
-		// answering `regClassForStdType(operandType)` would be the same answer by a route that
-		// stops being obviously true the day a float immediate exists.
-		binOpImm(resultId, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		cmpImm(resultId, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-
-		// The TRAPPING integer division; float division is `binOp(div)` above.
-		div(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		mod(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		param(resultId, _, paramType) then setValueClass(column, valueId: resultId, class: regClassForStdType(paramType))
+		// ⚠ A GPR outright, never the operand type's file: a float compare's answer is a bool, and every
+		// other result here is a machine integer — an address, a handle, a count, an atomic's word, or a
+		// status the host answers in its integer return register. The immediate forms are integer by
+		// construction (no float op takes an immediate), so their `operandType` is read for width only.
+		// `div`/`mod` are the trapping integer division; float division is `binOp`.
+		cmp(resultId, _, _, _, _) or
+			binOpImm or
+			cmpImm or
+			div or
+			mod or
+			globalAddr or
+			osAllocPages or
+			rdataAddr or
+			funcAddr or
+			osWaitHandle or
+			osWaitChild or
+			osEventCreate or
+			osThreadCreate or
+			osReadOverlapped or
+			osLastError or
+			osGetPid or
+			osWriteFile or
+			osFileOpenRead or
+			osReadFile or
+			osFileOpenWrite or
+			osFileOpenWriteExecutable or
+			osEnvBlock or
+			osFileSize or
+			osFileDelete or
+			osFileRename or
+			osFileFindFirst or
+			osFileFindNext or
+			osDirCreate or
+			osDirRemove or
+			osDirCurrentPath or
+			osFileAttributes or
+			osCommandLine or
+			osStdHandle or
+			osExecutablePath or
+			osWriteStdout or
+			osWriteStderr or
+			stackRecordAddr or
+			osOpenNamedSegment or
+			osMapNamedSegment or
+			osTickCountMs or
+			osPipePeek or
+			osEnvRead or
+			osProcessTerminate or
+			osSocketStartup or
+			osSocketResolve or
+			osSocketCreate or
+			osSocketConnect or
+			osSocketError or
+			osSocketSend or
+			osSocketRecv or
+			osCpuCount or
+			osCommitPages or
+			osReservePages or
+			atomicCas or
+			atomicRmw or
+			currentThreadToken or
+			tlsAlloc or
+			tlsSlotLoad or
+			osEnterBackgroundPriority or
+			osHandleFileType or
+			osProcessProbe or
+			osCreateNamedSegment or
+			osHostSample or
+			osNetpoll or
+			osSocketOverlapped or
+			osSocketServe or
+			osPathQuery or
+			osDebugHost then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		call(resultId, callee, _) then setValueClass(column, valueId: resultId, class: calleeResultClass(abi, callee: callee))
 
 		// A throwing call classes its primary result exactly as `call` does (the callee's return type);
 		// its error-flag second result is an i64, which the column's `gpr` default already covers.
 		tryCall(resultId, _, callee, _) then setValueClass(column, valueId: resultId, class: calleeResultClass(abi, callee: callee))
-
-		// An ADDRESS is an integer, whatever the global holds.
-		globalAddr(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		loadIndirect(resultId, _, _, valueType) then setValueClass(column, valueId: resultId, class: regClassForStdType(valueType))
-
-		// A page base is an address, so it is an integer — never float-classed.
-		osAllocPages(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-
-		// An `.rdata` address is an integer, never float-classed.
-		rdataAddr(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-
-		// A `.text` function address is an integer, exactly like `globalAddr`/`rdataAddr` — never
-		// float-classed.
-		funcAddr(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		loadIndirect(resultId, _, _, valueType) or
+			loadAcquire then setValueClass(column, valueId: resultId, class: regClassForStdType(valueType))
 
 		// A call THROUGH a function value classes its result by the `resultType` the op carries: a
 		// float-returning function value is XMM-classed and captured from xmm0/d0, everything else GPR from
@@ -686,39 +709,46 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, abi CalleeAbiTab
 		// end's own type for the result value rides on the op (`LowerMaxonToStd.lowerIndirectCall`).
 		callIndirect(resultId, _, resultType, _, _) then classifyIndirectResult(column, resultId: resultId, resultType: resultType)
 
-		// The ops that define NOTHING. Named individually rather than collapsed into a range: `StdOp`'s
-		// declaration order interleaves value-defining ops (`param`, `call`) between the non-defining
-		// ones, so a tempting range would span them. Naming each keeps the band-append rule enforcing it.
+		// The ops that define no value: terminators, stores, and host calls that discard their answer or
+		// write it through an out-param.
 		condBranch or
-			branch then break 'result'
-		ret then break 'result'
-		retVoid then break 'result'
-		storeIndirect then break 'result'
-
-		// `errorReturn` (a terminator) and `osExit` define no value.
-		errorReturn or
-			osExit then break 'result'
-
-		// The subprocess wait result is a GPR i64 (the `WaitForSingleObject` return code `proc_check` reads).
-		osWaitHandle(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-
-		// `osPanic` defines no value — it aborts. `osReadClock` defines none either: the clock read
-		// writes its results to caller-provided out-param buffers. The three result-less subprocess ops
-		// (`osProcessSpawn`, `osProcessExitCode`, `osCloseHandle`) join the range — they consume their `BOOL`
-		// via memory or ignore it, so none defines a value (`osWaitHandle`, which does, is named just above).
-		osPanic or
+			branch or
+			ret or
+			retVoid or
+			storeIndirect or
+			errorReturn or
+			osExit or
+			osPanic or
 			osReadClock or
 			osProcessSpawn or
 			osProcessExitCode or
-			osCloseHandle then break 'result'
-
-		// `osFreePages` defines no value — it releases a page region and returns nothing (its
-		// `VirtualFree` BOOL is ignored, like `osCloseHandle`'s). It sits past `osWaitHandle` in the union, so
-		// it takes its own break arm rather than joining the range above.
-		osFreePages then break 'result'
-
-		// The jump table defines no value — a terminator has no result class to record.
-		switch then break 'result'
+			osCloseHandle or
+			osFreePages or
+			switch or
+			osPipeCreate or
+			osLockInit or
+			osLockEnter or
+			osLockLeave or
+			osProcessSpawnInherit or
+			osCancelIo or
+			osPipeCreateOutbound or
+			osReadWallClock or
+			osFileClose or
+			osEnvBlockFree or
+			osFileFindClose or
+			osPanicValue or
+			osHandleSetInherit or
+			osSocketFreeAddrInfo or
+			osSocketClose or
+			osThreadCpuTicks or
+			osDecommitPages or
+			memFill or
+			tlsSetValue or
+			osSetEvent or
+			storeRelease or
+			osUnmapNamedSegment or
+			osUnpublishNamedSegment or
+			covPoint then break 'result'
 
 		// A witness call classes its result by the `resultType` the op carries — the same register-file
 		// question as `callIndirect` (there is no callee NAME to look a return type up against).
@@ -728,162 +758,6 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, abi CalleeAbiTab
 		// the op carries); its error-flag second result is an i64, which the column's `gpr` default already
 		// covers — the same split `tryCall`'s two results take.
 		witnessTryCall(resultId, _, _, _, resultType, _, _) then classifyIndirectResult(column, resultId: resultId, resultType: resultType)
-
-		// The four value-defining overlapped-read ops define GPR i64 results (kernel handles, the ReadFile
-		// BOOL, the GetLastError DWORD — all integers); the rest define nothing.
-		osPipeCreate then break 'result'
-		osEventCreate(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osThreadCreate(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osLockInit or
-			osLockEnter or
-			osLockLeave then break 'result'
-		osReadOverlapped(resultId, _, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osLastError(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osProcessSpawnInherit then break 'result'
-		osCancelIo then break 'result'
-		osGetPid(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-
-		// osWriteFile defines the WriteFile BOOL (an integer, GPR); osPipeCreateOutbound defines nothing.
-		osPipeCreateOutbound then break 'result'
-		osWriteFile(resultId, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-
-		// The wall-clock read defines no value — `GetSystemTimeAsFileTime` writes its answer to the
-		// caller's out-param word, exactly as `osReadClock` does with its two.
-		osReadWallClock then break 'result'
-
-		// The file OPEN defines the `CreateFileA` HANDLE — an integer, so a GPR.
-		osFileOpenRead(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-
-		// The close defines no value, so there is no result class to record.
-		osFileClose then break 'result'
-
-		// The five ops whose Win32 entry point answers in RAX define an integer (a BOOL verdict or a
-		// search HANDLE), so a GPR; the find-close defines nothing, exactly as the file close does.
-		osReadFile(resultId, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osFileOpenWrite(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osFileOpenWriteExecutable(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osEnvBlock(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osEnvBlockFree then break 'result'
-		osFileSize(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osFileDelete(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osFileRename(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osFileFindFirst(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osFileFindClose then break 'result'
-
-		// All five directory primitives answer in RAX with an integer — a Win32 BOOL, a character
-		// count or a `dwFileAttributes` mask — so all five define a GPR result.
-		osFileFindNext(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osDirCreate(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osDirRemove(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osDirCurrentPath(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osFileAttributes(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-
-		// A rendered panic defines no value, exactly as `osPanic` defines none.
-		osPanicValue then break 'result'
-		osCommandLine(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-
-		// Both answer in RAX with an integer — a kernel HANDLE and a character count — so both define a
-		// GPR result.
-		osStdHandle(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osExecutablePath(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-
-		// Both stream writes define the OS's byte COUNT — an integer, so a GPR.
-		osWriteStdout(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osWriteStderr(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-
-		// A promoted record's address is a POINTER, so its result is a GPR — `globalAddr`'s class exactly.
-		stackRecordAddr(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-
-		// A HANDLE, a mapped ADDRESS and a tick COUNT are all machine words.
-		osOpenNamedSegment(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osMapNamedSegment(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osTickCountMs(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-
-		// The attached subprocess's two ANSWERING host primitives: a peeked byte count and an environment
-		// variable's character count are both machine words.
-		osPipePeek(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osEnvRead(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-
-		// Its other two answer nothing at all — the `SetHandleInformation`/`TerminateProcess` BOOL is
-		// discarded, exactly as `osCloseHandle`'s is — so there is no result class to record. They take a
-		// `break` arm like every other value-less op in this match; this match is EXHAUSTIVE, so "absent" is
-		// not a state an op can be in. (It said they were absent, two lines above their own arms.)
-		osHandleSetInherit then break 'result'
-		osProcessTerminate then break 'result'
-
-		// The socket family's six ANSWERING primitives: a Winsock startup code, a getaddrinfo status, a raw
-		// SOCKET, a connect status and two byte counts are all machine words. The other two discard their
-		// answer and take a `break` arm like every other value-less op in this exhaustive match.
-		osSocketStartup(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osSocketResolve(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osSocketFreeAddrInfo then break 'result'
-		osSocketCreate(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osSocketConnect(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osSocketError(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osSocketSend(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osSocketRecv(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osSocketClose then break 'result'
-
-		// The machine query defines the processor count `GetActiveProcessorCount` answers in EAX — an
-		// integer, so a GPR, exactly as `osGetPid` classes `GetCurrentProcessId`'s DWORD.
-		osCpuCount(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-
-		// The thread-CPU read defines NOTHING — `QueryThreadCycleTime` answers through its out-param, so there
-		// is no result to class, exactly as there is none for the wall-clock read.
-		osThreadCpuTicks then break 'result'
-
-		// The decommit defines no value — it answers only a discarded BOOL — so, like the page release
-		// above, there is no result to class.
-		osDecommitPages then break 'result'
-
-		// A fill defines no value — it is a store — so there is no result to class.
-		memFill then break 'result'
-
-		// A reservation's base and a commit's base are addresses, so both are integers — classed exactly as
-		// `osAllocPages`'s page base is, and never float-classed.
-		osCommitPages(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osReservePages(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-
-		// A CAS's success boolean, an RMW's prior word and a thread's identity token are all INTEGERS —
-		// GPR-classed, never float-classed. An atomic reads and writes a 64-bit machine word by definition;
-		// there is no float atomic at this tier (see `StdOp.atomicRmw` on why there is no width field either).
-		atomicCas(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		atomicRmw(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		currentThreadToken(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-
-		// The TLS slot index and the word read back out of the slot are both machine integers, so GPR; the
-		// two writing ops define nothing at all.
-		tlsAlloc(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		tlsSetValue then break 'result'
-		tlsSlotLoad(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osSetEvent then break 'result'
-
-		// The priority door defines the class `GetPriorityClass` answers in EAX — an integer, so a GPR,
-		// exactly as `osCpuCount` classes `GetActiveProcessorCount`'s.
-		osEnterBackgroundPriority(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-
-		// An ordered access classes exactly as its plain twin does — by the type it reads — and the
-		// ordered store defines nothing, exactly as `storeIndirect` defines nothing.
-		loadAcquire(resultId, _, _, valueType) then setValueClass(column, valueId: resultId, class: regClassForStdType(valueType))
-		storeRelease then break 'result'
-
-		// The terminal question defines the file-type word `GetFileType` answers in EAX — an integer, so a
-		// GPR, exactly as the priority read above classes `GetPriorityClass`'s.
-		osHandleFileType(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-
-		// A created section's HANDLE is a machine integer, so a GPR; the unmap and the unpublish define nothing.
-		osCreateNamedSegment(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osUnmapNamedSegment or
-			osUnpublishNamedSegment or
-			covPoint then break 'result'
-
-		// The host call's raw answer is a machine integer, so a GPR.
-		osHostSample(resultId, _, _, _, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osNetpoll(resultId, _, _, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osSocketOverlapped(resultId, _, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osSocketServe(resultId, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osPathQuery(resultId, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osDebugHost(resultId, _, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 	end 'result'
 end 'recordOpResultClass'
 
@@ -1280,9 +1154,9 @@ export type ScaledIndexFolds
 		return true
 	end 'tryIndexedAddress'
 
-	// The two ops whose ADDRESS operand an indexed form can absorb. Every other `StdOp` breaks: the
-	// ranges are written as ranges rather than a bare `default` so that an op APPENDED to the union
-	// fails to compile here until somebody decides whether it addresses memory.
+	// The two ops whose address operand an indexed form can absorb. Every other `StdOp` is named
+	// rather than left to a bare `default`, so an op appended to the union fails to compile here until
+	// somebody decides whether it addresses memory.
 	function recordMemoryFold(op StdOp, blockRef BlockRef, memoryForm IndexedMemoryForm)
 		match op 'mem'
 			const or
@@ -1299,10 +1173,8 @@ export type ScaledIndexFolds
 				param or
 				call or
 				retVoid or
-				globalAddr then break 'mem'
-			loadIndirect(_, addrId, offset, valueType) then self.fuseAddressIntoMemoryOp(addrId, blockRef: blockRef, offset: offset, valueType: valueType, memoryForm: memoryForm)
-			storeIndirect(addrId, offset, _, valueType) then self.fuseAddressIntoMemoryOp(addrId, blockRef: blockRef, offset: offset, valueType: valueType, memoryForm: memoryForm)
-			osAllocPages or
+				globalAddr or
+				osAllocPages or
 				osWriteStdout or
 				rdataAddr or
 				tryCall or
@@ -1316,6 +1188,7 @@ export type ScaledIndexFolds
 				osProcessExitCode or
 				osCloseHandle or
 				osWaitHandle or
+				osWaitChild or
 				osFreePages or
 				switch or
 				witnessCall or
@@ -1383,18 +1256,17 @@ export type ScaledIndexFolds
 				tlsSetValue or
 				tlsSlotLoad or
 				osSetEvent or
-				osEnterBackgroundPriority then break 'mem'
-			osFileOpenWriteExecutable then break 'mem'
-			osEnvBlock or
-				osEnvBlockFree then break 'mem'
-
-			// The ordered pair addresses a STRUCT FIELD off a plain pointer, never a scaled element
-			// address, so there is nothing for the indexed form to absorb. Declining to fuse is always safe:
-			// the address op then emits its own `lea` and the access reads it.
-			loadAcquire or
-				storeRelease then break 'mem'
-			osHandleFileType then break 'mem'
-			osCreateNamedSegment or
+				osEnterBackgroundPriority or
+				osFileOpenWriteExecutable or
+				osEnvBlock or
+				osEnvBlockFree or
+				// The ordered pair addresses a struct field off a plain pointer, never a scaled element
+				// address. Declining to fuse is always safe: the address op emits its own `lea`.
+				loadAcquire or
+				storeRelease or
+				osHandleFileType or
+				osProcessProbe or
+				osCreateNamedSegment or
 				osUnmapNamedSegment or
 				osUnpublishNamedSegment or
 				covPoint or
@@ -1402,8 +1274,10 @@ export type ScaledIndexFolds
 				osNetpoll or
 				osPathQuery or
 				osSocketOverlapped or
-				osSocketServe then break 'mem'
+				osSocketServe or
 				osDebugHost then break 'mem'
+			loadIndirect(_, addrId, offset, valueType) then self.fuseAddressIntoMemoryOp(addrId, blockRef: blockRef, offset: offset, valueType: valueType, memoryForm: memoryForm)
+			storeIndirect(addrId, offset, _, valueType) then self.fuseAddressIntoMemoryOp(addrId, blockRef: blockRef, offset: offset, valueType: valueType, memoryForm: memoryForm)
 		end 'mem'
 	end 'recordMemoryFold'
 
@@ -1764,38 +1638,27 @@ export type CompareFusionCensus
 	// Record, for every block terminating in a `condBranch`, whether that branch reads the flags of the
 	// compare defining its condition — and if so, which predicate it must test.
 	//
-	// PURELY LOCAL, and that is precisely what makes it sound: the condition flags survive neither a
-	// block boundary nor an intervening flag-writing instruction on either ISA, so the flags a
-	// conditional branch reads are ALWAYS those of the LAST flag-clobbering op before it. Fusion is
-	// legal exactly when that op is the compare whose result the branch is testing — no more, no less.
-	// Nothing about how many OTHER things read the compare enters into it.
+	// Purely local, and that is what makes it sound: the condition flags survive neither a block
+	// boundary nor an intervening flag-writing instruction on either ISA, so a conditional branch
+	// reads the flags of the last flag-clobbering op before it. Fusion is legal exactly when that op
+	// is the compare whose result the branch tests; how many other things read the compare does not
+	// matter.
 	//
 	// A boolean condition that is a call result, a parameter or a merge phi has no flags to fuse and is
-	// simply absent here; the backend truth-tests it in a register instead.
+	// absent here; the backend truth-tests it in a register instead.
 	//
-	// ⚠ THE PRECONDITION THE WHOLE THING RESTS ON: this scan runs on STD ops, but the REGISTER
-	// ALLOCATOR later inserts TARGET ops into the very window it just proved safe — the gap between a
-	// fused compare and its branch. The fusion survives only because **every op the allocator can insert
-	// there is flag-neutral**:
+	// ⚠ This scan runs on Std ops, but the register allocator later inserts Target ops into the window
+	// it proved safe, and the fusion survives only because every op it can insert there is
+	// flag-neutral: `storeSlotReg`/`loadRegSlot` (spill/reload), `movRegReg` (phi and reuse copies),
+	// `xchgRegReg` (permutation cycles) and a rematerialized `const` (`constMaterializationOp`). Each
+	// is a move- or load/store-class instruction on both ISAs; no S-suffixed arm64 form that writes
+	// NZCV is among them. `prologue`/`epilogue` write flags on x64 but land only in a function's entry
+	// and exit blocks. A flag-writing op added to what the allocator can insert makes this fusion a
+	// silent miscompile that the Std-tier scan cannot see — re-check this list then.
 	//
-	//     storeSlotReg · loadRegSlot (spill/reload) · movRegReg (phi copies, reuse copies) ·
-	//     xchgRegReg (permutation cycles) · a REMATERIALIZED `const` (`constMaterializationOp`)
-	//
-	// Every one is a move- or load/store-class instruction: `mov`/`lea`/`movzx` on x64, and on arm64
-	// `ORR Xd, XZR, Xn`, `LDR`/`STR`, the vector `EOR` swap and the `movz`/`movk` ladder — the S-suffixed
-	// arm64 forms that would write NZCV appear in none of them. (`prologue`/`epilogue` DO write flags on
-	// x64 — they are a `sub`/`add rsp` — but they land at a function's entry and exit blocks, never
-	// inside a compare/branch window.)
-	//
-	// ⇒ **IF A FLAG-WRITING OP IS EVER ADDED TO WHAT THE ALLOCATOR CAN INSERT, THIS FUSION BECOMES A
-	// SILENT MISCOMPILE** — the branch would read flags that op had already destroyed, and the Std-tier
-	// scan cannot see it coming, because the op does not exist at Std tier. The likeliest candidate is a
-	// spill/reload growing an address computation, or a memzero (whose size ladder compares — see
-	// ARCHITECTURE.md). Re-check this list then.
-	//
-	// Fills ALL THREE fusion columns in one walk — see `fusedFloatCmps` for why the float-ness (and, beside
-	// it, the signedness) is a column rather than a field inside the predicate. They are handed in
-	// rather than returned so the three can only be created together.
+	// Fills all three fusion columns in one walk (see `fusedFloatCmps` for why float-ness and
+	// signedness are columns); they are handed in rather than returned so the three can only be
+	// created together.
 	function computeFusedCmps(module StdModule, func IrFunction, fused FusedPredColumn, floatCmps StdValueUseSet, unsignedCmps StdValueUseSet)
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("computeFusedCmps: blockRef from func.blockRefs not in stdModule.blocks")
@@ -1808,6 +1671,8 @@ export type CompareFusionCensus
 
 			match term 'term'
 				condBranch(condId, _, _) then self.recordFusableCompare(module, block: block, blockRef: blockRef, condId: condId, fused: fused, floatCmps: floatCmps, unsignedCmps: unsignedCmps)
+				// Only a `condBranch` fuses a compare. The jump table does its own `cmp` against the bounds
+				// count, and every other op here is a body op that never terminates a block.
 				const or
 					binOp or
 					unaryOp or
@@ -1815,8 +1680,8 @@ export type CompareFusionCensus
 					binOpImm or
 					cmpImm or
 					div or
-					mod then break 'term'
-				branch or
+					mod or
+					branch or
 					ret or
 					param or
 					call or
@@ -1826,11 +1691,8 @@ export type CompareFusionCensus
 					storeIndirect or
 					osAllocPages or
 					osWriteStdout or
-					rdataAddr then break 'term'
-
-				// `funcAddr`/`callIndirect` are value-producing body ops, never a block terminator — a
-				// non-`condBranch` terminator fuses nothing, so like every other arm here it breaks.
-				tryCall or
+					rdataAddr or
+					tryCall or
 					errorReturn or
 					osExit or
 					funcAddr or
@@ -1841,18 +1703,12 @@ export type CompareFusionCensus
 					osProcessExitCode or
 					osCloseHandle or
 					osWaitHandle or
-					osFreePages then break 'term'
-
-				// The jump table does its OWN `cmp` against the bounds count — it fuses no preceding compare.
-				switch then break 'term'
-
-				// A witness call is a call — like `tryCall` it is not the compare, so it fuses nothing. The
-				// throwing form is a call for the identical reason.
-				witnessCall then break 'term'
-				witnessTryCall then break 'term'
-
-				// The OS-primitive ops are value-consuming/void body ops, never terminators.
-				osPipeCreate or
+					osWaitChild or
+					osFreePages or
+					switch or
+					witnessCall or
+					witnessTryCall or
+					osPipeCreate or
 					osEventCreate or
 					osThreadCreate or
 					osLockInit or
@@ -1864,13 +1720,9 @@ export type CompareFusionCensus
 					osCancelIo or
 					osGetPid or
 					osPipeCreateOutbound or
-					osWriteFile then break 'term'
-
-				// The wall-clock read is a void body op, never a terminator.
-				osReadWallClock then break 'term'
-
-				// Every file op is a value-producing or void body op, never a terminator.
-				osFileOpenRead or
+					osWriteFile or
+					osReadWallClock or
+					osFileOpenRead or
 					osFileClose or
 					osReadFile or
 					osFileOpenWrite or
@@ -1883,27 +1735,17 @@ export type CompareFusionCensus
 					osDirCreate or
 					osDirRemove or
 					osDirCurrentPath or
-					osFileAttributes then break 'term'
-
-				// A panic is a body op, never a terminator, under either spelling.
-				osPanicValue then break 'term'
-
-				// A command-line read is a value-producing body op, never a terminator.
-				osCommandLine then break 'term'
-
-				// A handle read and a path fill are value-producing body ops, never terminators.
-				osStdHandle then break 'term'
-				osExecutablePath then break 'term'
-
-				// A stream write is a value-producing body op, never a terminator.
-				osWriteStderr then break 'term'
-
-				// A frame address is a value-producing body op, never a terminator.
-				stackRecordAddr then break 'term'
-				osOpenNamedSegment or
+					osFileAttributes or
+					osPanicValue or
+					osCommandLine or
+					osStdHandle or
+					osExecutablePath or
+					osWriteStderr or
+					stackRecordAddr or
+					osOpenNamedSegment or
 					osMapNamedSegment or
-					osTickCountMs then break 'term'
-				osHandleSetInherit or
+					osTickCountMs or
+					osHandleSetInherit or
 					osPipePeek or
 					osEnvRead or
 					osProcessTerminate or
@@ -1917,36 +1759,27 @@ export type CompareFusionCensus
 					osSocketRecv or
 					osSocketClose or
 					osCpuCount or
-					osThreadCpuTicks then break 'term'
-
-				// A decommit is a body op, never a terminator — nothing to fuse.
-				osDecommitPages then break 'term'
-
-				// A byte fill is a body op, never a terminator — nothing to fuse.
-				memFill then break 'term'
-
-				// A reserve and a commit are body ops, never terminators — nothing to fuse.
-				osCommitPages or
-					osReservePages then break 'term'
-
-				// The two atomics and the thread token are value-producing body ops, never terminators.
-				atomicCas or
+					osThreadCpuTicks or
+					osDecommitPages or
+					memFill or
+					osCommitPages or
+					osReservePages or
+					atomicCas or
 					atomicRmw or
-					currentThreadToken then break 'term'
-
-				// The TLS ops and the event signal are body ops, never terminators — nothing to fuse.
-				tlsAlloc or
+					currentThreadToken or
+					tlsAlloc or
 					tlsSetValue or
 					tlsSlotLoad or
 					osSetEvent or
-					osEnterBackgroundPriority then break 'term'
-				osFileOpenWriteExecutable then break 'term'
-				osEnvBlock or
-					osEnvBlockFree then break 'term'
-				loadAcquire or
-					storeRelease then break 'term'
-				osHandleFileType then break 'term'
-				osCreateNamedSegment or
+					osEnterBackgroundPriority or
+					osFileOpenWriteExecutable or
+					osEnvBlock or
+					osEnvBlockFree or
+					loadAcquire or
+					storeRelease or
+					osHandleFileType or
+					osProcessProbe or
+					osCreateNamedSegment or
 					osUnmapNamedSegment or
 					osUnpublishNamedSegment or
 					covPoint or
@@ -1954,7 +1787,7 @@ export type CompareFusionCensus
 					osNetpoll or
 					osPathQuery or
 					osSocketOverlapped or
-					osSocketServe then break 'term'
+					osSocketServe or
 					osDebugHost then break 'term'
 			end 'term'
 		end 'eachBlock'
@@ -1980,28 +1813,23 @@ export type CompareFusionCensus
 			// and the scan stops HERE rather than looking further back, because whatever was
 			// there had its flags overwritten by this very op.
 			//
-			// ⭐ **`isCmp` IS THE QUESTION THIS ASKS**, and it is declared on `cmp` and `cmpImm` and on nothing
-			// else — so one test answers for every other variant instead of 105 arms naming themselves only to
-			// say "not the compare". The two compare variants answer identically: `foldConstOperands` moved the
-			// right operand into an immediate, which changed the instruction, not what the compare means.
+			// `isCmp` is declared on `cmp` and `cmpImm` and nothing else, so one test answers for every
+			// other variant. The two compare variants answer identically: `foldConstOperands` moving the
+			// right operand into an immediate changed the instruction, not what the compare means.
 			//
-			// ⚠ **A FLAG-WRITING MEMORY INSTRUCTION THIS SCAN CANNOT SEE EXISTS, AND IT IS KEPT OUT OF THE
-			// WINDOW RATHER THAN DECLARED.** x64 selects `add [mem]` for a `storeIndirect`, which declares
-			// `clobbersFlags: false`; `MemoryDestinationFolds` refuses every such store past the position
-			// recorded here. A new Std op that writes flags states `clobbersFlags` and `isCmp` at its
-			// declaration, and reaching this gate with `isCmp: true` and no arm below panics by name.
+			// ⚠ One flag-writing memory instruction is invisible to this scan and is kept out of the window
+			// rather than declared: x64 selects `add [mem]` for a `storeIndirect`, which declares
+			// `clobbersFlags: false`, so `MemoryDestinationFolds` refuses every such store past the position
+			// recorded here.
 			if not op.rawValue.isCmp 'notTheCompare'
 				return
 			end 'notTheCompare'
 
 			match op 'isTheCompare'
-				cmp(defId, _, _, pred, operandType) then fuseIfDefines(fused, floatCmps: floatCmps, unsignedCmps: unsignedCmps, blockRef: blockRef, position: i, defId: defId, condId: condId, pred: pred, operandType: operandType)
-
-				// `cmpImm` is INTEGER BY CONSTRUCTION — no SSE form takes an immediate, so
-				// `foldConstOperands` refuses a float rhs and a float compare can never reach this
-				// variant. The width is still ASKED of the op's own `operandType` rather than assumed
-				// from that: naming a type here would be a second answer to a question the op carries.
-				cmpImm(defId, _, _, pred, operandType) then fuseIfDefines(fused, floatCmps: floatCmps, unsignedCmps: unsignedCmps, blockRef: blockRef, position: i, defId: defId, condId: condId, pred: pred, operandType: operandType)
+				cmp(defId, _, _, pred, operandType) or
+					// `cmpImm` is integer by construction (`foldConstOperands` refuses a float rhs), but its
+					// width is still read off its own `operandType`.
+					cmpImm then fuseIfDefines(fused, floatCmps: floatCmps, unsignedCmps: unsignedCmps, blockRef: blockRef, position: i, defId: defId, condId: condId, pred: pred, operandType: operandType)
 				default panic("recordFusableCompare: `isCmp: true` on an op this match does not name — StdOpMeta's isCmp and this match have come apart")
 			end 'isTheCompare'
 
@@ -2247,6 +2075,7 @@ export type MemoryDestinationFolds
 				osProcessExitCode or
 				osCloseHandle or
 				osWaitHandle or
+				osWaitChild or
 				osFreePages or
 				switch or
 				witnessCall or
@@ -2321,6 +2150,7 @@ export type MemoryDestinationFolds
 				loadAcquire or
 				storeRelease or
 				osHandleFileType or
+				osProcessProbe or
 				osCreateNamedSegment or
 				osUnmapNamedSegment or
 				osUnpublishNamedSegment or
@@ -2329,7 +2159,7 @@ export type MemoryDestinationFolds
 				osNetpoll or
 				osPathQuery or
 				osSocketOverlapped or
-				osSocketServe then break 'part'
+				osSocketServe or
 				osDebugHost then break 'part'
 		end 'part'
 	end 'recordOp'

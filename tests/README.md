@@ -6,7 +6,7 @@ reach `stdlib/` and nothing else. **A DRIVER COMMAND is not that** (user ruling,
 a fixture project and asserting what it reports. This directory is where those
 fixtures live.
 
-Twenty corpora live here, one directory each, every path into one spelled from the CHECKOUT
+Twenty-one corpora live here, one directory each, every path into one spelled from the CHECKOUT
 ROOT — the working directory every driver inherits, and the contract
 `SpecTestRunner.specRunWorkingDir` states, along with why it is deliberately not `specDir.parent()`.
 
@@ -27,6 +27,7 @@ SERVER its tests spawn.
 | `ladders/` | `maxon test`, under the compiler | `LaddersDirName` in `index.maxtest` |
 | `parallel-compile/` | `maxon test`, under the compiler | `TestedCompilerStem` — the compiler it spawns |
 | `debug/` | `maxon test`, under the compiler | `TestedCompilerStem` in `DebugHarness.maxon` — the binary it spawns: the compiler under test, which is also what the sidecar case builds with |
+| `dap/` | `maxon test`, under the compiler | `TestedCompilerStem` in `DapClient.maxon` — the binary it spawns: the compiler under test, which is also the DAP adapter under test and what builds every fixture it debugs |
 | `define/` | `maxon test`, under the compiler | `TestedCompilerStem` — the compiler it spawns, which is also the one whose `--define` is under test |
 | `build-manifest/` | `maxon test`, under the compiler | `TestedCompilerStem` in `BuildManifestHarness.maxon` — the binary it spawns: the compiler under test, which is also the driver that runs each fixture's `.maxproj` target and builds what it describes |
 | `coverage/` | `maxon test`, under the compiler | `TestedCompilerStem` in `CoverageHarness.maxon` — the binary it spawns: the compiler under test, which builds every binary it measures |
@@ -46,7 +47,7 @@ names the former path in every row minted before 2026-09-02 — a dated record, 
 rows stay as written.
 
 ⚠ **The six rules below are the `fmt/` corpus's**, and each is written against the
-command `fmt` is. They are not automatically true of the other nineteen: `test-fixtures/`
+command `fmt` is. Each of the other twenty takes them up case by case: `test-fixtures/`
 deliberately stores LIVE `*.maxtest` sources, because the command under test compiles
 them, and `lsp/` stores a live `LspClient.maxon` the tests import.
 
@@ -65,6 +66,8 @@ tests/
   test-command/
     fixtures.maxtest             the shared half: paths, argv, the two corpus guards
     <case>.maxtest               ONE spawning `test` per file - see rule 5
+    list-build.maxtest           `--list --build --json` names an absolute binary with its sidecar; each listed `select` runs one test
+    no-debug-info.maxtest        `--list --build --json --no-debug-info` builds the binary with no sidecar beside it
   test-fixtures/<case>/
     <name>.maxtest               a LIVE source: `maxon test` is what compiles it
     expected.txt  expected-exit.txt  argv.txt?
@@ -120,11 +123,14 @@ tests/
     fixtures/<project>/app.maxproj.fixture  main.maxon.fixture   stored names only, subdirectories included - see rule 1
   debug/
     DebugHarness.maxon                      the shared half: the spawn, the staging, the folds, the event reader
+    ImageIdentity.maxon                     the byte-identity half: one source and one output path built repeatedly, each image kept aside and compared
     sidecar-dump.maxtest                    the sidecar says something TRUE about the binary beside it
     byte-identical-debug-info.maxtest       the sidecar never decides an instruction; `--no-debug-agent` is the one exception
+    byte-identical-debug-info-under-inlining.maxtest      a program full of spliced bodies with folded and dead locals builds the same image with and without its sidecar
     dump-info-sections.maxtest              a word that is not a section is refused by name, and a real list prints only itself
     sidecar-local-types.maxtest             every local of a two-file program is described under its own type
     sidecar-local-live-range.maxtest        a local row is scoped to the code it is live over
+    sidecar-no-local-is-live-across-the-prologue.maxtest      a local of a parameterless function is placed from its first instruction on
     sidecar-array-element-type.maxtest      an Array local names its element type
     sidecar-generic-and-clone-lines.maxtest      a per-type generic body and a synthesized clone carry line rows
     monitor-sched-events.maxtest            `monitor --filter=sched` shows a green thread's spawn and await
@@ -145,10 +151,62 @@ tests/
     break-no-match-suggests.maxtest         a name nothing answers to names the nearest function
     backtrace-at-breakpoint.maxtest         the callers outward, innermost frame first
     inline-frames-in-backtrace.maxtest      a spliced leaf is a frame of its own, marked inlined
+    inline-caller-frame-is-at-its-call-site.maxtest      a spliced body's caller stands at its call, and every frame carries its column
+    values-of-an-inlined-frame.maxtest      a frame the inliner synthesized lists and prints its own locals
+    one-pass-through-a-line-stops-once.maxtest      a line breakpoint arms one address per body, so a pass stops once
+    a-loop-header-stops-every-iteration.maxtest      a loop header's breakpoint stops at every evaluation of its condition
+    break-names-a-file-by-its-most-specific-spelling.maxtest      two files of one base name: a path names one, a bare name is ambiguous, and clear names what break named
+    break-at-an-exact-offset.maxtest        `break *0x<offset>` arms that offset, stops there, and reports the line containing it
+    break-at-an-offset-outside-text-is-refused.maxtest      an offset no function covers is refused `out-of-text`, and the program runs out
+    break-at-an-offset-inside-an-instruction-is-refused.maxtest      an offset inside an instruction is refused `not-an-instruction-start`, and the program runs out
     stop-shows-a-source-window.maxtest      a stop carries the source around its line, that line marked current
     batch-step-next-finish.maxtest          `step` enters, `next` steps over, `finish` returns
-    step-off-a-conditional-jump.maxtest           a step onto a SIMULATED jump still publishes the stop that follows it
+    step-off-a-conditional-jump.maxtest           a step off a breakpoint armed on a SIMULATED jump still publishes the stop that follows it
     next-stops-at-inner-breakpoint.maxtest        a stepped-over call's breakpoint is still honoured
+    next-over-a-long-call-is-fast.maxtest         a `next` runs a fifty-million-iteration call to its return at full speed
+    next-over-a-long-call-stops-at-a-breakpoint-inside-it.maxtest      a call a `next` runs at full speed still stops at a breakpoint inside it
+    finish-out-of-a-long-call-is-fast.maxtest     a `finish` runs the rest of the frame to its return address at full speed
+    break-in-a-test-body-stops.maxtest            a line of a test body arms and stops, and the stop names the test by its prose
+    backtrace-from-a-helper-includes-the-test-frame.maxtest      the test is its helper's caller frame, and the dispatcher `maxon test` generates is no frame of the author's
+    break-in-the-debug-agent-is-refused.maxtest      the agent's own code is refused by where it came from, whatever its name spells; the entry stub is the control
+    a-leaf-inlined-at-adjacent-calls-stops-at-each-copy.maxtest      two back-to-back copies of one leaf each begin a row of its line, so both arm and both stop
+    a-leaf-folded-away-has-no-code.maxtest        a leaf whose every call folds to a constant has no code to arm, and its caller's line does
+    break-on-a-line-that-is-only-an-inlined-call-stops.maxtest      a line whose code is an inlined body arms at the body's entry and stops at the call line; `next` runs over the body, `step` enters it
+    break-on-a-narrowing-cast-line-stops.maxtest      a cast's range check is its own line's code: the line arms, and a walk from the line before stops on it
+    step-into-an-inlined-call-that-starts-its-line-enters-it.maxtest      a line whose first code is an inlined call stops before the call, and `step` enters it
+    a-line-led-by-an-inlined-call-stops-once-per-pass.maxtest      a kept breakpoint on a loop line led by an inlined call stops once per pass, at the call's entry
+    a-line-whose-blocks-split-stops-once-per-pass.maxtest      a line the compiler splits into blocks stops once each time control passes through it
+    a-short-circuit-line-stops-once-per-pass.maxtest      a line evaluating `a and b` stops once each time control passes through it
+    step-onto-a-conditional-jump.maxtest          a single step landing on an armed, SIMULATED jump publishes it, and the step off it lands where the jump goes
+    clearing-one-of-two-breakpoints-at-an-offset-keeps-the-other.maxtest      clearing a line breakpoint leaves an exact-offset breakpoint at the same byte armed
+    a-second-condition-at-an-armed-offset-is-refused.maxtest      a second condition at a byte a conditional breakpoint holds is refused by name, and the first condition still decides
+    a-cleared-breakpoints-row-is-armed-again-past-the-table-size.maxtest      a cleared breakpoint gives its row back, so a session arms more distinct instructions than the table has rows
+    a-walk-past-the-table-size-plants-its-points.maxtest      a step plants its points in rows and slots cleared breakpoints gave back, and runs the splice between its calls
+    a-stop-inside-the-prologue-shows-the-caller.maxtest      a backtrace from between `push rbp` and `mov rbp, rsp` names the caller one frame down
+    next-from-inside-a-prologue-stays-in-the-frame.maxtest      a `next` from inside a prologue lands on the first positioned row of that same frame
+    finish-from-inside-a-prologue-returns-to-the-caller.maxtest      a `finish` from inside a prologue returns to the caller
+    next-over-a-recursive-call-returns-to-its-own-frame.maxtest      a `next` over a recursive call lands in the frame it was issued from
+    next-over-a-call-another-thread-returns-through.maxtest      a `next` over a call other green threads also return through lands on the thread that issued it
+    next-over-a-call-that-grows-the-green-thread-stack.maxtest      a `next` over a call that moves the green thread's stack lands on the next line
+    next-over-a-call-that-faults-reports-the-fault.maxtest      a `next` over a call that faults stops at the fault
+    next-over-a-call-that-ends-the-program-reports-the-end-once.maxtest      a `next` over a call that ends the program reports the end once, and it is the last event
+    next-over-a-long-call-returns-through-a-false-condition.maxtest      a `next` over a long call whose return lands on a false conditional breakpoint returns at once
+    next-over-a-spliced-library-loop-is-fast.maxtest      a `next` over a line whose library loop is spliced into the frame runs the loop at full speed
+    step-into-a-library-call-comes-back-to-the-program.maxtest      a `step` on a line that calls into the library comes back at the program's next line
+    step-into-a-spliced-library-loop-stops-in-the-authors-closure.maxtest      a `step` on a spliced library call that calls the author back stops in the author's closure
+    step-runs-a-spliced-loop-between-its-calls-through-a-value.maxtest      a `step` over a spliced loop that calls library code through a value runs the loop between those calls
+    two-walk-points-under-conditions-leave-the-step-exact.maxtest      a step whose exit and call site both carry a false conditional breakpoint lands on the next line
+    until-stops-at-a-conditioned-header-only-when-it-holds.maxtest      an `until` that single-steps onto a conditioned loop header stops there on the pass whose condition holds
+    a-stale-step-landing-on-an-armed-instruction-is-its-breakpoint.maxtest      a step overtaken by another machine's hit still reports the armed instruction it lands on as that breakpoint
+    a-false-condition-on-another-thread-does-not-take-the-step.maxtest      steps on main stay on main while workers hit a false condition, and main stays pausable
+    a-false-condition-on-a-service-machine-never-takes-mains-step.maxtest      the same, with the false condition hit by services on other machines
+    every-walk-from-a-fault-is-refused.maxtest      `finish`, `next`, `until` and `step` at a fault stop are each refused, and the stop stays
+    a-refused-step-keeps-the-stop.maxtest         a step the agent refuses leaves the session stopped where it was
+    a-step-after-a-pause-steps.maxtest            `next` and `step` from a pause stop each land one line on, in the paused frame
+    pause-at-a-stop-is-not-an-error.maxtest       a `pause` asked of a stopped program is answered
+    a-repl-that-ends-at-a-stop-reports-the-exit-once.maxtest      a REPL whose input ends at a stop lets the program finish and reports its exit once
+    a-stop-inside-library-code-is-presented-at-the-programs-frame.maxtest      a breakpoint inside a library function stops at the program frame that called into it
+    a-backtrace-walks-through-library-frames-to-main.maxtest      a stop in a function the library calls back shows `main` below the library frames
     finish-stops-at-inner-breakpoint.maxtest      a walk does not swallow a breakpoint it passes
     finish-from-outermost-refused.maxtest         a `finish` with no caller is refused, not waited on
     two-machines-hit-one-breakpoint.maxtest        every green thread reaching one breakpoint stops on it
@@ -185,6 +243,44 @@ tests/
     trace-unavailable-without-debugstream.maxtest      a build with no producer says so, and answers no list
     trace-unavailable-without-the-flag.maxtest         the same build without `--trace` names the other reason
     fixtures/<name>/main.maxon.fixture      stored names only - see rule 1
+  dap/
+    DapClient.maxon                         the shared half: a DAP client over a spawned `dap-server`, the staging of `debug/fixtures/`, the message readers
+    initialize-advertises-capabilities.maxtest      `initialize` advertises configurationDone, conditional and function breakpoints
+    launch-hits-a-source-breakpoint.maxtest         initialize, launch, initialized, setBreakpoints, configurationDone, then the stop
+    launch-builds-a-source.maxtest          a `.maxon` program is built with debug info and stopped in
+    no-code-line-is-unverified.maxtest      a line that emits no code is unverified and says why
+    unsupported-condition-is-unverified-with-a-reason.maxtest      a condition the agent cannot evaluate is unverified, the plain line verifies
+    unsupported-request-is-refused.maxtest          an unserved command is refused by name, a served one succeeds
+    function-breakpoints.maxtest            a function breakpoint stops inside the function it names
+    set-breakpoints-while-running-is-hit.maxtest      a breakpoint placed mid-run is verified and then fires
+    pause-stops-a-spinning-program.maxtest          `pause` answers at once and the `pause` stop follows
+    step-over-and-out.maxtest               `next` stays in its frame, `stepOut` lands in the caller
+    stack-trace-and-scopes-and-variables.maxtest      frame, scope and variable references chain to the right local's value
+    evaluate-hover-and-repl.maxtest         `hover` answers a value, `repl` runs a debugger word
+    threads-lists-green-threads.maxtest     `threads` lists the green threads themselves
+    debuggee-output-arrives-as-output-events.maxtest      the program's stdout reaches the client as `output` events
+    exited-and-terminated.maxtest           a program run out reports its own exit code, then `terminated`
+    disconnect-reaps-the-debuggee.maxtest           `disconnect` ends a stopped program, so its image can be deleted
+    crash-is-an-exception-stop.maxtest      a fault is an `exception` stop with a walkable stack
+    inlined-frame-has-its-locals-and-its-call-site.maxtest      a spliced frame's variables are its own, and its caller stands at the call
+    zero-based-lines-and-columns.maxtest      `linesStartAt1`/`columnsStartAt1` false is answered in the client's own count
+    set-breakpoints-names-the-file-by-its-full-path.maxtest      of two files with one base name, a source breakpoint arms the one its full path names
+    a-step-over-a-long-call-answers-pause.maxtest      a `pause` sent while `next` walks is answered at once, and the pause stops the program
+    requests-after-the-program-ended-answer-empty.maxtest      threads, stackTrace, scopes and variables after the end succeed, empty
+    threads-after-terminate-answers-empty.maxtest      `threads` after a `terminate` answers an empty list; the ask for a `launch` belongs to an adapter yet to launch
+    a-breakpoint-in-a-test-body-is-verified.maxtest      a source breakpoint in a test body of a `test --list --build` binary binds and stops, under the test's name
+    a-breakpoint-on-an-inlined-call-line-is-verified.maxtest      a line whose code is an inlined body binds and stops with the caller on top, at the call line
+    a-conditional-breakpoint-in-a-path-with-if-in-it-is-hit.maxtest      a conditional breakpoint on a file whose path holds ` if `, its condition spaced out, is armed and hit
+    a-console-breakpoint-outlives-the-clients-clear.maxtest      the editor's `setBreakpoints` replaces the editor's own breakpoints, and one typed in the debug console stands
+    a-step-typed-in-the-debug-console-reaches-its-stop.maxtest      a `next` typed in the debug console over a long call is watched until it lands
+    a-step-after-a-pause-steps.maxtest      `next` and `stepIn` from a pause stop each stop as a step in the paused frame
+    a-step-while-a-step-walks-answers-failure.maxtest      a `next` sent while a `next` walks answers failure, and the first still lands
+    a-step-after-a-fault-answers-failure.maxtest      a `next` from a fault stop answers failure, and the stop stays walkable
+    a-step-out-of-a-fault-answers-failure.maxtest      `stepOut` and `next` from a fault in a callee answer failure, and the stop stays walkable
+    a-step-out-of-the-outermost-frame-answers-failure.maxtest      a `stepOut` from the outermost frame answers failure, and the session goes on
+    a-stop-timeout-past-the-bound-is-refused-by-name.maxtest      a `launch` stop timeout past the CLI's `--stop-timeout` bound is refused, naming the argument
+    green-thread-ids-never-name-the-main-thread.maxtest      the id a program with no scheduler runs under belongs to no green thread, and every listed green thread id walks
+    stderr-is-not-starved-behind-a-stdout-backlog.maxtest      a stderr line written behind a stdout backlog arrives ahead of the stdout written after it
   coverage/
     CoverageHarness.maxon                   the shared half: the spawn, the staging, the report readers
     coverage-line-states.maxtest            the four line states, each attached to its own line
@@ -227,6 +323,10 @@ tests/
     interner-presize-never-regrows.maxtest                  every source file's type-name interner reports itself under `--log=compiler:debug`, and none of them regrew
     wasm-build-without-tools-is-an-error-not-a-panic.maxtest        an install-shaped copy outside the checkout, with no `vendor/`: exit 1 naming `wasm-tools`, no panic
     wasm-build-reports-the-module-size.maxtest              a wasm32-wasi build's `Wrote N bytes of code` has N > 0
+    build-refuses-a-runtime-tier-file-by-name.maxtest       `build runtime/<file>` exits 1 with an error naming the runtime tier, ahead of any diagnostic inside the file
+    cache-does-not-count-a-staged-snippet.maxtest           a snippet the MCP server staged under the cache root is left out of bare `cache`'s build count
+    cache-clear-keeps-a-live-debug-sessions-build.maxtest   `cache clear` keeps the debug build of a session still running, and says so
+    help-lists-every-mcp-server-option.maxtest              `help mcp-server` lists every option the parser accepts
   profile/
     ProfileHarness.maxon                    the shared half: the spawn, the staging, the report readers
     profile-hot-ordering.maxtest            the busier function ranks first in every section
@@ -284,9 +384,9 @@ tests/
     filed-type-reuse.maxtest                a bytes-only edit re-parses one file when a parse files a type
     fixtures/<program>/<name>.maxon.fixture stored names only - see rule 1
   mcp/
-    McpHarness.maxon                        the shared JSON-RPC stdio harness and JSON helpers
-    standard.maxtest                        standard user-facing MCP server tests (8 standard tools)
-    dev.maxtest                             contributor MCP server tests (11 tools + --dev)
+    McpHarness.maxon                        the shared half: stdio and `--http` sessions, the debug tool readers, and JSON helpers
+    standard.maxtest                        standard user-facing MCP server tests (21 standard tools)
+    dev.maxtest                             contributor MCP server tests (24 tools + --dev)
     scale-defaults-agree-with-help.maxtest       `run_scale_test` states the defaults `help scale-test` states
     rebuild.maxtest                         a running server survives its image being replaced on disk
     rebuild-over-a-running-previous.maxtest      a self-rebuild succeeds while a server runs its `.previous`
@@ -294,6 +394,31 @@ tests/
     reference-documents-every-tool.maxtest       docs/CLI_REFERENCE.md's `## MCP Server` section names every tool and argument `--dev` advertises
     check-reports-a-type-error-and-writes-nothing.maxtest      `check` answers a type error's code, is not the warm-rebuild gate, and writes nothing
     dump-ir-answers-the-ir-text.maxtest          `dump_ir` answers the IR of `main` as text, and writes nothing
+    two-sessions-debug-one-source.maxtest        two debug sessions of one source each debug a build of their own, and a closed session's build is gone
+    stdio-debug-tools.maxtest               the stdio face holds one debug session across calls, refuses a tool before `debug_start`, and builds a source
+    http-roster-matches-stdio.maxtest       `--http` serves the stdio roster, name for name
+    http-routes.maxtest                     `GET /mcp` is 405, another path 404, a notification 202 with no body
+    http-session-lifecycle.maxtest          `initialize` mints `Mcp-Session-Id`; a missing or unknown id is 404, `DELETE` ends it, idle sessions are swept, `--max-sessions` answers 429
+    http-origin-and-host.maxtest            a foreign or portless `Origin` and a foreign `Host` are 403; the endpoint is loopback; a host spelling and an HTTP option without `--http` are refused
+    http-debug-session.maxtest              a debug session survives across HTTP requests, and `debug_stop` reaps its debuggee
+    http-options-are-refused-by-name.maxtest     a malformed port, and an HTTP-only option without `--http`, are refused by name with exit 1
+    http-server-outlives-its-stdin.maxtest       without `--exit-on-stdin-eof` the HTTP server serves on after its stdin closes
+    http-idle-sweep-needs-no-traffic.maxtest     an idle session and its debuggee are reaped on time with no request arriving; closing stdin ends the server with exit 0
+    http-a-long-call-keeps-its-session.maxtest   a call that outlasts the idle timeout keeps its session
+    http-a-request-queued-behind-a-long-call-keeps-its-session.maxtest      a request waiting behind another session's long call keeps its own session
+    http-every-request-queued-behind-a-long-call-keeps-its-session.maxtest      so does every request waiting there, the first one served and each after it
+    notifications-get-no-answer.maxtest          over stdio a notification gets no answer; over HTTP an `initialize` notification is 202 and mints no session
+    a-fractional-whole-number-argument-is-refused-by-name.maxtest      a fraction given to a whole-number argument is refused by name
+    a-fractional-stop-timeout-is-honoured.maxtest      a stop timeout of a fraction of a second is accepted, and one under a millisecond is refused by name
+    execute-is-stopped-at-its-bound.maxtest      `execute` stops a program that outlasts its bound and answers
+    debug-start-stops-a-source-build-at-its-bound.maxtest      `debug_start` stops a source's build at its bound and answers without launching
+    debug-start-refuses-a-build-bound-on-an-executable.maxtest      `debug_start` given an executable refuses a build bound, naming the argument
+    debug-start-refuses-a-test-file-by-name.maxtest      `debug_start` refuses a test file as an executable or a source, and names the test build
+    debug-start-over-a-live-session-answers-its-final-lines.maxtest      a `debug_start` over a live session answers what the replaced program wrote since the last call
+    debug-output-is-bounded.maxtest              debuggee output nobody has taken is bounded, the oldest lines dropped and the drop announced ahead of what is kept
+    debug-builds-are-swept.maxtest               a server sweeps exactly the debug builds whose owner has ended, whatever their age
+    a-staged-snippet-is-removed-after-its-call.maxtest      a snippet staged for a tool call, and everything built from it, is gone once the call answers
+    snippets-an-ended-server-left-are-swept.maxtest      a server sweeps the snippets and snippet builds an ended server left, and keeps a live server's
   docs/
     stdlib-reference-documents-every-public-api.maxtest      docs/STDLIB_REFERENCE.md names every `public` declaration in `stdlib/*.maxon`
 ```
@@ -320,17 +445,19 @@ Two independent reasons, and the second is the one that bites:
   forever by construction.
 
 ⚠ **This rule is `fmt/`'s, and the live Maxon files under `tests/` are more than the
-`.maxtest` drivers.** `lsp/LspClient.maxon` is an ordinary source — a 1,200-line JSON-RPC client the
-`lsp/` tests import — and `debug/DebugHarness.maxon`, `coverage/CoverageHarness.maxon`,
-`profile/ProfileHarness.maxon`, `execute/ExecuteHarness.maxon`, `cli/CliHarness.maxon`,
-`define/DefineHarness.maxon`, `build-manifest/BuildManifestHarness.maxon`, `examples/ExamplesHarness.maxon`, `warm-rebuild/WarmRebuildHarness.maxon`, `emitted-runtime/EmittedRuntimeHarness.maxon`, `spec-harness/SpecHarness.maxon` and `mcp/McpHarness.maxon` are each their corpus's shared half,
-`.maxon` files that `maxon test` compiles beside the `.maxtest` files and runs as none. That is fine and
-is a consequence of the rule's own reason: the hazard above is `fmt` rewriting an ORACLE, and none of
-these corpora keeps one on disk — `lsp/`'s are `b"…"` byte literals inside its test files, `examples/`'s
-are string constants inside its case files, and the rest assert properties. A helper that `fmt`
-reformats stays a correct helper. ⇒ The rule to carry forward is **"nothing `fmt` rewrites may be a
-stored expectation"**, a weaker rule than "no live Maxon file". `fmt/` states it the strong way because
-every one of ITS fixtures is a stored expectation.
+`.maxtest` drivers.** `lsp/LspClient.maxon` is an ordinary source — a JSON-RPC client the `lsp/` tests
+import — and `debug/DebugHarness.maxon`, `debug/ImageIdentity.maxon`, `dap/DapClient.maxon`,
+`coverage/CoverageHarness.maxon`, `profile/ProfileHarness.maxon`, `execute/ExecuteHarness.maxon`,
+`cli/CliHarness.maxon`, `define/DefineHarness.maxon`, `build-manifest/BuildManifestHarness.maxon`,
+`examples/ExamplesHarness.maxon`, `warm-rebuild/WarmRebuildHarness.maxon`,
+`emitted-runtime/EmittedRuntimeHarness.maxon`, `spec-harness/SpecHarness.maxon` and `mcp/McpHarness.maxon`
+are their corpora's shared halves, `.maxon` files that `maxon test` compiles beside the `.maxtest` files
+as helpers. That follows from the rule's own reason: the hazard above is `fmt` rewriting an ORACLE, and
+these corpora keep their oracles elsewhere — `lsp/`'s are `b"…"` byte literals inside its test files,
+`examples/`'s are string constants inside its case files, and the rest assert properties. A helper that
+`fmt` reformats stays a correct helper. ⇒ The rule to carry forward is **"nothing `fmt` rewrites may be
+a stored expectation"**, a weaker rule than "every Maxon file here is stored". `fmt/` states it the
+strong way because every one of ITS fixtures is a stored expectation.
 
 ⛔ **No `.maxonignore` in this directory.** A marker excludes its subtree from every walk that
 honours it — `maxon test`'s, `fmt`'s and the build's — so a marker at a corpus root removes the
@@ -338,11 +465,10 @@ very files the corpus stages: every `test-command` case finds no sources and exi
 
 ### 2. stderr is compared, not just stdout
 
-`test-command/fixtures.maxtest:196` records the trap: a fixture passed byte-for-byte
-*throughout a defect* because the harness compared stdout while the diagnostic went to
-stderr. **Every `fmt` refusal writes to stderr and prints nothing to stdout**, so a
-stdout-only corpus has zero coverage of the refusals that exist to prevent a
-destructive default.
+`test-command/reserved-name-refused.maxtest` shows the trap: its fixture's `expected.txt` holds
+stdout, and the compile error that case is about goes to stderr, so the case reads stderr itself.
+**Every `fmt` refusal writes to stderr and leaves stdout empty**, so a stdout-only corpus has zero
+coverage of the refusals that exist to prevent a destructive default.
 
 ### 3. The resulting tree is compared, both ways
 
@@ -621,6 +747,23 @@ agent's half is `specs/debug-agent.md`.
 it, run under `monitor --filter=sched`. The program's answer is asserted before any event, because a
 monitor that ran nothing prints no events either; then a `sched_spawn` and a `sched_await` line must
 appear. Presence only: how many yields and resumes one await costs moves with the scheduler.
+
+## `dap/` — `maxon dap-server`, driven as an editor drives it
+
+Every case spawns `maxon dap-server`, speaks `Content-Length`-framed Debug Adapter Protocol to it through
+`DapClient.maxon`, and debugs a fixture staged from `tests/debug/fixtures/` — the same stored programs the
+`debug/` corpus debugs, so both corpora read one copy of each fixture's lines. The client awaits a
+response by its `request_seq` and keeps the events that arrive meanwhile. Each wait reads past at most a
+fixed budget of other messages, so an adapter that keeps talking without sending the awaited one fails
+the case; an adapter that falls silent holds the read until the file's deadline.
+
+A case drives its session into values first and asserts after `dapRunSession` has released the adapter,
+because an unreleased adapter process is a leak and exits the run 101.
+
+The runner, the compiler that builds each fixture and the adapter are one binary, named by
+`TestedCompilerStem` in `DapClient.maxon`, so the `debug/` corpus's warning holds here too: read the pass
+count. The debugger it drives runs on x64-windows, so the corpus runs on that host, and like `debug/` each
+case spends a compile plus a debugged run: `maxon test tests/dap --timeout=60000`.
 
 ## `coverage/` — what a `--coverage` binary can be asked about after it has RUN
 
@@ -984,16 +1127,33 @@ directory under `temp/warm-rebuild/`).
 
 ## `mcp/` — JSON-RPC MCP server for end users and compiler contributors
 
-The Model Context Protocol (MCP) server runs over standard I/O using newline-delimited JSON-RPC 2.0.
-`McpHarness.maxon` provides the shared harness for spawning the compiler as an MCP server, exchanging
-JSON-RPC messages, and inspecting structured responses.
+The Model Context Protocol (MCP) server runs over standard I/O using newline-delimited JSON-RPC 2.0, or
+over loopback HTTP with `--http`. `McpHarness.maxon` provides the shared harness for spawning the compiler
+as an MCP server on either transport, exchanging JSON-RPC messages, and inspecting structured responses.
 
-- `standard.maxtest` gates the default end-user mode (`maxon mcp-server`): the handshake, the 8 tools
-  (`build`, `run`, `test`, `fmt`, `check`, `dump_ir`, `lookup_error_code`, `info`), their schemas, and the
-  refusals — an argument no tool declares, an argument of the wrong JSON type, a contributor argument in
-  user mode, and an error code no registry case claims.
-- `dev.maxtest` gates contributor mode (`maxon mcp-server --dev`): the 11 tools, the `repoRoot` and
+- `standard.maxtest` gates the default end-user mode (`maxon mcp-server`): the handshake, the 21 tools
+  (`build`, `execute`, `test`, `fmt`, `check`, `dump_ir`, `lookup_error_code`, `info` and the thirteen
+  `debug_*` tools), their schemas, and the refusals — an argument no tool declares, an argument of the
+  wrong JSON type, a contributor argument in user mode, and an error code no registry case claims.
+- `dev.maxtest` gates contributor mode (`maxon mcp-server --dev`): the 24 tools, the `repoRoot` and
   `from` arguments, checkout validation, and the `repoRoot` ECHO on both an answer and a refusal.
+- `stdio-debug-tools.maxtest`, `two-sessions-debug-one-source.maxtest` and
+  `http-debug-session.maxtest` gate the `debug_*` tools: one debug session per MCP session, held
+  across calls on either transport, and reaped with its build when the session ends.
+- The `debug-start-*` cases, `debug-output-is-bounded.maxtest`, `execute-is-stopped-at-its-bound.maxtest`
+  and the two `a-fractional-*` cases gate what a tool call is bounded by: a build or a run past its bound
+  is stopped and answered, a debuggee's untaken output is capped with the drop announced, a stop timeout
+  in fractional seconds is honoured down to a millisecond, and a fraction given to a whole-number
+  argument is refused by name.
+- `debug-builds-are-swept.maxtest`, `a-staged-snippet-is-removed-after-its-call.maxtest` and
+  `snippets-an-ended-server-left-are-swept.maxtest` gate what a server leaves under the cache root: a
+  snippet goes when its call answers, and a server sweeps the debug builds and snippets whose owning
+  process has ended, keeping every live owner's.
+- The `http-*` cases gate the HTTP transport itself: the roster it serves, its routes, its sessions and
+  their idle sweep, a long call's session kept alive with every request queued behind it, the options
+  that belong to `--http`, and the `Origin`/`Host` checks that keep a browser page from driving it.
+  `notifications-get-no-answer.maxtest` holds both transports to the protocol's rule for a
+  notification: over stdio it goes unanswered, and over HTTP it is 202 with an empty body.
 - `scale-defaults-agree-with-help.maxtest` reads the default each `run_scale_test` property states and the
   default `maxon help scale-test` states for the same option, and holds them equal. One server and one `help` run.
 - `rebuild.maxtest` gates the half of a self-rebuild that a live server depends on: its image is

@@ -1,0 +1,94 @@
+typealias OwnerProcessId = int(1 to i32.max)
+
+export enum OwnerLiveness
+	notOwned
+	ownerAlive
+	ownerGone
+end 'OwnerLiveness'
+
+export union LeftoverOwner
+	notOwned
+	process(pid OwnerProcessId)
+end 'LeftoverOwner'
+
+export typealias LeftoverLivenessOf = function(String) returns OwnerLiveness
+export typealias LeftoverKeyOf = function(FilePath) returns FilePath
+export typealias LeftoverDiscard = function(FilePath)
+
+/// Removes what processes that have ended left in `directory`. `livenessOf` reads an entry's owner
+/// from its name, and an entry whose owner runs or cannot be read is left alone. `keyOf` maps an
+/// entry to the file it belongs with: a key goes through `discardKeyed`, and any other entry goes
+/// once its key is gone.
+export function sweepLeftoversOfEndedOwners(directory FilePath, livenessOf LeftoverLivenessOf, keyOf LeftoverKeyOf, discardKeyed LeftoverDiscard)
+	if not Directory.isDirectory(directory) 'nothingLeftYet'
+		return
+	end 'nothingLeftYet'
+
+	let entries = try Directory.list(directory) otherwise (e) 'unlisted'
+		printError("maxon: could not list {directory.path} to sweep what a server that ended left there ({e.name})\n")
+
+		return
+	end 'unlisted'
+
+	for entry in entries 'eachEntry'
+		if livenessOf(entry.filename()) != OwnerLiveness.ownerGone 'itsOwnerRunsOrIsUnknown'
+			continue
+		end 'itsOwnerRunsOrIsUnknown'
+
+		let key = keyOf(entry)
+
+		if key.equals(entry) 'theKey'
+			discardKeyed(entry)
+			continue
+		end 'theKey'
+
+		if not File.exists(key) 'orphaned'
+			removeOwnedFile(entry)
+		end 'orphaned'
+	end 'eachEntry'
+end 'sweepLeftoversOfEndedOwners'
+
+export function livenessOfOwner(owner LeftoverOwner) returns OwnerLiveness
+	return match owner 'owner'
+		notOwned gives OwnerLiveness.notOwned
+		process(pid) gives OwnerLiveness.ownerAlive if __Builtins.processIsAlive(pid) else OwnerLiveness.ownerGone
+	end 'owner'
+end 'livenessOfOwner'
+
+export function ownerProcessNamed(field String) returns LeftoverOwner
+	if not isDecimal(field) 'notDigits'
+		return LeftoverOwner.notOwned
+	end 'notDigits'
+
+	let pid = try int.fromString(field) otherwise return LeftoverOwner.notOwned
+
+	if pid == 0 or pid > i32.max 'notAProcessId'
+		return LeftoverOwner.notOwned
+	end 'notAProcessId'
+
+	return LeftoverOwner.process(pid as OwnerProcessId)
+end 'ownerProcessNamed'
+
+export function isDecimal(text String) returns bool
+	return not text.isEmpty() and text.trimStart(asciiDecimalDigits()).isEmpty()
+end 'isDecimal'
+
+export function removeOwnedFile(path FilePath)
+	if not File.exists(path) 'alreadyGone'
+		return
+	end 'alreadyGone'
+
+	try File.delete(path) otherwise (e) 'kept'
+		printError("maxon: could not delete {path.path} ({e.name}); a later server's sweep removes it once nothing holds it and its owner has ended\n")
+	end 'kept'
+end 'removeOwnedFile'
+
+export function pathWithoutSuffix(path FilePath, suffix String) returns FilePath
+	if not path.path.endsWith(suffix) 'notItsSuffix'
+		panic("pathWithoutSuffix: {path.path} does not end in {suffix}")
+	end 'notItsSuffix'
+
+	let spelled = path.path.slice(path.path.startIndex(), length: path.path.count() - suffix.count())
+
+	return try FilePath.from(spelled) otherwise panic("pathWithoutSuffix: {path.path} with {suffix} taken off is a spellable path")
+end 'pathWithoutSuffix'

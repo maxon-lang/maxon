@@ -1,0 +1,40 @@
+let LoopHeaderCaseLabel = "a-loop-header-stops-every-iteration"
+let WhileHeaderAnchor = "while-header"
+let ForHeaderAnchor = "for-header"
+let IterationsOfEachLoop = 3
+let WhileHeaderStops = 4
+let ForHeaderStops = 4
+let ContinuesPastEveryStop = 8
+let FirstLineEntry = 1
+
+test 'a breakpoint on a loop header stops each time control comes back to the header'
+	let staged = builtFixture(LoopHeaderCaseLabel, fixture: LoopsFixtureName)
+	let executable = builtExecutable(staged)
+	let whileLine = anchorLine(staged, anchor: WhileHeaderAnchor)
+	let forLine = anchorLine(staged, anchor: ForHeaderAnchor)
+
+	let whileEvents = loopSession(executable, staged: staged, line: whileLine)
+	try Expect.equal(stopsAtLine(whileEvents, line: whileLine) as AssertedInt, expected: WhileHeaderStops, message: "the `while` loop runs {IterationsOfEachLoop} iterations, and control comes to its header {WhileHeaderStops} times — once from the line before the loop and once from the end of each iteration's body — in the one rotated header block the preheader jumps to and every iteration falls into, so its breakpoint stops {WhileHeaderStops} times. It printed: {renderedRows(eventKinds(whileEvents))}")
+	try Expect.equal(eventsOfKind(whileEvents, kind: ExitEventName).count() as AssertedInt, expected: 1, message: "after its stops the program runs to its exit. It printed: {renderedRows(eventKinds(whileEvents))}")
+
+	let forEvents = loopSession(executable, staged: staged, line: forLine)
+	try Expect.equal(stopsAtLine(forEvents, line: forLine) as AssertedInt, expected: ForHeaderStops, message: "the `for` loop's line is entered once at its initializer and then once at the end of each of its {IterationsOfEachLoop} iterations, where the increment follows the body inside one block; the initializer's jump to the condition stays on the line and is the same pass. So its breakpoint stops {ForHeaderStops} times; a breakpoint armed at the initializer alone stops once and never per iteration, and one armed at the condition too stops twice on the first pass. It printed: {renderedRows(eventKinds(forEvents))}")
+	try Expect.equal(eventsOfKind(forEvents, kind: ExitEventName).count() as AssertedInt, expected: 1, message: "after its stops the program runs to its exit. It printed: {renderedRows(eventKinds(forEvents))}")
+
+	var entries = SidecarNumberArray.create()
+
+	for row in dumpedRowsAt(executable, staged: staged, scope: DumpedRowScope.line(forLine)) 'eachRow'
+		if row.tags.contains(LineEntryRowTag) 'entersTheLine'
+			entries.push(row.offset)
+		end 'entersTheLine'
+	end 'eachRow'
+
+	try Expect.greaterThan(entries.count() as AssertedInt, than: FirstLineEntry, message: "`{DebugSubcommandName} {DumpInfoOptionName} lines` marks two rows of the `for` line `{LineEntryRowTag}`: the initializer, entered from the line before the loop, and the increment, entered from the body. It marked {entries.count()}")
+end 'a breakpoint on a loop header stops each time control comes back to the header'
+
+function loopSession(executable FilePath, staged FilePath, line SourceLine) returns JsonDocArray
+	let commands = debugCommandLine(appendedCommands(["{BreakCommand} {lineTarget(line)}", RunCommand], rest: repeatedCommand(ContinueCommand, times: ContinuesPastEveryStop)))
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create())
+
+	return batchEvents(session.stdout)
+end 'loopSession'

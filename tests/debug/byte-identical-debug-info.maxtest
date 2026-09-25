@@ -1,110 +1,23 @@
 let ByteIdenticalDebugInfoCaseLabel = "byte-identical-debug-info"
 
-let NoDebugInfoBuildFlag = "--no-debug-info"
-
-let FirstDefaultImageName = "retained-default-first"
-let SecondDefaultImageName = "retained-default-second"
-let NoSidecarImageName = "retained-no-debug-info"
-let NoAgentImageName = "retained-no-debug-agent"
-
 test 'the sidecar leaves the executable byte-identical, and withdrawing the agent is the one thing that does not'
-	let staged = stagedFixture(ByteIdenticalDebugInfoCaseLabel, fixture: SpansFixtureName)
-	let source = staged.join(StagedProgramFileName)
-	let image = builtExecutable(staged)
-	let sidecar = sidecarBesideTheImage(image)
+	let identity = ImageIdentityCase.staging(ByteIdenticalDebugInfoCaseLabel, fixture: SpansFixtureName)
 
-	let firstDefault = imageAfterBuild(source, staged: staged, image: image, sidecar: sidecar, label: "the first default", extraArguments: StringArray.create(), retainedAs: FirstDefaultImageName)
-	Expect.isTrue(firstDefault.wroteASidecar, message: "a default build writes `{sidecar.filename()}` beside its executable — that is what every reader of debug info in this tree relies on, and a build that wrote none leaves the comparisons below comparing two binaries nobody can debug.")
+	let firstDefault = identity.built("the first default", extraArguments: StringArray.create(), retainedAs: FirstDefaultImageName)
+	Expect.isTrue(firstDefault.wroteASidecar, message: "a default build writes `{identity.sidecar.filename()}` beside its executable — that is what every reader of debug info in this tree relies on, and a build that wrote none leaves the comparisons below comparing two binaries nobody can debug.")
 
-	let secondDefault = imageAfterBuild(source, staged: staged, image: image, sidecar: sidecar, label: "the second default", extraArguments: StringArray.create(), retainedAs: SecondDefaultImageName)
+	let secondDefault = identity.built("the second default", extraArguments: StringArray.create(), retainedAs: SecondDefaultImageName)
 
-	requireSameImage(firstDefault.retained, second: secondDefault.retained, why: "⭐ THE POSITIVE CONTROL. Two DEFAULT builds of one staged source to one output path must agree before any difference below can be attributed to a flag. No writer stamps a clock into an image, so a difference here is the build failing to be reproducible — and it would make the identity this case goes on to claim unprovable rather than false.")
+	identity.requireSameImage(firstDefault.retained, second: secondDefault.retained, why: "⭐ THE POSITIVE CONTROL. Two DEFAULT builds of one staged source to one output path must agree before any difference below can be attributed to a flag. No writer stamps a clock into an image, so a difference here is the build failing to be reproducible — and it would make the identity this case goes on to claim unprovable rather than false.")
 
-	let withoutSidecar = imageAfterBuild(source, staged: staged, image: image, sidecar: sidecar, label: "the `{NoDebugInfoBuildFlag}`", extraArguments: [NoDebugInfoBuildFlag], retainedAs: NoSidecarImageName)
-	Expect.isFalse(withoutSidecar.wroteASidecar, message: "`{NoDebugInfoBuildFlag}` is the opt-out and it wrote `{sidecar.filename()}` anyway, so the flag was accepted and did nothing.")
+	let withoutSidecar = identity.built("the `{NoDebugInfoBuildFlag}`", extraArguments: [NoDebugInfoBuildFlag], retainedAs: NoSidecarImageName)
+	Expect.isFalse(withoutSidecar.wroteASidecar, message: "`{NoDebugInfoBuildFlag}` is the opt-out and it wrote `{identity.sidecar.filename()}` anyway, so the flag was accepted and did nothing.")
 
-	requireSameImage(firstDefault.retained, second: withoutSidecar.retained, why: "⭐⭐ THE HEADLINE: THE SIDECAR IS METADATA AND NEVER DECIDES AN INSTRUCTION. The binary you debug must be the binary you shipped, byte for byte — otherwise every reading taken under debug info is a reading of a different program, and `{NoDebugInfoBuildFlag}` becomes a flag nobody can safely leave off.")
+	identity.requireSameImage(firstDefault.retained, second: withoutSidecar.retained, why: "⭐⭐ THE HEADLINE: THE SIDECAR IS METADATA AND NEVER DECIDES AN INSTRUCTION. The binary you debug must be the binary you shipped, byte for byte — otherwise every reading taken under debug info is a reading of a different program, and `{NoDebugInfoBuildFlag}` becomes a flag nobody can safely leave off.")
 
-	let withoutAgent = imageAfterBuild(source, staged: staged, image: image, sidecar: sidecar, label: "the `{NoDebugAgentOption}`", extraArguments: [NoDebugAgentOption], retainedAs: NoAgentImageName)
+	let withoutAgent = identity.built("the `{NoDebugAgentOption}`", extraArguments: [NoDebugAgentOption], retainedAs: NoAgentImageName)
 
-	requireDifferentImage(firstDefault.retained, second: withoutAgent.retained, why: "`{NoDebugAgentOption}` is the ONE sanctioned exception to the identity above: it leaves the in-process agent's body, its trap thunk, its control word and the imports they need out of the image, so the two cannot be the same program. An identical image means the flag was accepted and emitted the agent anyway.")
+	identity.requireDifferentImage(firstDefault.retained, second: withoutAgent.retained, why: "`{NoDebugAgentOption}` is the ONE sanctioned exception to the identity above: it leaves the in-process agent's body, its trap thunk, its control word and the imports they need out of the image, so the two cannot be the same program. An identical image means the flag was accepted and emitted the agent anyway.")
 
-	Expect.isTrue(imageBytes(withoutAgent.retained).count() < imageBytes(firstDefault.retained).count(), message: "`{NoDebugAgentOption}` produced an image that is not SMALLER ({imageBytes(withoutAgent.retained).count()} bytes against {imageBytes(firstDefault.retained).count()}). The flag's whole effect is to leave code out, so a difference that did not shrink the image is a different change wearing its name.")
+	Expect.isTrue(identity.bytesOf(withoutAgent.retained).count() < identity.bytesOf(firstDefault.retained).count(), message: "`{NoDebugAgentOption}` produced an image that is not SMALLER ({identity.bytesOf(withoutAgent.retained).count()} bytes against {identity.bytesOf(firstDefault.retained).count()}). The flag's whole effect is to leave code out, so a difference that did not shrink the image is a different change wearing its name.")
 end 'the sidecar leaves the executable byte-identical, and withdrawing the agent is the one thing that does not'
-
-// ⭐ ONE STAGED SOURCE PATH AND ONE OUTPUT PATH, BUILT FOUR TIMES. The source path reaches the emitted
-// image through the spans it carries and the output BASENAME reaches it on Mach-O as the ad-hoc signature's
-// identifier, so either left to vary would report a difference no flag caused. Each image is copied aside
-// under a name no build writes, and the originals — the executable AND its sidecar — are cleared before the
-// next build, so a build that produced nothing cannot be read as having produced what the last one did.
-type BuiltImage
-	export var retained as FilePath
-	export var wroteASidecar as bool
-
-	static function create(retained FilePath, wroteASidecar bool) returns BuiltImage
-		return BuiltImage{retained: retained, wroteASidecar: wroteASidecar}
-	end 'create'
-end 'BuiltImage'
-
-function imageAfterBuild(source FilePath, staged FilePath, image FilePath, sidecar FilePath, label String, extraArguments StringArray, retainedAs String) returns BuiltImage
-	let build = spawnBuild(source, staged: staged, label: label, extraArguments: extraArguments)
-
-	if build.exitCode() != 0 'didNotBuild'
-		panic("byte-identical-debug-info: the gate could not run — {label} build exited {build.exitCode()}, so there is no image to compare. It wrote to stderr: {build.stderr}")
-	end 'didNotBuild'
-
-	let wroteASidecar = File.exists(sidecar)
-	let retained = staged.join(retainedAs)
-
-	try File.writeBinary(retained, content: imageBytes(image)) otherwise panic("byte-identical-debug-info: the gate could not run — could not retain {image.toString()} as {retained.toString()}.")
-	try File.delete(image) otherwise panic("byte-identical-debug-info: the gate could not run — could not clear {image.toString()}, so the next build cannot be handed that path.")
-
-	if wroteASidecar 'thereWasOne'
-		try File.delete(sidecar) otherwise panic("byte-identical-debug-info: the gate could not run — could not clear {sidecar.toString()}, so the next build's sidecar assertion would read this one.")
-	end 'thereWasOne'
-
-	return BuiltImage.create(retained, wroteASidecar: wroteASidecar)
-end 'imageAfterBuild'
-
-function sidecarBesideTheImage(image FilePath) returns FilePath
-	return try FilePath.from("{image.toString()}{SidecarSuffix}") otherwise panic("byte-identical-debug-info: the gate could not run — could not spell the sidecar path beside {image.toString()}.")
-end 'sidecarBesideTheImage'
-
-function requireSameImage(first FilePath, second FilePath, why String) throws TestFailure
-	let firstBytes = imageBytes(first)
-	let secondBytes = imageBytes(second)
-
-	try Expect.notEqual(firstBytes.count() as AssertedInt, expected: 0, message: "positive control: {first.toString()} is empty, and two empty files agree about nothing.")
-	try Expect.isTrue(imagesAgree(firstBytes, second: secondBytes), message: "{why} The two images differ ({firstBytes.count()} bytes against {secondBytes.count()}).")
-end 'requireSameImage'
-
-function requireDifferentImage(first FilePath, second FilePath, why String) throws TestFailure
-	let firstBytes = imageBytes(first)
-	let secondBytes = imageBytes(second)
-
-	try Expect.notEqual(firstBytes.count() as AssertedInt, expected: 0, message: "positive control: {first.toString()} is empty, so this comparison would report a difference whatever the other side held.")
-	try Expect.notEqual(secondBytes.count() as AssertedInt, expected: 0, message: "positive control: {second.toString()} is empty, so this comparison would report a difference whatever the other side held.")
-	try Expect.isFalse(imagesAgree(firstBytes, second: secondBytes), message: "{why}")
-end 'requireDifferentImage'
-
-function imagesAgree(first ByteArray, second ByteArray) returns bool
-	if first.count() != second.count() 'differentLengths'
-		return false
-	end 'differentLengths'
-
-	for (iter, octet) in first.withIterator() 'eachByte'
-		if octet != (try second.get(iter.index()) otherwise return false) 'differs'
-			return false
-		end 'differs'
-	end 'eachByte'
-
-	return true
-end 'imagesAgree'
-
-function imageBytes(path FilePath) returns ByteArray
-	if not File.exists(path) 'notWritten'
-		panic("byte-identical-debug-info: the gate could not run — there is no executable at {path.toString()}, so there is nothing to compare.")
-	end 'notWritten'
-
-	return try File.readBinary(path) otherwise panic("byte-identical-debug-info: the gate could not run — could not read {path.toString()}.")
-end 'imageBytes'

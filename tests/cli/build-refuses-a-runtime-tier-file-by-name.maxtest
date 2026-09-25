@@ -1,0 +1,14 @@
+let RuntimeTierFile = "runtime/DebugAgent.maxon"
+let RefusalNeedle = "runtime/ tier"
+let ErrorCodeMark = "error E"
+let PanicMarker = "panic"
+
+test 'building a runtime tier file is refused by name, not with an error inside the file'
+	let build = runDriver([BuildCommandWord, RuntimeTierFile, "{OutputOptionPrefix}temp/build-refuses-a-runtime-tier-file"])
+	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+
+	try Expect.equal(build.exitCode() as AssertedInt, expected: 1, message: "`{BuildCommandWord} {RuntimeTierFile}` did not exit 1. {said}")
+	try Expect.contains(build.stderr, needle: RefusalNeedle, message: "the refusal does not say the file is part of the runtime tier. {said}")
+	try Expect.isFalse(build.stderr.contains(ErrorCodeMark), message: "the build reached a diagnostic inside the tier file, which is the tier being compiled as a program of its own. {said}")
+	try Expect.isFalse(build.stderr.contains(PanicMarker), message: "the refusal is a panic rather than an error. {said}")
+end 'building a runtime tier file is refused by name, not with an error inside the file'

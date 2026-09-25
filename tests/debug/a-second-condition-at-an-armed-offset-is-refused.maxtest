@@ -1,0 +1,38 @@
+let SharedConditionCaseLabel = "a-second-condition-at-an-armed-offset-is-refused"
+let AnchorName = "hit-body"
+let FirstCondition = "i == 7"
+let SecondCondition = "i == 9"
+let SharedConditionReason = "condition-differs-at-a-shared-offset"
+let LoopLocalName = "i"
+let ChosenIteration = "7"
+
+test 'a second breakpoint with another condition at a byte a conditional breakpoint holds is refused by name, and the first condition still decides'
+	let staged = builtFixture(SharedConditionCaseLabel, fixture: ConditionFixtureName)
+	let hitLine = anchorLine(staged, anchor: AnchorName)
+	let executable = builtExecutable(staged)
+	let rows = statementOffsetsOfLine(executable, staged: staged, line: hitLine)
+	let offset = try rows.get(0) otherwise panic("a-second-condition-at-an-armed-offset-is-refused: the anchored line has a statement row")
+	let commands = debugCommandLine([conditionalBreak(lineTarget(hitLine), condition: FirstCondition), conditionalBreak(exactOffsetTarget(offset), condition: SecondCondition), RunCommand, "{PrintCommand} {LoopLocalName}", ContinueCommand])
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let armings = eventsOfKind(events, kind: BreakpointEventName)
+
+	try Expect.equal(armings.count() as AssertedInt, expected: 2, message: "two armings are two `{BreakpointEventName}` events. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let first = eventAt(armings, index: 0)
+	try Expect.equal(textOf(first, node: first.root, key: ActionKey), expected: SetAction, message: "the first conditional breakpoint is armed. {said}")
+	try Expect.equal(textOf(first, node: first.root, key: OffsetKey), expected: hexSpelling(offset), message: "the line breakpoint arms the line's first statement row, the byte the second breakpoint names. {said}")
+
+	let second = eventAt(armings, index: 1)
+	try Expect.equal(textOf(second, node: second.root, key: ActionKey), expected: RefusedAction, message: "one byte carries one condition, so a second breakpoint asking another condition of it cannot be honoured; it must be refused rather than silently replace the first. {said}")
+	try Expect.equal(textOf(second, node: second.root, key: ReasonKey), expected: SharedConditionReason, message: "the refusal names why. {said}")
+
+	let stops = eventsOfKind(events, kind: StopEventName)
+	try Expect.equal(stops.count() as AssertedInt, expected: 1, message: "the first condition holds on one iteration. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let printed = eventsOfKind(events, kind: ValueEventName)
+	let value = eventAt(printed, index: 0)
+	let read = memberOf(value, node: value.root, key: ValueKey)
+	try Expect.equal(textOf(value, node: nodeAt(read, index: 0), key: DisplayKey), expected: ChosenIteration, message: "the stop is on the iteration the first condition names; the refused one changed nothing. {said}")
+end 'a second breakpoint with another condition at a byte a conditional breakpoint holds is refused by name, and the first condition still decides'

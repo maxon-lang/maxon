@@ -10,16 +10,19 @@
 /// second, narrower alias would be a widening the language has no spelling for.
 public typealias NetworkPort = int(0 to 65535)
 
-// Bytes sent or received in one call. Each is a length into a `ByteArray` the caller owns, so the
-// backing `__ManagedMemory`'s signed machine-word length is the ceiling.
-public typealias BytePos = int(0 to u64.max)
+/// The most bytes one `recv` returns. At least one: a read of zero bytes is how a closed peer is
+/// reported.
+public typealias RecvCapacity = int(1 to i64.max)
 
-// A deadline in milliseconds, `0` meaning none. The ceiling is a REAL bound and not a round number: the value
-// becomes `now + milliseconds * 1_000_000` in signed 64-bit NANOSECONDS, so a count past about 9.2e12 ms wraps
-// NEGATIVE and yields a deadline permanently in the past — every read would then time out instantly. 2^32 - 1
-// ms is about 49 days, which is past any deadline a socket operation can mean and leaves four orders of
-// magnitude of headroom under the wrap.
-public typealias Milliseconds = int(0 to 4294967295)
+// A send goes to the OS in slices of this size. Windows takes one send of any size into the kernel at
+// once, so an unsliced send to a peer that stops reading never waits and a write deadline never ends it.
+let SendSliceBytes = 1048576
+
+/// A socket deadline in milliseconds, `0` meaning none. The deadline is computed as
+/// `now + milliseconds * 1_000_000` in signed 64-bit nanoseconds, which a count past about
+/// 9.2e12 ms would wrap into the past, timing out every read at once; the ceiling of about 49 days
+/// stays far below that.
+public typealias SocketDeadlineMs = int(0 to 4294967295)
 
 /// TCP networking errors
 public enum NetworkError implements Error
@@ -31,6 +34,7 @@ public enum NetworkError implements Error
 	timedOut
 	bindFailed
 	acceptFailed
+	acceptInterrupted
 end 'NetworkError'
 
 /// TCP client connection. Automatically closes when it goes out of scope.
@@ -65,15 +69,15 @@ public type TcpClient
 	/// Loops internally to handle partial sends.
 	/// Returns the total number of bytes sent.
 	public function send(data String) returns BytePos throws NetworkError
-		// Materialized ONCE, outside the loop: a partial send drives this round again, and under
-		// Stage 4b asking a short string for its bytes allocates and copies. Per-string, not per-send.
+		// Materialized once, outside the loop: a partial send drives this round again, and asking a
+		// short string for its bytes allocates and copies.
 		let bytes = data.addressableBytes()
 		var totalSent = 0
 		var remaining = bytes.length()
 
 		while remaining > 0 'send_loop'
 			// bufferOutOfBounds is impossible here: remaining <= bytes.length() by loop invariant.
-			let sent = try socket.sendFrom(bytes, totalSent, remaining) otherwise (e) 'sendErr'
+			let sent = try socket.sendFrom(bytes, totalSent, remaining if remaining < SendSliceBytes else SendSliceBytes) otherwise (e) 'sendErr'
 				// The deadline is a PREDICATE on the socket, not a variant of the builtin error: it says
 				// whether the call that just failed ran out of time rather than out of connection.
 				if socket.timedOut() 'late'
@@ -99,9 +103,11 @@ public type TcpClient
 
 	/// Receive data as a string (up to bufferSize bytes).
 	/// Returns the received data. Throws connectionClosed if the peer closed.
-	public function recv(bufferSize BytePos) returns String throws NetworkError
-		var managed = try __ManagedMemory.create(bufferSize + 1, 1) otherwise 'createErr'
-			panic("TcpClient.recv: create — bufferSize+1 >= 0 guaranteed")
+	public function recv(bufferSize RecvCapacity) returns String throws NetworkError
+		// Exactly `bufferSize`: `__ms_recv` fills the whole capacity, so any spare byte is a read that
+		// may return more than the caller asked for.
+		var managed = try __ManagedMemory.create(bufferSize, 1) otherwise 'createErr'
+			panic("TcpClient.recv: create — bufferSize >= 0 guaranteed")
 		end 'createErr'
 
 		let received = try socket.recv(managed) otherwise 'recvErr'
@@ -117,29 +123,16 @@ public type TcpClient
 			throw NetworkError.connectionClosed
 		end 'closed'
 
-		try managed.setLength(received) otherwise 'lenErr1'
-			panic("TcpClient.recv: setLength(received) — received within buffer capacity")
-		end 'lenErr1'
-
-		// Null-terminate for C string compatibility
-		try managed.setLength(received + 1) otherwise 'lenErr2'
-			panic("TcpClient.recv: setLength(received+1) — extra byte allocated for null terminator")
-		end 'lenErr2'
-
-		try managed.setByte(received, 0) otherwise 'setErr'
-			panic("TcpClient.recv: setByte at null terminator — length just extended to received+1")
-		end 'setErr'
-
-		try managed.setLength(received) otherwise 'lenErr3'
-			panic("TcpClient.recv: setLength(received) — restoring original length always valid")
-		end 'lenErr3'
+		try managed.setLength(received) otherwise 'lenErr'
+			panic("TcpClient.recv: setLength(received) — received is within the buffer's capacity")
+		end 'lenErr'
 
 		return String.init(managed)
 	end 'recv'
 
 	/// End a read that the peer leaves unanswered after `milliseconds`, with `NetworkError.timedOut`.
 	/// `0` clears the deadline. It is measured from this call, not from the read that observes it.
-	public function setReadDeadline(milliseconds Milliseconds) throws NetworkError
+	public function setReadDeadline(milliseconds SocketDeadlineMs) throws NetworkError
 		// The only failure the setter has is a socket that is already closed.
 		try socket.setReadDeadline(milliseconds) otherwise 'deadlineErr'
 			throw NetworkError.connectionClosed
@@ -148,12 +141,24 @@ public type TcpClient
 
 	/// End a send that cannot make progress after `milliseconds`, with `NetworkError.timedOut`.
 	/// `0` clears the deadline. It is measured from this call, not from the send that observes it.
-	public function setWriteDeadline(milliseconds Milliseconds) throws NetworkError
+	public function setWriteDeadline(milliseconds SocketDeadlineMs) throws NetworkError
 		// See `setReadDeadline`.
 		try socket.setWriteDeadline(milliseconds) otherwise 'deadlineErr'
 			throw NetworkError.connectionClosed
 		end 'deadlineErr'
 	end 'setWriteDeadline'
+
+	/// Stop sending: the peer reads end-of-stream while this side can still `recv`. Throws
+	/// `connectionClosed` when the socket is already closed.
+	public function shutdownWrite() throws NetworkError
+		try socket.shutdownWrite() otherwise (e) 'shutdownErr'
+			match e 'why'
+				closed then throw NetworkError.connectionClosed
+				sendFailed then throw NetworkError.sendFailed
+				default panic("TcpClient.shutdownWrite: `__ms_shutdown_write` raises only `closed` and `sendFailed`")
+			end 'why'
+		end 'shutdownErr'
+	end 'shutdownWrite'
 
 	/// Explicitly close the connection.
 	/// Safe to call multiple times (idempotent).

@@ -1,0 +1,28 @@
+let TestBodyBreakCaseLabel = "break-in-a-test-body-stops"
+
+let TestBodyDisplayName = "test 'doubling two gives four'"
+
+test 'a breakpoint on a line of a test body is placed, stops there, and names the test'
+	let staged = stagedFixture(TestBodyBreakCaseLabel, fixture: TestBodyFixtureName)
+	let binary = builtTestBinary(TestBodyBreakCaseLabel, staged: staged)
+	let bodyLine = anchorLine(staged, anchor: "test-body", file: TestBodyTestFileName)
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(bodyLine, file: TestBodyTestFileName)}", RunCommand])
+	let session = spawnDebugBatch(binary, staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: BreakpointEventName)
+
+	try Expect.equal(answers.count() as AssertedInt, expected: 1, message: "`{BreakCommand}` answers one `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let placed = eventAt(answers, index: 0)
+	try Expect.equal(textOf(placed, node: placed.root, key: ActionKey), expected: SetAction, message: "a test body is the author's code, written in the author's file; whether a line of it may be armed is a fact about where the code came from, never about the name the compiler mints for the function. {said}")
+	try Expect.equal(textOf(placed, node: placed.root, key: FunctionKey), expected: TestBodyDisplayName, message: "a test is named by its prose, as `maxon test` names it, and never by the symbol it compiles to. {said}")
+
+	let stops = eventsOfKind(events, kind: StopEventName)
+	try Expect.equal(stops.count() as AssertedInt, expected: 1, message: "the armed line stops the test binary once before the batch ends. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let stop = eventAt(stops, index: 0)
+	try Expect.equal(textOf(stop, node: stop.root, key: ReasonKey), expected: BreakpointStopReason, message: "the stop is the breakpoint's. {said}")
+	try Expect.equal(numberOf(stop, node: stop.root, key: LineKey) as AssertedInt, expected: bodyLine as AssertedInt, message: "the stop is on the armed line of the test body. {said}")
+	try Expect.equal(textOf(stop, node: stop.root, key: FunctionKey), expected: TestBodyDisplayName, message: "the stop names the test it is inside by its prose. {said}")
+end 'a breakpoint on a line of a test body is placed, stops there, and names the test'

@@ -1,0 +1,34 @@
+let HotConditionCaseLabel = "a-false-condition-on-another-thread-does-not-take-the-step"
+let NeverTrueCondition = "k == 999999999"
+let StepsTaken = 10
+let MainFunctionName = "main"
+let StopTimeoutSeconds = 5
+
+test 'steps on main while workers hit a false condition stay on main and leave main pausable'
+	let staged = builtFixture(HotConditionCaseLabel, fixture: HotConditionFixtureName)
+	let hotLine = anchorLine(staged, anchor: "hot-body")
+	let startLine = anchorLine(staged, anchor: "main-start")
+	var script = StringArray.create()
+	script.push(conditionalBreak(lineTarget(hotLine), condition: NeverTrueCondition))
+	script.push("{BreakCommand} {lineTarget(startLine)}")
+	script.push(RunCommand)
+	script.push("{ClearCommand} {lineTarget(startLine)}")
+
+	let commands = debugCommandLine(appendedCommands(appendedCommands(script, rest: repeatedCommand(NextCommand, times: StepsTaken)), rest: [ContinueCommand, PauseCommand, BacktraceCommand]))
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: ["{DebugStopTimeoutOptionPrefix}{StopTimeoutSeconds}"])
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let stops = eventsOfKind(events, kind: StopEventName)
+
+	try Expect.equal(stops.count() as AssertedInt, expected: StepsTaken + 2, message: "the breakpoint on main, one stop per `{NextCommand}`, and the pause after the `{ContinueCommand}` times out. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	for (iter, stop) in stops.withIterator() 'eachStop'
+		if iter.index() > 0 and iter.index() <= StepsTaken 'aStepOnMain'
+			try Expect.equal(textOf(stop, node: stop.root, key: FunctionKey), expected: MainFunctionName, message: "⛔ A FALSE CONDITION ON A WORKER RESUMES THE WORKER AS A CONTINUE. Stop {iter.index()} landed in `{textOf(stop, node: stop.root, key: FunctionKey)}`: the worker that took the trap single-stepped because the resume read main's step, and published a step stop of its own. {said}")
+			try Expect.equal(textOf(stop, node: stop.root, key: ReasonKey), expected: StepStopReason, message: "every `{NextCommand}` lands as a step. {said}")
+		end 'aStepOnMain'
+	end 'eachStop'
+
+	let last = eventAt(stops, index: StepsTaken + 1)
+	try Expect.equal(textOf(last, node: last.root, key: ReasonKey), expected: PauseStopReason, message: "⛔ MAIN MUST STILL BE PAUSABLE AFTER ITS STEPS. A step that holds a machine's signal claim and never gives it back leaves that machine refusing every later interruption, so the pause of main's spin is refused as not pausable. {said}")
+end 'steps on main while workers hit a false condition stay on main and leave main pausable'

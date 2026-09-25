@@ -533,6 +533,61 @@ reported=3 timeouts=0 heard=xyz
 __ms_send_from
 ```
 
+<!-- test: netpoll-socket.a-write-deadline-fires-on-a-send-the-peer-never-reads -->
+<!-- procs: 1 -->
+```maxon
+let WriteDeadlineMs = 300
+let ChunkBytes = 1048576
+let MostChunks = 512
+
+function oneChunk() returns String
+	var chunk = StringBuilder.create()
+
+	for _ in 0 upto ChunkBytes 'fill'
+		chunk.append("x")
+	end 'fill'
+
+	return chunk.build()
+end 'oneChunk'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let dialing = async TcpClient.connect("127.0.0.1", port: listener.port())
+	let peer = try listener.accept() otherwise return 1
+	let client = try await dialing otherwise return 1
+	try client.setWriteDeadline(WriteDeadlineMs) otherwise return 1
+
+	let chunk = oneChunk()
+	var chunks = 0
+	var fired = false
+
+	while chunks < MostChunks and not fired 'sending'
+		_ = try client.send(chunk) otherwise (e) 'failed'
+			match e 'why'
+				timedOut then fired = true
+				default panic("unreachable: a send to a peer that holds its connection open and reads nothing ends in its bytes or its deadline")
+			end 'why'
+
+			continue
+		end 'failed'
+
+		chunks = chunks + 1
+	end 'sending'
+
+	client.close()
+	peer.close()
+
+	print("timedOut={fired}\n")
+	return 0
+end 'main'
+```
+```stdout
+timedOut=true
+```
+```exitcode
+0
+```
+
 <!-- test: netpoll-socket.drop-a-parked-reader -->
 <!-- procs: 1 -->
 **A PROMISE DROPPED WHILE ITS COROUTINE IS PARKED IN `recv` DOES NOT HANG THE EXIT.** `main` spawns a reader
@@ -1223,6 +1278,55 @@ dropped=true bound=true
 42
 ```
 
+<!-- test: netpoll-socket.a-listener-closed-under-a-parked-accept-fails-the-accept -->
+<!-- procs: 1 -->
+**A LISTENER CLOSED UNDER A PARKED ACCEPT IS A FAILED LISTENER, ON EVERY LANE.** The close readies the parked
+accept with its record's generation moved on, so the wait answers `NetpollWaitStale`: the listener the accept
+began on is gone, and no later accept on it can succeed. That is `acceptFailed`, never `acceptInterrupted` —
+the retriable answer tells a server loop to accept again on a listener that no longer exists.
+
+⚠ **`parked > 0` IS WHAT MAKES THIS A POLLER CASE.** An accept that never reached the poller would meet the
+closed listener at its own entry and fail there, which reads the same at the end.
+```maxon
+typealias AcceptOutcome = int(0 to 3)
+
+function acceptUntilClosed(listener TcpListener) returns AcceptOutcome
+	var code = 0
+
+	try listener.accept() otherwise (e) 'acceptErr'
+		match e 'which'
+			acceptFailed then code = 1
+			acceptInterrupted then code = 2
+			timedOut then code = 3
+			default panic("unreachable: an accept whose listener closes under it ends in one of the three above")
+		end 'which'
+	end 'acceptErr'
+
+	return code
+end 'acceptUntilClosed'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+
+	let before = __Builtins.schedNetpollBlockCount()
+	let acceptor = async acceptUntilClosed(listener)
+	sleep(200)
+	let parked = __Builtins.schedNetpollBlockCount() - before
+
+	listener.close()
+	let code = await acceptor
+
+	print("parked={parked > 0} code={code}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+parked=true code=1
+```
+```exitcode
+0
+```
+
 <!-- test: netpoll-socket.a-renounced-acceptor-does-not-start-an-accept-nothing-can-end -->
 <!-- procs: 1 -->
 **AN ACCEPT A RENOUNCED COROUTINE OPENS IS THE SAME UNENDABLE WAIT A READ IS.** A listener registers on the
@@ -1348,6 +1452,275 @@ end 'main'
 ```
 ```stdout
 refused=true
+```
+```exitcode
+0
+```
+
+<!-- test: netpoll-socket.an-accept-deadline-fires -->
+<!-- procs: 1 -->
+```maxon
+let deadlineMs = 300
+let promptMs = 3000
+let clockSlackMs = 20
+
+function connectOnce(port NetworkPort) returns ExitCode
+	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return 1
+	client.close()
+
+	return 0
+end 'connectOnce'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	try listener.setAcceptDeadline(deadlineMs) otherwise return 2
+
+	var fired = false
+	let start = Clock.nowMs()
+
+	try listener.accept() otherwise (e) 'acceptErr'
+		match e 'check'
+			timedOut then fired = true
+			default panic("unreachable: nobody connects, so only the accept deadline can end this accept")
+		end 'check'
+	end 'acceptErr'
+
+	let tookMs = Clock.elapsedMs(start)
+
+	try listener.setAcceptDeadline(0) otherwise return 3
+	let peer = async connectOnce(listener.port())
+	let accepted = try listener.accept() otherwise return 4
+	accepted.close()
+	let connected = await peer
+
+	print("timedOut={fired} notEarly={tookMs + clockSlackMs >= deadlineMs} prompt={tookMs < promptMs} servedAfterClearing={connected == 0}\n")
+	return 0
+end 'main'
+```
+```stdout
+timedOut=true notEarly=true prompt=true servedAfterClearing=true
+```
+```exitcode
+0
+```
+
+<!-- test: netpoll-socket.shutting-down-the-write-side-ends-the-peers-reads-and-leaves-its-own -->
+<!-- procs: 1 -->
+**`shutdownWrite` ENDS ONE DIRECTION AND ONLY ONE.** The peer's next read sees the end of the stream, the peer can
+still send, and the side that shut its writes still reads what arrives. The server's lingering close stands on all
+three and reports none of them, so a wrong call or a missing import on a lane is invisible anywhere else. Once the
+socket is closed there is nothing left to shut, and saying so is the call's to do.
+```maxon
+function halfClosed(listener TcpListener) returns String
+	let conn = try listener.accept() otherwise return "accept-failed"
+	_ = try conn.send("before") otherwise return "send-failed"
+
+	try conn.shutdownWrite() otherwise (e) 'unshut'
+		return "shutdown threw {e.name}"
+	end 'unshut'
+
+	let heard = try conn.recv(1024) otherwise (e) 'unheard'
+		return "recv threw {e.name}"
+	end 'unheard'
+
+	conn.close()
+
+	let again = "shutdown after close {shutdownOutcome(conn)}"
+
+	return "heard={heard} {again}"
+end 'halfClosed'
+
+function shutdownOutcome(conn TcpClient) returns String
+	try conn.shutdownWrite() otherwise (e) 'refused'
+		return "threw {e.name}"
+	end 'refused'
+
+	return "returned"
+end 'shutdownOutcome'
+
+function nextRead(client TcpClient) returns String
+	return try client.recv(1024) otherwise (e) 'unread'
+		return e.name
+	end 'unread'
+end 'nextRead'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let peer = async halfClosed(listener)
+
+	let client = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 2
+	let first = nextRead(client)
+	let ended = nextRead(client)
+
+	_ = try client.send("after") otherwise return 4
+	let served = await peer
+	client.close()
+
+	print("first={first} then={ended}\n")
+	print("{served}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+first=before then=connectionClosed
+heard=after shutdown after close threw connectionClosed
+```
+```exitcode
+0
+```
+
+<!-- test: netpoll-socket.a-connection-reset-before-it-is-accepted-leaves-the-listener-serving -->
+<!-- procs: 1 -->
+<!-- unsupported-targets: wasm32-wasi -->
+```maxon
+typealias AcceptRound = int(0 to 8)
+
+let AcceptRounds = 8 as AcceptRound
+let Greeting = "hello"
+
+function resetBeforeAccept(port NetworkPort) returns bool
+	var argv = StringArray.create()
+
+	#if os(Windows)
+		argv.push("-NoProfile")
+		argv.push("-Command")
+		argv.push("$s = New-Object System.Net.Sockets.Socket([System.Net.Sockets.AddressFamily]::InterNetwork, [System.Net.Sockets.SocketType]::Stream, [System.Net.Sockets.ProtocolType]::Tcp); $s.LingerState = New-Object System.Net.Sockets.LingerOption($true, 0); $s.Connect('127.0.0.1', {port}); $s.Close()")
+		let helper = Executable.name("powershell")
+	#else
+		argv.push("-MSocket")
+		argv.push("-e")
+		argv.push("socket(my $s, PF_INET, SOCK_STREAM, 0) or die; setsockopt($s, SOL_SOCKET, SO_LINGER, pack(\"ii\", 1, 0)) or die; connect($s, pack_sockaddr_in({port}, inet_aton(\"127.0.0.1\"))) or die; close($s)")
+		let helper = Executable.name("perl")
+	#endif
+
+	let res = try Subprocess.run(helper, arguments: argv) otherwise return false
+
+	return res.succeeded()
+end 'resetBeforeAccept'
+
+function greet(port NetworkPort) returns ExitCode
+	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return 1
+	_ = try client.send(Greeting) otherwise return 2
+	client.close()
+
+	return 0
+end 'greet'
+
+function greetingOf(conn TcpClient) returns String
+	return try conn.recv(1024) otherwise (e) 'unread'
+		return e.name
+	end 'unread'
+end 'greetingOf'
+
+function serveTheGreeting(listener TcpListener) returns String
+	for round in 0 upto AcceptRounds 'eachAccept'
+		let conn = try listener.accept() otherwise (e) 'refused'
+			if e == NetworkError.acceptInterrupted 'retriable'
+				continue
+			end 'retriable'
+
+			return "ended by {e.name} in round {round}"
+		end 'refused'
+
+		let heard = greetingOf(conn)
+		conn.close()
+
+		if heard == Greeting 'theGreeting'
+			return "served"
+		end 'theGreeting'
+	end 'eachAccept'
+
+	return "no greeting in {AcceptRounds} accepts"
+end 'serveTheGreeting'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let reset = resetBeforeAccept(listener.port())
+	let peer = async greet(listener.port())
+	let outcome = serveTheGreeting(listener)
+	let greeted = await peer
+
+	print("reset={reset} {outcome} greeted={greeted == 0}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+reset=true served greeted=true
+```
+```exitcode
+0
+```
+
+<!-- test: netpoll-socket.an-accept-out-of-descriptors-is-retriable -->
+<!-- procs: 1 -->
+<!-- unsupported-targets: x64-windows, wasm32-wasi -->
+```maxon
+typealias HeldCount = int(0 to 256)
+
+let HeldLimit = 256 as HeldCount
+let DescriptorLimit = "ulimit -n 64 && exec \"$0\" child"
+let RanOut = "ran-out"
+
+function acceptOutcome(listener TcpListener) returns String
+	let conn = try listener.accept() otherwise (e) 'refused'
+		return e.name
+	end 'refused'
+
+	conn.close()
+
+	return "accepted"
+end 'acceptOutcome'
+
+function fillThenProbe(listener TcpListener, depth HeldCount) returns String
+	if depth >= HeldLimit 'neverRanOut'
+		return "filled=false"
+	end 'neverRanOut'
+
+	let client = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return RanOut
+	let below = fillThenProbe(listener, depth: depth + 1)
+
+	if below != RanOut 'probedBelow'
+		client.close()
+
+		return below
+	end 'probedBelow'
+
+	let first = acceptOutcome(listener)
+	client.close()
+	let second = acceptOutcome(listener)
+
+	return "filled=true first={first} second={second}"
+end 'fillThenProbe'
+
+function outOfDescriptors() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 5
+
+	print("{fillThenProbe(listener, depth: 0)}\n")
+
+	return 0
+end 'outOfDescriptors'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'theChild'
+		return outOfDescriptors()
+	end 'theChild'
+
+	let exe = try Process.executablePath() otherwise return 2
+	var argv = StringArray.create()
+	argv.push("-c")
+	argv.push(DescriptorLimit)
+	argv.push(exe.path)
+
+	let res = try Subprocess.run(Executable.name("sh"), arguments: argv) otherwise return 3
+	print(res.stdout)
+
+	return 0 if res.succeeded() else 4
+end 'main'
+```
+```stdout
+filled=true first=acceptInterrupted second=accepted
 ```
 ```exitcode
 0

@@ -1,0 +1,40 @@
+let SourceLaunchCaseLabel = "launch-builds-a-source"
+let OuterCallAnchor = "outer-call"
+
+type SourceLaunchSession implements DapSession
+	let source as FilePath
+	let anchored as SourceLine
+	export var launch as JsonDoc
+	export var verified as bool
+	export var stopReason as String
+
+	static function create(source FilePath, anchored SourceLine) returns SourceLaunchSession
+		return Self{source: source, anchored: anchored, launch: JsonDoc.create(), verified: false, stopReason: ""}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+
+		self.launch = try client.request(LaunchCommand, argumentsJson: dapLaunchArguments(self.source))
+
+		_ = try client.awaitEvent(InitializedEvent)
+
+		let placed = try client.request(SetBreakpointsCommand, argumentsJson: dapSetBreakpointsArguments(self.source, line: self.anchored))
+		self.verified = dapBreakpointVerified(placed, index: 0)
+
+		_ = try client.request(ConfigurationDoneCommand)
+		self.stopReason = dapBodyString(try client.awaitEvent(StoppedEvent), key: "reason")
+
+		_ = try client.request(DisconnectCommand)
+	end 'drive'
+end 'SourceLaunchSession'
+
+test 'a launch naming a maxon source builds it and stops in what it built'
+	let staged = dapStagedFixture(SourceLaunchCaseLabel, fixture: SteppingFixtureName)
+	var session = SourceLaunchSession.create(dapStagedSource(staged), anchored: dapAnchorLine(staged, anchor: OuterCallAnchor))
+	try dapRunSession(session, completing: "complete")
+
+	try Expect.isTrue(dapSuccess(session.launch), message: "`{LaunchCommand}` refused a `.maxon` source. A build failure answers the request with the compiler's diagnostics, so this is what it said: {dapDescribed(session.launch)}")
+	try Expect.isTrue(session.verified, message: "a breakpoint in the built source was not verified, which is what an image built WITHOUT debug info looks like")
+	try Expect.equal(session.stopReason, expected: BreakpointReason, message: "the program built from source must stop on the breakpoint; the stop said `{session.stopReason}`")
+end 'a launch naming a maxon source builds it and stops in what it built'

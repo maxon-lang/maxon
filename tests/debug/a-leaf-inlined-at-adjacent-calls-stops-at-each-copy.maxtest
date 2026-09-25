@@ -1,0 +1,28 @@
+let AdjacentCopiesCaseLabel = "a-leaf-inlined-at-adjacent-calls-stops-at-each-copy"
+
+let LeafFunctionName = "double"
+let CopyCount = 2
+
+test 'a one-line leaf spliced into two calls with nothing positioned between them is armed and stopped at both copies'
+	let staged = builtFixture(AdjacentCopiesCaseLabel, fixture: LeafPairFixtureName)
+	let bodyLine = anchorLine(staged, anchor: "double-body")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(bodyLine)}", RunCommand, ContinueCommand, ContinueCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let breakpoints = eventsOfKind(events, kind: BreakpointEventName)
+
+	try Expect.equal(breakpoints.count() as AssertedInt, expected: 1, message: "`{BreakCommand} {lineTarget(bodyLine)}` printed no `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let armed = eventAt(breakpoints, index: 0)
+	try Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: SetAction, message: "the leaf's line has code in both of its callers' copies. {said}")
+	try Expect.equal(childrenOf(armed, node: armed.root, key: OffsetsKey).count() as AssertedInt, expected: CopyCount, message: "the two copies of `{LeafFunctionName}` are laid out back to back with only positionless code between them; each copy still begins its own run of the leaf's line, so the line is {CopyCount} addresses. {said}")
+
+	let stops = eventsOfKind(events, kind: StopEventName)
+	try Expect.equal(stops.count() as AssertedInt, expected: CopyCount, message: "each call of `{LeafFunctionName}` passes its line once, so the session stops {CopyCount} times before the program exits. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	for stop in stops 'eachStop'
+		try Expect.equal(numberOf(stop, node: stop.root, key: LineKey) as AssertedInt, expected: bodyLine as AssertedInt, message: "every stop is on the leaf's line. {said}")
+		try Expect.equal(textOf(stop, node: stop.root, key: FunctionKey), expected: LeafFunctionName, message: "every stop is inside a copy of `{LeafFunctionName}`. {said}")
+	end 'eachStop'
+end 'a one-line leaf spliced into two calls with nothing positioned between them is armed and stopped at both copies'

@@ -833,7 +833,7 @@ end 'formatLogEvent'
 // A LOG_TEXT's UTF-8 tail, without the terminator the emitting call site wrote: a line this consumer prints
 // supplies its own, and a doubled one would put a blank line into every golden.
 function logTextIn(entry ByteArray, at ByteOffset, byteCount BytePos) returns String
-	if not imageRangeFits(entry, start: at, count: byteCount) 'runsPastTheEntry'
+	if not spanFitsWithin(at, count: byteCount, total: entry.count()) 'runsPastTheEntry'
 		panic("DebugStream: a log_text entry claims {byteCount} text bytes at {at}, past the {entry.count()} bytes of the drained span — its entry_size and its length field disagree")
 	end 'runsPastTheEntry'
 

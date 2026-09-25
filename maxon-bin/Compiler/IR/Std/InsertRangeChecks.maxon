@@ -19,15 +19,13 @@
 // caller including the indirect ones — so the argument site owes only the compile-time half and the
 // premise is enforced all the same. See `guardRangedParams`.
 //
-// ⭐ WHY STD-TIER, AND NOT THE MAXON-TIER MARKER OP THE PLAN SKETCHED. The narrowing guard needs a
-// primitive the Maxon dialect does not have — "abort with a symbolized backtrace and exit 1" — and the
-// only way to add one at the Maxon tier is a new `MaxonOp` variant, which forces a fresh arm into EVERY
-// exhaustive `MaxonOp` match, including the escape-analysis functions in `SemanticCheck.maxon` /
-// `FnRefThunk.maxon`. So the guard is emitted
-// HERE instead, where the panic is a PLAIN `StdOp.call` to the `mrt_panic` runtime chunk (no new op in
-// any dialect) and the compare cascade is the ordinary `cmp`/`condBranch` the tier already carries. The
-// cast alias name and source spans — which the Std tier's ops do not carry — ride the parser's
-// `project.rangeChecks` side table instead of an op.
+// The guard is emitted at the Std tier because it needs a primitive the Maxon dialect lacks —
+// "abort with a symbolized backtrace and exit 1" — and adding one there is a new `MaxonOp` variant,
+// which forces an arm into every exhaustive `MaxonOp` match, the escape analysis in
+// `SemanticCheck.maxon` / `FnRefThunk.maxon` included. Here the panic is a plain `StdOp.call` to
+// the `mrt_panic` runtime chunk and the cascade is the tier's ordinary `cmp`/`condBranch`. The
+// alias name and the site's position ride the parser's `project.rangeChecks` side table, and
+// `emitGuardAt` stamps the guard's ops with the site's span.
 //
 // ⭐ ONE GUARD EMITTER, one unsigned strategy, one panic-message builder, serving BOTH the cast sites and
 // the return sites (`emitGuardAt`). Two emitters drift on unsigned handling; here there is one.
@@ -190,15 +188,13 @@ end 'GuardedOperand'
 // whether an opaque `T`'s range is provable from the enclosing instance, or whether every corpus generic
 // body gains a cascade that can never fire. Not fixed here.
 //
-// ⚠ **WHAT THE SKIP COSTS IS MEASURED, AND IT IS NOT A REASON TO KEEP IT COMFORTABLY.** A `throws`
-// function's `return` leaves through `errorReturn`; unrecognised as a return by `retMatchesValue`, EVERY
-// ranged return in EVERY throwing function comes back `notFound` and is dropped here — a wrong answer on
-// ordinary source, absorbed in silence. The set of Std terminators that RETURN A VALUE is still written
-// twice — here in `retMatchesValue`'s arms, and in `StdOpMeta.role` (`OpRole.ret` / `OpRole.errorReturn`,
-// which has no reader in the compiler) — and the two are held in agreement by hand. `retMatchesValue`'s
-// match is exhaustive, so a NEW variant is a compile error there; what defeats it is an EXISTING variant
-// swept into a RANGE arm, which exhaustiveness cannot see. ⇒ **The panic is the
-// right end state and the fourth cause is the one thing standing between here and it.**
+// The skip also hides a misfiled terminator: a value-returning variant filed with the non-returns
+// in `retMatchesValue` drops every guard it carries in silence (`errorReturn` there would drop
+// every ranged return of every throwing function). The set of Std terminators that return a value
+// is also written in `StdOpMeta.role` (`OpRole.errorReturn` has no reader), and the two agree only
+// by hand. The match is exhaustive, so a new variant is a compile error; an existing variant filed
+// in the wrong arm is not. The panic is the right end state, and the promoted return above is what
+// stands between here and it.
 union RetBlockLookup
 	notFound
 	found(block IrBlock)
@@ -442,18 +438,17 @@ type RangeCheckEmitter
 		return RangeGuardVerdict.guard(alias)
 	end 'runtimeHalfOf'
 
-	// An alias-named site: the site's own `stdOpPos` is where in its block the guard goes. Every one of them
-	// owes the RUNTIME half, so no site carries a `RangeCheckGuard` to be asked for.
+	// An alias-named site: the site's own `stdOpPos` is where in its block the guard goes. Every one
+	// of them owes the runtime half, so no site carries a `RangeCheckGuard` to be asked for.
 	//
-	// ⛔ **THE TWO FILES ARE NOT ALWAYS ONE HERE.** *"Both files are this function's own (every door here
-	// resolved its alias where it wrote it)"* is true of the cast, the field store, the struct-literal field
-	// and the array element, and FALSE of the arm-served index, whose alias is the CALLEE's
-	// (`Parser.recordArmServedIndexRangeCheck`). So the site carries the declaration it resolved, in
-	// `RangeCheckSite.aliasFilePath`.
+	// The two files are not always one here. The cast, the field store, the struct-literal field and
+	// the array element resolve their alias in this function's own file, but the arm-served index's
+	// alias is the callee's (`Parser.recordArmServedIndexRangeCheck`), so the site carries the
+	// declaration it resolved in `RangeCheckSite.aliasFilePath`.
 	function processSite(site RangeCheckSite, filePath FilePath)
 		match self.guardVerdict(site.value, aliasName: site.aliasName, guard: RangeCheckGuard.runtime, line: site.line, column: site.column, aliasFilePath: site.aliasFilePath, filePath: filePath) 'verdict'
 			noGuard then return
-			guard(alias) then _ = self.emitGuardAt(self.guardSiteAt(site.block, stdOpPos: site.stdOpPos), operand: GuardedOperand.asIs(site.value), alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName), chain: GuardChain.blockChain(site.block))
+			guard(alias) then _ = self.emitGuardAt(self.guardSiteAt(site.block, stdOpPos: site.stdOpPos), operand: GuardedOperand.asIs(site.value), alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName), chain: GuardChain.blockChain(site.block), span: sourceSpanOf(self.project, filePath: filePath, line: site.line, column: site.column))
 		end 'verdict'
 	end 'processSite'
 
@@ -547,35 +542,32 @@ type RangeCheckEmitter
 		end 'verdict'
 	end 'guardRangedParam'
 
-	// ⭐⭐ **THE CASCADE, AND THE RECORD OF WHERE IT LANDED.** A parameter guard is the ONE guard this
-	// pass emits that a LATER pass can prove dead, because it is the one whose premise belongs to somebody
-	// else: the caller. `InlineLeaves` splices this body into a frame that may already know the argument is
-	// in range — from its own entry guard, or from a counted loop's interval — and a cascade it can identify
-	// is a cascade it can decline to copy. Identifying it needs this record, because once emitted a guard is
-	// a compare, a branch and a panicking block — which is also what a hand-written
+	// A parameter guard is the one guard this pass emits that a later pass can prove dead, because its
+	// premise belongs to the caller: `InlineLeaves` splices this body into a frame that may already
+	// know the argument is in range — from its own entry guard, or from a counted loop's interval —
+	// and declines to copy a cascade it can identify. Identifying one needs this record, because an
+	// emitted guard is a compare, a branch and a panicking block, which is also what a hand-written
 	// `if x < 0 'bad' panic(…) end` is.
 	//
-	// ⚠ **THE HEAD IS READ BEFORE THE EMIT AND THE OK BLOCK AFTER IT, and neither is `entryId`.** A second
-	// ranged parameter's cascade splits the FIRST one's `__rc_ok` (`guardSiteAt` resolves a site to its
-	// block's current chain END), so the k-th guard's head is the (k-1)-th's ok block and only the first
-	// one's head is the entry. Recording `entryId` for all of them would tell the inliner that every cascade
-	// begins where control enters, and it would skip the first guard's compare while jumping into the
-	// second's.
+	// The head is read before the emit and the ok block after it, and neither is `entryId`. A second
+	// ranged parameter's cascade splits the first one's `__rc_ok` (`guardSiteAt` resolves a site to
+	// its block's current chain end), so the k-th guard's head is the (k-1)-th's ok block and only the
+	// first one's head is the entry. Recording `entryId` for all of them would make the inliner skip
+	// the first guard's compare while jumping into the second's.
 	//
-	// A guard whose bounds both elide splits nothing and is not a cascade to record: `emitGuardAt` hands back
-	// the head it was given, which is how that says so without a flag.
+	// A guard whose bounds both elide splits nothing and is not a cascade to record: `emitGuardAt`
+	// hands back the head it was given.
 	function emitParamGuard(site RangeCheckParamSite, alias RangedTypeAlias, entryId BlockId, filePath FilePath)
 		let guardSite = self.guardSiteAt(entryId, stdOpPos: self.func.paramCount as BlockOpPos)
 		let headId = guardSite.block.id
 		self.requireGuardHeadHoldsOnlyParams(guardSite)
 
-		// ⭐ **THE ID SPACE BEFORE AND AFTER IS WHAT ENUMERATES THE CASCADE'S OWN BLOCKS.** Everything
-		// `emitGuardAt` mints — the `__rc_ok` continuation, the `__rc_panic`, one `__rc_chk` per extra bound
-		// — goes through `IrModule.addBlock`, which hands out `func.nextBlockId` and bumps it. So the ids in
-		// `[firstMintedId, nextBlockId)` are exactly this guard's, in one subtraction and with no second
-		// list to keep in step with the three places that mint them.
+		// Everything `emitGuardAt` mints — the `__rc_ok` continuation, the `__rc_panic`, one `__rc_chk`
+		// per extra bound — goes through `IrModule.addBlock`, which hands out `func.nextBlockId` and
+		// bumps it, so `[firstMintedId, nextBlockId)` is exactly this guard's blocks with no second list
+		// to keep in step.
 		let firstMintedId = self.func.nextBlockId
-		let ok = self.emitGuardAt(guardSite, operand: self.paramOperand(site), alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName), chain: GuardChain.blockChain(entryId))
+		let ok = self.emitGuardAt(guardSite, operand: self.paramOperand(site), alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName), chain: GuardChain.blockChain(entryId), span: sourceSpanOf(self.project, filePath: filePath, line: site.line, column: site.column))
 
 		if ok.id == headId 'bothBoundsElided'
 			return
@@ -619,9 +611,8 @@ type RangeCheckEmitter
 					mod or
 					condBranch or
 					branch or
-					ret then self.refuseNonParamAheadOfAGuard(pos)
-				param then break 'op'
-				call or
+					ret or
+					call or
 					retVoid or
 					globalAddr or
 					loadIndirect or
@@ -640,6 +631,7 @@ type RangeCheckEmitter
 					osProcessExitCode or
 					osCloseHandle or
 					osWaitHandle or
+					osWaitChild or
 					osFreePages or
 					switch or
 					witnessCall or
@@ -707,14 +699,15 @@ type RangeCheckEmitter
 					tlsSetValue or
 					tlsSlotLoad or
 					osSetEvent or
-					osEnterBackgroundPriority then self.refuseNonParamAheadOfAGuard(pos)
-				osFileOpenWriteExecutable then self.refuseNonParamAheadOfAGuard(pos)
-				osEnvBlock or
-					osEnvBlockFree then self.refuseNonParamAheadOfAGuard(pos)
-				loadAcquire or
-					storeRelease then self.refuseNonParamAheadOfAGuard(pos)
-				osHandleFileType then self.refuseNonParamAheadOfAGuard(pos)
-				osCreateNamedSegment or
+					osEnterBackgroundPriority or
+					osFileOpenWriteExecutable or
+					osEnvBlock or
+					osEnvBlockFree or
+					loadAcquire or
+					storeRelease or
+					osHandleFileType or
+					osProcessProbe or
+					osCreateNamedSegment or
 					osUnmapNamedSegment or
 					osUnpublishNamedSegment or
 					covPoint or
@@ -722,8 +715,9 @@ type RangeCheckEmitter
 					osNetpoll or
 					osPathQuery or
 					osSocketOverlapped or
-					osSocketServe then self.refuseNonParamAheadOfAGuard(pos)
+					osSocketServe or
 					osDebugHost then self.refuseNonParamAheadOfAGuard(pos)
+				param then break 'op'
 			end 'op'
 		end 'eachPrefixOp'
 	end 'requireGuardHeadHoldsOnlyParams'
@@ -827,11 +821,10 @@ type RangeCheckEmitter
 
 	function guardReturns(alias RangedTypeAlias, checks FunctionRangeChecks)
 		for site in checks.returnSites 'eachSite'
-			// ⚠ **ASKED FIRST, AND UNCONDITIONALLY** — it is the decider that raises the compile-time E3005
-			// on its way to an answer (`guardVerdict` states the same discipline), and it is also what makes
-			// the elision below legitimate: clause 4 is that the entry guard EXISTS, and the only thing that
-			// could have stopped it existing is this function answering `false` for the same value against
-			// the same alias. Reaching the elision at all is therefore the proof that it did not.
+			// Asked first and unconditionally: it raises the compile-time E3005 on its way to an answer
+			// (`guardVerdict` keeps the same discipline), and it is what makes the elision below legitimate.
+			// Clause 4 is that the entry guard exists, and only this function answering `false` for the same
+			// value against the same alias could have stopped it existing.
 			if not self.needsRuntimeGuard(site.value, alias: alias, aliasName: checks.returnAliasName, line: site.line, column: site.column, filePath: checks.filePath) 'noGuard'
 				continue
 			end 'noGuard'
@@ -842,7 +835,7 @@ type RangeCheckEmitter
 
 			match self.retBlockOf(site) 'ret'
 				notFound then break 'ret'
-				found(retBlock) then _ = self.emitGuardAt(GuardSite.create(retBlock, position: retBlock.opRefs.count()), operand: GuardedOperand.asIs(site.value), alias: alias, message: self.rangeCheckMessage(checks.filePath, line: site.line, aliasName: checks.returnAliasName), chain: GuardChain.retChain)
+				found(retBlock) then _ = self.emitGuardAt(GuardSite.create(retBlock, position: retBlock.opRefs.count()), operand: GuardedOperand.asIs(site.value), alias: alias, message: self.rangeCheckMessage(checks.filePath, line: site.line, aliasName: checks.returnAliasName), chain: GuardChain.retChain, span: sourceSpanOf(self.project, filePath: checks.filePath, line: site.line, column: site.column))
 			end 'ret'
 		end 'eachSite'
 	end 'guardReturns'
@@ -932,16 +925,13 @@ type RangeCheckEmitter
 		return true
 	end 'needsRuntimeGuard'
 
-	// Split the site's block, emit the panic block, thread the compare cascade between them, and extend
-	// `chain` onto the continuation so the NEXT guard on this path lands after this one (see `GuardChain`
-	// for why only an alias-named site has a chain to extend).
+	// Hands back the block the in-range path continues in: the guard's `__rc_ok` when one was emitted,
+	// and the site's own head block when both bounds elided. `emitParamGuard` reads it, because where
+	// the cascade ends is half of the record `InlineLeaves` needs to skip it.
 	//
-	// ⭐ **IT HANDS BACK THE BLOCK THE IN-RANGE PATH CONTINUES IN**, which is the guard's `__rc_ok` when one
-	// was emitted and the site's own head block when both bounds elided — the true answer in either case, not
-	// a presence flag wearing a block's clothes. Two of the three callers have no use for it; `emitParamGuard`
-	// is the one that does, because *where the cascade ends* is half of the record `InlineLeaves` needs to
-	// skip it.
-	function emitGuardAt(site GuardSite, operand GuardedOperand, alias RangedTypeAlias, message ByteArray, chain GuardChain) returns IrBlock
+	// The guard's ops carry the checked site's span, so a line whose only code is a guard still has a
+	// line row; the span is cleared after, so nothing this pass emits next inherits it.
+	function emitGuardAt(site GuardSite, operand GuardedOperand, alias RangedTypeAlias, message ByteArray, chain GuardChain, span SpanId) returns IrBlock
 		let isFloat = aliasIsFloat(alias)
 		let checks = boundChecks(alias.low, high: alias.high, isFloat: isFloat)
 
@@ -951,20 +941,27 @@ type RangeCheckEmitter
 			return site.block
 		end 'noBoundNeeded'
 
-		// ⚠ **THE SPLIT ADVANCES THE CHAIN INSIDE ITSELF, BEFORE `emitPanicBlock`, AND THE ORDER IS
-		// LOAD-BEARING** — see `extendGuardChain`.
+		self.module.spans.current = span
+		let ok = self.emitCheckedGuard(site, operand: operand, checks: checks, message: message, chain: chain, isFloat: isFloat)
+		self.module.spans.current = NoSpanId
+
+		return ok
+	end 'emitGuardAt'
+
+	function emitCheckedGuard(site GuardSite, operand GuardedOperand, checks RangeBoundCheckArray, message ByteArray, chain GuardChain, isFloat bool) returns IrBlock
+		// The split advances the chain inside itself, before `emitPanicBlock`, and that order is
+		// load-bearing — see `extendGuardChain`.
 		let ok = self.splitFor(site, chain: chain)
 
-		// ⚠ **THE DEREFERENCE GOES IN BETWEEN, AND ITS POSITION IS THE WHOLE OF WHY IT IS HERE AND NOT AT
-		// THE CALLER.** `site.block` is the guard's HEAD: after the split it holds exactly the ops that
-		// stood before the site, so appending the load here puts it past the `param` ops and immediately
-		// ahead of the cascade that reads it. It appends an OP and never a BLOCK, so `extendGuardChain`'s
-		// "the last block registered is the continuation" invariant is untouched.
+		// The dereference goes between the split and the cascade: after the split `site.block` holds
+		// exactly the ops that stood before the site, so the load lands past the `param` ops and
+		// immediately ahead of the cascade that reads it. It appends an op, never a block, so
+		// `extendGuardChain`'s "the last block registered is the continuation" invariant holds.
 		let compared = self.comparedValue(operand, head: site.block, isFloat: isFloat)
 		let panicBlock = self.emitPanicBlock(message)
 		self.emitCascade(site.block, value: compared, checks: checks, panicId: panicBlock.id, okId: ok.id, isFloat: isFloat)
 		return ok
-	end 'emitGuardAt'
+	end 'emitCheckedGuard'
 
 	// ⭐⭐ **THE VALUE THE CASCADE ACTUALLY COMPARES — see `GuardedOperand` for why a parameter can be a
 	// cell.** The load's type is the CASCADE's operand type rather than the parameter's declared Std type,
@@ -1376,19 +1373,8 @@ type RangeCheckEmitter
 
 			match op 'c'
 				const(resultId, value, valueType) then self.recordConst(resultId, value: value, valueType: valueType)
-
-				// A NEGATED INTEGER literal (`-5 as Positive`) survives lowering as `unaryOp neg` over a
-				// `const`, not a folded `const`, so the E3005 literal check would miss it and emit a runtime
-				// guard where the spec expects a COMPILE error. Fold it here — the `const` operand is already
-				// recorded (it is emitted before the `neg`, and ops are walked in order). Only `neg` folds;
-				// every other unary (a domain conversion, a bitwise `not`) is left to the runtime path.
-				//
-				// A negated FLOAT literal needs nothing here: the parser folds `-<float literal>` into a
-				// single literal carrying the sign-flipped bits (`parseNegatedNumericLiteral`), so it arrives
-				// as a plain `const` — and `neg` is the INTEGER negate, which is why this stays int-only.
-				binOp then break 'c'
-				unaryOp(resultId, operand, opcode, _) then recordConstNeg(self.intConsts, resultId: resultId, operand: operand, opcode: opcode)
-				cmp or
+				binOp or
+					cmp or
 					binOpImm or
 					cmpImm or
 					div or
@@ -1416,16 +1402,12 @@ type RangeCheckEmitter
 					osProcessExitCode or
 					osCloseHandle or
 					osWaitHandle or
-					osFreePages then break 'c'
-				switch then break 'c'
-
-				// A witness call's result is a call return, not a foldable constant — nothing to record, and
-				// neither of the throwing form's two results is one either.
-				witnessCall then break 'c'
-				witnessTryCall then break 'c'
-
-				// The OS-primitive ops produce no ranged-typealias value to range-check.
-				osPipeCreate or
+					osWaitChild or
+					osFreePages or
+					switch or
+					witnessCall or
+					witnessTryCall or
+					osPipeCreate or
 					osEventCreate or
 					osThreadCreate or
 					osLockInit or
@@ -1437,13 +1419,9 @@ type RangeCheckEmitter
 					osCancelIo or
 					osGetPid or
 					osPipeCreateOutbound or
-					osWriteFile then break 'c'
-
-				// The wall-clock read produces no ranged-typealias value to range-check.
-				osReadWallClock then break 'c'
-
-				// A raw OS handle, a Win32 BOOL and a byte count are not ranged-typealias values.
-				osFileOpenRead or
+					osWriteFile or
+					osReadWallClock or
+					osFileOpenRead or
 					osFileClose or
 					osReadFile or
 					osFileOpenWrite or
@@ -1456,28 +1434,17 @@ type RangeCheckEmitter
 					osDirCreate or
 					osDirRemove or
 					osDirCurrentPath or
-					osFileAttributes then break 'c'
-
-				// The RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
-				osPanicValue then break 'c'
-				osCommandLine then break 'c'
-
-				// A raw OS handle and a character count are not ranged-typealias values.
-				osStdHandle then break 'c'
-				osExecutablePath then break 'c'
-
-				// The byte count the OS reports for a stream write is not a ranged-typealias value.
-				osWriteStderr then break 'c'
-
-				// A frame address is not a ranged-typealias value.
-				stackRecordAddr then break 'c'
-				osOpenNamedSegment or
+					osFileAttributes or
+					osPanicValue or
+					osCommandLine or
+					osStdHandle or
+					osExecutablePath or
+					osWriteStderr or
+					stackRecordAddr or
+					osOpenNamedSegment or
 					osMapNamedSegment or
-					osTickCountMs then break 'c'
-
-				// The rest of the appended band — the four attached-subprocess host primitives, the `ws2_32` socket
-				// band, the machine query AND the thread-CPU read — are import calls too.
-				osHandleSetInherit or
+					osTickCountMs or
+					osHandleSetInherit or
 					osPipePeek or
 					osEnvRead or
 					osProcessTerminate or
@@ -1491,35 +1458,27 @@ type RangeCheckEmitter
 					osSocketRecv or
 					osSocketClose or
 					osCpuCount or
-					osThreadCpuTicks then break 'c'
-
-				// F1a: the decommit defines nothing, so it can never define a negated int constant.
-				osDecommitPages then break 'c'
-
-				// F1b: a fill defines nothing, so it can never define a negated int constant.
-				memFill then break 'c'
-
-				// A reserve and a commit define a page base the OS chose, never a negated int constant.
-				osCommitPages or
-					osReservePages then break 'c'
-
-				// Every value-defining member of this range answers something the machine produces at run
-				// time, never a negated int constant.
-				atomicCas or
+					osThreadCpuTicks or
+					osDecommitPages or
+					memFill or
+					osCommitPages or
+					osReservePages or
+					atomicCas or
 					atomicRmw or
 					currentThreadToken or
 					tlsAlloc or
 					tlsSetValue or
 					tlsSlotLoad or
 					osSetEvent or
-					osEnterBackgroundPriority then break 'c'
-				osFileOpenWriteExecutable then break 'c'
-				osEnvBlock or
-					osEnvBlockFree then break 'c'
-				loadAcquire or
-					storeRelease then break 'c'
-				osHandleFileType then break 'c'
-				osCreateNamedSegment or
+					osEnterBackgroundPriority or
+					osFileOpenWriteExecutable or
+					osEnvBlock or
+					osEnvBlockFree or
+					loadAcquire or
+					storeRelease or
+					osHandleFileType or
+					osProcessProbe or
+					osCreateNamedSegment or
 					osUnmapNamedSegment or
 					osUnpublishNamedSegment or
 					covPoint or
@@ -1527,8 +1486,16 @@ type RangeCheckEmitter
 					osNetpoll or
 					osPathQuery or
 					osSocketOverlapped or
-					osSocketServe then break 'c'
+					osSocketServe or
 					osDebugHost then break 'c'
+
+				// A negated integer literal (`-5 as Positive`) survives lowering as `unaryOp neg` over a
+				// `const`, not a folded `const`, so the E3005 literal check would miss it and emit a runtime
+				// guard where the spec expects a compile error. The `const` operand is already recorded: it is
+				// emitted before the `neg`, and ops are walked in order. A negated float literal needs nothing
+				// here: the parser folds it into one literal carrying the sign-flipped bits
+				// (`parseNegatedNumericLiteral`), and `neg` is the integer negate.
+				unaryOp(resultId, operand, opcode, _) then recordConstNeg(self.intConsts, resultId: resultId, operand: operand, opcode: opcode)
 			end 'c'
 		end 'eachOp'
 	end 'collectConsts'
@@ -1736,12 +1703,9 @@ end 'recordConstNeg'
 // `return` put its terminator in — so a `false` says the site's own `ret` is gone (or carries a value the
 // hand-off promoted out from under the site), which is the whole of `RetBlockLookup.notFound`.
 //
-// ⚠ IT ANSWERS A `bool` AND NOT A UNION, AND THAT IS MEASURED. A payload-carrying
-// `RetTarget` union in a loop over every ret-bearing block costs +2 allocations per return site
-// (+805 at N=400) — a payload case is a heap box — against a phase that is otherwise allocation-identical.
-// One exhaustive `StdOp` match, in the one place the question is asked, so a new variant is a compile
-// error here rather than a `ret` this silently stops recognizing — `collectConsts` reads the same ops
-// the same way for the same reason.
+// It answers a `bool` rather than a union: a payload-carrying union case is a heap box, and this is
+// asked in a loop over every ret-bearing block. One exhaustive `StdOp` match, so a new variant is a
+// compile error here rather than a `ret` this silently stops recognizing.
 function retMatchesValue(term StdOp, target ValueId) returns bool
 	return match term 'term'
 		const or
@@ -1753,11 +1717,8 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 			div or
 			mod or
 			condBranch or
-			branch gives false
-		ret(retValId) gives retValId == target
-
-		// `retVoid` is in this range and belongs there: it returns no value, so no site can name it.
-		param or
+			branch or
+			param or
 			call or
 			retVoid or
 			globalAddr or
@@ -1766,22 +1727,8 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 			osAllocPages or
 			osWriteStdout or
 			rdataAddr or
-			tryCall gives false
-
-		// ⭐⭐ **A THROWING FUNCTION LEAVES THROUGH `errorReturn`, NOT `ret`, AND READING ONLY `ret` HERE
-		// UNGUARDED EVERY RANGED RETURN IN EVERY `throws` FUNCTION.** `LowerMaxonToStd.emitRetOrErrorReturn`
-		// picks the terminator off the THROWS clause — *"the ONE place the ABI decides ret-vs-errorReturn"* — so
-		// a `returns ExitCode throws E` function's `return v` lands here as `errorReturn(v, flag)` and was swept
-		// up by the arm below as "not a `ret`". `retBlockOf` then answers `notFound` and the site is dropped
-		// in silence — a `returns ExitCode throws MatchError` function returning -5 runs unguarded instead of
-		// panicking `Range check failed: value outside typealias 'ExitCode'`.
-		//
-		// The PRIMARY value is what a return site names — the error flag is the ABI's second register and no
-		// range-check site is ever recorded against it — so the comparison is `retValId`'s alone, exactly as the
-		// `ret` arm's is. `emitDeadReturn` already emits the matching `errorReturn` shape for the panic block it
-		// splits in front of, so the guard this unlocks terminates a throwing function correctly on both edges.
-		errorReturn(retValId, _) gives retValId == target
-		osExit or
+			tryCall or
+			osExit or
 			funcAddr or
 			callIndirect or
 			osPanic or
@@ -1790,18 +1737,12 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 			osProcessExitCode or
 			osCloseHandle or
 			osWaitHandle or
-			osFreePages gives false
-
-		// The jump table is a branch terminator, not a `ret` — it returns no value.
-		switch gives false
-
-		// A witness call is a body op, not a `ret` — it is not the return whose value this checks. Nor is the
-		// throwing form: it is a body op with two results, neither of them a return terminator.
-		witnessCall gives false
-		witnessTryCall gives false
-
-		// An OS-primitive op is a body op, never a `ret`.
-		osPipeCreate or
+			osWaitChild or
+			osFreePages or
+			switch or
+			witnessCall or
+			witnessTryCall or
+			osPipeCreate or
 			osEventCreate or
 			osThreadCreate or
 			osLockInit or
@@ -1813,13 +1754,9 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 			osCancelIo or
 			osGetPid or
 			osPipeCreateOutbound or
-			osWriteFile gives false
-
-		// The wall-clock read is a body op, never a `ret`.
-		osReadWallClock gives false
-
-		// Every file op is a body op, never a `ret`.
-		osFileOpenRead or
+			osWriteFile or
+			osReadWallClock or
+			osFileOpenRead or
 			osFileClose or
 			osReadFile or
 			osFileOpenWrite or
@@ -1832,28 +1769,17 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 			osDirCreate or
 			osDirRemove or
 			osDirCurrentPath or
-			osFileAttributes gives false
-
-		// The RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
-		osPanicValue gives false
-		osCommandLine gives false
-
-		// Both are body ops, never a `ret`.
-		osStdHandle gives false
-		osExecutablePath gives false
-
-		// A stream write is a body op, never a `ret`.
-		osWriteStderr gives false
-
-		// A promoted record's address is a body op, never a `ret`.
-		stackRecordAddr gives false
-		osOpenNamedSegment or
+			osFileAttributes or
+			osPanicValue or
+			osCommandLine or
+			osStdHandle or
+			osExecutablePath or
+			osWriteStderr or
+			stackRecordAddr or
+			osOpenNamedSegment or
 			osMapNamedSegment or
-			osTickCountMs gives false
-
-		// The rest of the appended band — the four attached-subprocess host primitives, the `ws2_32` socket
-		// band, the machine query AND the thread-CPU read — are import calls too.
-		osHandleSetInherit or
+			osTickCountMs or
+			osHandleSetInherit or
 			osPipePeek or
 			osEnvRead or
 			osProcessTerminate or
@@ -1867,34 +1793,27 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 			osSocketRecv or
 			osSocketClose or
 			osCpuCount or
-			osThreadCpuTicks gives false
-
-		// F1a: the decommit is a body op, never the `ret` this asks about.
-		osDecommitPages gives false
-
-		// F1b: a fill is a body op, never the `ret` this asks about.
-		memFill gives false
-
-		// A reserve and a commit are body ops too, never the `ret` this asks about.
-		osCommitPages or
-			osReservePages gives false
-
-		// Every member of this range is a body op, never the `ret` this asks about.
-		atomicCas or
+			osThreadCpuTicks or
+			osDecommitPages or
+			memFill or
+			osCommitPages or
+			osReservePages or
+			atomicCas or
 			atomicRmw or
 			currentThreadToken or
 			tlsAlloc or
 			tlsSetValue or
 			tlsSlotLoad or
 			osSetEvent or
-			osEnterBackgroundPriority gives false
-		osFileOpenWriteExecutable gives false
-		osEnvBlock or
-			osEnvBlockFree gives false
-		loadAcquire or
-			storeRelease gives false
-		osHandleFileType gives false
-		osCreateNamedSegment or
+			osEnterBackgroundPriority or
+			osFileOpenWriteExecutable or
+			osEnvBlock or
+			osEnvBlockFree or
+			loadAcquire or
+			storeRelease or
+			osHandleFileType or
+			osProcessProbe or
+			osCreateNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
@@ -1902,8 +1821,17 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe gives false
+			osSocketServe or
 			osDebugHost gives false
+		ret(retValId) or
+			// ⚠ A throwing function leaves through `errorReturn`, not `ret`
+			// (`LowerMaxonToStd.emitRetOrErrorReturn` picks the terminator off the `throws` clause). Read
+			// as "not a `ret`", its site gets `notFound` from `retBlockOf` and is dropped silently, leaving
+			// the ranged return unguarded. The primary value is what a return site names — no range-check
+			// site is recorded against the error flag — so the comparison is `retValId`'s alone.
+			// `emitDeadReturn` emits the matching `errorReturn` shape for the panic block it splits in
+			// front of, so the guard terminates a throwing function correctly on both edges.
+			errorReturn gives retValId == target
 	end 'term'
 end 'retMatchesValue'
 

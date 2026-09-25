@@ -2222,7 +2222,33 @@ function noTlsSlotArray(os Os) returns ParsedInt
 end 'noTlsSlotArray'
 
 let WindowsTebTlsSlotsOffset = 0x1480 as ParsedInt
+let WindowsTebTlsSlotCount = 64 as ParsedInt
 let DarwinTsdArrayBase = 0 as ParsedInt
+
+function emitRequireAddressableTlsSlot(module StdModule, func IrFunction, cur IrBlock, tlsIndex ValueId, target Target, ids ValueMinter) returns IrBlock
+	match target.os 'os'
+		windows then return emitRequireTebTlsSlot(module, func: func, cur: cur, tlsIndex: tlsIndex, ids: ids)
+
+		linux or
+			macos then return cur
+
+		wasi then panic("emitRequireAddressableTlsSlot: {target.os.name} has no per-OS-thread slot this scheduler could publish a P in — `targetProvidesFacility` denies `greenThreads` there, so no `__sched_init_procs` is built for it")
+	end 'os'
+end 'emitRequireAddressableTlsSlot'
+
+// A `TlsAlloc` index past the TEB's inline array lives in the expansion slots, which the `gs:` read
+// at `index * 8 + WindowsTebTlsSlotsOffset` cannot reach: it would read and write some other TEB
+// field. `TLS_OUT_OF_INDEXES` fails the same test.
+function emitRequireTebTlsSlot(module StdModule, func IrFunction, cur IrBlock, tlsIndex ValueId, ids ValueMinter) returns IrBlock
+	var inTheTeb = module.addBlock(func, label: b"tlsinteb", heat: BlockHeat.normal)
+	var pastTheTeb = module.addBlock(func, label: b"tlspastteb", heat: BlockHeat.cold)
+
+	let fits = emitCmp(module, block: cur, a: tlsIndex, b: emitConst(module, block: cur, value: WindowsTebTlsSlotCount, ids: ids), pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(fits, thenBlockId: inTheTeb.id, elseBlockId: pastTheTeb.id))
+	emitRuntimeAbort(module, func: func, block: pastTheTeb, abort: RuntimeAbort.schedulerTlsSlotOutsideTheTeb, ids: ids)
+
+	return inTheTeb
+end 'emitRequireTebTlsSlot'
 
 // **Linux — 0, for Darwin's reason arrived at from the opposite direction.** There the base is 0 because the
 // masked thread pointer IS the TSD array's base; here it is 0 because the backend CHOSE the thread pointer to
@@ -2845,16 +2871,12 @@ end 'emitSchedDequeueLocked'
 // `__sched_init_procs`
 // ==========================================================================
 
-// ⭐⭐ **`__sched_init_procs()` — the whole of scheduler bring-up that is about Ms rather than about green
-// threads.** Written in builder-built Std rather than hand-assembled bytes, so it gets register
-// allocation, a checked frame and the leak-safe backend for free, exactly as `MmRuntime`'s reasoning one
-// tier up.
+// `__sched_init_procs()`: the scheduler bring-up that is about Ms rather than green threads. In
+// order: reserve the TLS slot and publish its offset; decide how many Ps to build; allocate the
+// run-queue lock and the `P*` array; build each P; adopt P[0] for this OS thread.
 //
-// In order: reserve the TLS slot and publish its TEB offset; decide how many Ps to build; allocate the run-
-// queue lock and the `P*` array; build each P; adopt P[0] for this OS thread.
-//
-// ⚠ **THE RUN-QUEUE LOCK IS ALLOCATED HERE.** It guards the queue for every M, so a green-thread program
-// that never touches a pipe must still have it. See `SchedLockLabel`.
+// The run-queue lock is allocated here because it guards the queue for every M, so a green-thread
+// program that never touches a pipe still needs it. See `SchedLockLabel`.
 function buildSchedInitProcs(module StdModule, target Target)
 	var func = IrFunction.createFromStd(SchedInitProcsName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
@@ -2867,25 +2889,26 @@ function buildSchedInitProcs(module StdModule, target Target)
 	var loopNext = module.addBlock(func, label: b"pnext", heat: BlockHeat.normal)
 	var adopt = module.addBlock(func, label: b"adopt", heat: BlockHeat.normal)
 
-	// The TLS slot, and the `index * 8 + 0x1480` byte offset every later read indexes `gs:` by.
+	// Every later read indexes the thread pointer by `index * 8 + tlsSlotArrayBase(target)`.
 	let tlsIndex = ids.mint()
 	module.appendOp(entry, op: StdOp.tlsAlloc(tlsIndex))
-	emitStoreGlobalWord(module, block: entry, label: SchedTlsIndexLabel, value: tlsIndex, ids: ids)
-	let slotStride = emitConst(module, block: entry, value: PointerSlotBytes, ids: ids)
-	let slotBytes = emitBin(module, block: entry, a: tlsIndex, b: slotStride, opcode: StdBinOpcode.mul, ids: ids)
-	let tebBase = emitConst(module, block: entry, value: tlsSlotArrayBase(target), ids: ids)
-	let tebOffset = emitBin(module, block: entry, a: slotBytes, b: tebBase, opcode: StdBinOpcode.add, ids: ids)
-	emitStoreGlobalWord(module, block: entry, label: SchedTlsTebOffsetLabel, value: tebOffset, ids: ids)
+	var slotHeld = emitRequireAddressableTlsSlot(module, func: func, cur: entry, tlsIndex: tlsIndex, target: target, ids: ids)
+	emitStoreGlobalWord(module, block: slotHeld, label: SchedTlsIndexLabel, value: tlsIndex, ids: ids)
+	let slotStride = emitConst(module, block: slotHeld, value: PointerSlotBytes, ids: ids)
+	let slotBytes = emitBin(module, block: slotHeld, a: tlsIndex, b: slotStride, opcode: StdBinOpcode.mul, ids: ids)
+	let tebBase = emitConst(module, block: slotHeld, value: tlsSlotArrayBase(target), ids: ids)
+	let tebOffset = emitBin(module, block: slotHeld, a: slotBytes, b: tebBase, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreGlobalWord(module, block: slotHeld, label: SchedTlsTebOffsetLabel, value: tebOffset, ids: ids)
 
 	// The allocator reads the same offset out of its own state head, because this `.data` word is laid
 	// out only where a scheduler exists and every heap program's allocator asks the question.
-	emitSlabPublishScheduler(module, block: entry, tebOffset: tebOffset, ids: ids)
+	emitSlabPublishScheduler(module, block: slotHeld, tebOffset: tebOffset, ids: ids)
 
 	// How many Ps: the machine's processor count, unless `MAXON_MAX_PROCS` names another count within it.
 	// The answer arrives as `settled`'s block arg, because the decision is a five-way merge.
 	let numProcs = ids.mint()
 	settled.blockArgs.push(IrBlockArg.create(numProcs, argType: StdType.i64))
-	emitResolveMaxProcs(module, func: func, cur: entry, settled: settled, ids: ids)
+	emitResolveMaxProcs(module, func: func, cur: slotHeld, settled: settled, ids: ids)
 
 	emitStoreGlobalWord(module, block: settled, label: SchedNumProcsLabel, value: numProcs, ids: ids)
 
@@ -2913,9 +2936,8 @@ function buildSchedInitProcs(module StdModule, target Target)
 	module.setTerminator(settled, op: StdOp.branch(loopHdr.id))
 	settled.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: argsOf(zero)))
 
-	// ⚠ The bound is `settled`'s block arg rather than a re-read of `__sched_num_procs`: `settled` dominates
-	// this header, so the value is in scope, and reloading it every iteration would be the same fact read twice
-	// per turn from a word only this function writes.
+	// The bound is `settled`'s block arg rather than a re-read of `__sched_num_procs`: `settled`
+	// dominates this header, and only this function writes the word.
 	let built = emitCmp(module, block: loopHdr, a: iterId, b: numProcs, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(loopHdr, op: StdOp.condBranch(built, thenBlockId: adopt.id, elseBlockId: loopBody.id))
 
@@ -2930,23 +2952,18 @@ function buildSchedInitProcs(module StdModule, target Target)
 	// `rng = id + 1` — non-zero, because zero is a fixed point of xorshift. Reserved for the stealer.
 	emitStoreField(module, block: loopBody, record: p, offset: POffRng, value: emitBin(module, block: loopBody, a: iterId, b: one, opcode: StdBinOpcode.add, ids: ids))
 
-	// ⚠ **NO WAKE EVENT IS CREATED HERE — the park is the M's** (`MOffParkEvent`), created with each M by
-	// `emitSchedAllocM`. This loop runs once per PROCESSOR, so one event per P would open kernel objects for
-	// machines that mostly never start.
+	// No wake event is created here: the park is the M's (`MOffParkEvent`), created with each M by
+	// `emitSchedAllocM`, and one event per P would open kernel objects for machines that mostly
+	// never start.
 	//
-	// ⭐⭐ **EVERY P BUT P[0] JOINS `__sched_pidle`, THROUGH `pidleput`, SO `__sched_npidle` STARTS AT
-	// `numProcs - 1`.** A processor no M has ever claimed and one whose M has parked are the same thing to a
-	// `__sched_startm` looking for somewhere to put work.
+	// Every P but P[0] joins `__sched_pidle` through `pidleput`, so `__sched_npidle` starts at
+	// `numProcs - 1`. No lock is needed around the put: this function builds the array any worker
+	// could be spawned onto, so only one thread exists yet (`sealedBeforeWorkers`), and the empty
+	// ring cannot fire the door's assertion.
 	//
-	// ⚠ No lock is taken around this put and none is needed — `sealedBeforeWorkers`'s argument covers the
-	// list exactly as it covers the array being built around it: the first `__gt_init` is reached by the only
-	// thread there is, because THIS function is what builds the array a worker could ever be spawned onto. The
-	// ring is empty, so the door's assertion cannot fire.
-	//
-	// ⭐⭐⭐ **P[0] IS THE ONE THAT DOES *NOT* JOIN HERE, AND THIS IS THE ONLY PLACE THAT FACT IS WRITTEN DOWN.**
-	// P[0] is the processor M0 is born holding and enters its scheduler loop with (`__sched_main_loop`), so
-	// offering it here would hand a worker the processor M0 is about to run on. From then on M0 releases and
-	// takes processors like every other machine.
+	// P[0] does not join: M0 is born holding it and enters `__sched_main_loop` with it, so offering
+	// it would hand a worker the processor M0 is about to run on. This is the only place that fact is
+	// written.
 	let mainProcIndex = emitConst(module, block: loopBody, value: 0, ids: ids)
 	let isMainProc = emitCmp(module, block: loopBody, a: iterId, b: mainProcIndex, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(loopBody, op: StdOp.condBranch(isMainProc, thenBlockId: loopNext.id, elseBlockId: loopOffer.id))
@@ -2954,35 +2971,27 @@ function buildSchedInitProcs(module StdModule, target Target)
 	var offered = emitSchedPidlePutLocked(module, func: func, cur: loopOffer, p: p, holdsWorkLabel: b"pofferheldwork", emptyLabel: b"poffered", ids: ids)
 	module.setTerminator(offered, op: StdOp.branch(loopNext.id))
 
-	// ⚠ **NO SYSCALL STACK IS COMMITTED HERE — it is the M's, and the OS thread that is about to BE one
-	// commits it** (`emitSchedBecomeM`). This loop runs once per PROCESSOR, so committing here would cost a
-	// 16-processor box 1 MB of scratch pages at bring-up for Ms that mostly never start; per-M it is one
-	// 64 KB region per machine that actually runs.
+	// No syscall stack is committed here: it is the M's, committed by the OS thread about to become
+	// one (`emitSchedBecomeM`), so only machines that actually run pay for one.
 	let nextIter = emitBin(module, block: loopNext, a: iterId, b: emitConst(module, block: loopNext, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids)
 	module.setTerminator(loopNext, op: StdOp.branch(loopHdr.id))
 	loopNext.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: argsOf(nextIter)))
 
-	// ⭐⭐ **THE MAIN OS THREAD BECOMES AN M, AND THEN THAT M TAKES P[0] — two acts, in that order.** Becoming
-	// an M is what gives this thread a syscall stack, a scheduler context and a TLS identity; taking a P is
-	// what gives it a run queue and an allocator shard. A handoff has to be able to undo the second without
-	// the first, so they cannot be one store sequence.
+	// The main OS thread becomes an M, and then that M takes P[0]. Becoming an M gives the thread a
+	// syscall stack, a scheduler context and a TLS identity; taking a P gives it a run queue and an
+	// allocator shard. A handoff must be able to undo the second without the first, so they are not
+	// one store sequence.
 	//
-	// ⚠ **THE M IS BUILT BEFORE THE P IS TAKEN, AND THE ALLOCATIONS INSIDE IT RUN WITH NO M AT ALL.**
-	// `__sched_tls_teb_offset` is already published by `entry` above while this thread's TLS slot still reads
-	// 0, so the `__slab_alloc` for the M struct itself takes `SlabRawShardRow` under the lock — reaching it
-	// through `emitSlabResolveShard`'s **no-M** arm (`emitSchedBecomeM` publishes the slot LAST), not through the
-	// P-less-M one. ⛔ **Do not read that as coverage of a P-less M**: this thread has no M yet, which is a
-	// different zero from an M that holds no processor. A parked worker with `M->currentP == 0` running its
-	// timer poll is the second one, and it is not this.
+	// The allocations inside the M's construction run with no M at all: `__sched_tls_teb_offset` is
+	// published while this thread's TLS slot still reads 0, so the M struct's `__slab_alloc` takes
+	// `SlabRawShardRow` through `emitSlabResolveShard`'s no-M arm (`emitSchedBecomeM` publishes the
+	// slot last). That is not coverage of the P-less-M arm, which a parked worker with
+	// `M->currentP == 0` running its timer poll reaches.
 	//
-	// ⚠ **M0 IS ALLOCATED AND REGISTERED ON THE SAME THREAD THAT THEN BECOMES IT**, which is the one place
-	// the two halves of M creation are not two threads. It costs nothing and it keeps the roster's rule
-	// whole: every M is on `__sched_allm` before anything can look for it, and M0's handle is 0 because this
-	// runtime never created this thread — the same 0 the teardown's join already tests for.
-	//
-	// ⚠ **THE LOCK IS TAKEN THOUGH THERE IS NOBODY TO CONTEND WITH.** `emitSchedAllocM`'s contract is that
-	// the caller holds it, and honouring a precondition that happens to be vacuous here is cheaper than a
-	// second spelling of the registration that does not.
+	// M0 is allocated and registered on the thread that then becomes it, which keeps the roster's
+	// rule whole: every M is on `__sched_allm` before anything can look for it. M0's handle is 0
+	// because this runtime never created the thread, the same 0 the teardown's join tests for. The
+	// lock is taken though nothing contends, because `emitSchedAllocM` requires its caller to hold it.
 	emitSchedLockEnter(module, block: adopt, ids: ids)
 	let zeroIndex = emitConst(module, block: adopt, value: 0, ids: ids)
 	let p0 = emitLoadProc(module, block: adopt, index: zeroIndex, ids: ids)
@@ -2990,10 +2999,10 @@ function buildSchedInitProcs(module StdModule, target Target)
 	emitSchedRegisterMLocked(module, block: adopt, m: m0, ids: ids)
 	emitStoreGlobalWord(module, block: adopt, label: SchedMainMLabel, value: m0, ids: ids)
 
-	// ⚠ **P[0] IS CLAIMED EXPLICITLY BECAUSE IT DID NOT JOIN `__sched_pidle` ABOVE.** Every other processor is
-	// marked taken by the `pidleget` that removes it; M0's skipped the list, so its claim is spelled at the one
-	// site that knows that — with no `__sched_npidle` step, since the count is the list's — inside this
-	// critical section, like every other writer of the word.
+	// P[0] is claimed explicitly because it never joined `__sched_pidle`, where every other
+	// processor is marked taken by the `pidleget` that removes it. There is no `__sched_npidle` step,
+	// since the count is the list's, and the claim is inside this critical section like every other
+	// writer of the word.
 	emitSchedPidleClaimLocked(module, block: adopt, p: p0, ids: ids)
 	emitSchedLockLeave(module, block: adopt, ids: ids)
 	emitSchedBecomeM(module, block: adopt, m: m0, target: target, ids: ids)
@@ -3003,8 +3012,8 @@ function buildSchedInitProcs(module StdModule, target Target)
 	emitStoreField(module, block: adopt, record: m0, offset: MOffNextP, value: emitConst(module, block: adopt, value: 0, ids: ids))
 	emitSchedAdoptProc(module, block: adopt, m: m0, p: p0)
 
-	// ⭐ **THE MONITOR'S `CONTEXT` BUFFER, TAKEN ONCE** — see `SchedPreemptContextLabel`. Bring-up, so the
-	// store needs no lock, and an asynchronous stop then allocates nothing for the life of the process.
+	// The monitor's `CONTEXT` buffer, taken once at bring-up (see `SchedPreemptContextLabel`), so the
+	// store needs no lock and an asynchronous stop allocates nothing.
 	if targetPreemptDelivery(target) == PreemptDelivery.threadSuspend 'theContextBuffer'
 		let contextPage = ids.mint()
 		module.appendOp(adopt, op: StdOp.osAllocPages(contextPage, sizeId: emitConst(module, block: adopt, value: SchedPreemptContextBytes, ids: ids)))
@@ -4273,25 +4282,18 @@ function recordRunqTaintOfOp(func IrFunction, op StdOp, taint RunqRingTaint) ret
 		const(resultId, value, _) then return recordRunqOffsetConst(taint, resultId: resultId, value: value)
 		binOp(resultId, lhs, rhs, opcode, _) then return recordAddressTaint(taint, resultId: resultId, lhs: lhs, rhs: rhs, opcode: opcode)
 		unaryOp or
-			cmp then return false
-		binOpImm(resultId, lhs, imm, opcode, _) then return recordImmediateAddressTaint(taint, resultId: resultId, lhs: lhs, imm: imm, opcode: opcode)
-		cmpImm or
+			cmp or
+			cmpImm or
 			div or
 			mod or
 			condBranch or
-			branch then return false
-		ret(retValId) then return recordReturnTaint(taint, funcName: func.name, retValId: retValId)
-		param(resultId, index, _) then return recordParamTaint(taint, funcName: func.name, resultId: resultId, index: index as ParsedInt)
-		call(resultId, callee, args) then return recordCallTaint(taint, resultId: resultId, callee: callee, args: args)
-		retVoid then return false
-		globalAddr(resultId, label) then return recordSchedulerGlobalAddr(taint, resultId: resultId, label: label)
-		loadIndirect(resultId, addrId, offset, _) then return recordLoadedRecord(taint, resultId: resultId, addrId: addrId, offset: offset)
-		storeIndirect or
+			branch or
+			retVoid or
+			storeIndirect or
 			osAllocPages or
 			osWriteStdout or
-			rdataAddr then return false
-		tryCall(resultId, _, callee, args) then return recordCallTaint(taint, resultId: resultId, callee: callee, args: args)
-		errorReturn or
+			rdataAddr or
+			errorReturn or
 			osExit or
 			funcAddr or
 			callIndirect or
@@ -4301,6 +4303,7 @@ function recordRunqTaintOfOp(func IrFunction, op StdOp, taint RunqRingTaint) ret
 			osProcessExitCode or
 			osCloseHandle or
 			osWaitHandle or
+			osWaitChild or
 			osFreePages or
 			switch or
 			witnessCall or
@@ -4365,16 +4368,15 @@ function recordRunqTaintOfOp(func IrFunction, op StdOp, taint RunqRingTaint) ret
 			atomicRmw or
 			currentThreadToken or
 			tlsAlloc or
-			tlsSetValue then return false
-		tlsSlotLoad(resultId, _) then return noteTaintedValue(taint.machineChannel.values, valueId: resultId)
-		osSetEvent or
+			tlsSetValue or
+			osSetEvent or
 			osEnterBackgroundPriority or
 			osFileOpenWriteExecutable or
 			osEnvBlock or
-			osEnvBlockFree then return false
-		loadAcquire(resultId, addrId, offset, _) then return recordLoadedRecord(taint, resultId: resultId, addrId: addrId, offset: offset)
-		storeRelease or
+			osEnvBlockFree or
+			storeRelease or
 			osHandleFileType or
+			osProcessProbe or
 			osCreateNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
@@ -4383,8 +4385,17 @@ function recordRunqTaintOfOp(func IrFunction, op StdOp, taint RunqRingTaint) ret
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe then return false
-		osDebugHost then return false
+			osSocketServe or
+			osDebugHost then return false
+		binOpImm(resultId, lhs, imm, opcode, _) then return recordImmediateAddressTaint(taint, resultId: resultId, lhs: lhs, imm: imm, opcode: opcode)
+		ret(retValId) then return recordReturnTaint(taint, funcName: func.name, retValId: retValId)
+		param(resultId, index, _) then return recordParamTaint(taint, funcName: func.name, resultId: resultId, index: index as ParsedInt)
+		call(resultId, callee, args) then return recordCallTaint(taint, resultId: resultId, callee: callee, args: args)
+		globalAddr(resultId, label) then return recordSchedulerGlobalAddr(taint, resultId: resultId, label: label)
+		loadIndirect(resultId, addrId, offset, _) or
+			loadAcquire then return recordLoadedRecord(taint, resultId: resultId, addrId: addrId, offset: offset)
+		tryCall(resultId, _, callee, args) then return recordCallTaint(taint, resultId: resultId, callee: callee, args: args)
+		tlsSlotLoad(resultId, _) then return noteTaintedValue(taint.machineChannel.values, valueId: resultId)
 	end 'k'
 end 'recordRunqTaintOfOp'
 
@@ -7335,31 +7346,28 @@ function buildSchedPreemptOne(module StdModule, target Target)
 	module.functions.push(func)
 end 'buildSchedPreemptOne'
 
-// `__gt_preempt_safe(m, pc, sp) -> gt | 0` — see `PreemptSafeName`. PURE LOADS AND COMPARES, no lock and no
-// call but the table lookup, because a POSIX lane will run it inside a signal handler on an arbitrary
-// instruction boundary of the thread it is judging.
+// `__gt_preempt_safe(m, pc, sp) -> gt | 0` — see `PreemptSafeName`. Pure loads and compares, no
+// lock and no call but the table lookup, because a POSIX lane runs it inside a signal handler on an
+// arbitrary instruction boundary of the thread it judges.
 //
-// ⭐⭐⭐ **EVERY TEST IS A REASON A STOP WOULD BE UNSOUND, AND ALL OF THEM MUST HOLD:**
-//   • **there is a green thread and it is not a scheduler context.** A g0 is the machine's own loop; parking
-//     it has no meaning, and its `stackBase` is 0 (`MOffSchedulerContext`), which is the test.
-//   • **the guard word carries the cooperative request.** The request is what makes the stop LEGITIMATE:
-//     `__sched_preemptone` wrote it a moment ago, and a thread that never got one is a thread nobody asked
-//     to yield. It is also what keeps a stop off a thread that has since switched, because a switch-in
-//     restores the word (`emitGtExecute`).
-//   • **the machine is not inside or leaving a bracketed kernel call.** Its register file then describes the
-//     shim's stack switch or a kernel frame, neither of which the trampoline could return into. A machine
-//     blocked in the poller is inside one of those calls.
-//   • **it holds no runtime lock** (`MOffLocks`) — a parked thread holding `__sched_lock` never releases it.
-//   • **the stack pointer is inside the green thread's own stack with the whole stop floor below it**
-//     (`GtRuntime.gtAsyncPreemptFloor`: the trampoline's own cost plus the OS's fault-frame reserve).
-//     That excludes the syscall shim's window and `__gt_morestack` (both run on the machine's system stack),
-//     the guard region, and any instant with too little room for the register block the trampoline spills.
-//   • **the PC lies in a function `__symtable` marks asynchronously preemptible** — see
-//     `BacktraceFormat.SymtabSafeFromBias`, which also excludes that function's own prologue guard.
+// Each test refuses a stop that would be unsound:
+// - a scheduler context: a g0 is the machine's own loop, and its `stackBase` is 0
+//   (`MOffSchedulerContext`);
+// - no cooperative request in the guard word: nobody asked the thread to yield, and a switch-in
+//   restores the word (`emitGtExecute`), which keeps a stop off a thread that has since switched;
+// - inside or leaving a bracketed kernel call: the register file describes the shim's stack switch
+//   or a kernel frame, neither of which the trampoline could return into;
+// - a runtime lock held (`MOffLocks`): a parked holder of `__sched_lock` never releases it;
+// - the stack pointer outside the thread's own stack or within the stop floor of its base
+//   (`GtRuntime.gtAsyncPreemptFloor`), which excludes the shim window and `__gt_morestack` (both on
+//   the system stack), the guard region, and too little room for the trampoline's register block;
+// - a PC outside every function `__symtable` marks asynchronously preemptible, or inside its
+//   prologue guard (`BacktraceFormat.SymtabSafeFromBias`);
+// - under the debug agent, a PC one byte past an address the agent has planted an `int3` at, where
+//   a trap may still be in flight (`emitGtPreemptSafeTrapLookback`).
 //
-// ⚠ **THE ADDRESS COMPARES ARE SIGNED, WHICH IS EVERY OTHER ADDRESS COMPARE IN THIS RUNTIME.** Nothing this
-// judges is a kernel address: a green thread's stack is `osAllocPages`'d user memory and the PC is inside
-// this image, both far below the sign bit.
+// The address compares are signed, like every other in this runtime: a green thread's stack is
+// `osAllocPages`'d user memory and the PC is inside this image, both far below the sign bit.
 function buildGtPreemptSafe(module StdModule, target Target)
 	var func = IrFunction.createFromStd(PreemptSafeName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(3)
@@ -7428,30 +7436,35 @@ function buildGtPreemptSafe(module StdModule, target Target)
 	let unnamed = emitCmp(module, block: named, a: index, b: emitConst(module, block: named, value: 0, ids: ids), pred: StdCmpPred.lt, ids: ids)
 	module.setTerminator(named, op: StdOp.condBranch(unnamed, thenBlockId: notSafe.id, elseBlockId: flagged.id))
 
-	// The safe-point run is one byte per entry at the entry's own index, reached through the header column
-	// that records where the variable-length names end — read as the whole header word and shifted down,
-	// because the Std tier has no 32-bit access (`BacktraceFormat.SymtabHeaderFlagsOffsetShift`).
+	// The safe-point run is one byte per entry at the entry's own index, reached through the header
+	// column that records where the variable-length names end — read as the whole header word and
+	// shifted down, because the Std tier has no 32-bit access
+	// (`BacktraceFormat.SymtabHeaderFlagsOffsetShift`). The byte shares its top bit with
+	// `SymtabScaffoldingBit`; unmasked, a scaffolding function the table marks never-safe would pass
+	// the zero test.
 	let header = emitLoadField(module, block: flagged, record: symtable, offset: 0, ids: ids)
 	let flagsOffset = emitBin(module, block: flagged, a: header, b: emitConst(module, block: flagged, value: SymtabHeaderFlagsOffsetShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
 	let flagsBase = emitBin(module, block: flagged, a: symtable, b: flagsOffset, opcode: StdBinOpcode.add, ids: ids)
-	let safeFrom = emitLoadByteIndexed(module, block: flagged, base: flagsBase, index: index, ids: ids)
+	let flagsByte = emitLoadByteIndexed(module, block: flagged, base: flagsBase, index: index, ids: ids)
+	let safeFrom = emitBin(module, block: flagged, a: flagsByte, b: emitConst(module, block: flagged, value: SymtabSafeFromMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
 	let neverSafe = emitCmp(module, block: flagged, a: safeFrom, b: emitConst(module, block: flagged, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(flagged, op: StdOp.condBranch(neverSafe, thenBlockId: notSafe.id, elseBlockId: pastTheGuard.id))
 
-	// ⛔⛔ **AND PAST THE FUNCTION'S PROLOGUE GUARD, WHICH HOLDS A *MACHINE* IN A REGISTER.** The guard walks
-	// TLS to the machine and then to the machine's green thread; a thread stopped between those two loads
-	// resumes — possibly on another machine — with a register naming the machine it left, and the next load
-	// takes somebody else's green thread for its own. `BacktraceFormat.SymtabSafeFromBias` carries the whole
-	// argument and the byte that measures the region.
+	// Past the function's prologue guard too, which holds a machine in a register between its TLS load
+	// and its green-thread load: a thread stopped there resumes, possibly on another machine, and
+	// takes the green thread of the machine it left for its own. `BacktraceFormat.SymtabSafeFromBias`
+	// carries the argument.
 	let entryStride = emitBin(module, block: pastTheGuard, a: index, b: emitConst(module, block: pastTheGuard, value: SymtabEntryShift, ids: ids), opcode: StdBinOpcode.shl, ids: ids)
 	let entryOffset = emitBin(module, block: pastTheGuard, a: entryStride, b: emitConst(module, block: pastTheGuard, value: SymtabOffEntries as ParsedInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
 	let entryAddr = emitBin(module, block: pastTheGuard, a: symtable, b: entryOffset, opcode: StdBinOpcode.add, ids: ids)
 	let entryWord = emitLoadField(module, block: pastTheGuard, record: entryAddr, offset: 0, ids: ids)
 	let funcStart = emitBin(module, block: pastTheGuard, a: entryWord, b: emitConst(module, block: pastTheGuard, value: SymtabEntryCodeOffsetMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
 	let intoFunc = emitBin(module, block: pastTheGuard, a: textOffset, b: funcStart, opcode: StdBinOpcode.sub, ids: ids)
-	let firstSafe = emitBin(module, block: pastTheGuard, a: safeFrom, b: emitConst(module, block: pastTheGuard, value: SymtabSafeFromBias, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	let safeGranules = emitBin(module, block: pastTheGuard, a: safeFrom, b: emitConst(module, block: pastTheGuard, value: SymtabSafeFromBias, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	let firstSafe = emitBin(module, block: pastTheGuard, a: safeGranules, b: emitConst(module, block: pastTheGuard, value: safePointGranuleOf(target) as ParsedInt, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
 	let insideTheGuard = emitCmp(module, block: pastTheGuard, a: intoFunc, b: firstSafe, pred: StdCmpPred.lt, ids: ids)
-	let cleared = emitGtPreemptSafeLlscLookback(module, func: func, pc: pc, notSafe: notSafe, safe: safe, target: target, ids: ids)
+	let noTrapInFlight = emitGtPreemptSafeTrapLookback(module, func: func, pc: pc, notSafe: notSafe, safe: safe, target: target, ids: ids)
+	let cleared = emitGtPreemptSafeLlscLookback(module, func: func, pc: pc, notSafe: notSafe, safe: noTrapInFlight, target: target, ids: ids)
 	module.setTerminator(pastTheGuard, op: StdOp.condBranch(insideTheGuard, thenBlockId: notSafe.id, elseBlockId: cleared.id))
 
 	module.setTerminator(safe, op: StdOp.ret(gt))
@@ -7496,6 +7509,34 @@ function emitGtPreemptSafeLlscLookback(module StdModule, func IrFunction, pc Val
 
 	return head
 end 'emitGtPreemptSafeLlscLookback'
+
+let TrapByteLength = 1
+
+function emitGtPreemptSafeTrapLookback(module StdModule, func IrFunction, pc ValueId, notSafe IrBlock, safe IrBlock, target Target, ids ValueMinter) returns IrBlock
+	if targetPreemptDelivery(target) != PreemptDelivery.threadSuspend 'theThreadReadsItsOwnRegisters'
+		return safe
+	end 'theThreadReadsItsOwnRegisters'
+
+	match target.cpu 'isa'
+		x64 then break 'isa'
+
+		arm64 or
+			wasm32 then panic("emitGtPreemptSafeTrapLookback: only x64-windows stops a thread from outside it, and `{target.cpu.name}` plants no `int3` for a trap to be in flight behind")
+	end 'isa'
+
+	if not module.usesDebugAgent 'noAgentPlantsTraps'
+		return safe
+	end 'noAgentPlantsTraps'
+
+	var check = module.addBlock(func, label: b"psnotrap", heat: BlockHeat.normal)
+	let previous = emitBin(module, block: check, a: pc, b: emitConst(module, block: check, value: TrapByteLength, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	let planted = ids.mint()
+	module.appendOp(check, op: StdOp.call(planted, callee: DbgTrapPlantedAtName, args: argsOf(previous)))
+	let trapInFlight = emitCmp(module, block: check, a: planted, b: emitConst(module, block: check, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(check, op: StdOp.condBranch(trapInFlight, thenBlockId: notSafe.id, elseBlockId: safe.id))
+
+	return check
+end 'emitGtPreemptSafeTrapLookback'
 
 // `psnollsc1` … `psnollsc4` — the block that refuses on the `wordsBack`-th word before the interrupted one.
 // One ASCII digit, which the refusal below is what makes safe rather than the reader's arithmetic.

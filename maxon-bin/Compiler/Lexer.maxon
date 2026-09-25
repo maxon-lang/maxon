@@ -1364,14 +1364,11 @@ type Lexer
 		let numStart = cursorByte()
 		let firstByte = cursor.current()
 
-		// Check for 0x, 0b, 0o prefixes
-		// Sentinel: peek(1) throws past EOF, which legitimately happens when
-		// scanNumber is invoked from a sub-parser (e.g. string interpolation)
-		// over a substring that ends on a digit. 0 is safe — treated as "no prefix".
+		// `peek(1)` throws when a sub-parser (string interpolation) scans a substring that ends on this
+		// digit; 0 reads as "no prefix".
 		let prefixByte = try cursor.peek(1) otherwise 0
 
 		if firstByte == Ascii.zero and prefixByte != 0 'checkPrefix'
-			// Hex literal: 0x or 0X
 			if prefixByte == Ascii.lowerX or prefixByte == Ascii.upperX 'isHex'
 				_ = tryAdvance()
 
@@ -1383,7 +1380,7 @@ type Lexer
 				while cursorByte() < len 'hexDigits'
 					let hc = cursor.current()
 
-					if not isHexDigit(hc) and hc != Ascii.underscore 'endHex'
+					if not urlIsHexDigit(hc) and hc != Ascii.underscore 'endHex'
 						break
 					end 'endHex'
 
@@ -1395,7 +1392,6 @@ type Lexer
 				emitNumber(TokenKind.intLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
 				return
 			end 'isHex' else if prefixByte == Ascii.lowerB or prefixByte == Ascii.upperB 'isBin'
-				// Binary literal: 0b or 0B
 				_ = tryAdvance()
 
 				if not tryAdvance() 'binPrefixEof'
@@ -1442,7 +1438,6 @@ type Lexer
 			end 'isOct'
 		end 'checkPrefix'
 
-		// Decimal digits (with underscore separators)
 		while cursorByte() < len 'digits'
 			let dc = cursor.current()
 
@@ -1455,21 +1450,12 @@ type Lexer
 			end 'digitsEof'
 		end 'digits'
 
-		// ⭐⭐ **A NUMBER THAT FOLLOWS A `.` IS A TUPLE INDEX AND HAS NO FRACTION (P1.10).**
-		//
-		// `scanNumber` greedily takes a following `.` as the start of a fraction, which is right for `1.5`
-		// and WRONG for `t.0.1`: that lexed as `identifier(t)`, `dot`, `floatLiteral(0.1)` — a chained
-		// positional access silently becoming a float. Nothing downstream can undo it, because by then the
-		// two indices have been fused into one token's text.
-		//
-		// The rule is exact rather than a heuristic, because a number can follow a `dot` for exactly one
-		// reason: `.` is not an operator on numbers in Maxon (a range is `low to high`), a float literal
-		// always begins at its INTEGER part (there is no `.5` form — `scanNumber` is only entered on a
-		// digit), and every other dotted form (`u16.max`, `p.x`, `Point.create`) has an identifier on the
-		// right. So a digit after a `.` is a tuple index, always.
+		// A number after a `.` is a tuple index and takes no fraction, or `t.0.1` fuses two indices into
+		// the float `0.1`, which nothing downstream can split. The rule is exact: `.` is no operator on
+		// numbers, a float literal always starts with its integer part, and every other dotted form has
+		// an identifier on the right.
 		let followsMemberDot = lastTokenKind() == TokenKind.dot
 
-		// Check for decimal point (float literal)
 		var isFloat = false
 
 		if cursorByte() < len and not followsMemberDot 'checkDot'
@@ -1497,7 +1483,6 @@ type Lexer
 			end 'hasDot'
 		end 'checkDot'
 
-		// Check for scientific notation exponent (e/E) — only after a decimal point
 		if isFloat and cursorByte() < len 'checkExp'
 			let expCh = cursor.current()
 
@@ -1509,7 +1494,6 @@ type Lexer
 					return
 				end 'expEof'
 
-				// Optional sign
 				if cursorByte() < len 'checkSign'
 					let signCh = cursor.current()
 
@@ -1521,7 +1505,6 @@ type Lexer
 					end 'hasSign'
 				end 'checkSign'
 
-				// Exponent digits
 				while cursorByte() < len 'expDigits'
 					let ec = cursor.current()
 
@@ -1536,20 +1519,10 @@ type Lexer
 			end 'hasExp'
 		end 'checkExp'
 
-		// For decimal/float numbers, only include current byte if it's a digit or underscore
-		// (not alpha like 'e' which should start a separate identifier token)
-		// The `.` is admitted here only on the same terms it was admitted as a fraction opener above — a
-		// tuple index ends at its digits, and swallowing the following `.` would take the next hop's
-		// separator with it.
-		//
-		// ⛔⛔ **AND NOT WHEN THE NUMBER ALREADY HAS A FRACTION — A SECOND `.` IS NOT PART OF ANY NUMBER.**
-		// Without `not isFloat` this clause appended the second dot of `1.5.3` to the token AND set
-		// `atEof`, so the lexer handed the parser the text `1.5.` and then stopped scanning — dropping
-		// the `3` entirely. `__float_bitsFromText` then answered `malformed`, which
-		// `Parser.literalDecodeError` PANICKED on, on the stated premise that the lexer never emits such
-		// a token. It did, on `1.5.`, `1.5.3`, `1..5` and `1.5e2.3` — four ordinary typos that CRASHED
-		// the compiler. A float token ends at its fraction; the `.` after it belongs to whatever comes
-		// next, and letting it start a member access is what turns those four into positioned errors.
+		// The byte under the cursor joins the token only as a digit, an underscore, or a `.` that could
+		// still open a fraction: not after a member `.`, where a tuple index ends at its digits, and not
+		// after a fraction, where the second `.` of `1.5.3` belongs to the next token. Taking it also
+		// sets `atEof`, so a wrongly taken `.` ends the scan and drops the rest of the source.
 		let cb = cursor.current()
 		var atEof = false
 		var endOfs = cursorByte()
@@ -1909,9 +1882,6 @@ end 'tokenize'
 
 // --- Pure helpers ---
 
-// Exported for `isHexDigit`'s reason, and to its own second reader: `InterpFormatSpec.digitsEnd`
-// scans the width and precision of a format specifier, and "is this byte a decimal digit?" is the
-// number lexer's question asked about a different run of bytes — one predicate, not a second copy.
 export function isDigit(b Byte) returns bool
 	return b >= '0' and b <= '9'
 end 'isDigit'
@@ -2081,12 +2051,6 @@ function classifyDirective(name String) returns TokenKind
 	return TokenKind.identifier
 end 'classifyDirective'
 
-// ASCII byte enum
-// ⚠ VISIBLE ACROSS THE MODULE for `isHexDigit`'s reason, stated one function below: a second spelling
-// of *"34 is a double quote"* is a second spelling however far away it is written.
-// `TargetPrinter.escapedPayloadByte` reads `dquote` and `backslash` from here when it renders a `.rdata`
-// blob's text into a golden. `module` and not `export`: every reader is inside `Compiler/`, and a
-// self-compile refuses an `export` nothing outside the subtree reads (E3093).
 module enum Ascii
 	lf = 10
 	space = 32
@@ -2112,12 +2076,6 @@ module enum Ascii
 	lowerO = 111
 	lowerX = 120
 end 'Ascii'
-
-// Exported so the byte-string escape decoder (`Parser.hexDigitsPresent`) reads a hex digit the same way
-// the number lexer does — one predicate, not a second copy.
-export function isHexDigit(b Byte) returns bool
-	return (b >= '0' and b <= '9') or (b >= 'A' and b <= 'F') or (b >= 'a' and b <= 'f')
-end 'isHexDigit'
 
 function isBinaryDigit(b Byte) returns bool
 	return b == '0' or b == '1'

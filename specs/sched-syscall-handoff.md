@@ -634,6 +634,125 @@ retaken=yes
 0
 ```
 
+<!-- test: a-child-wait-and-its-kill-hand-their-processor-off -->
+<!-- procs: 1 -->
+<!-- unsupported-targets: wasm32-wasi -->
+A streaming child's `waitWithTimeout` is a kernel wait on another process, and so is the wait for the kill
+its deadline fires. With one processor, the sentinel's sleep ends while the waiter sits in the kernel, so it
+prints ahead of the wait's return only if that processor was handed off, and the retake count read around
+the wait says the hand-off happened there rather than at the spawn.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+let deadlineMs = 1000
+let blockedThresholdMs = 500
+let sentinelSleepMs = 200
+
+function spawnLongChild() returns StreamingSubprocess throws SubprocessError
+	var argv = StringArray.create()
+
+	#if os(Windows)
+		argv.push("-n")
+		argv.push("30")
+		argv.push("127.0.0.1")
+		return try StreamingSubprocess.spawn(Executable.name("ping"), arguments: argv)
+	#else
+		argv.push("30")
+		return try StreamingSubprocess.spawn(Executable.path(FilePath from "/bin/sleep"), arguments: argv)
+	#endif
+end 'spawnLongChild'
+
+function endedByItsDeadline(child StreamingSubprocess) returns bool
+	_ = try child.waitWithTimeout(deadlineMs) otherwise (e) 'ended'
+		return match e 'why'
+			timeout gives true
+			executableNotFound or
+				spawnFailed or
+				ioFailed or
+				inputTooLarge gives false
+		end 'why'
+	end 'ended'
+
+	return false
+end 'endedByItsDeadline'
+
+type Waiter
+	var id as Integer
+
+	static function create() returns Self
+		return Self{id: 0}
+	end 'create'
+
+	export function outlast(sentinel Sentinel.handle) returns Integer
+		var child = try spawnLongChild() otherwise 'noChild'
+			return 0
+		end 'noChild'
+
+		print("W: waiting\n")
+		let tailReply = sentinel.ping()
+		let retakesBefore = __Builtins.schedRetakeCount()
+		let start = Clock.nowMs()
+		let killed = endedByItsDeadline(child)
+		let waitedMs = Clock.elapsedMs(start)
+		let retakesDuring = __Builtins.schedRetakeCount() - retakesBefore
+		child.release()
+		print("W: wait returned\n")
+
+		let tail = try await tailReply otherwise 0
+		var blocked = "no"
+
+		if waitedMs >= blockedThresholdMs 'blocked'
+			blocked = "yes"
+		end 'blocked'
+
+		var retaken = "no"
+
+		if retakesDuring > 0 'retaken'
+			retaken = "yes"
+		end 'retaken'
+
+		print("done sibling={tail} killed={killed} blocked={blocked} retaken={retaken}\n")
+		return 1
+	end 'outlast'
+end 'Waiter'
+
+type Sentinel
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function ping() returns Integer
+		sleep(sentinelSleepMs)
+		print("S: sentinel ran\n")
+		return 1
+	end 'ping'
+end 'Sentinel'
+
+function main() returns ExitCode
+	let sentinel = spawn Sentinel.create()
+	let waiter = spawn Waiter.create()
+
+	let finished = try await waiter.outlast(sentinel) otherwise 0
+
+	if finished == 0 'noChild'
+		return 1 as ExitCode
+	end 'noChild'
+
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+W: waiting
+S: sentinel ran
+W: wait returned
+done sibling=1 killed=true blocked=yes retaken=yes
+```
+```exitcode
+0
+```
+
 <!-- test: the-feed-is-measured-from-the-first-output-not-from-the-start -->
 <!-- procs: 1 -->
 <!-- stdin: delayed -->

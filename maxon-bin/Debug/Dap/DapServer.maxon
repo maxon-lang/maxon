@@ -1,0 +1,920 @@
+typealias DapWakePromise = Promise with DapWake
+typealias DapWakePromiseArray = Array with DapWakePromise
+typealias DapFrameRefArray = Array with DapFrameRef
+typealias DapVariableRefArray = Array with DapVariableRef
+typealias DapSourceBreakpointsArray = Array with DapSourceBreakpoints
+typealias DapRefIndex = int(0 to i64.max)
+typealias DapBreakpointAskArray = Array with DapBreakpointAsk
+
+let DapPollSliceMs = 10 as Milliseconds
+let DapWalkYieldMs = 0 as Milliseconds
+let DapStopLookMs = 0 as StopTimeoutMs
+let DapWalkSliceMs = 10 as StopTimeoutMs
+let FirstReference = 1 as DapNumber
+let NoFramesAtAll = 0 as DapNumber
+
+let InitializeCommand = "initialize"
+let LaunchCommand = "launch"
+let SetBreakpointsCommand = "setBreakpoints"
+let SetFunctionBreakpointsCommand = "setFunctionBreakpoints"
+let ConfigurationDoneCommand = "configurationDone"
+let ThreadsCommand = "threads"
+let StackTraceCommand = "stackTrace"
+let ScopesCommand = "scopes"
+let VariablesCommand = "variables"
+let EvaluateCommand = "evaluate"
+let ContinueCommand = "continue"
+let NextCommand = "next"
+let StepInCommand = "stepIn"
+let StepOutCommand = "stepOut"
+let PauseCommand = "pause"
+let DisconnectCommand = "disconnect"
+let TerminateCommand = "terminate"
+
+let InitializedEvent = "initialized"
+let StoppedEvent = "stopped"
+let ContinuedEvent = "continued"
+let OutputEvent = "output"
+let ExitedEvent = "exited"
+let TerminatedEvent = "terminated"
+
+let SourceArgument = "source"
+let PathArgument = "path"
+let BreakpointsArgument = "breakpoints"
+let LineArgument = "line"
+let ConditionArgument = "condition"
+let NameArgument = "name"
+let ThreadIdArgument = "threadId"
+let StartFrameArgument = "startFrame"
+let LevelsArgument = "levels"
+let FrameIdArgument = "frameId"
+let VariablesReferenceArgument = "variablesReference"
+let ExpressionArgument = "expression"
+let ContextArgument = "context"
+
+let ReplContext = "repl"
+let WatchContext = "watch"
+let HoverContext = "hover"
+let ClipboardContext = "clipboard"
+let VariablesContext = "variables"
+
+let NoProgramMessage = "no program has been launched; send `launch` first"
+let ProgramEndedMessage = "the program has ended; there is nothing left to ask it"
+let AlreadyLaunchedMessage = "this adapter has already launched its program; one adapter debugs one launch"
+
+union DapWake
+	frame(incoming LspIncoming)
+	sliceElapsed
+end 'DapWake'
+
+type DapFrameReader
+	static function create() returns DapFrameReader
+		return Self{}
+	end 'create'
+
+	export function next() returns LspIncoming
+		return readLspMessage().clone()
+	end 'next'
+end 'DapFrameReader'
+
+function dapNextFrame(reader DapFrameReader.handle) returns DapWake
+	return DapWake.frame(try await reader.next() otherwise panic("dapNextFrame: the frame reader stopped while the adapter still held its handle"))
+end 'dapNextFrame'
+
+function dapSliceElapsed(sliceMs Milliseconds) returns DapWake
+	sleep(sliceMs)
+
+	return DapWake.sliceElapsed
+end 'dapSliceElapsed'
+
+export function runDapServer() returns ExitCode
+	sweepStaleDebugBuilds()
+
+	var adapter = DapAdapter.create()
+	let reader = spawn DapFrameReader.create()
+	var wakes = DapWakePromiseArray.create()
+	wakes.push(async dapNextFrame(reader))
+
+	while adapter.isServing() 'pump'
+		if adapter.wantsASlice() 'aProgramToWatch'
+			wakes.push(async dapSliceElapsed(adapter.sliceMs()))
+			adapter.noteSliceArmed()
+		end 'aProgramToWatch'
+
+		let ready = __Builtins.awaitAny(wakes)
+		let woke = try wakes.remove(ready) otherwise panic("runDapServer: wakes.remove({ready}) — `awaitAny` answered a slot of this very array")
+
+		match await woke 'which'
+			sliceElapsed then adapter.sliceElapsed()
+			frame(incoming) then adapter.rearm(wakes, reader: reader, incoming: incoming)
+		end 'which'
+	end 'pump'
+
+	while wakes.count() > 0 'drainTheSlices'
+		let pending = try wakes.remove(0) otherwise panic("runDapServer: wakes.remove(0) on an array of {wakes.count()}")
+
+		match await pending 'leftover'
+			sliceElapsed then break 'leftover'
+			frame then panic("runDapServer: a frame read was left pending after the adapter stopped serving, and nothing re-arms one then")
+		end 'leftover'
+	end 'drainTheSlices'
+
+	return adapter.finish()
+end 'runDapServer'
+
+enum DapLifecycle
+	idle
+	configuring
+	parkedAtEntry
+	live
+	ended
+end 'DapLifecycle'
+
+type DapFrameRef
+	export let frame as DebugFrame
+	export let onTheStoppedThread as bool
+
+	static function create(frame DebugFrame, onTheStoppedThread bool) returns DapFrameRef
+		return Self{frame: frame, onTheStoppedThread: onTheStoppedThread}
+	end 'create'
+end 'DapFrameRef'
+
+union DapVariableRef
+	frameLocals(frame DapRefIndex)
+	children(tree DapRefIndex, node DebugValueIndex)
+end 'DapVariableRef'
+
+type DapSourceBreakpoints
+	export let path as FilePath
+	export let armed as DapBreakpointAskArray
+
+	static function create(path FilePath, armed DapBreakpointAskArray) returns DapSourceBreakpoints
+		return Self{path: path, armed: armed}
+	end 'create'
+end 'DapSourceBreakpoints'
+
+type DapAdapter
+	var writer as DapWriter
+	var debuggee as DebugSessionSlot
+	var lifecycle as DapLifecycle
+	var stopOnEntry as bool
+	var stoppedThread as DapNumber
+	var sourceBreakpoints as DapSourceBreakpointsArray
+	var functionBreakpoints as DapBreakpointAskArray
+	var frameRefs as DapFrameRefArray
+	var variableRefs as DapVariableRefArray
+	var renderedTrees as DebugValueTreeArray
+	var numbering as DapNumbering
+	var serving as bool
+	var broken as bool
+	var sliceArmed as bool
+
+	static function create() returns DapAdapter
+		return Self{writer: DapWriter.create(), debuggee: DebugSessionSlot.create(), lifecycle: DapLifecycle.idle, stopOnEntry: false, stoppedThread: DapMainThreadId, sourceBreakpoints: DapSourceBreakpointsArray.create(), functionBreakpoints: DapBreakpointAskArray.create(), frameRefs: DapFrameRefArray.create(), variableRefs: DapVariableRefArray.create(), renderedTrees: DebugValueTreeArray.create(), numbering: DapNumbering.countingFromOne(), serving: true, broken: false, sliceArmed: false}
+	end 'create'
+
+	function programState() returns DebugProgramState
+		return match self.debuggee.hold 'held'
+			empty gives DebugProgramState.ended
+			held(session) gives session.conversation.programState()
+		end 'held'
+	end 'programState'
+
+	function sliceMs() returns Milliseconds
+		return DapWalkYieldMs if self.programState() == DebugProgramState.walking else DapPollSliceMs
+	end 'sliceMs'
+
+	function isServing() returns bool
+		return self.serving
+	end 'isServing'
+
+	function isWatching() returns bool
+		if self.lifecycle != DapLifecycle.live 'notReleased'
+			return false
+		end 'notReleased'
+
+		let state = self.programState()
+
+		return state == DebugProgramState.running or state == DebugProgramState.walking
+	end 'isWatching'
+
+	function wantsASlice() returns bool
+		return self.isWatching() and not self.sliceArmed
+	end 'wantsASlice'
+
+	function noteSliceArmed()
+		self.sliceArmed = true
+	end 'noteSliceArmed'
+
+	function sliceElapsed()
+		self.sliceArmed = false
+
+		if self.isWatching() 'stillRunning'
+			self.watch()
+		end 'stillRunning'
+	end 'sliceElapsed'
+
+	function rearm(wakes DapWakePromiseArray, reader DapFrameReader.handle, incoming LspIncoming)
+		self.take(incoming)
+
+		if self.serving 'anotherFrame'
+			wakes.push(async dapNextFrame(reader))
+		end 'anotherFrame'
+	end 'rearm'
+
+	function take(incoming LspIncoming)
+		match incoming 'which'
+			message(body) then self.handleBody(body)
+			endOfStream then self.serving = false
+			framingError(detail) then self.breakDown(detail)
+		end 'which'
+	end 'take'
+
+	function breakDown(detail String)
+		printError("maxon dap-server: {detail}\n")
+		self.broken = true
+		self.serving = false
+	end 'breakDown'
+
+	function finish() returns ExitCode
+		_ = self.debuggee.reap()
+
+		return OwnFailureExit if self.broken else SucceededExit
+	end 'finish'
+
+	function watch()
+		match self.debuggee.hold 'which'
+			empty then panic("DapAdapter.watch: the adapter watches only while a launched program runs")
+			held(session) then self.watchSession(session)
+		end 'which'
+	end 'watch'
+
+	function watchSession(session DebugToolSession)
+		let sliceMs = DapWalkSliceMs if self.programState() == DebugProgramState.walking else DapStopLookMs
+		let answers = self.delivered(session, replies: session.conversation.pollForStop(sliceMs), announceResume: false)
+
+		for failure in answers.failures 'eachFailure'
+			self.emitText(ConsoleCategory, text: failure)
+		end 'eachFailure'
+	end 'watchSession'
+
+	function handleBody(body String)
+		let request = try DapRequest.parse(body) otherwise (e) 'notARequest'
+			match e 'why'
+				notJson then self.breakDown("a frame's body is not JSON")
+				notARequest then self.breakDown("a frame is not a Debug Adapter Protocol request")
+			end 'why'
+
+			return
+		end 'notARequest'
+
+		try self.answer(request) otherwise (e) 'badArguments'
+			match e 'why'
+				missing(name) then self.writer.refuse(request, message: "`{request.command}` needs the argument `{name}`")
+				wrongType(name) then self.writer.refuse(request, message: "`{request.command}`'s argument `{name}` is not the type the protocol defines")
+			end 'why'
+		end 'badArguments'
+	end 'handleBody'
+
+	function answer(request DapRequest) throws DapArgumentError
+		if request.command == InitializeCommand 'initialize'
+			self.numbering = try DapNumbering.askedBy(request.arguments)
+			var doc = JsonDoc.create()
+			self.writer.respond(request, doc: doc, body: DapBody.object(dapCapabilitiesBody(doc)))
+
+			return
+		end 'initialize'
+
+		if request.command == LaunchCommand 'launch'
+			try self.launch(request)
+
+			return
+		end 'launch'
+
+		if request.command == DisconnectCommand or request.command == TerminateCommand 'ending'
+			self.endSession(request)
+
+			return
+		end 'ending'
+
+		if not liveCommands().contains(request.command) 'unsupported'
+			self.writer.refuse(request, message: "unsupported request: {request.command}")
+
+			return
+		end 'unsupported'
+
+		if self.answeredAfterTheEnd(request) 'theProgramHasEnded'
+			return
+		end 'theProgramHasEnded'
+
+		match self.debuggee.hold 'which'
+			empty then self.refuseWithoutAProgram(request)
+			held(session) then try self.answerLive(request, session: session)
+		end 'which'
+	end 'answer'
+
+	function refuseWithoutAProgram(request DapRequest)
+		match self.lifecycle 'where'
+			idle then self.writer.refuse(request, message: NoProgramMessage)
+			ended or
+				configuring or
+				parkedAtEntry or
+				live then panic("DapAdapter.refuseWithoutAProgram: the adapter is {self.lifecycle.name} with no program attached — only an adapter that never launched holds none, and an ended one is answered before this")
+		end 'where'
+	end 'refuseWithoutAProgram'
+
+	function launch(request DapRequest) throws DapArgumentError
+		if self.lifecycle != DapLifecycle.idle 'alreadyLaunched'
+			self.writer.refuse(request, message: AlreadyLaunchedMessage)
+
+			return
+		end 'alreadyLaunched'
+
+		match try dapLaunch(request.arguments) 'launched'
+			refused(message) then self.writer.refuse(request, message: message)
+			launched(session, parkAtEntry) then self.adopt(request, session: session, parkAtEntry: parkAtEntry)
+		end 'launched'
+	end 'launch'
+
+	function adopt(request DapRequest, session DebugToolSession, parkAtEntry bool)
+		self.debuggee.place(session)
+		self.stopOnEntry = parkAtEntry
+		self.lifecycle = DapLifecycle.configuring
+		self.writer.respond(request, doc: JsonDoc.create(), body: DapBody.none)
+		self.writer.event(InitializedEvent, doc: JsonDoc.create(), body: DapBody.none)
+	end 'adopt'
+
+	function endSession(request DapRequest)
+		self.emitProgramOutput(self.debuggee.reap())
+		self.lifecycle = DapLifecycle.ended
+		self.writer.respond(request, doc: JsonDoc.create(), body: DapBody.none)
+
+		if request.command == TerminateCommand 'terminated'
+			self.writer.event(TerminatedEvent, doc: JsonDoc.create(), body: DapBody.none)
+		end 'terminated'
+	end 'endSession'
+
+	function answerLive(request DapRequest, session DebugToolSession) throws DapArgumentError
+		if request.command == SetBreakpointsCommand 'sourceBreakpoints'
+			try self.setSourceBreakpoints(request, session: session)
+
+			return
+		end 'sourceBreakpoints'
+
+		if request.command == SetFunctionBreakpointsCommand 'functionBreakpoints'
+			try self.setFunctionBreakpoints(request, session: session)
+
+			return
+		end 'functionBreakpoints'
+
+		if request.command == ConfigurationDoneCommand 'configured'
+			self.configurationDone(request, session: session)
+
+			return
+		end 'configured'
+
+		if request.command == ThreadsCommand 'threads'
+			self.threads(request, session: session)
+
+			return
+		end 'threads'
+
+		if request.command == StackTraceCommand 'stackTrace'
+			try self.stackTrace(request, session: session)
+
+			return
+		end 'stackTrace'
+
+		if request.command == ScopesCommand 'scopes'
+			try self.scopes(request)
+
+			return
+		end 'scopes'
+
+		if request.command == VariablesCommand 'variables'
+			try self.variablesOf(request, session: session)
+
+			return
+		end 'variables'
+
+		if request.command == EvaluateCommand 'evaluate'
+			try self.evaluate(request, session: session)
+
+			return
+		end 'evaluate'
+
+		self.moveThen(request, session: session, command: motionCommandFor(request.command))
+	end 'answerLive'
+
+	function setSourceBreakpoints(request DapRequest, session DebugToolSession) throws DapArgumentError
+		let spelled = try (try request.arguments.object(SourceArgument)).text(PathArgument)
+		let path = try FilePath.from(spelled) otherwise throw DapArgumentError.wrongType(PathArgument)
+		var asked = DapBreakpointAskArray.create()
+
+		for breakpoint in try request.arguments.objects(BreakpointsArgument) 'eachBreakpoint'
+			let clientLine = try breakpoint.number(LineArgument)
+			let line = self.numbering.lineFromClient(clientLine)
+
+			if line < 0 or line > u32.max 'noSourceLineIsNumberedSo'
+				throw DapArgumentError.wrongType(LineArgument)
+			end 'noSourceLineIsNumberedSo'
+
+			asked.push(DapBreakpointAsk.create(DebugBreakTarget.fileLine(spelled, line: line as DebugLineNumber), condition: try breakpoint.textOr(ConditionArgument, fallback: ""), requested: DapRequestedLine.at(clientLine)))
+		end 'eachBreakpoint'
+
+		let armed = self.armReplacing(request, session: session, previous: self.sourceBreakpointsAt(path), asked: asked)
+		self.holdSourceBreakpoints(path, armed: armed)
+	end 'setSourceBreakpoints'
+
+	function sourceBreakpointsAt(path FilePath) returns DapBreakpointAskArray
+		for source in self.sourceBreakpoints 'eachSource'
+			if source.path.equals(path) 'thisSource'
+				return source.armed
+			end 'thisSource'
+		end 'eachSource'
+
+		return DapBreakpointAskArray.create()
+	end 'sourceBreakpointsAt'
+
+	function holdSourceBreakpoints(path FilePath, armed DapBreakpointAskArray)
+		var kept = DapSourceBreakpointsArray.create()
+
+		for source in self.sourceBreakpoints 'eachSource'
+			if not source.path.equals(path) 'anotherSource'
+				kept.push(source)
+			end 'anotherSource'
+		end 'eachSource'
+
+		kept.push(DapSourceBreakpoints.create(path, armed: armed))
+		self.sourceBreakpoints = kept
+	end 'holdSourceBreakpoints'
+
+	function setFunctionBreakpoints(request DapRequest, session DebugToolSession) throws DapArgumentError
+		var asked = DapBreakpointAskArray.create()
+
+		for breakpoint in try request.arguments.objects(BreakpointsArgument) 'eachBreakpoint'
+			asked.push(DapBreakpointAsk.create(DebugBreakTarget.named(try breakpoint.text(NameArgument)), condition: try breakpoint.textOr(ConditionArgument, fallback: ""), requested: DapRequestedLine.none))
+		end 'eachBreakpoint'
+
+		self.functionBreakpoints = self.armReplacing(request, session: session, previous: self.functionBreakpoints, asked: asked)
+	end 'setFunctionBreakpoints'
+
+	function armReplacing(request DapRequest, session DebugToolSession, previous DapBreakpointAskArray, asked DapBreakpointAskArray) returns DapBreakpointAskArray
+		for breakpoint in previous 'eachPrevious'
+			_ = self.delivered(session, replies: session.conversation.perform(DebugCommand.disarm(breakpoint.target, owner: DebugBreakOwner.client)), announceResume: false)
+		end 'eachPrevious'
+
+		var doc = JsonDoc.create()
+		var nodes = JsonNodeIdArray.create()
+		var armed = DapBreakpointAskArray.create()
+
+		for breakpoint in asked 'eachBreakpoint'
+			let answers = self.delivered(session, replies: session.conversation.perform(DebugCommand.arm(breakpoint.target, condition: breakpoint.condition, owner: DebugBreakOwner.client)), announceResume: false)
+
+			match dapBreakpointOutcome(answers) 'outcome'
+				armed(answer) then self.notedArmed(armed, nodes: nodes, doc: doc, breakpoint: breakpoint, answer: answer)
+				unverified(message) then nodes.push(dapUnverifiedBreakpointNode(doc, message: message, requested: breakpoint.requested))
+			end 'outcome'
+		end 'eachBreakpoint'
+
+		self.writer.respond(request, doc: doc, body: DapBody.object(dapBreakpointsBody(doc, nodes: nodes)))
+
+		return armed
+	end 'armReplacing'
+
+	function notedArmed(armed DapBreakpointAskArray, nodes JsonNodeIdArray, doc JsonDoc, breakpoint DapBreakpointAsk, answer DebugBreakpointAnswer)
+		armed.push(breakpoint)
+		nodes.push(dapArmedBreakpointNode(doc, answer: answer, numbering: self.numbering))
+	end 'notedArmed'
+
+	function configurationDone(request DapRequest, session DebugToolSession)
+		if self.stopOnEntry 'parkAtEntry'
+			self.lifecycle = DapLifecycle.parkedAtEntry
+			self.writer.respond(request, doc: JsonDoc.create(), body: DapBody.none)
+
+			var doc = JsonDoc.create()
+			self.writer.event(StoppedEvent, doc: doc, body: DapBody.object(dapStoppedBody(doc, reason: DapEntryReason, threadId: DapMainThreadId, fault: DebugNoFault)))
+
+			return
+		end 'parkAtEntry'
+
+		self.lifecycle = DapLifecycle.live
+		self.moveThen(request, session: session, command: DebugCommand.resume)
+	end 'configurationDone'
+
+	function threads(request DapRequest, session DebugToolSession)
+		let answers = self.delivered(session, replies: session.conversation.perform(DebugCommand.threads), announceResume: false)
+
+		if self.answeredAfterTheEnd(request) 'itEndedWhileWeAsked'
+			return
+		end 'itEndedWhileWeAsked'
+
+		var doc = JsonDoc.create()
+
+		let rows = match answers.roster 'listed'
+			none gives DebugThreadRowArray.create()
+			listed(roster) gives roster.rows
+		end 'listed'
+
+		self.respondUnlessRefused(request, answers: answers, body: DapBody.object(dapThreadsBody(doc, rows: rows)), doc: doc)
+	end 'threads'
+
+	function stackTrace(request DapRequest, session DebugToolSession) throws DapArgumentError
+		let threadId = try request.arguments.number(ThreadIdArgument)
+		let startFrame = try request.arguments.numberOr(StartFrameArgument, fallback: 0)
+		let levels = try request.arguments.numberOr(LevelsArgument, fallback: 0)
+
+		if self.lifecycle == DapLifecycle.configuring or self.lifecycle == DapLifecycle.parkedAtEntry 'beforeMain'
+			self.respondFrames(request, frames: DebugFrameArray.create(), onTheStoppedThread: true, startFrame: startFrame, levels: levels)
+
+			return
+		end 'beforeMain'
+
+		let onTheStoppedThread = threadId == self.stoppedThread
+
+		let walk = try walkCommandFor(threadId, onTheStoppedThread: onTheStoppedThread) otherwise 'noSuchThread'
+			self.writer.refuse(request, message: "thread {threadId} is not a thread this program has")
+
+			return
+		end 'noSuchThread'
+
+		let answers = self.delivered(session, replies: session.conversation.perform(walk), announceResume: false)
+
+		if self.answeredAfterTheEnd(request) 'itEndedWhileWeAsked'
+			return
+		end 'itEndedWhileWeAsked'
+
+		match answers.frames 'listing'
+			none then self.refuseWith(request, answers: answers)
+			missing(reason) then self.writer.refuse(request, message: "thread {threadId} cannot be walked: {reason}")
+			walked(frames) then self.respondFrames(request, frames: frames, onTheStoppedThread: onTheStoppedThread, startFrame: startFrame, levels: levels)
+		end 'listing'
+	end 'stackTrace'
+
+	function respondFrames(request DapRequest, frames DebugFrameArray, onTheStoppedThread bool, startFrame DapNumber, levels DapNumber)
+		var doc = JsonDoc.create()
+		var nodes = JsonNodeIdArray.create()
+
+		for (iter, frame) in frames.withIterator() 'eachFrame'
+			let position = iter.index() as DapNumber
+
+			if position < startFrame or (levels > 0 and position >= startFrame + levels) 'outsideTheWindow'
+				continue
+			end 'outsideTheWindow'
+
+			self.frameRefs.push(DapFrameRef.create(frame, onTheStoppedThread: onTheStoppedThread))
+			nodes.push(dapStackFrameNode(doc, id: self.frameRefs.count() as DapNumber, frame: frame, numbering: self.numbering))
+		end 'eachFrame'
+
+		self.writer.respond(request, doc: doc, body: DapBody.object(dapStackTraceBody(doc, frames: nodes, total: frames.count() as DapNumber)))
+	end 'respondFrames'
+
+	function scopes(request DapRequest) throws DapArgumentError
+		let frameId = try request.arguments.number(FrameIdArgument)
+
+		if frameId < FirstReference or frameId > (self.frameRefs.count() as DapNumber) 'noSuchFrame'
+			self.writer.refuse(request, message: "no stack frame has the id {frameId}")
+
+			return
+		end 'noSuchFrame'
+
+		self.variableRefs.push(DapVariableRef.frameLocals((frameId - FirstReference) as DapRefIndex))
+
+		var doc = JsonDoc.create()
+		self.writer.respond(request, doc: doc, body: DapBody.object(dapLocalsScopesBody(doc, reference: self.variableRefs.count() as DapNumber)))
+	end 'scopes'
+
+	function variablesOf(request DapRequest, session DebugToolSession) throws DapArgumentError
+		let reference = try request.arguments.number(VariablesReferenceArgument)
+
+		if reference < FirstReference or reference > (self.variableRefs.count() as DapNumber) 'noSuchReference'
+			self.writer.refuse(request, message: "no variable has the reference {reference}")
+
+			return
+		end 'noSuchReference'
+
+		let held = try self.variableRefs.get((reference - FirstReference) as DapRefIndex) otherwise panic("DapAdapter.variablesOf: the reference was bounds-checked on the line above")
+
+		match held 'which'
+			frameLocals(frame) then self.respondFrameLocals(request, session: session, frame: frame)
+			children(tree, node) then self.respondChildren(request, tree: tree, node: node)
+		end 'which'
+	end 'variablesOf'
+
+	function respondFrameLocals(request DapRequest, session DebugToolSession, frame DapRefIndex)
+		let held = (try self.frameRefs.get(frame) otherwise panic("DapAdapter.respondFrameLocals: a scope reference names a frame this stop handed out")).clone()
+		let answers = self.delivered(session, replies: session.conversation.localsOfFrame(held.frame, onTheStoppedThread: held.onTheStoppedThread), announceResume: false)
+
+		if let tree = try answers.trees.get(0) 'rendered'
+			self.respondValues(request, tree: self.held(tree), indices: tree.roots)
+
+			return
+		end 'rendered'
+
+		self.refuseWith(request, answers: answers)
+	end 'respondFrameLocals'
+
+	function respondChildren(request DapRequest, tree DapRefIndex, node DebugValueIndex)
+		let held = try self.renderedTrees.get(tree) otherwise panic("DapAdapter.respondChildren: a child reference names a tree this stop rendered")
+		let children = held.nodeAt(node).children.clone()
+		self.respondValues(request, tree: tree, indices: children)
+	end 'respondChildren'
+
+	function held(tree DebugValueTree) returns DapRefIndex
+		self.renderedTrees.push(tree)
+
+		return (self.renderedTrees.count() - 1) as DapRefIndex
+	end 'held'
+
+	function respondValues(request DapRequest, tree DapRefIndex, indices DebugValueIndexArray)
+		let values = try self.renderedTrees.get(tree) otherwise panic("DapAdapter.respondValues: the tree was registered before its values were asked for")
+		var doc = JsonDoc.create()
+		var nodes = JsonNodeIdArray.create()
+
+		for index in indices 'eachValue'
+			let value = values.nodeAt(index)
+			nodes.push(dapVariableNode(doc, value: value, reference: self.childReference(tree, node: index, value: value)))
+		end 'eachValue'
+
+		self.writer.respond(request, doc: doc, body: DapBody.object(dapVariablesBody(doc, nodes: nodes)))
+	end 'respondValues'
+
+	function childReference(tree DapRefIndex, node DebugValueIndex, value DebugValueNode) returns DapNumber
+		if value.children.count() == 0 'aLeaf'
+			return NoChildren
+		end 'aLeaf'
+
+		self.variableRefs.push(DapVariableRef.children(tree, node: node))
+
+		return self.variableRefs.count() as DapNumber
+	end 'childReference'
+
+	function evaluate(request DapRequest, session DebugToolSession) throws DapArgumentError
+		let expression = try request.arguments.text(ExpressionArgument)
+		let context = try request.arguments.textOr(ContextArgument, fallback: WatchContext)
+
+		if context == ReplContext 'aDebuggerCommand'
+			let answers = self.delivered(session, replies: session.conversation.run(expression), announceResume: true)
+			var doc = JsonDoc.create()
+			self.writer.respond(request, doc: doc, body: DapBody.object(dapEvaluateBody(doc, result: answers.transcript(), reference: NoChildren)))
+
+			return
+		end 'aDebuggerCommand'
+
+		if not valueContexts().contains(context) 'anUnknownContext'
+			self.writer.refuse(request, message: "unsupported evaluate context: {context}")
+
+			return
+		end 'anUnknownContext'
+
+		let answers = self.delivered(session, replies: session.conversation.perform(DebugCommand.print(expression)), announceResume: false)
+
+		if let tree = try answers.trees.get(0) 'rendered'
+			let treeIndex = self.held(tree)
+			let root = try tree.roots.get(0) otherwise panic("DapAdapter.evaluate: a `value` reply carries exactly one root")
+			let value = tree.nodeAt(root)
+			var doc = JsonDoc.create()
+			self.writer.respond(request, doc: doc, body: DapBody.object(dapEvaluateBody(doc, result: dapValueText(value), reference: self.childReference(treeIndex, node: root, value: value))))
+
+			return
+		end 'rendered'
+
+		self.refuseWith(request, answers: answers)
+	end 'evaluate'
+
+	function moveThen(request DapRequest, session DebugToolSession, command DebugCommand)
+		self.lifecycle = DapLifecycle.live
+		self.emitProgramOutput(session.engine.takeOutput())
+		let answers = DapAnswers.of(session.conversation.perform(command))
+
+		if answers.failures.count() > 0 'refused'
+			self.refuseWith(request, answers: answers)
+			self.reportMovements(answers, announceResume: false)
+
+			return
+		end 'refused'
+
+		var doc = JsonDoc.create()
+		self.writer.respond(request, doc: doc, body: dapMovedBody(doc, command: request.command))
+		self.reportMovements(answers, announceResume: false)
+	end 'moveThen'
+
+	// An empty slot is also the state before any launch, which is refused as no program rather than
+	// answered as an ended one.
+	function programHasEnded() returns bool
+		if self.lifecycle == DapLifecycle.ended 'endedHere'
+			return true
+		end 'endedHere'
+
+		return match self.debuggee.hold 'held'
+			empty gives false
+			held(session) gives session.conversation.programState() == DebugProgramState.ended
+		end 'held'
+	end 'programHasEnded'
+
+	function answeredAfterTheEnd(request DapRequest) returns bool
+		if not self.programHasEnded() 'stillRunning'
+			return false
+		end 'stillRunning'
+
+		var doc = JsonDoc.create()
+
+		if request.command == ThreadsCommand 'noThreads'
+			self.writer.respond(request, doc: doc, body: DapBody.object(dapNoThreadsBody(doc)))
+
+			return true
+		end 'noThreads'
+
+		if request.command == StackTraceCommand 'noStack'
+			self.writer.respond(request, doc: doc, body: DapBody.object(dapStackTraceBody(doc, frames: JsonNodeIdArray.create(), total: NoFramesAtAll)))
+
+			return true
+		end 'noStack'
+
+		if request.command == ScopesCommand 'noScopes'
+			self.writer.respond(request, doc: doc, body: DapBody.object(dapNoScopesBody(doc)))
+
+			return true
+		end 'noScopes'
+
+		if request.command == VariablesCommand 'noVariables'
+			self.writer.respond(request, doc: doc, body: DapBody.object(dapVariablesBody(doc, nodes: JsonNodeIdArray.create())))
+
+			return true
+		end 'noVariables'
+
+		self.writer.refuse(request, message: ProgramEndedMessage)
+
+		return true
+	end 'answeredAfterTheEnd'
+
+	function respondUnlessRefused(request DapRequest, answers DapAnswers, body DapBody, doc JsonDoc)
+		if answers.failures.count() > 0 'refused'
+			self.refuseWith(request, answers: answers)
+
+			return
+		end 'refused'
+
+		self.writer.respond(request, doc: doc, body: body)
+	end 'respondUnlessRefused'
+
+	function refuseWith(request DapRequest, answers DapAnswers)
+		let failure = try answers.failures.get(0) otherwise panic("DapAdapter.refuseWith: `{request.command}` produced neither its answer nor an error")
+		self.writer.refuse(request, message: failure)
+	end 'refuseWith'
+
+	function delivered(session DebugToolSession, replies DebugReplyArray, announceResume bool) returns DapAnswers
+		self.emitProgramOutput(session.engine.takeOutput())
+
+		let answers = DapAnswers.of(replies)
+		self.reportMovements(answers, announceResume: announceResume)
+
+		return answers
+	end 'delivered'
+
+	function reportMovements(answers DapAnswers, announceResume bool)
+		for movement in answers.movements 'eachMovement'
+			match movement 'which'
+				stopped(stop) then self.reportStop(stop)
+				ended(code) then self.reportEnd(code)
+				running then self.reportRunning(announceResume)
+			end 'which'
+		end 'eachMovement'
+	end 'reportMovements'
+
+	function reportStop(stop DebugStop)
+		self.forgetReferences()
+		self.lifecycle = DapLifecycle.live
+		self.stoppedThread = dapThreadIdOf(stop.thread)
+
+		var doc = JsonDoc.create()
+		self.writer.event(StoppedEvent, doc: doc, body: DapBody.object(dapStoppedBody(doc, reason: dapStopReason(stop), threadId: self.stoppedThread, fault: stop.fault)))
+	end 'reportStop'
+
+	function reportEnd(code DapNumber)
+		self.forgetReferences()
+		self.lifecycle = DapLifecycle.ended
+
+		var doc = JsonDoc.create()
+		self.writer.event(ExitedEvent, doc: doc, body: DapBody.object(dapExitedBody(doc, code: code)))
+		self.writer.event(TerminatedEvent, doc: JsonDoc.create(), body: DapBody.none)
+	end 'reportEnd'
+
+	function reportRunning(announce bool)
+		self.forgetReferences()
+		self.lifecycle = DapLifecycle.live
+
+		if announce 'notAskedFor'
+			var doc = JsonDoc.create()
+			self.writer.event(ContinuedEvent, doc: doc, body: DapBody.object(dapContinuedBody(doc, threadId: self.stoppedThread)))
+		end 'notAskedFor'
+	end 'reportRunning'
+
+	function forgetReferences()
+		self.frameRefs.clear()
+		self.variableRefs.clear()
+		self.renderedTrees.clear()
+	end 'forgetReferences'
+
+	function emitLines(category String, lines StringArray)
+		if lines.count() == 0 'nothingWritten'
+			return
+		end 'nothingWritten'
+
+		var doc = JsonDoc.create()
+		self.writer.event(OutputEvent, doc: doc, body: DapBody.object(dapOutputBody(doc, category: category, lines: lines)))
+	end 'emitLines'
+
+	function emitProgramOutput(output CollectedLines)
+		if output.dropped > 0 'someWereDropped'
+			self.emitText(ConsoleCategory, text: droppedOutputNotice(output.dropped))
+		end 'someWereDropped'
+
+		var run = StringArray.create()
+		var runStream = ChildStream.stdout
+
+		for line in output.lines 'eachLine'
+			if line.stream != runStream 'anotherStream'
+				self.emitLines(dapCategoryOf(runStream), lines: run)
+				run = StringArray.create()
+				runStream = line.stream
+			end 'anotherStream'
+
+			run.push(line.text)
+		end 'eachLine'
+
+		self.emitLines(dapCategoryOf(runStream), lines: run)
+	end 'emitProgramOutput'
+
+	function emitText(category String, text String)
+		var lines = StringArray.create()
+		lines.push(text)
+		self.emitLines(category, lines: lines)
+	end 'emitText'
+end 'DapAdapter'
+
+enum DapThreadError implements Error
+	notAThread
+end 'DapThreadError'
+
+function walkCommandFor(threadId DapNumber, onTheStoppedThread bool) returns DebugCommand throws DapThreadError
+	if onTheStoppedThread 'theStoppedThread'
+		return DebugCommand.backtrace
+	end 'theStoppedThread'
+
+	match dapThreadTargetOf(threadId) 'target'
+		green(id) then return DebugCommand.greenBacktrace(DebugThreadSelector.numbered(id))
+		mainThread or
+			unknown then throw DapThreadError.notAThread
+	end 'target'
+end 'walkCommandFor'
+
+function motionCommandFor(command String) returns DebugCommand
+	if command == ContinueCommand 'continue'
+		return DebugCommand.resume
+	end 'continue'
+
+	if command == NextCommand 'next'
+		return DebugCommand.walk(DebugWalkMode.overTheCall)
+	end 'next'
+
+	if command == StepInCommand 'stepIn'
+		return DebugCommand.walk(DebugWalkMode.intoTheCallee)
+	end 'stepIn'
+
+	if command == StepOutCommand 'stepOut'
+		return DebugCommand.walk(DebugWalkMode.outOfTheFrame)
+	end 'stepOut'
+
+	if command == PauseCommand 'pause'
+		return DebugCommand.pause
+	end 'pause'
+
+	panic("motionCommandFor: `{command}` is a live command and no arm answers it")
+end 'motionCommandFor'
+
+function liveCommands() returns StringArray
+	return [SetBreakpointsCommand, SetFunctionBreakpointsCommand, ConfigurationDoneCommand, ThreadsCommand, StackTraceCommand, ScopesCommand, VariablesCommand, EvaluateCommand, ContinueCommand, NextCommand, StepInCommand, StepOutCommand, PauseCommand]
+end 'liveCommands'
+
+function valueContexts() returns StringArray
+	return [WatchContext, HoverContext, ClipboardContext, VariablesContext]
+end 'valueContexts'
+
+function dapMovedBody(doc JsonDoc, command String) returns DapBody
+	if command == ContinueCommand 'everyThreadContinues'
+		return DapBody.object(dapAllContinuedBody(doc))
+	end 'everyThreadContinues'
+
+	return DapBody.none
+end 'dapMovedBody'
+
+type DapBreakpointAsk
+	export let target as DebugBreakTarget
+	export let condition as String
+	export let requested as DapRequestedLine
+
+	static function create(target DebugBreakTarget, condition String, requested DapRequestedLine) returns DapBreakpointAsk
+		return Self{target: target, condition: condition, requested: requested}
+	end 'create'
+end 'DapBreakpointAsk'

@@ -643,6 +643,60 @@ end 'main'
 invalidScheme
 ```
 
+<!-- test: url.parse-authority-is-read-to-its-grammar -->
+```maxon
+function verdict(spelled String) returns String
+	let url = try URL.parse(spelled) otherwise (e) 'refused'
+		return e.name
+	end 'refused'
+
+	let host = try url.host() otherwise "no-host"
+	let port = try url.port() otherwise 0
+
+	return "host={host} port={port}"
+end 'verdict'
+
+function main() returns ExitCode
+	let spellings = [
+		"http://[zz]:1/",
+		"http://a b/",
+		"http://:80/",
+		"http://[::1]x/",
+		"http://exa^mple.com/",
+		"http://host:99999/",
+		"http://host:8x/",
+		"http://[::1]:8080/p",
+		"http://host:/p",
+		"http://exa%41mple.com/",
+		"http://[v1.fe80::a+en1]/",
+		"file:///etc/hosts"
+	]
+
+	for spelled in spellings 'eachSpelling'
+		print("{spelled} -> {verdict(spelled)}\n")
+	end 'eachSpelling'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+http://[zz]:1/ -> invalidHost
+http://a b/ -> invalidHost
+http://:80/ -> invalidHost
+http://[::1]x/ -> invalidHost
+http://exa^mple.com/ -> invalidHost
+http://host:99999/ -> invalidPort
+http://host:8x/ -> invalidPort
+http://[::1]:8080/p -> host=[::1] port=8080
+http://host:/p -> host=host port=0
+http://exa%41mple.com/ -> host=exa%41mple.com port=0
+http://[v1.fe80::a+en1]/ -> host=[v1.fe80::a+en1] port=0
+file:///etc/hosts -> host= port=0
+```
+
 ### toString Tests
 
 <!-- test: url.tostring-basic -->

@@ -12,8 +12,10 @@ export typealias DebugWord = int(i64.min to i64.max)
 
 export let DebugNoSuggestion = ""
 let DebugNoUnavailability = ""
+export let DebugNoFault = ""
 
 export typealias DebugThreadId = int(1 to u32.max)
+export let LowestDebugThreadId = 1 as DebugThreadId
 
 export union DebugRegisterAccess
 	readable
@@ -25,15 +27,22 @@ export union DebugThreadRef
 	id(value DebugThreadId)
 end 'DebugThreadRef'
 
+export function debugNamePhrase(name DebugFunctionNameLookup, lead String) returns String
+	return match name 'known'
+		none gives ""
+		named(spelled) gives "{lead}{spelled}"
+	end 'known'
+end 'debugNamePhrase'
+
 export type DebugThreadRow
 	export var id as DebugThreadId
 	export var status as String
-	export var functionName as String
+	export var functionName as DebugFunctionNameLookup
 	export var file as String
 	export var line as DebugLineNumber
 	export var handle as DebugAddress
 
-	export static function create(id DebugThreadId, status String, functionName String, file String, line DebugLineNumber, handle DebugAddress) returns DebugThreadRow
+	export static function create(id DebugThreadId, status String, functionName DebugFunctionNameLookup, file String, line DebugLineNumber, handle DebugAddress) returns DebugThreadRow
 		return Self{id: id, status: status, functionName: functionName, file: file, line: line, handle: handle}
 	end 'create'
 end 'DebugThreadRow'
@@ -126,13 +135,16 @@ export type DebugFrame
 	export var number as DebugFrameNumber
 	export var functionName as String
 	export var file as String
+	export var path as String
 	export var line as DebugLineNumber
+	export var column as DebugColumnNumber
 	export var offset as DebugAddress
 	export var inlined as bool
+	export var site as MxdbgInlineSiteLookup
 	export var framePointer as DebugAddress
 
-	export static function create(number DebugFrameNumber, functionName String, file String, line DebugLineNumber, offset DebugAddress, inlined bool, framePointer DebugAddress) returns DebugFrame
-		return Self{number: number, functionName: functionName, file: file, line: line, offset: offset, inlined: inlined, framePointer: framePointer}
+	export static function create(number DebugFrameNumber, functionName String, path String, line DebugLineNumber, column DebugColumnNumber, offset DebugAddress, inlined bool, site MxdbgInlineSiteLookup, framePointer DebugAddress) returns DebugFrame
+		return Self{number: number, functionName: functionName, file: baseNameOf(path), path: path, line: line, column: column, offset: offset, inlined: inlined, site: site, framePointer: framePointer}
 	end 'create'
 end 'DebugFrame'
 
@@ -140,7 +152,8 @@ export typealias DebugFrameArray = Array with DebugFrame
 
 export type DebugStop
 	export var reason as String
-	export var functionName as String
+	export var fault as String
+	export var functionName as DebugFunctionNameLookup
 	export var file as String
 	export var line as DebugLineNumber
 	export var column as DebugColumnNumber
@@ -150,8 +163,8 @@ export type DebugStop
 	export var machine as DebugAddress
 	export var thread as DebugThreadRef
 
-	export static function create(reason String, functionName String, file String, line DebugLineNumber, column DebugColumnNumber, offset DebugAddress, source DebugSourceLineArray, frames DebugFrameArray, machine DebugAddress, thread DebugThreadRef) returns DebugStop
-		return Self{reason: reason, functionName: functionName, file: file, line: line, column: column, offset: offset, source: source, frames: frames, machine: machine, thread: thread}
+	export static function create(reason String, fault String, functionName DebugFunctionNameLookup, file String, line DebugLineNumber, column DebugColumnNumber, offset DebugAddress, source DebugSourceLineArray, frames DebugFrameArray, machine DebugAddress, thread DebugThreadRef) returns DebugStop
+		return Self{reason: reason, fault: fault, functionName: functionName, file: file, line: line, column: column, offset: offset, source: source, frames: frames, machine: machine, thread: thread}
 	end 'create'
 end 'DebugStop'
 
@@ -207,7 +220,7 @@ end 'DebugValueTree'
 export type DebugBreakpointAnswer
 	export var action as String
 	export var target as String
-	export var functionName as String
+	export var functionName as DebugFunctionNameLookup
 	export var file as String
 	export var line as DebugLineNumber
 	export var offset as DebugAddress
@@ -217,7 +230,7 @@ export type DebugBreakpointAnswer
 	export var reason as String
 	export var condition as String
 
-	export static function create(action String, target String, functionName String, file String, line DebugLineNumber, offset DebugAddress, offsets DebugAddressArray, candidates StringArray, suggestion String, reason String, condition String = "") returns DebugBreakpointAnswer
+	export static function create(action String, target String, functionName DebugFunctionNameLookup, file String, line DebugLineNumber, offset DebugAddress, offsets DebugAddressArray, candidates StringArray, suggestion String, reason String, condition String = "") returns DebugBreakpointAnswer
 		return Self{action: action, target: target, functionName: functionName, file: file, line: line, offset: offset, offsets: offsets, candidates: candidates, suggestion: suggestion, reason: reason, condition: condition}
 	end 'create'
 end 'DebugBreakpointAnswer'
@@ -226,7 +239,7 @@ export union DebugReply
 	breakpoint(answer DebugBreakpointAnswer)
 	stopped(stop DebugStop)
 	walked(frames DebugFrameArray)
-	locals(functionName String, values DebugValueTree)
+	locals(functionName DebugFunctionNameLookup, values DebugValueTree)
 	value(tree DebugValueTree)
 	exited(code DebugExitCode)
 	crashed(status DebugAddress)
@@ -235,6 +248,7 @@ export union DebugReply
 	threadOutcome(outcome DebugThreadOutcome)
 	traced(slice DebugTraceSlice)
 	timedOut(waitingFor String)
+	running
 	failed(message String, suggestion String)
 	spoken(lines StringArray)
 	quit

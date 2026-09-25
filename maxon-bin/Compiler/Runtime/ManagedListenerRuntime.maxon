@@ -55,11 +55,11 @@ let ListenerNameAddressOffset = 0 as ByteOffset
 let ListenerNameLengthOffset = 16 as ByteOffset
 let ListenerNameScratchBytes = 24 as ParsedInt
 
-// ⭐⭐ **`sin_port` IS AT BYTE 2 ON EVERY PLATFORM THIS COMPILER TARGETS, AND IT IS BIG-ENDIAN THERE.** Linux
-// and Windows open the record with a 16-bit `sin_family`; the BSDs open it with a one-byte `sin_len` and put
-// `sin_family` in byte 1 (`ManagedSocketRuntime.sockaddrFamilyHalfword` carries that measurement) — and both
-// layouts put the port in bytes 2 and 3. So the READ side needs no per-platform fork at all, which is why
-// these are constants rather than a shape function.
+// `sin_port` is at byte 2 on every platform this compiler targets, and big-endian there. Linux and
+// Windows open the record with a 16-bit `sin_family`; the BSDs open it with a one-byte `sin_len`
+// and put `sin_family` in byte 1 (`ManagedSocketRuntime.sockaddrFamilyHalfword`), and both layouts
+// put the port in bytes 2 and 3. So the read side needs no per-platform fork, which is why these
+// are constants rather than a shape function.
 let SinPortHighOffset = 2 as ByteOffset
 let SinPortLowOffset = 3 as ByteOffset
 
@@ -76,11 +76,13 @@ let ManagedListenerBindFailedOrdinal = 1 as ParsedInt
 let ManagedListenerAcceptFailedOrdinal = 2 as ParsedInt
 let ManagedListenerAddressFailedOrdinal = 3 as ParsedInt
 let ManagedListenerClosedOrdinal = 4 as ParsedInt
+let ManagedListenerAcceptRetriableOrdinal = 5 as ParsedInt
 let ManagedListenerResolveFailedFlag = ManagedListenerResolveFailedOrdinal + ErrorFlagOrdinalBias
 let ManagedListenerBindFailedFlag = ManagedListenerBindFailedOrdinal + ErrorFlagOrdinalBias
 let ManagedListenerAcceptFailedFlag = ManagedListenerAcceptFailedOrdinal + ErrorFlagOrdinalBias
 let ManagedListenerAddressFailedFlag = ManagedListenerAddressFailedOrdinal + ErrorFlagOrdinalBias
 let ManagedListenerClosedFlag = ManagedListenerClosedOrdinal + ErrorFlagOrdinalBias
+let ManagedListenerAcceptRetriableFlag = ManagedListenerAcceptRetriableOrdinal + ErrorFlagOrdinalBias
 
 // The `__ml_` prefix that identifies EVERY listener runtime entry point — the one test `scanRuntimeUsage`
 // reads to set `usesManagedListener`, and the one `TargetFacilities` reads for E3104. It is a band of its own
@@ -140,22 +142,17 @@ function emitLiveListenerOrThrow(module StdModule, func IrFunction, entry IrBloc
 	return emitLiveHandleOrClosedThrow(module, func: func, entry: entry, join: join, record: box, handleOffset: ManagedSocketHandleOffset, closedSentinel: ManagedSocketClosedHandle, closedFlag: ManagedListenerClosedFlag, ids: ids)
 end 'emitLiveListenerOrThrow'
 
-// ⭐⭐ **`__ml_bind(hostRec, port) -> (box, flag)` — RESOLVE, CREATE, BIND, LISTEN, OR THROW.**
-//
-// The sequence:
+// `__ml_bind(hostRec, port) -> (box, flag)`: resolve, create, bind, listen, or throw.
 //
 //   WSAStartup(2.2), once per process  →  resolve `host` to a network-order `sin_addr`  →  socket()
 //   →  build a `sockaddr_in`  →  bind()  →  listen(backlog)  →  join the poller  →  the box
 //
-// ⭐ **BINDING AND LISTENING ARE ONE CALL BECAUSE A BOUND SOCKET NOBODY LISTENS ON IS A STATE NO CALLER
-// WANTS.** Splitting them would let a program hold a box that owns a port and refuses every connection, and
-// there is no operation in this surface that such a box could serve.
+// Binding and listening are one call because a bound socket nobody listens on is a box that owns a
+// port and refuses every connection, which no operation in this surface could serve.
 //
-// ⚠ **A `port` OF 0 ASKS THE KERNEL TO CHOOSE**, which is how two spec workers running at once cannot
-// collide. `__ml_port` is how the caller learns which port it was given.
-//
-// ⚠ **EVERY SCRATCH IS FREED ON EVERY EXIT, THE THROWING ONES INCLUDED** — the host cstring, the `WSADATA`
-// and the address block.
+// A `port` of 0 asks the kernel to choose, which is how two spec workers running at once cannot
+// collide; `__ml_port` is how the caller learns the port. Every scratch is freed on every exit, the
+// throwing ones included.
 function buildManagedListenerBind(module StdModule, target Target)
 	var func = IrFunction.createFromStd(ManagedListenerBindName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: managedListenerThrows())
 	var ids = ValueMinter.create(2)
@@ -183,9 +180,9 @@ function buildManagedListenerBind(module StdModule, target Target)
 	emitRawFree(module, block: noWinsock, ptr: host, ids: ids)
 	emitErrorReturn(module, block: noWinsock, flag: ManagedListenerBindFailedFlag, ids: ids)
 
-	// ⭐ **A NAME'S RESOLVE IS THIS FUNCTION'S ONLY WAIT**, so it is the only road that parks, and
-	// `emitResolveHostIp` takes the park there. `socket`, `bind` and `listen` each allocate or rearrange a kernel
-	// object and return, which is not a wait — see `emitIoPark`'s once-per-blocking-operation invariant.
+	// A name's resolve is this function's only wait, so `emitResolveHostIp` takes the one park.
+	// `socket`, `bind` and `listen` each allocate or rearrange a kernel object and return, which is
+	// not a wait — see `emitIoPark`'s once-per-blocking-operation invariant.
 	let ip = emitResolveHostIp(module, func: func, resolve: resolve, resolved: resolved, resolveFailed: resolveFailed, renounced: noWinsock, host: host, shape: socketResolveShape(target), park: GtIoOperation.netListen, ids: ids)
 	emitErrorReturn(module, block: resolveFailed, flag: ManagedListenerResolveFailedFlag, ids: ids)
 
@@ -202,26 +199,26 @@ function buildManagedListenerBind(module StdModule, target Target)
 	let bindResult = ids.mint()
 	module.appendOp(doBind, op: StdOp.osSocketServe(bindResult, verb: SocketServeVerb.bind, a0Id: socket, a1Id: addr, a2Id: emitConst(module, block: doBind, value: 0, ids: ids)))
 	emitRawFree(module, block: doBind, ptr: addr, ids: ids)
-	let bindRefused = emitSocketStatusFailed(module, block: doBind, answer: bindResult, ids: ids)
+	let bindRefused = emitSocketCallFailed(module, block: doBind, answer: bindResult, ids: ids)
 	module.setTerminator(doBind, op: StdOp.condBranch(bindRefused, thenBlockId: closeAndFail.id, elseBlockId: doListen.id))
 
 	let listenResult = ids.mint()
 	let unusedListen = emitConst(module, block: doListen, value: 0, ids: ids)
 	module.appendOp(doListen, op: StdOp.osSocketServe(listenResult, verb: SocketServeVerb.listen, a0Id: socket, a1Id: emitConst(module, block: doListen, value: ListenBacklog, ids: ids), a2Id: unusedListen))
-	let listenRefused = emitSocketStatusFailed(module, block: doListen, answer: listenResult, ids: ids)
+	let listenRefused = emitSocketCallFailed(module, block: doListen, answer: listenResult, ids: ids)
 	module.setTerminator(doListen, op: StdOp.condBranch(listenRefused, thenBlockId: closeAndFail.id, elseBlockId: bound.id))
 
-	// A refused bind or listen leaves an OPEN socket that no box will ever own, so it is closed here or it
-	// holds its descriptor for the process lifetime — invisibly to the exit-101 gate, because a socket is not
-	// memory. The poller has not been given this descriptor yet, so there is no record to release.
+	// A refused bind or listen leaves an open socket that no box will ever own, so it is closed here
+	// or it holds its descriptor for the process lifetime — invisibly to the exit-101 gate, because a
+	// socket is not memory. The poller has not been given this descriptor yet, so there is no record
+	// to release.
 	module.appendOp(closeAndFail, op: StdOp.osSocketClose(socket))
 	emitErrorReturn(module, block: closeAndFail, flag: ManagedListenerBindFailedFlag, ids: ids)
 
-	// ⭐ **THE DESCRIPTOR JOINS THE POLLER ONLY NOW, AND ON EVERY LANE.** Nothing could have waited on it
-	// before it was listening, and a record opened ahead of a bind that fails is one the failure road would
-	// have to release. It is opened on the completion-port lane too — where the accept parks on an event
-	// rather than on this record — because `__ms_close` is this box's close on every lane and it releases the
-	// record unconditionally; an open that forked would leave that release to reset a record nobody adopted.
+	// The descriptor joins the poller only here, and on every lane. Nothing could have waited on it
+	// before it was listening, and a record opened ahead of a bind that fails is one the failure road
+	// would have to release. Both accept shapes park on this record, and `__ms_close` releases it
+	// unconditionally on every lane.
 	emitSocketPollerOpen(module, block: bound, pollKey: emitNetpollDescriptorIndex(module, block: bound, target: target, fd: socket, ids: ids), socket: socket, ids: ids)
 	let box = emitRawAlloc(module, block: bound, byteCount: emitConst(module, block: bound, value: ManagedSocketBoxBytes, ids: ids), ids: ids)
 	emitStoreHandleSlot(module, block: bound, record: box, handleOffset: ManagedSocketHandleOffset, handle: socket, ids: ids)
@@ -230,14 +227,9 @@ function buildManagedListenerBind(module StdModule, target Target)
 	module.functions.push(func)
 end 'buildManagedListenerBind'
 
-// ⭐⭐ **`__ml_port(box) -> (port, flag)` — THE PORT THE KERNEL ACTUALLY BOUND.** A caller that asked for 0
-// has no other way to learn it, and a caller that named a port gets the same number back.
-//
-// ⚠ **IT MAKES NO PARK, BECAUSE IT MAKES NO WAIT.** `getsockname` answers out of the socket object the
-// kernel is already holding.
-//
-// ⚠ **THE PORT IS BIG-ENDIAN IN THE RECORD AND IS COMPOSED FROM TWO BYTE LOADS**, which is also what makes
-// the read platform-neutral: Darwin's `sin_len` moves `sin_family` but not `sin_port`.
+// `__ml_port(box) -> (port, flag)`: the port the kernel bound, which a caller that asked for 0 has
+// no other way to learn. It makes no park because it makes no wait: `getsockname` answers out of
+// the socket object the kernel already holds.
 function buildManagedListenerPort(module StdModule)
 	var func = IrFunction.createFromStd(ManagedListenerPortName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: managedListenerThrows())
 	var ids = ValueMinter.create(1)
@@ -263,7 +255,7 @@ function buildManagedListenerPort(module StdModule)
 	let scaled = emitBin(module, block: ask, a: high, b: emitConst(module, block: ask, value: SinPortHighScale, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
 	let portValue = emitBin(module, block: ask, a: scaled, b: low, opcode: StdBinOpcode.bitOr, ids: ids)
 	emitRawFree(module, block: ask, ptr: scratch, ids: ids)
-	let askFailed = emitSocketStatusFailed(module, block: ask, answer: status, ids: ids)
+	let askFailed = emitSocketCallFailed(module, block: ask, answer: status, ids: ids)
 	module.setTerminator(ask, op: StdOp.condBranch(askFailed, thenBlockId: refused.id, elseBlockId: answered.id))
 	ask.branchEdges.push(BranchEdge.create(answered.id, argIds: argsOf(portValue)))
 
@@ -278,11 +270,9 @@ function buildManagedListenerPort(module StdModule)
 	module.functions.push(func)
 end 'buildManagedListenerPort'
 
-// ⭐⭐⭐ **`__ml_accept(box) -> (socketBox, flag)` — TAKE A CONNECTION, PARKING ON THE POLLER UNTIL ONE
-// ARRIVES.** The answer is an owned `__ManagedSocket` box of its own, with its own poll record and its own
-// destructor; the listener's box is untouched.
-//
-// ⚠ **THE WAIT COSTS NO MACHINE ON EITHER SHAPE**, which is what
+// `__ml_accept(box) -> (socketBox, flag)`: take a connection, parking on the poller until one
+// arrives. The answer is an owned `__ManagedSocket` box with its own poll record and destructor;
+// the listener's box is untouched. The wait costs no machine on either shape, which
 // `specs/netpoll-socket.md`'s `a-parked-accept-is-on-the-poller` reads off `schedNetpollBlockCount`.
 function buildManagedListenerAccept(module StdModule, target Target)
 	var func = IrFunction.createFromStd(ManagedListenerAcceptName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: managedListenerThrows())
@@ -294,34 +284,35 @@ function buildManagedListenerAccept(module StdModule, target Target)
 	var attempt = module.addBlock(func, label: b"mlattempt", heat: BlockHeat.normal)
 	var accepted = module.addBlock(func, label: b"mlaccepted", heat: BlockHeat.normal)
 	var failed = module.addBlock(func, label: b"mlacceptfail", heat: BlockHeat.normal)
+	var retriable = module.addBlock(func, label: b"mlacceptretry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let box = 0 as ValueId
 	let listener = emitLiveListenerOrThrow(module, func: func, entry: entry, join: ready, box: box, ids: ids)
 
-	// ⭐⭐ **BOTH SHAPES WAIT ON THE LISTENER'S OWN POLL RECORD, AND THAT IS WHAT MAKES TWO ACCEPTORS ONE
-	// WAITER TOO MANY ON EVERY LANE.** A direction word holds one waiter, so an accept published there is
-	// refused a second publication by `__np_pd_wait` itself — `RuntimeAbort.netpollDoubleWait`, the stop two
-	// readers of one socket already get (`specs/netpoll-socket.md`'s two named-stop cases are one contract in
-	// two shapes). A watch on a source minted per accept would name a different word each time and strand the
-	// first acceptor instead.
+	// Both shapes wait on the listener's own poll record, which makes two acceptors one waiter too
+	// many on every lane: a direction word holds one waiter, so `__np_pd_wait` refuses a second
+	// publication (`RuntimeAbort.netpollDoubleWait`, the stop two readers of one socket get). A
+	// source minted per accept would name a different word each time and strand the first acceptor.
 	//
-	// The accept begins on the record here, ahead of the retry ring: the generation its waits carry is the
-	// listener's life at this point, so a listener closed and reopened under a parked accept ends the accept
-	// rather than publishing it into the next owner's word.
+	// The accept begins on the record here, ahead of the retry ring: the generation its waits carry
+	// is the listener's life at this point, so a listener closed and reopened under a parked accept
+	// ends the accept rather than publishing it into the next owner's word.
 	emitIoParkBranchOnRenounced(module, cur: ready, operation: GtIoOperation.netAccept, proceed: accepting, renounced: failed, ids: ids)
 	let pollKey = emitNetpollDescriptorIndex(module, block: accepting, target: target, fd: listener, ids: ids)
 	let gen = emitNetpollPdOpBegin(module, block: accepting, source: pollKey, ids: ids)
 	module.setTerminator(accepting, op: StdOp.branch(attempt.id))
 
 	match socketWaitShape(target) 'shape'
-		polled then emitListenerPolledAccept(module, func: func, ids: ids, attempt: attempt, listener: listener, pollKey: pollKey, gen: gen, accepted: accepted, failed: failed, target: target)
-		overlapped then emitListenerWatchedAccept(module, func: func, ids: ids, attempt: attempt, listener: listener, pollKey: pollKey, gen: gen, accepted: accepted, failed: failed)
+		polled then emitListenerPolledAccept(module, func: func, ids: ids, attempt: attempt, listener: listener, pollKey: pollKey, gen: gen, accepted: accepted, failed: failed, retriable: retriable, target: target)
+		overlapped then emitListenerWatchedAccept(module, func: func, ids: ids, attempt: attempt, listener: listener, pollKey: pollKey, gen: gen, accepted: accepted, failed: failed, retriable: retriable)
 	end 'shape'
 
-	// ⛔ **A FAILED ACCEPT TOUCHES NEITHER DESCRIPTOR.** The listener is the caller's and stays open; there is
-	// no accepted socket on this edge to close. That is also what makes it safe on the `NetpollWaitStale`
-	// answer, where the fd number in hand may already name somebody else's socket.
+	emitErrorReturn(module, block: retriable, flag: ManagedListenerAcceptRetriableFlag, ids: ids)
+
+	// A failed or retriable accept closes neither descriptor: the listener is the caller's and stays
+	// open, and there is no accepted socket on these edges to close. That is also what makes it safe
+	// on the `NetpollWaitStale` answer, where the fd number in hand may name somebody else's socket.
 	emitErrorReturn(module, block: failed, flag: ManagedListenerAcceptFailedFlag, ids: ids)
 
 	let conn = ids.mint()
@@ -334,38 +325,59 @@ function buildManagedListenerAccept(module StdModule, target Target)
 	module.functions.push(func)
 end 'buildManagedListenerAccept'
 
-// The POLLED lanes' accept: issue the non-blocking `accept4` and let the socket band's own retry loop sort
-// what it said. `EAGAIN` parks the green thread on the listener's READ direction and comes back here.
-//
-// ⚠ **`timedOut` AND `stale` BOTH REACH `failed`, AND NEITHER IS A DEADLINE.** A listener has no deadline
-// API, so the only way this wait ends other than ready is a DROPPED promise — `__np_pd_drop` marks the wait
-// expired so the resumed thread issues no further syscall — or a record reset under it. Both mean *"this
-// accept will never complete"*, which is what `acceptFailed` says.
-function emitListenerPolledAccept(module StdModule, func IrFunction, ids ValueMinter, attempt IrBlock, listener ValueId, pollKey ValueId, gen ValueId, accepted IrBlock, failed IrBlock, target Target)
+// The polled lanes' accept: issue the non-blocking `accept4` and let the socket band's own retry
+// loop sort what it said. `EAGAIN` parks the green thread on the listener's read direction and
+// comes back here. The accept deadline is the listener's read deadline, and ends the wait through
+// `emitSocketLateExit`.
+function emitListenerPolledAccept(module StdModule, func IrFunction, ids ValueMinter, attempt IrBlock, listener ValueId, pollKey ValueId, gen ValueId, accepted IrBlock, failed IrBlock, retriable IrBlock, target Target)
+	var refused = module.addBlock(func, label: b"mlrefused", heat: BlockHeat.normal)
+
 	let answer = ids.mint()
 	let unused = emitConst(module, block: attempt, value: 0, ids: ids)
 	module.appendOp(attempt, op: StdOp.osSocketServe(answer, verb: SocketServeVerb.accept, a0Id: listener, a1Id: unused, a2Id: unused))
-	emitSocketAttempt(module, func: func, attempt: attempt, answer: answer, pollKey: pollKey, gen: gen, mode: NetpollModeRead, ok: accepted, failed: failed, timedOut: failed, target: target, ids: ids)
+	let late = emitSocketLateExit(module, func: func, pollKey: pollKey, gen: gen, failureFlag: ManagedListenerAcceptFailedFlag, ids: ids)
+	emitSocketAttempt(module, func: func, attempt: attempt, answer: answer, pollKey: pollKey, gen: gen, mode: NetpollModeRead, ok: accepted, failed: refused, stale: failed, timedOut: late, target: target, ids: ids)
+
+	let fatal = emitCodeIsOneOf(module, block: refused, code: emitErrnoOfAnswer(module, block: refused, answer: answer, ids: ids), codes: acceptFatalCodes(target.os), ids: ids)
+	module.setTerminator(refused, op: StdOp.condBranch(fatal, thenBlockId: failed.id, elseBlockId: retriable.id))
 end 'emitListenerPolledAccept'
 
-// ⭐⭐⭐ **THE OVERLAPPED LANE'S ACCEPT — A CONNECTION WATCHED THROUGH AN EVENT, WHICH IS
-// `emitSocketWatchedDial`'S ROAD WITH `FD_ACCEPT` IN PLACE OF `FD_CONNECT`.**
+// The refusals that name the listener itself as unusable. Every other refused accept answers
+// `acceptRetriable`, so a server loop may accept again.
+function acceptFatalCodes(os Os) returns ParsedIntArray
+	return match os 'os'
+		linux or
+			macos gives [socketErrnoNotASocket(os), PosixErrno.badDescriptor.rawValue, PosixErrno.invalidArgument.rawValue, PosixErrno.badAddress.rawValue]
+		windows gives [WinsockError.notASocket.rawValue, WinsockError.invalidArgument.rawValue, WinsockError.badAddress.rawValue, WinsockError.notInitialised.rawValue]
+		wasi panic("acceptFatalCodes: `targetProvidesFacility` denies `managedSocket` on wasm32-wasi, so no accept is emitted there to classify")
+	end 'os'
+end 'acceptFatalCodes'
+
+function socketErrnoNotASocket(os Os) returns ParsedInt
+	return match os 'os'
+		linux gives LinuxErrno.notASocket.rawValue
+		macos gives DarwinErrno.notASocket.rawValue
+		windows panic("socketErrnoNotASocket: x64-windows classifies a refused accept by `WSAGetLastError`'s own codes, never by an errno")
+		wasi panic("socketErrnoNotASocket: `targetProvidesFacility` denies `managedSocket` on wasm32-wasi, so no accept is emitted there to classify")
+	end 'os'
+end 'socketErrnoNotASocket'
+
+// The overlapped lane's accept: a connection watched through an event, `emitSocketWatchedDial`'s
+// road with `FD_ACCEPT` in place of `FD_CONNECT`. `WSAEventSelect(FD_ACCEPT)` signals the event
+// when a connection is waiting and makes the listener non-blocking, so `accept` answers
+// `WSAEWOULDBLOCK` without holding the machine; the event then rides the poller through the
+// thread-pool wait a parked child uses.
 //
-// `WSAEventSelect(FD_ACCEPT)` signals the event when a connection is waiting AND makes the listener
-// non-blocking, so `accept` answers `WSAEWOULDBLOCK` without ever holding the machine; the event then rides
-// the poller through the same thread-pool wait a parked child does.
+// The accepted socket carries the listener's `WSAEventSelect` association, so it would go on naming
+// an event this frame is about to close, and be opened as a poll descriptor with its
+// `WSARecv`/`WSASend` road talking to a socket still in event mode. `stopWatching` on the accepted
+// descriptor takes it off before anybody sees the socket.
 //
-// ⛔⛔ **THE ACCEPTED SOCKET INHERITS THE LISTENER'S EVENT ASSOCIATION, AND IT IS TAKEN OFF BEFORE ANYBODY
-// SEES IT.** A socket `accept` hands back carries the listening socket's `WSAEventSelect` record, so it would
-// go on naming an event this frame is about to close — and it would be opened as a poll descriptor in that
-// state, with its `WSARecv`/`WSASend` road talking to a socket still in event mode. `stopWatching` on the
-// ACCEPTED descriptor is what disinherits it.
-//
-// ⭐⭐ **THE PARK IS ON THE LISTENER'S OWN POLL RECORD, NOT ON A SOURCE MINTED PER ACCEPT.** The event's
-// signal is posted under the listener's key, so this accept publishes itself in the very direction word a
-// POSIX accept publishes itself in — which is what gives both lanes ONE rule for a second acceptor
-// (`RuntimeAbort.netpollDoubleWait`) and what lets a close under a parked accept end that accept.
-function emitListenerWatchedAccept(module StdModule, func IrFunction, ids ValueMinter, attempt IrBlock, listener ValueId, pollKey ValueId, gen ValueId, accepted IrBlock, failed IrBlock)
+// The park is on the listener's own poll record, not on a source minted per accept: the event's
+// signal is posted under the listener's key, so this accept publishes itself in the direction word
+// a POSIX accept does. That gives both lanes one rule for a second acceptor
+// (`RuntimeAbort.netpollDoubleWait`) and lets a close under a parked accept end that accept.
+function emitListenerWatchedAccept(module StdModule, func IrFunction, ids ValueMinter, attempt IrBlock, listener ValueId, pollKey ValueId, gen ValueId, accepted IrBlock, failed IrBlock, retriable IrBlock)
 	var noEvent = module.addBlock(func, label: b"mlnoevent", heat: BlockHeat.normal)
 	var armWatch = module.addBlock(func, label: b"mlwatch", heat: BlockHeat.normal)
 	var watchRefused = module.addBlock(func, label: b"mlwatchno", heat: BlockHeat.normal)
@@ -376,15 +388,19 @@ function emitListenerWatchedAccept(module StdModule, func IrFunction, ids ValueM
 	var awaited = module.addBlock(func, label: b"mlawaited", heat: BlockHeat.normal)
 	var notSignalled = module.addBlock(func, label: b"mlnosignal", heat: BlockHeat.normal)
 	var staleRecord = module.addBlock(func, label: b"mlstale", heat: BlockHeat.normal)
+	var notStale = module.addBlock(func, label: b"mlnotstale", heat: BlockHeat.normal)
+	var lateDrop = module.addBlock(func, label: b"mllatedrop", heat: BlockHeat.normal)
 	var giveBack = module.addBlock(func, label: b"mlgiveback", heat: BlockHeat.normal)
 	var dropEvent = module.addBlock(func, label: b"mldropevent", heat: BlockHeat.normal)
+	var refused = module.addBlock(func, label: b"mlrefused", heat: BlockHeat.normal)
+	var dropForARetry = module.addBlock(func, label: b"mldropretry", heat: BlockHeat.normal)
 
 	let event = ids.mint()
 	module.appendOp(attempt, op: StdOp.osEventCreate(event))
 	let haveEvent = emitCmp(module, block: attempt, a: event, b: emitConst(module, block: attempt, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(attempt, op: StdOp.condBranch(haveEvent, thenBlockId: armWatch.id, elseBlockId: noEvent.id))
 
-	module.setTerminator(noEvent, op: StdOp.branch(failed.id))
+	module.setTerminator(noEvent, op: StdOp.branch(retriable.id))
 
 	let selected = ids.mint()
 	let unusedArm = emitConst(module, block: armWatch, value: 0, ids: ids)
@@ -394,10 +410,10 @@ function emitListenerWatchedAccept(module StdModule, func IrFunction, ids ValueM
 
 	module.setTerminator(watchRefused, op: StdOp.branch(dropEvent.id))
 
-	// ⚠ **`issue` IS A LOOP HEADER AND CARRIES NO BLOCK ARGUMENTS**, which is what keeps the caller's
-	// `__gt_io_park` out of the ring: everything a re-issue reads — the listener, the event — is computed in a
-	// block that dominates it, so the trace still reports ONE yield/resume pair for the whole accept however
-	// many times the event fires without a connection behind it.
+	// `issue` is a loop header with no block arguments, which keeps the caller's `__gt_io_park` out of
+	// the ring: everything a re-issue reads is computed in a block that dominates it, so the trace
+	// reports one yield/resume pair for the whole accept however often the event fires without a
+	// connection behind it.
 	let conn = ids.mint()
 	let unusedIssue = emitConst(module, block: issue, value: 0, ids: ids)
 	module.appendOp(issue, op: StdOp.osSocketServe(conn, verb: SocketServeVerb.accept, a0Id: listener, a1Id: unusedIssue, a2Id: unusedIssue))
@@ -405,12 +421,18 @@ function emitListenerWatchedAccept(module StdModule, func IrFunction, ids ValueM
 	module.setTerminator(issue, op: StdOp.condBranch(acceptRefused, thenBlockId: pending.id, elseBlockId: giveBack.id))
 	issue.branchEdges.push(BranchEdge.create(giveBack.id, argIds: argsOf(conn)))
 
-	// ⚠ **`WSAEWOULDBLOCK` IS THE ONLY ANSWER THAT MEANS "no connection yet"**; every other code is a refusal
-	// this call already knows about.
+	// `WSAEWOULDBLOCK` and `WSAEINTR` mean "no connection yet"; any other code is a refusal, fatal
+	// only for `acceptFatalCodes`.
 	let reason = ids.mint()
 	module.appendOp(pending, op: StdOp.osLastError(reason))
-	let empty = emitCmp(module, block: pending, a: reason, b: emitConst(module, block: pending, value: WinsockWouldBlock, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(pending, op: StdOp.condBranch(empty, thenBlockId: armSignal.id, elseBlockId: dropEvent.id))
+	let empty = emitWinsockNotFinished(module, block: pending, reason: reason, ids: ids)
+	module.setTerminator(pending, op: StdOp.condBranch(empty, thenBlockId: armSignal.id, elseBlockId: refused.id))
+
+	let fatal = emitCodeIsOneOf(module, block: refused, code: reason, codes: acceptFatalCodes(Os.windows), ids: ids)
+	module.setTerminator(refused, op: StdOp.condBranch(fatal, thenBlockId: dropEvent.id, elseBlockId: dropForARetry.id))
+
+	emitSocketWatchGiveBack(module, block: dropForARetry, socket: listener, event: event, ids: ids)
+	module.setTerminator(dropForARetry, op: StdOp.branch(retriable.id))
 
 	// The registration is given back on the far side of the wait and the RECORD is not: it is the listener's,
 	// and the listener outlives this accept.
@@ -422,33 +444,38 @@ function emitListenerWatchedAccept(module StdModule, func IrFunction, ids ValueM
 	let signalled = emitCmp(module, block: awaited, a: verdict, b: emitConst(module, block: awaited, value: NetpollWaitReady, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(awaited, op: StdOp.condBranch(signalled, thenBlockId: issue.id, elseBlockId: notSignalled.id))
 
-	// ⚠ **A WAIT THAT DID NOT END IN THE EVENT ENDED IN A DROPPED PROMISE OR IN A LISTENER CLOSED UNDER IT**,
-	// and both mean this accept will never complete — which is what `failed` reports.
+	// A wait that did not end in the event ended in the accept deadline, a dropped promise or a
+	// listener closed under it. The deadline leaves through `emitSocketLateExit`; the other two mean
+	// this accept will never complete, which is what `failed` reports.
 	let gone = emitCmp(module, block: notSignalled, a: verdict, b: emitConst(module, block: notSignalled, value: NetpollWaitStale, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(notSignalled, op: StdOp.condBranch(gone, thenBlockId: staleRecord.id, elseBlockId: dropEvent.id))
+	module.setTerminator(notSignalled, op: StdOp.condBranch(gone, thenBlockId: staleRecord.id, elseBlockId: notStale.id))
 
-	// ⛔ **A STALE ANSWER MAY NOT NAME THE DESCRIPTOR.** The record has been reset and reopened, so that number
-	// can already be somebody else's socket; the event is this frame's own and is all there is to give back.
+	let late = emitCmp(module, block: notStale, a: verdict, b: emitConst(module, block: notStale, value: NetpollWaitTimedOut, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(notStale, op: StdOp.condBranch(late, thenBlockId: lateDrop.id, elseBlockId: dropEvent.id))
+
+	emitSocketWatchGiveBack(module, block: lateDrop, socket: listener, event: event, ids: ids)
+	module.setTerminator(lateDrop, op: StdOp.branch(emitSocketLateExit(module, func: func, pollKey: pollKey, gen: gen, failureFlag: ManagedListenerAcceptFailedFlag, ids: ids).id))
+
+	// A stale answer may not name the descriptor: the record has been reset and reopened, so that
+	// number can already be somebody else's socket. The event is this frame's own and is all there is
+	// to give back.
 	module.appendOp(staleRecord, op: StdOp.osCloseHandle(event))
 	module.setTerminator(staleRecord, op: StdOp.branch(failed.id))
 
-	// The accepted socket is disinherited first and the listener's own association given back second, so the
-	// event is closed with nothing left pointing at it. Neither answer is read: both sockets are usable either
-	// way, and the event about to be closed is this frame's alone.
+	// The accepted socket's association is taken off first and the listener's given back second, so
+	// the event is closed with nothing left pointing at it. No answer is read: both sockets are usable
+	// either way, and the event about to be closed is this frame's alone.
 	let accepting = ids.mint()
 	giveBack.blockArgs.push(IrBlockArg.create(accepting, argType: StdType.i64))
-	let unusedGiveBack = emitConst(module, block: giveBack, value: 0, ids: ids)
-	module.appendOp(giveBack, op: StdOp.osSocketOverlapped(ids.mint(), verb: SocketOverlappedVerb.stopWatching, a0Id: accepting, a1Id: unusedGiveBack, a2Id: unusedGiveBack, a3Id: unusedGiveBack))
-	module.appendOp(giveBack, op: StdOp.osSocketOverlapped(ids.mint(), verb: SocketOverlappedVerb.stopWatching, a0Id: listener, a1Id: unusedGiveBack, a2Id: unusedGiveBack, a3Id: unusedGiveBack))
-	module.appendOp(giveBack, op: StdOp.osCloseHandle(event))
+	emitSocketOverlappedOnly(module, block: giveBack, verb: SocketOverlappedVerb.disinherit, socket: accepting, ids: ids)
+	emitSocketOverlappedOnly(module, block: giveBack, verb: SocketOverlappedVerb.stopWatching, socket: accepting, ids: ids)
+	emitSocketWatchGiveBack(module, block: giveBack, socket: listener, event: event, ids: ids)
 	module.setTerminator(giveBack, op: StdOp.branch(accepted.id))
 	giveBack.branchEdges.push(BranchEdge.create(accepted.id, argIds: argsOf(accepting)))
 
-	// The failure road gives the LISTENER's association back too — it outlives this frame, and an association
-	// naming a closed event is a state the next arm would have to replace rather than one to leave behind.
-	let unusedDrop = emitConst(module, block: dropEvent, value: 0, ids: ids)
-	module.appendOp(dropEvent, op: StdOp.osSocketOverlapped(ids.mint(), verb: SocketOverlappedVerb.stopWatching, a0Id: listener, a1Id: unusedDrop, a2Id: unusedDrop, a3Id: unusedDrop))
-	module.appendOp(dropEvent, op: StdOp.osCloseHandle(event))
+	// The failure road gives the listener's association back too — it outlives this frame, and an
+	// association naming a closed event is a state the next arm would have to replace.
+	emitSocketWatchGiveBack(module, block: dropEvent, socket: listener, event: event, ids: ids)
 	module.setTerminator(dropEvent, op: StdOp.branch(failed.id))
 end 'emitListenerWatchedAccept'
 
@@ -465,13 +492,9 @@ export function verifyManagedListenerOrdinals(project Project)
 	end 'declaration'
 end 'verifyManagedListenerOrdinals'
 
-// ⭐⭐ **THIS ENUM IS NEW, WHICH IS WHY THE SERVER SIDE'S FACTS COULD BE WRITTEN AT ALL — read this before
-// appending a case to a DIFFERENT one.** `BuiltinErrorOrdinalCheck.requireTotal` is a check a runtime
-// CONSTRUCTS over the enum it transcribes, so a compiler that installs no listener runtime constructs none
-// over this enum and never looks at it: a declared-but-untranscribed public enum in `stdlib/Builtins.maxon` is
-// ordinary to every compiler that predates this family. A case APPENDED to an enum some older compiler already
-// transcribes is the opposite — `ManagedSocketRuntime.claimManagedSocketOrdinals` carries that argument, and
-// it is why `bindFailed` and `acceptFailed` are here instead of there.
+// Before appending a case, read `ManagedSocketRuntime.claimManagedSocketOrdinals`: an appended case
+// must be one the released seed's `BuiltinErrorOrdinalCheck.requireTotal` accepts, or every CI lane
+// goes red.
 function claimManagedListenerOrdinals(project Project, declaration EnumLayout)
 	var listenerErrors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: ManagedListenerOrdinalInstaller)
 	listenerErrors.claim(ManagedListenerResolveFailedCaseName, ordinal: ManagedListenerResolveFailedOrdinal)
@@ -479,6 +502,7 @@ function claimManagedListenerOrdinals(project Project, declaration EnumLayout)
 	listenerErrors.claim(ManagedListenerAcceptFailedCaseName, ordinal: ManagedListenerAcceptFailedOrdinal)
 	listenerErrors.claim(ManagedListenerAddressFailedCaseName, ordinal: ManagedListenerAddressFailedOrdinal)
 	listenerErrors.claim(ManagedListenerClosedCaseName, ordinal: ManagedListenerClosedOrdinal)
+	listenerErrors.claim(ManagedListenerAcceptRetriableCaseName, ordinal: ManagedListenerAcceptRetriableOrdinal)
 	listenerErrors.requireTotal()
 end 'claimManagedListenerOrdinals'
 

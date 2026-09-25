@@ -1,0 +1,44 @@
+let LiveCaseLabel = "set-breakpoints-while-running-is-hit"
+let TickAnchor = "tick-body"
+
+type LiveBreakpointSession implements DapSession
+	let executable as FilePath
+	let source as FilePath
+	let anchored as SourceLine
+	export var verified as bool
+	export var verifiedLine as DapNumber
+	export var stopReason as String
+
+	static function create(executable FilePath, source FilePath, anchored SourceLine) returns LiveBreakpointSession
+		return Self{executable: executable, source: source, anchored: anchored, verified: false, verifiedLine: 0, stopReason: ""}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+		_ = try client.request(LaunchCommand, argumentsJson: dapLaunchArguments(self.executable))
+		_ = try client.awaitEvent(InitializedEvent)
+
+		// No breakpoint before the program starts: the subject is the one placed while it runs.
+		_ = try client.request(SetBreakpointsCommand, argumentsJson: dapClearBreakpointsArguments(self.source))
+		_ = try client.request(ConfigurationDoneCommand)
+
+		let placed = try client.request(SetBreakpointsCommand, argumentsJson: dapSetBreakpointsArguments(self.source, line: self.anchored))
+		self.verified = dapBreakpointVerified(placed, index: 0)
+		self.verifiedLine = dapBreakpointLine(placed, index: 0)
+
+		self.stopReason = dapBodyString(try client.awaitEvent(StoppedEvent), key: "reason")
+
+		_ = try client.request(DisconnectCommand)
+	end 'drive'
+end 'LiveBreakpointSession'
+
+test 'a breakpoint placed while the program runs is verified and then hit'
+	let staged = dapStagedFixture(LiveCaseLabel, fixture: LiveSpinFixtureName)
+	let anchored = dapAnchorLine(staged, anchor: TickAnchor)
+	var session = LiveBreakpointSession.create(dapBuildFixture(staged), source: dapStagedSource(staged), anchored: anchored)
+	try dapRunSession(session, completing: "complete")
+
+	try Expect.isTrue(session.verified, message: "a breakpoint armed into running code must be verified; it was not, on `main.maxon:{anchored}`")
+	try Expect.equal(session.verifiedLine as AssertedInt, expected: anchored as AssertedInt, message: "the verified line must be the one asked for")
+	try Expect.equal(session.stopReason, expected: BreakpointReason, message: "a breakpoint placed mid-run must actually FIRE. `verified` alone is a promise the adapter made and this is whether it kept it; the stop said `{session.stopReason}`")
+end 'a breakpoint placed while the program runs is verified and then hit'

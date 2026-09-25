@@ -286,28 +286,54 @@ end 'LibraryFacts'
 // reads either of them — and before `DeadGlobalElimination.liveGlobalLabels`, which is the earliest
 // reader (`Compiler.compileToCodeResult`).
 //
-// ⭐ **IT TAKES `signatures` FOR ONE THING: THE FUNCTIONS A TOP-LEVEL INITIALIZER CALLS.** Those calls are
-// made by `__module_init`, which does not exist yet at this point and is called by the entry STUB rather
-// than from `main` once it does — so neither the walk below nor its short-circuit can see the edge in any
-// body. It is read off the DECLARATION that causes the call instead (`ProgramSignatures.globalInitCallees`),
-// which is also what lets this run before the synthesis: see that function for why the answer does not
-// depend on the global liveness this derivation is about to decide.
+// It takes `signatures` for one thing: the functions a top-level initializer calls. Those calls are
+// made by `__module_init`, which does not exist yet at this point and is called by the entry stub
+// rather than from `main` once it does, so neither `libraryReachOf`'s walk nor its short-circuit
+// can see the edge in any body. It is read off the declaration that causes the call instead
+// (`ProgramSignatures.globalInitCallees`), which is also what lets this run before the synthesis:
+// see that function for why the answer does not depend on the global liveness this derivation
+// decides.
 export function deriveLibraryFacts(project Project, module MaxonModule, signatures ProgramSignatures) returns LibraryFacts throws CompileError
-	// A prior diagnostic leaves the merged module and its registries describing a program that is already
-	// refused, so deriving anything from it can only be noise — the refusal the four siblings around this
-	// call already make (`checkConformance`, `checkWhereConstraints`, `checkTypeSymbolNamespace`,
-	// `checkGenericAliasCycles`), and this was the one pre-pipeline derivation without it. Nothing that runs
-	// before the pipeline's error gate READS these facts to report anything: `scanRuntimeUsage` only sets
-	// usage bits, and the two passes that do report off them (`checkCalls`'s target refusal,
-	// `insertRangeChecks`) are inside the pipeline, downstream of that gate.
+	let reach = try libraryReachOf(project, module: module, signatures: signatures)
+
+	return match reach 'reach'
+		noLibrarySource gives LibraryFacts.empty()
+		unreferenced(roster, stdlib) gives libraryFactsOf(roster, stdlib: stdlib, split: classifyLibraryReach(roster, reachable: FunctionNameSet.create()), substrateEntries: StdlibSubstrateEntryMap.create())
+		walked(roster, stdlib, reachable) gives walkedLibraryFacts(module, roster: roster, stdlib: stdlib, reachable: reachable)
+	end 'reach'
+end 'deriveLibraryFacts'
+
+function walkedLibraryFacts(module MaxonModule, roster LibraryFunctionRoster, stdlib FunctionNameSet, reachable FunctionNameSet) returns LibraryFacts
+	let split = classifyLibraryReach(roster, reachable: reachable)
+
+	return libraryFactsOf(roster, stdlib: stdlib, split: split, substrateEntries: stdlibSubstrateEntries(module, stdlibNames: roster.names, unreachable: split.unreachable))
+end 'walkedLibraryFacts'
+
+function libraryFactsOf(roster LibraryFunctionRoster, stdlib FunctionNameSet, split LibraryReachSplit, substrateEntries StdlibSubstrateEntryMap) returns LibraryFacts
+	return LibraryFacts.create(stdlib, unreachable: split.unreachable, substrateEntries: substrateEntries, runtimeTier: roster.runtimeTier, unreachedRuntimeTier: split.unreachedRuntimeTier, compilerCalledTier: roster.compilerReached, debugAgentTier: roster.debugAgent)
+end 'libraryFactsOf'
+
+union LibraryReach
+	noLibrarySource
+	unreferenced(roster LibraryFunctionRoster, stdlib FunctionNameSet)
+	walked(roster LibraryFunctionRoster, stdlib FunctionNameSet, reachable FunctionNameSet)
+end 'LibraryReach'
+
+function libraryReachOf(project Project, module MaxonModule, signatures ProgramSignatures) returns LibraryReach throws CompileError
+	// A prior diagnostic leaves the merged module and its registries describing a program that is
+	// already refused, so a walk over it can only be noise, and a compile that stops here builds no
+	// further bodies. Nothing that runs before the pipeline's error gate reads these facts to report
+	// anything: `scanRuntimeUsage` only sets usage bits, and the two passes that do report off them
+	// (`checkCalls`'s target refusal, `insertRangeChecks`) are inside the pipeline, downstream of that
+	// gate.
 	if projectHasErrors(project) 'malformedModule'
-		return LibraryFacts.empty()
+		return LibraryReach.noLibrarySource
 	end 'malformedModule'
 
 	let roster = try libraryFunctionRoster(project)
 
 	if roster.names.count() == 0 'noStdlibSource'
-		return LibraryFacts.empty()
+		return LibraryReach.noLibrarySource
 	end 'noStdlibSource'
 
 	var stdlibSet = FunctionNameSet.create()
@@ -321,93 +347,57 @@ export function deriveLibraryFacts(project Project, module MaxonModule, signatur
 	let initCallees = signatures.globalInitCallees()
 	let initWitnessInterfaces = signatures.globalInitWitnessInterfaces()
 
-	// ⭐ COMMON-CASE SHORT-CIRCUIT. If no op in USER code REACHES stdlib, no stdlib function is
-	// reachable at all — so an EMPTY reached set is the exact answer to hand `classifyLibraryReach`,
-	// which is what the call below does, and NONE can be blamed for a substrate — reached by
-	// ONE allocation-free O(ops) scan, WITHOUT the O(functions) name->index map and reached-array the
-	// from-`main` walk allocates, and without the substrate fixpoint. That map is the whole per-compile
-	// memory cost of loading stdlib source into a program that never touches it, so skipping it keeps the
-	// cost a per-compile CONSTANT instead of growing with the user program. It stays EXACT: a stdlib
-	// function referenced by nothing is reachable from nothing.
+	// Common-case short-circuit. If no op in user code reaches stdlib, no stdlib function is reachable
+	// at all, so an empty reached set is the exact answer and none can be blamed for a substrate. It
+	// is one allocation-free O(ops) scan, without the O(functions) name->index map and reached-array
+	// the from-`main` walk allocates, and without the substrate fixpoint. That map is the whole
+	// per-compile memory cost of loading stdlib source into a program that never touches it, so
+	// skipping it keeps the cost a per-compile constant instead of growing with the user program. It
+	// stays exact: a stdlib function referenced by nothing is reachable from nothing.
 	if not userCodeReachesStdlib(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees, initWitnessInterfaces: initWitnessInterfaces) 'noneReferenced'
-		let noneReached = classifyLibraryReach(roster, reachable: FunctionNameSet.create())
-
-		return LibraryFacts.create(stdlibSet, unreachable: noneReached.unreachable, substrateEntries: StdlibSubstrateEntryMap.create(), runtimeTier: roster.runtimeTier, unreachedRuntimeTier: noneReached.unreachedRuntimeTier, compilerCalledTier: roster.compilerReached, debugAgentTier: roster.debugAgent)
+		return LibraryReach.unreferenced(roster, stdlib: stdlibSet)
 	end 'noneReferenced'
 
-	// User code DOES call stdlib — resolve exactly which stdlib functions the program REACHES from `main`
-	// and mark only the untouched ones. This precise walk (and its maps) runs ONLY for a program that
-	// actually uses stdlib.
 	let reachable = try reachableMaxonFunctionNames(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees, initWitnessInterfaces: initWitnessInterfaces)
-	let split = classifyLibraryReach(roster, reachable: reachable)
 
-	return LibraryFacts.create(stdlibSet, unreachable: split.unreachable, substrateEntries: stdlibSubstrateEntries(module, stdlibNames: roster.names, unreachable: split.unreachable), runtimeTier: roster.runtimeTier, unreachedRuntimeTier: split.unreachedRuntimeTier, compilerCalledTier: roster.compilerReached, debugAgentTier: roster.debugAgent)
-end 'deriveLibraryFacts'
+	return LibraryReach.walked(roster, stdlib: stdlibSet, reachable: reachable)
+end 'libraryReachOf'
 
-// ⭐⭐ **GROW THE BODY DEMAND BY ONE ROUND — the fixpoint step `queryAllModule` iterates.**
+// The fixpoint step `queryAllModule` iterates, answering whether the demand grew.
 //
-// It asks the SAME question `deriveLibraryFacts` asks, of the same walk, and that is deliberate rather
-// than convenient: the set of bodies this compile BUILDS and the set `lowerMaxonToStd` LOWERS must be
-// decided by one derivation, or a body could be lowered that was never parsed. Round 0 merges every
-// file with no stdlib body built, so the walk sees the user's own edges into stdlib and stops there;
-// each later round has the bodies the previous one demanded, so the walk goes one call deeper. It
-// terminates because the demand only ever grows and is bounded by the stdlib functions that exist.
-//
-// ⚠ **A ROUND THAT ADDS NOTHING IS THE COMMON CASE, AND IT IS THE FIRST ONE.** A program whose user
-// code names no stdlib function at all — most of `specs` — settles here, having built not one
-// stdlib body. That is exactly `userCodeReachesStdlib`'s short-circuit reached one tier earlier.
-//
-// Returns whether the demand actually grew, which is the caller's loop condition.
+// ⚠ It asks `deriveLibraryFacts`' question of the same walk (`libraryReachOf`): the set of bodies
+// this compile builds and the set `lowerMaxonToStd` lowers must be decided by one derivation, or a
+// body could be lowered that was never parsed. Round 0 merges every file with no stdlib body built,
+// so the walk sees the user's own edges into stdlib and stops there; each later round has the
+// bodies the previous one demanded, so the walk goes one call deeper. It terminates because the
+// demand only ever grows and is bounded by the stdlib functions that exist.
 export function growStdlibBodyDemand(project Project, module MaxonModule, signatures ProgramSignatures) returns bool throws CompileError
-	// A prior diagnostic leaves the merged module describing a program that is already refused, so a
-	// reachability walk over it can only be noise — `deriveLibraryFacts` declines for the same reason, one
-	// screen down, and a compile that stops here simply builds no further bodies.
-	if projectHasErrors(project) 'malformedModule'
-		return false
-	end 'malformedModule'
+	let reach = try libraryReachOf(project, module: module, signatures: signatures)
 
-	let roster = try libraryFunctionRoster(project)
+	match reach 'reach'
+		noLibrarySource or
+			unreferenced then return false
 
-	if roster.names.count() == 0 'noStdlibSource'
-		return false
-	end 'noStdlibSource'
+		walked(_, _, reachable) then return try demandEveryReachedLibraryFile(project, reachable: reachable)
+	end 'reach'
+end 'growStdlibBodyDemand'
 
-	var stdlibSet = FunctionNameSet.create()
-
-	for name in roster.names 'seed'
-		stdlibSet.insert(name)
-	end 'seed'
-
-	let initCallees = signatures.globalInitCallees()
-	let initWitnessInterfaces = signatures.globalInitWitnessInterfaces()
-
-	// The same short-circuit `deriveLibraryFacts` opens with, and it is the whole saving: nothing this
-	// program reaches — no op in its code, and no root on either list — names a stdlib function, so no
-	// stdlib body can be reached and the walk's O(functions) name->index map is never built.
-	if not userCodeReachesStdlib(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees, initWitnessInterfaces: initWitnessInterfaces) 'noneReferenced'
-		return false
-	end 'noneReferenced'
-
-	let reachable = try reachableMaxonFunctionNames(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees, initWitnessInterfaces: initWitnessInterfaces)
-
-	// ⚠ **THE ANSWER IS RECORDED AS A SET OF FILES, NOT OF NAMES, AND THAT IS WHAT SURVIVES THE MEMO
-	// DROP.** `queryAllModule` clears `parseCache` before it re-folds, so nothing may ask a later round
-	// "which functions does this file declare?" — the artifact that knew is gone. A file recorded here is
-	// still recorded then. (Measured the other way round: keyed on names and read back through the parse
-	// cache, every file answered "declares nothing reached" after the drop, every body stayed skipped, and
-	// the x64 isel panicked on the `retVoid` of a function the program calls.)
+function demandEveryReachedLibraryFile(project Project, reachable FunctionNameSet) returns bool throws CompileError
+	// ⚠ The answer is recorded as a set of files, not of names, because that is what survives the memo
+	// drop: `queryAllModule` clears `parseCache` before it re-folds, so a later round cannot ask
+	// "which functions does this file declare?". Keyed on names and read back through the parse cache,
+	// every file would answer "declares nothing reached" and every body would stay skipped.
 	var grew = false
 
-	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
-	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
-	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+	// An index loop, not `for … in`: the element is a borrow of `project`, and the call below is
+	// recorded as writing that same storage (see `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`).
 	for fileIndex in 0 upto project.librarySourcePaths.count() 'eachFile'
-		let demandedThisFile = try demandOneStdlibFileIfReached(project, path: try project.librarySourcePaths.get(fileIndex) otherwise panic("growStdlibBodyDemand: fileIndex {fileIndex} is below project.librarySourcePaths.count()"), reachable: reachable)
+		let demandedThisFile = try demandOneStdlibFileIfReached(project, path: try project.librarySourcePaths.get(fileIndex) otherwise panic("demandEveryReachedLibraryFile: fileIndex {fileIndex} is below project.librarySourcePaths.count()"), reachable: reachable)
 		grew = grew or demandedThisFile
 	end 'eachFile'
 
 	return grew
-end 'growStdlibBodyDemand'
+end 'demandEveryReachedLibraryFile'
 
 // Demand ONE stdlib file's bodies if any function it declares is reachable, answering whether the demand
 // set grew. ⭐ **THE PATH ARRIVES AS A PARAMETER**, which is what lets it be named three times: read

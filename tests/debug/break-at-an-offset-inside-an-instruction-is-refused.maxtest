@@ -1,0 +1,26 @@
+let InsideAnInstructionCaseLabel = "break-at-an-offset-inside-an-instruction-is-refused"
+let NotAnInstructionStartReason = "not-an-instruction-start"
+let SecondRowOfThePrintLine = 1
+let BytesIntoTheInstruction = 1
+
+test 'an exact offset that is not an instruction start is refused, and the program runs out untouched'
+	let staged = builtFixture(InsideAnInstructionCaseLabel, fixture: SteppingFixtureName)
+	let printLine = anchorLine(staged, anchor: "main-print")
+	let executable = builtExecutable(staged)
+	let rows = statementOffsetsOfLine(executable, staged: staged, line: printLine)
+	let rowStart = try rows.get(SecondRowOfThePrintLine) otherwise panic("break-at-an-offset-inside-an-instruction-is-refused: the gate could not run — the print line has {rows.count()} statement row(s), and the case arms one byte into its second")
+	let inside = rowStart + BytesIntoTheInstruction
+	let commands = debugCommandLine(["{BreakCommand} {exactOffsetTarget(inside)}", RunCommand])
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let breakpoints = eventsOfKind(events, kind: BreakpointEventName)
+
+	try Expect.equal(breakpoints.count() as AssertedInt, expected: 1, message: "`{BreakCommand} {exactOffsetTarget(inside)}` printed no `{BreakpointEventName}` event. {said}")
+
+	let answer = eventAt(breakpoints, index: 0)
+	try Expect.equal(textOf(answer, node: answer.root, key: ActionKey), expected: RefusedAction, message: "a statement row begins an instruction, so one byte past it is inside that instruction, and an `int3` planted there would corrupt it. {said}")
+	try Expect.equal(textOf(answer, node: answer.root, key: ReasonKey), expected: NotAnInstructionStartReason, message: "the refusal says why the offset cannot be armed. {said}")
+	try Expect.equal(eventsOfKind(events, kind: StopEventName).count() as AssertedInt, expected: 0, message: "nothing was armed, so nothing stops. {said}")
+	try Expect.equal(eventsOfKind(events, kind: ExitEventName).count() as AssertedInt, expected: 1, message: "the program runs out to its exit. {said}")
+end 'an exact offset that is not an instruction start is refused, and the program runs out untouched'

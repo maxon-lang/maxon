@@ -5,13 +5,17 @@ This directory contains tests for the Maxon VS Code extension.
 ## Test Structure
 
 - `runTest.ts` - Entry point for running tests using @vscode/test-electron. It opens the checkout
-  root as the workspace, and pins the language server to this checkout's own compiler at
-  `maxon-bin/.maxon/` — the suite refuses to run without one.
+  root as the workspace, and pins the language server and the debug adapter to one compiler: the one
+  `MAXON_E2E_COMPILER` names when it is set, otherwise this checkout's own at `maxon-bin/.maxon/`. The
+  suite refuses to run without it.
 - `suite/index.ts` - Mocha test suite configuration and test file discovery
 - `suite/fixtures.ts` - the extension id (derived from `package.json`), and staging for the fixture
   projects the end-to-end tests drive the server against
 - `suite/definition.test.ts` - go to definition, end to end, judged on the answer's URI
 - `suite/lsp-integration.test.ts` - the rest of the language features, each one a real request
+- `suite/debug.test.ts` - debugging, end to end through `maxon dap-server`, judged on the Debug Adapter
+  Protocol messages a tracker records. It debugs x64-windows programs only, so on any other host every
+  case skips and says why in its title
 - `unit/` - Tests of modules that do not import `vscode`, run under plain mocha by `npm run test:unit`
 
 ## Running Tests
@@ -29,8 +33,10 @@ This will:
 4. Launch VS Code and run the end-to-end suite
 5. Display test results in the console
 
-The end-to-end tests need a built compiler, because the compiler *is* the language server:
-`scripts/build-from-seed.sh`, or `maxon build maxon-bin`.
+The end-to-end tests need a built compiler, because the compiler *is* the language server and the debug
+adapter: `scripts/build-from-seed.sh`, or `maxon build maxon-bin`. To test another build, name its
+executable in `MAXON_E2E_COMPILER`; the file must be named `maxon` (`maxon.exe` on Windows), because the
+extension finds it on `PATH` by that name.
 
 ## Fixtures
 
@@ -47,6 +53,13 @@ what keeps it from climbing to the checkout root and indexing the whole tree.
 3. **Language server** - the handshake's advertised capabilities, diagnostics, hover, formatting and
    document symbols, each driven through the editor's own provider commands
 4. **Grammar** - the TextMate grammar's structure, and its snapshots (`npm run test:grammar`)
+5. **Debugging** - a gutter breakpoint stopping at its line, the stop's frames and locals, `continue` to
+   the program's own exit code; F5 without a `program` debugging the active editor's file; and the Test
+   Explorer's Debug profile reporting one passing and one failing test, building a project once for all
+   its tests, stopping a live session when the run is cancelled, and leaving the project free for a Run
+   while a session is live. That project is staged under `vscode-extension/.maxon/e2e-fixtures/`, which
+   is gitignored and listed by the Test Explorer; `temp/` holds a `.maxonignore`, which hides a fixture
+   there from it
 
 ## Prerequisites
 
@@ -84,5 +97,6 @@ suite('My Test Suite', () => {
 If tests fail to run:
 1. Ensure all dependencies are installed (`npm install`)
 2. Check that TypeScript compilation succeeds (`npm run compile`)
-3. Verify the compiler exists at `maxon-bin/.maxon/` — `runTest.ts` says so and stops
+3. Verify the compiler exists at `maxon-bin/.maxon/`, or where `MAXON_E2E_COMPILER` names —
+   `runTest.ts` says so and stops
 4. Check console output for specific error messages

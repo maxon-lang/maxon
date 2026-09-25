@@ -1,0 +1,58 @@
+typealias Rounds = int(0 to 1000000000000000)
+
+type Churner
+	var total as Rounds
+
+	static function create(seed Rounds) returns Self
+		return Self{total: seed}
+	end 'create'
+
+	export function churn()
+		var k = 0 as Rounds
+		var churning = true
+
+		while churning 'churn'
+			self.total = (self.total + k mod 7) mod 1000000007 // anchor: hot-body
+			k = (k + 1) mod 1000000
+			churning = self.total >= 0
+		end 'churn'
+	end 'churn'
+end 'Churner'
+
+function spinForever(seed Rounds) returns Rounds
+	var total = seed
+	var running = true
+
+	while running 'spin'
+		total = total + 1
+		total = 0 if total > 100000 else total
+		running = total >= 0
+	end 'spin'
+
+	return total
+end 'spinForever'
+
+function main() returns ExitCode
+	let a = spawn Churner.create(1)
+	let b = spawn Churner.create(2)
+	let c = spawn Churner.create(3)
+	a.churn()
+	b.churn()
+	c.churn()
+	sleep(50)
+	let seed = Clock.nowMs() as Rounds
+	var x = seed mod 5 // anchor: main-start
+	x = x + seed mod 3
+	x = x + seed mod 7
+	x = x + seed mod 11
+	x = x + seed mod 13
+	x = x + seed mod 17
+	x = x + seed mod 19
+	x = x + seed mod 23
+	x = x + seed mod 29
+	x = x + seed mod 31
+	x = x + seed mod 37
+	let spun = spinForever(x)
+
+	return (spun mod 2) as ExitCode
+end 'main'

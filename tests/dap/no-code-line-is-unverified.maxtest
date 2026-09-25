@@ -1,0 +1,40 @@
+let NoCodeCaseLabel = "no-code-line-is-unverified"
+let TypealiasDeclaration = "typealias"
+let InnerLoopAnchor = "inner-loop"
+
+type NoCodeSession implements DapSession
+	let executable as FilePath
+	let source as FilePath
+	let codeless as SourceLine
+	let anchored as SourceLine
+	export var refused as JsonDoc
+	export var controlVerified as bool
+
+	static function create(executable FilePath, source FilePath, codeless SourceLine, anchored SourceLine) returns NoCodeSession
+		return Self{executable: executable, source: source, codeless: codeless, anchored: anchored, refused: JsonDoc.create(), controlVerified: false}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+		_ = try client.request(LaunchCommand, argumentsJson: dapLaunchArguments(self.executable))
+		_ = try client.awaitEvent(InitializedEvent)
+
+		self.refused = try client.request(SetBreakpointsCommand, argumentsJson: dapSetBreakpointsArguments(self.source, line: self.codeless))
+
+		let control = try client.request(SetBreakpointsCommand, argumentsJson: dapSetBreakpointsArguments(self.source, line: self.anchored))
+		self.controlVerified = dapBreakpointVerified(control, index: 0)
+
+		_ = try client.request(DisconnectCommand)
+	end 'drive'
+end 'NoCodeSession'
+
+test 'a breakpoint on a line that emits no code is unverified and says so'
+	let staged = dapStagedFixture(NoCodeCaseLabel, fixture: SteppingFixtureName)
+	let codeless = dapDeclarationLine(staged, needle: TypealiasDeclaration)
+	var session = NoCodeSession.create(dapBuildFixture(staged), source: dapStagedSource(staged), codeless: codeless, anchored: dapAnchorLine(staged, anchor: InnerLoopAnchor))
+	try dapRunSession(session, completing: "complete")
+
+	try Expect.isFalse(dapBreakpointVerified(session.refused, index: 0), message: "line {codeless} is a `{TypealiasDeclaration}` and emits nothing; a verified breakpoint there is a marker the editor draws over a line the program can never reach")
+	try Expect.isTrue(dapBreakpointHasMessage(session.refused, index: 0), message: "an unverified breakpoint must carry the reason, so the greyed-out marker means something to the person who clicked it; it answered {dapDescribed(session.refused)}")
+	try Expect.isTrue(session.controlVerified, message: "a line of the SAME file that does emit code must verify — otherwise the refusal above is about the file, not about the line")
+end 'a breakpoint on a line that emits no code is unverified and says so'

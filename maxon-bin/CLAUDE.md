@@ -19,12 +19,13 @@ opposite of `Compiler/Runtime/` below, which the compiler WRITES into every prog
 `runtime/Clock.maxon` holds `__clock_now_unix_s` and `__uptime_ms`, `runtime/ParallelBoundary.maxon` holds
 `__parallel_boundary`, `runtime/FaultProbe.maxon` holds `maxon_force_segfault`,
 `runtime/CpuParallel.maxon` holds `__cpu_count`, `__sched_max_active_workers` and
-`__sched_processor_count`, and `runtime/Process.maxon` holds `__proc_pid` and `__proc_bg_priority`; the
-matching `__Builtins` spellings lower to calls naming them, from whatever file wrote the construct.
+`__sched_processor_count`, and `runtime/Process.maxon` holds `__proc_pid`, `__proc_bg_priority` and
+`__proc_alive`; the matching `__Builtins` spellings lower to calls naming them, from whatever file wrote
+the construct.
 ⚠ **TWO MORE FAMILIES ARE IN AND NEITHER IS REACHED THAT WAY** — `runtime/SlabArena.maxon` and
 `runtime/SlabRuntime.maxon`, whose roots are `StdOp.call` sites an INSTALLER mints. They owe the declared
 reach edge below rather than a `__Builtins` spelling.
-⛔ **THE PROCESS FAMILY'S THIRD ENTRY, `__proc_exe_path`, IS NOT IN AND IS BLOCKED RATHER THAN DEFERRED.**
+⛔ **THE PROCESS FAMILY'S `__proc_exe_path` IS NOT IN AND IS BLOCKED RATHER THAN DEFERRED.**
 It is a grow-and-retry loop that allocates and builds an `__ManagedMemory` answer, so as tier source it
 would CALL other runtime entries. The blocker is no longer the usage scan (see `unreachedRuntimeTier`
 below) but the CALL DOOR: `__mm_alloc`, `__mm_free`, `__managed_create` and `__managed_reserve` are
@@ -223,9 +224,9 @@ as volatile (`X64PrologueEpilogue.calleeSavedOrder` is rbx and r12–r15) while 
 preserve them, and nothing in a run reports the difference.
 
 ⛔⛔ **THE AGENT IS A SECOND SUSPENDER OF THREADS, AND `__sched_preempt_ext_lock` IS WHAT MAKES THAT
-SOUND.** `__sysmon` is no longer the only party that calls `SuspendThread`: every stop suspends every
-other machine, and the agent holds that window across the whole park, so a suspend and `__gt_exit_process`
-still exclude each other. The order is the window, then `__sched_lock`, then the suspends — never the
+SOUND.** `__sysmon` and the agent both call `SuspendThread`: every stop suspends every other machine,
+and the agent holds that window across the whole park, so a suspend and `__gt_exit_process` still
+exclude each other. The order is the window, then `__sched_lock`, then the suspends — never the
 other way round, which is what keeps it free of a cycle with `__gt_preempt_m`. ⇒ **A THIRD SUSPENDER, OR
 A ROAD THAT BLOCKS WHILE HOLDING `__sched_lock`, BREAKS BOTH ARGUMENTS AT ONCE.**
 
@@ -260,7 +261,8 @@ Four doors are still standing open rather than shut:
   `builtins-cpu-parallel.md`'s two `-body-is-runtime-source` cases render the bodies they lower to;
   `osGetPid` and `osEnterBackgroundPriority` are the process family's, rendered by
   `process-id.md`'s `pid-body-is-runtime-source` and `process-background-priority.md`'s
-  `priority-body-is-runtime-source`.
+  `priority-body-is-runtime-source`; `osProcessProbe` is the process family's too, and no golden
+  renders its body — `process-liveness.md`'s cases measure it by running it.
   `osTickCountMs`, `osReadWallClock`, `scratch` and `loadWord` are the clock family's, and
   `builtins-clock.md`'s `wall-clock-body-is-runtime-source` renders the emitted body the last three lower to;
   `storeWord` is the fault probe's, and no golden renders that body — what measures it is a LIVE fault, in
@@ -412,12 +414,13 @@ Four doors are still standing open rather than shut:
 - **A `__Raw` row's host facility reaches no refusable site.** `maxonOpCalleeKind` answers `noCallee`,
   so `LibraryFacts.substrateEntries` never sees one, and a lane without the op reaches instruction
   selection instead of E3104. A substrate-entry row per op is what closes it.
-  ⚠ **FOUR ROWS NAME A FACILITY A SUPPORTED LANE DOES NOT PROVIDE** — `osCpuCount`, `osGetPid`,
-  `osEnterBackgroundPriority` and `osThreadCpuTicks`. For the first three what refuses the wasm program is
-  the CALLEE route (`TargetFacilities.calleeHostFacility`: the `__cpu_` band, the `__proc_` band, and
-  `ProcessBackgroundPriorityName` by name), not this one. The fourth is spelled only by an UNREACHED probe
-  body, which dead-function elimination removes before instruction selection, so nothing exercises its route
-  at all; a REACHED tier body spelling it reaches instruction selection with nothing said.
+  ⚠ **FIVE ROWS NAME A FACILITY A SUPPORTED LANE DOES NOT PROVIDE** — `osCpuCount`, `osGetPid`,
+  `osEnterBackgroundPriority`, `osProcessProbe` and `osThreadCpuTicks`. For the first four what refuses the
+  wasm program is the CALLEE route (`TargetFacilities.calleeHostFacility`: the `__cpu_` band, the `__proc_`
+  band, and `ProcessBackgroundPriorityName` and `ProcessAliveName` by name), not this one. The fifth is
+  spelled only by an UNREACHED probe body, which dead-function elimination removes before instruction
+  selection, so nothing exercises its route at all; a REACHED tier body spelling it reaches instruction
+  selection with nothing said.
   ⭐⭐ **THE LOCK ROWS' GAP WAS TWO GAPS AND BOTH ARE SHUT: `HostFacility.hostMutex` IS `true` ON ALL FIVE
   LANES.** On wasm32-wasi each of the three has its own arm in `StdToWasm.emitBodyOp` emitting NOTHING — a
   component has one thread, so exclusion is already total and the empty lowering is the honest translation,
@@ -709,7 +712,7 @@ facts worth knowing before you get there:
 One test per file is structural, not tidiness: a file is what ONE process runs and that process has a
 5 s default deadline, so twelve compiler-spawning tests in one file report a spurious `TIMED OUT`.
 
-⚠ **`tests/debug` IS 64 CASES AND MOST OF THEM DEBUG A RUNNING PROGRAM**, which is a compile plus a
+⚠ **`tests/debug` IS 118 CASES AND MOST OF THEM DEBUG A RUNNING PROGRAM**, which is a compile plus a
 debugged run inside one file's deadline. Run it as `maxon test tests/debug --timeout=60000`; the default
 deadline reports the corpus as timed out rather than failed.
 

@@ -3,8 +3,7 @@
 /// TCP listening socket. Automatically closes when it goes out of scope.
 ///
 /// A listener is not a connection: it has no `send` and no `recv`, and `accept()` is the only way to get
-/// something that does. That is Go's `net.Listener` against `net.Conn`, and this type is where the language
-/// states it — the box underneath is the same one a `TcpClient` holds, because an OS socket is an OS socket.
+/// something that does. The box underneath is the same one a `TcpClient` holds.
 public type TcpListener
 	var socket as __ManagedSocket
 
@@ -37,13 +36,34 @@ public type TcpListener
 
 	/// Take the next connection, suspending this green thread on the network poller until one arrives.
 	/// The returned TcpClient owns its own socket and auto-closes when it goes out of scope.
+	/// Throws `timedOut` past the accept deadline, and `acceptInterrupted` when the OS refused one
+	/// connection and the listener can still take the next.
 	public function accept() returns TcpClient throws NetworkError
-		let conn = try socket.accept() otherwise 'acceptErr'
-			throw NetworkError.acceptFailed
+		let conn = try socket.accept() otherwise (e) 'acceptErr'
+			if socket.timedOut() 'late'
+				throw NetworkError.timedOut
+			end 'late'
+
+			match e 'why'
+				acceptRetriable then throw NetworkError.acceptInterrupted
+				acceptFailed or
+					closed then throw NetworkError.acceptFailed
+				resolveFailed or
+					bindFailed or
+					addressFailed then panic("TcpListener.accept: `accept` does not throw `{e.name}`")
+			end 'why'
 		end 'acceptErr'
 
 		return TcpClient.adopt(conn)
 	end 'accept'
+
+	/// Make an `accept()` still waiting `milliseconds` after this call throw `timedOut`. `0` clears it.
+	/// Throws `acceptFailed` when the listener is closed.
+	public function setAcceptDeadline(milliseconds SocketDeadlineMs) throws NetworkError
+		try socket.setReadDeadline(milliseconds) otherwise 'deadlineErr'
+			throw NetworkError.acceptFailed
+		end 'deadlineErr'
+	end 'setAcceptDeadline'
 
 	/// Explicitly stop listening and release the port.
 	/// Safe to call multiple times (idempotent).

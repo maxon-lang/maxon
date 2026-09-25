@@ -1,0 +1,24 @@
+let WalkAfterChurnCaseLabel = "a-walk-past-the-table-size-plants-its-points"
+let MainFunctionName = "main"
+let ChurnedInstructions = 150
+
+test 'a step that plants several points after more breakpoints came and went than the table holds runs the splice between its calls'
+	let staged = builtFixture(WalkAfterChurnCaseLabel, fixture: TableChurnFixtureName)
+	let offsets = statementOffsetsOfTheProgram(builtExecutable(staged), staged: staged, atMost: ChurnedInstructions)
+	let scanLine = anchorLine(staged, anchor: "spliced-scan")
+	let afterLine = anchorLine(staged, anchor: "after-scan")
+	let commands = debugCommandLine(appendedCommands(armedAndClearedAtEvery(offsets), rest: ["{BreakCommand} {lineTarget(scanLine)}", RunCommand, StepCommand]))
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	try Expect.equal(eventsOfKind(events, kind: TimeoutEventName).count() as AssertedInt, expected: 0, message: "⛔ THE POINTS A WALK PLANTS TAKE ROWS AND SLOTS THE CLEARED BREAKPOINTS GAVE BACK. `bytes.contains(urlIsDigit)` is spliced into `{MainFunctionName}`, so the `{StepCommand}` plants the splice's exit and its call through a value; with every row still held by a breakpoint long cleared, neither can be planted and the loop is walked one instruction at a time. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let stops = eventsOfKind(events, kind: StopEventName)
+	try Expect.equal(stops.count() as AssertedInt, expected: 2, message: "the breakpoint on the scan line and the `{StepCommand}` are two stops. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let landed = eventAt(stops, index: 1)
+	try Expect.equal(textOf(landed, node: landed.root, key: ReasonKey), expected: StepStopReason, message: "the landing is the step's own. {said}")
+	try Expect.equal(numberOf(landed, node: landed.root, key: LineKey) as AssertedInt, expected: afterLine as AssertedInt, message: "the step lands on the program's next line. {said}")
+	try Expect.equal(textOf(landed, node: landed.root, key: FunctionKey), expected: MainFunctionName, message: "in the frame that made the call. {said}")
+end 'a step that plants several points after more breakpoints came and went than the table holds runs the splice between its calls'

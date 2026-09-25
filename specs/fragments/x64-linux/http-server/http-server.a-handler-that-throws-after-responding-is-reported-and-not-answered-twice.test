@@ -1,0 +1,1915 @@
+// Test: http-server.a-handler-that-throws-after-responding-is-reported-and-not-answered-twice
+let LatePath = "/late"
+
+type LateThrowingHandler implements HttpHandler
+	var label as String
+
+	static function create(label String) returns LateThrowingHandler
+		return LateThrowingHandler{label: label}
+	end 'create'
+
+	function handle(exchange HttpExchange) throws HttpServerError
+		try exchange.respondWith(StatusCode.ok, body: label, contentType: "text/plain")
+
+		if exchange.request().url().path() == LatePath 'thenFails'
+			throw HttpServerError.sendFailed
+		end 'thenFails'
+	end 'handle'
+
+	function faulted(fault HttpHandlerFault)
+		print("faulted {fault.describe()}\n")
+	end 'faulted'
+end 'LateThrowingHandler'
+
+function serveUntilClosed(server HttpServer, handler LateThrowingHandler) returns HttpServeEnd
+	return server.serve(handler)
+end 'serveUntilClosed'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	let handler = LateThrowingHandler.create("answered")
+	let peer = async serveUntilClosed(server, handler: handler)
+	let port = server.port()
+
+	let first = try HttpClient.get("http://127.0.0.1:{port}{LatePath}") otherwise return 2
+	let second = try HttpClient.get("http://127.0.0.1:{port}/fine") otherwise return 3
+
+	server.close()
+	let ended = await peer
+
+	print("first={first.statusCode().rawValue} body={first.body()} second={second.statusCode().rawValue} ended={ended.name}\n")
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_timer_count@24 = i64 0
+  __gt_timer_heap_base@32 = i64 0
+  __gt_timer_capacity@40 = i64 0
+  __gt_timer_seq@48 = i64 0
+  __gt_timer_when@56 = i64 9223372036854775807
+  __gt_trace_counter@64 = i64 0
+  __gt_live_count@72 = i64 0
+  __gt_seed_bytes@80 = i64 2048
+  __gt_stack_bytes_sum@88 = i64 0
+  __gt_stack_bytes_count@96 = i64 0
+  __gt_seed_sum_seen@104 = i64 0
+  __gt_seed_count_seen@112 = i64 0
+  __gt_keeps_cpu_clock@120 = i64 0
+  __sched_active_workers@128 = i64 1
+  __sched_max_active_workers@136 = i64 1
+  __sched_tls_index@144 = i64 0
+  __sched_tls_teb_offset@152 = i64 0
+  __sched_procs@160 = i64 0
+  __sched_allm@168 = i64 0
+  __sched_midle@176 = i64 0
+  __sched_pidle@184 = i64 0
+  __gt_gfree_head@192 = i64 0
+  __sched_arena_cursor@200 = i64 0
+  __sched_arena_limit@208 = i64 0
+  __gt_records_carved@216 = i64 0
+  __sched_npidle@224 = i64 0
+  __sched_runq_size@232 = i64 0
+  __sched_global_pushes@240 = i64 0
+  __sched_timer_scan_steps@248 = i64 0
+  __sched_mcount@256 = i64 0
+  __sched_nmidle@264 = i64 0
+  __sched_main_m@272 = i64 0
+  __sched_phase@280 = i64 0
+  __sched_lastpoll@288 = i64 0
+  __sched_poll_until@296 = i64 0
+  __sched_regain_head@304 = i64 0
+  __np_poller@312 = i64 0
+  __np_break@320 = i64 0
+  __np_wake_sig@328 = i64 0
+  __np_pd_table@336 = i64 0
+  __np_pd_cap@344 = i64 0
+  __np_waiters@352 = i64 0
+  __sched_num_procs@360 = i64 0
+  __sched_shutdown_flag@368 = i64 0
+  __sched_lock@376 = i64 0
+  __sched_lock_depth_sink@384 = i64 0
+  __sched_nmspinning@392 = i64 0
+  __sched_needspinning@400 = i64 0
+  __sched_sysmon_event@408 = i64 0
+  __sched_sysmon_wait@416 = i64 0
+  __sched_timer_starts@424 = i64 0
+  __mrt_envp@432 = i64 0
+  __mrt_tls_next_key@440 = i64 0
+  __mrt_errno@448 = i64 0
+  __mrt_tls_ready@456 = i64 0
+  __slab_arena_list@464 = i64 0
+  __slab_arena_map_l1@472 = i64 0
+  __slab_state@480 = i64 0
+  __ms_wsa_started@488 = i64 0
+}
+
+func @LateThrowingHandler.handle {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rdx
+    x64.movRegImm32 rdx, 200
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRdata r9, [rip + __str_rec_164]  ; "text/plain"
+    x64.movRegReg rcx, rbx
+    x64.callDirect HttpExchange.respondWith
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect HttpExchange.request
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect HttpRequest.url
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect URL.path
+    x64.movRegReg r13, r8
+    x64.leaRegRdata rdx, [rip + __str_rec_165]  ; "/late"
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_eq
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_URL
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_HttpRequest
+    x64.cmpRegImm32 r14, 0
+    x64.jcc equal, ifcont
+  thenFails:
+    x64.movRegImm32 r10, 8
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @LateThrowingHandler.faulted {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 440
+    x64.movRegReg rbx, rdx
+    x64.leaRegRdata rax, [rip + __str_rec_166]  ; "faulted "
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot0, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot1, rax
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.jumpTable rax, default=matchdead [[0]=matcharm#3, [1]=matcharm#4, [2]=matcharm#5, [3]=matcharm#6, [4]=matcharm#7, [5]=matcharm#8, [6]=matcharm#9] @__jumptable_597
+  matchdead:
+  matcharm#3:
+    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
+    x64.storeSlotReg slot5, r12
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.loadRegBaseDisp.word64 rbx, [rbx + 16]
+    x64.movRegReg rcx, r12
+    x64.callDirect requestLabel
+    x64.storeSlotReg slot9, r8
+    x64.loadRegBaseDisp.word64 r12, [r8 + 0]
+    x64.loadRegBaseDisp.word64 r13, [r8 + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_304]  ; " failed with "
+    x64.loadRegBaseDisp.word64 r14, [rax + 0]
+    x64.loadRegBaseDisp.word64 r15, [rax + 8]
+    x64.cmpRegImm32 rbx, 0
+    x64.setccReg equal, rax
+    x64.leaRegRdata rcx, [rip + __str_rec_300]  ; "acceptFailed"
+    x64.imulRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 1
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_305]  ; "malformedRequest"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 2
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_306]  ; "headersTooLarge"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 3
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_307]  ; "bodyTooLarge"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 4
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_308]  ; "unsupportedTransferEncoding"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 5
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_309]  ; "readTimedOut"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 6
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_297]  ; "connectionClosed"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 7
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_295]  ; "sendFailed"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 8
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_310]  ; "listenerClosed"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 9
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_311]  ; "acceptTimedOut"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 10
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_312]  ; "alreadyResponded"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 11
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_313]  ; "unsupportedMethod"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 12
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_314]  ; "unsupportedVersion"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 13
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_301]  ; "acceptInterrupted"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 14
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_315]  ; "invalidResponse"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot49, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot41, rax
+    x64.leaRegRdata rcx, [rip + __str_rec_316]  ; " and was answered 500"
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.storeSlotReg slot33, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.storeSlotReg slot25, rcx
+    x64.leaRegRegReg rdx, r13, r15
+    x64.leaRegRegReg rax, rdx, rax
+    x64.leaRegRegReg rax, rax, rcx
+    x64.storeSlotReg slot13, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot17, r8
+    x64.leaRegRegImm32 rbx, r8, 56
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, rbx, r13
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, r15
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r12, r15
+    x64.loadRegSlot rax, slot41
+    x64.loadRegSlot rdx, slot49
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot41
+    x64.leaRegRegReg r12, r12, rax
+    x64.loadRegSlot rax, slot25
+    x64.loadRegSlot rdx, slot33
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot25
+    x64.leaRegRegReg rax, r12, rax
+    x64.loadRegSlot r12, slot17
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.loadRegSlot rax, slot13
+    x64.storeBaseDispReg.word64 [r12 + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r12 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r12 + 24], rax
+    x64.loadRegSlot rcx, slot9
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot5
+    x64.callDirect __destruct_HttpRequest
+    x64.movRegReg rax, r12
+    x64.jmp matchcont
+  matcharm#4:
+    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
+    x64.storeSlotReg slot4, r12
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.loadRegBaseDisp.word64 rbx, [rbx + 16]
+    x64.movRegReg rcx, r12
+    x64.callDirect requestLabel
+    x64.storeSlotReg slot8, r8
+    x64.loadRegBaseDisp.word64 r12, [r8 + 0]
+    x64.loadRegBaseDisp.word64 r13, [r8 + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_304]  ; " failed with "
+    x64.loadRegBaseDisp.word64 r14, [rax + 0]
+    x64.loadRegBaseDisp.word64 r15, [rax + 8]
+    x64.cmpRegImm32 rbx, 0
+    x64.setccReg equal, rax
+    x64.leaRegRdata rcx, [rip + __str_rec_300]  ; "acceptFailed"
+    x64.imulRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 1
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_305]  ; "malformedRequest"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 2
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_306]  ; "headersTooLarge"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 3
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_307]  ; "bodyTooLarge"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 4
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_308]  ; "unsupportedTransferEncoding"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 5
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_309]  ; "readTimedOut"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 6
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_297]  ; "connectionClosed"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 7
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_295]  ; "sendFailed"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 8
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_310]  ; "listenerClosed"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 9
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_311]  ; "acceptTimedOut"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 10
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_312]  ; "alreadyResponded"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 11
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_313]  ; "unsupportedMethod"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 12
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_314]  ; "unsupportedVersion"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 13
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_301]  ; "acceptInterrupted"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 14
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_315]  ; "invalidResponse"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot48, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot40, rax
+    x64.leaRegRdata rcx, [rip + __str_rec_317]  ; " after its answer was sent"
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.storeSlotReg slot32, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.storeSlotReg slot24, rcx
+    x64.leaRegRegReg rdx, r13, r15
+    x64.leaRegRegReg rax, rdx, rax
+    x64.leaRegRegReg rax, rax, rcx
+    x64.storeSlotReg slot12, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot16, r8
+    x64.leaRegRegImm32 rbx, r8, 56
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, rbx, r13
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, r15
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r12, r15
+    x64.loadRegSlot rax, slot40
+    x64.loadRegSlot rdx, slot48
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot40
+    x64.leaRegRegReg r12, r12, rax
+    x64.loadRegSlot rax, slot24
+    x64.loadRegSlot rdx, slot32
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot24
+    x64.leaRegRegReg rax, r12, rax
+    x64.loadRegSlot r12, slot16
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.loadRegSlot rax, slot12
+    x64.storeBaseDispReg.word64 [r12 + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r12 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r12 + 24], rax
+    x64.loadRegSlot rcx, slot8
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect __destruct_HttpRequest
+    x64.movRegReg rax, r12
+    x64.jmp matchcont
+  matcharm#5:
+    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
+    x64.storeSlotReg slot3, r12
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.loadRegBaseDisp.word64 rbx, [rbx + 16]
+    x64.movRegReg rcx, r12
+    x64.callDirect requestLabel
+    x64.storeSlotReg slot7, r8
+    x64.loadRegBaseDisp.word64 r12, [r8 + 0]
+    x64.loadRegBaseDisp.word64 r13, [r8 + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_304]  ; " failed with "
+    x64.loadRegBaseDisp.word64 r14, [rax + 0]
+    x64.loadRegBaseDisp.word64 r15, [rax + 8]
+    x64.cmpRegImm32 rbx, 0
+    x64.setccReg equal, rax
+    x64.leaRegRdata rcx, [rip + __str_rec_300]  ; "acceptFailed"
+    x64.imulRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 1
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_305]  ; "malformedRequest"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 2
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_306]  ; "headersTooLarge"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 3
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_307]  ; "bodyTooLarge"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 4
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_308]  ; "unsupportedTransferEncoding"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 5
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_309]  ; "readTimedOut"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 6
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_297]  ; "connectionClosed"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 7
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_295]  ; "sendFailed"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 8
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_310]  ; "listenerClosed"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 9
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_311]  ; "acceptTimedOut"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 10
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_312]  ; "alreadyResponded"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 11
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_313]  ; "unsupportedMethod"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 12
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_314]  ; "unsupportedVersion"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 13
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_301]  ; "acceptInterrupted"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 14
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_315]  ; "invalidResponse"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot47, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot39, rax
+    x64.leaRegRdata rcx, [rip + __str_rec_318]  ; " after its answer could not be sent"
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.storeSlotReg slot31, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.storeSlotReg slot23, rcx
+    x64.leaRegRegReg rdx, r13, r15
+    x64.leaRegRegReg rax, rdx, rax
+    x64.leaRegRegReg rax, rax, rcx
+    x64.storeSlotReg slot11, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot15, r8
+    x64.leaRegRegImm32 rbx, r8, 56
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, rbx, r13
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, r15
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r12, r15
+    x64.loadRegSlot rax, slot39
+    x64.loadRegSlot rdx, slot47
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot39
+    x64.leaRegRegReg r12, r12, rax
+    x64.loadRegSlot rax, slot23
+    x64.loadRegSlot rdx, slot31
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot23
+    x64.leaRegRegReg rax, r12, rax
+    x64.loadRegSlot r12, slot15
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.loadRegSlot rax, slot11
+    x64.storeBaseDispReg.word64 [r12 + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r12 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r12 + 24], rax
+    x64.loadRegSlot rcx, slot7
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __destruct_HttpRequest
+    x64.movRegReg rax, r12
+    x64.jmp matchcont
+  matcharm#6:
+    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
+    x64.storeSlotReg slot2, r12
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.loadRegBaseDisp.word64 rbx, [rbx + 16]
+    x64.movRegReg rcx, r12
+    x64.callDirect requestLabel
+    x64.storeSlotReg slot6, r8
+    x64.loadRegBaseDisp.word64 r12, [r8 + 0]
+    x64.loadRegBaseDisp.word64 r13, [r8 + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_304]  ; " failed with "
+    x64.loadRegBaseDisp.word64 r14, [rax + 0]
+    x64.loadRegBaseDisp.word64 r15, [rax + 8]
+    x64.cmpRegImm32 rbx, 0
+    x64.setccReg equal, rax
+    x64.leaRegRdata rcx, [rip + __str_rec_300]  ; "acceptFailed"
+    x64.imulRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 1
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_305]  ; "malformedRequest"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 2
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_306]  ; "headersTooLarge"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 3
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_307]  ; "bodyTooLarge"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 4
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_308]  ; "unsupportedTransferEncoding"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 5
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_309]  ; "readTimedOut"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 6
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_297]  ; "connectionClosed"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 7
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_295]  ; "sendFailed"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 8
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_310]  ; "listenerClosed"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 9
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_311]  ; "acceptTimedOut"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 10
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_312]  ; "alreadyResponded"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 11
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_313]  ; "unsupportedMethod"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 12
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_314]  ; "unsupportedVersion"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 13
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_301]  ; "acceptInterrupted"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 14
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_315]  ; "invalidResponse"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot46, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot38, rax
+    x64.leaRegRdata rcx, [rip + __str_rec_319]  ; ", and the 500 sent in its place could not be sent"
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.storeSlotReg slot30, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.storeSlotReg slot22, rcx
+    x64.leaRegRegReg rdx, r13, r15
+    x64.leaRegRegReg rax, rdx, rax
+    x64.leaRegRegReg rax, rax, rcx
+    x64.storeSlotReg slot10, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot14, r8
+    x64.leaRegRegImm32 rbx, r8, 56
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, rbx, r13
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, r15
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r12, r15
+    x64.loadRegSlot rax, slot38
+    x64.loadRegSlot rdx, slot46
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot38
+    x64.leaRegRegReg r12, r12, rax
+    x64.loadRegSlot rax, slot22
+    x64.loadRegSlot rdx, slot30
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot22
+    x64.leaRegRegReg rax, r12, rax
+    x64.loadRegSlot r12, slot14
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.loadRegSlot rax, slot10
+    x64.storeBaseDispReg.word64 [r12 + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r12 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r12 + 24], rax
+    x64.loadRegSlot rcx, slot6
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __destruct_HttpRequest
+    x64.movRegReg rax, r12
+    x64.jmp matchcont
+  matcharm#7:
+    x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
+    x64.storeSlotReg slot21, rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, rbx
+    x64.callDirect requestLabel
+    x64.storeSlotReg slot29, r8
+    x64.loadRegBaseDisp.word64 rbx, [r8 + 0]
+    x64.loadRegBaseDisp.word64 r12, [r8 + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_320]  ; " ended without an answer and was answered 500"
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.leaRegRegReg rax, r12, r14
+    x64.storeSlotReg slot37, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot45, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r14
+    x64.loadRegSlot rbx, slot45
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot37
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rcx, slot29
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot21
+    x64.callDirect __destruct_HttpRequest
+    x64.movRegReg rax, rbx
+    x64.jmp matchcont
+  matcharm#8:
+    x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
+    x64.storeSlotReg slot20, rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, rbx
+    x64.callDirect requestLabel
+    x64.storeSlotReg slot28, r8
+    x64.loadRegBaseDisp.word64 rbx, [r8 + 0]
+    x64.loadRegBaseDisp.word64 r12, [r8 + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_321]  ; " ended without an answer, and the 500 sent in its place could not be sent"
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.leaRegRegReg rax, r12, r14
+    x64.storeSlotReg slot36, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot44, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r14
+    x64.loadRegSlot rbx, slot44
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot36
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rcx, slot28
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot20
+    x64.callDirect __destruct_HttpRequest
+    x64.movRegReg rax, rbx
+    x64.jmp matchcont
+  matcharm#9:
+    x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_322]  ; "accepting a connection failed; the next attempt is in "
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect __uint_to_string
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_323]  ; " ms"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot43, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot35, rax
+    x64.leaRegRegReg rcx, r13, rbx
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot19, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot27, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r15, r13
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r12, rbx
+    x64.loadRegSlot rax, slot35
+    x64.loadRegSlot rdx, slot43
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot35
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rbx, slot27
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot19
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, rbx
+  matchcont:
+    x64.storeSlotReg slot18, rax
+  __il_cont:
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_167]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot42, rax
+    x64.loadRegSlot r14, slot1
+    x64.leaRegRegReg rcx, r14, r12
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot26, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot34, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.loadRegSlot rdx, slot0
+    x64.movRegReg rcx, r15
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r14, r15, r14
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r14, r12
+    x64.loadRegSlot rax, slot42
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot42
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rbx, slot34
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot26
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot18
+    x64.callDirect __str_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 440
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @serveUntilClosed {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 168
+    x64.storeSlotReg slot12, rcx
+    x64.movRegReg rbx, rdx
+    x64.leaRegRdata rax, [rip + __witness_LateThrowingHandler.HttpHandler]
+    x64.storeSlotReg slot14, rax
+  __il_body#2:
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 8], rax
+    x64.movRegImm32 r12, 0
+    x64.movRegReg r13, r12
+    x64.movRegReg r12, r8
+  whilehdr:
+    x64.storeSlotReg slot5, r12
+  __il_body#11:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchnext#15
+  matcharm#12:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont#10
+  matchnext#15:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matchdead#14
+  matcharm#13:
+    x64.movRegImm32 rax, 0
+  __il_cont#10:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __il_body#18
+  acceptLoop:
+    x64.loadRegSlot rcx, slot12
+    x64.callDirect HttpServer.accept
+    x64.movRegReg r14, r8
+    x64.storeSlotReg slot7, r14
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#6
+  tryerr#7:
+    x64.leaRegRegImm32 r14, r10, -1
+  __il_body#26:
+    x64.jumpTable r14, default=matchdead#32 [[0]=matcharm#28, [1..6]=matcharm#30, [7]=matcharm#31, [8]=matcharm#27, [9]=matcharm#29, [10]=matcharm#31, [11..13]=matcharm#30, [14]=matcharm#31] @__jumptable_598
+  matchdead#32:
+  matcharm#28:
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r8 + 8], rax
+    x64.movRegReg r15, r8
+    x64.jmp __il_cont#25
+  matcharm#30:
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 8], rax
+    x64.movRegReg r15, r8
+    x64.jmp __il_cont#25
+  matcharm#31:
+    x64.leaRegRdata rax, [rip + __str_rec_326]  ; "panic at HttpServer.maxon:357: "
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_327]  ; "HttpServer.serve: `accept()` does not throw `"
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 r15, [rax + 8]
+    x64.cmpRegImm32 r14, 0
+    x64.setccReg equal, rax
+    x64.leaRegRdata rcx, [rip + __str_rec_300]  ; "acceptFailed"
+    x64.imulRegReg rax, rax, rcx
+    x64.cmpRegImm32 r14, 1
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_305]  ; "malformedRequest"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 r14, 2
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_306]  ; "headersTooLarge"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 r14, 3
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_307]  ; "bodyTooLarge"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 r14, 4
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_308]  ; "unsupportedTransferEncoding"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 r14, 5
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_309]  ; "readTimedOut"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 r14, 6
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_297]  ; "connectionClosed"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 r14, 7
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_295]  ; "sendFailed"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 r14, 8
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_310]  ; "listenerClosed"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 r14, 9
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_311]  ; "acceptTimedOut"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 r14, 10
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_312]  ; "alreadyResponded"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 r14, 11
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_313]  ; "unsupportedMethod"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 r14, 12
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_314]  ; "unsupportedVersion"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 r14, 13
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_301]  ; "acceptInterrupted"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 r14, 14
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_315]  ; "invalidResponse"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot15, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot13, rax
+    x64.leaRegRdata rcx, [rip + __str_rec_302]  ; "`"
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.storeSlotReg slot10, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.storeSlotReg slot6, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_167]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 0]
+    x64.storeSlotReg slot4, rsi
+    x64.loadRegBaseDisp.word64 rdx, [rdx + 8]
+    x64.storeSlotReg slot2, rdx
+    x64.leaRegRegReg rsi, r12, r15
+    x64.leaRegRegReg rax, rsi, rax
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegReg rax, rax, rdx
+    x64.storeSlotReg slot0, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot1, r8
+    x64.leaRegRegImm32 r14, r8, 56
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r14, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r15
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r15
+    x64.loadRegSlot rax, slot13
+    x64.loadRegSlot rdx, slot15
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot13
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.loadRegSlot rax, slot6
+    x64.loadRegSlot rdx, slot10
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot6
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.loadRegSlot rax, slot2
+    x64.loadRegSlot rdx, slot4
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot2
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rax, slot1
+    x64.storeBaseDispReg.word64 [rax + 0], r14
+    x64.loadRegSlot rcx, slot0
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 168
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matcharm#27:
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 8], rax
+    x64.movRegReg r15, r8
+    x64.jmp __il_cont#25
+  matcharm#29:
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.movRegImm32 rax, 2
+    x64.storeBaseDispReg.word64 [r8 + 8], rax
+    x64.movRegReg r15, r8
+  __il_cont#25:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+  __rc_chk#43:
+    x64.cmpRegImm32 r13, 1000
+    x64.jcc greater, __rc_panic#42
+  __rc_ok#41:
+    x64.cmpRegImm32 r14, 13
+    x64.jcc equal, ifcont#36
+  noRetry:
+    x64.movRegImm32 r12, 0
+    x64.jmp __il_cont#24
+  ifcont#36:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc notEqual, ifcont#38
+  firstRetry:
+    x64.movRegImm32 r12, 5
+    x64.jmp __il_cont#24
+  ifcont#38:
+    x64.imulRegRegImm32 r12, r13, 2
+    x64.cmpRegImm32 r12, 1000
+    x64.jcc less, __rc_chk#46
+  atTheLongest:
+    x64.movRegImm32 r12, 1000
+    x64.jmp __il_cont#24
+  __rc_chk#46:
+    x64.cmpRegImm32 r12, 1000
+    x64.jcc greater, __rc_panic#45
+  __il_cont#24:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc equal, ifcont#9
+  backOff:
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rax, 6
+    x64.storeBaseDispReg.word64 [r13 + 0], rax
+    x64.storeBaseDispReg.word64 [r13 + 8], r12
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r13 + 16], rax
+    x64.loadRegSlot rax, slot14
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callMem [rax + 56]
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_HttpHandlerFault
+  __rc_ok#49:
+    x64.movRegReg rcx, r12
+    x64.callDirect __gt_sleep
+  ifcont#9:
+    x64.movRegReg r13, r12
+    x64.movRegReg r12, r15
+    x64.jmp whilehdr
+  tryok#6:
+    x64.movRegImm32 rax, 0
+    x64.storeSlotReg slot3, rax
+  __il_body#52:
+    x64.movRegReg rcx, r14
+    x64.callDirect HttpExchange.request
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot8, r12
+    x64.loadRegSlot rax, slot14
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callMem [rax + 48]
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __il_body#67
+  tryerr#54:
+    x64.leaRegRegImm32 rax, r10, -1
+    x64.storeSlotReg slot11, rax
+  __il_body#69:
+    x64.loadRegBaseDisp.word64 rax, [r14 + 16]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+  __il_cont#68:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchnext#63
+  matcharm#61:
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot9, r13
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r13 + 0], rax
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_own
+    x64.storeBaseDispReg.word64 [r13 + 8], r8
+    x64.loadRegSlot r15, slot11
+    x64.storeBaseDispReg.word64 [r13 + 16], r15
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rax, 3
+    x64.storeBaseDispReg.word64 [r13 + 0], rax
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_own
+    x64.storeBaseDispReg.word64 [r13 + 8], r8
+    x64.storeBaseDispReg.word64 [r13 + 16], r15
+    x64.loadRegSlot rdx, slot9
+    x64.movRegReg rcx, r14
+    x64.movRegReg rax, r13
+    x64.callDirect answerInsteadOfTheHandler
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_HttpHandlerFault
+    x64.loadRegSlot rcx, slot9
+    x64.callDirect __destruct_HttpHandlerFault
+    x64.jmp __il_cont#57
+  matchnext#63:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matchnext#64
+  matcharm#59:
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r12 + 0], rax
+    x64.loadRegSlot rcx, slot8
+    x64.callDirect __mm_own
+    x64.storeBaseDispReg.word64 [r12 + 8], r8
+    x64.loadRegSlot rax, slot11
+    x64.storeBaseDispReg.word64 [r12 + 16], rax
+    x64.jmp __il_cont#57
+  matchnext#64:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc notEqual, matchdead#62
+  matcharm#60:
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rax, 2
+    x64.storeBaseDispReg.word64 [r12 + 0], rax
+    x64.loadRegSlot rcx, slot8
+    x64.callDirect __mm_own
+    x64.storeBaseDispReg.word64 [r12 + 8], r8
+    x64.loadRegSlot rax, slot11
+    x64.storeBaseDispReg.word64 [r12 + 16], rax
+  __il_cont#57:
+    x64.loadRegSlot rax, slot14
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callMem [rax + 56]
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_HttpHandlerFault
+    x64.loadRegSlot rcx, slot8
+    x64.callDirect __destruct_HttpRequest
+    x64.jmp __il_cont#51
+  matchdead#62:
+  tryok#53:
+  __il_body#67:
+    x64.loadRegBaseDisp.word64 rax, [r14 + 16]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+  __il_cont#66:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, ifcont#56
+  leftUnanswered:
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rax, 4
+    x64.storeBaseDispReg.word64 [r12 + 0], rax
+    x64.loadRegSlot rcx, slot8
+    x64.callDirect __mm_own
+    x64.storeBaseDispReg.word64 [r12 + 8], r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r12 + 16], rax
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rax, 5
+    x64.storeBaseDispReg.word64 [r13 + 0], rax
+    x64.loadRegSlot rcx, slot8
+    x64.callDirect __mm_own
+    x64.storeBaseDispReg.word64 [r13 + 8], r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r13 + 16], rax
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect answerInsteadOfTheHandler
+    x64.movRegReg r14, r8
+    x64.loadRegSlot rax, slot14
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callMem [rax + 56]
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_HttpHandlerFault
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_HttpHandlerFault
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_HttpHandlerFault
+  ifcont#56:
+    x64.loadRegSlot rcx, slot8
+    x64.callDirect __destruct_HttpRequest
+  __il_cont#51:
+    x64.loadRegSlot rcx, slot7
+    x64.callDirect __destruct_HttpExchange
+    x64.loadRegSlot rax, slot3
+    x64.loadRegSlot rcx, slot5
+    x64.movRegReg r12, rcx
+    x64.movRegReg r13, rax
+    x64.jmp whilehdr
+  __il_body#18:
+    x64.loadRegSlot rax, slot5
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchnext#22
+  matcharm#19:
+    x64.leaRegRdata rcx, [rip + __str_blob_325]  ; "panic at HttpServer.maxon:336: HttpServer.serve: the accept loop ended while still serving\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 168
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchnext#22:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matchdead#21
+  matcharm#20:
+    x64.loadRegSlot rax, slot5
+    x64.loadRegBaseDisp.word64 rbx, [rax + 8]
+  __il_cont#17:
+    x64.loadRegSlot rcx, slot5
+    x64.callDirect __mm_decref
+  __il_cont#1:
+    x64.movRegReg r8, rbx
+    x64.epilogue 168
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead#21:
+  matchdead#14:
+  __rc_panic#42:
+    x64.leaRegRdata rcx, [rip + __str_blob_503]  ; "panic at HttpServer.maxon:361: Range check failed: value outside typealias 'HttpAcceptRetryMs'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 168
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#45:
+    x64.leaRegRdata rcx, [rip + __str_blob_504]  ; "panic at HttpServer.maxon:374: Range check failed: value outside typealias 'HttpAcceptRetryMs'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 168
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 344
+    x64.leaRegRdata rcx, [rip + __str_rec_168]  ; "127.0.0.1"
+    x64.movRegImm32 rdx, 0
+    x64.callDirect HttpServer.bind
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 344
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
+    x64.leaRegRdata rax, [rip + __str_rec_169]  ; "answered"
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.leaRegRegImm32 rcx, r13, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r15, r14, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r13
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+  __il_body#9:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot1, r12
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r12 + 0], r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_decref
+  __il_cont#8:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_own
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_own
+    x64.movRegReg r14, r8
+    x64.leaRegFunc rcx, [rip + serveUntilClosed]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r15, r8
+    x64.storeSlotReg slot14, r15
+    x64.storeBaseDispReg.word64 [r15 + 200], r13
+    x64.storeBaseDispReg.word64 [r15 + 208], r14
+    x64.leaRegFunc rax, [rip + __gt_release_serveUntilClosed]
+    x64.storeBaseDispReg.word64 [r15 + 176], rax
+    x64.movRegReg rcx, r15
+    x64.callDirect __gt_ready
+  __il_body#10:
+    x64.loadRegBaseDisp.word64 r13, [rbx + 24]
+    x64.storeSlotReg slot15, r13
+  __il_cont#7:
+    x64.leaRegRdata rax, [rip + __str_rec_170]  ; "http://127.0.0.1:"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot34, rcx
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot36, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r8
+    x64.callDirect __uint_to_string
+    x64.storeSlotReg slot30, r8
+    x64.leaRegRdata rax, [rip + __str_rec_165]  ; "/late"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot27, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot24, rax
+    x64.leaRegRegReg rcx, r14, r8
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot18, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot21, r8
+    x64.leaRegRegImm32 r13, r8, 56
+    x64.loadRegSlot rdx, slot34
+    x64.movRegReg rcx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r14, r13, r14
+    x64.loadRegSlot rax, slot30
+    x64.loadRegSlot rdx, slot36
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot30
+    x64.leaRegRegReg r14, r14, rax
+    x64.loadRegSlot rax, slot24
+    x64.loadRegSlot rdx, slot27
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot24
+    x64.leaRegRegReg rax, r14, rax
+    x64.loadRegSlot r14, slot21
+    x64.storeBaseDispReg.word64 [r14 + 0], r13
+    x64.loadRegSlot rax, slot18
+    x64.storeBaseDispReg.word64 [r14 + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.loadRegSlot rcx, slot36
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r14
+    x64.callDirect HttpClient.get
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot2, r13
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.movRegImm32 r13, 2
+    x64.loadRegSlot rcx, slot21
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, r15
+    x64.callDirect __gt_promise_drop
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_LateThrowingHandler
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_HttpServer
+    x64.movRegReg r8, r13
+    x64.epilogue 344
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#3:
+    x64.loadRegSlot rcx, slot21
+    x64.callDirect __str_decref
+    x64.leaRegRdata rax, [rip + __str_rec_170]  ; "http://127.0.0.1:"
+    x64.loadRegBaseDisp.word64 r14, [rax + 0]
+    x64.loadRegBaseDisp.word64 r15, [rax + 8]
+    x64.storeSlotReg slot38, r15
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot33, r8
+    x64.loadRegSlot rcx, slot15
+    x64.movRegReg rdx, r8
+    x64.callDirect __uint_to_string
+    x64.storeSlotReg slot29, r8
+    x64.leaRegRdata rax, [rip + __str_rec_171]  ; "/fine"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot26, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot23, rax
+    x64.leaRegRegReg rcx, r15, r8
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot17, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot20, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.loadRegSlot rax, slot38
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r14
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot38
+    x64.leaRegRegReg r14, r15, rax
+    x64.loadRegSlot rax, slot29
+    x64.loadRegSlot rdx, slot33
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot29
+    x64.leaRegRegReg r14, r14, rax
+    x64.loadRegSlot rax, slot23
+    x64.loadRegSlot rdx, slot26
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot23
+    x64.leaRegRegReg rax, r14, rax
+    x64.loadRegSlot r14, slot20
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.loadRegSlot rax, slot17
+    x64.storeBaseDispReg.word64 [r14 + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.loadRegSlot rcx, slot33
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r14
+    x64.callDirect HttpClient.get
+    x64.movRegReg r14, r8
+    x64.storeSlotReg slot3, r14
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#5
+  tryerr#6:
+    x64.movRegImm32 r14, 3
+    x64.loadRegSlot rcx, slot20
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_HttpResponse
+    x64.loadRegSlot rcx, slot14
+    x64.callDirect __gt_promise_drop
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_LateThrowingHandler
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_HttpServer
+    x64.movRegReg r8, r14
+    x64.epilogue 344
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#5:
+    x64.loadRegSlot rcx, slot20
+    x64.callDirect __str_decref
+  __il_body#12:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.byte [rax + 0], rcx
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+  __il_body#14:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.callDirect __ms_close
+  __il_cont#11:
+    x64.loadRegSlot rcx, slot14
+    x64.callDirect __gt_await
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_172]  ; "first="
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot28, rcx
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+  __il_body#17:
+    x64.loadRegBaseDisp.word64 r15, [r13 + 0]
+  __il_cont#16:
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot25, r8
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r8
+    x64.callDirect __int_to_string
+    x64.movRegReg r15, r8
+    x64.leaRegRdata rax, [rip + __str_rec_173]  ; " body="
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot22, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot37, rax
+    x64.movRegReg rcx, r13
+    x64.callDirect HttpResponse.body
+    x64.storeSlotReg slot4, r8
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.storeSlotReg slot11, rax
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.storeSlotReg slot35, rax
+    x64.leaRegRdata rax, [rip + __str_rec_174]  ; " second="
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot10, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot31, rax
+  __il_body#18:
+    x64.loadRegBaseDisp.word64 r13, [r14 + 0]
+  __il_cont#15:
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot6, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r8
+    x64.callDirect __int_to_string
+    x64.storeSlotReg slot5, r8
+    x64.leaRegRdata rax, [rip + __str_rec_175]  ; " ended="
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot8, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot7, rax
+    x64.cmpRegImm32 rbx, 0
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_176]  ; "closed"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.cmpRegImm32 rbx, 1
+    x64.setccReg equal, rdx
+    x64.leaRegRdata rsi, [rip + __str_rec_177]  ; "listenerFailed"
+    x64.imulRegReg rdx, rdx, rsi
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.cmpRegImm32 rbx, 2
+    x64.setccReg equal, rdx
+    x64.leaRegRdata rsi, [rip + __str_rec_178]  ; "acceptDeadlinePassed"
+    x64.imulRegReg rdx, rdx, rsi
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.storeSlotReg slot9, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.storeSlotReg slot32, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_167]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 0]
+    x64.storeSlotReg slot19, rsi
+    x64.loadRegBaseDisp.word64 rdx, [rdx + 8]
+    x64.storeSlotReg slot16, rdx
+    x64.leaRegRegReg rsi, r12, r15
+    x64.loadRegSlot rbx, slot37
+    x64.leaRegRegReg rsi, rsi, rbx
+    x64.loadRegSlot r13, slot35
+    x64.leaRegRegReg rsi, rsi, r13
+    x64.loadRegSlot rdi, slot31
+    x64.leaRegRegReg rsi, rsi, rdi
+    x64.leaRegRegReg rsi, rsi, r8
+    x64.leaRegRegReg rax, rsi, rax
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegReg rax, rax, rdx
+    x64.storeSlotReg slot12, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot13, r8
+    x64.leaRegRegImm32 r14, r8, 56
+    x64.loadRegSlot rdx, slot28
+    x64.movRegReg rcx, r14
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r14, r12
+    x64.loadRegSlot rdx, slot25
+    x64.movRegReg rcx, r12
+    x64.movRegReg rax, r15
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r12, r15
+    x64.loadRegSlot rdx, slot22
+    x64.movRegReg rcx, r12
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r12, rbx
+    x64.loadRegSlot rdx, slot11
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r13
+    x64.loadRegSlot rdx, slot10
+    x64.loadRegSlot rax, slot31
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot31
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.loadRegSlot rax, slot5
+    x64.loadRegSlot rdx, slot6
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot5
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.loadRegSlot rax, slot7
+    x64.loadRegSlot rdx, slot8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot7
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.loadRegSlot rdx, slot9
+    x64.loadRegSlot rax, slot32
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot32
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.loadRegSlot rax, slot16
+    x64.loadRegSlot rdx, slot19
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot16
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rbx, slot13
+    x64.storeBaseDispReg.word64 [rbx + 0], r14
+    x64.loadRegSlot rax, slot12
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rcx, slot25
+    x64.callDirect __mm_decref
+    x64.loadRegSlot rcx, slot6
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect __str_decref
+    x64.movRegImm32 rbx, 0
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __destruct_HttpResponse
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __destruct_HttpResponse
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __destruct_LateThrowingHandler
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_HttpServer
+    x64.movRegReg r8, rbx
+    x64.epilogue 344
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

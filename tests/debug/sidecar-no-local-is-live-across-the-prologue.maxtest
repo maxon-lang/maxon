@@ -1,0 +1,40 @@
+let PrologueCaseLabel = "sidecar-no-local-is-live-across-the-prologue"
+let ParameterlessFunctionName = "main"
+let LocationColumn = 3
+let RegisterLocationPrefix = "reg"
+let FrameSlotLocationPrefix = "["
+
+test 'a local of a function with no parameters is not placed before the function has run an instruction'
+	let staged = builtFixture(PrologueCaseLabel, fixture: PrologueFixtureName)
+	let dump = spawnDumpInfo(builtExecutable(staged), staged: staged, sections: StringArray.create())
+
+	try Expect.equal(dump.exitCode() as AssertedInt, expected: 0, message: "`{DebugSubcommandName} {DumpInfoOptionName} <exe>` did not print the sidecar. It wrote to stderr: {dump.stderr}")
+
+	let functionRows = dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading)
+	let owner = functionRowOf(functionRows, name: ParameterlessFunctionName)
+	let (functionStart, _) = requiredCodeRange(owner, what: "`{ParameterlessFunctionName}`'s function row")
+	var placed = 0
+	var claimingTheEntry = StringArray.create()
+
+	for row in localRowsOf(functionRows, name: ParameterlessFunctionName) 'eachLocal'
+		let location = try whitespaceTokens(row).get(LocationColumn) otherwise continue
+
+		if not location.startsWith(RegisterLocationPrefix) and not location.startsWith(FrameSlotLocationPrefix) 'notPlaced'
+			continue
+		end 'notPlaced'
+
+		placed = placed + 1
+
+		let scopeStart = match codeRangeIn(row) 'scope'
+			none gives functionStart
+			range(start, _) gives start
+		end 'scope'
+
+		if scopeStart <= functionStart 'fromTheFirstByte'
+			claimingTheEntry.push(row)
+		end 'fromTheFirstByte'
+	end 'eachLocal'
+
+	try Expect.notEqual(placed as AssertedInt, expected: 0, message: "`{ParameterlessFunctionName}` places none of its locals in a register or a frame slot, so this case would ask nothing of any of them. The functions section held: {renderedRows(functionRows)}")
+	try Expect.isEmpty(renderedRows(claimingTheEntry), message: "`{ParameterlessFunctionName}` takes no parameters, so no value of it is live on entry: every one is defined by an instruction of its body, which runs after the prologue. A row scoped from the function's first byte at 0x{functionStart:x} claims the value across the prologue, where its register still holds the caller's. The rows were:{renderedRows(claimingTheEntry)}")
+end 'a local of a function with no parameters is not placed before the function has run an instruction'

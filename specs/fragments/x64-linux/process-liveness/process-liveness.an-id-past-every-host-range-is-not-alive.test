@@ -1,0 +1,35 @@
+// Test: process-liveness.an-id-past-every-host-range-is-not-alive
+function main() returns ExitCode
+	if __Builtins.processIsAlive(4294967296 + __Builtins.currentProcessId()) 'claimed'
+		return 1
+	end 'claimed'
+	return 3
+end 'main'
+---
+ExitCode: 3
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm rbx, 4294967296
+    x64.callDirect __proc_pid
+    x64.leaRegRegReg rcx, rbx, r8
+    x64.callDirect __proc_alive
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont
+  claimed:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 3
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

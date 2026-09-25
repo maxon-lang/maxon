@@ -9,10 +9,6 @@
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
-// A cursor into the document's source bytes, which are one `ByteArray`: its length is a signed
-// machine word, so that is the honest ceiling for every position into it.
-typealias BytePos = int(0 to u64.max)
-
 /// A handle into a `JsonDoc`'s node arena. The root of every parsed document
 /// is `0`; allocator order is deterministic but otherwise unspecified.
 /// Exported so callers can hold and pass node ids by name across files.
@@ -855,19 +851,10 @@ function numberFromBytes(bytes ByteArray, start BytePos, endPos BytePos) returns
 end 'numberFromBytes'
 
 function hexDigit(b Byte) returns JsonInt throws JsonError
-	if b >= 0x30 and b <= 0x39 'digit'
-		return b - 0x30
-	end 'digit'
-
-	if b >= 0x41 and b <= 0x46 'upper'
-		return b - 0x41 + 10
-	end 'upper'
-
-	if b >= 0x61 and b <= 0x66 'lower'
-		return b - 0x61 + 10
-	end 'lower'
-
-	throw JsonError.invalidEscape
+	match urlHexDigitOf(b) 'reading'
+		value(digit) then return digit as JsonInt
+		notAHexDigit then throw JsonError.invalidEscape
+	end 'reading'
 end 'hexDigit'
 
 function encodeCodepoint(cp JsonInt, out ByteArray)

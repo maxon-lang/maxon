@@ -177,17 +177,11 @@ let X64LinuxArchSetFs = 0x1002
 let X64LinuxArchGetFs = 0x1003
 
 // --- The child-process band ---
-//
-// ⚠⚠ **MEASURED ON THIS LANE, each with a negative control that produced a DIFFERENT observable**: `pipe2`
-// round-tripped a byte and answered exit 90 as 292; `dup3(w, 7, 0)` answered 7 and 91 as 291; `execve` ran
-// `/bin/true` and `/bin/false` and answered 120 as 60 and 42 as 58; `wait4` reported a child's `exit(37)` as
-// 37 and 255 as 60; `kill` SIGKILLed the caller to 137 and answered 11 as 61; `ppoll` reported `POLLIN` on a
-// ready pipe and returned 0 on an empty one, answering 90 as 270.
 let X64LinuxSyscallPipe2 = 293
 let X64LinuxSyscallDup3 = 292
 let X64LinuxSyscallExecve = 59
 let X64LinuxSyscallWait4 = 61
-let X64LinuxSyscallKill = 62
+export let X64LinuxSyscallKill = 62
 let X64LinuxSyscallPpoll = 271
 
 // The child's two optional pre-`execve` steps: its own SESSION for a `DETACHED_PROCESS`, and its working
@@ -342,23 +336,15 @@ export let X64LinuxSyscallSendto = 44
 export let X64LinuxSyscallRecvfrom = 45
 
 // --- The SERVER side of the socket band ---
-//
-// ⚠ **MEASURED ON THIS LANE, not transcribed, and END TO END**: a probe on the WSL x86_64 guest called these
-// four BY NUMBER and nothing else — `bind` to `127.0.0.1:0` answered 0, `listen` answered 0, `getsockname`
-// read back `family=2` and a non-zero ephemeral port, a second socket `connect`ed to exactly that port, and
-// `accept4` answered a live descriptor that carried BOTH `O_NONBLOCK` and `FD_CLOEXEC` and over which five
-// bytes then crossed.
-// ⛔ **NEGATIVE CONTROLS, one substitution at a time**: AArch64's whole set answered `-EFAULT` at the first
-// call; `listen` given 49 (`bind`) answered `-EINVAL`; `getsockname` given 52 (`getpeername`) answered
-// `-ENOTCONN` with `family=0`.
-// ⛔⛔ **AND THE SHARPEST CONTROL IS `accept4` GIVEN 43, WHICH IS PLAIN `accept` AND SUCCEEDS.** It answers a
-// live descriptor and the bytes still cross — but with `O_NONBLOCK` and `FD_CLOEXEC` both CLEAR, because
-// plain `accept` ignores the fourth argument. ⇒ **a check of this number that reads only "did it answer a
-// descriptor" reads GREEN on the wrong call**; the accepted descriptor's FLAGS are what tell 288 from 43, and
-// a blocking descriptor is what holds a machine on its first `recv`.
 export let X64LinuxSyscallBind = 49
 export let X64LinuxSyscallListen = 50
 export let X64LinuxSyscallGetsockname = 51
+export let X64LinuxSyscallShutdown = 48
+
+// Plain `accept` (43) also answers a live descriptor but ignores the flags argument, so a check of
+// this number that reads only "did it answer a descriptor" passes on the wrong call. The accepted
+// descriptor's `O_NONBLOCK` is what tells them apart, and a blocking one holds a machine on its
+// first `recv`.
 export let X64LinuxSyscallAccept4 = 288
 
 // ⛔⛔ **`O_DIRECTORY` IS THE asm-generic `0o200000` HERE, NOT THE `0o40000` AArch64 USES.**
@@ -461,9 +447,9 @@ function x64LinuxEmitStashErrno(asm X64RuntimeAsm)
 	x64LinuxEmitStoreErrno(asm, valueReg: X64Register.rsi)
 end 'x64LinuxEmitStashErrno'
 
-// Publish a KNOWN errno rather than one a syscall just answered — the walk's clear before each step
-// (`PosixErrnoCleared`, which is how end-of-iteration reaches `ERROR_NO_MORE_FILES`), and the two places a
-// reason has to be invented because no call failed.
+// Publish a known errno rather than one a syscall just answered: the walk's clear before each step
+// (`PosixErrno.cleared`, which is how end-of-iteration reaches `ERROR_NO_MORE_FILES`), and the
+// places a reason has to be invented because no call failed.
 function x64LinuxEmitPublishErrno(asm X64RuntimeAsm, value ParsedInt)
 	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: value as MachineWord)
 	x64LinuxEmitStoreErrno(asm, valueReg: X64Register.rsi)
@@ -542,15 +528,13 @@ function x64LinuxEmitStashIfFailed(asm X64RuntimeAsm)
 	asm.placeLabel(succeeded)
 end 'x64LinuxEmitStashIfFailed'
 
-// ⭐ **ONE `EINTR` TEST, SHARED BY EVERY CALL IN THIS FILE THAT OWES ONE** — the netpoll wait, the pipe
-// peek and the read/write transfer pair. A raw `syscall` answers the NEGATED number in rax itself, so there
-// is no accessor to call and the whole test is a compare and a branch; written three times it would be
-// three chances to compare against the wrong sign.
+// The one `EINTR` test, shared by the netpoll wait, the pipe peek and the read/write transfer pair.
+// A raw `syscall` answers the negated number in rax itself, so the sign is the thing to get right.
 //
-// ⚠ **`whenInterrupted` IS NOT ALWAYS A LOOP**: the transfer pair aims it BACKWARD at its own syscall to
-// re-issue it, and the peek and the netpoll wait aim it FORWARD at a different answer.
+// `whenInterrupted` is not always a loop: the transfer pair aims it backward at its own syscall to
+// re-issue it, and the peek and the netpoll wait aim it forward at a different answer.
 function x64LinuxEmitBranchIfEintr(asm X64RuntimeAsm, whenInterrupted BlockId)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: (0 - PosixErrnoInterrupted) as Imm32)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: (0 - PosixErrno.interrupted.rawValue) as Imm32)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: whenInterrupted)
 end 'x64LinuxEmitBranchIfEintr'
 
@@ -649,21 +633,16 @@ function x64LinuxEmitZeroSlots(asm X64RuntimeAsm, firstSlot StackSize, slotCount
 	asm.placeLabel(zeroed)
 end 'x64LinuxEmitZeroSlots'
 
-// ⭐ **AN errno IN rax BECOMING THE Win32 CODE THE Std TIER CLASSIFIES** — the whole body of
-// `mrt_host_last_error` except for where the errno came FROM. The errno values and the Win32 codes are
-// `Targets/Shared/PosixRuntime`'s, `Targets/Shared/LinuxRuntime`'s and `ManagedFileRuntime`'s; only the
-// branch shape is x64's.
+// An errno in rax becoming the Win32 code the Std tier classifies: the whole body of
+// `mrt_host_last_error` except for where the errno came from. The mapping is not the identity (see
+// `PosixErrno`), and a cleared errno answers `ERROR_NO_MORE_FILES` (`PosixErrno.cleared`).
 //
-// ⚠ **THE MAPPING IS NOT THE IDENTITY AND CANNOT BE**, even though `ENOENT` and `ERROR_FILE_NOT_FOUND` are
-// both 2. ⚠ **A CLEARED errno ANSWERS `ERROR_NO_MORE_FILES`** — see `PosixErrnoCleared`.
-//
-// ⭐⭐ **`EWOULDBLOCK` AND `ENOTEMPTY` ARE THE TWO ARMS WITH A LANE IN THEM, AND THEY ARE THE ONES THE
-// READER FORKS ON.** Linux numbers them 11 and 39 where Darwin has 35 and 66; this backend serves Linux
-// alone, so it reads that lane's pair outright where the arm64 twin takes both as parameters. `EWOULDBLOCK`
-// answers `ERROR_IO_PENDING` because that is what it MEANS — a non-blocking read that could not be served
-// yet is an operation still in flight, which is exactly the arm `__gt_subp_yield_read` parks on rather than
-// classifying as a fault. `ENOTEMPTY` answers `ERROR_DIR_NOT_EMPTY`, which is what tells a
-// `Directory.delete` caller that the directory is occupied rather than missing.
+// `EWOULDBLOCK` and `ENOTEMPTY` are the two arms whose numbers differ per OS; this backend serves
+// Linux alone, so it reads `LinuxErrno` outright where the arm64 twin takes both as parameters.
+// `EWOULDBLOCK` answers `ERROR_IO_PENDING`: a non-blocking read that could not be served yet is an
+// operation still in flight, the arm `__gt_subp_yield_read` parks on rather than classifying as a
+// fault. `ENOTEMPTY` answers `ERROR_DIR_NOT_EMPTY`, which tells a `Directory.delete` caller the
+// directory is occupied, not missing.
 function x64LinuxEmitErrnoToWin32(asm X64RuntimeAsm)
 	let notFound = asm.newLabel()
 	let pathNotFound = asm.newLabel()
@@ -675,17 +654,17 @@ function x64LinuxEmitErrnoToWin32(asm X64RuntimeAsm)
 
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: noMoreFiles)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: LinuxErrnoWouldBlock as Imm32)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: LinuxErrno.wouldBlock.rawValue as Imm32)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: stillInFlight)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: LinuxErrnoDirectoryNotEmpty as Imm32)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: LinuxErrno.directoryNotEmpty.rawValue as Imm32)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: notEmpty)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrnoNoSuchFileOrDirectory as Imm32)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrno.noSuchFileOrDirectory.rawValue as Imm32)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: notFound)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrnoNotADirectory as Imm32)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrno.notADirectory.rawValue as Imm32)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: pathNotFound)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrnoPermissionDenied as Imm32)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrno.permissionDenied.rawValue as Imm32)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: denied)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrnoOperationNotPermitted as Imm32)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrno.operationNotPermitted.rawValue as Imm32)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: denied)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ErrorGenericFailure as MachineWord)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
@@ -1420,18 +1399,16 @@ end 'buildX64LinuxFileAttributesChunk'
 // mrt_host_dir_current_path(rcx = bufPtr, rdx = bufLen) -> rax = bytes written
 // ==========================================================================
 
-// ⭐⭐ **`GetCurrentDirectoryA`'s THREE-WAY ANSWER.** The op's contract
-// (`ManagedDirectoryRuntime.emitFilledBufferVerdict`) reads `0` as failure, `< capacity` as "it fits, NUL
-// included" and anything else as "too small". Linux's `getcwd` SYSCALL answers the byte LENGTH INCLUDING
-// the terminator, or `-errno`, so the fit case is one subtraction and the classification one compare
-// against `ERANGE`.
+// `GetCurrentDirectoryA`'s three-way answer. The op's contract
+// (`ManagedDirectoryRuntime.emitFilledBufferVerdict`) reads `0` as failure, `< capacity` as "it
+// fits, NUL included" and anything else as "too small". Linux's `getcwd` syscall answers the byte
+// length including the terminator, or `-errno`, so the fit case is one subtraction and the
+// classification one compare against `ERANGE`.
 //
-// ⚠ **THE SUBTRACTION IS NOT COSMETIC.** Answering the kernel's count would report `capacity` for a path
-// that exactly fills the buffer — which the contract reads as "too small" — and would send
-// `__md_current_path` round its doubling loop for a path that had in fact fitted.
-//
-// ⛔ **REPORTING "TOO SMALL" FOR A REAL FAILURE WOULD SPIN THE CALLER'S DOUBLING LOOP FOREVER**, and
-// reporting a failure for a too-small buffer would throw on a long path.
+// Without the subtraction a path that exactly fills the buffer reports `capacity`, which the
+// contract reads as "too small", and `__md_current_path` goes round its doubling loop for a path
+// that fitted. Reporting "too small" for a real failure would spin that loop forever, and reporting
+// a failure for a too-small buffer would throw on a long path.
 function buildX64LinuxDirCurrentPathChunk() returns FunctionCodeChunk
 	let SlotBufLen = 0 as StackSize
 	var asm = X64RuntimeAsm.beginFunction(1)
@@ -1454,7 +1431,7 @@ function buildX64LinuxDirCurrentPathChunk() returns FunctionCodeChunk
 	// test needs — so the reason is published and classified from one negation.
 	asm.placeLabel(refused)
 	x64LinuxEmitStashErrno(asm)
-	emitCmpRegImm(asm, reg: X64Register.rsi, imm: PosixErrnoResultTooLarge as Imm32)
+	emitCmpRegImm(asm, reg: X64Register.rsi, imm: PosixErrno.resultTooLarge.rawValue as Imm32)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: tooSmall)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
@@ -1638,26 +1615,26 @@ end 'buildX64LinuxDirPrefixChunk'
 // mrt_host_dir_find_next(rcx = search, rdx = findDataPtr) -> rax = BOOL
 // ==========================================================================
 
-// ⭐⭐ **`FindNextFileA` — AND ALSO THE WHOLE OF `FindFirstFileA`'s FIRST ENTRY**, which is why
-// `find_first` below calls this rather than carrying a second copy of the walk. Win32's first and
-// subsequent entries come from one enumeration; so do these.
+// `FindNextFileA`, and also `FindFirstFileA`'s first entry, which is why `find_first` below calls
+// this rather than carrying a second copy of the walk: Win32's first and subsequent entries come
+// from one enumeration, and so do these.
 //
-// The loop: clear the errno word, take the next directory entry, match it against the pattern, and
-// describe the first one that matches. An exhausted enumeration leaves the word CLEAR, which the caller
-// reads as `ERROR_NO_MORE_FILES` (`PosixErrnoCleared`), and a `getdents64` that FAILS stashes its own
-// reason — so the same FALSE carries both answers exactly as Win32's does.
+// The loop clears the errno word, takes the next directory entry, matches it against the pattern,
+// and describes the first one that matches. An exhausted enumeration leaves the word clear, which
+// the caller reads as `ERROR_NO_MORE_FILES` (`PosixErrno.cleared`), and a `getdents64` that fails
+// stashes its own reason, so one FALSE carries both answers as Win32's does.
 //
-// ⚠ **`getdents64` REFILLS A BUFFER, WHERE `readdir` ANSWERS ONE ENTRY.** The search carries a cursor and
+// `getdents64` refills a buffer where `readdir` answers one entry: the search carries a cursor and
 // a filled count, and the syscall runs only when the cursor has caught up. A `0` from it is
 // end-of-directory; a negative is a failure.
 //
-// ⚠ **A SEARCH WITH A NEGATIVE `dirfd` IS EXHAUSTED, NOT BROKEN** — the single-`stat` route already
-// reported its one entry. The guard is INSIDE the loop head, after the errno clear, so that exit reports
-// end-of-iteration rather than a stale failure.
+// A search with a negative `dirfd` is exhausted, not broken: the single-`stat` route already
+// reported its one entry. The guard is inside the loop head, after the errno clear, so that exit
+// reports end-of-iteration rather than a stale failure.
 //
-// ⚠ **`fstatat`'s VERDICT IS DELIBERATELY DISCARDED AND THE BUFFER IS ZEROED FIRST.** A dangling symbolic
-// link is a real directory entry that Win32 reports; skipping it would silently shorten a listing, and
-// reading a stat buffer the call did not fill would report the PREVIOUS entry's size and timestamps.
+// ⚠ `fstatat`'s verdict is discarded and the buffer zeroed first. A dangling symbolic link is a
+// real directory entry that Win32 reports; skipping it would silently shorten a listing, and
+// reading a buffer the call did not fill would report the previous entry's size and timestamps.
 function buildX64LinuxDirFindNextChunk() returns FunctionCodeChunk
 	let SlotSearch = 0 as StackSize
 	let SlotFindData = 1 as StackSize
@@ -1676,7 +1653,7 @@ function buildX64LinuxDirFindNextChunk() returns FunctionCodeChunk
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFindData), srcReg: X64Register.rdx)
 
 	asm.placeLabel(nextEntry)
-	x64LinuxEmitPublishErrno(asm, value: PosixErrnoCleared)
+	x64LinuxEmitPublishErrno(asm, value: PosixErrno.cleared.rawValue)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotSearch), wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r9, base: X64Register.r8, disp: LinuxSearchDirFdOffset, wide: true)
 	emitCmpRegImm(asm, reg: X64Register.r9, imm: 0)
@@ -1749,12 +1726,12 @@ end 'buildX64LinuxDirFindNextChunk'
 // `FindFirstFileA` — open the enumeration a glob names and report its first entry, or answer
 // `INVALID_HANDLE_VALUE` with the errno word telling the caller why.
 //
-// ⭐ **TWO ROUTES, AND WHICH ONE IS TAKEN IS A PROPERTY OF THE PATTERN**: a base name with no `*` or `?`
-// names one path and is answered by one `stat`; anything else opens the directory and walks it.
+// Two routes, chosen by the pattern: a base name with no `*` or `?` names one path and is answered
+// by one `stat`; anything else opens the directory and walks it.
 //
-// ⚠ **AN EMPTY MATCH IS `ERROR_FILE_NOT_FOUND`, WHICH IS Win32's ANSWER AND NOT THIS LANE'S INVENTION.** A
-// walk that ended because `getdents64` FAILED keeps its own errno instead, so a real IO error is not
-// reported as a missing file.
+// An empty match is `ERROR_FILE_NOT_FOUND`, as Win32 answers. A walk that ended because
+// `getdents64` failed keeps its own errno instead, so a real IO error is not reported as a missing
+// file.
 function buildX64LinuxDirFindFirstChunk() returns FunctionCodeChunk
 	let SlotPattern = 0 as StackSize
 	let SlotFindData = 1 as StackSize
@@ -1841,13 +1818,13 @@ function buildX64LinuxDirFindFirstChunk() returns FunctionCodeChunk
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rdi, disp: 0, wide: true)
 	emitCmpRegImm(asm, reg: X64Register.rsi, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: publishReason)
-	x64LinuxEmitPublishErrno(asm, value: PosixErrnoNoSuchFileOrDirectory)
+	x64LinuxEmitPublishErrno(asm, value: PosixErrno.noSuchFileOrDirectory.rawValue)
 
 	asm.placeLabel(publishReason)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: releaseAndRefuse)
 
 	asm.placeLabel(nameTooLong)
-	x64LinuxEmitPublishErrno(asm, value: LinuxErrnoNameTooLong)
+	x64LinuxEmitPublishErrno(asm, value: LinuxErrno.nameTooLong.rawValue)
 
 	asm.placeLabel(releaseAndRefuse)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotSearch), wide: true)
@@ -3079,8 +3056,8 @@ end 'buildX64LinuxPipePeekChunk'
 // The ONE place a child's status is taken — `PosixWaitOffChildStatus` carries the reap-once rule that makes
 // it one place, and the cache it is taken into.
 //
-// ⚠ **A KILLED CHILD KEEPS THE CODE THE KILL NAMED.** `mrt_host_proc_terminate` writes `childStatus` and
-// raises `childKilled` BEFORE the signal lands, so this decodes nothing for it — see `PosixSignalExitCodeBase`.
+// ⚠ A killed child keeps the code the kill named only when its status says SIGKILL; see
+// `PosixSignalExitCodeBase`.
 function buildX64LinuxProcReapChunk() returns FunctionCodeChunk
 	let SlotObj = 0 as StackSize
 	let SlotBlocking = 1 as StackSize
@@ -3090,6 +3067,7 @@ function buildX64LinuxProcReapChunk() returns FunctionCodeChunk
 	let alreadySignalled = asm.newLabel()
 	let stillRunning = asm.newLabel()
 	let statusChosen = asm.newLabel()
+	let decode = asm.newLabel()
 	let bySignal = asm.newLabel()
 	let publish = asm.newLabel()
 	let blockingWait = asm.newLabel()
@@ -3127,13 +3105,16 @@ function buildX64LinuxProcReapChunk() returns FunctionCodeChunk
 	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: stillRunning)
 
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: PosixWaitOffChildKilled as Imm32, wide: true)
-	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: statusChosen)
-
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotStatus), wide: false)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAnd, reg: X64Register.rax, imm: PosixWaitStatusSignalMask as Imm32)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixSigKill as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: decode)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rcx, disp: PosixWaitOffChildKilled as Imm32, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rdi, src: X64Register.rdi, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: statusChosen)
+
+	asm.placeLabel(decode)
 	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: bySignal)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
@@ -3271,26 +3252,34 @@ end 'buildX64LinuxProcExitCodeChunk'
 // mrt_host_proc_terminate(rcx = handle, rdx = exitCode)
 // ==========================================================================
 
-// `TerminateProcess(h, exitCode)` — `kill(-pgid, SIGKILL)`, plus the one thing POSIX cannot carry across a
-// signal: the CODE the caller named. It is recorded in the object first, so the reap that follows reports it
-// instead of decoding `128 + SIGKILL` from the status. See `PosixSignalExitCodeBase`.
+// `TerminateProcess(h, exitCode)` as `kill(-pgid, SIGKILL)`. The code the caller named is recorded
+// in the object once the kill was delivered (0) or found the group gone (`-ESRCH`), for the reap to
+// report on a SIGKILL status (see `PosixSignalExitCodeBase`); a refused kill records nothing and
+// answers FALSE. A child already reaped (its signal word set) answers TRUE with nothing sent.
 //
-// ⭐⭐ **THE PID IS NEGATED, AND THAT IS THE WHOLE PROCESS-TREE KILL ON THIS LANE.** A NEGATIVE pid names a
-// process GROUP, and every child this runtime spawns leads one — `X64LinuxSyscallSetpgid`, or
-// `X64LinuxSyscallSetsid` for a detached child — so its pid IS its group: the signal reaches the child and
-// every descendant it started, where `kill(pid)` would end a shell and orphan everything under it.
+// The pid is negated: a negative pid names a process group, and every child this runtime spawns
+// leads one (`X64LinuxSyscallSetpgid`, or `X64LinuxSyscallSetsid` for a detached child), so the
+// signal reaches every descendant where `kill(pid)` would end a shell and orphan everything under
+// it.
 //
-// ⛔⛔ **AND A ZERO PID IS SKIPPED RATHER THAN NEGATED.** `kill(0, …)` signals the CALLER's OWN group, so a
-// record whose pid was never filled would kill this process and every sibling it shares a group with. The
-// guard is unreachable through a live handle and costs two instructions; what it prevents is not a failure.
+// A zero pid is refused with `ESRCH` rather than negated: `kill(0, …)` signals the caller's own
+// group, so a record whose pid was never filled would kill this process and every sibling in its
+// group.
 function buildX64LinuxProcTerminateChunk() returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(0)
+	let SlotObj = 0 as StackSize
+	let SlotCode = 1 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(2)
 	let noChild = asm.newLabel()
+	let delivered = asm.newLabel()
+	let nothingLeftToKill = asm.newLabel()
+	let answered = asm.newLabel()
 
 	x64LinuxEmitUntagHandle(asm, reg: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: PosixWaitOffChildStatus as Imm32, srcReg: X64Register.rdx)
-	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: PosixChildSignalled)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: PosixWaitOffChildKilled as Imm32, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCode), srcReg: X64Register.rdx)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: PosixWaitOffSignal as Imm32, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: nothingLeftToKill)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rcx, disp: PosixWaitOffChildPid as Imm32, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rdi, src: X64Register.rdi, wide: true)
@@ -3299,7 +3288,29 @@ function buildX64LinuxProcTerminateChunk() returns FunctionCodeChunk
 	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: PosixSigKill)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallKill)
 
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: (0 - PosixErrno.noSuchProcess.rawValue) as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: delivered)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: delivered)
+	x64LinuxEmitWin32BoolFromSyscall(asm)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(delivered)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotCode), wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: PosixWaitOffChildStatus as Imm32, srcReg: X64Register.rdx)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: PosixChildSignalled)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: PosixWaitOffChildKilled as Imm32, srcReg: X64Register.rax)
+
+	asm.placeLabel(nothingLeftToKill)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32True as MachineWord)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
 	asm.placeLabel(noChild)
+	x64LinuxEmitPublishErrno(asm, value: PosixErrno.noSuchProcess.rawValue)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32False as MachineWord)
+
+	asm.placeLabel(answered)
 	return asm.finishFunction(HostProcTerminateName)
 end 'buildX64LinuxProcTerminateChunk'
 

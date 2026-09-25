@@ -194,11 +194,11 @@ let FileTimeTicksPerSecond = 10000000 as ParsedInt
 // `nFileSizeHigh`/`nFileSizeLow` are two DWORDs; the size is `(high << 32) | low`.
 let FileSizeHighShift = 32 as ParsedInt
 
-// ⚠ **THE Std TIER HAS NO 4-BYTE MEMORY ACCESS, so a DWORD is read as a WORD and masked.**
-// `accessWidthFor` carries `byte` and `word64` and PANICS for everything between — deliberately, because a
-// narrow load's SIGNEDNESS is a decision it refuses to guess (see its own comment). Every DWORD this file
-// reads is unsigned, so a full-word load plus `and 0xFFFFFFFF` is the honest spelling and needs no new
-// access width: the four extra bytes are always inside the 320-byte find record.
+// ⚠ The Std tier has no 4-byte memory access, so a DWORD is read as a word and masked.
+// `accessWidthFor` carries `byte` and `word64` and panics for everything between, because a narrow
+// load's signedness is a decision it refuses to guess. The mask is right only for an unsigned
+// DWORD, and the full-word load must stay inside the record it reads; this file's four extra bytes
+// always fall inside the 320-byte find record.
 export let DwordMask = 0xFFFFFFFF as ParsedInt
 
 // The `__mf_` prefix that identifies EVERY file-IO runtime entry point — the one test `scanRuntimeUsage`

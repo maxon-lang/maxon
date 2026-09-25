@@ -1,0 +1,49 @@
+// Test: process-liveness.a-program-type-named-like-the-runtimes-parameter-changes-nothing
+typealias Tally = int(0 to 100)
+
+type ProbeWord
+	export let count as Tally
+
+	static function create() returns ProbeWord
+		return ProbeWord{count: 3}
+	end 'create'
+end 'ProbeWord'
+
+function main() returns ExitCode
+	let probe = ProbeWord.create()
+	if __Builtins.processIsAlive(__Builtins.currentProcessId()) 'alive'
+		return probe.count as ExitCode
+	end 'alive'
+	return 1
+end 'main'
+---
+ExitCode: 3
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+  __il_body:
+    x64.movRegImm32 rbx, 3
+  __il_cont:
+    x64.callDirect __proc_pid
+    x64.movRegReg rcx, r8
+    x64.callDirect __proc_alive
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont
+  alive:
+    x64.movRegReg r8, rbx
+    x64.andRegImm32 r8, rbx, 255
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -8,6 +8,7 @@
 	// ':' after a drive letter.
 	let DriveColonByte = 58
 	let DrivePrefixLength = 2
+	let PathSeparatorByteLength = 1
 #else
 	let pathSeparator = "/"
 	let pathSeparatorByte = 47
@@ -17,12 +18,17 @@
 public enum FilePathError implements Error
 	invalidCharacter
 	notFileURL
+	malformedURL
 	noParent
 end 'FilePathError'
 
 // The two component spellings `normalize` folds.
 let CurrentDirectoryComponent = "."
 let ParentDirectoryComponent = ".."
+
+let SchemeSeparator = "://"
+
+let PercentEscapeRadix = 16
 
 typealias PathComponentArray = Array with String
 
@@ -128,37 +134,17 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		#endif
 	end 'normalizeSeparators'
 
-	/// Detect file:// URLs and extract the filesystem path.
+	/// Detect file:// URLs and extract the percent-decoded filesystem path.
 	/// Returns the path unchanged if not a URL.
-	/// Throws FilePathError.notFileURL for non-file URL schemes.
+	/// Throws FilePathError.notFileURL for non-file URL schemes, and malformedURL for text holding
+	/// `://` that `URL.parse` refuses.
 	static function resolveFileURL(input String) returns String throws FilePathError
-		// Quick check: must contain "://" to be a URL
-		let len = input.byteLength()
-		var hasScheme = false
-		var i = 0
-
-		while i + 2 < len 'scan'
-			// ':' = 58, '/' = 47
-			if input.byteAtOrPanic(i) == 58 'colon'
-				if input.byteAtOrPanic(i + 1) == 47 'slash1'
-					if input.byteAtOrPanic(i + 2) == 47 'slash2'
-						hasScheme = true
-						break
-					end 'slash2'
-				end 'slash1'
-			end 'colon'
-
-			i = i + 1
-		end 'scan'
-
-		if not hasScheme 'notURL'
+		if not input.contains(SchemeSeparator) 'notURL'
 			return input
 		end 'notURL'
 
 		// Parse as URL
-		let url = try URL.parse(input) otherwise 'parseErr'
-			return input
-		end 'parseErr'
+		let url = try URL.parse(input) otherwise throw FilePathError.malformedURL
 
 		// Check scheme is "file"
 		if url.scheme() != "file" 'notFile'
@@ -167,7 +153,7 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 
 		#if os(Windows)
 			// file:///C:/path produces path "/C:/path" — strip leading slash before drive letter
-			let filePath = url.path()
+			let filePath = percentDecodedPath(url.path())
 
 			if filePath.byteLength() == 0 or filePath.byteAtOrPanic(0) != otherSeparatorByte 'noLeadingSlash'
 				return filePath
@@ -178,9 +164,37 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 
 			return unslashed if hasDrivePrefix(unslashed) else filePath
 		#else
-			return url.path()
+			return percentDecodedPath(url.path())
 		#endif
 	end 'resolveFileURL'
+
+	static function percentDecodedPath(encoded String) returns String
+		var decoded = ByteArray.create()
+		let length = encoded.byteLength()
+		var at = 0 as BytePos
+
+		while at < length 'eachByte'
+			let b = encoded.byteAtOrPanic(at)
+
+			if b != UrlPercentByte 'aLiteralByte'
+				decoded.push(b)
+				at = at + 1
+				continue
+			end 'aLiteralByte'
+
+			decoded.push(((escapeDigitAt(encoded, at: at + 1) * PercentEscapeRadix) + escapeDigitAt(encoded, at: at + 2)) as Byte)
+			at = at + UrlPercentTripletBytes
+		end 'eachByte'
+
+		return String.from(decoded)
+	end 'percentDecodedPath'
+
+	static function escapeDigitAt(encoded String, at BytePos) returns UrlHexDigitValue
+		match urlHexDigitOf(encoded.byteAtOrPanic(at)) 'reading'
+			value(digit) then return digit
+			notAHexDigit then panic("FilePath.escapeDigitAt: byte {at} of '{encoded}' is not a hex digit, and URL.parse refuses a malformed escape before any path reaches here")
+		end 'reading'
+	end 'escapeDigitAt'
 
 	/// The platform-native path separator string.
 	public static function separator() returns String
@@ -277,9 +291,7 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 				return false
 			end 'tooShort'
 
-			let letter = spelled.byteAtOrPanic(0)
-			let isLetter = (letter >= 'A' and letter <= 'Z') or (letter >= 'a' and letter <= 'z')
-			return isLetter and spelled.byteAtOrPanic(1) == DriveColonByte
+			return urlIsAlpha(spelled.byteAtOrPanic(0)) and spelled.byteAtOrPanic(1) == DriveColonByte
 		end 'hasDrivePrefix'
 	#endif
 
@@ -570,7 +582,7 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		let len = path.byteLength()
 		#if os(Windows)
 			if hasDriveRoot() 'driveRoot'
-				return DrivePrefixLength + 1
+				return DrivePrefixLength + PathSeparatorByteLength
 			end 'driveRoot'
 
 			if hasDrivePrefix(path) 'driveRelative'

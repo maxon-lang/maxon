@@ -1,0 +1,87 @@
+export let DebugMaxProcsOption = "maxProcs"
+export let DebugStopTimeoutOption = "stopTimeoutSeconds"
+
+export typealias AskedNumber = float(f64.min to f64.max)
+export typealias WholeBound = int(i64.min to i64.max)
+typealias ProcessorAsk = int(1 to u32.max)
+
+export let LowestProcessorAsk = 1 as ProcessorAsk
+export let HighestProcessorAsk = u32.max as ProcessorAsk
+
+export type NumberReading
+	export var value as AskedNumber
+
+	export static function create(value AskedNumber) returns NumberReading
+		return Self{value: value}
+	end 'create'
+end 'NumberReading'
+
+export function isWholeWithin(value AskedNumber, least WholeBound, most WholeBound) returns bool
+	return value == floor(value) and value >= least as AskedNumber and value <= most as AskedNumber
+end 'isWholeWithin'
+
+export union NumberAsk
+	absent
+	given(reading NumberReading)
+end 'NumberAsk'
+
+export union DebugLaunchOptions
+	read(stopTimeoutMs StopTimeoutMs)
+	refused(message String)
+end 'DebugLaunchOptions'
+
+export enum NumberAskError implements Error
+	notANumber
+end 'NumberAskError'
+
+export function debugLaunchOptionsFrom(maxProcs NumberAsk, stopTimeoutSeconds NumberAsk, targetEnv EnvMap) returns DebugLaunchOptions
+	if not processorsAskFits(maxProcs) 'notAProcessorCount'
+		return DebugLaunchOptions.refused("`{DebugMaxProcsOption}` is a whole number of processors from {LowestProcessorAsk} to {HighestProcessorAsk}; {askedNumberOf(maxProcs)} is not")
+	end 'notAProcessorCount'
+
+	match maxProcs 'processors'
+		absent then break 'processors'
+		given(procs) then targetEnv.upsert(String.from(MaxProcsEnvName), value: "{trunc(procs.value)}")
+	end 'processors'
+
+	return match stopTimeoutSeconds 'asked'
+		absent gives DebugLaunchOptions.read(stopTimeoutMsOf(DefaultStopTimeoutSeconds))
+		given(seconds) gives stopTimeoutOptionOf(targetSecondsReading(seconds.value as AskedSeconds), asked: seconds.value)
+	end 'asked'
+end 'debugLaunchOptionsFrom'
+
+function processorsAskFits(ask NumberAsk) returns bool
+	return match ask 'which'
+		absent gives true
+		given(procs) gives isWholeWithin(procs.value, least: LowestProcessorAsk, most: HighestProcessorAsk)
+	end 'which'
+end 'processorsAskFits'
+
+function askedNumberOf(ask NumberAsk) returns String
+	return match ask 'which'
+		absent panic("askedNumberOf: an absent option was accepted, so no refusal quotes it")
+		given(reading) gives "{reading.value}"
+	end 'which'
+end 'askedNumberOf'
+
+function stopTimeoutOptionOf(parse TargetSecondsParse, asked AskedNumber) returns DebugLaunchOptions
+	return match parse 'read'
+		refused gives DebugLaunchOptions.refused(targetSecondsMisreadRefusal("`{DebugStopTimeoutOption}`", asked: "{asked}"))
+		reading(value) gives DebugLaunchOptions.read(stopTimeoutMsOf(value.seconds))
+	end 'read'
+end 'stopTimeoutOptionOf'
+
+export function stopTimeoutMsOf(seconds TargetSeconds) returns StopTimeoutMs
+	return trunc(seconds * MillisecondsPerSecond) as StopTimeoutMs
+end 'stopTimeoutMsOf'
+
+export function numberAskIn(doc JsonDoc, node JsonNodeId, key String) returns NumberAsk throws NumberAskError
+	let childId = try doc.getChild(node, key: key) otherwise return NumberAsk.absent
+	let child = doc.get(childId)
+
+	if child.kind != JsonKind.jsonNumber 'notANumber'
+		throw NumberAskError.notANumber
+	end 'notANumber'
+
+	return NumberAsk.given(NumberReading.create(child.numberValue as AskedNumber))
+end 'numberAskIn'

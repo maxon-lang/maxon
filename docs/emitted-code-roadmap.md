@@ -1957,10 +1957,11 @@ arbitrary callee releases the caller's box — a whole-function analysis (CFG, R
 liveness, escape sets, a param-ABI map) does not have that fact either. The borrow checker
 states the same limit outright — *"THROUGH A CALL: deliberately NOT modelled"* (`BorrowCheck.maxon`).
 
-⚠ **The two siblings are untouched, for the same reason a fortiori.** `retainBorrowedAggregate`
-(`var q = p`) and `retainThrownField` (#64) hand their reference to a binding that outlives a single
-statement by construction — a local for its whole scope, a thrown box across a frame boundary — so the
-"the only consumer is a call in this statement" premise is not even expressible for them.
+⚠ **The sibling is untouched, for the same reason a fortiori.** `retainBorrowedAggregate`
+(`var q = p`) hands its reference to a binding that outlives a single statement by construction — a
+local for its whole scope — so the "the only consumer is a call in this statement" premise is not even
+expressible for it. A thrown field takes no acquire at all: `moveOutThrownField` moves the box out of
+its slot.
 
 ⭐ **WHAT THIS ROW POINTS AT INSTEAD, and it is a bigger and safer prize.** The bracket's cost is not the
 increment; it is that the increment is a CALL — two `mov`s, a `call`, and the callee-saved registers the

@@ -1,0 +1,42 @@
+let DisconnectCaseLabel = "disconnect-reaps-the-debuggee"
+let InnerLoopAnchor = "inner-loop"
+
+type DisconnectSession implements DapSession
+	let executable as FilePath
+	let source as FilePath
+	let anchored as SourceLine
+	export var stopReason as String
+	export var disconnected as bool
+
+	static function create(executable FilePath, source FilePath, anchored SourceLine) returns DisconnectSession
+		return Self{executable: executable, source: source, anchored: anchored, stopReason: "", disconnected: false}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+		_ = try client.request(LaunchCommand, argumentsJson: dapLaunchArguments(self.executable))
+		_ = try client.awaitEvent(InitializedEvent)
+		_ = try client.request(SetBreakpointsCommand, argumentsJson: dapSetBreakpointsArguments(self.source, line: self.anchored))
+		_ = try client.request(ConfigurationDoneCommand)
+
+		self.stopReason = dapBodyString(try client.awaitEvent(StoppedEvent), key: "reason")
+		self.disconnected = dapSuccess(try client.request(DisconnectCommand))
+	end 'drive'
+end 'DisconnectSession'
+
+test 'disconnect reaps a stopped debuggee, so its image can be deleted'
+	let staged = dapStagedFixture(DisconnectCaseLabel, fixture: SteppingFixtureName)
+	let executable = dapBuildFixture(staged)
+	var session = DisconnectSession.create(executable, source: dapStagedSource(staged), anchored: dapAnchorLine(staged, anchor: InnerLoopAnchor))
+	try dapRunSession(session, completing: "reach a stop")
+
+	var deletable = true
+
+	try File.delete(executable) otherwise 'stillHeld'
+		deletable = false
+	end 'stillHeld'
+
+	try Expect.equal(session.stopReason, expected: BreakpointReason, message: "the program must be STOPPED and therefore ALIVE when `{DisconnectCommand}` arrives, or the delete below proves nothing; the stop said `{session.stopReason}`")
+	try Expect.isTrue(session.disconnected, message: "`{DisconnectCommand}` must succeed")
+	try Expect.isTrue(deletable, message: "the debuggee's image is still held. That is a stopped process this adapter left behind, which no later message would ever mention and which fails the next build over that path")
+end 'disconnect reaps a stopped debuggee, so its image can be deleted'

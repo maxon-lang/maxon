@@ -19,13 +19,14 @@ agents, and reads back what a program did.
 | `maxon init [<directory>]` | Scaffold a new project: `<directory>.maxproj` and `main.maxon` |
 | `maxon cache [clear]` | Report what this compiler has cached on the host, or remove it |
 | `maxon coverage <run\|report> <exe>` | Run a `--coverage` binary and report line and branch coverage ([Debugging and Profiling](#debugging-and-profiling)) |
+| `maxon dap-server` | Speak the Debug Adapter Protocol over stdio ([Editor Support](#editor-support)) |
 | `maxon debug <exe> [-- args...]` | Debug a program interactively: breakpoints, stepping, backtraces and locals ([Debugging and Profiling](#debugging-and-profiling)) |
 | `maxon debug --dump-info <exe>` | Print the `.mxdbg` debug-info sidecar beside a binary ([Debugging and Profiling](#debugging-and-profiling)) |
 | `maxon debug --symbolize <exe> <offset...>` | Resolve code offsets to `file:line:col` ([Debugging and Profiling](#debugging-and-profiling)) |
 | `maxon fmt [file\|directory]` | Re-print Maxon sources in canonical layout, in place |
 | `maxon help [<command>]` | Print the command and option reference, whole or for one command |
 | `maxon lsp-server` | Speak the Language Server Protocol over stdio ([Editor Support](#editor-support)) |
-| `maxon mcp-server [--dev]` | Speak the Model Context Protocol over stdio ([MCP Server](#mcp-server)) |
+| `maxon mcp-server [--dev] [--http[=<port>]]` | Speak the Model Context Protocol over stdio, or over loopback HTTP ([MCP Server](#mcp-server)) |
 | `maxon monitor [--filter=…] <exe> [args...]` | Run a `--debugstream` binary and print its trace events ([Debugging and Profiling](#debugging-and-profiling)) |
 | `maxon profile run <exe>` | Sample a running program and report where its CPU time went ([Debugging and Profiling](#debugging-and-profiling)) |
 | `maxon execute <file\|directory> [args...]` | Compile a program, or reuse a cached build of it, and run it |
@@ -258,6 +259,11 @@ lists them and exits 1. **A single word naming a target** builds that target, ea
 name written `-`: `maxon build my-app` builds the target function `my_app`. A word naming no target is
 a path. See [Project Structure](#project-structure). A directory with no `.maxproj` file prints a usage
 line and exits 1.
+
+**A path inside the compiler's `runtime/` directory** is refused with exit 1 and an error naming it as part
+of the `runtime/` tier: every program compiles that tier, so a file of it is built through a program that
+uses it.
+
 **Options:**
 
 | Option | Description |
@@ -366,8 +372,20 @@ act on.
 
 `clear` removes the compiled programs [`maxon execute`](#maxon-execute) and a path-less
 [`maxon build`](#maxon-build) keep, the directories holding them, the inline snippets the
-[MCP server](#mcp-server) stages, and the Maxon directory above all of those. The next `run` or
-path-less `build` compiles from scratch and fills the cache again.
+[MCP server](#mcp-server) stages, the programs `debug_start` and `maxon dap-server` build for debugging,
+and the Maxon directory above all of those. The next `run` or path-less `build` compiles from scratch
+and fills the cache again.
+
+**A debug build a live session is using stays**, with its sidecar and the directories above it, and
+`clear` ends its report with a `Kept <n> files a live debug session is using` line. Each debug build's
+file name carries the process id of the `maxon mcp-server` or `maxon dap-server` that built it, and the
+build belongs to a live session while a process with that id exists. A server removes the debug builds
+and the staged snippets it made when the session or call that needed them ends, and each
+`maxon mcp-server` and `maxon dap-server` removes, as it starts, those whose owning process has ended —
+the leftovers of a server that was killed. The owner is known by its process id alone, so an owner in another pid
+namespace, such as a container sharing this cache directory, reads as ended when no process here has
+its id and as alive when an unrelated process here does; an ended owner whose id the system has reused
+reads as alive until that process ends.
 
 It removes **only what Maxon created**. `MAXON_RUN_CACHE_ROOT` may name a directory that is already
 somebody's — a shared build area, or your own scratch directory — so the clear reaches only the Maxon
@@ -453,7 +471,9 @@ normally with `maxon build`.
 | Option | Description |
 |--------|-------------|
 | `--filter=P` | Run only tests whose name or file path contains `P` (case-insensitive). Repeatable, and one value may hold comma-separated patterns; the run takes every test any pattern selects. A pattern that selects no test ends the run with `no test matched 'P'` and exit 1, and a value naming no pattern (`--filter=,`) is refused with exit 2. |
-| `--list` | Print the tests that would run, and compile nothing. A project whose sources do not all tokenize is still refused, so the list is never quietly short a file. |
+| `--list` | Print the tests that would run. It compiles only with `--build`. A project whose sources do not all tokenize is still refused, so the list holds every file's tests. |
+| `--build` | With `--list`: also build the test binary, with its debug-info sidecar, and stop before any test runs. The build happens when at least one test is selected, and `--build` without `--list` is refused. The listing names the absolute path of the binary (`binary` under `--json`) and, under `--json`, gives each test a `select` value: see [Running the test binary](#running-the-test-binary). |
+| `--no-debug-info` | Build the test binary without its `.mxdbg` debug-info sidecar, as [`maxon build --no-debug-info`](#maxon-build) does. |
 | `--json` | Emit the report as JSON instead of text. |
 | `--isolate` | Run every test in its own process, instead of one process per test file. |
 | `--bail`, `--bail=N` | Stop starting new work after `N` failures (`--bail` alone means 1). Work already running finishes, so the count may exceed `N`. Without it, every test runs. |
@@ -495,6 +515,21 @@ process from the start.
 A run that finds no tests exits 1 on purpose, so a suite that silently stopped containing tests does
 not read as green. A source file that does not tokenize is a compile error like any other: the run
 exits 2 with the diagnostic, rather than reporting that file's tests as absent.
+
+#### Running the test binary
+
+`maxon test --list --build --json` builds the test binary without running it, for a tool that runs it
+itself, such as a debugger. Run from the directory `maxon test` would run it in, the binary given
+`--select=<select>` (a listed test's `select` value) runs that test alone, and exits:
+
+| Code | Meaning |
+|------|---------|
+| `0` | Every test it ran passed |
+| `3` | A test failed |
+| `101` | A test leaked (see [The leak check](#the-leak-check)) |
+| `1` | A panic |
+
+The VS Code extension's **Debug Test** runs it this way.
 
 **Example.** A failing expectation, then the fix:
 
@@ -989,10 +1024,13 @@ On Linux and macOS the executable is `app` and the sidecar `app.mxdbg`. No sidec
 `wasm32-wasi`. The executable is **byte-identical** with or without the sidecar, so the binary you debug is
 the binary you ship.
 
-The sidecar maps machine code back to the source. It records the target and a **build id** (a hash of
-the executable's code section), then the source files, functions with their frame size and local
-variables, types, the line table and inlining records. `maxon debug` prints it; `maxon profile` and
-`maxon coverage` read it, and a `--coverage` build requires it.
+The sidecar maps machine code back to the source. It records the target, a **build id** (a hash of
+the executable's code section) and the directory the build ran in, then the source files, functions with
+their frame size, local variables and origin, types, the line table and inlining records. `maxon debug`
+prints it; `maxon profile` and `maxon coverage` read it, and a `--coverage` build requires it.
+
+The sidecar format is versioned (version 7), and a reader refuses a sidecar of any other version: after
+upgrading the compiler, rebuild before debugging, profiling or reporting coverage.
 
 ### Panics and backtraces
 
@@ -1041,7 +1079,7 @@ maxon debug --symbolize <exe|.mxdbg> <codeOffset...>
 | `--complete=` | Print the completions for a partially typed debugger line, one per line, and run nothing |
 | `--classify=` | Classify raw x64 instruction bytes the way arming a breakpoint does, and run nothing |
 | `--trace` | Create the DebugStream ring the `trace` command reads, and name it to the debugged program |
-| `--stop-timeout=` | Seconds to wait for a stop, and the budget for one driver-walked step (default 10) |
+| `--stop-timeout=` | Seconds to wait for a stop, and the budget for one driver-walked step (default 10). A fraction is honoured to the millisecond; a value outside 0.001 to 922337203685 is refused, naming the option. |
 | `--target-env=` | Set a variable in the DEBUGGED program's environment; repeatable |
 | `--dump-info` | Print the sidecar, or only the sections named after the path |
 | `--symbolize` | Resolve offsets into the executable's code section to `file:line:col` |
@@ -1080,15 +1118,30 @@ narrows to the threads whose entry function has that name — a batch script can
 Stepping is refused while a `gt` selection is on, a register-located local of a selected thread reads
 `unavailable: "register-of-parked-thread"`, and an id names a thread only for as long as that thread
 lives: every word that names one re-lists the roster first, and an id whose thread has ended is
-`no-such-thread`. The other
-refusals are `hold-table-full` (16 threads may be held at once), `thread-is-running` for a thread on a
-machine, `not-pausable` for a program the agent could not interrupt, and `not-running` for a word that
-needs a stop while the program is running.
+`no-such-thread`. The other refusals are:
 
-A `stop` carries a `reason`: `entry` before `main`, `breakpoint`, `step`, `pause`, and `trap` for an `int3`
-the agent did not plant — a stop like any other, with a register file and a stack to walk, which
-`continue` resumes past instead of the program dying on a breakpoint nobody owns. It also carries the
-`machine` (the OS thread id that took it) and, when a green thread was running, its `thread` id.
+- `hold-table-full` — 16 threads may be held at once.
+- `thread-is-running` — for a thread on a machine.
+- `not-pausable` — for a program the agent could not interrupt.
+- `not-running` — for a word that needs a stop while the program is running.
+- `fault-is-terminal` — for a step from a `fault` stop.
+- `table-full` — for a `break` when 64 instructions are already armed, counting the temporary
+  breakpoints a step plants, or when every out-of-line slot the agent runs a displaced instruction in is
+  still in use. A step that meets a full table walks one instruction at a time.
+- `return-hold-taken` — for a conditional `break` on the instruction of a running step's temporary
+  breakpoint, when another of that step's temporary breakpoints already shares its instruction with a
+  condition. One such instruction at a time may carry a condition.
+
+A `stop` carries a `reason`: `entry` before `main`, `breakpoint`, `step`, `pause`, `trap` and `fault`.
+`trap` is an `int3` the agent did not plant — a stop like any other, with a register file and a stack to
+walk, which `continue` resumes past. `fault` is a hardware fault the program would otherwise panic on (an
+access violation, a stack overflow, an integer divide by zero or an integer overflow), stopped at the
+faulting instruction with a `fault` field naming it in the words its panic line uses; a fault inside
+library code is positioned at the program's own call into it. The faulting instruction would fault
+again, so a step from a fault stop is refused `fault-is-terminal`, and `continue` hands the fault to the
+runtime, which ends the program with the same panic line, backtrace and exit code it has undebugged,
+reported as a `crash`. A stop also carries the `machine` (the OS thread id that took it), its `thread`
+id when a green thread was running, and its `function` when its position lies in one.
 
 **Every stop stops the whole program.** The agent suspends every other machine before it publishes a word
 of the stop and resumes them all on `continue` or a step, so the roster, a parked thread's stack and the
@@ -1107,16 +1160,49 @@ are serviced live by the agent's own service thread and `continue` waits again; 
 `locals` and the steps answer an error until something stops. The session's exit code is still 1 once
 anything has timed out, and the program is reaped when the session closes.
 
-A break target is `file.maxon:LINE`, a bare `LINE` in the file that declares `main`, or a function name
-resolved exact → `Type.method` → leaf name → word prefix. More than one match is reported as an
-ambiguity with the candidates, never a silent pick; a name nothing answers to names the nearest function.
-A line the inliner copied into several places is armed at every copy.
+A stop that lands while the program runs is reported ahead of the next command's answer: a stop that
+came before the command, or one the agent was already parked in when it answered, precedes that answer
+in the transcript, so each event sits where it happened.
+
+A break target is `file.maxon:LINE`, a bare `LINE` in the file that declares `main`, `*0x<offset>`, or a
+function name resolved exact → `Type.method` → leaf name → word prefix. More than one match answers
+`ambiguous` with the candidates; a name nothing answers to names the nearest function.
+
+- **A file** is named by the most specific spelling given: a full path names that one file; a relative
+  path with a directory names the file it reaches from the directory the program was built in, or else
+  every source file whose path ends in it; and a bare file name matches every source file of that name.
+  A spelling that matches more than one file answers `ambiguous` with the candidates.
+- **`*0x<offset>`** arms the instruction at that offset into the code section, the offsets
+  `--dump-info` and `--symbolize` print. An offset past the code, or in no function, is refused
+  `out-of-text`; one that falls inside an instruction, past its first byte, is refused
+  `not-an-instruction-start`.
+- **A line** arms wherever control enters it: the `line-entry` rows of the line table. A line the inliner
+  copied into several places is armed at every copy. A line whose only code is an inlined call arms at
+  the call: the stop is at the call line in the caller's frame, `next` runs over the inlined body and
+  `step` enters it. As in gdb, the inlined body joins that stop's backtrace once it is entered. A line
+  whose only code is a narrowing cast's range check is a line with code. A line with none answers
+  `no-code`.
+- **The runtime's own code** — the debug agent, the entry stub and the rest of the compiler's scaffolding
+  — is refused `inside-runtime-symbol`. Which code is the runtime's is recorded by the build. A `test`
+  body is the program's own, and is named `test '<prose>'` in stops, backtraces and break answers, as
+  `maxon test` names it.
 
 `step` enters a callee, `next` stays in the frame it was issued from, `finish` runs to the return of its
-frame and `until` runs forward past the current line. All four are walked one instruction at a time, so
-each honours any breakpoint it passes — except the one it started on — and each is bounded by
-`--stop-timeout=`. A `finish` from the outermost frame is refused rather than run off the end of the
-stack.
+frame and `until` runs forward past the current line. Each walks the program's own code one instruction
+at a time, and runs other code at full speed to a temporary breakpoint:
+
+- `next` and `until` run a call they reach, direct or through a value, to its return address.
+- `finish` from a function's own frame runs to that frame's return address. A recursive call that
+  reaches the address in a deeper frame runs on.
+- `step` into a library function runs it to the return into the program's code.
+- Library code the compiler inlined into the program's frame runs to the one place control leaves it.
+  Under `step` it does so when the inlined code, and every function it calls directly, is library
+  code, and a temporary breakpoint also stands on each call it makes through a value, so a closure of
+  the program's that the library calls is still stepped into. Inlined code with more than one way out
+  is walked.
+
+Each honours any breakpoint it passes — except the one it started on — and each is bounded by
+`--stop-timeout=`. A `finish` from the outermost frame is refused.
 
 ```text
 $ maxon debug --batch --commands="break app.maxon:12;run;locals;next;backtrace;continue" app.exe
@@ -1124,21 +1210,22 @@ $ maxon debug --batch --commands="break app.maxon:12;run;locals;next;backtrace;c
 {"event":"stop","reason":"breakpoint","function":"work","file":"app.maxon","line":12,"col":9,"offset":"0x7a","machine":5312,"thread":1,"source":[…],"backtrace":[…]}
 {"event":"locals","function":"work","locals":[{"name":"total","type":"Amount","kind":"int","display":"42"}]}
 {"event":"stop","reason":"step","function":"work","file":"app.maxon","line":13,"col":3,"offset":"0x7e","machine":5312,"thread":1,"source":[…],"backtrace":[…]}
-{"event":"backtrace","frames":[{"frame":0,"function":"work","file":"app.maxon","line":13,"offset":"0x7e"}]}
+{"event":"backtrace","frames":[{"frame":0,"function":"work","file":"app.maxon","line":13,"col":3,"offset":"0x7e"}]}
 {"event":"exit","code":0}
 ```
 
 **In `--batch`** stdout is pure JSON, one object per line, and the debugged program's own stdout and
 stderr both go to this driver's stderr. The events are `breakpoint`, `stop`, `backtrace`, `locals`,
 `value`, `threads`, `gt-backtrace`, `gt-select`, `gt-park`, `gt-resume`, `trace`, `exit`, `crash`,
-`timeout` and `error`; a list that cannot be produced is `null` beside a
-`<name>Unavailable` reason rather than an empty array, and a value that cannot be read carries
-`unavailable` with one of `optimized-out`, `not-live-here`, `read-failed` or `layout-not-described`. A
-`trace` event carries `since`, the previous stop's position in the ring, and leaves it out when there was
-no previous stop.
+`timeout` and `error`. A list that cannot be produced is `null` beside a `<name>Unavailable` reason, and a
+value that cannot be read carries `unavailable` with one of `optimized-out`, `not-live-here`,
+`read-failed` or `layout-not-described`. A `stop`, `breakpoint`, `locals` or thread row carries
+`function` when its position lies in a function, and a backtrace frame carries its `col` beside its
+`line`. A `trace` event carries `since`, the previous stop's position in the ring, when there was a
+previous stop.
 The driver exits 0 when the session completed — the program's own exit code is DATA in the `exit` event —
 and 1 on a timeout, an unacknowledged command, a refused session or a crash. A command issued after the
-program has ended is an `error` and does not change that verdict.
+program has ended is an `error`, and the verdict stands.
 
 **Without `--batch`** the same commands are read from stdin, one per line, and answered as text for a
 person; end of input quits. The debugged program's streams pass through to this driver's own.
@@ -1147,48 +1234,69 @@ person; end of input quits. The debugged program's streams pass through to this 
 on. It reads no program:
 
 ```text
-$ maxon debug --classify=488d0dce6f0000,c3,62
+$ maxon debug --classify=488d0dce6f0000,c21000,ff5008,62
 len=7 class=2 cond=0 disp=3 target=0x7fd5
-len=1 class=6 cond=0 disp=0 target=0x0
+len=3 class=6 cond=0 disp=0 target=0x0 rel=1
+len=3 class=7 cond=0 disp=2 target=0x0 operand=mem:base=0,index=none,scale=1,disp=+0x8
 unclassified
 ```
 
 The classes are 1 plain, 2 pc-relative data, 3 direct call, 4 direct jump, 5 conditional jump, 6 return,
-7 indirect call and 8 indirect jump; the agent places a breakpoint on the first six only. `target` is the
-absolute branch target for 3, 4 and 5 and the absolute referent for 2, computed against a fixed probe
-address, and `disp` is the byte position of a pc-relative displacement.
+7 indirect call and 8 indirect jump. The agent places a breakpoint on classes 1 to 7 and refuses an
+indirect jump `unclassified`. Every address is computed against a fixed probe address, `0x1000`:
+
+- `target` is the absolute branch target for 3, 4 and 5 and the absolute referent for 2.
+- `disp` is the byte position of the displacement of a memory operand, and `cond` the condition code of
+  a conditional jump.
+- `rel=` on a return is the byte position of the immediate a `ret imm16` releases, and `0` for a `ret`
+  that releases nothing.
+- `operand=` on an indirect call names what it calls through: `reg:<n>` a register; `word:0x<address>` a
+  pc-relative word at that absolute address; `mem:base=<n>,index=<n>,scale=<s>,disp=<±0x…>` a memory
+  word, with `none` for an absent base or index; and `overridden:form=<n>` an operand behind a segment
+  or address-size prefix, whose word the classifier leaves unresolved (`form` 1 register, 2 memory,
+  3 pc-relative).
 
 **Sections** of `--dump-info` (with none named, all are printed):
 
 | Section | Contents |
 |---------|----------|
-| `header` | The file, target and build id |
+| `header` | The file, target, build id and `root`, the directory the build ran in, from which the recorded relative source paths are read |
 | `files` | The source files, including the standard-library and runtime files the program uses |
-| `functions` | Each function's code range, frame size, parameter, line and local counts, and, per local, the code range `[start, end)` it is live over, its location and its type. A location is a frame slot, a register, `<optimized out>`, `= v` for a value folded to a constant or `= {…}` for a whole record folded to one; a `*` after it means the location holds a pointer to the value rather than the value. A name with several live runs has a row per run. |
+| `functions` | Each function's code range, frame size, parameter, line and local counts and `origin`, then `as <name>` when the debugger shows it under another name (a test body is shown as `test '<prose>'`); and, per local, the code range `[start, end)` it is live over, its location, `in [n]` when it belongs to inline site `n`, and its type. A location is a frame slot, a register, `<optimized out>`, `= v` for a value folded to a constant or `= {…}` for a whole record folded to one; a `*` after it means the location holds a pointer to the value rather than the value. A name with several live runs has a row per run. |
 | `types` | Each type's kind, size, alignment and fields, with `(signed)` on a type whose values are signed and an `element` row on an array's |
-| `lines` | The line table: code offset and source position |
-| `statements` | The same table, source positions only |
-| `inline` | Inlined call sites and the code ranges they occupy |
+| `lines` | The line table: code offset, source position and flags — `statement`, `coverage`, and `line-entry` on a row where control enters its source line: falling in from a different line, at the function's entry, or through a branch from another line |
+| `statements` | The same table, without the code offsets |
+| `inline` | Inlined call sites, each with the site it nests under, the position of its call and its `origin`, then the code ranges they occupy |
+
+An `origin` says where a function or an inlined body came from: `authored` (the program's own source),
+`test` (a `test` body), `library` (the standard library or the runtime), `generated` (source the compiler
+wrote for this build) or `synthesized` (code with no source, such as the entry stub). The debugger treats
+`authored` and `test` code as the program's own.
 
 ```text
 $ maxon debug --dump-info app.exe header
 Debug info: app.exe
   target:   x64-windows
-  build-id: 0xc9c1ee8ee7dd71e0
+  build-id: 0xb1c1a21a3d5126c2
+  root:     C:\work\app
 
 $ maxon debug --dump-info app.exe functions
-  functions (136):
-    mrt_start                        [0x0000, 0x003b)  frame=0x20  params=0  lines=0  locals=0
-    worker                           [0x0060, 0x00de)  frame=0x28  params=1  lines=4  locals=1
-        base                 [0x0064, 0x00a8)  reg3  : Integer
-    main                             [0x00e0, 0x053d)  frame=0x88  params=0  lines=50  locals=3
-        points               [0x0104, 0x053d)  [rbp-0x60]*  : Array_Amount
-        limit                [0x00e0, 0x053d)  = 64  : Amount
+  functions (109):
+    mrt_start                        [0x0000, 0x002e)  frame=0x20  params=0  lines=0  locals=0  origin=synthesized
+    main                             [0x0040, 0x021c)  frame=0x48  params=0  lines=21  locals=9  origin=authored
+        limit                [0x0040, 0x021c)  = 64  : Amount
+        points               [0x0065, 0x021c)  [rbp-0x50]*  : Array_Amount
+        total                [0x0085, 0x0089)  reg2  in [0]  : Amount
+
+$ maxon debug --dump-info app.exe inline
+  inline sites (385):
+    [0] worker  called at app.maxon:17:15  origin=authored
+    [1] print  called at app.maxon:20:2  origin=library
 
 $ maxon debug --dump-info app.exe lines
-  line table (390):
-    0x00c9  app.maxon:16:8  [statement]
-    0x0151  app.maxon:25:15  [statement]
+  line table (2484):
+    0x0051  app.maxon:14:15  [statement]
+    0x0078  app.maxon:6:11  [statement, line-entry]
 ```
 
 A word that is not a section is refused before the file is read:
@@ -1443,7 +1551,7 @@ Install **Maxon** from the
 or [Open VSX](https://open-vsx.org/extension/maxon-lang/maxon-lsp-client) (extension id
 `maxon-lang.maxon-lsp-client`). It activates in a workspace containing Maxon files and provides syntax
 highlighting, diagnostics, hover, completion, go-to-definition, rename, formatting, the Compiler
-Explorer and a Test Explorer. `.maxon` sources, `.maxproj` project files, `.maxtasks` task files and
+Explorer, a Test Explorer and, on x64-windows, debugging. `.maxon` sources, `.maxproj` project files, `.maxtasks` task files and
 `.maxtest` test files are all Maxon documents, served by the language server.
 
 **Finding the compiler.** The extension runs `maxon lsp-server` from the first compiler it finds:
@@ -1494,6 +1602,16 @@ whose every level holds a `.maxon` source. When the
 workspace folder is the Maxon source checkout, a second controller, **Maxon Spec Suite**, lists the spec
 tests in `specs/*.md` and runs them with the checkout's own compiler
 (`maxon-bin/.maxon/maxon spec-test --filter=…`).
+
+**Debugging.** The extension contributes a `maxon` debugger whose adapter is
+[`maxon dap-server`](#maxon-dap-server), run from the compiler it found, on x64-windows. **F5** works
+without a `launch.json`: a configuration without `program` debugs the active editor's `.maxon` file, or
+else the workspace folder when it holds a `.maxproj` file. A source file or project is built with debug info
+into the host's Maxon cache first. The Test Explorer's **Debug Test** builds each touched project's tests
+once with `maxon test --list --build --json`, copies the test binary and its sidecar to a temporary
+directory, and debugs each selected test in turn under that copy (see
+[Running the test binary](#running-the-test-binary)); cancelling the run stops the session. The extension's
+README describes the launch attributes and the panes.
 
 ### `maxon lsp-server`
 
@@ -1659,6 +1777,57 @@ any project is loading.
 { "rootPath": "/home/me/app", "loading": true }
 ```
 
+### `maxon dap-server`
+
+```bash
+maxon dap-server
+```
+
+Speaks the Debug Adapter Protocol over stdin and stdout, with the same `Content-Length` framing as
+`maxon lsp-server`. An option or an argument after the command word is refused with exit 1. It drives
+the same debugger as [`maxon debug`](#maxon-debug), so it debugs x64-windows programs only; the VS Code
+extension runs it as its debug adapter.
+
+**Requests:** `initialize`, `launch`, `setBreakpoints`, `setFunctionBreakpoints`, `configurationDone`,
+`threads`, `stackTrace`, `scopes`, `variables`, `evaluate`, `continue`, `next`, `stepIn`, `stepOut`,
+`pause`, `disconnect`, `terminate`. Any other request is answered `success: false` with the message
+`unsupported request: <command>`.
+
+**`launch` arguments:** `program`, `args`, `env`, `cwd`, `stopOnEntry`, `maxProcs`, `trace`,
+`stopTimeoutSeconds`. `stopTimeoutSeconds` is a number of seconds, default 10, with a fraction honoured
+to the millisecond, from 0.001 to 922337203685; `maxProcs` is a whole number of processors from 1 to
+4294967295, passed to the program as `MAXON_MAX_PROCS`. A value outside its bounds refuses the `launch`,
+naming the argument.
+
+**Events:** `initialized`, `stopped`, `continued`, `output`, `exited`, `terminated`.
+
+One adapter debugs one launch. `program` is a `.maxon` file or a project directory, which is built with
+debug info into the host's Maxon cache (a failed build refuses the `launch` with the compiler's
+diagnostics), or an executable already built with its sidecar. A `.maxtest` file is refused by name: a
+test file's debug build is `maxon test --list --build`, and the test binary it builds is the `program`
+to give. The program starts at `configurationDone`; with `stopOnEntry` it is reported `stopped` with
+reason `entry` before `main`. As it starts, the adapter removes the debug builds left by servers that
+have ended; see [`maxon cache`](#maxon-cache).
+
+- **Breakpoints.** `setBreakpoints` answers each line `verified`, or unverified with a `message` — a line
+  with no code, or a `condition` the debugger cannot evaluate. Breakpoints set while the program runs
+  are armed without stopping it. `setFunctionBreakpoints` resolves names as `break` does.
+- **Stops.** A `stopped` event carries `allThreadsStopped: true` and a `reason` of `breakpoint`, `step`,
+  `pause`, `entry`, or `exception` for a `trap` or a `fault`. `continue`, `next`, `stepIn`, `stepOut` and
+  `pause` are answered at once and the `stopped` event follows; `pause` stops every thread, whatever
+  `threadId` it names.
+- **Inspecting.** `threads` lists the green threads, or one thread `main` in a program without a
+  scheduler. `stackTrace` includes inlined frames, marked `presentationHint: "subtle"`. `variables`
+  expands a value's fields and elements on request, and a value the debugger cannot read is shown as
+  `<optimized out>`, `<not live here>`, `<read failed>` or `<layout not described>`. `evaluate` in the
+  `watch`, `hover`, `clipboard` or `variables` context prints an expression; in the `repl` context it runs
+  any [`maxon debug`](#maxon-debug) command and answers the transcript.
+- **The end.** The program's stdout and stderr arrive as `output` events; its exit is `exited` with the
+  exit code, then `terminated`. `disconnect` and `terminate` both reap a program still running. After
+  the program has ended, `threads`, `stackTrace`, `scopes` and `variables` answer empty lists.
+
+Lines and columns are 1-based unless `initialize` says `linesStartAt1` or `columnsStartAt1` is `false`.
+
 ### Other editors
 
 Any editor with an LSP client can use the server. Configure it to start the command `maxon` with the
@@ -1728,6 +1897,8 @@ with the same code and what the step printed.
 differences a program can meet are:
 
 - **`maxon profile`** runs only on x64-windows. Elsewhere it is refused.
+- **The interactive debugger** — `maxon debug`, `maxon dap-server` and the MCP `debug_*` tools — debugs
+  x64-windows programs only, because the debug agent it drives is emitted on that target alone.
 - On the Linux targets, host-name resolution for sockets is built in and simple: `A` records only, the
   first nameserver in `/etc/resolv.conf`, no search domains and no CNAME following.
 
@@ -1771,7 +1942,7 @@ maxon mcp-server
 ```
 
 Any MCP-compatible client (Claude Desktop, Claude Code, Cursor, Antigravity, VS Code and others) can use
-it to build, run, test, format and inspect Maxon code through structured tools, instead of shell
+it to build, run, test, format, inspect and debug Maxon code through structured tools, instead of shell
 commands. There is nothing else to install: the server is a command of every `maxon` binary.
 
 ### Quick setup
@@ -1795,32 +1966,90 @@ Add the server to your client's configuration.
 **Cursor, Claude Code and Antigravity:** `.cursor/mcp.json` or `.mcp.json` in your project root, with
 the same content.
 
-**Other clients:** configure a stdio server with command `maxon` and arguments `["mcp-server"]`.
+**Other clients:** configure a stdio server with command `maxon` and arguments `["mcp-server"]`. A
+client that cannot spawn a process can reach the same tools over [the HTTP transport](#the-http-transport).
 
 ### `maxon mcp-server`
 
 ```bash
-maxon mcp-server         # standard mode
-maxon mcp-server --dev   # also exposes the compiler-development tools
+maxon mcp-server                  # standard mode, over stdio
+maxon mcp-server --dev            # also exposes the compiler-development tools
+maxon mcp-server --http           # the same roster over loopback HTTP, on a free port
+maxon mcp-server --http=7823      # ... on a port you choose
 ```
 
 | Option | Description |
 |--------|-------------|
 | `--dev` | Enable the tools for working on the Maxon compiler: `run_spec_test`, `run_scale_test`, `spec_test_outcome`, the `repoRoot` argument of `build`, `execute`, `test` and `fmt`, and the `from` argument of `build` |
+| `--http=<port>` | Serve the same tool roster over HTTP on `127.0.0.1`, on `<port>` (1 to 65535). Written bare as `--http` it takes whichever free port the kernel gives. |
+| `--idle-timeout=<seconds>` | Close an HTTP session idle for this long, reaping any debug session it held (1 to 86400, default 300). See [Sessions and idleness](#sessions-and-idleness). Only with `--http`. |
+| `--max-sessions=<n>` | How many HTTP sessions may be live at once (1 to 4096, default 8); an `initialize` past the cap is answered `429`. Only with `--http`. |
+| `--exit-on-stdin-eof` | End the HTTP server when its stdin reaches end of file: the listener closes, every session is reaped and the server exits 0, so a server a parent process started ends with that parent. Only with `--http`. |
 
-The server reads newline-delimited JSON-RPC 2.0 messages on stdin and writes responses to stdout. It
+Any other spelling, and a value outside its range, is refused with exit 1, and so is `--idle-timeout`,
+`--max-sessions` or `--exit-on-stdin-eof` without `--http`. The HTTP transport binds loopback only, so a
+host or interface spelling such as `--http=0.0.0.0:80` is refused the same way.
+
+The stdio server reads newline-delimited JSON-RPC 2.0 messages on stdin and writes responses to stdout. It
 implements `initialize` (protocol version `2024-11-05`, server name `maxon`), `tools/list` and
 `tools/call`.
 
 | Mode | Invocation | Tools |
 |------|------------|-------|
-| Standard | `maxon mcp-server` | 8: `build`, `execute`, `test`, `fmt`, `check`, `dump_ir`, `lookup_error_code`, `info` |
-| Developer | `maxon mcp-server --dev` | 11: the standard tools plus `run_spec_test`, `run_scale_test`, `spec_test_outcome` |
+| Standard | `maxon mcp-server` | 21: `build`, `execute`, `test`, `fmt`, `check`, `dump_ir`, `lookup_error_code`, `info`, and the thirteen `debug_*` tools |
+| Developer | `maxon mcp-server --dev` | 24: the standard tools plus `run_spec_test`, `run_scale_test`, `spec_test_outcome` |
 
-**An argument a tool does not declare is refused** with `invalidParams`, so the arguments
-listed below are exactly the ones that exist. A developer-mode argument sent to a standard-mode server is
-refused the same way, as is an argument of the wrong JSON type and an array argument holding anything
-but strings.
+### The HTTP transport
+
+`--http` serves the SAME roster as stdio — name for name — for a client that cannot spawn a process. The
+server binds `127.0.0.1` and prints the endpoint it chose as ONE JSON line on stdout, the only line it
+writes there:
+
+```json
+{"endpoint":"http://127.0.0.1:7823/mcp"}
+```
+
+`/mcp` is the only route; every other path is `404`. `POST /mcp` carries one JSON-RPC object and is
+answered `200 application/json`, or `202` with an empty body when the message is a notification, which
+JSON-RPC forbids answering; a body that is something other than one JSON object is `400`. `DELETE /mcp`
+ends the session and answers `204`. `GET /mcp` is `405`, because the transport carries answers to
+requests alone, and `PUT`, `HEAD`, `PATCH` and `OPTIONS` are `405` too.
+
+`initialize` mints a 32-hex-character session id and returns it in the `Mcp-Session-Id` response header;
+every other message must carry that header, and one naming a session that has ended, or none at all, is
+`404`. An `initialize` that already carries a session id is `400`.
+
+A request must name the server in its `Host` header, exactly `127.0.0.1:<port>` or `localhost:<port>`
+with the server's own port, and an `Origin` header, when present, must be exactly
+`http://127.0.0.1:<port>` or `http://localhost:<port>`; any other request is refused `403`. A browser
+sets both headers from the page's own address, so a page open in a browser is refused. A request target
+that does not begin with `/` is `400`. The server runs until its process ends or, with
+`--exit-on-stdin-eof`, until its stdin closes.
+
+#### Sessions and idleness
+
+The server answers one request at a time: a request is read, handled and answered before the next
+connection is accepted, so a long call — a build, or a `debug_continue` waiting for a stop — holds
+every other session's requests until it answers. The time spent handling any request is credited to
+every session, so a session's idle time counts only the time between requests, and a request queued
+behind another session's long call finds its own session live.
+
+A session idle for `--idle-timeout` seconds is closed and its debug session reaped. The server sweeps
+before it serves each request and wakes on its own when the next session is due, so an idle session
+closes on time whatever the traffic. When the server ends, every session still open is reaped.
+
+### Arguments and answers
+
+**An argument a tool does not declare is refused** with `invalidParams`, so the arguments listed below
+are exactly the ones that exist. A developer-mode argument sent to a standard-mode server is refused the
+same way, as is an argument of the wrong JSON type, an array argument holding anything but strings, or a
+number outside the range the tool declares.
+
+**`timeoutSeconds`** bounds the `maxon` command a tool runs: `build`, `execute`, `test`, `fmt`, the
+developer tools, and the build `debug_start` makes of a `source`. It is a number of seconds, fractions
+honoured, from 0.001 to 922337203685 (default 600). A command still running at the bound has its whole
+process tree ended, and the call answers an error carrying what the command had written. For `execute`
+and `test` the bound covers the program or the tests as well as the build.
 
 Tools that run a compiler command answer with a JSON object holding `success`, the `command` that ran,
 `exitCode`, `stdout` and `stderr`; `check` and `dump_ir` compile inside the server and answer as described
@@ -1835,10 +2064,11 @@ Compiles a source file, a directory, a project target or an inline snippet, as `
 | Argument | Type | Description |
 |----------|------|-------------|
 | `path` | string | Source file or project directory. Omitted, the working directory's `.maxproj` file builds its target. |
-| `source` | string | Inline Maxon source to build instead of a path. Give `path` or `source`, not both. |
+| `source` | string | Inline Maxon source to build in place of a path. `path` and `source` exclude each other. |
 | `output` | string | Output executable path (`--output=<path>`) |
 | `target` | string | A target triple such as `wasm32-wasi`, passed as `--target=` when it is one of the five; any other value names a target of the `.maxproj` file, each `_` written `-` |
 | `emitIr` | boolean | Also write the Target IR (`--emit-ir`) |
+| `timeoutSeconds` | number | Seconds the build may take (default 600); see [Arguments and answers](#arguments-and-answers) |
 
 #### `execute`
 
@@ -1849,6 +2079,7 @@ Compiles, or reuses a cached build of, a program and runs it, as `maxon execute`
 | `path` | string | The `.maxon` file or directory to run |
 | `source` | string | Inline Maxon source to compile and run. Give `path` or `source`. |
 | `arguments` | array of strings | Command-line arguments for the program |
+| `timeoutSeconds` | number | Seconds the build and the run together may take (default 600) |
 | `repoRoot` | string | Developer mode only. The checkout whose compiler runs the program; see [Which tree, and which compiler](#which-tree-and-which-compiler). |
 
 The answer carries the program's exit code, stdout and stderr.
@@ -1861,6 +2092,7 @@ Runs a project's `test` declarations, as `maxon test` does.
 |----------|------|-------------|
 | `path` | string | Project directory (default: the working directory) |
 | `filter` | string | Selects tests by name or file: case-insensitive, comma-separated patterns are a union |
+| `timeoutSeconds` | number | Seconds the build and the tests together may take (default 600) |
 | `repoRoot` | string | Developer mode only. The checkout whose compiler runs the tests; see [Which tree, and which compiler](#which-tree-and-which-compiler). |
 
 #### `fmt`
@@ -1870,7 +2102,8 @@ Formats Maxon source, as `maxon fmt` does.
 | Argument | Type | Description |
 |----------|------|-------------|
 | `path` | string | File or directory, rewritten **in place**. Omitted, the whole working directory is formatted. |
-| `source` | string | Inline source to format. Nothing is written; the result's `formatted` field holds the text. Give `path` or `source`, not both. |
+| `source` | string | Inline source to format and return in the result's `formatted` field, leaving every file as it is. `path` and `source` exclude each other. |
+| `timeoutSeconds` | number | Seconds the format may take (default 600) |
 | `repoRoot` | string | Developer mode only. The checkout whose compiler formats; see [Which tree, and which compiler](#which-tree-and-which-compiler). |
 
 #### `check`
@@ -1918,6 +2151,107 @@ checkout; otherwise `documentationAvailable` is `false`. A number no error code 
 
 Takes no arguments. Returns `name`, `version`, `commit`, `commitDate`, `executable` (the running
 compiler's path) and `hostTarget`.
+
+### Debug tools
+
+Thirteen tools hold ONE live debug session per MCP session and drive it. Over stdio the process is the
+session, and the debuggee is reaped when stdin ends; over `--http` the session is the one the
+`Mcp-Session-Id` names, and the debuggee is reaped when that session is deleted or swept, or the server
+ends.
+
+Every `debug_*` tool answers `{"state": "stopped" | "running" | "ended" | "none", "events": [ … ],
+"output": [ … ]}` — the live state, the debugger events this call produced (the same objects
+`maxon debug --batch` writes, parsed rather than quoted), and the debuggee's stdout and stderr lines since
+the previous call. A tool other than `debug_start` called with no live session is an error naming
+`debug_start`.
+
+The debugger needs the in-process debug agent, which is emitted by default on `x64-windows` only.
+
+#### `debug_start`
+
+Launches a program under the debugger, parked before `main`, so a fresh session reports `stopped`. A
+`debug_start` while a session is live launches the new program first; once it has started, the live
+session is reaped and its remaining output leads the reply. A start that fails leaves the live session as it
+was.
+
+| Argument | Type | Description |
+|----------|------|-------------|
+| `executable` | string | An already-built program to debug. Exactly one of `executable` and `source` is given. |
+| `source` | string | A `.maxon` file or project directory to build with this compiler and then debug |
+| `args` | array of strings | Command-line arguments for the program being debugged |
+| `env` | array of strings | Environment variables for the debuggee, each spelled `NAME=VALUE` |
+| `stopTimeoutSeconds` | number | How long a command waits for the program to stop, and the budget for one step: seconds, fractions honoured, from 0.001 to 922337203685 (default 10) |
+| `trace` | boolean | Record the DebugStream ring, so `debug_trace` has events to report. A `source` is then built with `--debugstream`; an `executable` must already have been |
+| `maxProcs` | integer | Pin the debuggee's scheduler to this many processors, 1 to 4294967295 (`MAXON_MAX_PROCS`) |
+| `timeoutSeconds` | number | Seconds the build of a `source` may take (default 600). It bounds a build, so given with `executable` it is refused by name. |
+
+A `source` is built with debug info into the host's Maxon cache and removed when the session ends; see
+[`maxon cache`](#maxon-cache) for what happens to a build its server left behind. A `.maxtest` file,
+as either argument, is refused by name: a test file's debug build is `maxon test --list --build`, and the
+test binary it builds is the `executable` to give. A `.maxon` file or a directory given as `executable`,
+and anything else given as `source`, is refused with the argument to use.
+
+#### `debug_break`
+
+| Argument | Type | Description |
+|----------|------|-------------|
+| `target` | string | Required. `file:line`, a bare line number, a function name, or `*0x<offset>` |
+| `condition` | string | Break only when this holds, such as `i > 3`; the agent evaluates it itself |
+
+#### `debug_clear`
+
+| Argument | Type | Description |
+|----------|------|-------------|
+| `target` | string | Required. The `file:line`, line number, function name or `*0x<offset>` the breakpoint was armed on |
+
+#### `debug_continue`
+
+No arguments. It STARTS a session that has not run yet and resumes one that is stopped.
+
+#### `debug_step`
+
+| Argument | Type | Description |
+|----------|------|-------------|
+| `kind` | string | `step` into, `next` over, `finish` out of this frame, or `until` the next greater line. Default `step`. |
+
+#### `debug_pause`
+
+No arguments. Interrupts a running program that stops on nothing.
+
+#### `debug_backtrace`
+
+No arguments. Walks the stopped program's stack.
+
+#### `debug_locals`
+
+No arguments. Reports every local of the stopped frame with its value.
+
+#### `debug_eval`
+
+| Argument | Type | Description |
+|----------|------|-------------|
+| `expression` | string | Required. A local, or a dotted path through one, such as `config.retries` |
+
+#### `debug_threads`
+
+No arguments. Lists the program's green threads.
+
+#### `debug_gt`
+
+| Argument | Type | Description |
+|----------|------|-------------|
+| `action` | string | Required. `select` a green thread, `clear` the selection, `park` one, `resume` one, or `backtrace` one |
+| `thread` | string | The green-thread id `debug_threads` reported, or a selector. Not read by `clear`. |
+
+#### `debug_trace`
+
+| Argument | Type | Description |
+|----------|------|-------------|
+| `count` | integer | How many of the most recent DebugStream events to report (default 20). Needs a session started with `trace`. |
+
+#### `debug_stop`
+
+No arguments. Ends the session and REAPS the debuggee: the program ends where it stands.
 
 ### Developer tools (`--dev`)
 
@@ -1967,6 +2301,7 @@ Runs `maxon spec-test` and returns `passed`, `failed`, `total`, `summaryParsed`,
 | `network` | boolean | `--network`: also run the cases that reach a real external host |
 | `target` | string | `--target=` value, such as `wasm32-wasi` |
 | `workers` | integer | `--workers=`: the worker process count. A debugging aid; the default is what the suite normally runs at. |
+| `timeoutSeconds` | number | Seconds the run may take (default 600) |
 | `repoRoot` | string | The checkout to run in |
 
 #### `run_scale_test`
@@ -1979,8 +2314,9 @@ has no verdict: the ratio between rungs is the reading (×2 linear, ×4 quadrati
 | `rungs` | integer | Rungs to climb (1–8, default 6). Each rung doubles the program. |
 | `repeat` | integer | Compiles per rung (1–25, default 1). CPU takes the minimum; memory is cross-checked. |
 | `note` | string | Record the run in `docs/optimization-log.md` with this text as the reason |
-| `emitCorpus` | string | Write the generated programs to this directory and compile nothing |
+| `emitCorpus` | string | Write the generated programs to this directory and stop there |
 | `log` | string | `--log=` value |
+| `timeoutSeconds` | number | Seconds the run may take (default 600) |
 | `repoRoot` | string | The checkout to run in |
 
 #### `spec_test_outcome`
@@ -1994,6 +2330,7 @@ Runs spec tests for a filter and returns a `tests` array of `{spec, test, status
 | `target` | string | `--target=` value |
 | `network` | boolean | Also run the cases that reach a real external host |
 | `workers` | integer | `--workers=`: the worker process count. A debugging aid; the default is what the suite normally runs at. |
+| `timeoutSeconds` | number | Seconds the run may take (default 600) |
 | `repoRoot` | string | The checkout to run in |
 
 ### Rebuilding the compiler under a running server

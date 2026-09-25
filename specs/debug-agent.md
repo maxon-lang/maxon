@@ -31,9 +31,13 @@ parks — `stopSeq`, `stopReason`, `textBase` and `textSize`. A command is `cmdA
 an unknown `driverVersion` is not an error the program reports: a debugger that cannot read the page has
 no business stopping a program that was going to run correctly without it.
 
-**Attaching changes nothing else about how the program ends.** A fault is still terminal, with the same
-panic line and the same exit code it has with nothing attached — the agent's trap handler owns the trap
-codes it installed and no others.
+**A fault is a stop, and it is still terminal.** While a driver is attached, the four hardware faults the
+runtime's own handler converts — an access violation, a stack overflow, an integer divide by zero and an
+integer overflow — park the program exactly as a trap does: stop reason **6 `fault`**, the whole register
+file, the faulting pc, and the exception code in `stopFault`. A step from it is refused **faultIsTerminal**
+(13), because the instruction would only fault again; a continue hands the fault on to the runtime's
+handler, which ends the program with the same panic line, backtrace and exit code it has with nothing
+attached. Every other exception code is declined untouched.
 
 **A parked agent watches the driver PROCESS and ends itself when that process is gone.** A driver that was
 killed leaves a program stopped before `main` with nobody to resume it, so the agent opens a handle to the
@@ -356,15 +360,18 @@ version=0 flags=0 pid=0 child=5
 
 <!-- test: debug-agent.a-fault-is-still-terminal-while-attached -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
-### An attached child that faults still panics, prints its backtrace and exits 1
+### An attached child that faults stops, cannot be stepped past the fault, and after a continue still panics, prints its backtrace and exits 1
 
-⭐⭐ **THE AGENT INSTALLS A TRAP HANDLER, AND THIS IS WHAT SAYS IT OWNS ONLY THE CODES IT ASKED FOR.** A
-handler that claimed an access violation would swallow the one fault the language reports, and the program
-would hang parked, or continue past a wild store, instead of stopping. The child below calls
-`__Builtins.forceSegfault()` the way `specs/safety.md`'s `force-segfault` case spells it, with the agent
-attached and `stopAtEntry` 0, and the parent reads back the same exit code and the same first stderr line
-that case pins with nothing attached.
+⭐⭐ **A FAULT IS A STOP, AND IT IS STILL TERMINAL.** The agent parks on the fault so a debugger can see
+where it happened, but it cannot make the faulting instruction succeed: a one-instruction step would
+execute it again. So a `stepInstruction` at a fault stop is refused by reason (**faultIsTerminal**, 13)
+rather than obeyed, and a continue hands the fault on to the runtime's own handler, which reports it
+exactly as it does with nothing attached. The child below calls `__Builtins.forceSegfault()` the way
+`specs/safety.md`'s `force-segfault` case spells it, with the agent attached and `stopAtEntry` 0; the parent
+reads the stop, is refused the step, continues, and then reads back that case's exit code, its first stderr
+line and the frame its backtrace opens with.
 ```maxon
+typealias Millis = int(0 to i64.max)
 typealias StringArray = Array with String
 
 let MagicText = "MXDBGCTL"
@@ -373,16 +380,38 @@ let SegmentBytes = 8192
 let DebugVariableName = "MAXON_DEBUG"
 let ChildArgument = "child"
 let PanicLine = "panic: nil pointer or invalid memory access"
+let FaultingFrame = "in maxon_force_segfault"
+let LineBreak = "\n"
 
 let MagicOffset = 0 as SegmentOffset
 let DriverVersionOffset = 8 as SegmentOffset
-let AgentVersionOffset = 16 as SegmentOffset
 let DriverPidOffset = 40 as SegmentOffset
 let StopAtEntryOffset = 48 as SegmentOffset
+let CmdSeqOffset = 56 as SegmentOffset
+let CmdOffset = 64 as SegmentOffset
+let CmdArg0Offset = 72 as SegmentOffset
+let AckSeqOffset = 96 as SegmentOffset
+let CmdResultOffset = 104 as SegmentOffset
+let CmdRefusalOffset = 112 as SegmentOffset
+let StopSeqOffset = 120 as SegmentOffset
+let StopReasonOffset = 128 as SegmentOffset
 
 let DriverVersion = 1
 let RunToCompletion = 0
+let StepInstructionCommandCode = 6
+let ContinueCommandCode = 3
+let FaultStopReason = 6
+let CommandRefused = 0
+let CommandDone = 1
+let FaultIsTerminalRefusal = 13
+let FirstStop = 1
+let FirstCommandSequence = 1
+let SecondCommandSequence = 2
+let NoArgument = 0
 
+let PollIntervalMs = 5 as Millis
+let PollDeadlineMs = 20000 as Millis
+let ChildDeadlineMs = 20000 as Millis
 let AsciiBits = 8
 
 function controlMagic() returns SegmentWord
@@ -397,6 +426,40 @@ function controlMagic() returns SegmentWord
 	return magic
 end 'controlMagic'
 
+function awaitWord(segment SharedSegment, offset SegmentOffset, atLeast SegmentWord) returns bool
+	let deadline = (Clock.nowMs() as Millis) + PollDeadlineMs
+
+	while (Clock.nowMs() as Millis) < deadline 'poll'
+		let seen = try segment.readWord(offset) otherwise return false
+
+		if seen >= atLeast 'arrived'
+			return true
+		end 'arrived'
+
+		sleep(PollIntervalMs)
+	end 'poll'
+
+	return false
+end 'awaitWord'
+
+function drainedStderr(child StreamingSubprocess) returns String
+	var text = ""
+	var reading = true
+
+	while reading 'eachLine'
+		let line = try child.readStderrLine() otherwise ""
+
+		if line.isEmpty() 'endOfStream'
+			reading = false
+			continue
+		end 'endOfStream'
+
+		text.append("{line}{LineBreak}")
+	end 'eachLine'
+
+	return text
+end 'drainedStderr'
+
 function main() returns ExitCode
 	if CommandLine.args().count() > 1 'iAmTheChild'
 		__Builtins.forceSegfault()
@@ -410,24 +473,175 @@ function main() returns ExitCode
 	try segment.writeWord(DriverPidOffset, value: __Builtins.currentProcessId() as SegmentWord) otherwise return 7
 
 	let me = try Process.executablePath() otherwise return 8
+	let here = try FilePath.from("") otherwise return 9
 	var argv = StringArray.create()
 	argv.push(ChildArgument)
 
-	var config = Configuration.create(Executable.path(me))
-	config.arguments = argv
-	config.environment = Environment.inheritUpdating([DebugVariableName: segment.segmentName()])
-	let run = try Subprocess.runConfiguration(config) otherwise return 9
+	var child = try StreamingSubprocess.spawnWithEnvironment(Executable.path(me), arguments: argv, workingDirectory: here, environment: Environment.inheritUpdating([DebugVariableName: segment.segmentName()])) otherwise return 10
 
-	let version = try segment.readWord(AgentVersionOffset) otherwise return 10
+	let stopped = awaitWord(segment, offset: StopSeqOffset, atLeast: FirstStop)
+	let reason = try segment.readWord(StopReasonOffset) otherwise return 11
+
+	try segment.writeWord(CmdArg0Offset, value: NoArgument) otherwise return 12
+	try segment.writeWord(CmdOffset, value: StepInstructionCommandCode) otherwise return 13
+	try segment.writeWord(CmdSeqOffset, value: FirstCommandSequence) otherwise return 14
+
+	let sawTheStep = awaitWord(segment, offset: AckSeqOffset, atLeast: FirstCommandSequence)
+	let stepResult = try segment.readWord(CmdResultOffset) otherwise return 15
+	let stepRefusal = try segment.readWord(CmdRefusalOffset) otherwise return 16
+
+	try segment.writeWord(CmdOffset, value: ContinueCommandCode) otherwise return 17
+	try segment.writeWord(CmdSeqOffset, value: SecondCommandSequence) otherwise return 18
+
+	let sawTheContinue = awaitWord(segment, offset: AckSeqOffset, atLeast: SecondCommandSequence)
+	let continueResult = try segment.readWord(CmdResultOffset) otherwise return 19
+
+	let code = try child.waitWithTimeout(ChildDeadlineMs) otherwise 97
+	let said = drainedStderr(child)
+	child.release()
 	segment.close()
 
-	print("attached={version} child={run.exitCode()} panicked={run.stderr.contains(PanicLine)}\n")
+	print("stopped={stopped and reason == FaultStopReason} stepRefused={sawTheStep and stepResult == CommandRefused and stepRefusal == FaultIsTerminalRefusal} continued={sawTheContinue and continueResult == CommandDone} child={code} panicked={said.contains(PanicLine)} backtrace={said.contains(FaultingFrame)}\n")
 
 	return 0
 end 'main'
 ```
 ```stdout
-attached=1 child=1 panicked=true
+stopped=true stepRefused=true continued=true child=1 panicked=true backtrace=true
+```
+```exitcode
+0
+```
+
+<!-- test: debug-agent.a-fault-stops-a-debugged-program -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+### A debugged program that faults stops at the faulting instruction, names the fault, and ends as it would undebugged once continued
+
+⭐⭐ **EVERY DEBUGGER STOPS ON AN UNHANDLED FAULT, BECAUSE IT IS THE ONE MOMENT THE STACK IS WORTH MOST.** An
+agent that let the runtime's handler take the fault would end the program with its backtrace printed to a
+stream and nothing left to inspect. Here nothing is parked and no breakpoint is armed; the child faults on
+its own, and the parent sees a stop with reason **6 `fault`**, the exception code the host raised in
+`stopFault` (0xC0000005, an access violation), and a pc inside the program's own code. A continue is then
+acknowledged, and the child exits with the runtime's panic exit code and opens its stderr with the same
+panic line `specs/safety.md`'s `force-segfault` case pins with nothing attached.
+
+⚠ **THE PC IS ASKED TO BE INSIDE `[textBase, textBase + textSize)` AND NOTHING MORE.** Which instruction
+of the probe faults is a fact about a build; that the stop reports the program's own code rather than
+the agent's, the host's or zero is the claim.
+```maxon
+typealias Millis = int(0 to i64.max)
+typealias StringArray = Array with String
+
+let MagicText = "MXDBGCTL"
+let SegmentName = "maxon-spec-dbg-faultstop"
+let SegmentBytes = 8192
+let DebugVariableName = "MAXON_DEBUG"
+let ChildArgument = "child"
+let PanicLine = "panic: nil pointer or invalid memory access"
+
+let MagicOffset = 0 as SegmentOffset
+let DriverVersionOffset = 8 as SegmentOffset
+let DriverPidOffset = 40 as SegmentOffset
+let StopAtEntryOffset = 48 as SegmentOffset
+let CmdSeqOffset = 56 as SegmentOffset
+let CmdOffset = 64 as SegmentOffset
+let CmdArg0Offset = 72 as SegmentOffset
+let AckSeqOffset = 96 as SegmentOffset
+let CmdResultOffset = 104 as SegmentOffset
+let StopSeqOffset = 120 as SegmentOffset
+let StopReasonOffset = 128 as SegmentOffset
+let TextBaseOffset = 160 as SegmentOffset
+let TextSizeOffset = 168 as SegmentOffset
+let StopPcOffset = 176 as SegmentOffset
+let StopFaultOffset = 200 as SegmentOffset
+
+let DriverVersion = 1
+let RunToCompletion = 0
+let ContinueCommandCode = 3
+let CommandDone = 1
+let AccessViolationCode = 0xC0000005
+let FirstStop = 1
+let FirstCommandSequence = 1
+let NoArgument = 0
+
+let PollIntervalMs = 5 as Millis
+let PollDeadlineMs = 20000 as Millis
+let ChildDeadlineMs = 20000 as Millis
+let AsciiBits = 8
+
+function controlMagic() returns SegmentWord
+	var magic = 0
+	var shift = 0
+
+	for b in MagicText.bytes() 'eachByte'
+		magic = magic + ((b as SegmentWord) shl shift)
+		shift = shift + AsciiBits
+	end 'eachByte'
+
+	return magic
+end 'controlMagic'
+
+function awaitWord(segment SharedSegment, offset SegmentOffset, atLeast SegmentWord) returns bool
+	let deadline = (Clock.nowMs() as Millis) + PollDeadlineMs
+
+	while (Clock.nowMs() as Millis) < deadline 'poll'
+		let seen = try segment.readWord(offset) otherwise return false
+
+		if seen >= atLeast 'arrived'
+			return true
+		end 'arrived'
+
+		sleep(PollIntervalMs)
+	end 'poll'
+
+	return false
+end 'awaitWord'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'iAmTheChild'
+		__Builtins.forceSegfault()
+		return 0
+	end 'iAmTheChild'
+
+	var segment = try SharedSegment.create(SegmentName, bytes: SegmentBytes) otherwise return 3
+	try segment.writeWord(MagicOffset, value: controlMagic()) otherwise return 4
+	try segment.writeWord(DriverVersionOffset, value: DriverVersion) otherwise return 5
+	try segment.writeWord(StopAtEntryOffset, value: RunToCompletion) otherwise return 6
+	try segment.writeWord(DriverPidOffset, value: __Builtins.currentProcessId() as SegmentWord) otherwise return 7
+
+	let me = try Process.executablePath() otherwise return 8
+	let here = try FilePath.from("") otherwise return 9
+	var argv = StringArray.create()
+	argv.push(ChildArgument)
+
+	var child = try StreamingSubprocess.spawnWithEnvironment(Executable.path(me), arguments: argv, workingDirectory: here, environment: Environment.inheritUpdating([DebugVariableName: segment.segmentName()])) otherwise return 10
+
+	let stopped = awaitWord(segment, offset: StopSeqOffset, atLeast: FirstStop)
+	let reason = try segment.readWord(StopReasonOffset) otherwise return 11
+	let fault = try segment.readWord(StopFaultOffset) otherwise return 12
+	let textBase = try segment.readWord(TextBaseOffset) otherwise return 13
+	let textSize = try segment.readWord(TextSizeOffset) otherwise return 14
+	let stopPc = try segment.readWord(StopPcOffset) otherwise return 15
+
+	try segment.writeWord(CmdArg0Offset, value: NoArgument) otherwise return 16
+	try segment.writeWord(CmdOffset, value: ContinueCommandCode) otherwise return 17
+	try segment.writeWord(CmdSeqOffset, value: FirstCommandSequence) otherwise return 18
+
+	let resumed = awaitWord(segment, offset: AckSeqOffset, atLeast: FirstCommandSequence)
+	let resumeResult = try segment.readWord(CmdResultOffset) otherwise return 19
+
+	let code = try child.waitWithTimeout(ChildDeadlineMs) otherwise 97
+	let firstLine = try child.readStderrLine() otherwise ""
+	child.release()
+	segment.close()
+
+	print("stopped={stopped} reason={reason} accessViolation={fault == AccessViolationCode} inText={textBase != 0 and stopPc >= textBase and stopPc < textBase + textSize} resumed={resumed and resumeResult == CommandDone} child={code} panicked={firstLine.startsWith(PanicLine)}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+stopped=true reason=6 accessViolation=true inText=true resumed=true child=1 panicked=true
 ```
 ```exitcode
 0
@@ -2900,6 +3114,154 @@ end 'main'
 ```
 ```stdout
 setRefused=true clearRefused=true resumed=true child=5
+```
+```exitcode
+0
+```
+
+<!-- test: debug-agent.an-operand-the-class-word-places-past-the-instruction-is-refused -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+### A breakpoint whose class word places an operand past its instruction is refused as unclassified
+
+```maxon
+typealias Millis = int(0 to i64.max)
+typealias StringArray = Array with String
+
+let MagicText = "MXDBGCTL"
+let SegmentName = "maxon-spec-dbg-operandpast"
+let SegmentBytes = 8192
+let DebugVariableName = "MAXON_DEBUG"
+let ChildArgument = "child"
+
+let MagicOffset = 0 as SegmentOffset
+let DriverVersionOffset = 8 as SegmentOffset
+let DriverPidOffset = 40 as SegmentOffset
+let StopAtEntryOffset = 48 as SegmentOffset
+let CmdSeqOffset = 56 as SegmentOffset
+let CmdOffset = 64 as SegmentOffset
+let CmdArg0Offset = 72 as SegmentOffset
+let CmdArg1Offset = 80 as SegmentOffset
+let CmdArg2Offset = 88 as SegmentOffset
+let AckSeqOffset = 96 as SegmentOffset
+let CmdRefusalOffset = 112 as SegmentOffset
+let StopSeqOffset = 120 as SegmentOffset
+
+let DriverVersion = 1
+let ParkBeforeMain = 1
+let SetBreakpointCommandCode = 1
+let ClearBreakpointCommandCode = 2
+let ContinueCommandCode = 3
+let UnclassifiedRefusal = 3
+let ClassShift = 8
+let OperandPositionShift = 16
+let ModRmPositionShift = 32
+let PcRelativeDataClass = 2
+let ReturnClass = 6
+let IndirectCallClass = 7
+let ReturnReleasingBytes = 3
+let ReleaseImmediateBytes = 2
+let PcRelativeLoadBytes = 7
+let IndirectCallBytes = 3
+let PastEveryInstruction = 255
+let FirstCodeOffset = 0
+let NoArgument = 0
+let ChildExitCode = 5
+
+let PollIntervalMs = 5 as Millis
+let PollDeadlineMs = 20000 as Millis
+let ChildDeadlineMs = 20000 as Millis
+let AsciiBits = 8
+
+function controlMagic() returns SegmentWord
+	var magic = 0
+	var shift = 0
+
+	for b in MagicText.bytes() 'eachByte'
+		magic = magic + ((b as SegmentWord) shl shift)
+		shift = shift + AsciiBits
+	end 'eachByte'
+
+	return magic
+end 'controlMagic'
+
+function awaitWord(segment SharedSegment, offset SegmentOffset, atLeast SegmentWord)
+	let deadline = (Clock.nowMs() as Millis) + PollDeadlineMs
+
+	while (Clock.nowMs() as Millis) < deadline 'poll'
+		let seen = try segment.readWord(offset) otherwise return
+
+		if seen >= atLeast 'arrived'
+			return
+		end 'arrived'
+
+		sleep(PollIntervalMs)
+	end 'poll'
+end 'awaitWord'
+
+function classWord(instructionClass SegmentWord, length SegmentWord, operandAt SegmentWord, shift SegmentWord) returns SegmentWord
+	return (instructionClass shl ClassShift) + length + (operandAt shl shift)
+end 'classWord'
+
+function refusalOf(segment SharedSegment, word SegmentWord, sequence SegmentWord) returns SegmentWord
+	try segment.writeWord(CmdArg1Offset, value: word) otherwise return NoArgument
+	try segment.writeWord(CmdSeqOffset, value: sequence) otherwise return NoArgument
+
+	awaitWord(segment, offset: AckSeqOffset, atLeast: sequence)
+
+	return try segment.readWord(CmdRefusalOffset) otherwise NoArgument
+end 'refusalOf'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'iAmTheChild'
+		return ChildExitCode
+	end 'iAmTheChild'
+
+	var segment = try SharedSegment.create(SegmentName, bytes: SegmentBytes) otherwise return 3
+	try segment.writeWord(MagicOffset, value: controlMagic()) otherwise return 4
+	try segment.writeWord(DriverVersionOffset, value: DriverVersion) otherwise return 5
+	try segment.writeWord(StopAtEntryOffset, value: ParkBeforeMain) otherwise return 6
+	try segment.writeWord(DriverPidOffset, value: __Builtins.currentProcessId() as SegmentWord) otherwise return 7
+
+	let me = try Process.executablePath() otherwise return 8
+	let here = try FilePath.from("") otherwise return 9
+	var argv = StringArray.create()
+	argv.push(ChildArgument)
+
+	var child = try StreamingSubprocess.spawnWithEnvironment(Executable.path(me), arguments: argv, workingDirectory: here, environment: Environment.inheritUpdating([DebugVariableName: segment.segmentName()])) otherwise return 10
+
+	awaitWord(segment, offset: StopSeqOffset, atLeast: 1)
+
+	try segment.writeWord(CmdArg0Offset, value: FirstCodeOffset) otherwise return 11
+	try segment.writeWord(CmdArg2Offset, value: NoArgument) otherwise return 12
+	try segment.writeWord(CmdOffset, value: SetBreakpointCommandCode) otherwise return 13
+
+	let release = refusalOf(segment, word: classWord(ReturnClass, length: ReturnReleasingBytes, operandAt: PastEveryInstruction, shift: OperandPositionShift), sequence: 1)
+	let displacement = refusalOf(segment, word: classWord(PcRelativeDataClass, length: PcRelativeLoadBytes, operandAt: PastEveryInstruction, shift: OperandPositionShift), sequence: 2)
+	let modRm = refusalOf(segment, word: classWord(IndirectCallClass, length: IndirectCallBytes, operandAt: PastEveryInstruction, shift: ModRmPositionShift), sequence: 3)
+	let lastByteOver = refusalOf(segment, word: classWord(ReturnClass, length: ReturnReleasingBytes, operandAt: ReturnReleasingBytes - ReleaseImmediateBytes + 1, shift: OperandPositionShift), sequence: 4)
+	let lastFit = refusalOf(segment, word: classWord(ReturnClass, length: ReturnReleasingBytes, operandAt: ReturnReleasingBytes - ReleaseImmediateBytes, shift: OperandPositionShift), sequence: 5)
+
+	try segment.writeWord(CmdOffset, value: ClearBreakpointCommandCode) otherwise return 14
+	try segment.writeWord(CmdSeqOffset, value: 6) otherwise return 15
+
+	awaitWord(segment, offset: AckSeqOffset, atLeast: 6)
+
+	try segment.writeWord(CmdOffset, value: ContinueCommandCode) otherwise return 16
+	try segment.writeWord(CmdSeqOffset, value: 7) otherwise return 17
+
+	awaitWord(segment, offset: AckSeqOffset, atLeast: 7)
+
+	let code = try child.waitWithTimeout(ChildDeadlineMs) otherwise 97
+	child.release()
+	segment.close()
+
+	print("release={release == UnclassifiedRefusal} displacement={displacement == UnclassifiedRefusal} modRm={modRm == UnclassifiedRefusal} lastByteOver={lastByteOver == UnclassifiedRefusal} lastFit={lastFit == UnclassifiedRefusal} child={code}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+release=true displacement=true modRm=true lastByteOver=true lastFit=false child=5
 ```
 ```exitcode
 0

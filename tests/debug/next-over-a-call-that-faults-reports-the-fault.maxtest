@@ -1,0 +1,18 @@
+let FaultingCallCaseLabel = "next-over-a-call-that-faults-reports-the-fault"
+
+test 'a next over a call that faults stops at the fault'
+	let staged = builtFixture(FaultingCallCaseLabel, fixture: CrashFixtureName)
+	let faultLine = anchorLine(staged, anchor: "force-fault")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(faultLine)}", RunCommand, NextCommand, BacktraceCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let stops = eventsOfKind(events, kind: StopEventName)
+
+	try Expect.equal(eventsOfKind(events, kind: TimeoutEventName).count() as AssertedInt, expected: 0, message: "a walk whose callee faults ends at the fault; it must not wait out the stop timeout for a return that cannot come. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(stops.count() as AssertedInt, expected: 2, message: "the breakpoint on the faulting call and the fault itself are two stops. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let landed = eventAt(stops, index: 1)
+	try Expect.equal(textOf(landed, node: landed.root, key: ReasonKey), expected: FaultStopReason, message: "the walk's landing is the fault, reported as `{FaultStopReason}`. {said}")
+	try Expect.equal(eventsOfKind(events, kind: BacktraceEventName).count() as AssertedInt, expected: 1, message: "the fault is a stop the session can still walk. {said}")
+end 'a next over a call that faults stops at the fault'

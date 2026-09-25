@@ -37,15 +37,88 @@ export type BackendUnitBody
 	// compiler-emitted one.
 	export var hasAuthor as bool
 
-	// ⭐ **THE VALUES THE PARSER NAMED, FLAT AND IN `IrFunction.debugLocals` ORDER.** The allocator is the
-	// last point at which a `ValueId` still means anything — the encoder sees physical registers — so this
-	// is the question that has to cross, and the answer comes home in the same order.
-	export var debugValueIds as ValueIdArray
+	// The named values, flat and in `IrFunction.debugLocals` order, each with its inline site. The
+	// allocator is the last point at which a `ValueId` still means anything — the encoder sees
+	// physical registers — so this is the question that has to cross, and the answer comes home in the
+	// same order.
+	export var debugValues as DebugValueRoster
 
 	export static function extract(module StdModule, func IrFunction) returns BackendUnitBody
-		return Self{unitModule: extractUnitModule(module, func: func), hasAuthor: not func.sourceFilePath.isEmpty(), debugValueIds: debugValueIdsOf(func)}
+		return Self{unitModule: extractUnitModule(module, func: func), hasAuthor: not func.sourceFilePath.isEmpty(), debugValues: DebugValueRoster.of(func)}
 	end 'extract'
 end 'BackendUnitBody'
+
+export typealias DebugSiteKey = int(0 to u32.max)
+export typealias DebugSiteKeyColumn = Array with DebugSiteKey
+
+export let FunctionTextSiteKey = 0 as DebugSiteKey
+let DebugSiteKeyBias = 1
+
+export function debugSiteKeyOf(site InlineSiteRef) returns DebugSiteKey
+	return match site 'site'
+		none gives FunctionTextSiteKey
+		site(index) gives (index + DebugSiteKeyBias) as DebugSiteKey
+	end 'site'
+end 'debugSiteKeyOf'
+
+function requireParentRecordedEarlier(parent InlineSiteRef, site ElementIndex)
+	match parent 'nested'
+		none then return
+		site(index) then requireSiteIndexRecordedEarlier(index as MxdbgIndex, site: site as MxdbgIndex)
+	end 'nested'
+end 'requireParentRecordedEarlier'
+
+function requireSiteIndexRecordedEarlier(parent MxdbgIndex, site MxdbgIndex)
+	if not mxdbgNoneOrBelow(parent, none: MxdbgNoInlineSite, bound: site) 'notRecordedBeforeIt'
+		panic("DebugValueRoster: inline site {site} names {parent} as its parent — every site nests under one recorded before it, which is what ends the walk up an inline chain")
+	end 'notRecordedBeforeIt'
+end 'requireSiteIndexRecordedEarlier'
+
+export type DebugValueRoster
+	export var valueIds as ValueIdArray
+	export var siteKeys as DebugSiteKeyColumn
+	export var parentKeys as DebugSiteKeyColumn
+
+	export static function of(func IrFunction) returns DebugValueRoster
+		let tally = debugValueTallyOf(func)
+		var valueIds = ValueIdArray.create()
+		var siteKeys = DebugSiteKeyColumn.create()
+		var parentKeys = DebugSiteKeyColumn.create()
+
+		if tally == 0 'nothingNamed'
+			return Self{valueIds: valueIds, siteKeys: siteKeys, parentKeys: parentKeys}
+		end 'nothingNamed'
+
+		valueIds.reserve(tally)
+		siteKeys.reserve(tally)
+
+		for local in func.debugLocals 'eachBinding'
+			let key = debugSiteKeyOf(local.inlineSite)
+
+			for v in local.valueIds 'eachValue'
+				valueIds.push(v)
+				siteKeys.push(key)
+			end 'eachValue'
+		end 'eachBinding'
+
+		parentKeys.reserve(func.inlineSites.count())
+
+		for (iter, site) in func.inlineSites.withIterator() 'eachSite'
+			requireParentRecordedEarlier(site.parent, site: iter.index())
+			parentKeys.push(debugSiteKeyOf(site.parent))
+		end 'eachSite'
+
+		return Self{valueIds: valueIds, siteKeys: siteKeys, parentKeys: parentKeys}
+	end 'of'
+
+	export function siteKeyCount() returns ElementIndex
+		return self.parentKeys.count() + DebugSiteKeyBias
+	end 'siteKeyCount'
+
+	export static function empty() returns DebugValueRoster
+		return Self{valueIds: ValueIdArray.create(), siteKeys: DebugSiteKeyColumn.create(), parentKeys: DebugSiteKeyColumn.create()}
+	end 'empty'
+end 'DebugValueRoster'
 
 // THE MESSAGE ARGUMENT: which function, and its body in a one-slot holder the worker pops (see
 // `BackendUnitReply.afterRunning`).
@@ -62,24 +135,9 @@ export type BackendUnit
 	end 'extract'
 end 'BackendUnit'
 
-// Every value the parser named a binding for, flattened — built FRESH, because it is MOVED to a worker.
-// Empty on a build that records no bindings, which is what makes the whole carrier free when disarmed.
-function debugValueIdsOf(func IrFunction) returns ValueIdArray
-	var valueIds = ValueIdArray.create()
-	valueIds.reserve(debugValueTallyOf(func))
-
-	for local in func.debugLocals 'eachBinding'
-		for v in local.valueIds 'eachValue'
-			valueIds.push(v)
-		end 'eachValue'
-	end 'eachBinding'
-
-	return valueIds
-end 'debugValueIdsOf'
-
-// How many values that list holds. Its own walk rather than `debugValueIdsOf(func).count()`, because the
-// splice asks it on EVERY function of every build and building the array to measure it would allocate one
-// per function for a number.
+// How many values `DebugValueRoster.of` flattens. Its own walk because the splice asks it of every
+// function of every build, and building the roster to measure it would allocate per function for a
+// number.
 function debugValueTallyOf(func IrFunction) returns ElementIndex
 	var tally = 0 as ElementIndex
 
@@ -147,17 +205,10 @@ export type BackendUnitReply
 	end 'afterRunning'
 end 'BackendUnitReply'
 
-// ⭐⭐ **PUT ONE FINISHED FUNCTION INTO THE MODULE, AS THE WORKER LEFT IT.**
-//
-// The unit's ops are appended whole with their spans (`appendOps` — the worker compacted the unit, so
-// they are exactly the function's live ops), its blocks are appended in `blockRefs` order with their op
-// indices shifted onto the appended ops (`IrBlock.shiftOpIndices`), and the function's `blockRefs` is
-// refilled in place onto them. A block the unit's `blockRefs` no longer names is one a pass dropped, and
-// it is left behind with the unit.
-//
-// The Target-tier scalars the worker settled — the frame size, the outgoing-argument reservation, the
-// next block id — and the debug locations come across onto the REAL function, which the Target module
-// shares with the Std module.
+// The unit's ops are appended whole with their spans — the worker compacted the unit, so they are
+// exactly the function's live ops — and a block the unit's `blockRefs` no longer names is one a
+// pass dropped, left behind with the unit. The scalars the worker settled and the debug locations
+// land on the real function, which the Target module shares with the Std module.
 export function spliceBackendUnit(module TargetModule, func IrFunction, unitModule TargetModule)
 	let unitFunc = unitModule.getFunc(UnitFunctionIndex)
 
@@ -166,7 +217,7 @@ export function spliceBackendUnit(module TargetModule, func IrFunction, unitModu
 	unitModule.spans.requireParallelTo(unitModule.ops.count(), what: "after the backend unit of '{String.from(func.name)}'")
 
 	let opOffset = module.ops.count()
-	let splicedRanges = resolvedDebugRanges(unitModule, unitFunc: unitFunc, opOffset: opOffset)
+	resolveDebugRanges(unitModule, unitFunc: unitFunc, opOffset: opOffset)
 	module.appendOps(unitModule)
 	func.blockRefs.clear()
 
@@ -181,9 +232,8 @@ export function spliceBackendUnit(module TargetModule, func IrFunction, unitModu
 	func.stackSize = unitFunc.stackSize
 	func.outgoingArgSize = unitFunc.outgoingArgSize
 
-	// ⭐ **THE LOCATIONS COME HOME BY ORDER, SO THE COUNT IS THE ONLY THING THAT CAN SAY THE TWO AGREE.**
-	// A shortfall would silently shift every later binding onto its neighbour's location, which reads as a
-	// plausible dump rather than as a defect.
+	// The locations come home by order, so the count is the only check that the two agree: a shortfall
+	// would shift every later binding onto its neighbour's location, which reads as a plausible dump.
 	let debugValueTally = debugValueTallyOf(func)
 
 	if unitFunc.debugLocalLocations.count() != debugValueTally 'debugLocationsOutOfStep'
@@ -191,24 +241,22 @@ export function spliceBackendUnit(module TargetModule, func IrFunction, unitModu
 	end 'debugLocationsOutOfStep'
 
 	func.debugLocalLocations = unitFunc.debugLocalLocations
-	func.debugLocalRanges = splicedRanges
+	func.debugLocalRanges = unitFunc.debugLocalRanges
 end 'spliceBackendUnit'
 
-function resolvedDebugRanges(unitModule TargetModule, unitFunc IrFunction, opOffset OpIndex) returns DebugValueRangeArray
+function resolveDebugRanges(unitModule TargetModule, unitFunc IrFunction, opOffset OpIndex)
 	if unitFunc.debugLocalRanges.count() == 0 'noRanges'
-		return unitFunc.debugLocalRanges
+		return
 	end 'noRanges'
 
 	let liveOps = unitModule.liveOpIndices(unitFunc)
-	var resolved = DebugValueRangeArray.create()
-	resolved.reserve(unitFunc.debugLocalRanges.count())
 
-	for range in unitFunc.debugLocalRanges 'eachRange'
-		resolved.push(DebugValueRange.create(range.valueOrdinal, blockId: range.blockId, first: splicedOpOf(liveOps, ordinal: range.first, opOffset: opOffset), last: splicedOpOf(liveOps, ordinal: range.last, opOffset: opOffset)))
+	for i in 0 upto unitFunc.debugLocalRanges.count() 'eachRange'
+		var range = try unitFunc.debugLocalRanges.get(i) otherwise panic("resolveDebugRanges: debugLocalRanges.get OOB at {i} of {unitFunc.debugLocalRanges.count()}")
+		range.first = splicedOpOf(liveOps, ordinal: range.first, opOffset: opOffset)
+		range.last = splicedOpOf(liveOps, ordinal: range.last, opOffset: opOffset)
 	end 'eachRange'
-
-	return resolved
-end 'resolvedDebugRanges'
+end 'resolveDebugRanges'
 
 function splicedOpOf(liveOps OpIndexArray, ordinal DebugOpAnchor, opOffset OpIndex) returns DebugOpAnchor
 	return ((try liveOps.get(ordinal as ElementIndex) otherwise panic("spliceBackendUnit: live-op ordinal {ordinal} is past the {liveOps.count()} ops of the unit the allocator numbered it against")) + opOffset) as DebugOpAnchor

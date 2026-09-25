@@ -873,9 +873,9 @@ let StartupInfoSize = 0x68
 let StartupInfoCbOffset = 0
 
 // PROCESS_INFORMATION is 0x18 bytes: hProcess@0, hThread@8, dwProcessId@16, dwThreadId@20. The record a spawn is
-// handed is two words longer, for `SpawnFailedPreparationOffset` and `ProcInfoTreeObjectOffset`, neither of
-// which `CreateProcessA` writes.
-let ProcInfoSize = 0x28
+// handed is three words longer, for `SpawnFailedPreparationOffset`, `ProcInfoTreeObjectOffset` and
+// `ProcInfoTreeAssignedOffset`, none of which `CreateProcessA` writes.
+let ProcInfoSize = 0x30
 export let ProcInfoHProcessOffset = 0
 export let ProcInfoHThreadOffset = 8
 
@@ -902,6 +902,9 @@ export let SpawnFailedPreparationOffset = 0x18
 // Windows lane creates and assigns the child to. Zero on every lane that has none, which is what
 // `emitSubpCloseTreeObject` and the `SubpSlotProcessTree` fill-in below both test.
 export let ProcInfoTreeObjectOffset = 0x20
+
+// 1 where the child was assigned to that job, 0 where the assignment failed.
+export let ProcInfoTreeAssignedOffset = 0x28
 
 // ⭐ **A LINUX CHILD THAT CANNOT LAUNCH REPORTS IN THE PARENT's OWN RECORD SHAPE.** The launch happens in a
 // cloned process, so what failed crosses back down the spawn's status pipe: the child writes these bytes of its
@@ -6227,13 +6230,13 @@ end 'emitIoParkBranchOnRenounced'
 // bind to one is untouched.
 function ioParkRefusesARenouncedCoroutine(operation GtIoOperation) returns bool
 	return match operation 'operation'
-		fileExists gives false
-		netConnect gives true
-		netListen gives true
-		netAccept gives true
-		netSend gives true
-		netRecv gives true
-		netClose gives false
+		fileExists or
+			netClose gives false
+		netConnect or
+			netListen or
+			netAccept or
+			netSend or
+			netRecv gives true
 	end 'operation'
 end 'ioParkRefusesARenouncedCoroutine'
 
@@ -7769,6 +7772,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	// The mask discards `dwThreadId`, which sits in the high half of the word the load reads.
 	let pid = emitLoadDword(module, block: spawnOk, record: procInfoPtr, offset: ProcInfoDwProcessIdOffset, ids: ids)
 	let treeObject = emitLoadField(module, block: spawnOk, record: procInfoPtr, offset: ProcInfoTreeObjectOffset, ids: ids)
+	let assigned = emitLoadField(module, block: spawnOk, record: procInfoPtr, offset: ProcInfoTreeAssignedOffset, ids: ids)
 	emitSubpFreeLaunchRecords(module, block: spawnOk, startupPtr: startupPtr, procInfoPtr: procInfoPtr, ids: ids)
 	emitSubpFreeSetupScratch(module, block: spawnOk, saPtr: saPtr, childScratch: childScratch, nulName: nulName, ids: ids)
 	let slot = emitSubpSlotAddr(module, block: spawnOk, ids: ids, table: table, slotIdx: slotIdx)
@@ -7776,9 +7780,13 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	emitStoreField(module, block: spawnOk, record: slot, offset: SubpSlotPid, value: pid)
 	emitStoreField(module, block: spawnOk, record: slot, offset: SubpSlotOwnedTreeObject, value: treeObject)
 	let zeroTree = emitConst(module, block: spawnOk, value: 0, ids: ids)
-	let noTreeObject = emitCmp(module, block: spawnOk, a: treeObject, b: zeroTree, pred: StdCmpPred.eq, ids: ids)
+
+	// A job the child was not assigned to cannot end it, so the tree a deadline kills falls back to
+	// the child itself; the job is still owned and closed at release.
+	let adoptingTree = emitBin(module, block: spawnOk, a: treeObject, b: assigned, opcode: StdBinOpcode.mul, ids: ids)
+	let noTreeObject = emitCmp(module, block: spawnOk, a: adoptingTree, b: zeroTree, pred: StdCmpPred.eq, ids: ids)
 	let childItself = emitBin(module, block: spawnOk, a: noTreeObject, b: hProcess, opcode: StdBinOpcode.mul, ids: ids)
-	let processTree = emitBin(module, block: spawnOk, a: treeObject, b: childItself, opcode: StdBinOpcode.add, ids: ids)
+	let processTree = emitBin(module, block: spawnOk, a: adoptingTree, b: childItself, opcode: StdBinOpcode.add, ids: ids)
 	emitStoreField(module, block: spawnOk, record: slot, offset: SubpSlotProcessTree, value: processTree)
 	let zeroB = emitConst(module, block: spawnOk, value: 0, ids: ids)
 
@@ -8732,10 +8740,9 @@ function buildSubpWait(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let handle = 0 as ValueId
 
-	// ⭐ **THE HANDLE GUARD, AT THE ENTRY POINT.** See `emitSubpRequireHandle` for why it is here rather than
-	// at a wrapper, and for the grep that keeps the roster of these openings complete.
-	// A handle naming no live child answers -1, which is `__gt_subp_wait_exit`'s failure answer for the
-	// identical reading — this entry is that one without a deadline.
+	// The handle guard is at the entry point; see `emitSubpRequireHandle` for why, and for the grep
+	// that keeps the roster of these openings complete. A handle naming no live child answers -1,
+	// which is `__gt_subp_wait_exit`'s failure answer for the identical reading.
 	let badRc = emitConst(module, block: badHandle, value: -1, ids: ids)
 	module.setTerminator(badHandle, op: StdOp.ret(badRc))
 
@@ -8744,7 +8751,7 @@ function buildSubpWait(module StdModule)
 	let hProcess = emitLoadField(module, block: live, record: slot, offset: SubpSlotHProcess, ids: ids)
 	let infinite = emitConst(module, block: live, value: SubpWaitInfinite, ids: ids)
 	let waitResult = ids.mint()
-	module.appendOp(live, op: StdOp.osWaitHandle(waitResult, handleId: hProcess, timeoutMsId: infinite))
+	module.appendOp(live, op: StdOp.osWaitChild(waitResult, handleId: hProcess, timeoutMsId: infinite))
 	let codePtr = emitLoadField(module, block: live, record: slot, offset: SubpSlotBytesOut, ids: ids)
 	module.appendOp(live, op: StdOp.osProcessExitCode(hProcess, codePtrId: codePtr))
 	let exitCode = emitLoadDword(module, block: live, record: codePtr, offset: 0, ids: ids)

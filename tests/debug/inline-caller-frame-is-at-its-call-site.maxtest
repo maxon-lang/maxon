@@ -1,0 +1,38 @@
+let CallSiteCaseLabel = "inline-caller-frame-is-at-its-call-site"
+
+let CallSiteCalleeName = "render"
+let CallSiteCallerName = "main"
+let CallSiteCallSpelling = "render("
+
+test 'the caller of a spliced body stands at its call, and every frame carries its column'
+	let staged = builtFixture(CallSiteCaseLabel, fixture: SplicedFixtureName)
+	let printedAt = anchorLine(staged, anchor: "render-print")
+	let calledAt = anchorLine(staged, anchor: "main-call")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(printedAt)}", RunCommand, BacktraceCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let stops = eventsOfKind(events, kind: StopEventName)
+	let backtraces = eventsOfKind(events, kind: BacktraceEventName)
+
+	try Expect.atLeast(stops.count() as AssertedInt, than: 1, message: "the breakpoint on the spliced line never stopped the program. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(backtraces.count() as AssertedInt, expected: 1, message: "`{BacktraceCommand}` at the stop printed no `{BacktraceEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let stop = eventAt(stops, index: 0)
+	let walked = eventAt(backtraces, index: 0)
+	let frames = childrenOf(walked, node: walked.root, key: FramesKey)
+
+	try Expect.atLeast(frames.count() as AssertedInt, than: 2, message: "a stop inside the spliced `{CallSiteCalleeName}` has its synthesized frame and `{CallSiteCallerName}`'s. {said}")
+
+	let callee = nodeAt(frames, index: 0)
+	let caller = nodeAt(frames, index: 1)
+	let stopColumn = numberOf(stop, node: stop.root, key: ColumnKey)
+
+	try Expect.equal(textOf(walked, node: callee, key: FunctionKey), expected: CallSiteCalleeName, message: "frame 0 is the spliced body the stop is in. {said}")
+	try Expect.equal(textOf(walked, node: caller, key: FunctionKey), expected: CallSiteCallerName, message: "frame 1 is the function the body was spliced into. {said}")
+	try Expect.equal(numberOf(walked, node: callee, key: LineKey) as AssertedInt, expected: printedAt as AssertedInt, message: "the innermost frame stands at the stopped line. {said}")
+	try Expect.equal(numberOf(walked, node: caller, key: LineKey) as AssertedInt, expected: calledAt as AssertedInt, message: "`{CallSiteCallerName}` is stopped AT ITS CALL of `{CallSiteCalleeName}` on line {calledAt}; the machine pc is inside the spliced body, so a caller frame that reports the pc's own line names a line of the callee that `{CallSiteCallerName}` never wrote. {said}")
+	try Expect.atLeast(stopColumn as AssertedInt, than: 1, message: "a stop names the column of the statement row it stopped on. {said}")
+	try Expect.equal(numberOf(walked, node: callee, key: ColumnKey) as AssertedInt, expected: stopColumn as AssertedInt, message: "the innermost frame stands where the stop does, column and all. {said}")
+	try Expect.equal(numberOf(walked, node: caller, key: ColumnKey) as AssertedInt, expected: sourceColumnOf(staged, line: calledAt, spelling: CallSiteCallSpelling) as AssertedInt, message: "`{CallSiteCallerName}`'s frame carries the column its call of `{CallSiteCalleeName}` begins at. {said}")
+end 'the caller of a spliced body stands at its call, and every frame carries its column'

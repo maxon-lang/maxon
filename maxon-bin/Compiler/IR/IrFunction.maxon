@@ -194,15 +194,16 @@ export type DebugLocalDecl
 	export var declaredType as MaxonType
 	export var valueIds as ValueIdArray
 
-	// ⭐ **THE NAME DENOTES A CELL ADDRESS, NOT THE VALUE** — a `var` another frame may write, or a
-	// by-reference parameter. Its values locate the CELL, so a register or a slot stated for one of them
-	// would be the address rendered as the contents; the format has no indirect kind, and the honest
-	// answer for such a binding is `optimizedOut`.
+	// The name denotes a cell address, not the value — a `var` another frame may write, or a
+	// by-reference parameter. Its values locate the cell, so a register or a slot stated for one of
+	// them would render the address as the contents; such a binding is written `optimizedOut`.
 	export var heldInACell as bool
 
 	export var foldedConstant as DebugFoldedConstant = DebugFoldedConstant.none
 
 	export var foldedRecord as ParsedIntArray = ParsedIntArray.create()
+
+	export var inlineSite as InlineSiteRef = InlineSiteRef.none
 
 	export static function create(name ByteArray, declaredType MaxonType, firstValue ValueId, heldInACell bool) returns DebugLocalDecl
 		var valueIds = ValueIdArray.create()
@@ -210,6 +211,20 @@ export type DebugLocalDecl
 
 		return Self{name: name, declaredType: declaredType.clone(), valueIds: valueIds, heldInACell: heldInACell}
 	end 'create'
+
+	export function splicedCopy(subst ValueIdArray, site InlineSiteRef) returns DebugLocalDecl
+		var splicedValues = ValueIdArray.create()
+
+		for value in self.valueIds 'eachValue'
+			if value >= subst.count() 'definedByNoOp'
+				continue
+			end 'definedByNoOp'
+
+			splicedValues.push(try subst.get(value) otherwise panic("DebugLocalDecl.splicedCopy: value {value} of '{String.from(self.name)}' is past the {subst.count()} the splice's value column covers"))
+		end 'eachValue'
+
+		return Self{name: self.name, declaredType: self.declaredType, valueIds: splicedValues, heldInACell: self.heldInACell, foldedConstant: self.foldedConstant, foldedRecord: self.foldedRecord, inlineSite: site}
+	end 'splicedCopy'
 
 	export function noteFoldedConstant(value ValueId, constant ParsedInt)
 		match self.foldedConstant 'already'
@@ -282,9 +297,10 @@ export type DebugValueRange
 	export var blockId as BlockId
 	export var first as DebugOpAnchor
 	export var last as DebugOpAnchor
+	export var fromBlockEntry as bool
 
-	export static function create(valueOrdinal ElementIndex, blockId BlockId, first DebugOpAnchor, last DebugOpAnchor) returns DebugValueRange
-		return Self{valueOrdinal: valueOrdinal, blockId: blockId, first: first, last: last}
+	export static function create(valueOrdinal ElementIndex, blockId BlockId, first DebugOpAnchor, last DebugOpAnchor, fromBlockEntry bool) returns DebugValueRange
+		return Self{valueOrdinal: valueOrdinal, blockId: blockId, first: first, last: last, fromBlockEntry: fromBlockEntry}
 	end 'create'
 end 'DebugValueRange'
 
@@ -1755,14 +1771,14 @@ export type IrFunction
 	// a frame printer can name the callee a return address or a faulting instruction sits in.
 	export var inlineSites as InlineSiteArray
 
-	// ⭐ **THE SOURCE BINDINGS OF THIS FUNCTION, PUBLISHED BY THE PARSER FOR THE DEBUG-INFO SIDECAR** (see
-	// `DebugLocalDecl`). Empty unless the build is writing one — no pass reads it and nothing branches on
-	// it, which is what keeps the emitted image byte-identical either way.
-	//
-	// ⚠ The ValueIds in it are the PARSER's, and they stay meaningful all the way to the register allocator
-	// because the same `IrFunction` object is carried through Maxon → Std → Target and ids pass through
-	// verbatim (`LowerMaxonToStd`'s header).
+	// The source bindings the debug-info sidecar describes (see `DebugLocalDecl`), empty unless the
+	// build writes one. ⚠ Their ValueIds are this function's own all the way to the register
+	// allocator: ids pass through Maxon → Std → Target verbatim, and a spliced callee's are renamed
+	// through the splice's value column (`DebugLocalDecl.splicedCopy`). A pass that renumbers values
+	// without them leaves a name on another value's location.
 	export var debugLocals as DebugLocalDeclArray
+
+	var ownsItsDebugLocals as bool = false
 
 	// ⭐ **WHERE EACH OF THOSE BINDINGS' VALUES ENDED UP** — flat, in `debugLocals` order and within each
 	// record in its `valueIds` order, spliced home from the backend pool (`spliceBackendUnit`). Kept
@@ -2118,17 +2134,36 @@ export type IrFunction
 		self.paramGuards.push(RangeCheckParamGuard.create(index, alias: alias, headBlockId: headBlockId, okBlockId: okBlockId, ownedBlockIds: ownedBlockIds))
 	end 'recordParamGuard'
 
-	// Record one splice into this function and answer the site its copied blocks carry. COPY-ON-WRITE off
-	// the shared empty, for `recordParamGuard`'s reason and on its emptiness key.
-	export function recordInlineSite(calleeName ByteArray, parent InlineSiteRef) returns InlineSiteRef
+	// Record one splice into this function and answer the site its copied blocks carry. Copy-on-write
+	// off the shared empty, for `recordParamGuard`'s reason and on its emptiness key.
+	export function recordInlineSite(site InlineSite) returns InlineSiteRef
 		if self.inlineSites.isEmpty() 'stillShared'
 			self.inlineSites = InlineSiteArray.create()
 		end 'stillShared'
 
 		let index = self.inlineSites.count() as InlineSiteIndex
-		self.inlineSites.push(InlineSite.create(calleeName, parent: parent))
+		self.inlineSites.push(site)
 		return InlineSiteRef.site(index)
 	end 'recordInlineSite'
+
+	// Copy-on-write: `debugLocals` may be the shared empty or the array of the function this one was
+	// copied from, and appending to either in place would hand this splice's bindings to other
+	// functions too.
+	export function recordSplicedLocal(local DebugLocalDecl)
+		if not self.ownsItsDebugLocals 'sharedWithItsSource'
+			var owned = DebugLocalDeclArray.create()
+			owned.reserve(self.debugLocals.count() + 1)
+
+			for held in self.debugLocals 'eachHeld'
+				owned.push(held)
+			end 'eachHeld'
+
+			self.debugLocals = owned
+			self.ownsItsDebugLocals = true
+		end 'sharedWithItsSource'
+
+		self.debugLocals.push(local)
+	end 'recordSplicedLocal'
 
 	export function recordImmutableBinding(value ValueId, bindingName ByteArray, borrows bool, info VarInfo, declToken TokenIndex, empty ProvenanceColumns)
 		var sites = self.provenanceSitesForWrite(empty)

@@ -1,0 +1,207 @@
+// Shared by the `debug_start` MCP tool and the DAP adapter's `launch`: two faces that built the
+// same source with different argv would debug two different programs.
+
+let DebugBuildDirectory = "debug-builds"
+let DebugBuildStemDigestBytes = 4 as DigestPrefixBytes
+let DebugBuildNameSeparator = "-"
+let DebugBuildNameFieldsPastTheStem = 3
+let DebugBuildMintedField = 2
+let DebugBuildOwnerField = 3
+
+export enum DebugProgramArgument
+	program
+	executable
+	source
+end 'DebugProgramArgument'
+
+export union DebugBuildOutcome
+	ready(image DebugImage)
+	failed(diagnostics String)
+end 'DebugBuildOutcome'
+
+export union DebugImage
+	given(program FilePath)
+	built(program FilePath)
+
+	export function program() returns FilePath
+		return match self 'which'
+			given(program) or
+				built gives program
+		end 'which'
+	end 'program'
+
+	export function discardBuild()
+		match self 'which'
+			given then break 'which'
+			built(program) then discardBuiltImage(program)
+		end 'which'
+	end 'discardBuild'
+end 'DebugImage'
+
+union DebugBuildOutput
+	at(path FilePath)
+	unavailable(reason String)
+end 'DebugBuildOutput'
+
+var debugBuildsMinted = 0 as DebugBuildSerial
+
+typealias DebugBuildSerial = int(0 to u64.max)
+
+export function debugProgramFor(spelled String, compiler FilePath, traced bool, argument DebugProgramArgument, timeoutMs DurationMs) returns DebugBuildOutcome
+	let named = try FilePath.from(spelled) otherwise return DebugBuildOutcome.failed("`{spelled}` is not a spellable path")
+
+	if isTestSourceName(spelled) 'aTestFile'
+		return DebugBuildOutcome.failed("`{argument.name}` names {spelled}, which is a `{TestSourceExtension}` test file; a debug build of a test file is `maxon {TestCommandName} {TestListFlag} {TestBuildFlag}`, and the program it builds is given as `{DebugProgramArgument.executable.name}`")
+	end 'aTestFile'
+
+	let program = named.resolve(Directory.currentPath())
+	let isSource = spelled.endsWith(MaxonSourceExtension) or Directory.isDirectory(program)
+
+	if isSource and argument == DebugProgramArgument.executable 'aSourceGivenAsAnImage'
+		return DebugBuildOutcome.failed("`{argument.name}` names {spelled}, which is Maxon source; give it as `{DebugProgramArgument.source.name}`, which builds it")
+	end 'aSourceGivenAsAnImage'
+
+	if not isSource and argument == DebugProgramArgument.source 'anImageGivenAsSource'
+		return DebugBuildOutcome.failed("`{argument.name}` names {spelled}, which is neither a `{MaxonSourceExtension}` file nor a project directory; give a built program as `{DebugProgramArgument.executable.name}`")
+	end 'anImageGivenAsSource'
+
+	if not isSource 'aBuiltImage'
+		if not File.exists(program) 'notThere'
+			return DebugBuildOutcome.failed("there is no program at {spelled}")
+		end 'notThere'
+
+		return DebugBuildOutcome.ready(DebugImage.given(program))
+	end 'aBuiltImage'
+
+	if not File.exists(program) and not Directory.isDirectory(program) 'noSource'
+		return DebugBuildOutcome.failed("there is nothing to build at {spelled}")
+	end 'noSource'
+
+	return match debugBuildOutputFor(program) 'staged'
+		unavailable(reason) gives DebugBuildOutcome.failed(reason)
+		at(output) gives buildForDebugging(program, compiler: compiler, output: output, traced: traced, timeoutMs: timeoutMs)
+	end 'staged'
+end 'debugProgramFor'
+
+// The fields past the stem are read back by `debugBuildOwnerOf`: the owner's process id is how
+// `sweepStaleDebugBuilds` and `maxon cache clear` tell a live session's build from a leftover.
+function debugBuildOutputFor(source FilePath) returns DebugBuildOutput
+	let root = try hostCacheRoot() otherwise (e) 'noCache'
+		return DebugBuildOutput.unavailable("this host has no Maxon cache directory to build into: {e.name}")
+	end 'noCache'
+
+	let directory = root.join(DebugBuildDirectory)
+
+	if not Directory.create(directory) and not Directory.isDirectory(directory) 'unusable'
+		return DebugBuildOutput.unavailable("could not create {directory.path}, where a debug session stages the program it builds")
+	end 'unusable'
+
+	debugBuildsMinted = debugBuildsMinted + 1
+
+	return DebugBuildOutput.at(directory.join("{debugBuildStem(source)}{DebugBuildNameSeparator}{__Builtins.currentProcessId()}{DebugBuildNameSeparator}{WallClock.nowUnixSeconds()}{DebugBuildNameSeparator}{debugBuildsMinted}{hostExecutableExtension()}"))
+end 'debugBuildOutputFor'
+
+export function sweepStaleDebugBuilds()
+	let root = try hostCacheRoot() otherwise return
+	sweepLeftoversOfEndedOwners(root.join(DebugBuildDirectory), livenessOf: debugBuildLivenessOf, keyOf: debugImageOf, discardKeyed: discardBuiltImage)
+end 'sweepStaleDebugBuilds'
+
+function debugImageOf(entry FilePath) returns FilePath
+	return pathWithoutSuffix(entry, suffix: MxdbgSidecarExtension) if entry.filename().endsWith(MxdbgSidecarExtension) else entry
+end 'debugImageOf'
+
+export function isHeldByALiveDebugSession(path FilePath) returns bool
+	let directory = try path.parent() otherwise return false
+
+	return directory.filename() == DebugBuildDirectory and debugBuildLivenessOf(path.filename()) == OwnerLiveness.ownerAlive
+end 'isHeldByALiveDebugSession'
+
+function debugBuildLivenessOf(name String) returns OwnerLiveness
+	return livenessOfOwner(debugBuildOwnerOf(name))
+end 'debugBuildLivenessOf'
+
+function debugBuildOwnerOf(name String) returns LeftoverOwner
+	let fields = name.split(DebugBuildNameSeparator)
+
+	if fields.count() <= DebugBuildNameFieldsPastTheStem 'noStem'
+		return LeftoverOwner.notOwned
+	end 'noStem'
+
+	let serialAndExtension = try fields.get(fields.count() - 1) otherwise panic("debugBuildOwnerOf: a name split into {fields.count()} fields has a last one")
+	let minted = try fields.get(fields.count() - DebugBuildMintedField) otherwise panic("debugBuildOwnerOf: a name split into {fields.count()} fields has one {DebugBuildMintedField} from the end")
+	let owner = try fields.get(fields.count() - DebugBuildOwnerField) otherwise panic("debugBuildOwnerOf: a name split into {fields.count()} fields has one {DebugBuildOwnerField} from the end")
+	let trailing = serialAndExtension.trimStart(asciiDecimalDigits())
+	let image = hostExecutableExtension()
+
+	if trailing.byteLength() == serialAndExtension.byteLength() or not (trailing == image or trailing == "{image}{MxdbgSidecarExtension}") 'notOurExtension'
+		return LeftoverOwner.notOwned
+	end 'notOurExtension'
+
+	if not isDecimal(minted) 'notOurFields'
+		return LeftoverOwner.notOwned
+	end 'notOurFields'
+
+	return ownerProcessNamed(owner)
+end 'debugBuildOwnerOf'
+
+function sidecarOf(image FilePath) returns FilePath
+	return try FilePath.from(sidecarPathOf(image)) otherwise panic("sidecarOf: {image.path} with a suffix appended is a spellable path")
+end 'sidecarOf'
+
+function buildForDebugging(source FilePath, compiler FilePath, output FilePath, traced bool, timeoutMs DurationMs) returns DebugBuildOutcome
+	var argv = StringArray.create()
+	argv.push(BuildSubcommandName)
+	argv.push(source.path)
+	argv.push("{OutputFlagPrefix}{output.path}")
+
+	if traced 'aTracedSession'
+		argv.push(DebugStreamFlag)
+	end 'aTracedSession'
+
+	let workingDirectory = try source.parent() otherwise Directory.currentPath()
+
+	let res = try Subprocess.run(Executable.path(compiler), arguments: argv, workingDirectory: workingDirectory, timeoutMs: timeoutMs) otherwise (e) 'unfinished'
+		discardBuiltImage(output)
+
+		return DebugBuildOutcome.failed(unfinishedChildReason(e, doing: "run {compiler.path} to build {source.path}"))
+	end 'unfinished'
+
+	if not res.succeeded() 'refused'
+		discardBuiltImage(output)
+
+		return DebugBuildOutcome.failed(combineStreams(res.stdout, stderr: res.stderr))
+	end 'refused'
+
+	if not File.exists(output) 'nothingWritten'
+		discardBuiltImage(output)
+
+		return DebugBuildOutcome.failed("{compiler.path} reported success but wrote no executable at {output.path}")
+	end 'nothingWritten'
+
+	return DebugBuildOutcome.ready(DebugImage.built(output))
+end 'buildForDebugging'
+
+export function unfinishedChildReason(failure SubprocessError, doing String) returns String
+	return match failure 'why'
+		timeout(elapsedMs, stdout, stderr) gives "stopped waiting to {doing} after {elapsedMs} ms and ended its process tree; it had written:\n{combineStreams(stdout, stderr: stderr)}"
+		executableNotFound or
+			spawnFailed or
+			ioFailed or
+			inputTooLarge gives "could not {doing}: {failure.displayReason()}"
+	end 'why'
+end 'unfinishedChildReason'
+
+function discardBuiltImage(program FilePath)
+	removeOwnedFile(program)
+
+	if not File.exists(program) 'theImageIsGone'
+		removeOwnedFile(sidecarOf(program))
+	end 'theImageIsGone'
+end 'discardBuiltImage'
+
+function debugBuildStem(source FilePath) returns String
+	let named = source.filename().replace(".", with: "-")
+	let mark = hexOfLeadingBytes(sha256(source.path.toByteArray()), count: DebugBuildStemDigestBytes)
+
+	return "debuggee-{mark}" if named.isEmpty() else "{named}-{mark}"
+end 'debugBuildStem'

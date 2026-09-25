@@ -1,0 +1,13 @@
+let OkStatus = 200 as HttpStatusNumber
+let PastStdinEofMs = 500
+
+test 'without --exit-on-stdin-eof the http server serves on after its stdin closes'
+	var server = StreamingHttpMcpServer.start(StringArray.create(), endsWithItsStdin: false)
+	server.closeItsStdin()
+	sleep(PastStdinEofMs)
+
+	let (initialized, _) = server.initializeSession()
+	server.terminate()
+
+	try Expect.equal(initialized.statusCode as AssertedInt, expected: OkStatus as AssertedInt, message: "a server started with `{McpHttpOption}` alone is a service: its stdin closing, as it does under `</dev/null`, must not end it")
+end 'without --exit-on-stdin-eof the http server serves on after its stdin closes'

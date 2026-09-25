@@ -1,0 +1,51 @@
+let InlinedCallLineCaseLabel = "break-on-a-line-that-is-only-an-inlined-call-stops"
+
+let CallerFunctionName = "main"
+let LeafFunctionName = "double"
+
+test 'a line whose whole statement is an inlined call arms, stops at the call line, next runs over the body and step enters it'
+	let staged = builtFixture(InlinedCallLineCaseLabel, fixture: LeafPairFixtureName)
+	let callLine = anchorLine(staged, anchor: "first-call")
+	let followingLine = anchorLine(staged, anchor: "second-call")
+	let bodyLine = anchorLine(staged, anchor: "double-body")
+	let executable = builtExecutable(staged)
+
+	let overSession = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine(["{BreakCommand} {lineTarget(callLine)}", RunCommand, NextCommand]), extraOptions: StringArray.create())
+	let overEvents = batchEvents(overSession.stdout)
+	let overSaid = renderedEvents(overSession.stdout, stderr: overSession.stderr)
+	let answers = eventsOfKind(overEvents, kind: BreakpointEventName)
+
+	try Expect.equal(answers.count() as AssertedInt, expected: 1, message: "`{BreakCommand} {lineTarget(callLine)}` answers one `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(overEvents))}. {overSaid}")
+
+	let armed = eventAt(answers, index: 0)
+	try Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: SetAction, message: "control passes through the call line — its code is the inlined body — so the line arms at the body's first instruction rather than answering that it has no code. {overSaid}")
+
+	let overStops = eventsOfKind(overEvents, kind: StopEventName)
+	try Expect.equal(overStops.count() as AssertedInt, expected: 2, message: "the breakpoint on the call line and the `{NextCommand}` from it are two stops. It printed: {renderedRows(eventKinds(overEvents))}. {overSaid}")
+
+	let atTheCall = eventAt(overStops, index: 0)
+	try Expect.equal(textOf(atTheCall, node: atTheCall.root, key: ReasonKey), expected: BreakpointStopReason, message: "the first stop is the breakpoint's. {overSaid}")
+	try Expect.equal(numberOf(atTheCall, node: atTheCall.root, key: LineKey) as AssertedInt, expected: callLine as AssertedInt, message: "a breakpoint armed for the call line stops AT the call line, in the caller's frame, before the inlined body is entered. {overSaid}")
+	try Expect.equal(textOf(atTheCall, node: atTheCall.root, key: FunctionKey), expected: CallerFunctionName, message: "the stop names the caller whose line it is. {overSaid}")
+
+	let topFrames = childrenOf(atTheCall, node: atTheCall.root, key: BacktraceKey)
+	let topFrame = try topFrames.get(0) otherwise panic("break-on-a-line-that-is-only-an-inlined-call-stops: the stop at the call line carries no backtrace")
+	try Expect.equal(textOf(atTheCall, node: topFrame, key: FunctionKey), expected: CallerFunctionName, message: "frame 0 of the stop is the frame the stop reports, so the not-yet-entered inlined body is not above it. {overSaid}")
+
+	let over = eventAt(overStops, index: 1)
+	try Expect.equal(textOf(over, node: over.root, key: ReasonKey), expected: StepStopReason, message: "the second stop is the walk's. {overSaid}")
+	try Expect.equal(textOf(over, node: over.root, key: FunctionKey), expected: CallerFunctionName, message: "`{NextCommand}` runs over the inlined body and stays in the caller. {overSaid}")
+	try Expect.equal(numberOf(over, node: over.root, key: LineKey) as AssertedInt, expected: followingLine as AssertedInt, message: "`{NextCommand}` from the call line lands on the caller's next line. {overSaid}")
+
+	let intoSession = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine(["{BreakCommand} {lineTarget(callLine)}", RunCommand, StepCommand]), extraOptions: StringArray.create())
+	let intoEvents = batchEvents(intoSession.stdout)
+	let intoSaid = renderedEvents(intoSession.stdout, stderr: intoSession.stderr)
+	let intoStops = eventsOfKind(intoEvents, kind: StopEventName)
+
+	try Expect.equal(intoStops.count() as AssertedInt, expected: 2, message: "the breakpoint on the call line and the `{StepCommand}` from it are two stops. It printed: {renderedRows(eventKinds(intoEvents))}. {intoSaid}")
+
+	let entered = eventAt(intoStops, index: 1)
+	try Expect.equal(textOf(entered, node: entered.root, key: FunctionKey), expected: LeafFunctionName, message: "`{StepCommand}` from the call line enters the inlined body. {intoSaid}")
+	try Expect.equal(numberOf(entered, node: entered.root, key: LineKey) as AssertedInt, expected: bodyLine as AssertedInt, message: "`{StepCommand}` lands on the inlined body's line. {intoSaid}")
+	try Expect.equal(textOf(entered, node: entered.root, key: OffsetKey), expected: textOf(atTheCall, node: atTheCall.root, key: OffsetKey), message: "the body starts exactly where the call line stopped, so entering it executes nothing. {intoSaid}")
+end 'a line whose whole statement is an inlined call arms, stops at the call line, next runs over the body and step enters it'

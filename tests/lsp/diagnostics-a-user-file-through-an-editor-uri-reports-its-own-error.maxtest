@@ -1,0 +1,18 @@
+let EditorUriUserDirName = "maxon-tests-lsp-diagnostics-editor-uri-user-file"
+let EditorUriUserDeclaringFileName = "corners.maxon"
+let EditorUriUserBufferFileName = "main.maxon"
+let EditorUriUserDeclaringSource = "export function squareCorners() returns ExitCode\n\treturn 4\nend 'squareCorners'\n"
+let EditorUriUserBufferSource = "function wrong() returns bool\n\treturn \"not a bool\"\nend 'wrong'\n\nfunction main() returns ExitCode\n\tif wrong() 'w'\n\t\treturn 1\n\tend 'w'\n\n\treturn squareCorners()\nend 'main'\n"
+let EditorUriUserErrorCode = "E3005"
+
+test 'a user file opened through an editor uri publishes its own error and nothing its sibling explains'
+	let root = stagedProjectDiagnosticsRoot(EditorUriUserDirName)
+	writeCorpusFile(root, fileName: EditorUriUserDeclaringFileName, content: EditorUriUserDeclaringSource)
+	writeCorpusFile(root, fileName: EditorUriUserBufferFileName, content: EditorUriUserBufferSource)
+
+	let probe = probeProjectDiagnosticsThroughEditorUris(root, fileName: EditorUriUserBufferFileName, content: EditorUriUserBufferSource)
+
+	let reported = try onlyProjectDiagnostic(probe, note: "the buffer is opened through `{editorUriOf(root.join(EditorUriUserBufferFileName))}`, the spelling VS Code uses. It calls a function only the sibling file declares, and its `wrong` returns a String where it promised a bool — a `maxon build` of this project reports that E3005 and nothing else.")
+
+	try Expect.equal(reported.code, expected: EditorUriUserErrorCode, message: "the one error a build of this project reports is {EditorUriUserErrorCode}; the server published {reported.code}: {reported.message}")
+end 'a user file opened through an editor uri publishes its own error and nothing its sibling explains'

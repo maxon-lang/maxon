@@ -1,0 +1,104 @@
+// Test: process-liveness.an-unsigned-id-past-every-host-range-is-not-alive
+typealias WidePid = int(0 to u64.max)
+
+function main() returns ExitCode
+	if __Builtins.processIsAlive(u64.max as WidePid) 'claimed'
+		return 1
+	end 'claimed'
+
+	let pids = [u64.max as WidePid, 9223372036854775807 as WidePid]
+
+	for pid in pids 'each'
+		if __Builtins.processIsAlive(pid) 'alive'
+			return 2
+		end 'alive'
+	end 'each'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __sched_tls_teb_offset@0 = i64 0
+  __sched_allm@8 = i64 0
+  __sched_lock@16 = i64 0
+  __sched_preempt_ext_lock@24 = i64 0
+  __sched_preempt_context@32 = i64 0
+  __slab_arena_list@40 = i64 0
+  __slab_arena_map_l1@48 = i64 0
+  __slab_state@56 = i64 0
+  __ds_base@64 = i64 0
+  __dbg_ctl@72 = i64 0
+  __mrt_console_probe_stdin@80 = i8 0
+  __mrt_console_probe_stdout@81 = i8 0
+  __mrt_console_probe_stderr@82 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm rcx, 18446744073709551615
+    x64.callDirect __proc_alive
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont
+  claimed:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rcx, 48
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __barr_blob_0]
+    x64.storeBaseDispReg.word64 [rbx + 0], rax
+    x64.movRegImm32 rax, 2
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551614
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 8
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegImm32 r12, 0
+    x64.jmp forhdr
+  each:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseIndexScale.word64 rcx, [rax + r12*8 + 0]
+  __im_cont:
+    x64.callDirect __proc_alive
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, forstep
+  alive:
+    x64.movRegImm32 r12, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  forstep:
+    x64.leaRegRegImm32 r12, r12, 1
+  forhdr:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg r12, rax
+    x64.jcc less, each
+  forexit:
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

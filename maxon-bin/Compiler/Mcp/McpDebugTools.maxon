@@ -1,0 +1,312 @@
+let DebugToolPrefix = "debug_"
+
+module let DebugStartToolName = "debug_start"
+module let DebugBreakToolName = "debug_break"
+module let DebugClearToolName = "debug_clear"
+module let DebugContinueToolName = "debug_continue"
+module let DebugStepToolName = "debug_step"
+module let DebugPauseToolName = "debug_pause"
+module let DebugBacktraceToolName = "debug_backtrace"
+module let DebugLocalsToolName = "debug_locals"
+module let DebugEvalToolName = "debug_eval"
+module let DebugThreadsToolName = "debug_threads"
+module let DebugGreenThreadToolName = "debug_gt"
+module let DebugTraceToolName = "debug_trace"
+module let DebugStopToolName = "debug_stop"
+
+let StateKey = "state"
+let EventsKey = "events"
+let OutputKey = "output"
+
+module let TraceCountArgument = "count"
+
+let NoSessionMessage = "no debug session; call debug_start"
+
+let SelectAction = "select"
+let ClearSelectionAction = "clear"
+let ParkAction = "park"
+let ResumeAction = "resume"
+let ThreadBacktraceAction = "backtrace"
+
+module let WordListSeparator = ", "
+
+union DebugToolCommand
+	command(command DebugCommand)
+	refused(reason String)
+end 'DebugToolCommand'
+
+union DebugStartRead
+	read(program String, argument DebugProgramArgument, targetEnv EnvMap, stopTimeoutMs StopTimeoutMs)
+	refused(message String)
+end 'DebugStartRead'
+
+export function isDebugToolName(name String) returns bool
+	return name.startsWith(DebugToolPrefix)
+end 'isDebugToolName'
+
+function debugGreenThreadActions() returns StringArray
+	return [SelectAction, ClearSelectionAction, ParkAction, ResumeAction, ThreadBacktraceAction]
+end 'debugGreenThreadActions'
+
+export function executeDebugTool(reqDoc JsonDoc, idNode JsonNodeId, name String, args OptionalNode, exePath FilePath, debug DebugSessionSlot) returns String
+	if name.equals(DebugStartToolName) 'start'
+		return startDebugSession(reqDoc, idNode: idNode, args: args, exePath: exePath, debug: debug)
+	end 'start'
+
+	return match debug.hold 'live'
+		empty gives toolErrorText(reqDoc, idNode: idNode, message: NoSessionMessage, repoRoot: "")
+		held(session) gives runDebugTool(reqDoc, idNode: idNode, name: name, args: args, session: session, debug: debug)
+	end 'live'
+end 'executeDebugTool'
+
+function startDebugSession(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath, debug DebugSessionSlot) returns String
+	match debugStartReadOf(reqDoc, args: args) 'asked'
+		refused(message) then return toolErrorText(reqDoc, idNode: idNode, message: message, repoRoot: "")
+		read(program, argument, targetEnv, stopTimeoutMs) then return builtAndLaunched(reqDoc, idNode: idNode, args: args, program: program, argument: argument, targetEnv: targetEnv, stopTimeoutMs: stopTimeoutMs, exePath: exePath, debug: debug)
+	end 'asked'
+end 'startDebugSession'
+
+function debugStartReadOf(reqDoc JsonDoc, args OptionalNode) returns DebugStartRead
+	let executableArg = getOptionalStringArg(reqDoc, args: args, key: DebugProgramArgument.executable.name, defaultVal: "")
+	let sourceArg = getOptionalStringArg(reqDoc, args: args, key: DebugProgramArgument.source.name, defaultVal: "")
+
+	if executableArg.isEmpty() == sourceArg.isEmpty() 'neitherOrBoth'
+		return DebugStartRead.refused("`{DebugStartToolName}` takes either `{DebugProgramArgument.executable.name}` or `{DebugProgramArgument.source.name}`, and exactly one of them.")
+	end 'neitherOrBoth'
+
+	var targetEnv = EnvMap.create()
+
+	for entry in getOptionalStringListArg(reqDoc, args: args, key: "env") 'eachVariable'
+		match parseTargetEnv(entry) 'read'
+			malformed then return DebugStartRead.refused("`env` entries are NAME=VALUE, and `{entry}` is not.")
+			pair(name, value) then targetEnv.upsert(name, value: value)
+		end 'read'
+	end 'eachVariable'
+
+	let program = executableArg if sourceArg.isEmpty() else sourceArg
+	let argument = DebugProgramArgument.executable if sourceArg.isEmpty() else DebugProgramArgument.source
+
+	if argument == DebugProgramArgument.executable 'nothingToBuild'
+		match numberAskOf(reqDoc, args: args, key: ChildTimeoutOption) 'buildBound'
+			absent then break 'buildBound'
+			given then return DebugStartRead.refused("`{DebugStartToolName}`'s `{ChildTimeoutOption}` bounds the build of a `{DebugProgramArgument.source.name}`, and an `{DebugProgramArgument.executable.name}` is not built.")
+		end 'buildBound'
+	end 'nothingToBuild'
+
+	return match debugLaunchOptionsFrom(numberAskOf(reqDoc, args: args, key: DebugMaxProcsOption), stopTimeoutSeconds: numberAskOf(reqDoc, args: args, key: DebugStopTimeoutOption), targetEnv: targetEnv) 'options'
+		refused(message) gives DebugStartRead.refused("{DebugStartToolName}: {message}")
+		read(timeoutMs) gives DebugStartRead.read(program, argument: argument, targetEnv: targetEnv, stopTimeoutMs: timeoutMs)
+	end 'options'
+end 'debugStartReadOf'
+
+function builtAndLaunched(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, program String, argument DebugProgramArgument, targetEnv EnvMap, stopTimeoutMs StopTimeoutMs, exePath FilePath, debug DebugSessionSlot) returns String
+	let traced = getOptionalBoolArg(reqDoc, args: args, key: "trace", defaultVal: false)
+
+	return match debugProgramFor(program, compiler: exePath, traced: traced, argument: argument, timeoutMs: childTimeoutMsOf(reqDoc, args: args, unasked: CompilerChildTimeoutMs)) 'resolved'
+		failed(diagnostics) gives toolErrorText(reqDoc, idNode: idNode, message: "{DebugStartToolName}: {diagnostics}", repoRoot: "")
+		ready(image) gives launchedInPlaceOfTheLive(reqDoc, idNode: idNode, args: args, image: image, targetEnv: targetEnv, stopTimeoutMs: stopTimeoutMs, traced: traced, debug: debug)
+	end 'resolved'
+end 'builtAndLaunched'
+
+function launchedInPlaceOfTheLive(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, image DebugImage, targetEnv EnvMap, stopTimeoutMs StopTimeoutMs, traced bool, debug DebugSessionSlot) returns String
+	return match DebugToolSession.launch(image, arguments: getOptionalStringListArg(reqDoc, args: args, key: "args"), targetEnv: targetEnv, stopTimeoutMs: stopTimeoutMs, traced: traced) 'started'
+		refused(reason) gives toolErrorText(reqDoc, idNode: idNode, message: "{DebugStartToolName}: {reason}", repoRoot: "")
+		ready(session) gives placedSessionReply(reqDoc, idNode: idNode, session: session, debug: debug)
+	end 'started'
+end 'launchedInPlaceOfTheLive'
+
+function placedSessionReply(reqDoc JsonDoc, idNode JsonNodeId, session DebugToolSession, debug DebugSessionSlot) returns String
+	let replaced = debug.reap()
+	debug.place(session)
+
+	return debugToolReply(reqDoc, idNode: idNode, state: session.currentState(), replies: DebugReplyArray.create(), output: replaced.followedBy(session.engine.takeOutput()))
+end 'placedSessionReply'
+
+function runDebugTool(reqDoc JsonDoc, idNode JsonNodeId, name String, args OptionalNode, session DebugToolSession, debug DebugSessionSlot) returns String
+	if name.equals(DebugStopToolName) 'stop'
+		return stopDebugSession(reqDoc, idNode: idNode, debug: debug)
+	end 'stop'
+
+	return match debugCommandFor(name, reqDoc: reqDoc, args: args) 'command'
+		refused(reason) gives toolErrorText(reqDoc, idNode: idNode, message: reason, repoRoot: "")
+		command(command) gives ranDebugCommand(reqDoc, idNode: idNode, replies: session.conversation.perform(command), session: session)
+	end 'command'
+end 'runDebugTool'
+
+function ranDebugCommand(reqDoc JsonDoc, idNode JsonNodeId, replies DebugReplyArray, session DebugToolSession) returns String
+	return debugToolReply(reqDoc, idNode: idNode, state: session.currentState(), replies: replies, output: session.engine.takeOutput())
+end 'ranDebugCommand'
+
+function stopDebugSession(reqDoc JsonDoc, idNode JsonNodeId, debug DebugSessionSlot) returns String
+	let output = debug.reap()
+
+	return debugToolReply(reqDoc, idNode: idNode, state: DebugToolState.ended, replies: DebugReplyArray.create(), output: output)
+end 'stopDebugSession'
+
+function debugCommandFor(name String, reqDoc JsonDoc, args OptionalNode) returns DebugToolCommand
+	if name.equals(DebugBreakToolName) 'arm'
+		return breakpointToolCommand(reqDoc, args: args, missing: "`{DebugBreakToolName}` needs a `target`: {DebugBreakTargetSpellings}.", condition: getOptionalStringArg(reqDoc, args: args, key: "condition", defaultVal: ""), arming: true)
+	end 'arm'
+
+	if name.equals(DebugClearToolName) 'disarm'
+		return breakpointToolCommand(reqDoc, args: args, missing: "`{DebugClearToolName}` needs the `target` the breakpoint was armed on.", condition: "", arming: false)
+	end 'disarm'
+
+	if name.equals(DebugStepToolName) 'step'
+		return stepToolCommand(getOptionalStringArg(reqDoc, args: args, key: "kind", defaultVal: StepCommandWord))
+	end 'step'
+
+	if name.equals(DebugEvalToolName) 'read'
+		let expression = getOptionalStringArg(reqDoc, args: args, key: "expression", defaultVal: "")
+
+		if expression.isEmpty() 'nothingToRead'
+			return DebugToolCommand.refused("`{DebugEvalToolName}` needs an `expression`: a local, or a dotted path through one.")
+		end 'nothingToRead'
+
+		return DebugToolCommand.command(DebugCommand.print(expression))
+	end 'read'
+
+	if name.equals(DebugGreenThreadToolName) 'greenThread'
+		return greenThreadCommand(reqDoc, args: args)
+	end 'greenThread'
+
+	if name.equals(DebugTraceToolName) 'ring'
+		let limit = match optionalWholeArg(reqDoc, args: args, key: TraceCountArgument) 'count'
+			absent gives DebugDefaultTraceEvents
+			given(count) gives count as DebugTraceTally
+		end 'count'
+
+		return DebugToolCommand.command(DebugCommand.trace(limit))
+	end 'ring'
+
+	return DebugToolCommand.command(argumentFreeCommandFor(name))
+end 'debugCommandFor'
+
+function argumentFreeCommandFor(name String) returns DebugCommand
+	if name.equals(DebugContinueToolName) 'letGo'
+		return DebugCommand.resume
+	end 'letGo'
+
+	if name.equals(DebugPauseToolName) 'interrupt'
+		return DebugCommand.pause
+	end 'interrupt'
+
+	if name.equals(DebugBacktraceToolName) 'walk'
+		return DebugCommand.backtrace
+	end 'walk'
+
+	if name.equals(DebugLocalsToolName) 'locals'
+		return DebugCommand.locals
+	end 'locals'
+
+	if name.equals(DebugThreadsToolName) 'roster'
+		return DebugCommand.threads
+	end 'roster'
+
+	panic("debugCommandFor: the roster advertises `{name}` and no arm spells its command")
+end 'argumentFreeCommandFor'
+
+function breakpointToolCommand(reqDoc JsonDoc, args OptionalNode, missing String, condition String, arming bool) returns DebugToolCommand
+	let spelling = getOptionalStringArg(reqDoc, args: args, key: "target", defaultVal: "")
+
+	if spelling.isEmpty() 'noTarget'
+		return DebugToolCommand.refused(missing)
+	end 'noTarget'
+
+	match debugBreakTargetOf(spelling) 'parsed'
+		notATarget(named) then return DebugToolCommand.refused("`target` is {DebugBreakTargetSpellings}, and `{named}` is none of them.")
+		target(target) then return DebugToolCommand.command(DebugCommand.arm(target, condition: condition, owner: DebugBreakOwner.client) if arming else DebugCommand.disarm(target, owner: DebugBreakOwner.client))
+	end 'parsed'
+end 'breakpointToolCommand'
+
+function stepToolCommand(kind String) returns DebugToolCommand
+	match debugWalkModeNamed(kind) 'step'
+		none then return DebugToolCommand.refused("`{DebugStepToolName}`'s `kind` is one of {joinedWith(backQuoted(debugWalkModeWords()), separator: WordListSeparator)}, and `{kind}` is not.")
+		mode(mode) then return DebugToolCommand.command(DebugCommand.walk(mode))
+	end 'step'
+end 'stepToolCommand'
+
+function greenThreadCommand(reqDoc JsonDoc, args OptionalNode) returns DebugToolCommand
+	let action = getOptionalStringArg(reqDoc, args: args, key: "action", defaultVal: "")
+
+	if not debugGreenThreadActions().contains(action) 'notAnAction'
+		return DebugToolCommand.refused("`{DebugGreenThreadToolName}`'s `action` is one of {joinedWith(backQuoted(debugGreenThreadActions()), separator: WordListSeparator)}, and `{action}` is not.")
+	end 'notAnAction'
+
+	if action.equals(ClearSelectionAction) 'clearsTheSelection'
+		return DebugToolCommand.command(DebugCommand.greenClear)
+	end 'clearsTheSelection'
+
+	let thread = getOptionalStringArg(reqDoc, args: args, key: "thread", defaultVal: "")
+
+	if thread.isEmpty() 'noThread'
+		return DebugToolCommand.refused("`{DebugGreenThreadToolName}` with `action` `{action}` needs a `thread`: the id `{DebugThreadsToolName}` reported, or a selector.")
+	end 'noThread'
+
+	return DebugToolCommand.command(greenThreadCommandFor(action, thread: debugThreadSelectorOf(thread)))
+end 'greenThreadCommand'
+
+function greenThreadCommandFor(action String, thread DebugThreadSelector) returns DebugCommand
+	if action.equals(SelectAction) 'selects'
+		return DebugCommand.greenSelect(thread)
+	end 'selects'
+
+	if action.equals(ParkAction) 'holds'
+		return DebugCommand.greenPark(thread)
+	end 'holds'
+
+	if action.equals(ResumeAction) 'releases'
+		return DebugCommand.greenResume(thread)
+	end 'releases'
+
+	if action.equals(ThreadBacktraceAction) 'walks'
+		return DebugCommand.greenBacktrace(thread)
+	end 'walks'
+
+	panic("greenThreadCommandFor: `{action}` passed the action check and names no green-thread command")
+end 'greenThreadCommandFor'
+
+// Events are embedded as JSON, not as strings: `debugEventLineFor` renders the
+// `maxon debug --batch` schema, and a quoted line would make every client parse each event again.
+function debugToolReply(reqDoc JsonDoc, idNode JsonNodeId, state DebugToolState, replies DebugReplyArray, output CollectedLines) returns String
+	var doc = JsonDoc.create()
+	var payload = JsonObjectBuilder.create()
+	payload.addString(doc, key: StateKey, value: state.name)
+	payload.addNode(EventsKey, node: eventArray(doc, replies: replies))
+	payload.addNode(OutputKey, node: outputArray(doc, output: output))
+
+	return toolResultText(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: false)
+end 'debugToolReply'
+
+function eventArray(doc JsonDoc, replies DebugReplyArray) returns JsonNodeId
+	var ids = JsonNodeIdArray.create()
+
+	for reply in replies 'eachReply'
+		match debugEventLineFor(reply) 'rendered'
+			none then break 'rendered'
+			line(text) then ids.push(parsedEventNode(doc, text: text))
+		end 'rendered'
+	end 'eachReply'
+
+	return doc.add(JsonNode.arrayNode(ids))
+end 'eventArray'
+
+function parsedEventNode(doc JsonDoc, text String) returns JsonNodeId
+	let parsed = try Json.parse(text) otherwise panic("parsedEventNode: `debugEventLineFor` renders JSON, and this is not: {text}")
+
+	return copyJsonNode(parsed, srcId: parsed.root, dst: doc)
+end 'parsedEventNode'
+
+function outputArray(doc JsonDoc, output CollectedLines) returns JsonNodeId
+	var ids = JsonNodeIdArray.create()
+
+	if output.dropped > 0 'someWereDropped'
+		ids.push(doc.add(JsonNode.stringNode(droppedOutputNotice(output.dropped))))
+	end 'someWereDropped'
+
+	for line in output.lines 'eachLine'
+		ids.push(doc.add(JsonNode.stringNode(line.text)))
+	end 'eachLine'
+
+	return doc.add(JsonNode.arrayNode(ids))
+end 'outputArray'

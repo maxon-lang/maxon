@@ -29,23 +29,18 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 
 	var writer = MxdbgWriter.create()
 
-	// ⭐ **A COVERAGE POINT'S FILE IS REGISTERED BEFORE THE TABLE IS WALKED.** A point OUTLIVES its function
-	// — a report must still say "these lines have no code" about a function nothing called — so a file whose
-	// every function was pruned still owes its name to the file table the walk below writes. Empty, and so
-	// invisible, on every build that was not asked to instrument.
+	// Registered before the file walk below: a coverage point outlives its function, so a file whose
+	// every function was pruned still owes the file table its name.
 	for point in project.covPoints.points 'eachCoveragePointsFile'
 		_ = project.debugSpanTable.fileId(point.filePath)
 	end 'eachCoveragePointsFile'
 
-	// ⭐ **THE POSITIONLESS FILE IS NOT A SOURCE FILE AND IS NOT WRITTEN.** Emitting it would put a nameless
-	// row at the head of a table the reference driver fills with real paths only, and a sidecar either
-	// driver prints has to say the same thing about the same program.
 	for fileId in MxdbgFirstSourceFileId upto project.debugSpanTable.fileCount() 'eachFile'
-		writer.addFile(project.debugSpanTable.filePath(fileId as DebugFileId))
+		writer.addFile(authoredSourcePath(project, compiled: project.debugSpanTable.filePath(fileId as DebugFileId)))
 	end 'eachFile'
 
-	// ⭐ **THE TYPE TABLE IS BUILT BEFORE ANY RECORD POINTS INTO IT.** A local names its type by ID, so
-	// every id has to be fixed before the first local record is written.
+	// The type table is closed before any record points into it: a local names its type by id, so
+	// every id is fixed before the first local record is written.
 	let functionsByName = mxdbgFunctionIndex(codeResult.targetModule)
 	var types = MxdbgTypeTable.create()
 	types.closeDeclaredTypes(project, signatures: signatures)
@@ -59,37 +54,36 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 
 	types.writeInto(writer)
 
-	for fn in codeResult.debugFunctions 'eachFunction'
-		writer.addFunction(String.from(fn.name), codeStart: fn.codeStart as MxdbgCodeOffset, codeEnd: fn.codeEnd as MxdbgCodeOffset, frameSize: fn.frameSize as MxdbgIndex, paramCount: fn.paramCount as MxdbgIndex)
+	let provenance = SidecarProvenance.of(signatures)
 
-		match mxdbgFunctionOf(codeResult.targetModule, functionsByName: functionsByName, name: fn.name) 'itsIr'
+	for fn in codeResult.debugFunctions 'eachFunction'
+		let lookup = mxdbgFunctionOf(codeResult.targetModule, functionsByName: functionsByName, name: fn.name)
+		writer.addFunction(String.from(fn.name), displayName: provenance.displayNameOf(fn.name), origin: provenance.originOfChunk(project, lookup: lookup, name: fn.name), codeStart: fn.codeStart as MxdbgCodeOffset, codeEnd: fn.codeEnd as MxdbgCodeOffset, frameSize: fn.frameSize as MxdbgIndex, paramCount: fn.paramCount as MxdbgIndex)
+
+		match lookup 'itsIr'
 			none then break 'itsIr'
 			found(func) then writeFunctionLocals(project, signatures: signatures, writer: writer, types: types, func: func, range: fn)
 		end 'itsIr'
 	end 'eachFunction'
 
-	// ⭐⭐ **ONE READING OF `covPointOffsets` ANSWERS BOTH COVERAGE QUESTIONS** — which points got code, and
-	// which line rows a counter sits on. The two are the same fact seen from the point's side and the row's
-	// side, and deriving them separately is how they would come to disagree.
 	let emittedPoints = emittedCoveragePointOffsets(codeResult)
 	let countedRows = coverageCountedRows(codeResult, emitted: emittedPoints)
 
-	// ⚠ The position is COUNTED rather than read off a `withIterator()` cursor: this loop runs once per
-	// statement in the whole program, and that iterator allocates a `(Source, Element)` pair per step — a
-	// heap record per row of the line table, for an index an integer already carries.
+	// Counted rather than read off `withIterator()`, which allocates a pair per step on a loop that
+	// runs once per statement in the program.
 	var rowIndex = 0 as ElementIndex
 
 	for row in codeResult.debugLineRows 'eachRow'
-		writer.addLine(row.codeOffset as MxdbgCodeOffset, fileId: sidecarFileIdOf(project.debugSpanTable.fileIdOf(row.spanId)), line: project.debugSpanTable.lineOf(row.spanId) as MxdbgIndex, column: project.debugSpanTable.columnOf(row.spanId) as MxdbgIndex, flags: lineRowFlags(countedRows, at: rowIndex))
+		writer.addLine(row.codeOffset as MxdbgCodeOffset, fileId: sidecarFileIdOf(project.debugSpanTable.fileIdOf(row.spanId)), line: project.debugSpanTable.lineOf(row.spanId) as MxdbgIndex, column: project.debugSpanTable.columnOf(row.spanId) as MxdbgIndex, flags: lineRowFlags(countedRows, at: rowIndex, entersTheLine: row.entersTheLine))
 		rowIndex = rowIndex + 1
 	end 'eachRow'
 
 	writeCoveragePoints(project, writer: writer, emitted: emittedPoints)
-	writeInlineFrames(writer, codeResult: codeResult)
+	writeInlineFrames(project, writer: writer, codeResult: codeResult, provenance: provenance)
 
 	// The sidecar's build-id, and the `.mxcov`'s: one fold, so a driver joining the two cannot be handed
 	// two numbers for one build.
-	let image = writer.build(codeBuildId(codeResult.code), targetTriple: targetToString(project.target))
+	let image = writer.build(codeBuildId(codeResult.code), targetTriple: targetToString(project.target), sourceRoot: Directory.currentPath().toString())
 
 	let sidecarPath = try FilePath.from(sidecarPathOf(outputPath)) otherwise 'badPath'
 		logError(LogCategory.compiler, message: function() gives "Could not spell the debug-info sidecar path for {outputPath}")
@@ -106,14 +100,17 @@ end 'writeDebugInfoSidecar'
 
 // The rows concat wrote into `__inlframes`, spelled the sidecar's way, so the profiler names the spliced
 // body a sample landed in exactly as the panic runtime names the one a frame sits in.
-function writeInlineFrames(writer MxdbgWriter, codeResult CodeResult)
+function writeInlineFrames(project Project, writer MxdbgWriter, codeResult CodeResult, provenance SidecarProvenance)
 	for site in codeResult.inlineSites 'eachSite'
-		let parent = match site.parent 'p'
-			none gives MxdbgNoParentSite
-			site(index) gives index as MxdbgIndex
-		end 'p'
+		let parent = sidecarSiteOf(site.parent, siteBase: 0)
+		let origin = provenance.originOf(project, name: site.calleeName, sourceFile: site.calleeSourceFile)
 
-		writer.addInlineSite(String.from(site.calleeName), parent: parent)
+		if site.callSpan == NoSpanId 'aPositionlessCall'
+			writer.addInlineSite(String.from(site.calleeName), parent: parent, callFileId: MxdbgNoSourceFile, callLine: 0, callColumn: 0, origin: origin)
+			continue
+		end 'aPositionlessCall'
+
+		writer.addInlineSite(String.from(site.calleeName), parent: parent, callFileId: sidecarFileIdOf(project.debugSpanTable.fileIdOf(site.callSpan)), callLine: project.debugSpanTable.lineOf(site.callSpan) as MxdbgIndex, callColumn: project.debugSpanTable.columnOf(site.callSpan) as MxdbgIndex, origin: origin)
 	end 'eachSite'
 
 	for range in codeResult.inlineRanges 'eachRange'
@@ -195,11 +192,18 @@ function markRowAtOrPast(rows DebugLineRowArray, counted BoolArray, codeOffset M
 	end 'itsStatementEmittedARow'
 end 'markRowAtOrPast'
 
-// Every row this compiler writes is a statement boundary — see `DebugLineRowBuilder`, where that
-// granularity is decided — and a row a counter runs into carries the coverage bit as well.
-function lineRowFlags(counted BoolArray, at ElementIndex) returns MxdbgIndex
-	return (MxdbgLineFlagStatement or MxdbgLineFlagCoverage) if (try counted.get(at) otherwise panic("debug info: counted.get OOB at {at} of a column sized to the line table")) else MxdbgLineFlagStatement
+function lineRowFlags(counted BoolArray, at ElementIndex, entersTheLine bool) returns MxdbgIndex
+	let coverage = MxdbgLineFlagCoverage if (try counted.get(at) otherwise panic("debug info: counted.get OOB at {at} of a column sized to the line table")) else 0
+	let lineEntry = MxdbgLineFlagLineEntry if entersTheLine else 0
+
+	return MxdbgLineFlagStatement or coverage or lineEntry
 end 'lineRowFlags'
+
+function authoredSourcePath(project Project, compiled String) returns String
+	let read = try FilePath.from(compiled) otherwise panic("debug info: the span table holds the file '{compiled}', which is not a spellable path — every entry is a path the loader read")
+
+	return project.stagedSourceOrigins.authoredPathOf(read).toString()
+end 'authoredSourcePath'
 
 // ⭐⭐ **ONE RECORD PER MINTED POINT, IN COUNTER ORDER, WHETHER OR NOT ITS CODE SURVIVED.** The record's
 // POSITION is the counter index the emitted increment steps, so the walk is over the MINT table and never
@@ -258,10 +262,9 @@ function closeLocalTypes(project Project, signatures ProgramSignatures, types Mx
 	end 'eachBinding'
 end 'closeLocalTypes'
 
-// ⭐⭐ **ONE RECORD PER DECLARED BINDING, INCLUDING THE ONES THE COMPILER CANNOT PLACE.** A binding with
-// no honest location gets an `optimizedOut` record rather than no record at all, so a debugger says
-// "optimized out" where the alternative is "no local named that here" — a name the user can see in their
-// own source and cannot ask about.
+// A binding with no honest location still gets an `optimizedOut` record, so a debugger says
+// "optimized out" rather than "no local named that here" about a name the user can see in their own
+// source.
 function writeFunctionLocals(project Project, signatures ProgramSignatures, writer MxdbgWriter, types MxdbgTypeTable, func IrFunction, range DebugFunctionRange)
 	if func.debugLocals.count() == 0 'noBindings'
 		return
@@ -288,7 +291,7 @@ function writeFunctionLocals(project Project, signatures ProgramSignatures, writ
 		end 'nothingPlaced'
 
 		rows.sort(function(left MxdbgLocalRow, right MxdbgLocalRow) gives left.codeStart.compare(right.codeStart))
-		records.push(MxdbgLocalDraft.create(local.name, typeId: typeId, indirect: types.holdsAPointer(typeName), rows: rows))
+		records.push(MxdbgLocalDraft.create(local.name, typeId: typeId, indirect: types.holdsAPointer(typeName), rows: rows, site: sidecarSiteOf(local.inlineSite, siteBase: range.inlineSiteBase)))
 		at = past
 	end 'eachBinding'
 
@@ -296,13 +299,12 @@ function writeFunctionLocals(project Project, signatures ProgramSignatures, writ
 		panic("debug info: '{String.from(func.name)}' names {at} value(s) across its bindings and the allocator answered for {func.debugLocalLocations.count()} — the roster and the location column describe different value spaces")
 	end 'locationsOutOfStep'
 
-	// Ordinal, by name — the reference's order, and the one a reader scans. Sorted STABLY, so two
-	// bindings a nested scope gave the same name keep their declaration order.
+	// Sorted stably, so two bindings a nested scope gave the same name keep their declaration order.
 	records.sort(function(left MxdbgLocalDraft, right MxdbgLocalDraft) gives compareBytesOrdinally(left.name, right: right.name))
 
 	for record in records 'eachRecord'
 		for row in record.rows 'eachRow'
-			writer.addLocal(String.from(record.name), locKind: row.locKind, locValue: row.locValue, typeId: record.typeId, scopeStart: row.codeStart as MxdbgCodeOffset, scopeEnd: row.codeEnd as MxdbgCodeOffset, flags: MxdbgLocalFlagIndirect if record.indirect and mxdbgRowHasALocation(row.locKind) else 0)
+			writer.addLocal(String.from(record.name), locKind: row.locKind, locValue: row.locValue, typeId: record.typeId, scopeStart: row.codeStart as MxdbgCodeOffset, scopeEnd: row.codeEnd as MxdbgCodeOffset, flags: MxdbgLocalFlagIndirect if record.indirect and mxdbgRowHasALocation(row.locKind) else 0, site: record.site)
 		end 'eachRow'
 	end 'eachRecord'
 end 'writeFunctionLocals'
@@ -345,7 +347,7 @@ function unplacedRow(local DebugLocalDecl, writer MxdbgWriter, types MxdbgTypeTa
 		placed(placement) then return MxdbgLocalRow.create(placement, codeStart: range.codeStart, codeEnd: range.codeEnd)
 	end 'aggregate'
 
-	if local.valueIds.count() == 1 'oneValueForTheWholeName'
+	if local.valueIds.count() <= 1 'oneValueForTheWholeName'
 		match local.foldedConstant 'folded'
 			none then break 'folded'
 			immediate(value) then return foldedRow(value, range: range)
@@ -403,56 +405,34 @@ end 'foldedRow'
 let MxdbgSmallestConstant = i32.min as ParsedInt
 let MxdbgLargestConstant = i32.max as ParsedInt
 
-typealias MxdbgRunSlotColumn = Array with ElementIndex
-
 type DebugRunsByOrdinal
-	var starts as MxdbgRunSlotColumn
-	var ordered as DebugLocalCodeRangeArray
+	var byOrdinal as CsrGraph
+	var ranges as DebugLocalCodeRangeArray
 
 	static function over(localRanges DebugLocalCodeRangeArray, ordinalCount ElementIndex) returns DebugRunsByOrdinal
-		var starts = MxdbgRunSlotColumn.create()
-		starts.refill(ordinalCount + 1, value: 0 as ElementIndex)
+		var ordinals = CsrColumn.create()
+		var runs = CsrColumn.create()
+		ordinals.reserve(localRanges.count())
+		runs.reserve(localRanges.count())
 
-		for span in localRanges 'eachRange'
-			let slot = runOrdinalOf(span, ordinalCount: ordinalCount) + 1
-			try starts.set(slot, value: runSlotAt(starts, at: slot) + 1) otherwise panic("debug info: the run tally of ordinal {slot - 1} is outside a column sized to {ordinalCount}")
+		for (iter, span) in localRanges.withIterator() 'eachRange'
+			ordinals.push(runOrdinalOf(span, ordinalCount: ordinalCount) as CsrIndex)
+			runs.push(iter.index() as CsrIndex)
 		end 'eachRange'
 
-		for slot in 1 upto ordinalCount + 1 'eachOrdinal'
-			try starts.set(slot, value: runSlotAt(starts, at: slot) + runSlotAt(starts, at: slot - 1)) otherwise panic("debug info: the run tally of ordinal {slot - 1} is outside a column sized to {ordinalCount}")
-		end 'eachOrdinal'
-
-		var filled = MxdbgRunSlotColumn.create()
-		filled.refill(ordinalCount, value: 0 as ElementIndex)
-		var ordered = DebugLocalCodeRangeArray.create()
-		ordered.refill(localRanges.count(), value: DebugLocalCodeRange.create(0 as ElementIndex, codeStart: 0 as CodeOffset, codeEnd: 0 as CodeOffset))
-
-		for span in localRanges 'eachRangePlaced'
-			let ordinal = runOrdinalOf(span, ordinalCount: ordinalCount)
-			let slot = runSlotAt(starts, at: ordinal) + runSlotAt(filled, at: ordinal)
-			try ordered.set(slot, value: span) otherwise panic("debug info: run slot {slot} is outside the {localRanges.count()} runs this function's code ranges hold")
-			try filled.set(ordinal, value: runSlotAt(filled, at: ordinal) + 1) otherwise panic("debug info: the fill cursor of ordinal {ordinal} is outside a column sized to {ordinalCount}")
-		end 'eachRangePlaced'
-
-		return Self{starts: starts, ordered: ordered}
+		return Self{byOrdinal: buildCsr(ordinals, to: runs, nodeCount: ordinalCount as CsrIndex), ranges: localRanges}
 	end 'over'
 
-	export function first(ordinal ElementIndex) returns ElementIndex
-		return runSlotAt(self.starts, at: ordinal)
-	end 'first'
+	export function count(ordinal ElementIndex) returns ElementIndex
+		return self.byOrdinal.degree(ordinal as CsrIndex) as ElementIndex
+	end 'count'
 
-	export function past(ordinal ElementIndex) returns ElementIndex
-		return runSlotAt(self.starts, at: ordinal + 1)
-	end 'past'
+	export function at(ordinal ElementIndex, k ElementIndex) returns DebugLocalCodeRange
+		let run = self.byOrdinal.neighbour(ordinal as CsrIndex, k: k as CsrIndex) as ElementIndex
 
-	export function at(slot ElementIndex) returns DebugLocalCodeRange
-		return try self.ordered.get(slot) otherwise panic("debug info: run slot {slot} is outside the {self.ordered.count()} this function's code ranges hold")
+		return try self.ranges.get(run) otherwise panic("debug info: run {run} is outside the {self.ranges.count()} this function's code ranges hold")
 	end 'at'
 end 'DebugRunsByOrdinal'
-
-function runSlotAt(column MxdbgRunSlotColumn, at ElementIndex) returns ElementIndex
-	return try column.get(at) otherwise panic("debug info: a run column was read at {at}, past the {column.count()} it was sized to")
-end 'runSlotAt'
 
 function runOrdinalOf(span DebugLocalCodeRange, ordinalCount ElementIndex) returns ElementIndex
 	if span.valueOrdinal >= ordinalCount 'pastTheRoster'
@@ -462,16 +442,17 @@ function runOrdinalOf(span DebugLocalCodeRange, ordinalCount ElementIndex) retur
 	return span.valueOrdinal
 end 'runOrdinalOf'
 
-// One run per block arrives here, and they are joined only now, over code offsets. `BranchCleanup`
-// reorders blocks, so two runs that abut in the emitted code need not abut in the block order the
-// allocator walked, and merging before layout would leave a hole a reader reports as "not live here".
+// Runs are joined here over code offsets, not in the block order the allocator walked:
+// `BranchCleanup` reorders blocks, so two runs that abut in the emitted code need not abut in that
+// order, and merging by it would leave a hole a reader reports as "not live here".
 function mergedLiveRanges(range DebugFunctionRange, runs DebugRunsByOrdinal, ordinal ElementIndex) returns DebugLocalCodeRangeArray
 	var mine = DebugLocalCodeRangeArray.create()
 
-	for slot in runs.first(ordinal) upto runs.past(ordinal) 'eachRange'
-		let span = runs.at(slot)
-		let codeStart = span.codeStart if span.codeStart > range.codeStart else range.codeStart
-		let codeEnd = span.codeEnd if span.codeEnd < range.codeEnd else range.codeEnd
+	for k in 0 upto runs.count(ordinal) 'eachRange'
+		let span = runs.at(ordinal, k: k)
+		let codeStart = range.codeStart + span.codeStart
+		let spanEnd = range.codeStart + span.codeEnd
+		let codeEnd = spanEnd if spanEnd < range.codeEnd else range.codeEnd
 
 		if codeEnd <= codeStart 'outsideTheFunction'
 			continue
@@ -531,11 +512,22 @@ type MxdbgLocalDraft
 	export var typeId as MxdbgIndex
 	export var indirect as bool
 	export var rows as MxdbgLocalRowArray
+	export var site as MxdbgIndex
 
-	static function create(name ByteArray, typeId MxdbgIndex, indirect bool, rows MxdbgLocalRowArray) returns MxdbgLocalDraft
-		return Self{name: name, typeId: typeId, indirect: indirect, rows: rows}
+	static function create(name ByteArray, typeId MxdbgIndex, indirect bool, rows MxdbgLocalRowArray, site MxdbgIndex) returns MxdbgLocalDraft
+		return Self{name: name, typeId: typeId, indirect: indirect, rows: rows, site: site}
 	end 'create'
 end 'MxdbgLocalDraft'
+
+// A local's site is relative to its own chunk, so it passes that chunk's `inlineSiteBase`; a site's
+// parent in `CodeResult.inlineSites` is already rebased by `InlineFrameTables.appendChunk` and
+// passes 0.
+function sidecarSiteOf(site InlineSiteRef, siteBase InlineSiteIndex) returns MxdbgIndex
+	return match site 's'
+		none gives MxdbgNoInlineSite
+		site(index) gives (siteBase + index) as MxdbgIndex
+	end 's'
+end 'sidecarSiteOf'
 
 typealias MxdbgLocalDraftArray = Array with MxdbgLocalDraft
 
@@ -632,6 +624,57 @@ union MxdbgIrLookup
 	none
 	found(func IrFunction)
 end 'MxdbgIrLookup'
+
+// ============================================================================================
+// WHERE A FUNCTION CAME FROM
+// ============================================================================================
+
+typealias SidecarTestNameMap = Map with (ByteArray, String)
+
+type SidecarProvenance
+	let tests as SidecarTestNameMap
+
+	static function of(signatures ProgramSignatures) returns SidecarProvenance
+		var tests = SidecarTestNameMap.create()
+
+		for declared in signatures.declaredTests 'eachTest'
+			tests.upsert(declared.symbol, value: testDisplayName(declared.displayName))
+		end 'eachTest'
+
+		return Self{tests: tests}
+	end 'of'
+
+	function originOf(project Project, name ByteArray, sourceFile FilePath) returns MxdbgOrigin
+		if sourceFile.isEmpty() 'noSourceAtAll'
+			return MxdbgOrigin.synthesized
+		end 'noSourceAtAll'
+
+		if isLibrarySourceFile(project, path: sourceFile) 'theLibrarys'
+			return MxdbgOrigin.library
+		end 'theLibrarys'
+
+		if isCompilerWrittenDeclaration(project, path: sourceFile, name: name) 'writtenByTheCompile'
+			return MxdbgOrigin.generated
+		end 'writtenByTheCompile'
+
+		if self.tests.contains(name) 'aTest'
+			return MxdbgOrigin.test
+		end 'aTest'
+
+		return MxdbgOrigin.authored
+	end 'originOf'
+
+	function displayNameOf(name ByteArray) returns String
+		return try self.tests.get(name) otherwise String.from(name)
+	end 'displayNameOf'
+
+	function originOfChunk(project Project, lookup MxdbgIrLookup, name ByteArray) returns MxdbgOrigin
+		return match lookup 'itsIr'
+			none gives MxdbgOrigin.synthesized
+			found(func) gives self.originOf(project, name: name, sourceFile: func.sourceFilePath)
+		end 'itsIr'
+	end 'originOfChunk'
+end 'SidecarProvenance'
 
 // A `DebugSpanTable` file id as the sidecar's file table numbers it: one behind, because that table
 // holds the program's real files only and the span table reserves entry 0 for the positionless file.

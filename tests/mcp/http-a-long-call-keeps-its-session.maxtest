@@ -1,0 +1,19 @@
+let OkStatus = 200 as HttpStatusNumber
+let IdleTimeoutSeconds = 1
+let LongCallStagingDir = "temp/mcp-http-long-call"
+
+let LongCallSleepMs = 2500
+
+test 'a call that outlasts the idle timeout keeps its session'
+	let program = stagedProgram(LongCallStagingDir, fileName: "main.maxon", source: sleepingProgramSource(LongCallSleepMs))
+
+	var server = StreamingHttpMcpServer.start(["{McpIdleTimeoutOptionPrefix}{IdleTimeoutSeconds}"])
+	let (initialized, sessionId) = server.initializeSession()
+	let ran = httpToolCall(server, sessionId: sessionId, id: 2, name: ExecuteTool, argumentsJson: pathArgument(program))
+	let after = server.post(toolsListRequest(3), sessionId: sessionId)
+	try server.stop()
+
+	try Expect.equal(initialized.statusCode as AssertedInt, expected: OkStatus as AssertedInt)
+	try Expect.isFalse(toolCallIsError(ran), message: "the control: `{ExecuteTool}` must run the sleeping program, or the call was not long: {toolCallText(ran)}")
+	try Expect.equal(after.statusCode as AssertedInt, expected: OkStatus as AssertedInt, message: "a session is idle from the END of its last exchange, so a call that ran longer than `{McpIdleTimeoutOptionPrefix}{IdleTimeoutSeconds}` must not leave it swept by the very next request; it answered {after.statusCode} with {after.body}")
+end 'a call that outlasts the idle timeout keeps its session'

@@ -1,0 +1,22 @@
+let NextOverLongCallCaseLabel = "next-over-a-long-call-is-fast"
+
+let MainFunctionName = "main"
+
+test 'a next over a call that runs fifty million iterations reaches the next line within the stop timeout'
+	let staged = builtFixture(NextOverLongCallCaseLabel, fixture: LongCallFixtureName)
+	let callLine = anchorLine(staged, anchor: "main-long-call")
+	let afterLine = anchorLine(staged, anchor: "main-after")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(callLine)}", RunCommand, NextCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let stops = eventsOfKind(events, kind: StopEventName)
+
+	try Expect.equal(eventsOfKind(events, kind: TimeoutEventName).count() as AssertedInt, expected: 0, message: "a `{NextCommand}` over a call runs the call at full speed and stops at its return; one that single-steps every instruction of fifty million iterations cannot reach the next line inside the stop timeout. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(stops.count() as AssertedInt, expected: 2, message: "the breakpoint on the call line and the `{NextCommand}` are two stops. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let landed = eventAt(stops, index: 1)
+	try Expect.equal(textOf(landed, node: landed.root, key: FunctionKey), expected: MainFunctionName, message: "`{NextCommand}` stays in the frame it was issued from. {said}")
+	try Expect.equal(numberOf(landed, node: landed.root, key: LineKey) as AssertedInt, expected: afterLine as AssertedInt, message: "`{NextCommand}` from the call line lands on the next line of the same function. {said}")
+	try Expect.equal(textOf(landed, node: landed.root, key: ReasonKey), expected: StepStopReason, message: "the return point the walk ran to is its own, so the stop it reports is a `{StepStopReason}`, never a breakpoint. {said}")
+end 'a next over a call that runs fifty million iterations reaches the next line within the stop timeout'

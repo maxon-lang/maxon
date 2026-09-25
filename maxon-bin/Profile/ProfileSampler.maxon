@@ -79,8 +79,6 @@
 	// fills in.
 	let ProfileContextRbpOffset = 0xA0
 
-	// A DWORD's worth of a word read out of a foreign record, and one UTF-16 code unit of a module name.
-	let ProfileDwordMask = 0xFFFFFFFF
 	let ProfileUtf16UnitMask = 0xFFFF
 	let ProfileUtf16UnitBits = 16
 	let ProfileUtf16UnitsPerWord = 4
@@ -194,11 +192,10 @@
 		refused(reason String)
 	end 'ProfilePlacementRead'
 
-	// ⭐⭐ **THE IMAGE'S OWN HEADER IS READ, NEVER THE LIVE PROCESS — because the compiler PINS ITS IMAGE BASE.** Its
-	// PE writer clears DYNAMIC_BASE, so a binary this compiler emitted is mapped exactly where its header
-	// says and `.text`'s address is arithmetic rather than a query. A binary built by something that DOES set
-	// that flag is caught by `relocatable` and answered from the module map instead; a wrong base does not
-	// fail, it symbolizes every sample to a confidently incorrect function.
+	// The image's own header is read, never the live process, because this compiler's PE writer clears
+	// DYNAMIC_BASE: its binaries map where their header says, so `.text`'s address is arithmetic. A
+	// binary that sets the flag is caught by `relocatable` and answered from the module map instead; a
+	// wrong base would not fail, it would symbolize every sample to a wrong function.
 	module function readProfilePlacement(binary FilePath) returns ProfilePlacementRead
 		let image = try File.readBinary(binary) otherwise return ProfilePlacementRead.refused("cannot read {reportPathDisplay(binary)}")
 
@@ -208,7 +205,7 @@
 
 		let peOffset = imageReadU32(image, at: ProfilePeSignatureOffsetField) as ByteOffset
 
-		if not imageRangeFits(image, start: peOffset, count: ProfileCoffHeaderBytes as BytePos) or imageReadU32(image, at: peOffset) != ProfilePeMagic 'notPe'
+		if not spanFitsWithin(peOffset, count: ProfileCoffHeaderBytes as BytePos, total: image.count()) or imageReadU32(image, at: peOffset) != ProfilePeMagic 'notPe'
 			return profileNotAPeImage(binary)
 		end 'notPe'
 
@@ -224,7 +221,7 @@
 		for index in 0 upto sectionCount 'eachSection'
 			let header = firstSection + (index * ProfileSectionHeaderBytes) as ByteOffset
 
-			if not imageRangeFits(image, start: header, count: ProfileSectionHeaderBytes as BytePos) or imageNameAt(image, at: header, maxBytes: ProfileSectionNameBytes) != ProfileTextSectionName 'notTheCode'
+			if not spanFitsWithin(header, count: ProfileSectionHeaderBytes as BytePos, total: image.count()) or imageNameAt(image, at: header, maxBytes: ProfileSectionNameBytes) != ProfileTextSectionName 'notTheCode'
 				continue
 			end 'notTheCode'
 
@@ -233,7 +230,7 @@
 			let rawPointer = imageReadU32(image, at: header + ProfileSectionRawPointerOffset) as ByteOffset
 			let stored = virtualSize as BytePos if (virtualSize as BytePos) < rawSize else rawSize
 
-			if not imageRangeFits(image, start: rawPointer, count: stored) 'runsPastTheEnd'
+			if not spanFitsWithin(rawPointer, count: stored, total: image.count()) 'runsPastTheEnd'
 				return ProfilePlacementRead.refused("{reportPathDisplay(binary)} claims a {ProfileTextSectionName} section that runs past the end of the file")
 			end 'runsPastTheEnd'
 
@@ -293,7 +290,7 @@
 		while more != 0 'eachModule'
 			let base = __Builtins.profileReadWord(entryPtr, ProfileModuleEntryBaseOffset)
 			starts.push(base)
-			ends.push(base + (__Builtins.profileReadWord(entryPtr, ProfileModuleEntryExtentOffset) and ProfileDwordMask))
+			ends.push(base + (__Builtins.profileReadWord(entryPtr, ProfileModuleEntryExtentOffset) and DwordMask))
 			names.push(profileModuleName(entryPtr))
 			more = __Builtins.profileModuleNext(snapshot, entryPtr)
 		end 'eachModule'

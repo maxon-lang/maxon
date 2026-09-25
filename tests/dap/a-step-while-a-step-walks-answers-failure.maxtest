@@ -1,0 +1,52 @@
+let WalkingCaseLabel = "a-step-while-a-step-walks-answers-failure"
+let LongCallFixtureName = "longcall"
+let LongCallAnchor = "main-long-call"
+
+type WalkingSession implements DapSession
+	let executable as FilePath
+	let source as FilePath
+	let anchored as SourceLine
+	export var firstAnswered as bool
+	export var secondAnswered as bool
+	export var refusal as String
+	export var landedReason as String
+
+	static function create(executable FilePath, source FilePath, anchored SourceLine) returns WalkingSession
+		return Self{executable: executable, source: source, anchored: anchored, firstAnswered: false, secondAnswered: true, refusal: "", landedReason: ""}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+		_ = try client.request(LaunchCommand, argumentsJson: dapLaunchArguments(self.executable))
+		_ = try client.awaitEvent(InitializedEvent)
+		_ = try client.request(SetBreakpointsCommand, argumentsJson: dapSetBreakpointsArguments(self.source, line: self.anchored))
+		_ = try client.request(ConfigurationDoneCommand)
+
+		let threadId = dapBodyNumber(try client.awaitEvent(StoppedEvent), key: "threadId")
+		_ = try client.request(SetBreakpointsCommand, argumentsJson: dapClearBreakpointsArguments(self.source))
+
+		self.firstAnswered = dapSuccess(try client.request(NextCommand, argumentsJson: dapThreadArguments(threadId)))
+
+		let second = try client.request(NextCommand, argumentsJson: dapThreadArguments(threadId))
+		self.secondAnswered = dapSuccess(second)
+
+		if not self.secondAnswered 'refused'
+			self.refusal = dapRefusal(second)
+		end 'refused'
+
+		self.landedReason = dapBodyString(try client.awaitEvent(StoppedEvent), key: "reason")
+
+		_ = try client.request(DisconnectCommand)
+	end 'drive'
+end 'WalkingSession'
+
+test 'a next sent while a next still walks answers failure, and the first next still lands'
+	let staged = dapStagedFixture(WalkingCaseLabel, fixture: LongCallFixtureName)
+	var session = WalkingSession.create(dapBuildFixture(staged), source: dapStagedSource(staged), anchored: dapAnchorLine(staged, anchor: LongCallAnchor))
+	try dapRunSession(session, completing: "refuse the second next and land the first")
+
+	try Expect.isTrue(session.firstAnswered, message: "the first `{NextCommand}` starts a walk over a long call and must answer success at once")
+	try Expect.isFalse(session.secondAnswered, message: "a `{NextCommand}` while the first one's walk is still running must answer `success: false`: it cannot be started, and a success leaves the client waiting on a stop of its own")
+	try Expect.isFalse(session.refusal.isEmpty(), message: "the refused `{NextCommand}` must say why in its `message`")
+	try Expect.equal(session.landedReason, expected: StepReason, message: "the refusal must not disturb the walk already under way, which lands as a `{StepReason}` stop; it said `{session.landedReason}`")
+end 'a next sent while a next still walks answers failure, and the first next still lands'

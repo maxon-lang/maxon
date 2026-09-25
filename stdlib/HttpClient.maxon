@@ -18,6 +18,7 @@ public enum HttpMethod
 	delete
 	head
 	patch
+	options
 end 'HttpMethod'
 
 /// Case-insensitive HTTP header map.
@@ -66,13 +67,17 @@ public type HttpRequest
 			throw HttpError.invalidUrl
 		end 'badUrl'
 
+		return HttpRequest.parsed(method, url: parsed, headers: HttpHeaders.create())
+	end 'create'
+
+	module static function parsed(method HttpMethod, url URL, headers HttpHeaders) returns HttpRequest
 		return HttpRequest{
 			httpMethod: method,
-			requestUrl: parsed,
-			requestHeaders: HttpHeaders.create(),
+			requestUrl: url,
+			requestHeaders: headers,
 			requestBody: ""
 		}
-	end 'create'
+	end 'parsed'
 
 	/// Set a request header.
 	public function setHeader(name String, value String)
@@ -105,6 +110,7 @@ end 'HttpRequest'
 public enum StatusCode
 	ok = 200
 	created = 201
+	accepted = 202
 	noContent = 204
 	movedPermanently = 301
 	found = 302
@@ -114,13 +120,49 @@ public enum StatusCode
 	forbidden = 403
 	notFound = 404
 	methodNotAllowed = 405
+	requestTimeout = 408
 	conflict = 409
 	gone = 410
+	lengthRequired = 411
+	payloadTooLarge = 413
+	tooManyRequests = 429
+	headerFieldsTooLarge = 431
 	internalServerError = 500
 	notImplemented = 501
 	badGateway = 502
 	serviceUnavailable = 503
+	httpVersionNotSupported = 505
 end 'StatusCode'
+
+/// The reason phrase HTTP/1.1 pairs with a status code.
+public function reasonPhraseOf(code StatusCode) returns String
+	return match code 'which'
+		ok gives "OK"
+		created gives "Created"
+		accepted gives "Accepted"
+		noContent gives "No Content"
+		movedPermanently gives "Moved Permanently"
+		found gives "Found"
+		notModified gives "Not Modified"
+		badRequest gives "Bad Request"
+		unauthorized gives "Unauthorized"
+		forbidden gives "Forbidden"
+		notFound gives "Not Found"
+		methodNotAllowed gives "Method Not Allowed"
+		requestTimeout gives "Request Timeout"
+		conflict gives "Conflict"
+		gone gives "Gone"
+		lengthRequired gives "Length Required"
+		payloadTooLarge gives "Payload Too Large"
+		tooManyRequests gives "Too Many Requests"
+		headerFieldsTooLarge gives "Request Header Fields Too Large"
+		internalServerError gives "Internal Server Error"
+		notImplemented gives "Not Implemented"
+		badGateway gives "Bad Gateway"
+		serviceUnavailable gives "Service Unavailable"
+		httpVersionNotSupported gives "HTTP Version Not Supported"
+	end 'which'
+end 'reasonPhraseOf'
 
 /// An HTTP response with status code, headers, and body.
 public type HttpResponse
@@ -155,70 +197,29 @@ public type HttpResponse
 	end 'header'
 end 'HttpResponse'
 
-// The one scheme this client speaks. `URL.parse` lowercases a scheme, so the comparison is exact.
-let HttpScheme = "http"
+let FormContentType = "application/x-www-form-urlencoded"
 
 /// Stateless HTTP/1.1 client. All methods are static.
-/// HTTP only (no TLS). Uses Connection: close for simple response reading.
+/// HTTP only (no TLS). A response body is framed by `Transfer-Encoding`, then `Content-Length`, and
+/// is otherwise read until the server closes the connection.
 public type HttpClient
 	/// Send an HTTP request and return the response.
 	public static function send(request HttpRequest) returns HttpResponse throws HttpError
-		let url = request.url()
+		let target = try httpConnectTargetOf(request.url())
 
-		// There is no TLS here, so an `https` request sent as plaintext would leak what it meant to protect.
-		if url.scheme() != HttpScheme 'notPlainHttp'
-			throw HttpError.unsupportedScheme
-		end 'notPlainHttp'
+		let rawRequest = httpBuildRequest(request, target: target)
 
-		let host = try url.host() otherwise 'noHost'
-			throw HttpError.invalidUrl
-		end 'noHost'
-
-		let port = try url.port() otherwise 80
-
-		// Build the raw HTTP request
-		let rawRequest = httpBuildRequest(request)
-
-		// Connect via TcpClient
-		var client = try TcpClient.connect(host, port: port as NetworkPort) otherwise 'connFail'
+		var client = try TcpClient.connect(target.host, port: target.port) otherwise 'connFail'
 			throw HttpError.connectFailed
 		end 'connFail'
 
-		// Send the request
 		_ = try client.send(rawRequest) otherwise 'sendFail'
 			throw HttpError.sendFailed
 		end 'sendFail'
 
-		// Receive the response until the server closes the connection.
-		//
-		// `connectionClosed` is the ONLY clean end of the body — the server signalling it has sent
-		// everything. A `recvFailed` is a RESET, not an ending. Writing the loop as
-		// `if let chunk = try client.recv(...)` treats EVERY throw alike, so a connection dropped
-		// mid-response is indistinguishable from a complete one: the body is silently TRUNCATED and
-		// handed to the parser as if it were whole. A throttling or failing server — exactly what a
-		// busy test suite provokes — then produces a garbage response instead of an error the caller
-		// can see.
-		var responseData = StringBuilder.create()
-		var receiving = true
-
-		while receiving 'recvLoop'
-			let chunk = try client.recv(4096) otherwise (e) 'recvErr'
-				if e == NetworkError.connectionClosed 'serverFinished'
-					receiving = false
-					continue
-				end 'serverFinished'
-
-				throw HttpError.recvFailed
-			end 'recvErr'
-
-			responseData.append(chunk)
-		end 'recvLoop'
-
-		// Close connection
+		let response = try receiveResponse(client, method: request.method())
 		client.close()
 
-		// Parse the response
-		let response = try httpParseResponse(responseData.build())
 		return response
 	end 'send'
 
@@ -232,7 +233,7 @@ public type HttpClient
 	public static function post(url String, body String) returns HttpResponse throws HttpError
 		var request = try HttpRequest.create(HttpMethod.post, url: url)
 		request.setBody(body)
-		request.setHeader("content-type", value: "application/x-www-form-urlencoded")
+		request.setHeader(HttpContentTypeHeaderName, value: FormContentType)
 		return try send(request)
 	end 'post'
 
@@ -249,3 +250,177 @@ public type HttpClient
 		return try send(request)
 	end 'delete'
 end 'HttpClient'
+
+let MaxResponseHeadBytes = 65536 as BytePos
+let MaxChunkLineBytes = 4096 as BytePos
+let MostInterimResponses = 8
+let HexBase = 16 as BytePos
+let ChunkBlankBytes = " \t"
+let ChunkExtensionIntroducer = ";"
+
+// A close here ends a message before its framing does, so it is a truncated response. The close
+// that ends a close-delimited body is taken by `receiveMoreBeforeTheClose` and never reaches this
+// mapping.
+function clientReadFault(cause NetworkError) returns HttpError
+	return match cause 'which'
+		connectionClosed gives HttpError.invalidResponse
+		recvFailed or
+			timedOut gives HttpError.recvFailed
+		default panic("HttpClient: `TcpClient.recv` does not throw `{cause.name}`")
+	end 'which'
+end 'clientReadFault'
+
+function receiveResponse(client TcpClient, method HttpMethod) returns HttpResponse throws HttpError
+	var inbound = HttpInbound.over(client)
+
+	for _ in 0 to MostInterimResponses 'eachHead'
+		let head = try readDelimited(inbound, delimiter: HttpDelimiter.head, cap: MaxResponseHeadBytes)
+
+		match try httpResponseStatusOf(head) 'status'
+			final(response) then return try withFramedBody(inbound, response: response, method: method)
+			interim then continue
+		end 'status'
+	end 'eachHead'
+
+	throw HttpError.invalidResponse
+end 'receiveResponse'
+
+function readDelimited(inbound HttpInbound, delimiter HttpDelimiter, cap BytePos) returns String throws HttpError
+	let read = try httpReadDelimited(inbound, delimiter: delimiter, cap: cap) otherwise (cause) 'readFailed'
+		throw clientReadFault(cause)
+	end 'readFailed'
+
+	match read 'delimited'
+		delimited(text) then return text
+		pastTheCap then throw HttpError.invalidResponse
+	end 'delimited'
+end 'readDelimited'
+
+function withFramedBody(inbound HttpInbound, response HttpResponse, method HttpMethod) returns HttpResponse throws HttpError
+	let body = match try httpResponseFramingOf(response, method: method) 'framing'
+		bodiless gives ""
+		declared(length) gives try readDeclaredBody(inbound, length: length)
+		chunked gives try readChunkedBody(inbound)
+		closeDelimited gives try readUntilClosed(inbound)
+	end 'framing'
+
+	return HttpResponse.create(response.statusCode(), reasonPhrase: response.reason(), responseHeaders: response.headers(), responseBody: body)
+end 'withFramedBody'
+
+function readDeclaredBody(inbound HttpInbound, length BytePos) returns String throws HttpError
+	let body = try httpReadDeclared(inbound, length: length) otherwise (cause) 'readFailed'
+		throw clientReadFault(cause)
+	end 'readFailed'
+
+	return body
+end 'readDeclaredBody'
+
+function receiveMoreBeforeTheClose(inbound HttpInbound) returns bool throws HttpError
+	try inbound.receiveMore() otherwise (cause) 'recvErr'
+		if cause == NetworkError.connectionClosed 'serverFinished'
+			return false
+		end 'serverFinished'
+
+		throw clientReadFault(cause)
+	end 'recvErr'
+
+	return true
+end 'receiveMoreBeforeTheClose'
+
+function readUntilClosed(inbound HttpInbound) returns String throws HttpError
+	var open = true
+
+	while open 'drain'
+		open = try receiveMoreBeforeTheClose(inbound)
+
+		if inbound.unreadBytes() > HttpLargestBodyBytes 'pastTheLargestBody'
+			throw HttpError.invalidResponse
+		end 'pastTheLargestBody'
+	end 'drain'
+
+	return inbound.take(inbound.unreadBytes())
+end 'readUntilClosed'
+
+function readChunkedBody(inbound HttpInbound) returns String throws HttpError
+	var body = StringBuilder.create()
+	var bodyBytes = 0 as BytePos
+	var size = try chunkSizeOf(try readDelimited(inbound, delimiter: HttpDelimiter.line, cap: MaxChunkLineBytes))
+
+	while size > 0 'eachChunk'
+		if size > HttpLargestBodyBytes - bodyBytes 'pastTheLargestBody'
+			throw HttpError.invalidResponse
+		end 'pastTheLargestBody'
+
+		body.append(try readDeclaredBody(inbound, length: size))
+		bodyBytes = bodyBytes + size
+
+		let dataEnd = try readDelimited(inbound, delimiter: HttpDelimiter.line, cap: MaxChunkLineBytes)
+
+		if not dataEnd.isEmpty() 'dataOverranItsSize'
+			throw HttpError.invalidResponse
+		end 'dataOverranItsSize'
+
+		size = try chunkSizeOf(try readDelimited(inbound, delimiter: HttpDelimiter.line, cap: MaxChunkLineBytes))
+	end 'eachChunk'
+
+	try discardTrailerSection(inbound)
+
+	return body.build()
+end 'readChunkedBody'
+
+function discardTrailerSection(inbound HttpInbound) throws HttpError
+	var trailerBytes = 0 as BytePos
+	var field = try readDelimited(inbound, delimiter: HttpDelimiter.line, cap: MaxChunkLineBytes)
+
+	while not field.isEmpty() 'eachTrailerField'
+		trailerBytes = trailerBytes + field.byteLength() + HttpLineBreak.byteLength()
+
+		if trailerBytes > MaxResponseHeadBytes 'pastTheCap'
+			throw HttpError.invalidResponse
+		end 'pastTheCap'
+
+		field = try readDelimited(inbound, delimiter: HttpDelimiter.line, cap: MaxChunkLineBytes)
+	end 'eachTrailerField'
+end 'discardTrailerSection'
+
+function chunkSizeOf(line String) returns BytePos throws HttpError
+	var size = 0 as BytePos
+	var sizeEnd = 0 as BytePos
+
+	while sizeEnd < line.byteLength() 'eachDigit'
+		match urlHexDigitOf(line.byteAtOrPanic(sizeEnd)) 'reading'
+			value(digit) then size = try withHexDigit(size, digit: digit as BytePos)
+			notAHexDigit then break 'eachDigit'
+		end 'reading'
+
+		sizeEnd = sizeEnd + 1
+	end 'eachDigit'
+
+	if sizeEnd == 0 'noSize'
+		throw HttpError.invalidResponse
+	end 'noSize'
+
+	if sizeEnd < line.byteLength() and not extensionFollows(line, from: sizeEnd) 'notAnExtension'
+		throw HttpError.invalidResponse
+	end 'notAnExtension'
+
+	return size
+end 'chunkSizeOf'
+
+function withHexDigit(size BytePos, digit BytePos) returns BytePos throws HttpError
+	if size > (HttpLargestBodyBytes - digit) / HexBase 'pastTheLargest'
+		throw HttpError.invalidResponse
+	end 'pastTheLargest'
+
+	return size * HexBase + digit
+end 'withHexDigit'
+
+function extensionFollows(line String, from BytePos) returns bool
+	var pos = from
+
+	while pos < line.byteLength() and urlByteIsOneOf(line.byteAtOrPanic(pos), bytes: ChunkBlankBytes) 'eachBlank'
+		pos = pos + 1
+	end 'eachBlank'
+
+	return pos < line.byteLength() and urlByteIsOneOf(line.byteAtOrPanic(pos), bytes: ChunkExtensionIntroducer)
+end 'extensionFollows'

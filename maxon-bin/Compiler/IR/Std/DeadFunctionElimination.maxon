@@ -587,9 +587,10 @@ end 'StdFunctionReference'
 //     produced its value — that is false for a directly-emitted one, and the destructor is then
 //     pruned.
 //
-// `callIndirect` and `witnessCall` deliberately name NO callee: they consume a code pointer that some
-// `funcAddr` (named above) or some `.rdata` slot (rooted in `seedRoots`) already produced, so crediting
-// them would be crediting the same edge twice with no name to credit it to.
+// `callIndirect`, `witnessCall` and `witnessTryCall` deliberately name NO callee: they consume a
+// code pointer that some `funcAddr` (named above) or some `.rdata` slot (rooted in `seedRoots`)
+// already produced, so crediting them would be crediting the same edge twice with no name to credit
+// it to.
 //
 // The arms NAME every variant of the union, so a variant added later FAILS TO COMPILE here rather than
 // being classified by omission. A new variant that carries a callee name must be added as its own arm.
@@ -597,7 +598,6 @@ module function stdFunctionReferenceOf(op StdOp, byName FuncIndexByName, into St
 	into.recordNone()
 
 	match op 'op'
-		// arith + control + the call band up to `call`: pure computation, branches, `ret`, `param`.
 		const or
 			binOp or
 			unaryOp or
@@ -609,34 +609,24 @@ module function stdFunctionReferenceOf(op StdOp, byName FuncIndexByName, into St
 			condBranch or
 			branch or
 			ret or
-			param then break 'op'
-		call(_, callee, _) then into.resolve(callee, resolvedKind: StdFunctionReferenceKind.directCall, byName: byName)
-
-		// `retVoid` … `rdataAddr`: returns, `.data`/`.rdata` ADDRESSES (labels, not functions), loads,
-		// stores, and the two OS primitives that name no Maxon function.
-		retVoid or
+			param or
+			retVoid or
 			globalAddr or
 			loadIndirect or
 			storeIndirect or
 			osAllocPages or
 			osWriteStdout or
-			rdataAddr then break 'op'
-		tryCall(_, _, callee, _) then into.resolve(callee, resolvedKind: StdFunctionReferenceKind.otherReference, byName: byName)
-
-		// `errorReturn` reads two local virtuals; `osExit` is an OS primitive.
-		errorReturn or
-			osExit then break 'op'
-		funcAddr(_, funcName) then into.resolve(funcName, resolvedKind: StdFunctionReferenceKind.otherReference, byName: byName)
-
-		// `callIndirect`/`witnessCall` (see above) plus every appended `os*` primitive and `switch`,
-		// none of which names a Maxon function.
-		callIndirect or
+			rdataAddr or
+			errorReturn or
+			osExit or
+			callIndirect or
 			osPanic or
 			osReadClock or
 			osProcessSpawn or
 			osProcessExitCode or
 			osCloseHandle or
 			osWaitHandle or
+			osWaitChild or
 			osFreePages or
 			switch or
 			witnessCall or
@@ -652,18 +642,10 @@ module function stdFunctionReferenceOf(op StdOp, byName FuncIndexByName, into St
 			osCancelIo or
 			osGetPid or
 			osPipeCreateOutbound or
-			osWriteFile then break 'op'
-
-		// The wall-clock read names no Maxon function either — its callee is a Win32 import slot.
-		osReadWallClock then break 'op'
-
-		// The THROWING witness call names no Maxon function, exactly as `witnessCall` does not: both read a
-		// code pointer out of a `.rdata` witness table, and the DATA edge that keeps a witness impl live is
-		// counted by the witness-table walk, not here.
-		witnessTryCall then break 'op'
-
-		// Every file op calls a Win32 IMPORT, not a Maxon function, so none keeps anything live here.
-		osFileOpenRead or
+			osWriteFile or
+			osReadWallClock or
+			witnessTryCall or
+			osFileOpenRead or
 			osFileClose or
 			osReadFile or
 			osFileOpenWrite or
@@ -676,34 +658,17 @@ module function stdFunctionReferenceOf(op StdOp, byName FuncIndexByName, into St
 			osDirCreate or
 			osDirRemove or
 			osDirCurrentPath or
-			osFileAttributes then break 'op'
-
-		// The RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
-		osPanicValue then break 'op'
-		osCommandLine then break 'op'
-
-		// `GetStdHandle` and `GetModuleFileNameA` are Win32 IMPORTS, so neither keeps a Maxon function
-		// live — the file band's reason, and the reason each is named separately from `osCommandLine`: an
-		// op added later must fail to compile here rather than inherit one of their answers.
-		osStdHandle then break 'op'
-		osExecutablePath then break 'op'
-
-		// The stderr write reaches the OS through an import or a syscall exactly as its stdout twin
-		// does, so it keeps no Maxon function live either.
-		osWriteStderr then break 'op'
-
-		// A promoted record's address names a frame slot, not a function — it keeps nothing live.
-		stackRecordAddr then break 'op'
-
-		// O3: the three DebugStream host primitives call Win32 IMPORTS, so none keeps a Maxon function live.
-		osOpenNamedSegment or
+			osFileAttributes or
+			osPanicValue or
+			osCommandLine or
+			osStdHandle or
+			osExecutablePath or
+			osWriteStderr or
+			stackRecordAddr or
+			osOpenNamedSegment or
 			osMapNamedSegment or
-			osTickCountMs then break 'op'
-
-		// The rest of the appended band — the four attached-subprocess host primitives, the `ws2_32` socket
-		// band, the machine query AND the thread-CPU read — are import calls too (kernel32 and ws2_32), so none
-		// keeps a Maxon function live either.
-		osHandleSetInherit or
+			osTickCountMs or
+			osHandleSetInherit or
 			osPipePeek or
 			osEnvRead or
 			osProcessTerminate or
@@ -717,56 +682,39 @@ module function stdFunctionReferenceOf(op StdOp, byName FuncIndexByName, into St
 			osSocketRecv or
 			osSocketClose or
 			osCpuCount or
-			osThreadCpuTicks then break 'op'
-
-		// The decommit bottoms out in a Win32 import or a raw syscall — or, on wasm, in nothing at all —
-		// so it keeps no Maxon function live either.
-		osDecommitPages then break 'op'
-
-		// A fill lowers to INLINE machine code on every target — a store ladder, never a call — so it
-		// keeps no Maxon function live either.
-		memFill then break 'op'
-
-		// A reserve and a commit bottom out in `VirtualAlloc`, an `mmap` syscall or a `memory.grow` — never
-		// in a Maxon function, so neither keeps one live.
-		osCommitPages or
-			osReservePages then break 'op'
-
-		// The atomics and the `gs:` TLS read lower to INLINE machine code, and the thread token,
-		// `TlsAlloc`, `TlsSetValue` and `SetEvent` to a raw syscall or an IMPORT — never to a Maxon function, so
-		// no member of this range keeps one live. (Count the members off the range, not off this sentence.)
-		atomicCas or
+			osThreadCpuTicks or
+			osDecommitPages or
+			memFill or
+			osCommitPages or
+			osReservePages or
+			atomicCas or
 			atomicRmw or
 			currentThreadToken or
 			tlsAlloc or
 			tlsSetValue or
 			tlsSlotLoad or
 			osSetEvent or
-			osEnterBackgroundPriority then break 'op'
-		osFileOpenWriteExecutable then break 'op'
-		osEnvBlock or
-			osEnvBlockFree then break 'op'
-
-		// An ordered access is inline machine code on every lane, so it names no Maxon callee.
-		loadAcquire or
-			storeRelease then break 'op'
-		osHandleFileType then break 'op'
-
-		// The two named-section calls bottom out in kernel32 imports, never in a Maxon function.
-		osCreateNamedSegment or
+			osEnterBackgroundPriority or
+			osFileOpenWriteExecutable or
+			osEnvBlock or
+			osEnvBlockFree or
+			loadAcquire or
+			storeRelease or
+			osHandleFileType or
+			osProcessProbe or
+			osCreateNamedSegment or
 			osUnmapNamedSegment or
-			osUnpublishNamedSegment then break 'op'
-
-		// A coverage counter names a `.data` slot, not a callee.
-		covPoint then break 'op'
-
-		// A sampling, poller or socket op bottoms out in a host call, never in a Maxon function.
-		osHostSample or
+			osUnpublishNamedSegment or
+			covPoint or
+			osHostSample or
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe then break 'op'
-		osDebugHost then break 'op'
+			osSocketServe or
+			osDebugHost then break 'op'
+		call(_, callee, _) then into.resolve(callee, resolvedKind: StdFunctionReferenceKind.directCall, byName: byName)
+		tryCall(_, _, callee, _) then into.resolve(callee, resolvedKind: StdFunctionReferenceKind.otherReference, byName: byName)
+		funcAddr(_, funcName) then into.resolve(funcName, resolvedKind: StdFunctionReferenceKind.otherReference, byName: byName)
 	end 'op'
 end 'stdFunctionReferenceOf'
 

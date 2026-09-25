@@ -23,12 +23,10 @@ end 'MxdbgPoolSlice'
 typealias MxdbgPoolSliceArray = Array with MxdbgPoolSlice
 typealias MxdbgPoolSliceMap = Map with (String, MxdbgPoolSlice)
 
-// One function record, as the writer holds it before the line windows are computed.
-//
-// ⭐ **THE LOCAL WINDOW OPENS WHERE THE TABLE STOOD WHEN THE FUNCTION WAS ADDED, AND `addLocal` GROWS IT.**
-// That is what makes the windows contiguous and non-overlapping BY CONSTRUCTION rather than by assertion:
-// a gap loses records and an overlap hands two functions the same ones, and neither reads as a defect in
-// a dump.
+// One function record, as the writer holds it before the line windows are computed. Its local
+// window opens where the table stood when the function was added and `addLocal` grows it, which
+// keeps the windows contiguous and disjoint by construction: a gap loses records and an overlap
+// hands two functions the same ones, and neither reads as a defect in a dump.
 type MxdbgFuncRecord
 	export var name as MxdbgPoolSlice
 	export var codeStart as MxdbgCodeOffset
@@ -37,9 +35,11 @@ type MxdbgFuncRecord
 	export var paramCount as MxdbgIndex
 	export var localFirst as MxdbgIndex
 	export var localCount as MxdbgIndex
+	export var displayName as MxdbgPoolSlice
+	export var origin as MxdbgOrigin
 
-	static function create(name MxdbgPoolSlice, codeStart MxdbgCodeOffset, codeEnd MxdbgCodeOffset, frameSize MxdbgIndex, paramCount MxdbgIndex, localFirst MxdbgIndex) returns MxdbgFuncRecord
-		return Self{name: name, codeStart: codeStart, codeEnd: codeEnd, frameSize: frameSize, paramCount: paramCount, localFirst: localFirst, localCount: 0}
+	static function create(name MxdbgPoolSlice, codeStart MxdbgCodeOffset, codeEnd MxdbgCodeOffset, frameSize MxdbgIndex, paramCount MxdbgIndex, localFirst MxdbgIndex, displayName MxdbgPoolSlice, origin MxdbgOrigin) returns MxdbgFuncRecord
+		return Self{name: name, codeStart: codeStart, codeEnd: codeEnd, frameSize: frameSize, paramCount: paramCount, localFirst: localFirst, localCount: 0, displayName: displayName, origin: origin}
 	end 'create'
 end 'MxdbgFuncRecord'
 
@@ -77,7 +77,6 @@ end 'MxdbgFieldRecord'
 
 typealias MxdbgFieldRecordArray = Array with MxdbgFieldRecord
 
-// One local record.
 type MxdbgLocalRecord
 	export var name as MxdbgPoolSlice
 	export var locKind as MxdbgIndex
@@ -86,9 +85,10 @@ type MxdbgLocalRecord
 	export var scopeStart as MxdbgCodeOffset
 	export var scopeEnd as MxdbgCodeOffset
 	export var flags as MxdbgIndex
+	export var site as MxdbgIndex
 
-	static function create(name MxdbgPoolSlice, locKind MxdbgIndex, locValue MxdbgLocValue, typeId MxdbgIndex, scopeStart MxdbgCodeOffset, scopeEnd MxdbgCodeOffset, flags MxdbgIndex) returns MxdbgLocalRecord
-		return Self{name: name, locKind: locKind, locValue: locValue, typeId: typeId, scopeStart: scopeStart, scopeEnd: scopeEnd, flags: flags}
+	static function create(name MxdbgPoolSlice, locKind MxdbgIndex, locValue MxdbgLocValue, typeId MxdbgIndex, scopeStart MxdbgCodeOffset, scopeEnd MxdbgCodeOffset, flags MxdbgIndex, site MxdbgIndex) returns MxdbgLocalRecord
+		return Self{name: name, locKind: locKind, locValue: locValue, typeId: typeId, scopeStart: scopeStart, scopeEnd: scopeEnd, flags: flags, site: site}
 	end 'create'
 end 'MxdbgLocalRecord'
 
@@ -135,9 +135,13 @@ typealias MxdbgCovRecordArray = Array with MxdbgCovRecord
 type MxdbgInlineSiteRecord
 	export var name as MxdbgPoolSlice
 	export var parent as MxdbgIndex
+	export var callFileId as MxdbgIndex
+	export var callLine as MxdbgIndex
+	export var callColumn as MxdbgIndex
+	export var origin as MxdbgOrigin
 
-	static function create(name MxdbgPoolSlice, parent MxdbgIndex) returns MxdbgInlineSiteRecord
-		return Self{name: name, parent: parent}
+	static function create(name MxdbgPoolSlice, parent MxdbgIndex, callFileId MxdbgIndex, callLine MxdbgIndex, callColumn MxdbgIndex, origin MxdbgOrigin) returns MxdbgInlineSiteRecord
+		return Self{name: name, parent: parent, callFileId: callFileId, callLine: callLine, callColumn: callColumn, origin: origin}
 	end 'create'
 end 'MxdbgInlineSiteRecord'
 
@@ -205,18 +209,18 @@ export type MxdbgWriter
 		self.files.push(self.intern(path))
 	end 'addFile'
 
-	export function addFunction(name String, codeStart MxdbgCodeOffset, codeEnd MxdbgCodeOffset, frameSize MxdbgIndex, paramCount MxdbgIndex)
-		self.funcs.push(MxdbgFuncRecord.create(self.intern(name), codeStart: codeStart, codeEnd: codeEnd, frameSize: frameSize, paramCount: paramCount, localFirst: self.locals.count() as MxdbgIndex))
+	export function addFunction(name String, displayName String, origin MxdbgOrigin, codeStart MxdbgCodeOffset, codeEnd MxdbgCodeOffset, frameSize MxdbgIndex, paramCount MxdbgIndex)
+		self.funcs.push(MxdbgFuncRecord.create(self.intern(name), codeStart: codeStart, codeEnd: codeEnd, frameSize: frameSize, paramCount: paramCount, localFirst: self.locals.count() as MxdbgIndex, displayName: self.intern(displayName), origin: origin))
 	end 'addFunction'
 
 	// One local of the function added LAST. There is no function id, because a record can only ever belong
 	// to the function currently being described — so a window cannot be opened at the wrong place.
-	export function addLocal(name String, locKind MxdbgIndex, locValue MxdbgLocValue, typeId MxdbgIndex, scopeStart MxdbgCodeOffset, scopeEnd MxdbgCodeOffset, flags MxdbgIndex)
+	export function addLocal(name String, locKind MxdbgIndex, locValue MxdbgLocValue, typeId MxdbgIndex, scopeStart MxdbgCodeOffset, scopeEnd MxdbgCodeOffset, flags MxdbgIndex, site MxdbgIndex)
 		if self.funcs.count() == 0 'noFunctionYet'
 			panic("MxdbgWriter.addLocal: a local record was added before any function — a local grows the window of the function it belongs to")
 		end 'noFunctionYet'
 
-		self.locals.push(MxdbgLocalRecord.create(self.intern(name), locKind: locKind, locValue: locValue, typeId: typeId, scopeStart: scopeStart, scopeEnd: scopeEnd, flags: flags))
+		self.locals.push(MxdbgLocalRecord.create(self.intern(name), locKind: locKind, locValue: locValue, typeId: typeId, scopeStart: scopeStart, scopeEnd: scopeEnd, flags: flags, site: site))
 		var func = try self.funcs.get(self.funcs.count() - 1) otherwise panic("MxdbgWriter.addLocal: funcs.get OOB at the last of {self.funcs.count()}")
 		func.localCount = func.localCount + 1
 	end 'addLocal'
@@ -248,10 +252,10 @@ export type MxdbgWriter
 		self.covPoints.push(MxdbgCovRecord.create(codeOffset, fileId: fileId, line: line, column: column, branchLine: branchLine, branchColumn: branchColumn, funcName: self.intern(funcName), flags: flags))
 	end 'addCoveragePoint'
 
-	// Serialize everything added so far into a `.mxdbg` image bound to `buildId`.
-	// One spliced body; its index is its position, which is what a range and a nested site name.
-	export function addInlineSite(name String, parent MxdbgIndex)
-		self.inlineSites.push(MxdbgInlineSiteRecord.create(self.intern(name), parent: parent))
+	// One spliced body; its index is its position, which is what a range, a nested site and a local
+	// name.
+	export function addInlineSite(name String, parent MxdbgIndex, callFileId MxdbgIndex, callLine MxdbgIndex, callColumn MxdbgIndex, origin MxdbgOrigin)
+		self.inlineSites.push(MxdbgInlineSiteRecord.create(self.intern(name), parent: parent, callFileId: callFileId, callLine: callLine, callColumn: callColumn, origin: origin))
 	end 'addInlineSite'
 
 	export function addConstantWord(value MxdbgLocValue) returns MxdbgIndex
@@ -268,15 +272,16 @@ export type MxdbgWriter
 		self.inlineRanges.push(MxdbgInlineRangeRecord.create(codeStart, codeEnd: codeEnd, site: site))
 	end 'addInlineRange'
 
-	export function build(buildId HashDigest, targetTriple String) returns ByteArray
+	export function build(buildId HashDigest, targetTriple String, sourceRoot String) returns ByteArray
 		self.requireAscendingTables()
 		let windows = self.lineWindows()
+		self.requireEveryRowInAWindow(windows)
 		let triple = self.intern(targetTriple)
+		let root = self.intern(sourceRoot)
 
-		// ⭐ **THE SECTION ORDER IS THE REFERENCE'S AND IS NOT THE HEADER SLOT ORDER** — header, files,
-		// funcs, lines, types, fields, locals, coverage, string pool. A section this build recorded nothing
-		// for contributes its stride times zero, which is the same arithmetic a build that DID record one
-		// runs: an empty section is a count of 0, never a special case.
+		// Each offset is the previous section's plus its stride times its count, so this chain must list
+		// the sections in the order the loops below append them — not the header slot order (see
+		// `MxdbgFormat`).
 		let fileTableOff = MxdbgHeaderSize as ByteOffset
 		let funcTableOff = fileTableOff + (self.files.count() * MxdbgFileEntrySize) as ByteOffset
 		let lineTableOff = funcTableOff + (self.funcs.count() * MxdbgFuncEntrySize) as ByteOffset
@@ -289,10 +294,6 @@ export type MxdbgWriter
 		let constTableOff = inlineRangeTableOff + (self.inlineRanges.count() * MxdbgInlineRangeEntrySize) as ByteOffset
 		let stringPoolOff = constTableOff + (self.constWords.count() * MxdbgConstEntrySize) as ByteOffset
 
-		// ⛔ **PATCHED BY SLOT, NEVER WRITTEN AS A RUN.** The reader indexes these 96 bytes by the very same
-		// named offsets, so writing them positionally would let the two ends drift by one word — the failure
-		// this format's header calls out, and one that does not fail to load: it slides the parse and turns
-		// every later record into garbage.
 		var buf = ByteArray.create()
 		writeMxdbgMagic(buf)
 		writeZeros(buf, n: (MxdbgHeaderSize - buf.count()) as BytePos)
@@ -301,6 +302,8 @@ export type MxdbgWriter
 		patchQword(buf, offset: MxdbgOffBuildId, value: buildId as MachineWord)
 		patchDword(buf, offset: MxdbgOffTripleOff, value: triple.offset as MachineWord)
 		patchDword(buf, offset: MxdbgOffTripleLen, value: triple.length as MachineWord)
+		patchDword(buf, offset: MxdbgOffSourceRootOff, value: root.offset as MachineWord)
+		patchDword(buf, offset: MxdbgOffSourceRootLen, value: root.length as MachineWord)
 		patchDword(buf, offset: MxdbgOffStringPoolOff, value: stringPoolOff as MachineWord)
 		patchDword(buf, offset: MxdbgOffStringPoolSize, value: self.stringPool.count() as MachineWord)
 		patchDword(buf, offset: MxdbgOffFileTableOff, value: fileTableOff as MachineWord)
@@ -325,89 +328,107 @@ export type MxdbgWriter
 		patchDword(buf, offset: MxdbgOffConstCount, value: self.constWords.count() as MachineWord)
 
 		for file in self.files 'eachFile'
-			writeDword(buf, value: file.offset as MachineWord)
-			writeDword(buf, value: file.length as MachineWord)
+			let rec = appendedRecord(buf, stride: MxdbgFileEntrySize)
+			patchDword(buf, offset: rec + MxdbgFileNameOff, value: file.offset as MachineWord)
+			patchDword(buf, offset: rec + MxdbgFileNameLen, value: file.length as MachineWord)
 		end 'eachFile'
 
 		for i in 0 upto self.funcs.count() 'eachFunc'
 			let f = try self.funcs.get(i) otherwise panic("MxdbgWriter.build: funcs.get OOB at {i} despite the upto bound")
-			writeDword(buf, value: f.name.offset as MachineWord)
-			writeDword(buf, value: f.name.length as MachineWord)
-			writeDword(buf, value: f.codeStart as MachineWord)
-			writeDword(buf, value: f.codeEnd as MachineWord)
-			writeDword(buf, value: f.frameSize as MachineWord)
-			writeDword(buf, value: f.paramCount as MachineWord)
 			let window = try windows.get(i) otherwise panic("MxdbgWriter.build: windows.get OOB at {i} — one window is computed per function, in this very order")
-			writeDword(buf, value: window.first as MachineWord)
-			writeDword(buf, value: window.count as MachineWord)
-			writeDword(buf, value: f.localFirst as MachineWord)
-			writeDword(buf, value: f.localCount as MachineWord)
+			let rec = appendedRecord(buf, stride: MxdbgFuncEntrySize)
+			patchDword(buf, offset: rec + MxdbgFuncNameOff, value: f.name.offset as MachineWord)
+			patchDword(buf, offset: rec + MxdbgFuncNameLen, value: f.name.length as MachineWord)
+			patchDword(buf, offset: rec + MxdbgFuncCodeStart, value: f.codeStart as MachineWord)
+			patchDword(buf, offset: rec + MxdbgFuncCodeEnd, value: f.codeEnd as MachineWord)
+			patchDword(buf, offset: rec + MxdbgFuncFrameSize, value: f.frameSize as MachineWord)
+			patchDword(buf, offset: rec + MxdbgFuncParamCount, value: f.paramCount as MachineWord)
+			patchDword(buf, offset: rec + MxdbgFuncLineFirst, value: window.first as MachineWord)
+			patchDword(buf, offset: rec + MxdbgFuncLineCount, value: window.count as MachineWord)
+			patchDword(buf, offset: rec + MxdbgFuncLocalFirst, value: f.localFirst as MachineWord)
+			patchDword(buf, offset: rec + MxdbgFuncLocalCount, value: f.localCount as MachineWord)
+			patchDword(buf, offset: rec + MxdbgFuncDisplayNameOff, value: f.displayName.offset as MachineWord)
+			patchDword(buf, offset: rec + MxdbgFuncDisplayNameLen, value: f.displayName.length as MachineWord)
+			patchDword(buf, offset: rec + MxdbgFuncOrigin, value: mxdbgOriginWord(f.origin) as MachineWord)
 		end 'eachFunc'
 
 		for row in self.lines 'eachLine'
-			writeDword(buf, value: row.codeOffset as MachineWord)
-			writeDword(buf, value: row.fileId as MachineWord)
-			writeDword(buf, value: row.line as MachineWord)
-			writeDword(buf, value: row.column as MachineWord)
-			writeDword(buf, value: row.flags as MachineWord)
+			let rec = appendedRecord(buf, stride: MxdbgLineEntrySize)
+			patchDword(buf, offset: rec + MxdbgLineCodeOffset, value: row.codeOffset as MachineWord)
+			patchDword(buf, offset: rec + MxdbgLineFileId, value: row.fileId as MachineWord)
+			patchDword(buf, offset: rec + MxdbgLineLine, value: row.line as MachineWord)
+			patchDword(buf, offset: rec + MxdbgLineCol, value: row.column as MachineWord)
+			patchDword(buf, offset: rec + MxdbgLineFlags, value: row.flags as MachineWord)
 		end 'eachLine'
 
 		for entry in self.types 'eachType'
-			writeDword(buf, value: entry.name.offset as MachineWord)
-			writeDword(buf, value: entry.name.length as MachineWord)
-			writeDword(buf, value: entry.kind as MachineWord)
-			writeDword(buf, value: entry.size as MachineWord)
-			writeDword(buf, value: entry.align as MachineWord)
-			writeDword(buf, value: entry.fieldFirst as MachineWord)
-			writeDword(buf, value: entry.fieldCount as MachineWord)
-			writeDword(buf, value: entry.elementTypeId as MachineWord)
-			writeDword(buf, value: entry.flags as MachineWord)
+			let rec = appendedRecord(buf, stride: MxdbgTypeEntrySize)
+			patchDword(buf, offset: rec + MxdbgTypeNameOff, value: entry.name.offset as MachineWord)
+			patchDword(buf, offset: rec + MxdbgTypeNameLen, value: entry.name.length as MachineWord)
+			patchDword(buf, offset: rec + MxdbgTypeKindWord, value: entry.kind as MachineWord)
+			patchDword(buf, offset: rec + MxdbgTypeSize, value: entry.size as MachineWord)
+			patchDword(buf, offset: rec + MxdbgTypeAlign, value: entry.align as MachineWord)
+			patchDword(buf, offset: rec + MxdbgTypeFieldFirst, value: entry.fieldFirst as MachineWord)
+			patchDword(buf, offset: rec + MxdbgTypeFieldCount, value: entry.fieldCount as MachineWord)
+			patchDword(buf, offset: rec + MxdbgTypeElementTypeId, value: entry.elementTypeId as MachineWord)
+			patchDword(buf, offset: rec + MxdbgTypeFlags, value: entry.flags as MachineWord)
 		end 'eachType'
 
 		for field in self.fields 'eachField'
-			writeDword(buf, value: field.name.offset as MachineWord)
-			writeDword(buf, value: field.name.length as MachineWord)
-			writeDword(buf, value: field.offset as MachineWord)
-			writeDword(buf, value: field.typeId as MachineWord)
+			let rec = appendedRecord(buf, stride: MxdbgFieldEntrySize)
+			patchDword(buf, offset: rec + MxdbgFieldNameOff, value: field.name.offset as MachineWord)
+			patchDword(buf, offset: rec + MxdbgFieldNameLen, value: field.name.length as MachineWord)
+			patchDword(buf, offset: rec + MxdbgFieldOffset, value: field.offset as MachineWord)
+			patchDword(buf, offset: rec + MxdbgFieldTypeId, value: field.typeId as MachineWord)
 		end 'eachField'
 
 		for local in self.locals 'eachLocal'
-			writeDword(buf, value: local.name.offset as MachineWord)
-			writeDword(buf, value: local.name.length as MachineWord)
-			writeDword(buf, value: local.locKind as MachineWord)
-			writeDword(buf, value: mxdbgLocValueWord(local.locValue) as MachineWord)
-			writeDword(buf, value: local.typeId as MachineWord)
-			writeDword(buf, value: local.scopeStart as MachineWord)
-			writeDword(buf, value: local.scopeEnd as MachineWord)
-			writeDword(buf, value: local.flags as MachineWord)
+			let rec = appendedRecord(buf, stride: MxdbgLocalEntrySize)
+			patchDword(buf, offset: rec + MxdbgLocalNameOff, value: local.name.offset as MachineWord)
+			patchDword(buf, offset: rec + MxdbgLocalNameLen, value: local.name.length as MachineWord)
+			patchDword(buf, offset: rec + MxdbgLocalLocKind, value: local.locKind as MachineWord)
+			patchDword(buf, offset: rec + MxdbgLocalLocValue, value: mxdbgLocValueWord(local.locValue) as MachineWord)
+			patchDword(buf, offset: rec + MxdbgLocalTypeId, value: local.typeId as MachineWord)
+			patchDword(buf, offset: rec + MxdbgLocalScopeStart, value: local.scopeStart as MachineWord)
+			patchDword(buf, offset: rec + MxdbgLocalScopeEnd, value: local.scopeEnd as MachineWord)
+			patchDword(buf, offset: rec + MxdbgLocalFlags, value: local.flags as MachineWord)
+			patchDword(buf, offset: rec + MxdbgLocalSite, value: local.site as MachineWord)
 		end 'eachLocal'
 
 		for point in self.covPoints 'eachCoveragePoint'
-			writeDword(buf, value: point.codeOffset as MachineWord)
-			writeDword(buf, value: point.fileId as MachineWord)
-			writeDword(buf, value: point.line as MachineWord)
-			writeDword(buf, value: point.column as MachineWord)
-			writeDword(buf, value: point.branchLine as MachineWord)
-			writeDword(buf, value: point.branchColumn as MachineWord)
-			writeDword(buf, value: point.funcName.offset as MachineWord)
-			writeDword(buf, value: point.funcName.length as MachineWord)
-			writeDword(buf, value: point.flags as MachineWord)
+			let rec = appendedRecord(buf, stride: MxdbgCovEntrySize)
+			patchDword(buf, offset: rec + MxdbgCovCodeOffset, value: point.codeOffset as MachineWord)
+			patchDword(buf, offset: rec + MxdbgCovFileId, value: point.fileId as MachineWord)
+			patchDword(buf, offset: rec + MxdbgCovLine, value: point.line as MachineWord)
+			patchDword(buf, offset: rec + MxdbgCovCol, value: point.column as MachineWord)
+			patchDword(buf, offset: rec + MxdbgCovBranchLine, value: point.branchLine as MachineWord)
+			patchDword(buf, offset: rec + MxdbgCovBranchCol, value: point.branchColumn as MachineWord)
+			patchDword(buf, offset: rec + MxdbgCovFuncNameOff, value: point.funcName.offset as MachineWord)
+			patchDword(buf, offset: rec + MxdbgCovFuncNameLen, value: point.funcName.length as MachineWord)
+			patchDword(buf, offset: rec + MxdbgCovFlags, value: point.flags as MachineWord)
 		end 'eachCoveragePoint'
 
 		for site in self.inlineSites 'eachInlineSite'
-			writeDword(buf, value: site.name.offset as MachineWord)
-			writeDword(buf, value: site.name.length as MachineWord)
-			writeDword(buf, value: site.parent as MachineWord)
+			let rec = appendedRecord(buf, stride: MxdbgInlineSiteEntrySize)
+			patchDword(buf, offset: rec + MxdbgInlineSiteNameOff, value: site.name.offset as MachineWord)
+			patchDword(buf, offset: rec + MxdbgInlineSiteNameLen, value: site.name.length as MachineWord)
+			patchDword(buf, offset: rec + MxdbgInlineSiteParent, value: site.parent as MachineWord)
+			patchDword(buf, offset: rec + MxdbgInlineSiteCallFileId, value: site.callFileId as MachineWord)
+			patchDword(buf, offset: rec + MxdbgInlineSiteCallLine, value: site.callLine as MachineWord)
+			patchDword(buf, offset: rec + MxdbgInlineSiteCallCol, value: site.callColumn as MachineWord)
+			patchDword(buf, offset: rec + MxdbgInlineSiteOrigin, value: mxdbgOriginWord(site.origin) as MachineWord)
 		end 'eachInlineSite'
 
 		for range in self.inlineRanges 'eachInlineRange'
-			writeDword(buf, value: range.codeStart as MachineWord)
-			writeDword(buf, value: range.codeEnd as MachineWord)
-			writeDword(buf, value: range.site as MachineWord)
+			let rec = appendedRecord(buf, stride: MxdbgInlineRangeEntrySize)
+			patchDword(buf, offset: rec + MxdbgInlineRangeCodeStart, value: range.codeStart as MachineWord)
+			patchDword(buf, offset: rec + MxdbgInlineRangeCodeEnd, value: range.codeEnd as MachineWord)
+			patchDword(buf, offset: rec + MxdbgInlineRangeSite, value: range.site as MachineWord)
 		end 'eachInlineRange'
 
 		for word in self.constWords 'eachConstantWord'
-			writeDword(buf, value: mxdbgLocValueWord(word) as MachineWord)
+			let rec = appendedRecord(buf, stride: MxdbgConstEntrySize)
+			patchDword(buf, offset: rec + MxdbgConstWord, value: mxdbgLocValueWord(word) as MachineWord)
 		end 'eachConstantWord'
 
 		buf.append(self.stringPool)
@@ -463,10 +484,6 @@ export type MxdbgWriter
 		return at
 	end 'firstRowAtOrPast'
 
-	// ⭐ **BOTH TABLES MUST BE ASCENDING, AND THE WINDOW WALK IS WHY BOTH ARE ASKED.** The caller gets
-	// both for free by walking chunks in `.text` order. Refused rather than sorted: the reader
-	// binary-searches the line table and the window cursor never goes back, so a table that had stopped
-	// being ordered is a wrong answer at every later offset rather than a slow one.
 	function requireAggregateWindowFits(local MxdbgLocalRecord, at ElementIndex)
 		let described = try self.types.get(local.typeId as ElementIndex) otherwise panic("MxdbgWriter: local {at} is a folded aggregate of type {local.typeId}, which is past this file's {self.types.count()} type records")
 		let words = mxdbgFoldedAggregateWordCount(described.kind, fieldCount: described.fieldCount)
@@ -484,7 +501,7 @@ export type MxdbgWriter
 		var bytes = ByteArray.create()
 
 		for i in slice.offset upto slice.offset + slice.length 'eachByte'
-			bytes.push(try self.stringPool.get(i as ElementIndex) otherwise 0)
+			bytes.push(try self.stringPool.get(i as ElementIndex) otherwise panic("MxdbgWriter.poolBytes: byte {i} of a slice this writer interned is past the {self.stringPool.count()}-byte pool it interned it into"))
 		end 'eachByte'
 
 		return bytes
@@ -496,7 +513,7 @@ export type MxdbgWriter
 		for i in 0 upto self.lines.count() 'eachRow'
 			let row = try self.lines.get(i) otherwise panic("MxdbgWriter.requireAscendingTables: lines.get OOB at {i} despite the upto bound")
 
-			if row.codeOffset < previousRow 'rowOutOfOrder'
+			if not mxdbgRowFollows(row.codeOffset, previousRow: previousRow) 'rowOutOfOrder'
 				panic("MxdbgWriter: line row {i} is at 0x{row.codeOffset:x} behind 0x{previousRow:x} — the table is built by walking chunks in `.text` order, and both the reader's search and the window walk read it forward only")
 			end 'rowOutOfOrder'
 
@@ -508,11 +525,11 @@ export type MxdbgWriter
 		for i in 0 upto self.funcs.count() 'eachFunc'
 			let f = try self.funcs.get(i) otherwise panic("MxdbgWriter.requireAscendingTables: funcs.get OOB at {i} despite the upto bound")
 
-			if f.codeStart < previousFunc 'funcOutOfOrder'
-				panic("MxdbgWriter: function {i} starts at 0x{f.codeStart:x} behind 0x{previousFunc:x} — the concat pass lays chunks out in `.text` order, and the window walk consumes both tables forward together")
+			if not mxdbgFunctionRangeFollows(f.codeStart, codeEnd: f.codeEnd, previousEnd: previousFunc) 'funcOutOfOrder'
+				panic("MxdbgWriter: function {i} is [0x{f.codeStart:x}, 0x{f.codeEnd:x}), inverted or starting behind 0x{previousFunc:x} where the function before it ended — the concat pass lays chunks out in `.text` order, and the window walk consumes both tables forward together")
 			end 'funcOutOfOrder'
 
-			previousFunc = f.codeStart
+			previousFunc = f.codeEnd
 		end 'eachFunc'
 
 		for i in 0 upto self.funcs.count() 'eachFunctionsLocals'
@@ -521,29 +538,74 @@ export type MxdbgWriter
 			for k in f.localFirst upto f.localFirst + f.localCount 'eachLocal'
 				let local = try self.locals.get(k as ElementIndex) otherwise panic("MxdbgWriter.requireAscendingTables: locals.get OOB at {k} inside the window function {i} opened")
 
-				if local.scopeStart >= local.scopeEnd or local.scopeStart < f.codeStart or local.scopeEnd > f.codeEnd 'scopeOutsideTheFunction'
+				if not mxdbgScopeIsInside(local.scopeStart, scopeEnd: local.scopeEnd, codeStart: f.codeStart, codeEnd: f.codeEnd) 'scopeOutsideTheFunction'
 					panic("MxdbgWriter: local {k} states [0x{local.scopeStart:x}, 0x{local.scopeEnd:x}), which is empty or outside its function's [0x{f.codeStart:x}, 0x{f.codeEnd:x}) — a record covering code its function does not own is one a debugger reads at a PC the name never lived at")
 				end 'scopeOutsideTheFunction'
+
+				if not mxdbgLocKindIsKnown(local.locKind) 'noSuchLocKind'
+					panic("MxdbgWriter: local {k} names location kind {local.locKind}, which is none the reader knows")
+				end 'noSuchLocKind'
 
 				if local.locKind == MxdbgLocKindFoldedAggregate 'anAggregate'
 					self.requireAggregateWindowFits(local, at: k as ElementIndex)
 				end 'anAggregate'
+
+				if not mxdbgNoneOrBelow(local.site, none: MxdbgNoInlineSite, bound: self.inlineSites.count() as MxdbgIndex) 'siteOutsideTheTable'
+					panic("MxdbgWriter: local {k} is attributed to inline site {local.site}, past the {self.inlineSites.count()} this file holds — a spliced body's binding names a site its function recorded")
+				end 'siteOutsideTheTable'
 			end 'eachLocal'
 		end 'eachFunctionsLocals'
+
+		for (iter, site) in self.inlineSites.withIterator() 'eachSite'
+			if not mxdbgNoneOrBelow(site.parent, none: MxdbgNoInlineSite, bound: iter.index() as MxdbgIndex) 'notAnEarlierSite'
+				panic("MxdbgWriter: inline site {iter.index()} names site {site.parent} as its parent, which is not recorded before it — the reader refuses a parent chain that could loop")
+			end 'notAnEarlierSite'
+
+			if not mxdbgNoneOrBelow(site.callFileId, none: MxdbgNoSourceFile, bound: self.files.count() as MxdbgIndex) 'noSuchCallFile'
+				panic("MxdbgWriter: inline site {iter.index()} is called from file {site.callFileId}, past the {self.files.count()} this file holds")
+			end 'noSuchCallFile'
+		end 'eachSite'
+
+		for (iter, described) in self.types.withIterator() 'eachType'
+			if not mxdbgNoneOrBelow(described.elementTypeId, none: MxdbgNoElementType, bound: self.types.count() as MxdbgIndex) 'noSuchElementType'
+				panic("MxdbgWriter: type {iter.index()} names element type {described.elementTypeId}, past the {self.types.count()} this file holds")
+			end 'noSuchElementType'
+		end 'eachType'
 
 		var previousRangeEnd = 0 as MxdbgCodeOffset
 
 		for i in 0 upto self.inlineRanges.count() 'eachRange'
 			let range = try self.inlineRanges.get(i) otherwise panic("MxdbgWriter.requireAscendingTables: inlineRanges.get OOB at {i} despite the upto bound")
 
-			if range.codeStart < previousRangeEnd or range.codeStart >= range.codeEnd 'rangeOutOfOrder'
+			if not mxdbgCodeRangeFollows(range.codeStart, codeEnd: range.codeEnd, previousEnd: previousRangeEnd) 'rangeOutOfOrder'
 				panic("MxdbgWriter: inline range {i} is [0x{range.codeStart:x}, 0x{range.codeEnd:x}) behind 0x{previousRangeEnd:x} — the ranges are disjoint and ascending by construction, and the reader binary-searches them")
 			end 'rangeOutOfOrder'
 
 			previousRangeEnd = range.codeEnd
 		end 'eachRange'
 	end 'requireAscendingTables'
+
+	function requireEveryRowInAWindow(windows MxdbgLineWindowArray)
+		var windowed = 0 as MxdbgIndex
+
+		for window in windows 'eachWindow'
+			windowed = windowed + window.count
+		end 'eachWindow'
+
+		if windowed != self.lines.count() as MxdbgIndex 'rowsOutsideEveryFunction'
+			panic("MxdbgWriter: the functions' windows hold {windowed} of the {self.lines.count()} line rows — a row outside every function's code is one no reader reaches and the file would drop it")
+		end 'rowsOutsideEveryFunction'
+	end 'requireEveryRowInAWindow'
 end 'MxdbgWriter'
+
+// Records are zero-filled here and then patched at the same named field offsets the reader reads,
+// so the two ends cannot disagree on where a field sits.
+function appendedRecord(buf ByteArray, stride ByteOffset) returns ByteOffset
+	let rec = buf.count() as ByteOffset
+	writeZeros(buf, n: stride as BytePos)
+
+	return rec
+end 'appendedRecord'
 
 // One function's slice of the line table.
 type MxdbgLineWindow

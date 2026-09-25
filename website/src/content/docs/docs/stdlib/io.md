@@ -80,7 +80,8 @@ Output: `hello 5 false`, `false true`, `no such file`.
 ## FilePath
 
 `FilePath` is a filesystem path. Construction normalizes separators to the host's (`\` on Windows, `/`
-elsewhere) and accepts `file://` URLs, which are converted to paths. It implements `Equatable`, `Hashable`,
+elsewhere) and accepts `file://` URLs, which are converted to paths with their percent escapes decoded
+(`file:///tmp/a%20b` is `/tmp/a b`). It implements `Equatable`, `Hashable`,
 `Stringable` and `InitableFromStringLiteral`. Equality and hashing follow the host filesystem:
 case-insensitive on Windows, byte-exact elsewhere.
 
@@ -89,7 +90,7 @@ case-insensitive on Windows, byte-exact elsewhere.
 | Member | Returns | Description |
 |--------|---------|-------------|
 | `FilePath from "a/b.txt"` | `FilePath` | From a literal; an invalid path panics. |
-| `FilePath.from(path String)` | `FilePath` | Throws `FilePathError.invalidCharacter` on Windows for a control character or one of `< > " \| ? *`, or `notFileURL` for a URL whose scheme is not `file`. |
+| `FilePath.from(path String)` | `FilePath` | Throws `FilePathError.invalidCharacter` on Windows for a control character or one of `< > " \| ? *`, `notFileURL` for a URL whose scheme is other than `file`, or `malformedURL` for text holding `://` that `URL.parse` refuses. |
 | `FilePath.empty()` | `FilePath` | The empty path. |
 | `FilePath.separator()` | `String` | The host separator. |
 | `path` | field, `String` | The normalized text. |
@@ -131,6 +132,7 @@ case-insensitive on Windows, byte-exact elsewhere.
 enum FilePathError implements Error
 	invalidCharacter
 	notFileURL
+	malformedURL
 	noParent
 end 'FilePathError'
 ```

@@ -158,13 +158,12 @@ export function installTerminalRuntime(module StdModule, globalData GlobalDataTa
 	module.functions.push(func)
 end 'installTerminalRuntime'
 
-// ⭐⭐ **`__tty_stdout_wants_color() -> 0 | 1`** — the three conditions, short-circuited in the order that
-// costs least: the handle question is two instructions and no allocation, so a redirected stream (which
-// is EVERY spec-suite run and every captured build log) answers before a byte of scratch is reserved.
+// `__tty_stdout_wants_color() -> 0 | 1`: the three conditions, cheapest first. The handle question
+// allocates nothing, so a redirected stream, which every spec-suite run and captured build log is,
+// answers before any scratch is reserved.
 //
-// ⚠ **THE SCRATCH IS RESERVED ONCE AND SERVES BOTH READS**, and it is released on every exit that reached
-// it. `notATerminal` is the one exit that never allocated, which is why it has no release and why it is
-// the block the entry branches to rather than a fallthrough.
+// The scratch is reserved once, serves both reads, and is released on every exit that reached it.
+// `notATerminal` is the one exit that never allocated, which is why it has no release.
 function buildTerminalStdoutWantsColor(module StdModule, func IrFunction, entry IrBlock, ids ValueMinter, noColorLabel ByteArray, termLabel ByteArray)
 	var notATerminal = module.addBlock(func, label: b"ttynotty", heat: BlockHeat.normal)
 	var checkNoColor = module.addBlock(func, label: b"ttynocolor", heat: BlockHeat.normal)
@@ -177,21 +176,15 @@ function buildTerminalStdoutWantsColor(module StdModule, func IrFunction, entry 
 	let which = emitConst(module, block: entry, value: StdOutputHandleSelector, ids: ids)
 	let handle = ids.mint()
 	module.appendOp(entry, op: StdOp.osStdHandle(handle, whichId: which))
-	let rawFileType = ids.mint()
-	module.appendOp(entry, op: StdOp.osHandleFileType(rawFileType, handleId: handle))
-
-	// MASKED, for `StdOp.osHandleFileType`'s stated reason: the answer is a DWORD, so the upper half of the
-	// register carries whatever the callee left there and a raw 64-bit compare against 2 would call a real
-	// console a redirect. `__md_exists` records the identical hazard for `GetFileAttributesA`.
-	let dwordMask = emitConst(module, block: entry, value: DwordMask, ids: ids)
-	let fileType = emitBin(module, block: entry, a: rawFileType, b: dwordMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let fileType = ids.mint()
+	module.appendOp(entry, op: StdOp.osHandleFileType(fileType, handleId: handle))
 	let charDevice = emitConst(module, block: entry, value: FileTypeChar, ids: ids)
 	let interactive = emitCmp(module, block: entry, a: fileType, b: charDevice, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(interactive, thenBlockId: checkNoColor.id, elseBlockId: notATerminal.id))
 
 	emitConstReturn(module, block: notATerminal, value: 0, ids: ids)
 
-	// Condition 2 — PRESENCE, which is why the buffer is one byte and the returned COUNT is the whole
+	// Condition 2 is presence, which is why the buffer is one byte and the returned count is the whole
 	// answer: a set variable answers its own length or the size it needs, and an unset one answers 0.
 	let probeSize = emitConst(module, block: checkNoColor, value: TerminalEnvProbeBytes, ids: ids)
 	let scratch = emitRawAlloc(module, block: checkNoColor, byteCount: probeSize, ids: ids)
@@ -204,8 +197,8 @@ function buildTerminalStdoutWantsColor(module StdModule, func IrFunction, entry 
 	let noColorSet = emitCmp(module, block: checkNoColor, a: noColorLen, b: noColorZero, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(checkNoColor, op: StdOp.condBranch(noColorSet, thenBlockId: refuse.id, elseBlockId: checkTerm.id))
 
-	// Condition 3 — the LENGTH first, which disposes of every `TERM` that is not four characters without
-	// touching the bytes at all, and leaves the compare below reading a buffer the read really filled.
+	// Condition 3 tests the length first, which disposes of every `TERM` that is not four characters
+	// without touching the bytes, and leaves the compare below reading a buffer the read filled.
 	let termName = ids.mint()
 	module.appendOp(checkTerm, op: StdOp.rdataAddr(termName, label: termLabel))
 	let termCap = emitConst(module, block: checkTerm, value: TerminalEnvProbeBytes, ids: ids)
@@ -215,9 +208,9 @@ function buildTerminalStdoutWantsColor(module StdModule, func IrFunction, entry 
 	let couldBeDumb = emitCmp(module, block: checkTerm, a: termLen, b: dumbLen, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(checkTerm, op: StdOp.condBranch(couldBeDumb, thenBlockId: compareDumb.id, elseBlockId: allow.id))
 
-	// The case-insensitive compare — see `DumbTermName` for why the fold is EXACT rather than approximate,
-	// and why the bytes are read singly. The read is in bounds by the count test above: the API wrote four
-	// bytes and a terminator into a five-byte buffer.
+	// See `DumbTermName` for why the case fold is exact rather than approximate, and why the bytes are
+	// read singly. The read is in bounds by the count test above: the API wrote four bytes and a
+	// terminator into a five-byte buffer.
 	let foldMask = emitConst(module, block: compareDumb, value: AsciiCaseFoldMaskByte, ids: ids)
 	var termWord = 0 as ValueId
 

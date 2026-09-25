@@ -418,9 +418,8 @@ function returnedValueOf(module StdModule, block IrBlock) returns BlockExit
 			div or
 			mod or
 			condBranch or
-			branch gives BlockExit.notAValueReturn
-		ret(retValId) gives BlockExit.returns(retValId)
-		param or
+			branch or
+			param or
 			call or
 			retVoid or
 			globalAddr or
@@ -440,6 +439,7 @@ function returnedValueOf(module StdModule, block IrBlock) returns BlockExit
 			osProcessExitCode or
 			osCloseHandle or
 			osWaitHandle or
+			osWaitChild or
 			osFreePages or
 			switch or
 			witnessCall or
@@ -507,14 +507,15 @@ function returnedValueOf(module StdModule, block IrBlock) returns BlockExit
 			tlsSetValue or
 			tlsSlotLoad or
 			osSetEvent or
-			osEnterBackgroundPriority gives BlockExit.notAValueReturn
-		osFileOpenWriteExecutable gives BlockExit.notAValueReturn
-		osEnvBlock or
-			osEnvBlockFree gives BlockExit.notAValueReturn
-		loadAcquire or
-			storeRelease gives BlockExit.notAValueReturn
-		osHandleFileType gives BlockExit.notAValueReturn
-		osCreateNamedSegment or
+			osEnterBackgroundPriority or
+			osFileOpenWriteExecutable or
+			osEnvBlock or
+			osEnvBlockFree or
+			loadAcquire or
+			storeRelease or
+			osHandleFileType or
+			osProcessProbe or
+			osCreateNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
@@ -522,8 +523,9 @@ function returnedValueOf(module StdModule, block IrBlock) returns BlockExit
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe gives BlockExit.notAValueReturn
+			osSocketServe or
 			osDebugHost gives BlockExit.notAValueReturn
+		ret(retValId) gives BlockExit.returns(retValId)
 	end 'term'
 end 'returnedValueOf'
 
@@ -567,14 +569,11 @@ type ConstructorScan
 				mod or
 				condBranch or
 				branch or
-				ret gives false
-			param(resultId, index, _) gives self.admitParam(resultId, index: index)
-			call(resultId, callee, args) gives self.admitAlloc(resultId, callee: callee, args: args, box: box)
-			retVoid or
+				ret or
+				retVoid or
 				globalAddr or
-				loadIndirect gives false
-			storeIndirect(addrId, offset, valueId, valueType) gives self.admitStore(addrId, offset: offset, valueId: valueId, valueType: valueType, box: box)
-			osAllocPages or
+				loadIndirect or
+				osAllocPages or
 				osWriteStdout or
 				rdataAddr or
 				tryCall or
@@ -588,6 +587,7 @@ type ConstructorScan
 				osProcessExitCode or
 				osCloseHandle or
 				osWaitHandle or
+				osWaitChild or
 				osFreePages or
 				switch or
 				witnessCall or
@@ -655,17 +655,17 @@ type ConstructorScan
 				tlsSetValue or
 				tlsSlotLoad or
 				osSetEvent or
-				osEnterBackgroundPriority gives false
-			osFileOpenWriteExecutable gives false
-			osEnvBlock or
-				osEnvBlockFree gives false
-
-			// An ordered access to a stack record would be a publication nothing can read — a promoted
-			// record is frame-local. Refusing admission leaves the record on the heap, which is correct.
-			loadAcquire or
-				storeRelease gives false
-			osHandleFileType gives false
-			osCreateNamedSegment or
+				osEnterBackgroundPriority or
+				osFileOpenWriteExecutable or
+				osEnvBlock or
+				osEnvBlockFree or
+				// An ordered access to a stack record would be a publication nothing can read — a promoted
+				// record is frame-local. Refusing admission leaves the record on the heap, which is correct.
+				loadAcquire or
+				storeRelease or
+				osHandleFileType or
+				osProcessProbe or
+				osCreateNamedSegment or
 				osUnmapNamedSegment or
 				osUnpublishNamedSegment or
 				covPoint or
@@ -673,8 +673,11 @@ type ConstructorScan
 				osNetpoll or
 				osPathQuery or
 				osSocketOverlapped or
-				osSocketServe gives false
+				osSocketServe or
 				osDebugHost gives false
+			param(resultId, index, _) gives self.admitParam(resultId, index: index)
+			call(resultId, callee, args) gives self.admitAlloc(resultId, callee: callee, args: args, box: box)
+			storeIndirect(addrId, offset, valueId, valueType) gives self.admitStore(addrId, offset: offset, valueId: valueId, valueType: valueType, box: box)
 		end 'op'
 	end 'admit'
 
@@ -1061,19 +1064,10 @@ function scanOneOp(module StdModule, opIdx OpIndex, tracked BoolArray, byName Fu
 			condBranch or
 			branch or
 			ret or
-			param then collectStdOpUses(op, referenced: readByOtherOps)
-		call(_, callee, args) then scanCallOperands(module, callee: callee, args: args, tracked: tracked, byName: byName, scan: scan)
-		retVoid or
-			globalAddr then collectStdOpUses(op, referenced: readByOtherOps)
-
-		// A field read THROUGH the pointer. Its only operand IS the address, so an admitted `loadIndirect`
-		// needs nothing recorded at all.
-		loadIndirect then break 'shape'
-
-		// A field write through the pointer is admitted; the pointer as the STORED VALUE is the
-		// container / global / error-payload escape route, and is not.
-		storeIndirect(_, _, valueId, _) then markIfTracked(tracked, v: valueId, scan: scan)
-		osAllocPages or
+			param or
+			retVoid or
+			globalAddr or
+			osAllocPages or
 			osWriteStdout or
 			rdataAddr or
 			tryCall or
@@ -1087,6 +1081,7 @@ function scanOneOp(module StdModule, opIdx OpIndex, tracked BoolArray, byName Fu
 			osProcessExitCode or
 			osCloseHandle or
 			osWaitHandle or
+			osWaitChild or
 			osFreePages or
 			switch or
 			witnessCall or
@@ -1154,14 +1149,15 @@ function scanOneOp(module StdModule, opIdx OpIndex, tracked BoolArray, byName Fu
 			tlsSetValue or
 			tlsSlotLoad or
 			osSetEvent or
-			osEnterBackgroundPriority then collectStdOpUses(op, referenced: readByOtherOps)
-		osFileOpenWriteExecutable then collectStdOpUses(op, referenced: readByOtherOps)
-		osEnvBlock or
-			osEnvBlockFree then collectStdOpUses(op, referenced: readByOtherOps)
-		loadAcquire or
-			storeRelease then collectStdOpUses(op, referenced: readByOtherOps)
-		osHandleFileType then collectStdOpUses(op, referenced: readByOtherOps)
-		osCreateNamedSegment or
+			osEnterBackgroundPriority or
+			osFileOpenWriteExecutable or
+			osEnvBlock or
+			osEnvBlockFree or
+			loadAcquire or
+			storeRelease or
+			osHandleFileType or
+			osProcessProbe or
+			osCreateNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
@@ -1169,8 +1165,17 @@ function scanOneOp(module StdModule, opIdx OpIndex, tracked BoolArray, byName Fu
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe then collectStdOpUses(op, referenced: readByOtherOps)
+			osSocketServe or
 			osDebugHost then collectStdOpUses(op, referenced: readByOtherOps)
+		call(_, callee, args) then scanCallOperands(module, callee: callee, args: args, tracked: tracked, byName: byName, scan: scan)
+
+		// A field read THROUGH the pointer. Its only operand IS the address, so an admitted `loadIndirect`
+		// needs nothing recorded at all.
+		loadIndirect then break 'shape'
+
+		// A field write through the pointer is admitted; the pointer as the STORED VALUE is the
+		// container / global / error-payload escape route, and is not.
+		storeIndirect(_, _, valueId, _) then markIfTracked(tracked, v: valueId, scan: scan)
 	end 'shape'
 end 'scanOneOp'
 
@@ -1307,9 +1312,8 @@ function constructorCallAt(module StdModule, opIdx OpIndex, byName FunctionNameI
 			condBranch or
 			branch or
 			ret or
-			param gives ConstructorCallSite.notAConstructorCall
-		call(resultId, callee, args) gives constructorCallOf(module, resultId: resultId, callee: callee, args: args, byName: byName, constructors: constructors)
-		retVoid or
+			param or
+			retVoid or
 			globalAddr or
 			loadIndirect or
 			storeIndirect or
@@ -1327,6 +1331,7 @@ function constructorCallAt(module StdModule, opIdx OpIndex, byName FunctionNameI
 			osProcessExitCode or
 			osCloseHandle or
 			osWaitHandle or
+			osWaitChild or
 			osFreePages or
 			switch or
 			witnessCall or
@@ -1394,14 +1399,15 @@ function constructorCallAt(module StdModule, opIdx OpIndex, byName FunctionNameI
 			tlsSetValue or
 			tlsSlotLoad or
 			osSetEvent or
-			osEnterBackgroundPriority gives ConstructorCallSite.notAConstructorCall
-		osFileOpenWriteExecutable gives ConstructorCallSite.notAConstructorCall
-		osEnvBlock or
-			osEnvBlockFree gives ConstructorCallSite.notAConstructorCall
-		loadAcquire or
-			storeRelease gives ConstructorCallSite.notAConstructorCall
-		osHandleFileType gives ConstructorCallSite.notAConstructorCall
-		osCreateNamedSegment or
+			osEnterBackgroundPriority or
+			osFileOpenWriteExecutable or
+			osEnvBlock or
+			osEnvBlockFree or
+			loadAcquire or
+			storeRelease or
+			osHandleFileType or
+			osProcessProbe or
+			osCreateNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
@@ -1409,8 +1415,9 @@ function constructorCallAt(module StdModule, opIdx OpIndex, byName FunctionNameI
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe gives ConstructorCallSite.notAConstructorCall
+			osSocketServe or
 			osDebugHost gives ConstructorCallSite.notAConstructorCall
+		call(resultId, callee, args) gives constructorCallOf(module, resultId: resultId, callee: callee, args: args, byName: byName, constructors: constructors)
 	end 'op'
 end 'constructorCallAt'
 
@@ -1649,9 +1656,8 @@ function opDropsAPromotedRecord(module StdModule, opIdx OpIndex, promoted BoolAr
 			condBranch or
 			branch or
 			ret or
-			param gives false
-		call(_, callee, args) gives callDropsAPromotedRecord(callee, args: args, promoted: promoted)
-		retVoid or
+			param or
+			retVoid or
 			globalAddr or
 			loadIndirect or
 			storeIndirect or
@@ -1669,6 +1675,7 @@ function opDropsAPromotedRecord(module StdModule, opIdx OpIndex, promoted BoolAr
 			osProcessExitCode or
 			osCloseHandle or
 			osWaitHandle or
+			osWaitChild or
 			osFreePages or
 			switch or
 			witnessCall or
@@ -1736,17 +1743,15 @@ function opDropsAPromotedRecord(module StdModule, opIdx OpIndex, promoted BoolAr
 			tlsSetValue or
 			tlsSlotLoad or
 			osSetEvent or
-			osEnterBackgroundPriority gives false
-		osFileOpenWriteExecutable gives false
-		osEnvBlock or
-			osEnvBlockFree gives false
-
-		// An ordered access to a stack record would be a publication nothing can read — a promoted
-		// record is frame-local. Refusing admission leaves the record on the heap, which is correct.
-		loadAcquire or
-			storeRelease gives false
-		osHandleFileType gives false
-		osCreateNamedSegment or
+			osEnterBackgroundPriority or
+			osFileOpenWriteExecutable or
+			osEnvBlock or
+			osEnvBlockFree or
+			loadAcquire or
+			storeRelease or
+			osHandleFileType or
+			osProcessProbe or
+			osCreateNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
@@ -1754,8 +1759,9 @@ function opDropsAPromotedRecord(module StdModule, opIdx OpIndex, promoted BoolAr
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe gives false
+			osSocketServe or
 			osDebugHost gives false
+		call(_, callee, args) gives callDropsAPromotedRecord(callee, args: args, promoted: promoted)
 	end 'op'
 end 'opDropsAPromotedRecord'
 

@@ -80,7 +80,7 @@ let VehContinueSearch = 0
 
 // A Windows NTSTATUS exception code. A DWORD — which is also the width `EXCEPTION_RECORD` stores it
 // at and the width the thunk loads it with, so the comparand and the loaded value are one type.
-typealias ExceptionCode = int(0 to u32.max)
+export typealias ExceptionCode = int(0 to u32.max)
 
 // The two NTSTATUS codes Windows delivers for the `#DE` that `idiv` raises. `idiv` raises the SAME trap
 // for a zero divisor and for a quotient that does not fit (`i64.min / -1`), and the CPU distinguishes them
@@ -96,6 +96,15 @@ let ExcCodeAccessViolation = 0xC0000005
 // EXCEPTION_STACK_OVERFLOW — a touch of the stack's guard page with no stack left to grow into. The kernel
 // has already classified it, so the handler needs no address test the POSIX lanes make.
 let ExcCodeStackOverflow = 0xC00000FD
+
+export function windowsFaultExceptionCode(kind HardwareFaultKind) returns ExceptionCode
+	return match kind 'kind'
+		divideByZero gives ExcCodeIntDivideByZero
+		overflow gives ExcCodeIntOverflow
+		accessViolation gives ExcCodeAccessViolation
+		stackOverflow gives ExcCodeStackOverflow
+	end 'kind'
+end 'windowsFaultExceptionCode'
 
 export let DebugTrapThunkName = b"mrt_dbg_thunk"
 
@@ -689,18 +698,6 @@ function emitConsoleCellPtr(asm X64RuntimeAsm, dest X64Register)
 	encodeLeaRegBaseIndexScale(asm.code, dest: dest, base: dest, index: X64Register.r11, scale: MemoryIndexScale.byOne)
 end 'emitConsoleCellPtr'
 
-// ⛔⛔ **A WIN32 `BOOL` OR `int` IS A DWORD, SO THE HIGH HALF OF RAX IS UNDEFINED WHEN THE CALL RETURNS**,
-// and every comparison in this file is `cmp r64, imm32` (`encodeGrp1RegImm32` emits REX.W). `mov eax, eax`
-// zero-extends, which makes the value the register holds the one the kernel actually answered.
-//
-// ⛔ It is not cosmetic at `MultiByteToWideChar`: a garbage high half would survive the zero test, be stored
-// as `units`, and hand `WriteConsoleW` a count that reads far past the 64-byte frame buffer. The other two
-// sites test a BOOL, where garbage above a zero low half would merely take the fallback — the same answer
-// for the wrong reason, which is why all three narrow rather than only the one that must.
-function emitNarrowRaxToDword(asm X64RuntimeAsm)
-	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: X64Register.rax, wide: false)
-end 'emitNarrowRaxToDword'
-
 // `WriteFile(handle, bytes + offset, length - offset, &out, NULL)` — the raw-byte write, leaving the
 // accepted count in the out-param slot. Shared by the NOT-A-CONSOLE road, which is the whole of what it
 // does, and by the console road's fallback, which reaches it with a non-zero offset.
@@ -771,6 +768,7 @@ function buildWriteStreamChunk(usesGt bool, target Target) returns FunctionCodeC
 	// `GetStdHandle` is a read of a word the process already holds.
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotSelector), wide: true)
 	emitGtGatedIatCall(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.GetStdHandle), usesGt: usesGt)
+	encodeImportAnswerWidth(asm.code, slot: IatSlot.GetStdHandle)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotHandle), srcReg: X64Register.rax)
 
 	// Is this stream a console? Asked once per stream and cached; every later write reads the cell.
@@ -790,7 +788,7 @@ function buildWriteStreamChunk(usesGt bool, target Target) returns FunctionCodeC
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotHandle), wide: true)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOutWord))
 	emitGtGatedIatCall(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.GetConsoleMode), usesGt: usesGt)
-	emitNarrowRaxToDword(asm)
+	encodeImportAnswerWidth(asm.code, slot: IatSlot.GetConsoleMode)
 
 	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: ConsoleVerdict.notConsole.rawValue)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
@@ -871,7 +869,7 @@ function buildWriteStreamChunk(usesGt bool, target Target) returns FunctionCodeC
 	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.r8, src: X64Register.r11, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r9, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotSlice), wide: true)
 	emitGtGatedIatCall(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.MultiByteToWideChar), usesGt: usesGt)
-	emitNarrowRaxToDword(asm)
+	encodeImportAnswerWidth(asm.code, slot: IatSlot.MultiByteToWideChar)
 
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: rawFallback)
@@ -897,7 +895,7 @@ function buildWriteStreamChunk(usesGt bool, target Target) returns FunctionCodeC
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rsp, disp: asm.outgoingArgDisp(WriteConsoleReservedArgSlot), srcReg: X64Register.rax)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.r9, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOutWord))
 	emitGtGatedIatCall(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.WriteConsoleW), usesGt: usesGt)
-	emitNarrowRaxToDword(asm)
+	encodeImportAnswerWidth(asm.code, slot: IatSlot.WriteConsoleW)
 
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: rawFallback)
@@ -1470,14 +1468,10 @@ end 'emitClassifiedFault'
 // applies its default disposition. Win64 ABI: the EXCEPTION_POINTERS in RCX, a LONG back
 // in EAX.
 //
-// It converts the two integer `#DE` codes, the ACCESS VIOLATION and the STACK OVERFLOW, and NOTHING
-// ELSE. Every other code returns EXCEPTION_CONTINUE_SEARCH so the OS still handles it: a fault handler
-// that swallowed faults it was not asked about would turn every unrelated crash into this one's
-// diagnostic. A stack overflow runs this handler in the room `mrt_runtime_init` guaranteed.
-//
-// ⚠ **THE ACCESS-VIOLATION ARM IS WHAT MAKES THIS HANDLER TESTABLE AT ALL.** Every other route
-// to it is a compiler BUG, so until `__Builtins.forceSegfault()` existed the whole thunk was
-// code no spec case could reach on purpose. `runtime/FaultProbe.maxon` is that door.
+// It converts the `HardwareFaultKind` codes and nothing else. Every other code returns
+// EXCEPTION_CONTINUE_SEARCH so the OS still handles it: a fault handler that swallowed faults it
+// was not asked about would turn every unrelated crash into this one's diagnostic. A stack overflow
+// runs this handler in the room `mrt_runtime_init` guaranteed.
 //
 // Slots: 0 = EXCEPTION_POINTERS*, 1 = fault_rip, 2 = fault_rbp, 3 = fault_rsp, 4 = panic prefix.
 function buildFaultThunkChunk(usesGt bool, target Target) returns FunctionCodeChunk
@@ -1498,10 +1492,11 @@ function buildFaultThunkChunk(usesGt bool, target Target) returns FunctionCodeCh
 	// arm means this is not our fault, and the OS keeps it.
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: ExcPtrsOffExceptionRecord, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rax, disp: ExcRecOffExceptionCode, wide: false)
-	emitFaultCodeArm(asm, codeReg: X64Register.rax, scratch: X64Register.rdx, excCode: ExcCodeIntDivideByZero, kind: HardwareFaultKind.divideByZero, prefixSlot: SlotPanicPrefix, classified: classified)
-	emitFaultCodeArm(asm, codeReg: X64Register.rax, scratch: X64Register.rdx, excCode: ExcCodeIntOverflow, kind: HardwareFaultKind.overflow, prefixSlot: SlotPanicPrefix, classified: classified)
-	emitFaultCodeArm(asm, codeReg: X64Register.rax, scratch: X64Register.rdx, excCode: ExcCodeAccessViolation, kind: HardwareFaultKind.accessViolation, prefixSlot: SlotPanicPrefix, classified: classified)
-	emitFaultCodeArm(asm, codeReg: X64Register.rax, scratch: X64Register.rdx, excCode: ExcCodeStackOverflow, kind: HardwareFaultKind.stackOverflow, prefixSlot: SlotPanicPrefix, classified: classified)
+
+	for kind in HardwareFaultKind.allCases 'eachConvertedFault'
+		emitFaultCodeArm(asm, codeReg: X64Register.rax, scratch: X64Register.rdx, excCode: windowsFaultExceptionCode(kind), kind: kind, prefixSlot: SlotPanicPrefix, classified: classified)
+	end 'eachConvertedFault'
+
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: continueSearch)
 
 	asm.placeLabel(classified)
@@ -1992,8 +1987,9 @@ end 'emitDebugTrapCodeArm'
 // Win64 requires a handler to preserve them. Nothing checks it: the interrupted code simply resumes with
 // two registers it never wrote.
 //
-// It switches to the agent's own stack before calling tier code, so a stop costs the interrupted green
-// thread only the OS dispatch frame and this thunk's own — the two `requireDebugTrapFitsItsReserve` bounds.
+// Everything the thunk runs off the agent's stack, its own frame and the claim and release call
+// trees, lands in the interrupted green thread's OS reserve; `requireDebugTrapFitsItsReserve`
+// bounds it.
 function buildDebugTrapThunkChunk() returns FunctionCodeChunk
 	let SlotExcPtrs = 0
 	let SlotPrivate = 1
@@ -2026,11 +2022,18 @@ function buildDebugTrapThunkChunk() returns FunctionCodeChunk
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotExcCode), srcReg: X64Register.rax)
 	emitDebugTrapCodeArm(asm, codeReg: X64Register.rax, scratch: X64Register.rdx, excCode: DbgExcCodeBreakpoint, ours: ours)
 	emitDebugTrapCodeArm(asm, codeReg: X64Register.rax, scratch: X64Register.rdx, excCode: DbgExcCodeSingleStep, ours: ours)
+
+	for kind in HardwareFaultKind.allCases 'eachStoppingFault'
+		emitDebugTrapCodeArm(asm, codeReg: X64Register.rax, scratch: X64Register.rdx, excCode: windowsFaultExceptionCode(kind), ours: ours)
+	end 'eachStoppingFault'
+
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: continueSearch)
 
 	asm.placeLabel(ours)
 
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: DebugClaimStackName)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.r8, src: X64Register.r8, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: continueSearch)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rbp, disp: asm.slotDisp(SlotPrivate), wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: DbgPrivOffSavedRsp as Imm32, srcReg: X64Register.rsp)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsp, src: X64Register.r8, wide: true)

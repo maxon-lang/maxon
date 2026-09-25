@@ -1,0 +1,15 @@
+let EndingCallCaseLabel = "next-over-a-call-that-ends-the-program-reports-the-end-once"
+
+test 'a next over a call that ends the program reports the end once and nothing after it'
+	let staged = builtFixture(EndingCallCaseLabel, fixture: EnderFixtureName)
+	let endingLine = anchorLine(staged, anchor: "ending-call")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(endingLine)}", RunCommand, NextCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let endings = eventsOfKind(events, kind: ExitEventName).count() + eventsOfKind(events, kind: CrashEventName).count()
+
+	try Expect.equal(eventsOfKind(events, kind: TimeoutEventName).count() as AssertedInt, expected: 0, message: "a walk whose callee ends the program ends with it; it must not wait out the stop timeout. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(eventsOfKind(events, kind: StopEventName).count() as AssertedInt, expected: 1, message: "the breakpoint on the ending call is the session's only stop. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(endings as AssertedInt, expected: 1, message: "the program ends once, and its end is reported once — by the walk that saw it, not again by the session that closes after it. It printed: {renderedRows(eventKinds(events))}. {said}")
+end 'a next over a call that ends the program reports the end once and nothing after it'

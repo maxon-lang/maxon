@@ -1,0 +1,35 @@
+let OversizedTimeoutCaseLabel = "a-stop-timeout-past-the-bound-is-refused-by-name"
+let StopTimeoutArgument = "stopTimeoutSeconds"
+let PastTheBound = 1000000000000
+
+type OversizedTimeoutSession implements DapSession
+	let executable as FilePath
+	export var launched as bool
+	export var refusal as String
+
+	static function create(executable FilePath) returns OversizedTimeoutSession
+		return Self{executable: executable, launched: true, refusal: ""}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+
+		let answer = try client.request(LaunchCommand, argumentsJson: "\{\"program\":{Json.quote(self.executable.toString())},\"{StopTimeoutArgument}\":{PastTheBound}\}")
+		self.launched = dapSuccess(answer)
+
+		if not self.launched 'refused'
+			self.refusal = dapRefusal(answer)
+		end 'refused'
+
+		_ = try client.request(DisconnectCommand)
+	end 'drive'
+end 'OversizedTimeoutSession'
+
+test 'a launch whose stop timeout is past every bound the debugger keeps is refused by name'
+	let staged = dapStagedFixture(OversizedTimeoutCaseLabel, fixture: SteppingFixtureName)
+	var session = OversizedTimeoutSession.create(dapBuildFixture(staged))
+	try dapRunSession(session, completing: "answer the launch")
+
+	try Expect.isFalse(session.launched, message: "`{StopTimeoutArgument}` of {PastTheBound} seconds is past the bound the CLI's `--stop-timeout` keeps, and the two doors share one validator")
+	try Expect.contains(session.refusal, needle: StopTimeoutArgument, message: "the refusal names the argument it refused; it said: {session.refusal}")
+end 'a launch whose stop timeout is past every bound the debugger keeps is refused by name'

@@ -15,7 +15,7 @@ Install **Maxon** from the
 or [Open VSX](https://open-vsx.org/extension/maxon-lang/maxon-lsp-client) (extension id
 `maxon-lang.maxon-lsp-client`). It activates in a workspace containing Maxon files and provides syntax
 highlighting, diagnostics, hover, completion, go-to-definition, rename, formatting, the Compiler
-Explorer and a Test Explorer. `.maxon` sources, `.maxproj` project files, `.maxtasks` task files and
+Explorer, a Test Explorer and, on x64-windows, debugging. `.maxon` sources, `.maxproj` project files, `.maxtasks` task files and
 `.maxtest` test files are all Maxon documents, served by the language server.
 
 **Finding the compiler.** The extension runs `maxon lsp-server` from the first compiler it finds:
@@ -66,6 +66,16 @@ whose every level holds a `.maxon` source. When the
 workspace folder is the Maxon source checkout, a second controller, **Maxon Spec Suite**, lists the spec
 tests in `specs/*.md` and runs them with the checkout's own compiler
 (`maxon-bin/.maxon/maxon spec-test --filter=…`).
+
+**Debugging.** The extension contributes a `maxon` debugger whose adapter is
+[`maxon dap-server`](#maxon-dap-server), run from the compiler it found, on x64-windows. **F5** works
+without a `launch.json`: a configuration without `program` debugs the active editor's `.maxon` file, or
+else the workspace folder when it holds a `.maxproj` file. A source file or project is built with debug info
+into the host's Maxon cache first. The Test Explorer's **Debug Test** builds each touched project's tests
+once with `maxon test --list --build --json`, copies the test binary and its sidecar to a temporary
+directory, and debugs each selected test in turn under that copy (see
+[Running the test binary](/docs/cli/#running-the-test-binary)); cancelling the run stops the session. The extension's
+README describes the launch attributes and the panes.
 
 ## `maxon lsp-server`
 
@@ -230,6 +240,57 @@ any project is loading.
 ```json
 { "rootPath": "/home/me/app", "loading": true }
 ```
+
+## `maxon dap-server`
+
+```bash
+maxon dap-server
+```
+
+Speaks the Debug Adapter Protocol over stdin and stdout, with the same `Content-Length` framing as
+`maxon lsp-server`. An option or an argument after the command word is refused with exit 1. It drives
+the same debugger as [`maxon debug`](/docs/cli/debugging/#maxon-debug), so it debugs x64-windows programs only; the VS Code
+extension runs it as its debug adapter.
+
+**Requests:** `initialize`, `launch`, `setBreakpoints`, `setFunctionBreakpoints`, `configurationDone`,
+`threads`, `stackTrace`, `scopes`, `variables`, `evaluate`, `continue`, `next`, `stepIn`, `stepOut`,
+`pause`, `disconnect`, `terminate`. Any other request is answered `success: false` with the message
+`unsupported request: <command>`.
+
+**`launch` arguments:** `program`, `args`, `env`, `cwd`, `stopOnEntry`, `maxProcs`, `trace`,
+`stopTimeoutSeconds`. `stopTimeoutSeconds` is a number of seconds, default 10, with a fraction honoured
+to the millisecond, from 0.001 to 922337203685; `maxProcs` is a whole number of processors from 1 to
+4294967295, passed to the program as `MAXON_MAX_PROCS`. A value outside its bounds refuses the `launch`,
+naming the argument.
+
+**Events:** `initialized`, `stopped`, `continued`, `output`, `exited`, `terminated`.
+
+One adapter debugs one launch. `program` is a `.maxon` file or a project directory, which is built with
+debug info into the host's Maxon cache (a failed build refuses the `launch` with the compiler's
+diagnostics), or an executable already built with its sidecar. A `.maxtest` file is refused by name: a
+test file's debug build is `maxon test --list --build`, and the test binary it builds is the `program`
+to give. The program starts at `configurationDone`; with `stopOnEntry` it is reported `stopped` with
+reason `entry` before `main`. As it starts, the adapter removes the debug builds left by servers that
+have ended; see [`maxon cache`](/docs/cli/#maxon-cache).
+
+- **Breakpoints.** `setBreakpoints` answers each line `verified`, or unverified with a `message` — a line
+  with no code, or a `condition` the debugger cannot evaluate. Breakpoints set while the program runs
+  are armed without stopping it. `setFunctionBreakpoints` resolves names as `break` does.
+- **Stops.** A `stopped` event carries `allThreadsStopped: true` and a `reason` of `breakpoint`, `step`,
+  `pause`, `entry`, or `exception` for a `trap` or a `fault`. `continue`, `next`, `stepIn`, `stepOut` and
+  `pause` are answered at once and the `stopped` event follows; `pause` stops every thread, whatever
+  `threadId` it names.
+- **Inspecting.** `threads` lists the green threads, or one thread `main` in a program without a
+  scheduler. `stackTrace` includes inlined frames, marked `presentationHint: "subtle"`. `variables`
+  expands a value's fields and elements on request, and a value the debugger cannot read is shown as
+  `<optimized out>`, `<not live here>`, `<read failed>` or `<layout not described>`. `evaluate` in the
+  `watch`, `hover`, `clipboard` or `variables` context prints an expression; in the `repl` context it runs
+  any [`maxon debug`](/docs/cli/debugging/#maxon-debug) command and answers the transcript.
+- **The end.** The program's stdout and stderr arrive as `output` events; its exit is `exited` with the
+  exit code, then `terminated`. `disconnect` and `terminate` both reap a program still running. After
+  the program has ended, `threads`, `stackTrace`, `scopes` and `variables` answer empty lists.
+
+Lines and columns are 1-based unless `initialize` says `linesStartAt1` or `columnsStartAt1` is `false`.
 
 ## Other editors
 

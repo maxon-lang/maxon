@@ -1,0 +1,17 @@
+let ProjectSiblingInterfaceDirName = "diagnostics-project-sibling-result-returned-as-an-interface"
+let ProjectSiblingInterfaceHelperFileName = "shapes.maxon"
+let ProjectSiblingInterfaceBufferFileName = "main.maxon"
+let ProjectSiblingInterfaceHelperSource = "module function siblingShape() returns Square\n\treturn Square.create(4)\nend 'siblingShape'\n"
+let ProjectSiblingInterfaceBufferSource = "module typealias Side = int(0 to 100)\n\nmodule interface Shape\n\tfunction area() returns Side\nend 'Shape'\n\nmodule type Square implements Shape\n\tvar side as Side\n\n\tmodule static function create(side Side) returns Square\n\t\treturn Square\{side: side\}\n\tend 'create'\n\n\tmodule function area() returns Side\n\t\treturn self.side\n\tend 'area'\nend 'Square'\n\nfunction pickShape() returns Shape\n\treturn siblingShape()\nend 'pickShape'\n\nfunction main() returns ExitCode\n\treturn 0 if pickShape().area() == 4 else 1\nend 'main'\n"
+
+test 'a sibling function result returned at an interface type is not a conformance mismatch'
+	let root = stagedProjectDiagnosticsRoot(ProjectSiblingInterfaceDirName)
+	writeCorpusFile(root, fileName: ProjectSiblingInterfaceHelperFileName, content: ProjectSiblingInterfaceHelperSource)
+	writeCorpusFile(root, fileName: ProjectSiblingInterfaceBufferFileName, content: ProjectSiblingInterfaceBufferSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: ProjectSiblingInterfaceBufferFileName, content: ProjectSiblingInterfaceBufferSource)
+
+	discardOutsideCheckoutDir(root)
+
+	expectNoProjectDiagnostics(probe, note: "`siblingShape` is a `module function` the sibling file declares, returning a `Square` that implements `Shape`, and a `maxon build` of the staged project exits 0. The buffer compiled alone cannot type the sibling's result, so the `return` into `Shape` meets a value of no known type — and neither a conformance refusal about it nor a compiler panic on it may reach the editor.")
+end 'a sibling function result returned at an interface type is not a conformance mismatch'

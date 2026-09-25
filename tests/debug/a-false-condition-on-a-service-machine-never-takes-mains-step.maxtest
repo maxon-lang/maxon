@@ -1,0 +1,39 @@
+let HotServiceCaseLabel = "a-false-condition-on-a-service-machine-never-takes-mains-step"
+let NeverTrueCondition = "k == 999999999"
+let StepsTaken = 10
+let MainFunctionName = "main"
+let StopTimeoutSeconds = 5
+let FourProcessors = "4"
+let SpawnSpelling = "spawn Churner.create("
+
+test 'steps on main while services on other machines hit a false condition stay on main and leave main pausable'
+	let staged = builtFixture(HotServiceCaseLabel, fixture: HotServiceFixtureName)
+
+	try Expect.atLeast(stagedLinesContaining(staged, needle: SpawnSpelling) as AssertedInt, than: 2, message: "this case is about OTHER machines taking the conditioned trap while main steps, so the fixture must start its hot loops as services, which run on green threads of their own and on other processors; an `async` call stays on main's green thread and never races main's step.")
+
+	let hotLine = anchorLine(staged, anchor: "hot-body")
+	let startLine = anchorLine(staged, anchor: "main-start")
+	var script = StringArray.create()
+	script.push(conditionalBreak(lineTarget(hotLine), condition: NeverTrueCondition))
+	script.push("{BreakCommand} {lineTarget(startLine)}")
+	script.push(RunCommand)
+	script.push("{ClearCommand} {lineTarget(startLine)}")
+
+	let commands = debugCommandLine(appendedCommands(appendedCommands(script, rest: repeatedCommand(NextCommand, times: StepsTaken)), rest: [ContinueCommand, PauseCommand, BacktraceCommand]))
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: ["{DebugStopTimeoutOptionPrefix}{StopTimeoutSeconds}", targetEnvOption(MaxProcsVariableName, value: FourProcessors)])
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let stops = eventsOfKind(events, kind: StopEventName)
+
+	try Expect.equal(stops.count() as AssertedInt, expected: StepsTaken + 2, message: "the breakpoint on main, one stop per `{NextCommand}`, and the pause after the `{ContinueCommand}` times out. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	for (iter, stop) in stops.withIterator() 'eachStop'
+		if iter.index() > 0 and iter.index() <= StepsTaken 'aStepOnMain'
+			try Expect.equal(textOf(stop, node: stop.root, key: FunctionKey), expected: MainFunctionName, message: "⛔ A SERVICE'S STRAY STEP IS NEVER PRESENTED. Stop {iter.index()} landed in `{textOf(stop, node: stop.root, key: FunctionKey)}`: a machine that resumed a false condition single-stepped, or its step stop was shown in place of main's. {said}")
+			try Expect.equal(textOf(stop, node: stop.root, key: ReasonKey), expected: StepStopReason, message: "every `{NextCommand}` lands as a step. {said}")
+		end 'aStepOnMain'
+	end 'eachStop'
+
+	let last = eventAt(stops, index: StepsTaken + 1)
+	try Expect.equal(textOf(last, node: last.root, key: ReasonKey), expected: PauseStopReason, message: "⛔ MAIN MUST STILL BE PAUSABLE AFTER ITS STEPS. A step whose hold on a machine's signal claim is taken by another machine and never given back leaves main refusing every later interruption. {said}")
+end 'steps on main while services on other machines hit a false condition stay on main and leave main pausable'

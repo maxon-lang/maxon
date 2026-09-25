@@ -1,0 +1,21 @@
+let TestFileStagingDir = "temp/mcp-debug-start-refuses-a-test-file"
+let TestFileName = "sample.maxtest"
+let TestFileSource = "test 'sample'\n\tExpect.isTrue(true)\nend 'sample'\n"
+let TestListFlagSpelling = "--list"
+
+test 'debug_start refuses a test file given as an executable or as a source, and names the test build'
+	let testFile = stagedProgram(TestFileStagingDir, fileName: TestFileName, source: TestFileSource)
+
+	var session = StreamingMcpSession.startFrom(testedCompilerPath())
+	stdioHandshake(session)
+
+	let asExecutable = stdioToolCall(session, id: 2, name: DebugStartTool, argumentsJson: debugExecutableArgument(testFile))
+	let asSource = stdioToolCall(session, id: 3, name: DebugStartTool, argumentsJson: sourceArgument(testFile.toString()))
+
+	_ = try session.close() otherwise 0
+
+	try Expect.isTrue(toolCallIsError(asExecutable), message: "`{TestFileName}` is Maxon test source, not a built program, so `executable` must refuse it rather than launch it: {toolCallText(asExecutable)}")
+	try Expect.contains(toolCallText(asExecutable), needle: TestListFlagSpelling, message: "the refusal must name the build a test file is debugged through: {toolCallText(asExecutable)}")
+	try Expect.isTrue(toolCallIsError(asSource), message: "`{TestFileName}` is a test file, which a `source` debug build cannot compile as a program: {toolCallText(asSource)}")
+	try Expect.contains(toolCallText(asSource), needle: TestListFlagSpelling, message: "the refusal must name the build a test file is debugged through, not call the file something other than Maxon source: {toolCallText(asSource)}")
+end 'debug_start refuses a test file given as an executable or as a source, and names the test build'

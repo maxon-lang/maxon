@@ -4,26 +4,155 @@
 // asks for. Every table is found through its own header slot, so a writer may lay the tables out in any
 // order.
 //
-// ⚠ **A FILE THIS READER CANNOT VOUCH FOR IS REFUSED, NEVER PARTLY TRUSTED.** Bad magic, a version it
-// does not speak, or a header claiming more than the file holds are all refusals with a reason: an
+// A file this reader cannot vouch for is refused at `parse` with a reason, never partly trusted: an
 // instrument that answers confidently from a container it misread is worse than one that will not
-// answer at all.
+// answer at all. Every cross-table reference and window is checked there, which is what lets the
+// accessors treat a bad one as a panic.
+
+export enum MxdbgReference
+	siteParent
+	siteCallFile
+	rangeSite
+	localSite
+	localType
+	fieldType
+	elementType
+	lineFile
+	coverageFile
+end 'MxdbgReference'
+
+export enum MxdbgWindow
+	functionLines
+	functionLocals
+	typeFields
+	foldedWords
+end 'MxdbgWindow'
+
+export enum MxdbgOrderedTable
+	functionLines
+	inlineRanges
+	functionRanges
+	functionLineOutsideItsRange
+	localScopes
+end 'MxdbgOrderedTable'
+
+function orderedTableText(table MxdbgOrderedTable, record MxdbgIndex) returns String
+	return match table 'which'
+		functionLines gives "line rows of function {record} are not in ascending code order"
+		inlineRanges gives "inline range {record} is empty or overlaps the range before it"
+		functionRanges gives "function {record}'s code range ends before it starts or overlaps the function below it"
+		functionLineOutsideItsRange gives "a line row of function {record} lies outside that function's code range"
+		localScopes gives "local {record}'s scope is empty or reaches outside its function's code range"
+	end 'which'
+end 'orderedTableText'
 
 export union MxdbgReadError implements Error
 	notASidecar
 	unsupportedVersion(version MxdbgIndex)
 	truncated
+	danglingReference(reference MxdbgReference, record MxdbgIndex, names MxdbgIndex)
+	windowPastTable(window MxdbgWindow, record MxdbgIndex)
+	unknownOrigin(holder MxdbgOriginHolder, record MxdbgIndex, word MxdbgIndex)
+	stringPastPool(string MxdbgPoolString, record MxdbgIndex)
+	outOfOrder(table MxdbgOrderedTable, record MxdbgIndex)
+	unknownLocKind(record MxdbgIndex, word MxdbgIndex)
 
 	export function displayReason() returns String
 		return match self 'k'
 			notASidecar gives "not a .mxdbg file (bad magic)"
 			unsupportedVersion(version) gives ".mxdbg format version {version} is not supported (this build speaks {MxdbgFormatVersion})"
 			truncated gives "the .mxdbg header describes more data than the file holds"
+			danglingReference(reference, record, names) gives "the .mxdbg {danglingReferenceText(reference, record: record, names: names)}"
+			windowPastTable(window, record) gives "the .mxdbg {windowPastTableText(window, record: record)}"
+			unknownOrigin(holder, record, word) gives "the .mxdbg {originHolderText(holder)} {record} names origin {word}, which is none this build knows"
+			stringPastPool(string, record) gives "the .mxdbg {poolStringText(string, record: record)} runs past the string pool"
+			outOfOrder(table, record) gives "the .mxdbg {orderedTableText(table, record: record)}"
+			unknownLocKind(record, word) gives "the .mxdbg local {record} names location kind {word}, which is none this build knows"
 		end 'k'
 	end 'displayReason'
 end 'MxdbgReadError'
 
-// One function record, materialized.
+export enum MxdbgPoolString
+	targetTriple
+	sourceRoot
+	fileName
+	functionName
+	functionDisplayName
+	typeName
+	fieldName
+	localName
+	inlineSiteName
+end 'MxdbgPoolString'
+
+function poolStringText(string MxdbgPoolString, record MxdbgIndex) returns String
+	return match string 'which'
+		targetTriple gives "header's target triple"
+		sourceRoot gives "header's source root"
+		fileName gives "name of file {record}"
+		functionName gives "name of function {record}"
+		functionDisplayName gives "display name of function {record}"
+		typeName gives "name of type {record}"
+		fieldName gives "name of field {record}"
+		localName gives "name of local {record}"
+		inlineSiteName gives "name of inline site {record}"
+	end 'which'
+end 'poolStringText'
+
+function requirePoolSliceFits(offset ByteOffset, length BytePos, poolSize BytePos, string MxdbgPoolString, record MxdbgIndex) throws MxdbgReadError
+	if not spanFitsWithin(offset, count: length, total: poolSize) 'pastThePool'
+		throw MxdbgReadError.stringPastPool(string, record: record)
+	end 'pastThePool'
+end 'requirePoolSliceFits'
+
+export enum MxdbgOriginHolder
+	functionRecord
+	inlineSiteRecord
+end 'MxdbgOriginHolder'
+
+function originHolderText(holder MxdbgOriginHolder) returns String
+	return match holder 'which'
+		functionRecord gives "function"
+		inlineSiteRecord gives "inline site"
+	end 'which'
+end 'originHolderText'
+
+function requireKnownOrigin(word MxdbgIndex, holder MxdbgOriginHolder, record MxdbgIndex) throws MxdbgReadError
+	match mxdbgOriginOfWord(word) 'known'
+		unknown then throw MxdbgReadError.unknownOrigin(holder, record: record, word: word)
+		known then return
+	end 'known'
+end 'requireKnownOrigin'
+
+function validatedOrigin(word MxdbgIndex) returns MxdbgOrigin
+	match mxdbgOriginOfWord(word) 'known'
+		unknown then panic("MxdbgReader: origin word {word} was read from a record `requireReferencesHold` validated when the image was opened")
+		known(origin) then return origin
+	end 'known'
+end 'validatedOrigin'
+
+function danglingReferenceText(reference MxdbgReference, record MxdbgIndex, names MxdbgIndex) returns String
+	return match reference 'which'
+		siteParent gives "inline site {record} names {names} as its parent, which is not a site recorded before it"
+		siteCallFile gives "inline site {record} was called from file {names}, past the file table"
+		rangeSite gives "inline range {record} names site {names}, past the site table"
+		localSite gives "local {record} belongs to inline site {names}, past the site table"
+		localType gives "local {record} names type {names}, past the type table"
+		fieldType gives "field {record} names type {names}, past the type table"
+		elementType gives "type {record} names element type {names}, past the type table"
+		lineFile gives "line row {record} names file {names}, past the file table"
+		coverageFile gives "coverage point {record} names file {names}, past the file table"
+	end 'which'
+end 'danglingReferenceText'
+
+function windowPastTableText(window MxdbgWindow, record MxdbgIndex) returns String
+	return match window 'which'
+		functionLines gives "function {record} claims line rows past the line table"
+		functionLocals gives "function {record} claims locals past the local table"
+		typeFields gives "type {record} claims fields past the field table"
+		foldedWords gives "local {record} folds constant words past the constant table"
+	end 'which'
+end 'windowPastTableText'
+
 export type MxdbgFunctionInfo
 	export var name as String
 	export var codeStart as MxdbgCodeOffset
@@ -34,9 +163,11 @@ export type MxdbgFunctionInfo
 	export var lineCount as MxdbgIndex
 	export var localFirst as MxdbgIndex
 	export var localCount as MxdbgIndex
+	export var displayName as String
+	export var origin as MxdbgOrigin
 
-	export static function create(name String, codeStart MxdbgCodeOffset, codeEnd MxdbgCodeOffset, frameSize MxdbgIndex, paramCount MxdbgIndex, lineFirst MxdbgIndex, lineCount MxdbgIndex, localFirst MxdbgIndex, localCount MxdbgIndex) returns MxdbgFunctionInfo
-		return Self{name: name, codeStart: codeStart, codeEnd: codeEnd, frameSize: frameSize, paramCount: paramCount, lineFirst: lineFirst, lineCount: lineCount, localFirst: localFirst, localCount: localCount}
+	export static function create(name String, codeStart MxdbgCodeOffset, codeEnd MxdbgCodeOffset, frameSize MxdbgIndex, paramCount MxdbgIndex, lineFirst MxdbgIndex, lineCount MxdbgIndex, localFirst MxdbgIndex, localCount MxdbgIndex, displayName String, origin MxdbgOrigin) returns MxdbgFunctionInfo
+		return Self{name: name, codeStart: codeStart, codeEnd: codeEnd, frameSize: frameSize, paramCount: paramCount, lineFirst: lineFirst, lineCount: lineCount, localFirst: localFirst, localCount: localCount, displayName: displayName, origin: origin}
 	end 'create'
 end 'MxdbgFunctionInfo'
 
@@ -52,6 +183,10 @@ export type MxdbgLineInfo
 	export static function create(codeOffset MxdbgCodeOffset, file String, line MxdbgIndex, column MxdbgIndex, flags MxdbgIndex) returns MxdbgLineInfo
 		return Self{codeOffset: codeOffset, file: file, line: line, column: column, flags: flags}
 	end 'create'
+
+	export function entersTheLine() returns bool
+		return (self.flags and MxdbgLineFlagLineEntry) != 0
+	end 'entersTheLine'
 end 'MxdbgLineInfo'
 
 // One type record, materialized. `kind` stays the raw word the file carries: this reader's job is to
@@ -92,7 +227,6 @@ export type MxdbgFieldInfo
 	end 'create'
 end 'MxdbgFieldInfo'
 
-// One local record, materialized. `locKind` stays the raw word for `MxdbgTypeInfo.kind`'s reason.
 export type MxdbgLocalInfo
 	export var name as String
 	export var locKind as MxdbgIndex
@@ -101,9 +235,10 @@ export type MxdbgLocalInfo
 	export var scopeStart as MxdbgCodeOffset
 	export var scopeEnd as MxdbgCodeOffset
 	export var flags as MxdbgIndex
+	export var site as MxdbgInlineSiteLookup
 
-	export static function create(name String, locKind MxdbgIndex, locValue MxdbgLocValue, typeId MxdbgIndex, scopeStart MxdbgCodeOffset, scopeEnd MxdbgCodeOffset, flags MxdbgIndex) returns MxdbgLocalInfo
-		return Self{name: name, locKind: locKind, locValue: locValue, typeId: typeId, scopeStart: scopeStart, scopeEnd: scopeEnd, flags: flags}
+	export static function create(name String, locKind MxdbgIndex, locValue MxdbgLocValue, typeId MxdbgIndex, scopeStart MxdbgCodeOffset, scopeEnd MxdbgCodeOffset, flags MxdbgIndex, site MxdbgInlineSiteLookup) returns MxdbgLocalInfo
+		return Self{name: name, locKind: locKind, locValue: locValue, typeId: typeId, scopeStart: scopeStart, scopeEnd: scopeEnd, flags: flags, site: site}
 	end 'create'
 
 	export function holdsAPointer() returns bool
@@ -178,16 +313,21 @@ export union MxdbgFunctionLookup
 	found(info MxdbgFunctionInfo)
 end 'MxdbgFunctionLookup'
 
-// One spliced body: the callee's name and the site it is nested under, or `none` for a body spliced
-// into its function's own text.
 export type MxdbgInlineSiteInfo
 	export var name as String
 	export var parent as MxdbgInlineSiteLookup
+	export var call as MxdbgCallPosition
+	export var origin as MxdbgOrigin
 
-	export static function create(name String, parent MxdbgInlineSiteLookup) returns MxdbgInlineSiteInfo
-		return Self{name: name, parent: parent}
+	export static function create(name String, parent MxdbgInlineSiteLookup, call MxdbgCallPosition, origin MxdbgOrigin) returns MxdbgInlineSiteInfo
+		return Self{name: name, parent: parent, call: call, origin: origin}
 	end 'create'
 end 'MxdbgInlineSiteInfo'
+
+export union MxdbgCallPosition
+	none
+	at(file String, line MxdbgIndex, column MxdbgIndex)
+end 'MxdbgCallPosition'
 
 // A site index, or none: what an offset outside every inline range answers, and what a site spliced
 // into the function's own text names as its parent.
@@ -204,11 +344,15 @@ end 'MxdbgLineLookup'
 // The function table read in CODE-START order — see `MxdbgReader.funcOrder`.
 typealias MxdbgFuncOrder = Array with MxdbgIndex
 
+export typealias MxdbgLineInfoArray = Array with MxdbgLineInfo
+
 export type MxdbgReader
 	var image as ByteArray
 	export var buildId as HashDigest
 	export var triple as String
+	export var sourceRoot as String
 	var stringPoolOff as ByteOffset
+	var stringPoolSize as BytePos
 	var fileTableOff as ByteOffset
 	var fileTally as MxdbgIndex
 	var funcTableOff as ByteOffset
@@ -250,7 +394,7 @@ export type MxdbgReader
 		let stringPoolOff = imageReadU32(image, at: MxdbgOffStringPoolOff) as ByteOffset
 		let poolSize = imageReadU32(image, at: MxdbgOffStringPoolSize) as BytePos
 
-		if not imageRangeFits(image, start: stringPoolOff, count: poolSize) 'poolPastEnd'
+		if not spanFitsWithin(stringPoolOff, count: poolSize, total: image.count()) 'poolPastEnd'
 			throw MxdbgReadError.truncated
 		end 'poolPastEnd'
 
@@ -261,13 +405,10 @@ export type MxdbgReader
 		let lineTableOff = imageReadU32(image, at: MxdbgOffLineTableOff) as ByteOffset
 		let lineTally = imageReadU32(image, at: MxdbgOffLineCount) as MxdbgIndex
 
-		if not imageRangeFits(image, start: fileTableOff, count: (fileTally * MxdbgFileEntrySize) as BytePos) or not imageRangeFits(image, start: funcTableOff, count: (funcTally * MxdbgFuncEntrySize) as BytePos) or not imageRangeFits(image, start: lineTableOff, count: (lineTally * MxdbgLineEntrySize) as BytePos) 'tablePastEnd'
+		if not spanFitsWithin(fileTableOff, count: (fileTally * MxdbgFileEntrySize) as BytePos, total: image.count()) or not spanFitsWithin(funcTableOff, count: (funcTally * MxdbgFuncEntrySize) as BytePos, total: image.count()) or not spanFitsWithin(lineTableOff, count: (lineTally * MxdbgLineEntrySize) as BytePos, total: image.count()) 'tablePastEnd'
 			throw MxdbgReadError.truncated
 		end 'tablePastEnd'
 
-		// ⛔ The three record tables are found through their OWN header slots, whose order is not the
-		// order the sections sit in on disk (see `MxdbgFormat`). Deriving one from another's extent would
-		// bake that trap in.
 		let typeTableOff = imageReadU32(image, at: MxdbgOffTypeTableOff) as ByteOffset
 		let typeTally = imageReadU32(image, at: MxdbgOffTypeCount) as MxdbgIndex
 		let fieldTableOff = imageReadU32(image, at: MxdbgOffFieldTableOff) as ByteOffset
@@ -275,14 +416,14 @@ export type MxdbgReader
 		let localTableOff = imageReadU32(image, at: MxdbgOffLocalTableOff) as ByteOffset
 		let localTally = imageReadU32(image, at: MxdbgOffLocalCount) as MxdbgIndex
 
-		if not imageRangeFits(image, start: typeTableOff, count: (typeTally * MxdbgTypeEntrySize) as BytePos) or not imageRangeFits(image, start: fieldTableOff, count: (fieldTally * MxdbgFieldEntrySize) as BytePos) or not imageRangeFits(image, start: localTableOff, count: (localTally * MxdbgLocalEntrySize) as BytePos) 'recordTablePastEnd'
+		if not spanFitsWithin(typeTableOff, count: (typeTally * MxdbgTypeEntrySize) as BytePos, total: image.count()) or not spanFitsWithin(fieldTableOff, count: (fieldTally * MxdbgFieldEntrySize) as BytePos, total: image.count()) or not spanFitsWithin(localTableOff, count: (localTally * MxdbgLocalEntrySize) as BytePos, total: image.count()) 'recordTablePastEnd'
 			throw MxdbgReadError.truncated
 		end 'recordTablePastEnd'
 
 		let covTableOff = imageReadU32(image, at: MxdbgOffCovTableOff) as ByteOffset
 		let covTally = imageReadU32(image, at: MxdbgOffCovCount) as MxdbgIndex
 
-		if not imageRangeFits(image, start: covTableOff, count: (covTally * MxdbgCovEntrySize) as BytePos) 'coverageTablePastEnd'
+		if not spanFitsWithin(covTableOff, count: (covTally * MxdbgCovEntrySize) as BytePos, total: image.count()) 'coverageTablePastEnd'
 			throw MxdbgReadError.truncated
 		end 'coverageTablePastEnd'
 
@@ -291,22 +432,210 @@ export type MxdbgReader
 		let inlineRangeTableOff = imageReadU32(image, at: MxdbgOffInlineRangeTableOff) as ByteOffset
 		let inlineRangeTally = imageReadU32(image, at: MxdbgOffInlineRangeCount) as MxdbgIndex
 
-		if not imageRangeFits(image, start: inlineSiteTableOff, count: (inlineSiteTally * MxdbgInlineSiteEntrySize) as BytePos) or not imageRangeFits(image, start: inlineRangeTableOff, count: (inlineRangeTally * MxdbgInlineRangeEntrySize) as BytePos) 'inlineTablePastEnd'
+		if not spanFitsWithin(inlineSiteTableOff, count: (inlineSiteTally * MxdbgInlineSiteEntrySize) as BytePos, total: image.count()) or not spanFitsWithin(inlineRangeTableOff, count: (inlineRangeTally * MxdbgInlineRangeEntrySize) as BytePos, total: image.count()) 'inlineTablePastEnd'
 			throw MxdbgReadError.truncated
 		end 'inlineTablePastEnd'
 
 		let constTableOff = imageReadU32(image, at: MxdbgOffConstTableOff) as ByteOffset
 		let constTally = imageReadU32(image, at: MxdbgOffConstCount) as MxdbgIndex
 
-		if not imageRangeFits(image, start: constTableOff, count: (constTally * MxdbgConstEntrySize) as BytePos) 'constTablePastEnd'
+		if not spanFitsWithin(constTableOff, count: (constTally * MxdbgConstEntrySize) as BytePos, total: image.count()) 'constTablePastEnd'
 			throw MxdbgReadError.truncated
 		end 'constTablePastEnd'
 
 		let tripleOff = imageReadU32(image, at: MxdbgOffTripleOff) as ByteOffset
 		let tripleLen = imageReadU32(image, at: MxdbgOffTripleLen) as BytePos
+		let rootOff = imageReadU32(image, at: MxdbgOffSourceRootOff) as ByteOffset
+		let rootLen = imageReadU32(image, at: MxdbgOffSourceRootLen) as BytePos
 
-		return Self{image: image, buildId: imageReadU64(image, at: MxdbgOffBuildId) as HashDigest, triple: String.from(imageSlice(image, start: stringPoolOff + tripleOff, count: tripleLen)), stringPoolOff: stringPoolOff, fileTableOff: fileTableOff, fileTally: fileTally, funcTableOff: funcTableOff, funcTally: funcTally, lineTableOff: lineTableOff, lineTally: lineTally, typeTableOff: typeTableOff, typeTally: typeTally, fieldTableOff: fieldTableOff, fieldTally: fieldTally, localTableOff: localTableOff, localTally: localTally, covTableOff: covTableOff, covTally: covTally, inlineSiteTableOff: inlineSiteTableOff, inlineSiteTally: inlineSiteTally, inlineRangeTableOff: inlineRangeTableOff, inlineRangeTally: inlineRangeTally, constTableOff: constTableOff, constTally: constTally, funcOrder: functionOrderByCodeStart(image, tableOff: funcTableOff, tally: funcTally)}
+		try requirePoolSliceFits(tripleOff, length: tripleLen, poolSize: poolSize, string: MxdbgPoolString.targetTriple, record: 0)
+		try requirePoolSliceFits(rootOff, length: rootLen, poolSize: poolSize, string: MxdbgPoolString.sourceRoot, record: 0)
+
+		let reader = Self{image: image, buildId: imageReadU64(image, at: MxdbgOffBuildId) as HashDigest, triple: String.from(imageSlice(image, start: stringPoolOff + tripleOff, count: tripleLen)), sourceRoot: String.from(imageSlice(image, start: stringPoolOff + rootOff, count: rootLen)), stringPoolOff: stringPoolOff, stringPoolSize: poolSize, fileTableOff: fileTableOff, fileTally: fileTally, funcTableOff: funcTableOff, funcTally: funcTally, lineTableOff: lineTableOff, lineTally: lineTally, typeTableOff: typeTableOff, typeTally: typeTally, fieldTableOff: fieldTableOff, fieldTally: fieldTally, localTableOff: localTableOff, localTally: localTally, covTableOff: covTableOff, covTally: covTally, inlineSiteTableOff: inlineSiteTableOff, inlineSiteTally: inlineSiteTally, inlineRangeTableOff: inlineRangeTableOff, inlineRangeTally: inlineRangeTally, constTableOff: constTableOff, constTally: constTally, funcOrder: functionOrderByCodeStart(image, tableOff: funcTableOff, tally: funcTally)}
+		try reader.requireReferencesHold()
+		try reader.requireOrderedTables()
+
+		return reader
 	end 'parse'
+
+	function requireRecordString(tableOff ByteOffset, stride ByteOffset, index MxdbgIndex, offsetAt ByteOffset, lengthAt ByteOffset, string MxdbgPoolString) throws MxdbgReadError
+		try requirePoolSliceFits(self.tableWord(tableOff, stride: stride, index: index, at: offsetAt) as ByteOffset, length: self.tableWord(tableOff, stride: stride, index: index, at: lengthAt) as BytePos, poolSize: self.stringPoolSize, string: string, record: index)
+	end 'requireRecordString'
+
+	function requireReferencesHold() throws MxdbgReadError
+		for file in 0 upto self.fileTally 'eachFile'
+			try self.requireRecordString(self.fileTableOff, stride: MxdbgFileEntrySize, index: file, offsetAt: MxdbgFileNameOff, lengthAt: MxdbgFileNameLen, string: MxdbgPoolString.fileName)
+		end 'eachFile'
+
+		for site in 0 upto self.inlineSiteTally 'eachSite'
+			try self.requireRecordString(self.inlineSiteTableOff, stride: MxdbgInlineSiteEntrySize, index: site, offsetAt: MxdbgInlineSiteNameOff, lengthAt: MxdbgInlineSiteNameLen, string: MxdbgPoolString.inlineSiteName)
+
+			let parent = self.tableWord(self.inlineSiteTableOff, stride: MxdbgInlineSiteEntrySize, index: site, at: MxdbgInlineSiteParent)
+
+			// An earlier parent is what keeps every parent chain acyclic, so a walk up one ends.
+			if not mxdbgNoneOrBelow(parent, none: MxdbgNoInlineSite, bound: site) 'notAnEarlierSite'
+				throw MxdbgReadError.danglingReference(MxdbgReference.siteParent, record: site, names: parent)
+			end 'notAnEarlierSite'
+
+			let callFile = self.tableWord(self.inlineSiteTableOff, stride: MxdbgInlineSiteEntrySize, index: site, at: MxdbgInlineSiteCallFileId)
+
+			if not mxdbgNoneOrBelow(callFile, none: MxdbgNoSourceFile, bound: self.fileTally) 'noSuchCallFile'
+				throw MxdbgReadError.danglingReference(MxdbgReference.siteCallFile, record: site, names: callFile)
+			end 'noSuchCallFile'
+
+			try requireKnownOrigin(self.tableWord(self.inlineSiteTableOff, stride: MxdbgInlineSiteEntrySize, index: site, at: MxdbgInlineSiteOrigin), holder: MxdbgOriginHolder.inlineSiteRecord, record: site)
+		end 'eachSite'
+
+		for range in 0 upto self.inlineRangeTally 'eachRange'
+			try self.requireBelow(self.inlineRangeField(range, field: MxdbgInlineRangeSite), tally: self.inlineSiteTally, reference: MxdbgReference.rangeSite, record: range)
+		end 'eachRange'
+
+		for row in 0 upto self.lineTally 'eachRow'
+			try self.requireBelow(self.tableWord(self.lineTableOff, stride: MxdbgLineEntrySize, index: row, at: MxdbgLineFileId), tally: self.fileTally, reference: MxdbgReference.lineFile, record: row)
+		end 'eachRow'
+
+		for point in 0 upto self.covTally 'eachPoint'
+			try self.requireBelow(self.tableWord(self.covTableOff, stride: MxdbgCovEntrySize, index: point, at: MxdbgCovFileId), tally: self.fileTally, reference: MxdbgReference.coverageFile, record: point)
+		end 'eachPoint'
+
+		for fieldIndex in 0 upto self.fieldTally 'eachField'
+			try self.requireRecordString(self.fieldTableOff, stride: MxdbgFieldEntrySize, index: fieldIndex, offsetAt: MxdbgFieldNameOff, lengthAt: MxdbgFieldNameLen, string: MxdbgPoolString.fieldName)
+			try self.requireBelow(self.tableWord(self.fieldTableOff, stride: MxdbgFieldEntrySize, index: fieldIndex, at: MxdbgFieldTypeId), tally: self.typeTally, reference: MxdbgReference.fieldType, record: fieldIndex)
+		end 'eachField'
+
+		for entry in 0 upto self.typeTally 'eachType'
+			try self.requireRecordString(self.typeTableOff, stride: MxdbgTypeEntrySize, index: entry, offsetAt: MxdbgTypeNameOff, lengthAt: MxdbgTypeNameLen, string: MxdbgPoolString.typeName)
+			let element = self.tableWord(self.typeTableOff, stride: MxdbgTypeEntrySize, index: entry, at: MxdbgTypeElementTypeId)
+
+			if not mxdbgNoneOrBelow(element, none: MxdbgNoElementType, bound: self.typeTally) 'noSuchElementType'
+				throw MxdbgReadError.danglingReference(MxdbgReference.elementType, record: entry, names: element)
+			end 'noSuchElementType'
+
+			try self.requireWindowFits(self.tableWord(self.typeTableOff, stride: MxdbgTypeEntrySize, index: entry, at: MxdbgTypeFieldFirst), count: self.tableWord(self.typeTableOff, stride: MxdbgTypeEntrySize, index: entry, at: MxdbgTypeFieldCount), tally: self.fieldTally, window: MxdbgWindow.typeFields, record: entry)
+		end 'eachType'
+
+		for fn in 0 upto self.funcTally 'eachFunction'
+			try self.requireRecordString(self.funcTableOff, stride: MxdbgFuncEntrySize, index: fn, offsetAt: MxdbgFuncNameOff, lengthAt: MxdbgFuncNameLen, string: MxdbgPoolString.functionName)
+			try self.requireRecordString(self.funcTableOff, stride: MxdbgFuncEntrySize, index: fn, offsetAt: MxdbgFuncDisplayNameOff, lengthAt: MxdbgFuncDisplayNameLen, string: MxdbgPoolString.functionDisplayName)
+			try self.requireWindowFits(self.tableWord(self.funcTableOff, stride: MxdbgFuncEntrySize, index: fn, at: MxdbgFuncLineFirst), count: self.tableWord(self.funcTableOff, stride: MxdbgFuncEntrySize, index: fn, at: MxdbgFuncLineCount), tally: self.lineTally, window: MxdbgWindow.functionLines, record: fn)
+			try self.requireWindowFits(self.tableWord(self.funcTableOff, stride: MxdbgFuncEntrySize, index: fn, at: MxdbgFuncLocalFirst), count: self.tableWord(self.funcTableOff, stride: MxdbgFuncEntrySize, index: fn, at: MxdbgFuncLocalCount), tally: self.localTally, window: MxdbgWindow.functionLocals, record: fn)
+			try requireKnownOrigin(self.tableWord(self.funcTableOff, stride: MxdbgFuncEntrySize, index: fn, at: MxdbgFuncOrigin), holder: MxdbgOriginHolder.functionRecord, record: fn)
+		end 'eachFunction'
+
+		for local in 0 upto self.localTally 'eachLocal'
+			try self.requireRecordString(self.localTableOff, stride: MxdbgLocalEntrySize, index: local, offsetAt: MxdbgLocalNameOff, lengthAt: MxdbgLocalNameLen, string: MxdbgPoolString.localName)
+			let site = self.tableWord(self.localTableOff, stride: MxdbgLocalEntrySize, index: local, at: MxdbgLocalSite)
+
+			if not mxdbgNoneOrBelow(site, none: MxdbgNoInlineSite, bound: self.inlineSiteTally) 'noSuchSite'
+				throw MxdbgReadError.danglingReference(MxdbgReference.localSite, record: local, names: site)
+			end 'noSuchSite'
+
+			let typeId = self.tableWord(self.localTableOff, stride: MxdbgLocalEntrySize, index: local, at: MxdbgLocalTypeId)
+			try self.requireBelow(typeId, tally: self.typeTally, reference: MxdbgReference.localType, record: local)
+
+			let locKind = self.tableWord(self.localTableOff, stride: MxdbgLocalEntrySize, index: local, at: MxdbgLocalLocKind)
+
+			if not mxdbgLocKindIsKnown(locKind) 'noSuchLocKind'
+				throw MxdbgReadError.unknownLocKind(local, word: locKind)
+			end 'noSuchLocKind'
+
+			if locKind == MxdbgLocKindFoldedAggregate 'foldsConstantWords'
+				try self.requireFoldedWordsFit(local, typeId: typeId)
+			end 'foldsConstantWords'
+		end 'eachLocal'
+	end 'requireReferencesHold'
+
+	function requireOrderedTables() throws MxdbgReadError
+		var previousFunctionEnd = 0 as MxdbgCodeOffset
+
+		for position in 0 upto self.funcOrder.count() 'eachFunctionInCodeOrder'
+			let fn = try self.funcOrder.get(position) otherwise panic("MxdbgReader.requireOrderedTables: position {position} is inside a list of {self.funcOrder.count()} indices")
+			let codeStart = self.tableWord(self.funcTableOff, stride: MxdbgFuncEntrySize, index: fn, at: MxdbgFuncCodeStart) as MxdbgCodeOffset
+			let codeEnd = self.tableWord(self.funcTableOff, stride: MxdbgFuncEntrySize, index: fn, at: MxdbgFuncCodeEnd) as MxdbgCodeOffset
+
+			if not mxdbgFunctionRangeFollows(codeStart, codeEnd: codeEnd, previousEnd: previousFunctionEnd) 'invertedOrOverlapping'
+				throw MxdbgReadError.outOfOrder(MxdbgOrderedTable.functionRanges, record: fn)
+			end 'invertedOrOverlapping'
+
+			previousFunctionEnd = codeEnd
+			try self.requireRowsInside(fn, codeStart: codeStart, codeEnd: codeEnd)
+			try self.requireScopesInside(fn, codeStart: codeStart, codeEnd: codeEnd)
+		end 'eachFunctionInCodeOrder'
+
+		var previousEnd = 0 as MxdbgCodeOffset
+
+		for range in 0 upto self.inlineRangeTally 'eachRange'
+			let codeStart = self.inlineRangeField(range, field: MxdbgInlineRangeCodeStart) as MxdbgCodeOffset
+			let codeEnd = self.inlineRangeField(range, field: MxdbgInlineRangeCodeEnd) as MxdbgCodeOffset
+
+			if not mxdbgCodeRangeFollows(codeStart, codeEnd: codeEnd, previousEnd: previousEnd) 'emptyOrOverlapping'
+				throw MxdbgReadError.outOfOrder(MxdbgOrderedTable.inlineRanges, record: range)
+			end 'emptyOrOverlapping'
+
+			previousEnd = codeEnd
+		end 'eachRange'
+	end 'requireOrderedTables'
+
+	function requireRowsInside(fn MxdbgIndex, codeStart MxdbgCodeOffset, codeEnd MxdbgCodeOffset) throws MxdbgReadError
+		let first = self.tableWord(self.funcTableOff, stride: MxdbgFuncEntrySize, index: fn, at: MxdbgFuncLineFirst)
+		let count = self.tableWord(self.funcTableOff, stride: MxdbgFuncEntrySize, index: fn, at: MxdbgFuncLineCount)
+		var previousRow = codeStart
+
+		for row in first upto first + count 'eachRow'
+			let offset = self.tableWord(self.lineTableOff, stride: MxdbgLineEntrySize, index: row, at: MxdbgLineCodeOffset) as MxdbgCodeOffset
+
+			if not mxdbgRowIsInside(offset, codeStart: codeStart, codeEnd: codeEnd) 'outsideTheFunction'
+				throw MxdbgReadError.outOfOrder(MxdbgOrderedTable.functionLineOutsideItsRange, record: fn)
+			end 'outsideTheFunction'
+
+			if not mxdbgRowFollows(offset, previousRow: previousRow) 'rowBehindItsPredecessor'
+				throw MxdbgReadError.outOfOrder(MxdbgOrderedTable.functionLines, record: fn)
+			end 'rowBehindItsPredecessor'
+
+			previousRow = offset
+		end 'eachRow'
+	end 'requireRowsInside'
+
+	function requireScopesInside(fn MxdbgIndex, codeStart MxdbgCodeOffset, codeEnd MxdbgCodeOffset) throws MxdbgReadError
+		let first = self.tableWord(self.funcTableOff, stride: MxdbgFuncEntrySize, index: fn, at: MxdbgFuncLocalFirst)
+		let count = self.tableWord(self.funcTableOff, stride: MxdbgFuncEntrySize, index: fn, at: MxdbgFuncLocalCount)
+
+		for local in first upto first + count 'eachLocal'
+			let scopeStart = self.tableWord(self.localTableOff, stride: MxdbgLocalEntrySize, index: local, at: MxdbgLocalScopeStart) as MxdbgCodeOffset
+			let scopeEnd = self.tableWord(self.localTableOff, stride: MxdbgLocalEntrySize, index: local, at: MxdbgLocalScopeEnd) as MxdbgCodeOffset
+
+			if not mxdbgScopeIsInside(scopeStart, scopeEnd: scopeEnd, codeStart: codeStart, codeEnd: codeEnd) 'emptyOrOutside'
+				throw MxdbgReadError.outOfOrder(MxdbgOrderedTable.localScopes, record: local)
+			end 'emptyOrOutside'
+		end 'eachLocal'
+	end 'requireScopesInside'
+
+	function requireFoldedWordsFit(local MxdbgIndex, typeId MxdbgIndex) throws MxdbgReadError
+		let first = mxdbgSignedWord(self.tableWord(self.localTableOff, stride: MxdbgLocalEntrySize, index: local, at: MxdbgLocalLocValue))
+
+		if first < 0 'beforeTheTable'
+			throw MxdbgReadError.windowPastTable(MxdbgWindow.foldedWords, record: local)
+		end 'beforeTheTable'
+
+		let words = mxdbgFoldedAggregateWordCount(self.tableWord(self.typeTableOff, stride: MxdbgTypeEntrySize, index: typeId, at: MxdbgTypeKindWord), fieldCount: self.tableWord(self.typeTableOff, stride: MxdbgTypeEntrySize, index: typeId, at: MxdbgTypeFieldCount))
+		try self.requireWindowFits(first as MxdbgIndex, count: words, tally: self.constTally, window: MxdbgWindow.foldedWords, record: local)
+	end 'requireFoldedWordsFit'
+
+	function requireBelow(names MxdbgIndex, tally MxdbgIndex, reference MxdbgReference, record MxdbgIndex) throws MxdbgReadError
+		if names >= tally 'pastTheTable'
+			throw MxdbgReadError.danglingReference(reference, record: record, names: names)
+		end 'pastTheTable'
+	end 'requireBelow'
+
+	function requireWindowFits(first MxdbgIndex, count MxdbgIndex, tally MxdbgIndex, window MxdbgWindow, record MxdbgIndex) throws MxdbgReadError
+		if not spanFitsWithin(first as ByteOffset, count: count as BytePos, total: tally as BytePos) 'pastTheTable'
+			throw MxdbgReadError.windowPastTable(window, record: record)
+		end 'pastTheTable'
+	end 'requireWindowFits'
+
+	function tableWord(tableOff ByteOffset, stride ByteOffset, index MxdbgIndex, at ByteOffset) returns MxdbgIndex
+		return imageReadU32(self.image, at: tableOff + (index as ByteOffset) * stride + at) as MxdbgIndex
+	end 'tableWord'
 
 	export function fileCount() returns MxdbgIndex
 		return self.fileTally
@@ -356,7 +685,7 @@ export type MxdbgReader
 			panic("MxdbgReader.constantWord: word {index} is past the sidecar's {self.constTally} — every caller bounds itself by the window its local record names")
 		end 'noSuchWord'
 
-		return mxdbgSignedWord(imageReadU32(self.image, at: self.constTableOff + (index * MxdbgConstEntrySize) as ByteOffset) as MxdbgIndex)
+		return mxdbgSignedWord(self.tableWord(self.constTableOff, stride: MxdbgConstEntrySize, index: index, at: MxdbgConstWord))
 	end 'constantWord'
 
 	export function inlineSite(index MxdbgIndex) returns MxdbgInlineSiteInfo
@@ -365,9 +694,10 @@ export type MxdbgReader
 		end 'noSuchSite'
 
 		let rec = self.inlineSiteTableOff + (index * MxdbgInlineSiteEntrySize) as ByteOffset
-		let parent = imageReadU32(self.image, at: rec + MxdbgInlineSiteParent) as MxdbgIndex
+		let callFileId = imageReadU32(self.image, at: rec + MxdbgInlineSiteCallFileId) as MxdbgIndex
+		let call = MxdbgCallPosition.none if callFileId == MxdbgNoSourceFile else MxdbgCallPosition.at(self.fileName(callFileId), line: imageReadU32(self.image, at: rec + MxdbgInlineSiteCallLine) as MxdbgIndex, column: imageReadU32(self.image, at: rec + MxdbgInlineSiteCallCol) as MxdbgIndex)
 
-		return MxdbgInlineSiteInfo.create(self.poolString(imageReadU32(self.image, at: rec + MxdbgInlineSiteNameOff) as ByteOffset, length: imageReadU32(self.image, at: rec + MxdbgInlineSiteNameLen) as BytePos), parent: MxdbgInlineSiteLookup.none if parent == MxdbgNoParentSite else MxdbgInlineSiteLookup.site(parent))
+		return MxdbgInlineSiteInfo.create(self.poolString(imageReadU32(self.image, at: rec + MxdbgInlineSiteNameOff) as ByteOffset, length: imageReadU32(self.image, at: rec + MxdbgInlineSiteNameLen) as BytePos), parent: inlineSiteLookupOf(imageReadU32(self.image, at: rec + MxdbgInlineSiteParent) as MxdbgIndex), call: call, origin: validatedOrigin(imageReadU32(self.image, at: rec + MxdbgInlineSiteOrigin) as MxdbgIndex))
 	end 'inlineSite'
 
 	// The innermost spliced body `codeOffset` lies in, or none — a binary search over ranges that are
@@ -398,15 +728,43 @@ export type MxdbgReader
 	end 'inlineSiteContaining'
 
 	export function inlineRangeStart(index MxdbgIndex) returns MxdbgCodeOffset
-		if index >= self.inlineRangeTally 'noSuchRange'
-			panic("MxdbgReader.inlineRangeStart: range {index} is past the sidecar's {self.inlineRangeTally} — every caller bounds itself by `inlineRangeCount`")
-		end 'noSuchRange'
-
-		return self.inlineRangeField(index, field: MxdbgInlineRangeCodeStart) as MxdbgCodeOffset
+		return self.boundedInlineRangeField(index, field: MxdbgInlineRangeCodeStart) as MxdbgCodeOffset
 	end 'inlineRangeStart'
 
+	export function inlineRangeEnd(index MxdbgIndex) returns MxdbgCodeOffset
+		return self.boundedInlineRangeField(index, field: MxdbgInlineRangeCodeEnd) as MxdbgCodeOffset
+	end 'inlineRangeEnd'
+
+	export function inlineRangeSite(index MxdbgIndex) returns MxdbgIndex
+		return self.boundedInlineRangeField(index, field: MxdbgInlineRangeSite)
+	end 'inlineRangeSite'
+
+	function boundedInlineRangeField(index MxdbgIndex, field ByteOffset) returns MxdbgIndex
+		if index >= self.inlineRangeTally 'noSuchRange'
+			panic("MxdbgReader: inline range {index} is past the sidecar's {self.inlineRangeTally} — every caller bounds itself by `inlineRangeCount`")
+		end 'noSuchRange'
+
+		return self.inlineRangeField(index, field: field)
+	end 'boundedInlineRangeField'
+
+	export function inlineSitesCalledAt(fileIds MxdbgIndexArray, line MxdbgIndex) returns MxdbgIndexArray
+		var sites = MxdbgIndexArray.create()
+
+		for site in 0 upto self.inlineSiteTally 'eachSite'
+			if self.tableWord(self.inlineSiteTableOff, stride: MxdbgInlineSiteEntrySize, index: site, at: MxdbgInlineSiteCallLine) != line 'anotherLine'
+				continue
+			end 'anotherLine'
+
+			if fileIds.contains(self.tableWord(self.inlineSiteTableOff, stride: MxdbgInlineSiteEntrySize, index: site, at: MxdbgInlineSiteCallFileId)) 'calledFromThisFile'
+				sites.push(site as MxdbgIndex)
+			end 'calledFromThisFile'
+		end 'eachSite'
+
+		return sites
+	end 'inlineSitesCalledAt'
+
 	function inlineRangeField(index MxdbgIndex, field ByteOffset) returns MxdbgIndex
-		return imageReadU32(self.image, at: self.inlineRangeTableOff + (index * MxdbgInlineRangeEntrySize) as ByteOffset + field) as MxdbgIndex
+		return self.tableWord(self.inlineRangeTableOff, stride: MxdbgInlineRangeEntrySize, index: index, at: field)
 	end 'inlineRangeField'
 
 	export function typeRecord(index MxdbgIndex) returns MxdbgTypeInfo
@@ -430,14 +788,27 @@ export type MxdbgReader
 	end 'fieldRecord'
 
 	export function localRecord(index MxdbgIndex) returns MxdbgLocalInfo
+		let rec = self.localRecordAt(index)
+
+		return MxdbgLocalInfo.create(self.poolString(imageReadU32(self.image, at: rec + MxdbgLocalNameOff) as ByteOffset, length: imageReadU32(self.image, at: rec + MxdbgLocalNameLen) as BytePos), locKind: imageReadU32(self.image, at: rec + MxdbgLocalLocKind) as MxdbgIndex, locValue: mxdbgSignedWord(imageReadU32(self.image, at: rec + MxdbgLocalLocValue) as MxdbgIndex), typeId: imageReadU32(self.image, at: rec + MxdbgLocalTypeId) as MxdbgIndex, scopeStart: imageReadU32(self.image, at: rec + MxdbgLocalScopeStart) as MxdbgCodeOffset, scopeEnd: imageReadU32(self.image, at: rec + MxdbgLocalScopeEnd) as MxdbgCodeOffset, flags: imageReadU32(self.image, at: rec + MxdbgLocalFlags) as MxdbgIndex, site: inlineSiteLookupOf(imageReadU32(self.image, at: rec + MxdbgLocalSite) as MxdbgIndex))
+	end 'localRecord'
+
+	export function localBelongsTo(index MxdbgIndex, site MxdbgInlineSiteLookup) returns bool
+		let written = imageReadU32(self.image, at: self.localRecordAt(index) + MxdbgLocalSite) as MxdbgIndex
+
+		return match site 'which'
+			none gives written == MxdbgNoInlineSite
+			site(wanted) gives written == wanted
+		end 'which'
+	end 'localBelongsTo'
+
+	function localRecordAt(index MxdbgIndex) returns ByteOffset
 		if index >= self.localTally 'noSuchLocal'
 			panic("MxdbgReader.localRecord: local {index} is past the sidecar's {self.localTally} — every caller bounds itself by `localCount` or by a function's local window")
 		end 'noSuchLocal'
 
-		let rec = self.localTableOff + (index * MxdbgLocalEntrySize) as ByteOffset
-
-		return MxdbgLocalInfo.create(self.poolString(imageReadU32(self.image, at: rec + MxdbgLocalNameOff) as ByteOffset, length: imageReadU32(self.image, at: rec + MxdbgLocalNameLen) as BytePos), locKind: imageReadU32(self.image, at: rec + MxdbgLocalLocKind) as MxdbgIndex, locValue: mxdbgSignedWord(imageReadU32(self.image, at: rec + MxdbgLocalLocValue) as MxdbgIndex), typeId: imageReadU32(self.image, at: rec + MxdbgLocalTypeId) as MxdbgIndex, scopeStart: imageReadU32(self.image, at: rec + MxdbgLocalScopeStart) as MxdbgCodeOffset, scopeEnd: imageReadU32(self.image, at: rec + MxdbgLocalScopeEnd) as MxdbgCodeOffset, flags: imageReadU32(self.image, at: rec + MxdbgLocalFlags) as MxdbgIndex)
-	end 'localRecord'
+		return self.localTableOff + (index * MxdbgLocalEntrySize) as ByteOffset
+	end 'localRecordAt'
 
 	export function coveragePoint(index MxdbgIndex) returns MxdbgCovPointInfo
 		if index >= self.covTally 'noSuchPoint'
@@ -449,25 +820,14 @@ export type MxdbgReader
 		return MxdbgCovPointInfo.create(self.fileName(imageReadU32(self.image, at: rec + MxdbgCovFileId) as MxdbgIndex), line: imageReadU32(self.image, at: rec + MxdbgCovLine) as MxdbgIndex, column: imageReadU32(self.image, at: rec + MxdbgCovCol) as MxdbgIndex, branchLine: imageReadU32(self.image, at: rec + MxdbgCovBranchLine) as MxdbgIndex, branchColumn: imageReadU32(self.image, at: rec + MxdbgCovBranchCol) as MxdbgIndex, flags: imageReadU32(self.image, at: rec + MxdbgCovFlags) as MxdbgIndex)
 	end 'coveragePoint'
 
-	// The NAME a `typeId` resolves to, or empty for an id past the table. A field or a local carrying a
-	// dangling id is a defect of the writer, and a renderer that printed some unrelated entry's name for
-	// one would hide it behind a plausible answer.
-	export function typeName(typeId MxdbgIndex) returns String
-		if typeId >= self.typeTally 'noSuchType'
-			return ""
-		end 'noSuchType'
-
-		return self.typeRecord(typeId).name
-	end 'typeName'
-
 	export function fileName(fileId MxdbgIndex) returns String
 		if fileId >= self.fileTally 'noSuchFile'
-			return ""
+			panic("MxdbgReader.fileName: file {fileId} is past the sidecar's {self.fileTally} — every id a record names was checked against the file table when the image was opened, and every other caller bounds itself by `fileCount`")
 		end 'noSuchFile'
 
 		let rec = self.fileTableOff + (fileId * MxdbgFileEntrySize) as ByteOffset
 
-		return self.poolString(imageReadU32(self.image, at: rec) as ByteOffset, length: imageReadU32(self.image, at: rec + MxdbgFieldSize) as BytePos)
+		return self.poolString(imageReadU32(self.image, at: rec + MxdbgFileNameOff) as ByteOffset, length: imageReadU32(self.image, at: rec + MxdbgFileNameLen) as BytePos)
 	end 'fileName'
 
 	export function functionRecord(index MxdbgIndex) returns MxdbgFunctionInfo
@@ -477,7 +837,7 @@ export type MxdbgReader
 
 		let rec = self.funcTableOff + (index * MxdbgFuncEntrySize) as ByteOffset
 
-		return MxdbgFunctionInfo.create(self.poolString(imageReadU32(self.image, at: rec + MxdbgFuncNameOff) as ByteOffset, length: imageReadU32(self.image, at: rec + MxdbgFuncNameLen) as BytePos), codeStart: imageReadU32(self.image, at: rec + MxdbgFuncCodeStart) as MxdbgCodeOffset, codeEnd: imageReadU32(self.image, at: rec + MxdbgFuncCodeEnd) as MxdbgCodeOffset, frameSize: imageReadU32(self.image, at: rec + MxdbgFuncFrameSize) as MxdbgIndex, paramCount: imageReadU32(self.image, at: rec + MxdbgFuncParamCount) as MxdbgIndex, lineFirst: imageReadU32(self.image, at: rec + MxdbgFuncLineFirst) as MxdbgIndex, lineCount: imageReadU32(self.image, at: rec + MxdbgFuncLineCount) as MxdbgIndex, localFirst: imageReadU32(self.image, at: rec + MxdbgFuncLocalFirst) as MxdbgIndex, localCount: imageReadU32(self.image, at: rec + MxdbgFuncLocalCount) as MxdbgIndex)
+		return MxdbgFunctionInfo.create(self.poolString(imageReadU32(self.image, at: rec + MxdbgFuncNameOff) as ByteOffset, length: imageReadU32(self.image, at: rec + MxdbgFuncNameLen) as BytePos), codeStart: imageReadU32(self.image, at: rec + MxdbgFuncCodeStart) as MxdbgCodeOffset, codeEnd: imageReadU32(self.image, at: rec + MxdbgFuncCodeEnd) as MxdbgCodeOffset, frameSize: imageReadU32(self.image, at: rec + MxdbgFuncFrameSize) as MxdbgIndex, paramCount: imageReadU32(self.image, at: rec + MxdbgFuncParamCount) as MxdbgIndex, lineFirst: imageReadU32(self.image, at: rec + MxdbgFuncLineFirst) as MxdbgIndex, lineCount: imageReadU32(self.image, at: rec + MxdbgFuncLineCount) as MxdbgIndex, localFirst: imageReadU32(self.image, at: rec + MxdbgFuncLocalFirst) as MxdbgIndex, localCount: imageReadU32(self.image, at: rec + MxdbgFuncLocalCount) as MxdbgIndex, displayName: self.poolString(imageReadU32(self.image, at: rec + MxdbgFuncDisplayNameOff) as ByteOffset, length: imageReadU32(self.image, at: rec + MxdbgFuncDisplayNameLen) as BytePos), origin: validatedOrigin(imageReadU32(self.image, at: rec + MxdbgFuncOrigin) as MxdbgIndex))
 	end 'functionRecord'
 
 	export function lineRecord(index MxdbgIndex) returns MxdbgLineInfo
@@ -490,15 +850,10 @@ export type MxdbgReader
 		return MxdbgLineInfo.create(imageReadU32(self.image, at: rec + MxdbgLineCodeOffset) as MxdbgCodeOffset, file: self.fileName(imageReadU32(self.image, at: rec + MxdbgLineFileId) as MxdbgIndex), line: imageReadU32(self.image, at: rec + MxdbgLineLine) as MxdbgIndex, column: imageReadU32(self.image, at: rec + MxdbgLineCol) as MxdbgIndex, flags: imageReadU32(self.image, at: rec + MxdbgLineFlags) as MxdbgIndex)
 	end 'lineRecord'
 
-	// The function whose `.text` range contains `codeOffset`, or none in a gap — padding, or the symbol
-	// table the backends append past the last chunk.
-	//
-	// ⚠ It relies on the table being ASCENDING BY CODE START, which the concat pass gives it by
-	// construction (`funcStart` is the running `code.count()`), and it breaks on the first record that
-	// starts past the offset rather than scanning the rest.
+	// The function whose `.text` range contains `codeOffset`, or none in a gap — padding, or the
+	// symbol table the backends append past the last chunk. `parse` refuses overlapping function
+	// ranges, so the greatest code start not past the offset is the only candidate.
 	export function functionContaining(codeOffset MxdbgCodeOffset) returns MxdbgFunctionLookup
-		// The greatest code start not past the offset is the ONLY candidate: the emitter's ranges are
-		// disjoint, so a containment miss there means the offset lies in a gap.
 		var lo = 0 as MxdbgIndex
 		var hi = self.funcOrder.count() as MxdbgIndex
 
@@ -531,7 +886,7 @@ export type MxdbgReader
 	function funcCodeStartAt(position MxdbgIndex) returns MxdbgCodeOffset
 		let index = try self.funcOrder.get(position) otherwise panic("MxdbgReader.funcCodeStartAt: position {position} is inside a list of {self.funcOrder.count()} indices")
 
-		return imageReadU32(self.image, at: self.funcTableOff + (index * MxdbgFuncEntrySize + MxdbgFuncCodeStart) as ByteOffset) as MxdbgCodeOffset
+		return funcCodeStartOf(self.image, tableOff: self.funcTableOff, index: index)
 	end 'funcCodeStartAt'
 
 	// The source position of `codeOffset`: the last row at or before it inside the enclosing function.
@@ -544,29 +899,27 @@ export type MxdbgReader
 		end 'enclosing'
 	end 'pcToLine'
 
-	export function lineToOffsets(fileIds MxdbgIndexArray, line MxdbgIndex) returns MxdbgCodeOffsetArray
-		var offsets = MxdbgCodeOffsetArray.create()
+	export function statementRowsOf(fileIds MxdbgIndexArray, line MxdbgIndex) returns MxdbgLineInfoArray
+		var rows = MxdbgLineInfoArray.create()
 
 		if fileIds.count() == 0 'noFileNamed'
-			return offsets
+			return rows
 		end 'noFileNamed'
 
 		for i in 0 upto self.lineTally 'eachRow'
-			let rec = self.lineTableOff + (i * MxdbgLineEntrySize) as ByteOffset
-
-			if (imageReadU32(self.image, at: rec + MxdbgLineFlags) and MxdbgLineFlagStatement) == 0 'notAStatement'
+			if (self.tableWord(self.lineTableOff, stride: MxdbgLineEntrySize, index: i, at: MxdbgLineFlags) and MxdbgLineFlagStatement) == 0 'notAStatement'
 				continue
 			end 'notAStatement'
 
-			if (imageReadU32(self.image, at: rec + MxdbgLineLine) as MxdbgIndex) != line or not fileIds.contains(imageReadU32(self.image, at: rec + MxdbgLineFileId) as MxdbgIndex) 'anotherLine'
+			if self.tableWord(self.lineTableOff, stride: MxdbgLineEntrySize, index: i, at: MxdbgLineLine) != line or not fileIds.contains(self.tableWord(self.lineTableOff, stride: MxdbgLineEntrySize, index: i, at: MxdbgLineFileId)) 'anotherLine'
 				continue
 			end 'anotherLine'
 
-			offsets.push(imageReadU32(self.image, at: rec + MxdbgLineCodeOffset) as MxdbgCodeOffset)
+			rows.push(self.lineRecord(i as MxdbgIndex))
 		end 'eachRow'
 
-		return offsets
-	end 'lineToOffsets'
+		return rows
+	end 'statementRowsOf'
 
 	// The offset to look up for a code offset that is a RETURN address, stated once for every walker. A
 	// return address is the instruction after the call, so resolving it unbiased names the next line — and
@@ -599,6 +952,10 @@ export type MxdbgReader
 		return String.from(imageSlice(self.image, start: self.stringPoolOff + offset, count: length))
 	end 'poolString'
 end 'MxdbgReader'
+
+function inlineSiteLookupOf(raw MxdbgIndex) returns MxdbgInlineSiteLookup
+	return MxdbgInlineSiteLookup.none if raw == MxdbgNoInlineSite else MxdbgInlineSiteLookup.site(raw)
+end 'inlineSiteLookupOf'
 
 // The function table's indices sorted by code start, so `functionContaining` can partition them. Built at
 // parse rather than on first use: a `MxdbgReader` is held through a `let` at every reader in this tree, so

@@ -1,0 +1,40 @@
+let AgentBreakCaseLabel = "break-in-the-debug-agent-is-refused"
+
+let AgentHelperName = "dbgExitOrphaned"
+let EntryStubName = "mrt_start"
+let InsideRuntimeSymbolReason = "inside-runtime-symbol"
+
+test 'a breakpoint at the entry of a debug-agent helper that wears no reserved prefix is refused as runtime code, as the entry stub is'
+	let staged = builtFixture(AgentBreakCaseLabel, fixture: SteppingFixtureName)
+	let executable = builtExecutable(staged)
+	let dump = spawnDumpInfo(executable, staged: staged, sections: StringArray.create())
+
+	try Expect.equal(dump.exitCode() as AssertedInt, expected: 0, message: "`{DebugSubcommandName} {DumpInfoOptionName} <exe>` did not print the sidecar. It wrote to stderr: {dump.stderr}")
+
+	let functionRows = dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading)
+	let helperStart = functionStartIn(functionRowOf(functionRows, name: AgentHelperName), name: AgentHelperName)
+	let stubStart = functionStartIn(functionRowOf(functionRows, name: EntryStubName), name: EntryStubName)
+	let commands = debugCommandLine(["{BreakCommand} {exactOffsetTarget(helperStart)}", "{BreakCommand} {exactOffsetTarget(stubStart)}", RunCommand])
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: BreakpointEventName)
+
+	try Expect.equal(answers.count() as AssertedInt, expected: 2, message: "each `{BreakCommand}` answers one `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let helper = eventAt(answers, index: 0)
+	try Expect.equal(textOf(helper, node: helper.root, key: ActionKey), expected: RefusedAction, message: "`{AgentHelperName}` is the debug agent's own code — a trap planted in the code that handles traps cannot be serviced — and it is the runtime's by where it came from, whatever its name spells. {said}")
+	try Expect.equal(textOf(helper, node: helper.root, key: ReasonKey), expected: InsideRuntimeSymbolReason, message: "the refusal names why. {said}")
+
+	let stub = eventAt(answers, index: 1)
+	try Expect.equal(textOf(stub, node: stub.root, key: ActionKey), expected: RefusedAction, message: "the control: the entry stub the compiler assembles is runtime code. {said}")
+	try Expect.equal(textOf(stub, node: stub.root, key: ReasonKey), expected: InsideRuntimeSymbolReason, message: "the control's refusal names why. {said}")
+	try Expect.equal(eventsOfKind(events, kind: ExitEventName).count() as AssertedInt, expected: 1, message: "nothing was armed, so the program runs to its exit. {said}")
+end 'a breakpoint at the entry of a debug-agent helper that wears no reserved prefix is refused as runtime code, as the entry stub is'
+
+function functionStartIn(row String, name String) returns SidecarNumber
+	match codeRangeIn(row) 'ranged'
+		none then panic("break-in-the-debug-agent-is-refused: the gate could not run — the sidecar lists no function row for `{name}`, so there is no runtime entry to aim at: {row}")
+		range(start, _) then return start
+	end 'ranged'
+end 'functionStartIn'

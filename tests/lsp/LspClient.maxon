@@ -1067,6 +1067,23 @@ export function fileUriOf(file FilePath) returns String
 	return "{FileUriScheme}{slashed}" if slashed.startsWith(UriPathSeparator) else "{FileUriScheme}{UriPathSeparator}{slashed}"
 end 'fileUriOf'
 
+export function editorUriOf(file FilePath) returns String
+	let uri = fileUriOf(file)
+	let pieces = file.toString().split(DriveColon)
+
+	if pieces.count() < 2 'noDriveLetter'
+		return uri
+	end 'noDriveLetter'
+
+	let drive = try pieces.get(0) otherwise panic("editorUriOf: a split yielding two pieces has a first one")
+
+	if drive.byteLength() != DriveLetterBytes 'notADriveLetter'
+		return uri
+	end 'notADriveLetter'
+
+	return uri.replaceFirst("{UriPathSeparator}{drive}{DriveColon}", with: "{UriPathSeparator}{drive.toLower()}{EditorEncodedDriveColon}")
+end 'editorUriOf'
+
 function lastUriSegment(uri String) returns String
 	var name = uri
 
@@ -1677,6 +1694,9 @@ let RootUriKey = "rootUri"
 let FileUriScheme = "file://"
 let UriPathSeparator = "/"
 let WindowsPathSeparator = "\\"
+let DriveColon = ":"
+let EditorEncodedDriveColon = "%3A"
+let DriveLetterBytes = 1
 
 let TextDocumentSyncKey = "textDocumentSync"
 let HoverProviderKey = "hoverProvider"

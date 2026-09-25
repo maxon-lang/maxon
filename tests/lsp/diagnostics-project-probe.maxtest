@@ -31,11 +31,19 @@ end 'stagedProjectDiagnosticsRoot'
 // arrives. The buffer text is what the server is told the document holds, whatever the file on disk says.
 export function probeProjectDiagnostics(root FilePath, fileName String, content String) returns ProjectDiagnosticsProbe
 	var client = LspClient.start()
-	let probe = collectProjectDiagnostics(client, root: root, uri: fileUriOf(root.join(fileName)), content: content)
+	let probe = collectProjectDiagnostics(client, rootUri: fileUriOf(root), uri: fileUriOf(root.join(fileName)), content: content)
 	client.release()
 
 	return probe
 end 'probeProjectDiagnostics'
+
+export function probeProjectDiagnosticsThroughEditorUris(root FilePath, fileName String, content String) returns ProjectDiagnosticsProbe
+	var client = LspClient.start()
+	let probe = collectProjectDiagnostics(client, rootUri: editorUriOf(root), uri: editorUriOf(root.join(fileName)), content: content)
+	client.release()
+
+	return probe
+end 'probeProjectDiagnosticsThroughEditorUris'
 
 let RuntimeTierDirName = "runtime"
 
@@ -53,11 +61,11 @@ export function probeRuntimeTierDiagnostics(fileName String, content String) ret
 	return probeProjectDiagnostics(Directory.currentPath(), fileName: runtimeTierDocumentName(fileName), content: content)
 end 'probeRuntimeTierDiagnostics'
 
-function collectProjectDiagnostics(client LspClient, root FilePath, uri String, content String) returns ProjectDiagnosticsProbe
+function collectProjectDiagnostics(client LspClient, rootUri String, uri String, content String) returns ProjectDiagnosticsProbe
 	var probe = ProjectDiagnosticsProbe.broke(UnreportedSessionEnding)
 
 	try 'session'
-		_ = client.initializeAtRoot(root)
+		_ = client.initializeAtRootUri(rootUri)
 		client.initialized()
 		client.openDocument(uri, content: content)
 		probe = ProjectDiagnosticsProbe.published(client.awaitPublishedDiagnostics(uri).items)

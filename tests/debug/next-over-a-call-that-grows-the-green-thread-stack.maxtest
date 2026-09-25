@@ -1,0 +1,20 @@
+let StackGrowthCaseLabel = "next-over-a-call-that-grows-the-green-thread-stack"
+let MainFunctionName = "main"
+
+test 'a next over a call that moves the green thread stack still lands on the next line'
+	let staged = builtFixture(StackGrowthCaseLabel, fixture: WalksFixtureName)
+	let deepLine = anchorLine(staged, anchor: "deep-call")
+	let afterLine = anchorLine(staged, anchor: "after-deep")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(deepLine)}", RunCommand, NextCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let stops = eventsOfKind(events, kind: StopEventName)
+
+	try Expect.equal(stops.count() as AssertedInt, expected: 2, message: "`main` runs on a green thread here, and twenty thousand nested calls grow its stack by moving it; the breakpoint on the call and the `{NextCommand}` are still two stops. A return point whose frame is named by an address the move left behind is never recognised, and the walk runs on to the exit. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let landed = eventAt(stops, index: 1)
+	try Expect.equal(textOf(landed, node: landed.root, key: FunctionKey), expected: MainFunctionName, message: "`{NextCommand}` stays in the frame it was issued from. {said}")
+	try Expect.equal(numberOf(landed, node: landed.root, key: LineKey) as AssertedInt, expected: afterLine as AssertedInt, message: "`{NextCommand}` over the deep call lands on the line after it. {said}")
+	try Expect.equal(textOf(landed, node: landed.root, key: ReasonKey), expected: StepStopReason, message: "the landing is the step's own. {said}")
+end 'a next over a call that moves the green thread stack still lands on the next line'

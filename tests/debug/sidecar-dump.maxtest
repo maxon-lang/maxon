@@ -297,7 +297,11 @@ function lineNumberAfter(text String, marker String) returns FixtureLineNumber
 
 	for c in text.slice(cursor, endIndex: text.endIndex()) 'eachCharacter'
 		if Ascii.isDigit(c) 'aDigit'
-			value = value * DecimalBase + hexDigitValue(c)
+			match hexDigitOf(c) 'digit'
+				value(digit) then value = value * DecimalBase + digit
+				notAHexDigit then panic("sidecar-dump.test: '{c}' passed Ascii.isDigit, so it is a hex digit too")
+			end 'digit'
+
 			seenADigit = true
 			continue
 		end 'aDigit'
@@ -337,11 +341,14 @@ end 'sourceLineStartingWith'
 // Whether a build-id carries any digit that is not zero. An unfilled field reads as zeros, and a sidecar
 // with an all-zero identity describes every build of every binary equally well.
 function hasNonZeroHexDigit(text String) returns bool
+	var nonZero = false
+
 	for c in text.trim().replace(HexPrefix, with: "") 'eachCharacter'
-		if isHexDigit(c) and hexDigitValue(c) != 0 'nonZero'
-			return true
-		end 'nonZero'
+		match hexDigitOf(c) 'digit'
+			value(digit) then nonZero = nonZero or digit != 0
+			notAHexDigit then continue
+		end 'digit'
 	end 'eachCharacter'
 
-	return false
+	return nonZero
 end 'hasNonZeroHexDigit'

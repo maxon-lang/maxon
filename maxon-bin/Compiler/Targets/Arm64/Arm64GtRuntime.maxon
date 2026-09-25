@@ -805,18 +805,25 @@ let Arm64GuardSaveBytes = 16 as StackSize
 // they are declared together with it rather than chosen here.
 let Arm64GuardScratchReg = Arm64Register.x13
 
-// ⭐ Emit the guard at the very START of a guarded function's entry block — BEFORE the prologue — for a
-// USER function of a green-thread module that reserves a frame. When the running green thread's projected
-// SP would dip below its stack guard the cold path runs; otherwise it is a handful of instructions that fall
-// through. A no-op for a P's inline scheduler GT (`stackGuard` is the slab zero, so the `hs` is always taken)
-// and off a green thread entirely (the three null tests bail). At a function entry the cold path calls
-// `__gt_guard_tripped` and runs the whole guard again; `mrt_panic`'s withdraws a preemption request and only
-// grows (`Arm64PanicRuntime.arm64EmitPanicStackGuard`). x64's twin carries why both shapes are sound.
+export function arm64WidestGuardedFrame(margin ParsedInt) returns StackSize
+	return (Arm64AddSubImmWideMax as StackSize) - (margin as StackSize) - Arm64GuardSaveBytes
+end 'arm64WidestGuardedFrame'
+
+// Emit the guard at the very start of a guarded function's entry block, before the prologue, for a
+// user function of a green-thread module that reserves a frame. When the running green thread's
+// projected SP would dip below its stack guard the cold path runs; otherwise it is a handful of
+// instructions that fall through. A no-op for a P's inline scheduler GT (`stackGuard` is the slab
+// zero, so the `hs` is always taken) and off a green thread entirely (the three null tests bail).
+// At a function entry the cold path calls `__gt_guard_tripped` and runs the whole guard again;
+// `mrt_panic`'s withdraws a preemption request and only grows
+// (`Arm64PanicRuntime.arm64EmitPanicStackGuard`). x64's twin carries why both shapes are sound.
 //
-// ⚠ **IT PRESERVES x30 ITSELF**, which is the whole shape difference from x64's — see this file's header.
+// ⚠ It preserves x30 itself, which is the whole shape difference from x64's — see this file's
+// header.
 //
-// It emits into the function's own byte stream with a GUARD-LOCAL branch table, exactly as the x64 twin
-// does, so it is invisible to the Target-IR goldens and is verified by the RUN plus a disassembly instead.
+// It emits into the function's own byte stream with a guard-local branch table, exactly as the x64
+// twin does, so it is invisible to the Target-IR goldens and is verified by the run plus a
+// disassembly instead.
 export function emitArm64GtStackGuard(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, frameBytes StackSize, margin ParsedInt, site GtGuardSite, target Target)
 	var asm = Arm64RuntimeAsm.beginRawFunction()
 	let top = asm.newLabel()
@@ -1346,7 +1353,7 @@ end 'buildArm64PreemptMachineChunk'
 function emitArm64DarwinPreemptSend(asm Arm64RuntimeAsm, thread Arm64Register, delivered BlockId)
 	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x0, src: thread)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinSignalUrg as MachineWord)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.pthreadKill)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.pthreadKill)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: delivered)
 end 'emitArm64DarwinPreemptSend'
 
@@ -1459,8 +1466,8 @@ function arm64SavedFileOffsets(os Os) returns Arm64SavedFileOffsets
 	return match os 'os'
 		macos gives Arm64SavedFileOffsets.create(DarwinMcontextOffSsPc, sp: DarwinMcontextOffSsSp, lr: DarwinMcontextOffSsLr)
 		linux gives Arm64SavedFileOffsets.create(Arm64LinuxUcontextOffPc, sp: Arm64LinuxUcontextOffSp, lr: Arm64LinuxUcontextOffLr)
-		windows panic("arm64SavedFileOffsets: {os.name} delivers no signal to this backend — see `emitArm64SavedRegisterFile`")
-		wasi panic("arm64SavedFileOffsets: {os.name} delivers no signal to this backend — see `emitArm64SavedRegisterFile`")
+		windows or
+			wasi panic("arm64SavedFileOffsets: {os.name} delivers no signal to this backend — see `emitArm64SavedRegisterFile`")
 	end 'os'
 end 'arm64SavedFileOffsets'
 

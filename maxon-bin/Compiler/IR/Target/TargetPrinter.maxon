@@ -418,11 +418,9 @@ function rdataPayloadNote(label ByteArray, globalData GlobalDataTable) returns S
 			coveragePath gives payloadTextNote(globalData.payloadOf(name))
 
 		// A float island needs none — its LABEL is its value (`GlobalDataTable.registerFloatConstant`).
-		floatConstant gives ""
-		stringRecord gives payloadTextNote(globalData.payloadOf(globalData.stringBlobLabelOfRecord(name)))
-
-		// STRUCTURE: bytes only a decoder can read, so the label stands alone.
-		byteArrayBlob or
+		floatConstant or
+			// STRUCTURE: bytes only a decoder can read, so the label stands alone.
+			byteArrayBlob or
 			jumpTable or
 			witnessTable or
 			layoutDescriptor or
@@ -431,6 +429,7 @@ function rdataPayloadNote(label ByteArray, globalData GlobalDataTable) returns S
 			byteArrayRecord or
 			structRecord or
 			stringTableBuffer gives ""
+		stringRecord gives payloadTextNote(globalData.payloadOf(globalData.stringBlobLabelOfRecord(name)))
 	end 'kind'
 end 'rdataPayloadNote'
 
@@ -525,66 +524,44 @@ function requireEveryNameRendered(runtimeNames RuntimeFunctionNameArray, rendere
 	end 'eachName'
 end 'requireEveryNameRendered'
 
-// True for the runtime/entry functions the compiler's backend synthesizes (not from user source): the entry stub
-// `mrt_start`, the emitted `__`-prefixed runtime (`__slab_*`, `__mm_*`, `__destruct_*`, …), the
-// `__fnref_` env-thunks and `__module_init`/`__module_cleanup`.
+// True for the functions the compiler synthesizes rather than a source file declares — the entry
+// stub `mrt_start`, the emitted `__` runtime (`__slab_*`, `__mm_*`, `__destruct_*`, …), the
+// `__fnref_` env-thunks, `__module_init`/`__module_cleanup` — and for every `runtime/` tier body.
+// One predicate with three readers, so they cannot drift: the golden render (`isSuppliedFunction`),
+// the green-thread stack guard exemption (`skipsGreenThreadStackGuard`), and both backends'
+// `FunctionCodeChunk.compilerScaffolding`.
 //
-// EXPORTED because it is the SAME set the GT stack guard EXEMPTS (X64Backend's
-// `emitFunctionChunk`): a runtime function must never trigger `__gt_morestack` — the scheduler core
-// runs the grower, and its own kernel calls are already shimmed onto the system stack — so
-// "which functions are compiler-emitted runtime" is one predicate, shared by the golden-skip here and
-// the guard exemption there, not two copies free to drift.
+// The name shape alone is a reachable SIGSEGV, and `sourceFilePath` is the clause that closes it.
+// `stdlib/Builtins.maxon` may declare `__`-prefixed names and user code may call them, so on the
+// name alone a user function wearing the prefix gets the scheduler's exemption, and a deep
+// recursion on a green thread overflows its stack with no guard to call `__gt_morestack`.
+// `sourceFilePath` is stamped at construction by the only party that knows it — the parser, on
+// every function and lifted closure it builds — and left empty by the two doors a synthesized
+// function comes through (`IrFunction.createFromStd`, `ModuleInit`'s `IrFunction.create`), so no
+// name can fool it, a lifted closure inside a declared `__` function included.
 //
-// ⚠⚠ **THE NAME SHAPE ALONE IS A REACHABLE SEGFAULT, AND PROVENANCE IS THE SECOND CLAUSE THAT CLOSES
-// IT.** The premise *"Maxon reserves `__` for compiler-internal names, so a user function can never
-// collide"* is FALSE: `stdlib/Builtins.maxon` may DECLARE `__`-prefixed names, and they are CALLABLE. On
-// the name shape alone a user function wearing the prefix is handed the SCHEDULER's exemption. MEASURED
-// on x64-windows: a `__probeDeep` declared in that module, recursing 4000 deep inside an `async` worker,
-// **SIGSEGVs (exit 139)** because no guard ever calls `__gt_morestack`; the identical program with the
-// `__` dropped from the name exits **42**. A safety exemption keyed on a naming convention is only as
-// sound as the convention, and this convention carries an exemption of its own.
+// It narrows the name test rather than replacing it. An empty `sourceFilePath` also holds the
+// synthesized builtin bodies — `int.compare`, `String.hash`, the runtime families — which are
+// compiler-built but wear no prefix (a witness reloc must name a real `.text` symbol; see
+// `IrInterface.isBuiltinConformanceImplName`). The
+// `set`/`string-trim`/`character-set`/`primitive-comparable` goldens pin exactly those bodies, and
+// on the green-thread side they are ordinary frames that must grow. A builder-built body proves it
+// is scaffolding only by the conjunction: the runtime's naming band and no source file.
 //
-// **`sourceFilePath` is the fact, and it is recorded at CONSTRUCTION by the only party that knows it**: the
-// parser stamps it on every function it builds (`parseFunction`, and `parseClosureExpression` for a lifted
-// closure), and `IrFunction.createFromStd` / `ModuleInit`'s `IrFunction.create` — the two doors a synthesized
-// function comes through — leave it empty. So it is derived rather than guessed, and no name can fool it:
-// not a declared `__int_fromString`, and not a lifted closure inside one (`__int_fromString$closure_0`),
-// which the prefix test alone would exempt too.
+// A `runtime/` body proves it without a name, which is why tier membership is its own disjunct:
+// `LibraryFacts.runtimeTier` is the provenance fact `SemanticCheck.calleeYields` and
+// `calleeShowsAnEffect` read for the same question. `maxon_force_segfault` forces the point — the
+// backtrace prints its name, so it can never take a prefix, and under the conjunction it would
+// carry a green-thread stack guard and be marked `asyncPreemptible`. This admits no user function:
+// no user file may declare into `runtime/` (E2051, and
+// `Parser.requireFreeFunctionNameIsNotTheFaultProbe` for the one unbanded entry) or call into it
+// (E3004, and `calleeVisibleFrom`'s admit-list).
 //
-// ⚠ **IT NARROWS THE NAME TEST AND DOES NOT REPLACE IT, and that is not conservatism — MEASURED, replacing
-// it fails 118 spec tests.** An empty `sourceFilePath` is a strictly WIDER set than this one: it also holds
-// the SYNTHESIZED BUILTIN bodies — `int.compare`, `String.hash`, the runtime families — which
-// are compiler-built but deliberately wear NO prefix (a witness reloc must name a real `.text` symbol; see
-// `IrInterface.isBuiltinConformanceImplName`). Those are exactly the bodies the `set`/`string-trim`/
-// `character-set`/`primitive-comparable` goldens exist to pin — ⚠ **and in the first and third that is
-// the KEY's conformance impls (`Character.hash`/`Character.equals`) rather than a container runtime**;
-// the spec directories reach the same naming band, by the
-// corpus route. On the GT side they are ordinary frames a
-// green thread runs and MUST grow for. Both readers want *"the invariant scaffolding"*, and a BUILDER-BUILT
-// body can only prove it is that by the CONJUNCTION: the runtime's own naming band, and no source file.
-//
-// ⭐⭐ **A `runtime/` BODY PROVES IT WITHOUT A NAME, WHICH IS WHY TIER MEMBERSHIP IS ITS OWN DISJUNCT.**
-// The name band exists to identify a body NOTHING declared — a body with no path has nothing else to
-// argue from. A tier member has both a path and membership in `LibraryFacts.runtimeTier`, the provenance
-// fact `SemanticCheck.calleeYields` and `calleeShowsAnEffect` read for the same question, so requiring it
-// to ALSO wear a band would key a proven fact on a spelling. `maxon_force_segfault` is the body that
-// forces the point: the backtrace prints its name, so it can never take a prefix, and under a conjunction
-// it would carry a green-thread stack guard and be marked `asyncPreemptible`.
-//
-// ⛔ **THIS DOES NOT REOPEN THE `__probeDeep` SEGFAULT, and the difference is WHO CAN ADD A NAME.** That
-// defect was a USER function reaching the exemption: `stdlib/Builtins.maxon` is a file user code calls into,
-// so the name test alone let anything declared there wear the scheduler's exemption — which is why the
-// band still needs `sourceFilePath.isEmpty()` beside it. `runtime/` is a cone the COMPILER loads and no user
-// file may declare into (E2051, plus `Parser.requireFreeFunctionNameIsNotTheFaultProbe` for the one entry
-// wearing no band) or CALL into (E3004, and `calleeVisibleFrom`'s admit-list), so nothing a program writes
-// can enter `runtimeTier`.
-//
-// ⚠ **EVERY DECLARATION IN A TIER FILE IS EXEMPT, ITS UNRESERVED `module function` HELPERS INCLUDED, AND
-// THAT IS THE INTENDED READING.** They are compiler-authored frames inside the margin
-// `GtRuntime.gtStackGuardMargin` is sized for. The limit it buys is real and stated in `maxon-bin/CLAUDE.md`:
-// a DEEPLY RECURSIVE tier helper would be `__probeDeep`'s shape with a compiler author instead of a user, so
-// a tier body that recurses on program-sized data needs a guard this predicate will not give it.
-function isRuntimeFunction(func IrFunction, runtimeTier FunctionNameSet) returns bool
+// ⚠ Every declaration in a tier file is exempt from the stack guard, its unreserved
+// `module function` helpers included. They are compiler-authored frames inside the margin
+// `GtRuntime.gtStackGuardMargin` is sized for, so a tier body that recurses on program-sized data
+// needs a guard this predicate will not give.
+export function isRuntimeFunction(func IrFunction, runtimeTier FunctionNameSet) returns bool
 	if runtimeTier.contains(func.name) 'theTierProvesItself'
 		return true
 	end 'theTierProvesItself'
@@ -800,9 +777,9 @@ function moduleTargetCpu(module TargetModule) returns CpuArch
 	return CpuArch.x64
 end 'moduleTargetCpu'
 
-// True when `op` is one of the arm64-SPECIFIC ops (the `arm64Ret..arm64ImportCall` band) — the shared
-// ops (in the x64 band positionally) and the x64-specific ops are false, so a module is arm64 iff it
-// holds at least one of these. Exhaustive, so a new op variant is a compile error, not a mis-classify.
+// True when `op` is one of the arm64-specific ops — the shared ops and the x64-specific ops are
+// false, so a module is arm64 iff it holds at least one of these. Exhaustive, so a new op variant
+// is a compile error, not a mis-classify.
 function opIsArm64Band(op TargetOp) returns bool
 	return match op 'p'
 		prologue or
@@ -863,7 +840,28 @@ function opIsArm64Band(op TargetOp) returns bool
 			leaRegRdata or
 			minMaxSdRegReg or
 			movqXmmGpr or
-			negF64RegReg gives false
+			negF64RegReg or
+			leaRegFunc or
+			callReg or
+			x64Syscall or
+			x64JumpTable or
+			callMem or
+			leaRegSlot or
+			x64MemFill or
+			x64LockCmpxchg or
+			x64LockXadd or
+			x64LockAdd or
+			x64TebSelfPointer or
+			x64GsLoadRegBase or
+			leaRegBaseIndexScale or
+			loadRegBaseIndexScale or
+			storeBaseIndexScaleReg or
+			mulHighReg or
+			// ⛔ The counter is one op shared by both ISAs, so `true` here would make a pure-x64 module
+			// holding one report as arm64 and print every op in it against the wrong register file.
+			covInc or
+			x64AluBaseDispReg or
+			x64AluBaseDispImm32 gives false
 		arm64Ret or
 			arm64Branch or
 			arm64CondBranch or
@@ -915,76 +913,21 @@ function opIsArm64Band(op TargetOp) returns bool
 			arm64FpLoadRdata or
 			arm64ImportCall or
 			arm64Syscall or
-			arm64Fcsel gives true
-
-		// The x64 `leaRegFunc`/`callReg`, and the x64-linux `x64Syscall`, are appended past the
-		// arm64 band (band-append), but they are x64 ops, so `false` — a module is NOT arm64 for holding them.
-		leaRegFunc or
-			callReg or
-			x64Syscall gives false
-
-		// The jump tables are per-ISA: `x64JumpTable` is an x64 op (module not arm64 for it), `arm64JumpTable`
-		// an arm64 one.
-		x64JumpTable gives false
-		arm64JumpTable gives true
-
-		// The memory-indirect witness call is an x64 op.
-		callMem gives false
-
-		// The stack-argument pair IS arm64-specific (see their dialect header for why x64 needs no op).
-		arm64StoreOutgoingArg or
-			arm64LoadIncomingArg gives true
-
-		// The arm64 halves of the two bit reinterpretations, so a module holding either IS arm64. Their
-		// x64 twins `movqGprXmm`/`movqXmmGpr` both sit inside the leading `prologue to negF64RegReg` arm
-		// and are correctly `false` there — that range's endpoint is the x64 band's last member, so
-		// appending to that band moves it.
-		arm64FmovGprFp gives true
-		arm64FmovFpGpr gives true
-
-		// SHARED by both CPUs, like `storeSlotReg`/`loadRegSlot` — not an arm64-band op.
-		leaRegSlot gives false
-
-		// The fill ladders are per-ISA, exactly as the jump tables above are — same question, same
-		// answer, and written as two arms rather than a range for that reason.
-		x64MemFill gives false
-		arm64MemFill gives true
-
-		// Per-ISA, exactly as the fill ladders and jump tables above — the four x64 forms are x64's, the
-		// three arm64 forms are arm64's. Two ranges rather than seven arms, which the band-append order makes
-		// exact: the x64 four are contiguous and the arm64 three follow them.
-		x64LockCmpxchg or
-			x64LockXadd or
-			x64LockAdd or
-			x64TebSelfPointer or
-			x64GsLoadRegBase gives false
-		arm64AtomicCas or
+			arm64Fcsel or
+			arm64JumpTable or
+			arm64StoreOutgoingArg or
+			arm64LoadIncomingArg or
+			arm64FmovGprFp or
+			arm64FmovFpGpr or
+			arm64MemFill or
+			arm64AtomicCas or
 			arm64AtomicRmw or
-			arm64ThreadPointer gives true
-
-		// The scaled-index band splits by ISA exactly as the atomics above do — the three x64 forms
-		// are x64's, the shifted-register `add` is arm64's.
-		leaRegBaseIndexScale or
-			loadRegBaseIndexScale or
-			storeBaseIndexScaleReg gives false
-		arm64AddLsl gives true
-
-		// The high multiply is one value with two shapes: x64's one-operand group-3 form and arm64's
-		// three-address one, each its own op.
-		mulHighReg gives false
-
-		// `fneg` is arm64's own instruction (x64 spells the flip as `negF64RegReg`).
-		arm64Fneg gives true
-		arm64LoadAcquire or
-			arm64StoreRelease gives true
-		arm64Mulh gives true
-
-		// ⛔ **`false`, AND IT IS THE ANSWER RATHER THAN A DEFAULT.** The counter is ONE op shared by both ISAs,
-		// so `true` here would make a pure-x64 module holding one report as arm64 and print every op in it
-		// against the wrong register file.
-		covInc gives false
-		x64AluBaseDispReg or
-			x64AluBaseDispImm32 gives false
+			arm64ThreadPointer or
+			arm64AddLsl or
+			arm64Fneg or
+			arm64LoadAcquire or
+			arm64StoreRelease or
+			arm64Mulh gives true
 	end 'p'
 end 'opIsArm64Band'
 
@@ -1026,7 +969,8 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 	return match op 'op'
 		prologue(stackSize) gives "prologue {stackSize}"
 		epilogue(stackSize) gives "epilogue {stackSize}"
-		ret gives "ret"
+		ret or
+			arm64Ret gives "ret"
 		jmp(targetBlockId) gives "jmp {blockPrintName(targetBlockId, names: names)}"
 		jcc(cond, targetBlockId) gives "jcc {condCodeName(cond)}, {blockPrintName(targetBlockId, names: names)}"
 		movRegImm(dest, value) gives "movRegImm {vregName(dest)}, {value}"
@@ -1127,7 +1071,6 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 		// Each arm64 operand prints through `arm64VregName` (its `RegNum` mapped to an arm64 register
 		// name), and each condition through the `Arm64CondCode` member name. The mnemonics are the
 		// arm64 spellings; the `arm64.` namespace is added by `opIsaPrefix` at the print site.
-		arm64Ret gives "ret"
 		arm64Branch(targetBlockId) gives "b {blockPrintName(targetBlockId, names: names)}"
 		arm64CondBranch(cond, targetBlockId) gives "b.{cond.name} {blockPrintName(targetBlockId, names: names)}"
 		arm64Cbz(reg, targetBlockId) gives "cbz {arm64VregName(reg)}, {blockPrintName(targetBlockId, names: names)}"
@@ -1201,8 +1144,8 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 		// The jump tables render the biased index, the default, and the slot→target table run-length
 		// encoded (`[lo..hi]=label`), so a range/`or` arm's several identical slots collapse to one entry
 		// and the table stays readable even at the span cap.
-		x64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) gives "jumpTable {sharedVregName(indexReg, cpu: cpu)}, default={blockPrintName(defaultTarget, names: names)} [{formatJumpTableSlots(caseTargets, names: names)}] @{String.from(tableLabel)}"
-		arm64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) gives "jumpTable {sharedVregName(indexReg, cpu: cpu)}, default={blockPrintName(defaultTarget, names: names)} [{formatJumpTableSlots(caseTargets, names: names)}] @{String.from(tableLabel)}"
+		x64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) or
+			arm64JumpTable gives "jumpTable {sharedVregName(indexReg, cpu: cpu)}, default={blockPrintName(defaultTarget, names: names)} [{formatJumpTableSlots(caseTargets, names: names)}] @{String.from(tableLabel)}"
 		callMem(baseReg, disp) gives "callMem [{vregName(baseReg)} + {disp}]"
 
 		// The arm64 stack-argument pair renders the SLOT, not an address, because a slot is all either op
@@ -1210,17 +1153,12 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 		arm64StoreOutgoingArg(slot, srcReg) gives "storeOutgoingArg [sp + arg{slot}], {arm64VregName(srcReg)}"
 		arm64LoadIncomingArg(dest, slot) gives "loadIncomingArg {arm64VregName(dest)}, [arg{slot}]"
 
-		// The arm64 BIT REINTERPRETATION. Printed `fmov` — the real mnemonic, as every arm64 arm here
-		// is — and the operand NAMES disambiguate it from the FP→FP `fmov` the shared `movRegReg`
-		// emits: `arm64VregName` renders a GPR `x<n>` and an FP register `d<n>`, so `fmov x0, d1` and
-		// `fmov d0, d1` read as the two different instructions they are.
-		arm64FmovGprFp(dest, src) gives "fmov {arm64VregName(dest)}, {arm64VregName(src)}"
-
-		// Its INVERSE, and the reason the arm above is written the way it is: BOTH render the mnemonic
-		// `fmov`, so the two are told apart in a golden ONLY by which side prints `x<n>` and which
-		// `d<n>` — `fmov x0, d1` against `fmov d0, x1`. That is the real assembly and it is unambiguous;
-		// an invented mnemonic would be neither.
-		arm64FmovFpGpr(dest, src) gives "fmov {arm64VregName(dest)}, {arm64VregName(src)}"
+		// The arm64 bit reinterpretations, both printed `fmov` — the real mnemonic, as every arm64 arm
+		// here is. `arm64VregName` renders a GPR `x<n>` and an FP register `d<n>`, so the operand names
+		// tell the two directions apart (`fmov x0, d1` against `fmov d0, x1`) and both apart from the
+		// FP→FP `fmov` the shared `movRegReg` emits (`fmov d0, d1`).
+		arm64FmovGprFp(dest, src) or
+			arm64FmovFpGpr gives "fmov {arm64VregName(dest)}, {arm64VregName(src)}"
 
 		// Printed like its two slot neighbours: the SLOT, not the displacement, because the displacement is
 		// the encoder's and a golden that spelled it would move whenever an unrelated frame grew.

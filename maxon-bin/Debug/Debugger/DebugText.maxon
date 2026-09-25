@@ -1,4 +1,5 @@
 let FrameIndent = "  "
+let InFunctionLead = " in "
 let ValueIndent = "    "
 
 export function debugTextLinesFor(reply DebugReply) returns StringArray
@@ -19,6 +20,7 @@ export function debugTextLinesFor(reply DebugReply) returns StringArray
 		threadOutcome(outcome) then lines.push(threadOutcomeText(outcome))
 		traced(slice) then appendTrace(lines, slice: slice)
 		timedOut(waitingFor) then lines.push("timed out waiting for {waitingFor}")
+		running then lines.push("the program is running")
 		failed(message, suggestion) then lines.push(errorText(message, suggestion: suggestion))
 	end 'which'
 
@@ -33,7 +35,7 @@ function appendThreads(lines StringArray, roster DebugThreadRoster)
 	end 'nothingToList'
 
 	for row in roster.rows 'eachRow'
-		lines.push("{FrameIndent}#{row.id} {row.status} {row.functionName} at {row.file}:{row.line}")
+		lines.push("{FrameIndent}#{row.id} {row.status}{debugNamePhrase(row.functionName, lead: " ")} at {row.file}:{row.line}")
 	end 'eachRow'
 
 	if roster.truncated 'moreThanThePageHolds'
@@ -87,7 +89,7 @@ end 'appendSpoken'
 
 function breakpointText(answer DebugBreakpointAnswer) returns String
 	if answer.action == BreakpointAmbiguousAction 'moreThanOneName'
-		return "'{answer.target}' names {answer.candidates.count()} functions: {joined(answer.candidates)}"
+		return "'{answer.target}' is ambiguous: it names {joinedWith(answer.candidates, separator: CandidateSeparator)}"
 	end 'moreThanOneName'
 
 	if answer.action == BreakpointNoMatchAction 'nothingAnswersToIt'
@@ -102,7 +104,15 @@ function breakpointText(answer DebugBreakpointAnswer) returns String
 		return "no code at {answer.file}:{answer.line}"
 	end 'noCodeThere'
 
-	return "breakpoint {answer.action} at {answer.file}:{answer.line} in {answer.functionName} ({answer.offsets.count()} site(s))"
+	if answer.action == BreakpointConditionUnsupportedAction 'aConditionTheAgentCannotJudge'
+		return "breakpoint at {answer.file}:{answer.line} not set: the debug agent cannot evaluate `{answer.condition}`, which must compare one integer or bool local held in a register or a frame slot with a literal"
+	end 'aConditionTheAgentCannotJudge'
+
+	if answer.action == BreakpointConditionInvalidAction 'notACondition'
+		return "breakpoint at {answer.file}:{answer.line} not set: `{answer.condition}` is not `<local> <op> <literal>`"
+	end 'notACondition'
+
+	return "breakpoint {answer.action} at {answer.file}:{answer.line}{debugNamePhrase(answer.functionName, lead: " in ")} ({answer.offsets.count()} site(s))"
 end 'breakpointText'
 
 function suggestionTail(suggestion String) returns String
@@ -122,21 +132,31 @@ function stopHeadline(stop DebugStop) returns String
 		return "trap at {stop.file}:{stop.line} ({hexWord(stop.offset)})"
 	end 'anInt3NobodyPlanted'
 
-	return "stopped ({stop.reason}) at {stop.file}:{stop.line} in {stop.functionName}"
+	if stop.reason == FaultStopReasonName 'theProgramFaulted'
+		return "fault at {stop.file}:{stop.line}{debugNamePhrase(stop.functionName, lead: InFunctionLead)}: {stop.fault} ({hexWord(stop.offset)}); continuing ends the program"
+	end 'theProgramFaulted'
+
+	return "stopped ({stop.reason}) at {stop.file}:{stop.line}{debugNamePhrase(stop.functionName, lead: InFunctionLead)}"
 end 'stopHeadline'
 
 function appendFrames(lines StringArray, frames DebugFrameArray)
 	for frame in frames 'eachFrame'
-		lines.push("{FrameIndent}#{frame.number} {frame.functionName}{inlinedTail(frame.inlined)} at {frame.file}:{frame.line}")
+		lines.push("{FrameIndent}#{frame.number} {frame.functionName}{inlinedTail(frame.inlined)} {frameWhere(frame)}")
 	end 'eachFrame'
 end 'appendFrames'
+
+function frameWhere(frame DebugFrame) returns String
+	return UnknownPositionText if frame.path.isEmpty() else "at {frame.file}:{frame.line}"
+end 'frameWhere'
+
+let UnknownPositionText = "at an unknown position"
 
 function inlinedTail(inlined bool) returns String
 	return " [inlined]" if inlined else ""
 end 'inlinedTail'
 
-function appendLocals(lines StringArray, functionName String, values DebugValueTree)
-	lines.push("locals of {functionName}:")
+function appendLocals(lines StringArray, functionName DebugFunctionNameLookup, values DebugValueTree)
+	lines.push("locals{debugNamePhrase(functionName, lead: " of ")}:")
 	appendRoots(lines, tree: values, indent: ValueIndent)
 end 'appendLocals'
 
@@ -159,16 +179,9 @@ function valueText(value DebugValueNode) returns String
 	return "<{value.unavailable}>" if not value.unavailable.isEmpty() else value.display
 end 'valueText'
 
+let CandidateSeparator = ", "
+
 function errorText(message String, suggestion String) returns String
 	return "error: {message}{suggestionTail(suggestion)}"
 end 'errorText'
 
-function joined(values StringArray) returns String
-	var rendered = ""
-
-	for value in values 'eachValue'
-		rendered.append(value if rendered.isEmpty() else ", {value}")
-	end 'eachValue'
-
-	return rendered
-end 'joined'

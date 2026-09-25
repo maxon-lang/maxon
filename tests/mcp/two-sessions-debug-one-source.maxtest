@@ -1,0 +1,72 @@
+let TwoSessionsStagingDir = "temp/mcp-two-sessions"
+let CacheRootVariable = "MAXON_RUN_CACHE_ROOT"
+let CacheDirName = "cache"
+let CacheVendorDirName = "maxon"
+let DebugBuildDirName = "debug-builds"
+let SidecarSuffix = ".mxdbg"
+let OkStatus = 200 as HttpStatusNumber
+let SessionsDebuggingOneSource = 2
+
+test 'two debug sessions of one source each stop in their own build, and closing one removes its build'
+	let program = stagedProgram(TwoSessionsStagingDir, fileName: "main.maxon", source: debuggableProgramSource())
+	let anchored = anchorLineIn(program, anchor: DebuggableProgramAnchor)
+	let cache = stagingDir("{TwoSessionsStagingDir}/{CacheDirName}")
+	let builds = cache.join(CacheVendorDirName).join(DebugBuildDirName)
+
+	var server = StreamingHttpMcpServer.start(StringArray.create(), environment: Environment.inheritUpdating([CacheRootVariable: cache.toString()]))
+	let (firstInitialized, first) = server.initializeSession()
+	let (secondInitialized, second) = server.initializeSession()
+
+	let firstStarted = httpToolCall(server, sessionId: first, id: 2, name: DebugStartTool, argumentsJson: sourceArgument(program.toString()))
+	let secondStarted = httpToolCall(server, sessionId: second, id: 2, name: DebugStartTool, argumentsJson: sourceArgument(program.toString()))
+	_ = httpToolCall(server, sessionId: first, id: 3, name: DebugBreakTool, argumentsJson: debugBreakTargetArgument(anchored))
+	_ = httpToolCall(server, sessionId: second, id: 3, name: DebugBreakTool, argumentsJson: debugBreakTargetArgument(anchored))
+	let firstContinued = httpToolCall(server, sessionId: first, id: 4, name: DebugContinueTool)
+	let secondContinued = httpToolCall(server, sessionId: second, id: 4, name: DebugContinueTool)
+	let imagesWhileLive = imagesIn(builds)
+
+	_ = httpToolCall(server, sessionId: first, id: 5, name: DebugStopTool)
+	let imagesAfterFirst = imagesIn(builds)
+	_ = httpToolCall(server, sessionId: second, id: 5, name: DebugStopTool)
+	let leftAfterBoth = entriesIn(builds)
+
+	try server.stop()
+
+	try Expect.equal(firstInitialized.statusCode as AssertedInt, expected: OkStatus as AssertedInt)
+	try Expect.equal(secondInitialized.statusCode as AssertedInt, expected: OkStatus as AssertedInt)
+	try Expect.isFalse(toolCallIsError(firstStarted), message: "the first session's `{DebugStartTool}` must build the source and launch it: {toolCallText(firstStarted)}")
+	try Expect.isFalse(toolCallIsError(secondStarted), message: "the second session's `{DebugStartTool}` builds the same source while the first session's program runs, and must not build over the image that program runs from: {toolCallText(secondStarted)}")
+	try Expect.isTrue(debugEventLines(firstContinued, kind: DebugStopEventName).contains("{anchored}"), message: "the first session must stop at the anchored line {anchored}; it answered {toolCallText(firstContinued)}")
+	try Expect.isTrue(debugEventLines(secondContinued, kind: DebugStopEventName).contains("{anchored}"), message: "the second session must stop at the anchored line {anchored}; it answered {toolCallText(secondContinued)}")
+	try Expect.equal(imagesWhileLive.count() as AssertedInt, expected: SessionsDebuggingOneSource as AssertedInt, message: "each live session debugs a build of its own; {builds.toString()} held{renderedStrings(imagesWhileLive)}")
+	try Expect.equal(imagesAfterFirst.count() as AssertedInt, expected: (SessionsDebuggingOneSource - 1) as AssertedInt, message: "`{DebugStopTool}` removes the image its session built and no other; {builds.toString()} held{renderedStrings(imagesAfterFirst)}")
+	try Expect.isEmpty(renderedStrings(leftAfterBoth), message: "once both sessions have ended nothing they built is left in {builds.toString()}; it held {renderedStrings(leftAfterBoth)}")
+end 'two debug sessions of one source each stop in their own build, and closing one removes its build'
+
+function imagesIn(directory FilePath) returns StringArray
+	var images = StringArray.create()
+
+	for entry in entriesIn(directory) 'eachEntry'
+		if not entry.endsWith(SidecarSuffix) 'anImage'
+			images.push(entry)
+		end 'anImage'
+	end 'eachEntry'
+
+	return images
+end 'imagesIn'
+
+function entriesIn(directory FilePath) returns StringArray
+	var names = StringArray.create()
+
+	if not Directory.isDirectory(directory) 'nothingBuiltThere'
+		return names
+	end 'nothingBuiltThere'
+
+	let entries = try Directory.list(directory) otherwise panic("mcp two-sessions test: could not list {directory.path}")
+
+	for entry in entries 'eachEntry'
+		names.push(entry.filename())
+	end 'eachEntry'
+
+	return names
+end 'entriesIn'

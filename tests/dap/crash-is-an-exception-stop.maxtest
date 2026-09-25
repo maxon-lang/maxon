@@ -1,0 +1,35 @@
+let CrashCaseLabel = "crash-is-an-exception-stop"
+
+type CrashSession implements DapSession
+	let executable as FilePath
+	export var stopReason as String
+	export var frameNames as StringArray
+
+	static function create(executable FilePath) returns CrashSession
+		return Self{executable: executable, stopReason: "", frameNames: StringArray.create()}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+		_ = try client.request(LaunchCommand, argumentsJson: dapLaunchArguments(self.executable))
+		_ = try client.awaitEvent(InitializedEvent)
+		_ = try client.request(ConfigurationDoneCommand)
+
+		let stopped = try client.awaitEvent(StoppedEvent)
+		self.stopReason = dapBodyString(stopped, key: "reason")
+
+		let threadId = dapBodyNumber(stopped, key: "threadId")
+		self.frameNames = dapStackFrameNames(try client.request(StackTraceCommand, argumentsJson: dapThreadArguments(threadId)))
+
+		_ = try client.request(DisconnectCommand)
+	end 'drive'
+end 'CrashSession'
+
+test 'a faulting program is an exception stop with a walkable stack'
+	let staged = dapStagedFixture(CrashCaseLabel, fixture: CrashFixtureName)
+	var session = CrashSession.create(dapBuildFixture(staged))
+	try dapRunSession(session, completing: "reach a stop. An adapter that lets the fault end the session silently is the failure this case is here for")
+
+	try Expect.equal(session.stopReason, expected: ExceptionReason, message: "a fault is reported as `{ExceptionReason}`; it said `{session.stopReason}`")
+	try Expect.isFalse(session.frameNames.count() == 0, message: "an exception stop must be walkable: the stack is the only thing that says WHERE the program faulted. `{StackTraceCommand}` answered {dapRendered(session.frameNames)}")
+end 'a faulting program is an exception stop with a walkable stack'

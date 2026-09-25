@@ -1,0 +1,111 @@
+// Unlike `DebugSession`, nothing here prints: every reply is handed back and the child's output is
+// collected, because a tool's transport owns stdout and one stray line corrupts its stream.
+
+export enum DebugToolState
+	stopped
+	running
+	ended
+end 'DebugToolState'
+
+export union DebugSessionHold
+	empty
+	held(session DebugToolSession)
+end 'DebugSessionHold'
+
+// Owned by the transport: one per process over stdio, one per `Mcp-Session-Id` over HTTP. The
+// owner calls `reap` when it ends (EOF over stdio, a DELETE or an idle sweep over HTTP), or the
+// debuggee runs on with nobody able to reach it.
+export type DebugSessionSlot
+	export var hold as DebugSessionHold
+
+	export static function create() returns DebugSessionSlot
+		return Self{hold: DebugSessionHold.empty}
+	end 'create'
+
+	export function reap() returns CollectedLines
+		let finalOutput = match self.hold 'which'
+			empty gives CollectedLines.create()
+			held(session) gives session.close()
+		end 'which'
+
+		self.hold = DebugSessionHold.empty
+
+		return finalOutput
+	end 'reap'
+
+	export function place(session DebugToolSession)
+		match self.hold 'which'
+			empty then self.hold = DebugSessionHold.held(session)
+			held then panic("DebugSessionSlot.place: a session is already held here, and placing another would orphan its debuggee — reap it first")
+		end 'which'
+	end 'place'
+end 'DebugSessionSlot'
+
+export union DebugToolLaunch
+	ready(session DebugToolSession)
+	refused(reason String)
+end 'DebugToolLaunch'
+
+let NoDebugAgentReason = "no debug agent attached to this program: it was built without one, or its agent never attached"
+
+export type DebugToolSession
+	export var conversation as DebugConversation
+	export var engine as DebugEngine
+	let image as DebugImage
+
+	export static function launch(image DebugImage, arguments StringArray, targetEnv EnvMap, stopTimeoutMs StopTimeoutMs, traced bool, workingDirectory FilePath = inheritedWorkingDirectory(), delivery DebugStopDelivery = DebugStopDelivery.awaited) returns DebugToolLaunch
+		let launched = launchedToolSession(image, arguments: arguments, targetEnv: targetEnv, stopTimeoutMs: stopTimeoutMs, traced: traced, workingDirectory: workingDirectory, delivery: delivery)
+
+		match launched 'started'
+			refused then image.discardBuild()
+			ready then break 'started'
+		end 'started'
+
+		return launched
+	end 'launch'
+
+	static function over(engine DebugEngine, symbols DebugSymbols, delivery DebugStopDelivery, image DebugImage) returns DebugToolSession
+		return Self{conversation: DebugConversation.create(engine, symbols: symbols, delivery: delivery), engine: engine, image: image}
+	end 'over'
+
+	export function currentState() returns DebugToolState
+		return match self.conversation.programState() 'program'
+			stopped gives DebugToolState.stopped
+			running or
+				walking gives DebugToolState.running
+			ended gives DebugToolState.ended
+		end 'program'
+	end 'currentState'
+
+	// The debuggee is killed, never left to finish: nobody watches it once a tool has ended the
+	// session, and a live process would still hold the image `discardBuild` deletes.
+	export function close() returns CollectedLines
+		_ = self.conversation.close()
+		let finalOutput = self.engine.collectedOutput()
+		self.image.discardBuild()
+
+		return finalOutput
+	end 'close'
+end 'DebugToolSession'
+
+function launchedToolSession(image DebugImage, arguments StringArray, targetEnv EnvMap, stopTimeoutMs StopTimeoutMs, traced bool, workingDirectory FilePath, delivery DebugStopDelivery) returns DebugToolLaunch
+	let program = image.program()
+
+	match debugImageCheckFor(program, spelled: program.path) 'checked'
+		refused(reason) then return DebugToolLaunch.refused(reason)
+		usable(code, reader) then return startedToolSession(image, code: code, reader: reader, arguments: arguments, workingDirectory: workingDirectory, targetEnv: targetEnv, stopTimeoutMs: stopTimeoutMs, traced: traced, delivery: delivery)
+	end 'checked'
+end 'launchedToolSession'
+
+function startedToolSession(image DebugImage, code ByteArray, reader MxdbgReader, arguments StringArray, workingDirectory FilePath, targetEnv EnvMap, stopTimeoutMs StopTimeoutMs, traced bool, delivery DebugStopDelivery) returns DebugToolLaunch
+	let program = image.program()
+	let symbols = DebugSymbols.create(reader, code: code, executable: program)
+	let routing = ChildOutputRouting.collect(OutputSink.create())
+
+	match DebugEngine.start(program, arguments: arguments, workingDirectory: workingDirectory, targetEnv: targetEnv, routing: routing, stopTimeoutMs: stopTimeoutMs, traced: traced) 'started'
+		refused(reason) then return DebugToolLaunch.refused(reason)
+		noAgent then return DebugToolLaunch.refused(NoDebugAgentReason)
+		ready(engine) then return DebugToolLaunch.ready(DebugToolSession.over(engine, symbols: symbols, delivery: delivery, image: image))
+	end 'started'
+end 'startedToolSession'
+

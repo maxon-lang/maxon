@@ -1,0 +1,895 @@
+// Stages `tests/debug/fixtures/` by path rather than from a copy: `maxon test` compiles one
+// directory, so this corpus cannot import `DebugHarness` and repeats its staging, and a second copy
+// of an anchored fixture would drift from the first.
+
+let TestedCompilerStem = "maxon-bin/.maxon/maxon"
+let DapServerCommandName = "dap-server"
+
+// Kept under the per-file test deadline, so an adapter that ignores its closed stdin is terminated
+// by `release` rather than timing the whole file out.
+let AdapterExitDeadlineMs = 3000
+
+// Full width on purpose: every one is a number the adapter sends, and a narrower range would turn
+// an out-of-protocol value into a range-check panic instead of a failed assertion.
+export typealias DapNumber = int(i64.min to i64.max)
+export typealias DapReference = int(i64.min to i64.max)
+
+export typealias SourceLine = int(1 to u32.max)
+
+export typealias JsonDocArray = Array with JsonDoc
+
+typealias DapSequenceNumber = int(1 to i64.max)
+typealias FrameByteCount = int(0 to i64.max)
+typealias StashedMessageTally = int(0 to i64.max)
+typealias PathArray = Array with FilePath
+
+let FirstSequenceNumber = 1 as DapSequenceNumber
+
+// Bounds how many other messages a wait reads past, so an adapter that keeps talking but never
+// sends the awaited one fails the case. An adapter that sends nothing at all still blocks the read.
+let UnaddressedMessageBudget = 256 as StashedMessageTally
+
+// `writeStdinLine` appends an LF. Counted, it lands inside the body, where JSON allows trailing
+// whitespace; left outside the frame it would read as a blank header line and desynchronize the
+// stream.
+let LineWriterNewlineByteCount = 1
+
+let ContentLengthHeaderName = "content-length"
+let HeaderFieldSeparator = ":"
+
+export enum DapClientError implements Error
+	transportFailed
+	malformedResponse
+	noSuchEvent
+end 'DapClientError'
+
+export union DapAdapterExit
+	clean
+	failed(reason String)
+end 'DapAdapterExit'
+
+export interface DapSession
+	function drive(client DapClient) throws DapClientError
+end 'DapSession'
+
+union DapSessionOutcome
+	completed
+	broke(reason String)
+end 'DapSessionOutcome'
+
+// `release` runs before any assertion: an `Expect` that threw first would skip it, and an unreleased
+// `StreamingSubprocess` leaks and exits the run 101.
+export function dapRunSession(session DapSession, completing String, file String = __file__, line SourceLineNumber = __line__) throws TestFailure
+	var client = DapClient.start()
+	var outcome = DapSessionOutcome.completed
+
+	try session.drive(client) otherwise (e) 'broke'
+		outcome = DapSessionOutcome.broke(dapBroke(e))
+	end 'broke'
+
+	let exit = client.release()
+
+	match outcome 'session'
+		completed then break 'session'
+		broke(reason) then try Expect.fail("the session did not {completing}: {reason}", file: file, line: line)
+	end 'session'
+
+	match exit 'adapter'
+		clean then break 'adapter'
+		failed(reason) then try Expect.fail("the session did {completing}, but {reason}", file: file, line: line)
+	end 'adapter'
+end 'dapRunSession'
+
+function dapBroke(reason DapClientError) returns String
+	return match reason 'why'
+		transportFailed gives "the framed stream broke — the adapter stopped speaking, or never started"
+		malformedResponse gives "a message was not the shape the Debug Adapter Protocol defines"
+		noSuchEvent gives "an event the session was waiting for never arrived"
+	end 'why'
+end 'dapBroke'
+
+let FixturesDirName = "tests/debug/fixtures"
+let StagingRootDirName = "temp/dap"
+let StoredFixtureSuffix = ".fixture"
+let StagedProgramFileName = "main.maxon"
+let BuildCommandName = "build"
+let OutputOptionPrefix = "--output="
+let TestCommandName = "test"
+let TestListOption = "--list"
+let TestBuildOption = "--build"
+let TestJsonOption = "--json"
+let TestBinaryKey = "binary"
+let OutputFileStem = "out"
+let PathSeparator = "/"
+let AnchorMarker = "// anchor: "
+
+export let SteppingFixtureName = "stepping"
+export let ValuesFixtureName = "values"
+export let WorkersFixtureName = "workers"
+export let SpinFixtureName = "spin"
+export let SpinSignalFixtureName = "spinsignal"
+export let LiveSpinFixtureName = "livespin"
+export let HeaplessFixtureName = "heapless"
+export let CrashFixtureName = "crash"
+export let ConditionFixtureName = "condition"
+export let SplicedFixtureName = "spliced"
+export let TwoDirsFixtureName = "twodirs"
+export let TestBodyFixtureName = "testbody"
+export let LeafPairFixtureName = "leafpair"
+export let FaultCalleeFixtureName = "faultcallee"
+
+// `maxon test` runs case files concurrently, so `caseLabel` must be unique to the case: two cases
+// sharing one would share a staging tree and an output path.
+export function dapStagedFixture(caseLabel String, fixture String) returns FilePath
+	let staged = dapStagingDir("{StagingRootDirName}{PathSeparator}{caseLabel}")
+	dapClearStagedFiles(staged)
+	dapStageStoredTree(dapFixtureDir("{FixturesDirName}{PathSeparator}{fixture}"), into: staged)
+
+	return staged
+end 'dapStagedFixture'
+
+function dapStageStoredTree(stored FilePath, into FilePath)
+	for entry in dapListing(stored) 'eachStored'
+		let storedName = entry.filename()
+
+		if Directory.isDirectory(entry) 'aStoredDirectory'
+			let stagedDirectory = into.join(storedName)
+
+			if not Directory.create(stagedDirectory) and not Directory.isDirectory(stagedDirectory) 'unusable'
+				panic("dap tests: the gate could not run — could not create {stagedDirectory.toString()} to stage {entry.toString()} into")
+			end 'unusable'
+
+			dapStageStoredTree(entry, into: stagedDirectory)
+			continue
+		end 'aStoredDirectory'
+
+		if not storedName.endsWith(StoredFixtureSuffix) 'notAStoredSource'
+			continue
+		end 'notAStoredSource'
+
+		let stagedName = storedName.replace(StoredFixtureSuffix, with: "")
+		let body = try File.readText(entry) otherwise panic("dap tests: the gate could not run — could not read the stored fixture {entry.toString()}")
+		try File.writeText(into.join(stagedName), content: body) otherwise panic("dap tests: the gate could not run — could not stage {stagedName} into {into.toString()}")
+	end 'eachStored'
+end 'dapStageStoredTree'
+
+export function dapStagedSource(staged FilePath, file String = StagedProgramFileName) returns FilePath
+	return staged.join(file)
+end 'dapStagedSource'
+
+export enum DapBuildScope
+	mainFile
+	wholeDirectory
+end 'DapBuildScope'
+
+function dapBuiltExecutable(staged FilePath) returns FilePath
+	return staged.join("{OutputFileStem}{dapExecutableSuffix()}")
+end 'dapBuiltExecutable'
+
+export function dapBuildFixture(staged FilePath, scope DapBuildScope = DapBuildScope.mainFile) returns FilePath
+	let executable = dapBuiltExecutable(staged)
+	let source = match scope 'what'
+		mainFile gives dapStagedSource(staged)
+		wholeDirectory gives staged
+	end 'what'
+
+	var config = Configuration.create(Executable.path(dapTestedCompilerPath()))
+	config.arguments = [BuildCommandName, source.toString(), "{OutputOptionPrefix}{executable.toString()}"]
+	config.workingDirectory = staged
+
+	let out = try config.run() otherwise (e) 'spawnFailed'
+		panic("dap tests: the gate could not run — could not build the staged fixture: {e.displayReason()}")
+	end 'spawnFailed'
+
+	if out.exitCode() != 0 'buildFailed'
+		panic("dap tests: the gate could not run — the staged fixture did not build: {out.stdout} {out.stderr}")
+	end 'buildFailed'
+
+	return executable
+end 'dapBuildFixture'
+
+export function dapBuildTestBinary(staged FilePath) returns FilePath
+	var config = Configuration.create(Executable.path(dapTestedCompilerPath()))
+	config.arguments = [TestCommandName, TestListOption, TestBuildOption, TestJsonOption]
+	config.workingDirectory = staged
+
+	let out = try config.run() otherwise (e) 'spawnFailed'
+		panic("dap tests: the gate could not run — could not build the staged test binary: {e.displayReason()}")
+	end 'spawnFailed'
+
+	if out.exitCode() != 0 'buildFailed'
+		panic("dap tests: the gate could not run — the staged tests did not build: {out.stdout} {out.stderr}")
+	end 'buildFailed'
+
+	let doc = try Json.parse(out.stdout.trim()) otherwise panic("dap tests: the gate could not run — `{TestCommandName} {TestListOption} {TestBuildOption} {TestJsonOption}` wrote a listing that does not parse: {out.stdout}")
+	let binary = try doc.getString(doc.root, key: TestBinaryKey) otherwise panic("dap tests: the gate could not run — the listing names no `{TestBinaryKey}`: {out.stdout}")
+
+	return try FilePath.from(binary) otherwise panic("dap tests: the gate could not run — the listing names a binary '{binary}' that is not a spellable path")
+end 'dapBuildTestBinary'
+
+export function dapAnchorLine(staged FilePath, anchor String, file String = StagedProgramFileName) returns SourceLine
+	let marker = "{AnchorMarker}{anchor}"
+	var found = 0
+	var carriers = 0
+
+	for (iter, line) in dapStagedLines(staged, file: file).withIterator() 'eachLine'
+		if line.trim().endsWith(marker) 'thisAnchor'
+			found = iter.index() + 1
+			carriers = carriers + 1
+		end 'thisAnchor'
+	end 'eachLine'
+
+	if carriers != 1 'notExactlyOne'
+		panic("dap tests: {carriers} lines of {file} under {staged.toString()} carry `{marker}`; exactly one must, or the case names a line it is not about")
+	end 'notExactlyOne'
+
+	return found as SourceLine
+end 'dapAnchorLine'
+
+let FirstSourceLine = 1 as SourceLine
+let LineFeed = "\n"
+
+export function dapDeclarationLine(staged FilePath, needle String) returns SourceLine
+	var lineNumber = FirstSourceLine
+
+	for line in dapStagedLines(staged) 'eachLine'
+		if line.startsWith(needle) 'found'
+			return lineNumber
+		end 'found'
+
+		lineNumber = lineNumber + 1
+	end 'eachLine'
+
+	panic("dap tests: the staged source under {staged.toString()} has no line beginning `{needle}`")
+end 'dapDeclarationLine'
+
+export function dapSourceColumnOf(staged FilePath, line SourceLine, spelling String) returns DapNumber
+	let text = try dapStagedLines(staged).get(line - FirstSourceLine) otherwise panic("dap tests: the staged source under {staged.toString()} has no line {line}")
+	let before = try text.split(spelling).get(0) otherwise panic("dap tests: splitting a line always answers its first piece")
+
+	if before == text 'notOnTheLine'
+		panic("dap tests: line {line} of the staged source under {staged.toString()} does not spell `{spelling}`")
+	end 'notOnTheLine'
+
+	return (before.count() + FirstSourceColumn) as DapNumber
+end 'dapSourceColumnOf'
+
+let FirstSourceColumn = 1
+
+function dapStagedLines(staged FilePath, file String = StagedProgramFileName) returns StringArray
+	let body = try File.readText(dapStagedSource(staged, file: file)) otherwise panic("dap tests: could not read the staged source under {staged.toString()}")
+
+	return body.split(LineFeed)
+end 'dapStagedLines'
+
+function dapStagingDir(spelled String) returns FilePath
+	let relative = try FilePath.from(spelled) otherwise panic("dap tests: '{spelled}' is not a spellable path")
+	let resolved = relative.resolve(Directory.currentPath())
+
+	if not Directory.create(resolved) and not Directory.isDirectory(resolved) 'unusable'
+		panic("dap tests: could not create {resolved.toString()}, where a case stages what it debugs")
+	end 'unusable'
+
+	return resolved
+end 'dapStagingDir'
+
+function dapFixtureDir(spelled String) returns FilePath
+	let relative = try FilePath.from(spelled) otherwise panic("dap tests: '{spelled}' is not a spellable path")
+	let resolved = relative.resolve(Directory.currentPath())
+
+	if not Directory.isDirectory(resolved) 'missing'
+		panic("dap tests: the gate could not run — there is no fixture directory at {resolved.toString()}. Paths here are spelled from the CHECKOUT ROOT, which is the working directory `maxon test` hands a test binary")
+	end 'missing'
+
+	return resolved
+end 'dapFixtureDir'
+
+function dapListing(dir FilePath) returns PathArray
+	return try Directory.list(dir) otherwise panic("dap tests: could not list {dir.toString()}")
+end 'dapListing'
+
+// A previous run's executable or sidecar left in place would let a build that wrote neither pass as
+// one that did.
+function dapClearStagedFiles(dir FilePath)
+	for entry in dapListing(dir) 'eachEntry'
+		if Directory.isDirectory(entry) 'aDirectory'
+			dapClearStagedFiles(entry)
+			continue
+		end 'aDirectory'
+
+		try File.delete(entry) otherwise panic("dap tests: could not clear {entry.toString()} from a previous run's staging")
+	end 'eachEntry'
+end 'dapClearStagedFiles'
+
+function dapExecutableSuffix() returns String
+	#if os(Windows)
+		let suffix = ".exe"
+	#else
+		let suffix = ""
+	#endif
+
+	return suffix
+end 'dapExecutableSuffix'
+
+function dapTestedCompilerPath() returns FilePath
+	let spelled = "{TestedCompilerStem}{dapExecutableSuffix()}"
+	let relative = try FilePath.from(spelled) otherwise panic("dap tests: '{spelled}' is not a spellable path")
+	let binary = relative.resolve(Directory.currentPath())
+
+	if not File.exists(binary) 'noBinary'
+		panic("dap tests: the gate could not run — there is no compiler at {binary.toString()}. Paths here are spelled from the CHECKOUT ROOT; run from there, and build `{TestedCompilerStem}` first")
+	end 'noBinary'
+
+	return binary
+end 'dapTestedCompilerPath'
+
+export type DapClient
+	var server as StreamingSubprocess
+	var nextSequenceNumber as DapSequenceNumber
+
+	// Messages read while waiting for something else, in arrival order. An event can arrive ahead of
+	// the response it follows (`configurationDone` answers before its `stopped` event), so nothing
+	// read is dropped.
+	var stashed as StringArray
+
+	// Nothing drains the adapter's stderr, and this client has no thread to do it: an adapter that
+	// writes enough there fills the pipe and both sides block until the file times out.
+	export static function start() returns DapClient
+		let binary = dapTestedCompilerPath()
+
+		let spawned = try StreamingSubprocess.spawn(Executable.path(binary), arguments: [DapServerCommandName]) otherwise (e) 'spawnFailed'
+			panic("dap tests: the gate could not run — `{TestedCompilerStem} {DapServerCommandName}` did not spawn ({e.displayReason()})")
+		end 'spawnFailed'
+
+		return Self{server: spawned, nextSequenceNumber: FirstSequenceNumber, stashed: StringArray.create()}
+	end 'start'
+
+	export function release() returns DapAdapterExit
+		self.server.closeStdin()
+
+		let code = try self.server.waitWithTimeout(AdapterExitDeadlineMs) otherwise (e) 'noExit'
+			self.server.release()
+
+			return DapAdapterExit.failed("the adapter did not exit within {AdapterExitDeadlineMs} ms of its stdin closing ({e.displayReason()}), so it was terminated")
+		end 'noExit'
+
+		self.server.release()
+
+		if code != 0 'exitedUnclean'
+			return DapAdapterExit.failed("the adapter exited {code} when its stdin closed, where a session that ended cleanly exits 0")
+		end 'exitedUnclean'
+
+		return DapAdapterExit.clean
+	end 'release'
+
+	export function request(command String, argumentsJson String = "\{\}") returns JsonDoc throws DapClientError
+		let seq = self.nextSequenceNumber
+		self.nextSequenceNumber = seq + 1
+
+		try self.writeFrame("\{\"seq\":{seq},\"type\":\"request\",\"command\":\"{command}\",\"arguments\":{argumentsJson}\}")
+
+		return try self.awaitResponse(seq)
+	end 'request'
+
+	export function awaitEvent(kind String) returns JsonDoc throws DapClientError
+		return try self.awaitMessageMatching(function(doc) gives dapIsEvent(doc, kind: kind))
+	end 'awaitEvent'
+
+	export function awaitOutputContaining(needle String) returns JsonDoc throws DapClientError
+		return try self.awaitMessageMatching(function(doc) gives dapIsOutputContaining(doc, needle: needle))
+	end 'awaitOutputContaining'
+
+	function awaitMessageMatching(matches DapMessageTest) returns JsonDoc throws DapClientError
+		if let stashedEvent = try self.takeStashedMatching(matches) 'alreadyHere'
+			return stashedEvent
+		end 'alreadyHere'
+
+		var read = 0 as StashedMessageTally
+
+		while read < UnaddressedMessageBudget 'await'
+			let doc = try self.readMessage()
+
+			if matches(doc) 'wanted'
+				return doc
+			end 'wanted'
+
+			self.stashed.push(Json.stringify(doc))
+			read = read + 1
+		end 'await'
+
+		throw DapClientError.noSuchEvent
+	end 'awaitMessageMatching'
+
+	export function collectOutputUntil(until String) returns DapOutputPieceArray throws DapClientError
+		var collected = DapOutputPieceArray.create()
+		var kept = StringArray.create()
+		var arrived = false
+
+		for body in self.stashed 'eachStashed'
+			if arrived 'pastTheEvent'
+				kept.push(body)
+				continue
+			end 'pastTheEvent'
+
+			let doc = try Json.parse(body) otherwise panic("DapClient.collectOutputUntil: a stashed message was stashed as JSON and does not parse: {body}")
+
+			if dapIsEvent(doc, kind: OutputEvent) 'anOutput'
+				collected.push(try dapOutputPieceOf(doc))
+				continue
+			end 'anOutput'
+
+			if dapIsEvent(doc, kind: until) 'theEvent'
+				arrived = true
+				continue
+			end 'theEvent'
+
+			kept.push(body)
+		end 'eachStashed'
+
+		self.stashed = kept
+
+		if arrived 'alreadyHere'
+			return collected
+		end 'alreadyHere'
+
+		var read = 0 as StashedMessageTally
+
+		while read < UnaddressedMessageBudget 'await'
+			let doc = try self.readMessage()
+
+			if dapIsEvent(doc, kind: until) 'done'
+				return collected
+			end 'done'
+
+			if dapIsEvent(doc, kind: OutputEvent) 'anOutput'
+				collected.push(try dapOutputPieceOf(doc))
+			end 'anOutput' else 'somethingElse'
+				self.stashed.push(Json.stringify(doc))
+			end 'somethingElse'
+
+			read = read + 1
+		end 'await'
+
+		throw DapClientError.noSuchEvent
+	end 'collectOutputUntil'
+
+	function takeStashedMatching(matches DapMessageTest) returns JsonDoc throws DapClientError
+		var kept = StringArray.create()
+		var found = false
+		var wanted = JsonDoc.create()
+
+		for body in self.stashed 'eachStashed'
+			let doc = try Json.parse(body) otherwise continue
+
+			if not found and matches(doc) 'itsHere'
+				wanted = doc
+				found = true
+				continue
+			end 'itsHere'
+
+			kept.push(body.clone())
+		end 'eachStashed'
+
+		self.stashed = kept
+
+		if not found 'notStashed'
+			throw DapClientError.noSuchEvent
+		end 'notStashed'
+
+		return wanted
+	end 'takeStashedMatching'
+
+	function awaitResponse(seq DapSequenceNumber) returns JsonDoc throws DapClientError
+		var read = 0 as StashedMessageTally
+
+		while read < UnaddressedMessageBudget 'correlate'
+			let doc = try self.readMessage()
+
+			if dapAnswersRequest(doc, seq: seq) 'ours'
+				return doc
+			end 'ours'
+
+			self.stashed.push(Json.stringify(doc))
+			read = read + 1
+		end 'correlate'
+
+		throw DapClientError.transportFailed
+	end 'awaitResponse'
+
+	function readMessage() returns JsonDoc throws DapClientError
+		let body = try self.readFrame()
+
+		return try Json.parse(body) otherwise 'notJson'
+			throw DapClientError.malformedResponse
+		end 'notJson'
+	end 'readMessage'
+
+	function writeFrame(body String) throws DapClientError
+		try self.server.writeStdinLine("Content-Length: {body.byteLength() + LineWriterNewlineByteCount}\r\n\r\n{body}") otherwise 'writeFailed'
+			throw DapClientError.transportFailed
+		end 'writeFailed'
+	end 'writeFrame'
+
+	// The body has no terminator, so it is read by count; a line reader would block for ever on it.
+	function readFrame() returns String throws DapClientError
+		var contentLength = 0 as FrameByteCount
+		var haveContentLength = false
+		var inHeaders = true
+
+		while inHeaders 'headers'
+			let line = try self.server.readStdoutLine() otherwise 'headerReadFailed'
+				throw DapClientError.transportFailed
+			end 'headerReadFailed'
+
+			if line.isEmpty() 'blankLine'
+				if not haveContentLength 'noFrame'
+					throw DapClientError.transportFailed
+				end 'noFrame'
+
+				inHeaders = false
+			end 'blankLine' else 'headerField'
+				let parts = line.split(HeaderFieldSeparator)
+				let name = (try parts.get(0) otherwise "").toLower()
+
+				if name == ContentLengthHeaderName 'contentLengthField'
+					let raw = (try parts.get(1) otherwise "").trim()
+					contentLength = try int.fromString(raw) otherwise 'notACount'
+						throw DapClientError.transportFailed
+					end 'notACount'
+
+					haveContentLength = true
+				end 'contentLengthField'
+			end 'headerField'
+		end 'headers'
+
+		let body = try self.server.readStdoutBytes(contentLength) otherwise 'bodyReadFailed'
+			throw DapClientError.transportFailed
+		end 'bodyReadFailed'
+
+		if body.byteLength() != contentLength 'truncated'
+			throw DapClientError.transportFailed
+		end 'truncated'
+
+		return body
+	end 'readFrame'
+end 'DapClient'
+
+let TypeKey = "type"
+let EventKey = "event"
+let BodyKey = "body"
+let RequestSeqKey = "request_seq"
+let SuccessKey = "success"
+let MessageKey = "message"
+let OutputCategoryKey = "category"
+let OutputTextKey = "output"
+let ResponseType = "response"
+let EventType = "event"
+
+export let InitializedEvent = "initialized"
+export let StoppedEvent = "stopped"
+export let OutputEvent = "output"
+export let ExitedEvent = "exited"
+export let TerminatedEvent = "terminated"
+
+export let StdoutCategory = "stdout"
+export let StderrCategory = "stderr"
+
+export let BreakpointReason = "breakpoint"
+export let StepReason = "step"
+export let PauseReason = "pause"
+export let ExceptionReason = "exception"
+
+function dapIsEvent(doc JsonDoc, kind String) returns bool
+	let messageType = try doc.getString(doc.root, key: TypeKey) otherwise return false
+
+	if messageType != EventType 'notAnEvent'
+		return false
+	end 'notAnEvent'
+
+	return (try doc.getString(doc.root, key: EventKey) otherwise "") == kind
+end 'dapIsEvent'
+
+typealias DapMessageTest = function(JsonDoc) returns bool
+
+function dapIsOutputContaining(doc JsonDoc, needle String) returns bool
+	if not dapIsEvent(doc, kind: OutputEvent) 'notAnOutput'
+		return false
+	end 'notAnOutput'
+
+	let piece = try dapOutputPieceOf(doc) otherwise return false
+
+	return piece.text.contains(needle)
+end 'dapIsOutputContaining'
+
+function dapAnswersRequest(doc JsonDoc, seq DapSequenceNumber) returns bool
+	let messageType = try doc.getString(doc.root, key: TypeKey) otherwise return false
+
+	if messageType != ResponseType 'notAResponse'
+		return false
+	end 'notAResponse'
+
+	let answered = try doc.getInt(doc.root, key: RequestSeqKey) otherwise return false
+	return answered as DapNumber == seq as DapNumber
+end 'dapAnswersRequest'
+
+function dapOutputPieceOf(doc JsonDoc) returns DapOutputPiece throws DapClientError
+	let bodyId = try doc.getChild(doc.root, key: BodyKey) otherwise throw DapClientError.malformedResponse
+	let category = try doc.getString(bodyId, key: OutputCategoryKey) otherwise throw DapClientError.malformedResponse
+	let text = try doc.getString(bodyId, key: OutputTextKey) otherwise throw DapClientError.malformedResponse
+
+	return DapOutputPiece.create(category, text: text)
+end 'dapOutputPieceOf'
+
+export type DapOutputPiece
+	export let category as String
+	export let text as String
+
+	export static function create(category String, text String) returns DapOutputPiece
+		return Self{category: category, text: text}
+	end 'create'
+end 'DapOutputPiece'
+
+export typealias DapOutputPieceArray = Array with DapOutputPiece
+
+export function dapOutputOf(pieces DapOutputPieceArray, category String) returns String
+	var collected = ""
+
+	for piece in pieces 'eachPiece'
+		if piece.category == category 'thisStream'
+			collected.append(piece.text)
+		end 'thisStream'
+	end 'eachPiece'
+
+	return collected
+end 'dapOutputOf'
+
+export function dapSuccess(doc JsonDoc) returns bool
+	return try doc.getBool(doc.root, key: SuccessKey) otherwise panic("dap tests: a response carries no `{SuccessKey}`: {Json.stringify(doc)}")
+end 'dapSuccess'
+
+export function dapRefusal(doc JsonDoc) returns String
+	if dapSuccess(doc) 'notARefusal'
+		panic("dap tests: a refusal was read off a response that succeeded: {Json.stringify(doc)}")
+	end 'notARefusal'
+
+	return try doc.getString(doc.root, key: MessageKey) otherwise panic("dap tests: a refused response carries no `{MessageKey}`: {Json.stringify(doc)}")
+end 'dapRefusal'
+
+export function dapDescribed(doc JsonDoc) returns String
+	return Json.stringify(doc)
+end 'dapDescribed'
+
+function dapBody(doc JsonDoc) returns JsonNodeId
+	return try doc.getChild(doc.root, key: BodyKey) otherwise panic("dap tests: a message carries no `{BodyKey}`: {Json.stringify(doc)}")
+end 'dapBody'
+
+export function dapBodyString(doc JsonDoc, key String) returns String
+	return try doc.getString(dapBody(doc), key: key) otherwise panic("dap tests: a message body carries no `{key}`: {Json.stringify(doc)}")
+end 'dapBodyString'
+
+export function dapBodyNumber(doc JsonDoc, key String) returns DapNumber
+	return try doc.getInt(dapBody(doc), key: key) otherwise panic("dap tests: a message body carries no `{key}`: {Json.stringify(doc)}")
+end 'dapBodyNumber'
+
+export function dapCapability(doc JsonDoc, name String) returns bool
+	return try doc.getBool(dapBody(doc), key: name) otherwise panic("dap tests: the `initialize` capabilities name no `{name}`: {Json.stringify(doc)}")
+end 'dapCapability'
+
+let BreakpointsKey = "breakpoints"
+export let StackFramesKey = "stackFrames"
+export let ScopesKey = "scopes"
+export let VariablesKey = "variables"
+export let ThreadsKey = "threads"
+let NameKey = "name"
+let LineKey = "line"
+let ColumnKey = "column"
+let VerifiedKey = "verified"
+let ValueKey = "value"
+let IdKey = "id"
+let VariablesReferenceKey = "variablesReference"
+
+function dapListNodes(doc JsonDoc, key String) returns JsonNodeIdArray
+	var nodes = JsonNodeIdArray.create()
+	let listId = try doc.getChild(dapBody(doc), key: key) otherwise panic("dap tests: a message body carries no `{key}`: {Json.stringify(doc)}")
+	let count = try doc.arrayLength(listId) otherwise panic("dap tests: `{key}` is not an array: {Json.stringify(doc)}")
+
+	for i in 0 upto count 'eachElement'
+		let elementId = try doc.arrayAt(listId, index: i) otherwise continue
+		nodes.push(elementId)
+	end 'eachElement'
+
+	return nodes
+end 'dapListNodes'
+
+typealias JsonNodeIdArray = Array with JsonNodeId
+
+export function dapBreakpointVerified(doc JsonDoc, index BreakpointIndex) returns bool
+	let node = dapBreakpointNode(doc, index: index)
+	return try doc.getBool(node, key: VerifiedKey) otherwise panic("dap tests: a breakpoint carries no `{VerifiedKey}`: {Json.stringify(doc)}")
+end 'dapBreakpointVerified'
+
+export function dapBreakpointLine(doc JsonDoc, index BreakpointIndex) returns DapNumber
+	let node = dapBreakpointNode(doc, index: index)
+	return try doc.getInt(node, key: LineKey) otherwise panic("dap tests: a breakpoint carries no `{LineKey}`: {Json.stringify(doc)}")
+end 'dapBreakpointLine'
+
+export function dapBreakpointHasMessage(doc JsonDoc, index BreakpointIndex) returns bool
+	let node = dapBreakpointNode(doc, index: index)
+	_ = try doc.getString(node, key: MessageKey) otherwise return false
+
+	return true
+end 'dapBreakpointHasMessage'
+
+export typealias BreakpointIndex = int(0 to 1000)
+
+function dapBreakpointNode(doc JsonDoc, index BreakpointIndex) returns JsonNodeId
+	return try dapListNodes(doc, key: BreakpointsKey).get(index) otherwise panic("dap tests: `setBreakpoints` answered fewer than {index + 1} breakpoints: {Json.stringify(doc)}")
+end 'dapBreakpointNode'
+
+export function dapStackFrameNames(doc JsonDoc) returns StringArray
+	return dapStringsOf(doc, key: StackFramesKey, field: NameKey)
+end 'dapStackFrameNames'
+
+export function dapStackFrameLines(doc JsonDoc) returns DapNumberArray
+	return dapNumbersOf(doc, key: StackFramesKey, field: LineKey)
+end 'dapStackFrameLines'
+
+export function dapStackFrameColumns(doc JsonDoc) returns DapNumberArray
+	return dapNumbersOf(doc, key: StackFramesKey, field: ColumnKey)
+end 'dapStackFrameColumns'
+
+function dapNumbersOf(doc JsonDoc, key String, field String) returns DapNumberArray
+	var values = DapNumberArray.create()
+
+	for node in dapListNodes(doc, key: key) 'eachElement'
+		values.push(try doc.getInt(node, key: field) otherwise panic("dap tests: an element of `{key}` carries no `{field}`: {Json.stringify(doc)}"))
+	end 'eachElement'
+
+	return values
+end 'dapNumbersOf'
+
+export typealias DapNumberArray = Array with DapNumber
+
+export function dapFrameNumberAt(values DapNumberArray, frame FramePosition) returns DapNumber
+	return try values.get(frame) otherwise panic("dap tests: a stack of {values.count()} frames holds no frame {frame}")
+end 'dapFrameNumberAt'
+
+export function dapThreadIds(doc JsonDoc) returns DapNumberArray
+	return dapNumbersOf(doc, key: ThreadsKey, field: IdKey)
+end 'dapThreadIds'
+
+export function dapFrameNameAt(names StringArray, frame FramePosition) returns String
+	return try names.get(frame) otherwise panic("dap tests: a stack of {names.count()} frames holds no frame {frame}: {dapRendered(names)}")
+end 'dapFrameNameAt'
+
+export typealias FramePosition = int(0 to 1000)
+
+export function dapScopeNames(doc JsonDoc) returns StringArray
+	return dapStringsOf(doc, key: ScopesKey, field: NameKey)
+end 'dapScopeNames'
+
+export function dapVariableNames(doc JsonDoc) returns StringArray
+	return dapStringsOf(doc, key: VariablesKey, field: NameKey)
+end 'dapVariableNames'
+
+export function dapThreadNames(doc JsonDoc) returns StringArray
+	return dapStringsOf(doc, key: ThreadsKey, field: NameKey)
+end 'dapThreadNames'
+
+function dapStringsOf(doc JsonDoc, key String, field String) returns StringArray
+	var values = StringArray.create()
+
+	for node in dapListNodes(doc, key: key) 'eachElement'
+		let value = try doc.getString(node, key: field) otherwise continue
+		values.push(value)
+	end 'eachElement'
+
+	return values
+end 'dapStringsOf'
+
+export function dapTopFrameId(doc JsonDoc) returns DapReference
+	let node = try dapListNodes(doc, key: StackFramesKey).get(0) otherwise panic("dap tests: `stackTrace` answered no frames: {Json.stringify(doc)}")
+	return try doc.getInt(node, key: IdKey) otherwise panic("dap tests: a stack frame carries no `{IdKey}`: {Json.stringify(doc)}")
+end 'dapTopFrameId'
+
+export function dapScopeReference(doc JsonDoc, name String) returns DapReference
+	for node in dapListNodes(doc, key: ScopesKey) 'eachScope'
+		let seen = try doc.getString(node, key: NameKey) otherwise continue
+
+		if seen == name 'wanted'
+			return try doc.getInt(node, key: VariablesReferenceKey) otherwise panic("dap tests: the `{name}` scope carries no `{VariablesReferenceKey}`: {Json.stringify(doc)}")
+		end 'wanted'
+	end 'eachScope'
+
+	panic("dap tests: `scopes` names no `{name}` scope: {Json.stringify(doc)}")
+end 'dapScopeReference'
+
+export function dapVariableValue(doc JsonDoc, name String) returns String
+	for node in dapListNodes(doc, key: VariablesKey) 'eachVariable'
+		let seen = try doc.getString(node, key: NameKey) otherwise continue
+
+		if seen == name 'wanted'
+			return try doc.getString(node, key: ValueKey) otherwise panic("dap tests: the variable `{name}` carries no `{ValueKey}`: {Json.stringify(doc)}")
+		end 'wanted'
+	end 'eachVariable'
+
+	panic("dap tests: `variables` names no `{name}`: {Json.stringify(doc)}")
+end 'dapVariableValue'
+
+export function dapListLength(doc JsonDoc, key String) returns DapNumber
+	return dapListNodes(doc, key: key).count() as DapNumber
+end 'dapListLength'
+
+export function dapRendered(values StringArray) returns String
+	var rendered = ""
+
+	for value in values 'eachValue'
+		rendered.append("{value} ")
+	end 'eachValue'
+
+	return rendered
+end 'dapRendered'
+
+export function dapInitializeArguments(countsFromOne bool = true) returns String
+	return "\{\"adapterID\":\"maxon\",\"clientID\":\"maxon-tests\",\"linesStartAt1\":{countsFromOne},\"columnsStartAt1\":{countsFromOne},\"pathFormat\":\"path\"\}"
+end 'dapInitializeArguments'
+
+export function dapLaunchArguments(program FilePath) returns String
+	return "\{\"program\":{Json.quote(program.toString())}\}"
+end 'dapLaunchArguments'
+
+export function dapLaunchArgumentsWithEnv(program FilePath, envJson String) returns String
+	return "\{\"program\":{Json.quote(program.toString())},\"env\":{envJson}\}"
+end 'dapLaunchArgumentsWithEnv'
+
+export function dapSetBreakpointsArguments(source FilePath, line SourceLine) returns String
+	return "\{\"source\":\{\"path\":{Json.quote(source.toString())}\},\"breakpoints\":[\{\"line\":{line}\}]\}"
+end 'dapSetBreakpointsArguments'
+
+export function dapSetConditionalBreakpointArguments(source FilePath, line SourceLine, condition String) returns String
+	return "\{\"source\":\{\"path\":{Json.quote(source.toString())}\},\"breakpoints\":[\{\"line\":{line},\"condition\":{Json.quote(condition)}\}]\}"
+end 'dapSetConditionalBreakpointArguments'
+
+export function dapClearBreakpointsArguments(source FilePath) returns String
+	return "\{\"source\":\{\"path\":{Json.quote(source.toString())}\},\"breakpoints\":[]\}"
+end 'dapClearBreakpointsArguments'
+
+export function dapSetFunctionBreakpointsArguments(name String) returns String
+	return "\{\"breakpoints\":[\{\"name\":{Json.quote(name)}\}]\}"
+end 'dapSetFunctionBreakpointsArguments'
+
+export function dapThreadArguments(threadId DapNumber) returns String
+	return "\{\"threadId\":{threadId}\}"
+end 'dapThreadArguments'
+
+export function dapScopesArguments(frameId DapReference) returns String
+	return "\{\"frameId\":{frameId}\}"
+end 'dapScopesArguments'
+
+export function dapVariablesArguments(reference DapReference) returns String
+	return "\{\"variablesReference\":{reference}\}"
+end 'dapVariablesArguments'
+
+export function dapEvaluateArguments(expression String, context String, frameId DapReference) returns String
+	return "\{\"expression\":{Json.quote(expression)},\"context\":{Json.quote(context)},\"frameId\":{frameId}\}"
+end 'dapEvaluateArguments'
+
+export let InitializeCommand = "initialize"
+export let LaunchCommand = "launch"
+export let SetBreakpointsCommand = "setBreakpoints"
+export let SetFunctionBreakpointsCommand = "setFunctionBreakpoints"
+export let ConfigurationDoneCommand = "configurationDone"
+export let ThreadsCommand = "threads"
+export let StackTraceCommand = "stackTrace"
+export let ScopesCommand = "scopes"
+export let VariablesCommand = "variables"
+export let EvaluateCommand = "evaluate"
+export let ContinueCommand = "continue"
+export let NextCommand = "next"
+export let StepInCommand = "stepIn"
+export let StepOutCommand = "stepOut"
+export let PauseCommand = "pause"
+export let DisconnectCommand = "disconnect"
+export let TerminateCommand = "terminate"
+
+export let LocalsScopeName = "Locals"

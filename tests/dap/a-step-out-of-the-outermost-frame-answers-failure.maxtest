@@ -1,0 +1,49 @@
+let OutermostCaseLabel = "a-step-out-of-the-outermost-frame-answers-failure"
+let MainPrintAnchor = "main-print"
+
+type OutermostSession implements DapSession
+	let executable as FilePath
+	let source as FilePath
+	let anchored as SourceLine
+	export var stepOutAnswered as bool
+	export var refusal as String
+	export var continueAnswered as bool
+	export var exitedAfterwards as bool
+
+	static function create(executable FilePath, source FilePath, anchored SourceLine) returns OutermostSession
+		return Self{executable: executable, source: source, anchored: anchored, stepOutAnswered: true, refusal: "", continueAnswered: false, exitedAfterwards: false}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+		_ = try client.request(LaunchCommand, argumentsJson: dapLaunchArguments(self.executable))
+		_ = try client.awaitEvent(InitializedEvent)
+		_ = try client.request(SetBreakpointsCommand, argumentsJson: dapSetBreakpointsArguments(self.source, line: self.anchored))
+		_ = try client.request(ConfigurationDoneCommand)
+
+		let threadId = dapBodyNumber(try client.awaitEvent(StoppedEvent), key: "threadId")
+		let steppedOut = try client.request(StepOutCommand, argumentsJson: dapThreadArguments(threadId))
+		self.stepOutAnswered = dapSuccess(steppedOut)
+
+		if not self.stepOutAnswered 'refused'
+			self.refusal = dapRefusal(steppedOut)
+		end 'refused'
+
+		self.continueAnswered = dapSuccess(try client.request(ContinueCommand, argumentsJson: dapThreadArguments(threadId)))
+		_ = try client.awaitEvent(ExitedEvent)
+		self.exitedAfterwards = true
+
+		_ = try client.request(DisconnectCommand)
+	end 'drive'
+end 'OutermostSession'
+
+test 'a stepOut from the outermost frame answers failure, and the session goes on'
+	let staged = dapStagedFixture(OutermostCaseLabel, fixture: SteppingFixtureName)
+	var session = OutermostSession.create(dapBuildFixture(staged), source: dapStagedSource(staged), anchored: dapAnchorLine(staged, anchor: MainPrintAnchor))
+	try dapRunSession(session, completing: "refuse the stepOut and run the program to its exit")
+
+	try Expect.isFalse(session.stepOutAnswered, message: "`main` has no caller to return to, so `{StepOutCommand}` must answer its own request with `success: false`; answering success leaves the client waiting for a `{StoppedEvent}` that never comes")
+	try Expect.isFalse(session.refusal.isEmpty(), message: "a refused `{StepOutCommand}` must say why in its `message`")
+	try Expect.isTrue(session.continueAnswered, message: "the refusal left the program stopped where it was, so `{ContinueCommand}` from there must be accepted")
+	try Expect.isTrue(session.exitedAfterwards, message: "`{ContinueCommand}` after the refusal runs the program to its exit")
+end 'a stepOut from the outermost frame answers failure, and the session goes on'

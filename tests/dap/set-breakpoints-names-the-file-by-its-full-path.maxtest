@@ -1,0 +1,53 @@
+let FullPathCaseLabel = "set-breakpoints-names-the-file-by-its-full-path"
+let UtilBodyAnchor = "util-body"
+let SecondUtilFile = "b/util.maxon"
+let SecondFunctionName = "second"
+let RoundsTheProgramRuns = 2
+
+type FullPathSession implements DapSession
+	let executable as FilePath
+	let source as FilePath
+	let anchored as SourceLine
+	export var verified as bool
+	export var stoppedIn as StringArray
+
+	static function create(executable FilePath, source FilePath, anchored SourceLine) returns FullPathSession
+		return Self{executable: executable, source: source, anchored: anchored, verified: false, stoppedIn: StringArray.create()}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+		_ = try client.request(LaunchCommand, argumentsJson: dapLaunchArguments(self.executable))
+		_ = try client.awaitEvent(InitializedEvent)
+
+		let placed = try client.request(SetBreakpointsCommand, argumentsJson: dapSetBreakpointsArguments(self.source, line: self.anchored))
+		self.verified = dapBreakpointVerified(placed, index: 0)
+
+		_ = try client.request(ConfigurationDoneCommand)
+
+		for _ in 0 upto RoundsTheProgramRuns 'eachStop'
+			let stopped = try client.awaitEvent(StoppedEvent)
+			let threadId = dapBodyNumber(stopped, key: "threadId")
+			let frames = try client.request(StackTraceCommand, argumentsJson: dapThreadArguments(threadId))
+			self.stoppedIn.push(dapFrameNameAt(dapStackFrameNames(frames), frame: 0))
+			_ = try client.request(ContinueCommand, argumentsJson: dapThreadArguments(threadId))
+		end 'eachStop'
+
+		_ = try client.request(DisconnectCommand)
+	end 'drive'
+end 'FullPathSession'
+
+test 'a source breakpoint arms the file its full path names, and not another file of the same base name'
+	let staged = dapStagedFixture(FullPathCaseLabel, fixture: TwoDirsFixtureName)
+	let source = dapStagedSource(staged, file: SecondUtilFile)
+	let anchored = dapAnchorLine(staged, anchor: UtilBodyAnchor, file: SecondUtilFile)
+	var session = FullPathSession.create(dapBuildFixture(staged, scope: DapBuildScope.wholeDirectory), source: source, anchored: anchored)
+	try dapRunSession(session, completing: "complete")
+
+	try Expect.isTrue(session.verified, message: "the breakpoint on `{source.toString()}:{anchored}` was not verified")
+	try Expect.equal(session.stoppedIn.count() as AssertedInt, expected: RoundsTheProgramRuns as AssertedInt, message: "`{SecondFunctionName}` runs {RoundsTheProgramRuns} times; the session stopped {session.stoppedIn.count()} times")
+
+	for name in session.stoppedIn 'eachStop'
+		try Expect.equal(name, expected: SecondFunctionName, message: "the breakpoint names `{source.toString()}` by its full path, so every stop is in `{SecondFunctionName}`; the stops were in {dapRendered(session.stoppedIn)}")
+	end 'eachStop'
+end 'a source breakpoint arms the file its full path names, and not another file of the same base name'

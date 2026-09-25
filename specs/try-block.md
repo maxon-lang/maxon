@@ -2909,3 +2909,709 @@ end 'main'
 ```exitcode
 7
 ```
+
+<!-- test: a-statement-after-a-try-block-whose-both-edges-leave -->
+```maxon
+enum Failure implements Error
+	bad
+end 'Failure'
+
+function main() returns ExitCode
+	try 'work'
+		throw Failure.bad
+	end 'work' otherwise (e) 'handler'
+		match e 'kind'
+			bad then return 3
+		end 'kind'
+	end 'handler'
+
+	return 0
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: an-error-union-binding-read-after-a-boxed-arm-is-the-flag -->
+```maxon
+typealias Tally = int(0 to 1000)
+
+union BoxErr implements Error
+	boxed(text String)
+end 'BoxErr'
+
+enum Plain implements Error
+	flat
+	sharp
+end 'Plain'
+
+function fa(n Tally) returns Tally throws BoxErr
+	if n > 5 'big'
+		throw BoxErr.boxed("big {n}")
+	end 'big'
+
+	return 1
+end 'fa'
+
+function fb(n Tally) returns Tally throws Plain
+	if n == 1 'one'
+		throw Plain.sharp
+	end 'one'
+
+	return 2
+end 'fb'
+
+function probe(n Tally) returns Tally
+	var total = 0 as Tally
+
+	try 'work'
+		total = total + fa(n)
+		total = total + fb(n)
+	end 'work' otherwise (e) 'handler'
+		match e 'kind'
+			BoxErr.boxed(text) then total = text.byteLength() as Tally
+			Plain.flat then total = 100
+			Plain.sharp then print("sharp {e}\n")
+		end 'kind'
+
+		let again = e
+		total = total + (1 if again > 0 else 0)
+	end 'handler'
+
+	return total
+end 'probe'
+
+function main() returns ExitCode
+	print("{probe(9)} {probe(1)} {probe(4)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+sharp 2
+6 2 3
+```
+
+<!-- test: an-error-union-binding-inside-a-boxed-arm-is-the-member -->
+```maxon
+typealias Tally = int(0 to 1000)
+
+union BoxErr implements Error
+	boxed(text String)
+end 'BoxErr'
+
+enum Plain implements Error
+	flat
+	sharp
+end 'Plain'
+
+function fa(n Tally) returns Tally throws BoxErr
+	if n > 5 'big'
+		throw BoxErr.boxed("big {n}")
+	end 'big'
+
+	return 1
+end 'fa'
+
+function fb(n Tally) returns Tally throws Plain
+	if n == 1 'one'
+		throw Plain.sharp
+	end 'one'
+
+	return 2
+end 'fb'
+
+function probe(n Tally) returns Tally
+	var total = 0 as Tally
+
+	try 'work'
+		total = total + fa(n)
+		total = total + fb(n)
+	end 'work' otherwise (e) 'handler'
+		match e 'kind'
+			BoxErr.boxed(text) then print("in arm {e} {text}\n")
+			Plain.flat then total = 100
+			Plain.sharp then print("sharp {e}\n")
+		end 'kind'
+
+		let again = e
+		total = total + (1 if again > 0 else 0)
+	end 'handler'
+
+	return total
+end 'probe'
+
+function main() returns ExitCode
+	print("{probe(9)} {probe(1)} {probe(4)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+in arm boxed big 9
+sharp 2
+1 2 3
+```
+
+<!-- test: an-error-union-binding-copied-into-a-var-after-a-boxed-arm -->
+```maxon
+typealias Tally = int(0 to 1000)
+
+union BoxErr implements Error
+	boxed(text String)
+end 'BoxErr'
+
+enum Plain implements Error
+	flat
+	sharp
+end 'Plain'
+
+function fa(n Tally) returns Tally throws BoxErr
+	if n > 5 'big'
+		throw BoxErr.boxed("big {n}")
+	end 'big'
+
+	return 1
+end 'fa'
+
+function fb(n Tally) returns Tally throws Plain
+	if n == 1 'one'
+		throw Plain.sharp
+	end 'one'
+
+	return 2
+end 'fb'
+
+function probe(n Tally) returns Tally
+	var total = 0 as Tally
+
+	try 'work'
+		total = total + fa(n)
+		total = total + fb(n)
+	end 'work' otherwise (e) 'handler'
+		match e 'kind'
+			BoxErr.boxed(text) then total = text.byteLength() as Tally
+			Plain.flat then total = 100
+			Plain.sharp then print("sharp {e}\n")
+		end 'kind'
+
+		var again = e
+		again = again + 1
+		total = total + (1 if again > 1 else 0)
+	end 'handler'
+
+	return total
+end 'probe'
+
+function main() returns ExitCode
+	print("{probe(9)} {probe(1)} {probe(4)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+sharp 2
+6 2 3
+```
+
+<!-- test: an-error-union-binding-copied-into-a-var-reassigned-on-one-path -->
+```maxon
+typealias Tally = int(0 to 1000)
+
+union BoxErr implements Error
+	boxed(text String)
+end 'BoxErr'
+
+enum Plain implements Error
+	flat
+	sharp
+end 'Plain'
+
+function fa(n Tally) returns Tally throws BoxErr
+	if n > 5 'big'
+		throw BoxErr.boxed("big {n}")
+	end 'big'
+
+	return 1
+end 'fa'
+
+function fb(n Tally) returns Tally throws Plain
+	if n == 1 'one'
+		throw Plain.sharp
+	end 'one'
+
+	return 2
+end 'fb'
+
+function probe(n Tally) returns Tally
+	var total = 0 as Tally
+
+	try 'work'
+		total = total + fa(n)
+		total = total + fb(n)
+	end 'work' otherwise (e) 'handler'
+		match e 'kind'
+			BoxErr.boxed(text) then total = text.byteLength() as Tally
+			Plain.flat then total = 100
+			Plain.sharp then print("sharp {e}\n")
+		end 'kind'
+
+		var again = e
+
+		if n > 500 'never'
+			again = 0
+		end 'never'
+
+		total = total + (1 if again > 0 else 0)
+	end 'handler'
+
+	return total
+end 'probe'
+
+function main() returns ExitCode
+	print("{probe(9)} {probe(1)} {probe(4)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+sharp 2
+6 2 3
+```
+
+<!-- test: an-error-union-binding-assigned-to-an-outer-var-after-a-boxed-arm -->
+```maxon
+typealias Tally = int(0 to 1000)
+
+union BoxErr implements Error
+	boxed(text String)
+end 'BoxErr'
+
+enum Plain implements Error
+	flat
+	sharp
+end 'Plain'
+
+function fa(n Tally) returns Tally throws BoxErr
+	if n > 5 'big'
+		throw BoxErr.boxed("big {n}")
+	end 'big'
+
+	return 1
+end 'fa'
+
+function fb(n Tally) returns Tally throws Plain
+	if n == 1 'one'
+		throw Plain.sharp
+	end 'one'
+
+	return 2
+end 'fb'
+
+function probe(n Tally) returns Tally
+	var total = 0 as Tally
+	var x = 0
+
+	try 'work'
+		total = total + fa(n)
+		total = total + fb(n)
+	end 'work' otherwise (e) 'handler'
+		match e 'kind'
+			BoxErr.boxed(text) then total = text.byteLength() as Tally
+			Plain.flat then total = 100
+			Plain.sharp then print("sharp {e}\n")
+		end 'kind'
+
+		x = e
+	end 'handler'
+
+	return total + (1 if x > 0 else 0)
+end 'probe'
+
+function main() returns ExitCode
+	print("{probe(9)} {probe(1)} {probe(4)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+sharp 2
+6 2 3
+```
+
+<!-- test: an-error-union-binding-given-by-an-arm-after-a-boxed-arm -->
+```maxon
+typealias Tally = int(0 to 1000)
+
+union BoxErr implements Error
+	boxed(text String)
+end 'BoxErr'
+
+enum Plain implements Error
+	flat
+	sharp
+end 'Plain'
+
+function fa(n Tally) returns Tally throws BoxErr
+	if n > 5 'big'
+		throw BoxErr.boxed("big {n}")
+	end 'big'
+
+	return 1
+end 'fa'
+
+function fb(n Tally) returns Tally throws Plain
+	if n == 1 'one'
+		throw Plain.sharp
+	end 'one'
+
+	return 2
+end 'fb'
+
+function probe(n Tally) returns Tally
+	var total = 0 as Tally
+
+	try 'work'
+		total = total + fa(n)
+		total = total + fb(n)
+	end 'work' otherwise (e) 'handler'
+		let got = match e 'kind'
+			BoxErr.boxed(text) gives text.byteLength()
+			Plain.flat gives 100
+			Plain.sharp gives e
+		end 'kind'
+
+		total = got as Tally
+	end 'handler'
+
+	return total
+end 'probe'
+
+function main() returns ExitCode
+	print("{probe(9)} {probe(1)} {probe(4)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5 2 3
+```
+
+<!-- test: a-closure-in-a-boxed-arm-does-not-see-the-handlers-error-union -->
+```maxon
+typealias Tally = int(0 to 1000)
+typealias Measure = function() returns Tally
+
+union BoxErr implements Error
+	boxed(text String)
+end 'BoxErr'
+
+enum Plain implements Error
+	flat
+	sharp
+end 'Plain'
+
+function fa(n Tally) returns Tally throws BoxErr
+	if n > 5 'big'
+		throw BoxErr.boxed("big {n}")
+	end 'big'
+
+	return 1
+end 'fa'
+
+function fb(n Tally) returns Tally throws Plain
+	if n == 1 'one'
+		throw Plain.sharp
+	end 'one'
+
+	return 2
+end 'fb'
+
+function run(m Measure) returns Tally
+	return m()
+end 'run'
+
+function pick(a Tally, b BoxErr) returns Tally
+	return a + textLength(b)
+end 'pick'
+
+function textLength(b BoxErr) returns Tally
+	return match b 'k'
+		boxed(text) gives text.byteLength() as Tally
+	end 'k'
+end 'textLength'
+
+function inArm(n Tally) returns Tally
+	var total = 0 as Tally
+
+	try 'work'
+		total = total + fa(n)
+		total = total + fb(n)
+	end 'work' otherwise (e) 'handler'
+		match e 'kind'
+			BoxErr.boxed then total = run(function() gives (n + n + n + n + n + n) * 0 + match e 'outer'
+				boxed(e) gives match e 'inner'
+					"big 9" gives 1 as Tally
+					default gives 2 as Tally
+				end 'inner'
+			end 'outer')
+			Plain.flat then total = 100
+			Plain.sharp then total = 7
+		end 'kind'
+	end 'handler'
+
+	return total
+end 'inArm'
+
+function main() returns ExitCode
+	let a = inArm(9)
+	let b = inArm(1)
+	let c = inArm(0)
+	print("inArm {a} {b} {c}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+inArm 1 7 3
+```
+
+<!-- test: a-closure-in-a-scalar-arm-does-not-see-the-handlers-error-union -->
+```maxon
+typealias Tally = int(0 to 1000)
+typealias Measure = function() returns Tally
+
+union BoxErr implements Error
+	boxed(text String)
+end 'BoxErr'
+
+enum Plain implements Error
+	flat
+	sharp
+end 'Plain'
+
+function fa(n Tally) returns Tally throws BoxErr
+	if n > 5 'big'
+		throw BoxErr.boxed("big {n}")
+	end 'big'
+
+	return 1
+end 'fa'
+
+function fb(n Tally) returns Tally throws Plain
+	if n == 1 'one'
+		throw Plain.sharp
+	end 'one'
+
+	return 2
+end 'fb'
+
+function run(m Measure) returns Tally
+	return m()
+end 'run'
+
+function pick(a Tally, b BoxErr) returns Tally
+	return a + textLength(b)
+end 'pick'
+
+function textLength(b BoxErr) returns Tally
+	return match b 'k'
+		boxed(text) gives text.byteLength() as Tally
+	end 'k'
+end 'textLength'
+
+function inArm(n Tally) returns Tally
+	var total = 0 as Tally
+	let s = BoxErr.boxed("big 9")
+
+	try 'work'
+		total = total + fa(n)
+		total = total + fb(n)
+	end 'work' otherwise (e) 'handler'
+		match e 'kind'
+			BoxErr.boxed then total = 50
+			Plain.flat then total = 100
+			Plain.sharp then total = run(function() gives (n + n) * 0 + match s 'outer'
+				boxed(e) gives match e 'inner'
+					"big 9" gives 1 as Tally
+					default gives 2 as Tally
+				end 'inner'
+			end 'outer')
+		end 'kind'
+	end 'handler'
+
+	return total
+end 'inArm'
+
+function main() returns ExitCode
+	let a = inArm(9)
+	let b = inArm(1)
+	let c = inArm(0)
+	print("inArm {a} {b} {c}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+inArm 50 1 3
+```
+
+<!-- test: a-closure-in-a-boxed-arm-captures-the-member -->
+```maxon
+typealias Tally = int(0 to 1000)
+typealias Reader = function() returns String
+typealias TextArray = Array with String
+
+union BoxErr implements Error
+	boxed(text String)
+end 'BoxErr'
+
+enum Plain implements Error
+	flat
+	sharp
+end 'Plain'
+
+function fa(n Tally) returns Tally throws BoxErr
+	if n > 5 'big'
+		throw BoxErr.boxed("big {n}")
+	end 'big'
+
+	return 1
+end 'fa'
+
+function fb(n Tally) returns Tally throws Plain
+	if n == 1 'one'
+		throw Plain.sharp
+	end 'one'
+
+	return 2
+end 'fb'
+
+function textOf(b BoxErr) returns String
+	return match b 'k'
+		boxed(text) gives text
+	end 'k'
+end 'textOf'
+
+function applyReader(r Reader, into TextArray) returns Tally
+	let t = r()
+	into.push(t)
+	return t.byteLength() as Tally
+end 'applyReader'
+
+function captured(n Tally, readers TextArray) returns Tally
+	var sink = 0 as Tally
+
+	try 'work'
+		sink = sink + fa(n)
+		sink = sink + fb(n)
+	end 'work' otherwise (e) 'handler'
+		match e 'kind'
+			BoxErr.boxed then sink = applyReader(function() gives textOf(e), into: readers)
+			Plain.flat then sink = 100
+			Plain.sharp then sink = 7
+		end 'kind'
+	end 'handler'
+
+	return sink
+end 'captured'
+
+function main() returns ExitCode
+	var readers = TextArray.create()
+	let c9 = captured(9, readers: readers)
+	let c1 = captured(1, readers: readers)
+	let c7 = captured(7, readers: readers)
+	print("captured {c9} {c1} {c7} {readers.count()}\n")
+
+	for r in readers 'eachReader'
+		print("  {r}\n")
+	end 'eachReader'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+captured 5 7 5 2
+  big 9
+  big 7
+```
+
+<!-- test: a-payload-binding-named-like-the-handlers-error-in-a-boxed-arm -->
+```maxon
+typealias Tally = int(0 to 1000)
+
+union BoxErr implements Error
+	boxed(text String)
+end 'BoxErr'
+
+enum Plain implements Error
+	flat
+	sharp
+end 'Plain'
+
+function fa(n Tally) returns Tally throws BoxErr
+	if n > 5 'big'
+		throw BoxErr.boxed("big {n}")
+	end 'big'
+
+	return 1
+end 'fa'
+
+function fb(n Tally) returns Tally throws Plain
+	if n == 1 'one'
+		throw Plain.sharp
+	end 'one'
+
+	return 2
+end 'fb'
+
+function payloadNamedE(n Tally) returns Tally
+	var total = 0 as Tally
+
+	try 'work'
+		total = total + fa(n)
+		total = total + fb(n)
+	end 'work' otherwise (e) 'handler'
+		match e 'kind'
+			BoxErr.boxed(e) then total = e.byteLength() as Tally
+			Plain.flat then total = 100
+			Plain.sharp then total = 7
+		end 'kind'
+	end 'handler'
+
+	return total
+end 'payloadNamedE'
+
+function main() returns ExitCode
+	let a = payloadNamedE(9)
+	let b = payloadNamedE(1)
+	let c = payloadNamedE(0)
+	print("payloadNamedE {a} {b} {c}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+payloadNamedE 5 7 3
+```

@@ -1205,7 +1205,7 @@ function refuseLoweredUnit(project Project, lowered LoweredUnit, authorFilePath 
 	var facts = RegAllocFacts.create()
 
 	// It asks about no named value: the compile is failing, and a diagnostic run has no sidecar to fill.
-	try allocateFunctionCore(lowered.targetModule, func: func, hasAuthor: hasAuthor, pool: pool, callerSaved: callerSaved, file: file, valueClass: lowered.valueClass, opFacts: opFacts, counters: counters, costs: costs, facts: facts, refusal: refusal, debugValueIds: ValueIdArray.create(), debugLocations: DebugValueLocationArray.create(), debugRanges: DebugValueRangeArray.create()) otherwise 'refusedAgain'
+	try allocateFunctionCore(lowered.targetModule, func: func, hasAuthor: hasAuthor, pool: pool, callerSaved: callerSaved, file: file, valueClass: lowered.valueClass, opFacts: opFacts, counters: counters, costs: costs, facts: facts, refusal: refusal, debugValues: DebugValueRoster.empty(), debugLocations: DebugValueLocationArray.create(), debugRanges: DebugValueRangeArray.create()) otherwise 'refusedAgain'
 		try renderRegisterPressureRefusal(project, module: lowered.targetModule, func: func, funcIndex: funcIndex, pool: pool, refusal: refusal)
 	end 'refusedAgain'
 
@@ -1257,48 +1257,28 @@ module function foldFunctionAllocation(project Project, stats RegAllocStats, fun
 	logEvent(LogCategory.codegen, level: LogLevel.TRACE, name: event, arg0: classRowMax(facts.maxPressure) as TraceArg, arg1: stats.valuesSplit as TraceArg)
 end 'foldFunctionAllocation'
 
-// THE WHOLE PER-FUNCTION ALLOCATION, AND NOTHING THE COMPILE OWNS.
-//
-// No `Project`, no logger, no module-wide aggregate, no trace span - because this is what a pool worker
-// runs, and a message that reaches a module `var` is E3143. Everything it measures it measures into
-// values its caller hands it: `counters` (this function's sums), `facts` (this function's own figures)
-// and `costs` (the sub-phase brackets). A hot-loop overflow leaves through `refusal` and a `throw`,
-// because E5001 can only be built from tables a `Project` holds.
-module function allocateFunctionCore(module TargetModule, func IrFunction, hasAuthor bool, pool RegMask, callerSaved RegMask, file RegisterFile, valueClass ValueClassColumn, opFacts OpVariantFacts, counters RegAllocCounters, costs PoolPhaseCosts, facts RegAllocFacts, refusal RegAllocRefusalSite, debugValueIds ValueIdArray, debugLocations DebugValueLocationArray, debugRanges DebugValueRangeArray) throws RegAllocRefusal
-	// Lay the blocks out in reverse-postorder FIRST, so layout order matches execution order.
-	// The cold-spill splitter's before/after-peak classification (and the colorer's dominance
-	// walk) rest on that; the parser emits a nested loop's exit before its inner blocks, which
-	// would otherwise misclassify an idle value's post-loop use and false-E5001 (single-loop /
-	// straight-line CFGs are already in RPO, so they are untouched). See reorderFuncBlocksRpo.
+// The whole per-function allocation, touching nothing the compile owns: a pool worker runs it, and
+// a message that reaches a module `var` is E3143. Everything it measures goes into values its
+// caller hands it. A hot-loop overflow leaves through `refusal` and a `throw`, because E5001 can
+// only be built from tables a `Project` holds.
+module function allocateFunctionCore(module TargetModule, func IrFunction, hasAuthor bool, pool RegMask, callerSaved RegMask, file RegisterFile, valueClass ValueClassColumn, opFacts OpVariantFacts, counters RegAllocCounters, costs PoolPhaseCosts, facts RegAllocFacts, refusal RegAllocRefusalSite, debugValues DebugValueRoster, debugLocations DebugValueLocationArray, debugRanges DebugValueRangeArray) throws RegAllocRefusal
+	// Reverse-postorder first, so layout order matches execution order: the cold-spill splitter's
+	// before/after-peak classification and the colorer's dominance walk rest on it, and the parser
+	// emits a nested loop's exit before its inner blocks, which would otherwise misclassify an idle
+	// value's post-loop use into a false E5001. See `reorderFuncBlocksRpo`.
 	//
-	// It hands back the REORDERED skeleton, which the splitter completes into its `FuncCfg`
-	// rather than re-deriving from the IR. Nothing runs between the two, and the splitter never
-	// adds or removes a block, so the skeleton stays exactly this function's for the whole of
-	// allocation. (`splitCriticalEdges` DOES add blocks — which is why it runs before this, and
-	// why its own skeleton cannot be carried forward.)
+	// The splitter completes the reordered skeleton into its `FuncCfg` rather than re-deriving it,
+	// which is sound because it never adds or removes a block. `splitCriticalEdges` does add blocks,
+	// which is why it runs before this.
 	let orderProbe = PhaseProbe.beginCounters()
 	let topo = reorderFuncBlocksRpo(module, func: func)
 	costs.record(RegAllocPhase.blockOrder.ordinal, probe: orderProbe)
 
-	// Cold-spill live-range splitting: where register pressure exceeds the pool, split
-	// idle values out (store in a cold, dominating spot and reload at their uses) or
-	// rematerialize constants, so the colorer below always finds `maxPressure ≤ pool`. HOT
-	// pressure a loop genuinely cannot fit is raised as E5001 from inside the splitter.
-	// It runs FIRST because it MUTATES the IR — adding spill/reload/remat ops and
-	// fresh reload values that the liveness and coloring below then both consume. The
-	// splitter computes liveness internally and returns the final result (`maxPressure ≤
-	// pool` guaranteed), so no separate liveness pass is needed here.
-	// The splitter OWNS the liveness computation (one whole-function build, which it then REPAIRS
-	// incrementally after each split), and it bills that build to RegAllocPhase.liveness itself.
-	// Subtract it back out here so the two phases are DISJOINT and the sub-phases sum to the true
-	// total — otherwise `splitting` silently includes `liveness` and the biggest cost in the allocator
-	// hides inside the wrong bucket, which is exactly the "74% with zero sub-phase attribution"
-	// failure this instrumentation exists to prevent.
-	//
-	// The subtraction covers EVERY quantity, not just the clock: liveness allocates as well as costs
-	// time, and billing the splitter for liveness's allocations would put the allocator's memory in the
-	// wrong bucket exactly as billing it for liveness's time would. `PoolPhaseCosts.recordExcluding` does
-	// it in one place for all of them.
+	// The splitter runs first because it mutates the IR: it splits idle values out or rematerializes
+	// constants until `maxPressure ≤ pool`, and raises E5001 for hot pressure a loop cannot fit. It
+	// owns the liveness build and bills it to `RegAllocPhase.liveness` itself, so `recordExcluding`
+	// subtracts every quantity of that build, allocations as well as time, back out of `splitting`;
+	// otherwise the allocator's biggest cost would hide in the wrong bucket.
 	let livenessBefore = costs.accumulated(RegAllocPhase.liveness.ordinal)
 	let splitProbe = PhaseProbe.beginCounters()
 	var driver = SplitDriver.create(module, func: func, topo: topo, pool: pool, file: file, valueClass: valueClass, opFacts: opFacts, costs: costs)
@@ -1317,29 +1297,23 @@ module function allocateFunctionCore(module TargetModule, func IrFunction, hasAu
 
 	let alloc = colorRepairingConfinements(module, driver: driver, func: func, pool: pool, callerSaved: callerSaved, counters: counters, reuseCopies: reuseCopies, brackets: brackets, costs: costs)
 
-	// THE FRAME, fixed only now — after the relief loop AND after every repair. See
-	// `SplitDriver.fixFrameSize`: a repair consumes a spill slot after the splitter has finished, so a
-	// frame sized at the end of splitting would be short by exactly those slots.
+	// The frame is fixed only now, after the relief loop and every repair: a repair consumes a spill
+	// slot after the splitter has finished (`SplitDriver.fixFrameSize`).
 	driver.fixFrameSize(func)
 
-	// ⭐⭐ **THE ONE POINT AT WHICH A SOURCE NAME CAN STILL BE JOINED TO A MACHINE LOCATION.** `Allocation`
-	// is discarded with this pass, and by the time the encoder runs every operand is a physical register
-	// rather than a `ValueId` — so a debug-info location harvested anywhere later would have nothing left
-	// to key on. Read-only: nothing here can move an instruction.
-	harvestDebugValueLocations(alloc, liveness: liveness, valueIds: debugValueIds, into: debugLocations)
+	// The last point at which a source name can be joined to a machine location: `Allocation` is
+	// discarded with this pass, and the encoder sees only physical registers. Read-only: nothing here
+	// can move an instruction.
+	harvestDebugValueLocations(alloc, liveness: liveness, valueIds: debugValues.valueIds, into: debugLocations)
 
-	// ⚠ THE PER-FUNCTION FIGURES ARE READ AFTER THE COLOURING, NOT BEFORE IT, AND THE REPAIR IS WHY. A
-	// repair is a SPLIT: it walks liveness (`livenessMarkSteps`), it enumerates live rows
-	// (`rowWordsVisited`), and it lowers a block's demand (`maxPressure`). Read before the loop above,
-	// the two counters that would show a repair's cost would drop every one of them, and the pressure
-	// would be the pre-repair figure. Loop depth is a property of the CFG, which splitting cannot
-	// change, so it reads the same either side.
+	// Read after the colouring, because a repair is a split: it walks liveness, enumerates live rows
+	// and lowers a block's demand, so figures read before the loop above would miss every repair's
+	// cost and report the pre-repair pressure.
 	facts.livenessMarkSteps = liveness.livenessMarkSteps
 	facts.rowWordsVisited = driver.takeRowWordsVisited()
 
-	// PER CLASS, so the module report can name the file that was tight rather than a mixed figure that
-	// is no file's peak. A function with 14 live ints and 14 live floats is at its limit in BOTH files
-	// and over its limit in neither; one number cannot say that.
+	// Per class, so the module report names the file that was tight: 14 live ints and 14 live floats
+	// is at the limit in both files and over it in neither.
 	for classOrdinal in 0 upto RegClassCount 'eachClass'
 		let class = regClassAt(classOrdinal)
 		classRowSet(facts.maxPressure, class: class, value: liveness.maxPressureOf(class))
@@ -1356,7 +1330,7 @@ module function allocateFunctionCore(module TargetModule, func IrFunction, hasAu
 
 	// After the rewrite, which drops self-moves without renumbering: a run harvested before it would
 	// span ops that never reach the encoder, and every window would name code that is not there.
-	harvestDebugValueRanges(module, func: func, liveness: liveness, valueIds: debugValueIds, into: debugRanges)
+	harvestDebugValueRanges(module, func: func, liveness: liveness, roster: debugValues, into: debugRanges)
 	costs.record(RegAllocPhase.rewrite.ordinal, probe: rewriteProbe)
 end 'allocateFunctionCore'
 
@@ -1374,50 +1348,53 @@ function harvestDebugValueLocations(alloc Allocation, liveness LivenessResult, v
 	end 'eachNamedValue'
 end 'harvestDebugValueLocations'
 
-typealias DebugSlotIndex = int(0 to u64.max)
-typealias DebugSlotColumn = Array with DebugSlotIndex
 typealias DebugOrdinalColumn = Array with DebugOpAnchor
 typealias BlockIdColumn = Array with BlockId
 
-// Absent is 0 and every real anchor is biased past it, because the top of an `int(0 to u64.max)` column
-// is not available as a sentinel: it is a value the column is required to be able to hold.
-let NoDebugSlot = 0 as DebugSlotIndex
+// Absent is 0 and every real anchor and place is biased past it, because a column's top is a value
+// the column is required to be able to hold and so is not available as a sentinel.
+let NoDebugPlace = 0 as DebugPlace
 let NoDebugOrdinal = 0 as DebugOpAnchor
 let DebugAnchorBias = 1
 
-type DebugTouch
-	export var place as ElementIndex
-	export var slot as DebugSlotIndex
-	export var ordinal as DebugOpAnchor
+typealias DebugNamedSlot = int(0 to u32.max)
+typealias DebugNamedSlotColumn = Array with DebugNamedSlot
+typealias DebugPlace = int(0 to u32.max)
+typealias DebugPlaceColumn = Array with DebugPlace
 
-	static function create(place ElementIndex, slot DebugSlotIndex, ordinal DebugOpAnchor) returns DebugTouch
-		return Self{place: place, slot: slot, ordinal: ordinal}
+type DebugTouches
+	var slots as CsrColumn
+	var anchors as CsrColumn
+
+	static function create() returns DebugTouches
+		return Self{slots: CsrColumn.create(), anchors: CsrColumn.create()}
 	end 'create'
-end 'DebugTouch'
 
-typealias DebugTouchArray = Array with DebugTouch
+	function note(slot DebugNamedSlot, anchor DebugOpAnchor)
+		self.slots.push(slot as CsrIndex)
+		self.anchors.push(anchor as CsrIndex)
+	end 'note'
 
-function harvestDebugValueRanges(module TargetModule, func IrFunction, liveness LivenessResult, valueIds ValueIdArray, into DebugValueRangeArray)
-	if valueIds.count() == 0 'nothingNamed'
+	function byAnchor(anchorCount ElementIndex) returns CsrGraph
+		return buildCsr(self.anchors, to: self.slots, nodeCount: anchorCount as CsrIndex)
+	end 'byAnchor'
+end 'DebugTouches'
+
+function harvestDebugValueRanges(module TargetModule, func IrFunction, liveness LivenessResult, roster DebugValueRoster, into DebugValueRangeArray)
+	if roster.valueIds.count() == 0 'nothingNamed'
 		return
 	end 'nothingNamed'
 
 	let topo = liveness.cfg.topo
-	var slotOfValue = DebugSlotColumn.create()
-	slotOfValue.refill(liveness.valueCount as ElementIndex, value: NoDebugSlot)
-
-	for (iter, value) in valueIds.withIterator() 'eachNamedValue'
-		if value < liveness.valueCount 'inThisFunction'
-			try slotOfValue.set(value as ElementIndex, value: (iter.index() + DebugAnchorBias) as DebugSlotIndex) otherwise panic("harvestDebugValueRanges: slotOfValue.set OOB at value {value} below the function's {liveness.valueCount}")
-		end 'inThisFunction'
-	end 'eachNamedValue'
+	let names = DebugNameIndex.over(roster, valueCount: liveness.valueCount)
 
 	var ordinalOfOp = DebugOrdinalColumn.create()
 	ordinalOfOp.refill(module.ops.count(), value: NoDebugOrdinal)
-	var placeOfLocal = DebugSlotColumn.create()
-	placeOfLocal.refill(topo.numBlocks as ElementIndex, value: NoDebugSlot)
-	var localOfPlace = DebugSlotColumn.create()
+	var placeOfLocal = DebugPlaceColumn.create()
+	placeOfLocal.refill(topo.numBlocks as ElementIndex, value: NoDebugPlace)
+	var localOfPlace = CfgIndexArray.create()
 	var blockIdOfPlace = BlockIdColumn.create()
+	var siteKeyOfPlace = DebugSiteKeyColumn.create()
 	var blockFirst = DebugOrdinalColumn.create()
 	var blockLast = DebugOrdinalColumn.create()
 	var ordinal = 0 as DebugOpAnchor
@@ -1436,28 +1413,29 @@ function harvestDebugValueRanges(module TargetModule, func IrFunction, liveness 
 			ordinal = ordinal + 1
 		end 'hasTerminator'
 
-		try placeOfLocal.set(localOfBlockId(topo, blockId: block.id) as ElementIndex, value: (localOfPlace.count() + DebugAnchorBias) as DebugSlotIndex) otherwise panic("harvestDebugValueRanges: placeOfLocal.set OOB for block {block.id} of the topology's {topo.numBlocks}")
-		localOfPlace.push((localOfBlockId(topo, blockId: block.id) + DebugAnchorBias) as DebugSlotIndex)
+		try placeOfLocal.set(localOfBlockId(topo, blockId: block.id) as ElementIndex, value: (localOfPlace.count() + DebugAnchorBias) as DebugPlace) otherwise panic("harvestDebugValueRanges: placeOfLocal.set OOB for block {block.id} of the topology's {topo.numBlocks}")
+		localOfPlace.push(localOfBlockId(topo, blockId: block.id))
 		blockIdOfPlace.push(block.id)
+		siteKeyOfPlace.push(debugSiteKeyOf(block.inlineSite))
 		blockFirst.push(NoDebugOrdinal if ordinal == opened else opened + DebugAnchorBias)
 		blockLast.push(NoDebugOrdinal if ordinal == opened else ordinal)
 	end 'eachBlock'
 
-	var touches = DebugTouchArray.create()
-	collectDebugTouches(touches, liveness: liveness, valueIds: valueIds, ordinalOfOp: ordinalOfOp, placeOfLocal: placeOfLocal, blockFirst: blockFirst)
-	touches.sort(function(left DebugTouch, right DebugTouch) gives compareDebugTouches(left, right: right))
+	var scratch = DebugNamedSlotColumn.create()
+	var touches = DebugTouches.create()
+	collectDebugTouches(touches, liveness: liveness, names: names, ordinalOfOp: ordinalOfOp, placeOfLocal: placeOfLocal, blockFirst: blockFirst, siteKeyOfPlace: siteKeyOfPlace, scratch: scratch)
+	let byAnchor = touches.byAnchor((ordinal + DebugAnchorBias) as ElementIndex)
 
 	var startOrd = DebugOrdinalColumn.create()
-	startOrd.refill(valueIds.count(), value: NoDebugOrdinal)
+	startOrd.refill(roster.valueIds.count(), value: NoDebugOrdinal)
 	var endOrd = DebugOrdinalColumn.create()
-	endOrd.refill(valueIds.count(), value: NoDebugOrdinal)
-	var active = DebugSlotColumn.create()
-	var cursor = 0 as ElementIndex
+	endOrd.refill(roster.valueIds.count(), value: NoDebugOrdinal)
+	var active = DebugNamedSlotColumn.create()
 
-	for place in 0 upto localOfPlace.count() 'eachBlocksRuns'
-		let first = debugOrdinalAt(blockFirst, at: place)
-		let last = debugOrdinalAt(blockLast, at: place)
-		let local = (debugSlotAt(localOfPlace, at: place) - DebugAnchorBias) as CfgIndex
+	for (place, local) in localOfPlace.withIterator() 'eachBlocksRuns'
+		let first = debugOrdinalAt(blockFirst, at: place.index())
+		let last = debugOrdinalAt(blockLast, at: place.index())
+		let siteKey = debugSiteKeyAt(siteKeyOfPlace, at: place.index())
 
 		if first == NoDebugOrdinal 'emptyBlock'
 			continue
@@ -1466,54 +1444,149 @@ function harvestDebugValueRanges(module TargetModule, func IrFunction, liveness 
 		active.clear()
 
 		for value in liveness.live.liveIn(local) 'eachLiveIn'
-			openDebugRun(active, startOrd: startOrd, endOrd: endOrd, slot: debugSlotOf(slotOfValue, value: value), at: first)
+			openNamedRuns(active, startOrd: startOrd, endOrd: endOrd, names: names, value: value, siteKey: siteKey, at: first, scratch: scratch)
 		end 'eachLiveIn'
 
-		while cursor < touches.count() 'eachTouch'
-			let touch = try touches.get(cursor) otherwise panic("harvestDebugValueRanges: touches.get OOB at {cursor} despite the while guard")
+		let liveOnEntry = active.count()
 
-			if touch.place != place 'anotherBlock'
-				break
-			end 'anotherBlock'
-
-			openDebugRun(active, startOrd: startOrd, endOrd: endOrd, slot: touch.slot, at: touch.ordinal)
-			cursor = cursor + 1
-		end 'eachTouch'
+		for anchor in first upto last + 1 'eachAnchor'
+			for k in 0 upto byAnchor.degree(anchor as CsrIndex) 'eachTouchHere'
+				openDebugRun(active, startOrd: startOrd, endOrd: endOrd, slot: byAnchor.neighbour(anchor as CsrIndex, k: k) as DebugNamedSlot, at: anchor)
+			end 'eachTouchHere'
+		end 'eachAnchor'
 
 		for value in liveness.live.liveOut(local) 'eachLiveOut'
-			openDebugRun(active, startOrd: startOrd, endOrd: endOrd, slot: debugSlotOf(slotOfValue, value: value), at: last)
+			openNamedRuns(active, startOrd: startOrd, endOrd: endOrd, names: names, value: value, siteKey: siteKey, at: last, scratch: scratch)
 		end 'eachLiveOut'
 
-		let blockId = try blockIdOfPlace.get(place) otherwise panic("harvestDebugValueRanges: blockIdOfPlace.get OOB at {place} of {blockIdOfPlace.count()}")
+		let blockId = try blockIdOfPlace.get(place.index()) otherwise panic("harvestDebugValueRanges: blockIdOfPlace.get OOB at {place.index()} of {blockIdOfPlace.count()}")
+
+		var opening = 0 as ElementIndex
 
 		for slot in active 'eachRun'
 			let named = (slot - DebugAnchorBias) as ElementIndex
-			into.push(DebugValueRange.create(named, blockId: blockId, first: debugOrdinalAt(startOrd, at: named) - DebugAnchorBias, last: debugOrdinalAt(endOrd, at: named) - DebugAnchorBias))
+			let opened = debugOrdinalAt(startOrd, at: named)
+			into.push(DebugValueRange.create(named, blockId: blockId, first: opened - DebugAnchorBias, last: debugOrdinalAt(endOrd, at: named) - DebugAnchorBias, fromBlockEntry: opening < liveOnEntry))
+			opening = opening + 1
 			try startOrd.set(named, value: NoDebugOrdinal) otherwise panic("harvestDebugValueRanges: startOrd.set OOB at slot {slot}")
 			try endOrd.set(named, value: NoDebugOrdinal) otherwise panic("harvestDebugValueRanges: endOrd.set OOB at slot {slot}")
 		end 'eachRun'
 	end 'eachBlocksRuns'
-
-	into.sort(function(left DebugValueRange, right DebugValueRange) gives compareDebugValueRanges(left, right: right))
 end 'harvestDebugValueRanges'
+
+// `byValue` lists each value's names in ascending site key — `over` feeds them site by site and
+// `buildCsr` keeps push order within a key — and `collectNamesAt` bisects on that order.
+type DebugNameIndex
+	var byValue as CsrGraph
+	var siteKeys as DebugSiteKeyColumn
+	var siteParents as DebugSiteKeyColumn
+
+	static function over(roster DebugValueRoster, valueCount ValueId) returns DebugNameIndex
+		var sites = CsrColumn.create()
+		var names = CsrColumn.create()
+
+		for (iter, value) in roster.valueIds.withIterator() 'eachName'
+			if value < valueCount 'inThisFunction'
+				sites.push(debugSiteKeyAt(roster.siteKeys, at: iter.index()) as CsrIndex)
+				names.push(iter.index() as CsrIndex)
+			end 'inThisFunction'
+		end 'eachName'
+
+		let bySite = buildCsr(sites, to: names, nodeCount: roster.siteKeyCount() as CsrIndex)
+		var values = CsrColumn.create()
+		var siteOrdered = CsrColumn.create()
+
+		for site in 0 upto bySite.nodeCount() 'eachSite'
+			for k in 0 upto bySite.degree(site) 'eachNameOfTheSite'
+				let name = bySite.neighbour(site, k: k)
+				values.push((try roster.valueIds.get(name as ElementIndex) otherwise panic("DebugNameIndex.over: name {name} is past the roster's {roster.valueIds.count()} values")) as CsrIndex)
+				siteOrdered.push(name)
+			end 'eachNameOfTheSite'
+		end 'eachSite'
+
+		return Self{byValue: buildCsr(values, to: siteOrdered, nodeCount: valueCount as CsrIndex), siteKeys: roster.siteKeys, siteParents: siteParentsOf(roster)}
+	end 'over'
+
+	function isNamed(value ValueId) returns bool
+		return (value as CsrIndex) < self.byValue.nodeCount() and self.byValue.degree(value as CsrIndex) > 0
+	end 'isNamed'
+
+	function collectApplicable(value ValueId, siteKey DebugSiteKey, into DebugNamedSlotColumn)
+		into.clear()
+
+		var enclosing = siteKey
+		self.collectNamesAt(enclosing, value: value as CsrIndex, into: into)
+
+		while enclosing != FunctionTextSiteKey 'eachEnclosingSite'
+			enclosing = debugSiteKeyAt(self.siteParents, at: enclosing as ElementIndex)
+			self.collectNamesAt(enclosing, value: value as CsrIndex, into: into)
+		end 'eachEnclosingSite'
+	end 'collectApplicable'
+
+	function collectNamesAt(siteKey DebugSiteKey, value CsrIndex, into DebugNamedSlotColumn)
+		let limit = self.byValue.degree(value)
+		var low = 0 as CsrIndex
+		var high = limit
+
+		while low < high 'bisect'
+			let middle = low + (high - low) / 2
+
+			if self.siteKeyOf(self.byValue.neighbour(value, k: middle)) < siteKey 'below'
+				low = middle + 1
+			end 'below' else 'atOrAbove'
+				high = middle
+			end 'atOrAbove'
+		end 'bisect'
+
+		for k in low upto limit 'eachNameOfTheSite'
+			let name = self.byValue.neighbour(value, k: k)
+
+			if self.siteKeyOf(name) != siteKey 'pastTheSite'
+				return
+			end 'pastTheSite'
+
+			into.push((name + DebugAnchorBias) as DebugNamedSlot)
+		end 'eachNameOfTheSite'
+	end 'collectNamesAt'
+
+	function siteKeyOf(name CsrIndex) returns DebugSiteKey
+		return debugSiteKeyAt(self.siteKeys, at: name as ElementIndex)
+	end 'siteKeyOf'
+end 'DebugNameIndex'
+
+function siteParentsOf(roster DebugValueRoster) returns DebugSiteKeyColumn
+	var parents = DebugSiteKeyColumn.create()
+	parents.reserve(roster.siteKeyCount())
+	parents.push(FunctionTextSiteKey)
+
+	for parent in roster.parentKeys 'eachSite'
+		parents.push(parent)
+	end 'eachSite'
+
+	return parents
+end 'siteParentsOf'
+
+function debugSiteKeyAt(column DebugSiteKeyColumn, at ElementIndex) returns DebugSiteKey
+	return try column.get(at) otherwise panic("harvestDebugValueRanges: a site column was read at {at}, past the {column.count()} it was sized to")
+end 'debugSiteKeyAt'
+
+function openNamedRuns(active DebugNamedSlotColumn, startOrd DebugOrdinalColumn, endOrd DebugOrdinalColumn, names DebugNameIndex, value ValueId, siteKey DebugSiteKey, at DebugOpAnchor, scratch DebugNamedSlotColumn)
+	if not names.isNamed(value) 'unnamed'
+		return
+	end 'unnamed'
+
+	names.collectApplicable(value, siteKey: siteKey, into: scratch)
+
+	for slot in scratch 'eachApplicable'
+		openDebugRun(active, startOrd: startOrd, endOrd: endOrd, slot: slot, at: at)
+	end 'eachApplicable'
+end 'openNamedRuns'
 
 function debugOrdinalAt(column DebugOrdinalColumn, at ElementIndex) returns DebugOpAnchor
 	return try column.get(at) otherwise panic("harvestDebugValueRanges: an ordinal column was read at {at}, past the {column.count()} it was sized to")
 end 'debugOrdinalAt'
 
-function debugSlotAt(column DebugSlotColumn, at ElementIndex) returns DebugSlotIndex
-	return try column.get(at) otherwise panic("harvestDebugValueRanges: a slot column was read at {at}, past the {column.count()} it was sized to")
-end 'debugSlotAt'
-
-function debugSlotOf(slotOfValue DebugSlotColumn, value ValueId) returns DebugSlotIndex
-	return try slotOfValue.get(value as ElementIndex) otherwise NoDebugSlot
-end 'debugSlotOf'
-
-function openDebugRun(active DebugSlotColumn, startOrd DebugOrdinalColumn, endOrd DebugOrdinalColumn, slot DebugSlotIndex, at DebugOpAnchor)
-	if slot == NoDebugSlot 'unnamed'
-		return
-	end 'unnamed'
-
+function openDebugRun(active DebugNamedSlotColumn, startOrd DebugOrdinalColumn, endOrd DebugOrdinalColumn, slot DebugNamedSlot, at DebugOpAnchor)
 	let named = (slot - DebugAnchorBias) as ElementIndex
 
 	if debugOrdinalAt(startOrd, at: named) == NoDebugOrdinal 'firstTouchInThisBlock'
@@ -1529,20 +1602,18 @@ function openDebugRun(active DebugSlotColumn, startOrd DebugOrdinalColumn, endOr
 	end 'widens'
 end 'openDebugRun'
 
-function collectDebugTouches(touches DebugTouchArray, liveness LivenessResult, valueIds ValueIdArray, ordinalOfOp DebugOrdinalColumn, placeOfLocal DebugSlotColumn, blockFirst DebugOrdinalColumn)
+function collectDebugTouches(touches DebugTouches, liveness LivenessResult, names DebugNameIndex, ordinalOfOp DebugOrdinalColumn, placeOfLocal DebugPlaceColumn, blockFirst DebugOrdinalColumn, siteKeyOfPlace DebugSiteKeyColumn, scratch DebugNamedSlotColumn)
 	let index = liveness.useIndex
 
-	for (iter, value) in valueIds.withIterator() 'eachNamedValue'
-		if value >= liveness.valueCount 'notInThisFunction'
+	for value in 0 upto liveness.valueCount 'eachValue'
+		if not names.isNamed(value) 'unnamed'
 			continue
-		end 'notInThisFunction'
-
-		let slot = (iter.index() + DebugAnchorBias) as DebugSlotIndex
+		end 'unnamed'
 
 		match index.defKindOf(value) 'def'
 			none then break 'def'
-			opDef then noteDebugTouch(touches, slot: slot, place: debugPlaceOf(placeOfLocal, local: index.defBlockOf(value)), ordinal: debugOrdinalAt(ordinalOfOp, at: index.requireDefOp(value) as ElementIndex))
-			phiDef then noteDebugTouch(touches, slot: slot, place: debugPlaceOf(placeOfLocal, local: index.defBlockOf(value)), ordinal: debugBlockOpening(blockFirst, place: debugPlaceOf(placeOfLocal, local: index.defBlockOf(value))))
+			opDef then noteDebugTouches(touches, names: names, value: value, place: debugPlaceOf(placeOfLocal, local: index.defBlockOf(value)), ordinal: debugOrdinalAt(ordinalOfOp, at: index.requireDefOp(value) as ElementIndex), siteKeyOfPlace: siteKeyOfPlace, scratch: scratch)
+			phiDef then noteDebugTouches(touches, names: names, value: value, place: debugPlaceOf(placeOfLocal, local: index.defBlockOf(value)), ordinal: debugBlockOpening(blockFirst, place: debugPlaceOf(placeOfLocal, local: index.defBlockOf(value))), siteKeyOfPlace: siteKeyOfPlace, scratch: scratch)
 		end 'def'
 
 		let useSites = index.useCount(value)
@@ -1554,47 +1625,36 @@ function collectDebugTouches(touches DebugTouchArray, liveness LivenessResult, v
 		var record = index.firstUseOf(value)
 
 		for _ in 0 upto useSites 'eachUse'
-			noteDebugTouch(touches, slot: slot, place: debugPlaceOf(placeOfLocal, local: index.useBlockAt(record)), ordinal: debugOrdinalAt(ordinalOfOp, at: index.useOpAt(record) as ElementIndex))
+			noteDebugTouches(touches, names: names, value: value, place: debugPlaceOf(placeOfLocal, local: index.useBlockAt(record)), ordinal: debugOrdinalAt(ordinalOfOp, at: index.useOpAt(record) as ElementIndex), siteKeyOfPlace: siteKeyOfPlace, scratch: scratch)
 			record = index.nextUseOf(record)
 		end 'eachUse'
-	end 'eachNamedValue'
+	end 'eachValue'
 end 'collectDebugTouches'
 
-function debugPlaceOf(placeOfLocal DebugSlotColumn, local CfgIndex) returns DebugSlotIndex
-	return try placeOfLocal.get(local as ElementIndex) otherwise NoDebugSlot
+function debugPlaceOf(placeOfLocal DebugPlaceColumn, local CfgIndex) returns DebugPlace
+	return try placeOfLocal.get(local as ElementIndex) otherwise panic("harvestDebugValueRanges: block {local} is past the {placeOfLocal.count()} blocks of the topology the place column was sized to")
 end 'debugPlaceOf'
 
-function debugBlockOpening(blockFirst DebugOrdinalColumn, place DebugSlotIndex) returns DebugOpAnchor
-	if place == NoDebugSlot 'notLaidDown'
+function debugBlockOpening(blockFirst DebugOrdinalColumn, place DebugPlace) returns DebugOpAnchor
+	if place == NoDebugPlace 'notLaidDown'
 		return NoDebugOrdinal
 	end 'notLaidDown'
 
 	return debugOrdinalAt(blockFirst, at: (place - DebugAnchorBias) as ElementIndex)
 end 'debugBlockOpening'
 
-function noteDebugTouch(touches DebugTouchArray, slot DebugSlotIndex, place DebugSlotIndex, ordinal DebugOpAnchor)
-	if ordinal == NoDebugOrdinal or place == NoDebugSlot 'notEmitted'
+function noteDebugTouches(touches DebugTouches, names DebugNameIndex, value ValueId, place DebugPlace, ordinal DebugOpAnchor, siteKeyOfPlace DebugSiteKeyColumn, scratch DebugNamedSlotColumn)
+	if ordinal == NoDebugOrdinal or place == NoDebugPlace 'notEmitted'
 		return
 	end 'notEmitted'
 
-	touches.push(DebugTouch.create((place - DebugAnchorBias) as ElementIndex, slot: slot, ordinal: ordinal))
-end 'noteDebugTouch'
+	let placed = (place - DebugAnchorBias) as ElementIndex
+	names.collectApplicable(value, siteKey: debugSiteKeyAt(siteKeyOfPlace, at: placed), into: scratch)
 
-function compareDebugTouches(left DebugTouch, right DebugTouch) returns Ordering
-	if left.place != right.place 'byBlock'
-		return left.place.compare(right.place)
-	end 'byBlock'
-
-	return left.ordinal.compare(right.ordinal)
-end 'compareDebugTouches'
-
-function compareDebugValueRanges(left DebugValueRange, right DebugValueRange) returns Ordering
-	if left.valueOrdinal != right.valueOrdinal 'byName'
-		return left.valueOrdinal.compare(right.valueOrdinal)
-	end 'byName'
-
-	return left.first.compare(right.first)
-end 'compareDebugValueRanges'
+	for slot in scratch 'eachApplicable'
+		touches.note(slot, anchor: ordinal)
+	end 'eachApplicable'
+end 'noteDebugTouches'
 
 // ⭐ **MEMORY BEFORE REGISTERS, AND `nowhere` RATHER THAN A GUESS.** A slot-resident value is one memory
 // holds whatever register it was also coloured into, so the slot is the location a reader can act on at
@@ -1947,22 +2007,27 @@ function computeHints(module TargetModule, topo FuncTopology, valueCount ValueId
 	return hints
 end 'computeHints'
 
-// A `movRegReg`/`movReg32Reg32` carries a coloring hint: a copy to a FIXED register
-// hints its virtual source to that register (the R8 return move → the return value
-// elides). (No virtual-to-virtual copy op exists at coloring time; the two-address
-// hint comes from `collectReuseHints`.)
+// A copy to a fixed register hints its virtual source to that register, so the R8 return move
+// elides. No virtual-to-virtual copy exists at coloring time; the two-address hint comes from
+// `collectReuseHints`.
 function collectOpHints(op TargetOp, hints ColorHints)
 	match op 'hint'
-		movRegReg(dst, src) then addCopyHint(dst, src: src, hints: hints)
-		movReg32Reg32(dst, src) then addCopyHint(dst, src: src, hints: hints)
+		movRegReg(dst, src) or
+			movReg32Reg32 then addCopyHint(dst, src: src, hints: hints)
+		// None of these is a move, so none carries a copy hint. A two-address reuse, `lock xadd`'s
+		// included, is a constraint `collectReuseHints` reads off the operand model and the colorer
+		// honours through `allocateReuseDef`, and a fixed register such as `divideReg`'s or
+		// `mulHighReg`'s RAX/RDX is an implicit mask `forbidOperandsFromImplicit` enforces; a hint here
+		// would restate either as a weaker preference. The arm64 moves that want a fixed register — the
+		// param capture, the call-arg pre-move, the return move — are the shared `movRegReg` above.
 		prologue or
 			epilogue or
 			ret or
 			jmp or
-			jcc then break 'hint'
-		movRegImm or
-			movRegImm32 then break 'hint'
-		subRegReg or
+			jcc or
+			movRegImm or
+			movRegImm32 or
+			subRegReg or
 			imulRegReg or
 			negReg or
 			cmpRegReg or
@@ -1974,18 +2039,12 @@ function collectOpHints(op TargetOp, hints ColorHints)
 			callDirect or
 			iatCall or
 			cqo or
-			divideReg then break 'hint'
-		pushReg or
-			popReg then break 'hint'
-		storeSlotReg or
-			loadRegSlot then break 'hint'
-
-		// The bit band carries no COPY hint: none of these ops is a move. Their two-address
-		// `dest ⟸ lhs` bias is a REUSE hint, which `collectReuseHints` reads straight off
-		// the operand model — so it covers every one of them without an arm here.
-		// The data-section band carries no COPY hint either: a `lea`, a load and a store are
-		// none of them a move, so no two of their operands want the same register.
-		andRegReg or
+			divideReg or
+			pushReg or
+			popReg or
+			storeSlotReg or
+			loadRegSlot or
+			andRegReg or
 			orRegReg or
 			xorRegReg or
 			notReg or
@@ -2017,13 +2076,8 @@ function collectOpHints(op TargetOp, hints ColorHints)
 			leaRegRdata or
 			minMaxSdRegReg or
 			movqXmmGpr or
-			negF64RegReg then break 'hint'
-
-		// The arm64 band carries NO copy hint: arm64 is 3-ADDRESS (no ALU op is a move, none has a
-		// two-address reuse to bias). The arm64 moves that DO carry a fixed-register hint — the param
-		// capture, the call-arg pre-move, the return move — are the SHARED `movRegReg` handled above,
-		// not an arm64-band op. So every arm64 arm simply breaks, like the bit / data-section bands.
-		arm64Ret or
+			negF64RegReg or
+			arm64Ret or
 			arm64Branch or
 			arm64CondBranch or
 			arm64Cbz or
@@ -2074,81 +2128,39 @@ function collectOpHints(op TargetOp, hints ColorHints)
 			arm64FpLoadRdata or
 			arm64ImportCall or
 			arm64Syscall or
-			arm64Fcsel then break 'hint'
-
-		// The function-value band carries no COPY hint: `leaRegFunc` is a `lea` (like
-		// `leaRegRdata`) and `callReg` is a call (like `callDirect`) — neither is a move, so no two of
-		// its operands want the same register. Its callee-address use rides `collectReuseHints`' scan
-		// of the operand model, which finds no reuse def and adds nothing. The Linux `x64Syscall` names
-		// no register operand at all, so it carries no hint either.
-		leaRegFunc or
+			arm64Fcsel or
+			leaRegFunc or
 			callReg or
-			x64Syscall then break 'hint'
-
-		// The jump tables carry no copy hint: their one operand is a plain use, not a move or a reuse.
-		x64JumpTable or
-			arm64JumpTable then break 'hint'
-
-		// The witness call's base register is a plain use (a call, like `callReg`), no copy hint.
-		callMem then break 'hint'
-
-		// Neither stack-argument op is a MOVE: the outgoing store has a use and no def, the incoming load a
-		// def and no use, so no two of their operands could want the same register. No copy hint.
-		arm64StoreOutgoingArg or
-			arm64LoadIncomingArg then break 'hint'
-
-		// Neither arm64 bit reinterpretation is a move — each one's two operands live in DIFFERENT
-		// register files, so they could not want the same register even in principle. No copy hint.
-		arm64FmovGprFp or
-			arm64FmovFpGpr then break 'hint'
-
-		// A frame address is not a copy — it has no source register to want the same colour as.
-		leaRegSlot then break 'hint'
-
-		// A fill ladder has no operands at all, so there is no pair of them to hint together.
-		x64MemFill or
-			arm64MemFill then break 'hint'
-
-		// No atomic is a MOVE. `lock xadd`'s reuse-def is not a hint either — a reuse is a CONSTRAINT the
-		// colorer honours through `allocateReuseDef`, and `collectReuseHints` reads it off the operand model;
-		// adding a copy hint here would be the same fact stated twice, in the weaker place.
-		x64LockCmpxchg or
+			x64Syscall or
+			x64JumpTable or
+			arm64JumpTable or
+			callMem or
+			arm64StoreOutgoingArg or
+			arm64LoadIncomingArg or
+			arm64FmovGprFp or
+			arm64FmovFpGpr or
+			leaRegSlot or
+			x64MemFill or
+			arm64MemFill or
+			x64LockCmpxchg or
 			x64LockXadd or
 			x64LockAdd or
 			x64TebSelfPointer or
 			x64GsLoadRegBase or
 			arm64AtomicCas or
 			arm64AtomicRmw or
-			arm64ThreadPointer then break 'hint'
-
-		// None of the scaled-index forms is a MOVE — each computes or accesses an address out of two
-		// independent registers, so there is no pair to coalesce.
-		leaRegBaseIndexScale or
+			arm64ThreadPointer or
+			leaRegBaseIndexScale or
 			loadRegBaseIndexScale or
 			storeBaseIndexScaleReg or
-			arm64AddLsl then break 'hint'
-
-		// The high multiply is not a MOVE — `divideReg`'s answer, one band up, for the same reason.
-		// Its RAX/RDX constraints are IMPLICIT MASKS, which `forbidOperandsFromImplicit` enforces; a hint
-		// is a preference and would be the weaker statement of a fact the masks already make absolutely.
-		mulHighReg then break 'hint'
-
-		// arm64 `fneg` is 3-address like the rest of its band: not a move, nothing to coalesce.
-		arm64Fneg then break 'hint'
-
-		// An ordered access is not a move, so there is nothing to coalesce.
-		arm64LoadAcquire or
-			arm64StoreRelease then break 'hint'
-
-		// `SMULH` is a 3-address multiply, not a MOVE — nothing to coalesce, and unlike
-		// `mulHighReg` it constrains no physical register at all.
-		arm64Mulh then break 'hint'
-
-		// A coverage counter names no register at all, so there is nothing to hint.
-		covInc then break 'hint'
-
-		// A read-modify-write of memory defines no register, so there is no move to coalesce.
-		x64AluBaseDispReg or
+			arm64AddLsl or
+			mulHighReg or
+			arm64Fneg or
+			arm64LoadAcquire or
+			arm64StoreRelease or
+			arm64Mulh or
+			covInc or
+			x64AluBaseDispReg or
 			x64AluBaseDispImm32 then break 'hint'
 	end 'hint'
 end 'collectOpHints'
@@ -3038,17 +3050,34 @@ function colorVRegWith(vreg TargetVReg, alloc Allocation) returns TargetVReg
 	end 'v'
 end 'colorVRegWith'
 
-// Rebuild an op with its TargetVReg operands colored to physical registers. EXHAUSTIVE
-// over every TargetOp — control/frame/call ops with no register operands pass
-// through. `xchgRegReg` is spliced in AFTER this rewrite, so its operands are already
-// physical (pass through).
 export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 	match op 'rewrite'
+		// Returned verbatim because none carries a virtual register: the OS-call forms and
+		// `x64Syscall` take their arguments pre-moved into fixed registers, a fill ladder's operands
+		// arrive in fixed registers and its only field is a constant, and `xchgRegReg` is spliced in
+		// after this rewrite.
 		prologue or
 			epilogue or
 			ret or
 			jmp or
-			jcc then return op
+			jcc or
+			xchgRegReg or
+			callDirect or
+			iatCall or
+			cqo or
+			pushReg or
+			popReg or
+			arm64Ret or
+			arm64Branch or
+			arm64CondBranch or
+			arm64Prologue or
+			arm64Epilogue or
+			arm64BranchLink or
+			arm64ImportCall or
+			arm64Syscall or
+			x64Syscall or
+			x64MemFill or
+			arm64MemFill then return op
 		movRegImm(dest, value) then return TargetOp.movRegImm(colorVRegWith(dest, alloc: alloc), value: value)
 		movRegImm32(dest, value) then return TargetOp.movRegImm32(colorVRegWith(dest, alloc: alloc), value: value)
 		movRegReg(destReg, srcReg) then return TargetOp.movRegReg(colorVRegWith(destReg, alloc: alloc), srcReg: colorVRegWith(srcReg, alloc: alloc))
@@ -3061,13 +3090,7 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		leaRegRegImm32(dest, base, disp) then return TargetOp.leaRegRegImm32(colorVRegWith(dest, alloc: alloc), base: colorVRegWith(base, alloc: alloc), disp: disp)
 		imulRegRegImm32(dest, src, imm) then return TargetOp.imulRegRegImm32(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc), imm: imm)
 		cmpRegImm32(reg, imm) then return TargetOp.cmpRegImm32(colorVRegWith(reg, alloc: alloc), imm: imm)
-		xchgRegReg or
-			callDirect or
-			iatCall then return op
-		cqo then return op
 		divideReg(divisor, signedness) then return TargetOp.divideReg(colorVRegWith(divisor, alloc: alloc), signedness: signedness)
-		pushReg or
-			popReg then return op
 		storeSlotReg(slot, srcReg) then return TargetOp.storeSlotReg(slot, srcReg: colorVRegWith(srcReg, alloc: alloc))
 		loadRegSlot(destReg, slot) then return TargetOp.loadRegSlot(colorVRegWith(destReg, alloc: alloc), slot: slot)
 		andRegReg(dest, lhs, rhs) then return TargetOp.andRegReg(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
@@ -3084,17 +3107,12 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		sarRegCl(dest, lhs) then return TargetOp.sarRegCl(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc))
 		shrRegCl(dest, lhs) then return TargetOp.shrRegCl(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc))
 		setccReg(dest, cond) then return TargetOp.setccReg(colorVRegWith(dest, alloc: alloc), cond: cond)
-
-		// The data-section band. `label`, `disp` and `width` are not registers and pass through; the
-		// vregs are colored exactly as every other op's are.
 		leaRegGlobal(dest, label) then return TargetOp.leaRegGlobal(colorVRegWith(dest, alloc: alloc), label: label)
 		loadRegBaseDisp(dest, base, disp, width) then return TargetOp.loadRegBaseDisp(colorVRegWith(dest, alloc: alloc), base: colorVRegWith(base, alloc: alloc), disp: disp, width: width)
 		storeBaseDispReg(base, disp, src, width) then return TargetOp.storeBaseDispReg(colorVRegWith(base, alloc: alloc), disp: disp, src: colorVRegWith(src, alloc: alloc), width: width)
 
-		// The SSE band. Coloring is CLASS-BLIND by construction: `colorVRegWith` substitutes
-		// whatever register the allocator assigned, and the class column is what guaranteed that
-		// register is an XMM. So these arms are shape-for-shape identical to their GPR twins, and
-		// that identity is the one-enum design paying out.
+		// Coloring is class-blind: `colorVRegWith` substitutes whatever register the allocator
+		// assigned, and the class column is what guaranteed an XMM operand an XMM register.
 		addsdRegReg(dest, lhs, rhs) then return TargetOp.addsdRegReg(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
 		subsdRegReg(dest, lhs, rhs) then return TargetOp.subsdRegReg(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
 		mulsdRegReg(dest, lhs, rhs) then return TargetOp.mulsdRegReg(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
@@ -3103,51 +3121,22 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		movsdRegRip(dest, label) then return TargetOp.movsdRegRip(colorVRegWith(dest, alloc: alloc), label: label)
 		cvtsi2sdRegReg(dest, src) then return TargetOp.cvtsi2sdRegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		cvttsd2siRegReg(dest, src) then return TargetOp.cvttsd2siRegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
-
-		// The MATH INTRINSICS — two XMM operands each, colored like the converts. The
-		// rounding MODE is not a register, so it passes through, exactly as an immediate or a cond code
-		// does.
 		sqrtsdRegReg(dest, src) then return TargetOp.sqrtsdRegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		roundsdRegReg(dest, src, mode) then return TargetOp.roundsdRegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc), mode: mode)
-
-		// The BIT REINTERPRETATION colors both operands like any other def-from-use pair — each from
-		// its OWN value's allocation, which is what puts the dest in a GPR and the source in an XMM
-		// with nothing here having to know that.
 		movqGprXmm(dest, src) then return TargetOp.movqGprXmm(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		movqXmmGpr(dest, src) then return TargetOp.movqXmmGpr(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
-
-		// f64 NEGATE colors its two XMM operands exactly as `absF64RegReg` below does; the REUSE def and
-		// the scratch clobber are the operand model's and the metadata's statements respectively.
 		negF64RegReg(dest, src) then return TargetOp.negF64RegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
-
-		// f64 ABS colors its two XMM operands like any other pair. That it is a REUSE def rather than a
-		// plain one is the OPERAND MODEL's statement, already honoured by the time coloring runs, so
-		// nothing here has to know the two will land in one register.
 		absF64RegReg(dest, src) then return TargetOp.absF64RegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
-
-		// The `.rdata` address `lea` — colors its GPR dest, exactly like `leaRegGlobal`.
 		leaRegRdata(dest, label) then return TargetOp.leaRegRdata(colorVRegWith(dest, alloc: alloc), label: label)
 
-		// `minsd`/`maxsd` color their three XMM operands like any other binary SSE op. That it is a REUSE def is
-		// the OPERAND MODEL's statement, already honoured by the time coloring runs — and the operand
-		// ORDER is preserved verbatim, which matters here more than for the commutative arms: swapping
-		// `lhs` and `rhs` would change the answer on a NaN.
+		// ⚠ Operand order is preserved verbatim: swapping `lhs` and `rhs` changes the answer on a NaN.
 		minMaxSdRegReg(dest, lhs, rhs, kind) then return TargetOp.minMaxSdRegReg(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc), kind: kind)
 
-		// --- arm64 SCALAR-CORE band ---
-		//
-		// The SAME `colorVRegWith`-per-operand reconstruction the x64 arms use: the rewrite is NEUTRAL —
-		// it substitutes `RegNum`s and never names an ISA register — so an arm64 op is rebuilt exactly
-		// like its x64 twin, and the non-register fields (block ids, immediates, names, cond codes) pass
-		// through. Control/frame/call ops with no register operand pass through unchanged.
-		arm64Ret then return op
-		arm64Branch then return op
-		arm64CondBranch then return op
+		// The rewrite substitutes `RegNum`s and never names an ISA register, so an arm64 op is rebuilt
+		// exactly like its x64 twin.
 		arm64Cbz(reg, targetBlockId) then return TargetOp.arm64Cbz(colorVRegWith(reg, alloc: alloc), targetBlockId: targetBlockId)
 		arm64Cbnz(reg, targetBlockId) then return TargetOp.arm64Cbnz(colorVRegWith(reg, alloc: alloc), targetBlockId: targetBlockId)
 		arm64MovImm(dest, value) then return TargetOp.arm64MovImm(colorVRegWith(dest, alloc: alloc), value: value)
-		arm64Prologue then return op
-		arm64Epilogue then return op
 		arm64Add(dest, lhs, rhs) then return TargetOp.arm64Add(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
 		arm64Sub(dest, lhs, rhs) then return TargetOp.arm64Sub(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
 		arm64Mul(dest, lhs, rhs) then return TargetOp.arm64Mul(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
@@ -3176,7 +3165,6 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		arm64LeaFuncAddr(dest, funcName) then return TargetOp.arm64LeaFuncAddr(colorVRegWith(dest, alloc: alloc), funcName: funcName)
 		arm64LeaRdata(dest, label) then return TargetOp.arm64LeaRdata(colorVRegWith(dest, alloc: alloc), label: label)
 		arm64LeaGlobal(dest, label) then return TargetOp.arm64LeaGlobal(colorVRegWith(dest, alloc: alloc), label: label)
-		arm64BranchLink then return op
 		arm64BranchLinkReg(reg) then return TargetOp.arm64BranchLinkReg(colorVRegWith(reg, alloc: alloc))
 		arm64Fadd(dest, lhs, rhs) then return TargetOp.arm64Fadd(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
 		arm64Fsub(dest, lhs, rhs) then return TargetOp.arm64Fsub(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
@@ -3190,53 +3178,24 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		arm64Frint(dest, src, mode) then return TargetOp.arm64Frint(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc), mode: mode)
 		arm64FpLoadRdata(dest, label) then return TargetOp.arm64FpLoadRdata(colorVRegWith(dest, alloc: alloc), label: label)
 
-		// Neither OS-call form names a register operand (their args are pre-moved into x0..), so both
-		// pass through unchanged, exactly like `arm64BranchLink` and x64's `iatCall`.
-		arm64ImportCall or
-			arm64Syscall then return op
-
-		// `fcsel` colors its three FP operands and carries its condition through, exactly as `arm64Frint`
-		// carries its rounding mode. ⚠ `ifTrue`/`ifFalse` are ORDERED — swapping them turns `min` into
-		// `max` — so the reconstruction names each in its own slot.
+		// ⚠ `ifTrue`/`ifFalse` are ordered — swapping them turns `min` into `max`.
 		arm64Fcsel(dest, ifTrue, ifFalse, cond) then return TargetOp.arm64Fcsel(colorVRegWith(dest, alloc: alloc), ifTrue: colorVRegWith(ifTrue, alloc: alloc), ifFalse: colorVRegWith(ifFalse, alloc: alloc), cond: cond)
-
-		// --- The function-value band (x64) ---
-		// `leaRegFunc` colors its GPR dest exactly like `leaRegRdata`/`leaRegGlobal`. `callReg` colors
-		// its callee-address USE exactly like `arm64BranchLinkReg` — NOT a pass-through like
-		// `callDirect`/`iatCall`, which carry no explicit register operand at all.
 		leaRegFunc(dest, funcName) then return TargetOp.leaRegFunc(colorVRegWith(dest, alloc: alloc), funcName: funcName)
 		callReg(reg) then return TargetOp.callReg(colorVRegWith(reg, alloc: alloc))
 
-		// The Linux `syscall` names no register operand (its args are pre-moved into rdi..), so it passes
-		// through unchanged, exactly like `arm64Syscall` and x64's `iatCall`.
-		x64Syscall then return op
-
-		// The jump tables color their ONE register operand — the biased index — and carry the block-id
-		// table, default and rdata label through unchanged (the scratch registers are fixed in the encoder,
-		// not colored).
+		// Only the biased index is coloured; the jump sequence's scratch registers are fixed in the
+		// encoder.
 		x64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then return TargetOp.x64JumpTable(colorVRegWith(indexReg, alloc: alloc), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel)
 		arm64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then return TargetOp.arm64JumpTable(colorVRegWith(indexReg, alloc: alloc), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel)
-
-		// The witness call colors its witness-table base register, exactly as `callReg` colors its callee.
 		callMem(baseReg, disp) then return TargetOp.callMem(colorVRegWith(baseReg, alloc: alloc), disp: disp)
-
-		// The stack-argument pair colors its ONE register operand each; the slot is a frame index, not a register.
 		arm64StoreOutgoingArg(slot, srcReg) then return TargetOp.arm64StoreOutgoingArg(slot, srcReg: colorVRegWith(srcReg, alloc: alloc))
 		arm64LoadIncomingArg(dest, slot) then return TargetOp.arm64LoadIncomingArg(colorVRegWith(dest, alloc: alloc), slot: slot)
-
-		// The arm64 BIT REINTERPRETATIONS — both operands colored from their own values, like `fcvtzs`
-		// and `scvtf`, the converting neighbours each shares its pair of register files with.
 		arm64FmovGprFp(dest, src) then return TargetOp.arm64FmovGprFp(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		arm64FmovFpGpr(dest, src) then return TargetOp.arm64FmovFpGpr(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		leaRegSlot(destReg, slot) then return TargetOp.leaRegSlot(colorVRegWith(destReg, alloc: alloc), slot: slot)
 
-		// A fill ladder carries NO virtual register to colour — its operands arrived in fixed physical
-		// registers before it and its only field is a constant — so it is returned verbatim.
-		x64MemFill or
-			arm64MemFill then return op
-
-		// Every virtual operand of every atomic is coloured from its own value. The CAS's comparand is NOT
-		// among them — x86 pins it to RAX, so it arrives in a `movRegReg` above and rides `implicitUses` here.
+		// The CAS's comparand is not an operand: x86 pins it to RAX, so it arrives in a `movRegReg` and
+		// rides `implicitUses`.
 		x64LockCmpxchg(addrReg, srcReg) then return TargetOp.x64LockCmpxchg(colorVRegWith(addrReg, alloc: alloc), srcReg: colorVRegWith(srcReg, alloc: alloc))
 		x64LockXadd(dest, src, addrReg) then return TargetOp.x64LockXadd(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc), addrReg: colorVRegWith(addrReg, alloc: alloc))
 		x64LockAdd(addrReg, srcReg) then return TargetOp.x64LockAdd(colorVRegWith(addrReg, alloc: alloc), srcReg: colorVRegWith(srcReg, alloc: alloc))
@@ -3245,15 +3204,10 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		arm64AtomicCas(dest, addrReg, expectedReg, replacementReg) then return TargetOp.arm64AtomicCas(colorVRegWith(dest, alloc: alloc), addrReg: colorVRegWith(addrReg, alloc: alloc), expectedReg: colorVRegWith(expectedReg, alloc: alloc), replacementReg: colorVRegWith(replacementReg, alloc: alloc))
 		arm64AtomicRmw(dest, addrReg, operandReg, opcode) then return TargetOp.arm64AtomicRmw(colorVRegWith(dest, alloc: alloc), addrReg: colorVRegWith(addrReg, alloc: alloc), operandReg: colorVRegWith(operandReg, alloc: alloc), opcode: opcode)
 		arm64ThreadPointer(dest, source) then return TargetOp.arm64ThreadPointer(colorVRegWith(dest, alloc: alloc), source: source)
-
-		// The scaled-index band. The scale, displacement and width are IMMEDIATES and carry
-		// through untouched; only the register operands are coloured.
 		leaRegBaseIndexScale(dest, base, index, scale) then return TargetOp.leaRegBaseIndexScale(colorVRegWith(dest, alloc: alloc), base: colorVRegWith(base, alloc: alloc), index: colorVRegWith(index, alloc: alloc), scale: scale)
 		loadRegBaseIndexScale(dest, base, index, scale, disp, width) then return TargetOp.loadRegBaseIndexScale(colorVRegWith(dest, alloc: alloc), base: colorVRegWith(base, alloc: alloc), index: colorVRegWith(index, alloc: alloc), scale: scale, disp: disp, width: width)
 		storeBaseIndexScaleReg(base, index, scale, disp, src, width) then return TargetOp.storeBaseIndexScaleReg(colorVRegWith(base, alloc: alloc), index: colorVRegWith(index, alloc: alloc), scale: scale, disp: disp, src: colorVRegWith(src, alloc: alloc), width: width)
 		arm64AddLsl(dest, base, index, scale) then return TargetOp.arm64AddLsl(colorVRegWith(dest, alloc: alloc), base: colorVRegWith(base, alloc: alloc), index: colorVRegWith(index, alloc: alloc), scale: scale)
-
-		// One register operand to colour, exactly as `divideReg` has.
 		mulHighReg(src, signedness) then return TargetOp.mulHighReg(colorVRegWith(src, alloc: alloc), signedness: signedness)
 		arm64Fneg(dest, src) then return TargetOp.arm64Fneg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		arm64LoadAcquire(dest, base, width) then return TargetOp.arm64LoadAcquire(colorVRegWith(dest, alloc: alloc), base: colorVRegWith(base, alloc: alloc), width: width)

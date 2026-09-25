@@ -103,9 +103,17 @@ let NothingToFree = 0
 // Call a libSystem import, through the system-stack door (`Arm64GtRuntime.DarwinLibcCallName`) that every
 // chunk's libSystem call takes. This whole file is reached only for `Os.macos`, so unlike
 // `Arm64RuntimeAsm.arm64EmitOsPrimitive` there is no route to choose between and no syscall number to carry.
+//
+// ⚠ x0 after it is the raw answer, whose upper half is unspecified for a 32-bit C return; a chunk
+// that reads the answer calls `arm64DarwinCallImportAnswering` instead.
 export function arm64DarwinCallImport(asm Arm64RuntimeAsm, slot OsImportSlot)
 	arm64EmitLibcCall(asm.code, iatRelocs: asm.iatRelocs, callFixups: asm.callFixups, slotIndex: osImportSlotIndex(slot))
 end 'arm64DarwinCallImport'
+
+export function arm64DarwinCallImportAnswering(asm Arm64RuntimeAsm, slot OsImportSlot)
+	arm64DarwinCallImport(asm, slot: slot)
+	arm64EmitImportAnswerWidth(asm, slot: slot)
+end 'arm64DarwinCallImportAnswering'
 
 // `x0 = clock_gettime_nsec_np(clockId)` — the one call three of the four chunks below open with.
 function arm64DarwinReadClockNanos(asm Arm64RuntimeAsm, clockId MachineWord)
@@ -300,9 +308,8 @@ end 'buildArm64DarwinSleepChunk'
 // REQUIRED size only on the `-1` path, which is why the length comes from a `strlen` walk and never
 // from `SlotSize`.
 //
-// ⚠ **THE RETURN IS A C `int`, SO ITS UPPER HALF IS UNSPECIFIED** and a bare `cbnz x0` could read a stale
-// high word as "failed". `lsl #32` discards that half and leaves the low 32 bits where the following branch
-// tests them — see `Arm64NarrowResultShift`.
+// ⚠ The return is a C `int`, so its upper half is unspecified and a bare `cbnz x0` could read a
+// stale high word as "failed"; `arm64DarwinCallImportAnswering` widens it first.
 function buildArm64DarwinExePathChunk() returns FunctionCodeChunk
 	let SlotBufPtr = 0 as StackSize
 	let SlotBufLen = 1 as StackSize
@@ -334,8 +341,7 @@ function buildArm64DarwinExePathChunk() returns FunctionCodeChunk
 
 	// _NSGetExecutablePath(bufPtr, &bufsize)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotSize)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.nsGetExecutablePath)
-	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x0), rn: arm64RuntimeReg(Arm64Register.x0), sh: Arm64NarrowResultShift as ShiftCount)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.nsGetExecutablePath)
 	arm64EmitCbnzTo(asm, reg: Arm64Register.x0, label: finish)
 
 	// The buffer now holds the exec path, NUL-terminated. Canonicalize it.
@@ -911,12 +917,8 @@ function buildArm64DarwinTlsAllocChunk(globalData GlobalDataTable) returns Funct
 
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotKey)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinNoTlsDestructor)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.pthreadKeyCreate)
 
-	// `pthread_key_create` answers 0 on success and an errno otherwise — an `int`, so the upper half of x0
-	// is unspecified and the test is on the low 32 bits (`Arm64NarrowResultShift`, the trap
-	// `mrt_darwin_exe_path` records for `_NSGetExecutablePath`).
-	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x0), rn: arm64RuntimeReg(Arm64Register.x0), sh: Arm64NarrowResultShift as ShiftCount)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.pthreadKeyCreate)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: created)
 	arm64EmitPanicConstant(asm, globalData: globalData, bytes: DarwinTlsCreateFailedMessage)
 
@@ -993,14 +995,13 @@ end 'buildArm64DarwinEnvReadChunk'
 // `struct termios` it fills would have to be a frame this chunk owns — the Linux lanes pay both of those
 // because they link no libc and have no `isatty` to call.
 //
-// ⚠ **THE NARROWING IS NOT OPTIONAL.** `isatty` returns a C `int`, whose upper half AAPCS64 leaves
-// unspecified — a compare on the full register would read a stale high word as "a terminal", which is
-// `mrt_host_exe_path`'s trap one facility over.
+// ⚠ `isatty` returns a C `int`, whose upper half AAPCS64 leaves unspecified, so it is widened
+// before the test (`arm64DarwinCallImportAnswering`); a compare on the raw register would read a
+// stale high word as "a terminal".
 function buildArm64DarwinHandleFileTypeChunk() returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(0)
 
-	arm64DarwinCallImport(asm, slot: OsImportSlot.isatty)
-	arm64PosixNarrowIntStatus(asm, reg: Arm64Register.x0)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.isatty)
 	arm64EmitFileTypeFromStatus(asm, terminalWhen: Arm64CondCode.ne)
 
 	return asm.finishFunction(HostHandleFileTypeName)
@@ -1070,18 +1071,6 @@ let DarwinSearchBytes = 16
 let DarwinSearchAllocFailedMessage = b"panic: out of memory opening a directory search (malloc failed)\n"
 
 // ==========================================================================
-// Shared emit fragments
-// ==========================================================================
-
-// A libSystem `0`/`-1` STATUS IN x0 BECOMING THE Win32 BOOL THE Std TIER TESTS — the shared conversion
-// (`arm64EmitWin32BoolFromZeroStatus`) with THIS lane's narrowing in front of it, because a libSystem call
-// answers a C `int` whose upper half AAPCS64 leaves unspecified.
-function arm64DarwinWin32BoolFromPosixStatus(asm Arm64RuntimeAsm)
-	arm64PosixNarrowIntStatus(asm, reg: Arm64Register.x0)
-	arm64EmitWin32BoolFromZeroStatus(asm)
-end 'arm64DarwinWin32BoolFromPosixStatus'
-
-// ==========================================================================
 // mrt_darwin_last_error() -> x0 = the Win32 code the Std tier classifies
 // ==========================================================================
 
@@ -1095,7 +1084,7 @@ function buildArm64DarwinLastErrorChunk() returns FunctionCodeChunk
 
 	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)
 	arm64EmitLoadWord32At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: 0)
-	arm64EmitErrnoToWin32(asm, wouldBlock: DarwinErrnoWouldBlock, dirNotEmpty: DarwinErrnoDirectoryNotEmpty)
+	arm64EmitErrnoToWin32(asm, wouldBlock: DarwinErrno.wouldBlock.rawValue, dirNotEmpty: DarwinErrno.directoryNotEmpty.rawValue)
 
 	return asm.finishFunction(HostLastErrorName)
 end 'buildArm64DarwinLastErrorChunk'
@@ -1202,8 +1191,7 @@ function buildArm64DarwinFileSizeChunk() returns FunctionCodeChunk
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotOutPtr)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotStat)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.fstat)
-	arm64PosixNarrowIntStatus(asm, reg: Arm64Register.x0)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.fstat)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: measured)
 
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32False as MachineWord)
@@ -1226,13 +1214,13 @@ end 'buildArm64DarwinFileSizeChunk'
 // mrt_host_dir_remove(x0 = pathPtr) -> x0 = BOOL
 // ==========================================================================
 
-// `DeleteFileA` ⇒ `unlink`. Both take a path and answer a verdict; only the failure ENCODING differs, which
-// `arm64DarwinWin32BoolFromPosixStatus` owns.
+// `DeleteFileA` ⇒ `unlink`. Both take a path and answer a verdict; only the failure encoding
+// differs, which `arm64EmitWin32BoolFromZeroStatus` owns.
 function buildArm64DarwinFileDeleteChunk() returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(0)
 
-	arm64DarwinCallImport(asm, slot: OsImportSlot.unlink)
-	arm64DarwinWin32BoolFromPosixStatus(asm)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.unlink)
+	arm64EmitWin32BoolFromZeroStatus(asm)
 
 	return asm.finishFunction(HostFileDeleteName)
 end 'buildArm64DarwinFileDeleteChunk'
@@ -1244,8 +1232,8 @@ function buildArm64DarwinDirCreateChunk() returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(0)
 
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixDirectoryMode)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.mkdir)
-	arm64DarwinWin32BoolFromPosixStatus(asm)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.mkdir)
+	arm64EmitWin32BoolFromZeroStatus(asm)
 
 	return asm.finishFunction(HostDirCreateName)
 end 'buildArm64DarwinDirCreateChunk'
@@ -1256,8 +1244,8 @@ end 'buildArm64DarwinDirCreateChunk'
 function buildArm64DarwinDirRemoveChunk() returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(0)
 
-	arm64DarwinCallImport(asm, slot: OsImportSlot.rmdir)
-	arm64DarwinWin32BoolFromPosixStatus(asm)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.rmdir)
+	arm64EmitWin32BoolFromZeroStatus(asm)
 
 	return asm.finishFunction(HostDirRemoveName)
 end 'buildArm64DarwinDirRemoveChunk'
@@ -1288,8 +1276,7 @@ function buildArm64DarwinFileRenameChunk() returns FunctionCodeChunk
 	let answered = asm.newLabel()
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotNewPath)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.rename)
-	arm64PosixNarrowIntStatus(asm, reg: Arm64Register.x0)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.rename)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: renamed)
 
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32False as MachineWord)
@@ -1302,14 +1289,11 @@ function buildArm64DarwinFileRenameChunk() returns FunctionCodeChunk
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: released)
 
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixOpenReadOnly)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.open)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.open)
 
-	// The RAW answer is what `fsync` and `close` are handed — they read only its low half, exactly as the
-	// callee that produced it wrote only that half. The NARROWED copy exists solely for the sign test: after
-	// `lsl #32` a negative `int` has bit 63 set, so a signed compare against 0 reads the descriptor's sign
-	// and never a stale upper word.
+	// The descriptor is sign-extended, so the signed compare against 0 reads its sign and never a
+	// stale upper word.
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotDirFd)
-	arm64PosixNarrowIntStatus(asm, reg: Arm64Register.x0)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: released)
 
@@ -1447,8 +1431,7 @@ function buildArm64DarwinFileAttributesChunk() returns FunctionCodeChunk
 	let answered = asm.newLabel()
 
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotStat)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.stat)
-	arm64PosixNarrowIntStatus(asm, reg: Arm64Register.x0)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.stat)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: described)
 
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: InvalidFileAttributes as MachineWord)
@@ -1499,7 +1482,7 @@ function buildArm64DarwinDirCurrentPathChunk() returns FunctionCodeChunk
 	asm.placeLabel(refused)
 	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)
 	arm64EmitLoadWord32At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: 0)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrnoResultTooLarge as Imm32)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrno.resultTooLarge.rawValue as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: tooSmall)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
 	arm64EmitBranchTo(asm, label: answered)
@@ -1519,10 +1502,11 @@ end 'buildArm64DarwinDirCurrentPathChunk'
 // below calls this rather than carrying a second copy of the walk. Win32's first and subsequent entries
 // come from one enumeration; so do these.
 //
-// The loop: clear `errno`, take the next directory entry, match it against the pattern, and describe the
-// first one that matches. A NULL from `readdir` is end-of-iteration — which the caller reads as
-// `ERROR_NO_MORE_FILES` through a cleared `errno` (see `PosixErrnoCleared`) — and a `readdir` that FAILS
-// leaves its own errno standing, so the same FALSE carries both answers exactly as Win32's does.
+// The loop: clear `errno`, take the next directory entry, match it against the pattern, and
+// describe the first one that matches. A NULL from `readdir` is end-of-iteration — which the caller
+// reads as `ERROR_NO_MORE_FILES` through a cleared `errno` (see `PosixErrno.cleared`) — and a
+// `readdir` that FAILS leaves its own errno standing, so the same FALSE carries both answers
+// exactly as Win32's does.
 //
 // ⚠ **A SEARCH WITH NO DIRECTORY IS EXHAUSTED, NOT BROKEN.** A pattern with no wildcard was answered by one
 // `stat` and `FindFirstFileA` has already reported its single entry; the guard is INSIDE the loop head, after
@@ -1547,9 +1531,7 @@ function buildArm64DarwinDirFindNextChunk() returns FunctionCodeChunk
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotFindData)
 
 	asm.placeLabel(nextEntry)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixErrnoCleared as MachineWord)
-	arm64EmitStoreWord32At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: 0)
+	arm64DarwinEmitPublishErrno(asm, value: PosixErrno.cleared.rawValue)
 
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotSearch)
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: DarwinSearchDirOffset)
@@ -1562,8 +1544,7 @@ function buildArm64DarwinDirFindNextChunk() returns FunctionCodeChunk
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: DarwinSearchPatternOffset)
 	arm64DarwinEntryNameAddr(asm, dest: Arm64Register.x1, entrySlot: SlotEntry)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: DarwinDefaultGlobFlags)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.fnmatch)
-	arm64PosixNarrowIntStatus(asm, reg: Arm64Register.x0)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.fnmatch)
 	arm64EmitCbnzTo(asm, reg: Arm64Register.x0, label: nextEntry)
 
 	arm64EmitZeroSlots(asm, firstSlot: SlotStat, slotCount: runtimeFrameSlots(darwinStatLayout().bytes))
@@ -1644,8 +1625,7 @@ function buildArm64DarwinDirFindFirstChunk(globalData GlobalDataTable) returns F
 	// One path: `stat` it, and hand back a search that is already exhausted.
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotPattern)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotStat)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.stat)
-	arm64PosixNarrowIntStatus(asm, reg: Arm64Register.x0)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.stat)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: described)
 	arm64EmitBranchTo(asm, label: refused)
 
@@ -1707,7 +1687,7 @@ function buildArm64DarwinDirFindFirstChunk(globalData GlobalDataTable) returns F
 	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotSavedErrno)
 	arm64EmitCbnzTo(asm, reg: Arm64Register.x1, label: publishReason)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixErrnoNoSuchFileOrDirectory as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixErrno.noSuchFileOrDirectory.rawValue as MachineWord)
 
 	asm.placeLabel(publishReason)
 	arm64EmitStoreWord32At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: 0)
@@ -1888,14 +1868,11 @@ function buildArm64DarwinSpawnChunk() returns FunctionCodeChunk
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x5, slot: SlotEnv)
 
 	// The working directory first, before anything needs destroying: a NULL `lpCurrentDirectory` opens nothing.
-	// The RAW answer is kept for the file action, which reads only its low half; the narrowed copy is for the
-	// sign test alone.
 	arm64EmitCbzTo(asm, reg: Arm64Register.x1, label: cwdReady)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotCwd)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixOpenReadOnly or DarwinOpenDirectory or DarwinOpenCloseOnExec)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.open)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.open)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotCwdFd)
-	arm64PosixNarrowIntStatus(asm, reg: Arm64Register.x0)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: cwdReady)
 
@@ -1963,7 +1940,7 @@ function buildArm64DarwinSpawnChunk() returns FunctionCodeChunk
 	arm64EmitCbnzTo(asm, reg: Arm64Register.x5, label: envChosen)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x5, slot: SlotEnviron)
 	asm.placeLabel(envChosen)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.posixSpawnp)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.posixSpawnp)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotStatus)
 
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotAttributes)
@@ -1979,7 +1956,6 @@ function buildArm64DarwinSpawnChunk() returns FunctionCodeChunk
 	asm.placeLabel(noCwdToClose)
 
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotStatus)
-	arm64PosixNarrowIntStatus(asm, reg: Arm64Register.x0)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: spawned)
 
 	// Failure: publish the reason as errno and leave a ZERO `hProcess`, which is the Std tier's own spawn
@@ -2047,11 +2023,6 @@ export let DarwinShmOpenName = b"mrt_darwin_shm_open"
 // probe, which emits `mov w1, #0xa02`.
 let DarwinShmCreateFlags = 0xA02
 
-// How far a descriptor is shifted to discard the unspecified upper half of a C `int` return. A shift PAIR
-// zero-extends the low 32 bits, which is what leaves the handle's kind field (`PosixHandleKindShift`) clear
-// so `mrt_host_wait_close` reads it as a plain descriptor.
-let DarwinDescriptorBits = 32 as ShiftCount
-
 // `mrt_darwin_shm_create(x0 = namePtr, x1 = bytes) -> x0 = fd | 0`
 //
 // ⭐⭐ **`CreateFileMappingA` NAMES AND SIZES IN ONE CALL; POSIX TAKES TWO.** `shm_open` only names, so the
@@ -2085,13 +2056,12 @@ function buildArm64DarwinShmCreateChunk() returns FunctionCodeChunk
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinShmCreateFlags)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixSharedSegmentMode)
 	arm64EmitStoreWord64Sp(asm.code, src: arm64RuntimeReg(Arm64Register.x2), byteOffset: 0)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.shmOpen)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.shmOpen)
 	arm64DarwinCaptureDescriptor(asm, slot: SlotFd, failed: refused)
 
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotFd)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotBytes)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.ftruncate)
-	arm64PosixNarrowIntStatus(asm, reg: Arm64Register.x0)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.ftruncate)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: unsized)
 
@@ -2131,7 +2101,7 @@ function buildArm64DarwinShmOpenChunk() returns FunctionCodeChunk
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: absent)
 
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixOpenReadWrite)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.shmOpen)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.shmOpen)
 	arm64DarwinCaptureDescriptor(asm, slot: SlotFd, failed: absent)
 
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotFd)
@@ -2146,20 +2116,13 @@ end 'buildArm64DarwinShmOpenChunk'
 
 // Park the descriptor a `shm_open` answered, or branch to `failed`.
 //
-// ⚠ **THE SIGN TEST READS A NARROWED COPY AND THE SLOT KEEPS A ZERO-EXTENDED ONE**, which are two different
-// cleanups of the same unspecified upper half: after `lsl #32` a negative `int` has bit 63 set, so a signed
-// compare reads the descriptor's sign; the shift PAIR then clears the upper half for good, because a handle
-// whose top bits carried noise would be read as a WAIT OBJECT by `mrt_host_wait_close`'s kind field.
+// ⚠ x0 must arrive sign-extended (`arm64DarwinCallImportAnswering`): the signed compare then reads
+// the descriptor's sign, and a descriptor that passes it has a clear upper half. A handle whose top
+// bits carried noise would be read as a wait object by `mrt_host_wait_close`'s kind field.
 function arm64DarwinCaptureDescriptor(asm Arm64RuntimeAsm, slot StackSize, failed BlockId)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: slot)
-	arm64PosixNarrowIntStatus(asm, reg: Arm64Register.x0)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: failed)
-
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: slot)
-	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x0), rn: arm64RuntimeReg(Arm64Register.x0), sh: DarwinDescriptorBits)
-	arm64EmitLsrImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x0), rn: arm64RuntimeReg(Arm64Register.x0), sh: DarwinDescriptorBits)
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: slot)
 end 'arm64DarwinCaptureDescriptor'
 
 // Append the arm64-macOS host-surface chunks a program actually reaches.
@@ -2200,6 +2163,10 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 	if usage.usesTerminalDetection 'terminalDetection'
 		chunks.push(buildArm64DarwinHandleFileTypeChunk())
 	end 'terminalDetection'
+
+	if usage.usesProcessLiveness 'processLiveness'
+		chunks.push(buildArm64PosixProcProbeChunk(PosixHostCall.importCall(OsImportSlot.kill)))
+	end 'processLiveness'
 
 	if posixReadsEnvironment(usage) 'envRead'
 		chunks.push(buildArm64DarwinEnvReadChunk())
@@ -2339,12 +2306,11 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 		chunks.push(buildArm64DarwinDirCurrentPathChunk())
 	end 'managedDirectory'
 
-	// ⭐ **THE POLLED SOCKET BAND's THREE FOLDS.** Every socket lowering on this lane ends in one of them, so
-	// the gate is `installManagedSocketRuntime`'s own bit — one bit, two tiers, exactly as the gates above.
+	// Every socket lowering on this lane ends in one of the two folds, so the gate is
+	// `installManagedSocketRuntime`'s own bit — one bit, two tiers, as the gates above.
 	if usage.usesManagedSocket 'managedSocket'
 		chunks.push(buildArm64DarwinSocketBirthChunk())
-		chunks.push(buildArm64DarwinSocketStatusChunk(HostSocketIntStatusName, widens: true))
-		chunks.push(buildArm64DarwinSocketStatusChunk(HostSocketSizeStatusName, widens: false))
+		chunks.push(buildArm64DarwinSocketStatusChunk())
 	end 'managedSocket'
 
 	// The mode→attribute-mask decoder is called by BOTH `mrt_darwin_fill_find_data` (the cluster above) and
@@ -2376,8 +2342,7 @@ end 'appendArm64DarwinRuntimeChunks'
 // runs under `POSIX_SPAWN_CLOEXEC_DEFAULT`.
 function buildArm64DarwinNetpollOpenChunk() returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(0)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.kqueue)
-	arm64PosixWidenIntResult(asm, reg: Arm64Register.x0)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.kqueue)
 	return asm.finishFunction(HostNetpollOpenName)
 end 'buildArm64DarwinNetpollOpenChunk'
 
@@ -2406,8 +2371,7 @@ function buildArm64DarwinNetpollUserEventChunk(name ByteArray, flags MachineWord
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: 0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: 0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x5, value: 0)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.kevent)
-	arm64PosixWidenIntResult(asm, reg: Arm64Register.x0)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.kevent)
 
 	if answersQueue 'queueOnSuccess'
 		arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
@@ -2468,8 +2432,7 @@ function buildArm64DarwinNetpollWaitChunk() returns FunctionCodeChunk
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x3, slot: SlotEntries)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: SlotCapacity)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x5, slot: SlotTimeoutPtr)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.kevent)
-	arm64PosixWidenIntResult(asm, reg: Arm64Register.x0)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.kevent)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: answered)
 
@@ -2477,7 +2440,7 @@ function buildArm64DarwinNetpollWaitChunk() returns FunctionCodeChunk
 	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)
 	arm64EmitLoadWord32At(asm, dest: Arm64Register.x1, base: Arm64Register.x0, byteOffset: 0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: DarwinKeventFailed)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x1, imm: PosixErrnoInterrupted as Imm32)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x1, imm: PosixErrno.interrupted.rawValue as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: answered)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
 
@@ -2514,7 +2477,7 @@ function buildArm64DarwinNetpollArmChunk() returns FunctionCodeChunk
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: 0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: 0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x5, value: 0)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.kevent)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.kevent)
 	arm64DarwinEmitStatusOrErrno(asm)
 	return asm.finishFunction(HostNetpollArmSourceName)
 end 'buildArm64DarwinNetpollArmChunk'
@@ -2543,8 +2506,7 @@ function buildArm64DarwinNetpollChildOpenChunk() returns FunctionCodeChunk
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: PosixWaitOffChildPid)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotPid)
 
-	arm64DarwinCallImport(asm, slot: OsImportSlot.kqueue)
-	arm64PosixWidenIntResult(asm, reg: Arm64Register.x0)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.kqueue)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: noQueue)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotQueue)
@@ -2563,8 +2525,7 @@ function buildArm64DarwinNetpollChildOpenChunk() returns FunctionCodeChunk
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: 0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: 0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x5, value: 0)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.kevent)
-	arm64PosixWidenIntResult(asm, reg: Arm64Register.x0)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.kevent)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: refused)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotQueue)
@@ -2603,7 +2564,7 @@ function buildArm64DarwinNetpollArmChildChunk() returns FunctionCodeChunk
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: 0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: 0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x5, value: 0)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.kevent)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.kevent)
 	arm64DarwinEmitStatusOrErrno(asm)
 	return asm.finishFunction(HostNetpollArmChildName)
 end 'buildArm64DarwinNetpollArmChildChunk'
@@ -2637,7 +2598,7 @@ end 'buildArm64DarwinNetpollArmPipeChunk'
 function buildArm64DarwinNetpollChildCloseChunk() returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(0)
 
-	arm64DarwinCallImport(asm, slot: OsImportSlot.close)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.close)
 	arm64DarwinEmitStatusOrErrno(asm)
 	return asm.finishFunction(HostNetpollChildCloseName)
 end 'buildArm64DarwinNetpollChildCloseChunk'
@@ -2655,10 +2616,10 @@ end 'arm64DarwinEmitSocketFilter'
 // The polled socket band — libSystem's answers in the op's own vocabulary
 // ==========================================================================
 
-// ⭐⭐ **`mrt_host_socket_birth(x0 = socket()'s raw answer) -> x0 = the descriptor, or -errno`.** Darwin has
-// neither `SOCK_NONBLOCK` nor `SOCK_CLOEXEC` to pass `socket(2)`, so both flags are set here — and `fcntl` is
-// VARIADIC, whose third argument this ABI passes on the STACK, which is why this is a chunk with a frame and
-// not an isel sequence.
+// `mrt_host_socket_birth(x0 = socket()'s widened answer) -> x0 = the descriptor, or -errno`. Darwin
+// has neither `SOCK_NONBLOCK` nor `SOCK_CLOEXEC` to pass `socket(2)`, so both flags are set here —
+// and `fcntl` is variadic, whose third argument this ABI passes on the stack, which is why this is
+// a chunk with a frame and not an isel sequence.
 function buildArm64DarwinSocketBirthChunk() returns FunctionCodeChunk
 	let SlotFd = 0 as StackSize
 	let SlotErrno = 1 as StackSize
@@ -2668,7 +2629,6 @@ function buildArm64DarwinSocketBirthChunk() returns FunctionCodeChunk
 	let flagsRefused = asm.newLabel()
 	let answered = asm.newLabel()
 
-	arm64PosixWidenIntResult(asm, reg: Arm64Register.x0)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: noSocket)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotFd)
@@ -2697,40 +2657,26 @@ function arm64DarwinEmitFcntl(asm Arm64RuntimeAsm, fdSlot StackSize, command Par
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: command as MachineWord)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: value as MachineWord)
 	arm64EmitStoreWord64Sp(asm.code, src: arm64RuntimeReg(Arm64Register.x2), byteOffset: 0)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.fcntl)
-	arm64PosixNarrowIntStatus(asm, reg: Arm64Register.x0)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.fcntl)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: failed)
 end 'arm64DarwinEmitFcntl'
 
-// ⭐ **THE TWO STATUS FOLDS — a libSystem -1 becoming the `-errno` a raw `svc` would have answered.** The
-// `int` form widens first because AAPCS64 leaves a C `int`'s upper half unspecified; the `ssize_t` form must
-// NOT, because bit 31 of a byte count is a count's and not a sign.
-function buildArm64DarwinSocketStatusChunk(name ByteArray, widens bool) returns FunctionCodeChunk
+// A libSystem -1 becoming the `-errno` a raw `svc` would have answered. The caller captured the
+// import's answer at its own width, so a `ssize_t` byte count's bit 31 stays a count's and not a
+// sign.
+function buildArm64DarwinSocketStatusChunk() returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(0)
-
-	let answered = asm.newLabel()
-
-	if widens 'intAnswer'
-		arm64PosixWidenIntResult(asm, reg: Arm64Register.x0)
-	end 'intAnswer'
-
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: answered)
-	arm64DarwinEmitNegatedErrno(asm)
-
-	asm.placeLabel(answered)
-	return asm.finishFunction(name)
+	arm64DarwinEmitStatusOrErrno(asm)
+	return asm.finishFunction(HostSocketStatusName)
 end 'buildArm64DarwinSocketStatusChunk'
 
-// ⛔⛔ **A libSystem STATUS IS `-1` AND THE REASON IS IN `errno`; ANSWERING THE `-1` DISCARDS IT.** A raw
-// Linux `svc` already answers `-errno`, so only this lane has to fold — and until it did, every kevent
-// refusal on this lane reached the poller's abort as a bare `-1`, which names the failure and nothing else.
-// MEASURED: that is exactly what arm64-macos printed for `armPipeSource`, and it cost a lane round trip.
-function arm64DarwinEmitStatusOrErrno(asm Arm64RuntimeAsm)
+// A libSystem status is -1 with the reason in `errno`, and answering the -1 alone would discard the
+// reason; a raw Linux `svc` already answers `-errno`, so only this lane folds. ⚠ x0 must already be
+// at the import's width (`arm64DarwinCallImportAnswering`), or a stale upper half reads as a sign.
+export function arm64DarwinEmitStatusOrErrno(asm Arm64RuntimeAsm)
 	let answered = asm.newLabel()
 
-	arm64PosixWidenIntResult(asm, reg: Arm64Register.x0)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: answered)
 	arm64DarwinEmitNegatedErrno(asm)
@@ -2745,6 +2691,12 @@ function arm64DarwinEmitNegatedErrno(asm Arm64RuntimeAsm)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x9, value: 0)
 	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x9, rhs: Arm64Register.x0)
 end 'arm64DarwinEmitNegatedErrno'
+
+module function arm64DarwinEmitPublishErrno(asm Arm64RuntimeAsm, value ParsedInt)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: value as MachineWord)
+	arm64EmitStoreWord32At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: 0)
+end 'arm64DarwinEmitPublishErrno'
 
 // ⚠ **A DESCRIPTOR A CHUNK COULD NOT FINISH SETTING UP IS CLOSED HERE OR IT LEAKS FOR THE PROCESS LIFETIME.**
 // It belongs to nobody: the answer the chunk is about to give is a failure, so no box and no poll record will

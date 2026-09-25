@@ -8,6 +8,35 @@ export let DebugNoSuchThreadReason = "no-such-thread"
 let SelectorFunctionSeparator = ":"
 let UnknownThreadStatus = "unknown"
 
+export union DebugThreadSelector
+	numbered(id DebugThreadId)
+	numberBelowEveryId
+	matching(status String, functionName DebugFunctionNameLookup)
+end 'DebugThreadSelector'
+
+export function debugThreadSelectorOf(spelling String) returns DebugThreadSelector
+	let trimmed = spelling.trim()
+
+	match parseDigits(trimmed, skipping: 0, base: DecimalBase) 'aNumber'
+		invalid then break 'aNumber'
+		valid(number) then return numberedSelector(number)
+	end 'aNumber'
+
+	let pieces = trimmed.split(SelectorFunctionSeparator)
+	let status = try pieces.get(0) otherwise panic("debugThreadSelectorOf: a split of '{trimmed}' has a first piece")
+	let functionName = try pieces.get(1) otherwise return DebugThreadSelector.matching(status, functionName: DebugFunctionNameLookup.none)
+
+	return DebugThreadSelector.matching(status, functionName: DebugFunctionNameLookup.none if functionName.isEmpty() else DebugFunctionNameLookup.named(functionName))
+end 'debugThreadSelectorOf'
+
+function numberedSelector(number ParsedCodeOffset) returns DebugThreadSelector
+	if number < LowestDebugThreadId 'belowEveryId'
+		return DebugThreadSelector.numberBelowEveryId
+	end 'belowEveryId'
+
+	return DebugThreadSelector.numbered(number as DebugThreadId)
+end 'numberedSelector'
+
 export type DebugGreenThread
 	export let handle as DebugAddress
 	export let status as DebugAddress
@@ -100,24 +129,17 @@ export type DebugThreadTable
 		return DebugHandleLookup.none
 	end 'handleOfId'
 
-	export function resolve(spelling String) returns DebugThreadRef
-		let trimmed = spelling.trim()
-
-		match parseDigits(trimmed, skipping: 0, base: DecimalBase) 'aNumber'
-			invalid then break 'aNumber'
-			valid(number) then return self.rowWithId(number as DebugAddress)
-		end 'aNumber'
-
-		let pieces = trimmed.split(SelectorFunctionSeparator)
-		let status = try pieces.get(0) otherwise trimmed
-		let functionName = try pieces.get(1) otherwise ""
-
-		return self.lowestMatching(status, functionName: functionName)
+	export function resolve(selector DebugThreadSelector) returns DebugThreadRef
+		return match selector 'named'
+			numbered(number) gives self.rowWithId(number)
+			numberBelowEveryId gives DebugThreadRef.none
+			matching(status, functionName) gives self.lowestMatching(status, functionName: functionName)
+		end 'named'
 	end 'resolve'
 
-	function rowWithId(number DebugAddress) returns DebugThreadRef
+	function rowWithId(number DebugThreadId) returns DebugThreadRef
 		for row in self.rows 'eachRow'
-			if (row.id as DebugAddress) == number 'thisOne'
+			if row.id == number 'thisOne'
 				return DebugThreadRef.id(row.id)
 			end 'thisOne'
 		end 'eachRow'
@@ -125,7 +147,7 @@ export type DebugThreadTable
 		return DebugThreadRef.none
 	end 'rowWithId'
 
-	function lowestMatching(status String, functionName String) returns DebugThreadRef
+	function lowestMatching(status String, functionName DebugFunctionNameLookup) returns DebugThreadRef
 		var found = DebugThreadRef.none
 
 		for row in self.rows 'eachRow'
@@ -133,7 +155,7 @@ export type DebugThreadTable
 				continue
 			end 'anotherStatus'
 
-			if not functionName.isEmpty() and row.functionName != functionName 'anotherFunction'
+			if not functionNameAdmits(functionName, row: row) 'anotherFunction'
 				continue
 			end 'anotherFunction'
 
@@ -200,6 +222,20 @@ function identityOutlives(identity DebugThreadIdentity, records DebugGreenThread
 	return false if handleWasListed else wasTruncated
 end 'identityOutlives'
 
+function functionNameAdmits(asked DebugFunctionNameLookup, row DebugThreadRow) returns bool
+	return match asked 'named'
+		none gives true
+		named(name) gives functionNameIs(row.functionName, name: name)
+	end 'named'
+end 'functionNameAdmits'
+
+function functionNameIs(lookup DebugFunctionNameLookup, name String) returns bool
+	return match lookup 'known'
+		none gives false
+		named(spelled) gives spelled == name
+	end 'known'
+end 'functionNameIs'
+
 function lowerOf(found DebugThreadRef, candidate DebugThreadId) returns DebugThreadRef
 	match found 'soFar'
 		none then return DebugThreadRef.id(candidate)
@@ -211,7 +247,7 @@ function rowFor(id DebugThreadId, record DebugGreenThread, symbols DebugSymbols,
 	let status = debugThreadStatusName(record.status)
 
 	if record.entryPc < textBase 'noEntryInThisImage'
-		return DebugThreadRow.create(id, status: status, functionName: "", file: "", line: 0, handle: record.handle)
+		return DebugThreadRow.create(id, status: status, functionName: DebugFunctionNameLookup.none, file: "", line: 0, handle: record.handle)
 	end 'noEntryInThisImage'
 
 	let offset = record.entryPc - textBase

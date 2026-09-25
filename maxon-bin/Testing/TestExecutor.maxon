@@ -19,11 +19,6 @@
 // and does not accept one as a no-op: a flag that chose nothing would be a command line that reads as
 // though it did.
 
-// ⭐ **THE PROCESS-GLOBAL LEAK SIGNAL.** A leak-gated Maxon program reports its leak by substituting
-// this for whatever it was going to exit with, at exit — so it is a fact about the PROCESS and names
-// nobody. That is the whole reason a leaking shard has to be re-run test by test.
-let MemoryLeakExitCode = 101
-
 // What a test that was still running when its process hit the deadline reports.
 let KilledByDeadlineText = "still running when the process hit its deadline, and was killed"
 
@@ -130,44 +125,30 @@ union TestLaunchResult
 	couldNotStart(reason String)
 end 'TestLaunchResult'
 
-// Run ONE process over `indices`.
-//
-// ⭐⭐ **A TEST BINARY RUNS IN THE WORKING DIRECTORY THE `maxon test` PROCESS WAS INVOKED FROM, AND
-// THAT IS A CONTRACT RATHER THAN AN ACCIDENT.** `inheritedWorkingDir()` is the explicit spelling of it
-// (`SpecTestRunner` requires that argument precisely so no spawn can leave the question unanswered), and
-// nothing anywhere in this command changes directory — not the staging, which writes through absolute
-// and project-relative paths, and not the compile, which is handed paths rather than a cwd.
-//
-// ⛔ **IT IS NOT THE PROJECT DIRECTORY, AND A TEST THAT OPENS A FILE DEPENDS ON WHICH.** The obvious
-// alternative — run each binary in the project it was built from — is the wrong one: `maxon test
-// sub/project` from a checkout root would then run its tests somewhere the author never typed, so a
-// relative path in a test body would mean one thing when they ran it by hand and another under CI. The
-// author's own shell is the one place both agree.
-//
-// ⚠ The tests under `tests/test-command/` are the live consumer of this rule: they locate the fixture
-// corpus and the compiler under test by paths relative to the CHECKOUT ROOT, and say so in their header.
-// A change here silently breaks them, which is why the rule is written where it is decided.
+// A test binary runs in the directory `maxon test` was invoked from, never the project directory: a
+// relative path in a test body must mean the same under `maxon test sub/project` as when its author
+// runs it by hand. Nothing in this command changes directory. `tests/test-command/` locates its
+// fixtures relative to the checkout root and breaks silently if this changes.
 function launchTests(plan TestLaunchPlan, indices TestRunIndexArray) returns TestLaunchResult
 	var argv = StringArray.create()
 	argv.push("{testSelectFlag()}{formatTestSelection(indices)}")
 
-	let run = try runProcess(Executable.path(plan.binary), argv: argv, workingDirectory: inheritedWorkingDir(), timeoutMs: plan.timeoutMs) otherwise (e) 'didNotRun'
+	let run = try runProcess(Executable.path(plan.binary), argv: argv, workingDirectory: inheritedWorkingDirectory(), timeoutMs: plan.timeoutMs) otherwise (e) 'didNotRun'
 		return launchFailureOf(e)
 	end 'didNotRun'
 
 	return TestLaunchResult.ran(run.exitCode, stderr: run.stderr)
 end 'launchTests'
 
-// Which kind of failure a spawn reported. ⚠ **A DEADLINE IS NOT A LAUNCH FAILURE** — the process ran,
-// and one of its tests is the reason it was killed — so it is classified out first and the remaining
-// arms share ONE message site rather than repeating `displayReason()` four times.
+// A deadline is not a launch failure: the process ran, and one of its tests is the reason it was
+// killed.
 function launchFailureOf(error SubprocessError) returns TestLaunchResult
 	let killedAtTheDeadline = match error 'kind'
 		timeout gives true
-		executableNotFound gives false
-		spawnFailed gives false
-		ioFailed gives false
-		inputTooLarge gives false
+		executableNotFound or
+			spawnFailed or
+			ioFailed or
+			inputTooLarge gives false
 	end 'kind'
 
 	if killedAtTheDeadline 'outlivedItsBudget'
@@ -197,7 +178,7 @@ end 'AttributableLaunch'
 
 function attributableLaunch(launch TestLaunchResult) returns AttributableLaunch
 	match launch 'how'
-		ran(exitCode, stderr) then return AttributableLaunch.create(stderr, leaked: exitCode == MemoryLeakExitCode, launchProblem: "")
+		ran(exitCode, stderr) then return AttributableLaunch.create(stderr, leaked: isLeakDetectedExit(exitCode as ExitCode), launchProblem: "")
 		deadlineExpired then panic("attributableLaunch: a launch killed at its deadline never reaches attribution — `executeShard` answers that arm first, because a killed process leaves no stream to attribute from")
 		couldNotStart(reason) then return AttributableLaunch.create("", leaked: false, launchProblem: "{CouldNotLaunchPrefix}{reason}")
 	end 'how'
@@ -205,9 +186,9 @@ end 'attributableLaunch'
 
 function hitTheDeadline(launch TestLaunchResult) returns bool
 	return match launch 'how'
-		ran gives false
+		ran or
+			couldNotStart gives false
 		deadlineExpired gives true
-		couldNotStart gives false
 	end 'how'
 end 'hitTheDeadline'
 
@@ -475,11 +456,12 @@ end 'asLeaked'
 
 function leakedAlone(plan TestLaunchPlan, index TestRunIndex) returns bool
 	return match launchTests(plan, indices: soleIndex(index)) 'how'
-		ran(exitCode, _) gives exitCode == MemoryLeakExitCode
+		ran(exitCode, _) gives isLeakDetectedExit(exitCode as ExitCode)
 
-		// A test that HANGS when run alone did not leak; whatever verdict the shard gave it stands.
-		deadlineExpired gives false
-		couldNotStart gives false
+		// A test that hangs or cannot start when run alone showed no leak; whatever verdict the shard
+		// gave it stands.
+		deadlineExpired or
+			couldNotStart gives false
 	end 'how'
 end 'leakedAlone'
 
@@ -490,7 +472,7 @@ end 'leakedAlone'
 // One process launch's worth of work: the run indices it runs, all from ONE file.
 typealias TestShardArray = Array with TestRunIndexArray
 
-function soleIndex(index TestRunIndex) returns TestRunIndexArray
+module function soleIndex(index TestRunIndex) returns TestRunIndexArray
 	var only = TestRunIndexArray.create()
 	only.push(index)
 	return only

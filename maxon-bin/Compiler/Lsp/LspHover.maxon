@@ -59,8 +59,8 @@ module function hoverAnswer(request LspRequest) returns LspAnswer throws LspPara
 	let cursor = try document.cursorTokenIndex(position) otherwise return LspAnswer.nothing()
 
 	match hoverRenderingOf(request, document: document, cursor: cursor) 'answer'
-		present(markdown) then return markdownAnswer(markdown)
-		untyped(markdown) then return markdownAnswer(markdown)
+		present(markdown) or
+			untyped then return markdownAnswer(markdown)
 		absent then return LspAnswer.nothing()
 	end 'answer'
 end 'hoverAnswer'
@@ -415,8 +415,8 @@ module type HoverDocument
 		match declaration 'resolved'
 			binding(head) then return bindingRendering(head)
 			parameter(functionIndex, nameIndex) then return parameterRendering(functionIndex, nameIndex: nameIndex)
-			routine(head) then return declarationHeadRendering(head)
-			typeName(head) then return declarationHeadRendering(head)
+			routine(head) or
+				typeName then return declarationHeadRendering(head)
 			none then return HoverRendering.absent
 		end 'resolved'
 	end 'renderingOfDeclaration'

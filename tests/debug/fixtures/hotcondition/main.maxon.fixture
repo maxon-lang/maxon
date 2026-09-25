@@ -1,0 +1,51 @@
+typealias Rounds = int(0 to 1000000000000000)
+
+function hot(seed Rounds, until Rounds) returns Rounds
+	var total = seed
+	var k = 0 as Rounds
+
+	while (Clock.nowMs() as Rounds) < until 'churn'
+		total = total + k mod 7 // anchor: hot-body
+		k = k + 1
+	end 'churn'
+
+	return total
+end 'hot'
+
+function spinForever(seed Rounds) returns Rounds
+	var total = seed
+	var running = true
+
+	while running 'spin'
+		total = total + 1 // anchor: main-spin
+		total = 0 if total > 100000 else total
+		running = total >= 0
+	end 'spin'
+
+	return total
+end 'spinForever'
+
+function main() returns ExitCode
+	let until = (Clock.nowMs() as Rounds) + 4000
+	let a = async hot(1, until: until)
+	let b = async hot(2, until: until)
+	let c = async hot(3, until: until)
+	let d = async hot(4, until: until)
+	let e = async hot(5, until: until)
+	let f = async hot(6, until: until)
+	var x = until mod 5 // anchor: main-start
+	x = x + until mod 3
+	x = x + until mod 7
+	x = x + until mod 11
+	x = x + until mod 13
+	x = x + until mod 17
+	x = x + until mod 19
+	x = x + until mod 23
+	x = x + until mod 29
+	x = x + until mod 31
+	x = x + until mod 37
+	let workers = (await a) + (await b) + (await c) + (await d) + (await e) + (await f)
+	let spun = spinForever(x + workers)
+
+	return (spun mod 2) as ExitCode
+end 'main'

@@ -1,0 +1,59 @@
+let StdioDebugStagingDir = "temp/mcp-stdio-debug"
+let SourceDebugStagingDir = "temp/mcp-stdio-debug-source"
+
+test 'the stdio transport holds one debug session across tool calls'
+	let program = stagedProgram(StdioDebugStagingDir, fileName: "main.maxon", source: debuggableProgramSource())
+	let executable = buildStagedProgram(program)
+	let anchored = anchorLineIn(program, anchor: DebuggableProgramAnchor)
+
+	var session = StreamingMcpSession.startFrom(testedCompilerPath())
+	stdioHandshake(session)
+
+	let started = stdioToolCall(session, id: 2, name: DebugStartTool, argumentsJson: debugExecutableArgument(executable))
+	let armed = stdioToolCall(session, id: 3, name: DebugBreakTool, argumentsJson: debugBreakTargetArgument(anchored))
+	let continued = stdioToolCall(session, id: 4, name: DebugContinueTool)
+	let locals = stdioToolCall(session, id: 5, name: DebugLocalsTool)
+	let stopped = stdioToolCall(session, id: 6, name: DebugStopTool)
+
+	_ = try session.close() otherwise 0
+
+	try Expect.isFalse(toolCallIsError(started), message: "`{DebugStartTool}` refused a freshly built executable: {toolCallText(started)}")
+	try Expect.equal(debugToolState(started), expected: DebugStoppedState, message: "`{DebugStartTool}` launches without running, so the session is parked before `main` and reports `{DebugStoppedState}`; it reported `{debugToolState(started)}`")
+	try Expect.isFalse(toolCallIsError(armed), message: "`{DebugBreakTool}` refused `main.maxon:{anchored}`: {toolCallText(armed)}")
+	try Expect.equal(debugToolState(continued), expected: DebugStoppedState, message: "`{DebugContinueTool}` must run the program into the armed breakpoint; it reported `{debugToolState(continued)}` with {toolCallText(continued)}")
+	try Expect.isTrue(debugEventLines(continued, kind: DebugStopEventName).contains("{anchored}"), message: "the stop must be at the anchored line {anchored}; the events reported lines {renderedStrings(debugEventLines(continued, kind: DebugStopEventName))}")
+	try Expect.isTrue(debugLocalNames(locals).contains(DebuggableProgramLocalName), message: "`{DebugLocalsTool}` must reach the session the earlier calls left stopped and name its local `{DebuggableProgramLocalName}`; it named {renderedStrings(debugLocalNames(locals))}")
+	try Expect.isFalse(toolCallIsError(stopped), message: "`{DebugStopTool}` refused to end the session: {toolCallText(stopped)}")
+end 'the stdio transport holds one debug session across tool calls'
+
+test 'a debug tool called before debug_start is an error naming debug_start'
+	var session = StreamingMcpSession.startFrom(testedCompilerPath())
+	stdioHandshake(session)
+
+	let premature = stdioToolCall(session, id: 2, name: DebugContinueTool)
+	_ = try session.close() otherwise 0
+
+	try Expect.isTrue(toolCallIsError(premature), message: "`{DebugContinueTool}` with no session must be an error, not an answer about nothing: {toolCallText(premature)}")
+	try Expect.contains(toolCallText(premature), needle: DebugStartTool, message: "the refusal must name the tool that would fix it; it said {toolCallText(premature)}")
+end 'a debug tool called before debug_start is an error naming debug_start'
+
+test 'debug_start builds a source and stops in the program it built'
+	let program = stagedProgram(SourceDebugStagingDir, fileName: "main.maxon", source: debuggableProgramSource())
+	let anchored = anchorLineIn(program, anchor: DebuggableProgramAnchor)
+
+	var session = StreamingMcpSession.startFrom(testedCompilerPath())
+	stdioHandshake(session)
+
+	let started = stdioToolCall(session, id: 2, name: DebugStartTool, argumentsJson: sourceArgument(program.toString()))
+	let armed = stdioToolCall(session, id: 3, name: DebugBreakTool, argumentsJson: debugBreakTargetArgument(anchored))
+	let continued = stdioToolCall(session, id: 4, name: DebugContinueTool)
+	let stopped = stdioToolCall(session, id: 5, name: DebugStopTool)
+
+	_ = try session.close() otherwise 0
+
+	try Expect.isFalse(toolCallIsError(started), message: "`{DebugStartTool}` must build a `.maxon` source with debug info and launch what it built; it answered {toolCallText(started)}")
+	try Expect.equal(debugToolState(started), expected: DebugStoppedState, message: "a built-then-launched session is parked before `main`, exactly as one started from an executable; it reported `{debugToolState(started)}`")
+	try Expect.isFalse(toolCallIsError(armed), message: "a program built by `{DebugStartTool}` must carry the debug info a breakpoint needs: {toolCallText(armed)}")
+	try Expect.isTrue(debugEventLines(continued, kind: DebugStopEventName).contains("{anchored}"), message: "the stop must be at the anchored line {anchored} of the source that was built; the events reported lines {renderedStrings(debugEventLines(continued, kind: DebugStopEventName))}")
+	try Expect.isFalse(toolCallIsError(stopped), message: "`{DebugStopTool}` refused to end the session: {toolCallText(stopped)}")
+end 'debug_start builds a source and stops in the program it built'

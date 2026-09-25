@@ -1,0 +1,21 @@
+let OtherThreadCaseLabel = "next-over-a-call-another-thread-returns-through"
+let WorkerFunctionName = "worker"
+
+test 'a next over a call that other green threads also return through lands on the thread it was issued on'
+	let staged = builtFixture(OtherThreadCaseLabel, fixture: WorkersFixtureName)
+	let sleepLine = anchorLine(staged, anchor: "worker-sleep")
+	let afterLine = anchorLine(staged, anchor: "worker-after-sleep")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(sleepLine)}", RunCommand, "{ClearCommand} {lineTarget(sleepLine)}", NextCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let stops = eventsOfKind(events, kind: StopEventName)
+
+	try Expect.equal(stops.count() as AssertedInt, expected: 2, message: "the breakpoint on the sleep and the `{NextCommand}` are two stops. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let first = eventAt(stops, index: 0)
+	let landed = eventAt(stops, index: 1)
+	try Expect.equal(numberOf(landed, node: landed.root, key: ThreadKey) as AssertedInt, expected: numberOf(first, node: first.root, key: ThreadKey) as AssertedInt, message: "four workers sleep on the same line and every one of them returns through the same address; the `{NextCommand}` belongs to the thread it was issued on, and a landing on another is a different worker's return. {said}")
+	try Expect.equal(textOf(landed, node: landed.root, key: FunctionKey), expected: WorkerFunctionName, message: "`{NextCommand}` stays in the frame it was issued from. {said}")
+	try Expect.equal(numberOf(landed, node: landed.root, key: LineKey) as AssertedInt, expected: afterLine as AssertedInt, message: "`{NextCommand}` over the sleep lands on the line after it. {said}")
+end 'a next over a call that other green threads also return through lands on the thread it was issued on'

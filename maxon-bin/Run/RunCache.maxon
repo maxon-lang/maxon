@@ -80,17 +80,17 @@ let ChainSeparator = ", then "
 let SlotKeySeparator = "-"
 let PendingBuildMarker = ".tmp"
 
-// ⛔ **A SLOT PATH HAS A BUDGET, AND WINDOWS SETS IT AT 260 CHARACTERS.** Two full SHA-256s spelled out
-// is 128 of them before the root, the stem or the extension are counted — MEASURED: a checkout five
-// characters deeper than usual put the `.mxdbg` sidecar at 259 and the backend could not write it, which
-// reads as a build that produced no file rather than as a path too long.
+// A slot path has a budget, and Windows sets it at 260 characters: two full SHA-256s spelled out
+// are 128 of them before the root, the stem or the extension. Past it the backend cannot write the
+// `.mxdbg` sidecar, which reads as a build that produced no file rather than as a path too long.
 //
-// ⚠ **THESE ARE NAMES, NOT SIGNATURES.** 64 bits distinguishes the builds one developer's cache holds;
-// the collision it risks is a stale binary served for changed inputs, at a population no cache reaches.
-let CacheNameDigestBytes = 8
+// These are names, not signatures. 64 bits distinguishes the builds one developer's cache holds;
+// the collision it risks is a stale binary served for changed inputs, at a population no cache
+// reaches.
+let CacheNameDigestBytes = 8 as DigestPrefixBytes
 
-// How many characters a key occupies once `hexDigest` has spelled it, and the digits it may be spelled in.
-// Lower case, because that is what a `{byte:02x}` field writes.
+// How many characters a key occupies once `hexOfLeadingBytes` has spelled it, and the digits it may
+// be spelled in: lower case, because that is what a `{byte:02x}` field writes.
 let CacheKeyCharacters = CacheNameDigestBytes * 2
 let CacheKeyDigits = "0123456789abcdef"
 
@@ -206,11 +206,11 @@ end 'publishDebugSidecar'
 // This program's earlier builds, which no run can reach again: a key is a name, so nothing that would
 // find one of them has inputs that hash to it.
 //
-// ⛔ **EVERY FAILURE IS IGNORED AND NONE REACHES A STREAM.** A superseded build another run is EXECUTING
+// Every failure is ignored and none reaches a stream: a superseded build another run is executing
 // cannot be removed on Windows, and the run doing the removing has already built what it was asked for.
 //
-// ⛔ **A PENDING NAME IS LEFT ALONE — ANOTHER RUN IS WRITING IT.** Removing one costs that run its rename,
-// which it would then report as a failure with nothing published.
+// A pending name is left alone because another run is writing it. Removing one costs that run its
+// rename, which it would then report as a failure with nothing published.
 function discardSupersededBuilds(slot RunSlot)
 	let current = slot.executable.filename()
 
@@ -218,18 +218,19 @@ function discardSupersededBuilds(slot RunSlot)
 	kept.push(current)
 	kept.push("{current}{MxdbgSidecarExtension}")
 
-	discardSlotBuilds(slot.directory, binarySuffix: slot.binarySuffix, kept: kept)
+	discardSlotBuilds(slot.directory, binarySuffix: slot.binarySuffix, kept: kept, pending: PendingBuilds.leftInPlace)
 end 'discardSupersededBuilds'
 
-// Every build an OLDER cache format left, which no run of this format can reach again. Swept when a build
-// is published, so a hit pays nothing for it, and under `discardSupersededBuilds`' rules: failures ignored,
-// pending names left alone — an older driver may be writing one now.
+// Every build an older cache format left, which no run of this format can reach again. Swept when a
+// build is published, so a hit pays nothing for it, and under `discardSupersededBuilds`' rules:
+// failures ignored, pending names left alone — an older driver may be writing one now.
 //
-// ⚠ **A NEWER FORMAT'S DIRECTORY IS LEFT ALONE**, because a newer driver on this host is using it; sweeping
-// both ways would have two installed drivers discard each other's builds on every miss.
+// A newer format's directory is left alone, because a newer driver on this host is using it;
+// sweeping both ways would have two installed drivers discard each other's builds on every miss.
 //
-// ⛔ **ONLY THE DEPTH A FORMAT'S LAYOUT PUTS FILES AT IS SWEPT**, never a walk: a directory at any other
-// depth — a link planted in the cache included — is nothing a driver wrote, and a walk would follow it.
+// Only the depth a format's layout puts files at is swept, never a walk: a directory at any other
+// depth — a link planted in the cache included — is nothing a driver wrote, and a walk would follow
+// it.
 function discardOlderCacheFormats(slot RunSlot)
 	let entries = try Directory.list(slot.formatsRoot) otherwise return
 	let nothingKept = BuildNameArray.create()
@@ -237,9 +238,10 @@ function discardOlderCacheFormats(slot RunSlot)
 	for entry in entries 'eachEntry'
 		let name = entry.filename()
 
-		// The unversioned layout kept its slots here, and a key is hex, so no slot name begins with the prefix.
+		// The unversioned layout's slots sit here, and a key is hex, so no slot name begins with the
+		// prefix.
 		if not name.startsWith(CacheFormatPrefix) 'aSlotOfTheUnversionedLayout'
-			discardSlotBuilds(entry, binarySuffix: slot.binarySuffix, kept: nothingKept)
+			discardSlotBuilds(entry, binarySuffix: slot.binarySuffix, kept: nothingKept, pending: PendingBuilds.leftInPlace)
 			continue
 		end 'aSlotOfTheUnversionedLayout'
 
@@ -250,7 +252,7 @@ function discardOlderCacheFormats(slot RunSlot)
 		let slots = try Directory.list(entry) otherwise continue
 
 		for olderSlot in slots 'eachOlderSlot'
-			discardSlotBuilds(olderSlot, binarySuffix: slot.binarySuffix, kept: nothingKept)
+			discardSlotBuilds(olderSlot, binarySuffix: slot.binarySuffix, kept: nothingKept, pending: PendingBuilds.leftInPlace)
 		end 'eachOlderSlot'
 
 		try Directory.delete(entry) otherwise ignore
@@ -271,19 +273,24 @@ function isOlderCacheFormatName(name String) returns bool
 	return format < CacheFormat
 end 'isOlderCacheFormatName'
 
-// A slot's files, but for `kept` and any build still being written. A non-directory `dir` lists nothing
-// and is left alone.
+enum PendingBuilds
+	leftInPlace
+	discarded
+end 'PendingBuilds'
+
+// A slot's files, but for `kept` and, under `PendingBuilds.leftInPlace`, any build still being
+// written. A non-directory `dir` lists nothing and is left alone.
 //
-// ⭐ **THE EMPTIED DIRECTORY GOES WITH THEM**, or a slot costs a name for the life of the install, one per
+// The emptied directory goes with them, or a slot costs a name for the life of the install, one per
 // program ever run. The removal is asked for unconditionally because `Directory.delete` refuses a
 // directory that still holds an entry, so a slot keeping its newest build declines it by itself.
-function discardSlotBuilds(dir FilePath, binarySuffix String, kept BuildNameArray)
+function discardSlotBuilds(dir FilePath, binarySuffix String, kept BuildNameArray, pending PendingBuilds)
 	let entries = try Directory.list(dir) otherwise return
 
 	for entry in entries 'eachEntry'
 		let name = entry.filename()
 
-		if kept.contains(name) or isPendingBuildName(name, binarySuffix: binarySuffix) 'leftInPlace'
+		if kept.contains(name) or (pending == PendingBuilds.leftInPlace and isPendingBuildName(name, binarySuffix: binarySuffix)) 'leftInPlace'
 			continue
 		end 'leftInPlace'
 
@@ -530,16 +537,11 @@ function cacheFormatName() returns String
 	return "{CacheFormatPrefix}{CacheFormat}"
 end 'cacheFormatName'
 
-// ⛔ **WHAT MATTERS IS THAT THE SLOT IS THERE AFTERWARDS, NOT THAT THIS RUN MADE IT.** `Directory.create`
-// answers false when the underlying create fails, and a run losing the mkdir to a simultaneous one fails
-// exactly that way against a directory that now EXISTS — so the creation alone is not the question to ask.
-//
-// ⚠ **ONE SLOT PER PROGRAM AND ENTRY POINT.** A slot sweeps every build but its newest
-// (`discardSupersededBuilds`), so two targets or two tasks of one driver file sharing one slot would
-// evict each other on every use.
+// What matters is that the slot is there afterwards, not that this run made it: a run losing the
+// mkdir to a simultaneous one sees `Directory.create` answer false against a directory that now
+// exists.
 function slotDirectory(program FilePath, entryFunction ByteArray, formatsRoot FilePath) returns FilePath throws RunCacheError
-	let identity = manifestLine(program.toString(), fields: [String.from(entryFunction)])
-	let dir = formatsRoot.join(cacheFormatName()).join(hexDigest(sha256(identity.toByteArray())))
+	let dir = slotPathOf(program, entryFunction: entryFunction, formatsRoot: formatsRoot)
 
 	if not Directory.create(dir) and not Directory.isDirectory(dir) 'unusable'
 		throw RunCacheError.unavailable("could not create {dir.toString()}, where this program's build is kept. Set {RunCacheRootVariable} to a writable directory.")
@@ -547,6 +549,30 @@ function slotDirectory(program FilePath, entryFunction ByteArray, formatsRoot Fi
 
 	return dir
 end 'slotDirectory'
+
+// One slot per program and entry point. A slot sweeps every build but its newest
+// (`discardSupersededBuilds`), so two targets or two tasks of one driver file sharing one slot
+// would evict each other on every use.
+function slotPathOf(program FilePath, entryFunction ByteArray, formatsRoot FilePath) returns FilePath
+	let identity = manifestLine(program.toString(), fields: [String.from(entryFunction)])
+
+	return formatsRoot.join(cacheFormatName()).join(hexOfLeadingBytes(sha256(identity.toByteArray()), count: CacheNameDigestBytes))
+end 'slotPathOf'
+
+export enum RunSlotDiscard
+	gone
+	keptInPlace
+end 'RunSlotDiscard'
+
+/// Removes every file in the run slot of `program` and `entryFunction`, builds still being written
+/// included. `keptInPlace` when the slot's directory outlives the removal.
+export function discardRunSlotOf(program FilePath, entryFunction ByteArray) returns RunSlotDiscard
+	let formatsRoot = try runCacheRoot() otherwise return RunSlotDiscard.gone
+	let slot = slotPathOf(program, entryFunction: entryFunction, formatsRoot: formatsRoot)
+	discardSlotBuilds(slot, binarySuffix: executableExtension(detectHostTarget().os), kept: BuildNameArray.create(), pending: PendingBuilds.discarded)
+
+	return RunSlotDiscard.keptInPlace if Directory.isDirectory(slot) else RunSlotDiscard.gone
+end 'discardRunSlotOf'
 
 // A file's build is named after the FILE and a directory's after the DIRECTORY.
 //
@@ -595,7 +621,7 @@ function freshnessKey(program FilePath, isProject bool, target Target, entryFunc
 	let library = try stdlibSources()
 	manifest.append(try digestLines(StdlibFieldLabel, paths: library))
 
-	return hexDigest(sha256(manifest.toByteArray()))
+	return hexOfLeadingBytes(sha256(manifest.toByteArray()), count: CacheNameDigestBytes)
 end 'freshnessKey'
 
 // One manifest line: a label and its fields. Everything the key is computed over comes through here, so no
@@ -662,7 +688,7 @@ function sourceLine(label String, path FilePath) returns String throws RunCacheE
 
 	var fields = ManifestFieldArray.create()
 	fields.push(path.toString())
-	fields.push(hexDigest(sha256(bytes)))
+	fields.push(hexOfLeadingBytes(sha256(bytes), count: CacheNameDigestBytes))
 
 	return manifestLine(label, fields: fields)
 end 'sourceLine'
@@ -695,13 +721,11 @@ function stdlibSources() returns MaxonSourcePathArray throws RunCacheError
 	return walked
 end 'stdlibSources'
 
-// Nothing in the standard library renders bytes as hex, and a key has to be TEXT: it is the build's
-// filename. Only the leading `CacheNameDigestBytes` are spelled — see the budget beside that constant.
-function hexDigest(digest ByteArray) returns String
+export function hexOfLeadingBytes(digest ByteArray, count DigestPrefixBytes) returns String
 	var rendered = ""
 
 	for (iter, one) in digest.withIterator() 'eachByte'
-		if iter.index() >= CacheNameDigestBytes 'enoughToName'
+		if iter.index() >= (count as ElementIndex) 'enoughToName'
 			break
 		end 'enoughToName'
 
@@ -709,4 +733,6 @@ function hexDigest(digest ByteArray) returns String
 	end 'eachByte'
 
 	return rendered
-end 'hexDigest'
+end 'hexOfLeadingBytes'
+
+export typealias DigestPrefixBytes = int(1 to 32)

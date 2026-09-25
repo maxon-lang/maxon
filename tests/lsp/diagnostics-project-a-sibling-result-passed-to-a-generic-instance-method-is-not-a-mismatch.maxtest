@@ -1,0 +1,17 @@
+let ProjectSiblingGenericDirName = "diagnostics-project-sibling-result-passed-to-a-generic-instance-method"
+let ProjectSiblingGenericHelperFileName = "leaves.maxon"
+let ProjectSiblingGenericBufferFileName = "main.maxon"
+let ProjectSiblingGenericHelperSource = "module function siblingLeaf() returns Leaf\n\treturn Leaf.create(3)\nend 'siblingLeaf'\n"
+let ProjectSiblingGenericBufferSource = "module typealias Weight = int(0 to 100)\n\nmodule type Leaf\n\texport var weight as Weight\n\n\tmodule static function create(weight Weight) returns Leaf\n\t\treturn Leaf\{weight: weight\}\n\tend 'create'\nend 'Leaf'\n\ntype Holder uses T\n\tvar held as T\n\n\tstatic function create(first T) returns Holder\n\t\treturn Holder\{held: first\}\n\tend 'create'\n\n\tfunction put(next T) returns Holder\n\t\treturn Holder.create(next)\n\tend 'put'\nend 'Holder'\n\ntypealias LeafHolder = Holder with Leaf\n\nfunction main() returns ExitCode\n\tvar box = LeafHolder.create(Leaf.create(1))\n\tbox.put(siblingLeaf())\n\n\treturn 0\nend 'main'\n"
+
+test 'a sibling function result passed to a generic instance method is not an argument mismatch'
+	let root = stagedProjectDiagnosticsRoot(ProjectSiblingGenericDirName)
+	writeCorpusFile(root, fileName: ProjectSiblingGenericHelperFileName, content: ProjectSiblingGenericHelperSource)
+	writeCorpusFile(root, fileName: ProjectSiblingGenericBufferFileName, content: ProjectSiblingGenericBufferSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: ProjectSiblingGenericBufferFileName, content: ProjectSiblingGenericBufferSource)
+
+	discardOutsideCheckoutDir(root)
+
+	expectNoProjectDiagnostics(probe, note: "`siblingLeaf` is a `module function` the sibling file declares, returning the `Leaf` a `LeafHolder`'s `put` takes as its `T`, and a `maxon build` of the staged project exits 0. The buffer compiled alone cannot type the sibling's result, so the substituted type-parameter check compares `Leaf` against a value of no known type — and that argument mismatch is a consequence of the undefined-function error, which the corpus explains.")
+end 'a sibling function result passed to a generic instance method is not an argument mismatch'

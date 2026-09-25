@@ -1,0 +1,21 @@
+let OutsideTextCaseLabel = "break-at-an-offset-outside-text-is-refused"
+
+let PastEveryFunction = 0xFFFFFFF0
+
+test 'a breakpoint at an offset outside the program text is refused by reason, and the program runs to its exit'
+	let staged = builtFixture(OutsideTextCaseLabel, fixture: SteppingFixtureName)
+	let target = exactOffsetTarget(PastEveryFunction)
+	let commands = debugCommandLine(["{BreakCommand} {target}", RunCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let breakpoints = eventsOfKind(events, kind: BreakpointEventName)
+
+	try Expect.equal(breakpoints.count() as AssertedInt, expected: 1, message: "`{BreakCommand} {target}` printed no `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let refused = eventAt(breakpoints, index: 0)
+	try Expect.equal(textOf(refused, node: refused.root, key: ActionKey), expected: RefusedAction, message: "an offset no function covers holds no instruction to arm. {said}")
+	try Expect.equal(textOf(refused, node: refused.root, key: ReasonKey), expected: OutOfTextReason, message: "the refusal names why. {said}")
+	try Expect.equal(eventsOfKind(events, kind: StopEventName).count() as AssertedInt, expected: 0, message: "nothing was armed, so nothing stops the program. {said}")
+	try Expect.equal(eventsOfKind(events, kind: ExitEventName).count() as AssertedInt, expected: 1, message: "the program runs to its exit. {said}")
+end 'a breakpoint at an offset outside the program text is refused by reason, and the program runs to its exit'

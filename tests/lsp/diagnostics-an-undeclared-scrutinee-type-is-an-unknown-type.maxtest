@@ -1,0 +1,17 @@
+let UndeclaredScrutineeDirName = "maxon-tests-lsp-diagnostics-undeclared-scrutinee"
+let UndeclaredScrutineeBufferFileName = "main.maxon"
+let UndeclaredScrutineeBufferSource = "typealias Tally = int(0 to 9)\n\nfunction corners(shape MissingShape) returns Tally\n\treturn match shape 'shape'\n\t\tround gives 0\n\t\tsquare gives 4\n\tend 'shape'\nend 'corners'\n\nfunction main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let UndeclaredScrutineeCode = "E3011"
+let UndeclaredScrutineeMessage = "Unknown type 'MissingShape'"
+
+test 'a match over a value of an undeclared type publishes the unknown type'
+	let root = stagedProjectDiagnosticsRoot(UndeclaredScrutineeDirName)
+	writeCorpusFile(root, fileName: UndeclaredScrutineeBufferFileName, content: UndeclaredScrutineeBufferSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: UndeclaredScrutineeBufferFileName, content: UndeclaredScrutineeBufferSource)
+
+	let reported = try onlyProjectDiagnostic(probe, note: "`corners` takes a `MissingShape`, which nothing in the project declares, and matches it against case names. A `maxon build` of this project refuses the type the parameter names.")
+
+	try Expect.equal(reported.code, expected: UndeclaredScrutineeCode, message: "the refusal is the unknown type; the server published {reported.code}: {reported.message}")
+	try Expect.equal(reported.message, expected: UndeclaredScrutineeMessage, message: "the refusal must name the undeclared type")
+end 'a match over a value of an undeclared type publishes the unknown type'

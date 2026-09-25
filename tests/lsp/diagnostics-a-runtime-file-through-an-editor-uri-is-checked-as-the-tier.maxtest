@@ -1,0 +1,13 @@
+let EditorUriRuntimeDirName = "runtime"
+let EditorUriRuntimeFileName = "DebugAgent.maxon"
+
+test 'a runtime tier file opened through an editor uri publishes no diagnostics'
+	let tier = try FilePath.from(EditorUriRuntimeDirName) otherwise panic("runtime tier: '{EditorUriRuntimeDirName}' is not a spellable path")
+	let root = tier.resolve(Directory.currentPath())
+	let file = root.join(EditorUriRuntimeFileName)
+	let content = try File.readText(file) otherwise panic("runtime tier: could not read {file.toString()}")
+
+	let probe = probeProjectDiagnosticsThroughEditorUris(root, fileName: EditorUriRuntimeFileName, content: content)
+
+	try expectNoProjectDiagnostics(probe, note: "`{EditorUriRuntimeDirName}/{EditorUriRuntimeFileName}` opened through `{editorUriOf(file)}` — a lowercase drive letter and a percent-encoded colon, which is how VS Code spells every Windows uri — names the same file the library loader registered, and a buffer holding exactly its bytes has nothing wrong with it.")
+end 'a runtime tier file opened through an editor uri publishes no diagnostics'

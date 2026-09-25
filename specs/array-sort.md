@@ -1171,3 +1171,167 @@ end 'main'
 sorted
 ```
 
+<!-- test: driftsort-compare-count-grows-as-n-log-n -->
+The stable sort does `O(n log n)` comparisons. 65,536 pseudo-random keys are sorted through a comparator
+that counts its calls, and the count must stay within 32 per element — twice `log2(65536)`. A merge
+policy that folds every new run into the run beside it, or a node power that reads as zero, costs
+`O(n^1.5)` here: more than 150 per element.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type CompareTally
+	export var calls as Integer
+
+	static function create() returns CompareTally
+		return Self{calls: 0}
+	end 'create'
+end 'CompareTally'
+
+function counted(x Integer, y Integer, tally CompareTally) returns Ordering
+	tally.calls = tally.calls + 1
+	return x.compare(y)
+end 'counted'
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	var r = 2463534242
+
+	for i in 0 upto 65536 'fill'
+		r = (r * 1103515245 + 12345) and 0x7FFFFFFF
+		a.push(r and 0xFFFFF)
+	end 'fill'
+
+	let tally = CompareTally.create()
+	a.sort(function(x Integer, y Integer) gives counted(x, y: y, tally: tally))
+
+	var ordered = true
+
+	for i in 1 upto a.count() 'walk'
+		let p = try a.get(i - 1) otherwise return 99
+		let v = try a.get(i) otherwise return 99
+
+		if p > v 'outOfOrder'
+			ordered = false
+		end 'outOfOrder'
+	end 'walk'
+
+	if ordered and tally.calls <= 32 * a.count() 'withinTheBound'
+		print("sorted within n log n\n")
+	end 'withinTheBound' else 'overTheBound'
+		print("ordered={ordered} compares={tally.calls}\n")
+	end 'overTheBound'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+sorted within n log n
+```
+
+<!-- test: driftsort-survives-a-quicksort-adversary -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+let Items = 65536
+let ComparesPerItemBound = 64
+let RunBreakerStride = 8
+
+type Adversary
+	export var values as IntArray
+	export var solid as Integer
+	export var candidate as Integer
+	export var gas as Integer
+	export var calls as Integer
+
+	static function create(items Integer) returns Adversary
+		var values = IntArray.create()
+		var solid = 0
+
+		for i in 0 upto items 'fill'
+			if i mod RunBreakerStride == RunBreakerStride - 1 'breaksARun'
+				values.push(solid)
+				solid = solid + 1
+			end 'breaksARun' else 'undecided'
+				values.push(items)
+			end 'undecided'
+		end 'fill'
+
+		return Self{values: values, solid: solid, candidate: 0, gas: items, calls: 0}
+	end 'create'
+
+	function valueOf(item Integer) returns Integer
+		return try self.values.get(item) otherwise panic("Adversary.valueOf: every item the sort holds is one this adversary numbered")
+	end 'valueOf'
+
+	function freeze(item Integer)
+		try self.values.set(item, value: self.solid) otherwise panic("Adversary.freeze: every item the sort holds is one this adversary numbered")
+		self.solid = self.solid + 1
+	end 'freeze'
+
+	function compare(x Integer, y Integer) returns Ordering
+		self.calls = self.calls + 1
+
+		if self.valueOf(x) == self.gas and self.valueOf(y) == self.gas 'bothUndecided'
+			if x == self.candidate 'freezeTheCandidate'
+				self.freeze(x)
+			end 'freezeTheCandidate' else 'freezeTheOther'
+				self.freeze(y)
+			end 'freezeTheOther'
+		end 'bothUndecided'
+
+		if self.valueOf(x) == self.gas 'xUndecided'
+			self.candidate = x
+		end 'xUndecided' else if self.valueOf(y) == self.gas 'yUndecided'
+			self.candidate = y
+		end 'yUndecided'
+
+		return self.valueOf(x).compare(self.valueOf(y))
+	end 'compare'
+end 'Adversary'
+
+function adversarial(x Integer, y Integer, adversary Adversary) returns Ordering
+	return adversary.compare(x, y: y)
+end 'adversarial'
+
+function main() returns ExitCode
+	var items = IntArray.create()
+
+	for i in 0 upto Items 'fill'
+		items.push(i)
+	end 'fill'
+
+	let adversary = Adversary.create(Items)
+	items.sort(function(x Integer, y Integer) gives adversarial(x, y: y, adversary: adversary))
+
+	var ordered = true
+
+	for i in 1 upto items.count() 'walk'
+		let before = try items.get(i - 1) otherwise return 99
+		let after = try items.get(i) otherwise return 99
+
+		if adversary.valueOf(before) > adversary.valueOf(after) 'outOfOrder'
+			ordered = false
+		end 'outOfOrder'
+	end 'walk'
+
+	if ordered and adversary.calls <= ComparesPerItemBound * Items 'withinTheBound'
+		print("sorted within the bound\n")
+	end 'withinTheBound' else 'overTheBound'
+		print("ordered={ordered} compares={adversary.calls} perItem={adversary.calls / Items}\n")
+	end 'overTheBound'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+sorted within the bound
+```
+

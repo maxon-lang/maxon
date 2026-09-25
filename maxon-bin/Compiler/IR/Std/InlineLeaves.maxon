@@ -269,36 +269,29 @@ function inlineOpRole(op StdOp, meta StdOpMetaMemo) returns InlineOpRole
 			unaryOp or
 			cmp or
 			binOpImm or
-			cmpImm then break 'kind'
-		div or
-			mod then return InlineOpRole.framed
-		condBranch or
+			cmpImm or
+			condBranch or
 			branch or
-			ret then break 'kind'
-		param then return InlineOpRole.parameter
-		call then return InlineOpRole.calling
-		retVoid or
+			ret or
+			retVoid or
 			globalAddr or
 			loadIndirect or
 			storeIndirect or
 			osAllocPages or
 			osWriteStdout or
-			rdataAddr then break 'kind'
-		tryCall then return InlineOpRole.calling
-		errorReturn or
+			rdataAddr or
+			errorReturn or
 			osExit or
-			funcAddr then break 'kind'
-		callIndirect then return InlineOpRole.calling
-		osPanic then return InlineOpRole.framed
-		osReadClock or
+			funcAddr or
+			osReadClock or
 			osProcessSpawn or
 			osProcessExitCode or
 			osCloseHandle or
 			osWaitHandle or
+			osWaitChild or
 			osFreePages or
-			switch then break 'kind'
-		witnessCall then return InlineOpRole.calling
-		osPipeCreate or
+			switch or
+			osPipeCreate or
 			osEventCreate or
 			osThreadCreate or
 			osLockInit or
@@ -311,9 +304,8 @@ function inlineOpRole(op StdOp, meta StdOpMetaMemo) returns InlineOpRole
 			osGetPid or
 			osPipeCreateOutbound or
 			osWriteFile or
-			osReadWallClock then break 'kind'
-		witnessTryCall then return InlineOpRole.calling
-		osFileOpenRead or
+			osReadWallClock or
+			osFileOpenRead or
 			osFileClose or
 			osReadFile or
 			osFileOpenWrite or
@@ -326,14 +318,8 @@ function inlineOpRole(op StdOp, meta StdOpMetaMemo) returns InlineOpRole
 			osDirCreate or
 			osDirRemove or
 			osDirCurrentPath or
-			osFileAttributes then break 'kind'
-		osPanicValue then return InlineOpRole.framed
-
-		// The allocator's page/fill/atomic band and the scheduler's thread/TLS band are placed
-		// here consciously: none is a call site, a terminator or a `param`, so each one's own
-		// `isUnsupportedInInlineBody` answers below — a fill, the two atomics and the TLS slot read are body
-		// ops a body may hold, the import calls refuse.
-		osCommandLine or
+			osFileAttributes or
+			osCommandLine or
 			osStdHandle or
 			osExecutablePath or
 			osWriteStderr or
@@ -367,14 +353,15 @@ function inlineOpRole(op StdOp, meta StdOpMetaMemo) returns InlineOpRole
 			tlsSetValue or
 			tlsSlotLoad or
 			osSetEvent or
-			osEnterBackgroundPriority then break 'kind'
-		osFileOpenWriteExecutable then break 'kind'
-		osEnvBlock or
-			osEnvBlockFree then break 'kind'
-		loadAcquire or
-			storeRelease then break 'kind'
-		osHandleFileType then break 'kind'
-		osCreateNamedSegment or
+			osEnterBackgroundPriority or
+			osFileOpenWriteExecutable or
+			osEnvBlock or
+			osEnvBlockFree or
+			loadAcquire or
+			storeRelease or
+			osHandleFileType or
+			osProcessProbe or
+			osCreateNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
@@ -382,8 +369,18 @@ function inlineOpRole(op StdOp, meta StdOpMetaMemo) returns InlineOpRole
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe then break 'kind'
-		osDebugHost then break 'kind'
+			osSocketServe or
+			osDebugHost then break 'kind'
+		div or
+			mod or
+			osPanic or
+			osPanicValue then return InlineOpRole.framed
+		param then return InlineOpRole.parameter
+		call or
+			tryCall or
+			callIndirect or
+			witnessCall or
+			witnessTryCall then return InlineOpRole.calling
 	end 'kind'
 
 	return InlineOpRole.refusing if meta.isUnsupportedInInlineBody(op) else meta.bodyRole(op)
@@ -1001,12 +998,7 @@ type SpliceBlocks
 	// nested site's parent is already mapped when it is reached.
 	function mapCalleeSites(calleeFunc IrFunction, caller IrFunction)
 		for site in calleeFunc.inlineSites 'eachSite'
-			let parent = match site.parent 'p'
-				none gives self.spliceSite
-				site(index) gives self.mappedSite(index)
-			end 'p'
-
-			self.siteSubst.push(caller.recordInlineSite(site.calleeName, parent: parent))
+			self.siteSubst.push(caller.recordInlineSite(site.reparented(self.siteOf(site.parent))))
 		end 'eachSite'
 	end 'mapCalleeSites'
 
@@ -3044,9 +3036,8 @@ type SiteSplicer
 					condBranch or
 					branch or
 					ret or
-					param then break 'kind'
-				call(_, callee, _) then self.considerSite(pos, callee: callee)
-				retVoid or
+					param or
+					retVoid or
 					globalAddr or
 					loadIndirect or
 					storeIndirect or
@@ -3064,6 +3055,7 @@ type SiteSplicer
 					osProcessExitCode or
 					osCloseHandle or
 					osWaitHandle or
+					osWaitChild or
 					osFreePages or
 					switch or
 					witnessCall or
@@ -3131,14 +3123,15 @@ type SiteSplicer
 					tlsSetValue or
 					tlsSlotLoad or
 					osSetEvent or
-					osEnterBackgroundPriority then break 'kind'
-				osFileOpenWriteExecutable then break 'kind'
-				osEnvBlock or
-					osEnvBlockFree then break 'kind'
-				loadAcquire or
-					storeRelease then break 'kind'
-				osHandleFileType then break 'kind'
-				osCreateNamedSegment or
+					osEnterBackgroundPriority or
+					osFileOpenWriteExecutable or
+					osEnvBlock or
+					osEnvBlockFree or
+					loadAcquire or
+					storeRelease or
+					osHandleFileType or
+					osProcessProbe or
+					osCreateNamedSegment or
 					osUnmapNamedSegment or
 					osUnpublishNamedSegment or
 					covPoint or
@@ -3146,8 +3139,9 @@ type SiteSplicer
 					osNetpoll or
 					osPathQuery or
 					osSocketOverlapped or
-					osSocketServe then break 'kind'
-				osDebugHost then break 'kind'
+					osSocketServe or
+					osDebugHost then break 'kind'
+				call(_, callee, _) then self.considerSite(pos, callee: callee)
 			end 'kind'
 		end 'eachOp'
 
@@ -3252,9 +3246,8 @@ type SiteSplicer
 				condBranch or
 				branch or
 				ret or
-				param then self.refuseNotTheSplitCall()
-			call(resultId, callee, args) then self.splice(predRef, contRef: contRef, calleeIndex: calleeIndex, callee: callee, args: args, resultId: resultId, siteSpan: siteSpan)
-			retVoid or
+				param or
+				retVoid or
 				globalAddr or
 				loadIndirect or
 				storeIndirect or
@@ -3272,6 +3265,7 @@ type SiteSplicer
 				osProcessExitCode or
 				osCloseHandle or
 				osWaitHandle or
+				osWaitChild or
 				osFreePages or
 				switch or
 				witnessCall or
@@ -3339,14 +3333,15 @@ type SiteSplicer
 				tlsSetValue or
 				tlsSlotLoad or
 				osSetEvent or
-				osEnterBackgroundPriority then self.refuseNotTheSplitCall()
-			osFileOpenWriteExecutable then self.refuseNotTheSplitCall()
-			osEnvBlock or
-				osEnvBlockFree then self.refuseNotTheSplitCall()
-			loadAcquire or
-				storeRelease then self.refuseNotTheSplitCall()
-			osHandleFileType then self.refuseNotTheSplitCall()
-			osCreateNamedSegment or
+				osEnterBackgroundPriority or
+				osFileOpenWriteExecutable or
+				osEnvBlock or
+				osEnvBlockFree or
+				loadAcquire or
+				storeRelease or
+				osHandleFileType or
+				osProcessProbe or
+				osCreateNamedSegment or
 				osUnmapNamedSegment or
 				osUnpublishNamedSegment or
 				covPoint or
@@ -3354,8 +3349,9 @@ type SiteSplicer
 				osNetpoll or
 				osPathQuery or
 				osSocketOverlapped or
-				osSocketServe then self.refuseNotTheSplitCall()
-			osDebugHost then self.refuseNotTheSplitCall()
+				osSocketServe or
+				osDebugHost then self.refuseNotTheSplitCall()
+			call(resultId, callee, args) then self.splice(predRef, contRef: contRef, calleeIndex: calleeIndex, callee: callee, args: args, resultId: resultId, siteSpan: siteSpan)
 		end 'site'
 
 		var pred = self.blockAt(predRef)
@@ -3387,10 +3383,15 @@ type SiteSplicer
 
 		// The splice's site nests under whatever site the call's own block carries — the caller's text, or a
 		// body an earlier splice copied in.
-		let spliceSite = self.func.recordInlineSite(callee, parent: self.blockAt(predRef).inlineSite)
+		let spliceSite = self.func.recordInlineSite(InlineSite.create(callee, parent: self.blockAt(predRef).inlineSite, callSpan: siteSpan, calleeSourceFile: calleeFunc.sourceFilePath))
 		let blocks = self.mintCopiedBlocks(calleeFunc, guards: self.declinedGuards(calleeFunc, args: args), spliceSite: spliceSite)
 		self.attachContinuationArg(contRef, calleeFunc: calleeFunc, resultId: resultId)
 		self.copyBodies(calleeFunc, contRef: contRef, blocks: blocks, subst: subst)
+
+		for local in calleeFunc.debugLocals 'eachCalleeBinding'
+			self.func.recordSplicedLocal(local.splicedCopy(subst, site: blocks.siteOf(local.inlineSite)))
+		end 'eachCalleeBinding'
+
 		self.project.valueOrigins.copyRows(self.origins, fromFunc: calleeIndex, toFunc: self.funcIndex, subst: subst, calleeParamCount: calleeFunc.paramCount)
 
 		// The head's own exit was moved onto the continuation by the split, so it is un-terminated here
@@ -3403,19 +3404,17 @@ type SiteSplicer
 		self.module.setTerminator(self.blockAt(predRef), op: StdOp.branch(blocks.targetOf(self.calleeEntryBlockId(calleeFunc))))
 	end 'splice'
 
-	// ⭐ **THE DENSE VALUE COLUMN, TOTAL OVER THE CALLEE'S WHOLE ID SPACE — parameters to the site's
-	// arguments, everything else to a fresh caller id.**
+	// The dense value column, total over the callee's id space up to the bound its admission measured:
+	// parameters map to the site's arguments, everything else to a fresh caller id. A debug binding's
+	// value past that bound is dropped (`DebugLocalDecl.splicedCopy`). Minting for every non-parameter
+	// index rather than only the values some op defines is what lets `cloneStdOp` look every value up
+	// strictly, so a column built against the wrong function is a panic instead of a silently wrong
+	// operand. The price is a few ids per splice for values in a declined cascade or gaps an earlier
+	// pass's orphaned op left in the numbering.
 	//
-	// ⭐⭐ **IT MINTS FOR EVERY NON-PARAMETER INDEX, NOT ONLY FOR THE VALUES SOME OP DEFINES, AND THAT IS
-	// WHAT MAKES IT TOTAL RATHER THAN NEARLY TOTAL.** There is no unbound id to read, so
-	// `cloneStdOp` can look every value up STRICTLY and a column built against the wrong function
-	// is a panic instead of a silently wrong operand. The price is the handful of ids that go to values
-	// in a declined cascade, or to a gap an earlier pass's orphaned op left in the numbering — a couple
-	// per splice, against a caller value space the register allocator sizes its columns by.
-	//
-	// ⚠ Parameters occupy `0..paramCount-1` BY CONVENTION (`IrValueId.maxon`, `emitParams`), which is why
-	// this is a range rather than a scan for `param` ops. `copyBlockOps` CHECKS each `param` op against
-	// it as it skips the op, so the convention is verified where it is spent rather than assumed here.
+	// Parameters occupy `0..paramCount-1` by convention (`IrValueId.maxon`, `emitParams`), which is
+	// why this is a range rather than a scan for `param` ops; `copyBlockOps` checks each `param` op
+	// against it as it skips the op.
 	function buildValueColumn(calleeFunc IrFunction, calleeIndex FuncIndex, args ValueIdArray) returns ValueIdArray
 		let bound = self.valueBoundOf(calleeIndex)
 
@@ -3757,14 +3756,10 @@ type SiteSplicer
 				binOpImm or
 				cmpImm or
 				div or
-				mod then refuseNotATerminator(calleeFunc)
-			condBranch or
-				branch then self.cloneExit(calleeBlock, freshRef: freshRef, term: term, subst: subst, blocks: blocks)
-			ret(retValId) then self.returnToContinuation(freshRef, contRef: contRef, argIds: self.returnedValues(calleeFunc, valueId: clonedValue(retValId, subst: subst)))
-			param or
-				call then refuseNotATerminator(calleeFunc)
-			retVoid then self.returnToContinuation(freshRef, contRef: contRef, argIds: ValueIdArray.create())
-			globalAddr or
+				mod or
+				param or
+				call or
+				globalAddr or
 				loadIndirect or
 				storeIndirect or
 				osAllocPages or
@@ -3781,9 +3776,9 @@ type SiteSplicer
 				osProcessExitCode or
 				osCloseHandle or
 				osWaitHandle or
-				osFreePages then refuseNotATerminator(calleeFunc)
-			switch then self.cloneExit(calleeBlock, freshRef: freshRef, term: term, subst: subst, blocks: blocks)
-			witnessCall or
+				osWaitChild or
+				osFreePages or
+				witnessCall or
 				osPipeCreate or
 				osEventCreate or
 				osThreadCreate or
@@ -3848,14 +3843,15 @@ type SiteSplicer
 				tlsSetValue or
 				tlsSlotLoad or
 				osSetEvent or
-				osEnterBackgroundPriority then refuseNotATerminator(calleeFunc)
-			osFileOpenWriteExecutable then refuseNotATerminator(calleeFunc)
-			osEnvBlock or
-				osEnvBlockFree then refuseNotATerminator(calleeFunc)
-			loadAcquire or
-				storeRelease then refuseNotATerminator(calleeFunc)
-			osHandleFileType then refuseNotATerminator(calleeFunc)
-			osCreateNamedSegment or
+				osEnterBackgroundPriority or
+				osFileOpenWriteExecutable or
+				osEnvBlock or
+				osEnvBlockFree or
+				loadAcquire or
+				storeRelease or
+				osHandleFileType or
+				osProcessProbe or
+				osCreateNamedSegment or
 				osUnmapNamedSegment or
 				osUnpublishNamedSegment or
 				covPoint or
@@ -3863,8 +3859,13 @@ type SiteSplicer
 				osNetpoll or
 				osPathQuery or
 				osSocketOverlapped or
-				osSocketServe then refuseNotATerminator(calleeFunc)
-			osDebugHost then refuseNotATerminator(calleeFunc)
+				osSocketServe or
+				osDebugHost then refuseNotATerminator(calleeFunc)
+			condBranch or
+				branch or
+				switch then self.cloneExit(calleeBlock, freshRef: freshRef, term: term, subst: subst, blocks: blocks)
+			ret(retValId) then self.returnToContinuation(freshRef, contRef: contRef, argIds: self.returnedValues(calleeFunc, valueId: clonedValue(retValId, subst: subst)))
+			retVoid then self.returnToContinuation(freshRef, contRef: contRef, argIds: ValueIdArray.create())
 		end 'exit'
 	end 'copyBlockExit'
 
@@ -3984,9 +3985,8 @@ function assertParamOpMatchesConvention(op StdOp, calleeFunc IrFunction)
 			mod or
 			condBranch or
 			branch or
-			ret then refuseNotAParamOp()
-		param(resultId, index, _) then requireParamValueIsItsIndex(resultId, index: index, calleeFunc: calleeFunc)
-		call or
+			ret or
+			call or
 			retVoid or
 			globalAddr or
 			loadIndirect or
@@ -4005,6 +4005,7 @@ function assertParamOpMatchesConvention(op StdOp, calleeFunc IrFunction)
 			osProcessExitCode or
 			osCloseHandle or
 			osWaitHandle or
+			osWaitChild or
 			osFreePages or
 			switch or
 			witnessCall or
@@ -4072,14 +4073,15 @@ function assertParamOpMatchesConvention(op StdOp, calleeFunc IrFunction)
 			tlsSetValue or
 			tlsSlotLoad or
 			osSetEvent or
-			osEnterBackgroundPriority then refuseNotAParamOp()
-		osFileOpenWriteExecutable then refuseNotAParamOp()
-		osEnvBlock or
-			osEnvBlockFree then refuseNotAParamOp()
-		loadAcquire or
-			storeRelease then refuseNotAParamOp()
-		osHandleFileType then refuseNotAParamOp()
-		osCreateNamedSegment or
+			osEnterBackgroundPriority or
+			osFileOpenWriteExecutable or
+			osEnvBlock or
+			osEnvBlockFree or
+			loadAcquire or
+			storeRelease or
+			osHandleFileType or
+			osProcessProbe or
+			osCreateNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
@@ -4087,8 +4089,9 @@ function assertParamOpMatchesConvention(op StdOp, calleeFunc IrFunction)
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe then refuseNotAParamOp()
-		osDebugHost then refuseNotAParamOp()
+			osSocketServe or
+			osDebugHost then refuseNotAParamOp()
+		param(resultId, index, _) then requireParamValueIsItsIndex(resultId, index: index, calleeFunc: calleeFunc)
 	end 'p'
 end 'assertParamOpMatchesConvention'
 

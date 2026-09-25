@@ -1,0 +1,470 @@
+export typealias DebugBreakpointAnswerArray = Array with DebugBreakpointAnswer
+export typealias DebugValueTreeArray = Array with DebugValueTree
+export typealias DapMovementArray = Array with DapMovement
+
+export let DapMainThreadId = 1 as DapNumber
+let DapGreenThreadIdOffset = 1 as DapNumber
+let LowestGreenThreadId = 1 as DapNumber
+let HighestGreenThreadId = u32.max as DapNumber
+let DapMainThreadName = "main"
+
+let DapBreakpointReason = "breakpoint"
+let DapStepReason = "step"
+let DapPauseReason = "pause"
+export let DapEntryReason = "entry"
+let DapExceptionReason = "exception"
+
+let ReasonKey = "reason"
+let DescriptionKey = "description"
+let TextKey = "text"
+let FaultDescriptionPrefix = "Paused on a fault: "
+let ThreadIdKey = "threadId"
+let AllThreadsStoppedKey = "allThreadsStopped"
+let AllThreadsContinuedKey = "allThreadsContinued"
+let ExitCodeKey = "exitCode"
+let CategoryKey = "category"
+let OutputKey = "output"
+let BreakpointsKey = "breakpoints"
+let VerifiedKey = "verified"
+let LineKey = "line"
+let ColumnKey = "column"
+let MessageKey = "message"
+let SourceKey = "source"
+let NameKey = "name"
+let PathKey = "path"
+let StackFramesKey = "stackFrames"
+let TotalFramesKey = "totalFrames"
+let IdKey = "id"
+let PresentationHintKey = "presentationHint"
+let ScopesKey = "scopes"
+let VariablesReferenceKey = "variablesReference"
+let ExpensiveKey = "expensive"
+let VariablesKey = "variables"
+let ValueKey = "value"
+let TypeKey = "type"
+let ThreadsKey = "threads"
+let ResultKey = "result"
+
+let SubtleFrameHint = "subtle"
+let LocalsScopeName = "Locals"
+export let NoChildren = 0 as DapNumber
+let UnavailableWordSeparator = "-"
+let LineBreak = "\n"
+
+let StdoutCategory = "stdout"
+let StderrCategory = "stderr"
+export let ConsoleCategory = "console"
+
+export union DapMovement
+	stopped(stop DebugStop)
+	ended(code DapNumber)
+	running
+end 'DapMovement'
+
+export union DapFrameListing
+	none
+	walked(frames DebugFrameArray)
+	missing(reason String)
+end 'DapFrameListing'
+
+export union DapRosterAnswer
+	none
+	listed(roster DebugThreadRoster)
+end 'DapRosterAnswer'
+
+export union DapRequestedLine
+	none
+	at(line DapNumber)
+end 'DapRequestedLine'
+
+export type DapAnswers
+	export var movements as DapMovementArray
+	export var failures as StringArray
+	export var breakpoints as DebugBreakpointAnswerArray
+	export var frames as DapFrameListing
+	export var roster as DapRosterAnswer
+	export var trees as DebugValueTreeArray
+	export var text as StringArray
+
+	export static function of(replies DebugReplyArray) returns DapAnswers
+		var answers = Self{movements: DapMovementArray.create(), failures: StringArray.create(), breakpoints: DebugBreakpointAnswerArray.create(), frames: DapFrameListing.none, roster: DapRosterAnswer.none, trees: DebugValueTreeArray.create(), text: StringArray.create()}
+
+		for reply in replies 'eachReply'
+			answers.note(reply)
+		end 'eachReply'
+
+		return answers
+	end 'of'
+
+	function note(reply DebugReply)
+		for line in debugTextLinesFor(reply) 'eachLine'
+			self.text.push(line)
+		end 'eachLine'
+
+		match reply 'which'
+			stopped(stop) then self.movements.push(DapMovement.stopped(stop))
+			exited(code) then self.movements.push(DapMovement.ended(code as DapNumber))
+			crashed(status) then self.movements.push(DapMovement.ended(status as DapNumber))
+			running or
+				timedOut then self.movements.push(DapMovement.running)
+			breakpoint(answer) then self.breakpoints.push(answer)
+			walked(walkedFrames) then self.frames = DapFrameListing.walked(walkedFrames)
+			threadWalked(walk) then self.frames = walkedThread(walk)
+			threads(listed) then self.roster = DapRosterAnswer.listed(listed)
+			locals(_, values) then self.trees.push(values)
+			value(tree) then self.trees.push(tree)
+			failed then self.failures.push(joinedWith(debugTextLinesFor(reply), separator: LineBreak))
+			quit or
+				spoken or
+				threadOutcome or
+				traced then break 'which'
+		end 'which'
+	end 'note'
+
+	export function transcript() returns String
+		return joinedWith(self.text, separator: LineBreak)
+	end 'transcript'
+end 'DapAnswers'
+
+function walkedThread(walk DebugThreadWalk) returns DapFrameListing
+	if not walk.unavailable.isEmpty() 'notWalkable'
+		return DapFrameListing.missing(walk.unavailable)
+	end 'notWalkable'
+
+	return DapFrameListing.walked(walk.frames)
+end 'walkedThread'
+
+export function dapCapabilitiesBody(doc JsonDoc) returns JsonNodeId
+	var body = JsonObjectBuilder.create()
+	body.addBool(doc, key: "supportsConfigurationDoneRequest", value: true)
+	body.addBool(doc, key: "supportsConditionalBreakpoints", value: true)
+	body.addBool(doc, key: "supportsFunctionBreakpoints", value: true)
+	body.addBool(doc, key: "supportsEvaluateForHovers", value: true)
+	body.addBool(doc, key: "supportsTerminateRequest", value: true)
+	body.addBool(doc, key: "supportsSteppingGranularity", value: false)
+
+	return body.build(doc)
+end 'dapCapabilitiesBody'
+
+export function dapStopReason(stop DebugStop) returns String
+	if stop.reason == BreakpointStopReasonName 'aBreakpoint'
+		return DapBreakpointReason
+	end 'aBreakpoint'
+
+	if stop.reason == StepStopReasonName 'aStep'
+		return DapStepReason
+	end 'aStep'
+
+	if stop.reason == PauseStopReasonName 'aPause'
+		return DapPauseReason
+	end 'aPause'
+
+	if stop.reason == EntryStopReasonName 'theEntryPark'
+		return DapEntryReason
+	end 'theEntryPark'
+
+	if stop.reason == TrapStopReasonName or stop.reason == FaultStopReasonName 'anException'
+		return DapExceptionReason
+	end 'anException'
+
+	panic("dapStopReason: '{stop.reason}' is none of the stop reasons the conversation reports")
+end 'dapStopReason'
+
+export function dapThreadIdOf(thread DebugThreadRef) returns DapNumber
+	return match thread 'which'
+		none gives DapMainThreadId
+		id(value) gives dapGreenThreadId(value)
+	end 'which'
+end 'dapThreadIdOf'
+
+function dapGreenThreadId(green DebugThreadId) returns DapNumber
+	return (green as DapNumber) + DapGreenThreadIdOffset
+end 'dapGreenThreadId'
+
+export union DapThreadTarget
+	mainThread
+	green(id DebugThreadId)
+	unknown
+end 'DapThreadTarget'
+
+export function dapThreadTargetOf(threadId DapNumber) returns DapThreadTarget
+	if threadId == DapMainThreadId 'theMainThread'
+		return DapThreadTarget.mainThread
+	end 'theMainThread'
+
+	let green = threadId - DapGreenThreadIdOffset
+
+	if green < LowestGreenThreadId or green > HighestGreenThreadId 'noGreenThread'
+		return DapThreadTarget.unknown
+	end 'noGreenThread'
+
+	return DapThreadTarget.green(green as DebugThreadId)
+end 'dapThreadTargetOf'
+
+export function dapStoppedBody(doc JsonDoc, reason String, threadId DapNumber, fault String) returns JsonNodeId
+	var body = JsonObjectBuilder.create()
+	body.addString(doc, key: ReasonKey, value: reason)
+
+	if not fault.isEmpty() 'aFault'
+		body.addString(doc, key: DescriptionKey, value: "{FaultDescriptionPrefix}{fault}")
+		body.addString(doc, key: TextKey, value: fault)
+	end 'aFault'
+
+	body.addNumber(doc, key: ThreadIdKey, value: threadId as JsonFloat)
+	body.addBool(doc, key: AllThreadsStoppedKey, value: true)
+
+	return body.build(doc)
+end 'dapStoppedBody'
+
+export function dapContinuedBody(doc JsonDoc, threadId DapNumber) returns JsonNodeId
+	var body = JsonObjectBuilder.create()
+	body.addNumber(doc, key: ThreadIdKey, value: threadId as JsonFloat)
+	body.addBool(doc, key: AllThreadsContinuedKey, value: true)
+
+	return body.build(doc)
+end 'dapContinuedBody'
+
+export function dapAllContinuedBody(doc JsonDoc) returns JsonNodeId
+	var body = JsonObjectBuilder.create()
+	body.addBool(doc, key: AllThreadsContinuedKey, value: true)
+
+	return body.build(doc)
+end 'dapAllContinuedBody'
+
+export function dapExitedBody(doc JsonDoc, code DapNumber) returns JsonNodeId
+	var body = JsonObjectBuilder.create()
+	body.addNumber(doc, key: ExitCodeKey, value: code as JsonFloat)
+
+	return body.build(doc)
+end 'dapExitedBody'
+
+export function dapCategoryOf(stream ChildStream) returns String
+	return match stream 'which'
+		stdout gives StdoutCategory
+		stderr gives StderrCategory
+	end 'which'
+end 'dapCategoryOf'
+
+export function dapOutputBody(doc JsonDoc, category String, lines StringArray) returns JsonNodeId
+	var text = ""
+
+	for line in lines 'eachLine'
+		text.append("{line}{LineBreak}")
+	end 'eachLine'
+
+	var body = JsonObjectBuilder.create()
+	body.addString(doc, key: CategoryKey, value: category)
+	body.addString(doc, key: OutputKey, value: text)
+
+	return body.build(doc)
+end 'dapOutputBody'
+
+export function dapBreakpointsBody(doc JsonDoc, nodes JsonNodeIdArray) returns JsonNodeId
+	return listBody(doc, key: BreakpointsKey, nodes: nodes)
+end 'dapBreakpointsBody'
+
+export union DapBreakpointOutcome
+	armed(answer DebugBreakpointAnswer)
+	unverified(message String)
+end 'DapBreakpointOutcome'
+
+export function dapBreakpointOutcome(answers DapAnswers) returns DapBreakpointOutcome
+	for answer in answers.breakpoints 'eachArmed'
+		if answer.action == BreakpointSetAction 'armed'
+			return DapBreakpointOutcome.armed(answer)
+		end 'armed'
+	end 'eachArmed'
+
+	if let refused = try answers.breakpoints.get(0) 'refused'
+		return DapBreakpointOutcome.unverified(joinedWith(debugTextLinesFor(DebugReply.breakpoint(refused)), separator: LineBreak))
+	end 'refused'
+
+	if let failure = try answers.failures.get(0) 'failed'
+		return DapBreakpointOutcome.unverified(failure)
+	end 'failed'
+
+	panic("dapBreakpointOutcome: a `{BreakCommandWord}` answers a breakpoint or an error, and this one answered neither")
+end 'dapBreakpointOutcome'
+
+export function dapArmedBreakpointNode(doc JsonDoc, answer DebugBreakpointAnswer, numbering DapNumbering) returns JsonNodeId
+	var node = JsonObjectBuilder.create()
+	node.addBool(doc, key: VerifiedKey, value: true)
+	node.addNumber(doc, key: LineKey, value: numbering.lineToClient(answer.line) as JsonFloat)
+
+	var source = JsonObjectBuilder.create()
+	source.addString(doc, key: NameKey, value: answer.file)
+	node.addNode(SourceKey, node: source.build(doc))
+
+	return node.build(doc)
+end 'dapArmedBreakpointNode'
+
+export function dapUnverifiedBreakpointNode(doc JsonDoc, message String, requested DapRequestedLine) returns JsonNodeId
+	var node = JsonObjectBuilder.create()
+	node.addBool(doc, key: VerifiedKey, value: false)
+
+	match requested 'asked'
+		none then break 'asked'
+		at(line) then node.addNumber(doc, key: LineKey, value: line as JsonFloat)
+	end 'asked'
+
+	node.addString(doc, key: MessageKey, value: message)
+
+	return node.build(doc)
+end 'dapUnverifiedBreakpointNode'
+
+export function dapStackFrameNode(doc JsonDoc, id DapNumber, frame DebugFrame, numbering DapNumbering) returns JsonNodeId
+	var node = JsonObjectBuilder.create()
+	node.addNumber(doc, key: IdKey, value: id as JsonFloat)
+	node.addString(doc, key: NameKey, value: frame.functionName)
+
+	if not frame.path.isEmpty() 'aSourceFile'
+		var source = JsonObjectBuilder.create()
+		source.addString(doc, key: NameKey, value: frame.file)
+		source.addString(doc, key: PathKey, value: frame.path)
+		node.addNode(SourceKey, node: source.build(doc))
+	end 'aSourceFile'
+
+	node.addNumber(doc, key: LineKey, value: numbering.lineToClient(frame.line) as JsonFloat)
+	node.addNumber(doc, key: ColumnKey, value: numbering.columnToClient(frame.column) as JsonFloat)
+
+	if frame.inlined 'aSplicedBody'
+		node.addString(doc, key: PresentationHintKey, value: SubtleFrameHint)
+	end 'aSplicedBody'
+
+	return node.build(doc)
+end 'dapStackFrameNode'
+
+export function dapStackTraceBody(doc JsonDoc, frames JsonNodeIdArray, total DapNumber) returns JsonNodeId
+	var body = JsonObjectBuilder.create()
+	body.addNode(StackFramesKey, node: doc.add(JsonNode.arrayNode(frames)))
+	body.addNumber(doc, key: TotalFramesKey, value: total as JsonFloat)
+
+	return body.build(doc)
+end 'dapStackTraceBody'
+
+export function dapLocalsScopesBody(doc JsonDoc, reference DapNumber) returns JsonNodeId
+	var scope = JsonObjectBuilder.create()
+	scope.addString(doc, key: NameKey, value: LocalsScopeName)
+	scope.addNumber(doc, key: VariablesReferenceKey, value: reference as JsonFloat)
+	scope.addBool(doc, key: ExpensiveKey, value: false)
+
+	var scopes = JsonNodeIdArray.create()
+	scopes.push(scope.build(doc))
+
+	var body = JsonObjectBuilder.create()
+	body.addNode(ScopesKey, node: doc.add(JsonNode.arrayNode(scopes)))
+
+	return body.build(doc)
+end 'dapLocalsScopesBody'
+
+export function dapVariableNode(doc JsonDoc, value DebugValueNode, reference DapNumber) returns JsonNodeId
+	var node = JsonObjectBuilder.create()
+	node.addString(doc, key: NameKey, value: value.name)
+	node.addString(doc, key: ValueKey, value: dapValueText(value))
+	node.addString(doc, key: TypeKey, value: value.typeName)
+	node.addNumber(doc, key: VariablesReferenceKey, value: reference as JsonFloat)
+
+	return node.build(doc)
+end 'dapVariableNode'
+
+export function dapVariablesBody(doc JsonDoc, nodes JsonNodeIdArray) returns JsonNodeId
+	return listBody(doc, key: VariablesKey, nodes: nodes)
+end 'dapVariablesBody'
+
+export function dapEvaluateBody(doc JsonDoc, result String, reference DapNumber) returns JsonNodeId
+	var body = JsonObjectBuilder.create()
+	body.addString(doc, key: ResultKey, value: result)
+	body.addNumber(doc, key: VariablesReferenceKey, value: reference as JsonFloat)
+
+	return body.build(doc)
+end 'dapEvaluateBody'
+
+export function dapThreadsBody(doc JsonDoc, rows DebugThreadRowArray) returns JsonNodeId
+	var threads = JsonNodeIdArray.create()
+
+	for row in rows 'eachRow'
+		threads.push(threadNode(doc, id: dapGreenThreadId(row.id), name: threadName(row)))
+	end 'eachRow'
+
+	if threads.count() == 0 'noScheduler'
+		threads.push(threadNode(doc, id: DapMainThreadId, name: DapMainThreadName))
+	end 'noScheduler'
+
+	return listBody(doc, key: ThreadsKey, nodes: threads)
+end 'dapThreadsBody'
+
+export function dapNoThreadsBody(doc JsonDoc) returns JsonNodeId
+	return listBody(doc, key: ThreadsKey, nodes: JsonNodeIdArray.create())
+end 'dapNoThreadsBody'
+
+export function dapNoScopesBody(doc JsonDoc) returns JsonNodeId
+	return listBody(doc, key: ScopesKey, nodes: JsonNodeIdArray.create())
+end 'dapNoScopesBody'
+
+function listBody(doc JsonDoc, key String, nodes JsonNodeIdArray) returns JsonNodeId
+	var body = JsonObjectBuilder.create()
+	body.addNode(key, node: doc.add(JsonNode.arrayNode(nodes)))
+
+	return body.build(doc)
+end 'listBody'
+
+export type DapNumbering
+	let linesStartAt1 as bool
+	let columnsStartAt1 as bool
+
+	export static function countingFromOne() returns DapNumbering
+		return Self{linesStartAt1: true, columnsStartAt1: true}
+	end 'countingFromOne'
+
+	export static function askedBy(arguments DapObject) returns DapNumbering throws DapArgumentError
+		return Self{linesStartAt1: try arguments.flagOr(LinesStartAt1Argument, fallback: true), columnsStartAt1: try arguments.flagOr(ColumnsStartAt1Argument, fallback: true)}
+	end 'askedBy'
+
+	export function lineToClient(line DebugLineNumber) returns DapNumber
+		return positionToClient(line as DapNumber, startsAtOne: self.linesStartAt1)
+	end 'lineToClient'
+
+	export function columnToClient(column DebugColumnNumber) returns DapNumber
+		return positionToClient(column as DapNumber, startsAtOne: self.columnsStartAt1)
+	end 'columnToClient'
+
+	export function lineFromClient(line DapNumber) returns DapNumber
+		return line if self.linesStartAt1 else line + ZeroBasedShift
+	end 'lineFromClient'
+end 'DapNumbering'
+
+let LinesStartAt1Argument = "linesStartAt1"
+let ColumnsStartAt1Argument = "columnsStartAt1"
+let ZeroBasedShift = 1 as DapNumber
+let UnknownPosition = 0 as DapNumber
+
+function positionToClient(position DapNumber, startsAtOne bool) returns DapNumber
+	if startsAtOne or position == UnknownPosition 'asCounted'
+		return position
+	end 'asCounted'
+
+	return position - ZeroBasedShift
+end 'positionToClient'
+
+function threadNode(doc JsonDoc, id DapNumber, name String) returns JsonNodeId
+	var node = JsonObjectBuilder.create()
+	node.addNumber(doc, key: IdKey, value: id as JsonFloat)
+	node.addString(doc, key: NameKey, value: name)
+
+	return node.build(doc)
+end 'threadNode'
+
+function threadName(row DebugThreadRow) returns String
+	return match row.functionName 'known'
+		none gives "#{row.id}"
+		named(spelled) gives "{spelled} #{row.id}"
+	end 'known'
+end 'threadName'
+
+export function dapValueText(value DebugValueNode) returns String
+	if value.unavailable.isEmpty() 'aValue'
+		return value.display
+	end 'aValue'
+
+	return "<{value.unavailable.replace(UnavailableWordSeparator, with: " ")}>"
+end 'dapValueText'

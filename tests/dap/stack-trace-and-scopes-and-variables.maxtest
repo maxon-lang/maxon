@@ -1,0 +1,53 @@
+let ValuesCaseLabel = "stack-trace-and-scopes-and-variables"
+let RenderedAnchor = "rendered"
+let RenderFunctionName = "render"
+let LabelLocalName = "label"
+let LabelLocalText = "parcel"
+
+type ValuesSession implements DapSession
+	let executable as FilePath
+	let source as FilePath
+	let anchored as SourceLine
+	export var frameNames as StringArray
+	export var scopeNames as StringArray
+	export var variableNames as StringArray
+	export var labelValue as String
+
+	static function create(executable FilePath, source FilePath, anchored SourceLine) returns ValuesSession
+		return Self{executable: executable, source: source, anchored: anchored, frameNames: StringArray.create(), scopeNames: StringArray.create(), variableNames: StringArray.create(), labelValue: ""}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+		_ = try client.request(LaunchCommand, argumentsJson: dapLaunchArguments(self.executable))
+		_ = try client.awaitEvent(InitializedEvent)
+		_ = try client.request(SetBreakpointsCommand, argumentsJson: dapSetBreakpointsArguments(self.source, line: self.anchored))
+		_ = try client.request(ConfigurationDoneCommand)
+
+		let stopped = try client.awaitEvent(StoppedEvent)
+		let threadId = dapBodyNumber(stopped, key: "threadId")
+
+		let frames = try client.request(StackTraceCommand, argumentsJson: dapThreadArguments(threadId))
+		self.frameNames = dapStackFrameNames(frames)
+
+		let scopes = try client.request(ScopesCommand, argumentsJson: dapScopesArguments(dapTopFrameId(frames)))
+		self.scopeNames = dapScopeNames(scopes)
+
+		let variables = try client.request(VariablesCommand, argumentsJson: dapVariablesArguments(dapScopeReference(scopes, name: LocalsScopeName)))
+		self.variableNames = dapVariableNames(variables)
+		self.labelValue = dapVariableValue(variables, name: LabelLocalName)
+
+		_ = try client.request(DisconnectCommand)
+	end 'drive'
+end 'ValuesSession'
+
+test 'a stop answers its frames, its scopes and the variables of its Locals scope'
+	let staged = dapStagedFixture(ValuesCaseLabel, fixture: ValuesFixtureName)
+	var session = ValuesSession.create(dapBuildFixture(staged), source: dapStagedSource(staged), anchored: dapAnchorLine(staged, anchor: RenderedAnchor))
+	try dapRunSession(session, completing: "complete")
+
+	try Expect.equal(dapFrameNameAt(session.frameNames, frame: 0), expected: RenderFunctionName, message: "frame 0 is the INNERMOST frame and the stop is inside `{RenderFunctionName}`; the frames were {dapRendered(session.frameNames)}")
+	try Expect.isTrue(session.scopeNames.contains(LocalsScopeName), message: "an editor's Variables pane is built from the scopes; without a `{LocalsScopeName}` scope it is empty. The scopes were {dapRendered(session.scopeNames)}")
+	try Expect.isTrue(session.variableNames.contains(LabelLocalName), message: "the `{LocalsScopeName}` scope of `{RenderFunctionName}` must name its local `{LabelLocalName}`; it named {dapRendered(session.variableNames)}")
+	try Expect.contains(session.labelValue, needle: LabelLocalText, message: "`{LabelLocalName}` holds `{LabelLocalText}` at that line. A variables list that names the right locals with the WRONG values is what an off-by-one frame chain produces; it said {session.labelValue}")
+end 'a stop answers its frames, its scopes and the variables of its Locals scope'

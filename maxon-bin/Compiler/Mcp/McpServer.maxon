@@ -1,12 +1,12 @@
-// `maxon mcp-server` — the Model Context Protocol server, spoken over newline-delimited stdio.
+// `maxon mcp-server`: the Model Context Protocol server, over stdio or, with `--http`, loopback
+// HTTP (`McpHttpServer.maxon`).
 //
-// Gives AI-assisted editors structured tools for working on Maxon code. The default mode serves
-// someone WRITING Maxon; `--dev` adds the tools for someone working on the COMPILER, and the
-// `repoRoot` argument that says which checkout those act in.
+// The default mode serves someone writing Maxon; `--dev` adds the tools for someone working on the
+// compiler, and the `repoRoot` argument that says which checkout those act in.
 
 export let McpServerCommandName = "mcp-server"
 
-function handleInitialize(reqDoc JsonDoc, idNode JsonNodeId)
+function handleInitialize(reqDoc JsonDoc, idNode JsonNodeId) returns String
 	var doc = JsonDoc.create()
 
 	var emptyTools = JsonObjectBuilder.create()
@@ -22,26 +22,45 @@ function handleInitialize(reqDoc JsonDoc, idNode JsonNodeId)
 	result.addNode("capabilities", node: caps.build(doc))
 	result.addNode("serverInfo", node: serverInfo.build(doc))
 
-	sendRpcResult(reqDoc, idNode: idNode, resultDoc: doc, resultRoot: result.build(doc))
+	return rpcResultText(reqDoc, idNode: idNode, resultDoc: doc, resultRoot: result.build(doc))
 end 'handleInitialize'
 
-// An argument accepting two types is emitted as `oneOf`, which is what a client needs in order to
-// offer both spellings rather than flagging one as a type error.
+// An argument accepting several JSON types is emitted as `oneOf`, which is what a client needs in
+// order to offer every spelling rather than flagging one as a type error.
 function propertySchema(doc JsonDoc, prop McpProperty) returns JsonNodeId
 	var schema = JsonObjectBuilder.create()
+	let types = prop.jsonTypes()
 
-	if prop.altType.isEmpty() 'oneType'
-		addTypeFields(schema, doc: doc, jsonType: prop.jsonType)
+	if types.count() == 1 'oneType'
+		addTypeFields(schema, doc: doc, jsonType: try types.get(0) otherwise panic("propertySchema: a one-type property has its type"))
 	end 'oneType' else 'eitherType'
 		var alternatives = JsonNodeIdArray.create()
-		alternatives.push(typeSchema(doc, jsonType: prop.jsonType))
-		alternatives.push(typeSchema(doc, jsonType: prop.altType))
+
+		for jsonType in types 'eachType'
+			alternatives.push(typeSchema(doc, jsonType: jsonType))
+		end 'eachType'
+
 		schema.addNode("oneOf", node: doc.add(JsonNode.arrayNode(alternatives)))
 	end 'eitherType'
 
 	schema.addString(doc, key: "description", value: prop.description)
+
+	match prop.kind 'bounds'
+		text or
+			flag or
+			textList or
+			textOrTextList then break 'bounds'
+		wholeNumber(least, most, _) then addNumberBounds(doc, schema: schema, least: least as JsonFloat, most: most as JsonFloat)
+		seconds then addNumberBounds(doc, schema: schema, least: LeastTargetSeconds, most: MaxTargetSeconds)
+	end 'bounds'
+
 	return schema.build(doc)
 end 'propertySchema'
+
+function addNumberBounds(doc JsonDoc, schema JsonObjectBuilder, least JsonFloat, most JsonFloat)
+	schema.addNumber(doc, key: "minimum", value: least)
+	schema.addNumber(doc, key: "maximum", value: most)
+end 'addNumberBounds'
 
 function typeSchema(doc JsonDoc, jsonType String) returns JsonNodeId
 	var schema = JsonObjectBuilder.create()
@@ -53,8 +72,8 @@ end 'typeSchema'
 function addTypeFields(schema JsonObjectBuilder, doc JsonDoc, jsonType String)
 	schema.addString(doc, key: "type", value: jsonType)
 
-	if jsonType.equals(ArrayJsonType) 'needsItems'
-		schema.addNode("items", node: typeSchema(doc, jsonType: StringJsonType))
+	if jsonType.equals(JsonArrayType) 'needsItems'
+		schema.addNode("items", node: typeSchema(doc, jsonType: JsonStringType))
 	end 'needsItems'
 end 'addTypeFields'
 
@@ -77,7 +96,7 @@ function toolDescriptor(doc JsonDoc, spec McpToolSpec, devMode bool) returns Jso
 	end 'each'
 
 	var schema = JsonObjectBuilder.create()
-	schema.addString(doc, key: "type", value: ObjectJsonType)
+	schema.addString(doc, key: "type", value: JsonObjectType)
 	schema.addNode("properties", node: properties.build(doc))
 
 	if anyRequired 'hasRequired'
@@ -92,7 +111,7 @@ function toolDescriptor(doc JsonDoc, spec McpToolSpec, devMode bool) returns Jso
 	return descriptor.build(doc)
 end 'toolDescriptor'
 
-function handleToolsList(reqDoc JsonDoc, idNode JsonNodeId, devMode bool)
+function handleToolsList(reqDoc JsonDoc, idNode JsonNodeId, devMode bool) returns String
 	var doc = JsonDoc.create()
 	var descriptors = JsonNodeIdArray.create()
 
@@ -107,169 +126,205 @@ function handleToolsList(reqDoc JsonDoc, idNode JsonNodeId, devMode bool)
 	var result = JsonObjectBuilder.create()
 	result.addNode("tools", node: doc.add(JsonNode.arrayNode(descriptors)))
 
-	sendRpcResult(reqDoc, idNode: idNode, resultDoc: doc, resultRoot: result.build(doc))
+	return rpcResultText(reqDoc, idNode: idNode, resultDoc: doc, resultRoot: result.build(doc))
 end 'handleToolsList'
 
-function dispatchTool(reqDoc JsonDoc, idNode JsonNodeId, spec McpToolSpec, args OptionalNode, exePath FilePath, devMode bool)
-	if spec.name.equals("build") 'tBuild'
-		executeBuildTool(reqDoc, idNode: idNode, args: args, exePath: exePath, devMode: devMode)
-		return
+function dispatchTool(reqDoc JsonDoc, idNode JsonNodeId, spec McpToolSpec, args OptionalNode, exePath FilePath, devMode bool, debug DebugSessionSlot) returns String
+	if spec.name.equals(BuildToolName) 'tBuild'
+		return withinContext(buildToolContext(reqDoc, idNode: idNode, args: args, exePath: exePath, devMode: devMode), reqDoc: reqDoc, idNode: idNode, args: args, tool: executeBuildToolWithin)
 	end 'tBuild'
 
-	if spec.name.equals("execute") 'tExecute'
-		executeExecuteTool(reqDoc, idNode: idNode, args: args, exePath: exePath)
-		return
+	if spec.name.equals(ExecuteToolName) 'tExecute'
+		return withinHostOrTree(reqDoc, idNode: idNode, args: args, exePath: exePath, tool: executeExecuteToolWithin)
 	end 'tExecute'
 
-	if spec.name.equals("test") 'tTest'
-		executeTestTool(reqDoc, idNode: idNode, args: args, exePath: exePath)
-		return
+	if spec.name.equals(TestToolName) 'tTest'
+		return withinHostOrTree(reqDoc, idNode: idNode, args: args, exePath: exePath, tool: executeTestToolWithin)
 	end 'tTest'
 
-	if spec.name.equals("fmt") 'tFmt'
-		executeFmtTool(reqDoc, idNode: idNode, args: args, exePath: exePath)
-		return
+	if spec.name.equals(FmtToolName) 'tFmt'
+		return withinHostOrTree(reqDoc, idNode: idNode, args: args, exePath: exePath, tool: executeFmtToolWithin)
 	end 'tFmt'
 
-	if spec.name.equals("check") 'tCheck'
-		executeCheckTool(reqDoc, idNode: idNode, args: args, exePath: exePath)
-		return
+	if spec.name.equals(CheckToolName) 'tCheck'
+		return executeCheckTool(reqDoc, idNode: idNode, args: args, exePath: exePath)
 	end 'tCheck'
 
-	if spec.name.equals("dump_ir") 'tDumpIr'
-		executeDumpIrTool(reqDoc, idNode: idNode, args: args, exePath: exePath)
-		return
+	if spec.name.equals(DumpIrToolName) 'tDumpIr'
+		return executeDumpIrTool(reqDoc, idNode: idNode, args: args, exePath: exePath)
 	end 'tDumpIr'
 
-	if spec.name.equals("info") 'tInfo'
-		executeInfoTool(reqDoc, idNode: idNode, exePath: exePath)
-		return
+	if spec.name.equals(InfoToolName) 'tInfo'
+		return executeInfoTool(reqDoc, idNode: idNode, exePath: exePath)
 	end 'tInfo'
 
-	if spec.name.equals("lookup_error_code") 'tLookup'
-		executeLookupErrorCodeTool(reqDoc, idNode: idNode, args: args)
-		return
+	if spec.name.equals(LookupErrorCodeToolName) 'tLookup'
+		return executeLookupErrorCodeTool(reqDoc, idNode: idNode, args: args)
 	end 'tLookup'
 
-	if spec.name.equals("run_spec_test") 'tSpecTest'
-		executeSpecTestTool(reqDoc, idNode: idNode, args: args, exePath: exePath)
-		return
+	if spec.name.equals(SpecTestToolName) 'tSpecTest'
+		return withinTheTree(reqDoc, idNode: idNode, args: args, exePath: exePath, tool: executeSpecTestToolWithin)
 	end 'tSpecTest'
 
-	if spec.name.equals("run_scale_test") 'tScaleTest'
-		executeScaleTestTool(reqDoc, idNode: idNode, args: args, exePath: exePath)
-		return
+	if spec.name.equals(ScaleTestToolName) 'tScaleTest'
+		return withinTheTree(reqDoc, idNode: idNode, args: args, exePath: exePath, tool: executeScaleTestToolWithin)
 	end 'tScaleTest'
 
-	if spec.name.equals("spec_test_outcome") 'tSpecOutcome'
-		executeSpecOutcomeTool(reqDoc, idNode: idNode, args: args, exePath: exePath)
-		return
+	if spec.name.equals(SpecOutcomeToolName) 'tSpecOutcome'
+		return withinTheTree(reqDoc, idNode: idNode, args: args, exePath: exePath, tool: executeSpecOutcomeToolWithin)
 	end 'tSpecOutcome'
 
-	// The roster handed this spec over, so a name with no arm is a tool declared and never wired up.
+	if isDebugToolName(spec.name) 'tDebug'
+		return executeDebugTool(reqDoc, idNode: idNode, name: spec.name, args: args, exePath: exePath, debug: debug)
+	end 'tDebug'
+
 	panic("dispatchTool: the roster advertises `{spec.name}` and nothing executes it")
 end 'dispatchTool'
 
-function handleToolsCall(reqDoc JsonDoc, idNode JsonNodeId, paramsId JsonNodeId, exePath FilePath, devMode bool)
+function withinHostOrTree(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath, tool ToolWithin) returns String
+	return withinContext(hostOrTreeContext(reqDoc, idNode: idNode, args: args, exePath: exePath), reqDoc: reqDoc, idNode: idNode, args: args, tool: tool)
+end 'withinHostOrTree'
+
+function withinTheTree(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath, tool ToolWithin) returns String
+	return withinContext(resolveTreeContext(reqDoc, idNode: idNode, args: args, exePath: exePath, compiler: TreeCompiler.ownSlot), reqDoc: reqDoc, idNode: idNode, args: args, tool: tool)
+end 'withinTheTree'
+
+function handleToolsCall(reqDoc JsonDoc, idNode JsonNodeId, paramsId JsonNodeId, exePath FilePath, devMode bool, debug DebugSessionSlot) returns String
 	let toolName = try reqDoc.getString(paramsId, key: "name") otherwise 'noName'
-		sendRpcError(reqDoc, idNode: idNode, code: RpcStandardErrorCode.invalidParams, message: "Missing 'name' in tools/call params")
-		return
+		return rpcErrorText(reqDoc, idNode: idNode, code: RpcStandardErrorCode.invalidParams, message: "Missing 'name' in tools/call params")
 	end 'noName'
 
 	let spec = try findToolSpec(toolName, devMode: devMode) otherwise 'unknownTool'
-		sendRpcError(reqDoc, idNode: idNode, code: RpcStandardErrorCode.methodNotFound, message: "Unknown tool: {toolName}")
-		return
+		return rpcErrorText(reqDoc, idNode: idNode, code: RpcStandardErrorCode.methodNotFound, message: "Unknown tool: {toolName}")
 	end 'unknownTool'
 
 	let args = resolveChildKey(reqDoc, parent: paramsId, key: "arguments")
 
-	// ⛔ BEFORE the tool reads a single argument: every reader below defaults on a miss, so an argument
-	// that reaches one unchecked is an argument the caller set and nobody honoured.
+	// Before any argument is read: every reader defaults on a miss, so an argument reaching one
+	// unchecked is one the caller set and nobody honoured.
 	try validateToolArguments(reqDoc, args: args, spec: spec, devMode: devMode) otherwise (fault) 'badArgs'
-		sendRpcError(reqDoc, idNode: idNode, code: RpcStandardErrorCode.invalidParams, message: argumentFaultReason(fault))
-		return
+		return rpcErrorText(reqDoc, idNode: idNode, code: RpcStandardErrorCode.invalidParams, message: argumentFaultReason(fault))
 	end 'badArgs'
 
-	dispatchTool(reqDoc, idNode: idNode, spec: spec, args: args, exePath: exePath, devMode: devMode)
+	return dispatchTool(reqDoc, idNode: idNode, spec: spec, args: args, exePath: exePath, devMode: devMode, debug: debug)
 end 'handleToolsCall'
 
-function handleRpcMessage(line String, exePath FilePath, devMode bool)
-	var doc = try Json.parse(line) otherwise 'badJson'
-		var errDoc = JsonDoc.create()
-		let nullId = errDoc.add(JsonNode.nullNode())
-		sendRpcError(errDoc, idNode: nullId, code: RpcStandardErrorCode.parseError, message: "Parse error - invalid JSON")
-		return
-	end 'badJson'
+function handleRpcMessage(line String, exePath FilePath, devMode bool, debug DebugSessionSlot) returns RpcReply
+	let doc = try Json.parse(line) otherwise return unattributedRpcError(RpcStandardErrorCode.parseError, message: "Parse error - invalid JSON")
 
+	return handleRpcDocument(doc, exePath: exePath, devMode: devMode, debug: debug)
+end 'handleRpcMessage'
+
+function unattributedRpcError(code RpcStandardErrorCode, message String) returns RpcReply
+	var errDoc = JsonDoc.create()
+	let nullId = errDoc.add(JsonNode.nullNode())
+
+	return RpcReply.body(rpcErrorText(errDoc, idNode: nullId, code: code, message: message))
+end 'unattributedRpcError'
+
+export function handleRpcDocument(doc JsonDoc, exePath FilePath, devMode bool, debug DebugSessionSlot) returns RpcReply
 	let root = doc.root
 
 	if doc.get(root).kind != JsonKind.jsonObject 'notObj'
-		var errDoc = JsonDoc.create()
-		let nullId = errDoc.add(JsonNode.nullNode())
-		sendRpcError(errDoc, idNode: nullId, code: RpcStandardErrorCode.invalidRequest, message: "Invalid Request - expected JSON object")
-		return
+		return unattributedRpcError(RpcStandardErrorCode.invalidRequest, message: "Invalid Request - expected JSON object")
 	end 'notObj'
 
-	let idNode = match resolveChildKey(doc, parent: root, key: "id") 'ir'
-		none gives doc.add(JsonNode.nullNode())
-		some(id) gives id
-	end 'ir'
+	// A request without an id is a notification, and JSON-RPC forbids answering one: a reply
+	// carrying a null id matches no request the client sent.
+	if rpcIsNotification(doc) 'nothingToAnswer'
+		return RpcReply.none
+	end 'nothingToAnswer'
 
-	// A request without an id is a NOTIFICATION, and JSON-RPC forbids answering one at all — a reply
-	// carrying a null id is a reply the client has no request to match it to.
-	let isNotification = doc.get(idNode).kind == JsonKind.jsonNull
+	let idNode = rpcIdNodeOf(doc)
 
-	let method = try doc.getString(root, key: "method") otherwise 'noMethod'
-		if not isNotification 'respond'
-			sendRpcError(doc, idNode: idNode, code: RpcStandardErrorCode.invalidRequest, message: "Invalid Request - missing 'method'")
-		end 'respond'
+	return match rpcMethodOf(doc) 'asked'
+		absent gives RpcReply.body(rpcErrorText(doc, idNode: idNode, code: RpcStandardErrorCode.invalidRequest, message: "Invalid Request - missing 'method'"))
+		named(method) gives answeredRpcMethod(doc, idNode: idNode, method: method, exePath: exePath, devMode: devMode, debug: debug)
+	end 'asked'
+end 'handleRpcDocument'
 
-		return
-	end 'noMethod'
+function answeredRpcMethod(doc JsonDoc, idNode JsonNodeId, method String, exePath FilePath, devMode bool, debug DebugSessionSlot) returns RpcReply
+	let root = doc.root
 
-	if method.equals("initialize") 'init'
-		handleInitialize(doc, idNode: idNode)
-		return
+	if method.equals(RpcInitializeMethod) 'init'
+		return RpcReply.body(handleInitialize(doc, idNode: idNode))
 	end 'init'
 
-	if method.equals("notifications/initialized") 'initd'
-		return
-	end 'initd'
-
 	if method.equals("tools/list") 'tl'
-		handleToolsList(doc, idNode: idNode, devMode: devMode)
-		return
+		return RpcReply.body(handleToolsList(doc, idNode: idNode, devMode: devMode))
 	end 'tl'
 
 	if method.equals("tools/call") 'tc'
-		if isNotification 'noAnswerWanted'
-			return
-		end 'noAnswerWanted'
-
-		match resolveChildKey(doc, parent: root, key: "params") 'pr'
-			none then sendRpcError(doc, idNode: idNode, code: RpcStandardErrorCode.invalidParams, message: "Missing 'params' for tools/call")
-			some(paramsId) then handleToolsCall(doc, idNode: idNode, paramsId: paramsId, exePath: exePath, devMode: devMode)
+		return match resolveChildKey(doc, parent: root, key: "params") 'pr'
+			none gives RpcReply.body(rpcErrorText(doc, idNode: idNode, code: RpcStandardErrorCode.invalidParams, message: "Missing 'params' for tools/call"))
+			some(paramsId) gives RpcReply.body(handleToolsCall(doc, idNode: idNode, paramsId: paramsId, exePath: exePath, devMode: devMode, debug: debug))
 		end 'pr'
-
-		return
 	end 'tc'
 
-	if not isNotification 'unknownMethod'
-		sendRpcError(doc, idNode: idNode, code: RpcStandardErrorCode.methodNotFound, message: "Method not found: {method}")
-	end 'unknownMethod'
-end 'handleRpcMessage'
+	return RpcReply.body(rpcErrorText(doc, idNode: idNode, code: RpcStandardErrorCode.methodNotFound, message: "Method not found: {method}"))
+end 'answeredRpcMethod'
 
-export function runMcpServer(devMode bool) returns ExitCode
+let RpcMethodKey = "method"
+export let RpcInitializeMethod = "initialize"
+let RpcIdKey = "id"
+
+union RpcMethodRead
+	named(method String)
+	absent
+end 'RpcMethodRead'
+
+function rpcMethodOf(doc JsonDoc) returns RpcMethodRead
+	let method = try doc.getString(doc.root, key: RpcMethodKey) otherwise return RpcMethodRead.absent
+
+	return RpcMethodRead.named(method)
+end 'rpcMethodOf'
+
+export function rpcNamesMethod(doc JsonDoc, method String) returns bool
+	return match rpcMethodOf(doc) 'asked'
+		named(asked) gives asked.equals(method)
+		absent gives false
+	end 'asked'
+end 'rpcNamesMethod'
+
+function rpcIdNodeOf(doc JsonDoc) returns JsonNodeId
+	return match resolveChildKey(doc, parent: doc.root, key: RpcIdKey) 'ir'
+		none gives doc.add(JsonNode.nullNode())
+		some(id) gives id
+	end 'ir'
+end 'rpcIdNodeOf'
+
+export function rpcIsNotification(doc JsonDoc) returns bool
+	return match resolveChildKey(doc, parent: doc.root, key: RpcIdKey) 'ir'
+		none gives true
+		some(id) gives doc.get(id).kind == JsonKind.jsonNull
+	end 'ir'
+end 'rpcIsNotification'
+
+export function runMcpServer(devMode bool, transport McpTransportChoice) returns ExitCode
 	let exePath = try Process.executablePath() otherwise 'noExe'
 		printError("maxon {McpServerCommandName}: failed to determine executable path\n")
-		return 1
+
+		return OwnFailureExit
 	end 'noExe'
 
+	sweepStaleDebugBuilds()
+	sweepStaleSnippets()
+
+	return match transport 'which'
+		stdio gives runMcpStdioServer(devMode, exePath: exePath)
+		http(options) gives runMcpHttpServer(devMode, exePath: exePath, options: options)
+	end 'which'
+end 'runMcpServer'
+
+// One JSON object per line in each direction: MCP's stdio transport does not use the Content-Length
+// framing LSP and DAP do.
+function runMcpStdioServer(devMode bool, exePath FilePath) returns ExitCode
 	var stdin = Console.stdin()
+	let debug = DebugSessionSlot.create()
 
 	while true 'serverLoop'
 		let line = try stdin.readLine() otherwise 'eof'
-			return 0
+			break
 		end 'eof'
 
 		let trimmed = line.trim()
@@ -278,8 +333,13 @@ export function runMcpServer(devMode bool) returns ExitCode
 			continue
 		end 'blank'
 
-		handleRpcMessage(trimmed, exePath: exePath, devMode: devMode)
+		match handleRpcMessage(trimmed, exePath: exePath, devMode: devMode, debug: debug) 'answer'
+			none then break 'answer'
+			body(text) then print("{text}\n")
+		end 'answer'
 	end 'serverLoop'
 
-	return 0
-end 'runMcpServer'
+	_ = debug.reap()
+
+	return SucceededExit
+end 'runMcpStdioServer'

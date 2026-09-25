@@ -1,18 +1,119 @@
 export typealias DebugLocalArray = Array with MxdbgLocalInfo
 export typealias DebugNameSet = Set with String
 export typealias MxdbgLocValueArray = Array with MxdbgLocValue
+export typealias DebugLineCandidateArray = Array with DebugLineCandidate
+export typealias DebugLineBodyArray = Array with DebugLineCandidateArray
+
+export union DebugEntryCaller
+	none
+	at(returnAddress DebugAddress)
+end 'DebugEntryCaller'
+
+// A return address the frame-pointer chain does not reach: inside a prologue before `mov rbp, rsp`,
+// or at a `ret`. `wordsAbove` counts the words pushed over it and `frame` the words the prologue
+// pushes before `mov rbp, rsp`, which places the frame pointer the function's body runs under.
+export union DebugUnchainedReturn
+	none
+	onTheStack(wordsAbove DebugTally, frame DebugPrologueFrame)
+end 'DebugUnchainedReturn'
+
+export union DebugPrologueFrame
+	unset
+	belowTheReturn(words DebugTally)
+end 'DebugPrologueFrame'
+
+export union DebugFunctionNameLookup
+	none
+	named(name String)
+end 'DebugFunctionNameLookup'
+
+union DebugSourceText
+	none
+	text(content String)
+end 'DebugSourceText'
 
 export union BreakResolution
-	atLine(file String, line DebugLineNumber, offsets DebugAddressArray, functionName String)
+	atLine(file String, line DebugLineNumber, bodies DebugLineBodyArray, functionName DebugFunctionNameLookup, breakpoint String)
 	noCode(file String, line DebugLineNumber)
 	ambiguous(candidates StringArray)
 	noMatch(suggestion String)
-	notATarget(spelling String)
+	refused(file String, line DebugLineNumber, functionName DebugFunctionNameLookup, reason String)
 end 'BreakResolution'
 
-let DebugLibraryStdlibComponent = "stdlib"
-let DebugLibraryRuntimeComponent = "runtime"
-let DebugCompilerNamePrefix = "__"
+export union DebugBreakTarget
+	lineOfMain(line DebugLineNumber)
+	fileLine(file String, line DebugLineNumber)
+	named(name String)
+	exactOffset(offset MxdbgCodeOffset)
+end 'DebugBreakTarget'
+
+export union DebugBreakTargetParse
+	target(target DebugBreakTarget)
+	notATarget(spelling String)
+end 'DebugBreakTargetParse'
+
+export function debugBreakTargetOf(spelling String) returns DebugBreakTargetParse
+	let trimmed = spelling.trim()
+
+	if trimmed.isEmpty() 'nothingNamed'
+		return DebugBreakTargetParse.notATarget(spelling)
+	end 'nothingNamed'
+
+	if trimmed.startsWith(ExactOffsetMarker) 'anExactOffset'
+		return exactOffsetTargetOf(trimmed)
+	end 'anExactOffset'
+
+	match wholeNumberIn(trimmed) 'aBareLine'
+		none then break 'aBareLine'
+		value(line) then return DebugBreakTargetParse.target(DebugBreakTarget.lineOfMain(line))
+	end 'aBareLine'
+
+	let pieces = trimmed.split(TargetSeparator)
+	let last = pieces.count() - 1
+
+	if last < 1 'noLineNamed'
+		return DebugBreakTargetParse.target(DebugBreakTarget.named(trimmed))
+	end 'noLineNamed'
+
+	let lineSpelling = try pieces.get(last) otherwise panic("debugBreakTargetOf: a split of at least two pieces has a last one")
+
+	match wholeNumberIn(lineSpelling) 'aLineNumber'
+		none then return DebugBreakTargetParse.target(DebugBreakTarget.named(trimmed))
+		value(line) then return DebugBreakTargetParse.target(DebugBreakTarget.fileLine(joinedWith(try pieces.slice(0, endIndex: last) otherwise panic("debugBreakTargetOf: the pieces before the last of {pieces.count()} are a slice of them"), separator: TargetSeparator), line: line))
+	end 'aLineNumber'
+end 'debugBreakTargetOf'
+
+export function debugBreakTargetSpelling(target DebugBreakTarget) returns String
+	return match target 'asked'
+		lineOfMain(line) gives "{line}"
+		fileLine(file, line) gives "{file}{TargetSeparator}{line}"
+		named(name) gives name
+		exactOffset(offset) gives exactOffsetSpelling(offset)
+	end 'asked'
+end 'debugBreakTargetSpelling'
+
+function exactOffsetSpelling(offset MxdbgCodeOffset) returns String
+	return "{ExactOffsetMarker}{HexOffsetPrefix}{offset:x}"
+end 'exactOffsetSpelling'
+
+function exactOffsetTargetOf(spelling String) returns DebugBreakTargetParse
+	let spelledOffset = spelling.replaceFirst(ExactOffsetMarker, with: "").trim()
+
+	if not spelledOffset.startsWith(HexOffsetPrefix) 'notAHexOffset'
+		return DebugBreakTargetParse.notATarget(spelling)
+	end 'notAHexOffset'
+
+	match parseCodeOffset(spelledOffset) 'parsed'
+		invalid then return DebugBreakTargetParse.notATarget(spelling)
+		valid(offset) then return DebugBreakTargetParse.target(DebugBreakTarget.exactOffset(offset as MxdbgCodeOffset))
+	end 'parsed'
+end 'exactOffsetTargetOf'
+
+export let DebugBreakTargetSpellings = "`file.maxon:LINE`, a bare line number, a function name or `*0x<offset>`"
+
+let DebugNotAnInstructionStartReason = "not-an-instruction-start"
+
+let ExactOffsetMarker = "*"
 
 let TargetSeparator = ":"
 let ForwardSlash = "/"
@@ -20,24 +121,188 @@ let Backslash = "\\"
 
 let SourceWindowRadius = 2
 
+// A call entry is the first byte of a body spliced in from the line. `hidden` counts the spliced
+// frames a stop there leaves unpresented, so the stop shows the line that makes the call.
+export type DebugLineCandidate
+	export let offset as DebugAddress
+	export let entersTheLine as bool
+	export let startsACall as bool
+	export let hidden as DebugTally
+
+	static function row(offset DebugAddress, entersTheLine bool) returns DebugLineCandidate
+		return Self{offset: offset, entersTheLine: entersTheLine, startsACall: false, hidden: 0}
+	end 'row'
+
+	static function callEntry(offset DebugAddress, hidden DebugTally) returns DebugLineCandidate
+		return Self{offset: offset, entersTheLine: false, startsACall: true, hidden: hidden}
+	end 'callEntry'
+end 'DebugLineCandidate'
+
+type DebugPlacedCandidate
+	export let candidate as DebugLineCandidate
+	export let context as MxdbgInlineSiteLookup
+
+	static function create(candidate DebugLineCandidate, context MxdbgInlineSiteLookup) returns DebugPlacedCandidate
+		return Self{candidate: candidate, context: context}
+	end 'create'
+end 'DebugPlacedCandidate'
+
+typealias DebugPlacedCandidateArray = Array with DebugPlacedCandidate
+
+typealias DebugSiteEntryMap = Map with (MxdbgIndex, MxdbgCodeOffset)
+
+function framesPast(frames DebugFrameArray, hidden DebugTally) returns DebugFrameArray
+	var shown = DebugFrameArray.create()
+
+	for (iter, frame) in frames.withIterator() 'eachFrame'
+		if (iter.index() as DebugTally) < hidden 'notYetEntered'
+			continue
+		end 'notYetEntered'
+
+		shown.push(DebugFrame.create(shown.count() as DebugFrameNumber, functionName: frame.functionName, path: frame.path, line: frame.line, column: frame.column, offset: frame.offset, inlined: frame.inlined, site: frame.site, framePointer: frame.framePointer))
+	end 'eachFrame'
+
+	return shown
+end 'framesPast'
+
+function insertByOffset(placed DebugPlacedCandidateArray, entry DebugPlacedCandidate)
+	for (iter, held) in placed.withIterator() 'eachPlaced'
+		if held.candidate.offset > entry.candidate.offset 'pastIt'
+			placed.insert(iter.index(), value: entry)
+			return
+		end 'pastIt'
+	end 'eachPlaced'
+
+	placed.push(entry)
+end 'insertByOffset'
+
+function presentedThrough(reader MxdbgReader, chain MxdbgIndexArray, site MxdbgIndex) returns DebugTally
+	var presented = 0 as DebugTally
+
+	for index in chain 'eachSplicedBody'
+		if mxdbgOriginIsTheAuthors(reader.inlineSite(index).origin) 'theAuthorsBody'
+			presented = presented + 1
+		end 'theAuthorsBody'
+
+		if index == site 'thisOne'
+			return presented
+		end 'thisOne'
+	end 'eachSplicedBody'
+
+	panic("presentedThrough: site {site} is not in the chain of the offset that is its own entry")
+end 'presentedThrough'
+
+// The first range to reach a site is its entry only because `MxdbgReader.requireOrderedTables`
+// refuses a range table out of address order.
+function siteEntriesOf(reader MxdbgReader) returns DebugSiteEntryMap
+	var entries = DebugSiteEntryMap.create()
+
+	for range in 0 upto reader.inlineRangeCount() 'eachRange'
+		let start = reader.inlineRangeStart(range as MxdbgIndex)
+		var walking = MxdbgInlineSiteLookup.site(reader.inlineRangeSite(range as MxdbgIndex))
+		var climbing = true
+
+		while climbing 'eachEnclosingSite'
+			match walking 'site'
+				none then climbing = false
+				site(index) then walking = noteSiteEntry(entries, reader: reader, site: index, start: start)
+			end 'site'
+		end 'eachEnclosingSite'
+	end 'eachRange'
+
+	return entries
+end 'siteEntriesOf'
+
+function noteSiteEntry(entries DebugSiteEntryMap, reader MxdbgReader, site MxdbgIndex, start MxdbgCodeOffset) returns MxdbgInlineSiteLookup
+	if entries.contains(site) 'enteredEarlier'
+		return MxdbgInlineSiteLookup.none
+	end 'enteredEarlier'
+
+	entries.upsert(site, value: start)
+
+	return reader.inlineSite(site).parent
+end 'noteSiteEntry'
+
+type DebugSourceFile
+	export let fileId as MxdbgIndex
+	export let recorded as String
+	export let path as FilePath
+	export let components as StringArray
+
+	static function of(fileId MxdbgIndex, recorded String, named FilePath, root FilePath) returns DebugSourceFile
+		let path = named.resolve(root).normalize()
+
+		return Self{fileId: fileId, recorded: recorded, path: path, components: pathComponentsOf(path.toString())}
+	end 'of'
+
+	function endsWith(tail FilePath, depth DebugTally) returns bool
+		let count = self.components.count() as DebugTally
+
+		if depth == 0 or count < depth 'tooShort'
+			return false
+		end 'tooShort'
+
+		var joined = ""
+
+		for (iter, component) in self.components.withIterator() 'eachComponent'
+			if (iter.index() as DebugTally) < count - depth 'beforeTheTail'
+				continue
+			end 'beforeTheTail'
+
+			joined.append(component if joined.isEmpty() else "{FilePath.separator()}{component}")
+		end 'eachComponent'
+
+		let spelled = try FilePath.from(joined) otherwise return false
+
+		return spelled.equals(tail)
+	end 'endsWith'
+end 'DebugSourceFile'
+
+typealias DebugSourceFileArray = Array with DebugSourceFile
+
+union DebugFileResolution
+	files(fileIds MxdbgIndexArray, name String, path String)
+	ambiguous(candidates StringArray)
+	unknown
+end 'DebugFileResolution'
+
+union DebugInstructionStart
+	start
+	inside
+	undecodable
+end 'DebugInstructionStart'
+
 export type DebugSymbols
 	let reader as MxdbgReader
 	let code as ByteArray
 	let programFiles as StringArray
+	let sourceFiles as DebugSourceFileArray
 	let sourceRoot as FilePath
+	let executableDir as FilePath
+	let siteEntries as DebugSiteEntryMap
+	var spliceExits as DebugSpliceExitMap
+	var prologues as DebugPrologueMap
 
 	export static function create(reader MxdbgReader, code ByteArray, executable FilePath) returns DebugSymbols
 		var own = StringArray.create()
+		var sources = DebugSourceFileArray.create()
+		let executableDir = try executable.parent() otherwise executable
+		let root = try FilePath.from(reader.sourceRoot) otherwise executableDir
+		let authored = authoredFilesOf(reader)
 
 		for i in 0 upto reader.fileCount() 'eachFile'
 			let spelled = reader.fileName(i as MxdbgIndex)
 
-			if not isLibrarySourcePath(spelled) 'theProgramsOwn'
+			if authored.contains(spelled) 'theProgramsOwn'
 				own.push(spelled)
 			end 'theProgramsOwn'
+
+			if let named = try FilePath.from(spelled) 'spellable'
+				sources.push(DebugSourceFile.of(i as MxdbgIndex, recorded: spelled, named: named, root: root))
+			end 'spellable'
 		end 'eachFile'
 
-		return Self{reader: reader, code: code, programFiles: own, sourceRoot: try executable.parent() otherwise executable}
+		return Self{reader: reader, code: code, programFiles: own, sourceFiles: sources, sourceRoot: root, executableDir: executableDir, siteEntries: siteEntriesOf(reader), spliceExits: DebugSpliceExitMap.create(), prologues: DebugPrologueMap.create()}
 	end 'create'
 
 	export function imageCode() returns ByteArray
@@ -51,134 +316,263 @@ export type DebugSymbols
 		for i in 0 upto self.reader.functionCount() 'eachFunction'
 			let fn = self.reader.functionRecord(i as MxdbgIndex)
 
-			if self.functionIsTheProgramsOwn(fn) 'aProgramFunction'
-				noteDebugName(names, seen: seen, name: fn.name)
+			if bodyIsTheProgramsOwn(fn, origin: fn.origin) 'aProgramFunction'
+				noteDebugName(names, seen: seen, name: fn.displayName)
 			end 'aProgramFunction'
 		end 'eachFunction'
 
-		// Spliced names belong in the pool as much as function records do: a method the inliner copied into
-		// every caller has no function record at all, and a user who can read its name expects to break on it.
-		for i in 0 upto self.reader.inlineRangeCount() 'eachSplicedRange'
-			let spliced = self.splicedNameAt(self.reader.inlineRangeStart(i as MxdbgIndex))
+		// Spliced names belong in the pool as much as function records do: a method the inliner copied
+		// into every caller has no function record at all, and a user who can read its name expects to
+		// break on it.
+		for i in 0 upto self.reader.inlineSiteCount() 'eachSplicedBody'
+			let site = self.reader.inlineSite(i as MxdbgIndex)
 
-			if not spliced.isEmpty() 'aSplicedBody'
-				noteDebugName(names, seen: seen, name: spliced)
-			end 'aSplicedBody'
-		end 'eachSplicedRange'
+			if mxdbgOriginIsTheAuthors(site.origin) 'theAuthorsBody'
+				noteDebugName(names, seen: seen, name: site.name)
+			end 'theAuthorsBody'
+		end 'eachSplicedBody'
 
 		return names
 	end 'functionNamePool'
 
-	function splicedNameAt(offset MxdbgCodeOffset) returns String
-		if not self.offsetIsTheProgramsOwn(offset as DebugAddress) 'libraryOrRuntimeCode'
-			return ""
-		end 'libraryOrRuntimeCode'
-
-		match self.reader.inlineSiteContaining(offset) 'site'
-			none then return ""
-			site(index) then return "" if self.reader.inlineSite(index).name.startsWith(DebugCompilerNamePrefix) else self.reader.inlineSite(index).name
-		end 'site'
-	end 'splicedNameAt'
-
-	export function functionNameAt(offset DebugAddress) returns String
+	export function functionNameAt(offset DebugAddress) returns DebugFunctionNameLookup
 		return match self.reader.functionContaining(offset as MxdbgCodeOffset) 'enclosing'
-			none gives ""
-			found(fn) gives fn.name
+			none gives DebugFunctionNameLookup.none
+			found(fn) gives DebugFunctionNameLookup.named(fn.displayName)
 		end 'enclosing'
 	end 'functionNameAt'
 
-	export function resolveBreakTarget(spelling String) returns BreakResolution
-		let trimmed = spelling.trim()
+	export function resolveBreakTarget(target DebugBreakTarget) returns BreakResolution
+		match target 'asked'
+			lineOfMain(line) then return self.resolvedLineOfMain(line)
+			fileLine(file, line) then return self.resolvedLineOfFile(file, line: line)
+			exactOffset(offset) then return self.resolvedOffset(offset)
+			named(spelling) then return self.resolvedName(spelling)
+		end 'asked'
+	end 'resolveBreakTarget'
 
-		if trimmed.isEmpty() 'nothingNamed'
-			return BreakResolution.notATarget(spelling)
-		end 'nothingNamed'
-
-		match self.parsedLineTarget(trimmed) 'aFileAndLine'
-			none then break 'aFileAndLine'
-			at(file, line) then return self.resolvedLine(file, line: line)
-		end 'aFileAndLine'
-
-		match fuzzyResolve(trimmed, pool: self.functionNamePool()) 'named'
+	function resolvedName(spelling String) returns BreakResolution
+		match fuzzyResolve(spelling, pool: self.functionNamePool()) 'named'
 			none(suggestion) then return BreakResolution.noMatch(suggestion)
 			several(candidates) then return BreakResolution.ambiguous(candidates)
 			one(name) then return self.resolvedFunction(name)
 		end 'named'
-	end 'resolveBreakTarget'
+	end 'resolvedName'
 
 	export function completionPool(partial String) returns StringArray
 		return completionsFor(partial, pool: self.functionNamePool())
 	end 'completionPool'
 
-	export function stopRecordFor(reason String, stop EngineStop, textBase DebugAddress, thread DebugThreadRef) returns DebugStop
-		let frames = self.frameListFor(stop, textBase: textBase)
+	export function stopRecordFor(reason String, stop EngineStop, textBase DebugAddress, thread DebugThreadRef, hidden DebugTally, entryCaller DebugEntryCaller) returns DebugStop
+		let frames = self.frameListFor(stop, textBase: textBase, entryCaller: entryCaller)
+		let fault = debugFaultDescription(stop.fault) if reason == FaultStopReasonName else DebugNoFault
+		let offset = stop.pc - textBase
+
+		if not self.offsetIsTheProgramsOwn(offset) 'stoppedOutsideTheProgram'
+			if let caller = try frames.get(0) 'theProgramCalledIntoIt'
+				return self.stopAtFrame(reason, fault: fault, frame: caller, stop: stop, offset: offset, frames: frames, thread: thread)
+			end 'theProgramCalledIntoIt'
+
+			return self.positionedStop(reason, fault: fault, stop: stop, textBase: textBase, thread: thread, frames: frames)
+		end 'stoppedOutsideTheProgram'
+
+		if hidden == 0 'everyFrameShown'
+			return self.positionedStop(reason, fault: fault, stop: stop, textBase: textBase, thread: thread, frames: frames)
+		end 'everyFrameShown'
+
+		let shown = framesPast(frames, hidden: hidden)
+		let presented = try shown.get(0) otherwise panic("DebugSymbols.stopRecordFor: hiding {hidden} spliced frames at 0x{offset:x} left no frame — the physical frame they are spliced into is always walked")
+
+		return self.stopAtFrame(reason, fault: fault, frame: presented, stop: stop, offset: offset, frames: shown, thread: thread)
+	end 'stopRecordFor'
+
+	function stopAtFrame(reason String, fault String, frame DebugFrame, stop EngineStop, offset DebugAddress, frames DebugFrameArray, thread DebugThreadRef) returns DebugStop
+		return DebugStop.create(reason, fault: fault, functionName: DebugFunctionNameLookup.named(frame.functionName), file: frame.file, line: frame.line, column: frame.column, offset: offset, source: self.sourceWindow(frame.path, line: frame.line), frames: frames, machine: stop.machine, thread: thread)
+	end 'stopAtFrame'
+
+	function positionedStop(reason String, fault String, stop EngineStop, textBase DebugAddress, thread DebugThreadRef, frames DebugFrameArray) returns DebugStop
 		let offset = stop.pc - textBase
 
 		match self.reader.pcToLine(offset as MxdbgCodeOffset) 'positioned'
-			none then return DebugStop.create(reason, functionName: self.innermostName(frames, offset: offset), file: "", line: 0, column: 0, offset: offset, source: DebugSourceLineArray.create(), frames: frames, machine: stop.machine, thread: thread)
-			found(row) then return DebugStop.create(reason, functionName: self.innermostName(frames, offset: offset), file: baseNameOf(row.file), line: row.line as DebugLineNumber, column: row.column as DebugColumnNumber, offset: offset, source: self.sourceWindow(row.file, line: row.line as DebugLineNumber), frames: frames, machine: stop.machine, thread: thread)
+			none then return DebugStop.create(reason, fault: fault, functionName: self.innermostName(frames, offset: offset), file: "", line: 0, column: 0, offset: offset, source: DebugSourceLineArray.create(), frames: frames, machine: stop.machine, thread: thread)
+			found(row) then return DebugStop.create(reason, fault: fault, functionName: self.innermostName(frames, offset: offset), file: baseNameOf(row.file), line: row.line as DebugLineNumber, column: row.column as DebugColumnNumber, offset: offset, source: self.sourceWindow(self.openablePath(row.file), line: row.line as DebugLineNumber), frames: frames, machine: stop.machine, thread: thread)
 		end 'positioned'
-	end 'stopRecordFor'
+	end 'positionedStop'
 
-	export function frameListFor(stop EngineStop, textBase DebugAddress) returns DebugFrameArray
-		return self.walkedFrames(stop, textBase: textBase, mayStartOutsideTheProgram: false)
-	end 'frameListFor'
-
-	export function parkedFrameListFor(stop EngineStop, textBase DebugAddress) returns DebugFrameArray
-		return self.walkedFrames(stop, textBase: textBase, mayStartOutsideTheProgram: true)
-	end 'parkedFrameListFor'
-
-	// A parked green thread's chain starts inside the switch that parked it, which is runtime code no frame
-	// of this program covers, so its walk may cross frames before the first one it can name. A stopped
-	// thread's may not: there the first uncovered frame is the end of the program's own stack.
-	function walkedFrames(stop EngineStop, textBase DebugAddress, mayStartOutsideTheProgram bool) returns DebugFrameArray
+	// A frame no function of this program covers is skipped, never the end of the walk: a parked green
+	// thread's chain starts inside the switch that parked it, and a fault's may start in library or
+	// runtime code.
+	export function frameListFor(stop EngineStop, textBase DebugAddress, entryCaller DebugEntryCaller) returns DebugFrameArray
 		var frames = DebugFrameArray.create()
 		self.appendFramesFor(frames, pc: stop.pc, framePointer: stop.framePointer, textBase: textBase, biased: false)
-		var entered = frames.count() > 0
+
+		match entryCaller 'atAnEntry'
+			none then break 'atAnEntry'
+			at(returnAddress) then self.appendFramesFor(frames, pc: returnAddress, framePointer: stop.framePointer, textBase: textBase, biased: true)
+		end 'atAnEntry'
 
 		for (iter, returnAddress) in stop.returnAddresses.withIterator() 'eachCaller'
-			if not entered and not mayStartOutsideTheProgram 'theWalkAlreadyEnded'
-				break
-			end 'theWalkAlreadyEnded'
-
-			let framePointer = try stop.framePointers.get(iter.index() + 1) otherwise 0
-			let before = frames.count()
-			self.appendFramesFor(frames, pc: returnAddress, framePointer: framePointer, textBase: textBase, biased: true)
-
-			if frames.count() > before 'insideTheProgramsOwnCode'
-				entered = true
-				continue
-			end 'insideTheProgramsOwnCode'
-
-			if entered 'pastTheProgramsOwnCode'
-				break
-			end 'pastTheProgramsOwnCode'
+			self.appendFramesFor(frames, pc: returnAddress, framePointer: stop.callerFramePointerOf(iter.index()), textBase: textBase, biased: true)
 		end 'eachCaller'
 
 		return frames
-	end 'walkedFrames'
+	end 'frameListFor'
 
-	export function offsetIsTheProgramsOwn(offset DebugAddress) returns bool
+	export function unchainedReturnAt(offset DebugAddress) returns DebugUnchainedReturn
+		match self.reader.functionContaining(offset as MxdbgCodeOffset) 'enclosing'
+			none then return DebugUnchainedReturn.none
+			found(fn) then return self.unchainedReturnIn(fn, offset: offset as X64Offset)
+		end 'enclosing'
+	end 'unchainedReturnAt'
+
+	function unchainedReturnIn(fn MxdbgFunctionInfo, offset X64Offset) returns DebugUnchainedReturn
+		let prologue = self.prologueOf(fn)
+
+		if instructionIsAReturn(self.code, at: offset) or offset == (fn.codeStart as X64Offset) 'nothingPushedAboveIt'
+			return DebugUnchainedReturn.onTheStack(0, frame: prologue.frame)
+		end 'nothingPushedAboveIt'
+
+		for (iter, pushed) in prologue.pushEnds.withIterator() 'eachPush'
+			if pushed == offset 'justPastThisPush'
+				return DebugUnchainedReturn.onTheStack((iter.index() + 1) as DebugTally, frame: prologue.frame)
+			end 'justPastThisPush'
+		end 'eachPush'
+
+		return DebugUnchainedReturn.none
+	end 'unchainedReturnIn'
+
+	function prologueOf(fn MxdbgFunctionInfo) returns DebugPrologue
+		if let known = try self.prologues.get(fn.codeStart) 'scannedBefore'
+			return known
+		end 'scannedBefore'
+
+		let scanned = scannedPrologue(self.code, fn: fn)
+		self.prologues.upsert(fn.codeStart, value: scanned)
+
+		return scanned
+	end 'prologueOf'
+
+	export function spliceExitAt(offset DebugAddress) returns DebugSpliceExit
+		match self.libraryBodyAround(offset as MxdbgCodeOffset) 'body'
+			none then return DebugSpliceExit.none
+			site(root) then return self.memoizedExitOfSplice(root)
+		end 'body'
+	end 'spliceExitAt'
+
+	function memoizedExitOfSplice(root MxdbgIndex) returns DebugSpliceExit
+		if let known = try self.spliceExits.get(root) 'judgedBefore'
+			return known
+		end 'judgedBefore'
+
+		let exit = self.exitOfSplice(root)
+		self.spliceExits.upsert(root, value: exit)
+
+		return exit
+	end 'memoizedExitOfSplice'
+
+	function libraryBodyAround(offset MxdbgCodeOffset) returns MxdbgInlineSiteLookup
+		var root = MxdbgInlineSiteLookup.none
+
+		for index in self.inlineChainAt(offset) 'eachSplicedBody'
+			if mxdbgOriginIsTheAuthors(self.reader.inlineSite(index).origin) 'theAuthorsBody'
+				break
+			end 'theAuthorsBody'
+
+			root = MxdbgInlineSiteLookup.site(index)
+		end 'eachSplicedBody'
+
+		return root
+	end 'libraryBodyAround'
+
+	function exitOfSplice(root MxdbgIndex) returns DebugSpliceExit
+		var ranges = DebugCodeRangeArray.create()
+		var holdsTheAuthorsCode = false
+
+		for range in 0 upto self.reader.inlineRangeCount() 'eachRange'
+			let descent = self.descentFrom(self.reader.inlineRangeSite(range as MxdbgIndex), root: root)
+
+			if descent == DebugSpliceDescent.outside 'notPartOfTheSplice'
+				continue
+			end 'notPartOfTheSplice'
+
+			ranges.push(DebugCodeRange.create(self.reader.inlineRangeStart(range as MxdbgIndex), limit: self.reader.inlineRangeEnd(range as MxdbgIndex)))
+			holdsTheAuthorsCode = holdsTheAuthorsCode or descent == DebugSpliceDescent.throughTheAuthors
+		end 'eachRange'
+
+		let ways = spliceWaysOf(self.code, ranges: ranges)
+
+		if ways.leavesUnknowably or ways.exits.count() != 1 'noOneWayOut'
+			return DebugSpliceExit.none
+		end 'noOneWayOut'
+
+		let exit = try ways.exits.get(0) otherwise panic("DebugSymbols.exitOfSplice: a splice with exactly one way out holds it")
+
+		return DebugSpliceExit.at(exit as DebugAddress, reachesTheAuthorsCode: holdsTheAuthorsCode or self.someCalleeIsTheProgramsOwn(ways.callees), indirectCalls: ways.indirectCalls)
+	end 'exitOfSplice'
+
+	function someCalleeIsTheProgramsOwn(callees MxdbgCodeOffsetArray) returns bool
+		for callee in callees 'eachCallee'
+			if offsetIsTheProgramsOwnIn(self.reader, offset: callee) 'theAuthorsFunction'
+				return true
+			end 'theAuthorsFunction'
+		end 'eachCallee'
+
+		return false
+	end 'someCalleeIsTheProgramsOwn'
+
+	function descentFrom(site MxdbgIndex, root MxdbgIndex) returns DebugSpliceDescent
+		var index = site
+		var throughTheAuthors = false
+
+		while index != root 'eachEnclosingSite'
+			let enclosing = self.reader.inlineSite(index)
+			throughTheAuthors = throughTheAuthors or mxdbgOriginIsTheAuthors(enclosing.origin)
+
+			match enclosing.parent 'parent'
+				none then return DebugSpliceDescent.outside
+				site(parent) then index = parent
+			end 'parent'
+		end 'eachEnclosingSite'
+
+		return DebugSpliceDescent.throughTheAuthors if throughTheAuthors else DebugSpliceDescent.libraryOnly
+	end 'descentFrom'
+
+	export function offsetIsAFunctionEntry(offset DebugAddress) returns bool
 		return match self.reader.functionContaining(offset as MxdbgCodeOffset) 'enclosing'
 			none gives false
-			found(fn) gives self.functionIsTheProgramsOwn(fn)
+			found(fn) gives (fn.codeStart as DebugAddress) == offset
 		end 'enclosing'
+	end 'offsetIsAFunctionEntry'
+
+	export function functionAtIsTheProgramsOwn(offset DebugAddress) returns bool
+		return match self.reader.functionContaining(offset as MxdbgCodeOffset) 'enclosing'
+			none gives false
+			found(fn) gives bodyIsTheProgramsOwn(fn, origin: fn.origin)
+		end 'enclosing'
+	end 'functionAtIsTheProgramsOwn'
+
+	export function returnIsIntoTheProgramsOwn(offset DebugAddress) returns bool
+		return offsetIsTheProgramsOwnIn(self.reader, offset: MxdbgReader.callSiteLookup(offset as MxdbgCodeOffset))
+	end 'returnIsIntoTheProgramsOwn'
+
+	export function offsetIsTheProgramsOwn(offset DebugAddress) returns bool
+		return offsetIsTheProgramsOwnIn(self.reader, offset: offset as MxdbgCodeOffset)
 	end 'offsetIsTheProgramsOwn'
 
 	export function inlineDepthAt(offset DebugAddress) returns DebugTally
-		return self.inlineChainAt(offset as MxdbgCodeOffset).count() as DebugTally
+		return self.presentedChainAt(offset as MxdbgCodeOffset).count() as DebugTally
 	end 'inlineDepthAt'
 
 	export function sourcePositionAt(offset DebugAddress) returns MxdbgLineLookup
 		return self.reader.pcToLine(offset as MxdbgCodeOffset)
 	end 'sourcePositionAt'
 
-	export function localsAt(offset DebugAddress) returns DebugLocalArray
+	export function localsAt(offset DebugAddress, site MxdbgInlineSiteLookup) returns DebugLocalArray
 		var found = DebugLocalArray.create()
 
 		match self.reader.functionContaining(offset as MxdbgCodeOffset) 'enclosing'
 			none then return found
-			found(fn) then self.appendLocalsOf(found, fn: fn)
+			found(fn) then self.appendLocalsOf(found, fn: fn, site: site)
 		end 'enclosing'
 
 		return found
@@ -224,7 +618,7 @@ export type DebugSymbols
 	end 'typeRecordOf'
 
 	export function typeNameOf(typeId MxdbgIndex) returns String
-		return self.reader.typeName(typeId)
+		return self.reader.typeRecord(typeId).name
 	end 'typeNameOf'
 
 	export function typeIsDescribed(typeId MxdbgIndex) returns bool
@@ -235,16 +629,18 @@ export type DebugSymbols
 		return self.reader.fieldRecord(index)
 	end 'fieldRecordOf'
 
-	function appendLocalsOf(into DebugLocalArray, fn MxdbgFunctionInfo)
+	function appendLocalsOf(into DebugLocalArray, fn MxdbgFunctionInfo, site MxdbgInlineSiteLookup)
 		for k in fn.localFirst upto fn.localFirst + fn.localCount 'eachLocal'
-			into.push(self.reader.localRecord(k as MxdbgIndex))
+			if self.reader.localBelongsTo(k as MxdbgIndex, site: site) 'aBindingOfThisBody'
+				into.push(self.reader.localRecord(k as MxdbgIndex))
+			end 'aBindingOfThisBody'
 		end 'eachLocal'
 	end 'appendLocalsOf'
 
-	function innermostName(frames DebugFrameArray, offset DebugAddress) returns String
+	function innermostName(frames DebugFrameArray, offset DebugAddress) returns DebugFunctionNameLookup
 		let innermost = try frames.get(0) otherwise return self.functionNameAt(offset)
 
-		return innermost.functionName
+		return DebugFunctionNameLookup.named(innermost.functionName)
 	end 'innermostName'
 
 	function appendFramesFor(frames DebugFrameArray, pc DebugAddress, framePointer DebugAddress, textBase DebugAddress, biased bool)
@@ -253,6 +649,7 @@ export type DebugSymbols
 		end 'notInThisImage'
 
 		let raw = (pc - textBase) as MxdbgCodeOffset
+
 		// Only the outer frames are return addresses (`callSiteLookup` owns that bias); the innermost
 		// frame's pc is the stop itself and is read where it stands.
 		let offset = MxdbgReader.callSiteLookup(raw) if biased else raw
@@ -264,29 +661,61 @@ export type DebugSymbols
 	end 'appendFramesFor'
 
 	function appendKnownFrames(frames DebugFrameArray, fn MxdbgFunctionInfo, offset MxdbgCodeOffset, framePointer DebugAddress)
-		if not self.functionIsTheProgramsOwn(fn) 'libraryOrRuntimeCode'
+		if fn.lineCount == 0 'noSourceToShow'
 			return
-		end 'libraryOrRuntimeCode'
+		end 'noSourceToShow'
 
-		let file = self.fileOfFunction(fn)
-		let line = self.lineAt(offset)
+		var position = self.positionAt(fn, offset: offset)
 
-		for name in self.inlineChainAt(offset) 'eachSplicedBody'
-			frames.push(DebugFrame.create(frames.count() as DebugFrameNumber, functionName: name, file: file, line: line, offset: offset as DebugAddress, inlined: true, framePointer: framePointer))
+		for index in self.inlineChainAt(offset) 'eachSplicedBody'
+			let site = self.reader.inlineSite(index)
+
+			if mxdbgOriginIsTheAuthors(site.origin) 'theAuthorsBody'
+				frames.push(DebugFrame.create(frames.count() as DebugFrameNumber, functionName: site.name, path: position.path, line: position.line, column: position.column, offset: offset as DebugAddress, inlined: true, site: MxdbgInlineSiteLookup.site(index), framePointer: framePointer))
+			end 'theAuthorsBody'
+
+			position = self.callerPositionOf(site, fn: fn, offset: offset)
 		end 'eachSplicedBody'
 
-		frames.push(DebugFrame.create(frames.count() as DebugFrameNumber, functionName: fn.name, file: file, line: line, offset: offset as DebugAddress, inlined: false, framePointer: framePointer))
+		if mxdbgOriginIsTheAuthors(fn.origin) 'theAuthorsFunction'
+			frames.push(DebugFrame.create(frames.count() as DebugFrameNumber, functionName: fn.displayName, path: position.path, line: position.line, column: position.column, offset: offset as DebugAddress, inlined: false, site: MxdbgInlineSiteLookup.none, framePointer: framePointer))
+		end 'theAuthorsFunction'
 	end 'appendKnownFrames'
 
-	function inlineChainAt(offset MxdbgCodeOffset) returns StringArray
-		var names = StringArray.create()
+	function callerPositionOf(site MxdbgInlineSiteInfo, fn MxdbgFunctionInfo, offset MxdbgCodeOffset) returns DebugSourcePosition
+		return match site.call 'where'
+			none gives self.lastRowOfSite(fn, offset: offset, site: site.parent)
+			at(file, line, column) gives DebugSourcePosition.create(self.openablePath(file), line: line as DebugLineNumber, column: column as DebugColumnNumber)
+		end 'where'
+	end 'callerPositionOf'
+
+	function lastRowOfSite(fn MxdbgFunctionInfo, offset MxdbgCodeOffset, site MxdbgInlineSiteLookup) returns DebugSourcePosition
+		var position = DebugSourcePosition.unknown()
+
+		for k in fn.lineFirst upto fn.lineFirst + fn.lineCount 'eachRow'
+			let row = self.reader.lineRecord(k as MxdbgIndex)
+
+			if row.codeOffset > offset 'pastTheOffset'
+				break
+			end 'pastTheOffset'
+
+			if sameInlineSite(self.reader.inlineSiteContaining(row.codeOffset), other: site) 'theCallersOwnRow'
+				position = DebugSourcePosition.create(self.openablePath(row.file), line: row.line as DebugLineNumber, column: row.column as DebugColumnNumber)
+			end 'theCallersOwnRow'
+		end 'eachRow'
+
+		return position
+	end 'lastRowOfSite'
+
+	function inlineChainAt(offset MxdbgCodeOffset) returns MxdbgIndexArray
+		var chain = MxdbgIndexArray.create()
 		var walking = self.reader.inlineSiteContaining(offset)
 		var descending = true
 
 		while descending 'eachSite'
 			match walking 'site'
 				none then descending = false
-				site(index) then names.push(self.reader.inlineSite(index).name)
+				site(index) then chain.push(index)
 			end 'site'
 
 			if descending 'thenItsParent'
@@ -294,8 +723,20 @@ export type DebugSymbols
 			end 'thenItsParent'
 		end 'eachSite'
 
-		return names
+		return chain
 	end 'inlineChainAt'
+
+	function presentedChainAt(offset MxdbgCodeOffset) returns MxdbgIndexArray
+		var presented = MxdbgIndexArray.create()
+
+		for index in self.inlineChainAt(offset) 'eachSplicedBody'
+			if mxdbgOriginIsTheAuthors(self.reader.inlineSite(index).origin) 'theAuthorsBody'
+				presented.push(index)
+			end 'theAuthorsBody'
+		end 'eachSplicedBody'
+
+		return presented
+	end 'presentedChainAt'
 
 	function parentOf(lookup MxdbgInlineSiteLookup) returns MxdbgInlineSiteLookup
 		return match lookup 'which'
@@ -304,100 +745,263 @@ export type DebugSymbols
 		end 'which'
 	end 'parentOf'
 
-	function lineAt(offset MxdbgCodeOffset) returns DebugLineNumber
+	function positionAt(fn MxdbgFunctionInfo, offset MxdbgCodeOffset) returns DebugSourcePosition
 		return match self.reader.pcToLine(offset) 'positioned'
-			none gives 0
-			found(row) gives row.line as DebugLineNumber
+			none gives DebugSourcePosition.create(self.openablePath(self.pathOfFunction(fn)), line: NoSourceLine, column: NoSourceColumn)
+			found(row) gives DebugSourcePosition.create(self.openablePath(row.file), line: row.line as DebugLineNumber, column: row.column as DebugColumnNumber)
 		end 'positioned'
-	end 'lineAt'
+	end 'positionAt'
 
-	function fileOfFunction(fn MxdbgFunctionInfo) returns String
+	function pathOfFunction(fn MxdbgFunctionInfo) returns String
 		if fn.lineCount == 0 'noRows'
 			return ""
 		end 'noRows'
 
-		return baseNameOf(self.reader.lineRecord(fn.lineFirst).file)
-	end 'fileOfFunction'
+		return self.reader.lineRecord(fn.lineFirst).file
+	end 'pathOfFunction'
 
-	function functionIsTheProgramsOwn(fn MxdbgFunctionInfo) returns bool
-		if fn.name.startsWith(DebugCompilerNamePrefix) 'compilerMinted'
-			return false
-		end 'compilerMinted'
+	function openablePath(recorded String) returns String
+		for source in self.sourceFiles 'eachSource'
+			if source.recorded == recorded 'thisFile'
+				return source.path.toString()
+			end 'thisFile'
+		end 'eachSource'
 
-		if fn.lineCount == 0 'noSourcePosition'
-			return false
-		end 'noSourcePosition'
+		return recorded
+	end 'openablePath'
 
-		return not isLibrarySourcePath(self.reader.lineRecord(fn.lineFirst).file)
-	end 'functionIsTheProgramsOwn'
-
-	function parsedLineTarget(spelling String) returns DebugLineTarget
-		let pieces = spelling.split(TargetSeparator)
-
-		if pieces.count() == 1 'noColon'
-			match wholeNumberIn(spelling) 'aBareLine'
-				none then return DebugLineTarget.none
-				value(line) then return DebugLineTarget.at(self.fileOfMain(), line: line)
-			end 'aBareLine'
-		end 'noColon'
-
-		if pieces.count() != 2 'notAFileAndLine'
-			return DebugLineTarget.none
-		end 'notAFileAndLine'
-
-		match wholeNumberIn(try pieces.get(1) otherwise "") 'aLineNumber'
-			none then return DebugLineTarget.none
-			value(line) then return DebugLineTarget.at(try pieces.get(0) otherwise "", line: line)
-		end 'aLineNumber'
-	end 'parsedLineTarget'
-
-	function fileOfMain() returns String
+	function resolvedLineOfMain(line DebugLineNumber) returns BreakResolution
 		for i in 0 upto self.reader.functionCount() 'eachFunction'
 			let fn = self.reader.functionRecord(i as MxdbgIndex)
 
 			if fn.name == DebugMainFunctionName and fn.lineCount > 0 'theEntryPoint'
-				return baseNameOf(self.reader.lineRecord(fn.lineFirst).file)
+				return self.resolvedLineOfRecorded(self.reader.lineRecord(fn.lineFirst).file, line: line)
 			end 'theEntryPoint'
 		end 'eachFunction'
 
-		return try self.programFiles.get(0) otherwise ""
-	end 'fileOfMain'
+		let recorded = try self.programFiles.get(0) otherwise return BreakResolution.noCode("", line: line)
 
-	function resolvedLine(file String, line DebugLineNumber) returns BreakResolution
-		let wanted = baseNameOf(file)
-		var offsets = DebugAddressArray.create()
-		var fileIds = MxdbgIndexArray.create()
+		return self.resolvedLineOfRecorded(recorded, line: line)
+	end 'resolvedLineOfMain'
 
-		for i in 0 upto self.reader.fileCount() 'eachFile'
-			if baseNameOf(self.reader.fileName(i as MxdbgIndex)) == wanted 'thisFile'
-				fileIds.push(i as MxdbgIndex)
+	function resolvedLineOfRecorded(recorded String, line DebugLineNumber) returns BreakResolution
+		return self.resolvedLine(self.fileIdsRecordedAs(recorded), name: baseNameOf(recorded), path: self.openablePath(recorded), line: line)
+	end 'resolvedLineOfRecorded'
+
+	function fileIdsRecordedAs(recorded String) returns MxdbgIndexArray
+		var ids = MxdbgIndexArray.create()
+
+		for source in self.sourceFiles 'eachSource'
+			if source.recorded == recorded 'thisFile'
+				ids.push(source.fileId)
 			end 'thisFile'
-		end 'eachFile'
+		end 'eachSource'
 
-		for offset in self.reader.lineToOffsets(fileIds, line: line as MxdbgIndex) 'eachOffset'
-			if not offsets.contains(offset as DebugAddress) 'aNewSite'
-				offsets.push(offset as DebugAddress)
-			end 'aNewSite'
-		end 'eachOffset'
+		return ids
+	end 'fileIdsRecordedAs'
 
-		if offsets.count() == 0 'noCodeThere'
-			return BreakResolution.noCode(wanted, line: line)
-		end 'noCodeThere'
+	function resolvedLineOfFile(file String, line DebugLineNumber) returns BreakResolution
+		match self.resolvedSourceFile(file) 'named'
+			unknown then return BreakResolution.noCode(baseNameOf(file), line: line)
+			ambiguous(candidates) then return BreakResolution.ambiguous(candidates)
+			files(fileIds, name, path) then return self.resolvedLine(fileIds, name: name, path: path, line: line)
+		end 'named'
+	end 'resolvedLineOfFile'
 
-		return BreakResolution.atLine(wanted, line: line, offsets: offsets, functionName: self.functionNameAt(try offsets.get(0) otherwise panic("resolvedLine: a roster asserted non-empty holds a first element")))
+	function resolvedSourceFile(spelling String) returns DebugFileResolution
+		let named = try FilePath.from(spelling.trim()) otherwise return DebugFileResolution.unknown
+		let normalized = named.normalize()
+
+		if named.isAbsolute() 'aFullPath'
+			return self.filesAt(normalized)
+		end 'aFullPath'
+
+		let depth = pathComponentsOf(normalized.toString()).count() as DebugTally
+
+		if depth > 1 'aRelativePath'
+			match self.filesAt(named.resolve(self.sourceRoot).normalize()) 'fromTheRoot'
+				unknown then break 'fromTheRoot'
+				ambiguous(candidates) then return DebugFileResolution.ambiguous(candidates)
+				files(fileIds, name, path) then return DebugFileResolution.files(fileIds, name: name, path: path)
+			end 'fromTheRoot'
+		end 'aRelativePath'
+
+		var matching = DebugSourceFileArray.create()
+
+		for source in self.sourceFiles 'eachSource'
+			if source.endsWith(normalized, depth: depth) 'endsInTheSpelling'
+				matching.push(source)
+			end 'endsInTheSpelling'
+		end 'eachSource'
+
+		return resolutionOf(matching)
+	end 'resolvedSourceFile'
+
+	function filesAt(path FilePath) returns DebugFileResolution
+		var matching = DebugSourceFileArray.create()
+
+		for source in self.sourceFiles 'eachSource'
+			if source.path.equals(path) 'thisFile'
+				matching.push(source)
+			end 'thisFile'
+		end 'eachSource'
+
+		return resolutionOf(matching)
+	end 'filesAt'
+
+	function resolvedOffset(offset MxdbgCodeOffset) returns BreakResolution
+		if (offset as DebugAddress) >= (self.code.count() as DebugAddress) 'pastTheText'
+			return BreakResolution.refused("", line: NoSourceLine, functionName: DebugFunctionNameLookup.none, reason: DebugOutOfTextReason)
+		end 'pastTheText'
+
+		match self.reader.functionContaining(offset) 'enclosing'
+			none then return BreakResolution.refused("", line: NoSourceLine, functionName: DebugFunctionNameLookup.none, reason: DebugOutOfTextReason)
+			found(fn) then return self.resolvedInsideFunction(fn, offset: offset)
+		end 'enclosing'
+	end 'resolvedOffset'
+
+	function resolvedInsideFunction(fn MxdbgFunctionInfo, offset MxdbgCodeOffset) returns BreakResolution
+		let position = self.positionAt(fn, offset: offset)
+		let file = baseNameOf(position.path)
+		let named = DebugFunctionNameLookup.named(self.presentedNameAt(offset as DebugAddress, hidden: 0))
+
+		return match self.instructionStartAt(fn, offset: offset) 'boundary'
+			start gives BreakResolution.atLine(file, line: position.line, bodies: singleBody(offset as DebugAddress), functionName: named, breakpoint: exactOffsetSpelling(offset))
+			inside gives BreakResolution.refused(file, line: position.line, functionName: named, reason: DebugNotAnInstructionStartReason)
+			undecodable gives BreakResolution.refused(file, line: position.line, functionName: named, reason: DebugUnclassifiedReason)
+		end 'boundary'
+	end 'resolvedInsideFunction'
+
+	function instructionStartAt(fn MxdbgFunctionInfo, offset MxdbgCodeOffset) returns DebugInstructionStart
+		var at = fn.codeStart as X64Offset
+
+		while at < (offset as X64Offset) 'eachInstruction'
+			match decodeX64Instruction(self.code, at: at, address: at as X64Address) 'decoded'
+				unclassified then return DebugInstructionStart.undecodable
+				decoded(instruction) then at = at + (instruction.length as X64Offset)
+			end 'decoded'
+		end 'eachInstruction'
+
+		return DebugInstructionStart.start if at == (offset as X64Offset) else DebugInstructionStart.inside
+	end 'instructionStartAt'
+
+	function presentedNameAt(offset DebugAddress, hidden DebugTally) returns String
+		match self.presentedSiteAt(offset, hidden: hidden) 'presented'
+			site(index) then return self.reader.inlineSite(index).name
+			none then break 'presented'
+		end 'presented'
+
+		match self.functionNameAt(offset) 'enclosing'
+			none then panic("DebugSymbols.presentedNameAt: 0x{offset:x} is a line row or an instruction start of a function, and no function covers it")
+			named(name) then return name
+		end 'enclosing'
+	end 'presentedNameAt'
+
+	export function presentedSiteAt(offset DebugAddress, hidden DebugTally) returns MxdbgInlineSiteLookup
+		let chain = self.presentedChainAt(offset as MxdbgCodeOffset)
+
+		if (hidden as ElementIndex) > chain.count() 'moreHiddenThanSpliced'
+			panic("DebugSymbols.presentedSiteAt: {hidden} spliced frames are hidden at 0x{offset:x}, where only {chain.count()} are spliced")
+		end 'moreHiddenThanSpliced'
+
+		if (hidden as ElementIndex) == chain.count() 'theFunctionsOwnText'
+			return MxdbgInlineSiteLookup.none
+		end 'theFunctionsOwnText'
+
+		return MxdbgInlineSiteLookup.site(try chain.get(hidden as ElementIndex) otherwise panic("DebugSymbols.presentedSiteAt: a chain of {chain.count()} holds index {hidden} below its count"))
+	end 'presentedSiteAt'
+
+	export function presentedDepthAt(offset DebugAddress, hidden DebugTally) returns DebugTally
+		return self.inlineDepthAt(offset) - hidden
+	end 'presentedDepthAt'
+
+	export function hideableFramesAt(offset DebugAddress) returns DebugTally
+		var hideable = 0 as DebugTally
+
+		for index in self.presentedChainAt(offset as MxdbgCodeOffset) 'eachSplicedBody'
+			if not self.entersHere(index, offset: offset) 'alreadyUnderWay'
+				break
+			end 'alreadyUnderWay'
+
+			hideable = hideable + 1
+		end 'eachSplicedBody'
+
+		return hideable
+	end 'hideableFramesAt'
+
+	function entersHere(site MxdbgIndex, offset DebugAddress) returns bool
+		let entry = try self.siteEntries.get(site) otherwise return false
+
+		return match self.reader.inlineSite(site).call 'called'
+			none gives false
+			at gives (entry as DebugAddress) == offset
+		end 'called'
+	end 'entersHere'
+
+	export function presentedLineAt(offset DebugAddress, hidden DebugTally) returns DebugLineNumber
+		if hidden == 0 'nothingHidden'
+			return match self.reader.pcToLine(offset as MxdbgCodeOffset) 'positioned'
+				none gives NoSourceLine
+				found(row) gives row.line as DebugLineNumber
+			end 'positioned'
+		end 'nothingHidden'
+
+		let chain = self.presentedChainAt(offset as MxdbgCodeOffset)
+		let outermostHidden = try chain.get((hidden - 1) as ElementIndex) otherwise panic("DebugSymbols.presentedLineAt: {hidden} spliced frames are hidden at 0x{offset:x}, where only {chain.count()} are spliced")
+
+		match self.reader.inlineSite(outermostHidden).call 'called'
+			none then panic("DebugSymbols.presentedLineAt: site {outermostHidden} is hidden at 0x{offset:x} and records no call position — only a site with one is ever hidden")
+			at(_, line, _) then return line as DebugLineNumber
+		end 'called'
+	end 'presentedLineAt'
+
+	function resolvedLine(fileIds MxdbgIndexArray, name String, path String, line DebugLineNumber) returns BreakResolution
+		var grouping = DebugLineBodies.create()
+
+		for placed in self.lineCandidatesOf(fileIds, line: line) 'eachCandidate'
+			grouping.place(placed.candidate, site: placed.context, functionStart: self.functionStartOf(placed.candidate.offset as MxdbgCodeOffset))
+		end 'eachCandidate'
+
+		let firstBody = try grouping.bodies.get(0) otherwise return BreakResolution.noCode(name, line: line)
+		let first = try firstBody.get(0) otherwise panic("resolvedLine: a body is opened by the candidate that places it, so it is never empty")
+
+		return BreakResolution.atLine(name, line: line, bodies: grouping.bodies, functionName: DebugFunctionNameLookup.named(self.presentedNameAt(first.offset, hidden: first.hidden)), breakpoint: "{path}{TargetSeparator}{line}")
 	end 'resolvedLine'
+
+	function lineCandidatesOf(fileIds MxdbgIndexArray, line DebugLineNumber) returns DebugPlacedCandidateArray
+		var placed = DebugPlacedCandidateArray.create()
+
+		for row in self.reader.statementRowsOf(fileIds, line: line as MxdbgIndex) 'eachRow'
+			placed.push(DebugPlacedCandidate.create(DebugLineCandidate.row(row.codeOffset as DebugAddress, entersTheLine: row.entersTheLine()), context: self.reader.inlineSiteContaining(row.codeOffset)))
+		end 'eachRow'
+
+		for site in self.reader.inlineSitesCalledAt(fileIds, line: line as MxdbgIndex) 'eachCalledSite'
+			let entry = try self.siteEntries.get(site) otherwise continue
+			let hidden = presentedThrough(self.reader, chain: self.inlineChainAt(entry), site: site)
+			insertByOffset(placed, entry: DebugPlacedCandidate.create(DebugLineCandidate.callEntry(entry as DebugAddress, hidden: hidden), context: self.reader.inlineSite(site).parent))
+		end 'eachCalledSite'
+
+		return placed
+	end 'lineCandidatesOf'
+
+	function functionStartOf(offset MxdbgCodeOffset) returns MxdbgCodeOffset
+		match self.reader.functionContaining(offset) 'enclosing'
+			none then panic("DebugSymbols.functionStartOf: the line row at 0x{offset:x} lies in no function — every row is folded in from the chunk of the function it belongs to")
+			found(fn) then return fn.codeStart
+		end 'enclosing'
+	end 'functionStartOf'
 
 	function resolvedFunction(name String) returns BreakResolution
 		for i in 0 upto self.reader.functionCount() 'eachFunction'
 			let fn = self.reader.functionRecord(i as MxdbgIndex)
 
-			if fn.name != name 'anotherFunction'
+			if fn.displayName != name 'anotherFunction'
 				continue
 			end 'anotherFunction'
 
 			match self.firstStatementRowOf(fn) 'opening'
 				none then continue
-				found(row) then return BreakResolution.atLine(baseNameOf(row.file), line: row.line as DebugLineNumber, offsets: singleOffset(row.codeOffset as DebugAddress), functionName: name)
+				found(row) then return BreakResolution.atLine(baseNameOf(row.file), line: row.line as DebugLineNumber, bodies: singleBody(row.codeOffset as DebugAddress), functionName: DebugFunctionNameLookup.named(name), breakpoint: name)
 			end 'opening'
 		end 'eachFunction'
 
@@ -407,14 +1011,15 @@ export type DebugSymbols
 	function resolvedSplicedBody(name String) returns BreakResolution
 		for i in 0 upto self.reader.inlineRangeCount() 'eachSplicedRange'
 			let offset = self.reader.inlineRangeStart(i as MxdbgIndex)
+			let site = self.reader.inlineSite(self.reader.inlineRangeSite(i as MxdbgIndex))
 
-			if self.splicedNameAt(offset) != name 'anotherBody'
+			if site.name != name or not mxdbgOriginIsTheAuthors(site.origin) 'anotherBody'
 				continue
 			end 'anotherBody'
 
 			match self.reader.pcToLine(offset) 'positioned'
 				none then continue
-				found(row) then return BreakResolution.atLine(baseNameOf(row.file), line: row.line as DebugLineNumber, offsets: singleOffset(offset as DebugAddress), functionName: name)
+				found(row) then return BreakResolution.atLine(baseNameOf(row.file), line: row.line as DebugLineNumber, bodies: singleBody(offset as DebugAddress), functionName: DebugFunctionNameLookup.named(name), breakpoint: name)
 			end 'positioned'
 		end 'eachSplicedRange'
 
@@ -435,35 +1040,94 @@ export type DebugSymbols
 
 	function sourceWindow(path String, line DebugLineNumber) returns DebugSourceLineArray
 		var window = DebugSourceLineArray.create()
-		let text = self.readSource(path)
 
-		if text.isEmpty() 'noSourceToShow'
-			return window
-		end 'noSourceToShow'
-
-		for (iter, row) in text.split(LineSeparator).withIterator() 'eachLine'
-			let number = (iter.index() + 1) as DebugLineNumber
-
-			if number + SourceWindowRadius >= line and number <= line + SourceWindowRadius 'insideTheWindow'
-				window.push(DebugSourceLine.create(number, text: row.replace(CarriageReturn, with: ""), current: number == line))
-			end 'insideTheWindow'
-		end 'eachLine'
+		match self.readSource(path) 'read'
+			none then return window
+			text(content) then appendSourceWindow(window, content: content, line: line)
+		end 'read'
 
 		return window
 	end 'sourceWindow'
 
-	function readSource(path String) returns String
-		let named = try FilePath.from(path) otherwise return ""
+	function readSource(path String) returns DebugSourceText
+		let named = try FilePath.from(path) otherwise return DebugSourceText.none
 
 		if File.exists(named) 'namedDirectly'
-			return try File.readText(named) otherwise ""
+			return sourceTextAt(named)
 		end 'namedDirectly'
 
-		let beside = self.sourceRoot.join(baseNameOf(path))
-
-		return try File.readText(beside) otherwise ""
+		return sourceTextAt(self.executableDir.join(baseNameOf(path)))
 	end 'readSource'
 end 'DebugSymbols'
+
+function sourceTextAt(path FilePath) returns DebugSourceText
+	let content = try File.readText(path) otherwise return DebugSourceText.none
+
+	return DebugSourceText.text(content)
+end 'sourceTextAt'
+
+function appendSourceWindow(window DebugSourceLineArray, content String, line DebugLineNumber)
+	for (iter, row) in content.split(LineSeparator).withIterator() 'eachLine'
+		let number = (iter.index() + 1) as DebugLineNumber
+
+		if number + SourceWindowRadius >= line and number <= line + SourceWindowRadius 'insideTheWindow'
+			window.push(DebugSourceLine.create(number, text: row.replace(CarriageReturn, with: ""), current: number == line))
+		end 'insideTheWindow'
+	end 'eachLine'
+end 'appendSourceWindow'
+
+function resolutionOf(matching DebugSourceFileArray) returns DebugFileResolution
+	let first = try matching.get(0) otherwise return DebugFileResolution.unknown
+	var fileIds = MxdbgIndexArray.create()
+	var distinct = StringArray.create()
+	var paths = DebugSourceFileArray.create()
+
+	for source in matching 'eachMatch'
+		fileIds.push(source.fileId)
+
+		if not holdsPath(paths, path: source.path) 'anotherFile'
+			paths.push(source)
+			distinct.push(source.recorded)
+		end 'anotherFile'
+	end 'eachMatch'
+
+	if distinct.count() > 1 'severalFiles'
+		return DebugFileResolution.ambiguous(distinct)
+	end 'severalFiles'
+
+	return DebugFileResolution.files(fileIds, name: baseNameOf(first.recorded), path: first.path.toString())
+end 'resolutionOf'
+
+function holdsPath(sources DebugSourceFileArray, path FilePath) returns bool
+	for source in sources 'eachSource'
+		if source.path.equals(path) 'thisPath'
+			return true
+		end 'thisPath'
+	end 'eachSource'
+
+	return false
+end 'holdsPath'
+
+function sameInlineSite(lookup MxdbgInlineSiteLookup, other MxdbgInlineSiteLookup) returns bool
+	return match lookup 'which'
+		none gives isOwnText(other)
+		site(index) gives isSite(other, index: index)
+	end 'which'
+end 'sameInlineSite'
+
+function isOwnText(lookup MxdbgInlineSiteLookup) returns bool
+	return match lookup 'which'
+		none gives true
+		site gives false
+	end 'which'
+end 'isOwnText'
+
+function isSite(lookup MxdbgInlineSiteLookup, index MxdbgIndex) returns bool
+	return match lookup 'which'
+		none gives false
+		site(other) gives other == index
+	end 'which'
+end 'isSite'
 
 export union MxdbgLocalLookup
 	live(local MxdbgLocalInfo)
@@ -471,10 +1135,77 @@ export union MxdbgLocalLookup
 	undeclared
 end 'MxdbgLocalLookup'
 
-union DebugLineTarget
-	none
-	at(file String, line DebugLineNumber)
-end 'DebugLineTarget'
+typealias DebugBodySlotMap = Map with (MxdbgIndex, DebugTally)
+
+type DebugLineBodies
+	export var bodies as DebugLineBodyArray
+	var bySite as DebugBodySlotMap
+	var byFunctionStart as DebugBodySlotMap
+
+	static function create() returns DebugLineBodies
+		return Self{bodies: DebugLineBodyArray.create(), bySite: DebugBodySlotMap.create(), byFunctionStart: DebugBodySlotMap.create()}
+	end 'create'
+
+	function place(candidate DebugLineCandidate, site MxdbgInlineSiteLookup, functionStart MxdbgCodeOffset)
+		match site 'body'
+			none then placeInBody(self.bodies, slots: self.byFunctionStart, key: functionStart as MxdbgIndex, candidate: candidate)
+			site(index) then placeInBody(self.bodies, slots: self.bySite, key: index, candidate: candidate)
+		end 'body'
+	end 'place'
+end 'DebugLineBodies'
+
+function placeInBody(bodies DebugLineBodyArray, slots DebugBodySlotMap, key MxdbgIndex, candidate DebugLineCandidate)
+	if let slot = try slots.get(key) 'aBodyAlreadyOpened'
+		var body = try bodies.get(slot) otherwise panic("placeInBody: body slot {slot} is past the {bodies.count()} bodies this line opened")
+
+		if not bodyHolds(body, offset: candidate.offset) 'aFurtherStatement'
+			body.push(candidate)
+		end 'aFurtherStatement'
+
+		return
+	end 'aBodyAlreadyOpened'
+
+	slots.upsert(key, value: bodies.count() as DebugTally)
+	var body = DebugLineCandidateArray.create()
+	body.push(candidate)
+	bodies.push(body)
+end 'placeInBody'
+
+function bodyHolds(body DebugLineCandidateArray, offset DebugAddress) returns bool
+	for candidate in body 'eachCandidate'
+		if candidate.offset == offset 'thisOffset'
+			return true
+		end 'thisOffset'
+	end 'eachCandidate'
+
+	return false
+end 'bodyHolds'
+
+function singleBody(offset DebugAddress) returns DebugLineBodyArray
+	var body = DebugLineCandidateArray.create()
+	body.push(DebugLineCandidate.row(offset, entersTheLine: false))
+	var bodies = DebugLineBodyArray.create()
+	bodies.push(body)
+
+	return bodies
+end 'singleBody'
+
+let NoSourceLine = 0 as DebugLineNumber
+let NoSourceColumn = 0 as DebugColumnNumber
+
+type DebugSourcePosition
+	export let path as String
+	export let line as DebugLineNumber
+	export let column as DebugColumnNumber
+
+	static function create(path String, line DebugLineNumber, column DebugColumnNumber) returns DebugSourcePosition
+		return Self{path: path, line: line, column: column}
+	end 'create'
+
+	static function unknown() returns DebugSourcePosition
+		return Self{path: "", line: NoSourceLine, column: NoSourceColumn}
+	end 'unknown'
+end 'DebugSourcePosition'
 
 union DebugWholeNumber
 	none
@@ -496,24 +1227,192 @@ end 'wholeNumberIn'
 export function baseNameOf(path String) returns String
 	let components = pathComponentsOf(path)
 
-	return try components.get(components.count() - 1) otherwise path
+	if components.isEmpty() 'noComponentAtAll'
+		return path
+	end 'noComponentAtAll'
+
+	return try components.get(components.count() - 1) otherwise panic("baseNameOf: a non-empty component list of '{path}' holds its last element")
 end 'baseNameOf'
 
-function isLibrarySourcePath(path String) returns bool
-	for component in pathComponentsOf(path) 'eachComponent'
-		if component == DebugLibraryStdlibComponent or component == DebugLibraryRuntimeComponent 'aLibraryRoot'
+function authoredFilesOf(reader MxdbgReader) returns DebugNameSet
+	var files = DebugNameSet.create()
+
+	for k in 0 upto reader.lineCount() 'eachRow'
+		let row = reader.lineRecord(k as MxdbgIndex)
+
+		if offsetIsTheProgramsOwnIn(reader, offset: row.codeOffset) 'theAuthorsLine'
+			files.insert(row.file)
+		end 'theAuthorsLine'
+	end 'eachRow'
+
+	return files
+end 'authoredFilesOf'
+
+export union DebugSpliceExit
+	none
+	at(offset DebugAddress, reachesTheAuthorsCode bool, indirectCalls DebugAddressArray)
+end 'DebugSpliceExit'
+
+typealias DebugSpliceExitMap = Map with (MxdbgIndex, DebugSpliceExit)
+
+enum DebugSpliceDescent
+	outside
+	libraryOnly
+	throughTheAuthors
+end 'DebugSpliceDescent'
+
+type DebugCodeRange
+	export let start as MxdbgCodeOffset
+	export let limit as MxdbgCodeOffset
+
+	static function create(start MxdbgCodeOffset, limit MxdbgCodeOffset) returns DebugCodeRange
+		return Self{start: start, limit: limit}
+	end 'create'
+end 'DebugCodeRange'
+
+typealias DebugCodeRangeArray = Array with DebugCodeRange
+
+type DebugSpliceWays
+	export var exits as MxdbgCodeOffsetArray
+	export var leavesUnknowably as bool
+	export var indirectCalls as DebugAddressArray
+	export var callees as MxdbgCodeOffsetArray
+
+	static function create() returns DebugSpliceWays
+		return Self{exits: MxdbgCodeOffsetArray.create(), leavesUnknowably: false, indirectCalls: DebugAddressArray.create(), callees: MxdbgCodeOffsetArray.create()}
+	end 'create'
+
+	function noteExit(offset MxdbgCodeOffset)
+		if not self.exits.contains(offset) 'aNewWayOut'
+			self.exits.push(offset)
+		end 'aNewWayOut'
+	end 'noteExit'
+end 'DebugSpliceWays'
+
+function spliceWaysOf(code ByteArray, ranges DebugCodeRangeArray) returns DebugSpliceWays
+	var ways = DebugSpliceWays.create()
+
+	for range in ranges 'eachRange'
+		if not noteWaysOutOf(ways, code: code, range: range, ranges: ranges) 'controlGoesWhereNoRangeSays'
+			ways.leavesUnknowably = true
+
+			return ways
+		end 'controlGoesWhereNoRangeSays'
+	end 'eachRange'
+
+	return ways
+end 'spliceWaysOf'
+
+function noteWaysOutOf(ways DebugSpliceWays, code ByteArray, range DebugCodeRange, ranges DebugCodeRangeArray) returns bool
+	var at = range.start as X64Offset
+	var fallsThrough = true
+
+	while at < (range.limit as X64Offset) 'eachInstruction'
+		let instruction = try x64InstructionAt(code, at: at, address: at as X64Address) otherwise return false
+		let kind = instruction.instructionClass
+
+		if kind == DbgClassReturn or kind == DbgClassIndirectJump 'noTargetThisScanCanName'
+			return false
+		end 'noTargetThisScanCanName'
+
+		if kind == DbgClassIndirectCall 'aCallThroughAValue'
+			ways.indirectCalls.push(at as DebugAddress)
+		end 'aCallThroughAValue'
+
+		if kind == DbgClassDirectCall 'aCallOutOfTheSplice'
+			ways.callees.push(instruction.target as MxdbgCodeOffset)
+		end 'aCallOutOfTheSplice'
+
+		if (kind == DbgClassDirectJump or kind == DbgClassConditionalJump) and not codeRangesHold(ranges, offset: instruction.target as MxdbgCodeOffset) 'aJumpOutOfTheSplice'
+			ways.noteExit(instruction.target as MxdbgCodeOffset)
+		end 'aJumpOutOfTheSplice'
+
+		fallsThrough = kind != DbgClassDirectJump
+		at = at + (instruction.length as X64Offset)
+	end 'eachInstruction'
+
+	if at != (range.limit as X64Offset) 'anInstructionStraddlesTheEnd'
+		return false
+	end 'anInstructionStraddlesTheEnd'
+
+	if fallsThrough and not codeRangesHold(ranges, offset: range.limit) 'fallsOutOfTheSplice'
+		ways.noteExit(range.limit)
+	end 'fallsOutOfTheSplice'
+
+	return true
+end 'noteWaysOutOf'
+
+function codeRangesHold(ranges DebugCodeRangeArray, offset MxdbgCodeOffset) returns bool
+	for range in ranges 'eachRange'
+		if offset >= range.start and offset < range.limit 'insideIt'
 			return true
-		end 'aLibraryRoot'
-	end 'eachComponent'
+		end 'insideIt'
+	end 'eachRange'
 
 	return false
-end 'isLibrarySourcePath'
+end 'codeRangesHold'
+
+typealias DebugPrologueMap = Map with (MxdbgCodeOffset, DebugPrologue)
+typealias X64OffsetArray = Array with X64Offset
+
+type DebugPrologue
+	export let pushEnds as X64OffsetArray
+	export let frame as DebugPrologueFrame
+
+	static function create(pushEnds X64OffsetArray, frame DebugPrologueFrame) returns DebugPrologue
+		return Self{pushEnds: pushEnds, frame: frame}
+	end 'create'
+end 'DebugPrologue'
+
+function scannedPrologue(code ByteArray, fn MxdbgFunctionInfo) returns DebugPrologue
+	var pushEnds = X64OffsetArray.create()
+	var at = fn.codeStart as X64Offset
+
+	while at < (fn.codeEnd as X64Offset) 'eachPrologueInstruction'
+		match x64FrameStepAt(code, at: at) 'framing'
+			pushesAWord(length) then at = at + (length as X64Offset)
+			setsTheFramePointer then return DebugPrologue.create(pushEnds, frame: DebugPrologueFrame.belowTheReturn(pushEnds.count() as DebugTally))
+			neither then return DebugPrologue.create(pushEnds, frame: DebugPrologueFrame.unset)
+		end 'framing'
+
+		pushEnds.push(at)
+	end 'eachPrologueInstruction'
+
+	return DebugPrologue.create(pushEnds, frame: DebugPrologueFrame.unset)
+end 'scannedPrologue'
+
+function instructionIsAReturn(code ByteArray, at X64Offset) returns bool
+	return match decodeX64Instruction(code, at: at, address: at as X64Address) 'decoded'
+		unclassified gives false
+		decoded(instruction) gives instruction.instructionClass == DbgClassReturn
+	end 'decoded'
+end 'instructionIsAReturn'
+
+function bodyIsTheProgramsOwn(fn MxdbgFunctionInfo, origin MxdbgOrigin) returns bool
+	return mxdbgOriginIsTheAuthors(origin) and fn.lineCount > 0
+end 'bodyIsTheProgramsOwn'
+
+function offsetIsTheProgramsOwnIn(reader MxdbgReader, offset MxdbgCodeOffset) returns bool
+	match reader.functionContaining(offset) 'enclosing'
+		none then return false
+		found(fn) then return bodyIsTheProgramsOwn(fn, origin: innermostOriginOf(reader, fn: fn, offset: offset))
+	end 'enclosing'
+end 'offsetIsTheProgramsOwnIn'
+
+function innermostOriginOf(reader MxdbgReader, fn MxdbgFunctionInfo, offset MxdbgCodeOffset) returns MxdbgOrigin
+	return match reader.inlineSiteContaining(offset) 'innermost'
+		none gives fn.origin
+		site(index) gives reader.inlineSite(index).origin
+	end 'innermost'
+end 'innermostOriginOf'
 
 function pathComponentsOf(path String) returns StringArray
 	var components = StringArray.create()
 
 	for piece in path.replace(Backslash, with: ForwardSlash).split(ForwardSlash) 'eachPiece'
-		components.push(piece)
+		if not piece.isEmpty() 'aComponent'
+			components.push(piece)
+		end 'aComponent'
 	end 'eachPiece'
 
 	return components
@@ -527,10 +1426,3 @@ function noteDebugName(names StringArray, seen DebugNameSet, name String)
 	seen.insert(name)
 	names.push(name)
 end 'noteDebugName'
-
-function singleOffset(offset DebugAddress) returns DebugAddressArray
-	var offsets = DebugAddressArray.create()
-	offsets.push(offset)
-
-	return offsets
-end 'singleOffset'

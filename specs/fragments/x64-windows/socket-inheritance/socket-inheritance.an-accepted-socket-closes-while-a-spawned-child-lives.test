@@ -1,0 +1,667 @@
+// Test: socket-inheritance.an-accepted-socket-closes-while-a-spawned-child-lives
+typealias StringArray = Array with String
+
+let ChildLifetimeMs = 3000
+let PromptEndMs = 1500
+
+function sleepingChild() returns ExitCode
+	sleep(ChildLifetimeMs)
+	return 0
+end 'sleepingChild'
+
+function readsItsEndPromptly(port NetworkPort) returns bool
+	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return false
+	let started = Clock.nowMs()
+	let heard = try client.recv(64) otherwise (e) 'ended'
+		return e == NetworkError.connectionClosed and Clock.elapsedMs(started) < PromptEndMs
+	end 'ended'
+
+	print("unexpected bytes '{heard}'\n")
+	return false
+end 'readsItsEndPromptly'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'iAmTheChild'
+		return sleepingChild()
+	end 'iAmTheChild'
+
+	let me = try Process.executablePath() otherwise return 2
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 3
+	let reader = async readsItsEndPromptly(listener.port())
+	let conn = try listener.accept() otherwise return 4
+
+	var argv = StringArray.create()
+	argv.push("child")
+	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: argv) otherwise return 5
+	conn.close()
+
+	let endedPromptly = await reader
+	let code = try child.wait() otherwise return 6
+	child.release()
+
+	print("ended-promptly={endedPromptly} child={code}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_timer_count@24 = i64 0
+  __gt_timer_heap_base@32 = i64 0
+  __gt_timer_capacity@40 = i64 0
+  __gt_timer_seq@48 = i64 0
+  __gt_timer_when@56 = i64 9223372036854775807
+  __gt_trace_counter@64 = i64 0
+  __gt_live_count@72 = i64 0
+  __gt_seed_bytes@80 = i64 8192
+  __gt_stack_bytes_sum@88 = i64 0
+  __gt_stack_bytes_count@96 = i64 0
+  __gt_seed_sum_seen@104 = i64 0
+  __gt_seed_count_seen@112 = i64 0
+  __gt_keeps_cpu_clock@120 = i64 0
+  __sched_active_workers@128 = i64 1
+  __sched_max_active_workers@136 = i64 1
+  __sched_tls_index@144 = i64 0
+  __sched_tls_teb_offset@152 = i64 0
+  __sched_procs@160 = i64 0
+  __sched_allm@168 = i64 0
+  __sched_midle@176 = i64 0
+  __sched_pidle@184 = i64 0
+  __gt_gfree_head@192 = i64 0
+  __sched_arena_cursor@200 = i64 0
+  __sched_arena_limit@208 = i64 0
+  __gt_records_carved@216 = i64 0
+  __sched_npidle@224 = i64 0
+  __sched_runq_size@232 = i64 0
+  __sched_global_pushes@240 = i64 0
+  __sched_timer_scan_steps@248 = i64 0
+  __sched_mcount@256 = i64 0
+  __sched_nmidle@264 = i64 0
+  __sched_main_m@272 = i64 0
+  __sched_phase@280 = i64 0
+  __sched_lastpoll@288 = i64 0
+  __sched_poll_until@296 = i64 0
+  __sched_regain_head@304 = i64 0
+  __np_poller@312 = i64 0
+  __np_break@320 = i64 0
+  __np_wake_sig@328 = i64 0
+  __np_pd_table@336 = i64 0
+  __np_pd_cap@344 = i64 0
+  __np_waiters@352 = i64 0
+  __np_src_key_free@360 = i64 0
+  __np_src_key_high@368 = i64 0
+  __sched_num_procs@376 = i64 0
+  __sched_shutdown_flag@384 = i64 0
+  __sched_lock@392 = i64 0
+  __sched_lock_depth_sink@400 = i64 0
+  __sched_nmspinning@408 = i64 0
+  __sched_needspinning@416 = i64 0
+  __sched_sysmon_event@424 = i64 0
+  __sched_sysmon_wait@432 = i64 0
+  __sched_timer_starts@440 = i64 0
+  __sched_preempt_ext_lock@448 = i64 0
+  __sched_preempt_context@456 = i64 0
+  __io_pipe_seq@464 = i64 0
+  __subp_table@472 = i64 0
+  __subp_last_error@480 = i64 0
+  __slab_arena_list@488 = i64 0
+  __slab_arena_map_l1@496 = i64 0
+  __slab_state@504 = i64 0
+  __ds_base@512 = i64 0
+  __ms_wsa_started@520 = i64 0
+  __dbg_ctl@528 = i64 0
+  __mrt_console_probe_stdin@536 = i8 0
+  __mrt_console_probe_stdout@537 = i8 0
+  __mrt_console_probe_stderr@538 = i8 0
+}
+
+func @readsItsEndPromptly {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 88
+    x64.movRegReg rax, rcx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic#8
+  __rc_chk:
+    x64.cmpRegImm32 rax, 65535
+    x64.jcc greater, __rc_panic#8
+  __rc_ok#7:
+    x64.leaRegRdata rcx, [rip + __str_rec_32]  ; "127.0.0.1"
+    x64.movRegReg rdx, rax
+    x64.callDirect TcpClient.connect
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
+    x64.callDirect Clock.nowMs
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rdx, 64
+    x64.movRegReg rcx, rbx
+    x64.callDirect TcpClient.recv
+    x64.storeSlotReg slot1, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.leaRegRegImm32 rax, r10, -1
+    x64.cmpRegImm32 rax, 4
+    x64.movRegImm32 r13, 0
+    x64.jcc notEqual, critsplit
+  __il_body:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic#15
+  __rc_ok#14:
+    x64.callDirect Clock.nowMs
+    x64.cmpRegReg r8, r12
+    x64.jcc aboveEqual, ifcont
+  clockSkew:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont
+  ifcont:
+    x64.subRegReg r8, r8, r12
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#17
+  __rc_ok#16:
+    x64.movRegReg rax, r8
+  __il_cont:
+    x64.cmpRegImm32 rax, 1500
+    x64.setccReg below, r12
+    x64.jmp scmerge
+  critsplit:
+    x64.movRegReg r12, r13
+  scmerge:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_TcpClient
+    x64.movRegReg r8, r12
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#3:
+    x64.leaRegRdata rax, [rip + __str_rec_33]  ; "unexpected bytes '"
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.loadRegBaseDisp.word64 r13, [r8 + 0]
+    x64.loadRegBaseDisp.word64 r14, [r8 + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_34]  ; "'\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot5, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot4, rax
+    x64.leaRegRegReg rcx, r12, r14
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot2, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot3, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r14
+    x64.loadRegSlot rax, slot4
+    x64.loadRegSlot rdx, slot5
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot4
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rbx, slot3
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot2
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegImm32 rbx, 0
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_TcpClient
+    x64.movRegReg r8, rbx
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_148]  ; "panic at socket-inheritance.an-accepted-socket-closes-while-a-spawned-child-lives.test:12: Range check failed: value outside typealias 'NetworkPort'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#15:
+    x64.leaRegRdata rcx, [rip + __str_blob_159]  ; "panic at Clock.maxon:32: Range check failed: value outside typealias 'InstantMs'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#17:
+    x64.leaRegRdata rcx, [rip + __str_blob_160]  ; "panic at Clock.maxon:39: Range check failed: value outside typealias 'DurationMs'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 168
+  __il_body#14:
+    x64.callDirect __cl_count
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __str_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr
+  loop:
+    x64.movRegReg rcx, r13
+    x64.callDirect __cl_arg
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_retain
+    x64.movRegReg rcx, r8
+    x64.callDirect String.init
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+  forstep:
+    x64.leaRegRegImm32 r13, r13, 1
+  forhdr:
+    x64.cmpRegReg r13, rbx
+    x64.jcc less, loop
+  __il_cont#13:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 rax, 1
+    x64.setccReg greater, rbx
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc equal, ifcont
+  __il_body#33:
+    x64.movRegImm32 rcx, 3000
+  __rc_ok:
+    x64.callDirect __gt_sleep
+  __il_cont#34:
+    x64.movRegImm32 r8, 0
+  __il_cont#32:
+    x64.epilogue 168
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.callDirect Process.executablePath
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 168
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#3:
+    x64.leaRegRdata rcx, [rip + __str_rec_32]  ; "127.0.0.1"
+    x64.movRegImm32 rdx, 0
+    x64.callDirect TcpListener.bind
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot1, r12
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __il_body#20
+  tryerr#6:
+    x64.movRegImm32 r12, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg r8, r12
+    x64.epilogue 168
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __il_body#20:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.callDirect __ml_port
+    x64.movRegReg r13, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#21
+  tryerr#22:
+    x64.leaRegRdata rcx, [rip + __str_blob_128]  ; "panic at TcpListener.maxon:32: TcpListener.port: this listener is closed, so it holds no bound port to report\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 168
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#21:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r13, 65535
+    x64.jcc greater, __rc_panic
+  __il_cont#19:
+    x64.leaRegFunc rcx, [rip + readsItsEndPromptly]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r14, r8
+    x64.storeSlotReg slot13, r14
+    x64.storeBaseDispReg.word64 [r14 + 200], r13
+    x64.movRegReg rcx, r14
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, r12
+    x64.callDirect TcpListener.accept
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot2, r13
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#7
+  tryerr#8:
+    x64.movRegImm32 r13, 4
+    x64.movRegReg rcx, r14
+    x64.callDirect __gt_promise_drop
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_TcpListener
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg r8, r13
+    x64.epilogue 168
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#7:
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __str_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot3, r12
+    x64.leaRegRdata rcx, [rip + __str_rec_35]  ; "child"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.storeSlotReg slot14, r15
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r15 + 0], rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_own
+    x64.storeBaseDispReg.word64 [r15 + 8], r8
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.callDirect StreamingSubprocess.spawn
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot4, rbx
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#9
+  tryerr#10:
+    x64.movRegReg rcx, r10
+    x64.callDirect __destruct_SubprocessError
+    x64.loadRegSlot rcx, slot14
+    x64.callDirect __destruct_Executable
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_TcpClient
+    x64.movRegReg rcx, r14
+    x64.callDirect __gt_promise_drop
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __destruct_TcpListener
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_FilePath
+    x64.movRegImm32 r8, 5
+    x64.epilogue 168
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#9:
+    x64.loadRegSlot rcx, slot14
+    x64.callDirect __destruct_Executable
+  __il_body#27:
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
+    x64.callDirect __ms_close
+  __il_cont#26:
+    x64.loadRegSlot rcx, slot13
+    x64.callDirect __gt_await
+    x64.storeSlotReg slot15, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect StreamingSubprocess.wait
+    x64.storeSlotReg slot12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __il_body#29
+  tryerr#12:
+    x64.movRegReg rcx, r10
+    x64.callDirect __destruct_SubprocessError
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_TcpClient
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __destruct_TcpListener
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_FilePath
+    x64.movRegImm32 r8, 6
+    x64.epilogue 168
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __il_body#29:
+    x64.loadRegBaseDisp.byte rax, [rbx + 8]
+    x64.xorRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __il_cont#28
+  notYet:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __gt_subp_release
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.byte [rbx + 8], rax
+  __il_cont#28:
+    x64.leaRegRdata rax, [rip + __str_rec_36]  ; "ended-promptly="
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.movRegImm32 rcx, 5
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot11, r8
+    x64.loadRegSlot rcx, slot15
+    x64.movRegReg rdx, r8
+    x64.callDirect __bool_to_string
+    x64.movRegReg r13, r8
+    x64.leaRegRdata rax, [rip + __str_rec_37]  ; " child="
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot10, rcx
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot16, r8
+    x64.loadRegSlot rcx, slot12
+    x64.movRegReg rdx, r8
+    x64.callDirect __uint_to_string
+    x64.storeSlotReg slot9, r8
+    x64.leaRegRdata rax, [rip + __str_rec_38]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot8, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot7, rax
+    x64.leaRegRegReg rcx, r12, r13
+    x64.leaRegRegReg rcx, rcx, r14
+    x64.leaRegRegReg rcx, rcx, r8
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot5, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot6, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, r12
+    x64.loadRegSlot rdx, slot11
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r13
+    x64.loadRegSlot rdx, slot10
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r14
+    x64.loadRegSlot rax, slot9
+    x64.loadRegSlot rdx, slot16
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot9
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.loadRegSlot rax, slot7
+    x64.loadRegSlot rdx, slot8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot7
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rbx, slot6
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot5
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rcx, slot11
+    x64.callDirect __mm_decref
+    x64.loadRegSlot rcx, slot16
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegImm32 rbx, 0
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect __mm_decref
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __destruct_TcpClient
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __destruct_TcpListener
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg r8, rbx
+    x64.epilogue 168
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_270]  ; "panic at TcpListener.maxon:35: Range check failed: value outside typealias 'NetworkPort'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 168
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

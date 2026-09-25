@@ -444,12 +444,15 @@ function isRetiredImageName(name String, stem String, ext String) returns bool
 		return false
 	end 'otherFile'
 
-	let stampDigits = CharacterSet.from(CharSet from ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'])
 	let stamped = name.replaceFirst(prefix, with: "")
-	let tail = stamped.trimStart(stampDigits)
+	let tail = stamped.trimStart(asciiDecimalDigits())
 
 	return tail.byteLength() < stamped.byteLength() and (tail == ext or tail == "{ext}{MxdbgSidecarExtension}")
 end 'isRetiredImageName'
+
+export function asciiDecimalDigits() returns CharacterSet
+	return CharacterSet.from(CharSet from ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'])
+end 'asciiDecimalDigits'
 
 // A RENAME failed, and running an image never blocks one — that is what the retire relies on — so the
 // cause named is not the server that made the delete fail.
@@ -660,32 +663,29 @@ function writeTargetIr(irText String, outputPath FilePath)
 	logInfo(LogCategory.compiler, message: function() gives "Wrote Target IR to {irPath}")
 end 'writeTargetIr'
 
-// Create a project rooted at `inputPaths`' common ancestor and register every source file the
-// caller named with the query database — the shared "load" step before the pipeline runs.
-// Factored out so `build` and the warm-rebuild gate load a project identically
-// (the gate compiles the same input into several independent fresh projects).
+// `build` and the warm-rebuild gate both load through here, so the gate's several fresh projects
+// are loaded exactly as a build loads one.
 //
-// File/IO errors (`fileNotFound`, `noSourceFiles`, `readError`) carry NO
-// diagnostics and propagate straight to the caller, which prints a specific
-// message. `loadSourceFiles` is what raises them.
+// File and IO errors (`fileNotFound`, `noSourceFiles`, `readError`, raised by `loadSourceFiles`)
+// carry no diagnostics and propagate straight to the caller, which prints a specific message.
 export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride String = "", runtimeDirOverride String = "", entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(), debugStream bool = false) returns Project throws CompileError
-	// Both library roots are found BEFORE the project exists, because the project carries them to the
-	// loader below. Nothing after the load asks where either is — a later pass asks about a FUNCTION
-	// (`isLibraryFunction`), which is answered from a set the loader already built.
 	let stdlibDir = try stdlibDirFor(stdlibDirOverride)
 	var project = createProject(try commonAncestorOf(inputPaths), target: target, stdlibDir: stdlibDir, runtimeDir: try runtimeDirFor(runtimeDirOverride, stdlibDir: stdlibDir), debugStream: debugStream)
 
-	// ⭐ **BOTH SET BEFORE THE FIRST FILE IS REGISTERED, AND THAT ORDER IS LOAD-BEARING.**
-	// `Queries.compilerMintedNamesIn` is asked while a file is being READ, so a list filled after the
-	// load would classify every synthesized file as ordinary user source — the silent half of the reserved-
-	// name door, which fails by REFUSING a generated call rather than by admitting a written one.
+	if rootIsUnder(project, libraryRoot: project.runtimeDir, cwd: Directory.currentPath()) 'aRuntimeTierRoot'
+		throw CompileError.runtimeTierIsNotAProgram(project.rootPath)
+	end 'aRuntimeTierRoot'
+
+	// Both set before the first file is registered. `Queries.parseJobFor` reads the minted names while
+	// a file is being read, so an index filled after the load would classify every synthesized file as
+	// ordinary user source, and the reserved-name door would refuse a generated call.
 	project.entryFunctionName = entryFunction
-	project.compilerWrittenSources = compilerWrittenSources
+	project.compilerWrittenSources = CompilerWrittenIndex.of(compilerWrittenSources)
 
 	// Set WITH them and before the load, for their reason: a diagnostic can be raised while a file is
 	// being READ, and a mapping filled in afterwards would let those — the parse errors, which are
 	// most of them — go on naming the staged copy.
-	project.stagedSourceOrigins = stagedSourceOrigins
+	project.stagedSourceOrigins = StagedOriginIndex.of(stagedSourceOrigins)
 	try loadSourceFiles(project, paths: inputPaths, selection: sourceSelection)
 
 	// AFTER the user's own sources, so an empty user project fails with `noSourceFiles` above rather than
@@ -1317,11 +1317,11 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// (see `isOptionalTrailingImport`).
 	pipeline.stdModule.usesCpuCount = usage.usesCpuCount
 
-	// ⭐ **AND ANOTHER PRODUCER OF THAT BAND**, on the same seam and for the same measured reason as its
-	// neighbours: set any earlier and the flag lands on the `stdModule` `lowerMaxonToStd` threw away, and the
-	// symptom is `iatCall`s past the end of the table actually emitted. `__proc_bg_priority` needs
-	// `SetPriorityClass` and `GetPriorityClass`, both at the end of kernel32's run.
+	// Two more producers of that band, set here for their neighbours' reason. `__proc_bg_priority`
+	// needs `SetPriorityClass` and `GetPriorityClass`, and `__proc_alive` needs `OpenProcess`, all at
+	// the end of kernel32's run.
 	pipeline.stdModule.usesBackgroundPriority = usage.usesBackgroundPriority
+	pipeline.stdModule.usesProcessLiveness = usage.usesProcessLiveness
 
 	// ⭐ **AND ANOTHER PRODUCER OF THAT BAND**, on the same seam and for the same measured reason as its
 	// neighbours. `__tty_stdout_wants_color` needs `GetFileType` — and `GetEnvironmentVariableA`, already in
@@ -1827,7 +1827,7 @@ end 'loadSourceFiles'
 // untouched.** The narrowing loop's first comparison is `first` against itself, which `isInside` answers
 // true for, so a lone `build <file>` or `build <directory>` keeps the spelling the caller TYPED,
 // unresolved. Every downstream reader resolves it against the cwd for itself (`namespaceAnchorFor`,
-// `rootIsUnderStdlibDirectory`), and `resolveOutputPath` derives a default output name from it, so
+// `rootIsUnder`), and `resolveOutputPath` derives a default output name from it, so
 // resolving it here would silently rewrite that name for every single-file build in the tree.
 //
 // ⚠ **THE COMPARISON IS BETWEEN RESOLVED SPELLINGS, because `isInside` compares TEXT** — the same
@@ -1839,7 +1839,7 @@ end 'loadSourceFiles'
 // root itself for a path directly under one and throws for a root, so the narrowing walk runs out at the
 // top and reports `noCommonRoot` there. Every `resolvedRoot` it publishes is therefore an absolute
 // directory — which is what the downstream `.resolve(cwd)` readers (`namespaceAnchorFor`,
-// `rootIsUnderStdlibDirectory`) need, since a relative one would be joined onto the working directory.
+// `rootIsUnder`) need, since a relative one would be joined onto the working directory.
 //
 // ⚠ **THE RESIDUAL IS THAT A ROOT-ROOTED BUILD IS REFUSED RATHER THAN ROOTED, and it is REFUSED
 // rather than left wrong on purpose.** `C:\` really is the common directory of `C:\a\x` and `C:\b\y`,
@@ -2324,24 +2324,13 @@ export typealias CompilerWrittenSourceArray = Array with CompilerWrittenSource
 // .stageTestBuild` is the only one) hands the compile a row per copied file, and the single diagnostic
 // sink rewrites the path through it — see `Project.reportDiagnostic` and `Diagnostic.reportedUnder`.
 //
-// ⛔⛔ **WITHOUT IT A COMPILE ERROR NAMES A FILE THE AUTHOR NEVER WROTE AND THE NEXT RUN DELETES.**
-// MEASURED 2026-09-02: an author's reserved-name declaration under `maxon test` was reported at
-// `<project>/.maxon/test/staged/sneaky.test.maxon:11:10` — a path that exists only between two runs,
-// under a directory this compiler itself marks as not part of the project. A diagnostic a reader cannot
-// open is not a diagnostic, so the author's own file is what must be named for those bytes.
+// Without it a compile error names a file under `<project>/.maxon/test/staged/` — a path that exists
+// only between two runs, under a directory this compiler marks as not part of the project.
 //
-// ⛔ **THE WHOLE FILE MAPS, INCLUDING THE LINES THE STAGER APPENDED, AND THAT IS A DECISION MADE
-// AGAINST A MEASUREMENT.** This row first carried a third field — the author's last line — so that a
-// diagnostic anchored in the appended dispatcher would keep the staged spelling and stay openable. It
-// had to go: the lexer emits its END-OF-INPUT sentinel one line PAST the last line of the file, so an
-// unterminated `function` in an ORDINARY copied source — a file with no appended bytes anywhere — landed
-// above the threshold and kept the staged path. MEASURED 2026-09-02 on a two-line `helper.maxon`:
-// `E2007 …/.maxon/test/staged/helper.maxon:3:1: Unexpected end of input`. A threshold that misfires on
-// the commonest diagnostic in the commonest file is worse than none.
-//
-// ⚠ **WHAT IS GIVEN UP, STATED:** a diagnostic genuinely anchored in the generated dispatcher now names
-// the author's file at a line their file does not reach. That is a bug in what this compiler WROTE, its
-// reader is a compiler developer, and the staged tree is sitting beside the project for them to open.
+// The whole file maps, including the lines the stager appended: the lexer's end-of-input sentinel sits
+// one line past a file's last line, so any line threshold would misfire on an unterminated construct in
+// an ordinary copied source. The cost: a diagnostic anchored in the generated dispatcher names the
+// author's file at a line their file does not reach.
 export type StagedSourceOrigin
 	// The copy this compile READ, spelled exactly as the caller also puts it in the build's input list
 	// — so the loader registers this very spelling and the lookup is a `FilePath.equals` rather than a
@@ -2361,6 +2350,79 @@ export type StagedSourceOrigin
 end 'StagedSourceOrigin'
 
 export typealias StagedSourceOriginArray = Array with StagedSourceOrigin
+
+typealias ReportedPathMap = Map with (FilePath, FilePath)
+typealias MintedNamesByPath = Map with (FilePath, ByteArrayArray)
+
+export type StagedOriginIndex
+	let reportedPaths as ReportedPathMap
+
+	export static function empty() returns StagedOriginIndex
+		return Self{reportedPaths: ReportedPathMap.create()}
+	end 'empty'
+
+	export static function of(origins StagedSourceOriginArray) returns StagedOriginIndex
+		var reportedPaths = ReportedPathMap.create()
+
+		for origin in origins 'eachOrigin'
+			reportedPaths.upsert(origin.stagedPath, value: origin.reportedPath)
+		end 'eachOrigin'
+
+		return Self{reportedPaths: reportedPaths}
+	end 'of'
+
+	export function stagesNothing() returns bool
+		return self.reportedPaths.count() == 0
+	end 'stagesNothing'
+
+	export function authoredPathOf(staged FilePath) returns FilePath
+		return try self.reportedPaths.get(staged) otherwise staged
+	end 'authoredPathOf'
+
+	export function isStagedCopy(path FilePath) returns bool
+		return self.reportedPaths.contains(path)
+	end 'isStagedCopy'
+end 'StagedOriginIndex'
+
+export type CompilerWrittenIndex
+	let mintedNames as MintedNamesByPath
+
+	export static function empty() returns CompilerWrittenIndex
+		return Self{mintedNames: MintedNamesByPath.create()}
+	end 'empty'
+
+	export static function of(written CompilerWrittenSourceArray) returns CompilerWrittenIndex
+		var mintedNames = MintedNamesByPath.create()
+
+		for source in written 'eachWritten'
+			mintedNames.upsert(source.path, value: source.mintedNames)
+		end 'eachWritten'
+
+		return Self{mintedNames: mintedNames}
+	end 'of'
+
+	export function wrote(path FilePath) returns bool
+		return self.mintedNames.contains(path)
+	end 'wrote'
+
+	export function mintedNamesIn(path FilePath) returns ByteArrayArray
+		return try self.mintedNames.get(path) otherwise ByteArrayArray.create()
+	end 'mintedNamesIn'
+
+	export function minted(path FilePath, name ByteArray) returns bool
+		return mintedNamesInclude(self.mintedNamesIn(path), name: name)
+	end 'minted'
+end 'CompilerWrittenIndex'
+
+export function mintedNamesInclude(names ByteArrayArray, name ByteArray) returns bool
+	for minted in names 'eachMintedName'
+		if minted.equals(name) 'thisName'
+			return true
+		end 'thisName'
+	end 'eachMintedName'
+
+	return false
+end 'mintedNamesInclude'
 
 // How many directories one `collectMaxonSources` call LISTED — itself plus everything it recursed
 // into. Named for that rather than for a tree's shape: it is the walk's own reach, which is what an

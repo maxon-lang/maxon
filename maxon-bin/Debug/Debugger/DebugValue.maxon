@@ -64,10 +64,10 @@ let UnionTagBytes = 8 as DebugByteWidth
 
 let MinimumPlausibleHeapAddress = 0x10000 as DebugWord
 
-export function renderLocals(memory DebugMemory, symbols DebugSymbols, offset DebugAddress, framePointer DebugAddress, registers DebugRegisterAccess) returns DebugValueTree
+export function renderLocals(memory DebugMemory, symbols DebugSymbols, offset DebugAddress, site MxdbgInlineSiteLookup, framePointer DebugAddress, registers DebugRegisterAccess) returns DebugValueTree
 	var tree = DebugValueTree.create()
 	var named = DebugNameSet.create()
-	let locals = symbols.localsAt(offset)
+	let locals = symbols.localsAt(offset, site: site)
 
 	for local in locals 'eachLocal'
 		if named.contains(local.name) 'alreadyListed'
@@ -81,16 +81,16 @@ export function renderLocals(memory DebugMemory, symbols DebugSymbols, offset De
 	return tree
 end 'renderLocals'
 
-export function renderValuePath(memory DebugMemory, symbols DebugSymbols, offset DebugAddress, framePointer DebugAddress, path String, registers DebugRegisterAccess) returns DebugValueAnswer
+export function renderValuePath(memory DebugMemory, symbols DebugSymbols, offset DebugAddress, site MxdbgInlineSiteLookup, framePointer DebugAddress, path String, registers DebugRegisterAccess) returns DebugValueAnswer
 	let pieces = path.trim().split(MemberSeparator)
 	let head = try pieces.get(0) otherwise return DebugValueAnswer.unknownName(path)
 
-	let locals = symbols.localsAt(offset)
+	let locals = symbols.localsAt(offset, site: site)
 
 	match symbols.localCoveringIn(locals, offset: offset, name: head) 'known'
 		undeclared then return DebugValueAnswer.unknownName(path)
-		notLiveHere then break 'known'
-		live then break 'known'
+		notLiveHere or
+			live then break 'known'
 	end 'known'
 
 	var tree = DebugValueTree.create()
@@ -125,8 +125,8 @@ end 'childNamed'
 
 function renderNamedLocal(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, locals DebugLocalArray, offset DebugAddress, framePointer DebugAddress, name String, registers DebugRegisterAccess) returns DebugValueIndex
 	match symbols.localCoveringIn(locals, offset: offset, name: name) 'known'
-		undeclared then return tree.add(DebugValueNode.missing(name, typeName: "", kind: "", reason: DebugNotLiveHereReason))
-		notLiveHere then return tree.add(DebugValueNode.missing(name, typeName: "", kind: "", reason: DebugNotLiveHereReason))
+		undeclared or
+			notLiveHere then return tree.add(DebugValueNode.missing(name, typeName: "", kind: "", reason: DebugNotLiveHereReason))
 		live(local) then return renderLocalRecord(tree, memory: memory, symbols: symbols, local: local, framePointer: framePointer, name: name, registers: registers)
 	end 'known'
 end 'renderNamedLocal'
@@ -314,8 +314,8 @@ function renderStruct(tree DebugValueTree, memory DebugMemory, symbols DebugSymb
 	match source 'held'
 		nowhere then return unreadable(tree, name: name, typeName: typeName, kind: kind)
 		folded(first) then return renderFoldedStruct(tree, memory: memory, symbols: symbols, name: name, typeName: typeName, kind: kind, record: record, first: first)
-		word then break 'held'
-		address then break 'held'
+		word or
+			address then break 'held'
 	end 'held'
 
 	let base = try baseOf(source) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
@@ -355,8 +355,8 @@ function renderUnion(tree DebugValueTree, memory DebugMemory, symbols DebugSymbo
 	match source 'held'
 		nowhere then return unreadable(tree, name: name, typeName: typeName, kind: kind)
 		folded(first) then return renderFoldedUnion(tree, memory: memory, symbols: symbols, name: name, typeName: typeName, kind: kind, record: record, first: first)
-		word then break 'held'
-		address then break 'held'
+		word or
+			address then break 'held'
 	end 'held'
 
 	let box = try baseOf(source) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
@@ -470,8 +470,8 @@ end 'unresolvedCaseDisplay'
 
 function baseOf(source DebugValueSource) returns DebugAddress throws DebugMemoryError
 	match source 'which'
-		nowhere then throw DebugMemoryError.notReadable
-		folded then throw DebugMemoryError.notReadable
+		nowhere or
+			folded then throw DebugMemoryError.notReadable
 		word(bits) then return try addressOf(bits)
 		address(at) then return at
 	end 'which'
@@ -501,8 +501,8 @@ end 'countAt'
 
 function readRaw(memory DebugMemory, source DebugValueSource, width DebugByteWidth) returns DebugWord throws DebugMemoryError
 	match source 'which'
-		nowhere then throw DebugMemoryError.notReadable
-		folded then throw DebugMemoryError.notReadable
+		nowhere or
+			folded then throw DebugMemoryError.notReadable
 		word(bits) then return maskedToWidth(bits, width: width)
 		address(at) then return try memory.readDebuggeeWord(at, width: width as EngineReadLength)
 	end 'which'

@@ -1,0 +1,35 @@
+let OkStatus = 200 as HttpStatusNumber
+let IdleTimeoutSeconds = 1
+let QueuedStagingDir = "temp/mcp-http-every-queued-request"
+let FirstQueueLeadMs = 400
+let SecondQueueLeadMs = 300
+
+let EveryQueuedSleepMs = 3000
+
+function postedToolsList(server StreamingHttpMcpServer, sessionId McpSession, id RequestId) returns HttpAnswer
+	return server.post(toolsListRequest(id), sessionId: sessionId)
+end 'postedToolsList'
+
+test 'every request that waits behind another session s long call keeps its own session, not only the first one served'
+	let program = stagedProgram(QueuedStagingDir, fileName: "main.maxon", source: sleepingProgramSource(EveryQueuedSleepMs))
+
+	var server = StreamingHttpMcpServer.start(["{McpIdleTimeoutOptionPrefix}{IdleTimeoutSeconds}"])
+	let (_, longSession) = server.initializeSession()
+	let (_, firstQueuedSession) = server.initializeSession()
+	let (_, secondQueuedSession) = server.initializeSession()
+
+	let longCall = async httpToolCall(server, sessionId: longSession, id: 2, name: ExecuteTool, argumentsJson: pathArgument(program))
+	sleep(FirstQueueLeadMs)
+
+	let firstQueued = async postedToolsList(server, sessionId: firstQueuedSession, id: 3)
+	sleep(SecondQueueLeadMs)
+
+	let secondQueued = server.post(toolsListRequest(4), sessionId: secondQueuedSession)
+	let first = await firstQueued
+	let ran = await longCall
+	try server.stop()
+
+	try Expect.isFalse(toolCallIsError(ran), message: "the control: `{ExecuteTool}` must run the sleeping program, or no request waited behind it: {toolCallText(ran)}")
+	try Expect.equal(first.statusCode as AssertedInt, expected: OkStatus as AssertedInt, message: "the first request queued behind the long call keeps its session; it answered {first.statusCode} with {first.body}")
+	try Expect.equal(secondQueued.statusCode as AssertedInt, expected: OkStatus as AssertedInt, message: "⛔ TIME SPENT IN A HANDLER IS NOT IDLENESS FOR ANY SESSION. The second request queued behind the same long call waited while the first was served; a server that exempts only the session it is about to serve sweeps this one away as idle; it answered {secondQueued.statusCode} with {secondQueued.body}")
+end 'every request that waits behind another session s long call keeps its own session, not only the first one served'

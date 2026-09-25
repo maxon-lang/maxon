@@ -327,12 +327,10 @@ function testCountLine(tests ReportedTestCount, files ReportedTestCount) returns
 	return " {tests} {testWord} across {files} {fileWord}"
 end 'testCountLine'
 
-// ⭐ **`--list`: what WOULD run, compiling nothing.** It reads the same discovery and the same selection
-// a run does, so a listed test and a run test cannot come from different answers to "what is a test".
-//
-// A file with no selected test is skipped ENTIRELY — header included — so the listing shows the run
-// rather than the project.
-export function testListText(groups TestFileGroupArray, selected TestSelection, color bool) returns String
+// Reads the same discovery and selection a run does, so a listed test and a run test cannot come
+// from different answers to "what is a test". A file with no selected test is skipped entirely,
+// header included, so the listing shows the run rather than the project.
+export function testListText(groups TestFileGroupArray, selected TestSelection, color bool, binary TestBinaryListing) returns String
 	var listing = ""
 	var tests = 0 as ReportedTestCount
 	var files = 0 as ReportedTestCount
@@ -360,8 +358,21 @@ export function testListText(groups TestFileGroupArray, selected TestSelection, 
 	end 'eachFile'
 
 	listing.append("\n{testCountLine(tests, files: files)}\n")
+
+	match binary 'builtBinary'
+		notBuilt then break 'builtBinary'
+		built(path) then listing.append("{TestBinaryLinePrefix}{reportPathDisplay(path)}\n")
+	end 'builtBinary'
+
 	return listing
 end 'testListText'
+
+let TestBinaryLinePrefix = " binary: "
+
+export union TestBinaryListing
+	notBuilt
+	built(path FilePath)
+end 'TestBinaryListing'
 
 // ⭐ The line a run that found NOTHING TO DO prints. It is a FAILURE, and it says why in the report's
 // own voice rather than as an error, because nothing went wrong with the harness — there is simply
@@ -473,8 +484,8 @@ function pushThrownNode(doc JsonDoc, keys StringArray, children JsonNodeIdArray,
 	children.push(doc.add(JsonNode.objectNode(thrownKeys, children: thrownChildren)))
 end 'pushThrownNode'
 
-// ⭐ `--list --json`: the roster a machine reads. The same selection the text listing walks.
-export function testListJson(groups TestFileGroupArray, selected TestSelection) returns String
+// The roster a machine reads, over the same selection `testListText` walks.
+export function testListJson(groups TestFileGroupArray, selected TestSelection, binary TestBinaryListing) returns String
 	var doc = JsonDoc.create()
 	var listed = JsonNodeIdArray.create()
 
@@ -484,12 +495,18 @@ export function testListJson(groups TestFileGroupArray, selected TestSelection) 
 				continue
 			end 'notInThisRun'
 
-			listed.push(listedTestNode(doc, path: entry.group.file, test: member.test))
+			listed.push(listedTestNode(doc, path: entry.group.file, member: member))
 		end 'eachTest'
 	end 'eachFile'
 
 	var keys = StringArray.create()
 	var children = JsonNodeIdArray.create()
+
+	match binary 'builtBinary'
+		notBuilt then break 'builtBinary'
+		built(path) then pushJsonString(doc, keys: keys, children: children, key: "binary", value: path.toString())
+	end 'builtBinary'
+
 	keys.push("tests")
 	children.push(doc.add(JsonNode.arrayNode(listed)))
 
@@ -497,14 +514,15 @@ export function testListJson(groups TestFileGroupArray, selected TestSelection) 
 	return Json.stringify(doc)
 end 'testListJson'
 
-function listedTestNode(doc JsonDoc, path FilePath, test DiscoveredTest) returns JsonNodeId
+function listedTestNode(doc JsonDoc, path FilePath, member IndexedTest) returns JsonNodeId
 	var keys = StringArray.create()
 	var children = JsonNodeIdArray.create()
 
 	pushJsonString(doc, keys: keys, children: children, key: "file", value: reportPathDisplay(path))
-	pushJsonString(doc, keys: keys, children: children, key: "name", value: test.displayName)
-	pushJsonString(doc, keys: keys, children: children, key: "symbol", value: String.from(test.symbol))
-	pushJsonNumber(doc, keys: keys, children: children, key: "line", value: test.line as JsonFloat)
+	pushJsonString(doc, keys: keys, children: children, key: "name", value: member.test.displayName)
+	pushJsonString(doc, keys: keys, children: children, key: "symbol", value: String.from(member.test.symbol))
+	pushJsonNumber(doc, keys: keys, children: children, key: "line", value: member.test.line as JsonFloat)
+	pushJsonString(doc, keys: keys, children: children, key: "select", value: formatTestSelection(soleIndex(member.index)))
 
 	return doc.add(JsonNode.objectNode(keys, children: children))
 end 'listedTestNode'

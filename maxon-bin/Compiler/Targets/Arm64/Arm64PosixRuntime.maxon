@@ -182,10 +182,9 @@ end 'arm64EmitZeroSlots'
 // the Win32 way (`Win32False` is the failure), so the conversion is written once here rather than at each of
 // them.
 //
-// ⚠ **IT TESTS THE WHOLE 64-BIT REGISTER AGAINST ZERO, WHICH IS WHY THE NARROWING IS THE CALLER'S.** A
-// Darwin libSystem call answers a C `int` whose upper half AAPCS64 leaves unspecified, so that lane narrows
-// first; a Linux `svc` answers a full 64-bit `-errno` and narrowing it would be a second opinion about a
-// value the kernel already settled.
+// ⚠ It tests the whole 64-bit register against zero, so the widening is the caller's: a Darwin
+// libSystem call answers a C `int` whose upper half AAPCS64 leaves unspecified
+// (`arm64DarwinCallImportAnswering`), while a Linux `svc` answers a full 64-bit `-errno`.
 export function arm64EmitWin32BoolFromZeroStatus(asm Arm64RuntimeAsm)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixCallSucceeded as Imm32)
 	arm64EmitCset(asm.code, rd: arm64RuntimeReg(Arm64Register.x0), cond: Arm64CondCode.eq)
@@ -193,10 +192,10 @@ end 'arm64EmitWin32BoolFromZeroStatus'
 
 // ⭐ **AN errno IN x0 BECOMING THE Win32 CODE THE Std TIER CLASSIFIES — the whole body of
 // `mrt_host_last_error` except for where the errno came FROM.** Each lane fetches it its own way and then
-// branches here; the mapping itself has no lane in it (see `PosixErrnoNoSuchFileOrDirectory`).
+// branches here; the mapping itself has no lane in it (see `PosixErrno.noSuchFileOrDirectory`).
 //
 // ⚠ **THE MAPPING IS NOT THE IDENTITY AND CANNOT BE**, even though `ENOENT` and `ERROR_FILE_NOT_FOUND` are
-// both 2. ⚠ **A CLEARED errno ANSWERS `ERROR_NO_MORE_FILES`** — see `PosixErrnoCleared`.
+// both 2. A cleared errno answers `ERROR_NO_MORE_FILES` — see `PosixErrno.cleared`.
 //
 // ⭐⭐ **`EWOULDBLOCK` AND `ENOTEMPTY` ARE THE TWO ARMS WITH A LANE IN THEM, AND THEY ARE THE ONES THE READER
 // FORKS ON.** Linux numbers them 11 and 39, Darwin 35 and 66, so the caller supplies its own pair; every
@@ -218,13 +217,13 @@ export function arm64EmitErrnoToWin32(asm Arm64RuntimeAsm, wouldBlock ParsedInt,
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: stillInFlight)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: dirNotEmpty as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: notEmpty)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrnoNoSuchFileOrDirectory as Imm32)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrno.noSuchFileOrDirectory.rawValue as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: notFound)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrnoNotADirectory as Imm32)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrno.notADirectory.rawValue as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: pathNotFound)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrnoPermissionDenied as Imm32)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrno.permissionDenied.rawValue as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: denied)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrnoOperationNotPermitted as Imm32)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrno.operationNotPermitted.rawValue as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: denied)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: ErrorGenericFailure as MachineWord)
 	arm64EmitBranchTo(asm, label: answered)
@@ -490,10 +489,9 @@ end 'arm64PosixFillFindDataTime'
 // `PosixHostCall` — the ONE thing a shared body takes from its lane
 // ==========================================================================
 
-// ⭐ **THE ROUTE FORK, AS DATA RATHER THAN AS A SECOND COPY OF A BODY.** It is the runtime-chunk twin of
-// `StdToArm64Conversion.emitOsPrimitiveCall`'s `(importSlot, syscallNumber)` pair, and it exists for the same
-// reason: the two lanes reach the identical primitive through different doors, and a body written twice
-// around that difference is this project's signature bug.
+// The route fork, as data rather than as a second copy of a body — the runtime-chunk twin of
+// `StdToArm64Conversion.hostCalleeOn`. The two lanes reach the identical primitive through
+// different doors, and a body written twice around that difference drifts.
 export union PosixHostCall
 	// A GOT-indirect libSystem call — the arm64-macOS route, where every primitive in this band is a libc
 	// function.
@@ -506,40 +504,61 @@ end 'PosixHostCall'
 
 function arm64PosixEmitHostCall(asm Arm64RuntimeAsm, call PosixHostCall)
 	match call 'route'
-		importCall(slot) then arm64EmitLibcCall(asm.code, iatRelocs: asm.iatRelocs, callFixups: asm.callFixups, slotIndex: osImportSlotIndex(slot))
+		importCall(slot) then arm64DarwinCallImportAnswering(asm, slot: slot)
 		syscall(number) then arm64EmitSyscall(asm.code, number: number)
 	end 'route'
 end 'arm64PosixEmitHostCall'
 
-// The same call, followed by whatever that route owes before a `cmp x0, #0` reads its answer correctly.
-//
-// ⚠ **THE NARROWING IS THE IMPORT ROUTE'S ALONE AND MUST NOT BE BLANKET.** A libSystem call answers a C
-// `int` whose upper half AAPCS64 leaves unspecified, so that half is shifted out; a `svc` answers a full
-// 64-bit `-errno` the kernel already settled, and a second opinion about it would be
-// `arm64LinuxEmitStashIfFailed`'s note in reverse. ⛔ It is a SHIFT and not a sign-extend, so it destroys the
-// value — which is why `mrt_host_proc_reap`, whose answer is a `pid_t` it must still compare, calls
-// `arm64PosixEmitHostCall` above and masks instead.
-function arm64PosixEmitHostCallStatus(asm Arm64RuntimeAsm, call PosixHostCall)
+function arm64PosixEmitHostCallErrno(asm Arm64RuntimeAsm, call PosixHostCall)
 	arm64PosixEmitHostCall(asm, call: call)
+	arm64PosixEmitErrnoAnswer(asm, call: call)
+end 'arm64PosixEmitHostCallErrno'
 
+function arm64PosixEmitErrnoAnswer(asm Arm64RuntimeAsm, call PosixHostCall)
 	match call 'route'
-		importCall then arm64PosixNarrowIntStatus(asm, reg: Arm64Register.x0)
+		importCall then arm64DarwinEmitStatusOrErrno(asm)
 		syscall then break 'route'
 	end 'route'
-end 'arm64PosixEmitHostCallStatus'
+end 'arm64PosixEmitErrnoAnswer'
 
-// A C `int` result widened to the 64-bit value it names — `lsl #32` then `asr #32`, which is `sxtw` — for a
-// chunk that answers the `int` itself rather than only testing it.
-export function arm64PosixWidenIntResult(asm Arm64RuntimeAsm, reg Arm64Register)
-	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(reg), rn: arm64RuntimeReg(reg), sh: Arm64NarrowResultShift as ShiftCount)
-	arm64EmitAsrImm(asm.code, rd: arm64RuntimeReg(reg), rn: arm64RuntimeReg(reg), sh: Arm64NarrowResultShift as ShiftCount)
-end 'arm64PosixWidenIntResult'
+function arm64PosixEmitStashFailure(asm Arm64RuntimeAsm, call PosixHostCall)
+	match call 'route'
+		importCall then break 'route'
+		syscall then arm64LinuxEmitStashIfFailed(asm)
+	end 'route'
+end 'arm64PosixEmitStashFailure'
 
-// Discard the unspecified upper half of a register holding a C `int` return, leaving the low 32 bits where a
-// following `cbz`/`cbnz`/`cmp` tests them — `mrt_host_exe_path`'s trap, and the same shift.
-export function arm64PosixNarrowIntStatus(asm Arm64RuntimeAsm, reg Arm64Register)
-	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(reg), rn: arm64RuntimeReg(reg), sh: Arm64NarrowResultShift as ShiftCount)
-end 'arm64PosixNarrowIntStatus'
+function arm64PosixEmitPublishErrno(asm Arm64RuntimeAsm, call PosixHostCall, value ParsedInt)
+	match call 'route'
+		importCall then arm64DarwinEmitPublishErrno(asm, value: value)
+		syscall then arm64LinuxEmitPublishErrno(asm, value: value)
+	end 'route'
+end 'arm64PosixEmitPublishErrno'
+
+export function arm64EmitImportAnswerWidth(asm Arm64RuntimeAsm, slot OsImportSlot)
+	let answer = osImportAnswerOf(slot)
+
+	match answer 'width'
+		nothing then panic("arm64EmitImportAnswerWidth: `{slot.name}` returns VOID, so x0 holds no answer of it to widen — a chunk reading one after this import reads whatever the callee left there")
+		fullWord then return
+
+		unsignedDword or
+			signedDword then arm64EmitDwordWidening(asm, answer: answer)
+	end 'width'
+end 'arm64EmitImportAnswerWidth'
+
+function arm64EmitDwordWidening(asm Arm64RuntimeAsm, answer ImportAnswer)
+	let x0 = arm64RuntimeReg(Arm64Register.x0)
+	arm64EmitLslImm(asm.code, rd: x0, rn: x0, sh: Arm64NarrowResultShift as ShiftCount)
+
+	match answer 'extension'
+		signedDword then arm64EmitAsrImm(asm.code, rd: x0, rn: x0, sh: Arm64NarrowResultShift as ShiftCount)
+		unsignedDword then arm64EmitLsrImm(asm.code, rd: x0, rn: x0, sh: Arm64NarrowResultShift as ShiftCount)
+
+		nothing or
+			fullWord then panic("arm64EmitDwordWidening: a {answer.name} answer has no upper half to fill — only a dword answer is widened")
+	end 'extension'
+end 'arm64EmitDwordWidening'
 
 // ==========================================================================
 // mrt_host_tick_ms() -> x0 = milliseconds since boot
@@ -606,7 +625,7 @@ export function buildArm64PosixPipeChunk(call PosixHostCall, flags MachineWord) 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotWriteOut)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotFds)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: flags)
-	arm64PosixEmitHostCallStatus(asm, call: call)
+	arm64PosixEmitHostCall(asm, call: call)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: created)
 
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixNoPipeDescriptor)
@@ -708,8 +727,7 @@ export union PosixPollCall
 end 'PosixPollCall'
 
 // ⚠ It leaves x0 as a status a `cmp #0` reads: negative is a failure, 0 is "not ready", positive is the
-// number of ready descriptors. `arm64PosixEmitHostCallStatus`' narrowing rule applies to the import arm for
-// its own reason.
+// number of ready descriptors. The import arm's answer is widened by `arm64PosixEmitHostCall`.
 //
 // ⚠ Each arm is its own function for this file's usual reason: a `match` arm carries one expression and each
 // of these is five or eight — `StdToArm64Conversion.lowerOsFileOpenDarwin`'s split, for its reason.
@@ -740,18 +758,18 @@ end 'arm64PosixEmitPollWasInterrupted'
 // recognise it. ⚠ **`whenInterrupted` IS NOT ALWAYS A LOOP**: the transfer chunks aim it BACKWARD at
 // their own call to re-issue it, and the peek aims it FORWARD at a different answer.
 //
-// libSystem answers -1 and keeps the number in the thread-local `*__error()`, which is also why the narrowed
-// result register cannot carry it. ⚠ It CLOBBERS x0, which every caller has already finished with.
+// libSystem answers -1 and keeps the number in the thread-local `*__error()`, so the result
+// register cannot carry it. ⚠ It CLOBBERS x0, which every caller has already finished with.
 export function arm64PosixEmitDarwinBranchIfEintr(asm Arm64RuntimeAsm, whenInterrupted BlockId)
 	arm64PosixEmitHostCall(asm, call: PosixHostCall.importCall(OsImportSlot.errnoLocation))
 	arm64EmitLoadWord32At(asm, dest: Arm64Register.x1, base: Arm64Register.x0, byteOffset: 0)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x1, imm: PosixErrnoInterrupted as Imm32)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x1, imm: PosixErrno.interrupted.rawValue as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: whenInterrupted)
 end 'arm64PosixEmitDarwinBranchIfEintr'
 
 // A raw `svc` answers the NEGATED number in the result register itself, so there is no accessor to call.
 export function arm64PosixEmitSyscallBranchIfEintr(asm Arm64RuntimeAsm, whenInterrupted BlockId)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: (0 - PosixErrnoInterrupted) as Imm32)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: (0 - PosixErrno.interrupted.rawValue) as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: whenInterrupted)
 end 'arm64PosixEmitSyscallBranchIfEintr'
 
@@ -759,7 +777,7 @@ function arm64PosixEmitPollImport(asm Arm64RuntimeAsm, slot OsImportSlot, pollfd
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: pollfdSlot)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixPollOneDescriptor)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixPollNoWaitMillis)
-	arm64PosixEmitHostCallStatus(asm, call: PosixHostCall.importCall(slot))
+	arm64PosixEmitHostCall(asm, call: PosixHostCall.importCall(slot))
 end 'arm64PosixEmitPollImport'
 
 // The zeroed `timespec` goes in the caller's two frame slots, which must be CONSECUTIVE for the same reason
@@ -783,9 +801,8 @@ end 'arm64PosixEmitPpoll'
 // The ONE place a child's status is taken — `PosixWaitOffChildStatus` carries the reap-once rule that makes
 // it one place, and the cache it is taken into.
 //
-// ⚠ **A KILLED CHILD KEEPS THE CODE THE KILL NAMED.** `mrt_host_proc_terminate` writes `childStatus` and
-// raises `childKilled` BEFORE the signal lands, so this decodes nothing for it — see `PosixSignalExitCodeBase`
-// for why the lanes would otherwise answer a different number for a deadline than Windows does.
+// ⚠ A killed child keeps the code the kill named only when its status says SIGKILL; see
+// `PosixSignalExitCodeBase`.
 //
 // ⚠ **x3 IS SET FOR A FOURTH ARGUMENT ONLY ONE ROUTE HAS.** Linux's `wait4` takes a `struct rusage *` there
 // and NULL discards it; Darwin's `waitpid` is a three-argument call that never reads the register. Setting it
@@ -799,6 +816,7 @@ export function buildArm64PosixProcReapChunk(wait PosixHostCall) returns Functio
 	let alreadySignalled = asm.newLabel()
 	let stillRunning = asm.newLabel()
 	let statusChosen = asm.newLabel()
+	let decode = asm.newLabel()
 	let bySignal = asm.newLabel()
 	let publish = asm.newLabel()
 	let answered = asm.newLabel()
@@ -828,13 +846,16 @@ export function buildArm64PosixProcReapChunk(wait PosixHostCall) returns Functio
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: stillRunning)
 
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotObj)
-	arm64EmitLoadWord64At(asm, dest: Arm64Register.x4, base: Arm64Register.x1, byteOffset: PosixWaitOffChildKilled)
-	arm64EmitCbnzTo(asm, reg: Arm64Register.x4, label: statusChosen)
-
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x2, slot: SlotStatus)
 	arm64EmitLoadWord32At(asm, dest: Arm64Register.x3, base: Arm64Register.x2, byteOffset: 0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixWaitStatusSignalMask)
 	arm64EmitRuntimeRrr(asm, opcode: Arm64OpAnd, dest: Arm64Register.x5, lhs: Arm64Register.x3, rhs: Arm64Register.x2)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x5, imm: PosixSigKill as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: decode)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x4, base: Arm64Register.x1, byteOffset: PosixWaitOffChildKilled)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x4, label: statusChosen)
+
+	asm.placeLabel(decode)
 	arm64EmitCbnzTo(asm, reg: Arm64Register.x5, label: bySignal)
 	arm64EmitLsrImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x5), rn: arm64RuntimeReg(Arm64Register.x3), sh: PosixWaitStatusExitShift)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixWaitStatusExitMask)
@@ -973,12 +994,14 @@ export function buildArm64PosixProcExitCodeChunk() returns FunctionCodeChunk
 end 'buildArm64PosixProcExitCodeChunk'
 
 // ==========================================================================
-// mrt_host_proc_terminate(x0 = handle, x1 = exitCode)
+// mrt_host_proc_terminate(x0 = handle, x1 = exitCode) -> x0 = BOOL
 // ==========================================================================
 
-// `TerminateProcess(h, exitCode)` — `kill(-pgid, SIGKILL)`, plus the one thing POSIX cannot carry across a
-// signal: the CODE the caller named. It is recorded in the object first, so the reap that follows reports it
-// instead of decoding `128 + SIGKILL` from the status. See `PosixSignalExitCodeBase`.
+// `TerminateProcess(h, exitCode)` — `kill(-pgid, SIGKILL)`, plus the one thing POSIX cannot carry
+// across a signal: the code the caller named. It is recorded in the object once the kill is
+// delivered or finds the group gone (`ESRCH`), for the reap to report on a SIGKILL status
+// (`PosixSignalExitCodeBase`). A child already reaped, or a group already gone, answers TRUE: there
+// is nothing left to kill.
 //
 // ⭐⭐ **THE PID IS NEGATED, AND THAT IS THE WHOLE PROCESS-TREE KILL ON BOTH ARM64 POSIX LANES.** A NEGATIVE
 // pid names a process GROUP, and every child this runtime spawns leads one — a detached child through
@@ -989,24 +1012,63 @@ end 'buildArm64PosixProcExitCodeChunk'
 // ⛔⛔ **AND A ZERO PID IS SKIPPED RATHER THAN NEGATED.** `kill(0, …)` signals the CALLER's OWN group, so a
 // record whose pid was never filled would kill this process and every sibling it shares a group with.
 export function buildArm64PosixProcTerminateChunk(kill PosixHostCall) returns FunctionCodeChunk
-	var asm = Arm64RuntimeAsm.beginFunction(0)
+	let SlotObj = 0 as StackSize
+	let SlotCode = 1 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(2)
 	let noChild = asm.newLabel()
+	let delivered = asm.newLabel()
+	let nothingLeftToKill = asm.newLabel()
+	let answered = asm.newLabel()
 
 	arm64PosixUntagHandle(asm, reg: Arm64Register.x0)
-	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: PosixWaitOffChildStatus)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixChildSignalled)
-	arm64EmitStoreWord64At(asm, src: Arm64Register.x2, base: Arm64Register.x0, byteOffset: PosixWaitOffChildKilled)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotCode)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x2, base: Arm64Register.x0, byteOffset: PosixWaitOffSignal)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x2, label: nothingLeftToKill)
 
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: PosixWaitOffChildPid)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: noChild)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
 	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x2, rhs: Arm64Register.x0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixSigKill)
-	arm64PosixEmitHostCall(asm, call: kill)
+	arm64PosixEmitHostCallErrno(asm, call: kill)
+
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: (0 - PosixErrno.noSuchProcess.rawValue) as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: delivered)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: delivered)
+	arm64PosixEmitStashFailure(asm, call: kill)
+	arm64EmitWin32BoolFromZeroStatus(asm)
+	arm64EmitBranchTo(asm, label: answered)
+
+	asm.placeLabel(delivered)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotCode)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: PosixWaitOffChildStatus)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixChildSignalled)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x2, base: Arm64Register.x0, byteOffset: PosixWaitOffChildKilled)
+
+	asm.placeLabel(nothingLeftToKill)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32True as MachineWord)
+	arm64EmitBranchTo(asm, label: answered)
 
 	asm.placeLabel(noChild)
+	arm64PosixEmitPublishErrno(asm, call: kill, value: PosixErrno.noSuchProcess.rawValue)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32False as MachineWord)
+
+	asm.placeLabel(answered)
 	return asm.finishFunction(HostProcTerminateName)
 end 'buildArm64PosixProcTerminateChunk'
+
+// `kill(pid, 0)` delivers nothing and answers whether `pid` names a live process: 0, or `-errno` on
+// both lanes (`-ESRCH` once it is gone). No reason is stashed; the answer carries it.
+export function buildArm64PosixProcProbeChunk(kill PosixHostCall) returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixProbeSignal)
+	arm64PosixEmitHostCallErrno(asm, call: kill)
+
+	return asm.finishFunction(HostProcProbeName)
+end 'buildArm64PosixProcProbeChunk'
 
 // ==========================================================================
 // mrt_host_shm_map(x0 = fd, x1 = bytes) -> x0 = base | 0

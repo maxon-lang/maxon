@@ -1,0 +1,23 @@
+let NoDebugInfoCase = "no-debug-info"
+let ListFlag = "--list"
+let BuildFlag = "--build"
+let JsonFlag = "--json"
+let NoDebugInfoFlag = "--no-debug-info"
+let SidecarSuffix = ".mxdbg"
+let BinaryKey = "binary"
+let ListedCleanly = 0 as AssertedInt
+
+test 'no-debug-info builds the test binary without its sidecar'
+	let listed = runFixture(NoDebugInfoCase, extraArguments: [ListFlag, BuildFlag, JsonFlag, NoDebugInfoFlag])
+	try Expect.equal(listed.exitCode() as AssertedInt, expected: ListedCleanly, message: "`{TestedCommandName} {ListFlag} {BuildFlag} {JsonFlag} {NoDebugInfoFlag}` builds and lists; it printed {listed.stdout} and {listed.stderr}")
+
+	let document = try Json.parse(listed.stdout) otherwise panic("no-debug-info.test: `{ListFlag} {BuildFlag} {JsonFlag}` printed no JSON document: {listed.stdout}")
+	let binarySpelled = try document.getString(document.root, key: BinaryKey) otherwise panic("no-debug-info.test: the document names no `{BinaryKey}`: {listed.stdout}")
+	let binary = try FilePath.from(binarySpelled) otherwise panic("no-debug-info.test: `{BinaryKey}` is not a spellable path: {binarySpelled}")
+	let sidecar = try FilePath.from("{binarySpelled}{SidecarSuffix}") otherwise panic("no-debug-info.test: `{binarySpelled}{SidecarSuffix}` is not a spellable path")
+
+	try Expect.isTrue(File.exists(binary), message: "`{BuildFlag}` names the binary it built, and there is none at {binarySpelled}")
+	try Expect.isFalse(File.exists(sidecar), message: "`{NoDebugInfoFlag}` builds the test binary with no debug-info sidecar, and there is one beside {binarySpelled}")
+
+	try checkFixture(NoDebugInfoCase)
+end 'no-debug-info builds the test binary without its sidecar'

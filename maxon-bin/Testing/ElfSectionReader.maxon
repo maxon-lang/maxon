@@ -137,7 +137,7 @@ export function readElfSectionData(path FilePath, sectionName String) returns By
 		let size = imageReadU64(image, at: ((header + ShdrSizeOffset) as ByteOffset))
 		let fileOffset = imageReadU64(image, at: ((header + ShdrFileOffsetOffset) as ByteOffset))
 
-		if not imageRangeFits(image, start: fileOffset as ByteOffset, count: size as BytePos) 'runsPastEof'
+		if not spanFitsWithin(fileOffset as ByteOffset, count: size as BytePos, total: image.count()) 'runsPastEof'
 			throw ElfReadError.truncated(path, sectionName: sectionName)
 		end 'runsPastEof'
 

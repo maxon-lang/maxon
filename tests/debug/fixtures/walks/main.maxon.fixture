@@ -1,0 +1,65 @@
+typealias Depth = int(0 to 1000000)
+typealias Item = int(0 to 1000000000)
+typealias ItemArray = Array with Item
+
+type Tag implements Equatable
+	export let code as Item
+
+	static function create(code Item) returns Tag
+		return Tag{code: code}
+	end 'create'
+
+	function equals(other Tag) returns bool
+		return self.code == other.code // anchor: tag-equals
+	end 'equals'
+end 'Tag'
+
+typealias TagArray = Array with Tag
+
+function countdown(n Depth) returns Depth
+	if n == 0 'bottom'
+		return 0
+	end 'bottom'
+
+	let below = countdown(n - 1) // anchor: recurse
+	let here = below + 1 // anchor: after-recurse
+
+	return here
+end 'countdown'
+
+function deep(n Depth) returns Depth
+	if n == 0 'bottom'
+		return 0
+	end 'bottom'
+
+	return deep(n - 1) + 1
+end 'deep'
+
+function warmUp(n Depth) returns Depth
+	sleep(1)
+
+	return n + 1
+end 'warmUp'
+
+function main() returns ExitCode
+	let warm = async warmUp(1)
+	let first = await warm
+	var values = ItemArray.create()
+
+	for i in 0 upto 300000 'fill'
+		values.push((i * 7919) mod 1000003)
+	end 'fill'
+
+	let counted = values.count() // anchor: inlined-leaf
+	values.sort() // anchor: library-call
+	let sorted = try values.get(0) otherwise 0 // anchor: after-library-call
+	var tags = TagArray.create()
+	tags.push(Tag.create(3))
+	tags.push(Tag.create(5))
+	let found = tags.contains(Tag.create(5)) // anchor: generic-call
+	let top = countdown(3) // anchor: countdown-call
+	let depth = deep(20000) // anchor: deep-call
+	print("walks {first} {counted} {sorted} {found} {top} {depth}\n") // anchor: after-deep
+
+	return 0
+end 'main'

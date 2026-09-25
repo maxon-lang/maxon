@@ -1,0 +1,50 @@
+let TestBodyCaseLabel = "a-breakpoint-in-a-test-body-is-verified"
+let TestBodyAnchor = "test-body"
+let TestBodyFileName = "doubling.maxtest"
+let TestBodyDisplayName = "test 'doubling two gives four'"
+
+type TestBodySession implements DapSession
+	let binary as FilePath
+	let source as FilePath
+	let anchored as SourceLine
+	export var placed as JsonDoc
+	export var stopReason as String
+	export var frameNames as StringArray
+	export var frameLines as DapNumberArray
+
+	static function create(binary FilePath, source FilePath, anchored SourceLine) returns TestBodySession
+		return Self{binary: binary, source: source, anchored: anchored, placed: JsonDoc.create(), stopReason: "", frameNames: StringArray.create(), frameLines: DapNumberArray.create()}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+		_ = try client.request(LaunchCommand, argumentsJson: dapLaunchArguments(self.binary))
+		_ = try client.awaitEvent(InitializedEvent)
+
+		self.placed = try client.request(SetBreakpointsCommand, argumentsJson: dapSetBreakpointsArguments(self.source, line: self.anchored))
+
+		_ = try client.request(ConfigurationDoneCommand)
+
+		let stopped = try client.awaitEvent(StoppedEvent)
+		self.stopReason = dapBodyString(stopped, key: "reason")
+
+		let frames = try client.request(StackTraceCommand, argumentsJson: dapThreadArguments(dapBodyNumber(stopped, key: "threadId")))
+		self.frameNames = dapStackFrameNames(frames)
+		self.frameLines = dapStackFrameLines(frames)
+
+		_ = try client.request(DisconnectCommand)
+	end 'drive'
+end 'TestBodySession'
+
+test 'a source breakpoint in a test body of a built test binary is verified and stops there'
+	let staged = dapStagedFixture(TestBodyCaseLabel, fixture: TestBodyFixtureName)
+	let binary = dapBuildTestBinary(staged)
+	let anchored = dapAnchorLine(staged, anchor: TestBodyAnchor, file: TestBodyFileName)
+	var session = TestBodySession.create(binary, source: dapStagedSource(staged, file: TestBodyFileName), anchored: anchored)
+	try dapRunSession(session, completing: "complete")
+
+	try Expect.isTrue(dapBreakpointVerified(session.placed, index: 0), message: "a line of a test body is the author's code, so a breakpoint on it binds; it was left unverified: {dapDescribed(session.placed)}")
+	try Expect.equal(session.stopReason, expected: BreakpointReason, message: "the test binary must stop on the breakpoint in the test body")
+	try Expect.equal(dapFrameNameAt(session.frameNames, frame: 0), expected: TestBodyDisplayName, message: "the top frame is the test, named by its prose as `maxon test` names it. Frames: {dapRendered(session.frameNames)}")
+	try Expect.equal(dapFrameNumberAt(session.frameLines, frame: 0) as AssertedInt, expected: anchored as AssertedInt, message: "the top frame stands on the armed line. Frames: {dapRendered(session.frameNames)}")
+end 'a source breakpoint in a test body of a built test binary is verified and stops there'

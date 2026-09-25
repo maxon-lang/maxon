@@ -1,0 +1,15 @@
+let PauseAtStopCaseLabel = "pause-at-a-stop-is-not-an-error"
+
+test 'a pause asked of a program that is already stopped is answered rather than refused'
+	let staged = builtFixture(PauseAtStopCaseLabel, fixture: SteppingFixtureName)
+	let printLine = anchorLine(staged, anchor: "main-print")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(printLine)}", RunCommand, PauseCommand, BacktraceCommand, ContinueCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	try Expect.equal(eventsOfKind(events, kind: ErrorEventName).count() as AssertedInt, expected: 0, message: "a `{PauseCommand}` wants the program stopped, and it is: that is its answer, not an error. A pause that races a stop the program already published is this same case. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(eventsOfKind(events, kind: StopEventName).count() as AssertedInt, expected: 1, message: "the breakpoint is the one stop; the `{PauseCommand}` moved nothing. {said}")
+	try Expect.equal(eventsOfKind(events, kind: BacktraceEventName).count() as AssertedInt, expected: 1, message: "the stop is still walkable after the `{PauseCommand}`. {said}")
+	try Expect.equal(eventsOfKind(events, kind: ExitEventName).count() as AssertedInt, expected: 1, message: "`{ContinueCommand}` runs the program to its exit. {said}")
+end 'a pause asked of a program that is already stopped is answered rather than refused'

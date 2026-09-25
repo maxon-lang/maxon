@@ -635,17 +635,15 @@ end 'emitNetpollConsumeBreak'
 
 // Read the eventfd's counter back to zero. Terminates `cur` and continues at `cont`.
 //
-// ⛔⛔ **A COUNTER ALREADY AT ZERO ANSWERS `EAGAIN`, AND THAT MEANS THE DRAIN IS DONE.** The descriptor is
-// non-blocking, so a read finding nothing to take is the state this call exists to reach — not a refusal. It
-// is the `openChildSource`/`ESRCH` shape exactly: a runtime path reading *"the thing already happened"* as
-// *"the host refused me"*, and one that aborts a correct program only when the timing goes a particular way.
+// A counter already at zero answers `EAGAIN`, which means the drain is done: the descriptor is
+// non-blocking, so a read finding nothing is the state this call exists to reach, not a refusal.
 // The drain is `epoll`-only, so Linux's `EAGAIN` is the one number that can arrive here.
 function emitNetpollDrain(module StdModule, func IrFunction, cur IrBlock, cont IrBlock, ids ValueMinter)
 	var checked = module.addBlock(func, label: b"npdrainchk", heat: BlockHeat.normal)
 
 	let breakSource = emitLoadGlobalWord(module, block: cur, label: NetpollBreakLabel, ids: ids)
 	let answer = emitNetpoll(module, block: cur, verb: NetpollVerb.drainBreak, operands: argsOf(breakSource), ids: ids)
-	let empty = emitCmp(module, block: cur, a: answer, b: emitConst(module, block: cur, value: 0 - LinuxErrnoWouldBlock, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let empty = emitCmp(module, block: cur, a: answer, b: emitConst(module, block: cur, value: 0 - LinuxErrno.wouldBlock.rawValue, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(empty, thenBlockId: cont.id, elseBlockId: checked.id))
 
 	emitNetpollRequire(module, func: func, cur: checked, shape: NetpollShape.epoll, verb: NetpollVerb.drainBreak, subject: breakSource, answer: answer, cont: cont, ids: ids)
@@ -2039,24 +2037,22 @@ function emitNetpollSourceKeyFromAllocator(module StdModule, block IrBlock, cont
 	block.branchEdges.push(BranchEdge.create(cont.id, argIds: argsOf(key)))
 end 'emitNetpollSourceKeyFromAllocator'
 
-// A POSIX lane's source key IS a descriptor the host mints, so a refusal is the host's — and the answer to
-// *"this child can never be waited for"* is the one a socket the poller will not take already gets.
+// A POSIX lane's source key is a descriptor the host mints, so a refusal is the host's, and it gets
+// the stop a socket the poller will not take gets.
 //
-// ⛔ **`-ESRCH` TRAVELS BACK RATHER THAN ABORTING**: it says the child has already exited, which
-// `emitNetpollAcquireChildSource` answers by reading the status. Every other negative is a real refusal.
+// `-ESRCH` travels back rather than aborting: the child has already exited, which
+// `emitNetpollAcquireChildSource` answers by reading the status. Every other negative is a refusal.
 //
-// ⛔⛔ **AND IT RETURNS FROM `__np_child_open` HERE RATHER THAN JOINING `cont`, BECAUSE AN errno IS NOT AN
-// INDEX.** `cont` is the block that gives the answer a RECORD, and `__np_pd_adopt` reads what it is handed as
-// the record table's index: `-ESRCH` addresses the words BEFORE the table, and one of them is then handed to
-// `emitNetpollPdClear` as a poll descriptor — a wild pointer readied as a green thread, or eight bytes
-// belonging to something else overwritten with a fresh record's address. MEASURED on a loaded arm64-macos
-// host as a SIGSEGV in `__np_pd_ready_one`, on a program that did nothing wrong.
+// It returns from `__np_child_open` here rather than joining `cont`, because an errno is not an
+// index. `cont` gives the answer a record, and `__np_pd_adopt` reads what it is handed as the
+// record table's index: `-ESRCH` would address the words before the table and hand one to
+// `emitNetpollPdClear` as a poll descriptor, a wild pointer readied as a green thread.
 function emitNetpollChildSourceFromHost(module StdModule, func IrFunction, cur IrBlock, target Target, childHandle ValueId, cont IrBlock, ids ValueMinter)
 	var checked = module.addBlock(func, label: b"npchsrcchk", heat: BlockHeat.normal)
 	var gone = module.addBlock(func, label: b"npchsrcgone", heat: BlockHeat.normal)
 
 	let source = emitNetpoll(module, block: cur, verb: NetpollVerb.openChildSource, operands: argsOf(childHandle), ids: ids)
-	let exited = emitCmp(module, block: cur, a: source, b: emitConst(module, block: cur, value: 0 - PosixErrnoNoSuchProcess, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let exited = emitCmp(module, block: cur, a: source, b: emitConst(module, block: cur, value: 0 - PosixErrno.noSuchProcess.rawValue, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(exited, thenBlockId: gone.id, elseBlockId: checked.id))
 	module.setTerminator(gone, op: StdOp.ret(source))
 
@@ -2188,29 +2184,26 @@ export type NetpollChildSource
 	end 'create'
 end 'NetpollChildSource'
 
-// ⭐⭐ **MAKE A CHILD A SOURCE ON THE POLLER, AND THE ORDER OF THE THREE STEPS IS THE CONTRACT.** The source
-// is minted, given a record, and only then registered: an exit reported before the record exists would be
-// dropped, and a child exits ONCE. `cur` is terminated and `cont` reached with the source armed.
+// Make a child a source on the poller. The source is minted, given a record, and only then
+// registered: an exit reported before the record exists would be dropped, and a child exits once.
+// `cur` is terminated and `cont` reached with the source armed.
 //
-// ⛔ A poller that will not take the source leaves the caller nothing to wait on, which is the stop a socket
-// it will not take already gets — not a `RunProcessError`: the child spawned, and no caller could do anything
-// with the distinction but abandon a process it can no longer hear from.
-// ⛔⛔ **A CHILD THAT HAS ALREADY EXITED REACHES `gone`, AND THAT IS NOT A FAILURE.** The open answers
-// `-ESRCH` for it (`PosixRuntime.PosixErrnoNoSuchProcess`), and the caller's answer is the one it would have
-// reached anyway: read the status, which is still there to read. Aborting instead is the shape that has now
-// cost this rung three rounds — a runtime path reading *"the thing already happened"* as *"the host refused
-// me"*.
+// A poller that will not take the source leaves the caller nothing to wait on, so it gets the stop
+// a socket gets, not a `RunProcessError`: the child spawned, and a caller could do nothing with the
+// distinction but abandon a process it can no longer hear from.
 //
-// ⚠ **THE WINDOWS LANE CANNOT REACH `gone` AND DOES NOT NEED TO.** Its open allocates a dense key and cannot
-// fail this way, and `RegisterWaitForSingleObject` on an ALREADY-SIGNALLED handle fires the callback at once
-// rather than refusing — so the packet is posted and the wait ends immediately, which is the same answer by a
-// different road.
+// A child that has already exited reaches `gone`, which is not a failure: the open answers `-ESRCH`
+// (`PosixErrno.noSuchProcess`), and the caller reads the status, which is still there.
+//
+// The Windows lane cannot reach `gone`: its open allocates a dense key and cannot fail this way,
+// and `RegisterWaitForSingleObject` on an already-signalled handle fires the callback at once, so
+// the packet is posted and the wait ends immediately.
 export function emitNetpollAcquireChildSource(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, hProcess ValueId, cont IrBlock, gone IrBlock) returns NetpollChildSource
 	var opened = module.addBlock(func, label: b"npchopened", heat: BlockHeat.normal)
 
 	let source = ids.mint()
 	module.appendOp(cur, op: StdOp.call(source, callee: NetpollChildOpenName, args: argsOf(hProcess)))
-	let exited = emitCmp(module, block: cur, a: source, b: emitConst(module, block: cur, value: 0 - PosixErrnoNoSuchProcess, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let exited = emitCmp(module, block: cur, a: source, b: emitConst(module, block: cur, value: 0 - PosixErrno.noSuchProcess.rawValue, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(exited, thenBlockId: gone.id, elseBlockId: opened.id))
 
 	return NetpollChildSource.create(source, token: emitNetpollWatchHandleOnRecord(module, func: func, ids: ids, cur: opened, source: source, handle: hProcess, cont: cont))

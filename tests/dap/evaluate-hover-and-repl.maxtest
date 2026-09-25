@@ -1,0 +1,46 @@
+let EvaluateCaseLabel = "evaluate-hover-and-repl"
+let RenderedAnchor = "rendered"
+let RenderFunctionName = "render"
+let LabelLocalName = "label"
+let LabelLocalText = "parcel"
+let HoverContext = "hover"
+let ReplContext = "repl"
+let BacktraceWord = "backtrace"
+
+type EvaluateSession implements DapSession
+	let executable as FilePath
+	let source as FilePath
+	let anchored as SourceLine
+	export var hovered as String
+	export var replied as String
+
+	static function create(executable FilePath, source FilePath, anchored SourceLine) returns EvaluateSession
+		return Self{executable: executable, source: source, anchored: anchored, hovered: "", replied: ""}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+		_ = try client.request(LaunchCommand, argumentsJson: dapLaunchArguments(self.executable))
+		_ = try client.awaitEvent(InitializedEvent)
+		_ = try client.request(SetBreakpointsCommand, argumentsJson: dapSetBreakpointsArguments(self.source, line: self.anchored))
+		_ = try client.request(ConfigurationDoneCommand)
+
+		let threadId = dapBodyNumber(try client.awaitEvent(StoppedEvent), key: "threadId")
+		let frames = try client.request(StackTraceCommand, argumentsJson: dapThreadArguments(threadId))
+		let frameId = dapTopFrameId(frames)
+
+		self.hovered = dapBodyString(try client.request(EvaluateCommand, argumentsJson: dapEvaluateArguments(LabelLocalName, context: HoverContext, frameId: frameId)), key: "result")
+		self.replied = dapBodyString(try client.request(EvaluateCommand, argumentsJson: dapEvaluateArguments(BacktraceWord, context: ReplContext, frameId: frameId)), key: "result")
+
+		_ = try client.request(DisconnectCommand)
+	end 'drive'
+end 'EvaluateSession'
+
+test 'evaluate answers a local in hover context and a debugger word in repl context'
+	let staged = dapStagedFixture(EvaluateCaseLabel, fixture: ValuesFixtureName)
+	var session = EvaluateSession.create(dapBuildFixture(staged), source: dapStagedSource(staged), anchored: dapAnchorLine(staged, anchor: RenderedAnchor))
+	try dapRunSession(session, completing: "complete")
+
+	try Expect.contains(session.hovered, needle: LabelLocalText, message: "hovering `{LabelLocalName}` must show its value, which is `{LabelLocalText}` at that line; it showed {session.hovered}")
+	try Expect.contains(session.replied, needle: RenderFunctionName, message: "`{BacktraceWord}` in the Debug Console must answer the stack as TEXT, naming the function the program is stopped in; it answered {session.replied}")
+end 'evaluate answers a local in hover context and a debugger word in repl context'

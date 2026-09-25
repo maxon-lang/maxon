@@ -1,0 +1,49 @@
+let OkStatus = 200 as HttpStatusNumber
+let AcceptedStatus = 202 as HttpStatusNumber
+let ControlRequestId = 7 as RequestId
+
+function notificationOf(method String) returns String
+	return "\{\"jsonrpc\":\"2.0\",\"method\":\"{method}\",\"params\":\{\}\}"
+end 'notificationOf'
+
+function answeredIds(docs JsonDocArray) returns String
+	var ids = ""
+
+	for doc in docs 'eachDoc'
+		if let id = try doc.getInt(doc.root, key: "id") 'numbered'
+			ids.append("{id} ")
+		end 'numbered' else 'unnumbered'
+			ids.append("unnumbered ")
+		end 'unnumbered'
+	end 'eachDoc'
+
+	return ids
+end 'answeredIds'
+
+test 'over stdio an initialize, tools/list or tools/call notification gets no answer'
+	let run = runMcp([notificationOf("initialize"), notificationOf("tools/list"), notificationOf("tools/call"), toolsListRequest(ControlRequestId)])
+	let docs = responseDocs(run)
+
+	try Expect.equal(docs.count() as AssertedInt, expected: 1, message: "JSON-RPC forbids answering a notification, whatever its method; only the control request with id {ControlRequestId} may be answered. The answers carried ids {answeredIds(docs)}")
+	try Expect.equal(answeredIds(docs), expected: "{ControlRequestId} ", message: "the one answer must be the control request's")
+end 'over stdio an initialize, tools/list or tools/call notification gets no answer'
+
+test 'over http an initialize notification is accepted 202 and mints no session'
+	var server = StreamingHttpMcpServer.start(StringArray.create())
+	let notified = server.post(notificationOf("initialize"), sessionId: McpSession.none)
+	let (initialized, sessionId) = server.initializeSession()
+	let listed = server.post(notificationOf("tools/list"), sessionId: sessionId)
+	try server.stop()
+
+	try Expect.equal(notified.statusCode as AssertedInt, expected: AcceptedStatus as AssertedInt, message: "a POST carrying only a notification is answered 202 with no body; it answered {notified.statusCode} with {notified.body}")
+	try Expect.isTrue(notified.body.isEmpty(), message: "a 202 carries no body; it carried {notified.body}")
+
+	match notified.session() 'minted'
+		none then break 'minted'
+		minted then try Expect.fail("an `initialize` sent as a notification asks for nothing, so it must mint no session; it answered {describedSession(notified.session())}")
+	end 'minted'
+
+	try Expect.equal(initialized.statusCode as AssertedInt, expected: OkStatus as AssertedInt, message: "the control `initialize` REQUEST must still open a session")
+	try Expect.equal(listed.statusCode as AssertedInt, expected: AcceptedStatus as AssertedInt, message: "a `tools/list` notification on a live session is answered 202 with no body; it answered {listed.statusCode} with {listed.body}")
+	try Expect.isTrue(listed.body.isEmpty(), message: "a 202 carries no body; it carried {listed.body}")
+end 'over http an initialize notification is accepted 202 and mints no session'

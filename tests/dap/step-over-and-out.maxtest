@@ -1,0 +1,58 @@
+let StepCaseLabel = "step-over-and-out"
+let InnerLoopAnchor = "inner-loop"
+let InnerFunctionName = "inner"
+let OuterFunctionName = "outer"
+
+type StepSession implements DapSession
+	let executable as FilePath
+	let source as FilePath
+	let anchored as SourceLine
+	export var nextAnswered as bool
+	export var nextReason as String
+	export var framesAfterNext as StringArray
+	export var stepOutAnswered as bool
+	export var stepOutReason as String
+	export var framesAfterStepOut as StringArray
+
+	static function create(executable FilePath, source FilePath, anchored SourceLine) returns StepSession
+		return Self{executable: executable, source: source, anchored: anchored, nextAnswered: false, nextReason: "", framesAfterNext: StringArray.create(), stepOutAnswered: false, stepOutReason: "", framesAfterStepOut: StringArray.create()}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+		_ = try client.request(LaunchCommand, argumentsJson: dapLaunchArguments(self.executable))
+		_ = try client.awaitEvent(InitializedEvent)
+		_ = try client.request(SetBreakpointsCommand, argumentsJson: dapSetBreakpointsArguments(self.source, line: self.anchored))
+		_ = try client.request(ConfigurationDoneCommand)
+
+		let threadId = dapBodyNumber(try client.awaitEvent(StoppedEvent), key: "threadId")
+
+		// Cleared first: a step that walks back onto the armed line reports a `breakpoint` stop, not a
+		// `step`.
+		_ = try client.request(SetBreakpointsCommand, argumentsJson: dapClearBreakpointsArguments(self.source))
+
+		self.nextAnswered = dapSuccess(try client.request(NextCommand, argumentsJson: dapThreadArguments(threadId)))
+		self.nextReason = dapBodyString(try client.awaitEvent(StoppedEvent), key: "reason")
+		self.framesAfterNext = dapStackFrameNames(try client.request(StackTraceCommand, argumentsJson: dapThreadArguments(threadId)))
+
+		self.stepOutAnswered = dapSuccess(try client.request(StepOutCommand, argumentsJson: dapThreadArguments(threadId)))
+		self.stepOutReason = dapBodyString(try client.awaitEvent(StoppedEvent), key: "reason")
+		self.framesAfterStepOut = dapStackFrameNames(try client.request(StackTraceCommand, argumentsJson: dapThreadArguments(threadId)))
+
+		_ = try client.request(DisconnectCommand)
+	end 'drive'
+end 'StepSession'
+
+test 'next answers at once and stops on the next line, and stepOut lands in the caller'
+	let staged = dapStagedFixture(StepCaseLabel, fixture: SteppingFixtureName)
+	var session = StepSession.create(dapBuildFixture(staged), source: dapStagedSource(staged), anchored: dapAnchorLine(staged, anchor: InnerLoopAnchor))
+	try dapRunSession(session, completing: "complete the stepping")
+
+	try Expect.isTrue(session.nextAnswered, message: "`{NextCommand}` must answer its own request successfully, before the stop arrives")
+	try Expect.equal(session.nextReason, expected: StepReason, message: "a step's stop must say `{StepReason}`, which is how an editor tells it from a breakpoint it happened to pass; it said `{session.nextReason}`")
+	try Expect.equal(dapFrameNameAt(session.framesAfterNext, frame: 0), expected: InnerFunctionName, message: "`{NextCommand}` steps OVER calls and stays in the frame it was in — `{InnerFunctionName}`; it landed in {dapRendered(session.framesAfterNext)}")
+
+	try Expect.isTrue(session.stepOutAnswered, message: "`{StepOutCommand}` must answer its own request successfully, before the stop arrives")
+	try Expect.equal(session.stepOutReason, expected: StepReason, message: "`{StepOutCommand}`'s stop must say `{StepReason}`; it said `{session.stepOutReason}`")
+	try Expect.equal(dapFrameNameAt(session.framesAfterStepOut, frame: 0), expected: OuterFunctionName, message: "`{StepOutCommand}` from `{InnerFunctionName}` lands in its caller `{OuterFunctionName}`; it landed in {dapRendered(session.framesAfterStepOut)}")
+end 'next answers at once and stops on the next line, and stepOut lands in the caller'

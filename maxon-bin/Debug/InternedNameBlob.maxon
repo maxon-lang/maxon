@@ -26,7 +26,7 @@ export function nameBlobIn(symdata ByteArray, magic ByteArray) returns StringArr
 		let length = readBlobField(symdata, at: cursor)
 		cursor = cursor + DsNameBlobFieldBytes
 
-		if not imageRangeFits(symdata, start: cursor, count: length) 'runsPastTheSection'
+		if not spanFitsWithin(cursor, count: length, total: symdata.count()) 'runsPastTheSection'
 			break
 		end 'runsPastTheSection'
 
@@ -41,7 +41,7 @@ end 'nameBlobIn'
 // call and cannot come to disagree about width. A field running past the section reads 0, which ends the
 // walk at the next bound check.
 function readBlobField(symdata ByteArray, at ByteOffset) returns BytePos
-	if not imageRangeFits(symdata, start: at, count: DsNameBlobFieldBytes) 'runsPastTheSection'
+	if not spanFitsWithin(at, count: DsNameBlobFieldBytes, total: symdata.count()) 'runsPastTheSection'
 		return 0
 	end 'runsPastTheSection'
 

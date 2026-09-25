@@ -19,14 +19,6 @@
 // and the Std passes downstream grow their dense columns to fit, so a monotonic counter is all that is
 // needed (no per-function object).
 
-// Collapse a source-level MaxonType to its width/ABI-resolved StdType. `named` and `unresolved` are a
-// TypeResolution (Chunk C) responsibility: that pass replaces every
-// `named(alias)` with the primitive it resolves to (consulting the typealias
-// registry for its width) and eliminates every `unresolved` BEFORE lowering
-// runs. Seeing either arm here is a pipeline-ordering bug (TypeResolution did
-// not run, or left a residue) — not a user error — so it panics loudly rather
-// than silently guessing a width. GROWS at Chunk C to resolve `named` widths
-// through the registry once that registry exists.
 // An interface's transitive witness-slot list, held per interface for the module being lowered — keyed by
 // the declaration-order handle a `witnessDispatch` names its interface by, so the memo is asked with the
 // very scalar the op carries and needs no name round-trip. See `MaxonToStdLowering.witnessSlotsOf`.
@@ -48,80 +40,57 @@ export function maxonTypeToStdType(ref MaxonType) returns StdType
 		unresolved then panic("maxonTypeToStdType: an `unresolved` type reached lowering (TypeResolution did not run)")
 		boolean or
 			integer or
-			float then break 'residue'
-		exitCode then break 'residue'
-
-		// A struct reference is NOT a residue — it is what `resolveNamedType` PRODUCES for a
-		// declared `type`, and it is already concrete. Its width is a machine word, assigned one
-		// line down by the same table every other arm's comes from. (`named` is checked above and
-		// this is not, because they are two different questions about one union: a `named` type
-		// surviving to here means resolution left work undone; a `structRef` means resolution DID
-		// its work.)
-		structRef then break 'residue'
-
-		// A String is NOT a residue — `Parser.parseTypeReference` produces `MaxonType.string` for the
-		// `String` builtin directly (syntactically, like `Self`), so it is already concrete. Its width
-		// is a machine word (a pointer), assigned one line down by the same table every arm's comes from.
-		string then break 'residue'
-
-		// A function value is NOT a residue — `Parser.parseTypeReference`/`emitFunctionRef` produce
-		// `MaxonType.function` directly, so it is already concrete. Its width is a machine word (a `.text`
-		// code pointer), assigned one line down by the same table every arm's comes from.
-		function then break 'residue'
-
-		// A type parameter and a generic instance are NOT residues — the parser produces them
-		// directly and `resolveType` leaves them alone (they are already concrete: an opaque i64 and a
-		// struct pointer). Their width is a machine word, assigned one line down by the same table.
-		typeParameter then break 'residue'
-		genericInstance then break 'residue'
-
-		// A Character is concrete — a record pointer — so it is no more a residue than a String is.
-		character then break 'residue'
-
-		// An EXISTENTIAL is concrete: `Parser.parseTypeReference` mints `interfaceRef` directly for a name
-		// the whole-program interface registry knows, and `denotedNamedType` mints one for a swept `named`
-		// that turns out to be an interface. Its width here is the VALUE half's machine word — the witness
-		// half is a SEPARATE value with its own Std type, never a widening of this one.
-		interfaceRef then break 'residue'
-
-		// A `cstring` is concrete: `parseTypeReference` mints it directly for the keyword, and its width is
-		// the machine word every other address gets from the table one line down.
-		cstring then break 'residue'
+			float or
+			exitCode or
+			structRef or
+			string or
+			function or
+			typeParameter or
+			genericInstance or
+			character or
+			interfaceRef or
+			cstring then break 'residue'
 	end 'residue'
 
 	return valueTagToStdType(maxonTypeTag(ref))
 end 'maxonTypeToStdType'
 
-// ⭐ THE WIDTH/ABI COLLAPSE, STATED OVER THE PARSER'S DENSE TAG COLUMN — and the form the
-// per-OPERAND path must use. `maxonTypeToStdType` is the same collapse asked of a `MaxonType`,
-// and it DELEGATES here rather than restating the lattice: this boundary's whole content is that
-// one table, and two copies of it are the drift that would let a `literal`'s width and its
-// operand's width come to disagree.
+// The width/ABI collapse, stated over the parser's dense tag column, and the form the per-operand
+// path must use. `maxonTypeToStdType` delegates here rather than restating the table, so a
+// `literal`'s width and its operand's width cannot come to disagree.
 //
-// It takes a TAG, and the reason is measured rather than aesthetic: the alternative spelling —
-// `maxonTypeToStdType(maxonTypeOfTag(tag, …))` — REBUILDS A `MaxonType`, and **a Maxon union
-// value is a heap object** (MaxonDialect's ValueTypeTag header has the measurement: exactly this
-// shape costs +4,165 allocations on scale-test's smallest rung). `operandType` is
-// read for every operand of every arithmetic op in the program — the compiler's hottest path — so
-// the answer has to be a scalar computed from a scalar.
+// It takes a tag because rebuilding a `MaxonType` to ask the other function allocates — a Maxon
+// union value is a heap object — and `operandType` asks this of every operand of every arithmetic
+// op in the program.
 //
-// ⚠ `named` collapses to `i64` here and PANICS there, and that asymmetry is deliberate. A
-// `MaxonType.named` reaching lowering means TypeResolution left a residue; a `named` TAG is
-// perfectly ordinary, because `TypeResolution.resolveTypes` rewrites function SIGNATURES and
-// never the parser's `valueTags` column — so a parameter declared with a ranged alias still
-// carries a `named` tag right here. It collapses to i64 because a `named` value is an INT in every
-// position it can reach one: a `float(low to high)` alias is also legal
-// (`Parser.readTypeAliasDeclaration`), but a float alias is tagged `named` only as a param/field, all
-// deferred to the float ABI, and the i64 collapse there forces a cross-file move the x64
-// allocator PANICS on rather than passing a double in a GPR — never a wrong answer. Classing a float
-// alias as f64 needs `named` resolved through the alias registry, which is unbuilt (TypeRules'
-// `typeClassOf`/`tagIsIntegral`/`notOperatorFor` all cite the same resolution).
+// ⚠ `named` collapses to `i64` here and panics in `maxonTypeToStdType`, deliberately. A
+// `MaxonType.named` reaching lowering is a TypeResolution residue, but a `named` tag is ordinary:
+// `TypeResolution.resolveTypes` rewrites function signatures and never the parser's `valueTags`
+// column, so a parameter declared with a ranged alias still carries one here. A `named` value is an
+// integer in every position it can reach this, except a `float(low to high)` alias as a param or
+// field; that is deferred to the float ABI, and the i64 collapse there forces a cross-file move the
+// x64 allocator panics on rather than passing a double in a GPR — never a wrong answer. Classing a
+// float alias as f64 needs `named` resolved through the alias registry, which is unbuilt.
 export function valueTagToStdType(tag ValueTypeTag) returns StdType
 	match tag 'collapse'
 		boolean then return StdType.i1
-		integer then return StdType.i64
+		integer or
+			named or
+			// Every reference is one machine word: a struct or generic instance is its box's address, a
+			// String or Character its record's, a function value a `.text` code address, a `cstring` a
+			// raw address. A type parameter is an opaque word, which is what lets a generic type's method
+			// bodies compile once. MaxonType stays width-free (see MaxonDialect), so this arm is the one
+			// place the machine word is named. An existential's tag types only its value half; the
+			// witness half is a separate value with its own integer tag.
+			structRef or
+			string or
+			function or
+			typeParameter or
+			genericInstance or
+			character or
+			interfaceRef or
+			cstring then return StdType.i64
 		float then return StdType.f64
-		named then return StdType.i64
 
 		// `exitCode` is the resolved `ExitCode` builtin alias. Its width is
 		// assigned HERE (unsigned 32-bit) — this is the sole place ExitCode's
@@ -129,46 +98,6 @@ export function valueTagToStdType(tag ValueTypeTag) returns StdType
 		exitCode then return StdType.u32
 		unresolved then panic("valueTagToStdType: an `unresolved` tag reached lowering — it is a call to a function no file in the program declares, which SemanticCheck reports as E3004 and which therefore never reaches codegen")
 		void then panic("valueTagToStdType: a `void` tag names no value, so it has no width — a void call's result is a discarded statement result (Parser.parseCall) and can never be an operand")
-
-		// ⭐ A STRUCT IS A POINTER, AND THIS LINE IS THE WHOLE OF THAT DECISION. `type Point` is a
-		// heap-allocated refcounted box (`Parser.emitStructLiteral` → `__mm_alloc`), and a value of
-		// that type is the box's ADDRESS — one machine word, in a GPR, passed and returned like any
-		// other i64. It is why `sizeof(Outer{p Point, n Integer})` is 16 and not 24: a struct FIELD
-		// is a pointer too. Nothing above this line knows the width, which is the point — MaxonType
-		// stays width-free (see MaxonDialect) and the machine word is named exactly once, here.
-		structRef then return StdType.i64
-
-		// ⭐ A STRING IS A POINTER — to the fused 56-byte rdata record. One machine word, in a GPR,
-		// passed and returned like any other i64. Nothing above this line knows the width, which is the
-		// point: MaxonType stays width-free and the machine word is named exactly once, here.
-		string then return StdType.i64
-
-		// ⭐ A FUNCTION VALUE IS A POINTER — a `.text` code address. One machine word, in a GPR, passed
-		// and returned like any other i64. Nothing above this line knows the width, which is the point:
-		// MaxonType stays width-free and the machine word is named exactly once, here.
-		function then return StdType.i64
-
-		// ⭐ A TYPE PARAMETER IS AN OPAQUE MACHINE WORD. `T` in `type Box uses T` lowers to an
-		// i64, which is the WHOLE of what makes a generic type's method bodies compile ONCE and be
-		// byte-identical to the equivalent monomorphic struct: a trivial type argument is passed in a
-		// GPR and stored in an 8-byte slot like any other scalar. Nothing above this line knows the
-		// width — MaxonType stays width-free — and the machine word is named exactly once, here.
-		typeParameter then return StdType.i64
-
-		// A GENERIC INSTANCE IS A POINTER to the base struct's box — one machine word, like `structRef`.
-		genericInstance then return StdType.i64
-
-		// A CHARACTER IS A POINTER to the fused byte record — the same machine word a String is.
-		character then return StdType.i64
-
-		// ⭐ **AN EXISTENTIAL'S *VALUE HALF* IS A POINTER** — one machine word, exactly as `structRef` is.
-		// This tag types ONE of the fat pointer's two words and never both: the witness half is a separate
-		// value carrying its own (integer) tag, which is what keeps the collapse a scalar-to-scalar table
-		// rather than something that would have to answer with a width of 16.
-		interfaceRef then return StdType.i64
-
-		// A `cstring` is a raw ADDRESS — one machine word, in a GPR, like every other pointer here.
-		cstring then return StdType.i64
 	end 'collapse'
 end 'valueTagToStdType'
 
@@ -917,13 +846,13 @@ function registerProgramLiteralBlobs(maxonModule MaxonModule, globalData GlobalD
 	end 'eachFunc'
 end 'registerProgramLiteralBlobs'
 
-// The two ops that carry a blob the SOURCE wrote. It NAMES every variant of `MaxonOp` so an op added later
-// FAILS TO COMPILE here rather than being left out of the ordering — the same reason
-// `FnRefThunk.noteIfFunctionRef` gives: an op carrying a program literal must be a decision, not an
-// omission.
+// The two ops that carry a blob the source wrote. Every variant of `MaxonOp` is named, so an op
+// added later fails to compile here rather than being left out of the ordering: carrying a program
+// literal must be a decision, not an omission.
 //
-// Both arms call the very function the lowering calls (`registerStringBlob`, `registerByteArrayLiteralBlob`),
-// so the bytes this registers and the bytes the lowering asks for are one shaping, not two.
+// Both arms call the very function the lowering calls (`registerStringBlob`,
+// `registerByteArrayLiteralBlob`), so the bytes registered here and the bytes the lowering asks for
+// are one shaping.
 function registerIfProgramLiteral(op MaxonOp, globalData GlobalDataTable)
 	match op 'op'
 		call or
@@ -937,9 +866,8 @@ function registerIfProgramLiteral(op MaxonOp, globalData GlobalDataTable)
 			branch or
 			globalAddr or
 			loadIndirect or
-			storeIndirect then break 'op'
-		stringLiteral(_, bytes) then _ = registerStringBlob(globalData, bytes: bytes)
-		tryCall or
+			storeIndirect or
+			tryCall or
 			throwError or
 			propagateError or
 			panicAbort or
@@ -948,41 +876,31 @@ function registerIfProgramLiteral(op MaxonOp, globalData GlobalDataTable)
 			asyncCall or
 			await or
 			tryAwait or
-			sizeofType then break 'op'
-		constArrayLiteral(_, _, _, bytes) then _ = registerByteArrayLiteralBlob(globalData, bytes: bytes)
-		switch or
+			sizeofType or
+			switch or
 			witnessDispatch or
 			witnessTryDispatch or
-			panicAbortValue then break 'op'
-
-		// The error-flag encode carries no program LITERAL — the only constant it needs is the bias, which the
-		// lowering mints for itself rather than reading out of the op.
-		errorFlagEncode then break 'op'
-
-		// No service op carries a program literal: a `spawn`'s bytes are a TYPE NAME the lowering turns into
-		// two symbols, and a send's and a reply cell's are callee names no `.rdata` blob holds.
-		serviceSpawn or
+			panicAbortValue or
+			// The error-flag encode's only constant is the bias, which the lowering mints for itself.
+			errorFlagEncode or
+			// A `spawn`'s bytes are a type name the lowering turns into two symbols, and a send's and a
+			// reply cell's are callee names no `.rdata` blob holds.
+			serviceSpawn or
 			serviceSend or
-			serviceReplyCell then break 'op'
-
-		// ⚠ An imaged struct record is registered by its own LOWERING and not here, because what it registers is
-		// not a blob: it is the whole payload — the synthetic allocation header and the box — and the LABEL it
-		// mints points inside it. A pre-registration would have to mint the same payload twice or hand this
-		// walk the header geometry, and the dedup that pools two identical records already makes one object of
-		// them whichever pass asks first.
-		immortalStructRecord then break 'op'
-
-		// ⚠ An imaged string table registers its own literals at its LOWERING and not here, for the imaged
-		// struct record's reason: what it registers is not a blob but three interlocking payloads — a String
-		// record per element, the buffer of addresses over them, and the Array record over that — whose labels
-		// the relocations are recorded against. Every one of them byte-dedupes, so whichever pass asks first
-		// makes one object of two equal tables.
-		immortalStringTable or
+			serviceReplyCell or
+			// ⚠ An imaged struct record and an imaged string table register at their own lowering: what
+			// each registers is not a blob but interlocking payloads — the allocation header and the box,
+			// or a String record per element, the buffer of addresses over them and the Array record —
+			// whose labels point inside them. Registering here would mint each payload twice or hand this
+			// walk the header geometry; byte dedup already makes one object of two equal payloads.
+			immortalStructRecord or
+			immortalStringTable or
 			covPoint or
-			rawIntrinsic then break 'op'
-
-		// A witness table is registered by `ensureWitnessTable` when the op is lowered, as every table is.
-		existentialWitness then break 'op'
+			rawIntrinsic or
+			// A witness table is registered by `ensureWitnessTable` when the op is lowered.
+			existentialWitness then break 'op'
+		stringLiteral(_, bytes) then _ = registerStringBlob(globalData, bytes: bytes)
+		constArrayLiteral(_, _, _, bytes) then _ = registerByteArrayLiteralBlob(globalData, bytes: bytes)
 	end 'op'
 end 'registerIfProgramLiteral'
 
@@ -2034,6 +1952,9 @@ type MaxonToStdLowering
 			osCpuCount then self.stdModule.appendOp(dstBlock, op: StdOp.osCpuCount(result))
 			osGetPid then self.stdModule.appendOp(dstBlock, op: StdOp.osGetPid(result))
 			osEnterBackgroundPriority then self.stdModule.appendOp(dstBlock, op: StdOp.osEnterBackgroundPriority(result))
+			osProcessProbe then self.stdModule.appendOp(dstBlock, op: StdOp.osProcessProbe(result, pidId: rawWordOperand(args, index: 0, intrinsic: intrinsic)))
+			osWaitHandle then self.stdModule.appendOp(dstBlock, op: StdOp.osWaitHandle(result, handleId: rawWordOperand(args, index: 0, intrinsic: intrinsic), timeoutMsId: rawWordOperand(args, index: 1, intrinsic: intrinsic)))
+			osCloseHandle then self.stdModule.appendOp(dstBlock, op: StdOp.osCloseHandle(rawWordOperand(args, index: 0, intrinsic: intrinsic)))
 			osExit then self.stdModule.appendOp(dstBlock, op: StdOp.osExit(rawWordOperand(args, index: 0, intrinsic: intrinsic)))
 			scratch then self.stdModule.appendOp(dstBlock, op: StdOp.stackRecordAddr(result, slot: constant as SpillSlot))
 			schedNumProcsAddr then self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(result, label: SchedNumProcsLabel))
@@ -5221,37 +5142,26 @@ type MaxonToStdLowering
 		return nullEnv
 	end 'calleeEnvArg'
 
-	// Lower a Maxon binary op to its Std counterpart. The operand and result
-	// ValueIds pass through verbatim (this pass never renumbers — see the header);
-	// only the source-level operator maps to a width/ABI-resolved Std op. Every
-	// NON-TRAPPING operator becomes a `StdOp.binOp` carrying the mapped opcode; the
-	// TRAPPING division family (`div`/`mod`) becomes its OWN Std variant (`StdOp.div`/
-	// `mod`) — a dedicated arm, NOT routed through the binOp-opcode helper — because idiv
-	// can fault and so needs `isPure: false` metadata a shared opcode field cannot carry
-	// (mirrors why `compare` split into `StdOp.cmp`).
-	//
-	// TWO arms reach `appendStdBinOp`, not one, because `div`/`mod` sit BETWEEN the arithmetic
-	// band and the bit band in `MaxonBinOp` and are not part of either set.
+	// The operand and result ValueIds pass through verbatim. The trapping division family becomes its
+	// own Std variant (`StdOp.div`/`mod`) rather than a `binOp` opcode, because `idiv` can fault and
+	// so needs `isPure: false` metadata a shared opcode field cannot carry.
 	function lowerBinOp(result ValueId, lhs ValueId, rhs ValueId, op MaxonBinOp, dstBlock IrBlock)
 		match op 'op'
 			add or
 				sub or
-				mul then self.appendStdBinOp(result, lhs: lhs, rhs: rhs, op: op, dstBlock: dstBlock)
-			div then self.lowerDivision(result, lhs: lhs, rhs: rhs, dstBlock: dstBlock)
-			mod then self.stdModule.appendOp(dstBlock, op: StdOp.mod(result, lhs: lhs, rhs: rhs, signedness: IntegerSignedness.signed))
-			bitAnd or
+				mul or
+				bitAnd or
 				bitOr or
 				bitXor or
 				shl or
 				shr or
-				shrLogical then self.appendStdBinOp(result, lhs: lhs, rhs: rhs, op: op, dstBlock: dstBlock)
-
-			// `min`/`max` need no `lowerDivision`-style fork the way `div` does: only ONE of the two
-			// divisions is a pure `binOp`, so `/` has to ask its operand type which op it becomes,
-			// while these are float-only outright (`stdBinOpcodeIsFloatOnly`) and the parser has
-			// already promoted both operands. So they take the plain append, like the arith band.
-			min or
+				shrLogical or
+				// `min`/`max` need no `lowerDivision`-style fork: they are float-only outright
+				// (`stdBinOpcodeIsFloatOnly`) and the parser has already promoted both operands.
+				min or
 				max then self.appendStdBinOp(result, lhs: lhs, rhs: rhs, op: op, dstBlock: dstBlock)
+			div then self.lowerDivision(result, lhs: lhs, rhs: rhs, dstBlock: dstBlock)
+			mod then self.stdModule.appendOp(dstBlock, op: StdOp.mod(result, lhs: lhs, rhs: rhs, signedness: IntegerSignedness.signed))
 
 			// The UNSIGNED pair takes the same two routes their signed twins take, carrying the one thing
 			// that differs. They need no float fork: `divisionOpcodeFor` mints them only from two
@@ -5773,13 +5683,9 @@ type MaxonToStdLowering
 			panic("lowerDivisionExpansion: the dividend and the divisor of an expanded divide are in DIFFERENT domains (one float, one integer) — `emitDivOrMod` must promote both operands before emitting one")
 		end 'mixedDomains'
 
-		// ⚠ The two checked arms share one body, spelled twice: Maxon cannot bind a payload in a RANGE arm
-		// (`checkedQuotient(f) to checkedRemainder(f)` is E2010), and the alternative — reading the flag out
-		// through a second union, or a helper that panics for the total arm — would put the pairing back into a
-		// place that can be got wrong. One CALL twice beats one FACT twice.
 		match expansion 'zeroTest'
-			checkedQuotient(errorFlag) then self.emitDivisorZeroFlag(errorFlag, divisor: divisor, operandType: operandType, dstBlock: dstBlock)
-			checkedRemainder(errorFlag) then self.emitDivisorZeroFlag(errorFlag, divisor: divisor, operandType: operandType, dstBlock: dstBlock)
+			checkedQuotient(errorFlag) or
+				checkedRemainder then self.emitDivisorZeroFlag(errorFlag, divisor: divisor, operandType: operandType, dstBlock: dstBlock)
 
 			// The total remainder has no error channel at all — its divisor is PROVEN non-zero, so a flag
 			// register would be one nobody reads and a compare nobody branches on.
@@ -5834,8 +5740,8 @@ type MaxonToStdLowering
 		var safeDivisor = divisor
 
 		match expansion 'divisorGuard'
-			checkedQuotient(errorFlag) then safeDivisor = self.emitOrredSafeDivisor(divisor, errorFlag: errorFlag, operandType: operandType, dstBlock: dstBlock)
-			checkedRemainder(errorFlag) then safeDivisor = self.emitOrredSafeDivisor(divisor, errorFlag: errorFlag, operandType: operandType, dstBlock: dstBlock)
+			checkedQuotient(errorFlag) or
+				checkedRemainder then safeDivisor = self.emitOrredSafeDivisor(divisor, errorFlag: errorFlag, operandType: operandType, dstBlock: dstBlock)
 			guardedRemainder then break 'divisorGuard'
 		end 'divisorGuard'
 

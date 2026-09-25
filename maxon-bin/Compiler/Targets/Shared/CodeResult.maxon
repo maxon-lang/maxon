@@ -42,17 +42,19 @@ export typealias CallFixupArray = Array with CallFixup
 // A DebugSymbol pairs a function name with its byte offset in `.text`.
 // Format-neutral: PE writes COFF symbols, ELF Elf64_Sym, Mach-O nlist_64.
 //
-// `asyncPreemptible` and the unsafe prefix ride along because `__symtable` carries them
-// (`BacktraceFormat.SymtabSafeFromBias`): they are the only per-function facts the backtrace table holds
-// beyond a name, and the object writers ignore both.
+// `asyncPreemptible`, the unsafe prefix and `compilerScaffolding` ride along because `__symtable`
+// carries them in its per-symbol byte (`BacktraceFormat.SymtabSafeFromBias`): they are the only
+// per-function facts the backtrace table holds beyond a name, and the object writers ignore all
+// three.
 export type DebugSymbol
 	export var name as ByteArray
 	export var codeOffset as CodeOffset
 	export var asyncPreemptible as bool
 	export var asyncUnsafePrefixBytes as CodeOffset
+	export var compilerScaffolding as bool
 
-	export static function create(name ByteArray, codeOffset CodeOffset, asyncPreemptible bool = false, asyncUnsafePrefixBytes CodeOffset = 0) returns DebugSymbol
-		return Self{name: name, codeOffset: codeOffset, asyncPreemptible: asyncPreemptible, asyncUnsafePrefixBytes: asyncUnsafePrefixBytes}
+	export static function create(name ByteArray, codeOffset CodeOffset, asyncPreemptible bool, asyncUnsafePrefixBytes CodeOffset, compilerScaffolding bool) returns DebugSymbol
+		return Self{name: name, codeOffset: codeOffset, asyncPreemptible: asyncPreemptible, asyncUnsafePrefixBytes: asyncUnsafePrefixBytes, compilerScaffolding: compilerScaffolding}
 	end 'create'
 end 'DebugSymbol'
 
@@ -286,15 +288,13 @@ export function rebaseJumpTableReloc(reloc JumpTableReloc, funcStart CodeOffset)
 	return JumpTableReloc.create(reloc.tableLabel, targetTextOffsets: rebased)
 end 'rebaseJumpTableReloc'
 
-// ⭐ **ONE CHUNK'S DEBUG INFO, FOLDED INTO THE WHOLE-MODULE TABLES.** Both native concat passes call
-// it at the spot they push a `DebugSymbol`, which is the one place holding a chunk and its `.text`
-// start. `codeEnd` is `funcStart + chunk.code.count()` — exact and O(1), where a search of the symbol
-// table for the next function would be neither.
-export function foldChunkDebugInfo(chunk FunctionCodeChunk, funcStart CodeOffset, functions DebugFunctionRangeArray, lineRows DebugLineRowArray, covPointOffsets CovPointOffsetArray)
-	functions.push(DebugFunctionRange.create(chunk.funcName, codeStart: funcStart, codeEnd: funcStart + chunk.code.count(), frameSize: chunk.frameSize, paramCount: chunk.paramCount, spillSlotBase: chunk.spillSlotBase, frameLinkBytes: chunk.frameLinkBytes, localRanges: rebasedLocalRanges(chunk, funcStart: funcStart)))
+// One chunk's debug info, folded into the whole-module tables. Both native concat passes call it
+// where they push a `DebugSymbol`, the one place holding a chunk and its `.text` start.
+export function foldChunkDebugInfo(chunk FunctionCodeChunk, funcStart CodeOffset, inlineSiteBase InlineSiteIndex, functions DebugFunctionRangeArray, lineRows DebugLineRowArray, covPointOffsets CovPointOffsetArray)
+	functions.push(DebugFunctionRange.create(chunk.funcName, codeStart: funcStart, codeEnd: funcStart + chunk.code.count(), frameSize: chunk.frameSize, paramCount: chunk.paramCount, spillSlotBase: chunk.spillSlotBase, frameLinkBytes: chunk.frameLinkBytes, localRanges: chunk.localRanges, inlineSiteBase: inlineSiteBase))
 
 	for row in chunk.lineRows 'eachRow'
-		lineRows.push(DebugLineRow.create(funcStart + row.codeOffset, spanId: row.spanId))
+		lineRows.push(DebugLineRow.create(funcStart + row.codeOffset, spanId: row.spanId, entersTheLine: row.entersTheLine))
 	end 'eachRow'
 
 	// The coverage channel rides the same rebase, in the same call, so a point's `.text` address and its
@@ -348,15 +348,16 @@ end 'jumpTableEntry'
 let I32MinValue = -0x80000000 as ParsedInt
 let I32MaxValue = 0x7FFFFFFF as ParsedInt
 
-// ONE ROW OF THE EMITTED LINE TABLE: at `codeOffset`, execution is at the source position `spanId`
-// names. Chunk-local while the chunk is being emitted, rebased to whole-`.text` at the concat exactly
-// as a jump-table reloc is.
+// One row of the emitted line table: at `codeOffset`, execution is at the source position `spanId`
+// names. Chunk-local while the chunk is being emitted, rebased to whole-`.text` at the concat
+// exactly as a jump-table reloc is.
 export type DebugLineRow
 	export var codeOffset as CodeOffset
 	export var spanId as SpanId
+	export var entersTheLine as bool
 
-	export static function create(codeOffset CodeOffset, spanId SpanId) returns DebugLineRow
-		return Self{codeOffset: codeOffset, spanId: spanId}
+	export static function create(codeOffset CodeOffset, spanId SpanId, entersTheLine bool) returns DebugLineRow
+		return Self{codeOffset: codeOffset, spanId: spanId, entersTheLine: entersTheLine}
 	end 'create'
 end 'DebugLineRow'
 
@@ -378,42 +379,57 @@ end 'CovPointOffset'
 
 export typealias CovPointOffsetArray = Array with CovPointOffset
 
-// ⭐⭐ **STATEMENT GRANULARITY IS A PROPERTY OF THIS TABLE, NOT OF THE CARRIER.** Every op carries a
-// span; a row is written only where the span CHANGES, and every row written is a statement boundary.
-// That is what makes a step land on statements without one mark being placed anywhere upstream — the
-// parser needs no statement marking at all.
+// Statement granularity is a property of this table, not of the carrier: every op carries a span,
+// and a row is written only where the span or the inline site changes, or where a block some edge
+// enters from another line opens (`lineEntryColumn`). Every row written is a statement boundary,
+// which is what lets a step land on statements with no statement marking upstream. A row enters its
+// line at such a block's start, or mid-block where its line differs from the previous row's.
 //
-// A positionless op does NOT close the run: a spill in the middle of a statement is still that
+// A positionless op does not close the run: a spill in the middle of a statement is still that
 // statement's code, so the row that opened it still describes the offset.
 export type DebugLineRowBuilder
 	export var rows as DebugLineRowArray
 	var last as SpanId
+	var lastSite as InlineSiteRef
+	var openSite as InlineSiteRef
 	var armed as bool
+	var entering as bool
+	var atBlockStart as bool
+	let branchTargets as BoolArray
+	let spanTable as DebugSpanTable
 
-	export static function create(armed bool) returns DebugLineRowBuilder
-		return Self{rows: DebugLineRowArray.create(), last: NoSpanId, armed: armed}
-	end 'create'
+	export static function forFunction(module TargetModule, func IrFunction, armed bool, spanTable DebugSpanTable) returns DebugLineRowBuilder
+		return Self{rows: DebugLineRowArray.create(), last: NoSpanId, lastSite: InlineSiteRef.none, openSite: InlineSiteRef.none, armed: armed, entering: false, atBlockStart: false, branchTargets: lineEntryColumn(module, func: func, spanTable: spanTable) if armed else BoolArray.create(), spanTable: spanTable}
+	end 'forFunction'
+
+	export function openBlock(blockId BlockId, site InlineSiteRef)
+		if not self.armed 'noRows'
+			return
+		end 'noRows'
+
+		self.entering = try self.branchTargets.get(blockId) otherwise panic("DebugLineRowBuilder.openBlock: block {blockId} is past the {self.branchTargets.count()} its function's branch-target column holds")
+		self.atBlockStart = true
+		self.openSite = copiedInlineSite(site)
+	end 'openBlock'
 
 	export function note(spanId SpanId, codeOffset CodeOffset)
-		if not self.armed or spanId == NoSpanId or spanId == self.last 'noRowHere'
+		if not self.armed or spanId == NoSpanId 'noRowHere'
 			return
 		end 'noRowHere'
 
-		self.rows.push(DebugLineRow.create(codeOffset, spanId: spanId))
+		let entersTheLine = self.entering if self.atBlockStart else self.last == NoSpanId or not sameSourceLine(self.spanTable, first: self.last, second: spanId)
+		self.atBlockStart = false
+
+		if spanId == self.last and sameInlineSite(self.openSite, other: self.lastSite) and not entersTheLine 'theSameStatement'
+			return
+		end 'theSameStatement'
+
+		self.rows.push(DebugLineRow.create(codeOffset, spanId: spanId, entersTheLine: entersTheLine))
 		self.last = spanId
+		self.lastSite = copiedInlineSite(self.openSite)
+		self.entering = false
 	end 'note'
 end 'DebugLineRowBuilder'
-
-function rebasedLocalRanges(chunk FunctionCodeChunk, funcStart CodeOffset) returns DebugLocalCodeRangeArray
-	var rebased = DebugLocalCodeRangeArray.create()
-	rebased.reserve(chunk.localRanges.count())
-
-	for range in chunk.localRanges 'eachRange'
-		rebased.push(DebugLocalCodeRange.create(range.valueOrdinal, codeStart: funcStart + range.codeStart, codeEnd: funcStart + range.codeEnd))
-	end 'eachRange'
-
-	return rebased
-end 'rebasedLocalRanges'
 
 export type DebugLocalCodeRange
 	export var valueOrdinal as ElementIndex
@@ -491,7 +507,7 @@ export type DebugRunOffsets
 		for range in func.debugLocalRanges 'eachRun'
 			let blockStart = try blockStarts.get(range.blockId) otherwise continue
 			let blockEnd = try blockEnds.get(range.blockId) otherwise continue
-			let codeStart = self.startOf(range.first as OpIndex, orElse: blockStart)
+			let codeStart = blockStart if range.fromBlockEntry else self.startOf(range.first as OpIndex, orElse: blockStart)
 			let codeEnd = self.endOf(range.last as OpIndex, orElse: blockEnd)
 
 			if codeEnd <= codeStart 'coversNoCode'
@@ -518,10 +534,10 @@ export type DebugRunOffsets
 
 	function offsetOf(column DebugRunOffsetColumn, opIdx OpIndex) returns CodeOffset
 		if opIdx < self.base 'beforeTheWindow'
-			return NoDebugRunOffset
+			panic("DebugRunOffsets.offsetOf: op {opIdx} lies below the window at {self.base}, which was opened over both ends of every run")
 		end 'beforeTheWindow'
 
-		return try column.get((opIdx - self.base) as ElementIndex) otherwise NoDebugRunOffset
+		return try column.get((opIdx - self.base) as ElementIndex) otherwise panic("DebugRunOffsets.offsetOf: op {opIdx} lies past the {column.count()}-op window at {self.base}, which was opened over both ends of every run")
 	end 'offsetOf'
 end 'DebugRunOffsets'
 
@@ -543,29 +559,29 @@ export type DebugFunctionRange
 	export var frameSize as StackSize
 	export var paramCount as ParamCount
 
-	// Carried on the range so the debug sidecar can place a stack slot without the Target module: deriving
-	// it there asked "does this function make a call?" by walking every op, which is the one thing the
-	// sidecar still needed the module's ops for. ⚠ It is 0 on arm64, whose displacement is frame-relative
-	// and needs no per-function base — a reader must go through `mxdbgFrameDisplacement`, which forks.
+	// Carried on the range so the sidecar can place a stack slot without walking the function's ops. ⚠
+	// It is 0 on arm64, whose displacement is frame-relative and needs no per-function base — a reader
+	// must go through `mxdbgFrameDisplacement`, which forks.
 	export var spillSlotBase as StackSize
 
 	export var frameLinkBytes as StackSize
 
+	// Chunk-local, unlike `codeStart`: `MxdbgEmit.mergedLiveRanges` adds `codeStart` to every run.
 	export var localRanges as DebugLocalCodeRangeArray
 
-	export static function create(name ByteArray, codeStart CodeOffset, codeEnd CodeOffset, frameSize StackSize, paramCount ParamCount, spillSlotBase StackSize, frameLinkBytes StackSize, localRanges DebugLocalCodeRangeArray) returns DebugFunctionRange
-		return Self{name: name, codeStart: codeStart, codeEnd: codeEnd, frameSize: frameSize, paramCount: paramCount, spillSlotBase: spillSlotBase, frameLinkBytes: frameLinkBytes, localRanges: localRanges}
+	export var inlineSiteBase as InlineSiteIndex
+
+	export static function create(name ByteArray, codeStart CodeOffset, codeEnd CodeOffset, frameSize StackSize, paramCount ParamCount, spillSlotBase StackSize, frameLinkBytes StackSize, localRanges DebugLocalCodeRangeArray, inlineSiteBase InlineSiteIndex) returns DebugFunctionRange
+		return Self{name: name, codeStart: codeStart, codeEnd: codeEnd, frameSize: frameSize, paramCount: paramCount, spillSlotBase: spillSlotBase, frameLinkBytes: frameLinkBytes, localRanges: localRanges, inlineSiteBase: inlineSiteBase}
 	end 'create'
 end 'DebugFunctionRange'
 
 export typealias DebugFunctionRangeArray = Array with DebugFunctionRange
 
-// Per-function code chunk. B2's incremental backend emits one chunk per
-// function, then a module-level fixup pass concatenates them into the final
-// `.text` section. All offsets inside a chunk are CHUNK-LOCAL (`entryOffset` is
-// always 0 — kept as a field for clarity and future flexibility); the concat
-// pass shifts every fixup by the chunk's start offset before writing the final
-// CodeResult.
+// Per-function code chunk. The backend emits one chunk per function, then a module-level fixup pass
+// concatenates them into the final `.text` section. All offsets inside a chunk are chunk-local
+// (`entryOffset` is always 0); the concat pass shifts every fixup by the chunk's start offset
+// before writing the final CodeResult.
 //
 // `code` holds the raw machine bytes for one function (prologue + body +
 // epilogue). `callFixups` records intra-module call sites to patch once every
@@ -617,21 +633,26 @@ export type FunctionCodeChunk
 	export var inlineSites as InlineSiteArray
 	export var inlineRanges as InlineRangeArray
 
-	// ⭐ **MAY A THREAD BE STOPPED WHERE IT STANDS INSIDE THIS CHUNK?** True for every function a green thread
-	// runs that is not the compiler's own scaffolding, which is what `BacktraceFormat.SymtabSafeFromBias`
-	// records for the safe-point predicate. FALSE for every hand-assembled chunk, which is the arena's answer
-	// here: those are the context switch, the stack mover, the shims and the trampolines, and a thread
-	// stopped inside one of them has no coherent state to park.
+	// May a thread be stopped where it stands inside this chunk? True for every function a green
+	// thread runs that is not the compiler's own scaffolding, which is what
+	// `BacktraceFormat.SymtabSafeFromBias` records for the safe-point predicate. False for every
+	// hand-assembled chunk: those are the context switch, the stack mover, the shims and the
+	// trampolines, and a thread stopped inside one has no coherent state to park.
 	export var asyncPreemptible as bool
 
-	// ⭐ **THE BYTES AT THIS CHUNK'S START A STOP MAY NOT LAND IN** — the prologue stack guard, which holds a
-	// MACHINE-bound value in a register while it walks TLS (`BacktraceFormat.SymtabSafeFromBias`). 0 for a
-	// chunk with no guard, which is every hand-assembled one and every frameless function.
+	// The bytes at this chunk's start a stop may not land in — the prologue stack guard, which holds a
+	// machine-bound value in a register while it walks TLS (`BacktraceFormat.SymtabSafeFromBias`). 0
+	// for a chunk with no guard, which is every hand-assembled one and every frameless function.
 	//
-	// ⚠ **AN INLINED BODY CANNOT MOVE IT.** The guard is not IR: the encoder emits it at the first block of
-	// the FINAL function and reads this count off the buffer, so it is derived from the function as the
-	// inliner left it and there is no prefix for a splice to copy into a caller's interior.
+	// An inlined body cannot move it: the guard is not IR. The encoder emits it at the first block of
+	// the final function and reads this count off the buffer, so there is no prefix for a splice to
+	// copy into a caller's interior.
 	export var asyncUnsafePrefixBytes as CodeOffset
+
+	// The runtime's own code rather than the program's: true for every hand-assembled chunk, and for a
+	// lowered function exactly when `TargetPrinter.isRuntimeFunction` holds. `__symtable` carries it
+	// as `BacktraceFormat.SymtabScaffoldingBit`.
+	export var compilerScaffolding as bool
 
 	export static function create(funcName ByteArray) returns FunctionCodeChunk
 		return Self{
@@ -653,16 +674,15 @@ export type FunctionCodeChunk
 			inlineSites: InlineSiteArray.create(),
 			inlineRanges: InlineRangeArray.create(),
 			asyncPreemptible: false,
-			asyncUnsafePrefixBytes: 0
+			asyncUnsafePrefixBytes: 0,
+			compilerScaffolding: true
 		}
 	end 'create'
 
-	// Assemble a chunk from an emitter's accumulated buffers in one shot. The
-	// per-op emitter mutates local `var` buffers (`code`/`callFixups`/…) then hands
-	// them here, keeping the chunk itself an immutable `let` at the call site.
-	// `funcAdrpRelocs` starts empty and is assigned by the arm64 encoder after the
-	// fact (only its chunks carry any), so this signature — shared by both x64
-	// runtimes — stays unchanged.
+	// Assemble a chunk from an emitter's accumulated buffers in one shot. The per-op emitter mutates
+	// local `var` buffers (`code`/`callFixups`/…) then hands them here, keeping the chunk itself an
+	// immutable `let` at the call site. `funcAdrpRelocs` starts empty and is assigned by the arm64
+	// encoder afterwards, since only its chunks carry any.
 	export static function createWith(funcName ByteArray, code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, iatRelocs RelocationArray) returns FunctionCodeChunk
 		return Self{
 			funcName: funcName,
@@ -683,7 +703,8 @@ export type FunctionCodeChunk
 			inlineSites: InlineSiteArray.create(),
 			inlineRanges: InlineRangeArray.create(),
 			asyncPreemptible: false,
-			asyncUnsafePrefixBytes: 0
+			asyncUnsafePrefixBytes: 0,
+			compilerScaffolding: true
 		}
 	end 'createWith'
 end 'FunctionCodeChunk'
@@ -830,3 +851,4 @@ export type CodeResult
 		return (self.code.count() + self.wasmCoreModule.count()) as CodeByteCount
 	end 'emittedCodeBytes'
 end 'CodeResult'
+

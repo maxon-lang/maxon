@@ -1,0 +1,103 @@
+let OkStatus = 200 as HttpStatusNumber
+let NoContentStatus = 204 as HttpStatusNumber
+let NotFoundStatus = 404 as HttpStatusNumber
+let TooManyRequestsStatus = 429 as HttpStatusNumber
+
+let SessionIdHexLength = 32
+
+let IdleTimeoutSeconds = 1
+let PastIdleMs = 1500
+
+function lifecycleServerName(answer HttpAnswer) returns String
+	let doc = answer.bodyDoc()
+	let resultId = try doc.getChild(doc.root, key: "result") otherwise panic("an initialize answer has no `result`: {answer.body}")
+	let serverInfoId = try doc.getChild(resultId, key: "serverInfo") otherwise panic("an initialize answer has no `serverInfo`: {answer.body}")
+
+	return try doc.getString(serverInfoId, key: "name") otherwise panic("an initialize answer names no server: {answer.body}")
+end 'lifecycleServerName'
+
+test 'an http initialize mints a session id and answers as this compiler'
+	var server = StreamingHttpMcpServer.start(StringArray.create())
+	let (answer, sessionId) = server.initializeSession()
+	let name = lifecycleServerName(answer)
+	try server.stop()
+
+	try Expect.equal(answer.statusCode as AssertedInt, expected: OkStatus as AssertedInt, message: "an `initialize` over the HTTP transport must be answered 200; it answered {answer.statusCode} with {answer.body}")
+	try Expect.equal(name, expected: "maxon", message: "the HTTP transport must serve the same server identity as stdio")
+
+	match sessionId 'minted'
+		none then try Expect.fail("`initialize` must answer a 32-hex-character `Mcp-Session-Id` header; it answered none")
+		minted(id) then try Expect.equal(id.byteLength() as AssertedInt, expected: SessionIdHexLength as AssertedInt, message: "`initialize` must answer a 32-hex-character `Mcp-Session-Id` header; it answered `{id}`")
+	end 'minted'
+end 'an http initialize mints a session id and answers as this compiler'
+
+test 'an http request carrying no session id is refused 404'
+	var server = StreamingHttpMcpServer.start(StringArray.create())
+	let (initialized, sessionId) = server.initializeSession()
+	let sessionless = server.post(toolsListRequest(2), sessionId: McpSession.none)
+	let withSession = server.post(toolsListRequest(3), sessionId: sessionId)
+	try server.stop()
+
+	try Expect.equal(initialized.statusCode as AssertedInt, expected: OkStatus as AssertedInt, message: "the control `initialize` did not succeed, so nothing below says anything about sessions")
+	try Expect.equal(sessionless.statusCode as AssertedInt, expected: NotFoundStatus as AssertedInt, message: "a `tools/list` with no `Mcp-Session-Id` must be 404; it answered {sessionless.statusCode}")
+	try Expect.equal(withSession.statusCode as AssertedInt, expected: OkStatus as AssertedInt, message: "the SAME request with the minted session id must be served — a transport that refused both would pass the line above and serve nobody")
+end 'an http request carrying no session id is refused 404'
+
+test 'an http request carrying an unknown session id is refused 404'
+	var server = StreamingHttpMcpServer.start(StringArray.create())
+	let (initialized, sessionId) = server.initializeSession()
+	let stranger = server.post(toolsListRequest(2), sessionId: McpSession.minted("00000000000000000000000000000000"))
+	let mine = server.post(toolsListRequest(3), sessionId: sessionId)
+	try server.stop()
+
+	try Expect.equal(initialized.statusCode as AssertedInt, expected: OkStatus as AssertedInt)
+	try Expect.equal(stranger.statusCode as AssertedInt, expected: NotFoundStatus as AssertedInt, message: "a well-formed session id nobody minted must be 404, not served; it answered {stranger.statusCode}")
+	try Expect.equal(mine.statusCode as AssertedInt, expected: OkStatus as AssertedInt, message: "the minted id must still be served beside it")
+end 'an http request carrying an unknown session id is refused 404'
+
+test 'a DELETE ends the session and a later request on it is 404'
+	var server = StreamingHttpMcpServer.start(StringArray.create())
+	let (initialized, sessionId) = server.initializeSession()
+	let before = server.post(toolsListRequest(2), sessionId: sessionId)
+	let deleted = server.request("DELETE", target: McpRoutePath, host: server.authority(), origin: "", sessionId: sessionId, body: "")
+	let after = server.post(toolsListRequest(3), sessionId: sessionId)
+	try server.stop()
+
+	try Expect.equal(initialized.statusCode as AssertedInt, expected: OkStatus as AssertedInt)
+	try Expect.equal(before.statusCode as AssertedInt, expected: OkStatus as AssertedInt, message: "the session must serve BEFORE the DELETE, or the 404 after it says nothing")
+	try Expect.equal(deleted.statusCode as AssertedInt, expected: NoContentStatus as AssertedInt, message: "`DELETE /mcp` must answer 204; it answered {deleted.statusCode}")
+	try Expect.equal(after.statusCode as AssertedInt, expected: NotFoundStatus as AssertedInt, message: "a session that was deleted must be gone, not merely unmentioned")
+end 'a DELETE ends the session and a later request on it is 404'
+
+test 'a session left idle past the timeout is reaped'
+	var server = StreamingHttpMcpServer.start(["{McpIdleTimeoutOptionPrefix}{IdleTimeoutSeconds}"])
+	let (initialized, sessionId) = server.initializeSession()
+	let before = server.post(toolsListRequest(2), sessionId: sessionId)
+
+	sleep(PastIdleMs)
+
+	let after = server.post(toolsListRequest(3), sessionId: sessionId)
+	try server.stop()
+
+	try Expect.equal(initialized.statusCode as AssertedInt, expected: OkStatus as AssertedInt)
+	try Expect.equal(before.statusCode as AssertedInt, expected: OkStatus as AssertedInt, message: "the session must serve while it is fresh — a sweep that reaped everything would pass the line below")
+	try Expect.equal(after.statusCode as AssertedInt, expected: NotFoundStatus as AssertedInt, message: "a session untouched for longer than `{McpIdleTimeoutOptionPrefix}{IdleTimeoutSeconds}` must be swept; it answered {after.statusCode}")
+end 'a session left idle past the timeout is reaped'
+
+test 'an initialize past --max-sessions is refused 429'
+	var server = StreamingHttpMcpServer.start(["{McpMaxSessionsOptionPrefix}1"])
+	let (first, firstId) = server.initializeSession()
+	let (second, secondId) = server.initializeSession()
+	let firstStillWorks = server.post(toolsListRequest(2), sessionId: firstId)
+	try server.stop()
+
+	try Expect.equal(first.statusCode as AssertedInt, expected: OkStatus as AssertedInt, message: "the first session must be minted; it answered {first.statusCode}")
+	try Expect.equal(second.statusCode as AssertedInt, expected: TooManyRequestsStatus as AssertedInt, message: "a second `initialize` at `{McpMaxSessionsOptionPrefix}1` must be 429; it answered {second.statusCode} with {second.body}")
+
+	match secondId 'minted'
+		none then break 'minted'
+		minted then try Expect.fail("a refused `initialize` must mint no session id; it answered {describedSession(secondId)}")
+	end 'minted'
+
+	try Expect.equal(firstStillWorks.statusCode as AssertedInt, expected: OkStatus as AssertedInt, message: "the session that WAS minted must go on being served after the refusal")
+end 'an initialize past --max-sessions is refused 429'

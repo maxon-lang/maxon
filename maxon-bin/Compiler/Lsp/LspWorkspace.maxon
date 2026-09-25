@@ -386,7 +386,7 @@ function heldProjectFacts(root WorkspaceRoot, readerPath FilePath) returns LspPr
 end 'heldProjectFacts'
 
 module function lspDocumentCorpus(uri String) returns LspCorpus
-	let readerPath = try lspDocumentPathOrThrow(uri) otherwise return LspCorpus.unavailable
+	let readerPath = try FilePath.from(uri) otherwise return LspCorpus.unavailable
 	let document = ReaderDocument.of(readerPath)
 
 	return match lspRootSearch() 'search'
@@ -546,10 +546,10 @@ function heldRootOf(root WorkspaceRoot, readerPath FilePath) returns FilePath
 	end 'root'
 end 'heldRootOf'
 
-// A tier corpus is built rooted at the tier's parent. Rooted at `stdlib/` itself,
-// `rootIsUnderStdlibDirectory` would hold and the tier's files would be the project's own rather
-// than library source, which they are in every whole-program compile. It is still held and listed
-// under the tier directory (`heldRootOf`).
+// A tier corpus is built rooted at the tier's parent. Rooted at the tier itself, `rootIsUnder`
+// would hold and the tier's files would be the project's own rather than library source, which they
+// are in every whole-program compile. It is still held and listed under the tier directory
+// (`heldRootOf`).
 function buildRootOf(root WorkspaceRoot, readerPath FilePath) returns FilePath
 	return match root 'root'
 		libraryTier(dir) gives try dir.parent() otherwise panic("buildRootOf: '{dir.toString()}' is a library tier, a directory `LibraryTiers.locate` found by name inside another")
@@ -558,6 +558,13 @@ function buildRootOf(root WorkspaceRoot, readerPath FilePath) returns FilePath
 			singleFile gives heldRootOf(root, readerPath: readerPath)
 	end 'root'
 end 'buildRootOf'
+
+module function lspBufferRootOf(reader LspReaderSearch) returns FilePath
+	return match reader.tier 'tier'
+		inTier gives buildRootOf(workspaceRootOf(reader), readerPath: reader.document.path)
+		outside gives reader.document.path
+	end 'tier'
+end 'lspBufferRootOf'
 
 function sourcesUnder(root WorkspaceRoot, selection SourceSelection) returns SourceSweep
 	return match root 'root'
@@ -697,7 +704,7 @@ extension Project
 			try loadOneSourceFileIfChanged(self, path: path) otherwise ignore
 		end 'eachSource'
 
-		let reader = corpusSpellingOf(self, reader: readerPath.resolve(Directory.currentPath()))
+		let reader = registeredSpellingOf(self, path: readerPath.resolve(Directory.currentPath()))
 		kept.insert(reader)
 
 		unregisterWhatTheWalkNoLongerLists(self, walk: walk, kept: kept)
@@ -743,21 +750,6 @@ function pathsTheSweepDropped(project Project, kept MaxonSourcePathSet) returns 
 
 	return dropped
 end 'pathsTheSweepDropped'
-
-// The spelling this corpus already registered the reader's file under, which is not always the spelling
-// the request arrived with. ⚠ `FilePath` compares case-insensitively on Windows, so `db.sourceFiles`
-// holds ONE entry for two spellings — while `ProgramSignatures.moduleDirectoryOfPathText` is keyed by
-// exact path TEXT and PANICS on a miss. A visibility question asked on behalf of the other spelling
-// would take the server down.
-function corpusSpellingOf(project Project, reader FilePath) returns FilePath
-	for registered in project.db.sourcePaths 'eachRegistered'
-		if registered.equals(reader) 'theSameFile'
-			return registered
-		end 'theSameFile'
-	end 'eachRegistered'
-
-	return reader
-end 'corpusSpellingOf'
 
 // Every visibility question is asked ON BEHALF OF a file, and a file the sweep never saw has no module
 // directory, so the reader has to be in the corpus before the fold runs.

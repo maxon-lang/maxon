@@ -41,11 +41,6 @@ let DefaultRunTimeoutSeconds = 600.0 as CoverageSeconds
 // rule alike.
 let PositiveSecondsRequirement = "needs a positive number of seconds"
 
-// The longest deadline accepted, in seconds: the most a signed 64-bit count of 100 ns ticks holds, far
-// inside what `deadlineMs` converts. It is also what excludes an INFINITY: a float can carry one and a
-// wait cannot.
-let MaxDeadlineSeconds = 922337203685.0 as CoverageSeconds
-
 // A deadline in seconds. Fractions are accepted so a gate can drive a sub-second deadline
 // deterministically; ZERO is excluded at the door below rather than by this range, which has no
 // exclusive-lower spelling.
@@ -147,14 +142,11 @@ end 'runCoverage'
 // THE RUN
 // ============================================================================================
 
-// ⭐ Launch the instrumented program, then report on the counters IT wrote. The previous run's data file
-// goes FIRST: a run whose dump never happened would otherwise be reported from the PREVIOUS run's numbers,
-// which is a stale success where the caller is owed a refusal.
 function launchAndReport(request CoverageRequest) returns ExitCode
 	let dataPath = dataPathFor(request)
 
 	return match launchTarget(request, dataPath: dataPath) 'launched'
-		refused(reason) gives refuseLaunch(reason)
+		refused(reason) gives refuseCoverageReport(reason)
 		exited(code) gives printCoverageReport(request.exePath, dataPath: dataPath, targetStatus: CovTargetStatus.observed(code), json: request.json)
 	end 'launched'
 end 'launchAndReport'
@@ -175,18 +167,21 @@ function launchTarget(request CoverageRequest, dataPath String) returns Coverage
 
 	let data = try FilePath.from(dataPath) otherwise return CoverageLaunch.refused("'{dataPath}' is not a spellable path")
 
+	// Removed before the launch: a run whose dump never happened would otherwise be reported from the
+	// previous run's counters, a stale success where the caller is owed a refusal.
 	if File.exists(data) 'previousCounters'
 		try File.delete(data) otherwise return CoverageLaunch.refused("cannot remove the previous {dataPath}")
 	end 'previousCounters'
 
-	// ⚠ ROOTED, because a spawn resolves a bare program name against PATH rather than against the working
-	// directory — so `dir/prog.exe` would be reported missing by the OS moments after this file found it.
-	let capture = try runProcess(Executable.path(target.anchoredAt(Directory.currentPath())), argv: request.targetArgs, workingDirectory: inheritedWorkingDir(), timeoutMs: deadlineMs(request.timeoutSeconds)) otherwise (e) 'didNotFinish'
+	// Rooted, because a spawn resolves a bare program name against PATH rather than against the
+	// working directory, so `dir/prog.exe` would be reported missing by the OS moments after this file
+	// found it.
+	let capture = try runProcess(Executable.path(target.anchoredAt(Directory.currentPath())), argv: request.targetArgs, workingDirectory: inheritedWorkingDirectory(), timeoutMs: deadlineMs(request.timeoutSeconds)) otherwise (e) 'didNotFinish'
 		return CoverageLaunch.refused(launchFailureText(request, error: e))
 	end 'didNotFinish'
 
-	// ⭐ The program's own output goes to STDERR, which is what keeps stdout exactly the report and nothing
-	// else — so a coverage run of a chatty program stays machine-readable.
+	// The program's own output goes to stderr, which keeps stdout exactly the report: a coverage run
+	// of a chatty program stays machine-readable.
 	printError(capture.stdout)
 	printError(capture.stderr)
 
@@ -206,29 +201,20 @@ end 'launchFailureText'
 function timedOut(error SubprocessError) returns bool
 	return match error 'kind'
 		timeout gives true
-		executableNotFound gives false
-		spawnFailed gives false
-		ioFailed gives false
-		inputTooLarge gives false
+		executableNotFound or
+			spawnFailed or
+			ioFailed or
+			inputTooLarge gives false
 	end 'kind'
 end 'timedOut'
 
-// The deadline as the spawn takes it. Truncated to the millisecond and floored at one: a sub-millisecond
-// deadline the caller nonetheless asked for must still bound the run rather than becoming `Subprocess`'s
-// own wait-forever sentinel.
+// Floored at one millisecond: a sub-millisecond deadline the caller asked for must still bound the
+// run rather than truncating to `Subprocess`'s wait-forever sentinel.
 function deadlineMs(seconds CoverageSeconds) returns DurationMs
-	let millis = trunc(seconds * MillisPerSecond)
+	let millis = trunc(seconds * MillisecondsPerSecond)
 
 	return (millis if millis > 0 else 1) as DurationMs
 end 'deadlineMs'
-
-let MillisPerSecond = 1000.0
-
-function refuseLaunch(reason String) returns ExitCode
-	printError("coverage: {reason}\n")
-
-	return RefusedCoverageExit
-end 'refuseLaunch'
 
 // Where counters are read from: what `DataFlag` named, or the file the binary writes beside itself.
 function dataPathFor(request CoverageRequest) returns String
@@ -248,7 +234,7 @@ function recordDeadline(request CoverageRequest, raw String) returns bool
 		return false
 	end 'notANumber'
 
-	if not (seconds > 0.0 and seconds <= MaxDeadlineSeconds) 'notAPositiveFiniteDuration'
+	if not (seconds > 0.0 and seconds <= MaxTargetSeconds) 'notAPositiveFiniteDuration'
 		return false
 	end 'notAPositiveFiniteDuration'
 
@@ -258,8 +244,7 @@ function recordDeadline(request CoverageRequest, raw String) returns bool
 	return true
 end 'recordDeadline'
 
-// One refusal: the problem, then the banner, then a non-zero exit. Both go to stderr — see this file's
-// header on why stdout stays empty.
+// Both lines go to stderr; this file's header says why stdout stays empty.
 function refuseCoverage(problem String) returns ExitCode
 	printError("coverage: {problem}\n")
 	printError("Usage: {CoverageDriverName} {CoverageSubcommandName} <{RunVerb}|{ReportVerb}> <exe> [{JsonFlag}] [{DataFlag}<file>] [{TimeoutFlag}<seconds>] [args...]\n")
@@ -272,9 +257,5 @@ function refuseCoverage(problem String) returns ExitCode
 	printError("           This tool's own exit code says whether the MEASUREMENT completed;\n")
 	printError("           the program's own status is reported as `target exit code`.\n")
 
-	return RefusedCoverageExit
+	return OwnFailureExit
 end 'refuseCoverage'
-
-// A command line this tool could not act on, and a measurement that did not complete, are one answer:
-// something other than a finished report. Distinct from the MEASURED program's status, which is data.
-module let RefusedCoverageExit = 1 as ExitCode

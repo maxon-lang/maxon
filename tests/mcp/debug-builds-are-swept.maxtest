@@ -1,0 +1,60 @@
+let SweepStagingDir = "temp/mcp-debug-build-sweep"
+let CacheRootVariable = "MAXON_RUN_CACHE_ROOT"
+let CacheDirName = "cache"
+let CacheVendorDirName = "maxon"
+let DebugBuildDirName = "debug-builds"
+let SidecarSuffix = ".mxdbg"
+let PlantedStem = "planted-main-maxon"
+let TwoHoursSeconds = 7200
+let ForeignFileName = "notes.txt"
+let PlantedBytes = "not really an image"
+
+typealias BuildSerial = int(1 to 9)
+function plantedName(owner OwnerId, mintedAt UnixSeconds, serial BuildSerial) returns String
+	return "{PlantedStem}-{owner}-{mintedAt}-{serial}{executableSuffix()}"
+end 'plantedName'
+
+function plant(directory FilePath, name String)
+	try File.writeText(directory.join(name), content: PlantedBytes) otherwise panic("mcp debug-build sweep test: could not plant {name} in {directory.path}")
+end 'plant'
+
+function planted(directory FilePath, name String) returns bool
+	return File.exists(directory.join(name))
+end 'planted'
+
+test 'a server sweeps exactly the debug builds whose owner has ended, whatever their age'
+	let cache = stagingDir("{SweepStagingDir}/{CacheDirName}")
+	clearStagedFiles(cache)
+	_ = stagingDir("{SweepStagingDir}/{CacheDirName}/{CacheVendorDirName}")
+	let builds = stagingDir("{SweepStagingDir}/{CacheDirName}/{CacheVendorDirName}/{DebugBuildDirName}")
+
+	let now = WallClock.nowUnixSeconds()
+	let live = __Builtins.currentProcessId()
+	let ended = endedProcessId()
+
+	let oldLive = plantedName(live, mintedAt: now - TwoHoursSeconds, serial: 1)
+	let youngEnded = plantedName(ended, mintedAt: now, serial: 2)
+	let endedSidecar = "{plantedName(ended, mintedAt: now - TwoHoursSeconds, serial: 3)}{SidecarSuffix}"
+	let liveSidecar = "{plantedName(live, mintedAt: now - TwoHoursSeconds, serial: 4)}{SidecarSuffix}"
+
+	plant(builds, name: oldLive)
+	plant(builds, name: "{oldLive}{SidecarSuffix}")
+	plant(builds, name: youngEnded)
+	plant(builds, name: "{youngEnded}{SidecarSuffix}")
+	plant(builds, name: endedSidecar)
+	plant(builds, name: liveSidecar)
+	plant(builds, name: ForeignFileName)
+
+	let docs = responseDocs(runMcp([initRequest(1)], environment: Environment.inheritUpdating([CacheRootVariable: cache.toString()])))
+
+	try Expect.equal(docs.count() as AssertedInt, expected: 1, message: "the control: the server must start and answer `initialize`, or nothing below says anything about its startup")
+	try Expect.isTrue(__Builtins.processIsAlive(live), message: "the control: this test's own process is alive, so the builds planted under its id belong to a live owner")
+	try Expect.isFalse(__Builtins.processIsAlive(ended), message: "the control: the child run to learn an ended id has been reaped, so builds planted under it have no owner")
+	try Expect.isTrue(planted(builds, name: oldLive), message: "a build two hours old whose owner is still running belongs to a live session and must not be swept; `{oldLive}` is gone")
+	try Expect.isTrue(planted(builds, name: "{oldLive}{SidecarSuffix}"), message: "a kept build keeps its sidecar")
+	try Expect.isFalse(planted(builds, name: youngEnded), message: "a build minted just now by a process that has ended has no session left to use it and must be swept; `{youngEnded}` is still there")
+	try Expect.isFalse(planted(builds, name: "{youngEnded}{SidecarSuffix}"), message: "a swept build's sidecar goes with it")
+	try Expect.isFalse(planted(builds, name: endedSidecar), message: "a sidecar whose image and owner are both gone must be swept")
+	try Expect.isTrue(planted(builds, name: liveSidecar), message: "a sidecar whose owner is still running is that session's, even with its image not yet written")
+	try Expect.isTrue(planted(builds, name: ForeignFileName), message: "a file whose name is not a debug build's is never the sweep's to delete")
+end 'a server sweeps exactly the debug builds whose owner has ended, whatever their age'

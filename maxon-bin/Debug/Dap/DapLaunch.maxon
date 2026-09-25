@@ -1,0 +1,75 @@
+let ProgramArgument = "program"
+let ArgsArgument = "args"
+let EnvArgument = "env"
+let CwdArgument = "cwd"
+let StopOnEntryArgument = "stopOnEntry"
+let TraceArgument = "trace"
+
+export union DapLaunch
+	launched(session DebugToolSession, stopOnEntry bool)
+	refused(message String)
+end 'DapLaunch'
+
+type DapLaunchRequest
+	export let program as String
+	export let arguments as StringArray
+	export let targetEnv as EnvMap
+	export let workingDirectory as FilePath
+	export let stopOnEntry as bool
+	export let traced as bool
+	export let stopTimeoutMs as StopTimeoutMs
+
+	static function create(program String, arguments StringArray, targetEnv EnvMap, workingDirectory FilePath, stopOnEntry bool, traced bool, stopTimeoutMs StopTimeoutMs) returns DapLaunchRequest
+		return Self{program: program, arguments: arguments, targetEnv: targetEnv, workingDirectory: workingDirectory, stopOnEntry: stopOnEntry, traced: traced, stopTimeoutMs: stopTimeoutMs}
+	end 'create'
+end 'DapLaunchRequest'
+
+union DapLaunchRead
+	read(request DapLaunchRequest)
+	refused(message String)
+end 'DapLaunchRead'
+
+export function dapLaunch(arguments DapObject) returns DapLaunch throws DapArgumentError
+	match try launchRequestIn(arguments) 'asked'
+		refused(message) then return DapLaunch.refused(message)
+		read(request) then return launchedFrom(request)
+	end 'asked'
+end 'dapLaunch'
+
+function launchRequestIn(arguments DapObject) returns DapLaunchRead throws DapArgumentError
+	var targetEnv = try arguments.textMap(EnvArgument)
+	let options = debugLaunchOptionsFrom(try arguments.launchAsk(DebugMaxProcsOption), stopTimeoutSeconds: try arguments.launchAsk(DebugStopTimeoutOption), targetEnv: targetEnv)
+
+	return match options 'options'
+		refused(message) gives DapLaunchRead.refused(message)
+		read(stopTimeoutMs) gives try launchRequestWith(arguments, targetEnv: targetEnv, stopTimeoutMs: stopTimeoutMs)
+	end 'options'
+end 'launchRequestIn'
+
+function launchRequestWith(arguments DapObject, targetEnv EnvMap, stopTimeoutMs StopTimeoutMs) returns DapLaunchRead throws DapArgumentError
+	var workingDirectory = inheritedWorkingDirectory()
+
+	if arguments.has(CwdArgument) 'aWorkingDirectory'
+		let spelled = try arguments.text(CwdArgument)
+		let named = try FilePath.from(spelled) otherwise return DapLaunchRead.refused("`{CwdArgument}` names `{spelled}`, which is not a spellable path")
+		workingDirectory = named.resolve(Directory.currentPath())
+	end 'aWorkingDirectory'
+
+	return DapLaunchRead.read(DapLaunchRequest.create(try arguments.text(ProgramArgument), arguments: try arguments.texts(ArgsArgument), targetEnv: targetEnv, workingDirectory: workingDirectory, stopOnEntry: try arguments.flagOr(StopOnEntryArgument, fallback: false), traced: try arguments.flagOr(TraceArgument, fallback: false), stopTimeoutMs: stopTimeoutMs))
+end 'launchRequestWith'
+
+function launchedFrom(request DapLaunchRequest) returns DapLaunch
+	let compiler = try Process.executablePath() otherwise return DapLaunch.refused("this adapter cannot find its own executable, which is the compiler that builds {request.program}")
+
+	match debugProgramFor(request.program, compiler: compiler, traced: request.traced, argument: DebugProgramArgument.program, timeoutMs: CompilerChildTimeoutMs) 'resolved'
+		failed(diagnostics) then return DapLaunch.refused(diagnostics)
+		ready(image) then return startedOn(image, request: request)
+	end 'resolved'
+end 'launchedFrom'
+
+function startedOn(image DebugImage, request DapLaunchRequest) returns DapLaunch
+	match DebugToolSession.launch(image, arguments: request.arguments, targetEnv: request.targetEnv, stopTimeoutMs: request.stopTimeoutMs, traced: request.traced, workingDirectory: request.workingDirectory, delivery: DebugStopDelivery.polled) 'started'
+		refused(reason) then return DapLaunch.refused(reason)
+		ready(session) then return DapLaunch.launched(session, stopOnEntry: request.stopOnEntry)
+	end 'started'
+end 'startedOn'

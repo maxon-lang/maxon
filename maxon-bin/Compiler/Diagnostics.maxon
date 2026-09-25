@@ -21,14 +21,10 @@ export union DiagnosticNote
 	none
 	at(message String, line LineNumber, column ColumnNumber, filePath FilePath)
 
-	// A note names a file too, so it takes the staged-source rewrite along with the primary location.
-	// It is a method ON the union rather than a `match` inside `Diagnostic.reportedUnder` so that the
-	// arms and the answers to them sit together: a third arm added two lines up is refused here, in
-	// the reader's eye-line, rather than in another type's method further down the file.
-	function reportedUnder(origins StagedSourceOriginArray) returns DiagnosticNote
+	function reportedUnder(origins StagedOriginIndex) returns DiagnosticNote
 		return match self 'note'
 			none gives DiagnosticNote.none
-			at(message, line, column, filePath) gives DiagnosticNote.at(message, line: line, column: column, filePath: authoredPathFor(origins, staged: filePath))
+			at(message, line, column, filePath) gives DiagnosticNote.at(message, line: line, column: column, filePath: origins.authoredPathOf(filePath))
 		end 'note'
 	end 'reportedUnder'
 end 'DiagnosticNote'
@@ -44,33 +40,13 @@ export union DiagnosticCause
 	standsAlone
 	undeclaredCalls(calls SourceRangeArray, filePath FilePath)
 
-	function reportedUnder(origins StagedSourceOriginArray) returns DiagnosticCause
+	function reportedUnder(origins StagedOriginIndex) returns DiagnosticCause
 		return match self 'cause'
 			standsAlone gives DiagnosticCause.standsAlone
-			undeclaredCalls(calls, filePath) gives DiagnosticCause.undeclaredCalls(calls, filePath: authoredPathFor(origins, staged: filePath))
+			undeclaredCalls(calls, filePath) gives DiagnosticCause.undeclaredCalls(calls, filePath: origins.authoredPathOf(filePath))
 		end 'cause'
 	end 'reportedUnder'
 end 'DiagnosticCause'
-
-// ⭐⭐ **THE NAME A DIAGNOSTIC MUST CARRY FOR A FILE THIS COMPILE READ FROM A COPY.** Unknown paths
-// — every file in an ordinary build — come back untouched, so a compile that staged nothing renders
-// byte for byte what it always did.
-//
-// ⚠ **A LINEAR SCAN, AND THE HONEST BOUND IS Θ(diagnostics × staged sources)** — one row per source of
-// the project under test, which is HUNDREDS for a project the size of this compiler, times however many
-// diagnostics a broken build raised. It is affordable for one reason only: both factors are non-zero
-// only on a run that is already failing, and that run has just paid for a whole compile. A map here
-// would trade a scan of a few hundred `FilePath.equals` for a hash of every path, on the error path, to
-// save time nobody is waiting on. Revisit it if either factor ever grows on a GREEN run.
-function authoredPathFor(origins StagedSourceOriginArray, staged FilePath) returns FilePath
-	for origin in origins 'eachStagedSource'
-		if origin.stagedPath.equals(staged) 'thisFile'
-			return origin.reportedPath
-		end 'thisFile'
-	end 'eachStagedSource'
-
-	return staged
-end 'authoredPathFor'
 
 // ⭐⭐ **THE USER CONSTRUCT A LIBRARY-BODY DIAGNOSTIC IS REALLY ABOUT (BLAME).**
 //
@@ -142,18 +118,14 @@ export type Diagnostic
 		return Self{code: self.code, message: self.message, line: self.line, column: self.column, filePath: self.filePath, note: self.note, cause: origin}
 	end 'withCause'
 
-	// ⭐⭐ **THE SAME DIAGNOSTIC, NAMING THE AUTHOR'S FILE RATHER THAN THE COPY THIS COMPILE READ.**
-	// Applied by the single sink `Project.reportDiagnostic`, AFTER `blamedAt`, so both slots a blame swap
-	// produces are rewritten and neither can keep a staged spelling.
-	//
-	// An empty list — every ordinary build — returns `self` untouched, exactly as `blamedAt` does for
-	// `unblamed`.
-	export function reportedUnder(origins StagedSourceOriginArray) returns Diagnostic
-		if origins.isEmpty() 'nothingWasStaged'
+	// Applied by the sink `reportDiagnostic` after `blamedAt`, so both slots a blame swap produces are
+	// rewritten and neither keeps a staged path.
+	export function reportedUnder(origins StagedOriginIndex) returns Diagnostic
+		if origins.stagesNothing() 'nothingWasStaged'
 			return self
 		end 'nothingWasStaged'
 
-		return Self{code: self.code, message: self.message, line: self.line, column: self.column, filePath: authoredPathFor(origins, staged: self.filePath), note: self.note.reportedUnder(origins), cause: self.cause.reportedUnder(origins)}
+		return Self{code: self.code, message: self.message, line: self.line, column: self.column, filePath: origins.authoredPathOf(self.filePath), note: self.note.reportedUnder(origins), cause: self.cause.reportedUnder(origins)}
 	end 'reportedUnder'
 
 	// Render as `error <code>: <message>` — the exact wire format the spec's
@@ -232,13 +204,12 @@ export union CompileError implements Error
 	// other compiles nothing — and the sentence a user needs names the directory that is missing, which
 	// is why this is not `stdlibNotFound`.
 	runtimeNotFound
+	runtimeTierIsNotAProgram(root FilePath)
 	compileError
 end 'CompileError'
 
-// Construct and report a positioned diagnostic in one call. `reportDiagnostic`, the sink itself,
-// lives in Project.maxon beside the diagnostics field.
-export function reportPositioned(project Project, code ErrorCode, message String, line LineNumber, column ColumnNumber, filePath FilePath)
-	reportDiagnostic(project, diagnostic: Diagnostic.create(code, message: message, line: line, column: column, filePath: filePath))
+export function reportPositioned(project Project, code ErrorCode, message String, line LineNumber, column ColumnNumber, filePath FilePath, cause DiagnosticCause = DiagnosticCause.standsAlone)
+	reportDiagnostic(project, diagnostic: Diagnostic.create(code, message: message, line: line, column: column, filePath: filePath).withCause(cause))
 end 'reportPositioned'
 
 export function reportAtFunctionName(project Project, func IrFunction, code ErrorCode, message String)

@@ -171,7 +171,7 @@ export function readPeSectionData(path FilePath, sectionName String) returns Byt
 		let rawPointer = imageReadU32(image, at: ((header + SectionRawPointerOffset) as ByteOffset))
 		let size = virtualSize if virtualSize < rawSize else rawSize
 
-		if not imageRangeFits(image, start: rawPointer as ByteOffset, count: size as BytePos) 'runsPastEof'
+		if not spanFitsWithin(rawPointer as ByteOffset, count: size as BytePos, total: image.count()) 'runsPastEof'
 			throw PeReadError.truncated(path, sectionName: sectionName)
 		end 'runsPastEof'
 
@@ -320,6 +320,9 @@ end 'byteRunMatchesAt'
 // because they are one notation and a reader deciding whether `u8[] 1, 2` is an array reads both.
 let TypedValueArraySuffix = "[]"
 let TypedValueArraySeparator = ","
+
+let TypeRosterSeparator = "/"
+let HexByteSeparator = " "
 
 // The ELEMENT type a line's type name describes — `u8` for `u8[]`, and the name itself for a scalar.
 // Returning the name unchanged for a scalar is what lets the caller tell the two apart with one
@@ -533,17 +536,13 @@ end 'typedValueTypes'
 // The roster's names as the `unknownType` message lists them — the SECOND reader of the table, and the
 // reason the table exists at all.
 function typedValueTypeRoster() returns String
-	var out = StringBuilder.create()
+	var names = StringArray.create()
 
-	for (iter, row) in typedValueTypes().withIterator() 'eachRow'
-		if iter.index() > 0 'separator'
-			out.append("/")
-		end 'separator'
-
-		out.append(row.name)
+	for row in typedValueTypes() 'eachRow'
+		names.push(row.name)
 	end 'eachRow'
 
-	return out.build()
+	return joinedWith(names, separator: TypeRosterSeparator)
 end 'typedValueTypeRoster'
 
 // The byte width of a `RequiredData` type name — the FIRST reader of the table.
@@ -570,25 +569,19 @@ end 'appendLittleEndian'
 
 // --- Hex rendering for a mismatch message ---
 //
-// A `.data` mismatch is a BYTE-level failure, so it is reported in bytes: "expected 2a 00 00 00 00
+// A `.data` mismatch is a byte-level failure, so it is reported in bytes: "expected 2a 00 00 00 00
 // 00 00 00, got 00 00 …" is a diff a reader can act on, where "the layout differs" is not.
 //
-// ⚠ **`hexByte`/`hexDigit` LIVE IN THE COMPILER, NOT HERE.** A chunk golden's hex dump
-// (`TargetPrinter.printChunkBytes`) is the same rendering one tier down.
-// The harness may call INTO the compiler and does (`targetToString`,
-// `emitsTargetIr`); the compiler may not call out here — so the one spelling sits on the lower side
-// and this reads it from there.
+// `hexByte` lives in the compiler: a chunk golden's hex dump (`TargetPrinter.printChunkBytes`) is
+// the same rendering, and the harness may call into the compiler while the compiler may not call
+// out here, so the one spelling sits on the lower side.
 
 export function formatHexBytes(bytes ByteArray) returns String
-	var out = StringBuilder.create()
+	var hexes = StringArray.create()
 
-	for (iter, b) in bytes.withIterator() 'each'
-		if iter.index() > 0 'separator'
-			out.append(" ")
-		end 'separator'
-
-		out.append(hexByte(b))
+	for b in bytes 'each'
+		hexes.push(hexByte(b as MachineWord))
 	end 'each'
 
-	return out.build()
+	return joinedWith(hexes, separator: HexByteSeparator)
 end 'formatHexBytes'

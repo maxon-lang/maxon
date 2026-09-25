@@ -1,0 +1,284 @@
+// Test: driftsort-compare-count-grows-as-n-log-n
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type CompareTally
+	export var calls as Integer
+
+	export static function create() returns CompareTally
+		return Self{calls: 0}
+	end 'create'
+end 'CompareTally'
+
+function counted(x Integer, y Integer, tally CompareTally) returns Ordering
+	tally.calls = tally.calls + 1
+	return x.compare(y)
+end 'counted'
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	var r = 2463534242
+
+	for i in 0 upto 65536 'fill'
+		r = (r * 1103515245 + 12345) and 0x7FFFFFFF
+		a.push(r and 0xFFFFF)
+	end 'fill'
+
+	let tally = CompareTally.create()
+	a.sort(function(x Integer, y Integer) gives counted(x, y: y, tally: tally))
+
+	var ordered = true
+
+	for i in 1 upto a.count() 'walk'
+		let p = try a.get(i - 1) otherwise return 99
+		let v = try a.get(i) otherwise return 99
+
+		if p > v 'outOfOrder'
+			ordered = false
+		end 'outOfOrder'
+	end 'walk'
+
+	if ordered and tally.calls <= 32 * a.count() 'withinTheBound'
+		print("sorted within n log n\n")
+	end 'withinTheBound' else 'overTheBound'
+		print("ordered={ordered} compares={tally.calls}\n")
+	end 'overTheBound'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 120
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot2, rbx
+    x64.movRegImm32 rax, 2463534242
+    x64.movRegImm32 r12, 0
+    x64.jmp forhdr#1
+  fill:
+    x64.imulRegRegImm32 rax, rax, 1103515245
+    x64.leaRegRegImm32 r13, rax, 12345
+    x64.andRegImm32 r13, r13, 2147483647
+    x64.movRegReg rdx, r13
+    x64.andRegImm32 rdx, r13, 1048575
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+  forstep#3:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.movRegReg rax, r13
+  forhdr#1:
+    x64.cmpRegImm32 r12, 65536
+    x64.jcc less, fill
+  __il_body#30:
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot0, r13
+    x64.storeBaseDispReg.word64 [r13 + 0], r12
+  __il_cont#29:
+    x64.leaRegFunc r12, [rip + main$closure_0]
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot1, r8
+    x64.storeBaseDispReg.word64 [r8 + 0], r13
+    x64.leaRegRdata rdi, [rip + __layout_Array_Integer]
+  __il_body#31:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.movRegReg rcx, rbx
+    x64.movRegReg r9, r12
+    x64.movRegReg rsi, r8
+    x64.callDirect Array.driftsortRange
+  __il_cont#28:
+    x64.movRegImm32 r12, 1
+    x64.movRegImm32 rax, 1
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+  __us_test:
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
+    x64.jmp forhdr#5
+  walk:
+    x64.leaRegRegImm32 rsi, rax, -1
+  __im_load#27:
+    x64.loadRegBaseIndexScale.word64 rsi, [rdx + rsi*8 + 0]
+  __im_load#24:
+    x64.loadRegBaseIndexScale.word64 rdi, [rdx + rax*8 + 0]
+  tryok:
+    x64.cmpRegReg rsi, rdi
+    x64.jcc lessEqual, critsplit
+  outOfOrder:
+    x64.movRegImm32 rsi, 0
+    x64.jmp forstep#7
+  critsplit:
+    x64.movRegReg rsi, r12
+  forstep#7:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.movRegReg r12, rsi
+  forhdr#5:
+    x64.cmpRegReg rax, rcx
+    x64.jcc less, walk
+  forexit:
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r12, 0
+    x64.jcc equal, scmerge
+  andrhs:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.imulRegRegImm32 rcx, rcx, 32
+    x64.cmpRegReg rax, rcx
+    x64.setccReg lessEqual, rax
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifelse
+  withinTheBound:
+    x64.leaRegRdata rcx, [rip + __str_rec_4]  ; "sorted within n log n\x0a"
+    x64.callDirect print
+    x64.jmp ifcont
+  ifelse:
+    x64.leaRegRdata rax, [rip + __str_rec_5]  ; "ordered="
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot10, rcx
+    x64.loadRegBaseDisp.word64 rbx, [rax + 8]
+    x64.movRegImm32 rcx, 5
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot9, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __bool_to_string
+    x64.movRegReg r12, r8
+    x64.leaRegRdata rax, [rip + __str_rec_6]  ; " compares="
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot8, rcx
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.loadRegBaseDisp.word64 r13, [r13 + 0]
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r15
+    x64.callDirect __int_to_string
+    x64.storeSlotReg slot7, r8
+    x64.leaRegRdata rax, [rip + __str_rec_7]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot6, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot5, rax
+    x64.leaRegRegReg rcx, rbx, r12
+    x64.leaRegRegReg rcx, rcx, r14
+    x64.leaRegRegReg rcx, rcx, r8
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot3, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot4, r8
+    x64.leaRegRegImm32 r13, r8, 56
+    x64.loadRegSlot rdx, slot10
+    x64.movRegReg rcx, r13
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r13, rbx
+    x64.loadRegSlot rdx, slot9
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r12
+    x64.loadRegSlot rdx, slot8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r14
+    x64.loadRegSlot rax, slot7
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r15
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot7
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.loadRegSlot rax, slot5
+    x64.loadRegSlot rdx, slot6
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot5
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rbx, slot4
+    x64.storeBaseDispReg.word64 [rbx + 0], r13
+    x64.loadRegSlot rax, slot3
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rcx, slot9
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+  ifcont:
+    x64.movRegImm32 rbx, 0
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __mm_decref
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __mm_decref
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 120
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main$closure_0 {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+  __il_body#2:
+    x64.aluBaseDispImm32.add [rax + 0], 1
+  __il_body#4:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc greaterEqual, ifcont#6
+  lt:
+    x64.movRegImm32 r8, 0
+    x64.jmp __il_cont
+  ifcont#6:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc lessEqual, ifcont#8
+  gt:
+    x64.movRegImm32 r8, 2
+    x64.jmp __il_cont
+  ifcont#8:
+    x64.movRegImm32 r8, 1
+  __il_cont:
+    x64.popReg rbp
+    x64.ret
+}

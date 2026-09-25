@@ -41,6 +41,7 @@ let WaitingForKey = "waitingFor"
 let MessageKey = "message"
 let TextKey = "text"
 let CurrentKey = "current"
+let FaultKey = "fault"
 
 let UnavailableSuffix = "Unavailable"
 let NoSourceReason = "no-source-file"
@@ -67,8 +68,8 @@ export function debugEventLineFor(reply DebugReply) returns DebugEventLine
 	var doc = JsonDoc.create()
 
 	match reply 'which'
-		quit then return DebugEventLine.none
-		spoken then return DebugEventLine.none
+		quit or
+			spoken then return DebugEventLine.none
 		breakpoint(answer) then return DebugEventLine.line(renderedObject(doc, node: breakpointObject(doc, answer: answer)))
 		stopped(stop) then return DebugEventLine.line(renderedObject(doc, node: stopObject(doc, stop: stop)))
 		walked(frames) then return DebugEventLine.line(renderedObject(doc, node: backtraceObject(doc, frames: frames)))
@@ -81,6 +82,7 @@ export function debugEventLineFor(reply DebugReply) returns DebugEventLine
 		threadOutcome(outcome) then return DebugEventLine.line(renderedObject(doc, node: threadOutcomeObject(doc, outcome: outcome)))
 		traced(slice) then return DebugEventLine.line(renderedObject(doc, node: traceObject(doc, slice: slice)))
 		timedOut(waitingFor) then return DebugEventLine.line(renderedObject(doc, node: timeoutObject(doc, waitingFor: waitingFor)))
+		running then panic("debugEventLineFor: `running` is the reply of a conversation whose stops are POLLED, and the faces that render batch events all await theirs")
 		failed(message, suggestion) then return DebugEventLine.line(renderedObject(doc, node: errorObject(doc, message: message, suggestion: suggestion)))
 	end 'which'
 end 'debugEventLineFor'
@@ -95,7 +97,7 @@ function breakpointObject(doc JsonDoc, answer DebugBreakpointAnswer) returns Jso
 	var object = JsonObjectBuilder.create()
 	object.addString(doc, key: DebugEventKey, value: BreakpointEventKind)
 	object.addString(doc, key: ActionKey, value: answer.action)
-	object.addString(doc, key: FunctionKey, value: answer.functionName)
+	addFunctionName(object, doc: doc, name: answer.functionName)
 	object.addString(doc, key: FileKey, value: answer.file)
 	object.addNumber(doc, key: LineKey, value: answer.line as JsonFloat)
 	object.addString(doc, key: OffsetKey, value: hexWord(answer.offset))
@@ -146,7 +148,7 @@ function threadRowObject(doc JsonDoc, row DebugThreadRow) returns JsonNodeId
 	var object = JsonObjectBuilder.create()
 	object.addNumber(doc, key: IdKey, value: row.id as JsonFloat)
 	object.addString(doc, key: StatusKey, value: row.status)
-	object.addString(doc, key: FunctionKey, value: row.functionName)
+	addFunctionName(object, doc: doc, name: row.functionName)
 	object.addString(doc, key: FileKey, value: row.file)
 	object.addNumber(doc, key: LineKey, value: row.line as JsonFloat)
 	object.addString(doc, key: HandleKey, value: hexWord(row.handle))
@@ -219,7 +221,12 @@ function stopObject(doc JsonDoc, stop DebugStop) returns JsonNodeId
 	var object = JsonObjectBuilder.create()
 	object.addString(doc, key: DebugEventKey, value: StopEventKind)
 	object.addString(doc, key: ReasonKey, value: stop.reason)
-	object.addString(doc, key: FunctionKey, value: stop.functionName)
+
+	if not stop.fault.isEmpty() 'aFault'
+		object.addString(doc, key: FaultKey, value: stop.fault)
+	end 'aFault'
+
+	addFunctionName(object, doc: doc, name: stop.functionName)
 	object.addString(doc, key: FileKey, value: stop.file)
 	object.addNumber(doc, key: LineKey, value: stop.line as JsonFloat)
 	object.addNumber(doc, key: ColumnKey, value: stop.column as JsonFloat)
@@ -240,14 +247,21 @@ function backtraceObject(doc JsonDoc, frames DebugFrameArray) returns JsonNodeId
 	return object.build(doc)
 end 'backtraceObject'
 
-function localsObject(doc JsonDoc, functionName String, values DebugValueTree) returns JsonNodeId
+function localsObject(doc JsonDoc, functionName DebugFunctionNameLookup, values DebugValueTree) returns JsonNodeId
 	var object = JsonObjectBuilder.create()
 	object.addString(doc, key: DebugEventKey, value: LocalsEventKind)
-	object.addString(doc, key: FunctionKey, value: functionName)
+	addFunctionName(object, doc: doc, name: functionName)
 	object.addNode(LocalsKey, node: valueArray(doc, tree: values, indices: values.roots))
 
 	return object.build(doc)
 end 'localsObject'
+
+function addFunctionName(object JsonObjectBuilder, doc JsonDoc, name DebugFunctionNameLookup)
+	match name 'known'
+		none then break 'known'
+		named(spelled) then object.addString(doc, key: FunctionKey, value: spelled)
+	end 'known'
+end 'addFunctionName'
 
 function valueEventObject(doc JsonDoc, tree DebugValueTree) returns JsonNodeId
 	var object = JsonObjectBuilder.create()
@@ -318,6 +332,7 @@ function frameObject(doc JsonDoc, frame DebugFrame) returns JsonNodeId
 	object.addString(doc, key: FunctionKey, value: frame.functionName)
 	object.addString(doc, key: FileKey, value: frame.file)
 	object.addNumber(doc, key: LineKey, value: frame.line as JsonFloat)
+	object.addNumber(doc, key: ColumnKey, value: frame.column as JsonFloat)
 	object.addString(doc, key: OffsetKey, value: hexWord(frame.offset))
 
 	if frame.inlined 'aSplicedBody'

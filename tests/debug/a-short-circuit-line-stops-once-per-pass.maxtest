@@ -1,0 +1,15 @@
+let ShortCircuitCaseLabel = "a-short-circuit-line-stops-once-per-pass"
+let PassesThroughTheLine = 3
+let ContinuesPastEveryPass = 10
+
+test 'a breakpoint on a line that evaluates a and b stops once each time control passes through it'
+	let staged = builtFixture(ShortCircuitCaseLabel, fixture: LogicLineFixtureName)
+	let andLine = anchorLine(staged, anchor: "and-line")
+	let commands = debugCommandLine(appendedCommands(["{BreakCommand} {lineTarget(andLine)}", RunCommand], rest: repeatedCommand(ContinueCommand, times: ContinuesPastEveryPass)))
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	try Expect.equal(eventsOfKind(events, kind: StopEventName).count() as AssertedInt, expected: PassesThroughTheLine, message: "⛔ THE LOOP PASSES THROUGH THE `and` LINE {PassesThroughTheLine} TIMES, SO THE BREAKPOINT STOPS {PassesThroughTheLine} TIMES. Both arms of the short circuit join in a block the compiler may split out with no source position, and that block must not count as a second arrival on the line. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(eventsOfKind(events, kind: ExitEventName).count() as AssertedInt, expected: 1, message: "the program runs to its own end. {said}")
+end 'a breakpoint on a line that evaluates a and b stops once each time control passes through it'

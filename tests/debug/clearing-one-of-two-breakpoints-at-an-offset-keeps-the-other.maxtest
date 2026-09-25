@@ -1,0 +1,26 @@
+let SharedOffsetCaseLabel = "clearing-one-of-two-breakpoints-at-an-offset-keeps-the-other"
+
+test 'clearing a line breakpoint leaves an exact-offset breakpoint armed at the same byte'
+	let staged = builtFixture(SharedOffsetCaseLabel, fixture: SteppingFixtureName)
+	let printLine = anchorLine(staged, anchor: "main-print")
+	let executable = builtExecutable(staged)
+	let rows = statementOffsetsOfLine(executable, staged: staged, line: printLine)
+	let offset = try rows.get(0) otherwise panic("clearing-one-of-two-breakpoints-at-an-offset-keeps-the-other: the print line has a statement row")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(printLine)}", "{BreakCommand} {exactOffsetTarget(offset)}", "{ClearCommand} {lineTarget(printLine)}", RunCommand, ContinueCommand])
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let armings = eventsOfKind(events, kind: BreakpointEventName)
+
+	try Expect.equal(armings.count() as AssertedInt, expected: 3, message: "two armings and a clear are three `{BreakpointEventName}` events. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let lineArmed = eventAt(armings, index: 0)
+	try Expect.equal(textOf(lineArmed, node: lineArmed.root, key: OffsetKey), expected: hexSpelling(offset), message: "the line breakpoint arms the print line's first statement row, which is the byte the exact-offset breakpoint names too. {said}")
+
+	let stops = eventsOfKind(events, kind: StopEventName)
+	try Expect.equal(stops.count() as AssertedInt, expected: 1, message: "the exact-offset breakpoint still holds the byte after the line breakpoint is cleared, so the print line stops once. A clear that lifts the byte out from under another breakpoint runs the program to its exit instead. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let stopped = eventAt(stops, index: 0)
+	try Expect.equal(textOf(stopped, node: stopped.root, key: OffsetKey), expected: hexSpelling(offset), message: "the stop is at the byte both breakpoints named. {said}")
+	try Expect.equal(eventsOfKind(events, kind: ExitEventName).count() as AssertedInt, expected: 1, message: "`{ContinueCommand}` runs the program to its exit. {said}")
+end 'clearing a line breakpoint leaves an exact-offset breakpoint armed at the same byte'

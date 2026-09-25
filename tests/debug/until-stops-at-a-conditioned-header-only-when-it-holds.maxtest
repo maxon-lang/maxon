@@ -1,0 +1,33 @@
+let UntilConditionCaseLabel = "until-stops-at-a-conditioned-header-only-when-it-holds"
+let HeldRound = "2"
+let HeaderStopsWhenTheConditionIsJudged = 1
+
+test 'an until that single-steps onto a conditioned loop header stops there only on the pass whose condition holds'
+	let staged = builtFixture(UntilConditionCaseLabel, fixture: LoopsFixtureName)
+	let incrementLine = anchorLine(staged, anchor: "while-increment")
+	let headerLine = anchorLine(staged, anchor: "while-header")
+	var commands = StringArray.create()
+	commands.push("{BreakCommand} {lineTarget(incrementLine)}")
+	commands.push(RunCommand)
+	commands.push("{ClearCommand} {lineTarget(incrementLine)}")
+	commands.push(conditionalBreak(lineTarget(headerLine), condition: "round == {HeldRound}"))
+	commands.push(UntilCommand)
+	commands.push("{PrintCommand} round")
+	commands.push(ContinueCommand)
+	commands.push(ContinueCommand)
+
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: debugCommandLine(commands), extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	try Expect.equal(stopsAtLine(events, line: headerLine) as AssertedInt, expected: HeaderStopsWhenTheConditionIsJudged, message: "⛔ A SINGLE STEP THAT LANDS ON A CONDITIONED BYTE MUST JUDGE ITS CONDITION. The `{UntilCommand}` steps the back edge onto the header on the pass where `round` is 1, where `round == {HeldRound}` is false; a step taken as a hit whatever the condition stops there, and the `{ContinueCommand}` then stops again at the pass that holds. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let values = eventsOfKind(events, kind: ValueEventName)
+	try Expect.equal(values.count() as AssertedInt, expected: 1, message: "`{PrintCommand} round` at the header stop printed no value. {said}")
+
+	let printed = eventAt(values, index: 0)
+	let read = memberOf(printed, node: printed.root, key: ValueKey)
+	try Expect.equal(read.count() as AssertedInt, expected: 1, message: "the `{ValueEventName}` event carries no `{ValueKey}`. {said}")
+	try Expect.equal(textOf(printed, node: nodeAt(read, index: 0), key: DisplayKey), expected: HeldRound, message: "the header stop is the pass whose `round` is {HeldRound}. {said}")
+	try Expect.equal(eventsOfKind(events, kind: ExitEventName).count() as AssertedInt, expected: 1, message: "past the one pass that holds, the program runs to its exit. {said}")
+end 'an until that single-steps onto a conditioned loop header stops there only on the pass whose condition holds'

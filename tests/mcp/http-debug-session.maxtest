@@ -1,0 +1,62 @@
+let OkStatus = 200 as HttpStatusNumber
+
+let HttpDebugStagingDir = "temp/mcp-http-debug"
+
+test 'a debug session over http survives from one request to the next'
+	let program = stagedProgram(HttpDebugStagingDir, fileName: "main.maxon", source: debuggableProgramSource())
+	let executable = buildStagedProgram(program)
+	let anchored = anchorLineIn(program, anchor: DebuggableProgramAnchor)
+
+	var server = StreamingHttpMcpServer.start(StringArray.create())
+	let (initialized, sessionId) = server.initializeSession()
+
+	let started = httpToolCall(server, sessionId: sessionId, id: 2, name: DebugStartTool, argumentsJson: debugExecutableArgument(executable))
+	let armed = httpToolCall(server, sessionId: sessionId, id: 3, name: DebugBreakTool, argumentsJson: debugBreakTargetArgument(anchored))
+	let continued = httpToolCall(server, sessionId: sessionId, id: 4, name: DebugContinueTool)
+	let locals = httpToolCall(server, sessionId: sessionId, id: 5, name: DebugLocalsTool)
+	let stopped = httpToolCall(server, sessionId: sessionId, id: 6, name: DebugStopTool)
+
+	try server.stop()
+
+	try Expect.equal(initialized.statusCode as AssertedInt, expected: OkStatus as AssertedInt)
+	try Expect.isFalse(toolCallIsError(started), message: "`{DebugStartTool}` refused a freshly built executable: {toolCallText(started)}")
+	try Expect.equal(debugToolState(started), expected: DebugStoppedState, message: "`{DebugStartTool}` launches without running, so the session is parked before `main` and reports `{DebugStoppedState}`; it reported `{debugToolState(started)}`")
+
+	try Expect.isFalse(toolCallIsError(armed), message: "`{DebugBreakTool}` refused `main.maxon:{anchored}`: {toolCallText(armed)}")
+	try Expect.isTrue(debugEventKinds(armed).contains("breakpoint"), message: "`{DebugBreakTool}` must answer the `breakpoint` event the driver produced; it answered {toolCallText(armed)}")
+
+	try Expect.equal(debugToolState(continued), expected: DebugStoppedState, message: "`{DebugContinueTool}` on a fresh session runs the program, which must stop on the armed line; it reported `{debugToolState(continued)}` with {toolCallText(continued)}")
+	try Expect.isTrue(debugEventLines(continued, kind: DebugStopEventName).contains("{anchored}"), message: "the stop must be at the anchored line {anchored}; the events reported lines {renderedStrings(debugEventLines(continued, kind: DebugStopEventName))}")
+
+	try Expect.isTrue(debugLocalNames(locals).contains(DebuggableProgramLocalName), message: "a fifth request, on a fifth connection, must reach the SAME stopped program and name its local `{DebuggableProgramLocalName}`; it named {renderedStrings(debugLocalNames(locals))}")
+
+	try Expect.isFalse(toolCallIsError(stopped), message: "`{DebugStopTool}` refused to end the session: {toolCallText(stopped)}")
+end 'a debug session over http survives from one request to the next'
+
+test 'debug_stop reaps the debuggee, so its image can be deleted'
+	let program = stagedProgram("{HttpDebugStagingDir}-reap", fileName: "main.maxon", source: debuggableProgramSource())
+	let executable = buildStagedProgram(program)
+	let anchored = anchorLineIn(program, anchor: DebuggableProgramAnchor)
+
+	var server = StreamingHttpMcpServer.start(StringArray.create())
+	let (initialized, sessionId) = server.initializeSession()
+
+	let started = httpToolCall(server, sessionId: sessionId, id: 2, name: DebugStartTool, argumentsJson: debugExecutableArgument(executable))
+	_ = httpToolCall(server, sessionId: sessionId, id: 3, name: DebugBreakTool, argumentsJson: debugBreakTargetArgument(anchored))
+	let continued = httpToolCall(server, sessionId: sessionId, id: 4, name: DebugContinueTool)
+	let stopped = httpToolCall(server, sessionId: sessionId, id: 5, name: DebugStopTool)
+
+	var deletable = true
+
+	try File.delete(executable) otherwise 'stillHeld'
+		deletable = false
+	end 'stillHeld'
+
+	try server.stop()
+
+	try Expect.equal(initialized.statusCode as AssertedInt, expected: OkStatus as AssertedInt)
+	try Expect.isFalse(toolCallIsError(started), message: "`{DebugStartTool}` refused a freshly built executable: {toolCallText(started)}")
+	try Expect.equal(debugToolState(continued), expected: DebugStoppedState, message: "the program must be STOPPED and therefore alive before `{DebugStopTool}`, or the delete below proves nothing")
+	try Expect.isFalse(toolCallIsError(stopped), message: "`{DebugStopTool}` refused to end the session: {toolCallText(stopped)}")
+	try Expect.isTrue(deletable, message: "`{DebugStopTool}` must reap the debuggee. Its image is still held, which is a process this server left running after it said the session had ended")
+end 'debug_stop reaps the debuggee, so its image can be deleted'

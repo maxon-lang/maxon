@@ -313,13 +313,8 @@ export enum RuntimeAbort
 	// program's.
 	mainThreadSwitchedBackUnfinished = 100
 
-	// `__mm_leak_check`: the live allocation count was not zero at exit — a LEAK, or (a negative count)
-	// an over-release. ⚠ **`Testing/SpecWorkerPool.LeakCheckExitCode` SPELLS 101 TOO, AND FOLDING IT INTO
-	// THIS CASE WOULD BE WRONG.** That constant reads the exit code of a WORKER PROCESS; it is not emitted
-	// by the runtime this enum describes, so pointing the harness at this case would make it look
-	// single-sourced while its actual producer sat elsewhere. 101 is a PROJECT-WIDE CONVENTION with
-	// several independent producers; this enum owns the runtime's, and its job here is to stop a second
-	// abort taking the number.
+	// `__mm_leak_check`: the live allocation count was not zero at exit — a leak, or (a negative
+	// count) an over-release.
 	leakDetected = 101
 
 	// ⛔ `__gt_register_park` and `__gt_await_any`: a promise already names an awaiter, and a second green
@@ -439,6 +434,10 @@ export enum RuntimeAbort
 	// says the roster that gate read missed one. Copying anyway would hand two owners one box.
 	existentialNotCloneable = 120
 
+	// `__sched_init_procs` on x64-windows: `TlsAlloc` answered an index past the TEB's inline slot
+	// array (`TLS_OUT_OF_INDEXES` included), which the scheduler's `gs:` slot reads cannot address.
+	schedulerTlsSlotOutsideTheTeb = 121
+
 	// ⚠ **108 IS VACANT, NOT REUSABLE.** The fault it would name — `__np_pd_open` / `__np_pd_release` finding
 	// a green thread still PUBLISHED on a direction word of the record they are about to reset — is not a
 	// fault: it rests on the false claim that no two green threads can name one socket box, where a co-owning
@@ -449,6 +448,11 @@ export enum RuntimeAbort
 	// whatever the tree said at the time, and a recycled number makes two different faults indistinguishable
 	// in an old log.
 end 'RuntimeAbort'
+
+export function isLeakDetectedExit(code ExitCode) returns bool
+	let abort = try RuntimeAbort.fromRawValue(code) otherwise return false
+	return abort == RuntimeAbort.leakDetected
+end 'isLeakDetectedExit'
 
 // ⭐ **THE PANIC LINE ITSELF — `panic at <file>:<line>: <text>\n` — WRITTEN ONCE.**
 //

@@ -1,0 +1,13 @@
+let EditorUriStdlibDirName = "stdlib"
+let EditorUriStdlibFileName = "URL.maxon"
+
+test 'a stdlib file opened through an editor uri publishes no diagnostics'
+	let tier = try FilePath.from(EditorUriStdlibDirName) otherwise panic("stdlib tier: '{EditorUriStdlibDirName}' is not a spellable path")
+	let root = tier.resolve(Directory.currentPath())
+	let file = root.join(EditorUriStdlibFileName)
+	let content = try File.readText(file) otherwise panic("stdlib tier: could not read {file.toString()}")
+
+	let probe = probeProjectDiagnosticsThroughEditorUris(root, fileName: EditorUriStdlibFileName, content: content)
+
+	try expectNoProjectDiagnostics(probe, note: "`{EditorUriStdlibDirName}/{EditorUriStdlibFileName}` opened through `{editorUriOf(file)}` — a lowercase drive letter and a percent-encoded colon, which is how VS Code spells every Windows uri — names the same file the library loader registered, and a buffer holding exactly its bytes has nothing wrong with it.")
+end 'a stdlib file opened through an editor uri publishes no diagnostics'

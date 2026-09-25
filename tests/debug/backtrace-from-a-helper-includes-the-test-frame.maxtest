@@ -1,0 +1,32 @@
+let HelperBacktraceCaseLabel = "backtrace-from-a-helper-includes-the-test-frame"
+
+let HelperFunctionName = "double"
+let TestBodyDisplayName = "test 'doubling two gives four'"
+
+test 'a backtrace from a helper a test calls names the test as the helper s caller, at the call'
+	let staged = stagedFixture(HelperBacktraceCaseLabel, fixture: TestBodyFixtureName)
+	let binary = builtTestBinary(HelperBacktraceCaseLabel, staged: staged)
+	let announceLine = anchorLine(staged, anchor: "double-announce", file: TestBodyLibraryFileName)
+	let bodyLine = anchorLine(staged, anchor: "test-body", file: TestBodyTestFileName)
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(announceLine, file: TestBodyLibraryFileName)}", RunCommand, BacktraceCommand])
+	let session = spawnDebugBatch(binary, staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let backtraces = eventsOfKind(events, kind: BacktraceEventName)
+
+	try Expect.equal(backtraces.count() as AssertedInt, expected: 1, message: "`{BacktraceCommand}` at the stop in `{HelperFunctionName}` printed no `{BacktraceEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let walked = eventAt(backtraces, index: 0)
+	var named = StringArray.create()
+	var lines = StringArray.create()
+
+	for frame in childrenOf(walked, node: walked.root, key: FramesKey) 'eachFrame'
+		named.push(textOf(walked, node: frame, key: FunctionKey))
+		lines.push("{numberOf(walked, node: frame, key: LineKey)}")
+	end 'eachFrame'
+
+	try Expect.equal(named.count() as AssertedInt, expected: 2, message: "the stack is `{HelperFunctionName}` and the test that called it: the dispatcher `maxon test` generates around the test is not the author's code and is not a frame of theirs. The walk produced: {renderedRows(named)}. {said}")
+	try Expect.equal(try named.get(0) otherwise AbsentEventText, expected: HelperFunctionName, message: "frame 0 is the helper the stop is inside. The walk produced: {renderedRows(named)}. {said}")
+	try Expect.equal(try named.get(1) otherwise AbsentEventText, expected: TestBodyDisplayName, message: "frame 1 is the test that called the helper, named by its prose — a frame hidden because of the symbol a test compiles to is the author's own code missing from their stack. The walk produced: {renderedRows(named)}. {said}")
+	try Expect.equal(try lines.get(1) otherwise AbsentEventText, expected: "{bodyLine}", message: "the test's frame stands at its call of the helper. The frames' lines: {renderedRows(lines)}. {said}")
+end 'a backtrace from a helper a test calls names the test as the helper s caller, at the call'

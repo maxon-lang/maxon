@@ -1,0 +1,10 @@
+let TraceTool = "debug_trace"
+let TraceCountArgument = "count"
+let FractionalCount = "2.5"
+
+test 'a fraction given to a whole-number argument is refused by name rather than truncated'
+	let doc = callTool(TraceTool, argumentsJson: "\{\"{TraceCountArgument}\":{FractionalCount}\}")
+
+	try Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: RpcInvalidParamsCode, message: "`{TraceTool}` with `{TraceCountArgument}: {FractionalCount}` must be refused as invalid params, not truncated to a whole number and run")
+	try Expect.contains(rpcErrorMessage(doc), needle: TraceCountArgument, message: "the refusal must name the argument it refused; it said: {rpcErrorMessage(doc)}")
+end 'a fraction given to a whole-number argument is refused by name rather than truncated'

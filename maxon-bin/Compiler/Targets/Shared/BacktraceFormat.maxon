@@ -79,31 +79,59 @@ export let SymtabEntryCodeOffsetMask = (1 shl (SymbolTableColumnBytes * 8)) - 1
 export let SymtabEntryOffCodeOffset = 0 as Imm32  // an entry's first column
 export let SymtabEntryOffNameOffset = SymbolTableColumnBytes as Imm32  // … and its second
 
-// ⭐⭐⭐ **THE PER-SYMBOL BYTE: FROM WHICH OFFSET INSIDE THIS FUNCTION MAY A THREAD BE STOPPED WHERE IT
-// STANDS?** Zero means NEVER — every hand-assembled chunk and every un-guarded runtime function, because a
-// thread stopped inside one of those is mid-context-switch, mid-stack-move, on the system stack or holding a
-// lock. Any other value is `1 + the number of bytes at the function's start that are NOT safe`.
+// The per-symbol byte. Its low seven bits (`SymtabSafeFromMask`) say from which offset inside the
+// function a thread may be stopped where it stands: zero means never — every hand-assembled chunk
+// and every unguarded runtime function, because a thread stopped inside one of those is
+// mid-context-switch, mid-stack-move, on the system stack or holding a lock — and any other value
+// is `1 +` the number of unsafe granules at the function's start, a granule being a byte on x64 and
+// an instruction on arm64 (`safePointGranuleOf`, which `__gt_preempt_safe` multiplies back by).
+// Bit 7 (`SymtabScaffoldingBit`) marks the runtime's own code
+// (`FunctionCodeChunk.compilerScaffolding`); `runtime/DebugAgent.maxon` restates it, pinned by
+// `checkDebugAgentGeometry`.
 //
-// ⛔⛔ **THE UNSAFE PREFIX IS THE PROLOGUE STACK GUARD, AND IT IS UNSAFE FOR ONE REASON: IT HOLDS A
-// MACHINE-BOUND VALUE IN A REGISTER.** The guard walks TLS to the MACHINE and then to the machine's current
-// green thread; for the instruction between those two loads the register names a MACHINE. A stop there parks
-// the thread, and the thread may resume on a DIFFERENT machine — where that register now names the wrong
-// machine and the next load reads a green thread belonging to somebody else. The guard's cold path carries
-// the same hazard one step further, handing `__gt_morestack` a system-stack top that is another machine's.
-// Excluding the whole guard region is what makes "this register is still mine" true of every instruction a
-// stop can land on.
+// The unsafe prefix is the prologue stack guard, which holds a machine-bound value in a register:
+// it walks TLS to the machine and then to that machine's current green thread, and between the two
+// loads the register names a machine. A thread parked there may resume on a different machine,
+// where the next load reads another machine's green thread; the guard's cold path likewise hands
+// `__gt_morestack` another machine's system-stack top. Excluding the whole guard keeps every
+// stoppable instruction's registers the thread's own.
 //
-// ⚠ **IT IS A PROVENANCE QUESTION *AND* AN OFFSET, NOT ONE OR THE OTHER.** The provenance half is
-// `TargetPrinter.skipsGreenThreadStackGuard`, and it is NOT "does the function carry a guard": a call-free
-// loop that spills nothing reserves no frame and so carries none, and that is exactly the function this
-// mechanism exists to stop.
+// Whether a function may be stopped is a provenance question as well as an offset. The provenance
+// half is `TargetPrinter.skipsGreenThreadStackGuard`, not "does the function carry a guard": a
+// call-free loop that spills nothing reserves no frame and carries none, and it is exactly the
+// function this exists to stop.
 export let SymtabSafeFromBias = 1
 let SymtabNeverPreemptible = 0
+export let SymtabSafeFromMask = 0x7F
+export let SymtabScaffoldingBit = 0x80
+let SymtabNotScaffolding = 0
 
-// The widest unsafe prefix one byte can carry. The guard is a few dozen fixed bytes, so a function that
-// exceeded this would be a guard that had grown by an order of magnitude — refused at the writer rather
-// than truncated into a safe point that is not one.
-let SymtabMaxUnsafePrefix = 254
+// The widest unsafe prefix, in granules, the byte's seven safe-point bits can carry. A guard past
+// it is refused rather than truncated into a safe point that is not one.
+let SymtabMaxUnsafeGranules = SymtabSafeFromMask - SymtabSafeFromBias
+export typealias SafePointGranule = int(1 to 4)
+
+let X64SafePointGranule = 1 as SafePointGranule
+
+export function safePointGranuleOf(target Target) returns SafePointGranule
+	return match target.cpu 'isa'
+		x64 gives X64SafePointGranule
+		arm64 gives Arm64InstructionBytes as SafePointGranule
+		wasm32 panic("safePointGranuleOf: wasm32 stops no green thread asynchronously, so no safe-point column is written for it")
+	end 'isa'
+end 'safePointGranuleOf'
+
+function widestUnsafePrefix(granule SafePointGranule) returns CodeOffset
+	return (SymtabMaxUnsafeGranules as CodeOffset) * (granule as CodeOffset)
+end 'widestUnsafePrefix'
+
+export function requireStackGuardFitsTheSafePointColumn(guardBytes CodeOffset, target Target)
+	let widest = widestUnsafePrefix(safePointGranuleOf(target))
+
+	if guardBytes > widest 'theGuardOutgrewTheColumn'
+		panic("requireStackGuardFitsTheSafePointColumn: the {targetToString(target)} green-thread stack guard takes {guardBytes} bytes at the widest frame it can encode, past the {widest} the `__symtable` safe-point bits can carry — a function with such a frame could not be given a safe point past its guard. Widen `SymtabSafeFromMask`, or shorten the guard")
+	end 'theGuardOutgrewTheColumn'
+end 'requireStackGuardFitsTheSafePointColumn'
 
 // What the shared lookup answers for a `.text` offset below the first symbol. A real answer is an index into
 // an array, so the two cannot collide.
@@ -315,7 +343,7 @@ export type InlineFrameTables
 		return Self{sites: InlineSiteArray.create(), ranges: InlineRangeArray.create()}
 	end 'create'
 
-	export function appendChunk(chunk FunctionCodeChunk, funcStart CodeOffset)
+	export function appendChunk(chunk FunctionCodeChunk, funcStart CodeOffset) returns InlineSiteIndex
 		let siteBase = self.sites.count() as InlineSiteIndex
 
 		for site in chunk.inlineSites 'eachSite'
@@ -324,7 +352,7 @@ export type InlineFrameTables
 				site(index) gives InlineSiteRef.site(siteBase + index)
 			end 'p'
 
-			self.sites.push(InlineSite.create(site.calleeName, parent: parent))
+			self.sites.push(site.reparented(parent))
 		end 'eachSite'
 
 		for range in chunk.inlineRanges 'eachRange'
@@ -334,6 +362,8 @@ export type InlineFrameTables
 
 			self.ranges.push(InlineRange.create(funcStart + range.codeStart, codeEnd: funcStart + range.codeEnd, site: siteBase + range.site))
 		end 'eachRange'
+
+		return siteBase
 	end 'appendChunk'
 end 'InlineFrameTables'
 
@@ -359,13 +389,9 @@ export function buildInlineFrameTableBytes(tables InlineFrameTables) returns Byt
 	var prevEnd = 0 as CodeOffset
 
 	for (iter, range) in tables.ranges.withIterator() 'eachRange'
-		if range.codeStart >= range.codeEnd 'emptyRange'
-			panic("buildInlineFrameTableBytes: range {iter.index()} is [{range.codeStart}, {range.codeEnd}) — the builder drops an empty block, so an empty range here is a chunk rebased past its own code")
-		end 'emptyRange'
-
-		if range.codeStart < prevEnd 'overlapsOrDescends'
-			panic("buildInlineFrameTableBytes: range {iter.index()} starts at .text offset {range.codeStart}, inside or before its predecessor's end {prevEnd} — the ranges must ascend and stay disjoint, because the walkers stop at the first range past their offset")
-		end 'overlapsOrDescends'
+		if not mxdbgCodeRangeFollows(range.codeStart as MxdbgCodeOffset, codeEnd: range.codeEnd as MxdbgCodeOffset, previousEnd: prevEnd as MxdbgCodeOffset) 'emptyOverlappingOrDescending'
+			panic("buildInlineFrameTableBytes: range {iter.index()} is [{range.codeStart}, {range.codeEnd}) behind its predecessor's end {prevEnd} — the builder drops an empty block, and the ranges must ascend and stay disjoint because the walkers stop at the first range past their offset")
+		end 'emptyOverlappingOrDescending'
 
 		prevEnd = range.codeEnd
 		writeDword(table, value: range.codeStart as MachineWord)
@@ -410,12 +436,12 @@ export let ElidedFramesLine = b"  ...additional frames elided...\n"
 
 // The faults a handler converts. The vocabulary the CLASSIFICATION and the DIAGNOSTIC share: what the OS
 // hands over differs per platform (an NTSTATUS on Windows, a signal number and a fault address on POSIX),
-// but what gets printed must not, so the mapping to words is asked once, of `faultPanicMessage`.
+// but what gets printed must not, so the mapping to words is asked once, of `faultWords`.
 //
-// ⚠ **THE FIRST TWO ARE ONE INSTRUCTION'S.** x64's `idiv` raises the same `#DE` for a zero divisor and for
-// an unrepresentable quotient, and Windows tells them apart by code. A compiled divide reaches neither: a
-// possibly-zero divisor throws, and `i64.min / -1` panics with `overflow`'s words from a guard the parser
-// emits (`Parser.emitQuotientOverflowGuard`).
+// The first two are one instruction's: x64's `idiv` raises the same `#DE` for a zero divisor and
+// for an unrepresentable quotient, and Windows tells them apart by code. A compiled divide reaches
+// neither: a possibly-zero divisor throws, and `i64.min / -1` panics with `overflow`'s words from a
+// guard the parser emits (`Parser.emitQuotientOverflowGuard`).
 export enum HardwareFaultKind
 	divideByZero
 	overflow
@@ -444,26 +470,29 @@ let FaultRipTag = b" at rip=0x"
 export let FaultDiagBaseTag = b" diag_base=0x"
 export let FaultLineTerminator = b"\n"
 
-// ONE answer to "which fault prints what", for every handler in the tree and for the quotient guard.
-function faultPanicMessage(kind HardwareFaultKind) returns ByteArray
+// The one answer to which fault prints what — for every handler in the tree, the quotient guard and
+// the debugger's fault stop.
+export function faultWords(kind HardwareFaultKind) returns ByteArray
 	return match kind 'kind'
-		divideByZero gives b"panic: integer divide by zero"
-		overflow gives b"panic: integer overflow"
-		accessViolation gives b"panic: nil pointer or invalid memory access"
-		stackOverflow gives b"panic: stack overflow"
+		divideByZero gives b"integer divide by zero"
+		overflow gives b"integer overflow"
+		accessViolation gives b"nil pointer or invalid memory access"
+		stackOverflow gives b"stack overflow"
 	end 'kind'
-end 'faultPanicMessage'
+end 'faultWords'
+
+let FaultPanicPrefix = b"panic: "
 
 // The whole fixed prefix of `kind`'s fault line, up to the ASLR-dependent hex.
 export function faultPanicLinePrefix(kind HardwareFaultKind) returns ByteArray
 	return faultLineOf(kind, tail: FaultRipTag)
 end 'faultPanicLinePrefix'
 
-// `kind`'s words followed by `tail`, in a fresh buffer — the words are an immortal literal and are never
-// appended to in place.
+// A fresh buffer: `faultWords` answers an immortal literal, which is never appended to in place.
 export function faultLineOf(kind HardwareFaultKind, tail ByteArray) returns ByteArray
 	var line = ByteArray.create()
-	line.append(faultPanicMessage(kind))
+	line.append(FaultPanicPrefix)
+	line.append(faultWords(kind))
 	line.append(tail)
 	return line
 end 'faultLineOf'
@@ -540,7 +569,7 @@ export let MainThreadEntryName = b"mrt_main_entry"
 // anywhere else, its frames would be named after whatever function preceded it.
 export function recordChunkSymbol(symbols DebugSymbolArray, chunk FunctionCodeChunk, codeOffset CodeOffset)
 	if not chunk.funcName.equals(MainThreadEntryName) 'ownSymbol'
-		symbols.push(DebugSymbol.create(chunk.funcName, codeOffset: codeOffset, asyncPreemptible: chunk.asyncPreemptible, asyncUnsafePrefixBytes: chunk.asyncUnsafePrefixBytes))
+		symbols.push(DebugSymbol.create(chunk.funcName, codeOffset: codeOffset, asyncPreemptible: chunk.asyncPreemptible, asyncUnsafePrefixBytes: chunk.asyncUnsafePrefixBytes, compilerScaffolding: chunk.compilerScaffolding))
 		return
 	end 'ownSymbol'
 
@@ -559,25 +588,39 @@ end 'recordChunkSymbol'
 // descriptor is a target-independent fact two mechanisms name — this file's writers and the Std tier's
 // `printError` — and one spelling is what keeps them from drifting. This file holds vocabulary only.
 
-// One symbol's safe-point byte — see `SymtabSafeFromBias`.
-function symbolSafeFromByte(sym DebugSymbol) returns MachineWord
+// One symbol's safe-point bits — see `SymtabSafeFromBias`.
+function symbolSafeFromByte(sym DebugSymbol, granule SafePointGranule) returns MachineWord
 	if not sym.asyncPreemptible 'never'
 		return SymtabNeverPreemptible
 	end 'never'
 
-	if sym.asyncUnsafePrefixBytes > SymtabMaxUnsafePrefix 'prefixTooWide'
-		panic("symbolSafeFromByte: '{String.from(sym.name)}' has {sym.asyncUnsafePrefixBytes} bytes of stack guard before its first safe point, past the {SymtabMaxUnsafePrefix} one byte can carry — a thread stopped inside that guard holds another machine's value in a register, so the prefix may not be truncated. Widen the column")
+	let granuleBytes = granule as CodeOffset
+	let partialInstruction = try (sym.asyncUnsafePrefixBytes mod granuleBytes) otherwise panic("symbolSafeFromByte: a safe-point granule is at least one byte")
+
+	if partialInstruction != 0 'splitsAnInstruction'
+		panic("symbolSafeFromByte: '{String.from(sym.name)}' has {sym.asyncUnsafePrefixBytes} bytes of stack guard, which is not a whole number of this instruction set's {granule}-byte instructions")
+	end 'splitsAnInstruction'
+
+	if sym.asyncUnsafePrefixBytes > widestUnsafePrefix(granule) 'prefixTooWide'
+		panic("symbolSafeFromByte: '{String.from(sym.name)}' has {sym.asyncUnsafePrefixBytes} bytes of stack guard before its first safe point, past the {widestUnsafePrefix(granule)} the byte's safe-point bits can carry — a thread stopped inside that guard holds another machine's value in a register, so the prefix may not be truncated. Widen the column")
 	end 'prefixTooWide'
 
-	return (sym.asyncUnsafePrefixBytes as MachineWord) + SymtabSafeFromBias
+	let unsafeGranules = try (sym.asyncUnsafePrefixBytes / granuleBytes) otherwise panic("symbolSafeFromByte: a safe-point granule is at least one byte")
+
+	return (unsafeGranules as MachineWord) + SymtabSafeFromBias
 end 'symbolSafeFromByte'
+
+function symbolFlagsByte(sym DebugSymbol, granule SafePointGranule) returns MachineWord
+	return symbolSafeFromByte(sym, granule: granule) or (SymtabScaffoldingBit if sym.compilerScaffolding else SymtabNotScaffolding)
+end 'symbolFlagsByte'
 
 // Serialize the symbol table. `symbols` MUST already be in ascending `codeOffset` order:
 // the runtime's lookup keeps the LAST entry satisfying `text_offset >= codeOffset`, which
 // is the greatest such entry ONLY if the table ascends. Concat lays chunks out in order,
 // so the order is a fact of the layout — asserted here rather than re-established by a
 // sort, because a sort would silently paper over a layout that had stopped ascending.
-export function buildSymbolTableBytes(symbols DebugSymbolArray) returns ByteArray
+export function buildSymbolTableBytes(symbols DebugSymbolArray, target Target) returns ByteArray
+	let granule = safePointGranuleOf(target)
 	let headerSize = SymbolTableHeaderBytes + SymbolTableEntryBytes * symbols.count()
 	var names = ByteArray.create()
 	var flags = ByteArray.create()
@@ -615,7 +658,7 @@ export function buildSymbolTableBytes(symbols DebugSymbolArray) returns ByteArra
 
 		names.append(sym.name)
 		names.push(0)
-		flags.push(symbolSafeFromByte(sym))
+		flags.push(symbolFlagsByte(sym, granule: granule))
 	end 'entries'
 
 	// The flags run is pushed once per entry in the loop above, so its length is the symbol count by

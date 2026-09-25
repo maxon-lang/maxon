@@ -1,0 +1,39 @@
+let OkStatus = 200 as HttpStatusNumber
+let IdleTimeoutSeconds = 1
+let PastIdleMs = 3000
+let HttpIdleStagingDir = "temp/mcp-http-idle"
+
+test 'an idle session is reaped on time with no request arriving, and its debuggee with it'
+	let program = stagedProgram(HttpIdleStagingDir, fileName: "main.maxon", source: debuggableProgramSource())
+	let executable = buildStagedProgram(program)
+	let anchored = anchorLineIn(program, anchor: DebuggableProgramAnchor)
+
+	var server = StreamingHttpMcpServer.start(["{McpIdleTimeoutOptionPrefix}{IdleTimeoutSeconds}"])
+	let (initialized, sessionId) = server.initializeSession()
+	let started = httpToolCall(server, sessionId: sessionId, id: 2, name: DebugStartTool, argumentsJson: debugExecutableArgument(executable))
+	_ = httpToolCall(server, sessionId: sessionId, id: 3, name: DebugBreakTool, argumentsJson: debugBreakTargetArgument(anchored))
+	let continued = httpToolCall(server, sessionId: sessionId, id: 4, name: DebugContinueTool)
+
+	sleep(PastIdleMs)
+
+	var deletable = true
+
+	try File.delete(executable) otherwise 'stillHeld'
+		deletable = false
+	end 'stillHeld'
+
+	try server.stop()
+
+	try Expect.equal(initialized.statusCode as AssertedInt, expected: OkStatus as AssertedInt)
+	try Expect.isFalse(toolCallIsError(started), message: "`{DebugStartTool}` refused a freshly built executable: {toolCallText(started)}")
+	try Expect.equal(debugToolState(continued), expected: DebugStoppedState, message: "the program must be STOPPED and therefore alive when the session goes idle, or the delete below proves nothing")
+	try Expect.isTrue(deletable, message: "no request arrived after the session went idle for longer than `{McpIdleTimeoutOptionPrefix}{IdleTimeoutSeconds}`, so only a sweep that runs on time can end it; its debuggee's image is still held, so the session outlived its timeout")
+end 'an idle session is reaped on time with no request arriving, and its debuggee with it'
+
+test 'closing stdin ends the http server with exit 0'
+	var server = StreamingHttpMcpServer.start(StringArray.create())
+	let (initialized, _) = server.initializeSession()
+	try server.stop()
+
+	try Expect.equal(initialized.statusCode as AssertedInt, expected: OkStatus as AssertedInt, message: "the control `initialize` did not succeed, so the server that was stopped may never have served")
+end 'closing stdin ends the http server with exit 0'

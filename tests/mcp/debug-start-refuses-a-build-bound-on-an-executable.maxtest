@@ -1,0 +1,21 @@
+let BuildBoundStagingDir = "temp/mcp-debug-build-bound-on-an-executable"
+let AnyBoundSeconds = "5"
+
+test 'debug_start refuses a build bound with an executable, which it never builds, and names the argument'
+	let program = stagedProgram(BuildBoundStagingDir, fileName: "main.maxon", source: debuggableProgramSource())
+	let executable = buildStagedProgram(program)
+
+	var session = StreamingMcpSession.startFrom(testedCompilerPath())
+	stdioHandshake(session)
+
+	let bounded = stdioToolCall(session, id: 2, name: DebugStartTool, argumentsJson: argumentsOf([executableMember(executable), secondsMember(TimeoutSecondsArgument, seconds: AnyBoundSeconds)]))
+	let unbounded = stdioToolCall(session, id: 3, name: DebugStartTool, argumentsJson: debugExecutableArgument(executable))
+	let stopped = stdioToolCall(session, id: 4, name: DebugStopTool)
+
+	_ = try session.close() otherwise 0
+
+	try Expect.isTrue(toolCallIsError(bounded), message: "`{TimeoutSecondsArgument}` bounds the compiler a `{DebugStartTool}` runs to build a `source`; with an `executable` nothing is built, so the argument must be refused rather than ignored: {toolCallText(bounded)}")
+	try Expect.contains(toolCallText(bounded), needle: TimeoutSecondsArgument, message: "the refusal must name the argument it refused: {toolCallText(bounded)}")
+	try Expect.isFalse(toolCallIsError(unbounded), message: "the control: the same `executable` without `{TimeoutSecondsArgument}` must launch: {toolCallText(unbounded)}")
+	try Expect.isFalse(toolCallIsError(stopped), message: "`{DebugStopTool}` refused to end the control's session: {toolCallText(stopped)}")
+end 'debug_start refuses a build bound with an executable, which it never builds, and names the argument'

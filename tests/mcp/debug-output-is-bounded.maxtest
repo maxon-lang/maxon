@@ -1,0 +1,47 @@
+let FloodStagingDir = "temp/mcp-debug-output-bound"
+let FloodLineCount = 40000
+let FloodLinePadding = "................................................................................................................"
+let SinkByteCapacity = 4194304
+let DroppedNoticeOpening = "[maxon: "
+let LastFloodLine = "flood line 39999 "
+
+typealias HeldBytes = int(0 to u64.max)
+
+function floodingProgramSource() returns String
+	var source = ""
+	source.append("function main() returns ExitCode\n")
+	source.append("\tfor i in 0 upto {FloodLineCount} 'flood'\n")
+	source.append("\t\tprint(\"flood line \{i\} {FloodLinePadding}\\n\")\n")
+	source.append("\tend 'flood'\n")
+	source.append("\n")
+	source.append("\treturn 0\n")
+	source.append("end 'main'\n")
+	return source
+end 'floodingProgramSource'
+
+test 'output the debugger has not taken is bounded, and the drop is announced ahead of what is kept'
+	let program = stagedProgram(FloodStagingDir, fileName: "main.maxon", source: floodingProgramSource())
+
+	var session = StreamingMcpSession.startFrom(testedCompilerPath())
+	stdioHandshake(session)
+
+	let started = stdioToolCall(session, id: 2, name: DebugStartTool, argumentsJson: sourceArgument(program.toString()))
+	let ran = stdioToolCall(session, id: 3, name: DebugContinueTool)
+
+	_ = try session.close() otherwise 0
+
+	try Expect.isFalse(toolCallIsError(started), message: "`{DebugStartTool}` refused the flooding program: {toolCallText(started)}")
+
+	let lines = debugOutputLines(ran)
+	let first = try lines.get(0) otherwise panic("the run printed {FloodLineCount} lines and `{DebugContinueTool}` answered none of them")
+	let last = try lines.get(lines.count() - 1) otherwise panic("a non-empty answer has a last line")
+	var held = 0 as HeldBytes
+
+	for line in lines 'eachLine'
+		held = held + (line.byteLength() as HeldBytes)
+	end 'eachLine'
+
+	try Expect.startsWith(first, needle: DroppedNoticeOpening, message: "the program printed more than {SinkByteCapacity} bytes before anyone took them, so the answer must open with the notice that some were dropped")
+	try Expect.atMost((held - first.byteLength() as HeldBytes) as AssertedInt, than: SinkByteCapacity, message: "what is held for the debugger beside the notice must stay within the sink's bytes")
+	try Expect.startsWith(last, needle: LastFloodLine, message: "the drop takes the OLDEST lines, so the last one printed must survive")
+end 'output the debugger has not taken is bounded, and the drop is announced ahead of what is kept'

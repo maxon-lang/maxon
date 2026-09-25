@@ -1,0 +1,26 @@
+let FractionalStagingDir = "temp/mcp-fractional-stop-timeout"
+let HalfASecond = "0.5"
+let UnderAMillisecond = "0.0005"
+
+function startedWithStopTimeout(executable FilePath, seconds String) returns JsonDoc
+	var session = StreamingMcpSession.startFrom(testedCompilerPath())
+	stdioHandshake(session)
+
+	let started = stdioToolCall(session, id: 2, name: DebugStartTool, argumentsJson: argumentsOf([executableMember(executable), secondsMember(StopTimeoutArgument, seconds: seconds)]))
+	_ = stdioToolCall(session, id: 3, name: DebugStopTool)
+	_ = try session.close() otherwise 0
+
+	return started
+end 'startedWithStopTimeout'
+
+test 'a stop timeout of a fraction of a second is accepted, and one under a millisecond is refused by name'
+	let program = stagedProgram(FractionalStagingDir, fileName: "main.maxon", source: debuggableProgramSource())
+	let executable = buildStagedProgram(program)
+
+	let half = startedWithStopTimeout(executable, seconds: HalfASecond)
+	let tiny = startedWithStopTimeout(executable, seconds: UnderAMillisecond)
+
+	try Expect.isFalse(toolCallIsError(half), message: "`{StopTimeoutArgument}: {HalfASecond}` is the number of seconds the CLI's `--stop-timeout=` accepts, so `{DebugStartTool}` must accept it too: {toolCallText(half)}")
+	try Expect.equal(rpcErrorCode(tiny) as AssertedInt, expected: RpcInvalidParamsCode, message: "`{StopTimeoutArgument}: {UnderAMillisecond}` is under the one-millisecond resolution a stop wait has, so the roster must refuse it as invalid params rather than read it as no wait at all")
+	try Expect.contains(rpcErrorMessage(tiny), needle: StopTimeoutArgument, message: "the refusal must name the argument it refused; it said: {rpcErrorMessage(tiny)}")
+end 'a stop timeout of a fraction of a second is accepted, and one under a millisecond is refused by name'

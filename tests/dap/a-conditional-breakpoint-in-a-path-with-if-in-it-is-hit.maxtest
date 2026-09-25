@@ -1,0 +1,49 @@
+let IfPathCaseLabel = "a path  with if  in it"
+let HitBodyAnchor = "hit-body"
+let SpacedCondition = "i  ==  11"
+let ChosenIteration = "11"
+let LoopLocalName = "i"
+
+type IfPathSession implements DapSession
+	let executable as FilePath
+	let source as FilePath
+	let anchored as SourceLine
+	export var verified as bool
+	export var stopReason as String
+	export var chosen as String
+
+	static function create(executable FilePath, source FilePath, anchored SourceLine) returns IfPathSession
+		return Self{executable: executable, source: source, anchored: anchored, verified: false, stopReason: "", chosen: ""}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+		_ = try client.request(LaunchCommand, argumentsJson: dapLaunchArguments(self.executable))
+		_ = try client.awaitEvent(InitializedEvent)
+
+		let placed = try client.request(SetBreakpointsCommand, argumentsJson: dapSetConditionalBreakpointArguments(self.source, line: self.anchored, condition: SpacedCondition))
+		self.verified = dapBreakpointVerified(placed, index: 0)
+
+		_ = try client.request(ConfigurationDoneCommand)
+
+		let stopped = try client.awaitEvent(StoppedEvent)
+		self.stopReason = dapBodyString(stopped, key: "reason")
+
+		let threadId = dapBodyNumber(stopped, key: "threadId")
+		let frameId = dapTopFrameId(try client.request(StackTraceCommand, argumentsJson: dapThreadArguments(threadId)))
+		let locals = try client.request(VariablesCommand, argumentsJson: dapVariablesArguments(dapScopeReference(try client.request(ScopesCommand, argumentsJson: dapScopesArguments(frameId)), name: LocalsScopeName)))
+		self.chosen = dapVariableValue(locals, name: LoopLocalName)
+
+		_ = try client.request(DisconnectCommand)
+	end 'drive'
+end 'IfPathSession'
+
+test 'a conditional breakpoint whose source path holds " if " and whose condition is spaced out is armed and hit'
+	let staged = dapStagedFixture(IfPathCaseLabel, fixture: ConditionFixtureName)
+	var session = IfPathSession.create(dapBuildFixture(staged), source: dapStagedSource(staged), anchored: dapAnchorLine(staged, anchor: HitBodyAnchor))
+	try dapRunSession(session, completing: "arm the breakpoint and reach its condition")
+
+	try Expect.isTrue(session.verified, message: "the breakpoint's path is `{dapStagedSource(staged).toString()}`: a path is a path however many spaces or `if`s it holds, so the breakpoint must be verified")
+	try Expect.equal(session.stopReason, expected: BreakpointReason, message: "the program reaches the armed line with the condition true once; it said `{session.stopReason}`")
+	try Expect.equal(session.chosen, expected: ChosenIteration, message: "the condition `{SpacedCondition}` names iteration {ChosenIteration}, and the stop must be on it")
+end 'a conditional breakpoint whose source path holds " if " and whose condition is spaced out is armed and hit'

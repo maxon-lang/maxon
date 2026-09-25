@@ -1,4 +1,5 @@
-export typealias StopTimeoutMs = int(0 to i64.max)
+export typealias StopTimeoutMs = int(0 to 1000000000000000)
+export typealias DebugDeadline = int(0 to i64.max)
 export typealias EngineSeq = int(0 to i64.max)
 export typealias EngineReadLength = int(0 to 512)
 export typealias EngineRegisterNumber = int(0 to 79)
@@ -18,6 +19,7 @@ end 'DebugMemory'
 
 export type EngineStop
 	export var reason as DebugAddress
+	export var fault as DebugAddress
 	export var machine as DebugAddress
 	export var greenThread as DebugAddress
 	export var traceMark as DebugAddress
@@ -25,17 +27,28 @@ export type EngineStop
 	export var stackPointer as DebugAddress
 	export var framePointer as DebugAddress
 	export var returnAddresses as DebugAddressArray
-	export var framePointers as DebugAddressArray
+	export var callerFramePointers as DebugAddressArray
 	export var truncated as bool
+	export var conditionMissed as bool
 
-	export static function create(reason DebugAddress, machine DebugAddress, greenThread DebugAddress, traceMark DebugAddress, pc DebugAddress, stackPointer DebugAddress, framePointer DebugAddress, returnAddresses DebugAddressArray, framePointers DebugAddressArray, truncated bool) returns EngineStop
-		return Self{reason: reason, machine: machine, greenThread: greenThread, traceMark: traceMark, pc: pc, stackPointer: stackPointer, framePointer: framePointer, returnAddresses: returnAddresses, framePointers: framePointers, truncated: truncated}
+	export static function create(reason DebugAddress, fault DebugAddress, machine DebugAddress, greenThread DebugAddress, traceMark DebugAddress, pc DebugAddress, stackPointer DebugAddress, framePointer DebugAddress, returnAddresses DebugAddressArray, callerFramePointers DebugAddressArray, truncated bool, conditionMissed bool) returns EngineStop
+		return Self{reason: reason, fault: fault, machine: machine, greenThread: greenThread, traceMark: traceMark, pc: pc, stackPointer: stackPointer, framePointer: framePointer, returnAddresses: returnAddresses, callerFramePointers: callerFramePointers, truncated: truncated, conditionMissed: conditionMissed}
 	end 'create'
 
-	export static function walked(returnAddresses DebugAddressArray, framePointers DebugAddressArray, truncated bool) returns EngineStop
-		return Self{reason: 0, machine: 0, greenThread: 0, traceMark: 0, pc: 0, stackPointer: 0, framePointer: 0, returnAddresses: returnAddresses, framePointers: framePointers, truncated: truncated}
+	export static function walked(returnAddresses DebugAddressArray, callerFramePointers DebugAddressArray, truncated bool) returns EngineStop
+		return Self{reason: 0, fault: 0, machine: 0, greenThread: 0, traceMark: 0, pc: 0, stackPointer: 0, framePointer: 0, returnAddresses: returnAddresses, callerFramePointers: callerFramePointers, truncated: truncated, conditionMissed: false}
 	end 'walked'
+
+	export function callerFramePointerOf(frame ElementIndex) returns DebugAddress
+		return try self.callerFramePointers.get(frame) otherwise panic("EngineStop.callerFramePointerOf: the walk harvests one caller frame pointer per return address, and {frame} is past the {self.returnAddresses.count()} it holds")
+	end 'callerFramePointerOf'
 end 'EngineStop'
+
+export union CommandInquiry
+	answered
+	refused(reason String)
+	gone(outcome TargetOutcome)
+end 'CommandInquiry'
 
 export union CommandOutcome
 	done
@@ -43,6 +56,37 @@ export union CommandOutcome
 	refused(reason String)
 	unacknowledged
 	gone(outcome TargetOutcome)
+
+	export function accepted() returns bool
+		return match self 'which'
+			done gives true
+			nothingParked or
+				refused or
+				unacknowledged or
+				gone gives false
+		end 'which'
+	end 'accepted'
+
+	export function leftInDoubt() returns bool
+		return match self 'which'
+			unacknowledged gives true
+
+			done or
+				nothingParked or
+				refused or
+				gone gives false
+		end 'which'
+	end 'leftInDoubt'
+
+	export function inquiry() returns CommandInquiry
+		return match self 'which'
+			done gives CommandInquiry.answered
+			nothingParked gives CommandInquiry.refused(DebugNotRunningReason)
+			refused(reason) gives CommandInquiry.refused(reason)
+			unacknowledged gives CommandInquiry.refused(DebugUnacknowledgedReason)
+			gone(ending) gives CommandInquiry.gone(ending)
+		end 'which'
+	end 'inquiry'
 end 'CommandOutcome'
 
 export union StopWait
@@ -58,9 +102,19 @@ export union EngineStart
 end 'EngineStart'
 
 export let DebugUnclassifiedReason = "unclassified"
+export let DebugOutOfTextReason = "out-of-text"
+let DebugInsideRuntimeSymbolReason = "inside-runtime-symbol"
 export let DebugUnacknowledgedReason = "unacknowledged"
 export let DebugNotRunningReason = "not-running"
 let DebugNoSuchBreakpointReason = "no-such-breakpoint"
+let DebugReturnHoldTakenReason = "return-hold-taken"
+export let DebugFaultIsTerminalReason = "fault-is-terminal"
+let DebugTableFullReason = "table-full"
+let DebugUnknownCommandReason = "unknown-command"
+let DebugNotStoppedReason = "not-stopped"
+let DebugHoldTableFullReason = "hold-table-full"
+let DebugThreadIsRunningReason = "thread-is-running"
+let DebugNotPausableReason = "not-pausable"
 
 let SegmentNamePrefix = "maxon_dbg_"
 
@@ -73,13 +127,157 @@ let FirstStopSeq = 1
 type EngineBreakpoint
 	export let offset as DebugAddress
 	export let address as DebugAddress
+	export let conditioned as bool
 
-	static function create(offset DebugAddress, address DebugAddress) returns EngineBreakpoint
-		return Self{offset: offset, address: address}
+	static function create(offset DebugAddress, address DebugAddress, conditioned bool) returns EngineBreakpoint
+		return Self{offset: offset, address: address, conditioned: conditioned}
 	end 'create'
 end 'EngineBreakpoint'
 
 typealias EngineBreakpointArray = Array with EngineBreakpoint
+
+union EngineBreakpointLookup
+	none
+	at(breakpoint EngineBreakpoint)
+end 'EngineBreakpointLookup'
+
+union EngineReturnPoint
+	at(point DebugReturnPoint, offset DebugAddress, heldOverACondition bool)
+	doubted(offset DebugAddress, heldOverACondition bool)
+
+	function holdsTheAgentsHold() returns bool
+		return match self 'standing'
+			at(_, _, held) gives held
+			doubted(_, held) gives held
+		end 'standing'
+	end 'holdsTheAgentsHold'
+
+	function withoutTheHoldAt(armed DebugAddress) returns EngineReturnPoint
+		return match self 'standing'
+			at(point, offset, held) gives EngineReturnPoint.at(point, offset: offset, heldOverACondition: held and offset != armed)
+			doubted(offset, held) gives EngineReturnPoint.doubted(offset, heldOverACondition: held and offset != armed)
+		end 'standing'
+	end 'withoutTheHoldAt'
+
+	function heldIfAt(holding DebugAddress) returns EngineReturnPoint
+		return match self 'standing'
+			at(point, offset, held) gives EngineReturnPoint.at(point, offset: offset, heldOverACondition: held or offset == holding)
+			doubted gives self
+		end 'standing'
+	end 'heldIfAt'
+
+	function movedWith(movedThread DebugAddress, from DebugAddress, to DebugAddress) returns EngineReturnPoint
+		return match self 'standing'
+			at(point, offset, held) gives EngineReturnPoint.at(point.movedWith(movedThread, from: from, to: to), offset: offset, heldOverACondition: held)
+			doubted gives self
+		end 'standing'
+	end 'movedWith'
+
+	function confirmedPoint() returns DebugReturnPointLookup
+		return match self 'standing'
+			at(point, _, _) gives DebugReturnPointLookup.at(point)
+			doubted gives DebugReturnPointLookup.none
+		end 'standing'
+	end 'confirmedPoint'
+
+	function unheldPointAt(holding DebugAddress) returns DebugReturnPointLookup
+		return match self 'standing'
+			at(point, offset, held) gives DebugReturnPointLookup.at(point) if offset == holding and not held else DebugReturnPointLookup.none
+			doubted gives DebugReturnPointLookup.none
+		end 'standing'
+	end 'unheldPointAt'
+
+	function pointReachedBy(landed EngineStop) returns DebugReturnPointLookup
+		return match self 'standing'
+			at(point, _, _) gives DebugReturnPointLookup.at(point) if point.reachedBy(landed) else DebugReturnPointLookup.none
+			doubted gives DebugReturnPointLookup.none
+		end 'standing'
+	end 'pointReachedBy'
+end 'EngineReturnPoint'
+
+typealias EngineReturnPointArray = Array with EngineReturnPoint
+
+module union DebugReturnPointLookup
+	none
+	at(point DebugReturnPoint)
+
+	module function found() returns bool
+		return match self 'lookup'
+			none gives false
+			at gives true
+		end 'lookup'
+	end 'found'
+
+	function standsAt(address DebugAddress) returns bool
+		return match self 'lookup'
+			none gives false
+			at(point) gives point.address == address
+		end 'lookup'
+	end 'standsAt'
+end 'DebugReturnPointLookup'
+
+enum EngineLiftScope
+	doubtedOnly
+	everyPoint
+end 'EngineLiftScope'
+
+function doubtResolved(outcome CommandOutcome, doubted bool) returns CommandOutcome
+	if not doubted 'aConfirmedPoint'
+		return outcome
+	end 'aConfirmedPoint'
+
+	return match outcome 'answer'
+		refused(reason) gives CommandOutcome.done if reason == DebugNoSuchBreakpointReason else outcome
+
+		done or
+			nothingParked or
+			unacknowledged or
+			gone gives outcome
+	end 'answer'
+end 'doubtResolved'
+
+module enum DebugReturnKind
+	callReturn
+	frameReturn
+	indirectCall
+end 'DebugReturnKind'
+
+module type DebugReturnPoint
+	export let address as DebugAddress
+	export let framePointer as DebugAddress
+	export let greenThread as DebugAddress
+	export let kind as DebugReturnKind
+
+	module static function create(address DebugAddress, framePointer DebugAddress, greenThread DebugAddress, kind DebugReturnKind) returns DebugReturnPoint
+		return Self{address: address, framePointer: framePointer, greenThread: greenThread, kind: kind}
+	end 'create'
+
+	module function reachedBy(landed EngineStop) returns bool
+		if landed.pc != self.address or landed.greenThread != self.greenThread 'anotherPlaceOrThread'
+			return false
+		end 'anotherPlaceOrThread'
+
+		// A call return records the frame it lands in and a frame return the frame it leaves, so only a
+		// frame return needs a strictly higher frame pointer. A recursive activation reaches the same
+		// address in a deeper frame, whose frame pointer is lower, and must not end the walk.
+		return landed.framePointer > self.framePointer or (landed.framePointer == self.framePointer and self.kind != DebugReturnKind.frameReturn)
+	end 'reachedBy'
+
+	function movedWith(movedThread DebugAddress, from DebugAddress, to DebugAddress) returns DebugReturnPoint
+		if movedThread != self.greenThread 'anotherStack'
+			return self
+		end 'anotherStack'
+
+		return DebugReturnPoint.create(self.address, framePointer: self.framePointer + to - from, greenThread: self.greenThread, kind: self.kind)
+	end 'movedWith'
+end 'DebugReturnPoint'
+
+module typealias DebugReturnPointArray = Array with DebugReturnPoint
+
+union EngineStepPost
+	none
+	on(machine DebugAddress)
+end 'EngineStepPost'
 
 export type DebugEngine implements DebugMemory
 	var page as SharedSegment
@@ -88,12 +286,17 @@ export type DebugEngine implements DebugMemory
 	var commandSeq as EngineSeq
 	var lastStopSeq as EngineSeq
 	var breakpoints as EngineBreakpointArray
+	var returnPoints as EngineReturnPointArray
 	var textBase as DebugAddress
 	var textSize as DebugAddress
 	var cacheBase as DebugAddress
 	var cacheBytes as ByteArray
 	var cacheFilled as bool
 	var trace as DebugTraceState
+	let routing as ChildOutputRouting
+	var parkedMachine as DebugAddress
+	var stepPosted as EngineStepPost
+	var answeredUnder as DebugAddress
 
 	export static function start(program FilePath, arguments StringArray, workingDirectory FilePath, targetEnv EnvMap, routing ChildOutputRouting, stopTimeoutMs StopTimeoutMs, traced bool) returns EngineStart
 		requireEngineBoundsMatchTheLayout()
@@ -119,8 +322,8 @@ export type DebugEngine implements DebugMemory
 		let trace = openedTraceRing(program, traced: traced)
 
 		match trace 'ring'
-			untraced then break 'ring'
-			noProducer then break 'ring'
+			untraced or
+				noProducer then break 'ring'
 			ring(collector) then environment.upsert(DsActivationEnvVar, value: collector.segmentName())
 		end 'ring'
 
@@ -131,7 +334,7 @@ export type DebugEngine implements DebugMemory
 			return EngineStart.refused("could not launch the program ({e.displayReason()})")
 		end 'noChild'
 
-		var engine = Self{page: page, target: target, stopTimeoutMs: stopTimeoutMs, commandSeq: 0, lastStopSeq: 0, breakpoints: EngineBreakpointArray.create(), textBase: 0, textSize: 0, cacheBase: 0, cacheBytes: ByteArray.create(), cacheFilled: false, trace: trace}
+		var engine = Self{page: page, target: target, stopTimeoutMs: stopTimeoutMs, commandSeq: 0, lastStopSeq: 0, breakpoints: EngineBreakpointArray.create(), returnPoints: EngineReturnPointArray.create(), textBase: 0, textSize: 0, cacheBase: 0, cacheBytes: ByteArray.create(), cacheFilled: false, trace: trace, routing: routing, parkedMachine: 0, stepPosted: EngineStepPost.none, answeredUnder: DbgAnsweredLive}
 
 		return engine.awaitAttach()
 	end 'start'
@@ -146,16 +349,16 @@ export type DebugEngine implements DebugMemory
 
 	function pumpTrace()
 		match self.trace 'ring'
-			untraced then break 'ring'
-			noProducer then break 'ring'
+			untraced or
+				noProducer then break 'ring'
 			ring(collector) then collector.pump()
 		end 'ring'
 	end 'pumpTrace'
 
 	function awaitAttach() returns EngineStart
-		let deadline = (Clock.nowMs() as StopTimeoutMs) + self.stopTimeoutMs
+		let deadline = debugDeadlineAfter(self.stopTimeoutMs)
 
-		while (Clock.nowMs() as StopTimeoutMs) < deadline 'poll'
+		while not debugDeadlinePassed(deadline) 'poll'
 			self.target.pump()
 			let published = self.readWord(DbgOffStopSeq)
 
@@ -168,21 +371,14 @@ export type DebugEngine implements DebugMemory
 			end 'parkedAtEntry'
 
 			if not targetIsRunning(self.target.poll()) 'endedWithoutAttaching'
-				return self.abandonedStart()
+				return EngineStart.noAgent(self.close())
 			end 'endedWithoutAttaching'
 
 			sleep(PollIntervalMs)
 		end 'poll'
 
-		return self.abandonedStart()
+		return EngineStart.noAgent(self.close())
 	end 'awaitAttach'
-
-	function abandonedStart() returns EngineStart
-		let outcome = self.target.reap()
-		self.page.close()
-
-		return EngineStart.noAgent(outcome)
-	end 'abandonedStart'
 
 	export function imageTextBase() returns DebugAddress
 		return self.textBase
@@ -204,6 +400,20 @@ export type DebugEngine implements DebugMemory
 		return outcome
 	end 'close'
 
+	export function takeOutput() returns CollectedLines
+		self.target.pump()
+
+		return self.collectedOutput()
+	end 'takeOutput'
+
+	export function collectedOutput() returns CollectedLines
+		return match self.routing 'where'
+			verbatim or
+				allToStandardError gives CollectedLines.create()
+			collect(sink) gives sink.takeAll()
+		end 'where'
+	end 'collectedOutput'
+
 	export function pollTarget() returns TargetOutcome
 		self.target.pump()
 
@@ -213,34 +423,258 @@ export type DebugEngine implements DebugMemory
 	export function armBreakpoint(offset DebugAddress, classWord DebugAddress, fixup DebugAddress) returns CommandOutcome
 		let outcome = self.postCommand(DbgCmdSetBreakpoint, arg0: offset, arg1: classWord, arg2: fixup)
 
-		match outcome 'answered'
-			done then self.rememberBreakpoint(offset)
-			nothingParked then break 'answered'
-			refused then break 'answered'
-			unacknowledged then break 'answered'
-			gone then break 'answered'
-		end 'answered'
+		// The agent clears the condition and drops its return hold on a byte it re-arms, and the engine's
+		// records follow it.
+		if outcome.accepted() 'armed'
+			self.recordBreakpoint(offset, conditioned: false)
+			self.forgetTheHoldAt(offset)
+		end 'armed'
 
 		return outcome
 	end 'armBreakpoint'
 
-	export function attachCondition(offset DebugAddress, record DebugConditionRecord) returns CommandOutcome
-		self.writeWord(DbgOffConditionRecord + DbgCondRecOffKind, value: record.kind)
-		self.writeSignedWord(DbgOffConditionRecord + DbgCondRecOffOperand, value: record.operand)
-		self.writeWord(DbgOffConditionRecord + DbgCondRecOffWidth, value: record.width as DebugAddress)
-		self.writeWord(DbgOffConditionRecord + DbgCondRecOffSigned, value: record.signedCompare)
-		self.writeWord(DbgOffConditionRecord + DbgCondRecOffOp, value: record.op)
-		self.writeSignedWord(DbgOffConditionRecord + DbgCondRecOffLiteral, value: record.literal)
+	function forgetTheHoldAt(offset DebugAddress)
+		var kept = EngineReturnPointArray.create()
 
-		return self.postCommand(DbgCmdSetCondition, arg0: offset, arg1: 0, arg2: 0)
+		for standing in self.returnPoints 'eachPoint'
+			kept.push(standing.withoutTheHoldAt(offset))
+		end 'eachPoint'
+
+		self.returnPoints = kept
+	end 'forgetTheHoldAt'
+
+	export function attachCondition(offset DebugAddress, record DebugConditionRecord) returns CommandOutcome
+		let held = self.returnPointHeldOver(offset, conditioned: true)
+
+		if not held.accepted() 'theWalkCouldNotHoldItsReturn'
+			return held
+		end 'theWalkCouldNotHoldItsReturn'
+
+		self.writeWord(DbgOffConditionRecord + DbgCondRecOffKind, value: record.kind as DebugWord)
+		self.writeWord(DbgOffConditionRecord + DbgCondRecOffOperand, value: record.operand)
+		self.writeWord(DbgOffConditionRecord + DbgCondRecOffWidth, value: record.width as DebugWord)
+		self.writeWord(DbgOffConditionRecord + DbgCondRecOffSigned, value: record.signedCompare as DebugWord)
+		self.writeWord(DbgOffConditionRecord + DbgCondRecOffOp, value: record.op as DebugWord)
+		self.writeWord(DbgOffConditionRecord + DbgCondRecOffLiteral, value: record.literal)
+
+		let outcome = self.postCommand(DbgCmdSetCondition, arg0: offset, arg1: 0, arg2: 0)
+
+		if outcome.accepted() 'conditioned'
+			self.recordBreakpoint(offset, conditioned: true)
+		end 'conditioned'
+
+		return outcome
 	end 'attachCondition'
 
+	export function clearCondition(offset DebugAddress) returns CommandOutcome
+		let outcome = self.postCommand(DbgCmdClearCondition, arg0: offset, arg1: 0, arg2: 0)
+
+		if outcome.accepted() 'unconditioned'
+			self.recordBreakpoint(offset, conditioned: false)
+		end 'unconditioned'
+
+		return outcome
+	end 'clearCondition'
+
+	module function plantReturnPoint(point DebugReturnPoint, classWord DebugAddress, fixup DebugAddress) returns CommandOutcome
+		let settled = self.liftedReturnPoints(EngineLiftScope.doubtedOnly)
+
+		if not settled.accepted() 'stillInDoubt'
+			return settled
+		end 'stillInDoubt'
+
+		if self.returnPointAt(point.address) 'plantedAlready'
+			panic("DebugEngine.plantReturnPoint: a walk plants each of its return points once, and the one at {hexWord(point.address)} already stands")
+		end 'plantedAlready'
+
+		let offset = point.address - self.textBase
+
+		// A conditioned byte the user armed is held, so a false condition still stops the walk there
+		// rather than running past its return point.
+		if self.armedAt(point.address) 'theUserArmedItAlready'
+			let conditioned = self.conditionedAt(point.address)
+			let held = self.agentHoldFor(offset, needed: conditioned)
+			self.keepPlanted(held, planted: EngineReturnPoint.at(point, offset: offset, heldOverACondition: conditioned), doubted: EngineReturnPoint.doubted(offset, heldOverACondition: true))
+
+			return held
+		end 'theUserArmedItAlready'
+
+		let outcome = self.postCommand(DbgCmdSetBreakpoint, arg0: offset, arg1: classWord, arg2: fixup)
+		self.keepPlanted(outcome, planted: EngineReturnPoint.at(point, offset: offset, heldOverACondition: false), doubted: EngineReturnPoint.doubted(offset, heldOverACondition: false))
+
+		return outcome
+	end 'plantReturnPoint'
+
+	function keepPlanted(outcome CommandOutcome, planted EngineReturnPoint, doubted EngineReturnPoint)
+		match outcome 'answer'
+			done then self.returnPoints.push(planted)
+			unacknowledged then self.returnPoints.push(doubted)
+
+			nothingParked or
+				refused or
+				gone then break 'answer'
+		end 'answer'
+	end 'keepPlanted'
+
+	function agentHoldFor(offset DebugAddress, needed bool) returns CommandOutcome
+		if not needed 'nothingToHold'
+			return CommandOutcome.done
+		end 'nothingToHold'
+
+		if self.someReturnPointHolds() 'theHoldIsTaken'
+			return CommandOutcome.refused(DebugReturnHoldTakenReason)
+		end 'theHoldIsTaken'
+
+		return self.postCommand(DbgCmdHoldReturnPoint, arg0: offset, arg1: 0, arg2: 0)
+	end 'agentHoldFor'
+
+	function someReturnPointHolds() returns bool
+		for standing in self.returnPoints 'eachPoint'
+			if standing.holdsTheAgentsHold() 'thisOneHolds'
+				return true
+			end 'thisOneHolds'
+		end 'eachPoint'
+
+		return false
+	end 'someReturnPointHolds'
+
+	function returnPointHeldOver(offset DebugAddress, conditioned bool) returns CommandOutcome
+		match self.unheldReturnPointAt(offset) 'standing'
+			none then return CommandOutcome.done
+			at then return self.heldOverACondition(offset, needed: conditioned)
+		end 'standing'
+	end 'returnPointHeldOver'
+
+	function unheldReturnPointAt(offset DebugAddress) returns DebugReturnPointLookup
+		for standing in self.returnPoints 'eachPoint'
+			let unheld = standing.unheldPointAt(offset)
+
+			if unheld.found() 'thisOne'
+				return unheld
+			end 'thisOne'
+		end 'eachPoint'
+
+		return DebugReturnPointLookup.none
+	end 'unheldReturnPointAt'
+
+	function heldOverACondition(offset DebugAddress, needed bool) returns CommandOutcome
+		let outcome = self.agentHoldFor(offset, needed: needed)
+
+		if needed and outcome.accepted() 'held'
+			var kept = EngineReturnPointArray.create()
+
+			for standing in self.returnPoints 'eachPoint'
+				kept.push(standing.heldIfAt(offset))
+			end 'eachPoint'
+
+			self.returnPoints = kept
+		end 'held'
+
+		return outcome
+	end 'heldOverACondition'
+
+	module function rebaseReturnPoint(greenThread DebugAddress, from DebugAddress, to DebugAddress)
+		var kept = EngineReturnPointArray.create()
+
+		for standing in self.returnPoints 'eachPoint'
+			kept.push(standing.movedWith(greenThread, from: from, to: to))
+		end 'eachPoint'
+
+		self.returnPoints = kept
+	end 'rebaseReturnPoint'
+
+	module function returnPointsStand() returns bool
+		for standing in self.returnPoints 'eachPoint'
+			if standing.confirmedPoint().found() 'aConfirmedPoint'
+				return true
+			end 'aConfirmedPoint'
+		end 'eachPoint'
+
+		return false
+	end 'returnPointsStand'
+
+	module function returnPointReachedBy(landed EngineStop) returns DebugReturnPointLookup
+		for standing in self.returnPoints 'eachPoint'
+			let reached = standing.pointReachedBy(landed)
+
+			if reached.found() 'thisOne'
+				return reached
+			end 'thisOne'
+		end 'eachPoint'
+
+		return DebugReturnPointLookup.none
+	end 'returnPointReachedBy'
+
+	export function liftReturnPoint() returns CommandOutcome
+		return self.liftedReturnPoints(EngineLiftScope.everyPoint)
+	end 'liftReturnPoint'
+
+	function liftedReturnPoints(scope EngineLiftScope) returns CommandOutcome
+		let standing = self.returnPoints
+		self.returnPoints = EngineReturnPointArray.create()
+		var outcome = CommandOutcome.done
+
+		for point in standing 'eachPoint'
+			let lifted = self.liftedOrKept(point, scope: scope)
+
+			if outcome.accepted() 'noFailureYet'
+				outcome = lifted
+			end 'noFailureYet'
+		end 'eachPoint'
+
+		return outcome
+	end 'liftedReturnPoints'
+
+	function liftedOrKept(point EngineReturnPoint, scope EngineLiftScope) returns CommandOutcome
+		match point 'standing'
+			at(_, offset, held) then return self.liftedUnlessKept(point, offset: offset, held: held, scope: scope)
+			doubted(offset, held) then return self.liftedReturnPoint(offset, held: held, doubted: true)
+		end 'standing'
+	end 'liftedOrKept'
+
+	function liftedUnlessKept(point EngineReturnPoint, offset DebugAddress, held bool, scope EngineLiftScope) returns CommandOutcome
+		if scope == EngineLiftScope.doubtedOnly 'aConfirmedPointStays'
+			self.returnPoints.push(point)
+
+			return CommandOutcome.done
+		end 'aConfirmedPointStays'
+
+		return self.liftedReturnPoint(offset, held: held, doubted: false)
+	end 'liftedUnlessKept'
+
+	function liftedReturnPoint(offset DebugAddress, held bool, doubted bool) returns CommandOutcome
+		let released = self.releasedHold(held)
+		let cleared = CommandOutcome.done if self.armedAt(self.textBase + offset) else doubtResolved(self.postCommand(DbgCmdClearBreakpoint, arg0: offset, arg1: 0, arg2: 0), doubted: doubted)
+
+		if released.leftInDoubt() or cleared.leftInDoubt() 'theAgentMayStillHoldIt'
+			self.returnPoints.push(EngineReturnPoint.doubted(offset, heldOverACondition: held and not released.accepted()))
+		end 'theAgentMayStillHoldIt'
+
+		return cleared if released.accepted() else released
+	end 'liftedReturnPoint'
+
+	function releasedHold(held bool) returns CommandOutcome
+		if not held 'nothingWasHeld'
+			return CommandOutcome.done
+		end 'nothingWasHeld'
+
+		return self.postCommand(DbgCmdReleaseReturnPoint, arg0: 0, arg1: 0, arg2: 0)
+	end 'releasedHold'
+
+	export function returnPointAt(address DebugAddress) returns bool
+		for standing in self.returnPoints 'eachPoint'
+			if standing.confirmedPoint().standsAt(address) 'thisOne'
+				return true
+			end 'thisOne'
+		end 'eachPoint'
+
+		return false
+	end 'returnPointAt'
+
 	export function listGreenThreads() returns GreenThreadListing
-		match self.postCommand(DbgCmdGtList, arg0: 0, arg1: 0, arg2: 0) 'answered'
-			done then break 'answered'
-			nothingParked then return GreenThreadListing.refused(DebugNotRunningReason)
+		match self.postCommand(DbgCmdGtList, arg0: 0, arg1: 0, arg2: 0).inquiry() 'answered'
+			answered then break 'answered'
 			refused(reason) then return GreenThreadListing.refused(reason)
-			unacknowledged then return GreenThreadListing.refused(DebugUnacknowledgedReason)
 			gone(ending) then return GreenThreadListing.gone(ending)
 		end 'answered'
 
@@ -256,19 +690,17 @@ export type DebugEngine implements DebugMemory
 	end 'listGreenThreads'
 
 	export function walkGreenThread(handle DebugAddress) returns GreenThreadWalkOutcome
-		match self.postCommand(DbgCmdGtBacktrace, arg0: handle, arg1: 0, arg2: 0) 'answered'
-			done then break 'answered'
-			nothingParked then return GreenThreadWalkOutcome.refused(DebugNotRunningReason)
+		match self.postCommand(DbgCmdGtBacktrace, arg0: handle, arg1: 0, arg2: 0).inquiry() 'answered'
+			answered then break 'answered'
 			refused(reason) then return GreenThreadWalkOutcome.refused(reason)
-			unacknowledged then return GreenThreadWalkOutcome.refused(DebugUnacknowledgedReason)
 			gone(ending) then return GreenThreadWalkOutcome.gone(ending)
 		end 'answered'
 
 		var returnAddresses = DebugAddressArray.create()
-		var framePointers = DebugAddressArray.create()
-		self.harvestFrames(returnAddresses, framePointers: framePointers)
+		var callerFramePointers = DebugAddressArray.create()
+		self.harvestFrames(returnAddresses, callerFramePointers: callerFramePointers)
 
-		return GreenThreadWalkOutcome.walked(EngineStop.walked(returnAddresses, framePointers: framePointers, truncated: self.readWord(DbgOffBtTruncated) != 0))
+		return GreenThreadWalkOutcome.walked(EngineStop.walked(returnAddresses, callerFramePointers: callerFramePointers, truncated: self.readWord(DbgOffBtTruncated) != 0))
 	end 'walkGreenThread'
 
 	export function holdGreenThread(handle DebugAddress) returns CommandOutcome
@@ -286,14 +718,20 @@ export type DebugEngine implements DebugMemory
 	end 'requestPause'
 
 	export function clearBreakpoint(offset DebugAddress) returns CommandOutcome
+		if self.returnPointAt(self.textBase + offset) 'theWalkHoldsTheAddress'
+			self.forgetBreakpoint(offset)
+
+			return CommandOutcome.done
+		end 'theWalkHoldsTheAddress'
+
 		let outcome = self.postCommand(DbgCmdClearBreakpoint, arg0: offset, arg1: 0, arg2: 0)
 
 		match outcome 'answered'
-			done then self.forgetBreakpoint(offset)
-			nothingParked then self.forgetBreakpoint(offset)
-			refused then self.forgetBreakpoint(offset)
-			unacknowledged then break 'answered'
-			gone then break 'answered'
+			done or
+				nothingParked or
+				refused then self.forgetBreakpoint(offset)
+			unacknowledged or
+				gone then break 'answered'
 		end 'answered'
 
 		return outcome
@@ -312,6 +750,7 @@ export type DebugEngine implements DebugMemory
 	end 'forgetBreakpoint'
 
 	export function clearEveryBreakpoint()
+		_ = self.liftReturnPoint()
 		var armed = DebugAddressArray.create()
 
 		for breakpoint in self.breakpoints 'eachBreakpoint'
@@ -324,63 +763,81 @@ export type DebugEngine implements DebugMemory
 	end 'clearEveryBreakpoint'
 
 	export function armedAt(address DebugAddress) returns bool
+		return match self.breakpointAt(address) 'known'
+			none gives false
+			at gives true
+		end 'known'
+	end 'armedAt'
+
+	function conditionedAt(address DebugAddress) returns bool
+		return match self.breakpointAt(address) 'known'
+			none gives false
+			at(breakpoint) gives breakpoint.conditioned
+		end 'known'
+	end 'conditionedAt'
+
+	function breakpointAt(address DebugAddress) returns EngineBreakpointLookup
 		for breakpoint in self.breakpoints 'eachBreakpoint'
 			if breakpoint.address == address 'thisOne'
-				return true
+				return EngineBreakpointLookup.at(breakpoint)
 			end 'thisOne'
 		end 'eachBreakpoint'
 
-		return false
-	end 'armedAt'
+		return EngineBreakpointLookup.none
+	end 'breakpointAt'
 
 	export function armedCount() returns DebugTally
 		return self.breakpoints.count() as DebugTally
 	end 'armedCount'
 
 	export function resume() returns CommandOutcome
+		self.forgetThePostedStep()
+
+		return self.resumeWithoutAsking()
+	end 'resume'
+
+	export function forgetThePostedStep()
+		self.stepPosted = EngineStepPost.none
+	end 'forgetThePostedStep'
+
+	function resumeWithoutAsking() returns CommandOutcome
 		self.cacheFilled = false
 
 		return self.postCommand(DbgCmdContinue, arg0: 0, arg1: 0, arg2: 0)
-	end 'resume'
+	end 'resumeWithoutAsking'
 
 	export function stepOneInstruction() returns CommandOutcome
 		self.cacheFilled = false
+		let outcome = self.postCommand(DbgCmdStepInstruction, arg0: 0, arg1: 0, arg2: 0)
 
-		return self.postCommand(DbgCmdStepInstruction, arg0: 0, arg1: 0, arg2: 0)
+		if outcome.accepted() 'aStepIsOutstanding'
+			self.stepPosted = EngineStepPost.on(self.parkedMachine)
+		end 'aStepIsOutstanding'
+
+		return outcome
 	end 'stepOneInstruction'
 
-	export function waitForStop() returns StopWait
-		let deadline = (Clock.nowMs() as StopTimeoutMs) + self.stopTimeoutMs
+	export function pollForStop(sliceMs StopTimeoutMs) returns StopWait
+		let deadline = debugDeadlineAfter(sliceMs)
 
-		// The order of the three is the whole correctness of this loop. The exit is sampled before the page
-		// is read and acted on after it, so a stop the program published on its way out still wins — a gone
-		// producer's stores are final. Both child streams are pumped every turn, because a full pipe blocks
-		// the debuggee and reads back as a timeout. The deadline comes last, and `lastLookForAStop` after it.
-		while (Clock.nowMs() as StopTimeoutMs) < deadline 'poll'
-			let outcome = self.target.poll()
-			self.target.pump()
-			self.pumpTrace()
-			let published = self.readWord(DbgOffStopSeq)
+		while not debugDeadlinePassed(deadline) 'poll'
+			let look = self.lastLookForAStop()
 
-			if published > (self.lastStopSeq as DebugAddress) 'aStopArrived'
-				self.lastStopSeq = published as EngineSeq
-				self.cacheFilled = false
-
-				return StopWait.stopped(self.readStopRecord())
-			end 'aStopArrived'
-
-			if not targetIsRunning(outcome) 'theProgramEnded'
-				return StopWait.ended(self.target.reap())
-			end 'theProgramEnded'
-
-			sleep(PollIntervalMs)
+			match look 'seen'
+				stopped or
+					ended then return look
+				timedOut then sleep(PollIntervalMs)
+			end 'seen'
 		end 'poll'
 
+		// A program that ended in the last millisecond of the slice has already published everything it
+		// ever will, so the deadline is not the answer until the child has been asked once more.
 		return self.lastLookForAStop()
-	end 'waitForStop'
+	end 'pollForStop'
 
-	// ⛔ A program that ended in the last millisecond of the budget has already published everything it
-	// ever will, so the deadline is not the answer until the child has been asked once more.
+	// The exit is sampled before the page is read and acted on after it, so a stop the program
+	// published on its way out still wins: a gone producer's stores are final. Both child streams are
+	// pumped on every look, because a full pipe blocks the debuggee and reads back as a timeout.
 	export function lastLookForAStop() returns StopWait
 		let outcome = self.target.poll()
 		self.target.pump()
@@ -391,6 +848,12 @@ export type DebugEngine implements DebugMemory
 			self.lastStopSeq = published as EngineSeq
 			self.cacheFilled = false
 
+			if self.isAStrayStep() 'aStepNobodyIsWaitingFor'
+				return self.strayStepResumed()
+			end 'aStepNobodyIsWaitingFor'
+
+			self.stepPosted = EngineStepPost.none
+
 			return StopWait.stopped(self.readStopRecord())
 		end 'aStopArrived'
 
@@ -400,6 +863,27 @@ export type DebugEngine implements DebugMemory
 
 		return StopWait.timedOut
 	end 'lastLookForAStop'
+
+	function isAStrayStep() returns bool
+		if self.readWord(DbgOffStopReason) != DbgStopReasonStep 'notAStep'
+			return false
+		end 'notAStep'
+
+		return match self.stepPosted 'posted'
+			none gives true
+			on(machine) gives machine != self.readWord(DbgOffStopMachine)
+		end 'posted'
+	end 'isAStrayStep'
+
+	function strayStepResumed() returns StopWait
+		match self.resumeWithoutAsking() 'posted'
+			done or
+				nothingParked then return StopWait.timedOut
+			gone(ending) then return StopWait.ended(ending)
+			refused or
+				unacknowledged then return StopWait.stopped(self.readStopRecord())
+		end 'posted'
+	end 'strayStepResumed'
 
 	export function readDebuggeeWord(address DebugAddress, width EngineReadLength) returns DebugWord throws DebugMemoryError
 		return littleEndianWordOf(try self.readDebuggeeBytes(address, length: width))
@@ -426,7 +910,7 @@ export type DebugEngine implements DebugMemory
 	end 'readDebuggeeBytes'
 
 	export function registerValue(number EngineRegisterNumber) returns DebugWord
-		return try self.page.readWord((DbgOffRegisters + (number as DebugAddress) * WordBytes) as SegmentOffset) otherwise 0
+		return self.readSignedWord(DbgOffRegisters + (number as DebugAddress) * WordBytes)
 	end 'registerValue'
 
 	export function walkStack() returns CommandOutcome
@@ -461,13 +945,9 @@ export type DebugEngine implements DebugMemory
 	end 'fillCache'
 
 	function fetchedInto(address DebugAddress, length DebugAddress) returns bool
-		match self.postCommand(DbgCmdReadMemory, arg0: address, arg1: length, arg2: 0) 'answered'
-			done then break 'answered'
-			nothingParked then return false
-			refused then return false
-			unacknowledged then return false
-			gone then return false
-		end 'answered'
+		if not self.postCommand(DbgCmdReadMemory, arg0: address, arg1: length, arg2: 0).accepted() 'unanswered'
+			return false
+		end 'unanswered'
 
 		if self.readWord(DbgOffReadStatus) == 0 'notMapped'
 			return false
@@ -482,37 +962,38 @@ export type DebugEngine implements DebugMemory
 
 	function readStopRecord() returns EngineStop
 		let reason = self.readWord(DbgOffStopReason)
+		self.parkedMachine = self.readWord(DbgOffStopMachine)
 		var returnAddresses = DebugAddressArray.create()
-		var framePointers = DebugAddressArray.create()
+		var callerFramePointers = DebugAddressArray.create()
 
-		if reason != DbgStopReasonEntry and self.readWord(DbgOffStopPc) != 0 'aThreadIsStopped'
-			match self.walkStack() 'walked'
-				done then self.harvestFrames(returnAddresses, framePointers: framePointers)
-				nothingParked then break 'walked'
-				refused then break 'walked'
-				unacknowledged then break 'walked'
-				gone then break 'walked'
-			end 'walked'
+		if reason != DbgStopReasonEntry and self.readWord(DbgOffStopPc) != 0 and self.walkStack().accepted() 'aThreadIsStopped'
+			self.harvestFrames(returnAddresses, callerFramePointers: callerFramePointers)
 		end 'aThreadIsStopped'
 
-		return EngineStop.create(reason, machine: self.readWord(DbgOffStopMachine), greenThread: self.readWord(DbgOffStopGreenThread), traceMark: self.readWord(DbgOffStopTraceMark), pc: self.readWord(DbgOffStopPc), stackPointer: self.readWord(DbgOffStopSp), framePointer: self.readWord(DbgOffStopFp), returnAddresses: returnAddresses, framePointers: framePointers, truncated: self.readWord(DbgOffBtTruncated) != 0)
+		return EngineStop.create(reason, fault: self.readWord(DbgOffStopFault), machine: self.readWord(DbgOffStopMachine), greenThread: self.readWord(DbgOffStopGreenThread), traceMark: self.readWord(DbgOffStopTraceMark), pc: self.readWord(DbgOffStopPc), stackPointer: self.readWord(DbgOffStopSp), framePointer: self.readWord(DbgOffStopFp), returnAddresses: returnAddresses, callerFramePointers: callerFramePointers, truncated: self.readWord(DbgOffBtTruncated) != 0, conditionMissed: self.readWord(DbgOffStopConditionMissed) == DbgStopConditionMissedYes)
 	end 'readStopRecord'
 
-	function harvestFrames(returnAddresses DebugAddressArray, framePointers DebugAddressArray)
+	function harvestFrames(returnAddresses DebugAddressArray, callerFramePointers DebugAddressArray)
 		let count = self.readWord(DbgOffBtCount)
 
 		for i in 0 upto count 'eachFrame'
 			let slot = DbgOffBtFrames + i * DbgBacktraceFrameWords * WordBytes
 			returnAddresses.push(self.readWord(slot))
-			framePointers.push(self.readWord(slot + WordBytes))
+
+			if i > 0 'theCallerOfTheFrameBefore'
+				callerFramePointers.push(self.readWord(slot + WordBytes))
+			end 'theCallerOfTheFrameBefore'
 		end 'eachFrame'
+
+		if count > 0 'theOutermostCaller'
+			callerFramePointers.push(self.readWord(DbgOffBtOuterFrame))
+		end 'theOutermostCaller'
 	end 'harvestFrames'
 
-	function rememberBreakpoint(offset DebugAddress)
-		if not self.armedAt(self.textBase + offset) 'notYetKnown'
-			self.breakpoints.push(EngineBreakpoint.create(offset, address: self.textBase + offset))
-		end 'notYetKnown'
-	end 'rememberBreakpoint'
+	function recordBreakpoint(offset DebugAddress, conditioned bool)
+		self.forgetBreakpoint(offset)
+		self.breakpoints.push(EngineBreakpoint.create(offset, address: self.textBase + offset, conditioned: conditioned))
+	end 'recordBreakpoint'
 
 	function postCommand(command DebugAddress, arg0 DebugAddress, arg1 DebugAddress, arg2 DebugAddress) returns CommandOutcome
 		return self.postCommandWithin(command, arg0: arg0, arg1: arg1, arg2: arg2, budget: self.stopTimeoutMs)
@@ -520,15 +1001,15 @@ export type DebugEngine implements DebugMemory
 
 	function postCommandWithin(command DebugAddress, arg0 DebugAddress, arg1 DebugAddress, arg2 DebugAddress, budget StopTimeoutMs) returns CommandOutcome
 		self.commandSeq = self.commandSeq + 1
-		self.writeWord(DbgOffCmdArg0, value: arg0)
-		self.writeWord(DbgOffCmdArg1, value: arg1)
-		self.writeWord(DbgOffCmdArg2, value: arg2)
-		self.writeWord(DbgOffCmd, value: command)
-		self.writeWord(DbgOffCmdSeq, value: self.commandSeq as DebugAddress)
+		self.writeWord(DbgOffCmdArg0, value: arg0 as DebugWord)
+		self.writeWord(DbgOffCmdArg1, value: arg1 as DebugWord)
+		self.writeWord(DbgOffCmdArg2, value: arg2 as DebugWord)
+		self.writeWord(DbgOffCmd, value: command as DebugWord)
+		self.writeWord(DbgOffCmdSeq, value: self.commandSeq as DebugWord)
 
-		let deadline = (Clock.nowMs() as StopTimeoutMs) + budget
+		let deadline = debugDeadlineAfter(budget)
 
-		while (Clock.nowMs() as StopTimeoutMs) < deadline 'poll'
+		while not debugDeadlinePassed(deadline) 'poll'
 			let outcome = self.target.poll()
 			self.target.pump()
 
@@ -561,7 +1042,13 @@ export type DebugEngine implements DebugMemory
 		return CommandOutcome.unacknowledged
 	end 'lastLookForAnAcknowledgement'
 
+	export function answeredUnderAnUnseenStop() returns bool
+		return self.answeredUnder > (self.lastStopSeq as DebugAddress)
+	end 'answeredUnderAnUnseenStop'
+
 	function acknowledgedOutcome() returns CommandOutcome
+		self.answeredUnder = self.readWord(DbgOffAckStopSeq)
+
 		if self.readWord(DbgOffCmdResult) == DbgCmdResultDone 'accepted'
 			return CommandOutcome.done
 		end 'accepted'
@@ -578,16 +1065,12 @@ export type DebugEngine implements DebugMemory
 	end 'readWord'
 
 	function readSignedWord(offset DebugAddress) returns DebugWord
-		return (try self.page.readWord(offset as SegmentOffset) otherwise 0) as DebugWord
+		return (try self.page.readWord(offset as SegmentOffset) otherwise panic("DebugEngine.readSignedWord: offset {hexWord(offset)} is a field of the {DbgSegmentBytes}-byte control segment this engine holds open")) as DebugWord
 	end 'readSignedWord'
 
-	function writeWord(offset DebugAddress, value DebugAddress)
-		try self.page.writeWord(offset as SegmentOffset, value: value as SegmentWord) otherwise ignore
+	function writeWord(offset DebugAddress, value DebugWord)
+		try self.page.writeWord(offset as SegmentOffset, value: value as SegmentWord) otherwise panic("DebugEngine.writeWord: offset {hexWord(offset)} is a field of the {DbgSegmentBytes}-byte control segment this engine holds open")
 	end 'writeWord'
-
-	function writeSignedWord(offset DebugAddress, value DebugWord)
-		try self.page.writeWord(offset as SegmentOffset, value: value as SegmentWord) otherwise ignore
-	end 'writeSignedWord'
 end 'DebugEngine'
 
 function openedTraceRing(program FilePath, traced bool) returns DebugTraceState
@@ -604,15 +1087,15 @@ end 'openedTraceRing'
 
 function refusedTraceRing(reason DecoderError) returns DebugTraceState
 	match reason 'why'
-		nameTablesUnreadable then return DebugTraceState.noProducer
-		segmentUnavailable then return DebugTraceState.noProducer
+		nameTablesUnreadable or
+			segmentUnavailable then return DebugTraceState.noProducer
 	end 'why'
 end 'refusedTraceRing'
 
 function closeTraceRing(trace DebugTraceState)
 	match trace 'ring'
-		untraced then break 'ring'
-		noProducer then break 'ring'
+		untraced or
+			noProducer then break 'ring'
 		ring(collector) then collector.close()
 	end 'ring'
 end 'closeTraceRing'
@@ -622,6 +1105,20 @@ function slicedFrom(collector DebugTraceCollector, mark DebugAddress, since Debu
 
 	return collector.slice(mark, since: since, limit: limit)
 end 'slicedFrom'
+
+export function debugDeadlineAfter(budget StopTimeoutMs) returns DebugDeadline
+	return (Clock.nowMs() as DebugDeadline) + (budget as DebugDeadline)
+end 'debugDeadlineAfter'
+
+export function debugDeadlinePassed(deadline DebugDeadline) returns bool
+	return (Clock.nowMs() as DebugDeadline) >= deadline
+end 'debugDeadlinePassed'
+
+export function msLeftBefore(deadline DebugDeadline) returns StopTimeoutMs
+	let now = Clock.nowMs() as DebugDeadline
+
+	return 0 if now >= deadline else (deadline - now) as StopTimeoutMs
+end 'msLeftBefore'
 
 export union GreenThreadListing
 	listed(records DebugGreenThreadArray, truncated bool)
@@ -635,13 +1132,17 @@ export union GreenThreadWalkOutcome
 	gone(outcome TargetOutcome)
 end 'GreenThreadWalkOutcome'
 
+export function refusalDependsOnTheInstruction(reason String) returns bool
+	return reason == DebugUnclassifiedReason or reason == DebugOutOfTextReason or reason == DebugInsideRuntimeSymbolReason
+end 'refusalDependsOnTheInstruction'
+
 function refusalReasonName(code DebugAddress) returns String
 	if code == DbgRefusalOutOfText 'outOfText'
-		return "out-of-text"
+		return DebugOutOfTextReason
 	end 'outOfText'
 
 	if code == DbgRefusalInsideRuntimeSymbol 'insideRuntimeSymbol'
-		return "inside-runtime-symbol"
+		return DebugInsideRuntimeSymbolReason
 	end 'insideRuntimeSymbol'
 
 	if code == DbgRefusalUnclassified 'unclassified'
@@ -649,7 +1150,7 @@ function refusalReasonName(code DebugAddress) returns String
 	end 'unclassified'
 
 	if code == DbgRefusalTableFull 'tableFull'
-		return "table-full"
+		return DebugTableFullReason
 	end 'tableFull'
 
 	if code == DbgRefusalNoSuchBreakpoint 'noSuchBreakpoint'
@@ -657,11 +1158,11 @@ function refusalReasonName(code DebugAddress) returns String
 	end 'noSuchBreakpoint'
 
 	if code == DbgRefusalUnknownCommand 'unknownCommand'
-		return "unknown-command"
+		return DebugUnknownCommandReason
 	end 'unknownCommand'
 
 	if code == DbgRefusalNotStopped 'notStopped'
-		return "not-stopped"
+		return DebugNotStoppedReason
 	end 'notStopped'
 
 	if code == DbgRefusalNoSuchThread 'noSuchThread'
@@ -669,11 +1170,11 @@ function refusalReasonName(code DebugAddress) returns String
 	end 'noSuchThread'
 
 	if code == DbgRefusalHoldTableFull 'holdTableFull'
-		return "hold-table-full"
+		return DebugHoldTableFullReason
 	end 'holdTableFull'
 
 	if code == DbgRefusalThreadIsRunning 'threadIsRunning'
-		return "thread-is-running"
+		return DebugThreadIsRunningReason
 	end 'threadIsRunning'
 
 	if code == DbgRefusalNotRunning 'notRunning'
@@ -681,10 +1182,14 @@ function refusalReasonName(code DebugAddress) returns String
 	end 'notRunning'
 
 	if code == DbgRefusalNotPausable 'notPausable'
-		return "not-pausable"
+		return DebugNotPausableReason
 	end 'notPausable'
 
-	return "refused-{code}"
+	if code == DbgRefusalFaultIsTerminal 'faultIsTerminal'
+		return DebugFaultIsTerminalReason
+	end 'faultIsTerminal'
+
+	panic("refusalReasonName: the debug agent refused a command with reason {code}, which is none of the refusals `Compiler/Debug/DebugControlLayout.maxon` declares")
 end 'refusalReasonName'
 
 function seededControlPage(page SharedSegment) returns bool

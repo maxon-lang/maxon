@@ -1,0 +1,14 @@
+let EndsAtAStopCaseLabel = "a-repl-that-ends-at-a-stop-reports-the-exit-once"
+let ExitLine = "the program exited with code 0"
+
+test 'a REPL whose input ends at a stop lets the program finish and reports its exit once'
+	let staged = builtFixture(EndsAtAStopCaseLabel, fixture: SteppingFixtureName)
+	let printLine = anchorLine(staged, anchor: "main-print")
+	let script = "{BreakCommand} {lineTarget(printLine)}{LineFeed}{RunCommand}{LineFeed}"
+	let session = spawnDebugRepl(builtExecutable(staged), staged: staged, script: script)
+	let spoken = withoutCarriageReturns(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	try Expect.contains(spoken, needle: lineTarget(printLine), message: "the breakpoint on the print line stops the program. {said}")
+	try Expect.equal(spoken.split(ExitLine).count() as AssertedInt, expected: 2, message: "when its input ends at a stop the REPL lets the program finish, and the program exits once: `{ExitLine}` is said exactly once. {said}")
+end 'a REPL whose input ends at a stop lets the program finish and reports its exit once'

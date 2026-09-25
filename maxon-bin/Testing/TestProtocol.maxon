@@ -57,6 +57,20 @@ export let TestProtocolOutcomePass = "pass"
 // assertion and an uncaught foreign error, and the preceding `threw` line is what tells them apart.
 export let TestProtocolOutcomeFail = "fail"
 
+// The verdict a test binary run directly exits with, documented under `maxon test --build`. `maxon
+// test` itself attributes outcomes from the marker stream and reads only the leak exit.
+export let TestBinaryEverySelectedTestPassedExit = 0
+
+export let TestBinarySomeSelectedTestFailedExit = 3
+
+export function requireTestBinaryExitsAreItsOwn()
+	for claimed in [PanicExitCode, RuntimeAbort.leakDetected.rawValue] 'eachRuntimeExit'
+		if claimed == TestBinaryEverySelectedTestPassedExit or claimed == TestBinarySomeSelectedTestFailedExit 'aSharedExit'
+			panic("TestProtocol: the test binary's verdict exits {TestBinaryEverySelectedTestPassedExit} and {TestBinarySomeSelectedTestFailedExit} must differ from the runtime's exit {claimed}, or a crash reads as a verdict")
+		end 'aSharedExit'
+	end 'eachRuntimeExit'
+end 'requireTestBinaryExitsAreItsOwn'
+
 // ⭐ **THE OPTION THE BINARY READS ITS SELECTION FROM. SELECTION IS A RUNTIME ARGUMENT, NEVER A
 // COMPILE-TIME ONE:** every discovered test is compiled in every time, which is what lets a `--filter`
 // change leave the build cache warm and keeps the thing being tested identical to the thing that was

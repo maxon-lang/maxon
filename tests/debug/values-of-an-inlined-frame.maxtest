@@ -1,0 +1,42 @@
+let InlinedValuesCaseLabel = "values-of-an-inlined-frame"
+
+let SplicedCalleeName = "render"
+let SplicedLabelName = "label"
+let SplicedLabelText = "parcel"
+
+test 'a frame the inliner synthesized lists its own locals, and a name among them prints'
+	let staged = builtFixture(InlinedValuesCaseLabel, fixture: SplicedFixtureName)
+	let printedAt = anchorLine(staged, anchor: "render-print")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(printedAt)}", RunCommand, BacktraceCommand, LocalsCommand, "{PrintCommand} {SplicedLabelName}"])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let backtraces = eventsOfKind(events, kind: BacktraceEventName)
+	let listings = eventsOfKind(events, kind: LocalsEventName)
+	let printed = eventsOfKind(events, kind: ValueEventName)
+
+	let breakpoints = eventsOfKind(events, kind: BreakpointEventName)
+	try Expect.equal(breakpoints.count() as AssertedInt, expected: 1, message: "`{BreakCommand} {lineTarget(printedAt)}` printed no `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let armed = eventAt(breakpoints, index: 0)
+	try Expect.equal(textOf(armed, node: armed.root, key: FunctionKey), expected: SplicedCalleeName, message: "the line is `{SplicedCalleeName}`'s own, so the breakpoint names the spliced function — the name its frame carries — not the function it was spliced into. {said}")
+	try Expect.equal(backtraces.count() as AssertedInt, expected: 1, message: "`{BacktraceCommand}` at the stop printed no `{BacktraceEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let walked = eventAt(backtraces, index: 0)
+	let innermost = nodeAt(childrenOf(walked, node: walked.root, key: FramesKey), index: 0)
+	try Expect.equal(textOf(walked, node: innermost, key: FunctionKey), expected: SplicedCalleeName, message: "the stop is inside `{SplicedCalleeName}`, which the fixture calls once, so the inliner splices it into `main` and the walk synthesizes its frame. Without that splice this case asks nothing about an inlined frame. {said}")
+	try Expect.isTrue(flagOf(walked, node: innermost, key: InlinedKey), message: "frame 0 must be the SYNTHESIZED frame of the spliced body, marked `{InlinedKey}`. {said}")
+
+	try Expect.equal(listings.count() as AssertedInt, expected: 1, message: "`{LocalsCommand}` at the stop printed no `{LocalsEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let listed = eventAt(listings, index: 0)
+	let rows = renderedRows(valueRows(listed, node: listed.root, key: LocalsKey))
+	try Expect.equal(textOf(listed, node: listed.root, key: FunctionKey), expected: SplicedCalleeName, message: "`{LocalsCommand}` answers about the frame the stop is in. {said}")
+	try Expect.equal(valueNamed(listed, node: listed.root, key: LocalsKey, name: SplicedLabelName).count() as AssertedInt, expected: 1, message: "`{SplicedLabelName}` is declared in `{SplicedCalleeName}`'s own text, so the frame synthesized for the spliced body must list it — a splice that drops the callee's bindings leaves a frame a reader can see and cannot look into. The locals were: {rows}. {said}")
+
+	try Expect.equal(printed.count() as AssertedInt, expected: 1, message: "`{PrintCommand} {SplicedLabelName}` answered no `{ValueEventName}` event — the name is the spliced callee's own local. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let value = eventAt(printed, index: 0)
+	let valueNode = nodeAt(memberOf(value, node: value.root, key: ValueKey), index: 0)
+	try Expect.contains(textOf(value, node: valueNode, key: DisplayKey), needle: SplicedLabelText, message: "`{SplicedLabelName}` holds `{SplicedLabelText}` at that line. {said}")
+end 'a frame the inliner synthesized lists its own locals, and a name among them prints'

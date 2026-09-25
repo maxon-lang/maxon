@@ -89,19 +89,12 @@ export union StalenessVerdict
 	stale(newerSource FilePath)
 end 'StalenessVerdict'
 
-// Refuse this command if `binary` is older than a source it was built from. Returns the exit code the
-// command should return: 0 to go ahead, `NothingRanExitCode` to stop.
-//
 // `role` names the executable in the message, because two commands ask this about two different
 // binaries — `spec-test` about the harness-and-compiler it runs on, `scale-test` about the compiler it
 // drives — and "which binary is stale" is the first thing the reader needs.
-//
-// ⛔ **IT IS ASKED ONCE, NOT TWICE.** An in-process compile has exactly one binary that can be stale —
-// the harness IS the compiler — so a second question about a `--compiler=<path>` under test would have
-// nothing to ask.
 export function refuseIfStale(binary FilePath, role String) returns ExitCode
 	return match stalenessOf(binary) 'verdict'
-		mayProceed gives 0
+		mayProceed gives SucceededExit
 		stale(newerSource) gives reportStale(binary, role: role, newerSource: newerSource)
 	end 'verdict'
 end 'refuseIfStale'

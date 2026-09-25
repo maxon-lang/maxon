@@ -50,10 +50,6 @@
 # compile pays one `isEmpty`). Neither is worth a map today: at F=64 a whole green run is 2181 ms of
 # which 1203 is the compile, and the crossover is in the hundreds of test files.
 #
-# ⚠ A THIRD term is NOT here and must not be looked for: `Diagnostics.authoredPathFor` is
-# Θ(diagnostics × staged sources), and holding S=512 while sweeping the diagnostic count 512 → 1 read
-# 4509 ms → 4533 ms. It is inside the noise, because it fires only on a failing compile.
-#
 # Usage:  gentestproject.sh <files|onefile|broken> <n> <m> <outdir>
 #   e.g.  gentestproject.sh files   512 8    /tmp/lad512
 #         gentestproject.sh onefile 512 4096 /tmp/ctl512     # the control for the line above

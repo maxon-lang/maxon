@@ -161,24 +161,43 @@ public extension Array
 		end 'bufferLess'
 	end 'stablePartition'
 
-	// Stable quicksort of [lo, hi). Base case routes to the (stable)
-	// small-sort. Recurses into the smaller partition and loops on the larger
-	// (bounded recursion depth, like pdqsort). Progress is guaranteed: the
-	// boundary `p` splits off at least the `< pivot` class on the left and the
-	// pivot's own equal-group on the right, so each side is strictly smaller
-	// than the whole unless everything is `>= pivot` AND nothing equals the
-	// pivot — impossible, since the pivot is drawn from the slice (so at least
-	// one element equals it and sits in the right class), making the left side
-	// shrink whenever it is non-empty and the right side shrink otherwise.
-	//
 	// `pivotHold` is `stablePartition`'s one-slot pivot storage, threaded from
 	// `driftsortRange` alongside `scratch` for the same reason: allocated once
 	// per sort rather than once per partition.
 	public function stableQuicksortRange(lo SortIndex, hi SortIndex, scratch MergeScratchArray, scratchCap SortIndex, pivotHold MergeScratchArray, cmp SortComparator)
+		self.stableQuicksortWithin(lo, hi: hi, scratch: scratch, scratchCap: scratchCap, pivotHold: pivotHold, cmp: cmp, partitionsLeft: self.sortDepthBudget(hi - lo))
+	end 'stableQuicksortRange'
+
+	function stableMergeSortRange(lo SortIndex, hi SortIndex, scratch MergeScratchArray, scratchCap SortIndex, cmp SortComparator)
+		if hi - lo <= SmallSortThreshold 'small'
+			self.smallSortRange(lo, hi: hi, cmp: cmp)
+			return
+		end 'small'
+
+		let mid = lo + (hi - lo) / 2
+		self.stableMergeSortRange(lo, hi: mid, scratch: scratch, scratchCap: scratchCap, cmp: cmp)
+		self.stableMergeSortRange(mid, hi: hi, scratch: scratch, scratchCap: scratchCap, cmp: cmp)
+		self.mergeAdaptive(lo, mid: mid, hi: hi, scratch: scratch, scratchCap: scratchCap, cmp: cmp)
+	end 'stableMergeSortRange'
+
+	// Progress is guaranteed: the boundary `p` splits off the `< pivot` class
+	// on the left and the pivot's own equal-group on the right, and the pivot
+	// is drawn from the slice, so the left side shrinks whenever it is
+	// non-empty and the right side shrinks otherwise.
+	function stableQuicksortWithin(lo SortIndex, hi SortIndex, scratch MergeScratchArray, scratchCap SortIndex, pivotHold MergeScratchArray, cmp SortComparator, partitionsLeft SortIndex)
 		var curLo = lo
 		var curHi = hi
+		var budget = partitionsLeft
 
-		while curHi - curLo > 32 'loop'
+		while curHi - curLo > SmallSortThreshold 'loop'
+			// A merge sort, where pdqsort falls back to heapsort: this fallback must stay stable.
+			if budget == 0 'tooManyUnbalancedPartitions'
+				self.stableMergeSortRange(curLo, hi: curHi, scratch: scratch, scratchCap: scratchCap, cmp: cmp)
+				return
+			end 'tooManyUnbalancedPartitions'
+
+			budget = budget - 1
+
 			let pivotIndex = self.choosePivot(curLo, hi: curHi, cmp: cmp)
 			let p = self.stablePartition(curLo, hi: curHi, pivotIndex: pivotIndex, scratch: scratch, pivotHold: pivotHold, cmp: cmp)
 
@@ -216,14 +235,29 @@ public extension Array
 			end 'allGe'
 
 			if leftLen <= rightLen 'leftSmaller'
-				self.stableQuicksortRange(curLo, hi: p, scratch: scratch, scratchCap: scratchCap, pivotHold: pivotHold, cmp: cmp)
+				self.stableQuicksortWithin(curLo, hi: p, scratch: scratch, scratchCap: scratchCap, pivotHold: pivotHold, cmp: cmp, partitionsLeft: budget)
 				curLo = p
 			end 'leftSmaller' else 'rightSmaller'
-				self.stableQuicksortRange(p, hi: curHi, scratch: scratch, scratchCap: scratchCap, pivotHold: pivotHold, cmp: cmp)
+				self.stableQuicksortWithin(p, hi: curHi, scratch: scratch, scratchCap: scratchCap, pivotHold: pivotHold, cmp: cmp, partitionsLeft: budget)
 				curHi = p
 			end 'rightSmaller'
 		end 'loop'
 
 		self.smallSortRange(curLo, hi: curHi, cmp: cmp)
-	end 'stableQuicksortRange'
+	end 'stableQuicksortWithin'
+
+	module function sortDepthBudget(n SortIndex) returns SortIndex
+		var remaining = n
+		var bits = 0 as SortIndex
+
+		while remaining > 1 'halve'
+			remaining = remaining / 2
+			bits = bits + 1
+		end 'halve'
+
+		return QuicksortDepthPerLevel * bits
+	end 'sortDepthBudget'
 end 'Array'
+
+public let SmallSortThreshold = 32
+let QuicksortDepthPerLevel = 2

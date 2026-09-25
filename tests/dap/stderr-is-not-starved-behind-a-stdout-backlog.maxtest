@@ -1,0 +1,67 @@
+let BacklogCaseLabel = "stderr-is-not-starved-behind-a-stdout-backlog"
+let BacklogFixtureName = "backlog"
+let ErrorLine = "err after the backlog"
+let LastBacklogLine = "backlog 4000"
+let LastTailLine = "tail 40"
+let OutputLineSeparator = "\n"
+
+typealias ArrivalPosition = int(0 to u32.max)
+
+type BacklogSession implements DapSession
+	let executable as FilePath
+	export var pieces as DapOutputPieceArray
+
+	static function create(executable FilePath) returns BacklogSession
+		return Self{executable: executable, pieces: DapOutputPieceArray.create()}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+		_ = try client.request(LaunchCommand, argumentsJson: dapLaunchArguments(self.executable))
+		_ = try client.awaitEvent(InitializedEvent)
+		_ = try client.request(ConfigurationDoneCommand)
+
+		self.pieces = try client.collectOutputUntil(ExitedEvent)
+
+		_ = try client.request(DisconnectCommand)
+	end 'drive'
+end 'BacklogSession'
+
+function arrivalsOf(pieces DapOutputPieceArray) returns DapOutputPieceArray
+	var arrivals = DapOutputPieceArray.create()
+
+	for piece in pieces 'eachPiece'
+		for line in piece.text.split(OutputLineSeparator) 'eachLine'
+			if not line.isEmpty() 'aLine'
+				arrivals.push(DapOutputPiece.create(piece.category, text: line))
+			end 'aLine'
+		end 'eachLine'
+	end 'eachPiece'
+
+	return arrivals
+end 'arrivalsOf'
+
+function arrivalOf(arrivals DapOutputPieceArray, category String, text String) returns ArrivalPosition throws TestFailure
+	for (iter, arrival) in arrivals.withIterator() 'eachArrival'
+		if arrival.category == category and arrival.text == text 'thisOne'
+			return iter.index() as ArrivalPosition
+		end 'thisOne'
+	end 'eachArrival'
+
+	try Expect.fail("the program writes `{text}` to {category}, and no `{OutputEvent}` of category `{category}` carried it; stdout carried {dapOutputOf(arrivals, category: StdoutCategory)} and stderr {dapOutputOf(arrivals, category: StderrCategory)}")
+	panic("Expect.fail returned without throwing")
+end 'arrivalOf'
+
+test 'a stderr line written behind a stdout backlog arrives before the stdout written after it'
+	let staged = dapStagedFixture(BacklogCaseLabel, fixture: BacklogFixtureName)
+	var session = BacklogSession.create(dapBuildFixture(staged))
+	try dapRunSession(session, completing: "run the backlog program to its exit")
+
+	let arrivals = arrivalsOf(session.pieces)
+	let backlogEnd = try arrivalOf(arrivals, category: StdoutCategory, text: LastBacklogLine)
+	let errorAt = try arrivalOf(arrivals, category: StderrCategory, text: ErrorLine)
+	let tailEnd = try arrivalOf(arrivals, category: StdoutCategory, text: LastTailLine)
+
+	try Expect.lessThan(errorAt as AssertedInt, than: tailEnd as AssertedInt, message: "`{ErrorLine}` is written after a stdout backlog ending at `{LastBacklogLine}` (arrival {backlogEnd}) and before `{LastTailLine}`, which the program writes a fifth of a second later; a reader that drains stdout before it looks at stderr holds the stderr line until stdout closes")
+	try Expect.lessThan(backlogEnd as AssertedInt, than: tailEnd as AssertedInt, message: "one stream's lines keep their own order")
+end 'a stderr line written behind a stdout backlog arrives before the stdout written after it'

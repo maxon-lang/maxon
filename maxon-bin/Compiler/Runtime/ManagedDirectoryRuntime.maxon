@@ -115,20 +115,21 @@ export let NulByte = 0 as ParsedInt
 // `errno` onto exactly this, and reads it from here rather than transcribing it.
 export let ErrorNoMoreFiles = 18 as ParsedInt
 
-// `ERROR_DIR_NOT_EMPTY` — what `RemoveDirectoryA` answers for a directory that still holds an entry, and the
-// one reading that makes `delete` refuse with `deleteNotEmpty` rather than with its catch-all. It is tested
-// AHEAD of the shared errno classification because 145 is none of the three codes that classification knows,
-// so without this test an occupied directory and a broken disk would arrive as one answer.
+// `ERROR_DIR_NOT_EMPTY` — what `RemoveDirectoryA` answers for a directory that still holds an
+// entry, and the one reading that makes `delete` refuse with `deleteNotEmpty` rather than with its
+// catch-all. It is tested ahead of the shared errno classification because 145 is none of the three
+// codes that classification knows, so without this test an occupied directory and a broken disk
+// would arrive as one answer.
 //
-// ⚠ **EXPORTED FOR THE LANES THAT MUST *PRODUCE* IT.** POSIX reports the same refusal as `ENOTEMPTY`, which
-// the two OSes number differently (`LinuxErrnoDirectoryNotEmpty`, `DarwinErrnoDirectoryNotEmpty`), so each
-// lane's errno translator maps its own number onto this code rather than transcribing it.
+// Exported for the lanes that must produce it. POSIX reports the same refusal as `ENOTEMPTY`, which
+// the two OSes number differently (`LinuxErrno.directoryNotEmpty`,
+// `DarwinErrno.directoryNotEmpty`), so each lane's errno translator maps its own number onto this
+// code rather than transcribing it.
 export let ErrorDirNotEmpty = 145 as ParsedInt
 
-// `INVALID_FILE_ATTRIBUTES` — what `GetFileAttributesA` answers for a path that names nothing. It is the
-// full DWORD, so it is compared against a DWORD-masked load rather than against -1.
-// ⚠ **EXPORTED FOR THE SAME REASON** — `GetFileAttributesA` answers it and a POSIX lane's `stat` failure
-// must be reported as it (`Arm64DarwinRuntime.buildArm64DarwinFileAttributesChunk`).
+// `INVALID_FILE_ATTRIBUTES` — what `GetFileAttributesA` answers for a path that names nothing. The
+// answer arrives zero-extended, so it is the full DWORD and not -1. Exported because a POSIX lane's
+// `stat` failure must be reported as it (`Arm64DarwinRuntime.buildArm64DarwinFileAttributesChunk`).
 export let InvalidFileAttributes = 0xFFFFFFFF as ParsedInt
 
 // `MAX_PATH`, the first buffer `emitGrowingPathFill` offers. It fits every path a program is
@@ -643,17 +644,15 @@ function buildManagedDirectoryDestruct(module StdModule)
 	module.functions.push(func)
 end 'buildManagedDirectoryDestruct'
 
-// `__md_exists(pathRec) -> 0 | 1` — NON-throwing: "it is not a directory" is an answer, not a failure.
+// `__md_exists(pathRec) -> 0 | 1`, non-throwing: "it is not a directory" is an answer.
 //
-// ⭐ **THE ANSWER IS `bool` AT THE SURFACE, AND THE CORPUS SETTLES IT**: `specs/managed-directory.md:205`
-// writes `if not __ManagedDirectory.exists(…)`, so `not` must be logical negation and not bitwise
-// complement. The RUNTIME still answers a 0/1 i64 (this tier has no `setcc`); it is the PARSER that tags
-// the result `ValueTypeTag.boolean`, which is exactly the arrangement `__managed_is_empty` already has.
+// The runtime answers a 0/1 i64 and the parser tags it `ValueTypeTag.boolean`, as for
+// `__managed_is_empty`, so `not` on it is logical negation: `specs/managed-directory.md` writes
+// `if not __ManagedDirectory.exists(…)`.
 //
-// ⭐ **IT ASKS `GetFileAttributesA`, NOT `FindFirstFileA`**, which is the opposite of the choice
-// `__mf_exists` makes — see the `osFileAttributes` op's comment for why the argument that forbids a second
-// entry point there does not reach here: this takes a bare DIRECTORY path, and opening a search on one would
-// cost a handle to answer a question about one bit.
+// It asks `GetFileAttributesA` where `__mf_exists` asks `FindFirstFileA`: this takes a bare
+// directory path, and opening a search on one would cost a handle to answer a question about one
+// bit. The `osFileAttributes` op's comment says why that second entry point is admitted.
 function buildManagedDirectoryExists(module StdModule)
 	var func = IrFunction.createFromStd(ManagedDirectoryExistsName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -669,15 +668,11 @@ function buildManagedDirectoryExists(module StdModule)
 	let pathRec = 0 as ValueId
 
 	let scratch = emitPathToCString(module, func: func, cur: entry, join: afterCopy, pathRec: pathRec, ids: ids)
-	let rawAttrs = ids.mint()
+	let attrs = ids.mint()
 	emitIoPark(module, block: afterCopy, operation: GtIoOperation.fileExists, ids: ids)
-	module.appendOp(afterCopy, op: StdOp.osFileAttributes(rawAttrs, pathPtrId: scratch))
+	module.appendOp(afterCopy, op: StdOp.osFileAttributes(attrs, pathPtrId: scratch))
 	emitRawFree(module, block: afterCopy, ptr: scratch, ids: ids)
 
-	// `GetFileAttributesA` answers a DWORD, so the comparison is against the MASKED value: a raw i64 register
-	// holding 0x00000000FFFFFFFF is not -1, and testing it against -1 would call every missing path present.
-	let mask = emitConst(module, block: afterCopy, value: DwordMask, ids: ids)
-	let attrs = emitBin(module, block: afterCopy, a: rawAttrs, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
 	let invalidConst = emitConst(module, block: afterCopy, value: InvalidFileAttributes, ids: ids)
 	let noSuchPath = emitCmp(module, block: afterCopy, a: attrs, b: invalidConst, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(afterCopy, op: StdOp.condBranch(noSuchPath, thenBlockId: missing.id, elseBlockId: present.id))
@@ -685,7 +680,7 @@ function buildManagedDirectoryExists(module StdModule)
 	let zeroAnswer = emitConst(module, block: missing, value: 0, ids: ids)
 	module.setTerminator(missing, op: StdOp.ret(zeroAnswer))
 
-	// The path exists — but `exists()` asks whether it is a DIRECTORY, so a plain file answers false.
+	// `exists()` asks whether the path is a directory, so a plain file answers false.
 	let dirMask = emitConst(module, block: present, value: FileAttributeDirectory, ids: ids)
 	let dirBit = emitBin(module, block: present, a: attrs, b: dirMask, opcode: StdBinOpcode.bitAnd, ids: ids)
 	let noBit = emitConst(module, block: present, value: 0, ids: ids)

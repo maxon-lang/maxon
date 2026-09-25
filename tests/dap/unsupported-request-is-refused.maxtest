@@ -1,0 +1,36 @@
+let RefusalCaseLabel = "unsupported-request-is-refused"
+
+// Any command with no advertised capability serves; implementing `gotoTargets` means picking
+// another.
+let UnservedCommand = "gotoTargets"
+
+type RefusalSession implements DapSession
+	let executable as FilePath
+	export var refused as JsonDoc
+	export var controlSucceeded as bool
+
+	static function create(executable FilePath) returns RefusalSession
+		return Self{executable: executable, refused: JsonDoc.create(), controlSucceeded: false}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+		_ = try client.request(LaunchCommand, argumentsJson: dapLaunchArguments(self.executable))
+		_ = try client.awaitEvent(InitializedEvent)
+
+		self.refused = try client.request(UnservedCommand)
+		self.controlSucceeded = dapSuccess(try client.request(ThreadsCommand))
+
+		_ = try client.request(DisconnectCommand)
+	end 'drive'
+end 'RefusalSession'
+
+test 'an unsupported request is refused by name, and a served one still succeeds'
+	let staged = dapStagedFixture(RefusalCaseLabel, fixture: SteppingFixtureName)
+	var session = RefusalSession.create(dapBuildFixture(staged))
+	try dapRunSession(session, completing: "complete. An adapter that DROPS a command it does not know leaves the client waiting for ever, which is the worse half of this failure")
+
+	try Expect.isFalse(dapSuccess(session.refused), message: "`{UnservedCommand}` is not implemented and must answer `success: false`, never a successful response with an empty body")
+	try Expect.contains(dapRefusal(session.refused), needle: UnservedCommand, message: "the refusal must NAME the command, so a client and a reader can tell which one was refused")
+	try Expect.isTrue(session.controlSucceeded, message: "`{ThreadsCommand}` in the SAME session must still succeed — an adapter refusing everything says nothing about `{UnservedCommand}`")
+end 'an unsupported request is refused by name, and a served one still succeeds'

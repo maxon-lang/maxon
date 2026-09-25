@@ -621,25 +621,22 @@ export union TestOutcome
 	export function isPass() returns bool
 		return match self 'p'
 			pass gives true
-			fail gives false
-			skipped gives false
-			notRunHere gives false
+			fail or
+				skipped or
+				notRunHere gives false
 		end 'p'
 	end 'isPass'
 
-	// ⭐ Did a COMPILE happen whose emitted code is worth pinning against the committed golden?
-	//
-	// ⚠ **THIS IS NOT `isPass()`, AND CONFLATING THE TWO IS WHAT MADE THE CROSS LANE WORTHLESS.** A
-	// `notRunHere` case compiled cleanly and emitted a full Target-IR module; comparing that module
-	// against the golden is the ONLY verification such a case can get on this host, and it is a large
-	// fraction of what a cross lane is for. A `fail` is excluded because a failing test's IR is noise,
-	// and a `skipped` because nothing was emitted at all.
+	// ⚠ Not `isPass()`: a `notRunHere` case compiled cleanly and emitted a full Target-IR module, and
+	// comparing that module against the golden is the only verification such a case gets on this host,
+	// which is much of what a cross lane is for. A `fail` is excluded because a failing test's IR is
+	// noise, and a `skipped` because nothing was emitted at all.
 	export function pinsEmittedCode() returns bool
 		return match self 'p'
-			pass gives true
-			fail gives false
-			skipped gives false
-			notRunHere gives true
+			pass or
+				notRunHere gives true
+			fail or
+				skipped gives false
 		end 'p'
 	end 'pinsEmittedCode'
 end 'TestOutcome'
@@ -686,22 +683,20 @@ export union GoldenDrift
 	// that would have validated it never happened here (`notRunHere`). See `recordFragmentAndCleanup`.
 	unrecorded
 
-	// ⭐ **DID THE COMMITTED REFERENCE STOP DESCRIBING WHAT THE COMPILER EMITS? — the ONE predicate that
-	// decides the drifted SET.** Both readers go through it: `tallyResults` counts what it admits and
-	// `reportGoldenDrift` renders what it admits, so the number on the summary line and the entries in the
-	// trailer cannot come to describe two different sets. A second predicate would not fail to compile; it
-	// would print `35 drifted` over a note listing 30.
+	// The one predicate that decides the drifted set. Both readers go through it: `tallyResults`
+	// counts what it admits and `reportGoldenDrift` renders what it admits, so the number on the
+	// summary line and the entries in the trailer cannot come to describe two different sets.
 	//
-	// ⚠ **THE FALSE ARMS ARE FOUR DIFFERENT FACTS AND ONLY ONE OF THEM IS VERIFICATION.** `matched` is a
-	// comparison that held; `notPinned`, `minted` and `unrecorded` each mean no comparison happened, for
-	// three different reasons. This question is only about drift, and none of that may be read out of it.
+	// ⚠ The false arms are four different facts and only `matched` is verification; `notPinned`,
+	// `minted` and `unrecorded` each mean no comparison happened. This answers only about drift, and
+	// none of that may be read out of it.
 	export function isDrifted() returns bool
 		return match self 'reference'
 			drifted gives true
-			notPinned gives false
-			matched gives false
-			minted gives false
-			unrecorded gives false
+			notPinned or
+				matched or
+				minted or
+				unrecorded gives false
 		end 'reference'
 	end 'isDrifted'
 
@@ -815,85 +810,47 @@ type CompileAnswer
 	function isBuilt() returns bool
 		return match self.verdict 'v'
 			built gives true
-			reportedDiagnostics gives false
-			driverFailed gives false
+			reportedDiagnostics or
+				driverFailed gives false
 		end 'v'
 	end 'isBuilt'
 end 'CompileAnswer'
 
-// Takes an `Executable` rather than a `FilePath` so a caller can name a tool to be found on PATH
-// (`orb`) as easily as one whose exact location it already computed. The distinction belongs to the
-// caller — this is only the spawn.
-// ⚠ EVERY SPAWN CARRIES A DEADLINE, because `Subprocess`'s default is to wait FOREVER
-// (`timeoutMs = 0`) and a merge gate that hangs indefinitely is strictly worse than one that fails:
-// it reports NOTHING, so there is nothing to act on.
+// Every spawn carries a deadline, because `Subprocess`'s default (`timeoutMs = 0`) is to wait
+// forever, and a gate that hangs indefinitely reports nothing, so there is nothing to act on. An
+// external runner can block after its guest process has exited, and a redirected runner's
+// block-buffered stdout makes that hang silent rather than slow.
 //
-// Not hypothetical. A cross run through `orb` was observed blocking for **18m35s AFTER the guest
-// process had already exited and been reaped** (caught inside the VM as `<defunct>`); SIGTERM did
-// not clear it, SIGKILL did, and the suite then finished normally. It showed ZERO output for those
-// 19 minutes because the runner's stdout is block-buffered when redirected — so the failure mode is
-// not merely slow, it is silent. Rate was ~1 in 700 harness-driven execs and 0 in 300 shell-driven
-// ones, which puts the fault in the external runner rather than here; the CONSEQUENCE is still this
-// harness's to bound, and bounding it is the only part we control.
+// The value is far above what any legitimate spec needs rather than tuned to observed timings. It
+// converts an unbounded silent hang into a named failure (`SubprocessError.timeout`, rendered by
+// `runFailureReason` with whatever the child had written), not a policing of slow tests: a tight
+// deadline would inject flakes.
 //
-// The value is deliberately ~1000x the headroom it needs rather than tuned to observed timings: all
-// 780 tests COMPILE AND RUN in ~90 s serially (~0.12 s per test per phase), so no legitimate spec
-// can approach it. It exists to convert an unbounded silent hang into a named failure
-// (`SubprocessError.timeout`, rendered by `runFailureReason` with whatever the child had written), NOT to
-// police slow tests — a
-// tight deadline would inject flakes into a suite that currently has none, which is the one way
-// this guard could leave things worse than it found them.
+// ⚠ Exported because two of the pool's bounds are derived from it: this deadline,
+// `TestProgressDeadlineMs`'s floor and `WedgeWatchdogMs` are nested — this one bounds a single
+// subprocess, the progress bound how long a worker may say nothing, and the wedge watchdog the
+// dispatch loop's idleness — so an outer bound must never fire first and report an inner one's
+// failure as its own. None of the three is re-spelled as a literal; see
+// `SpecWorkerPool.progressDeadlineMs`, which derives the batched lane's allowance from
+// `batchDeadlineMs` for this reason.
 //
-// ⚠ EXPORTED BECAUSE TWO OF THE POOL'S BOUNDS ARE DERIVED FROM IT, and must be: this deadline,
-// `TestProgressDeadlineMs`'s floor and `WedgeWatchdogMs` are NESTED — this one bounds a single
-// subprocess, the progress bound bounds how long a worker may say NOTHING (i.e. one step of the spec
-// it is running), and the wedge watchdog bounds the dispatch loop's idleness — so an outer bound must
-// never fire first and report an inner one's failure as its own. Do not re-spell any of the three as a
-// literal; see `SpecWorkerPool.progressDeadlineMs`, which derives the batched lane's allowance from
-// `batchDeadlineMs` for exactly this reason.
+// It does not bound a compile, which runs in this process: the pool's progress bound ends a hung
+// compile, one level up.
 //
-// ⛔ **IT DOES NOT BOUND A COMPILE, AND THAT IS THE GAP `TestProgressDeadlineMs` EXISTS TO FILL.** A
-// compile runs in this process rather than in a `build` SUBPROCESS carrying this deadline, so this
-// bounds only the RUN — the pool's progress bound is what ends a hung compile, one level up.
-//
-// ⚠ **IT IS THE DEADLINE FOR ONE EXECUTION, WHICH IS NOT THE SAME THING AS ONE SPAWN.** The
-// batched WSL run performs a whole spec's executions inside a SINGLE `wsl` process (`runWslBatch`):
-// each one is bounded by this value from inside the guest, by coreutils `timeout`, and the spawn
-// carrying them all is bounded by their SUM (`batchDeadlineMs`). Two units, one number — the guest's
-// `timeout` takes SECONDS and `Subprocess` takes MILLISECONDS — so one is DERIVED from the other
-// rather than written down twice, which is also what keeps them from drifting apart.
+// It is the deadline for one execution, which is not one spawn: the batched WSL run performs a
+// whole spec's executions inside a single `wsl` process (`runWslBatch`), each bounded by this value
+// inside the guest with coreutils `timeout`, which takes seconds, and the spawn by their sum
+// (`batchDeadlineMs`). So the milliseconds are derived from the seconds rather than written twice.
 let SpecSpawnTimeoutSeconds = 120
-export let SpecSpawnTimeoutMs = SpecSpawnTimeoutSeconds * MillisPerSecond
+export let SpecSpawnTimeoutMs = SpecSpawnTimeoutSeconds * MillisecondsPerSecond
 
-// `Subprocess`'s own sentinel for "give the child MY cwd" — the EMPTY path, which is exactly what
-// `Configuration.create` defaults `workingDirectory` to. Named here rather than spelled at each spawn
-// because `workingDirectory` below is a REQUIRED argument and every spawn but the RUN step's wants
-// this value: hand-written `FilePath.from("")`s would each be a chance to write something that is
-// not the sentinel, and a wrong one is silent — the child simply starts somewhere else.
+// `workingDirectory` is required: a working directory is a fact only the caller knows, and a spawn
+// that states none starts its child somewhere nobody chose (see `RunWorkingSubdirName`).
 //
-// ⚠ It is a required argument rather than a defaulted one ON PURPOSE. The defect this parameter exists
-// to fix (see `RunWorkingSubdirName`) was precisely a spawn that never said where it should run and got
-// an answer nobody had chosen; a default would restore that, one call site at a time.
-export function inheritedWorkingDir() returns FilePath
-	return try FilePath.from("") otherwise panic("SpecTestRunner: the empty path is Subprocess's 'inherit cwd' sentinel and must parse")
-end 'inheritedWorkingDir'
-
-// ⚠ `timeoutMs` DEFAULTS, and that is deliberately the opposite decision from `workingDirectory`'s
-// above. A working directory is a fact only the CALLER knows, and the defect that made it required was
-// a spawn that never said where it should run; the deadline is the opposite — every spawn in this
-// harness that performs ONE execution wants the same value, and there is exactly one caller that
-// performs many at once and must therefore say so (`runWslBatch`). Defaulting puts the number in one
-// place and makes the one site that differs the one site that states it.
-//
-// ⚠ `environment` DEFAULTS FOR EXACTLY THAT REASON AND NOT FOR `workingDirectory`'s: every spawn here but
-// ONE wants the parent's environment unchanged, and the one that differs is the RUN step, where a case's
-// `<!-- procs: N -->` marker names the processor count its program must start on and its
-// `<!-- preempt: off -->` marker withdraws the monitor's preemption (`runEnvironmentFor`).
-//
-// ⚠ `standardInput` DEFAULTS FOR THE SAME REASON AS `environment`, and its one differing caller is the
-// same one: every spawn this harness makes wants `Subprocess`'s own default (the null device, so a read
-// answers at once with EOF), and the RUN step alone may be told otherwise by a case's
-// `<!-- stdin: … -->` marker (`runStdinFor`).
+// `timeoutMs`, `environment` and `standardInput` default because every spawn but one wants the same
+// value, so the one that differs is the one that states it: `runWslBatch` for the deadline, since
+// it performs many executions in one spawn, and the RUN step for the environment
+// (`runEnvironmentFor`) and standard input (`runStdinFor`).
 export function runProcess(exe Executable, argv StringArray, workingDirectory FilePath, timeoutMs DurationMs = SpecSpawnTimeoutMs, environment Environment = Environment.inherit, standardInput InputSource = InputSource.none) returns ProcessCapture throws SubprocessError
 	var config = Configuration.create(exe)
 	config.arguments = argv
@@ -1455,66 +1412,38 @@ union TargetRefusal
 	refused(diagnostics String)
 end 'TargetRefusal'
 
-// ⭐⭐ **THE CROSS-TARGET SKIP — READ OFF THE COMPILER'S OWN VERDICT, NOT OFF A MARKER AND NOT OFF THE
-// CASE'S SOURCE TEXT.**
+// The cross-target skip, read off the compiler's own verdict rather than a marker or the case's
+// source text. A case whose construct the chosen target cannot provide is skipped: not run, not
+// failed, counted and reported. `E3104 targetUnsupportedConstruct` states that fact at the call's
+// own span, naming the runtime entry that has no lowering there
+// (`SemanticCheck.requireTargetSupportsCallee`), so this asks the diagnostic rather than keeping a
+// second list beside it. A marker cannot be that authority: it is sufficient but not necessary,
+// since a case pinning that argv[0] arrives alone cannot carry one. And when a lane gains the
+// construct, the compiler stops emitting E3104 there and its cases run, with no edit here or in any
+// spec file.
 //
-// A case whose construct the chosen target cannot provide is SKIPPED: not run, not failed, counted and
-// reported. The compiler already knows that fact exactly and states it precisely — `E3104
-// targetUnsupportedConstruct`, at the call's own span, naming the runtime entry that has no lowering
-// there (`SemanticCheck.requireTargetSupportsCallee`). That diagnostic IS the authority, so this asks
-// it rather than keeping a second list beside it.
+// The hazard is a silent skip: a wrong E3104 would make cases vanish from a green suite. That is
+// why a skip is a result (`TestOutcome.skipped`) rather than an absence, why it travels its own
+// wire record, and why `reportTargetSkips` prints the count, the target and the constructs. A skip
+// that is not counted must never be added here.
 //
-// ⭐ **WHY THE COMPILER AND NOT THE HARNESS.** The harness's previous answer guessed from the `<!--
-// Args: … -->` marker a case carries — argv is the only host-only substrate the corpus reaches often —
-// and that guess is MEASURED WRONG: `/specs` holds 52
-// argv-reading code blocks against 51 markers. `command-line-args.args-length-no-extra` reads
-// `CommandLine.args()` with NO marker at all, because the property it pins is precisely that argv[0]
-// arrives ALONE — a marker would destroy the test — and `command-line-args.executable-path` is the same
-// shape one substrate over (`Process.executablePath`, which is not argv and so never had one). ⇒ the
-// marker is SUFFICIENT but NOT NECESSARY, and a rule that is only sufficient cannot be a gate. Marking
-// those two cases by hand would have silenced the symptom by lying about the case and left the 53rd
-// unmarked one to red again.
-//
-// ⭐ **IT UN-GATES ITSELF, AND IT HANDLES A PARTIAL LANDING FOR FREE.** The day a POSIX or WASI argv
-// substrate lands, the compiler simply stops emitting E3104 on the lane that has it and these cases run
-// there, with no edit here and none in any spec file. A marker-derived, CALLEE-ONLY expression structurally
-// could NOT express that: a landing on x64-linux but not wasm reads the same on both, because the target is
-// not in the question.
-//
-// ⛔⛔ **AND THE HAZARD IT CREATES IS THE ONE THIS WHOLE MECHANISM EXISTS TO DELETE: a SILENT skip.** If
-// the compiler ever emitted E3104 wrongly, cases would vanish and the suite would still read green —
-// the same lie a marker on a case that never needed one would tell, arriving by a new road. That is why
-// a skip is a RESULT (`TestOutcome.skipped`) rather than an absence, why it travels its own wire record,
-// and why `reportTargetSkips` prints the count, the target and the constructs in the trailer. **A skip
-// that is not counted must never be added here.**
-//
-// ⚠ **FOUR THINGS MAKE IT NARROW, AND EACH ANSWERS A DIFFERENT WAY IT COULD SWALLOW A REAL FAILURE:**
-//   * only a verdict that did NOT hold is considered at all, so a case that pins E3104 as its own
-//     expected diagnostic (`builtins-sleep.rejected-on-wasm`) matches, passes, and is never reached here;
-//   * and a `compilerError` case is not converted even when its verdict DID fail, which is the half the
-//     line above cannot cover and once did not: see `outcomeOrTargetSkip`, where a MEASURED silent skip
-//     of exactly those cases is recorded. The coverage that pins the refusal survives the refusal
-//     becoming a skip in BOTH directions only because of that second guard;
-//   * EVERY NON-EMPTY LINE the compiler printed must BE an E3104, not merely contain one. One other
-//     diagnostic beside it means the compile also had a real complaint, and a real complaint is a
-//     failure; one line that is not a diagnostic at all — a panic, a runtime message, anything this
-//     harness does not recognise — is likewise not something to interpret as "the target lacks a
-//     feature". That is stricter than "no OTHER diagnostic", deliberately: the failure mode being
-//     guarded against is a skip that swallows something real, so an unrecognised line must count
-//     AGAINST the skip rather than be walked past;
-//   * the compile must have failed by REPORTING DIAGNOSTICS, and by nothing else — a STATE, never an
-//     exit code. ⚠ **AN EXIT CODE CANNOT SAY IT**: a compiler that LEAKS exits 101 having printed the
-//     very same lines, and folding that into a skip deletes the leak gate. An in-process
-//     compile has no exit code and reaches no 101 at this level (see `CompileVerdict`, which owns
-//     where the leak signal goes); the state that carries the rule is
-//     `reportedDiagnostics`. A build that died on a missing file or an unlocatable `stdlib/` is
-//     `driverFailed` and is refused here exactly as a 101 would be — its text is not `Diagnostic.render()`
-//     output at all, so reading a construct out of it would be reading a sentence about the harness.
+// Four guards keep it narrow, each against a different way it could swallow a real failure:
+//   * only a verdict that did not hold is considered, so a case that pins E3104 as its own expected
+//     diagnostic (`builtins-sleep.rejected-on-wasm`) matches, passes, and never reaches here;
+//   * a `compilerError` case is not converted even when its verdict failed (`outcomeOrTargetSkip`),
+//     so the coverage that pins a refusal survives the refusal becoming a skip in both directions;
+//   * every non-empty line the compiler printed must be an E3104, not merely contain one: another
+//     diagnostic is a real complaint, and a line that is not a diagnostic at all (a panic, a
+//     runtime message) counts against the skip rather than being walked past;
+//   * the compile must have failed by reporting diagnostics (`reportedDiagnostics`), a state and
+//     never an exit code: a compiler that leaks exits 101 having printed the very same lines, and
+//     folding that into a skip deletes the leak gate (`CompileVerdict` owns where the leak signal
+//     goes). A `driverFailed` build is refused too: its text is not `Diagnostic.render()` output.
 function targetRefusalIn(compile CompileAnswer) returns TargetRefusal
 	let diagnosticsWereReported = match compile.verdict 'v'
-		built gives false
+		built or
+			driverFailed gives false
 		reportedDiagnostics gives true
-		driverFailed gives false
 	end 'v'
 
 	if not diagnosticsWereReported 'notADiagnosticFailure'
@@ -1749,24 +1678,21 @@ function driftDetailOf(golden GoldenDrift) returns String
 	end 'reference'
 end 'driftDetailOf'
 
-// ⭐ THE CENSUS OF EVERYTHING THIS RUN DID NOT RUN, and the reason it may never be silent is in
-// `targetRefusalIn`'s header: a skip nobody counts is indistinguishable from a case that quietly
-// vanished. It names the COUNT, the TARGET and the CONSTRUCTS — the last one straight out of the
-// compiler's diagnostic, which is the only artifact that knows which runtime entry was missing.
+// The census of everything this run did not run; `targetRefusalIn`'s header says why it may never
+// be silent. It names the count, the target and the constructs, the last straight out of the
+// compiler's diagnostic, the only artifact that knows which runtime entry was missing.
 //
-// SILENT when nothing was skipped, which is the whole of the host lane and most of every other: the
-// suite's convention for every trailer, where "no note" means zero.
-//
-// STDERR, because stdout is the report and stays byte-identical between
-// worker counts. The per-test `SKIP` lines and the count are on stdout, in `Main.reportResults`.
+// Silent when nothing was skipped: the suite's convention for every trailer, where "no note" means
+// zero. On stderr, because stdout is the report and stays byte-identical between worker counts; the
+// per-test `SKIP` lines and the count are on stdout, in `Main.reportResults`.
 export function reportTargetSkips(results SpecTestResultArray, effectiveTarget Target)
 	var entries = StringArray.create()
 
 	for result in results 'each'
 		match result.outcome 'verdict'
-			pass then continue
-			fail then continue
-			notRunHere then continue
+			pass or
+				fail or
+				notRunHere then continue
 			skipped(refusals) then entries.push(resultNoteEntry(result.specName, testName: result.testName, detail: indentedRefusals(refusals)))
 		end 'verdict'
 	end 'each'
@@ -1896,26 +1822,19 @@ function needsExternalRunner(target Target) returns bool
 	return target.cpu != host.cpu or target.os != host.os
 end 'needsExternalRunner'
 
-// ⭐ Does `target` emit a Target-IR module — i.e. is there a golden to pin?
+// Keyed on the CPU, because that is the fact: a register backend lowers Std IR into the Target
+// dialect, and `--emit-ir` writes that dialect out as the `.ir` sidecar the `.test` fragments gate.
+// wasm32 has no register file (`RegBits.registerFileFor` panics for it) and its backend consumes
+// the Std module directly, so there is nothing for a golden to hold. Every register backend is
+// true, including the ones that need an external runner.
 //
-// Keyed on the CPU, because that IS the fact: a REGISTER backend lowers Std IR into the Target
-// dialect, allocates registers over it and encodes it, and `--emit-ir` writes that dialect out as
-// the `.ir` sidecar the `.test` fragments gate. wasm32 has no register file at all (`RegBits
-// .registerFileFor` panics for it) — its backend consumes the Std module directly, so there is no
-// Target dialect for it to emit and nothing for a golden to hold.
-//
-// That is what makes wasm's `false` UNFORGEABLE by either predicate drifting: it does not come from
-// a name, an OS, or a list that someone must remember to update, but from the same property that
-// decides whether the register allocator runs. Every register backend — x64 and arm64, on every
-// OS — is TRUE, including the ones that need an external runner.
-//
-// Exported for the same reason `fragmentsRootDir` is: BOTH HALVES OF THE POOL ASK IT, in different
+// Exported for the same reason `fragmentsRootDir` is: both halves of the pool ask it, in different
 // processes. The parent gates `prepareSharedDirs` on it; the worker gates the `--emit-ir` flag and
 // the fragment write. A second copy in either is a copy that can disagree.
 export function emitsTargetIr(target Target) returns bool
 	return match target.cpu 'cpu'
-		x64 gives true
-		arm64 gives true
+		x64 or
+			arm64 gives true
 		wasm32 gives false
 	end 'cpu'
 end 'emitsTargetIr'
@@ -2379,7 +2298,8 @@ function compileVerdictOf(e CompileError) returns CompileVerdict
 			unnamedDirectory or
 			invalidOutputPath or
 			stdlibNotFound or
-			runtimeNotFound gives CompileVerdict.driverFailed
+			runtimeNotFound or
+			runtimeTierIsNotAProgram gives CompileVerdict.driverFailed
 	end 'arm'
 end 'compileVerdictOf'
 
@@ -2486,9 +2406,9 @@ function collectTraceRemint(reminted TraceRemintArray, test SpecTest, observatio
 
 	match observation 'observed'
 		completed(capture) then reminted.push(TraceRemint.create(traceSliceOf(test.traceCapture), family: family, trace: normalizeTrace(capture.stdout, family: family)))
-		notRequired then break 'observed'
-		failed then break 'observed'
-		notRunnableHere then break 'observed'
+		notRequired or
+			failed or
+			notRunnableHere then break 'observed'
 	end 'observed'
 end 'collectTraceRemint'
 
@@ -2824,11 +2744,10 @@ function compareTrace(expected String, actual String, family TraceFamily, monito
 	return TestOutcome.fail(withMonitorStderrText("{traceFenceOf(family)} mismatch:\nExpected:\n{expected}\nActual:\n{actual}", monitorStderr: monitorStderr))
 end 'compareTrace'
 
-// ⭐ **ATTACH THE MONITOR'S STDERR TO AN mm-trace FAILURE.** Every mm-trace verdict goes through here, so
-// no failure can report a symptom while the cause sits unread in a discarded stream: that stream carries
-// the `[debugstream]` event summary, the child's own stderr, AND the monitor's own crash report. The
-// reference records dropping it making a monitor that CRASHED before spawning the child indistinguishable
-// from a program that simply allocated nothing.
+// Every trace-capture verdict goes through here, so no failure can report a symptom while the cause
+// sits unread in a discarded stream: the monitor's stderr carries the `[debugstream]` event
+// summary, the child's own stderr and the monitor's own crash report. Without it, a monitor that
+// crashed before spawning the child is indistinguishable from a program that allocated nothing.
 function withMonitorStderr(outcome TestOutcome, traceCapture SpecTraceCapture, monitorStderr String) returns TestOutcome
 	match traceCapture 'mode'
 		off then return outcome
@@ -2838,9 +2757,9 @@ function withMonitorStderr(outcome TestOutcome, traceCapture SpecTraceCapture, m
 
 	return match outcome 'verdict'
 		fail(reason) gives TestOutcome.fail(withMonitorStderrText(reason, monitorStderr: monitorStderr))
-		pass gives outcome
-		skipped gives outcome
-		notRunHere gives outcome
+		pass or
+			skipped or
+			notRunHere gives outcome
 	end 'verdict'
 end 'withMonitorStderr'
 
@@ -3941,10 +3860,9 @@ function guestCompilerPath(projectRoot FilePath, harnessExe FilePath, effectiveT
 	return projectRoot.join(outputDir).join(exeName)
 end 'guestCompilerPath'
 
-// ⚠ **ANNOUNCED, BECAUSE IT IS A PAUSE MEASURED IN MINUTES.** A caller who typed `spec-test
-// --target=arm64-linux` asked for a suite, not a build, and a silent two-minute gap before the first
-// test line reads as a hang. The line names the source that forced it, because the verdict is holding
-// exactly that fact and a reader who has to go looking for it will not.
+// Announced, because the pause is minutes long: a caller who typed `spec-test --target=arm64-linux`
+// asked for a suite, not a build, and a silent gap before the first test line reads as a hang. The
+// line names the source that forced it, because the verdict is holding exactly that fact.
 function buildGuestCompiler(harnessExe FilePath, projectRoot FilePath, guestExe FilePath, effectiveTarget Target, because String) returns GuestCompiler
 	let targetKey = targetToString(effectiveTarget)
 	printError("building the {targetKey} compiler that will run this suite ({because}) — a few minutes\n")
@@ -3955,11 +3873,11 @@ function buildGuestCompiler(harnessExe FilePath, projectRoot FilePath, guestExe 
 	argv.push("{TargetFlagPrefix}{targetKey}")
 	argv.push("{OutputFlagPrefix}{guestExe.toString()}")
 
-	let built = try runProcess(Executable.path(harnessExe), argv: argv, workingDirectory: inheritedWorkingDir(), timeoutMs: GuestCompilerBuildDeadlineMs) otherwise (e) 'buildUnspawnable'
+	let built = try runProcess(Executable.path(harnessExe), argv: argv, workingDirectory: inheritedWorkingDirectory(), timeoutMs: GuestCompilerBuildDeadlineMs) otherwise (e) 'buildUnspawnable'
 		return GuestCompiler.unavailable("could not run `{harnessExe.toString()} {BuildSubcommandName} {projectRoot.toString()}`: {e.displayReason()}")
 	end 'buildUnspawnable'
 
-	if built.exitCode != 0 'buildFailed'
+	if not exitSucceeded(built.exitCode as ExitCode) 'buildFailed'
 		return GuestCompiler.unavailable("building the {targetKey} compiler failed (exit {built.exitCode}):\n{built.stderr}")
 	end 'buildFailed'
 
@@ -3973,10 +3891,9 @@ function buildGuestCompiler(harnessExe FilePath, projectRoot FilePath, guestExe 
 	return GuestCompiler.ready(guestExe)
 end 'buildGuestCompiler'
 
-// ⚠ **THIS NUMBER BOUNDS A WEDGE, NOT A SLOW BUILD.** A cross-target self-build of this compiler takes
-// on the order of two minutes, so no honest build approaches it; what it exists to convert is a build
-// that has stopped making progress into a named failure instead of a suite that never starts.
-let GuestCompilerBuildDeadlineMs = 30 * 60 * MillisPerSecond
+// Bounds a wedge, not a slow build: no honest cross-target self-build approaches it, and it turns a
+// build that has stopped making progress into a named failure instead of a suite that never starts.
+let GuestCompilerBuildDeadlineMs = 30 * 60 * MillisecondsPerSecond
 
 // The suite's own command line, behind `orb run`, streamed rather than collected.
 //
@@ -4018,8 +3935,8 @@ function spawnGuestSuite(guestExe FilePath, specDir FilePath, filterPatterns Fil
 	end 'guestUnreachable'
 
 	// The guest's exit code IS this command's: a red inside the machine must be red outside it, and
-	// that includes the codes whose meaning is not "a test failed" — `LeakCheckExitCode` and
-	// `NothingRanExitCode`.
+	// that includes the codes whose meaning is not "a test failed" — the leak exit
+	// (`isLeakDetectedExit`) and `NothingRanExitCode`.
 	return match ran.status 'termination'
 		exited(code) gives code as ExitCode
 		signalled(code) gives reportGuestSignalled(code as ExitCodeValue)
@@ -4030,7 +3947,7 @@ end 'spawnGuestSuite'
 // nothing about itself — so this is a failure of the RUN, named as one.
 function reportGuestSignalled(signal ExitCodeValue) returns ExitCode
 	printError("error: the suite inside '{OrbMachineName}' was killed by signal {signal} — no verdict was reported\n")
-	return 1
+	return OwnFailureExit
 end 'reportGuestSignalled'
 
 function reportGuestUnavailable(reason String, effectiveTarget Target) returns ExitCode
@@ -4739,18 +4656,17 @@ function requireOrbMachineReachable(effectiveTarget Target)
 	argv.push(OrbMachineName)
 	argv.push(OrbProbeCommand)
 
-	// DERIVED from the target the caller is actually running, never spelled as a literal — the same
-	// discipline the deleted `nativeTargetKeys` was built on. A message that tells the reader to drop
-	// `--target=<x>` has to name the flag `parseBuildTarget` accepts, and `targetToString` is the one
-	// producer of that spelling; a literal here would misname a cross-CPU orb target (x64-linux under
-	// Rosetta) and could not be reached by a renaming.
+	// Derived from the target the caller is running, never spelled as a literal: a message that tells
+	// the reader to drop `--target=<x>` has to name the flag `parseBuildTarget` accepts, and
+	// `targetToString` is the one producer of that spelling. A literal here would misname a cross-CPU
+	// orb target (x64-linux under Rosetta) and could not be reached by a renaming.
 	let orbTargetKey = targetToString(effectiveTarget)
 
-	let probe = try runProcess(Executable.name(OrbExecutableName), argv: argv, workingDirectory: inheritedWorkingDir()) otherwise (e) 'notInstalled'
+	let probe = try runProcess(Executable.name(OrbExecutableName), argv: argv, workingDirectory: inheritedWorkingDirectory()) otherwise (e) 'notInstalled'
 		panic("SpecTestRunner: could not run '{OrbExecutableName}' ({e.displayReason()}) — running a {orbTargetKey} binary from a non-Linux host needs OrbStack (https://orbstack.dev); install it, or drop {TargetFlagPrefix}{orbTargetKey} and run the suite for this host")
 	end 'notInstalled'
 
-	if probe.exitCode != 0 'machineUnreachable'
+	if not exitSucceeded(probe.exitCode as ExitCode) 'machineUnreachable'
 		panic("SpecTestRunner: '{OrbExecutableName} {OrbRunSubcommand} {OrbMachineFlag} {OrbMachineName} {OrbProbeCommand}' failed (exit {probe.exitCode}): {probe.stderr.trim()} — the {orbTargetKey} run path needs an OrbStack Linux machine named '{OrbMachineName}' (`orb create ubuntu {OrbMachineName}`)")
 	end 'machineUnreachable'
 end 'requireOrbMachineReachable'
@@ -4769,11 +4685,11 @@ function requireWslAvailable(effectiveTarget Target)
 	argv.push(GuestShellCommandFlag)
 	argv.push(wslProbeScript())
 
-	let probe = try runProcess(Executable.name(WslExecutableName), argv: argv, workingDirectory: inheritedWorkingDir()) otherwise (e) 'notInstalled'
+	let probe = try runProcess(Executable.name(WslExecutableName), argv: argv, workingDirectory: inheritedWorkingDirectory()) otherwise (e) 'notInstalled'
 		panic("SpecTestRunner: could not run '{WslExecutableName}' ({e.displayReason()}) — running a {wslTargetKey} binary from a Windows host needs WSL2 (`wsl --install`); install it, or drop {TargetFlagPrefix}{wslTargetKey} and run the suite for this host")
 	end 'notInstalled'
 
-	if probe.exitCode != 0 'distroUnusable'
+	if not exitSucceeded(probe.exitCode as ExitCode) 'distroUnusable'
 		panic("SpecTestRunner: '{WslExecutableName} {WslExecFlag} {GuestShell} {GuestShellCommandFlag} {wslProbeScript()}' failed (exit {probe.exitCode}): {probe.stderr.trim()} — the {wslTargetKey} run path needs a working WSL2 distribution (`wsl --install`) whose {GuestShell} and coreutils `{GuestTimeoutCommand}` are present, because a spec's binaries are run from a generated shell script that bounds each one with it")
 	end 'distroUnusable'
 end 'requireWslAvailable'
@@ -4824,20 +4740,11 @@ end 'runPreconditions'
 // `<!-- DebugInfo -->`: the sidecar must be WALKABLE, not merely written
 // ============================================================================
 //
-// ⭐⭐ **A `.mxdbg` THAT MERELY EXISTS PROVES NOTHING.** Every window this file writes is a
-// `(first, count)` pair into a separate table, and a pair that runs past its table's end produces a
-// file that LOADS and then answers confidently out of whatever bytes follow. So a marked case's
-// sidecar is opened and walked, and a case is failed by name for each way the walk cannot be trusted.
+// `MxdbgReader.parse` refuses a dangling reference or a window past its table; what it accepts is
+// checked here for what a well-formed file can still get wrong.
 //
-// ⭐ **A COUNT OF ZERO IS THE SHAPE A WHOLE MISSING TABLE HIDES IN**, and every offset check passes
-// over it vacuously. The type count is therefore asserted NON-ZERO: every program has types, so a
-// table naming none is one nobody filled rather than a program that has none.
-//
-// ⚠ **THE wasm LANE WRITES NO SIDECAR AT ALL**, and that is deliberate: it emits a core module rather
-// than a `.text` image, so a table keyed by `.text` offsets has nothing to describe
-// (`writeDebugInfoSidecar`). The gate is therefore the same predicate that decides whether a target
-// goes through a register backend at all — a case marked `<!-- DebugInfo -->` is checked on every lane
-// that emits an image and skipped, rather than failed, on the one that does not.
+// The wasm lane writes no sidecar (`writeDebugInfoSidecar`), so a marked case is skipped rather
+// than failed on every lane `emitsTargetIr` refuses.
 function checkDebugInfoSidecar(debugInfo bool, exePath FilePath, effectiveTarget Target) returns TestOutcome
 	if not debugInfo or not emitsTargetIr(effectiveTarget) 'noSidecarExpected'
 		return TestOutcome.pass
@@ -4863,62 +4770,11 @@ function sidecarStructureOutcome(reader MxdbgReader) returns TestOutcome
 		return TestOutcome.fail("the .mxdbg sidecar describes 0 types. Every program has types, so a type table naming none is one the writer never filled — and a debugger with no type table can name a local and never render its value")
 	end 'noTypes'
 
-	let referenceOutcome = sidecarTypeReferenceOutcome(reader)
-
-	if not referenceOutcome.isPass() 'danglingTypeId'
-		return referenceOutcome
-	end 'danglingTypeId'
-
-	let windowOutcome = sidecarTypeWindowOutcome(reader)
-
-	if not windowOutcome.isPass() 'fieldWindowEscapes'
-		return windowOutcome
-	end 'fieldWindowEscapes'
-
 	return sidecarLocalWindowOutcome(reader)
 end 'sidecarStructureOutcome'
 
-// Every `typeId` a field or a local carries, checked against the type table it indexes. A dangling id
-// is the failure that renders as a real type name belonging to something else entirely.
-function sidecarTypeReferenceOutcome(reader MxdbgReader) returns TestOutcome
-	for i in 0 upto reader.fieldCount() 'eachField'
-		let field = reader.fieldRecord(i as MxdbgIndex)
-
-		if field.typeId >= reader.typeCount() 'pastTheTypeTable'
-			return TestOutcome.fail("field record {i} ('{field.name}') names type {field.typeId}, past the sidecar's {reader.typeCount()} types")
-		end 'pastTheTypeTable'
-	end 'eachField'
-
-	for i in 0 upto reader.localCount() 'eachLocal'
-		let local = reader.localRecord(i as MxdbgIndex)
-
-		if local.typeId >= reader.typeCount() 'pastTheTypeTable'
-			return TestOutcome.fail("local record {i} ('{local.name}') names type {local.typeId}, past the sidecar's {reader.typeCount()} types")
-		end 'pastTheTypeTable'
-	end 'eachLocal'
-
-	return TestOutcome.pass
-end 'sidecarTypeReferenceOutcome'
-
-// ⚠ The window's end is tested as a REMAINING COUNT rather than as `first + count`: the two words are
-// each a full u32, so their sum is the one arithmetic here that could carry past the width it is
-// compared in.
-function sidecarTypeWindowOutcome(reader MxdbgReader) returns TestOutcome
-	for i in 0 upto reader.typeCount() 'eachType'
-		let entry = reader.typeRecord(i as MxdbgIndex)
-
-		if entry.fieldFirst > reader.fieldCount() or entry.fieldCount > reader.fieldCount() - entry.fieldFirst 'windowEscapes'
-			return TestOutcome.fail("type {i} ('{entry.name}') claims {entry.fieldCount} field(s) from {entry.fieldFirst} of a field table holding {reader.fieldCount()}")
-		end 'windowEscapes'
-	end 'eachType'
-
-	return TestOutcome.pass
-end 'sidecarTypeWindowOutcome'
-
-// ⚠ **THE LOCAL WINDOWS ARE ASSERTED CONTIGUOUS, NOT MERELY IN RANGE.** Each function's records are
-// appended in function order, so `localFirst` is the running total — and a window that is individually
-// in range while OVERLAPPING its neighbour hands two functions the same records, which reads as a
-// plausible dump rather than as a defect.
+// Contiguous, not merely in range: a window in range that overlaps its neighbour hands two
+// functions the same records, which reads as a plausible dump rather than as a defect.
 function sidecarLocalWindowOutcome(reader MxdbgReader) returns TestOutcome
 	var nextLocal = 0 as MxdbgIndex
 
@@ -4928,10 +4784,6 @@ function sidecarLocalWindowOutcome(reader MxdbgReader) returns TestOutcome
 		if fn.localFirst != nextLocal 'notContiguous'
 			return TestOutcome.fail("function {i} ('{fn.name}') opens its local window at {fn.localFirst}, where the functions before it end at {nextLocal}. The windows are appended in function order, so a gap loses records and an overlap hands two functions the same ones")
 		end 'notContiguous'
-
-		if fn.localCount > reader.localCount() - fn.localFirst 'windowEscapes'
-			return TestOutcome.fail("function {i} ('{fn.name}') claims {fn.localCount} local(s) from {fn.localFirst} of a local table holding {reader.localCount()}")
-		end 'windowEscapes'
 
 		nextLocal = (fn.localFirst + fn.localCount) as MxdbgIndex
 	end 'eachFunction'
@@ -5477,26 +5329,19 @@ end 'referencePathMapping'
 // mapping's `<dir>/<fragment>` (see FragmentPathMapping).
 //
 // With no offset the path is all that moves, and a whole-text replace does it — that is every
-// single-file test, and it is the path this function had before multi-file tests existed.
+// single-file test.
 function rewriteDiagnosticPaths(text String, path String, lineOffset LineIndex, token String) returns String
 	if lineOffset == NoLineOffset 'linesAlreadyMatch'
 		return text.replace(path, with: token)
 	end 'linesAlreadyMatch'
 
-	// An explicit if/else, NOT `rewritten if first else "{out}\n{rewritten}"`. Both arms happen to be
-	// owned here so the ternary would not leak — but the construct is a known compiler trap the
-	// moment one arm is a borrowed field read (OPEN.md #8b), and it is not worth keeping an instance
-	// of it around for a reader to copy.
-	var out = ""
-	var first = true
+	var rewritten = StringArray.create()
 
 	for line in text.split(LineSeparator) 'eachLine'
-		let rewritten = rewriteDiagnosticLine(line, path: path, lineOffset: lineOffset, token: token)
-		out = rewritten if first else "{out}{LineSeparator}{rewritten}"
-		first = false
+		rewritten.push(rewriteDiagnosticLine(line, path: path, lineOffset: lineOffset, token: token))
 	end 'eachLine'
 
-	return out
+	return joinedWith(rewritten, separator: LineSeparator)
 end 'rewriteDiagnosticPaths'
 
 // Rewrite ONE diagnostic line: `<anything><path>:<line>:<col>:<message>`.

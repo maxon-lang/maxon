@@ -1,0 +1,30 @@
+let LibraryCallbackCaseLabel = "a-backtrace-walks-through-library-frames-to-main"
+let RankFunctionName = "rank"
+let MainFunctionName = "main"
+
+test 'a stop in a function the library calls back still shows main below the library frames'
+	let staged = builtFixture(LibraryCallbackCaseLabel, fixture: LibraryCallbackFixtureName)
+	let rankLine = anchorLine(staged, anchor: "rank-body")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(rankLine)}", RunCommand, BacktraceCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let walks = eventsOfKind(events, kind: BacktraceEventName)
+
+	try Expect.equal(walks.count() as AssertedInt, expected: 1, message: "the `{BacktraceCommand}` at the comparator's breakpoint printed no walk. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let walked = eventAt(walks, index: 0)
+	let names = framesNamed(walked)
+	try Expect.equal(try names.get(0) otherwise "", expected: RankFunctionName, message: "the innermost frame is the comparator the breakpoint is in. Frames: {renderedRows(names)}. {said}")
+	try Expect.equal(try names.get(names.count() - 1) otherwise "", expected: MainFunctionName, message: "⛔ THE WALK CROSSES THE LIBRARY'S SORT TO REACH `main`. The sort's frames are not the program's, and a walk that stopped at the first of them loses every program frame beneath it. Frames: {renderedRows(names)}. {said}")
+end 'a stop in a function the library calls back still shows main below the library frames'
+
+function framesNamed(walked JsonDoc) returns StringArray
+	var names = StringArray.create()
+
+	for frame in childrenOf(walked, node: walked.root, key: FramesKey) 'eachFrame'
+		names.push(textOf(walked, node: frame, key: FunctionKey))
+	end 'eachFrame'
+
+	return names
+end 'framesNamed'

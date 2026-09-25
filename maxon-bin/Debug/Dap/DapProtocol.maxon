@@ -1,0 +1,289 @@
+export typealias DapSeq = int(0 to i64.max)
+export typealias DapNumber = int(i64.min to i64.max)
+export typealias DapObjectArray = Array with DapObject
+
+let SeqKey = "seq"
+let TypeKey = "type"
+let CommandKey = "command"
+let ArgumentsKey = "arguments"
+let RequestSeqKey = "request_seq"
+let SuccessKey = "success"
+let MessageKey = "message"
+let BodyKey = "body"
+let EventKey = "event"
+
+let RequestType = "request"
+let ResponseType = "response"
+let EventType = "event"
+
+let FirstAdapterSeq = 1 as DapSeq
+
+export enum DapProtocolError implements Error
+	notJson
+	notARequest
+end 'DapProtocolError'
+
+export union DapArgumentError implements Error
+	missing(name String)
+	wrongType(name String)
+end 'DapArgumentError'
+
+export union DapBody
+	none
+	object(node JsonNodeId)
+end 'DapBody'
+
+export type DapObject
+	let doc as JsonDoc
+	let node as JsonNodeId
+
+	export static function over(doc JsonDoc, node JsonNodeId) returns DapObject
+		return Self{doc: doc, node: node}
+	end 'over'
+
+	export function has(key String) returns bool
+		_ = try self.doc.getChild(self.node, key: key) otherwise return false
+
+		return true
+	end 'has'
+
+	export function text(key String) returns String throws DapArgumentError
+		if not self.has(key) 'absent'
+			throw DapArgumentError.missing(key)
+		end 'absent'
+
+		return try self.doc.getString(self.node, key: key) otherwise throw DapArgumentError.wrongType(key)
+	end 'text'
+
+	export function textOr(key String, fallback String) returns String throws DapArgumentError
+		if not self.has(key) 'absent'
+			return fallback
+		end 'absent'
+
+		return try self.text(key)
+	end 'textOr'
+
+	export function number(key String) returns DapNumber throws DapArgumentError
+		if not self.has(key) 'absent'
+			throw DapArgumentError.missing(key)
+		end 'absent'
+
+		let asked = try self.launchAsk(key)
+
+		return match asked 'whole'
+			absent panic("DapObject.number: `{key}` was just found present")
+			given(value) gives try wholeNumberOf(value, key: key)
+		end 'whole'
+	end 'number'
+
+	export function numberOr(key String, fallback DapNumber) returns DapNumber throws DapArgumentError
+		if not self.has(key) 'absent'
+			return fallback
+		end 'absent'
+
+		return try self.number(key)
+	end 'numberOr'
+
+	export function launchAsk(key String) returns NumberAsk throws DapArgumentError
+		return try numberAskIn(self.doc, node: self.node, key: key) otherwise throw DapArgumentError.wrongType(key)
+	end 'launchAsk'
+
+	export function flagOr(key String, fallback bool) returns bool throws DapArgumentError
+		if not self.has(key) 'absent'
+			return fallback
+		end 'absent'
+
+		return try self.doc.getBool(self.node, key: key) otherwise throw DapArgumentError.wrongType(key)
+	end 'flagOr'
+
+	export function object(key String) returns DapObject throws DapArgumentError
+		if not self.has(key) 'absent'
+			throw DapArgumentError.missing(key)
+		end 'absent'
+
+		let child = try self.doc.getChild(self.node, key: key) otherwise throw DapArgumentError.missing(key)
+
+		if self.doc.get(child).kind != JsonKind.jsonObject 'notAnObject'
+			throw DapArgumentError.wrongType(key)
+		end 'notAnObject'
+
+		return DapObject.over(self.doc, node: child)
+	end 'object'
+
+	export function objects(key String) returns DapObjectArray throws DapArgumentError
+		var found = DapObjectArray.create()
+
+		for element in try self.elements(key) 'eachElement'
+			if self.doc.get(element).kind != JsonKind.jsonObject 'notAnObject'
+				throw DapArgumentError.wrongType(key)
+			end 'notAnObject'
+
+			found.push(DapObject.over(self.doc, node: element))
+		end 'eachElement'
+
+		return found
+	end 'objects'
+
+	export function texts(key String) returns StringArray throws DapArgumentError
+		var found = StringArray.create()
+
+		for element in try self.elements(key) 'eachElement'
+			let value = self.doc.get(element)
+
+			if value.kind != JsonKind.jsonString 'notAString'
+				throw DapArgumentError.wrongType(key)
+			end 'notAString'
+
+			found.push(value.stringValue)
+		end 'eachElement'
+
+		return found
+	end 'texts'
+
+	export function textMap(key String) returns EnvMap throws DapArgumentError
+		var found = EnvMap.create()
+
+		if not self.has(key) 'absent'
+			return found
+		end 'absent'
+
+		let child = try self.doc.getChild(self.node, key: key) otherwise throw DapArgumentError.missing(key)
+		let holder = self.doc.get(child)
+
+		if holder.kind != JsonKind.jsonObject 'notAnObject'
+			throw DapArgumentError.wrongType(key)
+		end 'notAnObject'
+
+		for (iter, name) in holder.keys.withIterator() 'eachKey'
+			let value = self.doc.get(try holder.children.get(iter.index()) otherwise panic("DapObject.textMap: an object node holds one child per key"))
+
+			if value.kind != JsonKind.jsonString 'notAString'
+				throw DapArgumentError.wrongType(key)
+			end 'notAString'
+
+			found.upsert(name, value: value.stringValue)
+		end 'eachKey'
+
+		return found
+	end 'textMap'
+
+	function elements(key String) returns JsonNodeIdArray throws DapArgumentError
+		if not self.has(key) 'absent'
+			return JsonNodeIdArray.create()
+		end 'absent'
+
+		let child = try self.doc.getChild(self.node, key: key) otherwise throw DapArgumentError.missing(key)
+		let holder = self.doc.get(child)
+
+		if holder.kind != JsonKind.jsonArray 'notAnArray'
+			throw DapArgumentError.wrongType(key)
+		end 'notAnArray'
+
+		return holder.children
+	end 'elements'
+end 'DapObject'
+
+export type DapRequest
+	export let seq as DapSeq
+	export let command as String
+	export let arguments as DapObject
+
+	export static function parse(body String) returns DapRequest throws DapProtocolError
+		var doc = try Json.parse(body) otherwise throw DapProtocolError.notJson
+
+		if doc.rootKind() != JsonKind.jsonObject 'notAnObject'
+			throw DapProtocolError.notARequest
+		end 'notAnObject'
+
+		let messageType = try doc.getString(doc.root, key: TypeKey) otherwise throw DapProtocolError.notARequest
+
+		if messageType != RequestType 'notARequest'
+			throw DapProtocolError.notARequest
+		end 'notARequest'
+
+		let seq = try doc.getInt(doc.root, key: SeqKey) otherwise throw DapProtocolError.notARequest
+		let command = try doc.getString(doc.root, key: CommandKey) otherwise throw DapProtocolError.notARequest
+
+		if seq < 0 'notASequenceNumber'
+			throw DapProtocolError.notARequest
+		end 'notASequenceNumber'
+
+		let arguments = try doc.getChild(doc.root, key: ArgumentsKey) otherwise doc.add(JsonNode.objectNode(StringArray.create(), children: JsonNodeIdArray.create()))
+
+		if doc.get(arguments).kind != JsonKind.jsonObject 'argumentsNotAnObject'
+			throw DapProtocolError.notARequest
+		end 'argumentsNotAnObject'
+
+		return Self{seq: seq as DapSeq, command: command, arguments: DapObject.over(doc, node: arguments)}
+	end 'parse'
+end 'DapRequest'
+
+export type DapWriter
+	var nextSeq as DapSeq
+
+	export static function create() returns DapWriter
+		return Self{nextSeq: FirstAdapterSeq}
+	end 'create'
+
+	export function respond(request DapRequest, doc JsonDoc, body DapBody)
+		var envelope = self.responseEnvelope(request, doc: doc, success: true)
+		addBody(envelope, body: body)
+		self.send(doc, envelope: envelope)
+	end 'respond'
+
+	export function refuse(request DapRequest, message String)
+		var doc = JsonDoc.create()
+		var envelope = self.responseEnvelope(request, doc: doc, success: false)
+		envelope.addString(doc, key: MessageKey, value: message)
+		self.send(doc, envelope: envelope)
+	end 'refuse'
+
+	export function event(name String, doc JsonDoc, body DapBody)
+		var envelope = self.envelope(doc, messageType: EventType)
+		envelope.addString(doc, key: EventKey, value: name)
+		addBody(envelope, body: body)
+		self.send(doc, envelope: envelope)
+	end 'event'
+
+	function responseEnvelope(request DapRequest, doc JsonDoc, success bool) returns JsonObjectBuilder
+		var envelope = self.envelope(doc, messageType: ResponseType)
+		envelope.addNumber(doc, key: RequestSeqKey, value: request.seq as JsonFloat)
+		envelope.addBool(doc, key: SuccessKey, value: success)
+		envelope.addString(doc, key: CommandKey, value: request.command)
+
+		return envelope
+	end 'responseEnvelope'
+
+	function envelope(doc JsonDoc, messageType String) returns JsonObjectBuilder
+		var envelope = JsonObjectBuilder.create()
+		envelope.addNumber(doc, key: SeqKey, value: self.nextSeq as JsonFloat)
+		envelope.addString(doc, key: TypeKey, value: messageType)
+		self.nextSeq = self.nextSeq + 1
+
+		return envelope
+	end 'envelope'
+
+	function send(doc JsonDoc, envelope JsonObjectBuilder)
+		doc.root = envelope.build(doc)
+		writeLspMessage(Json.stringify(doc))
+	end 'send'
+end 'DapWriter'
+
+function wholeNumberOf(reading NumberReading, key String) returns DapNumber throws DapArgumentError
+	if not isWholeWithin(reading.value, least: 0 - DapExactIntegerBound, most: DapExactIntegerBound) 'notWhole'
+		throw DapArgumentError.wrongType(key)
+	end 'notWhole'
+
+	return trunc(reading.value)
+end 'wholeNumberOf'
+
+// 2^53: past it a JSON number no longer holds every integer, so a whole-looking value may not be
+// the one the client sent.
+let DapExactIntegerBound = 9007199254740992
+
+function addBody(envelope JsonObjectBuilder, body DapBody)
+	match body 'which'
+		none then break 'which'
+		object(node) then envelope.addNode(BodyKey, node: node)
+	end 'which'
+end 'addBody'

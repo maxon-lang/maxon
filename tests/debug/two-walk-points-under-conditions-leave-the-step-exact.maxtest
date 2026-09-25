@@ -1,0 +1,37 @@
+let HoldConflictCaseLabel = "two-walk-points-under-conditions-leave-the-step-exact"
+let MainFunctionName = "main"
+let NeverTrueCondition = "limit == 999"
+let PastTheNextLineBytes = 16
+
+test 'a step whose exit and call site both carry a user breakpoint with a false condition still lands on the next line'
+	let staged = builtFixture(HoldConflictCaseLabel, fixture: HoldConflictFixtureName)
+	let scanLine = anchorLine(staged, anchor: "spliced-scan")
+	let afterLine = anchorLine(staged, anchor: "after-scan")
+	let first = lowestOffsetOf(statementOffsetsOfLine(builtExecutable(staged), staged: staged, line: scanLine))
+	let last = lowestOffsetOf(statementOffsetsOfLine(builtExecutable(staged), staged: staged, line: afterLine)) + PastTheNextLineBytes
+
+	var script = StringArray.create()
+
+	for offset in first + 1 to last 'eachByte'
+		script.push(conditionalBreak(exactOffsetTarget(offset), condition: NeverTrueCondition))
+	end 'eachByte'
+
+	script.push("{BreakCommand} {lineTarget(scanLine)}")
+	script.push(RunCommand)
+	script.push(StepCommand)
+
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: debugCommandLine(script), extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	try Expect.atLeast(breakpointAnswersWithAction(events, action: SetAction) as AssertedInt, than: 3, message: "every instruction from the scan line to past the next line's first carries a breakpoint whose condition never holds — so the splice's exit and its call through a value, the two points the `{StepCommand}` plants, each carry one. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(eventsOfKind(events, kind: TimeoutEventName).count() as AssertedInt, expected: 0, message: "the step completes inside the stop timeout. {said}")
+
+	let stops = eventsOfKind(events, kind: StopEventName)
+	try Expect.equal(stops.count() as AssertedInt, expected: 2, message: "⛔ TWO WALK POINTS UNDER FALSE CONDITIONS NEED TWO HOLDS AND THE AGENT HAS ONE. The walk must not plant a point it cannot hold open — a false condition there would let the program run past it unseen — and must not report a breakpoint whose condition never held; the `{StepCommand}` is walked instead and still lands once. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let landed = eventAt(stops, index: 1)
+	try Expect.equal(textOf(landed, node: landed.root, key: ReasonKey), expected: StepStopReason, message: "the landing is the step's own, never one of the conditioned breakpoints. {said}")
+	try Expect.equal(numberOf(landed, node: landed.root, key: LineKey) as AssertedInt, expected: afterLine as AssertedInt, message: "the step lands on the program's next line. {said}")
+	try Expect.equal(textOf(landed, node: landed.root, key: FunctionKey), expected: MainFunctionName, message: "in the frame that made the call. {said}")
+end 'a step whose exit and call site both carry a user breakpoint with a false condition still lands on the next line'

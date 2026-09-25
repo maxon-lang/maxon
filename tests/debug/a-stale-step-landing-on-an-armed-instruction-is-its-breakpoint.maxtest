@@ -1,0 +1,64 @@
+let StaleStepCaseLabel = "a-stale-step-landing-on-an-armed-instruction-is-its-breakpoint"
+let MainFunctionName = "main"
+let ContinuesTaken = 60
+let TwoProcessors = "2"
+let SpawnSpelling = "spawn Churner.create("
+
+test 'a step main posted, overtaken by a service hitting its breakpoint, still reports the armed instruction it lands on'
+	let staged = builtFixture(StaleStepCaseLabel, fixture: StaleStepFixtureName)
+
+	try Expect.equal(stagedLinesContaining(staged, needle: SpawnSpelling) as AssertedInt, expected: 1, message: "this case is about ANOTHER machine's breakpoint overtaking main's step, so the fixture must start its hot loop as a service, which runs on a green thread of its own and on another processor.")
+
+	let startLine = anchorLine(staged, anchor: "main-start")
+	let nextLine = anchorLine(staged, anchor: "main-next")
+	let hotLine = anchorLine(staged, anchor: "hot-body")
+	let first = lowestOffsetOf(statementOffsetsOfLine(builtExecutable(staged), staged: staged, line: startLine))
+	let last = lowestOffsetOf(statementOffsetsOfLine(builtExecutable(staged), staged: staged, line: nextLine))
+
+	try Expect.isTrue(first < last, message: "the start line's code lies before the next line's, so every instruction start between them is one main executes in order")
+
+	var script = StringArray.create()
+
+	for offset in first to last 'eachCandidate'
+		script.push("{BreakCommand} {exactOffsetTarget(offset)}")
+	end 'eachCandidate'
+
+	script.push(RunCommand)
+	script.push("{BreakCommand} {lineTarget(hotLine)}")
+	script.push(NextCommand)
+
+	let commands = debugCommandLine(appendedCommands(script, rest: repeatedCommand(ContinueCommand, times: ContinuesTaken)))
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: [targetEnvOption(MaxProcsVariableName, value: TwoProcessors)])
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	var armed = SidecarNumberArray.create()
+
+	for answer in eventsOfKind(events, kind: BreakpointEventName) 'eachAnswer'
+		if textOf(answer, node: answer.root, key: ActionKey) == SetAction and textOf(answer, node: answer.root, key: FunctionKey) == MainFunctionName 'anInstructionOfMain'
+			armed.push(hexValue(textOf(answer, node: answer.root, key: OffsetKey)))
+		end 'anInstructionOfMain'
+	end 'eachAnswer'
+
+	try Expect.atLeast(armed.count() as AssertedInt, than: 3, message: "every instruction start from the start line to the next line's first is armed, and a line of arithmetic is several instructions. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	var reached = SidecarNumberArray.create()
+
+	for stop in eventsOfKind(events, kind: StopEventName) 'eachStop'
+		if textOf(stop, node: stop.root, key: FunctionKey) == MainFunctionName 'aStopOfMain'
+			reached.push(hexValue(textOf(stop, node: stop.root, key: OffsetKey)))
+		end 'aStopOfMain'
+	end 'eachStop'
+
+	try Expect.equal(renderedOffsets(reached), expected: renderedOffsets(armed), message: "⛔ A STEP THAT LANDS ON AN ARMED INSTRUCTION IS THAT INSTRUCTION'S BREAKPOINT, EVEN AFTER ANOTHER MACHINE'S STOP ENDED THE WALK THAT POSTED IT. Main is stopped at each armed instruction it executes, in order, once each; the `{NextCommand}` races the service's hit on its hot loop, and when the service wins, main's single-step is still outstanding when the session continues and lands on the next armed instruction. A filter that drops that landing as a step nobody waits for loses the hit, and main is next reported one instruction further on. {said}")
+end 'a step main posted, overtaken by a service hitting its breakpoint, still reports the armed instruction it lands on'
+
+function renderedOffsets(offsets SidecarNumberArray) returns String
+	var spelled = StringArray.create()
+
+	for offset in offsets 'eachOffset'
+		spelled.push(hexSpelling(offset))
+	end 'eachOffset'
+
+	return renderedRows(spelled)
+end 'renderedOffsets'

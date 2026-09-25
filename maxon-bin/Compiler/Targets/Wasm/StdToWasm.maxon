@@ -571,11 +571,10 @@ function appendGlobalCleanupGate(runBody WasmBody, exitCodeValType WasmValType, 
 	return WasmValType.i64
 end 'appendGlobalCleanupGate'
 
-// THE LEAK GATE on the wasm exit path, ported from the native `prependEntryStub`
-// (BackendDispatch:205). When the MM runtime installed `__mm_leak_check`, the exit code (on the
-// stack) is routed through it: it returns the code UNCHANGED, or LeakExitCode (101) when any
-// allocation outlived the program — so a leaking heap program FAILS with 101 rather than passing
-// invisibly. `__mm_leak_check` is an ordinary i64→i64 Std function, so a narrower ExitCode is widened
+// The leak gate on the wasm exit path, the twin of the native entry stub's. When the MM runtime
+// installed `__mm_leak_check`, the exit code (on the stack) is routed through it: it returns the
+// code unchanged, or `RuntimeAbort.leakDetected` (101) when any allocation outlived the program — so
+// a leaking heap program fails rather than passing invisibly. `__mm_leak_check` is an ordinary i64→i64 Std function, so a narrower ExitCode is widened
 // to i64 first. Without the MM runtime the program cannot leak (nothing was allocated), so the gate
 // is skipped and the code passes straight through — keeping the non-heap path byte-identical.
 //
@@ -680,12 +679,13 @@ function buildIndirectCallTypeIdxMap(module StdModule, builder WasmModuleBuilder
 	return map
 end 'buildIndirectCallTypeIdxMap'
 
-// If `op` is one of the THREE indirect calls — a `callIndirect` or either fused witness call — intern the
-// functype for its SIGNATURE into `map`; ignore any other op. Every StdOp variant is named, so one added
-// later FAILS TO COMPILE here rather than being swept into an ignore arm. Only body ops carry one of the three
-// (never a terminator), so scanning `block.opRefs` alone is complete.
+// Every StdOp variant is named, so one added later fails to compile here rather than being swept
+// into an ignore arm. Only body ops carry one of the three indirect calls (never a terminator), so
+// scanning `block.opRefs` alone is complete.
 function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder WasmModuleBuilder)
 	match op 'k'
+		// None of these makes an indirect call on this lane: each lowers to plain instructions, calls
+		// an import by index, emits nothing, or has no wasm lowering at all.
 		const or
 			binOp or
 			unaryOp or
@@ -709,34 +709,20 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 			tryCall or
 			errorReturn or
 			osExit or
-			funcAddr then break 'k'
-		callIndirect(_, _, resultType, argFloatMask, args) then internIndirectCallType(map, builder: builder, resultType: resultType, argFloatMask: argFloatMask, argCount: args.count(), isThrowing: false)
-		osPanic or
+			funcAddr or
+			osPanic or
 			osReadClock or
 			osProcessSpawn or
 			osProcessExitCode or
 			osCloseHandle or
 			osWaitHandle or
-			osFreePages then break 'k'
-
-		// The jump table makes no indirect call — it branches on an integer index.
-		switch then break 'k'
-
-		// ⭐ A witness call IS an indirect call on wasm: its callee is a funcref-table
-		// index loaded out of a witness-table slot, so it needs a pre-interned functype exactly as
-		// `callIndirect` does — through the SAME door, so the interned type and the call-site immediate cannot
-		// disagree. The THROWING form differs in ONE respect: its callee's wasm signature carries the trailing
-		// i64 error flag as a second result (`funcSignatureResultValTypes`), which `isThrowing` adds.
-		witnessCall(_, _, _, resultType, argFloatMask, args) then internIndirectCallType(map, builder: builder, resultType: resultType, argFloatMask: argFloatMask, argCount: args.count(), isThrowing: false)
-		witnessTryCall(_, _, _, _, resultType, argFloatMask, args) then internIndirectCallType(map, builder: builder, resultType: resultType, argFloatMask: argFloatMask, argCount: args.count(), isThrowing: true)
-
-		// The lock ops emit nothing at all here, so they make no indirect call.
-		osLockInit or
+			osWaitChild or
+			osFreePages or
+			switch or
+			osLockInit or
 			osLockEnter or
-			osLockLeave then break 'k'
-
-		// The IOCP ops have no wasm lowering and pull in no wasm import.
-		osPipeCreate or
+			osLockLeave or
+			osPipeCreate or
 			osEventCreate or
 			osThreadCreate or
 			osReadOverlapped or
@@ -745,13 +731,9 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 			osCancelIo or
 			osGetPid or
 			osPipeCreateOutbound or
-			osWriteFile then break 'k'
-
-		// The wall clock has no wasm lowering and makes no indirect call.
-		osReadWallClock then break 'k'
-
-		// The file ops have no wasm lowering (E3104 at the call site) and pull in no wasm import.
-		osFileOpenRead or
+			osWriteFile or
+			osReadWallClock or
+			osFileOpenRead or
 			osFileClose or
 			osReadFile or
 			osFileOpenWrite or
@@ -764,30 +746,17 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 			osDirCreate or
 			osDirRemove or
 			osDirCurrentPath or
-			osFileAttributes then break 'k'
-
-		// A rendered panic pulls in no import that `osPanic` does not.
-		osPanicValue then break 'k'
-
-		// The command line has no wasm lowering (E3104 at the call site) and pulls in no wasm import.
-		osCommandLine then break 'k'
-
-		// Neither has a wasm lowering, and neither pulls in a wasm import.
-		osStdHandle then break 'k'
-		osExecutablePath then break 'k'
-
-		// A stream write makes no INDIRECT call — it calls two IMPORTS by index.
-		osWriteStderr then break 'k'
-
-		// A frame address makes no call of any kind.
-		stackRecordAddr then break 'k'
-		osOpenNamedSegment or
+			osFileAttributes or
+			osPanicValue or
+			osCommandLine or
+			osStdHandle or
+			osExecutablePath or
+			osWriteStderr or
+			stackRecordAddr or
+			osOpenNamedSegment or
 			osMapNamedSegment or
-			osTickCountMs then break 'k'
-
-		// The rest of the appended band — the four attached-subprocess host primitives, the `ws2_32` socket
-		// band, the machine query AND the thread-CPU read — makes no wasm call either: none of it lowers here.
-		osHandleSetInherit or
+			osTickCountMs or
+			osHandleSetInherit or
 			osPipePeek or
 			osEnvRead or
 			osProcessTerminate or
@@ -801,40 +770,27 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 			osSocketRecv or
 			osSocketClose or
 			osCpuCount or
-			osThreadCpuTicks then break 'k'
-
-		// The decommit makes no call of ANY kind on this lane — it emits nothing at all (see `emitBodyOp`),
-		// so there is no signature to intern.
-		osDecommitPages then break 'k'
-
-		// A byte fill is ONE `memory.fill` instruction — no call, so no signature to intern.
-		memFill then break 'k'
-
-		// The reserve is `memory.grow` and the commit is a local copy — instructions, not calls, so neither
-		// has a signature to intern either.
-		osCommitPages or
-			osReservePages then break 'k'
-
-		// The two atomics and the thread token are plain instruction sequences on this lane — no call, so no
-		// signature to intern.
-		atomicCas or
+			osThreadCpuTicks or
+			osDecommitPages or
+			memFill or
+			osCommitPages or
+			osReservePages or
+			atomicCas or
 			atomicRmw or
-			currentThreadToken then break 'k'
-
-		// The multi-M substrate names no wasm function and needs no import table entry — it is REFUSED at
-		// emission (below), so it contributes nothing to collect here.
-		tlsAlloc or
+			currentThreadToken or
+			tlsAlloc or
 			tlsSetValue or
 			tlsSlotLoad or
 			osSetEvent or
-			osEnterBackgroundPriority then break 'k'
-		osFileOpenWriteExecutable then break 'k'
-		osEnvBlock or
-			osEnvBlockFree then break 'k'
-		loadAcquire or
-			storeRelease then break 'k'
-		osHandleFileType then break 'k'
-		osCreateNamedSegment or
+			osEnterBackgroundPriority or
+			osFileOpenWriteExecutable or
+			osEnvBlock or
+			osEnvBlockFree or
+			loadAcquire or
+			storeRelease or
+			osHandleFileType or
+			osProcessProbe or
+			osCreateNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
@@ -842,8 +798,16 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe then break 'k'
+			osSocketServe or
 			osDebugHost then break 'k'
+		callIndirect(_, _, resultType, argFloatMask, args) then internIndirectCallType(map, builder: builder, resultType: resultType, argFloatMask: argFloatMask, argCount: args.count(), isThrowing: false)
+
+		// A witness call is an indirect call on wasm: its callee is a funcref-table index loaded out of a
+		// witness-table slot, so its functype goes through the same door as `callIndirect`'s, and the
+		// interned type and the call-site immediate cannot disagree. The throwing form's signature also
+		// carries the trailing i64 error flag as a second result (`funcSignatureResultValTypes`).
+		witnessCall(_, _, _, resultType, argFloatMask, args) then internIndirectCallType(map, builder: builder, resultType: resultType, argFloatMask: argFloatMask, argCount: args.count(), isThrowing: false)
+		witnessTryCall(_, _, _, _, resultType, argFloatMask, args) then internIndirectCallType(map, builder: builder, resultType: resultType, argFloatMask: argFloatMask, argCount: args.count(), isThrowing: true)
 	end 'k'
 end 'internIndirectCallTypeFor'
 
@@ -925,15 +889,15 @@ end 'indirectCallArgValType'
 // f32 mapping is total for classification completeness, but nothing produces an f32 value.
 function wasmValTypeOf(t StdType) returns WasmValType
 	return match t 'w'
-		i1 gives WasmValType.i32
-		i8 gives WasmValType.i32
-		i16 gives WasmValType.i32
-		i32 gives WasmValType.i32
-		u8 gives WasmValType.i32
-		u16 gives WasmValType.i32
-		u32 gives WasmValType.i32
-		i64 gives WasmValType.i64
-		u64 gives WasmValType.i64
+		i1 or
+			i8 or
+			i16 or
+			i32 or
+			u8 or
+			u16 or
+			u32 gives WasmValType.i32
+		i64 or
+			u64 gives WasmValType.i64
 		f32 gives WasmValType.f32
 		f64 gives WasmValType.f64
 	end 'w'
@@ -1229,50 +1193,28 @@ function setValtype(valtypes WasmValTypeArray, v ValueId, vt WasmValType)
 	try valtypes.set(v, value: vt) otherwise panic("setValtype: v{v} OOB after growFilled — a grow that just ensured the slot cannot leave it missing")
 end 'setValtype'
 
-// The valtype of a unary op's RESULT. `neg`/`bitNot`/`logicalNot` compute what they consume;
-// the two conversions INVERT (`operandType` is always the source — `siToFp` reads an int and
-// yields f64, `fpToSi` reads f64 and yields an int), so their result type is NOT `operandType`.
-// Reading `operandType` as the result here would put the conversion's result in the wrong local
-// class (an f64 result recorded i64, or the reverse) — see StdUnaryOpcode's header.
+// The valtype of a unary op's result. `operandType` is always the source, so reading it as the
+// result puts the conversions and both bitcasts in the wrong local class and the module fails
+// validation. The math intrinsics are f64 → f64 by definition (`stdUnaryOperandIsFloat`).
 function unaryResultValType(opcode StdUnaryOpcode, operandType StdType) returns WasmValType
 	return match opcode 'k'
-		// ⚠ Naming these arms individually rather than collapsing them into a range costs nothing and
-		// buys a jump table: one forms only from 4+ INDIVIDUALLY-NAMED arms dense from ordinal 0, so a
-		// leading range would demote this to a ≤4-compare chain. Compile-time only, wasm-lowering only.
-		//
-		// ⚠ `logicalNot` PARTS COMPANY WITH THE OTHER TWO, and asking `wasmValTypeOf(operandType)` for
-		// it would be a latent trap rather than a shorter spelling: `emitLogicalNotExpr` emits an `i32.xor`
-		// and so ALWAYS defines an i32, while its `operandType` is the bool's — and a bool-returning
-		// function lowers to an i64 return in this tier, so an `operandType` that is not `i1` would
-		// declare the local i64 and fail wasm validation. `neg`/`bitNot` compute what they consume, at
-		// the machine word (`wasmMachineValTypeOf`, which keeps a float `neg`'s f64 unchanged).
+		// `neg`/`bitNot` compute what they consume, at the machine word (`wasmMachineValTypeOf` keeps a
+		// float `neg`'s f64). `logicalNot` does not: `emitLogicalNotExpr` emits an `i32.xor` and so
+		// always defines an i32, while its `operandType` is the bool's — and a bool-returning function
+		// lowers to an i64 return in this tier, so reading `operandType` would declare the local i64.
 		neg or
 			bitNot gives wasmMachineValTypeOf(operandType)
 		logicalNot gives WasmValType.i32
-		siToFp gives WasmValType.f64
-		fpToSi gives WasmValType.i64
-
-		// ⚠ The MATH INTRINSICS need their OWN arm even though `wasmValTypeOf(operandType)` would give
-		// the same answer: they sit PAST `fpToSi`, so the arm that computes it cannot be extended to
-		// reach them without swallowing both conversions. `f64` outright is also the stronger claim —
-		// they are f64 → f64 by definition (`stdUnaryOperandIsFloat`).
-		floor or
+		siToFp or
+			floor or
 			ceil or
 			round or
 			sqrt or
 			abs or
-			fneg gives WasmValType.f64
-
-		// ⚠ The BITCAST is the only op here whose operand and result differ in CLASS without the
-		// value changing: `i64.reinterpret_f64` reads an f64 local and writes an i64 one. Recording
-		// it as f64 (which `wasmValTypeOf(operandType)` would) puts the result in the wrong local
-		// class and the module fails validation, exactly as it would for the conversions.
-		bitcastF64ToI64 gives WasmValType.i64
-
-		// The INBOUND bitcast, and the same trap mirrored: `wasmValTypeOf(operandType)` would answer
-		// i64 (the source IS an i64) and record the result in an integer local, which `f64.*`
-		// consumers then fail validation against.
-		bitcastI64ToF64 gives WasmValType.f64
+			fneg or
+			bitcastI64ToF64 gives WasmValType.f64
+		fpToSi or
+			bitcastF64ToI64 gives WasmValType.i64
 	end 'k'
 end 'unaryResultValType'
 
@@ -1330,104 +1272,84 @@ function buildValtypeTable(module StdModule, func IrFunction, funcNames Function
 	return valtypes
 end 'buildValtypeTable'
 
-// Record one op's defined-value valtype. Exhaustive over `StdOp` with no bare `default`: a new
-// value-defining op fails to compile here rather than defaulting a value to the wrong width.
-// Terminators and the out-of-scope memory/system ops define nothing this backend declares a local
-// for (a memory/system op present at all makes the body emitter panic before this table is ever
-// consumed).
+// Exhaustive over `StdOp` with no bare `default`: a new value-defining op fails to compile here
+// rather than defaulting a value to the wrong width.
 function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames FunctionNameIndex)
 	match op 'def'
 		const(resultId, _, valueType) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(valueType))
-		binOp(resultId, _, _, _, operandType) then setValtype(valtypes, v: resultId, vt: wasmMachineValTypeOf(operandType))
+		binOp(resultId, _, _, _, operandType) or
+			// The immediate form carries its own width, so a fold cannot change a value's class: its
+			// result does not depend on `lhs`, which a fold does not promise agrees (see `emitBinOpImm`).
+			binOpImm then setValtype(valtypes, v: resultId, vt: wasmMachineValTypeOf(operandType))
 		unaryOp(resultId, _, opcode, operandType) then setValtype(valtypes, v: resultId, vt: unaryResultValType(opcode, operandType: operandType))
-		cmp(resultId, _, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i32)
 
-		// ⭐ The immediate forms carry their own width, so a fold cannot change a value's
-		// class: `binOpImm`'s result is `wasmMachineValTypeOf(operandType)`, exactly as `binOp`'s is, and
-		// it is NOT dependent on `lhs` — which a fold does not promise agrees (see `emitBinOpImm`).
-		binOpImm(resultId, _, _, _, operandType) then setValtype(valtypes, v: resultId, vt: wasmMachineValTypeOf(operandType))
-		cmpImm(resultId, _, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i32)
+		// ⚠ A wasm linear-memory address is an i32, not the i64 pointer width the native backends carry:
+		// `globalAddr` and `rdataAddr` materialize an `i32.const` that `loadIndirect`, `storeIndirect`
+		// and `osWriteStdout` consume as the base address.
+		cmp(resultId, _, _, _, _) or
+			cmpImm or
+			globalAddr or
+			rdataAddr then setValtype(valtypes, v: resultId, vt: WasmValType.i32)
 
-		// ⚠ The two ops with NO width of their own. They are computed at machine width and so define
-		// an i64, whatever their operands' storage widths are — `emitDivMod` holds the argument.
-		div(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-		mod(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-		condBranch then break 'def'
-		branch then break 'def'
-		ret then break 'def'
+		// ⚠ The machine word. `div`/`mod` have no width of their own and are computed at machine width
+		// whatever their operands' storage widths (`emitDivMod`). A stream write widens the i32 length it
+		// wrote back (`emitOsWriteStream`). A `funcAddr` is narrowed to the i32 `call_indirect`
+		// table-index operand only at the call itself (`emitFuncAddr`/`emitCallIndirect`), so it flows as
+		// i64, unlike an address consumed in place. The rest are refused at emission on this lane, or
+		// unreachable (`stackRecordAddr`: stack promotion is gated off for wasm32-wasi), but are typed
+		// anyway because this column is built before any lowering decides anything.
+		div(resultId, _, _, _) or
+			mod or
+			osAllocPages or
+			osWriteStdout or
+			funcAddr or
+			osWriteStderr or
+			stackRecordAddr or
+			osOpenNamedSegment or
+			osMapNamedSegment or
+			osTickCountMs or
+			osPipePeek or
+			osEnvRead or
+			osProcessTerminate or
+			osSocketStartup or
+			osSocketResolve or
+			osSocketCreate or
+			osSocketConnect or
+			osSocketError or
+			osSocketSend or
+			osSocketRecv or
+			osCpuCount or
+			osCommitPages or
+			osReservePages or
+			atomicCas or
+			atomicRmw or
+			currentThreadToken or
+			tlsAlloc or
+			tlsSlotLoad or
+			osEnterBackgroundPriority then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 
-		// A parameter's local is the wasm PARAMETER, so it takes the signature's machine word — the same
-		// answer the `func.paramTypes` sweep above already recorded for this id, and the same one
-		// `funcParamValTypes` declares.
-		param(resultId, _, paramType) then setValtype(valtypes, v: resultId, vt: wasmMachineValTypeOf(paramType))
-		call(resultId, callee, _) then setValtype(valtypes, v: resultId, vt: callResultValType(callee, funcNames: funcNames))
-		retVoid then break 'def'
-
-		// ⚠ A wasm linear-memory ADDRESS IS AN i32, not the i64 pointer width the native backends
-		// carry in a 64-bit register. `globalAddr` materializes an `i32.const`, so its result local
-		// must be i32 — the width `loadIndirect`/`storeIndirect` then consume as the base address.
-		globalAddr(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i32)
-		loadIndirect(resultId, _, _, valueType) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(valueType))
-		storeIndirect then break 'def'
-
-		// The ordered pair reads and writes exactly what its plain twin does, so the result local has
-		// the same valtype and the store defines none.
-		loadAcquire(resultId, _, _, valueType) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(valueType))
-		storeRelease then break 'def'
-		osAllocPages(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-
-		// A stream write defines the BYTE COUNT — an i64 like every other Std-tier integer, so the
-		// emitter widens the i32 length it wrote back to the machine width (see `emitOsWriteStream`).
-		osWriteStdout(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-
-		// A wasm linear-memory ADDRESS IS AN i32 (like `globalAddr`), not the i64 pointer width the
-		// native backends carry. `rdataAddr` materializes an `i32.const`, so its result local is i32 —
-		// the width `loadIndirect`/`osWriteStdout` then consume as the base address.
-		rdataAddr(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i32)
-
-		// A `tryCall` defines TWO values (like `call` plus the flag); `errorReturn`/`osExit` define
-		// none (a return terminator, a diverging exit). See `recordTryCallDefs`.
-		tryCall(resultId, errorFlagId, callee, _) then recordTryCallDefs(valtypes, resultId: resultId, errorFlagId: errorFlagId, callee: callee, funcNames: funcNames)
-		errorReturn then break 'def'
-		osExit then break 'def'
-
-		// Non-capturing function values. A function value itself is a machine word (its Std type
-		// collapses to i64 — valueTagToStdType), so a `funcAddr` (the callee's table index) is i64; it is
-		// narrowed to the i32 `call_indirect` table-index operand only at the call itself
-		// (`emitFuncAddr`/`emitCallIndirect`), so it FLOWS as i64 unlike a `globalAddr`/`rdataAddr` (an i32
-		// address consumed in place). A `callIndirect` RESULT takes the function value's own return width
-		// f64 for a float-returning function value, else i64 — the `resultType` the op carries,
-		// which is also the valtype the `call_indirect` functype declares as its result.
-		funcAddr(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-
-		// A VOID indirect callee (a raw element destructor) leaves NOTHING on the stack, so its `resultId` is a
-		// dead slot with no def — record no valtype (an unread i64-fill local, like any DCE gap). A value one
-		// takes the function value's own return width (f64 for a float-returning value, else i64).
-		callIndirect(resultId, _, resultType, _, _) then recordIndirectCallDefValtype(valtypes, resultId: resultId, resultType: resultType)
-		osPanic or
+		// No valtype: these define no value, or have no wasm lowering and so never have a def recorded.
+		condBranch or
+			branch or
+			ret or
+			retVoid or
+			storeIndirect or
+			storeRelease or
+			errorReturn or
+			osExit or
+			osPanic or
 			osReadClock or
 			osProcessSpawn or
 			osProcessExitCode or
 			osCloseHandle or
 			osWaitHandle or
-			osFreePages then break 'def'
-
-		// The jump table defines no value — a terminator has no result valtype to record.
-		switch then break 'def'
-
-		// A witness call defines exactly what a `callIndirect` does — the op-carried `resultType`'s width, and
-		// nothing at all for a VOID interface method. Its THROWING form defines the second `errorFlagId` too,
-		// always i64, exactly as a direct `tryCall`'s flag is.
-		witnessCall(resultId, _, _, resultType, _, _) then recordIndirectCallDefValtype(valtypes, resultId: resultId, resultType: resultType)
-		witnessTryCall(resultId, errorFlagId, _, _, resultType, _, _) then recordWitnessTryCallDefs(valtypes, resultId: resultId, errorFlagId: errorFlagId, resultType: resultType)
-
-		// The lock ops answer nothing and emit nothing — no def, so no wasm valtype.
-		osLockInit or
+			osWaitChild or
+			osFreePages or
+			switch or
+			osLockInit or
 			osLockEnter or
-			osLockLeave then break 'def'
-
-		// The IOCP ops have no wasm lowering — no wasm valtype to record.
-		osPipeCreate or
+			osLockLeave or
+			osPipeCreate or
 			osEventCreate or
 			osThreadCreate or
 			osReadOverlapped or
@@ -1436,13 +1358,9 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 			osCancelIo or
 			osGetPid or
 			osPipeCreateOutbound or
-			osWriteFile then break 'def'
-
-		// The wall clock has no wasm lowering and defines no value — no wasm valtype to record.
-		osReadWallClock then break 'def'
-
-		// The file ops have no wasm lowering, so no wasm valtype is ever recorded for their defs.
-		osFileOpenRead or
+			osWriteFile or
+			osReadWallClock or
+			osFileOpenRead or
 			osFileClose or
 			osReadFile or
 			osFileOpenWrite or
@@ -1455,105 +1373,52 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 			osDirCreate or
 			osDirRemove or
 			osDirCurrentPath or
-			osFileAttributes then break 'def'
-
-		// A rendered panic defines no value, exactly as `osPanic` defines none.
-		osPanicValue then break 'def'
-
-		// No wasm lowering, so no wasm valtype is ever recorded for its def.
-		osCommandLine then break 'def'
-
-		// Neither has a wasm lowering, so no wasm valtype is ever recorded for either def.
-		osStdHandle then break 'def'
-		osExecutablePath then break 'def'
-
-		// The stderr write defines the byte count at the Std tier width, exactly as its stdout twin does.
-		osWriteStderr(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-
-		// Unreachable on this lane — stack promotion is gated OFF for wasm32-wasi
-		// (`promoteStackRecords`): a wasm local has no address and the module emits no shadow-stack
-		// global, so there is no frame for a slot to index. The valtype scan still runs over the whole
-		// module ahead of emission, so it must classify the variant regardless; an i64 is what a pointer
-		// would be.
-		stackRecordAddr(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-
-		// A HANDLE, a mapped ADDRESS and a tick COUNT are all machine words — typed here even though
-		// `emitBodyOp` refuses them, because this column is built before any lowering decides anything.
-		osOpenNamedSegment(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-		osMapNamedSegment(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-		osTickCountMs(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-
-		// The attached subprocess's two ANSWERING host primitives; the other two answer nothing, so they take
-		// a `break` arm exactly as every other value-less op here does (`StdLoweringShared`'s twin note says
-		// the same thing — and both said "absent rather than present with a `break`", one citing the other,
-		// each directly above the `break` arms that made it false).
-		osPipePeek(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-		osEnvRead(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-		osHandleSetInherit then break 'def'
-		osProcessTerminate then break 'def'
-
-		// The socket family's six answering primitives; the other two answer nothing. This column is built
-		// before any lowering decides anything, which is why an x64-only family is classed here at all.
-		osSocketStartup(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-		osSocketResolve(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-		osSocketFreeAddrInfo then break 'def'
-		osSocketCreate(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-		osSocketConnect(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-		osSocketError(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-		osSocketSend(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-		osSocketRecv(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-		osSocketClose then break 'def'
-
-		// The machine query answers a processor count — an i64, exactly as `osGetPid` does. Classed here even
-		// though this target refuses it, for the reason the socket family states one line up: this column is
-		// built before any lowering decides anything.
-		osCpuCount(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-
-		// The thread-CPU read DEFINES nothing — its answer lands in the caller's out-param word, exactly as
-		// the wall-clock read's does, so there is no value to class.
-		osThreadCpuTicks then break 'def'
-
-		// The decommit defines no value on any target, so there is never a valtype to record.
-		osDecommitPages then break 'def'
-
-		// A fill defines no value either — it is a store.
-		memFill then break 'def'
-
-		// Both define a page BASE — an i64, exactly as `osAllocPages` does, because the Std tier carries every
-		// address at the machine width and this lane narrows to i32 only where an instruction demands one.
-		osCommitPages(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-		osReservePages(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-
-		// A CAS's success boolean, an RMW's prior word and a thread token are all i64 — the width every
-		// machine word carries at the Std tier, narrowed to i32 only where an instruction demands one.
-		atomicCas(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-		atomicRmw(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-		currentThreadToken(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-
-		// The two value-defining TLS ops would answer i64 like every other machine word; the two void ones
-		// declare nothing. They are refused at emission, so this only keeps the local map total.
-		tlsAlloc(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-		tlsSetValue then break 'def'
-		tlsSlotLoad(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-		osSetEvent then break 'def'
-
-		// The priority door would answer an i64 like every other machine word. It is refused at emission on
-		// this lane, so — exactly as for the TLS pair above — this arm exists only to keep the local map TOTAL.
-		osEnterBackgroundPriority(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-		osFileOpenWriteExecutable then break 'def'
-		osEnvBlock or
-			osEnvBlockFree then break 'def'
-		osHandleFileType then break 'def'
-		osCreateNamedSegment or
+			osFileAttributes or
+			osPanicValue or
+			osCommandLine or
+			osStdHandle or
+			osExecutablePath or
+			osHandleSetInherit or
+			osSocketFreeAddrInfo or
+			osSocketClose or
+			// The thread-CPU read DEFINES nothing — its answer lands in the caller's out-param word, exactly as
+			// the wall-clock read's does, so there is no value to class.
+			// The decommit defines no value on any target, so there is never a valtype to record.
+			// A fill defines no value either — it is a store.
+			osThreadCpuTicks or
+			osDecommitPages or
+			memFill or
+			tlsSetValue or
+			osSetEvent or
+			osFileOpenWriteExecutable or
+			osEnvBlock or
+			osEnvBlockFree or
+			osHandleFileType or
+			osProcessProbe or
+			osCreateNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
-			covPoint then break 'def'
-		osHostSample or
+			covPoint or
+			osHostSample or
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe then break 'def'
+			osSocketServe or
 			osDebugHost then break 'def'
+
+		// A parameter's local is the wasm parameter, so it takes the signature's machine word, the same
+		// answer the `func.paramTypes` sweep recorded and `funcParamValTypes` declares.
+		param(resultId, _, paramType) then setValtype(valtypes, v: resultId, vt: wasmMachineValTypeOf(paramType))
+		call(resultId, callee, _) then setValtype(valtypes, v: resultId, vt: callResultValType(callee, funcNames: funcNames))
+		loadIndirect(resultId, _, _, valueType) or
+			loadAcquire then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(valueType))
+		tryCall(resultId, errorFlagId, callee, _) then recordTryCallDefs(valtypes, resultId: resultId, errorFlagId: errorFlagId, callee: callee, funcNames: funcNames)
+
+		// A void indirect callee (a raw element destructor) leaves nothing on the stack, so its
+		// `resultId` is a dead slot and gets no valtype — an unread i64-fill local, like any DCE gap.
+		callIndirect(resultId, _, resultType, _, _) then recordIndirectCallDefValtype(valtypes, resultId: resultId, resultType: resultType)
+		witnessCall(resultId, _, _, resultType, _, _) then recordIndirectCallDefValtype(valtypes, resultId: resultId, resultType: resultType)
+		witnessTryCall(resultId, errorFlagId, _, _, resultType, _, _) then recordWitnessTryCallDefs(valtypes, resultId: resultId, errorFlagId: errorFlagId, resultType: resultType)
 	end 'def'
 end 'recordDefValtype'
 
@@ -1776,9 +1641,6 @@ type WasmFuncEmitter
 			tryCall then panic("emitStraightLineTerminator: a `tryCall` is a value-producing body op, never a terminator")
 			errorReturn(retValId, errorFlagId) then self.emitErrorReturn(retValId, errorFlagId: errorFlagId)
 			osExit then panic("emitStraightLineTerminator: an `osExit` is a body op followed by a dead return, never a terminator")
-
-			// A `funcAddr`/`callIndirect` is a value-producing body op, never a terminator — the exact
-			// mirror of the `call`/`tryCall` arms above.
 			funcAddr then panic("emitStraightLineTerminator: a `funcAddr` is a value-producing body op, never a terminator")
 			callIndirect then panic("emitStraightLineTerminator: a `callIndirect` is a value-producing body op, never a terminator")
 			osPanic or
@@ -1787,7 +1649,8 @@ type WasmFuncEmitter
 				osProcessExitCode or
 				osCloseHandle or
 				osWaitHandle or
-				osFreePages then panic("emitStraightLineTerminator: an `osPanic` is a body op, never a terminator")
+				osWaitChild or
+				osFreePages then panic("emitStraightLineTerminator: a host call (a panic, a clock read, a process, handle, wait or page op) is a body op, never a terminator")
 
 			// A jump table has multiple successors, so `decideDispatcher` always routes its function through
 			// the loop+br_table dispatcher — it never reaches the straight-line terminator path.
@@ -1821,7 +1684,8 @@ type WasmFuncEmitter
 				osDirCreate or
 				osDirRemove or
 				osDirCurrentPath or
-				osFileAttributes then panic("emitStraightLineTerminator: a file-IO op is a body op, never a terminator")
+				osFileAttributes or
+				osFileOpenWriteExecutable then panic("emitStraightLineTerminator: a file-IO op is a body op, never a terminator")
 			osPanicValue then panic("emitStraightLineTerminator: an `osPanicValue` is a body op, never a terminator")
 			osCommandLine then panic("emitStraightLineTerminator: an `osCommandLine` is a body op, never a terminator")
 			osStdHandle then panic("emitStraightLineTerminator: an `osStdHandle` is a body op, never a terminator")
@@ -1858,12 +1722,12 @@ type WasmFuncEmitter
 				tlsSlotLoad or
 				osSetEvent or
 				osEnterBackgroundPriority then panic("emitStraightLineTerminator: a TLS op, an event signal or the priority door is a body op, never a terminator")
-			osFileOpenWriteExecutable then panic("emitStraightLineTerminator: a file-IO op is a body op, never a terminator")
 			osEnvBlock or
 				osEnvBlockFree then panic("emitStraightLineTerminator: an environment-block read or release is a body op, never a terminator")
 			loadAcquire or
 				storeRelease then panic("emitStraightLineTerminator: an ordered load or store is a body op, never a terminator")
 			osHandleFileType then panic("emitStraightLineTerminator: `osHandleFileType` is a body op, never a terminator")
+			osProcessProbe then panic("emitStraightLineTerminator: `osProcessProbe` is a body op, never a terminator")
 			osCreateNamedSegment or
 				osUnmapNamedSegment or
 				osUnpublishNamedSegment then panic("emitStraightLineTerminator: a named-section create or unmap is a body op, never a terminator")
@@ -1873,7 +1737,7 @@ type WasmFuncEmitter
 			osPathQuery then panic("emitStraightLineTerminator: a path query is a body op, never a terminator")
 			osSocketOverlapped or
 				osSocketServe then panic("emitStraightLineTerminator: a socket transfer or a server-side socket call is a body op, never a terminator")
-				osDebugHost then panic("emitStraightLineTerminator: the debug agent's host primitive is a body op, never a terminator")
+			osDebugHost then panic("emitStraightLineTerminator: the debug agent's host primitive is a body op, never a terminator")
 		end 'term'
 	end 'emitStraightLineTerminator'
 
@@ -1954,9 +1818,6 @@ type WasmFuncEmitter
 			tryCall then panic("emitDispatcherTerminator: a `tryCall` is a value-producing body op, never a terminator")
 			errorReturn(retValId, errorFlagId) then self.emitErrorReturn(retValId, errorFlagId: errorFlagId)
 			osExit then panic("emitDispatcherTerminator: an `osExit` is a body op followed by a dead return, never a terminator")
-
-			// A `funcAddr`/`callIndirect` is a value-producing body op, never a terminator — the exact
-			// mirror of the `call`/`tryCall` arms above.
 			funcAddr then panic("emitDispatcherTerminator: a `funcAddr` is a value-producing body op, never a terminator")
 			callIndirect then panic("emitDispatcherTerminator: a `callIndirect` is a value-producing body op, never a terminator")
 			osPanic or
@@ -1965,7 +1826,8 @@ type WasmFuncEmitter
 				osProcessExitCode or
 				osCloseHandle or
 				osWaitHandle or
-				osFreePages then panic("emitDispatcherTerminator: an `osPanic` is a body op, never a terminator")
+				osWaitChild or
+				osFreePages then panic("emitDispatcherTerminator: a host call (a panic, a clock read, a process, handle, wait or page op) is a body op, never a terminator")
 			witnessCall then panic("emitDispatcherTerminator: a `witnessCall` is a value-producing body op, never a terminator")
 			witnessTryCall then panic("emitDispatcherTerminator: a `witnessTryCall` is a value-producing body op, never a terminator")
 			osLockInit or
@@ -1995,7 +1857,8 @@ type WasmFuncEmitter
 				osDirCreate or
 				osDirRemove or
 				osDirCurrentPath or
-				osFileAttributes then panic("emitDispatcherTerminator: a file-IO op is a body op, never a terminator")
+				osFileAttributes or
+				osFileOpenWriteExecutable then panic("emitDispatcherTerminator: a file-IO op is a body op, never a terminator")
 			osPanicValue then panic("emitDispatcherTerminator: an `osPanicValue` is a body op, never a terminator")
 			osCommandLine then panic("emitDispatcherTerminator: an `osCommandLine` is a body op, never a terminator")
 			osStdHandle then panic("emitDispatcherTerminator: an `osStdHandle` is a body op, never a terminator")
@@ -2032,12 +1895,12 @@ type WasmFuncEmitter
 				tlsSlotLoad or
 				osSetEvent or
 				osEnterBackgroundPriority then panic("emitDispatcherTerminator: a TLS op, an event signal or the priority door is a body op, never a terminator")
-			osFileOpenWriteExecutable then panic("emitDispatcherTerminator: a file-IO op is a body op, never a terminator")
 			osEnvBlock or
 				osEnvBlockFree then panic("emitDispatcherTerminator: an environment-block read or release is a body op, never a terminator")
 			loadAcquire or
 				storeRelease then panic("emitDispatcherTerminator: an ordered load or store is a body op, never a terminator")
 			osHandleFileType then panic("emitDispatcherTerminator: `osHandleFileType` is a body op, never a terminator")
+			osProcessProbe then panic("emitDispatcherTerminator: `osProcessProbe` is a body op, never a terminator")
 			osCreateNamedSegment or
 				osUnmapNamedSegment or
 				osUnpublishNamedSegment then panic("emitDispatcherTerminator: a named-section create or unmap is a body op, never a terminator")
@@ -2047,7 +1910,7 @@ type WasmFuncEmitter
 			osPathQuery then panic("emitDispatcherTerminator: a path query is a body op, never a terminator")
 			osSocketOverlapped or
 				osSocketServe then panic("emitDispatcherTerminator: a socket transfer or a server-side socket call is a body op, never a terminator")
-				osDebugHost then panic("emitDispatcherTerminator: the debug agent's host primitive is a body op, never a terminator")
+			osDebugHost then panic("emitDispatcherTerminator: the debug agent's host primitive is a body op, never a terminator")
 		end 'term'
 	end 'emitDispatcherTerminator'
 
@@ -2055,9 +1918,8 @@ type WasmFuncEmitter
 	// Per-StdOp body emitters (arith + call bands)
 	// ----------------------------------------------------------------------
 
-	// Emit one non-terminator op. `ret`/`retVoid` are accepted here too (a Std `ret` is normally
-	// the terminator, but is handled uniformly if it appears in a block body). Branch ops are
-	// terminators and panic; the memory/system bands are out of the scalar slice and panic.
+	// Emit one non-terminator op. `ret`/`retVoid` are accepted too: a Std `ret` is normally the
+	// terminator, but is handled uniformly if it appears in a block body.
 	function emitBodyOp(op StdOp)
 		match op 'body'
 			const(resultId, value, valueType) then self.emitConst(resultId, value: value, valueType: valueType)
@@ -2075,26 +1937,27 @@ type WasmFuncEmitter
 			call(resultId, callee, args) then self.emitCall(resultId, callee: callee, args: args)
 			retVoid then self.emitRetVoid()
 			globalAddr(resultId, label) then self.emitGlobalAddr(resultId, label: label)
-			loadIndirect(resultId, addrId, offset, valueType) then self.emitLoadIndirect(resultId, addrId: addrId, offset: offset, valueType: valueType)
-			storeIndirect(addrId, offset, valueId, valueType) then self.emitStoreIndirect(addrId, offset: offset, valueId: valueId, valueType: valueType)
 
-			// ⭐⭐ **THE ORDERED PAIR IS THE PLAIN PAIR ON THIS LANE, AND THE ARGUMENT IS THE COMPONENT
-			// MODEL RATHER THAN THE INSTRUCTION SET.** A release/acquire orders one thread's writes against
-			// ANOTHER THREAD's reads, and a WASI Preview2 component has exactly one thread: The compiler emits no
-			// `thread.spawn`, declares no `shared` memory, and imports nothing that starts a thread — the
-			// atomics the threads proposal defines are not even in the emitted feature set. With no second
-			// observer there is nothing to order against, which is the identical argument `StdOp.atomicCas`
-			// already makes on this lane for the CAS it lowers to a plain load/compare/store.
+			// ⚠ The ordered pair is the plain pair on this lane. A release/acquire orders one thread's
+			// writes against another thread's reads, and a WASI Preview2 component has exactly one thread:
+			// the compiler emits no `thread.spawn`, declares no `shared` memory and imports nothing that
+			// starts a thread — the argument `StdOp.atomicCas` makes for its plain load/compare/store here.
+			// It lapses the day the lane grows a second thread, not the day it grows atomics; the
+			// replacement is `i64.atomic.load`/`i64.atomic.store`, whose sequential consistency subsumes
+			// acquire/release.
+			loadIndirect(resultId, addrId, offset, valueType) or
+				loadAcquire then self.emitLoadIndirect(resultId, addrId: addrId, offset: offset, valueType: valueType)
+			storeIndirect(addrId, offset, valueId, valueType) or
+				storeRelease then self.emitStoreIndirect(addrId, offset: offset, valueId: valueId, valueType: valueType)
+
+			// There is no reservation on this lane, so a reserve is an allocation. Linear memory's only
+			// instruction is `memory.grow`, which takes the address range and backs it in one step, so
+			// there is no state between "not there" and "there" for a reservation to occupy.
 			//
-			// ⛔ **AND IT LAPSES THE DAY THE LANE GROWS A SECOND THREAD, NOT THE DAY IT GROWS ATOMICS.** The
-			// replacement is exact and already specified — `i64.atomic.load` / `i64.atomic.store`, whose
-			// sequentially-consistent ordering subsumes acquire/release — so this arm becomes two opcodes,
-			// not a redesign. What would be a silent wrong answer is a `thread.spawn` landing while this arm
-			// still reads as "wasm needs no barrier"; the condition is a SECOND THREAD, stated here so the
-			// next reader tests the right thing.
-			loadAcquire(resultId, addrId, offset, valueType) then self.emitLoadIndirect(resultId, addrId: addrId, offset: offset, valueType: valueType)
-			storeRelease(addrId, offset, valueId, valueType) then self.emitStoreIndirect(addrId, offset: offset, valueId: valueId, valueType: valueType)
-			osAllocPages(resultId, sizeId) then self.emitOsAllocPages(resultId, sizeId: sizeId)
+			// ⚠ A wasm reservation is therefore charged: an arena sized for a 64-bit address space is that
+			// many bytes of linear memory. See `SlabArena`'s header.
+			osAllocPages(resultId, sizeId) or
+				osReservePages then self.emitOsAllocPages(resultId, sizeId: sizeId)
 			osWriteStdout(resultId, bufId, lenId) then self.emitOsWriteStream(resultId, bufId: bufId, lenId: lenId, stream: OsOutputStream.standardOutput)
 			rdataAddr(resultId, label) then self.emitRdataAddr(resultId, label: label)
 			tryCall(resultId, errorFlagId, callee, args) then self.emitTryCall(resultId, errorFlagId: errorFlagId, callee: callee, args: args)
@@ -2118,44 +1981,29 @@ type WasmFuncEmitter
 			osProcessSpawn or
 				osProcessExitCode or
 				osCloseHandle or
-				osWaitHandle then panic("emitBodyOp: the subprocess ops have no wasm32-wasi lowering — WASI has no process-spawn primitive, and the call is refused at its own span (E3104)")
+				osWaitHandle or
+				osWaitChild then panic("emitBodyOp: the subprocess ops have no wasm32-wasi lowering — WASI has no process-spawn primitive, and the call is refused at its own span (E3104)")
 
-			// ⭐⭐ **THE THREE PAGE-LIFECYCLE OPS ARE PERMANENTLY INERT HERE — CORRECT NO-OPS, NOT STUBS AND NOT
-			// GATES.** wasm linear memory only ever GROWS: `memory.grow` is the whole instruction set for it, there
-			// is no shrink, no decommit and nothing to re-back. So "give this region back" translates to the EMPTY
-			// instruction sequence, which is the honest lowering of a request the ISA cannot represent, and a
-			// program that decommits simply keeps its bytes.
+			// Empty lowerings, and honest ones rather than stubs. Linear memory only grows, so giving a
+			// region back translates to no instruction and a program that decommits keeps its bytes. A
+			// component has one thread, so a lock has no second party to exclude: an acquire that cannot
+			// contend and a release that can wake nobody are the identity. Emitting nothing is
+			// stack-correct, because each emitter pushes its own operands (`pushOperandAt`).
 			//
-			// ⛔ THIS IS SPELLED DIFFERENTLY FROM ITS NEIGHBOURS ON PURPOSE, and the arm it replaces welded the two
-			// spellings together: it said `osFreePages` was x64-windows-gated (TEMPORARY — the green-thread
-			// substrate will grow other lanes) AND that linear memory cannot shrink (PERMANENT — an ISA fact). Two
-			// reasons of opposite lifetime in one message means the day the gate lifts, whoever reads it cannot tell
-			// which half still holds. The split `osStdHandle` / `osExecutablePath` make a few arms down is the
-			// model, and this is the same distinction: a WILL-NEVER, not a NOT-YET.
-			//
-			// ⚠ Emitting NOTHING is also stack-correct: this backend pushes operands explicitly per emitter
-			// (`pushOperandAt`), so an op that emits no instruction leaves the wasm operand stack exactly as it
-			// found it. There is no operand to drop.
-			osFreePages then break 'body'
-			osDecommitPages then break 'body'
+			// ⚠ A wasm lane with threads needs real lock bodies here, and `HostFacility.hostMutex` must come
+			// off `true` until it has them: that row promises every lock op has an arm in this match.
+			osFreePages or
+				osDecommitPages or
+				osLockInit or
+				osLockEnter or
+				osLockLeave then break 'body'
 
-			// The byte fill — ONE `memory.fill`, and this lane's whole size ladder. See `emitMemFill`.
+			// One `memory.fill` is this lane's whole size ladder. See `emitMemFill`.
 			memFill(destId, byteCountId, value) then self.emitMemFill(destId, byteCountId: byteCountId, value: value)
 
-			// ⭐⭐ **THERE IS NO RESERVATION ON THIS LANE, SO A RESERVE *IS* AN ALLOCATION AND A COMMIT IS A
-			// COPY — AND BOTH ARE THE HONEST TRANSLATION RATHER THAN A STUB.** Linear memory is one contiguous
-			// region whose only instruction is `memory.grow`, which takes the address range AND backs it in the
-			// same step: there is no state between "not there" and "there" for a reservation to occupy. So
-			// `osReservePages` routes to the SAME emitter `osAllocPages` does — not a copy of it, the same one —
-			// and `osCommitPages` answers the address it was handed, because the pages it names are already
-			// backed by the grow that "reserved" them.
-			//
-			// ⛔ THE PRICE IS REAL AND IT IS THE ARENA'S, NOT THIS EMITTER'S: a wasm reservation is CHARGED, so an
-			// arena sized for a 64-bit address space is that many bytes of linear memory. Go answers the same
-			// problem with a per-platform arena size (512 KiB on wasm, `vendor/go/src/runtime/malloc.go:259`);
-			// see `SlabArena`'s header for why the compiler cannot yet and what the follow-up is.
+			// A commit answers the address it was handed: the pages are already backed by the grow that
+			// reserved them.
 			osCommitPages(resultId, addrId, _) then self.emitOsCommitPages(resultId, addrId: addrId)
-			osReservePages(resultId, sizeId) then self.emitOsAllocPages(resultId, sizeId: sizeId)
 
 			// The dense-match jump table is ALWAYS a block terminator, never a body op.
 			switch then panic("emitBodyOp: a `switch` op appeared as a body op (lowering bug — the jump table is always a block terminator)")
@@ -2165,19 +2013,6 @@ type WasmFuncEmitter
 			// the fused call is a `call_indirect` through a loaded slot. See `emitWitnessCall`.
 			witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, args) then self.emitWitnessCall(resultId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask)
 			witnessTryCall(resultId, errorFlagId, witnessAddr, methodIndex, resultType, argFloatMask, args) then self.emitWitnessTryCall(resultId, errorFlagId: errorFlagId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask)
-
-			// ⭐⭐ **THE LOCK IS VACUOUS ON THIS LANE, SO ITS WHOLE LOWERING IS ZERO INSTRUCTIONS — AND THAT IS AN
-			// HONEST TRANSLATION RATHER THAN A STUB, THE SAME ONE `osDecommitPages` GETS ABOVE.** A WASI component
-			// has ONE thread, so a region has no second party to be excluded from: an acquire that can never
-			// contend and a release that can wake nobody are the identity. The three ops carry no result, so there
-			// is nothing to push either.
-			//
-			// ⛔ **A wasm LANE WITH THREADS WOULD NEED REAL BODIES HERE, AND `HostFacility.hostMutex` MUST COME OFF
-			// `true` UNTIL IT HAS THEM** — what that row promises is exactly that every one of the three has an arm
-			// in this match.
-			osLockInit or
-				osLockEnter or
-				osLockLeave then break 'body'
 
 			// The overlapped-read substrate has no wasm lowering, and wasm rejects rather than inventing an
 			// untested one.
@@ -2192,11 +2027,9 @@ type WasmFuncEmitter
 				osPipeCreateOutbound or
 				osWriteFile then panic("emitBodyOp: the IOCP ops have no wasm32-wasi lowering — the async-subprocess-stdio substrate is refused at the call's own span (E3104)")
 
-			// The `__Builtins` WALL clock reads `GetSystemTimeAsFileTime`. WASI has `wasi:clocks/wall-clock.now`,
-			// but its answer is a (seconds, nanoseconds) RECORD rather than a single 64-bit tick count, so a wasm
-			// lowering is a different shape rather than a different import name — a later slice, not a rename.
-			// SemanticCheck refuses a wall-clock program on wasm at its own source span (E3104), so this panic is
-			// the backstop for a compiler bug that got one past that gate, not the user-facing rejection.
+			// WASI's `wasi:clocks/wall-clock.now` answers a (seconds, nanoseconds) record rather than one
+			// 64-bit tick count, so a wasm lowering is a different shape rather than a different import
+			// name.
 			osReadWallClock then panic("emitBodyOp: `osReadWallClock` has no wasm32-wasi lowering — the wall clock is refused at the call's own span (E3104)")
 			osFileOpenRead or
 				osFileClose or
@@ -2211,27 +2044,22 @@ type WasmFuncEmitter
 				osDirCreate or
 				osDirRemove or
 				osDirCurrentPath or
-				osFileAttributes then panic("emitBodyOp: the file-IO ops have no wasm32-wasi lowering, and SemanticCheck refuses such a program at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
+				osFileAttributes or
+				osFileOpenWriteExecutable then panic("emitBodyOp: the file-IO ops have no wasm32-wasi lowering, and SemanticCheck refuses such a program at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
 
 			// The rendered message is a POINTER where the baked form names a label; both reach the one
 			// `mrt_panic` this backend synthesizes (`appendPanicRuntime`), exactly as on x64 and arm64.
 			osPanicValue(messagePtrId) then self.emitPanicValue(messagePtrId)
 
-			// WASI DOES have `args_sizes_get`/`args_get`, so this one is not refused for want of a primitive — it is
-			// refused because the wasm lane is SCALAR (no heap, no String, no `print`), and `CommandLine.args()`
-			// answers an `Array with String`. The op could be lowered the day that lane grows those; until then a
-			// lowering would be vocabulary with no reachable consumer.
+			// WASI has `args_sizes_get`/`args_get`, so this is an unwritten lowering rather than a missing
+			// primitive.
 			osCommandLine then panic("emitBodyOp: `osCommandLine` has no wasm32-wasi lowering, and SemanticCheck refuses such a program at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
 
-			// ⚠ THE TWO ARE REFUSED FOR DIFFERENT REASONS, and copying argv's sentence onto both would
-			// hide the one that is permanent.
-			//   • `osStdHandle`: WASI DOES have a standard input — `wasi:cli/stdin` plus a `read` on the
-			//     input stream — so this is argv's case exactly. There is no HANDLE to fetch (the stream
-			//     resource IS the handle), so the day the lane grows it, `__con_read_stdin` wants a different
-			//     Std graph rather than a lowering for this op. That is a rung.
-			//   • `osExecutablePath`: WASI has NO analogue AT ALL. A component has no image path to report,
-			//     and `args_get[0]` is whatever the host chose to pass, not a resolved path — answering it
-			//     would be a plausible wrong answer, which is the one thing worse than a refusal.
+			// The two are refused for different reasons. WASI has a standard input (`wasi:cli/stdin`), but
+			// no handle to fetch — the stream resource is the handle — so stdin on this lane wants a
+			// different `__con_read_stdin` graph rather than a lowering for `osStdHandle`. WASI has no
+			// analogue of `osExecutablePath` at all: `args_get[0]` is whatever the host passed, not a
+			// resolved path, and answering it would be a plausible wrong answer.
 			osStdHandle then panic("emitBodyOp: `osStdHandle` has no wasm32-wasi lowering, and SemanticCheck refuses such a program at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
 			osExecutablePath then panic("emitBodyOp: `osExecutablePath` has no wasm32-wasi lowering — WASI has no executable-path primitive at all — and SemanticCheck refuses such a program at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
 
@@ -2303,7 +2131,6 @@ type WasmFuncEmitter
 			// could not be incomplete, only a pretence: it would report success for something that never
 			// happened. Refused at the call's own span with E3104 by the `__proc_` prefix, so this is a backstop.
 			osEnterBackgroundPriority then panic("emitBodyOp: `osEnterBackgroundPriority` has no wasm32-wasi lowering — a WASI component has no process and no scheduler priority, so there is nothing here to lower it to")
-			osFileOpenWriteExecutable then panic("emitBodyOp: the file-IO ops have no wasm32-wasi lowering, and SemanticCheck refuses such a program at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
 			osEnvBlock or
 				osEnvBlockFree then panic("emitBodyOp: the environment-block ops have no wasm32-wasi lowering — their one producer is the attached-subprocess substrate, which a WASI component has no primitive for at all, and SemanticCheck refuses such a program at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
 
@@ -2311,6 +2138,7 @@ type WasmFuncEmitter
 			// `HostFacility.terminalDetection` and gives this lane a `__tty_stdout_wants_color` body that answers
 			// `false` without asking, so the op is never emitted on it and there is nothing for a gate to reject.
 			osHandleFileType then panic("emitBodyOp: `osHandleFileType` has no WASI spelling and is never emitted on this lane — `installTerminalRuntime` reads `HostFacility.terminalDetection` and builds the fallback `__tty_stdout_wants_color` body (answering `false`) instead of asking. Reaching here is a compiler bug, not a program this lane should have rejected")
+			osProcessProbe then panic("emitBodyOp: `osProcessProbe` has no wasm32-wasi lowering — a WASI component can name no other process, and SemanticCheck refuses such a program at its own source span (E3104)")
 			osCreateNamedSegment or
 				osUnmapNamedSegment or
 				osUnpublishNamedSegment then panic("emitBodyOp: the named-section CONSUMER primitives have no WASI spelling — `stdlib/SharedMemory.maxon` is refused at the call's own span on a lane that provides no named section (E3104), so this is the backstop for a compiler bug that got one past that gate rather than the user-facing rejection")
@@ -3663,8 +3491,8 @@ end 'narrowToImm32'
 // load form (`i32.load8_u`) is unsigned; a signed byte (`i8`) is gated below.
 function wasmMemAccessType(valueType StdType, what String) returns WasmValType
 	match valueType 'w'
-		i1 then return WasmValType.i32
-		u8 then return WasmValType.i32
+		i1 or
+			u8 then return WasmValType.i32
 		i64 then return WasmValType.i64
 		f64 then return WasmValType.f64
 		i8 or
@@ -3733,28 +3561,29 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 			binOpImm or
 			cmpImm or
 			div or
-			mod then break 'k'
-		condBranch then return true
-		branch then return true
-		ret then break 'k'
-		param then break 'k'
-		call then break 'k'
-		retVoid then break 'k'
-		globalAddr or
+			mod or
+			ret or
+			param or
+			call or
+			retVoid or
+			globalAddr or
 			loadIndirect or
 			storeIndirect or
 			osAllocPages or
 			osWriteStdout or
-			rdataAddr then break 'k'
-
-		// `errorReturn` is a non-branching (return) terminator — a throwing function's single block
-		// ending in it is straight-line, exactly like `ret`. `tryCall`/`osExit` are never terminators.
+			rdataAddr or
+			// `errorReturn` is a return terminator, so a throwing function's single block ending in it is
+			// straight-line, like `ret`.
+			errorReturn or
+			witnessCall or
+			witnessTryCall then break 'k'
+		condBranch or
+			branch or
+			// A `match` always creates several arm-body blocks, so `blockCount > 1` catches a jump table
+			// first; this arm makes a single-block switch force the dispatcher too.
+			switch then return true
 		tryCall then panic("decideDispatcher: a `tryCall` is a value-producing body op, never a terminator")
-		errorReturn then break 'k'
 		osExit then panic("decideDispatcher: an `osExit` is a body op followed by a dead return, never a terminator")
-
-		// A `funcAddr`/`callIndirect` is a value-producing body op, never a terminator — the same
-		// invariant `tryCall`/`osExit` assert.
 		funcAddr then panic("decideDispatcher: a `funcAddr` is a value-producing body op, never a terminator")
 		callIndirect then panic("decideDispatcher: a `callIndirect` is a value-producing body op, never a terminator")
 		osPanic or
@@ -3763,17 +3592,8 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 			osProcessExitCode or
 			osCloseHandle or
 			osWaitHandle or
-			osFreePages then panic("decideDispatcher: an `osPanic` is a body op, never a terminator")
-
-		// A jump table is a multiway branch — its function MUST use the loop+br_table dispatcher. (A `match`
-		// always creates several arm-body blocks, so `blockCount > 1` catches this first; the arm is here so
-		// a hypothetical single-block switch still forces the dispatcher rather than a straight-line path.)
-		switch then return true
-
-		// A witness call is a single-successor body op — it forces no dispatcher (it is refused at emission),
-		// and the throwing form is a single-successor body op for the identical reason.
-		witnessCall then break 'k'
-		witnessTryCall then break 'k'
+			osWaitChild or
+			osFreePages then panic("decideDispatcher: a host call (a panic, a clock read, a process, handle, wait or page op) is a body op, never a terminator")
 		osLockInit or
 			osLockEnter or
 			osLockLeave then panic("decideDispatcher: an `osLock*` op is a body op, never a terminator")
@@ -3801,7 +3621,8 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 			osDirCreate or
 			osDirRemove or
 			osDirCurrentPath or
-			osFileAttributes then panic("decideDispatcher: a file-IO op is a body op, never a terminator")
+			osFileAttributes or
+			osFileOpenWriteExecutable then panic("decideDispatcher: a file-IO op is a body op, never a terminator")
 		osPanicValue then panic("decideDispatcher: an `osPanicValue` is a body op, never a terminator")
 		osCommandLine then panic("decideDispatcher: an `osCommandLine` is a body op, never a terminator")
 		osStdHandle then panic("decideDispatcher: an `osStdHandle` is a body op, never a terminator")
@@ -3838,12 +3659,12 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 			tlsSlotLoad or
 			osSetEvent or
 			osEnterBackgroundPriority then panic("decideDispatcher: a TLS op, an event signal or the priority door is a body op, never a terminator")
-		osFileOpenWriteExecutable then panic("decideDispatcher: a file-IO op is a body op, never a terminator")
 		osEnvBlock or
 			osEnvBlockFree then panic("decideDispatcher: an environment-block read or release is a body op, never a terminator")
 		loadAcquire or
 			storeRelease then panic("decideDispatcher: an ordered load or store is a body op, never a terminator")
 		osHandleFileType then panic("decideDispatcher: `osHandleFileType` is a body op, never a terminator")
+		osProcessProbe then panic("decideDispatcher: `osProcessProbe` is a body op, never a terminator")
 		osCreateNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment then panic("decideDispatcher: a named-section create or unmap is a body op, never a terminator")
@@ -3853,7 +3674,7 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		osPathQuery then panic("decideDispatcher: a path query is a body op, never a terminator")
 		osSocketOverlapped or
 			osSocketServe then panic("decideDispatcher: a socket transfer or a server-side socket call is a body op, never a terminator")
-			osDebugHost then panic("decideDispatcher: the debug agent's host primitive is a body op, never a terminator")
+		osDebugHost then panic("decideDispatcher: the debug agent's host primitive is a body op, never a terminator")
 	end 'k'
 
 	return false

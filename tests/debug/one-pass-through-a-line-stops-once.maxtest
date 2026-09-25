@@ -1,0 +1,22 @@
+let OnePassCaseLabel = "one-pass-through-a-line-stops-once"
+
+let PassesThroughTheLine = 2
+let ContinuesPastEveryPass = 3
+
+test 'a line breakpoint stops once per pass through the line, however many statement rows the line has'
+	let staged = builtFixture(OnePassCaseLabel, fixture: TwoPassFixtureName)
+	let printedAt = anchorLine(staged, anchor: "describe-print")
+	let commands = debugCommandLine(appendedCommands(["{BreakCommand} {lineTarget(printedAt)}", RunCommand], rest: repeatedCommand(ContinueCommand, times: ContinuesPastEveryPass)))
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let breakpoints = eventsOfKind(events, kind: BreakpointEventName)
+
+	try Expect.equal(breakpoints.count() as AssertedInt, expected: 1, message: "`{BreakCommand} {lineTarget(printedAt)}` printed no `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let armed = eventAt(breakpoints, index: 0)
+	try Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: SetAction, message: "the breakpoint on `describe`'s line was not `{SetAction}`. {said}")
+	try Expect.equal(childrenOf(armed, node: armed.root, key: OffsetsKey).count() as AssertedInt, expected: 0, message: "`describe` is one body the inliner did not copy, so its line is ONE address however many statement rows the line table gives it; `{OffsetsKey}` lists a breakpoint's sites only when there are several. {said}")
+	try Expect.equal(stopsAtLine(events, line: printedAt) as AssertedInt, expected: PassesThroughTheLine, message: "the fixture passes through `describe`'s line {PassesThroughTheLine} times, so a breakpoint there stops {PassesThroughTheLine} times; a `{ContinueCommand}` that stops again on the line it is already on makes a reader step through one statement twice. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(eventsOfKind(events, kind: ExitEventName).count() as AssertedInt, expected: 1, message: "after its {PassesThroughTheLine} stops the program runs to its exit. It printed: {renderedRows(eventKinds(events))}. {said}")
+end 'a line breakpoint stops once per pass through the line, however many statement rows the line has'

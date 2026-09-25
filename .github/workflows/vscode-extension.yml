@@ -20,15 +20,28 @@
 name: vscode-extension
 
 on:
-  # ⭐ THE SUITE RUNS ON EVERY CHANGE TO THE EXTENSION OR TO THE SERVER IT DRIVES, WHICH THE PUBLISH
-  # DOES NOT. The extension has no code of its own for a language feature — it forwards to the
-  # compiler's LSP — so a change under `maxon-bin/Compiler/Lsp/` is a change to what these tests
-  # assert. `stdlib/Print.maxon` is named because the cross-file definition case pins that path.
+  # The suite, unlike the publish, runs on every change to the extension, to the compiler code it
+  # forwards to (the language server, the debug adapter and agent, and the test listing its Test
+  # Explorer reads), and to the scripts that build that compiler from the seed. A change there is a
+  # change to what these tests assert. `stdlib/Print.maxon` is named because the cross-file
+  # definition case pins that path.
   push:
     branches: [main]
     paths: &extension-inputs
       - 'vscode-extension/**'
+      - 'maxon-bin/Main.maxon'
       - 'maxon-bin/Compiler/Lsp/**'
+      - 'maxon-bin/Compiler/Debug/**'
+      - 'maxon-bin/Compiler/Runtime/DebugAgentRuntime.maxon'
+      - 'maxon-bin/Compiler/Targets/**'
+      - 'runtime/DebugAgent.maxon'
+      - 'runtime/Process.maxon'
+      - 'scripts/seed-shim/**'
+      - 'scripts/fetch-seed.sh'
+      - 'scripts/build-from-seed.sh'
+      - 'scripts/lib/host-binaries.sh'
+      - 'maxon-bin/Debug/**'
+      - 'maxon-bin/Testing/**'
       - 'stdlib/Print.maxon'
       - '.github/workflows/vscode-extension.yml'
   pull_request:
@@ -54,15 +67,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ⭐⭐ THE SERVER UNDER TEST IS THIS TREE'S COMPILER, WHICH IS WHY THIS JOB BUILDS ONE. The extension
-  # is a client: every assertion about a language feature is an assertion about `maxon lsp-server`, so a
-  # suite run against a released compiler would report on code this commit did not change. `runTest.ts`
-  # pins the search to `maxon-bin/.maxon/` and refuses to run without it.
+  # The server under test is this tree's compiler, which is why this job builds one. The extension is
+  # a client: every assertion about a language or debugging feature is an assertion about the
+  # compiler's `lsp-server` or `dap-server`, so a suite run against a released compiler would report
+  # on code this commit did not change. `runTest.ts` pins the search to `maxon-bin/.maxon/` and
+  # refuses to run without it.
   #
-  # ⚠ `xvfb-run`, because the suite launches a real VS Code and a Linux runner has no display.
+  # `xvfb-run` on the Linux runner, because the suite launches a real VS Code and that runner has no
+  # display.
   suite:
     if: github.event_name != 'release'
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            launch: xvfb-run -a npm test
+          - runner: windows-latest
+            launch: npm test
+    runs-on: ${{ matrix.runner }}
     defaults:
       run:
         shell: bash
@@ -106,7 +129,7 @@ jobs:
       # The grammar snapshots and the end-to-end suite, which is what `npm test` is.
       - name: Suite
         if: steps.seed.outputs.seeded == 'yes'
-        run: xvfb-run -a npm test
+        run: ${{ matrix.launch }}
 
   publish:
     if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'

@@ -1124,6 +1124,444 @@ typealias Tally = int(0 to u64.max)
 error E3004: <fragment>:3:37: call to undefined function 'frobnicate'
 ```
 
+<!-- test: unknown-function-result-matched-by-case-names -->
+```maxon
+function main() returns ExitCode
+	match frobnicate(2) 'm'
+		red then return 1
+		green then return 2
+	end 'm'
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:8: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-matched-by-payload-cases -->
+```maxon
+function main() returns ExitCode
+	let code = match frobnicate(2) 'm'
+		failed(_, at) gives at
+		passed gives 0
+	end 'm'
+	return code
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:19: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-destructured-by-let -->
+```maxon
+function main() returns ExitCode
+	let (a, b) = frobnicate(2)
+	return (a + b) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:15: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-as-an-array-literal-first-element -->
+```maxon
+function main() returns ExitCode
+	let xs = [frobnicate(2), 3]
+	return xs.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:12: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-compared-by-identity -->
+```maxon
+type Box
+	export var n = 0
+
+	static function create() returns Box
+		return Box{}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create()
+	return 0 if frobnicate(2) is b else 1
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:12:14: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-returned-at-an-interface -->
+```maxon
+typealias Side = int(0 to 100)
+
+interface Shape
+	function area() returns Side
+end 'Shape'
+
+function pick() returns Shape
+	return frobnicate(2)
+end 'pick'
+
+function main() returns ExitCode
+	return pick().area() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:9:9: call to undefined function 'frobnicate'
+error E3005: <fragment>:9:2: return type mismatch in 'pick': type 'unknown' does not implement interface 'Shape'
+```
+
+<!-- test: unknown-function-result-passed-at-an-interface-parameter -->
+```maxon
+typealias Side = int(0 to 100)
+
+interface Shape
+	function area() returns Side
+end 'Shape'
+
+function measure(shape Shape) returns Side
+	return shape.area()
+end 'measure'
+
+function main() returns ExitCode
+	return measure(frobnicate(2)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:13:17: call to undefined function 'frobnicate'
+error E3005: <fragment>:13:9: argument type mismatch for 'shape': type 'unknown' does not implement interface 'Shape'
+```
+
+<!-- test: unknown-function-result-stored-into-an-interface-field -->
+```maxon
+typealias Side = int(0 to 100)
+
+interface Shape
+	function area() returns Side
+end 'Shape'
+
+type Square implements Shape
+	var side as Side
+
+	static function create(side Side) returns Square
+		return Square{side: side}
+	end 'create'
+
+	function area() returns Side
+		return self.side
+	end 'area'
+end 'Square'
+
+type Frame
+	var shape as Shape
+
+	static function create() returns Frame
+		return Frame{shape: Square.create(2)}
+	end 'create'
+
+	function reshape()
+		self.shape = frobnicate(2)
+	end 'reshape'
+
+	function area() returns Side
+		return self.shape.area()
+	end 'area'
+end 'Frame'
+
+function main() returns ExitCode
+	var frame = Frame.create()
+	frame.reshape()
+	return frame.area() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:28:16: call to undefined function 'frobnicate'
+error E3005: <fragment>:28:3: field type mismatch for 'Frame.shape': type 'unknown' does not implement interface 'Shape'
+```
+
+<!-- test: unknown-function-result-returned-at-a-struct -->
+```maxon
+type Box
+	export var n = 0
+
+	static function create() returns Box
+		return Box{}
+	end 'create'
+end 'Box'
+
+function pick() returns Box
+	return frobnicate(2)
+end 'pick'
+
+function main() returns ExitCode
+	return pick().n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:11:9: call to undefined function 'frobnicate'
+error E3005: <fragment>:11:2: Cannot return 'unknown' from function declared to return 'Box'
+```
+
+<!-- test: unknown-function-result-assigned-to-a-struct-variable -->
+```maxon
+type Box
+	export var n = 0
+
+	static function create() returns Box
+		return Box{}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	var b = Box.create()
+	b = frobnicate(2)
+	return b.n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:12:6: call to undefined function 'frobnicate'
+error E3005: <fragment>:12:2: cannot assign a value of type 'unknown' to variable 'b', which holds 'Box'
+```
+
+<!-- test: unknown-function-result-negated-with-not -->
+```maxon
+function main() returns ExitCode
+	return 1 if not frobnicate(2) else 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:18: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-thrown -->
+```maxon
+enum Failure implements Error
+	bad
+end 'Failure'
+
+function run() returns ExitCode throws Failure
+	throw frobnicate(2)
+end 'run'
+
+function main() returns ExitCode
+	return try run() otherwise 1
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:7:8: call to undefined function 'frobnicate'
+error E3005: <fragment>:7:2: throw requires an error enum value
+```
+
+<!-- test: unknown-function-result-awaited-directly -->
+```maxon
+function main() returns ExitCode
+	let v = await frobnicate(2)
+	return v as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:16: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-as-an-otherwise-fallback -->
+```maxon
+type Box
+	export var n = 0
+
+	static function create() returns Box
+		return Box{}
+	end 'create'
+end 'Box'
+
+enum Failure implements Error
+	bad
+end 'Failure'
+
+function maybe() returns Box throws Failure
+	return Box.create()
+end 'maybe'
+
+function main() returns ExitCode
+	let b = try maybe() otherwise frobnicate(2)
+	return b.n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:19:32: call to undefined function 'frobnicate'
+error E3059: <fragment>:19:10: type mismatch: 'otherwise type 'unknown' does not match expected type 'Box''
+```
+
+<!-- test: unknown-function-result-as-a-match-arm-give -->
+```maxon
+type Box
+	export var n = 0
+
+	static function create() returns Box
+		return Box{}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let pick = 1
+	let b = match pick 'm'
+		1 gives Box.create()
+		default gives frobnicate(2)
+	end 'm'
+	return b.n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:14:17: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-called-alone-in-a-try-block -->
+```maxon
+enum Failure implements Error
+	bad
+end 'Failure'
+
+function main() returns ExitCode
+	try 'work'
+		let v = frobnicate(2)
+		print("{v}")
+	end 'work' otherwise (e) 'handler'
+		match e 'kind'
+			Failure.bad then return 3
+		end 'kind'
+	end 'handler'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:8:11: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-thrown-in-a-try-block -->
+```maxon
+enum Failure implements Error
+	bad
+end 'Failure'
+
+function main() returns ExitCode
+	try 'work'
+		throw frobnicate(2)
+	end 'work' otherwise (e) 'handler'
+		match e 'kind'
+			Failure.bad then return 3
+		end 'kind'
+	end 'handler'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:8:9: call to undefined function 'frobnicate'
+error E3005: <fragment>:8:3: throw requires an error enum value
+```
+
+<!-- test: unknown-function-result-method-called-alone-in-a-try-block -->
+```maxon
+enum Failure implements Error
+	bad
+end 'Failure'
+
+function main() returns ExitCode
+	let c = frobnicate(2)
+	try 'work'
+		c.run()
+	end 'work' otherwise (e) 'handler'
+		match e 'kind'
+			Failure.bad then return 3
+		end 'kind'
+	end 'handler'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:7:10: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-after-a-managed-array-literal-element -->
+```maxon
+type Box
+	export var n = 0
+
+	static function create() returns Box
+		return Box{}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let xs = [Box.create(), frobnicate(2)]
+	return xs.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:11:26: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-as-a-later-map-literal-value -->
+```maxon
+type Box
+	export var n = 0
+
+	static function create() returns Box
+		return Box{}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let m = ["a": Box.create(), "b": frobnicate(2)]
+	return m.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:11:35: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-as-a-first-arm-give-beside-mismatched-known-arms -->
+```maxon
+type Box
+	export var n = 0
+
+	static function create() returns Box
+		return Box{}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let pick = 1
+	let b = match pick 'm'
+		1 gives frobnicate(2)
+		2 gives Box.create()
+		default gives "text"
+	end 'm'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:12:10: match arms give incompatible types: 'String' vs 'Box'
+```
+
+<!-- test: unknown-function-result-as-a-ternary-arm-beside-a-function-value -->
+```maxon
+function double(n Integer) returns Integer
+	return n * 2
+end 'double'
+
+function main() returns ExitCode
+	let c = true
+	let f = double if c else frobnicate(2)
+	print("{f(1)}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3004: <fragment>:8:27: call to undefined function 'frobnicate'
+```
+
 <!-- test: unknown-label -->
 A `name:` label that matches no parameter is E3037.
 ```maxon

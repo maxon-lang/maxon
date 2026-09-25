@@ -1,4 +1,4 @@
-// LSP stdio framing: `Content-Length: <n>\r\n\r\n<body>` in both directions.
+// LSP and DAP stdio framing: `Content-Length: <n>\r\n\r\n<body>` in both directions.
 //
 // The count is the body's BYTES and the body carries no trailing newline. An editor frames the next
 // message from exactly that count, so one byte either way desynchronizes the stream permanently — which
@@ -29,14 +29,14 @@ end 'LspFramingError'
 // What one turn of the read loop produced. A union rather than a throwing read because the three
 // outcomes lead to three different ends of the session — one is handled, one is a clean close, and one
 // is fatal — and a caller that has to name all three cannot silently drop one.
-module union LspIncoming
+export union LspIncoming
 	message(body String)
 	endOfStream
 	framingError(detail String)
 end 'LspIncoming'
 
 // Read the next framed message off standard input.
-module function readLspMessage() returns LspIncoming
+export function readLspMessage() returns LspIncoming
 	var haveContentLength = false
 	var contentLength = 0
 	var inHeaders = true
@@ -81,7 +81,7 @@ module function readLspMessage() returns LspIncoming
 end 'readLspMessage'
 
 // Frame `body` and write it to standard output.
-module function writeLspMessage(body String)
+export function writeLspMessage(body String)
 	print("Content-Length: {body.byteLength()}\r\n\r\n{body}")
 end 'writeLspMessage'
 

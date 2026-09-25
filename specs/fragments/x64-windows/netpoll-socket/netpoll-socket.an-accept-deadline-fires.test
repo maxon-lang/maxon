@@ -1,0 +1,493 @@
+// Test: netpoll-socket.an-accept-deadline-fires
+let promptMs = 3000
+
+function connectOnce(port NetworkPort) returns ExitCode
+	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return 1
+	client.close()
+
+	return 0
+end 'connectOnce'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	try listener.setAcceptDeadline(300) otherwise return 2
+
+	var fired = false
+	let start = Clock.nowMs()
+
+	try listener.accept() otherwise (e) 'acceptErr'
+		match e 'check'
+			timedOut then fired = true
+			default panic("unreachable: nobody connects, so only the accept deadline can end this accept")
+		end 'check'
+	end 'acceptErr'
+
+	let tookMs = Clock.elapsedMs(start)
+
+	try listener.setAcceptDeadline(0) otherwise return 3
+	let peer = async connectOnce(listener.port())
+	let accepted = try listener.accept() otherwise return 4
+	accepted.close()
+	let connected = await peer
+
+	print("timedOut={fired} prompt={tookMs < promptMs} servedAfterClearing={connected == 0}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __gt_run_queue_head@0 = i64 0
+  __gt_run_queue_tail@8 = i64 0
+  __gt_timer_count@16 = i64 0
+  __gt_timer_heap_base@24 = i64 0
+  __gt_timer_capacity@32 = i64 0
+  __gt_timer_seq@40 = i64 0
+  __gt_timer_when@48 = i64 9223372036854775807
+  __gt_trace_counter@56 = i64 0
+  __gt_live_count@64 = i64 0
+  __gt_seed_bytes@72 = i64 8192
+  __gt_stack_bytes_sum@80 = i64 0
+  __gt_stack_bytes_count@88 = i64 0
+  __gt_seed_sum_seen@96 = i64 0
+  __gt_seed_count_seen@104 = i64 0
+  __gt_keeps_cpu_clock@112 = i64 0
+  __sched_active_workers@120 = i64 1
+  __sched_max_active_workers@128 = i64 1
+  __sched_tls_index@136 = i64 0
+  __sched_tls_teb_offset@144 = i64 0
+  __sched_procs@152 = i64 0
+  __sched_allm@160 = i64 0
+  __sched_midle@168 = i64 0
+  __sched_pidle@176 = i64 0
+  __gt_gfree_head@184 = i64 0
+  __sched_arena_cursor@192 = i64 0
+  __sched_arena_limit@200 = i64 0
+  __gt_records_carved@208 = i64 0
+  __sched_npidle@216 = i64 0
+  __sched_runq_size@224 = i64 0
+  __sched_global_pushes@232 = i64 0
+  __sched_timer_scan_steps@240 = i64 0
+  __sched_mcount@248 = i64 0
+  __sched_nmidle@256 = i64 0
+  __sched_main_m@264 = i64 0
+  __sched_phase@272 = i64 0
+  __sched_lastpoll@280 = i64 0
+  __sched_poll_until@288 = i64 0
+  __sched_regain_head@296 = i64 0
+  __np_poller@304 = i64 0
+  __np_break@312 = i64 0
+  __np_wake_sig@320 = i64 0
+  __np_pd_table@328 = i64 0
+  __np_pd_cap@336 = i64 0
+  __np_waiters@344 = i64 0
+  __np_src_key_free@352 = i64 0
+  __np_src_key_high@360 = i64 0
+  __sched_num_procs@368 = i64 0
+  __sched_shutdown_flag@376 = i64 0
+  __sched_lock@384 = i64 0
+  __sched_lock_depth_sink@392 = i64 0
+  __sched_nmspinning@400 = i64 0
+  __sched_needspinning@408 = i64 0
+  __sched_sysmon_event@416 = i64 0
+  __sched_sysmon_wait@424 = i64 0
+  __sched_timer_starts@432 = i64 0
+  __sched_preempt_ext_lock@440 = i64 0
+  __sched_preempt_context@448 = i64 0
+  __slab_arena_list@456 = i64 0
+  __slab_arena_map_l1@464 = i64 0
+  __slab_state@472 = i64 0
+  __ds_base@480 = i64 0
+  __ms_wsa_started@488 = i64 0
+  __dbg_ctl@496 = i64 0
+  __mrt_console_probe_stdin@504 = i8 0
+  __mrt_console_probe_stdout@505 = i8 0
+  __mrt_console_probe_stderr@506 = i8 0
+}
+
+func @connectOnce {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rax, rcx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rax, 65535
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.leaRegRdata rcx, [rip + __str_rec_5]  ; "127.0.0.1"
+    x64.movRegReg rdx, rax
+    x64.callDirect TcpClient.connect
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect TcpClient.close
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_TcpClient
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_13]  ; "panic at netpoll-socket.an-accept-deadline-fires.test:4: Range check failed: value outside typealias 'NetworkPort'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 152
+    x64.leaRegRdata rcx, [rip + __str_rec_5]  ; "127.0.0.1"
+    x64.movRegImm32 rdx, 0
+    x64.callDirect TcpListener.bind
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 152
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
+    x64.movRegImm32 rdx, 300
+    x64.movRegReg rcx, rbx
+    x64.callDirect TcpListener.setAcceptDeadline
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.movRegImm32 r12, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_TcpListener
+    x64.movRegReg r8, r12
+    x64.epilogue 152
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#3:
+    x64.movRegImm32 r12, 0
+    x64.callDirect Clock.nowMs
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect TcpListener.accept
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#5
+  tryerr#6:
+    x64.leaRegRegImm32 rax, r10, -1
+    x64.cmpRegImm32 rax, 5
+    x64.jcc notEqual, matchdefault
+  matcharm:
+    x64.movRegImm32 r12, 1
+    x64.jmp __il_body#16
+  matchdefault:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at netpoll-socket.an-accept-deadline-fires.test:21: unreachable: nobody connects, so only the accept deadline can end this accept\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 152
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#5:
+    x64.movRegReg rcx, r8
+    x64.callDirect __destruct_TcpClient
+  __il_body#16:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic#20
+  __rc_ok#19:
+    x64.callDirect Clock.nowMs
+    x64.cmpRegReg r8, r13
+    x64.jcc aboveEqual, ifcont
+  clockSkew:
+    x64.movRegImm32 r13, 0
+    x64.jmp __il_cont#15
+  ifcont:
+    x64.subRegReg r8, r8, r13
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#22
+  __rc_ok#21:
+    x64.movRegReg r13, r8
+  __il_cont#15:
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect TcpListener.setAcceptDeadline
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __il_body#24
+  tryerr#12:
+    x64.movRegImm32 r12, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_TcpListener
+    x64.movRegReg r8, r12
+    x64.epilogue 152
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __il_body#24:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __ml_port
+    x64.movRegReg r14, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#25
+  tryerr#26:
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at TcpListener.maxon:32: TcpListener.port: this listener is closed, so it holds no bound port to report\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 152
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#25:
+    x64.cmpRegImm32 r14, 0
+    x64.jcc less, __rc_panic#28
+  __rc_chk:
+    x64.cmpRegImm32 r14, 65535
+    x64.jcc greater, __rc_panic#28
+  __il_cont#23:
+    x64.leaRegFunc rcx, [rip + connectOnce]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r15, r8
+    x64.storeBaseDispReg.word64 [r15 + 200], r14
+    x64.movRegReg rcx, r15
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, rbx
+    x64.callDirect TcpListener.accept
+    x64.storeSlotReg slot1, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#13
+  tryerr#14:
+    x64.movRegImm32 r12, 4
+    x64.movRegReg rcx, r15
+    x64.callDirect __gt_promise_drop
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_TcpListener
+    x64.movRegReg r8, r12
+    x64.epilogue 152
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#13:
+    x64.movRegReg rcx, r8
+    x64.callDirect TcpClient.close
+    x64.movRegReg rcx, r15
+    x64.callDirect __gt_await
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_7]  ; "timedOut="
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot11, rcx
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.movRegImm32 rcx, 5
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot10, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __bool_to_string
+    x64.movRegReg r12, r8
+    x64.leaRegRdata rax, [rip + __str_rec_8]  ; " prompt="
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot9, rcx
+    x64.loadRegBaseDisp.word64 r15, [rax + 8]
+    x64.cmpRegImm32 r13, 3000
+    x64.setccReg below, r13
+    x64.movRegImm32 rcx, 5
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot8, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r8
+    x64.callDirect __bool_to_string
+    x64.movRegReg r13, r8
+    x64.leaRegRdata rax, [rip + __str_rec_9]  ; " servedAfterClearing="
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot7, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot13, rax
+    x64.cmpRegImm32 rbx, 0
+    x64.setccReg equal, rbx
+    x64.movRegImm32 rcx, 5
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot12, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __bool_to_string
+    x64.storeSlotReg slot6, r8
+    x64.leaRegRdata rax, [rip + __str_rec_10]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot4, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot2, rax
+    x64.leaRegRegReg rcx, r14, r12
+    x64.leaRegRegReg rcx, rcx, r15
+    x64.leaRegRegReg rcx, rcx, r13
+    x64.loadRegSlot rdx, slot13
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rcx, rcx, r8
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot3, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot5, r8
+    x64.leaRegRegImm32 rbx, r8, 56
+    x64.loadRegSlot rdx, slot11
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r14, rbx, r14
+    x64.loadRegSlot rdx, slot10
+    x64.movRegReg rcx, r14
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r14, r12
+    x64.loadRegSlot rdx, slot9
+    x64.movRegReg rcx, r12
+    x64.movRegReg rax, r15
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r12, r15
+    x64.loadRegSlot rdx, slot8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r12, r13
+    x64.loadRegSlot rdx, slot7
+    x64.loadRegSlot rax, slot13
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot13
+    x64.leaRegRegReg r12, r12, rax
+    x64.loadRegSlot rax, slot6
+    x64.loadRegSlot rdx, slot12
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot6
+    x64.leaRegRegReg r12, r12, rax
+    x64.loadRegSlot rax, slot2
+    x64.loadRegSlot rdx, slot4
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot2
+    x64.leaRegRegReg rax, r12, rax
+    x64.loadRegSlot rax, slot5
+    x64.storeBaseDispReg.word64 [rax + 0], rbx
+    x64.loadRegSlot rcx, slot3
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+    x64.loadRegSlot rcx, slot10
+    x64.callDirect __mm_decref
+    x64.loadRegSlot rcx, slot8
+    x64.callDirect __mm_decref
+    x64.loadRegSlot rcx, slot12
+    x64.callDirect __mm_decref
+  __il_body#31:
+    x64.loadRegSlot rcx, slot5
+    x64.callDirect __write_stdout
+  __il_cont#30:
+    x64.loadRegSlot rcx, slot5
+    x64.callDirect __str_decref
+    x64.movRegImm32 rbx, 0
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __destruct_TcpClient
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_TcpListener
+    x64.movRegReg r8, rbx
+    x64.epilogue 152
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#20:
+    x64.leaRegRdata rcx, [rip + __str_blob_15]  ; "panic at Clock.maxon:32: Range check failed: value outside typealias 'InstantMs'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 152
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#22:
+    x64.leaRegRdata rcx, [rip + __str_blob_16]  ; "panic at Clock.maxon:39: Range check failed: value outside typealias 'DurationMs'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 152
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#28:
+    x64.leaRegRdata rcx, [rip + __str_blob_19]  ; "panic at TcpListener.maxon:35: Range check failed: value outside typealias 'NetworkPort'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 152
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,31 @@
+# The seed knows none of `__Raw.osProcessProbe`, `__Raw.osWaitHandle` or `__Raw.osCloseHandle`, so it
+# refuses `runtime/Process.maxon`'s `__proc_alive` at the first call to one (E3004).
+# The rows are withdrawn at that call site alone: `RawIntrinsics`, `StdDialect` and the lowerings are left
+# standing, so `C1` knows every one of them and compiles the unshimmed tree into `C2`.
+#
+# The shimmed `__proc_alive` is inert: it reads the calling process's own id and adds two constants, and it
+# opens, waits on, closes and writes nothing. It is not reached either: the first build's liveness test
+# answers without asking it (0007).
+diff --git a/runtime/Process.maxon b/runtime/Process.maxon
+--- a/runtime/Process.maxon
++++ b/runtime/Process.maxon
+@@ -75,5 +75,5 @@ module function __proc_alive(pid ProbeWord) returns bool
+ 
+ 		// The probe answers the opened handle, or the negated `GetLastError` of a refused open.
+-		let answer = __Raw.osProcessProbe(pid as MachineWord) as ProbeWord
++		let answer = __Raw.osGetPid() as ProbeWord
+ 
+ 		if answer <= NoHandle 'notOpened'
+@@ -83,10 +83,9 @@ module function __proc_alive(pid ProbeWord) returns bool
+ 		// An exited process stays openable while any handle to it is held, so only a wait that times out
+ 		// proves it is still running.
+-		let waited = __Raw.osWaitHandle(answer as MachineWord, timeoutMs: NoWaitMs as MachineWord) as ProbeWord
+-		__Raw.osCloseHandle(answer as MachineWord)
++		let waited = WaitTimeout + NoWaitMs
+ 
+ 		return waited == WaitTimeout
+ 	#else
+-		return __Raw.osProcessProbe(pid as MachineWord) as ProbeWord != ProbeNoSuchProcess
++		return __Raw.osGetPid() as ProbeWord != ProbeNoSuchProcess
+ 	#endif
+ end '__proc_alive'

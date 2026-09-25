@@ -1,0 +1,21 @@
+type CapabilitiesSession implements DapSession
+	export var answer as JsonDoc
+
+	static function create() returns CapabilitiesSession
+		return Self{answer: JsonDoc.create()}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		self.answer = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+	end 'drive'
+end 'CapabilitiesSession'
+
+test 'initialize advertises the three capabilities a client gates its requests on'
+	var session = CapabilitiesSession.create()
+	try dapRunSession(session, completing: "complete the `{InitializeCommand}` handshake")
+
+	try Expect.isTrue(dapSuccess(session.answer), message: "`{InitializeCommand}` must succeed; it answered {dapDescribed(session.answer)}")
+	try Expect.isTrue(dapCapability(session.answer, name: "supportsConfigurationDoneRequest"), message: "without `supportsConfigurationDoneRequest` a client starts the program itself and the adapter never gets to place the breakpoints it was handed")
+	try Expect.isTrue(dapCapability(session.answer, name: "supportsConditionalBreakpoints"), message: "without `supportsConditionalBreakpoints` an editor silently drops the condition and stops on every hit")
+	try Expect.isTrue(dapCapability(session.answer, name: "supportsFunctionBreakpoints"), message: "without `supportsFunctionBreakpoints` an editor's function breakpoints are never sent at all")
+end 'initialize advertises the three capabilities a client gates its requests on'

@@ -115,6 +115,7 @@ function emitGtMorestackVirtualAlloc(code ByteArray, iatRelocs RelocationArray)
 	encodeMovRegImm32(code, dest: X64Register.r8, value: VirtualAllocCommitAndReserve)
 	encodeMovRegImm32(code, dest: X64Register.r9, value: PageReadWriteProtection)
 	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.VirtualAlloc))
+	encodeImportAnswerWidth(code, slot: IatSlot.VirtualAlloc)
 end 'emitGtMorestackVirtualAlloc'
 
 function emitGtMorestackMmap(code ByteArray)
@@ -487,31 +488,8 @@ function emitLoadCurrentMOrBailless(code ByteArray, rdataRelocs RdataRelocationA
 	encodeMovRegSegBase(code, dest: dest, base: dest, segment: x64ThreadPointerSegment(os))
 end 'emitLoadCurrentMOrBailless'
 
-// The count of true Win64 stack arguments (args 5+) a shimmed import takes — the words the shim copies from the
-// GT frame onto the system stack. Read from the ISEL's `*StackArgWords` single source (StdToX64Conversion), the
-// SAME constant that sizes each call's outgoing-arg reservation — so the copy count is DERIVED from the arg
-// layout it must match, never a second copy that could drift into a silent CreateProcessA/WriteFile miscompile
-// (too few words copied ⇒ the kernel reads garbage stack args). A ≤4-arg (register-only) import passes nothing
-// on the stack and copies nothing.
-// ⭐⭐ **THE SHIM'S PER-IMPORT COPY COUNT — TOTAL OVER `IatSlot`, SO AN OMISSION IS A COMPILE ERROR.**
-//
-// The table must be COMPLETE, and a missing entry's answer — zero words copied — is indistinguishable from a
-// correct one: a `__ManagedFile.open*` reached from a SPAWNED green thread would hand the kernel whatever
-// happened to be on the system stack for `CreateFileA`'s last three arguments, and only off the main thread,
-// where a green suite does not look. So the `match` below is EXHAUSTIVE over the enum, and adding an
-// `IatSlot` does not compile until its count is stated. There is no `default` arm and there must never be
-// one — a `default gives 0` would be that defect wearing a `match`'s clothes.
-//
-// ⚠ **A `0` HERE IS A CLAIM, NOT A BLANK.** It says the import passes four or fewer arguments, so Win64
-// puts every one in rcx/rdx/r8/r9 and there is nothing on the stack to copy. Each such arm carries its
-// argument count so the claim can be checked against MSDN without reading the emitter.
-//
-// ⚠ **THE EIGHT NON-ZERO COUNTS ARE NOT SPELLED HERE.** They are the SAME constants
-// `StdToX64Conversion.stdOpOutgoingArgBytes` reserves the GT frame with, so the copy and the reservation
-// cannot disagree about how many words the kernel reads — the property those constants' own headers exist
-// to hold. This function maps slots to them; it does not restate them.
-// ⚠ **THE SCAN IS DONE ONCE PER SHIM AND ITS ANSWER FEEDS BOTH TABLES** — the copy count and the syscall
-// classification below — so the two can never be asked about different slots.
+// The shim scans once and feeds the answer to both tables below, so the copy count and the syscall
+// class cannot be asked about different slots.
 function iatSlotOfIndex(slotIndex RelocSlotIndex) returns IatSlot
 	for slot in IatSlot.allCases 'each'
 		if iatSlotIndex(slot) == slotIndex 'found'
@@ -522,425 +500,334 @@ function iatSlotOfIndex(slotIndex RelocSlotIndex) returns IatSlot
 	panic("iatSlotOfIndex: slot index {slotIndex} names no IatSlot — every `iatCall` relocation is minted from `iatSlotIndex(IatSlot.…)`, so an index outside the enum means the op carried a hand-built number")
 end 'iatSlotOfIndex'
 
-// The stack-argument word count of ONE import, exhaustive over `IatSlot`. See the header above `iatSlotOfIndex`.
+// The true Win64 stack arguments (args 5+) an import takes: the words the shim copies from the
+// green thread's frame onto the system stack. Too few and the kernel reads garbage for the rest.
+//
+// Total over `IatSlot` with no `default` arm, so an import does not compile until its count is
+// stated: a missing count copies zero words, which looks correct until a spawned green thread hands
+// the kernel whatever was on the system stack.
+//
+// A `0` claims four arguments or fewer, all in rcx/rdx/r8/r9, and each such arm carries its
+// argument count so the claim can be checked. A non-zero count is never spelled here: it is the
+// constant `StdToX64Conversion.stdOpOutgoingArgBytes` reserves the frame with, so the copy and the
+// reservation cannot disagree.
 function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 	return match slot 'k'
-		// --- the imports the kernel reads stack arguments for: the counts live with the arg layout ---
 		CreateProcessA gives CreateProcessStackArgWords
 		WriteFile gives WriteFileStackArgWords
 		CreateNamedPipeW gives CreateNamedPipeStackArgWords
-		CreateFileW gives CreateFileStackArgWords
-
-		// The `A` variant takes the SAME seven arguments as its `W` sibling, so it derives from the same
-		// constant.
-		CreateFileA gives CreateFileStackArgWords
+		// The `A` variant takes the same seven arguments as its `W` sibling.
+		CreateFileW or
+			CreateFileA gives CreateFileStackArgWords
 		CreateThread gives CreateThreadStackArgWords
 		ReadFile gives ReadFileStackArgWords
+		MapViewOfFile gives MapViewOfFileStackArgWords  // 5: hFileMappingObject, dwDesiredAccess, dwFileOffsetHigh, dwFileOffsetLow, dwNumberOfBytesToMap
 
-		// FIVE arguments, so one word on the stack — derived from the same constant
-		// `stdOpOutgoingArgBytes` reserves the frame with, never restated here.
-		MapViewOfFile gives MapViewOfFileStackArgWords
+		ExitProcess or  // 1: uExitCode
+			GetStdHandle or  // 1: nStdHandle
+			AddVectoredExceptionHandler or  // 2: First, Handler
+			VirtualAlloc or  // 4: lpAddress, dwSize, flAllocationType, flProtect
+			QueryPerformanceCounter or  // 1: lpPerformanceCount
+			QueryPerformanceFrequency or  // 1: lpFrequency
+			GetExitCodeProcess or  // 2: hProcess, lpExitCode
+			WaitForSingleObject or  // 2: hHandle, dwMilliseconds
+			CloseHandle or  // 1: hObject
+			VirtualFree or  // 3: lpAddress, dwSize, dwFreeType
+			SetHandleInformation or  // 3: hObject, dwMask, dwFlags
+			CreateIoCompletionPort or  // 4: FileHandle, ExistingCompletionPort, CompletionKey, NumberOfConcurrentThreads
+			SetFileCompletionNotificationModes or  // 2: FileHandle, Flags
+			CreateEventA or  // 4: lpEventAttributes, bManualReset, bInitialState, lpName
+			SetEvent or  // 1: hEvent
+			InitializeCriticalSection or  // 1: lpCriticalSection
+			EnterCriticalSection or  // 1: lpCriticalSection
+			LeaveCriticalSection or  // 1: lpCriticalSection
+			GetLastError or  // 0
+			GetCurrentProcessId or  // 0
+			CancelIoEx or  // 2: hFile, lpOverlapped
+			GetSystemTimeAsFileTime or  // 1: lpSystemTimeAsFileTime
+			GetFileSizeEx or  // 2: hFile, lpFileSize
+			DeleteFileA or  // 1: lpFileName
+			MoveFileExA or  // 3: lpExistingFileName, lpNewFileName, dwFlags
+			FindFirstFileA or  // 2: lpFileName, lpFindFileData
+			FindClose or  // 1: hFindFile
+			FindNextFileA or  // 2: hFindFile, lpFindFileData
+			CreateDirectoryA or  // 2: lpPathName, lpSecurityAttributes
+			RemoveDirectoryA or  // 1: lpPathName
+			GetCurrentDirectoryA or  // 2: nBufferLength, lpBuffer
+			GetFileAttributesA or  // 1: lpFileName
+			GetCommandLineA or  // 0
+			GetModuleFileNameA or  // 3: hModule, lpFilename, nSize
+			GetConsoleMode or  // 2: hConsoleHandle, lpMode
+			SetThreadStackGuarantee or  // 1: StackSizeInBytes
+			GetEnvironmentVariableA or  // 3: lpName, lpBuffer, nSize
+			OpenFileMappingA or  // 3: dwDesiredAccess, bInheritHandle, lpName
+			GetTickCount64 or  // 0
+			WSAStartup or  // 2: wVersionRequested, lpWSAData
+			getaddrinfo or  // 4: pNodeName, pServiceName, pHints, ppResult
+			freeaddrinfo or  // 1: pAddrInfo
+			connect or  // 3: s, name, namelen
+			send or  // 4: s, buf, len, flags
+			recv or  // 4: s, buf, len, flags
+			closesocket or  // 1: s
+			WSAEventSelect or  // 3: s, hEventObject, lNetworkEvents
+			bind or  // 3: s, name, namelen
+			listen or  // 2: s, backlog
+			accept or  // 3: s, addr, addrlen
+			getsockname or  // 3: s, name, namelen
+			shutdown or  // 2: s, how
+			GetActiveProcessorCount or  // 1: GroupNumber
+			// The shim switches stacks, not threads: `QueryThreadCycleTime` reports the calling OS thread,
+			// which is the same M on either stack, and its out-param is a `.data` word the switch cannot
+			// move.
+			QueryThreadCycleTime or  // 2: ThreadHandle, CycleTime
+			TlsAlloc or  // 0
+			TlsSetValue or  // 2: dwTlsIndex, lpTlsValue
+			SetPriorityClass or  // 2: hProcess, dwPriorityClass
+			GetPriorityClass or  // 1: hProcess
+			GetEnvironmentStringsA or  // 0
+			FreeEnvironmentStringsA or  // 1: lpszEnvironmentBlock
+			GetFileType or  // 1: hFile
+			UnmapViewOfFile or  // 1: lpBaseAddress
+			OpenProcess or  // 3: dwDesiredAccess, bInheritHandle, dwProcessId
+			SuspendThread or  // 1: hThread
+			ResumeThread or  // 1: hThread
+			GetThreadContext or  // 2: hThread, lpContext
+			SetThreadContext or  // 2: hThread, lpContext
+			OpenThread or  // 3: dwDesiredAccess, bInheritHandle, dwThreadId
+			GetCurrentThreadId or  // 0
+			GetThreadId or  // 1: Thread
+			VirtualQueryEx or  // 4: hProcess, lpAddress, lpBuffer, dwLength
+			CreateWaitableTimerExW or  // 4: lpTimerAttributes, lpTimerName, dwFlags, dwDesiredAccess
+			CreateToolhelp32Snapshot or  // 2: dwFlags, th32ProcessID
+			Module32FirstW or  // 2: hSnapshot, lpme
+			Module32NextW or  // 2: hSnapshot, lpme
+			PostQueuedCompletionStatus or  // 4: CompletionPort, dwNumberOfBytesTransferred, dwCompletionKey, lpOverlapped
+			SwitchToThread or  // 0
+			UnregisterWaitEx or  // 2: WaitHandle, CompletionEvent
+			CreateJobObjectW or  // 2: lpJobAttributes, lpName
+			AssignProcessToJobObject or  // 2: hJob, hProcess
+			TerminateJobObject or  // 2: hJob, uExitCode
+			TerminateProcess or  // 2: hProcess, uExitCode
+			SetLastError or  // 1: dwErrCode
+			VirtualProtect or  // 4: lpAddress, dwSize, flNewProtect, lpflOldProtect
+			FlushInstructionCache or  // 3: hProcess, lpBaseAddress, dwSize
+			VirtualQuery or  // 3: lpAddress, lpBuffer, dwLength
+			Sleep or  // 1: dwMilliseconds
+			GetSystemDirectoryA or  // 2: lpBuffer, uSize
+			GetWindowsDirectoryA or  // 2: lpBuffer, uSize
+			GetFullPathNameA or  // 4: lpFileName, nBufferLength, lpBuffer, lpFilePart
+			WaitForSingleObjectEx gives 0  // 3: hHandle, dwMilliseconds, bAlertable
 
-		// --- four arguments or fewer: register-only, nothing on the stack ---
-		ExitProcess gives 0  // 1: uExitCode
-		GetStdHandle gives 0  // 1: nStdHandle
-		AddVectoredExceptionHandler gives 0  // 2: First, Handler
-		VirtualAlloc gives 0  // 4: lpAddress, dwSize, flAllocationType, flProtect
-		QueryPerformanceCounter gives 0  // 1: lpPerformanceCount
-		QueryPerformanceFrequency gives 0  // 1: lpFrequency
-		GetExitCodeProcess gives 0  // 2: hProcess, lpExitCode
-		WaitForSingleObject gives 0  // 2: hHandle, dwMilliseconds
-		CloseHandle gives 0  // 1: hObject
-		VirtualFree gives 0  // 3: lpAddress, dwSize, dwFreeType
-		SetHandleInformation gives 0  // 3: hObject, dwMask, dwFlags
-		CreateIoCompletionPort gives 0  // 4: FileHandle, ExistingCompletionPort, CompletionKey, NumberOfConcurrentThreads
-		SetFileCompletionNotificationModes gives 0  // 2: FileHandle, Flags
-		CreateEventA gives 0  // 4: lpEventAttributes, bManualReset, bInitialState, lpName
-		SetEvent gives 0  // 1: hEvent
-		InitializeCriticalSection gives 0  // 1: lpCriticalSection
-		EnterCriticalSection gives 0  // 1: lpCriticalSection
-		LeaveCriticalSection gives 0  // 1: lpCriticalSection
-		GetLastError gives 0  // 0
-		GetCurrentProcessId gives 0  // 0
-		CancelIoEx gives 0  // 2: hFile, lpOverlapped
-		GetSystemTimeAsFileTime gives 0  // 1: lpSystemTimeAsFileTime
-		GetFileSizeEx gives 0  // 2: hFile, lpFileSize
-		DeleteFileA gives 0  // 1: lpFileName
-		MoveFileExA gives 0  // 3: lpExistingFileName, lpNewFileName, dwFlags
-		FindFirstFileA gives 0  // 2: lpFileName, lpFindFileData
-		FindClose gives 0  // 1: hFindFile
-		FindNextFileA gives 0  // 2: hFindFile, lpFindFileData
-		CreateDirectoryA gives 0  // 2: lpPathName, lpSecurityAttributes
-		RemoveDirectoryA gives 0  // 1: lpPathName
-		GetCurrentDirectoryA gives 0  // 2: nBufferLength, lpBuffer
-		GetFileAttributesA gives 0  // 1: lpFileName
-		GetCommandLineA gives 0  // 0
-		GetModuleFileNameA gives 0  // 3: hModule, lpFilename, nSize
-		GetConsoleMode gives 0  // 2: hConsoleHandle, lpMode
-
-		// The console writer's two >4-argument imports. Both counts are declared beside their siblings in
-		// `StdToX64Conversion` and read from there, so the shim's copy count and `mrt_write_stream`'s own
-		// outgoing reservation are one fact.
 		WriteConsoleW gives WriteConsoleStackArgWords  // 5: hConsoleOutput, lpBuffer, nNumberOfCharsToWrite, lpNumberOfCharsWritten, lpReserved
 		MultiByteToWideChar gives MultiByteToWideCharStackArgWords  // 6: CodePage, dwFlags, lpMultiByteStr, cbMultiByte, lpWideCharStr, cchWideChar
-		SetThreadStackGuarantee gives 0  // 1: StackSizeInBytes
-
-		// Its fourth sibling `MapViewOfFile` takes five and is stated with the other non-zero counts above.
-		GetEnvironmentVariableA gives 0  // 3: lpName, lpBuffer, nSize
-		OpenFileMappingA gives 0  // 3: dwDesiredAccess, bInheritHandle, lpName
-		GetTickCount64 gives 0  // 0
-
-		// The two attached-subprocess imports. `PeekNamedPipe` takes SIX arguments — four in registers and
-		// two on the stack — so it is the only one of this pair with a non-zero count.
 		PeekNamedPipe gives PeekPipeStackArgWords  // 6: hNamedPipe, lpBuffer, nBufferSize, lpBytesRead, lpTotalBytesAvail, lpBytesLeftThisMessage
-
-		// ⭐ **THE BLOCKING `ws2_32` SOCKET IMPORTS — EVERY ONE TAKES FOUR ARGUMENTS OR FEWER**, so every one
-		// passes entirely in registers and needs no stack words. That is not a coincidence worth relying on
-		// silently: `getaddrinfo`, `send` and `recv` sit exactly AT the four-register limit, and the OVERLAPPED
-		// pair below is what the limit was warned about — a socket import past four arguments must state its
-		// count here like `PeekNamedPipe` does, or the shim will hand it a frame too small and it will read the
-		// caller's.
-		WSAStartup gives 0  // 2: wVersionRequested, lpWSAData
-		getaddrinfo gives 0  // 4: pNodeName, pServiceName, pHints, ppResult
-		freeaddrinfo gives 0  // 1: pAddrInfo
-		socket gives 0  // 3: af, type, protocol
-		connect gives 0  // 3: s, name, namelen
-		send gives 0  // 4: s, buf, len, flags
-		recv gives 0  // 4: s, buf, len, flags
-		closesocket gives 0  // 1: s
-
-		// The overlapped pair. SEVEN arguments each, so three on the stack — derived from the same constant
-		// `stdOpOutgoingArgBytes` reserves the frame with, never restated here.
-		WSARecv gives SocketOverlappedStackArgWords  // 7: s, lpBuffers, dwBufferCount, lpNumberOfBytesRecvd, lpFlags, lpOverlapped, lpCompletionRoutine
-		WSASend gives SocketOverlappedStackArgWords  // 7: s, lpBuffers, dwBufferCount, lpNumberOfBytesSent, dwFlags, lpOverlapped, lpCompletionRoutine
-		WSAEventSelect gives 0  // 3: s, hEventObject, lNetworkEvents
+		WSARecv or  // 7: s, lpBuffers, dwBufferCount, lpNumberOfBytesRecvd, lpFlags, lpOverlapped, lpCompletionRoutine
+			WSASend gives SocketOverlappedStackArgWords  // 7: s, lpBuffers, dwBufferCount, lpNumberOfBytesSent, dwFlags, lpOverlapped, lpCompletionRoutine
 		getsockopt gives SocketOptionStackArgWords  // 5: s, level, optname, optval, optlen
-
-		// The server side's four, every one register-only.
-		bind gives 0  // 3: s, name, namelen
-		listen gives 0  // 2: s, backlog
-		accept gives 0  // 3: s, addr, addrlen
-		getsockname gives 0  // 3: s, name, namelen
-		GetActiveProcessorCount gives 0  // 1: GroupNumber
-
-		// ⚠ **THE SHIM SWITCHES STACKS, NOT THREADS**, which is the one thing that could have made this
-		// import wrong here: `QueryThreadCycleTime` reports the CALLING THREAD's CPU time, and a green thread
-		// runs on the same M whichever stack its frame sits on. Its out-param is a `.data` word rather than a
-		// stack slot besides, so the switch cannot move the buffer under it either.
-		QueryThreadCycleTime gives 0  // 2: ThreadHandle, CycleTime
-
-		// Both TLS imports are register-only. ⚠ **NEITHER IS EVER SHIMMED IN PRACTICE** — `TlsAlloc` runs
-		// once in `__gt_init` and `TlsSetValue` at each M's adoption, and every one of those sites executes on
-		// an OS thread whose current GT has `stackBase == 0`, which is exactly the shim's direct-call guard. The
-		// count is stated anyway because this match is TOTAL: an import with no arm is a compile error, which is
-		// what keeps a later >4-argument import from being handed a frame too small.
-		TlsAlloc gives 0  // 0
-		TlsSetValue gives 0  // 2: dwTlsIndex, lpTlsValue
-
-		// The priority pair. Both are register-only, and unlike the TLS pair these CAN be shimmed in practice:
-		// a harness may ask to be de-prioritised from inside a green thread, whose stack is the small one.
-		SetPriorityClass gives 0  // 2: hProcess, dwPriorityClass
-		GetPriorityClass gives 0  // 1: hProcess
-
-		// The whole-environment pair, both register-only. A spawn that names an override reaches them from
-		// inside a green thread — the harness's own run step is one — so, like the priority pair, they really
-		// are shimmed onto the system stack in practice.
-		GetEnvironmentStringsA gives 0  // 0
-		FreeEnvironmentStringsA gives 0  // 1: lpszEnvironmentBlock
-
-		// The terminal question, register-only. A harness asks it from its own main green thread before it
-		// prints anything, so it really is shimmed onto the system stack in practice.
-		GetFileType gives 0  // 1: hFile
-
-		// The named-section pair. `CreateFileMappingA` takes SIX arguments — four in registers and two on the
-		// stack — so it is the only one of this pair with a non-zero count, derived from the same constant
-		// `stdOpOutgoingArgBytes` reserves the frame with.
+		WSASocketW gives SocketCreateStackArgWords  // 6: af, type, protocol, lpProtocolInfo, g, dwFlags
 		CreateFileMappingA gives CreateFileMappingStackArgWords  // 6: hFile, lpFileMappingAttributes, flProtect, dwMaximumSizeHigh, dwMaximumSizeLow, lpName
-		UnmapViewOfFile gives 0  // 1: lpBaseAddress
 
-		// The process-sampling band. THREE of the thirteen overflow the four argument registers: the two
-		// six-argument services answer the same constant `stdOpOutgoingArgBytes` reserves the frame with —
-		// `osHostSample` is ONE op whose reservation must hold its WIDEST member — and the five-argument one
-		// states its own, because this table keys on a SLOT and copies exactly what that call reads.
-		NtGetNextThread gives HostSampleStackArgWords  // 6: ProcessHandle, ThreadHandle, DesiredAccess, HandleAttributes, Flags, NewThreadHandle
-		SetWaitableTimer gives HostSampleStackArgWords  // 6: hTimer, lpDueTime, lPeriod, pfnCompletionRoutine, lpArgToCompletionRoutine, fResume
+		// The two six-argument sampling services share `osHostSample`'s reservation, which must hold its
+		// widest member; `ReadProcessMemory` takes five and copies exactly its own count.
+		NtGetNextThread or  // 6: ProcessHandle, ThreadHandle, DesiredAccess, HandleAttributes, Flags, NewThreadHandle
+			SetWaitableTimer gives HostSampleStackArgWords  // 6: hTimer, lpDueTime, lPeriod, pfnCompletionRoutine, lpArgToCompletionRoutine, fResume
 		ReadProcessMemory gives ReadProcessMemoryStackArgWords  // 5: hProcess, lpBaseAddress, lpBuffer, nSize, lpNumberOfBytesRead
-		OpenProcess gives 0  // 3: dwDesiredAccess, bInheritHandle, dwProcessId
-		SuspendThread gives 0  // 1: hThread
-		ResumeThread gives 0  // 1: hThread
-		GetThreadContext gives 0  // 2: hThread, lpContext
-		SetThreadContext gives 0  // 2: hThread, lpContext
-		OpenThread gives 0  // 3: dwDesiredAccess, bInheritHandle, dwThreadId
-		GetCurrentThreadId gives 0  // 0
-		GetThreadId gives 0  // 1: Thread
-		VirtualQueryEx gives 0  // 4: hProcess, lpAddress, lpBuffer, dwLength
-		CreateWaitableTimerExW gives 0  // 4: lpTimerAttributes, lpTimerName, dwFlags, dwDesiredAccess
-		CreateToolhelp32Snapshot gives 0  // 2: dwFlags, th32ProcessID
-		Module32FirstW gives 0  // 2: hSnapshot, lpme
-		Module32NextW gives 0  // 2: hSnapshot, lpme
 
-		// The poller's pair. The wait takes six, so two on the stack; the break four.
 		GetQueuedCompletionStatusEx gives GetQueuedCompletionStatusExStackArgWords  // 6: CompletionPort, lpCompletionPortEntries, ulCount, ulNumEntriesRemoved, dwMilliseconds, fAlertable
-		PostQueuedCompletionStatus gives 0  // 4: CompletionPort, dwNumberOfBytesTransferred, dwCompletionKey, lpOverlapped
-		SwitchToThread gives 0  // 0
 
-		// The child-exit source. The register takes six, so two on the stack; the unregister two.
 		RegisterWaitForSingleObject gives RegisterWaitStackArgWords  // 6: phNewWaitObject, hObject, Callback, Context, dwMilliseconds, dwFlags
-		UnregisterWaitEx gives 0  // 2: WaitHandle, CompletionEvent
-
-		// The process-tree kill's four, none of them past the four argument registers.
-		CreateJobObjectW gives 0  // 2: lpJobAttributes, lpName
-		AssignProcessToJobObject gives 0  // 2: hJob, hProcess
-		TerminateJobObject gives 0  // 2: hJob, uExitCode
-		SetLastError gives 0  // 1: dwErrCode
-		VirtualProtect or
-			FlushInstructionCache or
-			VirtualQuery or
-			Sleep or
-			GetSystemDirectoryA or
-			GetWindowsDirectoryA or
-			GetFullPathNameA gives 0
 	end 'k'
 end 'gtShimStackArgWordsOf'
 
 // ==========================================================================
-// ⭐⭐⭐ THE SYSCALL BRACKET — WHICH IMPORTS MAY COST THIS MACHINE ITS PROCESSOR
+// The syscall bracket: which imports may cost this machine its processor
 // ==========================================================================
 
-// ⛔⛔ **THE CLASSIFICATION IS MANDATORY, AND HERE IS THE CASE THAT PROVES IT RATHER THAN THE PRINCIPLE THAT
-// SUGGESTS IT.** `EnterCriticalSection` **is** reached through this shim — from `__mbox_send`, `__mbox_recv`,
-// `__gt_timer_add`, and `__slab_lock` on EVERY allocation a green thread makes. Bracket it and:
+// `blocking` means the call can wait an unbounded time on something outside the scheduler, and a
+// `blocking` import may never be called with `__sched_lock` held. Bracketing one that runs under
+// the lock deadlocks the whole scheduler: `EnterCriticalSection` is reached from `__mbox_send`,
+// `__mbox_recv`, `__gt_timer_add` and `__slab_lock` on every allocation, so a machine blocked on
+// `__sched_lock` would have its P handed off by `__sysmon`, then wait in `__sched_syscall_regain`
+// for a processor while holding the lock, for ever. Every scheduler-internal call made under that
+// lock is therefore `schedulerBound` here, which makes the requirement checkable by reading this
+// one table.
 //
-//   1. a green thread on M1/P1 blocks acquiring `__sched_lock`, because another machine holds it;
-//   2. `__sysmon` sees the same generation past the threshold and `__sched_handoffp` takes P1 away;
-//   3. M1 finally acquires the lock, leaves the call and finds `MSyscallStolen`;
-//   4. `__sched_syscall_regain` waits for a processor — **while M1 holds `__sched_lock`**;
-//   5. the lock is now held for ever by a machine that cannot run. **Whole-scheduler deadlock.**
+// Total over `IatSlot` with no `default` arm: a `default gives schedulerBound` would let a new
+// blocking import silently keep costing its processor.
 //
-// ⇒ **the rule this table encodes is *"`blocking` means it can wait an unbounded time on something OUTSIDE
-// the scheduler"*, and its contrapositive is a REQUIREMENT ON THE RUNTIME: a `blocking` import may never be
-// called with `__sched_lock` held.** Every scheduler-internal call under that lock — the child poll's
-// `WaitForSingleObject`, the reap's `GetExitCodeProcess`, the register's `CloseHandle`, the poller's own
-// imports — is `schedulerBound` below, which is what makes the requirement checkable by reading one table
-// rather than by tracing every lock bracket.
-//
-// ⚠ **THE `match` IS TOTAL OVER `IatSlot` AND HAS NO `default` ARM, WHICH IS `gtShimStackArgWordsOf`'s OWN
-// STATED RULE ONE FUNCTION UP AND FOR THE SAME MEASURED REASON.** That table's silent `return 0` once handed
-// `CreateFileA` a frame too small and let the kernel read whatever was on the stack; a `default gives
-// schedulerBound` here would be the same defect wearing a `match`'s clothes — a new blocking import would
-// silently keep costing its processor, and nothing would say so.
-//
-// ⛔⛔ **THE `SyscallClass` VOCABULARY IS `StdDialect`'s, AND `StdDialect.stdOpSyscallClassOf` IS THE SOURCE
-// OF TRUTH FOR THE RULE THIS TABLE APPLIES.** The two tables are not one fact written twice: that one keys on
-// a Std OP, this one on an IAT SLOT — a Win32 entry point — because this lane's bracket sits BELOW the StdOp
-// level, inline in the import shim, where the only thing left to classify is the slot. Moving this lane's
-// bracket up to the StdOp door would delete this table; it needs a Windows host to re-mint its goldens, so it
-// is not this change.
-//
-// The syscall class of ONE import, exhaustive over `IatSlot`. See the header above.
+// `StdDialect.stdOpSyscallClassOf` owns the rule and keys on a Std op; this lane's bracket sits
+// inline in the import shim, below the StdOp level, where only the slot is left to classify.
 function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 	return match slot 'k'
 		// --- `blocking`: the calls a green thread can sit inside for an unbounded time ---
 		//
-		// ⭐ **`WriteFile` IS THE HOTTEST BRACKETED SLOT THERE IS — every `print` from a green thread — which is
-		// why the bracket has to stay at one exchange each way and must not touch `__sched_lock`.** It is here
-		// and not with the bounded family because a write to a pipe whose reader has stopped reading blocks
-		// exactly as long as the reader takes, which is a property of the far end and not of this process.
-		WriteFile gives SyscallClass.blocking
-
-		// ⛔ **A CONSOLE IN QUICK-EDIT SELECTION SUSPENDS ITS WRITER**, unbounded by the far end exactly as a
-		// stalled pipe reader is — so this is `WriteFile`'s position and not `GetConsoleMode`'s.
-		WriteConsoleW gives SyscallClass.blocking
-
-		// ⭐⭐ **`ReadFile` IS THIS RUNG'S SUBJECT.** `__con_read_stdin` is a plain synchronous read of standard
-		// input with no overlapped IO and no park (`ConsoleRuntime`), so a green thread inside it holds its OS
-		// thread in the kernel until the user presses return — which is what
-		// `specs/sched-syscall-handoff.md`'s ordering case measures.
-		ReadFile gives SyscallClass.blocking
-
-		// The file-system family. Every one of them can reach a cold disk, a network share or a stalled device.
-		CreateFileA gives SyscallClass.blocking
-		CreateFileW gives SyscallClass.blocking
-		CreateNamedPipeW gives SyscallClass.blocking
-		GetFileSizeEx gives SyscallClass.blocking
-		DeleteFileA gives SyscallClass.blocking
-		MoveFileExA gives SyscallClass.blocking
-		FindFirstFileA gives SyscallClass.blocking
-		FindNextFileA gives SyscallClass.blocking
-		CreateDirectoryA gives SyscallClass.blocking
-		RemoveDirectoryA gives SyscallClass.blocking
-		GetCurrentDirectoryA gives SyscallClass.blocking
-		GetFileAttributesA gives SyscallClass.blocking
-
-		// The file-MAPPING pair, which fault pages in from the same devices.
-		OpenFileMappingA gives SyscallClass.blocking
-		MapViewOfFile gives SyscallClass.blocking
-
-		// Spawning a child image and peeking a child's pipe both wait on another process.
-		CreateProcessA gives SyscallClass.blocking
-		PeekNamedPipe gives SyscallClass.blocking
-
-		// The socket calls that can wait: `getaddrinfo` on a resolver (a literal address never reaches it —
-		// `ManagedSocketRuntime.emitResolveHostIp`), and `WSAStartup`, which runs until one succeeds
-		// (`ManagedSocketRuntime.emitWinsockStartup`), on loading the provider stack.
-		WSAStartup gives SyscallClass.blocking
-		getaddrinfo gives SyscallClass.blocking
-
-		// ⚠ **REACHED BY NO EMITTER ON THIS LANE.** `osSocketSend`/`osSocketRecv` come only from the polled
-		// transfer and the built-in resolver, and this lane takes the overlapped transfer and `getaddrinfo`, so
-		// the slots are classed for the call they name: a blocking-mode transfer waits on its peer.
-		send gives SyscallClass.blocking
-		recv gives SyscallClass.blocking
-
-		// ⭐ **THE DESCRIPTOR CALLS CANNOT WAIT, WHICH IS `StdDialect.stdOpSyscallClassOf`'s RULE ON EVERY OTHER
-		// LANE.** `socket` allocates a descriptor; `connect` is issued only after `WSAEventSelect` has made the
-		// socket non-blocking, so it answers `WSAEWOULDBLOCK` and the handshake is waited for on the poller; and
-		// `closesocket` returns at once because nothing here sets `SO_LINGER`.
-		socket gives SyscallClass.schedulerBound
-		connect gives SyscallClass.schedulerBound
-		closesocket gives SyscallClass.schedulerBound
-
-		// ⭐⭐ **THE OVERLAPPED PAIR IS NOT `blocking`, AND THAT IS THE WHOLE POINT OF THEM.** Each hands the
-		// kernel a buffer and returns at once — `WSA_IO_PENDING` — with the transfer reported later as a packet on
-		// the poller, so there is no window for `__sysmon` to rescue a processor out of.
-		WSARecv gives SyscallClass.schedulerBound
-		WSASend gives SyscallClass.schedulerBound
-
-		// Neither reaches the network: the event select RECORDS which events are wanted, and the option read
-		// answers out of the socket object the kernel is already holding.
-		WSAEventSelect gives SyscallClass.schedulerBound
-		getsockopt gives SyscallClass.schedulerBound
-
-		// ⭐ **THE SERVER SIDE's FOUR REACH NO NETWORK EITHER, `accept` INCLUDED.** Three of them answer out of
-		// the socket object the kernel is already holding. The fourth is issued only on a listener
-		// `WSAEventSelect(FD_ACCEPT)` has already put into non-blocking mode, so it takes a connection off the
-		// queue or answers `WSAEWOULDBLOCK` at once — the wait is the green thread's park on the event, which
-		// holds no processor.
-		bind gives SyscallClass.schedulerBound
-		listen gives SyscallClass.schedulerBound
-		accept gives SyscallClass.schedulerBound
-		getsockname gives SyscallClass.schedulerBound
+		// `WriteFile` is the hottest bracketed slot (every `print` from a green thread), so the bracket
+		// stays at one exchange each way and never touches `__sched_lock`. It is blocking because a write
+		// to a pipe whose reader has stopped reading waits as long as the far end does.
+		WriteFile or
+			// A console in quick-edit selection suspends its writer, unbounded by the far end like a
+			// stalled pipe reader.
+			WriteConsoleW or
+			// `__con_read_stdin` is a synchronous read with no park (`ConsoleRuntime`), so a green thread
+			// inside it holds its OS thread until the user presses return;
+			// `specs/sched-syscall-handoff.md`'s ordering case measures it.
+			ReadFile or
+			// The file-system family. Every one can reach a cold disk, a network share or a stalled device.
+			CreateFileA or
+			CreateFileW or
+			CreateNamedPipeW or
+			GetFileSizeEx or
+			DeleteFileA or
+			MoveFileExA or
+			FindFirstFileA or
+			FindNextFileA or
+			CreateDirectoryA or
+			RemoveDirectoryA or
+			GetCurrentDirectoryA or
+			GetFileAttributesA or
+			// The file-mapping pair, which faults pages in from the same devices.
+			OpenFileMappingA or
+			MapViewOfFile or
+			// Spawning a child image and peeking a child's pipe both wait on another process.
+			CreateProcessA or
+			PeekNamedPipe or
+			// A child wait (`osWaitChild`) lowers to this slot rather than `WaitForSingleObject` so that
+			// this table, keyed on the slot, can bracket it while the scheduler's own waits stay
+			// `schedulerBound` (`lowerOsWaitHandleWin64`).
+			WaitForSingleObjectEx or
+			// `getaddrinfo` waits on a resolver (a literal address never reaches it —
+			// `ManagedSocketRuntime.emitResolveHostIp`), and `WSAStartup`, which runs until one succeeds
+			// (`ManagedSocketRuntime.emitWinsockStartup`), on loading the provider stack.
+			WSAStartup or
+			getaddrinfo or
+			// Reached by no emitter on this lane, which takes the overlapped transfer, so the slots are
+			// classed for the call they name: a blocking-mode transfer waits on its peer.
+			send or
+			recv or
+			// Creating a section reaches the memory manager and can touch the page file, as
+			// `OpenFileMappingA`/`MapViewOfFile` do.
+			CreateFileMappingA or
+			// A stack window copied out of a suspended thread can touch a paged-out page, and a module walk
+			// reads the target's loader list under its own lock: both are `MapViewOfFile`'s position.
+			ReadProcessMemory or
+			CreateToolhelp32Snapshot or
+			Module32FirstW or
+			Module32NextW gives SyscallClass.blocking
 
 		// --- `schedulerBound`: the scheduler's own machinery, and the bounded-and-short remainder ---
 		//
-		// ⛔ The lock pair is the deadlock this table's header sets out in five steps. Do not move them.
-		EnterCriticalSection gives SyscallClass.schedulerBound
-		LeaveCriticalSection gives SyscallClass.schedulerBound
-		InitializeCriticalSection gives SyscallClass.schedulerBound
-
-		// ⛔⛔ **THE WAITS ARE THE SCHEDULER WAITING FOR ITS OWN WORK.** An idle machine's park and
-		// `__sched_syscall_regain`'s wait go through them holding no processor, so there is none for `__sysmon`
-		// to take.
-		WaitForSingleObject gives SyscallClass.schedulerBound
-
-		// Process teardown, memory, events, handles and the clocks: bounded and short, every one.
-		ExitProcess gives SyscallClass.schedulerBound
-		GetStdHandle gives SyscallClass.schedulerBound
-
-		// ⚠ A "file" call that is NOT in the blocking family above, and the distinction is the ARGUMENT: the
-		// path-taking `GetFileAttributesA` can reach a cold disk, while this one answers the type of an
-		// ALREADY-OPEN handle out of the file object the kernel is holding — bounded and short, like the
-		// `GetStdHandle` that produced the handle it is asked about.
-		GetFileType gives SyscallClass.schedulerBound
-		AddVectoredExceptionHandler gives SyscallClass.schedulerBound
-		VirtualAlloc gives SyscallClass.schedulerBound
-		VirtualFree gives SyscallClass.schedulerBound
-		QueryPerformanceCounter gives SyscallClass.schedulerBound
-		QueryPerformanceFrequency gives SyscallClass.schedulerBound
-		GetSystemTimeAsFileTime gives SyscallClass.schedulerBound
-		GetTickCount64 gives SyscallClass.schedulerBound
-		QueryThreadCycleTime gives SyscallClass.schedulerBound
-		GetExitCodeProcess gives SyscallClass.schedulerBound
-		CloseHandle gives SyscallClass.schedulerBound
-		SetHandleInformation gives SyscallClass.schedulerBound
-		CreateIoCompletionPort gives SyscallClass.schedulerBound
-		SetFileCompletionNotificationModes gives SyscallClass.schedulerBound
-		CancelIoEx gives SyscallClass.schedulerBound
-		FindClose gives SyscallClass.schedulerBound
-		CreateEventA gives SyscallClass.schedulerBound
-		SetEvent gives SyscallClass.schedulerBound
-
-		// ⚠ **`CreateThread` IS THE ONE THAT LOOKS LIKE IT BELONGS ABOVE AND DOES NOT.** Its only caller is
-		// `__sched_startm`'s spawn arm, which runs INSIDE `__sched_lock` — so bracketing it would be the
-		// header's five-step deadlock reached by a second road. It is bounded in any case: creating a thread
-		// commits a stack and returns, and nothing about it waits on another party.
-		CreateThread gives SyscallClass.schedulerBound
-		GetLastError gives SyscallClass.schedulerBound
-		GetCurrentProcessId gives SyscallClass.schedulerBound
-		GetCommandLineA gives SyscallClass.schedulerBound
-		GetModuleFileNameA gives SyscallClass.schedulerBound
-
-		// ⚠ **`GetConsoleMode` IS `GetFileType`'s POSITION EXACTLY** — it answers out of the file object the
-		// kernel already holds for a handle this process owns, so it is bounded and short.
-		GetConsoleMode gives SyscallClass.schedulerBound
-
-		// ⚠ **NOT A SYSTEM CALL AT ALL** — a table walk in user-mode kernel32 over the caller's own bytes.
-		MultiByteToWideChar gives SyscallClass.schedulerBound
-
-		// Called once, from `mrt_runtime_init`, before any green thread exists.
-		SetThreadStackGuarantee gives SyscallClass.schedulerBound
-		GetEnvironmentVariableA gives SyscallClass.schedulerBound
-		GetEnvironmentStringsA gives SyscallClass.schedulerBound
-		FreeEnvironmentStringsA gives SyscallClass.schedulerBound
-		GetActiveProcessorCount gives SyscallClass.schedulerBound
-		SetPriorityClass gives SyscallClass.schedulerBound
-		GetPriorityClass gives SyscallClass.schedulerBound
-		TlsAlloc gives SyscallClass.schedulerBound
-		TlsSetValue gives SyscallClass.schedulerBound
-		freeaddrinfo gives SyscallClass.schedulerBound
-
-		// The named-section pair. Creating a section reaches the memory manager and can touch the page file,
-		// exactly as `OpenFileMappingA`/`MapViewOfFile` above; tearing a view down waits on nothing.
-		CreateFileMappingA gives SyscallClass.blocking
-		UnmapViewOfFile gives SyscallClass.schedulerBound
-
-		// The process-sampling band splits on ONE question: does the call reach memory the kernel may have
-		// to fault in, or another process's loader data? A stack window copied out of a suspended thread can
-		// touch a paged-out page, and a module walk reads the target's loader list under its own lock — both
-		// are `MapViewOfFile`'s position, one question over.
-		ReadProcessMemory gives SyscallClass.blocking
-		CreateToolhelp32Snapshot gives SyscallClass.blocking
-		Module32FirstW gives SyscallClass.blocking
-		Module32NextW gives SyscallClass.blocking
-
-		// The remainder is bounded kernel bookkeeping over handles this process already holds: a handle
-		// open, the suspend/resume pair and the context read, the thread walk, the VAD query and the timer
-		// pair. None of them waits on another party — the sampler's WAIT is `osWaitHandle`'s
-		// `WaitForSingleObject`, classified above.
-		OpenProcess gives SyscallClass.schedulerBound
-		SuspendThread gives SyscallClass.schedulerBound
-		ResumeThread gives SyscallClass.schedulerBound
-		GetThreadContext gives SyscallClass.schedulerBound
-		SetThreadContext gives SyscallClass.schedulerBound
-		OpenThread gives SyscallClass.schedulerBound
-		GetCurrentThreadId gives SyscallClass.schedulerBound
-		GetThreadId gives SyscallClass.schedulerBound
-		VirtualQueryEx gives SyscallClass.schedulerBound
-		NtGetNextThread gives SyscallClass.schedulerBound
-		CreateWaitableTimerExW gives SyscallClass.schedulerBound
-		SetWaitableTimer gives SyscallClass.schedulerBound
-
-		// The scheduler's poller — `StdDialect.stdOpSyscallClassOf`'s `osNetpoll` arm carries why its wait is
-		// the scheduler waiting for its own work.
-		GetQueuedCompletionStatusEx gives SyscallClass.schedulerBound
-		PostQueuedCompletionStatus gives SyscallClass.schedulerBound
-
-		// A yield gives the rest of this quantum away and comes straight back; it waits on no other party.
-		SwitchToThread gives SyscallClass.schedulerBound
-
-		// ⚠ **THE UNREGISTER BLOCKS UNTIL A RUNNING CALLBACK FINISHES, AND IT IS STILL NOT `blocking`.** The
-		// callback it waits for is one `PostQueuedCompletionStatus`, so the bound is this process's own thread
-		// pool rather than a far end — and the register itself only arms a wait.
-		RegisterWaitForSingleObject gives SyscallClass.schedulerBound
-		UnregisterWaitEx gives SyscallClass.schedulerBound
-
-		// The process-tree kill's four. The terminate asks the kernel to end a job's processes and waits on
-		// none of them, so it holds no machine of ours.
-		CreateJobObjectW gives SyscallClass.schedulerBound
-		AssignProcessToJobObject gives SyscallClass.schedulerBound
-		TerminateJobObject gives SyscallClass.schedulerBound
-		SetLastError gives SyscallClass.schedulerBound
-		VirtualProtect or
+		// The descriptor calls cannot wait: `WSASocketW` allocates a descriptor; `connect` is issued only
+		// after `WSAEventSelect` has made the socket non-blocking, so it answers `WSAEWOULDBLOCK` and the
+		// handshake is waited for on the poller; and `closesocket` returns at once because nothing here
+		// sets `SO_LINGER`.
+		WSASocketW or
+			connect or
+			closesocket or
+			// The overlapped pair hands the kernel a buffer and returns `WSA_IO_PENDING` at once, with the
+			// transfer reported later as a packet on the poller, so there is no window for `__sysmon` to
+			// rescue a processor out of.
+			WSARecv or
+			WSASend or
+			// Neither reaches the network: the event select records which events are wanted, and the
+			// option read answers out of the socket object the kernel already holds.
+			WSAEventSelect or
+			getsockopt or
+			// `accept` is issued only on a listener `WSAEventSelect(FD_ACCEPT)` has made non-blocking, so
+			// it takes a connection off the queue or answers `WSAEWOULDBLOCK` at once; the wait is the
+			// green thread's park on the event, which holds no processor.
+			bind or
+			listen or
+			accept or
+			getsockname or
+			shutdown or
+			// The lock pair is the header's deadlock; it must stay `schedulerBound`.
+			EnterCriticalSection or
+			LeaveCriticalSection or
+			InitializeCriticalSection or
+			// The scheduler waiting for its own work: an idle machine's park and
+			// `__sched_syscall_regain`'s wait hold no processor for `__sysmon` to take.
+			WaitForSingleObject or
+			// Process teardown, memory, events, handles and the clocks: bounded and short, every one.
+			ExitProcess or
+			GetStdHandle or
+			// Unlike the path-taking `GetFileAttributesA`, this answers for an already-open handle out of
+			// the file object the kernel holds.
+			GetFileType or
+			AddVectoredExceptionHandler or
+			VirtualAlloc or
+			VirtualFree or
+			QueryPerformanceCounter or
+			QueryPerformanceFrequency or
+			GetSystemTimeAsFileTime or
+			GetTickCount64 or
+			QueryThreadCycleTime or
+			GetExitCodeProcess or
+			CloseHandle or
+			SetHandleInformation or
+			CreateIoCompletionPort or
+			SetFileCompletionNotificationModes or
+			CancelIoEx or
+			FindClose or
+			CreateEventA or
+			SetEvent or
+			// `CreateThread`'s only caller is `__sched_startm`'s spawn arm, which runs inside
+			// `__sched_lock`, so bracketing it would reach the header's deadlock by a second road. It is
+			// bounded anyway: it commits a stack and returns.
+			CreateThread or
+			GetLastError or
+			GetCurrentProcessId or
+			GetCommandLineA or
+			GetModuleFileNameA or
+			// `GetFileType`'s position: it answers out of the file object for a handle this process owns.
+			GetConsoleMode or
+			// Not a system call: a table walk in user-mode kernel32 over the caller's own bytes.
+			MultiByteToWideChar or
+			// Called once, from `mrt_runtime_init`, before any green thread exists.
+			SetThreadStackGuarantee or
+			GetEnvironmentVariableA or
+			GetEnvironmentStringsA or
+			FreeEnvironmentStringsA or
+			GetActiveProcessorCount or
+			SetPriorityClass or
+			GetPriorityClass or
+			TlsAlloc or
+			TlsSetValue or
+			freeaddrinfo or
+			UnmapViewOfFile or
+			// Bounded kernel bookkeeping over handles this process already holds: a handle open, the
+			// suspend/resume pair and the context read, the thread walk, the VAD query and the timer pair.
+			// None waits on another party; the sampler's wait is `osWaitHandle`'s `WaitForSingleObject`,
+			// classified above.
+			OpenProcess or
+			SuspendThread or
+			ResumeThread or
+			GetThreadContext or
+			SetThreadContext or
+			OpenThread or
+			GetCurrentThreadId or
+			GetThreadId or
+			VirtualQueryEx or
+			NtGetNextThread or
+			CreateWaitableTimerExW or
+			SetWaitableTimer or
+			// The scheduler's poller; `StdDialect.stdOpSyscallClassOf`'s `osNetpoll` arm carries why its
+			// wait is the scheduler waiting for its own work.
+			GetQueuedCompletionStatusEx or
+			PostQueuedCompletionStatus or
+			// A yield gives the rest of this quantum away and comes straight back.
+			SwitchToThread or
+			// The unregister blocks until a running callback finishes and is still not `blocking`: the
+			// callback is one `PostQueuedCompletionStatus`, bounded by this process's own thread pool, and
+			// the register only arms a wait.
+			RegisterWaitForSingleObject or
+			UnregisterWaitEx or
+			// The process-tree kill: a terminate asks the kernel to end processes and waits on none of them.
+			CreateJobObjectW or
+			AssignProcessToJobObject or
+			TerminateJobObject or
+			TerminateProcess or
+			SetLastError or
+			VirtualProtect or
 			FlushInstructionCache or
 			VirtualQuery or
 			Sleep or
@@ -1710,21 +1597,31 @@ function emitGtRelocateChainWalk(code ByteArray)
 	resolveChunkRel32Fixups(code, labelOffsets: walkLabels, rel32Fixups: walkFixups)
 end 'emitGtRelocateChainWalk'
 
-// ⭐ The prologue stack GUARD. X64Backend emits it at the very START of a guarded function's entry block — BEFORE
-// `push rbp` — iff the module carries the GT scheduler, the function is NOT a runtime (`__`/`mrt_`) function, and
-// it reserves a frame. When the running GT's projected rsp would dip below its guard word the cold path runs;
-// otherwise it is a handful of instructions that fall through. A no-op for an M's scheduler context (guard word 0
-// ⇒ `jae` always taken) and off a green thread (current GT 0 ⇒ bail). It preserves every register but r8, r10
-// and r11 — all volatile, and none an argument's — and the flags.
+// The largest frame whose projection `frameBytes + margin` still fits the guard's `sub` immediate,
+// so `widestStackGuardBytes` measures the longest guard any function carries; a larger frame fails
+// the `Imm32` cast.
+export function x64WidestGuardedFrame(margin ParsedInt) returns StackSize
+	return (LargestGuardProjection - margin) as StackSize
+end 'x64WidestGuardedFrame'
+
+let LargestGuardProjection = i32.max as ParsedInt
+
+// The prologue stack guard. `X64Backend` emits it before `push rbp` in the entry block of a
+// green-thread module's function that reserves a frame and is not exempt
+// (`skipsGreenThreadStackGuard`). When the running GT's projected rsp would dip below its guard
+// word the cold path runs; otherwise it is a handful of instructions that fall through. A no-op for
+// an M's scheduler context (guard word 0 ⇒ `jae` always taken) and off a green thread
+// (current GT 0 ⇒ bail). It preserves every register but r8, r10 and r11 (all volatile, none an
+// argument's) and the flags.
 //
-// ⭐ **AT A FUNCTION ENTRY THE COLD PATH CALLS `__gt_guard_tripped` AND JUMPS BACK TO THE GUARD's FIRST BYTE —
-// Go's `morestack` re-entering the function.** A preemption request (`GtRuntime.GtStackGuardPreempt`) fails this
-// compare exactly as an overflow does, and is answered without growing; the guard then runs again on whatever
-// stack the park left the thread, and a request that hid a real overflow grows on the second pass.
+// At a function entry the cold path calls `__gt_guard_tripped` and jumps back to the guard's first
+// byte. A preemption request (`GtRuntime.GtStackGuardPreempt`) fails this compare exactly as an
+// overflow does and is answered without growing; the guard then runs again on whatever stack the
+// park left the thread, and a request that hid a real overflow grows on the second pass.
 //
-// ⛔ **`mrt_panic`'s GUARD NEVER PARKS** (`GtGuardSite.mrtPanic`): it withdraws a request before its compare and
-// calls `__gt_morestack` itself, with no jump back, because the grower makes the frame fit in one call. A request
-// `__sysmon` stores after the withdrawal costs one needless grow.
+// `mrt_panic`'s guard never parks (`GtGuardSite.mrtPanic`): it withdraws a request before its
+// compare and calls `__gt_morestack` itself, with no jump back, because the grower makes the frame
+// fit in one call. A request `__sysmon` stores after the withdrawal costs one needless grow.
 export function emitGtStackGuard(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, frameBytes StackSize, margin ParsedInt, site GtGuardSite, target Target)
 	var guardFixups = ChunkRel32FixupArray.create()
 	var guardLabels = BlockOffsetTable.create()
@@ -1865,14 +1762,6 @@ let ThreadGetContext = 0x0008
 let ThreadSetContext = 0x0010
 let PreemptThreadAccess = ThreadSuspendResume or ThreadGetContext or ThreadSetContext
 
-// `SuspendThread` answers the thread's previous suspend count, or `(DWORD)-1` if the thread is gone. The
-// answer is a DWORD, so the failure value is compared as one.
-let SuspendThreadFailed = 0xFFFFFFFF
-
-// Win32's FALSE: what `OpenThread` is handed for `bInheritHandle`, and what `GetThreadContext` /
-// `SetThreadContext` answer on failure.
-let PreemptWin32False = 0
-
 // `lock cmpxchg r/m64, r64` (F0 0F B1 /r) and `lock xadd r/m64, r64` (F0 0F C1 /r) — the two-byte-escape
 // opcodes the claims and the acknowledgement counter ride.
 let OpcodeCmpxchg2ndByte = 0xB1
@@ -1918,6 +1807,7 @@ let PreemptResumeLabel = 2 as BlockId
 let PreemptDoneLabel = 3 as BlockId
 let PreemptNoMachineLabel = 4 as BlockId
 let ExitProcessSpinLabel = 0 as BlockId
+let ExitProcessClaimedLabel = 1 as BlockId
 
 // ⭐⭐ **THE INJECTION, WRITTEN ONCE FOR BOTH WAYS A STOP IS DELIVERED.** `sp -= 8; [sp] = pc;
 // pc = __gt_async_preempt`, applied to a SAVED register file — a Windows `CONTEXT` the monitor read out of a
@@ -1977,18 +1867,17 @@ function buildPreemptSelfRegisterChunk() returns FunctionCodeChunk
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotMachine), srcReg: X64Register.rcx)
 
-	// `GetCurrentThreadId()` answers a DWORD; the zero-extending `mov eax, eax` is what makes the id a whole
-	// word before it is stored and handed on.
 	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.GetCurrentThreadId))
-	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: X64Register.rax, wide: false)
+	encodeImportAnswerWidth(asm.code, slot: IatSlot.GetCurrentThreadId)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rbp, disp: asm.slotDisp(SlotMachine), wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: MOffOsThreadId as Imm32, srcReg: X64Register.rax)
 
 	// `OpenThread(PreemptThreadAccess, FALSE, id)`
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r8, src: X64Register.rax, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: PreemptThreadAccess)
-	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: PreemptWin32False)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: Win32False as MachineWord)
 	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.OpenThread))
+	encodeImportAnswerWidth(asm.code, slot: IatSlot.OpenThread)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rbp, disp: asm.slotDisp(SlotMachine), wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: MOffPreemptThreadHandle as Imm32, srcReg: X64Register.rax)
@@ -1996,21 +1885,21 @@ function buildPreemptSelfRegisterChunk() returns FunctionCodeChunk
 	return asm.finishFunction(PreemptSelfRegisterName)
 end 'buildPreemptSelfRegisterChunk'
 
-// `__gt_preempt_m(rcx = m)` — see `SchedRuntime.PreemptMachineName`. Go's `preemptM` (`signal_windows.go`).
+// `__gt_preempt_m(rcx = m)`; see `SchedRuntime.PreemptMachineName`.
 //
-// ⭐⭐ **THE ORDER OF THE TWO CLAIMS IS THE WHOLE PROTOCOL.** The machine's `signalPending` goes up FIRST, so
-// at most one stop is ever in flight against one machine and the trampoline's clear is what re-arms it; then
-// the process-wide `preemptExtLock`, which `__gt_exit_process` takes and never releases — a thread suspended
-// inside `ExitProcess` holds the loader lock the terminating thread needs, and the process hangs with nothing
-// printed anywhere.
+// The order of the two claims is the protocol. The machine's `signalPending` goes up first, so at
+// most one stop is in flight against one machine and the trampoline's clear re-arms it; then the
+// process-wide `preemptExtLock`, which `__gt_exit_process` takes and never releases, because a
+// thread suspended inside `ExitProcess` holds the loader lock the terminating thread needs and the
+// process hangs silently.
 //
-// ⛔ **EVERY ROAD THAT DOES NOT INJECT MUST HAND `signalPending` BACK**, or that machine is never preempted
-// again for the life of the process. Only the road that reaches `SetThreadContext` successfully leaves it
-// raised, because only then is a trampoline going to run and clear it.
+// Every road that does not inject must hand `signalPending` back, or that machine is never
+// preempted again. Only the road that reaches `SetThreadContext` successfully leaves it raised,
+// because only then does a trampoline run and clear it.
 //
-// ⚠ **THE IMPORT CALLS ARE DIRECT, NOT SHIMMED.** `__sysmon` is this chunk's only caller and it is not a
-// machine (`SchedRuntime.buildSysmon`), so it runs on a real OS-thread stack with no green thread to switch
-// off and no processor to hand away.
+// The import calls are direct, not shimmed: `__sysmon` is this chunk's only caller and it is not a
+// machine (`SchedRuntime.buildSysmon`), so it runs on a real OS-thread stack with no processor to
+// hand away.
 function buildPreemptMachineChunk() returns FunctionCodeChunk
 	let SlotMachine = 0
 	let SlotHandle = 1
@@ -2026,16 +1915,15 @@ function buildPreemptMachineChunk() returns FunctionCodeChunk
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtCmp, reg: X64Register.r10, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: PreemptGiveBackLabel)
 
-	// CAS(preemptExtLock, free -> held). A loss means a thread of this process is exiting it.
-	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.r10, label: SchedPreemptExtLockLabel)
-	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: PreemptClaimFree)
-	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: PreemptClaimHeld)
-	encodeLockedRmwBaseDispReg(asm.code, twoByteEscape: true, opcode: OpcodeCmpxchg2ndByte, base: X64Register.r10, disp: 0, reg: X64Register.rdx)
+	// A loss means another party holds the window: a thread exiting the process, or a debugger stop.
+	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.GetCurrentThreadId))
+	encodeImportAnswerWidth(asm.code, slot: IatSlot.GetCurrentThreadId)
+	emitX64ClaimExtLockAs(asm, claimant: X64Register.rax)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: PreemptGiveBackLabel)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotHandle), wide: true)
 	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.SuspendThread))
-	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: X64Register.rax, wide: false)
+	encodeImportAnswerWidth(asm.code, slot: IatSlot.SuspendThread)
 	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: SuspendThreadFailed)
 	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: PreemptUnlockLabel)
@@ -2050,8 +1938,8 @@ function buildPreemptMachineChunk() returns FunctionCodeChunk
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotHandle), wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.r10, wide: true)
 	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.GetThreadContext))
-	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: X64Register.rax, wide: false)
-	encodeGrp1RegImm32(asm.code, ext: Grp1ExtCmp, reg: X64Register.rax, imm: PreemptWin32False)
+	encodeImportAnswerWidth(asm.code, slot: IatSlot.GetThreadContext)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtCmp, reg: X64Register.rax, imm: Win32False as Imm32)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: PreemptResumeLabel)
 
 	// `__gt_preempt_safe(m, pc, sp)` — the third argument rides RAX, which is this compiler's own third
@@ -2069,8 +1957,8 @@ function buildPreemptMachineChunk() returns FunctionCodeChunk
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotHandle), wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.r10, wide: true)
 	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.SetThreadContext))
-	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: X64Register.rax, wide: false)
-	encodeGrp1RegImm32(asm.code, ext: Grp1ExtCmp, reg: X64Register.rax, imm: PreemptWin32False)
+	encodeImportAnswerWidth(asm.code, slot: IatSlot.SetThreadContext)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtCmp, reg: X64Register.rax, imm: Win32False as Imm32)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: PreemptResumeLabel)
 
 	// The stop has landed: resume the thread and release the window — and leave `signalPending` raised,
@@ -2096,6 +1984,16 @@ function buildPreemptMachineChunk() returns FunctionCodeChunk
 	asm.placeLabel(PreemptDoneLabel)
 	return asm.finishFunction(PreemptMachineName)
 end 'buildPreemptMachineChunk'
+
+// CAS(`__sched_preempt_ext_lock`, free -> `claimant`, the caller's thread id). The word names its
+// owner so a holder can recognise itself (`__gt_exit_process`, and the debug agent's
+// `__dbg_claim_stack`). ZF is set on a win; on a loss rax holds the owner.
+function emitX64ClaimExtLockAs(asm X64RuntimeAsm, claimant X64Register)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: claimant, wide: false)
+	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.r10, label: SchedPreemptExtLockLabel)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: PreemptClaimFree)
+	encodeLockedRmwBaseDispReg(asm.code, twoByteEscape: true, opcode: OpcodeCmpxchg2ndByte, base: X64Register.r10, disp: 0, reg: X64Register.rdx)
+end 'emitX64ClaimExtLockAs'
 
 // Release `__sched_preempt_ext_lock`. A plain store, because x86-64 is total store order: every write this
 // window made is already visible to any thread that then wins the claim.
@@ -2215,31 +2113,36 @@ export function x64GtAsyncPreemptStackBytes() returns StackSize
 	return (2 * StackWordBytes) as StackSize + emitAsyncPreemptBody(ByteArray.create(), callFixups: CallFixupArray.create())
 end 'x64GtAsyncPreemptStackBytes'
 
-// `__gt_exit_process(rcx = exitCode)` — see `SchedRuntime.ExitProcessGateName`. Go's `osPreemptExtEnter`.
+// `__gt_exit_process(rcx = exitCode)`; see `SchedRuntime.ExitProcessGateName`.
 //
-// ⛔⛔ **IT TAKES `__sched_preempt_ext_lock` AND NEVER GIVES IT BACK, WHICH IS THE POINT.** From here on the
-// monitor's compare-and-swap fails and no thread of this process is suspended again — so no thread can be
-// suspended INSIDE `ExitProcess`, holding the loader lock this one is about to need. The spin is bounded by
-// one suspend/inject/resume window, which is a handful of kernel calls.
+// It takes `__sched_preempt_ext_lock` and never gives it back: from here on the monitor's
+// compare-and-swap fails and no thread of this process is suspended again, so none can be suspended
+// inside `ExitProcess` holding the loader lock this one needs. A thread that already holds the
+// window proceeds rather than spinning on itself.
 //
-// ⚠ **A THREAD SUSPENDED WHILE SPINNING HERE IS FINE**: its PC is inside this chunk, which claims no
-// `__symtable` preemptible flag, so the safe-point predicate declines it and the monitor resumes it.
+// A thread suspended while spinning here is fine: its PC is inside this chunk, which claims no
+// `__symtable` preemptible flag, so the safe-point predicate declines it and the monitor resumes.
 function buildExitProcessGateChunk() returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(1)
+	var asm = X64RuntimeAsm.beginFunction(2)
 	let SlotExitCode = 0
+	let SlotClaimant = 1
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotExitCode), srcReg: X64Register.rcx)
-
-	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.r10, label: SchedPreemptExtLockLabel)
+	emitGtGatedIatCall(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.GetCurrentThreadId), usesGt: true)
+	encodeImportAnswerWidth(asm.code, slot: IatSlot.GetCurrentThreadId)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotClaimant), srcReg: X64Register.rax)
 
 	asm.placeLabel(ExitProcessSpinLabel)
-	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: PreemptClaimFree)
-	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: PreemptClaimHeld)
-	encodeLockedRmwBaseDispReg(asm.code, twoByteEscape: true, opcode: OpcodeCmpxchg2ndByte, base: X64Register.r10, disp: 0, reg: X64Register.rdx)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotClaimant), wide: true)
+	emitX64ClaimExtLockAs(asm, claimant: X64Register.rax)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: ExitProcessClaimedLabel)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: ExitProcessClaimedLabel)
 	asm.code.push(OpcodePauseRepPrefix)
 	asm.code.push(OpcodePauseNop)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: ExitProcessSpinLabel)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: ExitProcessSpinLabel)
 
+	asm.placeLabel(ExitProcessClaimedLabel)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotExitCode), wide: true)
 	emitGtGatedIatCall(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.ExitProcess), usesGt: true)
 

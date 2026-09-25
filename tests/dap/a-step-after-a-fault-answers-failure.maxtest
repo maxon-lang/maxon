@@ -1,0 +1,46 @@
+let FaultStepCaseLabel = "a-step-after-a-fault-answers-failure"
+
+type FaultStepSession implements DapSession
+	let executable as FilePath
+	export var stopReason as String
+	export var nextAnswered as bool
+	export var refusal as String
+	export var framesAfterRefusal as StringArray
+
+	static function create(executable FilePath) returns FaultStepSession
+		return Self{executable: executable, stopReason: "", nextAnswered: true, refusal: "", framesAfterRefusal: StringArray.create()}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+		_ = try client.request(LaunchCommand, argumentsJson: dapLaunchArguments(self.executable))
+		_ = try client.awaitEvent(InitializedEvent)
+		_ = try client.request(ConfigurationDoneCommand)
+
+		let stopped = try client.awaitEvent(StoppedEvent)
+		self.stopReason = dapBodyString(stopped, key: "reason")
+
+		let threadId = dapBodyNumber(stopped, key: "threadId")
+		let stepped = try client.request(NextCommand, argumentsJson: dapThreadArguments(threadId))
+		self.nextAnswered = dapSuccess(stepped)
+
+		if not self.nextAnswered 'refused'
+			self.refusal = dapRefusal(stepped)
+		end 'refused'
+
+		self.framesAfterRefusal = dapStackFrameNames(try client.request(StackTraceCommand, argumentsJson: dapThreadArguments(threadId)))
+
+		_ = try client.request(DisconnectCommand)
+	end 'drive'
+end 'FaultStepSession'
+
+test 'a next from a fault stop answers failure and leaves the stop walkable'
+	let staged = dapStagedFixture(FaultStepCaseLabel, fixture: CrashFixtureName)
+	var session = FaultStepSession.create(dapBuildFixture(staged))
+	try dapRunSession(session, completing: "refuse the step from the fault and walk the stop")
+
+	try Expect.equal(session.stopReason, expected: ExceptionReason, message: "the program's first stop is its fault; it said `{session.stopReason}`")
+	try Expect.isFalse(session.nextAnswered, message: "a fault is terminal: `{NextCommand}` from it must answer `success: false` rather than success followed by no `{StoppedEvent}`")
+	try Expect.isFalse(session.refusal.isEmpty(), message: "a refused `{NextCommand}` must say why in its `message`")
+	try Expect.isFalse(session.framesAfterRefusal.count() == 0, message: "the refused step leaves the program stopped at its fault, so `{StackTraceCommand}` still walks it; it answered {dapRendered(session.framesAfterRefusal)}")
+end 'a next from a fault stop answers failure and leaves the stop walkable'

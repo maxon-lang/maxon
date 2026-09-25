@@ -286,12 +286,11 @@ let Arm64WordBitMax = 63
 // The machine word is 64 bits wide — the iteration cap of the leading/trailing bit-count loops.
 let Arm64WordBits = 64
 
-// ⭐ **THE SHIFT THAT WIDENS A 32-BIT C RESULT INTO THE 64-BIT VALUE THE Std TIER READS.** AAPCS64
-// leaves the UPPER half of a register holding an `int` return UNSPECIFIED, so a libSystem call that
-// answers `int` — `getpid`, `getpriority`, `_NSGetExecutablePath` — must be widened at the call site
-// before its answer is a number: `lsl #32` then `asr #32` sign-extends it, and `lsl #32` alone is
-// enough when all that follows is a test against zero. EXPORTED because the isel spells that in
-// `TargetOp`s and a runtime chunk spells it in raw encoders, and neither may pick its own 32.
+// The shift that widens a 32-bit C result into the 64-bit value the Std tier reads. AAPCS64 leaves
+// the upper half of a register holding an `int` return unspecified, so a libSystem call that
+// answers one is widened at the call site: `lsl #32` then `asr #32` sign-extends it and `lsl #32`
+// then `lsr #32` zero-extends it, by the width `osImportAnswerOf` states. Exported because the isel
+// spells that in `TargetOp`s and a runtime chunk in raw encoders, and neither may pick its own 32.
 export let Arm64NarrowResultShift = 32
 
 // The 64-bit word's sign bit (bit 63), as an UNSIGNED `MachineWord` — the number 9223372036854775808,
@@ -540,7 +539,7 @@ let Arm64OpEorVec8b = 0x2E201C00
 // so its isel asks `arm64ImmIsEncodableAddSub` and never selects the immediate form for a wider constant;
 // a FRAME past this has no encodable form at all (SP cannot be a shifted-register operand), so the split
 // panics rather than truncate.
-let Arm64AddSubImmWideMax = Arm64ShiftedImm12Max or Arm64ImmMask
+module let Arm64AddSubImmWideMax = Arm64ShiftedImm12Max or Arm64ImmMask
 
 // The reach of a `b`/`bl` (imm26 scaled by 4 = ±128 MiB) and of a `b.cond`/`cbz`/`cbnz` (imm19 scaled
 // by 4 = ±1 MiB), as byte counts. Guarded on resolution so an out-of-range branch is a loud link
@@ -2573,18 +2572,12 @@ end 'arm64EmitStackFree'
 // Per-function chunk emission
 // ==========================================================================
 
-// Emit one function into a FunctionCodeChunk with CHUNK-LOCAL fixup offsets — the arm64 twin of
-// `X64Backend.emitFunctionChunk`. Inter-function `bl` fixups (`callFixups`), code→data references
-// (`rdataRelocs`) and `leaFuncAddr` code→`.text`-function pairs (`funcAdrpRelocs`) are rebased by concat;
-// within-function block branches are resolved HERE, since a function's blocks are contiguous within its
-// one chunk.
-// ⭐ **`usesGt` DECIDES TWO THINGS BELOW THE `TargetOp` TIER**, exactly as the x64 twin's does: the prologue
-// STACK GUARD at a guarded function's entry, and whether every `arm64ImportCall` goes through the
-// system-stack door (`Arm64GtRuntime.DarwinLibcCallName`). It is `RuntimeUsage.usesGt` — the bit
-// `installGtRuntime` was gated on — read once by the caller and never re-derived per function, so this stays
-// O(1) per function. The door is macOS-only by construction: only the import-call route emits an
-// `arm64ImportCall`, and the guard's thread-pointer read is routed per OS (`arm64ThreadPointerSource`).
-function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThreads bool, target Target, runtimeTier FunctionNameSet) returns FunctionCodeChunk
+// Fixup offsets are chunk-local: concat rebases the `bl` fixups, the code→data references and the
+// `leaFuncAddr` pairs. Block branches are resolved here, because a function's blocks are contiguous
+// within its one chunk. `greenThreads` is `RuntimeUsage.usesGt`, read once by the caller rather
+// than re-derived per function; it decides the prologue stack guard and whether every
+// `arm64ImportCall` goes through the system-stack door (`Arm64GtRuntime.DarwinLibcCallName`).
+function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThreads bool, target Target, runtimeTier FunctionNameSet, spanTable DebugSpanTable) returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
 	var rdataRelocs = RdataRelocationArray.create()
@@ -2608,9 +2601,9 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThrea
 	var unsafePrefixBytes = 0 as CodeOffset
 	var isFirstBlock = true
 
-	// ⭐ x64's twin: one bool test per op when debug info is off, and the span column untouched.
+	// Hoisted so a build without debug info pays one bool test per op and never reads the span column.
 	let captureSpans = module.spans.armed
-	var lineRows = DebugLineRowBuilder.create(captureSpans)
+	var lineRows = DebugLineRowBuilder.forFunction(module, func: func, armed: captureSpans, spanTable: spanTable)
 	var runOffsets = DebugRunOffsets.forFunction(func, armed: captureSpans)
 	var blockEnds = BlockOffsetTable.forBlockCount(func.nextBlockId)
 
@@ -2625,14 +2618,11 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThrea
 
 		let blockStart = code.count()
 		blockOffsets.place(block.id, value: blockStart)
+		lineRows.openBlock(block.id, site: block.inlineSite)
 
-		// ⭐ THE GREEN-THREAD STACK GUARD, at the very START of a guarded function's entry block — BEFORE the
-		// prologue — so a green thread whose stack would overflow grows and relocates it first. It is EXEMPT
-		// for the compiler's own scaffolding: the scheduler core must never trip the grower, and its own
-		// libSystem calls already run on the M's system stack through the door. ⚠ The exemption is
-		// asked of the FUNCTION's PROVENANCE and never of its name — `skipsGreenThreadStackGuard`'s header
-		// carries the measurement (a `__`-name test handed the guard to a user function declared in
-		// `stdlib/Builtins.maxon` and segfaulted a green thread) and the split from `isRuntimeFunction`.
+		// The green-thread stack guard, before the prologue, so a thread whose stack would overflow grows
+		// and relocates it first. The exemption is `skipsGreenThreadStackGuard`, asked of the function's
+		// provenance and never its name.
 		if isFirstBlock and guarded 'guard'
 			emitArm64GtStackGuard(code, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: arm64PrologueFrameBytes(module, block: block), margin: gtStackGuardMargin(target), site: GtGuardSite.functionEntry, target: target)
 
@@ -2676,10 +2666,11 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThrea
 	chunk.funcAdrpRelocs = funcAdrpRelocs
 	chunk.jumpTableRelocs = resolveJumpTableRelocs(jumpTables, blockOffsets: blockOffsets)
 
-	// x64's twin, and the same fact: this is code a green thread runs rather than the compiler's own
-	// scaffolding, which is what makes a PC inside it a safe point for an asynchronous stop.
+	// Stoppable where it stands exactly when the stack guard applies; `X64Backend.emitFunctionChunk`
+	// says why `compilerScaffolding` is asked separately.
 	chunk.asyncPreemptible = guarded
 	chunk.asyncUnsafePrefixBytes = unsafePrefixBytes
+	chunk.compilerScaffolding = isRuntimeFunction(func, runtimeTier: runtimeTier)
 
 	// Gated on `--coverage` rather than on debug info: the two are independent channels, and this one is
 	// empty for an ordinary build because no `covInc` was emitted to fill it. Dropping it would leave every
@@ -2749,17 +2740,6 @@ end 'appendArm64RuntimeChunks'
 // Concatenation: lay out .text, rebase fixups, resolve intra-module calls
 // ==========================================================================
 
-// Concatenate the per-function chunks into `.text`, rebase each chunk's CHUNK-LOCAL fixups to absolute
-// offsets, resolve the intra-module `bl` calls to 26-bit displacements (`bl main` among them), rebase
-// the GOT import calls (the entry stub's `_exit`) into the writer's slot-indexed `relocations`, and
-// resolve every code→data reference to its section offset (the writer adds the section VA) — the arm64
-// twin of `concatX64FunctionChunks`.
-//
-// `mrt_start` MUST lead `.text` so `LC_MAIN.entryoff` (= `mainCallFixupOffset`) is its offset, 0;
-// `appendArm64RuntimeChunks` appends it first, and the guard below asserts that layout at the one
-// place that decides it. `__symtable` CLOSES `.text` after everything else, exactly as x64's concat
-// closes its own — the arm64 panic runtime's backtrace symbolizes every frame against it, and reads
-// `__symtable - mrt_start` as the size of the code.
 function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModule, chunks FunctionCodeChunkArray, globalData GlobalDataTable, project Project, funcNames FunctionNameIndex) returns CodeResult throws CompileError
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
@@ -2785,10 +2765,10 @@ function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModul
 		try recordChunkLabel(labelOffsets, name: chunk.funcName, offset: funcStart, laidOut: labelsLaid, project: project, funcNames: funcNames)
 		labelsLaid = labelsLaid + 1
 		recordChunkSymbol(debugSymbols, chunk: chunk, codeOffset: funcStart)
-		inlineFrames.appendChunk(chunk, funcStart: funcStart)
+		let inlineSiteBase = inlineFrames.appendChunk(chunk, funcStart: funcStart)
 
 		if captureSpans 'debugInfo'
-			foldChunkDebugInfo(chunk, funcStart: funcStart, functions: debugFunctions, lineRows: debugLineRows, covPointOffsets: covPointOffsets)
+			foldChunkDebugInfo(chunk, funcStart: funcStart, inlineSiteBase: inlineSiteBase, functions: debugFunctions, lineRows: debugLineRows, covPointOffsets: covPointOffsets)
 		end 'debugInfo'
 
 		code.append(chunk.code)
@@ -2827,18 +2807,14 @@ function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModul
 		end 'rebaseJumpTables'
 	end 'eachChunk'
 
-	// `__symtable` CLOSES `.text`, after the last chunk — the placement the panic runtime's
-	// `textSize = __symtable - mrt_start` depends on. Appending it here, from the loop's own output, is
-	// what makes that structural: every symbol's offset is known because the loop just assigned it, and
-	// nothing can be laid out after it because nothing follows. It is registered in `labelOffsets` (so
-	// the walker's `leaFuncAddr __symtable` resolves like any other chunk reference) but deliberately
-	// NOT in `debugSymbols` — it is DATA, not a function, and an entry for it would let a walk symbolize
-	// a stray return address INTO the table. It is exempt from being a function, not from being unique:
-	// a second claim would move the bound `textSize` reads, silently mis-sizing every backtrace.
+	// ⚠ `__symtable` closes `.text`, and the panic runtime's `textSize = __symtable - mrt_start`
+	// depends on it: a second claim on the label would move that bound and silently mis-size every
+	// backtrace, so it claims its label through the same door as every chunk. It is data, so it has no
+	// `debugSymbols` entry; one would let a walk symbolize a stray return address into the table.
 	padTo(code, size: alignUp(code.count(), alignment: SymbolTableAlignment))
 	try recordChunkLabel(labelOffsets, name: SymbolTableName, offset: code.count(), laidOut: labelsLaid, project: project, funcNames: funcNames)
 	labelsLaid = labelsLaid + 1
-	code.append(buildSymbolTableBytes(debugSymbols))
+	code.append(buildSymbolTableBytes(debugSymbols, target: project.target))
 
 	// The inline frame tables follow the whole of `__symtable` — names and flag run both — under their own
 	// label (`BacktraceFormat`), past the `[mrt_start, __symtable)` window the walkers symbolize in; x64's
@@ -2891,10 +2867,10 @@ end 'concatArm64FunctionChunks'
 // resolve, not a near miss).
 function arm64SectionOffsetOfReloc(globalData GlobalDataTable, reloc RdataRelocation) returns ByteOffset
 	return match reloc.kind 'kind'
-		arm64Adrp gives globalData.rdataOffsetOf(reloc.rdataLabel)
-		arm64PageOff gives globalData.rdataOffsetOf(reloc.rdataLabel)
-		dataSectionArm64Adrp gives globalData.dataSectionOffsetOf(reloc.rdataLabel)
-		dataSectionArm64PageOff gives globalData.dataSectionOffsetOf(reloc.rdataLabel)
+		arm64Adrp or
+			arm64PageOff gives globalData.rdataOffsetOf(reloc.rdataLabel)
+		dataSectionArm64Adrp or
+			dataSectionArm64PageOff gives globalData.dataSectionOffsetOf(reloc.rdataLabel)
 		ripRelDisp32 or
 			symdataRipRelDisp32 or
 			dataSectionRipRelDisp32 panic("arm64SectionOffsetOfReloc: '{reloc.rdataLabel}' carries an x64 RIP-relative reloc kind in the arm64 backend")
@@ -3056,7 +3032,7 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	appendArm64RuntimeChunks(chunks, leakCheck: stub.checksLeaks, initGlobals: usage.usesManagedGlobals, drainGreenThreads: stub.runsMainOnAGreenThread, captureArgv: usage.usesCommandLine, captureEnvp: linuxReadsEnvironment(usage) and target.os == Os.linux, debugStream: stub.bracketsDebugStream, dumpCoverage: stub.dumpsCoverage, os: target.os, entryFunction: project.entryFunctionName)
 
 	for func in targetModule.functions 'eachFunc'
-		chunks.push(emitArm64FunctionChunk(targetModule, func: func, greenThreads: usage.usesGt, target: target, runtimeTier: project.libraryFacts.runtimeTier))
+		chunks.push(emitArm64FunctionChunk(targetModule, func: func, greenThreads: usage.usesGt, target: target, runtimeTier: project.libraryFacts.runtimeTier, spanTable: project.debugSpanTable))
 	end 'eachFunc'
 
 	// The panic runtime lays out ABOVE user code (x64's placement, and for x64's reason: only the entry

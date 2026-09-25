@@ -1,0 +1,25 @@
+// Test: unknown-function-result-as-an-otherwise-fallback
+type Box
+	export var n = 0
+
+	static function create() returns Box
+		return Box{}
+	end 'create'
+end 'Box'
+
+enum Failure implements Error
+	bad
+end 'Failure'
+
+function maybe() returns Box throws Failure
+	return Box.create()
+end 'maybe'
+
+function main() returns ExitCode
+	let b = try maybe() otherwise frobnicate(2)
+	return b.n as ExitCode
+end 'main'
+---
+CompilerError:
+error E3004: <fragment>:19:32: call to undefined function 'frobnicate'
+error E3059: <fragment>:19:10: type mismatch: 'otherwise type 'unknown' does not match expected type 'Box''

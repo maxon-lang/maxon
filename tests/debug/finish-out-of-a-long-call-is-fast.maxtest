@@ -1,0 +1,25 @@
+let FinishOutOfLongCallCaseLabel = "finish-out-of-a-long-call-is-fast"
+
+let ChurnFunctionName = "churn"
+let MainFunctionName = "main"
+
+test 'a finish out of a frame with fifty million iterations left returns to the caller within the stop timeout'
+	let staged = builtFixture(FinishOutOfLongCallCaseLabel, fixture: LongCallFixtureName)
+	let callLine = anchorLine(staged, anchor: "main-long-call")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(callLine)}", RunCommand, StepCommand, FinishCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let stops = eventsOfKind(events, kind: StopEventName)
+
+	try Expect.equal(eventsOfKind(events, kind: TimeoutEventName).count() as AssertedInt, expected: 0, message: "a `{FinishCommand}` runs the rest of its frame at full speed and stops at the frame's return address; one that single-steps fifty million iterations cannot return inside the stop timeout. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(stops.count() as AssertedInt, expected: 3, message: "the breakpoint, the step into `{ChurnFunctionName}` and the finish are three stops. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let entered = eventAt(stops, index: 1)
+	try Expect.equal(textOf(entered, node: entered.root, key: FunctionKey), expected: ChurnFunctionName, message: "`{StepCommand}` at the call line enters the callee. {said}")
+
+	let returned = eventAt(stops, index: 2)
+	try Expect.equal(textOf(returned, node: returned.root, key: FunctionKey), expected: MainFunctionName, message: "`{FinishCommand}` stops in the frame's CALLER. {said}")
+	try Expect.equal(numberOf(returned, node: returned.root, key: LineKey) as AssertedInt, expected: callLine as AssertedInt, message: "`{FinishCommand}` stops at the return address, which is still on the call's line. {said}")
+	try Expect.equal(textOf(returned, node: returned.root, key: ReasonKey), expected: StepStopReason, message: "the return point the walk ran to is its own, so the stop it reports is a `{StepStopReason}`. {said}")
+end 'a finish out of a frame with fifty million iterations left returns to the caller within the stop timeout'

@@ -492,6 +492,14 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		return indexAtByte(try findIn(self, offset: 0, len: byteLength(), needle: needle))
 	end 'findFirst'
 
+	module function bytePosOf(needle String, from BytePos) returns BytePos throws StringError
+		if from > byteLength() 'pastTheEnd'
+			throw StringError.invalidIndex
+		end 'pastTheEnd'
+
+		return from + (try findIn(self, offset: from, len: byteLength() - from, needle: needle))
+	end 'bytePosOf'
+
 	public function findLast(needle String) returns StringIndex throws StringError
 		return indexAtByte(try findLastIn(self, needle: needle))
 	end 'findLast'

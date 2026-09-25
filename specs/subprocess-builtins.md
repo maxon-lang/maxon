@@ -989,6 +989,96 @@ kind=2 descendantSurvived=false
 
 ```
 
+<!-- test: subprocess-builtins.a-child-that-exited-before-the-deadline-keeps-its-own-code -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
+**A DEADLINE KILL REPORTS THE KILL'S CODE ONLY FOR A CHILD THE KILL ENDED.** The direct child exits at once
+with `3`, but the grandchild it started in the background holds the stdout pipe, so the collect cannot finish
+until the deadline kills the tree. The kill reaches only the grandchild: the child had already exited, and
+`TerminateJobObject` leaves an exited process's code alone. The status kind is `timedOut` (`2`) because the
+deadline fired, and the code is the child's own `3`.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function main() returns ExitCode
+	var argv = ByteArray.create()
+	appendToken(argv, token: "cmd")
+	appendToken(argv, token: "/c")
+	appendToken(argv, token: "start /b ping -n 5 127.0.0.1 & exit 3")
+	let empty = ""
+	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
+	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+	let r = __Builtins.subprocessWaitCollect(h, 300)
+	let kind = __Builtins.subprocessResultStatusKind(r)
+	let code = __Builtins.subprocessResultStatusCode(r)
+	print("kind={kind} code={code}")
+	__Builtins.subprocessResultRelease(r)
+	__Builtins.subprocessReleaseHandle(h)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+kind=2 code=3
+
+```
+
+<!-- test: subprocess-builtins.posix-a-child-that-exited-before-the-deadline-keeps-its-own-code -->
+<!-- unsupported-targets: x64-windows -->
+`a-child-that-exited-before-the-deadline-keeps-its-own-code` on this lane. The shell exits with `3` and the
+`sleep` it left in the background holds the stdout pipe, so the child is an unreaped zombie when the deadline
+fires. `kill(-pgid, SIGKILL)` still answers success for a group whose leader is a zombie, and the reap is
+what tells the two apart: the kill's code is reported only for a child whose wait status says `SIGKILL` ended
+it, and this one says it exited with `3`.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function main() returns ExitCode
+	var argv = ByteArray.create()
+	appendToken(argv, token: "/bin/sh")
+	appendToken(argv, token: "-c")
+	appendToken(argv, token: "sleep 3 & exit 3")
+	let empty = ""
+	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
+	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+	let r = __Builtins.subprocessWaitCollect(h, 300)
+	let kind = __Builtins.subprocessResultStatusKind(r)
+	let code = __Builtins.subprocessResultStatusCode(r)
+	print("kind={kind} code={code}")
+	__Builtins.subprocessResultRelease(r)
+	__Builtins.subprocessReleaseHandle(h)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+kind=2 code=3
+
+```
+
 <!-- test: subprocess-builtins.a-release-under-a-parked-collect-is-a-named-stop -->
 <!-- unsupported-targets: wasm32-wasi -->
 <!-- procs: 1 -->

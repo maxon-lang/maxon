@@ -4,14 +4,14 @@ export function runInit(args MaxonArgs) returns ExitCode
 	if args.paths.count() > 1 'tooManyPaths'
 		printError("Usage: maxon {InitCommandName} [<directory>]\n")
 		printError("One directory at most: a project is initialized in one place.\n")
-		return 1
+		return OwnFailureExit
 	end 'tooManyPaths'
 
 	let spelling = try args.paths.get(0) otherwise "."
 
 	let stated = try FilePath.from(spelling) otherwise 'badPath'
 		printError("error: invalid path: {spelling}\n")
-		return 1
+		return OwnFailureExit
 	end 'badPath'
 
 	let root = stated.anchoredAt(Directory.currentPath())
@@ -19,7 +19,7 @@ export function runInit(args MaxonArgs) returns ExitCode
 
 	if named.isEmpty() 'unnameable'
 		printError("error: `{spelling}` names no directory a project can be called after.\n")
-		return 1
+		return OwnFailureExit
 	end 'unnameable'
 
 	let manifest = root.join("{named}{ProjectFileExtension}")
@@ -28,7 +28,7 @@ export function runInit(args MaxonArgs) returns ExitCode
 	if Directory.isDirectory(root) 'anExistingDirectory'
 		let existing = try driverFileIn(root, extension: ProjectFileExtension) otherwise (e) 'unreadableLayout'
 			reportCompileError(e)
-			return 1
+			return OwnFailureExit
 		end 'unreadableLayout'
 
 		match existing 'existing'
@@ -43,34 +43,34 @@ export function runInit(args MaxonArgs) returns ExitCode
 
 	try requireNoProjectEncloses(manifest) otherwise (e) 'nested'
 		reportCompileError(e)
-		return 1
+		return OwnFailureExit
 	end 'nested'
 
 	if not Directory.create(root) 'noDirectory'
 		printError("error: {root.toString()} could not be created\n")
-		return 1
+		return OwnFailureExit
 	end 'noDirectory'
 
 	try File.writeText(manifest, content: ManifestSource) otherwise 'manifestNotWritten'
 		printError("error: {manifest.toString()} could not be written\n")
-		return 1
+		return OwnFailureExit
 	end 'manifestNotWritten'
 
 	try File.writeText(entry, content: EntrySource) otherwise 'entryNotWritten'
 		printError("error: {entry.toString()} could not be written\n")
-		return 1
+		return OwnFailureExit
 	end 'entryNotWritten'
 
 	print("{manifest.toString()}\n")
 	print("{entry.toString()}\n")
 	print("\n")
 	print("Build it with `maxon {BuildSubcommandName}` in {root.toString()}.\n")
-	return 0
+	return SucceededExit
 end 'runInit'
 
 function refuseExistingFile(path FilePath) returns ExitCode
 	printError("error: {path.toString()} is already there, so nothing was written.\n")
-	return 1
+	return OwnFailureExit
 end 'refuseExistingFile'
 
 let ManifestSource = "export function build() returns ExitCode\n\tBuild.build(\".\")\n\treturn 0\nend 'build'\n"

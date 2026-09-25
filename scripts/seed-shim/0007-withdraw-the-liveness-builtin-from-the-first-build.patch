@@ -1,0 +1,16 @@
+# The seed knows no `__Builtins.processIsAlive`, so it refuses `maxon-bin/Run/OwnedLeftovers.maxon` at the
+# call that asks it (E3004). The builtin is withdrawn at that call site alone: its parser arm is left
+# standing, so `C1` knows it and compiles the unshimmed tree into `C2`.
+#
+# The shimmed liveness test answers any positive id as alive, so the first build's leftover sweep removes
+# nothing — a build that keeps a file it could have deleted, never one that deletes a file still in use.
+diff --git a/maxon-bin/Run/OwnedLeftovers.maxon b/maxon-bin/Run/OwnedLeftovers.maxon
+--- a/maxon-bin/Run/OwnedLeftovers.maxon
++++ b/maxon-bin/Run/OwnedLeftovers.maxon
+@@ -48,5 +48,5 @@ export function livenessOfOwner(owner LeftoverOwner) returns OwnerLiveness
+ 	return match owner 'owner'
+ 		notOwned gives OwnerLiveness.notOwned
+-		process(pid) gives OwnerLiveness.ownerAlive if __Builtins.processIsAlive(pid) else OwnerLiveness.ownerGone
++		process(pid) gives OwnerLiveness.ownerAlive if pid > 0 else OwnerLiveness.ownerGone
+ 	end 'owner'
+ end 'livenessOfOwner'

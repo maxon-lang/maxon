@@ -47,6 +47,8 @@ let MaxonTestIndexAlias = "__MaxonTestIndex"
 // differ only outside `[A-Za-z0-9_]` share a namespace and sanitize alike.
 let MaxonTestFileRunnerPrefix = "__maxon_test_file_"
 
+let EveryTestPassedLocal = "maxonTestEverySelectedTestPassed"
+
 // File name given to the synthesized root-entry source. It is deliberately NOT a `.maxtest` file —
 // it holds no `test` declaration, and E2058 refuses one outside such a file — and it sits at the
 // staged root so its `export`s are visible to every directory below. The name is never opened by a
@@ -169,43 +171,23 @@ union TestFileGroupLookup
 	absent
 end 'TestFileGroupLookup'
 
-// ⭐⭐ **PARTITION TESTS INTO FILES, PRESERVING DISCOVERY ORDER BOTH BETWEEN FILES AND WITHIN ONE.**
+// Discovery order is preserved between files and within one: it is the run's numbering, a report's
+// reading order, and what makes a redirected run byte-reproducible.
 //
-// Order is not cosmetic: it is the run's numbering, a report's reading order, and what makes a redirected
-// run byte-reproducible. Sorting by name instead would make the report stable and the numbering depend on a
-// sort nobody asked for.
+// Separate from the staging because `--list` without `--build` needs the grouping and nothing
+// else: it compiles nothing, so it must not synthesize a dispatcher either.
 //
-// ⚠ **SEPARATE FROM THE STAGING BECAUSE `--list` NEEDS THE GROUPING AND NOTHING ELSE.** That flag is
-// documented as compiling nothing, and synthesizing a dispatcher it will never hand to a compiler is the
-// same kind of quiet untruth as compiling behind its back.
+// It does not assume the roster arrives grouped, though `ProgramSignatures.declaredTests` does
+// arrive with each file's tests contiguous: that is a property of a caller two layers away, and a
+// grouping that relied on it would silently drop a file's second run of tests the day anything
+// interleaved. Contiguity buys the cost, never the answer: the fast path in `groupOrdinalFor` reads
+// it, and the full scan behind that path is right either way.
 //
-// ⛔ **IT DOES NOT ASSUME THE ROSTER ARRIVES ALREADY GROUPED, THOUGH IT HAPPENS TO.** The sweep folds one
-// file at a time, so `ProgramSignatures.declaredTests` really does arrive with each file's tests
-// contiguous — but that is a property of a caller two layers away, and a grouping that read it as an
-// invariant would silently drop a file's second run of tests the day anything interleaved. So contiguity
-// buys the COST and never the ANSWER: the fast path in `groupOrdinalFor` is what reads it, and behind that
-// path sits the full scan that is right either way.
-//
-// ⛔⛔ **ONE PASS. TWO NESTED ONES ARE Θ(files × tests), MEASURED AT 10.7 SECONDS.** Collecting the
-// distinct files and then walking EVERY test again for each of them is a
-// `FilePath.equals` per (file, test) pair, and on Windows `FilePath.equals` is not a byte compare: it is
-// `s.clone().toLower()` on BOTH sides (`stdlib/FilePath.maxon`), so every one of those pairs costs four
-// String allocations. MEASURED with `maxon test --list` on generated projects, one binary, idle machine:
-//
-//   512 test files × 8 tests (4096 tests)                    —  11,357 ms
-//   511 ordinary files + 1 test file, the same 4096 tests  —     684 ms
-//
-// Same file count, same test count, same token volume; the only thing that differs is how many GROUPS the
-// roster partitions into, which is the one quantity the nested shape multiplies by. Holding the test count at
-// 2048 and doubling the file count doubled the time (F=256 ⇒ 3062 ms, F=512 ⇒ 6099 ms) — the product, read
-// straight off a doubling ladder.
-//
-// ⚠ **THE RESIDUAL IS Θ(files²) AND IT IS STATED RATHER THAN HIDDEN.** A file TRANSITION still scans the
-// groups built so far, so a run pays one scan per test FILE rather than one per TEST: 512 files cost
-// ~131k comparisons against the nested shape's 4.2M. A map keyed on the path would remove even that, and is
-// deliberately not used — the key would have to restate `FilePath.equals`'s own platform rule (exact bytes
-// on POSIX, case-folded on Windows) outside the stdlib that owns it, which is a second spelling of a
-// comparison this file has exactly one of.
+// One pass, because a nested walk is a `FilePath.equals` per (file, test) pair, and on Windows each
+// one case-folds both sides into fresh Strings. The residual is Θ(files²), one scan of the groups
+// built so far per file transition. A map keyed on the path would remove it, but its key would
+// restate `FilePath.equals`'s platform rule (exact bytes on POSIX, case-folded on Windows) outside
+// the stdlib that owns it.
 export function groupTestsByFile(tests DiscoveredTestArray) returns TestFileGroupArray throws TestStagingError
 	// Refused here, by count, rather than left to fail inside generated source: every index there is typed
 	// by the generated alias, so the overflow would otherwise surface as a range error in text nobody wrote.
@@ -423,26 +405,19 @@ function writeStagedFile(path FilePath, content String) throws TestStagingError
 	try File.writeText(path, content: content) otherwise throw TestStagingError.refused("could not write {path.toString()}")
 end 'writeStagedFile'
 
-// ⭐⭐ **THE DISPATCHER APPENDED TO ONE TEST FILE.** Each test is wrapped in a selection guard, a begin
-// marker, a timer and a handler.
+// The handler is the block form of `otherwise` setting a variable: control continues past it, so
+// one report site serves pass and fail alike.
 //
-// ⚠ **THE HANDLER IS THE BLOCK FORM OF `otherwise` SETTING A VARIABLE, RATHER THAN TWO EXITS**, because
-// control CONTINUES past an `otherwise` block — so ONE report site serves both outcomes and there is no
-// second place for pass and fail to be reported differently.
+// A test throws exactly `TestFailure` (`Parser.emitUncaughtTestThrow` converts a foreign error), so
+// the handler catches everything but a `panic`. That is why the begin marker precedes the body, and
+// why a begin with no end is the crash signal.
 //
-// ⚠ **A TEST THROWS EXACTLY `TestFailure`**, so this catches everything a test body can raise; a foreign
-// error was already converted, and reported, by the handler the compiler substitutes
-// (`Parser.emitUncaughtTestThrow`). What it cannot catch is a `panic`, which is uncatchable by design —
-// which is precisely why the begin marker is written BEFORE the body, and why a begin with no end is the
-// crash signal.
-//
-// ⚠ **EVERY DISCOVERED TEST IS GENERATED IN, ALWAYS.** Filtering happens at RUN time, through the
-// `--select=` value — which is what lets a filter change between runs without invalidating anything, and
-// what keeps the thing being tested identical to the thing that was compiled.
+// Every discovered test is generated in; selection happens at run time (`TestSelectOptionName`).
 function fileDispatcherSource(group TestFileGroup) returns String
 	var source = "\n// Generated by `maxon test` into a staged copy — the file in your tree is untouched. It lives\n"
 	source.append("// in this file because a `test` is not exported, so nowhere else can call one. See TestDispatcher.\n")
-	source.append("export function {group.runnerName}(selection String)\n")
+	source.append("export function {group.runnerName}(selection String) returns bool\n")
+	source.append("\tvar {EveryTestPassedLocal} = true\n")
 
 	for member in group.tests 'eachTest'
 		let index = member.index
@@ -456,25 +431,22 @@ function fileDispatcherSource(group TestFileGroup) returns String
 		source.append("\t\tlet started{index} = Clock.nowNanos()\n")
 		source.append("\t\ttry {symbol}() otherwise '{caught}'\n")
 		source.append("\t\t\toutcome{index} = \"{TestProtocolOutcomeFail}\"\n")
+		source.append("\t\t\t{EveryTestPassedLocal} = false\n")
 		source.append("\t\tend '{caught}'\n")
 		source.append("\t\t{MaxonTestHelperType}.ended({index}, outcome: outcome{index}, nanos: Clock.elapsedNanos(started{index}))\n")
 		source.append("\tend '{guard}'\n")
 	end 'eachTest'
 
+	source.append("\n\treturn {EveryTestPassedLocal}\n")
 	source.append("end '{group.runnerName}'\n")
 	return source
 end 'fileDispatcherSource'
 
-// ⭐⭐ **THE ROOT ENTRY: the shared helpers, then a call to every file's dispatcher.**
-//
-// `useWireFormat` is called ONCE, FIRST, before anything can report — that is the contract
-// `stdlib/Testing.maxon` states, and it is why the format is an argument rather than a constant the stdlib
-// holds.
-//
-// ⚠ **IT RETURNS 0 WHATEVER THE TESTS DID.** The runner attributes outcomes from the MARKER STREAM, and a
-// non-zero exit here would be indistinguishable from the crash it must never be confused with. The exit
-// code a test binary owns is therefore only ever "how the process died".
+// `useWireFormat` is called once, first, before anything can report: the contract
+// `stdlib/Testing.maxon` states, and why the format is an argument rather than a stdlib constant.
 function entrySource(groups TestFileGroupArray) returns String
+	requireTestBinaryExitsAreItsOwn()
+
 	let beganLine = wrapped("{TestProtocolBeganTag}{TestProtocolSeparatorInMaxonSource}\{index\}")
 	let endedLine = wrapped("{TestProtocolEndedTag}{TestProtocolSeparatorInMaxonSource}\{index\}{TestProtocolSeparatorInMaxonSource}\{outcome\}{TestProtocolSeparatorInMaxonSource}\{nanos\}")
 
@@ -515,13 +487,14 @@ function entrySource(groups TestFileGroupArray) returns String
 
 	source.append("export function {MaxonTestEntrySymbol}() returns ExitCode\n")
 	source.append("\t__TestReport.useWireFormat(\"{TestProtocolWrapper}\", separator: \"{TestProtocolSeparatorInMaxonSource}\")\n")
-	source.append("\tlet selection = {MaxonTestHelperType}.selection()\n\n")
+	source.append("\tlet selection = {MaxonTestHelperType}.selection()\n")
+	source.append("\tvar {EveryTestPassedLocal} = true\n\n")
 
 	for group in groups 'eachGroup'
-		source.append("\t{group.runnerName}(selection)\n")
+		source.append("\t{EveryTestPassedLocal} = {group.runnerName}(selection) and {EveryTestPassedLocal}\n")
 	end 'eachGroup'
 
-	source.append("\n\treturn 0\n")
+	source.append("\n\treturn {TestBinaryEverySelectedTestPassedExit} if {EveryTestPassedLocal} else {TestBinarySomeSelectedTestFailedExit}\n")
 	source.append("end '{MaxonTestEntrySymbol}'\n")
 	return source
 end 'entrySource'

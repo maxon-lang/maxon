@@ -1,0 +1,18 @@
+let OncePerPassCaseLabel = "a-line-led-by-an-inlined-call-stops-once-per-pass"
+let PassCount = 3
+
+test 'a kept breakpoint on a loop line whose first code is an inlined call stops once per pass'
+	let staged = builtFixture(OncePerPassCaseLabel, fixture: LeadingCallFixtureName)
+	let callLine = anchorLine(staged, anchor: "leading-call-each-pass")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(callLine)}", RunCommand, ContinueCommand, ContinueCommand, ContinueCommand, ContinueCommand, ContinueCommand, ContinueCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let stops = eventsOfKind(events, kind: StopEventName)
+
+	try Expect.equal(stops.count() as AssertedInt, expected: PassCount, message: "⛔ THE LOOP RUNS THE LINE {PassCount} TIMES, SO A BREAKPOINT KEPT ON IT STOPS {PassCount} TIMES. A line whose first code is an inlined call is entered once per pass, at the call's entry; the row that enters the line after the inlined body is the same entry and must not be armed as a second one. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	for stop in stops 'eachStop'
+		try Expect.equal(numberOf(stop, node: stop.root, key: LineKey) as AssertedInt, expected: callLine as AssertedInt, message: "every stop is on the call line. {said}")
+	end 'eachStop'
+end 'a kept breakpoint on a loop line whose first code is an inlined call stops once per pass'

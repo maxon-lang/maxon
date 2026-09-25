@@ -1,0 +1,510 @@
+// What a message means is `handleRpcDocument`'s alone, so stdio and HTTP cannot drift apart; this
+// file carries messages to it and keeps sessions across requests.
+//
+// Loopback only, with no host option: the tools build and run programs, so a routable listener
+// would be a remote-code-execution surface. `Host` and `Origin` are checked so a page open in the
+// developer's browser cannot drive it either.
+
+let McpRoutePath = "/mcp"
+let McpLoopbackAddress = "127.0.0.1"
+let McpLocalhostName = "localhost"
+
+export let DefaultMcpIdleTimeoutSeconds = 300
+export let DefaultMcpMaxSessions = 8
+
+let SessionHeaderName = "mcp-session-id"
+let OriginHeaderName = "origin"
+let HostHeaderName = "host"
+let JsonContentType = "application/json"
+let SessionIdBytes = 16 as DigestPrefixBytes
+let ContentTypeHeaderName = "content-type"
+let NoAcceptDeadline = 0 as SocketDeadlineMs
+let SoonestAcceptDeadline = 1 as SocketDeadlineMs
+let ExpiryPastTheIdleWindow = 1 as SessionMillis
+
+let LoopbackOriginScheme = "http://"
+
+typealias SessionMillis = int(0 to i64.max)
+typealias SessionTally = int(0 to 4096)
+typealias SessionSerial = int(0 to u64.max)
+
+export typealias McpIdleSeconds = int(1 to 86400)
+export typealias McpSessionLimit = int(1 to 4096)
+
+export let McpMaxIdleSeconds = 86400 as McpIdleSeconds
+export let McpMaxSessionCap = 4096 as McpSessionLimit
+
+export type McpHttpOptions
+	export var port as NetworkPort
+	export var idleTimeoutSeconds as McpIdleSeconds
+	export var maxSessions as McpSessionLimit
+	export var exitOnStdinEof as bool
+
+	export static function create() returns McpHttpOptions
+		return Self{port: 0, idleTimeoutSeconds: DefaultMcpIdleTimeoutSeconds, maxSessions: DefaultMcpMaxSessions, exitOnStdinEof: false}
+	end 'create'
+end 'McpHttpOptions'
+
+export union McpTransportChoice
+	stdio
+	http(options McpHttpOptions)
+end 'McpTransportChoice'
+
+type McpHttpSession
+	export let id as String
+	export var lastSeenMs as SessionMillis
+	export let debug as DebugSessionSlot
+
+	static function create(id String, nowMs SessionMillis) returns McpHttpSession
+		return Self{id: id, lastSeenMs: nowMs, debug: DebugSessionSlot.create()}
+	end 'create'
+
+	export function touch()
+		self.lastSeenMs = Clock.nowMs() as SessionMillis
+	end 'touch'
+
+	function credit(handlerMs SessionMillis, nowMs SessionMillis)
+		let credited = self.lastSeenMs + handlerMs
+		self.lastSeenMs = credited if credited < nowMs else nowMs
+	end 'credit'
+end 'McpHttpSession'
+
+typealias McpHttpSessionArray = Array with McpHttpSession
+typealias SessionEnds = function(McpHttpSession) returns bool
+
+union SessionLookup
+	found(session McpHttpSession)
+	unknown
+end 'SessionLookup'
+
+union OfferedSession
+	absent
+	named(id String)
+end 'OfferedSession'
+
+union McpAnswerBody
+	empty
+	json(text String)
+end 'McpAnswerBody'
+
+union PostedMessage
+	message(doc JsonDoc)
+	notOneObject
+end 'PostedMessage'
+
+union McpHttpWake
+	served(outcome HttpServeEnd)
+	stdinEnded
+end 'McpHttpWake'
+
+typealias McpHttpWakePromise = Promise with McpHttpWake
+typealias McpHttpWakePromiseArray = Array with McpHttpWakePromise
+
+type McpStdinWatcher
+	static function create() returns McpStdinWatcher
+		return Self{}
+	end 'create'
+
+	export function untilClosed() returns McpHttpWake
+		var stdin = Console.stdin()
+		var open = true
+
+		while open 'drain'
+			_ = try stdin.readLine() otherwise (failure) 'unread'
+				match failure 'why'
+					endOfFile then open = false
+				end 'why'
+
+				continue
+			end 'unread'
+		end 'drain'
+
+		return McpHttpWake.stdinEnded
+	end 'untilClosed'
+end 'McpStdinWatcher'
+
+function stdinEnded(watcher McpStdinWatcher.handle) returns McpHttpWake
+	return try await watcher.untilClosed() otherwise panic("stdinEnded: the stdin watcher stopped while the transport still held its handle")
+end 'stdinEnded'
+
+export function runMcpHttpServer(devMode bool, exePath FilePath, options McpHttpOptions) returns ExitCode
+	let server = try HttpServer.bind(McpLoopbackAddress, port: options.port) otherwise (e) 'noListener'
+		printError("maxon {McpServerCommandName}: could not bind {McpLoopbackAddress}:{options.port} ({e.name})\n")
+
+		return OwnFailureExit
+	end 'noListener'
+
+	let port = server.port()
+
+	// The only stdout line: a spawning caller reads the endpoint off the pipe, and anything else
+	// written there would be parsed as that handshake.
+	print("\{\"endpoint\":\"http://{McpLoopbackAddress}:{port}{McpRoutePath}\"\}\n")
+
+	// No route shuts the server down: one would be a denial of service for any page that got past the
+	// header checks. It ends with its process, or with its stdin under `exitOnStdinEof`.
+	var handler = McpHttpHandler.create(devMode, exePath: exePath, caps: options, port: port, server: server)
+	var wakes = McpHttpWakePromiseArray.create()
+	wakes.push(async servedSessions(server, handler: handler))
+
+	if options.exitOnStdinEof 'watchingStdin'
+		let watcher = spawn McpStdinWatcher.create()
+		wakes.push(async stdinEnded(watcher))
+	end 'watchingStdin'
+
+	while wakes.count() > 0 'untilServingEnds'
+		let ready = __Builtins.awaitAny(wakes)
+		let woken = try wakes.remove(ready) otherwise panic("runMcpHttpServer: wakes.remove({ready}) — `awaitAny` answered a slot of this very array")
+
+		match await woken 'which'
+			stdinEnded then server.close()
+			served(ended) then return exitCodeAfter(ended)
+		end 'which'
+	end 'untilServingEnds'
+
+	panic("runMcpHttpServer: the serving loop is always among the wakes, and it ended without answering")
+end 'runMcpHttpServer'
+
+function exitCodeAfter(ended HttpServeEnd) returns ExitCode
+	return match ended 'which'
+		closed gives SucceededExit
+		listenerFailed gives reportedListenerFailure()
+		acceptDeadlinePassed panic("exitCodeAfter: `servedSessions` serves on past every accept deadline")
+	end 'which'
+end 'exitCodeAfter'
+
+function reportedListenerFailure() returns ExitCode
+	printError("maxon {McpServerCommandName}: the listener on {McpLoopbackAddress} failed and accepts no more connections\n")
+
+	return OwnFailureExit
+end 'reportedListenerFailure'
+
+function servedSessions(server HttpServer, handler McpHttpHandler) returns McpHttpWake
+	handler.rearm()
+	var outcome = server.serve(handler)
+
+	while outcome == HttpServeEnd.acceptDeadlinePassed 'sweepOnTime'
+		handler.sweep()
+		handler.rearm()
+		outcome = server.serve(handler)
+	end 'sweepOnTime'
+
+	handler.reapEverySession()
+
+	return McpHttpWake.served(outcome)
+end 'servedSessions'
+
+type McpHttpHandler implements HttpHandler
+	export var sessions as McpHttpSessionArray
+	let devMode as bool
+	let exePath as FilePath
+	let caps as McpHttpOptions
+	let port as NetworkPort
+	let server as HttpServer
+
+	static function create(devMode bool, exePath FilePath, caps McpHttpOptions, port NetworkPort, server HttpServer) returns McpHttpHandler
+		return Self{sessions: McpHttpSessionArray.create(), devMode: devMode, exePath: exePath, caps: caps, port: port, server: server}
+	end 'create'
+
+	function handle(exchange HttpExchange) throws HttpServerError
+		let startedMs = Clock.nowMs() as SessionMillis
+
+		try self.answer(exchange) otherwise (fault) 'unanswered'
+			self.settleAfterHandling(startedMs)
+
+			throw fault
+		end 'unanswered'
+
+		self.settleAfterHandling(startedMs)
+	end 'handle'
+
+	// Requests are served one at a time, so time spent in a handler is not idleness for any session:
+	// a request queued behind another session's long call would otherwise find its own swept.
+	function settleAfterHandling(startedMs SessionMillis)
+		let nowMs = Clock.nowMs() as SessionMillis
+
+		for session in self.sessions 'eachSession'
+			session.credit(nowMs - startedMs, nowMs: nowMs)
+		end 'eachSession'
+
+		self.rearm()
+	end 'settleAfterHandling'
+
+	function answer(exchange HttpExchange) throws HttpServerError
+		let request = exchange.request()
+
+		if not hostNamesThisServer(request, port: self.port) 'foreignHost'
+			try refuse(exchange, code: StatusCode.forbidden, reason: "this transport serves {McpLoopbackAddress} and {McpLocalhostName} only")
+
+			return
+		end 'foreignHost'
+
+		if not originIsLoopback(request.headers(), port: self.port) 'foreignOrigin'
+			try refuse(exchange, code: StatusCode.forbidden, reason: "this transport serves a loopback Origin only")
+
+			return
+		end 'foreignOrigin'
+
+		if not request.url().path().equals(McpRoutePath) 'unknownRoute'
+			try refuse(exchange, code: StatusCode.notFound, reason: "no such route; this server serves {McpRoutePath}")
+
+			return
+		end 'unknownRoute'
+
+		self.sweep()
+
+		match request.method() 'verb'
+			post then try servePostedMessage(exchange, request: request, sessions: self.sessions, devMode: self.devMode, exePath: self.exePath, caps: self.caps)
+			delete then try serveSessionDelete(exchange, request: request, sessions: self.sessions)
+			get then try refuse(exchange, code: StatusCode.methodNotAllowed, reason: "this transport carries no server-to-client stream")
+			put or
+				head or
+				patch or
+				options then try refuse(exchange, code: StatusCode.methodNotAllowed, reason: "{McpRoutePath} takes POST and DELETE")
+		end 'verb'
+	end 'answer'
+
+	function faulted(fault HttpHandlerFault)
+		printError("maxon {McpServerCommandName}: {fault.describe()}\n")
+	end 'faulted'
+
+	export function sweep()
+		let nowMs = Clock.nowMs() as SessionMillis
+		let idleMs = self.idleMs()
+		_ = reapSessions(self.sessions, ending: function(session) gives nowMs - session.lastSeenMs > idleMs)
+	end 'sweep'
+
+	export function reapEverySession()
+		_ = reapSessions(self.sessions, ending: function(_) gives true)
+	end 'reapEverySession'
+
+	export function rearm()
+		try self.server.setAcceptDeadline(acceptDeadlineFor(self.sessions, idleMs: self.idleMs())) otherwise (fault) 'unarmed'
+			match fault 'why'
+				listenerClosed then break 'why'
+				default panic("McpHttpHandler.rearm: `setAcceptDeadline` answers only a closed listener, and it answered `{fault.name}`")
+			end 'why'
+		end 'unarmed'
+	end 'rearm'
+
+	function idleMs() returns SessionMillis
+		return (self.caps.idleTimeoutSeconds * MillisecondsPerSecond) as SessionMillis
+	end 'idleMs'
+end 'McpHttpHandler'
+
+function acceptDeadlineFor(sessions McpHttpSessionArray, idleMs SessionMillis) returns SocketDeadlineMs
+	let first = try sessions.get(0) otherwise return NoAcceptDeadline
+	var longestIdle = first.lastSeenMs
+
+	for session in sessions 'eachSession'
+		longestIdle = session.lastSeenMs if session.lastSeenMs < longestIdle else longestIdle
+	end 'eachSession'
+
+	let expiry = longestIdle + idleMs + ExpiryPastTheIdleWindow
+	let nowMs = Clock.nowMs() as SessionMillis
+
+	return (expiry - nowMs) as SocketDeadlineMs if expiry > nowMs else SoonestAcceptDeadline
+end 'acceptDeadlineFor'
+
+function reapSessions(sessions McpHttpSessionArray, ending SessionEnds) returns SessionTally
+	var kept = McpHttpSessionArray.create()
+	var reaped = 0 as SessionTally
+
+	for session in sessions 'eachSession'
+		if ending(session) 'itEnds'
+			_ = session.debug.reap()
+			reaped = reaped + 1
+			continue
+		end 'itEnds'
+
+		kept.push(session)
+	end 'eachSession'
+
+	if reaped == 0 'nothingReaped'
+		return reaped
+	end 'nothingReaped'
+
+	sessions.clear()
+
+	for session in kept 'eachKept'
+		sessions.push(session)
+	end 'eachKept'
+
+	return reaped
+end 'reapSessions'
+
+function servePostedMessage(exchange HttpExchange, request HttpRequest, sessions McpHttpSessionArray, devMode bool, exePath FilePath, caps McpHttpOptions) throws HttpServerError
+	match postedMessageOf(request.body()) 'posted'
+		notOneObject then try refuse(exchange, code: StatusCode.badRequest, reason: "the body is not one JSON-RPC object")
+		message(doc) then try serveMessage(exchange, doc: doc, offered: sessionOfferedBy(request), sessions: sessions, devMode: devMode, exePath: exePath, caps: caps)
+	end 'posted'
+end 'servePostedMessage'
+
+function postedMessageOf(body String) returns PostedMessage
+	let doc = try Json.parse(body.trim()) otherwise return PostedMessage.notOneObject
+
+	if doc.get(doc.root).kind != JsonKind.jsonObject 'notAnObject'
+		return PostedMessage.notOneObject
+	end 'notAnObject'
+
+	return PostedMessage.message(doc)
+end 'postedMessageOf'
+
+function serveMessage(exchange HttpExchange, doc JsonDoc, offered OfferedSession, sessions McpHttpSessionArray, devMode bool, exePath FilePath, caps McpHttpOptions) throws HttpServerError
+	if rpcNamesMethod(doc, method: RpcInitializeMethod) 'initializing'
+		if rpcIsNotification(doc) 'asksForNothing'
+			try answerWith(exchange, code: StatusCode.accepted, body: McpAnswerBody.empty, minted: OfferedSession.absent)
+
+			return
+		end 'asksForNothing'
+
+		try serveInitialize(exchange, doc: doc, offered: offered, sessions: sessions, devMode: devMode, exePath: exePath, caps: caps)
+
+		return
+	end 'initializing'
+
+	match findSession(sessions, offered: offered) 'known'
+		unknown then try refuse(exchange, code: StatusCode.notFound, reason: "unknown session")
+		found(session) then try serveOnSession(exchange, doc: doc, session: session, devMode: devMode, exePath: exePath, minted: OfferedSession.absent)
+	end 'known'
+end 'serveMessage'
+
+// An `initialize` carrying any session id is refused: honoured under a live id, it would replace
+// that session and orphan its debuggee.
+function serveInitialize(exchange HttpExchange, doc JsonDoc, offered OfferedSession, sessions McpHttpSessionArray, devMode bool, exePath FilePath, caps McpHttpOptions) throws HttpServerError
+	if namesASession(offered) 'alreadyInASession'
+		try refuse(exchange, code: StatusCode.badRequest, reason: "`initialize` opens a session and must carry no Mcp-Session-Id")
+
+		return
+	end 'alreadyInASession'
+
+	if sessions.count() >= caps.maxSessions 'full'
+		try refuse(exchange, code: StatusCode.tooManyRequests, reason: "this server holds its maximum of {caps.maxSessions} sessions")
+
+		return
+	end 'full'
+
+	let session = McpHttpSession.create(mintSessionId(), nowMs: Clock.nowMs() as SessionMillis)
+	sessions.push(session)
+
+	try serveOnSession(exchange, doc: doc, session: session, devMode: devMode, exePath: exePath, minted: OfferedSession.named(session.id))
+end 'serveInitialize'
+
+function serveOnSession(exchange HttpExchange, doc JsonDoc, session McpHttpSession, devMode bool, exePath FilePath, minted OfferedSession) throws HttpServerError
+	let reply = handleRpcDocument(doc, exePath: exePath, devMode: devMode, debug: session.debug)
+	session.touch()
+
+	match reply 'answer'
+		none then try answerWith(exchange, code: StatusCode.accepted, body: McpAnswerBody.empty, minted: minted)
+		body(text) then try answerWith(exchange, code: StatusCode.ok, body: McpAnswerBody.json(text), minted: minted)
+	end 'answer'
+end 'serveOnSession'
+
+function serveSessionDelete(exchange HttpExchange, request HttpRequest, sessions McpHttpSessionArray) throws HttpServerError
+	let reaped = match sessionOfferedBy(request) 'offered'
+		absent gives 0 as SessionTally
+		named(id) gives reapSessions(sessions, ending: function(session) gives session.id.equals(id))
+	end 'offered'
+
+	if reaped == 0 'noSuchSession'
+		try refuse(exchange, code: StatusCode.notFound, reason: "unknown session")
+
+		return
+	end 'noSuchSession'
+
+	try answerWith(exchange, code: StatusCode.noContent, body: McpAnswerBody.empty, minted: OfferedSession.absent)
+end 'serveSessionDelete'
+
+function answerWith(exchange HttpExchange, code StatusCode, body McpAnswerBody, minted OfferedSession) throws HttpServerError
+	var headers = HttpHeaders.create()
+
+	match minted 'session'
+		absent then break 'session'
+		named(id) then headers.set(SessionHeaderName, value: id)
+	end 'session'
+
+	match body 'typed'
+		empty then break 'typed'
+		json then headers.set(ContentTypeHeaderName, value: JsonContentType)
+	end 'typed'
+
+	try exchange.respond(HttpResponse.create(code, reasonPhrase: reasonPhraseOf(code), responseHeaders: headers, responseBody: answerTextOf(body)))
+end 'answerWith'
+
+function answerTextOf(body McpAnswerBody) returns String
+	return match body 'carried'
+		empty gives ""
+		json(text) gives text
+	end 'carried'
+end 'answerTextOf'
+
+function namesASession(offered OfferedSession) returns bool
+	return match offered 'which'
+		absent gives false
+		named gives true
+	end 'which'
+end 'namesASession'
+
+function refuse(exchange HttpExchange, code StatusCode, reason String) throws HttpServerError
+	try exchange.respondWith(code, body: "\{\"error\":{Json.quote(reason)}\}", contentType: JsonContentType)
+end 'refuse'
+
+function sessionOfferedBy(request HttpRequest) returns OfferedSession
+	let id = try request.headers().get(SessionHeaderName) otherwise return OfferedSession.absent
+
+	return OfferedSession.named(id)
+end 'sessionOfferedBy'
+
+function findSession(sessions McpHttpSessionArray, offered OfferedSession) returns SessionLookup
+	match offered 'which'
+		absent then return SessionLookup.unknown
+		named(id) then return sessionNamed(sessions, id: id)
+	end 'which'
+end 'findSession'
+
+function sessionNamed(sessions McpHttpSessionArray, id String) returns SessionLookup
+	for session in sessions 'eachSession'
+		if session.id.equals(id) 'hit'
+			return SessionLookup.found(session)
+		end 'hit'
+	end 'eachSession'
+
+	return SessionLookup.unknown
+end 'sessionNamed'
+
+// A DNS name pointed at 127.0.0.1 reaches a loopback server, and the `Host` header is what tells
+// the two apart: a browser sets it from the URL and cannot forge it.
+function hostNamesThisServer(request HttpRequest, port NetworkPort) returns bool
+	let authority = try request.headers().get(HostHeaderName) otherwise return false
+
+	return loopbackAuthorities(port).contains(authority)
+end 'hostNamesThisServer'
+
+function originIsLoopback(headers HttpHeaders, port NetworkPort) returns bool
+	if not headers.has(OriginHeaderName) 'noOrigin'
+		return true
+	end 'noOrigin'
+
+	let origin = try headers.get(OriginHeaderName) otherwise panic("originIsLoopback: `{OriginHeaderName}` was just found present")
+
+	for authority in loopbackAuthorities(port) 'eachAllowed'
+		if origin.equals("{LoopbackOriginScheme}{authority}") 'hit'
+			return true
+		end 'hit'
+	end 'eachAllowed'
+
+	return false
+end 'originIsLoopback'
+
+function loopbackAuthorities(port NetworkPort) returns StringArray
+	return ["{McpLoopbackAddress}:{port}", "{McpLocalhostName}:{port}"]
+end 'loopbackAuthorities'
+
+var sessionIdsMinted = 0 as SessionSerial
+
+// Hashed so the next id cannot be read off one a caller already holds.
+function mintSessionId() returns String
+	sessionIdsMinted = sessionIdsMinted + 1
+	let seed = "{__Builtins.currentProcessId()}-{Clock.nowNanos()}-{sessionIdsMinted}"
+
+	return hexOfLeadingBytes(sha256(seed.toByteArray()), count: SessionIdBytes)
+end 'mintSessionId'

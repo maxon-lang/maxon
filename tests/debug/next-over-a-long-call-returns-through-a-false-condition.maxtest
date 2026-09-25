@@ -1,0 +1,21 @@
+let FalseConditionReturnCaseLabel = "next-over-a-long-call-returns-through-a-false-condition"
+let NeverTrueCondition = "marker == 99"
+
+test 'a next over a long call whose return lands on a conditional breakpoint that is false still returns at once'
+	let staged = builtFixture(FalseConditionReturnCaseLabel, fixture: VoidCallFixtureName)
+	let callLine = anchorLine(staged, anchor: "main-long-call")
+	let afterLine = anchorLine(staged, anchor: "main-after")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(callLine)}", RunCommand, conditionalBreak(lineTarget(afterLine), condition: NeverTrueCondition), NextCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	try Expect.equal(eventsOfKind(events, kind: TimeoutEventName).count() as AssertedInt, expected: 0, message: "⛔ THE WALK'S RETURN POINT SHARES ITS BYTE WITH A CONDITIONAL BREAKPOINT, AND THE CONDITION MUST NOT SILENCE IT. Refused as a return point, the `{NextCommand}` single-steps fifty million iterations and times out. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let stops = eventsOfKind(events, kind: StopEventName)
+	try Expect.equal(stops.count() as AssertedInt, expected: 2, message: "the breakpoint on the call and the `{NextCommand}` are two stops. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let landed = eventAt(stops, index: 1)
+	try Expect.equal(numberOf(landed, node: landed.root, key: LineKey) as AssertedInt, expected: afterLine as AssertedInt, message: "the `{NextCommand}` lands on the line after the call. {said}")
+	try Expect.equal(textOf(landed, node: landed.root, key: ReasonKey), expected: StepStopReason, message: "the landing is the walk's own; the breakpoint there is false and did not hit. {said}")
+end 'a next over a long call whose return lands on a conditional breakpoint that is false still returns at once'

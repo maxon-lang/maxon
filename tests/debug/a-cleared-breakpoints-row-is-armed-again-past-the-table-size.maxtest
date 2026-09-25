@@ -1,0 +1,29 @@
+let TableChurnCaseLabel = "a-cleared-breakpoints-row-is-armed-again-past-the-table-size"
+let MainFunctionName = "main"
+let MoreThanTheTableHolds = 65
+let ChurnedInstructions = 150
+
+test 'a session that arms and clears more distinct instructions than the table holds still arms and hits a breakpoint'
+	let staged = builtFixture(TableChurnCaseLabel, fixture: TableChurnFixtureName)
+	let offsets = statementOffsetsOfTheProgram(builtExecutable(staged), staged: staged, atMost: ChurnedInstructions)
+
+	try Expect.atLeast(offsets.count() as AssertedInt, than: MoreThanTheTableHolds, message: "the fixture holds more distinct statements than the agent's breakpoint table has rows, so arming each once reaches past the table")
+
+	let scanLine = anchorLine(staged, anchor: "spliced-scan")
+	let commands = debugCommandLine(appendedCommands(armedAndClearedAtEvery(offsets), rest: ["{BreakCommand} {lineTarget(scanLine)}", RunCommand]))
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	try Expect.equal(breakpointAnswersWithAction(events, action: RefusedAction) as AssertedInt, expected: 0, message: "⛔ A CLEARED BREAKPOINT GIVES ITS ROW BACK. {offsets.count()} distinct instructions are each armed and cleared before the next is armed, so no more than one is ever live; a table that keeps every cleared row answers `table-full` from the sixty-fifth on. {said}")
+	try Expect.equal(breakpointAnswersWithAction(events, action: SetAction) as AssertedInt, expected: (offsets.count() + 1) as AssertedInt, message: "every instruction is armed, and so is the line after them. {said}")
+	try Expect.equal(breakpointAnswersWithAction(events, action: ClearedAction) as AssertedInt, expected: offsets.count() as AssertedInt, message: "every instruction is cleared again. {said}")
+
+	let stops = eventsOfKind(events, kind: StopEventName)
+	try Expect.equal(stops.count() as AssertedInt, expected: 1, message: "the breakpoint armed after the churn is the one stop. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let hit = eventAt(stops, index: 0)
+	try Expect.equal(textOf(hit, node: hit.root, key: ReasonKey), expected: BreakpointStopReason, message: "the stop is that breakpoint's. {said}")
+	try Expect.equal(numberOf(hit, node: hit.root, key: LineKey) as AssertedInt, expected: scanLine as AssertedInt, message: "it stops on the line it was armed on. {said}")
+	try Expect.equal(textOf(hit, node: hit.root, key: FunctionKey), expected: MainFunctionName, message: "in the program's own frame. {said}")
+end 'a session that arms and clears more distinct instructions than the table holds still arms and hits a breakpoint'

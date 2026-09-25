@@ -6,6 +6,9 @@ export let DebugDefaultTraceEvents = 20 as DebugTraceTally
 
 export typealias DebugTraceTally = int(1 to u32.max)
 
+export let LowestDebugTraceTally = 1 as DebugTraceTally
+export let HighestDebugTraceTally = u32.max as DebugTraceTally
+
 let HeldTraceEventCap = 8192
 let TraceEventsKeptOnOverflow = 4096 as DebugTraceTally
 
@@ -41,9 +44,9 @@ export type DebugTraceCollector
 		while draining 'eachBatch'
 			match self.decoder.drain(false) 'status'
 				decoded(events) then self.hold(events)
-				idle then draining = false
-				finished then draining = false
-				schemaMismatch then draining = false
+				idle or
+					finished or
+					schemaMismatch then draining = false
 			end 'status'
 		end 'eachBatch'
 

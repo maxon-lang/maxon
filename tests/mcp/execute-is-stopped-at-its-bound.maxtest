@@ -1,0 +1,14 @@
+let BoundSeconds = 3
+let SleepMs = 60000
+let WellShortOfTheSleepMs = 40000
+
+test 'execute stops a program that outlasts its bound and answers instead of waiting for it'
+	let started = Clock.nowMs()
+	let doc = callTool(ExecuteTool, argumentsJson: argumentsOf([sourceMember(sleepingProgramSource(SleepMs)), secondsMember(TimeoutSecondsArgument, seconds: "{BoundSeconds}")]))
+	let tookMs = Clock.elapsedMs(started)
+
+	try Expect.isTrue(toolCallIsError(doc), message: "a program sleeping {SleepMs} ms under a {BoundSeconds} s bound must be stopped and the call answered as a failure: {toolCallText(doc)}")
+	try Expect.contains(toolCallText(doc), needle: BoundStoppedMarker, message: "the failure must say the run was stopped at its bound: {toolCallText(doc)}")
+	try Expect.contains(toolCallText(doc), needle: SleepingProgramStartedLine, message: "the bound covers the compile as well as the run, so a stop that came before the program printed `{SleepingProgramStartedLine}` stopped the compile and proves nothing about the run: {toolCallText(doc)}")
+	try Expect.lessThan(tookMs as AssertedInt, than: WellShortOfTheSleepMs, message: "the call took {tookMs} ms, so nothing stopped the {SleepMs} ms program at its {BoundSeconds} s bound")
+end 'execute stops a program that outlasts its bound and answers instead of waiting for it'

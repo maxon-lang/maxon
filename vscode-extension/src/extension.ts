@@ -12,7 +12,8 @@ import {
 } from 'vscode-languageclient/node';
 import { log, initLogger } from './logger';
 import { CompilerExplorerViewProvider } from './compilerExplorerPanel';
-import { registerTestControllers } from './testController';
+import { registerTestControllers, UnitTestController } from './testController';
+import { registerDebugging } from './debugAdapter';
 
 interface ExtensionState {
 	client: LanguageClient;
@@ -23,6 +24,7 @@ interface ExtensionState {
 let state: ExtensionState | undefined;
 let statusBarItem: vscode.StatusBarItem | undefined;
 let clientSubscriptions: vscode.Disposable[] = [];
+let unitTests: UnitTestController | undefined;
 
 const ProjectLoadingNotification = 'maxon/projectLoading';
 const RestartLanguageServerCommand = 'maxon.restartLanguageServer';
@@ -478,18 +480,35 @@ export async function restartClient(): Promise<void> {
 	}
 }
 
+export function registerCompilerIndependentFeatures(ctx: vscode.ExtensionContext): void {
+	registerGuarded('the Test Explorer', () => {
+		const registered = registerTestControllers(() => state?.compilerExecutable);
+		ctx.subscriptions.push(registered.registration);
+		unitTests = registered.unitTests;
+	});
+
+	registerGuarded('the debugger', () => {
+		ctx.subscriptions.push(registerDebugging(() => state?.compilerExecutable));
+	});
+}
+
+function registerGuarded(feature: string, register: () => void): void {
+	try {
+		register();
+	} catch (error) {
+		log(`Failed to register ${feature}: ${error}`);
+		void vscode.window.showErrorMessage(`Maxon could not register ${feature}: ${error}`);
+	}
+}
+
 export async function activate(ctx: vscode.ExtensionContext) {
 	const outputChannel = vscode.window.createOutputChannel('Maxon Language Server');
 	initLogger(outputChannel);
 	log('Maxon extension activating...');
 
-	// Registered before the compiler is looked for, so the Test Explorer lists tests even when no compiler is
-	// found and activation returns early; a run asks for the compiler when it starts.
-	try {
-		ctx.subscriptions.push(registerTestControllers(() => state?.compilerExecutable));
-	} catch (error) {
-		log(`Failed to register test controller: ${error}`);
-	}
+	// Registered before the compiler is looked for, so the Test Explorer and the debugger exist even
+	// when none is found and activation returns early; each asks for the compiler when it runs.
+	registerCompilerIndependentFeatures(ctx);
 
 	await removeServerCopy(ctx.globalStorageUri.fsPath);
 
@@ -584,9 +603,6 @@ export async function activate(ctx: vscode.ExtensionContext) {
 		vscode.commands.registerCommand(ShowLanguageServerOutputCommand, () => outputChannel.show(true))
 	);
 
-	// Refresh the loaded-project list when the active editor changes (a new
-	// project may have been opened) or when a file is saved (project files
-	// may have been added/removed on disk). Both events are cheap to debounce.
 	ctx.subscriptions.push(
 		vscode.window.onDidChangeActiveTextEditor(scheduleProjectRefresh),
 		vscode.workspace.onDidSaveTextDocument(scheduleProjectRefresh),
@@ -660,8 +676,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
 
 	log('Maxon extension activated successfully');
 
-	// Export the client for testing
-	return { client, getClient };
+	return { client, getClient, getUnitTests: () => unitTests };
 }
 
 export function deactivate(): Thenable<void> | undefined {

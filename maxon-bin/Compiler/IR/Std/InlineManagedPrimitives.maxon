@@ -384,14 +384,10 @@ type PrimitiveInliner
 	// which appends past every ref the function already had, so the two are told apart by identity and
 	// nothing has to be wrapped to say which happened.
 	//
-	// ⛔⛔ **AND THAT IS AN ALLOCATION DECISION, MEASURED.** This routine is called once per op in the whole
-	// module, and a PAYLOAD-BEARING union heap-boxes EVERY case, payload-free ones included (`Parser`'s
-	// `enumOf` note). The classification and the outcome as two such unions — a
-	// `ManagedCallSite.notInlinable` and a `BlockExpansion.noSite` minted and dropped at every op that is
-	// neither — cost **2 allocations and 64 bytes per Std op in the program**: on a straight-line
-	// ladder holding ZERO expandable sites the phase reads 594 / 1,106 / 2,130 / 4,178 allocations across a
-	// doubling program, which is the boxes and nothing else. `BlockRef` is an `int`, so this answer is a
-	// register. — MEASURED with `tests/ladders/genmanagedsites.sh nosites`.
+	// ⛔ That is an allocation decision. This routine is called once per op in the whole module,
+	// and a payload-bearing union heap-boxes every case, payload-free ones included (`Parser`'s
+	// `enumOf` note), so a classification and an outcome as two such unions cost two allocations
+	// per Std op in the program. `BlockRef` is an `int`, so this answer is a register.
 	//
 	// ⚠ The `StdOp` match is EXHAUSTIVE: the two call variants are named and so is every other variant, so
 	// a variant added later fails to compile here until it is consciously placed.
@@ -412,22 +408,15 @@ type PrimitiveInliner
 				condBranch or
 				branch or
 				ret or
-				param then break 'op'
-			call(resultId, callee, args) then return self.expandFiled(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: ManagedCallFlag.none)
-			retVoid or
+				param or
+				retVoid or
 				globalAddr or
 				loadIndirect or
 				storeIndirect or
 				osAllocPages or
 				osWriteStdout or
-				rdataAddr then break 'op'
-			tryCall(resultId, errorFlagId, callee, args) then return self.expandFiled(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: ManagedCallFlag.flag(errorFlagId))
-
-			// ⚠ This range reaches past `osThreadCpuTicks` to cover `memFill`, the reserve/commit/decommit
-			// family and the atomics. None is a CALL, so none can be a managed
-			// primitive to expand — this pass dispatches on a callee NAME and they have none. Placed
-			// consciously.
-			errorReturn or
+				rdataAddr or
+				errorReturn or
 				osExit or
 				funcAddr or
 				callIndirect or
@@ -437,6 +426,7 @@ type PrimitiveInliner
 				osProcessExitCode or
 				osCloseHandle or
 				osWaitHandle or
+				osWaitChild or
 				osFreePages or
 				switch or
 				witnessCall or
@@ -504,14 +494,15 @@ type PrimitiveInliner
 				tlsSetValue or
 				tlsSlotLoad or
 				osSetEvent or
-				osEnterBackgroundPriority then break 'op'
-			osFileOpenWriteExecutable then break 'op'
-			osEnvBlock or
-				osEnvBlockFree then break 'op'
-			loadAcquire or
-				storeRelease then break 'op'
-			osHandleFileType then break 'op'
-			osCreateNamedSegment or
+				osEnterBackgroundPriority or
+				osFileOpenWriteExecutable or
+				osEnvBlock or
+				osEnvBlockFree or
+				loadAcquire or
+				storeRelease or
+				osHandleFileType or
+				osProcessProbe or
+				osCreateNamedSegment or
 				osUnmapNamedSegment or
 				osUnpublishNamedSegment or
 				covPoint or
@@ -519,8 +510,10 @@ type PrimitiveInliner
 				osNetpoll or
 				osPathQuery or
 				osSocketOverlapped or
-				osSocketServe then break 'op'
+				osSocketServe or
 				osDebugHost then break 'op'
+			call(resultId, callee, args) then return self.expandFiled(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: ManagedCallFlag.none)
+			tryCall(resultId, errorFlagId, callee, args) then return self.expandFiled(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: ManagedCallFlag.flag(errorFlagId))
 		end 'op'
 
 		return blockRef

@@ -1,0 +1,548 @@
+// Test: http-server.request-headers-are-case-insensitive
+typealias Served = int(0 to 9)
+
+function serveOne(server HttpServer) returns Served
+	let exchange = try server.accept() otherwise return 1
+	let headers = exchange.request().headers()
+	let lower = try headers.get("x-maxon-tag") otherwise "absent"
+	let upper = try headers.get("X-MAXON-TAG") otherwise "absent"
+
+	try exchange.respondWith(StatusCode.ok, body: "{lower}/{upper}", contentType: "text/plain") otherwise return 2
+
+	return 3
+end 'serveOne'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	let peer = async serveOne(server)
+
+	var request = try HttpRequest.create(HttpMethod.get, url: "http://127.0.0.1:{server.port()}/tagged") otherwise return 2
+	request.setHeader("X-Maxon-Tag", value: "mixed")
+
+	let response = try HttpClient.send(request) otherwise return 3
+	let served = await peer
+
+	print("served={served} body={response.body()}\n")
+	server.close()
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_timer_count@24 = i64 0
+  __gt_timer_heap_base@32 = i64 0
+  __gt_timer_capacity@40 = i64 0
+  __gt_timer_seq@48 = i64 0
+  __gt_timer_when@56 = i64 9223372036854775807
+  __gt_trace_counter@64 = i64 0
+  __gt_live_count@72 = i64 0
+  __gt_seed_bytes@80 = i64 8192
+  __gt_stack_bytes_sum@88 = i64 0
+  __gt_stack_bytes_count@96 = i64 0
+  __gt_seed_sum_seen@104 = i64 0
+  __gt_seed_count_seen@112 = i64 0
+  __gt_keeps_cpu_clock@120 = i64 0
+  __sched_active_workers@128 = i64 1
+  __sched_max_active_workers@136 = i64 1
+  __sched_tls_index@144 = i64 0
+  __sched_tls_teb_offset@152 = i64 0
+  __sched_procs@160 = i64 0
+  __sched_allm@168 = i64 0
+  __sched_midle@176 = i64 0
+  __sched_pidle@184 = i64 0
+  __gt_gfree_head@192 = i64 0
+  __sched_arena_cursor@200 = i64 0
+  __sched_arena_limit@208 = i64 0
+  __gt_records_carved@216 = i64 0
+  __sched_npidle@224 = i64 0
+  __sched_runq_size@232 = i64 0
+  __sched_global_pushes@240 = i64 0
+  __sched_timer_scan_steps@248 = i64 0
+  __sched_mcount@256 = i64 0
+  __sched_nmidle@264 = i64 0
+  __sched_main_m@272 = i64 0
+  __sched_phase@280 = i64 0
+  __sched_lastpoll@288 = i64 0
+  __sched_poll_until@296 = i64 0
+  __sched_regain_head@304 = i64 0
+  __np_poller@312 = i64 0
+  __np_break@320 = i64 0
+  __np_wake_sig@328 = i64 0
+  __np_pd_table@336 = i64 0
+  __np_pd_cap@344 = i64 0
+  __np_waiters@352 = i64 0
+  __np_src_key_free@360 = i64 0
+  __np_src_key_high@368 = i64 0
+  __sched_num_procs@376 = i64 0
+  __sched_shutdown_flag@384 = i64 0
+  __sched_lock@392 = i64 0
+  __sched_lock_depth_sink@400 = i64 0
+  __sched_nmspinning@408 = i64 0
+  __sched_needspinning@416 = i64 0
+  __sched_sysmon_event@424 = i64 0
+  __sched_sysmon_wait@432 = i64 0
+  __sched_timer_starts@440 = i64 0
+  __sched_preempt_ext_lock@448 = i64 0
+  __sched_preempt_context@456 = i64 0
+  __slab_arena_list@464 = i64 0
+  __slab_arena_map_l1@472 = i64 0
+  __slab_state@480 = i64 0
+  __ds_base@488 = i64 0
+  __ms_wsa_started@496 = i64 0
+  __dbg_ctl@504 = i64 0
+  __mrt_console_probe_stdin@512 = i8 0
+  __mrt_console_probe_stdout@513 = i8 0
+  __mrt_console_probe_stderr@514 = i8 0
+}
+
+func @serveOne {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 104
+    x64.callDirect HttpServer.accept
+    x64.storeSlotReg slot3, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __il_body
+  tryerr#2:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __il_body:
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 8]
+    x64.callDirect __mm_retain
+    x64.movRegReg rbx, r8
+  __il_cont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect HttpRequest.headers
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot0, r12
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_HttpRequest
+    x64.leaRegRdata rdx, [rip + __str_rec_73]  ; "x-maxon-tag"
+    x64.movRegReg rcx, r12
+    x64.callDirect HttpHeaders.get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.leaRegRdata rcx, [rip + __str_rec_74]  ; "absent"
+    x64.callDirect __str_retain
+    x64.movRegReg rbx, r8
+    x64.jmp trycont#5
+  tryok#3:
+    x64.movRegReg rbx, r8
+  trycont#5:
+    x64.storeSlotReg slot1, rbx
+    x64.leaRegRdata rdx, [rip + __str_rec_75]  ; "X-MAXON-TAG"
+    x64.movRegReg rcx, r12
+    x64.callDirect HttpHeaders.get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, trycont#8
+  tryerr#7:
+    x64.leaRegRdata rcx, [rip + __str_rec_74]  ; "absent"
+    x64.callDirect __str_retain
+  trycont#8:
+    x64.storeSlotReg slot2, r8
+    x64.loadRegBaseDisp.word64 r12, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_76]  ; "/"
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.storeSlotReg slot7, rax
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.storeSlotReg slot6, rax
+    x64.leaRegRegReg rcx, rbx, r14
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot4, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot5, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, rbx
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r14
+    x64.loadRegSlot rax, slot6
+    x64.loadRegSlot rdx, slot7
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot6
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rax, slot5
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot4
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+    x64.leaRegRdata r9, [rip + __str_rec_77]  ; "text/plain"
+    x64.loadRegSlot rcx, slot3
+    x64.movRegImm32 rdx, 200
+    x64.callDirect HttpExchange.respondWith
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#9
+  tryerr#10:
+    x64.movRegImm32 rbx, 2
+    x64.loadRegSlot rcx, slot5
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_HttpHeaders
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __destruct_HttpExchange
+    x64.movRegReg r8, rbx
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#9:
+    x64.loadRegSlot rcx, slot5
+    x64.callDirect __str_decref
+    x64.movRegImm32 rbx, 3
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_HttpHeaders
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __destruct_HttpExchange
+    x64.movRegReg r8, rbx
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 184
+    x64.leaRegRdata rcx, [rip + __str_rec_78]  ; "127.0.0.1"
+    x64.movRegImm32 rdx, 0
+    x64.callDirect HttpServer.bind
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot2, rbx
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 184
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_own
+    x64.movRegReg r12, r8
+    x64.leaRegFunc rcx, [rip + serveOne]
+    x64.callDirect __gt_spawn
+    x64.storeSlotReg slot7, r8
+    x64.storeBaseDispReg.word64 [r8 + 200], r12
+    x64.leaRegFunc rax, [rip + __gt_release_serveOne]
+    x64.storeBaseDispReg.word64 [r8 + 176], rax
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_ready
+    x64.leaRegRdata rax, [rip + __str_rec_79]  ; "http://127.0.0.1:"
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+  __il_body#10:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+  __il_body#12:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.callDirect __ml_port
+    x64.movRegReg r14, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#13
+  tryerr#14:
+    x64.leaRegRdata rcx, [rip + __str_blob_198]  ; "panic at TcpListener.maxon:32: TcpListener.port: this listener is closed, so it holds no bound port to report\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 184
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#13:
+    x64.cmpRegImm32 r14, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r14, 65535
+    x64.jcc greater, __rc_panic
+  __il_cont#9:
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r15
+    x64.callDirect __uint_to_string
+    x64.storeSlotReg slot17, r8
+    x64.leaRegRdata rax, [rip + __str_rec_80]  ; "/tagged"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot15, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot13, rax
+    x64.leaRegRegReg rcx, r13, r8
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot9, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot11, r8
+    x64.leaRegRegImm32 r14, r8, 56
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r14, r13
+    x64.loadRegSlot rax, slot17
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r15
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot17
+    x64.leaRegRegReg r12, r12, rax
+    x64.loadRegSlot rax, slot13
+    x64.loadRegSlot rdx, slot15
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot13
+    x64.leaRegRegReg rax, r12, rax
+    x64.loadRegSlot r12, slot11
+    x64.storeBaseDispReg.word64 [r12 + 0], r14
+    x64.loadRegSlot rax, slot9
+    x64.storeBaseDispReg.word64 [r12 + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r12 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r12 + 24], rax
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_decref
+    x64.movRegImm32 rcx, 0
+    x64.movRegReg rdx, r12
+    x64.callDirect HttpRequest.create
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot0, r12
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.movRegImm32 r12, 2
+    x64.loadRegSlot rcx, slot11
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot7
+    x64.callDirect __gt_promise_drop
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_HttpServer
+    x64.movRegReg r8, r12
+    x64.epilogue 184
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#3:
+    x64.loadRegSlot rcx, slot11
+    x64.callDirect __str_decref
+    x64.leaRegRdata rdx, [rip + __str_rec_81]  ; "X-Maxon-Tag"
+    x64.leaRegRdata rax, [rip + __str_rec_82]  ; "mixed"
+    x64.movRegReg rcx, r12
+    x64.callDirect HttpRequest.setHeader
+    x64.movRegReg rcx, r12
+    x64.callDirect HttpClient.send
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot1, r13
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#5
+  tryerr#6:
+    x64.movRegImm32 r13, 3
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_HttpRequest
+    x64.loadRegSlot rcx, slot7
+    x64.callDirect __gt_promise_drop
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_HttpServer
+    x64.movRegReg r8, r13
+    x64.epilogue 184
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#5:
+    x64.loadRegSlot rcx, slot7
+    x64.callDirect __gt_await
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_83]  ; "served="
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot16, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __uint_to_string
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_84]  ; " body="
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot14, rcx
+    x64.loadRegBaseDisp.word64 r15, [rax + 8]
+    x64.movRegReg rcx, r13
+    x64.callDirect HttpResponse.body
+    x64.storeSlotReg slot3, r8
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.storeSlotReg slot12, rax
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.storeSlotReg slot10, rax
+    x64.leaRegRdata rcx, [rip + __str_rec_85]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.storeSlotReg slot8, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.storeSlotReg slot6, rcx
+    x64.leaRegRegReg rdx, r14, rbx
+    x64.leaRegRegReg rdx, rdx, r15
+    x64.leaRegRegReg rax, rdx, rax
+    x64.leaRegRegReg rax, rax, rcx
+    x64.storeSlotReg slot4, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot5, r8
+    x64.leaRegRegImm32 r13, r8, 56
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r13, r14
+    x64.loadRegSlot rdx, slot16
+    x64.movRegReg rcx, r12
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r12, rbx
+    x64.loadRegSlot rdx, slot14
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r15
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r15
+    x64.loadRegSlot rax, slot10
+    x64.loadRegSlot rdx, slot12
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot10
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.loadRegSlot rax, slot6
+    x64.loadRegSlot rdx, slot8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot6
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rax, slot5
+    x64.storeBaseDispReg.word64 [rax + 0], r13
+    x64.loadRegSlot rcx, slot4
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+    x64.loadRegSlot rcx, slot16
+    x64.callDirect __mm_decref
+  __il_body#8:
+    x64.loadRegSlot rcx, slot5
+    x64.callDirect __write_stdout
+  __il_cont#7:
+    x64.loadRegSlot rcx, slot5
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __str_decref
+  __il_body#19:
+    x64.loadRegSlot rax, slot2
+    x64.loadRegBaseDisp.word64 rcx, [rax + 16]
+    x64.movRegImm32 rdx, 1
+    x64.storeBaseDispReg.byte [rcx + 0], rdx
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+  __il_body#21:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.callDirect __ms_close
+  __il_cont#18:
+    x64.movRegImm32 rbx, 0
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __destruct_HttpResponse
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_HttpRequest
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __destruct_HttpServer
+    x64.movRegReg r8, rbx
+    x64.epilogue 184
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_342]  ; "panic at TcpListener.maxon:35: Range check failed: value outside typealias 'NetworkPort'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 184
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

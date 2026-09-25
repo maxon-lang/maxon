@@ -55,12 +55,13 @@
 // table, so the `MaxonType` handed back is indistinguishable from one that file had parsed itself.
 // `returnTypeOf` is the one door, and it is the one place the two id spaces meet.
 
+let TypeArgumentSeparator = ", "
+
 // The shape discriminators the signature hash mixes — one per arm of the two type unions, so two
 // declarations that differ only in shape (`returns bool` vs `returns int`) cannot hash alike.
 //
-// Small distinct constants, NOT the enums' ordinals: an ordinal is not a value in Maxon, and — the
-// real reason — a hash that moved when an enum's arms were REORDERED would invalidate every parse
-// memo in the project for a change that means nothing.
+// Small distinct constants, NOT the enums' ordinals: a hash that moved when an enum's arms were
+// REORDERED would invalidate every parse memo in the project for a change that means nothing.
 let ReturnShapeVoid = 1 as HashDigest
 let ReturnShapeValue = 2 as HashDigest
 let TypeShapeBoolean = 3 as HashDigest
@@ -1210,14 +1211,11 @@ end 'constArrayLiteralEnumName'
 
 function constArrayElementScalar(element ConstArrayElement) returns ParsedInt
 	return match element 'e'
-		integer(payload) gives payload
+		integer(payload) or
 
-		// A String and a Character element alike hold a heap address, which is why `arrayElementMayBeConstantBlob`
-		// refuses the instance before this is asked — and a Character element cannot reach a blob at all, its
-		// container being a `Set` rather than an `Array`.
-		// An enum case's image is its TAG, exactly as an integer element's is its number — the same i64 in the
-		// same slot, which is what makes an enum array a constant blob at all.
-		enumCase(payload, _) gives payload
+			// An enum case's image is its tag, exactly as an integer element's is its number — the same i64
+			// in the same slot, which is what makes an enum array a constant blob at all.
+			enumCase gives payload
 		string or
 			character panic("constArrayElementScalar: a managed element has no constant image — its slot holds a heap address, which is why `arrayElementMayBeConstantBlob` refuses the instance before this is asked")
 	end 'e'
@@ -1717,19 +1715,16 @@ end 'GlobalFactoryReturn'
 // map, in one place so the kind a constant folded to and the construction its slot gets cannot drift apart.
 function managedLiteralRecord(bytes ByteArray, kind ManagedConstKind) returns ManagedGlobalRecord
 	match kind 'k'
-		string then return ManagedGlobalRecord.stringRecord(bytes)
-		byteArray then return ManagedGlobalRecord.constArrayRecord(ByteStringElementSize as ElementStride, elementCount: bytes.count(), bytes: bytes)
+		string or
 
-		// ⭐ **A CHARACTER IS THAT SAME RECORD AT A DIFFERENT TAG**, which is `Parser.emitCharacterLiteral`'s
-		// own sentence: a character literal emits the identical `stringLiteral` op over an immortal `.rdata`
-		// byte record, and only the value's tag differs. So it takes the identical construction, and the
-		// `valueType` `globalRecordOf` carries beside it is what makes `ModuleInit.clonedStringRecord` mint the
-		// clone at `character` rather than at `string`.
-		//
-		// It reaches here only as the ARGUMENT of a `<Type> from 'A'` construction. A top-level `let c = 'X'`
-		// is refused permanently by `Parser.evalConstCharLiteral` — a Character is a record, and a
-		// module-scope initializer is a folded constant by definition.
-		character then return ManagedGlobalRecord.stringRecord(bytes)
+			// A character is the same record at a different tag (`Parser.emitCharacterLiteral`): the
+			// identical `stringLiteral` op over an immortal `.rdata` byte record. The `valueType`
+			// `globalRecordOf` carries beside it is what makes `ModuleInit.clonedStringRecord` mint the
+			// clone at `character` rather than at `string`. It reaches here only as the argument of a
+			// `<Type> from 'A'` construction: a top-level `let c = 'X'` is refused by
+			// `Parser.evalConstCharLiteral`.
+			character then return ManagedGlobalRecord.stringRecord(bytes)
+		byteArray then return ManagedGlobalRecord.constArrayRecord(ByteStringElementSize as ElementStride, elementCount: bytes.count(), bytes: bytes)
 	end 'k'
 end 'managedLiteralRecord'
 
@@ -2506,18 +2501,18 @@ end 'TypeArgKindMatch'
 // program be REFUSED?"*, where such a row is not a conservative margin but a wrong answer about a program
 // that does not contain the instantiation being refused for.
 //
-// ⛔ **TWO CLASSES OF ROW ARE NOT FACTS ABOUT THE PROGRAM, AND ONLY A REFUSAL MAY NOT READ THEM** — a
-// SPECULATIVELY minted one (A4q) and one minted by substituting into an instantiation E3017 already owns
-// (W90). They are unrelated in origin and identical in consequence, which is why one predicate answers for
-// both; `instanceWithTypeArgKind` applies it twice and carries both measurements.
+// ⛔ **TWO CLASSES OF ROW ARE NOT FACTS ABOUT THE PROGRAM, AND ONLY A REFUSAL MAY NOT READ THEM** —
+// a speculatively minted one and one minted by substituting into an instantiation E3017 already
+// owns. They are unrelated in origin and identical in consequence, which is why one predicate
+// answers for both; `instanceWithTypeArgKind` applies it twice.
 function kindIsARefusal(kind TypeArgInstantiationKind) returns bool
 	match kind 'kind'
-		consumeMoved then return false
-		coOwnedTrivial then return false
-		uncopyableElement then return true
-		managedElement then return true
-		retainedFeed then return false
-		nestedDeclarationViewArg then return true
+		consumeMoved or
+			coOwnedTrivial or
+			retainedFeed then return false
+		uncopyableElement or
+			managedElement or
+			nestedDeclarationViewArg then return true
 	end 'kind'
 end 'kindIsARefusal'
 
@@ -2536,17 +2531,17 @@ end 'kindIsARefusal'
 // `a-nested-view-whose-parameter-owes-no-reference-round-trips`).
 function kindFollowsADeclarationView(kind TypeArgInstantiationKind) returns bool
 	match kind 'kind'
-		consumeMoved then return true
-		coOwnedTrivial then return true
-		uncopyableElement then return false
-		managedElement then return false
-		retainedFeed then return false
-		nestedDeclarationViewArg then return false
+		consumeMoved or
+			coOwnedTrivial then return true
+		uncopyableElement or
+			managedElement or
+			retainedFeed or
+			nestedDeclarationViewArg then return false
 	end 'kind'
 end 'kindFollowsADeclarationView'
 
-// ⛔⛔ **DOES THE SLOT WALK DESCEND INTO A NESTED GENERIC-INSTANCE FIELD FOR THIS KIND — and the answer is
-// NOT the same for all of them, which is a defect the BATCH41 review MEASURED as a SEGFAULT.**
+// ⛔ Does the slot walk descend into a nested generic-instance field for this kind? The answer is
+// not the same for all of them, and a wrong one is an over-release.
 //
 // A REFUSING kind (`managedElement`) asks *"can any symbol this body could name release the slot?"*, and that
 // is transitive: a record holding a record holding an unnameable slot is just as unnameable, so the walk
@@ -2559,21 +2554,19 @@ end 'kindFollowsADeclarationView'
 // `Outer uses T, U` as `Mid with (T, U)`, has the release ask about `Outer`'s `T` (managed — `Outer with
 // (String, String)` is interned) while the retain asks about `Mid`'s `Y`, whose ONLY instantiation is
 // `Outer`'s `T`, a bare `typeParameter` that `typeIsManaged` answers `false` for. Release without retain is an
-// over-release: **MEASURED `0xC0000005`, exit 139, on a program the merge base runs at exit 0** — and adding a
-// concrete `Mid with (String, String)` beside it makes the retain fire and the same program exit 0, which is
-// the control that pins the cause on WHICH PARAMETER IS ASKED and not on the kind.
+// over-release, and the program faults.
 //
-// ⇒ the dictionary destructor serves ONE level of declaration view, which is the level whose retain it can
-// see. The nested level is held by `Parser.requireStoredNestedViewDropIsNameable`, which refuses exactly the
-// store the merge base refused.
+// ⇒ the dictionary destructor serves one level of declaration view, which is the level whose retain
+// it can see. The nested level is held by `Parser.requireStoredNestedViewDropIsNameable`, which
+// refuses that store.
 function kindWalksNestedInstances(kind TypeArgInstantiationKind) returns bool
 	match kind 'kind'
-		consumeMoved then return true
-		coOwnedTrivial then return true
-		uncopyableElement then return true
-		managedElement then return true
+		consumeMoved or
+			coOwnedTrivial or
+			uncopyableElement or
+			managedElement or
+			nestedDeclarationViewArg then return true
 		retainedFeed then return false
-		nestedDeclarationViewArg then return true
 	end 'kind'
 end 'kindWalksNestedInstances'
 
@@ -2608,19 +2601,19 @@ function globalStdType(tag ValueTypeTag, name ByteArray) returns StdType
 	match tag 'reachable'
 		boolean or
 			integer or
-			float then break 'reachable'
+			float or
 
-		// ⭐ **A PAYLOAD-FREE ENUM OR UNION CASE IS THE ONE `named` WHOSE `.data` BYTES ARE ITS VALUE.** Its
-		// value IS its tag — a number fixed at declaration (`evalConstNamed`) — so the slot holds the ordinal
-		// and not a pointer, and the machine word comes from `valueTagToStdType` below like every other arm's.
-		// That is the same word `declaredAggregateSlotWidth` states for a FIELD holding the same enum, which
-		// is what keeps a global and a field from storing one enum at two widths.
-		//
-		// ⚠ **IT IS THE EVALUATOR'S ONLY `named`, AND A SECOND ONE WOULD NOT BE AN INT.** A float ranged
-		// alias also carries this tag, and the i64 collapse below would be a wrong answer about it — so an
-		// `as` cast in a constant initializer (P1.9) owes this door an arm of its own rather than inheriting
-		// this one.
-		named then break 'reachable'
+			// A payload-free enum or union case is the one `named` whose `.data` bytes are its value: its
+			// value is its tag, a number fixed at declaration (`evalConstNamed`), so the slot holds the
+			// ordinal and the machine word comes from `valueTagToStdType` below. That is the word
+			// `declaredAggregateSlotWidth` states for a field holding the same enum, which keeps a global
+			// and a field from storing one enum at two widths.
+			//
+			// ⚠ It is the evaluator's only `named`, and a second one would not be an int. A float ranged
+			// alias also carries this tag, and the i64 collapse below would be a wrong answer about it, so
+			// an `as` cast in a constant initializer owes this door an arm of its own rather than inheriting
+			// this one.
+			named then break 'reachable'
 		exitCode or
 			unresolved or
 			void then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — the constant evaluator folds integers, bools, floats and payload-free enum or union cases only")
@@ -2637,16 +2630,16 @@ function globalStdType(tag ValueTypeTag, name ByteArray) returns StdType
 		//
 		// ⚠ ONE SENTENCE, not one per tag: the two differ by nothing the message does not already carry,
 		// because `typeTagName(tag)` names which of them arrived.
-		string then panic("{recordSlotGlobalPanic(name, tag: tag)}")
-		genericInstance then panic("{recordSlotGlobalPanic(name, tag: tag)}")
+		string or
+			genericInstance then panic("{recordSlotGlobalPanic(name, tag: tag)}")
 
-		// A FUNCTION global is unreachable (P1.5-A1): a global takes no type annotation and a function
+		// A FUNCTION global is unreachable: a global takes no type annotation and a function
 		// reference is not a constant initializer, so a global's inferred type is never `function` (a bare
 		// function name at top level is rejected before this — `var g = double` is E2045, no call in a
 		// constant initializer). Were it to reach here, the honest answer is still not a width.
 		function then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — a function value is not a constant initializer, so a global's inferred type is never a function")
 
-		// A TYPE-PARAMETER global is unreachable (P1.6-A): a type parameter names no value outside a
+		// A TYPE-PARAMETER global is unreachable: a type parameter names no value outside a
 		// generic body, and a global's inline value is a folded scalar constant.
 		typeParameter then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — a type parameter names no value at module scope")
 
@@ -2992,8 +2985,8 @@ function retainCalleeForProtocol(protocol ExistentialOwnershipProtocol) returns 
 
 		// A green thread is never co-owned — see the arm's own note. EMPTY here is the complete answer, not a
 		// sentinel, exactly as it is for `none`: both readers stamp nothing and the zero word is inert.
-		greenThread then return EmptySourceText
-		none then return EmptySourceText
+		greenThread or
+			none then return EmptySourceText
 	end 'protocol'
 end 'retainCalleeForProtocol'
 
@@ -3004,62 +2997,49 @@ end 'retainCalleeForProtocol'
 // layout ids in DIFFERENT interners and a name is the one currency all of them have.
 //
 // THREE kinds of slot ask it, and they are one question: a struct/union FIELD, a capturing closure's ENV
-// SLOT, and — since W116 — a struct-literal BOX built by `__module_init`, whose asker has no `Parser` at all.
+// SLOT, and a struct-literal BOX built by `__module_init`, whose asker has no `Parser` at all.
 //
 // It resolves a `named` alias through `signatures.aliasOf`, the SAME whole-program door THE SHIFT RULE asks
 // (`valueIsUnsigned`), for the same reason: an alias declared in another file is still an alias here, and a
 // single file's own table would answer for neither it nor a forward reference.
 //
-// ⚠ **IT IS THE SECOND STATEMENT OF "WHAT A `named` TYPE DENOTES", AND `TypeResolution.resolveNamedType` IS
-// THE FIRST.** That is the standing shape of the two registries (see `ProgramSignatures.structTypes`): the
-// sweep answers the PARSER, the project registry answers the AUTHORITY, and the alias half has been written
-// in both places since ranged typealiases landed. What forces a slot's type to be resolved this early is the
-// op: `resolveTypes` never rewrites an op's type, so whoever EMITS is the last tier that can make it concrete.
+// ⚠ **IT IS THE SECOND STATEMENT OF "WHAT A `named` TYPE DENOTES", AND
+// `TypeResolution.resolveNamedType` IS THE FIRST.** That is the standing shape of the two
+// registries (see `ProgramSignatures.structTypes`): the sweep answers the PARSER, the project
+// registry answers the AUTHORITY, and the alias half is written in both places. What forces a
+// slot's type to be resolved this early is the op: `resolveTypes` never rewrites an op's type, so
+// whoever EMITS is the last tier that can make it concrete.
 export function slotStorageType(signatures ProgramSignatures, declared MaxonType, typeNames TypeNameInterner, readerFilePath FilePath) returns MaxonType
 	match declared 'kind'
-		// Already concrete. `structRef` included — a struct FIELD is a pointer, and
-		// `maxonTypeToStdType` gives it the machine word without help.
+		// Already concrete: `maxonTypeToStdType` gives each its width without help. A struct, String,
+		// Character or generic-instance field stores a pointer, a function field a code pointer, a
+		// type-parameter field an opaque i64, and a `cstring` slot the raw address.
 		boolean or
 			integer or
-			float then return declared
-		exitCode then return declared
-		structRef then return declared
+			float or
+			exitCode or
+			structRef or
+			string or
+
+			// `emitFieldLoad` functionizes a `named` function alias before this, so a function field arrives
+			// here concrete.
+			function or
+			typeParameter or
+			genericInstance or
+			character or
+			cstring then return declared
 		unresolved then panic("slotStorageType: a slot is declared `unresolved` — a DECLARED slot type comes from `parseTypeReference`, which produces only `named`, `structRef` and the three primitive keywords, a word slot typed by a VALUE (a cell, a closure's env slot) answers a deferred value at `Parser.wordSlotStorageType` without asking here, and a global's type comes from a top-level initializer, which admits no call to an undeclared function")
 
-		// A String field stores an i64 POINTER, exactly like a struct-ref field — `maxonTypeToStdType`
-		// gives it the machine word. A managed field IS now constructed (`moveInPayload`), and its
-		// self-field READ loads through this same width.
-		string then return declared
-
-		// A FUNCTION-typed field (P1.5-A1) stores an i64 code POINTER, exactly like a struct/String
-		// field — `maxonTypeToStdType`/`valueTagToStdType` give it the machine word. `emitFieldLoad`
-		// functionizes a `named` function alias BEFORE this, so a function field arrives here concrete.
-		function then return declared
-
-		// A TYPE-PARAMETER field stores an opaque i64 and a GENERIC-INSTANCE field a struct POINTER
-		// (P1.6-A) — both already concrete, so `maxonTypeToStdType` gives the machine word directly.
-		// This is what a `b.value` read on `type Box uses T` loads through.
-		typeParameter then return declared
-		genericInstance then return declared
-
-		// A CHARACTER field stores a POINTER to the fused byte record, exactly as a String field
-		// does — already concrete, so `maxonTypeToStdType` gives the machine word directly.
-		character then return declared
-
-		// ⭐ **AN INTERFACE-TYPED FIELD ACCESSES ITS VALUE HALF AS ONE MACHINE WORD**
-		// (P1.7a-existentials slice 2). The field occupies TWO slots — `(value@+0, witness@+8)` — but a
-		// `loadIndirect`/`storeIndirect` moves ONE of them, and `emitFieldLoad`/`emitFieldStore` emit two
-		// ops at the two offsets rather than one op of a doubled width. So the width this answers is the
-		// word, exactly as a declared enum/union field's is: `integer`, because `maxonTypeToStdType` panics
-		// on the declared `interfaceRef` the way it panics on a `named`.
+		// ⭐ **AN INTERFACE-TYPED FIELD ACCESSES ITS VALUE HALF AS ONE MACHINE WORD**. The field occupies
+		// TWO slots — `(value@+0, witness@+8)` — but a `loadIndirect`/`storeIndirect` moves ONE of them,
+		// and `emitFieldLoad`/`emitFieldStore` emit two ops at the two offsets rather than one op of a
+		// doubled width. So the width this answers is the word, exactly as a declared enum/union field's
+		// is: `integer`, because `maxonTypeToStdType` panics on the declared `interfaceRef` the way it
+		// panics on a `named`.
 		//
 		// ⚠ A CAPTURED interface binding — this function's other caller, a closure env slot — is still
 		// refused by the capture path's own E2015, so no env slot reaches this arm.
 		interfaceRef then return MaxonType.integer
-
-		// A `cstring` slot stores the raw address — already concrete, so `maxonTypeToStdType` gives it the
-		// machine word directly, exactly as a String slot's pointer.
-		cstring then return declared
 		named then break 'kind'
 	end 'kind'
 
@@ -3095,7 +3075,7 @@ end 'slotStorageType'
 // construct/extract sites, `project.typeNames` at the destructor-synthesis site. Every lookup
 // below is keyed by that name, so they are interner-independent once the name is in hand.
 //
-// ⭐⭐ **A PAYLOAD IS A SLOT, AND WHAT ITS BARE `named` DENOTES IS ASKED THROUGH THE SLOT DOOR (A4k).**
+// ⭐⭐ **A PAYLOAD IS A SLOT, AND WHAT ITS BARE `named` DENOTES IS ASKED THROUGH THE SLOT DOOR.**
 // A cascade of its own here disagrees with the slot door exactly where the copy is
 // thinner: `declaredSlotType` re-tags a function alias and a generic alias, and a copy that does not lets a
 // `boxed(b PB)` payload fall through to `undeclaredName` — the construct stores the pointer without
@@ -3106,27 +3086,37 @@ end 'slotStorageType'
 //
 // `slotScopeFilePath` is the UNION's `declFilePath` — the file whose reading of a contested generic
 // alias fixes this payload's identity, exactly as a struct field's is its own declaring file's. It is
-// the same file `resolveRecordedGenericAliasTypes` settled the recorded payload column against (N3), so
+// the same file `resolveRecordedGenericAliasTypes` settled the recorded payload column against, so
 // the column and this classifier cannot come to mean two different declarations of one name.
 export function classifyUnionPayload(signatures ProgramSignatures, typeNames TypeNameInterner, fieldType MaxonType, slotScopeFilePath FilePath) returns PayloadClass
 	match fieldType 'kind'
-		boolean then return PayloadClass.scalar(fieldType)
-		integer then return PayloadClass.scalar(fieldType)
-		exitCode then return PayloadClass.scalar(fieldType)
+		boolean or
+			integer or
+			exitCode or
+
+			// A function-typed payload is a code pointer stored inline, owning no heap, so the cascade has
+			// nothing to drop.
+			function or
+
+			// A `cstring` payload is a borrowed address: stored verbatim, moved out verbatim, and released
+			// by nobody.
+			cstring then return PayloadClass.scalar(fieldType)
 		float then return PayloadClass.floatPayload
 
 		// A String / struct reference is a managed heap pointer whose move-in and drop are this rung's
 		// work — unless the named type packs inline into a word, which owns no heap and moves as a scalar.
 		// A payload field of a struct's own name resolves to `structRef` (`Self` and the enclosing
 		// type); a reference to ANOTHER struct arrives as `named` and is resolved below.
-		string then return PayloadClass.managed(fieldType, isString: true)
+		string or
+
+			// ⚠ A Character payload is the same owned byte record a `string` payload is, so it takes
+			// `isString: true`: `isString` selects the fused-record copy/drop protocol
+			// (`promoteToOwnedString` in, `__str_decref` out), a question about the representation and not
+			// the type. Answering `false` would take the aggregate path and co-own a record that has no
+			// `__mm_retain` owner.
+			character then return PayloadClass.managed(fieldType, isString: true)
 		structRef then return PayloadClass.scalar(fieldType) if signatures.nameIsInlineRecord(foreignNameOf(typeNames, id: typeNameIdOf(fieldType))) else PayloadClass.managed(fieldType, isString: false)
 		unresolved then panic("classifyUnionPayload: a payload field is declared `unresolved` — `parseTypeReference` produces only `named`, `structRef` and the three primitive keywords, so no payload declaration can carry one")
-
-		// A FUNCTION-typed payload (P1.5-A1) is a SCALAR: a code pointer is an i64 stored inline, owns no
-		// heap, and the cascade skips it (nothing to drop). It stores through `maxonTypeToStdType(function)`
-		// → i64, exactly as a scalar does.
-		function then return PayloadClass.scalar(fieldType)
 
 		// ⭐ A TYPE-PARAMETER slot is its own class (`PayloadClass.typeParam`) — one opaque machine word in the
 		// DECLARATION view, dropped by nothing there (the per-INSTANCE cascade drops the substituted field
@@ -3136,57 +3126,47 @@ export function classifyUnionPayload(signatures ProgramSignatures, typeNames Typ
 		// carries the double free the `scalar` classification was.
 		typeParameter then return PayloadClass.typeParam(fieldType)
 
-		// A generic-INSTANCE payload is an OWNED base-struct box (P1.6-B2), exactly like a `structRef`
+		// A generic-INSTANCE payload is an OWNED base-struct box, exactly like a `structRef`
 		// payload: construct MOVES it in, a match binds it out, the cascade drops it through its own
 		// `__destruct_<instance>` / `__mm_decref` (`managedFieldDropCallee` routes the `genericInstance`
 		// tag). Its storage is the `genericInstance` type itself, which `maxonTypeToStdType` gives an i64
 		// (a pointer), so `payloadStorageOf`/`payloadValueTypeOf` lower it like any managed pointer.
 		//
-		// ⚠ **EXCEPT A `Promise` INSTANCE, WHICH IS A SCALAR** (P1.5-B2c) — a green-thread handle owning no
+		// ⚠ **EXCEPT A `Promise` INSTANCE, WHICH IS A SCALAR** — a green-thread handle owning no
 		// heap record. It MUST agree with `typeIsManaged`'s instance arm: these are the two SEPARATE
 		// implementations of "does this own heap?" that `Parser.requireContainerElementType`'s header warns
 		// about, and a slot they classify differently is moved in by one protocol and dropped by the other.
 		genericInstance then return promiseOrManagedInstanceClass(signatures, typeNames: typeNames, fieldType: fieldType)
 
-		// ⭐ A CHARACTER payload is an OWNED byte record — the same record a `string` payload is, so it is
-		// managed and `isString: true`: `isString` selects the fused-record COPY/DROP protocol
-		// (`promoteToOwnedString` in, `__str_decref` out), which is a question about the REPRESENTATION and
-		// not about the type. A Character answering `false` here would take the aggregate path and try to
-		// co-own a record that has no `__mm_retain` owner.
-		character then return PayloadClass.managed(fieldType, isString: true)
-
-		// ⭐ A STRUCT FIELD at an interface type is the two-slot fat pointer (P1.7a-existentials slice 2) — see
+		// ⭐ A STRUCT FIELD at an interface type is the two-slot fat pointer — see
 		// `PayloadClass.existential`. A UNION PAYLOAD at one is still refused at the declaration
 		// (`Parser.requireStorableDeclaredType`), because a payload slot IS one machine word — the case list
 		// shares one slot region across every case, so a two-slot payload has nowhere to widen into — and this
 		// classifier serves both, so the refusal lives at the payload's own lowering gate
 		// (`requirePayloadLowerable`) rather than here.
 		interfaceRef then return PayloadClass.existential
-
-		// A `cstring` payload owns nothing — it is a borrowed address — so it is a SCALAR slot: stored
-		// verbatim, moved out verbatim, and released by nobody.
-		cstring then return PayloadClass.scalar(fieldType)
 		named then break 'kind'
 	end 'kind'
 
 	let name = try typeNames.nameOf(typeNameIdOf(fieldType)) otherwise panic("classifyUnionPayload: a payload field's named type id is not in the interner it was resolved against — pass the interner the layout's ids live in")
 
 	// ⭐⭐ **THE SHARED CASCADE, and it answers every payload whose name denotes a DIFFERENT type** — a
-	// STRUCT (a managed heap pointer, re-tagged `structRef` because `maxonTypeToStdType` panics on a `named`
-	// and a struct binding's field access requires the tag), a TUPLE alias (the tuple's own `structRef` —
-	// `Pair` is a registered nothing, and unresolved it was `E3011 Unknown type 'Pair'` on a program the
-	// other walk order ran), a GENERIC alias (the instance), a FUNCTION alias (a code pointer), and a ranged
-	// FLOAT alias (a genuine f64). Re-entered rather than re-classified by hand: `denotedSlotType` never
-	// answers with a `named`, so the recursion is exactly one deep and the tag→class mapping above stays the
-	// only one there is.
+	// STRUCT (a managed heap pointer, re-tagged `structRef` because `maxonTypeToStdType` panics on a
+	// `named` and a struct binding's field access requires the tag), a TUPLE alias (the tuple's own
+	// `structRef` — `Pair` is a registered nothing, and unresolved it is `E3011 Unknown type 'Pair'`
+	// on a program the other walk order runs), a GENERIC alias (the instance), a FUNCTION alias (a
+	// code pointer), and a ranged FLOAT alias (a genuine f64). Re-entered rather than re-classified by
+	// hand: `denotedSlotType` never answers with a `named`, so the recursion is exactly one deep and
+	// the tag→class mapping above stays the only one there is.
 	//
-	// ⚠ **AND THAT TERMINATION FACT IS ASSERTED, NOT MERELY WRITTEN DOWN (A4k review).** It holds today by
-	// construction — every arm of that door answers `function`, `genericInstance`, `structRef` or `float`,
-	// and each is a RETURNING arm of the `match` above — but it is a property of the OTHER function's arms,
-	// and that door serves `declaredSlotType` too. An arm added for that caller which answered with the bare
-	// `named` it was handed (the int-alias shape its own header describes) would make this an UNBOUNDED
-	// recursion: a compiler that hangs, with nothing naming the edit that did it. A `named` here is loud
-	// instead — the same rule `resolveRecordedGenericAliasTypes` states for a spelling its pass cannot reach.
+	// ⚠ **AND THAT TERMINATION FACT IS ASSERTED, NOT MERELY WRITTEN DOWN.** It holds by construction —
+	// every arm of that door answers `function`, `genericInstance`, `structRef` or `float`, and each
+	// is a RETURNING arm of the `match` above — but it is a property of the OTHER function's arms, and
+	// that door serves `declaredSlotType` too. An arm added for that caller which answered with the
+	// bare `named` it was handed (the int-alias shape its own header describes) would make this an
+	// UNBOUNDED recursion: a compiler that hangs, with nothing naming the edit that did it. A `named`
+	// here is loud instead — the same rule `resolveRecordedGenericAliasTypes` states for a spelling
+	// its pass cannot reach.
 	if let denoted = try signatures.denotedSlotType(name, into: typeNames, slotScopeFilePath: slotScopeFilePath) 'theNameDenotesAnotherType'
 		if maxonTypeTag(denoted) == ValueTypeTag.named 'wouldNotTerminate'
 			panic("classifyUnionPayload: `denotedSlotType('{String.from(name)}')` answered with a `named`, which this re-entry cannot make progress on — every arm of that door must answer with a type the tag match above RETURNS on")
@@ -3291,34 +3271,37 @@ end 'caseHasManagedField'
 // agrees.
 export function payloadClassIsManaged(class PayloadClass) returns bool
 	return match class 'c'
-		managed gives true
-		nestedUnion gives true
+		managed or
+			nestedUnion or
 
-		// An existential owns its conformer's record — see `PayloadClass.existential` and `typeIsManaged`.
-		existential gives true
-		scalar gives false
-		floatPayload gives false
-		undeclaredName gives false
+			// An existential owns its conformer's record — see `PayloadClass.existential` and
+			// `typeIsManaged`.
+			existential gives true
+		scalar or
+			floatPayload or
+			undeclaredName or
 
-		// ⭐ **FALSE, AND IT IS THE DECLARATION VIEW'S ANSWER RATHER THAN THE SLOT'S (W41-opaque).** Every
-		// reader here is a DECLARATION-view drop question — the base struct's own cascade, the usage gates,
-		// `caseHasManagedField` — and a `T` slot is dropped by none of them: `genericInstanceFieldIsManaged`
-		// answers the substituted question for the per-instance cascade that does drop it. Answering `true`
-		// would give `type Box uses T` a `__destruct_Box` that decrefs an opaque word, which for a trivial
-		// instantiation is a raw scalar. The STORE-side reference the slot does owe is taken by
-		// `Parser.moveInPayload`, which routes on this case by NAME and not through this predicate.
-		typeParam gives false
+			// ⚠ `false` is the declaration view's answer rather than the slot's. Every reader here is a
+			// declaration-view drop question — the base struct's own cascade, the usage gates,
+			// `caseHasManagedField` — and a `T` slot is dropped by none of them:
+			// `genericInstanceFieldIsManaged` answers the substituted question for the per-instance cascade
+			// that does drop it. Answering `true` would give `type Box uses T` a `__destruct_Box` that
+			// decrefs an opaque word, which for a trivial instantiation is a raw scalar. The store-side
+			// reference the slot does owe is taken by `Parser.moveInPayload`, which routes on this case by
+			// name and not through this predicate.
+			typeParam or
 
-		// NOT managed: "managed" here licenses a RETAIN and a clone, and a green thread has neither. What it
-		// does owe is a drop, which is `payloadClassOwesDrop` below.
-		greenThread gives false
+			// "Managed" here licenses a retain and a clone, and a green thread has neither. What it does owe
+			// is a drop, which is `payloadClassOwesDrop` below.
+			greenThread gives false
 	end 'c'
 end 'payloadClassIsManaged'
 
-// ⭐ **DOES THIS PAYLOAD OWE A RECLAIM?** The union twin of `typeOwesDrop`, and the question a destructor
-// cascade must ask — `payloadClassIsManaged` is the narrower "is it a box". A promise payload answers
-// `false` there and `true` here, and reading the first as the second is what let `union Slot { held(p
-// IntPromise) }` construct without moving the spawn in and die without dropping it.
+// ⭐ **DOES THIS PAYLOAD OWE A RECLAIM?** The union twin of `typeOwesDrop`, and the question a
+// destructor cascade must ask — `payloadClassIsManaged` is the narrower "is it a box". A promise
+// payload answers `false` there and `true` here, and reading the first as the second constructs
+// `union Slot { held(p IntPromise) }` without moving the spawn in, and drops the union without
+// dropping it.
 module function payloadClassOwesDrop(class PayloadClass) returns bool
 	return payloadClassIsManaged(class) or payloadClassIsAGreenThread(class)
 end 'payloadClassOwesDrop'
@@ -3326,19 +3309,19 @@ end 'payloadClassOwesDrop'
 export function payloadClassIsAGreenThread(class PayloadClass) returns bool
 	return match class 'c'
 		greenThread gives true
-		managed gives false
-		scalar gives false
-		nestedUnion gives false
-		existential gives false
-		floatPayload gives false
-		undeclaredName gives false
-		typeParam gives false
+		managed or
+			scalar or
+			nestedUnion or
+			existential or
+			floatPayload or
+			undeclaredName or
+			typeParam gives false
 	end 'c'
 end 'payloadClassIsAGreenThread'
 
 // ⭐ **MAY A MATCH-ARM BINDING ON THIS SLOT BE WRITTEN BACK INTO THE BOX (`specs/mutable-enums.md`)?**
 // The write-back (`Parser.writeBackPayload`) must state, statically, who owns the value the slot held
-// BEFORE it and who owns the one going in — and only these three classes state it:
+// BEFORE it and who owns the one going in — and only these four classes state it:
 //
 //   • `scalar` — the slot owns nothing, so a store is the whole of the write.
 //   • `managed` — the box's reference to the value the slot held is releasable by a statically named
@@ -3346,8 +3329,9 @@ end 'payloadClassIsAGreenThread'
 //     nothing to release; a RETAINED one still holds the box's reference, which `Parser.writeBackPayload`
 //     drops before the store.
 //   • `nestedUnion` — a boxed union is an owned heap pointer with a statically named release
-//     (`unionBoxDropCallee`), so the sentence above is true of it WORD FOR WORD. It answered `false`
-//     only while a nested boxed-union payload could not be constructed at all (W55).
+//     (`unionBoxDropCallee`), so the sentence above is true of it word for word.
+//   • `greenThread` — a one-word slot, so a bound payload takes a write exactly as a scalar one
+//     does.
 //
 // ⚠ **THIS PREDICATE IS NOT THE WHOLE GATE, AND SAYING SO IS THE POINT OF THIS PARAGRAPH.** It answers
 // about the CLASS. WHO ELSE OWNS THE BOX is a fact about the ACQUISITION, and
@@ -3357,48 +3341,46 @@ end 'payloadClassIsAGreenThread'
 // write through such a binding would publish a payload swap to an owner this frame cannot name, so the
 // retain arm there demotes it to read-only.
 //
-// Every other class keeps today's read-only binding rather than a guessed protocol. `typeParam` is the
+// Every other class keeps a read-only binding rather than a guessed protocol. `typeParam` is the
 // one that could be wrongly waved through: its slot's reference protocol is a RUN-TIME fact reached
 // through the instance descriptor (`Parser.moveOpaqueValueInto`), so a plain store would drop the
-// reference the box still holds — and it is unreachable today besides, a generic union having no
-// construct syntax. `floatPayload` never reaches a binding at all
-// (`Parser.requirePayloadLowerable` refuses it), and `undeclaredName` is an error path.
+// reference the box still holds — and it is unreachable besides, a generic union having no
+// construct syntax. `floatPayload` never reaches a binding at all (`Parser.requirePayloadLowerable`
+// refuses it), and `undeclaredName` is an error path.
 //
 // A `match` like its siblings, so a case appended to `PayloadClass` fails to compile here rather than
 // being silently absorbed into either answer.
 export function payloadBindingAcceptsWrites(class PayloadClass) returns bool
 	return match class 'c'
-		scalar gives true
-		managed gives true
-		nestedUnion gives true
-		typeParam gives false
-		existential gives false
-		floatPayload gives false
-		undeclaredName gives false
-
-		// A one-word slot, so a bound payload takes a write exactly as a scalar one does.
-		greenThread gives true
+		scalar or
+			managed or
+			nestedUnion or
+			greenThread gives true
+		typeParam or
+			existential or
+			floatPayload or
+			undeclaredName gives false
 	end 'c'
 end 'payloadBindingAcceptsWrites'
 
-// Is a classified slot an EXISTENTIAL (P1.7a-existentials slice 2) — the two-slot fat pointer, whose
-// admitted values and whose DROP both differ from every other managed kind? Its readers are the field-type
-// door (`Parser.requireFieldType`) and nothing else today; it is a `match` like its two siblings rather than
-// an `is` test so that a case appended to `PayloadClass` fails to compile here.
+// Is a classified slot an EXISTENTIAL — the two-slot fat pointer, whose admitted values and whose
+// DROP both differ from every other managed kind? Its reader is the field-type door
+// (`Parser.requireFieldType`); it is a `match` like its two siblings rather than an `is` test so
+// that a case appended to `PayloadClass` fails to compile here.
 export function payloadClassIsExistential(class PayloadClass) returns bool
 	return match class 'c'
 		existential gives true
-		managed gives false
-		nestedUnion gives false
-		scalar gives false
-		floatPayload gives false
-		undeclaredName gives false
-		typeParam gives false
-		greenThread gives false
+		managed or
+			nestedUnion or
+			scalar or
+			floatPayload or
+			undeclaredName or
+			typeParam or
+			greenThread gives false
 	end 'c'
 end 'payloadClassIsExistential'
 
-// Is a classified slot the enclosing generic's own TYPE PARAMETER (W41-opaque) — one opaque machine word whose
+// Is a classified slot the enclosing generic's own TYPE PARAMETER — one opaque machine word whose
 // reference protocol is a run-time fact? Its reader is the store door (`Parser.moveInPayload`) and nothing
 // else: every OTHER question about the slot (its width, a loaded value's type, whether the DECLARATION view
 // drops it) is answered identically to a scalar's, which is why those readers stay unaware of the case. A
@@ -3406,13 +3388,13 @@ end 'payloadClassIsExistential'
 export function payloadClassIsTypeParam(class PayloadClass) returns bool
 	return match class 'c'
 		typeParam gives true
-		existential gives false
-		managed gives false
-		nestedUnion gives false
-		scalar gives false
-		floatPayload gives false
-		undeclaredName gives false
-		greenThread gives false
+		existential or
+			managed or
+			nestedUnion or
+			scalar or
+			floatPayload or
+			undeclaredName or
+			greenThread gives false
 	end 'c'
 end 'payloadClassIsTypeParam'
 
@@ -3422,33 +3404,32 @@ end 'payloadClassIsTypeParam'
 export function payloadClassIsString(class PayloadClass) returns bool
 	return match class 'c'
 		managed(_, isString) gives isString
-		scalar gives false
-		floatPayload gives false
-		nestedUnion gives false
+		scalar or
+			floatPayload or
+			nestedUnion or
 
-		// An existential's value half is a conformer's record, which may or may not BE a String — that is
-		// exactly the fact only its witness knows, and the reason its drop is `__drop_existential` and its
-		// co-ownership `__retain_existential`. `false` here does NOT mean "the aggregate protocol applies":
-		// for a byte-record conformer the protocol is COPY, never co-own (`ExistentialOwnershipProtocol`), and
-		// this reader's earlier claim that co-owning "is right whatever the conformer is" was measurably false
-		// — it is an incref of read-only `.rdata` for a literal. `false` means only "do not take the STATIC
-		// String route", which is right because the choice belongs to the witness at run time.
-		existential gives false
-		undeclaredName gives false
+			// ⚠ An existential's value half is a conformer's record, which may or may not be a String — the
+			// fact only its witness knows, and the reason its drop is `__drop_existential` and its
+			// co-ownership `__retain_existential`. `false` does not mean "the aggregate protocol applies":
+			// for a byte-record conformer the protocol is copy, never co-own
+			// (`ExistentialOwnershipProtocol`), since co-owning is an incref of read-only `.rdata` for a
+			// literal. `false` means only "do not take the static String route", because the choice belongs
+			// to the witness at run time.
+			existential or
+			undeclaredName or
 
-		// An opaque `T` may BE a String at some instantiation — which is exactly the fact the shared body
-		// cannot know, and the reason its store dispatches through the descriptor's `retainFunc@64`. `false`
-		// means "do not take the STATIC String route" here, precisely as it does for an existential.
-		typeParam gives false
-		greenThread gives false
+			// An opaque `T` may be a String at some instantiation, which the shared body cannot know, so its
+			// store dispatches through the descriptor's `retainFunc@64`: `false` means the same as for an
+			// existential.
+			typeParam or
+			greenThread gives false
 	end 'c'
 end 'payloadClassIsString'
 
-// ⭐⭐ **THE SLOT'S OWN WIDTH — the type a `loadIndirect`/`storeIndirect` through this slot CARRIES**, and
-// nothing else. **THE ONE HOME of the width-vs-identity split** (W55): `payloadValueTypeOf` answers the other
-// half and points here rather than restating it, and so do `PayloadClass.nestedUnion` and
-// `Parser.requirePayloadLowerable`. It was written out in full at three sites and had already drifted on which
-// tags a `managed` payload's storage can be.
+// ⭐⭐ **THE SLOT'S OWN WIDTH — the type a `loadIndirect`/`storeIndirect` through this slot
+// CARRIES**, and nothing else. **THE ONE HOME of the width-vs-identity split**:
+// `payloadValueTypeOf` answers the other half and points here rather than restating it, and so do
+// `PayloadClass.nestedUnion` and `Parser.requirePayloadLowerable`.
 //
 // ⛔ **THE WIDTH IS NOT THE IDENTITY, AND FOR MOST CLASSES IT IS NOT EVEN THE SAME TYPE.** Only `managed`
 // (whose `storage` is already a concrete machine-word tag — `structRef`/`string`/`genericInstance`/
@@ -3462,16 +3443,15 @@ end 'payloadClassIsString'
 //     that word; the identity is the declared `interfaceRef` every witness-dispatching reader needs. The
 //     witness half rides at `+InterfaceWitnessHalfOffset`, stored beside it by `Parser.emitFieldStore`, the
 //     only site holding the field's base offset.
-//   • `nestedUnion` — a boxed union IS a pointer, so the width is the word; the identity is the union's own
-//     `named(<union>)`. ⚠ **The one class where handing the identity to an op does not merely lose information
-//     but PANICS** (`maxonTypeToStdType` has no `named` arm) — and deriving the width from the union's name is
-//     exactly what made a nested boxed-union payload unlowerable until W55.
+//   • `nestedUnion` — a boxed union IS a pointer, so the width is the word; the identity is the
+//     union's own `named(<union>)`. ⚠ **The one class where handing the identity to an op does not
+//     merely lose information but PANICS** (`maxonTypeToStdType` has no `named` arm) — so deriving
+//     the width from the union's name makes a nested boxed-union payload unlowerable.
 //   • `undeclaredName` — an error path: the width keeps the op well-formed for the instant before the
 //     pipeline's error gate throws, while the identity stays the name the user wrote, for the diagnostic.
 //
-// ⇒ the three `MaxonType.integer` arms below are deliberately NOT collapsed under the redundant-arm rule:
-// they are three DIFFERENT reasons that happen to share an answer. A `float` payload is rejected before
-// any store reaches here.
+// ⇒ the three one-word answers below are different reasons that happen to share an answer. A
+// `float` payload is rejected before any store reaches here.
 //
 // ⚠ **"A DECLARED ENUM/UNION OCCUPIES ONE MACHINE WORD" HAS TWO DERIVERS, AND THEY SHARE A HOME** —
 // `declaredAggregateSlotWidth` below. Both are in these two files (`Parser.fieldStorageType`'s `containsEnum`
@@ -3485,8 +3465,8 @@ end 'payloadClassIsString'
 // expression to change. Only the two-party agreement with `resolveNamedType` rests on prose.
 // ⭐⭐ **THE WIDTH A SLOT HOLDING A DECLARED ENUM OR UNION IS ACCESSED AT — one machine word, stated ONCE.**
 // A payload-FREE enum's value IS its i64 tag; a payload-bearing union's value is an i64 POINTER to its box
-// (P1.4b wave 2c). Two different representations, one access width, and that coincidence is exactly why the
-// two slot kinds could drift apart while each looked right on its own.
+// — two different representations, one access width, and that coincidence is why the two slot
+// kinds could drift apart while each looked right on its own.
 //
 // Its two callers are the two slot kinds: `Parser.fieldStorageType`'s `containsEnum` arm (a struct FIELD) and
 // `payloadStorageOf`'s `nestedUnion` arm (a union PAYLOAD). See the ⚠ above for the third deriver that is out
@@ -3501,25 +3481,23 @@ end 'declaredAggregateSlotWidth'
 
 export function payloadStorageOf(class PayloadClass) returns MaxonType
 	match class 'c'
-		scalar(storage) then return storage
-		managed(storage, _) then return storage
+		scalar(storage) or
+			managed or
+
+			// The opaque word itself, the same width for every instantiation.
+			typeParam or
+			greenThread then return storage
 
 		// One machine word — the box POINTER. Not the `named(<union>)` the case carries: that is the slot's
 		// IDENTITY, and it panics the lowering. See the ⛔ above. Through the shared accessor, so this width and
 		// the STRUCT-FIELD one cannot come apart.
 		nestedUnion then return declaredAggregateSlotWidth()
 
-		// The VALUE half's word, one of the fat pointer's two. See the ⛔ above.
-		existential then return MaxonType.integer
-
-		// An error path's placeholder width. See the ⛔ above.
-		undeclaredName then return MaxonType.integer
-
-		// The opaque word itself — the same value the `scalar` arm carried before this case split off, so the
-		// store's width is unchanged for every instantiation.
-		typeParam(storage) then return storage
+		// The value half's word, one of the fat pointer's two, and an error path's placeholder width. See
+		// the ⛔ above.
+		existential or
+			undeclaredName then return MaxonType.integer
 		floatPayload then panic("payloadStorageOf: a float payload has no lowerable storage — requirePayloadLowerable rejects it before any store")
-		greenThread(storage) then return storage
 	end 'c'
 end 'payloadStorageOf'
 
@@ -3541,21 +3519,21 @@ end 'payloadStorageOf'
 // answer to an op loses a ranged alias's bound; handing a `nestedUnion`'s PANICS the lowering.
 export function payloadValueTypeOf(class PayloadClass, declared MaxonType) returns MaxonType
 	match class 'c'
-		scalar then return declared
-		managed(storage, _) then return storage
-		nestedUnion(storage) then return storage
+		scalar or
 
-		// The DECLARED `interfaceRef`, so a loaded existential is recognised as one by every reader that
-		// dispatches on the tag (`witnessOfValue`'s pairing, the argument widening, the drop router).
-		existential then return declared
-		undeclaredName then return declared
+			// The declared `interfaceRef`, so a loaded existential is recognised as one by every reader that
+			// dispatches on the tag (`witnessOfValue`'s pairing, the argument widening, the drop router).
+			existential or
+			undeclaredName or
 
-		// The DECLARED type, exactly as the `scalar` arm answers: a loaded `T` must read back as the opaque
-		// `typeParameter` its slot is declared at, which is what the caller's `retypeOpaqueMethodResult`
-		// substitutes and what `decrefCalleeFor` routes to `__drop_type_param` on.
-		typeParam then return declared
+			// A loaded `T` must read back as the opaque `typeParameter` its slot is declared at, which is
+			// what the caller's `retypeOpaqueMethodResult` substitutes and what `decrefCalleeFor` routes to
+			// `__drop_type_param` on.
+			typeParam then return declared
+		managed(storage, _) or
+			nestedUnion or
+			greenThread then return storage
 		floatPayload then panic("payloadValueTypeOf: a float payload has no lowerable value type — requirePayloadLowerable rejects it before any load")
-		greenThread(storage) then return storage
 	end 'c'
 end 'payloadValueTypeOf'
 
@@ -4215,8 +4193,8 @@ export typealias ForwardCallArray = Array with ForwardCall
 // payload is read, so a fourth reader cannot come to match one arm and forget the others.
 export function forwardCallName(call ForwardCall) returns ByteArray
 	return match call 'c'
-		bare(name) gives name
-		throughAReceiver(name) gives name
+		bare(name) or
+			throughAReceiver gives name
 		throughSelf(_, name) gives name
 	end 'c'
 end 'forwardCallName'
@@ -4257,8 +4235,8 @@ end 'foldCallability'
 // established that both are `throughSelf` or neither is.
 function forwardCallSelfType(call ForwardCall) returns ByteArray
 	return match call 'c'
-		bare gives EmptySourceText
-		throughAReceiver gives EmptySourceText
+		bare or
+			throughAReceiver gives EmptySourceText
 		throughSelf(typeName, _) gives typeName
 	end 'c'
 end 'forwardCallSelfType'
@@ -5270,12 +5248,12 @@ export function managedNameRetainCallee(signatures ProgramSignatures, declaredNa
 		// different reasons, and the day either reason changes only one arm should move.
 		managedFile or
 			managedDirectory or
-			managedSocket gives plainBoxRetainCallee(result)
+			managedSocket or
+			userDeclared gives plainBoxRetainCallee(result)
 
 		// ONE entry for both shapes: it hands the box back (`MailboxRuntime.buildMboxHandleRetainBox`), so a
 		// caller wanting a fresh name uses the result and a caller retaining in place ignores it.
 		serviceHandle gives MboxHandleRetainBoxName
-		userDeclared gives plainBoxRetainCallee(result)
 	end 'compilerOwned'
 end 'managedNameRetainCallee'
 
@@ -5373,8 +5351,8 @@ function managedNameDropCallee(signatures ProgramSignatures, declaredName ByteAr
 		// union's scope-exit drop takes, so a union FIELD and a union BINDING cannot be dropped through
 		// different callees. See `unionHasManagedPayload` for the reachable compiler panic the
 		// layout-and-foreign-interner spelling this replaces produced.
-		enumType then return signatures.unionBoxDropCallee(declaredName)
-		unionType then return signatures.unionBoxDropCallee(declaredName)
+		enumType or
+			unionType then return signatures.unionBoxDropCallee(declaredName)
 
 		// An INTERFACE NAME reaching a 1-argument drop router is the `managedFieldDropCallee` guard's case one
 		// resolution further down: an existential is released through `__drop_existential(witness, value)`,
@@ -5797,9 +5775,9 @@ function managedNameCascadeStrategy(signatures ProgramSignatures, declaredName B
 	match form 'form'
 		// A scalar-only box still takes `__clone_<T>` (not the drop side's `__mm_decref`): the clone MUST
 		// allocate a fresh independent box, which only a synthesized cloner does.
-		structType then return ManagedCascadeStrategy.direct(perTypeCascadeSymbol(action, typeName: declaredName))
-		enumType then return ManagedCascadeStrategy.direct(perTypeCascadeSymbol(action, typeName: declaredName))
-		unionType then return ManagedCascadeStrategy.direct(perTypeCascadeSymbol(action, typeName: declaredName))
+		structType or
+			enumType or
+			unionType then return ManagedCascadeStrategy.direct(perTypeCascadeSymbol(action, typeName: declaredName))
 
 		// The three arms below mirror `managedNameDropCallee`'s exactly — an interface slot is E3011 today,
 		// and a ranged alias and a function value are scalars `typeIsManaged` never calls managed.
@@ -7692,9 +7670,9 @@ export let ManagedSocketTypeName = b"__ManagedSocket"
 let ManagedSocketHandleFieldName = b"_handle"
 let ManagedSocketHandleFieldIndex = 0 as FieldIndex
 
-// The `__ManagedSocket` methods a PEER connection uses: one static and six instance methods. A name outside
-// the whole set — these plus the server side's three below — is refused by name at its own span rather than
-// mangled into a callee no file declares.
+// The `__ManagedSocket` methods a PEER connection uses: one static and seven instance methods. A
+// name outside the whole set — these plus the server side's three below — is refused by name at its
+// own span rather than mangled into a callee no file declares.
 //
 // ⚠ `stdlib/TcpClient.maxon` calls every one of them and nothing else, so this half is the whole contract
 // the client corpus needs.
@@ -7702,6 +7680,7 @@ export let ManagedSocketTcpConnectMethod = b"tcpConnect"
 export let ManagedSocketSendFromMethod = b"sendFrom"
 export let ManagedSocketRecvMethod = b"recv"
 export let ManagedSocketCloseMethod = b"close"
+export let ManagedSocketShutdownWriteMethod = b"shutdownWrite"
 export let ManagedSocketSetReadDeadlineMethod = b"setReadDeadline"
 export let ManagedSocketSetWriteDeadlineMethod = b"setWriteDeadline"
 
@@ -7735,8 +7714,9 @@ export let ManagedSocketAcceptMethod = b"accept"
 // `Project.BuiltinErrorOrdinalCheck`'s reason.
 module let ManagedListenerErrorTypeName = b"__ManagedListenerError"
 
-// The five case names in the declaration's order — which IS their ordinal order, and therefore the error
-// flag the runtime returns. Not reorderable; the ordinal guard checks this list against the declaration.
+// The six case names in the declaration's order — which IS their ordinal order, and therefore the
+// error flag the runtime returns. Not reorderable; the ordinal guard checks this list against the
+// declaration.
 module let ManagedListenerResolveFailedCaseName = b"resolveFailed"
 
 module let ManagedListenerBindFailedCaseName = b"bindFailed"
@@ -7746,6 +7726,8 @@ module let ManagedListenerAcceptFailedCaseName = b"acceptFailed"
 module let ManagedListenerAddressFailedCaseName = b"addressFailed"
 
 module let ManagedListenerClosedCaseName = b"closed"
+
+module let ManagedListenerAcceptRetriableCaseName = b"acceptRetriable"
 
 // ⭐ **THE ERROR EVERY THROWING `__ManagedSocket` OPERATION THROWS**, and the type a handler’s `match e`
 // discriminates. DECLARED at `stdlib/Builtins.maxon:164` and read from there (A1s), exactly as the file and
@@ -9618,8 +9600,8 @@ end 'ExtensionTarget'
 // refusal at `readWhereClause` rather than a silent acceptance.
 export function extensionTargetParamNames(target ExtensionTarget) returns ByteArrayArray
 	match target 'target'
-		interfaceExtension(paramNames, _) then return paramNames
-		typeExtension(paramNames, _) then return paramNames
+		interfaceExtension(paramNames, _) or
+			typeExtension then return paramNames
 		undeclaredTarget then return sharedEmptyDeclaredConformances
 	end 'target'
 end 'extensionTargetParamNames'
@@ -9628,8 +9610,8 @@ end 'extensionTargetParamNames'
 // `conformersOf` for why one answer rather than two derivations.
 export function extensionTargetConformers(target ExtensionTarget) returns ByteArrayArray
 	match target 'target'
-		interfaceExtension(_, conformers) then return conformers
-		typeExtension(_, conformers) then return conformers
+		interfaceExtension(_, conformers) or
+			typeExtension then return conformers
 		undeclaredTarget then return sharedEmptyDeclaredConformances
 	end 'target'
 end 'extensionTargetConformers'
@@ -9780,10 +9762,10 @@ end 'constValueInfersItsInstance'
 function constFoldedInfersItsInstance(folded ConstFoldedValue) returns bool
 	return match folded 'kind'
 		arrayLiteral gives true
-		scalar gives false
-		managed gives false
-		containerCreate gives false
-		boxedUnionCase gives false
+		scalar or
+			managed or
+			containerCreate or
+			boxedUnionCase gives false
 	end 'kind'
 end 'constFoldedInfersItsInstance'
 
@@ -16124,8 +16106,8 @@ export type ProgramSignatures
 				// settled too; it is simply not reachable BY a reference (see `evaluateDecl`).
 				value or
 					failed or
-					poisoned then break 'state'
-				managedValue or
+					poisoned or
+					managedValue or
 					arrayValue or
 					containerValue or
 					factoryValue or
@@ -16381,7 +16363,7 @@ export type ProgramSignatures
 		end 'folded'
 	end 'foldedInlineFieldPayload'
 
-	// ⭐ **THE TYPE ONE ARENA NODE PRODUCES, IN THIS INDEX'S OWN INTERNER (W116)** — the ONE derivation, read
+	// ⭐ **THE TYPE ONE ARENA NODE PRODUCES, IN THIS INDEX'S OWN INTERNER** — the ONE derivation, read
 	// by the ROOT (which types the global's `.data` slot and routes its drop) and by a NESTED node (which
 	// types the argument or field receiving it). A call's is its callee's declared return; a construction's is
 	// the struct it names, which is the whole of what makes `Outer{inner: Inner.create(7)}` and
@@ -16391,20 +16373,19 @@ export type ProgramSignatures
 			call(callee, _) gives self.resolvedReturnValueType(callee, name: name)
 			construct(typeName, _) gives MaxonType.structRef(self.typeNames.intern(typeName))
 
-			// A map literal's type is the INSTANCE its first pair fixed, which the evaluator interned in THIS
-			// index's registry (`builtinInstanceForColumns`) — so there is nothing to resolve, only to state.
-			// It is the same `genericInstance(id)` a `MapAlias.create()` global's slot is typed as, which is
-			// what makes a literal-built map and a hand-built one one type.
-			mapLiteral(giid, _) gives MaxonType.genericInstance(giid)
+			// A map or array literal's type is the INSTANCE its first pair or element fixed, which the
+			// evaluator interned in THIS index's registry (`builtinInstanceForColumns`) — so there is
+			// nothing to resolve, only to state. It is the same `genericInstance(id)` a `MapAlias.create()`
+			// global's slot is typed as, which is what makes a literal-built map and a hand-built one one
+			// type.
+			mapLiteral(giid, _) or
+				arrayLiteral gives MaxonType.genericInstance(giid)
 
 			// A boxed union's case IS its box pointer, tagged `named(<union>)` — `foldedValueType`'s answer for
 			// the payload-free spelling of the same value, so a case with a payload and one without type their
 			// slot identically and one `match` reads both. The reader adopts it BY NAME (`resolvedGlobalOf`'s
 			// factory arm), which is what keeps this index's id out of a file's parse.
 			unionCase(typeName, _, _) gives MaxonType.named(self.typeNames.intern(typeName))
-
-			// An array literal's type is the INSTANCE its first element fixed, stated for the map arm's reason.
-			arrayLiteral(giid, _) gives MaxonType.genericInstance(giid)
 		end 'node'
 	end 'constFactoryCallResultType'
 
@@ -16594,8 +16575,8 @@ export type ProgramSignatures
 	function constStructBoxNode(calls ConstFactoryCallArray, root InitializerCallId, declName ByteArray, elementFilePath FilePath, nodes ImmortalBoxNodeArray) returns ConstStructBoxOutcome
 		match factoryCallAt(calls, id: root) 'node'
 			construct(typeName, fields) then return self.describeConstStructBox(typeName, fields: fields, calls: calls, below: root, declName: declName, elementFilePath: elementFilePath, nodes: nodes)
-			call then return ConstStructBoxOutcome.notImageable
-			mapLiteral or
+			call or
+				mapLiteral or
 				unionCase or
 				arrayLiteral then return ConstStructBoxOutcome.notImageable
 		end 'node'
@@ -16685,8 +16666,8 @@ export type ProgramSignatures
 	function foldedFieldImageSlot(value ConstFoldedValue, nodes ImmortalBoxNodeArray) returns ConstFieldImageSlot
 		match value 'kind'
 			scalar then return ConstFieldImageSlot.scalar
-			managed then return ConstFieldImageSlot.notImageable
-			arrayLiteral then return ConstFieldImageSlot.notImageable
+			managed or
+				arrayLiteral then return ConstFieldImageSlot.notImageable
 			containerCreate(giid, _, elements) then return self.emptyContainerFieldSlot(giid, elements: elements, nodes: nodes)
 			boxedUnionCase(typeName, caseName) then return self.boxedUnionCaseFieldSlot(typeName, caseName: caseName, nodes: nodes)
 		end 'kind'
@@ -17021,8 +17002,8 @@ export type ProgramSignatures
 			// Spelled arm by arm rather than as a range: a case appended to `ContainerBoxSlot` must be
 			// classified here rather than swallowed by a range whose text does not move with it.
 			let laysDownAsBytes = match self.containerBoxSlot(giid, layout: layout, index: i) 'slot'
-				scalar gives true
-				column gives true
+				scalar or
+					column gives true
 				notImageable gives false
 			end 'slot'
 
@@ -17043,9 +17024,9 @@ export type ProgramSignatures
 	// so neither has bytes to lay down.
 	function containerBoxSlot(giid GenericInstanceId, layout StructLayout, index FieldIndex) returns ContainerBoxSlot
 		match layout.fieldDefault(index) 'declared'
-			none then return ContainerBoxSlot.notImageable
+			none or
+				helper then return ContainerBoxSlot.notImageable
 			literal(payload, tag, writtenNegative) then return self.containerBoxScalarSlot(layout, index: index, payload: payload, tag: tag, writtenNegative: writtenNegative)
-			helper then return ContainerBoxSlot.notImageable
 			bareCreateHelper then return self.containerBoxColumnSlot(giid, layout: layout, index: index)
 		end 'declared'
 	end 'containerBoxSlot'
@@ -17626,14 +17607,14 @@ export type ProgramSignatures
 				failed or
 				poisoned or
 				managedValue or
-				arrayValue then return TopLevelInitializerCall.none
+				arrayValue or
+
+				// A boxed union's payload-free case calls nothing: `__module_init` allocates the box and stores
+				// a tag it already knows, so there is no callee to root and nothing that can print, throw or
+				// mutate.
+				boxedUnionValue then return TopLevelInitializerCall.none
 			containerValue(giid, _, _) then return self.containerInitializerCall(giid)
 			factoryValue(calls, _, _) then return TopLevelInitializerCall.calls(self.factoryInitializerCallees(calls))
-
-			// A BOXED UNION'S PAYLOAD-FREE CASE calls nothing: `__module_init` allocates the box and stores a
-			// tag it already knows, so there is no callee to root and nothing that can print, throw or mutate.
-			// It cannot join the range above, which ends before the two arms that DO call.
-			boxedUnionValue then return TopLevelInitializerCall.none
 		end 'state'
 	end 'declInitializerCall'
 
@@ -17732,13 +17713,13 @@ export type ProgramSignatures
 		match folded 'value'
 			scalar or
 				managed or
-				arrayLiteral then return
-			containerCreate(giid, _, _) then self.appendDeclaredInstanceCreateCallee(callees, giid: giid)
+				arrayLiteral or
 
-			// A BOXED UNION'S PAYLOAD-FREE CASE contributes no callee: `__module_init` allocates its box and
-			// stores a tag the fold already knew, so there is no declared body for the reachability walk to
-			// root. It answers with the range above and cannot join it, being appended past the container arm.
-			boxedUnionCase then return
+				// A boxed union's payload-free case contributes no callee: `__module_init` allocates its box
+				// and stores a tag the fold already knew, so there is no declared body for the reachability
+				// walk to root.
+				boxedUnionCase then return
+			containerCreate(giid, _, _) then self.appendDeclaredInstanceCreateCallee(callees, giid: giid)
 		end 'value'
 	end 'appendFoldedArgumentCallee'
 
@@ -17764,15 +17745,15 @@ export type ProgramSignatures
 	// It asks `instanceCreateIsDeclared` rather than re-reading the base roster, so which callee this reports
 	// and which callee `containerCreateCall` emits are one derivation.
 	//
-	// ⭐⭐ **IT IS THE `create` AND THE ELEMENT-ADD, BECAUSE `ModuleInit.builtContainerRecord` EMITS BOTH
-	// (W90).** Rooting only the create is what a `Set from […]` global measured as
-	// `requireUnreachableLibraryStayedDead: 'Set.insert' is in LibraryFacts.unreachable` — the walk never saw
-	// the edge, no body was lowered, and dead-function elimination reached the empty function `__module_init`
-	// calls. Both come off `containerCreateCall`'s own routers, so what is rooted here and what is emitted
-	// there stay two readings of one answer.
+	// ⭐⭐ **IT IS THE `create` AND THE ELEMENT-ADD, BECAUSE `ModuleInit.builtContainerRecord` EMITS
+	// BOTH.** Rooting only the create leaves the add unseen by the walk, so no body is lowered and a
+	// `Set from […]` global panics in `requireUnreachableLibraryStayedDead` ('Set.insert' is in
+	// `LibraryFacts.unreachable`). Both come off `containerCreateCall`'s own routers, so what is
+	// rooted here and what is emitted there stay two readings of one answer.
 	//
-	// ⚠ The add is rooted whether or not this global HAS elements — an over-rooted leaf is lowered and then
-	// dropped by dead-function elimination, while a missing root is the panic above.
+	// ⚠ The add, one-column or keyed, is rooted whether or not this global HAS elements — an
+	// over-rooted leaf is lowered and then dropped by dead-function elimination, while a missing root
+	// is the panic above.
 	function appendDeclaredInstanceCreateCallee(callees ByteArrayArray, giid GenericInstanceId)
 		if not self.instanceCreateIsDeclared(giid) 'runtimeCreate'
 			return
@@ -17781,13 +17762,9 @@ export type ProgramSignatures
 		callees.push(self.declaredInstanceCreateCallee(giid))
 
 		match self.declaredContainerElementAdd(giid) 'add'
-			push(callee) then callees.push(callee)
+			push(callee) or
+				upsert then callees.push(callee)
 			unsupported then break 'add'
-
-			// A KEYED add is rooted on the identical rule its one-column sibling is, and for the identical
-			// reason: an over-rooted leaf is lowered and then dropped by dead-function elimination, while a
-			// missing root is `requireUnreachableLibraryStayedDead`.
-			upsert(callee) then callees.push(callee)
 		end 'add'
 	end 'appendDeclaredInstanceCreateCallee'
 
@@ -17847,9 +17824,9 @@ export type ProgramSignatures
 					poisoned or
 					managedValue or
 					arrayValue or
-					containerValue then continue
+					containerValue or
+					boxedUnionValue then continue
 				factoryValue(calls, _, _) then self.appendConstructedFieldInterfaces(names, calls: calls)
-				boxedUnionValue then continue
 			end 'state'
 		end 'each'
 
@@ -17917,25 +17894,20 @@ export type ProgramSignatures
 				failed or
 					poisoned then continue
 
-				// ⭐ EVERY RECORD BINDING reserves a POINTER slot holding NULL — a managed literal (P1.7 slice
-				// 2a), an array literal (slice 2b) and a container factory alike, and now for a `let` too. The
+				// ⭐ EVERY RECORD BINDING reserves a POINTER slot holding NULL — a managed literal, an array
+				// literal, a container factory and a boxed union's payload-free case alike, `let` or `var`. The
 				// record it will point at cannot be baked into a constant image — a data→data pointer has no
-				// compile-time VA under ASLR (`specs/static-variables.md:729-730`) — so the bytes are zero
-				// here and `__module_init` writes the address before `main` runs.
+				// compile-time VA under ASLR (`specs/static-variables.md`) — so the bytes are zero here and
+				// `__module_init` writes the address before `main` runs.
 				managedValue or
 					arrayValue or
-					containerValue then entries.push(self.materializedRecordSlot(decl))
+					containerValue or
+					boxedUnionValue then entries.push(self.nullPointerSlot(decl, valueType: self.foldedValueType(self.foldedValueOf(decl.outcome, name: decl.name), elementFilePath: decl.declFilePath)))
 
 				// ⭐ A FACTORY-CALL GLOBAL reserves the SAME null POINTER slot, for the same reason and one
 				// more: the record does not exist until the callee has RUN, which is strictly later than the
 				// image is written.
 				factoryValue(_, _, returnType) then entries.push(self.nullPointerSlot(decl, valueType: returnType))
-
-				// ⭐ A BOXED UNION'S PAYLOAD-FREE CASE reserves the same null POINTER slot as every other
-				// MATERIALIZED record, and would be inside the range above but for the factory arm between
-				// them — the band rule that makes a new outcome visible here is also what splits one answer in
-				// two, so the answer itself is written once (`materializedRecordSlot`) rather than twice.
-				boxedUnionValue then entries.push(self.materializedRecordSlot(decl))
 				pending or
 					evaluating then panic("ProgramSignatures.declaredGlobals: '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`")
 			end 'state'
@@ -18047,27 +18019,21 @@ export type ProgramSignatures
 					failed or
 					poisoned then continue
 
-				// ⭐ A MANAGED LITERAL, AN ARRAY LITERAL (P1.7 slice 2b) AND A CONTAINER FACTORY are managed
-				// globals whenever they still have a SLOT — the record is built before `main` and released
-				// after, and `let` refuses only the WRITE. An IMAGED `let` is filtered out above by
-				// `contributesStorage`, which is what makes "no slot" mean no construction and no drop in one
-				// answer. All three route through `globalRecordOf`, which is also what a factory ARGUMENT of
-				// the same shape routes through: a container factory IS an array literal with no elements,
+				// ⭐ A MANAGED LITERAL, AN ARRAY LITERAL, A CONTAINER FACTORY AND A BOXED UNION'S PAYLOAD-FREE
+				// CASE are managed globals whenever they still have a SLOT — the record is built before `main`
+				// and released after, and `let` refuses only the WRITE. An IMAGED `let` is filtered out above
+				// by `contributesStorage`, which is what makes "no slot" mean no construction and no drop in
+				// one answer. All four route through `globalRecordOf`, which is also what a factory ARGUMENT
+				// of the same shape routes through: a container factory IS an array literal with no elements,
 				// and that is a fact about the record rather than a shortcut.
 				managedValue or
 					arrayValue or
-					containerValue then entries.push(self.recordGlobalOf(decl))
+					containerValue or
+					boxedUnionValue then entries.push(self.recordGlobalOf(decl))
 
 				// ⭐ A FACTORY-CALL GLOBAL's slot holds whatever the callee returns, so its construction is the
 				// CALL and its type is the callee's declared return type — settled when the outcome was.
 				factoryValue(calls, root, returnType) then entries.push(self.managedGlobalEntry(decl, initializer: ManagedGlobalInitializer.factoryCall(self.globalInitCalls(calls, declName: decl.name, elementFilePath: decl.declFilePath), root: root), valueType: returnType))
-
-				// ⭐ A BOXED UNION'S PAYLOAD-FREE CASE is a managed global for the same reason the three above
-				// are — its record is built before `main` and released after — and routes through the same
-				// `globalRecordOf`, an IMAGED `let` having been filtered out above by `contributesStorage`.
-				// It repeats their one call rather than joining their range because it is appended past the
-				// factory arm that stands between them.
-				boxedUnionValue then entries.push(self.recordGlobalOf(decl))
 				pending or
 					evaluating then panic("ProgramSignatures.managedGlobals: '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`")
 			end 'state'
@@ -18075,14 +18041,6 @@ export type ProgramSignatures
 
 		return entries
 	end 'managedGlobals'
-
-	// The `.data` slot a MATERIALIZED record binding reserves — a null pointer word typed by the record the
-	// outcome already carries. Split out because the two arms that need it CANNOT be one range: the band rule
-	// appends a new outcome past `factoryValue`, which has an arm of its own between them, so one answer is
-	// asked at two sites and is written here once so they cannot drift.
-	function materializedRecordSlot(decl TopLevelDecl) returns DataSectionEntry
-		return self.nullPointerSlot(decl, valueType: self.foldedValueType(self.foldedValueOf(decl.outcome, name: decl.name), elementFilePath: decl.declFilePath))
-	end 'materializedRecordSlot'
 
 	// The callee roster `ManagedGlobal.initCallees` carries, flattened out of the union `declInitializerCall`
 	// answers with. A fresh empty array for the `none` arm rather than a shared one: this is asked once per
@@ -18532,19 +18490,19 @@ export type ProgramSignatures
 			// the whole-program widening check instead (`SemanticCheck.checkExistentialFieldStores`). Should this
 			// door ever gain an asker on the far side of that fold, DECLINING is still the right answer and not a
 			// second-best one: the verdict on a fat pointer belongs to the door that can see one.
-			interfaceType then return ConstFieldSlotLookup.unresolvableHere
+			interfaceType or
+
+				// A GENERIC alias reaches here only when the cascade DECLINED to re-tag it, which
+				// `slotTypeOfGenericAlias` does for exactly one shape — an instance over an `interface` base,
+				// i.e. an existential wearing an alias's spelling. So it declines for `interfaceType`'s reason:
+				// a slot this door could not resolve is not a slot it may judge.
+				genericAlias then return ConstFieldSlotLookup.unresolvableHere
 
 			// An INTEGER ranged alias, the one alias form the cascade deliberately leaves bare: its NAME
 			// carries the range and the signedness, and the RANGE is checked on its own
 			// (`Parser.requireConstScalarSuitsAlias`). A FLOAT one never arrives — `rangedAliasSlotType`
 			// re-tags it — so what this admits is exactly an integer.
 			rangedAlias then return ConstFieldSlotLookup.holds(MaxonType.integer)
-
-			// A GENERIC alias reaches here only when the cascade DECLINED to re-tag it, which
-			// `slotTypeOfGenericAlias` does for exactly one shape — an instance over an `interface` base, i.e.
-			// an existential wearing an alias's spelling. So it declines for the arm above's reason, and by
-			// the same argument: a slot this door could not resolve is not a slot it may judge.
-			genericAlias then return ConstFieldSlotLookup.unresolvableHere
 			structType then panic("ProgramSignatures.constFieldSlotTypeOfForm: field type '{String.from(name)}' is a declared `type` and still reads `named` — `denotedSlotType`'s `structType` arm re-tags every one of them to `structRef`, so arriving here means that arm did not run for a name the same registry answers for")
 			functionAlias then panic("ProgramSignatures.constFieldSlotTypeOfForm: field type '{String.from(name)}' is a function alias and still reads `named` — `denotedSlotType`'s `functionAlias` arm re-tags every one of them to `function`, unconditionally")
 			tupleAlias then panic("ProgramSignatures.constFieldSlotTypeOfForm: field type '{String.from(name)}' is a tuple alias and still reads `named` — `denotedSlotType`'s `tupleAlias` arm re-tags every one of them to the canonical tuple's `structRef`, unconditionally")
@@ -19441,14 +19399,14 @@ export type ProgramSignatures
 	// A METHOD rather than a free function for exactly that: mangling an instance needs the registry.
 	function constFactoryCallHashName(call ConstFactoryCall) returns ByteArray
 		return match call 'node'
-			call(callee, _) gives callee
-			construct(typeName, _) gives typeName
-			mapLiteral(giid, _) gives self.mangleGenericInstance(giid)
+			call(callee, _) or
+				construct or
 
-			// A case fixes its slot's type from the UNION, never from which case was written — the same fact
-			// `boxedUnionValue`'s own arm mixes, and for its reason: the case reaches only `__module_init`.
-			unionCase(typeName, _, _) gives typeName
-			arrayLiteral(giid, _) gives self.mangleGenericInstance(giid)
+				// A case fixes its slot's type from the UNION, never from which case was written — the same fact
+				// `boxedUnionValue`'s own arm mixes, and for its reason: the case reaches only `__module_init`.
+				unionCase gives callee
+			mapLiteral(giid, _) or
+				arrayLiteral gives self.mangleGenericInstance(giid)
 		end 'node'
 	end 'constFactoryCallHashName'
 
@@ -23203,18 +23161,18 @@ export type ProgramSignatures
 			// `GenericInstanceId` — so it crosses unchanged, exactly as `adoptType`'s own arms state.
 			boolean or
 				integer or
-				float gives t
-			exitCode or
-				unresolved gives t
-			string gives t
-			typeParameter gives t
-			genericInstance gives t
-			character gives t
+				float or
+				exitCode or
+				unresolved or
+				string or
+				typeParameter or
+				genericInstance or
+				character or
+				cstring gives t
 
 			// An existential carries the INTERFACE's per-file interner id, so it arrives by NAME exactly as
 			// `named`/`structRef`/`function` do.
 			interfaceRef(id) gives MaxonType.interfaceRef(self.typeNames.intern(foreignNameOf(from, id: id)))
-			cstring gives t
 		end 'r'
 	end 'adoptTypeFrom'
 
@@ -28846,16 +28804,13 @@ export type ProgramSignatures
 			out.append("(")
 		end 'moreThanOneArgumentIsParENTHESIZED'
 
-		var first = true
+		var names = StringArray.create()
 
 		for arg in args 'eachArg'
-			if not first 'afterTheFirst'
-				out.append(", ")
-			end 'afterTheFirst'
-
-			first = false
-			out.append(String.from(self.displayedTypeArgName(arg)))
+			names.push(String.from(self.displayedTypeArgName(arg)))
 		end 'eachArg'
+
+		out.append(joinedWith(names, separator: TypeArgumentSeparator))
 
 		if args.count() != 1 'closeTheParEN'
 			out.append(")")
@@ -28917,32 +28872,32 @@ export type ProgramSignatures
 		match maxonTypeTag(arg) 'k'
 			// No nominal identity: a scalar, a `String`, an opaque `T` and a function value all coerce by
 			// TAG (`checkDeclaredType`), so `Box with Integer` keeps accepting a plain `42`.
-			boolean then return EmptySourceText
-			integer then return EmptySourceText
-			float then return EmptySourceText
+			boolean or
+				integer or
+				float or
+				exitCode or
+				unresolved or
+				string or
+				function or
+				typeParameter or
+
+				// A Character argument carries no name — the builtin's identity is its tag, `string`'s answer.
+				character or
+				cstring then return EmptySourceText
 			named then return self.namedIdentityOf(self.nameOfId(typeNameIdOf(arg)), readerFilePath: readerFilePath)
-			exitCode then return EmptySourceText
-			unresolved then return EmptySourceText
 			void then panic("typeArgAggregateName: a type argument is `void` — a type argument is a TYPE, and the parser accepts no void one")
 
 			// A struct argument is named by itself and a nested instance by its compiled name — the same two
 			// spellings `mangleTypeArg` produces, which is why it is asked rather than re-derived.
 			structRef then return self.mangleTypeArg(arg).toByteArray()
-			string then return EmptySourceText
-			function then return EmptySourceText
-			typeParameter then return EmptySourceText
 
 			// CANONICAL, not `mangleTypeArg`: a nested instance's identity must match what the two
 			// value-side extractors produce for the same type, whichever way it was spelled.
 			genericInstance then return self.canonicalInstanceName(genericInstanceIdOf(arg))
 
-			// A Character argument carries no name — the builtin's identity is its tag, `string`'s answer.
-			character then return EmptySourceText
-
-			// An interface type is refused as a generic ARGUMENT at the front end (`Parser.checkGenericArgType`
-			// rule 4), because an element slot is one machine word and a fat pointer is two. This arm is that
-			// refusal's backstop, exactly as `primitiveTypeTagName`'s is.
-			cstring then return EmptySourceText
+			// An interface type is refused as a generic argument at the front end
+			// (`Parser.checkGenericArgType`), so this arm is that refusal's backstop, exactly as
+			// `primitiveTypeTagName`'s is.
 			interfaceRef then panic("typeArgAggregateName: an interface type reached a generic type ARGUMENT — an element slot is one machine word and a fat pointer is two, so no container holds one")
 		end 'k'
 	end 'typeArgAggregateName'
@@ -30138,11 +30093,10 @@ export type ProgramSignatures
 		// narrower than the drop one, and every arm below says which way it goes and why; what may not differ
 		// is which forms the two doors have HEARD OF.
 		//
-		// ⚠ The declared TYPES are now asked ahead of the alias registries, where this cascade asked
-		// `isGenericAlias` first. That is `declaredFormOf`'s order and it is deliberate: it is the order
-		// `typeIsManaged` takes, so an ILL-FORMED program (one name in two registries, E3006/E3061, which are
-		// reported by a whole-program check that runs AFTER this classifier has answered) now reaches the two
-		// boundaries on ONE path instead of two — which is the agreement this function's header demands.
+		// ⚠ The declared TYPES are asked ahead of the alias registries, in `declaredFormOf`'s order,
+		// which is the order `typeIsManaged` takes: an ILL-FORMED program (one name in two registries,
+		// E3006/E3061, reported by a whole-program check that runs AFTER this classifier has answered)
+		// reaches the two boundaries on ONE path — the agreement this function's header demands.
 		let form = try self.declaredFormInAnyFile(name) otherwise return false
 
 		match form 'form'
@@ -30152,18 +30106,15 @@ export type ProgramSignatures
 
 			// A payload-free enum's value is its i64 tag — nothing to move. `isBoxed` is the same bit the
 			// drop side routes on, through the same reader.
-			enumType then return self.declaredEnumIsBoxed(name)
-			unionType then return self.declaredEnumIsBoxed(name)
+			enumType or
+				unionType then return self.declaredEnumIsBoxed(name)
 
-			// An interface-typed slot is `E3011 Unknown type` before anything classifies it — existentials
-			// are unbuilt. The rung that lands a fat-pointer slot owes this arm its consume answer, which is
-			// why it is written out rather than ranged in with a neighbour.
-			interfaceType then return false
-
-			// A ranged alias IS its primitive and a function value is a bare code pointer; neither owns a
-			// record, so neither is ever moved into a box.
-			rangedAlias then return false
-			functionAlias then return false
+			// An interface-typed slot is `E3011 Unknown type` before anything classifies it. A ranged alias
+			// IS its primitive and a function value is a bare code pointer; neither owns a record, so
+			// neither is ever moved into a box.
+			interfaceType or
+				rangedAlias or
+				functionAlias then return false
 
 			// A SUPERSEDED spelling consumes nothing — no call site can name it. See
 			// `genericAliasSpellingIsSuperseded`, which records the two walks that reach this arm with one.
@@ -30171,8 +30122,7 @@ export type ProgramSignatures
 
 			// A tuple IS a struct box, and `denotedSlotAggregateName` above has already resolved the alias to
 			// the tuple's own canonical name — so this arm is reached only if that resolution is ever
-			// narrowed, and it must then answer exactly as the struct arm does. A3e's measured wrong answer
-			// is what happens when it does not.
+			// narrowed, and it must then answer exactly as the struct arm does.
 			tupleAlias then return self.structHasManagedField(self.tupleAliasTargetInAnyFile(name))
 		end 'form'
 	end 'typeArgIsOwned'
@@ -31344,19 +31294,17 @@ export type ProgramSignatures
 	end 'declaredSlotType'
 
 	// ⭐⭐ **THE CASCADE ITSELF, KEYED BY THE NAME RATHER THAN BY AN ID — SO THE OTHER FAMILY OF ASKER CAN
-	// SHARE IT (A4k).** `declaredSlotType` above holds an id minted against THIS index's interner; the
+	// SHARE IT.** `declaredSlotType` above holds an id minted against THIS index's interner; the
 	// whole-program payload/field CLASSIFIERS hold one minted against `project.typeNames` or a file
 	// artifact's, and an id is only a number without its table (`typeIsManaged`'s header records both
 	// directions in which reading it against the wrong one is a silent wrong answer). A name is the one
 	// currency both hold, so the cascade lives here and the id-keyed door is a two-line adapter over it.
 	//
-	// ⛔ **IT IS ONE FUNCTION BECAUSE THERE WERE TWO, AND THE SECOND ONE'S GAP WAS A READ-AFTER-FREE.**
-	// `classifyUnionPayload` resolved a `named` through a cascade of its own with a struct arm and no
-	// generic-alias arm, so `Holder with IntBox` fell through to `undeclaredName`, took the SCALAR store,
-	// and `h.item = IntBox.create(8)` printed `4557430888798830399` — `0x3F3F3F3F3F3F3F3F`, the free poison
-	// (A4i review). Closing that at the caller left the two cascades still disagreeing, and the next caller
-	// to hand it a bare `named` — a union PAYLOAD declared with a generic alias — was a clean but wrong
-	// `E3011 Unknown type 'PB'` on a legal program, plus a payload the construct never moved in.
+	// ⛔ **ONE CASCADE, BECAUSE A SECOND ONE'S GAP IS A READ-AFTER-FREE.** A payload classifier
+	// resolving a `named` through a cascade of its own with no generic-alias arm files `Holder with
+	// IntBox` as `undeclaredName` and takes the SCALAR store, so `h.item = IntBox.create(8)` reads
+	// freed memory; a union PAYLOAD declared with a generic alias gets a false `E3011 Unknown type`
+	// and a payload the construct never moved in.
 	//
 	// **`MapError` IS AN ANSWER, NOT A GAP.** Three names denote nothing this door can re-tag, and each is
 	// deliberate: a ranged INT alias (its NAME is what carries the range and the signedness — see
@@ -31371,18 +31319,13 @@ export type ProgramSignatures
 		match form 'form'
 			// ⭐⭐ **A STRUCT-TYPED SLOT (`export var leaf as Leaf`) arrives as a `named` for the reason the
 			// alias arms below do** — the SWEEP recorded the declaration before anything could say what the
-			// name denoted — and it is the re-tag that was MISSING, with exactly the consequence this
-			// cascade's header warns of: `named` reads as an INTEGER. Without this arm:
-			//   • `return self.leaf` from a `returns Leaf` method was `E3005 Cannot return 'int' from
+			// name denoted — and without this re-tag `named` reads as an INTEGER:
+			//   • `return self.leaf` from a `returns Leaf` method is `E3005 Cannot return 'int' from
 			//     function declared to return 'struct'` — a false reject of a legal program;
-			//   • `fieldStorageType` fell through to its undeclared-name recovery and typed the field's
-			//     `loadIndirect` `integer` (the same machine word, so no emitted byte moved — which is why
-			//     it went unnoticed);
-			//   • `emitFieldLoad` recorded the read as a BOXED-UNION candidate, a slot its own header says a
+			//   • `fieldStorageType` falls through to its undeclared-name recovery and types the field's
+			//     `loadIndirect` `integer` (the same machine word, so no emitted byte moves);
+			//   • `emitFieldLoad` records the read as a BOXED-UNION candidate, a slot its own header says a
 			//     struct field never touches.
-			// It is the arm the payload cascade DID have, which is exactly why the split hid for as long as
-			// it did: a struct-typed payload was answered correctly by both, so only the arms the copy
-			// lacked — the generic-instance one and the function one — ever showed the disagreement.
 			// Re-interned into `into` by NAME exactly as `adoptType`'s `named` arm is.
 			structType then return MaxonType.structRef(into.intern(name))
 
@@ -31390,24 +31333,22 @@ export type ProgramSignatures
 			// its type — a payload-free enum's value is its i64 tag and a boxed one's is its box — so the
 			// caller's fallthrough (an `adoptType` at `declaredSlotType`, an enum lookup at the payload
 			// classifier) is the rest of the answer rather than a recovery path.
-			enumType then throw MapError.keyNotFound
-			unionType then throw MapError.keyNotFound
+			enumType or
+				unionType or
 
-			// ⛔⛔ **THIS ARM MUST STAY A `throw`, AND THE RUNG THAT LANDED FAT-POINTER SLOTS IS WHY**
-			// (P1.7a-existentials slice 2). Its predecessor invited the opposite — *"the rung that lands a
-			// fat-pointer slot type has to come here and say what one denotes"* — and re-tagging here is
-			// exactly the wrong answer, because THIS DOOR IS A READ AND THE SLOT COUNT IS DECIDED IN THE
-			// COLUMN. An interface-typed field is re-tagged ONCE, by `normalizeSweptInterfaceTypes`, which
-			// goes through `StructLayout.retypeField` and so rebuilds the two-slot prefix sum with it.
-			// Answering `MaxonType.interfaceRef` here instead would hand `Parser.emitFieldLoad` an
-			// `interfaceRef` for a field the layout budgeted ONE slot for: the witness load at
-			// `offset + InterfaceWitnessHalfOffset` would read the NEXT field, and every later field's offset
-			// would be one slot short — a wrong answer at run time with no compile error anywhere.
-			//
-			// Its `functionAlias` sibling below DOES re-tag, and is safe for the one reason this arm is not: it
-			// does not change a field's slot count. ⚠ Its `genericAlias` sibling is only CONDITIONALLY safe —
-			// an instance over an `interface` base denotes an existential too, and that arm now says so.
-			interfaceType then throw MapError.keyNotFound
+				// ⛔ An interface name must stay a `throw` too, because this door is a read and the slot count
+				// is decided in the column. An interface-typed field is re-tagged once, by
+				// `normalizeSweptInterfaceTypes`, which goes through `StructLayout.retypeField` and so rebuilds
+				// the two-slot prefix sum with it. Answering `MaxonType.interfaceRef` here would hand
+				// `Parser.emitFieldLoad` an `interfaceRef` for a field the layout budgeted one slot for: the
+				// witness load at `offset + InterfaceWitnessHalfOffset` would read the next field, and every
+				// later field's offset would be one slot short — a wrong answer at run time with no compile
+				// error anywhere.
+				//
+				// The `functionAlias` arm below does re-tag, and is safe because it does not change a field's
+				// slot count. ⚠ The `genericAlias` arm is only conditionally safe — an instance over an
+				// `interface` base denotes an existential too, and that arm says so.
+				interfaceType then throw MapError.keyNotFound
 
 			// ⭐ A RANGED alias splits, and it is the ONLY arm that does: the FORM is one declaration
 			// (`typealias X = <primitive>(range)`, which is why `TypeDeclKind` holds one case for both,
@@ -31417,7 +31358,7 @@ export type ProgramSignatures
 
 			// A FUNCTION-typed slot (`export var op as UnaryOp`) arrives as a `named` — the SWEEP that
 			// recorded its declaration ran before the function alias was known — so it is re-tagged
-			// `function` HERE (P1.5-A1). One place, so every reader (a field READ, a `Self{op: op}`
+			// `function` HERE. One place, so every reader (a field READ, a `Self{op: op}`
 			// construction check, the store-width query, a union PAYLOAD's class) sees a function VALUE and
 			// not an int.
 			functionAlias then return MaxonType.function(into.intern(self.functionTypeAliases.shapeScopedName(name, readerFilePath: slotScopeFilePath)))
@@ -32483,7 +32424,7 @@ export type ProgramSignatures
 	// The NAME half, mirroring `declaredNameIsManaged`'s two promise exemptions exactly — a canonical mint
 	// (`Promise_Integer`) and a `genericAlias` (`IntPromise`). It is the same two arms read in the POSITIVE
 	// direction, which is why it is written beside them: an exemption added there and not here would make a
-	// promise unmanaged AND undroppable, which is the leak this whole slice is about.
+	// promise unmanaged AND undroppable, a leak.
 	function declaredNameIsAGreenThreadHandle(name ByteArray) returns bool
 		if self.isCanonicalInstanceName(name) 'aRenderedInstance'
 			return self.renderedNameIsPromiseHandle(name)
@@ -32495,9 +32436,9 @@ export type ProgramSignatures
 				unionType or
 				interfaceType or
 				rangedAlias or
-				functionAlias gives false
+				functionAlias or
+				tupleAlias gives false
 			genericAlias gives self.instanceIsPromiseHandle(self.bareGenericAliasInstance(name))
-			tupleAlias gives false
 		end 'form'
 	end 'declaredNameIsAGreenThreadHandle'
 
@@ -32540,14 +32481,14 @@ export type ProgramSignatures
 	// appended to `TypeDeclKind` must fail to compile here rather than be swallowed.
 	export function nameIsDeclared(name ByteArray) returns bool
 		return match try self.declaredFormInAnyFile(name) otherwise return false 'form'
-			structType gives true
-			enumType gives true
-			unionType gives true
-			interfaceType gives true
-			rangedAlias gives true
-			functionAlias gives true
-			genericAlias gives true
-			tupleAlias gives true
+			structType or
+				enumType or
+				unionType or
+				interfaceType or
+				rangedAlias or
+				functionAlias or
+				genericAlias or
+				tupleAlias gives true
 		end 'form'
 	end 'nameIsDeclared'
 
@@ -32575,26 +32516,26 @@ export type ProgramSignatures
 	// refcounted nor one word. Exactly one declared form answers yes: an INTERFACE type, whose value is the
 	// 16-byte fat pointer `(value, witness)`.
 	//
-	// ⚠ It exists because that fact was being read off the ownership door, which answers `false` for an
-	// interface and meant E3120 admitted an associated type bound to an interface NAME. MEASURED: the
-	// requirement's impl received one word where the fat pointer's two were passed, and the program
-	// SEGFAULTED (exit 139) on x64 and wasm alike.
+	// ⚠ The ownership door answers `false` for an interface, so reading this fact off it lets E3120
+	// admit an associated type bound to an interface NAME: the requirement's impl receives one word
+	// where the fat pointer's two are passed, and the program faults.
 	export function declaredNameIsFatPointer(name ByteArray) returns bool
 		match try self.declaredFormInAnyFile(name) otherwise return false 'form'
 			interfaceType then return true
 			structType or
 				enumType or
-				unionType then return false
-
-			// ⚠ **`genericAlias` STAYS `false` EVEN THOUGH `IntegerSeq = Seq with Integer` DENOTES AN
-			// EXISTENTIAL, and the reason is that this door never meets that spelling.** Both callers pass a
-			// conformance's recorded `withArgs`, and `Parser.readConformanceWithArg` RENDERS what it read — an
-			// existential alias renders to its interface name, `Seq` — so the alias reaches the `interfaceType`
-			// arm above under the bare name. Answering it here as well would be a second reading of one fact,
-			// reachable by nothing; `parameterized-existential.error.associated-type-bound-to-an-existential-alias`
-			// is what pins the rendering this rests on.
-			rangedAlias or
+				unionType or
+				rangedAlias or
 				functionAlias or
+
+				// ⚠ **`genericAlias` STAYS `false` EVEN THOUGH `IntegerSeq = Seq with Integer` DENOTES AN
+				// EXISTENTIAL, and the reason is that this door never meets that spelling.** Both callers pass
+				// a conformance's recorded `withArgs`, and `Parser.readConformanceWithArg` RENDERS what it read
+				// — an existential alias renders to its interface name, `Seq` — so the alias reaches the
+				// `interfaceType` arm above under the bare name. Answering it here as well would be a second
+				// reading of one fact, reachable by nothing;
+				// `parameterized-existential.error.associated-type-bound-to-an-existential-alias` pins the
+				// rendering this rests on.
 				genericAlias or
 				tupleAlias then return false
 		end 'form'
@@ -32613,22 +32554,16 @@ export type ProgramSignatures
 	// whatever `canonicalInstanceName` mints, per instance interned since the last ask. That is bounded by
 	// the instance COUNT over the whole compile rather than by the number of asks, and `deriveInstanceNames`
 	// has already driven it to completion before the parse — the fan-out this obligation exists for — so
-	// every ask on the hot path is genuinely a probe. What it is NOT is the old literal guarantee, and this
-	// says so rather than leaving a reader to discover an allocation under a comment promising none. (The
-	// walk it replaced honoured the letter no better: it minted a `GenericInstanceIdArray` per instance, on
-	// EVERY ask — see `CanonicalInstanceNameSet` for that quadratic's measurement.)
-	//
-	// ⛔ THIS HEADER SAT ABOVE `isCanonicalInstanceName`, forty lines from the function it describes, and a
-	// reader arriving at either found the other one's contract. Moved to its statement (BATCH10 review).
+	// every ask on the hot path is genuinely a probe. It is not a literal allocation-free guarantee.
 	export function declaredNameIsManaged(name ByteArray) returns bool
 		// ⚠ **A GENERIC INSTANCE ARRIVES AS ITS CANONICAL NAME AT SOME DOORS, AND NO REGISTRY IS KEYED BY
-		// THAT.** `genericAliases` holds the ALIAS (`IntBox`); `renderDeclaredTypeName` renders an instance as
-		// `canonicalInstanceName` (`Box_Integer`), which `declaredFormOf` matches nothing for — so the walk
-		// below fell straight through to `return false` and called a heap box unmanaged. MEASURED at the E3120
-		// door: `implements Maker with IntBox` and `with IntArr` both compiled and **exited 101**, the leak
-		// gate, on x64 and wasm alike. Asked FIRST because it is the one form whose name the registries cannot
-		// see, and answered `true` for the same reason the `genericAlias` arm below is: an instance is a heap
-		// box — an `Array`'s record and buffer, a `Box`'s box.
+		// THAT.** `genericAliases` holds the ALIAS (`IntBox`); `renderDeclaredTypeName` renders an
+		// instance as `canonicalInstanceName` (`Box_Integer`), which `declaredFormOf` matches nothing for
+		// — so the walk below would fall through to `return false` and call a heap box unmanaged, and
+		// `implements Maker with IntBox` would leak (exit 101). Asked FIRST because it is the one form
+		// whose name the registries cannot see, and answered `true` for the same reason the
+		// `genericAlias` arm below is: an instance is a heap box — an `Array`'s record and buffer, a
+		// `Box`'s box.
 		if self.isCanonicalInstanceName(name) 'aRenderedInstance'
 			return not self.renderedNameIsPromiseHandle(name)
 		end 'aRenderedInstance'
@@ -32645,34 +32580,33 @@ export type ProgramSignatures
 			// A payload-free enum's value IS its i64 tag — a scalar; a boxed one's is a heap box. `isBoxed`
 			// is the same bit `unionBoxDropCallee` routes on, so what is called managed here is exactly what
 			// gets a drop there.
-			enumType then return self.declaredEnumIsBoxed(name)
-			unionType then return self.declaredEnumIsBoxed(name)
+			enumType or
+				unionType then return self.declaredEnumIsBoxed(name)
 
-			// ⭐ An interface-typed slot owns its conformer's record (P1.7a-existentials slice 2) — the same
-			// answer `typeIsManaged`'s `interfaceRef` arm gives, which is where the reasoning lives. This arm
-			// is reached by NAME rather than by tag: a conformer name handed to `existentialDestroyCallee`,
-			// and any `named` annotation `normalizeSweptInterfaceTypes` did not re-tag.
-			interfaceType then return true
+			// ⭐ An interface-typed slot owns its conformer's record — the same answer `typeIsManaged`'s
+			// `interfaceRef` arm gives, which is where the reasoning lives. This arm is reached by NAME
+			// rather than by tag: a conformer name handed to `existentialDestroyCallee`, and any `named`
+			// annotation `normalizeSweptInterfaceTypes` did not re-tag.
+			interfaceType or
+
+				// A tuple IS a struct box. `denotedAggregateName` above resolves a tuple alias to the tuple's own
+				// canonical name before this is asked, so this arm is reached only if that resolution is ever
+				// narrowed — and it must then still answer `true`, or the tuple leaks (exit 101).
+				tupleAlias then return true
 
 			// A ranged int or float alias IS its primitive — a scalar either way.
-			rangedAlias then return false
-
 			// A function value is a bare code pointer; it owns no record. (A CLOSURE's environment is owned
 			// by the closure VALUE, not by the alias that names its signature.)
-			functionAlias then return false
+			rangedAlias or
+				functionAlias then return false
 
 			// A generic instance is a heap box — an `Array`'s record + buffer, a `Box`'s box — so it is
 			// managed and dropped by the owning struct's cascade. ⚠ EXCEPT a `Promise` instance, whose value
-			// is a green-thread handle owning no record (P1.5-B2c) — the same exemption the `genericInstance`
+			// is a green-thread handle owning no record — the same exemption the `genericInstance`
 			// TAG arm above makes, and it is needed at BOTH because a `typealias StrPromise = Promise with
 			// String` reaches this door by NAME. `bareGenericAliasInstance` is total under this arm's own
 			// precondition (`declaredFormOf` answered `genericAlias`, which is `genericAliases.contains`).
 			genericAlias then return not self.instanceIsPromiseHandle(self.bareGenericAliasInstance(name))
-
-			// A tuple IS a struct box. `denotedAggregateName` above resolves a tuple alias to the tuple's own
-			// canonical name before this is asked, so this arm is reached only if that resolution is ever
-			// narrowed — and it must then still answer `true`, for A3e's measured exit-101 reason.
-			tupleAlias then return true
 		end 'form'
 	end 'declaredNameIsManaged'
 
@@ -34226,36 +34160,34 @@ export type ProgramSignatures
 	// costing an allocation rather than a wrong answer this time.
 	function adoptValueReturn(rt MaxonReturnType, inner MaxonType, into TypeNameInterner) returns MaxonReturnType
 		return match inner 'r'
-			named gives MaxonReturnType.value(self.adoptType(inner, into: into))
-			structRef gives MaxonReturnType.value(self.adoptType(inner, into: into))
+			named or
+				structRef or
+
+				// A function return type carries its governing name id, so it re-interns like `named`.
+				function or
+
+				// A type-parameter or generic-instance return type (`get() returns T`) carries no per-file
+				// interner id (a source-derived digest, a whole-program giid), so it crosses files unchanged;
+				// routing it through `adoptType` keeps the one crossing door.
+				typeParameter or
+				genericInstance or
+
+				// An existential return type carries the interface's per-file interner id, so it re-interns
+				// like `named`. This is the crossing that makes `let p = f.make()` in another file name the
+				// same interface the declaring file did — which is what the result's dispatch resolves its
+				// slot against.
+				interfaceRef gives MaxonReturnType.value(self.adoptType(inner, into: into))
+
+			// A `String`, `Character` or primitive return type carries no interned name, so it crosses files
+			// unchanged.
 			boolean or
 				integer or
-				float gives rt
-			exitCode or
-				unresolved gives rt
-
-			// A `String` return type carries no interned name (it is a builtin, like a primitive), so
-			// crossing files needs no re-interning — it passes through unchanged.
-			string gives rt
-
-			// A FUNCTION return type carries its governing name id (P1.5-A1), so it re-interns like `named`.
-			function gives MaxonReturnType.value(self.adoptType(inner, into: into))
-
-			// A TYPE-PARAMETER / GENERIC-INSTANCE return type (P1.6-A) — `get() returns T`. Neither carries a
-			// per-file interner id (a source-derived DIGEST since W14 / a whole-program giid), so like a
-			// primitive it crosses files unchanged. `adoptType` handles both identically; routing through it
-			// keeps the one crossing door.
-			typeParameter gives MaxonReturnType.value(self.adoptType(inner, into: into))
-			genericInstance gives MaxonReturnType.value(self.adoptType(inner, into: into))
-
-			// A `Character` return type carries no interned name either — it crosses files unchanged.
-			character gives rt
-
-			// An EXISTENTIAL return type carries the INTERFACE's per-file interner id, so it re-interns like
-			// `named`. This is the crossing that makes `let p = f.make()` in another file name the same
-			// interface the declaring file did — which is what the result's dispatch resolves its slot against.
-			interfaceRef gives MaxonReturnType.value(self.adoptType(inner, into: into))
-			cstring gives rt
+				float or
+				exitCode or
+				unresolved or
+				string or
+				character or
+				cstring gives rt
 		end 'r'
 	end 'adoptValueReturn'
 
@@ -34269,13 +34201,13 @@ export type ProgramSignatures
 	// Exported for the union-payload sites: unlike a struct field or a return type, a union payload's
 	// `declaredType` is already in the caller's hand (it fetched the layout and walked `payloadsAt`),
 	// so it needs this bare crossing rather than a name+index fetch door like `fieldTypeOf`. Routing
-	// those sites through here is what stopped a signatures-interner payload id being classified /
-	// minted against the parser's own interner (OPEN #52).
+	// those sites through here is what keeps a signatures-interner payload id from being classified /
+	// minted against the parser's own interner.
 	export function adoptType(t MaxonType, into TypeNameInterner) returns MaxonType
 		return match t 'r'
 			named(id) gives MaxonType.named(into.intern(self.nameOfId(id)))
 
-			// ⭐ **A TUPLE `structRef` IS CANONICALIZED ON THE WAY OUT (P1.10), and this door is where it has
+			// ⭐ **A TUPLE `structRef` IS CANONICALIZED ON THE WAY OUT, and this door is where it has
 			// to be.** A tuple minted by the DECLARATION SWEEP names its elements the way the source spelled
 			// them, because the registries that say what those spellings MEAN are still being built when the
 			// sweep runs (see `internTupleType`). Every sweep-recorded type reaches a reader through here — a
@@ -34283,36 +34215,30 @@ export type ProgramSignatures
 			// here, is what makes `let t = makePair(…)` and a locally-built `(10, 32)` the same type. It is the
 			// same arrangement `declaredSlotType`'s re-tags live under, one tier down.
 			structRef(id) gives MaxonType.structRef(into.intern(self.canonicalNameOfStruct(self.nameOfId(id))))
+
+			// A `String`, a `Character` and a primitive carry no name id, so they pass through unchanged.
 			boolean or
 				integer or
-				float gives t
-			exitCode or
-				unresolved gives t
+				float or
+				exitCode or
+				unresolved or
+				string or
 
-			// A `String` carries no name id, so like a primitive it passes through unchanged.
-			string gives t
+				// A type-parameter reference and a generic instance carry GLOBAL ids — a `(declaring type,
+				// parameter name)` DIGEST, a pure function of source text, and a `GenericInstanceId` keyed on
+				// THIS index's own registry — not per-file interner ids, so there is nothing to remap.
+				typeParameter or
+				genericInstance or
+				character or
+				cstring gives t
 
-			// A FUNCTION value carries its governing name id (P1.5-A1), re-interned by NAME like `named`.
+			// A FUNCTION value carries its governing name id, re-interned by NAME like `named`.
 			function(id) gives MaxonType.function(into.intern(self.nameOfId(id)))
-
-			// A type-parameter reference and a generic instance (P1.6-A) carry GLOBAL ids — a
-			// `(declaring type, parameter name)` DIGEST and a `GenericInstanceId` keyed on THIS index's own
-			// registry — not per-file interner ids, so there is nothing to remap: they pass through
-			// unchanged, like a primitive. ⚠ W14 replaced the type parameter's id and the arm still holds,
-			// but for a NEW reason that has to be stated: a POSITION was global because every declaration
-			// numbers from zero, and a DIGEST is global because it is a pure function of source text. Neither
-			// is an interner id, which is the only property this arm needs.
-			typeParameter gives t
-			genericInstance gives t
-
-			// A `Character` carries no name id, so like a primitive it passes through unchanged.
-			character gives t
 
 			// An existential carries the INTERFACE's name id, re-interned by NAME like `named` — which is
 			// what lets a field declared at an interface type and a call returning one cross into a reader's
 			// own interner and still name the interface the dispatch resolves against.
 			interfaceRef(id) gives MaxonType.interfaceRef(into.intern(self.nameOfId(id)))
-			cstring gives t
 		end 'r'
 	end 'adoptType'
 
@@ -34792,8 +34718,8 @@ export type ProgramSignatures
 	function rowSetFlag(query RowSetQuery) returns bool
 		match self.rowSetAnswer(query) 'answer'
 			holds(value) then return value
-			noInstance then panic("ProgramSignatures.rowSetFlag: a flag query was answered with an instance match")
-			instance then panic("ProgramSignatures.rowSetFlag: a flag query was answered with an instance match")
+			noInstance or
+				instance then panic("ProgramSignatures.rowSetFlag: a flag query was answered with an instance match")
 		end 'answer'
 	end 'rowSetFlag'
 

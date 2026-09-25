@@ -1,0 +1,48 @@
+let InlinedCallLineCaseLabel = "a-breakpoint-on-an-inlined-call-line-is-verified"
+let FirstCallAnchor = "first-call"
+let CallerFunctionName = "main"
+
+type InlinedCallLineSession implements DapSession
+	let executable as FilePath
+	let source as FilePath
+	let anchored as SourceLine
+	export var placed as JsonDoc
+	export var stopReason as String
+	export var frameNames as StringArray
+	export var frameLines as DapNumberArray
+
+	static function create(executable FilePath, source FilePath, anchored SourceLine) returns InlinedCallLineSession
+		return Self{executable: executable, source: source, anchored: anchored, placed: JsonDoc.create(), stopReason: "", frameNames: StringArray.create(), frameLines: DapNumberArray.create()}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+		_ = try client.request(LaunchCommand, argumentsJson: dapLaunchArguments(self.executable))
+		_ = try client.awaitEvent(InitializedEvent)
+
+		self.placed = try client.request(SetBreakpointsCommand, argumentsJson: dapSetBreakpointsArguments(self.source, line: self.anchored))
+
+		_ = try client.request(ConfigurationDoneCommand)
+
+		let stopped = try client.awaitEvent(StoppedEvent)
+		self.stopReason = dapBodyString(stopped, key: "reason")
+
+		let frames = try client.request(StackTraceCommand, argumentsJson: dapThreadArguments(dapBodyNumber(stopped, key: "threadId")))
+		self.frameNames = dapStackFrameNames(frames)
+		self.frameLines = dapStackFrameLines(frames)
+
+		_ = try client.request(DisconnectCommand)
+	end 'drive'
+end 'InlinedCallLineSession'
+
+test 'a source breakpoint on a line whose whole statement is an inlined call is verified and stops at that line'
+	let staged = dapStagedFixture(InlinedCallLineCaseLabel, fixture: LeafPairFixtureName)
+	let anchored = dapAnchorLine(staged, anchor: FirstCallAnchor)
+	var session = InlinedCallLineSession.create(dapBuildFixture(staged), source: dapStagedSource(staged), anchored: anchored)
+	try dapRunSession(session, completing: "complete")
+
+	try Expect.isTrue(dapBreakpointVerified(session.placed, index: 0), message: "control passes through a line whose code is an inlined body, so a breakpoint on it binds; it was left unverified: {dapDescribed(session.placed)}")
+	try Expect.equal(session.stopReason, expected: BreakpointReason, message: "the program must stop on the breakpoint at the call line")
+	try Expect.equal(dapFrameNameAt(session.frameNames, frame: 0), expected: CallerFunctionName, message: "the top frame is the caller, standing at its call. Frames: {dapRendered(session.frameNames)}")
+	try Expect.equal(dapFrameNumberAt(session.frameLines, frame: 0) as AssertedInt, expected: anchored as AssertedInt, message: "the top frame stands on the call line. Frames: {dapRendered(session.frameNames)}")
+end 'a source breakpoint on a line whose whole statement is an inlined call is verified and stops at that line'

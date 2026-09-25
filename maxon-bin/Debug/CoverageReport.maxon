@@ -418,6 +418,7 @@ let ArmCountSeparator = "="
 let ColumnSeparator = "|"
 let LineFeed = "\n"
 let CarriageReturn = "\r"
+let JsonElementSeparator = ","
 
 function renderText(report CovReport) returns String
 	let totals = summarize(report)
@@ -596,18 +597,13 @@ function jsonTargetStatus(status CovTargetStatus) returns String
 end 'jsonTargetStatus'
 
 function jsonFile(file CovFile) returns String
-	var out = "\{\"path\":{Json.quote(reportPathDisplay(file.path))},\"lines\":["
-	var first = true
+	var lines = StringArray.create()
 
 	for line in file.lines 'eachLine'
-		out.append("" if first else ",")
-		out.append(jsonLine(line))
-		first = false
+		lines.push(jsonLine(line))
 	end 'eachLine'
 
-	out.append("]\}")
-
-	return out
+	return "\{\"path\":{Json.quote(reportPathDisplay(file.path))},\"lines\":[{joinedWith(lines, separator: JsonElementSeparator)}]\}"
 end 'jsonFile'
 
 // An eliminated line reports no count at all rather than a zero a consumer would read as "never executed".
@@ -626,18 +622,13 @@ function stateName(state CovLineState) returns String
 end 'stateName'
 
 function jsonBranch(branch CovBranch) returns String
-	var out = "\{\"file\":{Json.quote(reportPathDisplay(branch.file))},\"line\":{branch.line},\"col\":{branch.column},\"arms\":["
-	var first = true
+	var arms = StringArray.create()
 
 	for arm in branch.arms 'eachArm'
-		out.append("" if first else ",")
-		out.append(jsonArm(arm))
-		first = false
+		arms.push(jsonArm(arm))
 	end 'eachArm'
 
-	out.append("]\}")
-
-	return out
+	return "\{\"file\":{Json.quote(reportPathDisplay(branch.file))},\"line\":{branch.line},\"col\":{branch.column},\"arms\":[{joinedWith(arms, separator: JsonElementSeparator)}]\}"
 end 'jsonBranch'
 
 // `implicit` is written only where it is TRUE: an arm the source did write has nothing to say here, and a
@@ -675,18 +666,18 @@ module function printCoverageReport(exePath String, dataPath String, targetStatu
 	end 'loaded'
 end 'printCoverageReport'
 
-function refuseCoverageReport(reason String) returns ExitCode
+module function refuseCoverageReport(reason String) returns ExitCode
 	printError("coverage: {reason}\n")
 
-	return RefusedCoverageExit
+	return OwnFailureExit
 end 'refuseCoverageReport'
 
-// ⭐ stdout is the report and nothing else. The exit code answers whether the MEASUREMENT completed: a run
-// that died before writing its counters is real data CI must not read as a measured pass.
+// The exit code answers whether the measurement completed, never the measured program's status: a
+// run that died before writing its counters must not read to CI as a measured pass.
 function emitCoverageReport(report CovReport, json bool) returns ExitCode
 	print("{renderJson(report)}\n" if json else renderText(report))
 
-	return 0 if report.runCompleted else RefusedCoverageExit
+	return SucceededExit if report.runCompleted else OwnFailureExit
 end 'emitCoverageReport'
 
 function loadCoverageReport(exePath String, dataPath String, targetStatus CovTargetStatus) returns CovLoad

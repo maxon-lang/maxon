@@ -1,0 +1,13 @@
+let InlineStressCaseLabel = "byte-identical-debug-info-under-inlining"
+
+test 'a program the inliner splices many bodies with folded and dead locals into is byte-identical without its sidecar'
+	let identity = ImageIdentityCase.staging(InlineStressCaseLabel, fixture: InlineStressFixtureName)
+
+	let withSidecar = identity.built("the default", extraArguments: StringArray.create(), retainedAs: FirstDefaultImageName)
+	try Expect.isTrue(withSidecar.wroteASidecar, message: "a default build writes `{identity.sidecar.filename()}` beside its executable, and a build that wrote none compares two binaries nobody can debug.")
+
+	let withoutSidecar = identity.built("the `{NoDebugInfoBuildFlag}`", extraArguments: [NoDebugInfoBuildFlag], retainedAs: NoSidecarImageName)
+	try Expect.isFalse(withoutSidecar.wroteASidecar, message: "`{NoDebugInfoBuildFlag}` wrote `{identity.sidecar.filename()}` anyway.")
+
+	try identity.requireSameImage(withSidecar.retained, second: withoutSidecar.retained, why: "every splice here copies a callee whose locals the inliner records only under debug info, and some of them name values no op defines once folding has run; numbering the spliced values by those names would make the value space, and with it the emitted code, depend on whether a sidecar was asked for.")
+end 'a program the inliner splices many bodies with folded and dead locals into is byte-identical without its sidecar'

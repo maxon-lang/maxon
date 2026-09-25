@@ -1,0 +1,42 @@
+let ReplacedSessionStagingDir = "temp/mcp-debug-replaced-session"
+let ReplacementStagingDir = "temp/mcp-debug-replacement-session"
+let FinalLine = "the replaced session's last words"
+let ContinueWaitSeconds = "0.3"
+let DelayBeforeTheLineMs = 1000
+let LineWrittenMs = 3000
+
+function lateLineProgramSource() returns String
+	var source = ""
+	source.append("function main() returns ExitCode\n")
+	source.append("\tsleep({DelayBeforeTheLineMs})\n")
+	source.append("\tprint(\"{FinalLine}\\n\")\n")
+	source.append("\n")
+	source.append("\treturn 0\n")
+	source.append("end 'main'\n")
+
+	return source
+end 'lateLineProgramSource'
+
+test 'a debug_start over a live session answers the lines the replaced program wrote since the last call'
+	let replacedProgram = stagedProgram(ReplacedSessionStagingDir, fileName: "main.maxon", source: lateLineProgramSource())
+	let replacedExecutable = buildStagedProgram(replacedProgram)
+	let replacement = stagedProgram(ReplacementStagingDir, fileName: "main.maxon", source: debuggableProgramSource())
+	let replacementExecutable = buildStagedProgram(replacement)
+
+	var session = StreamingMcpSession.startFrom(testedCompilerPath())
+	stdioHandshake(session)
+
+	let started = stdioToolCall(session, id: 2, name: DebugStartTool, argumentsJson: argumentsOf([executableMember(replacedExecutable), secondsMember(StopTimeoutArgument, seconds: ContinueWaitSeconds)]))
+	let continued = stdioToolCall(session, id: 3, name: DebugContinueTool)
+	sleep(LineWrittenMs)
+	let replaced = stdioToolCall(session, id: 4, name: DebugStartTool, argumentsJson: debugExecutableArgument(replacementExecutable))
+	let stopped = stdioToolCall(session, id: 5, name: DebugStopTool)
+
+	_ = try session.close() otherwise 0
+
+	try Expect.isFalse(toolCallIsError(started), message: "the control: `{DebugStartTool}` must launch the first program: {toolCallText(started)}")
+	try Expect.isFalse(debugOutputLines(continued).contains(FinalLine), message: "the control: the first program waits {DelayBeforeTheLineMs} ms before it writes, so `{DebugContinueTool}`'s answer after {ContinueWaitSeconds} s must not carry the line yet; it answered {toolCallText(continued)}")
+	try Expect.isFalse(toolCallIsError(replaced), message: "the control: a second `{DebugStartTool}` must launch the replacement: {toolCallText(replaced)}")
+	try Expect.isTrue(debugOutputLines(replaced).contains(FinalLine), message: "⛔ A `{DebugStartTool}` OVER A LIVE SESSION REAPS IT, AND WHAT THE REPLACED PROGRAM WROTE SINCE THE LAST CALL IS ANSWERED THERE OR NOWHERE. The second start's output must carry `{FinalLine}`; it answered {toolCallText(replaced)}")
+	try Expect.isFalse(toolCallIsError(stopped), message: "`{DebugStopTool}` refused to end the replacement session: {toolCallText(stopped)}")
+end 'a debug_start over a live session answers the lines the replaced program wrote since the last call'

@@ -1,0 +1,15 @@
+let ProjectSiblingArgumentDirName = "maxon-tests-lsp-diagnostics-project-sibling-argument"
+let ProjectSiblingArgumentDeclaringFileName = "digits.maxon"
+let ProjectSiblingArgumentBufferFileName = "main.maxon"
+let ProjectSiblingArgumentDeclaringSource = "export function siblingDigitSet() returns CharacterSet\n\treturn CharacterSet.decimalDigits()\nend 'siblingDigitSet'\n"
+let ProjectSiblingArgumentBufferSource = "function allDigits(text String) returns bool\n\treturn not text.isEmpty() and text.trimStart(siblingDigitSet()).isEmpty()\nend 'allDigits'\n\nfunction main() returns ExitCode\n\treturn 0 if allDigits(\"42\") else 1\nend 'main'\n"
+
+test 'a call a sibling declares, passed as an argument to an overloaded method, publishes nothing'
+	let root = stagedProjectDiagnosticsRoot(ProjectSiblingArgumentDirName)
+	writeCorpusFile(root, fileName: ProjectSiblingArgumentDeclaringFileName, content: ProjectSiblingArgumentDeclaringSource)
+	writeCorpusFile(root, fileName: ProjectSiblingArgumentBufferFileName, content: ProjectSiblingArgumentBufferSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: ProjectSiblingArgumentBufferFileName, content: ProjectSiblingArgumentBufferSource)
+
+	try expectNoProjectDiagnostics(probe, note: "`siblingDigitSet` is declared by the sibling `{ProjectSiblingArgumentDeclaringFileName}` and returns the `CharacterSet` `trimStart` takes, and a `maxon build` of the staged project exits 0. The buffer alone cannot see the declaration, so the call's result has no type there — and neither the overload choice nor the argument check may report a mismatch about a type the compile never knew.")
+end 'a call a sibling declares, passed as an argument to an overloaded method, publishes nothing'

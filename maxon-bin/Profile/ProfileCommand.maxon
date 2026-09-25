@@ -5,11 +5,9 @@
 // thing read besides the running process is the `.mxdbg` sidecar an ordinary build already writes, which
 // leaves the executable byte-identical. So the program measured is the program that ships.
 //
-// ⭐⭐ **EVERY REFUSAL HERE IS THE REFERENCE DRIVER'S OWN SENTENCE, AND THAT IS A CONTRACT RATHER THAN A
-// STYLE.** A report is a MEASUREMENT and no two runs of a sampled program agree, so a refusal is the only
-// part of this tool that two implementations can be compared on byte for byte — and
-// `tests/profile/profile-refusals.test.maxon` does exactly that. A "better" wording here is the failure,
-// not a fix.
+// Every refusal here is the reference driver's own sentence, and that is a contract: a report is a
+// measurement no two runs agree on, so a refusal is the only part of this tool two implementations can
+// be compared on byte for byte. A "better" wording breaks that comparison.
 //
 // ⚠ **THE BANNER SAYS `maxon` WHERE THE REFERENCE SAYS `maxon`, AND THAT IS THE ONE DIFFERENCE THE
 // CORPUS NORMALIZES.** A usage banner spells the command a user should type, so demanding byte identity
@@ -85,12 +83,7 @@
 	// The kill a deadline performs: the shortest wait that still terminates the child.
 	let KillWaitMs = 1 as DurationMs
 
-	let MillisPerSecond = 1000.0
 	let NanosPerMilli = 1000000.0
-
-	// A command line this tool could not act on, and a measurement that did not complete, are one answer:
-	// something other than a finished report. Distinct from the MEASURED program's status, which is data.
-	let RefusedProfileExit = 1 as ExitCode
 
 	// What one `profile` command line asked for. A record rather than a local per flag, for `MaxonArgs`'
 	// reason: an accumulating chain carries one value across its joins instead of one register per option.
@@ -325,9 +318,10 @@
 	end 'launchAndSample'
 
 	function launchAndSampleCalibrated(request ProfileRequest, target FilePath, placement ProfilePlacement, sidecar MxdbgReader, cyclesPerTick ProfileCyclesPerTick) returns ExitCode
-		// ⚠ ROOTED, because a spawn resolves a bare program name against PATH rather than against the working
-		// directory — so `dir/prog.exe` would be reported missing by the OS moments after this file found it.
-		var child = try StreamingSubprocess.spawnWithEnvironment(Executable.path(target.anchoredAt(Directory.currentPath())), arguments: request.targetArgs, workingDirectory: inheritedWorkingDir(), environment: profileChildEnvironment(request)) otherwise (e) 'didNotStart'
+		// Rooted, because a spawn resolves a bare program name against PATH rather than against the
+		// working directory, so `dir/prog.exe` would be reported missing by the OS moments after this
+		// file found it.
+		var child = try StreamingSubprocess.spawnWithEnvironment(Executable.path(target.anchoredAt(Directory.currentPath())), arguments: request.targetArgs, workingDirectory: inheritedWorkingDirectory(), environment: profileChildEnvironment(request)) otherwise (e) 'didNotStart'
 			return refuseProfile("could not run {reportPathDisplay(request.exePath)}: {e.displayReason()}")
 		end 'didNotStart'
 
@@ -384,15 +378,12 @@
 		return outcome
 	end 'sampleUntilItEnds'
 
-	// ⭐⭐ **THE TICK LOOP, ON THE THREAD THAT CALLED IT.** Per tick, in this order: refresh the thread table
-	// if it is due, charge every thread the CPU it has consumed, drain what the child has said without
-	// blocking, check whether it is still alive, then step the ABSOLUTE deadline and wait for it.
 	function runProfileTicks(request ProfileRequest, child StreamingSubprocess, session ProfileSession, image ProfileImage) returns ExitCode
 		var accumulator = ProfileAccumulator.create()
 		var frames = ProfileStringArray.create()
 
 		let intervalTicks = profileIntervalTicks(request.rateHz)
-		let deadlineNanos = trunc(request.timeoutSeconds * MillisPerSecond * NanosPerMilli) as DurationNanos
+		let deadlineNanos = trunc(request.timeoutSeconds * MillisecondsPerSecond * NanosPerMilli) as DurationNanos
 		let started = Clock.nowNanos()
 		var lastRefresh = started
 		var deadline = __Builtins.profileNowFileTime() + intervalTicks
@@ -410,7 +401,7 @@
 			session.sampleOnce(accumulator, image: image, frames: frames)
 			_ = forwardChildOutput(child, routing: ChildOutputRouting.allToStandardError, budget: ChildLineBudget.atMost(MaxDrainedLinesPerTick))
 
-			// ⭐ LIVENESS IS CHECKED AFTER THE SAMPLE, so a short program's last moments are measured rather
+			// Liveness is checked after the sample, so a short program's last moments are measured rather
 			// than lost to a check that happened to win the race.
 			let observed = profileChildExit(child)
 
@@ -431,7 +422,7 @@
 		let seconds = profileSecondsOf(Clock.elapsedNanos(started))
 
 		if not completed 'stillRunning'
-			// A deadline that fired leaves a live child, and the only wait this surface has that ENDS one is
+			// A deadline that fired leaves a live child, and the only wait this surface has that ends one is
 			// the one that terminates it at its own timeout.
 			_ = try child.waitWithTimeout(KillWaitMs) otherwise 0
 		end 'stillRunning'
@@ -457,8 +448,9 @@
 		end 'k'
 	end 'profileStatusObserved'
 
-	// ⛔ stdout is the report and nothing else. The exit code answers whether the MEASUREMENT completed: a
-	// run killed at its deadline is real data CI must not read as a finished measurement.
+	// Stdout is the report and nothing else. The exit code answers whether the measurement completed,
+	// not the measured program's status: a run killed at its deadline is real data CI must not read as
+	// a finished measurement, so it exits as a refusal does.
 	function emitProfileReport(request ProfileRequest, report ProfileReport) returns ExitCode
 		if request.json 'machineJson'
 			print("{renderProfileJson(report)}\n")
@@ -468,7 +460,7 @@
 			print(renderProfileText(report))
 		end 'forAReader'
 
-		return 0 if report.runCompleted else RefusedProfileExit
+		return SucceededExit if report.runCompleted else OwnFailureExit
 	end 'emitProfileReport'
 
 	// A refusal reached with a child already running: it is this tool's orphan, so it is ended before the
@@ -488,7 +480,7 @@
 	function refuseProfile(reason String) returns ExitCode
 		printError("{ProfileSubcommandName}: {reason}\n")
 
-		return RefusedProfileExit
+		return OwnFailureExit
 	end 'refuseProfile'
 
 	// A refusal about the COMMAND LINE, which is the one kind a banner answers.
@@ -514,18 +506,16 @@
 		printError("            This tool's own exit code says whether the MEASUREMENT completed;\n")
 		printError("            the program's own status is reported as `target exit code`.\n")
 
-		return RefusedProfileExit
+		return OwnFailureExit
 	end 'refuseProfileUsage'
 #else
-	/// ⛔ **REFUSED BY NAME RATHER THAN ABSENT**, exactly as `monitor` is. Sampling suspends another process's
-	/// threads and reads its register file as an x64 `CONTEXT`, which is `TargetFacilities.processSampling`'s
-	/// row — and a compiler without that intrinsic cannot serve it at all. The driver still dispatches
-	/// on a
-	/// command enum whose match is exhaustive, so a caller who typed `profile` is owed the reason rather than
-	/// a usage listing that says nothing about why.
+	/// Refused by name rather than absent, as `monitor` is. Sampling suspends another process's
+	/// threads and reads its register file as an x64 `CONTEXT` (`TargetFacilities.processSampling`),
+	/// which a compiler without that intrinsic cannot serve. The driver's command match is exhaustive,
+	/// so a caller who typed `profile` is owed the reason rather than a usage listing.
 	export function runProfile(args MaxonArgs) returns ExitCode
 		printError("maxon profile: unavailable in this build. Sampling suspends the target's threads and reads an x64 CONTEXT record, which only an x64-Windows compiler can do — so the {args.paths.count()} argument(s) after `profile` name a program it cannot measure.\n")
 
-		return 1
+		return OwnFailureExit
 	end 'runProfile'
 #endif

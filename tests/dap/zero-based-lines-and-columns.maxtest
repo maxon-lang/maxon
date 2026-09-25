@@ -1,0 +1,57 @@
+let ZeroBasedCaseLabel = "zero-based-lines-and-columns"
+let ZeroBasedPrintAnchor = "render-print"
+let ZeroBasedCallAnchor = "main-call"
+let ZeroBasedCallSpelling = "render("
+let OneBasedOffset = 1
+let ZeroBasedCallerFrame = 1
+
+type ZeroBasedSession implements DapSession
+	let executable as FilePath
+	let source as FilePath
+	let printedAt as SourceLine
+	export var placed as JsonDoc
+	export var stopReason as String
+	export var frameLines as DapNumberArray
+	export var frameColumns as DapNumberArray
+
+	static function create(executable FilePath, source FilePath, printedAt SourceLine) returns ZeroBasedSession
+		return Self{executable: executable, source: source, printedAt: printedAt, placed: JsonDoc.create(), stopReason: "", frameLines: DapNumberArray.create(), frameColumns: DapNumberArray.create()}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments(false))
+		_ = try client.request(LaunchCommand, argumentsJson: dapLaunchArguments(self.executable))
+		_ = try client.awaitEvent(InitializedEvent)
+
+		self.placed = try client.request(SetBreakpointsCommand, argumentsJson: dapSetBreakpointsArguments(self.source, line: self.printedAt))
+
+		if dapBreakpointVerified(self.placed, index: 0) 'aStopToAwait'
+			_ = try client.request(ConfigurationDoneCommand)
+
+			let stopped = try client.awaitEvent(StoppedEvent)
+			self.stopReason = dapBodyString(stopped, key: "reason")
+
+			let frames = try client.request(StackTraceCommand, argumentsJson: dapThreadArguments(dapBodyNumber(stopped, key: "threadId")))
+			self.frameLines = dapStackFrameLines(frames)
+			self.frameColumns = dapStackFrameColumns(frames)
+		end 'aStopToAwait'
+
+		_ = try client.request(DisconnectCommand)
+	end 'drive'
+end 'ZeroBasedSession'
+
+test 'a client that counts lines and columns from zero is answered in its own count'
+	let staged = dapStagedFixture(ZeroBasedCaseLabel, fixture: SplicedFixtureName)
+	let printedAt = (dapAnchorLine(staged, anchor: ZeroBasedPrintAnchor) - OneBasedOffset) as SourceLine
+	let calledAt = dapAnchorLine(staged, anchor: ZeroBasedCallAnchor)
+	let callColumn = dapSourceColumnOf(staged, line: calledAt, spelling: ZeroBasedCallSpelling) - OneBasedOffset
+	var session = ZeroBasedSession.create(dapBuildFixture(staged), source: dapStagedSource(staged), printedAt: printedAt)
+	try dapRunSession(session, completing: "complete")
+
+	try Expect.isTrue(dapBreakpointVerified(session.placed, index: 0), message: "a breakpoint on zero-based line {printedAt} names the fixture's `{ZeroBasedPrintAnchor}` line and must verify; it answered {dapDescribed(session.placed)}")
+	try Expect.equal(dapBreakpointLine(session.placed, index: 0) as AssertedInt, expected: printedAt as AssertedInt, message: "the verified breakpoint is reported on the line the client asked for, counted the client's way")
+	try Expect.equal(session.stopReason, expected: BreakpointReason, message: "the breakpoint on zero-based line {printedAt} must stop the program")
+	try Expect.equal(dapFrameNumberAt(session.frameLines, frame: 0) as AssertedInt, expected: printedAt as AssertedInt, message: "a client that said `linesStartAt1: false` reads every line it is sent as counted from zero")
+	try Expect.equal(dapFrameNumberAt(session.frameLines, frame: ZeroBasedCallerFrame) as AssertedInt, expected: (calledAt - OneBasedOffset) as AssertedInt, message: "the caller frame's line is its call's, counted from zero")
+	try Expect.equal(dapFrameNumberAt(session.frameColumns, frame: ZeroBasedCallerFrame) as AssertedInt, expected: callColumn as AssertedInt, message: "a client that said `columnsStartAt1: false` reads every column it is sent as counted from zero")
+end 'a client that counts lines and columns from zero is answered in its own count'

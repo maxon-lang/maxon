@@ -434,6 +434,15 @@ situation:
 - **Findings are FIXED BEFORE the commit**, then the filtered set re-run. ⚠ Its report is a lead, not a
   verdict — this project's history is full of agent findings that measurement refuted. Confirm before
   acting, and say so if you disagree.
+- **Its scope is EVERY file in the diff** — test harnesses, fixtures, the extension, stdlib helpers and
+  CI files, not only the compiler. Name the directories in the brief; a reviewer left to choose reads
+  the compiler and skips the rest.
+
+⛔ **§6 runs only on REVIEWED code.** Any code written after the review — its fixes, a follow-up
+implementer round, a defect found while gating — is reviewed again, on that delta, before §6. Loop
+until a review round comes back with nothing to fix. **The documenter is not a reviewer:** it reports
+defects it happens to notice and fixes none. If its report carries code defects, §5 missed them — fix
+them, review that delta, then run §6 again on the files the fixes touched.
 
 ## 6. Document the change — the `documenter` skill, in a dispatched agent
 
@@ -457,6 +466,8 @@ review then rewrites, which is the write-it-twice waste the no-comments rule exi
   verification is `mcp__maxon__build`, and §8's battery runs everything else minutes later on the same
   tree. It regenerates the site pages but does not run `sync-docs.mjs --check`; that is §8's.
 - **It does not commit, `git add`, push, rebase or stash**, and it changes not one byte of code.
+
+⚠ **Its report must carry no code defects.** One that does means §5 failed: see the rule closing §5.
 
 ⚠ **Read its report, do not re-derive it.** The line that matters is the count: comment lines added,
 rewritten, deleted, net. **A change that came back with a paragraph per declaration has failed the
@@ -495,6 +506,7 @@ during changes; a battery run before the rebase measured a tree that no longer e
 | **SELF-COMPILE** — `./maxon-bin/.maxon/maxon build maxon-bin --output=temp/land-selfcompile` | exit 0, about a minute. Output discarded; only the exit code matters |
 | **The tree corpora** — `./maxon-bin/.maxon/maxon test` on `tests/fmt`, `tests/spec-harness --timeout=15000` and `tests/ladders` | each `0 fail`, and read each count. These are the formatter's engine corpus, the spec harness's own refusals and gates, and the ladder index — tree-level gates `spec-test` does not run. CI runs the same three on every lane |
 | **Documentation** — `node website/scripts/sync-docs.mjs --check` | exit 0 — §6 regenerated the pages but ran no check, so this is where they are gated. And for a user-visible change, each doc-coverage gate its surface owns (`./maxon-bin/.maxon/maxon test tests/cli --filter=reference-documents`, `tests/mcp --filter=reference-documents`, `tests/docs`): `0 fail`. A change with nothing user-visible states that instead. ⚠ A red here after a new diagnostic means §6 did not write the registry doc comment |
+| **Seed shims** — every `scripts/seed-shim/*.patch` passes `git apply --check`, in sorted order; if the tree has any, `scripts/build-from-seed.sh` in a throwaway clone at a short path exits 0 | A shim's context lines are source text, so §6's comment edits can break one, and CI builds from the released seed. Regenerate a patch that no longer applies, then re-run the seed build |
 | **Golden drift staged, as it is** | `git add -A specs/` — whatever the runs minted, modified or deleted, with no further thought. See the box below |
 | **§1's count check** on the final tree | markers == ran, no name spelled twice |
 

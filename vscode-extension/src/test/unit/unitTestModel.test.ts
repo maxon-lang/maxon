@@ -3,11 +3,20 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
+	DebugInfoSidecarSuffix,
+	debuggedTestVerdict,
 	isIgnoredDirectory,
+	isProgramSource,
 	isTestFileName,
+	listedTestFor,
 	parseTestDeclarations,
+	parseTestListDocument,
 	parseTestRunDocument,
+	pathKey,
+	removeStagedTestBinary,
 	resultKey,
+	StagedTestBinaryDirectoryPrefix,
+	stageTestBinary,
 	TestResult,
 	testFilterFor,
 	testKey,
@@ -17,6 +26,8 @@ import {
 
 // `tests/test-fixtures/json-face/expected.txt`: what `maxon test --json` printed for a real run.
 const JSON_FACE_DOCUMENT = '{"total":2,"passed":1,"failed":1,"files":1,"results":[{"file":"tests/test-fixtures/json-face/parity.maxtest","name":"halving four gives two","symbol":"__test_halving_four_gives_two","line":14,"state":"passed"},{"file":"tests/test-fixtures/json-face/parity.maxtest","name":"halving five gives three","symbol":"__test_halving_five_gives_three","line":19,"state":"failed","output":"FAIL parity.maxtest:20: Expect.equal\\n  expected: 3\\n  received: 2"}]}\n';
+
+const TEST_LIST_DOCUMENT = '{"binary":"C:\\\\workspace\\\\probe\\\\.maxon\\\\test\\\\maxon-test.exe","tests":[{"file":"probe/lib.maxtest","name":"doubling passes","symbol":"__test_doubling_passes","line":1,"select":"|0|"},{"file":"probe/lib.maxtest","name":"doubling fails","symbol":"__test_doubling_fails","line":5,"select":"|1|"}]}\n';
 
 function result(fields: Partial<TestResult>): TestResult {
 	return { file: 'a.maxtest', name: 'a test', symbol: '__test_a_test', line: 1, state: 'passed', ...fields };
@@ -166,6 +177,46 @@ suite('matching results to tests', () => {
 	});
 });
 
+suite('parseTestListDocument', () => {
+	const cwd = path.resolve('/workspace');
+	const listed = parseTestListDocument(TEST_LIST_DOCUMENT);
+
+	test('reads the built binary and each listed test', () => {
+		assert.strictEqual(listed.binary, 'C:\\workspace\\probe\\.maxon\\test\\maxon-test.exe');
+		assert.deepStrictEqual(listed.tests.map(one => [one.name, one.select]), [['doubling passes', '|0|'], ['doubling fails', '|1|']]);
+	});
+
+	test('refuses a listing without the binary', () => {
+		assert.throws(() => parseTestListDocument('{"tests":[]}'), /"binary"/);
+	});
+
+	test('refuses a listed test without a selection', () => {
+		assert.throws(() => parseTestListDocument('{"binary":"b","tests":[{"file":"a.maxtest","name":"a"}]}'), /select/);
+	});
+
+	test('a test is found by its file and name, never by its position', () => {
+		const file = path.join(cwd, 'probe', 'lib.maxtest');
+		assert.strictEqual(listedTestFor(listed, file, 'doubling fails', cwd)?.select, '|1|');
+		assert.strictEqual(listedTestFor(listed, file, 'doubling', cwd), undefined);
+		assert.strictEqual(listedTestFor(listed, path.join(cwd, 'other.maxtest'), 'doubling fails', cwd), undefined);
+	});
+});
+
+suite('debuggedTestVerdict', () => {
+	test('the test binary exit code decides the outcome', () => {
+		assert.strictEqual(debuggedTestVerdict(0).kind, 'passed');
+		assert.strictEqual(debuggedTestVerdict(3).kind, 'failed');
+
+		const leaked = debuggedTestVerdict(101);
+		assert.ok(leaked.kind === 'failed', `a leak is a failure, not ${leaked.kind}`);
+		assert.match(leaked.message, /^Leaked/);
+
+		const crashed = debuggedTestVerdict(1);
+		assert.ok(crashed.kind === 'errored', `a panic's exit code is an error, not ${crashed.kind}`);
+		assert.match(crashed.message, /code 1/);
+	});
+});
+
 suite('testFilterFor', () => {
 	const cwd = path.resolve('/workspace');
 
@@ -239,5 +290,81 @@ suite('isIgnoredDirectory', () => {
 			assert.strictEqual(isIgnoredDirectory(path.join(root, 'fixtures', 'deep')), true);
 			assert.strictEqual(isIgnoredDirectory(path.join(root, 'src')), false);
 		});
+	});
+});
+
+suite('stageTestBinary', () => {
+	const BinaryName = 'maxon-test.exe';
+	const TempDirectoryVariables = ['TMPDIR', 'TMP', 'TEMP'];
+
+	async function withBuiltBinary(files: Record<string, string>, body: (binary: string) => Promise<void>): Promise<void> {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'maxon-unit-built-binary-'));
+
+		try {
+			for (const [name, content] of Object.entries(files)) fs.writeFileSync(path.join(root, name), content);
+			await body(path.join(root, BinaryName));
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	}
+
+	test('copies the binary and its sidecar into a directory of their own, under the same name', () => withBuiltBinary(
+		{ [BinaryName]: 'code', [BinaryName + DebugInfoSidecarSuffix]: 'debug info' },
+		async binary => {
+			const staged = stageTestBinary(binary);
+
+			try {
+				assert.strictEqual(path.basename(staged.program), BinaryName);
+				assert.strictEqual(path.dirname(staged.program), staged.directory);
+				assert.notStrictEqual(pathKey(staged.directory), pathKey(path.dirname(binary)));
+				assert.strictEqual(fs.readFileSync(staged.program, 'utf8'), 'code');
+				assert.strictEqual(fs.readFileSync(staged.program + DebugInfoSidecarSuffix, 'utf8'), 'debug info');
+
+				fs.writeFileSync(binary, 'rebuilt');
+				assert.strictEqual(fs.readFileSync(staged.program, 'utf8'), 'code', 'a rebuild of the original reached the copy');
+			} finally {
+				await removeStagedTestBinary(staged);
+			}
+
+			assert.strictEqual(fs.existsSync(staged.directory), false);
+			assert.strictEqual(fs.existsSync(binary), true, 'removing the copy removed the original');
+		}
+	));
+
+	test('a binary with no sidecar is refused, and leaves no directory behind', () => withBuiltBinary(
+		{ [BinaryName]: 'code' },
+		async binary => {
+			const privateTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'maxon-unit-private-temp-'));
+			const inherited = TempDirectoryVariables.map(name => [name, process.env[name]] as const);
+
+			try {
+				for (const name of TempDirectoryVariables) process.env[name] = privateTemp;
+				assert.strictEqual(pathKey(os.tmpdir()), pathKey(privateTemp));
+
+				assert.throws(() => stageTestBinary(binary), /ENOENT/);
+				assert.deepStrictEqual(fs.readdirSync(privateTemp).filter(entry => entry.startsWith(StagedTestBinaryDirectoryPrefix)), []);
+			} finally {
+				for (const [name, value] of inherited) {
+					if (value === undefined) {
+						delete process.env[name];
+					} else {
+						process.env[name] = value;
+					}
+				}
+				fs.rmSync(privateTemp, { recursive: true, force: true });
+			}
+		}
+	));
+});
+
+suite('isProgramSource', () => {
+	test('a program is a .maxon file, and a test or driver file has an extension of its own', () => {
+		assert.strictEqual(isProgramSource(path.join('app', 'main.maxon')), true);
+		assert.strictEqual(isProgramSource(path.join('app', 'main.test.maxon')), true);
+		assert.strictEqual(isProgramSource(path.join('app', 'project.maxon')), true);
+		assert.strictEqual(isProgramSource(path.join('app', 'main.maxtest')), false);
+		assert.strictEqual(isProgramSource(path.join('app', 'app.maxproj')), false);
+		assert.strictEqual(isProgramSource(path.join('app', 'dev.maxtasks')), false);
+		assert.strictEqual(isProgramSource(path.join('app', 'notes.txt')), false);
 	});
 });

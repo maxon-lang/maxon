@@ -242,16 +242,6 @@ let GoldenUnrecordedToken = "NOREC"
 // that finished early would sit idle until the awaited one came back.
 let PollYieldMs = 1
 
-// Milliseconds in a second. Named because the watchdog below is stated in SECONDS (the unit an
-// operator thinks in) and measured in MILLISECONDS (the unit `Clock` counts in), and one of those
-// two spellings has to be derived from the other rather than written down twice.
-//
-// ⚠ EXPORTED because `SpecSpawnTimeoutMs` needs the same conversion for the same reason, in the other
-// direction: it is spent as a `Subprocess` deadline in milliseconds AND written into the batch script
-// as a coreutils `timeout` duration in seconds. A second copy of `1000` next door is exactly the
-// "one fact written twice" this constant was created to prevent.
-export let MillisPerSecond = 1000
-
 // The one fractional digit `formatSeconds` keeps.
 let TenthsPerSecond = 10
 
@@ -259,56 +249,30 @@ let TenthsPerSecond = 10
 // THE PROGRESS BOUND — what bounds a compile that hangs inside the worker
 // ============================================================================================
 //
-// ⭐⭐ **WHY NOTHING ELSE CAN BOUND ONE.** `SpecSpawnTimeoutMs` bounds a SPAWN, and a compile is not
-// one: it runs in this process, so a compiler infinite loop parks the worker for ever, silently, and an
-// unattended gate never returns. The bound therefore sits in the PARENT,
-// which is the only party able to end it.
+// `SpecSpawnTimeoutMs` bounds a spawn, and a compile is not one: it runs in the worker's process,
+// so a compiler infinite loop parks the worker for ever, silently, and an unattended gate never
+// returns. The bound therefore sits in the parent, the only party able to end it.
 //
-// ⛔⛔ **IT MAY NOT BE AN ESTIMATE THAT SCALES WITH THE SPEC — `SpecSpawnTimeoutMs + tests x 5 s` IS A
-// COST NOBODY MEASURED PER SPEC.** The argument for such a bound is that a flat
-// number cannot serve both `abs` (3 tests) and `managed-memory-methods` (161), which is true, and its
-// calibration is a spec's AVERAGE test: 161 tests running alone in 44.1 s against a 925 s deadline,
-// ~21x. **A spec of FEW HUGE tests inverts that ratio, and one in this corpus does.**
+// It is keyed off progress, never an estimate that scales with the spec: a spec of few huge tests
+// (`wide-spill-frames`) inverts any per-test average, and a bound derived from one fails all of
+// that spec's cases through the dead-worker path, blaming the compiler for a deadline the harness
+// chose. The worker announces each step it is about to take (`emitWorkerStep`) and the parent's
+// drain reads those lines as they arrive, so what the parent times is the interval since a slot's
+// worker last spoke. A worker making progress speaks, whatever its spec's shape; a compiler
+// infinite loop says nothing.
 //
-// MEASURED 2026-08-26: `wide-spill-frames` has THREE cases,
-// two of which hold 4111 values live at one program point. Compiled one at a time, alone:
-// **64.7 s**, **70.0 s** and 2.2 s — **136.9 s of compiling** against a job deadline of 120 + 3x5 =
-// **135 s**. Under such a bound the spec FAILS ALL THREE OF ITS CASES through the dead-worker path on a
-// run of its own (159 s wall, exit 1), and does so intermittently on the full suite — two of four
-// runs — which is the worst shape a harness bug can take: a red that names the tests it terminated and
-// blames the compiler for a deadline the harness chose.
+// The number is a single step's, with a floor of one execution: a spawned run is already bounded by
+// `SpecSpawnTimeoutMs` and surfaces as one named FAIL, so an outer bound tighter than that would
+// kill a whole spec for a hang the inner bound was about to report per test. The grace on top of it
+// is the compile's, because a compile has no bound of its own.
 //
-// ⭐⭐ **SO THE BOUND IS KEYED OFF PROGRESS INSTEAD OF OFF AN ESTIMATE.** The worker already announces
-// each step it is about to take (`emitWorkerStep`), and the parent's drain green thread already reads
-// those lines as they arrive. What the parent times is therefore the interval since a slot's worker
-// LAST SPOKE — and a worker that is making progress speaks, whatever its spec's shape. A compiler
-// infinite loop is exactly the state in which nothing is said, which is the state this catches.
-//
-// ⚠ **THE NUMBER IS A SINGLE STEP'S, AND IT HAS A FLOOR NOTHING MAY GO UNDER: ONE EXECUTION.** A step
-// is either an in-process compile (bounded by nothing, which is why this exists) or a spawned program
-// run — and a run is ALREADY bounded, by `SpecSpawnTimeoutMs`, and already surfaces as one named FAIL
-// naming the test. An outer bound tighter than that would kill a whole spec for a hang the inner bound
-// was about to report per test: the nesting `SpecSpawnTimeoutMs`'s own header states, violated. The
-// grace on top of it is the compile's, because a compile has no bound of its own.
-//
-// ⚠ **THE NUMBER IS CALIBRATED ON THE SLOWEST STEP ANYONE HAS MEASURED, AND WHAT MAKES THAT SAFE IS
-// THE MARGIN, NOT A CENSUS.** Nobody has timed all ~3,700 cases individually and this comment does not
-// claim otherwise; what is known is that `wide-spill-frames` is the only spec that has ever come near a
-// bound here, and it was re-measured on 2026-08-27 with the box IDLE — 39.7 s, 39.7 s and 7.9 s for its
-// three cases end to end, against 7.3 s for a trivial case through the same harness, i.e. **~32 s** of
-// compile for each of the two big ones. The 70.0 s above is the SAME compile under other agents' load.
-// A factor of two between an idle box and a loaded one is the whole reason a bound here must be wide.
-//
-// So: 240 s is ~3.4x the loaded worst case and ~7.4x the idle one, and the bound as a whole is ~5.1x
-// and ~11x. Like `SpecSpawnTimeoutMs`, it exists to convert an unbounded silent hang into a named
-// failure, NOT to police slow steps, so wide is the safe direction: a bound too loose costs an
-// unattended gate a few extra minutes ONCE, while a bound too tight false-reds a whole spec and has no
-// workaround.
-//
-// ⭐ **AND THE STANDING CHECK IS THE SUITE ITSELF, which is why no census is owed.** A step that ever
-// approached this prints `has said nothing about '<spec>' for …` on stderr and reds the run, naming the
-// spec. The corpus polices the number continuously; a dated ranking of 3,700 compiles could not.
-let SlowCompileGraceMs = 240 * MillisPerSecond
+// The grace is several times the slowest compile step in the corpus, because an idle machine and a
+// loaded one differ by a factor of two. Like `SpecSpawnTimeoutMs`, it converts an unbounded silent
+// hang into a named failure rather than policing slow steps, so wide is the safe direction: too
+// loose costs an unattended gate a few minutes once, too tight false-reds a whole spec with no
+// workaround. The suite is the standing check: a step that approaches it prints
+// `has said nothing about '<spec>' for …` on stderr and reds the run, naming the spec.
+let SlowCompileGraceMs = 240 * MillisecondsPerSecond
 
 // ⭐ THE BOUND ITSELF: the floor one execution already carries, plus the grace a compile needs on top
 // of it — the two paragraphs above are what each half is, and neither may be spelled again anywhere.
@@ -331,16 +295,13 @@ let TestProgressDeadlineMs = SpecSpawnTimeoutMs + SlowCompileGraceMs
 // 50 ms. It is not zero because zero means "wait for ever" to `waitWithTimeout`.
 let JobKillGraceMs = 50
 
-// The headroom the pool's idleness bound keeps over the interval it is actually measuring.
-//
-// ⛔ **THE TWO GUARDS ARE EXPLICITLY DISJOINT, WHICH IS WHAT KEEPS THIS GRACE SMALL.** `WedgeWatchdogMs`
-// does not have to outlast a whole job — the progress bound above bounds one — so
-// a busy slot still INSIDE its progress bound resets the idleness clock
-// (see the dispatch loop), so what this grace covers is only the interval AFTER every outstanding job
-// has been given up on — an EOF propagating back through the runtime, and a drain completing. That is
-// milliseconds. Three minutes is left as it stands because the number is also quoted at an operator by
-// `E6002`, where wide is the safe direction.
-let WedgeWatchdogGraceMs = 180 * MillisPerSecond
+// The headroom the pool's idleness bound keeps over the interval it measures. The two guards are
+// disjoint: a busy slot still inside its progress bound resets the idleness clock (see the dispatch
+// loop), so this grace covers only the interval after every outstanding job has been given up on,
+// an EOF propagating back through the runtime and a drain completing, which is milliseconds. It is
+// three minutes because `E6002` also quotes the number at an operator, where wide is the safe
+// direction.
+let WedgeWatchdogGraceMs = 180 * MillisecondsPerSecond
 
 // ⭐ **HOW LONG THIS SLOT'S WORKER MAY STAY SILENT — the step bound, plus whatever this LANE makes one
 // step out of.**
@@ -385,61 +346,37 @@ function progressDeadlineMs(tests TestTally, strategy RunStrategy) returns Durat
 	end 'lane'
 end 'progressDeadlineMs'
 
-// How long the dispatch loop tolerates making NO progress at all — nothing dispatched, nothing
+// How long the dispatch loop tolerates making no progress at all — nothing dispatched, nothing
 // collected, and no outstanding job whose worker is still inside its progress bound — before it
 // declares the pool wedged and panics with every slot's state.
 //
-// ⚠ IT IS DERIVED FROM `SpecSpawnTimeoutMs`, AND THAT IS THE LOAD-BEARING PART, not the measured
-// headroom underneath it. The two deadlines are nested — the worker bounds ONE subprocess, the pool
-// bounds the LOOP that waits on the worker — so the outer one must be strictly the longer, or it
-// pre-empts the inner one and reports the inner one's failure as its own. Written as two independent
-// literals they were EQUAL (both 120 s), and the collision was not theoretical: a hung RUN is bounded
-// by `SpecSpawnTimeoutMs` and surfaces as `TestOutcome.fail("… timed out after …")` — one named FAIL
-// naming the test — but only if the worker gets to report it. With the pool's deadline equal to the
-// worker's, the pool's clock starts EARLIER (at dispatch, whereas the worker's starts at whichever
-// test within that job hung) and therefore fires first, killing the whole run with "this is a HARNESS
-// bug, RETRY" for what is actually a bounded, named, per-test failure. That is a wrong answer pointed
-// at the wrong file, and it lands hardest on the one lane where the hang is documented and measured —
-// `runProcess`'s comment records an external runner blocking 18m35s at ~1 exec in 700 on the cross
-// lane, which is exactly what `SpecSpawnTimeoutMs` exists to convert into a test failure.
+// ⚠ Derived from `SpecSpawnTimeoutMs`, and that is the load-bearing part. The deadlines are nested:
+// the worker bounds one subprocess, the pool the loop that waits on the worker, so the outer one
+// must be strictly the longer. The pool's clock starts at dispatch, earlier than the worker's, so
+// with equal deadlines it fires first and kills the whole run as a harness bug for what is a
+// bounded, named, per-test failure (`TestOutcome.fail("… timed out after …")`).
 //
-// ⚠ WHAT THIS IS NOT, AND STILL IS NOT: a bound on how long a JOB may take. Nothing bounds a job any
-// more — `progressDeadlineMs` bounds a worker's SILENCE, and a spec of many steps may legitimately
-// take as long as its steps do. That bound can itself exceed this number (360 s per step against 300 s
-// here, and far more on the batched lane), which is precisely why the two are kept from racing by
-// CONDITION rather than by arithmetic: a slot whose worker is still speaking is not idleness, so the
-// clock below does not run while one exists. Nesting them by size instead would force this number past
-// the largest job in the corpus, i.e. past a figure that grows every time a spec does.
+// It is not a bound on how long a job may take: `progressDeadlineMs` bounds a worker's silence, and
+// a spec of many steps may take as long as its steps do. That bound can exceed this number, so the
+// two are kept from racing by condition rather than by size: a slot whose worker is still speaking
+// is not idleness, and the clock below does not run while one exists. Nesting them by size would
+// force this number past the largest job in the corpus, a figure that grows every time a spec does.
 //
-// The measured margin against a HEALTHY run, on the 8-core arm64-macOS host, 2026-07-30: the whole
-// 210-spec suite takes 5.5 s on the host lane and 8.2 s on the wasm lane; the slowest single spec on
-// its own is `arrays` at 1.27 s / 1.70 s; and the 210 specs sum to 50.1 s of solo work that the pool
-// retires in 5.5 s, so a job under full 12-worker contention runs at well under 2x its solo time.
-// Five minutes is ~55x the entire suite and ~150x the slowest job.
+// The one way to trip it without a hang is a machine suspended mid-run for longer than this:
+// Darwin's CLOCK_MONOTONIC keeps counting across a lid-close. That is not reliably
+// self-identifying, because the tail of a run has one busy slot, so the report prints the actual
+// idle interval in its header, and a header reading far past this threshold is the nap's length
+// rather than a wedge's.
 //
-// The one non-absurd way to trip it without a hang is a machine SUSPENDED mid-run for longer than
-// this: Darwin's CLOCK_MONOTONIC is boottime-based and keeps counting across a lid-close. That is not
-// a slow run, it is a stopped one. It is NOT reliably self-identifying — the suggestion that "every
-// slot reads the same age" holds only while several slots are busy, and the tail of a run has exactly
-// one — so the report prints the ACTUAL idle interval in its header, and a header reading far past
-// this threshold is the nap's own length rather than a wedge's.
+// It exists because the dispatch loop's fallthrough is a poll, not a block: a pool that stops
+// making progress does not deadlock loudly, it re-scans forever, and an unattended gate is then
+// indistinguishable from a slow one. A loud failure is retryable and diagnosable; a silent hang is
+// neither, whatever caused the wedge.
 //
-// WHY IT EXISTS AT ALL: the dispatch loop's fallthrough is a POLL, not a block, so a pool that stops
-// making progress does not deadlock loudly — it parks and re-scans forever, at a couple of percent
-// CPU, and an unattended gate is then indistinguishable from a slow one. It has happened: measured at
-// 2 wedges in 75 back-to-back suite runs on this host, on both lanes, green on retry with the same
-// binary. A LOUD failure is retryable and diagnosable; a silent hang is neither.
-//
-// ⚠ IT IS NOT A WORKAROUND FOR THE WEDGE IT WAS WRITTEN FOR, and it does not retire when that is
-// fixed. The 2026-07-30 wedges were traced OUT of this file — a lost kqueue wakeup in the arm64
-// green-thread runtime — and the case for a deadline on a poll loop is independent of them: a loop
-// that cannot deadlock can only fail by never finishing, and that failure has no symptom unless
-// something is counting.
-//
-// ⚠ EXPORTED BECAUSE IT IS ALSO THE ANSWER TO "HOW LONG CAN THIS TREE'S BINARY STAY LOCKED?" — it is
-// the only bound that exists on an abandoned run's lifetime, so it is the number `E6002` quotes when
-// it tells an operator whether to wait or to kill (see `Compiler.discardPreviousOutput`). Quoted, not
-// re-spelled: a prose "~5 min" in that message would be a second copy of this sum, free to drift.
+// Exported because it is also the only bound on an abandoned run's lifetime, so it is the number
+// `E6002` quotes when it tells an operator whether to wait or to kill (see
+// `Compiler.discardPreviousOutput`). Quoted, not re-spelled: a prose "~5 min" there would be a
+// second copy of this sum, free to drift.
 export let WedgeWatchdogMs = SpecSpawnTimeoutMs + WedgeWatchdogGraceMs
 
 // How long a worker gets to exit after it has been sent EXIT and had its stdin closed. By the time
@@ -447,12 +384,7 @@ export let WedgeWatchdogMs = SpecSpawnTimeoutMs + WedgeWatchdogGraceMs
 // read, so the honest expectation is milliseconds — this is not tuned to an observed time, it is
 // wide enough that no healthy shutdown can reach it and finite enough that an unhealthy one is
 // reported instead of waited on forever.
-let WorkerShutdownTimeoutMs = 30 * MillisPerSecond
-
-// A leak-gated Maxon program exits with this when it leaked. A worker IS such a program, so this
-// code coming back from one means the HARNESS leaked while servicing that worker's tests — a
-// suite failure even if every test it ran passed.
-let LeakCheckExitCode = 101
+let WorkerShutdownTimeoutMs = 30 * MillisecondsPerSecond
 
 // The bytes `encodeRecordPayload` escapes and `decodeRecordPayload` puts back. Named rather than
 // written as character literals so the escape table reads as one table.
@@ -526,9 +458,11 @@ export function defaultWorkerCount() returns WorkerCount
 	return reported
 end 'defaultWorkerCount'
 
+export let MinWorkerCount = 1 as WorkerCount
+
 // The largest pool `--workers=` will accept. Not a technical limit — it is the point past which
 // the request is more plausibly a typo than an intent, and every worker is a real OS process.
-let MaxWorkerCount = 1024
+export let MaxWorkerCount = 1024 as WorkerCount
 
 // The outcome of parsing `--workers=<n>`. A union rather than a throw, because the caller is
 // inside the argument loop and must neither diverge nor invent a value: `invalid` is recorded as
@@ -538,9 +472,7 @@ export union WorkerCountArg
 	invalid
 end 'WorkerCountArg'
 
-// Parse `--workers=<n>`.
-//
-// Zero (or a non-number) is REFUSED, never clamped. `--workers=0` asks for a pool that can run
+// Zero (or a non-number) is refused, never clamped. `--workers=0` asks for a pool that can run
 // nothing; quietly running the default instead would answer a question the caller never asked,
 // and they would believe they had measured a pool size they had not.
 export function parseWorkerCount(raw String) returns WorkerCountArg
@@ -548,7 +480,7 @@ export function parseWorkerCount(raw String) returns WorkerCountArg
 		return WorkerCountArg.invalid
 	end 'notANumber'
 
-	if value < 1 or value > MaxWorkerCount 'outOfRange'
+	if value < MinWorkerCount or value > MaxWorkerCount 'outOfRange'
 		return WorkerCountArg.invalid
 	end 'outOfRange'
 
@@ -743,12 +675,12 @@ end 'popHeaviestJob'
 // record per test, print READY again. `EXIT` — or stdin EOF, which is what a vanished parent
 // looks like — ends the loop.
 //
-// THE READY/JOB PAIRING IS THE WHOLE PROTOCOL, and this loop is where it is honoured. The parent's
-// drain reads this worker's stdout until it sees READY, so every path through the loop that CONSUMED
-// A JOB LINE must print exactly one READY afterwards — the paths that could not run the job
-// included. Print none and the parent waits forever on a line that is never coming; print two and
-// the NEXT job's drain ends early, with that job's records read as the job after it. A blank line,
-// which consumed no job, therefore owes no READY. All three READY sites are below.
+// The READY/JOB pairing is the whole protocol, and this loop is where it is honoured. The parent's
+// drain reads this worker's stdout until it sees READY, so every path through the loop that
+// consumed a job line must print exactly one READY afterwards — the paths that could not run the
+// job included. Print none and the parent waits forever on a line that is never coming; print two
+// and the next job's drain ends early, with that job's records read as the job after it. A blank
+// line, which consumed no job, therefore owes no READY. All three READY sites are below.
 export function runPersistentWorker(specDir FilePath, filterPatterns FilterPatternArray, updateRequired bool, effectiveTarget Target, includeNetwork bool) returns ExitCode
 	silenceCompilerLogging()
 
@@ -795,7 +727,7 @@ export function runPersistentWorker(specDir FilePath, filterPatterns FilterPatte
 		print("{WorkerReadyMarker}\n")
 	end 'jobLoop'
 
-	return 0
+	return SucceededExit
 end 'runPersistentWorker'
 
 // ⛔⛔ **A WORKER'S STDERR IS AN UNDRAINED PIPE, SO THE COMPILER'S LOG CHANNEL HAS TO BE OFF INSIDE
@@ -940,8 +872,8 @@ function recordPayload(result SpecTestResult) returns String
 	return match result.outcome 'verdict'
 		fail(reason) gives reason
 		skipped(refusals) gives refusals
-		pass gives goldenPayload(result.golden)
-		notRunHere gives goldenPayload(result.golden)
+		pass or
+			notRunHere gives goldenPayload(result.golden)
 	end 'verdict'
 end 'recordPayload'
 
@@ -950,10 +882,10 @@ end 'recordPayload'
 function goldenPayload(golden GoldenDrift) returns String
 	return match golden 'reference'
 		drifted(detail) gives detail
-		notPinned gives ""
-		matched gives ""
-		minted gives ""
-		unrecorded gives ""
+		notPinned or
+			matched or
+			minted or
+			unrecorded gives ""
 	end 'reference'
 end 'goldenPayload'
 
@@ -1075,15 +1007,15 @@ function decodeWorkerLine(line String) returns WorkerRecord
 	let test = splitAtFieldSep(spec.rest, expected: "payload", line: line)
 	let payload = decodeRecordPayload(test.rest)
 
-	// ⚠ THE VERDICT IS ASKED FIRST, EXACTLY AS `recordPayload` WROTE IT. A verdict that owns the payload
-	// leaves the golden with none, and `decodeGolden` is told so — that is the ownership rule read back,
-	// and the only place it could be got wrong.
+	// ⚠ The verdict is asked first, exactly as `recordPayload` wrote it. A verdict that owns the
+	// payload leaves the golden with none, and `decodeGolden` is told so — that is the ownership rule
+	// read back, and the only place it could be got wrong.
 	let outcome = decodeVerdict(verdict.field, payload: payload, line: line)
 	let claimed = match outcome 'claim'
-		fail gives true
-		skipped gives true
-		pass gives false
-		notRunHere gives false
+		fail or
+			skipped gives true
+		pass or
+			notRunHere gives false
 	end 'claim'
 
 	return WorkerRecord.create(spec.field, testName: test.field, outcome: outcome, golden: decodeGolden(golden.field, payload: payload, verdictClaimedIt: claimed, line: line))
@@ -1958,11 +1890,11 @@ end 'reportDeadWorker'
 // the only digit that separates them. Exported for the same reason `WedgeWatchdogMs` is: `E6002`
 // quotes that deadline at an operator, and an operator-facing duration has exactly one spelling here.
 export function formatSeconds(ms DurationMs) returns String
-	let whole = ms / MillisPerSecond
+	let whole = ms / MillisecondsPerSecond
 
 	// Scaled by the tenths-per-second BEFORE the divide, so the one divisor in this function is
-	// `MillisPerSecond` twice over rather than a second constant derived from it.
-	let tenths = (ms - whole * MillisPerSecond) * TenthsPerSecond / MillisPerSecond
+	// `MillisecondsPerSecond` twice over rather than a second constant derived from it.
+	let tenths = (ms - whole * MillisecondsPerSecond) * TenthsPerSecond / MillisecondsPerSecond
 	return "{whole}.{tenths} s"
 end 'formatSeconds'
 
@@ -2670,8 +2602,8 @@ function shutdownPool(workers PersistentWorkerHandleArray) returns WorkerTally
 			continue
 		end 'shutdownFailed'
 
-		if code != 0 'nonZeroExit'
-			let leakHint = " — the leak gate: this worker's compiles leaked memory" if code == LeakCheckExitCode else ""
+		if not exitSucceeded(code as ExitCode) 'nonZeroExit'
+			let leakHint = " — the leak gate: this worker's compiles leaked memory" if isLeakDetectedExit(code as ExitCode) else ""
 			printError("error: spec worker {i} exited with code {code}{leakHint}\n")
 			failed = failed + 1
 		end 'nonZeroExit'

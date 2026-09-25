@@ -71,6 +71,7 @@ typealias CacheTally = int(0 to u64.max)
 typealias CacheSizeInUnits = float(f64.min to f64.max)
 
 typealias CacheEntryArray = Array with CacheEntry
+typealias CachePathSet = Set with String
 
 // ⭐ **THE FIRST THING THAT WENT WRONG, KEPT WHOLE.** A walk reporting the last one names an empty parent
 // directory whose real cause was a file several levels down. One record because a read and a removal fail
@@ -140,15 +141,29 @@ type CacheCensus
 	end 'add'
 end 'CacheCensus'
 
-// What a removal has done so far. A record because the walk spans every root, and both halves — how much
-// went, and the first thing that would not — belong to the clear rather than to one directory of it.
+// What a removal has done so far. A record because the walk spans every root, and what it holds —
+// how much went, what was kept, and the first thing that would not go — belongs to the clear rather
+// than to one directory of it.
 type CacheRemoval
 	export var files as CacheTally
+	export var kept as CacheTally
+	export var keptUnder as CachePathSet
 	export var failure as FirstFailure
 
 	static function create() returns CacheRemoval
-		return Self{files: 0, failure: FirstFailure.create()}
+		return Self{files: 0, kept: 0, keptUnder: CachePathSet.create(), failure: FirstFailure.create()}
 	end 'create'
+
+	function keep(path FilePath)
+		self.kept = self.kept + 1
+		self.noteEnclosingDirectories(path)
+	end 'keep'
+
+	function noteEnclosingDirectories(path FilePath)
+		let enclosing = try path.parent() otherwise return
+		self.keptUnder.insert(enclosing.toString())
+		self.noteEnclosingDirectories(enclosing)
+	end 'noteEnclosingDirectories'
 end 'CacheRemoval'
 
 /// `maxon cache [clear]`.
@@ -172,14 +187,12 @@ export function runCache(args MaxonArgs) returns ExitCode
 	return clearCache()
 end 'runCache'
 
-// ⭐⭐ **THE WHOLE ROSTER IS REPORTED, THE ROOTS HOLDING NOTHING INCLUDED.** A reader asking where the
-// cache is is owed the directories this host consults, in the order it consults them; omitting the empty
-// ones answers a narrower question and leaves the reader unable to tell an empty candidate from one this
-// host does not have at all.
+// The whole roster is reported, the roots holding nothing included. A reader asking where the cache
+// is is owed the directories this host consults, in the order it consults them; omitting the empty
+// ones leaves the reader unable to tell an empty candidate from one this host does not have at all.
 //
-// ⛔ **A ROOT THAT COULD NOT BE READ SAYS WHY AND COSTS THE EXIT CODE.** Counted as empty it would report a
-// cache of zero builds over a directory that may hold hundreds, which is the one answer a caller cannot act
-// on.
+// A root that could not be read says why and costs the exit code. Counted as empty it would report
+// a cache of zero builds over a directory that may hold hundreds.
 function reportCache() returns ExitCode
 	let roots = try hostCacheRoots() otherwise (e) 'noCacheRoot'
 		reportCacheError(e, speaker: commandAsTyped())
@@ -221,7 +234,7 @@ function reportCache() returns ExitCode
 		return OwnFailureExit
 	end 'somethingUnread'
 
-	return 0
+	return SucceededExit
 end 'reportCache'
 
 // Appended to the report on stdout, with the command still exiting 0: the reader asked which
@@ -303,7 +316,12 @@ function clearCache() returns ExitCode
 	end 'somethingStayed'
 
 	print(clearReport(removal.files, swept: swept, considered: roots))
-	return 0
+
+	if removal.kept > 0 'someSessionIsLive'
+		print("Kept {counted(removal.kept, word: FileWord)} a live debug session is using\n")
+	end 'someSessionIsLive'
+
+	return SucceededExit
 end 'clearCache'
 
 // ⛔ **WHICH ROOTS HOLD A CACHE IS DECIDED BEFORE ANYTHING IS REMOVED.** A candidate nothing was ever
@@ -401,6 +419,12 @@ function removeContents(contents CacheContents, removal CacheRemoval)
 	removal.failure.note(contents.failure.reason)
 
 	for entry in contents.entries 'eachEntry'
+		// A directory still holding a kept build would refuse the delete and fail the clear. Every kept
+		// file is noted before its directories are reached, because the walk is post-order.
+		if entry.isDirectory and removal.keptUnder.contains(entry.path.toString()) 'holdsALiveSessionsBuild'
+			continue
+		end 'holdsALiveSessionsBuild'
+
 		if entry.isDirectory 'aDirectory'
 			try Directory.delete(entry.path) otherwise (e) 'notRemoved'
 				removal.failure.note("could not remove {entry.path.toString()}: {deleteRefusal(e)}")
@@ -408,6 +432,11 @@ function removeContents(contents CacheContents, removal CacheRemoval)
 
 			continue
 		end 'aDirectory'
+
+		if isHeldByALiveDebugSession(entry.path) 'aLiveSessionsBuild'
+			removal.keep(entry.path)
+			continue
+		end 'aLiveSessionsBuild'
 
 		try File.delete(entry.path) otherwise 'notDeleted'
 			removal.failure.note("could not remove {entry.path.toString()}")

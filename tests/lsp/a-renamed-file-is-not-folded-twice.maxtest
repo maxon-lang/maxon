@@ -15,7 +15,6 @@ let RenamedPauseMs = 100 as Milliseconds
 
 test 'stale source: a renamed file is not folded twice'
 	let directory = stagedCorpusDirectory(RenamedDirName)
-	removeRenamedDestination(directory)
 	writeCorpusFile(directory, fileName: RenamedReaderName, content: RenamedReaderSource)
 	writeCorpusFile(directory, fileName: RenamedBeforeName, content: RenamedDeclarationSource)
 
@@ -29,14 +28,6 @@ function requireRenamedAnswerNamesOnlyTheNewFile(answers CorpusStaleSourceAnswer
 
 	try expectDefinitionInFile(answers.after, fileTail: RenamedAfterName, startLine: RenamedDeclarationLine, note: "`{RenamedBeforeName}` was renamed to `{RenamedAfterName}` — the same declaration, written to the new path and deleted from the old one — and the jump did not land in `{RenamedAfterName}`. The old path is never unregistered, so one declaration is folded from TWO files at once and the answer is whichever of the two the fold wrote last.")
 end 'requireRenamedAnswerNamesOnlyTheNewFile'
-
-function removeRenamedDestination(directory FilePath)
-	if not File.exists(directory.join(RenamedAfterName)) 'alreadyAbsent'
-		return
-	end 'alreadyAbsent'
-
-	deleteCorpusFile(directory, fileName: RenamedAfterName)
-end 'removeRenamedDestination'
 
 function renamedRun(directory FilePath) returns CorpusStaleSourceRun
 	var edits = CorpusDiskEditArray.create()

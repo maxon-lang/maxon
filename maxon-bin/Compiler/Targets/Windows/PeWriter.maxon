@@ -597,23 +597,18 @@ export enum IatSlot
 	GetSystemDirectoryA = IatSlotMeta{dll: ImportDll.kernel32}
 	GetWindowsDirectoryA = IatSlotMeta{dll: ImportDll.kernel32}
 	GetFullPathNameA = IatSlotMeta{dll: ImportDll.kernel32}
+	WaitForSingleObjectEx = IatSlotMeta{dll: ImportDll.kernel32}
+	TerminateProcess = IatSlotMeta{dll: ImportDll.kernel32}
 
-	// ⭐⭐ **THE EIGHT `ws2_32.dll` SOCKET IMPORTS — THE FIRST NON-kernel32 IMPORTS THIS WRITER HAS EMITTED.**
-	// `stdlib/TcpClient.maxon` reaches all four `__ManagedSocket` methods and they bottom out here:
-	// `WSAStartup` (Winsock demands it once per process before any other call), `getaddrinfo`/`freeaddrinfo`
-	// (the DNS half, whose failure IS `resolveFailed`), `socket`/`connect` (whose failure IS `connectFailed`),
-	// `send`/`recv`, and `closesocket` for both the explicit `close()` and the RAII drop.
-	//
-	// ⚠ **THEY SIT AFTER EVERY kernel32 SLOT, AND THAT POSITION IS THE DLL BOUNDARY.** It keeps the whole
-	// kernel32 run contiguous, so `iatSlotByteOffset` needs one gap term per DLL rather than a general
-	// interleaving. **Never insert a kernel32 import below this line** — a kernel32 case declared here would
-	// split ws2_32's run in two, and the loader would bind the slots on either side of it to the wrong
-	// library. A kernel32 import goes ABOVE this line even when that shifts every ordinal below it, which
-	// costs nothing: no emitted artefact persists an ordinal (see the process-sampling band above).
+	// The ws2_32 run sits after every kernel32 slot, which keeps kernel32's run contiguous so
+	// `iatSlotByteOffset` needs one gap term per DLL. A kernel32 import declared below this line would
+	// split ws2_32's run, and the loader would bind the slots on either side of it to the wrong
+	// library. It goes above, and shifting every ordinal below costs nothing: no emitted artefact
+	// persists an ordinal.
 	WSAStartup = IatSlotMeta{dll: ImportDll.ws2_32}
 	getaddrinfo = IatSlotMeta{dll: ImportDll.ws2_32}
 	freeaddrinfo = IatSlotMeta{dll: ImportDll.ws2_32}
-	socket = IatSlotMeta{dll: ImportDll.ws2_32}
+	WSASocketW = IatSlotMeta{dll: ImportDll.ws2_32}
 	connect = IatSlotMeta{dll: ImportDll.ws2_32}
 	send = IatSlotMeta{dll: ImportDll.ws2_32}
 	recv = IatSlotMeta{dll: ImportDll.ws2_32}
@@ -639,6 +634,7 @@ export enum IatSlot
 	listen = IatSlotMeta{dll: ImportDll.ws2_32}
 	accept = IatSlotMeta{dll: ImportDll.ws2_32}
 	getsockname = IatSlotMeta{dll: ImportDll.ws2_32}
+	shutdown = IatSlotMeta{dll: ImportDll.ws2_32}
 
 	// ⛔⛔ **THE ONE `ntdll.dll` IMPORT, AND IT CARRIES AN ACCEPTED RISK THAT IS WRITTEN DOWN HERE
 	// BECAUSE NOTHING ELSE CAN STATE IT.** `NtGetNextThread` is a STATIC PE import, so the Windows loader
@@ -662,6 +658,126 @@ end 'IatSlot'
 function slotDll(slot IatSlot) returns ImportDll
 	return slot.rawValue.dll
 end 'slotDll'
+
+// Filed by the import's C return type: a pointer, `HANDLE` or `SOCKET` is a full word, a `DWORD`
+// zero-extends, an `int` or `BOOL` sign-extends. The ABI leaves the upper half of a 32-bit return
+// undefined, so a misfiled slot hands its caller garbage high bits.
+export function importAnswerOf(slot IatSlot) returns ImportAnswer
+	return match slot 'answer'
+		ExitProcess or
+			InitializeCriticalSection or
+			EnterCriticalSection or
+			LeaveCriticalSection or
+			GetSystemTimeAsFileTime or
+			SetLastError or
+			Sleep or
+			freeaddrinfo gives ImportAnswer.nothing
+		GetStdHandle or
+			AddVectoredExceptionHandler or
+			VirtualAlloc or
+			CreateNamedPipeW or
+			CreateFileW or
+			CreateIoCompletionPort or
+			CreateThread or
+			CreateEventA or
+			CreateFileA or
+			FindFirstFileA or
+			GetCommandLineA or
+			OpenFileMappingA or
+			MapViewOfFile or
+			GetTickCount64 or
+			GetEnvironmentStringsA or
+			CreateFileMappingA or
+			OpenProcess or
+			VirtualQueryEx or
+			CreateWaitableTimerExW or
+			OpenThread or
+			CreateToolhelp32Snapshot or
+			CreateJobObjectW or
+			VirtualQuery or
+			WSASocketW or
+			accept gives ImportAnswer.fullWord
+		WaitForSingleObject or
+			GetLastError or
+			GetCurrentProcessId or
+			GetCurrentDirectoryA or
+			GetFileAttributesA or
+			GetModuleFileNameA or
+			GetSystemDirectoryA or
+			GetWindowsDirectoryA or
+			GetFullPathNameA or
+			GetEnvironmentVariableA or
+			GetActiveProcessorCount or
+			TlsAlloc or
+			GetPriorityClass or
+			GetFileType or
+			SuspendThread or
+			ResumeThread or
+			GetThreadId or
+			GetCurrentThreadId or
+			WaitForSingleObjectEx gives ImportAnswer.unsignedDword
+		WriteFile or
+			QueryPerformanceCounter or
+			QueryPerformanceFrequency or
+			CreateProcessA or
+			GetExitCodeProcess or
+			CloseHandle or
+			VirtualFree or
+			SetHandleInformation or
+			SetFileCompletionNotificationModes or
+			SetEvent or
+			ReadFile or
+			CancelIoEx or
+			GetFileSizeEx or
+			DeleteFileA or
+			MoveFileExA or
+			FindClose or
+			FindNextFileA or
+			CreateDirectoryA or
+			RemoveDirectoryA or
+			GetConsoleMode or
+			WriteConsoleW or
+			MultiByteToWideChar or
+			SetThreadStackGuarantee or
+			PeekNamedPipe or
+			QueryThreadCycleTime or
+			TlsSetValue or
+			SetPriorityClass or
+			FreeEnvironmentStringsA or
+			UnmapViewOfFile or
+			GetThreadContext or
+			ReadProcessMemory or
+			SetWaitableTimer or
+			SetThreadContext or
+			Module32FirstW or
+			Module32NextW or
+			GetQueuedCompletionStatusEx or
+			PostQueuedCompletionStatus or
+			SwitchToThread or
+			RegisterWaitForSingleObject or
+			UnregisterWaitEx or
+			AssignProcessToJobObject or
+			TerminateJobObject or
+			VirtualProtect or
+			FlushInstructionCache or
+			TerminateProcess or
+			WSAStartup or
+			getaddrinfo or
+			connect or
+			send or
+			recv or
+			closesocket or
+			WSARecv or
+			WSASend or
+			WSAEventSelect or
+			getsockopt or
+			bind or
+			listen or
+			getsockname or
+			shutdown or
+			NtGetNextThread gives ImportAnswer.signedDword
+	end 'answer'
+end 'importAnswerOf'
 
 // The DLL's import-table name string.
 function dllFileName(dll ImportDll) returns String
@@ -717,29 +833,18 @@ export function iatSlotIndex(slot IatSlot) returns RelocSlotIndex
 	return slot.ordinal as RelocSlotIndex
 end 'iatSlotIndex'
 
-// ⭐ **DOES THIS SLOT BELONG TO THE OPTIONAL TRAILING BAND?** Every import in it is emitted ONLY into a
-// build that has a producer for one of them — an import nothing references still costs its IAT thunk, its
-// import-lookup entry and its Hint/Name record, and a run of those in EVERY binary in the language is not a
-// price a debug instrument, a child-process runtime, a core-count query, a phase timer or a shared section
-// may charge a program that uses none of them. That is the same rule the `.data` slots, the box header and
-// the event sites follow (`DebugStreamRuntime`'s header states it once).
+// The optional trailing band is emitted only into a build with a producer for one of its imports:
+// an import nothing references still costs its IAT thunk, lookup entry and Hint/Name record in
+// every binary.
 //
-// ⚠ **THEY ARE THE TRAILING BAND, AND THAT IS WHAT MAKES OMITTING THEM SAFE.** An `iatCall` records a
-// slot INDEX; dropping entries off the END leaves every earlier index exactly where it was, while dropping
-// one from the middle would silently repoint every import after it. This is a TOTAL match rather than an
-// `ordinal >=` test precisely so that a future import appended past this band fails to compile here
-// instead of quietly joining it.
+// ⚠ Trailing is what makes omitting it safe. An `iatCall` records a slot index, so dropping entries
+// off the end moves no earlier index, while dropping one from the middle would silently repoint
+// every import after it. The match is total rather than an `ordinal >=` test so an import appended
+// past the band fails to compile here instead of joining it.
 //
-// ⚠⚠ **IT IS ONE BAND WITH SEVERAL PRODUCERS, NOT ONE BAND EACH, AND THAT IS FORCED BY THE INDEXING ABOVE.**
-// Independently-gated bands would leave a HOLE in the emitted table whenever an earlier one was absent and
-// a later one present, and every slot after the hole would resolve to the wrong import. So the whole band is
-// emitted whenever ANY producer is present: a traced build pays for the subprocess imports, the machine
-// query and the thread-CPU read it does not call, and a spawning build pays for the DebugStream ones. A
-// handful of unreferenced imports in the rare build that wants one producer, against a silently-repointed
-// import table — the trade is not close.
-//
-// ⚠ **THE BAND'S MEMBERSHIP IS THE RUN BELOW, NOT THIS PROSE.** Read it off the `true` arm; a producer
-// added later must extend that arm, or fail this total match.
+// It is one band with several producers, emitted whenever any is present: independently gated bands
+// would leave a hole whenever an earlier one was absent and a later one present, and every slot
+// after the hole would resolve to the wrong import.
 function isOptionalTrailingImport(slot IatSlot) returns bool
 	return match slot 'band'
 		GetEnvironmentVariableA or
@@ -788,7 +893,14 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 			Sleep or
 			GetSystemDirectoryA or
 			GetWindowsDirectoryA or
-			GetFullPathNameA gives true
+			GetFullPathNameA or
+			WaitForSingleObjectEx or
+			TerminateProcess gives true
+		// The ws2_32 and ntdll slots in this arm answer `false` because `dllIsEmitted` gates each of
+		// those runs as a whole; this band decides membership within kernel32's. Answering `true` would
+		// tie them to the kernel32 band's producers: a socket binary with none of those would lose its
+		// imports, and a thread-walking build would emit an ntdll directory entry over an empty run and
+		// panic in `slotPositionInRun` at the first `iatCall` naming it.
 		ExitProcess or
 			GetStdHandle or
 			WriteFile or
@@ -833,17 +945,11 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 			GetConsoleMode or
 			WriteConsoleW or
 			MultiByteToWideChar or
-			SetThreadStackGuarantee gives false
-
-		// ⚠ **THE SOCKET SLOTS ANSWER `false` BECAUSE THEIR GATE IS A DIFFERENT ONE, NOT BECAUSE THEY ARE
-		// ALWAYS EMITTED.** This band decides membership WITHIN kernel32's run; `dllIsEmitted` decides
-		// whether ws2_32's run exists at all. Answering `true` here would gate them on the DebugStream /
-		// subprocess producers — an unrelated question — and a socket binary built without a traced or
-		// spawning producer would lose its imports entirely.
-		WSAStartup or
+			SetThreadStackGuarantee or
+			WSAStartup or
 			getaddrinfo or
 			freeaddrinfo or
-			socket or
+			WSASocketW or
 			connect or
 			send or
 			recv or
@@ -855,15 +961,9 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 			bind or
 			listen or
 			accept or
-			getsockname gives false
-
-		// ⚠ **THE ntdll SLOT ANSWERS `false` FOR THE SOCKET RUN'S REASON, AND THE FAILURE IT AVOIDS IS THE
-		// SHARPER ONE.** `dllIsEmitted` decides whether ntdll's run exists at all; this band decides
-		// membership WITHIN a run. Answering `true` here would make the run's ONLY member depend on the
-		// kernel32 band's producers — so a build that walks threads but has no traced, spawning or
-		// green-thread producer would emit an ntdll directory entry over an EMPTY run, and the first
-		// `iatCall` naming the slot would panic in `slotPositionInRun`.
-		NtGetNextThread gives false
+			getsockname or
+			shutdown or
+			NtGetNextThread gives false
 	end 'band'
 end 'isOptionalTrailingImport'
 
@@ -1849,7 +1949,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// `GetEnvironmentVariableA` and the machine's processor count through `GetActiveProcessorCount`, and its
 	// TLS pair lives in this band too. It also answers for a spawning image, whose child-process bodies are
 	// installed only with the scheduler.
-	let optionalImports = codeResult.stdModule.debugStream or codeResult.stdModule.usesCpuCount or codeResult.stdModule.carriesThreadCpuTicks or codeResult.stdModule.usesGt or codeResult.stdModule.usesBackgroundPriority or codeResult.stdModule.usesTerminalDetection or codeResult.stdModule.usesSharedMemory or codeResult.stdModule.usesUptimeClock or codeResult.stdModule.usesProcessSampling or codeResult.stdModule.usesDebugAgent
+	let optionalImports = codeResult.stdModule.debugStream or codeResult.stdModule.usesCpuCount or codeResult.stdModule.carriesThreadCpuTicks or codeResult.stdModule.usesGt or codeResult.stdModule.usesBackgroundPriority or codeResult.stdModule.usesProcessLiveness or codeResult.stdModule.usesTerminalDetection or codeResult.stdModule.usesSharedMemory or codeResult.stdModule.usesUptimeClock or codeResult.stdModule.usesProcessSampling or codeResult.stdModule.usesDebugAgent
 
 	// ⭐ **THE SAMPLER IS ntdll's ONLY PRODUCER**, and it feeds BOTH gates: the suspend/context/read/resume
 	// family, the timer pair and the module walk ride the optional kernel32 band above, while

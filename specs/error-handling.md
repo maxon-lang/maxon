@@ -1802,7 +1802,7 @@ end 'main'
 // caught box's cascade drops the payload before freeing the box. `throw E.failed("boom")`
 // hands the box to the caller; `otherwise (e)` adopts it; `match e { failed(m) ... }` binds
 // the String by RETAIN — a caught box is a CO-OWNER, because the thrower may have retained
-// it out of a container it still holds (`retainThrownField`) and the flag register carries
+// it out of a container it still holds (`retainBorrowedAggregate`) and the flag register carries
 // no note of which transfer ran — so the binding drops its own reference at the arm's end
 // and `__destruct_E` drops the slot's. A leak or double-free of either the String or the box
 // is exit 101; a clean `"boom".byteLength()` is 4.
@@ -1868,10 +1868,11 @@ adopts and decrefs once, and the borrow's own owner never notices … **what gen
 is a MOVE**, where the source must be poisoned so exactly one owner remains."*
 
 ⭐ **A `throw` IS A HAND-OFF, NOT A MOVE.** Nothing is poisoned, so nothing needs the consume — the thrown
-reference is a SECOND owner, the catch consumes it, and the borrow's own owner drops its own. The mechanism was
-already there and already spent one bullet up, on a borrowed union FIELD: `retainThrownValue` is two lines, an
-incref and a co-own mark, and **neither is about a field** — it was called `retainThrownField` while it served
-every borrowed box, which is why the non-field case looked like it needed a mechanism it did not.
+reference is a SECOND owner, the catch consumes it, and the borrow's own owner drops its own. The mechanism is the
+one a borrowed union FIELD takes one bullet up: `retainBorrowedAggregate` is an incref and a co-own mark, and
+**neither is about a field**. The only throw that MOVES is `moveOutThrownField`'s — a field read by the throw
+itself, out of a container this frame solely owns, on a throw that leaves the function — and a borrowed binding
+is none of those.
 
 ⚠ **THE ASSERTION IS THE SURVIVAL OF THE ORIGINAL, NOT MERELY THAT IT COMPILES.** The caught throw is followed by
 a READ of the very binding that was thrown, and `useAfterRethrow` is called TWICE on ONE box: a move would leave
@@ -1910,6 +1911,189 @@ end 'main'
 ```
 ```stdout
 a=7 b=7
+```
+
+<!-- test: throw-borrowed-union-leaves-a-sibling-path-borrowing -->
+```maxon
+typealias Tally = int(0 to 1000)
+
+union Fault implements Error
+	bad(text String, at Tally)
+end 'Fault'
+
+type Kept
+	export let fault as Fault
+
+	static function create(fault Fault) returns Kept
+		return Self{fault: fault}
+	end 'create'
+end 'Kept'
+
+typealias KeptArray = Array with Kept
+
+type Keeper
+	var kept as KeptArray
+
+	static function create() returns Keeper
+		return Keeper{kept: KeptArray.create()}
+	end 'create'
+
+	function keepUnlessLate(fault Fault, at Tally) throws Fault
+		if at > 500 'late'
+			throw fault
+		end 'late'
+
+		self.kept.push(Kept.create(fault))
+	end 'keepUnlessLate'
+
+	function keep(at Tally) throws Fault
+		let fault = Fault.bad("at {at}", at: at)
+		try self.keepUnlessLate(fault, at: at)
+	end 'keep'
+
+	function keptBytes() returns Tally
+		var total = 0 as Tally
+
+		for k in self.kept 'each'
+			match k.fault 'fault'
+				bad(text, _) then total = total + text.byteLength() as Tally
+			end 'fault'
+		end 'each'
+
+		return total
+	end 'keptBytes'
+end 'Keeper'
+
+function main() returns ExitCode
+	var keeper = Keeper.create()
+	try keeper.keep(3) otherwise return 1
+	try keeper.keep(40) otherwise return 2
+	try keeper.keep(900) otherwise (e) 'late'
+		match e 'fault'
+			bad(_, at) then print("late {at}\n")
+		end 'fault'
+	end 'late'
+	print("kept {keeper.keptBytes()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+late 900
+kept 9
+```
+
+<!-- test: throw-sole-owned-field-leaves-a-sibling-path-borrowing -->
+```maxon
+typealias Tally = int(0 to 1000)
+
+union Fault implements Error
+	bad(text String, at Tally)
+end 'Fault'
+
+typealias FaultArray = Array with Fault
+
+type Holder
+	export let fault as Fault
+
+	static function keepInto(kept FaultArray, at Tally) throws Fault
+		let holder = Self{fault: Fault.bad("at {at}", at: at)}
+		let fault = holder.fault
+
+		if at > 500 'late'
+			throw fault
+		end 'late'
+
+		kept.push(fault)
+	end 'keepInto'
+end 'Holder'
+
+function keptBytes(kept FaultArray) returns Tally
+	var total = 0 as Tally
+
+	for f in kept 'each'
+		match f 'fault'
+			bad(text, _) then total = total + text.byteLength() as Tally
+		end 'fault'
+	end 'each'
+
+	return total
+end 'keptBytes'
+
+function main() returns ExitCode
+	var kept = FaultArray.create()
+	try Holder.keepInto(kept, at: 3) otherwise return 1
+	try Holder.keepInto(kept, at: 40) otherwise return 2
+	try Holder.keepInto(kept, at: 900) otherwise (e) 'late'
+		match e 'fault'
+			bad(_, at) then print("late {at}\n")
+		end 'fault'
+	end 'late'
+	print("kept {keptBytes(kept)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+late 900
+kept 9
+```
+
+<!-- test: throw-sole-owned-field-to-a-try-block-leaves-the-field -->
+```maxon
+typealias Tally = int(0 to 1000)
+
+union Fault implements Error
+	bad(text String, at Tally)
+end 'Fault'
+
+type Holder
+	export var fault as Fault
+
+	static function probe(at Tally) returns Tally
+		let holder = Self{fault: Fault.bad("at {at}", at: at)}
+		var caught = 0 as Tally
+
+		try 'work'
+			if at > 500 'late'
+				throw holder.fault
+			end 'late'
+
+			caught = check(at)
+		end 'work' otherwise (e) 'handler'
+			match e 'fault'
+				bad(_, n) then caught = n
+			end 'fault'
+		end 'handler'
+
+		match holder.fault 'again'
+			bad(text, _) then return caught + text.byteLength() as Tally
+		end 'again'
+	end 'probe'
+end 'Holder'
+
+function check(at Tally) returns Tally throws Fault
+	if at > 999 'never'
+		throw Fault.bad("never", at: at)
+	end 'never'
+
+	return 1
+end 'check'
+
+function main() returns ExitCode
+	print("{Holder.probe(900)} {Holder.probe(3)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+906 5
 ```
 
 <!-- test: error.throw-payload-expr-temp-decref -->

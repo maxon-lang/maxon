@@ -1,0 +1,17 @@
+let ProjectSiblingParameterDirName = "diagnostics-project-sibling-result-at-a-struct-parameter"
+let ProjectSiblingParameterHelperFileName = "leaves.maxon"
+let ProjectSiblingParameterBufferFileName = "main.maxon"
+let ProjectSiblingParameterHelperSource = "module function siblingLeaf() returns Leaf\n\treturn Leaf.create(3)\nend 'siblingLeaf'\n"
+let ProjectSiblingParameterBufferSource = "module typealias Weight = int(0 to 100)\n\nmodule type Leaf\n\texport var weight as Weight\n\n\tmodule static function create(weight Weight) returns Leaf\n\t\treturn Leaf\{weight: weight\}\n\tend 'create'\nend 'Leaf'\n\nfunction takesLeaf(leaf Leaf) returns Weight\n\treturn leaf.weight\nend 'takesLeaf'\n\nfunction main() returns ExitCode\n\treturn 0 if takesLeaf(siblingLeaf()) == 3 else 1\nend 'main'\n"
+
+test 'a sibling function result passed to a non-overloaded struct parameter is not an argument mismatch'
+	let root = stagedProjectDiagnosticsRoot(ProjectSiblingParameterDirName)
+	writeCorpusFile(root, fileName: ProjectSiblingParameterHelperFileName, content: ProjectSiblingParameterHelperSource)
+	writeCorpusFile(root, fileName: ProjectSiblingParameterBufferFileName, content: ProjectSiblingParameterBufferSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: ProjectSiblingParameterBufferFileName, content: ProjectSiblingParameterBufferSource)
+
+	discardOutsideCheckoutDir(root)
+
+	expectNoProjectDiagnostics(probe, note: "`siblingLeaf` is a `module function` the sibling file declares, returning the `Leaf` that `takesLeaf` takes, and a `maxon build` of the staged project exits 0. The buffer compiled alone cannot type the sibling's result, so the argument check meets a value of no known type — a consequence of the undefined-function error, which the corpus explains.")
+end 'a sibling function result passed to a non-overloaded struct parameter is not an argument mismatch'

@@ -1,14 +1,35 @@
 /// Internal helper functions for URL parsing and manipulation.
 /// @category Internal
 public typealias Byte = int(0 to u8.max)
+public typealias UrlDecimal = int(0 to u64.max)
+// At most `u64.max / 10`: `urlDecimalWithin` grows a value no larger than the bound by one more digit,
+// which then cannot pass `u64.max` however long the digit run a peer sends.
+public typealias UrlDecimalBound = int(0 to 1844674407370955160)
+
+public let UrlPercentByte = 37 as Byte
+public let UrlPercentTripletBytes = 3
+public let UrlDecimalZeroByte = 48 as Byte
+public let UrlSlashByte = 47 as Byte
+public let UrlOriginFormRoot = "/"
+let UrlDotByte = 46 as Byte
+let UrlPlusByte = 43 as Byte
+let UrlMinusByte = 45 as Byte
+let UrlSegmentEndBytes = "/"
+let UrlDecimalBase = 10
+let UrlDecimalNineByte = 57 as Byte
+let UrlUpperAByte = 65 as Byte
+let UrlUpperFByte = 70 as Byte
+let UrlUpperZByte = 90 as Byte
+let UrlLowerAByte = 97 as Byte
+let UrlLowerFByte = 102 as Byte
+let UrlLowerZByte = 122 as Byte
 
 public function urlIsAlpha(b Byte) returns bool
-	// A-Z: 65-90, a-z: 97-122
-	if b >= 65 and b <= 90 'upper'
+	if b >= UrlUpperAByte and b <= UrlUpperZByte 'upper'
 		return true
 	end 'upper'
 
-	if b >= 97 and b <= 122 'lower'
+	if b >= UrlLowerAByte and b <= UrlLowerZByte 'lower'
 		return true
 	end 'lower'
 
@@ -16,30 +37,65 @@ public function urlIsAlpha(b Byte) returns bool
 end 'urlIsAlpha'
 
 public function urlIsDigit(b Byte) returns bool
-	// 0-9: 48-57
-	if b >= 48 and b <= 57 'digit'
+	if b >= UrlDecimalZeroByte and b <= UrlDecimalNineByte 'digit'
 		return true
 	end 'digit'
 
 	return false
 end 'urlIsDigit'
 
-public function urlIsHexDigit(b Byte) returns bool
-	// 0-9: 48-57, A-F: 65-70, a-f: 97-102
-	if b >= 48 and b <= 57 'digit'
-		return true
+public typealias UrlHexDigitValue = int(0 to 15)
+
+public union UrlHexDigitReading
+	value(digit UrlHexDigitValue)
+	notAHexDigit
+end 'UrlHexDigitReading'
+
+let UrlHexLetterValueBase = 10
+
+public function urlHexDigitOf(b Byte) returns UrlHexDigitReading
+	if urlIsDigit(b) 'digit'
+		return UrlHexDigitReading.value((b - UrlDecimalZeroByte) as UrlHexDigitValue)
 	end 'digit'
 
-	if b >= 65 and b <= 70 'upperHex'
-		return true
+	if b >= UrlUpperAByte and b <= UrlUpperFByte 'upperHex'
+		return UrlHexDigitReading.value((b - UrlUpperAByte + UrlHexLetterValueBase) as UrlHexDigitValue)
 	end 'upperHex'
 
-	if b >= 97 and b <= 102 'lowerHex'
-		return true
+	if b >= UrlLowerAByte and b <= UrlLowerFByte 'lowerHex'
+		return UrlHexDigitReading.value((b - UrlLowerAByte + UrlHexLetterValueBase) as UrlHexDigitValue)
 	end 'lowerHex'
 
-	return false
+	return UrlHexDigitReading.notAHexDigit
+end 'urlHexDigitOf'
+
+public function urlIsHexDigit(b Byte) returns bool
+	return match urlHexDigitOf(b) 'reading'
+		value gives true
+		notAHexDigit gives false
+	end 'reading'
 end 'urlIsHexDigit'
+
+public function urlByteIsOneOf(b Byte, bytes String) returns bool
+	for candidate in bytes.bytes() 'eachCandidate'
+		if candidate == b 'hit'
+			return true
+		end 'hit'
+	end 'eachCandidate'
+
+	return false
+end 'urlByteIsOneOf'
+
+/// The position of the first byte in `[from, until)` that is one of `bytes`, or `until` when none is.
+public function urlFirstOfBytes(text String, from BytePos, until BytePos, bytes String) returns BytePos
+	for pos in from upto until 'eachByte'
+		if urlByteIsOneOf(text.byteAtOrPanic(pos), bytes: bytes) 'found'
+			return pos
+		end 'found'
+	end 'eachByte'
+
+	return until
+end 'urlFirstOfBytes'
 
 /// Valid scheme characters after the first: ALPHA / DIGIT / "+" / "-" / "."
 public function urlIsSchemeChar(b Byte) returns bool
@@ -51,8 +107,7 @@ public function urlIsSchemeChar(b Byte) returns bool
 		return true
 	end 'digit'
 
-	// +: 43, -: 45, .: 46
-	if b == 43 or b == 45 or b == 46 'special'
+	if b == UrlPlusByte or b == UrlMinusByte or b == UrlDotByte 'special'
 		return true
 	end 'special'
 
@@ -65,31 +120,61 @@ public function urlValidatePercentEncoding(input String) throws URLError
 	var i = 0
 
 	while i < len 'scan'
-		let b = input.byteAtOrPanic(i)
-
-		if b == 37 'percent'
-			// '%' = 37, need two hex digits after
-			if i + 2 >= len 'truncated'
+		if input.byteAtOrPanic(i) == UrlPercentByte 'percent'
+			if not urlPercentTripletAt(input, at: i, until: len) 'malformed'
 				throw URLError.invalidEncoding
-			end 'truncated'
+			end 'malformed'
 
-			let h1 = input.byteAtOrPanic(i + 1)
-			let h2 = input.byteAtOrPanic(i + 2)
-
-			if not urlIsHexDigit(h1) 'badH1'
-				throw URLError.invalidEncoding
-			end 'badH1'
-
-			if not urlIsHexDigit(h2) 'badH2'
-				throw URLError.invalidEncoding
-			end 'badH2'
-
-			i = i + 3
+			i = i + UrlPercentTripletBytes
 		end 'percent' else 'notPercent'
 			i = i + 1
 		end 'notPercent'
 	end 'scan'
 end 'urlValidatePercentEncoding'
+
+public function urlPercentTripletAt(text String, at BytePos, until BytePos) returns bool
+	return at + UrlPercentTripletBytes <= until and urlIsHexDigit(text.byteAtOrPanic(at + 1)) and urlIsHexDigit(text.byteAtOrPanic(at + 2))
+end 'urlPercentTripletAt'
+
+public function urlByteRange(text String, from BytePos, until BytePos) returns String
+	if from >= until 'nothingThere'
+		return ""
+	end 'nothingThere'
+
+	let slice = try text.addressableBytes().slice(from, until) otherwise panic("urlByteRange: {from}..{until} is outside the {text.byteLength()} bytes of the text it was asked of")
+
+	return String.init(slice)
+end 'urlByteRange'
+
+public union UrlDecimalReading
+	value(number UrlDecimal)
+	notADecimal
+	aboveTheBound
+end 'UrlDecimalReading'
+
+public function urlDecimalWithin(text String, from BytePos, until BytePos, bound UrlDecimalBound) returns UrlDecimalReading
+	if from >= until 'noDigits'
+		return UrlDecimalReading.notADecimal
+	end 'noDigits'
+
+	var value = 0 as UrlDecimal
+	var aboveTheBound = false
+
+	for pos in from upto until 'eachDigit'
+		let b = text.byteAtOrPanic(pos)
+
+		if not urlIsDigit(b) 'notADigit'
+			return UrlDecimalReading.notADecimal
+		end 'notADigit'
+
+		if not aboveTheBound 'stillCounting'
+			value = value * UrlDecimalBase + ((b - UrlDecimalZeroByte) as UrlDecimal)
+			aboveTheBound = value > bound as UrlDecimal
+		end 'stillCounting'
+	end 'eachDigit'
+
+	return UrlDecimalReading.aboveTheBound if aboveTheBound else UrlDecimalReading.value(value)
+end 'urlDecimalWithin'
 
 /// Remove dot segments from a path per RFC 3986 Section 5.2.4.
 public function urlRemoveDotSegments(path String) returns String
@@ -111,9 +196,9 @@ public function urlRemoveDotSegments(path String) returns String
 
 		// A: If input starts with "../" remove it
 		if remaining >= 3 'checkDotDotSlash'
-			if path.byteAtOrPanic(pos) == 46 'dot1'
-				if path.byteAtOrPanic(pos + 1) == 46 'dot2'
-					if path.byteAtOrPanic(pos + 2) == 47 'slash'
+			if path.byteAtOrPanic(pos) == UrlDotByte 'dot1'
+				if path.byteAtOrPanic(pos + 1) == UrlDotByte 'dot2'
+					if path.byteAtOrPanic(pos + 2) == UrlSlashByte 'slash'
 						pos = pos + 3
 						continue
 					end 'slash'
@@ -123,8 +208,8 @@ public function urlRemoveDotSegments(path String) returns String
 
 		// A: If input starts with "./" remove it
 		if remaining >= 2 'checkDotSlash'
-			if path.byteAtOrPanic(pos) == 46 'dot1b'
-				if path.byteAtOrPanic(pos + 1) == 47 'slash1b'
+			if path.byteAtOrPanic(pos) == UrlDotByte 'dot1b'
+				if path.byteAtOrPanic(pos + 1) == UrlSlashByte 'slash1b'
 					pos = pos + 2
 					continue
 				end 'slash1b'
@@ -133,9 +218,9 @@ public function urlRemoveDotSegments(path String) returns String
 
 		// B: If input starts with "/./" replace with "/"
 		if remaining >= 3 'checkSlashDotSlash'
-			if path.byteAtOrPanic(pos) == 47 'sl1'
-				if path.byteAtOrPanic(pos + 1) == 46 'dt1'
-					if path.byteAtOrPanic(pos + 2) == 47 'sl2'
+			if path.byteAtOrPanic(pos) == UrlSlashByte 'sl1'
+				if path.byteAtOrPanic(pos + 1) == UrlDotByte 'dt1'
+					if path.byteAtOrPanic(pos + 2) == UrlSlashByte 'sl2'
 						pos = pos + 2
 						continue
 					end 'sl2'
@@ -145,8 +230,8 @@ public function urlRemoveDotSegments(path String) returns String
 
 		// B: If input is exactly "/." replace with "/"
 		if remaining == 2 'checkSlashDot'
-			if path.byteAtOrPanic(pos) == 47 'sl1c'
-				if path.byteAtOrPanic(pos + 1) == 46 'dt1c'
+			if path.byteAtOrPanic(pos) == UrlSlashByte 'sl1c'
+				if path.byteAtOrPanic(pos + 1) == UrlDotByte 'dt1c'
 					output = "{output}/"
 					pos = len
 					continue
@@ -156,10 +241,10 @@ public function urlRemoveDotSegments(path String) returns String
 
 		// C: If input starts with "/../" replace with "/" and remove last segment from output
 		if remaining >= 4 'checkSlashDotDotSlash'
-			if path.byteAtOrPanic(pos) == 47 'sl1d'
-				if path.byteAtOrPanic(pos + 1) == 46 'dt1d'
-					if path.byteAtOrPanic(pos + 2) == 46 'dt2d'
-						if path.byteAtOrPanic(pos + 3) == 47 'sl2d'
+			if path.byteAtOrPanic(pos) == UrlSlashByte 'sl1d'
+				if path.byteAtOrPanic(pos + 1) == UrlDotByte 'dt1d'
+					if path.byteAtOrPanic(pos + 2) == UrlDotByte 'dt2d'
+						if path.byteAtOrPanic(pos + 3) == UrlSlashByte 'sl2d'
 							output = urlRemoveLastSegment(output)
 							pos = pos + 3
 							continue
@@ -171,9 +256,9 @@ public function urlRemoveDotSegments(path String) returns String
 
 		// C: If input is exactly "/.." replace with "/" and remove last segment from output
 		if remaining == 3 'checkSlashDotDot'
-			if path.byteAtOrPanic(pos) == 47 'sl1e'
-				if path.byteAtOrPanic(pos + 1) == 46 'dt1e'
-					if path.byteAtOrPanic(pos + 2) == 46 'dt2e'
+			if path.byteAtOrPanic(pos) == UrlSlashByte 'sl1e'
+				if path.byteAtOrPanic(pos + 1) == UrlDotByte 'dt1e'
+					if path.byteAtOrPanic(pos + 2) == UrlDotByte 'dt2e'
 						output = urlRemoveLastSegment(output)
 						output = "{output}/"
 						pos = len
@@ -185,15 +270,15 @@ public function urlRemoveDotSegments(path String) returns String
 
 		// D: If input is exactly "." or ".." remove it
 		if remaining == 1 'checkLoneDot'
-			if path.byteAtOrPanic(pos) == 46 'isDot'
+			if path.byteAtOrPanic(pos) == UrlDotByte 'isDot'
 				pos = len
 				continue
 			end 'isDot'
 		end 'checkLoneDot'
 
 		if remaining == 2 'checkLoneDotDot'
-			if path.byteAtOrPanic(pos) == 46 'isDot1'
-				if path.byteAtOrPanic(pos + 1) == 46 'isDot2'
+			if path.byteAtOrPanic(pos) == UrlDotByte 'isDot1'
+				if path.byteAtOrPanic(pos + 1) == UrlDotByte 'isDot2'
 					pos = len
 					continue
 				end 'isDot2'
@@ -203,18 +288,12 @@ public function urlRemoveDotSegments(path String) returns String
 		// E: Move first path segment (including initial "/" if any) to output
 		var segEnd = pos
 
-		if path.byteAtOrPanic(segEnd) == 47 'startsWithSlash'
+		if path.byteAtOrPanic(segEnd) == UrlSlashByte 'startsWithSlash'
 			segEnd = segEnd + 1
 		end 'startsWithSlash'
 
 		// Find next "/" or end
-		while segEnd < len 'findSlash'
-			if path.byteAtOrPanic(segEnd) == 47 'foundSlash'
-				break
-			end 'foundSlash'
-
-			segEnd = segEnd + 1
-		end 'findSlash'
+		segEnd = urlFirstOfBytes(path, from: segEnd, until: len, bytes: UrlSegmentEndBytes)
 
 		let segManaged = try pathBytes.slice(pos, segEnd) otherwise 'sliceErr'
 			panic("urlRemoveDotSegments: slice OOB — pos and segEnd are within bounds")
@@ -243,7 +322,7 @@ public function urlRemoveLastSegment(output String) returns String
 	while i > 0 'scan'
 		i = i - 1
 
-		if output.byteAtOrPanic(i) == 47 'foundSlash'
+		if output.byteAtOrPanic(i) == UrlSlashByte 'foundSlash'
 			if i == 0 'isRoot'
 				return ""
 			end 'isRoot'
@@ -272,7 +351,7 @@ public function urlMergeBasePath(basePath String, hasAuthority bool, refPath Str
 	while i > 0 'scan'
 		i = i - 1
 
-		if basePath.byteAtOrPanic(i) == 47 'foundSlash'
+		if basePath.byteAtOrPanic(i) == UrlSlashByte 'foundSlash'
 			let prefix = try baseBytes.slice(0, i + 1) otherwise 'sliceErr3'
 				panic("urlMergeBasePath: slice OOB — i < len guaranteed")
 			end 'sliceErr3'

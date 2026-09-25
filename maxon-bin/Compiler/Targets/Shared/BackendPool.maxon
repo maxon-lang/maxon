@@ -428,14 +428,11 @@ export type BackendWorker
 		return try BackendUnitReply.afterRunning(unit, worker: self)
 	end 'run'
 
-	// ⭐ **ONE UNIT THROUGH ALL THREE STAGES**, each bracketed on this thread's counters: the isel into
-	// its own delta, the edge split and the allocator's sub-phases into one `PoolPhaseCosts` — the same
-	// rows a serial run bills them to.
+	// Each stage is bracketed on this thread's counters into the same rows a serial run bills them to.
 	//
-	// ⛔ **THE ORPHANS GO BEFORE THE REPLY.** The allocator's rewrite leaves the uncoloured op behind in the
-	// flat array beside the coloured one that replaced it, sharing its managed payloads — and a reply moves,
-	// so every record reachable from it must have one owner. Compacting drops the orphans, which is also
-	// what makes the reply carry the function's live ops and nothing else.
+	// The orphans are compacted away before the reply: the allocator's rewrite leaves the uncoloured
+	// op in the flat array beside the coloured one that replaced it, sharing its managed payloads, and
+	// a reply moves, so every record reachable from it must have one owner.
 	module function finish(body BackendUnitBody) returns FinishedUnit throws RegAllocRefusal
 		var costs = PoolPhaseCosts.create(RegAllocPhase.allCases.count())
 		var iselCost = PhaseDelta.zero()
@@ -448,7 +445,7 @@ export type BackendWorker
 		var refusal = RegAllocRefusalSite.create()
 		var debugLocations = DebugValueLocationArray.create()
 		var debugRanges = DebugValueRangeArray.create()
-		try allocateFunctionCore(lowered.targetModule, func: unitFunc, hasAuthor: body.hasAuthor, pool: self.pool, callerSaved: self.callerSaved, file: self.file, valueClass: lowered.valueClass, opFacts: self.opFacts, counters: counters, costs: costs, facts: facts, refusal: refusal, debugValueIds: body.debugValueIds, debugLocations: debugLocations, debugRanges: debugRanges)
+		try allocateFunctionCore(lowered.targetModule, func: unitFunc, hasAuthor: body.hasAuthor, pool: self.pool, callerSaved: self.callerSaved, file: self.file, valueClass: lowered.valueClass, opFacts: self.opFacts, counters: counters, costs: costs, facts: facts, refusal: refusal, debugValues: body.debugValues, debugLocations: debugLocations, debugRanges: debugRanges)
 		unitFunc.debugLocalLocations = debugLocations
 		unitFunc.debugLocalRanges = debugRanges
 

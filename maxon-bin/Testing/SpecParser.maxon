@@ -2151,7 +2151,7 @@ function supportedTargetKeyList() returns String
 		keys.push(targetToString(candidate))
 	end 'each'
 
-	return commaList(keys)
+	return joinedWith(keys, separator: RosterSeparator)
 end 'supportedTargetKeyList'
 
 union UnreadCommentSite
@@ -2181,29 +2181,16 @@ function endsTestCase(line String, openings StringArray) returns bool
 end 'endsTestCase'
 
 function caseMarkerRoster() returns String
-	var quoted = StringArray.create()
+	var spellings = StringArray.create()
 
 	for directive in CaseDirective.allCases 'eachDirective'
-		quoted.push("`{directive.spelling()}`")
+		spellings.push(directive.spelling())
 	end 'eachDirective'
 
-	return commaList(quoted)
+	return joinedWith(backQuoted(spellings), separator: RosterSeparator)
 end 'caseMarkerRoster'
 
-// `items` as one comma-separated line, for a refusal to quote a roster with.
-function commaList(items StringArray) returns String
-	var listed = ""
-
-	for item in items 'each'
-		if not listed.isEmpty() 'separator'
-			listed = "{listed}{TargetSeparator} "
-		end 'separator'
-
-		listed = "{listed}{item}"
-	end 'each'
-
-	return listed
-end 'commaList'
+let RosterSeparator = ", "
 
 // What a `<!-- network: … -->` marker says this case needs.
 //

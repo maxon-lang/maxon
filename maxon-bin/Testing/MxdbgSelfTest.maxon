@@ -1,20 +1,19 @@
 // Testing/MxdbgSelfTest.maxon — round-trip the `.mxdbg` container through its own writer and reader.
 //
-// ⭐ **THE FORMAT IS A SHARED CONTRACT AND THIS IS THE HALF THAT NEEDS NO COMPILED PROGRAM.** The
-// layout has to be right before any question about a real build's contents is worth asking.
-// `tests/debug/sidecar-dump.maxtest` asks the other half — whether a sidecar says something TRUE
-// about the binary beside it — and it needs three spawned processes to do it. This one is pure and
-// costs microseconds.
+// This is the half of the format contract that needs no compiled program;
+// `tests/debug/sidecar-dump.maxtest` asks the other half — whether a sidecar says something true
+// about the binary beside it.
 //
-// ⚠ **THE ROWS GO IN ASCENDING ORDER.** This writer does not sort — it REFUSES an out-of-order row
-// (`requireAscendingLineTable`), because its caller walks chunks in `.text` order — so ascending is the
-// contract being exercised, not a convenience.
+// Rows are added in ascending order because the writer refuses an out-of-order row
+// (`MxdbgWriter.requireAscendingTables`) rather than sorting it.
 
 let AccountFileName = "account.maxon"
 let IoFileName = "io.maxon"
 let WithdrawName = "withdraw"
 let ParseBatchName = "parseBatch"
+let ParseBatchDisplayName = "test 'parses a batch'"
 let SelfTestTriple = "x64-windows"
+let SelfTestSourceRoot = "C:/projects/ledger"
 
 // `withdraw` occupies [0, 100) and `parseBatch` [100, 200); 250 is the gap past both, which every lookup
 // must answer nothing for rather than naming the nearest function.
@@ -45,6 +44,10 @@ let DebitEnd = 60 as MxdbgCodeOffset
 let InDebitOnly = 45 as MxdbgCodeOffset
 let InBoth = 35 as MxdbgCodeOffset
 let InNeither = 70 as MxdbgCodeOffset
+let DebitCallLine = 11 as MxdbgIndex
+let DebitCallColumn = 9 as MxdbgIndex
+let DueName = "due"
+let DueRegister = 6 as MxdbgLocValue
 
 let TotalName = "total"
 let AmountName = "amount"
@@ -83,6 +86,17 @@ let UnvisitedLine = 99 as MxdbgIndex
 let FirstCodeOffset = 0 as MxdbgCodeOffset
 
 let BrokenRowIndent = "\n  "
+
+let PastEveryPool = 0xFFFFFFF0 as MachineWord
+let PastEveryType = 0xFFFFFF00 as MxdbgIndex
+let PastEveryFile = 0xFFFFFF00 as MxdbgIndex
+let PastEveryRow = 0xFFFFFF00 as MxdbgIndex
+let UnknownLocKind = 99 as MxdbgIndex
+let RowPastItsSuccessor = 50 as MxdbgCodeOffset
+let InvertedParseBatchEnd = 50 as MxdbgCodeOffset
+let OverlappingParseBatchStart = 50 as MxdbgCodeOffset
+let RowPastWithdraw = 150 as MxdbgCodeOffset
+let ParseBatchFunction = 1 as MxdbgIndex
 
 export function requireMxdbgRoundTrip()
 	var broken = StringArray.create()
@@ -126,14 +140,130 @@ function checkTablesRoundTrip(broken StringArray)
 	checkFunctionWindows(broken, reader: reader)
 	checkLineLookups(broken, reader: reader)
 	checkInlineLookups(broken, reader: reader)
+	checkSiteAttribution(broken, reader: reader)
 	checkLocalRanges(broken, reader: reader)
 	checkFoldedAndIndirect(broken, reader: reader)
 	checkFoldedAggregates(broken, reader: reader)
 	checkArrayElement(broken, reader: reader)
 	checkTypeSignedness(broken, reader: reader)
-	checkLineToOffsets(broken, reader: reader)
+	checkStatementRows(broken, reader: reader)
 	checkCallSiteBias(broken)
+	checkRefusesACyclicSiteParent(broken, buildId: buildId)
+	checkRefusesAStringPastThePool(broken, buildId: buildId)
+	checkRefusesADanglingLocalType(broken, buildId: buildId)
+	checkRefusesADanglingFieldType(broken, buildId: buildId)
+	checkRefusesALineWindowPastItsTable(broken, buildId: buildId)
+	checkRefusesAnUnknownLocKind(broken, buildId: buildId)
+	checkRefusesLineRowsOutOfOrder(broken, buildId: buildId)
+	checkRefusesOverlappingInlineRanges(broken, buildId: buildId)
+	checkRefusesAnInvertedFunctionRange(broken, buildId: buildId)
+	checkRefusesOverlappingFunctionRanges(broken, buildId: buildId)
+	checkRefusesARowOutsideItsFunction(broken, buildId: buildId)
+	checkRefusesAnEmptyLocalScope(broken, buildId: buildId)
+	checkRefusesADanglingCallFile(broken, buildId: buildId)
 end 'checkTablesRoundTrip'
+
+function checkRefusesAnInvertedFunctionRange(broken StringArray, buildId HashDigest)
+	var image = selfTestImage(buildId)
+	overwriteTableWord(image, tableAt: MxdbgOffFuncTableOff, stride: MxdbgFuncEntrySize, record: ParseBatchFunction, field: MxdbgFuncCodeEnd, value: InvertedParseBatchEnd as MachineWord)
+	requireRefusedAs(broken, image: image, expected: MxdbgReadError.outOfOrder(MxdbgOrderedTable.functionRanges, record: ParseBatchFunction), damage: "an image whose function {ParseBatchFunction} ends at 0x{InvertedParseBatchEnd:x}, before it starts")
+end 'checkRefusesAnInvertedFunctionRange'
+
+function checkRefusesOverlappingFunctionRanges(broken StringArray, buildId HashDigest)
+	var image = selfTestImage(buildId)
+	overwriteTableWord(image, tableAt: MxdbgOffFuncTableOff, stride: MxdbgFuncEntrySize, record: ParseBatchFunction, field: MxdbgFuncCodeStart, value: OverlappingParseBatchStart as MachineWord)
+	requireRefusedAs(broken, image: image, expected: MxdbgReadError.outOfOrder(MxdbgOrderedTable.functionRanges, record: ParseBatchFunction), damage: "an image whose function {ParseBatchFunction} starts at 0x{OverlappingParseBatchStart:x}, inside function 0")
+end 'checkRefusesOverlappingFunctionRanges'
+
+function checkRefusesARowOutsideItsFunction(broken StringArray, buildId HashDigest)
+	var image = selfTestImage(buildId)
+	overwriteTableWord(image, tableAt: MxdbgOffLineTableOff, stride: MxdbgLineEntrySize, record: 0, field: MxdbgLineCodeOffset, value: RowPastWithdraw as MachineWord)
+	requireRefusedAs(broken, image: image, expected: MxdbgReadError.outOfOrder(MxdbgOrderedTable.functionLineOutsideItsRange, record: 0), damage: "an image whose function 0 lists a line row at 0x{RowPastWithdraw:x}, past its own end")
+end 'checkRefusesARowOutsideItsFunction'
+
+function checkRefusesAnEmptyLocalScope(broken StringArray, buildId HashDigest)
+	var image = selfTestImage(buildId)
+	overwriteTableWord(image, tableAt: MxdbgOffLocalTableOff, stride: MxdbgLocalEntrySize, record: 0, field: MxdbgLocalScopeStart, value: WithdrawEnd as MachineWord)
+	requireRefusedAs(broken, image: image, expected: MxdbgReadError.outOfOrder(MxdbgOrderedTable.localScopes, record: 0), damage: "an image whose local 0's scope starts at its function's end, so it covers nothing")
+end 'checkRefusesAnEmptyLocalScope'
+
+function checkRefusesADanglingCallFile(broken StringArray, buildId HashDigest)
+	var image = selfTestImage(buildId)
+	overwriteTableWord(image, tableAt: MxdbgOffInlineSiteTableOff, stride: MxdbgInlineSiteEntrySize, record: DebitSite, field: MxdbgInlineSiteCallFileId, value: PastEveryFile as MachineWord)
+	requireRefusedAs(broken, image: image, expected: MxdbgReadError.danglingReference(MxdbgReference.siteCallFile, record: DebitSite, names: PastEveryFile), damage: "an image whose inline site '{DebitName}' is called from file {PastEveryFile}")
+end 'checkRefusesADanglingCallFile'
+
+function checkRefusesACyclicSiteParent(broken StringArray, buildId HashDigest)
+	var writer = MxdbgWriter.create()
+	writer.addFile(AccountFileName)
+	writer.addFunction(WithdrawName, displayName: WithdrawName, origin: MxdbgOrigin.authored, codeStart: WithdrawStart, codeEnd: WithdrawEnd, frameSize: WithdrawFrame, paramCount: WithdrawParams)
+	writer.addInlineSite(DebitName, parent: MxdbgNoInlineSite, callFileId: MxdbgNoSourceFile, callLine: 0, callColumn: 0, origin: MxdbgOrigin.authored)
+	writer.addInlineSite(CheckFundsName, parent: DebitSite, callFileId: MxdbgNoSourceFile, callLine: 0, callColumn: 0, origin: MxdbgOrigin.library)
+	writer.addInlineRange(DebitStart, codeEnd: DebitEnd, site: DebitSite)
+
+	var image = writer.build(buildId, targetTriple: SelfTestTriple, sourceRoot: SelfTestSourceRoot)
+	overwriteTableWord(image, tableAt: MxdbgOffInlineSiteTableOff, stride: MxdbgInlineSiteEntrySize, record: DebitSite, field: MxdbgInlineSiteParent, value: CheckFundsSite as MachineWord)
+	requireRefusedAs(broken, image: image, expected: MxdbgReadError.danglingReference(MxdbgReference.siteParent, record: DebitSite, names: CheckFundsSite), damage: "an image whose inline sites '{DebitName}' and '{CheckFundsName}' name each other as parents")
+end 'checkRefusesACyclicSiteParent'
+
+function checkRefusesAStringPastThePool(broken StringArray, buildId HashDigest)
+	var image = selfTestImage(buildId)
+	overwriteTableWord(image, tableAt: MxdbgOffFuncTableOff, stride: MxdbgFuncEntrySize, record: 0, field: MxdbgFuncNameLen, value: PastEveryPool)
+	requireRefusedAs(broken, image: image, expected: MxdbgReadError.stringPastPool(MxdbgPoolString.functionName, record: 0), damage: "an image whose function 0 names a string running {PastEveryPool} bytes past its string pool")
+end 'checkRefusesAStringPastThePool'
+
+function checkRefusesADanglingLocalType(broken StringArray, buildId HashDigest)
+	var image = selfTestImage(buildId)
+	overwriteTableWord(image, tableAt: MxdbgOffLocalTableOff, stride: MxdbgLocalEntrySize, record: 0, field: MxdbgLocalTypeId, value: PastEveryType as MachineWord)
+	requireRefusedAs(broken, image: image, expected: MxdbgReadError.danglingReference(MxdbgReference.localType, record: 0, names: PastEveryType), damage: "an image whose local 0 names type {PastEveryType}")
+end 'checkRefusesADanglingLocalType'
+
+function checkRefusesADanglingFieldType(broken StringArray, buildId HashDigest)
+	var image = selfTestImage(buildId)
+	overwriteTableWord(image, tableAt: MxdbgOffFieldTableOff, stride: MxdbgFieldEntrySize, record: 0, field: MxdbgFieldTypeId, value: PastEveryType as MachineWord)
+	requireRefusedAs(broken, image: image, expected: MxdbgReadError.danglingReference(MxdbgReference.fieldType, record: 0, names: PastEveryType), damage: "an image whose field 0 names type {PastEveryType}")
+end 'checkRefusesADanglingFieldType'
+
+function checkRefusesALineWindowPastItsTable(broken StringArray, buildId HashDigest)
+	var image = selfTestImage(buildId)
+	overwriteTableWord(image, tableAt: MxdbgOffFuncTableOff, stride: MxdbgFuncEntrySize, record: 0, field: MxdbgFuncLineCount, value: PastEveryRow as MachineWord)
+	requireRefusedAs(broken, image: image, expected: MxdbgReadError.windowPastTable(MxdbgWindow.functionLines, record: 0), damage: "an image whose function 0 claims {PastEveryRow} line rows")
+end 'checkRefusesALineWindowPastItsTable'
+
+function checkRefusesAnUnknownLocKind(broken StringArray, buildId HashDigest)
+	var image = selfTestImage(buildId)
+	overwriteTableWord(image, tableAt: MxdbgOffLocalTableOff, stride: MxdbgLocalEntrySize, record: 0, field: MxdbgLocalLocKind, value: UnknownLocKind as MachineWord)
+	requireRefusedAs(broken, image: image, expected: MxdbgReadError.unknownLocKind(0, word: UnknownLocKind), damage: "an image whose local 0 names location kind {UnknownLocKind}")
+end 'checkRefusesAnUnknownLocKind'
+
+function checkRefusesLineRowsOutOfOrder(broken StringArray, buildId HashDigest)
+	var image = selfTestImage(buildId)
+	overwriteTableWord(image, tableAt: MxdbgOffLineTableOff, stride: MxdbgLineEntrySize, record: 0, field: MxdbgLineCodeOffset, value: RowPastItsSuccessor as MachineWord)
+	requireRefusedAs(broken, image: image, expected: MxdbgReadError.outOfOrder(MxdbgOrderedTable.functionLines, record: 0), damage: "an image whose function 0 lists a line row at 0x{RowPastItsSuccessor:x} ahead of one before it")
+end 'checkRefusesLineRowsOutOfOrder'
+
+function checkRefusesOverlappingInlineRanges(broken StringArray, buildId HashDigest)
+	var image = selfTestImage(buildId)
+	overwriteTableWord(image, tableAt: MxdbgOffInlineRangeTableOff, stride: MxdbgInlineRangeEntrySize, record: 1, field: MxdbgInlineRangeCodeStart, value: DebitStart as MachineWord)
+	requireRefusedAs(broken, image: image, expected: MxdbgReadError.outOfOrder(MxdbgOrderedTable.inlineRanges, record: 1), damage: "an image whose inline range 1 starts inside range 0")
+end 'checkRefusesOverlappingInlineRanges'
+
+function requireRefusedAs(broken StringArray, image ByteArray, expected MxdbgReadError, damage String)
+	let parsed = try MxdbgReader.parse(image) otherwise (e) 'refused'
+		if e.displayReason() != expected.displayReason() 'anotherReason'
+			broken.push("{damage} is refused as \"{e.displayReason()}\" rather than \"{expected.displayReason()}\"")
+		end 'anotherReason'
+
+		return
+	end 'refused'
+
+	broken.push("{damage} parses into {parsed.functionCount()} function(s) — it must be refused as \"{expected.displayReason()}\"")
+end 'requireRefusedAs'
+
+function overwriteTableWord(image ByteArray, tableAt ByteOffset, stride ByteOffset, record MxdbgIndex, field ByteOffset, value MachineWord)
+	let table = imageReadU32(image, at: tableAt) as ByteOffset
+	patchDword(image, offset: table + (record as ByteOffset) * stride + field, value: value)
+end 'overwriteTableWord'
 
 function checkFoldedAggregates(broken StringArray, reader MxdbgReader)
 	if reader.constantWordCount() != 4 'sectionLost'
@@ -218,8 +348,8 @@ end 'checkFoldedAndIndirect'
 function checkLocalRanges(broken StringArray, reader MxdbgReader)
 	let withdraw = reader.functionRecord(0)
 
-	if withdraw.localCount != 6 'windowLost'
-		broken.push("'{WithdrawName}' claims {withdraw.localCount} local row(s) against the 6 added under it")
+	if withdraw.localCount != 7 'windowLost'
+		broken.push("'{WithdrawName}' claims {withdraw.localCount} local row(s) against the 7 added under it")
 		return
 	end 'windowLost'
 
@@ -287,24 +417,31 @@ function checkTypeSignedness(broken StringArray, reader MxdbgReader)
 	end 'signednessInvented'
 end 'checkTypeSignedness'
 
-function checkLineToOffsets(broken StringArray, reader MxdbgReader)
+function checkStatementRows(broken StringArray, reader MxdbgReader)
 	var accountFile = MxdbgIndexArray.create()
 	accountFile.push(AccountFileId)
-	let offsets = reader.lineToOffsets(accountFile, line: SharedLine)
+	let rows = reader.statementRowsOf(accountFile, line: SharedLine)
 
-	if offsets.count() != 2 'copiesLost'
-		broken.push("{AccountFileName}:{SharedLine} resolves to {offsets.count()} offset(s) against the 2 rows that carry it — a line that lives at several addresses owes every one of them")
+	if rows.count() != 2 'copiesLost'
+		broken.push("{AccountFileName}:{SharedLine} resolves to {rows.count()} row(s) against the 2 that carry it — a line that lives at several addresses owes every one of them")
 		return
 	end 'copiesLost'
 
-	if (try offsets.get(0) otherwise 0) != SharedLineFirstOffset or (try offsets.get(1) otherwise 0) != SharedLineSecondOffset 'orderLost'
-		broken.push("{AccountFileName}:{SharedLine} resolves to 0x{try offsets.get(0) otherwise 0:x} and 0x{try offsets.get(1) otherwise 0:x}, against 0x{SharedLineFirstOffset:x} and 0x{SharedLineSecondOffset:x} ascending")
+	let first = try rows.get(0) otherwise panic("checkStatementRows: the count was asserted on the line above")
+	let second = try rows.get(1) otherwise panic("checkStatementRows: the count was asserted on the line above")
+
+	if first.codeOffset != SharedLineFirstOffset or second.codeOffset != SharedLineSecondOffset 'orderLost'
+		broken.push("{AccountFileName}:{SharedLine} resolves to 0x{first.codeOffset:x} and 0x{second.codeOffset:x}, against 0x{SharedLineFirstOffset:x} and 0x{SharedLineSecondOffset:x} ascending")
 	end 'orderLost'
 
-	if reader.lineToOffsets(accountFile, line: UnvisitedLine).count() != 0 'aLineWithNoCode'
+	if first.entersTheLine() or not second.entersTheLine() 'lineEntryLost'
+		broken.push("{AccountFileName}:{SharedLine}'s rows read back as entering the line {first.entersTheLine()} and {second.entersTheLine()}, against the flag written on the second alone — a loop header armed only where control falls into it stops once and never per iteration")
+	end 'lineEntryLost'
+
+	if reader.statementRowsOf(accountFile, line: UnvisitedLine).count() != 0 'aLineWithNoCode'
 		broken.push("{AccountFileName}:{UnvisitedLine} carries no row and resolved to an offset anyway")
 	end 'aLineWithNoCode'
-end 'checkLineToOffsets'
+end 'checkStatementRows'
 
 function checkCallSiteBias(broken StringArray)
 	if MxdbgReader.callSiteLookup(FirstCodeOffset) != FirstCodeOffset 'wrappedPastTheStart'
@@ -332,29 +469,30 @@ function selfTestImage(buildId HashDigest) returns ByteArray
 	_ = writer.addConstantWord(ParcelHeight)
 	_ = writer.addConstantWord(ShipmentTag)
 	_ = writer.addConstantWord(ShipmentPayload)
-	writer.addFunction(WithdrawName, codeStart: WithdrawStart, codeEnd: WithdrawEnd, frameSize: WithdrawFrame, paramCount: WithdrawParams)
-	writer.addLocal(AmountName, locKind: MxdbgLocKindRegister, locValue: AmountRegister, typeId: AmountTypeId, scopeStart: WithdrawStart, scopeEnd: WithdrawEnd, flags: 0)
-	writer.addLocal(LimitName, locKind: MxdbgLocKindConstant, locValue: LimitConstant, typeId: AmountTypeId, scopeStart: WithdrawStart, scopeEnd: WithdrawEnd, flags: 0)
-	writer.addLocal(ParcelName, locKind: MxdbgLocKindFoldedAggregate, locValue: ParcelWordBase, typeId: ParcelTypeId, scopeStart: WithdrawStart, scopeEnd: WithdrawEnd, flags: 0)
-	writer.addLocal(ShipmentName, locKind: MxdbgLocKindFoldedAggregate, locValue: ShipmentWordBase, typeId: ShipmentTypeId, scopeStart: WithdrawStart, scopeEnd: WithdrawEnd, flags: 0)
-	writer.addLocal(TotalName, locKind: MxdbgLocKindRegister, locValue: TotalRegister, typeId: AmountArrayTypeId, scopeStart: WithdrawStart, scopeEnd: TotalFirstRunEnd, flags: MxdbgLocalFlagIndirect)
-	writer.addLocal(TotalName, locKind: MxdbgLocKindRegister, locValue: TotalRegister, typeId: AmountArrayTypeId, scopeStart: TotalSecondRunStart, scopeEnd: WithdrawEnd, flags: MxdbgLocalFlagIndirect)
-	writer.addFunction(ParseBatchName, codeStart: ParseBatchStart, codeEnd: ParseBatchEnd, frameSize: ParseBatchFrame, paramCount: ParseBatchParams)
+	writer.addFunction(WithdrawName, displayName: WithdrawName, origin: MxdbgOrigin.authored, codeStart: WithdrawStart, codeEnd: WithdrawEnd, frameSize: WithdrawFrame, paramCount: WithdrawParams)
+	writer.addLocal(AmountName, locKind: MxdbgLocKindRegister, locValue: AmountRegister, typeId: AmountTypeId, scopeStart: WithdrawStart, scopeEnd: WithdrawEnd, flags: 0, site: MxdbgNoInlineSite)
+	writer.addLocal(LimitName, locKind: MxdbgLocKindConstant, locValue: LimitConstant, typeId: AmountTypeId, scopeStart: WithdrawStart, scopeEnd: WithdrawEnd, flags: 0, site: MxdbgNoInlineSite)
+	writer.addLocal(ParcelName, locKind: MxdbgLocKindFoldedAggregate, locValue: ParcelWordBase, typeId: ParcelTypeId, scopeStart: WithdrawStart, scopeEnd: WithdrawEnd, flags: 0, site: MxdbgNoInlineSite)
+	writer.addLocal(ShipmentName, locKind: MxdbgLocKindFoldedAggregate, locValue: ShipmentWordBase, typeId: ShipmentTypeId, scopeStart: WithdrawStart, scopeEnd: WithdrawEnd, flags: 0, site: MxdbgNoInlineSite)
+	writer.addLocal(TotalName, locKind: MxdbgLocKindRegister, locValue: TotalRegister, typeId: AmountArrayTypeId, scopeStart: WithdrawStart, scopeEnd: TotalFirstRunEnd, flags: MxdbgLocalFlagIndirect, site: MxdbgNoInlineSite)
+	writer.addLocal(TotalName, locKind: MxdbgLocKindRegister, locValue: TotalRegister, typeId: AmountArrayTypeId, scopeStart: TotalSecondRunStart, scopeEnd: WithdrawEnd, flags: MxdbgLocalFlagIndirect, site: MxdbgNoInlineSite)
+	writer.addLocal(DueName, locKind: MxdbgLocKindRegister, locValue: DueRegister, typeId: AmountTypeId, scopeStart: DebitStart, scopeEnd: DebitEnd, flags: 0, site: DebitSite)
+	writer.addFunction(ParseBatchName, displayName: ParseBatchDisplayName, origin: MxdbgOrigin.test, codeStart: ParseBatchStart, codeEnd: ParseBatchEnd, frameSize: ParseBatchFrame, paramCount: ParseBatchParams)
 	writer.addLine(0, fileId: AccountFileId, line: 10, column: 1, flags: MxdbgLineFlagStatement)
 	writer.addLine(16, fileId: AccountFileId, line: 11, column: 5, flags: MxdbgLineFlagStatement)
 	writer.addLine(SharedLineFirstOffset, fileId: AccountFileId, line: SharedLine, column: 5, flags: MxdbgLineFlagStatement)
 	writer.addLine(100, fileId: IoFileId, line: 5, column: 1, flags: MxdbgLineFlagStatement)
 	writer.addLine(120, fileId: IoFileId, line: 6, column: 9, flags: MxdbgLineFlagStatement)
-	writer.addLine(SharedLineSecondOffset, fileId: AccountFileId, line: SharedLine, column: 5, flags: MxdbgLineFlagStatement)
+	writer.addLine(SharedLineSecondOffset, fileId: AccountFileId, line: SharedLine, column: 5, flags: MxdbgLineFlagStatement or MxdbgLineFlagLineEntry)
 
 	// The nested body's blocks carry the inner site, so `debit` is two ranges around `checkFunds`'s one.
-	writer.addInlineSite(DebitName, parent: MxdbgNoParentSite)
-	writer.addInlineSite(CheckFundsName, parent: DebitSite)
+	writer.addInlineSite(DebitName, parent: MxdbgNoInlineSite, callFileId: AccountFileId, callLine: DebitCallLine, callColumn: DebitCallColumn, origin: MxdbgOrigin.authored)
+	writer.addInlineSite(CheckFundsName, parent: DebitSite, callFileId: MxdbgNoSourceFile, callLine: 0, callColumn: 0, origin: MxdbgOrigin.library)
 	writer.addInlineRange(DebitStart, codeEnd: CheckFundsStart, site: DebitSite)
 	writer.addInlineRange(CheckFundsStart, codeEnd: CheckFundsEnd, site: CheckFundsSite)
 	writer.addInlineRange(CheckFundsEnd, codeEnd: DebitEnd, site: DebitSite)
 
-	return writer.build(buildId, targetTriple: SelfTestTriple)
+	return writer.build(buildId, targetTriple: SelfTestTriple, sourceRoot: SelfTestSourceRoot)
 end 'selfTestImage'
 
 // ⭐ **THE INLINE-FRAME ANSWERS, INCLUDING THE NESTED ONE.** An offset inside the inner body names the
@@ -380,6 +518,51 @@ function checkInlineLookups(broken StringArray, reader MxdbgReader)
 		site(index) then broken.push("offset {InNeither} is under no inline range and resolved to '{reader.inlineSite(index).name}'")
 	end 'gap'
 end 'checkInlineLookups'
+
+function checkSiteAttribution(broken StringArray, reader MxdbgReader)
+	let withdraw = reader.functionRecord(0)
+
+	for k in withdraw.localFirst upto withdraw.localFirst + withdraw.localCount 'eachLocal'
+		let local = reader.localRecord(k as MxdbgIndex)
+
+		let readBack = match local.site 'attributed'
+			none gives OwnTextAttributionText
+			site(index) gives SplicedAttributionText if index == DebitSite else AnotherSiteAttributionText
+		end 'attributed'
+
+		let written = SplicedAttributionText if local.name == DueName else OwnTextAttributionText
+
+		if readBack != written 'misattributed'
+			broken.push("'{local.name}' reads back {readBack}, against {written}")
+		end 'misattributed'
+	end 'eachLocal'
+
+	match reader.inlineSite(DebitSite).call 'debitCall'
+		none then broken.push("'{DebitName}' reads back with no call position, against {AccountFileName}:{DebitCallLine}:{DebitCallColumn}")
+		at(file, line, column) then noteCallMismatch(broken, file: file, line: line, column: column)
+	end 'debitCall'
+
+	match reader.inlineSite(CheckFundsSite).call 'checkFundsCall'
+		none then break 'checkFundsCall'
+		at(file, line, column) then broken.push("'{CheckFundsName}' was written with no call position and reads back at {file}:{line}:{column}")
+	end 'checkFundsCall'
+
+	if reader.inlineSite(DebitSite).origin != MxdbgOrigin.authored or reader.inlineSite(CheckFundsSite).origin != MxdbgOrigin.library 'siteProvenanceLost'
+		broken.push("the sites read back of origins {reader.inlineSite(DebitSite).origin.name} and {reader.inlineSite(CheckFundsSite).origin.name}, against authored and library")
+	end 'siteProvenanceLost'
+end 'checkSiteAttribution'
+
+let SplicedAttributionText = "attributed to the spliced body of debit"
+let OwnTextAttributionText = "attributed to its function's own text"
+let AnotherSiteAttributionText = "attributed to a site it was not written under"
+
+function noteCallMismatch(broken StringArray, file String, line MxdbgIndex, column MxdbgIndex)
+	if file == AccountFileName and line == DebitCallLine and column == DebitCallColumn 'asWritten'
+		return
+	end 'asWritten'
+
+	broken.push("'{DebitName}' reads back called at {file}:{line}:{column}, against {AccountFileName}:{DebitCallLine}:{DebitCallColumn}")
+end 'noteCallMismatch'
 
 function requireSiteChain(broken StringArray, reader MxdbgReader, index MxdbgIndex, name String, parentName String)
 	let site = reader.inlineSite(index)
@@ -417,6 +600,10 @@ function checkHeader(broken StringArray, reader MxdbgReader, buildId HashDigest)
 		broken.push("the target triple reads back as '{reader.triple}' rather than '{SelfTestTriple}'")
 	end 'tripleLost'
 
+	if reader.sourceRoot != SelfTestSourceRoot 'sourceRootLost'
+		broken.push("the source root reads back as '{reader.sourceRoot}' rather than '{SelfTestSourceRoot}' — a relative file-table path resolves against it, so a breakpoint spelled by its path would name nothing")
+	end 'sourceRootLost'
+
 	if reader.fileCount() != 2 or reader.functionCount() != 2 or reader.lineCount() != 6 'countsLost'
 		broken.push("the table counts read back as {reader.fileCount()} files / {reader.functionCount()} functions / {reader.lineCount()} rows against 2 / 2 / 6")
 	end 'countsLost'
@@ -426,8 +613,9 @@ function checkHeader(broken StringArray, reader MxdbgReader, buildId HashDigest)
 	end 'namesLost'
 end 'checkHeader'
 
-// Each function's record, and the LINE WINDOW the writer computed for it — the one field nothing else
-// would notice being wrong, because the rows themselves would still all be present and in order.
+// Each function's record, and the line window the writer computed for it — the one field nothing
+// else would notice being wrong, because the rows themselves would still all be present and in
+// order.
 function checkFunctionWindows(broken StringArray, reader MxdbgReader)
 	let withdraw = reader.functionRecord(0)
 
@@ -439,7 +627,15 @@ function checkFunctionWindows(broken StringArray, reader MxdbgReader)
 		broken.push("'{WithdrawName}' claims rows [{withdraw.lineFirst}, +{withdraw.lineCount}) against the 3 that lie inside its range")
 	end 'firstWindowWrong'
 
+	if withdraw.displayName != WithdrawName or withdraw.origin != MxdbgOrigin.authored 'firstProvenanceLost'
+		broken.push("function 0 reads back displayed as '{withdraw.displayName}' of origin {withdraw.origin.name}")
+	end 'firstProvenanceLost'
+
 	let parseBatch = reader.functionRecord(1)
+
+	if parseBatch.displayName != ParseBatchDisplayName or parseBatch.origin != MxdbgOrigin.test 'secondProvenanceLost'
+		broken.push("function 1 reads back displayed as '{parseBatch.displayName}' of origin {parseBatch.origin.name}")
+	end 'secondProvenanceLost'
 
 	if parseBatch.lineFirst != 3 or parseBatch.lineCount != 3 'secondWindowWrong'
 		broken.push("'{ParseBatchName}' claims rows [{parseBatch.lineFirst}, +{parseBatch.lineCount}) against the 3 that lie inside its range")

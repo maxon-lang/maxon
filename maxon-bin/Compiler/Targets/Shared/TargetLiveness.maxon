@@ -1396,9 +1396,8 @@ function opIsCondBranch(op TargetOp) returns bool
 		prologue or
 			epilogue or
 			ret or
-			jmp gives false
-		jcc gives true
-		movRegImm or
+			jmp or
+			movRegImm or
 			movRegImm32 or
 			movRegReg or
 			movReg32Reg32 or
@@ -1414,12 +1413,12 @@ function opIsCondBranch(op TargetOp) returns bool
 			callDirect or
 			iatCall or
 			cqo or
-			divideReg gives false
-		pushReg or
-			popReg gives false
-		storeSlotReg or
-			loadRegSlot gives false
-		andRegReg or
+			divideReg or
+			pushReg or
+			popReg or
+			storeSlotReg or
+			loadRegSlot or
+			andRegReg or
 			orRegReg or
 			xorRegReg or
 			notReg or
@@ -1451,18 +1450,10 @@ function opIsCondBranch(op TargetOp) returns bool
 			leaRegRdata or
 			minMaxSdRegReg or
 			movqXmmGpr or
-			negF64RegReg gives false
-
-		// The arm64 conditional branches — a flag test (`arm64CondBranch`) or a register zero-test
-		// (`arm64Cbz`/`arm64Cbnz`) — are the twins of `jcc`: each carries only the THEN edge, paired
-		// with an `arm64Branch` terminator for the else edge. `arm64Ret`/`arm64Branch` and the ALU band
-		// are not conditional branches.
-		arm64Ret or
-			arm64Branch gives false
-		arm64CondBranch or
-			arm64Cbz or
-			arm64Cbnz gives true
-		arm64MovImm or
+			negF64RegReg or
+			arm64Ret or
+			arm64Branch or
+			arm64MovImm or
 			arm64Prologue or
 			arm64Epilogue or
 			arm64Add or
@@ -1508,84 +1499,51 @@ function opIsCondBranch(op TargetOp) returns bool
 			arm64FpLoadRdata or
 			arm64ImportCall or
 			arm64Syscall or
-			arm64Fcsel gives false
-
-		// `leaRegFunc`/`callReg` are a `lea` and a call, and the Linux `x64Syscall` a call —
-		// none is a conditional branch.
-		leaRegFunc or
+			arm64Fcsel or
+			leaRegFunc or
 			callReg or
-			x64Syscall gives false
-
-		// The jump tables are MULTIWAY terminators, not two-way conditional branches: their successors come
-		// straight off the op (`collectBlockSuccessorIds`), not via a `condBranch`+`jmp` pairing.
-		x64JumpTable or
-			arm64JumpTable gives false
-
-		// The witness call is a body op, not a conditional branch.
-		callMem gives false
-
-		// Both stack-argument ops are body ops, not branches.
-		arm64StoreOutgoingArg or
-			arm64LoadIncomingArg gives false
-
-		// Both arm64 bit reinterpretations are body ops, not branches.
-		arm64FmovGprFp or
-			arm64FmovFpGpr gives false
-
-		// A frame address is a body op, not a branch.
-		leaRegSlot gives false
-
-		// A fill ladder is a body op, not a branch — its branches are internal to its own encoding.
-		x64MemFill or
-			arm64MemFill gives false
-
-		// Every atomic is a body op, not a branch — the arm64 retry loop's branches are internal to its own
-		// encoding, exactly as the fill ladder's are.
-		x64LockCmpxchg or
+			x64Syscall or
+			x64JumpTable or
+			arm64JumpTable or
+			callMem or
+			arm64StoreOutgoingArg or
+			arm64LoadIncomingArg or
+			arm64FmovGprFp or
+			arm64FmovFpGpr or
+			leaRegSlot or
+			x64MemFill or
+			arm64MemFill or
+			x64LockCmpxchg or
 			x64LockXadd or
 			x64LockAdd or
 			x64TebSelfPointer or
 			x64GsLoadRegBase or
 			arm64AtomicCas or
 			arm64AtomicRmw or
-			arm64ThreadPointer gives false
-
-		// Every scaled-index form is a body op, not a branch.
-		leaRegBaseIndexScale or
+			arm64ThreadPointer or
+			leaRegBaseIndexScale or
 			loadRegBaseIndexScale or
 			storeBaseIndexScaleReg or
-			arm64AddLsl gives false
-
-		// The high multiply is a body op, not a branch.
-		mulHighReg gives false
-
-		// arm64 `fneg` is a body op, not a branch.
-		arm64Fneg gives false
-
-		// An ordered access is a body op, not a branch.
-		arm64LoadAcquire or
-			arm64StoreRelease gives false
-
-		// The arm64 high multiply is a body op, not a branch.
-		arm64Mulh gives false
-
-		// A coverage counter is a body op, not a branch.
-		covInc gives false
-
-		// So is a read-modify-write of memory.
-		x64AluBaseDispReg or
+			arm64AddLsl or
+			mulHighReg or
+			arm64Fneg or
+			arm64LoadAcquire or
+			arm64StoreRelease or
+			arm64Mulh or
+			covInc or
+			x64AluBaseDispReg or
 			x64AluBaseDispImm32 gives false
+		jcc or
+			arm64CondBranch or
+			arm64Cbz or
+			arm64Cbnz gives true
 	end 'check'
 end 'opIsCondBranch'
 
-// The block a terminator branches to UNCONDITIONALLY — `jmp` for x64, `arm64Branch` for arm64 — or
-// `none` for a terminator that is neither (a `ret`, a multiway jump table, an op-less `dead` slot).
-//
-// ⭐ THE ONE ROSTER FOR "IS THIS THE ISA'S UNCONDITIONAL BRANCH, AND WHERE DOES IT GO?". Two callers
-// need the two halves of that answer and neither may restate the arm list: `terminatorIsUnconditionalBranch`
-// below wants only the yes/no (it is the else-edge carrier a `condBranch` must be paired with), and
-// `BranchCleanup` wants the target (to compare it against the physically next block). A second
-// enumeration of `TargetOp` would be a copy that goes stale at the next op added to the dialect.
+// The one roster for "is this terminator the ISA's unconditional branch, and where does it go?".
+// `terminatorIsUnconditionalBranch` wants the yes/no and `BranchCleanup` the target, and neither
+// may restate the arm list: a second enumeration of `TargetOp` goes stale at the next op the
+// dialect adds.
 export union UnconditionalBranchTarget
 	none
 	blockId(id BlockId)
@@ -1600,9 +1558,8 @@ export function unconditionalBranchTargetOf(module TargetModule, block IrBlock) 
 	return match op 'check'
 		prologue or
 			epilogue or
-			ret gives UnconditionalBranchTarget.none
-		jmp(target) gives UnconditionalBranchTarget.blockId(target)
-		jcc or
+			ret or
+			jcc or
 			movRegImm or
 			movRegImm32 or
 			movRegReg or
@@ -1619,12 +1576,12 @@ export function unconditionalBranchTargetOf(module TargetModule, block IrBlock) 
 			callDirect or
 			iatCall or
 			cqo or
-			divideReg gives UnconditionalBranchTarget.none
-		pushReg or
-			popReg gives UnconditionalBranchTarget.none
-		storeSlotReg or
-			loadRegSlot gives UnconditionalBranchTarget.none
-		andRegReg or
+			divideReg or
+			pushReg or
+			popReg or
+			storeSlotReg or
+			loadRegSlot or
+			andRegReg or
 			orRegReg or
 			xorRegReg or
 			notReg or
@@ -1656,10 +1613,9 @@ export function unconditionalBranchTargetOf(module TargetModule, block IrBlock) 
 			leaRegRdata or
 			minMaxSdRegReg or
 			movqXmmGpr or
-			negF64RegReg gives UnconditionalBranchTarget.none
-		arm64Ret gives UnconditionalBranchTarget.none
-		arm64Branch(target) gives UnconditionalBranchTarget.blockId(target)
-		arm64CondBranch or
+			negF64RegReg or
+			arm64Ret or
+			arm64CondBranch or
 			arm64Cbz or
 			arm64Cbnz or
 			arm64MovImm or
@@ -1708,63 +1664,42 @@ export function unconditionalBranchTargetOf(module TargetModule, block IrBlock) 
 			arm64FpLoadRdata or
 			arm64ImportCall or
 			arm64Syscall or
-			arm64Fcsel gives UnconditionalBranchTarget.none
-
-		// `leaRegFunc`/`callReg` and the Linux `x64Syscall` are value-producing body ops,
-		// never a terminator — so never the ISA's unconditional branch.
-		leaRegFunc or
+			arm64Fcsel or
+			leaRegFunc or
 			callReg or
-			x64Syscall gives UnconditionalBranchTarget.none
-
-		// A jump table IS a terminator, but a MULTIWAY one — not the ISA's UNconditional single-target
-		// branch that a `condBranch` op's else-edge needs, so `none` (a jump-table block records no
-		// `condBranch`, so this is never consulted for one, but the classifier must be exhaustive).
-		x64JumpTable or
-			arm64JumpTable gives UnconditionalBranchTarget.none
-
-		// The witness call is a body op, not an unconditional branch.
-		callMem gives UnconditionalBranchTarget.none
-
-		// Both stack-argument ops are body ops, not branches.
-		arm64StoreOutgoingArg or
-			arm64LoadIncomingArg gives UnconditionalBranchTarget.none
-
-		// Both arm64 bit reinterpretations are body ops, not branches.
-		arm64FmovGprFp or
-			arm64FmovFpGpr gives UnconditionalBranchTarget.none
-
-		// A frame address is a body op, not a branch.
-		leaRegSlot gives UnconditionalBranchTarget.none
-
-		// A fill ladder is a body op, not a branch — its branches are internal to its own encoding.
-		x64MemFill or
-			arm64MemFill gives UnconditionalBranchTarget.none
-
-		// Every atomic is a body op, not a branch.
-		x64LockCmpxchg or
+			x64Syscall or
+			x64JumpTable or
+			arm64JumpTable or
+			callMem or
+			arm64StoreOutgoingArg or
+			arm64LoadIncomingArg or
+			arm64FmovGprFp or
+			arm64FmovFpGpr or
+			leaRegSlot or
+			x64MemFill or
+			arm64MemFill or
+			x64LockCmpxchg or
 			x64LockXadd or
 			x64LockAdd or
 			x64TebSelfPointer or
 			x64GsLoadRegBase or
 			arm64AtomicCas or
 			arm64AtomicRmw or
-			arm64ThreadPointer gives UnconditionalBranchTarget.none
-
-		// Every scaled-index form is a body op, not a branch.
-		leaRegBaseIndexScale or
+			arm64ThreadPointer or
+			leaRegBaseIndexScale or
 			loadRegBaseIndexScale or
 			storeBaseIndexScaleReg or
-			arm64AddLsl gives UnconditionalBranchTarget.none
-
-		// The high multiply is a body op, not a branch.
-		mulHighReg gives UnconditionalBranchTarget.none
-		arm64Fneg gives UnconditionalBranchTarget.none
-		arm64LoadAcquire or
-			arm64StoreRelease gives UnconditionalBranchTarget.none
-		arm64Mulh or
+			arm64AddLsl or
+			mulHighReg or
+			arm64Fneg or
+			arm64LoadAcquire or
+			arm64StoreRelease or
+			arm64Mulh or
 			covInc or
 			x64AluBaseDispReg or
 			x64AluBaseDispImm32 gives UnconditionalBranchTarget.none
+		jmp(target) or
+			arm64Branch gives UnconditionalBranchTarget.blockId(target)
 	end 'check'
 end 'unconditionalBranchTargetOf'
 
@@ -1778,21 +1713,12 @@ function terminatorIsUnconditionalBranch(module TargetModule, block IrBlock) ret
 	end 'check'
 end 'terminatorIsUnconditionalBranch'
 
-// A block's successor BlockIds: the `jcc` conditional-branch op names the then-target; the
-// `jmp` terminator names the (unconditional / else) target; `ret` names none.
-//
-// Every target here is read OFF THE OP — the ops are the ground truth for the CFG, and
-// `branchEdges` are NOT a substitute (they exist only for phi-CARRYING edges, so a CFG
-// derived from them would silently lose every non-phi edge). What the block caches is only
-// WHERE its two control ops are (`condBranch`, `terminator`), never what they target, so an
-// in-place retarget cannot leave a stale successor behind.
-//
-// That is the whole point: finding the `jcc` by SCANNING EVERY OP OF THE BLOCK makes building
-// the CFG skeleton a full pass over every op of the function — and the allocator builds one
-// twice per function (the critical-edge split, then the RPO reorder). Indexed, it is O(1) per
-// block, making a topology build O(blocks + edges).
-// `checkCondBranchIndex` (above) asserts, against the ops, that the two indices name every
-// branch the block actually has.
+// Every target is read off the op. `branchEdges` are no substitute: they exist only for
+// phi-carrying edges, so a CFG derived from them would silently lose every non-phi edge. The block
+// caches only where its two control ops are (`condBranch`, `terminator`), never what they target,
+// so an in-place retarget cannot leave a stale successor behind; the index keeps a topology build
+// O(blocks + edges) instead of a scan of every op. `checkCondBranchIndex` asserts, against the
+// ops, that the two indices name every branch the block has.
 function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockIdArray)
 	if block.hasCondBranchOp() 'hasCond'
 		let opIdx = block.condBranchIndex()
@@ -1804,8 +1730,10 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 		let op = try module.ops.get(block.terminatorIndex()) otherwise panic("collectBlockSuccessorIds: terminator not in module.ops")
 
 		match op 'termCtrl'
-			jmp(target) then out.push(target)
-			ret then break 'termCtrl'
+			jmp(target) or
+				arm64Branch then out.push(target)
+			ret or
+				arm64Ret then break 'termCtrl'
 			prologue or
 				epilogue then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' terminator is a frame op, not a branch/return")
 			jcc then panic("collectBlockSuccessorIds: `jcc` reached as a terminator — it must be a body op paired with a `jmp` terminator")
@@ -1825,12 +1753,8 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 				callDirect or
 				iatCall or
 				cqo or
-				divideReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator op as its terminator")
-			pushReg or
-				popReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a pushReg/popReg as its terminator — those are post-regalloc body ops")
-			storeSlotReg or
-				loadRegSlot then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a spill/reload as its terminator — the splitter inserts them as body ops")
-			andRegReg or
+				divideReg or
+				andRegReg or
 				orRegReg or
 				xorRegReg or
 				notReg or
@@ -1862,14 +1786,14 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 				leaRegRdata or
 				minMaxSdRegReg or
 				movqXmmGpr or
-				negF64RegReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator op as its terminator")
-
-			// The arm64 terminators: `arm64Branch` names the (unconditional / else) target, `arm64Ret`
-			// names none — the exact mirror of `jmp`/`ret`. The conditional branches
-			// (`arm64CondBranch`/`arm64Cbz`/`arm64Cbnz`) are BODY ops paired with an `arm64Branch`
-			// terminator (their then-target is read via `condBranchTargetOf`), never terminators here.
-			arm64Ret then break 'termCtrl'
-			arm64Branch(target) then out.push(target)
+				negF64RegReg or
+				leaRegFunc or
+				callReg or
+				x64Syscall then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator op as its terminator")
+			pushReg or
+				popReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a pushReg/popReg as its terminator — those are post-regalloc body ops")
+			storeSlotReg or
+				loadRegSlot then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a spill/reload as its terminator — the splitter inserts them as body ops")
 			arm64CondBranch or
 				arm64Cbz or
 				arm64Cbnz or
@@ -1920,12 +1844,6 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 				arm64ImportCall or
 				arm64Syscall or
 				arm64Fcsel then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator arm64 op as its terminator")
-
-			// `leaRegFunc`/`callReg` and the Linux `x64Syscall` are value-producing x64 body
-			// ops, never a terminator — the same non-terminator panic the x64 ALU/data bands above raise.
-			leaRegFunc or
-				callReg or
-				x64Syscall then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator op as its terminator")
 			callMem then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a `callMem` (witness call) body op as its terminator")
 			arm64StoreOutgoingArg or
 				arm64LoadIncomingArg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a stack-argument body op as its terminator")
@@ -1944,23 +1862,418 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 				arm64ThreadPointer then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has an atomic or a thread-token read as its terminator")
 
 			// A jump table's successors are every DISTINCT case target plus the default — see `pushJumpTableSuccessors`.
-			x64JumpTable(_, defaultTarget, caseTargets, _) then pushJumpTableSuccessors(out, defaultTarget: defaultTarget, caseTargets: caseTargets)
-			arm64JumpTable(_, defaultTarget, caseTargets, _) then pushJumpTableSuccessors(out, defaultTarget: defaultTarget, caseTargets: caseTargets)
+			x64JumpTable(_, defaultTarget, caseTargets, _) or
+				arm64JumpTable then pushJumpTableSuccessors(out, defaultTarget: defaultTarget, caseTargets: caseTargets)
 			leaRegBaseIndexScale or
 				loadRegBaseIndexScale or
 				storeBaseIndexScaleReg or
 				arm64AddLsl then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a scaled-index address or access body op as its terminator")
-			mulHighReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a high multiply body op as its terminator")
+			mulHighReg or
+				arm64Mulh then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a high multiply body op as its terminator")
 			arm64Fneg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a float negate body op as its terminator")
 			arm64LoadAcquire or
 				arm64StoreRelease then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has an ordered load/store body op as its terminator")
-			arm64Mulh then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a high multiply body op as its terminator")
 			covInc then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a coverage counter body op as its terminator")
 			x64AluBaseDispReg or
 				x64AluBaseDispImm32 then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a read-modify-write of memory body op as its terminator")
 		end 'termCtrl'
 	end 'hasTerm'
 end 'collectBlockSuccessorIds'
+
+// Per block id: does some edge enter it from another source line? Such a block gets its own line
+// row even when its layout predecessor ended on the same span, because a line's breakpoints are
+// armed at its rows and a loop header armed only where control falls into it stops once rather
+// than on every iteration.
+module function lineEntryColumn(module TargetModule, func IrFunction, spanTable DebugSpanTable) returns BoolArray
+	var firstSpans = SpanIdArray.create()
+	firstSpans.refill(func.nextBlockId as ElementIndex, value: NoSpanId)
+	var blockSites = InlineSiteRefArray.create()
+	blockSites.refill(func.nextBlockId as ElementIndex, value: InlineSiteRef.none)
+
+	for blockRef in func.blockRefs 'eachBlockOpening'
+		let block = try module.blocks.get(blockRef) otherwise panic("lineEntryColumn: blockRef from func.blockRefs not in module.blocks")
+		try firstSpans.set(block.id, value: firstSpanOf(module, block: block)) otherwise panic("lineEntryColumn: block '{String.from(block.label)}' has id {block.id}, past the {func.nextBlockId} this function numbers")
+		try blockSites.set(block.id, value: block.inlineSite) otherwise panic("lineEntryColumn: block '{String.from(block.label)}' has id {block.id}, past the {func.nextBlockId} this function numbers")
+	end 'eachBlockOpening'
+
+	var entered = BoolArray.create()
+	entered.refill(func.nextBlockId as ElementIndex, value: false)
+
+	if not someSpanIn(firstSpans) 'noLineToEnter'
+		return entered
+	end 'noLineToEnter'
+
+	let ways = LineWays.of(module, func: func, sites: blockSites, spanTable: spanTable)
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("lineEntryColumn: blockRef from func.blockRefs not in module.blocks")
+
+		for k in 0 upto ways.successors.degree(block.id as CsrIndex) 'eachTarget'
+			let target = ways.successors.neighbour(block.id as CsrIndex, k: k) as BlockId
+			let arriving = try firstSpans.get(target) otherwise panic("lineEntryColumn: block '{String.from(block.label)}' branches to block {target}, past the {func.nextBlockId} this function numbers")
+			let targetSite = try blockSites.get(target) otherwise panic("lineEntryColumn: block '{String.from(block.label)}' branches to block {target}, past the {func.nextBlockId} this function numbers")
+
+			if ways.leavesAnotherLine(block.id, func: func, arriving: arriving, targetSite: targetSite) 'fromAnotherLine'
+				try entered.set(target, value: true) otherwise panic("lineEntryColumn: block {target} is past the {func.nextBlockId} this function numbers")
+			end 'fromAnotherLine'
+		end 'eachTarget'
+	end 'eachBlock'
+
+	try entered.set(ways.entry, value: true) otherwise panic("lineEntryColumn: block {ways.entry} is past the {func.nextBlockId} this function numbers")
+
+	return entered
+end 'lineEntryColumn'
+
+function someSpanIn(spans SpanIdArray) returns bool
+	for span in spans 'eachSpan'
+		if span != NoSpanId 'positioned'
+			return true
+		end 'positioned'
+	end 'eachSpan'
+
+	return false
+end 'someSpanIn'
+
+typealias LineFrontierArray = Array with BlockIdArray
+typealias LineClassKey = int(0 to u64.max)
+typealias LineClassId = int(0 to u64.max)
+typealias BlockLineClassArray = Array with BlockLineClass
+typealias LineClassMap = Map with (LineClassKey, LineClassId)
+typealias JoinGeneration = int(0 to u64.max)
+typealias JoinGenerationArray = Array with JoinGeneration
+
+union BlockLineClass
+	positionless
+	ofLine(lineClass LineClassId, lastSpan SpanId)
+end 'BlockLineClass'
+
+let OwnTextSiteSlot = 0 as LineClassKey
+let FirstSplicedSiteSlot = OwnTextSiteSlot + 1
+
+type LineWays
+	export let successors as CsrGraph
+	let predecessors as CsrGraph
+	let sites as InlineSiteRefArray
+	let lineClasses as BlockLineClassArray
+	let spanTable as DebugSpanTable
+	export let entry as BlockId
+	var frontiers as LineFrontierArray
+	var reachesEntry as BoolArray
+	var classStamps as JoinGenerationArray
+	var joinGeneration as JoinGeneration
+
+	static function of(module TargetModule, func IrFunction, sites InlineSiteRefArray, spanTable DebugSpanTable) returns LineWays
+		var leaving = CsrColumn.create()
+		var entering = CsrColumn.create()
+		var lineClasses = BlockLineClassArray.create()
+		lineClasses.refill(func.nextBlockId as ElementIndex, value: BlockLineClass.positionless)
+		var sourceLineOrdinals = LineClassMap.create()
+		var classIds = LineClassMap.create()
+		let siteSlots = func.inlineSites.count() as LineClassKey + FirstSplicedSiteSlot
+		var successors = BlockIdArray.create()
+		var entry = 0 as BlockId
+
+		for (iter, blockRef) in func.blockRefs.withIterator() 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("LineWays.of: blockRef from func.blockRefs not in module.blocks")
+			entry = block.id if iter.index() == 0 else entry
+			let lastSpan = lastSpanOf(module, block: block)
+
+			if lastSpan != NoSpanId 'positioned'
+				let sourceLine = denseOrdinalOf(sourceLineOrdinals, key: spanTable.lineKeyOf(lastSpan) as LineClassKey)
+				let lineClass = denseOrdinalOf(classIds, key: lineClassKeyOf(sourceLine, site: block.inlineSite, siteSlots: siteSlots))
+				try lineClasses.set(block.id, value: BlockLineClass.ofLine(lineClass, lastSpan: lastSpan)) otherwise panic("LineWays.of: block {block.id} is past the {func.nextBlockId} this function numbers")
+			end 'positioned'
+
+			successors.clear()
+			collectLineSuccessorIds(module, func: func, block: block, placed: iter.index() as CfgIndex, out: successors)
+
+			for target in successors 'eachTarget'
+				leaving.push(block.id as CsrIndex)
+				entering.push(target as CsrIndex)
+			end 'eachTarget'
+		end 'eachBlock'
+
+		var frontiers = LineFrontierArray.create()
+		frontiers.refill(func.nextBlockId as ElementIndex, value: BlockIdArray.create())
+		var reachesEntry = BoolArray.create()
+		reachesEntry.refill(func.nextBlockId as ElementIndex, value: false)
+		var classStamps = JoinGenerationArray.create()
+		classStamps.refill(classIds.count() as ElementIndex, value: 0)
+
+		var ways = Self{successors: buildCsr(leaving, to: entering, nodeCount: func.nextBlockId as CsrIndex), predecessors: buildCsr(entering, to: leaving, nodeCount: func.nextBlockId as CsrIndex), sites: sites, lineClasses: lineClasses, spanTable: spanTable, entry: entry, frontiers: frontiers, reachesEntry: reachesEntry, classStamps: classStamps, joinGeneration: 0}
+		ways.settleFrontiers(func)
+
+		return ways
+	end 'of'
+
+	function settleFrontiers(func IrFunction)
+		var queued = BoolArray.create()
+		queued.refill(func.nextBlockId as ElementIndex, value: false)
+		var pending = CsrColumn.create()
+
+		for block in 0 upto func.nextBlockId 'eachBlock'
+			if self.positionless(block as BlockId) 'transparent'
+				pending.push(block as CsrIndex)
+				try queued.set(block as ElementIndex, value: true) otherwise panic("LineWays.settleFrontiers: block {block} is below the {func.nextBlockId} this function numbers")
+			end 'transparent'
+		end 'eachBlock'
+
+		var head = 0 as CsrIndex
+
+		while head < pending.count() 'eachChangedBlock'
+			let block = try pending.get(head) otherwise panic("LineWays.settleFrontiers: pending.get({head}) below its own count")
+			head = head + 1
+			try queued.set(block, value: false) otherwise panic("LineWays.settleFrontiers: block {block} was queued, so it is numbered")
+
+			if self.refreshedFrontier(block) 'itChanged'
+				self.requeueTransparentSuccessors(block, queued: queued, pending: pending)
+			end 'itChanged'
+		end 'eachChangedBlock'
+	end 'settleFrontiers'
+
+	function refreshedFrontier(block CsrIndex) returns bool
+		var frontier = BlockIdArray.create()
+		var owned = true
+		var fromEntry = block == (self.entry as CsrIndex)
+		self.joinGeneration = self.joinGeneration + 1
+
+		for k in 0 upto self.predecessors.degree(block) 'eachWayIn'
+			let before = self.predecessors.neighbour(block, k: k)
+			let transparent = self.positionless(before as BlockId)
+
+			if transparent 'alsoTransparent'
+				fromEntry = fromEntry or self.entryReachedThrough(before)
+			end 'alsoTransparent'
+
+			if transparent and frontier.isEmpty() 'nothingHeldYet'
+				frontier = self.adoptedFrontier(before, adopter: block)
+				owned = false
+				continue
+			end 'nothingHeldYet'
+
+			for arriving in (self.frontierOf(before) if transparent else [before as BlockId]) 'eachArriving'
+				if not self.claimsItsLine(arriving) 'alreadyRepresented'
+					continue
+				end 'alreadyRepresented'
+
+				if not owned 'stillShared'
+					frontier = frontier.clone()
+					owned = true
+				end 'stillShared'
+
+				frontier.push(arriving)
+			end 'eachArriving'
+		end 'eachWayIn'
+
+		let grew = frontier.count() != self.frontierOf(block).count() or fromEntry != self.entryReachedThrough(block)
+		try self.frontiers.set(block, value: frontier) otherwise panic("LineWays.refreshedFrontier: block {block} is past the {self.frontiers.count()} this function numbers")
+		try self.reachesEntry.set(block, value: fromEntry) otherwise panic("LineWays.refreshedFrontier: block {block} is past the {self.reachesEntry.count()} this function numbers")
+
+		return grew
+	end 'refreshedFrontier'
+
+	function requeueTransparentSuccessors(block CsrIndex, queued BoolArray, pending CsrColumn)
+		for k in 0 upto self.successors.degree(block) 'eachWayOut'
+			let after = self.successors.neighbour(block, k: k)
+			let alreadyQueued = try queued.get(after) otherwise panic("LineWays.requeueTransparentSuccessors: block {after} is past the {queued.count()} this function numbers")
+
+			if self.positionless(after as BlockId) and not alreadyQueued 'waitsOnThisOne'
+				pending.push(after)
+				try queued.set(after, value: true) otherwise panic("LineWays.requeueTransparentSuccessors: block {after} was just read")
+			end 'waitsOnThisOne'
+		end 'eachWayOut'
+	end 'requeueTransparentSuccessors'
+
+	function adoptedFrontier(before CsrIndex, adopter CsrIndex) returns BlockIdArray
+		let frontier = self.frontierOf(before)
+
+		for held in frontier 'eachHeld'
+			if not self.claimsItsLine(held) 'aSecondBlockOfOneLine'
+				panic("LineWays.adoptedFrontier: block {adopter} adopts block {before}'s frontier, which holds two blocks of one line, {held} among them")
+			end 'aSecondBlockOfOneLine'
+		end 'eachHeld'
+
+		return frontier
+	end 'adoptedFrontier'
+
+	// A frontier keeps one block per line class, so a positionless join of many ways from one line
+	// holds one block rather than one per way. That is sound because `leftFromAnotherLine` reads
+	// only a block's inline site and source line; if it ever reads more, the class key must carry it
+	// too, or the dedup drops a block whose answer differs.
+	function claimsItsLine(block BlockId) returns bool
+		let lineClass = self.lineClassOf(block)
+		let stamp = try self.classStamps.get(lineClass) otherwise panic("LineWays.claimsItsLine: block {block}'s line class {lineClass} is past the {self.classStamps.count()} classes this function holds")
+
+		if stamp == self.joinGeneration 'alreadyClaimed'
+			return false
+		end 'alreadyClaimed'
+
+		try self.classStamps.set(lineClass, value: self.joinGeneration) otherwise panic("LineWays.claimsItsLine: line class {lineClass} was just read")
+
+		return true
+	end 'claimsItsLine'
+
+	function lineClassOf(block BlockId) returns LineClassId
+		return match self.lineHeldBy(block) 'line'
+			positionless panic("LineWays.lineClassOf: block {block} is positionless, so it holds no line a join could claim")
+			ofLine(lineClass, _) gives lineClass
+		end 'line'
+	end 'lineClassOf'
+
+	function lineHeldBy(block BlockId) returns BlockLineClass
+		return try self.lineClasses.get(block) otherwise panic("LineWays.lineHeldBy: block {block} is past the {self.lineClasses.count()} this function numbers")
+	end 'lineHeldBy'
+
+	function frontierOf(block CsrIndex) returns BlockIdArray
+		return try self.frontiers.get(block) otherwise panic("LineWays.frontierOf: block {block} is past the {self.frontiers.count()} this function numbers")
+	end 'frontierOf'
+
+	function entryReachedThrough(block CsrIndex) returns bool
+		return try self.reachesEntry.get(block) otherwise panic("LineWays.entryReachedThrough: block {block} is past the {self.reachesEntry.count()} this function numbers")
+	end 'entryReachedThrough'
+
+	function leavesAnotherLine(block BlockId, func IrFunction, arriving SpanId, targetSite InlineSiteRef) returns bool
+		if not self.positionless(block) 'itsOwnLastSpan'
+			return self.leftFromAnotherLine(block, func: func, arriving: arriving, targetSite: targetSite)
+		end 'itsOwnLastSpan'
+
+		if self.entryReachedThrough(block as CsrIndex) 'arrivesFromTheCaller'
+			return true
+		end 'arrivesFromTheCaller'
+
+		for before in self.frontierOf(block as CsrIndex) 'eachFrontierBlock'
+			if self.leftFromAnotherLine(before, func: func, arriving: arriving, targetSite: targetSite) 'anotherLine'
+				return true
+			end 'anotherLine'
+		end 'eachFrontierBlock'
+
+		return false
+	end 'leavesAnotherLine'
+
+	function positionless(block BlockId) returns bool
+		return match self.lineHeldBy(block) 'line'
+			positionless gives true
+			ofLine gives false
+		end 'line'
+	end 'positionless'
+
+	function spanLeaving(block BlockId) returns SpanId
+		return match self.lineHeldBy(block) 'line'
+			positionless panic("LineWays.spanLeaving: block {block} is positionless, so no span leaves it")
+			ofLine(_, lastSpan) gives lastSpan
+		end 'line'
+	end 'spanLeaving'
+
+	function siteOf(block BlockId) returns InlineSiteRef
+		return try self.sites.get(block) otherwise panic("LineWays.siteOf: block {block} is past the {self.sites.count()} this function numbers")
+	end 'siteOf'
+
+	function leftFromAnotherLine(block BlockId, func IrFunction, arriving SpanId, targetSite InlineSiteRef) returns bool
+		let seen = spanSeenFrom(func, span: self.spanLeaving(block), site: self.siteOf(block), frame: targetSite)
+
+		return seen == NoSpanId or not sameSourceLine(self.spanTable, first: seen, second: arriving)
+	end 'leftFromAnotherLine'
+end 'LineWays'
+
+function denseOrdinalOf(ordinals LineClassMap, key LineClassKey) returns LineClassId
+	if let known = try ordinals.get(key) 'seenBefore'
+		return known
+	end 'seenBefore'
+
+	let fresh = ordinals.count() as LineClassId
+	ordinals.upsert(key, value: fresh)
+
+	return fresh
+end 'denseOrdinalOf'
+
+function lineClassKeyOf(sourceLine LineClassId, site InlineSiteRef, siteSlots LineClassKey) returns LineClassKey
+	let slot = inlineSiteSlot(site)
+
+	if slot >= siteSlots 'pastTheFunctionsSites'
+		panic("lineClassKeyOf: inline site slot {slot} is past the {siteSlots} this function's sites number, so its key would be the next source line's")
+	end 'pastTheFunctionsSites'
+
+	return (sourceLine as LineClassKey) * siteSlots + slot
+end 'lineClassKeyOf'
+
+function inlineSiteSlot(site InlineSiteRef) returns LineClassKey
+	return match site 's'
+		none gives OwnTextSiteSlot
+		site(index) gives index as LineClassKey + FirstSplicedSiteSlot
+	end 's'
+end 'inlineSiteSlot'
+
+function collectLineSuccessorIds(module TargetModule, func IrFunction, block IrBlock, placed CfgIndex, out BlockIdArray)
+	collectBlockSuccessorIds(module, block: block, out: out)
+
+	if block.hasTerminatorOp() 'aJumpEndsIt'
+		return
+	end 'aJumpEndsIt'
+
+	if let nextRef = try func.blockRefs.get(placed + 1) 'fallsIntoTheNextBlock'
+		let next = try module.blocks.get(nextRef) otherwise panic("collectLineSuccessorIds: blockRef from func.blockRefs not in module.blocks")
+		out.push(next.id)
+	end 'fallsIntoTheNextBlock'
+end 'collectLineSuccessorIds'
+
+function spanSeenFrom(func IrFunction, span SpanId, site InlineSiteRef, frame InlineSiteRef) returns SpanId
+	var seen = span
+	var at = site
+
+	while not sameInlineSite(at, other: frame) 'outToTheFrame'
+		match at 'which'
+			none then return seen
+			site(index) then (seen, at) = callerOfSite(func, index: index)
+		end 'which'
+	end 'outToTheFrame'
+
+	return seen
+end 'spanSeenFrom'
+
+function callerOfSite(func IrFunction, index InlineSiteIndex) returns (SpanId, InlineSiteRef)
+	let spliced = try func.inlineSites.get(index) otherwise panic("callerOfSite: inline site {index} is past the {func.inlineSites.count()} its function records")
+
+	return (spliced.callSpan, spliced.parent)
+end 'callerOfSite'
+
+module function sameSourceLine(spanTable DebugSpanTable, first SpanId, second SpanId) returns bool
+	if first == second 'oneSpan'
+		return true
+	end 'oneSpan'
+
+	if second == NoSpanId 'nowhere'
+		return false
+	end 'nowhere'
+
+	return spanTable.lineKeyOf(first) == spanTable.lineKeyOf(second)
+end 'sameSourceLine'
+
+function firstSpanOf(module TargetModule, block IrBlock) returns SpanId
+	for position in 0 upto block.opCountInRunOrder() 'eachOp'
+		let spanId = module.spans.at(block.opInRunOrderAt(position))
+
+		if spanId != NoSpanId 'positioned'
+			return spanId
+		end 'positioned'
+	end 'eachOp'
+
+	return NoSpanId
+end 'firstSpanOf'
+
+function lastSpanOf(module TargetModule, block IrBlock) returns SpanId
+	var position = block.opCountInRunOrder()
+
+	while position > 0 'eachOpBackwards'
+		position = position - 1
+		let spanId = module.spans.at(block.opInRunOrderAt(position))
+
+		if spanId != NoSpanId 'positioned'
+			return spanId
+		end 'positioned'
+	end 'eachOpBackwards'
+
+	return NoSpanId
+end 'lastSpanOf'
 
 // A jump table's successor set: every DISTINCT case-target block plus the default, each pushed ONCE. A
 // dense table repeats a block across many slots (a range/`or` arm fills several), but the CFG has ONE edge
@@ -1977,20 +2290,15 @@ function pushJumpTableSuccessors(out BlockIdArray, defaultTarget BlockId, caseTa
 	end 'eachDistinct'
 end 'pushJumpTableSuccessors'
 
-// The then-target of the op a block's `condBranch` names. Panics if it is not a `jcc`: the
-// index names the block's conditional branch and nothing else, so any other op there means
-// the index went stale or was set by something that is not a branch. This is the O(1) half
-// of the invariant check — it fires on every CFG build, for every block that has a
-// conditional branch, and needs no scan.
+// Any op other than a conditional branch at the `condBranch` index means the index went stale or
+// was set by something that is not a branch. This is the O(1) half of that check, asked on every
+// CFG build; `checkCondBranchIndex` is the half that scans.
 export function condBranchTargetOf(op TargetOp, block IrBlock) returns BlockId
 	match op 'cond'
-		jcc(_, target) then return target
-
-		// The arm64 conditional branches — a flag test (`arm64CondBranch`) or a register zero-test
-		// (`arm64Cbz`/`arm64Cbnz`) — each names its then-target the same way the `jcc` does.
-		arm64CondBranch(_, target) then return target
-		arm64Cbz(_, target) then return target
-		arm64Cbnz(_, target) then return target
+		jcc(_, target) or
+			arm64CondBranch or
+			arm64Cbz or
+			arm64Cbnz then return target
 		default panic("condBranchTargetOf: block '{String.from(block.label)}' records its conditional branch at op {block.condBranchIndex()}, but that op is not a `jcc`/`arm64CondBranch`/`arm64Cbz`/`arm64Cbnz`")
 	end 'cond'
 end 'condBranchTargetOf'
@@ -3732,14 +4040,17 @@ function collectEntryParamCaptures(module TargetModule, topo FuncTopology, param
 
 		match op 'capture'
 			movRegReg(dst, src) then recordParamCapture(captures, dst: dst, src: src, paramCount: paramCount)
+			// An incoming stack parameter (`arm64LoadIncomingArg`) is deliberately not a capture: this set
+			// stops one parameter's capture destination from clobbering a sibling's incoming register, and a
+			// parameter that arrives in the caller's frame has no incoming register to clobber.
 			prologue or
 				epilogue or
 				ret or
 				jmp or
 				jcc or
 				movRegImm or
-				movRegImm32 then break 'capture'
-			movReg32Reg32 or
+				movRegImm32 or
+				movReg32Reg32 or
 				subRegReg or
 				imulRegReg or
 				negReg or
@@ -3754,10 +4065,10 @@ function collectEntryParamCaptures(module TargetModule, topo FuncTopology, param
 				cqo or
 				divideReg or
 				pushReg or
-				popReg then break 'capture'
-			storeSlotReg or
-				loadRegSlot then break 'capture'
-			andRegReg or
+				popReg or
+				storeSlotReg or
+				loadRegSlot or
+				andRegReg or
 				orRegReg or
 				xorRegReg or
 				notReg or
@@ -3789,8 +4100,8 @@ function collectEntryParamCaptures(module TargetModule, topo FuncTopology, param
 				leaRegRdata or
 				minMaxSdRegReg or
 				movqXmmGpr or
-				negF64RegReg then break 'capture'
-			arm64Ret or
+				negF64RegReg or
+				arm64Ret or
 				arm64Branch or
 				arm64CondBranch or
 				arm64Cbz or
@@ -3841,73 +4152,39 @@ function collectEntryParamCaptures(module TargetModule, topo FuncTopology, param
 				arm64FpLoadRdata or
 				arm64ImportCall or
 				arm64Syscall or
-				arm64Fcsel then break 'capture'
-
-			// `leaRegFunc`/`callReg` and the Linux `x64Syscall` are not a `movRegReg`, so none
-			// is an entry param capture — skipped exactly like every other non-`movRegReg` op here.
-			leaRegFunc or
+				arm64Fcsel or
+				leaRegFunc or
 				callReg or
-				x64Syscall then break 'capture'
-
-			// The jump tables are terminators, never an entry param-capture `movRegReg`.
-			x64JumpTable or
-				arm64JumpTable then break 'capture'
-
-			// The witness call is a call, never an entry param-capture `movRegReg`.
-			callMem then break 'capture'
-
-			// ⭐ An incoming STACK parameter is materialized by `arm64LoadIncomingArg`, not by a `movRegReg` from a
-			// physical source — so it is deliberately NOT a capture. That is CORRECT and not an omission: this set
-			// exists to stop one parameter's capture DESTINATION from clobbering a sibling's incoming REGISTER, and
-			// a parameter that arrives in the caller's frame has no incoming register to clobber.
-			arm64StoreOutgoingArg or
-				arm64LoadIncomingArg then break 'capture'
-
-			// Neither arm64 bit reinterpretation is a `movRegReg`, so neither is ever an entry param capture.
-			arm64FmovGprFp or
-				arm64FmovFpGpr then break 'capture'
-
-			// Not a `movRegReg`, so never an entry param capture.
-			leaRegSlot then break 'capture'
-
-			// Not a `movRegReg`, so never an entry param capture.
-			x64MemFill or
-				arm64MemFill then break 'capture'
-
-			// Not a `movRegReg`, so never an entry param capture.
-			x64LockCmpxchg or
+				x64Syscall or
+				x64JumpTable or
+				arm64JumpTable or
+				callMem or
+				arm64StoreOutgoingArg or
+				arm64LoadIncomingArg or
+				arm64FmovGprFp or
+				arm64FmovFpGpr or
+				leaRegSlot or
+				x64MemFill or
+				arm64MemFill or
+				x64LockCmpxchg or
 				x64LockXadd or
 				x64LockAdd or
 				x64TebSelfPointer or
 				x64GsLoadRegBase or
 				arm64AtomicCas or
 				arm64AtomicRmw or
-				arm64ThreadPointer then break 'capture'
-
-			// Not a `movRegReg`, so never an entry param capture.
-			leaRegBaseIndexScale or
+				arm64ThreadPointer or
+				leaRegBaseIndexScale or
 				loadRegBaseIndexScale or
 				storeBaseIndexScaleReg or
-				arm64AddLsl then break 'capture'
-
-			// Not a `movRegReg`, so never an entry param capture.
-			mulHighReg then break 'capture'
-
-			// arm64 `fneg` is not a `movRegReg`, so never an entry param capture.
-			arm64Fneg then break 'capture'
-
-			// An ordered access is not a `movRegReg`, so never an entry param capture.
-			arm64LoadAcquire or
-				arm64StoreRelease then break 'capture'
-
-			// `SMULH` is not a `movRegReg`, so never an entry param capture.
-			arm64Mulh then break 'capture'
-
-			// A coverage counter is not a `movRegReg`, so never an entry param capture.
-			covInc then break 'capture'
-
-			// Nor is a read-modify-write of memory.
-			x64AluBaseDispReg or
+				arm64AddLsl or
+				mulHighReg or
+				arm64Fneg or
+				arm64LoadAcquire or
+				arm64StoreRelease or
+				arm64Mulh or
+				covInc or
+				x64AluBaseDispReg or
 				x64AluBaseDispImm32 then break 'capture'
 		end 'capture'
 	end 'eachOp'
@@ -4262,9 +4539,9 @@ export type ColdBlockRuns
 			let kind = walkKindOf(coldRunOpKind(op, buf: buf, opFacts: opFacts), lastKind: lastKind, block: block, pos: pos)
 
 			match kind 'k'
-				none then break 'k'
+				none or
+					store then break 'k'
 				capture then self.requireCaptureAdjacent(lastKind, block: block, pos: pos)
-				store then break 'k'
 				clobber or
 					call then self.openRunIfClosed(lastKind, pos: pos)
 			end 'k'
@@ -5085,6 +5362,13 @@ let VerifyOpVariantFacts = false
 function deriveSlotRole(op TargetOp) returns OpSlotRole
 	return match op 'k'
 		storeSlotReg gives OpSlotRole.spillStore
+		// ⚠ Three ops below name memory and are deliberately not spill stores. `storeBaseDispReg`
+		// writes a global at a link-time address, not a `SpillSlot` this frame owns.
+		// `arm64StoreOutgoingArg` writes the argument region, a different index space, and answering
+		// `spillStore` would let the splitter elide a real spill; `arm64LoadIncomingArg` reads the
+		// caller's frame, so it is no reload either. `leaRegSlot` names a promoted record's slot,
+		// reserved out of the spiller's range (`SplitDriver.create` seeds `nextSlot` past it), and a
+		// `spillStore` would let a later reload read that record as if it were a spilled value.
 		prologue or
 			epilogue or
 			ret or
@@ -5108,14 +5392,8 @@ function deriveSlotRole(op TargetOp) returns OpSlotRole
 			cqo or
 			divideReg or
 			pushReg or
-			popReg gives OpSlotRole.touchesNoSlot
-		loadRegSlot gives OpSlotRole.slotReload
-
-		// ⚠ `storeBaseDispReg` is a STORE and is deliberately NOT a spill store. This asks "did the
-		// splitter spill a value to a stack SLOT here?", and a `.data` store answers no: it writes a
-		// global at a link-time address, not a `SpillSlot` this function's frame owns. Claiming a slot
-		// for it would hand the allocator a spill record for a value it never spilled.
-		andRegReg or
+			popReg or
+			andRegReg or
 			orRegReg or
 			xorRegReg or
 			notReg or
@@ -5147,11 +5425,8 @@ function deriveSlotRole(op TargetOp) returns OpSlotRole
 			leaRegRdata or
 			minMaxSdRegReg or
 			movqXmmGpr or
-			negF64RegReg gives OpSlotRole.touchesNoSlot
-
-		// arm64 spills go through the SHARED `storeSlotReg` (handled above), so the arm64 band never
-		// carries a spill store — `touchesNoSlot` is unreachable this rung AND correct.
-		arm64Ret or
+			negF64RegReg or
+			arm64Ret or
 			arm64Branch or
 			arm64CondBranch or
 			arm64Cbz or
@@ -5202,84 +5477,41 @@ function deriveSlotRole(op TargetOp) returns OpSlotRole
 			arm64FpLoadRdata or
 			arm64ImportCall or
 			arm64Syscall or
-			arm64Fcsel gives OpSlotRole.touchesNoSlot
-
-		// `leaRegFunc`/`callReg` and the Linux `x64Syscall` write no stack slot — a `lea`, a
-		// call and a syscall are not spill stores, exactly like the `.data` store above.
-		leaRegFunc or
+			arm64Fcsel or
+			leaRegFunc or
 			callReg or
-			x64Syscall gives OpSlotRole.touchesNoSlot
-
-		// The jump tables write no stack slot — a multiway terminator is not a spill store.
-		x64JumpTable or
-			arm64JumpTable gives OpSlotRole.touchesNoSlot
-
-		// The witness call writes no stack slot — a call is not a spill store.
-		callMem gives OpSlotRole.touchesNoSlot
-
-		// ⚠ `arm64StoreOutgoingArg` writes a frame slot but is NOT a SPILL store, exactly as
-		// `storeBaseDispReg` is not: this asks "did this op save a VALUE to its spill slot?", and the
-		// argument region is a different area with a different index space. Answering `spillStore` would
-		// let the splitter treat an argument store as a spill and elide a real one. An incoming-argument
-		// load reads the CALLER's frame for the same reason, so it is no reload either.
-		arm64StoreOutgoingArg or
-			arm64LoadIncomingArg gives OpSlotRole.touchesNoSlot
-
-		// Neither arm64 bit reinterpretation touches a stack slot — each is a register-to-register transfer.
-		arm64FmovGprFp or
-			arm64FmovFpGpr gives OpSlotRole.touchesNoSlot
-
-		// ⭐⭐ **`touchesNoSlot`, AND THAT IS THE POINT RATHER THAN AN OMISSION.** This role column answers
-		// "which value does memory hold, and where?" for the SPILLER's residency model. A promoted record is
-		// not a spilled value: it is storage the frame owns outright, in a slot RESERVED out of the
-		// spiller's range (`SplitDriver.create` seeds `nextSlot` past the promoted region), so no split can
-		// ever be handed the slot this op names. Calling it a `spillStore` would tell the residency model
-		// that a value lives there and let a later reload read a record as if it were that value.
-		leaRegSlot gives OpSlotRole.touchesNoSlot
-
-		// A fill ladder touches no stack SLOT — it writes a heap region through a register the isel loaded.
-		x64MemFill or
-			arm64MemFill gives OpSlotRole.touchesNoSlot
-
-		// An atomic touches no stack SLOT — it reads and writes the word its address operand names, which is
-		// a heap or global address the isel handed it, and the two thread-token reads touch no memory the
-		// residency model tracks at all.
-		x64LockCmpxchg or
+			x64Syscall or
+			x64JumpTable or
+			arm64JumpTable or
+			callMem or
+			arm64StoreOutgoingArg or
+			arm64LoadIncomingArg or
+			arm64FmovGprFp or
+			arm64FmovFpGpr or
+			leaRegSlot or
+			x64MemFill or
+			arm64MemFill or
+			x64LockCmpxchg or
 			x64LockXadd or
 			x64LockAdd or
 			x64TebSelfPointer or
 			x64GsLoadRegBase or
 			arm64AtomicCas or
 			arm64AtomicRmw or
-			arm64ThreadPointer gives OpSlotRole.touchesNoSlot
-
-		// A scaled-index access touches no stack SLOT — it addresses the heap or global region its
-		// base register names, exactly as `loadRegBaseDisp`/`storeBaseDispReg` do.
-		leaRegBaseIndexScale or
+			arm64ThreadPointer or
+			leaRegBaseIndexScale or
 			loadRegBaseIndexScale or
 			storeBaseIndexScaleReg or
-			arm64AddLsl gives OpSlotRole.touchesNoSlot
-
-		// The high multiply touches no memory at all — its operands and its whole product are registers.
-		mulHighReg gives OpSlotRole.touchesNoSlot
-
-		// arm64 `fneg` touches registers only.
-		arm64Fneg gives OpSlotRole.touchesNoSlot
-
-		// An ordered access addresses the heap through its base register, never a stack SLOT —
-		// `loadRegBaseDisp`/`storeBaseDispReg`'s answer exactly.
-		arm64LoadAcquire or
-			arm64StoreRelease gives OpSlotRole.touchesNoSlot
-
-		// `SMULH` touches no memory at all — its operands and its result are registers.
-		arm64Mulh gives OpSlotRole.touchesNoSlot
-
-		// A coverage counter touches no SLOT — its address is a link-time constant, not a frame offset.
-		covInc gives OpSlotRole.touchesNoSlot
-
-		// Its word is addressed through a base register, `storeBaseDispReg`'s answer.
-		x64AluBaseDispReg or
+			arm64AddLsl or
+			mulHighReg or
+			arm64Fneg or
+			arm64LoadAcquire or
+			arm64StoreRelease or
+			arm64Mulh or
+			covInc or
+			x64AluBaseDispReg or
 			x64AluBaseDispImm32 gives OpSlotRole.touchesNoSlot
+		loadRegSlot gives OpSlotRole.slotReload
 	end 'k'
 end 'deriveSlotRole'
 

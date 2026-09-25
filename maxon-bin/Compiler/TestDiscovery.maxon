@@ -9,9 +9,9 @@
 // (`Project.testFunctionRegistrationName`), so this asks IT, and the roster a run prints is the
 // roster the compile registers, by construction.
 //
-// ⭐ **IT STOPS AT THE SWEEP, WHICH IS WHAT LETS IT ANSWER FOR A PROJECT THAT HAS NO ENTRY POINT YET.**
-// `maxon test --list` is documented as compiling nothing, and a project of pure test files declares no
-// `main` — E3001 lives in `SemanticCheck`, far downstream of here, so nothing on this path can raise it.
+// It stops at the sweep, which lets it answer for a project with no entry point yet: `maxon test
+// --list` without `--build` compiles nothing, and a project of pure test files declares no `main`.
+// E3001 lives in `SemanticCheck`, downstream of here, so nothing on this path can raise it.
 
 // ⭐⭐ **ONE `test` DECLARATION, AS THE SWEEP SAW IT.** A test has TWO names and this carries both, for
 // `specs/test-declaration.md`'s reason: the prose name cannot be a symbol, so the compiler mints a
@@ -53,6 +53,12 @@ end 'DiscoveredTest'
 // file, declaration order. The ORDER is the fact this alias carries: it is the run's numbering, the
 // report's reading order, and what makes a redirected run byte-reproducible.
 export typealias DiscoveredTestArray = Array with DiscoveredTest
+
+module function testDisplayName(prose String) returns String
+	return "{TestKeywordSpelling} '{prose}'"
+end 'testDisplayName'
+
+let TestKeywordSpelling = "test"
 
 // ⭐⭐ **EVERY `test` UNDER `projectDir`.** Loads the project WITH its test files (the one selection an
 // ordinary build does not make — see `Compiler.SourceSelection`) and runs the declaration sweep over it.

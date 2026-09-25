@@ -1,0 +1,33 @@
+typealias Count = int(0 to 1000)
+
+enum Trouble implements Error
+	odd
+end 'Trouble'
+
+function risky(i Count) returns Count throws Trouble
+	if i == 1 'one'
+		throw Trouble.odd
+	end 'one'
+
+	return i
+end 'risky'
+
+function above(i Count) returns bool
+	return i > 1
+end 'above'
+
+function main() returns ExitCode
+	var hits = 0 as Count
+	var i = 0 as Count
+
+	while i < 3 'loop'
+		let v = (try risky(i) otherwise 0) + 1 // anchor: split-line
+		let both = i > 0 and v > 1 and above(i) and i != 4 // anchor: and-line
+		hits = hits + v + (1 if both else 0)
+		i = i + 1
+	end 'loop'
+
+	print("hits {hits}\n")
+
+	return 0
+end 'main'

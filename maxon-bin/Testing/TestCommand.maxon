@@ -22,14 +22,6 @@
 // reader's line, so the only gate that sees it is the SELF-COMPILE.
 export let TestCommandName = "test"
 
-// ⭐ **EVERY TEST PASSED.** Nothing to act on.
-let AllTestsPassedExit = 0 as ExitCode
-
-// ⭐⭐ **SOMETHING FAILED, CRASHED, TIMED OUT, LEAKED, DID NOT RUN — OR NO TESTS WERE FOUND.** That last
-// one shares this code with a failure DELIBERATELY: a zero-test run that exits 0 is the classic CI lie,
-// where a renamed directory or a broken filter reads for months as a green suite.
-let TestsFailedExit = 1 as ExitCode
-
 // ============================================================================================
 // WHERE A TEST BUILD LIVES
 // ============================================================================================
@@ -52,7 +44,7 @@ let TestBinaryStem = "maxon-test"
 
 // The usage line a refusal prints under itself.
 function testUsageLine() returns String
-	return "maxon {TestCommandName} [<directory>] [{FilterFlagPrefix}PATTERN]... [--list] [--json] [options]"
+	return "maxon {TestCommandName} [<directory>] [{FilterFlagPrefix}PATTERN]... [{TestListFlag} [{TestBuildFlag}]] [--json] [options]"
 end 'testUsageLine'
 
 // ============================================================================================
@@ -72,7 +64,11 @@ export function runTest(args MaxonArgs) returns ExitCode
 		return refuseTestRun("not a directory: {reportPathDisplay(projectDir)}")
 	end 'notADirectory'
 
-	let target = try commandLineTarget(args.targetSpec) otherwise return 1
+	if args.buildTestBinary and not args.listOnly 'buildWithoutAList'
+		return refuseTestRun("{TestBuildFlag} builds the test binary for {TestListFlag} and runs nothing, so it is given with {TestListFlag}")
+	end 'buildWithoutAList'
+
+	let target = try commandLineTarget(args.targetSpec) otherwise return NothingRanExitCode
 
 	let patterns = try filterPatterns(args.filterPatterns) otherwise (e) 'emptyFilterValue'
 		return refuseTestRun(filterValueRefusalReason(e))
@@ -80,10 +76,9 @@ export function runTest(args MaxonArgs) returns ExitCode
 
 	_ = quietTheBuildChatter(args)
 
-	// ⚠ **THE SAME SPELLING REACHES DISCOVERY AND STAGING**, which is what `TestDispatcher
-	// .stageTestBuild` requires: both walk through `Compiler.collectMaxonSources`, so the paths they
-	// produce are equal spellings and a group's file maps onto its staged copy by `FilePath.equals`
-	// rather than by a second derivation.
+	// The same spelling reaches discovery and staging, which `TestDispatcher.stageTestBuild`
+	// requires: both walk through `Compiler.collectMaxonSources`, so a group's file maps onto its
+	// staged copy by `FilePath.equals` rather than by a second derivation.
 	let tests = try discoverTests(projectDir, target: target) otherwise (e) 'discoveryFailed'
 		reportCompileError(e)
 		return NothingRanExitCode
@@ -97,10 +92,8 @@ export function runTest(args MaxonArgs) returns ExitCode
 	let filtered = selectionFor(groups, total: tests.count() as ReportedTestCount, patterns: patterns)
 	let selected = filtered.selected
 
-	// BEFORE any source is synthesized: `--list` compiles nothing, and generating a dispatcher it would
-	// then throw away is the same claim made quietly.
 	if args.listOnly 'listOnly'
-		return listSelectedTests(args, groups: groups, selected: selected, color: color)
+		return listSelectedTests(args, projectDir: projectDir, target: target, groups: groups, selected: selected, color: color)
 	end 'listOnly'
 
 	if tests.isEmpty() 'noTestsAtAll'
@@ -242,13 +235,13 @@ function filterValueRefusalReason(error FilterValueError) returns String
 end 'filterValueRefusalReason'
 
 function quotedPatterns(patterns FilterPatternArray) returns String
-	var quoted = SourcePathSpellingArray.create()
+	var quoted = StringArray.create()
 
 	for pattern in patterns 'eachPattern'
 		quoted.push("'{pattern}'")
 	end 'eachPattern'
 
-	return commaJoined(quoted)
+	return joinedWith(quoted, separator: ListSeparator)
 end 'quotedPatterns'
 
 function selectedCount(selected TestSelection) returns ReportedTestCount
@@ -267,26 +260,37 @@ end 'selectedCount'
 // --list
 // ============================================================================================
 
-// ⭐ `--list` prints what WOULD run and compiles nothing. A list that found nothing is the same lie a
-// run that found nothing is, so it fails too.
-function listSelectedTests(args MaxonArgs, groups TestFileGroupArray, selected TestSelection, color bool) returns ExitCode
-	if args.jsonReport 'machineReadable'
-		let document = testListJson(groups, selected: selected)
-		print("{document}\n")
-	end 'machineReadable' else 'human'
-		print(testListText(groups, selected: selected, color: color))
-	end 'human'
+function listSelectedTests(args MaxonArgs, projectDir FilePath, target Target, groups TestFileGroupArray, selected TestSelection, color bool) returns ExitCode
+	if not args.buildTestBinary or selectedCount(selected) == 0 'nothingToBuild'
+		return printTestList(args, groups: groups, selected: selected, color: color, binary: TestBinaryListing.notBuilt)
+	end 'nothingToBuild'
 
-	if selectedCount(selected) == 0 'listedNothing'
-		return TestsFailedExit
-	end 'listedNothing'
-
-	return AllTestsPassedExit
+	match buildTestBinary(projectDir, target: target, groups: groups, debugInfo: args.debugInfo) 'build'
+		failed(exitCode) then return exitCode
+		built(_, binary) then return printTestList(args, groups: groups, selected: selected, color: color, binary: TestBinaryListing.built(binary.resolve(Directory.currentPath())))
+	end 'build'
 end 'listSelectedTests'
 
-// ⭐ A run that found nothing to do. It is a FAILURE, and it says why in the REPORT's own voice rather
-// than as an error, because nothing went wrong with the harness — there is simply nothing green to
-// claim. It therefore goes to STDOUT, where the rest of the report goes.
+function printTestList(args MaxonArgs, groups TestFileGroupArray, selected TestSelection, color bool, binary TestBinaryListing) returns ExitCode
+	if args.jsonReport 'machineReadable'
+		let document = testListJson(groups, selected: selected, binary: binary)
+		print("{document}\n")
+	end 'machineReadable' else 'human'
+		print(testListText(groups, selected: selected, color: color, binary: binary))
+	end 'human'
+
+	// A list that found nothing fails, as a run that found nothing does: a zero-test run that exits 0
+	// lets a renamed directory or a broken filter read as a green suite.
+	if selectedCount(selected) == 0 'listedNothing'
+		return OwnFailureExit
+	end 'listedNothing'
+
+	return SucceededExit
+end 'printTestList'
+
+// A run that found nothing to do fails, and says why in the report's own voice rather than as an
+// error, because nothing went wrong with the harness — there is simply nothing green to claim. It
+// therefore goes to stdout, where the rest of the report goes.
 function reportNothingToRun(reason String, args MaxonArgs, color bool) returns ExitCode
 	if args.jsonReport 'machineReadable'
 		let empty = TestRunReport.create(TestFileResultsArray.create(), compileMs: 0, runMs: 0, bailed: false)
@@ -296,7 +300,7 @@ function reportNothingToRun(reason String, args MaxonArgs, color bool) returns E
 		print(testEmptyRunNote(reason, color: color))
 	end 'human'
 
-	return TestsFailedExit
+	return OwnFailureExit
 end 'reportNothingToRun'
 
 // ============================================================================================
@@ -342,32 +346,47 @@ function emitReadyFiles(files TestFileResultsArray, ran TestFileResultsArray, or
 	return cursor
 end 'emitReadyFiles'
 
-function compileAndRunTests(args MaxonArgs, projectDir FilePath, target Target, groups TestFileGroupArray, selected TestSelection, color bool) returns ExitCode
+union TestBinaryBuild
+	built(staged StagedTestBuild, binary FilePath)
+	failed(exitCode ExitCode)
+end 'TestBinaryBuild'
+
+function buildTestBinary(projectDir FilePath, target Target, groups TestFileGroupArray, debugInfo bool) returns TestBinaryBuild
 	let buildRoot = try prepareTestBuildRoot(projectDir) otherwise (e) 'noBuildRoot'
-		return refuseTestRun(stagingRefusalReason(e))
+		return TestBinaryBuild.failed(refuseTestRun(stagingRefusalReason(e)))
 	end 'noBuildRoot'
 
-	let compileStarted = Clock.nowMs()
-
 	let staged = try stageTestBuild(buildRoot.join("{StagedTreeDirName}"), projectRoot: projectDir, groups: groups) otherwise (e) 'stagingRefused'
-		return refuseTestRun(stagingRefusalReason(e))
+		return TestBinaryBuild.failed(refuseTestRun(stagingRefusalReason(e)))
 	end 'stagingRefused'
 
-	// A SIBLING of the staged tree, never inside it: the staged root is purged and rewritten on every
+	// A sibling of the staged tree, never inside it: the staged root is purged and rewritten on every
 	// run, and a binary living in the tree that gets walked is a file the next run would have to reason
 	// about.
 	let exePath = buildRoot.join("{TestBinaryStem}{executableExtension(target.os)}")
-	let product = try compileToProduct(staged.buildTargets, target: target, outputOverride: exePath.toString(), runtimeIrNames: RuntimeFunctionNameArray.create(), entryFunction: MaxonTestEntrySymbol.toByteArray(), compilerWrittenSources: staged.compilerWrittenSources, sourceSelection: SourceSelection.productionAndTests, stagedSourceOrigins: staged.stagedSourceOrigins) otherwise 'didNotCompile'
-		// SILENT about the cause: the pipeline already emitted every diagnostic through the one sink,
+	let product = try compileToProduct(staged.buildTargets, target: target, outputOverride: exePath.toString(), runtimeIrNames: RuntimeFunctionNameArray.create(), debugInfo: debugInfo, entryFunction: MaxonTestEntrySymbol.toByteArray(), compilerWrittenSources: staged.compilerWrittenSources, sourceSelection: SourceSelection.productionAndTests, stagedSourceOrigins: staged.stagedSourceOrigins) otherwise 'didNotCompile'
+		// Silent about the cause: the pipeline already emitted every diagnostic through the one sink,
 		// and a sentence of our own here would be a second, vaguer report of the same failure.
 		printError("{TestCommandName}: the tests did not compile — the diagnostics above say why\n")
-		return NothingRanExitCode
+		return TestBinaryBuild.failed(NothingRanExitCode)
 	end 'didNotCompile'
 
-	let compileMs = Clock.elapsedMs(compileStarted)
+	return TestBinaryBuild.built(staged, binary: product.outputPath)
+end 'buildTestBinary'
+
+function compileAndRunTests(args MaxonArgs, projectDir FilePath, target Target, groups TestFileGroupArray, selected TestSelection, color bool) returns ExitCode
+	let compileStarted = Clock.nowMs()
+
+	match buildTestBinary(projectDir, target: target, groups: groups, debugInfo: args.debugInfo) 'build'
+		failed(exitCode) then return exitCode
+		built(staged, binary) then return runBuiltTests(args, staged: staged, binary: binary, compileMs: Clock.elapsedMs(compileStarted), selected: selected, color: color)
+	end 'build'
+end 'compileAndRunTests'
+
+function runBuiltTests(args MaxonArgs, staged StagedTestBuild, binary FilePath, compileMs DurationMs, selected TestSelection, color bool) returns ExitCode
 	let runStarted = Clock.nowMs()
 
-	let plan = TestLaunchPlan.create(product.outputPath, timeoutMs: args.testTimeoutMs)
+	let plan = TestLaunchPlan.create(binary, timeoutMs: args.testTimeoutMs)
 	var progress = TestRunProgress.create()
 	let reportOrder = reportFileOrder(staged.groups)
 	var ran = TestFileResultsArray.create()
@@ -392,11 +411,11 @@ function compileAndRunTests(args MaxonArgs, projectDir FilePath, target Target, 
 	end 'human'
 
 	if tallyTestRun(report.files).failed > 0 'somethingIsNotGreen'
-		return TestsFailedExit
+		return OwnFailureExit
 	end 'somethingIsNotGreen'
 
-	return AllTestsPassedExit
-end 'compileAndRunTests'
+	return SucceededExit
+end 'runBuiltTests'
 
 // ⭐⭐ **CREATE `<project>/.maxon/test/` AND MARK IT AS NOT PART OF THE PROJECT.**
 //

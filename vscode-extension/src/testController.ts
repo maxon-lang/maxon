@@ -2,18 +2,28 @@ import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { debugToExit, NoCompilerMessage } from './debugAdapter';
 import { log } from './logger';
+import { registerAll } from './registration';
 import { isMaxonCheckout, registerSpecTestController } from './specTestController';
 import { appendRunOutput, childList, pipeLines } from './testItems';
 import {
+	debuggedTestVerdict,
 	isIgnoredDirectory,
 	isTestFileName,
+	listedTestFor,
 	parseTestDeclarations,
+	parseTestListDocument,
 	parseTestRunDocument,
 	pathKey,
+	removeStagedTestBinary,
 	resultKey,
+	StagedTestBinary,
+	stageTestBinary,
 	TestFileGlob,
 	testFilterFor,
+	TestListDocument,
+	TestListExitCode,
 	testKey,
 	TestProjectExitCode,
 	testProjectDirectory,
@@ -23,10 +33,28 @@ import {
 } from './unitTestModel';
 
 const IGNORE_MARKER_GLOB = '**/.maxonignore';
+const COMMAND_ECHO_PREFIX = '> ';
+const JSON_FLAG = '--json';
+const FILTER_FLAG = '--filter=';
+const LIST_FLAG = '--list';
+const BUILD_FLAG = '--build';
+const SELECT_FLAG = '--select=';
+const NOT_LISTED_MESSAGE = 'maxon test did not list this test. It compiles the files as saved on disk, so a test that is unsaved or was renamed is not among them.';
 
 interface DeclaredTestItem {
 	file: string;
 	name: string;
+}
+
+export interface UnitTestController {
+	controller: vscode.TestController;
+	runProfile: vscode.TestRunProfile;
+	debugProfile: vscode.TestRunProfile;
+}
+
+export interface RegisteredTestControllers {
+	registration: vscode.Disposable;
+	unitTests: UnitTestController;
 }
 
 /**
@@ -36,20 +64,22 @@ interface DeclaredTestItem {
  * `compilerExecutable` is asked at run time, because the compiler is found (or installed) after activation
  * registers this.
  */
-export function registerTestControllers(compilerExecutable: () => string | undefined): vscode.Disposable {
-	const disposables: vscode.Disposable[] = [registerUnitTestController(compilerExecutable)];
+export function registerTestControllers(compilerExecutable: () => string | undefined): RegisteredTestControllers {
+	const unitTests = registerUnitTestController(compilerExecutable);
+	const checkouts = (vscode.workspace.workspaceFolders ?? []).map(folder => folder.uri.fsPath).filter(isMaxonCheckout);
 
-	for (const folder of vscode.workspace.workspaceFolders ?? []) {
-		if (isMaxonCheckout(folder.uri.fsPath)) {
-			log(`${folder.uri.fsPath} is the Maxon checkout; registering the spec suite`);
-			disposables.push(registerSpecTestController(folder.uri.fsPath));
-		}
-	}
+	const registration = registerAll([
+		() => unitTests.registration,
+		...checkouts.map(checkout => () => {
+			log(`${checkout} is the Maxon checkout; registering the spec suite`);
+			return registerSpecTestController(checkout);
+		})
+	]);
 
-	return vscode.Disposable.from(...disposables);
+	return { registration, unitTests };
 }
 
-function registerUnitTestController(compilerExecutable: () => string | undefined): vscode.Disposable {
+function registerUnitTestController(compilerExecutable: () => string | undefined): UnitTestController & { registration: vscode.Disposable; } {
 	const controller = vscode.tests.createTestController('maxonTests', 'Maxon Tests');
 	const fileItems = new Map<string, vscode.TestItem>();
 	const declared = new Map<string, DeclaredTestItem>();
@@ -133,14 +163,31 @@ function registerUnitTestController(compilerExecutable: () => string | undefined
 	ignoreMarkerWatcher.onDidCreate(rediscover);
 	ignoreMarkerWatcher.onDidDelete(rediscover);
 
-	controller.createRunProfile(
-		'Run',
-		vscode.TestRunProfileKind.Run,
-		(request, token) => runTests(request, token),
-		true
-	);
+	const projectCommands = new Map<string, Promise<void>>();
+	const runProfile = createProjectRunProfile('Run', vscode.TestRunProfileKind.Run, runProject, true);
+	const debugProfile = createProjectRunProfile('Debug', vscode.TestRunProfileKind.Debug, debugProject, false);
 
-	async function runTests(request: vscode.TestRunRequest, token: vscode.CancellationToken): Promise<void> {
+	function createProjectRunProfile(label: string, kind: vscode.TestRunProfileKind, perform: ProjectRunner, isDefault: boolean): vscode.TestRunProfile {
+		return controller.createRunProfile(label, kind, (request, token) => startTestRun(request, token, perform), isDefault);
+	}
+
+	// Every `maxon test` in one project stages into and builds over the same `.maxon/test/` tree, so
+	// two commands in one project run one after the other.
+	function exclusivelyInProject<T>(projectDirectory: string, work: () => Promise<T>): Promise<T> {
+		const key = pathKey(projectDirectory);
+		const previous = projectCommands.get(key) ?? Promise.resolve();
+		const result = previous.then(work);
+		const settled = result.then(() => undefined, () => undefined);
+
+		projectCommands.set(key, settled);
+		void settled.then(() => {
+			if (projectCommands.get(key) === settled) projectCommands.delete(key);
+		});
+
+		return result;
+	}
+
+	async function startTestRun(request: vscode.TestRunRequest, token: vscode.CancellationToken, perform: ProjectRunner): Promise<void> {
 		const run = controller.createTestRun(request);
 
 		try {
@@ -149,8 +196,7 @@ function registerUnitTestController(compilerExecutable: () => string | undefined
 
 			const compiler = compilerExecutable();
 			if (!compiler) {
-				const message = new vscode.TestMessage('No Maxon compiler was found. Set `maxon.serverPath` or install Maxon, then reload the window.');
-				for (const item of requested) run.errored(item, message);
+				erroredAll(run, requested, NoCompilerMessage);
 				return;
 			}
 
@@ -158,7 +204,7 @@ function registerUnitTestController(compilerExecutable: () => string | undefined
 
 			for (const project of groupByProject(requested)) {
 				if (token.isCancellationRequested) break;
-				await runProject(compiler, project, run, token);
+				await perform(compiler, project, run, token);
 			}
 		} catch (err) {
 			log(`Test run failed: ${err}`);
@@ -193,28 +239,40 @@ function registerUnitTestController(compilerExecutable: () => string | undefined
 		return [...out.values()];
 	}
 
-	interface ProjectRun {
+	interface TestProject {
+		folder: vscode.WorkspaceFolder;
 		projectDirectory: string;
 		workingDirectory: string;
+	}
+
+	interface ProjectRun extends TestProject {
 		tests: vscode.TestItem[];
 		filter: string | undefined;
 	}
 
+	type ProjectRunner = (compiler: string, project: ProjectRun, run: vscode.TestRun, token: vscode.CancellationToken) => Promise<void>;
+
+	function projectOf(file: string): TestProject {
+		const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(file));
+		if (!folder) throw new Error(`${file} is in no workspace folder`);
+
+		return {
+			folder,
+			projectDirectory: testProjectDirectory(file, folder.uri.fsPath),
+			workingDirectory: folder.uri.fsPath
+		};
+	}
+
 	function groupByProject(requested: vscode.TestItem[]): ProjectRun[] {
-		const projectOf = new Map<string, { projectDirectory: string; workingDirectory: string; }>();
+		const located = new Map<string, TestProject>();
 		const locate = (file: string) => {
 			const key = pathKey(file);
-			let located = projectOf.get(key);
-			if (!located) {
-				const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(file));
-				if (!folder) throw new Error(`${file} is in no workspace folder`);
-				located = {
-					projectDirectory: testProjectDirectory(file, folder.uri.fsPath),
-					workingDirectory: folder.uri.fsPath
-				};
-				projectOf.set(key, located);
+			let project = located.get(key);
+			if (!project) {
+				project = projectOf(file);
+				located.set(key, project);
 			}
-			return located;
+			return project;
 		};
 
 		const requestedIds = new Set(requested.map(item => item.id));
@@ -255,6 +313,7 @@ function registerUnitTestController(compilerExecutable: () => string | undefined
 			}
 
 			return {
+				folder: group.folder,
 				projectDirectory: group.projectDirectory,
 				workingDirectory: group.workingDirectory,
 				tests: group.tests,
@@ -269,25 +328,38 @@ function registerUnitTestController(compilerExecutable: () => string | undefined
 		return test;
 	}
 
-	async function runProject(compiler: string, project: ProjectRun, run: vscode.TestRun, token: vscode.CancellationToken): Promise<void> {
-		const args = ['test', project.projectDirectory, '--json'];
-		if (project.filter !== undefined) args.push(`--filter=${project.filter}`);
+	function testCommandArguments(project: ProjectRun, modeFlags: string[]): string[] {
+		const args = ['test', project.projectDirectory, ...modeFlags, JSON_FLAG];
+		if (project.filter !== undefined) args.push(`${FILTER_FLAG}${project.filter}`);
+		return args;
+	}
 
+	async function runTestCommand(compiler: string, args: string[], project: ProjectRun, run: vscode.TestRun, token: vscode.CancellationToken): Promise<CompilerExit | undefined> {
 		log(`Running ${compiler} ${args.join(' ')} in ${project.workingDirectory}`);
-		run.appendOutput(`> ${compiler} ${args.join(' ')}\r\n`);
-		for (const item of project.tests) run.started(item);
+		run.appendOutput(`${COMMAND_ECHO_PREFIX}${compiler} ${args.join(' ')}\r\n`);
 
 		const outcome = await runCompiler(compiler, args, project.workingDirectory, run, token);
-		if (token.isCancellationRequested) return;
-
-		if (outcome.kind === 'failedToStart') {
-			erroredAll(run, project.tests, `Could not run ${compiler}: ${outcome.error}`);
-			return;
+		switch (outcome.kind) {
+			case 'exited':
+				return outcome;
+			case 'cancelled':
+				return undefined;
+			case 'failedToStart':
+				erroredAll(run, project.tests, `Could not run ${compiler}: ${outcome.error}`);
+				return undefined;
+			default:
+				throw new Error(`runTestCommand: unhandled compiler outcome ${JSON.stringify(outcome)}`);
 		}
+	}
+
+	async function runProject(compiler: string, project: ProjectRun, run: vscode.TestRun, token: vscode.CancellationToken): Promise<void> {
+		for (const item of project.tests) run.started(item);
+
+		const outcome = await exclusivelyInProject(project.projectDirectory, () => runTestCommand(compiler, testCommandArguments(project, []), project, run, token));
+		if (!outcome) return;
 
 		if (outcome.code !== TestProjectExitCode.AllPassed && outcome.code !== TestProjectExitCode.TestsFailed) {
-			const said = outcome.stderr.trim() || outcome.stdout.trim();
-			erroredAll(run, project.tests, `maxon test could not run the tests (exit code ${outcome.code})${said ? `:\n${said}` : '.'}`);
+			erroredAll(run, project.tests, `maxon test could not run the tests (exit code ${outcome.code})${compilerSaid(outcome)}`);
 			return;
 		}
 
@@ -300,6 +372,86 @@ function registerUnitTestController(compilerExecutable: () => string | undefined
 		}
 
 		reportResults(document, project, run);
+	}
+
+	interface DebuggableBuild {
+		document: TestListDocument;
+		binary: StagedTestBinary;
+	}
+
+	async function debugProject(compiler: string, project: ProjectRun, run: vscode.TestRun, token: vscode.CancellationToken): Promise<void> {
+		const build = await exclusivelyInProject(project.projectDirectory, () => buildForDebugging(compiler, project, run, token));
+		if (!build) return;
+
+		try {
+			for (const item of project.tests) {
+				if (token.isCancellationRequested) return;
+				await debugListedTest(item, build, project, run, token);
+			}
+		} finally {
+			await removeStagedTestBinary(build.binary).catch(err => log(`Could not remove the debugged copy of the test binary in ${build.binary.directory}: ${err}`));
+		}
+	}
+
+	async function buildForDebugging(compiler: string, project: ProjectRun, run: vscode.TestRun, token: vscode.CancellationToken): Promise<DebuggableBuild | undefined> {
+		const outcome = await runTestCommand(compiler, testCommandArguments(project, [LIST_FLAG, BUILD_FLAG]), project, run, token);
+		if (!outcome) return undefined;
+
+		if (outcome.code === TestListExitCode.NoneListed) {
+			erroredAll(run, project.tests, NOT_LISTED_MESSAGE);
+			return undefined;
+		}
+
+		if (outcome.code !== TestListExitCode.Listed) {
+			erroredAll(run, project.tests, `maxon test could not build the tests for debugging (exit code ${outcome.code})${compilerSaid(outcome)}`);
+			return undefined;
+		}
+
+		let document: TestListDocument;
+		try {
+			document = parseTestListDocument(outcome.stdout);
+		} catch (err) {
+			erroredAll(run, project.tests, `maxon test built the tests without a listing this extension could read: ${err}\n${outcome.stdout.trim()}`);
+			return undefined;
+		}
+
+		try {
+			return { document, binary: stageTestBinary(document.binary) };
+		} catch (err) {
+			erroredAll(run, project.tests, `Could not copy the test binary ${document.binary} aside for debugging: ${err}`);
+			return undefined;
+		}
+	}
+
+	async function debugListedTest(item: vscode.TestItem, build: DebuggableBuild, project: ProjectRun, run: vscode.TestRun, token: vscode.CancellationToken): Promise<void> {
+		const test = declaredTest(item);
+		const listed = listedTestFor(build.document, test.file, test.name, project.workingDirectory);
+		if (!listed) {
+			run.errored(item, new vscode.TestMessage(NOT_LISTED_MESSAGE));
+			return;
+		}
+
+		run.started(item);
+
+		const ended = await debugToExit(project.folder, {
+			name: `Debug test: ${test.name}`,
+			program: build.binary.program,
+			args: [`${SELECT_FLAG}${listed.select}`],
+			cwd: project.workingDirectory
+		}, { testRun: run }, token);
+
+		switch (ended.kind) {
+			case 'cancelled':
+				return;
+			case 'ended':
+				run.errored(item, new vscode.TestMessage(ended.reason));
+				return;
+			case 'exited':
+				applyVerdict(run, item, debuggedTestVerdict(ended.code));
+				return;
+			default:
+				throw new Error(`debugListedTest: unhandled debug run outcome ${JSON.stringify(ended)}`);
+		}
 	}
 
 	function reportResults(document: TestRunDocument, project: ProjectRun, run: vscode.TestRun): void {
@@ -334,7 +486,7 @@ function registerUnitTestController(compilerExecutable: () => string | undefined
 	}
 
 	const disposables = [controller, testFileWatcher, ignoreMarkerWatcher];
-	return new vscode.Disposable(() => disposables.forEach(d => d.dispose()));
+	return { controller, runProfile, debugProfile, registration: new vscode.Disposable(() => disposables.forEach(d => d.dispose())) };
 }
 
 function itemLocation(item: vscode.TestItem): vscode.Location | undefined {
@@ -366,7 +518,15 @@ function erroredAll(run: vscode.TestRun, items: vscode.TestItem[], text: string)
 
 type CompilerOutcome =
 	| { kind: 'exited'; code: number | null; stdout: string; stderr: string; }
-	| { kind: 'failedToStart'; error: string; };
+	| { kind: 'failedToStart'; error: string; }
+	| { kind: 'cancelled'; };
+
+type CompilerExit = Extract<CompilerOutcome, { kind: 'exited'; }>;
+
+function compilerSaid(outcome: { stdout: string; stderr: string; }): string {
+	const said = outcome.stderr.trim() || outcome.stdout.trim();
+	return said ? `:\n${said}` : '.';
+}
 
 function runCompiler(
 	compiler: string,
@@ -375,6 +535,8 @@ function runCompiler(
 	run: vscode.TestRun,
 	token: vscode.CancellationToken
 ): Promise<CompilerOutcome> {
+	if (token.isCancellationRequested) return Promise.resolve({ kind: 'cancelled' });
+
 	return new Promise(resolve => {
 		const child = spawn(compiler, args, { cwd });
 		let stdout = '';
@@ -397,6 +559,6 @@ function runCompiler(
 		});
 
 		child.on('error', err => settle({ kind: 'failedToStart', error: err.message }));
-		child.on('close', code => settle({ kind: 'exited', code, stdout, stderr }));
+		child.on('close', code => settle(token.isCancellationRequested ? { kind: 'cancelled' } : { kind: 'exited', code, stdout, stderr }));
 	});
 }

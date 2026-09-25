@@ -104,9 +104,6 @@ let ModuleSnapshotFlags = SnapModule or SnapModule32
 // the scheduler's monitor reads them from too.
 let ContextSampleFlags = Win64ContextControl or Win64ContextInteger
 
-// Win32's FALSE, which `GetThreadContext`, `ReadProcessMemory` and the two module walks all answer with.
-let Win32False = 0
-
 // `VirtualQueryEx` answers the number of bytes it wrote, so zero is its failure.
 let RegionQueryFailed = 0
 
@@ -258,31 +255,25 @@ function buildProfileThreadCycles(module StdModule)
 	module.functions.push(func)
 end 'buildProfileThreadCycles'
 
-// ⭐⭐⭐ **`__prof_sample(proc, thread, ctxPtr, mbiPtr, windowPtr, windowCap) -> bytesCopied | -1` — THE ONLY
-// PLACE A THREAD IS EVER SUSPENDED, AND THE PLACE THE RESUME RULE BECOMES STRUCTURAL.**
+// `__prof_sample(proc, thread, ctxPtr, mbiPtr, windowPtr, windowCap) -> bytesCopied | -1`: the
+// profiler's only suspension of a thread.
 //
-// ⛔⛔ **EVERY EDGE OUT OF THE SUSPENDED REGION CONVERGES ON ONE RESUME BLOCK, WHICH DOMINATES THE SINGLE
-// RETURN.** A failed context read, a region query that misses, a stack that copies nothing and a partial
-// copy all branch there; the ONLY path that skips it is the one where `SuspendThread` itself failed, and
-// that path is correct precisely because nothing was suspended. There is no early return between the two,
-// and the graph makes one unwritable rather than forbidding one — a sampler that can leave a thread
-// suspended is a deadlock generator, and a language-level `finally` exists only because a language-level
-// `return` can jump past it.
+// Every edge out of the suspended region converges on one resume block, which dominates the single
+// return. The only path that skips it is a failed `SuspendThread`, where nothing was suspended. An
+// early return between the two would leave a thread suspended, which deadlocks the sampled process.
 //
-// ⭐ **THE ANSWER TELLS THREE THINGS APART, because they mean three different things upstream.**
-// `ProfileSampleThreadGone` is a thread that has exited and must be dropped rather than counted;
-// `ProfileSampleNoRegisters` is a real sample with nothing in it; `0` is a leaf whose chain could not be
-// walked, which still attributes SELF time to a real function. The frame slot carries that answer across
-// the edges because the convergence above leaves nowhere else to put it.
+// The answer tells three things apart for the caller: `ProfileSampleThreadGone` is an exited thread
+// to drop, `ProfileSampleNoRegisters` a real sample with nothing in it, and `0` a leaf whose chain
+// could not be walked. The frame slot carries it across the edges because the convergence leaves
+// nowhere else.
 //
-// ⚠ **`mbiPtr`'s ALLOCATION BASE IS CLEARED BEFORE THE QUERY**, so a miss reads back as 0 rather than as
-// whatever the previous sample left there — a stack identity taken from a stale word would merge two
-// unrelated threads' samples into one row.
+// `mbiPtr`'s allocation base is cleared before the query, so a miss reads back as 0: a stack
+// identity taken from a previous sample's stale word would merge two threads' samples into one row.
 //
-// ⭐ **THE THREAD's CYCLE COUNT IS READ WHILE IT IS STILL SUSPENDED**, in the resume block every suspended edge
-// reaches, into the word `ProfileRegionSuspendedCyclesOffset` names: the sampler's next charge is measured from
-// it, so neither the suspend's own kernel cycles nor what the thread runs while the sampler walks its copied
-// stack fall on the wrong side of the baseline.
+// The thread's cycle count is read in the resume block while it is still suspended, into the word
+// `ProfileRegionSuspendedCyclesOffset` names, so neither the suspend's own kernel cycles nor what
+// the thread runs while the sampler walks its stack fall on the wrong side of the next charge's
+// baseline.
 function buildProfileSample(module StdModule)
 	var func = IrFunction.createFromStd(ProfileSampleName, returnType: StdReturnType.value(StdType.i64), paramCount: 6, paramTypes: sixI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(6)
@@ -320,11 +311,12 @@ function buildProfileSample(module StdModule)
 	emitStoreField(module, block: entry, record: mbiPtr, offset: ProfileRegionAllocationBaseOffset, value: zero)
 
 	let suspended = emitHostSample(module, block: entry, service: ProfileHostCall.suspendThread, a0: thread, a1: zero, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
-	let nothingSuspended = emitCmp(module, block: entry, a: suspended, b: threadGone, pred: StdCmpPred.eq, ids: ids)
+	let suspendFailed = emitConst(module, block: entry, value: SuspendThreadFailed, ids: ids)
+	let nothingSuspended = emitCmp(module, block: entry, a: suspended, b: suspendFailed, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(nothingSuspended, thenBlockId: answer.id, elseBlockId: readContext.id))
 
-	// The thread IS suspended from here on, so the answer stops being "it is gone" and becomes "this instant
-	// is unreadable" — which `queryRegion` below replaces with a byte count once the registers are in hand.
+	// The thread is suspended from here on, so the answer becomes "this instant is unreadable" until
+	// `queryRegion` replaces it with a byte count.
 	let unreadable = emitConst(module, block: readContext, value: ProfileSampleNoRegisters, ids: ids)
 	emitStoreField(module, block: readContext, record: resultPtr, offset: 0, value: unreadable)
 	let sampleFlags = emitConst(module, block: readContext, value: ContextSampleFlags, ids: ids)
@@ -334,7 +326,7 @@ function buildProfileSample(module StdModule)
 	let contextFailed = emitCmp(module, block: readContext, a: gotContext, b: noContext, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(readContext, op: StdOp.condBranch(contextFailed, thenBlockId: resume.id, elseBlockId: queryRegion.id))
 
-	// The registers ARE read from here on, so the answer becomes a byte count — zero until a copy succeeds.
+	// The registers are read from here on, so the answer is a byte count, zero until a copy succeeds.
 	emitStoreField(module, block: queryRegion, record: resultPtr, offset: 0, value: zero)
 	let stackPointer = emitLoadField(module, block: queryRegion, record: ctxPtr, offset: Win64ContextRspOffset, ids: ids)
 	let mbiBytes = emitConst(module, block: queryRegion, value: ProfileRegionRecordBytes, ids: ids)
@@ -343,8 +335,8 @@ function buildProfileSample(module StdModule)
 	let regionMissing = emitCmp(module, block: queryRegion, a: queried, b: queryMiss, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(queryRegion, op: StdOp.condBranch(regionMissing, thenBlockId: resume.id, elseBlockId: measureWindow.id))
 
-	// How much of the region above the stack pointer is readable, clamped to the window. Both comparisons are
-	// UNSIGNED: these are addresses, and a signed `>` reads a high-half pointer as negative.
+	// Both comparisons are unsigned: these are addresses, and a signed `>` reads a high-half pointer
+	// as negative.
 	let regionBase = emitLoadField(module, block: measureWindow, record: mbiPtr, offset: MbiBaseAddressOffset, ids: ids)
 	let regionSize = emitLoadField(module, block: measureWindow, record: mbiPtr, offset: MbiRegionSizeOffset, ids: ids)
 	let regionEnd = emitBin(module, block: measureWindow, a: regionBase, b: regionSize, opcode: StdBinOpcode.add, ids: ids)
@@ -359,8 +351,8 @@ function buildProfileSample(module StdModule)
 	emitStoreField(module, block: capped, record: wantPtr, offset: 0, value: windowCap)
 	module.setTerminator(capped, op: StdOp.branch(copyStack.id))
 
-	// A PARTIAL copy is still a walkable PREFIX — a stack running into its guard page yields its readable
-	// frames rather than nothing — so the failure edge takes the byte count the API wrote rather than zero.
+	// A partial copy is still a walkable prefix, since a stack running into its guard page yields its
+	// readable frames, so the failure edge takes the byte count the API wrote.
 	let want = emitLoadField(module, block: copyStack, record: wantPtr, offset: 0, ids: ids)
 	emitStoreField(module, block: copyStack, record: readPtr, offset: 0, value: zero)
 	let copied = emitHostSample(module, block: copyStack, service: ProfileHostCall.readProcessMemory, a0: proc, a1: stackPointer, a2: windowPtr, a3: want, a4: readPtr, a5: zero, ids: ids)
@@ -373,7 +365,6 @@ function buildProfileSample(module StdModule)
 	emitStoreField(module, block: partialCopy, record: resultPtr, offset: 0, value: partial)
 	module.setTerminator(partialCopy, op: StdOp.branch(resume.id))
 
-	// ⭐ THE RESUME. Unconditional, and reached from every edge out of the suspended region.
 	let cyclesPtr = emitBin(module, block: resume, a: mbiPtr, b: emitConst(module, block: resume, value: ProfileRegionSuspendedCyclesOffset, ids: ids), opcode: StdBinOpcode.add, ids: ids)
 	module.appendOp(resume, op: StdOp.osThreadCpuTicks(thread, outPtrId: cyclesPtr))
 	let resumeZero = emitConst(module, block: resume, value: 0, ids: ids)

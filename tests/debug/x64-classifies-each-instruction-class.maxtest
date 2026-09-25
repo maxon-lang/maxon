@@ -12,6 +12,9 @@ let ReturnClass = 6
 let IndirectCallClass = 7
 let IndirectJumpClass = 8
 
+let MemoryCallForm = 2
+let PcRelativeCallForm = 3
+
 let UnclassifiedAnswer = "unclassified"
 
 let LessThanCondition = 12
@@ -33,9 +36,25 @@ test 'the x64 classifier answers a length and a class for every instruction clas
 	probes.push(Probe.create("eb05", expected: "len=2 class={DirectJumpClass} cond=0 disp=0 target=0x1007", what: "`jmp rel8` — a two-byte jump, whose one-byte displacement is still signed"))
 	probes.push(Probe.create("0f8cebffffff", expected: "len=6 class={ConditionalJumpClass} cond={LessThanCondition} disp=0 target=0xff1", what: "`jl rel32` — the condition NIBBLE rides the class word, because the agent evaluates it against the saved flags"))
 	probes.push(Probe.create("7c05", expected: "len=2 class={ConditionalJumpClass} cond={LessThanCondition} disp=0 target=0x1007", what: "`jl rel8` — the same condition through the short encoding"))
-	probes.push(Probe.create("c3", expected: "len=1 class={ReturnClass} cond=0 disp=0 target=0x0", what: "`ret` — the class the agent simulates by popping the stack"))
-	probes.push(Probe.create("ff1510000000", expected: "len=6 class={IndirectCallClass} cond=0 disp=2 target=0x0", what: "`call [rip+0x10]` — an indirect call, which is classified so the agent can REFUSE it rather than resume past it wrongly"))
+	probes.push(Probe.create("c3", expected: "len=1 class={ReturnClass} cond=0 disp=0 target=0x0 rel=0", what: "`ret` — the class the agent simulates by popping the stack"))
+	probes.push(Probe.create("c21000", expected: "len=3 class={ReturnClass} cond=0 disp=0 target=0x0 rel=1", what: "`ret 0x10` — a return that also releases arguments, whose immediate the agent reads at the release position the class word carries"))
+	probes.push(Probe.create("f3c21000", expected: "len=4 class={ReturnClass} cond=0 disp=0 target=0x0 rel=2", what: "`rep ret 0x10` — a prefix moves the release immediate one byte on, so a release position read off the length would name the wrong two bytes"))
+	probes.push(Probe.create("48c21000", expected: "len=4 class={ReturnClass} cond=0 disp=0 target=0x0 rel=2", what: "`ret 0x10` behind a REX byte — the immediate is two bytes whatever REX.W says"))
+	probes.push(Probe.create("66c3", expected: UnclassifiedAnswer, what: "`ret` under an operand-size prefix — a sixteen-bit return on one vendor's parts and an ordinary one on the other's, so it must be refused rather than simulated"))
+	probes.push(Probe.create("66c21000", expected: UnclassifiedAnswer, what: "`ret 0x10` under an operand-size prefix — refused for the same reason"))
+	probes.push(Probe.create("ff1510000000", expected: "len=6 class={IndirectCallClass} cond=0 disp=2 target=0x0 operand=word:0x1016", what: "`call [rip+0x10]` — an indirect call through a pc-relative word, which the agent reads at its absolute address to simulate the call"))
+	probes.push(Probe.create("41ffd4", expected: "len=3 class={IndirectCallClass} cond=0 disp=0 target=0x0 operand=reg:12", what: "`call r12` — an indirect call through a register, which REX.B carries past the eighth"))
+	probes.push(Probe.create("ff5008", expected: "len=3 class={IndirectCallClass} cond=0 disp=2 target=0x0 operand=mem:base=0,index=none,scale=1,disp=+0x8", what: "`call [rax+8]` — an indirect call through a based word"))
+	probes.push(Probe.create("42ff54c5f8", expected: "len=5 class={IndirectCallClass} cond=0 disp=4 target=0x0 operand=mem:base=5,index=8,scale=8,disp=-0x8", what: "`call [rbp+r8*8-8]` — a scaled index that REX.X carries past the eighth, under a signed byte displacement"))
+	probes.push(Probe.create("ff14e5f0ffffff", expected: "len=7 class={IndirectCallClass} cond=0 disp=3 target=0x0 operand=mem:base=none,index=none,scale=8,disp=-0x10", what: "`call [-0x10]` through a SIB with neither base nor index — the absolute form, whose displacement is the whole address"))
 	probes.push(Probe.create("ff2510000000", expected: "len=6 class={IndirectJumpClass} cond=0 disp=2 target=0x0", what: "`jmp [rip+0x10]` — an indirect jump, refused for the same reason"))
+	probes.push(Probe.create("64ff1510000000", expected: "len=7 class={IndirectCallClass} cond=0 disp=3 target=0x0 operand=overridden:form={PcRelativeCallForm}", what: "`call fs:[rip+0x10]` — a segment override adds a base the operand reader does not know, so the word it calls through is left unresolved"))
+	probes.push(Probe.create("67ff10", expected: "len=3 class={IndirectCallClass} cond=0 disp=3 target=0x0 operand=overridden:form={MemoryCallForm}", what: "`call [eax]` — an address-size prefix truncates the address to 32 bits, so the operand is left unresolved rather than read at the full register"))
+	probes.push(Probe.create("41f3ffd4", expected: "len=4 class={IndirectCallClass} cond=0 disp=0 target=0x0 operand=reg:4", what: "`call rsp` with a REX.B the hardware ignores — a REX byte is heard only directly ahead of the opcode, so the legacy prefix after it drops it"))
+	probes.push(Probe.create("48f3b801000000", expected: "len=7 class={PlainClass} cond=0 disp=0 target=0x0", what: "`mov eax, 1` with a REX.W the hardware ignores — a dropped REX.W leaves the immediate four bytes long"))
+	probes.push(Probe.create("66ff10", expected: UnclassifiedAnswer, what: "`call word [rax]` — a sixteen-bit indirect call, which would be rebuilt as a two-byte push"))
+	probes.push(Probe.create("66ff20", expected: UnclassifiedAnswer, what: "`jmp word [rax]` — a sixteen-bit indirect jump"))
+	probes.push(Probe.create("66e8fbfeffff", expected: UnclassifiedAnswer, what: "`call rel16` on one vendor's parts and `call rel32` on the other's — no length can be vouched for"))
 	probes.push(Probe.create("62", expected: UnclassifiedAnswer, what: "a byte this build's tables do not cover — it must be answered `{UnclassifiedAnswer}` rather than given a length nobody can vouch for"))
 	probes.push(Probe.create("d5", expected: UnclassifiedAnswer, what: "a second such byte"))
 	probes.push(Probe.create("f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f390", expected: UnclassifiedAnswer, what: "sixteen `rep` prefixes ahead of a `nop` — a run longer than the fifteen bytes any x64 instruction may occupy, which must be REFUSED rather than measured: the length and the displacement position both ride a fifteen-bit field, so a decoder that answered here would abort the driver on a range check for a token a caller simply mistyped"))

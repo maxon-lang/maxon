@@ -23,8 +23,10 @@ let SingleTypeSpelling = "f32"
 let UnsignedCompare = 0 as DebugAddress
 let NegativeSign = "-"
 let HexLiteralPrefix = "0x"
+
 typealias LiteralBase = int(2 to 16)
 typealias LiteralQuotient = int(1 to i64.max)
+
 let HexLiteralBase = 16 as LiteralBase
 let DecimalLiteralBase = 10 as LiteralBase
 let MaxLiteralMagnitude = 9223372036854775807 as DebugWord
@@ -61,17 +63,6 @@ export union DebugConditionRequest
 	carried(record DebugConditionRecord)
 end 'DebugConditionRequest'
 
-export type DebugArmingSite
-	export let offset as DebugAddress
-	export let condition as DebugConditionRequest
-
-	export static function create(offset DebugAddress, condition DebugConditionRequest) returns DebugArmingSite
-		return Self{offset: offset, condition: condition}
-	end 'create'
-end 'DebugArmingSite'
-
-export typealias DebugArmingSiteArray = Array with DebugArmingSite
-
 export union DebugBreakRequest
 	plain(target String)
 	conditional(target String, condition String)
@@ -84,7 +75,9 @@ export function debugBreakRequestIn(argument String, conditionWord String) retur
 		return DebugBreakRequest.plain(argument.trim())
 	end 'noCondition'
 
-	return DebugBreakRequest.conditional((try pieces.get(0) otherwise "").trim(), condition: conditionTailOf(pieces, conditionWord: conditionWord))
+	let target = try pieces.get(0) otherwise panic("debugBreakRequestIn: a split into {pieces.count()} pieces has a first")
+
+	return DebugBreakRequest.conditional(target.trim(), condition: conditionTailOf(pieces, conditionWord: conditionWord))
 end 'debugBreakRequestIn'
 
 function conditionTailOf(pieces StringArray, conditionWord String) returns String
@@ -101,7 +94,7 @@ function conditionTailOf(pieces StringArray, conditionWord String) returns Strin
 	return tail.trim()
 end 'conditionTailOf'
 
-export function compileDebugCondition(symbols DebugSymbols, offset DebugAddress, text String) returns DebugConditionCompile
+export function compileDebugCondition(symbols DebugSymbols, offset DebugAddress, site MxdbgInlineSiteLookup, text String) returns DebugConditionCompile
 	let words = conditionWordsOf(text)
 
 	if words.count() != ConditionWords 'notAThreePartComparison'
@@ -118,16 +111,16 @@ export function compileDebugCondition(symbols DebugSymbols, offset DebugAddress,
 
 	match conditionOperatorOf(opSpelling) 'known'
 		none then return DebugConditionCompile.unsupported
-		code(op) then return compiledAgainstName(symbols, offset: offset, name: name, op: op, literalSpelling: literalSpelling)
+		code(op) then return compiledAgainstName(symbols, offset: offset, site: site, name: name, op: op, literalSpelling: literalSpelling)
 	end 'known'
 end 'compileDebugCondition'
 
-function compiledAgainstName(symbols DebugSymbols, offset DebugAddress, name String, op DebugAddress, literalSpelling String) returns DebugConditionCompile
-	let locals = symbols.localsAt(offset)
+function compiledAgainstName(symbols DebugSymbols, offset DebugAddress, site MxdbgInlineSiteLookup, name String, op DebugAddress, literalSpelling String) returns DebugConditionCompile
+	let locals = symbols.localsAt(offset, site: site)
 
 	match symbols.localCoveringIn(locals, offset: offset, name: name) 'known'
-		undeclared then return DebugConditionCompile.unsupported
-		notLiveHere then return DebugConditionCompile.unsupported
+		undeclared or
+			notLiveHere then return DebugConditionCompile.unsupported
 		live(local) then return compiledAgainstLocal(symbols, local: local, op: op, literalSpelling: literalSpelling)
 	end 'known'
 end 'compiledAgainstName'

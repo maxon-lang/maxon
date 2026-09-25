@@ -1,0 +1,53 @@
+let SnippetSweepStagingDir = "temp/mcp-snippet-sweep"
+let CacheRootVariable = "MAXON_RUN_CACHE_ROOT"
+let CacheVendorDirName = "maxon"
+let SnippetDirName = "mcp-snippet"
+let SnippetStem = "mcp-snippet"
+let SnippetSourceSuffix = ".maxon"
+let SidecarSuffix = ".mxdbg"
+let PlantedText = "not really a program"
+let StagedSnippetSerial = 1
+let OrphanedSnippetSerial = 2
+
+typealias PlantedSerial = int(1 to 2)
+
+function plantedSnippetFile(directory FilePath, owner OwnerId, serial PlantedSerial, suffix String) returns String
+	let name = "{SnippetStem}-{owner}-{serial}{suffix}"
+	try File.writeText(directory.join(name), content: PlantedText) otherwise panic("mcp snippet sweep test: could not plant {name} in {directory.path}")
+
+	return name
+end 'plantedSnippetFile'
+
+test 'a server sweeps the snippets and snippet builds whose server has ended, and keeps a live one s'
+	let cacheRoot = stagingDir(SnippetSweepStagingDir)
+	clearStagedFiles(cacheRoot)
+	_ = stagingDir("{SnippetSweepStagingDir}/{CacheVendorDirName}")
+	let snippets = stagingDir("{SnippetSweepStagingDir}/{CacheVendorDirName}/{SnippetDirName}")
+
+	let ended = endedProcessId()
+	let live = __Builtins.currentProcessId()
+	var endedFiles = StringArray.create()
+	endedFiles.push(plantedSnippetFile(snippets, owner: ended, serial: StagedSnippetSerial, suffix: SnippetSourceSuffix))
+	endedFiles.push(plantedSnippetFile(snippets, owner: ended, serial: StagedSnippetSerial, suffix: executableSuffix()))
+	endedFiles.push(plantedSnippetFile(snippets, owner: ended, serial: StagedSnippetSerial, suffix: "{executableSuffix()}{SidecarSuffix}"))
+	let orphanedProduct = plantedSnippetFile(snippets, owner: ended, serial: OrphanedSnippetSerial, suffix: executableSuffix())
+	var liveFiles = StringArray.create()
+	liveFiles.push(plantedSnippetFile(snippets, owner: live, serial: StagedSnippetSerial, suffix: SnippetSourceSuffix))
+	liveFiles.push(plantedSnippetFile(snippets, owner: live, serial: StagedSnippetSerial, suffix: executableSuffix()))
+
+	var environment = EnvMap.create()
+	environment.upsert(CacheRootVariable, value: cacheRoot.toString())
+	let docs = responseDocs(runMcp([initRequest(1)], environment: Environment.inheritUpdating(environment)))
+
+	try Expect.equal(docs.count() as AssertedInt, expected: 1, message: "the control: the server must answer its `initialize`")
+
+	for name in endedFiles 'eachEnded'
+		try Expect.isFalse(File.exists(snippets.join(name)), message: "⛔ A SNIPPET NAMES THE SERVER THAT STAGED IT, and {name} names one that has ended, so nothing will ever delete it but the next server's sweep")
+	end 'eachEnded'
+
+	try Expect.isFalse(File.exists(snippets.join(orphanedProduct)), message: "{orphanedProduct} is a build of a snippet whose source is already gone and whose server has ended; nothing names it any longer, so the sweep must remove it on its own")
+
+	for name in liveFiles 'eachLive'
+		try Expect.isTrue(File.exists(snippets.join(name)), message: "{name} names a server that is still running, whose call may be using it right now; the sweep must leave it")
+	end 'eachLive'
+end 'a server sweeps the snippets and snippet builds whose server has ended, and keeps a live one s'

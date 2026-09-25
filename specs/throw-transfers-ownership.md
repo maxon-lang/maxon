@@ -140,8 +140,8 @@ the caller alive and is freed once. Caught and matched, it yields the transferre
 payload once — no leak, no double-free.
 
 ⚠ **THE TRANSFER HERE IS THE RETAIN, AND THE PROSE SAID "the compiler has no incref, so the
-throw MOVES the box out" — false twice over.** `retainThrownField` has existed since
-#64 (the case below uses it), and this container is `let h = Holder.create()`: a CALL
+throw MOVES the box out" — false twice over.** The retain is `retainBorrowedAggregate`
+(the case below uses it), and this container is `let h = Holder.create()`: a CALL
 RESULT, which the compiler must treat as a CO-OWNER because a `return` may hand back an
 increfed borrow of something the callee still holds (`return h.ty`) and no signature
 records which. Nulling the slot of a co-owned container is a segfault
@@ -303,7 +303,7 @@ the `Body` record in its slot has two owners. The match's move-out then vacated 
 that the frame holds *that slot's* reference — and the payload binding `b` was stamped SOLE, so `throw b.e`
 nulled `e@0` in a record the CALLER still reads. **This shape predates the co-ownership rule and is not a
 nested-union case: a struct payload has been constructible since P1.4b.** With the payload co-owned the throw
-takes `retainThrownField`, the caller's `body.e` stays live, and the refcount balances at one free (`first=7`
+takes `retainBorrowedAggregate`, the caller's `body.e` stays live, and the refcount balances at one free (`first=7`
 from the fallback, `second=52`).
 
 ```maxon

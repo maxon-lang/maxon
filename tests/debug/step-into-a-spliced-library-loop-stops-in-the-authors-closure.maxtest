@@ -1,0 +1,19 @@
+let SplicedClosureCaseLabel = "step-into-a-spliced-library-loop-stops-in-the-authors-closure"
+let MainFunctionName = "main"
+
+test 'a step on a line whose library call is spliced into the frame and calls the author back stops in the author closure'
+	let staged = builtFixture(SplicedClosureCaseLabel, fixture: SplicedClosureFixtureName)
+	let scanLine = anchorLine(staged, anchor: "spliced-scan")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(scanLine)}", RunCommand, "{ClearCommand} {lineTarget(scanLine)}", StepCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let stops = eventsOfKind(events, kind: StopEventName)
+
+	try Expect.equal(stops.count() as AssertedInt, expected: 2, message: "the breakpoint on the scan line and the `{StepCommand}` are two stops. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let entered = eventAt(stops, index: 1)
+	try Expect.equal(textOf(entered, node: entered.root, key: ReasonKey), expected: StepStopReason, message: "the landing is a step. {said}")
+	try Expect.notEqual(textOf(entered, node: entered.root, key: FunctionKey), expected: MainFunctionName, message: "⛔ A STEP MUST STOP IN THE AUTHOR'S CODE THE SPLICE CALLS. `values.contains(…)` is spliced into `{MainFunctionName}` and calls the closure written on this line for every element; running the splice to its exit is `next`, and it lands on the line after with the closure never shown. {said}")
+	try Expect.equal(numberOf(entered, node: entered.root, key: LineKey) as AssertedInt, expected: scanLine as AssertedInt, message: "the closure's body is written on the scan line, so the step stops there. {said}")
+end 'a step on a line whose library call is spliced into the frame and calls the author back stops in the author closure'

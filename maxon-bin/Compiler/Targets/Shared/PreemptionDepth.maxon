@@ -1,22 +1,25 @@
-// PreemptionDepth — the compile-time certificate that honouring a preemption request cannot run a green thread
-// off its stack.
+// PreemptionDepth — the compile-time certificate that the runtime code a green thread runs below
+// its frames, with no guard of its own, cannot run it off its stack.
 //
-// ⭐⭐ **WHY IT HAS TO BE ADDED UP AND CANNOT BE TRUSTED.** A request is honoured at a prologue guard, BEFORE
-// the guarded function has a frame (`GtRuntime.GtStackGuardPreempt`), and its whole call tree —
-// `__gt_guard_tripped`'s preempt arm, `__gt_preempt` and everything the park reaches down to the context switch —
-// runs on the thread's own stack with no guard of its own, riding the margin every guarded prologue projects
-// (`GtRuntime.gtStackGuardMargin`). Those frames are the register allocator's to size, so the only honest
-// answer is the one read off the frames this backend laid out, after the prologue pass.
+// A request is honoured at a prologue guard, before the guarded function has a frame
+// (`GtRuntime.GtStackGuardPreempt`), and its whole call tree — `__gt_guard_tripped`'s preempt arm,
+// `__gt_preempt` and everything the park reaches down to the context switch — runs on the thread's
+// own stack riding the margin every guarded prologue projects (`GtRuntime.gtStackGuardMargin`).
+// Those frames are the register allocator's to size, so the only honest answer is the one read off
+// the frames this backend laid out, after the prologue pass.
 //
-// ⚠ **A CALL IT CANNOT SIZE IS REFUSED, NEVER GUESSED.** An indirect call, a callee that is neither a laid-out
-// function nor a chunk whose depth is known here, and a tree deeper than any the runtime has are each a build
-// failure naming what reached it, so a change that grows the tree has to state what it costs.
+// A call it cannot size is refused, never guessed. An indirect call, a callee that is neither a
+// laid-out function nor a chunk whose depth is known here, and a tree deeper than any the runtime
+// has are each a build failure naming what reached it, so a change that grows the tree has to state
+// what it costs.
 //
-// ⭐⭐ **THERE ARE TWO ROOTS AND TWO MARGINS, AND THE SECOND IS THE ASYNCHRONOUS STOP'S.** A request honoured
-// at a prologue rides the guard margin; a thread STOPPED WHERE IT STANDS has had nothing projected on its
-// behalf at all, so the safe-point predicate demands `GtRuntime.gtAsyncPreemptMargin` outright and this file
-// proves the trampoline's register block plus its park's tree fit inside it. One walk serves both — only the
-// root and the margin differ.
+// There are three roots, each with its own room. A request honoured at a prologue rides the guard
+// margin. A thread stopped where it stands has had nothing projected on its behalf, so the
+// safe-point predicate demands `GtRuntime.gtAsyncPreemptMargin` outright and the trampoline's
+// register block plus its park's tree must fit inside it. A debug trap on a green thread runs
+// Windows exception dispatch, the trap thunk's frame and the deeper of the agent's claim and
+// release trees on the interrupted stack, inside the reserve below its guard word
+// (`GtRuntime.gtStackSystemBytes`). One walk serves all three; only the root and the room differ.
 
 // One step down from a frame in the tree: a named callee whose own tree is added up, `below` bytes beneath its
 // caller's frame; or a call whose whole depth on the thread's stack is known where it is emitted.
@@ -58,14 +61,17 @@ export function requireAsyncPreemptionFitsItsMargin(module TargetModule, funcNam
 	end 'overflowsTheMargin'
 end 'requireAsyncPreemptionFitsItsMargin'
 
-export function requireDebugTrapFitsItsReserve(target Target)
+export function requireDebugTrapFitsItsReserve(module TargetModule, funcNames FunctionNameIndex, target Target)
 	let dispatch = gtWindowsExceptionDispatchMeasuredBytes()
-	let preSwitch = debugTrapPreSwitchStackBytes(target)
+	let thunk = debugTrapPreSwitchStackBytes(target)
+	let claim = unguardedTreeBytes(module, funcNames: funcNames, name: DebugClaimStackName, root: DebugClaimStackName, target: target, framesLeft: MaxUnguardedTreeFrames)
+	let release = unguardedTreeBytes(module, funcNames: funcNames, name: DebugReleaseStackName, root: DebugReleaseStackName, target: target, framesLeft: MaxUnguardedTreeFrames)
+	let preSwitch = thunk + deeperOf(claim, other: release)
 	let reserve = gtStackSystemBytes(target)
-	logDebug(LogCategory.codegen, message: function() gives "debug trap depth ({targetToString(target)}): OS dispatch {dispatch} + thunk {preSwitch} = {dispatch + preSwitch} of a {reserve}-byte reserve")
+	logDebug(LogCategory.codegen, message: function() gives "debug trap depth ({targetToString(target)}): OS dispatch {dispatch} + thunk {thunk} + the deeper of claim {claim} and release {release} = {dispatch + preSwitch} of a {reserve}-byte reserve")
 
 	if (dispatch + preSwitch) as ParsedInt > reserve 'overrunsTheReserve'
-		panic("requireDebugTrapFitsItsReserve: a debug trap on a green thread costs {dispatch} bytes of Windows exception dispatch and {preSwitch} for `{String.from(DebugTrapThunkName)}`'s own frame before it switches to the agent stack, {dispatch + preSwitch} in all, but a green thread reserves only {reserve} bytes below its guard word for the OS. Shrink the thunk's pre-switch path, or raise GtRuntime.GtWindowsExceptionDispatchBytes and measure the self-compile")
+		panic("requireDebugTrapFitsItsReserve: a debug trap on a green thread costs {dispatch} bytes of Windows exception dispatch, {thunk} for `{String.from(DebugTrapThunkName)}`'s own frame and {deeperOf(claim, other: release)} for the deeper of `{String.from(DebugClaimStackName)}`'s call tree ({claim}) and `{String.from(DebugReleaseStackName)}`'s ({release}), both of which run on the interrupted stack, {dispatch + preSwitch} in all, but a green thread reserves only {reserve} bytes below its guard word for the OS. Shrink the thunk's pre-switch path, or raise GtRuntime.GtWindowsExceptionDispatchBytes and measure the self-compile")
 	end 'overrunsTheReserve'
 end 'requireDebugTrapFitsItsReserve'
 

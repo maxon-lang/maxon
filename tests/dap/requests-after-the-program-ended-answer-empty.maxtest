@@ -1,0 +1,57 @@
+let EndedCaseLabel = "requests-after-the-program-ended-answer-empty"
+let EndedThreadId = 1 as DapNumber
+let EndedFrameId = 1
+let EndedVariablesReference = 1
+let EndedExpression = "total"
+let HoverContext = "hover"
+let ProgramEndedWording = "the program has ended"
+
+type EndedSession implements DapSession
+	let executable as FilePath
+	export var threads as JsonDoc
+	export var frames as JsonDoc
+	export var scopes as JsonDoc
+	export var variables as JsonDoc
+	export var evaluated as JsonDoc
+	export var continued as JsonDoc
+
+	static function create(executable FilePath) returns EndedSession
+		return Self{executable: executable, threads: JsonDoc.create(), frames: JsonDoc.create(), scopes: JsonDoc.create(), variables: JsonDoc.create(), evaluated: JsonDoc.create(), continued: JsonDoc.create()}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+		_ = try client.request(LaunchCommand, argumentsJson: dapLaunchArguments(self.executable))
+		_ = try client.awaitEvent(InitializedEvent)
+		_ = try client.request(ConfigurationDoneCommand)
+		_ = try client.awaitEvent(ExitedEvent)
+
+		self.threads = try client.request(ThreadsCommand)
+		self.frames = try client.request(StackTraceCommand, argumentsJson: dapThreadArguments(EndedThreadId))
+		self.scopes = try client.request(ScopesCommand, argumentsJson: dapScopesArguments(EndedFrameId))
+		self.variables = try client.request(VariablesCommand, argumentsJson: dapVariablesArguments(EndedVariablesReference))
+		self.evaluated = try client.request(EvaluateCommand, argumentsJson: dapEvaluateArguments(EndedExpression, context: HoverContext, frameId: EndedFrameId))
+		self.continued = try client.request(ContinueCommand, argumentsJson: dapThreadArguments(EndedThreadId))
+
+		_ = try client.request(DisconnectCommand)
+	end 'drive'
+end 'EndedSession'
+
+test 'after the program ended, the listings answer empty and every other request says the program has ended'
+	let staged = dapStagedFixture(EndedCaseLabel, fixture: HeaplessFixtureName)
+	var session = EndedSession.create(dapBuildFixture(staged))
+	try dapRunSession(session, completing: "complete")
+
+	try Expect.isTrue(dapSuccess(session.threads), message: "an editor asks for the threads at any moment, including after the program has gone; refusing it shows the user an error for a program that simply finished. It answered {dapDescribed(session.threads)}")
+	try Expect.equal(dapListLength(session.threads, key: ThreadsKey) as AssertedInt, expected: 0, message: "a program that has ended has no threads, and naming one would be a thread the editor could then ask about")
+	try Expect.isTrue(dapSuccess(session.frames), message: "`{StackTraceCommand}` after the end is answered, with no frames. It answered {dapDescribed(session.frames)}")
+	try Expect.equal(dapListLength(session.frames, key: StackFramesKey) as AssertedInt, expected: 0, message: "a program that has ended has no stack")
+	try Expect.isTrue(dapSuccess(session.scopes), message: "`{ScopesCommand}` after the end is answered, with no scopes. It answered {dapDescribed(session.scopes)}")
+	try Expect.equal(dapListLength(session.scopes, key: ScopesKey) as AssertedInt, expected: 0, message: "a program that has ended has no scopes")
+	try Expect.isTrue(dapSuccess(session.variables), message: "`{VariablesCommand}` after the end is answered, with no variables. It answered {dapDescribed(session.variables)}")
+	try Expect.equal(dapListLength(session.variables, key: VariablesKey) as AssertedInt, expected: 0, message: "a program that has ended has no variables")
+	try Expect.isFalse(dapSuccess(session.evaluated), message: "`{EvaluateCommand}` after the end has no program to read and must be refused, not handed to a session that is gone. It answered {dapDescribed(session.evaluated)}")
+	try Expect.contains(dapRefusal(session.evaluated), needle: ProgramEndedWording, message: "the refusal of `{EvaluateCommand}` must say the program has ended")
+	try Expect.isFalse(dapSuccess(session.continued), message: "`{ContinueCommand}` after the end has no program to run and must be refused. It answered {dapDescribed(session.continued)}")
+	try Expect.contains(dapRefusal(session.continued), needle: ProgramEndedWording, message: "the refusal of `{ContinueCommand}` must say the program has ended")
+end 'after the program ended, the listings answer empty and every other request says the program has ended'

@@ -258,27 +258,17 @@ export let Arm64LinuxSyscallRecvfrom = 207
 
 // --- The SERVER side of the socket band ---
 //
-// ⚠ **MEASURED ON THIS LANE, not transcribed, and END TO END**: a probe on an aarch64 Ubuntu guest called
-// these four BY NUMBER and nothing else — `bind` to `127.0.0.1:0` answered 0, `listen` answered 0,
-// `getsockname` read back `family=2` and a non-zero ephemeral port, a second socket `connect`ed to exactly
-// that port, and `accept4` answered a live descriptor carrying BOTH `O_NONBLOCK` and `FD_CLOEXEC` over which
-// five bytes then crossed.
-// ⛔⛔ **`bind` IS 200 AND NOT 235, AND 235 IS THE NUMBER A TRANSCRIPTION REACHES FOR.** The probe was run
-// first with 235 and the kernel answered **-38 (`ENOSYS`)** — 235 in the asm-generic table is `mbind`, which
-// this kernel does not carry. A table copied from the other arch's neighbourhood would have compiled and
-// linked and refused every bind at runtime.
-// ⛔ **NEGATIVE CONTROLS, one substitution at a time**: x86-64's whole set answered `-EFAULT` at the first
-// call; `bind` given 199 (`socketpair`) or 202 answered `-EINVAL`; `listen` given 200 (`bind`) answered
-// `-EINVAL`; `getsockname` given 205 (`getpeername`) answered `-ENOTCONN` with `family=0`.
-// ⛔⛔ **AND THE SHARPEST CONTROL IS `accept4` GIVEN 202, WHICH IS PLAIN `accept` AND SUCCEEDS.** It answers a
-// live descriptor and the bytes still cross — but with `O_NONBLOCK` and `FD_CLOEXEC` both CLEAR, because
-// plain `accept` ignores the fourth argument. ⇒ **a check of this number that reads only "did it answer a
-// descriptor" reads GREEN on the wrong call**; the accepted descriptor's FLAGS are what tell 242 from 202,
-// and a blocking descriptor is what holds a machine on its first `recv`.
+// ⛔ `bind` is 200, not 235: 235 in the asm-generic table is `mbind`, which answers `-ENOSYS`, so a
+// table copied from another arch's neighbourhood links and refuses every bind at run time. ⛔
+// `accept4` is 242, not 202: 202 is plain `accept`, which succeeds but ignores the fourth argument,
+// so its descriptor comes back without `O_NONBLOCK` and `FD_CLOEXEC`. A check that reads only "did
+// it answer a descriptor" passes on the wrong call; the descriptor's flags tell the two apart, and
+// a blocking descriptor holds a machine on its first `recv`.
 export let Arm64LinuxSyscallBind = 200
 export let Arm64LinuxSyscallListen = 201
 export let Arm64LinuxSyscallAccept4 = 242
 export let Arm64LinuxSyscallGetsockname = 204
+export let Arm64LinuxSyscallShutdown = 210
 
 // ⭐⭐ **THE WAIT OBJECT ON THIS LANE — ONE `mmap`'d PAGE, AND `Arm64PosixRuntime` OWNS EVERY FIELD IN IT.**
 // Darwin's twin carries a `pthread_mutex_t` and a `pthread_cond_t` ABOVE the shared prefix, because a
@@ -446,9 +436,9 @@ function arm64LinuxEmitStashErrno(asm Arm64RuntimeAsm)
 end 'arm64LinuxEmitStashErrno'
 
 // Publish a KNOWN errno rather than one a syscall just answered — the walk's clear before each step
-// (`PosixErrnoCleared`, which is how end-of-iteration reaches `ERROR_NO_MORE_FILES`), and the two places a
-// reason has to be invented because no call failed.
-function arm64LinuxEmitPublishErrno(asm Arm64RuntimeAsm, value ParsedInt)
+// (`PosixErrno.cleared`, which is how end-of-iteration reaches `ERROR_NO_MORE_FILES`), and the two
+// places a reason has to be invented because no call failed.
+module function arm64LinuxEmitPublishErrno(asm Arm64RuntimeAsm, value ParsedInt)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x9, value: value as MachineWord)
 	arm64LinuxEmitErrnoAddr(asm, dest: Arm64Register.x16)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x9, base: Arm64Register.x16, byteOffset: 0)
@@ -457,7 +447,7 @@ end 'arm64LinuxEmitPublishErrno'
 // ⭐ **THE TAIL OF EVERY SYSCALL IN THIS FILE: a negative answer is a failure, and the reason goes in the
 // word.** x0 is left exactly as the kernel wrote it, so a caller that wants a count, a descriptor or a
 // sentinel decides that for itself immediately after.
-function arm64LinuxEmitStashIfFailed(asm Arm64RuntimeAsm)
+export function arm64LinuxEmitStashIfFailed(asm Arm64RuntimeAsm)
 	let succeeded = asm.newLabel()
 
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
@@ -750,7 +740,7 @@ function buildArm64LinuxLastErrorChunk() returns FunctionCodeChunk
 
 	arm64LinuxEmitErrnoAddr(asm, dest: Arm64Register.x16)
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x16, byteOffset: 0)
-	arm64EmitErrnoToWin32(asm, wouldBlock: LinuxErrnoWouldBlock, dirNotEmpty: LinuxErrnoDirectoryNotEmpty)
+	arm64EmitErrnoToWin32(asm, wouldBlock: LinuxErrno.wouldBlock.rawValue, dirNotEmpty: LinuxErrno.directoryNotEmpty.rawValue)
 
 	return asm.finishFunction(HostLastErrorName)
 end 'buildArm64LinuxLastErrorChunk'
@@ -1050,7 +1040,7 @@ function buildArm64LinuxDirCurrentPathChunk() returns FunctionCodeChunk
 	// test needs — so the reason is published and classified from one negation.
 	asm.placeLabel(refused)
 	arm64LinuxEmitStashErrno(asm)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x9, imm: PosixErrnoResultTooLarge as Imm32)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x9, imm: PosixErrno.resultTooLarge.rawValue as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: tooSmall)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
 	arm64EmitBranchTo(asm, label: answered)
@@ -1246,10 +1236,10 @@ end 'buildArm64LinuxDirPrefixChunk'
 // below calls this rather than carrying a second copy of the walk. Win32's first and subsequent entries come
 // from one enumeration; so do these.
 //
-// The loop: clear the errno word, take the next directory entry, match it against the pattern, and describe
-// the first one that matches. An exhausted enumeration leaves the word CLEAR, which the caller reads as
-// `ERROR_NO_MORE_FILES` (`PosixErrnoCleared`), and a `getdents64` that FAILS stashes its own reason — so the
-// same FALSE carries both answers exactly as Win32's does.
+// The loop: clear the errno word, take the next directory entry, match it against the pattern, and
+// describe the first one that matches. An exhausted enumeration leaves the word CLEAR, which the
+// caller reads as `ERROR_NO_MORE_FILES` (`PosixErrno.cleared`), and a `getdents64` that FAILS
+// stashes its own reason — so the same FALSE carries both answers exactly as Win32's does.
 //
 // ⚠ **`getdents64` REFILLS A BUFFER, WHERE `readdir` ANSWERS ONE ENTRY.** That is the one structural
 // difference from the Darwin walk: the search carries a cursor and a filled count, and the syscall runs only
@@ -1278,7 +1268,7 @@ function buildArm64LinuxDirFindNextChunk() returns FunctionCodeChunk
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotFindData)
 
 	asm.placeLabel(nextEntry)
-	arm64LinuxEmitPublishErrno(asm, value: PosixErrnoCleared)
+	arm64LinuxEmitPublishErrno(asm, value: PosixErrno.cleared.rawValue)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x10, slot: SlotSearch)
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x11, base: Arm64Register.x10, byteOffset: LinuxSearchDirFdOffset as MachineWord)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x11, imm: 0)
@@ -1441,13 +1431,13 @@ function buildArm64LinuxDirFindFirstChunk() returns FunctionCodeChunk
 	arm64LinuxEmitErrnoAddr(asm, dest: Arm64Register.x16)
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x9, base: Arm64Register.x16, byteOffset: 0)
 	arm64EmitCbnzTo(asm, reg: Arm64Register.x9, label: publishReason)
-	arm64LinuxEmitPublishErrno(asm, value: PosixErrnoNoSuchFileOrDirectory)
+	arm64LinuxEmitPublishErrno(asm, value: PosixErrno.noSuchFileOrDirectory.rawValue)
 
 	asm.placeLabel(publishReason)
 	arm64EmitBranchTo(asm, label: releaseAndRefuse)
 
 	asm.placeLabel(nameTooLong)
-	arm64LinuxEmitPublishErrno(asm, value: LinuxErrnoNameTooLong)
+	arm64LinuxEmitPublishErrno(asm, value: LinuxErrno.nameTooLong.rawValue)
 
 	asm.placeLabel(releaseAndRefuse)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotSearch)
@@ -2934,6 +2924,10 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64LinuxHandleFileTypeChunk())
 	end 'terminalDetection'
 
+	if usage.usesProcessLiveness 'processLiveness'
+		chunks.push(buildArm64PosixProcProbeChunk(PosixHostCall.syscall(Arm64LinuxSyscallKill)))
+	end 'processLiveness'
+
 	if linuxReadsEnvironment(usage) 'envRead'
 		chunks.push(buildArm64LinuxEnvReadChunk())
 	end 'envRead'
@@ -3209,7 +3203,7 @@ function buildArm64LinuxNetpollWaitChunk() returns FunctionCodeChunk
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: PosixPollNoSignalMask)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x5, value: LinuxSigsetBytes)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallEpollPwait)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: (0 - PosixErrnoInterrupted) as Imm32)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: (0 - PosixErrno.interrupted.rawValue) as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: answered)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
 

@@ -63,6 +63,8 @@ export function stagedCorpusDirectory(dirName String) returns FilePath
 	return resolved
 end 'stagedCorpusDirectory'
 
+// Cleared on every call: the staging tree outlives a run, and a file the previous run left would let
+// a stale-source case's first request resolve, so the case would prove nothing.
 export function createdStagingDirectory(dirName String, under FilePath) returns FilePath
 	let directory = try FilePath.from(dirName) otherwise panic("definition corpus: '{dirName}' is not a spellable path")
 	let resolved = directory.resolve(under)
@@ -71,15 +73,30 @@ export function createdStagingDirectory(dirName String, under FilePath) returns 
 		panic("definition corpus: the test could not run — could not create {resolved.toString()}")
 	end 'couldNotCreate'
 
+	clearStagedFiles(resolved)
+
 	return resolved
 end 'createdStagingDirectory'
+
+function clearStagedFiles(directory FilePath)
+	let entries = try Directory.list(directory) otherwise panic("definition corpus: the test could not run — could not list {directory.toString()}")
+
+	for entry in entries 'eachEntry'
+		if Directory.isDirectory(entry) 'aDirectory'
+			clearStagedFiles(entry)
+			continue
+		end 'aDirectory'
+
+		try File.delete(entry) otherwise panic("definition corpus: the test could not run — could not clear {entry.toString()} from a previous run's staging tree")
+	end 'eachEntry'
+end 'clearStagedFiles'
 
 export function writeCorpusFile(directory FilePath, fileName String, content String)
 	let file = directory.join(fileName)
 	try File.writeText(file, content: content) otherwise panic("definition corpus: the test could not run — could not write {file.toString()}")
 end 'writeCorpusFile'
 
-export function deleteCorpusFile(directory FilePath, fileName String)
+function deleteCorpusFile(directory FilePath, fileName String)
 	let file = directory.join(fileName)
 	try File.delete(file) otherwise panic("definition corpus: the test could not run — could not delete {file.toString()}")
 end 'deleteCorpusFile'

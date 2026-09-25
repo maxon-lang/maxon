@@ -32,7 +32,6 @@ let PollIntervalMs = 1
 // from the child's, which is what every successful run answers, and from 1, which is a command line this
 // command could not act on.
 let SchemaMismatchExit = 3 as ExitCode
-let RefusedCommandExit = 1 as ExitCode
 
 // ⭐ **THE WIDTH `ExitCode` HAS ON THIS HOST, WHICH IS THE WIDTH THE OS REPORTS.** A Win32 exit code is a
 // DWORD and a POSIX one a byte, and `stdlib/Process.maxon` declares `ExitCode` at exactly that width
@@ -42,9 +41,6 @@ let RefusedCommandExit = 1 as ExitCode
 #else
 	let ProcessExitCodeMask = 0xFF
 #endif
-
-// The timestamp on the wire is a millisecond delta; the trace prints it as `+SSSS.mmm`.
-let MillisecondsPerSecond = 1000
 
 // DEPTH_INC / DEPTH_DEC nest the trace, and one level is this much indent.
 let DepthIndentUnit = "  "
@@ -79,24 +75,23 @@ export function runMonitor(args MaxonArgs) returns ExitCode
 
 	let spelling = try args.paths.get(exeIndex) otherwise 'noExecutable'
 		printError("{usageLine()}\n")
-		return RefusedCommandExit
+		return OwnFailureExit
 	end 'noExecutable'
 
-	// ⭐ VALIDATED AT THE COMMAND LINE rather than in the decode loop, where the only available behaviours
-	// would be to throw or to silently show EVERY event — which is the opposite of what was asked for.
+	// Validated here rather than in the decode loop, whose only choices would be to throw or to show
+	// every event, the opposite of what was asked for.
 	let filter = parseFamilyFilter(filterSpelling)
 
 	match filter 'chosen'
-		all then break 'chosen'
-		only then break 'chosen'
+		all or
+			only then break 'chosen'
 		unknown(named) then return refuseUnknownFilter(named)
 	end 'chosen'
 
-	// ⚠ **ANCHORED TO AN ABSOLUTE PATH, AND THE TRACE ITSELF DEPENDS ON IT.** The path handed to the spawn
-	// becomes the child's OWN `argv[0]`, so a program that reads its command line allocates a buffer whose
-	// SIZE is this spelling's length — and an `mm-trace` golden pins that number. Measured: monitoring
-	// `temp/x/out.exe` by a relative spelling shifted three `ElementBuffer` sizes by 26 bytes against the
-	// reference, whose path is absolute as well. The REFUSAL still names what was typed.
+	// ⚠ Anchored to an absolute path, because the trace depends on it: the path handed to the spawn
+	// becomes the child's own `argv[0]`, so a program that reads its command line allocates a buffer
+	// sized by this spelling, and an `mm-trace` golden pins that size. The refusal still names what
+	// was typed.
 	let target = try FilePath.from(spelling) otherwise return refuseMissingTarget(spelling)
 
 	if not File.exists(target) 'notThere'
@@ -107,26 +102,25 @@ export function runMonitor(args MaxonArgs) returns ExitCode
 
 	var decoder = try DebugStreamDecoder.create(resolved, filter: filter) otherwise (e) 'noRing'
 		printError("maxon monitor: {e.displayReason()}\n")
-		return RefusedCommandExit
+		return OwnFailureExit
 	end 'noRing'
 
 	var child = try spawnTarget(resolved, arguments: childArguments(args.paths, from: exeIndex + 1), segment: decoder.segmentName()) otherwise (e) 'noChild'
 		decoder.close()
 		printError("maxon monitor: could not spawn {spelling} ({e.displayReason()})\n")
-		return RefusedCommandExit
+		return OwnFailureExit
 	end 'noChild'
 
 	return watchTarget(decoder, child: child)
 end 'runMonitor'
 
-// ⭐ The timeline: drain, print, forward, repeat until the producer is gone and the ring is empty.
 function watchTarget(decoder DebugStreamDecoder, child StreamingSubprocess) returns ExitCode
 	var draining = true
 
 	while draining 'timeline'
-		// ⛔ SAMPLED BEFORE THE DRAIN READS THE CURSORS. If the producer is already gone by this read, every
-		// store it will ever make is in the ring, so the cursors read next are FINAL. The other order lets a
-		// last event land after the check and be lost.
+		// Sampled before the drain reads the cursors: if the producer is already gone by this read, every
+		// store it will ever make is in the ring and the cursors read next are final. The other order
+		// lets a last event land after the check and be lost.
 		let producerExited = hasExited(child)
 		var idled = false
 
@@ -155,7 +149,7 @@ function watchTarget(decoder DebugStreamDecoder, child StreamingSubprocess) retu
 		printError("maxon monitor: waiting for the target failed ({e.displayReason()})\n")
 		child.release()
 		decoder.close()
-		return RefusedCommandExit
+		return OwnFailureExit
 	end 'waitFailed'
 
 	_ = forwardChildTail(child, routing: ChildOutputRouting.verbatim)
@@ -181,12 +175,12 @@ end 'refuseSchema'
 
 function refuseUnknownFilter(named String) returns ExitCode
 	printError("Unknown --filter value '{named}'.\n{usageLine()}\n")
-	return RefusedCommandExit
+	return OwnFailureExit
 end 'refuseUnknownFilter'
 
 function refuseMissingTarget(spelling String) returns ExitCode
 	printError("Executable not found: {spelling}\n")
-	return RefusedCommandExit
+	return OwnFailureExit
 end 'refuseMissingTarget'
 
 function usageLine() returns String
@@ -197,12 +191,10 @@ end 'usageLine'
 // The child
 // ============================================================================
 
-// Spawn the target into the ring. `inheritUpdating` and not `custom`: the program under a monitor must see
-// the environment it would have seen without one, plus the single variable that names the segment.
+// `inheritUpdating` and not `custom`: the program under a monitor must see the environment it would
+// have seen without one, plus the single variable that names the segment.
 function spawnTarget(target FilePath, arguments StringArray, segment String) returns StreamingSubprocess throws SubprocessError
-	let inheritCwd = try FilePath.from("") otherwise panic("MonitorCommand: the empty path is the 'inherit cwd' sentinel and must be spellable")
-
-	return try StreamingSubprocess.spawnWithEnvironment(Executable.path(target), arguments: arguments, workingDirectory: inheritCwd, environment: Environment.inheritUpdating([DsActivationEnvVar: segment]))
+	return try StreamingSubprocess.spawnWithEnvironment(Executable.path(target), arguments: arguments, workingDirectory: inheritedWorkingDirectory(), environment: Environment.inheritUpdating([DsActivationEnvVar: segment]))
 end 'spawnTarget'
 
 // Everything after the executable, in the order typed. It is the CHILD's command line and reaches it

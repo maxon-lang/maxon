@@ -18,16 +18,15 @@ test 'reserved-name-refused refuses an author declaring a __ name'
 	checkFixture("reserved-name-refused")
 end 'reserved-name-refused refuses an author declaring a __ name'
 
-// assertion belongs where stderr is readable, which is here.
+// `maxon test` compiles a staged copy under `<project>/.maxon/test/staged/`, and without
+// `Compiler.StagedSourceOrigin` a diagnostic would name that copy. The fixture's `expected.txt`
+// compares stdout while the diagnostic goes to stderr, so the assertion belongs here, where stderr
+// is readable.
 //
-// ⭐ **ONE POSITIVE ASSERTION, AND IT DISCRIMINATES ON ITS OWN.** The needle is the case directory
-// IMMEDIATELY followed by the file name; in the staged spelling those two are separated by
-// `/.maxon/test/staged/`, so nothing about the staged path can satisfy it. The obvious companion — assert
-// the word `staged` is absent — was written and then removed on purpose: it would have been a second
-// spelling of `TestCommand.StagedTreeDirName`, in a file that cannot import it, guarding a NEGATIVE. Renaming
-// that directory would leave this test hunting for a word nothing emits, passing forever and proving
-// nothing, with no compile error anywhere. A check that can rot into a silent pass is worse than the one
-// it was doubling.
+// The needle is the case directory immediately followed by the file name; the staged spelling
+// separates those two with `/.maxon/test/staged/`, so no staged path can satisfy it. An assertion
+// that the word `staged` is absent would restate `TestCommand.StagedTreeDirName` in a file that
+// cannot import it, and would pass forever once that directory is renamed.
 test 'a compile error names the author file, not the staged copy'
 	let run = runFixture(ReservedNameCase)
 	Expect.contains(run.stderr, needle: "{ReservedNameCase}{FilePath.separator()}sneaky.maxtest:", message: "a compile error under `{TestedCommandName}` must name the author's own file at the path they can open, not the staged copy the next run deletes. It said: {run.stderr}")

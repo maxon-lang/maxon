@@ -1,0 +1,33 @@
+let StepAfterPauseCaseLabel = "a-step-after-a-pause-steps"
+let OneSecond = 1
+let GrindFunctionName = "grind"
+
+test 'next and step from a pause stop each land one line on, in the paused frame'
+	let staged = builtFixture(StepAfterPauseCaseLabel, fixture: SpinFixtureName)
+	let commands = debugCommandLine([RunCommand, PauseCommand, NextCommand, StepCommand, QuitCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: ["{DebugStopTimeoutOptionPrefix}{OneSecond}"])
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let stops = eventsOfKind(events, kind: StopEventName)
+
+	try Expect.equal(eventsOfKind(events, kind: TimeoutEventName).count() as AssertedInt, expected: 1, message: "only the `{RunCommand}` over a program with nothing armed times out. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(stops.count() as AssertedInt, expected: 3, message: "⛔ A STEP POSTED AT A PAUSE STOP MUST STEP. The pause, the `{NextCommand}` and the `{StepCommand}` are three stops; a pause that resumes its thread without the trap flag lets the program run on and the step is never answered. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let paused = eventAt(stops, index: 0)
+	try Expect.equal(textOf(paused, node: paused.root, key: ReasonKey), expected: PauseStopReason, message: "the first stop is the pause. {said}")
+
+	var previousLine = numberOf(paused, node: paused.root, key: LineKey)
+
+	for (iter, stepped) in stops.withIterator() 'eachStep'
+		if iter.index() == 0 'thePause'
+			continue
+		end 'thePause'
+
+		try Expect.equal(textOf(stepped, node: stepped.root, key: ReasonKey), expected: StepStopReason, message: "stop {iter.index()} after the pause is a step. {said}")
+		try Expect.equal(textOf(stepped, node: stepped.root, key: FunctionKey), expected: GrindFunctionName, message: "stop {iter.index()} stays in the loop the pause interrupted. {said}")
+
+		let line = numberOf(stepped, node: stepped.root, key: LineKey)
+		try Expect.notEqual(line as AssertedInt, expected: previousLine as AssertedInt, message: "stop {iter.index()} lands on another line than the stop before it, line {previousLine}. {said}")
+		previousLine = line
+	end 'eachStep'
+end 'next and step from a pause stop each land one line on, in the paused frame'

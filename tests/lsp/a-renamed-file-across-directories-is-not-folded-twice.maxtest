@@ -25,7 +25,6 @@ test 'stale source: a renamed file across directories is not folded twice'
 	let beforeDirectory = createdStagingDirectory(CrossDirBeforeDirName, under: Directory.currentPath())
 	let afterDirectory = createdStagingDirectory(CrossDirAfterDirName, under: Directory.currentPath())
 
-	removeCrossDirDestination(afterDirectory)
 	writeCorpusFile(root, fileName: CrossDirReaderName, content: CrossDirReaderSource)
 	writeCorpusFile(root, fileName: CrossDirSteadyName, content: CrossDirSteadySource)
 	writeCorpusFile(beforeDirectory, fileName: CrossDirDeclarationName, content: CrossDirDeclarationSource)
@@ -44,14 +43,6 @@ function requireCrossDirAnswerNamesOnlyTheNewDirectory(answers CorpusStaleSource
 
 	try expectDefinitionInFile(answers.after, fileTail: CrossDirAfterTail, startLine: CrossDirDeclarationLine, note: "`{CrossDirBeforeTail}` was moved to `{CrossDirAfterTail}` — the same declaration, written under the new directory and deleted from the old one — and the jump did not land in `{CrossDirAfterTail}`, while the untouched jump above still resolved. The old path is never unregistered, so ONE declaration is folded from two files in two module directories at once: the name becomes a contested free function with two visible spellings, and a call the compiler would bind to exactly one declaration is answered as though the author had written something ambiguous.")
 end 'requireCrossDirAnswerNamesOnlyTheNewDirectory'
-
-function removeCrossDirDestination(afterDirectory FilePath)
-	if not File.exists(afterDirectory.join(CrossDirDeclarationName)) 'alreadyAbsent'
-		return
-	end 'alreadyAbsent'
-
-	deleteCorpusFile(afterDirectory, fileName: CrossDirDeclarationName)
-end 'removeCrossDirDestination'
 
 function crossDirRun(root FilePath, afterDirectory FilePath, beforeDirectory FilePath) returns CorpusStaleSourceRun
 	var edits = CorpusDiskEditArray.create()

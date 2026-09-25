@@ -1,0 +1,113 @@
+let ListBuildCase = "list-build"
+let PassingTestName = "a deposit adds to the balance"
+let FailingTestName = "a deposit is counted twice"
+let ListFlag = "--list"
+let BuildFlag = "--build"
+let JsonFlag = "--json"
+let SelectFlagPrefix = "--select="
+let RanMarker = "ran: "
+let LineBreak = "\n"
+let SidecarSuffix = ".mxdbg"
+let BinaryKey = "binary"
+let TestsKey = "tests"
+let NameKey = "name"
+let SelectKey = "select"
+let ListedCleanly = 0 as AssertedInt
+let BinaryPassedExit = 0 as AssertedInt
+let BinaryFailedExit = 3 as AssertedInt
+let OneTestRan = 1 as AssertedInt
+let ListedTests = 2 as AssertedInt
+let DebugCommandWord = "debug"
+let DumpInfoOption = "--dump-info"
+let FilesSection = "files"
+let LedgerSourceName = "ledger.maxtest"
+let StagedSourcesDir = ".maxon/test/staged/"
+let WindowsSeparator = "\\"
+let PortableSeparator = "/"
+let CarriageReturn = "\r"
+
+test 'list-build builds a binary with its sidecar, each select runs one test, and a failing one exits 3'
+	let listed = runFixture(ListBuildCase, extraArguments: [ListFlag, BuildFlag, JsonFlag])
+	try Expect.equal(listed.exitCode() as AssertedInt, expected: ListedCleanly, message: "`{TestedCommandName} {ListFlag} {BuildFlag} {JsonFlag}` builds and lists; it printed {listed.stdout} and {listed.stderr}")
+
+	let document = try Json.parse(listed.stdout) otherwise panic("list-build.test: `{ListFlag} {BuildFlag} {JsonFlag}` printed no JSON document: {listed.stdout}")
+	let binarySpelled = try document.getString(document.root, key: BinaryKey) otherwise ""
+	try Expect.isTrue(not binarySpelled.isEmpty(), message: "`{BuildFlag}` reports the `{BinaryKey}` it built; the document was {listed.stdout}")
+
+	let binary = try FilePath.from(binarySpelled) otherwise panic("list-build.test: `{BinaryKey}` is not a spellable path: {binarySpelled}")
+	try Expect.isTrue(binary.isAbsolute(), message: "`{BinaryKey}` is absolute, so a launcher in another working directory finds it; it said {binarySpelled}")
+	try Expect.isTrue(File.exists(binary), message: "`{BinaryKey}` names the binary `{BuildFlag}` built, and there is none at {binarySpelled}")
+	try Expect.isTrue(File.exists(try FilePath.from("{binarySpelled}{SidecarSuffix}") otherwise binary), message: "a test binary is built with its debug-info sidecar beside it, which is what a debugger needs to launch one test; there is none beside {binarySpelled}")
+
+	let dumped = try Subprocess.run(Executable.path(testedCompilerPath()), arguments: [DebugCommandWord, DumpInfoOption, binarySpelled, FilesSection]) otherwise (e) 'dumpFailed'
+		panic("list-build.test: the gate could not run — could not spawn `{DebugCommandWord} {DumpInfoOption}` over {binarySpelled} ({e.displayReason()})")
+	end 'dumpFailed'
+
+	let ledgerRows = fileRowsNaming(dumped.stdout, file: LedgerSourceName)
+	try Expect.equal(ledgerRows.count() as AssertedInt, expected: 1, message: "the test binary's sidecar names `{LedgerSourceName}` once in its file table; `{DebugCommandWord} {DumpInfoOption} {FilesSection}` printed {dumped.stdout}{dumped.stderr}")
+
+	for row in ledgerRows 'eachLedgerRow'
+		try Expect.isFalse(row.replace(WindowsSeparator, with: PortableSeparator).contains(StagedSourcesDir), message: "the sidecar records the project's own `{LedgerSourceName}`, which a debugger opens and a breakpoint names, not the copy `{TestedCommandName}` staged under `{StagedSourcesDir}` and the next run deletes; it recorded {row}")
+	end 'eachLedgerRow'
+
+	let tests = try document.getChild(document.root, key: TestsKey) otherwise panic("list-build.test: the document carries no `{TestsKey}`: {listed.stdout}")
+	let testCount = try document.arrayLength(tests) otherwise panic("list-build.test: `{TestsKey}` is not a list: {listed.stdout}")
+	try Expect.equal(testCount as AssertedInt, expected: ListedTests, message: "the fixture declares {ListedTests} tests: {listed.stdout}")
+
+	for i in 0 upto testCount 'eachListed'
+		let entry = try document.arrayAt(tests, index: i) otherwise panic("list-build.test: `{TestsKey}` holds no element {i}")
+		let name = try document.getString(entry, key: NameKey) otherwise ""
+		let selection = try document.getString(entry, key: SelectKey) otherwise ""
+		try Expect.isTrue(not selection.isEmpty(), message: "every listed test carries the `{SelectKey}` value that runs it alone; `{name}` has none: {listed.stdout}")
+
+		let ran = runBinary(binary, arguments: ["{SelectFlagPrefix}{selection}"])
+		try Expect.equal(linesMarkedRan(ran.stdout), expected: OneTestRan, message: "`{SelectFlagPrefix}{selection}` runs exactly `{name}`; the binary printed {ran.stdout}")
+		try Expect.contains(ran.stdout, needle: "{RanMarker}{name}", message: "`{SelectFlagPrefix}{selection}` runs `{name}` and no other test; the binary printed {ran.stdout}")
+		try Expect.equal(ran.exitCode() as AssertedInt, expected: selectedExitFor(name), message: "the binary exits {BinaryPassedExit} when every selected test passed and {BinaryFailedExit} when one failed; `{name}` alone exited {ran.exitCode()}")
+	end 'eachListed'
+
+	let everything = runBinary(binary, arguments: StringArray.create())
+	try Expect.equal(everything.exitCode() as AssertedInt, expected: BinaryFailedExit, message: "run with no selection the binary runs both tests, one of which fails; it exited {everything.exitCode()}")
+
+	try checkFixture(ListBuildCase)
+end 'list-build builds a binary with its sidecar, each select runs one test, and a failing one exits 3'
+
+function selectedExitFor(name String) returns AssertedInt
+	if name == FailingTestName 'theFailingTest'
+		return BinaryFailedExit
+	end 'theFailingTest'
+
+	if name == PassingTestName 'thePassingTest'
+		return BinaryPassedExit
+	end 'thePassingTest'
+
+	panic("list-build.test: the fixture declares no test named `{name}`")
+end 'selectedExitFor'
+
+function fileRowsNaming(dump String, file String) returns StringArray
+	var rows = StringArray.create()
+
+	for line in dump.replace(CarriageReturn, with: "").split(LineBreak) 'eachLine'
+		if line.trim().endsWith(file) 'namesTheFile'
+			rows.push(line.trim())
+		end 'namesTheFile'
+	end 'eachLine'
+
+	return rows
+end 'fileRowsNaming'
+
+function linesMarkedRan(output String) returns AssertedInt
+	var tally = 0 as AssertedInt
+
+	for line in output.split(LineBreak) 'eachLine'
+		tally = tally + 1 if line.startsWith(RanMarker) else tally
+	end 'eachLine'
+
+	return tally
+end 'linesMarkedRan'
+
+function runBinary(binary FilePath, arguments StringArray) returns CollectedOutput
+	return try Subprocess.run(Executable.path(binary), arguments: arguments) otherwise (e) 'spawnFailed'
+		panic("list-build.test: the gate could not run — could not spawn the built test binary {binary.toString()} ({e.displayReason()})")
+	end 'spawnFailed'
+end 'runBinary'

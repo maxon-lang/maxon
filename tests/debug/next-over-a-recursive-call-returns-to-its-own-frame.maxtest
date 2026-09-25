@@ -1,0 +1,22 @@
+let RecursionCaseLabel = "next-over-a-recursive-call-returns-to-its-own-frame"
+let RecursingFunctionName = "countdown"
+let FramesOfTheOutermostCall = 2
+
+test 'a next over a recursive call lands in the frame it was issued from, not in a deeper one returning through the same address'
+	let staged = builtFixture(RecursionCaseLabel, fixture: WalksFixtureName)
+	let recurseLine = anchorLine(staged, anchor: "recurse")
+	let afterLine = anchorLine(staged, anchor: "after-recurse")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(recurseLine)}", RunCommand, "{ClearCommand} {lineTarget(recurseLine)}", NextCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let stops = eventsOfKind(events, kind: StopEventName)
+
+	try Expect.equal(stops.count() as AssertedInt, expected: 2, message: "the breakpoint in the outermost `{RecursingFunctionName}` and the `{NextCommand}` are two stops. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let landed = eventAt(stops, index: 1)
+	try Expect.equal(textOf(landed, node: landed.root, key: FunctionKey), expected: RecursingFunctionName, message: "`{NextCommand}` stays in the frame it was issued from. {said}")
+	try Expect.equal(numberOf(landed, node: landed.root, key: LineKey) as AssertedInt, expected: afterLine as AssertedInt, message: "`{NextCommand}` over the recursive call lands on the line after it. {said}")
+
+	try Expect.equal(childrenOf(landed, node: landed.root, key: BacktraceKey).count() as AssertedInt, expected: FramesOfTheOutermostCall, message: "the breakpoint stopped the outermost `{RecursingFunctionName}`, called from `main`, and every deeper call returns through the same return address before it does; the landing must be in the frame the `{NextCommand}` was issued from, whose stack is that one call under `main`. {said}")
+end 'a next over a recursive call lands in the frame it was issued from, not in a deeper one returning through the same address'

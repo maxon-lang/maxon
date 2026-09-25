@@ -263,7 +263,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 
 	// Set before any file is swept, so every reader below (and every `Parser.create` in every later
 	// query) sees the answer rather than the seeded `false`. See `livesUnderStdlibDirectory`.
-	signatures.rootIsUnderStdlibDirectory = rootIsUnderStdlibDirectory(project, cwd: Directory.currentPath())
+	signatures.rootIsUnderStdlibDirectory = rootIsUnder(project, libraryRoot: project.stdlibDir, cwd: Directory.currentPath())
 
 	// The sweep is partitioned by provenance, user files first, stdlib files second: the shadow
 	// contest below is decided BETWEEN the two halves, so a stdlib file must already know the
@@ -545,7 +545,7 @@ end 'producerMaskFor'
 // `stdlib/` it is literally `isStdlibSource` and a no-op, and when the root IS under `stdlib/`
 // every file anchors together.
 //
-// It is the same distinction `Project.rootIsUnderStdlibDirectory` draws for the two
+// It is the same distinction `Project.rootIsUnder` draws for the two
 // `module`-visible `String` methods, arriving at a second door — asked rather than re-spelled, so
 // the two doors cannot drift apart on it.
 function moduleDirectoryForFile(project Project, path FilePath, livesUnderStdlibDirectory bool, livesUnderRuntimeDirectory bool) returns String
@@ -1566,9 +1566,7 @@ function fileProvenanceOf(project Project, path FilePath) returns FileProvenance
 
 	// Containment alone, whatever the project root: every rule the runtime bit gates (the `__`
 	// exemption from E2051, E3004 and E3155, E3152, E3153, E3154, the tier's module anchor) is a fact
-	// about the file, and the language server and `maxon build <file>` root the project at the
-	// document itself. Subtracting that root would make an open `runtime/Clock.maxon` report E2051 on
-	// its own declarations.
+	// about the file.
 	let isRuntimeSource = resolvedPath.isInside(project.runtimeDir)
 	let derived = FileProvenance.create(isStdlibSource, isRuntimeSource: isRuntimeSource)
 
@@ -1595,7 +1593,7 @@ function isStdlibRootFile(project Project, resolvedPath FilePath, cwd FilePath) 
 		return false
 	end 'outsideThisRoot'
 
-	if not rootIsUnderStdlibDirectory(project, cwd: cwd) 'theUsersProjectIsElsewhere'
+	if not rootIsUnder(project, libraryRoot: project.stdlibDir, cwd: cwd) 'theUsersProjectIsElsewhere'
 		return true
 	end 'theUsersProjectIsElsewhere'
 
@@ -1650,7 +1648,7 @@ end 'programSignaturesIn'
 // file.
 //
 // ⚠ The proof above is a claim about `isStdlibSourceFile`'s root arm, so both must read the SAME
-// predicate and not two spellings of it — `Project.rootIsUnderStdlibDirectory` is that one home.
+// predicate and not two spellings of it — `Project.rootIsUnder` is that one home.
 //
 // Exported because the declaration sweep asks it too: `ProgramSignatures.foldFile` decides whether
 // a declaration under a compiler-owned type name is the corpus's own or a user's contest of it, the
@@ -1722,40 +1720,17 @@ function declaresReservedNamesAs(project Project, path FilePath, relative String
 	return path.resolve(Directory.currentPath()).equals(project.stdlibDir.join("{relative}"))
 end 'declaresReservedNamesAs'
 
-// `Project.compilerWrittenSources` is the list a caller that staged generated Maxon source handed
-// in; the row for `path` carries the names, and an empty answer means every byte of the file is the
-// author's. It feeds both reserved-name doors: the DECLARATION door asks whether the name being
-// declared is one of these, and the CALL door asks only whether the list is non-empty
-// (`Parser.fileMayUseReservedNames`), because a generated fragment has to reach names its own file
-// does not declare.
-//
-// ⚠ That asymmetry is load-bearing: a staged `.maxtest` file is the author's bytes with a
-// dispatcher appended, so "this compiler wrote this file" is true of the file and false of most of
-// its lines. Granting the whole file the reserved space on the declaration side would let an
-// author's `function __sneaky()` through. The call side keeps the per-file shape because its own
-// `declaresCallee` conjunction already bounds it to names some file in the program really declares.
-//
-// An empty list is not a sentinel for "author-written" — it is the same fact: a generated fragment
-// always declares at least the symbol its caller reaches it by, so "this compile minted nothing
-// here" and "this compile wrote nothing here" cannot come apart.
-//
-// Both sides of the compare come from ONE construction: `TestDispatcher.stageTestBuild` builds the
-// staged path once and puts the same `FilePath` into the build's input list and into this list, so
-// the compare can be an exact spelling match rather than the `resolve`-then-compare the sibling
-// door above needs.
-function compilerMintedNamesIn(project Project, path FilePath) returns ByteArrayArray
-	if project.compilerWrittenSources.isEmpty() 'nothingWasSynthesized'
-		return ByteArrayArray.create()
-	end 'nothingWasSynthesized'
+module function isCompilerWrittenDeclaration(project Project, path FilePath, name ByteArray) returns bool
+	if not project.compilerWrittenSources.wrote(path) 'anotherFile'
+		return false
+	end 'anotherFile'
 
-	for written in project.compilerWrittenSources 'eachSynthesized'
-		if written.path.equals(path) 'thisFile'
-			return written.mintedNames
-		end 'thisFile'
-	end 'eachSynthesized'
+	if not project.stagedSourceOrigins.isStagedCopy(path) 'everyByteIsTheCompiles'
+		return true
+	end 'everyByteIsTheCompiles'
 
-	return ByteArrayArray.create()
-end 'compilerMintedNamesIn'
+	return project.compilerWrittenSources.minted(path, name: name)
+end 'isCompilerWrittenDeclaration'
 
 // ⭐ **WHAT EVERY PASS READS A FILE WITH, DERIVED FROM THE PROJECT ON THE MAIN THREAD** — the per-file signature sweep,
 // the whole-program interface and extension passes, and the real parse (`ParseStaging.parseFile`). Each needs the same
@@ -1775,7 +1750,7 @@ function parseJobFor(project Project, signatures ProgramSignatures, path FilePat
 	// one compile, which is the drift this routine exists to prevent.
 	let isRuntimeSource = isRuntimeSourceFile(project, path: path)
 
-	return ParseJob.create(path, namespace: signatures.namespaceOf(path), isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource, declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path, isRuntimeSource: isRuntimeSource), compilerMintedNames: compilerMintedNamesIn(project, path: path), livesUnderStdlibDirectory: livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource), buildsBodies: buildsBodies, capturesDebugLocals: project.debugInfo, instrumentsCoverage: project.coverage)
+	return ParseJob.create(path, namespace: signatures.namespaceOf(path), isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource, declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path, isRuntimeSource: isRuntimeSource), compilerMintedNames: project.compilerWrittenSources.mintedNamesIn(path), livesUnderStdlibDirectory: livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource), buildsBodies: buildsBodies, capturesDebugLocals: project.debugInfo, instrumentsCoverage: project.coverage)
 end 'parseJobFor'
 
 // A reader over one file for a pass that folds what it reads into the index rather than building an artifact —

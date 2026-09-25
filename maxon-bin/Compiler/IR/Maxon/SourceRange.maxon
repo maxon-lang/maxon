@@ -170,7 +170,7 @@ export let NoSpanId = 0 as SpanId
 // interned against it is `NoSpanId`, so a runtime body can never be attributed to a real file.
 export let NoDebugFileId = 0 as DebugFileId
 
-typealias SpanInternKey = int(0 to u64.max)
+export typealias SpanInternKey = int(0 to u64.max)
 typealias SpanInternMap = Map with (SpanInternKey, SpanId)
 typealias DebugFileIdMap = Map with (String, DebugFileId)
 
@@ -239,7 +239,7 @@ export type DebugSpanTable
 			return NoSpanId
 		end 'notRepresentable'
 
-		let key = ((fileId as SpanInternKey) shl SpanKeyFileShift) or ((line as SpanInternKey) shl SpanKeyLineShift) or (column as SpanInternKey)
+		let key = spanLineKey(fileId, line: line) or (column as SpanInternKey)
 
 		if self.lastId != NoSpanId and key == self.lastKey 'sameAsTheLastOne'
 			return self.lastId
@@ -282,7 +282,15 @@ export type DebugSpanTable
 	export function columnOf(spanId SpanId) returns ColumnNumber
 		return try self.columns.get(spanId) otherwise panic("DebugSpanTable.columnOf: span {spanId} is past the table's {self.columns.count()} entries")
 	end 'columnOf'
+
+	export function lineKeyOf(spanId SpanId) returns SpanInternKey
+		return spanLineKey(self.fileIdOf(spanId), line: self.lineOf(spanId))
+	end 'lineKeyOf'
 end 'DebugSpanTable'
+
+function spanLineKey(fileId DebugFileId, line LineNumber) returns SpanInternKey
+	return ((fileId as SpanInternKey) shl SpanKeyFileShift) or ((line as SpanInternKey) shl SpanKeyLineShift)
+end 'spanLineKey'
 
 // THE PER-MODULE COLUMN: entry `i` is the span of `module.ops[i]`, at every tier below Maxon.
 //
@@ -411,3 +419,11 @@ export type DebugSpanColumn
 		end 'outOfStep'
 	end 'requireNextSlot'
 end 'DebugSpanColumn'
+
+export function sourceSpanOf(project Project, filePath FilePath, line LineNumber, column ColumnNumber) returns SpanId
+	if not project.debugInfo or filePath.isEmpty() or line == 0 'positionless'
+		return NoSpanId
+	end 'positionless'
+
+	return project.debugSpanTable.intern(project.debugSpanTable.fileId(filePath.toString()), line: line, column: column)
+end 'sourceSpanOf'

@@ -351,19 +351,9 @@ export function stringBytesPrecede(earlier String, later String) returns bool
 	return a.count() < b.count()
 end 'stringBytesPrecede'
 
-// The `", "`-joined candidate trailer both ambiguity messages end with. One renderer, because the two
-// diagnostics say the identical sentence about a different kind of declaration.
-export function renderCandidateList(candidates StringArray) returns String
-	var out = ""
-	var first = true
-
-	for candidate in candidates 'each'
-		out = "{candidate}" if first else "{out}, {candidate}"
-		first = false
-	end 'each'
-
-	return out
-end 'renderCandidateList'
+// Joins the candidate trailer every ambiguity message ends with: the diagnostics say the identical
+// sentence about different kinds of declaration.
+module let CandidateListSeparator = ", "
 
 // ⭐ THE ONE EMPTY `StringArray` every UNAMBIGUOUS name answers with — so the common path allocates
 // nothing. NEVER mutated: the only writer builds a fresh array.
@@ -1614,9 +1604,9 @@ let PosixExitCodeAliasHigh = 255 as ParsedInt
 function exitCodeAliasHigh(os Os) returns ParsedInt
 	return match os 'os'
 		windows gives U32MaxBound
-		linux gives PosixExitCodeAliasHigh
-		macos gives PosixExitCodeAliasHigh
-		wasi gives PosixExitCodeAliasHigh
+		linux or
+			macos or
+			wasi gives PosixExitCodeAliasHigh
 	end 'os'
 end 'exitCodeAliasHigh'
 
@@ -5316,46 +5306,45 @@ export enum EnumBackingFieldDomain
 	unsupported
 end 'EnumBackingFieldDomain'
 
-// ⭐ **DOES THIS DOMAIN NEED THE SUM REINTERPRETED?** - the one domain whose i64 is not the value,
-// spelled as an exhaustive `match` and never as `== floatBits`, for `namesAnEnumInstanceAccessor`'s reason:
-// a domain appended to the enum must be classified HERE too, so the read cannot silently start treating a
-// new one as a machine word.
+// The one domain whose i64 is not the value. An exhaustive `match` and never `== floatBits`, for
+// `namesAnEnumInstanceAccessor`'s reason: a domain appended to the enum must be classified here
+// too, so the read cannot silently start treating a new one as a machine word.
 export function domainIsEnumBackingFloatBits(domain EnumBackingFieldDomain) returns bool
 	match domain 'd'
 		floatBits then return true
-		integerWord then return false
-		booleanWord then return false
-		enumWord then return false
-		nestedRecord then return false
-		unsupported then return false
+		integerWord or
+			booleanWord or
+			enumWord or
+			nestedRecord or
+			unsupported then return false
 	end 'd'
 end 'domainIsEnumBackingFloatBits'
 
-// ⭐ **DOES THIS DOMAIN NAME A RECORD THE READ MUST DESCEND INTO RATHER THAN SELECT?** — the third of the
-// family, and an exhaustive `match` for its siblings' reason: a domain appended to the enum must be
-// classified here too, so a new one cannot silently be treated as a leaf by the walk that reads a chain.
+// A record the read must descend into rather than select. An exhaustive `match` for its siblings'
+// reason: a domain appended to the enum must be classified here too, so a new one cannot silently
+// be treated as a leaf by the walk that reads a chain.
 export function domainIsEnumBackingNestedRecord(domain EnumBackingFieldDomain) returns bool
 	match domain 'd'
 		nestedRecord then return true
-		integerWord then return false
-		booleanWord then return false
-		enumWord then return false
-		floatBits then return false
-		unsupported then return false
+		integerWord or
+			booleanWord or
+			enumWord or
+			floatBits or
+			unsupported then return false
 	end 'd'
 end 'domainIsEnumBackingNestedRecord'
 
-// ⭐ **IS THIS DOMAIN ONE NO CONSTANT COLUMN CAN HOLD?** — `domainIsEnumBackingFloatBits`' twin, and an
-// exhaustive `match` for its reason: a domain appended to the enum must be classified here too, so a new one
-// cannot silently be treated as holdable by the two gates that ask.
+// A domain no constant column can hold. An exhaustive `match` for `domainIsEnumBackingFloatBits`'
+// reason: a domain appended to the enum must be classified here too, so a new one cannot silently
+// be treated as holdable by the two gates that ask.
 export function domainIsEnumBackingUnsupported(domain EnumBackingFieldDomain) returns bool
 	match domain 'd'
 		unsupported then return true
-		integerWord then return false
-		booleanWord then return false
-		enumWord then return false
-		floatBits then return false
-		nestedRecord then return false
+		integerWord or
+			booleanWord or
+			enumWord or
+			floatBits or
+			nestedRecord then return false
 	end 'd'
 end 'domainIsEnumBackingUnsupported'
 
@@ -5373,9 +5362,9 @@ export function enumBackingValueSuitsDomain(value EnumBackingFieldValue, domain 
 	end 'written'
 end 'enumBackingValueSuitsDomain'
 
-// ⚠ **EVERY ARM SPELLED OUT, NO RANGES.** `EnumBacking`'s header states the rule this obeys: a range is the
-// one arm shape that can absorb a newly declared member silently, and here that would mean admitting a
-// constant into a domain nobody classified — which is a wrong answer at the machine level, not a diagnostic.
+// ⚠ Every member named, no ranges (`EnumBacking`'s header owns the rule): a range can absorb a
+// newly declared member silently, admitting a constant into a domain nobody classified, which is a
+// wrong answer at the machine level rather than a diagnostic.
 function enumBackingLiteralSuitsDomain(kind EnumBackingLiteralKind, domain EnumBackingFieldDomain) returns bool
 	match domain 'd'
 		integerWord then return kind == EnumBackingLiteralKind.integerLiteral
@@ -5386,14 +5375,13 @@ function enumBackingLiteralSuitsDomain(kind EnumBackingLiteralKind, domain EnumB
 		// so `M{ratio: 1}` means 1.0 exactly as `let x = 1 + 2.0` does. A bool has no float reading.
 		floatBits then return kind == EnumBackingLiteralKind.integerLiteral or kind == EnumBackingLiteralKind.floatLiteral
 
-		// A field of a declared enum takes `<ThatEnum>.<case>` and never a bare number: an enum value IS its
-		// tag, and WHICH number that is belongs to the enum's declaration, not to this case.
-		enumWord then return false
-
-		// A field of a declared `type` takes that type's own constant (`Inner{…}` / `Inner.create(…)`) and
-		// never a number: a record is not one word, and its constants are its LEAVES.
-		nestedRecord then return false
-		unsupported then return false
+		// An enum field takes `<ThatEnum>.<case>` and never a bare number: an enum value is its tag, and
+		// which number that is belongs to the enum's declaration. A record field takes that type's own
+		// constant (`Inner{…}` / `Inner.create(…)`): a record is not one word, and its constants are its
+		// leaves.
+		enumWord or
+			nestedRecord or
+			unsupported then return false
 	end 'd'
 end 'enumBackingLiteralSuitsDomain'
 
@@ -5425,18 +5413,18 @@ function enumBackingNamedValueSuitsDomain(written ByteArray, domain EnumBackingF
 	return enumBackingDomainTakesANamedValue(domain, wanted: wanted) and written.equals(declaredName)
 end 'enumBackingNamedValueSuitsDomain'
 
-// ⚠ **EVERY ARM SPELLED OUT — NO RANGES, AND NOT A BARE `domain == wanted`.** `EnumBacking`'s header states
-// the rule this obeys: a domain appended to the enum must be CLASSIFIED here, and an equality test would
-// answer for a new one silently — admitting a `<Type>.<member>` constant into a domain nobody decided it
-// suits, which is a wrong answer at the machine level rather than a diagnostic.
+// ⚠ Every member named, no ranges, and not a bare `domain == wanted` (`EnumBacking`'s header owns
+// the rule): a domain appended to the enum must be classified here, and an equality test would
+// answer for a new one silently, admitting a `<Type>.<member>` constant into a domain nobody
+// decided it suits.
 function enumBackingDomainTakesANamedValue(domain EnumBackingFieldDomain, wanted EnumBackingFieldDomain) returns bool
 	match domain 'd'
 		enumWord then return wanted == EnumBackingFieldDomain.enumWord
 		nestedRecord then return wanted == EnumBackingFieldDomain.nestedRecord
-		integerWord then return false
-		booleanWord then return false
-		floatBits then return false
-		unsupported then return false
+		integerWord or
+			booleanWord or
+			floatBits or
+			unsupported then return false
 	end 'd'
 end 'enumBackingDomainTakesANamedValue'
 
@@ -5646,17 +5634,14 @@ export function enumInstanceAccessorOf(member ByteArray) returns EnumInstanceAcc
 	return EnumInstanceAccessor.notAnAccessor
 end 'enumInstanceAccessorOf'
 
-// ⭐ **DOES THIS CLASSIFICATION NAME AN ACCESSOR AT ALL?** — the DERIVED predicate the cursor door asks,
-// spelled as an exhaustive `match` and never as `!= notAnAccessor`. It is `divisionKindThrows`' shape
-// exactly (`Runtime/CheckedDivisionRuntime.maxon`), and for its reason as well as the compiler's own: a union may
-// not be compared with `==` (E3066), and — the part that matters — a member appended to
-// `EnumInstanceAccessor` must be classified HERE too, so the door cannot silently start admitting one that
+// An exhaustive `match` and never `!= notAnAccessor`: a member appended to `EnumInstanceAccessor`
+// must be classified here too, so the cursor door cannot silently start admitting one that
 // `Parser.parseEnumAccessor` has not been taught to answer.
 export function namesAnEnumInstanceAccessor(accessor EnumInstanceAccessor) returns bool
 	match accessor 'a'
-		ordinal then return true
-		caseName then return true
-		rawValue then return true
+		ordinal or
+			caseName or
+			rawValue then return true
 		notAnAccessor then return false
 	end 'a'
 end 'namesAnEnumInstanceAccessor'
@@ -8444,33 +8429,30 @@ export type Project
 	// (`Parser.recordScannedSignature`): that exclusion is about the NAME `main`, not about the entry.
 	export var entryFunctionName as ByteArray
 
-	// ⭐⭐ **THE SOURCE FILES THIS COMPILE ITSELF WROTE, AND THE RESERVED NAMES IT MINTED INTO EACH — the
-	// third provenance the reserved-name doors read.** EMPTY for every ordinary build, and non-empty only
-	// for a caller that STAGED generated Maxon source and named it (`TestDispatcher.stageTestBuild`).
+	// The source files this compile itself wrote, and the reserved names it minted into each: the
+	// third provenance the reserved-name doors read. Empty for every ordinary build; filled only by a
+	// caller that staged generated Maxon source (`TestDispatcher.stageTestBuild`).
 	//
-	// ⚠ **THE TWO DOORS READ IT DIFFERENTLY, AND THAT ASYMMETRY IS THE POINT** (see
-	// `CompilerWrittenSource`, which carries the measurement). CALLING a `__` name is a per-FILE
-	// exemption — the generated dispatcher has to reach names other files declare, and the call door
-	// conjoins `declaresCallee`, so what it grants is "a `__` name some file in this program declares"
-	// and never "any `__` name". DECLARING one is per-NAME, because a staged `.maxtest` file is the
-	// author's bytes with a dispatcher appended, and a per-file exemption there would hand the author
-	// the reserved space.
+	// ⚠ The two doors read it differently (see `CompilerWrittenSource`). Calling a `__` name is a
+	// per-file exemption: the generated dispatcher has to reach names other files declare, and the
+	// call door conjoins `declaresCallee`, so it grants only a `__` name some file in this program
+	// declares. Declaring one is per-name, because a staged `.maxtest` file is the author's bytes with
+	// a dispatcher appended, and a per-file exemption would hand the author the reserved space.
 	//
-	// ⚠ The spellings here are the very ones the caller hands `compileToProduct` as input paths, so
-	// `Queries.compilerMintedNamesIn` compares them against `db.sourcePaths` entries the loader
-	// registered from that same list — one construction, never two derivations of one path.
-	export var compilerWrittenSources as CompilerWrittenSourceArray
+	// Keyed by the very spellings the caller hands `compileToProduct` as input paths, which are the
+	// paths the loader registers: one construction, never two derivations of one path.
+	export var compilerWrittenSources as CompilerWrittenIndex
 
-	// ⭐⭐ **WHICH OF THIS COMPILE'S SOURCES ARE COPIES, AND WHOSE FILES THEY ARE COPIES OF.** Empty
-	// for every ordinary build; filled by the one caller that compiles a staged tree
-	// (`TestDispatcher.stageTestBuild`). `reportDiagnostic` rewrites every reported path through it.
+	// Which of this compile's sources are copies, and whose files they are copies of. Empty for every
+	// ordinary build; filled by the one caller that compiles a staged tree
+	// (`TestDispatcher.stageTestBuild`). `reportDiagnostic` rewrites every reported path through it,
+	// and the debug sidecar names the author's file through it.
 	//
-	// ⚠ **IT IS A DISPLAY MAPPING AND NOTHING ELSE READS IT.** The compile itself works entirely in
-	// staged paths — that is what it was handed and what it registered — so nothing here changes which
-	// bytes are compiled, which names are minted, or where the loader looks. Anything that wanted to
-	// OPEN the file a diagnostic names would want the staged spelling, which is exactly why the rewrite
-	// happens at the sink and not at the load.
-	export var stagedSourceOrigins as StagedSourceOriginArray
+	// ⚠ It never changes which bytes are compiled, which names are minted, or where the loader looks:
+	// the compile works entirely in the staged paths it was handed and registered. Anything that
+	// wanted to open the file a diagnostic names would want the staged spelling, which is why the
+	// rewrite happens at the sink and not at the load.
+	export var stagedSourceOrigins as StagedOriginIndex
 
 	// ⭐ The SOURCE TEXT of every `async <call>` spawn, keyed by its `asyncCall` op index — what E3073 quotes
 	// back at the author (`'async heavyCompute(5)'`). SPARSE, unlike `opRanges`: only spawn sites have an
@@ -8738,8 +8720,8 @@ export type Project
 			// so `checkMainFunction`, the entry stub and the parser's exclusion cannot come to name three
 			// different functions. A caller that enters somewhere else overwrites it after the load.
 			entryFunctionName: MainFunctionName,
-			compilerWrittenSources: CompilerWrittenSourceArray.create(),
-			stagedSourceOrigins: StagedSourceOriginArray.create(),
+			compilerWrittenSources: CompilerWrittenIndex.empty(),
+			stagedSourceOrigins: StagedOriginIndex.empty(),
 			asyncSpawnSites: AsyncSpawnSiteMap.create(),
 			serviceAwaitSites: ServiceAwaitSiteMap.create(),
 			moduleVarAccessSites: ModuleVarAccessSiteMap.create(),
@@ -8773,8 +8755,8 @@ export function createProject(rootPath FilePath, target Target, stdlibDir FilePa
 	return Project.create(QueryDatabase.create(target.os), rootPath: rootPath, target: target, stdlibDir: stdlibDir, runtimeDir: runtimeDir, debugStream: debugStream)
 end 'createProject'
 
-// Is the project root itself under `stdlib/`, as in `maxon build stdlib/URL.maxon`? Asked in this
-// one place because three rules turn on it:
+// Is the project root itself under a library tier, as in `maxon build stdlib/URL.maxon`? Asked in
+// this one place because four rules turn on it:
 //
 //   * `StdlibLoader.setAsideTheUsersOwnLibraryFiles` — the library walk does not load the
 //     project's own files a second time.
@@ -8782,19 +8764,20 @@ end 'createProject'
 //     the loader pulled in from outside the root is stdlib for visibility.
 //   * `Queries.livesUnderStdlibDirectory` — for the two `module`-visible `String` methods those
 //     same files are under `stdlib/`, a fact about the path and not about visibility.
+//   * `Compiler.loadProject` — a project rooted under `runtime/` is refused.
 //
 // ⚠ The third rule's soundness is a claim about the second: `livesUnderStdlibDirectory` is
 // `isStdlibSource OR rootIsUnderStdlibDirectory`, and the two differ exactly when this predicate
-// holds. A second spelling taught about symlinks, case or a trailing separator would leave that
-// proof reading as if it held while the stdlib-only gate refused `stdlib/URL.maxon`, or opened for
-// a user file.
+// holds for `stdlib/`. A second spelling taught about symlinks, case or a trailing separator would
+// leave that proof reading as if it held while the stdlib-only gate refused `stdlib/URL.maxon`, or
+// opened for a user file.
 //
 // `cwd` is passed in because the per-file provenance derivation already holds it, and a second
 // `Directory.currentPath()` would sit on that per-file path. Resolving is not optional: `isInside`
 // compares spellings, so a relative and an absolute spelling of one root would answer differently.
-export function rootIsUnderStdlibDirectory(project Project, cwd FilePath) returns bool
-	return project.rootPath.resolve(cwd).isInside(project.stdlibDir)
-end 'rootIsUnderStdlibDirectory'
+export function rootIsUnder(project Project, libraryRoot FilePath, cwd FilePath) returns bool
+	return project.rootPath.resolve(cwd).isInside(libraryRoot)
+end 'rootIsUnder'
 
 // Append a diagnostic to the project's sink. The single funnel every reporting
 // pass routes through, so diagnostic bookkeeping lives in one place — which is

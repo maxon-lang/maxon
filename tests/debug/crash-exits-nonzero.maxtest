@@ -4,10 +4,16 @@ let FaultedSessionExitCode = 1
 
 test 'a debuggee that faults is reported as a crash and the driver exits nonzero'
 	let staged = builtFixture(CrashCaseLabel, fixture: CrashFixtureName)
-	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: RunCommand, extraOptions: StringArray.create())
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: debugCommandLine([RunCommand, ContinueCommand]), extraOptions: StringArray.create())
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let stops = eventsOfKind(events, kind: StopEventName)
 	let crashes = eventsOfKind(events, kind: CrashEventName)
+
+	Expect.equal(stops.count() as AssertedInt, expected: 1, message: "a program that faulted under the debugger printed {stops.count()} `{StopEventName}` events. The fault is a stop, so the `{RunCommand}` must answer one before the `{ContinueCommand}` lets it end. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let stopped = eventAt(stops, index: 0)
+	Expect.equal(textOf(stopped, node: stopped.root, key: ReasonKey), expected: FaultStopReason, message: "a stop at a fault is reported `{FaultStopReason}`, never as a breakpoint or a trap. {said}")
 
 	Expect.equal(crashes.count() as AssertedInt, expected: 1, message: "a program that faulted printed {crashes.count()} `{CrashEventName}` events. A fault is not an exit, so it must not be reported as one. It printed: {renderedRows(eventKinds(events))}. {said}")
 	Expect.equal(eventsOfKind(events, kind: ExitEventName).count() as AssertedInt, expected: 0, message: "a program that faulted was also reported as having exited, so a reader cannot tell a clean end from a fault. {said}")

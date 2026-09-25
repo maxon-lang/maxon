@@ -1,0 +1,38 @@
+let ConditionCaseLabel = "unsupported-condition-is-unverified-with-a-reason"
+let HitBodyAnchor = "hit-body"
+let StringLocalCondition = "label == 1"
+
+type ConditionSession implements DapSession
+	let executable as FilePath
+	let source as FilePath
+	let anchored as SourceLine
+	export var refused as JsonDoc
+	export var controlVerified as bool
+
+	static function create(executable FilePath, source FilePath, anchored SourceLine) returns ConditionSession
+		return Self{executable: executable, source: source, anchored: anchored, refused: JsonDoc.create(), controlVerified: false}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+		_ = try client.request(LaunchCommand, argumentsJson: dapLaunchArguments(self.executable))
+		_ = try client.awaitEvent(InitializedEvent)
+
+		self.refused = try client.request(SetBreakpointsCommand, argumentsJson: dapSetConditionalBreakpointArguments(self.source, line: self.anchored, condition: StringLocalCondition))
+
+		let control = try client.request(SetBreakpointsCommand, argumentsJson: dapSetBreakpointsArguments(self.source, line: self.anchored))
+		self.controlVerified = dapBreakpointVerified(control, index: 0)
+
+		_ = try client.request(DisconnectCommand)
+	end 'drive'
+end 'ConditionSession'
+
+test 'a condition on a String local is unverified and says why, and the same line without one verifies'
+	let staged = dapStagedFixture(ConditionCaseLabel, fixture: ConditionFixtureName)
+	var session = ConditionSession.create(dapBuildFixture(staged), source: dapStagedSource(staged), anchored: dapAnchorLine(staged, anchor: HitBodyAnchor))
+	try dapRunSession(session, completing: "complete")
+
+	try Expect.isFalse(dapBreakpointVerified(session.refused, index: 0), message: "`{StringLocalCondition}` compares a String local, which the agent refuses to compile. Verifying it would arm an UNCONDITIONAL breakpoint under a conditional marker")
+	try Expect.isTrue(dapBreakpointHasMessage(session.refused, index: 0), message: "an unverified breakpoint must carry the reason: it is the only text the editor has to show beside the greyed-out marker; it answered {dapDescribed(session.refused)}")
+	try Expect.isTrue(session.controlVerified, message: "the SAME line with no condition must verify — otherwise the refusal above says nothing about conditions and everything about the line")
+end 'a condition on a String local is unverified and says why, and the same line without one verifies'

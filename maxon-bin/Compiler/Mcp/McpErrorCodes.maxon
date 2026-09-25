@@ -16,6 +16,10 @@
 let ErrorCodeRegistryRelativePath = "maxon-bin/Compiler/ErrorCodeRegistry.maxon"
 let CommentPrefix = "//"
 
+module let CodeArgument = "code"
+module let LowestErrorCodeNumber = 1000
+module let HighestErrorCodeNumber = 9999
+
 typealias CodeDigit = int(0 to 9)
 
 export let AsciiZeroByte = 0x30 as Byte
@@ -144,22 +148,22 @@ function readDocumentation(code String) returns String throws McpError
 	throw McpError.notFound
 end 'readDocumentation'
 
-export function executeLookupErrorCodeTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode)
-	var raw = getOptionalStringArg(reqDoc, args: args, key: "code", defaultVal: "").trim()
+function codeSpellingIn(reqDoc JsonDoc, args OptionalNode) returns String
+	let codeId = try reqDoc.getChild(argumentsNode(args), key: CodeArgument) otherwise panic("codeSpellingIn: the roster requires `{CodeArgument}`, so it arrived")
+	let code = reqDoc.get(codeId)
 
-	// A JSON number is the spelling an agent reaches for first; the roster accepts it and the digits
-	// mean the same thing either way.
-	if raw.isEmpty() 'maybeNumeric'
-		let numeric = getOptionalIntArg(reqDoc, args: args, key: "code", defaultVal: 0)
+	return match code.kind 'spelling'
+		jsonString gives code.stringValue.trim()
+		jsonNumber gives "{trunc(code.numberValue)}"
+		default panic("codeSpellingIn: the roster admits `{CodeArgument}` as a string or a whole number only")
+	end 'spelling'
+end 'codeSpellingIn'
 
-		if numeric > 0 'gotDigits'
-			raw = "{numeric}"
-		end 'gotDigits'
-	end 'maybeNumeric'
+export function executeLookupErrorCodeTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode) returns String
+	let raw = codeSpellingIn(reqDoc, args: args)
 
 	if raw.isEmpty() 'noCode'
-		sendToolError(reqDoc, idNode: idNode, message: "`code` must name a code: 3014, \"3014\", \"E3014\", or a registry case name.", repoRoot: "")
-		return
+		return toolErrorText(reqDoc, idNode: idNode, message: "`code` must name a code: 3014, \"3014\", \"E3014\", or a registry case name.", repoRoot: "")
 	end 'noCode'
 
 	let key = normalizeKey(raw)
@@ -169,8 +173,7 @@ export function executeLookupErrorCodeTool(reqDoc JsonDoc, idNode JsonNodeId, ar
 			caseName(text) gives "the error-code registry declares no case named `{text}`."
 		end 'k'
 
-		sendToolError(reqDoc, idNode: idNode, message: "lookup_error_code: {reason}", repoRoot: "")
-		return
+		return toolErrorText(reqDoc, idNode: idNode, message: "lookup_error_code: {reason}", repoRoot: "")
 	end 'unclaimed'
 
 	let stage = try stageForCode(entry.code) otherwise panic("executeLookupErrorCodeTool: `{entry.code}` came from the registry and must have a stage")
@@ -185,11 +188,10 @@ export function executeLookupErrorCodeTool(reqDoc JsonDoc, idNode JsonNodeId, ar
 	let documentation = try readDocumentation(entry.code) otherwise 'noSource'
 		payload.addBool(doc, key: "documentationAvailable", value: false)
 		payload.addString(doc, key: "documentation", value: "This install has no `{ErrorCodeRegistryRelativePath}` to read the registry's prose from — a release ships the compiler and the `stdlib/` and `runtime/` libraries it compiles against, never the compiler's own sources. The code, its canonical name and its stage above come from the compiler itself and are complete.")
-		sendToolResult(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: false)
-		return
+		return toolResultText(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: false)
 	end 'noSource'
 
 	payload.addBool(doc, key: "documentationAvailable", value: true)
 	payload.addString(doc, key: "documentation", value: documentation)
-	sendToolResult(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: false)
+	return toolResultText(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: false)
 end 'executeLookupErrorCodeTool'

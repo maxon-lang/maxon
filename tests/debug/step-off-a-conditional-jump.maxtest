@@ -1,35 +1,44 @@
 let ConditionalStepCaseLabel = "step-off-a-conditional-jump"
 
-let StepsOffTheBranch = 2
+let JumpRowOfTheBranchLine = 1
+let StatementRowsOfTheBranchLine = 2
+let StopsOffTheJump = 2
 
-test 'a step that lands on a simulated conditional jump still publishes the stop that follows it'
+test 'a step from a breakpoint on a conditional jump arrives as a step stop on the line the jump lands on'
 	let staged = builtFixture(ConditionalStepCaseLabel, fixture: SteppingFixtureName)
 	let branchLine = anchorLine(staged, anchor: "branch")
 	let takenLine = anchorLine(staged, anchor: "branch-taken")
-	let commands = debugCommandLine(appendedCommands(["{BreakCommand} {lineTarget(branchLine)}", RunCommand], rest: repeatedCommand(StepCommand, times: StepsOffTheBranch)))
-	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let executable = builtExecutable(staged)
+	let rows = statementOffsetsOfLine(executable, staged: staged, line: branchLine)
+
+	Expect.atLeast(rows.count() as AssertedInt, than: StatementRowsOfTheBranchLine, message: "this case needs the condition's TEST and its JUMP to be two statement rows of the branch line, so the jump's own offset can be armed; the line table gives it {rows.count()}")
+
+	let jump = try rows.get(JumpRowOfTheBranchLine) otherwise panic("step-off-a-conditional-jump: the row count was asserted on the line above")
+	let commands = debugCommandLine(["{BreakCommand} {exactOffsetTarget(jump)}", RunCommand, StepCommand])
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create())
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let breakpoints = eventsOfKind(events, kind: BreakpointEventName)
 	let stops = eventsOfKind(events, kind: StopEventName)
 
-	Expect.equal(breakpoints.count() as AssertedInt, expected: 1, message: "`{BreakCommand} {lineTarget(branchLine)}` printed no `{BreakpointEventName}` event, so nothing here is about a branch. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(breakpoints.count() as AssertedInt, expected: 1, message: "`{BreakCommand} {exactOffsetTarget(jump)}` printed no `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let armed = eventAt(breakpoints, index: 0)
-	Expect.atLeast(childrenOf(armed, node: armed.root, key: OffsetsKey).count() as AssertedInt, than: StepsOffTheBranch, message: "this case needs the condition's TEST and its JUMP to be two armed offsets of one line, so that the first step lands on the jump itself. The line resolved to fewer. {said}")
+	Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: SetAction, message: "the conditional jump of the branch line was not armed. {said}")
+	Expect.equal(textOf(armed, node: armed.root, key: OffsetKey), expected: hexSpelling(jump), message: "an exact-offset breakpoint is armed at the offset it names. {said}")
 
 	var walked = StringArray.create()
 
 	for stop in stops 'eachStop'
-		walked.push("{textOf(stop, node: stop.root, key: ReasonKey)} {textOf(stop, node: stop.root, key: FunctionKey)}:{numberOf(stop, node: stop.root, key: LineKey)}")
+		walked.push("{textOf(stop, node: stop.root, key: ReasonKey)} {textOf(stop, node: stop.root, key: FunctionKey)}:{numberOf(stop, node: stop.root, key: LineKey)} {textOf(stop, node: stop.root, key: OffsetKey)}")
 	end 'eachStop'
 
-	Expect.equal(stops.count() as AssertedInt, expected: 3, message: "⛔ THE REGRESSION THIS GUARDS IS SILENCE. A conditional jump is not executed out of line — it is SIMULATED against the saved flags — so a step that lands on one has no trap of its own to publish, and the stop after it goes missing with no event of any kind: no stop, no error, no timeout. The breakpoint and the two steps are three stops. The session stopped: {renderedRows(walked)}. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(stops.count() as AssertedInt, expected: StopsOffTheJump, message: "⛔ THE REGRESSION THIS GUARDS IS SILENCE. A conditional jump is not executed out of line — it is SIMULATED against the saved flags — so the step off one has no trap of its own to publish, and the stop after it goes missing with no event of any kind. The breakpoint and the step are two stops. The session stopped: {renderedRows(walked)}. It printed: {renderedRows(eventKinds(events))}. {said}")
 
-	let onTheJump = eventAt(stops, index: 1)
-	Expect.equal(numberOf(onTheJump, node: onTheJump.root, key: LineKey) as AssertedInt, expected: branchLine as AssertedInt, message: "the first step stays on the branch's own line, because the condition's test and its jump are two instructions of that one line. The session stopped: {renderedRows(walked)}. {said}")
+	let onTheJump = eventAt(stops, index: 0)
+	Expect.equal(textOf(onTheJump, node: onTheJump.root, key: OffsetKey), expected: hexSpelling(jump), message: "the first stop is the breakpoint on the jump itself. The session stopped: {renderedRows(walked)}. {said}")
 
-	let pastTheJump = eventAt(stops, index: 2)
+	let pastTheJump = eventAt(stops, index: 1)
 	Expect.equal(textOf(pastTheJump, node: pastTheJump.root, key: ReasonKey), expected: StepStopReason, message: "the stop that follows a simulated jump is the STEP's — it is what says the landing was published at all rather than swallowed with the trap that never fired there. The session stopped: {renderedRows(walked)}. {said}")
-	Expect.equal(numberOf(pastTheJump, node: pastTheJump.root, key: LineKey) as AssertedInt, expected: takenLine as AssertedInt, message: "the second step lands where the branch went, which for this fixture is the arm the condition takes. The session stopped: {renderedRows(walked)}. {said}")
-end 'a step that lands on a simulated conditional jump still publishes the stop that follows it'
+	Expect.equal(numberOf(pastTheJump, node: pastTheJump.root, key: LineKey) as AssertedInt, expected: takenLine as AssertedInt, message: "the step lands where the branch went, which for this fixture is the arm the condition takes. The session stopped: {renderedRows(walked)}. {said}")
+end 'a step from a breakpoint on a conditional jump arrives as a step stop on the line the jump lands on'
