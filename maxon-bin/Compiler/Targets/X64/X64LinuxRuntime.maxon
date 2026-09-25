@@ -479,7 +479,7 @@ function x64LinuxEmitStoreErrno(asm X64RuntimeAsm, valueReg X64Register)
 
 	x64LinuxEmitTestTlsReady(asm, scratch: X64Register.rdi, whenReady: perThread)
 	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.rdi, label: LinuxErrnoLabel)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rdi, disp: 0, srcReg: valueReg)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rdi, disp: 0, srcReg: valueReg, wide: true)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: stored)
 
 	asm.placeLabel(perThread)
@@ -625,7 +625,7 @@ function x64LinuxEmitZeroSlots(asm X64RuntimeAsm, firstSlot StackSize, slotCount
 	asm.placeLabel(step)
 	emitCmpRegImm(asm, reg: X64Register.rdi, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: zeroed)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rsi, disp: 0, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rsi, disp: 0, srcReg: X64Register.rax, wide: true)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rsi, imm: SpillSlotBytes as Imm32)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.rdi, imm: 1)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: step)
@@ -779,7 +779,7 @@ function buildX64LinuxWallClockChunk() returns FunctionCodeChunk
 	let SlotOutPtr = 0 as StackSize
 	var asm = X64RuntimeAsm.beginFunction(LinuxClockChunkSlots)
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), srcReg: X64Register.rcx, wide: true)
 	x64LinuxReadClockTimespec(asm, clockId: LinuxClockRealtime)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: x64LinuxTimespecDisp(asm, byteOffset: X64LinuxTimespecSecOffset), wide: true)
@@ -795,7 +795,7 @@ function buildX64LinuxWallClockChunk() returns FunctionCodeChunk
 	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.rax, src: X64Register.r8, wide: true)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.rax, wide: true)
 
 	return asm.finishFunction(HostWallClockName)
 end 'buildX64LinuxWallClockChunk'
@@ -812,12 +812,12 @@ function buildX64LinuxThreadCpuChunk() returns FunctionCodeChunk
 	let SlotOutPtr = 0 as StackSize
 	var asm = X64RuntimeAsm.beginFunction(LinuxClockChunkSlots)
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), srcReg: X64Register.rcx, wide: true)
 	x64LinuxReadClockTimespec(asm, clockId: LinuxClockThreadCpuTime)
 	x64LinuxEmitTimespecToNanos(asm)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.rax, wide: true)
 
 	return asm.finishFunction(HostThreadCpuName)
 end 'buildX64LinuxThreadCpuChunk'
@@ -857,8 +857,8 @@ function buildX64LinuxExePathChunk() returns FunctionCodeChunk
 	let unavailable = asm.newLabel()
 	let finish = asm.newLabel()
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBufPtr), srcReg: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBufLen), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBufPtr), srcReg: X64Register.rcx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBufLen), srcReg: X64Register.rdx, wide: true)
 
 	encodeMovRegImm64(asm.code, dest: X64Register.rdi, value: LinuxAtFdCwd)
 	emitLeaString(asm, dest: X64Register.rsi, bytes: LinuxProcSelfExe)
@@ -1099,14 +1099,14 @@ function buildX64LinuxFillFindDataChunk(layout PosixStatLayout) returns Function
 	let SlotName = 2 as StackSize
 	var asm = X64RuntimeAsm.beginFunction(3)
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFindData), srcReg: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStat), srcReg: X64Register.rdx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotName), srcReg: X64Register.r8)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFindData), srcReg: X64Register.rcx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStat), srcReg: X64Register.rdx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotName), srcReg: X64Register.r8, wide: true)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotStat), wide: true)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostAttrsFromModeName)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotFindData), wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rdx, disp: FindDataAttributesOffset as Imm32, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rdx, disp: FindDataAttributesOffset as Imm32, srcReg: X64Register.rax, wide: true)
 
 	x64LinuxFillFindDataTime(asm, statSlot: SlotStat, findSlot: SlotFindData, statOffset: layout.creationTimeOffset as Imm32, findOffset: FindDataCreationTimeOffset)
 	x64LinuxFillFindDataTime(asm, statSlot: SlotStat, findSlot: SlotFindData, statOffset: layout.accessTimeOffset as Imm32, findOffset: FindDataLastAccessTimeOffset)
@@ -1119,7 +1119,7 @@ function buildX64LinuxFillFindDataChunk(layout PosixStatLayout) returns Function
 	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShl, reg: X64Register.rax, count: X64SizeHalfShift)
 	encodeRmRegDirect(asm.code, opcode: OpcodeOrRmReg, dest: X64Register.rax, src: X64Register.rsi, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotFindData), wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rdx, disp: FindDataSizeHighOffset as Imm32, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rdx, disp: FindDataSizeHighOffset as Imm32, srcReg: X64Register.rax, wide: true)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotName), wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotFindData), wide: true)
@@ -1139,7 +1139,7 @@ function x64LinuxFillFindDataTime(asm X64RuntimeAsm, statSlot StackSize, findSlo
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdx, disp: statOffset, wide: true)
 	x64LinuxEmitSecondsToFileTime(asm, reg: X64Register.rax, scratch: X64Register.rsi)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(findSlot), wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rdx, disp: findOffset, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rdx, disp: findOffset, srcReg: X64Register.rax, wide: true)
 end 'x64LinuxFillFindDataTime'
 
 // ==========================================================================
@@ -1188,13 +1188,13 @@ function buildX64LinuxTransferChunk(name ByteArray, syscallNumber MachineWord) r
 	let transferred = asm.newLabel()
 	let answered = asm.newLabel()
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), srcReg: X64Register.r9)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), srcReg: X64Register.r9, wide: true)
 
 	// ⛔ **THE THREE ARGUMENTS OUTLIVE THE CALL BECAUSE AN `EINTR` RE-ISSUES IT** — the arm64 twins' reason
 	// (`Arm64DarwinRuntime.buildArm64DarwinTransferChunk`), and a `syscall` clobbers rcx outright.
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFd), srcReg: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBuf), srcReg: X64Register.rdx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotLen), srcReg: X64Register.r8)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFd), srcReg: X64Register.rcx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBuf), srcReg: X64Register.rdx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotLen), srcReg: X64Register.r8, wide: true)
 
 	asm.placeLabel(issue)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotFd), wide: true)
@@ -1213,13 +1213,13 @@ function buildX64LinuxTransferChunk(name ByteArray, syscallNumber MachineWord) r
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: 0)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rdx, disp: 0, srcReg: X64Register.rsi)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rdx, disp: 0, srcReg: X64Register.rsi, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32False as MachineWord)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
 
 	asm.placeLabel(transferred)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rdx, disp: 0, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rdx, disp: 0, srcReg: X64Register.rax, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32True as MachineWord)
 
 	asm.placeLabel(answered)
@@ -1245,7 +1245,7 @@ function buildX64LinuxFileSizeChunk() returns FunctionCodeChunk
 	let measured = asm.newLabel()
 	let answered = asm.newLabel()
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), srcReg: X64Register.rdx, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rcx, wide: true)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: statDisp)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallFstat)
@@ -1260,7 +1260,7 @@ function buildX64LinuxFileSizeChunk() returns FunctionCodeChunk
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: statDisp)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rsi, disp: X64LinuxStatSizeOffset, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rsi, disp: 0, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rsi, disp: 0, srcReg: X64Register.rax, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32True as MachineWord)
 
 	asm.placeLabel(answered)
@@ -1320,7 +1320,7 @@ function buildX64LinuxFileRenameChunk() returns FunctionCodeChunk
 	let released = asm.newLabel()
 	let answered = asm.newLabel()
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotNewPath), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotNewPath), srcReg: X64Register.rdx, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r10, src: X64Register.rdx, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.rcx, wide: true)
 	encodeMovRegImm64(asm.code, dest: X64Register.rdi, value: LinuxAtFdCwd)
@@ -1345,7 +1345,7 @@ function buildX64LinuxFileRenameChunk() returns FunctionCodeChunk
 	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: PosixNoFileMode as MachineWord)
 	encodeMovRegImm64(asm.code, dest: X64Register.rdi, value: LinuxAtFdCwd)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallOpenat)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotDirFd), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotDirFd), srcReg: X64Register.rax, wide: true)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: released)
 
@@ -1417,7 +1417,7 @@ function buildX64LinuxDirCurrentPathChunk() returns FunctionCodeChunk
 	let tooSmall = asm.newLabel()
 	let answered = asm.newLabel()
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBufLen), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBufLen), srcReg: X64Register.rdx, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rcx, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.rdx, wide: true)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallGetcwd)
@@ -1565,8 +1565,8 @@ function buildX64LinuxDirPrefixChunk() returns FunctionCodeChunk
 	let tooLong = asm.newLabel()
 	let answered = asm.newLabel()
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotPath), srcReg: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotDest), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotPath), srcReg: X64Register.rcx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotDest), srcReg: X64Register.rdx, wide: true)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostBaseNameName)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotPath), wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
@@ -1587,7 +1587,7 @@ function buildX64LinuxDirPrefixChunk() returns FunctionCodeChunk
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotPath), wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotDest), wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotLength), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotLength), srcReg: X64Register.rdx, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rbp, disp: asm.slotDisp(SlotLength), wide: true)
 	x64LinuxEmitCopyCStringBounded(asm, src: X64Register.rsi, dest: X64Register.rdi, limit: X64Register.r10, scratch: X64Register.rax)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 1)
@@ -1649,8 +1649,8 @@ function buildX64LinuxDirFindNextChunk() returns FunctionCodeChunk
 	let exhausted = asm.newLabel()
 	let answered = asm.newLabel()
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSearch), srcReg: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFindData), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSearch), srcReg: X64Register.rcx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFindData), srcReg: X64Register.rdx, wide: true)
 
 	asm.placeLabel(nextEntry)
 	x64LinuxEmitPublishErrno(asm, value: PosixErrno.cleared.rawValue)
@@ -1674,9 +1674,9 @@ function buildX64LinuxDirFindNextChunk() returns FunctionCodeChunk
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.lessEqual, targetBlockId: exhausted)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotSearch), wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.r8, disp: LinuxSearchFilledOffset, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.r8, disp: LinuxSearchFilledOffset, srcReg: X64Register.rax, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: 0)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.r8, disp: LinuxSearchCursorOffset, srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.r8, disp: LinuxSearchCursorOffset, srcReg: X64Register.rdx, wide: true)
 
 	// `entry = search + entriesOffset + cursor`, and the cursor steps by the entry's own `d_reclen`.
 	asm.placeLabel(haveEntry)
@@ -1687,9 +1687,9 @@ function buildX64LinuxDirFindNextChunk() returns FunctionCodeChunk
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.r9, disp: LinuxDirentRecordLengthOffset, wide: false)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAnd, reg: X64Register.rdx, imm: LinuxDirentRecordLengthMask)
 	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.r10, src: X64Register.rdx, wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.r8, disp: LinuxSearchCursorOffset, srcReg: X64Register.r10)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.r8, disp: LinuxSearchCursorOffset, srcReg: X64Register.r10, wide: true)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.r9, imm: LinuxDirentNameOffset)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotName), srcReg: X64Register.r9)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotName), srcReg: X64Register.r9, wide: true)
 
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rcx, base: X64Register.r8, disp: LinuxSearchPatternOffset)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.r9, wide: true)
@@ -1750,11 +1750,11 @@ function buildX64LinuxDirFindFirstChunk() returns FunctionCodeChunk
 	let refused = asm.newLabel()
 	let answered = asm.newLabel()
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotPattern), srcReg: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFindData), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotPattern), srcReg: X64Register.rcx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFindData), srcReg: X64Register.rdx, wide: true)
 
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostBaseNameName)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotGlob), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotGlob), srcReg: X64Register.rax, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: X64Register.rax, wide: true)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostHasWildcardName)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
@@ -1801,7 +1801,7 @@ function buildX64LinuxDirFindFirstChunk() returns FunctionCodeChunk
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: releaseAndRefuse)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotSearch), wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.r8, disp: LinuxSearchDirFdOffset, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.r8, disp: LinuxSearchDirFdOffset, srcReg: X64Register.rax, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotGlob), wide: true)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdi, base: X64Register.r8, disp: LinuxSearchPatternOffset)
 	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: PosixPathStringCapacity as MachineWord)
@@ -1859,13 +1859,13 @@ function x64LinuxEmitAllocateSearch(asm X64RuntimeAsm, searchSlot StackSize)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greater, targetBlockId: mapped)
 
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(searchSlot), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(searchSlot), srcReg: X64Register.rax, wide: true)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: recorded)
 
 	asm.placeLabel(mapped)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(searchSlot), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(searchSlot), srcReg: X64Register.rax, wide: true)
 	encodeMovRegImm64(asm.code, dest: X64Register.rsi, value: LinuxNoDirectory)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rax, disp: LinuxSearchDirFdOffset, srcReg: X64Register.rsi)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rax, disp: LinuxSearchDirFdOffset, srcReg: X64Register.rsi, wide: true)
 
 	asm.placeLabel(recorded)
 end 'x64LinuxEmitAllocateSearch'
@@ -1887,7 +1887,7 @@ function buildX64LinuxDirFindCloseChunk() returns FunctionCodeChunk
 
 	let unmap = asm.newLabel()
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSearch), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSearch), srcReg: X64Register.rcx, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rcx, disp: LinuxSearchDirFdOffset, wide: true)
 	emitCmpRegImm(asm, reg: X64Register.rdi, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: unmap)
@@ -1969,17 +1969,17 @@ function buildX64LinuxEnvReadChunk() returns FunctionCodeChunk
 	let tooSmall = asm.newLabel()
 	let finish = asm.newLabel()
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotName), srcReg: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBufPtr), srcReg: X64Register.rdx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBufLen), srcReg: X64Register.r8)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotName), srcReg: X64Register.rcx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBufPtr), srcReg: X64Register.rdx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBufLen), srcReg: X64Register.r8, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: PosixEnvUnset as MachineWord)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotWritten), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotWritten), srcReg: X64Register.rax, wide: true)
 
 	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.rdi, label: LinuxEnvpLabel)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdi, disp: 0, wide: true)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: finish)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCursor), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCursor), srcReg: X64Register.rax, wide: true)
 
 	// `rax = *cursor`, the next `NAME=VALUE` string, or NULL at the vector's terminator.
 	asm.placeLabel(scan)
@@ -2007,13 +2007,13 @@ function buildX64LinuxEnvReadChunk() returns FunctionCodeChunk
 	emitCmpRegImm(asm, reg: X64Register.r9, imm: LinuxEnvSeparatorByte)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: nextEntry)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: 1)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotValue), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotValue), srcReg: X64Register.rax, wide: true)
 
 	// The measure-and-copy tail — Windows's contract rather than this lane's: copy only when the value fits
 	// STRICTLY inside the capacity, because the NUL needs the last byte.
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotValue), wide: true)
 	emitCstrLenIntoRax(asm, cstrReg: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotWritten), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotWritten), srcReg: X64Register.rax, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotBufLen), wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.aboveEqual, targetBlockId: tooSmall)
@@ -2033,13 +2033,13 @@ function buildX64LinuxEnvReadChunk() returns FunctionCodeChunk
 	// The size required, counting the NUL.
 	asm.placeLabel(tooSmall)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: 1)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotWritten), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotWritten), srcReg: X64Register.rax, wide: true)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: finish)
 
 	asm.placeLabel(nextEntry)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotCursor), wide: true)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rcx, base: X64Register.rcx, disp: SpillSlotBytes as Imm32)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCursor), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCursor), srcReg: X64Register.rcx, wide: true)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: scan)
 
 	asm.placeLabel(finish)
@@ -2200,18 +2200,18 @@ function buildX64LinuxMonotonicClockChunk() returns FunctionCodeChunk
 	let SlotFreqPtr = 3 as StackSize
 	var asm = X64RuntimeAsm.beginFunction(1 + LinuxTimespecSlots + 1)
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTicksPtr), srcReg: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFreqPtr), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTicksPtr), srcReg: X64Register.rcx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFreqPtr), srcReg: X64Register.rdx, wide: true)
 
 	x64LinuxReadClockTimespec(asm, clockId: LinuxClockMonotonic)
 	x64LinuxEmitTimespecToNanos(asm)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotTicksPtr), wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.rax, wide: true)
 
 	encodeMovRegImm64(asm.code, dest: X64Register.rax, value: PosixNanosPerSecond)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotFreqPtr), wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.rax, wide: true)
 
 	return asm.finishFunction(HostMonotonicClockName)
 end 'buildX64LinuxMonotonicClockChunk'
@@ -2262,12 +2262,12 @@ function x64LinuxEmitToTimespec(asm X64RuntimeAsm, amount X64Register, unit Posi
 	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rdx, src: X64Register.rdx, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: posixUnitsPerSecond(unit))
 	encodeGrp3Reg(asm.code, ext: Grp3ExtDiv, reg: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: x64LinuxTimespecFieldDisp(asm, firstSlot: firstSlot, byteOffset: X64LinuxTimespecSecOffset), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: x64LinuxTimespecFieldDisp(asm, firstSlot: firstSlot, byteOffset: X64LinuxTimespecSecOffset), srcReg: X64Register.rax, wide: true)
 
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: posixNanosPerUnit(unit))
 	encodeImulRegReg(asm.code, dest: X64Register.rax, src: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: x64LinuxTimespecFieldDisp(asm, firstSlot: firstSlot, byteOffset: X64LinuxTimespecNsecOffset), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: x64LinuxTimespecFieldDisp(asm, firstSlot: firstSlot, byteOffset: X64LinuxTimespecNsecOffset), srcReg: X64Register.rax, wide: true)
 end 'x64LinuxEmitToTimespec'
 
 // ==========================================================================
@@ -2289,7 +2289,7 @@ function buildX64LinuxWaitNewChunk() returns FunctionCodeChunk
 	let mapped = asm.newLabel()
 	let kindOk = asm.newLabel()
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotKind), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotKind), srcReg: X64Register.rcx, wide: true)
 	encodeX64MmapAnon(asm.code, length: X64MapLength.fixed(LinuxHostObjectPageBytes))
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: mapped)
@@ -2308,7 +2308,7 @@ function buildX64LinuxWaitNewChunk() returns FunctionCodeChunk
 	// The signal word needs no store: `MAP_ANONYMOUS` hands back a zero-filled page, and 0 IS
 	// `PosixWaitNotSignalled`.
 	asm.placeLabel(kindOk)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rax, disp: PosixWaitOffKind as Imm32, srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rax, disp: PosixWaitOffKind as Imm32, srcReg: X64Register.rcx, wide: true)
 	x64LinuxEmitTagObject(asm, reg: X64Register.rax, scratch: X64Register.rcx)
 
 	return asm.finishFunction(HostWaitNewName)
@@ -2361,8 +2361,8 @@ function buildX64LinuxThreadCreateChunk() returns FunctionCodeChunk
 	let noThread = asm.newLabel()
 	let done = asm.newLabel()
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotEntry), srcReg: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotArg), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotEntry), srcReg: X64Register.rcx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotArg), srcReg: X64Register.rdx, wide: true)
 
 	encodeX64MmapAnon(asm.code, length: X64MapLength.fixed(LinuxWorkerRegionBytes))
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
@@ -2370,7 +2370,7 @@ function buildX64LinuxThreadCreateChunk() returns FunctionCodeChunk
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: noThread)
 
 	asm.placeLabel(stackMapped)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRegion), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRegion), srcReg: X64Register.rax, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rax, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: LinuxWorkerStackGuardBytes)
 	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: MmapProtNone)
@@ -2383,11 +2383,11 @@ function buildX64LinuxThreadCreateChunk() returns FunctionCodeChunk
 	asm.placeLabel(guarded)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotRegion), wide: true)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: (LinuxWorkerRegionBytes - LinuxWorkerStackSeedBytes) as Imm32)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStack), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStack), srcReg: X64Register.rax, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotEntry), wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rax, disp: LinuxWorkerSeedEntryOffset as Imm32, srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rax, disp: LinuxWorkerSeedEntryOffset as Imm32, srcReg: X64Register.rcx, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotArg), wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rax, disp: LinuxWorkerSeedArgOffset as Imm32, srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rax, disp: LinuxWorkerSeedArgOffset as Imm32, srcReg: X64Register.rcx, wide: true)
 
 	// This M's per-OS-thread slot block, which `CLONE_SETTLS` publishes in its FS base.
 	encodeX64MmapAnon(asm.code, length: X64MapLength.fixed(LinuxHostObjectPageBytes))
@@ -2396,17 +2396,17 @@ function buildX64LinuxThreadCreateChunk() returns FunctionCodeChunk
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: releaseStack)
 
 	asm.placeLabel(tlsMapped)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTls), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTls), srcReg: X64Register.rax, wide: true)
 
 	// The waitable handle, and the join word inside it, published RUNNING before the thread can clear it.
 	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: PosixWaitKindThread)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostWaitNewName)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), srcReg: X64Register.rax, wide: true)
 	x64LinuxEmitUntagHandle(asm, reg: X64Register.rax)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: PosixWaitOffThread as Imm32)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotJoin), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotJoin), srcReg: X64Register.rax, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: LinuxThreadRunning)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rax, disp: 0, srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rax, disp: 0, srcReg: X64Register.rcx, wide: true)
 
 	// ⛔⛔ `clone(flags, stack, ptid, ctid, tls)` — x86-64's argument order, which is NOT AArch64's (that one
 	// swaps the last two). Both are live here, and the wrong order is a HANG rather than an error.
@@ -2467,7 +2467,7 @@ function buildX64LinuxEventSetChunk() returns FunctionCodeChunk
 
 	x64LinuxEmitUntagHandle(asm, reg: X64Register.rcx)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rcx, base: X64Register.rcx, disp: PosixWaitOffSignal as Imm32)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSignal), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSignal), srcReg: X64Register.rcx, wide: true)
 
 	x64LinuxEmitCasImm(asm, addrSlot: SlotSignal, expected: PosixWaitNotSignalled, replacement: PosixWaitSignalled)
 	x64LinuxEmitFutex(asm, addrSlot: SlotSignal, operation: LinuxFutexWakePrivate, value: LinuxFutexWakeOne, timespecFirstSlot: SlotSignal, hasTimeout: false)
@@ -2524,8 +2524,8 @@ function buildX64LinuxWaitOneChunk() returns FunctionCodeChunk
 
 	asm.placeLabel(isObject)
 	x64LinuxEmitUntagHandle(asm, reg: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTimeout), srcReg: X64Register.rdx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTimeout), srcReg: X64Register.rdx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), srcReg: X64Register.rcx, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: PosixWaitOffKind as Imm32, wide: true)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixWaitKindEvent as Imm32)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: isEvent)
@@ -2540,7 +2540,7 @@ function buildX64LinuxWaitOneChunk() returns FunctionCodeChunk
 	asm.placeLabel(joinThread)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), wide: true)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rcx, base: X64Register.rcx, disp: PosixWaitOffThread as Imm32)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSignal), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSignal), srcReg: X64Register.rcx, wide: true)
 
 	asm.placeLabel(joinTest)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotSignal), wide: true)
@@ -2552,7 +2552,7 @@ function buildX64LinuxWaitOneChunk() returns FunctionCodeChunk
 
 	asm.placeLabel(joined)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: WaitObject0)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotResult), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotResult), srcReg: X64Register.rax, wide: true)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: finish)
 
 	// awaitChild: the child's own wait, in `mrt_host_proc_await` — which honours all three timeouts the
@@ -2561,15 +2561,15 @@ function buildX64LinuxWaitOneChunk() returns FunctionCodeChunk
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotTimeout), wide: true)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostProcAwaitName)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotResult), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotResult), srcReg: X64Register.rax, wide: true)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: finish)
 
 	asm.placeLabel(isEvent)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), wide: true)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rcx, base: X64Register.rcx, disp: PosixWaitOffSignal as Imm32)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSignal), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSignal), srcReg: X64Register.rcx, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: WaitTimeout)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotResult), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotResult), srcReg: X64Register.rax, wide: true)
 
 	asm.placeLabel(testSignal)
 	x64LinuxEmitCasImm(asm, addrSlot: SlotSignal, expected: PosixWaitSignalled, replacement: PosixWaitNotSignalled)
@@ -2599,7 +2599,7 @@ function buildX64LinuxWaitOneChunk() returns FunctionCodeChunk
 
 	asm.placeLabel(takeSignal)
 	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: WaitObject0)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotResult), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotResult), srcReg: X64Register.rcx, wide: true)
 
 	asm.placeLabel(finish)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotResult), wide: true)
@@ -2641,7 +2641,7 @@ function buildX64LinuxWaitCloseChunk() returns FunctionCodeChunk
 	// An OBJECT is one mapped page and nothing else — there are no primitives to destroy first, which is the
 	// whole of what a futex buys over a mutex-and-condvar pair.
 	asm.placeLabel(releaseObject)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), srcReg: X64Register.rcx, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: PosixWaitOffKind as Imm32, wide: true)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixWaitKindProcess as Imm32)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: unmapObject)
@@ -2667,9 +2667,9 @@ function buildX64LinuxLockInitChunk() returns FunctionCodeChunk
 
 	assertLinuxLockFits()
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: LinuxMutexFree)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffFutex as Imm32, srcReg: X64Register.rax)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffOwner as Imm32, srcReg: X64Register.rax)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffDepth as Imm32, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffFutex as Imm32, srcReg: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffOwner as Imm32, srcReg: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffDepth as Imm32, srcReg: X64Register.rax, wide: true)
 
 	return asm.finishFunction(HostLockInitName)
 end 'buildX64LinuxLockInitChunk'
@@ -2688,9 +2688,9 @@ function buildX64LinuxLockEnterChunk() returns FunctionCodeChunk
 	let owned = asm.newLabel()
 	let done = asm.newLabel()
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRegion), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRegion), srcReg: X64Register.rcx, wide: true)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallGettid)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTid), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTid), srcReg: X64Register.rax, wide: true)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotRegion), wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rcx, disp: LinuxLockOffOwner as Imm32, wide: true)
@@ -2698,7 +2698,7 @@ function buildX64LinuxLockEnterChunk() returns FunctionCodeChunk
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: acquire)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rcx, disp: LinuxLockOffDepth as Imm32, wide: true)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rdx, imm: 1)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffDepth as Imm32, srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffDepth as Imm32, srcReg: X64Register.rdx, wide: true)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: done)
 
 	// The futex word is at offset 0 of the region, so the region pointer IS its address.
@@ -2716,9 +2716,9 @@ function buildX64LinuxLockEnterChunk() returns FunctionCodeChunk
 	asm.placeLabel(owned)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotRegion), wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotTid), wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffOwner as Imm32, srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffOwner as Imm32, srcReg: X64Register.rdx, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: LinuxMutexFirstEntry)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffDepth as Imm32, srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffDepth as Imm32, srcReg: X64Register.rdx, wide: true)
 
 	asm.placeLabel(done)
 	return asm.finishFunction(LinuxLockEnterName)
@@ -2734,18 +2734,18 @@ function buildX64LinuxLockLeaveChunk() returns FunctionCodeChunk
 	let wake = asm.newLabel()
 	let done = asm.newLabel()
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRegion), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRegion), srcReg: X64Register.rcx, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: LinuxLockOffDepth as Imm32, wide: true)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: LinuxMutexFirstEntry as Imm32)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.lessEqual, targetBlockId: release)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.rax, imm: 1)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffDepth as Imm32, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffDepth as Imm32, srcReg: X64Register.rax, wide: true)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: done)
 
 	asm.placeLabel(release)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: LinuxMutexFree)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffOwner as Imm32, srcReg: X64Register.rax)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffDepth as Imm32, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffOwner as Imm32, srcReg: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffDepth as Imm32, srcReg: X64Register.rax, wide: true)
 	encodeMovRegImm64(asm.code, dest: X64Register.rdx, value: LinuxMutexReleaseStep)
 	encodeLockedRmwBaseDispReg(asm.code, twoByteEscape: true, opcode: OpcodeXaddRmReg, base: X64Register.rcx, disp: LinuxLockOffFutex as Imm32, reg: X64Register.rdx)
 	emitCmpRegImm(asm, reg: X64Register.rdx, imm: LinuxMutexHeld as Imm32)
@@ -2755,7 +2755,7 @@ function buildX64LinuxLockLeaveChunk() returns FunctionCodeChunk
 	asm.placeLabel(wake)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotRegion), wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: LinuxMutexFree)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffFutex as Imm32, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffFutex as Imm32, srcReg: X64Register.rax, wide: true)
 	x64LinuxEmitFutex(asm, addrSlot: SlotRegion, operation: LinuxFutexWakePrivate, value: LinuxFutexWakeOne, timespecFirstSlot: SlotRegion, hasTimeout: false)
 
 	asm.placeLabel(done)
@@ -2797,7 +2797,7 @@ function buildX64LinuxTlsAllocChunk() returns FunctionCodeChunk
 	// non-zero garbage word says "this thread already has a block" and skips the mapping. Zero routes a failed
 	// GET to the map path, which is the answer a thread with no readable FS base needs.
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFsBase), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFsBase), srcReg: X64Register.rax, wide: true)
 
 	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: X64LinuxArchGetFs)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotFsBase))
@@ -2831,7 +2831,7 @@ function buildX64LinuxTlsAllocChunk() returns FunctionCodeChunk
 	// no reader can be sent to a block that does not exist yet.
 	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.rdi, label: X64LinuxTlsReadyLabel)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: X64LinuxTlsBlocksAreLive)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rdi, disp: 0, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rdi, disp: 0, srcReg: X64Register.rax, wide: true)
 
 	asm.placeLabel(haveBlock)
 	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.rdi, label: LinuxTlsNextKeyLabel)
@@ -2842,7 +2842,7 @@ function buildX64LinuxTlsAllocChunk() returns FunctionCodeChunk
 	x64LinuxEmitPanicConstant(asm, bytes: LinuxTlsExhaustedMessage)
 
 	asm.placeLabel(keyOk)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rdi, disp: 0, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rdi, disp: 0, srcReg: X64Register.rax, wide: true)
 	return asm.finishFunction(HostTlsAllocName)
 end 'buildX64LinuxTlsAllocChunk'
 
@@ -2948,8 +2948,8 @@ function buildX64LinuxPipeChunk() returns FunctionCodeChunk
 	let created = asm.newLabel()
 	let published = asm.newLabel()
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotReadOut), srcReg: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotWriteOut), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotReadOut), srcReg: X64Register.rcx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotWriteOut), srcReg: X64Register.rdx, wide: true)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotFds))
 	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: LinuxOpenCloseOnExec)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallPipe2)
@@ -2967,9 +2967,9 @@ function buildX64LinuxPipeChunk() returns FunctionCodeChunk
 
 	asm.placeLabel(published)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotReadOut), wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.r8)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.r8, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotWriteOut), wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.r9)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.r9, wide: true)
 
 	return asm.finishFunction(HostPipeName)
 end 'buildX64LinuxPipeChunk'
@@ -2997,16 +2997,16 @@ function buildX64LinuxPipePeekChunk() returns FunctionCodeChunk
 	let publish = asm.newLabel()
 	let answered = asm.newLabel()
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotAvailOut), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotAvailOut), srcReg: X64Register.rdx, wide: true)
 	x64LinuxEmitUntagHandle(asm, reg: X64Register.rcx)
 	encodeMovRegImm64(asm.code, dest: X64Register.rax, value: (PosixPollEventsUnit * PosixPollIn))
 	encodeRmRegDirect(asm.code, opcode: OpcodeOrRmReg, dest: X64Register.rcx, src: X64Register.rax, wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotPollfd), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotPollfd), srcReg: X64Register.rcx, wide: true)
 
 	// `ppoll(&pollfd, 1, &timespec{0,0}, NULL, sizeof(sigset_t))` — the zeroed pair is the no-wait request.
 	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: x64LinuxTimespecFieldDisp(asm, firstSlot: SlotTimespec, byteOffset: X64LinuxTimespecSecOffset), srcReg: X64Register.rax)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: x64LinuxTimespecFieldDisp(asm, firstSlot: SlotTimespec, byteOffset: X64LinuxTimespecNsecOffset), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: x64LinuxTimespecFieldDisp(asm, firstSlot: SlotTimespec, byteOffset: X64LinuxTimespecSecOffset), srcReg: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: x64LinuxTimespecFieldDisp(asm, firstSlot: SlotTimespec, byteOffset: X64LinuxTimespecNsecOffset), srcReg: X64Register.rax, wide: true)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotPollfd))
 	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: PosixPollOneDescriptor)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rbp, disp: x64LinuxTimespecFieldDisp(asm, firstSlot: SlotTimespec, byteOffset: X64LinuxTimespecSecOffset))
@@ -3032,7 +3032,7 @@ function buildX64LinuxPipePeekChunk() returns FunctionCodeChunk
 
 	asm.placeLabel(publish)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotAvailOut), wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.r8)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.r8, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32True as MachineWord)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
 
@@ -3074,8 +3074,8 @@ function buildX64LinuxProcReapChunk() returns FunctionCodeChunk
 	let haveOptions = asm.newLabel()
 	let answered = asm.newLabel()
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), srcReg: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBlocking), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), srcReg: X64Register.rcx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBlocking), srcReg: X64Register.rdx, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: PosixWaitOffSignal as Imm32, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: alreadySignalled)
@@ -3127,11 +3127,11 @@ function buildX64LinuxProcReapChunk() returns FunctionCodeChunk
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rax, imm: PosixSignalExitCodeBase as Imm32)
 
 	asm.placeLabel(publish)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: PosixWaitOffChildStatus as Imm32, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: PosixWaitOffChildStatus as Imm32, srcReg: X64Register.rax, wide: true)
 
 	asm.placeLabel(statusChosen)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: PosixWaitSignalled)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: PosixWaitOffSignal as Imm32, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: PosixWaitOffSignal as Imm32, srcReg: X64Register.rax, wide: true)
 
 	asm.placeLabel(alreadySignalled)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: PosixChildSignalled)
@@ -3175,8 +3175,8 @@ function buildX64LinuxProcAwaitChunk() returns FunctionCodeChunk
 	let notSignalled = asm.newLabel()
 	let answered = asm.newLabel()
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), srcReg: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTimeout), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), srcReg: X64Register.rcx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTimeout), srcReg: X64Register.rdx, wide: true)
 
 	// INFINITE: one blocking reap, and the answer cannot be anything but signalled.
 	encodeMovRegImm64(asm.code, dest: X64Register.rax, value: WaitInfinite)
@@ -3192,7 +3192,7 @@ function buildX64LinuxProcAwaitChunk() returns FunctionCodeChunk
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostTickMsName)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotTimeout), wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotDeadline), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotDeadline), srcReg: X64Register.rax, wide: true)
 
 	asm.placeLabel(boundedStep)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), wide: true)
@@ -3234,16 +3234,16 @@ function buildX64LinuxProcExitCodeChunk() returns FunctionCodeChunk
 	let SlotObj = 1 as StackSize
 	var asm = X64RuntimeAsm.beginFunction(2)
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCodeOut), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCodeOut), srcReg: X64Register.rdx, wide: true)
 	x64LinuxEmitUntagHandle(asm, reg: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), srcReg: X64Register.rcx, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: PosixReapBlocking)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostProcReapName)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: PosixWaitOffChildStatus as Imm32, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotCodeOut), wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.rax, wide: true)
 
 	return asm.finishFunction(HostProcExitCodeName)
 end 'buildX64LinuxProcExitCodeChunk'
@@ -3275,8 +3275,8 @@ function buildX64LinuxProcTerminateChunk() returns FunctionCodeChunk
 	let answered = asm.newLabel()
 
 	x64LinuxEmitUntagHandle(asm, reg: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), srcReg: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCode), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), srcReg: X64Register.rcx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCode), srcReg: X64Register.rdx, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: PosixWaitOffSignal as Imm32, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: nothingLeftToKill)
@@ -3298,9 +3298,9 @@ function buildX64LinuxProcTerminateChunk() returns FunctionCodeChunk
 	asm.placeLabel(delivered)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotCode), wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: PosixWaitOffChildStatus as Imm32, srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: PosixWaitOffChildStatus as Imm32, srcReg: X64Register.rdx, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: PosixChildSignalled)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: PosixWaitOffChildKilled as Imm32, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: PosixWaitOffChildKilled as Imm32, srcReg: X64Register.rax, wide: true)
 
 	asm.placeLabel(nothingLeftToKill)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32True as MachineWord)
@@ -3380,14 +3380,14 @@ function buildX64LinuxSpawnChunk() returns FunctionCodeChunk
 	let inheritCwd = asm.newLabel()
 	let envChosen = asm.newLabel()
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotArgv), srcReg: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCwd), srcReg: X64Register.rdx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFlags), srcReg: X64Register.r8)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStartup), srcReg: X64Register.r9)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotArgv), srcReg: X64Register.rcx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCwd), srcReg: X64Register.rdx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFlags), srcReg: X64Register.r8, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStartup), srcReg: X64Register.r9, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: win64IncomingArgDisp(SpawnProcInfoIncomingSlot), wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotProcInfo), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotProcInfo), srcReg: X64Register.rax, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: win64IncomingArgDisp(SpawnEnvironmentIncomingSlot), wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotEnv), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotEnv), srcReg: X64Register.rax, wide: true)
 
 	// The working directory, opened close-on-exec so no launched program inherits the descriptor. A NULL
 	// `lpCurrentDirectory` opens nothing.
@@ -3400,7 +3400,7 @@ function buildX64LinuxSpawnChunk() returns FunctionCodeChunk
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallOpenat)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: cwdFailed)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCwdFd), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCwdFd), srcReg: X64Register.rax, wide: true)
 
 	asm.placeLabel(cwdReady)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusFds))
@@ -3414,13 +3414,13 @@ function buildX64LinuxSpawnChunk() returns FunctionCodeChunk
 	asm.placeLabel(cwdFailed)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotProcInfo), wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: SpawnPreparation.workingDirectory.rawValue as MachineWord)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: SpawnFailedPreparationOffset as Imm32, srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: SpawnFailedPreparationOffset as Imm32, srcReg: X64Register.rdx, wide: true)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: spawnFailed)
 
 	// The status pipe could not be made: give back the working directory's descriptor, carrying the reason
 	// across the close.
 	asm.placeLabel(pipeFailed)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusWord), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusWord), srcReg: X64Register.rax, wide: true)
 	emitX64LinuxCloseSpawnCwd(asm, cwdSlot: SlotCwd, cwdFdSlot: SlotCwdFd)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusWord), wide: true)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: spawnFailed)
@@ -3428,9 +3428,9 @@ function buildX64LinuxSpawnChunk() returns FunctionCodeChunk
 	asm.placeLabel(piped)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusFds))
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: 0, wide: false)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusRead), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusRead), srcReg: X64Register.rax, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: PosixPipeWriteEndOffset as Imm32, wide: false)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusWrite), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusWrite), srcReg: X64Register.rax, wide: true)
 
 	// ⛔ `clone(flags, stack, ptid, ctid, tls)` — x86-64's order. All four pointer arguments are NULL here, so
 	// the AArch64 disagreement about the last two cannot bite; it bites in `mrt_host_thread_create`.
@@ -3447,7 +3447,7 @@ function buildX64LinuxSpawnChunk() returns FunctionCodeChunk
 
 	// PARENT. Drop the write end so the read below can see EOF, then take the child's verdict. The child holds its
 	// own copy of the working directory's descriptor, so the parent's goes now.
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotPid), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotPid), srcReg: X64Register.rax, wide: true)
 	emitX64LinuxCloseSpawnCwd(asm, cwdSlot: SlotCwd, cwdFdSlot: SlotCwdFd)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusWrite), wide: true)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallClose)
@@ -3456,7 +3456,7 @@ function buildX64LinuxSpawnChunk() returns FunctionCodeChunk
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rsi, disp: SpawnChildReportOffset as Imm32)
 	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: SpawnChildReportBytes as MachineWord)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallRead)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusCount), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusCount), srcReg: X64Register.rax, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusRead), wide: true)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallClose)
 
@@ -3481,7 +3481,7 @@ function buildX64LinuxSpawnChunk() returns FunctionCodeChunk
 	// The clone itself failed: close both ends of a pipe no child will ever hold, then report as above. The
 	// reason has to be carried across the two closes, each of which writes rax.
 	asm.placeLabel(cloneFailed)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusWord), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusWord), srcReg: X64Register.rax, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusRead), wide: true)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallClose)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusWrite), wide: true)
@@ -3500,10 +3500,10 @@ function buildX64LinuxSpawnChunk() returns FunctionCodeChunk
 	asm.placeLabel(spawned)
 	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: PosixWaitKindProcess)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostWaitNewName)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotHandle), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotHandle), srcReg: X64Register.rax, wide: true)
 	x64LinuxEmitUntagHandle(asm, reg: X64Register.rax)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r9, base: X64Register.rbp, disp: asm.slotDisp(SlotPid), wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rax, disp: PosixWaitOffChildPid as Imm32, srcReg: X64Register.r9)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rax, disp: PosixWaitOffChildPid as Imm32, srcReg: X64Register.r9, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotHandle), wide: true)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: published)
 
@@ -3569,8 +3569,8 @@ function buildX64LinuxSpawnChunk() returns FunctionCodeChunk
 	// end the WHOLE program.
 	asm.placeLabel(childFailed)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotProcInfo), wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: SpawnChildReportOffset as Imm32, srcReg: X64Register.rax)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: SpawnFailedPreparationOffset as Imm32, srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: SpawnChildReportOffset as Imm32, srcReg: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: SpawnFailedPreparationOffset as Imm32, srcReg: X64Register.rdx, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusWrite), wide: true)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rcx, disp: SpawnChildReportOffset as Imm32)
 	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: SpawnChildReportBytes as MachineWord)
@@ -3583,10 +3583,10 @@ function buildX64LinuxSpawnChunk() returns FunctionCodeChunk
 	// stores that fill the record are written once.
 	asm.placeLabel(published)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotProcInfo), wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: ProcInfoHProcessOffset as Imm32, srcReg: X64Register.r8)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: ProcInfoHProcessOffset as Imm32, srcReg: X64Register.r8, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: PosixNoThreadHandle)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: ProcInfoHThreadOffset as Imm32, srcReg: X64Register.rax)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: ProcInfoDwProcessIdOffset as Imm32, srcReg: X64Register.r9)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: ProcInfoHThreadOffset as Imm32, srcReg: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: ProcInfoDwProcessIdOffset as Imm32, srcReg: X64Register.r9, wide: true)
 
 	return asm.finishFunction(HostSpawnName)
 end 'buildX64LinuxSpawnChunk'
@@ -3699,7 +3699,7 @@ function buildX64LinuxShmCreateChunk() returns FunctionCodeChunk
 	let refused = asm.newLabel()
 	let answered = asm.newLabel()
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBytes), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBytes), srcReg: X64Register.rdx, wide: true)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rbp, disp: pathDisp)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: LinuxShmPathName)
 
@@ -3714,7 +3714,7 @@ function buildX64LinuxShmCreateChunk() returns FunctionCodeChunk
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallOpenat)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: refused)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFd), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFd), srcReg: X64Register.rax, wide: true)
 
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rax, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotBytes), wide: true)
@@ -3757,7 +3757,7 @@ function buildX64LinuxShmOpenChunk() returns FunctionCodeChunk
 	let absent = asm.newLabel()
 	let answered = asm.newLabel()
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBufPtr), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBufPtr), srcReg: X64Register.rdx, wide: true)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostEnvReadName)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: absent)
@@ -3823,8 +3823,8 @@ function buildX64LinuxShmMapChunk() returns FunctionCodeChunk
 	let refused = asm.newLabel()
 	let answered = asm.newLabel()
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFd), srcReg: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBytes), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFd), srcReg: X64Register.rcx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBytes), srcReg: X64Register.rdx, wide: true)
 	emitCmpRegImm(asm, reg: X64Register.rcx, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: refused)
 
@@ -4087,18 +4087,18 @@ function buildX64LinuxNetpollOpenBreakChunk() returns FunctionCodeChunk
 	let failed = asm.newLabel()
 	let eventDisp = x64LinuxBufferDisp(asm, firstSlot: SlotEvent, slotCount: eventSlots)
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotPoller), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotPoller), srcReg: X64Register.rcx, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rdi, src: X64Register.rdi, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: LinuxEpollCloexec + LinuxEventfdNonblock)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallEventfd2)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: failed)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotEventfd), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotEventfd), srcReg: X64Register.rax, wide: true)
 
 	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: LinuxEpollIn)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: eventDisp, srcReg: X64Register.r8)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: eventDisp, srcReg: X64Register.r8, wide: true)
 	encodeMovRegImm64(asm.code, dest: X64Register.r8, value: NetpollBreakToken as MachineWord)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: eventDisp + (LinuxEpollPackedDataOffset as Imm32), srcReg: X64Register.r8)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: eventDisp + (LinuxEpollPackedDataOffset as Imm32), srcReg: X64Register.r8, wide: true)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotPoller), wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: LinuxEpollCtlAdd)
@@ -4129,8 +4129,8 @@ function buildX64LinuxNetpollArmChunk(name ByteArray, events MachineWord) return
 	let eventDisp = x64LinuxBufferDisp(asm, firstSlot: SlotEvent, slotCount: eventSlots)
 
 	encodeMovRegImm64(asm.code, dest: X64Register.r8, value: events)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: eventDisp, srcReg: X64Register.r8)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: eventDisp + (LinuxEpollPackedDataOffset as Imm32), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: eventDisp, srcReg: X64Register.r8, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: eventDisp + (LinuxEpollPackedDataOffset as Imm32), srcReg: X64Register.rdx, wide: true)
 
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rcx, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: LinuxEpollCtlAdd)
@@ -4220,7 +4220,7 @@ function buildX64LinuxNetpollCounterChunk(name ByteArray, syscallNumber MachineW
 
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: descriptor, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: LinuxEventfdRaise)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCounter), srcReg: X64Register.r8)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCounter), srcReg: X64Register.r8, wide: true)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotCounter))
 	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: LinuxEventfdCounterBytes)
 	encodeX64Syscall(asm.code, number: syscallNumber)

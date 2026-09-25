@@ -217,8 +217,8 @@ is the opt-out, and it is the one debugging flag that changes the executable (`-
 identity stands, gated by `tests/debug/byte-identical-debug-info`).
 
 ⚠ **ITS GEOMETRY IS WRITTEN TWICE AND PINNED, ON THE SLAB RUNTIME'S TERMS.**
-`Compiler/Debug/DebugControlLayout.maxon` owns the control segment's layout, the tier restates every figure,
-and `checkDebugAgentGeometry` reads the tier's own constants back out and compares them. So **a pinned
+`Compiler/Debug/DebugControlLayout.maxon` owns the control segment's layout, the tier restates every figure
+it reads, and `checkDebugAgentGeometry` reads the tier's own constants back out and compares them. So **a pinned
 figure, or a `__Raw` row's arity, takes a STAGED build** — tier file back to the current emitter's values →
 build C1 → restore → build C2 with C1 — exactly as the slab state region does above.
 

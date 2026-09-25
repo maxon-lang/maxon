@@ -41,10 +41,12 @@ export typealias GlobalDedupMap = Map with (ByteArray, String)
 // 8 is what the loads want and 4 is merely the coarsest granularity at which the breakage becomes visible.
 let RdataPayloadAlignment = 8 as BytePos
 
-// The byte a payload is padded WITH. Named because it is read back rather than merely written: a text
-// payload's pad is indistinguishable from its NUL terminator, which is exactly what lets
-// `TargetPrinter.quotedPayloadText` stop at the first one and never render alignment as content.
-let RdataPadByte = 0 as Byte
+// The byte every pad in the table is filled with: an `.rdata` payload's, a reserved `.data` run's,
+// and the gap before an aligned `.data` slot. Named because it is read back rather than merely
+// written: a text payload's pad is indistinguishable from its NUL terminator, which is what lets
+// `TargetPrinter.quotedPayloadText` stop at the first one and never render alignment as content,
+// and a reader striding one slot past a counter run's count finds zero instead of the next global.
+let PadByte = 0 as Byte
 
 // The synthetic-label prefix a dense-`match` jump table's `.rdata` blob is minted under
 // (`registerJumpTable`). Distinct from the float/String prefixes so a jump table is recognisable in a
@@ -385,13 +387,6 @@ end 'DataSectionEntry'
 
 export typealias DataSectionEntryArray = Array with DataSectionEntry
 
-// The byte a reserved run's pad carries. Named because the pad is READ BACK rather than merely
-// written: a counter run's slots are zero at start-up, so a reader striding one slot past the
-// count it was told finds a plain zero instead of whatever the next global holds.
-let DataBlobPadByte = 0 as Byte
-
-let DataSlotPadByte = 0 as Byte
-
 // ⭐⭐ **ONE CONTIGUOUS RESERVED RUN IN `.data`, ADDRESSED BY A SINGLE LABEL** — what a runtime
 // needs when it indexes into its own image at a computed stride (a coverage `.mxcov` header
 // followed by N u64 counters is the shape that asks for it).
@@ -407,7 +402,7 @@ let DataSlotPadByte = 0 as Byte
 type DataBlobEntry
 	export let label as String
 
-	// The run as the table stores it: the registrant's bytes padded by `dataBlobStoredRun`.
+	// The run as the table stores it: the registrant's bytes padded to `MaxDataSlotBytes`.
 	// Mutable because `stampDataBlob` rewrites the contents of an already-placed run.
 	export var bytes as ByteArray
 	export var offset as ByteOffset
@@ -640,7 +635,7 @@ export type GlobalDataTable
 			panic("GlobalDataTable.appendRdataPayload: '{label}' would be addressed at offset {labelAt} of a {bytes.count()}-byte payload — a label names a point WITHIN what it registers, and an EMPTY payload (a `b\"\"` blob) has only its start")
 		end 'labelPastPayload'
 
-		let payload = rdataStoredPayload(bytes)
+		let payload = paddedTo(bytes, alignment: RdataPayloadAlignment)
 		self.rdataOffsets.upsert(label, value: self.rdataSizeSoFar)
 		self.rdataLabelOffsets.upsert(label, value: labelAt)
 		self.rdataSizeSoFar = self.rdataSizeSoFar + payload.count()
@@ -760,7 +755,7 @@ export type GlobalDataTable
 		// pads to `RdataPayloadAlignment`, so comparing the incumbent's padded bytes against a caller's
 		// raw ones would report every odd-length payload as a collision with itself.
 		let existing = self.payloadOf(label)
-		let incoming = rdataStoredPayload(bytes)
+		let incoming = paddedTo(bytes, alignment: RdataPayloadAlignment)
 
 		if not existing.equals(incoming) 'differs'
 			panic("GlobalDataTable.requireIdenticalPayload: '{label}' is registered twice with DIFFERENT payloads ({existing.count()} and {incoming.count()} STORED bytes — each padded up to RdataPayloadAlignment, so a 13- and a 17-byte payload read here as 16 and 24) — a structural .rdata label names its content, so two payloads under one label means two derivations produced one name and the second would be silently dropped")
@@ -933,14 +928,14 @@ export type GlobalDataTable
 		end 'alreadyReserved'
 
 		self.dataBlobIndex.upsert(label, value: self.dataBlobs.count())
-		self.dataBlobs.push(DataBlobEntry.create(label, bytes: dataBlobStoredRun(bytes)))
+		self.dataBlobs.push(DataBlobEntry.create(label, bytes: paddedTo(bytes, alignment: MaxDataSlotBytes)))
 	end 'registerDataBlob'
 
 	// ⭐ REWRITE a reserved run's contents where it already lies. A producer whose image embeds a
 	// value knowable only after the code is final registers a placeholder and stamps it here.
 	//
 	// ⚠ **THE STAMP'S LENGTH MUST EQUAL THE RESERVED RUN'S EXACTLY** — that is the registered
-	// length rounded up to `MaxDataSlotBytes`, since `dataBlobStoredRun` pads. A stamp free to
+	// length rounded up to `MaxDataSlotBytes`, since `registerDataBlob` pads. A stamp free to
 	// resize would move every scalar laid out behind the run while every `globalAddr` already
 	// emitted still carries the old offset, so the mismatch is refused by name rather than
 	// resolved in either direction.
@@ -1049,7 +1044,7 @@ export type GlobalDataTable
 				panic("GlobalDataTable.dataSectionImage: '{entry.label}' is laid out at offset {entry.offset} but the image, aligned for its {stdTypeStorageBytes(entry.valueType)}-byte slot, has reached {slotStart} — layOut's ordering and this rendering disagree")
 			end 'drift'
 
-			image.growFilled(slotStart as ElementIndex, value: DataSlotPadByte)
+			image.growFilled(slotStart as ElementIndex, value: PadByte)
 			appendLittleEndianScalar(image, value: entry.value, byteCount: stdTypeStorageBytes(entry.valueType))
 		end 'each'
 
@@ -1155,13 +1150,14 @@ function naturallyAlignedSlotOffset(offset ByteOffset, valueType StdType) return
 	return alignUp(offset as BytePos, alignment: stdTypeStorageBytes(valueType)) as ByteOffset
 end 'naturallyAlignedSlotOffset'
 
-// The table pads each run rather than trusting the registrant, so every run starts aligned to the
-// widest slot whatever length a producer reserves.
+// The table pads every `.rdata` payload and reserved `.data` run rather than trusting the
+// registrant, so each starts aligned whatever length a producer hands over.
 //
-// The pad is part of the run, so `stampDataBlob` compares against the padded length: a producer that
-// reserved an odd length stamps the rounded run, not the length it asked for.
-function dataBlobStoredRun(bytes ByteArray) returns ByteArray
-	let storedCount = alignUp(bytes.count(), alignment: MaxDataSlotBytes)
+// An `.rdata` pad is invisible to every reader by construction: a text payload is read to its NUL,
+// and a structural one by a reader that knows its own slot count. Nothing may derive a count from a
+// stored payload's length.
+function paddedTo(bytes ByteArray, alignment BytePos) returns ByteArray
+	let storedCount = alignUp(bytes.count(), alignment: alignment)
 
 	if storedCount == bytes.count() 'alreadyAligned'
 		return bytes
@@ -1169,32 +1165,9 @@ function dataBlobStoredRun(bytes ByteArray) returns ByteArray
 
 	var padded = ByteArray.create()
 	padded.append(bytes)
-	padded.growFilled(storedCount as ElementIndex, value: DataBlobPadByte)
+	padded.growFilled(storedCount as ElementIndex, value: PadByte)
 	return padded
-end 'dataBlobStoredRun'
-
-// A payload as the table STORES it: the caller's bytes, zero-padded up to `RdataPayloadAlignment`.
-//
-// ⚠ **THE ALREADY-ALIGNED PATH RETURNS THE ARGUMENT UNTOUCHED, AND IT IS THE COMMON ONE** — a String
-// record is 56 bytes, a float island 8, a jump table `4 × slotCount` for an even slot count — so the
-// discipline costs no copy for the payloads that already satisfy it, and the ones it does copy are the
-// handful of odd-length tables that would otherwise break the cursor.
-//
-// ⚠ The padding is invisible to every consumer by construction: a text payload is read to its NUL
-// (`TargetPrinter.quotedPayloadText`, and `length@8` for a String), and a structural payload is decoded by
-// a reader that knows its own slot count. Nothing derives a count from a stored payload's length.
-function rdataStoredPayload(bytes ByteArray) returns ByteArray
-	let storedCount = alignUp(bytes.count(), alignment: RdataPayloadAlignment)
-
-	if storedCount == bytes.count() 'alreadyAligned'
-		return bytes
-	end 'alreadyAligned'
-
-	var padded = ByteArray.create()
-	padded.append(bytes)
-	padded.growFilled(storedCount as ElementIndex, value: RdataPadByte)
-	return padded
-end 'rdataStoredPayload'
+end 'paddedTo'
 
 // `value` rendered as a standalone `byteCount`-byte little-endian payload — what
 // `registerFloatConstant` mints a float island out of.

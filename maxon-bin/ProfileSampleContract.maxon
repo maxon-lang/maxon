@@ -14,36 +14,47 @@
 
 // --- The Win64 `CONTEXT` record ---
 //
-// ⭐⭐ **THREE MECHANISMS READ THIS ONE RECORD, AND ONLY ONE OF THEM IS A PROFILER.** The sampler reads a
-// FOREIGN process's registers through it; `maxon-bin/Profile/` places the stack copy it bounded; and the
-// scheduler's monitor reads and REWRITES this process's own (`X64GtRuntime.buildPreemptMachineChunk`),
-// which is what asynchronous preemption is. They compile on different sets of lanes, which is why the
-// displacements live at the root — see this file's header.
+// Not only the profiler reads this record. The sampler reads a foreign process's registers through
+// it and `maxon-bin/Profile/` places the stack copy it bounded; the scheduler's monitor reads and
+// rewrites this process's own (`X64GtRuntime.buildPreemptMachineChunk`); and x64-windows' fault
+// handler and debug agent read the CONTEXT a trap delivers (`X64Runtime`). They compile on
+// different sets of lanes, which is why the displacements live at the root (see this file's
+// header).
 
 // The displacement of RSP, and of RIP: what an instant of execution IS, and the two words a stop rewrites.
 module let Win64ContextRspOffset = 0x98
 module let Win64ContextRipOffset = 0xF8
 
-// `CONTEXT.ContextFlags` — the record's ONE input field — and the two families asked for. CONTEXT_CONTROL
-// supplies RSP and RIP, CONTEXT_INTEGER the general registers the sampler's walk needs.
+// `CONTEXT.ContextFlags` — the record's one input field — and the families asked for.
+// CONTEXT_CONTROL supplies RSP and RIP, CONTEXT_INTEGER the general registers,
+// CONTEXT_FLOATING_POINT the XMM registers.
 //
-// ⚠ **THE FLAGS ARE WRITTEN AS A WHOLE 64-BIT WORD, WHICH ALSO ZEROES `MxCsr` AT 0x34 — and that is correct
-// rather than tolerated:** `MxCsr` is CONTEXT_FLOATING_POINT's, and neither reader asks for that family, so
-// it is neither read on the way in nor written back on the way out.
+// ⚠ `ContextFlags` is a DWORD and `MxCsr`, CONTEXT_FLOATING_POINT's, follows it at 0x34. The
+// sampler and the preemption monitor write the flags as a whole 64-bit word, zeroing `MxCsr`, which
+// is sound only because neither asks for that family. The debug agent asks for it and writes the
+// record back, so it stores the flags as a DWORD.
 module let Win64ContextFlagsOffset = 0x30
 module let Win64ContextControl = 0x00100001
 module let Win64ContextInteger = 0x00100002
+module let Win64ContextFloatingPoint = 0x00100008
+module let Win64ContextAlignment = 16
 
 // `SuspendThread`'s failure, `(DWORD)-1`. Its answer arrives zero-extended, so a compare against -1
 // would never match.
 module let SuspendThreadFailed = 0xFFFFFFFF
+
+module let Win64MbiBytes = 48
+module let Win64MbiBaseAddressOffset = 0
+module let Win64MbiRegionSizeOffset = 24
+module let Win64MbiStateOffset = 32
+module let Win64MbiProtectOffset = 36
 
 // A `MEMORY_BASIC_INFORMATION`'s allocation base — the field the runtime clears before the region query and
 // the only one the profiler reads back, as the identity of a stack.
 module let ProfileRegionAllocationBaseOffset = 8
 
 // The `MEMORY_BASIC_INFORMATION` record's size, which the region query is told.
-module let ProfileRegionRecordBytes = 48
+module let ProfileRegionRecordBytes = Win64MbiBytes
 
 // ⭐ **THE WORD JUST PAST THE REGION RECORD RECEIVES THE THREAD's CYCLE COUNT, READ WHILE IT IS STILL
 // SUSPENDED.** The caller's region slot is far larger than the record, so the reading rides there rather than

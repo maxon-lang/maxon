@@ -107,8 +107,24 @@ export function windowsFaultExceptionCode(kind HardwareFaultKind) returns Except
 end 'windowsFaultExceptionCode'
 
 export let DebugTrapThunkName = b"mrt_dbg_thunk"
+export let DebugReadThreadContextName = b"mrt_dbg_read_ctx"
+export let DebugWriteThreadContextName = b"mrt_dbg_write_ctx"
+export let DebugReadableName = b"mrt_dbg_readable"
 
 let DebugTrapThunkSlots = 6 as StackSize
+
+// CONTEXT_FLOATING_POINT because the frame carries the XMM registers: without it the vector slots
+// read bytes the OS never filled, and an edit to one is never applied.
+let DbgThreadContextFlags = Win64ContextControl or Win64ContextInteger or Win64ContextFloatingPoint
+
+let DbgMbiSlots = (Win64MbiBytes / DbgWordBytes) as StackSize
+let DbgMemCommit = 0x1000
+let DbgPageNoAccess = 0x01
+let DbgPageGuard = 0x100
+
+let DebugReadableArgSlots = 2 as StackSize
+let DebugReadableSlotAddr = 0 as StackSize
+let DebugReadableSlotLen = 1 as StackSize
 
 // EXCEPTION_POINTERS field offsets (the struct RCX points at).
 let ExcPtrsOffExceptionRecord = 0x00
@@ -119,10 +135,8 @@ let ExcPtrsOffContextRecord = 0x08
 // read would turn 0xC0000094 into a negative number that matches nothing.
 let ExcRecOffExceptionCode = 0x00
 
-// CONTEXT field offsets (x64). The three registers a backtrace needs.
-let ContextOffRsp = 0x098
+// CONTEXT's RBP, the third register a backtrace needs; RIP and RSP are `ProfileSampleContract`'s.
 let ContextOffRbp = 0x0A0
-let ContextOffRip = 0x0F8
 
 // --- Hex formatting: the x64 writer's own two constants ---
 //
@@ -708,8 +722,8 @@ end 'emitConsoleCellPtr'
 // written nothing reads back 0 rather than garbage.
 function emitWriteStreamRawWrite(asm X64RuntimeAsm, usesGt bool)
 	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOutWord), srcReg: X64Register.rax)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rsp, disp: asm.outgoingArgDisp(WriteFileOverlappedArgSlot), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOutWord), srcReg: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rsp, disp: asm.outgoingArgDisp(WriteFileOverlappedArgSlot), srcReg: X64Register.rax, wide: true)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotHandle), wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r11, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOffset), wide: true)
@@ -751,15 +765,15 @@ function buildWriteStreamChunk(usesGt bool, target Target) returns FunctionCodeC
 	let rawFallback = asm.newLabel()
 	let consoleDone = asm.newLabel()
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotSelector), srcReg: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotBytes), srcReg: X64Register.rdx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotLength), srcReg: X64Register.r8)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotSelector), srcReg: X64Register.rcx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotBytes), srcReg: X64Register.rdx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotLength), srcReg: X64Register.r8, wide: true)
 
 	// Nothing to write is answered before any OS call — which is also what keeps `cbMultiByte = 0`, the one
 	// value `MultiByteToWideChar` reports as FAILURE, out of reach. rax is the answer on every exit, so the
 	// zero it is tested against here is already the one this exit returns.
 	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOffset), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOffset), srcReg: X64Register.rax, wide: true)
 	emitCmpRegImm(asm, reg: X64Register.r8, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: done)
 
@@ -769,7 +783,7 @@ function buildWriteStreamChunk(usesGt bool, target Target) returns FunctionCodeC
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotSelector), wide: true)
 	emitGtGatedIatCall(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.GetStdHandle), usesGt: usesGt)
 	encodeImportAnswerWidth(asm.code, slot: IatSlot.GetStdHandle)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotHandle), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotHandle), srcReg: X64Register.rax, wide: true)
 
 	// Is this stream a console? Asked once per stream and cached; every later write reads the cell.
 	emitConsoleCellPtr(asm, dest: X64Register.r10)
@@ -853,15 +867,15 @@ function buildWriteStreamChunk(usesGt bool, target Target) returns FunctionCodeC
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: backOffLoop)
 
 	asm.placeLabel(sliceChosen)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotSlice), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotSlice), srcReg: X64Register.rax, wide: true)
 
 	// MultiByteToWideChar(CP_UTF8, 0, bytes + offset, slice, wide, K).
 	// ⛔ `cbMultiByte` is the EXPLICIT slice length and never -1: an embedded NUL is a byte committed specs
 	// push through this door, and -1 would stop at the first one.
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rbp, disp: wideDisp)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rsp, disp: asm.outgoingArgDisp(WidenBufferArgSlot), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rsp, disp: asm.outgoingArgDisp(WidenBufferArgSlot), srcReg: X64Register.rax, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ConsoleWideBufferUnits)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rsp, disp: asm.outgoingArgDisp(WidenBufferUnitsArgSlot), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rsp, disp: asm.outgoingArgDisp(WidenBufferUnitsArgSlot), srcReg: X64Register.rax, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: ConsoleCodePageUtf8)
 	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: ConsoleWidenNoFlags)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotBytes), wide: true)
@@ -873,9 +887,9 @@ function buildWriteStreamChunk(usesGt bool, target Target) returns FunctionCodeC
 
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: rawFallback)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotUnits), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotUnits), srcReg: X64Register.rax, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotDone), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotDone), srcReg: X64Register.rax, wide: true)
 
 	// WriteConsoleW accepts a PREFIX of the units it is offered, so the slice is offered again from where it
 	// stopped until every unit has landed.
@@ -891,8 +905,8 @@ function buildWriteStreamChunk(usesGt bool, target Target) returns FunctionCodeC
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rbp, disp: wideDisp)
 	encodeLeaRegBaseIndexScale(asm.code, dest: X64Register.rdx, base: X64Register.rdx, index: X64Register.r11, scale: MemoryIndexScale.byTwo)
 	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOutWord), srcReg: X64Register.rax)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rsp, disp: asm.outgoingArgDisp(WriteConsoleReservedArgSlot), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOutWord), srcReg: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rsp, disp: asm.outgoingArgDisp(WriteConsoleReservedArgSlot), srcReg: X64Register.rax, wide: true)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.r9, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOutWord))
 	emitGtGatedIatCall(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.WriteConsoleW), usesGt: usesGt)
 	encodeImportAnswerWidth(asm.code, slot: IatSlot.WriteConsoleW)
@@ -907,14 +921,14 @@ function buildWriteStreamChunk(usesGt bool, target Target) returns FunctionCodeC
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: rawFallback)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r11, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotDone), wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.r11, src: X64Register.rax, wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotDone), srcReg: X64Register.r11)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotDone), srcReg: X64Register.r11, wide: true)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: innerLoop)
 
 	asm.placeLabel(sliceWritten)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOffset), wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r11, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotSlice), wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.rax, src: X64Register.r11, wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOffset), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOffset), srcReg: X64Register.rax, wide: true)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: outerLoop)
 
 	// ⛔⛔ **A REFUSED CONVERSION OR A FAILED CONSOLE WRITE NEVER DROPS BYTES** — it writes the RAW remaining
@@ -990,9 +1004,9 @@ function buildWriteHexChunk() returns FunctionCodeChunk
 	// LOWEST of them — slots grow downward from rbp, so that is the LAST slot index.
 	let bufferDisp = asm.slotDisp(((SlotBuffer + bufferSlots - 1) as StackSize))
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotValue), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotValue), srcReg: X64Register.rcx, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), srcReg: X64Register.rax, wide: true)
 
 	asm.placeLabel(loop)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), wide: true)
@@ -1024,7 +1038,7 @@ function buildWriteHexChunk() returns FunctionCodeChunk
 	encodeStoreBaseDispReg8(asm.code, base: X64Register.r9, disp: 0, srcReg: X64Register.rdx)
 
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: 1)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), srcReg: X64Register.rax, wide: true)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: loop)
 
 	asm.placeLabel(loopDone)
@@ -1121,8 +1135,8 @@ function buildPrintFrameChunk() returns FunctionCodeChunk
 	let unknown = asm.newLabel()
 	let newline = asm.newLabel()
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTextOffset), srcReg: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTextOffset), srcReg: X64Register.rcx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), srcReg: X64Register.rdx, wide: true)
 
 	// The spliced bodies the offset lies inside come first, innermost out, so the trace reads as the calls
 	// would have printed it.
@@ -1178,9 +1192,9 @@ function buildPrintInlineFramesChunk() returns FunctionCodeChunk
 	let printSite = asm.newLabel()
 	let done = asm.newLabel()
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTextOffset), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTextOffset), srcReg: X64Register.rcx, wide: true)
 	encodeLeaRegFuncAddr(asm.code, callFixups: asm.callFixups, dest: X64Register.rax, targetName: InlineFrameTableName)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTables), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTables), srcReg: X64Register.rax, wide: true)
 
 	// r9 = the first range entry: tables + InlineTableOffSites + siteCount * 8.
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: InlineTableOffSiteCount, wide: false)
@@ -1195,7 +1209,7 @@ function buildPrintInlineFramesChunk() returns FunctionCodeChunk
 	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShl, reg: X64Register.rdx, count: InlineRangeStrideShiftFour)
 	encodeLeaRegBaseIndexScale(asm.code, dest: X64Register.r8, base: X64Register.r8, index: X64Register.rdx, scale: MemoryIndexScale.byOne)
 	encodeLeaRegBaseIndexScale(asm.code, dest: X64Register.r8, base: X64Register.r9, index: X64Register.r8, scale: MemoryIndexScale.byOne)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRangesEnd), srcReg: X64Register.r8)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRangesEnd), srcReg: X64Register.r8, wide: true)
 
 	// The scan makes no call, so the cursor stays in r9 and the offset in rdx.
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotTextOffset), wide: true)
@@ -1214,7 +1228,7 @@ function buildPrintInlineFramesChunk() returns FunctionCodeChunk
 
 	asm.placeLabel(found)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.r9, disp: InlineRangeOffSite, wide: false)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSite), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSite), srcReg: X64Register.rax, wide: true)
 
 	// One line per site: rcx = its entry, the parent replaces the site slot, then the name is printed.
 	asm.placeLabel(printSite)
@@ -1225,7 +1239,7 @@ function buildPrintInlineFramesChunk() returns FunctionCodeChunk
 	encodeLeaRegBaseIndexScale(asm.code, dest: X64Register.rcx, base: X64Register.rcx, index: X64Register.rax, scale: MemoryIndexScale.byOne)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rcx, base: X64Register.rcx, disp: InlineTableOffSites)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rcx, disp: InlineSiteOffParent, wide: false)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSite), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSite), srcReg: X64Register.rdx, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: InlineSiteOffName, wide: false)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotTables), wide: true)
 	encodeLeaRegBaseIndexScale(asm.code, dest: X64Register.rcx, base: X64Register.rcx, index: X64Register.rax, scale: MemoryIndexScale.byOne)
@@ -1276,14 +1290,14 @@ function buildWalkFramesChunk(usesGt bool, os Os) returns FunctionCodeChunk
 	let done = asm.newLabel()
 
 	// The budget first: `emitWalkStackBounds` clobbers r8.
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCounter), srcReg: X64Register.r8)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFrame), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCounter), srcReg: X64Register.r8, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFrame), srcReg: X64Register.rcx, wide: true)
 	emitWalkStackBounds(asm, usesGt: usesGt, os: os, lowSlot: SlotStackLow, ceilingSlot: SlotFrameCeiling)
 
 	emitLeaTextBase(asm, dest: X64Register.rax)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTextBase), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTextBase), srcReg: X64Register.rax, wide: true)
 	emitLeaSymtable(asm, dest: X64Register.rax)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), srcReg: X64Register.rax, wide: true)
 
 	// UNSIGNED compares: a frame pointer is an address, and a corrupt one with bit 63 set must read as far
 	// above the stack rather than below it. The low bound is never zero, so it also ends the chain at a
@@ -1311,7 +1325,7 @@ function buildWalkFramesChunk(usesGt bool, os Os) returns FunctionCodeChunk
 	emitCmpRegImm(asm, reg: X64Register.rdx, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: elided)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rdx, disp: -1)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCounter), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCounter), srcReg: X64Register.rdx, wide: true)
 
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: X64Register.rax, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), wide: true)
@@ -1322,7 +1336,7 @@ function buildWalkFramesChunk(usesGt bool, os Os) returns FunctionCodeChunk
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: FrameOffSavedFramePointer, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rdx, src: X64Register.rax, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.belowEqual, targetBlockId: done)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFrame), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFrame), srcReg: X64Register.rdx, wide: true)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: loop)
 
 	asm.placeLabel(elided)
@@ -1344,9 +1358,9 @@ end 'buildWalkFramesChunk'
 // only what the running thread keeps alive. A `stack_low` on neither — or a thread that is no M, or an M
 // between threads — gets the `StackWindowBytes` window.
 function emitWalkStackBounds(asm X64RuntimeAsm, usesGt bool, os Os, lowSlot StackSize, ceilingSlot StackSize)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(lowSlot), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(lowSlot), srcReg: X64Register.rdx, wide: true)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rdx, disp: StackWindowBytes - FrameRecordBytes)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(ceilingSlot), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(ceilingSlot), srcReg: X64Register.rax, wide: true)
 
 	let windowed = asm.newLabel()
 
@@ -1366,7 +1380,7 @@ function emitWalkStackBounds(asm X64RuntimeAsm, usesGt bool, os Os, lowSlot Stac
 	end 'windowOnly'
 
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.r8, base: X64Register.r8, disp: -FrameRecordBytes)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(ceilingSlot), srcReg: X64Register.r8)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(ceilingSlot), srcReg: X64Register.r8, wide: true)
 
 	asm.placeLabel(windowed)
 end 'emitWalkStackBounds'
@@ -1396,17 +1410,17 @@ function buildFaultBacktraceChunk() returns FunctionCodeChunk
 
 	let walk = asm.newLabel()
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRip), srcReg: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRbp), srcReg: X64Register.rdx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRsp), srcReg: X64Register.r8)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRip), srcReg: X64Register.rcx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRbp), srcReg: X64Register.rdx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRsp), srcReg: X64Register.r8, wide: true)
 	emitStoreFrameBudget(asm, slot: SlotFrameBudget, frames: MaxBacktraceFrames)
 
 	emitPrintString(asm, bytes: BacktraceHeader)
 
 	emitLeaTextBase(asm, dest: X64Register.rax)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTextBase), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTextBase), srcReg: X64Register.rax, wide: true)
 	emitLeaSymtable(asm, dest: X64Register.rax)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), srcReg: X64Register.rax, wide: true)
 
 	// Frame 0. A fault whose RIP is in a system DLL has no local symbol, so the bounds guard
 	// skips it and the trace starts at the RBP chain instead.
@@ -1431,7 +1445,7 @@ end 'buildFaultBacktraceChunk'
 
 function emitStoreFrameBudget(asm X64RuntimeAsm, slot StackSize, frames MachineWord)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: frames)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(slot), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(slot), srcReg: X64Register.rax, wide: true)
 end 'emitStoreFrameBudget'
 
 // ==========================================================================
@@ -1460,7 +1474,7 @@ end 'emitFaultCodeArm'
 // arm on both OSes.
 function emitClassifiedFault(asm X64RuntimeAsm, kind HardwareFaultKind, scratch X64Register, prefixSlot StackSize, classified BlockId)
 	emitLeaString(asm, dest: scratch, bytes: faultPanicLinePrefix(kind))
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(prefixSlot), srcReg: scratch)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(prefixSlot), srcReg: scratch, wide: true)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: classified)
 end 'emitClassifiedFault'
 
@@ -1485,7 +1499,7 @@ function buildFaultThunkChunk(usesGt bool, target Target) returns FunctionCodeCh
 	let continueSearch = asm.newLabel()
 	let classified = asm.newLabel()
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotExcPtrs), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotExcPtrs), srcReg: X64Register.rcx, wide: true)
 
 	// code = *(u32*)(p->ExceptionRecord), then one arm per code we convert. An arm that matches
 	// leaves its panic prefix in `SlotPanicPrefix` and jumps to `classified`; falling out of the last
@@ -1506,12 +1520,12 @@ function buildFaultThunkChunk(usesGt bool, target Target) returns FunctionCodeCh
 	// exactly as it stands.
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotExcPtrs), wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: ExcPtrsOffContextRecord, wide: true)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: ContextOffRip, wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRip), srcReg: X64Register.rdx)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: Win64ContextRipOffset as Imm32, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRip), srcReg: X64Register.rdx, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: ContextOffRbp, wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRbp), srcReg: X64Register.rdx)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: ContextOffRsp, wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRsp), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRbp), srcReg: X64Register.rdx, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: Win64ContextRspOffset as Imm32, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRsp), srcReg: X64Register.rdx, wide: true)
 
 	// The panic line opens with whichever prefix the classification chose; the rest of the diagnostic
 	// is the OS-neutral one. The harness strips the addresses, an operator reads them.
@@ -1555,7 +1569,7 @@ function buildRuntimeInitChunk() returns FunctionCodeChunk
 	var asm = X64RuntimeAsm.beginFunction(1)
 
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: SignalStackBytes)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotGuaranteeBytes), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotGuaranteeBytes), srcReg: X64Register.rax, wide: true)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotGuaranteeBytes))
 	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.SetThreadStackGuarantee))
 
@@ -1755,11 +1769,11 @@ function buildLinuxFaultHandlerChunk() returns FunctionCodeChunk
 
 	// Stash the faulting RIP/RBP/RSP from the ucontext (rdx) BEFORE any call clobbers rdx.
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdx, disp: X64LinuxUContextRipOffset, wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRip), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRip), srcReg: X64Register.rax, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdx, disp: X64LinuxUContextRbpOffset, wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRbp), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRbp), srcReg: X64Register.rax, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rdx, disp: X64LinuxUContextRspOffset, wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRsp), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRsp), srcReg: X64Register.rdx, wide: true)
 
 	emitCmpRegImm(asm, reg: X64Register.rdi, imm: LinuxSignalFpe)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: memoryFault)
@@ -1810,11 +1824,11 @@ function buildLinuxSignalStackInstallChunk() returns FunctionCodeChunk
 
 	// `stack_t` in the slots, ascending from the lowest — so its address is the deepest slot's.
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(LinuxStackTSlots - 1))
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rdi, disp: LinuxStackTOffSp, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rdi, disp: LinuxStackTOffSp, srcReg: X64Register.rax, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rdi, disp: LinuxStackTOffFlags, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rdi, disp: LinuxStackTOffFlags, srcReg: X64Register.rax, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: SignalStackBytes)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rdi, disp: LinuxStackTOffSize, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rdi, disp: LinuxStackTOffSize, srcReg: X64Register.rax, wide: true)
 
 	// sigaltstack(&ss, NULL)
 	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rsi, src: X64Register.rsi, wide: true)
@@ -1845,18 +1859,18 @@ function buildLinuxRuntimeInitChunk(usesGt bool, target Target) returns Function
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: SignalStackInstallName)
 
 	encodeLeaRegFuncAddr(asm.code, callFixups: asm.callFixups, dest: X64Register.rax, targetName: FaultHandlerName)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotHandler), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotHandler), srcReg: X64Register.rax, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: X64LinuxSigactionFlags)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFlags), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFlags), srcReg: X64Register.rax, wide: true)
 
 	// sa_restorer = &mrt_rt_sigreturn — MANDATORY on x86-64: the kernel builds the signal return frame from
 	// it, and a missing/NULL restorer is a KERNEL SIGSEGV during delivery (measured), before the handler.
 	encodeLeaRegFuncAddr(asm.code, callFixups: asm.callFixups, dest: X64Register.rax, targetName: LinuxSigreturnName)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRestorer), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRestorer), srcReg: X64Register.rax, wide: true)
 
 	// sa_mask = 0 (block nothing additional during the handler).
 	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotMask), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotMask), srcReg: X64Register.rax, wide: true)
 
 	emitLinuxSigactionCall(asm, signal: LinuxSignalFpe, handlerSlot: SlotHandler)
 	emitLinuxSigactionCall(asm, signal: LinuxSignalSegv, handlerSlot: SlotHandler)
@@ -1864,7 +1878,7 @@ function buildLinuxRuntimeInitChunk(usesGt bool, target Target) returns Function
 
 	if programInstallsPreemptSignal(target, usesGt: usesGt) 'itCanStopAThread'
 		encodeLeaRegFuncAddr(asm.code, callFixups: asm.callFixups, dest: X64Register.rax, targetName: PreemptHandlerName)
-		encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotHandler), srcReg: X64Register.rax)
+		encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotHandler), srcReg: X64Register.rax, wide: true)
 		emitLinuxSigactionCall(asm, signal: LinuxSignalUrg, handlerSlot: SlotHandler)
 	end 'itCanStopAThread'
 
@@ -1942,9 +1956,9 @@ function buildGtStackOverflowChunk(exitRoute X64OsCallKind, target Target) retur
 	let SlotSp = 2
 	var asm = X64RuntimeAsm.beginFunction(3)
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotPc), srcReg: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFp), srcReg: X64Register.rdx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSp), srcReg: X64Register.r8)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotPc), srcReg: X64Register.rcx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFp), srcReg: X64Register.rdx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSp), srcReg: X64Register.r8, wide: true)
 
 	emitPrintString(asm, bytes: faultPanicLinePrefix(HardwareFaultKind.stackOverflow))
 	emitFaultAddressesAndBacktrace(asm, ripSlot: SlotPc, rbpSlot: SlotFp, rspSlot: SlotSp)
@@ -1970,7 +1984,114 @@ end 'appendX64WindowsRuntimeChunks'
 
 export function appendX64DebugAgentChunks(chunks FunctionCodeChunkArray)
 	chunks.push(buildDebugTrapThunkChunk())
+	chunks.push(buildDebugThreadContextChunk(DebugReadThreadContextName, toFrame: true))
+	chunks.push(buildDebugThreadContextChunk(DebugWriteThreadContextName, toFrame: false))
+	chunks.push(buildDebugReadableChunk())
 end 'appendX64DebugAgentChunks'
+
+let DebugThreadContextSlots = 3 as StackSize
+let DebugThreadContextSlotHandle = 0 as StackSize
+let DebugThreadContextSlotFrame = 1 as StackSize
+let DebugThreadContextSlotScratch = 2 as StackSize
+
+function emitLoadDebugPrivate(asm X64RuntimeAsm, dest X64Register)
+	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: dest, label: DbgCtlLabel)
+	encodeLoadRegBaseDisp(asm.code, destReg: dest, base: dest, disp: 0, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: dest, base: dest, disp: DbgOffAgentPrivate as Imm32, wide: true)
+end 'emitLoadDebugPrivate'
+
+function emitDebugThreadContextCall(asm X64RuntimeAsm, slot IatSlot)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(DebugThreadContextSlotHandle), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(DebugThreadContextSlotScratch), wide: true)
+	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(slot))
+	encodeImportAnswerWidth(asm.code, slot: slot)
+end 'emitDebugThreadContextCall'
+
+// The write direction reads the thread's CONTEXT first and overlays the frame on it, so what the
+// frame does not carry — the XMM registers' upper halves, `MxCsr`, the segment selectors — goes
+// back unchanged.
+function buildDebugThreadContextChunk(name ByteArray, toFrame bool) returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(DebugThreadContextSlots)
+	let fail = asm.newLabel()
+	let done = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(DebugThreadContextSlotHandle), srcReg: X64Register.rcx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(DebugThreadContextSlotFrame), srcReg: X64Register.rdx, wide: true)
+
+	emitLoadDebugPrivate(asm, dest: X64Register.r10)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.r10, imm: DbgPrivOffContext as Imm32)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(DebugThreadContextSlotScratch), srcReg: X64Register.r10, wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: DbgThreadContextFlags)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: Win64ContextFlagsOffset as Imm32, srcReg: X64Register.rax, wide: false)
+
+	emitDebugThreadContextCall(asm, slot: IatSlot.GetThreadContext)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtCmp, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: fail)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(DebugThreadContextSlotScratch), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rbp, disp: asm.slotDisp(DebugThreadContextSlotFrame), wide: true)
+	emitDebugFrameTranslate(asm, ctx: X64Register.rcx, frame: X64Register.r10, counter: X64Register.rax, ctxCur: X64Register.r9, scratch: X64Register.r11, toFrame: toFrame)
+
+	if toFrame 'readIntoTheFrame'
+		encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 1)
+	end 'readIntoTheFrame' else 'writeBackToTheThread'
+		emitDebugThreadContextCall(asm, slot: IatSlot.SetThreadContext)
+	end 'writeBackToTheThread'
+
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: done)
+
+	asm.placeLabel(fail)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+
+	asm.placeLabel(done)
+	return asm.finishFunction(name)
+end 'buildDebugThreadContextChunk'
+
+function buildDebugReadableChunk() returns FunctionCodeChunk
+	let mbiSlot = DebugReadableArgSlots + DbgMbiSlots - 1
+	var asm = X64RuntimeAsm.beginFunction(DebugReadableArgSlots + DbgMbiSlots)
+	let notReadable = asm.newLabel()
+	let done = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(DebugReadableSlotAddr), srcReg: X64Register.rcx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(DebugReadableSlotLen), srcReg: X64Register.rdx, wide: true)
+
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(mbiSlot))
+	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: Win64MbiBytes as MachineWord)
+	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.VirtualQuery))
+	encodeImportAnswerWidth(asm.code, slot: IatSlot.VirtualQuery)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtCmp, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: notReadable)
+
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.r10, base: X64Register.rbp, disp: asm.slotDisp(mbiSlot))
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.r10, disp: Win64MbiStateOffset as Imm32, wide: false)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtCmp, reg: X64Register.rax, imm: DbgMemCommit as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: notReadable)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.r10, disp: Win64MbiProtectOffset as Imm32, wide: false)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAnd, reg: X64Register.rax, imm: (DbgPageNoAccess or DbgPageGuard) as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: notReadable)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.r10, disp: Win64MbiBaseAddressOffset as Imm32, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r11, base: X64Register.r10, disp: Win64MbiRegionSizeOffset as Imm32, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.rdx, src: X64Register.r11, wide: true)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(DebugReadableSlotAddr), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r11, base: X64Register.rbp, disp: asm.slotDisp(DebugReadableSlotLen), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.rcx, src: X64Register.r11, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rcx, src: X64Register.rdx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.above, targetBlockId: notReadable)
+
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: done)
+
+	asm.placeLabel(notReadable)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+
+	asm.placeLabel(done)
+	return asm.finishFunction(DebugReadableName)
+end 'buildDebugReadableChunk'
 
 export function x64DebugTrapPreSwitchStackBytes() returns StackSize
 	return X64RuntimeAsm.beginFunction(DebugTrapThunkSlots).stackBytesPerCall()
@@ -1982,10 +2103,81 @@ function emitDebugTrapCodeArm(asm X64RuntimeAsm, codeReg X64Register, scratch X6
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: ours)
 end 'emitDebugTrapCodeArm'
 
+let DbgFramePcByteOffset = DbgRegPc * DbgWordBytes
+let DbgFrameFlagsByteOffset = DbgRegFlags * DbgWordBytes
+let DbgFrameVecByteBase = DbgGprCount * DbgWordBytes
+
+function emitDebugFrameGprLoop(asm X64RuntimeAsm, ctx X64Register, frame X64Register, counter X64Register, scratch X64Register, toFrame bool)
+	let loop = asm.newLabel()
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: counter, src: counter, wide: true)
+	asm.placeLabel(loop)
+
+	if toFrame 'contextIntoFrame'
+		encodeLoadRegBaseDisp(asm.code, destReg: scratch, base: ctx, disp: DbgCtxOffGpr0 as Imm32, wide: true, index: counter, indexScale: MemoryIndexScale.byEight)
+		encodeStoreBaseDispReg(asm.code, base: frame, disp: 0, srcReg: scratch, wide: true, index: counter, indexScale: MemoryIndexScale.byEight)
+	end 'contextIntoFrame' else 'frameIntoContext'
+		encodeLoadRegBaseDisp(asm.code, destReg: scratch, base: frame, disp: 0, wide: true, index: counter, indexScale: MemoryIndexScale.byEight)
+		encodeStoreBaseDispReg(asm.code, base: ctx, disp: DbgCtxOffGpr0 as Imm32, srcReg: scratch, wide: true, index: counter, indexScale: MemoryIndexScale.byEight)
+	end 'frameIntoContext'
+
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: counter, imm: 1)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtCmp, reg: counter, imm: DbgGprCount as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: loop)
+end 'emitDebugFrameGprLoop'
+
+function emitDebugFrameVecLoop(asm X64RuntimeAsm, ctx X64Register, frame X64Register, counter X64Register, ctxCur X64Register, scratch X64Register, toFrame bool)
+	let loop = asm.newLabel()
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: counter, src: counter, wide: true)
+	encodeMovRegImm32(asm.code, dest: ctxCur, value: DbgCtxOffXmm0 as MachineWord)
+	asm.placeLabel(loop)
+
+	if toFrame 'contextIntoFrame'
+		encodeLoadRegBaseDisp(asm.code, destReg: scratch, base: ctx, disp: 0, wide: true, index: ctxCur, indexScale: MemoryIndexScale.byOne)
+		encodeStoreBaseDispReg(asm.code, base: frame, disp: DbgFrameVecByteBase as Imm32, srcReg: scratch, wide: true, index: counter, indexScale: MemoryIndexScale.byEight)
+	end 'contextIntoFrame' else 'frameIntoContext'
+		encodeLoadRegBaseDisp(asm.code, destReg: scratch, base: frame, disp: DbgFrameVecByteBase as Imm32, wide: true, index: counter, indexScale: MemoryIndexScale.byEight)
+		encodeStoreBaseDispReg(asm.code, base: ctx, disp: 0, srcReg: scratch, wide: true, index: ctxCur, indexScale: MemoryIndexScale.byOne)
+	end 'frameIntoContext'
+
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: ctxCur, imm: DbgCtxXmmStride as Imm32)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: counter, imm: 1)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtCmp, reg: counter, imm: DbgXmmCount as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: loop)
+end 'emitDebugFrameVecLoop'
+
+function emitDebugFrameTranslate(asm X64RuntimeAsm, ctx X64Register, frame X64Register, counter X64Register, ctxCur X64Register, scratch X64Register, toFrame bool)
+	emitDebugFrameGprLoop(asm, ctx: ctx, frame: frame, counter: counter, scratch: scratch, toFrame: toFrame)
+	emitDebugFrameVecLoop(asm, ctx: ctx, frame: frame, counter: counter, ctxCur: ctxCur, scratch: scratch, toFrame: toFrame)
+
+	if toFrame 'contextIntoFrame'
+		encodeLoadRegBaseDisp(asm.code, destReg: scratch, base: ctx, disp: Win64ContextRipOffset as Imm32, wide: true)
+		encodeStoreBaseDispReg(asm.code, base: frame, disp: DbgFramePcByteOffset as Imm32, srcReg: scratch, wide: true)
+		encodeLoadRegBaseDisp(asm.code, destReg: scratch, base: ctx, disp: DbgCtxOffEFlags as Imm32, wide: false)
+		encodeStoreBaseDispReg(asm.code, base: frame, disp: DbgFrameFlagsByteOffset as Imm32, srcReg: scratch, wide: true)
+	end 'contextIntoFrame' else 'frameIntoContext'
+		encodeLoadRegBaseDisp(asm.code, destReg: scratch, base: frame, disp: DbgFramePcByteOffset as Imm32, wide: true)
+		encodeStoreBaseDispReg(asm.code, base: ctx, disp: Win64ContextRipOffset as Imm32, srcReg: scratch, wide: true)
+		encodeLoadRegBaseDisp(asm.code, destReg: scratch, base: frame, disp: DbgFrameFlagsByteOffset as Imm32, wide: true)
+		encodeStoreBaseDispReg(asm.code, base: ctx, disp: DbgCtxOffEFlags as Imm32, srcReg: scratch, wide: false)
+	end 'frameIntoContext'
+end 'emitDebugFrameTranslate'
+
+function emitDebugTrapFrameTranslate(asm X64RuntimeAsm, excPtrsSlot StackSize, privateSlot StackSize, toFrame bool)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(excPtrsSlot), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rcx, disp: ExcPtrsOffContextRecord, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rbp, disp: asm.slotDisp(privateSlot), wide: true)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.r10, imm: DbgPrivOffFrame as Imm32)
+	emitDebugFrameTranslate(asm, ctx: X64Register.rcx, frame: X64Register.r10, counter: X64Register.rax, ctxCur: X64Register.r9, scratch: X64Register.r11, toFrame: toFrame)
+end 'emitDebugTrapFrameTranslate'
+
 // The vectored handler Windows calls on a trap, and the one place rsi and rdi are saved by hand: Maxon's
 // own convention treats them as volatile (`X64PrologueEpilogue.calleeSavedOrder` is rbx and r12–r15) while
 // Win64 requires a handler to preserve them. Nothing checks it: the interrupted code simply resumes with
 // two registers it never wrote.
+//
+// The agent never sees the CONTEXT: the thunk copies it into the register-slot frame at
+// `DbgPrivOffFrame` before `__dbg_on_trap` and back after, so a register the agent rewrites takes
+// effect only through that second copy.
 //
 // Everything the thunk runs off the agent's stack, its own frame and the claim and release call
 // trees, lands in the interrupted green thread's OS reserve; `requireDebugTrapFitsItsReserve`
@@ -2003,9 +2195,9 @@ function buildDebugTrapThunkChunk() returns FunctionCodeChunk
 	let ours = asm.newLabel()
 	let done = asm.newLabel()
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotExcPtrs), srcReg: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSavedRsi), srcReg: X64Register.rsi)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSavedRdi), srcReg: X64Register.rdi)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotExcPtrs), srcReg: X64Register.rcx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSavedRsi), srcReg: X64Register.rsi, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSavedRdi), srcReg: X64Register.rdi, wide: true)
 
 	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.rax, label: DbgCtlLabel)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rax, disp: 0, wide: true)
@@ -2015,11 +2207,11 @@ function buildDebugTrapThunkChunk() returns FunctionCodeChunk
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rax, disp: DbgOffAgentPrivate as Imm32, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.r10, src: X64Register.r10, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: continueSearch)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotPrivate), srcReg: X64Register.r10)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotPrivate), srcReg: X64Register.r10, wide: true)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: ExcPtrsOffExceptionRecord, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rax, disp: ExcRecOffExceptionCode, wide: false)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotExcCode), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotExcCode), srcReg: X64Register.rax, wide: true)
 	emitDebugTrapCodeArm(asm, codeReg: X64Register.rax, scratch: X64Register.rdx, excCode: DbgExcCodeBreakpoint, ours: ours)
 	emitDebugTrapCodeArm(asm, codeReg: X64Register.rax, scratch: X64Register.rdx, excCode: DbgExcCodeSingleStep, ours: ours)
 
@@ -2035,17 +2227,21 @@ function buildDebugTrapThunkChunk() returns FunctionCodeChunk
 	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.r8, src: X64Register.r8, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: continueSearch)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rbp, disp: asm.slotDisp(SlotPrivate), wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: DbgPrivOffSavedRsp as Imm32, srcReg: X64Register.rsp)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: DbgPrivOffSavedRsp as Imm32, srcReg: X64Register.rsp, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsp, src: X64Register.r8, wide: true)
 
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotExcPtrs), wide: true)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rcx, disp: ExcPtrsOffContextRecord, wide: true)
+	emitDebugTrapFrameTranslate(asm, excPtrsSlot: SlotExcPtrs, privateSlot: SlotPrivate, toFrame: true)
+
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: X64Register.r10, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotExcCode), wide: true)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: DbgOnTrapName)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rbp, disp: asm.slotDisp(SlotPrivate), wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsp, base: X64Register.r10, disp: DbgPrivOffSavedRsp as Imm32, wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotDisposition), srcReg: X64Register.r8)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotDisposition), srcReg: X64Register.r8, wide: true)
+
+	emitDebugTrapFrameTranslate(asm, excPtrsSlot: SlotExcPtrs, privateSlot: SlotPrivate, toFrame: false)
+
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: DebugReleaseStackName)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotDisposition), wide: true)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: done)

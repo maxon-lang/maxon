@@ -72,7 +72,21 @@ export function checkDebugAgentGeometry(signatures ProgramSignatures, tierPath F
 	requireRegionBefore(DbgPrivOffHoldsPlaced, bytes: DbgWordBytes, what: "the placed-hold count", before: DbgPrivOffBreakpoints, beforeWhat: "the breakpoint table")
 	requireRegionBefore(DbgBpOffCondition + DbgCondRecOffLiteral, bytes: DbgWordBytes, what: "a breakpoint's condition literal", before: DbgPrivBreakpointStride, beforeWhat: "the end of the entry it lives in")
 	requireRegionBefore(DbgPrivOffBreakpoints, bytes: DbgBreakpointCapacity * DbgPrivBreakpointStride, what: "{DbgBreakpointCapacity} breakpoint entries", before: DbgPrivOffGtRoster, beforeWhat: "the green-thread roster")
-	requireRegionBefore(DbgPrivOffGtRoster, bytes: DbgGtRosterCapacity * DbgWordBytes, what: "a {DbgGtRosterCapacity}-entry roster", before: DbgPrivStackBase, beforeWhat: "the agent stack")
+	requireRegionBefore(DbgPrivOffGtRoster, bytes: DbgGtRosterCapacity * DbgWordBytes, what: "a {DbgGtRosterCapacity}-entry roster", before: DbgPrivOffFrame, beforeWhat: "the register-slot trap frame")
+	requireRegionBefore(DbgPrivOffFrame, bytes: DbgRegisterSlots * DbgWordBytes, what: "the {DbgRegisterSlots}-slot trap frame", before: DbgPrivOffThreadFrame, beforeWhat: "the other-thread frame")
+	requireRegionBefore(DbgPrivOffThreadFrame, bytes: DbgRegisterSlots * DbgWordBytes, what: "the {DbgRegisterSlots}-slot other-thread frame", before: DbgPrivStackBase, beforeWhat: "the agent stack")
+
+	if DbgGprCount + DbgXmmCount > DbgRegFlags 'theVectorsRunIntoTheFlags'
+		panic("debug agent: {DbgGprCount} general and {DbgXmmCount} vector slots run past the flags slot {DbgRegFlags}")
+	end 'theVectorsRunIntoTheFlags'
+
+	if DbgRegPc >= DbgRegisterSlots 'thePcIsOutsideTheFrame'
+		panic("debug agent: the program counter's slot {DbgRegPc} is outside a {DbgRegisterSlots}-slot frame")
+	end 'thePcIsOutsideTheFrame'
+
+	if DbgPrivOffContext mod Win64ContextAlignment != 0 'theContextIsMisaligned'
+		panic("debug agent: the CONTEXT buffer at {DbgPrivOffContext} is not {Win64ContextAlignment}-byte aligned, which GetThreadContext and SetThreadContext require")
+	end 'theContextIsMisaligned'
 
 	if DbgPrivStackBase >= DbgPrivBytes - DbgAgentShadowBytes 'noStackLeft'
 		panic("debug agent: the agent stack's floor at {DbgPrivStackBase} leaves no room below the top of a {DbgPrivBytes}-byte private block")
@@ -136,8 +150,6 @@ function requireRegionBefore(start ParsedInt, bytes ParsedInt, what String, befo
 		panic("debug agent: {what} at {start} runs past {beforeWhat} at {before}")
 	end 'runsPastIt'
 end 'requireRegionBefore'
-
-let DbgWordBytes = 8
 
 let DbgEnvNameWords = 2
 
@@ -324,17 +336,15 @@ function debugAgentTierPins() returns TierGeometryPinArray
 	out.push(TierGeometryPin.create("the breakpoint exception code", here: DbgExcCodeBreakpoint, named: "DbgExcCodeBreakpoint"))
 	out.push(TierGeometryPin.create("the single-step exception code", here: DbgExcCodeSingleStep, named: "DbgExcCodeSingleStep"))
 
-	out.push(TierGeometryPin.create("the CONTEXT's first general register", here: DbgCtxOffGpr0, named: "DbgCtxOffGpr0"))
-	out.push(TierGeometryPin.create("the CONTEXT's first XMM register", here: DbgCtxOffXmm0, named: "DbgCtxOffXmm0"))
-	out.push(TierGeometryPin.create("the CONTEXT's XMM stride", here: DbgCtxXmmStride, named: "DbgCtxXmmStride"))
-	out.push(TierGeometryPin.create("the CONTEXT's instruction pointer", here: DbgCtxOffRip, named: "DbgCtxOffRip"))
-	out.push(TierGeometryPin.create("the CONTEXT's low flags byte", here: DbgCtxOffEFlagsLowByte, named: "DbgCtxOffEFlagsLowByte"))
-	out.push(TierGeometryPin.create("the CONTEXT's high flags byte", here: DbgCtxOffEFlagsHighByte, named: "DbgCtxOffEFlagsHighByte"))
+	out.push(TierGeometryPin.create("a machine word's bytes", here: DbgWordBytes, named: "DbgWordBytes"))
+	out.push(TierGeometryPin.create("the stack pointer's register slot", here: DbgRegSp, named: "DbgRegSp"))
+	out.push(TierGeometryPin.create("the frame pointer's register slot", here: DbgRegFp, named: "DbgRegFp"))
+	out.push(TierGeometryPin.create("the flags' register slot", here: DbgRegFlags, named: "DbgRegFlags"))
+	out.push(TierGeometryPin.create("the program counter's register slot", here: DbgRegPc, named: "DbgRegPc"))
 	out.push(TierGeometryPin.create("the general register count", here: DbgGprCount, named: "DbgGprCount"))
-	out.push(TierGeometryPin.create("the XMM register count", here: DbgXmmCount, named: "DbgXmmCount"))
-	out.push(TierGeometryPin.create("the stack pointer's register number", here: DbgRegRsp, named: "DbgRegRsp"))
-	out.push(TierGeometryPin.create("the frame pointer's register number", here: DbgRegRbp, named: "DbgRegRbp"))
-	out.push(TierGeometryPin.create("the flags' register slot", here: DbgRegEFlags, named: "DbgRegEFlags"))
+
+	out.push(TierGeometryPin.create("the trap flag's bit in the flags word", here: DbgFlagTrapBit, named: "DbgFlagTrapBit"))
+	out.push(TierGeometryPin.create("the other-thread frame's private offset", here: DbgPrivOffThreadFrame, named: "DbgPrivOffThreadFrame"))
 
 	out.push(TierGeometryPin.create("the breakpoint byte", here: DbgBreakpointByte, named: "DbgBreakpointByte"))
 	out.push(TierGeometryPin.create("the indirect-push opcode", here: DbgPushIndirectOpcode, named: "DbgPushIndirectOpcode"))
@@ -366,20 +376,10 @@ function debugAgentTierPins() returns TierGeometryPinArray
 	out.push(TierGeometryPin.create("a return's release immediate's bytes", here: DbgReleaseImmediateBytes, named: "DbgReleaseImmediateBytes"))
 	out.push(TierGeometryPin.create("the execute/read-write protection", here: DbgPageExecuteReadWrite, named: "DbgPageExecuteReadWrite"))
 	out.push(TierGeometryPin.create("the execute/read protection", here: DbgPageExecuteRead, named: "DbgPageExecuteRead"))
-	out.push(TierGeometryPin.create("the trap flag's bit in the high flags byte", here: DbgTrapFlagByteBit, named: "DbgTrapFlagByteBit"))
-
 	out.push(TierGeometryPin.create("the continue resume action", here: DbgResumeContinue, named: "DbgResumeContinue"))
 	out.push(TierGeometryPin.create("the step resume action", here: DbgResumeStep, named: "DbgResumeStep"))
 
-	out.push(TierGeometryPin.create("a region query's bytes", here: DbgMbiBytes, named: "DbgMbiBytes"))
-	out.push(TierGeometryPin.create("a region query's base address", here: DbgMbiOffBaseAddress, named: "DbgMbiOffBaseAddress"))
-	out.push(TierGeometryPin.create("a region query's size", here: DbgMbiOffRegionSize, named: "DbgMbiOffRegionSize"))
-	out.push(TierGeometryPin.create("a region query's state and protection", here: DbgMbiOffStateAndProtect, named: "DbgMbiOffStateAndProtect"))
-	out.push(TierGeometryPin.create("the committed-region state", here: DbgMemCommit, named: "DbgMemCommit"))
-	out.push(TierGeometryPin.create("the no-access protection", here: DbgPageNoAccess, named: "DbgPageNoAccess"))
-	out.push(TierGeometryPin.create("the guard-page protection", here: DbgPageGuard, named: "DbgPageGuard"))
 	out.push(TierGeometryPin.create("a double word's mask", here: DwordMask, named: "DbgDwordMask"))
-	out.push(TierGeometryPin.create("a double word's bits", here: DbgDwordBits, named: "DbgDwordBits"))
 	out.push(TierGeometryPin.create("the segment name buffer's bytes", here: DbgSegmentNameBytes, named: "DbgSegmentNameBytes"))
 	out.push(TierGeometryPin.create("the env name buffer's bytes", here: DbgEnvNameBufferBytes, named: "DbgEnvNameBufferBytes"))
 	out.push(TierGeometryPin.create("the env name's first word", here: debugEnvNameWord(0), named: "DbgEnvNameWord0"))
@@ -468,7 +468,6 @@ function debugAgentTierPins() returns TierGeometryPinArray
 	out.push(TierGeometryPin.create("the pause attempt count's private offset", here: DbgPrivOffPauseAttempts, named: "DbgPrivOffPauseAttempts"))
 	out.push(TierGeometryPin.create("the scheduler-lock-held flag's private offset", here: DbgPrivOffSchedLockHeld, named: "DbgPrivOffSchedLockHeld"))
 	out.push(TierGeometryPin.create("the hold table's private offset", here: DbgPrivOffHold, named: "DbgPrivOffHold"))
-	out.push(TierGeometryPin.create("the context buffer's private offset", here: DbgPrivOffContext, named: "DbgPrivOffContext"))
 	out.push(TierGeometryPin.create("the stop lock owner's private offset", here: DbgPrivOffStopLockOwner, named: "DbgPrivOffStopLockOwner"))
 	out.push(TierGeometryPin.create("the return point hold's private offset", here: DbgPrivOffReturnHold, named: "DbgPrivOffReturnHold"))
 	out.push(TierGeometryPin.create("no return point held", here: DbgNoReturnHold, named: "DbgNoReturnHold"))
@@ -482,10 +481,6 @@ function debugAgentTierPins() returns TierGeometryPinArray
 	out.push(TierGeometryPin.create("a hold's stack-base witness", here: DbgHoldOffStackBase, named: "DbgHoldOffStackBase"))
 	out.push(TierGeometryPin.create("the green-thread roster's capacity", here: DbgGtRosterCapacity, named: "DbgGtRosterCapacity"))
 	out.push(TierGeometryPin.create("a breakpoint's condition field", here: DbgBpOffCondition, named: "DbgBpOffCondition"))
-
-	out.push(TierGeometryPin.create("the CONTEXT's stack pointer", here: DbgCtxOffRsp, named: "DbgCtxOffRsp"))
-	out.push(TierGeometryPin.create("the CONTEXT's request field", here: DbgCtxOffFlagsRequest, named: "DbgCtxOffFlagsRequest"))
-	out.push(TierGeometryPin.create("the CONTEXT's control request", here: DbgCtxControlRequest, named: "DbgCtxControlRequest"))
 
 	out.push(TierGeometryPin.create("the pause trampoline's bytes", here: DbgPauseTrampolineBytes, named: "DbgPauseTrampolineBytes"))
 	out.push(TierGeometryPin.create("a failed suspend", here: DbgSuspendFailed, named: "DbgSuspendFailed"))

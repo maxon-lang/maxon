@@ -1,7 +1,10 @@
 // The in-process half of the debugger: it plants bytes, parks machines and answers the control segment,
 // and decides nothing about what any of that MEANS — source lines, names and values are the driver's.
-// `Compiler/Debug/DebugControlLayout.maxon` owns the segment's geometry, which this file restates and
-// `checkDebugAgentGeometry` pins.
+// `Compiler/Debug/DebugControlLayout.maxon` owns the segment's geometry; this file restates the
+// figures it reads, and `checkDebugAgentGeometry` pins them.
+//
+// It reads and writes a thread's registers only as a register-slot frame, numbered as the driver
+// numbers them; translating to and from the Windows CONTEXT is the emitter's (`X64Runtime`).
 //
 // It is tier source: a constant function of `RuntimeUsage`, holding no managed value, and exempt from the
 // stack guard because it runs inside a trap handler on a stack of its own.
@@ -226,7 +229,7 @@ let DbgPrivOffRosterTruncated = 0x068
 let DbgPrivOffPauseAttempts = 0x070
 let DbgPrivOffSchedLockHeld = 0x078
 let DbgPrivOffHold = 0x080
-let DbgPrivOffContext = 0x280
+let DbgPrivOffThreadFrame = 0xA280
 let DbgPrivOffPlantedMap = 0x7E0
 let DbgPrivOffReturnHold = 0x7E8
 let DbgNoReturnHold = 0
@@ -265,20 +268,13 @@ let DbgExcCodeBreakpoint = 0x80000003
 let DbgExcCodeSingleStep = 0x80000004
 let DbgNoFault = 0
 
-let DbgCtxOffGpr0 = 0x078
-let DbgCtxOffXmm0 = 0x1A0
-let DbgCtxXmmStride = 16
-let DbgCtxOffRip = 0x0F8
-let DbgCtxOffRsp = 0x098
-let DbgCtxOffFlagsRequest = 0x030
-let DbgCtxControlRequest = 0x00100001
-let DbgCtxOffEFlagsLowByte = 0x044
-let DbgCtxOffEFlagsHighByte = 0x045
+let DbgRegPc = 72
+let DbgFlagTrapBit = 0x100
+
+let DbgRegSp = 4
+let DbgRegFp = 5
+let DbgRegFlags = 32
 let DbgGprCount = 16
-let DbgXmmCount = 16
-let DbgRegRsp = 4
-let DbgRegRbp = 5
-let DbgRegEFlags = 32
 
 let DbgBreakpointByte = 0xCC
 let DbgPauseTrampolineBytes = 1
@@ -312,20 +308,11 @@ let DbgDisplacementBytes = 4
 let DbgReleaseImmediateBytes = 2
 let DbgPageExecuteReadWrite = 0x40
 let DbgPageExecuteRead = 0x20
-let DbgTrapFlagByteBit = 1
 
 let DbgResumeContinue = 0
 let DbgResumeStep = 1
 
-let DbgMbiBytes = 48
-let DbgMbiOffBaseAddress = 0x00
-let DbgMbiOffRegionSize = 0x18
-let DbgMbiOffStateAndProtect = 0x20
-let DbgMemCommit = 0x1000
-let DbgPageNoAccess = 0x01
-let DbgPageGuard = 0x100
 let DbgDwordMask = 0xFFFFFFFF
-let DbgDwordBits = 32
 
 let DbgSymtabOffEntries = 8
 let DbgSymtabColumnBytes = 4
@@ -821,7 +808,7 @@ function dbgStopTheWorld(private DbgWord)
 	dbgStore(private, offset: DbgPrivOffStopThreadId, value: me)
 	dbgStore(private, offset: DbgPrivOffWorldStopped, value: 1)
 
-	let context = private + DbgPrivOffContext
+	let frame = private + DbgPrivOffThreadFrame
 	var machine = dbgAllMachines()
 
 	while machine != 0 'eachMachine'
@@ -834,8 +821,7 @@ function dbgStopTheWorld(private DbgWord)
 			// raised and the thread runs on until the kernel gets round to it. Reading its register file is what
 			// forces the suspension to complete, so without this read the stop is published while a machine is
 			// still running and the driver is told the program is frozen when it is not.
-			dbgStore(context, offset: DbgCtxOffFlagsRequest, value: DbgCtxControlRequest)
-			dbgSinkHostAnswer(__Raw.osDebugHost(DbgVerbReadThreadContext, a0: handle as MachineWord, a1: context as MachineWord, a2: DbgNothing, a3: DbgNothing))
+			dbgSinkHostAnswer(__Raw.osDebugHost(DbgVerbReadThreadContext, a0: handle as MachineWord, a1: frame as MachineWord, a2: DbgNothing, a3: DbgNothing))
 		end 'notTheStoppingThread'
 
 		machine = dbgLoad(machine, offset: DbgMOffAllNext)
@@ -866,7 +852,7 @@ module function __dbg_on_trap(contextPtr MachineWord, excCode MachineWord) retur
 	let private = dbgPrivateBlock()
 	let context = contextPtr as DbgWord
 	let code = excCode as DbgWord
-	let rip = dbgLoad(context, offset: DbgCtxOffRip)
+	let rip = dbgFrameLoad(context, number: DbgRegPc)
 	let textBase = dbgLoad(base, offset: DbgOffTextBase)
 
 	var stopPc = rip
@@ -875,8 +861,8 @@ module function __dbg_on_trap(contextPtr MachineWord, excCode MachineWord) retur
 
 	dbgReleaseTheStepsPreemptionHold()
 
-	// Windows hands a breakpoint trap a `CONTEXT.Rip` already backed onto the `int3` — the opposite of the
-	// POSIX convention — so the pc as delivered IS the breakpoint's address and is not adjusted here.
+	// Windows hands a breakpoint trap a pc already backed onto the `int3` — the opposite of the POSIX
+	// convention — so the frame's pc IS the breakpoint's address and is not adjusted here.
 	if code == DbgExcCodeBreakpoint and rip == dbgLoad(private, offset: DbgPrivOffPauseTrampoline) 'aPauseLanded'
 		stopPc = dbgPoppedInterruptedPc(context)
 		reason = DbgStopReasonPause
@@ -930,8 +916,9 @@ module function __dbg_on_trap(contextPtr MachineWord, excCode MachineWord) retur
 		if slot != DbgNotFound and not dbgPastTheExitCount(slot, pc: rip) 'itFaultedBeforeCountingItsExit'
 			dbgLeaveTheSlot(slot)
 		end 'itFaultedBeforeCountingItsExit'
+
 		dbgStopAt(base, private: private, context: context, pc: faultPc, reason: DbgStopReasonFault, fault: code)
-		dbgStore(context, offset: DbgCtxOffRip, value: faultPc)
+		dbgFrameStore(context, number: DbgRegPc, value: faultPc)
 
 		return DbgVehContinueSearch as MachineWord
 	end 'theProgramFaulted'
@@ -977,8 +964,8 @@ end '__dbg_on_trap'
 // below the thread's stack pointer. The word is popped here, so the reported sp is the one the
 // thread really had and the resume leaves nothing on its stack.
 function dbgPoppedInterruptedPc(context DbgWord) returns DbgWord
-	let sp = dbgLoad(context, offset: DbgCtxOffRsp)
-	dbgStore(context, offset: DbgCtxOffRsp, value: sp + DbgWordBytes)
+	let sp = dbgFrameLoad(context, number: DbgRegSp)
+	dbgFrameStore(context, number: DbgRegSp, value: sp + DbgWordBytes)
 
 	return dbgLoad(sp, offset: 0)
 end 'dbgPoppedInterruptedPc'
@@ -1019,7 +1006,7 @@ function dbgTrapStop(base DbgWord, private DbgWord, context DbgWord, rip DbgWord
 	dbgStopAt(base, private: private, context: context, pc: trapPc, reason: DbgStopReasonTrap, fault: DbgNoFault)
 
 	dbgWriteRegistersBack(base, context: context)
-	dbgStore(context, offset: DbgCtxOffRip, value: rip + DbgOneByte)
+	dbgFrameStore(context, number: DbgRegPc, value: rip + DbgOneByte)
 	dbgSetTrapFlag(context, armed: false)
 
 	return DbgVehContinueExecution as MachineWord
@@ -1063,6 +1050,14 @@ end 'dbgLoad'
 function dbgStore(addr DbgWord, offset DbgWord, value DbgWord)
 	__Raw.storeWord((addr + offset) as MachineWord, offset: 0, value: value as MachineWord)
 end 'dbgStore'
+
+function dbgFrameLoad(frame DbgWord, number DbgWord) returns DbgWord
+	return dbgLoad(frame, offset: number * DbgWordBytes)
+end 'dbgFrameLoad'
+
+function dbgFrameStore(frame DbgWord, number DbgWord, value DbgWord)
+	dbgStore(frame, offset: number * DbgWordBytes, value: value)
+end 'dbgFrameStore'
 
 function dbgLoadByte(addr DbgWord, offset DbgWord) returns DbgWord
 	return __Raw.loadByte((addr + offset) as MachineWord, offset: 0) as DbgWord
@@ -1713,17 +1708,12 @@ function dbgDropTheReturnHoldAt(private DbgWord, address DbgWord)
 end 'dbgDropTheReturnHoldAt'
 
 function dbgCaptureRegisters(base DbgWord, context DbgWord)
-	for index in 0 upto DbgGprCount 'eachGeneral'
-		dbgStore(base, offset: DbgOffRegisters + (index as DbgWord) * DbgWordBytes, value: dbgLoad(context, offset: DbgCtxOffGpr0 + (index as DbgWord) * DbgWordBytes))
-	end 'eachGeneral'
+	for index in 0 upto DbgRegisterSlots 'eachSlot'
+		dbgStore(base, offset: DbgOffRegisters + (index as DbgWord) * DbgWordBytes, value: dbgFrameLoad(context, number: index as DbgWord))
+	end 'eachSlot'
 
-	for index in 0 upto DbgXmmCount 'eachVector'
-		dbgStore(base, offset: DbgOffRegisters + ((DbgGprCount + index) as DbgWord) * DbgWordBytes, value: dbgLoad(context, offset: DbgCtxOffXmm0 + (index as DbgWord) * DbgCtxXmmStride))
-	end 'eachVector'
-
-	dbgSetRegister(base, number: DbgRegEFlags, value: dbgLoadByte(context, offset: DbgCtxOffEFlagsLowByte) or (dbgLoadByte(context, offset: DbgCtxOffEFlagsHighByte) shl DbgByteBits))
-	dbgStore(base, offset: DbgOffStopSp, value: dbgRegister(base, number: DbgRegRsp))
-	dbgStore(base, offset: DbgOffStopFp, value: dbgRegister(base, number: DbgRegRbp))
+	dbgStore(base, offset: DbgOffStopSp, value: dbgRegister(base, number: DbgRegSp))
+	dbgStore(base, offset: DbgOffStopFp, value: dbgRegister(base, number: DbgRegFp))
 end 'dbgCaptureRegisters'
 
 function dbgClearRegisters(base DbgWord)
@@ -1741,22 +1731,18 @@ function dbgSetRegister(base DbgWord, number DbgWord, value DbgWord)
 end 'dbgSetRegister'
 
 function dbgWriteRegistersBack(base DbgWord, context DbgWord)
-	for index in 0 upto DbgGprCount 'eachGeneral'
-		dbgStore(context, offset: DbgCtxOffGpr0 + (index as DbgWord) * DbgWordBytes, value: dbgRegister(base, number: index as DbgWord))
-	end 'eachGeneral'
-
-	for index in 0 upto DbgXmmCount 'eachVector'
-		dbgStore(context, offset: DbgCtxOffXmm0 + (index as DbgWord) * DbgCtxXmmStride, value: dbgRegister(base, number: (DbgGprCount + index) as DbgWord))
-	end 'eachVector'
+	for index in 0 upto DbgRegisterSlots 'eachSlot'
+		dbgFrameStore(context, number: index as DbgWord, value: dbgRegister(base, number: index as DbgWord))
+	end 'eachSlot'
 end 'dbgWriteRegistersBack'
 
 function dbgSetTrapFlag(context DbgWord, armed bool)
-	let flags = dbgLoadByte(context, offset: DbgCtxOffEFlagsHighByte)
+	let flags = dbgFrameLoad(context, number: DbgRegFlags)
 
 	if armed 'stepOne'
-		dbgStoreByte(context, offset: DbgCtxOffEFlagsHighByte, value: flags or DbgTrapFlagByteBit)
+		dbgFrameStore(context, number: DbgRegFlags, value: flags or DbgFlagTrapBit)
 	end 'stepOne' else 'runOn'
-		dbgStoreByte(context, offset: DbgCtxOffEFlagsHighByte, value: flags and (DbgByteMask xor DbgTrapFlagByteBit))
+		dbgFrameStore(context, number: DbgRegFlags, value: flags - (flags and DbgFlagTrapBit))
 	end 'runOn'
 end 'dbgSetTrapFlag'
 
@@ -1813,7 +1799,7 @@ function dbgResume(base DbgWord, private DbgWord, context DbgWord, stopPc DbgWor
 	end 'displacedByAnArmedByte'
 
 	dbgWriteRegistersBack(base, context: context)
-	dbgStore(context, offset: DbgCtxOffRip, value: nextPc)
+	dbgFrameStore(context, number: DbgRegPc, value: nextPc)
 	dbgSetTrapFlag(context, armed: singleStep)
 
 	if singleStep 'oneInstruction'
@@ -1867,7 +1853,7 @@ function dbgSimulate(base DbgWord, entry DbgWord, stopPc DbgWord, classWord DbgW
 end 'dbgSimulate'
 
 function dbgPoppedReturn(base DbgWord, stopPc DbgWord, classWord DbgWord) returns DbgWord
-	let sp = dbgRegister(base, number: DbgRegRsp)
+	let sp = dbgRegister(base, number: DbgRegSp)
 	let releaseAt = dbgOperandPositionOf(classWord)
 	var released = 0 as DbgWord
 
@@ -1881,7 +1867,7 @@ function dbgPoppedReturn(base DbgWord, stopPc DbgWord, classWord DbgWord) return
 		released = dbgProgramByteAt(private, textBase: textBase, address: stopPc + releaseAt) or (dbgProgramByteAt(private, textBase: textBase, address: stopPc + releaseAt + DbgOneByte) shl DbgByteBits)
 	end 'itReleasesArguments'
 
-	dbgSetRegister(base, number: DbgRegRsp, value: sp + DbgWordBytes + released)
+	dbgSetRegister(base, number: DbgRegSp, value: sp + DbgWordBytes + released)
 
 	return dbgLoad(sp, offset: 0)
 end 'dbgPoppedReturn'
@@ -1959,11 +1945,11 @@ function dbgConditionHolds(base DbgWord, condition DbgWord) returns bool
 end 'dbgConditionHolds'
 
 function dbgRegisterFlagsLow(base DbgWord) returns DbgWord
-	return dbgRegister(base, number: DbgRegEFlags) and DbgByteMask
+	return dbgRegister(base, number: DbgRegFlags) and DbgByteMask
 end 'dbgRegisterFlagsLow'
 
 function dbgRegisterFlagsHigh(base DbgWord) returns DbgWord
-	return (dbgRegister(base, number: DbgRegEFlags) shr DbgByteBits) and DbgByteMask
+	return (dbgRegister(base, number: DbgRegFlags) shr DbgByteBits) and DbgByteMask
 end 'dbgRegisterFlagsHigh'
 
 function dbgBacktrace(base DbgWord)
@@ -2054,26 +2040,7 @@ function dbgRegionIsReadable(address DbgWord, length DbgWord) returns bool
 		return false
 	end 'nothingToRead'
 
-	let query = __Raw.scratch(DbgMbiBytes) as DbgWord
-
-	if __Raw.osDebugHost(DbgVerbQueryRegion, a0: address as MachineWord, a1: query as MachineWord, a2: DbgMbiBytes as MachineWord, a3: DbgNothing) == DbgNothing 'theQueryFailed'
-		return false
-	end 'theQueryFailed'
-
-	let stateAndProtect = dbgLoad(query, offset: DbgMbiOffStateAndProtect)
-	let state = stateAndProtect and DbgDwordMask
-	let protect = (stateAndProtect shr DbgDwordBits) and DbgDwordMask
-
-	if state != DbgMemCommit 'notBacked'
-		return false
-	end 'notBacked'
-
-	if (protect and DbgPageNoAccess) != 0 or (protect and DbgPageGuard) != 0 'notReadableThere'
-		return false
-	end 'notReadableThere'
-
-	let regionEnd = dbgLoad(query, offset: DbgMbiOffBaseAddress) + dbgLoad(query, offset: DbgMbiOffRegionSize)
-	return address + length <= regionEnd
+	return __Raw.osDebugHost(DbgVerbQueryRegion, a0: address as MachineWord, a1: length as MachineWord, a2: DbgNothing, a3: DbgNothing) != DbgNothing
 end 'dbgRegionIsReadable'
 
 function dbgInsideRuntimeSymbol(textOffset DbgWord) returns bool
@@ -2332,21 +2299,20 @@ function dbgInjectThread(base DbgWord, private DbgWord, machine DbgWord, handle 
 	// so the conjunct holds by construction and every other one is judged on an instant that cannot move.
 	dbgRequestYield(machine)
 
-	let context = private + DbgPrivOffContext
-	dbgStore(context, offset: DbgCtxOffFlagsRequest, value: DbgCtxControlRequest)
+	let frame = private + DbgPrivOffThreadFrame
 
 	var injected = false
 
-	if __Raw.osDebugHost(DbgVerbReadThreadContext, a0: handle as MachineWord, a1: context as MachineWord, a2: DbgNothing, a3: DbgNothing) != DbgNothing 'theInstantIsReadable'
-		let pc = dbgLoad(context, offset: DbgCtxOffRip)
-		let sp = dbgLoad(context, offset: DbgCtxOffRsp)
+	if __Raw.osDebugHost(DbgVerbReadThreadContext, a0: handle as MachineWord, a1: frame as MachineWord, a2: DbgNothing, a3: DbgNothing) != DbgNothing 'theInstantIsReadable'
+		let pc = dbgFrameLoad(frame, number: DbgRegPc)
+		let sp = dbgFrameLoad(frame, number: DbgRegSp)
 
 		if dbgPauseIsSafe(base, machine: machine, pc: pc, sp: sp) 'aSafePoint'
 			let landing = sp - DbgWordBytes
 			dbgStore(landing, offset: 0, value: pc)
-			dbgStore(context, offset: DbgCtxOffRsp, value: landing)
-			dbgStore(context, offset: DbgCtxOffRip, value: dbgLoad(private, offset: DbgPrivOffPauseTrampoline))
-			injected = __Raw.osDebugHost(DbgVerbWriteThreadContext, a0: handle as MachineWord, a1: context as MachineWord, a2: DbgNothing, a3: DbgNothing) != DbgNothing
+			dbgFrameStore(frame, number: DbgRegSp, value: landing)
+			dbgFrameStore(frame, number: DbgRegPc, value: dbgLoad(private, offset: DbgPrivOffPauseTrampoline))
+			injected = __Raw.osDebugHost(DbgVerbWriteThreadContext, a0: handle as MachineWord, a1: frame as MachineWord, a2: DbgNothing, a3: DbgNothing) != DbgNothing
 		end 'aSafePoint'
 	end 'theInstantIsReadable'
 
@@ -2443,9 +2409,9 @@ function dbgConditionAllows(private DbgWord, index DbgWord, context DbgWord) ret
 			return true
 		end 'outsideTheGeneralFile'
 
-		raw = dbgLoad(context, offset: DbgCtxOffGpr0 + operand * DbgWordBytes)
+		raw = dbgFrameLoad(context, number: operand)
 	end 'aRegister' else if kind == DbgCondKindStackSlot 'aFrameSlot'
-		let at = dbgLoad(context, offset: DbgCtxOffGpr0 + DbgRegRbp * DbgWordBytes) + operand
+		let at = dbgFrameLoad(context, number: DbgRegFp) + operand
 
 		if not dbgRegionIsReadable(at, length: DbgWordBytes) 'nothingMappedThere'
 			return true

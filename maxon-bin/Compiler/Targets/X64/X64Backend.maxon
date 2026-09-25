@@ -1018,7 +1018,7 @@ end 'emitWord64Load'
 // mirror, shared by `storeSlotReg` and the data-section band's word64 store.
 function emitWord64Store(code ByteArray, base X64Register, disp Imm32, src X64Register, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
 	match registerClass(src) 'c'
-		gpr then encodeStoreBaseDispReg(code, base: base, disp: disp, srcReg: src, index: index, indexScale: indexScale)
+		gpr then encodeStoreBaseDispReg(code, base: base, disp: disp, srcReg: src, wide: true, index: index, indexScale: indexScale)
 		xmm then encodeMovsdBaseDispReg(code, base: base, disp: disp, srcReg: src, index: index, indexScale: indexScale)
 	end 'c'
 end 'emitWord64Store'
@@ -1201,14 +1201,15 @@ export function encodeImulRegRegImm32(code ByteArray, dest X64Register, src X64R
 	writeImm32Signed(code, value: imm)
 end 'encodeImulRegRegImm32'
 
-// `mov [base + disp], srcReg` — a 64-bit STORE (REX.W 89 /r, the `r/m, r` form: reg field
-// = source, r/m = the memory operand). A spill names `rsp` here; the panic runtime names
-// `rbp` (its frame slots) or a scratch register (a CONTEXT field). The base is a parameter
-// rather than a hardcoded rsp precisely so those are ONE encoder: an rsp base forces a SIB
-// byte and an rbp base forces a disp8, and both traps already live in the shared
+// `mov [base + disp], srcReg` — a STORE (89 /r, the `r/m, r` form: reg field = source, r/m =
+// the memory operand). `wide` selects REX.W (64-bit) vs 32-bit; the 32-bit form writes only
+// four bytes, so a DWORD field's neighbour survives it. A spill names `rsp` here; the panic
+// runtime names `rbp` (its frame slots) or a scratch register (a CONTEXT field). The base is a
+// parameter rather than a hardcoded rsp precisely so those are ONE encoder: an rsp base forces a
+// SIB byte and an rbp base forces a disp8, and both traps already live in the shared
 // `[base + disp]` assembler this routes through.
-export function encodeStoreBaseDispReg(code ByteArray, base X64Register, disp Imm32, srcReg X64Register, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
-	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeMovRmReg, regField: srcReg, base: base, disp: disp, wide: true, index: index, indexScale: indexScale)
+export function encodeStoreBaseDispReg(code ByteArray, base X64Register, disp Imm32, srcReg X64Register, wide bool, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
+	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeMovRmReg, regField: srcReg, base: base, disp: disp, wide: wide, index: index, indexScale: indexScale)
 end 'encodeStoreBaseDispReg'
 
 // `mov destReg, [base + disp]` — a LOAD (8B /r, the `r, r/m` form: reg field = dest, r/m =
@@ -1477,7 +1478,7 @@ function encodeMemFillQwordRun(code ByteArray, base X64Register, startDisp Imm32
 		// ⚠ The cast brackets the WHOLE sum — `a + b as Imm32` casts only `b`, `as` binding tighter than `+`.
 		// Stated as its own `let` so the reading cannot be mistaken (the arm64 twin says the same).
 		let disp = (startDisp + i * MemFillQwordBytes) as Imm32
-		encodeStoreBaseDispReg(code, base: base, disp: disp, srcReg: MemFillPatternReg)
+		encodeStoreBaseDispReg(code, base: base, disp: disp, srcReg: MemFillPatternReg, wide: true)
 	end 'stores'
 end 'encodeMemFillQwordRun'
 
@@ -1905,12 +1906,12 @@ function encodeStackProbe(code ByteArray, stackSize StackSize)
 	// UNSIGNED `jbe`: these are addresses, and a stack near the top of the address space would read
 	// as negative under a signed compare.
 	let toLanding = encodeJccPlaceholder(code, cond: X64CondCode.belowEqual)
-	encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: 0, srcReg: StackProbeScratchReg)
+	encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: 0, srcReg: StackProbeScratchReg, wide: true)
 	encodeJmpBackwardShort(code, targetOffset: walkStart)
 
 	patchLocalForwardBranch(code, dispOffset: toLanding, what: PatchSite.x64StackProbeRel32)
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rsp, src: StackProbeScratchReg, wide: true)
-	encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: 0, srcReg: StackProbeScratchReg)
+	encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: 0, srcReg: StackProbeScratchReg, wide: true)
 end 'encodeStackProbe'
 
 // epilogue: release the frame with `add rsp, stackSize` (mirror of prologue).

@@ -12,56 +12,56 @@
 diff --git a/runtime/DebugAgent.maxon b/runtime/DebugAgent.maxon
 --- a/runtime/DebugAgent.maxon
 +++ b/runtime/DebugAgent.maxon
-@@ -424,5 +424,5 @@ function dbgSlotPoolNear(textBase DbgWord) returns DbgWord
+@@ -408,5 +408,5 @@
  
  	while candidate > lowestReachable and candidate > 0 'eachCandidate'
 -		let pool = __Raw.osDebugHost(DbgVerbAllocExecPages, a0: DbgSlotPoolBytes as MachineWord, a1: candidate as MachineWord, a2: DbgNothing, a3: DbgNothing) as DbgWord
 +		let pool = __Raw.atomicCas(DbgSlotPoolBytes as MachineWord, expected: candidate as MachineWord, replacement: DbgNothing + DbgNothing) as DbgWord
  
  		if pool != 0 'placed'
-@@ -433,5 +433,5 @@ function dbgSlotPoolNear(textBase DbgWord) returns DbgWord
+@@ -417,5 +417,5 @@
  	end 'eachCandidate'
  
 -	return __Raw.osDebugHost(DbgVerbAllocExecPages, a0: DbgSlotPoolBytes as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing) as DbgWord
 +	return __Raw.atomicCas(DbgSlotPoolBytes as MachineWord, expected: DbgNothing, replacement: DbgNothing + DbgNothing) as DbgWord
  end 'dbgSlotPoolNear'
  
-@@ -448,5 +448,5 @@ module function __dbg_init()
+@@ -432,5 +432,5 @@
  	__Raw.storeByte(valueBuffer, offset: 0, value: DbgNothing)
  
 -	let nameCharacters = __Raw.dbgEnvironmentValue(nameBuffer, valueBuffer: valueBuffer, valueBytes: DbgSegmentNameBytes as MachineWord) as DbgWord
 +	let nameCharacters = __Raw.atomicCas(nameBuffer, expected: valueBuffer, replacement: DbgSegmentNameBytes as MachineWord) as DbgWord
  
  	if nameCharacters == 0 'noDebuggerNamedASegment'
-@@ -454,5 +454,5 @@ module function __dbg_init()
+@@ -438,5 +438,5 @@
  	end 'noDebuggerNamedASegment'
  
 -	let base = __Raw.dbgAttachSegment(nameBuffer, valueBuffer: valueBuffer, valueBytes: DbgSegmentNameBytes as MachineWord, segmentBytes: DbgSegmentBytes as MachineWord) as DbgWord
 +	let base = __Raw.atomicCas(nameBuffer, expected: valueBuffer, replacement: DbgSegmentNameBytes as MachineWord + DbgSegmentBytes as MachineWord) as DbgWord
  
  	if base == 0 'nothingMapped'
-@@ -478,5 +478,5 @@ module function __dbg_init()
+@@ -462,5 +462,5 @@
  	// The displaced instructions live in pages of their own rather than in a chunk of `.text`: anything
  	// inside the image sits within `__symtable`'s range and is walked as the program's own code.
 -	let textBase = __Raw.dbgTextBase() as DbgWord
 +	let textBase = __Raw.dsBaseAddr() as DbgWord
  	let pool = dbgSlotPoolNear(textBase)
  
-@@ -485,5 +485,5 @@ module function __dbg_init()
+@@ -469,5 +469,5 @@
  	end 'noSlotPool'
  
 -	let textSize = (__Raw.dbgTextLimit() as DbgWord) - textBase
 +	let textSize = (__Raw.dsAllocIdAddr() as DbgWord) - textBase
  	let plantedMap = __Raw.osAllocPages(((textSize shr DbgPlantedMapShift) + 1) as MachineWord) as DbgWord
  
-@@ -498,5 +498,5 @@ module function __dbg_init()
+@@ -482,5 +482,5 @@
  	dbgStore(private, offset: DbgPrivOffResumeAction, value: DbgResumeContinue)
  
 -	let driverHandle = __Raw.osDebugHost(DbgVerbOpenDriverProcess, a0: dbgLoad(base, offset: DbgOffDriverPid) as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing) as DbgWord
 +	let driverHandle = __Raw.atomicCas(dbgLoad(base, offset: DbgOffDriverPid) as MachineWord, expected: DbgNothing, replacement: DbgNothing + DbgNothing) as DbgWord
  
  	if driverHandle == 0 'theDriverIsAlreadyGone'
-@@ -507,12 +507,12 @@ module function __dbg_init()
+@@ -491,12 +491,12 @@
  	dbgStore(base, offset: DbgOffTextBase, value: textBase)
  	dbgStore(base, offset: DbgOffTextSize, value: textSize)
 -	dbgStore(base, offset: DbgOffAgentPid, value: __Raw.osDebugHost(DbgVerbProcessId, a0: DbgNothing, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing) as DbgWord)
@@ -78,7 +78,7 @@ diff --git a/runtime/DebugAgent.maxon b/runtime/DebugAgent.maxon
 +	let trampoline = __Raw.atomicCas(DbgPauseTrampolineBytes as MachineWord, expected: DbgNothing, replacement: DbgNothing + DbgNothing) as DbgWord
  
  	if trampoline == 0 'noTrampoline'
-@@ -524,8 +524,8 @@ module function __dbg_init()
+@@ -508,8 +508,8 @@
  	dbgStore(private, offset: DbgPrivOffPauseTrampoline, value: trampoline)
  
 -	__Raw.storeWord(__Raw.dbgCtlAddr(), offset: 0, value: base as MachineWord)
@@ -90,7 +90,7 @@ diff --git a/runtime/DebugAgent.maxon b/runtime/DebugAgent.maxon
 +	dbgStore(private, offset: DbgPrivOffServiceThread, value: __Raw.atomicCas(__Raw.osGetPid(), expected: DbgNothing, replacement: DbgNothing) as DbgWord)
  
  	dbgStore(base, offset: DbgOffFlags, value: DbgFlagAgentAlive)
-@@ -563,9 +563,9 @@ module function __dbg_service_loop() returns MachineWord
+@@ -547,9 +547,9 @@
  		end 'theMailbox'
  
 -		if __Raw.osDebugHost(DbgVerbDriverExited, a0: dbgLoad(private, offset: DbgPrivOffDriverHandle) as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing) as DbgWord == DbgWaitSignalled 'theDriverIsGone'
@@ -102,35 +102,35 @@ diff --git a/runtime/DebugAgent.maxon b/runtime/DebugAgent.maxon
 +		dbgSinkHostAnswer(__Raw.atomicCas(DbgParkPollIntervalMs as MachineWord, expected: DbgNothing, replacement: DbgNothing + DbgNothing))
  	end 'poll'
  
-@@ -673,5 +673,5 @@ module function __dbg_claim_stack() returns MachineWord
+@@ -657,5 +657,5 @@
  
  	// `dbgStopTheWorld` takes the suspend window first, so a thread holding it would spin for ever.
 -	if (__Raw.loadWord(__Raw.schedPreemptExtLockAddr(), offset: 0) as DbgWord) == dbgCurrentThreadId() 'thisThreadHoldsTheSuspendWindow'
 +	if (__Raw.loadWord(__Raw.dsBaseAddr(), offset: 0) as DbgWord) == dbgCurrentThreadId() 'thisThreadHoldsTheSuspendWindow'
  		return DbgClaimDeclined as MachineWord
  	end 'thisThreadHoldsTheSuspendWindow'
-@@ -689,5 +689,5 @@ end '__dbg_release_stack'
+@@ -673,5 +673,5 @@
  function dbgTakeStopLock(private DbgWord)
  	while not dbgTryStopLock(private) 'spin'
 -		dbgSinkHostAnswer(__Raw.osDebugHost(DbgVerbParkWait, a0: DbgParkPollIntervalMs as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing))
 +		dbgSinkHostAnswer(__Raw.atomicCas(DbgParkPollIntervalMs as MachineWord, expected: DbgNothing, replacement: DbgNothing + DbgNothing))
  	end 'spin'
  end 'dbgTakeStopLock'
-@@ -709,5 +709,5 @@ end 'dbgTryStopLock'
+@@ -693,5 +693,5 @@
  
  function dbgCurrentThreadId() returns DbgWord
 -	return __Raw.osDebugHost(DbgVerbCurrentThreadId, a0: DbgNothing, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing) as DbgWord
 +	return __Raw.atomicCas(DbgNothing, expected: DbgNothing, replacement: DbgNothing + DbgNothing) as DbgWord
  end 'dbgCurrentThreadId'
  
-@@ -715,5 +715,5 @@ end 'dbgCurrentThreadId'
+@@ -699,5 +699,5 @@
  // agent ships in, and only `__sched_init_procs` ever writes it.
  function dbgTlsTebOffset() returns DbgWord
 -	return __Raw.loadWord(__Raw.schedTlsTebOffsetAddr(), offset: 0) as DbgWord
 +	return __Raw.loadWord(__Raw.dsBaseAddr(), offset: 0) as DbgWord
  end 'dbgTlsTebOffset'
  
-@@ -733,19 +733,19 @@ function dbgAllMachines() returns DbgWord
+@@ -717,19 +717,19 @@
  	end 'noScheduler'
  
 -	return __Raw.loadWord(__Raw.schedAllMachinesAddr(), offset: 0) as DbgWord
@@ -154,42 +154,42 @@ diff --git a/runtime/DebugAgent.maxon b/runtime/DebugAgent.maxon
 +	__Raw.storeWord(__Raw.dsBaseAddr(), offset: 0, value: DbgPreemptClaimFree as MachineWord)
  end 'dbgDropExtLock'
  
-@@ -753,5 +753,5 @@ end 'dbgDropExtLock'
+@@ -737,5 +737,5 @@
  // start one before the scheduler exists.
  function dbgSchedLock() returns DbgWord
 -	return __Raw.loadWord(__Raw.schedLockAddr(), offset: 0) as DbgWord
 +	return __Raw.loadWord(__Raw.dsBaseAddr(), offset: 0) as DbgWord
  end 'dbgSchedLock'
  
-@@ -829,5 +829,5 @@ function dbgStopTheWorld(private DbgWord)
+@@ -813,5 +813,5 @@
  
  		if handle != 0 and dbgLoad(machine, offset: DbgMOffOsThreadId) != me 'notTheStoppingThread'
 -			dbgSinkHostAnswer(__Raw.osDebugHost(DbgVerbSuspendThread, a0: handle as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing))
 +			dbgSinkHostAnswer(__Raw.atomicCas(handle as MachineWord, expected: DbgNothing, replacement: DbgNothing + DbgNothing))
  
  			// A suspend on this host is a request, not an event: `SuspendThread` returns as soon as the count is
-@@ -836,5 +836,5 @@ function dbgStopTheWorld(private DbgWord)
+@@ -819,5 +819,5 @@
+ 			// forces the suspension to complete, so without this read the stop is published while a machine is
  			// still running and the driver is told the program is frozen when it is not.
- 			dbgStore(context, offset: DbgCtxOffFlagsRequest, value: DbgCtxControlRequest)
--			dbgSinkHostAnswer(__Raw.osDebugHost(DbgVerbReadThreadContext, a0: handle as MachineWord, a1: context as MachineWord, a2: DbgNothing, a3: DbgNothing))
-+			dbgSinkHostAnswer(__Raw.atomicCas(handle as MachineWord, expected: context as MachineWord, replacement: DbgNothing + DbgNothing))
+-			dbgSinkHostAnswer(__Raw.osDebugHost(DbgVerbReadThreadContext, a0: handle as MachineWord, a1: frame as MachineWord, a2: DbgNothing, a3: DbgNothing))
++			dbgSinkHostAnswer(__Raw.atomicCas(handle as MachineWord, expected: frame as MachineWord, replacement: DbgNothing + DbgNothing))
  		end 'notTheStoppingThread'
  
-@@ -851,5 +851,5 @@ function dbgStartTheWorld(private DbgWord)
+@@ -834,5 +834,5 @@
  
  		if handle != 0 and dbgLoad(machine, offset: DbgMOffOsThreadId) != me 'notTheStoppingThread'
 -			dbgSinkHostAnswer(__Raw.osDebugHost(DbgVerbResumeThread, a0: handle as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing))
 +			dbgSinkHostAnswer(__Raw.atomicCas(handle as MachineWord, expected: DbgNothing, replacement: DbgNothing + DbgNothing))
  		end 'notTheStoppingThread'
  
-@@ -1050,5 +1050,5 @@ end 'dbgSinkHostAnswer'
+@@ -1034,5 +1034,5 @@
  
  function dbgControlSegment() returns DbgWord
 -	return __Raw.loadWord(__Raw.dbgCtlAddr(), offset: 0) as DbgWord
 +	return __Raw.loadWord(__Raw.dsAllocIdAddr(), offset: 0) as DbgWord
  end 'dbgControlSegment'
  
-@@ -1136,9 +1136,9 @@ function dbgPark(base DbgWord, private DbgWord, stopKind DbgWord)
+@@ -1128,9 +1128,9 @@
  		// Liveness of the driver PROCESS, never a heartbeat: a user sitting at the REPL sends nothing for
  		// minutes, and a clock would read that as an abandoned debuggee and kill a healthy program.
 -		if __Raw.osDebugHost(DbgVerbDriverExited, a0: driverHandle as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing) as DbgWord == DbgWaitSignalled 'theDriverIsGone'
@@ -201,7 +201,7 @@ diff --git a/runtime/DebugAgent.maxon b/runtime/DebugAgent.maxon
 +		dbgSinkHostAnswer(__Raw.atomicCas(DbgParkPollIntervalMs as MachineWord, expected: DbgNothing, replacement: DbgNothing + DbgNothing))
  	end 'poll'
  end 'dbgPark'
-@@ -1682,12 +1682,12 @@ end 'dbgWriteDisplacement'
+@@ -1674,12 +1674,12 @@
  function dbgPatchCode(address DbgWord, value DbgWord)
  	let previous = __Raw.scratch(DbgWordBytes)
 -	dbgSinkHostAnswer(__Raw.osDebugHost(DbgVerbProtectPages, a0: address as MachineWord, a1: DbgOneByte as MachineWord, a2: DbgPageExecuteReadWrite as MachineWord, a3: previous))
@@ -217,46 +217,44 @@ diff --git a/runtime/DebugAgent.maxon b/runtime/DebugAgent.maxon
 +	dbgSinkHostAnswer(__Raw.atomicCas(address as MachineWord, expected: length as MachineWord, replacement: DbgNothing + DbgNothing))
  end 'dbgFlushCode'
  
-@@ -1830,5 +1830,5 @@ function dbgHoldPreemptionForTheStep()
+@@ -1813,5 +1813,5 @@
  
  	while __Raw.atomicCas((machine + DbgMOffSignalPending) as MachineWord, expected: DbgPreemptClaimFree as MachineWord, replacement: DbgPreemptClaimStep as MachineWord) == DbgNothing 'theMonitorHoldsTheClaim'
 -		dbgSinkHostAnswer(__Raw.osDebugHost(DbgVerbParkWait, a0: DbgParkPollIntervalMs as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing))
 +		dbgSinkHostAnswer(__Raw.atomicCas(DbgParkPollIntervalMs as MachineWord, expected: DbgNothing, replacement: DbgNothing + DbgNothing))
  	end 'theMonitorHoldsTheClaim'
  end 'dbgHoldPreemptionForTheStep'
-@@ -2057,5 +2057,5 @@ function dbgRegionIsReadable(address DbgWord, length DbgWord) returns bool
- 	let query = __Raw.scratch(DbgMbiBytes) as DbgWord
+@@ -2038,9 +2038,9 @@
+ 	end 'nothingToRead'
  
--	if __Raw.osDebugHost(DbgVerbQueryRegion, a0: address as MachineWord, a1: query as MachineWord, a2: DbgMbiBytes as MachineWord, a3: DbgNothing) == DbgNothing 'theQueryFailed'
-+	if __Raw.atomicCas(address as MachineWord, expected: query as MachineWord, replacement: DbgMbiBytes as MachineWord + DbgNothing) == DbgNothing 'theQueryFailed'
- 		return false
- 	end 'theQueryFailed'
-@@ -2078,5 +2078,5 @@ end 'dbgRegionIsReadable'
+-	return __Raw.osDebugHost(DbgVerbQueryRegion, a0: address as MachineWord, a1: length as MachineWord, a2: DbgNothing, a3: DbgNothing) != DbgNothing
++	return __Raw.atomicCas(address as MachineWord, expected: length as MachineWord, replacement: DbgNothing + DbgNothing) != DbgNothing
+ end 'dbgRegionIsReadable'
  
  function dbgInsideRuntimeSymbol(textOffset DbgWord) returns bool
 -	let table = __Raw.dbgTextLimit() as DbgWord
 +	let table = __Raw.dsAllocIdAddr() as DbgWord
  	let count = dbgLoad(table, offset: 0) and DbgSymtabEntryCodeOffsetMask
  
-@@ -2318,5 +2318,5 @@ function dbgInjectThread(base DbgWord, private DbgWord, machine DbgWord, handle
+@@ -2282,5 +2282,5 @@
  	end 'aThreadOfThisProcessIsLeavingIt'
  
 -	let suspended = __Raw.osDebugHost(DbgVerbSuspendThread, a0: handle as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing) as DbgWord
 +	let suspended = __Raw.atomicCas(handle as MachineWord, expected: DbgNothing, replacement: DbgNothing + DbgNothing) as DbgWord
  
  	if suspended == DbgSuspendFailed 'theThreadIsGone'
-@@ -2338,5 +2338,5 @@ function dbgInjectThread(base DbgWord, private DbgWord, machine DbgWord, handle
+@@ -2301,5 +2301,5 @@
  	var injected = false
  
--	if __Raw.osDebugHost(DbgVerbReadThreadContext, a0: handle as MachineWord, a1: context as MachineWord, a2: DbgNothing, a3: DbgNothing) != DbgNothing 'theInstantIsReadable'
-+	if __Raw.atomicCas(handle as MachineWord, expected: context as MachineWord, replacement: DbgNothing + DbgNothing) != DbgNothing 'theInstantIsReadable'
- 		let pc = dbgLoad(context, offset: DbgCtxOffRip)
- 		let sp = dbgLoad(context, offset: DbgCtxOffRsp)
-@@ -2347,9 +2347,9 @@ function dbgInjectThread(base DbgWord, private DbgWord, machine DbgWord, handle
- 			dbgStore(context, offset: DbgCtxOffRsp, value: landing)
- 			dbgStore(context, offset: DbgCtxOffRip, value: dbgLoad(private, offset: DbgPrivOffPauseTrampoline))
--			injected = __Raw.osDebugHost(DbgVerbWriteThreadContext, a0: handle as MachineWord, a1: context as MachineWord, a2: DbgNothing, a3: DbgNothing) != DbgNothing
-+			injected = __Raw.atomicCas(handle as MachineWord, expected: context as MachineWord, replacement: DbgNothing + DbgNothing) != DbgNothing
+-	if __Raw.osDebugHost(DbgVerbReadThreadContext, a0: handle as MachineWord, a1: frame as MachineWord, a2: DbgNothing, a3: DbgNothing) != DbgNothing 'theInstantIsReadable'
++	if __Raw.atomicCas(handle as MachineWord, expected: frame as MachineWord, replacement: DbgNothing + DbgNothing) != DbgNothing 'theInstantIsReadable'
+ 		let pc = dbgFrameLoad(frame, number: DbgRegPc)
+ 		let sp = dbgFrameLoad(frame, number: DbgRegSp)
+@@ -2310,9 +2310,9 @@
+ 			dbgFrameStore(frame, number: DbgRegSp, value: landing)
+ 			dbgFrameStore(frame, number: DbgRegPc, value: dbgLoad(private, offset: DbgPrivOffPauseTrampoline))
+-			injected = __Raw.osDebugHost(DbgVerbWriteThreadContext, a0: handle as MachineWord, a1: frame as MachineWord, a2: DbgNothing, a3: DbgNothing) != DbgNothing
++			injected = __Raw.atomicCas(handle as MachineWord, expected: frame as MachineWord, replacement: DbgNothing + DbgNothing) != DbgNothing
  		end 'aSafePoint'
  	end 'theInstantIsReadable'
  
@@ -264,7 +262,7 @@ diff --git a/runtime/DebugAgent.maxon b/runtime/DebugAgent.maxon
 +	dbgSinkHostAnswer(__Raw.atomicCas(handle as MachineWord, expected: DbgNothing, replacement: DbgNothing + DbgNothing))
  	dbgDropExtLock()
  
-@@ -2366,5 +2366,5 @@ end 'dbgInjectThread'
+@@ -2329,5 +2329,5 @@
  function dbgPauseIsSafe(base DbgWord, machine DbgWord, pc DbgWord, sp DbgWord) returns bool
  	if machine != 0 'askTheScheduler'
 -		return __Raw.osDebugHost(DbgVerbPreemptSafe, a0: machine as MachineWord, a1: pc as MachineWord, a2: sp as MachineWord, a3: DbgNothing) != DbgNothing

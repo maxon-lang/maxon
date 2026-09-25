@@ -66,9 +66,9 @@ module let TibStackLimitDisp = 0x10 as Imm32  // NT_TIB.StackLimit — gs:[0x10]
 // other register.
 function emitSaveTibIntoGt(code ByteArray, gtReg X64Register, scratch X64Register)
 	encodeMovRegGsAbs(code, dest: scratch, disp: TibStackBaseDisp)
-	encodeStoreBaseDispReg(code, base: gtReg, disp: GtOffTibStackBase as Imm32, srcReg: scratch)
+	encodeStoreBaseDispReg(code, base: gtReg, disp: GtOffTibStackBase as Imm32, srcReg: scratch, wide: true)
 	encodeMovRegGsAbs(code, dest: scratch, disp: TibStackLimitDisp)
-	encodeStoreBaseDispReg(code, base: gtReg, disp: GtOffTibStackLimit as Imm32, srcReg: scratch)
+	encodeStoreBaseDispReg(code, base: gtReg, disp: GtOffTibStackLimit as Imm32, srcReg: scratch, wide: true)
 end 'emitSaveTibIntoGt'
 
 function emitLoadTibFromGt(code ByteArray, gtReg X64Register, scratch X64Register)
@@ -229,8 +229,8 @@ function buildGtContextSwitchChunk(target Target) returns FunctionCodeChunk
 	end 'saveXmm'
 
 	// from->sp = rsp ; from->fp = rbp.
-	encodeStoreBaseDispReg(code, base: GtSwitchFromReg, disp: GtOffSp as Imm32, srcReg: X64Register.rsp)
-	encodeStoreBaseDispReg(code, base: GtSwitchFromReg, disp: GtOffFp as Imm32, srcReg: X64Register.rbp)
+	encodeStoreBaseDispReg(code, base: GtSwitchFromReg, disp: GtOffSp as Imm32, srcReg: X64Register.rsp, wide: true)
+	encodeStoreBaseDispReg(code, base: GtSwitchFromReg, disp: GtOffFp as Imm32, srcReg: X64Register.rbp, wide: true)
 
 	// ⭐ SAVE the CURRENT NT_TIB stack bounds into `from`, so the TIB always describes the stack that is actually
 	// executing. Without this, the syscall shim's after-call restore (which sets the TIB to `currentGt`'s bounds)
@@ -314,8 +314,8 @@ function buildGtTrampolineChunk() returns FunctionCodeChunk
 	// does not. This is the same r10 the trampoline used as its arg-buffer scratch (`GtTrampArgBufReg`) before
 	// the call; that use is finished once the args are loaded, so the register is free to receive the flag.
 	encodeCallReg(code, reg: GtTrampFuncPtrReg)
-	encodeStoreBaseDispReg(code, base: GtTrampGtReg, disp: GtOffResult as Imm32, srcReg: X64Register.r8)
-	encodeStoreBaseDispReg(code, base: GtTrampGtReg, disp: GtOffThrew as Imm32, srcReg: X64Register.r10)
+	encodeStoreBaseDispReg(code, base: GtTrampGtReg, disp: GtOffResult as Imm32, srcReg: X64Register.r8, wide: true)
+	encodeStoreBaseDispReg(code, base: GtTrampGtReg, disp: GtOffThrew as Imm32, srcReg: X64Register.r10, wide: true)
 	encodeMovRegImm32(code, dest: X64Register.rax, value: GtStatusCompleted)
 
 	// ⭐⭐ **THIS `mov` IS THE PUBLICATION, AND ON x64 IT IS ALREADY A STORE-RELEASE.** A reader on
@@ -328,7 +328,7 @@ function buildGtTrampolineChunk() returns FunctionCodeChunk
 	//
 	// ⚠ There is no COMPILER half to worry about either, unlike the Std-tier publication
 	// (`GtRuntime.emitGtPublishCompleted`): these are hand-assembled bytes, so no pass can reorder them.
-	encodeStoreBaseDispReg(code, base: GtTrampGtReg, disp: GtOffStatus as Imm32, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(code, base: GtTrampGtReg, disp: GtOffStatus as Imm32, srcReg: X64Register.rax, wide: true)
 
 	// context_switch(from = gt, to = gt.waiter) — never returns (the GT is completed).
 	encodeLoadRegBaseDisp(code, destReg: GtSwitchToReg, base: GtTrampGtReg, disp: GtOffWaiter as Imm32, wide: true)
@@ -516,6 +516,7 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		CreateProcessA gives CreateProcessStackArgWords
 		WriteFile gives WriteFileStackArgWords
 		CreateNamedPipeW gives CreateNamedPipeStackArgWords
+
 		// The `A` variant takes the same seven arguments as its `W` sibling.
 		CreateFileW or
 			CreateFileA gives CreateFileStackArgWords
@@ -576,6 +577,7 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 			getsockname or  // 3: s, name, namelen
 			shutdown or  // 2: s, how
 			GetActiveProcessorCount or  // 1: GroupNumber
+
 			// The shim switches stacks, not threads: `QueryThreadCycleTime` reports the calling OS thread,
 			// which is the same M on either stack, and its out-param is a `.data` word the switch cannot
 			// move.
@@ -665,13 +667,16 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		// stays at one exchange each way and never touches `__sched_lock`. It is blocking because a write
 		// to a pipe whose reader has stopped reading waits as long as the far end does.
 		WriteFile or
+
 			// A console in quick-edit selection suspends its writer, unbounded by the far end like a
 			// stalled pipe reader.
 			WriteConsoleW or
+
 			// `__con_read_stdin` is a synchronous read with no park (`ConsoleRuntime`), so a green thread
 			// inside it holds its OS thread until the user presses return;
 			// `specs/sched-syscall-handoff.md`'s ordering case measures it.
 			ReadFile or
+
 			// The file-system family. Every one can reach a cold disk, a network share or a stalled device.
 			CreateFileA or
 			CreateFileW or
@@ -685,28 +690,35 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 			RemoveDirectoryA or
 			GetCurrentDirectoryA or
 			GetFileAttributesA or
+
 			// The file-mapping pair, which faults pages in from the same devices.
 			OpenFileMappingA or
 			MapViewOfFile or
+
 			// Spawning a child image and peeking a child's pipe both wait on another process.
 			CreateProcessA or
 			PeekNamedPipe or
+
 			// A child wait (`osWaitChild`) lowers to this slot rather than `WaitForSingleObject` so that
 			// this table, keyed on the slot, can bracket it while the scheduler's own waits stay
 			// `schedulerBound` (`lowerOsWaitHandleWin64`).
 			WaitForSingleObjectEx or
+
 			// `getaddrinfo` waits on a resolver (a literal address never reaches it —
 			// `ManagedSocketRuntime.emitResolveHostIp`), and `WSAStartup`, which runs until one succeeds
 			// (`ManagedSocketRuntime.emitWinsockStartup`), on loading the provider stack.
 			WSAStartup or
 			getaddrinfo or
+
 			// Reached by no emitter on this lane, which takes the overlapped transfer, so the slots are
 			// classed for the call they name: a blocking-mode transfer waits on its peer.
 			send or
 			recv or
+
 			// Creating a section reaches the memory manager and can touch the page file, as
 			// `OpenFileMappingA`/`MapViewOfFile` do.
 			CreateFileMappingA or
+
 			// A stack window copied out of a suspended thread can touch a paged-out page, and a module walk
 			// reads the target's loader list under its own lock: both are `MapViewOfFile`'s position.
 			ReadProcessMemory or
@@ -723,15 +735,18 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		WSASocketW or
 			connect or
 			closesocket or
+
 			// The overlapped pair hands the kernel a buffer and returns `WSA_IO_PENDING` at once, with the
 			// transfer reported later as a packet on the poller, so there is no window for `__sysmon` to
 			// rescue a processor out of.
 			WSARecv or
 			WSASend or
+
 			// Neither reaches the network: the event select records which events are wanted, and the
 			// option read answers out of the socket object the kernel already holds.
 			WSAEventSelect or
 			getsockopt or
+
 			// `accept` is issued only on a listener `WSAEventSelect(FD_ACCEPT)` has made non-blocking, so
 			// it takes a connection off the queue or answers `WSAEWOULDBLOCK` at once; the wait is the
 			// green thread's park on the event, which holds no processor.
@@ -740,16 +755,20 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 			accept or
 			getsockname or
 			shutdown or
+
 			// The lock pair is the header's deadlock; it must stay `schedulerBound`.
 			EnterCriticalSection or
 			LeaveCriticalSection or
 			InitializeCriticalSection or
+
 			// The scheduler waiting for its own work: an idle machine's park and
 			// `__sched_syscall_regain`'s wait hold no processor for `__sysmon` to take.
 			WaitForSingleObject or
+
 			// Process teardown, memory, events, handles and the clocks: bounded and short, every one.
 			ExitProcess or
 			GetStdHandle or
+
 			// Unlike the path-taking `GetFileAttributesA`, this answers for an already-open handle out of
 			// the file object the kernel holds.
 			GetFileType or
@@ -770,6 +789,7 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 			FindClose or
 			CreateEventA or
 			SetEvent or
+
 			// `CreateThread`'s only caller is `__sched_startm`'s spawn arm, which runs inside
 			// `__sched_lock`, so bracketing it would reach the header's deadlock by a second road. It is
 			// bounded anyway: it commits a stack and returns.
@@ -778,10 +798,13 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 			GetCurrentProcessId or
 			GetCommandLineA or
 			GetModuleFileNameA or
+
 			// `GetFileType`'s position: it answers out of the file object for a handle this process owns.
 			GetConsoleMode or
+
 			// Not a system call: a table walk in user-mode kernel32 over the caller's own bytes.
 			MultiByteToWideChar or
+
 			// Called once, from `mrt_runtime_init`, before any green thread exists.
 			SetThreadStackGuarantee or
 			GetEnvironmentVariableA or
@@ -794,6 +817,7 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 			TlsSetValue or
 			freeaddrinfo or
 			UnmapViewOfFile or
+
 			// Bounded kernel bookkeeping over handles this process already holds: a handle open, the
 			// suspend/resume pair and the context read, the thread walk, the VAD query and the timer pair.
 			// None waits on another party; the sampler's wait is `osWaitHandle`'s `WaitForSingleObject`,
@@ -810,17 +834,21 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 			NtGetNextThread or
 			CreateWaitableTimerExW or
 			SetWaitableTimer or
+
 			// The scheduler's poller; `StdDialect.stdOpSyscallClassOf`'s `osNetpoll` arm carries why its
 			// wait is the scheduler waiting for its own work.
 			GetQueuedCompletionStatusEx or
 			PostQueuedCompletionStatus or
+
 			// A yield gives the rest of this quantum away and comes straight back.
 			SwitchToThread or
+
 			// The unregister blocks until a running callback finishes and is still not `blocking`: the
 			// callback is one `PostQueuedCompletionStatus`, bounded by this process's own thread pool, and
 			// the register only arms a wait.
 			RegisterWaitForSingleObject or
 			UnregisterWaitEx or
+
 			// The process-tree kill: a terminate asks the kernel to end processes and waits on none of them.
 			CreateJobObjectW or
 			AssignProcessToJobObject or
@@ -916,7 +944,7 @@ function emitGtExitSyscall(code ByteArray, rdataRelocs RdataRelocationArray, cal
 	encodeJcc(code, rel32Fixups: fixups, cond: X64CondCode.equal, targetBlockId: ShimDoneLabel)
 
 	encodePrologue(code, stackSize: exitSyscallSlowFrameBytes(), probeScratchIsFree: false)
-	encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: ExitSyscallSavedResultDisp, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: ExitSyscallSavedResultDisp, srcReg: X64Register.rax, wide: true)
 	encodeCallDirect(code, callFixups: callFixups, targetName: SchedSyscallRegainName)
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rsp, disp: ExitSyscallSavedResultDisp, wide: true)
 	encodeEpilogue(code, stackSize: exitSyscallSlowFrameBytes())
@@ -1091,7 +1119,7 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 		let dstDisp = win64OutgoingArgDisp(k)
 		let srcDisp = (ShimPushedWordBytes + (dstDisp as StackSize)) as Imm32
 		encodeLoadRegBaseDisp(code, destReg: ShimGtReg, base: ShimGtRspReg, disp: srcDisp, wide: true)
-		encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: dstDisp, srcReg: ShimGtReg)
+		encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: dstDisp, srcReg: ShimGtReg, wide: true)
 	end 'copyArg'
 
 	// Repoint the TIB at the system stack for the call (rax = system-stack top, destroyed here — it is dead
@@ -1333,7 +1361,7 @@ function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
 	// Step 1: switch to the system stack, ferrying the GT entry rsp (rsp on entry — the guard's return-addr slot)
 	// as the top word of the system-stack frame. `[r10 - 8] = entryRsp` then `rsp = r10 - 8`. r11 = gt and
 	// r10 = systemStackTop both survive (neither the store, the lea, nor the pushes below touch them).
-	encodeStoreBaseDispReg(code, base: ShimGtRspReg, disp: MorestackFerryDisp, srcReg: X64Register.rsp)  // [r10-8] = entryRsp
+	encodeStoreBaseDispReg(code, base: ShimGtRspReg, disp: MorestackFerryDisp, srcReg: X64Register.rsp, wide: true)  // [r10-8] = entryRsp
 	encodeLeaRegRegImm32(code, dest: X64Register.rsp, base: ShimGtRspReg, disp: MorestackFerryDisp)  // rsp = r10 - 8
 
 	// Step 2: save what the ENTRY CONTRACT names. The system-stack top is 16-aligned, so the ferried word is all
@@ -1387,8 +1415,8 @@ function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
 	// Writing the two words of a RUNNING thread is harmless: nothing reads them until its next switch-out
 	// overwrites both.
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rsp, disp: ferriedRspDisp, wide: true)
-	encodeStoreBaseDispReg(code, base: GtMoreGtReg, disp: GtOffSp as Imm32, srcReg: X64Register.rcx)
-	encodeStoreBaseDispReg(code, base: GtMoreGtReg, disp: GtOffFp as Imm32, srcReg: X64Register.rbp)
+	encodeStoreBaseDispReg(code, base: GtMoreGtReg, disp: GtOffSp as Imm32, srcReg: X64Register.rcx, wide: true)
+	encodeStoreBaseDispReg(code, base: GtMoreGtReg, disp: GtOffFp as Imm32, srcReg: X64Register.rbp, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: GtMoreGtReg, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: GtMoreNewBaseReg, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: GtMoreNewSizeReg, wide: true)
@@ -1397,9 +1425,9 @@ function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
 	// Step 7: both stack marks (`GtStackMarksOfAGrow`) — the size was chosen now, and the thread has grown — and the
 	// rebased live rbp goes to its saved slot so the pop below restores the relocated value.
 	encodeMovRegImm32(code, dest: X64Register.rcx, value: GtStackMarksOfAGrow as MachineWord)
-	encodeStoreBaseDispReg(code, base: GtMoreGtReg, disp: GtOffStackMarks as Imm32, srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(code, base: GtMoreGtReg, disp: GtOffStackMarks as Imm32, srcReg: X64Register.rcx, wide: true)
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: GtMoreGtReg, disp: GtOffFp as Imm32, wide: true)
-	encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: savedRbpDisp, srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: savedRbpDisp, srcReg: X64Register.rcx, wide: true)
 
 	// Step 8: set the TIB to the NEW GT-stack bounds (`__gt_stack_relocate` wrote them to the struct) BEFORE we
 	// pop rbx=gt. rcx is free scratch. After this, gs:[] describes the stack we return onto.
@@ -1432,7 +1460,7 @@ function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
 	growLabels.place(GrowExhaustedLabel, value: code.count())
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rsp, disp: ferriedRspDisp, wide: true)
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rax, disp: FrameOffSavedFramePointer as Imm32, wide: true)
-	encodeStoreBaseDispReg(code, base: X64Register.rax, disp: FrameOffSavedFramePointer as Imm32, srcReg: X64Register.rbp)
+	encodeStoreBaseDispReg(code, base: X64Register.rax, disp: FrameOffSavedFramePointer as Imm32, srcReg: X64Register.rbp, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.rax, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.r8, src: X64Register.rax, wide: true)
 	encodeCallDirect(code, callFixups: callFixups, targetName: GtStackOverflowName)
@@ -1509,7 +1537,7 @@ function buildGtStackRelocateChunk(target Target) returns FunctionCodeChunk
 	code.push(OpcodeCld)
 	code.push(OpcodeRepPrefix)
 	code.push(OpcodeMovsb)
-	encodeStoreBaseDispReg(code, base: RelocGtReg, disp: GtOffSp as Imm32, srcReg: RelocNewLowReg)
+	encodeStoreBaseDispReg(code, base: RelocGtReg, disp: GtOffSp as Imm32, srcReg: RelocNewLowReg, wide: true)
 
 	// `gt.fp` rebased in place, then the chain from it.
 	emitGtRelocateRebaseWord(code, reg: RelocWalkReg, base: RelocGtReg, disp: GtOffFp as Imm32)
@@ -1517,8 +1545,8 @@ function buildGtStackRelocateChunk(target Target) returns FunctionCodeChunk
 
 	// The GT's own view of its stack: base, size, the guard word, and — where the kernel probes it — the TIB pair
 	// the next switch-in (or `__gt_morestack`'s step 8) loads.
-	encodeStoreBaseDispReg(code, base: RelocGtReg, disp: GtOffStackBase as Imm32, srcReg: RelocNewBaseReg)
-	encodeStoreBaseDispReg(code, base: RelocGtReg, disp: GtOffStackSize as Imm32, srcReg: RelocNewSizeReg)
+	encodeStoreBaseDispReg(code, base: RelocGtReg, disp: GtOffStackBase as Imm32, srcReg: RelocNewBaseReg, wide: true)
+	encodeStoreBaseDispReg(code, base: RelocGtReg, disp: GtOffStackSize as Imm32, srcReg: RelocNewSizeReg, wide: true)
 
 	// ⚠ A preemption request `__sysmon` stored into the guard word meanwhile is overwritten here and lost; it is
 	// sent again at the next lap while the strand still holds its processor, a loss Go accepts at the same store
@@ -1526,8 +1554,8 @@ function buildGtStackRelocateChunk(target Target) returns FunctionCodeChunk
 	emitGtGuardWordRestore(code, gt: RelocGtReg, scratch: X64Register.rcx, target: target)
 
 	if x64OsProbesStackBounds(target.os) 'republishTheBounds'
-		encodeStoreBaseDispReg(code, base: RelocGtReg, disp: GtOffTibStackBase as Imm32, srcReg: RelocNewHighReg)
-		encodeStoreBaseDispReg(code, base: RelocGtReg, disp: GtOffTibStackLimit as Imm32, srcReg: RelocNewBaseReg)
+		encodeStoreBaseDispReg(code, base: RelocGtReg, disp: GtOffTibStackBase as Imm32, srcReg: RelocNewHighReg, wide: true)
+		encodeStoreBaseDispReg(code, base: RelocGtReg, disp: GtOffTibStackLimit as Imm32, srcReg: RelocNewBaseReg, wide: true)
 	end 'republishTheBounds'
 
 	// Give the old stack back. Every pointer into it has been rewritten, so nothing that survives this can read it.
@@ -1549,7 +1577,7 @@ end 'buildGtStackRelocateChunk'
 function emitGtGuardWordRestore(code ByteArray, gt X64Register, scratch X64Register, target Target)
 	encodeLoadRegBaseDisp(code, destReg: scratch, base: gt, disp: GtOffStackBase as Imm32, wide: true)
 	encodeGrp1RegImm32(code, ext: Grp1ExtAdd, reg: scratch, imm: gtStackGuardHeight(target) as Imm32)
-	encodeStoreBaseDispReg(code, base: gt, disp: GtOffStackGuard as Imm32, srcReg: scratch)
+	encodeStoreBaseDispReg(code, base: gt, disp: GtOffStackGuard as Imm32, srcReg: scratch, wide: true)
 end 'emitGtGuardWordRestore'
 
 // `reg += offset` IFF `reg` points inside the OLD stack `[old_base, old_top)` — the one statement of that test, for
@@ -1573,7 +1601,7 @@ end 'emitGtRelocateRebase'
 function emitGtRelocateRebaseWord(code ByteArray, reg X64Register, base X64Register, disp Imm32)
 	encodeLoadRegBaseDisp(code, destReg: reg, base: base, disp: disp, wide: true)
 	emitGtRelocateRebase(code, reg: reg)
-	encodeStoreBaseDispReg(code, base: base, disp: disp, srcReg: reg)
+	encodeStoreBaseDispReg(code, base: base, disp: disp, srcReg: reg, wide: true)
 end 'emitGtRelocateRebaseWord'
 
 // The saved-rbp chain walk — the correctness crux. Entered with the walker (the rebased `gt.fp`) in `RelocWalkReg`.
@@ -1829,10 +1857,10 @@ function emitX64PreemptInject(asm X64RuntimeAsm, fileSlot StackSize, spOffset Im
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.r10, disp: spOffset, wide: true)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: -(StackWordBytes as Imm32))
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.r10, disp: pcOffset, wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rax, disp: 0, srcReg: X64Register.rdx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: spOffset, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rax, disp: 0, srcReg: X64Register.rdx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: spOffset, srcReg: X64Register.rax, wide: true)
 	encodeLeaRegFuncAddr(asm.code, callFixups: asm.callFixups, dest: X64Register.rdx, targetName: AsyncPreemptName)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: pcOffset, srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: pcOffset, srcReg: X64Register.rdx, wide: true)
 end 'emitX64PreemptInject'
 
 // CAS(m.signalPending, free → held) on the machine in `m`, branching to `alreadyOutstanding` when a stop is
@@ -1851,7 +1879,7 @@ end 'emitX64PreemptClaim'
 function emitX64PreemptGiveBack(asm X64RuntimeAsm, machineSlot StackSize)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rbp, disp: asm.slotDisp(machineSlot), wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: PreemptClaimFree)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: MOffSignalPending as Imm32, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: MOffSignalPending as Imm32, srcReg: X64Register.rax, wide: true)
 end 'emitX64PreemptGiveBack'
 
 // `__gt_preempt_self_register(rcx = m)` — see `SchedRuntime.PreemptSelfRegisterName`. Run by the thread that
@@ -1865,12 +1893,12 @@ function buildPreemptSelfRegisterChunk() returns FunctionCodeChunk
 	let SlotMachine = 0
 	var asm = X64RuntimeAsm.beginFunction(1)
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotMachine), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotMachine), srcReg: X64Register.rcx, wide: true)
 
 	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.GetCurrentThreadId))
 	encodeImportAnswerWidth(asm.code, slot: IatSlot.GetCurrentThreadId)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rbp, disp: asm.slotDisp(SlotMachine), wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: MOffOsThreadId as Imm32, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: MOffOsThreadId as Imm32, srcReg: X64Register.rax, wide: true)
 
 	// `OpenThread(PreemptThreadAccess, FALSE, id)`
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r8, src: X64Register.rax, wide: true)
@@ -1880,7 +1908,7 @@ function buildPreemptSelfRegisterChunk() returns FunctionCodeChunk
 	encodeImportAnswerWidth(asm.code, slot: IatSlot.OpenThread)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rbp, disp: asm.slotDisp(SlotMachine), wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: MOffPreemptThreadHandle as Imm32, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: MOffPreemptThreadHandle as Imm32, srcReg: X64Register.rax, wide: true)
 
 	return asm.finishFunction(PreemptSelfRegisterName)
 end 'buildPreemptSelfRegisterChunk'
@@ -1906,12 +1934,12 @@ function buildPreemptMachineChunk() returns FunctionCodeChunk
 	let SlotContext = 2
 	var asm = X64RuntimeAsm.beginFunction(3)
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotMachine), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotMachine), srcReg: X64Register.rcx, wide: true)
 
 	emitX64PreemptClaim(asm, m: X64Register.rcx, alreadyOutstanding: PreemptDoneLabel)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rcx, disp: MOffPreemptThreadHandle as Imm32, wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotHandle), srcReg: X64Register.r10)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotHandle), srcReg: X64Register.r10, wide: true)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtCmp, reg: X64Register.r10, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: PreemptGiveBackLabel)
 
@@ -1931,9 +1959,9 @@ function buildPreemptMachineChunk() returns FunctionCodeChunk
 	// The thread IS suspended from here on, so every road out goes through `PreemptResumeLabel`.
 	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.r10, label: SchedPreemptContextLabel)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.r10, disp: 0, wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotContext), srcReg: X64Register.r10)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotContext), srcReg: X64Register.r10, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win64ContextControl)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: Win64ContextFlagsOffset as Imm32, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: Win64ContextFlagsOffset as Imm32, srcReg: X64Register.rax, wide: true)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotHandle), wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.r10, wide: true)
@@ -2000,7 +2028,7 @@ end 'emitX64ClaimExtLockAs'
 function emitPreemptReleaseExtLock(asm X64RuntimeAsm)
 	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.r10, label: SchedPreemptExtLockLabel)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: PreemptClaimFree)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: 0, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: 0, srcReg: X64Register.rax, wide: true)
 end 'emitPreemptReleaseExtLock'
 
 // `__gt_async_preempt` — see `SchedRuntime.AsyncPreemptName`. NOT a normal call: it is entered by a `ret`
@@ -2059,7 +2087,7 @@ function emitAsyncPreemptRegisterBlock(code ByteArray, direction GtRegisterBlock
 		let disp = (ShadowSpaceBytes + ((iter.index() as StackSize) * StackWordBytes)) as Imm32
 
 		match direction 'dir'
-			save then encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: disp, srcReg: reg)
+			save then encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: disp, srcReg: reg, wide: true)
 			restore then encodeLoadRegBaseDisp(code, destReg: reg, base: X64Register.rsp, disp: disp, wide: true)
 		end 'dir'
 	end 'gprs'
@@ -2127,10 +2155,10 @@ function buildExitProcessGateChunk() returns FunctionCodeChunk
 	let SlotExitCode = 0
 	let SlotClaimant = 1
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotExitCode), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotExitCode), srcReg: X64Register.rcx, wide: true)
 	emitGtGatedIatCall(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.GetCurrentThreadId), usesGt: true)
 	encodeImportAnswerWidth(asm.code, slot: IatSlot.GetCurrentThreadId)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotClaimant), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotClaimant), srcReg: X64Register.rax, wide: true)
 
 	asm.placeLabel(ExitProcessSpinLabel)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotClaimant), wide: true)
@@ -2178,10 +2206,10 @@ function buildLinuxPreemptSelfRegisterChunk() returns FunctionCodeChunk
 	let SlotMachine = 0
 	var asm = X64RuntimeAsm.beginFunction(1)
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotMachine), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotMachine), srcReg: X64Register.rcx, wide: true)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallGettid)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rbp, disp: asm.slotDisp(SlotMachine), wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: MOffOsThreadId as Imm32, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: MOffOsThreadId as Imm32, srcReg: X64Register.rax, wide: true)
 
 	return asm.finishFunction(PreemptSelfRegisterName)
 end 'buildLinuxPreemptSelfRegisterChunk'
@@ -2199,7 +2227,7 @@ function buildLinuxPreemptMachineChunk() returns FunctionCodeChunk
 	let SlotMachine = 0
 	var asm = X64RuntimeAsm.beginFunction(1)
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotMachine), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotMachine), srcReg: X64Register.rcx, wide: true)
 
 	emitX64PreemptClaim(asm, m: X64Register.rcx, alreadyOutstanding: PreemptDoneLabel)
 
@@ -2242,10 +2270,10 @@ function buildLinuxPreemptHandlerChunk() returns FunctionCodeChunk
 	let SlotMachine = 1
 	var asm = X64RuntimeAsm.beginFunction(2)
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotUcontext), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotUcontext), srcReg: X64Register.rdx, wide: true)
 
 	emitLoadCurrentMOrBail(asm.code, rdataRelocs: asm.rdataRelocs, fixups: asm.rel32Fixups, dest: X64Register.rax, bail: PreemptNoMachineLabel, os: Os.linux)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotMachine), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotMachine), srcReg: X64Register.rax, wide: true)
 
 	// `__gt_preempt_safe(m, pc, sp)` over the register file the kernel saved. The third argument rides RAX,
 	// this compiler's own third argument register (`StdToX64Conversion.argRegisters`) — which is why the

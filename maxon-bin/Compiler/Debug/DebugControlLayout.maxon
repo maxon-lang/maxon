@@ -1,7 +1,8 @@
-// The one declaration of the control segment's geometry. `runtime/DebugAgent.maxon` restates every figure
-// here as a `let` of its own, because tier source may not read the compiler's; `checkDebugAgentGeometry`
-// compares the two and refuses the build when they part, since nothing else would notice until an agent
-// wrote one field and a driver read another.
+// The one declaration of the control segment's geometry. `runtime/DebugAgent.maxon` restates every
+// figure here that it reads as a `let` of its own, because tier source may not read the compiler's;
+// the rest, such as `DbgPrivOffFrame` and the `DbgCtx*` CONTEXT displacements, only the emitter
+// reads. `checkDebugAgentGeometry` compares the two and refuses the build when they part, since
+// nothing else would notice until an agent wrote one field and a driver read another.
 export let DbgLayoutVersion = 1
 
 export let DbgMagicWord = 0x4C5443474244584D
@@ -82,6 +83,7 @@ export let DbgGtRecOffMachine = 48
 export let DbgOffAgentPrivate = 0x1FF8
 
 export let DbgRegisterSlots = 80
+export let DbgWordBytes = 8
 export let DbgMaxBacktraceFrames = 64
 export let DbgBacktraceFrameWords = 2
 export let DbgReadBufBytes = 512
@@ -220,7 +222,13 @@ export let DbgPrivOffHoldsPlaced = 0x7F8
 export let DbgPrivOffBreakpoints = 0x800
 export let DbgPrivOffGtRoster = 0x2000
 export let DbgPrivBreakpointStride = 96
-export let DbgPrivStackBase = 0xA000
+export let DbgPrivOffFrame = 0xA000
+
+// Another thread's registers, read during a stop, land here and never in `DbgPrivOffFrame`: that
+// frame holds the trapping thread's registers until the thunk copies them back into its CONTEXT, so
+// a stop that read into it would resume the trapping thread on another thread's registers.
+export let DbgPrivOffThreadFrame = 0xA280
+export let DbgPrivStackBase = 0xA500
 export let DbgClaimDeclined = 0
 export let DbgPrivBytes = 0x40000
 export let DbgSlotPoolBytes = 16384
@@ -254,18 +262,17 @@ export let DbgExcCodeSingleStep = 0x80000004
 export let DbgCtxOffGpr0 = 0x078
 export let DbgCtxOffXmm0 = 0x1A0
 export let DbgCtxXmmStride = 16
-export let DbgCtxOffRip = Win64ContextRipOffset
-export let DbgCtxOffRsp = Win64ContextRspOffset
-export let DbgCtxOffFlagsRequest = Win64ContextFlagsOffset
-export let DbgCtxControlRequest = Win64ContextControl
 export let DbgCtxBytes = 1232
-export let DbgCtxOffEFlagsLowByte = 0x044
-export let DbgCtxOffEFlagsHighByte = 0x045
+export let DbgCtxOffEFlags = 0x044
 export let DbgGprCount = 16
 export let DbgXmmCount = 16
-export let DbgRegRsp = 4
-export let DbgRegRbp = 5
-export let DbgRegEFlags = 32
+
+export let DbgRegSp = 4
+export let DbgRegFp = 5
+export let DbgRegFlags = 32
+export let DbgRegPc = 72
+
+export let DbgFlagTrapBit = 0x100
 
 export let DbgBreakpointByte = 0xCC
 export let DbgPauseTrampolineBytes = 1
@@ -312,21 +319,11 @@ export let DbgDisplacementMin = -2147483648
 export let DbgDisplacementMax = 2147483647
 export let DbgPageExecuteReadWrite = 0x40
 export let DbgPageExecuteRead = 0x20
-export let DbgTrapFlagByteBit = 1
 
 export let DbgResumeContinue = 0
 export let DbgResumeStep = 1
 
 export let DbgPreemptClaimStep = 2
-
-export let DbgMbiBytes = 48
-export let DbgMbiOffBaseAddress = 0x00
-export let DbgMbiOffRegionSize = 0x18
-export let DbgMbiOffStateAndProtect = 0x20
-export let DbgMemCommit = 0x1000
-export let DbgPageNoAccess = 0x01
-export let DbgPageGuard = 0x100
-export let DbgDwordBits = 32
 
 export let DbgSegmentNameBytes = 256
 export let DbgEnvNameBufferBytes = 16

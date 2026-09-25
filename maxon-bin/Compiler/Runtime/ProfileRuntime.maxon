@@ -96,9 +96,6 @@ let ModuleSnapshotFlags = SnapModule or SnapModule32
 // (`ProfileSampleContract.maxon`), which is the one place a gated-out directory and this one can share a
 // number rather than each restate it.
 
-// `sizeof(MEMORY_BASIC_INFORMATION)` on x64: BaseAddress, AllocationBase, AllocationProtect + PartitionId,
-// RegionSize, and the State/Protect/Type triple with its tail padding.
-
 // The two `CONTEXT` families `GetThreadContext` is asked to fill here: CONTEXT_CONTROL supplies RIP and RSP,
 // CONTEXT_INTEGER supplies RBP. The record's own displacements are `ProfileSampleContract`'s, which is where
 // the scheduler's monitor reads them from too.
@@ -106,11 +103,6 @@ let ContextSampleFlags = Win64ContextControl or Win64ContextInteger
 
 // `VirtualQueryEx` answers the number of bytes it wrote, so zero is its failure.
 let RegionQueryFailed = 0
-
-// The `MEMORY_BASIC_INFORMATION` displacements only this file touches; the allocation base, which the
-// profiler reads back, is `ProfileRegionAllocationBaseOffset`, and the record's size `ProfileRegionRecordBytes`.
-let MbiBaseAddressOffset = 0
-let MbiRegionSizeOffset = 24
 
 // `__prof_sample`'s own frame: the answer it is accumulating, the byte count it is about to ask for, and
 // `ReadProcessMemory`'s out-param. Three words, because the graph has no block arguments to carry them —
@@ -337,8 +329,8 @@ function buildProfileSample(module StdModule)
 
 	// Both comparisons are unsigned: these are addresses, and a signed `>` reads a high-half pointer
 	// as negative.
-	let regionBase = emitLoadField(module, block: measureWindow, record: mbiPtr, offset: MbiBaseAddressOffset, ids: ids)
-	let regionSize = emitLoadField(module, block: measureWindow, record: mbiPtr, offset: MbiRegionSizeOffset, ids: ids)
+	let regionBase = emitLoadField(module, block: measureWindow, record: mbiPtr, offset: Win64MbiBaseAddressOffset, ids: ids)
+	let regionSize = emitLoadField(module, block: measureWindow, record: mbiPtr, offset: Win64MbiRegionSizeOffset, ids: ids)
 	let regionEnd = emitBin(module, block: measureWindow, a: regionBase, b: regionSize, opcode: StdBinOpcode.add, ids: ids)
 	let available = emitBin(module, block: measureWindow, a: regionEnd, b: stackPointer, opcode: StdBinOpcode.sub, ids: ids)
 	emitStoreField(module, block: measureWindow, record: wantPtr, offset: 0, value: available)
