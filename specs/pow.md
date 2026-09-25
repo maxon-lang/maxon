@@ -95,20 +95,13 @@ end 'main'
 
 <!-- test: fractional-exponent -->
 The only case in this file that reads its result as TEXT rather than through `trunc`, so it is the
-only one that pins what `Math.pow` actually computes rather than what it truncates to. It sat
-`disabled-test:` awaiting float interpolation, and its expectation was written against the
-bootstrap's fixed-six-decimal printer (`1.999999`). The compiler prints the SHORTEST decimal that reads back
-as the same double, so the same value now spells out in full — `Math.pow(4.0, 0.5)` is a software
-exp/log pair and lands one ulp under 2, which six decimals were rounding away.
+only one that pins what `Math.pow` actually computes rather than what it truncates to. The compiler
+prints the SHORTEST decimal that reads back as the same double, so the value spells out in full —
+`Math.pow(4.0, 0.5)` is a software exp/log pair (`exp(exponent * log(base))`) and lands one ulp under 2.
 
-⚠ **The pinned value moved from `1.9999999999999991` to `1.9999999999999998`, and the sentence above
-became TRUE when it did.** `1.9999999999999991` is **four** ulp under 2; only `1.9999999999999998` is
-one. `Math.pow` routes through `exp(exponent * log(base))`, and `stdlib/Math.maxon` had been carrying
-**two spellings of ln 2** — `0.693147180559945`, some 2.7 ulp low, multiplied by the exponent (up to
-~1000) inside `log`, alongside the correctly-rounded `0.6931471805599453` a few functions away. One fact,
-two sites, nothing forcing agreement. Found by review during the `atan2` port and collapsed to a single
-constant; `log`'s worst error over a 12-argument probe fell from ~7 ulp to ≤2, and this case is the only
-committed expectation anywhere that the correction moves.
+⚠ **One ulp is a property of `stdlib/Math.maxon`'s single correctly-rounded ln 2 constant.** `log`
+multiplies it by an exponent of up to ~1000, so an ln 2 a few ulp low moves this answer to
+`1.9999999999999991`, four ulp under 2. This is the only committed expectation that pins that constant.
 ```maxon
 function main() returns ExitCode
 	let result = Math.pow(4.0, exponent: 0.5)  // Square root

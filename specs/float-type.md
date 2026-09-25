@@ -384,8 +384,6 @@ end 'main'
 0.0
 ```
 
-Note: Tests for many float parameters (>4) and float parameter preservation across calls are currently disabled due to known codegen bugs with float register allocation. See test fragments for the disabled tests.
-
 <!-- test: float.panic-in-a-float-returning-function -->
 **THE CONSTRUCT `float.fromString` IS BUILT ON, PINNED IN USER CODE — and the pre-existing compiler PANIC
 that stood between this rung and its two float cases.** `stdlib/Builtins.maxon`'s `__float_fromString`

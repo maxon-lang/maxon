@@ -8,8 +8,7 @@ import {
 	parseSpecContent,
 	parseSpecDirectory,
 	SpecFile,
-	SpecTestMarker,
-	specIsRunnable
+	SpecTestMarker
 } from './specParser';
 import { appendRunOutput, childList, pipeLines } from './testItems';
 
@@ -20,7 +19,6 @@ interface ProfileBinding {
 	profile: vscode.TestRunProfile;
 	binary: string;
 	cwd: string;
-	includes(spec: SpecFile): boolean;
 }
 
 // `spec-test` prints one verdict line per selected test on stdout — `PASS <spec>/<test>`,
@@ -64,8 +62,7 @@ export function registerSpecTestController(workspaceRoot: string): vscode.Dispos
 			true
 		),
 		binary: compilerBinary,
-		cwd: workspaceRoot,
-		includes: specIsRunnable
+		cwd: workspaceRoot
 	};
 
 	// Sync a single spec's tree node and child test items. Returns the count of
@@ -167,10 +164,7 @@ export function registerSpecTestController(workspaceRoot: string): vscode.Dispos
 			return;
 		}
 
-		const requested = collectRequested(
-			request, controller, testItemById, specItems, specByName, binding
-		);
-		for (const item of requested.skipped) run.skipped(item);
+		const requested = collectRequested(request, controller, testItemById, specItems);
 		if (requested.items.length === 0) {
 			run.end();
 			return;
@@ -178,7 +172,7 @@ export function registerSpecTestController(workspaceRoot: string): vscode.Dispos
 
 		for (const item of requested.items) run.enqueued(item);
 
-		const filters = buildFilters(requested, specByName, binding);
+		const filters = buildFilters(requested, specByName);
 		try {
 			await runWithFilters(binding, filters, requested, run, token);
 		} catch (err) {
@@ -203,26 +197,19 @@ interface RequestedTests {
 	items: vscode.TestItem[];
 	itemById: Map<string, vscode.TestItem>;
 	bySpec: Map<string, { all: boolean; tests: vscode.TestItem[]; }>;
-	// Items whose spec is excluded by the active profile (e.g. `status: draft`).
-	// The runner won't see them, so we mark them skipped explicitly instead of
-	// leaving them unresolved.
-	skipped: vscode.TestItem[];
 }
 
 function collectRequested(
 	request: vscode.TestRunRequest,
 	controller: vscode.TestController,
 	testItemById: Map<string, vscode.TestItem>,
-	specItems: Map<string, vscode.TestItem>,
-	specByName: Map<string, SpecFile>,
-	binding: ProfileBinding
+	specItems: Map<string, vscode.TestItem>
 ): RequestedTests {
 	const exclude = new Set<string>();
 	for (const ex of request.exclude ?? []) exclude.add(ex.id);
 
 	const items: vscode.TestItem[] = [];
 	const itemById = new Map<string, vscode.TestItem>();
-	const skipped: vscode.TestItem[] = [];
 	const bySpec = new Map<string, { all: boolean; tests: vscode.TestItem[]; }>();
 
 	const seedItems: vscode.TestItem[] = [];
@@ -237,18 +224,11 @@ function collectRequested(
 		if (specItems.has(seed.id)) {
 			// Whole-spec selection
 			const specName = seed.id;
-			const spec = specByName.get(specName);
 			const tests: vscode.TestItem[] = [];
 			seed.children.forEach(child => {
 				if (!exclude.has(child.id)) tests.push(child);
 			});
 			if (tests.length === 0) continue;
-			if (spec && !binding.includes(spec)) {
-				// Profile excludes this spec (e.g. `status: draft`) — the runner
-				// won't report on these tests, so mark them skipped here.
-				skipped.push(...tests);
-				continue;
-			}
 			items.push(...tests);
 			for (const t of tests) itemById.set(t.id, t);
 			bySpec.set(specName, { all: tests.length === seed.children.size, tests });
@@ -256,11 +236,6 @@ function collectRequested(
 			const slash = seed.id.indexOf('/');
 			if (slash < 0) continue;
 			const specName = seed.id.slice(0, slash);
-			const spec = specByName.get(specName);
-			if (spec && !binding.includes(spec)) {
-				skipped.push(seed);
-				continue;
-			}
 			const entry = bySpec.get(specName) ?? { all: false, tests: [] };
 			entry.tests.push(seed);
 			bySpec.set(specName, entry);
@@ -269,28 +244,17 @@ function collectRequested(
 		}
 	}
 
-	return { items, itemById, bySpec, skipped };
+	return { items, itemById, bySpec };
 }
 
 function buildFilters(
 	requested: RequestedTests,
-	specByName: Map<string, SpecFile>,
-	binding: ProfileBinding
+	specByName: Map<string, SpecFile>
 ): string[] {
-	// If we've requested whole-spec runs of every spec the profile would
-	// include, drop the filter and let the runner do its thing in one process.
-	let coversAllEligible = true;
-	let eligibleCount = 0;
-	for (const spec of specByName.values()) {
-		if (!binding.includes(spec)) continue;
-		eligibleCount++;
-		const entry = requested.bySpec.get(spec.specName);
-		if (!entry || !entry.all) {
-			coversAllEligible = false;
-			break;
-		}
-	}
-	if (coversAllEligible && eligibleCount > 0 && eligibleCount === requested.bySpec.size) {
+	const coversEverySpec = specByName.size > 0
+		&& specByName.size === requested.bySpec.size
+		&& [...specByName.keys()].every(specName => requested.bySpec.get(specName)?.all === true);
+	if (coversEverySpec) {
 		return [];
 	}
 

@@ -324,10 +324,6 @@ error E3072: specs/fragments/managed-directory/managed-directory.error-direct-co
 
 ### the compiler's own cases
 
-⚠ A `### ` heading, not a `## ` one: `SpecParser`'s active-test region runs from
-`## Tests` to the NEXT `## ` heading, so a second-level heading here would shelve
-every case below it silently.
-
 The nine cases below are the compiler's own, added by R4.3's adversarial probing (seven)
 and by its independent review (the last two). Each pins something the ten ported
 cases above do not reach — and every one of them was written because a probe

@@ -45,24 +45,9 @@ a consuming call, and the slot's single `+1` is dropped exactly once at each
 function exit. This disposes the reference once regardless of how many times the
 unpromoted slot is re-loaded.
 
-In the self-hosted compiler this test is restricted to the register-frame
-targets. On `wasm32-wasi` every function shares ONE linear-memory slot region, so
-an unpromoted slot does not persist across the calls in its own body — its
-content is unrecoverable at scope exit — and the slot-owned drop is deliberately
-disabled there (a pre-existing wasm slot-model limitation needing a
-per-invocation shadow stack). The consumed interface param therefore keeps its
-unfixed behavior on wasm and this test would fault there.
-
-⚠ **THAT PREMISE IS v1's, AND IT IS FALSE FOR the compiler — MEASURED 2026-08-04, NOT
-INFERRED.** The compiler reaches the same answers by a different route: it is move-only
-and has no `mem2reg`-unpromoted-slot model to lose, so there is no slot whose
-content must survive a call. Both cases were run under the vendored wasmtime and
-return **34** and **22**, the same as every register-frame target. `wasm32-wasi`
-is therefore ON this file's target list here, where upstream `/specs` leaves it
-off — the ONE deliberate divergence from the byte-identical port, recorded here
-because a restriction nobody re-measures is how a lane silently loses coverage.
-(the compiler's wasm lane has form for exactly this: `.claude/CLAUDE.md` carried
-"scalar only" for two weeks after it stopped being true.)
+Both cases run on every target, `wasm32-wasi` included, and return **34** and **22** there as on
+every register-frame target: the compiler is move-only and has no `mem2reg`-unpromoted-slot model, so
+there is no slot whose content must survive a call.
 
 ## Tests
 

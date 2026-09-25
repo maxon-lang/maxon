@@ -17,10 +17,9 @@ carries the same rule for the same reason.
 ⚠ **The marker below has TWO spaces after the comment opener. Do not let a formatter collapse them**
 — the second space IS the subject.
 
-⚠ **AND THE PROSE ABOVE DELIBERATELY DOES NOT SPELL ONE OUT.** A spelled-out example IS a marker:
-`extractTests` never reaches this far up the file, but `traceSliceOf` and `traceMarkerLineOf` scan every
-line, so the sentence would yield a phantom case. A fixture documenting a grammar must not be written in
-it.
+⚠ **AND THE PROSE ABOVE DELIBERATELY DOES NOT SPELL ONE OUT.** A spelled-out example on a line of its
+own IS a marker, and the parser refuses a test marker above `## Tests`, so the fixture would fail before
+its case ran. A fixture documenting a grammar must not be written in it.
 
 ## Tests
 

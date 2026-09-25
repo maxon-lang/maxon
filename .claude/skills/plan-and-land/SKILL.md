@@ -63,9 +63,9 @@ whether this lands in emitted runtime (`Compiler/Runtime/`, `Targets/*/*Runtime*
 `stdlib/` or plain compiler source, **and which of
 `maxon-bin/CLAUDE.md`'s obligations that triggers**.
 
-**B — SPEC SURFACE** (`Explore`), briefed with `/land` §1's four fields **verbatim**: which `specs` files
+**B — SPEC SURFACE** (`Explore`), briefed with `/land` §1's three fields **verbatim**: which `specs` files
 own this behaviour; every existing case that touches it with file + line and **the verbatim text** of any
-that already pins it; every `disabled-test:` in range; what the neighbouring cases look like.
+that already pins it; what the neighbouring cases look like.
 
 Both: read-only · write nothing into the checkout · run nothing · `file:line` for every claim.
 

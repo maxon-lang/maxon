@@ -246,9 +246,7 @@ line2
 ```
 
 <!-- test: default-values.float-default-omitted -->
-A float default on a ranged float alias, interpolated. It sat `disabled-test:` for the whole of P1.2
-wave B because `print("{factor}")` on a float was E2015; float interpolation landing is what
-re-enabled it, and the declaration half was never the blocker.
+A float default on a ranged float alias, interpolated.
 ```maxon
 typealias Number = float(f64.min to f64.max)
 

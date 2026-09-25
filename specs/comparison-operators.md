@@ -27,9 +27,7 @@ rather than materializing a boolean. See `specs/if-statements.md`.
 
 ## Tests
 
-The M4a slice of `specs/comparison-operators.md`: `==`, `!=`, `>`, and `<=`, each
-inside an `if`. `float-comparison` is DEFERRED (floats) and recorded under
-`## Deferred` below.
+The first four cases test `==`, `!=`, `>`, and `<=`, each inside an `if`.
 
 Each of those four takes its branch, so each asserts only the TRUE direction of one
 operator — and a `jcc` that is wrong in a way that still lands on the same answer

@@ -287,7 +287,8 @@ the restriction set above.
 (keyword list :47, `function_decl` production), `LANGUAGE_REFERENCE.md`, `QUICK_REFERENCE.md`. Document the
 factory idiom as the sanctioned route for object-level dependencies.
 
-**Order:** 1 → 2 → 3 → write spec with all tests `disabled-test` → 4 → 4c → 5 → enable tests one at a time.
+**Order:** 1 → 2 → 3 → 4 → 4c → 5. Each spec case is written in the slice that makes it pass; a case
+that cannot pass halts the work.
 Slices 1–3 change no existing program's behavior; slice 4 turns the feature on. **Land 4c with 4**, not
 after — shipping injection without the async guard would mean silently threading providers across thread
 boundaries, which is the one outcome ruling 7 exists to prevent.
@@ -309,7 +310,7 @@ arg type.
 
 Frontmatter: `feature: context-parameters`, `status: experimental`,
 `keywords: [using, provide, context, contextual, implicit, ambient, dependency]`, `category: functions`.
-All start as `disabled-test`, enabled one at a time.
+Each case is added in the slice that makes it pass.
 
 | Test | Description |
 |---|---|
@@ -343,8 +344,7 @@ All start as `disabled-test`, enabled one at a time.
 
 1. `scripts/build.sh` — exit 0, **zero warnings**.
 2. `node website/scripts/sync-docs.mjs --check` passes — it refuses a duplicate error-code number.
-3. `mcp__maxon__run_spec_test` with `filter: "context-parameters"` — walk the disabled tests green one
-   at a time.
+3. `mcp__maxon__run_spec_test` with `filter: "context-parameters"` — every case passes.
 4. **Full suite neutral** — no regression against a pre-change baseline established first-hand; never
    trust a claimed-green tree.
 5. **Leak gate** — no run exits 101. The `async-*` and `factory-injection` cases are the ones most likely

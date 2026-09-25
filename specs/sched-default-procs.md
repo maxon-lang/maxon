@@ -64,25 +64,16 @@ rather than by the suite, and why a scheduler bug reachable only at N ≥ 2 coul
 `<!-- unsupported-targets: … -->` and `<!-- Args: … -->` on the same kind of comment line
 (`maxon-bin/Testing/SpecParser.maxon`). A case that carries none gets the process default.
 
-⭐ **THE CASE THAT ASSERTS THE DEFAULT ITSELF — `the-default-is-every-processor` — IS THE FIRST ONE BELOW,
-AND IT ARRIVED WITH THE FLIP EXACTLY AS THIS PARAGRAPH SAID IT WOULD.** Its whole subject is the ABSENCE of
-a marker: it sets no count and asserts that the scheduler resolved the machine's own. It could not have
-landed a commit earlier — it would have read 1 against the host's count — which is why it was named here
-before it existed rather than written and shelved.
+⭐ **THE CASE THAT ASSERTS THE DEFAULT ITSELF — `the-default-is-every-processor` — IS THE FIRST ONE
+BELOW.** Its whole subject is the ABSENCE of a marker: it sets no count and asserts that the scheduler
+resolved the machine's own.
 
-⚠⚠ **A MARKER WITH NO ARM IN `parseTestBlocks` IS SILENTLY IGNORED, AND THIS HAS ALREADY HAPPENED HERE.**
-The marker loop (`SpecParser.maxon:1175-1270`) asks one `openingsCarry` question per known family and a
-line matching none of them falls through to `i = i + 1` — the file's own comment on the `unsupported-targets:` arm
-says what that costs: *"without this it would fall through to `i = i + 1` and be silently ignored (which
-is exactly how `safety.md`'s four markers went unread until this rung)"*. ⇒ a `procs:` marker written
-before its arm exists reads as **prose**: the case runs at the default and passes or fails for a reason
-that has nothing to do with the number it names.
-
-⇒ **`the-procs-marker-pins-one-processor` IS THE GATE FOR THAT, AND THE FLIP IS WHAT ARMED IT.** Before the
-flip its `procs: 1` and the default agreed, so it could not see whether the override happened at all; now
-the default is the machine's count and its `procs=1` is reachable ONLY through the marker. **MEASURED: the
+⇒ **`the-procs-marker-pins-one-processor` IS THE GATE THAT THE OVERRIDE HAPPENS.** The harness refuses a
+comment line no directive reads, but a `procs:` marker that is READ and then not applied would still run the
+case at the default. The default is the machine's count, so its `procs=1` is reachable ONLY through the
+marker. **MEASURED: the
 same program with the marker removed prints `procs=16` on this host.** A `procs:` marker that is parsed but
-dropped, or misspelled into `SpecParser`'s silently-ignored bucket, turns it red.
+dropped turns it red.
 
 **`the-procs-marker-raises-the-processor-count` is the same gate pointing the other way**, and it is last
 below. It names a count ABOVE one and asserts the scheduler RESOLVED it, so an unread marker on the
@@ -258,12 +249,10 @@ is 1 wherever this runs, because a machine cannot report fewer than one processo
 (`SchedRuntime.MinimumProcessorCount` is the floor that guarantees it). The aggregate is unchanged,
 because it is unchangeable.
 
-⭐ **THE COINCIDENCE HAS ENDED, AND THIS CASE IS NOW LOAD-BEARING.** It used to agree with the default it
-was meant to override, so it could not see whether the override happened at all. The default is now the
-machine's processor count, so `procs=1` is reachable ONLY through the marker — **MEASURED: the identical
-program with the marker removed prints `procs=16` on this host.** A `procs:` marker that is parsed but
-dropped, or misspelled into `SpecParser`'s silently-ignored bucket, turns this case red, which is exactly
-what it is for.
+⭐ **THIS CASE IS LOAD-BEARING.** The default is the machine's processor count, so `procs=1` is reachable
+ONLY through the marker — **MEASURED: the identical program with the marker removed prints `procs=16` on
+this host.** A `procs:` marker that is parsed but dropped turns this case red, which is exactly what it
+is for.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias AdderHandleArray = Array with Adder.handle

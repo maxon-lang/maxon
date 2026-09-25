@@ -362,11 +362,8 @@ end 'main'
 
 
 <!-- test: character-element-type -->
-BOTH of the blockers this case was disabled for are gone, and it was disabled for one of them long after
-that one had been closed. MEASURED at W60 on the untouched compiler: it compiles, runs, and exits **65**.
-The `Character` half (`E2015 … member 'codepoints'`) closed with the `Character` slice; the
-"substitution rung" half was never a blocker at all — `CharSource` declares no `extends`, so
-`implements CharSource with Character` is the ordinary root-entry binding every case above it already used.
+`CharSource` declares no `extends`, so `implements CharSource with Character` is the ordinary root-entry
+binding every case above it uses; `Character.codepoints()` supplies the value, and the program exits **65**.
 ```maxon
 // character is a grapheme cluster type, use codepoints() to access codepoint values
 interface CharSource uses Element
@@ -604,9 +601,6 @@ end 'main'
 
 
 ### the compiler regression cases
-
-(A `###` and not a `##`: the active-test region runs from `## Tests` to the NEXT `## ` heading, so a
-second-level heading here would shelve every case below it — see `Testing/SpecParser.maxon`.)
 
 The cases above are the canonical `/specs/associated-types.md` corpus, byte-identical. The four below are
 the compiler's own, found by probing the substitution rung (R5) for false rejects and false accepts. Each names the

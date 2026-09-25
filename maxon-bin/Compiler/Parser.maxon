@@ -8404,17 +8404,18 @@ end 'cursorSurfaceMemberNames'
 // branch, and view and parent both cascaded `__str_decref` over the same records: **0xC0000005 at teardown,
 // 25 cases**. An `Array` IS its own column, and that walk now says so.
 //
-// ⭐⭐ **AND ARRH STRUCK `clone`, WHICH IS THE ONE ARR3a MEASURED GREEN AND PUT BACK FOR THE HARNESS.** Its
-// blocker was never the code: `requireArrayCopyMethodSupported` fires where the `managed.slice(0, len)` IS, so
-// two refusals relocate from `<fragment>:12:12 … 'clone'` to `stdlib/Array.maxon:142:32 … 'slice'`, and no
-// `maxoncstderr` block could name an absolute checkout path. ARRH cured THAT —
-// `SpecTestRunner.rewriteSourceTierPaths` rewrites the compiler's library root to the repo-relative `stdlib/`
-// exactly as a staged fragment's path is rewritten to `<fragment>` — and the retirement then cost 27
-// expectation texts and NOTHING else: 21 of them this roster rendering itself, 4 the relocated refusals, and
-// the deletion took `emitArrayCloneCall` and the whole `__managed_clone_opaque` wrapper with it (its only emitter
-// was that arm). What it did NOT cure is that the relocated sentence names a line no user wrote; the blame
-// edge that would re-point a stdlib-body diagnostic at the construct that forced it still does not exist, and
-// `specs/array-conditional-conformance-withheld.md`'s disabled case is the standing record of it.
+// ⭐⭐ **AND ARRH STRUCK `clone`, WHICH IS THE ONE ARR3a MEASURED GREEN AND PUT BACK FOR THE
+// HARNESS.** Its blocker was never the code: `requireArrayCopyMethodSupported` fires where the
+// `managed.slice(0, len)` IS, so two refusals relocate from `<fragment>:12:12 … 'clone'` to
+// `stdlib/Array.maxon:142:32 … 'slice'`, and no `maxoncstderr` block could name an absolute
+// checkout path. ARRH cured THAT — `SpecTestRunner.rewriteSourceTierPaths` rewrites the compiler's
+// library root to the repo-relative `stdlib/` exactly as a staged fragment's path is rewritten to
+// `<fragment>` — and the retirement then cost 27 expectation texts and NOTHING else: 21 of them
+// this roster rendering itself, 4 the relocated refusals, and the deletion took
+// `emitArrayCloneCall` and the whole `__managed_clone_opaque` wrapper with it (its only emitter was
+// that arm). What it did NOT cure is that the relocated sentence names a line no user wrote; the
+// blame edge that would re-point a stdlib-body diagnostic at the construct that forced it still
+// does not exist.
 //
 // ⚠⚠ **THE SIX THAT DID NOT GO AT ARR3a, AND WHAT EACH ONE MEASURED** — no two of them for the same reason.
 // Both compiler defects above are FIXED, so several of these are one named mechanism away rather than
@@ -31967,13 +31968,6 @@ export type Parser
 	// So `static function create(…) returns Self` is `structRef(Point)` in the sweep and in the
 	// parse, and a call's result is typed exactly (`mintCallResult` reads the sweep). That is what
 	// `let p = Point.create(3, y: 4)` needs to know `p` is a Point at all.
-	//
-	// ⚠ **`returns Point` from OUTSIDE `type Point` is the gap, and it is LOUD.** The signature
-	// resolves to `structRef` (TypeResolution) while the call site's tag comes from the sweep's
-	// `named` — so `let p = make()` binds `p` as a ranged int and `p.x` reports "is not a struct".
-	// A wrong REJECTION of a correct program, never a wrong answer, and the program it rejects is
-	// `struct-return` — still `disabled-test:`, deferred to P1.4's ownership ruling, which is what
-	// a struct crossing a call boundary needs before it can be right for any other reason.
 	function readTypeReference(voice BarePrimitiveVoice) returns MaxonType throws ParseError
 		// A TUPLE TYPE (P1.10) — `(Integer, Integer)`. Asked first because `(` opens nothing else in a type
 		// position: the one other parenthesized type form, `function(…)`, is introduced by its own keyword and
@@ -35002,12 +34996,8 @@ export type Parser
 		// line below: the environment block lives in THIS frame and the box outlives it. Sitting on the emitter,
 		// the guard cannot be routed around by a second assignment path.
 		//
-		// ⚠ **THE SHELVED CASE'S DIVERGENCE ARGUMENT DIED WHEN THE WRITE-BACK WAS BUILT.** It read *"the compiler
-		// payload bindings are IMMUTABLE frame-local COPIES … the compiler never writes back through a payload binding,
-		// so the E3099 escape route does not exist here"*, and E2013 was doing the refusing. Mutable payload
-		// bindings carry exactly that write-back (`specs/mutable-enums.md`), which makes the
-		// premise false and the route real — the store this function emits IS the alias into the heap box the
-		// note said the compiler has not got.
+		// ⚠ Mutable payload bindings write back into the box (`specs/mutable-enums.md`), so the store
+		// this function emits IS an alias into the heap box and the route is real.
 		//
 		// It is anchored at the BINDING, not at the closure literal: SemanticCheck's whole-program backstop
 		// already catches the raw `storeIndirect` and words it *"into memory that outlives this frame"* at the
@@ -60349,12 +60339,11 @@ export type Parser
 		self.materializeStringRecordPart(self.emitStringLiteral(buf, range: range), partBufs: partBufs, partLens: partLens, range: range)
 	end 'materializeFragmentBytes'
 
-	// A `{expr}` part. A String value (a literal or an interpolation result) is copied by its bytes exactly
-	// as a literal fragment is — `materializeStringRecordPart` reads `buffer@0`/`length@8` from either. An
-	// integer renders to decimal text via `__int_to_string` into a scratch buffer, a bool via
-	// `__bool_to_string`, a float via `__float_toString` and a user struct via its own `toString`. An enum
-	// renders its VALUE — the integer for an int backing, the decoded double for a float one; its case NAME
-	// is a later rung (`string-interpolation.md`'s two `disabled-test:` cases).
+	// A `{expr}` part. A String value (a literal or an interpolation result) is copied by its bytes
+	// exactly as a literal fragment is — `materializeStringRecordPart` reads `buffer@0`/`length@8`
+	// from either. An integer renders to decimal text via `__int_to_string` into a scratch buffer, a
+	// bool via `__bool_to_string`, a float via `__float_toString` and a user struct via its own
+	// `toString`. An enum renders by its backing (`materializeEnumPart`).
 	function materializeInterpExpr(exprVal ValueId, exprTok Token, format InterpFormatSpec, partBufs ValueIdArray, partLens ValueIdArray, scratchIds ValueIdArray, range SourceRange) throws ParseError
 		// ⚠ **THE RAW TAG IS CORRECT HERE, AND THAT WAS MEASURED RATHER THAN ASSUMED.** `tagIsIntegral`
 		// answers `true` for a `named` tag deliberately (its own header records the trade), so a float
@@ -72024,11 +72013,9 @@ export type Parser
 			// compiler refused the same program outright. A trivial element merely printed `0`, which is how
 			// it survived a whole pass unnoticed.
 			//
-			// ⭐ **IT IS PER-BINDING, WHICH IS THE WHOLE DIFFERENCE FROM THE E3070 IT REPLACES.** That refusal
-			// keyed on the STORAGE, so `ml.remove(a)` also killed a handle `b` on a node the removal cannot
-			// touch — the over-refusal that disabled canonical `core.remove`. This marks the ARGUMENT's
-			// binding and nothing else, so siblings stay readable and that case stays green; it is the
-			// regression test for the narrowing.
+			// ⭐ **IT IS PER-BINDING, NOT PER-STORAGE.** Keyed on the storage, `ml.remove(a)` would also kill
+			// a handle `b` on a node the removal cannot touch. This marks the ARGUMENT's binding and nothing
+			// else, so siblings stay readable; canonical `core.remove` pins that.
 			//
 			// ⚠ **`detach` DELIBERATELY DOES NOT REACH THIS.** It leaves the element in the node, so its
 			// handle goes on answering `value()` — which is what `core.detach` asserts.
@@ -87384,12 +87371,10 @@ export type Parser
 	// `parseBuiltinIntegerArg`'s header records, which has shipped twice in this file), and the CALLEE token
 	// as the anchor rather than the argument (the position every `__Builtins` refusal in this table uses).
 	//
-	// ⚠ **IT IS NOT THE SPELLING `commandLineArg`/`readStdin` USE, AND UNIFYING THOSE IS A DIFFERENT RUNG.**
-	// Those two render `got:` as `typeTagName(self.tagOf(arg))` where this renders `valueDisplayTypeName`;
-	// the two agree on every case any spec pins today, and `specs/builtins-type.md`'s four disabled
-	// `bits-to-float` cases already name the whole `ParseError.builtinOperandType` VOICE as its own rung
-	// (it moves every `__Builtins.*` and `subp*` refusal at once, and four spec files pin the current
-	// wording). Folding them in here would move pinned diagnostics for a reason unrelated to this cure.
+	// ⚠ **IT IS NOT THE SPELLING `commandLineArg`/`readStdin` USE.** Those two render `got:` as
+	// `typeTagName(self.tagOf(arg))` where this renders `valueDisplayTypeName`; the two agree on every
+	// case any spec pins today. Unifying the `ParseError.builtinOperandType` voice moves every
+	// `__Builtins.*` and `subp*` refusal at once, and four spec files pin the current wording.
 	function requireIntrinsicMachineWordArg(arg ValueId, callee ByteArray, calleeTok Token) throws ParseError
 		if not tagIsIntegral(self.tagOf(arg)) 'notAMachineWord'
 			throw ParseError.builtinOperandType(String.from(callee), required: typeTagName(ValueTypeTag.integer), got: self.valueDisplayTypeName(arg), line: calleeTok.line, column: calleeTok.column)

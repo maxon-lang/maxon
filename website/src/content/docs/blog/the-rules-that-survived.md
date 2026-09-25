@@ -144,7 +144,7 @@ not a smaller unit of work. It is an unintegrated one that reaches `main` half-f
 
 What an agent *may* do is stop and ask. The halt list is short and every entry is a question, never a
 reroute: a gate is red and the fix is not yours; the specs and the compiler disagree about what is
-correct; a case would have to be disabled or an existing expectation rewritten. That middle one
+correct; a case would have to be removed or excluded, or an existing expectation rewritten. That middle one
 carries its own warning — *never edit a spec to match the compiler*, because that is precisely how a
 compiler bug becomes a specification.
 

@@ -9,9 +9,8 @@ category: parser-edge-cases
 
 ## Documentation
 
-`keyword-parameter-names.md` is the canonical spec for one half of this rule, but every one of its
-cases also needs `module typealias` — a separate feature with no stdlib consumer — so it is shelved
-whole and this file carries the mechanism in SINGLE-FILE form.
+`keyword-parameter-names.md` is the canonical spec for one half of this rule, stated mostly
+cross-file; this file carries the mechanism in SINGLE-FILE form.
 
 **The rule is one sentence: a declaration position that expects an identifier accepts a KEYWORD
 TOKEN as a NAME.** A function's declared name and a parameter's name are both such positions —

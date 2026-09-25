@@ -10,7 +10,7 @@ milestone: M4b
 
 ## Documentation
 
-Execute a block repeatedly while a comparison condition is true:
+Execute a block repeatedly while a condition is true:
 
 ```maxon
 while <condition> 'identifier'
@@ -29,18 +29,10 @@ by `resolveBlockJumps`, the same path forward `if` jumps use.
 On-the-fly SSA carries each mutable variable through the header as a **phi**
 (block-arg); a loop-carried var whose update feeds only the back-edge coalesces to a
 single register (no move), while a var also read inside the loop (an induction
-variable) keeps a distinct register and an explicit phi-elimination move. The M4b
-condition must be a comparison — a bare boolean condition (`while true`) needs the
-boolean-value support deferred past M4b.
+variable) keeps a distinct register and an explicit phi-elimination move. A bare
+boolean condition (`while true`) is accepted too.
 
 ## Tests
-
-The M4b slice of `specs/while-loops.md` that fits the placeholder register allocator
-(each distinct SSA value takes its own GPR from a 6-register pool): a
-zero-iteration loop, and a loop whose body carries a `continue`. The register-heavy
-`while-loops.basic` (two loop-carried vars plus a `break`, which needs a loop-exit
-phi), the `while true` loop (`while-loops.break`), and the `mod`-using
-`nested-control` are DEFERRED under `## Deferred`.
 
 <!-- test: while-loops.zero-iterations -->
 ```maxon

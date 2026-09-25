@@ -11,8 +11,6 @@ export interface SpecFile {
 	filePath: string;
 	specName: string;
 	feature: string;
-	status: string;
-	category: string;
 	tests: SpecTestMarker[];
 }
 
@@ -25,15 +23,10 @@ function extractYamlValue(yaml: string, key: string): string | undefined {
 	return m ? m[1].trim() : undefined;
 }
 
-function parseFrontmatter(content: string): { feature: string; status: string; category: string; } {
+function parseFeature(content: string): string {
 	const m = FRONTMATTER_RE.exec(content);
-	if (!m) return { feature: 'unknown', status: 'unknown', category: 'unknown' };
-	const yaml = m[1];
-	return {
-		feature: extractYamlValue(yaml, 'feature') ?? 'unknown',
-		status: extractYamlValue(yaml, 'status') ?? 'unknown',
-		category: extractYamlValue(yaml, 'category') ?? 'unknown'
-	};
+	if (!m) return 'unknown';
+	return extractYamlValue(m[1], 'feature') ?? 'unknown';
 }
 
 function offsetToPosition(content: string, offset: number): { line: number; column: number; } {
@@ -49,7 +42,7 @@ function offsetToPosition(content: string, offset: number): { line: number; colu
 }
 
 export function parseSpecContent(filePath: string, content: string): SpecFile {
-	const { feature, status, category } = parseFrontmatter(content);
+	const feature = parseFeature(content);
 	const tests: SpecTestMarker[] = [];
 	const markerRe = new RegExp(TEST_MARKER_PATTERN, 'g');
 	let match: RegExpExecArray | null;
@@ -61,8 +54,6 @@ export function parseSpecContent(filePath: string, content: string): SpecFile {
 		filePath,
 		specName: path.basename(filePath, '.md'),
 		feature,
-		status,
-		category,
 		tests
 	};
 }
@@ -70,11 +61,6 @@ export function parseSpecContent(filePath: string, content: string): SpecFile {
 export function parseSpecFile(filePath: string): SpecFile {
 	const content = fs.readFileSync(filePath, 'utf8');
 	return parseSpecContent(filePath, content);
-}
-
-/** `spec-test` skips a `status: draft` spec (`Testing/SpecParser.maxon`) and runs every other. */
-export function specIsRunnable(spec: SpecFile): boolean {
-	return spec.status !== 'draft';
 }
 
 export function parseSpecDirectory(specDir: string): SpecFile[] {

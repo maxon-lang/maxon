@@ -151,10 +151,9 @@ score=2
 Verify that a `sleep` inside a green thread yields and resumes it, and that the trace names the SLEEP
 rather than an I/O operation.
 
-This is the pin for the `sleep_yield`/`sleep_resume` tags. Without it the tags are emitted by the runtime
-and asserted by nothing: `/specs/http-client.md`'s `async-trace-interleave` is the only canonical case that
-names them, and it is `disabled-test:` there and here — it additionally needs a sync-worker I/O pool and
-runnext scheduling, neither of which this compiler has.
+This is the pin for the `sleep_yield`/`sleep_resume` tags on a SPAWNED green thread. The only other case
+that names them, `/specs/http-client.md`'s `async-trace-interleave`, sleeps on `main` (`#0`), so without
+this one a sleep that parks a spawned thread is emitted by the runtime and asserted by nothing.
 
 The shape is `async-await.trace-yield`'s, one operation over: a spawn, the yield, the resume, and the await
 observing an already-yielded promise.

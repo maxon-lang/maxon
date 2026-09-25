@@ -223,7 +223,7 @@ When the workspace folder is the Maxon compiler checkout — it holds both `spec
 second controller, **Maxon Spec Suite**, lists the `<!-- test: name -->` markers in `specs/*.md` under
 one node per spec, and runs them with the tree's own build, `maxon-bin/.maxon/maxon spec-test`, in one
 process per run. A run of every spec passes no filter; otherwise each whole spec adds `--filter=<spec>/`
-and each single test `--filter=<spec>/<test>`. Specs marked `status: draft` are reported as skipped.
+and each single test `--filter=<spec>/<test>`.
 Verdicts are read from the `PASS`, `FAIL`, `SKIP` and `NOTRUN` lines on stdout; a selected test with no
 verdict is skipped when the run reached its `<n> passed, <m> failed` summary, and errored with the
 runner's stderr when it did not. A filter that selects nothing on this host refuses the whole run, so

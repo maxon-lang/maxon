@@ -67,7 +67,8 @@ the class that has actually bitten this project:
 - The spec pool's parent and worker each independently reimplemented *which tests a spec selects*. They
   agreed. Nothing made them agree — and the failure mode was the parent waiting forever for records the
   worker was never going to send.
-- Two constants named `DraftStatus` in two files.
+- The spec parser and the trace re-minter each spelled where a case ends — a line that ends a case in
+  one and not the other re-mints a trace block into the neighbouring case.
 - Hand-rolled "find separator, slice before, slice after" written once per record type.
 
 Ask of every helper: **could a future edit to one copy silently diverge from the other, and what would

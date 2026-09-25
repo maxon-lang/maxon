@@ -116,11 +116,8 @@ Stack trace:
 
 ### Pinning emitted code
 
-**There is no `RequiredIR` block.** The fences the harness implements are the `*Fence` constants in
-`maxon-bin/Testing/SpecParser.maxon`, and `RequiredIR` is not among them — a block no fence arm claims
-would be walked over and read as prose, pinning nothing while reading as coverage, so a **live** case that
-opens one is refused outright (`SpecParser.isUnimplementedFenceOpen`), naming the case and the fence. A
-`disabled-test:` case may keep one as a note for whoever enables it.
+The fences the harness reads are the `*Fence` constants in `maxon-bin/Testing/SpecParser.maxon`. A case
+that opens any other tagged fence, such as ` ```RequiredIR `, is refused, naming the case and the fence.
 
 Three things pin what the compiler emits, and only the third is a gate:
 
@@ -288,17 +285,18 @@ reader can tell at a glance what is not a program.
 
 ## Test Section
 
-Tests in the **Tests** section are always extracted. Each test needs:
+The **Tests** region runs from the `## Tests` heading to the end of the file, and every case in it runs. A
+case runs from its marker to the next test marker or `## ` heading. Each test needs:
 
 - **Test marker**: `<!-- test: test-name -->`
 - **Maxon code block**: The source code
 - **Output block**: Expected results
 
-Optional per-test directives go between the test marker and the maxon block:
+Optional per-test directives go between the test marker and the case's first fence, one directive per
+line:
 
 | Directive | Effect |
 |-----------|--------|
-| `<!-- disabled-test: test-name -->` | In place of the test marker, not beside it: a shelved case the compiler cannot yet pass. It is parsed and counted but never run; flip the marker to `test:` to revive it |
 | `<!-- Args: ... -->` | The argv the compiled program is spawned with, space-separated; a double-quoted run is one argument and may be empty (`""`). Capital `A`, matched exactly |
 | `<!-- unsupported-targets: t1, t2 -->` | Exclude the case from the named targets (`x64-windows`, `wasm32-wasi`, …; comma-separated); it runs on every other target. A missing or blank marker excludes nothing; a key naming no supported target, or a list naming every one, is a parse failure |
 | `<!-- targets: ... -->` | Retired. The parser refuses it: nothing reads it, so a case carrying it would run everywhere. Spell the lanes that cannot serve the case with `unsupported-targets:` instead |
@@ -312,11 +310,31 @@ Optional per-test directives go between the test marker and the maxon block:
 | `<!-- stdin: hold -->` / `<!-- stdin: delayed -->` | Give the program a stdin that blocks. `hold` is a pipe nobody ever writes to, so a read blocks for the program's whole life; `delayed` writes one line about a second after the program's first stdout byte and closes, so the read blocks and then completes. Without the marker stdin is the null device and every read answers at once with EOF |
 | `<!-- runs: alone -->` | Run the case's program with no other case's program running beside it: the harness runs a spec's `alone` cases as a job of their own, after every other job has finished, and starts nothing else while it runs. It is for a program whose peak memory is set by a runtime limit, such as a green thread's stack grown to its 1 GiB maximum; `alone` is the only value |
 
-A valued marker refuses an unrecognized value rather than reading it as the default, and a `<!-- … -->`
-comment line inside a case that no directive above claims (a misspelling, or a marker newer than the
-parser) is a parse failure naming the line and this roster — a claim a spec file makes must be honoured
-or reported, never silently declined. The four valueless flags match by their whole body, so
-`<!-- DebugInfos -->` is refused rather than read as `DebugInfo`.
+A case holds one block of each kind: one ` ```maxon ` program, one ` ```exitcode `, one each of the portable
+` ```stdout `, ` ```stderr ` and ` ```maxoncstderr `, one target-qualified block per target, and one
+` ```mm-trace ` or ` ```log-trace ` block. ` ```RequiredData `, ` ```RequiredRdata ` and
+` ```RequiredRuntime ` blocks accumulate. A block closes on a line holding only ` ``` `.
+
+Prose blocks, a bare ` ``` ` fence or ` ```text `, are skipped whole wherever they sit in the region, so
+a marker or fence quoted inside one reads as prose.
+
+The harness reads a spec strictly. A claim a spec file makes is honoured or refused, and each refusal is a
+parse failure naming the file and line. It refuses:
+
+- a test marker above `## Tests`, or one with no `-->` of its own;
+- a `<!-- … -->` comment line in the region that no directive claims, inside a case or outside any (a
+  misspelling, or a marker newer than the parser); the failure lists the directives above;
+- two directives on one line, a directive repeated in one case, or a directive written after the case's
+  first fence;
+- a valued directive with an unrecognized value. The four valueless flags match by their whole body, so
+  `<!-- DebugInfos -->` is an unread comment line;
+- a tagged fence outside any case other than ` ```text `, a case with no ` ```maxon ` block, and a case
+  with no result block;
+- a second block of a kind the case holds one of;
+- a target-qualified fence naming no supported target;
+- a block the file ends inside, and a tagged fence opened inside a block;
+- `<!-- MmTrace -->` and `<!-- LogTrace -->` on one case, or a trace marker and a trace block naming
+  different families.
 
 ### mm-trace blocks
 
@@ -350,7 +368,9 @@ mm_free String #1
 The trace is normalized so goldens are stable across runs and machines:
 timestamps and depth indentation are stripped, and allocation ids (`#<id>`) are
 densely renumbered `1, 2, 3, …` by first appearance. Regenerate the golden with
-`--update-required`.
+`--update-required`, which writes it over the case's existing block, or after the case's last line when
+it has none, in the file's own line ending. The run refuses to write into a spec file that changed after
+it was parsed.
 
 **Event order is not normalized, and is not stable once a second green thread
 produces events.** The debug stream is one shared ring carrying no sequence
@@ -364,18 +384,6 @@ the monitor's returned child exit code); an ` ```stdout ` block, if present, is
 checked via a separate untraced run since the monitor interleaves trace lines
 with the child's own stdout. mm-trace assertions are enforced by the spec
 runner.
-
-```markdown
-<!-- test: basic-example -->
-```maxon
-function main() returns ExitCode
-		return 0
-end 'main'
-```
-```output
-ExitCode: 0
-```
-```
 
 ## Example: Complete Spec File
 

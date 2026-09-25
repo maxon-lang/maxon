@@ -1025,14 +1025,10 @@ end 'main'
 7
 ```
 
-⭐ **THE TWO CASES ABOVE SHIPPED DISABLED FOR TWO RUNGS AND ARE LIVE NOW; `ARR3b` WAS THE CONDITION
-THEY NAMED.** They
-were written RED and measured RED — both panicked in `DeadFunctionElimination`, naming
-`Array.contains#struct` and `Array.contains#type parameter` — against a tree where `contains` had been
-struck from `Parser.arraySurfaceMemberNames`, and they went GREEN on the widening. `contains` did not
-retire at the time (its corpus body faulted), so with the roster serving it these two programs never
-crossed into stdlib at all and would have PASSED without touching the rule they exist for. `contains` is
-struck now, so they cross, and they are live again.
+⭐ **THE TWO CASES ABOVE TEST THEIR RULE ONLY BECAUSE `contains` IS STRUCK FROM
+`Parser.arraySurfaceMemberNames`.** With the roster serving `contains`, these two programs would never
+cross into stdlib at all and would PASS without touching the rule they exist for. Without the widening,
+both panic in `DeadFunctionElimination`, naming `Array.contains#struct` and `Array.contains#type parameter`.
 
 ⚠ **`Array.contains` IS STILL THE ONLY CONTESTED `<Conformer>.<method>` THE CORPUS HAS**
 (`stdlib/Interfaces.maxon`'s `extension Iterable` and `stdlib/Array.maxon`'s `where Element is Equatable`

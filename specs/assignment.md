@@ -195,9 +195,8 @@ The SCALAR field store was the one coercion door of the eight that never asked `
 field declared `Color` accepted a `Shade` — MEASURED 2026-08-06 (BATCH32): this program COMPILED and printed
 `stored`, where it must be refused, and `h.c.ordinal` would then read `Shade.light`'s tag under
 `Color`'s name. It is `error.retype-enum-to-other-enum-errors` one slot over, which is exactly the pairing
-`error.retype-enum-field-errors` states in `specs/assignment.md` — that spec's own cases stay disabled here
-only because canonical spells the sentence differently, and a wording gap is not a reason to leave the hole
-open. compiler-authored, in the compiler's `assignTypeMismatch` wording.
+`error.retype-enum-field-errors` below states. compiler-authored, in the compiler's `assignTypeMismatch`
+wording.
 ```maxon
 
 enum Color

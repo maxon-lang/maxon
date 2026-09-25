@@ -11,11 +11,10 @@
 #     thousands of times per suite and taken exactly never — which is the worst shape a branch can
 #     have, because the coverage looks incidental rather than absent.
 #   * Taking it needs the filesystem to REFUSE that unlink — a running image on Windows, a read-only
-#     attribute, a non-writable parent directory on POSIX. A spec is a Maxon program plus an expected
-#     exit code or stderr; the parser's whole directive set is `test:` / `disabled-test:`, a ```maxon
-#     block, ```exitcode, ```maxoncstderr, `status:` and `// --- file:`. Not one of them can change a
-#     permission, the harness (not the spec) owns the output path, and the program a spec describes
-#     does not run until long after the compile that would have to fail.
+#     attribute, a non-writable parent directory on POSIX. A spec is a Maxon program plus its
+#     expected result, and no directive or block the spec harness reads (docs/SPECS.md lists
+#     them) can change a permission; the harness (not the spec) owns the output path, and the
+#     program a spec describes does not run until long after the compile that would have to fail.
 #
 # So the whole branch — a refusal that exists to stop the compiler reporting success over a stale
 # binary — had ZERO executable coverage. This script is that coverage. It is a shell gate for the same

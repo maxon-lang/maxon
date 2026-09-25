@@ -52,17 +52,10 @@ unreachable and emits no code.
 
 ## Tests
 
-The M4a slice of `specs/if-statements.md`: simple if, if-else (taken and not taken),
-the else-if chain, and a nested if. Every test uses a comparison condition and
-returns on all reachable paths. The tests needing top-level `typealias` + calls
-(`else-if-in-helper`, `nested-if-with-multiple-returns`), strings + calls
-(`nested-if-with-scoped-string`), or a bool literal + the "newline after block
-label" reject (`single-line-block-rejected`) are DEFERRED and recorded under
-`## Deferred` below.
-
-Each of those four ported tests runs with a single `x`, so only ONE arm of a chain is
-ever entered. `else-if-chain-every-arm` is the compiler-native test that closes that: it
-puts the chain in a helper and calls it once per arm, so every arm executes.
+The first five cases — simple if, if-else (taken and not taken), the else-if chain, and a
+nested if — each run with a single `x`, so only ONE arm of a chain is ever entered.
+`else-if-chain-every-arm` closes that: it puts the chain in a helper and calls it once per arm,
+so every arm executes.
 
 <!-- test: if-statements.simple -->
 ```maxon

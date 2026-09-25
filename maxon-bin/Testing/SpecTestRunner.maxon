@@ -1,4 +1,4 @@
-// Testing/SpecTestRunner.maxon — run every active test in a specs directory
+// Testing/SpecTestRunner.maxon — run every test in a specs directory
 // through the compiler and collect PASS/FAIL results.
 //
 // ⭐⭐ **EVERY TEST IS COMPILED IN THIS PROCESS, THROUGH THE COMPILER'S ONE PIPELINE DRIVER
@@ -78,7 +78,7 @@ let MultiFileSourceDirSuffix = ".src"
 // staged runtime anywhere else is a directory nothing loads.
 let StagedTierRootSuffix = ".tiers"
 
-let DraftStatus = "draft"
+let CarriageReturn = "\r"
 
 // Committed-fragment layout: `<specDir>/fragments/<target>/<specName>/<testName>.test`.
 //
@@ -1083,15 +1083,15 @@ export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, fil
 	var cpu = SuiteCpuTally.zero()
 
 	let specPath = specDir.join("{specName}{SpecFileExtension}")
-	let specFile = try parseSpecFile(specPath, effectiveTargetKey: targetToString(effectiveTarget))
+	let parsed = try parseSpecFile(specPath, effectiveTargetKey: targetToString(effectiveTarget))
 
 	// The worker takes only the SELECTED half: the census of what was left out is the PARENT's to
 	// report, and it is built from the parent's own walk over every spec (`buildPlans`). A worker
 	// printing it would print one spec's worth of it, once per spec, onto a stream that is a wire.
-	let tests = testsThatRun(selectedTests(specFile, specName: specName, filterPatterns: filterPatterns, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, assumeNativeHost: false).selected, runs: runs)
+	let tests = testsThatRun(selectedTests(parsed.tests, specName: specName, filterPatterns: filterPatterns, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, assumeNativeHost: false).selected, runs: runs)
 
 	if tests.count() == 0 'selectsNothing'
-		// A `draft` spec, or one every test of which the filter rejected. The pool never dispatches
+		// A spec every test of which the filter rejected. The pool never dispatches
 		// such a spec — its parent built the same list from the same function — so this is not the
 		// path a pool run takes; returning here keeps the scratch directories below from being made
 		// for a spec that would write nothing into them.
@@ -1160,7 +1160,7 @@ export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, fil
 		cpu = cpu.adding(run.cpu)
 	end 'eachVerdict'
 
-	spliceTraceGoldens(specPath, reminted: reminted)
+	spliceTraceGoldens(specPath, parsedText: parsed.text, reminted: reminted)
 
 	return SpecRun.create(results, cpu: cpu)
 end 'runOneSpec'
@@ -1221,30 +1221,26 @@ export type SpecSelection
 	end 'create'
 end 'SpecSelection'
 
-// The tests of `specFile` that this run will actually execute, in DECLARATION order — and the ones it
-// deliberately passed over.
+// The tests of `specTests` that this run will actually execute, in DECLARATION order — and the ones
+// it deliberately passed over.
 //
-// THE ONE PLACE THE SELECTION RULES LIVE — the `draft` skip, the `--filter` match, the per-target gates,
-// the trace-instrument gate and the network gate — and it has to be, because BOTH HALVES OF THE POOL ASK THE SAME
-// QUESTION IN DIFFERENT
-// PROCESSES. The parent asks it to decide what the run will report and to weight the job queue
-// (`buildPlans`); the worker asks it to decide what to run (`runOneSpec`). Written out twice, the two
-// copies could drift — a rule added to one and not the other — and the drift would not read as a bug:
-// the parent would sit waiting for records the worker was never going to send, or count tests nobody
-// ran. `resultsFromLines` turns that into a panic, but ONE shared rule is what makes the panic
-// unreachable rather than merely loud. The target gate is why this discipline matters here and not only
-// in principle: it is what makes the same suite green on x64-windows AND arm64-macos, so it MUST be
-// applied identically on both sides of the pool. `--network` joined that list for the identical reason:
-// the parent forwards it to every worker (`spawnNoWait`), and a worker that did not read it back would
-// run live-network cases the parent never counted.
-export function selectedTests(specFile SpecFile, specName String, filterPatterns FilterPatternArray, effectiveTarget Target, includeNetwork bool, assumeNativeHost bool) returns SpecSelection
+// THE ONE PLACE THE SELECTION RULES LIVE — the `--filter` match, the per-target gates, the
+// trace-instrument gate and the network gate — and it has to be, because BOTH HALVES OF THE POOL
+// ASK THE SAME QUESTION IN DIFFERENT PROCESSES. The parent asks it to decide what the run will
+// report and to weight the job queue (`buildPlans`); the worker asks it to decide what to run
+// (`runOneSpec`). Written out twice, the two copies could drift — a rule added to one and not the
+// other — and the drift would not read as a bug: the parent would sit waiting for records the
+// worker was never going to send, or count tests nobody ran. `resultsFromLines` turns that into a
+// panic, but ONE shared rule is what makes the panic unreachable rather than merely loud. The
+// target gate is why this discipline matters here and not only in principle: it is what makes the
+// same suite green on x64-windows AND arm64-macos, so it MUST be applied identically on both sides
+// of the pool. `--network` joined that list for the identical reason: the parent forwards it to
+// every worker (`spawnNoWait`), and a worker that did not read it back would run live-network cases
+// the parent never counted.
+export function selectedTests(specTests SpecTestArray, specName String, filterPatterns FilterPatternArray, effectiveTarget Target, includeNetwork bool, assumeNativeHost bool) returns SpecSelection
 	var selected = SpecTestArray.create()
 	var excluded = ExcludedCaseArray.create()
 	var filterTally = FilterPatternTally.create(filterPatterns, spellings: filterPatterns)
-
-	if specFile.status == DraftStatus 'draftSpec'
-		return SpecSelection.create(selected, excluded: excluded, filterTally: filterTally)
-	end 'draftSpec'
 
 	// Resolved ONCE, not per test: the effective target is fixed for the whole run, and both halves of
 	// the pool resolve it to the same value (the worker re-parses the parent's forwarded `--target`),
@@ -1262,7 +1258,7 @@ export function selectedTests(specFile SpecFile, specName String, filterPatterns
 	// filter never chose, or one this target cannot express, was not left out because of the internet or
 	// because of an instrument — counting it as such would make `--filter=arrays` report every live http
 	// case as excluded and would give every reader a number that means nothing.
-	for test in specFile.tests 'eachTest'
+	for test in specTests 'eachTest'
 		if not selectableThisRun(test, effectiveTarget: effectiveTarget, effectiveTargetKey: effectiveTargetKey) 'notInThisRun'
 			continue
 		end 'notInThisRun'
@@ -1397,8 +1393,8 @@ function targetCanCaptureTrace(test SpecTest, effectiveTarget Target, assumeNati
 	return assumeNativeHost or not needsExternalRunner(effectiveTarget)
 end 'targetCanCaptureTrace'
 
-// The gate the spec author spelled. A gated-out test is not run, failed or reported, exactly as a draft
-// or filtered-out test is.
+// The gate the spec author spelled. A gated-out test is not run, failed or reported, exactly as a
+// filtered-out test is.
 //
 // A test runs on every target unless an `<!-- unsupported-targets: … -->` marker names it. A marker
 // names a lane for a technical reason — an ISA-specific register pool, a fault handler, a runtime chunk
@@ -2461,17 +2457,18 @@ end 'recordFragmentAndCleanup'
 // written back is byte-for-byte the one the verdict was computed against, so a minted golden cannot
 // disagree with the run that produced it.
 
-// One golden to rewrite: the test it belongs to, WHICH FAMILY it captures, and the normalized trace to put
-// there. The family rides along because the splice has to write the matching FENCE — a remint that only
-// carried the text would put a `log` trace inside a ```mm-trace block, and the next run would then read it
-// back as the other family's golden and fail with a diff nobody could explain.
+// One golden to rewrite: the lines it replaces, WHICH FAMILY it captures, and the normalized trace
+// to put there. The family rides along because the splice has to write the matching FENCE — a
+// remint that only carried the text would put a `log` trace inside a ```mm-trace block, and the
+// next run would then read it back as the other family's golden and fail with a diff nobody could
+// explain.
 type TraceRemint
-	export let testName as String
+	export let slice as TraceSlice
 	export let family as TraceFamily
 	export let trace as String
 
-	static function create(testName String, family TraceFamily, trace String) returns TraceRemint
-		return Self{testName: testName, family: family, trace: trace}
+	static function create(slice TraceSlice, family TraceFamily, trace String) returns TraceRemint
+		return Self{slice: slice, family: family, trace: trace}
 	end 'create'
 end 'TraceRemint'
 
@@ -2488,7 +2485,7 @@ function collectTraceRemint(reminted TraceRemintArray, test SpecTest, observatio
 	let family = traceCaptureFamilyOf(test.traceCapture)
 
 	match observation 'observed'
-		completed(capture) then reminted.push(TraceRemint.create(test.name, family: family, trace: normalizeTrace(capture.stdout, family: family)))
+		completed(capture) then reminted.push(TraceRemint.create(traceSliceOf(test.traceCapture), family: family, trace: normalizeTrace(capture.stdout, family: family)))
 		notRequired then break 'observed'
 		failed then break 'observed'
 		notRunnableHere then break 'observed'
@@ -2497,7 +2494,7 @@ end 'collectTraceRemint'
 
 // Write every collected golden back into the spec file. A no-op when nothing was collected — which is
 // every ordinary `--update-required` run, so a spec with no capture case is never even read.
-function spliceTraceGoldens(specPath FilePath, reminted TraceRemintArray)
+function spliceTraceGoldens(specPath FilePath, parsedText String, reminted TraceRemintArray)
 	if reminted.isEmpty() 'nothingToSplice'
 		return
 	end 'nothingToSplice'
@@ -2506,14 +2503,21 @@ function spliceTraceGoldens(specPath FilePath, reminted TraceRemintArray)
 		panic("SpecTestRunner: could not re-read {specPath.toString()} to splice {reminted.count()} capture golden(s) into it — the file was parsed moments ago, so it is there and readable")
 	end 'unreadable'
 
-	var lines = StringArray.create()
+	if original != parsedText 'changedSinceTheParse'
+		panic("SpecTestRunner: {specPath.toString()} changed between this run's parse of it and the splice of {reminted.count()} re-minted capture golden(s). Every block is written at the line the parse found it on, so writing now would land each one at a line that no longer holds it. Re-run with --update-required once the file stops changing")
+	end 'changedSinceTheParse'
 
-	for line in original.split(LineSeparator) 'eachLine'
-		lines.push(line)
-	end 'eachLine'
+	// `specLinesOf` leaves a CRLF file's `\r` on every line, so the written block carries it too and
+	// the file keeps one line ending.
+	var lines = specLinesOf(original)
+	let lineTail = CarriageReturn if original.contains("{CarriageReturn}{LineSeparator}") else ""
+
+	// Bottom-first: a splice changes the line count below it, so splicing upward leaves every
+	// remaining remint's recorded slice where the parse found it.
+	reminted.sort(function(left TraceRemint, right TraceRemint) gives right.slice.blockStart.compare(left.slice.blockStart))
 
 	for remint in reminted 'eachRemint'
-		lines = spliceOneTraceGolden(lines, remint: remint, specPath: specPath)
+		lines = spliceOneTraceGolden(lines, remint: remint, lineTail: lineTail)
 	end 'eachRemint'
 
 	try File.writeText(specPath, content: joinFrom(lines, first: 0, separator: LineSeparator)) otherwise 'unwritable'
@@ -2521,18 +2525,12 @@ function spliceTraceGoldens(specPath FilePath, reminted TraceRemintArray)
 	end 'unwritable'
 end 'spliceTraceGoldens'
 
-// ⭐ Replace (or insert) ONE case's capture block, in the fence its FAMILY names. The case's SLICE runs
-// from its `<!-- test: NAME -->`
-// marker to the next test marker or `## ` heading — the same bound `SpecParser.scanTestFromMarker` reads a
-// case's blocks within, so the splice cannot reach into a neighbour's.
-//
-// ⚠ **AN ABSENT BLOCK IS INSERTED AT THE END OF THE SLICE, WHICH IS WHERE THE RESULT BLOCKS ARE.** That
-// is the authoring path a bare `<!-- MmTrace -->` / `<!-- LogTrace -->` marker asks for: the block
-// belongs after the last fenced result block in the slice, and the last non-blank line of the slice
-// IS that block's close in a well-formed spec.
-function spliceOneTraceGolden(lines StringArray, remint TraceRemint, specPath FilePath) returns StringArray
+// Replace ONE case's capture block, in the fence its FAMILY names, over the lines the parse
+// recorded (`SpecParser.TraceSlice`). A case with no block recorded an empty slice, so the splice
+// inserts one.
+function spliceOneTraceGolden(lines StringArray, remint TraceRemint, lineTail String) returns StringArray
 	let fence = traceFenceOf(remint.family)
-	let slice = traceSliceOf(lines, testName: remint.testName, fence: fence, specPath: specPath)
+	let slice = remint.slice
 
 	var out = StringArray.create()
 
@@ -2540,13 +2538,13 @@ function spliceOneTraceGolden(lines StringArray, remint TraceRemint, specPath Fi
 		out.push(try lines.get(i) otherwise panic("spliceOneTraceGolden: index {i} past {lines.count()} lines"))
 	end 'beforeBlock'
 
-	out.push(fence)
+	out.push("{fence}{lineTail}")
 
-	for traceLine in remint.trace.split(LineSeparator) 'eachTraceLine'
-		out.push(traceLine)
+	for traceLine in specLinesOf(remint.trace) 'eachTraceLine'
+		out.push("{traceLine}{lineTail}")
 	end 'eachTraceLine'
 
-	out.push(FenceDelimiter)
+	out.push("{FenceDelimiter}{lineTail}")
 
 	for i in slice.blockEnd upto lines.count() 'afterBlock'
 		out.push(try lines.get(i) otherwise panic("spliceOneTraceGolden: index {i} past {lines.count()} lines"))
@@ -2554,82 +2552,6 @@ function spliceOneTraceGolden(lines StringArray, remint TraceRemint, specPath Fi
 
 	return out
 end 'spliceOneTraceGolden'
-
-// The half-open line range `[blockStart, blockEnd)` the new block replaces. For a case that HAS a block
-// that is the block itself, fences included; for one that does not, it is the empty range at the end of the
-// case's slice, so the write becomes an insertion.
-type TraceSlice
-	export let blockStart as LineIndex
-	export let blockEnd as LineIndex
-
-	static function create(blockStart LineIndex, blockEnd LineIndex) returns TraceSlice
-		return Self{blockStart: blockStart, blockEnd: blockEnd}
-	end 'create'
-end 'TraceSlice'
-
-function traceSliceOf(lines StringArray, testName String, fence String, specPath FilePath) returns TraceSlice
-	let markerLine = traceMarkerLineOf(lines, testName: testName, specPath: specPath)
-
-	var lastContent = markerLine + 1
-	var i = markerLine + 1
-
-	while i < lines.count() 'scan'
-		let line = try lines.get(i) otherwise panic("traceSliceOf: index {i} past {lines.count()} lines")
-
-		if line.startsWith(SectionHeadingPrefix) or carriesMarker(line, marker: TestMarker) or carriesMarker(line, marker: DisabledTestMarker) 'endOfSlice'
-			return TraceSlice.create(lastContent, blockEnd: lastContent)
-		end 'endOfSlice'
-
-		if line.trim().startsWith(fence) 'foundBlock'
-			return TraceSlice.create(i, blockEnd: fenceCloseAfter(lines, openIndex: i))
-		end 'foundBlock'
-
-		if not line.trim().isEmpty() 'content'
-			lastContent = i + 1
-		end 'content'
-
-		i = i + 1
-	end 'scan'
-
-	// No block: insert one just past the case's last non-blank line, so the blank line that separates this
-	// case from the next survives the write.
-	return TraceSlice.create(lastContent, blockEnd: lastContent)
-end 'traceSliceOf'
-
-// The line index one PAST the fence that closes the block opened at `openIndex`.
-function fenceCloseAfter(lines StringArray, openIndex LineIndex) returns LineIndex
-	var i = openIndex + 1
-
-	while i < lines.count() 'scan'
-		let line = try lines.get(i) otherwise panic("fenceCloseAfter: index {i} past {lines.count()} lines")
-
-		if line.trim() == FenceDelimiter 'closed'
-			return i + 1
-		end 'closed'
-
-		i = i + 1
-	end 'scan'
-
-	return i
-end 'fenceCloseAfter'
-
-// The line carrying this case's `<!-- test: NAME -->` marker. It PANICS when absent, because the case was
-// parsed out of this very file moments ago: a marker that cannot be found again means the splice is about
-// to write a golden into some other case's slice, which is worse than not writing it at all.
-function traceMarkerLineOf(lines StringArray, testName String, specPath FilePath) returns LineIndex
-	// Asked through the PARSER's own two questions rather than by rebuilding the canonical spelling and
-	// comparing strings. An exact compare is a THIRD opinion about what a marker line is, and it was wrong
-	// in the same two places the scanner was: a marker terminated with a tab, or opened with two spaces, is
-	// one the parse accepts and this splice could not find again — a panic on a file that is perfectly well
-	// formed by the parser's own rules.
-	for (iter, line) in lines.withIterator() 'eachLine'
-		if carriesMarker(line, marker: TestMarker) and markerValue(line) == testName 'found'
-			return iter.index()
-		end 'found'
-	end 'eachLine'
-
-	panic("SpecTestRunner: re-minting the capture golden for '{testName}' but {specPath.toString()} carries no `{TestMarker} {testName} -->` marker — the case was parsed out of this file moments ago, so the marker's spelling and this one have drifted")
-end 'traceMarkerLineOf'
 
 // ============================================================================
 // Debug-stream capture: the mode question, the normalizer, and the verdict
@@ -2889,8 +2811,8 @@ end 'linesWithoutPrefix'
 function checkTraceCapture(traceCapture SpecTraceCapture, monitorStdout String, monitorStderr String) returns TestOutcome
 	return match traceCapture 'mode'
 		off gives TestOutcome.pass
-		unpinned(family) gives TestOutcome.fail(withMonitorStderrText("this case is in capture mode (a `{traceMarkerOf(family)} -->` marker) but carries no {traceFenceOf(family)} golden, so there is nothing to compare its trace against. Run the suite with --update-required to mint one, or paste this:\n{normalizeTrace(monitorStdout, family: family)}", monitorStderr: monitorStderr))
-		pinned(family, expected) gives compareTrace(normalizeTrace(expected, family: family), actual: normalizeTrace(monitorStdout, family: family), family: family, monitorStderr: monitorStderr)
+		unpinned(family, _) gives TestOutcome.fail(withMonitorStderrText("this case is in capture mode (a `{traceMarkerOf(family)} -->` marker) but carries no {traceFenceOf(family)} golden, so there is nothing to compare its trace against. Run the suite with --update-required to mint one, or paste this:\n{normalizeTrace(monitorStdout, family: family)}", monitorStderr: monitorStderr))
+		pinned(family, expected, _) gives compareTrace(normalizeTrace(expected, family: family), actual: normalizeTrace(monitorStdout, family: family), family: family, monitorStderr: monitorStderr)
 	end 'mode'
 end 'checkTraceCapture'
 

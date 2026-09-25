@@ -2479,12 +2479,9 @@ function floatWorkingDecl(tracked TrackedFloatArray) returns String
 	return out.build()
 end 'floatWorkingDecl'
 
-// The shared float epilogue: sum the accumulators and LEAVE the float domain through `trunc`.
-//
-// `trunc` is not a flourish, it is the only exit: a float RETURN needs the xmm0 return slot Wave 1
-// does not model (specs/float-type.md's disabled `float-return-from-function`), so an `int`
-// return through `fpToSi` is how a float value reaches `main` at all — and it is the conversion
-// band's second direction, the one `floatWorkingDecl` does not cover.
+// The shared float epilogue: sum the accumulators and LEAVE the float domain through `trunc`, an
+// `int` return through `fpToSi` — the conversion band's second direction, the one
+// `floatWorkingDecl` does not cover.
 function floatSumAndWitness(driverName String, tracked TrackedFloatArray) returns String
 	var out = StringBuilder.create()
 	out.append("\tvar fsum = 0.0\n")
@@ -5865,12 +5862,8 @@ end 'codeGrowthAt'
 // GENERATED for a rung after they were implemented, and integer `/` and `mod` sat there for three
 // after the entire idiv path was built.
 //
-// ⚠⚠ AND IT CAN LIE A THIRD WAY, WHICH IS THE WORST OF THE THREE: BY NAMING A GAP WITH A REASON THAT
-// HAS STOPPED BEING TRUE. A struct entry calling field WRITES "NOT IMPLEMENTED"
-// and a struct crossing a CALL "deferred on the borrow-vs-consume ruling" outlived both:
-// `specs/challenge-struct-field-assign.md`'s `struct-field-reassignment` and
-// `struct-managed-field.md`'s `param-consumed-into-field` were live, non-disabled tests while the file
-// went ten rungs without either. An omission stops a reader from KNOWING; a stale reason stops them
+// ⚠⚠ AND IT CAN LIE A THIRD WAY, WHICH IS THE WORST OF THE THREE: BY NAMING A GAP WITH A REASON
+// THAT HAS STOPPED BEING TRUE. An omission stops a reader from KNOWING; a stale reason stops them
 // from LOOKING, because the reason is what they use to decide whether the gap is theirs to close.
 //
 // ⇒ SO WHEN A FAMILY MOVES TO CONSTRUCTS GENERATED, ITS OLD REASON GOES WITH IT. And a reason that

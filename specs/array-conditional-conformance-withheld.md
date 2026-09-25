@@ -104,11 +104,9 @@ error E4006: <fragment>:19:7: Type 'Array' has no field named 'equals' ('equals'
 <!-- test: the-cloneable-witness-route-is-opened-by-the-instance-dictionary -->
 ### An existential `Cloneable` reaches `Array.clone`'s body with no concretely-typed call site
 
-⭐⭐ **THIS CASE PINNED THE OPAQUE COPY GATE FOR TWO RUNGS AND WAS NEVER THE GATE'S TO PIN.** It stood in the
-`Map` case's shelving note as a shell transcript, and a transcript is the one form of evidence nothing
-re-runs. The program calls `.clone()` at NO concretely-typed site: it reaches `Array.clone`'s shared body
-purely through the `Cloneable` witness that `type Array … implements … Cloneable` promises unconditionally.
-The gate spoke first, so the gate got the credit.
+⭐⭐ **THIS CASE IS NOT THE OPAQUE COPY GATE'S TO PIN.** The program calls `.clone()` at NO concretely-typed
+site: it reaches `Array.clone`'s shared body purely through the `Cloneable` witness that
+`type Array … implements … Cloneable` promises unconditionally.
 
 ⛔⛔ **W90 MEASURED THAT IT WAS NOT THE GATE — with `requireOpaqueArrayCopyable` probe-disabled, this program
 was STILL REFUSED, by E3128 at `stdlib/Array.maxon:145:18`.** A conforming generic type shared ONE witness
@@ -297,11 +295,11 @@ note: stdlib/Array.maxon:79:32: raised inside the library, on behalf of the cons
 <!-- test: error.a-map-key-array-is-refused-for-its-element -->
 ### A `Map` key array is refused for its ELEMENT, not as an unserved key type
 
-⭐⭐ **UN-SHELVED BY W90, AND WHAT MOVED WAS *WHICH REGISTRY ROWS A REFUSAL MAY READ* — NOT THE COPY GATE'S
-SUBJECT.** This case spent two rungs disabled because `Parser.requireOpaqueArrayCopyable` spoke first and
-its refusal is a `ParseError`: the file stopped, `checkWhereConstraints` short-circuited on
-`projectHasErrors`, and the two E3017s below — the user's actual mistake — never spoke at all. A consequence
-did not merely out-word its cause here, it SILENCED it.
+⭐⭐ **WHAT DECIDES THIS CASE IS *WHICH REGISTRY ROWS A REFUSAL MAY READ* — NOT THE COPY GATE'S
+SUBJECT.** Were `Parser.requireOpaqueArrayCopyable` to speak first, its refusal is a `ParseError`: the file
+would stop, `checkWhereConstraints` would short-circuit on `projectHasErrors`, and the two E3017s below — the
+user's actual mistake — would never speak. A consequence would not merely out-word its cause, it would
+SILENCE it.
 
 The gate's offender was `Array with (Array with Opaque)`, an instance no author wrote: `Map`'s own
 `typealias KeyArray = Array with Key` substituted with this key. And the instantiation that minted it —

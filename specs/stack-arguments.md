@@ -49,17 +49,11 @@ forbid (a value defined while an argument register is pending may not be coloure
 ⇒ **The property IS pinned, by those three cases**, and no single-mechanism sabotage can show it — which is
 why a case has to be seen red against BOTH cures removed before it can be believed to pin anything here.
 
-⛔ **`a-stack-argument-store-does-not-clobber-an-argument-register` WAS DELETED IN THAT SAME MEASUREMENT
-(BATCH29/X3), AND ITS SHELVING ROW'S TWO CLAIMS WERE BOTH WRONG.** The row said the property was *"now
-pinned by nothing"* (it is pinned by the three cases above) and that *"there is no legal Maxon program with
-this property"*, because seven of its eight parameters had to go unread and an unread parameter is `E3012`.
-The second claim mistakes which side of the call the bug is on: the clobber is emitted by the CALLER, and
-what the callee does with its parameters cannot move an instruction in it — so a version whose callee reads
-all eight behind a guard and still returns only the third is legal, compiles, and was written and run. It
-was then deleted anyway, for the reason the row never reached: **eight arguments do not create enough
-register pressure for the clobber to be observable at all.** That case stayed GREEN with both cures
-removed, in the same run where the three above went red. Restoring it at 22 arguments would make it red and
-would also make it a second spelling of `every-argument-of-a-wide-call-is-distinct`.
+⛔ **AN EIGHT-ARGUMENT CLOBBER CASE PINS NOTHING.** The clobber is emitted by the CALLER, so a legal
+version is easy to write (the callee reads all eight parameters behind a guard and returns only the
+third), but **eight arguments do not create enough register pressure for the clobber to be observable at
+all**: such a case stays GREEN with both cures removed. At 22 arguments it goes red, and is then a second
+spelling of `every-argument-of-a-wide-call-is-distinct`.
 
 A managed argument (a `String`, an `Array`) is passed by pointer like any other 8-byte value, so a
 stack slot changes nothing about who owns it: the callee consumes it and drops it exactly as it would

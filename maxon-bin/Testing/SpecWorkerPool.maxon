@@ -617,9 +617,10 @@ function buildPlans(specDir FilePath, filterPatterns FilterPatternArray, effecti
 	let specPaths = try specFilePaths(specDir)
 
 	for specPath in specPaths 'eachSpec'
-		let specFile = try parseSpecFile(specPath, effectiveTargetKey: targetToString(effectiveTarget))
+		let parsed = try parseSpecFile(specPath, effectiveTargetKey: targetToString(effectiveTarget))
+		let specTests = parsed.tests
 		let specName = specPath.stem()
-		let selection = selectedTests(specFile, specName: specName, filterPatterns: filterPatterns, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, assumeNativeHost: false)
+		let selection = selectedTests(specTests, specName: specName, filterPatterns: filterPatterns, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, assumeNativeHost: false)
 
 		for excludedCase in selection.excluded 'eachExcluded'
 			excluded.push(excludedCase)

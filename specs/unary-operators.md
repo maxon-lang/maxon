@@ -27,14 +27,6 @@ Unary `+` (identity) is not yet parsed — no test needs it.
 Prefix `-` on a literal and on a variable, negation in a WIDER context, the double-negation parse
 error, and negation of an `int` and of a `float`.
 
-⛔ **This paragraph used to say `negate-int` and `negate-float` were DEFERRED "under `## Deferred`
-below", and every part of that was false.** Both cases are ACTIVE and both pass; this file has no
-`## Deferred` section. It was a dated measurement — true of the M3 slice, when `if`/`==` and floats
-were the gaps — left standing as a fact long after the gaps closed. `negate-float` was worse than
-stale: it was live BY ACCIDENT, because its marker was never closed, so a case its author had
-commented out ran on every suite. `SpecParser.refuseUnterminatedTestMarker` refuses that shape now,
-and the marker below is closed deliberately.
-
 <!-- test: unary-minus -->
 ```maxon
 function main() returns ExitCode

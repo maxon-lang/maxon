@@ -39,14 +39,11 @@ caller's to finish. Two outcomes, both live in this file:
 | What the program does next | Result |
 |---|---|
 | **awaits the rest** (this file's `leaves-the-others-awaitable`) | correct and **leak-free**, exit 0 |
-| **drops the array with losers still in it** | **exit 75** — a reported green-thread leak |
+| **drops the array with losers still in it** | **leak-free**, exit 0 — the array drops each un-awaited loser |
 
-✅ **THE SECOND ROW WAS A PRE-EXISTING DEFECT (`W217`), NOT SOMETHING `awaitAny` INTRODUCED, AND IT IS
-FIXED.** An `Array with Promise` used to emit no `__gt_promise_drop` per element when it died:
-`__gt_live_count` stayed up and the exit gate reported 75, on a compiler built from `main` with or
-without this primitive. A container is now an OWNER of its promise elements and drops each un-awaited
-one, so the case that pins the composition (`the-losers-are-dropped-when-the-array-dies`) runs — it was
-`disabled-test` against `W217` until the container's element walk existed. See
+✅ **THE SECOND ROW IS NOT A LEAK.** A container is an OWNER of its promise elements and drops each
+un-awaited one when it dies, so `__gt_live_count` returns to zero — the case that pins the composition is
+`the-losers-are-dropped-when-the-array-dies`. See
 `async-promise-drop.a-container-drops-its-un-awaited-elements` for the isolated statement of it.
 
 The motivating consumer is unaffected, and that is the point of choosing a primitive that does not
@@ -473,9 +470,8 @@ end 'main'
 
 <!-- test: await-any.the-losers-are-dropped-when-the-array-dies -->
 ⭐ The composition: select, serve the winner, and let the array die with the losers still in it. Exit 0
-is what a container that drops its promise elements gives. This case was `disabled-test` until the
-container owned its elements: the missing element walk on an `Array with Promise` (`W217`) reported
-**exit 75** here, and on `main` with or without this primitive.
+is what a container that drops its promise elements gives; a container that did not would leave the losers
+live and exit **75**.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer

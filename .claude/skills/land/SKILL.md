@@ -187,7 +187,7 @@ feeding a gate that is going to run anyway beats a run nobody can attribute.
    lets the coordinator read your work instead of repeating it.
 
 ⛔ **Brief for DIAGNOSIS, never for COVERAGE.** "Enumerate every construct that could false-reject and
-prove each parses", "confirm no other spec regressed", "check nothing was left disabled" — the §8
+prove each parses", "confirm no other spec regressed", "check every case still runs" — the §8
 battery and §1's count check already do all three, better, one step later. ⚠ **A specific instruction in
 your brief OUTRANKS the agent's own stop rule**: you cannot brief thoroughness in without briefing the
 stop out.
@@ -250,13 +250,13 @@ large, that is the set telling you the size of the work, and the answer is §2, 
 **Send a read-only survey agent first** (`Explore`). It reads; it does not run probes — what the
 compiler does today is what §1's red run of the chosen cases shows.
 Ask it for **FACTS, not a recommendation**: which `specs` files own this behaviour, every existing
-case that touches it with file + line and the **verbatim text** of any that already pins it, every
-`disabled-test:` in range, and what the neighbouring cases in that file look like.
+case that touches it with file + line and the **verbatim text** of any that already pins it, and what
+the neighbouring cases in that file look like.
 
 **Then YOU pick the set** — from its facts, against the criterion above. That decision never moves.
 
 **Then hand the writing out**: give an agent the exact list — file, case name, program, expected
-`exitcode`/`stdout`/`maxoncstderr`, and the marker to flip for anything already present — and let it
+`exitcode`/`stdout`/`maxoncstderr` — and let it
 write them into `specs/`, and **tell it to invoke the `maxon-coder` skill before writing a case**. *(For
 one or two cases, writing them yourself is cheaper than the brief — invoke `maxon-coder` yourself first.
 That is a cost call, not a rule.)*
@@ -264,8 +264,7 @@ That is a cost call, not a rule.)*
 **Where the cases come from, in this order:**
 
 1. **An existing `specs/` case.** Grep first — the behaviour may already be pinned, and then your
-   set is "these three, which are red". A `<!-- disabled-test:` marker your change unblocks is a case you
-   **enable**: those markers are DEBT, not precedent.
+   set is "these three, which are red".
 2. **A new case in the `specs/*.md` file that already owns the behaviour.** Format:
    `docs/SPECS.md`. Follow the neighbouring cases' shape.
 
@@ -294,21 +293,19 @@ run_spec_test filter=["<spec-a>/", "<spec-b>/", …]
   comma is part of a pattern, not a separator. A pattern that selects nothing refuses the whole run and
   is named, so a typo'd member cannot pass unseen.
 
-> ### ⛔ COUNT WHAT RAN. A spec can pass by running NOTHING — three ways, all of which read as green.
+> ### ⛔ COUNT WHAT RAN. A spec can pass by running NOTHING — two ways, both of which read as green.
 > ```bash
-> grep -c '<!-- test:'          specs/<file>.md   # summed over the set's files, must EQUAL the runner's `total`
-> grep -c '<!-- disabled-test:' specs/<file>.md   # cases you did not enable — you may write none
-> grep -o '<!-- \(disabled-\)\?test: [^ ]*' specs/<file>.md | sed 's/.*test: //' | sort | uniq -d
+> grep -c '<!-- test:' specs/<file>.md   # summed over the set's files, must EQUAL the runner's `total`
+> grep -o '<!-- test: [^ ]*' specs/<file>.md | sed 's/.*test: //' | sort | uniq -d
 > ```
 > 1. **A shortfall against the runner's total is a defect in the spec, never a pass** — once you have
 >    subtracted the cases an `<!-- unsupported-targets: -->` marker excludes on the lane you ran, and
->    added any other spec file one of your patterns also selects. The causes: `status: draft` in the
->    frontmatter (ZERO tests for the whole file), no `## Tests` heading, a case written above
->    `## Tests`, or a case below `## Deferred` — the one heading that **ENDS the active-test region**
->    (`SpecParser.RegionEndHeadings`). Any other `## ` heading is walked over.
-> 2. **The `uniq -d` must print nothing** — a name spelled both `test:` and `disabled-test:` reads as
->    disabled while it still runs.
-> 3. ⛔ **You may not write a `disabled-test:`.** A case you cannot make pass is a HALT, not a marker.
+>    added any other spec file one of your patterns also selects. The harness refuses a marker outside
+>    the `## Tests` region and a program or directive no marker opened, so a shortfall is a harness
+>    defect to fix, not a spec to adjust.
+> 2. **The `uniq -d` must print nothing** — two cases under one name report as one.
+>
+> ⛔ **A case you cannot make pass is a HALT.** It is never removed, narrowed or excluded to get green.
 
 ## 2. Write the code — a `general-purpose` implementer agent
 
@@ -499,7 +496,7 @@ during changes; a battery run before the rebase measured a tree that no longer e
 | **The tree corpora** — `./maxon-bin/.maxon/maxon test` on `tests/fmt`, `tests/spec-harness --timeout=15000` and `tests/ladders` | each `0 fail`, and read each count. These are the formatter's engine corpus, the spec harness's own refusals and gates, and the ladder index — tree-level gates `spec-test` does not run. CI runs the same three on every lane |
 | **Documentation** — `node website/scripts/sync-docs.mjs --check` | exit 0 — §6 regenerated the pages but ran no check, so this is where they are gated. And for a user-visible change, each doc-coverage gate its surface owns (`./maxon-bin/.maxon/maxon test tests/cli --filter=reference-documents`, `tests/mcp --filter=reference-documents`, `tests/docs`): `0 fail`. A change with nothing user-visible states that instead. ⚠ A red here after a new diagnostic means §6 did not write the registry doc comment |
 | **Golden drift staged, as it is** | `git add -A specs/` — whatever the runs minted, modified or deleted, with no further thought. See the box below |
-| **§1's count check** on the final tree | markers == ran, none disabled, no name spelled twice |
+| **§1's count check** on the final tree | markers == ran, no name spelled twice |
 
 > ### ⭐ THE SELF-COMPILE IS THE GATE THE SUITE CANNOT SUBSTITUTE FOR
 > `checkUnusedExports` (**E3092/E3093/E3094**) runs only when the compiler compiles a *program*, and the
@@ -569,7 +566,7 @@ Everything above runs unattended. Stop and report, without landing, when:
 - **A DESIGN RULING is needed** — the specs and the compiler disagree about what is *correct*, or `specs/`
   contradicts itself. **Do not guess, and never edit a spec to match the compiler**: that is how a
   compiler bug becomes a specification.
-- **A case would have to be disabled**, or **an existing `specs` expectation rewritten**. The first
+- **A case would have to be removed or excluded**, or **an existing `specs` expectation rewritten**. The first
   is the failure mode this whole process exists to prevent; the second has a blast radius beyond your
   change and belongs to whoever owns that behaviour.
 

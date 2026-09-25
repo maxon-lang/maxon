@@ -23,11 +23,11 @@ return expression
 
 ## Tests
 
-The M4a slice of `specs/return-statement.md`: a bare value return, an expression
-return, a return inside an `if`, and a `return` of a variable as the tail
-statement. Both cases once recorded under `## Deferred` are now live —
-`return-in-if-then-reachable` (function parameters + calls) and
-`dead-code-after-return` (E3071, W118).
+A bare value return, an expression return, a return inside an `if`, a `return` of a
+variable as the tail statement, a return inside a called function's `if`
+(`return-in-if-then-reachable`), and both sides of E3071: code after a `return` is refused
+(`dead-code-after-return`) and code after an `if` that returns is not
+(`return-in-if-then-statement-after`).
 
 <!-- test: simple-return -->
 ```maxon

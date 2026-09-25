@@ -1,6 +1,6 @@
 // Testing/SpecParser.maxon — parse a `specs/*.md` spec file into a list of
-// runnable tests: the `<!-- test: NAME -->` marker, the ```maxon source block, one
-// expected block (```exitcode or ```maxoncstderr), and the `status:` frontmatter.
+// runnable tests: each `<!-- test: NAME -->` marker, its directives, its ```maxon
+// source block and its result blocks, from the `## Tests` heading to the end of the file.
 // A directive the corpus does not use is not parsed at all; each is added when a
 // spec first needs it. Per-target `Stdout:<target>` pins one answer per platform,
 // for `specs/filepath.md`'s 26 separator-printing cases (see
@@ -9,7 +9,7 @@
 // `RequiredRdata` pins a read-only section no other golden can see (see
 // `RequiredRdataFence`); `Args` carries a program's own argv (see `ArgsMarker`).
 //
-// MULTI-FILE TESTS — `// --- file: <name>` (added for the cross-file signature rung).
+// MULTI-FILE TESTS — `// --- file: <name>`.
 //
 // ⚠ **THE CONVENTION IS THE CORPUS'S, NOT THIS PARSER'S.** `/specs` and its committed fragments
 // already use it in hundreds of places, so a second, harness-only multi-file syntax would be this
@@ -27,49 +27,6 @@
 //
 // The golden `.test` fragment shows the MERGED block, markers and all, so what a reviewer reads is what
 // a spec author wrote.
-//
-// DEFERRED-SKIP CONVENTION (why a `## Deferred` section, not a comment):
-// HTML comments do NOT nest. The obvious way to shelve a test —
-// `<!-- … <!-- test: NAME --> … -->` — is a trap: the FIRST `-->` (the one on
-// the inner `<!-- test: … -->` line) closes the OUTER comment, so the inner test
-// marker + its code blocks are exposed as live markup and a naive parser
-// extracts and RUNS a deferred test. Rather than depend on comment nesting, the
-// active-test region runs from the `## Tests` heading to the next STOP HEADING
-// (see `RegionEndHeadings`) or EOF. Deferred tests live under a `## Deferred`
-// heading (as plain `### name` subsections, carrying NO `<!-- test: … -->`
-// marker), so they are both out of the scanned region AND carry no marker —
-// belt and suspenders. The specs files were rewritten to this convention
-// in lockstep with this parser.
-//
-// DISABLED TESTS — the per-CASE shelf, and the mechanism Workstream S runs on.
-// `## Deferred` shelves at the wrong granularity for a ported spec: a real
-// `/specs` file mixes cases the compiler can already pass with cases it cannot, so
-// deferring the FILE strands the former behind the latter. A case the compiler cannot
-// yet pass is therefore marked `<!-- disabled-test: NAME -->` — the marker the
-// project ALREADY has, matched by `<!--\s*(?:disabled-)?test:\s*\S+\s*-->` — with
-// the RUNG THAT UNLOCKS IT on the following comment line:
-//
-//     <!-- disabled-test: arithmetic.string-concat -->
-//     <!-- P1.2 String -->
-//
-// A disabled case is parsed as a full test BOUNDARY (its blocks are consumed
-// exactly as an active test's are, by the same routine, so the two can never
-// drift on where a test ends) and then discarded: never compiled, never run, and
-// — because it never reaches `SpecFile.tests` — NO `.test` golden is generated
-// for it. Goldens therefore accrete only as cases are ENABLED, which is what
-// keeps the fragment diff reviewable instead of a ten-thousand-file dump.
-//
-// The reasons are the roadmap: `grep -A1 disabled-test:` groups the entire
-// remaining language surface by the milestone that unlocks it, ranked by cases
-// that must actually PASS. And the ratchet is free: an ENABLED case may never be
-// re-disabled.
-//
-// ⛔ **NOTHING GATES THE MARKER ITSELF (user ruling, 2026-09-04).** `basics.md` carried
-// one case whose expectation was DELIBERATELY WRONG — a program returning 0 pinned at
-// 1 — so an ignored marker would have run it and taken the suite red. It was the last
-// permanently-disabled case in the tree and was deleted with the debt. ⇒ if this
-// mechanism ever stops suppressing, the symptom is cases running that nobody expects
-// to run, and no case in the suite will say so.
 
 // --- Spec-markdown grammar tokens ---
 // Named (not inline literals) because these strings are a format contract shared
@@ -78,12 +35,13 @@
 // fence MUST be tested before the source fence or the source check swallows it.
 //
 // ⚠⚠ **THE FENCE PREFIX RELATIONS, IN ONE PLACE — because a swallowed arm is SILENT.**
-// `scanTestFromMarker` recognizes every fence with `startsWith`, so if fence A is a prefix of fence B
-// and A's arm is matched first, B's blocks are read as A's and B is never seen. This set contains
-// exactly ONE such pair (the one named above), and it is handled by ORDER; every other pair must be in
-// no prefix relation at all, and each is checked here rather than assumed — fence order is precisely the
-// kind of thing that stays true until someone edits a literal. (`String.startsWith` compares BYTES, so a
-// difference of CASE is a real difference. Byte 3 is the first character after the ``` opener.)
+// `CaseBuilder.readLine` recognizes every fence with `startsWith`, so if fence A is a prefix of
+// fence B and A's arm is matched first, B's blocks are read as A's and B is never seen. This set
+// contains exactly ONE such pair (the one named above), and it is handled by ORDER; every other
+// pair must be in no prefix relation at all, and each is checked here rather than assumed — fence
+// order is precisely the kind of thing that stays true until someone edits a literal.
+// (`String.startsWith` compares BYTES, so a difference of CASE is a real difference. Byte 3 is the
+// first character after the ``` opener.)
 //
 //   • **PORTABLE vs PORTABLE.** "```maxoncstderr" startsWith "```maxon" — THE pair, ordered. Every other
 //     pair differs at byte 3 (`m`/`e`/`s` — both `maxon` spellings against "```exitcode", "```stderr" and
@@ -114,40 +72,16 @@
 //
 // ⇒ no arm can swallow another, and the order every arm but the compiler-error/source pair is matched in
 // stays free. Each fence constant below names what it PINS; none of them restates this relation.
-let FrontmatterFence = "---"
-let StatusKey = "status:"
 let TestsHeading = "## Tests"
-export let SectionHeadingPrefix = "## "
-export let TestMarker = "<!-- test:"
-
-// The ONE heading that ENDS the active-test region. Every OTHER `## ` heading is an
-// ordinary section heading INSIDE `## Tests`, and the region continues across it:
-// `/specs/array-sort.md` organizes its 40 cases under six `## Stage N: …` headings, and a
-// rule that stopped at ANY heading ran the 12 cases above `## Stage 2`, dropped the other
-// 28, and reported the file green. The stop is deliberately narrow: this ONE heading, never any
-// other.
-//
-// ⚠ It cannot be replaced by "a heading with no test markers under it": the `## Deferred`
-// section's own PROSE quotes the marker literally ("prefix it with its `<!-- test: NAME -->`
-// marker"), so a marker-driven scan would read that sentence as a case. The stop is
-// POSITIONAL, and the headings that qualify are named here — the one place a future stop
-// heading joins. Matched with `startsWith`, so a decorated stop heading
-// (`## Deferred (P1.6)`) still stops rather than silently exposing the section below it.
-let RegionEndHeadings = ["## Deferred"]
-
-// A case the compiler cannot yet pass — same grammar, opposite verdict. It is NOT a
-// superstring of `TestMarker` ("<!-- disabled-test:" does not contain
-// "<!-- test:"), so the two match orders are independent and neither can swallow
-// the other. Both are still tested explicitly, in one place, so that stays true
-// if either literal is ever edited.
-export let DisabledTestMarker = "<!-- disabled-test:"
+let SectionHeadingPrefix = "## "
+let TestMarker = "<!-- test:"
 
 // ⭐⭐ **THE PER-TARGET GATE, AND IT NAMES THE LANES THAT CANNOT SERVE THE CASE — NEVER THE ONES THAT
-// CAN.** A marker that may sit on any comment line between a test's `<!-- test: NAME -->` (or
-// `<!-- disabled-test: NAME -->`) and its first ```maxon block. It EXCLUDES the test from the
-// `targetToString` forms it names (`x64-windows`, `wasm32-wasi`); on every other target the test runs.
-// A missing marker — or one with a blank value — excludes nothing (see `SpecTest.unsupportedTargets`
-// and `SpecTestRunner.markerAllowsTarget`).
+// CAN.** A marker that may sit on any comment line between a test's `<!-- test: NAME -->` and its
+// first ```maxon block. It EXCLUDES the test from the `targetToString` forms it names
+// (`x64-windows`, `wasm32-wasi`); on every other target the test runs. A missing marker — or one
+// with a blank value — excludes nothing (see `SpecTest.unsupportedTargets` and
+// `SpecTestRunner.markerAllowsTarget`).
 //
 // ⛔ **THE DIRECTION IS THE WHOLE POINT, because the alternative ROTS TOWARD SILENCE.** A whitelist —
 // which this was — makes every case that predates a new backend exclude it, so landing a target
@@ -157,9 +91,9 @@ export let DisabledTestMarker = "<!-- disabled-test:"
 // blacklist fails the other way: a new lane inherits every case, and the ones it genuinely cannot
 // serve go RED and get a marker, which is a fact somebody had to look at.
 //
-// It is NOT a superstring or substring of any other marker ("<!-- unsupported-targets:" first differs
-// from every one of them at the character after "<!-- "), so the marker checks are independent and
-// none can swallow another — the property `DisabledTestMarker` and `TestMarker` are documented against.
+// It is NOT a superstring or substring of any other marker ("<!-- unsupported-targets:" first
+// differs from every one of them at the character after "<!-- "), so the marker checks are
+// independent and none can swallow another.
 //
 // COMMA is the separator, because the shared spec format states it. A second spelling of one
 // directive would be this project's signature bug — one fact written down twice — in a place where
@@ -167,9 +101,10 @@ export let DisabledTestMarker = "<!-- disabled-test:"
 let UnsupportedTargetsMarker = "<!-- unsupported-targets:"
 let TargetSeparator = ","
 
-// The spelling this marker replaced, kept ONLY so the scanner can refuse it — see the arm in
-// `scanTestFromMarker`. It is not a superstring or substring of `UnsupportedTargetsMarker` (they differ
-// at the `t`/`u` after "<!-- "), so neither check can swallow the other.
+// The spelling this marker replaced, kept ONLY so the scanner can refuse it — see
+// `CaseBuilder.refuseUnreadDirective`. It is not a superstring or substring of
+// `UnsupportedTargetsMarker` (they differ at the `t`/`u` after "<!-- "), so neither check can
+// swallow the other.
 let RetiredTargetsMarker = "<!-- targets:"
 
 // The per-case RUNTIME ARGUMENTS — `<!-- Args: -5.5 -->` — sitting on the same kind of comment line
@@ -177,15 +112,15 @@ let RetiredTargetsMarker = "<!-- targets:"
 // compiled program is SPAWNED with (`SpecTest.programArgs` → `SpecTestRunner.buildRunCommand`), which
 // the program then reads back through `CommandLine.args()`.
 //
-// `/specs` carries 51 of them across 12 files (`abs`, `ceil`/`floor`, `min`/`max`, `command-line-args`,
-// `regalloc`, `advent`, `builtins-type`), so a harness that spawns an empty argv cannot port any of
-// them: the program reads `args.get(1)`, gets nothing, and the case fails on a value it was never
-// given. Two already-ported specs record exactly that in their shelve notes.
+// `/specs` carries 51 of them across 12 files (`abs`, `ceil`/`floor`, `min`/`max`,
+// `command-line-args`, `regalloc`, `advent`, `builtins-type`), so a harness that spawns an empty
+// argv cannot port any of them: the program reads `args.get(1)`, gets nothing, and the case fails
+// on a value it was never given.
 //
-// It is not a superstring of any other marker ("<!-- Args:" first differs from "<!-- test:",
-// "<!-- disabled-test:" and "<!-- unsupported-targets:" at the character after "<!-- "), so the marker checks stay
-// independent and none can swallow another — the property `UnsupportedTargetsMarker` and `DisabledTestMarker` are
-// both documented against.
+// It is not a superstring of any other marker ("<!-- Args:" first differs from "<!-- test:" and
+// "<!-- unsupported-targets:" at the character after "<!-- "), so the marker checks stay
+// independent and none can swallow another — the property `UnsupportedTargetsMarker` is documented
+// against.
 //
 // ⚠ CAPITAL `A`, matched EXACTLY, because the spec format is SHARED: the directive is
 // `<!--\s*Args:\s*(.+?)\s*-->`. A case-insensitive spelling would accept — and act on — a directive
@@ -207,26 +142,19 @@ let ArgsMarker = "<!-- Args:"
 // ⭐ **THE ONE VALUELESS MARKER — `<!-- AsyncTrace -->`.** It says a case asserts the green-thread TRACE: the
 // program is compiled with `--async-trace`, and its stderr — where the trace goes — is compared like any other.
 //
-// ⚠ **IT CARRIES NO PAYLOAD, SO IT MUST NOT GO THROUGH `markerValue`.** That helper splits on
-// `MarkerNameSep` and answers "" for a bare marker — an empty answer being indistinguishable from a
-// missing one is exactly how a silently-ignored marker happens. Its arm is a whole-body match
-// (`openingsCarryFlag`) that sets a flag.
+// A marker nothing reads is not inert — it is a claim the file makes and the harness declines —
+// which is why a comment line no directive claims is refused (`refuseUnreadOpening`) rather than
+// walked over.
 //
-// A marker nothing reads is not inert — it is a claim the file makes and the harness declines — which is
-// why a comment line no arm claims is refused at the foot of the scan rather than walked over.
-//
-// It is not a superstring or substring of any other marker ("<!-- AsyncTrace" first differs from "<!-- test:",
-// "<!-- disabled-test:", "<!-- unsupported-targets:" and "<!-- Args:" at the character after "<!-- "), so the marker checks
-// stay independent and none can swallow another.
+// It is not a superstring or substring of any other marker ("<!-- AsyncTrace" first differs from
+// "<!-- test:", "<!-- unsupported-targets:" and "<!-- Args:" at the character after "<!-- "), so
+// the marker checks stay independent and none can swallow another.
 let AsyncTraceMarker = "<!-- AsyncTrace"
 
 // ⭐ **`<!-- DebugInfo -->` — COMPILE THIS CASE THE WAY `maxon build` DOES.** The suite compiles every
 // other case with debug info OFF, which is right: 7000+ compiles must not pay for a sidecar nothing
 // reads. But then the path a user gets BY DEFAULT would have no
 // spec coverage on any target at all, so a case marks itself and that one compile takes it.
-//
-// ⚠ Valueless, so it must NOT go through `markerValue` — see `AsyncTraceMarker`, whose note carries why
-// an empty answer being indistinguishable from a missing one is how a marker goes silently unread.
 //
 // It is not a superstring or substring of any other marker ("<!-- DebugInfo" first differs from every one
 // of them at the character after "<!-- "), so the marker checks stay independent.
@@ -265,17 +193,12 @@ end 'TraceFamily'
 // AUTHORING state: write it, run `--update-required`, and the harness mints the matching block from what
 // the program actually did. So a marker with no block is not an error — it is a request.
 //
-// ⚠ Neither carries a payload, so neither may go through `markerValue` — see `AsyncTraceMarker` for why an
-// empty answer being indistinguishable from a missing one is the failure that arrangement prevents.
-//
 // Neither is a superstring or substring of any other marker ("<!-- MmTrace" and "<!-- LogTrace" first
 // differ from every one of them, and from each other, at the character after "<!-- "), so the marker checks
 // stay independent and none can swallow another.
 let MmTraceMarker = "<!-- MmTrace"
 let LogTraceMarker = "<!-- LogTrace"
 
-// The marker a family's case is REQUESTED with. Read by the splice, which has to find the line it inserts
-// a minted golden after — see `SpecTestRunner.traceMarkerLineOf`.
 export function traceMarkerOf(family TraceFamily) returns String
 	return match family 'f'
 		mm gives MmTraceMarker
@@ -296,9 +219,6 @@ end 'traceMarkerOf'
 // real networking runtime without leaving the machine and must keep running by default. Gating the file
 // would take those down with the live ones.
 //
-// ⚠ **AND IT IS NOT `disabled-test:`.** A shelved case is one the compiler cannot pass; these pass, and are
-// PARSED, SELECTED and RUN in full under `--network`. The two must not read alike.
-//
 // ⚠ **THE MARKER IS THE CENSUS, AND A HARD-CODED ROSTER IS NOT.** A list of live-network case paths held
 // in a runner is the spec files' contents written down a second time; the copy that rots is always the
 // one in the runner, and it rots SILENTLY, because a path that no longer names a case excludes nothing.
@@ -307,8 +227,8 @@ end 'traceMarkerOf'
 // Stating the fact on the case itself is the same correction the section-pin markers got (see
 // `SpecTestRunner.targetCanCheckSectionPins`).
 //
-// No marker token is a prefix of another — `markerOpeningAmong`'s rule, which keeps this check independent
-// of every other family's.
+// No marker token is a prefix of another — `openingIsMarker`'s rule, which keeps this check
+// independent of every other family's.
 export let NetworkMarker = "<!-- network:"
 
 // The ONE value `NetworkMarker` recognizes. Any other value is REFUSED rather than read as "no
@@ -332,8 +252,9 @@ export let NetworkLiveValue = "live"
 // at whatever the machine gave it and report the result as though the number had been honoured, which is
 // the silently-declined claim `AsyncTraceMarker` records having shipped.
 //
-// No marker token is a prefix of another — `markerOpeningAmong`'s rule, which keeps this check independent
-// of every other family's (`PreemptMarker` shares `<!-- pr` with it, and that is not a prefix).
+// No marker token is a prefix of another — `openingIsMarker`'s rule, which keeps this check
+// independent of every other family's (`PreemptMarker` shares `<!-- pr` with it, and that is not a
+// prefix).
 let ProcsMarker = "<!-- procs:"
 
 // ⭐⭐ **WHETHER THE MONITOR MAY TAKE THE PROCESSOR FROM THE THREAD HOLDING IT — `<!-- preempt: off -->`, the
@@ -350,8 +271,8 @@ let ProcsMarker = "<!-- procs:"
 // `parseNetworkValue` exactly. And `off` is the ONLY value: the marker states a departure from the default,
 // and absence already says the default.
 //
-// No marker token is a prefix of another — `markerOpeningAmong`'s rule, which keeps this check independent
-// of every other family's.
+// No marker token is a prefix of another — `openingIsMarker`'s rule, which keeps this check
+// independent of every other family's.
 let PreemptMarker = "<!-- preempt:"
 
 // ⭐⭐ **WHETHER THIS CASE'S PROGRAM IS GIVEN A STDIN THAT BLOCKS — `<!-- stdin: hold -->` and
@@ -386,8 +307,8 @@ let PreemptMarker = "<!-- preempt:"
 // the case an instant EOF and let it report PASS on a program that never blocked at all, which is the
 // silently-declined claim `AsyncTraceMarker` records having shipped.
 //
-// No marker token is a prefix of another — `markerOpeningAmong`'s rule, which keeps this check independent
-// of every other family's.
+// No marker token is a prefix of another — `openingIsMarker`'s rule, which keeps this check
+// independent of every other family's.
 let StdinMarker = "<!-- stdin:"
 
 // The two values `StdinMarker` recognizes, for `NetworkLiveValue`'s reason.
@@ -404,8 +325,8 @@ let StdinDelayedValue = "delayed"
 // ⛔ **AN UNRECOGNIZED VALUE IS A PANIC, NOT A DEFAULT** — `parseRunsValue`, which follows `parseNetworkValue`
 // exactly. And `alone` is the ONLY value: absence already says the case shares the pool.
 //
-// No marker token is a prefix of another — `markerOpeningAmong`'s rule, which keeps this check independent
-// of every other family's.
+// No marker token is a prefix of another — `openingIsMarker`'s rule, which keeps this check
+// independent of every other family's.
 let RunsMarker = "<!-- runs:"
 
 // The one value `RunsMarker` recognizes, for `NetworkLiveValue`'s reason.
@@ -418,8 +339,8 @@ let ArgQuote = "\""
 
 // ⭐⭐ **WHAT A MARKER LINE IS — ARBITRARY WHITESPACE AT BOTH ENDS.**
 //
-// The constants above are the CANONICAL SPELLING a spec author writes and `traceMarkerLineOf` looks
-// for. They are not what is MATCHED, and matching them literally is narrower at both ends:
+// The constants above are the CANONICAL SPELLING a spec author writes. They are not what is
+// MATCHED, and matching them literally is narrower at both ends:
 //
 //   • `<!--  test: x -->` (two spaces) does not contain the literal `<!-- test:`, so NO marker is seen
 //     at all and the line walks over as prose — the case silently DROPPED, its fences swallowed by the
@@ -427,14 +348,13 @@ let ArgQuote = "\""
 //   • `<!-- test: x<TAB>-->` does not contain the literal `" -->"`, so the unterminated-marker refusal
 //     takes the WHOLE SUITE DOWN on every run, where `\s*-->` accepts it.
 //
-// ⇒ the three tokens below are what the scanner matches, and the whitespace rule around them lives in
-// `markerOpeningsIn` / `markerValue` rather than in a literal per marker. EVERY marker in this grammar
-// goes through them, so closing this class closed it for `unsupported-targets:`, `Args:`, `network:` and the three
-// valueless flags at the same time — each had the identical divergence and none was named as a defect,
-// because nothing had asked.
+// ⇒ the three tokens below are what the scanner matches, and the whitespace rule around them lives
+// in `markerOpeningsIn` / `markerValueOf` rather than in a literal per marker, so it holds for
+// every directive at once.
 let CommentOpen = "<!--"
 let MarkerEnd = "-->"
 let MarkerNameSep = ":"
+let DirectivesPerLine = 1
 let SourceFence = "```maxon"
 let ExitCodeFence = "```exitcode"
 let CompilerErrorFence = "```maxoncstderr"
@@ -543,11 +463,6 @@ end 'traceFenceOf'
 // what the compiler thinks it laid out, but what the linked binary actually contains, read back out
 // of the image (`SpecTestRunner.checkRequiredSections`).
 //
-// ⚠ **```RequiredData IS PARSED, NOT WALKED OVER.** A block no arm claims is read line by line as
-// ordinary prose, and the SIX cases in `specs/static-variables.md` that carry one would then pass on
-// their exit code alone while CLAIMING to check their layout. A gate that cannot see its own property
-// must not report PASS.
-//
 // ⭐⭐ **```RequiredRdata IS ITS TWIN, AND IT CLOSES THE SAME BLINDNESS ONE SECTION OVER.** A
 // `.rdata` payload registered under a STRUCTURAL label (`registerRdataConstantLabeled` — witness
 // tables, `__layout_*` descriptors, the UCD tables) does not advance `GlobalDataTable.nextStringId`,
@@ -596,15 +511,15 @@ let RequiredRdataFence = "```RequiredRdata"
 // `pinsAnyResult` — a case carrying only this would compile, render a golden and check no behaviour.
 let RequiredRuntimeFence = "```RequiredRuntime"
 
-// The three-backtick delimiter. Markdown spells OPEN and CLOSE the same way, so one name serves both
-// readers: `readFence` looking for the end of a block, and the terminating arm in `scanTestFromMarker`
-// looking at the start of one it has no reader for.
+// The three-backtick delimiter. Markdown spells OPEN and CLOSE the same way, so one name serves
+// both readers: `readFence` looking for the end of a block, and `isUnimplementedFenceOpen` looking
+// at the start of one no arm reads.
 export let FenceDelimiter = "```"
 
-// The one TAGGED fence a test region may open without claiming anything. A bare `FenceDelimiter` block
-// and a ```text one are PROSE — a quoted panic message, an illustrated diagnostic — and 200 of them are
-// in this corpus. Every OTHER tag is a claim, and `isUnimplementedFenceOpen` refuses the ones no arm of
-// `scanTestFromMarker` can honour.
+// The one TAGGED fence a test region may open without claiming anything. A bare `FenceDelimiter`
+// block and a ```text one are PROSE — a quoted panic message, an illustrated diagnostic. Every
+// OTHER tag is a claim, and `refuseUnreadFence` refuses the ones no arm of `CaseBuilder.readLine`
+// reads.
 let ProseFenceOpen = "```text"
 
 // The multi-file marker, and the ONE line the `// Test: <name>` fragment header adds above a
@@ -660,11 +575,6 @@ export let DriveLetterSeparator = ":"
 // what applies that distance to a diagnostic.
 export typealias LineIndex = int(0 to u64.max)
 
-// How many cases in one spec file are shelved behind `<!-- disabled-test: … -->`.
-// Carried (not discarded) because it is the project's progress metric: a rung is
-// DONE when the cases it unlocks have moved out of this count and into the run.
-export typealias DisabledTestCount = int(0 to u64.max)
-
 // A process exit code — shared by the EXPECTED value parsed here and the OBSERVED
 // value the runner reads back, so they compare without a cast. Exported so the
 // runner names the `SpecExpectation.exitCode` payload in its own signatures.
@@ -718,13 +628,12 @@ export typealias SpecSectionPinArray = Array with SpecSectionPin
 // `RuntimeFunctionNameArray`, declared by the printer that consumes them — `TargetPrinter.maxon`.
 // It is the same list all the way from the fence to the render, so it is named once.)
 
-// ⭐⭐ **WHAT A SPEC PINS ABOUT THE EXIT CODE, AND THE "UNPINNED" STATE IS THE WHOLE POINT — WITHOUT IT
-// WHOLE TEST CASES DROP SILENTLY.** An exit code that is the one half of a run expectation with no
-// "unpinned" state makes `scanTestFromMarker` push a test only `if haveExitCode`, so a `/specs` case
-// that pins ONLY stdout — which is legal, because the success expectation is built from ANY result
-// block — is consumed as a full test
-// boundary and then thrown away. No test, no golden, and NOTHING IN THE OUTPUT SAYING SO: the case
-// simply is not in the count.
+// ⭐⭐ **WHAT A SPEC PINS ABOUT THE EXIT CODE, AND THE "UNPINNED" STATE IS THE WHOLE POINT — WITHOUT
+// IT WHOLE TEST CASES DROP SILENTLY.** An exit code that is the one half of a run expectation with
+// no "unpinned" state makes the parser push a test only `if haveExitCode`, so a `/specs` case that
+// pins ONLY stdout — which is legal, because the success expectation is built from ANY result block
+// — is consumed as a full test boundary and then thrown away. No test, no golden, and NOTHING IN
+// THE OUTPUT SAYING SO: the case simply is not in the count.
 //
 // ⚠ **MEASURED WHEN IT FIRST BIT: all 3 cases of `specs/init-from-literal.md` vanished** — the file
 // parsed, the suite reported `no tests selected matching --filter=init-from-literal/`, and a reader
@@ -815,34 +724,32 @@ export union SpecTraceCapture
 	// Not a capture case: built and run exactly as any other.
 	off
 
-	// In capture mode with no golden. The program is built with `--debugstream` and run under the monitor,
-	// and the trace is compared against NOTHING — so the case fails unless the family it names is silent,
-	// and `--update-required` mints the block that makes it a real assertion.
-	unpinned(family TraceFamily)
+	// In capture mode with no golden. The program is built with `--debugstream` and run under the
+	// monitor, and the trace is compared against NOTHING — so the case fails unless the family it
+	// names is silent, and `--update-required` mints the block that makes it a real assertion, at
+	// `insertAt`: the empty slice after the case's last non-blank line.
+	unpinned(family TraceFamily, insertAt TraceSlice)
 
-	// In capture mode with a golden, normalized and compared line for line.
-	pinned(family TraceFamily, trace String)
+	// In capture mode with a golden, normalized and compared line for line. `span` is the block,
+	// fences included, which a re-mint replaces.
+	pinned(family TraceFamily, trace String, span TraceSlice)
 end 'SpecTraceCapture'
+
+export function traceSliceOf(capture SpecTraceCapture) returns TraceSlice
+	return match capture 'mode'
+		off panic("traceSliceOf: a case not in capture mode has no capture block to write — ask `traceCaptureMode` before asking this")
+		unpinned(_, insertAt) gives insertAt
+		pinned(_, _, span) gives span
+	end 'mode'
+end 'traceSliceOf'
 
 // The family a capture case names. `off` has none — a caller that reaches here has already established
 // the case IS a capture (`SpecTestRunner.traceCaptureMode`), so an `off` here is a caller that did not.
-// A marker RAISES the capture mode and never lowers it: a `pinned` set by a block earlier in the case must
-// not become `unpinned` again, so a marker's family is the case's only when no block has already named
-// one. Written once because both markers ask it, and because the arm that must NOT fire is the easy one to
-// get wrong.
-function raisedTraceCapture(current SpecTraceCapture, family TraceFamily) returns SpecTraceCapture
-	return match current 'raise'
-		off gives SpecTraceCapture.unpinned(family)
-		unpinned(existing) gives SpecTraceCapture.unpinned(existing)
-		pinned(existing, trace) gives SpecTraceCapture.pinned(existing, trace: trace)
-	end 'raise'
-end 'raisedTraceCapture'
-
 export function traceCaptureFamilyOf(capture SpecTraceCapture) returns TraceFamily
 	return match capture 'mode'
 		off panic("traceCaptureFamilyOf: a case not in capture mode names no family — ask `traceCaptureMode` before asking this")
-		unpinned(family) gives family
-		pinned(family, _) gives family
+		unpinned(family, _) gives family
+		pinned(family, _, _) gives family
 	end 'mode'
 end 'traceCaptureFamilyOf'
 
@@ -955,9 +862,9 @@ export type SpecTest
 	// own `runtime/`. Empty is the literal count of runtime-file markers, exactly as `stdlibOverlays` is.
 	export let runtimeFiles as SpecSourceFileArray
 
-	// The `targetToString` forms this test CANNOT run on (an `<!-- unsupported-targets: … -->` marker),
-	// or EMPTY for the ordinary test that runs on every target. The runner SKIPS a test whose list
-	// names the effective target (`SpecTestRunner.markerAllowsTarget`) — the same treatment a draft or
+	// The `targetToString` forms this test CANNOT run on (an `<!-- unsupported-targets: … -->`
+	// marker), or EMPTY for the ordinary test that runs on every target. The runner SKIPS a test whose
+	// list names the effective target (`SpecTestRunner.markerAllowsTarget`) — the same treatment a
 	// filtered-out test gets, never a failure. ⚠ Distinct from a SKIPPED result, which is a test that
 	// WAS selected, WAS compiled and was refused by the target; that one is counted and reported.
 	export let unsupportedTargets as TargetKeyArray
@@ -1049,7 +956,7 @@ export type SpecTest
 	// marker beside it, because a marker is a second copy of "which formats have a section", and the
 	// copy that goes missing takes a whole lane down with it.
 	//
-	// A `compilerError` case answers a structural FALSE, not a default: `scanTestFromMarker`'s
+	// A `compilerError` case answers a structural FALSE, not a default: `CaseBuilder.expectationFor`'s
 	// `pinsOnARejectedCase` refuses a pin on a case that never links, so such a case cannot carry one.
 	export function pinsLinkedSection() returns bool
 		return match self.expectation 'e'
@@ -1060,33 +967,6 @@ export type SpecTest
 end 'SpecTest'
 
 export typealias SpecTestArray = Array with SpecTest
-
-// A parsed spec file: its frontmatter `status` (the runner skips `draft`), every
-// ACTIVE test, and how many cases were shelved behind `<!-- disabled-test: … -->`.
-// (The path is deliberately NOT stored — the caller already holds the FilePath it
-// passed to `parseSpecFile`, so a copy here would be dead.)
-export type SpecFile
-	export let status as String
-	export let tests as SpecTestArray
-	export let disabledCount as DisabledTestCount
-
-	export static function create(status String, tests SpecTestArray, disabledCount DisabledTestCount) returns SpecFile
-		return Self{status: status, tests: tests, disabledCount: disabledCount}
-	end 'create'
-end 'SpecFile'
-
-// What one pass over a spec's `## Tests` region found: the runnable tests, and the
-// count of cases deliberately shelved. Two values, one traversal — returning both
-// keeps `extractTests` a single scan rather than a scan plus a separate re-count,
-// which could disagree with it.
-type ExtractedTests
-	export let tests as SpecTestArray
-	export let disabledCount as DisabledTestCount
-
-	static function create(tests SpecTestArray, disabledCount DisabledTestCount) returns ExtractedTests
-		return Self{tests: tests, disabledCount: disabledCount}
-	end 'create'
-end 'ExtractedTests'
 
 // One fenced code block: its content (fence lines excluded), and the line index
 // immediately AFTER its closing ``` — the single unit the block reader returns
@@ -1125,9 +1005,6 @@ type TargetPreferredText
 		return Self{portable: "", qualified: "", havePortable: false, haveQualified: false}
 	end 'create'
 
-	// A LATER block of the same kind replaces an earlier one, which is what a plain assignment always did
-	// here — two portable ```stdout blocks in one case are a spec-authoring mistake, not two claims, and
-	// unlike a section pin they cannot accumulate (a run has one stdout).
 	function recordPortable(text String)
 		portable = text
 		havePortable = true
@@ -1155,9 +1032,9 @@ type TargetPreferredText
 	end 'resolved'
 end 'TargetPreferredText'
 
-// Read the spec file at `path` and extract its frontmatter status + active
-// tests. Throws `readError` when the file cannot be read (the runner surfaces
-// it), reusing the driver's IO error union rather than inventing a parallel one.
+// Read the spec file at `path` and extract its tests. Throws `readError` when the file cannot be
+// read (the runner surfaces it), reusing the driver's IO error union rather than inventing a
+// parallel one.
 //
 // ⚠ **IT TAKES THE RUN'S TARGET, because THREE fences' meaning depends on it** — `` ```Stdout:<target> ``
 // and its `` ```Stderr: `` / `` ```Maxoncstderr: `` twins resolve HERE, so a `SpecTest` carries an
@@ -1165,61 +1042,25 @@ end 'TargetPreferredText'
 // deliberately NOT the treatment `<!-- unsupported-targets: … -->` gets — that marker decides whether the test is in
 // this run's SET at all, which is a selection the RUNNER owns and reports ("skipped"); this one decides
 // what the test's expectation IS, which is the parse's own answer.
-export function parseSpecFile(path FilePath, effectiveTargetKey String) returns SpecFile throws CompileError
+export function parseSpecFile(path FilePath, effectiveTargetKey String) returns ParsedSpec throws CompileError
 	let content = try File.readText(path) otherwise throw CompileError.readError(path)
-	let lines = content.split("\n")
-	let extracted = extractTests(lines, specPath: path, effectiveTargetKey: effectiveTargetKey)
-	return SpecFile.create(parseStatus(lines), tests: extracted.tests, disabledCount: extracted.disabledCount)
+	return ParsedSpec.create(content, tests: extractTests(specLinesOf(content), specPath: path, effectiveTargetKey: effectiveTargetKey))
 end 'parseSpecFile'
 
-// Read the `status:` key out of the YAML frontmatter (the leading `--- … ---` block). "" when
-// there is no frontmatter or no status key — the runner skips only the literal "draft", so ""
-// runs normally.
-//
-// ⚠⚠ **`status: selfhosted` DOES NOT SUSPEND A SPEC, AND READING IT AS "SUSPENDED" SILENTLY DELETES
-// CASES.** It is INHERITED metadata: a spec ported into `specs/` is copied BYTE-IDENTICAL, frontmatter
-// and all, so that line rides along describing a decision about the `/specs` copy rather than one about
-// this corpus. THIRTY-TWO files carry it here today
-// (`arithmetic`, `assignment`, `basics`, `break`, `division`, `functions`, `if-statements`,
-// `variables`, `while-loops`, …) and every one of them RUNS and PASSES; honouring it
-// would silently delete the language's core cases from the suite. ⇒ the only status that means
-// anything to THIS runner is `draft`, and a suspension in `specs/` is spelled by disabling the
-// cases (`<!-- disabled-test: … -->`), which is counted.
-function parseStatus(lines StringArray) returns String
-	var status = ""
+export type ParsedSpec
+	export let text as String
+	export let tests as SpecTestArray
 
-	let lineCount = lines.count()
+	static function create(text String, tests SpecTestArray) returns ParsedSpec
+		return Self{text: text, tests: tests}
+	end 'create'
+end 'ParsedSpec'
 
-	if lineCount == 0 'noLines'
-		return status
-	end 'noLines'
-
-	let firstLine = try lines.get(0) otherwise ""
-
-	if firstLine.trim() != FrontmatterFence 'noFrontmatter'
-		return status
-	end 'noFrontmatter'
-
-	var i = 1
-
-	while i < lineCount 'scan'
-		let line = try lines.get(i) otherwise panic("SpecParser.parseStatus: index {i} >= lineCount {lineCount} despite the while guard i<lineCount")
-
-		let trimmed = line.trim()
-
-		if trimmed == FrontmatterFence 'endFrontmatter'
-			break
-		end 'endFrontmatter'
-
-		if trimmed.startsWith(StatusKey) 'isStatus'
-			status = valueAfterKey(trimmed, key: StatusKey)
-		end 'isStatus'
-
-		i = i + 1
-	end 'scan'
-
-	return status
-end 'parseStatus'
+// The one split a spec's line indices are counted in. The parse records every `TraceSlice` against
+// it and the re-mint splices through it, so a span names the same lines on both sides.
+export function specLinesOf(text String) returns StringArray
+	return text.split(LineSeparator)
+end 'specLinesOf'
 
 // The trimmed remainder of `line` after a literal `key` prefix. `line` is known
 // to start with `key` (the caller gates on `startsWith`), so advancing
@@ -1234,31 +1075,9 @@ function valueAfterKey(line String, key String) returns String
 	return line.slice(pos, endIndex: line.endIndex()).trim()
 end 'valueAfterKey'
 
-// Whether `line` is a heading that ENDS the active-test region — the single decision
-// site for `RegionEndHeadings`, which states the stop set. An ordinary `## ` heading is
-// not one: a spec is free to organize its cases under section headings, and the scan
-// walks straight over them.
-function endsActiveTestRegion(line String) returns bool
-	for heading in RegionEndHeadings 'stops'
-		if line.startsWith(heading) 'isStop'
-			return true
-		end 'isStop'
-	end 'stops'
-
-	return false
-end 'endsActiveTestRegion'
-
-// Extract every ACTIVE test, and count the disabled ones. The scanned region is the
-// `## Tests` section only: from the line after the `## Tests` heading to the next STOP
-// HEADING (or EOF). `## Deferred` is that stop, so no deferred test is ever reached — see
-// the deferred-skip convention at the top of this file, and `RegionEndHeadings` for why
-// an ordinary section heading must NOT end the region.
-function extractTests(lines StringArray, specPath FilePath, effectiveTargetKey String) returns ExtractedTests
+function extractTests(lines StringArray, specPath FilePath, effectiveTargetKey String) returns SpecTestArray
 	var tests = SpecTestArray.create()
-	var disabledCount = 0 as DisabledTestCount
 	let lineCount = lines.count()
-
-	// Locate the `## Tests` heading; the active-test region begins on the next line.
 	var i = 0
 	var inTests = false
 
@@ -1271,93 +1090,54 @@ function extractTests(lines StringArray, specPath FilePath, effectiveTargetKey S
 			break
 		end 'foundTests'
 
+		if carriesDirective(markerOpeningsIn(line), directive: CaseDirective.testCase) 'markerOutsideTheRegion'
+			panic("SpecParser: {specPath.toString()}:{i + 1}: this test marker is outside the `{TestsHeading}` region: '{line.trim()}'. A case runs only below that heading, so this one would run nowhere with nothing reported. Move it under `{TestsHeading}`, or delete it")
+		end 'markerOutsideTheRegion'
+
 		i = i + 1
 	end 'find'
 
 	if not inTests 'noTestsSection'
-		return ExtractedTests.create(tests, disabledCount: disabledCount)
+		return tests
 	end 'noTestsSection'
+
+	let outside = UnreadCommentSite.outsideAnyCase
 
 	while i < lineCount 'scan'
 		let line = try lines.get(i) otherwise panic("SpecParser.extractTests: index {i} >= lineCount {lineCount} despite the while guard i<lineCount")
-
-		// A STOP heading — `## Deferred` — ends the active-test region. Any other `## `
-		// heading is an ordinary section inside `## Tests` and is walked over below.
-		if endsActiveTestRegion(line) 'sectionEnd'
-			break
-		end 'sectionEnd'
-
-		// A DISABLED case is scanned by the very same routine as an active one — it
-		// is a full test boundary, just one whose result is thrown away. Sharing the
-		// scan is the point: a second "skip a disabled test" walker would be free to
-		// disagree with this one about where a test's blocks end, and the failure
-		// mode of that disagreement is a shelved case silently RUNNING.
 		let openings = markerOpeningsIn(line)
 
-		if openingsCarry(openings, marker: DisabledTestMarker) 'isDisabledMarker'
-			disabledCount = disabledCount + 1
-			i = scanTestFromMarker(lines, markerIndex: i, markerLine: line, tests: tests, active: false, specPath: specPath, effectiveTargetKey: effectiveTargetKey)
-		end 'isDisabledMarker' else if openingsCarry(openings, marker: TestMarker) 'isMarker'
-			i = scanTestFromMarker(lines, markerIndex: i, markerLine: line, tests: tests, active: true, specPath: specPath, effectiveTargetKey: effectiveTargetKey)
-		end 'isMarker' else 'notMarker'
-			i = i + 1
-		end 'notMarker'
+		match openingFor(openings, directive: CaseDirective.testCase) 'marker'
+			at(testOpening) then i = scanTestFromMarker(lines, markerIndex: i, markerLine: line, markerOpenings: openings, testOpening: testOpening, tests: tests, specPath: specPath, effectiveTargetKey: effectiveTargetKey)
+			absent then i = afterLineOutsideAnyCase(lines, index: i, line: line, openings: openings, site: outside, specPath: specPath)
+		end 'marker'
 	end 'scan'
 
-	return ExtractedTests.create(tests, disabledCount: disabledCount)
+	return tests
 end 'extractTests'
 
-// ⭐⭐ **A TEST MARKER THAT IS NEVER CLOSED IS REFUSED — because the way a spec author COMMENTS A CASE
-// OUT is to leave the `-->` until after its fences, and without this refusal the parser RUNS it.**
-//
-// `markerValue` answers with everything to the end of the line when it finds no `MarkerEnd`, and
-// that fallback is right for it — it reads six different markers and cannot decide for all of them. For
-// a TEST marker it is a wrong answer with teeth: the name parses, the case becomes ACTIVE, and the
-// harness compiles and runs a program the file says is switched off. Every other marker's fallback is
-// harmless by comparison (`markerValue` trims, so an unterminated `<!-- unsupported-targets: wasm32-wasi` yields the
-// same key a closed one would); this is the only one that CREATES A CASE.
-//
-// ⛔ **THE GRAMMAR REQUIRES THE END TOKEN.** `<!--\s*test:\s*(\S+)\s*-->` cannot span the prose line an
-// unterminated marker carries, so such a line is declined rather than turned into a live case —
-// `specs/unary-operators.md` holds one, and reading it as live runs a case the file does not declare.
-//
-// Asked at the ONE door both kinds of marker go through, so a shelved case is refused identically —
-// `extractTests` routes `<!-- disabled-test: … -->` here too, and the two must not come to disagree
-// about what a well-formed marker line is.
+function afterLineOutsideAnyCase(lines StringArray, index LineIndex, line String, openings StringArray, site UnreadCommentSite, specPath FilePath) returns LineIndex
+	refuseUnreadComment(openings, lineIndex: index, specPath: specPath, site: site)
+
+	let fenceLine = line.trim()
+	refuseFenceShapedProse(fenceLine, lineIndex: index, specPath: specPath)
+	return afterUnclaimedLine(lines, index: index, fenceLine: fenceLine, specPath: specPath, site: site)
+end 'afterLineOutsideAnyCase'
+
+// A test marker with no `-->` of its own is refused. A spec author comments a case out by leaving
+// the `-->` until after its fences, and `markerValueOf` reads an unclosed opening to its end, so
+// without this the name still parses and the harness runs a case the file says is switched off. The
+// grammar, `<!--\s*test:\s*(\S+)\s*-->`, requires the end token.
 //
 // It panics in the parent, before a worker exists, as this file's other spec-authoring refusals do;
 // `tests/spec-harness/refusals/unterminated-test-marker` is what proves it still fires.
-function refuseUnterminatedTestMarker(markerLine String, marker String, markerIndex LineIndex, specPath FilePath)
-	// ⛔ **ASKED OF THIS MARKER'S OWN OPENING, NOT OF THE LINE.** A `markerLine.contains` on
-	// `<!-- note --> <!-- test: foo` is satisfied by the OTHER comment's closer while the test
-	// marker runs off the end of the line — the exact shape this refusal exists to catch, walking through
-	// the check meant to stop it. Zero such lines stand in either corpus, which is what lets one in.
-	match markerOpeningAmong(markerOpeningsIn(markerLine), marker: marker) 'opening'
-		absent then panic("SpecParser.refuseUnterminatedTestMarker: '{markerLine}' was recognized as carrying '{marker}' moments ago and no longer does — recognition and this refusal have come apart, which is the one thing they may never do")
-		at(text) then refuseUnclosedOpening(text, markerIndex: markerIndex, specPath: specPath)
-	end 'opening'
-end 'refuseUnterminatedTestMarker'
-
-// The refusal itself, once the marker's own opening is in hand.
-function refuseUnclosedOpening(opening String, markerIndex LineIndex, specPath FilePath)
+function closedOpening(opening String, markerIndex LineIndex, specPath FilePath) returns String
 	if opening.contains(MarkerEnd) 'properlyClosed'
-		return
+		return opening
 	end 'properlyClosed'
 
-	panic("SpecParser: {specPath.toString()}:{markerIndex + 1}: this test marker is never closed — its own '{CommentOpen}' has no '{MarkerEnd}' after it, so everything past the '{MarkerNameSep}' would be read as the case NAME: '{opening}'. That is how a case its author COMMENTED OUT gets run: the `-->` ends up below the case's fences, the marker parses anyway, and the harness compiles and runs a program the file says is switched off. The reference parser declines this marker outright, so the same file already means two different things to two compilers. Close the marker on its own line — and if the case was meant to be shelved, delete the trailing `-->` as well and write it as a `{DisabledTestMarker} NAME -->` naming the rung that unlocks it")
-end 'refuseUnclosedOpening'
-
-// Which of the two spellings a case's marker line was recognized by. `extractTests` asks the disabled
-// one first and the active one second, and this says the same thing from the `active` flag it already
-// passes — so the refusal below interrogates the opening that was actually matched, rather than
-// guessing which of the two it was.
-function testMarkerSpellingFor(active bool) returns String
-	if active 'liveCase'
-		return TestMarker
-	end 'liveCase'
-
-	return DisabledTestMarker
-end 'testMarkerSpellingFor'
+	panic("SpecParser: {specPath.toString()}:{markerIndex + 1}: this test marker is never closed — its own '{CommentOpen}' has no '{MarkerEnd}' after it, so everything past the '{MarkerNameSep}' would be read as the case NAME: '{opening}'. That is how a case its author COMMENTED OUT gets run: the `-->` ends up below the case's fences, the marker parses anyway, and the harness compiles and runs a program the file says is switched off. The reference parser declines this marker outright, so the same file already means two different things to two compilers. Close the marker on its own line — and if the case is not meant to run, delete it")
+end 'closedOpening'
 
 function exitCodeExpectationIn(text String, fenceIndex LineIndex, specPath FilePath) returns ExitCodeValue
 	let parsed = try int.fromString(text) otherwise panic("SpecParser: {specPath.toString()}:{fenceIndex + 1}: this test's `{ExitCodeFence}` block holds '{text}', which is not a number — so nothing would be pinned about the case's exit status and the case would run as though the block were not there")
@@ -1369,414 +1149,445 @@ function exitCodeExpectationIn(text String, fenceIndex LineIndex, specPath FileP
 	return parsed as ExitCodeValue
 end 'exitCodeExpectationIn'
 
-// Scan one test starting at its marker line, returning the line index to resume the
-// outer scan from. When `active`, the parsed test is pushed onto `tests`; when not
-// (a `<!-- disabled-test: … -->` case) it is scanned identically and DISCARDED, so
-// the shelved case is skipped by consuming exactly the blocks a live test would
-// have consumed rather than by a separate, driftable walker.
-//
-// A test is pushed when a ```maxon source block AND AT LEAST ONE result block were
-// seen before the next marker / section boundary (the "marker + source + expected,
-// contiguous" active-test contract). ANY result block qualifies — an exit code, either
-// stream, or a `.data` pin; see `SpecExitCode` for the three cases a stricter rule
-// silently drops. A source block with NO result block is not a runnable test and PANICS naming
-// it, because it is a spec-authoring error whose only other outcome is a case that looks
-// present and tests nothing.
-//
-// The scan reads the test's WHOLE block run and builds the expectation once at the end,
-// rather than returning at the first expected block it recognizes. It has to: a run
-// expectation is spread across TWO fences (```exitcode then ```stderr — see
-// `SpecExpectation`), so a scan that returned at the exitcode would leave the stderr
-// block to the outer loop, which — finding no marker in it — would walk over it line by
-// line and silently drop the assertion. A spec that pins a panic would then pass on the
-// exit code alone, which is the one failure mode a panic spec exists to catch.
-function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine String, tests SpecTestArray, active bool, specPath FilePath, effectiveTargetKey String) returns LineIndex
-	refuseUnterminatedTestMarker(markerLine, marker: testMarkerSpellingFor(active), markerIndex: markerIndex, specPath: specPath)
+function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine String, markerOpenings StringArray, testOpening String, tests SpecTestArray, specPath FilePath, effectiveTargetKey String) returns LineIndex
+	let closed = closedOpening(testOpening, markerIndex: markerIndex, specPath: specPath)
+	var builder = CaseBuilder.create(markerValueOf(closed), markerIndex: markerIndex, specPath: specPath, effectiveTargetKey: effectiveTargetKey)
+	builder.refuseCrowdedLine(markerOpenings, line: markerLine, lineIndex: markerIndex)
 
 	let lineCount = lines.count()
-	let name = markerValue(markerLine)
-	var source = ""
-	var haveSource = false
-	var exitCode = SpecExitCode.unpinned
-
-	// The three slots a spec may state TWICE — once portably and once for a named target. Each holds both
-	// blocks until the whole run of a test's blocks has been read, because the two fences may appear in
-	// either order; `TargetPreferredText` carries the preference and the reason.
-	var compilerError = TargetPreferredText.create()
-	var stderr = TargetPreferredText.create()
-	var stdout = TargetPreferredText.create()
-	var sectionPins = SpecSectionPinArray.create()
-	var unsupportedTargets = TargetKeyArray.create()
-	var runtimeNames = RuntimeFunctionNameArray.create()
-	var programArgs = ProgramArgArray.create()
-	var asyncTrace = false
-	var debugInfo = false
-
-	// Starts `off`; the MARKER raises it to `unpinned` and the BLOCK to `pinned`. A case carrying both
-	// ends `pinned` whichever order they appear in, because the block never lowers the mode.
-	var traceCapture = SpecTraceCapture.off
-
-	// `none` unless a `<!-- network: … -->` marker says otherwise — the ordinary case, and the literal
-	// answer for a case that reaches no host, not a default standing in for an unread marker.
-	var network = SpecNetwork.none
-
-	// `unset` unless a `<!-- procs: … -->` marker says otherwise — the literal answer for a case that names
-	// no count and takes the process default, not a default standing in for an unread marker.
-	var procs = SpecProcs.unset
-
-	// `unset` unless a `<!-- preempt: … -->` marker says otherwise — the literal answer for a case whose program
-	// inherits the environment, not a default standing in for an unread marker.
-	var preempt = SpecPreempt.unset
-
-	// `closed` unless a `<!-- stdin: … -->` marker says otherwise — the literal answer for a case whose
-	// program is handed the null device, not a default standing in for an unread marker.
-	var stdin = SpecStdin.closed
-
-	// `shared` unless a `<!-- runs: … -->` marker says otherwise — the literal answer for a case whose program
-	// runs beside others, not a default standing in for an unread marker.
-	var runs = SpecRuns.shared
 	var i = markerIndex + 1
 
 	while i < lineCount 'blocks'
 		let line = try lines.get(i) otherwise panic("SpecParser.scanTestFromMarker: index {i} >= lineCount {lineCount} despite the while guard i<lineCount")
 
-		// The next marker of EITHER kind, or a section boundary, ends this test. Leave
-		// `i` ON that line so the outer scan re-examines it. Disabled markers must end
-		// a test just as active ones do, or an active case followed by a shelved one
-		// would swallow the shelved case's blocks and mis-read its expectation.
-		//
-		// ⚠ ANY `## ` heading ends a TEST — deliberately wider than `endsActiveTestRegion`,
-		// which ends the whole REGION. The last case before `## Stage 3` stops at that
-		// heading (its blocks cannot span it), and the region then continues underneath.
-		if line.startsWith(SectionHeadingPrefix) 'sectionEnd'
-			break
-		end 'sectionEnd'
-
-		// Computed ONCE and asked of every family below — see `markerOpeningsIn` for why that matters here
-		// in particular: this loop runs over every line of every case and asks about every family on each.
+		// Computed ONCE and asked of every directive — see `markerOpeningsIn` for why that matters here
+		// in particular: this loop runs over every line of every case and asks about every directive on
+		// each.
 		let openings = markerOpeningsIn(line)
 
-		if openingsCarry(openings, marker: TestMarker) or openingsCarry(openings, marker: DisabledTestMarker) 'nextMarker'
+		if endsTestCase(line, openings: openings) 'caseEnd'
 			break
-		end 'nextMarker'
+		end 'caseEnd'
 
-		// The per-target gate — one of the comment lines that may sit between this test's marker and
-		// its first fence. Parsed here so a disabled case consumes it identically to a live one; the
-		// disabled case then discards the whole test, exclusions and all.
-		if openingsCarry(openings, marker: UnsupportedTargetsMarker) 'unsupportedTargetsMarker'
-			unsupportedTargets = parseUnsupportedTargetKeys(line, specPath: specPath, testName: name)
+		if not openings.isEmpty() 'directiveLine'
+			builder.readDirectiveLine(openings, line: line, lineIndex: i)
 			i = i + 1
 			continue
-		end 'unsupportedTargetsMarker'
+		end 'directiveLine'
 
-		// ⛔⛔ **THE RETIRED WHITELIST SPELLING GETS ITS OWN REFUSAL.** `<!-- targets: … -->` named the
-		// lanes a case COULD run on — the exact inverse of what `UnsupportedTargetsMarker` names — so a
-		// line still carrying it asserts one set and delivers its complement. The unread-comment refusal
-		// at the foot of the scan would catch it too, but only this arm can say what the line MEANT and
-		// which spelling replaces it.
-		if openingsCarry(openings, marker: RetiredTargetsMarker) 'retiredTargetsMarker'
-			panic("SpecParser: {specPath.toString()}: test '{name}' carries the retired `{RetiredTargetsMarker} … -->`, which named the targets a case runs ON. Nothing reads it, so the case runs EVERYWHERE — the complement of what the line says. Spell the lanes that cannot serve it: `{UnsupportedTargetsMarker} … -->`")
+		i = builder.readLine(lines, index: i, fenceLine: line.trim())
+	end 'blocks'
+
+	tests.push(builder.build(lines, caseEnd: i))
+	return i
+end 'scanTestFromMarker'
+
+// The half-open line range `[blockStart, blockEnd)` a capture re-mint replaces, in `specLinesOf`
+// lines. The parse records it so `--update-required` needs no case-end rule of its own: a second
+// walker that disagreed about where a case ends would write the block into a neighbouring case or a
+// prose block.
+export type TraceSlice
+	export let blockStart as LineIndex
+	export let blockEnd as LineIndex
+
+	static function create(blockStart LineIndex, blockEnd LineIndex) returns TraceSlice
+		return Self{blockStart: blockStart, blockEnd: blockEnd}
+	end 'create'
+end 'TraceSlice'
+
+function sliceAfterLastContent(lines StringArray, markerIndex LineIndex, caseEnd LineIndex) returns TraceSlice
+	var boundary = caseEnd
+
+	while boundary > markerIndex + 1 'trailingBlankLines'
+		let line = try lines.get(boundary - 1) otherwise panic("SpecParser.sliceAfterLastContent: index {boundary - 1} is inside the case the scan just read, so it is inside the file")
+
+		if not line.trim().isEmpty() 'content'
+			break
+		end 'content'
+
+		boundary = boundary - 1
+	end 'trailingBlankLines'
+
+	return TraceSlice.create(boundary, blockEnd: boundary)
+end 'sliceAfterLastContent'
+
+union CaptureBlock
+	read(family TraceFamily, trace String, span TraceSlice)
+	absent
+end 'CaptureBlock'
+
+typealias CaseDirectiveArray = Array with CaseDirective
+
+union CaseProgram
+	read(text String)
+	absent
+end 'CaseProgram'
+
+union MarkedTraceFamily
+	marked(family TraceFamily)
+	none
+end 'MarkedTraceFamily'
+
+union OpeningDirective
+	known(directive CaseDirective)
+	unread
+end 'OpeningDirective'
+
+function directiveOf(opening String) returns OpeningDirective
+	for directive in CaseDirective.allCases 'eachDirective'
+		if openingIsDirective(opening, directive: directive) 'isOne'
+			return OpeningDirective.known(directive)
+		end 'isOne'
+	end 'eachDirective'
+
+	return OpeningDirective.unread
+end 'directiveOf'
+
+type CaseBuilder
+	let site as UnreadCommentSite
+	let name as String
+	let markerIndex as LineIndex
+	let specPath as FilePath
+	let effectiveTargetKey as String
+	var claimedBlocks as StringArray
+	var claimedDirectives as CaseDirectiveArray
+	var fenceSeen as bool
+	var program as CaseProgram
+	var exitCode as SpecExitCode
+
+	// The three slots a spec may state TWICE — once portably and once for a named target. Each holds both
+	// blocks until the whole run of a test's blocks has been read, because the two fences may appear in
+	// either order; `TargetPreferredText` carries the preference and the reason.
+	var compilerError as TargetPreferredText
+	var stderr as TargetPreferredText
+	var stdout as TargetPreferredText
+	var sectionPins as SpecSectionPinArray
+	var unsupportedTargets as TargetKeyArray
+	var runtimeNames as RuntimeFunctionNameArray
+	var programArgs as ProgramArgArray
+	var asyncTrace as bool
+	var debugInfo as bool
+	var markedFamily as MarkedTraceFamily
+	var captureBlock as CaptureBlock
+
+	// `none` unless a `<!-- network: … -->` marker says otherwise — the ordinary case, and the literal
+	// answer for a case that reaches no host, not a default standing in for an unread marker.
+	var network as SpecNetwork
+
+	// `unset` unless a `<!-- procs: … -->` marker says otherwise — the literal answer for a case that names
+	// no count and takes the process default, not a default standing in for an unread marker.
+	var procs as SpecProcs
+
+	// `unset` unless a `<!-- preempt: … -->` marker says otherwise — the literal answer for a case whose program
+	// inherits the environment, not a default standing in for an unread marker.
+	var preempt as SpecPreempt
+
+	// `closed` unless a `<!-- stdin: … -->` marker says otherwise — the literal answer for a case whose
+	// program is handed the null device, not a default standing in for an unread marker.
+	var stdin as SpecStdin
+
+	// `shared` unless a `<!-- runs: … -->` marker says otherwise — the literal answer for a case whose program
+	// runs beside others, not a default standing in for an unread marker.
+	var runs as SpecRuns
+
+	static function create(name String, markerIndex LineIndex, specPath FilePath, effectiveTargetKey String) returns CaseBuilder
+		return Self{site: UnreadCommentSite.insideCase(name), name: name, markerIndex: markerIndex, specPath: specPath, effectiveTargetKey: effectiveTargetKey, claimedBlocks: StringArray.create(), claimedDirectives: CaseDirectiveArray.create(), fenceSeen: false, program: CaseProgram.absent, exitCode: SpecExitCode.unpinned, compilerError: TargetPreferredText.create(), stderr: TargetPreferredText.create(), stdout: TargetPreferredText.create(), sectionPins: SpecSectionPinArray.create(), unsupportedTargets: TargetKeyArray.create(), runtimeNames: RuntimeFunctionNameArray.create(), programArgs: ProgramArgArray.create(), asyncTrace: false, debugInfo: false, markedFamily: MarkedTraceFamily.none, captureBlock: CaptureBlock.absent, network: SpecNetwork.none, procs: SpecProcs.unset, preempt: SpecPreempt.unset, stdin: SpecStdin.closed, runs: SpecRuns.shared}
+	end 'create'
+
+	function refuseCrowdedLine(openings StringArray, line String, lineIndex LineIndex)
+		if openings.count() <= DirectivesPerLine 'oneAtMost'
+			return
+		end 'oneAtMost'
+
+		for opening in openings 'each'
+			match directiveOf(opening) 'directive'
+				known then break 'directive'
+				unread then refuseUnreadOpening(opening, lineIndex: lineIndex, specPath: specPath, site: site)
+			end 'directive'
+		end 'each'
+
+		panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: this line carries {openings.count()} directives: '{line.trim()}'. Each line is read for one marker, so every directive after the first would be discarded without a word. Give each directive a line of its own")
+	end 'refuseCrowdedLine'
+
+	function readDirectiveLine(openings StringArray, line String, lineIndex LineIndex)
+		self.refuseCrowdedLine(openings, line: line, lineIndex: lineIndex)
+		let opening = try openings.first() otherwise panic("SpecParser.CaseBuilder.readDirectiveLine: the caller hands it a line whose openings are non-empty, so its first cannot be absent")
+
+		match directiveOf(opening) 'directive'
+			known(directive) then self.readDirective(directive, opening: opening, lineIndex: lineIndex)
+			unread then self.refuseUnreadDirective(opening, lineIndex: lineIndex)
+		end 'directive'
+	end 'readDirectiveLine'
+
+	function readDirective(directive CaseDirective, opening String, lineIndex LineIndex)
+		let spelling = directive.spelling()
+
+		if claimedDirectives.contains(directive) 'repeated'
+			panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{name}' repeats the directive `{spelling} … -->`. A case reads each directive once, so the later line would silently overrule the earlier one. Keep one of the two")
+		end 'repeated'
+
+		if fenceSeen 'afterAFence'
+			panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{name}' carries `{spelling} … -->` after one of its fences. A case's directives sit between its marker and its first fence, so this line reads as belonging to the case below it while it applies to this one. Move it above this case's first fence, or under the marker of the case it belongs to")
+		end 'afterAFence'
+
+		claimedDirectives.push(directive)
+
+		match directive 'directive'
+			testCase then panic("SpecParser.CaseBuilder.readDirective: a test marker ends the case before its line reaches here (`endsTestCase`), so this arm is unreachable")
+			unsupportedTargets then unsupportedTargets = parseUnsupportedTargetKeys(opening, specPath: specPath, testName: name)
+			args then programArgs = parseProgramArgs(opening)
+			asyncTrace then asyncTrace = true
+			debugInfo then debugInfo = true
+			mmTrace then self.markTraceFamily(TraceFamily.mm, lineIndex: lineIndex)
+			logTrace then self.markTraceFamily(TraceFamily.log, lineIndex: lineIndex)
+			network then network = parseNetworkValue(opening, lineIndex: lineIndex, specPath: specPath, testName: name)
+			procs then procs = parseProcsValue(opening, lineIndex: lineIndex, specPath: specPath, testName: name)
+			preempt then preempt = parsePreemptValue(opening, lineIndex: lineIndex, specPath: specPath, testName: name)
+			stdin then stdin = parseStdinValue(opening, lineIndex: lineIndex, specPath: specPath, testName: name)
+			runs then runs = parseRunsValue(opening, lineIndex: lineIndex, specPath: specPath, testName: name)
+		end 'directive'
+	end 'readDirective'
+
+	function markTraceFamily(family TraceFamily, lineIndex LineIndex)
+		match markedFamily 'marked'
+			none then markedFamily = MarkedTraceFamily.marked(family)
+			marked(earlier) then panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{name}' carries both `{traceMarkerOf(earlier)} -->` and `{traceMarkerOf(family)} -->`. A case captures one trace family, so one of the two would be discarded without a word. Keep the one this case asserts")
+		end 'marked'
+	end 'markTraceFamily'
+
+	function refuseUnreadDirective(opening String, lineIndex LineIndex)
+		// The retired whitelist spelling gets its own refusal. `refuseUnreadOpening` would catch it too,
+		// but only this arm can say what the line meant — the inverse of what `UnsupportedTargetsMarker`
+		// names — and which spelling replaces it.
+		if openingIsMarker(opening, marker: RetiredTargetsMarker) 'retiredTargetsMarker'
+			panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{name}' carries the retired `{RetiredTargetsMarker} … -->`, which named the targets a case runs ON. Nothing reads it, so the case runs EVERYWHERE — the complement of what the line says. Spell the lanes that cannot serve it: `{UnsupportedTargetsMarker} … -->`")
 		end 'retiredTargetsMarker'
 
-		// The runtime arguments — the other comment line that may sit between this test's marker and its
-		// first fence, read here for `UnsupportedTargetsMarker`'s reasons exactly: a disabled case must
-		// consume it identically to a live one.
-		if openingsCarry(openings, marker: ArgsMarker) 'argsMarker'
-			programArgs = parseProgramArgs(line)
-			i = i + 1
-			continue
-		end 'argsMarker'
+		refuseUnreadOpening(opening, lineIndex: lineIndex, specPath: specPath, site: site)
+	end 'refuseUnreadDirective'
 
-		// The valueless flag marker. Consumed identically to the markers above — including on a DISABLED case, so
-		// shelving a trace case does not turn its marker into a refused line.
-		if openingsCarryFlag(openings, flag: AsyncTraceMarker) 'asyncTraceMarker'
-			asyncTrace = true
-			i = i + 1
-			continue
-		end 'asyncTraceMarker'
+	function readLine(lines StringArray, index LineIndex, fenceLine String) returns LineIndex
+		// Asked before the fence arms: they match by prefix, so a prose line such as
+		// `` ```RequiredRuntime block, one name per line: `` would be consumed as a block and its words
+		// read as function names.
+		refuseFenceShapedProse(fenceLine, lineIndex: index, specPath: specPath)
 
-		// The other valueless flag marker, consumed identically — including on a DISABLED case, so shelving
-		// a debug-info case does not turn its marker into a refused line.
-		if openingsCarryFlag(openings, flag: DebugInfoMarker) 'debugInfoMarker'
-			debugInfo = true
-			i = i + 1
-			continue
-		end 'debugInfoMarker'
-
-		// The other two valueless flag markers, consumed identically — including on a DISABLED case, so
-		// shelving a capture case does not turn its marker into a refused line. Each only RAISES
-		// the mode; see `raisedTraceCapture` for what that means when a block has already named a family.
-		if openingsCarryFlag(openings, flag: MmTraceMarker) 'mmTraceMarker'
-			traceCapture = raisedTraceCapture(traceCapture, family: TraceFamily.mm)
-			i = i + 1
-			continue
-		end 'mmTraceMarker'
-
-		if openingsCarryFlag(openings, flag: LogTraceMarker) 'logTraceMarker'
-			traceCapture = raisedTraceCapture(traceCapture, family: TraceFamily.log)
-			i = i + 1
-			continue
-		end 'logTraceMarker'
-
-		// The network gate the author SPELLED, consumed identically to the markers above — including on a
-		// DISABLED case, so shelving a live-network case does not turn its marker into a refused line. The
-		// VALUE is refused rather than defaulted; see `parseNetworkValue`.
-		if openingsCarry(openings, marker: NetworkMarker) 'networkMarker'
-			network = parseNetworkValue(line, specPath: specPath, testName: name)
-			i = i + 1
-			continue
-		end 'networkMarker'
-
-		// The processor count the author asked for, consumed identically to the markers above — including on a
-		// DISABLED case, so shelving a multi-processor case does not turn its marker into a refused line. The
-		// VALUE is refused rather than defaulted; see `parseProcsValue`.
-		if openingsCarry(openings, marker: ProcsMarker) 'procsMarker'
-			procs = parseProcsValue(line, specPath: specPath, testName: name)
-			i = i + 1
-			continue
-		end 'procsMarker'
-
-		// The preemption switch the author asked for, consumed identically to the markers above — including on a
-		// DISABLED case, so shelving such a case does not turn its marker into a refused line. The
-		// VALUE is refused rather than defaulted; see `parsePreemptValue`.
-		if openingsCarry(openings, marker: PreemptMarker) 'preemptMarker'
-			preempt = parsePreemptValue(line, specPath: specPath, testName: name)
-			i = i + 1
-			continue
-		end 'preemptMarker'
-
-		// The stdin the author asked for, consumed identically to the markers above — including on a DISABLED
-		// case, so shelving a blocking-stdin case does not turn its marker into a refused line.
-		// The VALUE is refused rather than defaulted; see `parseStdinValue`.
-		if openingsCarry(openings, marker: StdinMarker) 'stdinMarker'
-			stdin = parseStdinValue(line, specPath: specPath, testName: name)
-			i = i + 1
-			continue
-		end 'stdinMarker'
-
-		// The pool sharing the author asked for, consumed identically to the markers above — including on a
-		// DISABLED case, so shelving such a case does not turn its marker into a refused line. The VALUE is
-		// refused rather than defaulted; see `parseRunsValue`.
-		if openingsCarry(openings, marker: RunsMarker) 'runsMarker'
-			runs = parseRunsValue(line, specPath: specPath, testName: name)
-			i = i + 1
-			continue
-		end 'runsMarker'
-
-		// ⛔⛔ **A COMMENT LINE NO ARM ABOVE CLAIMED IS REFUSED, NOT WALKED OVER.** Every comment line inside a
-		// case is a directive — the corpus carries no prose comment between a case's marker and the next —
-		// so one that reaches here is a marker the harness does not know: a misspelling
-		// (`<!-- unsupported-target: … -->`, `<!-- procs 1 -->`) or a marker newer than the parser. Falling
-		// through to `i = i + 1` would discard the line without a word and run the case UNPINNED. The
-		// predicate is "the line opens with `<!--` and no arm consumed it", not a roster lookup, so a marker
-		// added to `caseMarkerRoster` without an arm cannot pass through here as read.
-		if not openings.isEmpty() 'unreadComment'
-			let opening = try openings.first() otherwise panic("SpecParser.scanTestFromMarker: `openings` is non-empty by the guard above, so its first element cannot be absent")
-			panic("SpecParser: {specPath.toString()}:{i + 1}: test '{name}' carries a comment line no marker reads: '{markerBodyOf(opening).trim()} {MarkerEnd}'. A comment inside a case is a directive, and one the harness does not know would otherwise be discarded without a word, so the case runs as though the line were not there. The markers a case may carry: {caseMarkerRoster()}")
-		end 'unreadComment'
-
-		// ⛔⛔ **A PROSE SENTENCE THAT HAPPENS TO BEGIN WITH A FENCE PREFIX IS NOT A FENCE, AND EVERY ARM
-		// BELOW MATCHES BY PREFIX.** `` ```RequiredRuntime block, one name per line: `` — a real line in
-		// `emitted-runtime-body.md`, where an author meant inline code and typed three backticks —
-		// `startsWith(RequiredRuntimeFence)`, so it would be CONSUMED as a `RequiredRuntime` block and its
-		// prose read as function names. Today that line is harmless for one reason only: it sits above
-		// `## Tests`, where this scan never reaches. That is a coincidence of where it happens to sit, not
-		// a property of anything, and the terminating arm below has just raised the price of tripping it
-		// from a silent skip to a whole-suite abort.
-		//
-		// The rule is derived rather than listed, so it needs no second copy of the fence vocabulary: EVERY
-		// tag in this grammar is a single token, and the shape being caught is a SENTENCE. Asked before the
-		// arms because the arms are what would claim it, and for a DISABLED case as well as a live one —
-		// this is a line that is not a fence at all, which is true however the case is marked, and
-		// `pushRuntimeNames` panics just as hard while scanning a shelved case.
-		// ⭐ ONE trim, read by BOTH fence questions — the one above and the terminating arm at the bottom —
-		// so they cannot come to disagree about what "opens a fence" is — and they have: one arm trimming
-		// where `isUnimplementedFenceOpen` does not lets an unreadable fence INDENTED by two spaces walk
-		// straight past the terminating arm, and the block is skipped in silence (measured
-		// 2026-08-06: `  ```mm-trace` in a live case, suite green, exit 0). Markdown
-		// allows a fence up to three columns in and a fence nested in a list item further still, so that
-		// is a spelling an author reaches by accident, not a contrivance.
-		let fenceLine = line.trim()
-
-		if fenceOpenCarriesProse(fenceLine) 'proseLineOpeningWithAFencePrefix'
-			panic("SpecParser: {specPath.toString()}:{i + 1}: this line begins with a fence delimiter and its info string contains a space, so it is a PROSE line that every fence arm would claim by prefix and read as a block body: '{fenceLine}'. Every fence tag in this grammar is a single token. Write the name as inline code (one backtick) if it is prose, or make the line a real fence")
-		end 'proseLineOpeningWithAFencePrefix'
+		if fenceLine.startsWith(FenceDelimiter) 'opensAFence'
+			fenceSeen = true
+		end 'opensAFence'
 
 		// CompilerError MUST be checked before Source: "```maxoncstderr" also
 		// startsWith "```maxon", so the source arm would otherwise consume it. It is the ONLY ordering
 		// constraint among the fences — every other pair is in no prefix relation at all, which the
 		// `--- Spec-markdown grammar tokens ---` header argues for the whole set.
-		if line.startsWith(CompilerErrorFence) 'compilerErr'
-			i = recordPortableText(lines, openIndex: i, slot: compilerError)
-			continue
+		if fenceLine.startsWith(CompilerErrorFence) 'compilerErr'
+			self.claimBlock(CompilerErrorFence, lineIndex: index)
+			return recordPortableText(lines, openIndex: index, slot: compilerError, specPath: specPath)
 		end 'compilerErr'
 
-		if line.startsWith(RuntimeStderrFence) 'runtimeStderr'
-			i = recordPortableText(lines, openIndex: i, slot: stderr)
-			continue
+		if fenceLine.startsWith(RuntimeStderrFence) 'runtimeStderr'
+			self.claimBlock(RuntimeStderrFence, lineIndex: index)
+			return recordPortableText(lines, openIndex: index, slot: stderr, specPath: specPath)
 		end 'runtimeStderr'
 
-		if line.startsWith(StdoutFence) 'runtimeStdout'
-			i = recordPortableText(lines, openIndex: i, slot: stdout)
-			continue
+		if fenceLine.startsWith(StdoutFence) 'runtimeStdout'
+			self.claimBlock(StdoutFence, lineIndex: index)
+			return recordPortableText(lines, openIndex: index, slot: stdout, specPath: specPath)
 		end 'runtimeStdout'
 
 		// The three TARGET-QUALIFIED blocks, each the twin of the portable arm above it. One routine, one
 		// target comparison — see `recordTargetQualifiedText` for why every such block is READ whatever
 		// target it names.
-		if line.startsWith(TargetCompilerErrorFencePrefix) 'targetCompilerErr'
-			i = recordTargetQualifiedText(lines, openIndex: i, openLine: line, fencePrefix: TargetCompilerErrorFencePrefix, effectiveTargetKey: effectiveTargetKey, slot: compilerError)
-			continue
+		if fenceLine.startsWith(TargetCompilerErrorFencePrefix) 'targetCompilerErr'
+			self.claimBlock(fenceLine, lineIndex: index)
+			return recordTargetQualifiedText(lines, openIndex: index, openLine: fenceLine, fencePrefix: TargetCompilerErrorFencePrefix, effectiveTargetKey: effectiveTargetKey, slot: compilerError, specPath: specPath, testName: name)
 		end 'targetCompilerErr'
 
-		if line.startsWith(TargetStderrFencePrefix) 'targetStderr'
-			i = recordTargetQualifiedText(lines, openIndex: i, openLine: line, fencePrefix: TargetStderrFencePrefix, effectiveTargetKey: effectiveTargetKey, slot: stderr)
-			continue
+		if fenceLine.startsWith(TargetStderrFencePrefix) 'targetStderr'
+			self.claimBlock(fenceLine, lineIndex: index)
+			return recordTargetQualifiedText(lines, openIndex: index, openLine: fenceLine, fencePrefix: TargetStderrFencePrefix, effectiveTargetKey: effectiveTargetKey, slot: stderr, specPath: specPath, testName: name)
 		end 'targetStderr'
 
-		if line.startsWith(TargetStdoutFencePrefix) 'targetStdout'
-			i = recordTargetQualifiedText(lines, openIndex: i, openLine: line, fencePrefix: TargetStdoutFencePrefix, effectiveTargetKey: effectiveTargetKey, slot: stdout)
-			continue
+		if fenceLine.startsWith(TargetStdoutFencePrefix) 'targetStdout'
+			self.claimBlock(fenceLine, lineIndex: index)
+			return recordTargetQualifiedText(lines, openIndex: index, openLine: fenceLine, fencePrefix: TargetStdoutFencePrefix, effectiveTargetKey: effectiveTargetKey, slot: stdout, specPath: specPath, testName: name)
 		end 'targetStdout'
 
 		// The two section pins differ in exactly one thing — WHICH section they name — so the block
 		// reading and the recording are written once and the difference is the argument. See
 		// `RequiredDataFence` for why the two fences cannot swallow one another.
-		if line.startsWith(RequiredDataFence) 'globalsPin'
-			i = pushSectionPin(lines, openIndex: i, testName: name, fence: RequiredDataFence, section: LinkedSectionKind.globals, pins: sectionPins)
-			continue
+		if fenceLine.startsWith(RequiredDataFence) 'globalsPin'
+			return pushSectionPin(lines, openIndex: index, testName: name, fence: RequiredDataFence, section: LinkedSectionKind.globals, pins: sectionPins, specPath: specPath)
 		end 'globalsPin'
 
-		if line.startsWith(RequiredRdataFence) 'readOnlyPin'
-			i = pushSectionPin(lines, openIndex: i, testName: name, fence: RequiredRdataFence, section: LinkedSectionKind.readOnly, pins: sectionPins)
-			continue
+		if fenceLine.startsWith(RequiredRdataFence) 'readOnlyPin'
+			return pushSectionPin(lines, openIndex: index, testName: name, fence: RequiredRdataFence, section: LinkedSectionKind.readOnly, pins: sectionPins, specPath: specPath)
 		end 'readOnlyPin'
 
-		if line.startsWith(RequiredRuntimeFence) 'runtimeBlock'
-			i = pushRuntimeNames(lines, openIndex: i, testName: name, names: runtimeNames)
-			continue
+		if fenceLine.startsWith(RequiredRuntimeFence) 'runtimeBlock'
+			return pushRuntimeNames(lines, openIndex: index, testName: name, names: runtimeNames, specPath: specPath)
 		end 'runtimeBlock'
 
 		// The two capture goldens. Either is a result check in its own right (see `MmTraceFence`), and either
 		// puts the case into capture mode on its own — the matching marker beside it is then a second
 		// statement of one fact rather than a requirement.
-		if line.startsWith(MmTraceFence) 'mmTraceBlock'
-			let block = readFence(lines, openIndex: i)
-			traceCapture = SpecTraceCapture.pinned(TraceFamily.mm, trace: block.text)
-			i = block.nextIndex
-			continue
+		if fenceLine.startsWith(MmTraceFence) 'mmTraceBlock'
+			return self.readCaptureBlock(lines, index: index, family: TraceFamily.mm)
 		end 'mmTraceBlock'
 
-		if line.startsWith(LogTraceFence) 'logTraceBlock'
-			let block = readFence(lines, openIndex: i)
-			traceCapture = SpecTraceCapture.pinned(TraceFamily.log, trace: block.text)
-			i = block.nextIndex
-			continue
+		if fenceLine.startsWith(LogTraceFence) 'logTraceBlock'
+			return self.readCaptureBlock(lines, index: index, family: TraceFamily.log)
 		end 'logTraceBlock'
 
-		if line.startsWith(ExitCodeFence) 'exitCodeBlock'
-			let block = readFence(lines, openIndex: i)
-			exitCode = SpecExitCode.pinned(exitCodeExpectationIn(block.text.trim(), fenceIndex: i, specPath: specPath))
-			i = block.nextIndex
-			continue
+		if fenceLine.startsWith(ExitCodeFence) 'exitCodeBlock'
+			self.claimBlock(ExitCodeFence, lineIndex: index)
+			let block = readFence(lines, openIndex: index, specPath: specPath)
+			exitCode = SpecExitCode.pinned(exitCodeExpectationIn(block.text.trim(), fenceIndex: index, specPath: specPath))
+			return block.nextIndex
 		end 'exitCodeBlock'
 
-		if line.startsWith(SourceFence) 'source'
-			let block = readFence(lines, openIndex: i)
-			source = block.text
-			haveSource = true
-			i = block.nextIndex
-			continue
+		if fenceLine.startsWith(SourceFence) 'source'
+			self.claimBlock(SourceFence, lineIndex: index)
+			let block = readFence(lines, openIndex: index, specPath: specPath)
+			program = CaseProgram.read(block.text)
+			return block.nextIndex
 		end 'source'
 
-		// ⛔⛔ **THE TERMINATING ARM — A LIVE CASE MAY NOT OPEN A FENCE THIS PARSER DOES NOT IMPLEMENT.**
-		// Every arm above consumes its whole block through `readFence`, so the only fence-opening line that
-		// reaches here is one no arm claimed; the fallthrough below steps over it and then reads its BODY as
-		// ordinary prose.
-		//
-		// That is not a harmless skip. It is this corpus's most expensive shape — a block that LOOKS like an
-		// assertion and asserts nothing — and it was already here twice, both found by this arm the first
-		// time it ran. `vector.md` carried six ```RequiredIR blocks copied byte-identically from `/specs`,
-		// pinning an instruction selection this compiler does not make. `tuples.md`'s
-		// `for-in-over-map-allocates-no-tuple` — an ACTIVE, PASSING case — carried the ```mm-trace block
-		// that IS the property its name claims, and passed on its exit code alone.
-		//
-		// ⚠ The cure is not to implement every fence: it is that dropping one becomes a decision somebody
-		// makes and writes down. What is pinned instead is the minted fragment golden, which records what
-		// THIS compiler emits.
-		//
-		// ⚖ ONLY A LIVE CASE. A `disabled-test:` marker ALREADY says the case runs nowhere, so a block it
-		// carries claims nothing — it is a record kept for the rung that will enable it, which is exactly
-		// what the disabled form is for. Refusing there would delete the notes instead of the lies.
-		if active and isUnimplementedFenceOpen(fenceLine) 'unimplementedFence'
-			panic("SpecParser: {specPath.toString()}:{i + 1}: live test '{name}' opens a fence this parser does not implement: '{fenceLine}'. The arms above are the whole set it can read, so this block is silently skipped: it pins NOTHING while reading as coverage. Delete it (what pins the emitted code here is the minted fragment golden), implement the fence, or shelve the case as `disabled-test:` naming the rung that unlocks it")
-		end 'unimplementedFence'
+		return afterUnclaimedLine(lines, index: index, fenceLine: fenceLine, specPath: specPath, site: site)
+	end 'readLine'
 
-		i = i + 1
-	end 'blocks'
+	function readCaptureBlock(lines StringArray, index LineIndex, family TraceFamily) returns LineIndex
+		self.claimBlock(captureBlockKind(), lineIndex: index)
+		let block = readFence(lines, openIndex: index, specPath: specPath)
+		captureBlock = CaptureBlock.read(family, trace: block.text, span: TraceSlice.create(index, blockEnd: block.nextIndex))
+		return block.nextIndex
+	end 'readCaptureBlock'
 
-	// A DISABLED case has now consumed exactly the blocks a live one would have, which was
-	// the entire point of scanning it; it contributes no test. A case with no source block
-	// is not runnable either.
-	if not active or not haveSource 'notRunnable'
-		return i
-	end 'notRunnable'
+	function claimBlock(kind String, lineIndex LineIndex)
+		if claimedBlocks.contains(kind) 'repeated'
+			panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{name}' carries a second '{kind}' block. A case holds one of each, so the later block would silently replace the earlier one, and a case whose own marker is missing merges into the case above it in exactly this way. Give each case its own `{TestMarker} NAME -->` line, or delete one of the two blocks")
+		end 'repeated'
 
-	// A ```maxoncstderr block WINS over an ```exitcode one: the two are mutually exclusive,
-	// and a spec carrying both is asserting the compile FAILS — which no exit code of the
-	// program it never produced could also be true of.
-	if compilerError.isPinned() 'rejected'
-		// ⭐⭐ **A REJECTED CASE PRODUCES NO BINARY, so every block that reads one is refused here
-		// rather than silently discarded** — and silently discarded is exactly what happened: a
-		// ```RequiredRdata claiming bytes no image could hold rode along beside a ```maxoncstderr and
-		// the case PASSED, because `SpecExpectation.compilerError` has nowhere to carry a section pin
-		// and the compile that would have been read never linked. A ```RequiredRuntime is the same
-		// story one flag over: the runner still spells `--emit-ir-runtime=` onto the command line, but
-		// the compile fails before the printer runs, so neither the render nor the printer's own
-		// misspelling refusal ever happens.
-		if sectionPins.count() > 0 or runtimeNames.count() > 0 'pinsOnARejectedCase'
-			panic("SpecParser: {specPath.toString()}: test '{name}' expects a COMPILE ERROR (a ```maxoncstderr block) and also carries a {RequiredDataFence}/{RequiredRdataFence}/{RequiredRuntimeFence} block. A case that never links produces no image to read a section out of and no IR to render a body into, so that block cannot fail and pins nothing. Drop it, or split the pin into a case that compiles")
-		end 'pinsOnARejectedCase'
+		claimedBlocks.push(kind)
+	end 'claimBlock'
 
-		// ⛔ A capture block on a REJECTED case is refused for the reason the section pins beside it are:
-		// a compile that fails produces no binary, so there is no program to run under the monitor and no
-		// trace the block could ever be compared against. It would pin nothing while reading as coverage.
-		match traceCapture 'traceCaptureOnARejectedCase'
-			off then break 'traceCaptureOnARejectedCase'
-			unpinned or
-				pinned then panic("SpecParser: {specPath.toString()}: test '{name}' expects a COMPILE ERROR (a ```maxoncstderr block) and also carries a `{traceFenceOf(traceCaptureFamilyOf(traceCapture))}` block or `{traceMarkerOf(traceCaptureFamilyOf(traceCapture))} -->` marker. A case that never links produces no program to run under the monitor, so that block cannot fail and pins nothing. Drop it, or split the trace into a case that compiles")
-		end 'traceCaptureOnARejectedCase'
+	function build(lines StringArray, caseEnd LineIndex) returns SpecTest
+		let source = match program 'program'
+			absent panic("SpecParser: {specPath.toString()}:{markerIndex + 1}: test '{name}' has no ```maxon block, so there is no program to run and the case would run nowhere with nothing reported. Add its source under the marker, or delete the marker")
+			read(text) gives text
+		end 'program'
 
-		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(compilerError.resolved()), unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin, runs: runs))
-		return i
-	end 'rejected'
+		let traceCapture = self.settledCapture(lines, caseEnd: caseEnd)
+		return SpecTest.create(name, source: source, expectation: self.expectationFor(traceCapture), unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin, runs: runs)
+	end 'build'
 
-	// Whatever result blocks this case carried are ONE claim about ONE execution. Each stream's union is
-	// built HERE, from its resolved slot, so no reader downstream can resolve the pair a second and
-	// different way. Two constructors rather than one because `SpecStdout` and `SpecStderr` are distinct
-	// types, each naming ITS stream; everything above the constructor is already shared.
-	let resolvedStdout = SpecStdout.pinned(stdout.resolved()) if stdout.isPinned() else SpecStdout.unpinned
-	let resolvedStderr = SpecStderr.pinned(stderr.resolved()) if stderr.isPinned() else SpecStderr.unpinned
+	function settledCapture(lines StringArray, caseEnd LineIndex) returns SpecTraceCapture
+		return match markedFamily 'marker'
+			none gives self.unmarkedCapture()
+			marked(family) gives self.markedCapture(family, lines: lines, caseEnd: caseEnd)
+		end 'marker'
+	end 'settledCapture'
 
-	if not pinsAnyResult(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins, traceCapture: traceCapture) 'pinsNothing'
-		panic("SpecParser: {specPath.toString()}: test '{name}' has a ```maxon block but no result block — add an ```exitcode, ```stdout, ```stderr, ```maxoncstderr, ```RequiredData or ```RequiredRdata block, or shelve the case as `<!-- disabled-test: {name} -->`. A case with nothing to check is not a test, and running it would report PASS for a program nothing looked at. (A target-qualified block — `{TargetStdoutFencePrefix}<target>` and its two twins — counts only on the target it NAMES, so a case whose only result block names another target has none here)")
-	end 'pinsNothing'
+	function unmarkedCapture() returns SpecTraceCapture
+		return match captureBlock 'block'
+			absent gives SpecTraceCapture.off
+			read(family, trace, span) gives SpecTraceCapture.pinned(family, trace: trace, span: span)
+		end 'block'
+	end 'unmarkedCapture'
 
-	tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins), unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin, runs: runs))
+	function markedCapture(family TraceFamily, lines StringArray, caseEnd LineIndex) returns SpecTraceCapture
+		return match captureBlock 'block'
+			absent gives SpecTraceCapture.unpinned(family, insertAt: sliceAfterLastContent(lines, markerIndex: markerIndex, caseEnd: caseEnd))
+			read(blockFamily, trace, span) gives self.agreeingCapture(family, blockFamily: blockFamily, trace: trace, span: span)
+		end 'block'
+	end 'markedCapture'
 
-	return i
-end 'scanTestFromMarker'
+	function agreeingCapture(markerFamily TraceFamily, blockFamily TraceFamily, trace String, span TraceSlice) returns SpecTraceCapture
+		if markerFamily != blockFamily 'twoFamilies'
+			panic("SpecParser: {specPath.toString()}:{span.blockStart + 1}: test '{name}' carries `{traceMarkerOf(markerFamily)} -->` and a `{traceFenceOf(blockFamily)}` block, which name two different trace families. A case captures one, so one of the two would be discarded without a word. Make the marker and the block agree, or drop the marker")
+		end 'twoFamilies'
 
-// ⚠ BOTH FUNCTIONS BELOW TAKE AN ALREADY-TRIMMED LINE, and the caller trims once for the pair. Each used
-// to decide for itself whether the line "opens a fence" and they decided DIFFERENTLY — one trimming, one
-// not — which is this file's own subject arriving in the guard that closes it: an indented unreadable
-// fence satisfied neither and was skipped in silence. The argument type is what keeps them agreeing.
+		return SpecTraceCapture.pinned(blockFamily, trace: trace, span: span)
+	end 'agreeingCapture'
+
+	function expectationFor(traceCapture SpecTraceCapture) returns SpecExpectation
+		// A ```maxoncstderr block WINS over an ```exitcode one: the two are mutually exclusive,
+		// and a spec carrying both is asserting the compile FAILS — which no exit code of the
+		// program it never produced could also be true of.
+		if compilerError.isPinned() 'rejected'
+			// `SpecExpectation.compilerError` has nowhere to carry these, so without the refusal they would
+			// be dropped and the case would pass over them.
+			if sectionPins.count() > 0 or runtimeNames.count() > 0 'pinsOnARejectedCase'
+				panic("SpecParser: {specPath.toString()}: test '{name}' expects a COMPILE ERROR (a ```maxoncstderr block) and also carries a {RequiredDataFence}/{RequiredRdataFence}/{RequiredRuntimeFence} block. A case that never links produces no image to read a section out of and no IR to render a body into, so that block cannot fail and pins nothing. Drop it, or split the pin into a case that compiles")
+			end 'pinsOnARejectedCase'
+
+			match traceCapture 'traceCaptureOnARejectedCase'
+				off then break 'traceCaptureOnARejectedCase'
+				unpinned or
+					pinned then panic("SpecParser: {specPath.toString()}: test '{name}' expects a COMPILE ERROR (a ```maxoncstderr block) and also carries a `{traceFenceOf(traceCaptureFamilyOf(traceCapture))}` block or `{traceMarkerOf(traceCaptureFamilyOf(traceCapture))} -->` marker. A case that never links produces no program to run under the monitor, so that block cannot fail and pins nothing. Drop it, or split the trace into a case that compiles")
+			end 'traceCaptureOnARejectedCase'
+
+			return SpecExpectation.compilerError(compilerError.resolved())
+		end 'rejected'
+
+		// Whatever result blocks this case carried are ONE claim about ONE execution. Each stream's union
+		// is built HERE, from its resolved slot, so no reader downstream can resolve the pair a second
+		// and different way. Two constructors rather than one because `SpecStdout` and `SpecStderr` are
+		// distinct types, each naming ITS stream; everything above the constructor is already shared.
+		let resolvedStdout = SpecStdout.pinned(stdout.resolved()) if stdout.isPinned() else SpecStdout.unpinned
+		let resolvedStderr = SpecStderr.pinned(stderr.resolved()) if stderr.isPinned() else SpecStderr.unpinned
+
+		if not pinsAnyResult(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins, traceCapture: traceCapture) 'pinsNothing'
+			panic("SpecParser: {specPath.toString()}: test '{name}' has a ```maxon block but no result block — add an ```exitcode, ```stdout, ```stderr, ```maxoncstderr, ```RequiredData or ```RequiredRdata block, or delete the case. A case with nothing to check is not a test, and running it would report PASS for a program nothing looked at. (A target-qualified block — `{TargetStdoutFencePrefix}<target>` and its two twins — counts only on the target it NAMES, so a case whose only result block names another target has none here)")
+		end 'pinsNothing'
+
+		return SpecExpectation.run(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins)
+	end 'expectationFor'
+end 'CaseBuilder'
+
+// One claim key for both capture fences: a case holds one capture block whichever family it names,
+// so a second block of the other family is refused rather than replacing the first.
+function captureBlockKind() returns String
+	return "{MmTraceFence} or {LogTraceFence}"
+end 'captureBlockKind'
+
+function refuseFenceShapedProse(fenceLine String, lineIndex LineIndex, specPath FilePath)
+	if fenceOpenCarriesProse(fenceLine) 'proseLineOpeningWithAFencePrefix'
+		panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: this line begins with a fence delimiter and its info string contains a space, so it is a PROSE line that every fence arm would claim by prefix and read as a block body: '{fenceLine}'. Every fence tag in this grammar is a single token. Write the name as inline code (one backtick) if it is prose, or make the line a real fence")
+	end 'proseLineOpeningWithAFencePrefix'
+end 'refuseFenceShapedProse'
+
+// A prose block is consumed to its close in one step, inside a case or outside any, so a marker or
+// fence it quotes is never read as one.
+function afterUnclaimedLine(lines StringArray, index LineIndex, fenceLine String, specPath FilePath, site UnreadCommentSite) returns LineIndex
+	if opensProseFence(fenceLine) 'proseBlock'
+		return readFence(lines, openIndex: index, specPath: specPath).nextIndex
+	end 'proseBlock'
+
+	if isUnimplementedFenceOpen(fenceLine) 'unreadFence'
+		refuseUnreadFence(fenceLine, lineIndex: index, specPath: specPath, site: site)
+	end 'unreadFence'
+
+	return index + 1
+end 'afterUnclaimedLine'
+
+function refuseUnreadFence(fenceLine String, lineIndex LineIndex, specPath FilePath, site UnreadCommentSite)
+	let consequence = match site 'where'
+		insideCase(name) gives "test '{name}' opens a fence this parser does not implement: '{fenceLine}'. The fences a case may open are the whole set this parser reads, so this block is silently skipped: it pins NOTHING while reading as coverage. Delete it (what pins the emitted code here is the minted fragment golden) or implement the fence"
+		outsideAnyCase gives "the `{TestsHeading}` region opens a fence outside any case: '{fenceLine}'. Only a `{TestMarker} NAME -->` line opens a case, so a program or expectation no marker opened runs nowhere, with nothing reported. Put it under its case's marker, or make it prose (a bare `{FenceDelimiter}` or `{ProseFenceOpen}` block)"
+	end 'where'
+
+	panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: {consequence}")
+end 'refuseUnreadFence'
+
+// ⚠ The three functions below take a trimmed line, and each caller trims once for all of them.
+// Markdown allows a fence indented up to three columns, and a check that did not trim would let an
+// indented unread fence pass in silence.
 
 // Whether `trimmedLine` opens a fence whose info string carries WHITESPACE — i.e. a prose sentence
-// starting with three backticks rather than one of this grammar's fences, every one of which is a single
-// token. Asked BEFORE the arms, because it is the arms' prefix matching that would misread it.
-//
-// The delimiter itself holds no space, so in a trimmed line any space or tab is in the info string.
+// starting with three backticks rather than one of this grammar's fences, every one of which is a
+// single token. The delimiter itself holds no space, so in a trimmed line any space or tab is in
+// the info string.
 function fenceOpenCarriesProse(trimmedLine String) returns bool
 	if not trimmedLine.startsWith(FenceDelimiter) 'notAFence'
 		return false
@@ -1785,19 +1596,15 @@ function fenceOpenCarriesProse(trimmedLine String) returns bool
 	return trimmedLine.contains(" ") or trimmedLine.contains("\t")
 end 'fenceOpenCarriesProse'
 
-// Whether `trimmedLine` opens a block `scanTestFromMarker` has no reader for — asked only AFTER every
-// fence arm has declined it, so a tag with an arm never reaches here.
-//
-// The two exceptions are PROSE and make no claim, which is why walking past them is correct and always
-// was: a bare fence (the closing delimiter of any block is the same three bytes, and 11,210 lines in this
-// corpus are one or the other) and `ProseFenceOpen`.
+// Inside a case this is asked only after every fence arm has declined the line; outside any case no
+// arm runs, so every fence but prose answers true there.
 function isUnimplementedFenceOpen(trimmedLine String) returns bool
-	if not trimmedLine.startsWith(FenceDelimiter) 'notAFence'
-		return false
-	end 'notAFence'
-
-	return trimmedLine != FenceDelimiter and trimmedLine != ProseFenceOpen
+	return trimmedLine.startsWith(FenceDelimiter) and not opensProseFence(trimmedLine)
 end 'isUnimplementedFenceOpen'
+
+function opensProseFence(trimmedLine String) returns bool
+	return trimmedLine == FenceDelimiter or trimmedLine == ProseFenceOpen
+end 'opensProseFence'
 
 // Consume a section-pin fence opening at `openIndex` and record what it claims about `section`,
 // returning the line index to resume the block scan from. THE one place a pin is read, so the two
@@ -1806,8 +1613,8 @@ end 'isUnimplementedFenceOpen'
 // ⚠ Pins ACCUMULATE, which is why this pushes rather than assigns: a case may pin both sections, and
 // a second block of the same kind is still a second claim about the same link rather than a
 // replacement for the first.
-function pushSectionPin(lines StringArray, openIndex LineIndex, testName String, fence String, section LinkedSectionKind, pins SpecSectionPinArray) returns LineIndex
-	let block = readFence(lines, openIndex: openIndex)
+function pushSectionPin(lines StringArray, openIndex LineIndex, testName String, fence String, section LinkedSectionKind, pins SpecSectionPinArray, specPath FilePath) returns LineIndex
+	let block = readFence(lines, openIndex: openIndex, specPath: specPath)
 	let text = block.text.trim()
 
 	// A section pin is compared as a PREFIX (`SpecTestRunner.compareLinkedSection`), and the empty
@@ -1827,14 +1634,14 @@ end 'pushSectionPin'
 // ⚠ Names ACCUMULATE across blocks, for `pushSectionPin`'s reason and one more: an ASSIGN would make a
 // case carrying two ```RequiredRuntime blocks silently render only the second one's bodies while
 // reading as though it had asked for both.
-function pushRuntimeNames(lines StringArray, openIndex LineIndex, testName String, names RuntimeFunctionNameArray) returns LineIndex
-	let block = readFence(lines, openIndex: openIndex)
+function pushRuntimeNames(lines StringArray, openIndex LineIndex, testName String, names RuntimeFunctionNameArray, specPath FilePath) returns LineIndex
+	let block = readFence(lines, openIndex: openIndex, specPath: specPath)
 
 	// What THIS block contributed is the difference the accumulator itself reports — not a counter
 	// beside it, which would be a second tally of one fact and free to disagree with the pushes.
 	let before = names.count()
 
-	for rawLine in block.text.split("\n") 'eachLine'
+	for rawLine in specLinesOf(block.text) 'eachLine'
 		let name = rawLine.trim()
 
 		if not name.isEmpty() 'nonBlank'
@@ -1903,8 +1710,8 @@ end 'pinsAnyResult'
 // resume the block scan from. Its target-qualified twin is below, and the pair is why the three portable
 // arms are three lines each instead of the same five lines written out three times: what differs between
 // a ```maxoncstderr, a ```stderr and a ```stdout block is WHICH SLOT it lands in, and nothing else.
-function recordPortableText(lines StringArray, openIndex LineIndex, slot TargetPreferredText) returns LineIndex
-	let block = readFence(lines, openIndex: openIndex)
+function recordPortableText(lines StringArray, openIndex LineIndex, slot TargetPreferredText, specPath FilePath) returns LineIndex
+	let block = readFence(lines, openIndex: openIndex, specPath: specPath)
 	slot.recordPortable(block.text.trim())
 	return block.nextIndex
 end 'recordPortableText'
@@ -1914,16 +1721,17 @@ end 'recordPortableText'
 // from. THE one place a fence's `:<target>` suffix is compared against the run's target, shared by all
 // three qualified fences: a second spelling of "does this block name my target" is one fact written twice.
 //
-// ⚠ **EVERY such block is READ, whatever target it names.** The fence has to be CONSUMED either way, or
-// the outer scan walks its contents line by line as markup — and those contents are arbitrary text: a
-// `## ` line inside one ENDS the test at that point, so an unconsumed `` ```Maxoncstderr:arm64-macos ``
-// sitting above a case's ```maxon block silently deletes the whole case from the run. (Measured on the
-// tree that had no such arm: the case did not fail, it simply was not in the count.) Only the block naming
-// this run's target is KEPT.
-function recordTargetQualifiedText(lines StringArray, openIndex LineIndex, openLine String, fencePrefix String, effectiveTargetKey String, slot TargetPreferredText) returns LineIndex
-	let block = readFence(lines, openIndex: openIndex)
+// ⚠ **EVERY such block is READ, whatever target it names.** The fence has to be CONSUMED either
+// way, or the outer scan walks its contents line by line as markup — and those contents are
+// arbitrary text: a `## ` line inside one ENDS the test at that point, so an unconsumed
+// `` ```Maxoncstderr:arm64-macos `` sitting above a case's ```maxon block silently deletes the whole
+// case from the run. Only the block naming this run's target is KEPT.
+function recordTargetQualifiedText(lines StringArray, openIndex LineIndex, openLine String, fencePrefix String, effectiveTargetKey String, slot TargetPreferredText, specPath FilePath, testName String) returns LineIndex
+	let qualifier = valueAfterKey(openLine, key: fencePrefix)
+	requireSupportedTargetKey(qualifier, spelledIn: "the fence '{openLine}'", specPath: specPath, testName: testName)
+	let block = readFence(lines, openIndex: openIndex, specPath: specPath)
 
-	if valueAfterKey(openLine, key: fencePrefix) == effectiveTargetKey 'namesThisTarget'
+	if qualifier == effectiveTargetKey 'namesThisTarget'
 		slot.recordQualified(block.text.trim())
 	end 'namesThisTarget'
 
@@ -2118,52 +1926,45 @@ function pushSection(files SpecSourceFileArray, overlays SpecSourceFileArray, ru
 	end 'toItsList'
 end 'pushSection'
 
-// The VALUE of an HTML-comment marker line: the text between the first ": " and the trailing
-// " -->", trimmed — i.e. NAME out of `<!-- test: NAME -->`, or the target list out of
-// `<!-- unsupported-targets: k1, k2 -->`. It reads any `<!-- key: value -->` marker, because the two share one
-// grammar; a target key holds no ": ", so the first separator is always the marker's own.
-export function markerValue(line String) returns String
-	for opening in markerOpeningsIn(line) 'eachOpening'
-		let body = markerBodyOf(opening)
-		let colonIdx = try body.findFirst(MarkerNameSep) otherwise continue
+// The VALUE of one valued marker's opening: the text between its first `:` and its `-->`, trimmed —
+// NAME out of `<!-- test: NAME -->`, or the target list out of
+// `<!-- unsupported-targets: k1, k2 -->`. A target key holds no `:`, so the first separator is
+// always the marker's own.
+function markerValueOf(opening String) returns String
+	let body = markerBodyOf(opening)
+	let colonIdx = try body.findFirst(MarkerNameSep) otherwise panic("SpecParser.markerValueOf: every caller hands it an opening a valued marker claimed, and every valued marker's spelling carries '{MarkerNameSep}': '{opening}'")
 
-		// Advance one index past the ':' rather than measuring the separator's length — a method call
-		// directly on a top-level `let` constant is a parse error. `trim()` then drops whatever
-		// whitespace the author put on either side, which is the grammar's `\s*` exactly.
-		let valueStart = try body.indexAfter(colonIdx) otherwise continue
-		return body.slice(valueStart, endIndex: body.endIndex()).trim()
-	end 'eachOpening'
-
-	return ""
-end 'markerValue'
+	// Advance one index past the ':' rather than measuring the separator's length — a method call
+	// directly on a top-level `let` constant is a parse error. `trim()` then drops whatever
+	// whitespace the author put on either side, which is the grammar's `\s*` exactly.
+	let valueStart = try body.indexAfter(colonIdx) otherwise panic("SpecParser.markerValueOf: the separator was found inside '{body}', so the index after it exists")
+	return body.slice(valueStart, endIndex: body.endIndex()).trim()
+end 'markerValueOf'
 
 // ⭐⭐ **EVERY `<!--` ON A LINE, EACH NORMALIZED TO THE CANONICAL SPELLING — the ONE place that decides
 // where a marker begins, and the one place the grammar's `\s*` is spent.**
 //
-// Each opening comes back as `<!-- <trimmed text>`, which is exactly what the marker constants above
-// ARE — so every question after this one is a plain `startsWith` against a constant, with no
-// whitespace rule of its own and nothing to allocate. NORMALIZING THE OPENING RATHER THAN TAKING EACH
-// MARKER CONSTANT APART is what makes the tolerance cost one allocation per LINE instead of one per
-// (line × marker family): `scanTestFromMarker` asks about every family on every line of every case, and
-// the per-family form costs ~0.5 s of fixed overhead on a run that parses the corpus and exits.
+// Each opening comes back as `<!-- <trimmed text>`, which is exactly what the marker constants
+// above ARE — so every question after this one is a plain `startsWith` against a constant, with no
+// whitespace rule of its own and nothing to allocate. NORMALIZING THE OPENING RATHER THAN TAKING
+// EACH MARKER CONSTANT APART is what makes the tolerance cost one allocation per LINE instead of
+// one per (line × directive): `directiveOf` asks about every directive on every comment line of
+// every case.
 //
-// The three questions this file asks of a marker line — WHICH marker is it (`openingsCarry`), what is
-// its VALUE (`markerValue`), and is it CLOSED (`refuseUnterminatedTestMarker`) — all read this one
-// answer. A second walk is how they would come to disagree, and one of them already had: the refusal
-// asked the whole LINE for a `-->` while the body asked one OPENING, so on `<!-- note --> <!-- test: x`
-// the refusal was satisfied by the other comment's closer and the unterminated marker went through.
+// The three questions this file asks of a marker line — WHICH directive is it (`directiveOf`), what
+// is its VALUE (`markerValueOf`), and is it CLOSED (`closedOpening`) — all read this one answer, so
+// they cannot disagree about where an opening begins or ends.
 //
 // The text before the first opening is not an opening, and a line carrying none yields none.
 function markerOpeningsIn(line String) returns StringArray
 	var openings = StringArray.create()
 
-	// ⛔⛔ **A DIRECTIVE IS A LINE, SO A LINE THAT MERELY MENTIONS ONE CARRIES NOTHING.** Every marker in
-	// this corpus is written alone on its own line; prose that QUOTES a marker — `` `<!-- procs: 1 -->`
-	// is what keeps that table applicable`` — is documentation about a directive, not the directive.
-	// Without this the two are indistinguishable, and the sentence wins: it sits between a test's marker
-	// and its fences like any other comment line, so a paragraph explaining a case's processor count SETS
-	// one, on whichever case the paragraph happens to fall inside. MEASURED across both corpora: 22 lines
-	// mention a marker mid-sentence and NOT ONE of them is a directive anybody wrote.
+	// ⛔⛔ **A DIRECTIVE IS A LINE, SO A LINE THAT MERELY MENTIONS ONE CARRIES NOTHING.** Every marker
+	// in this corpus is written alone on its own line; prose that QUOTES a marker —
+	// `` `<!-- procs: 1 -->` is what keeps that table applicable`` — is documentation about a
+	// directive, not the directive. Without this the two are indistinguishable, and the sentence wins: it sits between a
+	// test's marker and its fences like any other comment line, so a paragraph explaining a case's
+	// processor count SETS one, on whichever case the paragraph happens to fall inside.
 	if not line.trim().startsWith(CommentOpen) 'prose'
 		return openings
 	end 'prose'
@@ -2182,69 +1983,111 @@ function markerOpeningsIn(line String) returns StringArray
 	return openings
 end 'markerOpeningsIn'
 
-// What one opening SAYS: everything up to the `-->` that closes it, or the whole of it when nothing on
-// this line does. The fallback is deliberate and is the older behaviour — an unterminated marker still
-// yields a name, so `refuseUnterminatedTestMarker` can quote it back at the author.
+// What one opening SAYS: everything up to the `-->` that closes it, or the whole of it when nothing
+// on this line does. The fallback is deliberate: an unclosed test marker still yields its text, so
+// `closedOpening` can quote it back at the author.
 function markerBodyOf(opening String) returns String
 	let parts = opening.split(MarkerEnd)
 	return try parts.get(0) otherwise panic("SpecParser.markerBodyOf: split yields at least one part for any input, so index 0 cannot be absent")
 end 'markerBodyOf'
 
-// ⭐ **DOES ONE OF THESE OPENINGS CARRY `marker`?** The openings are already canonical, so this is the
-// plain prefix test the marker constants were always written to be — the whitespace the grammar
-// allows was spent once, in `markerOpeningsIn`.
-//
-// Takes the OPENINGS rather than the line so the caller can compute them once and ask about EVERY
-// family; `carriesMarker` below is the door for a caller that asks once.
-function openingsCarry(openings StringArray, marker String) returns bool
-	return match markerOpeningAmong(openings, marker: marker) 'opening'
-		at gives true
-		absent gives false
-	end 'opening'
-end 'openingsCarry'
-
-// WHICH opening carries `marker`, not merely whether one does — the refusal needs the opening itself,
-// because whether a marker is closed is a property of ITS `<!--`, never of the line it sits on.
-//
-// ⛔ **THE TEST IS `startsWith`, SO NO MARKER TOKEN MAY BE A PREFIX OF ANOTHER.** Two tokens may share any
-// leading run (`<!-- procs:` and `<!-- preempt:` share `<!-- pr`); what would let one family swallow another
-// is a whole token that begins another, and every token ends in `:` or in its whole word, which is what
-// rules that out.
+// WHICH opening carries a directive, not merely whether one does: whether a test marker is closed
+// is a property of ITS `<!--` (`closedOpening`), never of the line it sits on.
 union MarkerOpening
 	at(text String)
 	absent
 end 'MarkerOpening'
 
-function markerOpeningAmong(openings StringArray, marker String) returns MarkerOpening
+// ⛔ **THE TEST IS `startsWith`, SO NO MARKER TOKEN MAY BE A PREFIX OF ANOTHER.** Two tokens may
+// share any leading run (`<!-- procs:` and `<!-- preempt:` share `<!-- pr`); what would let one
+// directive swallow another is a whole token that begins another, and every valued token ends in
+// `:`, which rules that out.
+function openingIsMarker(opening String, marker String) returns bool
+	return opening.startsWith(marker)
+end 'openingIsMarker'
+
+// A flag takes no payload, so its whole body must BE the constant. A prefix test would claim
+// `<!-- DebugInfos -->` as the flag; this leaves it to the unread-comment refusal.
+function openingIsFlag(opening String, flag String) returns bool
+	return markerBodyOf(opening).trim() == flag
+end 'openingIsFlag'
+
+// Every directive a case may carry. `directiveOf` recognizes each by its `spelling`, and
+// `CaseBuilder.readDirective` matches on it totally, so a directive added here without an arm does
+// not compile.
+enum CaseDirective
+	testCase
+	unsupportedTargets
+	args
+	asyncTrace
+	debugInfo
+	mmTrace
+	logTrace
+	network
+	procs
+	preempt
+	stdin
+	runs
+
+	function spelling() returns String
+		return match self 'directive'
+			testCase gives TestMarker
+			unsupportedTargets gives UnsupportedTargetsMarker
+			args gives ArgsMarker
+			asyncTrace gives AsyncTraceMarker
+			debugInfo gives DebugInfoMarker
+			mmTrace gives MmTraceMarker
+			logTrace gives LogTraceMarker
+			network gives NetworkMarker
+			procs gives ProcsMarker
+			preempt gives PreemptMarker
+			stdin gives StdinMarker
+			runs gives RunsMarker
+		end 'directive'
+	end 'spelling'
+
+	function isFlag() returns bool
+		return match self 'directive'
+			asyncTrace or
+				debugInfo or
+				mmTrace or
+				logTrace gives true
+			testCase or
+				unsupportedTargets or
+				args or
+				network or
+				procs or
+				preempt or
+				stdin or
+				runs gives false
+		end 'directive'
+	end 'isFlag'
+end 'CaseDirective'
+
+function openingIsDirective(opening String, directive CaseDirective) returns bool
+	if directive.isFlag() 'valueless'
+		return openingIsFlag(opening, flag: directive.spelling())
+	end 'valueless'
+
+	return openingIsMarker(opening, marker: directive.spelling())
+end 'openingIsDirective'
+
+function openingFor(openings StringArray, directive CaseDirective) returns MarkerOpening
 	for opening in openings 'eachOpening'
-		if opening.startsWith(marker) 'thisOpeningIsIt'
+		if openingIsDirective(opening, directive: directive) 'thisOpeningIsIt'
 			return MarkerOpening.at(opening)
 		end 'thisOpeningIsIt'
 	end 'eachOpening'
 
 	return MarkerOpening.absent
-end 'markerOpeningAmong'
+end 'openingFor'
 
-// ⭐ **DOES ONE OF THESE OPENINGS CARRY THE VALUELESS FLAG `flag`, AND NOTHING ELSE?** A flag takes no
-// payload, so the whole body of its comment — everything before the `-->`, trimmed — must BE the
-// constant. The prefix test the valued markers use would claim `<!-- DebugInfos -->` as the flag; here
-// that spelling matches nothing and reaches the unread-comment refusal, where a misspelling belongs.
-function openingsCarryFlag(openings StringArray, flag String) returns bool
-	for opening in openings 'eachOpening'
-		if markerBodyOf(opening).trim() == flag 'thisOpeningIsIt'
-			return true
-		end 'thisOpeningIsIt'
-	end 'eachOpening'
-
-	return false
-end 'openingsCarryFlag'
-
-// The one-shot door: does `line` carry `marker`? For callers that ask about a single family, where
-// computing the openings and asking are one act, as in `SpecTestRunner`'s two line walks. The
-// scanners in this file hoist the openings instead, because they ask once per family per line.
-export function carriesMarker(line String, marker String) returns bool
-	return openingsCarry(markerOpeningsIn(line), marker: marker)
-end 'carriesMarker'
+function carriesDirective(openings StringArray, directive CaseDirective) returns bool
+	return match openingFor(openings, directive: directive) 'opening'
+		at gives true
+		absent gives false
+	end 'opening'
+end 'carriesDirective'
 
 // The target keys a `<!-- unsupported-targets: k1, k2 -->` marker names — its value split on `,`, each
 // part trimmed, empties dropped. An EMPTY result (a blank value) excludes nothing, which the runner
@@ -2260,34 +2103,35 @@ end 'carriesMarker'
 // a backend that was deleted.
 //
 // ⛔ **AND A MARKER THAT EXCLUDES EVERY SUPPORTED TARGET IS ALSO A PANIC.** That case runs nowhere,
-// which is the exact outcome the typo above produced, reached legitimately one key at a time. A test
-// nobody runs is not a restriction, it is a suspension, and this corpus spells a suspension
-// `<!-- disabled-test: -->` where a reader can count it.
-function parseUnsupportedTargetKeys(line String, specPath FilePath, testName String) returns TargetKeyArray
+// which is the exact outcome the typo above produced, reached legitimately one key at a time.
+function parseUnsupportedTargetKeys(opening String, specPath FilePath, testName String) returns TargetKeyArray
 	var result = TargetKeyArray.create()
-	let rawValue = markerValue(line)
+	let rawValue = markerValueOf(opening)
 
 	for part in rawValue.split(TargetSeparator) 'eachTarget'
 		let trimmed = part.trim()
 
 		if not trimmed.isEmpty() 'nonEmpty'
-			if not namesSupportedTarget(trimmed) 'unknownKey'
-				panic("SpecParser: {specPath.toString()}: test '{testName}' carries `{UnsupportedTargetsMarker} … -->` naming '{trimmed}', which is not a target this compiler supports ({supportedTargetKeyList()}). A key nothing matches changes which lanes run the case while reading as though it described them, so it is refused here rather than tolerated")
-			end 'unknownKey'
-
+			requireSupportedTargetKey(trimmed, spelledIn: "`{UnsupportedTargetsMarker} … -->`", specPath: specPath, testName: testName)
 			result.push(trimmed)
 		end 'nonEmpty'
 	end 'eachTarget'
 
 	if result.count() == supportedTargets().count() 'excludesEverything'
-		panic("SpecParser: {specPath.toString()}: test '{testName}' excludes every supported target ({supportedTargetKeyList()}), so it runs nowhere. That is a suspension rather than a target restriction — spell it `{DisabledTestMarker} {testName} -->` so it is counted as debt")
+		panic("SpecParser: {specPath.toString()}: test '{testName}' excludes every supported target ({supportedTargetKeyList()}), so it runs nowhere. A case no target runs tests nothing while reading as coverage — fix it so some target can run it, or delete it")
 	end 'excludesEverything'
 
 	return result
 end 'parseUnsupportedTargetKeys'
 
-// Whether a key names one of `supportedTargets()`. Asked of the compiler's own roster rather than a
-// table here, so a target that lands or leaves cannot leave this check describing the old set.
+function requireSupportedTargetKey(key String, spelledIn String, specPath FilePath, testName String)
+	if not namesSupportedTarget(key) 'unknownKey'
+		panic("SpecParser: {specPath.toString()}: test '{testName}' carries {spelledIn} naming '{key}', which is not a target this compiler supports ({supportedTargetKeyList()}). A key nothing matches changes which lanes run the case while reading as though it described them, so it is refused here rather than tolerated")
+	end 'unknownKey'
+end 'requireSupportedTargetKey'
+
+// Asked of the compiler's own roster rather than a table here, so a target that lands or leaves
+// cannot leave this check describing the old set.
 function namesSupportedTarget(key String) returns bool
 	for candidate in supportedTargets() 'each'
 		if targetToString(candidate) == key 'hit'
@@ -2310,17 +2154,38 @@ function supportedTargetKeyList() returns String
 	return commaList(keys)
 end 'supportedTargetKeyList'
 
-// Every marker a case may carry — the two that open it and the directives that may sit between the
-// opener and its fences, in the order the scanner asks about them. Quoted by the unread-comment refusal
-// so a reader handed a refused line sees the legal spellings in the same breath; the scanner's arms
-// match the same constants, so the two cannot spell a marker differently. `RetiredTargetsMarker` is
-// left out on purpose: it is a spelling the scanner refuses, not one a case may carry.
+union UnreadCommentSite
+	insideCase(name String)
+	outsideAnyCase
+end 'UnreadCommentSite'
+
+function refuseUnreadComment(openings StringArray, lineIndex LineIndex, specPath FilePath, site UnreadCommentSite)
+	for opening in openings 'each'
+		refuseUnreadOpening(opening, lineIndex: lineIndex, specPath: specPath, site: site)
+	end 'each'
+end 'refuseUnreadComment'
+
+function refuseUnreadOpening(opening String, lineIndex LineIndex, specPath FilePath, site UnreadCommentSite)
+	let quoted = "'{markerBodyOf(opening).trim()} {MarkerEnd}'"
+
+	let consequence = match site 'where'
+		insideCase(name) gives "test '{name}' carries a comment line no marker reads: {quoted}. A comment inside a case is a directive, and one the harness does not know would otherwise be discarded without a word, so the case runs as though the line were not there."
+		outsideAnyCase gives "the `{TestsHeading}` region carries, outside any case, a comment line no marker reads: {quoted}. Only a `{TestMarker} NAME -->` line opens a case, and every other directive belongs under its case's marker, so nothing reads this line: a misspelt test marker opens no case and the program beneath it runs nowhere, and a directive written above its case's marker applies to no case, both with nothing reported."
+	end 'where'
+
+	panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: {consequence} The markers a case may carry: {caseMarkerRoster()}")
+end 'refuseUnreadOpening'
+
+function endsTestCase(line String, openings StringArray) returns bool
+	return line.startsWith(SectionHeadingPrefix) or carriesDirective(openings, directive: CaseDirective.testCase)
+end 'endsTestCase'
+
 function caseMarkerRoster() returns String
 	var quoted = StringArray.create()
 
-	for marker in [TestMarker, DisabledTestMarker, UnsupportedTargetsMarker, ArgsMarker, AsyncTraceMarker, DebugInfoMarker, MmTraceMarker, LogTraceMarker, NetworkMarker, ProcsMarker, PreemptMarker, StdinMarker, RunsMarker] 'each'
-		quoted.push("`{marker}`")
-	end 'each'
+	for directive in CaseDirective.allCases 'eachDirective'
+		quoted.push("`{directive.spelling()}`")
+	end 'eachDirective'
 
 	return commaList(quoted)
 end 'caseMarkerRoster'
@@ -2340,8 +2205,7 @@ function commaList(items StringArray) returns String
 	return listed
 end 'commaList'
 
-// What a `<!-- network: … -->` marker says this case needs, read through the same `markerValue` every
-// other valued marker goes through.
+// What a `<!-- network: … -->` marker says this case needs.
 //
 // ⛔ **AN UNRECOGNIZED VALUE IS A PANIC, NOT A `none`.** Both failing spellings are silent otherwise and
 // both fail OPEN: a typo (`<!-- network: livee -->`) and a blank value would each be read as "reaches no
@@ -2349,18 +2213,17 @@ end 'commaList'
 // with nothing anywhere saying why. That is the same failure `AsyncTraceMarker` records having shipped —
 // a marker the file states and the harness declines — arriving through a value rather than through a
 // missing arm.
-function parseNetworkValue(line String, specPath FilePath, testName String) returns SpecNetwork
-	let value = markerValue(line)
+function parseNetworkValue(opening String, lineIndex LineIndex, specPath FilePath, testName String) returns SpecNetwork
+	let value = markerValueOf(opening)
 
 	if value == NetworkLiveValue 'live'
 		return SpecNetwork.live
 	end 'live'
 
-	panic("SpecParser: {specPath.toString()}: test '{testName}' carries `{NetworkMarker} {value} -->`, and '{NetworkLiveValue}' is the only value this marker takes. It says the case opens a socket to a REAL EXTERNAL HOST, so a default run leaves it out and `--network` brings it back; an unrecognized value would quietly read as 'reaches no host' and put the case back in the default gate")
+	panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{testName}' carries `{NetworkMarker} {value} -->`, and '{NetworkLiveValue}' is the only value this marker takes. It says the case opens a socket to a REAL EXTERNAL HOST, so a default run leaves it out and `--network` brings it back; an unrecognized value would quietly read as 'reaches no host' and put the case back in the default gate")
 end 'parseNetworkValue'
 
-// How many processors a `<!-- procs: … -->` marker asks for, read through the same `markerValue` every other
-// valued marker goes through.
+// How many processors a `<!-- procs: … -->` marker asks for.
 //
 // ⛔ **AN UNREADABLE OR NON-POSITIVE VALUE IS A PANIC, NOT AN `unset`**, for `parseNetworkValue`'s reason
 // exactly: a defaulted value would run the case at whatever the machine happened to give it and report the
@@ -2368,61 +2231,59 @@ end 'parseNetworkValue'
 // as "leave the default alone" (`SchedRuntime.emitResolveMaxProcs`) — which is the right answer for a value
 // a USER typed at a shell and the wrong one for a value a SPEC FILE states, because only one of the two is
 // a committed claim somebody expects to be checked.
-function parseProcsValue(line String, specPath FilePath, testName String) returns SpecProcs
-	let value = markerValue(line)
-	let count = try int.fromString(value) otherwise panic("SpecParser: {specPath.toString()}: test '{testName}' carries `{ProcsMarker} {value} -->`, and this marker takes a positive decimal processor count. It becomes `{String.from(MaxProcsEnvName)}={value}` in the environment of this case's program alone, so a value the harness cannot read is a claim the file makes and nothing honours")
+function parseProcsValue(opening String, lineIndex LineIndex, specPath FilePath, testName String) returns SpecProcs
+	let value = markerValueOf(opening)
+	let count = try int.fromString(value) otherwise panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{testName}' carries `{ProcsMarker} {value} -->`, and this marker takes a positive decimal processor count. It becomes `{String.from(MaxProcsEnvName)}={value}` in the environment of this case's program alone, so a value the harness cannot read is a claim the file makes and nothing honours")
 
 	if count < 1 'notPositive'
-		panic("SpecParser: {specPath.toString()}: test '{testName}' carries `{ProcsMarker} {value} -->`, and a processor count below 1 is not one. The scheduler builds at least one P whatever it is told (`emitResolveMaxProcs` floors it), so this number would be silently discarded rather than honoured")
+		panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{testName}' carries `{ProcsMarker} {value} -->`, and a processor count below 1 is not one. The scheduler builds at least one P whatever it is told (`emitResolveMaxProcs` floors it), so this number would be silently discarded rather than honoured")
 	end 'notPositive'
 
 	return SpecProcs.pinned(count as ProcessorCount)
 end 'parseProcsValue'
 
-// What a `<!-- preempt: … -->` marker withdraws, read through the same `markerValue` every other valued marker
-// goes through. The one value is spelled from the constant the emitted scheduler reads it back through, for
-// `MaxProcsEnvName`'s reason: a value written under one spelling and read under another is accepted, aborted
-// on, and reported as the child's exit code.
+// What a `<!-- preempt: … -->` marker withdraws. The one value is spelled from the constant the
+// emitted scheduler reads it back through, for `MaxProcsEnvName`'s reason: a value written under
+// one spelling and read under another is accepted, aborted on, and reported as the child's exit
+// code.
 //
 // ⛔ **AN UNRECOGNIZED VALUE IS A PANIC, NOT AN `unset`**, for `parseNetworkValue`'s reason exactly: a
 // defaulted value would run a case whose pinned ORDER assumes `main` keeps its processor under a monitor
 // that takes it, and report the answer as though the switch had been honoured. The scheduler refuses a
 // malformed `MAXON_PREEMPT` too (`SchedRuntime.emitResolvePreemptSwitch`); this refusal comes first, at
 // parse, so the file's claim never reaches a child.
-function parsePreemptValue(line String, specPath FilePath, testName String) returns SpecPreempt
-	let value = markerValue(line)
+function parsePreemptValue(opening String, lineIndex LineIndex, specPath FilePath, testName String) returns SpecPreempt
+	let value = markerValueOf(opening)
 
 	if value == String.from(PreemptEnvOffValue) 'off'
 		return SpecPreempt.off
 	end 'off'
 
-	panic("SpecParser: {specPath.toString()}: test '{testName}' carries `{PreemptMarker} {value} -->`, and '{String.from(PreemptEnvOffValue)}' is the only value this marker takes. It becomes `{String.from(PreemptEnvName)}={String.from(PreemptEnvOffValue)}` in the environment of this case's program alone, so the monitor takes no processor from the thread holding it; absence already says the default, and an unrecognized value would quietly run the case under preemption and report its order as though the switch had been honoured")
+	panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{testName}' carries `{PreemptMarker} {value} -->`, and '{String.from(PreemptEnvOffValue)}' is the only value this marker takes. It becomes `{String.from(PreemptEnvName)}={String.from(PreemptEnvOffValue)}` in the environment of this case's program alone, so the monitor takes no processor from the thread holding it; absence already says the default, and an unrecognized value would quietly run the case under preemption and report its order as though the switch had been honoured")
 end 'parsePreemptValue'
 
-// Whether a `<!-- runs: … -->` marker takes the case out of the shared pool, read through the same `markerValue`
-// every other valued marker goes through.
+// Whether a `<!-- runs: … -->` marker takes the case out of the shared pool.
 //
 // ⛔ **AN UNRECOGNIZED VALUE IS A PANIC, NOT A `shared`**, for `parseNetworkValue`'s reason exactly: a defaulted
 // value would run the case beside a full pool, which is the one condition the marker exists to keep it from.
-function parseRunsValue(line String, specPath FilePath, testName String) returns SpecRuns
-	let value = markerValue(line)
+function parseRunsValue(opening String, lineIndex LineIndex, specPath FilePath, testName String) returns SpecRuns
+	let value = markerValueOf(opening)
 
 	if value == RunsAloneValue 'alone'
 		return SpecRuns.alone
 	end 'alone'
 
-	panic("SpecParser: {specPath.toString()}: test '{testName}' carries `{RunsMarker} {value} -->`, and '{RunsAloneValue}' is the only value this marker takes. It runs the case's program with no other job in flight; absence already says the case shares the pool, and an unrecognized value would quietly run it beside every other worker")
+	panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{testName}' carries `{RunsMarker} {value} -->`, and '{RunsAloneValue}' is the only value this marker takes. It runs the case's program with no other job in flight; absence already says the case shares the pool, and an unrecognized value would quietly run it beside every other worker")
 end 'parseRunsValue'
 
-// What a `<!-- stdin: … -->` marker asks the child's fd 0 to be, read through the same `markerValue`
-// every other valued marker goes through.
+// What a `<!-- stdin: … -->` marker asks the child's fd 0 to be.
 //
 // ⛔ **AN UNRECOGNIZED VALUE IS A PANIC, NOT A `closed`**, for `parseNetworkValue`'s reason and with the
 // same fail-open shape: a typo or a blank value read as "the default stdin" hands the case an INSTANT
 // EOF, and a case written to assert that something blocks would then pass without anything ever having
 // blocked — a green result from a program that never entered the state under test.
-function parseStdinValue(line String, specPath FilePath, testName String) returns SpecStdin
-	let value = markerValue(line)
+function parseStdinValue(opening String, lineIndex LineIndex, specPath FilePath, testName String) returns SpecStdin
+	let value = markerValueOf(opening)
 
 	if value == StdinHoldValue 'held'
 		return SpecStdin.held
@@ -2432,7 +2293,7 @@ function parseStdinValue(line String, specPath FilePath, testName String) return
 		return SpecStdin.delayed
 	end 'delayed'
 
-	panic("SpecParser: {specPath.toString()}: test '{testName}' carries `{StdinMarker} {value} -->`, and '{StdinHoldValue}' and '{StdinDelayedValue}' are the only values this marker takes. '{StdinHoldValue}' spawns the program with a stdin pipe nobody ever writes to, so a read BLOCKS in the kernel forever; '{StdinDelayedValue}' writes one line about a second after the program's first stdout byte and closes, so the read blocks and then COMPLETES. An unrecognized value would quietly read as the default stdin, which answers every read at once with EOF — and a case asserting that something blocks would pass without anything having blocked")
+	panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{testName}' carries `{StdinMarker} {value} -->`, and '{StdinHoldValue}' and '{StdinDelayedValue}' are the only values this marker takes. '{StdinHoldValue}' spawns the program with a stdin pipe nobody ever writes to, so a read BLOCKS in the kernel forever; '{StdinDelayedValue}' writes one line about a second after the program's first stdout byte and closes, so the read blocks and then COMPLETES. An unrecognized value would quietly read as the default stdin, which answers every read at once with EOF — and a case asserting that something blocks would pass without anything having blocked")
 end 'parseStdinValue'
 
 // The arguments an `<!-- Args: … -->` marker names, in order — its value split into the argv the
@@ -2452,9 +2313,9 @@ end 'parseStdinValue'
 // own rule, so a directive no spec author meant to write still has exactly one reading.
 // Backslash escapes and single quotes are NOT honoured: nothing in `/specs` writes them, and the
 // platform rule they would have to mirror is per-OS.
-function parseProgramArgs(line String) returns ProgramArgArray
+function parseProgramArgs(opening String) returns ProgramArgArray
 	var args = ProgramArgArray.create()
-	let payload = markerValue(line)
+	let payload = markerValueOf(opening)
 
 	// The argument being accumulated, and whether one has been STARTED — which `current.isEmpty()`
 	// cannot answer: `""` starts an argument and contributes no characters to it, and inferring the
@@ -2479,7 +2340,7 @@ function parseProgramArgs(line String) returns ProgramArgArray
 		// Advanced ONCE, before the branches: both the next segment's start and the next character's
 		// position are this same index, and computing it twice would be one fact — and one panic
 		// message — written down twice.
-		let next = try payload.indexAfter(pos) otherwise panic("SpecParser.parseProgramArgs: indexAfter failed at character {at} of {length} on the payload of '{line}', which the while guard says is still in range")
+		let next = try payload.indexAfter(pos) otherwise panic("SpecParser.parseProgramArgs: indexAfter failed at character {at} of {length} on the payload '{payload}', which the while guard says is still in range")
 
 		if isQuote or isSeparator 'segmentEnds'
 			current.append(payload.slice(segmentStart, endIndex: pos))
@@ -2592,42 +2453,27 @@ end 'TextJoiner'
 // joined with "\n" and NO trailing newline, so a ```maxon block is reproduced
 // VERBATIM — the runner prepends the one `// Test: <name>` line and nothing else,
 // which is what keeps a spec's code at the fragment line number its diagnostics
-// name (SpecTestRunner's `fragmentSource`). A missing
-// closing fence treats EOF as the close (robust against a malformed spec rather
-// than looping).
-function readFence(lines StringArray, openIndex LineIndex) returns FenceBlock
+// name (SpecTestRunner's `fragmentSource`).
+function readFence(lines StringArray, openIndex LineIndex, specPath FilePath) returns FenceBlock
 	let lineCount = lines.count()
 	var text = TextJoiner.create(LineSeparator)
 	var i = openIndex + 1
 
 	while i < lineCount 'read'
 		let line = try lines.get(i) otherwise panic("SpecParser.readFence: index {i} >= lineCount {lineCount} despite the while guard i<lineCount")
+		let trimmed = line.trim()
 
-		if line.startsWith(FenceDelimiter) 'close'
+		if trimmed == FenceDelimiter 'close'
 			return FenceBlock.create(text.build(), nextIndex: i + 1)
 		end 'close'
 
-		// ⚠ **A CONTENT LINE THAT ENDS WITH THE CLOSING FENCE** — `42``` ` (the content `42` and the
-		// closing ` ``` ` on ONE line, no newline between them). It is malformed markdown, but the
-		// byte-identical corpus contains it (`specs/arrays.md`'s `array-with-reserve` exitcode), so it is
-		// tolerated — otherwise that exitcode is misread and the block scanner walks into the next
-		// test. The remainder before the fence is the final content line, then the
-		// block closes. Only fires when the line is NOT itself a bare fence (handled above), and no other spec
-		// has a genuine content line ending in ` ``` `, so this changes nothing else.
-		if line.endsWith(FenceDelimiter) 'inlineClose'
-			var stop = line.startIndex()
-
-			for _ in 0 upto line.byteLength() - FenceDelimiter.byteLength() 'toFence'
-				stop = try line.indexAfter(stop) otherwise panic("SpecParser.readFence: indexAfter failed before the inline closing fence — the byte length and the index walk disagree on an ASCII line")
-			end 'toFence'
-
-			text.push(line.slice(line.startIndex(), endIndex: stop))
-			return FenceBlock.create(text.build(), nextIndex: i + 1)
-		end 'inlineClose'
+		if trimmed.startsWith(FenceDelimiter) 'fenceOpenedInside'
+			panic("SpecParser: {specPath.toString()}:{i + 1}: this line opens a '{trimmed}' fence inside the block opened at line {openIndex + 1}, which is never closed before it. A fenced block cannot hold another, so the earlier block would swallow this one and everything up to its close, and the cases in between would run nowhere with nothing reported. Close the block at line {openIndex + 1} with a bare '{FenceDelimiter}'")
+		end 'fenceOpenedInside'
 
 		text.push(line)
 		i = i + 1
 	end 'read'
 
-	return FenceBlock.create(text.build(), nextIndex: lineCount)
+	panic("SpecParser: {specPath.toString()}:{openIndex + 1}: the block opened here is never closed — the file ends inside it, so every line after this one would be read as its body and any case below it would run nowhere with nothing reported. Close it with a bare '{FenceDelimiter}'")
 end 'readFence'

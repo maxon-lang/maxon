@@ -231,9 +231,8 @@ Every `__DebugStream` argument but `text`'s message is a machine word. A `String
 slots is refused where the mistake is, not a pass later.
 
 ⚠ *"requires a int"* is the shared `builtinOperandType` sentence every `__Builtins` and `subp*` refusal
-already speaks, quoted here as it stands. Its wording is named as its own rung by
-`specs/builtins-type.md`'s disabled `bits-to-float` cases, and moving it would move four spec files'
-pins for a reason unrelated to this surface.
+already speaks, quoted here as it stands. `specs/builtins-type.md`'s `bits-to-float` cases pin the same
+sentence, and moving it would move four spec files' pins for a reason unrelated to this surface.
 ```maxon
 function main() returns ExitCode
 	__DebugStream.phaseBegin("compile", 7)

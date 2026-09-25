@@ -1,0 +1,58 @@
+let RemintSpecFileName = "remint.md"
+let UpdateRequiredFlag = "--update-required"
+let ProseBlockOpen = "```text"
+let ExitCodeBlockOpen = "```exitcode"
+let CaptureBlockOpen = "```mm-trace"
+let StaleCaptureLine = "stale line the re-mint replaces"
+let SecondCaseMarker = "<!-- test: remint.replaces-a-stale-block -->"
+let LastCaseMarker = "<!-- test: remint.the-last-case -->"
+let ReMintedBlockCount = 2
+
+typealias RemintLine = int(0 to u64.max)
+typealias RemintLineArray = Array with RemintLine
+
+test 'two re-minted capture blocks land in their own cases: an insertion past a prose block, and a replacement below it'
+	let staged = stagedGateFixture()
+	var arguments = StringArray.create()
+	arguments.push(UpdateRequiredFlag)
+
+	let run = runSpecTest(staged, includeNetwork: false, extraArguments: arguments)
+	let specPath = staged.join(RemintSpecFileName)
+	let written = try File.readText(specPath) otherwise panic("spec-harness tests: the gate could not run - could not read back {specPath.toString()}.")
+	discardStaging(staged)
+
+	let lines = written.split("\n")
+	let said = "The file now reads:\n{written}\nThe run said:\n{everythingSaid(run)}"
+	let captures = linesOpening(lines, prefix: CaptureBlockOpen)
+
+	Expect.equal(captures.count() as AssertedInt, expected: ReMintedBlockCount, message: "the re-mint left {captures.count()} `{CaptureBlockOpen}` block(s), not {ReMintedBlockCount}: one insertion and one replacement. {said}")
+	Expect.isFalse(written.contains(StaleCaptureLine), message: "the stale capture line survived the re-mint, so the replacement was written somewhere other than over the stale block. {said}")
+
+	let proseAt = firstLineOpening(lines, prefix: ProseBlockOpen, said: said)
+	let firstExitCodeAt = firstLineOpening(lines, prefix: ExitCodeBlockOpen, said: said)
+	let secondCaseAt = firstLineOpening(lines, prefix: SecondCaseMarker, said: said)
+	let lastCaseAt = firstLineOpening(lines, prefix: LastCaseMarker, said: said)
+	let insertedAt = try captures.get(0) otherwise panic("spec-harness tests: the count above is {ReMintedBlockCount}, so the first capture block exists")
+	let replacedAt = try captures.get(1) otherwise panic("spec-harness tests: the count above is {ReMintedBlockCount}, so the second capture block exists")
+
+	Expect.isTrue(proseAt < firstExitCodeAt, message: "the fixture's prose block no longer precedes its exit-code block, so the gate proves nothing. {said}")
+	Expect.isTrue(firstExitCodeAt < insertedAt and insertedAt < secondCaseAt, message: "the inserted `{CaptureBlockOpen}` block landed at line {insertedAt + 1}, not between the first case's last block (line {firstExitCodeAt + 1}) and the second case's marker (line {secondCaseAt + 1}). {said}")
+	Expect.isTrue(secondCaseAt < replacedAt and replacedAt < lastCaseAt, message: "the replacing `{CaptureBlockOpen}` block landed at line {replacedAt + 1}, not inside the second case (lines {secondCaseAt + 1} to {lastCaseAt}). {said}")
+end 'two re-minted capture blocks land in their own cases: an insertion past a prose block, and a replacement below it'
+
+function linesOpening(lines StringArray, prefix String) returns RemintLineArray
+	var found = RemintLineArray.create()
+
+	for (iter, line) in lines.withIterator() 'eachLine'
+		if line.trim().startsWith(prefix) 'hit'
+			found.push(iter.index() as RemintLine)
+		end 'hit'
+	end 'eachLine'
+
+	return found
+end 'linesOpening'
+
+function firstLineOpening(lines StringArray, prefix String, said String) returns RemintLine
+	let found = linesOpening(lines, prefix: prefix)
+	return try found.get(0) otherwise panic("spec-harness tests: the re-minted spec holds no line opening with '{prefix}'. {said}")
+end 'firstLineOpening'

@@ -414,12 +414,10 @@ Stack trace:
 
 <!-- test: computed-argument-is-guarded-on-a-narrowing-abi -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-⭐⭐ **THE CASE THIS RUNG EXISTED TO TURN GREEN, AND IT WENT GREEN WITHOUT A LINE OF NEW MECHANISM.** The
-wasm twin of the case above — the identical program; only the lane differs, and on this lane the ABI
-narrows the argument to `i32` before the callee's guard ever sees it. It was DISABLED rather than given a
-`unsupported-targets:` line that omits wasm, because the two say different things: an `unsupported-targets:` entry reads as
-"this lane cannot express the program", and this lane expressed it perfectly and got the wrong answer.
-It used to exit **251** — `-5` truncated to `u32` and then masked to a byte by WASI — with no diagnostic.
+⭐⭐ **THE wasm TWIN OF THE CASE ABOVE, AND IT NEEDS NO MECHANISM OF ITS OWN.** The identical program;
+only the lane differs, and on this lane the ABI narrows the argument to `i32` before the callee's guard
+ever sees it. An unguarded answer here is exit **251** — `-5` truncated to `u32` and then masked to a byte
+by WASI — with no diagnostic.
 
 It is kept as a SEPARATE case from its x64 sibling rather than merged into one portable case because the
 two pin different facts: the sibling says the guard catches a value the ABI *did not* touch, this one
@@ -428,9 +426,7 @@ two on every lane and the stronger one nowhere.
 
 ⚠ **WHAT MADE IT PASS WAS THE RANGE, NOT THE GUARD'S POSITION** — see the section above. The truncated
 `-5` still arrives as `4294967291`; what changed is that `4294967291` is no longer a value `ExitCode`
-admits on this lane, so the guard that was already standing at the entry has something to refuse. The
-shelving note said the fix was "a rung that moves the call-argument door's RUNTIME half back to the CALL
-SITE"; that was a diagnosis written from the symptom, and it named a mechanism that never had to exist.
+admits on this lane, so the guard that was already standing at the entry has something to refuse.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

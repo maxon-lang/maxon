@@ -31,7 +31,7 @@
 // nobody runs, where neither a compare nor a mint ever visits the directory. Which is why a lane's
 // Target comes from its DIRECTORY NAME rather than from the run.
 //
-// ⚠ **A DISABLED OR TARGET-GATED CASE PRODUCES NO GOLDEN, and that is not a debt.** This asks only
+// ⚠ **A CASE GATED OFF A LANE PRODUCES NO GOLDEN THERE, and that is not a debt.** This asks only
 // whether what EXISTS can be compared; it has no model of what ought to exist.
 //
 // ⚠ A finding is NOT always "delete the file": a case may have been RENAMED, in which case the golden
@@ -117,16 +117,12 @@ function reportUncomparedUnder(fragmentsRoot FilePath, specDir FilePath, effecti
 		let specName = specPath.stem()
 		declaredSpecs.insert(specName)
 
-		let specFile = try parseSpecFile(specPath, effectiveTargetKey: targetToString(effectiveTarget)) otherwise panic("GoldenCensus.reportUncomparedUnder: a spec the parent already parsed to build this run's plan no longer parses.")
-
-		// Every ACTIVE case this spec declares. A `<!-- disabled-test: … -->` case is deliberately NOT one:
-		// it is never compiled, never run and mints no golden (`SpecParser`'s header), so a `.test` bearing
-		// its name is a file nothing compares — which is precisely this census's finding, and an enabled
-		// case may never be re-disabled.
-		let roster = caseNameSetOf(specFile.tests)
+		let parsed = try parseSpecFile(specPath, effectiveTargetKey: targetToString(effectiveTarget)) otherwise panic("GoldenCensus.reportUncomparedUnder: a spec the parent already parsed to build this run's plan no longer parses.")
+		let specTests = parsed.tests
+		let roster = caseNameSetOf(specTests)
 
 		for lane in lanes 'eachLane'
-			collectUncomparedIn(lane, specName: specName, specFile: specFile, roster: roster, entries: entries)
+			collectUncomparedIn(lane, specName: specName, specTests: specTests, roster: roster, entries: entries)
 		end 'eachLane'
 	end 'eachSpec'
 
@@ -195,30 +191,30 @@ end 'caseNameSetOf'
 // delete them.
 //
 // A lane whose name resolves to no target can select nothing: no run of any command line visits it.
-function pinnableOn(lane GoldenLane, specFile SpecFile, specName String) returns SpecCaseNameSet
+function pinnableOn(lane GoldenLane, specTests SpecTestArray, specName String) returns SpecCaseNameSet
 	return match lane.target 'resolution'
-		builds(target) gives selectableCaseNamesOn(target, specFile: specFile, specName: specName)
+		builds(target) gives selectableCaseNamesOn(target, specTests: specTests, specName: specName)
 		namesNoTarget gives SpecCaseNameSet.create()
 	end 'resolution'
 end 'pinnableOn'
 
 // The half of the answer that needs a real target — split out only because a `match` arm is one
 // expression and this one is a loop.
-function selectableCaseNamesOn(laneTarget Target, specFile SpecFile, specName String) returns SpecCaseNameSet
-	let selection = selectedTests(specFile, specName: specName, filterPatterns: FilterPatternArray.create(), effectiveTarget: laneTarget, includeNetwork: true, assumeNativeHost: true)
+function selectableCaseNamesOn(laneTarget Target, specTests SpecTestArray, specName String) returns SpecCaseNameSet
+	let selection = selectedTests(specTests, specName: specName, filterPatterns: FilterPatternArray.create(), effectiveTarget: laneTarget, includeNetwork: true, assumeNativeHost: true)
 	return caseNameSetOf(selection.selected)
 end 'selectableCaseNamesOn'
 
 // One spec's goldens on one lane, when a spec of that name still exists. The DIRECTORY guard and the
 // per-lane pinnable set are this arm's own; the walk itself is not — see `collectGoldensIn`.
-function collectUncomparedIn(lane GoldenLane, specName String, specFile SpecFile, roster SpecCaseNameSet, entries StringArray)
+function collectUncomparedIn(lane GoldenLane, specName String, specTests SpecTestArray, roster SpecCaseNameSet, entries StringArray)
 	let specGoldens = lane.dir.join(specName)
 
 	if not Directory.isDirectory(specGoldens) 'laneHasNoneForThisSpec'
 		return
 	end 'laneHasNoneForThisSpec'
 
-	let pinnable = pinnableOn(lane, specFile: specFile, specName: specName)
+	let pinnable = pinnableOn(lane, specTests: specTests, specName: specName)
 	collectGoldensIn(lane, specName: specName, specGoldens: specGoldens, classify: UncomparedClassifier.againstRoster(pinnable, roster: roster), entries: entries)
 end 'collectUncomparedIn'
 
@@ -362,11 +358,12 @@ function uncomparedReasonText(reason UncomparedReason) returns String
 	return match reason 'reason'
 		noSuchCase(specName, caseName) gives "{specName} declares no case named `{caseName}`"
 
-		// Selection's remaining gates are all the spec's own text: a `<!-- unsupported-targets: … -->` restriction, a
-		// trace directive only x64-windows can capture, a section pin a container format cannot answer, or
-		// a `status: draft` spec. Naming WHICH would mean re-deriving `selectableThisRun`'s conjunction
-		// here, and a second copy of it is worth less than the sentence that sends the reader to the case.
-		laneCannotSelectIt(specName, caseName, laneName) gives "{specName} declares `{caseName}`, but no run on {laneName} can select it — read its markers and its spec's status"
+		// Selection's remaining gates are all the case's own text: a `<!-- unsupported-targets: … -->`
+		// restriction, a trace directive only x64-windows can capture, or a section pin a container
+		// format cannot answer. Naming WHICH would mean re-deriving `selectableThisRun`'s conjunction
+		// here, and a second copy of it is worth less than the sentence that sends the reader to the
+		// case.
+		laneCannotSelectIt(specName, caseName, laneName) gives "{specName} declares `{caseName}`, but no run on {laneName} can select it — read its markers"
 		noSuchSpec(specName) gives "no spec named `{specName}` exists, so nothing on any lane declares this case"
 		laneNamesNoTarget(laneName) gives "`{laneName}` names no target this compiler builds for, so no run of any command line visits this lane"
 		strayUnderFragmentsRoot gives "a file directly under the fragments root, where only per-target lane directories live"

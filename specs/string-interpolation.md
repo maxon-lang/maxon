@@ -756,10 +756,8 @@ end 'main'
 
 ### Stringable with Format Specifier
 
-⭐ **THESE TWO CASES WERE ONE DISABLED CASE, AND SPLITTING THEM IS THE POINT (R10d).** It bundled a half
-that works today with a half the parser cannot even read, so the whole thing was disabled and *this spec*
-carried no live case for the working half — *"in the corpus but never executed"*, which reads as coverage in
-a listing and provides none. The halves have different blockers, so they are different cases.
+⭐ **TWO CASES, ONE PER FACT.** Selecting the zero-argument overload for a plain `{c}` and honouring a format
+specifier are separate facts, so neither case's failure can hide the other's.
 
 <!-- test: stringable-and-formatted-interp-selects-the-zero-arg-overload -->
 Plain `{c}` on a type implementing **both** protocols must select `toString()`, not `toString(format)`.

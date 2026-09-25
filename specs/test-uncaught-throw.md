@@ -138,7 +138,7 @@ The bootstrap allows that because it has no call-side reservation at all; The co
 and scopes its exemptions to the head's PROVENANCE rather than to a spelling — a `__` callee whose
 bytes an author typed stays refused, which `stdlib-user-shadows.error.the-mint-is-not-reachable-from-user-code`
 pins shut in exactly those words. Rewording those 8 to suit this compiler would be inventing a claim
-nobody has satisfied, so they are NOT reworded and NOT shelved here: they stay verbatim in
+nobody has satisfied, so they are NOT reworded here: they stay verbatim in
 `/specs/test-uncaught-throw.md` and land with the `maxon test` command, whose generated dispatcher
 is compiler-minted and therefore passes the rule as it stands.
 

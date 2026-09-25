@@ -1569,10 +1569,9 @@ in the section at the end of this file does.
 
 ⚠ **WHY THE ENUMERATION MISSED IT, and it generalises past this type**: the sweep below enumerated the
 PRODUCERS OF A BUFFER VALUE, and a DECLARED TYPE is an entrance that a value-producer sweep cannot reach — it
-mints no value of its own, it *annotates* one. No live case in `specs/` wrote any of the three (the only
-one was a `disabled-test` in `interface-conformance.md`), so an enumeration of *what the corpus calls* was
-bounding *what a program may write*. The six cases under "A2j" at the end of this file are the fix for that
-too: each of the three spellings now has a case in both directions.
+mints no value of its own, it *annotates* one, so an enumeration of *what the corpus calls* cannot bound
+*what a program may write*. The six cases under "A2j" at the end of this file close that: each of the three
+spellings has a case in both directions.
 
 ⚠ **THE MEASUREMENT THE RULING TURNED ON, and it is why the roster gained nothing.** Every buffer-surface
 call the corpus makes was enumerated from the four producers of a buffer VALUE (`__ManagedMemory.create`, a
@@ -2963,8 +2962,7 @@ That also **removed** the arity question rather than answering it again: the mas
 refusal to stop a 63rd slot silently losing its bit. A pre-order TREE has one node per named position, no
 width and no depth, nothing to truncate and so nothing to refuse.
 
-⚠ **ONE SHAPE IS NOT CLOSED AND IS NOT DISABLED — it is closed at the door that can answer it and stated
-here.** A slot spelled with an array-of-buffers ALIAS works through a PARAMETER (below) and does NOT work
+⚠ **ONE SHAPE IS NOT CLOSED — it is closed at the door that can answer it and stated here.** A slot spelled with an array-of-buffers ALIAS works through a PARAMETER (below) and does NOT work
 through a return type or a struct field. Those two are captured by the declaration SWEEP, which asks the
 alias registry at a moment it cannot guarantee an answer, and unlike the ROOT's element bit there is nothing
 left to derive it from later: a tuple's element types are CANONICAL by the time anything could ask, so the
