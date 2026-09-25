@@ -1,0 +1,177 @@
+// Test: data-section-bool-global-with-green-threads-runs
+typealias Integer = int(i64.min to i64.max)
+
+var flag = true
+
+function compute() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 42
+end 'compute'
+
+function main() returns ExitCode
+	let promise = async compute()
+	let result = await promise
+
+	if flag 'read'
+		return result
+	end 'read'
+
+	return 1
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __data_flag@8 = i1 1
+  __gt_run_queue_head@16 = i64 0
+  __gt_run_queue_tail@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_timer_seq@56 = i64 0
+  __gt_timer_when@64 = i64 9223372036854775807
+  __gt_trace_counter@72 = i64 0
+  __gt_live_count@80 = i64 0
+  __gt_seed_bytes@88 = i64 2048
+  __gt_stack_bytes_sum@96 = i64 0
+  __gt_stack_bytes_count@104 = i64 0
+  __gt_seed_sum_seen@112 = i64 0
+  __gt_seed_count_seen@120 = i64 0
+  __gt_keeps_cpu_clock@128 = i64 0
+  __sched_active_workers@136 = i64 1
+  __sched_max_active_workers@144 = i64 1
+  __sched_tls_index@152 = i64 0
+  __sched_tls_teb_offset@160 = i64 0
+  __sched_procs@168 = i64 0
+  __sched_allm@176 = i64 0
+  __sched_midle@184 = i64 0
+  __sched_pidle@192 = i64 0
+  __gt_gfree_head@200 = i64 0
+  __sched_arena_cursor@208 = i64 0
+  __sched_arena_limit@216 = i64 0
+  __gt_records_carved@224 = i64 0
+  __sched_npidle@232 = i64 0
+  __sched_runq_size@240 = i64 0
+  __sched_global_pushes@248 = i64 0
+  __sched_timer_scan_steps@256 = i64 0
+  __sched_mcount@264 = i64 0
+  __sched_nmidle@272 = i64 0
+  __sched_main_m@280 = i64 0
+  __sched_phase@288 = i64 0
+  __sched_lastpoll@296 = i64 0
+  __sched_poll_until@304 = i64 0
+  __sched_regain_head@312 = i64 0
+  __np_poller@320 = i64 0
+  __np_break@328 = i64 0
+  __np_wake_sig@336 = i64 0
+  __np_pd_table@344 = i64 0
+  __np_pd_cap@352 = i64 0
+  __np_waiters@360 = i64 0
+  __sched_num_procs@368 = i64 0
+  __sched_shutdown_flag@376 = i64 0
+  __sched_lock@384 = i64 0
+  __sched_lock_depth_sink@392 = i64 0
+  __sched_nmspinning@400 = i64 0
+  __sched_needspinning@408 = i64 0
+  __sched_sysmon_event@416 = i64 0
+  __sched_sysmon_wait@424 = i64 0
+  __sched_timer_starts@432 = i64 0
+  __mrt_envp@440 = i64 0
+  __mrt_tls_next_key@448 = i64 0
+  __mrt_errno@456 = i64 0
+  __mrt_tls_ready@464 = i64 0
+  __slab_arena_list@472 = i64 0
+  __slab_arena_map_l1@480 = i64 0
+  __slab_state@488 = i64 0
+}
+
+func @compute {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.leaRegRdata rcx, [rip + __str_rec_30]  ; "noyield.txt"
+  __il_body#3:
+    x64.callDirect FilePath.create
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+  __il_body#6:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect String.addressableBytes
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __mf_exists
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.cmpRegImm32 r13, 0
+  __il_cont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_FilePath
+    x64.movRegImm32 r8, 42
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_42]  ; "panic at FilePath.maxon:46: FilePath: invalid path\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.leaRegFunc rcx, [rip + compute]
+    x64.callDirect __gt_spawn
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, rbx
+    x64.callDirect __gt_await
+    x64.leaRegGlobal rax, __data_flag
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont
+  read:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_117]  ; "panic at data-section-bool-global-with-green-threads-runs.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

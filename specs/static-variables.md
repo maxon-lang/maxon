@@ -2898,6 +2898,68 @@ f64 2.5
 i8 1
 ```
 
+<!-- test: data-section-runtime-word-after-a-bool-is-aligned -->
+The runtime's words are laid out after the program's own globals, and each is still naturally aligned:
+a 1-byte user global is followed by seven bytes of padding before the scheduler's 8-byte worker mark.
+An arm64 exclusive load or store faults on an address that is not a multiple of its width.
+
+```maxon
+var flag = true
+
+function main() returns ExitCode
+	let workers = __Builtins.schedMaxActiveWorkers()
+
+	if flag 'read'
+		return workers - 1
+	end 'read'
+
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+```RequiredData
+i8 1
+i8 0
+i8 0
+i8 0
+i8 0
+i8 0
+i8 0
+i8 0
+i64 1
+```
+
+<!-- test: data-section-bool-global-with-green-threads-runs -->
+A program whose own globals end on a 1-byte slot starts the scheduler, whose words it lays out after
+them, and runs a coroutine to completion.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+var flag = true
+
+function compute() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 42
+end 'compute'
+
+function main() returns ExitCode
+	let promise = async compute()
+	let result = await promise
+
+	if flag 'read'
+		return result
+	end 'read'
+
+	return 1
+end 'main'
+```
+```exitcode
+42
+```
+
 <!-- test: top-level-var-byte-ranged-type -->
 Module-level var with a byte-sized ranged type.
 ```maxon

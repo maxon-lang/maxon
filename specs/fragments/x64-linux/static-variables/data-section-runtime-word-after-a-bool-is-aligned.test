@@ -1,0 +1,54 @@
+// Test: data-section-runtime-word-after-a-bool-is-aligned
+var flag = true
+
+function main() returns ExitCode
+	let workers = __Builtins.schedMaxActiveWorkers()
+
+	if flag 'read'
+		return workers - 1
+	end 'read'
+
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_flag@0 = i1 1
+  __sched_max_active_workers@8 = i64 1
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __sched_max_active_workers
+    x64.leaRegGlobal rax, __data_flag
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont
+  read:
+    x64.leaRegRegImm32 r8, r8, -1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at data-section-runtime-word-after-a-bool-is-aligned.test:8: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

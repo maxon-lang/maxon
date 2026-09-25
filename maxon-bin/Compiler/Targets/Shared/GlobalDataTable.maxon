@@ -390,6 +390,8 @@ export typealias DataSectionEntryArray = Array with DataSectionEntry
 // count it was told finds a plain zero instead of whatever the next global holds.
 let DataBlobPadByte = 0 as Byte
 
+let DataSlotPadByte = 0 as Byte
+
 // ⭐⭐ **ONE CONTIGUOUS RESERVED RUN IN `.data`, ADDRESSED BY A SINGLE LABEL** — what a runtime
 // needs when it indexes into its own image at a computed stride (a coverage `.mxcov` header
 // followed by N u64 counters is the shape that asks for it).
@@ -442,11 +444,7 @@ export type GlobalDataTable
 	export var dataSection as DataSectionEntryArray
 	export var dataIndex as DataSectionIndexMap
 
-	// ⭐ The contiguous reserved runs — see `DataBlobEntry`. Laid out BEFORE the scalar slots,
-	// which is what leaves `layOut`'s zero-padding claim intact: every run is stored padded to
-	// `MaxDataSlotBytes`, so the summed run length is a multiple of the widest slot and the first
-	// scalar still starts on a multiple of its own size. The claim gains a class ABOVE the four
-	// size classes rather than a hole between them.
+	// The contiguous reserved runs — see `DataBlobEntry`.
 	var dataBlobs as DataBlobEntryArray
 
 	// A run's label → its index in `dataBlobs`, written at REGISTRATION because registration order
@@ -957,28 +955,20 @@ export type GlobalDataTable
 		entry.bytes = bytes
 	end 'stampDataBlob'
 
-	// ⭐ LAY OUT THE `.data` SECTION: order the slots, then assign each its offset. The SINGLE
-	// writer of `dataSection`, `dataIndex` and every offset in the section — a reserved run's as
-	// much as a scalar entry's — so the image, the relocation resolver and the RequiredData gate
-	// cannot hold three opinions of where a global lives.
+	// The single writer of `dataSection`, `dataIndex` and every `.data` offset, a reserved run's
+	// included, so the image, the relocation resolver and the RequiredData gate cannot hold three
+	// opinions of where a global lives.
 	//
-	// **SORTED BY STORAGE SIZE, LARGEST FIRST — which is what makes the padding zero.** Every
-	// size here is a power of two and no larger than 8, so laying the widest out first means
-	// each slot's offset is already a multiple of its own size when it is reached: the 8-byte
-	// slots fill offsets 0,8,16…, and the 1-byte slots that follow need no alignment at all.
-	// Declaration order would not do it — `var flag = false` then `var counter = 42` would put
-	// an 8-byte slot at offset 1 and force 7 bytes of padding to fix it. This is exactly what
-	// `specs/static-variables.md`'s six `RequiredData` cases pin, and the spec says so in its
-	// own words ("sorted largest-first, no padding needed").
+	// Every slot is placed at its natural alignment. Each segment is sorted largest slot first, so
+	// inside a segment that costs no padding; padding appears only at the join, where a user segment
+	// ending on a narrow slot is followed by an 8-byte runtime word. `specs/static-variables.md`'s
+	// `RequiredData` cases pin this layout byte for byte.
 	//
-	// **THE SORT IS STABLE, and that is part of the contract too**: `data-section-multiple-bools`
-	// pins three equal-sized slots in DECLARATION order (`i8 1`, `i8 0`, `i8 1` for `a`,`b`,`c`).
-	// An unstable sort would order them by whatever the algorithm did that day, and the layout
-	// of a program would stop being a function of its source.
+	// The sort is stable: `data-section-multiple-bools` pins equal-sized slots in declaration order.
 	//
-	// ⭐ **A `walked` SLOT NOBODY SURVIVING NAMES IS DROPPED BEFORE THE SORT**, and dropping keeps the
-	// survivors' relative order — so a program that reaches every word it names lays each out at the offset
-	// it would have had with nothing dropped (`DataReach`).
+	// A `walked` slot nobody surviving names is dropped before the sort, and dropping keeps the
+	// survivors' relative order, so a program that reaches every word it names lays each out at the
+	// offset it would have had with nothing dropped (`DataReach`).
 	export function layOut(roster DataSectionEntryArray, referenced ReferencedGlobalLabelSet, userGlobalCount ElementIndex)
 		// The user's globals are laid out ahead of the runtime's, each segment sorted within itself. One
 		// sort over both would interleave them by size class, so a runtime word added anywhere would move
@@ -992,10 +982,8 @@ export type GlobalDataTable
 		self.dataSection = laidOut
 		self.dataIndex = DataSectionIndexMap.create()
 
-		// ⭐ **THE RESERVED RUNS GO FIRST, AND THE ZERO-PADDING CLAIM ABOVE SURVIVES IT EXACTLY**:
-		// `dataBlobStoredRun` stores every run padded to `MaxDataSlotBytes`, so their total is a
-		// multiple of the widest slot and the first scalar still meets its own size class. Runs are
-		// laid out in registration order, which is why `dataBlobIndex` can be written at the door.
+		// Runs are laid out in registration order, which is why `dataBlobIndex` can be written at the
+		// door.
 		var offset = 0 as ByteOffset
 
 		for i in 0 upto self.dataBlobs.count() 'eachRun'
@@ -1014,6 +1002,7 @@ export type GlobalDataTable
 				panic("GlobalDataTable.layOut: '{entry.label}' is both a declared global and a reserved .data run — one label names one address, and `dataSectionOffsetOf` answers runs first, so the global would be unreachable")
 			end 'labelCollision'
 
+			offset = naturallyAlignedSlotOffset(offset, valueType: entry.valueType)
 			entry.offset = offset
 			self.dataIndex.upsert(entry.label, value: i)
 			offset = offset + (stdTypeStorageBytes(entry.valueType) as ByteOffset)
@@ -1039,15 +1028,9 @@ export type GlobalDataTable
 		end 'eachReference'
 	end 'requireLaidOutCoversReferences'
 
-	// The byte image of the `.data` section, in layout order: the reserved runs verbatim, then
-	// each scalar slot rendered from its `(value, valueType)`. Little-endian, matching every
-	// other integer this backend writes.
-	//
-	// It needs no padding logic and asserts that it needs none: `dataBlobStoredRun` padded every
-	// run and `layOut` ordered the slots so each lands naturally aligned, so the image is simply
-	// the concatenation. An entry whose offset disagrees with the running position means the
-	// layout and the image have drifted, which panics rather than emitting a silently misaligned
-	// global.
+	// Each slot's aligned start is recomputed from the image rather than read from `entry.offset`, so
+	// a disagreement with `layOut` panics instead of emitting a global at an address its relocations
+	// do not name.
 	export function dataSectionImage() returns ByteArray
 		var image = ByteArray.create()
 
@@ -1060,10 +1043,13 @@ export type GlobalDataTable
 		end 'eachRun'
 
 		for entry in self.dataSection 'each'
-			if image.count() != entry.offset 'drift'
-				panic("GlobalDataTable.dataSectionImage: '{entry.label}' is laid out at offset {entry.offset} but the image has reached {image.count()} — layOut's ordering and this rendering disagree")
+			let slotStart = naturallyAlignedSlotOffset(image.count() as ByteOffset, valueType: entry.valueType)
+
+			if slotStart != entry.offset 'drift'
+				panic("GlobalDataTable.dataSectionImage: '{entry.label}' is laid out at offset {entry.offset} but the image, aligned for its {stdTypeStorageBytes(entry.valueType)}-byte slot, has reached {slotStart} — layOut's ordering and this rendering disagree")
 			end 'drift'
 
+			image.growFilled(slotStart as ElementIndex, value: DataSlotPadByte)
 			appendLittleEndianScalar(image, value: entry.value, byteCount: stdTypeStorageBytes(entry.valueType))
 		end 'each'
 
@@ -1087,10 +1073,9 @@ export type GlobalDataTable
 	end 'dataSectionOffsetOf'
 end 'GlobalDataTable'
 
-// The widest a `.data` slot can be. `StdTypeInfo.storageBytes` tops out at 8 (`i64`/`u64`/`f64`)
-// and every value it can take is a power of two — the SAME fact `GlobalDataTable.layOut` already
-// rests its zero-padding claim on, named here because `sortBySizeDescendingStable` is the code
-// that walks the size classes and would otherwise re-state the bound as a literal.
+// The widest a `.data` slot can be. Every `StdTypeInfo.storageBytes` is a power of two no larger
+// than this, which `sortBySizeDescendingStable`'s halving walk and `naturallyAlignedSlotOffset`'s
+// `alignUp` both rely on.
 let MaxDataSlotBytes = 8 as BytePos
 
 // The roster minus every `walked` slot no surviving function names; `declared` slots pass untouched. Order
@@ -1163,20 +1148,18 @@ function sortBySizeDescendingStable(declared DataSectionEntryArray) returns Data
 	return sorted
 end 'sortBySizeDescendingStable'
 
-// A reserved `.data` run as the table STORES it: the registrant's bytes, zero-padded up to
-// `MaxDataSlotBytes`.
+// arm64's exclusive and acquire/release accesses (`ldaxr`, `stlxr`, `ldar`, `stlr`) fault on an
+// address that is not a multiple of their width. x64 tolerates one, so a misplaced runtime word
+// crashes only the arm64 lanes.
+function naturallyAlignedSlotOffset(offset ByteOffset, valueType StdType) returns ByteOffset
+	return alignUp(offset as BytePos, alignment: stdTypeStorageBytes(valueType)) as ByteOffset
+end 'naturallyAlignedSlotOffset'
+
+// The table pads each run rather than trusting the registrant, so every run starts aligned to the
+// widest slot whatever length a producer reserves.
 //
-// ⭐⭐ **THE PAD IS THE TABLE'S JOB AND NOT THE REGISTRANT'S, AND THAT IS WHY THE ALIGNMENT IS
-// `MaxDataSlotBytes` RATHER THAN A NUMBER OF ITS OWN.** Runs are laid out ahead of the scalars, so
-// the first scalar starts at the summed run length, and `layOut`'s zero-padding claim holds only
-// if that sum is a multiple of the widest slot — which is exactly the bound this constant names.
-// A coverage image is `40 + 8N` bytes and satisfies it already; nothing makes the NEXT producer
-// do so, and a whole-section invariant left to a producer's habit is how `.rdata`'s cursor came to
-// sit permanently 2 mod 8 (see `RdataPayloadAlignment`). Rounding here means a run can never be
-// the thing that breaks it.
-//
-// ⚠ The pad is part of the RUN, so `stampDataBlob` compares against the padded length: a producer
-// that reserved an odd length stamps the rounded run, not the length it asked for.
+// The pad is part of the run, so `stampDataBlob` compares against the padded length: a producer that
+// reserved an odd length stamps the rounded run, not the length it asked for.
 function dataBlobStoredRun(bytes ByteArray) returns ByteArray
 	let storedCount = alignUp(bytes.count(), alignment: MaxDataSlotBytes)
 

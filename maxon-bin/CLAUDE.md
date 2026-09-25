@@ -105,6 +105,11 @@ reorders, so a program that reaches every word it names lays each out at the off
 it — but the roster order alone is NOT the `.data` order, because `layOut` sorts each segment largest slot
 first. The segment split is what keeps a runtime word added anywhere from moving every user global of a
 narrower size class.
+⛔ **EVERY SLOT IS NATURALLY ALIGNED, AND THE SEGMENT JOIN IS WHERE THE PADDING GOES**: a user segment
+ending on a 1-, 2- or 4-byte slot is followed by up to seven zero bytes before the first runtime word
+(`GlobalDataTable.naturallyAlignedSlotOffset`). arm64's `ldaxr`/`stlxr`/`ldar`/`stlr` fault on a
+misaligned address and x64 tolerates one, so a layout that drops the alignment crashes only the arm64
+lanes. `specs/static-variables.md`'s `data-section-runtime-word-after-a-bool-is-aligned` pins the pad.
 
 The fault probe's family predicate `isFaultProbeRuntimeCallee` outlived its bit, because
 `MmRuntime.reservedCalleeReasonOf` still routes the call refusal through it; it moved there with the two

@@ -1,0 +1,186 @@
+// Test: an-awaited-range-bound-in-a-for-source-inside-a-try-block
+typealias Integer = int(i64.min to i64.max)
+
+enum CheckError implements Error
+	tooBig
+end 'CheckError'
+
+function start() returns Integer
+	Scheduler.yield()
+	return 2
+end 'start'
+
+function check(n Integer) returns Integer throws CheckError
+	if n > 100 'big'
+		throw CheckError.tooBig
+	end 'big'
+
+	return n
+end 'check'
+
+function main() returns ExitCode
+	let p = async start()
+	var total = 0
+
+	try 'work'
+		for i in await p upto 5 'each'
+			total = total + i
+		end 'each'
+
+		total = check(total)
+	end 'work' otherwise (e) 'h'
+		match e 'k'
+			tooBig then total = 0
+		end 'k'
+	end 'h'
+
+	return total as ExitCode
+end 'main'
+---
+ExitCode: 9
+---
+data {
+  __gt_run_queue_head@0 = i64 0
+  __gt_run_queue_tail@8 = i64 0
+  __gt_timer_count@16 = i64 0
+  __gt_timer_heap_base@24 = i64 0
+  __gt_timer_capacity@32 = i64 0
+  __gt_timer_seq@40 = i64 0
+  __gt_timer_when@48 = i64 9223372036854775807
+  __gt_trace_counter@56 = i64 0
+  __gt_live_count@64 = i64 0
+  __gt_seed_bytes@72 = i64 2048
+  __gt_stack_bytes_sum@80 = i64 0
+  __gt_stack_bytes_count@88 = i64 0
+  __gt_seed_sum_seen@96 = i64 0
+  __gt_seed_count_seen@104 = i64 0
+  __gt_keeps_cpu_clock@112 = i64 0
+  __sched_active_workers@120 = i64 1
+  __sched_max_active_workers@128 = i64 1
+  __sched_tls_index@136 = i64 0
+  __sched_tls_teb_offset@144 = i64 0
+  __sched_procs@152 = i64 0
+  __sched_allm@160 = i64 0
+  __sched_midle@168 = i64 0
+  __sched_pidle@176 = i64 0
+  __gt_gfree_head@184 = i64 0
+  __sched_arena_cursor@192 = i64 0
+  __sched_arena_limit@200 = i64 0
+  __gt_records_carved@208 = i64 0
+  __sched_npidle@216 = i64 0
+  __sched_runq_size@224 = i64 0
+  __sched_global_pushes@232 = i64 0
+  __sched_timer_scan_steps@240 = i64 0
+  __sched_mcount@248 = i64 0
+  __sched_nmidle@256 = i64 0
+  __sched_main_m@264 = i64 0
+  __sched_phase@272 = i64 0
+  __sched_lastpoll@280 = i64 0
+  __sched_poll_until@288 = i64 0
+  __sched_regain_head@296 = i64 0
+  __np_poller@304 = i64 0
+  __np_break@312 = i64 0
+  __np_wake_sig@320 = i64 0
+  __np_pd_table@328 = i64 0
+  __np_pd_cap@336 = i64 0
+  __np_waiters@344 = i64 0
+  __sched_num_procs@352 = i64 0
+  __sched_shutdown_flag@360 = i64 0
+  __sched_lock@368 = i64 0
+  __sched_lock_depth_sink@376 = i64 0
+  __sched_nmspinning@384 = i64 0
+  __sched_needspinning@392 = i64 0
+  __sched_sysmon_event@400 = i64 0
+  __sched_sysmon_wait@408 = i64 0
+  __sched_timer_starts@416 = i64 0
+  __mrt_errno@424 = i64 0
+  __mrt_envp@432 = i64 0
+  __mrt_tls_next_key@440 = i64 0
+  __slab_arena_list@448 = i64 0
+  __slab_arena_map_l1@456 = i64 0
+  __slab_state@464 = i64 0
+}
+
+func @start {
+  entry:
+    arm64.prologue 16
+  __il_body:
+    arm64.bl __gt_resched
+  __il_cont:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @check {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 100
+    arm64.b.le ifcont
+  big:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaFuncAddr x0, start
+    arm64.bl __gt_spawn
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __gt_ready
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __gt_await
+    arm64.movRegReg x1, x20
+    arm64.b forhdr
+  each:
+    arm64.add x1, x1, x0
+  forstep:
+    arm64.add x0, x0, 1
+  forhdr:
+    arm64.cmp x0, 5
+    arm64.b.lt each
+  forexit:
+    arm64.movRegReg x0, x1
+    arm64.bl check
+    arm64.cmp x9, 0
+    arm64.b.eq tryblkcont
+  tryblkerr:
+    arm64.sub x0, x9, 1
+    arm64.cmp x0, 0
+    arm64.b.ne matchdead
+  matcharm:
+    arm64.movImm x0, 0
+    arm64.b tryblkcont
+  matchdead:
+  tryblkok:
+  tryblkcont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at an-awaited-range-bound-in-a-for-source-inside-a-try-block.test:37: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
