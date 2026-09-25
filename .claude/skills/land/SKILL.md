@@ -91,8 +91,8 @@ gates and the commit.** Agents do the reading and the typing.
 | **8** | THE BATTERY, once: full suite · wasm lane · **self-compile** | **you** | **stop** |
 | **9** | Commit and push | **you** | a rejected push re-runs §8 |
 
-**Everything before §8 runs on `--filter`ed specs** — one filter when the set's names share a substring,
-one per spec file otherwise. That is what makes this lightweight — and it is only
+**Everything before §8 runs on `--filter`ed specs** — the whole set in ONE run, one `--filter=` per
+pattern (MCP: a `filter` array), so its spec files run as parallel jobs. That is what makes this lightweight — and it is only
 honest because §1's red was real. The filter is a *proxy* for the suite, and a proxy you never saw fail
 is a proxy for nothing.
 
@@ -279,7 +279,7 @@ Every other user-visible change still owes its `docs/` source an edit (§6), whi
 **Then SEE IT RED.** A spec is data — no rebuild needed to run one.
 
 ```
-run_spec_test filter=<pattern>
+run_spec_test filter=["<spec-a>/", "<spec-b>/", …]
 ```
 
 - **Read the failure of EVERY case in the set** and record the exact symptom — exit code, stderr, diff.
@@ -288,19 +288,21 @@ run_spec_test filter=<pattern>
   enough.)
 - **A case that is already GREEN is not in the set.** Either it does not test your change, or the change
   is already done. Find out which before writing a line.
-- ⚠ **`--filter` is ONE substring**, matched against the `<spec>/<case>` label (`selectedByFilter`) — no
-  lists. Name new cases so one distinctive substring selects the whole set; otherwise run one filter per
-  file and read every one of them.
+- ⚠ **Select the whole set in ONE run.** Each pattern is a case-sensitive substring of the
+  `<spec>/<case>` label, and repeated `--filter=` flags (MCP: a `filter` array) are a union — one pattern
+  per spec file, never one run per file, which pays the startup per file and runs each on one worker. A
+  comma is part of a pattern, not a separator. A pattern that selects nothing refuses the whole run and
+  is named, so a typo'd member cannot pass unseen.
 
 > ### ⛔ COUNT WHAT RAN. A spec can pass by running NOTHING — three ways, all of which read as green.
 > ```bash
-> grep -c '<!-- test:'          specs/<file>.md   # must EQUAL the runner's `total` for your filter
+> grep -c '<!-- test:'          specs/<file>.md   # summed over the set's files, must EQUAL the runner's `total`
 > grep -c '<!-- disabled-test:' specs/<file>.md   # cases you did not enable — you may write none
 > grep -o '<!-- \(disabled-\)\?test: [^ ]*' specs/<file>.md | sed 's/.*test: //' | sort | uniq -d
 > ```
 > 1. **A shortfall against the runner's total is a defect in the spec, never a pass** — once you have
 >    subtracted the cases an `<!-- unsupported-targets: -->` marker excludes on the lane you ran, and
->    added any other spec file your filter substring also selects. The causes: `status: draft` in the
+>    added any other spec file one of your patterns also selects. The causes: `status: draft` in the
 >    frontmatter (ZERO tests for the whole file), no `## Tests` heading, a case written above
 >    `## Tests`, or a case below `## Deferred` — the one heading that **ENDS the active-test region**
 >    (`SpecParser.RegionEndHeadings`). Any other `## ` heading is walked over.
@@ -522,7 +524,7 @@ during changes; a battery run before the rebase measured a tree that no longer e
 
 **A red gate STOPS the change** — and a red you did not cause still gets fixed, in its own commit,
 before yours (CLAUDE.md). To attribute it: do the failures touch what you changed? Re-run **the failing
-cases alone, by filter** — never the whole suite for them. If that still does not settle it, **measure
+cases alone, by filter** — one run, one pattern per case — never the whole suite for them. If that still does not settle it, **measure
 the control** on that same filter — `git stash -u`, re-run, `git stash pop`. ⚠ **A lane that
 did not RUN is not a red gate** (remote arm64 is outside this battery): that is a SKIP you report, never
 folded into the green — CI answers it after the push, and §9's report names it.

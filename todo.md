@@ -125,3 +125,4 @@ Many advanced AI agents can use these files to "constrain" their output, prevent
 
 5. Specialized "System Instructions" for the Compiler
 Since you're building the compiler itself, you can provide the AI with a "Mental Model of the IR." * Instead of just showing the surface syntax, explain why the compiler expects certain patterns for optimization. When an AI understands the underlying architecture (like how you handle phi nodes), it is less likely to write "clever" code that the compiler can't actually lower to machine code efficiently.
+- `--dry-run` and `--dev` given to a command that does not take them are refused as "unknown option" (maxon-bin/Main.maxon, MaxonArgs.parse dryRunFlag/devFlag arms): both are known options, just not of that command, so the message names the wrong fault. Seen reading the option-refusal paths during the --filter union review.

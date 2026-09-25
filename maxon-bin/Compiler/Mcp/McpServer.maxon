@@ -25,37 +25,38 @@ function handleInitialize(reqDoc JsonDoc, idNode JsonNodeId)
 	sendRpcResult(reqDoc, idNode: idNode, resultDoc: doc, resultRoot: result.build(doc))
 end 'handleInitialize'
 
-// Render one roster property as a JSON Schema fragment. An array's `items` says only that the entries
-// are strings; no argument here takes a richer element type.
-//
 // An argument accepting two types is emitted as `oneOf`, which is what a client needs in order to
 // offer both spellings rather than flagging one as a type error.
 function propertySchema(doc JsonDoc, prop McpProperty) returns JsonNodeId
 	var schema = JsonObjectBuilder.create()
 
 	if prop.altType.isEmpty() 'oneType'
-		schema.addString(doc, key: "type", value: prop.jsonType)
+		addTypeFields(schema, doc: doc, jsonType: prop.jsonType)
 	end 'oneType' else 'eitherType'
 		var alternatives = JsonNodeIdArray.create()
-		alternatives.push(bareTypeSchema(doc, jsonType: prop.jsonType))
-		alternatives.push(bareTypeSchema(doc, jsonType: prop.altType))
+		alternatives.push(typeSchema(doc, jsonType: prop.jsonType))
+		alternatives.push(typeSchema(doc, jsonType: prop.altType))
 		schema.addNode("oneOf", node: doc.add(JsonNode.arrayNode(alternatives)))
 	end 'eitherType'
 
 	schema.addString(doc, key: "description", value: prop.description)
-
-	if prop.jsonType.equals("array") 'needsItems'
-		schema.addNode("items", node: bareTypeSchema(doc, jsonType: "string"))
-	end 'needsItems'
-
 	return schema.build(doc)
 end 'propertySchema'
 
-function bareTypeSchema(doc JsonDoc, jsonType String) returns JsonNodeId
+function typeSchema(doc JsonDoc, jsonType String) returns JsonNodeId
 	var schema = JsonObjectBuilder.create()
-	schema.addString(doc, key: "type", value: jsonType)
+	addTypeFields(schema, doc: doc, jsonType: jsonType)
 	return schema.build(doc)
-end 'bareTypeSchema'
+end 'typeSchema'
+
+// `items` is always a string: `validateToolArguments` refuses a list holding anything else.
+function addTypeFields(schema JsonObjectBuilder, doc JsonDoc, jsonType String)
+	schema.addString(doc, key: "type", value: jsonType)
+
+	if jsonType.equals(ArrayJsonType) 'needsItems'
+		schema.addNode("items", node: typeSchema(doc, jsonType: StringJsonType))
+	end 'needsItems'
+end 'addTypeFields'
 
 function toolDescriptor(doc JsonDoc, spec McpToolSpec, devMode bool) returns JsonNodeId
 	var properties = JsonObjectBuilder.create()
@@ -76,7 +77,7 @@ function toolDescriptor(doc JsonDoc, spec McpToolSpec, devMode bool) returns Jso
 	end 'each'
 
 	var schema = JsonObjectBuilder.create()
-	schema.addString(doc, key: "type", value: "object")
+	schema.addString(doc, key: "type", value: ObjectJsonType)
 	schema.addNode("properties", node: properties.build(doc))
 
 	if anyRequired 'hasRequired'

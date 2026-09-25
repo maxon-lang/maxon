@@ -180,10 +180,7 @@ export function registerSpecTestController(workspaceRoot: string): vscode.Dispos
 
 		const filters = buildFilters(requested, specByName, binding);
 		try {
-			for (const filter of filters) {
-				if (token.isCancellationRequested) break;
-				await runWithFilter(binding, filter, requested, run, token);
-			}
+			await runWithFilters(binding, filters, requested, run, token);
 		} catch (err) {
 			log(`Test run failed: ${err}`);
 		} finally {
@@ -275,16 +272,11 @@ function collectRequested(
 	return { items, itemById, bySpec, skipped };
 }
 
-/**
- * Build the list of `--filter` values to pass. `null` in the list means
- * "no filter" — the runner walks every spec itself in a single shared
- * worker pool, which is dramatically faster than spawning per-spec.
- */
 function buildFilters(
 	requested: RequestedTests,
 	specByName: Map<string, SpecFile>,
 	binding: ProfileBinding
-): (string | null)[] {
+): string[] {
 	// If we've requested whole-spec runs of every spec the profile would
 	// include, drop the filter and let the runner do its thing in one process.
 	let coversAllEligible = true;
@@ -299,10 +291,10 @@ function buildFilters(
 		}
 	}
 	if (coversAllEligible && eligibleCount > 0 && eligibleCount === requested.bySpec.size) {
-		return [null];
+		return [];
 	}
 
-	const out: (string | null)[] = [];
+	const out: string[] = [];
 	for (const [specName, entry] of requested.bySpec) {
 		if (entry.all) {
 			out.push(`${specName}/`);
@@ -328,17 +320,17 @@ interface ActiveRun {
 	// Without the summary the runner stopped early, so a test it printed no verdict for was not excluded:
 	// it is unaccounted for.
 	sawSummary: boolean;
+	stderr: string[];
 }
 
-async function runWithFilter(
+async function runWithFilters(
 	binding: ProfileBinding,
-	filter: string | null,
+	filters: string[],
 	requested: RequestedTests,
 	run: vscode.TestRun,
 	token: vscode.CancellationToken
 ): Promise<void> {
-	const args = ['spec-test'];
-	if (filter !== null) args.splice(1, 0, `--filter=${filter}`);
+	const args = ['spec-test', ...filters.map(filter => `--filter=${filter}`)];
 	log(`Spawning ${binding.binary} ${args.join(' ')}`);
 	run.appendOutput(`> ${binding.binary} ${args.join(' ')}\r\n`);
 
@@ -347,7 +339,7 @@ async function runWithFilter(
 		child = spawn(binding.binary, args, { cwd: binding.cwd });
 	} catch (err) {
 		log(`Failed to spawn: ${err}`);
-		failAllInScope(run, requested, filter, `Failed to spawn compiler: ${err}`);
+		failAllRequested(run, requested, `Failed to spawn compiler: ${err}`);
 		return;
 	}
 
@@ -360,13 +352,17 @@ async function runWithFilter(
 		run,
 		pendingFailures: new Map(),
 		reported: new Set(),
-		sawSummary: false
+		sawSummary: false,
+		stderr: []
 	};
 
 	// Verdicts are on stdout only; stderr is shown, never parsed, so a note there cannot land inside a
 	// failure's reason.
 	pipeLines(child.stdout, makeVerdictLineHandler(active));
-	pipeLines(child.stderr, line => appendRunOutput(run, line));
+	pipeLines(child.stderr, line => {
+		appendRunOutput(run, line);
+		active.stderr.push(line.trimEnd());
+	});
 
 	await new Promise<void>(resolve => {
 		child.on('close', code => {
@@ -375,13 +371,13 @@ async function runWithFilter(
 			if (code !== 0 && code !== null && !token.isCancellationRequested) {
 				run.appendOutput(`\r\nProcess exited with code ${code}\r\n`);
 			}
-			if (!token.isCancellationRequested) settleUnreportedInScope(active, filter, code);
+			if (!token.isCancellationRequested) settleUnreported(active, code);
 			resolve();
 		});
 		child.on('error', err => {
 			cancelSub.dispose();
 			log(`Process error: ${err}`);
-			failAllInScope(run, requested, filter, `Process error: ${err}`);
+			failAllRequested(run, requested, `Process error: ${err}`);
 			resolve();
 		});
 	});
@@ -448,34 +444,25 @@ function flushPendingDetails(active: ActiveRun) {
 	active.pendingFailures.clear();
 }
 
-// A requested test with no verdict in a run that reached its summary was not selected — a marker excludes it
-// on this host — so it is skipped. In a run that never reached its summary it is errored.
-function settleUnreportedInScope(active: ActiveRun, filter: string | null, code: number | null): void {
+// A requested test with no verdict in a run that reached its summary was passed over on this host, so it is
+// skipped. A run the runner refused — a filter that selected nothing here among them — never reaches its
+// summary, and each unreported test is errored with the runner's stderr. Which tests this host passes over
+// is left to the runner: a copy of its markers here would drift from it.
+function settleUnreported(active: ActiveRun, code: number | null): void {
+	const said = active.stderr.filter(line => line.length > 0).join('\n');
+	const unreported = `spec-test exited with code ${code} before reporting this test`;
+	const reason = said.length > 0 ? `${unreported}:\n${said}` : `${unreported}; its output is in the run log.`;
 	for (const item of active.requested.items) {
-		if (!itemMatchesFilter(item, filter) || active.reported.has(item.id)) continue;
+		if (active.reported.has(item.id)) continue;
 
 		if (active.sawSummary) {
 			active.run.skipped(item);
 		} else {
-			active.run.errored(item, new vscode.TestMessage(`spec-test exited with code ${code} before reporting this test; its output is in the run log.`));
+			active.run.errored(item, new vscode.TestMessage(reason));
 		}
 	}
 }
 
-function failAllInScope(
-	run: vscode.TestRun,
-	requested: RequestedTests,
-	filter: string | null,
-	message: string
-): void {
-	for (const item of requested.items) {
-		if (!itemMatchesFilter(item, filter)) continue;
-		run.errored(item, new vscode.TestMessage(message));
-	}
-}
-
-function itemMatchesFilter(item: vscode.TestItem, filter: string | null): boolean {
-	if (filter === null) return true;            // no-filter run: every requested item is in scope
-	if (filter.endsWith('/')) return item.id.startsWith(filter);
-	return item.id === filter;
+function failAllRequested(run: vscode.TestRun, requested: RequestedTests, message: string): void {
+	for (const item of requested.items) run.errored(item, new vscode.TestMessage(message));
 }

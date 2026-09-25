@@ -375,6 +375,79 @@ export function payloadString(doc JsonDoc, key String) returns String
 	return try payload.getString(payload.root, key: key) otherwise panic("tool payload has no `{key}`: {toolCallText(doc)}")
 end 'payloadString'
 
+export function payloadInt(doc JsonDoc, key String) returns JsonInt
+	let payload = toolPayload(doc)
+	return try payload.getInt(payload.root, key: key) otherwise panic("tool payload has no number `{key}`: {toolCallText(doc)}")
+end 'payloadInt'
+
+let OutsideCheckoutStagingDirNamePrefix = "maxon-tests-mcp"
+let CheckoutMarkerDirName = "stdlib"
+
+#if os(Windows)
+	let HostTempVariable = "TEMP"
+#else
+	let HostTempVariable = "TMPDIR"
+	let PosixLastResortTempDir = "/tmp"
+#endif
+
+// `maxon test tests/mcp` compiles only this directory, so the outside-checkout helpers `CliHarness` and
+// `LspClient` define are copied here rather than imported.
+export function freshOutsideCheckoutDir(caseDirName String) returns FilePath
+	let dir = hostTempDir().join("{OutsideCheckoutStagingDirNamePrefix}-{__Builtins.currentProcessId()}-{caseDirName}")
+	requireNoCheckoutAbove(dir)
+
+	if Directory.isDirectory(dir) 'leftByAnEndedProcess'
+		discardOutsideCheckoutDir(dir)
+	end 'leftByAnEndedProcess'
+
+	if not Directory.create(dir) 'couldNotCreate'
+		panic("McpHarness: could not create {dir.path}, where a case stages outside the checkout")
+	end 'couldNotCreate'
+
+	return dir
+end 'freshOutsideCheckoutDir'
+
+export function discardOutsideCheckoutDir(dir FilePath)
+	let entries = try Directory.list(dir) otherwise panic("McpHarness: could not list {dir.path}")
+
+	for entry in entries 'eachEntry'
+		if Directory.isDirectory(entry) 'aDirectory'
+			discardOutsideCheckoutDir(entry)
+			continue
+		end 'aDirectory'
+
+		try File.delete(entry) otherwise panic("McpHarness: could not remove the staged file {entry.path}")
+	end 'eachEntry'
+
+	try Directory.delete(dir) otherwise panic("McpHarness: could not remove {dir.path}, where a case staged outside the checkout")
+end 'discardOutsideCheckoutDir'
+
+function requireNoCheckoutAbove(dir FilePath)
+	var level = dir
+
+	while true 'eachLevel'
+		let marker = level.join(CheckoutMarkerDirName)
+
+		if Directory.isDirectory(marker) 'checkoutFound'
+			panic("McpHarness: {marker.path} sits above {dir.path}, so a command run there would take that checkout's tree lock")
+		end 'checkoutFound'
+
+		let above = try level.parent() otherwise break
+
+		level = above
+	end 'eachLevel'
+end 'requireNoCheckoutAbove'
+
+function hostTempDir() returns FilePath
+	#if os(Windows)
+		let spelled = try Process.environmentVariable(HostTempVariable) otherwise panic("McpHarness: {HostTempVariable} is not set, and it names the only area outside this checkout a case can stage in")
+	#else
+		let spelled = try Process.environmentVariable(HostTempVariable) otherwise PosixLastResortTempDir
+	#endif
+
+	return try FilePath.from(spelled) otherwise panic("McpHarness: the host temp area '{spelled}' is not a spellable path")
+end 'hostTempDir'
+
 // Drive one request against a server started in the given mode and return its response.
 export function callTool(name String, argumentsJson String = "\{\}", devMode bool = false) returns JsonDoc
 	var reqs = StringArray.create()

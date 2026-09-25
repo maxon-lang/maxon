@@ -1,0 +1,26 @@
+let StagingCaseDirName = "run-spec-test-filter-union"
+let SpecFileExtension = ".md"
+let UnnamedSpec = "gamma"
+
+function failingSpecSource(specName String) returns String
+	return "---\nfeature: mcp-filter-union-{specName}\n---\n# {specName}\n\n## Tests\n\n<!-- test: {specName}.selected -->\n\n```maxon\nfunction main() returns ExitCode\n\tprint(\"selected\\n\")\n\treturn 0\nend 'main'\n```\n\n```stdout\nthis expectation is deliberately wrong\n```\n"
+end 'failingSpecSource'
+
+function stageSpec(dir FilePath, specName String)
+	let path = dir.join("{specName}{SpecFileExtension}")
+	try File.writeText(path, content: failingSpecSource(specName)) otherwise panic("could not stage {path.path}")
+end 'stageSpec'
+
+test 'run_spec_test runs the union of a filter array'
+	let dir = freshOutsideCheckoutDir(StagingCaseDirName)
+
+	for specName in ["alpha", "beta", UnnamedSpec] 'eachSpec'
+		stageSpec(dir, specName: specName)
+	end 'eachSpec'
+
+	let answer = callTool("run_spec_test", argumentsJson: "\{\"directory\":{Json.quote(dir.toString())},\"filter\":[\"alpha/\",\"beta/\"]\}", devMode: true)
+	discardOutsideCheckoutDir(dir)
+
+	Expect.isFalse(hasChildKey(answer, parent: answer.root, key: "error"), message: "`run_spec_test` refused a `filter` given as an array of strings: {Json.stringify(answer)}")
+	Expect.equal(payloadInt(answer, key: "total") as AssertedInt, expected: 2, message: "a `filter` array naming `alpha/` and `beta/` must run exactly their two cases and not `{UnnamedSpec}`'s. It answered: {toolCallText(answer)}")
+end 'run_spec_test runs the union of a filter array'

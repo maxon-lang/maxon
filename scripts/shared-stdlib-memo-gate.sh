@@ -239,12 +239,15 @@ else
 fi
 
 # ---------------------------------------------------------------------------------- CHECK 4
-"$MAXON" spec-test --filter="$FILTER" > "$WORK/suite.log" 2>&1
+SPEC_FILTER=()
+[ -n "$FILTER" ] && SPEC_FILTER+=("--filter=$FILTER")
+
+"$MAXON" spec-test ${SPEC_FILTER[@]+"${SPEC_FILTER[@]}"} > "$WORK/suite.log" 2>&1
 suite_rc=$?
 summary=$(grep -E '^[0-9]+ passed, [0-9]+ failed' "$WORK/suite.log" | tail -1)
 
 if [ "$suite_rc" -ne 0 ]; then
-	fail "CHECK 4: spec-test --filter=$FILTER exited $suite_rc (${summary:-no summary line})"
+	fail "CHECK 4: spec-test ${SPEC_FILTER[*]+${SPEC_FILTER[*]}} exited $suite_rc (${summary:-no summary line})"
 	grep -E '^FAIL' "$WORK/suite.log" | head -20 | sed 's/^/       /'
 elif [ -z "$summary" ]; then
 	fail "CHECK 4: spec-test printed no summary line"

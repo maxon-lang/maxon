@@ -585,23 +585,28 @@ Always pair `updateRequired` with a `filter` — unfiltered, it rewrites every g
 the `.maxproj` file, each `_` written `-` (`my-app` is `my_app`). A word naming no target is a SOURCE
 PATH to `maxon build`, so a triple has to travel as `--target=`.
 
-**A `spec-test` filter is ONE CASE-SENSITIVE substring** of the `<spec>/<test>` label (`maxon test`
-lowercases its own, and takes a comma-separated union). Neither is a list here —
-`--filter=static-methods,enums` selects NOTHING. Run one filter per file and read every one.
+**A `spec-test` pattern is a CASE-SENSITIVE substring** of the `<spec>/<test>` label, and `--filter=`
+is repeatable: the run takes the union, as N jobs across the pool. **Select a set spanning several spec
+files in ONE run** — one `--filter=<spec>/` per file (MCP: a `filter` array) — never one run per file,
+which pays the startup per file and runs each on one worker. A comma is part of a pattern
+(`--filter=static-methods,enums` selects nothing and is refused). A pattern that selects no case refuses
+the whole run, naming it, so a typo'd member cannot run nowhere while the rest reads green. (`maxon test`
+lowercases its patterns and also splits a value on commas.)
 
 The runner has no `--verbose` (it always prints a line per test), no `--no-batch` (its batching is
 `RunStrategy`, chosen by target and host) and no `--debug-info`; it does have `--network`.
 
 ### Common flags
 
-- `--filter=PATTERN`, `--update-required`, `--log=CATEGORY:LEVEL` (e.g. `--log=ir:debug`),
+- `--filter=PATTERN` (repeatable), `--update-required`, `--log=CATEGORY:LEVEL` (e.g. `--log=ir:debug`),
   `--workers=<n>`, `--target=ARCH-OS`, `--network`.
 - ⛔ **There is no `--mm-trace` on any command.** The driver refuses an unimplemented flag loudly
   (`Main.MaxonArgs.parse`, which cites this very spelling as the reason it must), so a leak is read off
   the RUN: the runtime's leak gate is **exit 101**, and a case pinning `exitcode 0` reddens on one.
 - **`--workers=1` is a DEBUGGING TOOL, not a gate.** It is the same pool with one worker in it, and
   the parent buffers results and reports in fixed order — **ordering cannot vary with pool size**.
-  The default pool is 12 and that is the only count these processes run the suite at.
+  The default pool is `defaultWorkerCount()`, this machine's CPU count, and that is the only count these
+  processes run the suite at.
 
 ### Targets
 

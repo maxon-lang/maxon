@@ -242,7 +242,7 @@ export function executeExecuteTool(reqDoc JsonDoc, idNode JsonNodeId, args Optio
 	argv.push("execute")
 	argv.push(target.file.path)
 
-	for a in getOptionalStringArrayArg(reqDoc, args: args, key: "arguments") 'each'
+	for a in getOptionalStringListArg(reqDoc, args: args, key: "arguments") 'each'
 		argv.push(a)
 	end 'each'
 
@@ -268,7 +268,7 @@ export function executeTestTool(reqDoc JsonDoc, idNode JsonNodeId, args Optional
 	let filterArg = getOptionalStringArg(reqDoc, args: args, key: "filter", defaultVal: "")
 
 	if not filterArg.isEmpty() 'hasFilter'
-		argv.push("--filter={filterArg}")
+		argv.push("{FilterFlagPrefix}{filterArg}")
 	end 'hasFilter'
 
 	runAndReport(reqDoc, idNode: idNode, ctx: tree.ctx, argv: argv, what: "tests", timeoutMs: LongRunTimeoutMs)
@@ -472,6 +472,47 @@ function hostOrTreeContext(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode,
 	return resolveTreeContext(reqDoc, idNode: idNode, args: args, exePath: exePath)
 end 'hostOrTreeContext'
 
+let SpecFilterArgument = "filter"
+
+function specFilterPatterns(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext, tool String) returns FilterPatternArray throws McpError
+	let patterns = getOptionalStringListArg(reqDoc, args: args, key: SpecFilterArgument)
+
+	for pattern in patterns 'eachPattern'
+		if pattern.isEmpty() 'emptyPattern'
+			sendToolError(reqDoc, idNode: idNode, message: "{tool}: `{SpecFilterArgument}` holds an empty pattern, which would select every case.", repoRoot: ctx.repoRootLabel)
+			throw McpError.notFound
+		end 'emptyPattern'
+	end 'eachPattern'
+
+	return patterns
+end 'specFilterPatterns'
+
+function specRunArgv(reqDoc JsonDoc, args OptionalNode, filterPatterns FilterPatternArray) returns StringArray
+	var argv = StringArray.create()
+
+	for pattern in filterPatterns 'eachPattern'
+		argv.push("{FilterFlagPrefix}{pattern}")
+	end 'eachPattern'
+
+	if getOptionalBoolArg(reqDoc, args: args, key: "network", defaultVal: false) 'hasNet'
+		argv.push("--network")
+	end 'hasNet'
+
+	let targetArg = getOptionalStringArg(reqDoc, args: args, key: "target", defaultVal: "")
+
+	if not targetArg.isEmpty() 'hasTgt'
+		argv.push("--target={targetArg}")
+	end 'hasTgt'
+
+	let workers = getOptionalIntArg(reqDoc, args: args, key: "workers", defaultVal: 0)
+
+	if workers > 0 'hasWorkers'
+		argv.push("--workers={workers}")
+	end 'hasWorkers'
+
+	return argv
+end 'specRunArgv'
+
 export function executeSpecTestTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath)
 	let tree = resolveTreeContext(reqDoc, idNode: idNode, args: args, exePath: exePath)
 
@@ -490,11 +531,8 @@ export function executeSpecTestTool(reqDoc JsonDoc, idNode JsonNodeId, args Opti
 		argv.push(dirArg)
 	end 'hasDir'
 
-	let filterArg = getOptionalStringArg(reqDoc, args: args, key: "filter", defaultVal: "")
-
-	if not filterArg.isEmpty() 'hasFilter'
-		argv.push("--filter={filterArg}")
-	end 'hasFilter'
+	let filterPatterns = try specFilterPatterns(reqDoc, idNode: idNode, args: args, ctx: ctx, tool: "run_spec_test") otherwise return
+	argv.append(specRunArgv(reqDoc, args: args, filterPatterns: filterPatterns))
 
 	if getOptionalBoolArg(reqDoc, args: args, key: "updateRequired", defaultVal: false) 'hasUr'
 		argv.push("--update-required")
@@ -505,22 +543,6 @@ export function executeSpecTestTool(reqDoc JsonDoc, idNode JsonNodeId, args Opti
 	if not logArg.isEmpty() 'hasLog'
 		argv.push("--log={logArg}")
 	end 'hasLog'
-
-	if getOptionalBoolArg(reqDoc, args: args, key: "network", defaultVal: false) 'hasNet'
-		argv.push("--network")
-	end 'hasNet'
-
-	let targetArg = getOptionalStringArg(reqDoc, args: args, key: "target", defaultVal: "")
-
-	if not targetArg.isEmpty() 'hasTgt'
-		argv.push("--target={targetArg}")
-	end 'hasTgt'
-
-	let workers = getOptionalIntArg(reqDoc, args: args, key: "workers", defaultVal: 0)
-
-	if workers > 0 'hasWorkers'
-		argv.push("--workers={workers}")
-	end 'hasWorkers'
 
 	let startTime = Clock.nowMs()
 	let res = try runCompiler(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: "spec-test", timeoutMs: LongRunTimeoutMs) otherwise return
@@ -640,22 +662,17 @@ export function executeSpecOutcomeTool(reqDoc JsonDoc, idNode JsonNodeId, args O
 
 	let ctx = tree.ctx
 
+	let filterPatterns = try specFilterPatterns(reqDoc, idNode: idNode, args: args, ctx: ctx, tool: "spec_test_outcome") otherwise return
+
+	if filterPatterns.isEmpty() 'noPattern'
+		sendToolError(reqDoc, idNode: idNode, message: "spec_test_outcome: `{SpecFilterArgument}` must name at least one pattern.", repoRoot: ctx.repoRootLabel)
+		return
+	end 'noPattern'
+
 	var argv = StringArray.create()
 	argv.push("spec-test")
 	argv.push("specs")
-
-	let filterArg = getOptionalStringArg(reqDoc, args: args, key: "filter", defaultVal: "")
-	argv.push("--filter={filterArg}")
-
-	if getOptionalBoolArg(reqDoc, args: args, key: "network", defaultVal: false) 'hasNet'
-		argv.push("--network")
-	end 'hasNet'
-
-	let targetArg = getOptionalStringArg(reqDoc, args: args, key: "target", defaultVal: "")
-
-	if not targetArg.isEmpty() 'hasTgt'
-		argv.push("--target={targetArg}")
-	end 'hasTgt'
+	argv.append(specRunArgv(reqDoc, args: args, filterPatterns: filterPatterns))
 
 	let startTime = Clock.nowMs()
 	let res = try runCompiler(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: "spec-test", timeoutMs: LongRunTimeoutMs) otherwise return

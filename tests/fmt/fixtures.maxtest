@@ -889,18 +889,12 @@ test 'a tree with no Maxon source reports nothing found and succeeds'
 	checkFixture("empty-directory")
 end 'a tree with no Maxon source reports nothing found and succeeds'
 
-// flag-refused-implemented-option — ⛔⛔ **THE DANGEROUS HALF OF THE FLAG REFUSAL, AND THE
-// ONE `flag-refused` CANNOT SEE.** That case passes `--check`, which NO command in this driver
-// implements, so it is refused by the catch-all unknown-flag arm and would stay refused even if `fmt`
-// had no rule of its own. This one passes `--emit-ir`, which `maxon` DOES implement — so an arm
-// that understands it sets `emitIr`, leaves `badOption` empty, and lets `fmt` run on a command line
-// whose flag was silently swallowed. For this command that means rewriting a directory in place.
-//
-// MEASURED before the fix: `maxon --emit-ir fmt` printed `formatted: <cwd>/U.maxon` and exited 0.
-// See `MaxonArgs.anyOption`, which records every `-`-leading argument ABOVE the arm chain so no arm can
-// swallow one first, and `fixtures.maxtest`'s `an option ahead of the command word is still refused`
-// for the ORDERING half — the two together are what close it.
-//
+// flag-refused-implemented-option — the half of the flag refusal `flag-refused` cannot see. That case
+// passes `--check`, which no command implements, so the catch-all unknown-flag arm refuses it even if
+// `fmt` had no rule of its own. This one passes `--emit-ir`, which `maxon` implements: its arm sets
+// `emitIr` and leaves `refusedOptions` empty, so only `MaxonArgs.anyOption` stops `fmt` rewriting a
+// directory in place on a command line whose flag was swallowed. `an option ahead of the command word
+// is still refused` covers the ordering half.
 test 'an option this driver implements is still refused rather than swallowed'
 	checkFixture("flag-refused-implemented-option")
 end 'an option this driver implements is still refused rather than swallowed'

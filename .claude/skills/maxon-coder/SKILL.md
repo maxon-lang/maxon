@@ -51,7 +51,7 @@ After each edit:
 |---|---|
 | a standalone program or example | `mcp__maxon__check`, then `mcp__maxon__execute` if it should run — `path:` the file for a one-file program, **the directory** for one spread over several files |
 | a `.maxtest` or its project | `mcp__maxon__test` (`path:` the project directory, `filter:` the test) |
-| a spec case | `mcp__maxon__spec_test_outcome` (`filter:` ONE case-sensitive substring of `<spec>/<test>`) |
+| a spec case | `mcp__maxon__spec_test_outcome` (`filter:` a case-sensitive substring of `<spec>/<test>`, or an array of them selecting their union in one run) |
 | `maxon-bin/`, `stdlib/` or `runtime/` | build the slot — `./maxon-bin/.maxon/maxon run build`, or `mcp__maxon__build` with `path: "maxon-bin"` — then the spec filter that owns the behaviour |
 
 ⚠ **Traps in the instruments:**

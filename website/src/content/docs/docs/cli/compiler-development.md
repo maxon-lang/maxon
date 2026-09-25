@@ -27,7 +27,7 @@ case is compiled inside this process, so the compiler under test is the executab
 
 | Option | Description |
 |--------|-------------|
-| `--filter=<pattern>` | Run only tests whose `<spec>/<test>` label contains `<pattern>`. One case-sensitive substring, not a list: a spec name selects that spec, a test name selects that test, and `spec/test` selects exactly one. |
+| `--filter=<pattern>` | Run only tests whose `<spec>/<test>` label contains `<pattern>`, a case-sensitive substring: a spec name selects that spec, a test name selects that test, and `spec/test` selects exactly one. Repeatable: the run takes every test any pattern selects, in one pool of workers. A comma is part of the pattern. |
 | `--workers=<n>` | Run on `<n>` persistent worker processes (default: this machine's count, shown by `maxon help spec-test`). `1` is the same pool with one worker, not a serial mode, and output is identical for every count. |
 | `--target=<cpu>-<os>` | Cross-compile each selected test for that target and run it under the vendored runtime. |
 | `--network` | Also run the cases that open a socket to a real external host. A default run names every case it left out. |
@@ -40,10 +40,16 @@ case; only `--update-required` rewrites one.
 It refuses to start, with exit **2** and nothing run, when the compiler binary is older than the sources
 it was built from, or when another command holds the checkout's [tree lock](/docs/cli/project-structure/#the-tree-lock).
 
+A run in which any `--filter` pattern selects no test on this host exits 1 before any test runs, naming
+each such pattern: `error: no tests selected matching --filter=a, --filter=b`. A pattern whose only
+matches this host leaves out, such as live-network cases, counts as selecting nothing, and the lines
+for the left-out cases say why. An empty `--filter=` is refused as an invalid option value.
+
 ```bash
 maxon spec-test
 maxon spec-test --filter=arrays
 maxon spec-test --filter=arrays/a-pushed-element-survives-the-push
+maxon spec-test --filter=arrays/ --filter=tuples/   # two specs, one run
 maxon spec-test --target=wasm32-wasi
 maxon spec-test --filter=strings --update-required
 ```
@@ -94,7 +100,7 @@ maxon verify-recheck <file|dir>
 
 ```bash
 ./maxon-bin/.maxon/maxon run build                    # rebuild the compiler with itself
-./maxon-bin/.maxon/maxon spec-test --filter=arrays    # the specs you touched
+./maxon-bin/.maxon/maxon spec-test --filter=arrays/ --filter=tuples/   # the specs you touched, one run
 ./maxon-bin/.maxon/maxon spec-test > temp/spec.log 2>&1   # the whole suite, read from the file
 ./maxon-bin/.maxon/maxon scale-test                   # after a change to a compiler pass
 ```

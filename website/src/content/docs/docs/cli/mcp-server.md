@@ -58,9 +58,10 @@ implements `initialize` (protocol version `2024-11-05`, server name `maxon`), `t
 | Standard | `maxon mcp-server` | 8: `build`, `execute`, `test`, `fmt`, `check`, `dump_ir`, `lookup_error_code`, `info` |
 | Developer | `maxon mcp-server --dev` | 11: the standard tools plus `run_spec_test`, `run_scale_test`, `spec_test_outcome` |
 
-**An argument a tool does not declare is refused** with `invalidParams`, never ignored, so the arguments
+**An argument a tool does not declare is refused** with `invalidParams`, so the arguments
 listed below are exactly the ones that exist. A developer-mode argument sent to a standard-mode server is
-refused the same way, as is an argument of the wrong JSON type.
+refused the same way, as is an argument of the wrong JSON type and an array argument holding anything
+but strings.
 
 Tools that run a compiler command answer with a JSON object holding `success`, the `command` that ran,
 `exitCode`, `stdout` and `stderr`; `check` and `dump_ir` compile inside the server and answer as described
@@ -200,7 +201,7 @@ Runs `maxon spec-test` and returns `passed`, `failed`, `total`, `summaryParsed`,
 
 | Argument | Type | Description |
 |----------|------|-------------|
-| `filter` | string | `--filter=`: one case-sensitive substring of the `<spec>/<test>` label, not a list |
+| `filter` | string or array of strings | One `--filter=` per pattern, each a case-sensitive substring of the `<spec>/<test>` label. The run takes every case any pattern selects; a pattern that selects nothing refuses the run, and an empty pattern is a tool error. A comma is part of a pattern. |
 | `directory` | string | Spec directory (default `specs`) |
 | `updateRequired` | boolean | `--update-required`: rewrite the committed IR goldens. Always pair it with `filter`; unfiltered, it rewrites every golden. |
 | `log` | string | `--log=` value, such as `ir:debug` |
@@ -230,9 +231,10 @@ Runs spec tests for a filter and returns a `tests` array of `{spec, test, status
 
 | Argument | Type | Description |
 |----------|------|-------------|
-| `filter` | string, required | One case-sensitive substring, typically a label like `arithmetic/addition` |
+| `filter` | string or array of strings, required | One `--filter=` per pattern, each a case-sensitive substring, typically a label like `arithmetic/addition`. At least one pattern, none of them empty. |
 | `target` | string | `--target=` value |
 | `network` | boolean | Also run the cases that reach a real external host |
+| `workers` | integer | `--workers=`: the worker process count. A debugging aid; the default is what the suite normally runs at. |
 | `repoRoot` | string | The checkout to run in |
 
 ## Rebuilding the compiler under a running server

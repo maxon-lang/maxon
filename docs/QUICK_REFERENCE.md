@@ -1162,7 +1162,7 @@ Full flags and a worked example: `docs/CLI_REFERENCE.md`.
 ### Test Options (spec-test)
 | Option | Description |
 |--------|-------------|
-| `--filter=PATTERN` | Run the cases whose `<spec>/<test>` label contains PATTERN — ONE case-SENSITIVE substring, never a list |
+| `--filter=PATTERN` | Run the cases whose `<spec>/<test>` label contains PATTERN, a case-sensitive substring. Repeatable: the run takes every case any pattern selects, and a pattern that selects nothing refuses the run |
 | `--update-required` | Rewrite the committed IR goldens. Pair it with `--filter`; unfiltered it rewrites the whole suite |
 | `--workers=N` | Set the number of parallel test workers |
 | `--target=ARCH-OS` | Compile the cases for another target |

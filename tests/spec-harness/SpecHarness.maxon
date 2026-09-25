@@ -69,7 +69,7 @@ module function requireMarkerShapeRan(label String, caller String = __file__) th
 	try Expect.isTrue(said.contains(ranVerdict), message: "the fixture did NOT run '{label}': the compiler no longer reads this marker shape the way the reference does, and the case is simply GONE. Expected '{ranVerdict}', and it said:\n{said}")
 end 'requireMarkerShapeRan'
 
-module function runSpecTest(staged FilePath, includeNetwork bool) returns CollectedOutput
+module function runSpecTest(staged FilePath, includeNetwork bool, extraArguments StringArray = StringArray.create()) returns CollectedOutput
 	let binary = testedCompilerPath()
 
 	if not File.exists(binary) 'noBinary'
@@ -83,6 +83,10 @@ module function runSpecTest(staged FilePath, includeNetwork bool) returns Collec
 	if includeNetwork 'wantsLiveNetwork'
 		arguments.push(NetworkFlag)
 	end 'wantsLiveNetwork'
+
+	for extra in extraArguments 'eachExtra'
+		arguments.push(extra)
+	end 'eachExtra'
 
 	var config = Configuration.create(Executable.path(binary))
 	config.arguments = arguments

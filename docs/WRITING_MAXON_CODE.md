@@ -1233,6 +1233,7 @@ The default target is the host. `--target=<cpu>-<os>` cross-compiles: `x64-windo
 ```bash
 ./maxon-bin/.maxon/maxon.exe spec-test                            # all tests
 ./maxon-bin/.maxon/maxon.exe spec-test --filter=arithmetic        # filter
+./maxon-bin/.maxon/maxon.exe spec-test --filter=arithmetic/ --filter=tuples/   # several specs, one run
 ./maxon-bin/.maxon/maxon.exe spec-test --update-required          # regenerate goldens (pair with --filter)
 ./maxon-bin/.maxon/maxon.exe spec-test --target=x64-linux         # cross-compile
 ```

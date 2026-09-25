@@ -10,6 +10,13 @@
 // indistinguishable from a leak-free run. Refusing by ARRIVAL — anything not declared — also covers
 // the argument nobody thought to write a rejection for.
 
+module let StringJsonType = "string"
+module let ArrayJsonType = "array"
+module let ObjectJsonType = "object"
+let BooleanJsonType = "boolean"
+let IntegerJsonType = "integer"
+let NumberJsonType = "number"
+
 export type McpProperty
 	export var name as String
 	export var jsonType as String
@@ -60,20 +67,24 @@ end 'McpToolSpec'
 export typealias McpToolSpecArray = Array with McpToolSpec
 
 function str(name String, description String, required bool = false, devOnly bool = false) returns McpProperty
-	return McpProperty.create(name, jsonType: "string", description: description, required: required, devOnly: devOnly)
+	return McpProperty.create(name, jsonType: StringJsonType, description: description, required: required, devOnly: devOnly)
 end 'str'
 
 function flag(name String, description String, devOnly bool = false) returns McpProperty
-	return McpProperty.create(name, jsonType: "boolean", description: description, devOnly: devOnly)
+	return McpProperty.create(name, jsonType: BooleanJsonType, description: description, devOnly: devOnly)
 end 'flag'
 
 function whole(name String, description String, devOnly bool = false) returns McpProperty
-	return McpProperty.create(name, jsonType: "integer", description: description, devOnly: devOnly)
+	return McpProperty.create(name, jsonType: IntegerJsonType, description: description, devOnly: devOnly)
 end 'whole'
 
 function list(name String, description String) returns McpProperty
-	return McpProperty.create(name, jsonType: "array", description: description)
+	return McpProperty.create(name, jsonType: ArrayJsonType, description: description)
 end 'list'
+
+function stringOrList(name String, description String, required bool = false, devOnly bool = false) returns McpProperty
+	return McpProperty.create(name, jsonType: StringJsonType, description: description, required: required, devOnly: devOnly, altType: ArrayJsonType)
+end 'stringOrList'
 
 // `repoRoot` reads the same on every tool that takes it, and a caller who learns it once should not have to
 // read seven spellings of it. Only the sentence about what an ABSENT one means differs, because the two
@@ -124,7 +135,7 @@ export function mcpToolRoster() returns McpToolSpecArray
 	tools.push(McpToolSpec.create("check", description: "Check a Maxon program for errors without writing anything, answering the diagnostics `maxon build` would print.", properties: checkProps))
 
 	var lookupProps = McpPropertyArray.create()
-	lookupProps.push(McpProperty.create("code", jsonType: "string", description: "Error code to look up: 'E3014', '3014', 3014, or the registry case name 'semanticUnneededCast'", required: true, altType: "integer"))
+	lookupProps.push(McpProperty.create("code", jsonType: StringJsonType, description: "Error code to look up: 'E3014', '3014', 3014, or the registry case name 'semanticUnneededCast'", required: true, altType: IntegerJsonType))
 	tools.push(McpToolSpec.create("lookup_error_code", description: "Look up a Maxon compiler error code: its canonical registry name, compilation stage, and documentation.", properties: lookupProps))
 
 	var irProps = McpPropertyArray.create()
@@ -134,7 +145,7 @@ export function mcpToolRoster() returns McpToolSpecArray
 	tools.push(McpToolSpec.create("info", description: "Get Maxon compiler version, commit, executable path, and host target.", properties: McpPropertyArray.create()))
 
 	var specProps = McpPropertyArray.create()
-	specProps.push(str("filter", description: "Passed to --filter=<pattern>: ONE CASE-SENSITIVE substring of the `<spec>/<test>` label. Not a list — a comma selects nothing.", devOnly: true))
+	specProps.push(stringOrList("filter", description: "A pattern, or a list of patterns, each passed as its own --filter=<pattern>: a CASE-SENSITIVE substring of the `<spec>/<test>` label. The run takes every case any pattern selects, and a pattern that selects nothing refuses the run. A comma is part of a pattern.", devOnly: true))
 	specProps.push(str("directory", description: "Spec directory to run (default: 'specs').", devOnly: true))
 	specProps.push(flag("updateRequired", description: "Pass --update-required to rewrite the committed IR goldens under specs/fragments. ALWAYS pair with `filter`: unfiltered it rewrites every golden in the suite.", devOnly: true))
 	specProps.push(str("log", description: "Passed to --log=<value> (e.g. 'ir:debug').", devOnly: true))
@@ -154,9 +165,10 @@ export function mcpToolRoster() returns McpToolSpecArray
 	tools.push(McpToolSpec.create("run_scale_test", description: "Run the scaling INSTRUMENT: compile a doubling ladder and report per-phase memory and CPU. It has no verdict — the RATIO between rungs is the reading.", properties: scaleProps, devOnly: true))
 
 	var outcomeProps = McpPropertyArray.create()
-	outcomeProps.push(str("filter", description: "Passed to --filter=<pattern>. ONE CASE-SENSITIVE substring, typically a label like 'arithmetic/addition'.", required: true, devOnly: true))
+	outcomeProps.push(stringOrList("filter", description: "A pattern, or a list of at least one, each passed as its own --filter=<pattern>: a CASE-SENSITIVE substring, typically a label like 'arithmetic/addition'. A pattern that selects nothing refuses the run.", required: true, devOnly: true))
 	outcomeProps.push(str("target", description: "Cross-compile target passed to --target=<value>.", devOnly: true))
 	outcomeProps.push(flag("network", description: "Pass --network to ALSO run live network fragments.", devOnly: true))
+	outcomeProps.push(whole("workers", description: "Number of worker subprocesses (--workers=<n>). A debugging tool; the suite's own count is the default.", devOnly: true))
 	outcomeProps.push(repoRootProperty(RepoRootDefaultsToOwnCheckout))
 	tools.push(McpToolSpec.create("spec_test_outcome", description: "Run spec-tests with a filter, returning structured per-test PASS/FAIL entries plus a failure summary.", properties: outcomeProps, devOnly: true))
 
@@ -184,6 +196,7 @@ export union ArgumentFault
 	devOnly(key String, tool String)
 	missing(key String, tool String)
 	wrongType(key String, tool String, expected String)
+	wrongElementType(key String, tool String)
 end 'ArgumentFault'
 
 export function argumentFaultReason(fault ArgumentFault) returns String
@@ -192,28 +205,29 @@ export function argumentFaultReason(fault ArgumentFault) returns String
 		devOnly(key, tool) gives "`{key}` on `{tool}` is a compiler-contributor argument and this server was started without --dev."
 		missing(key, tool) gives "`{tool}` requires the `{key}` argument."
 		wrongType(key, tool, expected) gives "`{key}` on `{tool}` must be of type {expected}."
+		wrongElementType(key, tool) gives "`{key}` on `{tool}` must be a list of strings."
 	end 'f'
 end 'argumentFaultReason'
 
 // Declared above `McpProperty.accepts`, which is its only caller.
 function propertyTypeAccepts(jsonType String, kind JsonKind) returns bool
-	if jsonType.equals("string") 'str'
+	if jsonType.equals(StringJsonType) 'str'
 		return kind == JsonKind.jsonString
 	end 'str'
 
-	if jsonType.equals("boolean") 'bool'
+	if jsonType.equals(BooleanJsonType) 'bool'
 		return kind == JsonKind.jsonBool
 	end 'bool'
 
-	if jsonType.equals("integer") or jsonType.equals("number") 'num'
+	if jsonType.equals(IntegerJsonType) or jsonType.equals(NumberJsonType) 'num'
 		return kind == JsonKind.jsonNumber
 	end 'num'
 
-	if jsonType.equals("array") 'arr'
+	if jsonType.equals(ArrayJsonType) 'arr'
 		return kind == JsonKind.jsonArray
 	end 'arr'
 
-	if jsonType.equals("object") 'obj'
+	if jsonType.equals(ObjectJsonType) 'obj'
 		return kind == JsonKind.jsonObject
 	end 'obj'
 
@@ -229,6 +243,16 @@ function findProperty(spec McpToolSpec, key String) returns McpProperty throws M
 
 	throw McpError.notFound
 end 'findProperty'
+
+function holdsOnlyStrings(doc JsonDoc, list JsonNode) returns bool
+	for childId in list.children 'eachElement'
+		if doc.get(childId).kind != JsonKind.jsonString 'notAString'
+			return false
+		end 'notAString'
+	end 'eachElement'
+
+	return true
+end 'holdsOnlyStrings'
 
 // Check every key the caller SENT against the roster, then every key the roster REQUIRES against what
 // arrived. Walking the arrivals is what catches the argument nobody anticipated.
@@ -248,9 +272,15 @@ export function validateToolArguments(doc JsonDoc, args OptionalNode, spec McpTo
 
 			let valueId = try node.children.get(iter.index()) otherwise panic("validateToolArguments: keys and children disagree in length")
 
-			if not prop.accepts(doc.get(valueId).kind) 'wrongShape'
+			let value = doc.get(valueId)
+
+			if not prop.accepts(value.kind) 'wrongShape'
 				throw ArgumentFault.wrongType(key, tool: spec.name, expected: prop.acceptedTypes())
 			end 'wrongShape'
+
+			if value.kind == JsonKind.jsonArray and not holdsOnlyStrings(doc, list: value) 'wrongElements'
+				throw ArgumentFault.wrongElementType(key, tool: spec.name)
+			end 'wrongElements'
 		end 'eachArrival'
 	end 'checkArrivals'
 

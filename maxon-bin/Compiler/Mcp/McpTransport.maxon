@@ -152,9 +152,9 @@ end 'objectHasKey'
 // Argument readers
 // =============================================================================
 //
-// Every read defaults on a miss. That is safe ONLY because the roster has already refused any key the
-// tool does not declare and any value of the wrong shape — see `validateToolArguments`. Without that
-// gate, defaulting here is how an argument the caller explicitly set gets silently ignored.
+// A missing key reads as the default. That is safe only because the roster has already refused any key
+// the tool does not declare and any value of the wrong shape (`validateToolArguments`); without that
+// gate, a default here silently ignores an argument the caller set.
 
 export function argumentsGiven(args OptionalNode) returns bool
 	return match args 'a'
@@ -192,7 +192,7 @@ export function getOptionalBoolArg(doc JsonDoc, args OptionalNode, key String, d
 	end 'a'
 end 'getOptionalBoolArg'
 
-export function getOptionalStringArrayArg(doc JsonDoc, args OptionalNode, key String) returns StringArray
+export function getOptionalStringListArg(doc JsonDoc, args OptionalNode, key String) returns StringArray
 	var result = StringArray.create()
 
 	if not argumentsGiven(args) 'noArgs'
@@ -206,19 +206,29 @@ export function getOptionalStringArrayArg(doc JsonDoc, args OptionalNode, key St
 		some(id) then childId = id
 	end 'cr'
 
-	let count = try doc.arrayLength(childId) otherwise return result
+	let value = doc.get(childId)
 
-	for i in 0 upto count 'each'
-		let elemId = try doc.arrayAt(childId, index: i) otherwise continue
+	if value.kind == JsonKind.jsonString 'oneString'
+		result.push(value.stringValue)
+		return result
+	end 'oneString'
+
+	if value.kind != JsonKind.jsonArray 'notAList'
+		panic("getOptionalStringListArg: `{key}` is neither a string nor a list, which `validateToolArguments` refuses before any tool reads it")
+	end 'notAList'
+
+	for elemId in value.children 'each'
 		let elemNode = doc.get(elemId)
 
-		if elemNode.kind == JsonKind.jsonString 'isStr'
-			result.push(elemNode.stringValue)
-		end 'isStr'
+		if elemNode.kind != JsonKind.jsonString 'notAString'
+			panic("getOptionalStringListArg: `{key}` holds a non-string element, which `validateToolArguments` refuses before any tool reads it")
+		end 'notAString'
+
+		result.push(elemNode.stringValue)
 	end 'each'
 
 	return result
-end 'getOptionalStringArrayArg'
+end 'getOptionalStringListArg'
 
 // =============================================================================
 // Responses

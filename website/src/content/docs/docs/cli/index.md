@@ -44,6 +44,11 @@ and `verify-warm-rebuild`. `maxon` with no arguments does not list them; `maxon 
 Only the **first** command word on a line is the command. A later one is an ordinary positional
 argument, so `maxon fmt fmt` formats the directory `fmt/`.
 
+An option the driver does not recognize stops the command before it runs, with
+`error: unknown option: <arg>` and the command list. A recognized option given a value it cannot take,
+such as `--workers=0` or an empty `--filter=`, stops it with `error: invalid option value: <arg>`. The
+first such option on the line is the one reported, and the exit code is 1 (2 for `maxon test`).
+
 ## `maxon execute`
 
 Compiles a program, or reuses a cached build of it, and runs it.
@@ -450,7 +455,7 @@ normally with `maxon build`.
 
 | Option | Description |
 |--------|-------------|
-| `--filter=P` | Run only tests whose name or file path contains `P` (case-insensitive). Comma-separated patterns are a union. |
+| `--filter=P` | Run only tests whose name or file path contains `P` (case-insensitive). Repeatable, and one value may hold comma-separated patterns; the run takes every test any pattern selects. A pattern that selects no test ends the run with `no test matched 'P'` and exit 1, and a value naming no pattern (`--filter=,`) is refused with exit 2. |
 | `--list` | Print the tests that would run, and compile nothing. A project whose sources do not all tokenize is still refused, so the list is never quietly short a file. |
 | `--json` | Emit the report as JSON instead of text. |
 | `--isolate` | Run every test in its own process, instead of one process per test file. |
@@ -547,6 +552,7 @@ maxon test                        # every test under the working directory
 maxon test src/parser             # one project's tests
 maxon test --filter=json          # only tests whose name or file mentions "json"
 maxon test --filter=parser,lexer  # two patterns, as a union
+maxon test --filter=parser --filter=lexer  # the same union, one flag per pattern
 maxon test --list                 # what would run, without compiling
 maxon test --json --no-timing     # machine-readable and reproducible
 maxon test --bail=3 --timeout=20000

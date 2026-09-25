@@ -41,6 +41,11 @@ and `verify-warm-rebuild`. `maxon` with no arguments does not list them; `maxon 
 Only the **first** command word on a line is the command. A later one is an ordinary positional
 argument, so `maxon fmt fmt` formats the directory `fmt/`.
 
+An option the driver does not recognize stops the command before it runs, with
+`error: unknown option: <arg>` and the command list. A recognized option given a value it cannot take,
+such as `--workers=0` or an empty `--filter=`, stops it with `error: invalid option value: <arg>`. The
+first such option on the line is the one reported, and the exit code is 1 (2 for `maxon test`).
+
 ### `maxon execute`
 
 Compiles a program, or reuses a cached build of it, and runs it.
@@ -447,7 +452,7 @@ normally with `maxon build`.
 
 | Option | Description |
 |--------|-------------|
-| `--filter=P` | Run only tests whose name or file path contains `P` (case-insensitive). Comma-separated patterns are a union. |
+| `--filter=P` | Run only tests whose name or file path contains `P` (case-insensitive). Repeatable, and one value may hold comma-separated patterns; the run takes every test any pattern selects. A pattern that selects no test ends the run with `no test matched 'P'` and exit 1, and a value naming no pattern (`--filter=,`) is refused with exit 2. |
 | `--list` | Print the tests that would run, and compile nothing. A project whose sources do not all tokenize is still refused, so the list is never quietly short a file. |
 | `--json` | Emit the report as JSON instead of text. |
 | `--isolate` | Run every test in its own process, instead of one process per test file. |
@@ -544,6 +549,7 @@ maxon test                        # every test under the working directory
 maxon test src/parser             # one project's tests
 maxon test --filter=json          # only tests whose name or file mentions "json"
 maxon test --filter=parser,lexer  # two patterns, as a union
+maxon test --filter=parser --filter=lexer  # the same union, one flag per pattern
 maxon test --list                 # what would run, without compiling
 maxon test --json --no-timing     # machine-readable and reproducible
 maxon test --bail=3 --timeout=20000
@@ -1811,9 +1817,10 @@ implements `initialize` (protocol version `2024-11-05`, server name `maxon`), `t
 | Standard | `maxon mcp-server` | 8: `build`, `execute`, `test`, `fmt`, `check`, `dump_ir`, `lookup_error_code`, `info` |
 | Developer | `maxon mcp-server --dev` | 11: the standard tools plus `run_spec_test`, `run_scale_test`, `spec_test_outcome` |
 
-**An argument a tool does not declare is refused** with `invalidParams`, never ignored, so the arguments
+**An argument a tool does not declare is refused** with `invalidParams`, so the arguments
 listed below are exactly the ones that exist. A developer-mode argument sent to a standard-mode server is
-refused the same way, as is an argument of the wrong JSON type.
+refused the same way, as is an argument of the wrong JSON type and an array argument holding anything
+but strings.
 
 Tools that run a compiler command answer with a JSON object holding `success`, the `command` that ran,
 `exitCode`, `stdout` and `stderr`; `check` and `dump_ir` compile inside the server and answer as described
@@ -1953,7 +1960,7 @@ Runs `maxon spec-test` and returns `passed`, `failed`, `total`, `summaryParsed`,
 
 | Argument | Type | Description |
 |----------|------|-------------|
-| `filter` | string | `--filter=`: one case-sensitive substring of the `<spec>/<test>` label, not a list |
+| `filter` | string or array of strings | One `--filter=` per pattern, each a case-sensitive substring of the `<spec>/<test>` label. The run takes every case any pattern selects; a pattern that selects nothing refuses the run, and an empty pattern is a tool error. A comma is part of a pattern. |
 | `directory` | string | Spec directory (default `specs`) |
 | `updateRequired` | boolean | `--update-required`: rewrite the committed IR goldens. Always pair it with `filter`; unfiltered, it rewrites every golden. |
 | `log` | string | `--log=` value, such as `ir:debug` |
@@ -1983,9 +1990,10 @@ Runs spec tests for a filter and returns a `tests` array of `{spec, test, status
 
 | Argument | Type | Description |
 |----------|------|-------------|
-| `filter` | string, required | One case-sensitive substring, typically a label like `arithmetic/addition` |
+| `filter` | string or array of strings, required | One `--filter=` per pattern, each a case-sensitive substring, typically a label like `arithmetic/addition`. At least one pattern, none of them empty. |
 | `target` | string | `--target=` value |
 | `network` | boolean | Also run the cases that reach a real external host |
+| `workers` | integer | `--workers=`: the worker process count. A debugging aid; the default is what the suite normally runs at. |
 | `repoRoot` | string | The checkout to run in |
 
 ### Rebuilding the compiler under a running server
@@ -2025,7 +2033,7 @@ case is compiled inside this process, so the compiler under test is the executab
 
 | Option | Description |
 |--------|-------------|
-| `--filter=<pattern>` | Run only tests whose `<spec>/<test>` label contains `<pattern>`. One case-sensitive substring, not a list: a spec name selects that spec, a test name selects that test, and `spec/test` selects exactly one. |
+| `--filter=<pattern>` | Run only tests whose `<spec>/<test>` label contains `<pattern>`, a case-sensitive substring: a spec name selects that spec, a test name selects that test, and `spec/test` selects exactly one. Repeatable: the run takes every test any pattern selects, in one pool of workers. A comma is part of the pattern. |
 | `--workers=<n>` | Run on `<n>` persistent worker processes (default: this machine's count, shown by `maxon help spec-test`). `1` is the same pool with one worker, not a serial mode, and output is identical for every count. |
 | `--target=<cpu>-<os>` | Cross-compile each selected test for that target and run it under the vendored runtime. |
 | `--network` | Also run the cases that open a socket to a real external host. A default run names every case it left out. |
@@ -2038,10 +2046,16 @@ case; only `--update-required` rewrites one.
 It refuses to start, with exit **2** and nothing run, when the compiler binary is older than the sources
 it was built from, or when another command holds the checkout's [tree lock](#the-tree-lock).
 
+A run in which any `--filter` pattern selects no test on this host exits 1 before any test runs, naming
+each such pattern: `error: no tests selected matching --filter=a, --filter=b`. A pattern whose only
+matches this host leaves out, such as live-network cases, counts as selecting nothing, and the lines
+for the left-out cases say why. An empty `--filter=` is refused as an invalid option value.
+
 ```bash
 maxon spec-test
 maxon spec-test --filter=arrays
 maxon spec-test --filter=arrays/a-pushed-element-survives-the-push
+maxon spec-test --filter=arrays/ --filter=tuples/   # two specs, one run
 maxon spec-test --target=wasm32-wasi
 maxon spec-test --filter=strings --update-required
 ```
@@ -2092,7 +2106,7 @@ maxon verify-recheck <file|dir>
 
 ```bash
 ./maxon-bin/.maxon/maxon run build                    # rebuild the compiler with itself
-./maxon-bin/.maxon/maxon spec-test --filter=arrays    # the specs you touched
+./maxon-bin/.maxon/maxon spec-test --filter=arrays/ --filter=tuples/   # the specs you touched, one run
 ./maxon-bin/.maxon/maxon spec-test > temp/spec.log 2>&1   # the whole suite, read from the file
 ./maxon-bin/.maxon/maxon scale-test                   # after a change to a compiler pass
 ```

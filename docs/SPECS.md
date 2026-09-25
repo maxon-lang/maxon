@@ -505,6 +505,9 @@ error E3061: <fragment>:3:11: Duplicate typealias 'Score'
 # Run only tests matching a pattern; a case with no golden mints one, a drifted golden is reported
 ./maxon-bin/.maxon/maxon.exe spec-test --filter=arithmetic
 
+# Run several specs in one run: every case any pattern selects
+./maxon-bin/.maxon/maxon.exe spec-test --filter=arithmetic/ --filter=tuples/
+
 # Rewrite the committed goldens of the matching cases
 ./maxon-bin/.maxon/maxon.exe spec-test --update-required --filter=arithmetic
 ```

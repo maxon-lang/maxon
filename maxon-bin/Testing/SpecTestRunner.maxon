@@ -1063,35 +1063,22 @@ type TestRun
 	end 'notCompiled'
 end 'TestRun'
 
-// Run the active tests of ONE spec — `<specDir>/<specName>.md` — compiling each in THIS process and
-// returning one result per test that `filter` selects, in DECLARATION order (a `draft`
-// spec yields none). Throws only on a spec-file IO failure; a per-test compile or run
-// failure is captured as a FAIL result, never thrown, so one bad test can't abort the run.
+// A per-test compile or run failure is captured as a FAIL result, so one bad test cannot abort the run.
+// A compiler panic takes the worker down instead, and the pool contains it: `SpecWorkerPool` reads the
+// last `WORKER_STEP:` breadcrumb, fails every test of the job naming that step, and respawns.
 //
-// ⚠ **A compiler PANIC is the one failure this cannot capture, and that is the pool's to contain.**
-// It takes the whole worker process down; `SpecWorkerPool` reads the last `WORKER_STEP:` breadcrumb,
-// FAILs every test of the job naming the step that was in the worker's hands, and respawns.
+// One spec is the unit of work the pool dispatches. Only the parent walks the spec directory, because
+// the listing order is also the report order.
 //
-// One spec is the unit of work the pool dispatches (see SpecWorkerPool): a worker gets a
-// spec NAME on stdin and calls exactly this. Nothing above this function walks a directory
-// — the pool does that once, in the parent, because the listing ORDER is also the report
-// order and only one process may own it.
+// Three passes: compile (and decide every verdict that needs no run), execute every run the spec needs
+// together through this lane's runner (`executeRuns`), then finish each verdict against its golden. The
+// middle pass is what lets the x64-linux lane make one `wsl` entry per spec instead of one per test
+// (`runWslBatch`).
 //
-// ⭐⭐ **IT IS THREE PASSES OVER ONE SPEC, AND THE MIDDLE ONE IS WHY.** Every test is COMPILED (and, if
-// its verdict never needed the program to run, decided) in the first; every test that DOES need its
-// program run has that execution performed in the second, all of them together, by whatever this lane's
-// runner does best (`executeRuns`); every verdict is finished, compared against its golden and cleaned
-// up in the third. On the host lane the middle pass is still one spawn per test and the shape is a
-// bookkeeping change only; on the x64-linux lane it is ONE `wsl` entry for the whole spec instead of
-// one per test, which is where a measured ~37 s of the suite's wall time was going (see
-// `runWslBatch`).
-//
-// ⚠ **THE THREE ARRAYS ARE ALIGNED WITH `tests`, INDEX FOR INDEX, AND THAT IS THE WHOLE BOOKKEEPING.**
-// `prepared` and `observations` each hold exactly one entry per selected test in declaration order —
-// including a `notRequired` observation for a test that never ran — so the third pass needs no counter,
-// no sorting and no name lookup, and a length that disagrees is a panic rather than a silently
-// misattributed result.
-export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, filter String, updateRequired bool, effectiveTarget Target, includeNetwork bool) returns SpecRun throws CompileError
+// `prepared` and `observations` hold exactly one entry per selected test in declaration order, a
+// `notRequired` observation included, so the third pass pairs them by index; a length that disagrees
+// panics rather than misattributing a result.
+export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, filterPatterns FilterPatternArray, updateRequired bool, effectiveTarget Target, includeNetwork bool) returns SpecRun throws CompileError
 	var results = SpecTestResultArray.create()
 	var cpu = SuiteCpuTally.zero()
 
@@ -1101,7 +1088,7 @@ export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, fil
 	// The worker takes only the SELECTED half: the census of what was left out is the PARENT's to
 	// report, and it is built from the parent's own walk over every spec (`buildPlans`). A worker
 	// printing it would print one spec's worth of it, once per spec, onto a stream that is a wire.
-	let tests = testsThatRun(selectedTests(specFile, specName: specName, filter: filter, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, assumeNativeHost: false).selected, runs: runs)
+	let tests = testsThatRun(selectedTests(specFile, specName: specName, filterPatterns: filterPatterns, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, assumeNativeHost: false).selected, runs: runs)
 
 	if tests.count() == 0 'selectsNothing'
 		// A `draft` spec, or one every test of which the filter rejected. The pool never dispatches
@@ -1227,8 +1214,10 @@ export type SpecSelection
 	// separately, exactly as the other trailers are.
 	export let excluded as ExcludedCaseArray
 
-	export static function create(selected SpecTestArray, excluded ExcludedCaseArray) returns SpecSelection
-		return Self{selected: selected, excluded: excluded}
+	export let filterTally as FilterPatternTally
+
+	static function create(selected SpecTestArray, excluded ExcludedCaseArray, filterTally FilterPatternTally) returns SpecSelection
+		return Self{selected: selected, excluded: excluded, filterTally: filterTally}
 	end 'create'
 end 'SpecSelection'
 
@@ -1248,12 +1237,13 @@ end 'SpecSelection'
 // applied identically on both sides of the pool. `--network` joined that list for the identical reason:
 // the parent forwards it to every worker (`spawnNoWait`), and a worker that did not read it back would
 // run live-network cases the parent never counted.
-export function selectedTests(specFile SpecFile, specName String, filter String, effectiveTarget Target, includeNetwork bool, assumeNativeHost bool) returns SpecSelection
+export function selectedTests(specFile SpecFile, specName String, filterPatterns FilterPatternArray, effectiveTarget Target, includeNetwork bool, assumeNativeHost bool) returns SpecSelection
 	var selected = SpecTestArray.create()
 	var excluded = ExcludedCaseArray.create()
+	var filterTally = FilterPatternTally.create(filterPatterns, spellings: filterPatterns)
 
 	if specFile.status == DraftStatus 'draftSpec'
-		return SpecSelection.create(selected, excluded: excluded)
+		return SpecSelection.create(selected, excluded: excluded, filterTally: filterTally)
 	end 'draftSpec'
 
 	// Resolved ONCE, not per test: the effective target is fixed for the whole run, and both halves of
@@ -1273,9 +1263,13 @@ export function selectedTests(specFile SpecFile, specName String, filter String,
 	// because of an instrument — counting it as such would make `--filter=arrays` report every live http
 	// case as excluded and would give every reader a number that means nothing.
 	for test in specFile.tests 'eachTest'
-		if not selectableThisRun(test, specName: specName, filter: filter, effectiveTarget: effectiveTarget, effectiveTargetKey: effectiveTargetKey) 'notInThisRun'
+		if not selectableThisRun(test, effectiveTarget: effectiveTarget, effectiveTargetKey: effectiveTargetKey) 'notInThisRun'
 			continue
 		end 'notInThisRun'
+
+		if not chosenByFilter(filterTally, specName: specName, testName: test.name) 'notChosen'
+			continue
+		end 'notChosen'
 
 		if not targetCanCaptureTrace(test, effectiveTarget: effectiveTarget, assumeNativeHost: assumeNativeHost) 'noInstrument'
 			excluded.push(ExcludedCase.create(specName, testName: test.name, reason: ExclusionReason.traceInstrument))
@@ -1284,12 +1278,16 @@ export function selectedTests(specFile SpecFile, specName String, filter String,
 
 		if networkModeAllows(test, includeNetwork: includeNetwork) 'isSelected'
 			selected.push(test)
+
+			// Credited only here: a pattern whose every match this host excludes selects nothing, and
+			// counting it as matched would let a run of a set pass without running that member.
+			filterTally.credit()
 		end 'isSelected' else 'liveNetwork'
 			excluded.push(ExcludedCase.create(specName, testName: test.name, reason: ExclusionReason.liveNetwork))
 		end 'liveNetwork'
 	end 'eachTest'
 
-	return SpecSelection.create(selected, excluded: excluded)
+	return SpecSelection.create(selected, excluded: excluded, filterTally: filterTally)
 end 'selectedTests'
 
 // The selected tests one JOB of a spec runs. A spec's `alone` cases are a job of their own, which the pool
@@ -1307,22 +1305,25 @@ export function testsThatRun(tests SpecTestArray, runs SpecRuns) returns SpecTes
 	return job
 end 'testsThatRun'
 
-// Everything this run asks of a case SILENTLY: the `--filter` match and the two per-target gates whose
-// answer nobody needs to be told, because nothing about the program was proved or disproved either way.
+// The per-target gates a run asks silently: a case either one passes over proves nothing about the
+// program. Both read the spec text — `markerAllowsTarget` an exclusion the author spelled,
+// `targetCanCheckSectionPins` one declared by a ```RequiredData / ```RequiredRdata block — so both are
+// answerable before a compiler is spawned.
 //
-// ⚠ **BOTH PER-TARGET QUESTIONS ASKED HERE ARE THE SPEC'S OWN, AND THE SECOND IS THE FIRST ONE
-// DERIVED.** `markerAllowsTarget` reads an exclusion the author SPELLED; `targetCanCheckSectionPins`
-// reads one the author DECLARED by writing a ```RequiredData / ```RequiredRdata block, because a
-// section pin names bytes only a native container format has. Both are properties of the spec TEXT,
-// which is why both are answerable before a compiler is spawned and why neither is a guess.
-//
-// ⛔ **`targetCanCaptureTrace` DOES NOT BELONG HERE.** It is not a property of
-// the spec text at all — it is the reach of an instrument that lives on THIS HOST — so a case it passes
-// over is one this lane could have judged and did not, which is coverage a reader has to be told about.
-// It is asked by the caller, where the answer is RECORDED (`ExclusionReason.traceInstrument`).
-function selectableThisRun(test SpecTest, specName String, filter String, effectiveTarget Target, effectiveTargetKey String) returns bool
-	return selectedByFilter(specName, testName: test.name, filter: filter) and markerAllowsTarget(test, effectiveTargetKey: effectiveTargetKey) and targetCanCheckSectionPins(test, effectiveTarget: effectiveTarget)
+// `targetCanCaptureTrace` is asked by the caller instead: it is the reach of an instrument on this host,
+// so a case it passes over is coverage the reader is told about (`ExclusionReason.traceInstrument`).
+function selectableThisRun(test SpecTest, effectiveTarget Target, effectiveTargetKey String) returns bool
+	return markerAllowsTarget(test, effectiveTargetKey: effectiveTargetKey) and targetCanCheckSectionPins(test, effectiveTarget: effectiveTarget)
 end 'selectableThisRun'
+
+function chosenByFilter(tally FilterPatternTally, specName String, testName String) returns bool
+	if not tally.filters() 'wholeSuite'
+		return true
+	end 'wholeSuite'
+
+	let label = testLabel(specName, testName: testName)
+	return tally.admits(function(pattern) gives label.contains(pattern))
+end 'chosenByFilter'
 
 // ⭐⭐ **THE ONE GATE THAT IS ABOUT THE RUN AND NOT ABOUT THE TREE.** Every other question `selectedTests`
 // asks is answered from the spec text and the target — the same answer on every invocation on this
@@ -1396,24 +1397,17 @@ function targetCanCaptureTrace(test SpecTest, effectiveTarget Target, assumeNati
 	return assumeNativeHost or not needsExternalRunner(effectiveTarget)
 end 'targetCanCaptureTrace'
 
-// The MARKER's own gate — what the SPEC AUTHOR SPELLED. A gated-out test is not run, not failed and
-// not reported, exactly as a draft or filtered-out test is, which is why this lives beside
-// `selectedByFilter` under the one door.
+// The gate the spec author spelled. A gated-out test is not run, failed or reported, exactly as a draft
+// or filtered-out test is.
 //
-// UNIFORM rule for EVERY target (native and cross alike): a test runs on ALL targets unless it
-// declares an `<!-- unsupported-targets: … -->` EXCLUSION, in which case it runs on every target the
-// exclusion does not name. A marker names a lane for a TECHNICAL reason — an ISA-specific
-// register-allocation test (its register pool), a fault-handler-dependent test, a runtime chunk whose
-// body only one backend emits — NEVER a per-target opt-in. So an unmarked test runs on x64-windows,
-// arm64-macos AND wasm32-wasi; there is no marking to "enable" a target, and a lane that lands
-// tomorrow inherits every unmarked case rather than being excluded from all of them at once.
+// A test runs on every target unless an `<!-- unsupported-targets: … -->` marker names it. A marker
+// names a lane for a technical reason — an ISA-specific register pool, a fault handler, a runtime chunk
+// only one backend emits — never as a per-target opt-in, so a new lane inherits every unmarked case.
 //
-// ⛔ **A SECTION PIN IS NOT ONE OF THOSE REASONS.** A `RequiredData` case asserts bytes only a native
-// container format has, and the lanes that have one are `LinkedSection.targetHasLinkedSections` — so
-// the exclusion is DERIVED (`targetCanCheckSectionPins`) and writing it as a marker would be the same
-// fact twice. Hand-written, it was also incomplete: `enum-narrow-storage.md`'s six cases carried no
-// marker at all and panicked in `linkedSectionName` under `--target=wasm32-wasi`, killing the worker
-// and aborting the whole lane.
+// A section pin is not one of those reasons. The lanes that can check one are
+// `LinkedSection.targetHasLinkedSections`, so that exclusion is derived (`targetCanCheckSectionPins`),
+// and a marker would state the same fact twice and can omit a case, which panics the worker on a lane
+// without linked sections.
 function markerAllowsTarget(test SpecTest, effectiveTargetKey String) returns bool
 	// An explicit walk rather than an `Array.contains`: the element comparison String equality needs
 	// is exactly what a bare `contains` would have to be told, and an exclusion list is one to four
@@ -1968,23 +1962,80 @@ export function specRunWorkingDir() returns FilePath
 	return Directory.currentPath().join(runSub)
 end 'specRunWorkingDir'
 
-// Does `--filter=<pattern>` select this test? The pattern is matched as a
-// SUBSTRING of `testLabel` — the same string a reader sees in a PASS/FAIL line and
-// in a dead worker's breadcrumb, and it is that FUNCTION rather than a second copy
-// of the spelling, which is the only thing keeping the three in step. So one rule
-// covers every way you would want to narrow a run: a bare spec name takes that whole
-// spec, a bare test name takes that test wherever it lives, and `spec/test` takes
-// exactly one. An empty pattern (no `--filter` given) selects everything.
-//
-// Private: `selectedTests` above is the only door in, so neither half of the pool can apply this
-// rule without also applying the `draft` rule that sits beside it.
-function selectedByFilter(specName String, testName String, filter String) returns bool
-	if filter.isEmpty() 'wholeSuite'
-		return true
-	end 'wholeSuite'
+module typealias PatternMatch = function(String) returns bool
 
-	return testLabel(specName, testName: testName).contains(filter)
-end 'selectedByFilter'
+typealias FilterPatternIndexArray = Array with ElementIndex
+
+module type FilterPatternTally
+	let keys as FilterPatternArray
+	let spellings as FilterPatternArray
+	var matched as BoolArray
+	var hits as FilterPatternIndexArray
+
+	module static function create(keys FilterPatternArray, spellings FilterPatternArray) returns FilterPatternTally
+		if keys.count() != spellings.count() 'unpaired'
+			panic("FilterPatternTally.create: {keys.count()} match key(s) for {spellings.count()} spelling(s), and each pattern has one of each")
+		end 'unpaired'
+
+		var matched = BoolArray.create()
+
+		for _ in keys 'eachPattern'
+			matched.push(false)
+		end 'eachPattern'
+
+		return Self{keys: keys, spellings: spellings, matched: matched, hits: FilterPatternIndexArray.create()}
+	end 'create'
+
+	module function filters() returns bool
+		return not self.keys.isEmpty()
+	end 'filters'
+
+	module function admits(selects PatternMatch) returns bool
+		self.hits.clear()
+
+		for (iter, key) in self.keys.withIterator() 'eachPattern'
+			if selects(key) 'selects'
+				self.hits.push(iter.index())
+			end 'selects'
+		end 'eachPattern'
+
+		return self.keys.isEmpty() or not self.hits.isEmpty()
+	end 'admits'
+
+	module function credit()
+		for index in self.hits 'eachHit'
+			self.mark(index)
+		end 'eachHit'
+	end 'credit'
+
+	module function absorb(other FilterPatternTally)
+		if other.matched.count() != self.matched.count() 'differentPatterns'
+			panic("FilterPatternTally.absorb: a tally of {other.matched.count()} pattern(s) cannot be merged into one of {self.matched.count()}")
+		end 'differentPatterns'
+
+		for (iter, wasMatched) in other.matched.withIterator() 'eachPattern'
+			if wasMatched 'matchedThere'
+				self.mark(iter.index())
+			end 'matchedThere'
+		end 'eachPattern'
+	end 'absorb'
+
+	function mark(index ElementIndex)
+		try self.matched.set(index, value: true) otherwise panic("FilterPatternTally.mark: pattern {index} has no slot, and one is minted per pattern")
+	end 'mark'
+
+	module function unmatched() returns FilterPatternArray
+		var unmatched = FilterPatternArray.create()
+
+		for (iter, spelling) in self.spellings.withIterator() 'eachPattern'
+			if not (try self.matched.get(iter.index()) otherwise panic("FilterPatternTally.unmatched: pattern {iter.index()} has no slot, and one is minted per pattern")) 'selectedNothing'
+				unmatched.push(spelling)
+			end 'selectedNothing'
+		end 'eachPattern'
+
+		return unmatched
+	end 'unmatched'
+end 'FilterPatternTally'
 
 // The committed-fragment root for `target`: `<specDir>/fragments/<target>`
 // (e.g. `specs/fragments/x64-windows`). Each spec's `.test` files hang off a
@@ -2262,19 +2313,10 @@ function compileStagedTest(test SpecTest, specName String, staged StagedTest, ex
 	end 'verdict'
 end 'compileStagedTest'
 
-// ⭐⭐ **THE `<spec>/<test>` LABEL — THE ONE STRING THREE UNRELATED-LOOKING SITES HAVE TO AGREE ABOUT.**
-// `selectedByFilter` matches `--filter` against it, `Main.verdictLine` prints it on every PASS/FAIL
-// line, and a breadcrumb names its step with it — and the three are ONE fact because of what a reader
-// does with them: a dead worker's report says `while compiling 'spec/test'`, and the next thing that
-// happens is somebody retyping that into `--filter`.
-//
-// ⚠ **NOTHING BUT THIS FUNCTION MAKES THEM AGREE, WHICH IS WHY THE FILTER MATCHER CALLS IT AND DOES
-// NOT SPELL IT AGAIN.** A separator changed in one copy alone is not a compile error anywhere; it is a
-// breadcrumb a reader can no longer look up, which reads as "that case does not exist".
-//
-// EXPORTED because the third site is `Main.reportResults`' printed verdict line, in another file: the
-// label a reader retypes into `--filter` must be the label the verdict printed, and this is the one
-// function that spells it.
+// `chosenByFilter` matches `--filter` against this label, `Main.verdictLine` prints it on every
+// PASS/FAIL line, and a dead worker's breadcrumb names its step with it. A reader retypes a printed
+// label into `--filter`, so all three call this one function: a separator spelled again at one site
+// still compiles, and the label it prints then matches no case.
 export function testLabel(specName String, testName String) returns String
 	return "{specName}/{testName}"
 end 'testLabel'
@@ -3908,9 +3950,9 @@ end 'buildLinuxVmRunCommand'
 // ⚠ ONE machine serves BOTH Linux targets. `OrbMachineName` is aarch64 with Rosetta enabled, so an
 // x64-linux compiler runs there too; a second machine would be a second answer to "where does Linux
 // run here".
-export function runSuiteInGuest(harnessExe FilePath, specDir FilePath, filter String, updateRequired bool, workerCount WorkerCount, workersOverridden bool, effectiveTarget Target, includeNetwork bool) returns ExitCode
+export function runSuiteInGuest(harnessExe FilePath, specDir FilePath, filterPatterns FilterPatternArray, updateRequired bool, workerCount WorkerCount, workersOverridden bool, effectiveTarget Target, includeNetwork bool) returns ExitCode
 	return match guestCompilerFor(harnessExe, effectiveTarget: effectiveTarget) 'compiler'
-		ready(guestExe) gives spawnGuestSuite(guestExe, specDir: specDir, filter: filter, updateRequired: updateRequired, workerCount: workerCount, workersOverridden: workersOverridden, includeNetwork: includeNetwork)
+		ready(guestExe) gives spawnGuestSuite(guestExe, specDir: specDir, filterPatterns: filterPatterns, updateRequired: updateRequired, workerCount: workerCount, workersOverridden: workersOverridden, includeNetwork: includeNetwork)
 		unavailable(reason) gives reportGuestUnavailable(reason, effectiveTarget: effectiveTarget)
 	end 'compiler'
 end 'runSuiteInGuest'
@@ -4021,13 +4063,13 @@ let GuestCompilerBuildDeadlineMs = 30 * 60 * MillisPerSecond
 // terminal and a failure would arrive only after everything else. `timeoutMs: 0` for the same reason
 // the deadline above is generous — the pool inside the guest carries every bound this run needs, and a
 // second one out here could only pre-empt a report that was about to arrive.
-function spawnGuestSuite(guestExe FilePath, specDir FilePath, filter String, updateRequired bool, workerCount WorkerCount, workersOverridden bool, includeNetwork bool) returns ExitCode
+function spawnGuestSuite(guestExe FilePath, specDir FilePath, filterPatterns FilterPatternArray, updateRequired bool, workerCount WorkerCount, workersOverridden bool, includeNetwork bool) returns ExitCode
 	let launch = buildLinuxVmRunCommand(guestExe)
 
 	var argv = StringArray.create()
 	argv.append(launch.argv)
 	argv.push(SpecTestCommandName)
-	argv.append(specSelectionArgv(specDir, filter: filter, updateRequired: updateRequired, includeNetwork: includeNetwork))
+	argv.append(specSelectionArgv(specDir, filterPatterns: filterPatterns, updateRequired: updateRequired, includeNetwork: includeNetwork))
 
 	// ⛔ **`--target` IS NEVER FORWARDED.** `detectHostTarget()` is answered at COMPILE time, so the
 	// binary crossing into the guest already reports the guest's own target as its host and takes the

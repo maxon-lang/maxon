@@ -1,0 +1,87 @@
+let FilterFlagPrefix = "--filter="
+let UnmatchedPattern = "nosuch"
+
+function filterFlag(pattern String) returns String
+	return "{FilterFlagPrefix}{pattern}"
+end 'filterFlag'
+
+function specPrefix(specName String) returns String
+	return testLabel(specName, testName: "")
+end 'specPrefix'
+
+function selectedLabel(specName String) returns String
+	return testLabel(specName, testName: "{specName}.selected")
+end 'selectedLabel'
+
+function saidByFilteredRun(patterns StringArray) returns CollectedOutput
+	let staged = stagedGateFixture()
+	var arguments = StringArray.create()
+
+	for pattern in patterns 'eachPattern'
+		arguments.push(filterFlag(pattern))
+	end 'eachPattern'
+
+	let run = runSpecTest(staged, includeNetwork: false, extraArguments: arguments)
+	discardStaging(staged)
+	return run
+end 'saidByFilteredRun'
+
+function ranVerdictIn(said String, specName String) returns bool
+	let label = selectedLabel(specName)
+	return said.contains(failVerdictPrefix(label)) or said.contains(passVerdictLine(label))
+end 'ranVerdictIn'
+
+test 'repeated --filter runs the union'
+	let said = everythingSaid(saidByFilteredRun([specPrefix("alpha"), specPrefix("beta")]))
+	var broken = StringArray.create()
+
+	for specName in ["alpha", "beta"] 'eachNamed'
+		if not said.contains(failVerdictPrefix(selectedLabel(specName))) 'namedButNotRun'
+			broken.push("'{selectedLabel(specName)}' is named by one of two `{FilterFlagPrefix}` flags and did NOT run. Expected '{failVerdictPrefix(selectedLabel(specName))}', and it said:\n{said}\n")
+		end 'namedButNotRun'
+	end 'eachNamed'
+
+	if ranVerdictIn(said, specName: "gamma") 'unnamedButRun'
+		broken.push("'{selectedLabel("gamma")}' is named by NO `{FilterFlagPrefix}` flag and it ran. It said:\n{said}\n")
+	end 'unnamedButRun'
+
+	requireNothingBroken(broken, headline: "a repeated `{FilterFlagPrefix}` selects the union of its patterns")
+end 'repeated --filter runs the union'
+
+test 'a --filter that selects nothing refuses the run and is named'
+	let run = saidByFilteredRun([UnmatchedPattern, specPrefix("alpha")])
+	let said = everythingSaid(run)
+	var broken = StringArray.create()
+
+	if run.exitCode() == SuccessExitCode 'accepted'
+		broken.push("the run exited {SuccessExitCode} although `{filterFlag(UnmatchedPattern)}` selects no case. It said:\n{said}\n")
+	end 'accepted'
+
+	if not said.contains(filterFlag(UnmatchedPattern)) 'patternUnnamed'
+		broken.push("the output does not name `{filterFlag(UnmatchedPattern)}`, the pattern that selected nothing. It said:\n{said}\n")
+	end 'patternUnnamed'
+
+	if ranVerdictIn(said, specName: "alpha") 'ranBeforeRefusing'
+		broken.push("'{selectedLabel("alpha")}' RAN: a run with a pattern that selects nothing must be refused before any case runs. It said:\n{said}\n")
+	end 'ranBeforeRefusing'
+
+	requireNothingBroken(broken, headline: "a `{FilterFlagPrefix}` pattern that selects nothing refuses the run")
+end 'a --filter that selects nothing refuses the run and is named'
+
+test 'an empty --filter= refuses the run'
+	let run = saidByFilteredRun([""])
+	let said = everythingSaid(run)
+	var broken = StringArray.create()
+
+	if run.exitCode() == SuccessExitCode 'accepted'
+		broken.push("the run exited {SuccessExitCode} although `{FilterFlagPrefix}` names no pattern. It said:\n{said}\n")
+	end 'accepted'
+
+	for specName in ["alpha", "beta", "gamma"] 'eachSpec'
+		if ranVerdictIn(said, specName: specName) 'ranUnderAnEmptyFilter'
+			broken.push("'{selectedLabel(specName)}' RAN under an empty `{FilterFlagPrefix}`, which must refuse the run rather than select every case. It said:\n{said}\n")
+		end 'ranUnderAnEmptyFilter'
+	end 'eachSpec'
+
+	requireNothingBroken(broken, headline: "an empty `{FilterFlagPrefix}` refuses the run")
+end 'an empty --filter= refuses the run'

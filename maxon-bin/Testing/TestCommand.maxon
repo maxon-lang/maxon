@@ -52,7 +52,7 @@ let TestBinaryStem = "maxon-test"
 
 // The usage line a refusal prints under itself.
 function testUsageLine() returns String
-	return "maxon {TestCommandName} [<directory>] [{FilterFlagPrefix}PATTERN] [--list] [--json] [options]"
+	return "maxon {TestCommandName} [<directory>] [{FilterFlagPrefix}PATTERN]... [--list] [--json] [options]"
 end 'testUsageLine'
 
 // ============================================================================================
@@ -74,6 +74,10 @@ export function runTest(args MaxonArgs) returns ExitCode
 
 	let target = try commandLineTarget(args.targetSpec) otherwise return 1
 
+	let patterns = try filterPatterns(args.filterPatterns) otherwise (e) 'emptyFilterValue'
+		return refuseTestRun(filterValueRefusalReason(e))
+	end 'emptyFilterValue'
+
 	_ = quietTheBuildChatter(args)
 
 	// ⚠ **THE SAME SPELLING REACHES DISCOVERY AND STAGING**, which is what `TestDispatcher
@@ -90,7 +94,8 @@ export function runTest(args MaxonArgs) returns ExitCode
 	end 'groupingRefused'
 
 	let color = reportColorEnabled(args.colorMode)
-	let selected = selectionFor(groups, total: tests.count() as ReportedTestCount, filter: args.filter)
+	let filtered = selectionFor(groups, total: tests.count() as ReportedTestCount, patterns: patterns)
+	let selected = filtered.selected
 
 	// BEFORE any source is synthesized: `--list` compiles nothing, and generating a dispatcher it would
 	// then throw away is the same claim made quietly.
@@ -102,8 +107,8 @@ export function runTest(args MaxonArgs) returns ExitCode
 		return reportNothingToRun("no `test` declarations found under {reportPathDisplay(projectDir)}", args: args, color: color)
 	end 'noTestsAtAll'
 
-	if selectedCount(selected) == 0 'filterMatchedNothing'
-		return reportNothingToRun("no test matched '{args.filter}'", args: args, color: color)
+	if filtered.unmatchedPatterns.count() > 0 'filterMatchedNothing'
+		return reportNothingToRun("no test matched {quotedPatterns(filtered.unmatchedPatterns)}", args: args, color: color)
 	end 'filterMatchedNothing'
 
 	return compileAndRunTests(args, projectDir: projectDir, target: target, groups: groups, selected: selected, color: color)
@@ -144,18 +149,35 @@ end 'refuseTestRun'
 // Separates the parts of a comma-separated filter, each of which is matched on its own.
 let FilterPatternSeparator = ","
 
-// ⭐⭐ **WHICH DISCOVERED TESTS THIS RUN SELECTED. NO FILTER KEEPS EVERYTHING.**
+union FilterValueError implements Error
+	namesNoPattern(value String)
+end 'FilterValueError'
+
+type FilteredSelection
+	export let selected as TestSelection
+	export let unmatchedPatterns as FilterPatternArray
+
+	static function create(selected TestSelection, unmatchedPatterns FilterPatternArray) returns FilteredSelection
+		return Self{selected: selected, unmatchedPatterns: unmatchedPatterns}
+	end 'create'
+end 'FilteredSelection'
+
+// No pattern keeps every discovered test. A pattern matches a test when it is a substring of the test's
+// name or of its file's displayed path, so `--filter=math` finds both a file called math and a test
+// about maths. Patterns union, whether from repeated flags or commas. Matching is case-insensitive
+// because these are prose names retyped off a report, and a refusal quotes the caller's own spelling.
 //
-// A pattern matches a test when it is a substring of the test's NAME or of its FILE's DISPLAYED path,
-// so `--filter=math` finds both a file called math and a test about maths. Comma-separated patterns
-// UNION, which is what makes `--filter=a,b` mean "run a and b" rather than "run nothing". Matching
-// is case-insensitive: these are prose names a human is retyping off a report.
-//
-// ⚠ **SELECTION IS A RUNTIME ARGUMENT AND NEVER A COMPILE-TIME ONE.** Every discovered test is compiled
-// in every time and `--select=` picks which of them run, which is what lets a filter change between runs
-// without changing the thing being tested.
-function selectionFor(groups TestFileGroupArray, total ReportedTestCount, filter String) returns TestSelection
-	let patterns = filterPatterns(filter)
+// Selection is a runtime argument, never a compile-time one: every discovered test is compiled in and
+// `--select=` picks which of them run, so a filter can change between runs without changing the thing
+// being tested.
+function selectionFor(groups TestFileGroupArray, total ReportedTestCount, patterns FilterPatternArray) returns FilteredSelection
+	var keys = FilterPatternArray.create()
+
+	for pattern in patterns 'eachPattern'
+		keys.push(pattern.toLower())
+	end 'eachPattern'
+
+	var tally = FilterPatternTally.create(keys, spellings: patterns)
 
 	// One slot per DISCOVERED test, indexed by run index — see `TestSelection`.
 	var selected = TestSelection.create()
@@ -169,46 +191,65 @@ function selectionFor(groups TestFileGroupArray, total ReportedTestCount, filter
 		let loweredPath = reportPathDisplay(group.file).toLower()
 
 		for member in group.tests 'eachTest'
-			if not patterns.isEmpty() and not matchesAnyPattern(patterns, loweredPath: loweredPath, name: member.test.displayName) 'filteredOut'
-				continue
-			end 'filteredOut'
+			if tally.filters() 'filtered'
+				let loweredName = member.test.displayName.toLower()
+
+				if not tally.admits(function(pattern) gives loweredName.contains(pattern) or loweredPath.contains(pattern)) 'filteredOut'
+					continue
+				end 'filteredOut'
+
+				tally.credit()
+			end 'filtered'
 
 			try selected.set(member.index, value: true) otherwise panic("selectionFor: run index {member.index} is outside the {total} slots minted for it — the slots are one per discovered test and the groups partition exactly those tests")
 		end 'eachTest'
 	end 'eachFile'
 
-	return selected
+	return FilteredSelection.create(selected, unmatchedPatterns: tally.unmatched())
 end 'selectionFor'
 
-// The patterns a `--filter` value names — split on the separator, each trimmed and lowered, empties
-// dropped. An empty filter therefore names NO pattern, which is how "keep everything" is spelled.
-function filterPatterns(filter String) returns StringArray
-	var patterns = StringArray.create()
+// A value naming no pattern (`--filter=,`) is refused: it would otherwise add nothing to the union,
+// and as the only value it would keep every test.
+function filterPatterns(filterValues FilterPatternArray) returns FilterPatternArray throws FilterValueError
+	var patterns = FilterPatternArray.create()
 
-	for part in filter.split(FilterPatternSeparator) 'eachPattern'
-		let trimmed = part.trim()
+	for value in filterValues 'eachValue'
+		var named = false
 
-		if trimmed.isEmpty() 'namesNothing'
-			continue
-		end 'namesNothing'
+		for part in value.split(FilterPatternSeparator) 'eachPattern'
+			let trimmed = part.trim()
 
-		patterns.push(trimmed.toLower())
-	end 'eachPattern'
+			if trimmed.isEmpty() 'namesNothing'
+				continue
+			end 'namesNothing'
+
+			patterns.push(trimmed)
+			named = true
+		end 'eachPattern'
+
+		if not named 'noPatternInValue'
+			throw FilterValueError.namesNoPattern(value)
+		end 'noPatternInValue'
+	end 'eachValue'
 
 	return patterns
 end 'filterPatterns'
 
-function matchesAnyPattern(patterns StringArray, loweredPath String, name String) returns bool
-	let loweredName = name.toLower()
+function filterValueRefusalReason(error FilterValueError) returns String
+	return match error 'reason'
+		namesNoPattern(value) gives "`{FilterFlagPrefix}{value}` names no pattern"
+	end 'reason'
+end 'filterValueRefusalReason'
+
+function quotedPatterns(patterns FilterPatternArray) returns String
+	var quoted = SourcePathSpellingArray.create()
 
 	for pattern in patterns 'eachPattern'
-		if loweredName.contains(pattern) or loweredPath.contains(pattern) 'matched'
-			return true
-		end 'matched'
+		quoted.push("'{pattern}'")
 	end 'eachPattern'
 
-	return false
-end 'matchesAnyPattern'
+	return commaJoined(quoted)
+end 'quotedPatterns'
 
 function selectedCount(selected TestSelection) returns ReportedTestCount
 	var chosen = 0 as ReportedTestCount

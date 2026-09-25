@@ -184,17 +184,15 @@ function caseNameSetOf(tests SpecTestArray) returns SpecCaseNameSet
 	return names
 end 'caseNameSetOf'
 
-// The cases `lane` can ever compare a golden for — asked of `selectedTests`, the harness's ONE selection
-// door, rather than of a second copy of its rules. The three arguments that are not the lane all say the
-// same thing: **this is a question about the TREE, and every gate that is about one RUN is neutralised.**
-// `filter` is empty because a filter is a property of one command line; `includeNetwork` is TRUE because a
-// `<!-- network: live -->` case IS compared under `--network`, so its golden is not dead; and
-// `assumeNativeHost` is TRUE because a trace case's golden is compared on a host whose own target this
-// lane is, even though the host asking right now may reach that lane only through an external runner.
+// The cases `lane` can ever compare a golden for, asked of `selectedTests`, the harness's one selection
+// door. This is a question about the tree, so every gate about one run is neutralised: no filter
+// pattern, because a filter is a property of one command line; `includeNetwork`, because a
+// `<!-- network: live -->` case is compared under `--network`; and `assumeNativeHost`, because a trace
+// case's golden is compared on a host whose own target this lane is, even when the host asking reaches
+// that lane only through an external runner.
 //
-// ⛔ **A GATE THAT IS ABOUT THE HOST AND IS NOT NEUTRALISED HERE MAKES THIS FUNCTION REPORT LIVE
-// REFERENCES AS ORPHANS — under a headline that says to DELETE them.** MEASURED: 22 `mm-trace`,
-// `debugstream-log-events` and `tuples` goldens on the three non-host lanes.
+// ⚠ A host gate not neutralised here reports live references as orphans, under a headline that says to
+// delete them.
 //
 // A lane whose name resolves to no target can select nothing: no run of any command line visits it.
 function pinnableOn(lane GoldenLane, specFile SpecFile, specName String) returns SpecCaseNameSet
@@ -207,7 +205,7 @@ end 'pinnableOn'
 // The half of the answer that needs a real target — split out only because a `match` arm is one
 // expression and this one is a loop.
 function selectableCaseNamesOn(laneTarget Target, specFile SpecFile, specName String) returns SpecCaseNameSet
-	let selection = selectedTests(specFile, specName: specName, filter: "", effectiveTarget: laneTarget, includeNetwork: true, assumeNativeHost: true)
+	let selection = selectedTests(specFile, specName: specName, filterPatterns: FilterPatternArray.create(), effectiveTarget: laneTarget, includeNetwork: true, assumeNativeHost: true)
 	return caseNameSetOf(selection.selected)
 end 'selectableCaseNamesOn'
 
