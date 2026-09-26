@@ -4547,7 +4547,7 @@ let BitsTypeName = b"bits"
 //
 // ⚠ It is DICTATED, not chosen: the target is an existing declaration in that module and both reference
 // compilers emit the identical name, so this is a spelling to MATCH rather than a mangling to design. That
-// is also why the `_` here is not the injective-join question ARCHITECTURE.md raises for
+// is also why the `_` here is not the injective-join rule docs/internals/names-and-values.md states for
 // `IrInterface.witnessTableLabel` — the left component is drawn from the closed, `_`-free vocabulary
 // `namesAPrimitiveType` states, so no two `(primitive, method)` pairs can spell one name.
 let PrimitiveStaticNameSeparator = "_"
@@ -51801,10 +51801,10 @@ export type Parser
 	// `emitEnumBox` sizes every box for the WIDEST case (`boxSizeBytes` over `maxPayloadArity`) and then
 	// EXPLICITLY STORES 0 into the slots a narrow case does not fill (its `zeroFill` loop, whose own header
 	// states the fill is MANDATORY); the union cloner preserves it by blitting the whole box. The slab's
-	// zeroing says the same thing today, but it is the WEAKER guarantee — it carries an explicit "a future
-	// free-list must re-zero" caveat (ARCHITECTURE.md → "Allocator: the zeroing contract"), which the store
-	// does not — so this rule cites the store. That is why `specs/match-enum-or-pattern.md` can pin `stay=0`,
-	// and `emitEnumBox` now carries the back-reference saying a diagnostic depends on it.
+	// zeroing contract (docs/internals/memory-allocator.md) also leaves those slots 0, but it is a property
+	// of the allocator, which this layout does not choose — so this rule cites the store. That is why
+	// `specs/match-enum-or-pattern.md` can pin `stay=0`, and `emitEnumBox` carries the back-reference
+	// saying a diagnostic depends on it.
 	//
 	// ⚠ **WHETHER THAT 0 IS A VALUE AT ALL IS A SEPARATE QUESTION**, asked of the binding's own type by
 	// `zeroInhabitsPayloadType` — see it for the two measured faults that come of asking a drop-ownership
@@ -84839,7 +84839,7 @@ export type Parser
 		// PARSED CALL — +85/+153/+289/+561/+1105/+2193 allocations across the six scale rungs, a
 		// linear constant factor on the hottest path in the parser, for a call that is not an
 		// intrinsic 99.99% of the time. A plain `equals` allocates nothing and `scale-test` returns
-		// to bit-for-bit parity with main. (The `flat union` rule in ARCHITECTURE.md is about NESTING
+		// to bit-for-bit parity with main. (The flat-union rule in docs/internals/names-and-values.md is about NESTING
 		// costing a box per level; this is the same accounting one level down.)
 
 		// ⭐ **THE `__Raw.*` FLOOR (see `RawIntrinsics`), AND IT IS GATED ON THE TIER AS WELL AS THE PREFIX.**
@@ -89929,8 +89929,8 @@ export type Parser
 	//     one of those had already asked for it.
 	//   • **`valueWitnessIds` IS THE MEMO'S OWN ARRAY.** `LowerMaxonToStd` re-points at
 	//     `IrFunction.valueWitnessIds` per function and the merged module is a SHARED memo, so a pairing
-	//     written down there would mutate what every later compile reads (ARCHITECTURE.md, "the memo is
-	//     shared, so nothing may be mutated in place").
+	//     written down there would mutate what every later compile reads (docs/internals/query-spine.md,
+	//     "The memo is shared").
 	//
 	// The witness id is therefore RESERVED by the parser and DEFINED by the Std tier — the one value in the
 	// Maxon module with no Maxon op behind it, which is exactly what "the witness rides out of band" means:

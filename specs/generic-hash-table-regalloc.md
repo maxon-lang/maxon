@@ -19,7 +19,7 @@ method that forwards them to another method of the same instance keeps them live
 in between — including a loop. They are then indistinguishable, to the pressure analysis, from the
 author's own values, and they push the loop's working set over the pool.
 
-That is exactly RULE 3's case (`ARCHITECTURE.md`, register-allocator section): *no
+That is exactly RULE 3's case (`docs/internals/register-allocation.md`): *no
 compiler-introduced value may ever appear in an `E5001` blocking set*, because an agent told to
 delete a value that is not in its source cannot converge. The design's answer for a dictionary
 parameter is stated there too — *"under a forced bracket it simply spills around the call and

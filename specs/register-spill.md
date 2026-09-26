@@ -34,7 +34,7 @@ after the loop at its next use, and **nothing added to the loop body**. So a loo
 carries fifteen unrelated values through it pays no per-iteration cost for them; they
 sit in memory across the loop and return to registers only where they are used.
 
-This rests on two invariants (design: `maxon-bin/ARCHITECTURE.md`, register allocator, Rules 1 + 2):
+This rests on two invariants (design: `docs/internals/register-allocation.md`, Rules 1 + 2):
 - **Rule 2** — a store or reload is placed only where, for every loop containing it,
   the value has no use or def in that loop. So spill code never lands in a loop body
   for a value that loop uses.

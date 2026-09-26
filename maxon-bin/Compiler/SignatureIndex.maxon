@@ -14091,7 +14091,7 @@ export type ProgramSignatures
 		// slots to a defaulted position — and the per-position presence bit rides because it is what decides
 		// whether a caller's short call is legal at all.
 		//
-		// ⚠ **THE DEFAULT'S EXPRESSION DELIBERATELY DOES NOT RIDE**, and that is ARCHITECTURE.md's "mix what
+		// ⚠ **THE DEFAULT'S EXPRESSION DELIBERATELY DOES NOT RIDE**, and that is docs/internals/query-spine.md's "mix what
 		// a reader COPIES" rule, not an omission. A reader copies NOTHING out of the expression: it emits
 		// `call __paramDefault#f#0`, byte-identical whether the default is `"World"` or `"Maxon"`, and the
 		// expression reaches only the DECLARING file's own helper body — which re-parses on that file's own
@@ -14932,12 +14932,12 @@ export type ProgramSignatures
 	// differing in exactly two things and in nothing else: the entries land in `interfaceAliases` rather than
 	// `genericAliases` (see that field for the ruling), and they do NOT ride the content hash.
 	//
-	// ⚠ **THEY DO NOT RIDE THE HASH BECAUSE NO PARSE COPIES THEM** — ARCHITECTURE's "MIX WHAT A READER
-	// COPIES" rule. The index's hash keys every parse memo, and a requirement's rendered parameter type is
-	// `Holder.ElementArray` whether this map holds the alias or not; the ONE consumer is `checkConformance`,
-	// which runs on the merged project on every compile and memoizes nothing. Mixing it would re-parse the
-	// whole program whenever an interface edited a private shorthand, which is the "sound, and useless"
-	// pessimal key the query spine's header names.
+	// ⚠ **THEY DO NOT RIDE THE HASH BECAUSE NO PARSE COPIES THEM** — docs/internals/query-spine.md's
+	// "MIX WHAT A READER COPIES" rule. The index's hash keys every parse memo, and a requirement's rendered
+	// parameter type is `Holder.ElementArray` whether this map holds the alias or not; the ONE consumer is
+	// `checkConformance`, which runs on the merged project on every compile and memoizes nothing. Mixing it
+	// would re-parse the whole program whenever an interface edited a private shorthand, which is the
+	// "sound, and useless" pessimal key the query spine's header names.
 	//
 	// It takes the reader's own interner rather than a `TypeIdRemap` because the FOLD, unlike `foldFile`,
 	// has no remap in hand: `foldInterfaceDeclarations` builds one reader per FILE and seats it at each site,
@@ -17873,9 +17873,9 @@ export type ProgramSignatures
 	// EVERY LIVE top-level global in the program, in ARENA (declaration) order, with the label and value
 	// its `.data` slot carries — the door the backend's data-section layout asks through.
 	//
-	// It is asked ONCE per compile (`Compiler.declaredGlobals`), never per file: it is O(globals),
+	// It is asked ONCE per compile (`Compiler.compileToCodeResult`), never per file: it is O(globals),
 	// and a whole-program query under a per-file one is asked once per FILE, which is how a linear
-	// walk becomes quadratic (see the ARCHITECTURE's warning on this exact query).
+	// walk becomes quadratic (docs/internals/query-spine.md, Whole-program queries under per-file ones).
 	//
 	// A var whose initializer FAILED contributes no slot: the build has already failed on its
 	// diagnostic, and there is no value to lay down.
@@ -18001,7 +18001,7 @@ export type ProgramSignatures
 	//
 	// Asked ONCE per compile (`Compiler.compileToCodeResult`), never per file — it is O(declarations), and a
 	// whole-program query under a per-file one is asked once per FILE, which is how a linear walk becomes
-	// quadratic (see the ARCHITECTURE's warning on this query).
+	// quadratic (docs/internals/query-spine.md, Whole-program queries under per-file ones).
 	//
 	// A var whose initializer FAILED contributes nothing: the build has already failed on its diagnostic.
 	export function managedGlobals(live LiveGlobalLabelSet) returns ManagedGlobalArray

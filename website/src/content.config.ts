@@ -2,9 +2,10 @@ import { defineCollection } from 'astro:content';
 // Astro 7 deprecates the `z` re-export from `astro:content`; `astro/zod` is the
 // supported path and stays pinned to the Zod version Astro itself validates with.
 import { z } from 'astro/zod';
-import { docsLoader, i18nLoader } from '@astrojs/starlight/loaders';
+import { i18nLoader } from '@astrojs/starlight/loaders';
 import { docsSchema, i18nSchema } from '@astrojs/starlight/schema';
 import { blogSchema } from 'starlight-blog/schema';
+import { repositoryDocsLoader } from './shared-docs';
 
 // Site-wide "early preview" announcement banner shown on every docs page.
 // Starlight's `banner` is per-page frontmatter, so we default it here for the
@@ -18,7 +19,7 @@ export const collections = {
   // Blog posts live under src/content/docs/blog/ and use the blog schema
   // (authors, date, tags, excerpt) layered onto the Starlight docs schema.
   docs: defineCollection({
-    loader: docsLoader(),
+    loader: repositoryDocsLoader(),
     schema: docsSchema({
       extend: (context) =>
         blogSchema(context).extend({

@@ -5,8 +5,8 @@
 # Usage: genblocks.sh <n> <blocks|funcs|straight> <outfile>
 #
 #   blocks    — ONE function with `n` sequential `if`s, so ~3n BASIC BLOCKS in a single function
-#               and a per-function structure of size n. This is the shape ARCHITECTURE.md's own
-#               headline is measured on (a 3,200-`if` function) and the one `ScaleCorpus`'s
+#               and a per-function structure of size n. This is the shape of the corpus's
+#               headline (a 3,200-`if` function) and the one `ScaleCorpus`'s
 #               `longFunction` / `deepBlocks` knobs generate.
 #   funcs     — `n` functions of FIXED size (one `if` each), so the same block count spread across
 #               n per-function structures. The CONTROL: a cost that is per-block reads the same on

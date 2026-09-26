@@ -1,5 +1,5 @@
 // RegisterPressureDiagnostic — the E5001 "this needs more registers than exist"
-// message (design: ARCHITECTURE.md's register-allocator section). The DECISION that a point is a
+// message (design: docs/internals/register-allocation.md, Rule 3). The DECISION that a point is a
 // genuine HOT overflow already happened in `SplitLiveRanges`: the cold-spill splitter
 // relieved every idle value and rematerialized every constant, and `chooseVictim` still
 // found NO value crossing the peak that can be moved — so what remains is the region's true
@@ -13,7 +13,7 @@
 // relieved by a FORCED store/reload bracket and never reaches here — `noVictimAtPeak` panics rather
 // than let it. So the pool this message reports is the full 14, never a reduced one: reporting "6
 // live, only 5 survive a call" as a deficit was the false-positive class this design exists to end
-// (ARCHITECTURE, "Known limits" #2).
+// (docs/internals/register-allocation.md, The contract).
 //
 // **The message is the remedy, and the consumer is an agent in a rewrite loop**, so it must
 // let the agent converge in ONE step (design Phase 7):
@@ -132,7 +132,7 @@ function buildRegisterPressureMessage(project Project, module TargetModule, func
 	// OP instead — `pool ∖ op.implicitDefs` — reports 5 whenever a
 	// full-pool overflow happens to land on a call, and the deficit computed from it asks the author
 	// to remove NINE MORE VALUES THAN THE PROGRAM NEEDS. Measuring an E5001 against a reduced pool is
-	// the documented false-positive class (ARCHITECTURE, "Known limits" #2); the witness is what makes
+	// the documented false-positive class (docs/internals/register-allocation.md, The contract); the witness makes
 	// it structurally unspellable.
 	// PER FILE: "the full pool" is the pool of the peak's OWN register file — 14 GPRs or 16 XMMs, never
 	// the 30 the two hold between them. A loop needing 17 GPRs is a full-pool overflow of the GPR file

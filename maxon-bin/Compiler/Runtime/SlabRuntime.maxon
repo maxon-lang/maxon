@@ -47,8 +47,9 @@
 //   * the FREE LIST — a RECYCLED slot. It holds the previous occupant's bytes plus the link written into
 //     its first word when it was freed, so it MUST be zeroed before the caller sees it.
 //   * the BUMP REGION `[bump_next, bump_end)` — slots that have NEVER been handed out. Their pages came
-//     straight from `__slab_arena_alloc_chunks`, i.e. fresh `VirtualAlloc`/`mmap` address space, which
-//     every target the compiler emits guarantees arrives ZEROED. They cost NOTHING to hand out.
+//     straight from `__slab_arena_alloc_chunks`, and every chunk it hands out reads ZERO — fresh address
+//     space, or a released run the arena zeroed (INV-4, `__slab_arena_free_chunks`). They cost NOTHING
+//     to hand out.
 //
 // ⛔⛔ **THIS IS WHY THERE IS NO `__slab_build_freelist`.** Threading an intrusive
 // free list through a fresh span writes a next-pointer into slot[0] of EVERY slot, which DIRTIES every one

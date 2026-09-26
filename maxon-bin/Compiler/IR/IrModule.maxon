@@ -242,8 +242,8 @@ export type IrModule uses Op
 	// Count ops that are still reachable from any block — i.e., the size
 	// of the `block.opRefs` union plus one per block that has a terminator
 	// op. This differs from `opCount` (which is just the underlying array
-	// size) because passes like mem2reg rebuild blocks by clearing
-	// `opRefs` and appending fresh ops to `module.ops`, leaving the
+	// size) because a pass that rebuilds a block clears its
+	// `opRefs` and appends fresh ops to `module.ops`, leaving the
 	// previous entries as orphans. The orphans never reach codegen but
 	// inflate `opCount` and make the per-pass IR-summary log line read
 	// like ops doubled when in fact the live set shrank.
@@ -370,8 +370,8 @@ export type IrModule uses Op
 
 	// Reclaim orphaned ops from `self.ops` in place.
 	//
-	// Every block-rebuilding pass (mem2reg, canonicalize, CSE, DCE, LICM,
-	// insertDrops, lowerToMachineForm, …) clears each block's
+	// Every block-rebuilding pass (CSE, LICM, lowerToMachineForm, …) clears
+	// each block's
 	// `opRefs` and re-appends fresh ops via `appendOp`, which only ever pushes
 	// onto `self.ops` and never removes the now-unreferenced predecessors. Those
 	// orphans accumulate across passes — during the backend phase they bloat

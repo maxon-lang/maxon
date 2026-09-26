@@ -30,9 +30,9 @@
 #
 # ⚠ EVERY UNIT LANDS IN ONE `main`, SO `regalloc` DOMINATES AND BENDS — 501.0 → 1,569.2 ms at units
 # 200 → 400 (x3.13), of which `regalloc:splitting` is 408.2 → 1,351.8 (x3.31). That is the KNOWN and
-# BUDGETED `SplitLiveRanges` term (`ARCHITECTURE.md:1336-1345`), triggered here by this ladder putting
-# everything in a single growing function. It is not a finding of this ladder: read the front-end phase
-# columns, which are the ones this generator exists to move.
+# BUDGETED `SplitLiveRanges` term (`docs/internals/register-allocation.md`, Scaling), triggered here by
+# this ladder putting everything in a single growing function. It is not a finding of this ladder: read
+# the front-end phase columns, which are the ones this generator exists to move.
 set -euo pipefail
 UNITS="$1"; OUT="$2"
 

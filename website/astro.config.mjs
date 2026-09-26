@@ -5,6 +5,8 @@ import starlightBlog from 'starlight-blog';
 import starlightLlmsTxt from 'starlight-llms-txt';
 import starlightLinksValidator from 'starlight-links-validator';
 import tailwindcss from '@tailwindcss/vite';
+import { satteri } from '@astrojs/markdown-satteri';
+import { SHARED_DOCS, sharedDocsLinks } from './src/shared-docs.ts';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -20,6 +22,9 @@ maxonGrammar.name = 'maxon';
 
 export default defineConfig({
   site: 'https://maxon.dev',
+  markdown: {
+    processor: satteri({ mdastPlugins: [sharedDocsLinks(new URL('./', import.meta.url))] }),
+  },
   integrations: [
     starlight({
       title: 'Maxon',
@@ -77,6 +82,9 @@ export default defineConfig({
         ThemeProvider: './src/components/starlight/ThemeProvider.astro',
       },
       customCss: ['./src/styles/theme.css'],
+      markdown: {
+        processedDirs: SHARED_DOCS.map((doc) => doc.dir),
+      },
       expressiveCode: {
         themes: ['github-dark', 'github-light'],
         shiki: {
@@ -114,6 +122,10 @@ export default defineConfig({
         {
           label: 'Specification',
           items: [{ autogenerate: { directory: 'docs/spec' } }],
+        },
+        {
+          label: 'Compiler Internals',
+          items: [{ autogenerate: { directory: 'docs/internals' } }],
         },
         {
           label: 'Project',

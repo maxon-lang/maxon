@@ -35,9 +35,8 @@ forbids the registers that would make a naive in-order emit wrong:
 register — nor should it**, since staying put is the case where the capture disappears entirely.
 So a parameter may legitimately sit in, say, `RDX`, and it is then ONLY the setup-direction
 forbid that stops a later `mov rdx, <some other arg>` from destroying it before its own argument
-move reads it. The two mechanisms have to interlock exactly. This is the class ARCHITECTURE.md
-records as having **shipped once as a silent miscompile** (the v1 bug
-`project_call_arg_parallel_copy_fix`).
+move reads it. The two mechanisms have to interlock exactly, and a gap between them is a **silent
+miscompile**: the program runs and the callee reads another argument's value.
 
 **A PERMUTATION is what makes the interlock load-bearing.** An identity mapping never needs it:
 every parameter is already in the register its own argument move wants, every capture and every

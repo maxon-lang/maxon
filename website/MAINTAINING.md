@@ -151,6 +151,7 @@ This is the one map of where the site's documentation comes from.
 | An MCP tool or its arguments | `docs/CLI_REFERENCE.md`, MCP Server |
 | The install scripts | `public/install.sh` / `public/install.ps1`, and the pages listed under [Install and build instructions](#install-and-build-instructions-follow-the-scripts-and-the-repository) |
 | The syntax grammar | `vscode-extension/syntaxes/maxon.tmLanguage.json`, then copy it to `src/grammars/maxon.tmLanguage.json` **by hand** |
+| How a part of the compiler works inside | its page in `docs/internals/`, which the site reads directly — see [Shared pages](#shared-pages-docsinternals) |
 | An example program | `examples/*.maxon`, then copy it to `src/examples/` **by hand** |
 
 The grammar and the example programs are still manual copies: nothing checks them against their
@@ -173,6 +174,31 @@ When writing a source:
 - Tag Maxon code fences ` ```maxon ` so they highlight; leave shell fences ` ```bash `.
 - Keep the agent-facing "how to write Maxon" framing — it's intentional and on-brand. Sections that
   describe this repository rather than the language belong in `notPublished`.
+
+## Shared pages: `docs/internals/`
+
+The Compiler Internals section is not synced: **each file in `docs/internals/` is the page itself**, read in
+place by the site. There is no copy to regenerate and nothing to drift. `src/shared-docs.ts` does the
+sharing, and `SHARED_DOCS` there lists each shared directory and the route it is served under:
+
+- `repositoryDocsLoader` loads the directory into the docs collection alongside `src/content/docs/`, and
+  fails the build if a directory under `src/content/docs/` would shadow it.
+- `sharedDocsLinks` rewrites the links in a shared page and records the page's route as its `slug`, which
+  is how `starlight-links-validator` checks links into and out of it. Starlight's own Markdown transforms
+  (heading anchors, asides) reach the directory through `markdown.processedDirs`.
+
+A shared page is one lower-case, hyphenated `.md` file directly in the directory; `index.md` is the
+section's front page. It carries its own front matter (`title`, `description`, `sidebar.order`) and no `#`
+title, because Starlight renders the title. Its links are written for a reader of the repository:
+
+| Link to | Write | On the site it becomes |
+| --- | --- | --- |
+| A heading on the same page | `[text](#anchor)` | unchanged |
+| Another shared page | `[text](register-allocation.md#anchor)` | that page's route |
+| Any other file in the repository | a relative path, e.g. `[text](../CLI_REFERENCE.md#commands)` | its GitHub URL |
+
+A site route (`/docs/…`) is refused, because it is a dead link in the repository, and so is a relative link
+to a page or file that does not exist.
 
 ## Install and build instructions follow the scripts and the repository
 

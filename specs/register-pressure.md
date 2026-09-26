@@ -300,7 +300,7 @@ contradictory: the count is of OP operands, and every in-loop use of a loop-carr
 branch-edge arg (`RegionReadCount`). The word is `read` for exactly this reason — these values ARE
 written in the loop, further down, and calling that "used 0 times" told an author the loop
 does not touch a value they can see it assigning. ⚠ It also means a 0 here is **necessary but not
-sufficient** as the tell of a surplus value ARCHITECTURE's "Known limits" #1 describes: nothing
+sufficient** as the tell of a surplus value (`docs/internals/register-allocation.md`, The contract): nothing
 upstream over-produced anything in this program.
 
 No arm64 twin, and that is MEASURED rather than a missing golden: arm64 allocates from 25 GPRs, so
@@ -589,7 +589,8 @@ Relieving the peak therefore costs NOTHING that has not already been paid — no
 reload before the uses that remain — and `isForcedBracketVictim` now offers exactly that at a COLD peak as
 well as a confined one. The program compiles, and returns 21 + 21 + 21.
 
-⚠ **THE `E5001` THE ARCHITECTURE ARGUES FOR IS UNTOUCHED, AND THAT IS THE LINE THIS CASE NOW SITS BESIDE.**
+⚠ **THE `E5001` THE CONTRACT DEFINES IS UNTOUCHED, AND THAT IS THE LINE THIS CASE NOW SITS BESIDE**
+(`docs/internals/register-allocation.md`, The contract).
 The refusal is for *"a value the LOOP genuinely uses, when the working set exceeds the whole pool"* — the
 per-iteration cost of a reload at every use inside a loop body. A value used inside a loop is not
 cold-spillable, so the re-relief arm cannot reach it: `hot-loop-overflow`, `hot-loop-param-used` and every

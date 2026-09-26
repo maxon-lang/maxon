@@ -1,5 +1,5 @@
-// SplitLiveRanges — the cold-spill live-range splitter (design: ARCHITECTURE.md's
-// register-allocator section, Rule 2). It is what relieves COLD pressure, so the colorer
+// SplitLiveRanges — the cold-spill live-range splitter (design: docs/internals/register-allocation.md,
+// Rule 2). It is what relieves COLD pressure, so the colorer
 // never faces "pressure > pool": a value that is idle across a
 // region of high register pressure is SPLIT — it lives in memory across the gap and in a
 // register only where it is used — so the colorer then always finds `maxPressure ≤ pool`.
@@ -10,16 +10,14 @@
 // THE TWO INVARIANTS THIS RESTS ON (design Rules 1 + 2):
 //
 //  • BELADY SPLIT AT THE EVICTION POINT — a spilled value's live range is split ACROSS THE
-//    PEAK, not shipped whole to memory. The store goes after the value's LAST use BEFORE the
-//    peak (or at its def when it is idle before the peak); the reload goes before its NEXT
-//    use AFTER the peak. Only the uses AT/AFTER the split point are rewritten to the fresh
-//    reload id — the uses BEFORE it keep the ORIGINAL value in its original register. This is
-//    what makes the value DEAD across the peak (freeing its register there), so a split
-//    actually LOWERS peak pressure and the loop converges. Splitting whole-range and reloading
-//    before a block's FIRST use (the earlier design) is WRONG: a value used both before AND
-//    after a peak would get its fresh reload before the pre-peak use, leaving that fresh value
-//    live ACROSS the peak — pressure never drops and `chooseVictim` re-picks the same lineage
-//    forever.
+//    PEAK, not shipped whole to memory. The store goes at the value's DEF, the one point that
+//    dominates every reload (see "THE STORE ANCHOR IS THE VALUE'S DEF, ALWAYS"); the reload goes
+//    before its NEXT use AFTER the peak. Only the uses AT/AFTER the split point are rewritten to
+//    the fresh reload id — the uses BEFORE it keep the ORIGINAL value in its original register.
+//    This is what makes the value DEAD across the peak (freeing its register there), so a split
+//    actually LOWERS peak pressure and the loop converges. Reloading before a block's FIRST use
+//    instead would put the fresh value live ACROSS the peak for a value used both before and
+//    after it — pressure never drops and `chooseVictim` re-picks the same lineage forever.
 //
 //  • DOMINATING RELOADS, and no SSA reconstruction with them. Every reload is placed in a use's
 //    own block, before the first AFTER-peak use in that block — which DOMINATES the after-peak
@@ -49,12 +47,11 @@
 //    the restructuring E5001 would demand emits the same load and store at every use anyway. See
 //    `SpillPlacement`, `SplitScope`, and `noVictimAtPeak`.
 //
-// REMAT (load-bearing, not an optimization): an integer constant (`movRegImm`/`movRegImm32`)
-// is REMATERIALIZED rather than spilled — re-emitted at each use with a fresh ValueId, never
-// a register across the gap and never memory. A constant is always PREFERRED over spilling a
-// real value (remat is free — no store, no slot, no reload). The compiler has no `xor reg,reg` zero
-// idiom yet (StdToX64Conversion emits `movRegImm32 0`), so only the two `movRegImm` forms are
-// rematerializable here; rdata/witness-table address remat is a later-milestone class.
+// REMAT (load-bearing, not an optimization): an integer constant (`movRegImm`/`movRegImm32` on
+// x64, `arm64MovImm` on arm64) is REMATERIALIZED rather than spilled — re-emitted at each use with
+// a fresh ValueId, never a register across the gap and never memory. A constant is always PREFERRED
+// over spilling a real value (remat is free — no store, no slot, no reload). Only those immediate
+// moves are rematerializable; an rdata or witness-table address is spilled like any other value.
 //
 // ALGORITHM (iterative Belady/MIN with the dominating-reload restriction): recompute
 // liveness; while some program point OVERFLOWS ITS POOL, find that PEAK op, choose a
@@ -4336,7 +4333,7 @@ end 'rankOutranks'
 // THE TWO CANNOT BE FUSED. They are ORDERED, not redundant, and the order is a fact about what each
 // one WRITES and what the other READS — so anyone who reaches for the obvious saving needs this
 // paragraph rather than a benchmark. Both walks are named as separate per-split terms in
-// ARCHITECTURE.md's shape warning; that is what they are, and it is not a lapse.
+// docs/internals/register-allocation.md, Scaling; that is what they are, and it is not a lapse.
 //
 //  • `sweepBlockPressure` WRITES `forbidden`, and this reads `EffectivePools`, which is
 //    `popcount(pool ∖ forbidden(v))`. A split clears the victim's mask and the fresh ids' and the
@@ -4353,7 +4350,7 @@ end 'rankOutranks'
 //    region; `refreshPeak` sweeps the dirty region OR, on the mode flip, the whole function.
 //
 // ⭐ THE PEAK HALF OF THAT SECOND WALK IS GONE — `PressureIndex` is the per-op incremental structure
-// ARCHITECTURE.md names, and `wantFullPool: false` is what reads the answer off it instead of sweeping
+// splitting needs, and `wantFullPool: false` is what reads the answer off it instead of sweeping
 // for it. What remains here is the CONFINED half, whose verdict is a bipartite matching over the live
 // values rather than a number a suffix sum can carry, and which only runs at all once no op in the
 // function overflows its full pool. `sweepBlockPressure`'s own walk (the `forbidden` masks) is the other

@@ -18,12 +18,13 @@
 //     the monitor still prints "regalloc". A formatted log inside the register allocator would
 //     allocate into the very `mm` stream the trace exists to read, and cost more than the work
 //     it measures — so the structured tier does not allocate, at all.
-//   * TWO GATES, both in `maxon.exe`. Built without `--debugstream`, every call below emits ZERO
-//     instructions. Built with it but run without the monitor, each one is a load of `__ds_base`,
-//     a test, and a not-taken branch — the bail is inline, before any CALL.
+//   * TWO GATES, both in `maxon.exe`. Built without `--debugstream`, every trace call emits ZERO
+//     instructions. Built with it but run without the monitor, each one is ONE call that bails on
+//     `__ds_base` at its entry (a log site cannot split its block — see `DebugStreamRuntime`'s LOG
+//     family); `__DebugStream.enabled()` is the inline load and compare a caller tests first.
 
-// A name, interned at compile time. The wire field is 16 bits (see the frozen schema in
-// ARCHITECTURE.md), so the range is the schema's, not a guess.
+// A name, interned at compile time. The wire field is 16 bits (see the frozen wire format,
+// docs/internals/debug-stream.md), so the range is the schema's, not a guess.
 export typealias TraceName = int(0 to 65535)
 
 // WHICH COMPILE a span belongs to. 32 bits on the wire. It is derived from the compile ROOT

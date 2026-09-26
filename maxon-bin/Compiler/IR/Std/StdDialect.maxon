@@ -1,8 +1,7 @@
 // Std Dialect — mid-level IR. The width/ABI-resolved tier between the
 // source-proximate Maxon dialect and the target-specific dialects (x64/arm64).
-// All mid-level optimization passes (mem2reg, canonicalize, cse, licm, dce, …)
-// run here, and so do the machine-level passes (instruction scheduling,
-// coalescing).
+// All mid-level optimization passes (constant folding, CSE, LICM, …; the
+// schedule is `IR/PassPipeline.maxon`) run here.
 //
 // There is no machine-IR tier below this one: the pipeline is Maxon → Std →
 // Target. Std's `ValueId`s ALREADY ARE infinite virtual registers, so such a
@@ -1355,8 +1354,8 @@ export union StdOp
 	//
 	// 1. **TIERING.** `IatSlot` is a WINDOWS PE concept (`Targets/Windows/PeWriter.maxon`), and it
 	//    is referenced nowhere outside `Targets/`. Naming it here would put a PE import-table index
-	//    in the target-NEUTRAL mid-level tier — the tier ARCHITECTURE says the wasm backend will
-	//    consume directly. `osAllocPages` says WHAT is wanted (pages) and lets each backend say HOW
+	//    in the target-NEUTRAL mid-level tier — the tier the wasm backend
+	//    consumes directly. `osAllocPages` says WHAT is wanted (pages) and lets each backend say HOW
 	//    (x64-windows: `VirtualAlloc` through the IAT; Linux: `mmap`; wasm: `memory.grow`).
 	// 2. **BAND MEMBERSHIP.** The `call` band ends at `retVoid` — MID-UNION. The `system` band sits
 	//    past `storeIndirect`, i.e. at the END of the union: measured, this
@@ -1366,7 +1365,7 @@ export union StdOp
 	// `sizeId` is a VALUE (the byte count), not a name — the same value/name split `call`'s `callee`
 	// and `globalAddr`'s `label` sit on the other side of. The result is the base address of a
 	// freshly-committed, OS-ZEROED region, which is what lets `__slab_alloc` hand out bump slots
-	// without memzeroing them (see ARCHITECTURE.md → "Allocator: the zeroing contract").
+	// without memzeroing them (see docs/internals/memory-allocator.md, The zeroing contract).
 	//
 	// Full call-barrier metadata: it IS a call once lowered (an indirect call through the IAT), so
 	// it clobbers the caller-saved registers and may observe or modify arbitrary memory.
@@ -2430,8 +2429,9 @@ export union StdOp
 	//     with `MAP_FIXED`, so the next touch reads a fresh ZERO page.
 	//   • wasm32-wasi — the decommit is INERT and the commit copies the address through, so the bytes SURVIVE
 	//     VERBATIM.
-	// ⇒ the strongest contract a reback can honestly offer is "readable and writable", NEVER "zeroed", and the
-	// slab's zeroing contract (ARCHITECTURE.md) does NOT extend across a decommit/recommit round trip.
+	// ⇒ the strongest contract a reback can honestly offer is "readable and writable", NEVER "zeroed". The
+	// slab's zeroing contract (docs/internals/memory-allocator.md) is kept by the arena zeroing a chunk run as
+	// it is released (INV-4), never by this round trip.
 	//
 	// ⛔ **THAT OBLIGATION IS RECORDED HERE, AT THE OP, AND NOT LEFT TO THE EVENTUAL CALLER.** The natural later
 	// shortcut is a per-OS `pagesAreZeroAfterReback` flag the scavenger consults — and whoever writes it will set it
@@ -2457,13 +2457,13 @@ export union StdOp
 	// ⭐⭐ **IT IS AN OP BECAUSE THE THING IT LOWERS TO IS A SIZE LADDER, AND STD IR CANNOT SPELL ONE.** This
 	// replaced a hand-built Std-IR loop (`MmRuntime.emitFillRange`) that cost one `storeIndirect u8` plus an
 	// add, a compare and a branch PER BYTE — on the three hottest paths the runtime has: the zeroing a
-	// recycled free-list slot owes (ARCHITECTURE.md → "Allocator: the zeroing contract"), `__mm_free`'s
+	// recycled free-list slot owes (docs/internals/memory-allocator.md, The zeroing contract), `__mm_free`'s
 	// poison of the whole dead payload, and the array capacity-slot eraser. A recycled 32 KB slot was 32,768
 	// iterations of it. A backend can do the same work in a handful of stores because it may CHOOSE an
 	// instruction sequence by SIZE — straight-line overlapping stores in the small bands, a block loop in the
 	// middle, `rep stosq` at the top — and "eight overlapping qword stores" is not a thing this tier has the
 	// vocabulary to say. ⇒ the size dispatch is the backend's, and this op is the request. The per-target
-	// ladders are specified in ARCHITECTURE.md → "The `memzero` the backend must emit".
+	// ladders are specified in docs/internals/memory-allocator.md, memFill and the fill ladders.
 	//
 	// ⭐ **`value` IS A COMPILE-TIME `ParsedInt`, NOT A `ValueId`, AND THAT IS WHAT MAKES THE FILL PATTERN
 	// FREE.** Every call site passes a literal (0 to restore the zeroing contract, `PoisonByte` to poison a
@@ -4560,7 +4560,7 @@ end 'StdShapeReader'
 //
 // A DENSE COLUMN, not a `Set`. A ValueId IS a dense, function-local index — so a hash set spends a
 // hash and a probe to look up something that is already an array subscript. That is the design's
-// "NO `Set`/`Map` and NO hashing in the hot path" rule (ARCHITECTURE.md §"Data representation")
+// "NO `Set`/`Map` and NO hashing in the hot path" rule (docs/internals/names-and-values.md, Data representation)
 // broken in the one place it is easiest to break it, and on the corpus's single large function it
 // showed: `foldConstOperands` grew at exponent **1.29 in TIME while its ALLOCATIONS grew at 0.99** —
 // the signature of a structure whose asymptotics are fine and whose CONSTANT degrades, because every

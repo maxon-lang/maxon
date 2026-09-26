@@ -352,7 +352,7 @@ export function sourceEntryOf(project Project, path FilePath) returns SourceFile
 	return try project.db.sourceFiles.get(path) otherwise throw CompileError.fileNotFound(path)
 end 'sourceEntryOf'
 
-// **A PARSE MEMO IS KEYED ON THREE FACTS, BECAUSE A PARSE READS THREE INPUTS.**
+// **A PARSE MEMO IS KEYED ON FIVE FACTS, BECAUSE A PARSE READS FIVE INPUTS.**
 //
 //   1. the file's OWN bytes — its tokens;
 //   2. the WHOLE-PROGRAM SIGNATURE INDEX — every OTHER file's declarations, which the parser
@@ -366,9 +366,11 @@ end 'sourceEntryOf'
 //      parse, so an instrumented parse and a plain one produce different ops out of identical bytes.
 //      Without this half, toggling the flag on a warm tree serves the STALE UNINSTRUMENTED parse: exit
 //      0, an empty `.mxcov`, and no error anywhere — a measurement that silently measured nothing.
+//   5. the whole program's ANSWERS this file is parsed with (`RowSetOverrideTable.digest`) — questions
+//      its own parse answered otherwise, which the parse's output depends on.
 //
-// Keying on (1) alone — which is what shipped, and was correct only while a parse read nothing
-// but its own file — SERVES A STALE PARSE the moment a signature moves: change `isReady`'s
+// Keying on (1) alone would be correct only if a parse read nothing but its own file, and it
+// SERVES A STALE PARSE the moment a signature moves: change `isReady`'s
 // return type in `a.maxon` and `b.maxon`'s bytes have not moved, so `b.maxon` is a cache HIT
 // and keeps a parse built against the OLD type. The file did not change; what the file MEANS
 // did. That is the load-bearing half of the signature index, and the easy half to get silently

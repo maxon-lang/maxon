@@ -405,8 +405,9 @@ mm_free String #1
 
 The type name comes from the interned-name table the compiler embedded in the executable, reached through
 the packed id below each box's header; the `#id` correlates the events of one allocation. That is also what
-a spec's ` ```mm-trace ` block asserts — see `docs/SPECS.md`. The ring is one shared buffer with no thread
-id, so with more than one green thread producing events the decoded order is the order they took the lock.
+a spec's ` ```mm-trace ` block asserts — see `docs/SPECS.md`. The ring is one shared buffer and a memory
+event carries no thread id, so with more than one green thread producing events the decoded order is the
+order they took the lock.
 
 ### Corruption detection is always on
 

@@ -21,12 +21,9 @@
 // never TRIGGER). The corpus was blind in four measured dimensions at once and every blind spot was
 // silent; an instrument that cannot name what it cannot see keeps producing confident zeros.
 //
-// ARCHITECTURE.md claims compilation is linear in program size, and quotes measurements to back it —
-// 1.96 -> ~1.0 for a 3,200-`if` function, 40x faster, a 19,200-block function that used to
-// SIGSEGV. Every one of those numbers was measured on throwaway generated programs that were never
-// committed. This file is the corpus that makes those claims falsifiable, and the two headline
-// shapes are deliberately reproduced at the top rung: rung 5's `longFunction` is 3,200 `if`s, and
-// its `deepBlocks` is ~19,200 blocks.
+// Compilation must stay linear in program size (docs/internals/scaling.md). This file is the corpus
+// that makes that claim falsifiable, and its two headline shapes are reproduced at the top rung:
+// rung 5's `longFunction` is 3,200 `if`s, and its `deepBlocks` is ~19,200 blocks.
 //
 // ===========================================================================================
 // THE TRAP, AND WHY EVERY VALUE HERE IS SEEDED FROM SOMETHING OPAQUE
@@ -228,7 +225,7 @@ let FunctionsBase = 16 as KnobSize
 // across them, so functions-per-file stays constant as both double.
 let FilesBase = 4 as KnobSize
 
-// ONE function, N sequential `if`s. The 3,200-`if` benchmark ARCHITECTURE.md quotes: at rung 5
+// ONE function, N sequential `if`s. The 3,200-`if` headline shape: at rung 5
 // this is exactly 100 << 5 = 3,200.
 let LongIfsBase = 100 as KnobSize
 
@@ -1989,8 +1986,8 @@ end 'smallFunctionName'
 let LongIfDriver = "scaleLongIf"
 
 // The `longFunction` knob: ONE function, N sequential `if`s, over a bounded working set and
-// `localCount` scope-fillers. At rung 5 this is the 3,200-`if` benchmark ARCHITECTURE.md quotes a
-// measurement for. It grows OPS in a near-straight line; the CFG grows with it but stays a simple
+// `localCount` scope-fillers. At rung 5 this is the 3,200-`if` headline
+// shape. It grows OPS in a near-straight line; the CFG grows with it but stays a simple
 // chain.
 //
 // Three things here are load-bearing, and the knob measured nothing without the first two (see

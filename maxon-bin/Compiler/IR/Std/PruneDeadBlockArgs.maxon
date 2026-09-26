@@ -1,7 +1,7 @@
 // PruneDeadBlockArgs — a Std→Std pass that deletes the block-args (phis) NOTHING reads.
 //
-// WHY IT EXISTS: a FALSE E5001 is the worst bug this compiler can have (ARCHITECTURE.md,
-// register allocator §"the contract"), and this is where one came from.
+// WHY IT EXISTS: a FALSE E5001 is the worst bug this compiler can have (docs/internals/register-allocation.md,
+// The contract), and this is where one came from.
 //
 // The parser builds SSA on the fly, and a loop header's phis must be minted BEFORE the body is
 // parsed. It once minted one per mutable var IN SCOPE, so every `var` declared before a loop got
@@ -32,8 +32,8 @@
 //     the machine, ranking the dead phis first among the values to delete ("read 0 times in
 //     the loop" — the tell). ⚠ That tell is NECESSARY, NOT SUFFICIENT: a loop-carried `var` the
 //     loop only ASSIGNS reads 0 there too, because the count excludes branch-edge args, and it is
-//     no surplus at all (ARCHITECTURE, "Known limits" #1). A 0 says "look at the IR", not "a pass
-//     over-produced".
+//     no surplus at all (docs/internals/register-allocation.md, The contract). A 0 says "look at
+//     the IR", not "a pass over-produced".
 //
 // The parser PROMISES this pruning ("phis for unmutated vars turn out trivial and
 // collapse in the Std-tier phi-elim pass"), and this pass is the pruning half of that promise

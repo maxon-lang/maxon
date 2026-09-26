@@ -1,5 +1,5 @@
 // Register allocator (pure Design B: SSA chordal coloring + gap
-// splitting + E5001; canonical design in ARCHITECTURE.md's register-allocator section). Spine:
+// splitting + E5001; design in docs/internals/register-allocation.md). Spine:
 // cold-spill splitting → liveness → biased forward-sweep coloring → SSA destruction. It adopts
 // the `Reuse` operand model to DELETE the pre-emitted two-address seed `mov`: ISel now
 // emits ONE reuse-def op (`sub`/`imul`/`neg`) and THIS pass materializes the copy only
@@ -27,12 +27,13 @@
 //   • biased forward-sweep colorer       — this file
 //   • SSA destruction (edge copies/xchg) — SsaDestruction.maxon
 //
-// TWO RULES this rests on (design):
+// What the colorer rests on (docs/internals/register-allocation.md; Rule 2, spill placement, is the
+// splitter's):
 //   RULE 1 (SSA). Every value has one def dominating its uses, so live ranges are
 //     dominance-closed, the interference graph is CHORDAL, and dominance-order
 //     greedy coloring is EXACT (χ = ω = maxPressure). Layout order is a perfect
 //     elimination order, ASSERTED by "every use is already colored" at each op.
-//   RULE 2 (biased coloring is CORRECTNESS, not optimization). Copy-related values
+//   BIASED COLORING is CORRECTNESS, not optimization. Copy-related values
 //     (a phi and its back-edge arg; a reuse def and its two-address input) hold the
 //     same value; coloring them together (a) keeps a loop's back-edge / reuse copy
 //     from landing IN the loop and (b) stops a false E5001 by not counting one value
@@ -47,8 +48,8 @@
 // every over-pool program point — full-pool overflow at a normal op AND reduced-pool
 // overflow at a FIXED-REGISTER point. `maxPressure ≤ pool` alone is NECESSARY but NOT
 // SUFFICIENT at such a point: at an `idiv`, values live across it are forbidden {RAX,RDX}
-// (effective pool `pool ∖ {RAX,RDX}`); at a call, the callee-saved subset (ARCHITECTURE.md's
-// register-allocator "Known limits" #2). The splitter's peak-finder checks each op against its OWN
+// (effective pool `pool ∖ {RAX,RDX}`); at a call, the callee-saved subset (docs/internals/register-allocation.md,
+// Effective pools). The splitter's peak-finder checks each op against its OWN
 // reduced pool (`pool ∖ op.implicitDefs`) and splits values live across it, so by the time
 // this colorer runs no point — normal or fixed-register — overflows its pool.
 //

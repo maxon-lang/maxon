@@ -1093,9 +1093,9 @@ function buildDsReserve(module StdModule)
 
 	// ⭐ THE RING'S ONE PUBLISH POINT. It orders every store above it — this entry's header, and any
 	// padding entry written on the way — ahead of the cursor that makes them reachable. On x64 a plain
-	// store IS a release store (TSO), which is what makes this correct with no barrier op at this tier; a
-	// target whose stores may be reordered would owe one, and `--debugstream` is refused on every such
-	// target today.
+	// store IS a release store (TSO), which is what makes this correct with no barrier op at this tier. The
+	// arm64 targets also carry `--debugstream`, and there this plain store orders nothing: they owe a release
+	// store here and at `__ds_commit` (see `DebugStreamDecoder`'s header for the window that leaves open).
 	let published = emitBin(module, block: place, a: placeCursor, b: entrySize, opcode: StdBinOpcode.add, ids: ids)
 	module.appendOp(place, op: StdOp.storeIndirect(base, offset: DsOffWriteCursor, valueId: published, valueType: StdType.i64))
 	emitBumpSegmentCounter(module, block: place, base: base, offset: DsOffTotalEvents, ids: ids)
@@ -1258,8 +1258,8 @@ end 'emitReserveEntry'
 // ⭐ **AND IT COSTS NOTHING THE `gt` READ WAS NOT ALREADY PAYING.** The walk to the green thread goes
 // THROUGH the P, so `emitLoadCurrentGtAndProcIdOrZero` returns both from the one guarded TLS read it always
 // did — one extra field load on the arm that already holds the pointer, no second branch. That is why this
-// is a stamp and not a rung. It also puts the compiler on the wire format `ARCHITECTURE.md` documents, which has
-// said `gt` + `p_id` since the ring was specified.
+// is a stamp and not a rung. It also fills the `gt` and `p_id` fields the wire format
+// (docs/internals/debug-stream.md) gives every log entry.
 //
 // ⭐⭐ **SEEN MOVE, WITH ITS CONTROL — because a field that reads 0 everywhere and a field nobody looks at
 // are indistinguishable in a golden.** A `--debugstream` program that spawns eight services and logs one
