@@ -291,7 +291,7 @@ end 'rebaseJumpTableReloc'
 // One chunk's debug info, folded into the whole-module tables. Both native concat passes call it
 // where they push a `DebugSymbol`, the one place holding a chunk and its `.text` start.
 export function foldChunkDebugInfo(chunk FunctionCodeChunk, funcStart CodeOffset, inlineSiteBase InlineSiteIndex, functions DebugFunctionRangeArray, lineRows DebugLineRowArray, covPointOffsets CovPointOffsetArray)
-	functions.push(DebugFunctionRange.create(chunk.funcName, codeStart: funcStart, codeEnd: funcStart + chunk.code.count(), frameSize: chunk.frameSize, paramCount: chunk.paramCount, spillSlotBase: chunk.spillSlotBase, frameLinkBytes: chunk.frameLinkBytes, localRanges: chunk.localRanges, inlineSiteBase: inlineSiteBase))
+	functions.push(DebugFunctionRange.create(chunk.funcName, codeStart: funcStart, codeEnd: funcStart + chunk.code.count(), prologueOffset: chunk.asyncUnsafePrefixBytes, frameSize: chunk.frameSize, paramCount: chunk.paramCount, spillSlotBase: chunk.spillSlotBase, frameLinkBytes: chunk.frameLinkBytes, localRanges: chunk.localRanges, inlineSiteBase: inlineSiteBase))
 
 	for row in chunk.lineRows 'eachRow'
 		lineRows.push(DebugLineRow.create(funcStart + row.codeOffset, spanId: row.spanId, entersTheLine: row.entersTheLine))
@@ -549,13 +549,13 @@ function debugRunHigher(at OpIndex, other OpIndex) returns OpIndex
 	return other if other > at else at
 end 'debugRunHigher'
 
-// One function as the debug-info sidecar names it: where its code sits in `.text`, how much frame it
-// reserves, and how many parameters it takes. Filled at the concat, which is the one place that holds
-// both a chunk and its whole-`.text` start.
+// One function as the debug-info sidecar names it. Filled at the concat, the one place that holds both
+// a chunk and its whole-`.text` start.
 export type DebugFunctionRange
 	export var name as ByteArray
 	export var codeStart as CodeOffset
 	export var codeEnd as CodeOffset
+	export var prologueOffset as CodeOffset
 	export var frameSize as StackSize
 	export var paramCount as ParamCount
 
@@ -571,8 +571,8 @@ export type DebugFunctionRange
 
 	export var inlineSiteBase as InlineSiteIndex
 
-	export static function create(name ByteArray, codeStart CodeOffset, codeEnd CodeOffset, frameSize StackSize, paramCount ParamCount, spillSlotBase StackSize, frameLinkBytes StackSize, localRanges DebugLocalCodeRangeArray, inlineSiteBase InlineSiteIndex) returns DebugFunctionRange
-		return Self{name: name, codeStart: codeStart, codeEnd: codeEnd, frameSize: frameSize, paramCount: paramCount, spillSlotBase: spillSlotBase, frameLinkBytes: frameLinkBytes, localRanges: localRanges, inlineSiteBase: inlineSiteBase}
+	export static function create(name ByteArray, codeStart CodeOffset, codeEnd CodeOffset, prologueOffset CodeOffset, frameSize StackSize, paramCount ParamCount, spillSlotBase StackSize, frameLinkBytes StackSize, localRanges DebugLocalCodeRangeArray, inlineSiteBase InlineSiteIndex) returns DebugFunctionRange
+		return Self{name: name, codeStart: codeStart, codeEnd: codeEnd, prologueOffset: prologueOffset, frameSize: frameSize, paramCount: paramCount, spillSlotBase: spillSlotBase, frameLinkBytes: frameLinkBytes, localRanges: localRanges, inlineSiteBase: inlineSiteBase}
 	end 'create'
 end 'DebugFunctionRange'
 
@@ -641,8 +641,9 @@ export type FunctionCodeChunk
 	export var asyncPreemptible as bool
 
 	// The bytes at this chunk's start a stop may not land in — the prologue stack guard, which holds a
-	// machine-bound value in a register while it walks TLS (`BacktraceFormat.SymtabSafeFromBias`). 0
-	// for a chunk with no guard, which is every hand-assembled one and every frameless function.
+	// machine-bound value in a register while it walks TLS (`BacktraceFormat.SymtabSafeFromBias`). The
+	// sidecar records it as the function's prologue offset, where the debugger's prologue scan starts, so
+	// a guarded hand-assembled chunk (`mrt_panic`) sets it too.
 	//
 	// An inlined body cannot move it: the guard is not IR. The encoder emits it at the first block of
 	// the final function and reads this count off the buffer, so there is no prefix for a splice to
@@ -851,4 +852,3 @@ export type CodeResult
 		return (self.code.count() + self.wasmCoreModule.count()) as CodeByteCount
 	end 'emittedCodeBytes'
 end 'CodeResult'
-

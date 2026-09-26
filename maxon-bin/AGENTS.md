@@ -717,7 +717,7 @@ facts worth knowing before you get there:
 One test per file is structural, not tidiness: a file is what ONE process runs and that process has a
 5 s default deadline, so twelve compiler-spawning tests in one file report a spurious `TIMED OUT`.
 
-⚠ **`tests/debug` IS 118 CASES AND MOST OF THEM DEBUG A RUNNING PROGRAM**, which is a compile plus a
+⚠ **`tests/debug` IS 120 CASES AND MOST OF THEM DEBUG A RUNNING PROGRAM**, which is a compile plus a
 debugged run inside one file's deadline. Run it as `maxon test tests/debug --timeout=60000`; the default
 deadline reports the corpus as timed out rather than failed.
 

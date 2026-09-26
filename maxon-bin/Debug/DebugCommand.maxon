@@ -61,10 +61,9 @@ let AggregateTagPrefix = "tag "
 let AggregateWordSeparator = ", "
 let ElementRowOffset = 0 as MxdbgIndex
 
-// How a location renders. The frame-pointer register is the sidecar's target's, read off its triple.
+// How a location renders. The frame-pointer register is the sidecar's target's.
 let X64FramePointerName = "rbp"
 let Arm64FramePointerName = "x29"
-let Arm64TriplePrefix = "arm64"
 let OptimizedOutLocation = "<optimized out>"
 
 // The magnitude of a frame displacement, one wider than the signed value it is taken from.
@@ -101,7 +100,7 @@ end 'DigitParse'
 
 // The outcome of finding, reading and VOUCHING FOR the sidecar that describes a given path.
 union SidecarLoad
-	loaded(reader MxdbgReader)
+	loaded(reader MxdbgReader, code ByteArray)
 	refused(reason String)
 end 'SidecarLoad'
 
@@ -143,7 +142,6 @@ let SupportedDebugTriple = "x64-windows"
 let RefusedWasmTarget = "wasm32-wasi"
 
 let WasmMagic = b"\x00asm"
-let PeMagic = b"MZ"
 
 union DebuggerFaceRequest
 	session
@@ -236,7 +234,7 @@ end 'hexByteSequence'
 function printClassification(code ByteArray)
 	match decodeX64Instruction(code, at: 0, address: ClassifyProbeAddress) 'classified'
 		unclassified then print("{DebugUnclassifiedReason}\n")
-		decoded(instruction) then print("len={instruction.length} class={instruction.instructionClass} cond={instruction.condition} disp={instruction.displacementPosition} target=0x{instruction.target:x}{spelledClassOperand(instruction)}\n")
+		decoded(instruction) then print("len={instruction.length} class={instruction.instructionClass} cond={instruction.condition} disp={instruction.displacementPosition} target={instruction.target.spelled()}{spelledClassOperand(instruction)}\n")
 	end 'classified'
 end 'printClassification'
 
@@ -377,25 +375,26 @@ module function debugImageCheckFor(program FilePath, spelled String) returns Deb
 		return DebugImageCheck.refused("{spelled} is a {RefusedWasmTarget} module: it carries no `.text` image and hosts no debug agent, so it cannot be debugged")
 	end 'aWasmModule'
 
-	if not startsWithBytes(opening, magic: PeMagic) 'notAWindowsImage'
-		return DebugImageCheck.refused("{spelled} is not a {SupportedDebugTriple} image, and the interactive debugger runs only on {SupportedDebugTriple}")
-	end 'notAWindowsImage'
-
 	match loadSidecarFor(spelled) 'sidecar'
 		refused(reason) then return DebugImageCheck.refused(reason)
-		loaded(reader) then return vouchedDebugImage(program, spelled: spelled, reader: reader)
+		loaded(reader, code) then return vouchedDebugImage(reader, code: code, spelled: spelled)
 	end 'sidecar'
 end 'debugImageCheckFor'
 
-function vouchedDebugImage(program FilePath, spelled String, reader MxdbgReader) returns DebugImageCheck
-	if reader.triple != SupportedDebugTriple 'anotherTarget'
-		return DebugImageCheck.refused("{spelled} was built for {reader.triple}, and the interactive debugger runs only on {SupportedDebugTriple}")
-	end 'anotherTarget'
+function vouchedDebugImage(reader MxdbgReader, code ByteArray, spelled String) returns DebugImageCheck
+	let host = targetToString(detectHostTarget())
 
-	match binaryCodeSection(program) 'text'
-		refused(reason) then return DebugImageCheck.refused(reason)
-		found(bytes) then return DebugImageCheck.usable(bytes, reader: reader)
-	end 'text'
+	if host != SupportedDebugTriple 'anUnsupportedHost'
+		return DebugImageCheck.refused("the interactive debugger runs only on {SupportedDebugTriple}, and this host is {host}")
+	end 'anUnsupportedHost'
+
+	let built = targetToString(reader.target)
+
+	if built != host 'anotherHostsImage'
+		return DebugImageCheck.refused("{spelled} was built for {built}, and this debugger runs on {host}, so it can launch only a program built for {host}")
+	end 'anotherHostsImage'
+
+	return DebugImageCheck.usable(code, reader: reader)
 end 'vouchedDebugImage'
 
 function startsWithBytes(opening ByteArray, magic ByteArray) returns bool
@@ -479,7 +478,7 @@ function runDumpInfo(args MaxonArgs) returns ExitCode
 
 	match loadSidecarFor(spelled) 'sidecar'
 		refused(reason) then return refuseDebugCommand(reason)
-		loaded(reader) then return dumpSidecar(reader, path: spelled, sections: sections)
+		loaded(reader, _) then return dumpSidecarOfATarget(reader, path: spelled, sections: sections)
 	end 'sidecar'
 end 'runDumpInfo'
 
@@ -567,7 +566,7 @@ function runSymbolize(args MaxonArgs) returns ExitCode
 
 	match loadSidecarFor(spelled) 'sidecar'
 		refused(reason) then return refuseDebugCommand(reason)
-		loaded(reader) then return symbolizeOffsets(reader, args: args)
+		loaded(reader, _) then return symbolizeOffsets(reader, args: args)
 	end 'sidecar'
 end 'runSymbolize'
 
@@ -581,10 +580,10 @@ end 'refuseDebugCommand'
 // PRINTING
 // ============================================================================================
 
-function dumpSidecar(reader MxdbgReader, path String, sections BoolArray) returns ExitCode
+function dumpSidecar(reader MxdbgReader, framePointer String, path String, sections BoolArray) returns ExitCode
 	if sectionIsPrinted(sections, section: HeaderSection) 'theHead'
 		print("Debug info: {path}\n")
-		print("  target:   {reader.triple}\n")
+		print("  target:   {targetToString(reader.target)}\n")
 		print("  build-id: 0x{reader.buildId:016x}\n")
 		print("  root:     {reader.sourceRoot}\n")
 	end 'theHead'
@@ -598,7 +597,7 @@ function dumpSidecar(reader MxdbgReader, path String, sections BoolArray) return
 	end 'theFiles'
 
 	if sectionIsPrinted(sections, section: FunctionsSection) 'theFunctions'
-		dumpFunctions(reader)
+		dumpFunctions(reader, framePointer: framePointer)
 	end 'theFunctions'
 
 	// Printed even when the count is 0, and the count is what says so. A dump that omitted the heading
@@ -669,15 +668,13 @@ function inlineRangeStarts(reader MxdbgReader) returns MxdbgCodeOffsetArray
 	return starts
 end 'inlineRangeStarts'
 
-function dumpFunctions(reader MxdbgReader)
-	let framePointer = framePointerRegisterFor(reader.triple)
-
+function dumpFunctions(reader MxdbgReader, framePointer String)
 	print("  functions ({reader.functionCount()}):\n")
 
 	for i in 0 upto reader.functionCount() 'eachFunction'
 		let fn = reader.functionRecord(i as MxdbgIndex)
 		let displayed = "" if fn.displayName == fn.name else "  as {fn.displayName}"
-		print("    {padRight(fn.name, width: FunctionNameColumn)} [0x{fn.codeStart:04x}, 0x{fn.codeEnd:04x})  frame=0x{fn.frameSize:x}  params={fn.paramCount}  lines={fn.lineCount}  locals={fn.localCount}  origin={fn.origin.name}{displayed}\n")
+		print("    {padRight(fn.name, width: FunctionNameColumn)} [0x{fn.codeStart:04x}, 0x{fn.codeEnd:04x})  prologue=+0x{fn.prologueOffset:x}  frame=0x{fn.frameSize:x}  params={fn.paramCount}  lines={fn.lineCount}  locals={fn.localCount}  origin={fn.origin.name}{displayed}\n")
 
 		for k in fn.localFirst upto fn.localFirst + fn.localCount 'eachLocal'
 			let local = reader.localRecord(k as MxdbgIndex)
@@ -709,11 +706,26 @@ function dumpTypes(reader MxdbgReader)
 	end 'eachType'
 end 'dumpTypes'
 
-// ⭐ **THE DISPLACEMENTS ARE TARGET-AGNOSTIC AND ONLY THIS LABEL DIFFERS.** The sidecar records a
-// frame-pointer-relative offset; which register that is, is the sidecar's own target's business.
-function framePointerRegisterFor(triple String) returns String
-	return Arm64FramePointerName if triple.startsWith(Arm64TriplePrefix) else X64FramePointerName
-end 'framePointerRegisterFor'
+// The recorded displacements are target-agnostic frame-pointer offsets; only this label differs.
+function framePointerRegisterOf(cpu CpuArch) returns FramePointerLookup
+	return match cpu 'cpu'
+		x64 gives FramePointerLookup.named(X64FramePointerName)
+		arm64 gives FramePointerLookup.named(Arm64FramePointerName)
+		wasm32 gives FramePointerLookup.none
+	end 'cpu'
+end 'framePointerRegisterOf'
+
+union FramePointerLookup
+	none
+	named(register String)
+end 'FramePointerLookup'
+
+function dumpSidecarOfATarget(reader MxdbgReader, path String, sections BoolArray) returns ExitCode
+	match framePointerRegisterOf(reader.target.cpu) 'framed'
+		none then return refuseDebugCommand("{path} describes a {targetToString(reader.target)} image, which has no frame-pointer register its frame slots are measured from")
+		named(register) then return dumpSidecar(reader, framePointer: register, path: path, sections: sections)
+	end 'framed'
+end 'dumpSidecarOfATarget'
 
 // `<optimized out>` is a real answer — a value the compiler could not place honestly — and rendering it as
 // a slot number instead would print a byte of somebody else's frame. A location kind this build does not
@@ -829,15 +841,15 @@ end 'enclosingFunctionAt'
 // ============================================================================================
 
 // The sidecar that describes `spelled`, refused by name when it is absent, unreadable, or describes a
-// different build.
-//
-// A path ending in the sidecar suffix is read AS the sidecar, with no build-id check — there is no
-// binary to check it against, and a caller who named the sidecar directly has said which file they mean.
+// different build. A spelled `.mxdbg` path is checked against the binary beside it.
 function loadSidecarFor(spelled String) returns SidecarLoad
 	let named = try FilePath.from(spelled) otherwise return SidecarLoad.refused("'{spelled}' is not a spellable path")
 
 	if spelled.endsWith(MxdbgSidecarExtension) 'namedTheSidecar'
-		return parseSidecarAt(named)
+		let binarySpelling = spelled.slice(spelled.startIndex(), endIndex: try spelled.findLast(MxdbgSidecarExtension) otherwise panic("loadSidecarFor: '{spelled}' was just seen to end in {MxdbgSidecarExtension}"))
+		let binary = try FilePath.from(binarySpelling) otherwise return SidecarLoad.refused("'{spelled}' names no spellable binary beside it")
+
+		return vouchedSidecarAt(named, binary: binary)
 	end 'namedTheSidecar'
 
 	let sidecarPath = try FilePath.from(sidecarPathOf(named)) otherwise return SidecarLoad.refused("'{spelled}' has no spellable sidecar path")
@@ -846,38 +858,30 @@ function loadSidecarFor(spelled String) returns SidecarLoad
 		return SidecarLoad.refused("no debug-info sidecar at {sidecarPath}. It is written by default and leaves the executable byte-identical, so a binary that has none was built {NoDebugInfoFlag}: rebuild it without that flag")
 	end 'noSidecar'
 
-	match parseSidecarAt(sidecarPath) 'parsed'
-		refused(reason) then return SidecarLoad.refused(reason)
-		loaded(reader) then return vouchedForBinary(reader, binary: named)
-	end 'parsed'
+	return vouchedSidecarAt(sidecarPath, binary: named)
 end 'loadSidecarFor'
 
-function parseSidecarAt(path FilePath) returns SidecarLoad
-	let image = try File.readBinary(path) otherwise return SidecarLoad.refused("cannot read {path}")
+function vouchedSidecarAt(sidecar FilePath, binary FilePath) returns SidecarLoad
+	let image = try File.readBinary(sidecar) otherwise return SidecarLoad.refused("cannot read {sidecar}")
+	let reader = try MxdbgReader.parse(image) otherwise (e) 'badImage'
+		return SidecarLoad.refused("{sidecar}: {e.displayReason()}")
+	end 'badImage'
 
-	return SidecarLoad.loaded(try MxdbgReader.parse(image) otherwise (e) 'badImage'
-		return SidecarLoad.refused("{path}: {e.displayReason()}")
-	end 'badImage')
-end 'parseSidecarAt'
-
-// ⭐ The build-id check, recomputed from the binary's own code section. It is the only refusal here that
-// would otherwise produce a confident wrong answer rather than a missing one.
-//
-// ⚠ The two ids are deliberately NOT printed: they are a build-machine detail a reader can do nothing
-// with, and printing them would make every refusal transcript machine-specific.
-function vouchedForBinary(reader MxdbgReader, binary FilePath) returns SidecarLoad
-	match binaryCodeSection(binary) 'text'
-		refused(reason) then return SidecarLoad.refused(reason)
-		found(bytes) then return sidecarMatchingCode(reader, code: bytes)
+	return match binaryCodeSection(binary) 'text'
+		refused(reason) gives SidecarLoad.refused(reason)
+		found(code) gives sidecarMatchingCode(reader, code: code)
 	end 'text'
-end 'vouchedForBinary'
+end 'vouchedSidecarAt'
 
+// The only refusal here that would otherwise produce a confident wrong answer rather than a missing one.
+// The two ids are not printed: they are build-machine detail, and printing them would make every
+// refusal transcript machine-specific.
 function sidecarMatchingCode(reader MxdbgReader, code ByteArray) returns SidecarLoad
 	if reader.buildId != Hasher.combined(Hasher.empty(), bytes: code) 'differentBuild'
 		return SidecarLoad.refused("the .mxdbg sidecar describes a different build of this binary — rebuild it")
 	end 'differentBuild'
 
-	return SidecarLoad.loaded(reader)
+	return SidecarLoad.loaded(reader, code: code)
 end 'sidecarMatchingCode'
 
 // The bytes of a binary's code section, whatever container it is in. A union so a file in none of the

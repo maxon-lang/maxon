@@ -1,0 +1,30 @@
+let GuardedPrologueCaseLabel = "a-stop-inside-a-guarded-prologue-shows-the-caller"
+let GuardedCalleeName = "countdown"
+let GuardedCallerName = "main"
+
+test 'a stop after a green-thread callee passed its stack guard and pushed its frame pointer still names the caller'
+	let staged = builtFixture(GuardedPrologueCaseLabel, fixture: WalksFixtureName)
+	let executable = builtExecutable(staged)
+	let codeStart = functionCodeStart(executable, staged: staged, name: GuardedCalleeName)
+	let prologueStart = functionPrologueStart(executable, staged: staged, name: GuardedCalleeName)
+
+	try Expect.greaterThan(prologueStart as AssertedInt, than: codeStart as AssertedInt, message: "the control: `{GuardedCalleeName}` runs on a green thread and reserves a frame, so the stack guard opens it and its prologue starts past its entry. With no guard ahead of the prologue this case measures nothing the unguarded prologue cases do not.")
+
+	let afterThePush = exactOffsetTarget(prologueStart + PushedFramePointerBytes)
+	let commands = debugCommandLine(["{BreakCommand} {afterThePush}", RunCommand, BacktraceCommand])
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let walks = eventsOfKind(events, kind: BacktraceEventName)
+
+	try Expect.equal(walks.count() as AssertedInt, expected: 1, message: "the `{BacktraceCommand}` at `{afterThePush}` printed no walk. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let walked = eventAt(walks, index: 0)
+	var names = StringArray.create()
+
+	for frame in childrenOf(walked, node: walked.root, key: FramesKey) 'eachFrame'
+		names.push(textOf(walked, node: frame, key: FunctionKey))
+	end 'eachFrame'
+
+	try Expect.equal(renderedRows(names), expected: renderedRows([GuardedCalleeName, GuardedCallerName]), message: "⛔ THE STACK GUARD IS NOT PART OF THE PROLOGUE. A scan that starts at the function's entry reads the guard's first instruction as neither a push nor `mov rbp, rsp`, finds no prologue at all, and walks from the caller's rbp — naming the caller's caller. {said}")
+end 'a stop after a green-thread callee passed its stack guard and pushed its frame pointer still names the caller'

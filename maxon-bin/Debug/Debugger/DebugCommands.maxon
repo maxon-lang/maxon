@@ -54,8 +54,6 @@ export let StepStopReasonName = "step"
 
 let NoLine = 0 as DebugLineNumber
 let NoOffset = 0 as DebugAddress
-let DebugWordBytes = 8 as EngineReadLength
-let UserSpaceLimit = 0x0000800000000000 as DebugWord
 let DebugStackBoundsUnreadableReason = "stack-bounds-unreadable"
 let DebugSharedConditionReason = "condition-differs-at-a-shared-offset"
 
@@ -476,19 +474,6 @@ union DebugReturnAddress
 	none
 	at(address DebugAddress)
 end 'DebugReturnAddress'
-
-union DebugCallTarget
-	unresolved
-	at(address DebugAddress)
-end 'DebugCallTarget'
-
-function userSpaceTarget(value DebugWord) returns DebugCallTarget
-	if value < 0 or value >= UserSpaceLimit 'notAUserSpaceAddress'
-		return DebugCallTarget.unresolved
-	end 'notAUserSpaceAddress'
-
-	return DebugCallTarget.at(value as DebugAddress)
-end 'userSpaceTarget'
 
 union DebugWaitExpiry
 	reportedAs(waitingFor String)
@@ -1120,7 +1105,7 @@ export type DebugConversation
 	end 'notedArmed'
 
 	function armDecoded(candidate DebugLineCandidate, instruction X64Instruction, request DebugConditionRequest, attempt DebugArmingAttempt) returns bool
-		match self.engine.armBreakpoint(candidate.offset, classWord: instruction.classWord() as DebugAddress, fixup: instruction.fixupWord() as DebugAddress) 'answered'
+		match self.engine.armBreakpoint(candidate.offset, classWord: instruction.classWord(), fixup: instruction.fixupWord()) 'answered'
 			done then return self.attachConditionTo(attempt, candidate: candidate, request: request)
 			nothingParked then return attempt.stoppedBy(DebugNotRunningReason)
 			refused(reason) then return attempt.refusedByTheAgent(reason)
@@ -1404,7 +1389,10 @@ export type DebugConversation
 	function returnAddressOnTheStack(record EngineStop, wordsAbove DebugTally) returns DebugEntryCaller
 		let word = try self.engine.readDebuggeeWord(record.stackPointer + (wordsAbove as DebugAddress) * (DebugWordBytes as DebugAddress), width: DebugWordBytes) otherwise return DebugEntryCaller.none
 
-		return DebugEntryCaller.at(word as DebugAddress)
+		return match debugUserSpaceAddress(word) 'held'
+			unresolved gives DebugEntryCaller.none
+			at(address) gives DebugEntryCaller.at(address)
+		end 'held'
 	end 'returnAddressOnTheStack'
 
 	function stopNameOf(record EngineStop) returns String
@@ -1656,12 +1644,14 @@ export type DebugConversation
 			return ReturnPlanting.declined
 		end 'theProgramsOwnCode'
 
-		if not self.insideTheImage(stop.pc) or self.symbols.offsetIsAFunctionEntry(stop.pc - self.engine.imageTextBase()) 'enteredThisInstruction'
-			return match self.returnAddressOnTheStack(stop, wordsAbove: 0) 'caller'
-				none gives ReturnPlanting.declined
-				at(returnAddress) gives self.plantedAt(DebugReturnPoint.create(returnAddress, framePointer: stop.framePointer, greenThread: stop.greenThread, kind: DebugReturnKind.callReturn))
-			end 'caller'
-		end 'enteredThisInstruction'
+		if not self.insideTheImage(stop.pc) 'enteredCodeOutsideTheImage'
+			return self.plantedOnTheReturnAbove(stop, wordsAbove: 0)
+		end 'enteredCodeOutsideTheImage'
+
+		match self.unchainedReturnOf(stop) 'unchained'
+			onTheStack(wordsAbove, _) then return self.plantedOnTheReturnAbove(stop, wordsAbove: wordsAbove)
+			none then break 'unchained'
+		end 'unchained'
 
 		if self.symbols.functionAtIsTheProgramsOwn(stop.pc - self.engine.imageTextBase()) 'splicedIntoTheProgramsFrame'
 			return self.plantedPastTheSplice(stop, mode: DebugWalkMode.intoTheCallee)
@@ -1675,6 +1665,13 @@ export type DebugConversation
 
 		return ReturnPlanting.declined
 	end 'plantedPastForeignCode'
+
+	function plantedOnTheReturnAbove(stop EngineStop, wordsAbove DebugTally) returns ReturnPlanting
+		return match self.returnAddressOnTheStack(stop, wordsAbove: wordsAbove) 'caller'
+			none gives ReturnPlanting.declined
+			at(returnAddress) gives self.plantedAt(DebugReturnPoint.create(returnAddress, framePointer: stop.framePointer, greenThread: stop.greenThread, kind: DebugReturnKind.callReturn))
+		end 'caller'
+	end 'plantedOnTheReturnAbove'
 
 	function plantedPastTheSplice(stop EngineStop, mode DebugWalkMode) returns ReturnPlanting
 		match self.symbols.spliceExitAt(stop.pc - self.engine.imageTextBase()) 'exit'
@@ -1751,7 +1748,7 @@ export type DebugConversation
 	end 'plantedAt'
 
 	function plantDecoded(point DebugReturnPoint, instruction X64Instruction) returns ReturnPlanting
-		let planted = self.engine.plantReturnPoint(point, classWord: instruction.classWord() as DebugAddress, fixup: instruction.fixupWord() as DebugAddress)
+		let planted = self.engine.plantReturnPoint(point, classWord: instruction.classWord(), fixup: instruction.fixupWord())
 
 		return match planted 'answered'
 			done gives ReturnPlanting.planted
@@ -1926,37 +1923,32 @@ export type DebugConversation
 		end 'target'
 	end 'callStaysOutOfTheProgram'
 
-	function indirectCallTargetAt(pc DebugAddress) returns DebugCallTarget
+	function indirectCallTargetAt(pc DebugAddress) returns DebugUserSpaceAddress
 		match decodedAt(self.symbols.imageCode(), offset: pc - self.engine.imageTextBase(), address: pc) 'classified'
 			unclassified then panic("DebugConversation.indirectCallTargetAt: {hexWord(pc)} was planted as an indirect call the splice scan decoded")
 			decoded(instruction) then return self.calledThrough(instruction.callOperand)
 		end 'classified'
 	end 'indirectCallTargetAt'
 
-	function calledThrough(operand X64CallOperand) returns DebugCallTarget
+	function calledThrough(operand X64CallOperand) returns DebugUserSpaceAddress
 		match operand 'operand'
 			none then panic("DebugConversation.calledThrough: an indirect call decodes with the operand it calls through")
-			register(number) then return userSpaceTarget(self.engine.registerValue(number as EngineRegisterNumber))
+			register(number) then return debugUserSpaceAddress(self.engine.registerValue(number as EngineRegisterNumber))
 			memory(base, index, scale, displacement) then return self.wordAtTarget(self.effectiveAddress(base, index: index, scale: scale, displacement: displacement))
 			programCounterRelative(address) then return self.wordHeldAt(address as DebugAddress)
-			addressOverridden then return DebugCallTarget.unresolved
+			addressOverridden then return DebugUserSpaceAddress.unresolved
 		end 'operand'
 	end 'calledThrough'
 
-	function effectiveAddress(base X64RegisterLookup, index X64RegisterLookup, scale X64Scale, displacement X64Relative) returns DebugCallTarget
+	function effectiveAddress(base X64RegisterLookup, index X64RegisterLookup, scale X64Scale, displacement X64Displacement) returns DebugUserSpaceAddress
 		let baseValue = self.registerTerm(base)
 		let indexValue = self.registerTerm(index)
 
-		if baseValue < 0 or baseValue >= UserSpaceLimit or indexValue < 0 or indexValue >= UserSpaceLimit 'notAUserSpaceTerm'
-			return DebugCallTarget.unresolved
+		if baseValue < 0 or baseValue >= DebugUserSpaceLimit or indexValue < 0 or indexValue >= DebugUserSpaceLimit 'notAUserSpaceTerm'
+			return DebugUserSpaceAddress.unresolved
 		end 'notAUserSpaceTerm'
 
-		let scaled = baseValue + indexValue * (scale as DebugWord)
-
-		return match displacement 'direction'
-			forward(magnitude) gives userSpaceTarget(scaled + (magnitude as DebugWord))
-			backward(magnitude) gives userSpaceTarget(scaled - (magnitude as DebugWord))
-		end 'direction'
+		return debugUserSpaceAddress(baseValue + indexValue * (scale as DebugWord) + (displacement as DebugWord))
 	end 'effectiveAddress'
 
 	function registerTerm(register X64RegisterLookup) returns DebugWord
@@ -1966,17 +1958,17 @@ export type DebugConversation
 		end 'term'
 	end 'registerTerm'
 
-	function wordAtTarget(address DebugCallTarget) returns DebugCallTarget
+	function wordAtTarget(address DebugUserSpaceAddress) returns DebugUserSpaceAddress
 		match address 'held'
-			unresolved then return DebugCallTarget.unresolved
+			unresolved then return DebugUserSpaceAddress.unresolved
 			at(slot) then return self.wordHeldAt(slot)
 		end 'held'
 	end 'wordAtTarget'
 
-	function wordHeldAt(slot DebugAddress) returns DebugCallTarget
-		let word = try self.engine.readDebuggeeWord(slot, width: DebugWordBytes) otherwise return DebugCallTarget.unresolved
+	function wordHeldAt(slot DebugAddress) returns DebugUserSpaceAddress
+		let word = try self.engine.readDebuggeeWord(slot, width: DebugWordBytes) otherwise return DebugUserSpaceAddress.unresolved
 
-		return userSpaceTarget(word)
+		return debugUserSpaceAddress(word)
 	end 'wordHeldAt'
 
 	function steppedLandingSettled(replies DebugReplyArray, pending DebugPendingWalk, record EngineStop) returns bool

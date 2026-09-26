@@ -12,7 +12,7 @@ export enum DebugMemoryError implements Error
 end 'DebugMemoryError'
 
 export interface DebugMemory
-	function readDebuggeeWord(address DebugAddress, width EngineReadLength) returns DebugWord throws DebugMemoryError
+	function readDebuggeeWord(address DebugAddress, width DebugWidth) returns DebugWord throws DebugMemoryError
 	function readDebuggeeText(address DebugAddress, length EngineReadLength) returns String throws DebugMemoryError
 	function registerValue(number EngineRegisterNumber) returns DebugWord
 end 'DebugMemory'
@@ -885,8 +885,13 @@ export type DebugEngine implements DebugMemory
 		end 'posted'
 	end 'strayStepResumed'
 
-	export function readDebuggeeWord(address DebugAddress, width EngineReadLength) returns DebugWord throws DebugMemoryError
-		return littleEndianWordOf(try self.readDebuggeeBytes(address, length: width))
+	export function readDebuggeeWord(address DebugAddress, width DebugWidth) returns DebugWord throws DebugMemoryError
+		let bytes = try self.readDebuggeeBytes(address, length: width as EngineReadLength)
+
+		match debugLittleEndianAt(bytes, at: 0, width: width) 'read'
+			pastTheBytes then panic("DebugEngine.readDebuggeeWord: the {bytes.count()} bytes read from {address:x} are all in hand")
+			read(value) then return value
+		end 'read'
 	end 'readDebuggeeWord'
 
 	export function readDebuggeeText(address DebugAddress, length EngineReadLength) returns String throws DebugMemoryError
@@ -1201,35 +1206,6 @@ function seededWord(page SharedSegment, offset DebugAddress, value DebugAddress)
 
 	return true
 end 'seededWord'
-
-function littleEndianWordOf(bytes ByteArray) returns DebugWord
-	var low = 0 as DebugWord
-	var top = 0 as EngineTopByte
-
-	for (iter, byte) in bytes.withIterator() 'eachByte'
-		if iter.index() == EngineTopBytePosition 'theSignBearingByte'
-			top = byte as EngineTopByte
-			continue
-		end 'theSignBearingByte'
-
-		low = low or ((byte as DebugWord) shl ((iter.index() * EngineByteBits) as DebugEngineBitShift))
-	end 'eachByte'
-
-	if top < EngineSignBitByteValue 'positive'
-		return low + (top as DebugWord) * EngineTopByteWeight
-	end 'positive'
-
-	return low + ((top - EngineByteModulus) as DebugWord) * EngineTopByteWeight
-end 'littleEndianWordOf'
-
-typealias DebugEngineBitShift = int(0 to 63)
-typealias EngineTopByte = int(0 to 255)
-
-let EngineByteBits = 8
-let EngineTopBytePosition = 7
-let EngineSignBitByteValue = 128
-let EngineByteModulus = 256
-let EngineTopByteWeight = 72057594037927936
 
 // ⚠ The two bounds below are written twice: a typed range cannot name a `let`, so the only way to
 // keep them true is to compare them with the page they describe before the page is created.

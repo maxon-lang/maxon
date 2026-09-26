@@ -1086,16 +1086,60 @@ export function requiredCodeRange(row String, what String) returns (SidecarNumbe
 end 'requiredCodeRange'
 
 export function functionCodeStart(executable FilePath, staged FilePath, name String) returns SidecarNumber
+	let (start, _) = requiredCodeRange(dumpedFunctionRow(executable, staged: staged, name: name), what: "`{name}`'s function row")
+
+	return start
+end 'functionCodeStart'
+
+export function functionPrologueStart(executable FilePath, staged FilePath, name String) returns SidecarNumber
+	let row = dumpedFunctionRow(executable, staged: staged, name: name)
+	let (start, _) = requiredCodeRange(row, what: "`{name}`'s function row")
+
+	for token in whitespaceTokens(row) 'eachToken'
+		if token.startsWith(PrologueColumn) 'thePrologueColumn'
+			return start + hexValue(token.replace(PrologueColumn, with: ""))
+		end 'thePrologueColumn'
+	end 'eachToken'
+
+	panic("debug tests: the gate could not run — `{name}`'s function row carries no `{PrologueColumn}` column: {row}")
+end 'functionPrologueStart'
+
+function dumpedFunctionRow(executable FilePath, staged FilePath, name String) returns String
 	let dump = spawnDumpInfo(executable, staged: staged, sections: StringArray.create())
 
 	if dump.exitCode() != 0 'noSidecarPrinted'
 		panic("debug tests: the gate could not run — `{DebugSubcommandName} {DumpInfoOptionName} <exe>` did not print the sidecar. It wrote to stderr: {dump.stderr}")
 	end 'noSidecarPrinted'
 
-	let (start, _) = requiredCodeRange(functionRowOf(dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading), name: name), what: "`{name}`'s function row")
+	return functionRowOf(dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading), name: name)
+end 'dumpedFunctionRow'
 
-	return start
-end 'functionCodeStart'
+let PrologueColumn = "prologue=+"
+
+export let PushedFramePointerBytes = 1 as SidecarNumber
+
+// What `--target` defaults to on this host, spelled `<arch>-<os>`.
+export function hostTargetTriple() returns String
+	#if arch(x64)
+		let archName = "x64"
+	#else
+		let archName = "arm64"
+	#endif
+
+	#if os(Windows)
+		let osName = "windows"
+	#endif
+
+	#if os(Linux)
+		let osName = "linux"
+	#endif
+
+	#if os(Macos)
+		let osName = "macos"
+	#endif
+
+	return "{archName}-{osName}"
+end 'hostTargetTriple'
 
 export typealias SidecarNumberArray = Array with SidecarNumber
 
@@ -1185,6 +1229,7 @@ export function dumpedRowsAt(executable FilePath, staged FilePath, scope DumpedR
 		theProgram gives "{StagedProgramFileName}:"
 		line(number) gives "{StagedProgramFileName}:{number}:"
 	end 'rows'
+
 	let dump = spawnDumpInfo(executable, staged: staged, sections: [LinesSectionName])
 	var rows = DumpedLineRowArray.create()
 

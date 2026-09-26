@@ -31,10 +31,10 @@ the binary you ship.
 
 The sidecar maps machine code back to the source. It records the target, a **build id** (a hash of
 the executable's code section) and the directory the build ran in, then the source files, functions with
-their frame size, local variables and origin, types, the line table and inlining records. `maxon debug`
-prints it; `maxon profile` and `maxon coverage` read it, and a `--coverage` build requires it.
+their prologue offset, frame size, local variables and origin, types, the line table and inlining
+records. `maxon debug` prints it; `maxon profile` and `maxon coverage` read it, and a `--coverage` build requires it.
 
-The sidecar format is versioned (version 7), and a reader refuses a sidecar of any other version: after
+The sidecar format is versioned (version 8), and a reader refuses a sidecar of any other version: after
 upgrading the compiler, rebuild before debugging, profiling or reporting coverage.
 
 ## Panics and backtraces
@@ -97,9 +97,10 @@ while the driver arms whatever was asked for. Only the agent writes into the pro
 OS debug API is used. A debugged program that finds its driver gone stops where it is and exits 97,
 rather than staying parked forever waiting for a command nobody will send.
 
-A program the debugger cannot drive is refused by name, with exit 1: a wasm module, a binary built for
-another target, one built `--no-debug-agent` (reported as no agent having attached), and a binary whose
-sidecar describes a different build.
+A program the debugger cannot drive is refused by name, with exit 1: every program on a host other than
+x64-windows (naming the host), a wasm module, a binary built for a target other than this host's
+(refused before launch, naming both targets), one built `--no-debug-agent` (reported as no agent having
+attached), and a binary whose sidecar describes a different build.
 
 **Commands**, with their aliases: `break` (`b`) · `clear` · `run` (`r`) · `continue` (`c`) · `step` (`s`) ·
 `next` (`n`) · `finish` · `until` (`u`) · `backtrace` (`bt`, `where`) · `print` (`p`) · `locals` · `pause` ·
@@ -267,7 +268,7 @@ indirect jump `unclassified`. Every address is computed against a fixed probe ad
 |---------|----------|
 | `header` | The file, target, build id and `root`, the directory the build ran in, from which the recorded relative source paths are read |
 | `files` | The source files, including the standard-library and runtime files the program uses |
-| `functions` | Each function's code range, frame size, parameter, line and local counts and `origin`, then `as <name>` when the debugger shows it under another name (a test body is shown as `test '<prose>'`); and, per local, the code range `[start, end)` it is live over, its location, `in [n]` when it belongs to inline site `n`, and its type. A location is a frame slot, a register, `<optimized out>`, `= v` for a value folded to a constant or `= {…}` for a whole record folded to one; a `*` after it means the location holds a pointer to the value rather than the value. A name with several live runs has a row per run. |
+| `functions` | Each function's code range, `prologue=+0x…` (how far past its entry its prologue starts: the length of the green-thread stack guard ahead of it, `+0x0` when none), frame size, parameter, line and local counts and `origin`, then `as <name>` when the debugger shows it under another name (a test body is shown as `test '<prose>'`); and, per local, the code range `[start, end)` it is live over, its location, `in [n]` when it belongs to inline site `n`, and its type. A location is a frame slot, a register, `<optimized out>`, `= v` for a value folded to a constant or `= {…}` for a whole record folded to one; a `*` after it means the location holds a pointer to the value rather than the value. A name with several live runs has a row per run. |
 | `types` | Each type's kind, size, alignment and fields, with `(signed)` on a type whose values are signed and an `element` row on an array's |
 | `lines` | The line table: code offset, source position and flags — `statement`, `coverage`, and `line-entry` on a row where control enters its source line: falling in from a different line, at the function's entry, or through a branch from another line |
 | `statements` | The same table, without the code offsets |
@@ -287,8 +288,8 @@ Debug info: app.exe
 
 $ maxon debug --dump-info app.exe functions
   functions (109):
-    mrt_start                        [0x0000, 0x002e)  frame=0x20  params=0  lines=0  locals=0  origin=synthesized
-    main                             [0x0040, 0x021c)  frame=0x48  params=0  lines=21  locals=9  origin=authored
+    mrt_start                        [0x0000, 0x002e)  prologue=+0x0  frame=0x20  params=0  lines=0  locals=0  origin=synthesized
+    main                             [0x0040, 0x021c)  prologue=+0x0  frame=0x48  params=0  lines=21  locals=9  origin=authored
         limit                [0x0040, 0x021c)  = 64  : Amount
         points               [0x0065, 0x021c)  [rbp-0x50]*  : Array_Amount
         total                [0x0085, 0x0089)  reg2  in [0]  : Amount
@@ -321,16 +322,16 @@ $ maxon debug --symbolize app.exe 0x00e0 0x0151 zz
 Not a code offset: 'zz' (use decimal or 0x-prefixed hex).
 ```
 
-**The build id.** Given an executable, `maxon debug` checks that the sidecar beside it was written by the
-same build, and refuses a stale one with exit 1:
+**The build id.** Given an executable, or the `.mxdbg` path beside one, `maxon debug` checks that the
+sidecar was written by the same build as that executable, and refuses a stale one with exit 1:
 
 ```text
 maxon debug: the .mxdbg sidecar describes a different build of this binary — rebuild it
 ```
 
-Given the `.mxdbg` path directly, it prints the sidecar without that check. A missing sidecar is refused
-with exit 1, naming the path it looked for and `--no-debug-info` as the likely cause. `maxon debug` reads
-PE, ELF and Mach-O executables whatever the host, so it works on a cross-compiled binary.
+A missing sidecar is refused with exit 1, naming the path it looked for and `--no-debug-info` as the
+likely cause. `maxon debug` reads PE, ELF and Mach-O executables whatever the host, so it works on a
+cross-compiled binary.
 
 ## `maxon monitor`
 

@@ -21,14 +21,8 @@ union DebugChildLookup
 	at(index DebugValueIndex)
 end 'DebugChildLookup'
 
-typealias DebugByteWidth = int(0 to 512)
-typealias DebugBitShift = int(0 to 63)
 typealias DebugElementTally = int(0 to u32.max)
 typealias DebugRealValue = float(f64.min to f64.max)
-
-let WordBytes = 8 as DebugByteWidth
-let ByteBits = 8
-let ByteMask = 0xFF
 
 let MaxCountableElements = 4294967295 as DebugWord
 let UnionFoldedWords = 2
@@ -46,21 +40,21 @@ let SingleNormalScale = -150.0 as DebugRealValue
 let BoolTypeName = "i1"
 let DoubleTypeName = "f64"
 let SingleTypeName = "f32"
-let FlagBytes = 1 as DebugByteWidth
+let FlagBytes = 1 as DebugWidth
 let NullPointerDisplay = "<null>"
 let StructDisplay = "\{…\}"
 let MemberSeparator = "."
 let VoidPayloadName = "void"
 
 let MaxRenderedChildren = 32 as DebugElementTally
-let MaxRenderedTextBytes = 256 as DebugByteWidth
+let MaxRenderedTextBytes = 256 as EngineReadLength
 
 let ManagedBufferOffset = 0 as DebugAddress
 let ManagedLengthOffset = 8 as DebugAddress
 let ManagedElementSizeOffset = 24 as DebugAddress
 
 let UnionTagOffset = 0 as DebugAddress
-let UnionTagBytes = 8 as DebugByteWidth
+let UnionTagBytes = 8 as DebugWidth
 
 let MinimumPlausibleHeapAddress = 0x10000 as DebugWord
 
@@ -177,7 +171,7 @@ function sourceOf(memory DebugMemory, local MxdbgLocalInfo, framePointer DebugAd
 		return DebugValueSource.address(slot)
 	end 'theValueItself'
 
-	return DebugValueSource.address(try addressOf(try readRaw(memory, source: DebugValueSource.address(slot), width: WordBytes)))
+	return DebugValueSource.address(try addressOf(try readRaw(memory, source: DebugValueSource.address(slot), width: DebugWordBytes)))
 end 'sourceOf'
 
 function renderTyped(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, name String, typeId MxdbgIndex, source DebugValueSource) returns DebugValueIndex
@@ -228,7 +222,7 @@ function renderNumberOrCase(tree DebugValueTree, memory DebugMemory, symbols Deb
 		return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: caseNameOf(symbols, record: record, tag: raw)))
 	end 'aDeclaredCase'
 
-	return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: "{signExtended(raw, width: width) if record.isSigned() else raw}"))
+	return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: "{debugSignExtended(raw, width: width) if record.isSigned() else raw}"))
 end 'renderNumberOrCase'
 
 function renderFlag(tree DebugValueTree, memory DebugMemory, name String, typeName String, kind String, source DebugValueSource) returns DebugValueIndex
@@ -237,10 +231,10 @@ function renderFlag(tree DebugValueTree, memory DebugMemory, name String, typeNa
 	return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: "true" if raw != 0 else "false"))
 end 'renderFlag'
 
-function renderReal(tree DebugValueTree, memory DebugMemory, name String, typeName String, kind String, source DebugValueSource, width DebugByteWidth) returns DebugValueIndex
+function renderReal(tree DebugValueTree, memory DebugMemory, name String, typeName String, kind String, source DebugValueSource, width DebugWidth) returns DebugValueIndex
 	let raw = try readRaw(memory, source: source, width: width) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
 
-	if width < WordBytes 'aSingle'
+	if width < DebugWordBytes 'aSingle'
 		return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: "{singleFrom(raw)}"))
 	end 'aSingle'
 
@@ -279,8 +273,8 @@ function renderText(tree DebugValueTree, memory DebugMemory, name String, typeNa
 
 	let buffer = try pointerAt(memory, address: record + ManagedBufferOffset) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
 	let length = try countAt(memory, address: record + ManagedLengthOffset) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
-	let shown = (length as DebugByteWidth) if length < (MaxRenderedTextBytes as DebugElementTally) else MaxRenderedTextBytes
-	let text = try memory.readDebuggeeText(buffer, length: shown as EngineReadLength) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
+	let shown = (length as EngineReadLength) if length < (MaxRenderedTextBytes as DebugElementTally) else MaxRenderedTextBytes
+	let text = try memory.readDebuggeeText(buffer, length: shown) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
 
 	return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: "\"{text}\" (len={length})"))
 end 'renderText'
@@ -425,31 +419,10 @@ function unreadable(tree DebugValueTree, name String, typeName String, kind Stri
 	return tree.add(DebugValueNode.missing(name, typeName: typeName, kind: kind, reason: DebugReadFailedReason))
 end 'unreadable'
 
-// ⚠ A word read at eight bytes ALREADY carries its sign, because that is the only reading an i64 can
-// hold; a narrower one is read unsigned and is sign-extended here iff the type record says the type is
-// signed. A `renderReal` never comes through here: a float's bits are not a magnitude.
-function signExtended(raw DebugWord, width DebugByteWidth) returns DebugWord
-	if width >= WordBytes or raw < signBitOf(width) 'nothingToExtend'
-		return raw
-	end 'nothingToExtend'
-
-	return raw - signBitOf(width) * 2
-end 'signExtended'
-
-function signBitOf(width DebugByteWidth) returns DebugWord
-	var bit = 1 as DebugWord
-
-	for _ in 0 upto width * ByteBits - 1 'eachBitBelowTheSign'
-		bit = bit * 2
-	end 'eachBitBelowTheSign'
-
-	return bit
-end 'signBitOf'
-
-function widthOf(record MxdbgTypeInfo) returns DebugByteWidth
+function widthOf(record MxdbgTypeInfo) returns DebugWidth
 	let size = record.size as DebugAddress
 
-	return WordBytes if size == 0 or size > (WordBytes as DebugAddress) else size as DebugByteWidth
+	return DebugWordBytes if size == 0 or size > (DebugWordBytes as DebugAddress) else size as DebugWidth
 end 'widthOf'
 
 function caseNameOf(symbols DebugSymbols, record MxdbgTypeInfo, tag DebugWord) returns String
@@ -486,11 +459,11 @@ function addressOf(word DebugWord) returns DebugAddress throws DebugMemoryError
 end 'addressOf'
 
 function pointerAt(memory DebugMemory, address DebugAddress) returns DebugAddress throws DebugMemoryError
-	return try addressOf(try readRaw(memory, source: DebugValueSource.address(address), width: WordBytes))
+	return try addressOf(try readRaw(memory, source: DebugValueSource.address(address), width: DebugWordBytes))
 end 'pointerAt'
 
 function countAt(memory DebugMemory, address DebugAddress) returns DebugElementTally throws DebugMemoryError
-	let word = try readRaw(memory, source: DebugValueSource.address(address), width: WordBytes)
+	let word = try readRaw(memory, source: DebugValueSource.address(address), width: DebugWordBytes)
 
 	if word < 0 or word > MaxCountableElements 'notACount'
 		throw DebugMemoryError.notReadable
@@ -499,25 +472,11 @@ function countAt(memory DebugMemory, address DebugAddress) returns DebugElementT
 	return word as DebugElementTally
 end 'countAt'
 
-function readRaw(memory DebugMemory, source DebugValueSource, width DebugByteWidth) returns DebugWord throws DebugMemoryError
+function readRaw(memory DebugMemory, source DebugValueSource, width DebugWidth) returns DebugWord throws DebugMemoryError
 	match source 'which'
 		nowhere or
 			folded then throw DebugMemoryError.notReadable
-		word(bits) then return maskedToWidth(bits, width: width)
-		address(at) then return try memory.readDebuggeeWord(at, width: width as EngineReadLength)
+		word(bits) then return debugMaskedToWidth(bits, width: width)
+		address(at) then return try memory.readDebuggeeWord(at, width: width)
 	end 'which'
 end 'readRaw'
-
-function maskedToWidth(bits DebugWord, width DebugByteWidth) returns DebugWord
-	if width >= WordBytes 'theWholeWord'
-		return bits
-	end 'theWholeWord'
-
-	var mask = 0 as DebugWord
-
-	for i in 0 upto width 'eachByte'
-		mask = mask or ((ByteMask as DebugWord) shl ((i * ByteBits) as DebugBitShift))
-	end 'eachByte'
-
-	return bits and mask
-end 'maskedToWidth'

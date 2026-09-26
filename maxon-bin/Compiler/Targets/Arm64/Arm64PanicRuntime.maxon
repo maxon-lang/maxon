@@ -432,6 +432,7 @@ function buildArm64PanicChunk(globalData GlobalDataTable, dumpCoverage bool, gre
 	var callFixups = CallFixupArray.create()
 	var rdataRelocs = RdataRelocationArray.create()
 	arm64EmitPanicStackGuard(entry, callFixups: callFixups, rdataRelocs: rdataRelocs, greenThreads: greenThreads, target: target)
+	let guardBytes = entry.count() as CodeOffset
 	var asm = Arm64RuntimeAsm.beginFunctionAfterEntry(entry, callFixups: callFixups, rdataRelocs: rdataRelocs, slots: 0)
 
 	// (1) The caller's message — already in x0.
@@ -453,14 +454,16 @@ function buildArm64PanicChunk(globalData GlobalDataTable, dumpCoverage bool, gre
 	// (5) exit(PanicExitCode) — the one step with an OS in it.
 	arm64EmitProcessExit(asm, os: target.os, exitCode: PanicExitCode)
 
-	return asm.finishChunk(PanicName)
+	var chunk = asm.finishChunk(PanicName)
+	chunk.asyncUnsafePrefixBytes = guardBytes
+
+	return chunk
 end 'buildArm64PanicChunk'
 
-// ⭐⭐ **A PANIC CAN BE RAISED FROM ANY DEPTH OF UN-GUARDED RUNTIME FRAMES, SO IT MAKES ITS OWN ROOM** —
 // x64's `emitPanicStackGuard` carries the argument: the same prologue guard every guarded function runs,
-// projecting one margin for the diagnostic chain under `mrt_panic`, placed before the frame record as x64's is
-// and for x64's reason. It never parks (`GtGuardSite.mrtPanic`). Only a green-thread program has the scheduler
-// words it reads.
+// projecting one margin for the diagnostic chain under `mrt_panic`, placed before the frame record for
+// x64's reason. Its length is the chunk's `asyncUnsafePrefixBytes`, the sidecar's prologue offset. It
+// never parks (`GtGuardSite.mrtPanic`). Only a green-thread program has the scheduler words it reads.
 function arm64EmitPanicStackGuard(entry ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, greenThreads bool, target Target)
 	if not greenThreads 'noGreenThreads'
 		return

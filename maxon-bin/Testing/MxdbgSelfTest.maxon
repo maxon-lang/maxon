@@ -25,6 +25,8 @@ let PastEverything = 250 as MxdbgCodeOffset
 
 let WithdrawFrame = 64 as MxdbgIndex
 let ParseBatchFrame = 32 as MxdbgIndex
+let WithdrawPrologueOffset = 0 as MxdbgCodeOffset
+let ParseBatchPrologueOffset = 12 as MxdbgCodeOffset
 let WithdrawParams = 1 as MxdbgIndex
 let ParseBatchParams = 2 as MxdbgIndex
 
@@ -159,6 +161,7 @@ function checkTablesRoundTrip(broken StringArray)
 	checkRefusesAnInvertedFunctionRange(broken, buildId: buildId)
 	checkRefusesOverlappingFunctionRanges(broken, buildId: buildId)
 	checkRefusesARowOutsideItsFunction(broken, buildId: buildId)
+	checkRefusesAProloguePastItsFunction(broken, buildId: buildId)
 	checkRefusesAnEmptyLocalScope(broken, buildId: buildId)
 	checkRefusesADanglingCallFile(broken, buildId: buildId)
 end 'checkTablesRoundTrip'
@@ -181,6 +184,12 @@ function checkRefusesARowOutsideItsFunction(broken StringArray, buildId HashDige
 	requireRefusedAs(broken, image: image, expected: MxdbgReadError.outOfOrder(MxdbgOrderedTable.functionLineOutsideItsRange, record: 0), damage: "an image whose function 0 lists a line row at 0x{RowPastWithdraw:x}, past its own end")
 end 'checkRefusesARowOutsideItsFunction'
 
+function checkRefusesAProloguePastItsFunction(broken StringArray, buildId HashDigest)
+	var image = selfTestImage(buildId)
+	overwriteTableWord(image, tableAt: MxdbgOffFuncTableOff, stride: MxdbgFuncEntrySize, record: 0, field: MxdbgFuncPrologueOffset, value: RowPastWithdraw as MachineWord)
+	requireRefusedAs(broken, image: image, expected: MxdbgReadError.outOfOrder(MxdbgOrderedTable.functionPrologueOutsideItsRange, record: 0), damage: "an image whose function 0 starts its prologue at +0x{RowPastWithdraw:x}, past its own end")
+end 'checkRefusesAProloguePastItsFunction'
+
 function checkRefusesAnEmptyLocalScope(broken StringArray, buildId HashDigest)
 	var image = selfTestImage(buildId)
 	overwriteTableWord(image, tableAt: MxdbgOffLocalTableOff, stride: MxdbgLocalEntrySize, record: 0, field: MxdbgLocalScopeStart, value: WithdrawEnd as MachineWord)
@@ -196,7 +205,7 @@ end 'checkRefusesADanglingCallFile'
 function checkRefusesACyclicSiteParent(broken StringArray, buildId HashDigest)
 	var writer = MxdbgWriter.create()
 	writer.addFile(AccountFileName)
-	writer.addFunction(WithdrawName, displayName: WithdrawName, origin: MxdbgOrigin.authored, codeStart: WithdrawStart, codeEnd: WithdrawEnd, frameSize: WithdrawFrame, paramCount: WithdrawParams)
+	writer.addFunction(WithdrawName, displayName: WithdrawName, origin: MxdbgOrigin.authored, codeStart: WithdrawStart, codeEnd: WithdrawEnd, prologueOffset: WithdrawPrologueOffset, frameSize: WithdrawFrame, paramCount: WithdrawParams)
 	writer.addInlineSite(DebitName, parent: MxdbgNoInlineSite, callFileId: MxdbgNoSourceFile, callLine: 0, callColumn: 0, origin: MxdbgOrigin.authored)
 	writer.addInlineSite(CheckFundsName, parent: DebitSite, callFileId: MxdbgNoSourceFile, callLine: 0, callColumn: 0, origin: MxdbgOrigin.library)
 	writer.addInlineRange(DebitStart, codeEnd: DebitEnd, site: DebitSite)
@@ -469,7 +478,7 @@ function selfTestImage(buildId HashDigest) returns ByteArray
 	_ = writer.addConstantWord(ParcelHeight)
 	_ = writer.addConstantWord(ShipmentTag)
 	_ = writer.addConstantWord(ShipmentPayload)
-	writer.addFunction(WithdrawName, displayName: WithdrawName, origin: MxdbgOrigin.authored, codeStart: WithdrawStart, codeEnd: WithdrawEnd, frameSize: WithdrawFrame, paramCount: WithdrawParams)
+	writer.addFunction(WithdrawName, displayName: WithdrawName, origin: MxdbgOrigin.authored, codeStart: WithdrawStart, codeEnd: WithdrawEnd, prologueOffset: WithdrawPrologueOffset, frameSize: WithdrawFrame, paramCount: WithdrawParams)
 	writer.addLocal(AmountName, locKind: MxdbgLocKindRegister, locValue: AmountRegister, typeId: AmountTypeId, scopeStart: WithdrawStart, scopeEnd: WithdrawEnd, flags: 0, site: MxdbgNoInlineSite)
 	writer.addLocal(LimitName, locKind: MxdbgLocKindConstant, locValue: LimitConstant, typeId: AmountTypeId, scopeStart: WithdrawStart, scopeEnd: WithdrawEnd, flags: 0, site: MxdbgNoInlineSite)
 	writer.addLocal(ParcelName, locKind: MxdbgLocKindFoldedAggregate, locValue: ParcelWordBase, typeId: ParcelTypeId, scopeStart: WithdrawStart, scopeEnd: WithdrawEnd, flags: 0, site: MxdbgNoInlineSite)
@@ -477,7 +486,7 @@ function selfTestImage(buildId HashDigest) returns ByteArray
 	writer.addLocal(TotalName, locKind: MxdbgLocKindRegister, locValue: TotalRegister, typeId: AmountArrayTypeId, scopeStart: WithdrawStart, scopeEnd: TotalFirstRunEnd, flags: MxdbgLocalFlagIndirect, site: MxdbgNoInlineSite)
 	writer.addLocal(TotalName, locKind: MxdbgLocKindRegister, locValue: TotalRegister, typeId: AmountArrayTypeId, scopeStart: TotalSecondRunStart, scopeEnd: WithdrawEnd, flags: MxdbgLocalFlagIndirect, site: MxdbgNoInlineSite)
 	writer.addLocal(DueName, locKind: MxdbgLocKindRegister, locValue: DueRegister, typeId: AmountTypeId, scopeStart: DebitStart, scopeEnd: DebitEnd, flags: 0, site: DebitSite)
-	writer.addFunction(ParseBatchName, displayName: ParseBatchDisplayName, origin: MxdbgOrigin.test, codeStart: ParseBatchStart, codeEnd: ParseBatchEnd, frameSize: ParseBatchFrame, paramCount: ParseBatchParams)
+	writer.addFunction(ParseBatchName, displayName: ParseBatchDisplayName, origin: MxdbgOrigin.test, codeStart: ParseBatchStart, codeEnd: ParseBatchEnd, prologueOffset: ParseBatchPrologueOffset, frameSize: ParseBatchFrame, paramCount: ParseBatchParams)
 	writer.addLine(0, fileId: AccountFileId, line: 10, column: 1, flags: MxdbgLineFlagStatement)
 	writer.addLine(16, fileId: AccountFileId, line: 11, column: 5, flags: MxdbgLineFlagStatement)
 	writer.addLine(SharedLineFirstOffset, fileId: AccountFileId, line: SharedLine, column: 5, flags: MxdbgLineFlagStatement)
@@ -596,8 +605,8 @@ function checkHeader(broken StringArray, reader MxdbgReader, buildId HashDigest)
 		broken.push("the build-id does not survive the round trip")
 	end 'buildIdLost'
 
-	if reader.triple != SelfTestTriple 'tripleLost'
-		broken.push("the target triple reads back as '{reader.triple}' rather than '{SelfTestTriple}'")
+	if targetToString(reader.target) != SelfTestTriple 'tripleLost'
+		broken.push("the target triple reads back as '{targetToString(reader.target)}' rather than '{SelfTestTriple}'")
 	end 'tripleLost'
 
 	if reader.sourceRoot != SelfTestSourceRoot 'sourceRootLost'
@@ -632,6 +641,10 @@ function checkFunctionWindows(broken StringArray, reader MxdbgReader)
 	end 'firstProvenanceLost'
 
 	let parseBatch = reader.functionRecord(1)
+
+	if withdraw.prologueOffset != WithdrawPrologueOffset or parseBatch.prologueOffset != ParseBatchPrologueOffset 'prologueOffsetLost'
+		broken.push("the prologue offsets read back as +0x{withdraw.prologueOffset:x} and +0x{parseBatch.prologueOffset:x}, written as +0x{WithdrawPrologueOffset:x} and +0x{ParseBatchPrologueOffset:x}")
+	end 'prologueOffsetLost'
 
 	if parseBatch.displayName != ParseBatchDisplayName or parseBatch.origin != MxdbgOrigin.test 'secondProvenanceLost'
 		broken.push("function 1 reads back displayed as '{parseBatch.displayName}' of origin {parseBatch.origin.name}")

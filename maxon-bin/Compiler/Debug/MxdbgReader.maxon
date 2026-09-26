@@ -33,6 +33,7 @@ export enum MxdbgOrderedTable
 	inlineRanges
 	functionRanges
 	functionLineOutsideItsRange
+	functionPrologueOutsideItsRange
 	localScopes
 end 'MxdbgOrderedTable'
 
@@ -42,6 +43,7 @@ function orderedTableText(table MxdbgOrderedTable, record MxdbgIndex) returns St
 		inlineRanges gives "inline range {record} is empty or overlaps the range before it"
 		functionRanges gives "function {record}'s code range ends before it starts or overlaps the function below it"
 		functionLineOutsideItsRange gives "a line row of function {record} lies outside that function's code range"
+		functionPrologueOutsideItsRange gives "function {record}'s prologue starts past the end of its code range"
 		localScopes gives "local {record}'s scope is empty or reaches outside its function's code range"
 	end 'which'
 end 'orderedTableText'
@@ -56,6 +58,7 @@ export union MxdbgReadError implements Error
 	stringPastPool(string MxdbgPoolString, record MxdbgIndex)
 	outOfOrder(table MxdbgOrderedTable, record MxdbgIndex)
 	unknownLocKind(record MxdbgIndex, word MxdbgIndex)
+	unknownTarget(triple String)
 
 	export function displayReason() returns String
 		return match self 'k'
@@ -68,6 +71,7 @@ export union MxdbgReadError implements Error
 			stringPastPool(string, record) gives "the .mxdbg {poolStringText(string, record: record)} runs past the string pool"
 			outOfOrder(table, record) gives "the .mxdbg {orderedTableText(table, record: record)}"
 			unknownLocKind(record, word) gives "the .mxdbg local {record} names location kind {word}, which is none this build knows"
+			unknownTarget(triple) gives "the .mxdbg header names target '{triple}', which is none this build compiles for"
 		end 'k'
 	end 'displayReason'
 end 'MxdbgReadError'
@@ -115,6 +119,13 @@ function originHolderText(holder MxdbgOriginHolder) returns String
 		inlineSiteRecord gives "inline site"
 	end 'which'
 end 'originHolderText'
+
+function targetOfTriple(triple String) returns Target throws MxdbgReadError
+	match parseBuildTarget(triple) 'known'
+		unrecognized then throw MxdbgReadError.unknownTarget(triple)
+		resolved(target) then return target
+	end 'known'
+end 'targetOfTriple'
 
 function requireKnownOrigin(word MxdbgIndex, holder MxdbgOriginHolder, record MxdbgIndex) throws MxdbgReadError
 	match mxdbgOriginOfWord(word) 'known'
@@ -165,9 +176,10 @@ export type MxdbgFunctionInfo
 	export var localCount as MxdbgIndex
 	export var displayName as String
 	export var origin as MxdbgOrigin
+	export var prologueOffset as MxdbgCodeOffset
 
-	export static function create(name String, codeStart MxdbgCodeOffset, codeEnd MxdbgCodeOffset, frameSize MxdbgIndex, paramCount MxdbgIndex, lineFirst MxdbgIndex, lineCount MxdbgIndex, localFirst MxdbgIndex, localCount MxdbgIndex, displayName String, origin MxdbgOrigin) returns MxdbgFunctionInfo
-		return Self{name: name, codeStart: codeStart, codeEnd: codeEnd, frameSize: frameSize, paramCount: paramCount, lineFirst: lineFirst, lineCount: lineCount, localFirst: localFirst, localCount: localCount, displayName: displayName, origin: origin}
+	export static function create(name String, codeStart MxdbgCodeOffset, codeEnd MxdbgCodeOffset, prologueOffset MxdbgCodeOffset, frameSize MxdbgIndex, paramCount MxdbgIndex, lineFirst MxdbgIndex, lineCount MxdbgIndex, localFirst MxdbgIndex, localCount MxdbgIndex, displayName String, origin MxdbgOrigin) returns MxdbgFunctionInfo
+		return Self{name: name, codeStart: codeStart, codeEnd: codeEnd, frameSize: frameSize, paramCount: paramCount, lineFirst: lineFirst, lineCount: lineCount, localFirst: localFirst, localCount: localCount, displayName: displayName, origin: origin, prologueOffset: prologueOffset}
 	end 'create'
 end 'MxdbgFunctionInfo'
 
@@ -349,7 +361,7 @@ export typealias MxdbgLineInfoArray = Array with MxdbgLineInfo
 export type MxdbgReader
 	var image as ByteArray
 	export var buildId as HashDigest
-	export var triple as String
+	export var target as Target
 	export var sourceRoot as String
 	var stringPoolOff as ByteOffset
 	var stringPoolSize as BytePos
@@ -451,7 +463,7 @@ export type MxdbgReader
 		try requirePoolSliceFits(tripleOff, length: tripleLen, poolSize: poolSize, string: MxdbgPoolString.targetTriple, record: 0)
 		try requirePoolSliceFits(rootOff, length: rootLen, poolSize: poolSize, string: MxdbgPoolString.sourceRoot, record: 0)
 
-		let reader = Self{image: image, buildId: imageReadU64(image, at: MxdbgOffBuildId) as HashDigest, triple: String.from(imageSlice(image, start: stringPoolOff + tripleOff, count: tripleLen)), sourceRoot: String.from(imageSlice(image, start: stringPoolOff + rootOff, count: rootLen)), stringPoolOff: stringPoolOff, stringPoolSize: poolSize, fileTableOff: fileTableOff, fileTally: fileTally, funcTableOff: funcTableOff, funcTally: funcTally, lineTableOff: lineTableOff, lineTally: lineTally, typeTableOff: typeTableOff, typeTally: typeTally, fieldTableOff: fieldTableOff, fieldTally: fieldTally, localTableOff: localTableOff, localTally: localTally, covTableOff: covTableOff, covTally: covTally, inlineSiteTableOff: inlineSiteTableOff, inlineSiteTally: inlineSiteTally, inlineRangeTableOff: inlineRangeTableOff, inlineRangeTally: inlineRangeTally, constTableOff: constTableOff, constTally: constTally, funcOrder: functionOrderByCodeStart(image, tableOff: funcTableOff, tally: funcTally)}
+		let reader = Self{image: image, buildId: imageReadU64(image, at: MxdbgOffBuildId) as HashDigest, target: try targetOfTriple(String.from(imageSlice(image, start: stringPoolOff + tripleOff, count: tripleLen))), sourceRoot: String.from(imageSlice(image, start: stringPoolOff + rootOff, count: rootLen)), stringPoolOff: stringPoolOff, stringPoolSize: poolSize, fileTableOff: fileTableOff, fileTally: fileTally, funcTableOff: funcTableOff, funcTally: funcTally, lineTableOff: lineTableOff, lineTally: lineTally, typeTableOff: typeTableOff, typeTally: typeTally, fieldTableOff: fieldTableOff, fieldTally: fieldTally, localTableOff: localTableOff, localTally: localTally, covTableOff: covTableOff, covTally: covTally, inlineSiteTableOff: inlineSiteTableOff, inlineSiteTally: inlineSiteTally, inlineRangeTableOff: inlineRangeTableOff, inlineRangeTally: inlineRangeTally, constTableOff: constTableOff, constTally: constTally, funcOrder: functionOrderByCodeStart(image, tableOff: funcTableOff, tally: funcTally)}
 		try reader.requireReferencesHold()
 		try reader.requireOrderedTables()
 
@@ -556,6 +568,10 @@ export type MxdbgReader
 			if not mxdbgFunctionRangeFollows(codeStart, codeEnd: codeEnd, previousEnd: previousFunctionEnd) 'invertedOrOverlapping'
 				throw MxdbgReadError.outOfOrder(MxdbgOrderedTable.functionRanges, record: fn)
 			end 'invertedOrOverlapping'
+
+			if (self.tableWord(self.funcTableOff, stride: MxdbgFuncEntrySize, index: fn, at: MxdbgFuncPrologueOffset) as MxdbgCodeOffset) > codeEnd - codeStart 'prologuePastTheEnd'
+				throw MxdbgReadError.outOfOrder(MxdbgOrderedTable.functionPrologueOutsideItsRange, record: fn)
+			end 'prologuePastTheEnd'
 
 			previousFunctionEnd = codeEnd
 			try self.requireRowsInside(fn, codeStart: codeStart, codeEnd: codeEnd)
@@ -837,7 +853,7 @@ export type MxdbgReader
 
 		let rec = self.funcTableOff + (index * MxdbgFuncEntrySize) as ByteOffset
 
-		return MxdbgFunctionInfo.create(self.poolString(imageReadU32(self.image, at: rec + MxdbgFuncNameOff) as ByteOffset, length: imageReadU32(self.image, at: rec + MxdbgFuncNameLen) as BytePos), codeStart: imageReadU32(self.image, at: rec + MxdbgFuncCodeStart) as MxdbgCodeOffset, codeEnd: imageReadU32(self.image, at: rec + MxdbgFuncCodeEnd) as MxdbgCodeOffset, frameSize: imageReadU32(self.image, at: rec + MxdbgFuncFrameSize) as MxdbgIndex, paramCount: imageReadU32(self.image, at: rec + MxdbgFuncParamCount) as MxdbgIndex, lineFirst: imageReadU32(self.image, at: rec + MxdbgFuncLineFirst) as MxdbgIndex, lineCount: imageReadU32(self.image, at: rec + MxdbgFuncLineCount) as MxdbgIndex, localFirst: imageReadU32(self.image, at: rec + MxdbgFuncLocalFirst) as MxdbgIndex, localCount: imageReadU32(self.image, at: rec + MxdbgFuncLocalCount) as MxdbgIndex, displayName: self.poolString(imageReadU32(self.image, at: rec + MxdbgFuncDisplayNameOff) as ByteOffset, length: imageReadU32(self.image, at: rec + MxdbgFuncDisplayNameLen) as BytePos), origin: validatedOrigin(imageReadU32(self.image, at: rec + MxdbgFuncOrigin) as MxdbgIndex))
+		return MxdbgFunctionInfo.create(self.poolString(imageReadU32(self.image, at: rec + MxdbgFuncNameOff) as ByteOffset, length: imageReadU32(self.image, at: rec + MxdbgFuncNameLen) as BytePos), codeStart: imageReadU32(self.image, at: rec + MxdbgFuncCodeStart) as MxdbgCodeOffset, codeEnd: imageReadU32(self.image, at: rec + MxdbgFuncCodeEnd) as MxdbgCodeOffset, prologueOffset: imageReadU32(self.image, at: rec + MxdbgFuncPrologueOffset) as MxdbgCodeOffset, frameSize: imageReadU32(self.image, at: rec + MxdbgFuncFrameSize) as MxdbgIndex, paramCount: imageReadU32(self.image, at: rec + MxdbgFuncParamCount) as MxdbgIndex, lineFirst: imageReadU32(self.image, at: rec + MxdbgFuncLineFirst) as MxdbgIndex, lineCount: imageReadU32(self.image, at: rec + MxdbgFuncLineCount) as MxdbgIndex, localFirst: imageReadU32(self.image, at: rec + MxdbgFuncLocalFirst) as MxdbgIndex, localCount: imageReadU32(self.image, at: rec + MxdbgFuncLocalCount) as MxdbgIndex, displayName: self.poolString(imageReadU32(self.image, at: rec + MxdbgFuncDisplayNameOff) as ByteOffset, length: imageReadU32(self.image, at: rec + MxdbgFuncDisplayNameLen) as BytePos), origin: validatedOrigin(imageReadU32(self.image, at: rec + MxdbgFuncOrigin) as MxdbgIndex))
 	end 'functionRecord'
 
 	export function lineRecord(index MxdbgIndex) returns MxdbgLineInfo

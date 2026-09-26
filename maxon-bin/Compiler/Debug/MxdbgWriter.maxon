@@ -37,9 +37,10 @@ type MxdbgFuncRecord
 	export var localCount as MxdbgIndex
 	export var displayName as MxdbgPoolSlice
 	export var origin as MxdbgOrigin
+	export var prologueOffset as MxdbgCodeOffset
 
-	static function create(name MxdbgPoolSlice, codeStart MxdbgCodeOffset, codeEnd MxdbgCodeOffset, frameSize MxdbgIndex, paramCount MxdbgIndex, localFirst MxdbgIndex, displayName MxdbgPoolSlice, origin MxdbgOrigin) returns MxdbgFuncRecord
-		return Self{name: name, codeStart: codeStart, codeEnd: codeEnd, frameSize: frameSize, paramCount: paramCount, localFirst: localFirst, localCount: 0, displayName: displayName, origin: origin}
+	static function create(name MxdbgPoolSlice, codeStart MxdbgCodeOffset, codeEnd MxdbgCodeOffset, prologueOffset MxdbgCodeOffset, frameSize MxdbgIndex, paramCount MxdbgIndex, localFirst MxdbgIndex, displayName MxdbgPoolSlice, origin MxdbgOrigin) returns MxdbgFuncRecord
+		return Self{name: name, codeStart: codeStart, codeEnd: codeEnd, frameSize: frameSize, paramCount: paramCount, localFirst: localFirst, localCount: 0, displayName: displayName, origin: origin, prologueOffset: prologueOffset}
 	end 'create'
 end 'MxdbgFuncRecord'
 
@@ -209,8 +210,8 @@ export type MxdbgWriter
 		self.files.push(self.intern(path))
 	end 'addFile'
 
-	export function addFunction(name String, displayName String, origin MxdbgOrigin, codeStart MxdbgCodeOffset, codeEnd MxdbgCodeOffset, frameSize MxdbgIndex, paramCount MxdbgIndex)
-		self.funcs.push(MxdbgFuncRecord.create(self.intern(name), codeStart: codeStart, codeEnd: codeEnd, frameSize: frameSize, paramCount: paramCount, localFirst: self.locals.count() as MxdbgIndex, displayName: self.intern(displayName), origin: origin))
+	export function addFunction(name String, displayName String, origin MxdbgOrigin, codeStart MxdbgCodeOffset, codeEnd MxdbgCodeOffset, prologueOffset MxdbgCodeOffset, frameSize MxdbgIndex, paramCount MxdbgIndex)
+		self.funcs.push(MxdbgFuncRecord.create(self.intern(name), codeStart: codeStart, codeEnd: codeEnd, prologueOffset: prologueOffset, frameSize: frameSize, paramCount: paramCount, localFirst: self.locals.count() as MxdbgIndex, displayName: self.intern(displayName), origin: origin))
 	end 'addFunction'
 
 	// One local of the function added LAST. There is no function id, because a record can only ever belong
@@ -350,6 +351,7 @@ export type MxdbgWriter
 			patchDword(buf, offset: rec + MxdbgFuncDisplayNameOff, value: f.displayName.offset as MachineWord)
 			patchDword(buf, offset: rec + MxdbgFuncDisplayNameLen, value: f.displayName.length as MachineWord)
 			patchDword(buf, offset: rec + MxdbgFuncOrigin, value: mxdbgOriginWord(f.origin) as MachineWord)
+			patchDword(buf, offset: rec + MxdbgFuncPrologueOffset, value: f.prologueOffset as MachineWord)
 		end 'eachFunc'
 
 		for row in self.lines 'eachLine'

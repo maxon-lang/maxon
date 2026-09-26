@@ -138,6 +138,7 @@ tests/
     classify-refuses-a-repeated-hex-prefix.maxtest      a second `0x` inside a sequence is refused, never stripped
     debug-refuses-wasm.maxtest              a wasm module is refused by the name of its target
     debug-refuses-foreign-sidecar.maxtest        a sidecar describing another build is refused, its own build the control
+    debug-refuses-an-image-built-for-another-host.maxtest        an image built for another host is refused before launch, naming both triples
     debug-refuses-a-no-debug-agent-build.maxtest      a `--no-debug-agent` binary reports that nothing attached
     batch-run-to-exit.maxtest               a completed session exits 0 and reports the program's code as data
     crash-exits-nonzero.maxtest             a fault is a `crash` event and a failed session
@@ -183,6 +184,7 @@ tests/
     a-cleared-breakpoints-row-is-armed-again-past-the-table-size.maxtest      a cleared breakpoint gives its row back, so a session arms more distinct instructions than the table has rows
     a-walk-past-the-table-size-plants-its-points.maxtest      a step plants its points in rows and slots cleared breakpoints gave back, and runs the splice between its calls
     a-stop-inside-the-prologue-shows-the-caller.maxtest      a backtrace from between `push rbp` and `mov rbp, rsp` names the caller one frame down
+    a-stop-inside-a-guarded-prologue-shows-the-caller.maxtest      the same stop in a green-thread function, whose prologue starts past its stack guard
     next-from-inside-a-prologue-stays-in-the-frame.maxtest      a `next` from inside a prologue lands on the first positioned row of that same frame
     finish-from-inside-a-prologue-returns-to-the-caller.maxtest      a `finish` from inside a prologue returns to the caller
     next-over-a-recursive-call-returns-to-its-own-frame.maxtest      a `next` over a recursive call lands in the frame it was issued from

@@ -9,8 +9,8 @@ export union DebugEntryCaller
 	at(returnAddress DebugAddress)
 end 'DebugEntryCaller'
 
-// A return address the frame-pointer chain does not reach: inside a prologue before `mov rbp, rsp`,
-// or at a `ret`. `wordsAbove` counts the words pushed over it and `frame` the words the prologue
+// A return address the frame-pointer chain does not reach: from the function's entry, through its
+// green-thread stack guard and its prologue, up to `mov rbp, rsp`, or at a `ret`. `wordsAbove` counts the words pushed over it and `frame` the words the prologue
 // pushes before `mov rbp, rsp`, which places the frame pointer the function's body runs under.
 export union DebugUnchainedReturn
 	none
@@ -428,7 +428,7 @@ export type DebugSymbols
 	function unchainedReturnIn(fn MxdbgFunctionInfo, offset X64Offset) returns DebugUnchainedReturn
 		let prologue = self.prologueOf(fn)
 
-		if instructionIsAReturn(self.code, at: offset) or offset == (fn.codeStart as X64Offset) 'nothingPushedAboveIt'
+		if instructionIsAReturn(self.code, at: offset) or offset <= prologueStartOf(fn) 'nothingPushedAboveIt'
 			return DebugUnchainedReturn.onTheStack(0, frame: prologue.frame)
 		end 'nothingPushedAboveIt'
 
@@ -536,13 +536,6 @@ export type DebugSymbols
 
 		return DebugSpliceDescent.throughTheAuthors if throughTheAuthors else DebugSpliceDescent.libraryOnly
 	end 'descentFrom'
-
-	export function offsetIsAFunctionEntry(offset DebugAddress) returns bool
-		return match self.reader.functionContaining(offset as MxdbgCodeOffset) 'enclosing'
-			none gives false
-			found(fn) gives (fn.codeStart as DebugAddress) == offset
-		end 'enclosing'
-	end 'offsetIsAFunctionEntry'
 
 	export function functionAtIsTheProgramsOwn(offset DebugAddress) returns bool
 		return match self.reader.functionContaining(offset as MxdbgCodeOffset) 'enclosing'
@@ -1320,11 +1313,11 @@ function noteWaysOutOf(ways DebugSpliceWays, code ByteArray, range DebugCodeRang
 		end 'aCallThroughAValue'
 
 		if kind == DbgClassDirectCall 'aCallOutOfTheSplice'
-			ways.callees.push(instruction.target as MxdbgCodeOffset)
+			ways.callees.push(instruction.target.reached() as MxdbgCodeOffset)
 		end 'aCallOutOfTheSplice'
 
-		if (kind == DbgClassDirectJump or kind == DbgClassConditionalJump) and not codeRangesHold(ranges, offset: instruction.target as MxdbgCodeOffset) 'aJumpOutOfTheSplice'
-			ways.noteExit(instruction.target as MxdbgCodeOffset)
+		if (kind == DbgClassDirectJump or kind == DbgClassConditionalJump) and not codeRangesHold(ranges, offset: instruction.target.reached() as MxdbgCodeOffset) 'aJumpOutOfTheSplice'
+			ways.noteExit(instruction.target.reached() as MxdbgCodeOffset)
 		end 'aJumpOutOfTheSplice'
 
 		fallsThrough = kind != DbgClassDirectJump
@@ -1366,7 +1359,7 @@ end 'DebugPrologue'
 
 function scannedPrologue(code ByteArray, fn MxdbgFunctionInfo) returns DebugPrologue
 	var pushEnds = X64OffsetArray.create()
-	var at = fn.codeStart as X64Offset
+	var at = prologueStartOf(fn)
 
 	while at < (fn.codeEnd as X64Offset) 'eachPrologueInstruction'
 		match x64FrameStepAt(code, at: at) 'framing'
@@ -1380,6 +1373,10 @@ function scannedPrologue(code ByteArray, fn MxdbgFunctionInfo) returns DebugProl
 
 	return DebugPrologue.create(pushEnds, frame: DebugPrologueFrame.unset)
 end 'scannedPrologue'
+
+function prologueStartOf(fn MxdbgFunctionInfo) returns X64Offset
+	return (fn.codeStart + fn.prologueOffset) as X64Offset
+end 'prologueStartOf'
 
 function instructionIsAReturn(code ByteArray, at X64Offset) returns bool
 	return match decodeX64Instruction(code, at: at, address: at as X64Address) 'decoded'

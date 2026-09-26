@@ -1618,6 +1618,7 @@ function buildPanicChunk(exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool
 	var callFixups = CallFixupArray.create()
 	var rdataRelocs = RdataRelocationArray.create()
 	emitPanicStackGuard(entry, callFixups: callFixups, rdataRelocs: rdataRelocs, usesGt: usesGt, target: target)
+	let guardBytes = entry.count() as CodeOffset
 	var asm = X64RuntimeAsm.beginFunctionAfterEntry(entry, callFixups: callFixups, rdataRelocs: rdataRelocs, slots: 0)
 
 	// (1) The caller's message — already in RCX, NUL-terminated and newline-suffixed by the pass.
@@ -1639,19 +1640,21 @@ function buildPanicChunk(exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool
 	// (5) exit(PanicExitCode) — the one step with an OS in it.
 	encodeX64ProcessExit(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, route: exitRoute, exitCode: PanicExitCode, usesGt: usesGt, target: target)
 
-	return asm.finishFunction(PanicName)
+	var chunk = asm.finishFunction(PanicName)
+	chunk.asyncUnsafePrefixBytes = guardBytes
+
+	return chunk
 end 'buildPanicChunk'
 
-// ⭐⭐ **A PANIC CAN BE RAISED FROM ANY DEPTH OF UN-GUARDED RUNTIME FRAMES, SO IT MAKES ITS OWN ROOM.** The
-// prologue guard vouches only for the frames between two guarded checkpoints; a `panic` reached five frames
-// down inside the `__gt_` runtime has already spent most of the margin, and the diagnostic chain under
-// `mrt_panic` needs up to a margin of its own. So `mrt_panic` runs the same guard every guarded function
-// runs, projecting one margin as its frame — `requireWriteStreamFitsGreenThreadStack` certifies that the
-// deepest un-guarded chain, x64-Windows' through `mrt_write_stream`, fits in one — and the grower relocates
-// the stack before a byte is printed. It runs BEFORE the prologue, as a compiled function's guard does, so a
-// growth past `GtMaxStackBytes` finds the entry shape `__gt_morestack` reports a stack overflow from; the
-// projected frame's margin covers the frame the prologue then opens. It never parks
-// (`GtGuardSite.mrtPanic`). Only a green-thread program has the scheduler words the guard reads.
+// A panic can be raised from any depth of un-guarded runtime frames, which may have spent most of the
+// margin, and the diagnostic chain under `mrt_panic` needs up to a margin of its own. So `mrt_panic` runs
+// the same guard every guarded function runs, projecting one margin as its frame
+// (`requireWriteStreamFitsGreenThreadStack` certifies the deepest un-guarded chain fits in one), and the
+// grower relocates the stack before a byte is printed. It runs before the prologue, as a compiled
+// function's guard does, so a growth past `GtMaxStackBytes` finds the entry shape `__gt_morestack` reports
+// a stack overflow from, and the projected margin covers the frame the prologue then opens. Its length
+// is the chunk's `asyncUnsafePrefixBytes`, the sidecar's prologue offset. It never parks (`GtGuardSite.mrtPanic`). Only a green-thread program has the scheduler words
+// the guard reads.
 function emitPanicStackGuard(entry ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, usesGt bool, target Target)
 	if not usesGt 'noGreenThreads'
 		return
