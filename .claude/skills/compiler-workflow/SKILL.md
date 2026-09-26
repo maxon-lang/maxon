@@ -5,7 +5,7 @@ description: Procedures for measuring and host-testing the Maxon compiler that a
 
 # Compiler workflow — instruments and host lanes
 
-The always-loaded rules live in `maxon-bin/CLAUDE.md`. This skill holds the four procedures that are
+The always-loaded rules live in `maxon-bin/AGENTS.md`. This skill holds the four procedures that are
 reference material rather than standing constraints.
 
 ## `run_scale_test` — the scaling INSTRUMENT. ⚠ NOT A GATE.
@@ -54,7 +54,7 @@ exactly one byte for that reason alone — a difference that reads as a miscompi
 ## Hosting the x64-linux lane locally
 
 `--target=` cross-compiles the PROGRAMS and never hosts the compiler — that rule, and the defect that
-proved it, are in `maxon-bin/CLAUDE.md`. To actually host the lane:
+proved it, are in `maxon-bin/AGENTS.md`. To actually host the lane:
 
 ⇒ **CROSS-BUILD ONCE AND THEN STAY INSIDE WSL.** `stdlib/` resolves by walking UP from the executable,
 so a binary under `temp/` in this tree reaches this tree's library. WSL starts in the Windows working

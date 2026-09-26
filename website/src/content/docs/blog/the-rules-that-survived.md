@@ -190,7 +190,7 @@ Both of them exist because the alternative is trusting a claim. The compiler
 statistic for a README. It is the one check that cannot be satisfied by a model reporting success.
 
 Everything here is in the repository, and the rules are not documentation about the project — they
-are part of it. [`.claude/CLAUDE.md`](https://github.com/maxon-lang/maxon/blob/main/.claude/CLAUDE.md)
+are part of it. [`.claude/CLAUDE.md`](https://github.com/maxon-lang/maxon/blob/4b8929dab6ab2c0ba65aa64a2c4c5358467a8079/.claude/CLAUDE.md)
 is what every session reads;
 [`.claude/skills/land/SKILL.md`](https://github.com/maxon-lang/maxon/blob/main/.claude/skills/land/SKILL.md)
 is the workflow above in full; [`specs/`](https://github.com/maxon-lang/maxon/tree/main/specs) is the

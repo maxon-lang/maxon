@@ -12,14 +12,16 @@ There are no time constraints. Complexity doesn't matter. If you are fixing an i
 This file holds what binds EVERY tree in the repository. The compiler is a project inside it, with its
 own build, gates and traps, and those rules load with it:
 
-- **`maxon-bin/CLAUDE.md`** — the compiler: how to build it, the seed, the two-self-compiles rule, the
+- **`maxon-bin/AGENTS.md`** — the compiler: how to build it, the seed, the two-self-compiles rule, the
   `maxon` MCP tools, targets, `spec-test`, `tests/`, `fmt`, the error-code registry, spec fragments.
   `stdlib/`, `specs/`, `tests/`, `scripts/` and `examples/` import it, because work there is compiler work.
 - **the `compiler-workflow` skill** — the long procedures: the `run_scale_test` ladder, `fixpoint.sh`,
   hosting the x64-linux lane under WSL, staging `vendor/`.
+- **the skills** — each named skill is `.claude/skills/<name>/SKILL.md`. An agent that cannot invoke a
+  skill reads that file and follows it.
 
 ⇒ **Touching the compiler means those rules apply whether or not they are in front of you.** If you are
-about to build, gate or measure it and have not read `maxon-bin/CLAUDE.md` this session, read it first.
+about to build, gate or measure it and have not read `maxon-bin/AGENTS.md` this session, read it first.
 
 ## Documentation
 

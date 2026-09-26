@@ -16,7 +16,7 @@ cone, and two rules that hold nowhere else are imposed on it.
 
 The tier exists so that the runtime the compiler emits into every program becomes INPUT the compiler
 READS FROM THE TREE rather than compiler code that BUILDS IR. A runtime written as IR-building code
-lives inside the compiler, so changing it needs the two self-compiles that `maxon-bin/CLAUDE.md`
+lives inside the compiler, so changing it needs the two self-compiles that `maxon-bin/AGENTS.md`
 spells out: the first build fixes the emitter, the second gives the compiler its own new runtime. A
 runtime written as SOURCE the compiler reads is just another input — the compiler that reads it is
 already correct — so a runtime change needs ONE self-compile, and the runtime becomes readable,

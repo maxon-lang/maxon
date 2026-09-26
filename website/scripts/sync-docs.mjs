@@ -129,7 +129,7 @@ const UNPUBLISHED_DOC_ROUTES = {
 // Prose that still names this checkout. A reader installed `maxon` and runs it by name.
 const REWRITES = [
   [/`\.\/maxon-bin\/\.maxon\/maxon(\.exe)?`/g, '`maxon`'],
-  [/`\.claude\/CLAUDE\.md` and `docs\/STYLE_GUIDE\.md#comments`/g, "the compiler repository's own style guide"],
+  [/`AGENTS\.md` and `docs\/STYLE_GUIDE\.md#comments`/g, "the compiler repository's own style guide"],
   [/the `documenter` skill/g, 'a dedicated documentation step'],
 ];
 

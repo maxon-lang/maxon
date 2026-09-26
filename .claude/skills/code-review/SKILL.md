@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: Independent code review of a completed change in the compiler. DUPLICATION IS THE TOP PRIORITY, then latent bugs, then the CLAUDE.md quality checklist. Never run by the agent that wrote the code. Runs after the optimization pass and before the commit.
+description: Independent code review of a completed change in the compiler. DUPLICATION IS THE TOP PRIORITY, then latent bugs, then the AGENTS.md quality checklist. Never run by the agent that wrote the code. Runs after the optimization pass and before the commit.
 ---
 
 # Review a change
@@ -16,7 +16,7 @@ a performance-motivated fork as duplication until proven otherwise — if it mus
 owes a reason why the two cannot be one, and its absence is the finding.
 
 **Fix what you find even if it is pre-existing** — the goal is that quality improves continuously, and
-CLAUDE.md is explicit that you do not care whether an issue predates the change.
+AGENTS.md is explicit that you do not care whether an issue predates the change.
 
 **Do not chase green.** Your job is **QUALITY and LATENT BUGS**, not re-running the suite — iterate on
 `--filter` while you work.
@@ -42,7 +42,7 @@ CLAUDE.md is explicit that you do not care whether an issue predates the change.
 **Invoked standalone**, steps 6–7 below are yours: the gates and the commit. Skip them when you were
 dispatched.
 
-Prefer the `maxon` MCP tools for build/test/format — `maxon-bin/CLAUDE.md` has the task→tool table. You
+Prefer the `maxon` MCP tools for build/test/format — `maxon-bin/AGENTS.md` has the task→tool table. You
 work in the main checkout, so no tool needs `repoRoot`.
 
 Create a task list to perform these steps.
@@ -83,9 +83,9 @@ that look like at runtime?** If the answer is "a wrong answer, not a compile err
 - Concurrency: dropped/double-dispatched work, starvation, races between a producer and a consumer.
 - Off-by-one, unhandled boundary, silent fallthrough.
 
-## 5. The CLAUDE.md quality checklist
+## 5. The AGENTS.md quality checklist
 
-**`.claude/CLAUDE.md`'s "Code Quality" section is the checklist and is already in your context — apply
+**`AGENTS.md`'s "Code Quality" section is the checklist and is already in your context — apply
 it to every changed file, do not restate it.** The three that get missed:
 
 - ⛔ **COMMENTS ARE NOT YOUR CONCERN — YOU REVIEW THE CODE.** Do not judge, rewrite, delete or report
@@ -98,7 +98,7 @@ it to every changed file, do not restate it.** The three that get missed:
   by READING. Never ask for it to be RUN**: the arm64 lanes are remote and are not in the battery, so
   "unverified on arm64" is never a review finding and never blocks the change.
 
-**DOCUMENTATION IS A FINDING, NOT A SUGGESTION** (`.claude/CLAUDE.md`'s Documentation section). ⚠ When
+**DOCUMENTATION IS A FINDING, NOT A SUGGESTION** (`AGENTS.md`'s Documentation section). ⚠ When
 `/land` dispatched you, its §6 documenter writes the docs AFTER you, so the diff you read has none yet:
 name what the change owes in your report for §6 rather than writing it. Standalone, these are yours:
 

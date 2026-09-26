@@ -513,7 +513,7 @@ control taken the same session (the same binary with the one `passes.push` line 
 `create`/`push`/`get`/`count`/`slice` straight-line with **no loop over an array at all**, and every loop
 the ladder does generate holds a call, which Rule 3 refuses. So the ladder cannot express the construct
 this row optimizes and can see none of the win. That is the instrument's blind spot, exactly as
-`.claude/CLAUDE.md` warns; it is a corpus gap, and it is filed rather than fixed. (Before Rule 3 the
+`AGENTS.md` warns; it is a corpus gap, and it is filed rather than fixed. (Before Rule 3 the
 same control read **+64 bytes at every rung** — a constant, i.e. one stdlib function, and one that Rule 3
 then declined.)
 
@@ -2074,7 +2074,7 @@ weigh it against the compile time it costs before building it.
 
 The compiler forms a jump table for **dense** arms only; choosing among linear chain / table /
 binary search over *intervals* would need thresholds of its own.
-⚠ **Measure first whether CLAUDE.md's "consolidate redundant match arms" rule demotes jump tables** —
+⚠ **Measure first whether AGENTS.md's "consolidate redundant match arms" rule demotes jump tables** —
 the claim that it does rests on a source that no longer exists.
 
 #### `EC22` · Short-jump (rel8) relaxation

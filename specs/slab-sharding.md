@@ -74,7 +74,7 @@ every thread takes the raw row as its sole writer, and no lock is taken — `emi
 span's re-owning and a remote free need is a P, and a P exists only where a scheduler has been built, so
 every case below spawns one. ⚠ **NO CASE CARRIES AN `unsupported-targets:` MARKER, AND NONE MAY:** on wasm a
 green-thread program is refused at its own span with E3104, which the harness counts as a SKIP naming the
-case; a marker would make the same fact invisible (`maxon-bin/CLAUDE.md`, *do not mark a case the compiler
+case; a marker would make the same fact invisible (`maxon-bin/AGENTS.md`, *do not mark a case the compiler
 already refuses*). `sched-processor.md` carries the identical restriction for the identical reason.
 
 ## Tests

@@ -1,3 +1,3 @@
 Work here is compiler work.
 
-@../maxon-bin/CLAUDE.md
+@../maxon-bin/AGENTS.md

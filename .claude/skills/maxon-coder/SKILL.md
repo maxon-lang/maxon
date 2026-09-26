@@ -23,8 +23,8 @@ defect: fix the doc in the same change (the `documenter` skill owns that step).
 
 | Where | Extra rules |
 |---|---|
-| `maxon-bin/` — the compiler | Read `maxon-bin/CLAUDE.md` first. A diagnostic names `ErrorCode.<case>`, never `"E3010"`; `maxon-bin/Compiler/ErrorCodeRegistry.maxon` is hand-authored — add a case there. A change under `Compiler/Runtime/` needs two self-compiles: ask `scripts/self-compiles-needed.sh`. |
-| `runtime/` | The tier rules in `maxon-bin/CLAUDE.md`: no managed values (E3153), no guarded construct in an always-reached family, a restated geometry figure owes its pin. |
+| `maxon-bin/` — the compiler | Read `maxon-bin/AGENTS.md` first. A diagnostic names `ErrorCode.<case>`, never `"E3010"`; `maxon-bin/Compiler/ErrorCodeRegistry.maxon` is hand-authored — add a case there. A change under `Compiler/Runtime/` needs two self-compiles: ask `scripts/self-compiles-needed.sh`. |
+| `runtime/` | The tier rules in `maxon-bin/AGENTS.md`: no managed values (E3153), no guarded construct in an always-reached family, a restated geometry figure owes its pin. |
 | `stdlib/` | A symbol callers outside the stdlib use is `public`, not `export`. No instrumentation (no `Log` calls) in stdlib algorithms. |
 | `specs/` | The language's canonical definition. Under `/land` it is read-only except to the agent briefed to write the cases. A case is a program in a spec `.md` file, pinned by `exitcode` / `stdout` / `maxoncstderr` blocks. |
 | `tests/` | Read `tests/README.md` first. A fixture `.maxon` is stored as `<name>.fixture`; one test per `.maxtest` file; expectations are generated, never hand-written. |

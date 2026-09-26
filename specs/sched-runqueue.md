@@ -136,7 +136,7 @@ machine running the dropper — so no processor count exposes it.
 programs, and the green-thread substrate exists on exactly the lanes that have written it — x64-windows and,
 since the arm64-macOS scheduler landed, that one too. A lane without it refuses the program at its own span,
 which the harness counts as a SKIP naming the case; a marker would make the same fact invisible
-(`maxon-bin/CLAUDE.md`, *do not mark a case the compiler already refuses*). `async-scheduler.md`'s *Targets*
+(`maxon-bin/AGENTS.md`, *do not mark a case the compiler already refuses*). `async-scheduler.md`'s *Targets*
 section is the one statement of that gate.
 
 ⚠ **FIVE CASES HERE NAME x64-windows ALONE, AND THE REASON IS NOT THE RUN QUEUE.** Each additionally starts

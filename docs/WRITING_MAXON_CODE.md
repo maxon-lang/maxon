@@ -270,7 +270,7 @@ Comment the **why** — the constraint, the invariant, the reason a bound or an 
 — never the **how**, which is the code. **Describe the code as it is now:** no "used to", no "changed
 from", no reference to a previous name or shape; git holds the history. **A comment you edit gets
 rewritten to conform**, not patched. See the Comments entry of the Code Quality checklist in
-`.claude/CLAUDE.md` and `docs/STYLE_GUIDE.md#comments`.
+`AGENTS.md` and `docs/STYLE_GUIDE.md#comments`.
 
 ### 16. Blocks MUST NOT be empty (E3082)
 

@@ -156,7 +156,7 @@ making it. **Write no row you did not measure.**
   your REPORT and in `docs/optimization-log.md`, and your caller files it in `todo.md` (standalone, you
   append the `- ` bullet yourself).
 - **Check exit codes; never grep for a success string.** Exit **101** = memory leak.
-- ⚠ Redirecting suite runs by hand, `--workers=1` and `fmt`'s path argument are in `maxon-bin/CLAUDE.md`,
+- ⚠ Redirecting suite runs by hand, `--workers=1` and `fmt`'s path argument are in `maxon-bin/AGENTS.md`,
   once — not repeated here.
 
 ## Report

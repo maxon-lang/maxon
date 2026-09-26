@@ -21,7 +21,7 @@ that answers wrong, a feature however large. There is no heavier sibling to esca
 >
 > ⛔ **NONE of these is a reason to leave, and each has been offered as one:** it turned out large; it
 > touches several passes; it needs new IR ops; it wants a design decision you are able to make; it
-> "deserves" a contract or a plan; it will take hours. `.claude/CLAUDE.md` settles all of them at once —
+> "deserves" a contract or a plan; it will take hours. `AGENTS.md` settles all of them at once —
 > ***"There are no time constraints. Complexity doesn't matter. If you are fixing an issue then fix it
 > properly."***
 >
@@ -228,7 +228,7 @@ cheapest moment to ask.
   `./maxon-bin/.maxon/maxon run build` at the repo root (or MCP `build` with `path: "maxon-bin"`)
   compiles `maxon-bin/` with the compiler already in the slot and renames the result into place. An
   EMPTY slot is refused, not seeded: fetch the seed with `scripts/fetch-seed.sh` and build with it as
-  `maxon-bin/CLAUDE.md` says. A current binary is already what every red in §1 is read off: rebuilding
+  `maxon-bin/AGENTS.md` says. A current binary is already what every red in §1 is read off: rebuilding
   it is minutes spent to learn nothing.
 - **No baseline suite run.** The §8 gate is `failed: 0`, not a delta from a remembered total, so there is
   nothing to measure yet. (When §8 comes back red you therefore may not assume the red is yours — §8 says
@@ -333,7 +333,7 @@ deliverable stays one chunk and one commit.)*
   language; an edit to an existing case does not adjust a test, it redefines Maxon. §1's author is the
   one writer of cases, and a fix that would falsify another spec's committed expectation is a
   STOP-and-report, never an edit to that spec.
-- **Root causes, no workarounds** — and a defect is fixed whether or not it predates you (CLAUDE.md).
+- **Root causes, no workarounds** — and a defect is fixed whether or not it predates you (AGENTS.md).
 - **Cross-target consistency**: an x64 change needs its arm64 equivalent. The wasm lane runs in §8 and
   is not scalar-only — a float or `String` case failing there is a bug on that lane.
 - **A new diagnostic goes through the registry, which is HAND-AUTHORED and has NO generator**: add a
@@ -353,7 +353,7 @@ deliverable stays one chunk and one commit.)*
   target. Size is never a reason to stop; see the two boxes at the top of this file.
 - **Documentation is §6's, not theirs** — the `docs/` source, the site regeneration and the doc-coverage
   gates all move there, in the same pass that writes the comments. What the implementer owes is the
-  report: **what the change made visible to a user**, in the terms `.claude/CLAUDE.md`'s Documentation
+  report: **what the change made visible to a user**, in the terms `AGENTS.md`'s Documentation
   section uses, since that is the judgement it has the context to make.
 
 ⚠ **Whoever writes the code, §5's reviewer must not be them.**
@@ -460,7 +460,7 @@ review then rewrites, which is the write-it-twice waste the no-comments rule exi
   nowhere else: a why-only comment cannot be composed from a diff. Also the implementer's and
   optimizer's reports, which hold the reasons behind an unobvious shape, a deliberate asymmetry and any
   forked fast path.
-- **What the change made user-visible**, in `.claude/CLAUDE.md`'s terms — or that nothing is, which is
+- **What the change made user-visible**, in `AGENTS.md`'s terms — or that nothing is, which is
   an answer it must state rather than skip.
 - ⛔ **It runs NO tests** — not the suite, not the wasm lane, not the doc-coverage gates. Its
   verification is `mcp__maxon__build`, and §8's battery runs everything else minutes later on the same
@@ -532,7 +532,7 @@ during changes; a battery run before the rebase measured a tree that no longer e
 > with drift.
 
 **A red gate STOPS the change** — and a red you did not cause still gets fixed, in its own commit,
-before yours (CLAUDE.md). To attribute it: do the failures touch what you changed? Re-run **the failing
+before yours (AGENTS.md). To attribute it: do the failures touch what you changed? Re-run **the failing
 cases alone, by filter** — one run, one pattern per case — never the whole suite for them. If that still does not settle it, **measure
 the control** on that same filter — `git stash -u`, re-run, `git stash pop`. ⚠ **A lane that
 did not RUN is not a red gate** (remote arm64 is outside this battery): that is a SKIP you report, never
@@ -564,7 +564,7 @@ not the tree you would push: **rebase and RE-RUN §8** before pushing again.
 > `scripts/fixpoint.sh`, none of which your battery does, so a lane can still go red after you have
 > reported — that is why the report names every lane your battery did not run. (wasm32-wasi is the
 > reverse: only your battery runs it.) When a red lane is reported to you, it is yours to fix whether or not
-> you caused it (CLAUDE.md), in its own commit, reproduced on that platform's own host — never on the
+> you caused it (AGENTS.md), in its own commit, reproduced on that platform's own host — never on the
 > cross lane that missed it.
 
 Then report in a few lines: the change, the cases that went red → green, each gate's number, and

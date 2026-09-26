@@ -17,9 +17,9 @@ library as much as in the language itself.
 **We prefer a fix to a report.** Maxon is written by AI, and an AI coding agent pointed at this
 repository can usually turn a failing program into a fix — so a pull request that fixes a bug is
 worth far more than an issue describing it, and reaches everyone sooner. The repository carries
-instructions for coding agents (`.claude/CLAUDE.md` and its skills for Claude Code,
-`.github/copilot-instructions.md` for Copilot), so an agent opened in a checkout already knows how
-to build, test and land a change.
+instructions for coding agents in `AGENTS.md` files — the root one, and one beside each tree with
+rules of its own — plus the skills in `.claude/skills/`, so an agent opened in a checkout already
+knows how to build, test and land a change. Claude Code reads `AGENTS.md` from version 2.1.277.
 
 Found a miscompile, a crash, a confusing diagnostic, or a place where the docs and the compiler
 disagree?

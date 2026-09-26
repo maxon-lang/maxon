@@ -283,7 +283,7 @@ fi
 # a contest could leak backwards into what the store already holds, this is where it would show.
 #
 # ⚠ `--workers=1` is not a gate on worker-count invariance (there is no such gate — see
-# `.claude/CLAUDE.md`). It is the PROPERTY UNDER TEST: one worker is one process, which is what puts
+# `AGENTS.md`). It is the PROPERTY UNDER TEST: one worker is one process, which is what puts
 # all three compiles behind one store. At the default pool the three would land in three workers and
 # the check would silently measure nothing.
 #

@@ -339,7 +339,7 @@ comment, and the allow-list does not apply to them — they are prose for a read
 
 ## The documentation pass
 
-**A user-visible change updates its documentation in the same commit** (`.claude/CLAUDE.md`).
+**A user-visible change updates its documentation in the same commit** (`AGENTS.md`).
 User-visible means a command, flag or `maxon help` text; a diagnostic; syntax or semantics; a `public`
 stdlib API; a runtime environment variable; target support; LSP, VS Code or MCP behaviour.
 
