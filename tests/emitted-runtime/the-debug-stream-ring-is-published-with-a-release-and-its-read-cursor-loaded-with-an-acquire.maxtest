@@ -1,0 +1,125 @@
+let CaseLabel = "debug-stream-ring-ordering"
+let HeapFixtureName = "heap"
+
+let ReserveName = "__ds_reserve"
+let CommitName = "__ds_commit"
+
+let SegmentBaseLabel = "__ds_base"
+let EntryArgumentRegister = "x0"
+
+let WriteCursorOffset = 24 as FieldOffset
+let ReadCursorOffset = 32 as FieldOffset
+let EntryHeaderOffset = 0 as FieldOffset
+
+let CursorPublishSites = 2 as AccessTally
+let HeaderCommitSites = 1 as AccessTally
+let LeastReadCursorAcquires = 1 as AccessTally
+let SegmentBaseMaterialisations = 1 as LineTally
+
+let AddImmediatePrefix = "arm64.add "
+
+let OrderingReason = "The monitor is another PROCESS, and it shares no lock with the producer: `__ds_lock` orders producers against each other and nothing against the reader. `__ds_reserve` writes an entry's header and then advances `write_cursor` to make it reachable, and `__ds_commit` sets the header's commit bit once the payload is written — so each of those stores ANNOUNCES bytes written before it, and a plain `str` orders nothing before itself: armv8 may make the cursor or the bit visible ahead of the bytes, and the monitor decodes an entry that is not there yet. `read_cursor` is the monitor's announcement that it has consumed the space behind it, and a plain `ldr` of it orders nothing after itself, so the producer may overwrite bytes the monitor is still reading. The stores are `StdOp.storeRelease`, which is `stlr` on both arm64 lanes, and the load `StdOp.loadAcquire`, which is `ldar`; both are the same plain `mov` on x64."
+
+test 'the debug stream ring is published with a release and its read cursor loaded with an acquire'
+	let staged = stagedProgram(CaseLabel, fixture: HeapFixtureName)
+
+	var findings = StringArray.create()
+	noteRingOrdering(findings, staged: staged, target: MacosTargetName)
+	noteRingOrdering(findings, staged: staged, target: LinuxTargetName)
+
+	Expect.isTrue(findings.isEmpty(), message: "an emitted DebugStream producer body reaches a ring word the monitor process reads or writes without the ordering that word is published with:{renderedFindings(findings)}\n\n  {OrderingReason}")
+end 'the debug stream ring is published with a release and its read cursor loaded with an acquire'
+
+function noteRingOrdering(findings StringArray, staged FilePath, target String)
+	let lines = irLines(buildStagedProgram(staged, caseLabel: CaseLabel, target: target, functionName: "{ReserveName}{EmittedNameSeparator}{CommitName}", debugStream: true))
+
+	noteReserve(findings, body: functionBody(lines, functionName: ReserveName, target: target), target: target)
+	noteCommit(findings, body: functionBody(lines, functionName: CommitName, target: target), target: target)
+end 'noteRingOrdering'
+
+function noteReserve(findings StringArray, body StringArray, target String)
+	let base = segmentBaseRegister(body, target: target)
+	let writeCursor = ringWordAccesses(body, base: base, offset: WriteCursorOffset, target: target, functionName: ReserveName)
+	let readCursor = ringWordAccesses(body, base: base, offset: ReadCursorOffset, target: target, functionName: ReserveName)
+
+	for line in writeCursor.plainStores 'eachPlainStore'
+		findings.push("on {target}, `{ReserveName}` still publishes `write_cursor` (segment+{WriteCursorOffset}) with a plain store — `{line}`")
+	end 'eachPlainStore'
+
+	if writeCursor.releases != CursorPublishSites 'miscountedReleases'
+		findings.push("on {target}, `{ReserveName}` carries {writeCursor.releases} `{ReleaseStoreMnemonic}` to `write_cursor` (segment+{WriteCursorOffset}) where its padding and placing paths need {CursorPublishSites}")
+	end 'miscountedReleases'
+
+	for line in readCursor.plainLoads 'eachPlainLoad'
+		findings.push("on {target}, `{ReserveName}` still reads `read_cursor` (segment+{ReadCursorOffset}) with a plain load — `{line}`")
+	end 'eachPlainLoad'
+
+	if readCursor.acquires < LeastReadCursorAcquires 'noAcquire'
+		findings.push("on {target}, `{ReserveName}` carries no `{AcquireLoadMnemonic}` of `read_cursor` (segment+{ReadCursorOffset}) through `{base}`, the register holding `{SegmentBaseLabel}`")
+	end 'noAcquire'
+end 'noteReserve'
+
+function noteCommit(findings StringArray, body StringArray, target String)
+	let entry = try registerHoldingArgument(body, argument: EntryArgumentRegister) otherwise EntryArgumentRegister
+	let header = ringWordAccesses(body, base: entry, offset: EntryHeaderOffset, target: target, functionName: CommitName)
+
+	for line in header.plainStores 'eachPlainStore'
+		findings.push("on {target}, `{CommitName}` still commits the entry header (entry+{EntryHeaderOffset}) with a plain store — `{line}`")
+	end 'eachPlainStore'
+
+	if header.releases != HeaderCommitSites 'miscountedReleases'
+		findings.push("on {target}, `{CommitName}` carries {header.releases} `{ReleaseStoreMnemonic}` to the entry header (entry+{EntryHeaderOffset}) through `{entry}`, the register holding its argument, where its one commit needs {HeaderCommitSites}")
+	end 'miscountedReleases'
+end 'noteCommit'
+
+function segmentBaseRegister(body StringArray, target String) returns String
+	let materialisedLabel = "{ArgumentSeparator}{SegmentBaseLabel}"
+	let materialisations = bodyLineCount(body, startingWith: GlobalAddressPrefix, containing: NoFurtherDemand, endingWith: materialisedLabel)
+
+	if materialisations > SegmentBaseMaterialisations 'reloaded'
+		panic("emitted-runtime tests: the gate could not run — on {target}, `{ReserveName}` materialises `{SegmentBaseLabel}` {materialisations} times, and this case reads the ring words through the register the first one loads the base into. A second base register would carry accesses this case never attributes, and a plain load of `read_cursor` through it would pass beside an acquire through the first.")
+	end 'reloaded'
+
+	let materialisation = try firstLineIndex(body, startingWith: GlobalAddressPrefix, containing: NoFurtherDemand, endingWith: materialisedLabel) otherwise panic("emitted-runtime tests: the gate could not run — on {target}, the emitted `{ReserveName}` holds no `{GlobalAddressPrefix.trim()} …{ArgumentSeparator}{SegmentBaseLabel}` line, so no register can be read as the one holding the segment base, and every demand below would address nothing.")
+	let address = try destinationRegisterOf(lineAt(body, index: materialisation)) otherwise panic("emitted-runtime tests: the gate could not run — on {target}, no destination register could be read off the line of `{ReserveName}` that materialises `{SegmentBaseLabel}`.")
+	let load = lineAt(body, index: materialisation + 1)
+
+	if not load.startsWith(PlainLoadPrefix) or not load.contains("[{address} + 0]") 'notTheBaseLoad'
+		panic("emitted-runtime tests: the gate could not run — on {target}, `{ReserveName}` materialises `{SegmentBaseLabel}` into `{address}` and the next line, `{load}`, is not the load of the segment base through it. The shape of that load has moved, and a register read off any other line is not the one the ring words are addressed through.")
+	end 'notTheBaseLoad'
+
+	let base = try destinationRegisterOf(load) otherwise panic("emitted-runtime tests: the gate could not run — on {target}, no destination register could be read off `{load}`, the load of the segment base in `{ReserveName}`.")
+
+	for event in registerEvents(body, register: base) 'eachEvent'
+		if event.use == RegisterUse.copiedOut 'copied'
+			panic("emitted-runtime tests: the gate could not run — on {target}, `{ReserveName}` copies the segment base out of `{base}` with `{event.line}`, and this case reads the ring words only through `{base}`. An access through the copy would go unattributed, and a plain load of `read_cursor` through it would pass beside an acquire through `{base}`.")
+		end 'copied'
+	end 'eachEvent'
+
+	return base
+end 'segmentBaseRegister'
+
+function ringWordAccesses(body StringArray, base String, offset FieldOffset, target String, functionName String) returns WordAccesses
+	let displacedAddress = "[{base} + {offset}]"
+	let directAddress = "[{base}]"
+	let foldedAddress = "{ArgumentSeparator}{base}{ArgumentSeparator}{offset}"
+	let word = "the ring word at {base}+{offset}"
+	var accesses = WordAccesses.create()
+
+	for (iter, text) in body.withIterator() 'eachLine'
+		if text.contains(displacedAddress) or (offset == 0 and text.contains(directAddress)) 'throughTheBase'
+			accesses.record(text, register: base, target: target, functionName: functionName, word: word)
+			continue
+		end 'throughTheBase'
+
+		if not text.startsWith(AddImmediatePrefix) or not text.endsWith(foldedAddress) 'anotherLine'
+			continue
+		end 'anotherLine'
+
+		let folded = try destinationRegisterOf(text) otherwise panic("emitted-runtime tests: the gate could not run — on {target}, no destination register could be read off `{text}` in `{functionName}`.")
+		let access = try accessThrough(body, site: iter.index() as LineIndex, register: folded) otherwise panic("emitted-runtime tests: the gate could not run — on {target}, `{functionName}` folds {word} into `{folded}` with `{text}` and then reaches nothing through `{folded}` before overwriting it. A fold this case cannot attribute an access to leaves every absence demand true for the reason that it addresses nothing.")
+		accesses.record(access.line, register: folded, target: target, functionName: functionName, word: word)
+	end 'eachLine'
+
+	return accesses
+end 'ringWordAccesses'

@@ -135,15 +135,17 @@ public type SharedSegment
 		return name
 	end 'segmentName'
 
-	/// The 64-bit word at `offset` bytes into the mapping. Throws `outOfBounds` when the word would reach
-	/// past the end of the mapping.
+	/// The 64-bit word at `offset` bytes into the mapping, read with an acquire load: once it returns a
+	/// value another process wrote with `writeWord`, every write that process made before it is visible.
+	/// Throws `outOfBounds` when the word would reach past the end of the mapping.
 	public function readWord(offset SegmentOffset) returns SegmentWord throws SharedMemoryError
 		try requireInside(offset, byteCount: SegmentWordBytes)
 		return __Builtins.sharedMemoryReadWord(base, offset)
 	end 'readWord'
 
-	/// Write `value` as a 64-bit word at `offset` bytes into the mapping. Throws `outOfBounds` when the word
-	/// would reach past the end of the mapping.
+	/// Write `value` as a 64-bit word at `offset` bytes into the mapping, with a release store: every write
+	/// this process made before it is visible to a process that reads the word with `readWord`. Throws
+	/// `outOfBounds` when the word would reach past the end of the mapping.
 	public function writeWord(offset SegmentOffset, value SegmentWord) throws SharedMemoryError
 		try requireInside(offset, byteCount: SegmentWordBytes)
 		__Builtins.sharedMemoryWriteWord(base, offset, value)

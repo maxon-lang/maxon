@@ -70,9 +70,11 @@ emitter writes the payload; `__ds_commit` sets the committed bit. The producer n
 with no room it drops the event and counts it. Log entries carry the current green thread and processor id,
 0 and 0 outside the scheduler.
 
-The cursor and the commit bit are published with plain stores. That orders them after the payload on x64; on
-arm64, which also carries the producer, it does not, and the consumer can in principle read a committed bit
-before the bytes under it.
+The write cursor and the commit bit are published with release stores, so the monitor sees a header before
+the cursor that reaches it and a payload before the bit that commits it. The producer reads the monitor's read
+cursor with an acquire load before it reuses the space behind it. The monitor reads and writes these words
+through `SharedSegment.readWord` (an acquire) and `writeWord` (a release). The lock orders producers against
+each other only. On x64 the ordered accesses are plain loads and stores.
 
 ## The monitor
 

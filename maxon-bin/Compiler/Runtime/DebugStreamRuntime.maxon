@@ -39,11 +39,9 @@
 // `emitCommitAndFinish`, so the pairing is the only shape a body has rather than a convention each one is
 // trusted to follow.
 //
-// ⚠⚠ **THE LOCK IS A CRITICAL_SECTION, NOT A TICKET SPINLOCK.** A ticket lock is `atomic_xadd`
-// twice, and the Std tier has NO ATOMIC OP AT ALL — not one, in the whole dialect. The compiler already
-// owns a real OS mutex (`osLockInit`/`osLockEnter`/`osLockLeave`, the scheduler's `__sched_lock`),
-// which serializes the critical section exactly as a ticket lock would and needs no vocabulary this
-// tier does not have. A spin form would mean adding atomics to the IR for one debug-only producer.
+// ⚠ The ring lock (`__ds_lock`) orders producers against each other only. The monitor never takes it,
+// so the ordering it relies on travels on the accesses themselves: see `emitPublishCursor`,
+// `emitUsedBytes` and `__ds_commit`.
 //
 // ⚠ **THE FLAG ALONE DOES NOT DECIDE WHETHER A BUILD CARRIES THIS: `buildCarriesDebugStream` DOES**, and
 // it is `--debugstream` AND `usesHeap`. Four parts must agree about that answer and they are in three
@@ -978,13 +976,26 @@ function emitRingPos(module StdModule, block IrBlock, base ValueId, ids ValueMin
 	return emitBin(module, block: block, a: cursor, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
 end 'emitRingPos'
 
+// The acquire of `read_cursor` pairs with the monitor's release of it, so the space it frees is space
+// the monitor has finished copying before this producer overwrites it.
+function emitUsedBytes(module StdModule, block IrBlock, base ValueId, ids ValueMinter) returns ValueId
+	let cursor = emitLoadField(module, block: block, record: base, offset: DsOffWriteCursor, ids: ids)
+	let reader = emitLoadAcquireField(module, block: block, record: base, offset: DsOffReadCursor, ids: ids)
+	return emitBin(module, block: block, a: cursor, b: reader, opcode: StdBinOpcode.sub, ids: ids)
+end 'emitUsedBytes'
+
+// The release orders the header written before it (an entry's, or a padding entry's) ahead of the
+// cursor that makes it reachable; a plain store here lets an arm64 monitor decode a stale header.
+function emitPublishCursor(module StdModule, block IrBlock, base ValueId, cursor ValueId, advance ValueId, ids ValueMinter)
+	let published = emitBin(module, block: block, a: cursor, b: advance, opcode: StdBinOpcode.add, ids: ids)
+	module.appendOp(block, op: StdOp.storeRelease(base, offset: DsOffWriteCursor, valueId: published, valueType: StdType.i64))
+end 'emitPublishCursor'
+
 // `(write_cursor - read_cursor) + entrySize <= buf_size` — is there room? Asked TWICE by `__ds_reserve`
 // (before and after a wrap's padding), off freshly re-read cursors both times, so the two cannot come to
 // disagree about what "room" means. `fits` and `dropped` are the caller's blocks.
 function emitSpaceCheck(module StdModule, block IrBlock, base ValueId, entrySize ValueId, fits IrBlock, dropped IrBlock, ids ValueMinter)
-	let cursor = emitLoadField(module, block: block, record: base, offset: DsOffWriteCursor, ids: ids)
-	let reader = emitLoadField(module, block: block, record: base, offset: DsOffReadCursor, ids: ids)
-	let used = emitBin(module, block: block, a: cursor, b: reader, opcode: StdBinOpcode.sub, ids: ids)
+	let used = emitUsedBytes(module, block: block, base: base, ids: ids)
 	let needed = emitBin(module, block: block, a: used, b: entrySize, opcode: StdBinOpcode.add, ids: ids)
 	let bufSize = emitLoadGlobalWord(module, block: block, label: DsBufSizeLabel, ids: ids)
 	let roomy = emitCmp(module, block: block, a: needed, b: bufSize, pred: StdCmpPred.le, ids: ids)
@@ -1008,8 +1019,7 @@ end 'emitSpaceCheck'
 // ⚠ **EVERY BLOCK BELOW RE-READS `write_cursor` FROM THE SEGMENT HEADER RATHER THAN THREADING IT.** That
 // is not a workaround for the Std tier having no block arguments — it is CORRECT, for the reason their
 // absence is survivable here: the whole function runs under the ring lock, so the header word cannot
-// change underneath it, and a re-read and a thread are the same value by construction. It is also what
-// lets the padding path publish its own advance through the ordinary cursor store instead of a second one.
+// change underneath it, and a re-read and a thread are the same value by construction.
 function buildDsReserve(module StdModule)
 	var func = IrFunction.createFromStd(DsReserveName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
@@ -1033,9 +1043,7 @@ function buildDsReserve(module StdModule)
 
 	// PEAK first, because it is a fact about how full the ring GOT rather than about this entry: an event
 	// that is about to be dropped still pushed the high-water mark to where it is.
-	let cursor = emitLoadField(module, block: entry, record: base, offset: DsOffWriteCursor, ids: ids)
-	let reader = emitLoadField(module, block: entry, record: base, offset: DsOffReadCursor, ids: ids)
-	let used = emitBin(module, block: entry, a: cursor, b: reader, opcode: StdBinOpcode.sub, ids: ids)
+	let used = emitUsedBytes(module, block: entry, base: base, ids: ids)
 	let peak = emitLoadField(module, block: entry, record: base, offset: DsOffPeakUsed, ids: ids)
 	let higher = emitCmp(module, block: entry, a: used, b: peak, pred: StdCmpPred.gt, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(higher, thenBlockId: raisePeak.id, elseBlockId: checkSpace.id))
@@ -1064,8 +1072,7 @@ function buildDsReserve(module StdModule)
 	let padHeader = emitBin(module, block: pad, a: padSizeField, b: padTypeAndFlags, opcode: StdBinOpcode.bitOr, ids: ids)
 	module.appendOp(pad, op: StdOp.storeIndirect(padAddr, offset: 0, valueId: padHeader, valueType: StdType.i64))
 	let padCursor = emitLoadField(module, block: pad, record: base, offset: DsOffWriteCursor, ids: ids)
-	let paddedCursor = emitBin(module, block: pad, a: padCursor, b: padSize, opcode: StdBinOpcode.add, ids: ids)
-	module.appendOp(pad, op: StdOp.storeIndirect(base, offset: DsOffWriteCursor, valueId: paddedCursor, valueType: StdType.i64))
+	emitPublishCursor(module, block: pad, base: base, cursor: padCursor, advance: padSize, ids: ids)
 	module.setTerminator(pad, op: StdOp.branch(recheck.id))
 
 	// ⚠ The space check is asked AGAIN after padding, and it is not the same question: the padding entry
@@ -1091,13 +1098,7 @@ function buildDsReserve(module StdModule)
 	let header = emitBin(module, block: place, a: typeAndSize, b: timeField, opcode: StdBinOpcode.bitOr, ids: ids)
 	module.appendOp(place, op: StdOp.storeIndirect(dataPtr, offset: 0, valueId: header, valueType: StdType.i64))
 
-	// ⭐ THE RING'S ONE PUBLISH POINT. It orders every store above it — this entry's header, and any
-	// padding entry written on the way — ahead of the cursor that makes them reachable. On x64 a plain
-	// store IS a release store (TSO), which is what makes this correct with no barrier op at this tier. The
-	// arm64 targets also carry `--debugstream`, and there this plain store orders nothing: they owe a release
-	// store here and at `__ds_commit` (see `DebugStreamDecoder`'s header for the window that leaves open).
-	let published = emitBin(module, block: place, a: placeCursor, b: entrySize, opcode: StdBinOpcode.add, ids: ids)
-	module.appendOp(place, op: StdOp.storeIndirect(base, offset: DsOffWriteCursor, valueId: published, valueType: StdType.i64))
+	emitPublishCursor(module, block: place, base: base, cursor: placeCursor, advance: entrySize, ids: ids)
 	emitBumpSegmentCounter(module, block: place, base: base, offset: DsOffTotalEvents, ids: ids)
 	module.appendOp(place, op: StdOp.osLockLeave(lock))
 	module.setTerminator(place, op: StdOp.ret(dataPtr))
@@ -1121,8 +1122,7 @@ end 'buildDsReserve'
 // it — so nothing can race the OR.
 //
 // What it DOES need is release ordering, so the payload writes are visible to the monitor before the bit
-// that claims they are there. On x64 that is a plain store; see `__ds_reserve`'s publish point for why
-// this tier has no barrier op and what would owe one.
+// that claims they are there.
 function buildDsCommit(module StdModule)
 	var func = IrFunction.createFromStd(DsCommitName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -1134,7 +1134,7 @@ function buildDsCommit(module StdModule)
 	let header = emitLoadField(module, block: entry, record: entryPtr, offset: 0, ids: ids)
 	let bit = emitConst(module, block: entry, value: DsEntryCommittedBit, ids: ids)
 	let committed = emitBin(module, block: entry, a: header, b: bit, opcode: StdBinOpcode.bitOr, ids: ids)
-	module.appendOp(entry, op: StdOp.storeIndirect(entryPtr, offset: 0, valueId: committed, valueType: StdType.i64))
+	module.appendOp(entry, op: StdOp.storeRelease(entryPtr, offset: 0, valueId: committed, valueType: StdType.i64))
 	module.setTerminator(entry, op: StdOp.retVoid)
 
 	module.functions.push(func)

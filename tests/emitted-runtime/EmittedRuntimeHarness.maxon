@@ -11,6 +11,7 @@ let BuildCommandName = "build"
 let OutputOptionPrefix = "--output="
 let TargetOptionPrefix = "--target="
 let EmitIrRuntimeOptionPrefix = "--emit-ir-runtime="
+let DebugStreamOption = "--debugstream"
 export let EmittedNameSeparator = ","
 let OutputStem = "out"
 let IrFileSuffix = ".ir"
@@ -27,6 +28,7 @@ export let PlainStorePrefix = "arm64.storeBaseDispReg.word64 "
 export let AcquireLoadMnemonic = "arm64.ldar.word64"
 export let ReleaseStoreMnemonic = "arm64.stlr.word64"
 export let RegisterMovePrefix = "arm64.movRegReg "
+export let GlobalAddressPrefix = "arm64.leaGlobal "
 export let ArgumentSeparator = ", "
 export let NoFurtherDemand = ""
 let WordSeparator = " "
@@ -38,6 +40,7 @@ let DestinationWordIndex = 1
 export typealias FieldOffset = int(0 to 65535)
 export typealias LineIndex = int(0 to u64.max)
 export typealias LineTally = int(0 to u64.max)
+export typealias AccessTally = int(0 to 65535)
 typealias PathArray = Array with FilePath
 
 export enum IrScanError implements Error
@@ -68,18 +71,42 @@ end 'RegisterEvent'
 
 export typealias RegisterEventArray = Array with RegisterEvent
 
-export function stagedProgram(caseLabel String) returns FilePath
+export type WordAccesses
+	export var plainLoads as StringArray
+	export var plainStores as StringArray
+	export var acquires as AccessTally
+	export var releases as AccessTally
+
+	export static function create() returns Self
+		return Self{plainLoads: StringArray.create(), plainStores: StringArray.create(), acquires: 0, releases: 0}
+	end 'create'
+
+	export function record(line String, register String, target String, functionName String, word String)
+		match registerUseIn(line, register: register) 'use'
+			plainLoad then self.plainLoads.push(line)
+			plainStore then self.plainStores.push(line)
+			acquireLoad then self.acquires = self.acquires + 1
+			releaseStore then self.releases = self.releases + 1
+
+			otherAccess or
+				copiedOut or
+				untouched then panic("emitted-runtime tests: the gate could not run — on {target}, `{functionName}` reaches {word} through `{register}` with `{line}`, which is none of the four shapes this case can read: `{PlainStorePrefix.trim()}`, `{PlainLoadPrefix.trim()}`, `{ReleaseStoreMnemonic}` or `{AcquireLoadMnemonic}` through that register. An access this case cannot classify would satisfy every absence demand by being none of them.")
+		end 'use'
+	end 'record'
+end 'WordAccesses'
+
+export function stagedProgram(caseLabel String, fixture String = SpawnFixtureName) returns FilePath
 	let staged = stagingDir("{StagingRootDirName}{PathSeparator}{caseLabel}")
 	clearStagedFiles(staged)
 
-	let stored = fixtureDir("{FixturesDirName}{PathSeparator}{SpawnFixtureName}").join("{StagedProgramFileName}{StoredFixtureSuffix}")
+	let stored = fixtureDir("{FixturesDirName}{PathSeparator}{fixture}").join("{StagedProgramFileName}{StoredFixtureSuffix}")
 	let body = try File.readText(stored) otherwise panic("emitted-runtime tests: the gate could not run — could not read the stored fixture {stored.toString()}.")
 	try File.writeText(staged.join(StagedProgramFileName), content: body) otherwise panic("emitted-runtime tests: the gate could not run — could not stage {StagedProgramFileName} into {staged.toString()}.")
 
 	return staged
 end 'stagedProgram'
 
-export function buildStagedProgram(staged FilePath, caseLabel String, target String, functionName String) returns FilePath
+export function buildStagedProgram(staged FilePath, caseLabel String, target String, functionName String, debugStream bool = false) returns FilePath
 	let executable = staged.join("{OutputStem}-{caseLabel}-{target}")
 	let ir = staged.join("{OutputStem}-{caseLabel}-{target}{IrFileSuffix}")
 
@@ -89,6 +116,10 @@ export function buildStagedProgram(staged FilePath, caseLabel String, target Str
 	arguments.push("{OutputOptionPrefix}{executable.toString()}")
 	arguments.push("{TargetOptionPrefix}{target}")
 	arguments.push("{EmitIrRuntimeOptionPrefix}{functionName}")
+
+	if debugStream 'withTheProducer'
+		arguments.push(DebugStreamOption)
+	end 'withTheProducer'
 
 	let build = spawnCompiler(arguments, staged: staged)
 
@@ -238,6 +269,26 @@ export function registerHoldingArgument(body StringArray, argument String) retur
 	throw IrScanError.noSuchLine
 end 'registerHoldingArgument'
 
+export function accessThrough(body StringArray, site LineIndex, register String) returns RegisterEvent throws IrScanError
+	for event in registerEvents(body, register: register) 'eachEvent'
+		if event.index <= site 'atOrBeforeTheMaterialisation'
+			continue
+		end 'atOrBeforeTheMaterialisation'
+
+		if event.use == RegisterUse.copiedOut 'carriedElsewhere'
+			continue
+		end 'carriedElsewhere'
+
+		if event.use == RegisterUse.untouched 'overwritten'
+			throw IrScanError.noSuchLine
+		end 'overwritten'
+
+		return event
+	end 'eachEvent'
+
+	throw IrScanError.noSuchLine
+end 'accessThrough'
+
 export function notePlainFieldLoad(findings StringArray, body StringArray, target String, register String, offset FieldOffset, functionName String, field String)
 	let addressed = "[{register} + {offset}]"
 	let index = try firstLineIndex(body, startingWith: PlainLoadPrefix, containing: addressed, endingWith: NoFurtherDemand) otherwise return
@@ -267,8 +318,8 @@ function lineMatches(text String, startingWith String, containing String, ending
 	return endingWith.isEmpty() or text.endsWith(endingWith)
 end 'lineMatches'
 
-function lineAt(body StringArray, index LineIndex) returns String
-	return try body.get(index) otherwise panic("emitted-runtime tests: the gate could not run — line {index} was read out of a body of {body.count()} lines that a scan of that same body had just found it in.")
+export function lineAt(body StringArray, index LineIndex) returns String
+	return try body.get(index) otherwise panic("emitted-runtime tests: the gate could not run — line {index} was read out of a body of {body.count()} lines, and every line a case reads is one a scan of that same body found or the one after it, which a function body always holds.")
 end 'lineAt'
 
 // The destination is read off the line's own second word rather than off a roster of the ops that write, so

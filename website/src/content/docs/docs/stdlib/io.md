@@ -596,6 +596,10 @@ refused at compile time elsewhere.
 | `copyOut(offset SegmentOffset, byteCount SegmentByteCount)` | `ByteArray` | `SharedMemoryError` | An independent copy of a byte range. |
 | `close()` | — | — | Unmap, release the section and withdraw its name. Idempotent. |
 
+`readWord` is an acquire load and `writeWord` a release store, so a word is how one process announces
+bytes to another: once `readWord` returns a value another process wrote with `writeWord`, every write that
+process made before it is visible, including a range read afterwards with `copyOut`.
+
 Offsets are in bytes, not words. Every access is checked against the section's size: a word (8 bytes) or a
 `copyOut` range (`offset + byteCount`) that would reach past the end throws `SharedMemoryError.outOfBounds`
 and touches nothing.

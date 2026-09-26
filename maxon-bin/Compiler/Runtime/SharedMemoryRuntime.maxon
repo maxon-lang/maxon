@@ -30,7 +30,7 @@ let SharedMemoryRuntimePrefix = b"__shm_"
 
 // ⭐ **THE SIX ENTRY POINTS.** Two host calls (create, and the whole teardown), one mapping, and three
 // accessors over the mapped bytes. The accessors are entries rather than surface syntax because Maxon has no raw
-// dereference: `readWord` is one `loadIndirect` at an address the language cannot otherwise name.
+// dereference: `readWord` is one acquire load at an address the language cannot otherwise name.
 export let SharedMemoryCreateName = b"__shm_create"
 export let SharedMemoryMapName = b"__shm_map"
 export let SharedMemoryReadWordName = b"__shm_read_word"
@@ -86,6 +86,10 @@ end 'buildSharedMemoryMap'
 // an arbitrary displacement inside it; a runtime guard would need the length, which is a fact the SEGMENT
 // holds and this entry is not given. `stdlib/SharedMemory.maxon`'s ranged `SegmentOffset` is where the domain
 // is stated.
+//
+// ⚠ The read is an acquire and the write a release because a word in the segment is how one process
+// announces bytes to another, and no lock spans the two. `__shm_copy_out` stays plain: it is sound only
+// after an acquire of the word that announced the range it copies.
 function buildSharedMemoryReadWord(module StdModule)
 	var func = IrFunction.createFromStd(SharedMemoryReadWordName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
@@ -97,8 +101,7 @@ function buildSharedMemoryReadWord(module StdModule)
 	let offset = 1 as ValueId
 
 	let addr = emitBin(module, block: entry, a: base, b: offset, opcode: StdBinOpcode.add, ids: ids)
-	let word = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(word, addrId: addr, offset: 0, valueType: StdType.i64))
+	let word = emitLoadAcquireField(module, block: entry, record: addr, offset: 0, ids: ids)
 	module.setTerminator(entry, op: StdOp.ret(word))
 
 	module.functions.push(func)
@@ -116,7 +119,7 @@ function buildSharedMemoryWriteWord(module StdModule)
 	let value = 2 as ValueId
 
 	let addr = emitBin(module, block: entry, a: base, b: offset, opcode: StdBinOpcode.add, ids: ids)
-	module.appendOp(entry, op: StdOp.storeIndirect(addr, offset: 0, valueId: value, valueType: StdType.i64))
+	module.appendOp(entry, op: StdOp.storeRelease(addr, offset: 0, valueId: value, valueType: StdType.i64))
 	module.setTerminator(entry, op: StdOp.retVoid)
 
 	module.functions.push(func)

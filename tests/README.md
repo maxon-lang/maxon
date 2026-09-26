@@ -359,7 +359,11 @@ tests/
     EmittedRuntimeHarness.maxon             the shared half: the staging, the spawn, the printed body, the line scan, the plain-load reading
     steal-reads-the-victim-ring-with-acquire-loads.maxtest     the thief reads another P's runqHead, runqTail and runnext with `ldar`, on both arm64 lanes
     locked-relist-doors-recheck-the-owner-with-an-acquire-load.maxtest     both doors that finish a slot free under `__slab_lock` re-read the span's owner word with `ldar`, on both arm64 lanes
+    the-debug-stream-ring-is-published-with-a-release-and-its-read-cursor-loaded-with-an-acquire.maxtest     `__ds_reserve` publishes `write_cursor` with `stlr` and reads `read_cursor` with `ldar`, and `__ds_commit` commits the entry header with `stlr`, on both arm64 lanes
+    a-shared-segment-word-is-read-with-an-acquire-and-written-with-a-release.maxtest     `__shm_read_word` is one `ldar` and `__shm_write_word` one `stlr`, on both arm64 lanes
     fixtures/spawn/main.maxon.fixture       stored name only - see rule 1
+    fixtures/heap/main.maxon.fixture        stored name only - see rule 1
+    fixtures/shared-segment/main.maxon.fixture   stored name only - see rule 1
   examples/
     ExamplesHarness.maxon                   the shared half: build one example, or one document's program, into temp/examples/<name>/, run it, check its answer
     basic.maxtest                           exits 42, the value its `main` returns
@@ -966,20 +970,25 @@ directory under `temp/console-write/`), and it keeps rule 5: one spawning `test`
 
 ## `emitted-runtime/` — the ORDERING an emitted runtime body reads another thread's word with
 
-Three cases, and each one's subject is a body no author wrote: one the back end synthesizes into every
-program that spawns, two into every program that allocates, and fifteen scheduler, timer and poller
-bodies for the `.data` words published from under `__sched_lock`. All three build the same two-line
-`spawn` fixture for `arm64-macos` and for `arm64-linux` with `--emit-ir-runtime=`, cut
+Five cases, and each one's subject is a body no author wrote: one the back end synthesizes into every
+program that spawns, two into every program that allocates, fifteen scheduler, timer and poller
+bodies for the `.data` words published from under `__sched_lock`, the DebugStream producer's two ring
+bodies, and the two shared-segment word accessors. Each builds a fixture — `spawn` for the first three,
+`heap` with `--debugstream` for the ring, `shared-segment` for the accessors — for `arm64-macos` and for
+`arm64-linux` with `--emit-ir-runtime=`, cut
 `func @<function>` out of the printed Target IR, and ask how that body reads a word another thread
 published — with `ldar` or with a plain `ldr` — and how it writes one, with `stlr` or a plain `str`.
 The shared half — the staging, the spawn, the cut, the line scan and the plain-access reading — lives
-in `EmittedRuntimeHarness.maxon`; see the note under `debug/`. Every demand a case makes is one of
-three scans of the cut body, and no case walks it itself: `firstLineIndex` where an ORDER is
-demanded and `bodyLineCount` where a TALLY is, both selecting a line by the op it starts with, an
-operand it contains and an operand it ends with; and `registerEvents`, the one scan that FOLLOWS a
-register, which reads off each line both what it does through that register and whether it overwrites
-it — two facts rather than one, because `ldr x1, [x1 + 48]` is both. `firstWriteOfRegister` and
-`registerHoldingArgument` are readings of that one scan rather than scans of their own.
+in `EmittedRuntimeHarness.maxon`; see the note under `debug/`. The harness holds three scans of the cut
+body: `firstLineIndex` where an ORDER is demanded and `bodyLineCount` where a TALLY is, both selecting a
+line by the op it starts with, an operand it contains and an operand it ends with; and `registerEvents`,
+the one scan that FOLLOWS a register, which reads off each line both what it does through that register
+and whether it overwrites it — two facts rather than one, because `ldr x1, [x1 + 48]` is both.
+`firstWriteOfRegister`, `registerHoldingArgument` and `accessThrough` (the first thing done through a
+register after a given line, skipping copies and throwing at an overwrite) are readings of that one scan.
+The cases that locate a word's accesses by walking the body themselves — the scheduler words and the
+debug-stream ring — tally each access they find into a `WordAccesses`, which sorts it into plain loads,
+plain stores, acquires and releases and panics on any other shape.
 
 **`steal-reads-the-victim-ring-with-acquire-loads`** — `__sched_steal`, the green-thread scheduler's
 thief, and the victim's `runqHead`, `runqTail` and `runnext`.
@@ -1014,6 +1023,24 @@ word says which of publishing and observing each body owes. ⛔ **ITS SELF-PROOF
 PASS**: a body that never names the word, a materialisation whose destination register cannot be read,
 one whose register is overwritten before it reaches anything, and an access matching none of the four
 shapes each leave the absence demands true for the reason that they address nothing.
+
+**`the-debug-stream-ring-is-published-with-a-release-and-its-read-cursor-loaded-with-an-acquire`** —
+`__ds_reserve` and `__ds_commit`, and the ring words the monitor PROCESS shares with them: `write_cursor`
+(segment+24) and `read_cursor` (segment+32), addressed through the register the body loads `__ds_base`
+into, and the entry header (entry+0) through the register holding `__ds_commit`'s argument. No lock spans
+the two processes, so each demand is per access: both `write_cursor` stores (the padding path and the
+placing path) are `stlr` and none is a plain `str`, every `read_cursor` load is `ldar` with at least one
+present, and the one header store is `stlr`. An ordered access at a displacement is read as the
+`add x16, <base>, <offset>` / `ldar`-or-`stlr [x16]` pair it lowers to. ⛔ **ITS SELF-PROOFS PANIC
+RATHER THAN PASS**: the line after `leaGlobal …, __ds_base` must be the load of the segment base;
+`__ds_base` may be materialised only once in `__ds_reserve`, and the base register may not be copied
+out, because an access through a second register would go unattributed; and every access to a ring
+word — direct, displaced or folded through an `add` — must be one of the four shapes, and a folded
+address must reach an access before its register is overwritten.
+
+**`a-shared-segment-word-is-read-with-an-acquire-and-written-with-a-release`** — `__shm_read_word` and
+`__shm_write_word`, the two bodies behind `SharedSegment.readWord`/`writeWord`: no plain word load or
+store in either, and exactly one `ldar` and one `stlr` respectively.
 
 ⭐⭐ **THE TARGET IR IS THE ONLY PLACE THE ANSWER IS.** The victim publishes its tail with a
 read-modify-write and claims a head with a compare-and-swap, so the WRITER's half of the pair is

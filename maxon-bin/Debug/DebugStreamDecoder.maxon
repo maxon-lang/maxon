@@ -18,13 +18,10 @@
 // reference measured 0 events decoded, 283221 dropped and 5290 abandoned from a producer that had exited
 // cleanly — every number of it a fiction.
 //
-// ⚠⚠ **NO MEMORY BARRIER OP EXISTS AT THIS TIER, AND ON A WEAKLY-ORDERED HOST THAT IS A REAL GAP.** On
-// x64 a plain store IS a release store and the commit bit cannot be observed before the payload under it.
-// AArch64 gives no such guarantee, so a producer and a consumer on two CORES could in principle see the
-// bit before the bytes. What holds here is narrower and worth stating rather than assuming: the reserve
-// and the commit are separated by the ring LOCK the producer takes, and the consumer re-reads
-// `write_cursor` on every drain — so the window is a single entry, and the scan already stops dead at the
-// first uncommitted one. A fence is owed at BOTH ends the day this is driven hard enough to matter.
+// ⚠ The consumer's half of the ring's ordering is `SharedSegment.readWord` (an acquire) and `writeWord`
+// (a release), pairing with the producer's release of `write_cursor` and of each commit bit and its
+// acquire of `read_cursor`. So the ring is read only through those two and `copyOut`, and a span is
+// copied only after the header words that announce it have been read.
 //
 // ⛔ **THE SEGMENT MUST BE FULLY SEEDED BEFORE THE CHILD IS SPAWNED.** `__ds_init` checks the magic,
 // compares the monitor's version, and caches `buffer_size` and `start_timestamp` before it arms

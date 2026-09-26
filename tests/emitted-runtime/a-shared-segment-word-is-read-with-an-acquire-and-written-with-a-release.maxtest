@@ -1,0 +1,40 @@
+let CaseLabel = "shared-segment-word-ordering"
+let SharedSegmentFixtureName = "shared-segment"
+
+let ReadWordName = "__shm_read_word"
+let WriteWordName = "__shm_write_word"
+
+let OrderedAccessesPerBody = 1 as AccessTally
+
+let OrderingReason = "A shared segment is the one memory two PROCESSES both map, and a word in it is how one of them tells the other that the bytes it covers are ready. No lock spans the two processes, so the edge has to travel on the accesses themselves. A plain `ldr` orders nothing after itself and a plain `str` nothing before itself, so armv8 may serve the reader bytes older than the word that announced them. The read is `StdOp.loadAcquire`, which is `ldar` on both arm64 lanes, and the write `StdOp.storeRelease`, which is `stlr`; both are the same plain `mov` on x64."
+
+test 'a shared segment word is read with an acquire and written with a release'
+	let staged = stagedProgram(CaseLabel, fixture: SharedSegmentFixtureName)
+
+	var findings = StringArray.create()
+	noteSegmentAccessors(findings, staged: staged, target: MacosTargetName)
+	noteSegmentAccessors(findings, staged: staged, target: LinuxTargetName)
+
+	Expect.isTrue(findings.isEmpty(), message: "an emitted shared-segment accessor reaches a word another process reads or writes without the ordering that word is published with:{renderedFindings(findings)}\n\n  {OrderingReason}")
+end 'a shared segment word is read with an acquire and written with a release'
+
+function noteSegmentAccessors(findings StringArray, staged FilePath, target String)
+	let lines = irLines(buildStagedProgram(staged, caseLabel: CaseLabel, target: target, functionName: "{ReadWordName}{EmittedNameSeparator}{WriteWordName}"))
+
+	noteSegmentWordAccess(findings, body: functionBody(lines, functionName: ReadWordName, target: target), target: target, functionName: ReadWordName, plainPrefix: PlainLoadPrefix, orderedMnemonic: AcquireLoadMnemonic)
+	noteSegmentWordAccess(findings, body: functionBody(lines, functionName: WriteWordName, target: target), target: target, functionName: WriteWordName, plainPrefix: PlainStorePrefix, orderedMnemonic: ReleaseStoreMnemonic)
+end 'noteSegmentAccessors'
+
+function noteSegmentWordAccess(findings StringArray, body StringArray, target String, functionName String, plainPrefix String, orderedMnemonic String)
+	for line in body 'eachLine'
+		if line.startsWith(plainPrefix) 'aPlainAccess'
+			findings.push("on {target}, `{functionName}` still reaches the segment word with a plain access — `{line}`")
+		end 'aPlainAccess'
+	end 'eachLine'
+
+	let ordered = bodyLineCount(body, startingWith: orderedMnemonic, containing: NoFurtherDemand, endingWith: NoFurtherDemand)
+
+	if ordered != OrderedAccessesPerBody 'miscounted'
+		findings.push("on {target}, `{functionName}` carries {ordered} `{orderedMnemonic}` where the one segment word it reaches needs {OrderedAccessesPerBody}")
+	end 'miscounted'
+end 'noteSegmentWordAccess'

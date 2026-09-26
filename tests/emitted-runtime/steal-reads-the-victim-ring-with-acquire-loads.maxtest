@@ -15,11 +15,9 @@ let RunnextFieldName = "runnext"
 let RunqHeadOffset = 0 as FieldOffset
 let RunqTailOffset = 8 as FieldOffset
 let RunnextOffset = 88 as FieldOffset
-let RingWordCount = 3 as LoadTally
+let RingWordCount = 3 as AccessTally
 
 let OrderingReason = "The victim publishes each of those words with a release — `emitRunqPublishTail` advances the tail with an atomic read-modify-write, and a head claim is an atomic compare-and-swap — so the slot store the word announces cannot sink past it. A plain `ldr` of the word here is the other half of that pair missing: arm64 may satisfy it from a stale line while the load of the slot it describes is satisfied from a fresh one, and the thief then runs whatever the slot held before the victim wrote it. The three reads are `StdOp.loadAcquire`, which is `ldar` on this target and the same plain `mov` on x64."
-
-typealias LoadTally = int(0 to 65535)
 
 test 'a thief reads the victim run queue words with acquire loads'
 	let staged = stagedProgram(CaseLabel)
