@@ -114,8 +114,11 @@ Binding on every comment written and every comment touched.
   to a former name. Git holds the history; a comment holds the present. The reason a guard exists is a
   *why* and belongs — but state the constraint that still binds ("callers may hand this an unsorted
   list"), never the edit that introduced it.
-- **Touching a comment means REWRITING it to conform** — or deleting it. Never leave a conforming
-  sentence inside a non-conforming block.
+- ⛔ **An existing comment is edited only when its CONTENT must change** — a fact the change made
+  false, a history clause, a fact outside the allow-list, a duplicate. A comment whose content is true
+  and allowed stays byte-for-byte as it is, whatever its formatting: bold, capitals, `⭐`, its wrap
+  width and its wording are not reasons to edit it. When content does change, rewrite the sentences
+  that carry it, not the block around them.
 
 The Maxon form:
 
@@ -191,8 +194,9 @@ is simply never written, and no gap in any enumeration can rescue it.
 point at — in the code itself, or in the diagnosis your caller's brief carries. ⛔ **Never a reason
 inferred from the shape of the diff.**
 
-**For a comment that already exists, you are RE-ADDING**, never rewriting freely: every surviving fact
-traces to text that was already in the file.
+**For a comment that already exists, you are CHECKING, and the default is no edit.** Change it only
+where its content must change (see the rules above), and then every surviving fact traces to text that
+was already in the file.
 
 ⚠ **Both ways, a fact must be VERIFIABLE.** If a claim cannot be checked and does not clearly match a
 category, drop it. **A confident, fabricated invariant is far worse than a missing comment**, because
@@ -231,6 +235,8 @@ paraphrases is three things free to drift.
 blocks. Forty small edits cost roughly twice what ten large ones do.
 
 ### Writing what survives
+
+These govern text this pass WRITES. They are never a reason to edit an existing comment on its own.
 
 - Present tense, declarative, third person. State what is true now.
 - One idea per sentence. No sentence whose only job is to set up the next one.
@@ -282,32 +288,25 @@ WRITTEN (2 lines)
 An ordering constraint whose violation is a silent cache miss, not an error. Gate 3 is what earns it
 the two lines; the measurement that found it stays in the commit message.
 
-**C. An existing block, re-added under category 4 — long because the argument has that many steps.**
+**C. An existing block whose content still holds — left exactly as it is.**
 
 ```
-BEFORE (11 lines)
+EXISTING (over the filtered-token cache in `Queries.maxon`; the change edited the function below it)
 // ⚠ **THE FILTERED STREAM IS TARGET-DEPENDENT AND THIS MEMO'S KEY IS NOT, WHICH IS SOUND ONLY
-// BECAUSE A `Project` HAS EXACTLY ONE TARGET FOR ITS WHOLE LIFE.** `Project.target` is a `let` set
-// by `Project.create` and re-aiming a live `Project` does not compile (Project.maxon says so at the
-// field, which is the line that would have to change first), and this cache lives on `project.db` —
-// so two targets are two `Project`s and two databases, and one cache can never be asked a question
-// about a target it was not filled for. Should a `Project` ever need re-aiming, THIS memo's key is
-// what becomes wrong: mix the target into it, do not simply invalidate.
-//
-// ⚠ **THE PROCESS-WIDE STORE BELOW HAS NO SUCH GUARANTEE AND SO ALREADY CARRIES THE TARGET IN ITS
-// KEY** — it outlives every `Project`, which is exactly the premise this paragraph rests on. See the
-// second store lookup in the body.
+// BECAUSE A `Project` HAS EXACTLY ONE TARGET FOR ITS WHOLE LIFE.** `Project.target` is a `let`, and
+// this cache lives on `project.db` — so two targets are two `Project`s and two databases. Should a
+// `Project` ever need re-aiming, THIS memo's key is what becomes wrong: mix the target into it.
 
-AFTER (5 lines)
-// ⚠ The filtered stream is target-dependent and this memo's key is not. That is sound only because a
-// `Project` is aimed at one target for its whole life: `Project.target` is a `let` and this cache
-// lives on `project.db`, so two targets are two `Project`s and two databases. If a `Project` ever
-// needs re-aiming, this key is what becomes wrong — mix the target in, do not merely invalidate.
-// The process-wide store has no such guarantee and already carries the target in its key.
+AFTER
+(unchanged)
 ```
 
-Every constraint survives, because each is a category-4 fact whose violation is a wrong answer. What
-goes is the shouting, the bold, and the two clauses that only assert the paragraph's own importance.
+Every claim is still true and each is a category-4 fact. The capitals, the bold and the wrap are not
+content, so they are not a reason to edit. Rewrapping or restyling this block would be a diff with no
+change in meaning, which is noise in review and cost in the pass.
+
+If the change had made one of its facts false — say `Project.target` became a `var` — the edit is that
+sentence and the conclusion that rests on it, nothing else in the block.
 
 **D. An existing block, nothing survives.**
 
