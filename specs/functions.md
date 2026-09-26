@@ -1380,7 +1380,7 @@ enum Failure implements Error
 end 'Failure'
 
 function maybe() returns Box throws Failure
-	return Box.create()
+	throw Failure.bad
 end 'maybe'
 
 function main() returns ExitCode
