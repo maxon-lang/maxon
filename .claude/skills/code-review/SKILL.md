@@ -111,8 +111,8 @@ name what the change owes in your report for §6 rather than writing it. Standal
 
 ## 6. Rebuild and re-run the gates — STANDALONE ONLY
 
-- **The battery:** every row of `/land` §8's table — build if stale (twice when
-  `scripts/self-compiles-needed.sh` says so), the full suite, the wasm lane, the self-compile, the tree
+- **The battery:** every row of `/land` §8's table — build if stale (`maxon run build`, which builds
+  twice by itself for an emitted-runtime change), the full suite, the wasm lane, the self-compile, the tree
   corpora and the documentation gates. It is one battery, kept in one place.
 - **Scaling:** `mcp__maxon__run_scale_test` if the change touched a pass, the IR, or a data
   structure the compiler indexes by. ⚠ **It is an INSTRUMENT with no verdict — there is no green one,

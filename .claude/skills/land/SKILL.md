@@ -156,8 +156,8 @@ feeding a gate that is going to run anyway beats a run nobody can attribute.
 >   carry the stdlib they were built with, so a change the tree corpora exercise does need one.
 > - **The one second build that is not a repeat: emitted runtime.** A change to `Compiler/Runtime/` or
 >   `Compiler/Targets/*/*Runtime*.maxon` takes TWO self-compiles before the compiler itself — which is
->   also the spec harness — runs the new runtime. Ask `scripts/self-compiles-needed.sh` before you
->   build; it prints `once` or `twice`.
+>   also the spec harness — runs the new runtime. `maxon run build` does the second build itself, and
+>   prints why; `MAXON_SECOND_STAGE=1` on that `run build` stops it at one.
 > - **A run already done on the same binary and tree is READ, not repeated.** Agents write every build
 >   and run to a file under `temp/` and report its path and exit code; you read that file. Re-run only
 >   when something it depended on has changed since.
@@ -500,7 +500,7 @@ during changes; a battery run before the rebase measured a tree that no longer e
 
 | Gate | |
 |---|---|
-| **Build** exit 0 | **Only if stale** — §6 built last, so this is stale only if the rebase moved a compiled-in source. A current binary is not rebuilt: the SELF-COMPILE below is the one build of it the battery runs. The exception is emitted runtime: when `scripts/self-compiles-needed.sh` says `twice` and the slot was built only once since the change, build it again now, before the suite rows |
+| **Build** exit 0 | **Only if stale** — §6 built last, so this is stale only if the rebase moved a compiled-in source. A current binary is not rebuilt: the SELF-COMPILE below is the one build of it the battery runs. The exception is emitted runtime: when the slot was built with `MAXON_SECOND_STAGE=1` since the change, run `maxon run build` again now, without it, before the suite rows — it builds twice |
 | **Full `run_spec_test`** | **`failed: 0`**, and no exit **101**. The gate is zero failures *including every pre-existing test*, never a total |
 | **`run_spec_test target=wasm32-wasi`** | `failed: 0`. Default battery, not an extra (user ruling, 2026-08-29) |
 | **SELF-COMPILE** — `./maxon-bin/.maxon/maxon build maxon-bin --output=temp/land-selfcompile` | exit 0, about a minute. Output discarded; only the exit code matters |

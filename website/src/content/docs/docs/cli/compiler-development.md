@@ -115,4 +115,10 @@ maxon build problem.maxon --metrics=temp/phases.tsv          # where the compile
 
 A change to the runtime the compiler emits into every program takes effect in the compiler's own
 behaviour only after it has rebuilt itself twice: the first rebuild emits the new runtime into programs,
-the second into the compiler.
+the second into the compiler. `maxon run build` does both. Its project file compares the commit the
+running compiler reports with the emitted-runtime sources (`maxon-bin/Compiler/Runtime/` and
+`maxon-bin/Compiler/Targets/*/*Runtime*.maxon`), committed and uncommitted, and when they changed, or
+when git or the compiler cannot answer, it prints the reason to stderr and asks for
+[`rebuild_with_output`](/docs/cli/project-structure/#building-again-with-the-written-program). Set `MAXON_SECOND_STAGE=1` for one
+build only: the programs it builds carry the new runtime, and the compiler's own process — the
+`spec-test` worker among them — carries its builder's.

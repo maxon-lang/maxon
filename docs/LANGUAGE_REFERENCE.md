@@ -4491,7 +4491,7 @@ describes **one** build; describing a second in the same run is an error.
 
 | Call | Meaning |
 |------|---------|
-| `Build.build(source, output: "", debugInfo: true, version: "", defines:)` | compile one file or directory to one output |
+| `Build.build(source, output: "", debugInfo: true, version: "", defines:, rebuildWithOutput: false)` | compile one file or directory to one output |
 | `Build.buildWithConfig(config)` | build one `BuildConfig`, whose `sources` may list several files and directories compiled as one program, in order |
 | `Build.delegate(directory, target: "")` | hand the whole description to a target of another directory's `.maxproj` file, run there |
 
@@ -4500,6 +4500,9 @@ describes **one** build; describing a second in the same run is an error.
 - `defines` is a `StringArray` of `"name=value"` entries, each replacing the written default of a top-level
   `String` constant — the same as `maxon build --define`. This is how a project file passes a value it
   computed, such as a version derived from git, into the program.
+- `rebuildWithOutput` runs the written program with the same command line once the build succeeds, as a
+  compiler building itself does; see
+  [Building again with the written program](CLI_REFERENCE.md#building-again-with-the-written-program).
 - `target` names one of the delegated project's targets the way `maxon build` does; empty means its only
   one.
 

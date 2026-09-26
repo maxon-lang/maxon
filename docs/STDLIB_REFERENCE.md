@@ -2506,7 +2506,7 @@ end 'gen_tool'
 
 | Function | Returns | Description |
 |----------|---------|-------------|
-| `Build.build(source String, output String = "", debugInfo bool = true, version String = "", defines StringArray = empty)` | — | Describe one source file or directory compiled to one output. An empty `output` builds `.maxon/<name>`, `<name>` being the project or task file's own name. |
+| `Build.build(source String, output String = "", debugInfo bool = true, version String = "", defines StringArray = empty, rebuildWithOutput bool = false)` | — | Describe one source file or directory compiled to one output. An empty `output` builds `.maxon/<name>`, `<name>` being the project or task file's own name. |
 | `Build.buildWithConfig(config BuildConfig)` | — | Describe one full `BuildConfig`, which may list several sources. |
 | `Build.delegate(directory String, target String = "")` | — | Describe a build by handing it to a target of `directory`'s own `.maxproj` file, run with that directory as its working directory. `target` names one of its targets as `maxon build` does, each `_` written `-`; empty means its sole one. |
 | `Build.emitBuildConfig(config BuildConfig)` | — | Write one configuration as a JSON object, every string JSON-escaped; `build`, `buildWithConfig` and `delegate` use it. |
@@ -2526,9 +2526,11 @@ end 'gen_tool'
 | `defines` | `StringArray` | `name=value` pairs, each replacing a top-level `String` constant's default, as `maxon build --define` does. |
 | `directory` | `String` | The directory whose own `.maxproj` file describes this build. Empty for an ordinary build; stating it alongside `sources` is refused. |
 | `delegateTarget` | `String` | With `directory`, which of the delegated project's targets to build. |
+| `rebuildWithOutput` | `bool` | Once a build for the host succeeds, run the written program with the same command line in the same directory, adding `MAXON_SECOND_STAGE=1`, and exit with its exit code; a build that finds `MAXON_SECOND_STAGE` set ends at its own output. Stating it alongside `directory` is refused. See [Building again with the written program](CLI_REFERENCE.md#building-again-with-the-written-program). |
 
 `BuildConfig.create(sources StringArray, output String = "", debug_info bool = true, version String = "",
-defines StringArray = empty, directory String = "", delegateTarget String = "")` builds one.
+defines StringArray = empty, directory String = "", delegateTarget String = "", rebuildWithOutput bool = false)` builds
+one.
 
 `defines` is how a project file puts something it computed into the binary, such as a version derived
 from git. A define whose name matches no constant, or more than one, is refused (E3149, E3150), as is a

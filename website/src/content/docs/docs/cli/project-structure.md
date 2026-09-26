@@ -101,13 +101,18 @@ describes a second build in one run is refused.
 print whatever it likes as it works, and it streams to the caller live. With the variable unset, the
 description goes to stdout, which is the one way to inspect it directly.
 
+The program runs, and exits, before the build it describes starts. The driver names itself in
+**`MAXON_COMPILER`** — the path of the compiler running the command — so a target or task can ask the
+compiler that is about to build, for example which commit its `maxon version` reports.
+
 | Call | Meaning |
 |---|---|
-| `Build.build(source, output:, debugInfo:, version:, defines:)` | Build one file or directory to one output. The common case. |
+| `Build.build(source, output:, debugInfo:, version:, defines:, rebuildWithOutput:)` | Build one file or directory to one output. The common case. |
 | `Build.buildWithConfig(config)` | Build one `BuildConfig`, which can list several sources, compiled as one program in order. |
 | `Build.delegate(directory, target:)` | Hand the whole description to a target of another directory's `.maxproj` file. |
 
-`output` defaults to `""`, `debugInfo` to `true`, `version` to `""` and `defines` to an empty list. **A
+`output` defaults to `""`, `debugInfo` to `true`, `version` to `""`, `defines` to an empty list and
+`rebuildWithOutput` to `false`. **A
 build that states no output is written to `.maxon/<name>`**, `<name>` being the project file's name
 without its extension (for a task, the `.maxtasks` file's). The keys the driver reads from the JSON are:
 
@@ -115,11 +120,12 @@ without its extension (for a task, the `.maxtasks` file's). The keys the driver 
 |-----|------|---------|
 | `output` | string, required unless `directory` | Where the executable goes, without the extension. The compiler adds `.exe` for Windows, `.wasm` for `wasm32-wasi`, and nothing for Linux and macOS. Relative to the current directory. Empty means `.maxon/<name>`. |
 | `sources` | list of strings, required unless `directory` | The files and directories to compile, in order. An empty list is refused. |
-| `directory` | string | A directory whose own `.maxproj` file describes this build. Stating it alongside `sources` is refused. |
+| `directory` | string | A directory whose own `.maxproj` file describes this build. Stating it alongside `sources` or `rebuild_with_output` is refused. |
 | `target` | string | With `directory`, which of the delegated project's targets to build, as `maxon build` spells it; empty means its sole one. |
 | `debug_info` | `true` or `false` | Whether to write the `.mxdbg` sidecar (default `true`). |
 | `version` | string | A dotted version stamped into the binary: a `VS_VERSIONINFO` resource on Windows and `LC_SOURCE_VERSION` on macOS. Linux and `wasm32-wasi` binaries carry no product version. Without it, the binary reports `0.0.0.0`, and a missing component is 0. A component that is not a number is refused on every target, and one the target's field cannot hold is refused too: each Windows component holds 0 to 65535 (four at most); on macOS the first holds 0 to 16777215 and the next four 0 to 1023. |
 | `defines` | list of `name=value` strings | The same as [`--define=`](/docs/cli/#defines) on the command line. |
+| `rebuild_with_output` | `true` or `false` | Run the written program with this command's own arguments once the build succeeds (default `false`). See [Building again with the written program](#building-again-with-the-written-program). |
 
 A field that is present but malformed is **refused**, naming the key, for example
 ``error: myapp.maxproj's `sources` is not a list of strings``. A description that fails to parse as JSON
@@ -144,6 +150,14 @@ way `maxon build <word>` does; left empty, a project with one target builds it a
 lists them and refuses. The command line's `--output=`, `--target`, `--define` and `--no-debug-info` are
 applied afterwards, exactly as they are to a build described in place. Delegation more than eight deep
 is refused as a cycle.
+
+The delegated project owns the rest of the description, so a delegating one that also states `sources`
+or `rebuild_with_output` is refused, naming the key:
+
+```text
+error: maxon.maxtasks states both a `directory` and `rebuild_with_output`.
+A delegated build hands the whole description to that directory's `.maxproj` file; it cannot also state `rebuild_with_output` of its own.
+```
 
 ### The task file
 
@@ -206,6 +220,29 @@ build. Once the compile succeeds, the compiler renames its running image to `max
 `maxon.previous` is itself still running, for example an editor's language server, it is renamed aside to
 `maxon.retired-<stamp>` and deleted by a later rebuild. A **failed** build leaves the running compiler in
 place.
+
+### Building again with the written program
+
+A build that states `rebuild_with_output` (`Build.build(…, rebuildWithOutput: true)`) is repeated by
+the program it writes. Once the compile succeeds, the driver releases the build's lock, prints
+
+```text
+Repeating this build with the program it just wrote, <absolute path of the output>
+```
+
+and runs that program with this command's own arguments, word for word, in the same working directory
+and with the same streams, adding `MAXON_SECOND_STAGE=1` to its environment. The command exits with
+that program's exit code. A build that finds `MAXON_SECOND_STAGE` already set ends at its own output,
+so the repetition happens once.
+
+It serves a compiler building itself: a compiler emits its runtime into every program it writes, so
+the compiler a build writes carries the runtime of the compiler that built it, and a second build by
+the new compiler gives it its own. A program built for another target than the host's is left as
+written, and the build says why:
+
+```text
+Not repeating this build with the program it wrote: dist/maxon is built for x64-linux, and this host is x64-windows.
+```
 
 ## Ignoring directories
 

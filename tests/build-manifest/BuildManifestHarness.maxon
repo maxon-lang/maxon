@@ -77,11 +77,21 @@ export let MaxprojTwoInOneDirectoryFixtureName = "maxproj-two-in-one-directory"
 export let MaxprojNestedFixtureName = "maxproj-nested"
 export let MaxprojTwoBuildsInOneTargetFixtureName = "maxproj-two-builds-in-one-target"
 export let MaxprojPublicTargetFixtureName = "maxproj-public-target"
+export let ReportsItsCompilerFixtureName = "reports-its-compiler"
+export let RebuildWithOutputFixtureName = "rebuild-with-output"
+export let DelegatedRebuildWithOutputFixtureName = "delegated-rebuild-with-output"
+export let DelegatedWithSourcesFixtureName = "delegated-with-sources"
 
 // The targets whose version fields bound a manifest `version`, pinned rather than inherited: the host's
 // own target may be one that stamps no version at all.
 export let PeTargetOption = "--target=x64-windows"
 export let MachOTargetOption = "--target=arm64-macos"
+
+export let RebuildWithOutputMarkerFileName = "ran.txt"
+let RebuildWithOutputExitCode = 7 as AssertedInt
+let SecondStageRecordLine = "stage=1\n"
+let ArgumentRecordPrefix = "arg="
+let RecordLineEnd = "\n"
 
 // Where a project's build products live (`<project>/.maxon/`).
 export let ProjectProductsDirName = ".maxon"
@@ -135,7 +145,7 @@ function stageStoredTree(stored FilePath, into FilePath)
 end 'stageStoredTree'
 
 // `maxon build <options>` in the staged project.
-export function spawnManifestBuild(staged FilePath, options StringArray) returns CollectedOutput
+export function spawnManifestBuild(staged FilePath, options StringArray, environment EnvMap = EnvMap.create()) returns CollectedOutput
 	var arguments = StringArray.create()
 	arguments.push(BuildCommandName)
 
@@ -147,7 +157,15 @@ export function spawnManifestBuild(staged FilePath, options StringArray) returns
 	var config = Configuration.create(Executable.path(binary))
 	config.arguments = arguments
 	config.workingDirectory = staged
-	config.environment = Environment.inheritUpdating([CacheRootVariable: privateCacheRoot(staged).toString()])
+
+	var overrides = EnvMap.create()
+	overrides.upsert(CacheRootVariable, value: privateCacheRoot(staged).toString())
+
+	for (name, value) in environment 'eachVariable'
+		overrides.upsert(name, value: value)
+	end 'eachVariable'
+
+	config.environment = Environment.inheritUpdating(overrides)
 
 	return try config.run() otherwise (e) 'spawnFailed'
 		panic("build-manifest tests: the gate could not run — could not spawn `{BuildCommandName}` in {staged.toString()} ({e.displayReason()}).")
@@ -268,6 +286,22 @@ export function requireRefused(staged FilePath, options StringArray, exitCode As
 	try Expect.isEmpty(builtProductsIn(staged), message: "`{what}` over the staged manifest was refused and still wrote a product.")
 end 'requireRefused'
 
+export function requireRepeatedWithOutput(caseLabel String, option String) throws TestFailure
+	let staged = stagedProject(caseLabel, fixture: RebuildWithOutputFixtureName)
+
+	let build = spawnManifestBuild(staged, options: [option])
+	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+
+	try Expect.equal(build.exitCode() as AssertedInt, expected: RebuildWithOutputExitCode, message: "`maxon build {option}` over a manifest asking to rebuild with its output did not exit with the written program's own exit code. {said}")
+
+	let marker = staged.join(RebuildWithOutputMarkerFileName)
+	try Expect.isTrue(File.exists(marker), message: "the written program never ran: it leaves {marker.toString()} behind whenever it does. {said}")
+
+	let record = try File.readText(marker) otherwise panic("build-manifest tests: {marker.toString()} exists and could not be read")
+	let expected = "{SecondStageRecordLine}{ArgumentRecordPrefix}{BuildCommandName}{RecordLineEnd}{ArgumentRecordPrefix}{option}{RecordLineEnd}"
+	try Expect.equal(record, expected: expected, message: "the written program ran with a command line or a MAXON_SECOND_STAGE other than the driver's own invocation, word for word, and `1`. {said}")
+end 'requireRepeatedWithOutput'
+
 // Every file in the staged project named for the manifest's output, whatever suffix a target gives it, named
 // for a report: a refusal over a pinned target writes no host-suffixed executable either way.
 function builtProductsIn(staged FilePath) returns String
@@ -291,7 +325,7 @@ function withoutFixtureSuffix(name String) returns String
 	return try cut.get(0) otherwise panic("build-manifest tests: a split of '{name}' has a first part")
 end 'withoutFixtureSuffix'
 
-function testedCompilerPath() returns FilePath
+export function testedCompilerPath() returns FilePath
 	let spelled = "{TestedCompilerStem}{executableSuffix()}"
 	let relative = try FilePath.from(spelled) otherwise panic("build-manifest tests: the gate could not run — '{spelled}' is not a spellable path")
 	let binary = relative.resolve(Directory.currentPath())

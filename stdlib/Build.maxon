@@ -27,8 +27,13 @@ public type BuildConfig
 	/// Which of the delegated project's targets to build. Empty means its sole target.
 	public var delegateTarget as String
 
-	public static function create(sources StringArray, output String = "", debug_info bool = true, version String = "", defines StringArray = StringArray.create(), directory String = "", delegateTarget String = "") returns BuildConfig
-		return BuildConfig{output: output, sources: sources, debug_info: debug_info, version: version, defines: defines, directory: directory, delegateTarget: delegateTarget}
+	/// After a successful build for the host, run the written program with the same command line in
+	/// the same directory, adding `MAXON_SECOND_STAGE=1`; the build exits with its exit code. A build
+	/// already running with `MAXON_SECOND_STAGE` set ends at its own output. Refused with `directory`.
+	public var rebuildWithOutput as bool
+
+	public static function create(sources StringArray, output String = "", debug_info bool = true, version String = "", defines StringArray = StringArray.create(), directory String = "", delegateTarget String = "", rebuildWithOutput bool = false) returns BuildConfig
+		return BuildConfig{output: output, sources: sources, debug_info: debug_info, version: version, defines: defines, directory: directory, delegateTarget: delegateTarget, rebuildWithOutput: rebuildWithOutput}
 	end 'create'
 end 'BuildConfig'
 
@@ -39,6 +44,10 @@ let BuildDescriptionVariable = "MAXON_BUILD_DESCRIPTION"
 
 let DescribedBuildSeparator = ",\n"
 
+// The compiler spells this key too (`Main.ManifestRebuildWithOutputKey`); a mismatch drops the
+// request silently, since an absent key reads as `false`.
+let RebuildWithOutputKey = "rebuild_with_output"
+
 public type Build
 	typealias StringArray = Array with String
 
@@ -47,10 +56,12 @@ public type Build
 	/// compiler appends `.exe` on Windows, `.wasm` on wasm32-wasi and nothing elsewhere); empty means
 	/// `.maxon/<name>`, `<name>` being the driver file's. debugInfo: whether the build writes the
 	/// `<output>.mxdbg` sidecar; `maxon build --no-debug-info` turns it off whatever this says.
-	public static function build(source String, output String = "", debugInfo bool = true, version String = "", defines StringArray = StringArray.create())
+	/// rebuildWithOutput: build again with the program just written, as
+	/// `BuildConfig.rebuildWithOutput` describes.
+	public static function build(source String, output String = "", debugInfo bool = true, version String = "", defines StringArray = StringArray.create(), rebuildWithOutput bool = false)
 		var sources = StringArray.create()
 		sources.push(source)
-		Build.emitBuildConfig(BuildConfig.create(sources, output: output, debug_info: debugInfo, version: version, defines: defines))
+		Build.emitBuildConfig(BuildConfig.create(sources, output: output, debug_info: debugInfo, version: version, defines: defines, rebuildWithOutput: rebuildWithOutput))
 	end 'build'
 
 	/// Custom build - full control via BuildConfig
@@ -80,8 +91,13 @@ public type Build
 		text.append("  \"sources\": [{Build.renderStringList(config.sources)}],\n")
 		text.append("  \"debug_info\": {"true" if config.debug_info else "false"},\n")
 		text.append("  \"version\": {Json.quote(config.version)},\n")
-		text.append("  \"defines\": [{Build.renderStringList(config.defines)}]\n")
-		text.append("\}")
+		text.append("  \"defines\": [{Build.renderStringList(config.defines)}]")
+
+		if config.rebuildWithOutput 'rebuildRequested'
+			text.append(",\n  \"{RebuildWithOutputKey}\": true")
+		end 'rebuildRequested'
+
+		text.append("\n\}")
 		return text
 	end 'renderBuildConfig'
 

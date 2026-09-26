@@ -111,5 +111,7 @@ if ! "$seed" build maxon-bin --output="$built"; then
 	withdraw_shim
 fi
 
-"$built" run build
+# `C1` was compiled from this tree, so the `C2` it writes already carries the tree's runtime; `C1`
+# stamps no commit, so its manifest would otherwise ask for a third build.
+MAXON_SECOND_STAGE=1 "$built" run build
 "$built" version

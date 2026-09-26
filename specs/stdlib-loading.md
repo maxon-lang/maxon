@@ -739,6 +739,29 @@ end 'main'
 }
 ```
 
+<!-- test: stdlib-loading.build-config-asks-for-a-rebuild-with-its-output -->
+```maxon
+function main() returns ExitCode
+	Build.build(".", rebuildWithOutput: true)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+{
+  "output": "",
+  "directory": "",
+  "target": "",
+  "sources": ["."],
+  "debug_info": true,
+  "version": "",
+  "defines": [],
+  "rebuild_with_output": true
+}
+```
+
 <!-- test: stdlib-loading.ascii-classifiers-from-stdlib -->
 `stdlib/Ascii.maxon`'s six classifiers. It is the first stdlib module to reach user code whose bodies are `match` arms
 over **`Character` RANGE patterns** (`'0' to '9'`, `'a' to 'z' or 'A' to 'Z'`), which is the construct

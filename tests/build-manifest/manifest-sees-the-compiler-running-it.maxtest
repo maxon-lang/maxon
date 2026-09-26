@@ -1,0 +1,21 @@
+let CaseDirName = "manifest-sees-the-compiler-running-it"
+let ReportPrefix = "MAXON_COMPILER=["
+let ReportSuffix = "]"
+
+test 'a manifest program sees MAXON_COMPILER naming the compiler that runs it'
+	let staged = stagedProject(CaseDirName, fixture: ReportsItsCompilerFixtureName)
+
+	let build = spawnManifestBuild(staged, options: StringArray.create())
+	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+
+	Expect.equal(build.exitCode() as AssertedInt, expected: 0, message: "`maxon build` over a manifest that reports MAXON_COMPILER and describes an ordinary build did not succeed. {said}")
+	Expect.contains(build.stdout, needle: ReportPrefix, message: "the manifest program's report of MAXON_COMPILER did not reach the build's stdout. {said}")
+
+	let afterPrefix = try build.stdout.split(ReportPrefix).get(1) otherwise ""
+	let reported = try afterPrefix.split(ReportSuffix).get(0) otherwise ""
+	let reportedPath = try FilePath.from(reported) otherwise FilePath.empty()
+	let compiler = testedCompilerPath()
+
+	Expect.isTrue(File.exists(reportedPath), message: "MAXON_COMPILER, as the manifest program saw it, was '{reported}', which names no existing file. {said}")
+	Expect.isTrue(reportedPath.normalize() == compiler.normalize(), message: "MAXON_COMPILER, as the manifest program saw it, was '{reported}', not the compiler running the build, {compiler.toString()}. {said}")
+end 'a manifest program sees MAXON_COMPILER naming the compiler that runs it'

@@ -13,7 +13,8 @@ Docker image, a Homebrew prefix. A tree holding one without the other compiles n
 ⛔ **A `runtime/` FILE IS NOT COMPILER SOURCE AND NEEDS ONE SELF-COMPILE, NOT TWO.** It is input the
 compiler READS, so the first build already compiles against the edited file and carries it. That is the
 opposite of `Compiler/Runtime/` below, which the compiler WRITES into every program including itself.
-`scripts/self-compiles-needed.sh` answers for both; it does not watch `runtime/`, deliberately.
+`maxon run build` builds a second time by itself when `Compiler/Runtime/` or a per-target
+`*Runtime*.maxon` file changed; a `runtime/` edit is left out of that check, deliberately.
 
 ⭐ **FIVE FAMILIES ARE IN, AND THE ROOT THAT REACHES ANY OF THEM IS A CALL THE COMPILER EMITS.**
 `runtime/Clock.maxon` holds `__clock_now_unix_s` and `__uptime_ms`, `runtime/ParallelBoundary.maxon` holds
@@ -503,15 +504,19 @@ Four doors are still standing open rather than shut:
 > ⚠ **`fixpoint.sh` DOES NOT CATCH THIS.** It builds two stages under `temp/fixpoint/` and compares
 > them — both are past the convergence point, so they agree while the SLOT still holds `C1`.
 >
-> ⭐⭐ **DO NOT GUESS WHICH CASE YOU ARE IN — ASK, BEFORE YOU BUILD:**
-> ```
-> scripts/self-compiles-needed.sh     # prints `once` or `twice`, and why
-> ```
-> The compiler stamps the commit it was built from, so *"has any runtime file changed since the slot
-> binary was built"* is a `git diff` rather than a judgement — and it counts uncommitted changes too.
+> ⭐⭐ **`maxon run build` DOES THE SECOND BUILD ITSELF.** The compiler stamps the commit it was built
+> from, so *"has any runtime file changed since the running compiler was built"* is a `git diff` — it
+> counts uncommitted changes too — and `maxon-bin/maxon.maxproj` asks it on every `run build`. When the
+> answer is yes, or unknown, it prints the reason to stderr and describes the build with
+> `rebuildWithOutput: true`; the driver then runs the compiler it just wrote with the same command line
+> and `MAXON_SECOND_STAGE=1`, which ends the repetition. While a runtime edit is uncommitted, every
+> `run build` therefore compiles twice.
+> ⇒ **To iterate on runtime with ONE build, set `MAXON_SECOND_STAGE=1` for that `run build`.** Programs
+> `C1` builds already get the new runtime; only the compiler's own process — the spec harness, the
+> self-compile timing — needs `C2`. The MCP `build` tool with path `maxon-bin` is a path build: it runs
+> no manifest, so it builds once.
 > ⛔ **THIS RULE IS ONLY ABOUT EMITTED RUNTIME. EVERY OTHER CHANGE NEEDS ONE BUILD**, and a needless
-> self-compile is a minute off every task that touches the compiler. The script's own header says why
-> the per-target half counts.
+> self-compile is a minute off every task that touches the compiler.
 > ⛔ **THE COMPILER THAT BUILDS THIS TREE MUST LIVE INSIDE IT.** `stdlib/` and its sibling `runtime/` are
 > found by walking up from the EXECUTABLE, so an installed `maxon` on PATH compiles this repository
 > against the RELEASE's sources — MEASURED: it succeeds and exits 0, having built a compiler from a

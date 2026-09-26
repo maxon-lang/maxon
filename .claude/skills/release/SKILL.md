@@ -37,8 +37,8 @@ git checkout -b release/X.Y.Z
 ⛔ **THEN REBUILD, BEFORE ANYTHING ELSE** — `./maxon-bin/.maxon/maxon run build` at the repo root, the
 build that stamps a version (`maxon build maxon-bin` is a path build and stamps none). The version comes
 from the ref at BUILD time, so a compiler built before the branch existed still reports `dev`, and
-§3b's `compiler-version` check refuses it. Ask `scripts/self-compiles-needed.sh` whether this needs one
-build or two.
+§3b's `compiler-version` check refuses it. When the emitted runtime changed since the slot was built,
+`run build` builds a second time by itself and prints why.
 
 ## 2 · Write the changelog entry, by hand
 

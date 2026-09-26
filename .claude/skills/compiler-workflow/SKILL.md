@@ -68,8 +68,8 @@ wsl -- ./temp/linux-lane/maxon2 spec-test
 ```
 
 `C1` is built by the Windows compiler and `C2` by `C1` running on Linux, so `C2` is the first binary a
-Linux-HOSTED compiler produced — the defect class the cross lane cannot reach. When
-`scripts/self-compiles-needed.sh` says `twice` for the Windows slot, it is also the first whose own
+Linux-HOSTED compiler produced — the defect class the cross lane cannot reach. When the emitted
+runtime changed since the Windows slot was built, it is also the first whose own
 emitted runtime is this tree's.
 
 ## Staging `vendor/`

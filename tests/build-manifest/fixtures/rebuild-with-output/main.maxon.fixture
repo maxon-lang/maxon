@@ -1,0 +1,26 @@
+typealias ExitCode = int(0 to 255)
+
+let MarkerFileName = "ran.txt"
+let StageVariable = "MAXON_SECOND_STAGE"
+let Unset = "<unset>"
+let RanExitCode = 7
+
+function main() returns ExitCode
+	let stage = try Process.environmentVariable(StageVariable) otherwise Unset
+	var record = "stage={stage}\n"
+	var atProgramName = true
+
+	for arg in CommandLine.args() 'eachArg'
+		if atProgramName 'programName'
+			atProgramName = false
+			continue
+		end 'programName'
+
+		record.append("arg={arg}\n")
+	end 'eachArg'
+
+	let marker = try FilePath.from(MarkerFileName) otherwise panic("'{MarkerFileName}' is a spellable path")
+	try File.writeText(marker, content: record) otherwise panic("the marker {MarkerFileName} could not be written")
+
+	return RanExitCode
+end 'main'

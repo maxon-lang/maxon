@@ -383,6 +383,15 @@ let ManifestDefinesKey = "defines"
 let ManifestDebugInfoKey = "debug_info"
 let ManifestDirectoryKey = "directory"
 let ManifestDelegateTargetKey = "target"
+let ManifestRebuildWithOutputKey = "rebuild_with_output"
+
+let DebugInfoWhenUnstated = true
+let RebuildWithOutputWhenUnstated = false
+
+let CompilerVariable = "MAXON_COMPILER"
+let SecondStageVariable = "MAXON_SECOND_STAGE"
+let SecondStageValue = "1"
+let NotRepeatedPrefix = "Not repeating this build with the program it wrote:"
 
 // The channel a manifest describes its build over, so that its stdout stays the task's own. The
 // compiler cannot read a stdlib constant, so `stdlib/Build.maxon` spells this name too: the two
@@ -525,6 +534,7 @@ module function runManifestProgram(manifest FilePath, entry ByteArray, speaker S
 
 	var overrides = EnvMap.create()
 	overrides.upsert(BuildDescriptionVariable, value: description.toString())
+	overrides.upsert(CompilerVariable, value: runningCompilerPath().toString())
 
 	let code = spawnForwarding(Executable.path(runner.executable), arguments: arguments, environment: Environment.inheritUpdating(overrides), standardInput: InputSource.inherit, workingDirectory: baseDirectory(base), speaker: speaker)
 
@@ -546,6 +556,10 @@ module function runManifestProgram(manifest FilePath, entry ByteArray, speaker S
 	discardDescription(description)
 	return ManifestProgramRun.described(text)
 end 'runManifestProgram'
+
+function runningCompilerPath() returns FilePath
+	return try Process.executablePath() otherwise panic("runningCompilerPath: this compiler found its stdlib by walking up from its own executable, so the host has already named that executable")
+end 'runningCompilerPath'
 
 // The name carries this process's id because two concurrent builds of one manifest share the cache
 // slot the runner lives in, and each would otherwise read back the other's description.
@@ -642,12 +656,20 @@ module function buildFromManifestOutput(described String, args MaxonArgs, manife
 		return reportMalformedManifestField(ManifestSourcesKey, error: e, manifest: manifest)
 	end 'badSources'
 
+	let rebuildWithOutput = try manifestBool(doc, build: chosen, key: ManifestRebuildWithOutputKey, unstated: RebuildWithOutputWhenUnstated) otherwise (e) 'badRebuildWithOutput'
+		return reportMalformedManifestField(ManifestRebuildWithOutputKey, error: e, manifest: manifest)
+	end 'badRebuildWithOutput'
+
 	if not delegateDirectory.isEmpty() 'delegated'
 		if statedSources.count() != 0 'bothWays'
-			printError("error: {manifest.filename()} states both a `{ManifestDirectoryKey}` and `{ManifestSourcesKey}`.\n")
-			printError("A delegated build hands the whole description to that directory's `{ProjectFileExtension}` file; it cannot also name sources of its own.\n")
-			return OwnFailureExit
+			return refuseDelegatedWith(ManifestSourcesKey, manifest: manifest)
 		end 'bothWays'
+
+		// Only the delegated project knows the output path, so at this level there is no program to
+		// repeat and an ignored key would drop the request silently.
+		if rebuildWithOutput 'delegatedRebuild'
+			return refuseDelegatedWith(ManifestRebuildWithOutputKey, manifest: manifest)
+		end 'delegatedRebuild'
 
 		let delegateTarget = try manifestDelegateTarget(doc, build: chosen) otherwise (e) 'badDelegateTarget'
 			return reportMalformedManifestField(ManifestDelegateTargetKey, error: e, manifest: manifest)
@@ -674,7 +696,7 @@ module function buildFromManifestOutput(described String, args MaxonArgs, manife
 
 	// Either side can turn the sidecar off and neither can force it on: `--no-debug-info` has no
 	// positive twin, and a manifest saying `false` means the project never wants one.
-	let manifestWantsDebugInfo = try manifestDebugInfo(doc, build: chosen) otherwise (e) 'badDebugInfo'
+	let manifestWantsDebugInfo = try manifestBool(doc, build: chosen, key: ManifestDebugInfoKey, unstated: DebugInfoWhenUnstated) otherwise (e) 'badDebugInfo'
 		return reportMalformedManifestField(ManifestDebugInfoKey, error: e, manifest: manifest)
 	end 'badDebugInfo'
 
@@ -692,8 +714,65 @@ module function buildFromManifestOutput(described String, args MaxonArgs, manife
 		defines.push(supplied)
 	end 'eachCommandLineDefine'
 
-	return buildAndReport(inputPaths, target: target, args: args, outputOverride: outputOverride, debugInfo: manifestWantsDebugInfo and args.debugInfo, productVersion: productVersion, defines: defines)
+	let outcome = buildAndReport(inputPaths, target: target, args: args, outputOverride: outputOverride, debugInfo: manifestWantsDebugInfo and args.debugInfo, productVersion: productVersion, defines: defines)
+
+	return match outcome 'outcome'
+		built(written) gives repeatedWithOutput(written, target: target) if rebuildWithOutput else SucceededExit
+		failed(code) gives code
+	end 'outcome'
 end 'buildFromManifestOutput'
+
+function refuseDelegatedWith(key String, manifest FilePath) returns ExitCode
+	printError("error: {manifest.filename()} states both a `{ManifestDirectoryKey}` and `{key}`.\n")
+	printError("A delegated build hands the whole description to that directory's `{ProjectFileExtension}` file; it cannot also state `{key}` of its own.\n")
+	return OwnFailureExit
+end 'refuseDelegatedWith'
+
+// Called after `buildAndReport` has released the tree lock, which the second stage takes again.
+// The second stage's manifest can ask again (a compiler built from uncommitted sources stamps its
+// builder's commit), so `SecondStageVariable` is what ends the repetition.
+function repeatedWithOutput(written FilePath, target Target) returns ExitCode
+	let host = detectHostTarget()
+
+	if target.cpu != host.cpu or target.os != host.os 'cannotRunHere'
+		print("{NotRepeatedPrefix} {written.toString()} is built for {targetToString(target)}, and this host is {targetToString(host)}.\n")
+		return SucceededExit
+	end 'cannotRunHere'
+
+	let secondStage = try inSecondStage() otherwise 'unreadableEnvironment'
+		printError("error: this process's environment could not be read, so whether this build is already its own second stage ({SecondStageVariable}) is unknown. It was not repeated.\n")
+		return OwnFailureExit
+	end 'unreadableEnvironment'
+
+	if secondStage 'alreadyRepeated'
+		return SucceededExit
+	end 'alreadyRepeated'
+
+	let program = written.resolve(Directory.currentPath())
+	print("Repeating this build with the program it just wrote, {program.toString()}\n")
+
+	var overrides = EnvMap.create()
+	overrides.upsert(SecondStageVariable, value: SecondStageValue)
+
+	return spawnForwarding(Executable.path(program), arguments: invocationArguments(), environment: Environment.inheritUpdating(overrides), standardInput: InputSource.inherit, workingDirectory: inheritedWorkingDirectory(), speaker: BuildSubcommandName)
+end 'repeatedWithOutput'
+
+function inSecondStage() returns bool throws ProcessIntrospectionError
+	_ = try Process.environmentVariable(SecondStageVariable) otherwise (e) 'unset'
+		if e == ProcessIntrospectionError.variableUnset 'firstStage'
+			return false
+		end 'firstStage'
+
+		throw e
+	end 'unset'
+
+	return true
+end 'inSecondStage'
+
+function invocationArguments() returns StringArray
+	let words = CommandLine.args()
+	return try words.slice(1, endIndex: words.count()) otherwise panic("invocationArguments: this process was dispatched on the command word after its program name, so both are present")
+end 'invocationArguments'
 
 // `output` and `sources` are required; any other absent field reads as what `Build` writes when its
 // caller says nothing.
@@ -802,8 +881,8 @@ module function reportEntryRosterError(e EntryRosterError)
 	end 'why'
 end 'reportEntryRosterError'
 
-function manifestDebugInfo(doc JsonDoc, build JsonNodeId) returns bool throws ManifestFieldError
-	let valueId = try doc.getChild(build, key: ManifestDebugInfoKey) otherwise return true
+function manifestBool(doc JsonDoc, build JsonNodeId, key String, unstated bool) returns bool throws ManifestFieldError
+	let valueId = try doc.getChild(build, key: key) otherwise return unstated
 	let value = doc.get(valueId)
 
 	if value.kind != JsonKind.jsonBool 'notABool'
@@ -811,7 +890,7 @@ function manifestDebugInfo(doc JsonDoc, build JsonNodeId) returns bool throws Ma
 	end 'notABool'
 
 	return value.boolValue
-end 'manifestDebugInfo'
+end 'manifestBool'
 
 // Absent reads as "unversioned". Checked against the target's version field here, before the build, so a
 // version the binary cannot carry refuses the build rather than being stamped as something else.
@@ -908,25 +987,28 @@ function runBuildPaths(args MaxonArgs) returns ExitCode
 
 	let target = try commandLineTarget(args.targetSpec) otherwise return OwnFailureExit
 
-	return buildAndReport(inputPaths, target: target, args: args, outputOverride: args.outputOverride, debugInfo: args.debugInfo, productVersion: VersionComponentArray.create(), defines: args.defines)
+	return match buildAndReport(inputPaths, target: target, args: args, outputOverride: args.outputOverride, debugInfo: args.debugInfo, productVersion: VersionComponentArray.create(), defines: args.defines) 'outcome'
+		built gives SucceededExit
+		failed(code) gives code
+	end 'outcome'
 end 'runBuildPaths'
 
 // The lock is asked of the command line's `--output=`: `outputOverride` may be a manifest's own
 // `output`, which says nothing about who else writes the tree.
-function buildAndReport(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs, outputOverride String, debugInfo bool, productVersion VersionComponentArray, defines DefineArray) returns ExitCode
+function buildAndReport(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs, outputOverride String, debugInfo bool, productVersion VersionComponentArray, defines DefineArray) returns BuildOutcome
 	if refusedBuildOptions(args, target: target, debugInfo: debugInfo) 'refusedOptions'
-		return OwnFailureExit
+		return BuildOutcome.failed(OwnFailureExit)
 	end 'refusedOptions'
 
 	let lockExit = acquireBuildTreeLock(inputPaths, outputOverride: args.outputOverride)
 
 	if not exitSucceeded(lockExit) 'busyTree'
-		return lockExit
+		return BuildOutcome.failed(lockExit)
 	end 'busyTree'
 
-	let buildExit = compileAndReport(inputPaths, target: target, args: args, outputOverride: outputOverride, debugInfo: debugInfo, productVersion: productVersion, defines: defines)
+	let outcome = compileAndReport(inputPaths, target: target, args: args, outputOverride: outputOverride, debugInfo: debugInfo, productVersion: productVersion, defines: defines)
 	releaseTreeLock()
-	return buildExit
+	return outcome
 end 'buildAndReport'
 
 // `debugInfo` is the build's effective setting, which a manifest can turn off.
@@ -989,15 +1071,20 @@ function acquireBuildTreeLock(inputPaths MaxonSourcePathArray, outputOverride St
 end 'acquireBuildTreeLock'
 
 // Separate from `buildAndReport` so the tree lock has one release: Maxon has no `defer`.
-function compileAndReport(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs, outputOverride String, debugInfo bool, productVersion VersionComponentArray, defines DefineArray) returns ExitCode
+function compileAndReport(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs, outputOverride String, debugInfo bool, productVersion VersionComponentArray, defines DefineArray) returns BuildOutcome
 	let outputPath = try compile(inputPaths, target: target, outputOverride: outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath, runtimeIrNames: args.runtimeIrNames, asyncTrace: args.asyncTrace, debugStream: args.debugStream, debugInfo: debugInfo, coverage: args.coverage, censusByTag: args.censusByTag, censusPhase: args.censusPhase, allocationsByTag: args.allocationsByTag, allocationsPhase: args.allocationsPhase, noDebugAgent: args.noDebugAgent, productVersion: productVersion, defines: defines) otherwise (e) 'compileErr'
 		reportCompileError(e)
-		return OwnFailureExit
+		return BuildOutcome.failed(OwnFailureExit)
 	end 'compileErr'
 
 	print("Compiled -> {outputPath}\n")
-	return SucceededExit
+	return BuildOutcome.built(outputPath)
 end 'compileAndReport'
+
+union BuildOutcome
+	built(output FilePath)
+	failed(code ExitCode)
+end 'BuildOutcome'
 
 // Exit 0 iff the query spine is deterministic and incremental for `<file>`.
 function runVerifyWarmRebuild(args MaxonArgs) returns ExitCode

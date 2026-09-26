@@ -197,7 +197,8 @@ file and the task name, so each task of a file has a build of its own.
 **A task may describe a build**, by calling `Build.build`, `Build.buildWithConfig` or `Build.delegate` —
 the same calls a `.maxproj` target makes (see [Describing a build](/docs/cli/project-structure/#describing-a-build)). The build is
 performed once the task exits 0, and `--output=`, `--target`, `--define` and `--no-debug-info` apply to
-it exactly as they do to `maxon build`. A task's build that states no output is written to
+it exactly as they do to `maxon build`, and so does
+[`rebuild_with_output`](/docs/cli/project-structure/#building-again-with-the-written-program). A task's build that states no output is written to
 `.maxon/<stem>` in the working directory, `<stem>` being the `.maxtasks` file's name without its
 extension.
 
@@ -741,6 +742,8 @@ driver's own. `maxon monitor`, `maxon coverage` and `maxon profile` have their o
 | `NO_COLOR`, `TERM` | `test --color=auto` | Set `NO_COLOR`, or `TERM=dumb`, to turn colour off |
 | `MAXON_IMAGE` | `upgrade` | Marks the container image; `upgrade` refuses and names `docker pull` |
 | `MAXON_INSTALL` | `upgrade` (written, not read) | `upgrade` sets it for the install script to the install the running compiler sits in, whatever your shell says |
+| `MAXON_COMPILER` | `build` (project target), `run` (written, not read) | Set for the project file or task program to the path of the compiler running it, so the program can ask that compiler, for example its `maxon version` |
+| `MAXON_SECOND_STAGE` | `build` (project target), `run` | Set, with any value, it makes a build asking for [`rebuild_with_output`](/docs/cli/project-structure/#building-again-with-the-written-program) end at its own output. The driver sets it to `1` for the program it runs |
 
 **Read by a compiled program at run time:**
 

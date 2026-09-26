@@ -31,19 +31,121 @@ let ReleaseTagPrefix = "v"
 let DevVersion = "dev"
 let UnknownField = "unknown"
 
+let CompilerVariable = "MAXON_COMPILER"
+let SecondStageVariable = "MAXON_SECOND_STAGE"
+let VersionCommandName = "version"
+let VersionLineOpen = "("
+let VersionFieldSeparator = " "
+let GitLineSeparator = "\n"
+let ChangedFileSeparator = ", "
+
+enum GitFailure implements Error
+	noAnswer
+end 'GitFailure'
+
+enum VersionLineError implements Error
+	noCommit
+end 'VersionLineError'
+
 // A missing git is not a build failure: a source tarball has no repository and must still build, so
-// every caller falls back rather than refusing.
-function gitOutput(args StringArray) returns String
-	let result = try Subprocess.run(Executable.name("git"), arguments: args) otherwise 'noGit'
-		return ""
-	end 'noGit'
+// every caller falls back rather than refusing. It throws rather than answering "": an empty diff
+// reads as an unchanged runtime, which leaves a compiler with a stale runtime of its own.
+function gitAnswer(args StringArray) returns String throws GitFailure
+	let result = try Subprocess.run(Executable.name("git"), arguments: args) otherwise throw GitFailure.noAnswer
 
 	if not result.succeeded() 'gitFailed'
-		return ""
+		throw GitFailure.noAnswer
 	end 'gitFailed'
 
 	return result.stdout.trim()
-end 'gitOutput'
+end 'gitAnswer'
+
+// Relative to `maxon-bin/`, this manifest's working directory. From anywhere else they match
+// nothing, which reads as an unchanged runtime.
+function emittedRuntimePathspecs() returns StringArray
+	return ["Compiler/Runtime", "Compiler/Targets/*/*Runtime*.maxon"]
+end 'emittedRuntimePathspecs'
+
+function gitAboutEmittedRuntime(command StringArray) returns String throws GitFailure
+	var args = command.clone()
+	args.push("--")
+	args.append(emittedRuntimePathspecs())
+	return try gitAnswer(args)
+end 'gitAboutEmittedRuntime'
+
+function isSet(variable String) returns bool
+	_ = try Process.environmentVariable(variable) otherwise return false
+	return true
+end 'isSet'
+
+function builtFromCommit(versionLine String) returns String throws VersionLineError
+	let afterOpen = try versionLine.split(VersionLineOpen).get(1) otherwise throw VersionLineError.noCommit
+	let commit = try afterOpen.split(VersionFieldSeparator).get(0) otherwise throw VersionLineError.noCommit
+
+	if commit.isEmpty() or commit == UnknownField 'noCommitStamped'
+		throw VersionLineError.noCommit
+	end 'noCommitStamped'
+
+	return commit
+end 'builtFromCommit'
+
+function changedFiles(listings StringArray) returns String
+	var named = ""
+
+	for listing in listings 'eachListing'
+		for line in listing.split(GitLineSeparator) 'eachLine'
+			let file = line.trim()
+
+			if file.isEmpty() 'blankLine'
+				continue
+			end 'blankLine'
+
+			if not named.isEmpty() 'notFirst'
+				named.append(ChangedFileSeparator)
+			end 'notFirst'
+
+			named.append(file)
+		end 'eachLine'
+	end 'eachListing'
+
+	return named
+end 'changedFiles'
+
+function rebuildBecause(reason String) returns bool
+	printError("maxon.maxproj: asking for the compiler this writes to build it again, because {reason}\n")
+	return true
+end 'rebuildBecause'
+
+// The compiler emits this runtime into every program it writes, itself included, so one build
+// carries its builder's copy. Every uncertainty answers "rebuild": wrong that way costs one build,
+// and wrong the other way is a compiler running a stale copy of its own runtime.
+function rebuildWithOutput() returns bool
+	if isSet(SecondStageVariable) 'secondStage'
+		return false
+	end 'secondStage'
+
+	let builder = try Process.environmentVariable(CompilerVariable) otherwise return rebuildBecause("{CompilerVariable} names no building compiler, so the runtime it carries is unknown")
+	let builderPath = try FilePath.from(builder) otherwise return rebuildBecause("{CompilerVariable} holds '{builder}', which is not a path")
+	let reported = try Subprocess.run(Executable.path(builderPath), arguments: [VersionCommandName]) otherwise return rebuildBecause("{builder} could not be asked which commit it was built from")
+
+	if not reported.succeeded() 'versionFailed'
+		return rebuildBecause("`{builder} {VersionCommandName}` exited {reported.exitCode()}, so the commit it was built from is unknown")
+	end 'versionFailed'
+
+	let commit = try builtFromCommit(reported.stdout) otherwise return rebuildBecause("{builder} reports no commit it was built from")
+
+	_ = try gitAnswer(["cat-file", "-e", "{commit}^\{commit\}"]) otherwise return rebuildBecause("the building compiler was built from {commit}, which git cannot find in this history")
+
+	let committed = try gitAboutEmittedRuntime(["diff", "--name-only", "{commit}..HEAD"]) otherwise return rebuildBecause("git could not list the emitted-runtime commits since {commit}")
+	let uncommitted = try gitAboutEmittedRuntime(["status", "--porcelain"]) otherwise return rebuildBecause("git could not list the uncommitted emitted-runtime changes")
+	let changed = changedFiles([committed, uncommitted])
+
+	if changed.isEmpty() 'runtimeUnchanged'
+		return false
+	end 'runtimeUnchanged'
+
+	return rebuildBecause("the emitted runtime changed since the building compiler was built from {commit}: {changed}")
+end 'rebuildWithOutput'
 
 function afterPrefix(text String, prefix String) returns String
 	let parts = text.split(prefix)
@@ -56,21 +158,13 @@ function afterPrefix(text String, prefix String) returns String
 end 'afterPrefix'
 
 function releaseVersion() returns String
-	var tagArgs = StringArray.create()
-	tagArgs.push("describe")
-	tagArgs.push("--exact-match")
-	tagArgs.push("--tags")
-	let tag = gitOutput(tagArgs)
+	let tag = try gitAnswer(["describe", "--exact-match", "--tags"]) otherwise DevVersion
 
 	if tag.startsWith(ReleaseTagPrefix) 'taggedRelease'
 		return afterPrefix(tag, prefix: ReleaseTagPrefix)
 	end 'taggedRelease'
 
-	var branchArgs = StringArray.create()
-	branchArgs.push("rev-parse")
-	branchArgs.push("--abbrev-ref")
-	branchArgs.push("HEAD")
-	let branch = gitOutput(branchArgs)
+	let branch = try gitAnswer(["rev-parse", "--abbrev-ref", "HEAD"]) otherwise DevVersion
 
 	if branch.startsWith(ReleaseBranchPrefix) 'releaseBranch'
 		return afterPrefix(branch, prefix: ReleaseBranchPrefix)
@@ -80,27 +174,10 @@ function releaseVersion() returns String
 end 'releaseVersion'
 
 function versionDefines(version String) returns StringArray
-	var hashArgs = StringArray.create()
-	hashArgs.push("rev-parse")
-	hashArgs.push("--short")
-	hashArgs.push("HEAD")
-	let commit = gitOutput(hashArgs)
+	let commitField = try gitAnswer(["rev-parse", "--short", "HEAD"]) otherwise UnknownField
+	let dateField = try gitAnswer(["log", "-1", "--format=%cd", "--date=short"]) otherwise UnknownField
 
-	var dateArgs = StringArray.create()
-	dateArgs.push("log")
-	dateArgs.push("-1")
-	dateArgs.push("--format=%cd")
-	dateArgs.push("--date=short")
-	let date = gitOutput(dateArgs)
-
-	let commitField = commit if not commit.isEmpty() else UnknownField
-	let dateField = date if not date.isEmpty() else UnknownField
-
-	var defines = StringArray.create()
-	defines.push("{VersionDefineName}={version}")
-	defines.push("{CommitDefineName}={commitField}")
-	defines.push("{CommitDateDefineName}={dateField}")
-	return defines
+	return ["{VersionDefineName}={version}", "{CommitDefineName}={commitField}", "{CommitDateDefineName}={dateField}"]
 end 'versionDefines'
 
 export function build() returns ExitCode
@@ -111,6 +188,6 @@ export function build() returns ExitCode
 	let version = releaseVersion()
 	let stampedVersion = "" if version == DevVersion else version
 
-	Build.build(".", output: ".maxon/maxon", version: stampedVersion, defines: versionDefines(version))
+	Build.build(".", output: ".maxon/maxon", version: stampedVersion, defines: versionDefines(version), rebuildWithOutput: rebuildWithOutput())
 	return 0
 end 'build'

@@ -109,9 +109,10 @@ runtime emitted by the compiler that predates the change.
 
 That matters for a release because `release.sh --package` runs the suite with the compiler it is about
 to ship, and the spec-test worker IS that compiler. The workflows always build twice from the seed;
-locally, `scripts/self-compiles-needed.sh` says whether you need one build or two. `fixpoint.sh` will
-not tell you, because it compares two stages that are both past the convergence point while the slot
-still holds the one that is not.
+locally, `maxon run build` builds a second time by itself whenever the emitted runtime changed since the
+running compiler was built, and prints why. `fixpoint.sh` is
+blind to it: it compares two stages that are both past the convergence point while the slot still holds
+the one before it.
 
 ---
 

@@ -106,7 +106,7 @@ BASE:   <sha>, tree clean, <date>  <- the staleness anchor for the scout skip
 | **2b** | **SPEC-SURFACE facts** — §1's four fields, field for field | **`/land` §1 — this IS the scout report** |
 | 3 | The approach; the alternatives and why they lost | the approval; §2's brief |
 | 4 | Blast radius — file list; disjoint partition if >1 implementer | `/land`'s brief item 3, the *"EXCLUSIVE file list"* |
-| 5 | Obligations — cross-target arms · `ErrorCodeRegistry` case + band · emitted runtime (`Compiler/Runtime/`, `Targets/*/*Runtime*.maxon`) ⇒ two self-compiles, per `scripts/self-compiles-needed.sh` · `runtime/` tier roster · which `docs/` source owns the surface | every brief; `/land` §8 |
+| 5 | Obligations — cross-target arms · `ErrorCodeRegistry` case + band · emitted runtime (`Compiler/Runtime/`, `Targets/*/*Runtime*.maxon`) ⇒ two self-compiles, which `maxon run build` does by itself · `runtime/` tier roster · which `docs/` source owns the surface | every brief; `/land` §8 |
 | 6 | Candidate acceptance — file, case, assertion, **why RED today** | `/land` §1, as a candidate |
 | 7 | Staging — `ONE /land` (default), or N stages with justification | §6 |
 | 8 | Open questions — what approval is actually being asked for | §5 |
