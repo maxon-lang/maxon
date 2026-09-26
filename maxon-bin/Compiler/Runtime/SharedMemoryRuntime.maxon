@@ -1,6 +1,7 @@
-// Runtime/SharedMemoryRuntime.maxon — a NAMED SECTION two processes both map, from the side that CREATES it.
+// Runtime/SharedMemoryRuntime.maxon — a NAMED SECTION two processes both map, from the side that publishes
+// or adopts it.
 //
-// ⭐ **WHAT IT SERVES.** `stdlib/SharedMemory.maxon`'s `SharedSegment` bottoms out in six `__Builtins`
+// ⭐ **WHAT IT SERVES.** `stdlib/SharedMemory.maxon`'s `SharedSegment` bottoms out in eight `__Builtins`
 // intrinsics and nothing else in the language reaches these entry points. Everything above them — where the
 // ring's header sits, how its cursors advance, what an entry packs into — is ordinary Maxon in the consumer
 // that decodes the ring, exactly as the FILETIME arithmetic stays out of `osReadWallClock`.
@@ -28,53 +29,144 @@
 // `scanRuntimeUsage` reads to set `usesSharedMemory`, and the one `TargetFacilities` reads for E3104.
 let SharedMemoryRuntimePrefix = b"__shm_"
 
-// ⭐ **THE SIX ENTRY POINTS.** Two host calls (create, and the whole teardown), one mapping, and three
-// accessors over the mapped bytes. The accessors are entries rather than surface syntax because Maxon has no raw
-// dereference: `readWord` is one acquire load at an address the language cannot otherwise name.
+// The eight entry points: the publish and the adopt, one mapping, three accessors over the mapped bytes, and
+// two teardowns — the publisher's, which withdraws the name, and an adopter's, which leaves it. The accessors
+// are entries rather than surface syntax because Maxon has no raw dereference: `readWord` is one acquire
+// load at an address the language cannot otherwise name.
 export let SharedMemoryCreateName = b"__shm_create"
 export let SharedMemoryMapName = b"__shm_map"
 export let SharedMemoryReadWordName = b"__shm_read_word"
 export let SharedMemoryWriteWordName = b"__shm_write_word"
 export let SharedMemoryCopyOutName = b"__shm_copy_out"
 export let SharedMemoryCloseName = b"__shm_close"
+export let SharedMemoryAdoptName = b"__shm_adopt"
+export let SharedMemoryReleaseName = b"__shm_release"
 
-// `__shm_create(namePtr, bytes) -> HANDLE | 0` — `CreateFileMappingA` under one Std op. A failure answers 0,
-// which is what `CreateFileMappingA` returns and what `stdlib/SharedMemory.maxon` tests for.
-function buildSharedMemoryCreate(module StdModule)
-	var func = IrFunction.createFromStd(SharedMemoryCreateName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+// What the publish and the adopt answer instead of a handle. The stdlib decodes the raw values, and
+// `checkSharedMemoryAnswers` pins them against its constants.
+export enum SharedSegmentAnswer
+	refused = 0
+	nameTaken = -1
+	notYetPublished = -2
+end 'SharedSegmentAnswer'
+
+enum Win32SegmentError
+	fileNotFound = 2
+	alreadyExists = 183
+end 'Win32SegmentError'
+
+let SharedMemoryStdlibFileName = "SharedMemory.maxon"
+
+enum SegmentCall
+	create
+	adopt
+	map
+end 'SegmentCall'
+
+function segmentCallName(call SegmentCall) returns ByteArray
+	return match call 'name'
+		create gives SharedMemoryCreateName
+		adopt gives SharedMemoryAdoptName
+		map gives SharedMemoryMapName
+	end 'name'
+end 'segmentCallName'
+
+function segmentCallOp(call SegmentCall, result ValueId, first ValueId, bytes ValueId) returns StdOp
+	return match call 'op'
+		create gives StdOp.osCreateNamedSegment(result, namePtrId: first, sizeId: bytes)
+		adopt gives StdOp.osAdoptNamedSegment(result, namePtrId: first, sizeId: bytes)
+		map gives StdOp.osMapNamedSegment(result, handleId: first, sizeId: bytes)
+	end 'op'
+end 'segmentCallOp'
+
+function buildSharedMemorySegmentCall(module StdModule, call SegmentCall, target Target)
+	var func = IrFunction.createFromStd(segmentCallName(call), returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let namePtr = 0 as ValueId
+	let first = 0 as ValueId
 	let bytes = 1 as ValueId
 
-	let handle = ids.mint()
-	module.appendOp(entry, op: StdOp.osCreateNamedSegment(handle, namePtrId: namePtr, sizeId: bytes))
-	module.setTerminator(entry, op: StdOp.ret(handle))
+	let answer = ids.mint()
+	module.appendOp(entry, op: segmentCallOp(call, result: answer, first: first, bytes: bytes))
+
+	if theStdBodyClassifiesTheAnswer(target) 'theStdBodyClassifies'
+		match call 'classify'
+			create then emitExclusiveCreateAnswer(module, func: func, entry: entry, handle: answer, ids: ids)
+			adopt then emitAdoptAnswer(module, func: func, entry: entry, handle: answer, bytes: bytes, ids: ids)
+			map then module.setTerminator(entry, op: StdOp.ret(answer))
+		end 'classify'
+	end 'theStdBodyClassifies' else 'theHostCallClassifies'
+		module.setTerminator(entry, op: StdOp.ret(answer))
+	end 'theHostCallClassifies'
 
 	module.functions.push(func)
-end 'buildSharedMemoryCreate'
+end 'buildSharedMemorySegmentCall'
 
-// `__shm_map(handle, bytes) -> base | 0` — the view. A NULL handle maps nothing and answers NULL, so a failed
-// create flows through here untested, exactly as `StdOp.osMapNamedSegment` records for the producer's open.
-function buildSharedMemoryMap(module StdModule)
-	var func = IrFunction.createFromStd(SharedMemoryMapName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(2)
+// A POSIX lane's host chunk classifies its own answer, because it holds the errno; Win32's reason is
+// `GetLastError`, which only a separate `osLastError` op reads, so the Std body classifies there.
+function theStdBodyClassifiesTheAnswer(target Target) returns bool
+	return match target.os 'os'
+		windows gives true
+		linux or
+			macos gives false
+		wasi panic("theStdBodyClassifiesTheAnswer: `targetProvidesFacility` denies `sharedMemory` on wasm32-wasi, so no `__shm_` body is built there")
+	end 'os'
+end 'theStdBodyClassifiesTheAnswer'
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+function emitLastErrorIs(module StdModule, block IrBlock, error Win32SegmentError, ids ValueMinter) returns ValueId
+	let lastError = ids.mint()
+	module.appendOp(block, op: StdOp.osLastError(lastError))
+	return emitCmp(module, block: block, a: lastError, b: emitConst(module, block: block, value: error.rawValue, ids: ids), pred: StdCmpPred.eq, ids: ids)
+end 'emitLastErrorIs'
 
-	emitParams(module, block: entry, count: 2)
-	let handle = 0 as ValueId
-	let bytes = 1 as ValueId
+function emitHandleIsNull(module StdModule, block IrBlock, handle ValueId, ids ValueMinter) returns ValueId
+	return emitCmp(module, block: block, a: handle, b: emitConst(module, block: block, value: SharedSegmentAnswer.refused.rawValue, ids: ids), pred: StdCmpPred.eq, ids: ids)
+end 'emitHandleIsNull'
 
-	let base = ids.mint()
-	module.appendOp(entry, op: StdOp.osMapNamedSegment(base, handleId: handle, sizeId: bytes))
-	module.setTerminator(entry, op: StdOp.ret(base))
+// The Win32 adopt. Win32 reports no section's size through its handle, but `MapViewOfFile` refuses a view
+// larger than the section, so a trial view of `bytes` is the size check; it is unmapped at once, and the
+// stdlib maps the section again. A name not yet published is `ERROR_FILE_NOT_FOUND`.
+function emitAdoptAnswer(module StdModule, func IrFunction, entry IrBlock, handle ValueId, bytes ValueId, ids ValueMinter)
+	var notOpened = module.addBlock(func, label: b"shmnoopen", heat: BlockHeat.cold)
+	var notYetPublished = module.addBlock(func, label: b"shmnotyet", heat: BlockHeat.cold)
+	var opened = module.addBlock(func, label: b"shmopened", heat: BlockHeat.normal)
+	var fits = module.addBlock(func, label: b"shmfits", heat: BlockHeat.normal)
+	var tooSmall = module.addBlock(func, label: b"shmsmall", heat: BlockHeat.cold)
 
-	module.functions.push(func)
-end 'buildSharedMemoryMap'
+	module.setTerminator(entry, op: StdOp.condBranch(emitHandleIsNull(module, block: entry, handle: handle, ids: ids), thenBlockId: notOpened.id, elseBlockId: opened.id))
+
+	module.setTerminator(notOpened, op: StdOp.condBranch(emitLastErrorIs(module, block: notOpened, error: Win32SegmentError.fileNotFound, ids: ids), thenBlockId: notYetPublished.id, elseBlockId: tooSmall.id))
+	emitConstReturn(module, block: notYetPublished, value: SharedSegmentAnswer.notYetPublished.rawValue, ids: ids)
+
+	let view = ids.mint()
+	module.appendOp(opened, op: StdOp.osMapNamedSegment(view, handleId: handle, sizeId: bytes))
+	module.setTerminator(opened, op: StdOp.condBranch(emitHandleIsNull(module, block: opened, handle: view, ids: ids), thenBlockId: tooSmall.id, elseBlockId: fits.id))
+
+	module.appendOp(fits, op: StdOp.osUnmapNamedSegment(view, sizeId: bytes))
+	module.setTerminator(fits, op: StdOp.ret(handle))
+
+	module.appendOp(tooSmall, op: StdOp.osCloseHandle(handle))
+	emitConstReturn(module, block: tooSmall, value: SharedSegmentAnswer.refused.rawValue, ids: ids)
+end 'emitAdoptAnswer'
+
+// `CreateFileMappingA` answers an existing section's handle with `ERROR_ALREADY_EXISTS` rather than failing.
+// That section is the adopt road's to open, so this handle is closed and the answer is `nameTaken`.
+function emitExclusiveCreateAnswer(module StdModule, func IrFunction, entry IrBlock, handle ValueId, ids ValueMinter)
+	var created = module.addBlock(func, label: b"shmmade", heat: BlockHeat.normal)
+	var existed = module.addBlock(func, label: b"shmexisted", heat: BlockHeat.cold)
+	var answered = module.addBlock(func, label: b"shmanswer", heat: BlockHeat.normal)
+
+	module.setTerminator(entry, op: StdOp.condBranch(emitHandleIsNull(module, block: entry, handle: handle, ids: ids), thenBlockId: answered.id, elseBlockId: created.id))
+	module.setTerminator(created, op: StdOp.condBranch(emitLastErrorIs(module, block: created, error: Win32SegmentError.alreadyExists, ids: ids), thenBlockId: existed.id, elseBlockId: answered.id))
+
+	module.appendOp(existed, op: StdOp.osCloseHandle(handle))
+	emitConstReturn(module, block: existed, value: SharedSegmentAnswer.nameTaken.rawValue, ids: ids)
+
+	module.setTerminator(answered, op: StdOp.ret(handle))
+end 'emitExclusiveCreateAnswer'
 
 // ⭐ `__shm_read_word(base, offset) -> word` and `__shm_write_word(base, offset, value)`.
 //
@@ -156,20 +248,16 @@ function buildSharedMemoryCopyOut(module StdModule)
 	module.functions.push(func)
 end 'buildSharedMemoryCopyOut'
 
-// ⭐ `__shm_close(handle, base, bytes)` — the whole teardown, in the order the OS requires.
+// `__shm_close(handle, base, bytes, name)` — the publisher's teardown, which withdraws the name.
+// `__shm_release` is an adopter's, which leaves the name to its publisher.
 //
-// ⛔ **THE UNMAP COMES FIRST AND BOTH CALLS ARE NEEDED.** A section object stays alive while any view of it is
-// mapped, so closing the handle alone keeps the section, its backing and its address range for the life of
-// the process — silently, because nothing in the language counts an OS mapping.
-//
-// ⚠ **THE LENGTH AND THE NAME TRAVEL FOR THE SAME REASON: A POSIX TEARDOWN NEEDS THREE STEPS WHERE WIN32
-// NEEDS TWO.** `UnmapViewOfFile` derives the extent from the base and `CloseHandle` takes the section's name
-// with it; `munmap` is given a length, and a POSIX object OUTLIVES every descriptor and every mapping until
+// ⚠ The length and the name travel because a POSIX teardown needs three steps where Win32 needs two.
+// `UnmapViewOfFile` derives the extent from the base and `CloseHandle` takes the section's name with it;
+// `munmap` is given a length, and a POSIX object outlives every descriptor and every mapping until
 // `shm_unlink` removes its name. The segment is the only party that remembers either
 // (`stdlib/SharedMemory.maxon`), and both operands are dead in the Win32 lowerings.
 //
-// A zero handle or a zero base is a no-op at both ends — so a segment whose create or map failed needs no
-// kind test on this path.
+// A zero base is a no-op at the unmap, so a segment whose map failed tears down on this path untested.
 function buildSharedMemoryClose(module StdModule)
 	var func = IrFunction.createFromStd(SharedMemoryCloseName, returnType: StdReturnType.void, paramCount: 4, paramTypes: fourI64Params(), returnLine: 0)
 
@@ -181,26 +269,63 @@ function buildSharedMemoryClose(module StdModule)
 	let bytes = 2 as ValueId
 	let namePtr = 3 as ValueId
 
-	module.appendOp(entry, op: StdOp.osUnmapNamedSegment(base, sizeId: bytes))
-	module.appendOp(entry, op: StdOp.osCloseHandle(handle))
+	emitSegmentRelease(module, block: entry, handle: handle, base: base, bytes: bytes)
 	module.appendOp(entry, op: StdOp.osUnpublishNamedSegment(namePtr))
 	module.setTerminator(entry, op: StdOp.retVoid)
 
 	module.functions.push(func)
 end 'buildSharedMemoryClose'
 
-export function installSharedMemoryRuntime(module StdModule, usage RuntimeUsage)
+function buildSharedMemoryRelease(module StdModule)
+	var func = IrFunction.createFromStd(SharedMemoryReleaseName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 3)
+	let handle = 0 as ValueId
+	let base = 1 as ValueId
+	let bytes = 2 as ValueId
+
+	emitSegmentRelease(module, block: entry, handle: handle, base: base, bytes: bytes)
+	module.setTerminator(entry, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildSharedMemoryRelease'
+
+// ⛔ The unmap comes first and both calls are needed. A section object stays alive while any view of it is
+// mapped, so closing the handle alone keeps the section, its backing and its address range for the life of
+// the process — silently, because nothing in the language counts an OS mapping.
+function emitSegmentRelease(module StdModule, block IrBlock, handle ValueId, base ValueId, bytes ValueId)
+	module.appendOp(block, op: StdOp.osUnmapNamedSegment(base, sizeId: bytes))
+	module.appendOp(block, op: StdOp.osCloseHandle(handle))
+end 'emitSegmentRelease'
+
+export function installSharedMemoryRuntime(module StdModule, usage RuntimeUsage, target Target)
 	if not usage.usesSharedMemory 'noSharedMemory'
 		return
 	end 'noSharedMemory'
 
-	buildSharedMemoryCreate(module)
-	buildSharedMemoryMap(module)
+	buildSharedMemorySegmentCall(module, call: SegmentCall.create, target: target)
+	buildSharedMemorySegmentCall(module, call: SegmentCall.adopt, target: target)
+	buildSharedMemorySegmentCall(module, call: SegmentCall.map, target: target)
 	buildSharedMemoryReadWord(module)
 	buildSharedMemoryWriteWord(module)
 	buildSharedMemoryCopyOut(module)
 	buildSharedMemoryClose(module)
+	buildSharedMemoryRelease(module)
 end 'installSharedMemoryRuntime'
+
+export function checkSharedMemoryAnswers(signatures ProgramSignatures, stdlibPath FilePath)
+	var pins = TierGeometryPinArray.create()
+	pins.push(TierGeometryPin.create("the refused answer", here: SharedSegmentAnswer.refused.rawValue, named: "NoSection"))
+	pins.push(TierGeometryPin.create("the name-taken answer", here: SharedSegmentAnswer.nameTaken.rawValue, named: "NameAlreadyPublished"))
+	pins.push(TierGeometryPin.create("the not-yet-published answer", here: SharedSegmentAnswer.notYetPublished.rawValue, named: "NotYetPublished"))
+	requireTierGeometryAgrees(pins, signatures: signatures, tierPath: stdlibPath, emitterFile: "SharedMemoryRuntime.maxon", layer: "checkSharedMemoryAnswers")
+end 'checkSharedMemoryAnswers'
+
+export function sharedMemoryStdlibFileName() returns String
+	return SharedMemoryStdlibFileName
+end 'sharedMemoryStdlibFileName'
 
 // Every callee this file installs — what `scanRuntimeUsage` reads to set `usesSharedMemory`, and what
 // `TargetFacilities.calleeHostFacility` refuses on a lane without the substrate. A PREFIX test rather than a

@@ -47,14 +47,16 @@ end 'arm64EmitPrintConstant'
 // `write(2, buf, len)`, reached through libSystem's GOT on macOS and a raw `svc #0` on Linux, with the
 // length measured here because a C string does not carry one.
 //
-// It needs NO locals: the string start stays in x0 across the walk (the cursor is x1, the byte under
-// test x2), so the length is one `sub` and the three call arguments are already in the registers
-// AAPCS64 wants them in.
+// The write loops: a short write resumes at the first unwritten byte, and an interrupted one is re-issued.
+// The cursor and the remaining length live in slots because the call clobbers x0..x2.
 function buildArm64WriteStderrChunk(os Os) returns FunctionCodeChunk
-	var asm = Arm64RuntimeAsm.beginFunction(0)
+	let SlotBuf = 0 as StackSize
+	let SlotLen = 1 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(2)
 
 	let lenLoop = asm.newLabel()
 	let lenDone = asm.newLabel()
+	let writeLap = asm.newLabel()
 	let done = asm.newLabel()
 
 	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x1, src: Arm64Register.x0)
@@ -72,11 +74,24 @@ function buildArm64WriteStderrChunk(os Os) returns FunctionCodeChunk
 	// the empty case from depending on that.
 	arm64EmitCbzTo(asm, reg: Arm64Register.x2, label: done)
 
-	// write(2, buf, len): the buffer moves to x1 BEFORE x0 takes the descriptor, or the move would
-	// read a clobbered x0.
-	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x1, src: Arm64Register.x0)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotBuf)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotLen)
+
+	asm.placeLabel(writeLap)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotBuf)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotLen)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: StderrFd)
 	arm64EmitOsPrimitive(asm, os: os, importSlot: OsImportSlot.write, syscallNumber: Arm64LinuxSyscallWrite)
+	arm64EmitBranchIfInterrupted(asm, route: arm64OsCallKind(os), whenInterrupted: writeLap)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.le, label: done)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotBuf)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x1, lhs: Arm64Register.x1, rhs: Arm64Register.x0)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotBuf)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotLen)
+	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x2, lhs: Arm64Register.x2, rhs: Arm64Register.x0)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotLen)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x2, label: writeLap)
 
 	asm.placeLabel(done)
 	return asm.finishFunction(WriteStderrName)

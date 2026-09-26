@@ -25,16 +25,16 @@ export let LinuxAtFdCwd = 0xFFFFFFFFFFFFFF9C
 //
 // ⚠ **THESE ARE NOT DARWIN'S BIT VALUES AND THE DIFFERENCE IS SILENT.** `O_CREAT` is 0x40 here and 0x200
 // there, `O_TRUNC` 0x200 here and 0x400 there, and a write open given the wrong bit lands `O_ASYNC`
-// instead of `O_TRUNC`. No translation is needed: the macOS lane calls `creat` rather than `open` and
-// never spells a flag word at all; these are Linux's alone.
+// instead of `O_TRUNC`. The macOS lane spells its own word
+// (`Arm64DarwinRuntime.DarwinOpenCreateTruncateFlags`); these are Linux's alone.
 //
 // ⚠ **AND THEY ARE THE ARCH-NEUTRAL THREE.** AArch64's `asm/fcntl.h` overrides exactly four flags before
 // including the generic header — `O_DIRECTORY`, `O_NOFOLLOW`, `O_DIRECT`, `O_LARGEFILE` — and none of them
 // appears in either word below, so both arches read the generic values. `O_DIRECTORY` is per-arch for that
 // reason and is declared beside its arch's syscall table.
 //
-// `O_WRONLY|O_CREAT|O_TRUNC` IS `CreateFileA(GENERIC_WRITE, CREATE_ALWAYS)`, which is the same trio `creat`
-// abbreviates on the Darwin lane — so the two opens agree on semantics while spelling them differently.
+// `O_WRONLY|O_CREAT|O_TRUNC` is `CreateFileA(GENERIC_WRITE, CREATE_ALWAYS)`, the same trio the Darwin word
+// spells in its own bit values.
 //
 // ⚠ **THE READ-ONLY FLAG WORD IS NOT HERE.** `O_RDONLY` is 0 on Darwin as well, so it is `PosixRuntime`'s
 // `PosixOpenReadOnly` and not Linux's to state a second time.
@@ -56,9 +56,9 @@ export let LinuxRemoveDirectoryFlags = 0x200
 // libc FUNCTION on Linux rather than a syscall — all it does is open a path under `/dev/shm` — so a
 // libc-less image opens that path itself with exactly the flags the function would have used.
 //
-// ⭐ **THE `O_EXCL` IS LOAD-BEARING.** The create side unlinks the name first, so the object cannot already
-// exist; if it somehow does, this refuses rather than adopting a segment whose contents another process is
-// still writing.
+// ⭐ The `O_EXCL` is load-bearing: it is what separates publishing from adopting. A name that already exists
+// answers `-EEXIST`, which the create reports as `SharedSegmentAnswer.nameTaken` and the stdlib takes to the
+// adopt road; without it the create would silently open, resize and later unlink another process's segment.
 //
 // ⚠ **THESE ARE THE ARCH-NEUTRAL THREE** — `O_RDWR` 0x2, `O_CREAT` 0x40, `O_EXCL` 0x80, none of them among
 // the four `asm/fcntl.h` overrides for AArch64 — and they are NOT Darwin's numbers, which spells the latter
@@ -71,15 +71,10 @@ export let LinuxShmCreateFlags = 0xC2
 // two ends of a ring agree on a path rather than on a call.
 export let LinuxDevShmPrefix = b"/dev/shm/"
 
-// ⭐ **THE FOUR NAMED-SECTION BODIES BOTH LINUX LANES BUILD, SO THE SYMBOLS ARE ONE FACT HERE RATHER THAN
-// TWO COPIES PER ARCH.** They keep the lane infix `PosixRuntime`'s header mandates: the MAP and the UNMAP
-// are a shared host-surface verb and wear `mrt_host_`, while naming a segment is a Linux-only body — every
-// other lane calls `shm_open` and this one opens the `/dev/shm` path that function would have built.
-//
-// The three the isel branches to are the create, the attach and the unpublish; the path builder is called
-// from those three and from nothing else, so it is not exported.
+// The Linux-only named-section bodies both Linux lanes build: every other lane calls `shm_open`, and this
+// one opens the `/dev/shm` path that function would have built. The create, the adopt, the map and the unmap
+// are shared host-surface verbs and wear `mrt_host_` (`PosixRuntime`).
 export let LinuxShmPathName = b"mrt_linux_shm_path"
-export let LinuxShmCreateName = b"mrt_linux_shm_create"
 export let LinuxShmOpenName = b"mrt_linux_shm_open"
 export let LinuxShmUnlinkName = b"mrt_linux_shm_unlink"
 
@@ -89,8 +84,8 @@ export let LinuxShmUnlinkName = b"mrt_linux_shm_unlink"
 // bits are readers of the chunk and of the capture, whether or not the attach is the reachable one. A `bl`
 // into a chunk nothing laid out is a link failure rather than a diagnostic, so the gate is the union.
 //
-// ⚠ **BOTH LINUX LANES ASK IT AND NEITHER OWNS IT**, exactly as `linuxOpensFiles` records for the open
-// chunk: the question is about `RuntimeUsage` and names no instruction set.
+// ⚠ Both Linux lanes ask it and neither owns it: the question is about `RuntimeUsage` and names no
+// instruction set.
 export function linuxReadsEnvironment(usage RuntimeUsage) returns bool
 	return posixReadsEnvironment(usage) or usage.usesDebugStream or usage.usesSharedMemory
 end 'linuxReadsEnvironment'
@@ -149,31 +144,18 @@ end 'linuxUsesHostSurface'
 // ⚠ **BOTH LINUX LANES ASK THESE TWO, AND NEITHER OWNS THEM.** The question is about `RuntimeUsage` and
 // names no instruction set; a second copy beside one assembler is a facility added to one lane's gate and
 // not the other's, which is that lane's `.data` word missing under a chunk that stashes into it.
-// ⚠ **THE SOCKET BAND IS A SECOND STASH-ONLY PRODUCER**, and for the reason `linuxOpensFiles` states: its
-// resolver opens `/etc/hosts` through `mrt_host_file_open`, whose failure arm stashes an errno nothing in a
-// socket program will ever read back.
+// ⚠ **THE SOCKET BAND IS A SECOND STASH-ONLY PRODUCER**, for the reason `PosixRuntime.posixOpensFiles`
+// states: its resolver opens `/etc/hosts` through `mrt_host_file_open`, whose failure arm stashes an errno
+// nothing in a socket program will ever read back.
 export function linuxTouchesErrnoWord(usage RuntimeUsage) returns bool
 	return linuxUsesHostSurface(usage) or usage.usesGt or usage.usesManagedSocket
 end 'linuxTouchesErrnoWord'
 
-// ⭐⭐ **WHO REACHES `mrt_host_file_open`, AND THE THIRD PRODUCER IS NOT A `File` CALL.** `usesChildPipes` is one
-// (a subprocess stream redirected to a path is opened here), and on this lane the SOCKET band is another:
-// with no `getaddrinfo` to call, `ManagedSocketRuntime`'s built-in resolver reads `/etc/hosts` and
-// `/etc/resolv.conf` through the ordinary file ops — so a program that opens no `File` and spawns nothing
-// still branches into this chunk. Gating it on `usesManagedFile` alone is a `bl` to a symbol nothing laid
-// out, which `arm64ResolveCallFixups` reports as a PANIC rather than a diagnostic.
-//
-// ⚠ **BOTH LINUX LANES ASK IT AND NEITHER OWNS IT**, exactly as `linuxTouchesErrnoWord` records for the
-// errno word: the question is about `RuntimeUsage` and names no instruction set, and a second copy beside
-// one assembler is a producer added to one lane's gate and not the other's.
-export function linuxOpensFiles(usage RuntimeUsage) returns bool
-	return usage.usesManagedFile or usage.usesChildPipes or usage.usesManagedSocket
-end 'linuxOpensFiles'
-
-// The read chunk's gate — every opener above, plus standard input, which is a descriptor this surface reads
-// without ever opening one. DERIVED from its own subset so the two cannot come apart.
+// The read chunk's gate — every opener `PosixRuntime.posixOpensFiles` names, plus standard input, which is
+// a descriptor this surface reads without ever opening one. Derived from its subset so the two cannot come
+// apart.
 export function linuxReadsFiles(usage RuntimeUsage) returns bool
-	return linuxOpensFiles(usage) or usage.usesConsoleStdin
+	return posixOpensFiles(usage) or usage.usesConsoleStdin
 end 'linuxReadsFiles'
 
 // ⭐⭐ **THE `.data` WORD HOLDING THE ENVIRONMENT VECTOR, AND ONLY A LIBC-LESS LANE NEEDS ONE.** Windows asks
@@ -182,6 +164,19 @@ end 'linuxReadsFiles'
 // `mrt_host_env_read` reads it back out of this word. Both Linux lanes capture into the same name because
 // only one lane's runtime ever reaches an image.
 export let LinuxEnvpLabel = b"__mrt_envp"
+
+// The alternate signal stack's size, which `mrt_linux_signal_stack_size` computes from `AT_MINSIGSTKSZ`
+// (see `SignalStackBytes`). ⚠ `mrt_runtime_init` calls it before the first `__signal_stack_install`, which
+// otherwise asks `mmap` for zero bytes and registers no stack.
+export let LinuxSignalStackBytesLabel = b"__mrt_signal_stack_bytes"
+export let LinuxSignalStackSizeName = b"mrt_linux_signal_stack_size"
+
+// The auxiliary vector follows `envp`'s NULL terminator: 16-byte (type, value) pairs ending at type 0.
+export let LinuxAuxVectorEnd = 0
+export let LinuxAuxMinSignalStackSize = 51
+export let LinuxAuxEntryBytes = 16
+export let LinuxAuxValueOffset = 8
+export let LinuxVectorEntryBytes = 8
 
 // `'='` — what separates a name from its value in every `envp` entry. Both lanes' walks compare against it,
 // and a match is the name followed by THIS byte: comparing only the prefix makes `MAXON_MAX` match
@@ -218,6 +213,14 @@ export let LinuxSiginfoOffAddr = 16
 // notion for it to collide with — so a stray one costs nothing and a delivered one means only this.
 export let LinuxSignalUrg = 23
 
+// The kernel's `struct sigaction`, which is not libc's, laid out alike on both Linux architectures: handler,
+// flags, restorer, then the 8-byte mask. Each install zeroes all four words first, so the mask is empty and
+// arm64's unused restorer is NULL; `SignalStackBytes` relies on that empty mask.
+export let LinuxSigactionOffHandler = 0x00
+export let LinuxSigactionOffFlags = 0x08
+export let LinuxSigactionOffRestorer = 0x10
+export let LinuxSigactionSlots = 4 as StackSize
+
 // `stack_t` — `ss_sp`, then the `int` `ss_flags` padded to a word, then `ss_size`: three words, laid out
 // alike on every 64-bit Linux architecture. `sigaltstack` reads it; 0 flags means "enabled".
 export let LinuxStackTOffSp = 0 as Imm32
@@ -234,24 +237,19 @@ export let LinuxTimespecSlots = 2 as StackSize
 // A clock chunk's frame: its out-param pointer in slot 0, and the `timespec` above it.
 export let LinuxClockChunkSlots = 1 + LinuxTimespecSlots
 
-// The `.data` word above, laid out for the programs that read the environment. Gated on the FACILITIES that
-// reach it rather than on the target alone, exactly as each lane's errno word is: a Linux program that
-// neither schedules nor asks about the terminal never touches it, so it does not carry it.
-//
-// ⚠ **NO `os` TEST INSIDE THE `usage` TEST — the target is asked FIRST**, because the answer really does
-// depend on both and this is the one place that pair is stated (`commandLineRuntimeGlobals`' arrangement).
-export function linuxEnvpGlobals(usage RuntimeUsage, target Target) returns DataSectionEntryArray
+// Every Linux program carries both words: the signal-stack sizing reads the vector, and `mrt_runtime_init`
+// runs in every program. Both are written in `mrt_start`, before any second OS thread exists.
+export function linuxEntryVectorGlobals(target Target) returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
 
-	if target.os != Os.linux or not linuxReadsEnvironment(usage) 'notThisLane'
+	if target.os != Os.linux 'notThisLane'
 		return out
 	end 'notThisLane'
 
-	// Written ONCE, in `mrt_start`, before `main` and therefore before anything could make a second OS
-	// thread; every later access is a read.
 	pushRuntimeGlobal(out, label: LinuxEnvpLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.declared)
+	pushRuntimeGlobal(out, label: LinuxSignalStackBytesLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.declared)
 	return out
-end 'linuxEnvpGlobals'
+end 'linuxEntryVectorGlobals'
 
 // ==========================================================================
 // Is this descriptor a terminal?

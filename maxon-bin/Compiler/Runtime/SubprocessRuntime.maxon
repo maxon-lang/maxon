@@ -53,6 +53,7 @@ export let SubpWaitExitName = b"__gt_subp_wait_exit"
 // zero as INFINITE — the corpus's convention for this whole family — and TERMINATES the child when any other
 // deadline fires. A parent that wants to know whether its child has finished wants neither.
 export let SubpPollExitName = b"__gt_subp_poll_exit"
+export let SubpExitSignalName = b"__gt_subp_exit_signal"
 export let SubpWriteAllName = b"__gt_subp_write_all"
 export let SubpReadOutBytesName = b"__gt_subp_read_out_bytes"
 export let SubpReadErrBytesName = b"__gt_subp_read_err_bytes"
@@ -122,7 +123,11 @@ let SubpTimedOutRc = -2
 // The `ResultStatusKind` discriminator `stdlib/Subprocess.maxon` decodes. Its raw values are declared THERE
 // and travel across the builtin boundary unchanged, exactly as the stdio kinds do.
 let SubpStatusExited = 0 as ParsedInt
+let SubpStatusSignalled = 1 as ParsedInt
 let SubpStatusTimedOut = 2 as ParsedInt
+export let SubpNoExitSignal = 0 as ParsedInt
+
+let SubprocessStdlibFileName = "Subprocess.maxon"
 
 // The exit code a child is TERMINATED with when its deadline fires. Any non-zero value would do; 1 is what a
 // killed process conventionally reports.
@@ -1469,9 +1474,23 @@ function buildSubpWaitExit(module StdModule)
 	module.functions.push(func)
 end 'buildSubpWaitExit'
 
-// ⭐ `__gt_subp_poll_exit(handle) -> exitCode | -1` — `__Builtins.subprocessPollExit`. Has the child exited?
-// Answered with a ZERO-timeout wait, so it never blocks, and with no terminate on any path, so it never
-// changes what it is asking about.
+enum SubpExitTail
+	exitCode
+	exitSignal
+end 'SubpExitTail'
+
+function subpExitPollName(tail SubpExitTail) returns ByteArray
+	return match tail 'name'
+		exitCode gives SubpPollExitName
+		exitSignal gives SubpExitSignalName
+	end 'name'
+end 'subpExitPollName'
+
+// ⭐ `__gt_subp_poll_exit(handle) -> exitCode | -1` and `__gt_subp_exit_signal(handle) -> signal | -1` —
+// `__Builtins.subprocessPollExit` and `subprocessExitSignal`. Has the child exited, and if so, what does it
+// report? Answered with a zero-timeout wait, so it never blocks, and with no terminate on any path, so it
+// never changes what it is asking about. The two differ only in the tail read once the child has exited; the
+// signal is `SubpNoExitSignal` for a child no signal ended.
 //
 // -1 cannot collide with an exit code because the DWORD load reads only the low 32 bits of the
 // shared scratch word (see `SubpSlotBytesOut`, which owns that rule): the answer is in [0, 2^32),
@@ -1480,8 +1499,8 @@ end 'buildSubpWaitExit'
 // ⚠ A handle naming no live child also answers -1, which `stdlib/Subprocess.maxon` reads as `running`: after
 // `release()` there is no child left to report an exit for, and the throwing methods refuse a released handle
 // on their own account.
-function buildSubpPollExit(module StdModule)
-	var func = IrFunction.createFromStd(SubpPollExitName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+function buildSubpExitPoll(module StdModule, tail SubpExitTail)
+	var func = IrFunction.createFromStd(subpExitPollName(tail), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1508,13 +1527,29 @@ function buildSubpPollExit(module StdModule)
 
 	let slotE = emitSubpSlotOf(module, block: exited, ids: ids, handle: handle)
 	let hProcessE = emitLoadField(module, block: exited, record: slotE, offset: SubpSlotHProcess, ids: ids)
-	let codePtr = emitLoadField(module, block: exited, record: slotE, offset: SubpSlotBytesOut, ids: ids)
-	module.appendOp(exited, op: StdOp.osProcessExitCode(hProcessE, codePtrId: codePtr))
-	let code = emitLoadDword(module, block: exited, record: codePtr, offset: 0, ids: ids)
-	module.setTerminator(exited, op: StdOp.ret(code))
+	module.setTerminator(exited, op: StdOp.ret(emitSubpExitTail(module, block: exited, tail: tail, slot: slotE, hProcess: hProcessE, ids: ids)))
 
 	module.functions.push(func)
-end 'buildSubpPollExit'
+end 'buildSubpExitPoll'
+
+function emitSubpExitTail(module StdModule, block IrBlock, tail SubpExitTail, slot ValueId, hProcess ValueId, ids ValueMinter) returns ValueId
+	match tail 'tail'
+		exitCode then return emitSubpReportedExitCode(module, block: block, slot: slot, hProcess: hProcess, ids: ids)
+		exitSignal then return emitSubpExitSignalOf(module, block: block, hProcess: hProcess, ids: ids)
+	end 'tail'
+end 'emitSubpExitTail'
+
+function emitSubpReportedExitCode(module StdModule, block IrBlock, slot ValueId, hProcess ValueId, ids ValueMinter) returns ValueId
+	let codePtr = emitLoadField(module, block: block, record: slot, offset: SubpSlotBytesOut, ids: ids)
+	module.appendOp(block, op: StdOp.osProcessExitCode(hProcess, codePtrId: codePtr))
+	return emitLoadDword(module, block: block, record: codePtr, offset: 0, ids: ids)
+end 'emitSubpReportedExitCode'
+
+function emitSubpExitSignalOf(module StdModule, block IrBlock, hProcess ValueId, ids ValueMinter) returns ValueId
+	let signal = ids.mint()
+	module.appendOp(block, op: StdOp.osProcessExitSignal(signal, handleId: hProcess))
+	return signal
+end 'emitSubpExitSignalOf'
 
 // One zero-timeout look at the child: whether it has exited. On POSIX it is a `waitpid(WNOHANG)`, which reaps
 // a child it finds exited and caches the status for the reads that follow.
@@ -1693,16 +1728,21 @@ function buildSubpWaitCollect(module StdModule, target Target)
 	let handleF = emitLoadField(module, block: reap, record: state, offset: WcHandle, ids: ids)
 	let slotF = emitSubpSlotOf(module, block: reap, ids: ids, handle: handleF)
 	let hProcessF = emitLoadField(module, block: reap, record: slotF, offset: SubpSlotHProcess, ids: ids)
-	let codePtr = emitLoadField(module, block: reap, record: slotF, offset: SubpSlotBytesOut, ids: ids)
-	module.appendOp(reap, op: StdOp.osProcessExitCode(hProcessF, codePtrId: codePtr))
-	let exitCode = emitLoadDword(module, block: reap, record: codePtr, offset: 0, ids: ids)
+	let reportedCode = emitSubpReportedExitCode(module, block: reap, slot: slotF, hProcess: hProcessF, ids: ids)
+	let exitSignal = emitSubpExitSignalOf(module, block: reap, hProcess: hProcessF, ids: ids)
+	let waitedStatus = emitLoadField(module, block: reap, record: state, offset: WcStatus, ids: ids)
+	let exitedStatus = emitConst(module, block: reap, value: SubpStatusExited, ids: ids)
+	let exitedNormally = emitCmp(module, block: reap, a: waitedStatus, b: exitedStatus, pred: StdCmpPred.eq, ids: ids)
+	let hasASignal = emitCmp(module, block: reap, a: exitSignal, b: emitConst(module, block: reap, value: SubpNoExitSignal, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	let killedBySignal = emitBin(module, block: reap, a: exitedNormally, b: hasASignal, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let exitCode = emitSelectWord(module, block: reap, cond: killedBySignal, whenSet: exitSignal, whenClear: reportedCode, ids: ids)
+	let status = emitSelectWord(module, block: reap, cond: killedBySignal, whenSet: emitConst(module, block: reap, value: SubpStatusSignalled, ids: ids), whenClear: waitedStatus, ids: ids)
 	let endMs = ids.mint()
 	module.appendOp(reap, op: StdOp.osTickCountMs(endMs))
 	let startF = emitLoadField(module, block: reap, record: state, offset: WcStartMs, ids: ids)
 	let duration = emitBin(module, block: reap, a: endMs, b: startF, opcode: StdBinOpcode.sub, ids: ids)
 	let resSize = emitConst(module, block: reap, value: ResBytes, ids: ids)
 	let result = emitRawAlloc(module, block: reap, byteCount: resSize, ids: ids)
-	let status = emitLoadField(module, block: reap, record: state, offset: WcStatus, ids: ids)
 	emitStoreField(module, block: reap, record: result, offset: ResStatus, value: status)
 	emitStoreField(module, block: reap, record: result, offset: ResCode, value: exitCode)
 	emitStoreField(module, block: reap, record: result, offset: ResDuration, value: duration)
@@ -3387,7 +3427,8 @@ export function installSubprocessRuntime(module StdModule, target Target)
 	buildSubpReadBytes(module, name: SubpTryReadOutBytesName, readerName: SubpTryReadLineName)
 	buildSubpReadBytes(module, name: SubpTryReadErrBytesName, readerName: SubpTryReadErrLineName)
 	buildSubpWaitExit(module)
-	buildSubpPollExit(module)
+	buildSubpExitPoll(module, tail: SubpExitTail.exitCode)
+	buildSubpExitPoll(module, tail: SubpExitTail.exitSignal)
 	buildSubpWaitCollect(module, target: target)
 	buildSubpResultWordReader(module, name: SubpResultKindName, offset: ResStatus)
 	buildSubpResultWordReader(module, name: SubpResultCodeName, offset: ResCode)
@@ -3400,6 +3441,16 @@ export function installSubprocessRuntime(module StdModule, target Target)
 	buildSubpEnvEntry(module, shape: environmentSnapshotShape(target))
 	buildSubpResolvePath(module, shape: pathSearchShape(target))
 end 'installSubprocessRuntime'
+
+export function checkSubprocessAnswers(signatures ProgramSignatures, stdlibPath FilePath)
+	var pins = TierGeometryPinArray.create()
+	pins.push(TierGeometryPin.create("the answer for a child no signal ended", here: SubpNoExitSignal, named: "NoTerminatingSignal"))
+	requireTierGeometryAgrees(pins, signatures: signatures, tierPath: stdlibPath, emitterFile: "SubprocessRuntime.maxon", layer: "checkSubprocessAnswers")
+end 'checkSubprocessAnswers'
+
+export function subprocessStdlibFileName() returns String
+	return SubprocessStdlibFileName
+end 'subprocessStdlibFileName'
 
 // The shell wrapper, built by `installGtRuntime` beside its callers — `__gt_process_run` and the one-shot
 // read probe — rather than with the attached family above, so the image lays it out next to the code that

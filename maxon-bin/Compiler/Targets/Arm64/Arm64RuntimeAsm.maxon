@@ -350,6 +350,15 @@ export function arm64EmitLeaRuntimeFuncAddr(asm Arm64RuntimeAsm, dest Arm64Regis
 	arm64EmitLeaFuncAddr(asm.code, funcAdrpRelocs: asm.funcAdrpRelocs, dest: arm64RuntimeReg(dest), funcName: funcName)
 end 'arm64EmitLeaRuntimeFuncAddr'
 
+module function arm64EmitDataAddr(asm Arm64RuntimeAsm, dest Arm64Register, label ByteArray)
+	arm64EmitAdrpAddPair(asm.code, rdataRelocs: asm.rdataRelocs, dest: arm64RuntimeReg(dest), label: label, adrpKind: RdataRelocKind.dataSectionArm64Adrp, pageOffKind: RdataRelocKind.dataSectionArm64PageOff)
+end 'arm64EmitDataAddr'
+
+module function arm64EmitLoadDataWord(asm Arm64RuntimeAsm, dest Arm64Register, label ByteArray)
+	arm64EmitDataAddr(asm, dest: dest, label: label)
+	arm64EmitLoadWord64At(asm, dest: dest, base: dest, byteOffset: 0)
+end 'arm64EmitLoadDataWord'
+
 // ⭐ **DOES `offsetReg` NAME CODE THIS IMAGE CAN SYMBOLIZE?** `0 <= offset < __symtable - mrt_start`,
 // branching to `rejectLabel` if not. SIGNED at both ends: an address BELOW the image reduces to a
 // negative offset, and both ends must reject.

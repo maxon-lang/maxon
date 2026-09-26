@@ -6903,6 +6903,9 @@ let BuiltinsSubprocessWaitExitName = b"__Builtins.subprocessWaitExit"
 // readers park until a line arrives. These three ask instead of committing — an exit poll that neither
 // blocks nor kills, and a line read that answers the empty string when the pipe has nothing buffered.
 let BuiltinsSubprocessPollExitName = b"__Builtins.subprocessPollExit"
+
+// The signal that ended an exited child, 0 for none, or -1 while it runs — the exit poll's shape.
+let BuiltinsSubprocessExitSignalName = b"__Builtins.subprocessExitSignal"
 let BuiltinsSubprocessTryReadStdoutLineName = b"__Builtins.subprocessTryReadStdoutLine"
 let BuiltinsSubprocessTryReadStderrLineName = b"__Builtins.subprocessTryReadStderrLine"
 
@@ -6921,17 +6924,18 @@ let BuiltinsManagedIsNullName = b"__Builtins.managedIsNull"
 // whole — see `SubprocessRuntime.SubpEnvEntryName`.
 let BuiltinsOsEnvironmentEntryName = b"__Builtins.osEnvironmentEntry"
 
-// ⭐ **THE SIX MEMBERS OF `stdlib/SharedMemory.maxon`'s FLOOR — A NAMED SECTION TWO PROCESSES BOTH MAP.**
+// ⭐ **THE EIGHT MEMBERS OF `stdlib/SharedMemory.maxon`'s FLOOR — A NAMED SECTION TWO PROCESSES BOTH MAP.**
 // They are their own family rather than members of the subprocess band above: a section is not a child, and
 // the E3104 gate reads the `__shm_` prefix their entries carry (`SharedMemoryRuntime`), so a lane can serve
-// one without the other. Two host calls (create, unmap-and-close), one mapping, and three accessors over the
-// mapped bytes — the accessors exist because Maxon has no raw dereference.
+// one without the other. `SharedMemoryRuntime` lists the entry points.
 let BuiltinsSharedMemoryCreateName = b"__Builtins.sharedMemoryCreate"
 let BuiltinsSharedMemoryMapName = b"__Builtins.sharedMemoryMap"
 let BuiltinsSharedMemoryReadWordName = b"__Builtins.sharedMemoryReadWord"
 let BuiltinsSharedMemoryWriteWordName = b"__Builtins.sharedMemoryWriteWord"
 let BuiltinsSharedMemoryCopyOutName = b"__Builtins.sharedMemoryCopyOut"
 let BuiltinsSharedMemoryCloseName = b"__Builtins.sharedMemoryClose"
+let BuiltinsSharedMemoryAdoptName = b"__Builtins.sharedMemoryAdopt"
+let BuiltinsSharedMemoryReleaseName = b"__Builtins.sharedMemoryRelease"
 
 // ⭐⭐ **THE SIXTEEN MEMBERS OF `maxon-bin/Profile/`'s FLOOR — SAMPLING ANOTHER PROCESS'S THREADS.** Their
 // own family rather than members of any band above, for the shared-memory family's reason: the E3104 gate
@@ -85330,10 +85334,13 @@ export type Parser
 				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpWaitExitName, arity: SubprocessTwoArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
 			end 'subprocessWaitExit'
 
-			// ⭐ **THE EXIT POLL, WHICH IS ITS OWN ENTRY BECAUSE THE WAIT CANNOT BE ASKED THIS QUESTION.**
-			// `__gt_subp_wait_exit(h, 0)` waits for ever and any other timeout TERMINATES the child when it
-			// fires, so neither spelling of it answers "has it finished yet". An exit code is a DWORD, so the
-			// entry's -1 cannot collide with one.
+			if callee.equals(BuiltinsSubprocessExitSignalName) 'subprocessExitSignal'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpExitSignalName, arity: SubprocessOneArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
+			end 'subprocessExitSignal'
+
+			// The exit poll is its own entry because the wait cannot be asked this question:
+			// `__gt_subp_wait_exit(h, 0)` waits for ever and any other timeout terminates the child when it
+			// fires. An exit code is a DWORD, so the entry's -1 cannot collide with one.
 			if callee.equals(BuiltinsSubprocessPollExitName) 'subprocessPollExit'
 				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpPollExitName, arity: SubprocessOneArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
 			end 'subprocessPollExit'
@@ -85451,6 +85458,10 @@ export type Parser
 				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SharedMemoryCreateName, arity: SharedMemoryTwoArgArity, shape: IntrinsicArgShape.cstringFirst, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
 			end 'sharedMemoryCreate'
 
+			if callee.equals(BuiltinsSharedMemoryAdoptName) 'sharedMemoryAdopt'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SharedMemoryAdoptName, arity: SharedMemoryTwoArgArity, shape: IntrinsicArgShape.cstringFirst, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
+			end 'sharedMemoryAdopt'
+
 			if callee.equals(BuiltinsSharedMemoryMapName) 'sharedMemoryMap'
 				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SharedMemoryMapName, arity: SharedMemoryTwoArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
 			end 'sharedMemoryMap'
@@ -85466,6 +85477,10 @@ export type Parser
 			if callee.equals(BuiltinsSharedMemoryCloseName) 'sharedMemoryClose'
 				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SharedMemoryCloseName, arity: SharedMemoryFourArgArity, shape: IntrinsicArgShape.cstringLast, resultTag: ValueTypeTag.void, resultUsed: resultUsed, calleeTok: anchor)
 			end 'sharedMemoryClose'
+
+			if callee.equals(BuiltinsSharedMemoryReleaseName) 'sharedMemoryRelease'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SharedMemoryReleaseName, arity: SharedMemoryThreeArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.void, resultUsed: resultUsed, calleeTok: anchor)
+			end 'sharedMemoryRelease'
 
 			if callee.equals(BuiltinsSharedMemoryCopyOutName) 'sharedMemoryCopyOut'
 				return try self.emitSubprocessManagedResult(args, callee: callee, runtimeName: SharedMemoryCopyOutName, arity: SharedMemoryThreeArgArity, shape: IntrinsicArgShape.allMachineWords, calleeTok: anchor)

@@ -122,7 +122,7 @@ end 'arm64ThreadPointerSource'
 // scalar core, which has no allocator and cannot leak. `initGlobals` gates the managed-global
 // initialization and release the same way — `false` for a program with no managed
 // top-level `var`, which is every program in the scalar corpus.
-export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, debugStream bool, dumpCoverage bool, os Os, entryFunction ByteArray) returns FunctionCodeChunk
+export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, debugStream bool, dumpCoverage bool, os Os, entryFunction ByteArray) returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
 	var iatRelocs = RelocationArray.create()
@@ -136,18 +136,14 @@ export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drain
 		emitArm64ArgvCapture(code, rdataRelocs: rdataRelocs, os: os)
 	end 'argv'
 
-	// ⭐⭐ **THE ENVIRONMENT VECTOR, AND ONLY arm64-LINUX NEEDS IT CAPTURED AT ALL.** Every other lane
-	// asks the platform for a variable — `GetEnvironmentVariableA` on Windows, `getenv` through libSystem on
-	// macOS — and a raw static image has neither, so the one moment the vector is reachable is HERE, where
-	// the kernel left it on the stack. It rides `LinuxRuntime.linuxReadsEnvironment` — the scheduler's
-	// `MAXON_MAX_PROCS` read, terminal detection's `NO_COLOR`/`TERM`, and the DebugStream attach's
-	// `MAXON_DEBUGSTREAM` — because none of the three implies either of the others.
+	// The environment vector, captured on Linux only: macOS asks libSystem's `getenv`, and a raw static
+	// image has no such call, so the one moment the vector is reachable is here, where the kernel left it on
+	// the stack. Every Linux program captures it, because `mrt_linux_signal_stack_size` walks past it to the
+	// auxiliary vector.
 	//
-	// ⚠ **IT IS INDEPENDENT OF THE argv CAPTURE ABOVE, DELIBERATELY.** The two ride different bits, so it
-	// re-reads `sp` rather than depending on a register the other arm happened to leave behind.
-	if captureEnvp 'envp'
-		emitArm64EnvpCapture(code, rdataRelocs: rdataRelocs, os: os)
-	end 'envp'
+	// ⚠ It re-reads `sp` rather than depending on a register the argv capture left behind, which runs only
+	// in a program that asks for its arguments.
+	emitArm64EnvpCapture(code, rdataRelocs: rdataRelocs, os: os)
 
 	// ⭐ **THE SIGNAL HANDLERS ARE INSTALLED BEFORE ANY OTHER `bl`, SO THE FIRST INSTRUCTION THEY COVER IS
 	// THE FIRST ONE THAT COULD FAULT.** `mrt_runtime_init` takes no argument and returns nothing, so there
@@ -339,7 +335,7 @@ end 'emitArm64ArgvFromEntryStack'
 function emitArm64EnvpCapture(code ByteArray, rdataRelocs RdataRelocationArray, os Os)
 	match os 'envpLocation'
 		linux then emitArm64EnvpFromEntryStack(code, rdataRelocs: rdataRelocs)
-		macos then panic("buildArm64EntryStubChunk: arm64-macOS reads an environment variable through libSystem's `getenv` and captures no vector — `captureEnvp` is asked only of the Linux lane, so a `true` here is a backend wiring bug")
+		macos then break 'envpLocation'
 		windows then panic("buildArm64EntryStubChunk: there is no arm64-Windows lane in this compiler")
 		wasi then panic("buildArm64EntryStubChunk: `wasm32-wasi` is not an arm64 lane")
 	end 'envpLocation'

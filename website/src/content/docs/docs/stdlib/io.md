@@ -486,9 +486,9 @@ union TerminationStatus
 end 'TerminationStatus'
 ```
 
-`exited` is how every child's end is reported: a child killed by a Unix signal exits with `128 + signal`, and
-a Windows child that ended abnormally exits with its NTSTATUS code. No target currently reports `signalled`. `isSuccess()` is true for `exited(0)`; `code()` returns
-the number either way.
+On Linux and macOS a child that a signal killed is `signalled(signal)`, carrying the signal number; every other
+end is `exited(code)`. A Windows child that ended abnormally is `exited` with its NTSTATUS code. `isSuccess()`
+is true for `exited(0)`; `code()` returns the number either way.
 
 ### SubprocessError
 
@@ -532,7 +532,8 @@ request after request. A read parks the calling green thread until data arrives.
 | `readStderrLineCapped(maxBytes)` | `String` | `SubprocessError` | With a cap. |
 | `tryReadStdoutLine()` | `LinePoll` | — | A line if one is already buffered; never blocks. |
 | `tryReadStderrLine()` | `LinePoll` | — | As above, for stderr. |
-| `pollExit()` | `ExitPoll` | — | Whether the child has exited, without blocking or killing it. A released handle answers `running`. |
+| `pollExit()` | `ExitPoll` | — | Whether the child has exited, without blocking or killing it. A released handle answers `running`. On Linux and macOS a child a signal killed reports `exited(128 + signal)`. |
+| `pollTermination()` | `TerminationPoll` | — | As `pollExit()`, answering how the child ended: `signalled(signal)` for a child a signal killed on Linux and macOS, `exited(code)` otherwise. |
 | `closeStdin()` | — | — | Close the child's stdin so it sees end of input. Idempotent. |
 | `wait()` | exit code | `SubprocessError` | Block until the child exits. |
 | `waitWithTimeout(timeoutMs DurationMs)` | exit code | `SubprocessError` | Throws `timeout` and kills the child's whole process tree when the deadline passes; `0` waits forever. The thrown `timeout` carries empty output fields — a streaming child's bytes belong to the caller draining the streams. |
@@ -549,6 +550,11 @@ union ExitPoll
 	running
 	exited(code int(0 to u32.max))
 end 'ExitPoll'
+
+union TerminationPoll
+	running
+	ended(status TerminationStatus)
+end 'TerminationPoll'
 ```
 
 `LinePoll` exists because a blank line from the child and "nothing buffered" are both `""` once the
@@ -582,19 +588,20 @@ With `git` on `PATH`, it prints `true 0 exited 0`.
 
 ## SharedMemory
 
-A `SharedSegment` is a named block of memory that several processes map at once: one creates it under a
-name, another maps the same name and sees the same bytes. Available on `x64-windows` (Win32 section
+A `SharedSegment` is a named block of memory that several processes map at once: one publishes it under a
+name, another adopts the same name and sees the same bytes. Available on `x64-windows` (Win32 section
 objects), `arm64-macos` (`shm_open` and `mmap`) and both Linux targets (a `/dev/shm` file and `mmap`);
 refused at compile time elsewhere.
 
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
-| `SharedSegment.create(name String, bytes SegmentByteCount)` | `SharedSegment` | `SharedMemoryError` | Create a new section of exactly `bytes` bytes under `name` and map it. |
+| `SharedSegment.create(name String, bytes SegmentByteCount)` | `SharedSegment` | `SharedMemoryError` | Publish a section of `bytes` bytes under `name` and map it, adopting one already published under that name. |
+| `SharedSegment.publish(name String, bytes SegmentByteCount)` | `SharedSegment` | `SharedMemoryError` | Publish a NEW section of `bytes` bytes under `name` and map it; a name already published is refused with `createFailed`. |
 | `segmentName()` | `String` | — | The name another process maps it by. |
 | `readWord(offset SegmentOffset)` | `SegmentWord` | `SharedMemoryError` | The 64-bit word `offset` bytes in. |
 | `writeWord(offset SegmentOffset, value SegmentWord)` | — | `SharedMemoryError` | Write a 64-bit word `offset` bytes in. |
 | `copyOut(offset SegmentOffset, byteCount SegmentByteCount)` | `ByteArray` | `SharedMemoryError` | An independent copy of a byte range. |
-| `close()` | — | — | Unmap, release the section and withdraw its name. Idempotent. |
+| `close()` | — | — | Unmap and release the section, and withdraw its name if this segment published it. Idempotent. |
 
 `readWord` is an acquire load and `writeWord` a release store, so a word is how one process announces
 bytes to another: once `readWord` returns a value another process wrote with `writeWord`, every write that
@@ -603,6 +610,13 @@ process made before it is visible, including a range read afterwards with `copyO
 Offsets are in bytes, not words. Every access is checked against the section's size: a word (8 bytes) or a
 `copyOut` range (`offset + byteCount`) that would reach past the end throws `SharedMemoryError.outOfBounds`
 and touches nothing.
+
+**`create` adopts a name that is already published**, keeping the size that section already has; on every
+target one smaller than `bytes` is refused with `SharedMemoryError.createFailed`. Two processes creating one
+name at once both succeed, one publishing and one adopting. On Linux and macOS a section whose publisher exited
+without `close()` is still published, and `create` adopts it. **`publish` only publishes**: a caller that needs
+a fresh section gets one, or `createFailed` when the name is taken. **`close` withdraws the name only when this
+segment published it**: an adopter's `close` leaves the name published for as long as the publisher holds it.
 
 | Type | Definition |
 |------|------------|
@@ -619,7 +633,8 @@ union SharedMemoryError implements Error
 end 'SharedMemoryError'
 ```
 
-`createFailed`: the name collides with an incompatible section, or the size cannot be backed.
+`createFailed`: the name is published by a section smaller than `bytes` (`create`) or is published at all
+(`publish`), or the host refuses the name or the size.
 `invalidName`: the name is empty, longer than 31 bytes, or holds a `/`, a `\` or a NUL byte. The rule is the
 same on every target (31 bytes is macOS's limit), so a name that works on one host works on all of them.
 `mapFailed`: no address space for the view. `outOfBounds`: a `readWord`, `writeWord` or `copyOut` would

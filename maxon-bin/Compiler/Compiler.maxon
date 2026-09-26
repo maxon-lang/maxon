@@ -1203,12 +1203,12 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	project.functionValueTargets = collectFnRefThunkTargets(module, funcSignatures: project.funcSignatures)
 	recordPhase(project, phase: CompilePhase.deriveRuntimeNeeds, probe: scanProbe)
 
-	// ⛔ **THE TRACE BIT IS FINAL BEFORE `EntryStubCalls.fromUsage` READS THE RECORD BELOW.** The stub's
+	// ⚠ The trace bit is final before `EntryStubCalls.fromUsage` reads the record below. The stub's
 	// DebugStream bracket is rooted from that snapshot, and the producer's synthesized body reaches the
-	// uptime clock, the ring lock and the segment attach — so slots that belong to OTHER families ride this
-	// bit too: `LinuxRuntime.linuxEnvpGlobals` declares `__mrt_envp` because the attach reads
+	// uptime clock, the ring lock and the segment attach, so chunks that belong to other families ride this
+	// bit too: `LinuxRuntime.linuxReadsEnvironment` lays out the environment read because the attach reads
 	// `MAXON_DEBUGSTREAM` out of the captured vector on a libc-less lane. `usesHeap` is final by here, which
-	// is what makes this the earliest honest place to ask.
+	// makes this the earliest place the question can be answered.
 	usage.usesDebugStream = buildCarriesDebugStream(project, usage: usage)
 	usage.usesDebugAgent = targetProvidesFacility(project.target, facility: HostFacility.debugAgent) and not project.noDebugAgent
 
@@ -1433,16 +1433,19 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// source, and the one walk a builder still emits is spliced inline into `__slab_free`. What is left is
 	// the geometry check, which runs on every compile rather than only where a program allocates — see its
 	// header for why a check gated on an install is a check that reports a breakage to whoever comes next.
-	checkSlabArenaGeometry(signatures, tierPath: runtimeTierSourcePath(project, tierFileName: SlabArenaTierFileName), target: project.target)
+	checkSlabArenaGeometry(signatures, tierPath: librarySourcePath(project, fileName: SlabArenaTierFileName), target: project.target)
 
-	checkDebugAgentGeometry(signatures, tierPath: runtimeTierSourcePath(project, tierFileName: DebugAgentTierFileName))
+	checkDebugAgentGeometry(signatures, tierPath: librarySourcePath(project, fileName: DebugAgentTierFileName))
+
+	checkSharedMemoryAnswers(signatures, stdlibPath: librarySourcePath(project, fileName: sharedMemoryStdlibFileName()))
+	checkSubprocessAnswers(signatures, stdlibPath: librarySourcePath(project, fileName: subprocessStdlibFileName()))
 
 	// The slab's OBJECT LAYER (`__slab_alloc`/`__slab_free`, the size classes, the spans and the mcache) —
 	// the allocator `__mm_alloc` takes its boxes from. Called unconditionally and gated inside, because it
 	// runs the record-layout and size-class checks as well as emitting, and it takes
 	// `globalData` because it REGISTERS as well as emits: its three `.rdata` tables must be in the table
 	// before the backend lays that section out, exactly as `installUnicodeCategoryRuntime`'s two are.
-	installSlabRuntime(pipeline.stdModule, globalData: project.globalData, usage: usage, target: project.target, signatures: signatures, tierPath: runtimeTierSourcePath(project, tierFileName: SlabRuntimeTierFileName))
+	installSlabRuntime(pipeline.stdModule, globalData: project.globalData, usage: usage, target: project.target, signatures: signatures, tierPath: librarySourcePath(project, fileName: SlabRuntimeTierFileName))
 
 	// The green-thread scheduler (`__gt_init`/`__gt_spawn`/`__gt_enqueue`/`__gt_dequeue`/`__gt_await`),
 	// installed the same way — already-lowered Std, appended after the pipeline (see this block's header for
@@ -1516,7 +1519,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// its own `usesSharedMemory` bit. It sits beside the three families above because it shares their helpers
 	// (the byte-element record builder and the forward copy), and it needs no ordering against the Array
 	// install below for the reason stated there.
-	installSharedMemoryRuntime(pipeline.stdModule, usage: usage)
+	installSharedMemoryRuntime(pipeline.stdModule, usage: usage, target: project.target)
 
 	// The process-sampling runtime (`__prof_open_target`/`__prof_sample`/…) — installed the same
 	// already-lowered way, on its own `usesProcessSampling` bit. It sits beside the shared-memory family

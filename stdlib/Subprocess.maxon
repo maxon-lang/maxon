@@ -23,6 +23,8 @@
 
 public typealias ExitInt = int(0 to u32.max)
 
+typealias ExitAnswer = int(-1 to u32.max)
+
 // An OS process id, which is a `pid_t` on POSIX and a DWORD on Windows — never negative, and never
 // wider than the i64 the spawn builtins answer in. Narrowing it makes every `Pid` position a guarded
 // door, so it is worth being exact about where the builtins' `-1` is decoded, because it is NOT
@@ -296,13 +298,10 @@ end 'OutputDestination'
 /// - `exited(code)` — the child called `exit(code)` (or its main returned
 ///   `code`). On Windows this includes any value `GetExitCodeProcess` returned
 ///   that isn't an NTSTATUS-class abnormal exit.
-/// - `signalled(code)` — Unix: the child was killed by signal `code`. Windows:
-///   the child terminated abnormally with NTSTATUS exit code `code` (e.g.
-///   `0xC0000005` for an access violation).
+/// - `signalled(code)` — Linux and macOS: the child was killed by signal `code`.
 ///
-/// ⚠ No runtime produces `signalled`: every lane reports `exited`, a POSIX child
-/// killed by a signal as `128 + signal` and a Windows abnormal exit as its
-/// NTSTATUS code.
+/// A Windows child that terminated abnormally is `exited` with its NTSTATUS code
+/// (e.g. `0xC0000005` for an access violation).
 public union TerminationStatus
 	exited(code ExitInt)
 	signalled(code ExitInt)
@@ -1082,14 +1081,24 @@ public type StreamingSubprocess
 			return ExitPoll.running
 		end 'gone'
 
-		let raw = __Builtins.subprocessPollExit(handle)
-
-		if raw < 0 'stillRunning'
-			return ExitPoll.running
-		end 'stillRunning'
-
-		return ExitPoll.exited(raw)
+		return exitPollOf(__Builtins.subprocessPollExit(handle))
 	end 'pollExit'
+
+	/// Has the child ended, and how? `pollExit`'s answer, naming the signal that killed a child on Linux or
+	/// macOS as `signalled(signal)`. Never blocks and never kills.
+	public function pollTermination() returns TerminationPoll
+		return match self.pollExit() 'polled'
+			running gives TerminationPoll.running
+			exited(code) gives TerminationPoll.ended(self.terminationAfterExit(code))
+		end 'polled'
+	end 'pollTermination'
+
+	function terminationAfterExit(code ExitInt) returns TerminationStatus
+		return match exitPollOf(__Builtins.subprocessExitSignal(handle)) 'signal'
+			running panic("StreamingSubprocess.pollTermination: the child answered that it had exited and then that it was running")
+			exited(signal) gives terminationWithSignal(code, signal: signal)
+		end 'signal'
+	end 'terminationAfterExit'
 
 	/// A line from the child's stdout if one is ALREADY buffered. Never blocks.
 	///
@@ -1141,11 +1150,35 @@ public type StreamingSubprocess
 end 'StreamingSubprocess'
 
 /// What `pollExit` found. A union rather than a code-plus-sentinel because "it has not finished" is not an
-/// exit code and there is no number that could stand for it: a Windows exit code is a full DWORD.
+/// exit code and there is no number that could stand for it: a Windows exit code is a full DWORD. A child a
+/// signal killed on Linux or macOS is `exited(128 + signal)`; `pollTermination` names the signal.
 public union ExitPoll
 	running
 	exited(code ExitInt)
 end 'ExitPoll'
+
+/// What `pollTermination` found: the child is still running, or how it ended.
+public union TerminationPoll
+	running
+	ended(status TerminationStatus)
+end 'TerminationPoll'
+
+// The runtime's answer for a child no signal ended, pinned against `SubprocessRuntime.SubpNoExitSignal` by
+// `checkSubprocessAnswers` on every compile.
+let NoTerminatingSignal = 0
+
+// A builtin's -1 is "still running": an exit code or a signal number is never negative.
+function exitPollOf(raw ExitAnswer) returns ExitPoll
+	if raw < 0 'stillRunning'
+		return ExitPoll.running
+	end 'stillRunning'
+
+	return ExitPoll.exited(raw as ExitInt)
+end 'exitPollOf'
+
+function terminationWithSignal(code ExitInt, signal ExitInt) returns TerminationStatus
+	return TerminationStatus.exited(code) if signal == NoTerminatingSignal else TerminationStatus.signalled(signal)
+end 'terminationWithSignal'
 
 /// What a non-blocking line read found. A union rather than a string-plus-sentinel because a child's own
 /// BLANK LINE is a line and `""` is the only string that could stand for "nothing buffered".

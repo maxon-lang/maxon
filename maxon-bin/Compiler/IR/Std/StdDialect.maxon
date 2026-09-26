@@ -2886,6 +2886,10 @@ export union StdOp
 	// to close.
 	osProcessProbe(resultId ValueId, pidId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: false, isCall: true, clobbersFlags: true, isCmp: false}
 
+	// `osProcessExitSignal(result, handle)` — the signal that ended a reaped POSIX child, 0 for none. It
+	// reaps as `osProcessExitCode` does, so it blocks on a child that has not exited. x64-windows answers 0.
+	osProcessExitSignal(resultId ValueId, handleId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// --- The CONSUMER's half of a named section: CREATE one, and give a mapping back ---
 	//
 	// Both carry `category: system`, placing them logically in the OS band independent of this tail
@@ -2903,6 +2907,11 @@ export union StdOp
 	// `osMapNamedSegment`, which takes a HANDLE and so serves a created section exactly as it serves an
 	// opened one.
 	osCreateNamedSegment(resultId ValueId, namePtrId ValueId, sizeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
+	// `osAdoptNamedSegment(result, namePtr, size)` — open a section already published under the name, without
+	// creating one: `OpenFileMappingA` on Win32, whose answer `SharedMemoryRuntime.emitAdoptAnswer` sizes and
+	// classifies, and the host adopt chunk on POSIX, which answers a handle or a `SharedSegmentAnswer`.
+	osAdoptNamedSegment(resultId ValueId, namePtrId ValueId, sizeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// `osUnmapNamedSegment(base, size)` = `UnmapViewOfFile(base)` / `munmap(base, size)`. No result — the
 	// status is ignored for `osCloseHandle`'s reason.
@@ -3170,6 +3179,7 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 			// type of an already-open handle out of the file object the kernel is holding.
 			osHandleFileType or
 			osProcessProbe or
+			osProcessExitSignal or
 			osHandleSetInherit or
 			osCloseHandle or
 			osFileClose or
@@ -3266,6 +3276,7 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 			// A section create reaches the memory manager and can touch the page file, as the open and the
 			// map do.
 			osCreateNamedSegment or
+			osAdoptNamedSegment or
 
 			// ⚠ One op, thirteen services, so the answer must be the widest member's. Copying a stack
 			// window out of a suspended thread can fault a paged-out page and a module walk reads another
@@ -3399,7 +3410,9 @@ export function stdOpNamesAGlobalLabel(op StdOp) returns bool
 			storeRelease or
 			osHandleFileType or
 			osProcessProbe or
+			osProcessExitSignal or
 			osCreateNamedSegment or
+			osAdoptNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
@@ -3827,7 +3840,9 @@ export function classifyArithOperands(op StdOp, operands StdArithOperands)
 			storeRelease or
 			osHandleFileType or
 			osProcessProbe or
+			osProcessExitSignal or
 			osCreateNamedSegment or
+			osAdoptNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
@@ -4069,7 +4084,9 @@ export function classifyAccessOperands(op StdOp, access StdAccessOperands)
 			osEnvBlockFree or
 			osHandleFileType or
 			osProcessProbe or
+			osProcessExitSignal or
 			osCreateNamedSegment or
+			osAdoptNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
@@ -4388,7 +4405,9 @@ module function classifyCallOperands(op StdOp, call StdCallOperands)
 			storeRelease or
 			osHandleFileType or
 			osProcessProbe or
+			osProcessExitSignal or
 			osCreateNamedSegment or
+			osAdoptNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
@@ -4810,6 +4829,7 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 			osWaitChild or
 			osThreadCreate or
 			osCreateNamedSegment or
+			osAdoptNamedSegment or
 			osFileSize or
 			osFileRename or
 			osFileFindFirst or
@@ -4838,6 +4858,7 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 			osFileAttributes or
 			osHandleFileType or
 			osProcessProbe or
+			osProcessExitSignal or
 			osStdHandle or
 			osSocketStartup or
 			tlsSlotLoad then referenced.insert(operand)
@@ -5051,7 +5072,9 @@ module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 			osEnvBlock or
 			osHandleFileType or
 			osProcessProbe or
+			osProcessExitSignal or
 			osCreateNamedSegment or
+			osAdoptNamedSegment or
 			osHostSample or
 			osNetpoll or
 			osSocketOverlapped or
@@ -5320,7 +5343,9 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osEnvBlockFree(blockPtr) gives StdOp.osEnvBlockFree(remappedValue(blockPtr, subst: subst))
 		osHandleFileType(resultId, handle) gives StdOp.osHandleFileType(resultId, handleId: remappedValue(handle, subst: subst))
 		osProcessProbe(resultId, pid) gives StdOp.osProcessProbe(resultId, pidId: remappedValue(pid, subst: subst))
+		osProcessExitSignal(resultId, handle) gives StdOp.osProcessExitSignal(resultId, handleId: remappedValue(handle, subst: subst))
 		osCreateNamedSegment(resultId, namePtr, size) gives StdOp.osCreateNamedSegment(resultId, namePtrId: remappedValue(namePtr, subst: subst), sizeId: remappedValue(size, subst: subst))
+		osAdoptNamedSegment(resultId, namePtr, size) gives StdOp.osAdoptNamedSegment(resultId, namePtrId: remappedValue(namePtr, subst: subst), sizeId: remappedValue(size, subst: subst))
 		osUnmapNamedSegment(base, size) gives StdOp.osUnmapNamedSegment(remappedValue(base, subst: subst), sizeId: remappedValue(size, subst: subst))
 		osUnpublishNamedSegment(namePtr) gives StdOp.osUnpublishNamedSegment(remappedValue(namePtr, subst: subst))
 
@@ -5652,7 +5677,9 @@ function cloneStdOp(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, 
 			osEnvBlockFree or
 			osHandleFileType or
 			osProcessProbe or
+			osProcessExitSignal or
 			osCreateNamedSegment or
+			osAdoptNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
@@ -6208,7 +6235,9 @@ module function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out
 			storeRelease or
 			osHandleFileType or
 			osProcessProbe or
+			osProcessExitSignal or
 			osCreateNamedSegment or
+			osAdoptNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
@@ -6407,7 +6436,9 @@ module function classifyBranch(op StdOp, out StdBranchOperands)
 			storeRelease or
 			osHandleFileType or
 			osProcessProbe or
+			osProcessExitSignal or
 			osCreateNamedSegment or
+			osAdoptNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or

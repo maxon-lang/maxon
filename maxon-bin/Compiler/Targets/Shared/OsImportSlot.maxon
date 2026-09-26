@@ -160,13 +160,8 @@ export enum OsImportSlot
 	// place that maps a Darwin errno onto the Win32 number `StdOp.osLastError`'s consumers test, which is why
 	// the family costs one slot and not one per failing call.
 	//
-	// ⚠ **`open` IS THE READ HALF AND `creat` THE WRITE HALF, AND THAT PAIRING AVOIDS A VARIADIC CALL.**
-	// `open(path, oflag, ...)` takes its permission bits as a VARARG, which AAPCS64 passes on the STACK — so
-	// a create through `open` would need a frame this lowering does not have. `creat(path, mode)` is
-	// `O_CREAT|O_TRUNC|O_WRONLY` with a NAMED mode parameter and is exactly what `CreateFileA(GENERIC_WRITE,
-	// CREATE_ALWAYS)` means, so the two opens are two non-variadic calls instead of one variadic one.
-	// `openWriteExecutable` is the same call with 0755 rather than 0644 — see `StdOp.osFileOpenWriteExecutable`
-	// for why that is its own op rather than a flag on `osFileOpenWrite`.
+	// `open(path, oflag, ...)` takes its permission bits as a vararg, which AAPCS64 passes on the stack, so
+	// every open goes through `Arm64DarwinRuntime.buildArm64DarwinFileOpenChunk`, whose frame has the room.
 	//
 	// `read`/`close` complete the file handle's life (`write` is five slots up — the same descriptor write
 	// `osWriteStdout` already reaches, because a descriptor is an argument and not a symbol). `fsync` is the
@@ -188,7 +183,6 @@ export enum OsImportSlot
 	// stand in for the other and neither entry point is reachable through the other's slot.
 	errnoLocation
 	open
-	creat
 	read
 	close
 	fsync
@@ -285,22 +279,18 @@ export enum OsImportSlot
 
 	// --- The NAMED SHARED SECTION both ends of a DebugStream ring map ---
 	//
-	// ⭐⭐ **THREE SLOTS BECAUSE POSIX SEPARATES NAMING A SHARED OBJECT FROM SIZING IT, AND WIN32 DOES NOT.**
+	// Three slots because POSIX separates naming a shared object from sizing it, and Win32 does not.
 	// `CreateFileMappingA` takes the name and the length in one call; `shm_open` only names, so the length is
-	// a second call (`ftruncate`) on the descriptor it answers. `shm_unlink` removes the name — the create
-	// side runs it first, so a segment left behind by a monitor that died cannot be adopted as this run's
-	// ring. The MAPPING itself needs no slot: `mmap` is already the page source `osAllocPages` calls, one
-	// `MAP_SHARED` flag word over.
+	// a second call (`ftruncate`) on the descriptor it answers. `shm_unlink` withdraws the name, which only
+	// the publisher does. The mapping needs no slot: `mmap` is already the page source `osAllocPages` calls,
+	// one `MAP_SHARED` flag word over.
 	//
-	// ⚠ **`shm_open` IS VARIADIC AND ITS MODE THEREFORE TRAVELS ON THE STACK**, which is why the create chunk
-	// is the one runtime chunk on this lane with an outgoing-argument region (`Arm64RuntimeAsm.beginFunction`'s
-	// `outgoingArgBytes`). MEASURED on this host with `otool -tV` over a clang-compiled probe: a three-argument
-	// `shm_open` stores 0600 at `[sp]` and passes only the first two in registers.
+	// ⚠ `shm_open` is variadic, so its mode travels on the stack: the chunks that call it have an
+	// outgoing-argument region (`Arm64RuntimeAsm.beginVariadicCallerFunction`).
 	//
-	// ⚠ **NEITHER HAS A LINUX TWIN THIS ENUM COULD SERVE**, for `sysconf`'s reason: `shm_open` is a libc
-	// FUNCTION there rather than a syscall — all it does is prepend `/dev/shm/` and `open` the result — so a
-	// libc-less static image re-answers the question with `openat`/`unlinkat` over a path it builds itself
-	// (`LinuxRuntime.LinuxShmCreateName`) rather than re-spelling this call.
+	// Neither has a Linux twin this enum could serve: `shm_open` is a libc function there — all it does is
+	// prepend `/dev/shm/` and `open` the result — so a libc-less static image uses `openat`/`unlinkat` over a
+	// path it builds itself (`LinuxRuntime.LinuxShmPathName`).
 	shmOpen
 	shmUnlink
 	ftruncate
@@ -418,7 +408,6 @@ export function osImportAnswerOf(slot OsImportSlot) returns ImportAnswer
 			pthreadMutexattrSettype or
 			pthreadMutexattrDestroy or
 			open or
-			creat or
 			close or
 			fsync or
 			stat or

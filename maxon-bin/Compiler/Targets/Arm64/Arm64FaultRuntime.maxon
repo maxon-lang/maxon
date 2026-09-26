@@ -351,9 +351,9 @@ end 'buildArm64FaultHandlerChunk'
 // handler runs there rather than on a green thread's stack. Called by `mrt_runtime_init` for the main thread
 // and by every worker machine as it is born (`SignalStackInstallName`), under AAPCS64 with no argument.
 //
-// ⭐ **ONE BODY FOR BOTH POSIX LANES.** The call is a libSystem import on Darwin and an `svc` on Linux, which
-// `arm64EmitOsPrimitive` already chooses between; what genuinely differs is where `stack_t` puts its three
-// fields, and that is the one thing asked per OS.
+// One body for both POSIX lanes. The call is a libSystem import on Darwin and an `svc` on Linux, which
+// `arm64EmitOsPrimitive` already chooses between; what differs is where `stack_t` puts its three fields and
+// where the size comes from (`arm64EmitSignalStackBytes`), and those are asked per OS.
 //
 // ⚠ **A FAILED `mmap` SKIPS THE `sigaltstack` RATHER THAN REGISTERING ITS ANSWER.** `MAP_FAILED` is -1 and a
 // raw `svc` answers a negative errno; `sigaltstack` validates only the SIZE — it would accept either address
@@ -366,9 +366,8 @@ function buildArm64SignalStackInstallChunk(os Os) returns FunctionCodeChunk
 
 	let done = asm.newLabel()
 
-	// mmap(NULL, SignalStackBytes, RW, MAP_ANON|MAP_PRIVATE, -1, 0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: MmapKernelChoosesBase)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: SignalStackBytes)
+	arm64EmitSignalStackBytes(asm, dest: Arm64Register.x1, os: os)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: MmapProtReadWrite)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: mmapAnonPrivateFlags(os))
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: MmapAnonFd)
@@ -383,7 +382,7 @@ function buildArm64SignalStackInstallChunk(os Os) returns FunctionCodeChunk
 	let sigstack = arm64SigstackLayout(os)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x9, slot: SlotSigstack)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x9, byteOffset: sigstack.sp)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: SignalStackBytes)
+	arm64EmitSignalStackBytes(asm, dest: Arm64Register.x1, os: os)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x9, byteOffset: sigstack.size)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: 0)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x9, byteOffset: sigstack.flags)
@@ -396,6 +395,61 @@ function buildArm64SignalStackInstallChunk(os Os) returns FunctionCodeChunk
 	asm.placeLabel(done)
 	return asm.finishFunction(SignalStackInstallName)
 end 'buildArm64SignalStackInstallChunk'
+
+let Arm64SignalFrameFloorBytes = 8192
+let DarwinSignalStackBytes = SignalStackBytes + (Arm64SignalFrameFloorBytes shl SignalStackKernelFramesShift)
+
+// The alternate stack's size (see `SignalStackBytes`): computed at init on Linux, a constant on Darwin.
+function arm64EmitSignalStackBytes(asm Arm64RuntimeAsm, dest Arm64Register, os Os)
+	match os 'lane'
+		linux then arm64EmitLoadDataWord(asm, dest: dest, label: LinuxSignalStackBytesLabel)
+		macos then arm64EmitMovRuntimeImm(asm, dest: dest, value: DarwinSignalStackBytes)
+		windows then panic("arm64EmitSignalStackBytes: there is no arm64-Windows lane in this compiler")
+		wasi then panic("arm64EmitSignalStackBytes: wasm32-wasi installs no signal stack")
+	end 'lane'
+end 'arm64EmitSignalStackBytes'
+
+// mrt_linux_signal_stack_size — the arm64 twin of `X64Runtime.buildLinuxSignalStackSizeChunk`.
+function buildArm64LinuxSignalStackSizeChunk() returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+	let eachEnvironmentEntry = asm.newLabel()
+	let eachAuxiliaryEntry = asm.newLabel()
+	let nextAuxiliaryEntry = asm.newLabel()
+	let sized = asm.newLabel()
+
+	arm64EmitLoadDataWord(asm, dest: Arm64Register.x9, label: LinuxEnvpLabel)
+
+	asm.placeLabel(eachEnvironmentEntry)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x10, base: Arm64Register.x9, byteOffset: 0)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x9, base: Arm64Register.x9, imm: LinuxVectorEntryBytes as Imm32)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x10, label: eachEnvironmentEntry)
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x11, value: Arm64SignalFrameFloorBytes)
+
+	asm.placeLabel(eachAuxiliaryEntry)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x10, base: Arm64Register.x9, byteOffset: 0)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x10, imm: LinuxAuxVectorEnd as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: sized)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x10, imm: LinuxAuxMinSignalStackSize as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: nextAuxiliaryEntry)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x12, base: Arm64Register.x9, byteOffset: LinuxAuxValueOffset)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x12, rhs: Arm64Register.x11)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ls, label: nextAuxiliaryEntry)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x11, src: Arm64Register.x12)
+
+	asm.placeLabel(nextAuxiliaryEntry)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x9, base: Arm64Register.x9, imm: LinuxAuxEntryBytes as Imm32)
+	arm64EmitBranchTo(asm, label: eachAuxiliaryEntry)
+
+	asm.placeLabel(sized)
+	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x11), rn: arm64RuntimeReg(Arm64Register.x11), sh: SignalStackKernelFramesShift)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x12, value: SignalStackBytes)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x11, lhs: Arm64Register.x11, rhs: Arm64Register.x12)
+	arm64EmitDataAddr(asm, dest: Arm64Register.x9, label: LinuxSignalStackBytesLabel)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x11, base: Arm64Register.x9, byteOffset: 0)
+
+	return asm.finishFunction(LinuxSignalStackSizeName)
+end 'buildArm64LinuxSignalStackSizeChunk'
 
 // `stack_t` is 24 bytes on both lanes and orders its three fields differently — Darwin puts the SIZE second
 // and the flags last, Linux the other way round. One `struct`, two layouts, so each field is asked for.
@@ -481,35 +535,26 @@ end 'arm64EmitDarwinSigactionCall'
 // The Linux install
 // ==========================================================================
 
-// ⭐⭐ **THE KERNEL'S `struct sigaction`, WHICH IS NOT libc's.** `rt_sigaction` takes `sa_handler`, then
-// `sa_flags`, then the mask; AArch64 declares no `SA_RESTORER`, so there is no fourth field here and none of
-// x86-64's mandatory restorer (`X64Runtime.buildLinuxRuntimeInitChunk` carries that lane's shape). VERIFIED
-// on the lane: this struct, through syscall 134, installs a handler that really receives a `ucontext` and
-// really runs on the alternate stack.
-let Arm64LinuxSigactionOffHandler = 0x00 as MachineWord
-let Arm64LinuxSigactionOffFlags = 0x08 as MachineWord
-let Arm64LinuxSigactionOffMask = 0x10 as MachineWord
-let Arm64LinuxSigactionSlots = 3 as StackSize
-
 // mrt_runtime_init (LINUX) — register the fault handler for SIGSEGV/SIGBUS/SIGFPE, and on a program that
 // stops threads the preemption signal's handler beside it. `mrt_start` calls it before `main`, so the very
 // first instruction of user code is already covered.
 //
-// ⚠ **THE MAIN THREAD's ALTERNATE STACK IS REGISTERED FIRST, AND THAT IS THE ONLY ORDER WITH NO WINDOW IN
-// IT** — `SA_ONSTACK` is a promise that a stack exists to switch to.
+// ⚠ The main thread's alternate stack is sized and registered first, the only order with no window in it:
+// `SA_ONSTACK` is a promise that a stack exists to switch to.
 //
-// Slots: 0..2 = the `struct sigaction`, ascending from the lowest, so `&act` is slot 0's address.
+// The `struct sigaction` is the kernel's (`LinuxSigactionOffHandler` owns the layout), in zeroed slots
+// ascending from slot 0, so `&act` is slot 0's address.
 function buildArm64LinuxRuntimeInitChunk(usesGt bool, target Target) returns FunctionCodeChunk
 	let SlotSigaction = 0 as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction(Arm64LinuxSigactionSlots)
+	var asm = Arm64RuntimeAsm.beginFunction(LinuxSigactionSlots)
 
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: LinuxSignalStackSizeName)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: SignalStackInstallName)
 
+	arm64EmitZeroSlots(asm, firstSlot: SlotSigaction, slotCount: LinuxSigactionSlots)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x9, slot: SlotSigaction)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Arm64LinuxSigactionFlags)
-	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x9, byteOffset: Arm64LinuxSigactionOffFlags)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
-	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x9, byteOffset: Arm64LinuxSigactionOffMask)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x9, byteOffset: LinuxSigactionOffFlags as MachineWord)
 
 	arm64EmitLinuxSigactionInstall(asm, handlerName: FaultHandlerName, signal: LinuxSignalSegv, actSlot: SlotSigaction)
 	arm64EmitLinuxSigactionCall(asm, signal: LinuxSignalBus, actSlot: SlotSigaction)
@@ -527,7 +572,7 @@ end 'buildArm64LinuxRuntimeInitChunk'
 function arm64EmitLinuxSigactionInstall(asm Arm64RuntimeAsm, handlerName ByteArray, signal MachineWord, actSlot StackSize)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x9, slot: actSlot)
 	arm64EmitLeaRuntimeFuncAddr(asm, dest: Arm64Register.x0, funcName: handlerName)
-	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x9, byteOffset: Arm64LinuxSigactionOffHandler)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x9, byteOffset: LinuxSigactionOffHandler as MachineWord)
 	arm64EmitLinuxSigactionCall(asm, signal: signal, actSlot: actSlot)
 end 'arm64EmitLinuxSigactionInstall'
 
@@ -550,7 +595,7 @@ end 'arm64EmitLinuxSigactionCall'
 //
 // ⭐ INSTALLED UNCONDITIONALLY, exactly as x64's is and for x64's reason: "can this program fault" is not a
 // question the encode phase can answer, and the cost is a few hundred bytes of `.text` plus one
-// `SignalStackBytes` alternate stack per thread. The PREEMPTION signal is different — it is installed only
+// alternate signal stack per thread. The PREEMPTION signal is different — it is installed only
 // for a program that runs green threads, because nothing else ever sends it.
 //
 // ⛔ **THE INSTALL IS A `match` PER OS.** Each lane's install reads its own struct layout and reaches the
@@ -565,6 +610,11 @@ export function appendArm64FaultRuntimeChunks(chunks FunctionCodeChunkArray, glo
 	end 'installLane'
 
 	chunks.push(buildArm64SignalStackInstallChunk(target.os))
+
+	if target.os == Os.linux 'sizedFromTheAuxiliaryVector'
+		chunks.push(buildArm64LinuxSignalStackSizeChunk())
+	end 'sizedFromTheAuxiliaryVector'
+
 	chunks.push(buildArm64FaultHandlerChunk(globalData, os: target.os))
 	chunks.push(buildArm64FaultBacktraceChunk(globalData))
 	chunks.push(buildArm64WriteHexChunk())

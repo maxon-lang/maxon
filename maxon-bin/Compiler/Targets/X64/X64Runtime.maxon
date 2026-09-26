@@ -1561,7 +1561,8 @@ end 'buildFaultThunkChunk'
 // ⭐ **THE STACK GUARANTEE IS WHAT LETS THE HANDLER REPORT A STACK OVERFLOW.** Windows runs a vectored
 // handler on the faulting stack, which an overflow has spent. `SetThreadStackGuarantee` keeps
 // `SignalStackBytes` beyond the guard page for exactly this — the room a POSIX lane's alternate signal
-// stack gives its handler. It takes the size through a pointer (and writes the previous one back).
+// stack gives its handler above the kernel's own frames. It takes the size through a pointer (and writes
+// the previous one back).
 //
 // Slots: 0 = the guarantee's size.
 function buildRuntimeInitChunk() returns FunctionCodeChunk
@@ -1714,15 +1715,16 @@ function buildLinuxSigreturnTrampolineChunk() returns FunctionCodeChunk
 end 'buildLinuxSigreturnTrampolineChunk'
 
 // mrt_write_cstr_stderr (LINUX) — rcx = NUL-terminated string. The Linux twin of `buildWriteStderrChunk`:
-// the same strlen, then a single `write(2, cstr, len)` syscall where the Windows one hands the bytes to
-// `mrt_write_stream`. Keeps the file's internal Win64 convention (the string arrives in rcx).
+// the same strlen, then `write(2, cstr, len)` where the Windows one hands the bytes to `mrt_write_stream`.
+// Keeps the file's internal Win64 convention (the string arrives in rcx).
 //
-// ⭐ It measures, writes and guards the empty case in ONE body because a descriptor takes bytes as they
-// are: there is nothing on this lane for a stream writer to decide, so there is no `mrt_write_stream`
-// beneath it to decide it.
+// The write loops: a short write resumes at the first unwritten byte, and an interrupted one is re-issued.
+// It measures, writes and guards the empty case in one body because a descriptor takes bytes as they are:
+// there is nothing on this lane for a stream writer to decide.
 function buildLinuxWriteStderrChunk() returns FunctionCodeChunk
 	var asm = X64RuntimeAsm.beginFunction(0)
 
+	let writeLap = asm.newLabel()
 	let done = asm.newLabel()
 
 	// rcx (the string start) is held untouched across the walk; len = rax - rcx.
@@ -1737,7 +1739,14 @@ function buildLinuxWriteStderrChunk() returns FunctionCodeChunk
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.rax, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.rcx, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: StderrFd)
-	encodeX64Syscall(asm.code, number: X64LinuxSyscallWrite)
+
+	asm.placeLabel(writeLap)
+	x64LinuxEmitSyscallRestartingOnEintr(asm, number: X64LinuxSyscallWrite)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.lessEqual, targetBlockId: done)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.rsi, src: X64Register.rax, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: X64Register.rdx, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: writeLap)
 
 	asm.placeLabel(done)
 	return asm.finishFunction(WriteStderrName)
@@ -1809,7 +1818,7 @@ end 'buildLinuxFaultHandlerChunk'
 // __signal_stack_install (LINUX) — map this OS thread's alternate signal stack and register it, so the
 // `SA_ONSTACK` handler below runs there rather than on a green thread's stack. Called by `mrt_runtime_init` for
 // the main thread and by every worker machine as it is born (`SignalStackInstallName`), under the internal
-// ABI: no argument, and nothing it touches is callee-saved.
+// ABI: no argument, and nothing it touches is callee-saved. The size is `__mrt_signal_stack_bytes`.
 //
 // ⚠ **A REFUSED `mmap` SKIPS THE REGISTRATION.** `sigaltstack` validates only the size and would accept a
 // negative errno as the base, making the first signal a kernel stack switch onto it; without the registration
@@ -1818,7 +1827,8 @@ function buildLinuxSignalStackInstallChunk() returns FunctionCodeChunk
 	var asm = X64RuntimeAsm.beginFunction(LinuxStackTSlots)
 	let done = asm.newLabel()
 
-	encodeX64MmapAnon(asm.code, length: X64MapLength.fixed(SignalStackBytes))
+	x64LinuxEmitSignalStackBytes(asm, dest: X64Register.rsi)
+	encodeX64MmapAnon(asm.code, length: X64MapLength.inRegister(X64Register.rsi))
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.lessEqual, targetBlockId: done)
 
@@ -1827,7 +1837,7 @@ function buildLinuxSignalStackInstallChunk() returns FunctionCodeChunk
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rdi, disp: LinuxStackTOffSp, srcReg: X64Register.rax, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rdi, disp: LinuxStackTOffFlags, srcReg: X64Register.rax, wide: true)
-	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: SignalStackBytes)
+	x64LinuxEmitSignalStackBytes(asm, dest: X64Register.rax)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rdi, disp: LinuxStackTOffSize, srcReg: X64Register.rax, wide: true)
 
 	// sigaltstack(&ss, NULL)
@@ -1838,59 +1848,111 @@ function buildLinuxSignalStackInstallChunk() returns FunctionCodeChunk
 	return asm.finishFunction(SignalStackInstallName)
 end 'buildLinuxSignalStackInstallChunk'
 
+function x64LinuxEmitSignalStackBytes(asm X64RuntimeAsm, dest X64Register)
+	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: dest, label: LinuxSignalStackBytesLabel)
+	encodeLoadRegBaseDisp(asm.code, destReg: dest, base: dest, disp: 0, wide: true)
+end 'x64LinuxEmitSignalStackBytes'
+
+let X64SignalFrameFloorBytes = 4096
+
+// mrt_linux_signal_stack_size — fill `__mrt_signal_stack_bytes` with `SignalStackBytes` plus two kernel
+// frames, each the larger of `AT_MINSIGSTKSZ` and the floor above. The auxiliary vector is found by walking
+// past `envp`'s NULL terminator.
+function buildLinuxSignalStackSizeChunk() returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(0)
+	let eachEnvironmentEntry = asm.newLabel()
+	let eachAuxiliaryEntry = asm.newLabel()
+	let nextAuxiliaryEntry = asm.newLabel()
+	let sized = asm.newLabel()
+
+	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.rcx, label: LinuxEnvpLabel)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rcx, disp: 0, wide: true)
+
+	asm.placeLabel(eachEnvironmentEntry)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: 0, wide: true)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rcx, imm: LinuxVectorEntryBytes as Imm32)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: eachEnvironmentEntry)
+
+	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: X64SignalFrameFloorBytes)
+
+	asm.placeLabel(eachAuxiliaryEntry)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: 0, wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: LinuxAuxVectorEnd as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: sized)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: LinuxAuxMinSignalStackSize as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: nextAuxiliaryEntry)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rcx, disp: LinuxAuxValueOffset as Imm32, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rdx, src: X64Register.r8, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.belowEqual, targetBlockId: nextAuxiliaryEntry)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r8, src: X64Register.rdx, wide: true)
+
+	asm.placeLabel(nextAuxiliaryEntry)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rcx, imm: LinuxAuxEntryBytes as Imm32)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: eachAuxiliaryEntry)
+
+	asm.placeLabel(sized)
+	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShl, reg: X64Register.r8, count: SignalStackKernelFramesShift)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.r8, imm: SignalStackBytes as Imm32)
+	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.rcx, label: LinuxSignalStackBytesLabel)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.r8, wide: true)
+
+	return asm.finishFunction(LinuxSignalStackSizeName)
+end 'buildLinuxSignalStackSizeChunk'
+
 // mrt_runtime_init (LINUX) — registers the fault handler for SIGFPE, SIGSEGV and SIGBUS, and on a lane that
 // stops threads the SIGURG one too, via rt_sigaction. `mrt_start` calls this before `main`, so the first user
 // instruction is already covered. The Linux twin of `buildRuntimeInitChunk`.
-// It installs the main thread's signal stack FIRST — `SA_ONSTACK` is a promise that one exists, so the
-// handler is not made reachable before it does. Then it builds a `struct sigaction` on the stack: the handler
-// address, `X64LinuxSigactionFlags`, the mandatory restorer, and an empty mask — then one
-// rt_sigaction(signal, &act, NULL, 8) per signal. Slots 0..3 are the 32-byte struct, ascending from the LOWEST
-// slot so `&act` (= the lowest field, sa_handler) is `slotDisp(3)`.
+// It sizes and installs the main thread's signal stack first — `SA_ONSTACK` is a promise that one exists, so
+// the handler is not made reachable before it does. Then it builds the kernel's `struct sigaction` in zeroed
+// slots (`LinuxSigactionOffHandler` owns the layout): the handler, `X64LinuxSigactionFlags`, the mandatory
+// restorer, and the mask left empty — then one rt_sigaction(signal, &act, NULL, 8) per signal.
 //
-// ⭐ **THE PREEMPTION INSTALL REWRITES ONLY `sa_handler`.** The flags, the restorer and the mask are the same
-// three words for every signal, so the struct is built once and the one field that differs is stored again.
+// Each later install rewrites only the handler: the flags, the restorer and the mask are the same for every
+// signal.
 function buildLinuxRuntimeInitChunk(usesGt bool, target Target) returns FunctionCodeChunk
-	let SlotHandler = 3  // rbp-32 = &act = sa_handler (offset 0)
-	let SlotFlags = 2  // rbp-24 = sa_flags (offset 8)
-	let SlotRestorer = 1  // rbp-16 = sa_restorer (offset 16)
-	let SlotMask = 0  // rbp-8 = sa_mask (offset 24)
-	var asm = X64RuntimeAsm.beginFunction(4)
+	let SlotSigaction = 0 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(LinuxSigactionSlots)
 
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: LinuxSignalStackSizeName)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: SignalStackInstallName)
 
-	encodeLeaRegFuncAddr(asm.code, callFixups: asm.callFixups, dest: X64Register.rax, targetName: FaultHandlerName)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotHandler), srcReg: X64Register.rax, wide: true)
+	x64LinuxEmitZeroSlots(asm, firstSlot: SlotSigaction, slotCount: LinuxSigactionSlots)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: X64LinuxSigactionFlags)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFlags), srcReg: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: x64LinuxSigactionFieldDisp(asm, actFirstSlot: SlotSigaction, field: LinuxSigactionOffFlags), srcReg: X64Register.rax, wide: true)
 
 	// sa_restorer = &mrt_rt_sigreturn — MANDATORY on x86-64: the kernel builds the signal return frame from
 	// it, and a missing/NULL restorer is a KERNEL SIGSEGV during delivery (measured), before the handler.
 	encodeLeaRegFuncAddr(asm.code, callFixups: asm.callFixups, dest: X64Register.rax, targetName: LinuxSigreturnName)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRestorer), srcReg: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: x64LinuxSigactionFieldDisp(asm, actFirstSlot: SlotSigaction, field: LinuxSigactionOffRestorer), srcReg: X64Register.rax, wide: true)
 
-	// sa_mask = 0 (block nothing additional during the handler).
-	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotMask), srcReg: X64Register.rax, wide: true)
-
-	emitLinuxSigactionCall(asm, signal: LinuxSignalFpe, handlerSlot: SlotHandler)
-	emitLinuxSigactionCall(asm, signal: LinuxSignalSegv, handlerSlot: SlotHandler)
-	emitLinuxSigactionCall(asm, signal: LinuxSignalBus, handlerSlot: SlotHandler)
+	emitX64LinuxSigactionInstall(asm, actFirstSlot: SlotSigaction, handlerName: FaultHandlerName, signal: LinuxSignalFpe)
+	emitLinuxSigactionCall(asm, signal: LinuxSignalSegv, actFirstSlot: SlotSigaction)
+	emitLinuxSigactionCall(asm, signal: LinuxSignalBus, actFirstSlot: SlotSigaction)
 
 	if programInstallsPreemptSignal(target, usesGt: usesGt) 'itCanStopAThread'
-		encodeLeaRegFuncAddr(asm.code, callFixups: asm.callFixups, dest: X64Register.rax, targetName: PreemptHandlerName)
-		encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotHandler), srcReg: X64Register.rax, wide: true)
-		emitLinuxSigactionCall(asm, signal: LinuxSignalUrg, handlerSlot: SlotHandler)
+		emitX64LinuxSigactionInstall(asm, actFirstSlot: SlotSigaction, handlerName: PreemptHandlerName, signal: LinuxSignalUrg)
 	end 'itCanStopAThread'
 
 	return asm.finishFunction(RuntimeInitName)
 end 'buildLinuxRuntimeInitChunk'
 
+function x64LinuxSigactionFieldDisp(asm X64RuntimeAsm, actFirstSlot StackSize, field ParsedInt) returns Imm32
+	return x64LinuxBufferDisp(asm, firstSlot: actFirstSlot, slotCount: LinuxSigactionSlots) + (field as Imm32)
+end 'x64LinuxSigactionFieldDisp'
+
+function emitX64LinuxSigactionInstall(asm X64RuntimeAsm, actFirstSlot StackSize, handlerName ByteArray, signal MachineWord)
+	encodeLeaRegFuncAddr(asm.code, callFixups: asm.callFixups, dest: X64Register.rax, targetName: handlerName)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: x64LinuxSigactionFieldDisp(asm, actFirstSlot: actFirstSlot, field: LinuxSigactionOffHandler), srcReg: X64Register.rax, wide: true)
+	emitLinuxSigactionCall(asm, signal: signal, actFirstSlot: actFirstSlot)
+end 'emitX64LinuxSigactionInstall'
+
 // rt_sigaction(signal, &act, NULL, 8): rdi=signal, rsi=&act (the struct's lowest field), rdx=0 (oldact),
 // r10=8 (the kernel's sigset_t size). `&act` is re-derived per call because `syscall` clobbers rcx and r11
 // and a second install would have to keep it live across the first.
-function emitLinuxSigactionCall(asm X64RuntimeAsm, signal MachineWord, handlerSlot StackSize)
+function emitLinuxSigactionCall(asm X64RuntimeAsm, signal MachineWord, actFirstSlot StackSize)
 	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: signal)
-	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(handlerSlot))
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: x64LinuxBufferDisp(asm, firstSlot: actFirstSlot, slotCount: LinuxSigactionSlots))
 	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rdx, src: X64Register.rdx, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: LinuxSigsetBytes)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallRtSigaction)
@@ -2256,9 +2318,9 @@ function buildDebugTrapThunkChunk() returns FunctionCodeChunk
 	return asm.finishFunction(DebugTrapThunkName)
 end 'buildDebugTrapThunkChunk'
 
-// The Linux-ONLY half: the rt_sigaction `runtime_init`, the signal-stack install it and every worker machine
-// call, the sigreturn trampoline and the signal `fault_handler`, over a `write`-syscall stderr writer published
-// under the same `mrt_write_cstr_stderr` label the Windows writer uses — which is what lets the shared chunks
+// The Linux-ONLY half: the rt_sigaction `runtime_init`, the signal-stack sizing it calls, the signal-stack
+// install it and every worker machine call, the sigreturn trampoline and the signal `fault_handler`, over a
+// `write`-syscall stderr writer published under the same `mrt_write_cstr_stderr` label the Windows writer uses — which is what lets the shared chunks
 // call it without knowing which lane they are on.
 //
 // ⚠ Every OS call in this half is a raw `syscall` instruction, which runs on whatever stack it is on and asks
@@ -2266,6 +2328,7 @@ end 'buildDebugTrapThunkChunk'
 function appendX64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool, target Target)
 	chunks.push(buildLinuxRuntimeInitChunk(usesGt, target: target))
 	chunks.push(buildLinuxSignalStackInstallChunk())
+	chunks.push(buildLinuxSignalStackSizeChunk())
 	chunks.push(buildLinuxSigreturnTrampolineChunk())
 	chunks.push(buildLinuxFaultHandlerChunk())
 	chunks.push(buildLinuxWriteStderrChunk())

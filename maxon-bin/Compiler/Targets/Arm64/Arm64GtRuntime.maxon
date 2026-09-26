@@ -387,8 +387,7 @@ end 'arm64LinuxEmitBailOnNullThreadPointer'
 // AFTER it has the GT (it reads the M's system stack out of it), so the two answers cannot share one
 // register — and because the guard's cold path wants the M and nothing else.
 function emitArm64LoadCurrentMOrBail(asm Arm64RuntimeAsm, dest Arm64Register, scratch Arm64Register, bail BlockId, os Os)
-	arm64EmitAdrpAddPair(asm.code, rdataRelocs: asm.rdataRelocs, dest: arm64RuntimeReg(scratch), label: SchedTlsTebOffsetLabel, adrpKind: RdataRelocKind.dataSectionArm64Adrp, pageOffKind: RdataRelocKind.dataSectionArm64PageOff)
-	arm64EmitLoadWord64At(asm, dest: scratch, base: scratch, byteOffset: 0)
+	arm64EmitLoadDataWord(asm, dest: scratch, label: SchedTlsTebOffsetLabel)
 	arm64EmitCbzTo(asm, reg: scratch, label: bail)
 	arm64EmitThreadPointer(asm.code, dest: arm64RuntimeReg(dest), source: arm64ThreadPointerSource(os))
 	arm64LinuxEmitBailOnNullThreadPointer(asm, reg: dest, bail: bail, os: os)
@@ -944,8 +943,7 @@ export let Arm64ImportCallGtStackBytes = 0 as StackSize
 // becomes an M once and never unbecomes one. A test here would need a branch target with no correct
 // destination.
 function emitArm64LoadCurrentMOrBailless(asm Arm64RuntimeAsm, dest Arm64Register, scratch Arm64Register, os Os)
-	arm64EmitAdrpAddPair(asm.code, rdataRelocs: asm.rdataRelocs, dest: arm64RuntimeReg(scratch), label: SchedTlsTebOffsetLabel, adrpKind: RdataRelocKind.dataSectionArm64Adrp, pageOffKind: RdataRelocKind.dataSectionArm64PageOff)
-	arm64EmitLoadWord64At(asm, dest: scratch, base: scratch, byteOffset: 0)
+	arm64EmitLoadDataWord(asm, dest: scratch, label: SchedTlsTebOffsetLabel)
 	arm64EmitThreadPointer(asm.code, dest: arm64RuntimeReg(dest), source: arm64ThreadPointerSource(os))
 	arm64EmitLoadRegOffset(asm.code, dest: arm64RuntimeReg(dest), base: arm64RuntimeReg(dest), index: arm64RuntimeReg(scratch))
 end 'emitArm64LoadCurrentMOrBailless'

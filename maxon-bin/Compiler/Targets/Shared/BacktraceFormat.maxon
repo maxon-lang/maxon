@@ -550,10 +550,14 @@ export let GtStackOverflowName = b"mrt_gt_stack_overflow"
 // stack, which is a few kilobytes with no room for it. `sigaltstack` is PER THREAD, so the main thread's is
 // installed by `mrt_runtime_init` and each worker machine's as it is born (`SchedRuntime.buildSchedLoop`)
 // — one per OS thread that runs green threads. The name wears the `__` band because the Std tier calls it.
-// 32 KB is Go's `gsignal` stack: the kernel's signal frame — x86-64's with an AVX-512 XSAVE area, or
-// Darwin/arm64's with its NEON state — plus the diagnostic frames under it.
+//
+// `SignalStackBytes` is the room for the runtime's own handler frames. The stack mapped is that plus two
+// kernel signal frames, because a fault and a preemption signal nested inside it can both land on it (the
+// handlers' mask is empty). A kernel frame's size depends on the CPU's register state, so Linux reads
+// `AT_MINSIGSTKSZ` at init into `__mrt_signal_stack_bytes`; Darwin adds a fixed floor per frame.
 export let SignalStackInstallName = b"__signal_stack_install"
 export let SignalStackBytes = 0x8000 as MachineWord
+export let SignalStackKernelFramesShift = 1 as ShiftCount
 
 // ⭐⭐ **THE MAIN GREEN THREAD's ENTRY — THE HALF OF `mrt_start` THAT RUNS ON `main`'s OWN STACK.** A program
 // with green threads runs `main` on one (`GtRuntime.GtRunMainName`): the trampoline calls this thunk, which

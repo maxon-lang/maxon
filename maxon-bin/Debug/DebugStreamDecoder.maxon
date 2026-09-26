@@ -200,8 +200,8 @@ function sharedMemoryReason(reason SharedMemoryError) returns String
 	match reason 'k'
 		createFailed then return "{SegmentCreateCallName} refused the section"
 		mapFailed then return "{SegmentMapCallName} refused the view"
-		invalidName then panic("DebugStreamDecoder.sharedMemoryReason: `mintSegmentName` answers a name within `SharedSegment.create`'s rule, so `invalidName` means the two disagree")
-		outOfBounds then panic("DebugStreamDecoder.sharedMemoryReason: `segmentUnavailable` carries only what `SharedSegment.create` throws, and an accessor's `outOfBounds` is not among it")
+		invalidName then panic("DebugStreamDecoder.sharedMemoryReason: `mintSegmentName` answers a name within `SharedSegment.publish`'s rule, so `invalidName` means the two disagree")
+		outOfBounds then panic("DebugStreamDecoder.sharedMemoryReason: `segmentUnavailable` carries only what `SharedSegment.publish` throws, and an accessor's `outOfBounds` is not among it")
 	end 'k'
 end 'sharedMemoryReason'
 
@@ -233,7 +233,7 @@ module type DebugStreamDecoder
 	/// it, it is a run that would print `tag=1` for every event and a golden that would fail without ever
 	/// saying why.
 	module static function create(target FilePath, filter FamilyFilter) returns DebugStreamDecoder throws DecoderError
-		let segment = try SharedSegment.create(mintSharedSegmentName(SegmentNamePrefix), bytes: DsSharedMemoryBytes) otherwise (e) 'noSegment'
+		let segment = try SharedSegment.publish(mintSharedSegmentName(SegmentNamePrefix), bytes: DsSharedMemoryBytes) otherwise (e) 'noSegment'
 			throw DecoderError.segmentUnavailable(e)
 		end 'noSegment'
 

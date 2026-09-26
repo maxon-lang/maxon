@@ -15,8 +15,10 @@ what it finds there. `stdlib/SharedMemory.maxon` is the door to that section, an
 consumer of the ring can be written in Maxon at all: without it the tree holds no decoder for the
 ring.
 
-`SharedSegment.create(name, bytes:)` creates a NEW section of exactly that many bytes and maps it into
-this process; the mapping is torn down by `close()`. `readWord` / `writeWord` address the mapping in
+`SharedSegment.create(name, bytes:)` publishes a section of that many bytes under the name, or adopts
+the one already published there, and maps it into this process; `SharedSegment.publish(name, bytes:)`
+publishes a new section and refuses a name that is already published. The mapping is torn down by
+`close()`, which withdraws the name only when this segment published it. `readWord` / `writeWord` address the mapping in
 64-bit words at a byte offset, `copyOut` lifts a byte range out of it, and `segmentName()` answers the
 name the section is published under — the one a second process needs in order to map the same bytes.
 
@@ -260,4 +262,102 @@ end 'main'
 ```
 ```exitcode
 7
+```
+
+<!-- test: shared-memory-builtins.an-adopter-closing-keeps-the-publishers-name -->
+A second `create` of a published name ADOPTS the section, and its `close()` releases only its own view:
+the name stays published for as long as the publisher holds it. A third `create` of the same name after
+the adopter has closed therefore adopts the publisher's section again and reads the word the publisher
+wrote (77); an adopter that withdrew the name would leave the third `create` publishing a fresh, zeroed
+section (0).
+```maxon
+function main() returns ExitCode
+	var publisher = try SharedSegment.create("maxon-spec-shm-adopter-close", bytes: 4096) otherwise return 3
+	try publisher.writeWord(0, value: 77) otherwise return 4
+	var adopter = try SharedSegment.create("maxon-spec-shm-adopter-close", bytes: 4096) otherwise return 5
+	let seen = try adopter.readWord(0) otherwise return 6
+	adopter.close()
+	var later = try SharedSegment.create("maxon-spec-shm-adopter-close", bytes: 4096) otherwise return 7
+	let stillSeen = try later.readWord(0) otherwise return 8
+	later.close()
+	publisher.close()
+	print("adopter={seen} later={stillSeen}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+adopter=77 later=77
+```
+```exitcode
+0
+```
+
+<!-- test: shared-memory-builtins.publish-refuses-a-name-already-published -->
+`SharedSegment.publish` never adopts: a name some other segment already publishes is refused with
+`createFailed` (3), so a caller that needs a FRESH section can never be handed a stale one. Once the
+publisher closes, the name is free and a second `publish` succeeds (5).
+```maxon
+function publishOutcome(name String) returns ExitCode
+	var segment = try SharedSegment.publish(name, bytes: 4096) otherwise (e) 'refused'
+		return match e 'why'
+			createFailed gives 3
+			invalidName or
+				mapFailed or
+				outOfBounds gives 4
+		end 'why'
+	end 'refused'
+
+	segment.close()
+	return 5 as ExitCode
+end 'publishOutcome'
+
+function main() returns ExitCode
+	var first = try SharedSegment.publish("maxon-spec-shm-publish-twice", bytes: 4096) otherwise return 6
+	let whileHeld = publishOutcome("maxon-spec-shm-publish-twice")
+	first.close()
+	let afterClose = publishOutcome("maxon-spec-shm-publish-twice")
+	print("while-held={whileHeld} after-close={afterClose}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+while-held=3 after-close=5
+```
+```exitcode
+0
+```
+
+<!-- test: shared-memory-builtins.create-refuses-an-existing-segment-too-small -->
+A `create` that finds the name already published by a section smaller than it asks for is refused at once with
+`createFailed` (3) on every lane, rather than retried or handed a mapping shorter than asked. Asking for no more
+than the section holds adopts it (5).
+```maxon
+function createOutcome(name String, bytes SegmentByteCount) returns ExitCode
+	var segment = try SharedSegment.create(name, bytes: bytes) otherwise (e) 'refused'
+		return match e 'why'
+			createFailed gives 3
+			invalidName or
+				mapFailed or
+				outOfBounds gives 4
+		end 'why'
+	end 'refused'
+
+	segment.close()
+	return 5 as ExitCode
+end 'createOutcome'
+
+function main() returns ExitCode
+	var publisher = try SharedSegment.publish("maxon-spec-shm-too-small", bytes: 4096) otherwise return 6
+	let larger = createOutcome("maxon-spec-shm-too-small", bytes: 65536)
+	let same = createOutcome("maxon-spec-shm-too-small", bytes: 4096)
+	publisher.close()
+	print("larger={larger} same={same}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+larger=3 same=5
+```
+```exitcode
+0
 ```

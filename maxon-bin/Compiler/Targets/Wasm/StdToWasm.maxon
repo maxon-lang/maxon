@@ -790,7 +790,9 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 			storeRelease or
 			osHandleFileType or
 			osProcessProbe or
+			osProcessExitSignal or
 			osCreateNamedSegment or
+			osAdoptNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
@@ -1395,7 +1397,9 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 			osEnvBlockFree or
 			osHandleFileType or
 			osProcessProbe or
+			osProcessExitSignal or
 			osCreateNamedSegment or
+			osAdoptNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
@@ -1728,7 +1732,9 @@ type WasmFuncEmitter
 				storeRelease then panic("emitStraightLineTerminator: an ordered load or store is a body op, never a terminator")
 			osHandleFileType then panic("emitStraightLineTerminator: `osHandleFileType` is a body op, never a terminator")
 			osProcessProbe then panic("emitStraightLineTerminator: `osProcessProbe` is a body op, never a terminator")
+			osProcessExitSignal then panic("emitStraightLineTerminator: `osProcessExitSignal` is a body op, never a terminator")
 			osCreateNamedSegment or
+				osAdoptNamedSegment or
 				osUnmapNamedSegment or
 				osUnpublishNamedSegment then panic("emitStraightLineTerminator: a named-section create or unmap is a body op, never a terminator")
 			covPoint then panic("emitStraightLineTerminator: a coverage counter is a body op, never a terminator")
@@ -1901,7 +1907,9 @@ type WasmFuncEmitter
 				storeRelease then panic("emitDispatcherTerminator: an ordered load or store is a body op, never a terminator")
 			osHandleFileType then panic("emitDispatcherTerminator: `osHandleFileType` is a body op, never a terminator")
 			osProcessProbe then panic("emitDispatcherTerminator: `osProcessProbe` is a body op, never a terminator")
+			osProcessExitSignal then panic("emitDispatcherTerminator: `osProcessExitSignal` is a body op, never a terminator")
 			osCreateNamedSegment or
+				osAdoptNamedSegment or
 				osUnmapNamedSegment or
 				osUnpublishNamedSegment then panic("emitDispatcherTerminator: a named-section create or unmap is a body op, never a terminator")
 			covPoint then panic("emitDispatcherTerminator: a coverage counter is a body op, never a terminator")
@@ -2139,7 +2147,9 @@ type WasmFuncEmitter
 			// `false` without asking, so the op is never emitted on it and there is nothing for a gate to reject.
 			osHandleFileType then panic("emitBodyOp: `osHandleFileType` has no WASI spelling and is never emitted on this lane — `installTerminalRuntime` reads `HostFacility.terminalDetection` and builds the fallback `__tty_stdout_wants_color` body (answering `false`) instead of asking. Reaching here is a compiler bug, not a program this lane should have rejected")
 			osProcessProbe then panic("emitBodyOp: `osProcessProbe` has no wasm32-wasi lowering — a WASI component can name no other process, and SemanticCheck refuses such a program at its own source span (E3104)")
+			osProcessExitSignal then panic("emitBodyOp: `osProcessExitSignal` has no wasm32-wasi lowering — a WASI component spawns no child, and SemanticCheck refuses the subprocess family at its own source span (E3104)")
 			osCreateNamedSegment or
+				osAdoptNamedSegment or
 				osUnmapNamedSegment or
 				osUnpublishNamedSegment then panic("emitBodyOp: the named-section CONSUMER primitives have no WASI spelling — `stdlib/SharedMemory.maxon` is refused at the call's own span on a lane that provides no named section (E3104), so this is the backstop for a compiler bug that got one past that gate rather than the user-facing rejection")
 			covPoint then panic("emitBodyOp: a coverage counter has no wasm32-wasi spelling — `--coverage` is refused for a target that cannot MEASURE coverage (`targetCanMeasureCoverage`), where the whole BUILD is rejected rather than one op, so this is the backstop for a compiler bug that got a point past that gate")
@@ -3665,7 +3675,9 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 			storeRelease then panic("decideDispatcher: an ordered load or store is a body op, never a terminator")
 		osHandleFileType then panic("decideDispatcher: `osHandleFileType` is a body op, never a terminator")
 		osProcessProbe then panic("decideDispatcher: `osProcessProbe` is a body op, never a terminator")
+		osProcessExitSignal then panic("decideDispatcher: `osProcessExitSignal` is a body op, never a terminator")
 		osCreateNamedSegment or
+			osAdoptNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment then panic("decideDispatcher: a named-section create or unmap is a body op, never a terminator")
 		covPoint then panic("decideDispatcher: a coverage counter is a body op, never a terminator")

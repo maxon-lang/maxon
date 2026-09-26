@@ -670,7 +670,11 @@ export function installStringRuntime(module StdModule, usage RuntimeUsage)
 end 'installStringRuntime'
 
 // `__write_stdout(mm)` / `__write_stderr(mm)` — write a `__ManagedMemory`'s bytes to a standard stream, no
-// trailing newline, answering the byte count the OS reports.
+// trailing newline, answering how many bytes reached it.
+//
+// A short write resumes at the first unwritten byte and a POSIX `-EINTR` is re-issued, because a pipe or a
+// terminal may take part of a write and a signal may interrupt one; the loop stops at the first answer that
+// writes nothing.
 //
 // It loads `buffer@0` and `length@8` from the record and hands them to the stream's system op, which lowers
 // per target — x64-windows to `GetStdHandle` + `WriteFile` through the IAT, arm64-macOS to a POSIX `write`
@@ -702,14 +706,45 @@ function buildStreamWrite(module StdModule, name ByteArray, stream OsOutputStrea
 	let length = ids.mint()
 	module.appendOp(entry, op: StdOp.loadIndirect(length, addrId: record, offset: StringLengthOffset, valueType: StdType.i64))
 
+	var header = module.addBlock(func, label: b"wrhdr", heat: BlockHeat.normal)
+	var lap = module.addBlock(func, label: b"wrlap", heat: BlockHeat.normal)
+	var reissue = module.addBlock(func, label: b"wrretry", heat: BlockHeat.cold)
+	var answered = module.addBlock(func, label: b"wranswer", heat: BlockHeat.normal)
+	var advance = module.addBlock(func, label: b"wradv", heat: BlockHeat.normal)
+	var finished = module.addBlock(func, label: b"wrdone", heat: BlockHeat.normal)
+
+	let nothingWritten = emitConst(module, block: entry, value: 0, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(header.id))
+	entry.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(nothingWritten)))
+
+	let done = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(done, argType: StdType.i64))
+	let allWritten = emitCmp(module, block: header, a: done, b: length, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(header, op: StdOp.condBranch(allWritten, thenBlockId: finished.id, elseBlockId: lap.id))
+
+	let cursor = emitBin(module, block: lap, a: buffer, b: done, opcode: StdBinOpcode.add, ids: ids)
+	let remaining = emitBin(module, block: lap, a: length, b: done, opcode: StdBinOpcode.sub, ids: ids)
 	let written = ids.mint()
 
 	match stream 's'
-		standardOutput then module.appendOp(entry, op: StdOp.osWriteStdout(written, bufId: buffer, lenId: length))
-		standardError then module.appendOp(entry, op: StdOp.osWriteStderr(written, bufId: buffer, lenId: length))
+		standardOutput then module.appendOp(lap, op: StdOp.osWriteStdout(written, bufId: cursor, lenId: remaining))
+		standardError then module.appendOp(lap, op: StdOp.osWriteStderr(written, bufId: cursor, lenId: remaining))
 	end 's'
 
-	module.setTerminator(entry, op: StdOp.ret(written))
+	let interrupted = emitCmp(module, block: lap, a: written, b: emitConst(module, block: lap, value: 0 - PosixErrno.interrupted.rawValue, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(lap, op: StdOp.condBranch(interrupted, thenBlockId: reissue.id, elseBlockId: answered.id))
+
+	module.setTerminator(reissue, op: StdOp.branch(header.id))
+	reissue.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(done)))
+
+	let progressed = emitCmp(module, block: answered, a: written, b: emitConst(module, block: answered, value: 0, ids: ids), pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(answered, op: StdOp.condBranch(progressed, thenBlockId: advance.id, elseBlockId: finished.id))
+
+	let doneAfter = emitBin(module, block: advance, a: done, b: written, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(advance, op: StdOp.branch(header.id))
+	advance.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(doneAfter)))
+
+	module.setTerminator(finished, op: StdOp.ret(done))
 
 	module.functions.push(func)
 end 'buildStreamWrite'

@@ -1,7 +1,7 @@
 /// A NAMED SHARED SECTION — a block of bytes two processes both map, addressed by name.
 ///
-/// One process CREATES a section of a fixed size and publishes it under a name; another maps the same
-/// name and sees the same bytes. That is how a DebugStream trace travels: the traced child writes
+/// One process publishes a section of a fixed size under a name; another adopts the same name and sees
+/// the same bytes. That is how a DebugStream trace travels: the traced child writes
 /// fixed-size records into a ring inside the section, and the process watching it decodes what it finds
 /// there. Nothing about the ring's layout is here — this file is the door to the bytes.
 ///
@@ -12,7 +12,8 @@
 ///
 /// Forgetting `close()` leaks the mapping AND keeps the section alive: a Win32 section object outlives
 /// its handle for as long as any view of it is mapped, and a POSIX one outlives every descriptor and
-/// every mapping until its name is removed — until the next reboot.
+/// every mapping until its publisher removes its name — until the next reboot. On POSIX a section left
+/// behind by a publisher that exited without `close()` is adopted by the next `create` of its name.
 ///
 /// Available on `x64-windows` (Win32 section objects), on `arm64-macos` (`shm_open` + `mmap`) and on both
 /// Linux lanes (a `/dev/shm` file + `mmap`), the same targets the DebugStream host primitives reach. A call
@@ -50,6 +51,13 @@ typealias ByteArray = Array with Byte
 // answers descriptor 0 — never a real one, because fd 0 is standard input and the runtime mints no handle
 // there. It is also what a teardown passes for the half a failed create never made.
 let NoSection = 0
+
+// The runtime's `SharedSegmentAnswer`s, pinned against these by `checkSharedMemoryAnswers` on every compile.
+let NameAlreadyPublished = 0xFFFFFFFFFFFFFFFF as SegmentHandle
+let NotYetPublished = 0xFFFFFFFFFFFFFFFE as SegmentHandle
+
+let MostPublishOrAdoptAttempts = 1000
+let PublishOrAdoptRetryMs = 1
 
 // How many bytes one `SegmentWord` occupies in the mapping.
 let SegmentWordBytes = 8
@@ -90,29 +98,79 @@ public type SharedSegment
 	// Latched by `close()` so a second call is a no-op, the contract `StreamingSubprocess.release` states.
 	var closed as bool
 
-	/// Create a NEW section of exactly `bytes` bytes, published under `name`, and map it into this process.
+	let publisher as bool
+
+	/// Publish a section of `bytes` bytes under `name` and map it into this process, or adopt the section
+	/// already published under `name` and map `bytes` of it.
 	///
-	/// Throws `invalidName` for a name that is empty, longer than 31 bytes, or holds a `/`, a `\` or a NUL
-	/// byte — on every target, including one whose host would have accepted it.
+	/// Two processes creating one name at once both succeed: one publishes and the other adopts, retrying
+	/// for about a second while the publisher sizes the section. Throws `createFailed` when the published
+	/// section is smaller than `bytes` or the host refuses the name, and `invalidName` for a name that is
+	/// empty, longer than 31 bytes, or holds a `/`, a `\` or a NUL byte — on every target, including one
+	/// whose host would have accepted it.
 	public static function create(name String, bytes SegmentByteCount) returns SharedSegment throws SharedMemoryError
 		try requirePortableName(name)
-		let rawHandle = __Builtins.sharedMemoryCreate(name.cstr(), bytes)
 
-		if rawHandle == NoSection 'createFailed'
+		for _ in 0 upto MostPublishOrAdoptAttempts 'eachAttempt'
+			let published = try Self.attempt(SegmentRoad.publish, name: name, bytes: bytes)
+
+			match published 'published'
+				opened(segment) then return segment
+				notOpenedYet then break 'published'
+			end 'published'
+
+			let adopted = try Self.attempt(SegmentRoad.adopt, name: name, bytes: bytes)
+
+			match adopted 'adopted'
+				opened(segment) then return segment
+				notOpenedYet then sleep(PublishOrAdoptRetryMs)
+			end 'adopted'
+		end 'eachAttempt'
+
+		throw SharedMemoryError.createFailed
+	end 'create'
+
+	/// Publish a new section of exactly `bytes` bytes under `name` and map it into this process. Throws
+	/// `createFailed` when `name` is already published, so the section is always a fresh one, and
+	/// `invalidName` for a name `create` refuses.
+	public static function publish(name String, bytes SegmentByteCount) returns SharedSegment throws SharedMemoryError
+		try requirePortableName(name)
+		let published = try Self.attempt(SegmentRoad.publish, name: name, bytes: bytes)
+
+		return match published 'published'
+			opened(segment) gives segment
+			notOpenedYet throws SharedMemoryError.createFailed
+		end 'published'
+	end 'publish'
+
+	static function attempt(road SegmentRoad, name String, bytes SegmentByteCount) returns SegmentAttempt throws SharedMemoryError
+		let raw = match road 'call'
+			publish gives __Builtins.sharedMemoryCreate(name.cstr(), bytes)
+			adopt gives __Builtins.sharedMemoryAdopt(name.cstr(), bytes)
+		end 'call'
+
+		if raw == NoSection 'refused'
 			throw SharedMemoryError.createFailed
-		end 'createFailed'
+		end 'refused'
 
+		if raw == NameAlreadyPublished or raw == NotYetPublished 'notYet'
+			return SegmentAttempt.notOpenedYet
+		end 'notYet'
+
+		return SegmentAttempt.opened(try mapped(raw, name: name, bytes: bytes, publisher: road == SegmentRoad.publish))
+	end 'attempt'
+
+	static function mapped(rawHandle SegmentHandle, name String, bytes SegmentByteCount, publisher bool) returns SharedSegment throws SharedMemoryError
 		let rawBase = __Builtins.sharedMemoryMap(rawHandle, bytes)
+		var segment = SharedSegment{handle: rawHandle, base: rawBase, bytes: bytes, name: name, closed: false, publisher: publisher}
 
 		if rawBase == NoSection 'mapFailed'
-			// The section exists and nothing is mapped, so the teardown is the handle alone — which is
-			// exactly what `close` does with a zero base, since an unmap of one is a no-op on every lane.
-			__Builtins.sharedMemoryClose(rawHandle, NoSection, bytes, name.cstr())
+			segment.close()
 			throw SharedMemoryError.mapFailed
 		end 'mapFailed'
 
-		return SharedSegment{handle: rawHandle, base: rawBase, bytes: bytes, name: name, closed: false}
-	end 'create'
+		return segment
+	end 'mapped'
 
 	// A name one lane cannot publish is refused on all of them, so a program that runs on one host does not
 	// fail on another with a `createFailed` that names no cause. The length is Darwin's `PSHMNAMLEN`, the
@@ -169,16 +227,35 @@ public type SharedSegment
 		end 'pastTheEnd'
 	end 'requireInside'
 
-	/// Unmap this process's view, release the section and withdraw its name. Idempotent.
+	/// Unmap this process's view and release the section, and withdraw its name if this segment published
+	/// it. Idempotent.
 	///
 	/// Every step is needed: a section object stays alive while any view of it is mapped, so releasing the
 	/// handle alone would keep the section and its address range for the life of the process — and on a
-	/// POSIX host the NAME outlives all of them, so a segment closed without withdrawing it stays
-	/// addressable to any later process until the machine is restarted.
+	/// POSIX host the NAME outlives all of them, so a published segment closed without withdrawing it stays
+	/// addressable to any later process until the machine is restarted. An adopter leaves the name to its
+	/// publisher, whose other adopters still map it by that name.
 	public function close()
-		if not closed 'stillOpen'
+		if closed 'alreadyClosed'
+			return
+		end 'alreadyClosed'
+
+		if publisher 'withdrawTheName'
 			__Builtins.sharedMemoryClose(handle, base, bytes, name.cstr())
-			closed = true
-		end 'stillOpen'
+		end 'withdrawTheName' else 'keepTheName'
+			__Builtins.sharedMemoryRelease(handle, base, bytes)
+		end 'keepTheName'
+
+		closed = true
 	end 'close'
 end 'SharedSegment'
+
+enum SegmentRoad
+	publish
+	adopt
+end 'SegmentRoad'
+
+union SegmentAttempt
+	opened(segment SharedSegment)
+	notOpenedYet
+end 'SegmentAttempt'

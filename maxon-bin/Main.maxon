@@ -1441,9 +1441,8 @@ module function spawnForwarding(executable Executable, arguments StringArray, en
 end 'spawnForwarding'
 
 // A signalled child has no exit code to forward, so the signal is named and the failure is the
-// command's own. No target's runtime raises `signalled` — `SubprocessRuntime` stores only the
-// `exited` and `timedOut` discriminators — so an abnormal termination arrives as `exited` with the
-// raw OS status; the arm is what the union owes.
+// command's own. Only a POSIX host reports `signalled`; a Windows abnormal termination arrives as
+// `exited` with its NTSTATUS code.
 function reportSignalled(executable Executable, signal SignalNumber, speaker String) returns ExitCode
 	printError("{speaker}: {executable.displayName()} was killed by signal {signal}\n")
 	return OwnFailureExit

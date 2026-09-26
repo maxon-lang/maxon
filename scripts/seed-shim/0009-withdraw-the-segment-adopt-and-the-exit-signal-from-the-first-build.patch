@@ -1,0 +1,41 @@
+# The seed knows none of `__Builtins.sharedMemoryAdopt`, `__Builtins.sharedMemoryRelease` and
+# `__Builtins.subprocessExitSignal`, so it refuses `stdlib/SharedMemory.maxon` at `SharedSegment.attempt`'s adopt
+# road and `SharedSegment.close`'s release, and `stdlib/Subprocess.maxon` at `StreamingSubprocess.pollTermination`.
+# Only those calls are withdrawn: the parser arms that admit them and the `__shm_adopt`, `__shm_release` and
+# `__gt_subp_exit_signal` bodies behind them are left standing, so `C1` knows every entry and compiles the unshimmed
+# tree into `C2`.
+#
+# The shimmed adopt road publishes instead of adopting, the shimmed `close` withdraws the name whichever process
+# published it, and the shimmed `pollTermination` reads the signal answer as "no signal". `C1` only builds `C2`,
+# maps no segment and polls no child, so nothing reaches the difference.
+--- a/stdlib/SharedMemory.maxon
++++ b/stdlib/SharedMemory.maxon
+@@ -146,7 +146,7 @@
+ 	static function attempt(road SegmentRoad, name String, bytes SegmentByteCount) returns SegmentAttempt throws SharedMemoryError
+ 		let raw = match road 'call'
+ 			publish gives __Builtins.sharedMemoryCreate(name.cstr(), bytes)
+-			adopt gives __Builtins.sharedMemoryAdopt(name.cstr(), bytes)
++			adopt gives __Builtins.sharedMemoryCreate(name.cstr(), bytes)
+ 		end 'call'
+ 
+ 		if raw == NoSection 'refused'
+@@ -241,7 +241,7 @@
+ 		if publisher 'withdrawTheName'
+ 			__Builtins.sharedMemoryClose(handle, base, bytes, name.cstr())
+ 		end 'withdrawTheName' else 'keepTheName'
+-			__Builtins.sharedMemoryRelease(handle, base, bytes)
++			__Builtins.sharedMemoryClose(handle, base, bytes, name.cstr())
+ 		end 'keepTheName'
+ 
+ 		closed = true
+--- a/stdlib/Subprocess.maxon
++++ b/stdlib/Subprocess.maxon
+@@ -1094,7 +1094,7 @@
+ 	end 'pollTermination'
+ 
+ 	function terminationAfterExit(code ExitInt) returns TerminationStatus
+-		return match exitPollOf(__Builtins.subprocessExitSignal(handle)) 'signal'
++		return match exitPollOf(NoTerminatingSignal) 'signal'
+ 			running panic("StreamingSubprocess.pollTermination: the child answered that it had exited and then that it was running")
+ 			exited(signal) gives terminationWithSignal(code, signal: signal)
+ 		end 'signal'

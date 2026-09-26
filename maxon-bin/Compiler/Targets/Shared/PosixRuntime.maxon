@@ -116,6 +116,13 @@ export function posixUsesHostObjects(usage RuntimeUsage) returns bool
 	return usage.usesGt or usage.usesDebugStream or usage.usesSharedMemory
 end 'posixUsesHostObjects'
 
+// Who reaches `mrt_host_file_open`: a `File`, a subprocess stream redirected to a path, and on Linux the
+// socket band, whose built-in resolver reads `/etc/hosts` and `/etc/resolv.conf` through the file ops. A gate
+// narrower than this is a call to a symbol nothing laid out, which the fixup resolver reports as a panic.
+export function posixOpensFiles(usage RuntimeUsage) returns bool
+	return usage.usesManagedFile or usage.usesChildPipes or usage.usesManagedSocket
+end 'posixOpensFiles'
+
 // ⭐⭐ **WHO EMITS `StdOp.osLockInit`/`osLockEnter`/`osLockLeave` — the union every POSIX lane lays its lock
 // chunks on.** Three independent producers: the scheduler's run-queue lock (`SchedRuntime`), the DebugStream
 // ring's guard (`DebugStreamRuntime.buildDsInit`), and — the widest — the allocator's slow-path lock, which
@@ -153,6 +160,7 @@ export let HostSpawnName = b"mrt_host_spawn"
 export let HostProcReapName = b"mrt_host_proc_reap"
 export let HostProcAwaitName = b"mrt_host_proc_await"
 export let HostProcExitCodeName = b"mrt_host_proc_exit_code"
+export let HostProcExitSignalName = b"mrt_host_proc_exit_signal"
 export let HostProcTerminateName = b"mrt_host_proc_terminate"
 export let HostProcProbeName = b"mrt_host_proc_probe"
 export let HostTickMsName = b"mrt_host_tick_ms"
@@ -175,11 +183,12 @@ export function posixReadsMonotonicClock(usage RuntimeUsage) returns bool
 	return usage.usesGt or usage.usesChildPipes or usage.usesDebugStream or usage.usesUptimeClock
 end 'posixReadsMonotonicClock'
 
-// ⭐ **THE TWO MEMBERS OF THE NAMED-SECTION BAND THAT ARE ONE BODY ON EVERY POSIX LANE.** A segment is
-// mapped and unmapped by `mmap`/`munmap` over a descriptor, which differ only in how the call reaches the
-// kernel — so they take a `PosixHostCall` and wear the shared prefix. ⚠ The CREATE and the ATTACH do not:
-// `shm_open` is a libSystem call on Darwin and a libc FUNCTION on Linux, where the substrate opens the
-// `/dev/shm` path that function would have built — two different bodies, so two lane-private names.
+// The named-section members every POSIX lane builds under one name. The map and the unmap differ only in how
+// the call reaches the kernel, and the create and the adopt also in how the segment is named
+// (`Arm64PosixRuntime.PosixShmNaming`). The attach is lane-private: Darwin's `getenv` answers a pointer
+// `shm_open` takes, and Linux reads the variable into a buffer first.
+export let HostShmCreateName = b"mrt_host_shm_create"
+export let HostShmAdoptName = b"mrt_host_shm_adopt"
 export let HostShmMapName = b"mrt_host_shm_map"
 export let HostShmUnmapName = b"mrt_host_shm_unmap"
 
@@ -251,6 +260,7 @@ export enum PosixErrno
 	noSuchFileOrDirectory = 2
 	operationNotPermitted = 1
 	permissionDenied = 13
+	fileExists = 17
 	notADirectory = 20
 	resultTooLarge = 34
 
@@ -479,6 +489,7 @@ end 'posixNanosPerUnit'
 
 // What a POSIX call that reports only success or failure answers on success.
 export let PosixCallSucceeded = 0
+export let PosixCallFailed = 0xFFFFFFFFFFFFFFFF
 
 // ⭐ **A CHILD PROCESS IS A WAIT OBJECT KIND, AND BOTH LANES NOW MINT ONE**, so it joins `PosixWaitKindEvent`
 // here rather than staying either lane's private constant: `mrt_host_spawn` writes it and `mrt_host_wait_one`
@@ -495,9 +506,9 @@ export let PosixWaitKindThread = 2
 // The WAIT OBJECT's shared prefix
 // ==========================================================================
 
-// ⭐⭐ **SIX FIELDS AT SIX FIXED OFFSETS, IDENTICAL ON BOTH LANES — which is what lets the reap, the await
-// and the exit-code read be ONE body each.** What the two lanes disagree about is what sits
-// ABOVE these: Darwin follows them with a `pthread_mutex_t` and a `pthread_cond_t` (an event there is a
+// ⭐⭐ **SEVEN FIELDS AT SEVEN FIXED OFFSETS, IDENTICAL ON BOTH LANES — which is what lets the reap, the
+// await and the exit-code and exit-signal reads be ONE body each.** What the two lanes disagree about is
+// what sits ABOVE these: Darwin follows them with a `pthread_mutex_t` and a `pthread_cond_t` (an event there is a
 // condition variable); Linux follows them with nothing at all (a futex needs no mutex, and the object is one
 // `mmap`'d page).
 //
@@ -521,6 +532,8 @@ export let PosixWaitOffThread = 0x10 as MachineWord
 export let PosixWaitOffChildPid = 0x18 as MachineWord
 export let PosixWaitOffChildStatus = 0x20 as MachineWord
 export let PosixWaitOffChildKilled = 0x28 as MachineWord
+export let PosixWaitOffChildSignal = 0x30 as MachineWord
+export let PosixWaitPrefixBytes = 0x38 as MachineWord
 
 // The two states of the signal word above. They are HERE rather than once per lane because the field is
 // shared and `mrt_host_proc_reap` — a shared body — publishes into it; each lane's own event protocol reads
@@ -792,16 +805,16 @@ export function posixSoError(os Os) returns MachineWord
 	end 'os'
 end 'posixSoError'
 
-// The two Darwin-only socket chunks. A raw `svc` answers `-errno`; a libSystem call answers -1 and
+// The two Darwin-only fold chunks. A raw `svc` answers `-errno`; a libSystem call answers -1 and
 // leaves the reason in `*__error()`, which a frame-less isel sequence cannot fetch because that is
 // a call. Each chunk takes the libSystem answer, already widened by the import's `ImportAnswer`,
 // and gives back the op's `-errno` contract:
 //   `mrt_host_socket_birth` — `socket(2)`'s answer, then `O_NONBLOCK` and `FD_CLOEXEC`, which
 //   Darwin cannot pass to `socket`. `fcntl` is variadic on Darwin's arm64 ABI with its third
 //   argument on the stack, which a frame-less sequence has nowhere to put.
-//   `mrt_host_socket_status` — every other socket status.
+//   `mrt_host_status_or_errno` — every other socket status, and a console write's count.
 export let HostSocketBirthName = b"mrt_host_socket_birth"
-export let HostSocketStatusName = b"mrt_host_socket_status"
+export let HostStatusOrErrnoName = b"mrt_host_status_or_errno"
 
 // `kqueue`'s user event: `EVFILT_USER`, registered `EV_ADD | EV_CLEAR` so a receive consumes it, and fired
 // with `NOTE_TRIGGER`.

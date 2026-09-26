@@ -1100,6 +1100,88 @@ end 'main'
 0
 ```
 
+<!-- test: subprocess-a-child-a-signal-killed-is-signalled -->
+<!-- unsupported-targets: x64-windows, wasm32-wasi -->
+A child that a signal ends is reported as `signalled` with the signal's number, never as `exited` with
+`128 + signal`: the shell below kills itself with SIGKILL, so the status is `signalled 9`. A runtime that
+reported only exit codes answers `exited 137` here.
+```maxon
+function main() returns ExitCode
+	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
+	var argv = StringArray.create()
+	argv.push("-c")
+	argv.push("kill -9 $$")
+	let result = try Subprocess.run(exe, arguments: argv) otherwise return 3
+	let described = match result.status 'status'
+		exited(c) gives "exited {c}"
+		signalled(c) gives "signalled {c}"
+	end 'status'
+	print("{described}\n")
+	return 0
+end 'main'
+```
+```stdout
+signalled 9
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-streaming-poll-termination-reports-how-the-child-ended -->
+<!-- unsupported-targets: wasm32-wasi -->
+`pollTermination()` answers how a streaming child ended once it has: on Windows the child exits 42 and is
+`exited 42`; on a POSIX host the shell kills itself with SIGKILL and is `signalled 9`, where `pollExit()`
+can only say `exited 137`.
+```maxon
+function describeStatus(status TerminationStatus) returns String
+	return match status 'status'
+		exited(c) gives "exited {c}"
+		signalled(c) gives "signalled {c}"
+	end 'status'
+end 'describeStatus'
+
+function describePoll(poll TerminationPoll) returns String
+	return match poll 'poll'
+		running gives "running"
+		ended(status) gives describeStatus(status)
+	end 'poll'
+end 'describePoll'
+
+function main() returns ExitCode
+	#if os(Windows)
+	let exe = Executable.name("cmd")
+	var argv = StringArray.create()
+	argv.push("/c")
+	argv.push("exit 42")
+	let expected = "exited 42"
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
+	var argv = StringArray.create()
+	argv.push("-c")
+	argv.push("kill -9 $$")
+	let expected = "signalled 9"
+	#endif
+	var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	_ = try child.wait() otherwise return 4
+	let seen = describePoll(child.pollTermination())
+	child.release()
+
+	if seen != expected 'unexpected'
+		print("{seen}\n")
+		return 5
+	end 'unexpected'
+
+	print("ended as expected\n")
+	return 0
+end 'main'
+```
+```stdout
+ended as expected
+```
+```exitcode
+0
+```
+
 <!-- test: subprocess-stderr-collect -->
 <!-- unsupported-targets: wasm32-wasi -->
 ```maxon

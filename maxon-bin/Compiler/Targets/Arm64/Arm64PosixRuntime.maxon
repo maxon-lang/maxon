@@ -509,7 +509,7 @@ function arm64PosixEmitHostCall(asm Arm64RuntimeAsm, call PosixHostCall)
 	end 'route'
 end 'arm64PosixEmitHostCall'
 
-function arm64PosixEmitHostCallErrno(asm Arm64RuntimeAsm, call PosixHostCall)
+module function arm64PosixEmitHostCallErrno(asm Arm64RuntimeAsm, call PosixHostCall)
 	arm64PosixEmitHostCall(asm, call: call)
 	arm64PosixEmitErrnoAnswer(asm, call: call)
 end 'arm64PosixEmitHostCallErrno'
@@ -729,8 +729,8 @@ end 'PosixPollCall'
 // ⚠ It leaves x0 as a status a `cmp #0` reads: negative is a failure, 0 is "not ready", positive is the
 // number of ready descriptors. The import arm's answer is widened by `arm64PosixEmitHostCall`.
 //
-// ⚠ Each arm is its own function for this file's usual reason: a `match` arm carries one expression and each
-// of these is five or eight — `StdToArm64Conversion.lowerOsFileOpenDarwin`'s split, for its reason.
+// Each arm is its own function because a `match` arm carries one expression and each of these is five or
+// eight.
 function arm64PosixEmitPollNoWait(asm Arm64RuntimeAsm, poll PosixPollCall, pollfdSlot StackSize, secSlot StackSize, nsecSlot StackSize)
 	match poll 'route'
 		pollImport(slot) then arm64PosixEmitPollImport(asm, slot: slot, pollfdSlot: pollfdSlot)
@@ -753,10 +753,9 @@ function arm64PosixEmitPollWasInterrupted(asm Arm64RuntimeAsm, poll PosixPollCal
 	end 'route'
 end 'arm64PosixEmitPollWasInterrupted'
 
-// ⭐ **ONE `EINTR` TEST PER LANE, SHARED BY EVERY CALL THAT OWES ONE** — the pipe peek and the
-// read/write transfer chunks both branch through these, so the two lanes cannot drift in how they
-// recognise it. ⚠ **`whenInterrupted` IS NOT ALWAYS A LOOP**: the transfer chunks aim it BACKWARD at
-// their own call to re-issue it, and the peek aims it FORWARD at a different answer.
+// One `EINTR` test per lane, shared by every call that owes one, so the two lanes cannot drift in how they
+// recognise it. ⚠ `whenInterrupted` is not always a loop: a re-issuing call aims it backward at its own
+// call, and the pipe peek aims it forward at a different answer.
 //
 // libSystem answers -1 and keeps the number in the thread-local `*__error()`, so the result
 // register cannot carry it. ⚠ It CLOBBERS x0, which every caller has already finished with.
@@ -772,6 +771,35 @@ export function arm64PosixEmitSyscallBranchIfEintr(asm Arm64RuntimeAsm, whenInte
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: (0 - PosixErrno.interrupted.rawValue) as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: whenInterrupted)
 end 'arm64PosixEmitSyscallBranchIfEintr'
+
+function arm64PosixEmitBranchIfCallInterrupted(asm Arm64RuntimeAsm, call PosixHostCall, whenInterrupted BlockId)
+	let route = match call 'route'
+		importCall gives Arm64OsCallKind.importCall
+		syscall gives Arm64OsCallKind.syscall
+	end 'route'
+
+	arm64EmitBranchIfInterrupted(asm, route: route, whenInterrupted: whenInterrupted)
+end 'arm64PosixEmitBranchIfCallInterrupted'
+
+export function arm64EmitBranchIfInterrupted(asm Arm64RuntimeAsm, route Arm64OsCallKind, whenInterrupted BlockId)
+	match route 'route'
+		importCall then arm64PosixEmitDarwinFailureBranchIfEintr(asm, whenInterrupted: whenInterrupted)
+		syscall then arm64PosixEmitSyscallBranchIfEintr(asm, whenInterrupted: whenInterrupted)
+	end 'route'
+end 'arm64EmitBranchIfInterrupted'
+
+// For a libSystem call whose failure is -1: the errno read clobbers x0, so a failure other than `EINTR`
+// answers -1 again.
+export function arm64PosixEmitDarwinFailureBranchIfEintr(asm Arm64RuntimeAsm, whenInterrupted BlockId)
+	let answered = asm.newLabel()
+
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: answered)
+	arm64PosixEmitDarwinBranchIfEintr(asm, whenInterrupted: whenInterrupted)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PosixCallFailed)
+
+	asm.placeLabel(answered)
+end 'arm64PosixEmitDarwinFailureBranchIfEintr'
 
 function arm64PosixEmitPollImport(asm Arm64RuntimeAsm, slot OsImportSlot, pollfdSlot StackSize)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: pollfdSlot)
@@ -814,6 +842,7 @@ export function buildArm64PosixProcReapChunk(wait PosixHostCall) returns Functio
 	var asm = Arm64RuntimeAsm.beginFunction(3)
 
 	let alreadySignalled = asm.newLabel()
+	let issue = asm.newLabel()
 	let stillRunning = asm.newLabel()
 	let statusChosen = asm.newLabel()
 	let decode = asm.newLabel()
@@ -826,6 +855,8 @@ export function buildArm64PosixProcReapChunk(wait PosixHostCall) returns Functio
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x2, base: Arm64Register.x0, byteOffset: PosixWaitOffSignal)
 	arm64EmitCbnzTo(asm, reg: Arm64Register.x2, label: alreadySignalled)
 
+	asm.placeLabel(issue)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: PosixWaitOffChildPid)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotStatus)
 
@@ -835,6 +866,7 @@ export function buildArm64PosixProcReapChunk(wait PosixHostCall) returns Functio
 	arm64EmitCset(asm.code, rd: arm64RuntimeReg(Arm64Register.x2), cond: Arm64CondCode.eq)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixReapDiscardsRusage)
 	arm64PosixEmitHostCall(asm, call: wait)
+	arm64PosixEmitBranchIfCallInterrupted(asm, call: wait, whenInterrupted: issue)
 
 	// The wait answers the reaped pid, 0 (nothing to report yet, `WNOHANG`) or -1. Only the pid means the
 	// child has been taken, and the comparison is on the low 32 bits because `pid_t` is a C `int`.
@@ -863,6 +895,7 @@ export function buildArm64PosixProcReapChunk(wait PosixHostCall) returns Functio
 	arm64EmitBranchTo(asm, label: publish)
 
 	asm.placeLabel(bySignal)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x5, base: Arm64Register.x1, byteOffset: PosixWaitOffChildSignal)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixSignalExitCodeBase)
 	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x5, lhs: Arm64Register.x5, rhs: Arm64Register.x2)
 
@@ -980,18 +1013,33 @@ export function buildArm64PosixProcExitCodeChunk() returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(2)
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotCodeOut)
-	arm64PosixUntagHandle(asm, reg: Arm64Register.x0)
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixReapBlocking)
-	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostProcReapName)
-
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotObj)
-	arm64EmitLoadWord64At(asm, dest: Arm64Register.x2, base: Arm64Register.x1, byteOffset: PosixWaitOffChildStatus)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotCodeOut)
-	arm64EmitStoreWord64At(asm, src: Arm64Register.x2, base: Arm64Register.x0, byteOffset: 0)
+	arm64PosixEmitReapedField(asm, objSlot: SlotObj, field: PosixWaitOffChildStatus)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotCodeOut)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x1, byteOffset: 0)
 
 	return asm.finishFunction(HostProcExitCodeName)
 end 'buildArm64PosixProcExitCodeChunk'
+
+// `mrt_host_proc_exit_signal(x0 = handle) -> x0 = signal | 0` — the signal the reap recorded, 0 for a child
+// no signal ended. The reap and its cached-status rule are the exit-code read's.
+export function buildArm64PosixProcExitSignalChunk() returns FunctionCodeChunk
+	let SlotObj = 0 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(1)
+
+	arm64PosixEmitReapedField(asm, objSlot: SlotObj, field: PosixWaitOffChildSignal)
+
+	return asm.finishFunction(HostProcExitSignalName)
+end 'buildArm64PosixProcExitSignalChunk'
+
+function arm64PosixEmitReapedField(asm Arm64RuntimeAsm, objSlot StackSize, field MachineWord)
+	arm64PosixUntagHandle(asm, reg: Arm64Register.x0)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: objSlot)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixReapBlocking)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostProcReapName)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: objSlot)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x1, byteOffset: field)
+end 'arm64PosixEmitReapedField'
 
 // ==========================================================================
 // mrt_host_proc_terminate(x0 = handle, x1 = exitCode) -> x0 = BOOL
@@ -1138,3 +1186,176 @@ export function buildArm64PosixShmUnmapChunk(call PosixHostCall) returns Functio
 	asm.placeLabel(unmapped)
 	return asm.finishFunction(HostShmUnmapName)
 end 'buildArm64PosixShmUnmapChunk'
+
+// ==========================================================================
+// mrt_host_shm_create / mrt_host_shm_adopt(x0 = namePtr, x1 = bytes) -> x0 = fd | SharedSegmentAnswer
+// ==========================================================================
+
+// How a lane names a segment: Darwin's `shm_open` takes the name, and a libc-less Linux image opens the
+// `/dev/shm` path that function would have built.
+export union PosixShmNaming
+	sharedObjectName
+	devShmPath
+end 'PosixShmNaming'
+
+export type PosixShmHost
+	export let naming as PosixShmNaming
+	export let exclusiveCreateFlags as MachineWord
+	export let stat as PosixStatLayout
+	export let ftruncate as PosixHostCall
+	export let fstat as PosixHostCall
+	export let close as PosixHostCall
+
+	export static function create(naming PosixShmNaming, exclusiveCreateFlags MachineWord, stat PosixStatLayout, ftruncate PosixHostCall, fstat PosixHostCall, close PosixHostCall) returns PosixShmHost
+		return Self{naming: naming, exclusiveCreateFlags: exclusiveCreateFlags, stat: stat, ftruncate: ftruncate, fstat: fstat, close: close}
+	end 'create'
+end 'PosixShmHost'
+
+let ShmSlotName = 0 as StackSize
+let ShmSlotBytes = 1 as StackSize
+let ShmSlotFd = 2 as StackSize
+let ShmSlotStat = 3 as StackSize
+
+function shmPathSlot(host PosixShmHost) returns StackSize
+	return ShmSlotStat + runtimeFrameSlots(host.stat.bytes)
+end 'shmPathSlot'
+
+function arm64PosixShmBegin(host PosixShmHost) returns Arm64RuntimeAsm
+	let fixedSlots = shmPathSlot(host)
+
+	var asm = match host.naming 'frame'
+		sharedObjectName gives Arm64RuntimeAsm.beginVariadicCallerFunction(fixedSlots)
+		devShmPath gives Arm64RuntimeAsm.beginFunction(fixedSlots + runtimeFrameSlots(MaxPathBytes))
+	end 'frame'
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: ShmSlotName)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: ShmSlotBytes)
+
+	match host.naming 'path'
+		sharedObjectName then break 'path'
+		devShmPath then arm64LinuxEmitShmPath(asm, pathSlot: fixedSlots)
+	end 'path'
+
+	return asm
+end 'arm64PosixShmBegin'
+
+function arm64PosixEmitShmOpen(asm Arm64RuntimeAsm, host PosixShmHost, flags MachineWord, mode MachineWord)
+	match host.naming 'open'
+		sharedObjectName then arm64DarwinEmitShmOpenName(asm, nameSlot: ShmSlotName, flags: flags, mode: mode)
+		devShmPath then arm64LinuxEmitShmOpenPath(asm, pathSlot: shmPathSlot(host), flags: flags, mode: mode)
+	end 'open'
+end 'arm64PosixEmitShmOpen'
+
+function arm64PosixEmitShmUnlink(asm Arm64RuntimeAsm, host PosixShmHost)
+	match host.naming 'unlink'
+		sharedObjectName then arm64DarwinEmitShmUnlinkName(asm, nameSlot: ShmSlotName)
+		devShmPath then arm64LinuxEmitShmUnlinkPath(asm, pathSlot: shmPathSlot(host))
+	end 'unlink'
+end 'arm64PosixEmitShmUnlink'
+
+function arm64PosixEmitShmCloseFd(asm Arm64RuntimeAsm, host PosixShmHost)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: ShmSlotFd)
+	arm64PosixEmitHostCall(asm, call: host.close)
+end 'arm64PosixEmitShmCloseFd'
+
+// The publish road. `CreateFileMappingA` names and sizes in one call; POSIX takes two, so a segment that
+// could not be sized loses its name again. Only `EEXIST` answers `nameTaken`, the one refusal the stdlib
+// answers by adopting; every other failure is `refused`.
+export function buildArm64PosixShmCreateChunk(host PosixShmHost) returns FunctionCodeChunk
+	var asm = arm64PosixShmBegin(host)
+
+	let unsized = asm.newLabel()
+	let notOpened = asm.newLabel()
+	let refused = asm.newLabel()
+	let answered = asm.newLabel()
+
+	arm64PosixEmitShmOpen(asm, host: host, flags: host.exclusiveCreateFlags, mode: PosixSharedSegmentMode)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: notOpened)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: ShmSlotFd)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: ShmSlotBytes)
+	arm64PosixEmitHostCall(asm, call: host.ftruncate)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: unsized)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: ShmSlotFd)
+	arm64EmitBranchTo(asm, label: answered)
+
+	asm.placeLabel(unsized)
+	arm64PosixEmitShmCloseFd(asm, host: host)
+	arm64PosixEmitShmUnlink(asm, host: host)
+	arm64EmitBranchTo(asm, label: refused)
+
+	asm.placeLabel(notOpened)
+	arm64PosixEmitShmAnswerForErrno(asm, errno: PosixErrno.fileExists, answer: SharedSegmentAnswer.nameTaken, otherwise: refused, answered: answered)
+
+	asm.placeLabel(refused)
+	arm64PosixEmitShmAnswer(asm, answer: SharedSegmentAnswer.refused)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostShmCreateName)
+end 'buildArm64PosixShmCreateChunk'
+
+// The adopt road: open a published name without creating it. A size of zero is a publisher between its
+// open and its `ftruncate`, and a missing name one that has not published yet or has just withdrawn — both
+// `notYetPublished`, which the stdlib retries. A segment smaller than `bytes` is `refused`, since mapping
+// past its end would fault on first touch.
+export function buildArm64PosixShmAdoptChunk(host PosixShmHost) returns FunctionCodeChunk
+	var asm = arm64PosixShmBegin(host)
+
+	let notOpened = asm.newLabel()
+	let unsized = asm.newLabel()
+	let unusable = asm.newLabel()
+	let refused = asm.newLabel()
+	let answered = asm.newLabel()
+
+	arm64PosixEmitShmOpen(asm, host: host, flags: PosixOpenReadWrite, mode: PosixNoFileMode)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: notOpened)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: ShmSlotFd)
+
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: ShmSlotStat)
+	arm64PosixEmitHostCall(asm, call: host.fstat)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: unusable)
+
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: ShmSlotStat)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x1, byteOffset: host.stat.sizeOffset)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: unsized)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: ShmSlotBytes)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x0, rhs: Arm64Register.x2)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: unusable)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: ShmSlotFd)
+	arm64EmitBranchTo(asm, label: answered)
+
+	asm.placeLabel(unsized)
+	arm64PosixEmitShmCloseFd(asm, host: host)
+	arm64PosixEmitShmAnswer(asm, answer: SharedSegmentAnswer.notYetPublished)
+	arm64EmitBranchTo(asm, label: answered)
+
+	asm.placeLabel(unusable)
+	arm64PosixEmitShmCloseFd(asm, host: host)
+	arm64EmitBranchTo(asm, label: refused)
+
+	asm.placeLabel(notOpened)
+	arm64PosixEmitShmAnswerForErrno(asm, errno: PosixErrno.noSuchFileOrDirectory, answer: SharedSegmentAnswer.notYetPublished, otherwise: refused, answered: answered)
+
+	asm.placeLabel(refused)
+	arm64PosixEmitShmAnswer(asm, answer: SharedSegmentAnswer.refused)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostShmAdoptName)
+end 'buildArm64PosixShmAdoptChunk'
+
+function arm64PosixEmitShmAnswerForErrno(asm Arm64RuntimeAsm, errno PosixErrno, answer SharedSegmentAnswer, otherwise BlockId, answered BlockId)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: (0 - errno.rawValue) as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: otherwise)
+	arm64PosixEmitShmAnswer(asm, answer: answer)
+	arm64EmitBranchTo(asm, label: answered)
+end 'arm64PosixEmitShmAnswerForErrno'
+
+function arm64PosixEmitShmAnswer(asm Arm64RuntimeAsm, answer SharedSegmentAnswer)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: answer.rawValue as MachineWord)
+end 'arm64PosixEmitShmAnswer'
