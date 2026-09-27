@@ -345,7 +345,6 @@ function convertWithNameIndex(project Project, module StdModule, byName Function
 
 	// PHASE 4 — stamp the bit the ABI readers ask, then rewrite every analysed function.
 	if anyCandidate(onTheConvention) 'someCandidateKeptIt'
-		logTheSettledConvention(module, onTheConvention: onTheConvention)
 		stampTheConvention(module, onTheConvention: onTheConvention)
 	end 'someCandidateKeptIt'
 
@@ -358,22 +357,6 @@ end 'convertWithNameIndex'
 // ══════════════════════════════════════════════════════════════════════════════════════════════════════
 // Phase 1 — the structural candidates
 // ══════════════════════════════════════════════════════════════════════════════════════════════════════
-
-// Which functions came out of the fixpoint on the convention — the one reading that says whether a
-// program the pass was expected to change actually changed, without disassembling it.
-function logTheSettledConvention(module StdModule, onTheConvention BoolArray)
-	for funcIndex in 0 upto module.funcCount() 'eachFunc'
-		if not isOnTheConvention(onTheConvention, funcIndex: funcIndex) 'notOnIt'
-			continue
-		end 'notOnIt'
-
-		let name = module.getFunc(funcIndex).name
-
-		if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.debug) 'debugging'
-			compilerLogger(CompilerLogGroup.ir).debug("applyValueTupleReturn: `{String.from(name)}` returns its pair in two registers")
-		end 'debugging'
-	end 'eachFunc'
-end 'logTheSettledConvention'
 
 function anyCandidate(onTheConvention BoolArray) returns bool
 	for on in onTheConvention 'eachFunc'

@@ -613,7 +613,7 @@ because a comparison against nothing passes. It spawns nothing and runs at the d
 It gates a COMPILER phase rather than a driver command, and it lives here for the same reason `fmt/` does: what it asserts is what `maxon build`
 REPORTS and EMITS at two processor counts, which a `specs` program cannot observe about
 the compiler that compiled it. `parallel.maxtest` is the shared half; each contract line has
-its own case file — `pool-default`, `pool-pinned`, `byte-identical`, `rdata-order`, `log-order`,
+its own case file — `pool-default`, `pool-pinned`, `byte-identical`, `rdata-order`,
 `pressure-refusal`, and for the front end's pool:
 
 - `front-end-pool-pinned` — under `MAXON_MAX_PROCS=1` the front end reports one worker over one processor

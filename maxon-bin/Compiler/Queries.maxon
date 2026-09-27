@@ -101,11 +101,6 @@ end 'lexedTokens'
 // opens its own `parse` probe, so the two phases are disjoint by construction and neither absorbs the other.
 function tokenizedHere(project Project, content String) returns TokenArray throws LexerError
 	let lexProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.lex)
-
-	if compilerLogEnabled(CompilerLogGroup.lexer, level: LogLevel.debug) 'debugging'
-		compilerLogger(CompilerLogGroup.lexer).debug("Starting lexer")
-	end 'debugging'
-
 	let tokens = try tokenize(content, keywords: project.keywords) otherwise (lexErr) 'lexFail'
 		recordPhase(project, phase: CompilePhase.lex, probe: lexProbe)
 		throw lexErr
@@ -1389,10 +1384,6 @@ function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSigna
 
 	if not newlyInstantiated.isEmpty() 'aParseInstantiatedATypeTheIndexDidNotCount'
 		for name in newlyInstantiated 'eachType'
-			if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
-				compilerLogger(CompilerLogGroup.compiler).debug("instantiated by a parse: '{String.from(name)}' — the signature index is settled again")
-			end 'debugging'
-
 			noteMoved(moved, name: name)
 			project.db.instantiatedByAParse.file(name)
 		end 'eachType'
@@ -1410,10 +1401,6 @@ function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSigna
 
 	if not needless.isEmpty() 'aFiledTypeNoLongerNeedsFiling'
 		for name in needless 'eachType'
-			if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
-				compilerLogger(CompilerLogGroup.compiler).debug("no longer instantiated only by a parse: '{String.from(name)}' — the signature index is settled again")
-			end 'debugging'
-
 			noteMoved(moved, name: name)
 			project.db.instantiatedByAParse.drop(name)
 		end 'eachType'

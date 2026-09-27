@@ -100,8 +100,6 @@
 // SUBJECT is the emitted arithmetic take a runtime input, which is strictly better
 // testing than a literal a correct compiler is entitled to fold.
 
-// The pass's headline, printed before its per-function lines.
-//
 // The pass runs over the WHOLE module, and unlike `foldConstOperands` it takes no start index: its other
 // caller would be the appended runtime band, and the hand-built runtime bodies (`MmRuntime`,
 // `GtRuntime`, the synthesized cascades) contain no `const <op> const` at all — every arithmetic op
@@ -138,7 +136,7 @@ end 'foldConstantsHeadline'
 // Iterating this walk instead would trade a LINEAR pass for
 // one whose worst case is O(blocks x ops), for two ops.
 // Fold one function, in place. `branch` is the caller's terminator record, refilled per block.
-module function foldConstantsInFunc(module StdModule, func IrFunction, branch StdBranchOperands, log PassLog)
+module function foldConstantsInFunc(module StdModule, func IrFunction, branch StdBranchOperands)
 	let opIndices = module.liveOpIndices(func)
 	var constMap = ConstValueMap.create()
 
@@ -150,7 +148,7 @@ module function foldConstantsInFunc(module StdModule, func IrFunction, branch St
 	//
 	// A fold ORPHANS the arm it did not take, and this pass must remove it itself — see
 	// `dropUnreachableBlocks` for the allocator invariant that says so.
-	if foldConstantBranches(module, func: func, constMap: constMap, branch: branch, log: log) > 0 'branchesFolded'
+	if foldConstantBranches(module, func: func, constMap: constMap, branch: branch) > 0 'branchesFolded'
 		dropUnreachableBlocks(module, func: func)
 	end 'branchesFolded'
 
@@ -614,7 +612,7 @@ end 'evaluateIntBinOp'
 // the time the code is encoded.
 //
 // Answers how many branches folded — `refineValueRanges` reports the count it made this fold.
-function foldConstantBranches(module StdModule, func IrFunction, constMap ConstValueMap, branch StdBranchOperands, log PassLog) returns TallyCount
+function foldConstantBranches(module StdModule, func IrFunction, constMap ConstValueMap, branch StdBranchOperands) returns TallyCount
 	var folded = 0 as TallyCount
 
 	for position in 0 upto func.blockRefs.count() 'eachBlock'
@@ -632,7 +630,7 @@ function foldConstantBranches(module StdModule, func IrFunction, constMap ConstV
 			continue
 		end 'noConditionToKnow'
 
-		if foldCondBranch(module, block: block, termIdx: termIdx, condId: branch.condId, thenBlockId: branch.thenBlockId, elseBlockId: branch.elseBlockId, constMap: constMap, log: log) 'folded'
+		if foldCondBranch(module, block: block, termIdx: termIdx, condId: branch.condId, thenBlockId: branch.thenBlockId, elseBlockId: branch.elseBlockId, constMap: constMap) 'folded'
 			folded = folded + 1
 		end 'folded'
 	end 'eachBlock'
@@ -646,7 +644,7 @@ end 'foldConstantBranches'
 // an arm by position is right only where a dead predicate really does make the two arms equivalent,
 // which is not true in general. (Nothing in the corpus produces it: the parser mints a distinct block
 // per arm.)
-function foldCondBranch(module StdModule, block IrBlock, termIdx OpIndex, condId ValueId, thenBlockId BlockId, elseBlockId BlockId, constMap ConstValueMap, log PassLog) returns bool
+function foldCondBranch(module StdModule, block IrBlock, termIdx OpIndex, condId ValueId, thenBlockId BlockId, elseBlockId BlockId, constMap ConstValueMap) returns bool
 	if thenBlockId == elseBlockId 'oneTargetTwoEdges'
 		return false
 	end 'oneTargetTwoEdges'
@@ -663,10 +661,6 @@ function foldCondBranch(module StdModule, block IrBlock, termIdx OpIndex, condId
 
 	try module.ops.set(termIdx, value: StdOp.branch(taken)) otherwise panic("foldConstants: ops.set OOB at terminator index {termIdx}")
 	block.branchEdges = edgesWithoutTarget(block.branchEdges, droppedTarget: dropped)
-
-	if log.traces 'traced'
-		log.trace("foldConstants: condBranch on a constant -> branch block_{taken} (block_{dropped} loses this predecessor)")
-	end 'traced'
 
 	return true
 end 'foldCondBranch'
@@ -689,7 +683,7 @@ module typealias CompareDecisionArray = Array with CompareDecision
 // — reads the constant; the branches on those constants fold as `foldConstantBranches` folds them; the
 // arm a fold dropped goes with everything only it reached; the constants nothing reads any more are
 // retired. Answers how many branches folded.
-module function applyCompareDecisions(module StdModule, func IrFunction, decisions CompareDecisionArray, branch StdBranchOperands, def StdFoldableDef, log PassLog) returns TallyCount
+module function applyCompareDecisions(module StdModule, func IrFunction, decisions CompareDecisionArray, branch StdBranchOperands, def StdFoldableDef) returns TallyCount
 	var constMap = ConstValueMap.create()
 
 	for decision in decisions 'eachDecision'
@@ -698,7 +692,7 @@ module function applyCompareDecisions(module StdModule, func IrFunction, decisio
 		constMap.upsert(decision.resultId, value: payload)
 	end 'eachDecision'
 
-	let folded = foldConstantBranches(module, func: func, constMap: constMap, branch: branch, log: log)
+	let folded = foldConstantBranches(module, func: func, constMap: constMap, branch: branch)
 
 	if folded > 0 'branchesFolded'
 		dropUnreachableBlocks(module, func: func)

@@ -1474,8 +1474,7 @@ function refuseAlwaysSplicedBodyStillReached(project Project, module StdModule, 
 end 'refuseAlwaysSplicedBodyStillReached'
 
 // Why the leaf rule left this body's call standing. Asked of the FINISHED module, so every sentence it can
-// answer with names a fact a reader can check against the body in front of them; the refusals share
-// `calledOnceRefusalText`'s wording because they are the same rules under a second reader.
+// answer with names a fact a reader can check against the body in front of them.
 function whyTheSpliceWasRefused(project Project, module StdModule, calleeIndex FuncIndex, caller IrFunction, byName FunctionNameIndex, always AlwaysSplicedPlan) returns String
 	// FIRST, because every other answer would be wrong about a cycle: its members refuse no rule at all
 	// — each one's call is into a body that declares the row, which is precisely the call the leaf rule
@@ -1567,8 +1566,7 @@ end 'aGoldenRequestNames'
 // The called-once rule
 // ══════════════════════════════════════════════════════════════════════════
 
-// Why a called-once callee was left as a call. Counted per reason into the pass summary and named in the
-// per-callee trace.
+// Why a called-once callee was left as a call. Counted per reason into the pass summary.
 enum CalledOnceRefusal
 	// Its one `call` site is not its only reference: a `tryCall` site, a function-value thunk, a witness or
 	// layout slot, or a name the entry stub or a hand-assembled chunk calls.
@@ -2298,37 +2296,37 @@ function spliceCalledOnceCallees(project Project, module StdModule, byName Funct
 		let func = module.getFunc(funcIndex)
 
 		if census.callerOfCallee(funcIndex) < firstCallerOf(round) 'siteBelongsToTheOtherRound'
-			noteCalledOnceRefusal(refusals, reason: CalledOnceRefusal.siteOutsideThisRound, func: func)
+			refusals.add(CalledOnceRefusal.siteOutsideThisRound.ordinal, count: 1)
 			continue
 		end 'siteBelongsToTheOtherRound'
 
 		if not roundAdmitsCallee(round, callee: func, runtimeTier: project.libraryFacts.runtimeTier) 'notThePairThisRoundJoins'
-			noteCalledOnceRefusal(refusals, reason: CalledOnceRefusal.calleeOutsideThisRound, func: func)
+			refusals.add(CalledOnceRefusal.calleeOutsideThisRound.ordinal, count: 1)
 			continue
 		end 'notThePairThisRoundJoins'
 
 		if not framesAreRecorded 'noRecordsOnThisTarget'
-			noteCalledOnceRefusal(refusals, reason: CalledOnceRefusal.noInlineFrameRecords, func: func)
+			refusals.add(CalledOnceRefusal.noInlineFrameRecords.ordinal, count: 1)
 			continue
 		end 'noRecordsOnThisTarget'
 
 		if isGoldenNamed(namedByGolden, funcIndex: funcIndex) 'aGoldenWantsTheBody'
-			noteCalledOnceRefusal(refusals, reason: CalledOnceRefusal.namedByGoldenRequest, func: func)
+			refusals.add(CalledOnceRefusal.namedByGoldenRequest.ordinal, count: 1)
 			continue
 		end 'aGoldenWantsTheBody'
 
 		if census.callerOfCallee(funcIndex) == funcIndex 'callsItself'
-			noteCalledOnceRefusal(refusals, reason: CalledOnceRefusal.recursive, func: func)
+			refusals.add(CalledOnceRefusal.recursive.ordinal, count: 1)
 			continue
 		end 'callsItself'
 
 		if splicingWouldWidenTheSafePoint(func, caller: module.getFunc(census.callerOfCallee(funcIndex)), runtimeTier: project.libraryFacts.runtimeTier) 'wouldWidenTheSafePoint'
-			noteCalledOnceRefusal(refusals, reason: CalledOnceRefusal.safePointProvenance, func: func)
+			refusals.add(CalledOnceRefusal.safePointProvenance.ordinal, count: 1)
 			continue
 		end 'wouldWidenTheSafePoint'
 
 		match scanSpliceableShape(module, func: func, meta: meta) 'shape'
-			refused(reason) then noteCalledOnceRefusal(refusals, reason: reason, func: func)
+			refused(reason) then refusals.add(reason.ordinal, count: 1)
 			spliceable then admitCandidate(funcIndex, census: census, candidate: candidate, pendingCallees: pendingCallees, candidateCount: candidateCount)
 		end 'shape'
 	end 'eachFunc'
@@ -2417,14 +2415,6 @@ function pendingCalleesOf(pendingCallees SiteCountArray, funcIndex FuncIndex) re
 	return try pendingCallees.get(funcIndex) otherwise panic("pendingCalleesOf: function index {funcIndex} is outside the pending column")
 end 'pendingCalleesOf'
 
-function noteCalledOnceRefusal(refusals OrdinalTally, reason CalledOnceRefusal, func IrFunction)
-	refusals.add(reason.ordinal, count: 1)
-
-	if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.trace) 'tracing'
-		compilerLogger(CompilerLogGroup.ir).trace("inlineLeaves: called-once callee '{String.from(func.name)}' left as a call — {calledOnceRefusalText(reason)}")
-	end 'tracing'
-end 'noteCalledOnceRefusal'
-
 // One candidate is done, spliced or refused: its caller has one fewer callee to wait for, and joins the
 // ready list when that was the last.
 function retireCandidate(calleeIndex FuncIndex, census CalledOnceCensus, candidate BoolArray, processed BoolArray, pendingCallees SiteCountArray, ready FuncIndexArray)
@@ -2480,7 +2470,7 @@ function refuseCandidateCycles(module StdModule, census CalledOnceCensus, candid
 			continue
 		end 'notAMember'
 
-		noteCalledOnceRefusal(refusals, reason: CalledOnceRefusal.recursive, func: module.getFunc(funcIndex))
+		refusals.add(CalledOnceRefusal.recursive.ordinal, count: 1)
 		retireCandidate(funcIndex, census: census, candidate: candidate, processed: processed, pendingCallees: pendingCallees, ready: ready)
 		refused = refused + 1
 	end 'eachMember'
@@ -2561,11 +2551,11 @@ function spliceWave(project Project, module StdModule, byName FunctionNameIndex,
 			let callee = module.getFunc(calleeIndex)
 			let valueBound = calleeValueBound(callerFacts, module: module, callee: callee, calleeIndex: calleeIndex)
 
-			if fitsSpliceBudget(module, budget: budget, facts: facts, caller: caller, callee: callee, calleeIndex: calleeIndex, calleeValueBound: valueBound, across: across, liveness: liveness) 'admitted'
+			if fitsSpliceBudget(module, budget: budget, facts: facts, callee: callee, calleeIndex: calleeIndex, calleeValueBound: valueBound, across: across, liveness: liveness) 'admitted'
 				wave.admit(calleeIndex, valueBound: valueBound, blockCount: callee.blockRefs.count())
 				admittedAny = true
 			end 'admitted' else 'overBudget'
-				noteCalledOnceRefusal(refusals, reason: CalledOnceRefusal.pressureBudgetExceeded, func: callee)
+				refusals.add(CalledOnceRefusal.pressureBudgetExceeded.ordinal, count: 1)
 			end 'overBudget'
 		end 'eachCandidate'
 
@@ -2641,10 +2631,10 @@ end 'groupByCaller'
 // counts. A parameter live at the body's busiest point IS the caller's argument after the splice, so it
 // is counted on the caller's side when that argument already counts there and on the body's side
 // otherwise.
-function fitsSpliceBudget(module StdModule, budget HoistPressureBudget, facts CallerSiteFacts, caller IrFunction, callee IrFunction, calleeIndex FuncIndex, calleeValueBound ValueId, across StdValueUseSet, liveness StdLiveness) returns bool
+function fitsSpliceBudget(module StdModule, budget HoistPressureBudget, facts CallerSiteFacts, callee IrFunction, calleeIndex FuncIndex, calleeValueBound ValueId, across StdValueUseSet, liveness StdLiveness) returns bool
 	match budget 'b'
 		unbounded then return true
-		registers(count) then return spliceFitsRegisters(module, facts: facts, caller: caller, callee: callee, calleeIndex: calleeIndex, calleeValueBound: calleeValueBound, budget: count, across: across, liveness: liveness)
+		registers(count) then return spliceFitsRegisters(module, facts: facts, callee: callee, calleeIndex: calleeIndex, calleeValueBound: calleeValueBound, budget: count, across: across, liveness: liveness)
 	end 'b'
 end 'fitsSpliceBudget'
 
@@ -2655,15 +2645,11 @@ end 'fitsSpliceBudget'
 // so a body too small to reach the budget from the site's count admits before it is read. Both answer
 // exactly what the full measurement would, and between them a liveness over a copied body is asked only of
 // the callees whose answer is not already known.
-function spliceFitsRegisters(module StdModule, facts CallerSiteFacts, caller IrFunction, callee IrFunction, calleeIndex FuncIndex, calleeValueBound ValueId, budget RegCount, across StdValueUseSet, liveness StdLiveness) returns bool
+function spliceFitsRegisters(module StdModule, facts CallerSiteFacts, callee IrFunction, calleeIndex FuncIndex, calleeValueBound ValueId, budget RegCount, across StdValueUseSet, liveness StdLiveness) returns bool
 	let site = facts.siteOf(calleeIndex, callee: callee)
 	let acrossCount = site.across.count() as RegCount
 
 	if acrossCount > budget 'overBeforeTheBody'
-		if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.trace) 'tracing'
-			compilerLogger(CompilerLogGroup.ir).trace("inlineLeaves: splicing '{String.from(callee.name)}' into '{String.from(caller.name)}' holds {acrossCount} value(s) across the site that its loop reads, over the budget of {budget} before the body is counted")
-		end 'tracing'
-
 		return false
 	end 'overBeforeTheBody'
 
@@ -2676,18 +2662,10 @@ function spliceFitsRegisters(module StdModule, facts CallerSiteFacts, caller IrF
 	let bodyBound = bodyLiveInBound(callee, valueBound: calleeValueBound, args: site.args, across: across)
 
 	if acrossCount + bodyBound <= budget 'fitsWhateverTheBodyHolds'
-		if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.trace) 'tracing'
-			compilerLogger(CompilerLogGroup.ir).trace("inlineLeaves: splicing '{String.from(callee.name)}' into '{String.from(caller.name)}' holds {acrossCount} value(s) across the site that its loop reads and at most {bodyBound} more anywhere in the body, against a budget of {budget}")
-		end 'tracing'
-
 		return true
 	end 'fitsWhateverTheBodyHolds'
 
 	let bodyCount = largestBodyLiveIn(module, func: callee, valueBound: calleeValueBound, args: site.args, across: across, liveness: liveness)
-
-	if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.trace) 'tracing'
-		compilerLogger(CompilerLogGroup.ir).trace("inlineLeaves: splicing '{String.from(callee.name)}' into '{String.from(caller.name)}' holds {acrossCount} value(s) across the site that its loop reads and {bodyCount} more at the body's busiest point, against a budget of {budget}")
-	end 'tracing'
 
 	return acrossCount + bodyCount <= budget
 end 'spliceFitsRegisters'

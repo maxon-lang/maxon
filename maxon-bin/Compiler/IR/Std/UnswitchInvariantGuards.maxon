@@ -125,7 +125,7 @@ end 'hoistPressureBudgetFor'
 let UnswitchTestLabel = b"__us_test"
 let UnswitchSlowLabel = b"__us_slow"
 
-// Why a loop was left alone. Counted per reason into the pass summary and named in the per-loop trace.
+// Why a loop was left alone. Counted per reason into the pass summary.
 module enum UnswitchRefusal
 	noPreheader
 	insideAVersionedLoop
@@ -146,29 +146,6 @@ module enum UnswitchRefusal
 	hoistBudgetExceeded
 	pressureBudgetExceeded
 end 'UnswitchRefusal'
-
-function refusalText(reason UnswitchRefusal) returns String
-	return match reason 'r'
-		noPreheader gives "it has no preheader whose only successor is the header"
-		insideAVersionedLoop gives "it lies inside a loop versioned in this run"
-		containsAVersionedLoop gives "it contains a loop versioned in this run"
-		oplessMember gives "a member has no terminator op"
-		unclonableOp gives "a member holds an op the cloner refuses"
-		tooManyOps gives "its body is over the op budget"
-		callWithUnknownEffect gives "a call's effect on its record is unknown"
-		writerOnAVariantRecord gives "an in-place writer's record is defined inside the loop"
-		noManagedCallee gives "no call names a record"
-		storeNotAnElementSlot gives "a store is not an element store on a callee's record"
-		elementStoreNotBounded gives "an element store is not dominated by the bound guard on its index"
-		noInvariantGuard gives "no shape guard tests an invariant record and no record field is invariant"
-		tooManyGuards gives "its guards are over the budget"
-		writerWithoutItsShapeGuards gives "an in-place writer's record lacks one of the three shape guards"
-		escapingOpResult gives "an op result defined in the loop is read after it"
-		escapingUseNotUnderOneExit gives "no exit block with only loop predecessors dominates every read of a loop value"
-		hoistBudgetExceeded gives "the copy would read more hoisted values than the budget"
-		pressureBudgetExceeded gives "its live-across set plus the hoisted values would be over the register budget"
-	end 'r'
-end 'refusalText'
 
 // The pass's summary line, from the tally its runs over every function summed into (`StdPassPool`).
 module function unswitchInvariantGuardsSummary(tally StdPassTally, funcCount FuncCount) returns String
@@ -208,7 +185,7 @@ module function unswitchInFunc(module StdModule, func IrFunction, origins Derive
 		let header = (try loops.headers.get(next) otherwise panic("unswitchInvariantGuards: headers.get OOB at {next}")) as BlockRefIndex
 		loops.collect(analysis.tree.pred, header: header as CsrIndex, into: scratch.members)
 
-		var plan = UnswitchPlan.create(func.name, header: header, members: scratch.members.blocks)
+		var plan = UnswitchPlan.create(header, members: scratch.members.blocks)
 
 		if analyzeLoop(module, func: func, analysis: analysis, plan: plan, budget: budget, scratch: scratch) 'admitted'
 			analysis.markVersioned(plan)
@@ -429,7 +406,6 @@ end 'ElementStoreSite'
 typealias ElementStoreSiteArray = Array with ElementStoreSite
 
 type UnswitchPlan
-	export let funcName as ByteArray
 	export var header as BlockRefIndex
 	export var preheader as BlockRefIndex = 0
 
@@ -465,14 +441,14 @@ type UnswitchPlan
 	export var escapingTypes as StdTypeArray
 	export var exitPhis as ValueIdArray
 
-	static function create(funcName ByteArray, header BlockRefIndex, members CsrColumn) returns UnswitchPlan
+	static function create(header BlockRefIndex, members CsrColumn) returns UnswitchPlan
 		var positions = BlockPositionColumn.create()
 
 		for member in members 'eachMember'
 			positions.push(member as BlockRefIndex)
 		end 'eachMember'
 
-		return Self{funcName: funcName, header: header, members: positions, walkOrder: BlockPositionColumn.create(), guards: UnswitchGuardArray.create(), bounds: UnswitchGuardArray.create(), stores: ElementStoreSiteArray.create(), knownRecords: ValueIdArray.create(), writerRecords: ValueIdArray.create(), hoisted: StdValueUseSet.create(), hoistedWalk: ValueIdArray.create(), hoistedCanonical: ValueIdArray.create(), escaping: ValueIdArray.create(), escapingTypes: StdTypeArray.create(), exitPhis: ValueIdArray.create()}
+		return Self{header: header, members: positions, walkOrder: BlockPositionColumn.create(), guards: UnswitchGuardArray.create(), bounds: UnswitchGuardArray.create(), stores: ElementStoreSiteArray.create(), knownRecords: ValueIdArray.create(), writerRecords: ValueIdArray.create(), hoisted: StdValueUseSet.create(), hoistedWalk: ValueIdArray.create(), hoistedCanonical: ValueIdArray.create(), escaping: ValueIdArray.create(), escapingTypes: StdTypeArray.create(), exitPhis: ValueIdArray.create()}
 	end 'create'
 
 	// The canonical of the `ordinal`-th hoisted op in walk order, which must be `valueId`'s: the
@@ -525,20 +501,20 @@ let NoGuardAtBlock = 0 as GuardCount
 // ══════════════════════════════════════════════════════════════════════════
 
 // Decide one loop, filling `plan`. Every clause that refuses does so through `refuse`, so the tally
-// and the trace name it.
+// counts it.
 function analyzeLoop(module StdModule, func IrFunction, analysis UnswitchFunction, plan UnswitchPlan, budget HoistPressureBudget, scratch UnswitchScratch) returns bool
 	if analysis.isInsideAVersionedLoop(plan.header) 'nested'
-		return refuse(plan, reason: UnswitchRefusal.insideAVersionedLoop, scratch: scratch)
+		return refuse(UnswitchRefusal.insideAVersionedLoop, scratch: scratch)
 	end 'nested'
 
 	for position in plan.members 'eachMember'
 		if analysis.isAVersionedHeader(position) 'containsOne'
-			return refuse(plan, reason: UnswitchRefusal.containsAVersionedLoop, scratch: scratch)
+			return refuse(UnswitchRefusal.containsAVersionedLoop, scratch: scratch)
 		end 'containsOne'
 	end 'eachMember'
 
 	match soleLoopEntry(analysis.tree, members: scratch.members, header: plan.header) 'entry'
-		none then return refuse(plan, reason: UnswitchRefusal.noPreheader, scratch: scratch)
+		none then return refuse(UnswitchRefusal.noPreheader, scratch: scratch)
 		position(preheader) then plan.preheader = preheader
 	end 'entry'
 
@@ -554,7 +530,7 @@ function analyzeLoop(module StdModule, func IrFunction, analysis UnswitchFunctio
 	end 'aCallRefuses'
 
 	if plan.knownRecords.count() == 0 'noRecordToGuard'
-		return refuse(plan, reason: UnswitchRefusal.noManagedCallee, scratch: scratch)
+		return refuse(UnswitchRefusal.noManagedCallee, scratch: scratch)
 	end 'noRecordToGuard'
 
 	recordLoopPreorder(analysis.tree, members: scratch.members, header: plan.header, into: plan.walkOrder)
@@ -564,7 +540,7 @@ function analyzeLoop(module StdModule, func IrFunction, analysis UnswitchFunctio
 	end 'aStoreRefuses'
 
 	if plan.guards.count() > MaxGuardsPerLoop 'tooManyGuards'
-		return refuse(plan, reason: UnswitchRefusal.tooManyGuards, scratch: scratch)
+		return refuse(UnswitchRefusal.tooManyGuards, scratch: scratch)
 	end 'tooManyGuards'
 
 	if not storesAreBounded(module, func: func, analysis: analysis, plan: plan, scratch: scratch) 'aStoreIsUnbounded'
@@ -588,19 +564,15 @@ function analyzeLoop(module StdModule, func IrFunction, analysis UnswitchFunctio
 	markHoisted(module, func: func, analysis: analysis, plan: plan, scratch: scratch)
 
 	if not plan.versioned and plan.hoisted.isEmpty() 'nothingToDo'
-		return refuse(plan, reason: UnswitchRefusal.noInvariantGuard, scratch: scratch)
+		return refuse(UnswitchRefusal.noInvariantGuard, scratch: scratch)
 	end 'nothingToDo'
 
 	return hoistFitsBudget(module, func: func, plan: plan, budget: budget, scratch: scratch)
 end 'analyzeLoop'
 
-// Count and trace one refusal. Answers `false` so a clause can `return refuse(…)`.
-function refuse(plan UnswitchPlan, reason UnswitchRefusal, scratch UnswitchScratch) returns bool
+// Count one refusal. Answers `false` so a clause can `return refuse(…)`.
+function refuse(reason UnswitchRefusal, scratch UnswitchScratch) returns bool
 	scratch.tally.unswitchRefusals.add(reason.ordinal, count: 1)
-
-	if scratch.log.traces 'traced'
-		scratch.log.trace("unswitchInvariantGuards: '{String.from(plan.funcName)}' loop at block position {plan.header} left alone — {refusalText(reason)}")
-	end 'traced'
 
 	return false
 end 'refuse'
@@ -614,12 +586,12 @@ function sizeFits(module StdModule, func IrFunction, plan UnswitchPlan, scratch 
 		let block = module.blockAtPosition(func, position: position)
 
 		if not block.hasTerminatorOp() 'fallsThrough'
-			return refuse(plan, reason: UnswitchRefusal.oplessMember, scratch: scratch)
+			return refuse(UnswitchRefusal.oplessMember, scratch: scratch)
 		end 'fallsThrough'
 
 		for opIdx in block.opRefs 'eachOp'
 			if module.getOp(opIdx).rawValue.isUnsupportedInInlineBody 'notClonable'
-				return refuse(plan, reason: UnswitchRefusal.unclonableOp, scratch: scratch)
+				return refuse(UnswitchRefusal.unclonableOp, scratch: scratch)
 			end 'notClonable'
 		end 'eachOp'
 
@@ -627,7 +599,7 @@ function sizeFits(module StdModule, func IrFunction, plan UnswitchPlan, scratch 
 	end 'eachMember'
 
 	if ops > MaxOpsPerLoop 'overBudget'
-		return refuse(plan, reason: UnswitchRefusal.tooManyOps, scratch: scratch)
+		return refuse(UnswitchRefusal.tooManyOps, scratch: scratch)
 	end 'overBudget'
 
 	return true
@@ -662,13 +634,13 @@ function admitCall(module StdModule, opIdx OpIndex, plan UnswitchPlan, scratch U
 	classifyCallOperands(op, call: scratch.call)
 
 	if not scratch.call.namesACallee() or scratch.call.argCount == 0 'noCalleeToLookUp'
-		return refuse(plan, reason: UnswitchRefusal.callWithUnknownEffect, scratch: scratch)
+		return refuse(UnswitchRefusal.callWithUnknownEffect, scratch: scratch)
 	end 'noCalleeToLookUp'
 
 	let record = scratch.call.firstArg
 
 	match managedCalleeHeaderEffect(scratch.call.callee) 'effect'
-		unknown then return refuse(plan, reason: UnswitchRefusal.callWithUnknownEffect, scratch: scratch)
+		unknown then return refuse(UnswitchRefusal.callWithUnknownEffect, scratch: scratch)
 		writesNothing then admitKnownRecord(record, plan: plan, scratch: scratch)
 		detachesUnlessOwnedUnshared then return admitWriterRecord(record, plan: plan, scratch: scratch)
 	end 'effect'
@@ -689,7 +661,7 @@ end 'admitKnownRecord'
 
 function admitWriterRecord(record ValueId, plan UnswitchPlan, scratch UnswitchScratch) returns bool
 	if scratch.definedInLoop.contains(record) 'variant'
-		return refuse(plan, reason: UnswitchRefusal.writerOnAVariantRecord, scratch: scratch)
+		return refuse(UnswitchRefusal.writerOnAVariantRecord, scratch: scratch)
 	end 'variant'
 
 	admitKnownRecord(record, plan: plan, scratch: scratch)
@@ -750,7 +722,7 @@ end 'classifyBodyOp'
 // refuses the loop. Whether its record is one a callee names is asked once every call has been read.
 function admitStore(op StdOp, position BlockRefIndex, analysis UnswitchFunction, plan UnswitchPlan, scratch UnswitchScratch) returns bool
 	if not storeStaysInABuffer(op, analysis: analysis, scratch: scratch) 'notASlot'
-		return refuse(plan, reason: UnswitchRefusal.storeNotAnElementSlot, scratch: scratch)
+		return refuse(UnswitchRefusal.storeNotAnElementSlot, scratch: scratch)
 	end 'notASlot'
 
 	plan.stores.push(ElementStoreSite.create(position, slot: scratch.slot))
@@ -856,11 +828,11 @@ end 'classifyTerminator'
 function storesAreBounded(module StdModule, func IrFunction, analysis UnswitchFunction, plan UnswitchPlan, scratch UnswitchScratch) returns bool
 	for store in plan.stores 'eachStore'
 		if not scratch.known.contains(store.record) 'notACalleesRecord'
-			return refuse(plan, reason: UnswitchRefusal.storeNotAnElementSlot, scratch: scratch)
+			return refuse(UnswitchRefusal.storeNotAnElementSlot, scratch: scratch)
 		end 'notACalleesRecord'
 
 		if store.indexIsVariable and not boundDominates(module, func: func, analysis: analysis, plan: plan, store: store) 'unbounded'
-			return refuse(plan, reason: UnswitchRefusal.elementStoreNotBounded, scratch: scratch)
+			return refuse(UnswitchRefusal.elementStoreNotBounded, scratch: scratch)
 		end 'unbounded'
 	end 'eachStore'
 
@@ -891,7 +863,7 @@ end 'boundDominates'
 function writersHaveTheirGuards(plan UnswitchPlan, scratch UnswitchScratch) returns bool
 	for record in plan.writerRecords 'eachWriter'
 		if not plan.hasGuard(ManagedGuardKind.bufferNotOwned, record: record) or not plan.hasGuard(ManagedGuardKind.bufferUnallocated, record: record) or not plan.hasGuard(ManagedGuardKind.bufferShared, record: record) 'aGuardIsMissing'
-			return refuse(plan, reason: UnswitchRefusal.writerWithoutItsShapeGuards, scratch: scratch)
+			return refuse(UnswitchRefusal.writerWithoutItsShapeGuards, scratch: scratch)
 		end 'aGuardIsMissing'
 	end 'eachWriter'
 
@@ -910,7 +882,7 @@ function refuseEscapingOpResults(module StdModule, func IrFunction, analysis Uns
 
 		for opIdx in block.opRefs 'eachOp'
 			if opResultEscapes(module, opIdx: opIdx, analysis: analysis, scratch: scratch) 'escapes'
-				return refuse(plan, reason: UnswitchRefusal.escapingOpResult, scratch: scratch)
+				return refuse(UnswitchRefusal.escapingOpResult, scratch: scratch)
 			end 'escapes'
 		end 'eachOp'
 	end 'eachMember'
@@ -954,7 +926,7 @@ function resolveExit(module StdModule, func IrFunction, analysis UnswitchFunctio
 		end 'eachSuccessor'
 	end 'eachExitingMember'
 
-	return refuse(plan, reason: UnswitchRefusal.escapingUseNotUnderOneExit, scratch: scratch)
+	return refuse(UnswitchRefusal.escapingUseNotUnderOneExit, scratch: scratch)
 end 'resolveExit'
 
 // Whether a non-member reads `valueId`, recording every such reading block.
@@ -1225,11 +1197,11 @@ function hoistFitsBudget(module StdModule, func IrFunction, plan UnswitchPlan, b
 	end 'eachBlock'
 
 	if scratch.readHoisted.insertedIdCount() > HoistedValueBudget 'overBudget'
-		return refuse(plan, reason: UnswitchRefusal.hoistBudgetExceeded, scratch: scratch)
+		return refuse(UnswitchRefusal.hoistBudgetExceeded, scratch: scratch)
 	end 'overBudget'
 
 	if not fitsPressureBudget(module, func: func, plan: plan, budget: budget, scratch: scratch) 'overPressure'
-		return refuse(plan, reason: UnswitchRefusal.pressureBudgetExceeded, scratch: scratch)
+		return refuse(UnswitchRefusal.pressureBudgetExceeded, scratch: scratch)
 	end 'overPressure'
 
 	return true
@@ -1396,17 +1368,9 @@ function applyPlan(module StdModule, func IrFunction, plan UnswitchPlan, analysi
 		scratch.tally.hoistedLoops = scratch.tally.hoistedLoops + 1
 		emitTestChain(module, func: func, plan: plan, analysis: analysis, scratch: scratch, columns: columns, minter: minter)
 		readHoistedInPlace(module, func: func, plan: plan, scratch: scratch, columns: columns)
-
-		if scratch.log.debugs 'logged'
-			scratch.log.debug("unswitchInvariantGuards: '{String.from(func.name)}' loop at block position {plan.header} — no guard; the fields of {plan.knownRecords.count()} record(s) hoisted in place")
-		end 'logged'
 	end 'hoistOnly' else 'versioned'
 		scratch.tally.versionedLoops = scratch.tally.versionedLoops + 1
 		copyLoop(module, func: func, plan: plan, analysis: analysis, scratch: scratch, columns: columns, minter: minter)
-
-		if scratch.log.debugs 'logged'
-			scratch.log.debug("unswitchInvariantGuards: '{String.from(func.name)}' loop at block position {plan.header} — {plan.guards.count()} guard(s) folded, {plan.members.count()} block(s) copied, {plan.escaping.count()} exit phi(s)")
-		end 'logged'
 	end 'versioned'
 
 	columns.reset()
@@ -1949,17 +1913,16 @@ module type UnswitchScratch
 	export var guard as ManagedGuardOperands
 	export var slot as ElementSlotOperands
 
-	// The step's counts and where a per-loop line goes, both the pool worker's (`StdPassPool`).
+	// The step's counts, the pool worker's (`StdPassPool`).
 	export var tally as StdPassTally
-	export var log as PassLog
 
 	// The preheader load `preheaderLoadOf` found, meaningful only when it answered true — and the def
 	// record its scan fills, kept apart from `def`, which its caller is still reading.
 	export var reusedLoad as ValueId = 0
 	export var preheaderDef as StdDefinedValues
 
-	module static function create(tally StdPassTally, log PassLog) returns UnswitchScratch
-		return Self{members: LoopMembership.create(), definedInLoop: LoopValueStamps.create(), liveAcross: LoopValueStamps.create(), invariant: LoopValueStamps.create(), hoistableLoads: LoopValueStamps.create(), known: LoopValueStamps.create(), writers: LoopValueStamps.create(), canonical: CanonicalMap.create(0), reads: StdValueUseSet.createRecordingIds(), readHoisted: StdValueUseSet.createRecordingIds(), escapingUses: BlockPositionColumn.create(), load: StdLoadOperands.create(), store: StdStoreOperands.create(), call: StdCallOperands.create(), branch: StdBranchOperands.create(), def: StdDefinedValues.create(), cloner: StdOpCloner.create(), guard: ManagedGuardOperands.create(), slot: ElementSlotOperands.create(), preheaderDef: StdDefinedValues.create(), tally: tally, log: log}
+	module static function create(tally StdPassTally) returns UnswitchScratch
+		return Self{members: LoopMembership.create(), definedInLoop: LoopValueStamps.create(), liveAcross: LoopValueStamps.create(), invariant: LoopValueStamps.create(), hoistableLoads: LoopValueStamps.create(), known: LoopValueStamps.create(), writers: LoopValueStamps.create(), canonical: CanonicalMap.create(0), reads: StdValueUseSet.createRecordingIds(), readHoisted: StdValueUseSet.createRecordingIds(), escapingUses: BlockPositionColumn.create(), load: StdLoadOperands.create(), store: StdStoreOperands.create(), call: StdCallOperands.create(), branch: StdBranchOperands.create(), def: StdDefinedValues.create(), cloner: StdOpCloner.create(), guard: ManagedGuardOperands.create(), slot: ElementSlotOperands.create(), preheaderDef: StdDefinedValues.create(), tally: tally}
 	end 'create'
 
 	function beginLoop()

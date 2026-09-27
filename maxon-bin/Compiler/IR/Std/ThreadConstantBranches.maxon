@@ -58,8 +58,8 @@ typealias ThreadedSiteCount = int(0 to u64.max)
 typealias CandidateIndex = int(0 to u64.max)
 typealias ArgSlot = int(0 to u64.max)
 
-// Why the rule left a SHAPED block alone. Counted per reason into the pass summary and named in the
-// per-site trace, so a reader can tell what widening the rule would buy before writing the widening.
+// Why the rule left a SHAPED block alone. Counted per reason into the pass summary, so a reader can
+// tell what widening the rule would buy before writing the widening.
 module enum ThreadRefusal
 	unreachable
 	conditionReadElsewhere
@@ -72,20 +72,6 @@ module enum ThreadRefusal
 	valueArgReadOutsideKeptTarget
 end 'ThreadRefusal'
 
-function refusalText(reason ThreadRefusal) returns String
-	return match reason 'r'
-		unreachable gives "the entry cannot reach it"
-		conditionReadElsewhere gives "its compare's result is read by more than the terminator"
-		testedArgReadElsewhere gives "the tested block arg is read by more than the compare"
-		predecessorNotALoneBranch gives "a predecessor does not reach it through a lone `branch`"
-		unsignedCompare gives "the compare is unsigned, which the shared evaluator declines"
-		targetsDisagree gives "two constant predecessors decide different targets"
-		noConstantPredecessor gives "no predecessor passes a constant for the tested arg"
-		keptTargetHasAnotherWayIn gives "the target its constants decide has a predecessor other than the join"
-		valueArgReadOutsideKeptTarget gives "another block arg is read in a block the kept target does not dominate"
-	end 'r'
-end 'refusalText'
-
 // What every function's scan refills, created ONCE for the module: the candidate list (`Array.clear`
 // keeps its capacity), the two classification records the scan reads ops into, and the refusal tally.
 // Per function these would be three allocations paid by the many functions that hold no candidate.
@@ -94,13 +80,12 @@ module type ThreadScratch
 	export var arith as StdArithOperands
 	export var branch as StdBranchOperands
 
-	// The step's counts — the threaded sites and one count per `ThreadRefusal` — and where a per-site
-	// line goes, both the pool worker's (`StdPassPool`).
+	// The step's counts — the threaded sites and one count per `ThreadRefusal` — the pool worker's
+	// (`StdPassPool`).
 	export var tally as StdPassTally
-	export var log as PassLog
 
-	module static function create(tally StdPassTally, log PassLog) returns ThreadScratch
-		return Self{candidates: ThreadCandidateArray.create(), arith: StdArithOperands.create(), branch: StdBranchOperands.create(), tally: tally, log: log}
+	module static function create(tally StdPassTally) returns ThreadScratch
+		return Self{candidates: ThreadCandidateArray.create(), arith: StdArithOperands.create(), branch: StdBranchOperands.create(), tally: tally}
 	end 'create'
 end 'ThreadScratch'
 
@@ -241,10 +226,9 @@ type FunctionAnalysis
 	export var valueUses as StdValueUseSet
 	export var positionById as BlockIndexById
 
-	// The pass's refusal tally, its log and its terminator record, aliased in from `ThreadScratch`: every
+	// The pass's refusal tally and its terminator record, aliased in from `ThreadScratch`: every
 	// clause that refuses, and every predecessor read, already holds this record.
 	export var refusals as OrdinalTally
-	export var log as PassLog
 	export var branch as StdBranchOperands
 
 	static function gather(module StdModule, func IrFunction, scratch ThreadScratch) returns FunctionAnalysis
@@ -253,7 +237,7 @@ type FunctionAnalysis
 		let tree = StdDominatorTree.build(module, func: func)
 		var valueUses = StdValueUseSet.createTrackingRepeats()
 		collectFunctionValueUses(module, func: func, referenced: valueUses)
-		return Self{constMap: constMap, tree: tree, stamps: DominatorStamps.build(tree), valueUses: valueUses, positionById: module.blockIndexById(func), refusals: scratch.tally.threadRefusals, log: scratch.log, branch: scratch.branch}
+		return Self{constMap: constMap, tree: tree, stamps: DominatorStamps.build(tree), valueUses: valueUses, positionById: module.blockIndexById(func), refusals: scratch.tally.threadRefusals, branch: scratch.branch}
 	end 'gather'
 
 	function positionOf(blockId BlockId) returns BlockRefIndex
@@ -265,15 +249,15 @@ end 'FunctionAnalysis'
 // other block args, which `refuseEscapingReads` checks for every admitted candidate in one walk.
 function admit(module StdModule, func IrFunction, analysis FunctionAnalysis, candidate ThreadCandidate) returns bool
 	if not analysis.tree.canReach(candidate.position) 'unreachable'
-		return refuse(candidate, reason: ThreadRefusal.unreachable, analysis: analysis)
+		return refuse(ThreadRefusal.unreachable, analysis: analysis)
 	end 'unreachable'
 
 	if analysis.valueUses.containsRepeat(candidate.condId) 'conditionReadElsewhere'
-		return refuse(candidate, reason: ThreadRefusal.conditionReadElsewhere, analysis: analysis)
+		return refuse(ThreadRefusal.conditionReadElsewhere, analysis: analysis)
 	end 'conditionReadElsewhere'
 
 	if analysis.valueUses.containsRepeat(candidate.testedArg) 'testedArgReadElsewhere'
-		return refuse(candidate, reason: ThreadRefusal.testedArgReadElsewhere, analysis: analysis)
+		return refuse(ThreadRefusal.testedArgReadElsewhere, analysis: analysis)
 	end 'testedArgReadElsewhere'
 
 	if not decideTargetFromPredecessors(module, func: func, analysis: analysis, candidate: candidate) 'predecessorsRefuse'
@@ -285,19 +269,15 @@ function admit(module StdModule, func IrFunction, analysis FunctionAnalysis, can
 	candidate.keptPosition = analysis.positionOf(candidate.keptTarget)
 
 	if candidate.keptPosition == StdEntryBlockPosition or analysis.tree.pred.degree(candidate.keptPosition as CsrIndex) != 1 'keptTargetHasAnotherWayIn'
-		return refuse(candidate, reason: ThreadRefusal.keptTargetHasAnotherWayIn, analysis: analysis)
+		return refuse(ThreadRefusal.keptTargetHasAnotherWayIn, analysis: analysis)
 	end 'keptTargetHasAnotherWayIn'
 
 	return true
 end 'admit'
 
-// Count and trace one refusal. Answers `false` so a clause can `return refuse(…)`.
-function refuse(candidate ThreadCandidate, reason ThreadRefusal, analysis FunctionAnalysis) returns bool
+// Count one refusal. Answers `false` so a clause can `return refuse(…)`.
+function refuse(reason ThreadRefusal, analysis FunctionAnalysis) returns bool
 	analysis.refusals.add(reason.ordinal, count: 1)
-
-	if analysis.log.traces 'traced'
-		analysis.log.trace("threadConstantBranches: block_{candidate.blockId} left alone — {refusalText(reason)}")
-	end 'traced'
 
 	return false
 end 'refuse'
@@ -314,7 +294,7 @@ function decideTargetFromPredecessors(module StdModule, func IrFunction, analysi
 		let pred = module.blockAtPosition(func, position: predPosition)
 
 		if not predecessorBranchesOnlyTo(module, pred: pred, targetId: candidate.blockId, branch: analysis.branch) 'notABranchPredecessor'
-			return refuse(candidate, reason: ThreadRefusal.predecessorNotALoneBranch, analysis: analysis)
+			return refuse(ThreadRefusal.predecessorNotALoneBranch, analysis: analysis)
 		end 'notABranchPredecessor'
 
 		let incoming = incomingArgAt(soleEdge(pred), k: candidate.testedSlot as ValueId, pred: pred, target: join)
@@ -327,11 +307,11 @@ function decideTargetFromPredecessors(module StdModule, func IrFunction, analysi
 
 		match evaluateIntCompare(candidate.pred, lhs: analysis.constMap.constantOf(incoming), rhs: candidate.imm as ParsedInt, operandType: candidate.operandType) 'verdict'
 			folded(payload) then target = candidate.thenBlockId if payload != ConditionIsFalse else candidate.elseBlockId
-			notFoldable then return refuse(candidate, reason: ThreadRefusal.unsignedCompare, analysis: analysis)
+			notFoldable then return refuse(ThreadRefusal.unsignedCompare, analysis: analysis)
 		end 'verdict'
 
 		if decided and target != candidate.keptTarget 'twoAnswers'
-			return refuse(candidate, reason: ThreadRefusal.targetsDisagree, analysis: analysis)
+			return refuse(ThreadRefusal.targetsDisagree, analysis: analysis)
 		end 'twoAnswers'
 
 		decided = true
@@ -340,7 +320,7 @@ function decideTargetFromPredecessors(module StdModule, func IrFunction, analysi
 	end 'eachPred'
 
 	if not decided 'noConstantPredecessor'
-		return refuse(candidate, reason: ThreadRefusal.noConstantPredecessor, analysis: analysis)
+		return refuse(ThreadRefusal.noConstantPredecessor, analysis: analysis)
 	end 'noConstantPredecessor'
 
 	return true
@@ -467,7 +447,7 @@ function refuseIfOwnedReadEscapes(candidate ThreadCandidate, valueId ValueId, po
 	end 'readInTheJoinItself'
 
 	if not analysis.tree.canReach(position) or not analysis.stamps.dominates(candidate.keptPosition, b: position) 'escapes'
-		candidate.admitted = refuse(candidate, reason: ThreadRefusal.valueArgReadOutsideKeptTarget, analysis: analysis)
+		candidate.admitted = refuse(ThreadRefusal.valueArgReadOutsideKeptTarget, analysis: analysis)
 	end 'escapes'
 end 'refuseIfOwnedReadEscapes'
 
@@ -538,10 +518,6 @@ function threadOne(module StdModule, func IrFunction, origins DerivedOrigins, an
 	// In place at its own index — `setTerminator` appends and would orphan the old op.
 	try module.ops.set(join.terminatorIndex(), value: StdOp.branch(candidate.keptTarget)) otherwise panic("threadConstantBranches: ops.set OOB at terminator index {join.terminatorIndex()}")
 	join.branchEdges = edgesWithoutTarget(join.branchEdges, droppedTarget: candidate.droppedTarget)
-
-	if analysis.log.traces 'traced'
-		analysis.log.trace("threadConstantBranches: block_{candidate.blockId} branches to block_{candidate.keptTarget} unconditionally; block_{candidate.droppedTarget} is reached from the non-constant predecessors directly")
-	end 'traced'
 end 'threadOne'
 
 // The args C's edge to `targetId` carries. A target that takes block args MUST have an edge (the

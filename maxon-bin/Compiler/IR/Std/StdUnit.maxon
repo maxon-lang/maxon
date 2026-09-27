@@ -43,15 +43,10 @@ export let UnitFunctionIndex = 0 as FuncIndex
 module typealias StdUnitBodyArray = Array with StdUnitBody
 
 // EVERYTHING ONE FUNCTION CARRIES TO A WORKER AND BACK: the module, the derived-origin rows the passes
-// file for it, and — on the way home — the lines they logged about it.
-//
-// `capturedLog` holds at most one log, and none on an ordinary build: a worker moves its lines here only
-// when it has any (`PassLog.taking`), so a build that logs nothing carries one empty array per function
-// rather than a log record and three columns.
+// file for it.
 export type StdUnitBody
 	export var unitModule as StdModule
 	export var origins as DerivedOrigins
-	export var capturedLog as PassLogArray
 
 	// ⭐ **EVERY RETURN IS `Self{…}`**, which is what lets a reply carry one of these: a message may return
 	// only a value its frame provably owns alone, and a call whose every return is a record literal is the
@@ -62,11 +57,11 @@ export type StdUnitBody
 		// empty, and the fresh literal below is the reply's alone once this frame's `body` has died.
 		var body = try unit.holder.pop() otherwise panic("StdUnitBody.afterRunning: the unit for function {unit.funcIndex} carried no body — `StdUnit.extract` pushes exactly one")
 		worker.runSteps(body)
-		return Self{unitModule: body.unitModule, origins: body.origins, capturedLog: body.capturedLog}
+		return Self{unitModule: body.unitModule, origins: body.origins}
 	end 'afterRunning'
 
 	module static function extract(module StdModule, func IrFunction) returns StdUnitBody
-		return Self{unitModule: extractUnitModule(module, func: func), origins: DerivedOrigins.create(), capturedLog: PassLogArray.create()}
+		return Self{unitModule: extractUnitModule(module, func: func), origins: DerivedOrigins.create()}
 	end 'extract'
 end 'StdUnitBody'
 

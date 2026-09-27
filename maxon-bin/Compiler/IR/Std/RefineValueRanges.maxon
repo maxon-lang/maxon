@@ -378,9 +378,8 @@ module type RangeScratch
 	export var result as Interval
 	export var incoming as Interval
 
-	// The step's counts and where a per-function line goes, both the pool worker's (`StdPassPool`).
+	// The step's counts, the pool worker's (`StdPassPool`).
 	export var tally as StdPassTally
-	export var log as PassLog
 
 	// The function under analysis, for the column panics.
 	export var funcName as ByteArray
@@ -395,8 +394,8 @@ module type RangeScratch
 	export var undecidedThisRound as TallyCount = 0
 	export var symbolicThisRound as TallyCount = 0
 
-	module static function create(tally StdPassTally, log PassLog) returns RangeScratch
-		return Self{lo: ParsedIntArray.create(), hi: ParsedIntArray.create(), symBasePlusOne: ValueIdArray.create(), symOffset: ParsedIntArray.create(), computed: BoolArray.create(), modelled: BoolArray.create(), defPosition: BlockPositionColumn.create(), trailValue: ValueIdArray.create(), trailLo: ParsedIntArray.create(), trailHi: ParsedIntArray.create(), trailSymBasePlusOne: ValueIdArray.create(), trailSymOffset: ParsedIntArray.create(), trailComputed: BoolArray.create(), walk: StdDominatorWalk.create(), walkTrailMark: TrailMarkColumn.create(), walkOpenedDead: BoolArray.create(), blockDead: BoolArray.create(), decisions: CompareDecisionArray.create(), arith: StdArithOperands.create(), branch: StdBranchOperands.create(), join: GuardedAccessJoinReader.create(), def: StdFoldableDef.create(), defined: StdDefinedValues.create(), left: Interval.create(), right: Interval.create(), result: Interval.create(), incoming: Interval.create(), tally: tally, log: log, funcName: ByteArray.create()}
+	module static function create(tally StdPassTally) returns RangeScratch
+		return Self{lo: ParsedIntArray.create(), hi: ParsedIntArray.create(), symBasePlusOne: ValueIdArray.create(), symOffset: ParsedIntArray.create(), computed: BoolArray.create(), modelled: BoolArray.create(), defPosition: BlockPositionColumn.create(), trailValue: ValueIdArray.create(), trailLo: ParsedIntArray.create(), trailHi: ParsedIntArray.create(), trailSymBasePlusOne: ValueIdArray.create(), trailSymOffset: ParsedIntArray.create(), trailComputed: BoolArray.create(), walk: StdDominatorWalk.create(), walkTrailMark: TrailMarkColumn.create(), walkOpenedDead: BoolArray.create(), blockDead: BoolArray.create(), decisions: CompareDecisionArray.create(), arith: StdArithOperands.create(), branch: StdBranchOperands.create(), join: GuardedAccessJoinReader.create(), def: StdFoldableDef.create(), defined: StdDefinedValues.create(), left: Interval.create(), right: Interval.create(), result: Interval.create(), incoming: Interval.create(), tally: tally, funcName: ByteArray.create()}
 	end 'create'
 
 	// Drop the reference into the function a run held for its panics. This scratch outlives the function
@@ -634,12 +633,8 @@ function refineOneFunction(module StdModule, func IrFunction, scratch RangeScrat
 		return 0
 	end 'nothingDecided'
 
-	if scratch.log.traces 'traced'
-		scratch.log.trace("refineValueRanges: '{String.from(func.name)}' decided {scratch.decisions.count()} compare(s) after {round} round(s)")
-	end 'traced'
-
 	// The fourth guardrail: a decided compare is rewritten only at its own definition.
-	return applyCompareDecisions(module, func: func, decisions: scratch.decisions, branch: scratch.branch, def: scratch.def, log: scratch.log)
+	return applyCompareDecisions(module, func: func, decisions: scratch.decisions, branch: scratch.branch, def: scratch.def)
 end 'refineOneFunction'
 
 function beginRound(scratch RangeScratch)

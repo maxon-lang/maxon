@@ -243,10 +243,6 @@ function hoistIntoPreheader(module StdModule, func IrFunction, tree StdDominator
 		return
 	end 'nothingInvariant'
 
-	if scratch.log.debugs 'logged'
-		scratch.log.debug("hoistLoopInvariants: '{String.from(func.name)}' loop at block position {header} — {scratch.hoisted.count()} op(s) to preheader {preheader}")
-	end 'logged'
-
 	appendToPreheader(module, func: func, preheader: preheader, ops: scratch.hoisted)
 end 'hoistIntoPreheader'
 
@@ -773,9 +769,6 @@ typealias WitnessCoverageMap = LoopValueMap with LoadCoverage
 // that took them separately would have to name all seven at each of six call sites (`CseScratch`'s
 // reason, and the same shape).
 module type LicmScratch
-	// Where a per-loop line goes — the pool worker's (`StdPassPool`).
-	export var log as PassLog
-
 	// Every value the CURRENT loop defines, and the subset of those this pass has decided to hoist. Two
 	// sets rather than one mutable "variant" set: a removal would need a second column anyway, and a
 	// value moving from one set to the other is exactly what the analysis records.
@@ -808,8 +801,8 @@ module type LicmScratch
 	export var load as StdLoadOperands
 	export var def as StdDefinedValues
 
-	module static function create(log PassLog) returns LicmScratch
-		return Self{log: log, definedInLoop: LoopValueStamps.create(), invariant: LoopValueStamps.create(), members: LoopMembership.create(), effects: LoopEffects.create(), mustExecute: MustExecuteCounter.create(), witness: LoadWitnessTable.create(), walkOrder: BlockPositionColumn.create(), hoisted: OpIndexArray.create(), leaving: BlockOpPosArray.create(), arith: StdArithOperands.create(), load: StdLoadOperands.create(), def: StdDefinedValues.create()}
+	module static function create() returns LicmScratch
+		return Self{definedInLoop: LoopValueStamps.create(), invariant: LoopValueStamps.create(), members: LoopMembership.create(), effects: LoopEffects.create(), mustExecute: MustExecuteCounter.create(), witness: LoadWitnessTable.create(), walkOrder: BlockPositionColumn.create(), hoisted: OpIndexArray.create(), leaving: BlockOpPosArray.create(), arith: StdArithOperands.create(), load: StdLoadOperands.create(), def: StdDefinedValues.create()}
 	end 'create'
 
 	// Empty every per-loop column, keeping capacity. ⛔ **A LEAKED ENTRY IS A MISCOMPILE, NOT A MISSED

@@ -49,7 +49,6 @@ let NoLengthFloor = -1 as LengthFloor
 
 typealias RecordSlot = int(0 to u64.max)
 typealias RecordSlotColumn = Array with RecordSlot
-typealias FactRound = int(0 to u64.max)
 
 // A position in the fact arena `EstablishedState` keeps every block's run in.
 typealias FactIndex = int(0 to u64.max)
@@ -93,11 +92,9 @@ function foldInFunc(module StdModule, func IrFunction, scratch EstablishedScratc
 	end 'noRecordNamed'
 
 	scratch.state.begin(analysis.tree.blockCount, recordCount: analysis.records.count)
-	var rounds = 0 as FactRound
 	var changed = true
 
 	while changed 'untilStable'
-		rounds = rounds + 1
 		changed = false
 
 		for position in analysis.tree.reverseOrder 'eachBlock'
@@ -120,11 +117,7 @@ function foldInFunc(module StdModule, func IrFunction, scratch EstablishedScratc
 		return false
 	end 'nothingDecided'
 
-	if scratch.log.traces 'traced'
-		scratch.log.trace("foldEstablishedGuards: '{String.from(func.name)}' decided {scratch.decisions.count()} guard(s) after {rounds} round(s)")
-	end 'traced'
-
-	_ = applyCompareDecisions(module, func: func, decisions: scratch.decisions, branch: scratch.branch, def: scratch.def, log: scratch.log)
+	_ = applyCompareDecisions(module, func: func, decisions: scratch.decisions, branch: scratch.branch, def: scratch.def)
 	retireGuardOperands(module, func: func, reader: analysis.reader, scratch: scratch)
 
 	return true
@@ -795,11 +788,10 @@ module type EstablishedScratch
 	export var readers as StdValueUseSet
 	export var seeds as StdValueUseSet
 
-	// The step's counts and where a per-function line goes, both the pool worker's (`StdPassPool`).
+	// The step's counts, the pool worker's (`StdPassPool`).
 	export var tally as StdPassTally
-	export var log as PassLog
 
-	module static function create(tally StdPassTally, log PassLog) returns EstablishedScratch
-		return Self{state: EstablishedState.create(), edge: EdgeFacts.create(), plainEdge: EdgeFacts.create(), success: RememberedSuccess.create(), call: StdCallOperands.create(), store: StdStoreOperands.create(), slot: ElementSlotOperands.create(), branch: StdBranchOperands.create(), guard: ManagedGuardOperands.create(), def: StdFoldableDef.create(), decisions: CompareDecisionArray.create(), readers: StdValueUseSet.createTrackingRepeats(), seeds: StdValueUseSet.createRecordingIds(), tally: tally, log: log}
+	module static function create(tally StdPassTally) returns EstablishedScratch
+		return Self{state: EstablishedState.create(), edge: EdgeFacts.create(), plainEdge: EdgeFacts.create(), success: RememberedSuccess.create(), call: StdCallOperands.create(), store: StdStoreOperands.create(), slot: ElementSlotOperands.create(), branch: StdBranchOperands.create(), guard: ManagedGuardOperands.create(), def: StdFoldableDef.create(), decisions: CompareDecisionArray.create(), readers: StdValueUseSet.createTrackingRepeats(), seeds: StdValueUseSet.createRecordingIds(), tally: tally}
 	end 'create'
 end 'EstablishedScratch'

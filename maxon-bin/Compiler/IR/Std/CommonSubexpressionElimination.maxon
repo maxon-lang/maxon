@@ -258,10 +258,6 @@ function analyzeOp(module StdModule, opIdx OpIndex, subst ValueIdArray, scratch 
 		return
 	end 'firstOccurrence'
 
-	if scratch.log.traces 'traced'
-		scratch.log.trace("eliminateCommonSubexpressions: value {scratch.current.resultId} recomputes value {scratch.outcome.canonicalValue()}")
-	end 'traced'
-
 	recordValueSubstitution(subst, resultId: scratch.current.resultId, replacement: scratch.outcome.canonicalValue())
 end 'analyzeOp'
 
@@ -405,9 +401,6 @@ typealias CallBarrierCountColumn = Array with CallBarrierCount
 module type CseScratch
 	export var table as CseExpressionTable
 
-	// Where a per-hit line goes — the pool worker's (`StdPassPool`).
-	export var log as PassLog
-
 	// The expression of the op being classified.
 	export var current as StdArithOperands
 
@@ -416,8 +409,8 @@ module type CseScratch
 	export var candidate as StdArithOperands
 	export var outcome as CseLookup
 
-	module static function create(log PassLog) returns CseScratch
-		return Self{table: CseExpressionTable.create(), log: log, current: StdArithOperands.create(), candidate: StdArithOperands.create(), outcome: CseLookup.create()}
+	module static function create() returns CseScratch
+		return Self{table: CseExpressionTable.create(), current: StdArithOperands.create(), candidate: StdArithOperands.create(), outcome: CseLookup.create()}
 	end 'create'
 end 'CseScratch'
 
