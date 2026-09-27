@@ -523,12 +523,11 @@ function returnedValueOf(module StdModule, block IrBlock) returns BlockExit
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
-			osHostSample or
+			osHostProcess or
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe or
-			osDebugHost gives BlockExit.notAValueReturn
+			osSocketServe gives BlockExit.notAValueReturn
 		ret(retValId) gives BlockExit.returns(retValId)
 	end 'term'
 end 'returnedValueOf'
@@ -676,12 +675,11 @@ type ConstructorScan
 				osUnmapNamedSegment or
 				osUnpublishNamedSegment or
 				covPoint or
-				osHostSample or
+				osHostProcess or
 				osNetpoll or
 				osPathQuery or
 				osSocketOverlapped or
-				osSocketServe or
-				osDebugHost gives false
+				osSocketServe gives false
 			param(resultId, index, _) gives self.admitParam(resultId, index: index)
 			call(resultId, callee, args) gives self.admitAlloc(resultId, callee: callee, args: args, box: box)
 			storeIndirect(addrId, offset, valueId, valueType) gives self.admitStore(addrId, offset: offset, valueId: valueId, valueType: valueType, box: box)
@@ -1170,12 +1168,11 @@ function scanOneOp(module StdModule, opIdx OpIndex, tracked BoolArray, byName Fu
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
-			osHostSample or
+			osHostProcess or
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe or
-			osDebugHost then collectStdOpUses(op, referenced: readByOtherOps)
+			osSocketServe then collectStdOpUses(op, referenced: readByOtherOps)
 		call(_, callee, args) then scanCallOperands(module, callee: callee, args: args, tracked: tracked, byName: byName, scan: scan)
 
 		// A field read THROUGH the pointer. Its only operand IS the address, so an admitted `loadIndirect`
@@ -1422,12 +1419,11 @@ function constructorCallAt(module StdModule, opIdx OpIndex, byName FunctionNameI
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
-			osHostSample or
+			osHostProcess or
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe or
-			osDebugHost gives ConstructorCallSite.notAConstructorCall
+			osSocketServe gives ConstructorCallSite.notAConstructorCall
 		call(resultId, callee, args) gives constructorCallOf(module, resultId: resultId, callee: callee, args: args, byName: byName, constructors: constructors)
 	end 'op'
 end 'constructorCallAt'
@@ -1768,12 +1764,11 @@ function opDropsAPromotedRecord(module StdModule, opIdx OpIndex, promoted BoolAr
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
-			osHostSample or
+			osHostProcess or
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe or
-			osDebugHost gives false
+			osSocketServe gives false
 		call(_, callee, args) gives callDropsAPromotedRecord(callee, args: args, promoted: promoted)
 	end 'op'
 end 'opDropsAPromotedRecord'

@@ -674,19 +674,33 @@ export let MOffPreemptThreadHandle = MOffOsThreadId + (PointerSlotBytes as ByteO
 // releases, and the next poll would otherwise inject a second one on top of the first.
 export let MOffSignalPending = MOffPreemptThreadHandle + (PointerSlotBytes as ByteOffset)
 
+export let MOffLockedGt = MOffSignalPending + (PointerSlotBytes as ByteOffset)
+
+// Raised by a machine that has given up its processor and is about to wait on `MOffParkEvent` for its
+// pinned thread's next turn; cleared by whoever hands that turn over.
+//
+// ⚠ It is published and `__sched_lock` dropped BEFORE the wait, which is sound only because the park object
+// is an EVENT: a `SetEvent` arriving first leaves it signalled and the wait returns at once. Under a
+// condition variable the same order loses the wakeup.
+let MOffLockedPark = MOffLockedGt + (PointerSlotBytes as ByteOffset)
+
+let MOffLockedStrand = MOffLockedPark + (PointerSlotBytes as ByteOffset)
+
+let MLockedParkWaiting = 1 as ParsedInt
+
 // The three head scalars, the inline GT, the idle tail, the syscall bracket's three, the idle back-link, the
-// wake count, the regain link and asynchronous preemption's four. Derived, never written down as a number,
-// for `PStructSize`'s reason.
-let MStructSize = ((MOffSignalPending as ParsedInt) + PointerSlotBytes) as ParsedInt
+// wake count, the regain link, asynchronous preemption's four and the pinned thread's three. Derived, never
+// written down as a number, for `PStructSize`'s reason.
+let MStructSize = ((MOffLockedStrand as ParsedInt) + PointerSlotBytes) as ParsedInt
 
 // ==========================================================================
 // The ProcContext (P) struct
 // ==========================================================================
 //
-// ⭐ **THE HEADER IS A FIXED, PORTABLE LAYOUT THROUGH 0x78**, so a debug agent, an allocator shard index and
-// a netpoll all graft onto it without a field moving. Fields this file does not use are RESERVED rather
+// ⭐ **THE HEADER IS A FIXED, PORTABLE LAYOUT THROUGH 0x78**, so an allocator shard index and a netpoll
+// both graft onto it without a field moving. Fields this file does not use are RESERVED rather
 // than omitted, for the reason `GtRuntime` reserves the GT's 0x60–0xA0 window: a field added later at a
-// different offset is a layout fork, and a layout fork under a shared debugger is a silent wrong answer.
+// different offset is a layout fork, and a layout fork under a shared reader is a silent wrong answer.
 //
 // ⚠⚠ **A P IS NOT ITS M, WHICH IS WHY THREE FIELDS SIT ON THE M INSTEAD.** A P bound to one OS thread for
 // life keeps `currentGt` at 0x18, a system stack at 0x70 and an inline `mainThread` at 0x80; a P that can
@@ -694,7 +708,7 @@ let MStructSize = ((MOffSignalPending as ParsedInt) + PointerSlotBytes) as Parse
 // reserved rather than reused. `id`, `rng`, `idleFlag`, `wakeEvent`, `osThreadHandle` and `status` stay exactly
 // where they are. ⚠ **SIX header words are RESERVED and read a permanent zero rather than a value** —
 // `currentGt`, the system stack, `idleFlag`, `wakeEvent`, `osThreadHandle` and 0x50 — which is worth saying
-// plainly to anyone grafting a debug agent onto this header.
+// plainly to anyone grafting a reader onto this header.
 //
 // ⚠⚠ **THE TAIL CARRIES A 256-SLOT RING**, which a linked local queue has no equivalent of, so only the
 // HEADER is portable; the tail grafts onto nothing and the total size is its own.
@@ -784,9 +798,9 @@ let POffReservedOsThreadHandle = 0x40 as ByteOffset
 // bug in full.**
 //
 // ⭐ **AND IT IS NOT A SECOND COPY OF "IS THIS P ON `__sched_pidle`", THOUGH IT IS DERIVABLE FROM IT.** The
-// list is a structure with an order and a head; this is a per-P word two readers want without walking one —
-// `__sched_find_runnable`'s steal loop, which skips a victim no M is filling, and a debug agent reading
-// this header at this offset. Both are stepped by the same two doors, in the same
+// list is a structure with an order and a head; this is a per-P word a reader wants without walking one —
+// `__sched_find_runnable`'s steal loop, which skips a victim no M is filling. Word and list are stepped by
+// the same two doors, in the same
 // critical section, which is the shape `MOffSpinning` and `__sched_nmspinning` already have: a per-party bit
 // beside a collective structure, with one door for the pair.
 let POffStatus = 0x48 as ByteOffset
@@ -985,7 +999,7 @@ export let POffSyscallCount = POffNetpollBlockCount + (PointerSlotBytes as ByteO
 // exists to take a lock OFF.
 //
 // It sits at the TAIL because everything above it is either the portable header or an 8-byte scalar, and a
-// 2 KB array in the middle would push every one of them past an offset a debug agent already knows.
+// 2 KB array in the middle would push every one of them past an offset every graft above already knows.
 let RunqSlots = 256 as ParsedInt
 
 // `counter mod RunqSlots` as a mask, which is what makes the slot computation an `and` rather than an
@@ -1114,7 +1128,7 @@ let SchedTlsIndexLabel = b"__sched_tls_index"
 export let SchedTlsTebOffsetLabel = b"__sched_tls_teb_offset"
 
 // The base of the `P*` array — `numProcs` machine words, one pointer per processor.
-let SchedProcsLabel = b"__sched_procs"
+export let SchedProcsLabel = b"__sched_procs"
 
 // ⭐⭐⭐ **THE M ROSTER — Go's `allm`.** The head of
 // an append-only intrusive list threaded through `MOffAllNext`; every M pushes itself at birth
@@ -1133,8 +1147,8 @@ let SchedProcsLabel = b"__sched_procs"
 // ⭐⭐ **`underSchedLock` NAMES THE WRITES; THE WALKS THAT READ IT UNLOCKED ARE THE CLASS'S ENUMERATED
 // EXCEPTION — see `MultiMSharing.underSchedLock`.** Every push is under the lock. `__sched_stop_workers`'s
 // JOIN walk deliberately releases first (it may not block on a thread while holding a lock that thread
-// needs), `__sched_park_wake_count` is a program's query, which takes no lock for a reading, and the debug
-// agent's pause poll walks it holding only its own stop lock.
+// needs), `__sched_park_wake_count` is a program's query, which takes no lock for a reading, and a debugger
+// walks it from OUTSIDE the process, where no lock of this one is available to take at all.
 //
 // ⛔ **THE UNLOCKED WALKS ARE SOUND BY A PROPERTY OF THE PUSH, NOT OF THE WALK.** `emitSchedListPush`
 // stores the joining machine's `MOffAllNext` BEFORE it stores the head, so a walker that reads the head can
@@ -1144,6 +1158,7 @@ let SchedProcsLabel = b"__sched_procs"
 // machine into existence at all, because `__sched_startm` reads the shutdown flag under the same lock that
 // sets it.
 export let SchedAllMLabel = b"__sched_allm"
+export let SchedAsyncPreemptOffLabel = b"__sched_async_preempt_off"
 
 // ⭐⭐ **HOW MANY MACHINES ARE ON `__sched_allm` — Go's `sched.mnext - sched.nmfreed`, and the count the
 // thread limit is checked against.** Stepped by `emitSchedRegisterMLocked`, the one door onto the roster, and
@@ -1531,10 +1546,8 @@ let SchedLockDepthSinkLabel = b"__sched_lock_depth_sink"
 // ⚠ **PROCESS-WIDE RATHER THAN PER-MACHINE, AND THE EXIT IS WHY.** A per-machine claim would let the monitor
 // suspend machine B while machine A is inside `ExitProcess`; process exit is not a per-machine act.
 //
-// ⛔ **IT IS ALSO WHAT MAKES A SECOND SUSPENDER SOUND.** The debug agent suspends every other machine at a
-// stop and holds this word across the park, so a suspend and an exit still exclude each other even though
-// `__sysmon` is not the only party that stops a thread. No separate `suspendLock` is needed for the handles
-// themselves: each machine opens its own once, at birth, rather than sharing a scratch slot.
+// No separate `suspendLock` is needed for the handles themselves: each machine opens its own once, at
+// birth, rather than sharing a scratch slot.
 export let SchedPreemptExtLockLabel = b"__sched_preempt_ext_lock"
 
 // ⭐ **THE ONE `CONTEXT` BUFFER THE MONITOR READS A SUSPENDED THREAD'S REGISTERS INTO.** A page, because
@@ -1968,7 +1981,7 @@ export let SchedExitSyscallName = b"__sched_exit_syscall"
 // zero TEB OFFSET is *"the scheduler has not initialized"*.
 // Neither is tested here — this door is straight-line by design — so a caller that cannot rule both out
 // takes `emitLoadCurrentGtAndProcIdOrZero` below, or tests what it must, as `__sched_runq_put` does.
-function emitLoadCurrentM(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+export function emitLoadCurrentM(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	let tebOffset = emitLoadGlobalWord(module, block: block, label: SchedTlsTebOffsetLabel, ids: ids)
 	let m = ids.mint()
 	module.appendOp(block, op: StdOp.tlsSlotLoad(m, tebOffsetId: tebOffset))
@@ -1990,7 +2003,7 @@ end 'emitLoadCurrentM'
 // `bailValues` are the constants the bail edge carries, one per block arg of `bail` — minted fresh in
 // whichever block takes the arm, because a branch edge's arguments must be defined in the block that
 // branches. A `bail` with no block args (`__sched_runq_put`'s global queue) passes none.
-function emitLoadCurrentMOrBail(module StdModule, cur IrBlock, haveOffset IrBlock, haveMachine IrBlock, bail IrBlock, bailValues ParsedIntArray, ids ValueMinter) returns ValueId
+export function emitLoadCurrentMOrBail(module StdModule, cur IrBlock, haveOffset IrBlock, haveMachine IrBlock, bail IrBlock, bailValues ParsedIntArray, ids ValueMinter) returns ValueId
 	let tebOffset = emitLoadGlobalWord(module, block: cur, label: SchedTlsTebOffsetLabel, ids: ids)
 	emitBailIfZero(module, block: cur, tested: tebOffset, bail: bail, bailValues: bailValues, otherwise: haveOffset, ids: ids)
 
@@ -2275,10 +2288,7 @@ export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns D
 	// Written by `__sched_init_procs` and by nothing else.
 	pushRuntimeGlobal(out, label: SchedTlsIndexLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
 
-	// The debug agent reads this word, `__sched_lock` and `__sched_preempt_ext_lock` in every program it
-	// ships in, so those three gates carry `usesDebugAgent` too — a zero here is how it recognises a program
-	// with no scheduler and takes its own road.
-	if usage.usesGt or usage.usesDebugAgent 'tlsOffsetReadByTheChunks'
+	if usage.usesGt 'tlsOffsetReadByTheChunks'
 		pushRuntimeGlobal(out, label: SchedTlsTebOffsetLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.declared)
 	end 'tlsOffsetReadByTheChunks'
 
@@ -2290,6 +2300,7 @@ export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns D
 	// though the array beside them is**: `__sched_procs` is written once at bring-up and read for ever,
 	// while these three are mutated by every park and every wake for the life of the process.
 	pushRuntimeGlobal(out, label: SchedAllMLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: SchedAsyncPreemptOffLabel, sharing: MultiMSharing.lastWriterWins, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: SchedMidleLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: SchedPidleLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
 
@@ -2336,7 +2347,7 @@ export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns D
 	pushRuntimeGlobal(out, label: SchedShutdownFlagLabel, sharing: MultiMSharing.lastWriterWins, reach: DataReach.walked)
 
 	// The lock is `__sched_init_procs`'s like the three above; the IOCP completion loop's chunk takes it.
-	if usage.usesGt or usage.usesDebugAgent 'lockReadByTheChunks'
+	if usage.usesGt 'lockReadByTheChunks'
 		pushRuntimeGlobal(out, label: SchedLockLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.declared)
 	end 'lockReadByTheChunks'
 
@@ -2356,9 +2367,9 @@ export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns D
 	end 'theMonitorExists'
 
 	// ⭐ **GATE SITE — the two words only a lane that SUSPENDS a thread has any writer for.** A signalling
-	// lane suspends nothing and reads no `CONTEXT`. Their readers are the monitor's hand-assembled sender,
-	// the trampoline and the debug agent, so the words are `declared` rather than walked.
-	if (usage.usesGt or usage.usesDebugAgent) and targetPreemptDelivery(target) == PreemptDelivery.threadSuspend 'theMonitorSuspendsThreads'
+	// lane suspends nothing and reads no `CONTEXT`. Their readers are the monitor's hand-assembled sender
+	// and the trampoline, so the words are `declared` rather than walked.
+	if usage.usesGt and targetPreemptDelivery(target) == PreemptDelivery.threadSuspend 'theMonitorSuspendsThreads'
 		pushRuntimeGlobal(out, label: SchedPreemptExtLockLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.declared)
 		pushRuntimeGlobal(out, label: SchedPreemptContextLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.declared)
 	end 'theMonitorSuspendsThreads'
@@ -2474,6 +2485,10 @@ end 'emitProcSlotAddr'
 function emitLoadProc(module StdModule, block IrBlock, index ValueId, ids ValueMinter) returns ValueId
 	return emitLoadField(module, block: block, record: emitProcSlotAddr(module, block: block, index: index, ids: ids), offset: 0, ids: ids)
 end 'emitLoadProc'
+
+function emitSchedWakeMachine(module StdModule, block IrBlock, m ValueId, ids ValueMinter)
+	module.appendOp(block, op: StdOp.osSetEvent(emitLoadField(module, block: block, record: m, offset: MOffParkEvent, ids: ids)))
+end 'emitSchedWakeMachine'
 
 // Take / release the one run-queue lock, stepping this machine's lock depth around it so an asynchronous
 // stop can refuse a thread that holds it (`MOffLocks`). Both are spelled here so `GtRuntime`'s four mutation
@@ -4383,12 +4398,11 @@ function recordRunqTaintOfOp(func IrFunction, op StdOp, taint RunqRingTaint) ret
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
-			osHostSample or
+			osHostProcess or
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe or
-			osDebugHost then return false
+			osSocketServe then return false
 		binOpImm(resultId, lhs, imm, opcode, _) then return recordImmediateAddressTaint(taint, resultId: resultId, lhs: lhs, imm: imm, opcode: opcode)
 		ret(retValId) then return recordReturnTaint(taint, funcName: func.name, retValId: retValId)
 		param(resultId, index, _) then return recordParamTaint(taint, funcName: func.name, resultId: resultId, index: index as ParsedInt)
@@ -5106,7 +5120,7 @@ function buildSchedFindRunnable(module StdModule)
 	// overdue (`POffRunnext`). Storing an absolute value rather than accumulating is what makes it safe on the
 	// tombstone retry, which reaches this block again with the same `tick`.
 	emitStoreField(module, block: candidate, record: p, offset: POffSchedTick, value: emitBin(module, block: candidate, a: tick, b: inherited, opcode: StdBinOpcode.sub, ids: ids))
-	emitGtTombstoneHandback(module, func: func, candidate: candidate, found: found, retry: localPop, requeue: GtEnqueueName, ids: ids)
+	emitGtTombstoneHandback(module, func: func, candidate: candidate, found: found, retry: localPop, requeue: GtEnqueueName, handOff: GtHandOffAnswer.giveTheProcessor(GtProcessorHandedOff), ids: ids)
 
 	module.functions.push(func)
 end 'buildSchedFindRunnable'
@@ -5412,7 +5426,7 @@ function buildGtFreeGet(module StdModule)
 	let carved = ids.mint()
 	module.appendOp(carve, op: StdOp.call(carved, callee: SchedArenaCarveName, args: argsOf(emitConst(module, block: carve, value: GtStructSize, ids: ids))))
 	emitSchedStepLockedCount(module, block: carve, label: GtRecordsCarvedLabel, delta: OneMore, ids: ids)
-	var registered = emitDebugAgentCarveHook(module, func: func, cur: carve, gt: carved, ids: ids)
+	var registered = emitGtAllGAppend(module, func: func, cur: carve, gt: carved, ids: ids)
 	emitSchedLockLeave(module, block: registered, ids: ids)
 	module.setTerminator(registered, op: StdOp.ret(carved))
 
@@ -5886,6 +5900,70 @@ function emitSchedMidleRemoveLocked(module StdModule, func IrFunction, cur IrBlo
 	module.setTerminator(unlinked, op: StdOp.branch(cont.id))
 end 'emitSchedMidleRemoveLocked'
 
+export function emitSchedStartLockedMachine(module StdModule, func IrFunction, cur IrBlock, owner ValueId, strand ValueId, gave IrBlock, declined IrBlock, ids ValueMinter)
+	var examineProc = module.addBlock(func, label: b"slmproc", heat: BlockHeat.cold)
+	var giveIt = module.addBlock(func, label: b"slmgive", heat: BlockHeat.cold)
+
+	let waiting = emitLoadField(module, block: cur, record: owner, offset: MOffLockedPark, ids: ids)
+	let notWaiting = emitCmp(module, block: cur, a: waiting, b: emitConst(module, block: cur, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(notWaiting, thenBlockId: declined.id, elseBlockId: examineProc.id))
+
+	let m = emitLoadCurrentM(module, block: examineProc, ids: ids)
+	let p = emitLoadField(module, block: examineProc, record: m, offset: MOffCurrentP, ids: ids)
+	let holdsNone = emitCmp(module, block: examineProc, a: p, b: emitConst(module, block: examineProc, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(examineProc, op: StdOp.condBranch(holdsNone, thenBlockId: declined.id, elseBlockId: giveIt.id))
+
+	let nobody = emitConst(module, block: giveIt, value: 0, ids: ids)
+	emitStoreField(module, block: giveIt, record: owner, offset: MOffLockedStrand, value: strand)
+	emitStoreField(module, block: giveIt, record: owner, offset: MOffLockedPark, value: nobody)
+	emitStoreField(module, block: giveIt, record: m, offset: MOffCurrentP, value: nobody)
+	emitStoreField(module, block: giveIt, record: p, offset: POffM, value: nobody)
+	emitStoreField(module, block: giveIt, record: p, offset: POffOldM, value: m)
+	emitStoreField(module, block: giveIt, record: owner, offset: MOffNextP, value: p)
+	emitSchedLockLeave(module, block: giveIt, ids: ids)
+	emitSchedWakeMachine(module, block: giveIt, m: owner, ids: ids)
+	module.setTerminator(giveIt, op: StdOp.branch(gave.id))
+end 'emitSchedStartLockedMachine'
+
+export function emitSchedHandProcessorToOwner(module StdModule, func IrFunction, cur IrBlock, owner ValueId, handedOff IrBlock, kept IrBlock, ids ValueMinter)
+	var examineOwner = module.addBlock(func, label: b"hpexamine", heat: BlockHeat.cold)
+	var giveIt = module.addBlock(func, label: b"hpgive", heat: BlockHeat.cold)
+	var drainIt = module.addBlock(func, label: b"hpdrain", heat: BlockHeat.cold)
+	var releaseIt = module.addBlock(func, label: b"hprelease", heat: BlockHeat.cold)
+	var keepIt = module.addBlock(func, label: b"hpkeep", heat: BlockHeat.cold)
+
+	let m = emitLoadCurrentM(module, block: cur, ids: ids)
+	let p = emitLoadField(module, block: cur, record: m, offset: MOffCurrentP, ids: ids)
+	let holdsNone = emitCmp(module, block: cur, a: p, b: emitConst(module, block: cur, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(holdsNone, thenBlockId: keepIt.id, elseBlockId: examineOwner.id))
+
+	let onList = emitSchedMidleHolds(module, block: examineOwner, m: owner, ids: ids)
+	let absent = emitCmp(module, block: examineOwner, a: onList, b: emitConst(module, block: examineOwner, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(examineOwner, op: StdOp.condBranch(absent, thenBlockId: drainIt.id, elseBlockId: giveIt.id))
+
+	var unlinked = emitSchedMidleUnlinkLocked(module, func: func, cur: giveIt, m: owner, ids: ids)
+	let nobody = emitConst(module, block: unlinked, value: 0, ids: ids)
+	emitStoreField(module, block: unlinked, record: m, offset: MOffCurrentP, value: nobody)
+	emitStoreField(module, block: unlinked, record: p, offset: POffM, value: nobody)
+	emitStoreField(module, block: unlinked, record: p, offset: POffOldM, value: m)
+	emitStoreField(module, block: unlinked, record: owner, offset: MOffNextP, value: p)
+	emitSchedLockLeave(module, block: unlinked, ids: ids)
+	emitSchedWakeMachine(module, block: unlinked, m: owner, ids: ids)
+	module.setTerminator(unlinked, op: StdOp.branch(handedOff.id))
+
+	emitSchedDrainRunqLocked(module, block: drainIt, p: p, cont: releaseIt, ids: ids)
+
+	var released = emitSchedReleaseProcLocked(module, func: func, cur: releaseIt, m: m, p: p, holdsWorkLabel: b"hpheldwork", emptyLabel: b"hpidled", ids: ids)
+	emitSchedLockLeave(module, block: released, ids: ids)
+	emitSchedWakeMachine(module, block: released, m: owner, ids: ids)
+	module.appendOp(released, op: StdOp.call(ids.mint(), callee: NetpollBreakName, args: ValueIdArray.create()))
+	module.setTerminator(released, op: StdOp.branch(handedOff.id))
+
+	emitSchedLockLeave(module, block: keepIt, ids: ids)
+	emitSchedWakeMachine(module, block: keepIt, m: owner, ids: ids)
+	module.setTerminator(keepIt, op: StdOp.branch(kept.id))
+end 'emitSchedHandProcessorToOwner'
+
 // ==========================================================================
 // The scheduler loop — `__sched_worker_loop` and `__sched_main_loop`
 // ==========================================================================
@@ -6040,6 +6118,13 @@ function buildSchedCheckdead(module StdModule)
 	module.functions.push(func)
 end 'buildSchedCheckdead'
 
+function emitSchedRunStrand(module StdModule, block IrBlock, m ValueId, g ValueId, handedOff IrBlock, cont IrBlock, ids ValueMinter)
+	let ranStrand = ids.mint()
+	module.appendOp(block, op: StdOp.call(ranStrand, callee: GtRunStrandName, args: twoArgs(m, second: g)))
+	let strandGaveItAway = emitCmp(module, block: block, a: ranStrand, b: emitConst(module, block: block, value: GtProcessorHandedOff, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(block, op: StdOp.condBranch(strandGaveItAway, thenBlockId: handedOff.id, elseBlockId: cont.id))
+end 'emitSchedRunStrand'
+
 // ⭐⭐⭐ **A MACHINE's SCHEDULER LOOP — Go's `schedule()`.** Fire what is due, search, run the strand whose
 // token it found on the machine's own scheduler context (`GtRuntime.__gt_run_strand`), and — with nothing to
 // run — poll the stores, release the processor and park, asking `__sched_checkdead` as it joins the idle
@@ -6063,9 +6148,20 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var loopTop = module.addBlock(func, label: b"wloop", heat: BlockHeat.normal)
+	var lockedCheck = module.addBlock(func, label: b"wlockedcheck", heat: BlockHeat.normal)
+	var lockedRelease = module.addBlock(func, label: b"wlockedrelease", heat: BlockHeat.cold)
+	var lockedHandOff = module.addBlock(func, label: b"wlockedhandoff", heat: BlockHeat.cold)
+	var lockedWait = module.addBlock(func, label: b"wlockedwait", heat: BlockHeat.cold)
+	var lockedWoke = module.addBlock(func, label: b"wlockedwoke", heat: BlockHeat.cold)
+	var lockedStopTest = module.addBlock(func, label: b"wlockedstoptest", heat: BlockHeat.cold)
+	var lockedAdopt = module.addBlock(func, label: b"wlockedadopt", heat: BlockHeat.cold)
+	var lockedRun = module.addBlock(func, label: b"wlockedrun", heat: BlockHeat.cold)
+	var lockedStrandRun = module.addBlock(func, label: b"wlockedstrandrun", heat: BlockHeat.cold)
 	var checkTimers = module.addBlock(func, label: b"wchecktimers", heat: BlockHeat.normal)
 	var fireTimers = module.addBlock(func, label: b"wfiretimers", heat: BlockHeat.normal)
 	var dequeue = module.addBlock(func, label: b"wdequeue", heat: BlockHeat.normal)
+	var sortWork = module.addBlock(func, label: b"wsortwork", heat: BlockHeat.normal)
+	var handedOffProc = module.addBlock(func, label: b"whandedoff", heat: BlockHeat.cold)
 	var haveWork = module.addBlock(func, label: b"wrun", heat: BlockHeat.normal)
 	var foundWork = module.addBlock(func, label: b"wfound", heat: BlockHeat.normal)
 	var idlePoll = module.addBlock(func, label: b"widlepoll", heat: BlockHeat.normal)
@@ -6116,7 +6212,48 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	// MACHINE HOLDS A PROCESSOR.** `__sched_find_runnable` reads `M->currentP` and dereferences it three ops in,
 	// before any test, so a P-less machine reaching it would fault. The blocks between `wpark` and `wadopt` are
 	// the ones that hold none, and every road out of them adopts one before branching here.
-	emitSchedLoopExitBranch(module, func: func, cur: loopTop, leave: leave, exitBlock: exitBlock, cont: checkTimers, holdsLock: false, ids: ids)
+	emitSchedLoopExitBranch(module, func: func, cur: loopTop, leave: leave, exitBlock: exitBlock, cont: lockedCheck, holdsLock: false, ids: ids)
+
+	let lockedGt = emitLoadField(module, block: lockedCheck, record: m, offset: MOffLockedGt, ids: ids)
+	let unlockedMachine = emitCmp(module, block: lockedCheck, a: lockedGt, b: emitConst(module, block: lockedCheck, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(lockedCheck, op: StdOp.condBranch(unlockedMachine, thenBlockId: checkTimers.id, elseBlockId: lockedRelease.id))
+
+	_ = emitSchedSpinningTransition(module, block: lockedRelease, m: m, transition: SpinningTransition.stopSpinning, ids: ids)
+	emitSchedLockEnter(module, block: lockedRelease, ids: ids)
+	let lockedProc = emitLoadField(module, block: lockedRelease, record: m, offset: MOffCurrentP, ids: ids)
+	emitStoreField(module, block: lockedRelease, record: m, offset: MOffLockedPark, value: emitConst(module, block: lockedRelease, value: MLockedParkWaiting, ids: ids))
+	emitStoreField(module, block: lockedRelease, record: m, offset: MOffCurrentP, value: emitConst(module, block: lockedRelease, value: 0, ids: ids))
+	emitSchedLockLeave(module, block: lockedRelease, ids: ids)
+	let holdsNoProc = emitCmp(module, block: lockedRelease, a: lockedProc, b: emitConst(module, block: lockedRelease, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(lockedRelease, op: StdOp.condBranch(holdsNoProc, thenBlockId: lockedWait.id, elseBlockId: lockedHandOff.id))
+
+	emitStoreField(module, block: lockedHandOff, record: lockedProc, offset: POffM, value: emitConst(module, block: lockedHandOff, value: 0, ids: ids))
+	module.appendOp(lockedHandOff, op: StdOp.call(ids.mint(), callee: SchedHandoffPName, args: argsOf(lockedProc)))
+	module.setTerminator(lockedHandOff, op: StdOp.branch(lockedWait.id))
+
+	let lockedEvent = emitLoadField(module, block: lockedWait, record: m, offset: MOffParkEvent, ids: ids)
+	module.appendOp(lockedWait, op: StdOp.osWaitHandle(ids.mint(), handleId: lockedEvent, timeoutMsId: emitConst(module, block: lockedWait, value: WaitInfinite, ids: ids)))
+	emitSchedCountParkWake(module, block: lockedWait, m: m, ids: ids)
+	module.setTerminator(lockedWait, op: StdOp.branch(lockedWoke.id))
+
+	emitSchedLockEnter(module, block: lockedWoke, ids: ids)
+	let lockedGiven = emitLoadField(module, block: lockedWoke, record: m, offset: MOffNextP, ids: ids)
+	emitStoreField(module, block: lockedWoke, record: m, offset: MOffNextP, value: emitConst(module, block: lockedWoke, value: 0, ids: ids))
+	emitSchedLockLeave(module, block: lockedWoke, ids: ids)
+	let gotNothing = emitCmp(module, block: lockedWoke, a: lockedGiven, b: emitConst(module, block: lockedWoke, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(lockedWoke, op: StdOp.condBranch(gotNothing, thenBlockId: lockedStopTest.id, elseBlockId: lockedAdopt.id))
+
+	emitSchedLoopExitBranch(module, func: func, cur: lockedStopTest, leave: leave, exitBlock: exitBlock, cont: lockedWait, holdsLock: false, ids: ids)
+
+	emitSchedAdoptProc(module, block: lockedAdopt, m: m, p: lockedGiven)
+	module.setTerminator(lockedAdopt, op: StdOp.branch(lockedRun.id))
+
+	let lockedStrand = emitLoadField(module, block: lockedRun, record: m, offset: MOffLockedStrand, ids: ids)
+	emitStoreField(module, block: lockedRun, record: m, offset: MOffLockedStrand, value: emitConst(module, block: lockedRun, value: 0, ids: ids))
+	let noStrand = emitCmp(module, block: lockedRun, a: lockedStrand, b: emitConst(module, block: lockedRun, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(lockedRun, op: StdOp.condBranch(noStrand, thenBlockId: loopTop.id, elseBlockId: lockedStrandRun.id))
+
+	emitSchedRunStrand(module, block: lockedStrandRun, m: m, g: lockedStrand, handedOff: handedOffProc, cont: loopTop, ids: ids)
 
 	// ⭐⭐ **FIRE WHAT IS DUE BEFORE EVERY SEARCH — Go's `checkTimers` at the head of `findRunnable`.** A machine
 	// that never runs dry would otherwise never fire a deadline, and a sleeper would wake only when some machine
@@ -6141,7 +6278,13 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	// both release whatever credit the machine holds; `SchedSpinningLabel` carries what a leaked one costs.
 	let g = emitSchedFindRunnable(module, block: dequeue, m: m, ids: ids)
 	let empty = emitCmp(module, block: dequeue, a: g, b: emitConst(module, block: dequeue, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(dequeue, op: StdOp.condBranch(empty, thenBlockId: idlePoll.id, elseBlockId: foundWork.id))
+	let gaveItAway = emitCmp(module, block: dequeue, a: g, b: emitConst(module, block: dequeue, value: GtProcessorHandedOff, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(dequeue, op: StdOp.condBranch(gaveItAway, thenBlockId: handedOffProc.id, elseBlockId: sortWork.id))
+	module.setTerminator(sortWork, op: StdOp.condBranch(empty, thenBlockId: idlePoll.id, elseBlockId: foundWork.id))
+
+	_ = emitSchedSpinningTransition(module, block: handedOffProc, m: m, transition: SpinningTransition.stopSpinning, ids: ids)
+	emitSchedLockEnter(module, block: handedOffProc, ids: ids)
+	module.setTerminator(handedOffProc, op: StdOp.branch(parkCheck.id))
 
 	// ⭐⭐⭐ **FOUND A TOKEN ⇒ A SPINNER HAS STOPPED LOOKING, AND IT OWES THE LOOKING TO SOMEBODY ELSE.** Go's
 	// `resetspinning` — decrement, then `wakep` — for a machine that WAS spinning, and for one whose own fire
@@ -6153,8 +6296,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	let nothingSkipped = emitBin(module, block: foundWork, a: heldNoCredit, b: owesNothing, opcode: StdBinOpcode.bitAnd, ids: ids)
 	emitSchedHandOnTheLooking(module, func: func, cur: foundWork, nothingSkipped: nothingSkipped, cont: haveWork, checkLabel: b"wrecheck", wakeLabel: b"wwakemore", pollerLabel: b"wwakepoller", ids: ids)
 
-	module.appendOp(haveWork, op: StdOp.call(ids.mint(), callee: GtRunStrandName, args: twoArgs(m, second: g)))
-	module.setTerminator(haveWork, op: StdOp.branch(loopTop.id))
+	emitSchedRunStrand(module, block: haveWork, m: m, g: g, handedOff: handedOffProc, cont: loopTop, ids: ids)
 
 	// ⭐⭐⭐ **NOTHING TO RUN ⇒ FIRE WHAT IS DUE AND REAP WHAT HAS EXITED BEFORE GIVING THE PROCESSOR UP.** A
 	// green thread this machine has just parked on a deadline that has already passed — every filesystem
@@ -7315,6 +7457,7 @@ function buildSchedPreemptOne(module StdModule, target Target)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var switchedOn = module.addBlock(func, label: b"poswitch", heat: BlockHeat.normal)
 	var running = module.addBlock(func, label: b"porunning", heat: BlockHeat.normal)
 	var onThread = module.addBlock(func, label: b"pothread", heat: BlockHeat.normal)
 	var request = module.addBlock(func, label: b"porequest", heat: BlockHeat.normal)
@@ -7323,9 +7466,13 @@ function buildSchedPreemptOne(module StdModule, target Target)
 	emitParams(module, block: entry, count: 1)
 	let m = 0 as ValueId
 
-	let stateBits = emitBin(module, block: entry, a: emitLoadField(module, block: entry, record: m, offset: MOffSyscallState, ids: ids), b: emitConst(module, block: entry, value: MSyscallStateMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
-	let inCall = emitCmp(module, block: entry, a: stateBits, b: emitConst(module, block: entry, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(inCall, thenBlockId: doneBlock.id, elseBlockId: running.id))
+	let withdrawn = emitLoadGlobalWord(module, block: entry, label: SchedAsyncPreemptOffLabel, ids: ids)
+	let asleep = emitCmp(module, block: entry, a: withdrawn, b: emitConst(module, block: entry, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(asleep, thenBlockId: doneBlock.id, elseBlockId: switchedOn.id))
+
+	let stateBits = emitBin(module, block: switchedOn, a: emitLoadField(module, block: switchedOn, record: m, offset: MOffSyscallState, ids: ids), b: emitConst(module, block: switchedOn, value: MSyscallStateMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	let inCall = emitCmp(module, block: switchedOn, a: stateBits, b: emitConst(module, block: switchedOn, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(switchedOn, op: StdOp.condBranch(inCall, thenBlockId: doneBlock.id, elseBlockId: running.id))
 
 	let gt = emitLoadField(module, block: running, record: m, offset: MOffCurrentGt, ids: ids)
 	let noThread = emitCmp(module, block: running, a: gt, b: emitConst(module, block: running, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
@@ -7368,9 +7515,11 @@ end 'buildSchedPreemptOne'
 //   (`GtRuntime.gtAsyncPreemptFloor`), which excludes the shim window and `__gt_morestack` (both on
 //   the system stack), the guard region, and too little room for the trampoline's register block;
 // - a PC outside every function `__symtable` marks asynchronously preemptible, or inside its
-//   prologue guard (`BacktraceFormat.SymtabSafeFromBias`);
-// - under the debug agent, a PC one byte past an address the agent has planted an `int3` at, where
-//   a trap may still be in flight (`emitGtPreemptSafeTrapLookback`).
+//   prologue guard (`BacktraceFormat.SymtabSafeFromBias`).
+//
+// A debugger's planted `int3` needs no arm of its own: a debug session withdraws asynchronous
+// preemption wholesale at the entry stop (`__sched_async_preempt_off`), so the monitor never reaches
+// this question while a trap byte stands.
 //
 // The address compares are signed, like every other in this runtime: a green thread's stack is
 // `osAllocPages`'d user memory and the PC is inside this image, both far below the sign bit.
@@ -7469,8 +7618,7 @@ function buildGtPreemptSafe(module StdModule, target Target)
 	let safeGranules = emitBin(module, block: pastTheGuard, a: safeFrom, b: emitConst(module, block: pastTheGuard, value: SymtabSafeFromBias, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
 	let firstSafe = emitBin(module, block: pastTheGuard, a: safeGranules, b: emitConst(module, block: pastTheGuard, value: safePointGranuleOf(target) as ParsedInt, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
 	let insideTheGuard = emitCmp(module, block: pastTheGuard, a: intoFunc, b: firstSafe, pred: StdCmpPred.lt, ids: ids)
-	let noTrapInFlight = emitGtPreemptSafeTrapLookback(module, func: func, pc: pc, notSafe: notSafe, safe: safe, target: target, ids: ids)
-	let cleared = emitGtPreemptSafeLlscLookback(module, func: func, pc: pc, notSafe: notSafe, safe: noTrapInFlight, target: target, ids: ids)
+	let cleared = emitGtPreemptSafeLlscLookback(module, func: func, pc: pc, notSafe: notSafe, safe: safe, target: target, ids: ids)
 	module.setTerminator(pastTheGuard, op: StdOp.condBranch(insideTheGuard, thenBlockId: notSafe.id, elseBlockId: cleared.id))
 
 	module.setTerminator(safe, op: StdOp.ret(gt))
@@ -7515,34 +7663,6 @@ function emitGtPreemptSafeLlscLookback(module StdModule, func IrFunction, pc Val
 
 	return head
 end 'emitGtPreemptSafeLlscLookback'
-
-let TrapByteLength = 1
-
-function emitGtPreemptSafeTrapLookback(module StdModule, func IrFunction, pc ValueId, notSafe IrBlock, safe IrBlock, target Target, ids ValueMinter) returns IrBlock
-	if targetPreemptDelivery(target) != PreemptDelivery.threadSuspend 'theThreadReadsItsOwnRegisters'
-		return safe
-	end 'theThreadReadsItsOwnRegisters'
-
-	match target.cpu 'isa'
-		x64 then break 'isa'
-
-		arm64 or
-			wasm32 then panic("emitGtPreemptSafeTrapLookback: only x64-windows stops a thread from outside it, and `{target.cpu.name}` plants no `int3` for a trap to be in flight behind")
-	end 'isa'
-
-	if not module.usesDebugAgent 'noAgentPlantsTraps'
-		return safe
-	end 'noAgentPlantsTraps'
-
-	var check = module.addBlock(func, label: b"psnotrap", heat: BlockHeat.normal)
-	let previous = emitBin(module, block: check, a: pc, b: emitConst(module, block: check, value: TrapByteLength, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
-	let planted = ids.mint()
-	module.appendOp(check, op: StdOp.call(planted, callee: DbgTrapPlantedAtName, args: argsOf(previous)))
-	let trapInFlight = emitCmp(module, block: check, a: planted, b: emitConst(module, block: check, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(check, op: StdOp.condBranch(trapInFlight, thenBlockId: notSafe.id, elseBlockId: safe.id))
-
-	return check
-end 'emitGtPreemptSafeTrapLookback'
 
 // `psnollsc1` … `psnollsc4` — the block that refuses on the `wordsBack`-th word before the interrupted one.
 // One ASCII digit, which the refusal below is what makes safe rather than the reader's arithmetic.

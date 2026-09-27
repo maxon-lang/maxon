@@ -618,7 +618,12 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 			GetSystemDirectoryA or  // 2: lpBuffer, uSize
 			GetWindowsDirectoryA or  // 2: lpBuffer, uSize
 			GetFullPathNameA or  // 4: lpFileName, nBufferLength, lpBuffer, lpFilePart
-			WaitForSingleObjectEx gives 0  // 3: hHandle, dwMilliseconds, bAlertable
+			WaitForSingleObjectEx or  // 3: hHandle, dwMilliseconds, bAlertable
+			DebugActiveProcess or  // 1: dwProcessId
+			DebugActiveProcessStop or  // 1: dwProcessId
+			DebugBreakProcess or  // 1: Process
+			WaitForDebugEvent or  // 2: lpDebugEvent, dwMilliseconds
+			ContinueDebugEvent gives 0  // 3: dwProcessId, dwThreadId, dwContinueStatus
 
 		WriteConsoleW gives WriteConsoleStackArgWords  // 5: hConsoleOutput, lpBuffer, nNumberOfCharsToWrite, lpNumberOfCharsWritten, lpReserved
 		MultiByteToWideChar gives MultiByteToWideCharStackArgWords  // 6: CodePage, dwFlags, lpMultiByteStr, cbMultiByte, lpWideCharStr, cchWideChar
@@ -629,11 +634,13 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		WSASocketW gives SocketCreateStackArgWords  // 6: af, type, protocol, lpProtocolInfo, g, dwFlags
 		CreateFileMappingA gives CreateFileMappingStackArgWords  // 6: hFile, lpFileMappingAttributes, flProtect, dwMaximumSizeHigh, dwMaximumSizeLow, lpName
 
-		// The two six-argument sampling services share `osHostSample`'s reservation, which must hold its
+		// The two six-argument sampling services share `osHostProcess`'s reservation, which must hold its
 		// widest member; `ReadProcessMemory` takes five and copies exactly its own count.
 		NtGetNextThread or  // 6: ProcessHandle, ThreadHandle, DesiredAccess, HandleAttributes, Flags, NewThreadHandle
-			SetWaitableTimer gives HostSampleStackArgWords  // 6: hTimer, lpDueTime, lPeriod, pfnCompletionRoutine, lpArgToCompletionRoutine, fResume
-		ReadProcessMemory gives ReadProcessMemoryStackArgWords  // 5: hProcess, lpBaseAddress, lpBuffer, nSize, lpNumberOfBytesRead
+			SetWaitableTimer gives HostProcessStackArgWords  // 6: hTimer, lpDueTime, lPeriod, pfnCompletionRoutine, lpArgToCompletionRoutine, fResume
+		ReadProcessMemory or  // 5: hProcess, lpBaseAddress, lpBuffer, nSize, lpNumberOfBytesRead
+			WriteProcessMemory or  // 5: hProcess, lpBaseAddress, lpBuffer, nSize, lpNumberOfBytesWritten
+			VirtualProtectEx gives ReadProcessMemoryStackArgWords  // 5: hProcess, lpAddress, dwSize, flNewProtect, lpflOldProtect
 
 		GetQueuedCompletionStatusEx gives GetQueuedCompletionStatusExStackArgWords  // 6: CompletionPort, lpCompletionPortEntries, ulCount, ulNumEntriesRemoved, dwMilliseconds, fAlertable
 
@@ -724,7 +731,12 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 			ReadProcessMemory or
 			CreateToolhelp32Snapshot or
 			Module32FirstW or
-			Module32NextW gives SyscallClass.blocking
+			Module32NextW or
+
+			WaitForDebugEvent or
+			WriteProcessMemory or
+			DebugActiveProcess or
+			VirtualProtectEx gives SyscallClass.blocking
 
 		// --- `schedulerBound`: the scheduler's own machinery, and the bounded-and-short remainder ---
 		//
@@ -861,7 +873,11 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 			Sleep or
 			GetSystemDirectoryA or
 			GetWindowsDirectoryA or
-			GetFullPathNameA gives SyscallClass.schedulerBound
+			GetFullPathNameA or
+
+			ContinueDebugEvent or
+			DebugActiveProcessStop or
+			DebugBreakProcess gives SyscallClass.schedulerBound
 	end 'k'
 end 'gtShimSyscallClassOf'
 
@@ -2014,8 +2030,8 @@ function buildPreemptMachineChunk() returns FunctionCodeChunk
 end 'buildPreemptMachineChunk'
 
 // CAS(`__sched_preempt_ext_lock`, free -> `claimant`, the caller's thread id). The word names its
-// owner so a holder can recognise itself (`__gt_exit_process`, and the debug agent's
-// `__dbg_claim_stack`). ZF is set on a win; on a loss rax holds the owner.
+// owner so a holder can recognise itself (`__gt_exit_process`). ZF is set on a win; on a loss rax holds
+// the owner.
 function emitX64ClaimExtLockAs(asm X64RuntimeAsm, claimant X64Register)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: claimant, wide: false)
 	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.r10, label: SchedPreemptExtLockLabel)

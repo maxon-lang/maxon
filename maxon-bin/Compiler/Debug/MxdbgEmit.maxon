@@ -80,6 +80,7 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 
 	writeCoveragePoints(project, writer: writer, emitted: emittedPoints)
 	writeInlineFrames(project, writer: writer, codeResult: codeResult, provenance: provenance)
+	writeRuntimeContract(writer, codeResult: codeResult)
 
 	// The sidecar's build-id, and the `.mxcov`'s: one fold, so a driver joining the two cannot be handed
 	// two numbers for one build.
@@ -97,6 +98,42 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 
 	compilerLogger(CompilerLogGroup.compiler).info("Wrote {image.count()} bytes of debug info to {sidecarPath}")
 end 'writeDebugInfoSidecar'
+
+// ⭐⭐ Nothing in a built image names a data symbol, so the sidecar is the only channel the two tables a
+// foreign-process debugger needs can travel by: where the scheduler's own words landed, and what a field of
+// the records they point at means.
+//
+// The offsets are read back out of the LAID-OUT table rather than off the roster it was fed, because
+// `GlobalDataTable.layOut` sorts each segment by size class; and a name the roster carries that the layout
+// does not hold is a defect in the roster, not an absence to report, so it panics by name.
+function writeRuntimeContract(writer MxdbgWriter, codeResult CodeResult)
+	match codeResult.imagePlacement 'placed'
+		unplaced then return
+		placed(imageBase, textRva, dataRva) then writeGlobalsTable(writer, codeResult: codeResult, imageBase: imageBase, dataRva: dataRva, textRva: textRva)
+	end 'placed'
+
+	for figure in debuggerLayoutFigures() 'eachFigure'
+		writer.addLayoutFigure(figure.name, figure: figure.figure)
+	end 'eachFigure'
+end 'writeRuntimeContract'
+
+function writeGlobalsTable(writer MxdbgWriter, codeResult CodeResult, imageBase MachineWord, dataRva ImageRva, textRva ImageRva)
+	if textRva > MxdbgLargestImageRva or dataRva > MxdbgLargestImageRva 'pastTheFigureWidth'
+		panic("writeDebugInfoSidecar: this image places `.text` at RVA {textRva} and `.data` at {dataRva}, and a sidecar layout figure is a signed 32-bit word — the runtime contract cannot describe an image reaching past {MxdbgLargestImageRva}")
+	end 'pastTheFigureWidth'
+
+	writer.placeImageAt(imageBase)
+	writer.addLayoutFigure(ImageTextRvaFigureName, figure: textRva as MxdbgRecordFigure)
+
+	for name in debuggerReadableGlobals() 'eachGlobal'
+		let slot = codeResult.globalData.dataSectionSlotOf(name)
+
+		match slot 'laidOut'
+			none then break 'laidOut'
+			at(offset, bytes) then writer.addGlobal(name, imageOffset: (dataRva + (offset as ImageRva)) as MxdbgIndex, slotBytes: bytes as MxdbgIndex)
+		end 'laidOut'
+	end 'eachGlobal'
+end 'writeGlobalsTable'
 
 // The rows concat wrote into `__inlframes`, spelled the sidecar's way, so the profiler names the spliced
 // body a sample landed in exactly as the panic runtime names the one a frame sits in.
@@ -379,7 +416,7 @@ function foldedAggregatePlacement(local DebugLocalDecl, writer MxdbgWriter, type
 	var opened = false
 
 	for word in local.foldedRecord 'eachWordWritten'
-		let index = writer.addConstantWord(word as MxdbgLocValue)
+		let index = writer.addConstantWord(word as MxdbgRecordFigure)
 
 		if not opened 'theFirst'
 			first = index
@@ -391,7 +428,7 @@ function foldedAggregatePlacement(local DebugLocalDecl, writer MxdbgWriter, type
 		return MxdbgAggregatePlacement.none
 	end 'pastTheWordSpace'
 
-	return MxdbgAggregatePlacement.placed(MxdbgPlacement.create(MxdbgLocKindFoldedAggregate, locValue: first as MxdbgLocValue))
+	return MxdbgAggregatePlacement.placed(MxdbgPlacement.create(MxdbgLocKindFoldedAggregate, locValue: first as MxdbgRecordFigure))
 end 'foldedAggregatePlacement'
 
 function foldedRow(value ParsedInt, range DebugFunctionRange) returns MxdbgLocalRow
@@ -399,11 +436,12 @@ function foldedRow(value ParsedInt, range DebugFunctionRange) returns MxdbgLocal
 		return MxdbgLocalRow.create(MxdbgOptimizedOutPlacement, codeStart: range.codeStart, codeEnd: range.codeEnd)
 	end 'notRepresentable'
 
-	return MxdbgLocalRow.create(MxdbgPlacement.create(MxdbgLocKindConstant, locValue: value as MxdbgLocValue), codeStart: range.codeStart, codeEnd: range.codeEnd)
+	return MxdbgLocalRow.create(MxdbgPlacement.create(MxdbgLocKindConstant, locValue: value as MxdbgRecordFigure), codeStart: range.codeStart, codeEnd: range.codeEnd)
 end 'foldedRow'
 
 let MxdbgSmallestConstant = i32.min as ParsedInt
 let MxdbgLargestConstant = i32.max as ParsedInt
+let MxdbgLargestImageRva = i32.max as ImageRva
 
 type DebugRunsByOrdinal
 	var byOrdinal as CsrGraph
@@ -495,7 +533,7 @@ end 'mergedLiveRanges'
 
 type MxdbgLocalRow
 	export var locKind as MxdbgIndex
-	export var locValue as MxdbgLocValue
+	export var locValue as MxdbgRecordFigure
 	export var codeStart as CodeOffset
 	export var codeEnd as CodeOffset
 
@@ -534,9 +572,9 @@ typealias MxdbgLocalDraftArray = Array with MxdbgLocalDraft
 // A location as the sidecar states one.
 type MxdbgPlacement
 	export var locKind as MxdbgIndex
-	export var locValue as MxdbgLocValue
+	export var locValue as MxdbgRecordFigure
 
-	static function create(locKind MxdbgIndex, locValue MxdbgLocValue) returns MxdbgPlacement
+	static function create(locKind MxdbgIndex, locValue MxdbgRecordFigure) returns MxdbgPlacement
 		return Self{locKind: locKind, locValue: locValue}
 	end 'create'
 end 'MxdbgPlacement'
@@ -545,7 +583,7 @@ let MxdbgOptimizedOutPlacement = MxdbgPlacement.create(MxdbgLocKindOptimizedOut,
 
 function mxdbgPlacementOf(project Project, location DebugValueLocation, range DebugFunctionRange) returns MxdbgPlacement
 	if location.kind == DebugValueInRegister 'aRegister'
-		return MxdbgPlacement.create(MxdbgLocKindRegister, locValue: location.number as MxdbgLocValue)
+		return MxdbgPlacement.create(MxdbgLocKindRegister, locValue: location.number as MxdbgRecordFigure)
 	end 'aRegister'
 
 	if location.kind == DebugValueInSpillSlot 'aFrameSlot'
@@ -567,9 +605,9 @@ end 'mxdbgLocationAt'
 // just past it. x64's is rsp-relative and call-dependent — a caller's slots sit above the shadow space and
 // its outgoing arguments — so it is rebased by the frame the prologue reserves, which puts a slot BELOW
 // the notional frame pointer exactly as the reference driver renders it.
-function mxdbgFrameDisplacement(project Project, frameSize StackSize, spillSlotBase StackSize, frameLinkBytes StackSize, slot SpillSlot) returns MxdbgLocValue
+function mxdbgFrameDisplacement(project Project, frameSize StackSize, spillSlotBase StackSize, frameLinkBytes StackSize, slot SpillSlot) returns MxdbgRecordFigure
 	return match project.target.cpu 'isa'
-		arm64 gives arm64SlotDisplacement(slot) as MxdbgLocValue
+		arm64 gives arm64SlotDisplacement(slot) as MxdbgRecordFigure
 		x64 gives mxdbgX64FrameDisplacement(frameSize, spillSlotBase: spillSlotBase, frameLinkBytes: frameLinkBytes, slot: slot)
 		wasm32 gives panicNoFrameOnWasm()
 	end 'isa'
@@ -579,15 +617,15 @@ end 'mxdbgFrameDisplacement'
 // hold a negative number, and a slot inside the frame the prologue reserved is BELOW the notional frame
 // pointer — so computing it there would trap on the range check for the ordinary case rather than the
 // exotic one.
-function mxdbgX64FrameDisplacement(frameSize StackSize, spillSlotBase StackSize, frameLinkBytes StackSize, slot SpillSlot) returns MxdbgLocValue
-	let fromStackPointer = (spillSlotBase + (slot as StackSize) * SpillSlotBytes) as MxdbgLocValue
+function mxdbgX64FrameDisplacement(frameSize StackSize, spillSlotBase StackSize, frameLinkBytes StackSize, slot SpillSlot) returns MxdbgRecordFigure
+	let fromStackPointer = (spillSlotBase + (slot as StackSize) * SpillSlotBytes) as MxdbgRecordFigure
 
-	return fromStackPointer - (frameSize as MxdbgLocValue) - (frameLinkBytes as MxdbgLocValue)
+	return fromStackPointer - (frameSize as MxdbgRecordFigure) - (frameLinkBytes as MxdbgRecordFigure)
 end 'mxdbgX64FrameDisplacement'
 
 // The wasm lane emits no `.text` image and writes no sidecar at all, so no spill slot of it can reach the
 // arithmetic above. Its own function because the arm has to answer with a value.
-function panicNoFrameOnWasm() returns MxdbgLocValue
+function panicNoFrameOnWasm() returns MxdbgRecordFigure
 	panic("debug info: a spill slot was asked for a frame displacement on wasm32, which writes no sidecar at all")
 end 'panicNoFrameOnWasm'
 
@@ -648,6 +686,10 @@ type SidecarProvenance
 		if sourceFile.isEmpty() 'noSourceAtAll'
 			return MxdbgOrigin.synthesized
 		end 'noSourceAtAll'
+
+		if isRuntimeSourceFile(project, path: sourceFile) 'theRuntimeTiers'
+			return MxdbgOrigin.runtime
+		end 'theRuntimeTiers'
 
 		if isLibrarySourceFile(project, path: sourceFile) 'theLibrarys'
 			return MxdbgOrigin.library

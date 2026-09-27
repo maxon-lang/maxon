@@ -1,0 +1,47 @@
+let NoAgentInImageCaseLabel = "a-program-with-no-agent-in-it-stops-at-a-breakpoint"
+
+let HotAnchorName = "hot"
+let AgentSymbolPrefix = "__dbg_"
+let CompletedSessionExitCode = 0
+
+test 'a program carrying no agent stops at a breakpoint, ends with its own code, and its sidecar names no agent function'
+	let staged = builtFixture(NoAgentInImageCaseLabel, fixture: HeaplessFixtureName)
+	let executable = builtExecutable(staged)
+	let undebugged = runBuiltProgram(staged)
+	let hotLine = anchorLine(staged, anchor: HotAnchorName)
+
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(hotLine)}", RunCommand, "{ClearCommand} {lineTarget(hotLine)}", ContinueCommand])
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let stops = eventsOfKind(events, kind: StopEventName)
+
+	Expect.equal(stops.count() as AssertedInt, expected: 1, message: "the breakpoint is cleared at the one stop it answers, so the session has exactly one. A session over a program with nothing of the debugger in it must still stop where it was asked to. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let stopped = eventAt(stops, index: 0)
+	Expect.equal(numberOf(stopped, node: stopped.root, key: LineKey) as AssertedInt, expected: hotLine as AssertedInt, message: "the stop is not on the anchored line. {said}")
+	Expect.equal(textOf(stopped, node: stopped.root, key: ReasonKey), expected: BreakpointStopReason, message: "the stop does not name a breakpoint as its reason. {said}")
+
+	let exits = eventsOfKind(events, kind: ExitEventName)
+	Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the breakpoint was cleared before the `{ContinueCommand}`, so the program runs to its end and the session reports one `{ExitEventName}`. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let exited = eventAt(exits, index: 0)
+	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "⭐ THE PROGRAM'S OWN CODE, NOT THE DEBUGGER'S. The debugged run answered a different code than the same image run with nothing attached, so being debugged changed what the program reported. {said}")
+	Expect.equal(session.exitCode() as AssertedInt, expected: CompletedSessionExitCode, message: "a session that ran its script and saw the program end is a successful one. {said}")
+
+	let dump = spawnDumpInfo(executable, staged: staged, sections: StringArray.create())
+
+	if dump.exitCode() != 0 'noSidecar'
+		panic("{NoAgentInImageCaseLabel}: the gate could not run — `{DebugSubcommandName} {DumpInfoOptionName} <exe>` exited {dump.exitCode()}, so there is no function table to read. It wrote to stderr: {dump.stderr}")
+	end 'noSidecar'
+
+	var agentFunctions = StringArray.create()
+
+	for row in dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading) 'eachRow'
+		if firstToken(row).startsWith(AgentSymbolPrefix) 'anAgentFunction'
+			agentFunctions.push(row)
+		end 'anAgentFunction'
+	end 'eachRow'
+
+	Expect.isEmpty(renderedRows(agentFunctions), message: "⭐⭐ THE PROGRAM CARRIES NO DEBUGGER. These functions are in the image's own function table under the `{AgentSymbolPrefix}` band, so the program this session just drove has an in-process agent compiled into it. A debugger that works out of process needs nothing of itself inside the program it drives, and a program that still carries one is paying for a facility nobody reads.")
+end 'a program carrying no agent stops at a breakpoint, ends with its own code, and its sidecar names no agent function'

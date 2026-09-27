@@ -287,8 +287,10 @@ have ended; see [`maxon cache`](/docs/cli/#maxon-cache).
   `watch`, `hover`, `clipboard` or `variables` context prints an expression; in the `repl` context it runs
   any [`maxon debug`](/docs/cli/debugging/#maxon-debug) command and answers the transcript.
 - **The end.** The program's stdout and stderr arrive as `output` events; its exit is `exited` with the
-  exit code, then `terminated`. `disconnect` and `terminate` both reap a program still running. After
+  exit code, then `terminated`. After
   the program has ended, `threads`, `stackTrace`, `scopes` and `variables` answer empty lists.
+  `terminate` reaps a program still running. `disconnect` honours `terminateDebuggee`: `true`, and the
+  default when the client omits it, reaps it; `false` detaches and leaves it running.
 
 Lines and columns are 1-based unless `initialize` says `linesStartAt1` or `columnsStartAt1` is `false`.
 

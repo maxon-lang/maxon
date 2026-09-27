@@ -192,7 +192,6 @@ export function dataSectionRoster(userGlobals DataSectionEntryArray, usage Runti
 	appendDataSectionEntries(roster, entries: slabRuntimeGlobals())
 	appendDataSectionEntries(roster, entries: debugStreamRuntimeGlobals())
 	appendDataSectionEntries(roster, entries: managedSocketRuntimeGlobals())
-	appendDataSectionEntries(roster, entries: debugAgentRuntimeGlobals(usage))
 	return roster
 end 'dataSectionRoster'
 
@@ -280,10 +279,6 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 		if targetStopsThreadsForPreemption(target) 'asyncPreemptionDepth'
 			requireAsyncPreemptionFitsItsMargin(targetModule, funcNames: funcNames, target: target)
 		end 'asyncPreemptionDepth'
-
-		if usage.usesDebugAgent 'debugTrapDepth'
-			requireDebugTrapFitsItsReserve(targetModule, funcNames: funcNames, target: target)
-		end 'debugTrapDepth'
 	end 'preemptionDepth'
 
 	let runtimeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.runtimeAugment)
@@ -292,7 +287,7 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	// inliner's census were built from — never a second spelling of those bits: a stub calling a `__ds_init`
 	// nothing installed, or one the roots did not keep alive, does not link.
 	let stub = project.entryStubCalls
-	augmentWithRuntime(targetModule, target: target, checkLeaks: stub.checksLeaks, initGlobals: usage.usesManagedGlobals, drainGreenThreads: stub.runsMainOnAGreenThread, captureArgv: usage.usesCommandLine, debugStream: stub.bracketsDebugStream, dumpCoverage: stub.dumpsCoverage, attachDebugAgent: stub.attachesDebugAgent, releasesRegistry: stub.releasesRegistry, entryFunction: project.entryFunctionName)
+	augmentWithRuntime(targetModule, target: target, checkLeaks: stub.checksLeaks, initGlobals: usage.usesManagedGlobals, drainGreenThreads: stub.runsMainOnAGreenThread, captureArgv: usage.usesCommandLine, debugStream: stub.bracketsDebugStream, dumpCoverage: stub.dumpsCoverage, releasesRegistry: stub.releasesRegistry, entryFunction: project.entryFunctionName)
 	recordPhase(project, phase: CompilePhase.runtimeAugment, probe: runtimeProbe)
 
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
@@ -329,10 +324,6 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	if usage.usesGt 'gtChunks'
 		appendX64GtRuntimeChunks(chunks, target: target)
 	end 'gtChunks'
-
-	if usage.usesDebugAgent 'debugAgentChunks'
-		appendX64DebugAgentChunks(chunks)
-	end 'debugAgentChunks'
 
 	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
 	releaseEncodedTargetModule(project, targetModule: targetModule)
@@ -430,7 +421,7 @@ end 'refuseDuplicateChunkName'
 // `entryFunction` is `Project.entryFunctionName` — the ONE place this build's entry is written down. The
 // stub calls whatever it names, so a build that enters somewhere other than `main` needs no arm of its own
 // here; see that field.
-function augmentWithRuntime(module TargetModule, target Target, checkLeaks bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, debugStream bool, dumpCoverage bool, attachDebugAgent bool, releasesRegistry bool, entryFunction ByteArray)
+function augmentWithRuntime(module TargetModule, target Target, checkLeaks bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, debugStream bool, dumpCoverage bool, releasesRegistry bool, entryFunction ByteArray)
 	// Prepended BEFORE the stub, so the stub prepended below lands directly ahead of it — the layout
 	// `recordChunkSymbol` requires of the thread entry.
 	if drainGreenThreads 'mainIsAGreenThread'
@@ -438,7 +429,7 @@ function augmentWithRuntime(module TargetModule, target Target, checkLeaks bool,
 	end 'mainIsAGreenThread'
 
 	match target.os 'os'
-		windows then prependEntryStub(module, target: target, checkLeaks: checkLeaks, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, debugStream: debugStream, dumpCoverage: dumpCoverage, attachDebugAgent: attachDebugAgent, releasesRegistry: releasesRegistry, entryFunction: entryFunction)
+		windows then prependEntryStub(module, target: target, checkLeaks: checkLeaks, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, debugStream: debugStream, dumpCoverage: dumpCoverage, releasesRegistry: releasesRegistry, entryFunction: entryFunction)
 
 		// The Linux stub brackets the producer exactly as the Windows one does: x64-linux provides both the
 		// named section and the millisecond stopwatch, so `--debugstream` reaches this arm.
@@ -455,7 +446,6 @@ end 'augmentWithRuntime'
 //   mov rbp, rsp       … so a backtrace can name mrt_start and then stop
 //   sub rsp, 0x20      reserve shadow space (rsp is already 16-aligned by the push)
 //   call mrt_runtime_init   install the fault handler BEFORE any user code can fault
-//   [debug agent]      call __dbg_init — before anything a debugger may be asked to stop on
 //   [ds attach]        call __ds_init
 //   the program        `appendProgramCall` — `main` bracketed by the managed globals, or, with green
 //                      threads, `lea rcx, mrt_main_entry ; call __gt_run_main`; its ExitCode in R8 either way
@@ -478,7 +468,7 @@ end 'augmentWithRuntime'
 // backtrace in the corpus expects. Its own saved rbp is whatever the loader left, and the
 // walk's `.text` bound is what discards it. When `main` is a green thread the same line
 // comes from `mrt_main_entry` instead — see `prependMainThreadEntry`.
-function prependEntryStub(module TargetModule, target Target, checkLeaks bool, initGlobals bool, drainGreenThreads bool, debugStream bool, dumpCoverage bool, attachDebugAgent bool, releasesRegistry bool, entryFunction ByteArray)
+function prependEntryStub(module TargetModule, target Target, checkLeaks bool, initGlobals bool, drainGreenThreads bool, debugStream bool, dumpCoverage bool, releasesRegistry bool, entryFunction ByteArray)
 	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var block = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
@@ -486,10 +476,6 @@ function prependEntryStub(module TargetModule, target Target, checkLeaks bool, i
 	module.appendOp(block, op: framePointerSetupOp())
 	module.appendOp(block, op: TargetOp.prologue(EntryStubFrameBytes))
 	module.appendOp(block, op: TargetOp.callDirect(RuntimeInitName))
-
-	if attachDebugAgent 'debuggableBuild'
-		module.appendOp(block, op: TargetOp.callDirect(DbgInitName))
-	end 'debuggableBuild'
 
 	// ⭐ **THE PRODUCER ATTACHES BEFORE `__module_init`, WHICH IS THE FIRST THING THAT CAN ALLOCATE.** An
 	// eager managed global's box is a real allocation and belongs in the trace; attaching after it would
@@ -826,13 +812,15 @@ end 'prependFunction'
 // Each writer lives beside the format it emits; the wasm one takes the core module bytes rather than
 // the whole CodeResult because building a component is a multi-step, multi-file job it owns end to
 // end (see its header).
-export function writeExecutable(codeResult CodeResult, target Target, outputPath FilePath, productVersion VersionComponentArray, tools ExecutableWriterTools) throws WasmComponentError
+export function writeExecutable(codeResult CodeResult, target Target, outputPath FilePath, productVersion VersionComponentArray, tools ExecutableWriterTools) returns ImagePlacement throws WasmComponentError
 	match target.os 'os'
-		windows then writePe(outputPath, codeResult: codeResult, target: target, productVersion: productVersion)
-		macos then writeMachO(outputPath, codeResult: codeResult, target: target, productVersion: productVersion)
-		linux then writeElf(outputPath, codeResult: codeResult, target: target)
+		windows then return writePe(outputPath, codeResult: codeResult, target: target, productVersion: productVersion)
+		macos then return writeMachO(outputPath, codeResult: codeResult, target: target, productVersion: productVersion)
+		linux then return writeElf(outputPath, codeResult: codeResult, target: target)
 		wasi then try writeWasmWith(tools, outputPath: outputPath, coreModule: codeResult.wasmCoreModule)
 	end 'os'
+
+	return ImagePlacement.unplaced
 end 'writeExecutable'
 
 // The programs a target's writer runs besides the compiler. Located before the pipeline, so a build that

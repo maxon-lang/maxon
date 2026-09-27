@@ -799,81 +799,8 @@ end 'stdOpMayWriteMemory'
 // the `StdOpMeta` backing attaches per variant and cannot reach an opcode buried
 // inside a field. That is why arithmetic is `binOp(… opcode StdBinOpcode)` with a
 // separate `cmp(…)` beside it.
-// Which host service one `osDebugHost` asks for. A closed roster naming the SERVICE rather than the
-// import, and one op carrying a compile-time verb, for the reasons `ProfileHostCall` states below.
-let DebugHostVerbInstallTrapHandlerCode = 1
-let DebugHostVerbProtectPagesCode = 2
-let DebugHostVerbFlushCodeCode = 3
-let DebugHostVerbParkWaitCode = 4
-let DebugHostVerbQueryRegionCode = 5
-let DebugHostVerbProcessIdCode = 6
-let DebugHostVerbAllocExecPagesCode = 7
-let DebugHostVerbOpenDriverProcessCode = 8
-let DebugHostVerbDriverExitedCode = 9
-let DebugHostVerbCurrentThreadIdCode = 11
-let DebugHostVerbOpenThreadCode = 12
-let DebugHostVerbSuspendThreadCode = 13
-let DebugHostVerbResumeThreadCode = 14
-let DebugHostVerbReadThreadContextCode = 15
-let DebugHostVerbWriteThreadContextCode = 16
-let DebugHostVerbPreemptSafeCode = 17
 
-export enum DebugHostVerb
-	installTrapHandler
-	protectPages
-	flushCode
-	parkWait
-	queryRegion
-	processId
-	allocExecPages
-	openDriverProcess
-	driverExited
-	currentThreadId
-	openThread
-	suspendThread
-	resumeThread
-	readThreadContext
-	writeThreadContext
-	preemptSafe
-end 'DebugHostVerb'
-
-export function debugHostVerbCode(verb DebugHostVerb) returns ParsedInt
-	return match verb 'code'
-		installTrapHandler gives DebugHostVerbInstallTrapHandlerCode
-		protectPages gives DebugHostVerbProtectPagesCode
-		flushCode gives DebugHostVerbFlushCodeCode
-		parkWait gives DebugHostVerbParkWaitCode
-		queryRegion gives DebugHostVerbQueryRegionCode
-		processId gives DebugHostVerbProcessIdCode
-		allocExecPages gives DebugHostVerbAllocExecPagesCode
-		openDriverProcess gives DebugHostVerbOpenDriverProcessCode
-		driverExited gives DebugHostVerbDriverExitedCode
-		currentThreadId gives DebugHostVerbCurrentThreadIdCode
-		openThread gives DebugHostVerbOpenThreadCode
-		suspendThread gives DebugHostVerbSuspendThreadCode
-		resumeThread gives DebugHostVerbResumeThreadCode
-		readThreadContext gives DebugHostVerbReadThreadContextCode
-		writeThreadContext gives DebugHostVerbWriteThreadContextCode
-		preemptSafe gives DebugHostVerbPreemptSafeCode
-	end 'code'
-end 'debugHostVerbCode'
-
-export union DebugHostVerbLookup
-	found(verb DebugHostVerb)
-	notListed
-end 'DebugHostVerbLookup'
-
-export function debugHostVerbLookup(code ParsedInt) returns DebugHostVerbLookup
-	for verb in DebugHostVerb.allCases 'eachVerb'
-		if debugHostVerbCode(verb) == code 'thisOne'
-			return DebugHostVerbLookup.found(verb)
-		end 'thisOne'
-	end 'eachVerb'
-
-	return DebugHostVerbLookup.notListed
-end 'debugHostVerbLookup'
-
-// Which host service one `osHostSample` asks for — a closed roster naming the SERVICE, never the import.
+// Which host service one `osHostProcess` asks for — a closed roster naming the SERVICE, never the import.
 // It is `osAllocPages`' discipline one family over: the Std tier asks to SUSPEND A THREAD and only
 // `StdToX64Conversion` knows that is `kernel32!SuspendThread`. A roster spelled in Win32 names would put a
 // per-import fact in the target-neutral tier, where nothing can check it.
@@ -882,10 +809,10 @@ end 'debugHostVerbLookup'
 // in dozens of exhaustive matches spread over a dozen files: a roster of separate ops multiplies that, and
 // a missed arm surfaces only when the whole compiler is rebuilt.
 //
-// ⚠ The roster is closed, which is what makes the x64 map total. `profileHostCallSlot` is exhaustive over
+// ⚠ The roster is closed, which is what makes the x64 map total. `hostProcessCallSlot` is exhaustive over
 // this enum, so a service added without an import fails to compile at the map rather than reaching a
 // backend as a silent no-op.
-export enum ProfileHostCall
+export enum HostProcessCall
 	// A handle to the process being sampled, and the walk over its threads. The walk hands back handles that
 	// already carry the access mask asked for, which is why there is no "open thread" service here.
 	openProcess
@@ -911,10 +838,21 @@ export enum ProfileHostCall
 	moduleSnapshot
 	moduleFirst
 	moduleNext
-end 'ProfileHostCall'
+
+	writeProcessMemory
+	writeThreadContext
+	attachToProcess
+	detachFromProcess
+	waitForDebugEvent
+	continueDebugEvent
+	breakProcess
+	protectRegion
+	flushCode
+	closeHandle
+end 'HostProcessCall'
 
 // ⭐⭐ **WHICH VERB ONE `osNetpoll` ASKS FOR — Go's netpoll verbs (`netpollinit`, `netpollBreak`, `netpoll`) and
-// the poller's clock, each with one body per lane.** One op with a selector, for `ProfileHostCall`'s measured
+// the poller's clock, each with one body per lane.** One op with a selector, for `HostProcessCall`'s measured
 // reason: every member is a scheduler-owned host call of the same shape, and a variant each would be the per-op
 // arm cost seven times over.
 //
@@ -2972,15 +2910,16 @@ export union StdOp
 	// code offsets, and the sidecar record holds exactly one.
 	covPoint(pointId CovPointId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: false, clobbersFlags: true, isCmp: false}
 
-	// ⭐⭐⭐ **THE SAMPLING PROFILER'S WHOLE HOST SURFACE, AS ONE FAMILY OP.**
-	// `osHostSample(result, service, a0…a5) -> the host call's own answer in the result register`, where
-	// `service` is what is wanted (`ProfileHostCall`) and never the import that serves it. Its `category: system`
+	// ⭐⭐⭐ **THE HOST SURFACE FOR WATCHING ANOTHER PROCESS, AS ONE FAMILY OP — the sampling profiler's and
+	// the out-of-process debugger's alike.**
+	// `osHostProcess(result, service, a0…a5) -> the host call's own answer in the result register`, where
+	// `service` is what is wanted (`HostProcessCall`) and never the import that serves it. Its `category: system`
 	// places it logically in the OS band, independent of this tail position.
 	//
 	// ⭐⭐ **THE ARITY IS FIXED AT SIX AND EVERY CALL MARSHALS SIX**, which is the widest member's count
 	// (`NtGetNextThread`, `SetWaitableTimer`). A narrower service is handed constant zeros for the operands
 	// it does not read, and that is CHEAPER than the alternative: per-service arities would be per-service
-	// variants, which is the per-op arm cost `ProfileHostCall`'s header measures.
+	// variants, which is the per-op arm cost `HostProcessCall`'s header measures.
 	//
 	// ⭐ **THE ANSWER IS THE RAW ONE THE HOST GAVE, UNCLASSIFIED.** Win32 answers a BOOL, an NTSTATUS and a
 	// byte count through this one op depending on the service; folding them into a common convention here
@@ -2996,14 +2935,15 @@ export union StdOp
 	// region query, the memory copy), so the op must order against every load and store around it. Full
 	// call-barrier metadata otherwise: it IS an indirect call once lowered.
 	//
-	// ⭐ x64-WINDOWS ONLY, gated by `HostFacility.processSampling` — and that gate names the CPU as well as
-	// the OS, because the sampled register file's offsets are `CONTEXT`'s x64 layout. Every other backend's
-	// arm is a refusal rather than a stub: a stub would symbolize three unrelated words as RIP/RSP/RBP and
-	// hand back a confident profile of nothing.
-	osHostSample(resultId ValueId, service ProfileHostCall, a0Id ValueId, a1Id ValueId, a2Id ValueId, a3Id ValueId, a4Id ValueId, a5Id ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// ⭐ x64-WINDOWS ONLY, gated by `HostFacility.processSampling` for the sampler's services and
+	// `HostFacility.processDebug` for the debugger's — and both gates name the CPU as well as the OS, because
+	// the register file either one reads has `CONTEXT`'s x64 layout. Every other backend's arm is a refusal
+	// rather than a stub: a stub would symbolize three unrelated words as RIP/RSP/RBP and hand back a
+	// confident profile of nothing.
+	osHostProcess(resultId ValueId, service HostProcessCall, a0Id ValueId, a1Id ValueId, a2Id ValueId, a3Id ValueId, a4Id ValueId, a5Id ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// ⭐⭐ **THE SCHEDULER'S POLLER AND ITS CLOCK, AS ONE FAMILY OP** — `osNetpoll(result, verb, a0…a4) -> the
-	// host's raw answer`, `NetpollVerb` naming what is wanted. The answer is unclassified for `osHostSample`'s
+	// host's raw answer`, `NetpollVerb` naming what is wanted. The answer is unclassified for `osHostProcess`'s
 	// reason; `NetpollRuntime` reads it per `NetpollShape`.
 	//
 	// `isStore: true`: `wait` fills the caller's entry buffer and `drainBreak` its scratch. Full call-barrier
@@ -3036,8 +2976,6 @@ export union StdOp
 	// classifies. x64-windows only: its one producer is the Windows executable search in
 	// `SubprocessRuntime`.
 	osPathQuery(resultId ValueId, verb PathQueryVerb, a0Id ValueId, a1Id ValueId, a2Id ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
-
-	osDebugHost(resultId ValueId, verb DebugHostVerb, a0Id ValueId, a1Id ValueId, a2Id ValueId, a3Id ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -3152,7 +3090,6 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 			// across a window that accepts four connections.
 			osSocketServe or
 			osPathQuery or
-			osDebugHost or
 
 			// The page band: bounded, and every one of them is reachable under `__slab_lock`.
 			osAllocPages or
@@ -3278,12 +3215,13 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 			osCreateNamedSegment or
 			osAdoptNamedSegment or
 
-			// ⚠ One op, thirteen services, so the answer must be the widest member's. Copying a stack
-			// window out of a suspended thread can fault a paged-out page and a module walk reads another
-			// process's loader data, both `osMapNamedSegment`'s position; the thread-control and timer
+			// ⚠ One op over the whole roster, so the answer must be the widest member's. Copying a stack
+			// window out of a suspended thread can fault a paged-out page, a module walk reads another
+			// process's loader data and a debug-event wait sits until the debuggee stops, all
+			// `osMapNamedSegment`'s position; the thread-control and timer
 			// services alone would be `schedulerBound`. The per-import table (`gtShimSyscallClassOf`) keys
 			// on a slot rather than an op and can afford that precision.
-			osHostSample gives SyscallClass.blocking
+			osHostProcess gives SyscallClass.blocking
 	end 'k'
 end 'stdOpSyscallClassOf'
 
@@ -3388,7 +3326,6 @@ export function stdOpNamesAGlobalLabel(op StdOp) returns bool
 			osPathQuery or
 			osSocketOverlapped or
 			osSocketServe or
-			osDebugHost or
 			osCpuCount or
 			osThreadCpuTicks or
 			osDecommitPages or
@@ -3416,7 +3353,7 @@ export function stdOpNamesAGlobalLabel(op StdOp) returns bool
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
-			osHostSample or
+			osHostProcess or
 			osNetpoll then return false
 		globalAddr then return true
 	end 'op'
@@ -3846,12 +3783,11 @@ export function classifyArithOperands(op StdOp, operands StdArithOperands)
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
-			osHostSample or
+			osHostProcess or
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe or
-			osDebugHost then operands.recordNeither()
+			osSocketServe then operands.recordNeither()
 		binOp(resultId, lhs, rhs, opcode, operandType) then operands.recordBinOp(resultId, left: lhs, right: rhs, binOpcode: opcode, readType: operandType)
 		unaryOp(resultId, operand, opcode, operandType) then operands.recordUnaryOp(resultId, only: operand, unaryOpcodeRead: opcode, readType: operandType)
 		cmp(resultId, lhs, rhs, pred, operandType) then operands.recordCmp(resultId, left: lhs, right: rhs, cmpPred: pred, readType: operandType)
@@ -4090,12 +4026,11 @@ export function classifyAccessOperands(op StdOp, access StdAccessOperands)
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
-			osHostSample or
+			osHostProcess or
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe or
-			osDebugHost then access.recordNeither()
+			osSocketServe then access.recordNeither()
 	end 'a'
 end 'classifyAccessOperands'
 
@@ -4411,12 +4346,11 @@ module function classifyCallOperands(op StdOp, call StdCallOperands)
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
-			osHostSample or
+			osHostProcess or
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe or
-			osDebugHost then call.recordOther()
+			osSocketServe then call.recordOther()
 		call(resultId, callee, args) then call.recordCall(resultId, name: callee, arguments: args)
 		tryCall(resultId, errorFlagId, callee, args) then call.recordTryCall(resultId, flag: errorFlagId, name: callee, arguments: args)
 	end 'c'
@@ -4907,10 +4841,9 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osWriteFile(_, handle, buf, len, bytesOutPtr) or
 			osReadFile then insertUseQuad(referenced, a: handle, b: buf, c: len, d: bytesOutPtr)
 		witnessTryCall(_, _, witnessAddr, _, _, _, args) then insertUseCalleeAndArgs(referenced, calleeReg: witnessAddr, args: args)
-		osHostSample(_, _, a0, a1, a2, a3, a4, a5) then insertUseSextet(referenced, a: a0, b: a1, c: a2, d: a3, e: a4, f: a5)
+		osHostProcess(_, _, a0, a1, a2, a3, a4, a5) then insertUseSextet(referenced, a: a0, b: a1, c: a2, d: a3, e: a4, f: a5)
 		osNetpoll(_, _, a0, a1, a2, a3, a4) then insertUseQuint(referenced, a: a0, b: a1, c: a2, d: a3, e: a4)
-		osSocketOverlapped(_, _, a0, a1, a2, a3) or
-			osDebugHost then insertUseQuad(referenced, a: a0, b: a1, c: a2, d: a3)
+		osSocketOverlapped(_, _, a0, a1, a2, a3) then insertUseQuad(referenced, a: a0, b: a1, c: a2, d: a3)
 		osSocketServe(_, _, a0, a1, a2) or
 			osPathQuery then insertUseTriple(referenced, a: a0, b: a1, c: a2)
 		osOpenNamedSegment(_, namePtr, bufPtr, bufLen) or
@@ -5075,12 +5008,11 @@ module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 			osProcessExitSignal or
 			osCreateNamedSegment or
 			osAdoptNamedSegment or
-			osHostSample or
+			osHostProcess or
 			osNetpoll or
 			osSocketOverlapped or
 			osSocketServe or
 			osPathQuery or
-			osDebugHost or
 			osFileSize or
 			osFileDelete or
 			osFileRename or
@@ -5349,12 +5281,11 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osUnmapNamedSegment(base, size) gives StdOp.osUnmapNamedSegment(remappedValue(base, subst: subst), sizeId: remappedValue(size, subst: subst))
 		osUnpublishNamedSegment(namePtr) gives StdOp.osUnpublishNamedSegment(remappedValue(namePtr, subst: subst))
 
-		osHostSample(resultId, service, a0, a1, a2, a3, a4, a5) gives StdOp.osHostSample(resultId, service: service, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst), a3Id: remappedValue(a3, subst: subst), a4Id: remappedValue(a4, subst: subst), a5Id: remappedValue(a5, subst: subst))
+		osHostProcess(resultId, service, a0, a1, a2, a3, a4, a5) gives StdOp.osHostProcess(resultId, service: service, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst), a3Id: remappedValue(a3, subst: subst), a4Id: remappedValue(a4, subst: subst), a5Id: remappedValue(a5, subst: subst))
 		osNetpoll(resultId, verb, a0, a1, a2, a3, a4) gives StdOp.osNetpoll(resultId, verb: verb, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst), a3Id: remappedValue(a3, subst: subst), a4Id: remappedValue(a4, subst: subst))
 		osSocketOverlapped(resultId, verb, a0, a1, a2, a3) gives StdOp.osSocketOverlapped(resultId, verb: verb, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst), a3Id: remappedValue(a3, subst: subst))
 		osSocketServe(resultId, verb, a0, a1, a2) gives StdOp.osSocketServe(resultId, verb: verb, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst))
 		osPathQuery(resultId, verb, a0, a1, a2) gives StdOp.osPathQuery(resultId, verb: verb, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst))
-		osDebugHost(resultId, verb, a0, a1, a2, a3) gives StdOp.osDebugHost(resultId, verb: verb, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst), a3Id: remappedValue(a3, subst: subst))
 		osFileSize(resultId, handle, sizeOutPtr) gives StdOp.osFileSize(resultId, handleId: remappedValue(handle, subst: subst), sizeOutPtrId: remappedValue(sizeOutPtr, subst: subst))
 		osFileDelete(resultId, pathPtr) gives StdOp.osFileDelete(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
 		osFileRename(resultId, oldPathPtr, newPathPtr) gives StdOp.osFileRename(resultId, oldPathPtrId: remappedValue(oldPathPtr, subst: subst), newPathPtrId: remappedValue(newPathPtr, subst: subst))
@@ -5683,12 +5614,11 @@ function cloneStdOp(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, 
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
-			osHostSample or
+			osHostProcess or
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe or
-			osDebugHost gives refuseUnclonable(op)
+			osSocketServe gives refuseUnclonable(op)
 		rdataAddr(resultId, label) gives StdOp.rdataAddr(clonedValue(resultId, subst: valueSubst), label: ownedBytes(label, payloads: payloads))
 		tryCall(resultId, errorFlagId, callee, args) gives StdOp.tryCall(clonedValue(resultId, subst: valueSubst), errorFlagId: clonedValue(errorFlagId, subst: valueSubst), callee: ownedBytes(callee, payloads: payloads), args: remappedArgs(args, subst: valueSubst))
 		funcAddr(resultId, funcName) gives StdOp.funcAddr(clonedValue(resultId, subst: valueSubst), funcName: ownedBytes(funcName, payloads: payloads))
@@ -6241,12 +6171,11 @@ module function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
-			osHostSample or
+			osHostProcess or
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe or
-			osDebugHost then break 'term'
+			osSocketServe then break 'term'
 		condBranch(_, thenBlockId, elseBlockId) then pushBothTargets(out, thenBlockId: thenBlockId, elseBlockId: elseBlockId)
 		branch(targetBlockId) then out.push(targetBlockId)
 		switch(_, denseTargetBlockIds, defaultBlockId) then pushSwitchTargets(out, denseTargetBlockIds: denseTargetBlockIds, defaultBlockId: defaultBlockId)
@@ -6442,12 +6371,11 @@ module function classifyBranch(op StdOp, out StdBranchOperands)
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
-			osHostSample or
+			osHostProcess or
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe or
-			osDebugHost then out.recordOther()
+			osSocketServe then out.recordOther()
 		condBranch(condId, thenBlockId, elseBlockId) then out.recordCondBranch(condId, thenTarget: thenBlockId, elseTarget: elseBlockId)
 		branch(targetBlockId) then out.recordBranch(targetBlockId)
 	end 'term'

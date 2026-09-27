@@ -872,7 +872,7 @@ function machOSourceVersion(productVersion VersionComponentArray) returns Machin
 	return packed
 end 'machOSourceVersion'
 
-export function writeMachO(outputPath FilePath, codeResult CodeResult, target Target, productVersion VersionComponentArray)
+export function writeMachO(outputPath FilePath, codeResult CodeResult, target Target, productVersion VersionComponentArray) returns ImagePlacement
 	if target.cpu != CpuArch.arm64 or target.os != Os.macos 'wrongTarget'
 		panic("writeMachO: the Mach-O writer emits arm64-macos only (got {targetToString(target)})")
 	end 'wrongTarget'
@@ -1189,10 +1189,12 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	// for the file) was the only true line of the three.
 	try File.writeBinary(outputPath, content: macho, mode: FilePermission.executable) otherwise 'writeErr'
 		compilerLogger(CompilerLogGroup.binary).error("Failed to write Mach-O file: {outputPath}")
-		return
+		return ImagePlacement.unplaced
 	end 'writeErr'
 
 	compilerLogger(CompilerLogGroup.binary).info("Mach-O write complete: {macho.count()} bytes")
+
+	return ImagePlacement.placed(imageBase, textRva: (textSectionVmAddr - imageBase) as ImageRva, dataRva: (dataSectionVmAddr - imageBase) as ImageRva)
 end 'writeMachO'
 
 // Append a NUL-terminated load-command string and pad the command out to

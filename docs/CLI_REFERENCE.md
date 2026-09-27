@@ -274,7 +274,6 @@ uses it.
 | `--emit-ir` | Also write the lowered Target IR beside the executable, as `<output>.ir`. It shows the functions from the program's own source. |
 | `--emit-ir-runtime=<a>,<b>` | Also render these compiler-emitted or standard-library functions in that IR. Implies `--emit-ir`. A value naming no function is refused. |
 | `--no-debug-info` | Do not write the `<output>.mxdbg` debug-info sidecar. It is written by default, and the executable is byte-identical either way. See [Debugging and Profiling](#debugging-and-profiling). |
-| `--no-debug-agent` | Do not emit the in-process debug agent. It is emitted by default on x64-windows and is dark unless the environment names a control segment in `MAXON_DEBUG`, so a program built without this flag and run without that variable behaves identically; with it the agent, its trap thunk, its control word and the imports they need are left out of the image and `maxon debug` cannot attach to the result. |
 | `--coverage` | Instrument for code coverage: the binary counts each statement and branch arm it executes and writes the counts to `<output>.mxcov` as it exits. This changes the emitted code, so it is a separate build from the one you ship. Read the counts with `maxon coverage`. Needs the debug-info sidecar, so `--no-debug-info` beside it is refused. |
 | `--debugstream` | Emit the shared-memory debug-stream producer that `maxon monitor` reads, with the memory manager's events. Also enables the `__DebugStream` builtin; without the flag its calls emit nothing. Refused on a target without shared memory and an uptime clock. |
 | `--async-trace` | Write the green-thread trace to stderr as the program runs: one line per spawn, sleep, I/O wait, resume and await. See [Debugging and Profiling](#debugging-and-profiling). |
@@ -750,10 +749,7 @@ driver's own. `maxon monitor`, `maxon coverage` and `maxon profile` have their o
 | `MAXON_PREEMPT` | `off` stops the scheduler from preempting a green thread that holds a processor, for a deliberate, reproducible run. Unset, empty or `on` is normal preemption. Any other value aborts the program at start. |
 
 `MAXON_DEBUGSTREAM` is set by `maxon monitor`, and by `maxon debug --trace`, to attach a `--debugstream`
-program to the ring the driver created; and
-`MAXON_DEBUG` is set by `maxon debug` to name the control segment its in-process agent attaches to. You
-do not set either yourself; a program that finds `MAXON_DEBUG` unset carries its agent dark and behaves
-exactly as it would without one.
+program to the ring the driver created. You do not set it yourself.
 
 ## Project Structure
 
@@ -1042,10 +1038,10 @@ abandoned: the next command breaks it with a warning and proceeds.
 
 Maxon has an **interactive debugger on x64-windows** — `maxon debug <exe>`: breakpoints, stepping,
 backtraces with inlined frames, and locals read out of the stopped thread. It launches the program
-rather than attaching to one already running, and it needs the in-process debug agent, which is emitted
-by default on that target only. Everything else on this page works on every target: debug information
-beside every binary, panic backtraces, a leak check, a trace monitor, a sampling profiler and code
-coverage.
+rather than attaching to one already running, and it drives it from outside through the host's own debug
+interface, so the program itself carries nothing of the debugger. Everything else on this page works on
+every target: debug information beside every binary, panic backtraces, a leak check, a trace monitor, a
+sampling profiler and code coverage.
 
 The examples below use output from real runs; addresses, counts and timings vary from build to build.
 
@@ -1067,9 +1063,11 @@ the binary you ship.
 The sidecar maps machine code back to the source. It records the target, a **build id** (a hash of
 the executable's code section) and the directory the build ran in, then the source files, functions with
 their prologue offset, frame size, local variables and origin, types, the line table and inlining
-records. `maxon debug` prints it; `maxon profile` and `maxon coverage` read it, and a `--coverage` build requires it.
+records, and the image base, the `.data` words a debugger reads out of the running program and the record
+geometry it reads them by. `maxon debug` prints it; `maxon profile` and `maxon coverage` read it, and a
+`--coverage` build requires it.
 
-The sidecar format is versioned (version 8), and a reader refuses a sidecar of any other version: after
+The sidecar format is versioned (version 10), and a reader refuses a sidecar of any other version: after
 upgrading the compiler, rebuild before debugging, profiling or reporting coverage.
 
 ### Panics and backtraces
@@ -1108,7 +1106,7 @@ maxon debug <exe> [--trace] [--stop-timeout=<seconds>] [--target-env=NAME=VALUE]
 maxon debug --batch --commands=<cmd;cmd;...|@file> <exe> [same options]
 maxon debug --complete=<partial line> <exe>
 maxon debug --classify=<hex>[,<hex>...]
-maxon debug --dump-info <exe|.mxdbg> [header|files|functions|types|lines|statements|inline]
+maxon debug --dump-info <exe|.mxdbg> [header|files|functions|types|lines|statements|inline|globals|layout]
 maxon debug --symbolize <exe|.mxdbg> <codeOffset...>
 ```
 
@@ -1126,23 +1124,27 @@ maxon debug --symbolize <exe|.mxdbg> <codeOffset...>
 
 `maxon debug` with no arguments prints the usage above and exits 1.
 
-**The session.** The driver creates a two-page shared control segment, names it in the `MAXON_DEBUG`
-environment variable of the program it launches, and the agent inside that program parks before `main`
-while the driver arms whatever was asked for. Only the agent writes into the program's own code, and no
-OS debug API is used. A debugged program that finds its driver gone stops where it is and exits 97,
-rather than staying parked forever waiting for a command nobody will send.
+**The session.** The driver launches the program under the host's own debug interface and takes the stop
+the loader gives it before any of the program's code runs, then arms whatever was asked for. A
+breakpoint is the driver saving the original byte and writing an `int3` over it through the debug
+interface; resuming off one restores the byte, single-steps the instruction and plants the trap again.
+The host keeps the pair together: quitting the session ends the program with it, and `detach` is how you
+leave a program running.
 
 A program the debugger cannot drive is refused by name, with exit 1: every program on a host other than
 x64-windows (naming the host), a wasm module, a binary built for a target other than this host's
-(refused before launch, naming both targets), one built `--no-debug-agent` (reported as no agent having
-attached), and a binary whose sidecar describes a different build.
+(refused before launch, naming both targets), and a binary whose sidecar describes a different build.
 
 **Commands**, with their aliases: `break` (`b`) · `clear` · `run` (`r`) · `continue` (`c`) · `step` (`s`) ·
 `next` (`n`) · `finish` · `until` (`u`) · `backtrace` (`bt`, `where`) · `print` (`p`) · `locals` · `pause` ·
-`threads` · `gt-backtrace` · `gt` · `gt-park` · `gt-resume` · `trace` · `help` (`?`, `commands`) ·
+`threads` · `gt-backtrace` · `gt` · `gt-park` · `gt-resume` · `trace` · `detach` · `help` (`?`, `commands`) ·
 `quit` (`q`, `exit`).
 
-`break <target> if <local> <op> <literal>` arms a conditional breakpoint the agent evaluates itself, so a
+`detach` restores every byte the debugger wrote, lifts every held green thread, puts asynchronous
+preemption back and lets the program run on under its own steam; the session then waits for the program's
+own ending and reports it. `quit` ends the program.
+
+`break <target> if <local> <op> <literal>` arms a conditional breakpoint the driver judges at the stop, so a
 hit that does not satisfy it is resumed without a stop; a condition over a float, a `String`, a field path,
 a constant or a local the breakpoint's pc has no record for is refused `condition-unsupported` and the
 breakpoint is NOT armed, and a literal that does not parse is `condition-invalid`.
@@ -1161,20 +1163,20 @@ Stepping is refused while a `gt` selection is on, a register-located local of a 
 lives: every word that names one re-lists the roster first, and an id whose thread has ended is
 `no-such-thread`. The other refusals are:
 
-- `hold-table-full` — 16 threads may be held at once.
 - `thread-is-running` — for a thread on a machine.
-- `not-pausable` — for a program the agent could not interrupt.
+- `not-pausable` — for a program the host would not interrupt, or one that did not stop within the
+  attempt budget.
 - `not-running` — for a word that needs a stop while the program is running.
 - `fault-is-terminal` — for a step from a `fault` stop.
-- `table-full` — for a `break` when 64 instructions are already armed, counting the temporary
-  breakpoints a step plants, or when every out-of-line slot the agent runs a displaced instruction in is
-  still in use. A step that meets a full table walks one instruction at a time.
+- `unwritable` — for a byte the debugger could not write into the program's code.
+- `inside-runtime-symbol` — for a `break` inside a body the program's author did not write: the runtime
+  tier, and anything the compiler synthesized.
 - `return-hold-taken` — for a conditional `break` on the instruction of a running step's temporary
   breakpoint, when another of that step's temporary breakpoints already shares its instruction with a
   condition. One such instruction at a time may carry a condition.
 
 A `stop` carries a `reason`: `entry` before `main`, `breakpoint`, `step`, `pause`, `trap` and `fault`.
-`trap` is an `int3` the agent did not plant — a stop like any other, with a register file and a stack to
+`trap` is an `int3` the debugger did not plant — a stop like any other, with a register file and a stack to
 walk, which `continue` resumes past. `fault` is a hardware fault the program would otherwise panic on (an
 access violation, a stack overflow, an integer divide by zero or an integer overflow), stopped at the
 faulting instruction with a `fault` field naming it in the words its panic line uses; a fault inside
@@ -1184,26 +1186,26 @@ runtime, which ends the program with the same panic line, backtrace and exit cod
 reported as a `crash`. A stop also carries the `machine` (the OS thread id that took it), its `thread`
 id when a green thread was running, and its `function` when its position lies in one.
 
-**Every stop stops the whole program.** The agent suspends every other machine before it publishes a word
-of the stop and resumes them all on `continue` or a step, so the roster, a parked thread's stack and the
-memory a `print` reads are one consistent picture. A stop of a program whose threads are all idle — a
+**Every stop stops the whole program.** A debug event holds every thread of the program until the driver
+answers it, so the roster, a parked thread's stack and the memory a `print` reads are one consistent
+picture, and `continue` or a step releases them together. A stop of a program whose threads are all idle — a
 `pause` with nothing running user code — reports no pc: `threads` and `gt-backtrace` answer as usual,
 while a walk of the stopping thread has nothing to describe.
 
 Two costs are worth knowing. A held thread is refused each time a machine reaches it, and that machine
 pauses and looks again, so a hold is a polite spin rather than a parked thread. And a `pause` asks the
-running threads to yield at their next safe point rather than stopping them where they stand, so a
-program that reaches none within the attempt budget answers `not-pausable`.
+host to interrupt the program and then waits for the stop that follows, so a program that produces none
+within the attempt budget answers `not-pausable`.
 
 **The running state.** A `run`, `continue` or step that reaches `--stop-timeout=` answers `timeout` and
 LEAVES THE PROGRAM RUNNING. In that state `break`, `clear`, `pause`, `threads`, `gt-park` and `gt-resume`
-are serviced live by the agent's own service thread and `continue` waits again; `backtrace`, `print`,
+are serviced while it runs and `continue` waits again; `backtrace`, `print`,
 `locals` and the steps answer an error until something stops. The session's exit code is still 1 once
 anything has timed out, and the program is reaped when the session closes.
 
 A stop that lands while the program runs is reported ahead of the next command's answer: a stop that
-came before the command, or one the agent was already parked in when it answered, precedes that answer
-in the transcript, so each event sits where it happened.
+came before the command, or one the program was already in when the command was answered, precedes that
+answer in the transcript, so each event sits where it happened.
 
 A break target is `file.maxon:LINE`, a bare `LINE` in the file that declares `main`, `*0x<offset>`, or a
 function name resolved exact → `Type.method` → leaf name → word prefix. More than one match answers
@@ -1223,7 +1225,7 @@ function name resolved exact → `Type.method` → leaf name → word prefix. Mo
   `step` enters it. As in gdb, the inlined body joins that stop's backtrace once it is entered. A line
   whose only code is a narrowing cast's range check is a line with code. A line with none answers
   `no-code`.
-- **The runtime's own code** — the debug agent, the entry stub and the rest of the compiler's scaffolding
+- **The runtime's own code** — the entry stub, the scheduler and the rest of the compiler's scaffolding
   — is refused `inside-runtime-symbol`. Which code is the runtime's is recorded by the build. A `test`
   body is the program's own, and is named `test '<prose>'` in stops, backtraces and break answers, as
   `maxon test` names it.
@@ -1265,14 +1267,14 @@ value that cannot be read carries `unavailable` with one of `optimized-out`, `no
 `line`. A `trace` event carries `since`, the previous stop's position in the ring, when there was a
 previous stop.
 The driver exits 0 when the session completed — the program's own exit code is DATA in the `exit` event —
-and 1 on a timeout, an unacknowledged command, a refused session or a crash. A command issued after the
+and 1 on a timeout, a refused session or a crash. A command issued after the
 program has ended is an `error`, and the verdict stands.
 
 **Without `--batch`** the same commands are read from stdin, one per line, and answered as text for a
 person; end of input quits. The debugged program's streams pass through to this driver's own.
 
-**`--classify=`** is the door onto the instruction classifier a breakpoint's out-of-line resume depends
-on. It reads no program:
+**`--classify=`** is the door onto the instruction classifier the step planner and the stack unwinder
+read. It reads no program:
 
 ```text
 $ maxon debug --classify=488d0dce6f0000,c21000,ff5008,62
@@ -1283,8 +1285,9 @@ unclassified
 ```
 
 The classes are 1 plain, 2 pc-relative data, 3 direct call, 4 direct jump, 5 conditional jump, 6 return,
-7 indirect call and 8 indirect jump. The agent places a breakpoint on classes 1 to 7 and refuses an
-indirect jump `unclassified`. Every address is computed against a fixed probe address, `0x1000`:
+7 indirect call and 8 indirect jump. A breakpoint is armed at any instruction the classifier decodes,
+whatever its class; bytes it cannot decode answer `unclassified`, and a `break` there is refused by that
+name. Every address is computed against a fixed probe address, `0x1000`:
 
 - `target` is the absolute branch target for 3, 4 and 5 and the absolute referent for 2.
 - `disp` is the byte position of the displacement of a memory operand, and `cond` the condition code of
@@ -1308,11 +1311,14 @@ indirect jump `unclassified`. Every address is computed against a fixed probe ad
 | `lines` | The line table: code offset, source position and flags — `statement`, `coverage`, and `line-entry` on a row where control enters its source line: falling in from a different line, at the function's entry, or through a branch from another line |
 | `statements` | The same table, without the code offsets |
 | `inline` | Inlined call sites, each with the site it nests under, the position of its call and its `origin`, then the code ranges they occupy |
+| `globals` | The `.data` words a debugger reads out of the running program: each one's name, its offset from the image base and the width of its slot |
+| `layout` | The record geometry it reads them by: each figure's name and value |
 
 An `origin` says where a function or an inlined body came from: `authored` (the program's own source),
-`test` (a `test` body), `library` (the standard library or the runtime), `generated` (source the compiler
-wrote for this build) or `synthesized` (code with no source, such as the entry stub). The debugger treats
-`authored` and `test` code as the program's own.
+`test` (a `test` body), `library` (the standard library), `runtime` (the runtime tier), `generated`
+(source the compiler wrote for this build) or `synthesized` (code with no source, such as the entry
+stub). The debugger treats `authored` and `test` code as the program's own, and refuses a breakpoint
+inside a `runtime` or `synthesized` body by that origin.
 
 ```text
 $ maxon debug --dump-info app.exe header
@@ -1343,7 +1349,7 @@ $ maxon debug --dump-info app.exe lines
 A word that is not a section is refused before the file is read:
 
 ```text
-maxon debug --dump-info: 'bogus' is not a section (header|files|functions|types|lines|statements|inline).
+maxon debug --dump-info: 'bogus' is not a section (header|files|functions|types|lines|statements|inline|globals|layout).
 ```
 
 **`--symbolize`** takes offsets in decimal or `0x`-prefixed hex and prints one line each. An offset
@@ -1864,8 +1870,10 @@ have ended; see [`maxon cache`](#maxon-cache).
   `watch`, `hover`, `clipboard` or `variables` context prints an expression; in the `repl` context it runs
   any [`maxon debug`](#maxon-debug) command and answers the transcript.
 - **The end.** The program's stdout and stderr arrive as `output` events; its exit is `exited` with the
-  exit code, then `terminated`. `disconnect` and `terminate` both reap a program still running. After
+  exit code, then `terminated`. After
   the program has ended, `threads`, `stackTrace`, `scopes` and `variables` answer empty lists.
+  `terminate` reaps a program still running. `disconnect` honours `terminateDebuggee`: `true`, and the
+  default when the client omits it, reaps it; `false` detaches and leaves it running.
 
 Lines and columns are 1-based unless `initialize` says `linesStartAt1` or `columnsStartAt1` is `false`.
 
@@ -1941,7 +1949,7 @@ differences a program can meet are:
   `GetSystemTimePreciseAsFileTime`.
 - **`maxon profile`** runs only on x64-windows. Elsewhere it is refused.
 - **The interactive debugger** — `maxon debug`, `maxon dap-server` and the MCP `debug_*` tools — debugs
-  x64-windows programs only, because the debug agent it drives is emitted on that target alone.
+  x64-windows programs only, because that is the one host whose debug interface this build drives.
 - On the Linux targets, host-name resolution for sockets is built in and simple: `A` records only, the
   first nameserver in `/etc/resolv.conf`, no search domains and no CNAME following.
 
@@ -2208,14 +2216,13 @@ Every `debug_*` tool answers `{"state": "stopped" | "running" | "ended" | "none"
 the previous call. A tool other than `debug_start` called with no live session is an error naming
 `debug_start`.
 
-The debugger needs the in-process debug agent, which is emitted by default on `x64-windows` only.
+The debugger drives `x64-windows` programs only. `debug_stop` ends the debuggee.
 
 #### `debug_start`
 
 Launches a program under the debugger, parked before `main`, so a fresh session reports `stopped`. A
-`debug_start` while a session is live launches the new program first; once it has started, the live
-session is reaped and its remaining output leads the reply. A start that fails leaves the live session as it
-was.
+`debug_start` while a session is live reaps that session first, and its remaining output leads the reply
+— including a start that is then refused, whose error carries the reaped session's final `output` lines.
 
 | Argument | Type | Description |
 |----------|------|-------------|
@@ -2239,7 +2246,7 @@ and anything else given as `source`, is refused with the argument to use.
 | Argument | Type | Description |
 |----------|------|-------------|
 | `target` | string | Required. `file:line`, a bare line number, a function name, or `*0x<offset>` |
-| `condition` | string | Break only when this holds, such as `i > 3`; the agent evaluates it itself |
+| `condition` | string | Break only when this holds, such as `i > 3`; the driver judges it at the stop |
 
 #### `debug_clear`
 

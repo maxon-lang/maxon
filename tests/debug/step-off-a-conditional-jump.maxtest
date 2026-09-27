@@ -33,12 +33,12 @@ test 'a step from a breakpoint on a conditional jump arrives as a step stop on t
 		walked.push("{textOf(stop, node: stop.root, key: ReasonKey)} {textOf(stop, node: stop.root, key: FunctionKey)}:{numberOf(stop, node: stop.root, key: LineKey)} {textOf(stop, node: stop.root, key: OffsetKey)}")
 	end 'eachStop'
 
-	Expect.equal(stops.count() as AssertedInt, expected: StopsOffTheJump, message: "⛔ THE REGRESSION THIS GUARDS IS SILENCE. A conditional jump is not executed out of line — it is SIMULATED against the saved flags — so the step off one has no trap of its own to publish, and the stop after it goes missing with no event of any kind. The breakpoint and the step are two stops. The session stopped: {renderedRows(walked)}. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(stops.count() as AssertedInt, expected: StopsOffTheJump, message: "⛔ THE REGRESSION THIS GUARDS IS SILENCE. The step off the armed jump restores the byte, single-steps the real jump and re-plants, so the landing carries no `int3` of its own to publish, and the stop after it goes missing with no event of any kind. The breakpoint and the step are two stops. The session stopped: {renderedRows(walked)}. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let onTheJump = eventAt(stops, index: 0)
 	Expect.equal(textOf(onTheJump, node: onTheJump.root, key: OffsetKey), expected: hexSpelling(jump), message: "the first stop is the breakpoint on the jump itself. The session stopped: {renderedRows(walked)}. {said}")
 
 	let pastTheJump = eventAt(stops, index: 1)
-	Expect.equal(textOf(pastTheJump, node: pastTheJump.root, key: ReasonKey), expected: StepStopReason, message: "the stop that follows a simulated jump is the STEP's — it is what says the landing was published at all rather than swallowed with the trap that never fired there. The session stopped: {renderedRows(walked)}. {said}")
+	Expect.equal(textOf(pastTheJump, node: pastTheJump.root, key: ReasonKey), expected: StepStopReason, message: "the stop that follows the single-stepped jump is the STEP's — it is what says the landing was published at all rather than swallowed because no `int3` fired there. The session stopped: {renderedRows(walked)}. {said}")
 	Expect.equal(numberOf(pastTheJump, node: pastTheJump.root, key: LineKey) as AssertedInt, expected: takenLine as AssertedInt, message: "the step lands where the branch went, which for this fixture is the arm the condition takes. The session stopped: {renderedRows(walked)}. {said}")
 end 'a step from a breakpoint on a conditional jump arrives as a step stop on the line the jump lands on'

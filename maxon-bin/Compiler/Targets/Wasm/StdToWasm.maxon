@@ -799,12 +799,11 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
-			osHostSample or
+			osHostProcess or
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe or
-			osDebugHost then break 'k'
+			osSocketServe then break 'k'
 		callIndirect(_, _, resultType, argFloatMask, args) then internIndirectCallType(map, builder: builder, resultType: resultType, argFloatMask: argFloatMask, argCount: args.count(), isThrowing: false)
 
 		// A witness call is an indirect call on wasm: its callee is a funcref-table index loaded out of a
@@ -1406,12 +1405,11 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
-			osHostSample or
+			osHostProcess or
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe or
-			osDebugHost then break 'def'
+			osSocketServe then break 'def'
 
 		// A parameter's local is the wasm parameter, so it takes the signature's machine word, the same
 		// answer the `func.paramTypes` sweep recorded and `funcParamValTypes` declares.
@@ -1741,12 +1739,11 @@ type WasmFuncEmitter
 				osUnmapNamedSegment or
 				osUnpublishNamedSegment then panic("emitStraightLineTerminator: a named-section create or unmap is a body op, never a terminator")
 			covPoint then panic("emitStraightLineTerminator: a coverage counter is a body op, never a terminator")
-			osHostSample then panic("emitStraightLineTerminator: a host sample call is a body op, never a terminator")
+			osHostProcess then panic("emitStraightLineTerminator: a host process call is a body op, never a terminator")
 			osNetpoll then panic("emitStraightLineTerminator: a poller call is a body op, never a terminator")
 			osPathQuery then panic("emitStraightLineTerminator: a path query is a body op, never a terminator")
 			osSocketOverlapped or
 				osSocketServe then panic("emitStraightLineTerminator: a socket transfer or a server-side socket call is a body op, never a terminator")
-			osDebugHost then panic("emitStraightLineTerminator: the debug agent's host primitive is a body op, never a terminator")
 		end 'term'
 	end 'emitStraightLineTerminator'
 
@@ -1916,12 +1913,11 @@ type WasmFuncEmitter
 				osUnmapNamedSegment or
 				osUnpublishNamedSegment then panic("emitDispatcherTerminator: a named-section create or unmap is a body op, never a terminator")
 			covPoint then panic("emitDispatcherTerminator: a coverage counter is a body op, never a terminator")
-			osHostSample then panic("emitDispatcherTerminator: a host sample call is a body op, never a terminator")
+			osHostProcess then panic("emitDispatcherTerminator: a host process call is a body op, never a terminator")
 			osNetpoll then panic("emitDispatcherTerminator: a poller call is a body op, never a terminator")
 			osPathQuery then panic("emitDispatcherTerminator: a path query is a body op, never a terminator")
 			osSocketOverlapped or
 				osSocketServe then panic("emitDispatcherTerminator: a socket transfer or a server-side socket call is a body op, never a terminator")
-			osDebugHost then panic("emitDispatcherTerminator: the debug agent's host primitive is a body op, never a terminator")
 		end 'term'
 	end 'emitDispatcherTerminator'
 
@@ -2159,12 +2155,11 @@ type WasmFuncEmitter
 
 			// ⛔ WASI has no other thread to suspend and no register file to read — the sandbox exposes
 			// neither — so this is a permanent absence rather than an unwritten lowering.
-			osHostSample then panic("emitBodyOp: `osHostSample` has no wasm32-wasi spelling — process sampling is `HostFacility.processSampling`, which this lane does not provide, so SemanticCheck refuses such a program at its own source span (E3104) and this is the backstop for a compiler bug that got one past that gate")
+			osHostProcess then panic("emitBodyOp: `osHostProcess` has no wasm32-wasi spelling — process sampling is `HostFacility.processSampling`, which this lane does not provide, so SemanticCheck refuses such a program at its own source span (E3104) and this is the backstop for a compiler bug that got one past that gate")
 			osNetpoll then panic("emitBodyOp: `osNetpoll` has no wasm32-wasi spelling — a WASI component has one thread, so there is no second party to interrupt a wait and no poller to block in; the scheduler that emits it is `HostFacility.greenThreads`, which SemanticCheck refuses on this lane at its own source span (E3104), and this is the backstop for a compiler bug that got one past that gate")
 			osSocketOverlapped then panic("emitBodyOp: `osSocketOverlapped` has no wasm32-wasi spelling — `TargetFacilities.targetProvidesFacility` denies `managedSocket` on this lane, so a socket call is refused at its own source span (E3104), and this is the backstop for a compiler bug that got one past that gate")
 			osPathQuery then panic("emitBodyOp: `osPathQuery` has no wasm32-wasi spelling — WASI has no process-spawn primitive, so a subprocess call is refused at its own source span (E3074) and the `PATH` walk that emits this op is never installed; this is the backstop for a compiler bug that got one past that refusal")
 			osSocketServe then panic("emitBodyOp: `osSocketServe` has no wasm32-wasi spelling — binding, listening and accepting need `wasi:sockets`, which this lane does not use, so `TargetFacilities.targetProvidesFacility` denies `managedSocket` here and a listener call is refused at its own source span (E3104); this is the backstop for a compiler bug that got one past that gate")
-			osDebugHost then panic("emitBodyOp: `osDebugHost` has no wasm32-wasi spelling — a WASI component hosts no child process and has no addressable code to patch, so `TargetFacilities.targetProvidesFacility` denies `debugAgent` here, the entry stub mints no call into `runtime/DebugAgent.maxon` and its bodies are swept as unreached tier; reaching here means a compiler bug got one past that gate")
 		end 'body'
 	end 'emitBodyOp'
 
@@ -3684,12 +3679,11 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment then panic("decideDispatcher: a named-section create or unmap is a body op, never a terminator")
 		covPoint then panic("decideDispatcher: a coverage counter is a body op, never a terminator")
-		osHostSample then panic("decideDispatcher: a host sample call is a body op, never a terminator")
+		osHostProcess then panic("decideDispatcher: a host process call is a body op, never a terminator")
 		osNetpoll then panic("decideDispatcher: a poller call is a body op, never a terminator")
 		osPathQuery then panic("decideDispatcher: a path query is a body op, never a terminator")
 		osSocketOverlapped or
 			osSocketServe then panic("decideDispatcher: a socket transfer or a server-side socket call is a body op, never a terminator")
-		osDebugHost then panic("decideDispatcher: the debug agent's host primitive is a body op, never a terminator")
 	end 'k'
 
 	return false

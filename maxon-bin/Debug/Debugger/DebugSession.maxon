@@ -6,10 +6,9 @@ end 'DebugFace'
 export union DebugSessionStart
 	ready(session DebugSession)
 	refused(reason String)
-	noAgent(reason String)
 end 'DebugSessionStart'
 
-let NoAgentMessage = "no debug agent attached to this program: it was built with"
+let NeverStoppedMessage = "the program ended before the debugger could stop it"
 
 export type DebugSession
 	var conversation as DebugConversation
@@ -20,9 +19,9 @@ export type DebugSession
 		let symbols = DebugSymbols.create(reader, code: code, executable: program)
 		let routing = ChildOutputRouting.allToStandardError if face == DebugFace.batch else ChildOutputRouting.verbatim
 
-		match DebugEngine.start(program, arguments: arguments, workingDirectory: workingDirectory, targetEnv: targetEnv, routing: routing, stopTimeoutMs: stopTimeoutMs, traced: traced) 'started'
+		match DebugEngine.start(program, reader: reader, textBytes: code.count() as DebugAddress, arguments: arguments, workingDirectory: workingDirectory, targetEnv: targetEnv, routing: routing, stopTimeoutMs: stopTimeoutMs, traced: traced) 'started'
 			refused(reason) then return DebugSessionStart.refused(reason)
-			noAgent then return DebugSessionStart.noAgent(NoAgentMessage)
+			neverStopped then return DebugSessionStart.refused(NeverStoppedMessage)
 			ready(engine) then return DebugSessionStart.ready(Self{conversation: DebugConversation.create(engine, symbols: symbols, delivery: DebugStopDelivery.awaited), symbols: symbols, face: face})
 		end 'started'
 	end 'launch'

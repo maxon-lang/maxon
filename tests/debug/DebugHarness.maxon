@@ -246,6 +246,40 @@ export let DumpFilesHeading = "files ("
 export let DumpFunctionsHeading = "functions ("
 export let DumpTypesHeading = "types ("
 export let DumpLineTableHeading = "line table ("
+let DumpInlineSitesHeading = "inline sites ("
+let DumpInlineRangesHeading = "inline ranges ("
+export let DumpGlobalsSectionHeading = "globals ("
+export let DumpLayoutSectionHeading = "layout ("
+
+export let RosterGlobalName = "__gt_allg"
+export let RosterLengthGlobalName = "__gt_allglen"
+export let DebugStreamGlobalName = "__ds_base"
+
+let SidecarNameTerminator = ":"
+
+export function sidecarTableNames(rows StringArray, names StringArray, published bool) returns StringArray
+	var matching = StringArray.create()
+
+	for name in names 'eachName'
+		if sidecarTableRowsName(rows, name: name) == published 'wanted'
+			matching.push(name)
+		end 'wanted'
+	end 'eachName'
+
+	return matching
+end 'sidecarTableNames'
+
+export function sidecarTableRowsName(rows StringArray, name String) returns bool
+	for row in rows 'eachRow'
+		for token in whitespaceTokens(row) 'eachToken'
+			if token.replace(SidecarNameTerminator, with: "") == name 'namesIt'
+				return true
+			end 'namesIt'
+		end 'eachToken'
+	end 'eachRow'
+
+	return false
+end 'sidecarTableRowsName'
 
 // The rows under one section heading: every line after it, up to the line that opens the NEXT section. A
 // heading nothing opens yields no rows, which the caller reports as the section being absent.
@@ -278,7 +312,7 @@ export function dumpSectionRows(dump String, heading String) returns StringArray
 end 'dumpSectionRows'
 
 function opensASection(line String) returns bool
-	return line.startsWith(DumpFilesHeading) or line.startsWith(DumpFunctionsHeading) or line.startsWith(DumpTypesHeading) or line.startsWith(DumpLineTableHeading)
+	return line.startsWith(DumpFilesHeading) or line.startsWith(DumpFunctionsHeading) or line.startsWith(DumpTypesHeading) or line.startsWith(DumpLineTableHeading) or line.startsWith(DumpInlineSitesHeading) or line.startsWith(DumpInlineRangesHeading) or line.startsWith(DumpGlobalsSectionHeading) or line.startsWith(DumpLayoutSectionHeading)
 end 'opensASection'
 
 // ============================================================================================
@@ -460,6 +494,7 @@ export let LogicLineFixtureName = "logicline"
 export let VoidCallFixtureName = "voidcall"
 export let RecursionFixtureName = "recursion"
 export let LibraryCallbackFixtureName = "librarycallback"
+export let ValueCallFixtureName = "valuecall"
 
 export let DebugBatchOption = "--batch"
 export let DebugCommandsOptionPrefix = "--commands="

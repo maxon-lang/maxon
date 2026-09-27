@@ -1565,3 +1565,64 @@ contested cases directly.
 logged after it.** `ScaleCorpus.maxon` now emits `public` on `ScaleInt` and drops `export` from three
 generated members, which changes the bytes every rung compiles. Compare against a row minted from this
 commit or later, or re-mint the baseline.
+
+### Result — 2026-09-27, the out-of-process debugger REMOVES a fixed cost from every compile
+
+The change that replaces the in-process debug agent with an out-of-process debugger was measured for a
+bend and has none. The allocation ladder is linear at every rung — ×1.32 ×1.49 ×1.68 ×1.83 ×1.90 — and
+the change is a net **reduction** at every rung, not a cost.
+
+| rung | HEAD `1d3610cc8e` | with the change | delta |
+|---|---|---|---|
+| 0 | 8,704,332 | 8,059,541 | −644,791 (−7.41%) |
+| 1 | 11,893,589 | 10,664,390 | −1,229,199 (−10.33%) |
+| 2 | 17,218,080 | 15,892,178 | −1,325,902 (−7.70%) |
+| 3 | 28,033,655 | 26,711,357 | −1,322,298 (−4.72%) |
+| 4 | 50,054,575 | 48,939,255 | −1,115,320 (−2.23%) |
+| 5 | 94,287,844 | 93,225,200 | −1,062,644 (−1.13%) |
+| 5 bytes | 12,691,706,842 | 12,597,062,456 | −94,644,386 (−0.75%) |
+
+**The saving is FIXED per compile, and the per-phase deltas are what prove it** — flat across all six
+rungs, which is the signature of less library and runtime source being read rather than less work per
+element: `phase:regalloc` −207,2xx, `phase:parse` −145,4xx, `phase:stdFanOut` −128,8xx,
+`phase:signatures` −104,xxx, `phase:merge` −104,4xx, `phase:inlineLeaves` −51,4xx, `phase:lex` −33,889
+(exactly, every rung). The cause is the deletion of `runtime/DebugAgent.maxon` (tier source read on
+every compile), `Compiler/Runtime/DebugAgentRuntime.maxon` (−513 lines of emitted runtime, which is the
+flat regalloc term), `Compiler/Debug/DebugControlLayout.maxon` (−336), the four hand-assembled agent
+chunks in `X64Runtime.maxon` (−294), and one fewer `StdOp` variant off every exhaustive match.
+
+**One term grows with the rung, and it is owed.** `phase:writeDebugInfo` runs −33,823 −34,860 −27,659
+−19,391 −2,847 **+30,168** — a flat −34k plus a per-function term worth ~+64k at rung 5, 0.07% of the
+compile. `SidecarProvenance.originOf` now asks `isRuntimeSourceFile` before `isLibrarySourceFile` once
+per function chunk, so a frame can be filed as `MxdbgOrigin.runtime`. That classification is the whole
+point of the v9 origin word: a debugger reading a foreign process must tell a runtime frame from a
+library one, and refusing a breakpoint by origin is what replaces the deleted tier's `__symtable` bit.
+
+⛔ **Two readings taken from a SINGLE ladder run were both wrong, and the same instrument corrected
+both.** A rung-5 total read +4,995,030 against the 2026-09-23 row and was attributed to this change: the
+row was five commits old, three of them runtime commits, and an interleaved A/B shows HEAD alone is
++6,104,918 on it while the change hands ~1.06M back. And `regalloc:splitting` read ×2.54 per doubling,
+which named it the only phase above ×2: `DefaultRepeatCount` is 1, that rung-5 CPU sample sat **32%
+above the minimum of three**, and the true ratio is ×1.95 with no rung in either arm above ×2.06 — the
+exact allocation column agreeing at ×1.86/×1.90. ⇒ **a CPU column from one sample cannot name a bend,
+and a log row is a control only for the commit it was minted from.**
+
+**The instrument.** `git archive HEAD` and the working tree built into two arms in the scratchpad from
+one seed, each self-compiled to byte stability (ctrl 15,898,397 bytes over three stages; tree
+15,840,744 over two), then **swapped into one directory and run from there**, because the allocation
+column carries a term in the compiler's own path length. Three interleaved cycles; reproducibility
+spread ≤153 allocations out of 8.7M–94M, four orders of magnitude below the deltas above.
+
+**The scheduler's new gate is free when nothing is debugged**, confirmed at machine-op level rather than
+by reading source. The hand-off gate is one `__gt_hold_epoch` load, one compare and a not-taken branch,
+with every arm behind it `BlockHeat.cold` and emitted 130 lines away; the locked-M road in
+`buildSchedLoop` is one load of `m->lockedGt` off an M pointer already live in `rbx`, one not-taken
+branch, falling through unchanged. This is emitted runtime, so it is charged to every Maxon program
+ever compiled.
+
+**Filed, not fixed.** `SidecarProvenance.originOf` resolves the same file's provenance twice per
+function (`Compiler/Debug/MxdbgEmit.maxon:689`), worth about half of the +64k — a constant factor, and
+collapsing it needs either a third exported predicate in `Queries.maxon` or the library rule restated at
+the call site. `emitLoadGlobalWord` emits `leaRegGlobal` + `loadRegBaseDisp` where x64 has a single
+RIP-relative `mov`, which is pre-existing, affects every runtime global read in every program, and is an
+isel change with reach far beyond this diff.

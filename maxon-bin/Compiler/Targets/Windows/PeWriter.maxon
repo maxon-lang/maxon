@@ -601,6 +601,13 @@ export enum IatSlot
 	GetFullPathNameA = IatSlotMeta{dll: ImportDll.kernel32}
 	WaitForSingleObjectEx = IatSlotMeta{dll: ImportDll.kernel32}
 	TerminateProcess = IatSlotMeta{dll: ImportDll.kernel32}
+	WriteProcessMemory = IatSlotMeta{dll: ImportDll.kernel32}
+	DebugActiveProcess = IatSlotMeta{dll: ImportDll.kernel32}
+	DebugActiveProcessStop = IatSlotMeta{dll: ImportDll.kernel32}
+	WaitForDebugEvent = IatSlotMeta{dll: ImportDll.kernel32}
+	ContinueDebugEvent = IatSlotMeta{dll: ImportDll.kernel32}
+	DebugBreakProcess = IatSlotMeta{dll: ImportDll.kernel32}
+	VirtualProtectEx = IatSlotMeta{dll: ImportDll.kernel32}
 
 	// The ws2_32 run sits after every kernel32 slot, which keeps kernel32's run contiguous so
 	// `iatSlotByteOffset` needs one gap term per DLL. A kernel32 import declared below this line would
@@ -763,6 +770,13 @@ export function importAnswerOf(slot IatSlot) returns ImportAnswer
 			VirtualProtect or
 			FlushInstructionCache or
 			TerminateProcess or
+			WriteProcessMemory or
+			DebugActiveProcess or
+			DebugActiveProcessStop or
+			WaitForDebugEvent or
+			ContinueDebugEvent or
+			DebugBreakProcess or
+			VirtualProtectEx or
 			WSAStartup or
 			getaddrinfo or
 			connect or
@@ -897,7 +911,14 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 			GetWindowsDirectoryA or
 			GetFullPathNameA or
 			WaitForSingleObjectEx or
-			TerminateProcess gives true
+			TerminateProcess or
+			WriteProcessMemory or
+			DebugActiveProcess or
+			DebugActiveProcessStop or
+			WaitForDebugEvent or
+			ContinueDebugEvent or
+			DebugBreakProcess or
+			VirtualProtectEx gives true
 
 		// The ws2_32 and ntdll slots in this arm answer `false` because `dllIsEmitted` gates each of
 		// those runs as a whole; this band decides membership within kernel32's. Answering `true` would
@@ -1873,7 +1894,7 @@ end 'buildRsrcSection'
 
 // --- Main PE writer ---
 
-export function writePe(outputPath FilePath, codeResult CodeResult, target Target, productVersion VersionComponentArray)
+export function writePe(outputPath FilePath, codeResult CodeResult, target Target, productVersion VersionComponentArray) returns ImagePlacement
 	var pe = ByteArray.create()
 	pe.reserve(4096)
 
@@ -1952,7 +1973,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// `GetEnvironmentVariableA` and the machine's processor count through `GetActiveProcessorCount`, and its
 	// TLS pair lives in this band too. It also answers for a spawning image, whose child-process bodies are
 	// installed only with the scheduler.
-	let optionalImports = codeResult.stdModule.debugStream or codeResult.stdModule.usesCpuCount or codeResult.stdModule.carriesThreadCpuTicks or codeResult.stdModule.usesGt or codeResult.stdModule.usesBackgroundPriority or codeResult.stdModule.usesProcessLiveness or codeResult.stdModule.usesTerminalDetection or codeResult.stdModule.usesSharedMemory or codeResult.stdModule.usesUptimeClock or codeResult.stdModule.usesProcessSampling or codeResult.stdModule.usesDebugAgent
+	let optionalImports = codeResult.stdModule.debugStream or codeResult.stdModule.usesCpuCount or codeResult.stdModule.carriesThreadCpuTicks or codeResult.stdModule.usesGt or codeResult.stdModule.usesBackgroundPriority or codeResult.stdModule.usesProcessLiveness or codeResult.stdModule.usesTerminalDetection or codeResult.stdModule.usesSharedMemory or codeResult.stdModule.usesUptimeClock or codeResult.stdModule.usesProcessSampling or codeResult.stdModule.usesProcessDebug
 
 	// ⭐ **THE SAMPLER IS ntdll's ONLY PRODUCER**, and it feeds BOTH gates: the suspend/context/read/resume
 	// family, the timer pair and the module walk ride the optional kernel32 band above, while
@@ -2114,4 +2135,6 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	try File.writeBinary(outputPath, content: pe) otherwise 'writeErr'
 		compilerLogger(CompilerLogGroup.binary).error("Failed to write PE file: {outputPath}")
 	end 'writeErr'
+
+	return ImagePlacement.placed(ImageBase as MachineWord, textRva: textRva as ImageRva, dataRva: dataRva as ImageRva)
 end 'writePe'

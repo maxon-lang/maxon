@@ -29,6 +29,7 @@ let StepInCommand = "stepIn"
 let StepOutCommand = "stepOut"
 let PauseCommand = "pause"
 let DisconnectCommand = "disconnect"
+let TerminateDebuggeeArgument = "terminateDebuggee"
 let TerminateCommand = "terminate"
 
 let InitializedEvent = "initialized"
@@ -237,7 +238,7 @@ type DapAdapter
 	end 'breakDown'
 
 	function finish() returns ExitCode
-		_ = self.debuggee.reap()
+		_ = self.debuggee.reap(DebugSessionEnding.terminateTheProgram)
 
 		return OwnFailureExit if self.broken else SucceededExit
 	end 'finish'
@@ -292,7 +293,7 @@ type DapAdapter
 		end 'launch'
 
 		if request.command == DisconnectCommand or request.command == TerminateCommand 'ending'
-			self.endSession(request)
+			try self.endSession(request)
 
 			return
 		end 'ending'
@@ -344,8 +345,8 @@ type DapAdapter
 		self.writer.event(InitializedEvent, doc: JsonDoc.create(), body: DapBody.none)
 	end 'adopt'
 
-	function endSession(request DapRequest)
-		self.emitProgramOutput(self.debuggee.reap())
+	function endSession(request DapRequest) throws DapArgumentError
+		self.emitProgramOutput(self.debuggee.reap(try self.endingAskedBy(request)))
 		self.lifecycle = DapLifecycle.ended
 		self.writer.respond(request, doc: JsonDoc.create(), body: DapBody.none)
 
@@ -353,6 +354,14 @@ type DapAdapter
 			self.writer.event(TerminatedEvent, doc: JsonDoc.create(), body: DapBody.none)
 		end 'terminated'
 	end 'endSession'
+
+	function endingAskedBy(request DapRequest) returns DebugSessionEnding throws DapArgumentError
+		if request.command == TerminateCommand 'alwaysTerminates'
+			return DebugSessionEnding.terminateTheProgram
+		end 'alwaysTerminates'
+
+		return DebugSessionEnding.terminateTheProgram if try request.arguments.flagOr(TerminateDebuggeeArgument, fallback: true) else DebugSessionEnding.leaveItRunning
+	end 'endingAskedBy'
 
 	function answerLive(request DapRequest, session DebugToolSession) throws DapArgumentError
 		if request.command == SetBreakpointsCommand 'sourceBreakpoints'

@@ -2,6 +2,8 @@ let TestedCompilerStem = "maxon-bin/.maxon/maxon"
 
 let FixturesDirName = "tests/emitted-runtime/fixtures"
 let SpawnFixtureName = "spawn"
+export let PinnedMachineFixtureName = "pinned-machine"
+export let PinnedMachineBlockedFixtureName = "pinned-machine-blocked"
 let StagingRootDirName = "temp/emitted-runtime"
 let StoredFixtureSuffix = ".fixture"
 let StagedProgramFileName = "main.maxon"
@@ -36,6 +38,10 @@ let OperandSeparator = ","
 let LineSeparator = "\n"
 let DisplacedAddressInfix = " + "
 let DestinationWordIndex = 1
+
+let MaxProcsVariableName = "MAXON_MAX_PROCS"
+
+export typealias ProcessorCount = int(1 to 1024)
 
 export typealias FieldOffset = int(0 to 65535)
 export typealias LineIndex = int(0 to u64.max)
@@ -133,6 +139,42 @@ export function buildStagedProgram(staged FilePath, caseLabel String, target Str
 
 	return ir
 end 'buildStagedProgram'
+
+export function buildStagedForHost(staged FilePath, caseLabel String) returns FilePath
+	let executable = staged.join("{OutputStem}-{caseLabel}{executableSuffix()}")
+
+	var arguments = StringArray.create()
+	arguments.push(BuildCommandName)
+	arguments.push(staged.join(StagedProgramFileName).toString())
+	arguments.push("{OutputOptionPrefix}{executable.toString()}")
+
+	let build = spawnCompiler(arguments, staged: staged)
+
+	if build.exitCode() != 0 'buildFailed'
+		panic("emitted-runtime tests: the gate could not run — `{BuildCommandName} {StagedProgramFileName}` for the host exited {build.exitCode()}, so there is no program to run. It wrote to stderr: {build.stderr}")
+	end 'buildFailed'
+
+	if not File.exists(executable) 'nothingWritten'
+		panic("emitted-runtime tests: the gate could not run — the host build exited 0 and wrote no executable to {executable.toString()}.")
+	end 'nothingWritten'
+
+	return executable
+end 'buildStagedForHost'
+
+export function runStagedForHost(executable FilePath, staged FilePath, procs ProcessorCount, deadlineMs DurationMs, standardInput InputSource) returns CollectedOutput
+	var overrides = EnvMap.create()
+	try overrides.insert(MaxProcsVariableName, value: "{procs}") otherwise panic("emitted-runtime tests: the gate could not run — could not name {MaxProcsVariableName} in the child's environment.")
+
+	var config = Configuration.create(Executable.path(executable))
+	config.workingDirectory = staged
+	config.environment = Environment.inheritUpdating(overrides)
+	config.timeoutMs = deadlineMs
+	config.standardInput = standardInput
+
+	return try config.run() otherwise (e) 'spawnFailed'
+		panic("emitted-runtime tests: the gate could not run — could not spawn the staged program at {executable.toString()} ({e.displayReason()}).")
+	end 'spawnFailed'
+end 'runStagedForHost'
 
 export function irLines(path FilePath) returns StringArray
 	let text = try File.readText(path) otherwise panic("emitted-runtime tests: the gate could not run — could not read the Target IR the compiler wrote to {path.toString()}.")
@@ -296,6 +338,10 @@ export function notePlainFieldLoad(findings StringArray, body StringArray, targe
 	findings.push("on {target}, `{functionName}` still reads {field} with a plain load — `{lineAt(body, index: index)}`")
 end 'notePlainFieldLoad'
 
+export function oneLine(raw String) returns String
+	return raw.replace("\r", with: "").replace("\n", with: " ").trim()
+end 'oneLine'
+
 export function renderedFindings(findings StringArray) returns String
 	var rendered = ""
 
@@ -348,16 +394,21 @@ function spawnCompiler(arguments StringArray, staged FilePath) returns Collected
 end 'spawnCompiler'
 
 function testedCompilerPath() returns FilePath
-	#if os(Windows)
-		let spelled = "{TestedCompilerStem}.exe"
-	#else
-		let spelled = "{TestedCompilerStem}"
-	#endif
-
+	let spelled = "{TestedCompilerStem}{executableSuffix()}"
 	let relative = try FilePath.from(spelled) otherwise panic("emitted-runtime tests: the gate could not run — '{spelled}' is not a spellable path")
 
 	return relative.resolve(Directory.currentPath())
 end 'testedCompilerPath'
+
+function executableSuffix() returns String
+	#if os(Windows)
+		let suffix = ".exe"
+	#else
+		let suffix = ""
+	#endif
+
+	return suffix
+end 'executableSuffix'
 
 function clearStagedFiles(dir FilePath)
 	for entry in listing(dir) 'eachEntry'

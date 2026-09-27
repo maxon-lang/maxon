@@ -1,0 +1,14 @@
+let NoAgentOptionRefusedCaseLabel = "a-no-debug-agent-build-is-refused-as-an-unknown-option"
+
+let RefusedBuildLabel = "the withdrawn option"
+let AcceptedBuildExitCode = 0
+
+test 'a build asked to withdraw the debug agent is refused as an option nothing implements, and writes no program'
+	let staged = stagedFixture(NoAgentOptionRefusedCaseLabel, fixture: HeaplessFixtureName)
+	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, label: RefusedBuildLabel, extraArguments: [NoDebugAgentOption])
+	let said = renderedEvents(build.stdout, stderr: build.stderr)
+
+	Expect.notEqual(build.exitCode() as AssertedInt, expected: AcceptedBuildExitCode, message: "⭐ THERE IS NOTHING LEFT TO WITHDRAW, SO THE WORD IS NOT AN OPTION. `{NoDebugAgentOption}` was accepted, which means a caller can still write a build line that asks for a program without an in-process agent and be told it worked — over a compiler that has no such thing to leave out. An option nothing implements must be refused like any word the driver does not know. {said}")
+	Expect.contains(build.stderr, needle: NoDebugAgentOption, message: "the refusal does not name the option that was typed, so a reader is left to find which of their arguments was rejected. {said}")
+	Expect.isFalse(File.exists(builtExecutable(staged)), message: "the refused build wrote a program anyway. A command line the driver refused must produce no output a later step could pick up and debug. {said}")
+end 'a build asked to withdraw the debug agent is refused as an option nothing implements, and writes no program'

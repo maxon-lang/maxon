@@ -1,0 +1,38 @@
+let CaseLabel = "pinned-machine"
+
+let RunDeadline = 30000 as DurationMs
+
+let SoleProcessor = 1 as ProcessorCount
+let TwoProcessors = 2 as ProcessorCount
+let FourProcessors = 4 as ProcessorCount
+
+let StayedLine = "moved 0 of 24"
+
+let PinReason = "A green thread that has pinned itself to its machine (`__Builtins.pinToMachine`) may not be resumed on another one, because the pin exists for OS interfaces that answer only the thread that opened them — `WaitForDebugEvent` and `ContinueDebugEvent` on Windows, every ptrace request after ATTACH on Linux. A park is what tests the pin: the thread leaves its machine's scheduler context, is readied by whichever machine completed what it waited for, and is found by whichever machine is searching. Go's answer is `startlockedm`/`stoplockedm` (`vendor/go/src/runtime/proc.go`): the finder hands its P to the owner M through the owner's own private slot and gives up its own, so the owner is the machine that runs the G next. A finder that merely requeues the G and signals the owner, keeping its processor, livelocks — at one processor the owner can never adopt one, and at several it loses the race for an idle one."
+
+test 'a pinned green thread stays on its machine across a park'
+	let staged = stagedProgram(CaseLabel, fixture: PinnedMachineFixtureName)
+	let executable = buildStagedForHost(staged, caseLabel: CaseLabel)
+
+	var findings = StringArray.create()
+
+	notePinnedRun(findings, executable: executable, staged: staged, procs: SoleProcessor)
+	notePinnedRun(findings, executable: executable, staged: staged, procs: TwoProcessors)
+	notePinnedRun(findings, executable: executable, staged: staged, procs: FourProcessors)
+
+	Expect.isTrue(findings.isEmpty(), message: "a pinned green thread did not stay on the machine it pinned itself to:{renderedFindings(findings)}\n\n  {PinReason}")
+end 'a pinned green thread stays on its machine across a park'
+
+function notePinnedRun(findings StringArray, executable FilePath, staged FilePath, procs ProcessorCount)
+	let run = runStagedForHost(executable, staged: staged, procs: procs, deadlineMs: RunDeadline, standardInput: InputSource.none)
+
+	if run.exitCode() != 0 'didNotFinish'
+		findings.push("at {procs} processor(s) the program exited {run.exitCode()} — it said `{oneLine(run.stdout)}` on stdout and `{oneLine(run.stderr)}` on stderr. A run killed at the {RunDeadline} ms deadline is the hand-off livelock; any other non-zero code is the program's own refusal")
+
+		return
+	end 'didNotFinish'
+
+	if not run.stdout.contains(StayedLine) 'movedMachine'
+		findings.push("at {procs} processor(s) the program exited 0 and said `{oneLine(run.stdout)}` where it says `{StayedLine}` when every park gave the thread back to the machine it pinned itself to")
+	end 'movedMachine'
+end 'notePinnedRun'

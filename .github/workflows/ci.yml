@@ -52,6 +52,10 @@ on:
       - 'tests/fmt/**'
       - 'tests/ladders/**'
       - 'tests/spec-harness/**'
+      - 'tests/debug/**'
+      - 'tests/dap/**'
+      - 'tests/mcp/**'
+      - 'tests/cli/**'
       - '!examples/**'
       - '!.github/**'
       - '.github/workflows/ci.yml'
@@ -143,6 +147,26 @@ jobs:
       - name: Ladder index
         if: steps.seed.outputs.seeded == 'yes'
         run: ./maxon-bin/.maxon/maxon test tests/ladders
+
+      # ⭐ THE ONLY DEBUGGER CODE CI RUNS. `spec-test` covers the language; the debugger's driver, its
+      # DAP server and its MCP tools are exercised by these three corpora and by nothing else, so a lane
+      # without them reports a green suite over a debugger that does not start. x64-windows only for now:
+      # the other three lanes refuse a debug session by name.
+      - name: Debugger corpus
+        if: steps.seed.outputs.seeded == 'yes' && matrix.target == 'x64-windows'
+        run: ./maxon-bin/.maxon/maxon test tests/debug --timeout=60000
+
+      - name: DAP corpus
+        if: steps.seed.outputs.seeded == 'yes' && matrix.target == 'x64-windows'
+        run: ./maxon-bin/.maxon/maxon test tests/dap --timeout=60000
+
+      - name: MCP corpus
+        if: steps.seed.outputs.seeded == 'yes' && matrix.target == 'x64-windows'
+        run: ./maxon-bin/.maxon/maxon test tests/mcp
+
+      - name: CLI corpus
+        if: steps.seed.outputs.seeded == 'yes'
+        run: ./maxon-bin/.maxon/maxon test tests/cli
 
       # ⭐ THE FIXPOINT IS THE ONE CHECK A GREEN SUITE CANNOT STAND IN FOR. Every stage shares the
       # compiler's logic, so the suite exercises the same behaviour whichever stage ran it; only the

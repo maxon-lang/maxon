@@ -86,6 +86,8 @@ export enum MxdbgPoolString
 	fieldName
 	localName
 	inlineSiteName
+	globalName
+	layoutFigureName
 end 'MxdbgPoolString'
 
 function poolStringText(string MxdbgPoolString, record MxdbgIndex) returns String
@@ -99,6 +101,8 @@ function poolStringText(string MxdbgPoolString, record MxdbgIndex) returns Strin
 		fieldName gives "name of field {record}"
 		localName gives "name of local {record}"
 		inlineSiteName gives "name of inline site {record}"
+		globalName gives "name of global {record}"
+		layoutFigureName gives "name of layout figure {record}"
 	end 'which'
 end 'poolStringText'
 
@@ -242,14 +246,14 @@ end 'MxdbgFieldInfo'
 export type MxdbgLocalInfo
 	export var name as String
 	export var locKind as MxdbgIndex
-	export var locValue as MxdbgLocValue
+	export var locValue as MxdbgRecordFigure
 	export var typeId as MxdbgIndex
 	export var scopeStart as MxdbgCodeOffset
 	export var scopeEnd as MxdbgCodeOffset
 	export var flags as MxdbgIndex
 	export var site as MxdbgInlineSiteLookup
 
-	export static function create(name String, locKind MxdbgIndex, locValue MxdbgLocValue, typeId MxdbgIndex, scopeStart MxdbgCodeOffset, scopeEnd MxdbgCodeOffset, flags MxdbgIndex, site MxdbgInlineSiteLookup) returns MxdbgLocalInfo
+	export static function create(name String, locKind MxdbgIndex, locValue MxdbgRecordFigure, typeId MxdbgIndex, scopeStart MxdbgCodeOffset, scopeEnd MxdbgCodeOffset, flags MxdbgIndex, site MxdbgInlineSiteLookup) returns MxdbgLocalInfo
 		return Self{name: name, locKind: locKind, locValue: locValue, typeId: typeId, scopeStart: scopeStart, scopeEnd: scopeEnd, flags: flags, site: site}
 	end 'create'
 
@@ -358,9 +362,29 @@ typealias MxdbgFuncOrder = Array with MxdbgIndex
 
 export typealias MxdbgLineInfoArray = Array with MxdbgLineInfo
 
+export type MxdbgGlobalInfo
+	export var name as String
+	export var imageOffset as MxdbgIndex
+	export var slotBytes as MxdbgIndex
+
+	static function create(name String, imageOffset MxdbgIndex, slotBytes MxdbgIndex) returns MxdbgGlobalInfo
+		return Self{name: name, imageOffset: imageOffset, slotBytes: slotBytes}
+	end 'create'
+end 'MxdbgGlobalInfo'
+
+export type MxdbgLayoutFigureInfo
+	export var name as String
+	export var figure as MxdbgRecordFigure
+
+	static function create(name String, figure MxdbgRecordFigure) returns MxdbgLayoutFigureInfo
+		return Self{name: name, figure: figure}
+	end 'create'
+end 'MxdbgLayoutFigureInfo'
+
 export type MxdbgReader
 	var image as ByteArray
 	export var buildId as HashDigest
+	export var imageBase as MachineWord
 	export var target as Target
 	export var sourceRoot as String
 	var stringPoolOff as ByteOffset
@@ -385,6 +409,10 @@ export type MxdbgReader
 	var inlineRangeTally as MxdbgIndex
 	var constTableOff as ByteOffset
 	var constTally as MxdbgIndex
+	var globalTableOff as ByteOffset
+	var globalTally as MxdbgIndex
+	var layoutTableOff as ByteOffset
+	var layoutTally as MxdbgIndex
 
 	// Function indices in code-start order, which is what makes `functionContaining` a binary search. It is
 	// a sort rather than a claim about the writer: a sidecar may store its table in emission order, so a walk
@@ -455,6 +483,15 @@ export type MxdbgReader
 			throw MxdbgReadError.truncated
 		end 'constTablePastEnd'
 
+		let globalTableOff = imageReadU32(image, at: MxdbgOffGlobalTableOff) as ByteOffset
+		let globalTally = imageReadU32(image, at: MxdbgOffGlobalCount) as MxdbgIndex
+		let layoutTableOff = imageReadU32(image, at: MxdbgOffLayoutTableOff) as ByteOffset
+		let layoutTally = imageReadU32(image, at: MxdbgOffLayoutCount) as MxdbgIndex
+
+		if not spanFitsWithin(globalTableOff, count: (globalTally * MxdbgGlobalEntrySize) as BytePos, total: image.count()) or not spanFitsWithin(layoutTableOff, count: (layoutTally * MxdbgLayoutEntrySize) as BytePos, total: image.count()) 'runtimeTablePastEnd'
+			throw MxdbgReadError.truncated
+		end 'runtimeTablePastEnd'
+
 		let tripleOff = imageReadU32(image, at: MxdbgOffTripleOff) as ByteOffset
 		let tripleLen = imageReadU32(image, at: MxdbgOffTripleLen) as BytePos
 		let rootOff = imageReadU32(image, at: MxdbgOffSourceRootOff) as ByteOffset
@@ -463,7 +500,7 @@ export type MxdbgReader
 		try requirePoolSliceFits(tripleOff, length: tripleLen, poolSize: poolSize, string: MxdbgPoolString.targetTriple, record: 0)
 		try requirePoolSliceFits(rootOff, length: rootLen, poolSize: poolSize, string: MxdbgPoolString.sourceRoot, record: 0)
 
-		let reader = Self{image: image, buildId: imageReadU64(image, at: MxdbgOffBuildId) as HashDigest, target: try targetOfTriple(String.from(imageSlice(image, start: stringPoolOff + tripleOff, count: tripleLen))), sourceRoot: String.from(imageSlice(image, start: stringPoolOff + rootOff, count: rootLen)), stringPoolOff: stringPoolOff, stringPoolSize: poolSize, fileTableOff: fileTableOff, fileTally: fileTally, funcTableOff: funcTableOff, funcTally: funcTally, lineTableOff: lineTableOff, lineTally: lineTally, typeTableOff: typeTableOff, typeTally: typeTally, fieldTableOff: fieldTableOff, fieldTally: fieldTally, localTableOff: localTableOff, localTally: localTally, covTableOff: covTableOff, covTally: covTally, inlineSiteTableOff: inlineSiteTableOff, inlineSiteTally: inlineSiteTally, inlineRangeTableOff: inlineRangeTableOff, inlineRangeTally: inlineRangeTally, constTableOff: constTableOff, constTally: constTally, funcOrder: functionOrderByCodeStart(image, tableOff: funcTableOff, tally: funcTally)}
+		let reader = Self{image: image, buildId: imageReadU64(image, at: MxdbgOffBuildId) as HashDigest, imageBase: imageReadU64(image, at: MxdbgOffImageBase), target: try targetOfTriple(String.from(imageSlice(image, start: stringPoolOff + tripleOff, count: tripleLen))), sourceRoot: String.from(imageSlice(image, start: stringPoolOff + rootOff, count: rootLen)), stringPoolOff: stringPoolOff, stringPoolSize: poolSize, fileTableOff: fileTableOff, fileTally: fileTally, funcTableOff: funcTableOff, funcTally: funcTally, lineTableOff: lineTableOff, lineTally: lineTally, typeTableOff: typeTableOff, typeTally: typeTally, fieldTableOff: fieldTableOff, fieldTally: fieldTally, localTableOff: localTableOff, localTally: localTally, covTableOff: covTableOff, covTally: covTally, inlineSiteTableOff: inlineSiteTableOff, inlineSiteTally: inlineSiteTally, inlineRangeTableOff: inlineRangeTableOff, inlineRangeTally: inlineRangeTally, constTableOff: constTableOff, constTally: constTally, globalTableOff: globalTableOff, globalTally: globalTally, layoutTableOff: layoutTableOff, layoutTally: layoutTally, funcOrder: functionOrderByCodeStart(image, tableOff: funcTableOff, tally: funcTally)}
 		try reader.requireReferencesHold()
 		try reader.requireOrderedTables()
 
@@ -475,6 +512,14 @@ export type MxdbgReader
 	end 'requireRecordString'
 
 	function requireReferencesHold() throws MxdbgReadError
+		for global in 0 upto self.globalTally 'eachGlobal'
+			try self.requireRecordString(self.globalTableOff, stride: MxdbgGlobalEntrySize, index: global, offsetAt: MxdbgGlobalNameOff, lengthAt: MxdbgGlobalNameLen, string: MxdbgPoolString.globalName)
+		end 'eachGlobal'
+
+		for figure in 0 upto self.layoutTally 'eachLayoutFigure'
+			try self.requireRecordString(self.layoutTableOff, stride: MxdbgLayoutEntrySize, index: figure, offsetAt: MxdbgLayoutNameOff, lengthAt: MxdbgLayoutNameLen, string: MxdbgPoolString.layoutFigureName)
+		end 'eachLayoutFigure'
+
 		for file in 0 upto self.fileTally 'eachFile'
 			try self.requireRecordString(self.fileTableOff, stride: MxdbgFileEntrySize, index: file, offsetAt: MxdbgFileNameOff, lengthAt: MxdbgFileNameLen, string: MxdbgPoolString.fileName)
 		end 'eachFile'
@@ -696,13 +741,41 @@ export type MxdbgReader
 		return self.constTally
 	end 'constantWordCount'
 
-	export function constantWord(index MxdbgIndex) returns MxdbgLocValue
+	export function constantWord(index MxdbgIndex) returns MxdbgRecordFigure
 		if index >= self.constTally 'noSuchWord'
 			panic("MxdbgReader.constantWord: word {index} is past the sidecar's {self.constTally} — every caller bounds itself by the window its local record names")
 		end 'noSuchWord'
 
 		return mxdbgSignedWord(self.tableWord(self.constTableOff, stride: MxdbgConstEntrySize, index: index, at: MxdbgConstWord))
 	end 'constantWord'
+
+	export function globalCount() returns MxdbgIndex
+		return self.globalTally
+	end 'globalCount'
+
+	export function globalRecord(index MxdbgIndex) returns MxdbgGlobalInfo
+		if index >= self.globalTally 'noSuchGlobal'
+			panic("MxdbgReader.globalRecord: global {index} is past the sidecar's {self.globalTally} — every caller bounds itself by `globalCount` or by a lookup this reader answered")
+		end 'noSuchGlobal'
+
+		let rec = self.globalTableOff + (index * MxdbgGlobalEntrySize) as ByteOffset
+
+		return MxdbgGlobalInfo.create(self.poolString(imageReadU32(self.image, at: rec + MxdbgGlobalNameOff) as ByteOffset, length: imageReadU32(self.image, at: rec + MxdbgGlobalNameLen) as BytePos), imageOffset: imageReadU32(self.image, at: rec + MxdbgGlobalImageOffset) as MxdbgIndex, slotBytes: imageReadU32(self.image, at: rec + MxdbgGlobalSlotBytes) as MxdbgIndex)
+	end 'globalRecord'
+
+	export function layoutFigureCount() returns MxdbgIndex
+		return self.layoutTally
+	end 'layoutFigureCount'
+
+	export function layoutFigureRecord(index MxdbgIndex) returns MxdbgLayoutFigureInfo
+		if index >= self.layoutTally 'noSuchFigure'
+			panic("MxdbgReader.layoutFigureRecord: figure {index} is past the sidecar's {self.layoutTally} — every caller bounds itself by `layoutFigureCount` or by a lookup this reader answered")
+		end 'noSuchFigure'
+
+		let rec = self.layoutTableOff + (index * MxdbgLayoutEntrySize) as ByteOffset
+
+		return MxdbgLayoutFigureInfo.create(self.poolString(imageReadU32(self.image, at: rec + MxdbgLayoutNameOff) as ByteOffset, length: imageReadU32(self.image, at: rec + MxdbgLayoutNameLen) as BytePos), figure: mxdbgSignedWord(imageReadU32(self.image, at: rec + MxdbgLayoutFigure) as MxdbgIndex))
+	end 'layoutFigureRecord'
 
 	export function inlineSite(index MxdbgIndex) returns MxdbgInlineSiteInfo
 		if index >= self.inlineSiteTally 'noSuchSite'

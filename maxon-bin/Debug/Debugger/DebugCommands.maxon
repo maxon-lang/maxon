@@ -18,6 +18,7 @@ let GreenParkCommandWord = "gt-park"
 let GreenResumeCommandWord = "gt-resume"
 let TraceCommandWord = "trace"
 let PauseCommandWord = "pause"
+let DetachCommandWord = "detach"
 
 let ConditionWord = " if "
 
@@ -63,6 +64,7 @@ let RunningMessage = "the program is running: it must stop before it can be step
 let NotStartedMessage = "the program is parked before its first line: `continue` starts it"
 let ContinueVerb = "continue"
 let PauseVerb = "pause"
+let DetachVerb = "detach"
 let WalkVerb = "move for the walk"
 let ReturnPointLiftVerb = "lift the walk's return point"
 let StillWalkingMessage = "a step is still walking: pause it before moving the program again"
@@ -96,6 +98,7 @@ export function debugCommandRows() returns DebugCommandRowArray
 	rows.push(DebugCommandRow.create(PrintCommandWord, aliases: ["p"], completesAFunctionName: false))
 	rows.push(DebugCommandRow.create(LocalsCommandWord, aliases: StringArray.create(), completesAFunctionName: false))
 	rows.push(DebugCommandRow.create(PauseCommandWord, aliases: StringArray.create(), completesAFunctionName: false))
+	rows.push(DebugCommandRow.create(DetachCommandWord, aliases: StringArray.create(), completesAFunctionName: false))
 	rows.push(DebugCommandRow.create(HelpCommandWord, aliases: ["?", "commands"], completesAFunctionName: false))
 	rows.push(DebugCommandRow.create(QuitCommandWord, aliases: ["q", "exit"], completesAFunctionName: false))
 	rows.push(DebugCommandRow.create(ThreadsCommandWord, aliases: StringArray.create(), completesAFunctionName: false))
@@ -163,7 +166,7 @@ function debugStopReasonName(code DebugAddress) returns String
 		return BreakpointStopReasonName
 	end 'aPlantedByte'
 
-	panic("debugStopReasonName: the debug agent published stop reason {code}, which is none of the reasons `Compiler/Debug/DebugControlLayout.maxon` declares")
+	panic("debugStopReasonName: the engine reported stop reason {code}, which is none of the reasons `Debug/Debugger/DebugEngine.maxon` declares")
 end 'debugStopReasonName'
 
 module function debugFaultDescription(code DebugAddress) returns String
@@ -173,7 +176,7 @@ module function debugFaultDescription(code DebugAddress) returns String
 		end 'thisFault'
 	end 'eachStoppingFault'
 
-	panic("debugFaultDescription: the debug agent stopped on exception code {hexWord(code)}, which is none of the faults it stops on")
+	panic("debugFaultDescription: the debuggee stopped on exception code {hexWord(code)}, which is none of the faults the driver stops on")
 end 'debugFaultDescription'
 
 union DebugCommandLookup
@@ -238,12 +241,11 @@ end 'DebugArmPurpose'
 
 typealias DebugArmPurposes = Array with DebugArmPurpose
 typealias DebugArmPurposeMap = Map with (DebugAddress, DebugArmPurposes)
-typealias DebugOffsetSet = Set with DebugAddress
 
 union PurposeDrop
 	notArmed
 	othersRemain
-	lastOne(held DebugArmPurposes)
+	lastOne
 end 'PurposeDrop'
 
 union DebugHeldCondition
@@ -257,6 +259,7 @@ export union DebugCommand
 	resume
 	walk(mode DebugWalkMode)
 	pause
+	detach
 	backtrace
 	locals
 	print(path String)
@@ -277,6 +280,7 @@ export union DebugCommand
 			arm or
 				disarm or
 				pause or
+				detach or
 				backtrace or
 				locals or
 				print or
@@ -392,6 +396,10 @@ function plainCommandFrom(canonical String, argument String) returns DebugComman
 	if canonical == PauseCommandWord 'interruptingIt'
 		return DebugCommand.pause
 	end 'interruptingIt'
+
+	if canonical == DetachCommandWord 'lettingItGo'
+		return DebugCommand.detach
+	end 'lettingItGo'
 
 	if canonical == ThreadsCommandWord 'theRoster'
 		return DebugCommand.threads
@@ -512,7 +520,7 @@ type DebugPendingWalk
 	export let startThread as DebugAddress
 	export let startStackTop as DebugAddress
 
-	static function from(mode DebugWalkMode, held DebugPosition, startFrame DebugAddress, startDepth DebugTally, startStackTop DebugAddress) returns DebugPendingWalk
+	static function from (mode DebugWalkMode, held DebugPosition, startFrame DebugAddress, startDepth DebugTally, startStackTop DebugAddress) returns DebugPendingWalk
 		return Self{mode: mode, startPc: held.record.pc, startFrame: startFrame, startReturn: returnAddressOf(held), startLine: held.stop.line, startDepth: startDepth, startThread: held.record.greenThread, startStackTop: startStackTop}
 	end 'from'
 
@@ -608,12 +616,11 @@ export type DebugConversation
 	var walkState as DebugWalkState
 	var pauseAskedMidWalk as bool
 	var armPurposes as DebugArmPurposeMap
-	var doubtedConditions as DebugOffsetSet
 	var released as bool
 	let delivery as DebugStopDelivery
 
 	export static function create(engine DebugEngine, symbols DebugSymbols, delivery DebugStopDelivery) returns DebugConversation
-		return Self{engine: engine, symbols: symbols, position: DebugStopState.none, outcome: TargetOutcome.running, failed: false, closedByTheReader: false, threads: DebugThreadTable.create(), selection: DebugSelectionState.none, traceMark: DebugTraceSince.none, traceSince: DebugTraceSince.none, walkState: DebugWalkState.idle, pauseAskedMidWalk: false, armPurposes: DebugArmPurposeMap.create(), doubtedConditions: DebugOffsetSet.create(), released: false, delivery: delivery}
+		return Self{engine: engine, symbols: symbols, position: DebugStopState.none, outcome: TargetOutcome.running, failed: false, closedByTheReader: false, threads: DebugThreadTable.create(), selection: DebugSelectionState.none, traceMark: DebugTraceSince.none, traceSince: DebugTraceSince.none, walkState: DebugWalkState.idle, pauseAskedMidWalk: false, armPurposes: DebugArmPurposeMap.create(), released: false, delivery: delivery}
 	end 'create'
 
 	export function isWalking() returns bool
@@ -678,6 +685,7 @@ export type DebugConversation
 				resume or
 				walk or
 				pause or
+				detach or
 				backtrace or
 				locals or
 				print or
@@ -713,7 +721,7 @@ export type DebugConversation
 		var answered = DebugReplyArray.create()
 		self.performLive(answered, command: command)
 
-		// A stop the agent answered this command under is reported before the answer. One that landed
+		// A stop this command was answered under is reported before the answer. One that landed
 		// after a live answer follows it: a stop a live `gt-resume` let happen belongs after that resume.
 		if self.engine.answeredUnderAnUnseenStop() 'aStopCameFirst'
 			self.noticeAPendingStop(replies)
@@ -866,7 +874,7 @@ export type DebugConversation
 	end 'rebasedWalk'
 
 	function stackTopOf(greenThread DebugAddress) returns DebugStackTopRead
-		let top = try self.engine.readDebuggeeWord(greenThread + (GtOffTibStackBase as DebugAddress), width: DebugWordBytes) otherwise return DebugStackTopRead.unreadable
+		let top = try self.engine.readDebuggeeWord(greenThread + self.engine.recordOffset(GtOffTibStackBaseFigureName), width: DebugWordBytes) otherwise return DebugStackTopRead.unreadable
 
 		return DebugStackTopRead.at(top as DebugAddress)
 	end 'stackTopOf'
@@ -896,7 +904,6 @@ export type DebugConversation
 			done then break 'lifted'
 			nothingParked then replies.push(motionRefused(ReturnPointLiftVerb, reason: DebugNotRunningReason))
 			refused(reason) then replies.push(motionRefused(ReturnPointLiftVerb, reason: reason))
-			unacknowledged then self.reportUnacknowledged(replies)
 			gone(ending) then self.settle(ending)
 		end 'lifted'
 	end 'liftTheReturnPoint'
@@ -940,6 +947,7 @@ export type DebugConversation
 			resume then self.resumeAndReport(replies)
 			walk(mode) then self.walk(replies, mode: mode)
 			pause then self.pauseAndReport(replies)
+			detach then self.detachAndReport(replies)
 			backtrace then self.reportBacktrace(replies)
 			locals then self.reportLocals(replies)
 			print(path) then self.reportValue(replies, path: path)
@@ -1020,7 +1028,7 @@ export type DebugConversation
 		attempt.reachedArming = true
 
 		if self.conditionDiffersAt(candidate.offset, attempt: attempt) 'anotherConditionHoldsTheByte'
-			return attempt.refusedByTheAgent(DebugSharedConditionReason)
+			return attempt.refusedByTheDriver(DebugSharedConditionReason)
 		end 'anotherConditionHoldsTheByte'
 
 		match self.conditionHeldAt(candidate.offset) 'armed'
@@ -1030,7 +1038,7 @@ export type DebugConversation
 
 		match decodedAt(self.symbols.imageCode(), offset: candidate.offset, address: self.engine.imageTextBase() + candidate.offset) 'classified'
 			unclassified then return attempt.refusedForTheInstruction(DebugUnclassifiedReason)
-			decoded(instruction) then return self.armDecoded(candidate, instruction: instruction, request: request, attempt: attempt)
+			decoded then return self.armDecoded(candidate, request: request, attempt: attempt)
 		end 'classified'
 	end 'armedHere'
 
@@ -1054,16 +1062,13 @@ export type DebugConversation
 	end 'conditionHeldAt'
 
 	function rearmedHeldByte(candidate DebugLineCandidate, request DebugConditionRequest, attempt DebugArmingAttempt, held String) returns bool
-		if held == attempt.condition and not self.doubtedConditions.contains(candidate.offset) 'theByteAlreadyCarriesIt'
+		if held == attempt.condition 'theByteAlreadyCarriesIt'
 			return self.notedArmed(attempt, candidate: candidate)
 		end 'theByteAlreadyCarriesIt'
 
-		let replaced = self.conditionReplaced(candidate.offset, request: request)
-		self.noteConditionDoubt(candidate.offset, answered: replaced)
-
-		match replaced.inquiry() 'replaced'
+		match self.conditionReplaced(candidate.offset, request: request).inquiry() 'replaced'
 			answered then return self.notedRearmed(attempt, candidate: candidate)
-			refused(reason) then return attempt.refusedByTheAgent(reason)
+			refused(reason) then return attempt.refusedByTheDriver(reason)
 			gone(ending) then return self.settledBy(ending, attempt: attempt)
 		end 'replaced'
 	end 'rearmedHeldByte'
@@ -1074,16 +1079,6 @@ export type DebugConversation
 			carried(record) gives self.engine.attachCondition(offset, record: record)
 		end 'asked'
 	end 'conditionReplaced'
-
-	function noteConditionDoubt(offset DebugAddress, answered CommandOutcome)
-		match answered 'which'
-			unacknowledged then self.doubtedConditions.insert(offset)
-			done then _ = self.doubtedConditions.remove(offset)
-			nothingParked or
-				refused or
-				gone then break 'which'
-		end 'which'
-	end 'noteConditionDoubt'
 
 	function notedRearmed(attempt DebugArmingAttempt, candidate DebugLineCandidate) returns bool
 		var reconditioned = DebugArmPurposes.create()
@@ -1104,12 +1099,11 @@ export type DebugConversation
 		return true
 	end 'notedArmed'
 
-	function armDecoded(candidate DebugLineCandidate, instruction X64Instruction, request DebugConditionRequest, attempt DebugArmingAttempt) returns bool
-		match self.engine.armBreakpoint(candidate.offset, classWord: instruction.classWord(), fixup: instruction.fixupWord()) 'answered'
+	function armDecoded(candidate DebugLineCandidate, request DebugConditionRequest, attempt DebugArmingAttempt) returns bool
+		match self.engine.armBreakpoint(candidate.offset, forTheUser: true) 'answered'
 			done then return self.attachConditionTo(attempt, candidate: candidate, request: request)
 			nothingParked then return attempt.stoppedBy(DebugNotRunningReason)
-			refused(reason) then return attempt.refusedByTheAgent(reason)
-			unacknowledged then return attempt.stoppedBy(DebugUnacknowledgedReason)
+			refused(reason) then return attempt.refusedByTheDriver(reason)
 			gone(ending) then return self.settledBy(ending, attempt: attempt)
 		end 'answered'
 	end 'armDecoded'
@@ -1122,15 +1116,10 @@ export type DebugConversation
 
 	function attachConditionTo(attempt DebugArmingAttempt, candidate DebugLineCandidate, request DebugConditionRequest) returns bool
 		if not self.conditionHeld(attempt.armRefusals, offset: candidate.offset, request: request) 'theConditionWasRefused'
-			if not self.clearArmedByte(candidate.offset, cleared: DebugAddressArray.create(), refusals: attempt.armRefusals) 'theByteMayStillBeArmed'
-				self.doubtedConditions.insert(candidate.offset)
-				self.notePurpose(candidate.offset, purpose: DebugArmPurpose.create(candidate.hidden, identity: attempt.identity, condition: attempt.condition))
-			end 'theByteMayStillBeArmed'
+			self.clearArmedByte(candidate.offset, cleared: DebugAddressArray.create(), refusals: attempt.armRefusals)
 
 			return true
 		end 'theConditionWasRefused'
-
-		_ = self.doubtedConditions.remove(candidate.offset)
 
 		return self.notedArmed(attempt, candidate: candidate)
 	end 'attachConditionTo'
@@ -1173,7 +1162,7 @@ export type DebugConversation
 				panic("DebugConversation.dropPurpose: offset 0x{offset:x} was read out of the purpose map a moment ago")
 			end 'alreadyGone'
 
-			return PurposeDrop.lastOne(held)
+			return PurposeDrop.lastOne
 		end 'theLastPurpose'
 
 		self.armPurposes.upsert(offset, value: kept)
@@ -1240,33 +1229,18 @@ export type DebugConversation
 		match self.dropPurpose(candidate.offset, hidden: candidate.hidden, identity: identity) 'dropped'
 			notArmed then return
 			othersRemain then cleared.push(candidate.offset)
-			lastOne(held) then self.clearHeldByte(candidate.offset, held: held, cleared: cleared, refusals: refusals)
+			lastOne then self.clearArmedByte(candidate.offset, cleared: cleared, refusals: refusals)
 		end 'dropped'
 	end 'disarmCandidate'
 
-	function clearHeldByte(offset DebugAddress, held DebugArmPurposes, cleared DebugAddressArray, refusals StringArray)
-		if not self.clearArmedByte(offset, cleared: cleared, refusals: refusals) 'theByteMayStillBeArmed'
-			self.armPurposes.upsert(offset, value: held)
-		end 'theByteMayStillBeArmed'
-	end 'clearHeldByte'
-
-	function clearArmedByte(offset DebugAddress, cleared DebugAddressArray, refusals StringArray) returns bool
+	function clearArmedByte(offset DebugAddress, cleared DebugAddressArray, refusals StringArray)
 		match self.engine.clearBreakpoint(offset) 'answered'
 			done then cleared.push(offset)
 			nothingParked then refusals.push(DebugNotRunningReason)
 			refused(reason) then refusals.push(reason)
-			unacknowledged then return self.unansweredClear(refusals)
 			gone(ending) then self.settle(ending)
 		end 'answered'
-
-		return true
 	end 'clearArmedByte'
-
-	function unansweredClear(refusals StringArray) returns bool
-		refusals.push(DebugUnacknowledgedReason)
-
-		return false
-	end 'unansweredClear'
 
 	function resumeAndReport(replies DebugReplyArray)
 		// Nothing is held, so no resume is posted: a thread parked at a stop this session has not yet
@@ -1293,7 +1267,6 @@ export type DebugConversation
 			done or
 				nothingParked then self.awaitStop(replies, waitingFor: waitingFor)
 			refused(reason) then replies.push(motionRefused(verb, reason: reason))
-			unacknowledged then self.reportUnacknowledged(replies)
 			gone(ending) then self.reportOutcome(replies, ending: ending)
 		end 'posted'
 	end 'reportMotion'
@@ -1318,7 +1291,6 @@ export type DebugConversation
 			done or
 				nothingParked then break 'posted'
 			refused(reason) then self.pauseRefusedMidWalk(replies, reason: reason)
-			unacknowledged then self.reportUnacknowledged(replies)
 			gone(ending) then _ = self.walkEnded(replies, ending: ending)
 		end 'posted'
 	end 'interruptTheRun'
@@ -1396,7 +1368,7 @@ export type DebugConversation
 	end 'returnAddressOnTheStack'
 
 	function stopNameOf(record EngineStop) returns String
-		if record.reason != DbgStopReasonFault and not record.conditionMissed and self.engine.armedAt(record.pc) 'arrivedAtAnArmedByte'
+		if record.reason != DbgStopReasonFault and not record.conditionMissed and self.engine.userBreakpointAt(record.pc) 'arrivedAtAnArmedByte'
 			return BreakpointStopReasonName
 		end 'arrivedAtAnArmedByte'
 
@@ -1743,18 +1715,17 @@ export type DebugConversation
 
 		match decodedAt(self.symbols.imageCode(), offset: point.address - self.engine.imageTextBase(), address: point.address) 'classified'
 			unclassified then return ReturnPlanting.declined
-			decoded(instruction) then return self.plantDecoded(point, instruction: instruction)
+			decoded then return self.plantDecoded(point)
 		end 'classified'
 	end 'plantedAt'
 
-	function plantDecoded(point DebugReturnPoint, instruction X64Instruction) returns ReturnPlanting
-		let planted = self.engine.plantReturnPoint(point, classWord: instruction.classWord(), fixup: instruction.fixupWord())
+	function plantDecoded(point DebugReturnPoint) returns ReturnPlanting
+		let planted = self.engine.plantReturnPoint(point)
 
 		return match planted 'answered'
 			done gives ReturnPlanting.planted
 			refused gives ReturnPlanting.declined
 			nothingParked or
-				unacknowledged or
 				gone gives ReturnPlanting.failed(planted.inquiry())
 		end 'answered'
 	end 'plantDecoded'
@@ -1824,7 +1795,6 @@ export type DebugConversation
 			done then replies.push(DebugReply.threadOutcome(DebugThreadOutcome.create(event, thread: DebugThreadRef.id(thread), result: result, reason: "")))
 			nothingParked then replies.push(DebugReply.threadOutcome(DebugThreadOutcome.create(event, thread: DebugThreadRef.id(thread), result: RefusedResult, reason: DebugNotRunningReason)))
 			refused(reason) then replies.push(DebugReply.threadOutcome(DebugThreadOutcome.create(event, thread: DebugThreadRef.id(thread), result: RefusedResult, reason: reason)))
-			unacknowledged then replies.push(DebugReply.threadOutcome(DebugThreadOutcome.create(event, thread: DebugThreadRef.id(thread), result: RefusedResult, reason: DebugUnacknowledgedReason)))
 			gone(ending) then self.reportOutcome(replies, ending: ending)
 		end 'answered'
 	end 'reportThreadCommand'
@@ -1994,7 +1964,7 @@ export type DebugConversation
 			return false
 		end 'whereTheWalkBegan'
 
-		return self.engine.armedAt(record.pc) and not record.conditionMissed
+		return self.engine.userBreakpointAt(record.pc) and not record.conditionMissed
 	end 'breakpointReached'
 
 	function walkArrived(mode DebugWalkMode, landed EngineStop, startFrame DebugAddress, startReturn DebugReturnAddress, startLine DebugLineNumber, startDepth DebugTally) returns WalkArrival
@@ -2073,7 +2043,6 @@ export type DebugConversation
 		self.endWalk(replies)
 		self.engine.clearEveryBreakpoint()
 		self.armPurposes = DebugArmPurposeMap.create()
-		self.doubtedConditions = DebugOffsetSet.create()
 		var rounds = 0 as DebugTally
 
 		var finishing = true
@@ -2088,8 +2057,7 @@ export type DebugConversation
 		match self.engine.resume() 'posted'
 			done or
 				nothingParked then break 'posted'
-			refused or
-				unacknowledged then return false
+			refused then return false
 			gone(ending) then return self.endedBy(replies, ending: ending)
 		end 'posted'
 
@@ -2106,17 +2074,39 @@ export type DebugConversation
 		return false
 	end 'endedBy'
 
-	function reportUnacknowledged(replies DebugReplyArray)
-		self.failed = true
-		replies.push(DebugReply.timedOut("an acknowledgement from the debug agent"))
-	end 'reportUnacknowledged'
-
 	function reportTimeout(replies DebugReplyArray, waitingFor String)
 		self.failed = true
 		self.position = DebugStopState.none
 		self.letTheProgramRun()
 		replies.push(DebugReply.timedOut(waitingFor))
 	end 'reportTimeout'
+
+	function detachAndReport(replies DebugReplyArray)
+		self.endWalk(replies)
+		self.armPurposes = DebugArmPurposeMap.create()
+
+		match self.engine.detach() 'letGo'
+			done or
+				nothingParked then self.awaitDetachedEnd(replies)
+			refused(reason) then replies.push(motionRefused(DetachVerb, reason: reason))
+			gone(ending) then self.reportOutcome(replies, ending: ending)
+		end 'letGo'
+	end 'detachAndReport'
+
+	function awaitDetachedEnd(replies DebugReplyArray)
+		self.letTheProgramRun()
+		var rounds = 0 as DebugTally
+
+		while targetIsRunning(self.outcome) and rounds < DetachRoundCap 'untilItEnds'
+			rounds = rounds + 1
+
+			match self.engine.pollForStop(self.engine.walkBudgetMs()) 'waited'
+				stopped then break 'untilItEnds'
+				ended(ending) then self.reportOutcome(replies, ending: ending)
+				timedOut then continue
+			end 'waited'
+		end 'untilItEnds'
+	end 'awaitDetachedEnd'
 
 	// A thread handle is an address that is valid only within the stop it was read at, so everything holding
 	// one is dropped the moment the program is let go: a selection kept across a resume would answer about
@@ -2170,11 +2160,11 @@ type DebugArmingAttempt
 		return false
 	end 'refusedForTheInstruction'
 
-	function refusedByTheAgent(reason String) returns bool
+	function refusedByTheDriver(reason String) returns bool
 		self.armRefusals.push(reason)
 
 		return not refusalDependsOnTheInstruction(reason)
-	end 'refusedByTheAgent'
+	end 'refusedByTheDriver'
 
 	function stoppedBy(reason String) returns bool
 		self.armRefusals.push(reason)

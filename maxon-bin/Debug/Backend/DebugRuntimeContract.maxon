@@ -1,0 +1,84 @@
+typealias ContractFigure = int(i64.min to i64.max)
+typealias ContractFigureArray = Array with ContractFigure
+
+export union ContractGlobalLookup
+	none
+	at(address DebugAddress)
+end 'ContractGlobalLookup'
+
+export type DebugRuntimeContract
+	let base as DebugAddress
+	let text as DebugAddress
+	let bytes as DebugAddress
+	var figureNames as StringArray
+	var figureValues as ContractFigureArray
+	var globalNames as StringArray
+	var globalAddresses as DebugAddressArray
+
+	export static function readFrom(reader MxdbgReader, textBytes DebugAddress) returns DebugRuntimeContract
+		let imageBase = reader.imageBase as DebugAddress
+		var figureNames = StringArray.create()
+		var figureValues = ContractFigureArray.create()
+
+		for index in 0 upto reader.layoutFigureCount() 'eachFigure'
+			let record = reader.layoutFigureRecord(index as MxdbgIndex)
+			figureNames.push(record.name)
+			figureValues.push(record.figure as ContractFigure)
+		end 'eachFigure'
+
+		var globalNames = StringArray.create()
+		var globalAddresses = DebugAddressArray.create()
+
+		for index in 0 upto reader.globalCount() 'eachGlobal'
+			let record = reader.globalRecord(index as MxdbgIndex)
+			globalNames.push(record.name)
+			globalAddresses.push(imageBase + (record.imageOffset as DebugAddress))
+		end 'eachGlobal'
+
+		let textRva = figureIn(figureNames, values: figureValues, name: ImageTextRvaFigureName)
+
+		return Self{base: imageBase, text: imageBase + (textRva as DebugAddress), bytes: textBytes, figureNames: figureNames, figureValues: figureValues, globalNames: globalNames, globalAddresses: globalAddresses}
+	end 'readFrom'
+
+	export function textBase() returns DebugAddress
+		return self.text
+	end 'textBase'
+
+	export function textSize() returns DebugAddress
+		return self.bytes
+	end 'textSize'
+
+	export function figure(name String) returns DebugWord
+		return figureIn(self.figureNames, values: self.figureValues, name: name) as DebugWord
+	end 'figure'
+
+	export function offset(name String) returns DebugAddress
+		let value = self.figure(name)
+
+		if value < 0 'notAnOffsetAtAll'
+			panic("DebugRuntimeContract.offset: the sidecar publishes '{name}' as {value}, and a record field's displacement is never negative")
+		end 'notAnOffsetAtAll'
+
+		return value as DebugAddress
+	end 'offset'
+
+	export function globalAt(name String) returns ContractGlobalLookup
+		for (iter, spelled) in self.globalNames.withIterator() 'eachGlobal'
+			if spelled == name 'thisOne'
+				return ContractGlobalLookup.at(try self.globalAddresses.get(iter.index()) otherwise panic("DebugRuntimeContract.globalAt: the two columns are filled together, so '{name}' has an address"))
+			end 'thisOne'
+		end 'eachGlobal'
+
+		return ContractGlobalLookup.none
+	end 'globalAt'
+end 'DebugRuntimeContract'
+
+function figureIn(names StringArray, values ContractFigureArray, name String) returns ContractFigure
+	for (iter, spelled) in names.withIterator() 'eachFigure'
+		if spelled == name 'thisOne'
+			return try values.get(iter.index()) otherwise panic("figureIn: the two columns are filled together, so '{name}' has a value")
+		end 'thisOne'
+	end 'eachFigure'
+
+	panic("figureIn: the `.mxdbg` sidecar publishes no layout figure named '{name}'. `Compiler/Debug/DebugContract.maxon` is the roster it is written from, so a name that roster does not carry cannot be answered")
+end 'figureIn'

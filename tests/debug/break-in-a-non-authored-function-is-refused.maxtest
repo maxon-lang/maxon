@@ -1,0 +1,60 @@
+let NonAuthoredBreakCaseLabel = "break-in-a-non-authored-function-is-refused"
+
+let RuntimeHelperName = "__slab_assert_os_alloc"
+let RuntimeOrigin = "runtime"
+let LibraryOrigin = "library"
+let EntryStubName = "mrt_start"
+let SynthesizedOrigin = "synthesized"
+let OriginColumn = "origin="
+let InsideRuntimeSymbolReason = "inside-runtime-symbol"
+
+test 'a breakpoint in a function the program did not author is refused for where the body came from'
+	let staged = builtFixture(NonAuthoredBreakCaseLabel, fixture: SteppingFixtureName)
+	let executable = builtExecutable(staged)
+	let dump = spawnDumpInfo(executable, staged: staged, sections: StringArray.create())
+
+	try Expect.equal(dump.exitCode() as AssertedInt, expected: 0, message: "`{DebugSubcommandName} {DumpInfoOptionName} <exe>` did not print the sidecar. It wrote to stderr: {dump.stderr}")
+
+	let functionRows = dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading)
+	let runtimeRow = functionRowOf(functionRows, name: RuntimeHelperName)
+	let stubRow = functionRowOf(functionRows, name: EntryStubName)
+
+	try Expect.equal(originIn(runtimeRow), expected: RuntimeOrigin, message: "⭐ THE PROPERTY IS DECIDED BY ORIGIN, SO THE CASE READS THE ORIGIN. `{RuntimeHelperName}` is a `runtime/` tier body and the sidecar must say so — `{LibraryOrigin}` is the ordinary stdlib, which stays armable; the row was: {runtimeRow}")
+	try Expect.equal(originIn(stubRow), expected: SynthesizedOrigin, message: "⛔ A NAME PREFIX IS NOT THE TEST. `{EntryStubName}` wears no reserved prefix and is refused because the compiler assembled it, which the sidecar spells as its origin; the row was: {stubRow}")
+
+	let runtimeStart = functionStartIn(runtimeRow, name: RuntimeHelperName)
+	let stubStart = functionStartIn(stubRow, name: EntryStubName)
+	let commands = debugCommandLine(["{BreakCommand} {exactOffsetTarget(runtimeStart)}", "{BreakCommand} {exactOffsetTarget(stubStart)}", RunCommand])
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: BreakpointEventName)
+
+	try Expect.equal(answers.count() as AssertedInt, expected: 2, message: "each `{BreakCommand}` answers one `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let runtimeBody = eventAt(answers, index: 0)
+	try Expect.equal(textOf(runtimeBody, node: runtimeBody.root, key: ActionKey), expected: RefusedAction, message: "a trap in a body the program's author did not write cannot be serviced, and `{RuntimeHelperName}` is the runtime's by where it came from, whatever its name spells. {said}")
+	try Expect.equal(textOf(runtimeBody, node: runtimeBody.root, key: ReasonKey), expected: InsideRuntimeSymbolReason, message: "the refusal names why. {said}")
+
+	let stub = eventAt(answers, index: 1)
+	try Expect.equal(textOf(stub, node: stub.root, key: ActionKey), expected: RefusedAction, message: "the control: the entry stub the compiler assembles is runtime code. {said}")
+	try Expect.equal(textOf(stub, node: stub.root, key: ReasonKey), expected: InsideRuntimeSymbolReason, message: "the control's refusal names why. {said}")
+	try Expect.equal(eventsOfKind(events, kind: ExitEventName).count() as AssertedInt, expected: 1, message: "nothing was armed, so the program runs to its exit. {said}")
+end 'a breakpoint in a function the program did not author is refused for where the body came from'
+
+function originIn(row String) returns String
+	for token in whitespaceTokens(row) 'eachToken'
+		if token.startsWith(OriginColumn) 'thisColumn'
+			return token.replace(OriginColumn, with: "")
+		end 'thisColumn'
+	end 'eachToken'
+
+	panic("break-in-a-non-authored-function-is-refused: the gate could not run — the sidecar's function row names no origin: {row}")
+end 'originIn'
+
+function functionStartIn(row String, name String) returns SidecarNumber
+	match codeRangeIn(row) 'ranged'
+		none then panic("break-in-a-non-authored-function-is-refused: the gate could not run — the sidecar lists no function row for `{name}`, so there is no non-authored entry to aim at: {row}")
+		range(start, _) then return start
+	end 'ranged'
+end 'functionStartIn'

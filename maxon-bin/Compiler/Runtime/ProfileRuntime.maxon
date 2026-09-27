@@ -2,8 +2,8 @@
 // another process rather than its own.
 //
 // ⭐ **WHAT IT SERVES.** `maxon-bin/Profile/` is ordinary Maxon calling `__Builtins.profile*`; every one of
-// those lowers to an entry point here, and each entry is a thin Std graph over `StdOp.osHostSample` — the
-// one op whose `ProfileHostCall` roster names the thirteen host services. Everything ABOVE these entries —
+// those lowers to an entry point here, and each entry is a thin Std graph over `StdOp.osHostProcess` — the
+// one op whose `HostProcessCall` roster names the host services this file asks for. Everything ABOVE these entries —
 // the tick schedule, the thread table, the frame walk, the aggregation, the report — is plain Maxon in the
 // profiler, exactly as the FILETIME arithmetic stays out of `osReadWallClock`.
 //
@@ -120,11 +120,11 @@ export function isProfileRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: ProfileRuntimePrefix)
 end 'isProfileRuntimeCallee'
 
-// One `osHostSample`, with all six words marshalled. The op's arity is fixed at its widest member's, so a
-// narrower service is handed zeros for the operands it does not read — see `StdOp.osHostSample`.
-function emitHostSample(module StdModule, block IrBlock, service ProfileHostCall, a0 ValueId, a1 ValueId, a2 ValueId, a3 ValueId, a4 ValueId, a5 ValueId, ids ValueMinter) returns ValueId
+// One `osHostProcess`, with all six words marshalled. The op's arity is fixed at its widest member's, so a
+// narrower service is handed zeros for the operands it does not read — see `StdOp.osHostProcess`.
+function emitHostSample(module StdModule, block IrBlock, service HostProcessCall, a0 ValueId, a1 ValueId, a2 ValueId, a3 ValueId, a4 ValueId, a5 ValueId, ids ValueMinter) returns ValueId
 	let answer = ids.mint()
-	module.appendOp(block, op: StdOp.osHostSample(answer, service: service, a0Id: a0, a1Id: a1, a2Id: a2, a3Id: a3, a4Id: a4, a5Id: a5))
+	module.appendOp(block, op: StdOp.osHostProcess(answer, service: service, a0Id: a0, a1Id: a1, a2Id: a2, a3Id: a3, a4Id: a4, a5Id: a5))
 
 	return answer
 end 'emitHostSample'
@@ -142,7 +142,7 @@ function buildProfileOpenTarget(module StdModule)
 
 	let access = emitConst(module, block: entry, value: ProcessSampleAccess, ids: ids)
 	let noInherit = emitConst(module, block: entry, value: 0, ids: ids)
-	let handle = emitHostSample(module, block: entry, service: ProfileHostCall.openProcess, a0: access, a1: noInherit, a2: pid, a3: noInherit, a4: noInherit, a5: noInherit, ids: ids)
+	let handle = emitHostSample(module, block: entry, service: HostProcessCall.openProcess, a0: access, a1: noInherit, a2: pid, a3: noInherit, a4: noInherit, a5: noInherit, ids: ids)
 	module.setTerminator(entry, op: StdOp.ret(handle))
 
 	module.functions.push(func)
@@ -177,7 +177,7 @@ function buildProfileNextThread(module StdModule)
 	emitStoreField(module, block: entry, record: outPtr, offset: 0, value: zero)
 
 	let access = emitConst(module, block: entry, value: ThreadSampleAccess, ids: ids)
-	let status = emitHostSample(module, block: entry, service: ProfileHostCall.nextThread, a0: proc, a1: cursor, a2: access, a3: zero, a4: zero, a5: outPtr, ids: ids)
+	let status = emitHostSample(module, block: entry, service: HostProcessCall.nextThread, a0: proc, a1: cursor, a2: access, a3: zero, a4: zero, a5: outPtr, ids: ids)
 
 	// `NtGetNextThread` ends a walk with `STATUS_NO_MORE_ENTRIES`, so anything but success stops it — a genuine
 	// failure and running out of threads are one answer to the caller.
@@ -205,7 +205,7 @@ function buildProfileThreadId(module StdModule)
 	let handle = 0 as ValueId
 
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let id = emitHostSample(module, block: entry, service: ProfileHostCall.threadId, a0: handle, a1: zero, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
+	let id = emitHostSample(module, block: entry, service: HostProcessCall.threadId, a0: handle, a1: zero, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
 	module.setTerminator(entry, op: StdOp.ret(id))
 
 	module.functions.push(func)
@@ -297,7 +297,7 @@ function buildProfileSample(module StdModule)
 	emitStoreField(module, block: entry, record: resultPtr, offset: 0, value: threadGone)
 	emitStoreField(module, block: entry, record: mbiPtr, offset: ProfileRegionAllocationBaseOffset, value: zero)
 
-	let suspended = emitHostSample(module, block: entry, service: ProfileHostCall.suspendThread, a0: thread, a1: zero, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
+	let suspended = emitHostSample(module, block: entry, service: HostProcessCall.suspendThread, a0: thread, a1: zero, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
 	let suspendFailed = emitConst(module, block: entry, value: SuspendThreadFailed, ids: ids)
 	let nothingSuspended = emitCmp(module, block: entry, a: suspended, b: suspendFailed, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(nothingSuspended, thenBlockId: answer.id, elseBlockId: readContext.id))
@@ -308,7 +308,7 @@ function buildProfileSample(module StdModule)
 	emitStoreField(module, block: readContext, record: resultPtr, offset: 0, value: unreadable)
 	let sampleFlags = emitConst(module, block: readContext, value: ContextSampleFlags, ids: ids)
 	emitStoreField(module, block: readContext, record: ctxPtr, offset: Win64ContextFlagsOffset, value: sampleFlags)
-	let gotContext = emitHostSample(module, block: readContext, service: ProfileHostCall.threadContext, a0: thread, a1: ctxPtr, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
+	let gotContext = emitHostSample(module, block: readContext, service: HostProcessCall.threadContext, a0: thread, a1: ctxPtr, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
 	let noContext = emitConst(module, block: readContext, value: Win32False, ids: ids)
 	let contextFailed = emitCmp(module, block: readContext, a: gotContext, b: noContext, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(readContext, op: StdOp.condBranch(contextFailed, thenBlockId: resume.id, elseBlockId: queryRegion.id))
@@ -317,7 +317,7 @@ function buildProfileSample(module StdModule)
 	emitStoreField(module, block: queryRegion, record: resultPtr, offset: 0, value: zero)
 	let stackPointer = emitLoadField(module, block: queryRegion, record: ctxPtr, offset: Win64ContextRspOffset, ids: ids)
 	let mbiBytes = emitConst(module, block: queryRegion, value: ProfileRegionRecordBytes, ids: ids)
-	let queried = emitHostSample(module, block: queryRegion, service: ProfileHostCall.queryRegion, a0: proc, a1: stackPointer, a2: mbiPtr, a3: mbiBytes, a4: zero, a5: zero, ids: ids)
+	let queried = emitHostSample(module, block: queryRegion, service: HostProcessCall.queryRegion, a0: proc, a1: stackPointer, a2: mbiPtr, a3: mbiBytes, a4: zero, a5: zero, ids: ids)
 	let queryMiss = emitConst(module, block: queryRegion, value: RegionQueryFailed, ids: ids)
 	let regionMissing = emitCmp(module, block: queryRegion, a: queried, b: queryMiss, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(queryRegion, op: StdOp.condBranch(regionMissing, thenBlockId: resume.id, elseBlockId: measureWindow.id))
@@ -342,7 +342,7 @@ function buildProfileSample(module StdModule)
 	// readable frames, so the failure edge takes the byte count the API wrote.
 	let want = emitLoadField(module, block: copyStack, record: wantPtr, offset: 0, ids: ids)
 	emitStoreField(module, block: copyStack, record: readPtr, offset: 0, value: zero)
-	let copied = emitHostSample(module, block: copyStack, service: ProfileHostCall.readProcessMemory, a0: proc, a1: stackPointer, a2: windowPtr, a3: want, a4: readPtr, a5: zero, ids: ids)
+	let copied = emitHostSample(module, block: copyStack, service: HostProcessCall.readProcessMemory, a0: proc, a1: stackPointer, a2: windowPtr, a3: want, a4: readPtr, a5: zero, ids: ids)
 	emitStoreField(module, block: copyStack, record: resultPtr, offset: 0, value: want)
 	let copyFalse = emitConst(module, block: copyStack, value: Win32False, ids: ids)
 	let copyFailed = emitCmp(module, block: copyStack, a: copied, b: copyFalse, pred: StdCmpPred.eq, ids: ids)
@@ -355,7 +355,7 @@ function buildProfileSample(module StdModule)
 	let cyclesPtr = emitBin(module, block: resume, a: mbiPtr, b: emitConst(module, block: resume, value: ProfileRegionSuspendedCyclesOffset, ids: ids), opcode: StdBinOpcode.add, ids: ids)
 	module.appendOp(resume, op: StdOp.osThreadCpuTicks(thread, outPtrId: cyclesPtr))
 	let resumeZero = emitConst(module, block: resume, value: 0, ids: ids)
-	_ = emitHostSample(module, block: resume, service: ProfileHostCall.resumeThread, a0: thread, a1: resumeZero, a2: resumeZero, a3: resumeZero, a4: resumeZero, a5: resumeZero, ids: ids)
+	_ = emitHostSample(module, block: resume, service: HostProcessCall.resumeThread, a0: thread, a1: resumeZero, a2: resumeZero, a3: resumeZero, a4: resumeZero, a5: resumeZero, ids: ids)
 	module.setTerminator(resume, op: StdOp.branch(answer.id))
 
 	let result = emitLoadField(module, block: answer, record: resultPtr, offset: 0, ids: ids)
@@ -378,11 +378,11 @@ function buildProfileTimerCreate(module StdModule)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let access = emitConst(module, block: entry, value: TimerAllAccess, ids: ids)
 	let highResolution = emitConst(module, block: entry, value: CreateWaitableTimerHighResolution, ids: ids)
-	let fine = emitHostSample(module, block: entry, service: ProfileHostCall.createHighResTimer, a0: zero, a1: zero, a2: highResolution, a3: access, a4: zero, a5: zero, ids: ids)
+	let fine = emitHostSample(module, block: entry, service: HostProcessCall.createHighResTimer, a0: zero, a1: zero, a2: highResolution, a3: access, a4: zero, a5: zero, ids: ids)
 	let noTimer = emitCmp(module, block: entry, a: fine, b: zero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(noTimer, thenBlockId: coarse.id, elseBlockId: made.id))
 
-	let plain = emitHostSample(module, block: coarse, service: ProfileHostCall.createHighResTimer, a0: zero, a1: zero, a2: emitConst(module, block: coarse, value: CreateWaitableTimerOrdinary, ids: ids), a3: access, a4: zero, a5: zero, ids: ids)
+	let plain = emitHostSample(module, block: coarse, service: HostProcessCall.createHighResTimer, a0: zero, a1: zero, a2: emitConst(module, block: coarse, value: CreateWaitableTimerOrdinary, ids: ids), a3: access, a4: zero, a5: zero, ids: ids)
 	module.setTerminator(coarse, op: StdOp.ret(plain))
 
 	module.setTerminator(made, op: StdOp.ret(fine))
@@ -417,7 +417,7 @@ function buildProfileTimerWait(module StdModule)
 	emitStoreField(module, block: entry, record: duePtr, offset: 0, value: dueTime)
 
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let set = emitHostSample(module, block: entry, service: ProfileHostCall.setAbsoluteTimer, a0: timer, a1: duePtr, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
+	let set = emitHostSample(module, block: entry, service: HostProcessCall.setAbsoluteTimer, a0: timer, a1: duePtr, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
 
 	// ⛔ **AN UNARMED TIMER IS NEVER WAITED ON.** The wait below is INFINITE, so a `SetWaitableTimer` that
 	// refused would hang the whole tool on a handle nothing will ever signal — the caller's tick simply
@@ -453,7 +453,7 @@ function buildProfileModuleSnapshot(module StdModule)
 
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let flags = emitConst(module, block: entry, value: ModuleSnapshotFlags, ids: ids)
-	let snapshot = emitHostSample(module, block: entry, service: ProfileHostCall.moduleSnapshot, a0: flags, a1: pid, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
+	let snapshot = emitHostSample(module, block: entry, service: HostProcessCall.moduleSnapshot, a0: flags, a1: pid, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
 	module.setTerminator(entry, op: StdOp.ret(snapshot))
 
 	module.functions.push(func)
@@ -473,7 +473,7 @@ function buildProfileModuleFirst(module StdModule)
 	let entryPtr = 1 as ValueId
 
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let found = emitHostSample(module, block: entry, service: ProfileHostCall.moduleFirst, a0: snapshot, a1: entryPtr, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
+	let found = emitHostSample(module, block: entry, service: HostProcessCall.moduleFirst, a0: snapshot, a1: entryPtr, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
 	module.setTerminator(entry, op: StdOp.ret(found))
 
 	module.functions.push(func)
@@ -492,7 +492,7 @@ function buildProfileModuleNext(module StdModule)
 	let entryPtr = 1 as ValueId
 
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let found = emitHostSample(module, block: entry, service: ProfileHostCall.moduleNext, a0: snapshot, a1: entryPtr, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
+	let found = emitHostSample(module, block: entry, service: HostProcessCall.moduleNext, a0: snapshot, a1: entryPtr, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
 	module.setTerminator(entry, op: StdOp.ret(found))
 
 	module.functions.push(func)

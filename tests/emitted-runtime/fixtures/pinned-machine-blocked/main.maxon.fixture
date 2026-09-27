@@ -1,0 +1,81 @@
+public typealias Tally = int(0 to u64.max)
+
+let Rounds = 20 as Tally
+let ParkMs = 10 as Milliseconds
+let RoundsBudgetMs = 600 as DurationMs
+let ReadAnswer = 1 as Tally
+
+type Reader
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function readOneLine() returns Tally
+		_ = try Console.stdin().readLine() otherwise ""
+
+		return ReadAnswer
+	end 'readOneLine'
+end 'Reader'
+
+function readVia(reader Reader.handle) returns Tally
+	return try await reader.readOneLine() otherwise 0
+end 'readVia'
+
+function main() returns ExitCode
+	if __Builtins.pinToMachine() == 0 'refused'
+		print("refused\n")
+
+		return 1
+	end 'refused'
+
+	let pinned = __Builtins.currentMachine()
+
+	if pinned == 0 'noMachine'
+		print("no machine\n")
+
+		return 1
+	end 'noMachine'
+
+	print("reading\n")
+
+	let reader = spawn Reader.create()
+	let reading = async readVia(reader)
+
+	var moved = 0 as Tally
+	var round = 0 as Tally
+	let start = Clock.nowMs()
+
+	while round < Rounds 'eachRound'
+		sleep(ParkMs)
+
+		if __Builtins.currentMachine() != pinned 'leftItsMachine'
+			moved = moved + 1
+		end 'leftItsMachine'
+
+		round = round + 1
+	end 'eachRound'
+
+	let tookMs = Clock.elapsedMs(start)
+
+	__Builtins.unpinFromMachine()
+
+	let read = await reading
+
+	if read != ReadAnswer 'neverRead'
+		print("read {read}\n")
+
+		return 1
+	end 'neverRead'
+
+	print("moved {moved} of {Rounds}\n")
+
+	if tookMs > RoundsBudgetMs 'overBudget'
+		print("rounds slow {tookMs}\n")
+
+		return 0
+	end 'overBudget'
+
+	print("rounds ok {tookMs}\n")
+
+	return 0
+end 'main'

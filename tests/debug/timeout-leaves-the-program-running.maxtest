@@ -15,7 +15,7 @@ test 'a timed-out run leaves the program running, and the session close still re
 	Expect.equal(eventsOfKind(events, kind: ExitEventName).count() as AssertedInt, expected: 0, message: "a timeout is not an exit — a session that gave up waiting must not claim the program ended. {said}")
 
 	let stops = eventsOfKind(events, kind: StopEventName)
-	Expect.equal(stops.count() as AssertedInt, expected: 1, message: "⭐⭐ THE PROOF THAT THE TIMEOUT DID NOT KILL ANYTHING. A `{PauseCommand}` answered AFTER a `{TimeoutEventName}` is a live agent in a live process: the session is in its running state, where the mailbox is serviced, and `{ContinueCommand}` would re-wait. A dead debuggee answers nothing at all. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(stops.count() as AssertedInt, expected: 1, message: "⭐⭐ THE PROOF THAT THE TIMEOUT DID NOT KILL ANYTHING. A `{PauseCommand}` answered AFTER a `{TimeoutEventName}` is a live process the driver still holds: the session is in its running state, where the driver is watching for a stop, and `{ContinueCommand}` would re-wait. A dead debuggee answers nothing at all. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let stopped = eventAt(stops, index: 0)
 	Expect.equal(textOf(stopped, node: stopped.root, key: ReasonKey), expected: PauseStopReason, message: "the stop after the timeout is the pause that was asked for. {said}")

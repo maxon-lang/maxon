@@ -1,6 +1,6 @@
 export typealias DebugLocalArray = Array with MxdbgLocalInfo
 export typealias DebugNameSet = Set with String
-export typealias MxdbgLocValueArray = Array with MxdbgLocValue
+export typealias MxdbgRecordFigureArray = Array with MxdbgRecordFigure
 export typealias DebugLineCandidateArray = Array with DebugLineCandidate
 export typealias DebugLineBodyArray = Array with DebugLineCandidateArray
 
@@ -272,6 +272,16 @@ union DebugInstructionStart
 	undecodable
 end 'DebugInstructionStart'
 
+let LargestCodeOffsetASidecarNames = 0xFFFFFFFF as DebugAddress
+
+// Every `pc - textBase` goes through here. A stopped thread can stand anywhere the OS put it — a requested
+// pause and a fault both land in the system libraries, below the image base — so the subtraction wraps to a
+// huge address rather than throwing, and clamping it lands outside every table the sidecar holds, which is
+// the answer the lookups want.
+function codeOffsetIn(address DebugAddress) returns MxdbgCodeOffset
+	return LargestCodeOffsetASidecarNames as MxdbgCodeOffset if address > LargestCodeOffsetASidecarNames else address as MxdbgCodeOffset
+end 'codeOffsetIn'
+
 export type DebugSymbols
 	let reader as MxdbgReader
 	let code as ByteArray
@@ -336,7 +346,7 @@ export type DebugSymbols
 	end 'functionNamePool'
 
 	export function functionNameAt(offset DebugAddress) returns DebugFunctionNameLookup
-		return match self.reader.functionContaining(offset as MxdbgCodeOffset) 'enclosing'
+		return match self.reader.functionContaining(codeOffsetIn(offset)) 'enclosing'
 			none gives DebugFunctionNameLookup.none
 			found(fn) gives DebugFunctionNameLookup.named(fn.displayName)
 		end 'enclosing'
@@ -393,7 +403,7 @@ export type DebugSymbols
 	function positionedStop(reason String, fault String, stop EngineStop, textBase DebugAddress, thread DebugThreadRef, frames DebugFrameArray) returns DebugStop
 		let offset = stop.pc - textBase
 
-		match self.reader.pcToLine(offset as MxdbgCodeOffset) 'positioned'
+		match self.reader.pcToLine(codeOffsetIn(offset)) 'positioned'
 			none then return DebugStop.create(reason, fault: fault, functionName: self.innermostName(frames, offset: offset), file: "", line: 0, column: 0, offset: offset, source: DebugSourceLineArray.create(), frames: frames, machine: stop.machine, thread: thread)
 			found(row) then return DebugStop.create(reason, fault: fault, functionName: self.innermostName(frames, offset: offset), file: baseNameOf(row.file), line: row.line as DebugLineNumber, column: row.column as DebugColumnNumber, offset: offset, source: self.sourceWindow(self.openablePath(row.file), line: row.line as DebugLineNumber), frames: frames, machine: stop.machine, thread: thread)
 		end 'positioned'
@@ -419,7 +429,7 @@ export type DebugSymbols
 	end 'frameListFor'
 
 	export function unchainedReturnAt(offset DebugAddress) returns DebugUnchainedReturn
-		match self.reader.functionContaining(offset as MxdbgCodeOffset) 'enclosing'
+		match self.reader.functionContaining(codeOffsetIn(offset)) 'enclosing'
 			none then return DebugUnchainedReturn.none
 			found(fn) then return self.unchainedReturnIn(fn, offset: offset as X64Offset)
 		end 'enclosing'
@@ -453,7 +463,7 @@ export type DebugSymbols
 	end 'prologueOf'
 
 	export function spliceExitAt(offset DebugAddress) returns DebugSpliceExit
-		match self.libraryBodyAround(offset as MxdbgCodeOffset) 'body'
+		match self.libraryBodyAround(codeOffsetIn(offset)) 'body'
 			none then return DebugSpliceExit.none
 			site(root) then return self.memoizedExitOfSplice(root)
 		end 'body'
@@ -538,32 +548,32 @@ export type DebugSymbols
 	end 'descentFrom'
 
 	export function functionAtIsTheProgramsOwn(offset DebugAddress) returns bool
-		return match self.reader.functionContaining(offset as MxdbgCodeOffset) 'enclosing'
+		return match self.reader.functionContaining(codeOffsetIn(offset)) 'enclosing'
 			none gives false
 			found(fn) gives bodyIsTheProgramsOwn(fn, origin: fn.origin)
 		end 'enclosing'
 	end 'functionAtIsTheProgramsOwn'
 
 	export function returnIsIntoTheProgramsOwn(offset DebugAddress) returns bool
-		return offsetIsTheProgramsOwnIn(self.reader, offset: MxdbgReader.callSiteLookup(offset as MxdbgCodeOffset))
+		return offsetIsTheProgramsOwnIn(self.reader, offset: MxdbgReader.callSiteLookup(codeOffsetIn(offset)))
 	end 'returnIsIntoTheProgramsOwn'
 
 	export function offsetIsTheProgramsOwn(offset DebugAddress) returns bool
-		return offsetIsTheProgramsOwnIn(self.reader, offset: offset as MxdbgCodeOffset)
+		return offsetIsTheProgramsOwnIn(self.reader, offset: codeOffsetIn(offset))
 	end 'offsetIsTheProgramsOwn'
 
 	export function inlineDepthAt(offset DebugAddress) returns DebugTally
-		return self.presentedChainAt(offset as MxdbgCodeOffset).count() as DebugTally
+		return self.presentedChainAt(codeOffsetIn(offset)).count() as DebugTally
 	end 'inlineDepthAt'
 
 	export function sourcePositionAt(offset DebugAddress) returns MxdbgLineLookup
-		return self.reader.pcToLine(offset as MxdbgCodeOffset)
+		return self.reader.pcToLine(codeOffsetIn(offset))
 	end 'sourcePositionAt'
 
 	export function localsAt(offset DebugAddress, site MxdbgInlineSiteLookup) returns DebugLocalArray
 		var found = DebugLocalArray.create()
 
-		match self.reader.functionContaining(offset as MxdbgCodeOffset) 'enclosing'
+		match self.reader.functionContaining(codeOffsetIn(offset)) 'enclosing'
 			none then return found
 			found(fn) then self.appendLocalsOf(found, fn: fn, site: site)
 		end 'enclosing'
@@ -591,8 +601,8 @@ export type DebugSymbols
 		return MxdbgLocalLookup.notLiveHere if declared else MxdbgLocalLookup.undeclared
 	end 'localCoveringIn'
 
-	export function foldedWordsFor(first MxdbgIndex, count MxdbgIndex) returns MxdbgLocValueArray
-		var words = MxdbgLocValueArray.create()
+	export function foldedWordsFor(first MxdbgIndex, count MxdbgIndex) returns MxdbgRecordFigureArray
+		var words = MxdbgRecordFigureArray.create()
 		let tally = self.reader.constantWordCount()
 
 		if count == 0 or first >= tally or count > tally - first 'pastTheSection'
@@ -641,7 +651,13 @@ export type DebugSymbols
 			return
 		end 'notInThisImage'
 
-		let raw = (pc - textBase) as MxdbgCodeOffset
+		let intoImage = pc - textBase
+
+		if intoImage > LargestCodeOffsetASidecarNames 'pastWhatACodeOffsetCanName'
+			return
+		end 'pastWhatACodeOffsetCanName'
+
+		let raw = intoImage as MxdbgCodeOffset
 
 		// Only the outer frames are return addresses (`callSiteLookup` owns that bias); the innermost
 		// frame's pc is the stop itself and is read where it stands.
@@ -858,6 +874,10 @@ export type DebugSymbols
 		let file = baseNameOf(position.path)
 		let named = DebugFunctionNameLookup.named(self.presentedNameAt(offset as DebugAddress, hidden: 0))
 
+		if mxdbgOriginIsTheRuntimes(fn.origin) 'notABodyTheProgramsAuthorWrote'
+			return BreakResolution.refused(file, line: position.line, functionName: named, reason: DebugInsideRuntimeSymbolReason)
+		end 'notABodyTheProgramsAuthorWrote'
+
 		return match self.instructionStartAt(fn, offset: offset) 'boundary'
 			start gives BreakResolution.atLine(file, line: position.line, bodies: singleBody(offset as DebugAddress), functionName: named, breakpoint: exactOffsetSpelling(offset))
 			inside gives BreakResolution.refused(file, line: position.line, functionName: named, reason: DebugNotAnInstructionStartReason)
@@ -891,7 +911,7 @@ export type DebugSymbols
 	end 'presentedNameAt'
 
 	export function presentedSiteAt(offset DebugAddress, hidden DebugTally) returns MxdbgInlineSiteLookup
-		let chain = self.presentedChainAt(offset as MxdbgCodeOffset)
+		let chain = self.presentedChainAt(codeOffsetIn(offset))
 
 		if (hidden as ElementIndex) > chain.count() 'moreHiddenThanSpliced'
 			panic("DebugSymbols.presentedSiteAt: {hidden} spliced frames are hidden at 0x{offset:x}, where only {chain.count()} are spliced")
@@ -911,7 +931,7 @@ export type DebugSymbols
 	export function hideableFramesAt(offset DebugAddress) returns DebugTally
 		var hideable = 0 as DebugTally
 
-		for index in self.presentedChainAt(offset as MxdbgCodeOffset) 'eachSplicedBody'
+		for index in self.presentedChainAt(codeOffsetIn(offset)) 'eachSplicedBody'
 			if not self.entersHere(index, offset: offset) 'alreadyUnderWay'
 				break
 			end 'alreadyUnderWay'
@@ -933,13 +953,13 @@ export type DebugSymbols
 
 	export function presentedLineAt(offset DebugAddress, hidden DebugTally) returns DebugLineNumber
 		if hidden == 0 'nothingHidden'
-			return match self.reader.pcToLine(offset as MxdbgCodeOffset) 'positioned'
+			return match self.reader.pcToLine(codeOffsetIn(offset)) 'positioned'
 				none gives NoSourceLine
 				found(row) gives row.line as DebugLineNumber
 			end 'positioned'
 		end 'nothingHidden'
 
-		let chain = self.presentedChainAt(offset as MxdbgCodeOffset)
+		let chain = self.presentedChainAt(codeOffsetIn(offset))
 		let outermostHidden = try chain.get((hidden - 1) as ElementIndex) otherwise panic("DebugSymbols.presentedLineAt: {hidden} spliced frames are hidden at 0x{offset:x}, where only {chain.count()} are spliced")
 
 		match self.reader.inlineSite(outermostHidden).call 'called'
@@ -952,7 +972,7 @@ export type DebugSymbols
 		var grouping = DebugLineBodies.create()
 
 		for placed in self.lineCandidatesOf(fileIds, line: line) 'eachCandidate'
-			grouping.place(placed.candidate, site: placed.context, functionStart: self.functionStartOf(placed.candidate.offset as MxdbgCodeOffset))
+			grouping.place(placed.candidate, site: placed.context, functionStart: self.functionStartOf(codeOffsetIn(placed.candidate.offset)))
 		end 'eachCandidate'
 
 		let firstBody = try grouping.bodies.get(0) otherwise return BreakResolution.noCode(name, line: line)

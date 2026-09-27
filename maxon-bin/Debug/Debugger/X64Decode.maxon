@@ -1,3 +1,28 @@
+let DbgClassPlain = 1
+let DbgClassPcRelativeData = 2
+export let DbgClassDirectCall = 3
+export let DbgClassDirectJump = 4
+export let DbgClassConditionalJump = 5
+export let DbgClassReturn = 6
+export let DbgClassIndirectCall = 7
+export let DbgClassIndirectJump = 8
+
+let DbgReturnReleasesNothing = 0
+
+let DbgCallFormRegister = 1
+let DbgCallFormMemory = 2
+let DbgCallFormPcRelative = 3
+
+let NoFixupWord = 0 as DebugAddress
+
+function callFormCode(form X64CallForm) returns DebugAddress
+	return match form 'form'
+		register gives DbgCallFormRegister as DebugAddress
+		memory gives DbgCallFormMemory as DebugAddress
+		programCounterRelative gives DbgCallFormPcRelative as DebugAddress
+	end 'form'
+end 'callFormCode'
+
 export typealias X64Offset = int(0 to u64.max)
 export typealias X64Address = int(0 to 0x00007FFFFFFFFFFF)
 export typealias X64Displacement = int(i32.min to i32.max)
@@ -16,14 +41,6 @@ export enum X64CallForm
 	memory
 	programCounterRelative
 end 'X64CallForm'
-
-function callFormCode(form X64CallForm) returns DebugAddress
-	return match form 'form'
-		register gives DbgCallFormRegister as DebugAddress
-		memory gives DbgCallFormMemory as DebugAddress
-		programCounterRelative gives DbgCallFormPcRelative as DebugAddress
-	end 'form'
-end 'callFormCode'
 
 export union X64RegisterLookup
 	none
@@ -115,47 +132,11 @@ export type X64Instruction
 	export var target as X64Target
 	export var pushesARegister as bool
 	export var callOperand as X64CallOperand
-	export var modRmPosition as X64Length
 
-	export static function create(length X64Length, instructionClass X64Class, condition X64Condition, displacementPosition X64Length, releasePosition X64Length, target X64Target, pushesARegister bool, callOperand X64CallOperand, modRmPosition X64Length) returns X64Instruction
-		return Self{length: length, instructionClass: instructionClass, condition: condition, displacementPosition: displacementPosition, releasePosition: releasePosition, target: target, pushesARegister: pushesARegister, callOperand: callOperand, modRmPosition: modRmPosition}
+	export static function create(length X64Length, instructionClass X64Class, condition X64Condition, displacementPosition X64Length, releasePosition X64Length, target X64Target, pushesARegister bool, callOperand X64CallOperand) returns X64Instruction
+		return Self{length: length, instructionClass: instructionClass, condition: condition, displacementPosition: displacementPosition, releasePosition: releasePosition, target: target, pushesARegister: pushesARegister, callOperand: callOperand}
 	end 'create'
-
-	export function classWord() returns DebugAddress
-		let word = (self.length as DebugAddress) or ((self.instructionClass as DebugAddress) shl DbgClassShift) or (self.operandByte() shl DbgCondShift)
-
-		if self.instructionClass == DbgClassIndirectCall 'callsThroughAnOperand'
-			return word or (callFormCode(self.callOperand.callForm()) shl DbgCallFormShift) or ((self.modRmPosition as DebugAddress) shl DbgCallModRmShift)
-		end 'callsThroughAnOperand'
-
-		return word
-	end 'classWord'
-
-	function operandByte() returns DebugAddress
-		if self.instructionClass == DbgClassConditionalJump 'aCondition'
-			return self.condition as DebugAddress
-		end 'aCondition'
-
-		if self.instructionClass == DbgClassReturn 'anArgumentRelease'
-			return self.releasePosition as DebugAddress
-		end 'anArgumentRelease'
-
-		return self.displacementPosition as DebugAddress
-	end 'operandByte'
-
-	export function fixupWord() returns DebugAddress
-		if self.instructionClass == DbgClassIndirectCall 'callsThroughAnOperand'
-			return self.callOperand.rebasedReferent()
-		end 'callsThroughAnOperand'
-
-		return match self.target 'target'
-			none gives NoFixupWord
-			at(address) gives address as DebugAddress
-		end 'target'
-	end 'fixupWord'
 end 'X64Instruction'
-
-let NoFixupWord = 0 as DebugAddress
 
 export union X64Decode
 	unclassified
@@ -409,10 +390,8 @@ function decodedOperation(cursor X64Cursor, at X64Offset, address X64Address, ha
 	var addressing = ModRmDirect as X64ByteValue
 	var rm = 0 as X64ModRmField
 	var sib = NoSib
-	var modRmPosition = 0 as X64Length
 
 	if hasModRm 'anAddressingByte'
-		modRmPosition = try cursor.spanFrom(at)
 		let modRm = try cursor.take()
 		addressing = (modRm shr ModRmModShift) and ModRmModMask
 		rm = (modRm and ModRmLowMask) as X64ModRmField
@@ -466,7 +445,7 @@ function decodedOperation(cursor X64Cursor, at X64Offset, address X64Address, ha
 		callOperand = try X64CallOperandReader.create(cursor, at: at, address: address, length: length, rex: rex, addressOverridden: addressOverridden).operandOf(addressing, rm: rm, sib: sib, displacementPosition: displacementPosition, displacementBytes: displacementBytes)
 	end 'anIndirectCall'
 
-	return X64Instruction.create(length, instructionClass: instructionClass, condition: taken, displacementPosition: displacementPosition, releasePosition: releasePosition, target: target, pushesARegister: family == X64Family.pushingRegister, callOperand: callOperand, modRmPosition: modRmPosition)
+	return X64Instruction.create(length, instructionClass: instructionClass, condition: taken, displacementPosition: displacementPosition, releasePosition: releasePosition, target: target, pushesARegister: family == X64Family.pushingRegister, callOperand: callOperand)
 end 'decodedOperation'
 
 type X64CallOperandReader

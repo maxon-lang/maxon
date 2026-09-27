@@ -1,0 +1,29 @@
+let DetachedRunsOnCaseLabel = "a-detached-program-runs-to-completion"
+
+let DetachCommand = "detach"
+let DetachHotAnchorName = "hot"
+let OrphanedProgramExitCode = 97
+let DetachedSessionExitCode = 0
+
+test 'a program the session detaches from runs on to its own end rather than being orphaned'
+	let staged = builtFixture(DetachedRunsOnCaseLabel, fixture: HeaplessFixtureName)
+	let undebugged = runBuiltProgram(staged)
+	let hotLine = anchorLine(staged, anchor: DetachHotAnchorName)
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(hotLine)}", RunCommand, DetachCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	Expect.equal(eventsOfKind(events, kind: ErrorEventName).count() as AssertedInt, expected: 0, message: "⭐ `{DetachCommand}` IS A COMMAND. A session must be able to let go of a program it stopped — that is the difference between a debugger and a program's owner. An `{ErrorEventName}` here is the word naming nothing. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let stops = eventsOfKind(events, kind: StopEventName)
+	Expect.equal(stops.count() as AssertedInt, expected: 1, message: "the program must be STOPPED when it is detached from, or the detach is not the thing being measured. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let exits = eventsOfKind(events, kind: ExitEventName)
+	Expect.equal(exits.count() as AssertedInt, expected: 1, message: "a detached program is still a program that ends, and the session that let it go reports that end once. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let exited = eventAt(exits, index: 0)
+	Expect.notEqual(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: OrphanedProgramExitCode, message: "⛔ {OrphanedProgramExitCode} IS THE CODE OF A PROGRAM THAT LOST ITS DRIVER, NOT OF ONE THAT WAS RELEASED. A detach that leaves the program to notice its debugger is gone and give up where it stands is a kill wearing another word. {said}")
+	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the detached program answered a different exit code than the same image run with nothing attached, so being debugged and released changed its result. {said}")
+	Expect.equal(session.exitCode() as AssertedInt, expected: DetachedSessionExitCode, message: "a session that detached on purpose did what it was asked, so the driver exits {DetachedSessionExitCode}. {said}")
+end 'a program the session detaches from runs on to its own end rather than being orphaned'

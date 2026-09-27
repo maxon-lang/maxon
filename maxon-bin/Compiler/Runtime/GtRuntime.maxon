@@ -422,6 +422,17 @@ let GtOffRenounced = GtOffReplyWitness + PointerFieldBytes
 let GtPromiseHeld = 0 as ParsedInt
 let GtPromiseGivenUp = 1 as ParsedInt
 
+let GtRestraintArmed = 1 as ParsedInt
+
+export let GtOffHold = GtOffRenounced + PointerFieldBytes
+
+export let GtHoldReleased = 0 as ParsedInt
+export let GtHoldRequested = 1 as ParsedInt
+
+let GtOffPinnedM = GtOffHold + PointerFieldBytes
+
+let GtOffPinDepth = GtOffPinnedM + PointerFieldBytes
+
 // The GT struct's size: the 0xC8 header, the inline argument region, then every field above. Must be a
 // multiple of 8.
 //
@@ -438,7 +449,7 @@ let GtPromiseGivenUp = 1 as ParsedInt
 // field at all.
 //
 // EXPORTED because `SchedRuntime`'s M struct embeds a whole GT inline as its scheduler context.
-export let GtStructSize = GtOffRenounced + PointerFieldBytes
+export let GtStructSize = GtOffPinDepth + PointerFieldBytes
 
 // ⭐⭐ **THE PARK KINDS — what the strand runner dispatches on after the switch.** Each names the STORE
 // `__gt_register_park` puts the thread on; a yield and a preemption register nothing and are placed back on
@@ -631,7 +642,7 @@ end 'x64FaultFrameHome'
 // ⭐⭐ **THE STACK THE OS ITSELF WRITES BELOW A GREEN THREAD's STACK POINTER — Go's `stackSystem`.** Where a
 // fault's frame lands on the faulting stack, the room for it is reserved under the guard word, as Go reserves
 // it on Windows; everywhere else nothing is.
-export function gtStackSystemBytes(target Target) returns ParsedInt
+function gtStackSystemBytes(target Target) returns ParsedInt
 	return match gtFaultFrameHome(target) 'home'
 		faultingStack gives GtWindowsExceptionDispatchBytes
 		signalStack gives 0
@@ -649,7 +660,7 @@ let GtWindowsExceptionDispatchBytes = 0x1000 as ParsedInt
 
 let GtWindowsExceptionDispatchMeasured = 0xA50 as StackSize
 
-export function gtWindowsExceptionDispatchMeasuredBytes() returns StackSize
+function gtWindowsExceptionDispatchMeasuredBytes() returns StackSize
 	return GtWindowsExceptionDispatchMeasured
 end 'gtWindowsExceptionDispatchMeasuredBytes'
 
@@ -1568,6 +1579,19 @@ export let IoReadName = b"__gt_io_read"
 // (`proc.go:3456`, `proc.go:3490`). The peek decides only whether to LOOK; the locked dequeue behind it is
 // what decides anything.
 let GtRunQueueHeadLabel = b"__gt_run_queue_head"
+
+// ⭐⭐ **EVERY GREEN THREAD EVER CARVED — Go's `allgs`, and a FLAT VECTOR rather than an intrusive list.**
+// Its one reader is a debugger in another process, which takes the whole roster with a single foreign read of
+// `len * 8` bytes; a chain through a link field would cost one read per node. The base is published with a
+// release store and the length after it, so a reader that sees a length sees the slots below it.
+export let GtAllGLabel = b"__gt_allg"
+export let GtAllGLenLabel = b"__gt_allglen"
+let GtAllGCapLabel = b"__gt_allgcap"
+
+// ⚠ **A COUNT, NOT A FLAG.** Two green threads of one process can each hold a pin at once — a DAP session
+// and an MCP session in the same compiler — so the hand-off gate is armed while any of them stands and dark
+// only at zero.
+export let GtHoldEpochLabel = b"__gt_hold_epoch"
 let GtRunQueueTailLabel = b"__gt_run_queue_tail"
 
 // ⚠ **THERE IS NO `__gt_system_stack_top` `.data` WORD: THE SYSCALL STACK IS `M->systemStackSP`.** One
@@ -2183,6 +2207,10 @@ export function gtRuntimeGlobals(usage RuntimeUsage, target Target) returns Data
 		return out
 	end 'noGreenThreadStack'
 
+	pushRuntimeGlobal(out, label: GtAllGLabel, sharing: MultiMSharing.publishedFromTheLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: GtAllGLenLabel, sharing: MultiMSharing.publishedFromTheLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: GtAllGCapLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: GtHoldEpochLabel, sharing: MultiMSharing.lastWriterWins, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: GtRunQueueHeadLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: GtRunQueueTailLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
 
@@ -2279,6 +2307,9 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	// list because `__gt_init` calls `__sched_init_procs` before it does anything else.
 	installSchedRuntime(module, target: target)
 	buildGtInit(module)
+	buildGtPinMachine(module)
+	buildGtUnpinMachine(module)
+	buildGtCurrentMachine(module)
 
 	// ⭐ ALL THREE spawn doors, from one body. Whether a program can REACH one is `DeadFunctionElimination`'s
 	// question, and answering it here would be a second reachability analysis that could disagree with it.
@@ -2881,7 +2912,12 @@ end 'emitGtFifoSweepDropped'
 //
 // ⚠ **THE RECLAIM RUNS WITH `__sched_lock` RELEASED AT BOTH CALLERS**, and the POP is what makes that safe: a
 // GT taken off a queue is unreachable by anyone else.
-export function emitGtTombstoneHandback(module StdModule, func IrFunction, candidate IrBlock, found ValueId, retry IrBlock, requeue ByteArray, ids ValueMinter)
+export union GtHandOffAnswer
+	giveTheProcessor(answer ParsedInt)
+	giveUpTheStrand(strandOwner ValueId)
+end 'GtHandOffAnswer'
+
+export function emitGtTombstoneHandback(module StdModule, func IrFunction, candidate IrBlock, found ValueId, retry IrBlock, requeue ByteArray, handOff GtHandOffAnswer, ids ValueMinter)
 	var noWork = module.addBlock(func, label: b"tsnowork", heat: BlockHeat.normal)
 	var checkDropped = module.addBlock(func, label: b"tscheckdropped", heat: BlockHeat.normal)
 	var reclaim = module.addBlock(func, label: b"tsreclaim", heat: BlockHeat.normal)
@@ -2894,73 +2930,302 @@ export function emitGtTombstoneHandback(module StdModule, func IrFunction, candi
 
 	let wasDropped = emitGtIsDropped(module, block: checkDropped, gt: found, ids: ids)
 	module.setTerminator(checkDropped, op: StdOp.condBranch(wasDropped, thenBlockId: reclaim.id, elseBlockId: hand.id))
-	emitDebugAgentHoldGate(module, func: func, hand: hand, found: found, retry: retry, requeue: requeue, ids: ids)
+	emitGtHandOffGate(module, func: func, hand: hand, found: found, retry: retry, requeue: requeue, handOff: handOff, ids: ids)
 
 	module.appendOp(reclaim, op: StdOp.call(ids.mint(), callee: GtRunnerDoneName, args: argsOf(found)))
 	module.setTerminator(reclaim, op: StdOp.branch(retry.id))
 end 'emitGtTombstoneHandback'
 
-// A hold is a refusal at the hand-over and moves nothing: the candidate goes back on the tail of the queue
-// it came off and the machine looks again. So a held thread stays inside the scheduler's own structures,
-// `__sched_checkdead` keeps seeing a machine running, nothing is parked on a chain the runtime cannot see,
-// and a release needs no wake because the next dequeue simply stops being refused.
+let GtRestrainedRefusePauseUs = 200 as ParsedInt
+
+export let GtProcessorHandedOff = -1 as ParsedInt
+
+let GtAllGSeedSlots = 64 as ParsedInt
+
+let GtAllGSlotBytes = 8 as ParsedInt
+
+function emitGtStartLockedOwner(module StdModule, func IrFunction, startLocked IrBlock, owner ValueId, found ValueId, declined IrBlock, handOff GtHandOffAnswer, ids ValueMinter)
+	match handOff 'shape'
+		giveTheProcessor(answer) then emitGtGiveTheProcessorToTheLockedOwner(module, func: func, startLocked: startLocked, owner: owner, found: found, declined: declined, answer: answer, ids: ids)
+		giveUpTheStrand then module.setTerminator(startLocked, op: StdOp.branch(declined.id))
+	end 'shape'
+end 'emitGtStartLockedOwner'
+
+function emitGtGiveTheProcessorToTheLockedOwner(module StdModule, func IrFunction, startLocked IrBlock, owner ValueId, found ValueId, declined IrBlock, answer ParsedInt, ids ValueMinter)
+	var gave = module.addBlock(func, label: b"tshslmgave", heat: BlockHeat.cold)
+
+	emitSchedStartLockedMachine(module, func: func, cur: startLocked, owner: owner, strand: found, gave: gave, declined: declined, ids: ids)
+	emitConstReturn(module, block: gave, value: answer, ids: ids)
+end 'emitGtGiveTheProcessorToTheLockedOwner'
+
+// A refusal at the hand-over moves nothing: the candidate goes back on the tail of the queue it came off and
+// the machine looks again, so a restrained thread stays inside the scheduler's own structures, nothing is
+// parked on a chain the runtime cannot see, and a release needs no wake.
 //
-// `requeue` is the caller's own door, not one door. `__sched_find_runnable`'s candidate is an owner token
-// of the global queue and `__gt_strand_next`'s is a member of its owner's strand queue; re-queueing either
+// ⚠ `requeue` is the CALLER's own door, not one door. `__sched_find_runnable`'s candidate is an owner token of
+// the global queue and `__gt_strand_next`'s is a member of its owner's strand queue; re-queueing either
 // through the other's door loses the thread.
 //
-// The cost when nothing is held is one load and one branch per dequeue, which is why the gate sits behind
-// `__dbg_ctl`: the agent is emitted into every x64-windows program and is dark in almost all of them.
-function emitDebugAgentHoldGate(module StdModule, func IrFunction, hand IrBlock, found ValueId, retry IrBlock, requeue ByteArray, ids ValueMinter)
-	if not module.usesDebugAgent 'noAgentInThisImage'
-		module.setTerminator(hand, op: StdOp.ret(found))
-		return
-	end 'noAgentInThisImage'
-
-	var askTheAgent = module.addBlock(func, label: b"tshaskagent", heat: BlockHeat.cold)
+// The back-off fires what is due before retrying, because the retry target sits below `findRunnable`'s
+// `checkTimers` and the short sleep is a `SwitchToThread` on this lane: without it a refused hand-over
+// starves every sleeping thread in the process.
+function emitGtHandOffGate(module StdModule, func IrFunction, hand IrBlock, found ValueId, retry IrBlock, requeue ByteArray, handOff GtHandOffAnswer, ids ValueMinter)
+	var examine = module.addBlock(func, label: b"tshexamine", heat: BlockHeat.cold)
+	var checkPin = module.addBlock(func, label: b"tshcheckpin", heat: BlockHeat.cold)
+	var comparePin = module.addBlock(func, label: b"tshcomparepin", heat: BlockHeat.cold)
+	var holdItBack = module.addBlock(func, label: b"tshholdback", heat: BlockHeat.cold)
 	var putItBack = module.addBlock(func, label: b"tshputback", heat: BlockHeat.cold)
+	var startLocked = module.addBlock(func, label: b"tshstartlocked", heat: BlockHeat.cold)
+	var noOwner = module.addBlock(func, label: b"tshnoowner", heat: BlockHeat.cold)
+	var wakeOwner = module.addBlock(func, label: b"tshwakeowner", heat: BlockHeat.cold)
+	var backOff = module.addBlock(func, label: b"tshbackoff", heat: BlockHeat.cold)
+	var fireDue = module.addBlock(func, label: b"tshfiredue", heat: BlockHeat.cold)
+	var payWake = module.addBlock(func, label: b"tshpaywake", heat: BlockHeat.cold)
 	var handOver = module.addBlock(func, label: b"tshhandover", heat: BlockHeat.normal)
 
-	let ctl = emitLoadGlobalWord(module, block: hand, label: DbgCtlLabel, ids: ids)
-	let dark = emitCmp(module, block: hand, a: ctl, b: emitConst(module, block: hand, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(hand, op: StdOp.condBranch(dark, thenBlockId: handOver.id, elseBlockId: askTheAgent.id))
+	let armed = emitLoadGlobalWord(module, block: hand, label: GtHoldEpochLabel, ids: ids)
+	let unrestrained = emitCmp(module, block: hand, a: armed, b: emitConst(module, block: hand, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(hand, op: StdOp.condBranch(unrestrained, thenBlockId: handOver.id, elseBlockId: examine.id))
 
-	let held = ids.mint()
-	module.appendOp(askTheAgent, op: StdOp.call(held, callee: DbgGtShouldHoldName, args: argsOf(found)))
-	let notHeld = emitCmp(module, block: askTheAgent, a: held, b: emitConst(module, block: askTheAgent, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(askTheAgent, op: StdOp.condBranch(notHeld, thenBlockId: handOver.id, elseBlockId: putItBack.id))
+	let hold = emitLoadField(module, block: examine, record: found, offset: GtOffHold, ids: ids)
+	let held = emitCmp(module, block: examine, a: hold, b: emitConst(module, block: examine, value: GtHoldRequested, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(examine, op: StdOp.condBranch(held, thenBlockId: holdItBack.id, elseBlockId: checkPin.id))
 
-	emitSchedLockEnter(module, block: putItBack, ids: ids)
+	emitSchedLockEnter(module, block: holdItBack, ids: ids)
+	module.setTerminator(holdItBack, op: StdOp.branch(putItBack.id))
+
+	let pinned = emitLoadField(module, block: checkPin, record: found, offset: GtOffPinnedM, ids: ids)
+	let unpinned = emitCmp(module, block: checkPin, a: pinned, b: emitConst(module, block: checkPin, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(checkPin, op: StdOp.condBranch(unpinned, thenBlockId: handOver.id, elseBlockId: comparePin.id))
+
+	let here = emitLoadCurrentM(module, block: comparePin, ids: ids)
+	let ours = emitCmp(module, block: comparePin, a: pinned, b: here, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(comparePin, op: StdOp.condBranch(ours, thenBlockId: handOver.id, elseBlockId: startLocked.id))
+
+	emitSchedLockEnter(module, block: startLocked, ids: ids)
+	emitGtStartLockedOwner(module, func: func, startLocked: startLocked, owner: pinned, found: found, declined: putItBack, handOff: handOff, ids: ids)
+
+	let owner = emitLoadField(module, block: putItBack, record: found, offset: GtOffPinnedM, ids: ids)
 	module.appendOp(putItBack, op: StdOp.call(ids.mint(), callee: requeue, args: argsOf(found)))
-	emitSchedLockLeave(module, block: putItBack, ids: ids)
+	let ownerless = emitCmp(module, block: putItBack, a: owner, b: emitConst(module, block: putItBack, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(putItBack, op: StdOp.condBranch(ownerless, thenBlockId: noOwner.id, elseBlockId: wakeOwner.id))
 
-	// The retry would otherwise be a hot spin on the one thread the driver has asked to stand still, so the
-	// machine backs off before looking again. That pause is the documented cost of holding a thread.
-	_ = emitNetpoll(module, block: putItBack, verb: NetpollVerb.shortSleep, operands: argsOf(emitConst(module, block: putItBack, value: DbgHoldRefusePauseUs, ids: ids)), ids: ids)
-	module.setTerminator(putItBack, op: StdOp.branch(retry.id))
+	emitSchedLockLeave(module, block: noOwner, ids: ids)
+	module.setTerminator(noOwner, op: StdOp.branch(backOff.id))
+
+	let afterBackOff = emitGtHandOffWake(module, func: func, wakeOwner: wakeOwner, owner: owner, backOff: backOff, retry: retry, handOff: handOff, ids: ids)
+
+	_ = emitNetpoll(module, block: backOff, verb: NetpollVerb.shortSleep, operands: argsOf(emitConst(module, block: backOff, value: GtRestrainedRefusePauseUs, ids: ids)), ids: ids)
+
+	let checkedAt = emitGtBranchOnTimerDue(module, func: func, cur: backOff, due: fireDue, notDue: afterBackOff, notDueArgs: ValueIdArray.create(), ids: ids)
+	let timerDebt = ids.mint()
+	module.appendOp(fireDue, op: StdOp.call(timerDebt, callee: GtTimerCheckName, args: argsOf(checkedAt)))
+	emitSchedWakeIfOwed(module, cur: fireDue, owed: timerDebt, wake: payWake, cont: afterBackOff, ids: ids)
 
 	module.setTerminator(handOver, op: StdOp.ret(found))
-end 'emitDebugAgentHoldGate'
+end 'emitGtHandOffGate'
 
-// The carve is the hook site because there is no all-threads list to walk and it is the one moment a record
-// comes into existence; the caller's hold of `__sched_lock` is what serialises the append.
-export function emitDebugAgentCarveHook(module StdModule, func IrFunction, cur IrBlock, gt ValueId, ids ValueMinter) returns IrBlock
-	if not module.usesDebugAgent 'noAgentInThisImage'
-		return cur
-	end 'noAgentInThisImage'
+function emitGtHandOffWake(module StdModule, func IrFunction, wakeOwner IrBlock, owner ValueId, backOff IrBlock, retry IrBlock, handOff GtHandOffAnswer, ids ValueMinter) returns IrBlock
+	return match handOff 'shape'
+		giveTheProcessor(answer) gives emitGtHandOffToOwnersMachine(module, func: func, wakeOwner: wakeOwner, owner: owner, backOff: backOff, retry: retry, answer: answer, ids: ids)
+		giveUpTheStrand(strandOwner) gives emitGtHandOffGivingUpTheStrand(module, func: func, wakeOwner: wakeOwner, owner: owner, backOff: backOff, strandOwner: strandOwner, ids: ids)
+	end 'shape'
+end 'emitGtHandOffWake'
 
-	var register = module.addBlock(func, label: b"dbgcarved", heat: BlockHeat.cold)
-	var done = module.addBlock(func, label: b"dbgcarvedone", heat: BlockHeat.normal)
+function emitGtHandOffToOwnersMachine(module StdModule, func IrFunction, wakeOwner IrBlock, owner ValueId, backOff IrBlock, retry IrBlock, answer ParsedInt, ids ValueMinter) returns IrBlock
+	var gave = module.addBlock(func, label: b"tshgave", heat: BlockHeat.cold)
 
-	let ctl = emitLoadGlobalWord(module, block: cur, label: DbgCtlLabel, ids: ids)
-	let dark = emitCmp(module, block: cur, a: ctl, b: emitConst(module, block: cur, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(dark, thenBlockId: done.id, elseBlockId: register.id))
+	emitSchedHandProcessorToOwner(module, func: func, cur: wakeOwner, owner: owner, handedOff: gave, kept: backOff, ids: ids)
+	_ = emitNetpoll(module, block: gave, verb: NetpollVerb.shortSleep, operands: argsOf(emitConst(module, block: gave, value: GtRestrainedRefusePauseUs, ids: ids)), ids: ids)
+	emitConstReturn(module, block: gave, value: answer, ids: ids)
 
-	module.appendOp(register, op: StdOp.call(ids.mint(), callee: DbgGtCarvedName, args: argsOf(gt)))
-	module.setTerminator(register, op: StdOp.branch(done.id))
+	return retry
+end 'emitGtHandOffToOwnersMachine'
+
+function emitGtHandOffGivingUpTheStrand(module StdModule, func IrFunction, wakeOwner IrBlock, owner ValueId, backOff IrBlock, strandOwner ValueId, ids ValueMinter) returns IrBlock
+	var gave = module.addBlock(func, label: b"tshgavestrand", heat: BlockHeat.cold)
+	var giveUp = module.addBlock(func, label: b"tshgiveupstrand", heat: BlockHeat.cold)
+
+	emitSchedHandProcessorToOwner(module, func: func, cur: wakeOwner, owner: owner, handedOff: gave, kept: backOff, ids: ids)
+
+	emitGtPublishStrandToken(module, block: gave, strandOwner: strandOwner, ids: ids)
+	_ = emitNetpoll(module, block: gave, verb: NetpollVerb.shortSleep, operands: argsOf(emitConst(module, block: gave, value: GtRestrainedRefusePauseUs, ids: ids)), ids: ids)
+	emitConstReturn(module, block: gave, value: GtProcessorHandedOff, ids: ids)
+
+	emitGtPublishStrandToken(module, block: giveUp, strandOwner: strandOwner, ids: ids)
+	emitConstReturn(module, block: giveUp, value: 0, ids: ids)
+
+	return giveUp
+end 'emitGtHandOffGivingUpTheStrand'
+
+function emitGtPublishStrandToken(module StdModule, block IrBlock, strandOwner ValueId, ids ValueMinter)
+	emitSchedLockEnter(module, block: block, ids: ids)
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: GtEnqueueName, args: argsOf(strandOwner)))
+	emitSchedLockLeave(module, block: block, ids: ids)
+	emitSchedWakeAnIdleM(module, block: block, ids: ids)
+end 'emitGtPublishStrandToken'
+
+export let GtPinMachineName = b"__gt_pin_m"
+
+export let GtUnpinMachineName = b"__gt_unpin_m"
+
+export let GtCurrentMachineName = b"__gt_current_m"
+
+function buildGtCurrentMachine(module StdModule)
+	var func = IrFunction.createFromStd(GtCurrentMachineName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var haveOffset = module.addBlock(func, label: b"curmoffset", heat: BlockHeat.normal)
+	var haveMachine = module.addBlock(func, label: b"curmmachine", heat: BlockHeat.normal)
+	var noMachine = module.addBlock(func, label: b"curmnone", heat: BlockHeat.normal)
+
+	let m = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: noMachine, bailValues: ParsedIntArray.create(), ids: ids)
+	module.setTerminator(haveMachine, op: StdOp.ret(m))
+
+	emitConstReturn(module, block: noMachine, value: 0, ids: ids)
+
+	module.functions.push(func)
+end 'buildGtCurrentMachine'
+
+function emitGtReleasePin(module StdModule, block IrBlock, gt ValueId, m ValueId, ids ValueMinter)
+	let released = emitConst(module, block: block, value: 0, ids: ids)
+	emitStoreField(module, block: block, record: gt, offset: GtOffPinDepth, value: released)
+	emitStoreField(module, block: block, record: gt, offset: GtOffPinnedM, value: released)
+	emitStoreField(module, block: block, record: m, offset: MOffLockedGt, value: released)
+	_ = emitGlobalAccumulate(module, block: block, label: GtHoldEpochLabel, delta: emitConst(module, block: block, value: 0 - GtRestraintArmed, ids: ids), multiM: true, ids: ids)
+end 'emitGtReleasePin'
+
+// ⛔ The pin is recorded on the running thread's STRAND OWNER (`GtOffOwner`), never on `M->currentGt` itself.
+// A driver asks for it from a coroutine, and `__sched_find_runnable` hands the gate an owner token, so a pin
+// on the member would be invisible there and the session's thread would migrate anyway.
+function buildGtPinMachine(module StdModule)
+	var func = IrFunction.createFromStd(GtPinMachineName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var haveOffset = module.addBlock(func, label: b"pinoffset", heat: BlockHeat.normal)
+	var haveMachine = module.addBlock(func, label: b"pinmachine", heat: BlockHeat.normal)
+	var haveThread = module.addBlock(func, label: b"pinthread", heat: BlockHeat.normal)
+	var refused = module.addBlock(func, label: b"pinrefused", heat: BlockHeat.normal)
+
+	let m = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: refused, bailValues: ParsedIntArray.create(), ids: ids)
+	let running = emitLoadField(module, block: haveMachine, record: m, offset: MOffCurrentGt, ids: ids)
+	let noThread = emitCmp(module, block: haveMachine, a: running, b: emitConst(module, block: haveMachine, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(haveMachine, op: StdOp.condBranch(noThread, thenBlockId: refused.id, elseBlockId: haveThread.id))
+
+	var armRestraint = module.addBlock(func, label: b"pinarm", heat: BlockHeat.normal)
+	var pinTaken = module.addBlock(func, label: b"pintaken", heat: BlockHeat.normal)
+
+	let gt = emitLoadField(module, block: haveThread, record: running, offset: GtOffOwner, ids: ids)
+	let heldDepth = emitLoadField(module, block: haveThread, record: gt, offset: GtOffPinDepth, ids: ids)
+	emitStoreField(module, block: haveThread, record: gt, offset: GtOffPinDepth, value: emitBin(module, block: haveThread, a: heldDepth, b: emitConst(module, block: haveThread, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids))
+	emitStoreField(module, block: haveThread, record: gt, offset: GtOffPinnedM, value: m)
+	emitStoreField(module, block: haveThread, record: m, offset: MOffLockedGt, value: gt)
+	let firstHold = emitCmp(module, block: haveThread, a: heldDepth, b: emitConst(module, block: haveThread, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(haveThread, op: StdOp.condBranch(firstHold, thenBlockId: armRestraint.id, elseBlockId: pinTaken.id))
+
+	_ = emitGlobalAccumulate(module, block: armRestraint, label: GtHoldEpochLabel, delta: emitConst(module, block: armRestraint, value: GtRestraintArmed, ids: ids), multiM: true, ids: ids)
+	module.setTerminator(armRestraint, op: StdOp.branch(pinTaken.id))
+
+	emitConstReturn(module, block: pinTaken, value: 1, ids: ids)
+
+	emitConstReturn(module, block: refused, value: 0, ids: ids)
+
+	module.functions.push(func)
+end 'buildGtPinMachine'
+
+function buildGtUnpinMachine(module StdModule)
+	var func = IrFunction.createFromStd(GtUnpinMachineName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var haveOffset = module.addBlock(func, label: b"unpinoffset", heat: BlockHeat.normal)
+	var haveMachine = module.addBlock(func, label: b"unpinmachine", heat: BlockHeat.normal)
+	var haveThread = module.addBlock(func, label: b"unpinthread", heat: BlockHeat.normal)
+	var haveHold = module.addBlock(func, label: b"unpinhold", heat: BlockHeat.normal)
+	var releaseIt = module.addBlock(func, label: b"unpinrelease", heat: BlockHeat.normal)
+	var keepOne = module.addBlock(func, label: b"unpinkeepone", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"unpindone", heat: BlockHeat.normal)
+
+	let m = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: doneBlock, bailValues: ParsedIntArray.create(), ids: ids)
+	let running = emitLoadField(module, block: haveMachine, record: m, offset: MOffCurrentGt, ids: ids)
+	let noThread = emitCmp(module, block: haveMachine, a: running, b: emitConst(module, block: haveMachine, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(haveMachine, op: StdOp.condBranch(noThread, thenBlockId: doneBlock.id, elseBlockId: haveThread.id))
+
+	let gt = emitLoadField(module, block: haveThread, record: running, offset: GtOffOwner, ids: ids)
+	let heldDepth = emitLoadField(module, block: haveThread, record: gt, offset: GtOffPinDepth, ids: ids)
+	let noHold = emitCmp(module, block: haveThread, a: heldDepth, b: emitConst(module, block: haveThread, value: 0, ids: ids), pred: StdCmpPred.le, ids: ids)
+	module.setTerminator(haveThread, op: StdOp.condBranch(noHold, thenBlockId: doneBlock.id, elseBlockId: haveHold.id))
+
+	let lastHold = emitCmp(module, block: haveHold, a: heldDepth, b: emitConst(module, block: haveHold, value: 1, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(haveHold, op: StdOp.condBranch(lastHold, thenBlockId: releaseIt.id, elseBlockId: keepOne.id))
+
+	emitGtReleasePin(module, block: releaseIt, gt: gt, m: m, ids: ids)
+	module.setTerminator(releaseIt, op: StdOp.branch(doneBlock.id))
+
+	emitStoreField(module, block: keepOne, record: gt, offset: GtOffPinDepth, value: emitBin(module, block: keepOne, a: heldDepth, b: emitConst(module, block: keepOne, value: 1, ids: ids), opcode: StdBinOpcode.sub, ids: ids))
+	module.setTerminator(keepOne, op: StdOp.branch(doneBlock.id))
+
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildGtUnpinMachine'
+
+export function emitGtAllGAppend(module StdModule, func IrFunction, cur IrBlock, gt ValueId, ids ValueMinter) returns IrBlock
+	var grow = module.addBlock(func, label: b"allggrow", heat: BlockHeat.cold)
+	var copyHead = module.addBlock(func, label: b"allgcopyhead", heat: BlockHeat.cold)
+	var copyBody = module.addBlock(func, label: b"allgcopybody", heat: BlockHeat.cold)
+	var publish = module.addBlock(func, label: b"allgpublish", heat: BlockHeat.cold)
+	var store = module.addBlock(func, label: b"allgstore", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"allgdone", heat: BlockHeat.normal)
+
+	let len = emitLoadAcquireGlobalWord(module, block: cur, label: GtAllGLenLabel, ids: ids)
+	let cap = emitLoadGlobalWord(module, block: cur, label: GtAllGCapLabel, ids: ids)
+	let noRoom = emitCmp(module, block: cur, a: len, b: cap, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(noRoom, thenBlockId: grow.id, elseBlockId: store.id))
+
+	let copied = ids.mint()
+	copyHead.blockArgs.push(IrBlockArg.create(copied, argType: StdType.i64))
+
+	let twice = emitBin(module, block: grow, a: cap, b: cap, opcode: StdBinOpcode.add, ids: ids)
+	let wanted = emitBin(module, block: grow, a: twice, b: emitConst(module, block: grow, value: GtAllGSeedSlots, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let wantedBytes = emitBin(module, block: grow, a: wanted, b: emitConst(module, block: grow, value: GtAllGSlotBytes, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
+	let fresh = ids.mint()
+	module.appendOp(grow, op: StdOp.osAllocPages(fresh, sizeId: wantedBytes))
+	let stale = emitLoadAcquireGlobalWord(module, block: grow, label: GtAllGLabel, ids: ids)
+	let unmapped = emitCmp(module, block: grow, a: fresh, b: emitConst(module, block: grow, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(grow, op: StdOp.condBranch(unmapped, thenBlockId: done.id, elseBlockId: copyHead.id))
+	grow.branchEdges.push(BranchEdge.create(copyHead.id, argIds: argsOf(emitConst(module, block: grow, value: 0, ids: ids))))
+
+	let allCopied = emitCmp(module, block: copyHead, a: copied, b: len, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(copyHead, op: StdOp.condBranch(allCopied, thenBlockId: publish.id, elseBlockId: copyBody.id))
+
+	let copyOffset = emitBin(module, block: copyBody, a: copied, b: emitConst(module, block: copyBody, value: GtAllGSlotBytes, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
+	let staleSlot = emitBin(module, block: copyBody, a: stale, b: copyOffset, opcode: StdBinOpcode.add, ids: ids)
+	let word = ids.mint()
+	module.appendOp(copyBody, op: StdOp.loadIndirect(word, addrId: staleSlot, offset: 0, valueType: StdType.i64))
+	let into = emitBin(module, block: copyBody, a: fresh, b: copyOffset, opcode: StdBinOpcode.add, ids: ids)
+	module.appendOp(copyBody, op: StdOp.storeIndirect(into, offset: 0, valueId: word, valueType: StdType.i64))
+	let stepped = emitBin(module, block: copyBody, a: copied, b: emitConst(module, block: copyBody, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(copyBody, op: StdOp.branch(copyHead.id))
+	copyBody.branchEdges.push(BranchEdge.create(copyHead.id, argIds: argsOf(stepped)))
+
+	emitStoreGlobalWord(module, block: publish, label: GtAllGCapLabel, value: wanted, ids: ids)
+	emitStoreReleaseGlobalWord(module, block: publish, label: GtAllGLabel, value: fresh, ids: ids)
+	module.setTerminator(publish, op: StdOp.branch(store.id))
+
+	let base = emitLoadAcquireGlobalWord(module, block: store, label: GtAllGLabel, ids: ids)
+	let roomLen = emitLoadAcquireGlobalWord(module, block: store, label: GtAllGLenLabel, ids: ids)
+	let storeOffset = emitBin(module, block: store, a: roomLen, b: emitConst(module, block: store, value: GtAllGSlotBytes, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
+	let slot = emitBin(module, block: store, a: base, b: storeOffset, opcode: StdBinOpcode.add, ids: ids)
+	module.appendOp(store, op: StdOp.storeIndirect(slot, offset: 0, valueId: gt, valueType: StdType.i64))
+	let grown = emitBin(module, block: store, a: roomLen, b: emitConst(module, block: store, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	emitStoreReleaseGlobalWord(module, block: store, label: GtAllGLenLabel, value: grown, ids: ids)
+	module.setTerminator(store, op: StdOp.branch(done.id))
 
 	return done
-end 'emitDebugAgentCarveHook'
+end 'emitGtAllGAppend'
 
 // `__gt_enqueue(g)` — append owner token `g` to the tail of the global FIFO run queue. The caller holds
 // `__sched_lock`.
@@ -3097,7 +3362,7 @@ function buildGtStrandNext(module StdModule)
 	module.setTerminator(gotOne, op: StdOp.branch(candidate.id))
 	gotOne.branchEdges.push(BranchEdge.create(candidate.id, argIds: argsOf(popped)))
 
-	emitGtTombstoneHandback(module, func: func, candidate: candidate, found: found, retry: pop, requeue: GtCoroEnqueueName, ids: ids)
+	emitGtTombstoneHandback(module, func: func, candidate: candidate, found: found, retry: pop, requeue: GtCoroEnqueueName, handOff: GtHandOffAnswer.giveUpTheStrand(owner), ids: ids)
 
 	module.functions.push(func)
 end 'buildGtStrandNext'
@@ -5667,13 +5932,15 @@ end 'emitGtPollStores'
 // keep this processor, so one service's coroutines could hold it for ever. The machine returns to its scheduler
 // loop, which fires what is due before it searches.
 function buildGtRunStrand(module StdModule, target Target)
-	var func = IrFunction.createFromStd(GtRunStrandName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtRunStrandName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var next = module.addBlock(func, label: b"strandnext", heat: BlockHeat.normal)
 	var run = module.addBlock(func, label: b"strandrun", heat: BlockHeat.normal)
 	var finished = module.addBlock(func, label: b"strandcompleted", heat: BlockHeat.normal)
+	var dropPin = module.addBlock(func, label: b"stranddroppin", heat: BlockHeat.cold)
+	var reapMember = module.addBlock(func, label: b"strandreap", heat: BlockHeat.normal)
 	var parked = module.addBlock(func, label: b"strandparked", heat: BlockHeat.normal)
 	var shrink = module.addBlock(func, label: b"strandshrink", heat: BlockHeat.normal)
 	var dispatch = module.addBlock(func, label: b"stranddispatch", heat: BlockHeat.normal)
@@ -5687,6 +5954,8 @@ function buildGtRunStrand(module StdModule, target Target)
 	var behindSiblings = module.addBlock(func, label: b"strandbehindsiblings", heat: BlockHeat.normal)
 	var behindEveryone = module.addBlock(func, label: b"strandbehindeveryone", heat: BlockHeat.normal)
 	var released = module.addBlock(func, label: b"strandreleased", heat: BlockHeat.normal)
+	var sortMember = module.addBlock(func, label: b"strandsort", heat: BlockHeat.normal)
+	var handedOffProc = module.addBlock(func, label: b"strandhandedoff", heat: BlockHeat.cold)
 
 	emitParams(module, block: entry, count: 2)
 	let m = 0 as ValueId
@@ -5699,8 +5968,12 @@ function buildGtRunStrand(module StdModule, target Target)
 	let member = ids.mint()
 	module.appendOp(next, op: StdOp.call(member, callee: GtStrandNextName, args: argsOf(owner)))
 	let strandEmpty = emitCmp(module, block: next, a: member, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(next, op: StdOp.condBranch(strandEmpty, thenBlockId: released.id, elseBlockId: run.id))
-	module.setTerminator(released, op: StdOp.retVoid)
+	module.setTerminator(next, op: StdOp.condBranch(strandEmpty, thenBlockId: released.id, elseBlockId: sortMember.id))
+	emitConstReturn(module, block: released, value: 0, ids: ids)
+
+	let gaveItAway = emitCmp(module, block: sortMember, a: member, b: emitConst(module, block: sortMember, value: GtProcessorHandedOff, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(sortMember, op: StdOp.condBranch(gaveItAway, thenBlockId: handedOffProc.id, elseBlockId: run.id))
+	emitConstReturn(module, block: handedOffProc, value: GtProcessorHandedOff, ids: ids)
 
 	emitGtExecute(module, block: run, g: member, schedulerContext: schedulerContext, m: m, target: target, ids: ids)
 
@@ -5711,8 +5984,15 @@ function buildGtRunStrand(module StdModule, target Target)
 	let completed = emitGtStatusEquals(module, block: run, status: status, want: GtStatusCompleted, ids: ids)
 	module.setTerminator(run, op: StdOp.condBranch(completed, thenBlockId: finished.id, elseBlockId: parked.id))
 
-	module.appendOp(finished, op: StdOp.call(ids.mint(), callee: GtRunnerDoneName, args: argsOf(member)))
-	module.setTerminator(finished, op: StdOp.branch(next.id))
+	let lockedHere = emitLoadField(module, block: finished, record: m, offset: MOffLockedGt, ids: ids)
+	let ranItsPinnedThread = emitCmp(module, block: finished, a: lockedHere, b: member, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(finished, op: StdOp.condBranch(ranItsPinnedThread, thenBlockId: dropPin.id, elseBlockId: reapMember.id))
+
+	emitGtReleasePin(module, block: dropPin, gt: member, m: m, ids: ids)
+	module.setTerminator(dropPin, op: StdOp.branch(reapMember.id))
+
+	module.appendOp(reapMember, op: StdOp.call(ids.mint(), callee: GtRunnerDoneName, args: argsOf(member)))
+	module.setTerminator(reapMember, op: StdOp.branch(next.id))
 
 	// ⭐⭐ **THE ONE DOOR EVERY PARK PASSES WHILE THE THREAD IS STOPPED AND REACHABLE BY NOBODY ELSE** — its
 	// registers are saved and it is on no store and no queue yet — so it is where a stack may move
@@ -5769,7 +6049,7 @@ function buildGtRunStrand(module StdModule, target Target)
 	module.appendOp(behindEveryone, op: StdOp.call(ids.mint(), callee: GtEnqueueName, args: argsOf(owner)))
 	emitSchedLockLeave(module, block: behindEveryone, ids: ids)
 	emitSchedWakeAnIdleM(module, block: behindEveryone, ids: ids)
-	module.setTerminator(behindEveryone, op: StdOp.retVoid)
+	emitConstReturn(module, block: behindEveryone, value: 0, ids: ids)
 
 	module.functions.push(func)
 end 'buildGtRunStrand'

@@ -69,7 +69,7 @@ differences a program can meet are:
   `GetSystemTimePreciseAsFileTime`.
 - **`maxon profile`** runs only on x64-windows. Elsewhere it is refused.
 - **The interactive debugger** — `maxon debug`, `maxon dap-server` and the MCP `debug_*` tools — debugs
-  x64-windows programs only, because the debug agent it drives is emitted on that target alone.
+  x64-windows programs only, because that is the one host whose debug interface this build drives.
 - On the Linux targets, host-name resolution for sockets is built in and simple: `A` records only, the
   first nameserver in `/etc/resolv.conf`, no search domains and no CNAME following.
 

@@ -235,14 +235,13 @@ Every `debug_*` tool answers `{"state": "stopped" | "running" | "ended" | "none"
 the previous call. A tool other than `debug_start` called with no live session is an error naming
 `debug_start`.
 
-The debugger needs the in-process debug agent, which is emitted by default on `x64-windows` only.
+The debugger drives `x64-windows` programs only. `debug_stop` ends the debuggee.
 
 ### `debug_start`
 
 Launches a program under the debugger, parked before `main`, so a fresh session reports `stopped`. A
-`debug_start` while a session is live launches the new program first; once it has started, the live
-session is reaped and its remaining output leads the reply. A start that fails leaves the live session as it
-was.
+`debug_start` while a session is live reaps that session first, and its remaining output leads the reply
+— including a start that is then refused, whose error carries the reaped session's final `output` lines.
 
 | Argument | Type | Description |
 |----------|------|-------------|
@@ -266,7 +265,7 @@ and anything else given as `source`, is refused with the argument to use.
 | Argument | Type | Description |
 |----------|------|-------------|
 | `target` | string | Required. `file:line`, a bare line number, a function name, or `*0x<offset>` |
-| `condition` | string | Break only when this holds, such as `i > 3`; the agent evaluates it itself |
+| `condition` | string | Break only when this holds, such as `i > 3`; the driver judges it at the stop |
 
 ### `debug_clear`
 

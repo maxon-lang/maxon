@@ -1,0 +1,48 @@
+export typealias BackendThreadId = int(0 to u64.max)
+export typealias BackendHandle = int(0 to u64.max)
+export typealias BackendWord = int(i64.min to i64.max)
+export typealias BackendExitCode = int(i64.min to i64.max)
+export typealias BackendByteCount = int(0 to 0x40000000)
+export typealias BackendWaitBudgetMs = int(0 to 0xFFFFFFFF)
+
+export typealias BackendThreadIdArray = Array with BackendThreadId
+
+export enum BackendStopReason
+	entry
+	breakpoint
+	singleStep
+	interrupt
+	trap
+	fault
+end 'BackendStopReason'
+
+export union DebugStopEvent
+	stopped(thread BackendThreadId, reason BackendStopReason, faultCode BackendWord, address DebugAddress)
+	threadStarted(id BackendThreadId)
+	threadExited(id BackendThreadId)
+	exited(code BackendExitCode)
+	signalled(status BackendWord)
+	timedOut
+
+	export function endsTheProgram() returns bool
+		return match self 'which'
+			exited or
+				signalled gives true
+
+			stopped or
+				threadStarted or
+				threadExited or
+				timedOut gives false
+		end 'which'
+	end 'endsTheProgram'
+end 'DebugStopEvent'
+
+export union BackendMemoryRead
+	read(bytes ByteArray)
+	unreadable
+end 'BackendMemoryRead'
+
+export union BackendExitStatus
+	running
+	ended(code BackendExitCode)
+end 'BackendExitStatus'

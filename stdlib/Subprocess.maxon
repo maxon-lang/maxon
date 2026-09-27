@@ -100,6 +100,7 @@ enum SpawnFlag
 	hideWindow = 1
 	newProcessGroup = 2
 	detach = 4
+	traced = 8
 end 'SpawnFlag'
 
 // Result-struct status-kind discriminator. Matches the runtime's
@@ -565,7 +566,7 @@ end 'Subprocess'
 public typealias StdioKindValue = int(0 to 5)
 
 // Spawn-flags bitfield. Bits past the documented 3 are reserved.
-typealias SpawnFlagsValue = int(0 to 7)
+typealias SpawnFlagsValue = int(0 to 15)
 
 /// Carries the (kind, data, limit) triple passed to subprocessSpawn for one
 /// stdio stream. The limit field is meaningful only for `collect`; for other
@@ -947,15 +948,22 @@ public type StreamingSubprocess
 	/// `custom` — and `spawnEnvironmentFor` turns any of them into the (block, source) pair the spawn
 	/// contract takes, exactly as the attached spawn does.
 	public static function spawnWithEnvironment(executable Executable, arguments StringArray, workingDirectory FilePath, environment Environment) returns StreamingSubprocess throws SubprocessError
+		return try Self.spawnTraceable(executable, arguments: arguments, workingDirectory: workingDirectory, environment: environment, traced: false)
+	end 'spawnWithEnvironment'
+
+	/// Same as `spawnWithEnvironment`, with the child created under this process as its DEBUGGER when
+	/// `traced` is set.
+	public static function spawnTraceable(executable Executable, arguments StringArray, workingDirectory FilePath, environment Environment, traced bool) returns StreamingSubprocess throws SubprocessError
 		let exePath = try resolveExecutablePath(executable, workingDirectory: workingDirectory)
 		let argvBlob = buildArgvBlob(exePath, args: arguments)
 		let argc = arguments.count() + 1
 		let spawnEnv = try spawnEnvironmentFor(environment)
 
-		// 4th arg is the spawn-flags bitfield (hideWindow / newProcessGroup / detach). Streaming spawns
-		// never detach — the parent has to keep the pipes open — and don't take platform-options today, so
-		// the field is always 0. The environment block and its source flag follow it.
-		let rawHandle = __Builtins.subprocessSpawnStreaming(argvBlob.addressableBytes(), argc, workingDirectory.toString().cstr(), 0, spawnEnv.block.addressableBytes(), spawnEnv.source)
+		// 4th arg is the spawn-flags bitfield. Streaming spawns never detach — the parent has to keep the
+		// pipes open — and don't take platform-options today, so `traced` is the only bit they ever carry.
+		// The environment block and its source flag follow it.
+		let flags = SpawnFlag.traced.rawValue if traced else 0
+		let rawHandle = __Builtins.subprocessSpawnStreaming(argvBlob.addressableBytes(), argc, workingDirectory.toString().cstr(), flags, spawnEnv.block.addressableBytes(), spawnEnv.source)
 
 		if rawHandle == -1 'spawnFailed'
 			throw spawnFailure(exePath)
@@ -964,7 +972,7 @@ public type StreamingSubprocess
 		// rawHandle is the wide builtin return; -1 is excluded above, so the
 		// narrow StreamingHandle range is satisfied.
 		return StreamingSubprocess{handle: rawHandle as StreamingHandle, released: false}
-	end 'spawnWithEnvironment'
+	end 'spawnTraceable'
 
 	/// Write `line + "\n"` to the child's stdin. Throws on broken pipe.
 	/// Embeds the newline; pass payload WITHOUT a trailing newline.

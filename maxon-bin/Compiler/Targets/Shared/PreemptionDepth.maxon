@@ -13,13 +13,11 @@
 // has are each a build failure naming what reached it, so a change that grows the tree has to state
 // what it costs.
 //
-// There are three roots, each with its own room. A request honoured at a prologue rides the guard
+// There are two roots, each with its own room. A request honoured at a prologue rides the guard
 // margin. A thread stopped where it stands has had nothing projected on its behalf, so the
 // safe-point predicate demands `GtRuntime.gtAsyncPreemptMargin` outright and the trampoline's
-// register block plus its park's tree must fit inside it. A debug trap on a green thread runs
-// Windows exception dispatch, the trap thunk's frame and the deeper of the agent's claim and
-// release trees on the interrupted stack, inside the reserve below its guard word
-// (`GtRuntime.gtStackSystemBytes`). One walk serves all three; only the root and the room differ.
+// register block plus its park's tree must fit inside it. One walk serves both; only the root and
+// the room differ.
 
 // One step down from a frame in the tree: a named callee whose own tree is added up, `below` bytes beneath its
 // caller's frame; or a call whose whole depth on the thread's stack is known where it is emitted.
@@ -66,31 +64,6 @@ export function requireAsyncPreemptionFitsItsMargin(module TargetModule, funcNam
 		panic("requireAsyncPreemptionFitsItsMargin: stopping a thread where it stands takes {trampoline} bytes for `{String.from(AsyncPreemptName)}`'s register block and {tree} for `{String.from(AsyncPreemptParkName)}`'s call tree on {targetToString(target)}, {trampoline + tree} in all, but the safe-point predicate only refuses a stack pointer nearer its base than {margin} bytes — a thread stopped just above that floor would write past its stack. Shrink the tree, or raise GtRuntime.GtAsyncPreemptMarginBytes and measure the self-compile")
 	end 'overflowsTheMargin'
 end 'requireAsyncPreemptionFitsItsMargin'
-
-export function requireDebugTrapFitsItsReserve(module TargetModule, funcNames FunctionNameIndex, target Target)
-	let dispatch = gtWindowsExceptionDispatchMeasuredBytes()
-	let thunk = debugTrapPreSwitchStackBytes(target)
-	let claim = unguardedTreeBytes(module, funcNames: funcNames, name: DebugClaimStackName, root: DebugClaimStackName, target: target, framesLeft: MaxUnguardedTreeFrames)
-	let release = unguardedTreeBytes(module, funcNames: funcNames, name: DebugReleaseStackName, root: DebugReleaseStackName, target: target, framesLeft: MaxUnguardedTreeFrames)
-	let preSwitch = thunk + deeperOf(claim, other: release)
-	let reserve = gtStackSystemBytes(target)
-
-	if compilerLogEnabled(CompilerLogGroup.codegen, level: LogLevel.debug) 'debugging'
-		compilerLogger(CompilerLogGroup.codegen).debug("debug trap depth ({targetToString(target)}): OS dispatch {dispatch} + thunk {thunk} + the deeper of claim {claim} and release {release} = {dispatch + preSwitch} of a {reserve}-byte reserve")
-	end 'debugging'
-
-	if (dispatch + preSwitch) as ParsedInt > reserve 'overrunsTheReserve'
-		panic("requireDebugTrapFitsItsReserve: a debug trap on a green thread costs {dispatch} bytes of Windows exception dispatch, {thunk} for `{String.from(DebugTrapThunkName)}`'s own frame and {deeperOf(claim, other: release)} for the deeper of `{String.from(DebugClaimStackName)}`'s call tree ({claim}) and `{String.from(DebugReleaseStackName)}`'s ({release}), both of which run on the interrupted stack, {dispatch + preSwitch} in all, but a green thread reserves only {reserve} bytes below its guard word for the OS. Shrink the thunk's pre-switch path, or raise GtRuntime.GtWindowsExceptionDispatchBytes and measure the self-compile")
-	end 'overrunsTheReserve'
-end 'requireDebugTrapFitsItsReserve'
-
-function debugTrapPreSwitchStackBytes(target Target) returns StackSize
-	return match target.cpu 'cpu'
-		x64 gives x64DebugTrapPreSwitchStackBytes()
-		arm64 panic("debugTrapPreSwitchStackBytes: `TargetFacilities.targetProvidesFacility` denies `debugAgent` on every arm64 lane, so no trap thunk is laid out there")
-		wasm32 panic("debugTrapPreSwitchStackBytes: wasm32-wasi lays out no native frames")
-	end 'cpu'
-end 'debugTrapPreSwitchStackBytes'
 
 function asyncPreemptTrampolineStackBytes(target Target) returns StackSize
 	return match target.cpu 'cpu'

@@ -87,6 +87,6 @@ most two pieces across the wrap, and publishes the read cursor. An uncommitted e
 exited is stepped over and counted as abandoned. The summary reports events, drops, abandoned entries and
 peak ring use.
 
-The interactive debugger's control segment (`MAXON_DEBUG`, [Debugger](debugger.md)) is separate. Its only
-link to this ring is the write cursor's offset, which the debug agent reads at a stop so `maxon debug --trace`
-can show the events leading up to it.
+The interactive debugger ([Debugger](debugger.md)) has one link to this ring: the write cursor's offset,
+which it reads out of the stopped program at every stop so `maxon debug --trace` can show the events
+leading up to it.

@@ -134,13 +134,7 @@ export let VirtualAllocCommitAndReserve = 0x3000  // MEM_COMMIT (0x1000) | MEM_R
 // publishes a section with. ONE Win32 constant, so one name: it is not `VirtualAlloc`'s.
 export let PageReadWriteProtection = 0x4
 
-let PageExecuteReadWriteProtection = 0x40
-
-let DebugAgentHandlerFirst = 1
-
 let CurrentProcessPseudoHandle = -1
-
-let DebugHostVoidAnswer = 0
 
 // The `VirtualFree(addr, 0, MEM_RELEASE)` shape `lowerOsFreePages` and the hand-assembled `__gt_morestack`
 // chunk both emit. `MEM_RELEASE` releases the WHOLE reservation from its base — which is why
@@ -216,13 +210,7 @@ let NullPointer = 0x0
 let ProcessSynchronizeAccess = 0x00100000
 let Win32NullHandle = 0
 let DoNotInheritHandles = 0
-let PollingWaitTimeoutMs = 0
 let WaitIsNotAlertable = 0
-
-let ThreadSuspendResumeAccess = 0x0002
-let ThreadGetContextAccess = 0x0008
-let ThreadSetContextAccess = 0x0010
-let DebugThreadAccess = ThreadSuspendResumeAccess or ThreadGetContextAccess or ThreadSetContextAccess
 
 let InheritHandlesTrue = 1  // CreateProcessA bInheritHandles=TRUE (the child inherits the pipe write end)
 
@@ -352,7 +340,7 @@ export let CreateProcessStackArgWords = 6 as MachineWord  // args 5-10, all real
 let PeekPipeAvailSlot = 0  // arg5 lpTotalBytesAvail
 let PeekPipeLeftSlot = 1  // arg6 lpBytesLeftThisMessage
 
-// `osHostSample`'s two outgoing stack SLOTS — the 5th and 6th of the six argument words every service is
+// `osHostProcess`'s two outgoing stack SLOTS — the 5th and 6th of the six argument words every service is
 // marshalled with. Named for `PeekPipe*Slot`'s reason: a bare 0/1 at an `[rsp+disp]` store says nothing
 // about which argument is being filled. Which Win32 parameter each carries depends on the SERVICE, which is
 // why they are named by POSITION rather than by a parameter name.
@@ -396,12 +384,12 @@ export let MapViewOfFileStackArgWords = 1 as MachineWord  // arg 5: dwNumberOfBy
 // for the band's own reason — the SAME constant sizes the frame reservation and the syscall shim's copy.
 export let CreateFileMappingStackArgWords = 2 as MachineWord  // args 5-6: dwMaximumSizeLow, lpName
 
-// The process-sampling family's two counts. ⭐ **`osHostSample` IS ONE OP OVER THIRTEEN SERVICES, so its
-// frame reservation is its WIDEST member's** — `NtGetNextThread` and `SetWaitableTimer` both take six
-// arguments, four in registers and two on the stack. `ReadProcessMemory` states its own because
+// The host-process family's two counts. ⭐ **`osHostProcess` IS ONE OP OVER THE WHOLE `HostProcessCall`
+// ROSTER, so its frame reservation is its WIDEST member's** — `NtGetNextThread` and `SetWaitableTimer` both
+// take six arguments, four in registers and two on the stack. `ReadProcessMemory` states its own because
 // `gtShimStackArgWordsOf` keys on a SLOT and copies exactly what that call reads.
 // EXPORTED because the GT syscall shim reads them, exactly as its five siblings above are.
-export let HostSampleStackArgWords = 2 as MachineWord  // args 5-6 of the six-argument services
+export let HostProcessStackArgWords = 2 as MachineWord  // args 5-6 of the six-argument services
 export let ReadProcessMemoryStackArgWords = 1 as MachineWord  // arg 5: lpNumberOfBytesRead
 
 // The overlapped socket pair's three stack arguments, stated in this band for the poller's reason. EXPORTED
@@ -499,14 +487,14 @@ let WaitableTimerOneShot = 0
 let WaitableTimerNoResume = 0
 
 // ⭐⭐⭐ **THE MAP FROM A SAMPLING SERVICE TO THE IMPORT THAT SERVES IT — the ONE place Win32 spellings meet
-// `ProfileHostCall`, and it is in the x64 isel because that is where every other import name in this
+// `HostProcessCall`, and it is in the x64 isel because that is where every other import name in this
 // compiler lives.** TOTAL over the enum with no `default`, so a service added to the roster fails to compile
 // here rather than reaching the backend as a call to nothing.
 //
 // ⚠ **THE ARGUMENT LISTS ARE NOT THE ROSTER'S BUSINESS AND ARE NOT WRITTEN HERE.** Which of the six words
 // each import reads, and in what order, is the Std-tier CALLER's knowledge — it is what decides the operands
 // it hands the op. This function answers only "which entry point".
-function profileHostCallSlot(service ProfileHostCall) returns IatSlot
+function hostProcessCallSlot(service HostProcessCall) returns IatSlot
 	return match service 'slot'
 		openProcess gives IatSlot.OpenProcess
 		nextThread gives IatSlot.NtGetNextThread
@@ -521,8 +509,18 @@ function profileHostCallSlot(service ProfileHostCall) returns IatSlot
 		moduleSnapshot gives IatSlot.CreateToolhelp32Snapshot
 		moduleFirst gives IatSlot.Module32FirstW
 		moduleNext gives IatSlot.Module32NextW
+		writeProcessMemory gives IatSlot.WriteProcessMemory
+		writeThreadContext gives IatSlot.SetThreadContext
+		attachToProcess gives IatSlot.DebugActiveProcess
+		detachFromProcess gives IatSlot.DebugActiveProcessStop
+		waitForDebugEvent gives IatSlot.WaitForDebugEvent
+		continueDebugEvent gives IatSlot.ContinueDebugEvent
+		breakProcess gives IatSlot.DebugBreakProcess
+		protectRegion gives IatSlot.VirtualProtectEx
+		flushCode gives IatSlot.FlushInstructionCache
+		closeHandle gives IatSlot.CloseHandle
 	end 'slot'
-end 'profileHostCallSlot'
+end 'hostProcessCallSlot'
 
 // `osPipeCreate` reserves the MAX outgoing stack-arg count across its calls (CreateNamedPipeW's 4 dominates
 // CreateFileW's 3), so its single GT-frame region holds either call's stack args at `[rsp + shadow + k*8]`.
@@ -1128,7 +1126,6 @@ export type StdToX64Lowering
 				osSocketClose or
 				osPathQuery or
 				osSocketServe or
-				osDebugHost or
 				osCpuCount or
 				osThreadCpuTicks or
 				osDecommitPages or
@@ -1258,10 +1255,10 @@ export type StdToX64Lowering
 			// nothing puts a spill slot at their displacement and the store lands on a spilled value.
 			osCreateNamedSegment gives win64OutgoingArgBytes(CreateFileMappingStackArgWords)
 
-			// One reservation for every `osHostSample` service, sized by the widest: a six-argument member's
+			// One reservation for every `osHostProcess` service, sized by the widest: a six-argument member's
 			// last two words are real stack arguments, and a narrower one leaves them unread. The frame is
 			// folded to a per-function max anyway, so sizing per service would buy nothing.
-			osHostSample gives win64OutgoingArgBytes(HostSampleStackArgWords)
+			osHostProcess gives win64OutgoingArgBytes(HostProcessStackArgWords)
 			osNetpoll gives win64OutgoingArgBytes(NetpollOutgoingSlots)
 			osSocketOverlapped gives win64OutgoingArgBytes(SocketOverlappedOutgoingSlots)
 		end 'o'
@@ -1465,7 +1462,7 @@ export type StdToX64Lowering
 
 			// One instruction, no operand, no register: the counter's address is a link-time constant.
 			covPoint(pointId) then self.targetModule.appendOp(dstBlock, op: TargetOp.covInc(pointId))
-			osHostSample(resultId, service, a0Id, a1Id, a2Id, a3Id, a4Id, a5Id) then self.lowerOsHostSample(resultId, service: service, a0Id: a0Id, a1Id: a1Id, a2Id: a2Id, a3Id: a3Id, a4Id: a4Id, a5Id: a5Id, dstBlock: dstBlock)
+			osHostProcess(resultId, service, a0Id, a1Id, a2Id, a3Id, a4Id, a5Id) then self.lowerOsHostProcess(resultId, service: service, a0Id: a0Id, a1Id: a1Id, a2Id: a2Id, a3Id: a3Id, a4Id: a4Id, a5Id: a5Id, dstBlock: dstBlock)
 			osNetpoll(resultId, verb, a0Id, a1Id, a2Id, a3Id, a4Id) then self.lowerOsNetpoll(resultId, verb: verb, operands: fiveArgs(a0Id, second: a1Id, third: a2Id, fourth: a3Id, fifth: a4Id), dstBlock: dstBlock)
 			osSocketOverlapped(resultId, verb, a0Id, a1Id, a2Id, a3Id) then self.lowerOsSocketOverlapped(resultId, verb: verb, operands: fourArgs(a0Id, second: a1Id, third: a2Id, fourth: a3Id), dstBlock: dstBlock)
 			osProcessTerminate(resultId, handleId, exitCodeId) then self.lowerOsProcessTerminate(resultId, handleId: handleId, exitCodeId: exitCodeId, dstBlock: dstBlock)
@@ -1480,7 +1477,6 @@ export type StdToX64Lowering
 			osSocketClose(sockId) then self.lowerOsSocketClose(sockId, dstBlock: dstBlock)
 			osSocketServe(resultId, verb, a0Id, a1Id, a2Id) then self.lowerOsSocketServe(resultId, verb: verb, operands: threeArgs(a0Id, second: a1Id, third: a2Id), dstBlock: dstBlock)
 			osPathQuery(resultId, verb, a0Id, a1Id, a2Id) then self.lowerOsPathQuery(resultId, verb: verb, a0Id: a0Id, a1Id: a1Id, a2Id: a2Id, dstBlock: dstBlock)
-			osDebugHost(resultId, verb, a0Id, a1Id, a2Id, a3Id) then self.lowerOsDebugHost(resultId, verb: verb, a0Id: a0Id, a1Id: a1Id, a2Id: a2Id, a3Id: a3Id, dstBlock: dstBlock)
 
 			// The MACHINE query behind `__Builtins.cpuCount()`; the clamp is builder-built Std, not here.
 			osCpuCount(resultId) then self.lowerOsCpuCount(resultId, dstBlock: dstBlock)
@@ -1657,7 +1653,6 @@ export type StdToX64Lowering
 				osSocketRecv or
 				osSocketClose or
 				osSocketServe then panic("StdToX64Lowering: a socket host primitive appeared as a block terminator (lowering bug — every socket primitive is a body op, never a terminator)")
-			osDebugHost then panic("StdToX64Lowering: `osDebugHost` appeared as a block terminator (lowering bug — the debug agent's host primitive is a body op, never a terminator)")
 			osFreePages then panic("StdToX64Lowering: an `osFreePages` op appeared as a block terminator (lowering bug — a page release is a body op)")
 			witnessCall then panic("StdToX64Lowering: a `witnessCall` op appeared as a block terminator (lowering bug — a witness call is a value-producing body op)")
 			witnessTryCall then panic("StdToX64Lowering: a `witnessTryCall` op appeared as a block terminator (lowering bug — a throwing witness call is a value-producing body op)")
@@ -1733,7 +1728,7 @@ export type StdToX64Lowering
 				osUnmapNamedSegment or
 				osUnpublishNamedSegment then panic("StdToX64Lowering: a named-section create or unmap appeared as a block terminator (lowering bug — one produces a value and the other is a void side effect, and neither terminates)")
 			covPoint then panic("StdToX64Lowering: a `covPoint` appeared as a block terminator (lowering bug — a coverage counter is emitted at a block HEAD, ahead of the code it counts)")
-			osHostSample then panic("StdToX64Lowering: an `osHostSample` op appeared as a block terminator (lowering bug — a host sample call produces a value and does not terminate)")
+			osHostProcess then panic("StdToX64Lowering: an `osHostProcess` op appeared as a block terminator (lowering bug — a host process call produces a value and does not terminate)")
 			osNetpoll then panic("StdToX64Lowering: an `osNetpoll` op appeared as a block terminator (lowering bug — a poller call produces a value and does not terminate)")
 			osSocketOverlapped then panic("StdToX64Lowering: an `osSocketOverlapped` op appeared as a block terminator (lowering bug — a socket transfer produces a value and does not terminate)")
 			osPathQuery then panic("StdToX64Lowering: an `osPathQuery` op appeared as a block terminator (lowering bug — a path query produces a value and does not terminate)")
@@ -2710,84 +2705,12 @@ export type StdToX64Lowering
 		self.emitCaptureRax(dstBlock, into: into)
 	end 'emitMmap'
 
-	function lowerOsDebugHost(resultId ValueId, verb DebugHostVerb, a0Id ValueId, a1Id ValueId, a2Id ValueId, a3Id ValueId, dstBlock IrBlock)
-		if self.target.os != Os.windows 'notTheAgentsLane'
-			panic("lowerOsDebugHost: `osDebugHost` reached the {targetToString(self.target)} isel — `TargetFacilities.targetProvidesFacility` denies `debugAgent` off x64-windows, so the entry stub mints no call into `runtime/DebugAgent.maxon` and its bodies are swept as unreached tier")
-		end 'notTheAgentsLane'
-
-		match verb 'verb'
-			installTrapHandler then self.lowerDebugHostInstallTrapHandler(resultId, dstBlock: dstBlock)
-			protectPages then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.import(IatSlot.VirtualProtect), args: fourArgs(a0Id, second: a1Id, third: a2Id, fourth: a3Id), dstBlock: dstBlock)
-			flushCode then self.lowerDebugHostFlushCode(resultId, a0Id: a0Id, a1Id: a1Id, dstBlock: dstBlock)
-			parkWait then self.lowerDebugHostParkWait(resultId, a0Id: a0Id, dstBlock: dstBlock)
-			queryRegion then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.chunk(DebugReadableName), args: twoArgs(a0Id, second: a1Id), dstBlock: dstBlock)
-			processId then self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.GetCurrentProcessId, into: TargetVReg.virtual(resultId))
-			allocExecPages then self.emitVirtualAlloc(TargetVReg.virtual(resultId), base: PageBase.at(a1Id), sizeId: a0Id, allocationType: VirtualAllocCommitAndReserve, protection: PageExecuteReadWriteProtection, dstBlock: dstBlock)
-			openDriverProcess then self.emitWin64OpenProcess(ProcessSynchronizeAccess, pidId: a0Id, into: TargetVReg.virtual(resultId), dstBlock: dstBlock)
-			driverExited then self.lowerDebugHostDriverExited(resultId, a0Id: a0Id, dstBlock: dstBlock)
-			currentThreadId then self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.GetCurrentThreadId, into: TargetVReg.virtual(resultId))
-			openThread then self.lowerDebugHostOpenThread(resultId, a0Id: a0Id, dstBlock: dstBlock)
-			suspendThread then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.import(IatSlot.SuspendThread), args: argsOf(a0Id), dstBlock: dstBlock)
-			resumeThread then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.import(IatSlot.ResumeThread), args: argsOf(a0Id), dstBlock: dstBlock)
-			readThreadContext then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.chunk(DebugReadThreadContextName), args: twoArgs(a0Id, second: a1Id), dstBlock: dstBlock)
-			writeThreadContext then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.chunk(DebugWriteThreadContextName), args: twoArgs(a0Id, second: a1Id), dstBlock: dstBlock)
-			preemptSafe then self.lowerDebugHostPreemptSafe(resultId, a0Id: a0Id, a1Id: a1Id, a2Id: a2Id, dstBlock: dstBlock)
-		end 'verb'
-	end 'lowerOsDebugHost'
-
-	function lowerDebugHostInstallTrapHandler(resultId ValueId, dstBlock IrBlock)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: DebugAgentHandlerFirst))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegFunc(x64PhysReg(X64Register.rdx), funcName: DebugTrapThunkName))
-		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.AddVectoredExceptionHandler, into: TargetVReg.virtual(resultId))
-	end 'lowerDebugHostInstallTrapHandler'
-
-	function lowerDebugHostFlushCode(resultId ValueId, a0Id ValueId, a1Id ValueId, dstBlock IrBlock)
-		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rcx), value: CurrentProcessPseudoHandle))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(a0Id)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(a1Id)))
-		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.FlushInstructionCache, into: TargetVReg.virtual(resultId))
-	end 'lowerDebugHostFlushCode'
-
 	function emitWin64OpenProcess(access MachineWord, pidId ValueId, into TargetVReg, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: access))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: DoNotInheritHandles))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(pidId)))
 		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.OpenProcess, into: into)
 	end 'emitWin64OpenProcess'
-
-	function lowerDebugHostDriverExited(resultId ValueId, a0Id ValueId, dstBlock IrBlock)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(a0Id)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: PollingWaitTimeoutMs))
-		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.WaitForSingleObject, into: TargetVReg.virtual(resultId))
-	end 'lowerDebugHostDriverExited'
-
-	function lowerDebugHostParkWait(resultId ValueId, a0Id ValueId, dstBlock IrBlock)
-		self.emitHostCall(dstBlock, callee: HostCallee.import(IatSlot.Sleep), args: argsOf(a0Id))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(TargetVReg.virtual(resultId), value: DebugHostVoidAnswer))
-	end 'lowerDebugHostParkWait'
-
-	function lowerDebugHostOpenThread(resultId ValueId, a0Id ValueId, dstBlock IrBlock)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: DebugThreadAccess))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: DoNotInheritHandles))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(a0Id)))
-		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.OpenThread, into: TargetVReg.virtual(resultId))
-	end 'lowerDebugHostOpenThread'
-
-	// A program with no scheduler has no machine, so no machine is at a safe point and the body that would
-	// judge one is not laid out. The agent never asks: it reads `__sched_tls_teb_offset` first and takes its
-	// own scheduler-less road.
-	function lowerDebugHostPreemptSafe(resultId ValueId, a0Id ValueId, a1Id ValueId, a2Id ValueId, dstBlock IrBlock)
-		if not self.usesGt 'noMachineExists'
-			self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(TargetVReg.virtual(resultId), value: DebugHostVoidAnswer))
-			return
-		end 'noMachineExists'
-
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(argRegisterAt(0)), srcReg: TargetVReg.virtual(a0Id)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(argRegisterAt(1)), srcReg: TargetVReg.virtual(a1Id)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(argRegisterAt(2)), srcReg: TargetVReg.virtual(a2Id)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.callDirect(PreemptSafeName))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(X64Register.r8)))
-	end 'lowerDebugHostPreemptSafe'
 
 	// Lower `osWriteStdout`/`osWriteStderr(result, buf, len)` to the one write primitive this OS has.
 	//
@@ -4115,32 +4038,33 @@ export type StdToX64Lowering
 		end 'route'
 	end 'lowerOsThreadCpuTicks'
 
-	// ⭐⭐⭐ **`osHostSample(result, call, a0…a5)` ⇒ ONE `iatCall` THROUGH THE SLOT `call` NAMES.** The map from
-	// a SERVICE to an IMPORT is `profileHostCallSlot` below and lives HERE, in the one file that knows the
+	// ⭐⭐⭐ **`osHostProcess(result, call, a0…a5)` ⇒ ONE `iatCall` THROUGH THE SLOT `call` NAMES.** The map from
+	// a SERVICE to an IMPORT is `hostProcessCallSlot` below and lives HERE, in the one file that knows the
 	// Windows import table — the Std tier asks to suspend a thread and never names `kernel32!SuspendThread`,
 	// which is `osAllocPages`' discipline exactly.
 	//
 	// ⚠ **ALL SIX WORDS ARE MARSHALLED FOR EVERY SERVICE.** A narrower call leaves the surplus registers and
 	// the two stack slots unread, so the cost is a handful of dead moves and what it buys is one lowering
-	// instead of thirteen.
+	// instead of one per service.
 	//
-	// ⛔ **THE SYSCALL ROUTE REFUSES RATHER THAN STUBBING.** `HostFacility.processSampling` is `false` for
-	// x64-linux, so a program reaching here got past that gate and this panic is the backstop for a compiler
-	// bug — never the user-facing rejection. A stub would hand back a profile of nothing.
-	function lowerOsHostSample(resultId ValueId, service ProfileHostCall, a0Id ValueId, a1Id ValueId, a2Id ValueId, a3Id ValueId, a4Id ValueId, a5Id ValueId, dstBlock IrBlock)
+	// ⛔ **THE SYSCALL ROUTE REFUSES RATHER THAN STUBBING.** `HostFacility.processSampling` and
+	// `HostFacility.processDebug` are both `false` for x64-linux, so a program reaching here got past one of
+	// those gates and this panic is the backstop for a compiler bug — never the user-facing rejection. A stub
+	// would hand back a profile of nothing, or a debugger that reports every stop as a success.
+	function lowerOsHostProcess(resultId ValueId, service HostProcessCall, a0Id ValueId, a1Id ValueId, a2Id ValueId, a3Id ValueId, a4Id ValueId, a5Id ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.lowerOsHostSampleWin64(resultId, service: service, a0Id: a0Id, a1Id: a1Id, a2Id: a2Id, a3Id: a3Id, a4Id: a4Id, a5Id: a5Id, dstBlock: dstBlock)
-			syscall then panic("lowerOsHostSample: `osHostSample` has no syscall lowering — process sampling is `HostFacility.processSampling`, which only x64-windows provides, so a program reaching this arm got past that gate")
+			importCall then self.lowerOsHostProcessWin64(resultId, service: service, a0Id: a0Id, a1Id: a1Id, a2Id: a2Id, a3Id: a3Id, a4Id: a4Id, a5Id: a5Id, dstBlock: dstBlock)
+			syscall then panic("lowerOsHostProcess: `osHostProcess` has no syscall lowering — its services are gated by `HostFacility.processSampling` and `HostFacility.processDebug`, which only x64-windows provides, so a program reaching this arm got past one of those gates")
 		end 'route'
-	end 'lowerOsHostSample'
+	end 'lowerOsHostProcess'
 
 	// The stack words go down first, while every argument register is still free — `lowerOsPipeCreateWin64`'s
 	// order and for its reason.
-	function lowerOsHostSampleWin64(resultId ValueId, service ProfileHostCall, a0Id ValueId, a1Id ValueId, a2Id ValueId, a3Id ValueId, a4Id ValueId, a5Id ValueId, dstBlock IrBlock)
+	function lowerOsHostProcessWin64(resultId ValueId, service HostProcessCall, a0Id ValueId, a1Id ValueId, a2Id ValueId, a3Id ValueId, a4Id ValueId, a5Id ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(HostSampleArg5Slot), src: TargetVReg.virtual(a4Id), width: X64AccessWidth.word64))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(HostSampleArg6Slot), src: TargetVReg.virtual(a5Id), width: X64AccessWidth.word64))
-		self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.import(profileHostCallSlot(service)), args: fourArgs(a0Id, second: a1Id, third: a2Id, fourth: a3Id), dstBlock: dstBlock)
-	end 'lowerOsHostSampleWin64'
+		self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.import(hostProcessCallSlot(service)), args: fourArgs(a0Id, second: a1Id, third: a2Id, fourth: a3Id), dstBlock: dstBlock)
+	end 'lowerOsHostProcessWin64'
 
 	// ⭐⭐ **`osNetpoll(result, verb, a0…a4)`** — the Windows route marshals each verb's import inline; the syscall
 	// route calls the lane's `mrt_host_netpoll_*` chunk with the operands that verb reads.
@@ -5384,12 +5308,11 @@ export type StdToX64Lowering
 				osUnmapNamedSegment or
 				osUnpublishNamedSegment or
 				covPoint or
-				osHostSample or
+				osHostProcess or
 				osNetpoll or
 				osPathQuery or
 				osSocketOverlapped or
-				osSocketServe or
-				osDebugHost gives false
+				osSocketServe gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -5613,7 +5536,6 @@ export type StdToX64Lowering
 				osSocketRecv or
 				osSocketClose or
 				osSocketServe panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a socket host primitive, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
-			osDebugHost panic("condBranchFieldsOf: the terminator of block ref {blockRef} is the debug agent's host primitive, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osCpuCount panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osCpuCount`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osThreadCpuTicks panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osThreadCpuTicks`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osDecommitPages panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osDecommitPages`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
@@ -5640,7 +5562,7 @@ export type StdToX64Lowering
 				osUnmapNamedSegment or
 				osUnpublishNamedSegment panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a named-section create or unmap, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			covPoint panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a coverage counter, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
-			osHostSample panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osHostSample`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			osHostProcess panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osHostProcess`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osNetpoll panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osNetpoll`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osSocketOverlapped panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osSocketOverlapped`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osPathQuery panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osPathQuery`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")

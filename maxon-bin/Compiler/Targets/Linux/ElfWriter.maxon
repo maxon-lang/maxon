@@ -245,7 +245,7 @@ function patchElfSectionRipRel(code ByteArray, reloc RdataRelocation, sectionVmA
 	patchX64Rel32(code, codeOffset: reloc.codeOffset, rel: targetVmAddr - ripAtReloc, what: PatchSite.x64RdataDisp32, targetAddr: targetVmAddr)
 end 'patchElfSectionRipRel'
 
-export function writeElf(outputPath FilePath, codeResult CodeResult, target Target)
+export function writeElf(outputPath FilePath, codeResult CodeResult, target Target) returns ImagePlacement
 	// The ELF writer emits Linux only, on the two CPUs the compiler has native backends for (arm64 and x64). The
 	// OS is what this file's whole shape depends on (raw syscalls, static ET_EXEC); the CPU only picks the
 	// `e_machine` word and the relocation patcher. A wasm32 or non-Linux target is a `writeExecutable`
@@ -380,10 +380,12 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 	// fails at SPAWN with a permission error — long after the build reported success.
 	try File.writeBinary(outputPath, content: elf, mode: FilePermission.executable) otherwise 'writeErr'
 		compilerLogger(CompilerLogGroup.binary).error("Failed to write ELF file: {outputPath}")
-		return
+		return ImagePlacement.unplaced
 	end 'writeErr'
 
 	compilerLogger(CompilerLogGroup.binary).info("ELF write complete: {elf.count()} bytes")
+
+	return ImagePlacement.placed(ElfLoadAddr as MachineWord, textRva: (textVAddr - ElfLoadAddr) as ImageRva, dataRva: (dataVAddr - ElfLoadAddr) as ImageRva)
 end 'writeElf'
 
 // Append `.symdata`, `.symtab` / `.strtab`, `.shstrtab` and the section header table, then backpatch

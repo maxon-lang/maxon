@@ -81,14 +81,14 @@ typealias MxdbgFieldRecordArray = Array with MxdbgFieldRecord
 type MxdbgLocalRecord
 	export var name as MxdbgPoolSlice
 	export var locKind as MxdbgIndex
-	export var locValue as MxdbgLocValue
+	export var locValue as MxdbgRecordFigure
 	export var typeId as MxdbgIndex
 	export var scopeStart as MxdbgCodeOffset
 	export var scopeEnd as MxdbgCodeOffset
 	export var flags as MxdbgIndex
 	export var site as MxdbgIndex
 
-	static function create(name MxdbgPoolSlice, locKind MxdbgIndex, locValue MxdbgLocValue, typeId MxdbgIndex, scopeStart MxdbgCodeOffset, scopeEnd MxdbgCodeOffset, flags MxdbgIndex, site MxdbgIndex) returns MxdbgLocalRecord
+	static function create(name MxdbgPoolSlice, locKind MxdbgIndex, locValue MxdbgRecordFigure, typeId MxdbgIndex, scopeStart MxdbgCodeOffset, scopeEnd MxdbgCodeOffset, flags MxdbgIndex, site MxdbgIndex) returns MxdbgLocalRecord
 		return Self{name: name, locKind: locKind, locValue: locValue, typeId: typeId, scopeStart: scopeStart, scopeEnd: scopeEnd, flags: flags, site: site}
 	end 'create'
 end 'MxdbgLocalRecord'
@@ -160,7 +160,30 @@ end 'MxdbgInlineRangeRecord'
 
 typealias MxdbgInlineRangeRecordArray = Array with MxdbgInlineRangeRecord
 
-typealias MxdbgConstWordArray = Array with MxdbgLocValue
+typealias MxdbgConstWordArray = Array with MxdbgRecordFigure
+
+type MxdbgGlobalRecord
+	export var name as MxdbgPoolSlice
+	export var imageOffset as MxdbgIndex
+	export var slotBytes as MxdbgIndex
+
+	static function create(name MxdbgPoolSlice, imageOffset MxdbgIndex, slotBytes MxdbgIndex) returns MxdbgGlobalRecord
+		return Self{name: name, imageOffset: imageOffset, slotBytes: slotBytes}
+	end 'create'
+end 'MxdbgGlobalRecord'
+
+typealias MxdbgGlobalRecordArray = Array with MxdbgGlobalRecord
+
+type MxdbgLayoutRecord
+	export var name as MxdbgPoolSlice
+	export var figure as MxdbgRecordFigure
+
+	static function create(name MxdbgPoolSlice, figure MxdbgRecordFigure) returns MxdbgLayoutRecord
+		return Self{name: name, figure: figure}
+	end 'create'
+end 'MxdbgLayoutRecord'
+
+typealias MxdbgLayoutRecordArray = Array with MxdbgLayoutRecord
 
 export type MxdbgWriter
 	var stringPool as ByteArray = ByteArray.create()
@@ -175,6 +198,9 @@ export type MxdbgWriter
 	var inlineSites as MxdbgInlineSiteRecordArray = MxdbgInlineSiteRecordArray.create()
 	var inlineRanges as MxdbgInlineRangeRecordArray = MxdbgInlineRangeRecordArray.create()
 	var constWords as MxdbgConstWordArray = MxdbgConstWordArray.create()
+	var globals as MxdbgGlobalRecordArray = MxdbgGlobalRecordArray.create()
+	var layoutFigures as MxdbgLayoutRecordArray = MxdbgLayoutRecordArray.create()
+	var imageBase as MachineWord = 0
 
 	export static function create() returns MxdbgWriter
 		return Self{}
@@ -216,7 +242,7 @@ export type MxdbgWriter
 
 	// One local of the function added LAST. There is no function id, because a record can only ever belong
 	// to the function currently being described — so a window cannot be opened at the wrong place.
-	export function addLocal(name String, locKind MxdbgIndex, locValue MxdbgLocValue, typeId MxdbgIndex, scopeStart MxdbgCodeOffset, scopeEnd MxdbgCodeOffset, flags MxdbgIndex, site MxdbgIndex)
+	export function addLocal(name String, locKind MxdbgIndex, locValue MxdbgRecordFigure, typeId MxdbgIndex, scopeStart MxdbgCodeOffset, scopeEnd MxdbgCodeOffset, flags MxdbgIndex, site MxdbgIndex)
 		if self.funcs.count() == 0 'noFunctionYet'
 			panic("MxdbgWriter.addLocal: a local record was added before any function — a local grows the window of the function it belongs to")
 		end 'noFunctionYet'
@@ -259,7 +285,19 @@ export type MxdbgWriter
 		self.inlineSites.push(MxdbgInlineSiteRecord.create(self.intern(name), parent: parent, callFileId: callFileId, callLine: callLine, callColumn: callColumn, origin: origin))
 	end 'addInlineSite'
 
-	export function addConstantWord(value MxdbgLocValue) returns MxdbgIndex
+	export function addGlobal(name String, imageOffset MxdbgIndex, slotBytes MxdbgIndex)
+		self.globals.push(MxdbgGlobalRecord.create(self.intern(name), imageOffset: imageOffset, slotBytes: slotBytes))
+	end 'addGlobal'
+
+	export function placeImageAt(base MachineWord)
+		self.imageBase = base
+	end 'placeImageAt'
+
+	export function addLayoutFigure(name String, figure MxdbgRecordFigure)
+		self.layoutFigures.push(MxdbgLayoutRecord.create(self.intern(name), figure: figure))
+	end 'addLayoutFigure'
+
+	export function addConstantWord(value MxdbgRecordFigure) returns MxdbgIndex
 		self.constWords.push(value)
 
 		return (self.constWords.count() - 1) as MxdbgIndex
@@ -293,7 +331,9 @@ export type MxdbgWriter
 		let inlineSiteTableOff = covTableOff + (self.covPoints.count() * MxdbgCovEntrySize) as ByteOffset
 		let inlineRangeTableOff = inlineSiteTableOff + (self.inlineSites.count() * MxdbgInlineSiteEntrySize) as ByteOffset
 		let constTableOff = inlineRangeTableOff + (self.inlineRanges.count() * MxdbgInlineRangeEntrySize) as ByteOffset
-		let stringPoolOff = constTableOff + (self.constWords.count() * MxdbgConstEntrySize) as ByteOffset
+		let globalTableOff = constTableOff + (self.constWords.count() * MxdbgConstEntrySize) as ByteOffset
+		let layoutTableOff = globalTableOff + (self.globals.count() * MxdbgGlobalEntrySize) as ByteOffset
+		let stringPoolOff = layoutTableOff + (self.layoutFigures.count() * MxdbgLayoutEntrySize) as ByteOffset
 
 		var buf = ByteArray.create()
 		writeMxdbgMagic(buf)
@@ -327,6 +367,11 @@ export type MxdbgWriter
 		patchDword(buf, offset: MxdbgOffInlineRangeCount, value: self.inlineRanges.count() as MachineWord)
 		patchDword(buf, offset: MxdbgOffConstTableOff, value: constTableOff as MachineWord)
 		patchDword(buf, offset: MxdbgOffConstCount, value: self.constWords.count() as MachineWord)
+		patchDword(buf, offset: MxdbgOffGlobalTableOff, value: globalTableOff as MachineWord)
+		patchDword(buf, offset: MxdbgOffGlobalCount, value: self.globals.count() as MachineWord)
+		patchDword(buf, offset: MxdbgOffLayoutTableOff, value: layoutTableOff as MachineWord)
+		patchDword(buf, offset: MxdbgOffLayoutCount, value: self.layoutFigures.count() as MachineWord)
+		patchQword(buf, offset: MxdbgOffImageBase, value: self.imageBase)
 
 		for file in self.files 'eachFile'
 			let rec = appendedRecord(buf, stride: MxdbgFileEntrySize)
@@ -389,7 +434,7 @@ export type MxdbgWriter
 			patchDword(buf, offset: rec + MxdbgLocalNameOff, value: local.name.offset as MachineWord)
 			patchDword(buf, offset: rec + MxdbgLocalNameLen, value: local.name.length as MachineWord)
 			patchDword(buf, offset: rec + MxdbgLocalLocKind, value: local.locKind as MachineWord)
-			patchDword(buf, offset: rec + MxdbgLocalLocValue, value: mxdbgLocValueWord(local.locValue) as MachineWord)
+			patchDword(buf, offset: rec + MxdbgLocalLocValue, value: mxdbgFigureWord(local.locValue) as MachineWord)
 			patchDword(buf, offset: rec + MxdbgLocalTypeId, value: local.typeId as MachineWord)
 			patchDword(buf, offset: rec + MxdbgLocalScopeStart, value: local.scopeStart as MachineWord)
 			patchDword(buf, offset: rec + MxdbgLocalScopeEnd, value: local.scopeEnd as MachineWord)
@@ -430,8 +475,23 @@ export type MxdbgWriter
 
 		for word in self.constWords 'eachConstantWord'
 			let rec = appendedRecord(buf, stride: MxdbgConstEntrySize)
-			patchDword(buf, offset: rec + MxdbgConstWord, value: mxdbgLocValueWord(word) as MachineWord)
+			patchDword(buf, offset: rec + MxdbgConstWord, value: mxdbgFigureWord(word) as MachineWord)
 		end 'eachConstantWord'
+
+		for global in self.globals 'eachGlobal'
+			let rec = appendedRecord(buf, stride: MxdbgGlobalEntrySize)
+			patchDword(buf, offset: rec + MxdbgGlobalNameOff, value: global.name.offset as MachineWord)
+			patchDword(buf, offset: rec + MxdbgGlobalNameLen, value: global.name.length as MachineWord)
+			patchDword(buf, offset: rec + MxdbgGlobalImageOffset, value: global.imageOffset as MachineWord)
+			patchDword(buf, offset: rec + MxdbgGlobalSlotBytes, value: global.slotBytes as MachineWord)
+		end 'eachGlobal'
+
+		for figure in self.layoutFigures 'eachLayoutFigure'
+			let rec = appendedRecord(buf, stride: MxdbgLayoutEntrySize)
+			patchDword(buf, offset: rec + MxdbgLayoutNameOff, value: figure.name.offset as MachineWord)
+			patchDword(buf, offset: rec + MxdbgLayoutNameLen, value: figure.name.length as MachineWord)
+			patchDword(buf, offset: rec + MxdbgLayoutFigure, value: mxdbgFigureWord(figure.figure) as MachineWord)
+		end 'eachLayoutFigure'
 
 		buf.append(self.stringPool)
 

@@ -14,12 +14,25 @@ export type DebugTarget
 	var faulted as bool
 	var settled as TargetOutcome
 
-	export static function launch(program FilePath, arguments StringArray, workingDirectory FilePath, environment EnvMap, routing ChildOutputRouting) returns DebugTarget throws SubprocessError
-		var spawned = try StreamingSubprocess.spawnWithEnvironment(Executable.path(program), arguments: arguments, workingDirectory: workingDirectory, environment: Environment.inheritUpdating(environment))
+	export static function launchTraced(program FilePath, arguments StringArray, workingDirectory FilePath, environment EnvMap, routing ChildOutputRouting) returns DebugTarget throws SubprocessError
+		var spawned = try StreamingSubprocess.spawnTraceable(Executable.path(program), arguments: arguments, workingDirectory: workingDirectory, environment: Environment.inheritUpdating(environment), traced: true)
 		spawned.closeStdin()
 
 		return Self{child: spawned, routing: routing, faulted: false, settled: TargetOutcome.running}
-	end 'launch'
+	end 'launchTraced'
+
+	// ⭐ The debug interface is the only thing that sees the child stop and the only thing that sees it end,
+	// so the status arrives from there rather than from a liveness poll: a poll that reaped the child would
+	// take the debugger's own notification with it.
+	export function settleWith(code DebugExitCode) returns TargetOutcome
+		if not targetIsRunning(self.settled) 'alreadySettled'
+			return self.settled
+		end 'alreadySettled'
+
+		self.settleAfterExit(code)
+
+		return self.settled
+	end 'settleWith'
 
 	export function pump()
 		self.faulted = forwardChildOutput(self.child, routing: self.routing, budget: ChildLineBudget.unbounded) or self.faulted
@@ -37,6 +50,17 @@ export type DebugTarget
 
 		return self.settled
 	end 'poll'
+
+	export function letGo() returns TargetOutcome
+		if not targetIsRunning(self.settled) 'alreadySettled'
+			return self.settled
+		end 'alreadySettled'
+
+		self.faulted = forwardChildOutput(self.child, routing: self.routing, budget: ChildLineBudget.unbounded) or self.faulted
+		self.child.release()
+
+		return self.settled
+	end 'letGo'
 
 	export function reap() returns TargetOutcome
 		if not targetIsRunning(self.settled) 'alreadySettled'

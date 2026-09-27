@@ -1,0 +1,51 @@
+export enum HostDebugVerb
+	pinMachine
+	unpinMachine
+	readMemory
+	writeMemory
+	readContext
+	writeContext
+	waitEvent
+	continueEvent
+	breakProcess
+	attachProcess
+	detachProcess
+	protectRegion
+	flushCode
+	closeHandle
+end 'HostDebugVerb'
+
+// ⛔ THE ONLY body in the compiler's own sources that names a `__Builtins.debug*` or `__Builtins.*Machine`
+// builtin, and it must stay the only one: the published seed knows none of those names, so the first build of
+// this tree is shimmable only while ONE body spells them (`scripts/seed-shim/README.md` owns that rule).
+// Spelling one at a second call site leaves every CI lane red until a release ships.
+module function hostDebugCall(verb HostDebugVerb, a0 BackendWord, a1 BackendWord, a2 BackendWord, a3 BackendWord, a4 BackendWord) returns BackendWord
+	var answer = 0 as BackendWord
+
+	match verb 'verb'
+		pinMachine then answer = __Builtins.pinToMachine()
+		unpinMachine then __Builtins.unpinFromMachine()
+		readMemory then answer = __Builtins.debugReadMemory(a0, a1, a2, a3, a4)
+		writeMemory then answer = __Builtins.debugWriteMemory(a0, a1, a2, a3, a4)
+		readContext then answer = __Builtins.debugReadContext(a0, a1)
+		writeContext then answer = __Builtins.debugWriteContext(a0, a1)
+		waitEvent then answer = __Builtins.debugWaitEvent(a0, a1)
+		continueEvent then answer = __Builtins.debugContinueEvent(a0, a1, a2)
+		breakProcess then answer = __Builtins.debugBreakProcess(a0)
+		attachProcess then answer = __Builtins.debugAttachProcess(a0)
+		detachProcess then answer = __Builtins.debugDetachProcess(a0)
+		protectRegion then answer = __Builtins.debugProtectRegion(a0, a1, a2, a3, a4)
+		flushCode then answer = __Builtins.debugFlushCode(a0, a1, a2)
+		closeHandle then answer = __Builtins.debugCloseHandle(a0)
+	end 'verb'
+
+	return answer
+end 'hostDebugCall'
+
+export function debugSessionPinnedToItsMachine() returns bool
+	return hostDebugCall(HostDebugVerb.pinMachine, a0: 0, a1: 0, a2: 0, a3: 0, a4: 0) != 0
+end 'debugSessionPinnedToItsMachine'
+
+export function releaseDebugSessionPin()
+	_ = hostDebugCall(HostDebugVerb.unpinMachine, a0: 0, a1: 0, a2: 0, a3: 0, a4: 0)
+end 'releaseDebugSessionPin'

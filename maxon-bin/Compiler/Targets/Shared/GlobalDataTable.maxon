@@ -1057,16 +1057,34 @@ export type GlobalDataTable
 	// `globalAddr` the parser emitted off the very arena `layOut` was fed, or from a run some
 	// runtime reserved.
 	export function dataSectionOffsetOf(label String) returns ByteOffset
+		match self.dataSectionSlotOf(label) 'placed'
+			none then panic("GlobalDataTable.dataSectionOffsetOf: no .data slot or reserved run is labelled '{label}' — every label a `globalAddr` carries is one the top-level `var` arena declared or one `registerDataBlob` reserved")
+			at(offset, _) then return offset
+		end 'placed'
+	end 'dataSectionOffsetOf'
+
+	// Where `label` sits in `.data` and how wide its slot is, or none — the same walk
+	// `dataSectionOffsetOf` refuses on, answered rather than refused, for the one caller that must tell
+	// an absent word from a misspelt one.
+	export function dataSectionSlotOf(label String) returns DataSectionSlotLookup
 		if let runIndex = try self.dataBlobIndex.get(label) 'reservedRun'
-			let blob = try self.dataBlobs.get(runIndex) otherwise panic("GlobalDataTable.dataSectionOffsetOf: dataBlobIndex maps '{label}' to {runIndex}, which dataBlobs does not hold — the index is written in the same call as the push and cannot disagree")
-			return blob.offset
+			let blob = try self.dataBlobs.get(runIndex) otherwise panic("GlobalDataTable.dataSectionSlotOf: dataBlobIndex maps '{label}' to {runIndex}, which dataBlobs does not hold — the index is written in the same call as the push and cannot disagree")
+			return DataSectionSlotLookup.at(blob.offset, bytes: blob.bytes.count())
 		end 'reservedRun'
 
-		let index = try self.dataIndex.get(label) otherwise panic("GlobalDataTable.dataSectionOffsetOf: no .data slot or reserved run is labelled '{label}' — every label a `globalAddr` carries is one the top-level `var` arena declared or one `registerDataBlob` reserved")
-		let entry = try self.dataSection.get(index) otherwise panic("GlobalDataTable.dataSectionOffsetOf: dataIndex maps '{label}' to {index}, which dataSection does not hold — the two fell out of lockstep")
-		return entry.offset
-	end 'dataSectionOffsetOf'
+		if let index = try self.dataIndex.get(label) 'aScalarSlot'
+			let entry = try self.dataSection.get(index) otherwise panic("GlobalDataTable.dataSectionSlotOf: dataIndex maps '{label}' to {index}, which dataSection does not hold — the two fell out of lockstep")
+			return DataSectionSlotLookup.at(entry.offset, bytes: stdTypeStorageBytes(entry.valueType))
+		end 'aScalarSlot'
+
+		return DataSectionSlotLookup.none
+	end 'dataSectionSlotOf'
 end 'GlobalDataTable'
+
+export union DataSectionSlotLookup
+	none
+	at(offset ByteOffset, bytes BytePos)
+end 'DataSectionSlotLookup'
 
 // The widest a `.data` slot can be. Every `StdTypeInfo.storageBytes` is a power of two no larger
 // than this, which `sortBySizeDescendingStable`'s halving walk and `naturallyAlignedSlotOffset`'s

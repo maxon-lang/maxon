@@ -309,12 +309,18 @@ function addRepoRootIfKnown(doc JsonDoc, payload JsonObjectBuilder, repoRoot Str
 	payload.addString(doc, key: "repoRoot", value: repoRoot)
 end 'addRepoRootIfKnown'
 
-export function toolErrorText(reqDoc JsonDoc, idNode JsonNodeId, message String, repoRoot String) returns String
-	var doc = JsonDoc.create()
+export function toolErrorPayload(doc JsonDoc, message String, repoRoot String) returns JsonObjectBuilder
 	var payload = JsonObjectBuilder.create()
 	payload.addBool(doc, key: "success", value: false)
 	payload.addString(doc, key: "error", value: message)
 	addRepoRootIfKnown(doc, payload: payload, repoRoot: repoRoot)
+
+	return payload
+end 'toolErrorPayload'
+
+export function toolErrorText(reqDoc JsonDoc, idNode JsonNodeId, message String, repoRoot String) returns String
+	var doc = JsonDoc.create()
+	let payload = toolErrorPayload(doc, message: message, repoRoot: repoRoot)
 
 	return toolResultText(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: true)
 end 'toolErrorText'

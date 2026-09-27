@@ -189,18 +189,22 @@ export enum HostFacility
 	sharedMemory
 
 	// ⭐⭐ **SAMPLING ANOTHER THREAD OF THIS PROCESS — the suspend/context/read/resume loop, the
-	// high-resolution tick that drives it and the module map that names what it finds (`StdOp.osHostSample`).**
+	// high-resolution tick that drives it and the module map that names what it finds (`StdOp.osHostProcess`).**
 	// Its own facility rather than a corner of `processInfo`, on this enum's stated rule: reading one's own
 	// identity is a call that cannot fail, while sampling walks ANOTHER thread's register file and copies
 	// ANOTHER stack out of memory — a different question with a different API.
 	//
-	// ⛔⛔ **ITS ROW IS ABOUT A CPU AS WELL AS AN OS, WHICH NO OTHER ROW IN THIS TABLE IS.** A sampled
+	// ⛔⛔ **ITS ROW IS ABOUT A CPU AS WELL AS AN OS, AS ONLY `processDebug`'s IS BESIDE IT.** A sampled
 	// register file arrives as a `CONTEXT`, whose RIP/RSP/RBP offsets are x64's; on any other CPU those same
 	// displacements name three unrelated words. So a lane claiming this row on the strength of `os(Windows)`
 	// alone would not FAIL — it would symbolize garbage into a confident profile, which is the worst kind of
 	// wrong answer a profiler can give. The table is keyed on a whole `Target` precisely so this can be said.
 	processSampling
-	debugAgent
+
+	// ⭐⭐ **DRIVING ANOTHER PROCESS FROM OUTSIDE IT — the debug port its stops arrive on, its memory, and
+	// its threads' register files (`StdOp.osHostProcess`, `Compiler/Runtime/DebugHostRuntime.maxon`).** The
+	// row above's CPU argument binds here word for word: a stop's register file is the same x64 `CONTEXT`.
+	processDebug
 end 'HostFacility'
 
 // The answer `calleeHostFacility` returns. A union rather than a bool-plus-out-param so that "this callee
@@ -446,6 +450,10 @@ function calleeHostFacility(callee ByteArray) returns CalleeFacility
 		return CalleeFacility.needs(HostFacility.processSampling)
 	end 'processSamplingBand'
 
+	if isDebugHostRuntimeCallee(callee) 'processDebugBand'
+		return CalleeFacility.needs(HostFacility.processDebug)
+	end 'processDebugBand'
+
 	if isClockRuntimeCallee(callee) 'wallClockBand'
 		return CalleeFacility.needs(HostFacility.wallClock)
 	end 'wallClockBand'
@@ -552,11 +560,11 @@ end 'calleeHasHostFacility'
 // the one FULL row — it provides every facility, so its block answers `true` without asking which.
 //
 // ⚠ The three POSIX lanes, arm64-macOS, arm64-linux and x64-linux, provide every facility but
-// `processSampling` and `debugAgent`, each `true` a landed family with real lowerings behind it:
-// libSystem imports on macOS, raw syscalls on the two static Linux images. `processSampling` is
-// `false` on all three because sampling is `osHostSample` reading an x64 `CONTEXT`, a mechanism
-// none of them has (see each row). A premature `true` is worse than a `false`; this file's header
-// says why.
+// `processSampling` and `processDebug`, each `true` a landed family with real lowerings behind it:
+// libSystem imports on macOS, raw syscalls on the two static Linux images. Both of the two `false`
+// rows are the same missing mechanism: reading another thread's or another process's register file
+// as an x64 `CONTEXT`, which none of them has (see each row). A premature `true` is worse than a
+// `false`; this file's header says why.
 //
 // ⚠ **wasm32-wasi PROVIDES ONLY `pageMemory` AND `hostMutex`, AND SOME OF ITS `false`s ARE PERMANENT.** WASI
 // has no process-spawn primitive and no per-thread CPU clock at all, so `subprocess` and `threadCpuClock`
@@ -617,12 +625,13 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 				sharedMemory or
 				uptimeClock gives true
 
-			// ⛔ `processSampling`: the register file is the wrong shape. `thread_get_state` answers an
-			// `arm_thread_state64_t`, not a `CONTEXT`, so this is a port of the whole sample decoder rather
-			// than a lowering of `osHostSample`; a `true` here would read three unrelated words as
-			// RIP/RSP/RBP.
+			// ⛔ `processSampling` and `processDebug`: the register file is the wrong shape. `thread_get_state`
+			// answers an `arm_thread_state64_t`, not a `CONTEXT`, so each is a port of the whole register
+			// decoder rather than a lowering; a `true` here would read three unrelated words as RIP/RSP/RBP.
+			// `processDebug` owes a second port beside that one: debugging another process here is the
+			// `mach_port`/`task_for_pid` protocol and a `debugserver`-shaped stop loop, not a debug port.
 			processSampling or
-				debugAgent gives false
+				processDebug gives false
 		end 'f'
 	end 'darwinArm64'
 
@@ -685,11 +694,12 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 				sharedMemory or
 				uptimeClock gives true
 
-			// ⛔ `processSampling`: the arm64-macOS row's reason, plus this lane's own: `ptrace` and
-			// `process_vm_readv` are a different sampling mechanism, and the register file they answer is
-			// AArch64's rather than the x64 `CONTEXT` the sample decoder reads.
+			// ⛔ `processSampling` and `processDebug`: the arm64-macOS row's reason, plus this lane's own:
+			// `ptrace` and `process_vm_readv` are a different mechanism from both a suspend-and-read loop and
+			// a debug port, and the register file they answer is AArch64's rather than the x64 `CONTEXT` both
+			// decoders read.
 			processSampling or
-				debugAgent gives false
+				processDebug gives false
 		end 'f'
 	end 'linuxArm64'
 
@@ -743,11 +753,12 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 				sharedMemory or
 				uptimeClock gives true
 
-			// ⛔ `processSampling`: the CPU matches and the mechanism does not. The sample decoder would
-			// port, but there is no suspend-and-read-context primitive to lower `osHostSample` onto: Linux's
-			// equivalent is `ptrace` with a stop protocol, or `process_vm_readv` plus a signal.
+			// ⛔ `processSampling` and `processDebug`: the CPU matches and the mechanism does not. The x64
+			// `CONTEXT` decoders would port, but neither primitive exists here: Linux has no
+			// suspend-and-read-context call to lower `osHostProcess` onto and no debug port to wait a
+			// debuggee's stops on. Both are `ptrace` with a stop protocol, which is a different shape.
 			processSampling or
-				debugAgent gives false
+				processDebug gives false
 		end 'f'
 	end 'linuxX64'
 
@@ -790,7 +801,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 				terminalDetection or
 				sharedMemory or
 				processSampling or
-				debugAgent gives false
+				processDebug gives false
 		end 'f'
 	end 'wasmWasi'
 

@@ -138,17 +138,22 @@ let SubpKilledExitCode = 1 as ParsedInt
 let WaitObjectSignalled = 0 as ParsedInt
 let WaitTimedOut = 0x102 as ParsedInt
 
-// The three `dwCreationFlags` bits `stdlib/Subprocess.maxon`'s `SpawnFlag` surface maps onto. The SURFACE
-// values (bit 0 hide window, bit 1 new process group, bit 2 detach) are the corpus's; these are Win32's, and
-// the translation between them lives in one place (`emitSubpCreationFlags`).
+// The `dwCreationFlags` bits `stdlib/Subprocess.maxon`'s `SpawnFlag` surface maps onto. The SURFACE
+// values (bit 0 hide window, bit 1 new process group, bit 2 detach, bit 3 traced) are the corpus's; these
+// are Win32's, and the translation between them lives in one place (`emitSubpCreationFlags`).
 let CreateNoWindow = 0x08000000 as ParsedInt
 let CreateNewProcessGroup = 0x00000200 as ParsedInt
 export let DetachedProcess = 0x00000008 as ParsedInt
 
-// The surface bitfield's own three bits, as the shifts that extract them.
+// `DEBUG_ONLY_THIS_PROCESS` — the child reports its debug events to this process and its own children are
+// left alone, which is the debugger's launch.
+let DebugOnlyThisProcess = 0x00000002 as ParsedInt
+
+// The surface bitfield's own four bits, as the shifts that extract them.
 let SpawnFlagHideWindowShift = 0 as ParsedInt
 let SpawnFlagNewGroupShift = 1 as ParsedInt
 let SpawnFlagDetachShift = 2 as ParsedInt
+let SpawnFlagTracedShift = 3 as ParsedInt
 
 // How long the collect loop sleeps when a pass moved no bytes and the child is still running, on the lane
 // whose pipes ride a completion port and have no poll descriptor to suspend on. It is a GREEN sleep
@@ -1008,8 +1013,8 @@ function emitSubpQuoteIfNeeded(module StdModule, func IrFunction, ids ValueMinte
 end 'emitSubpQuoteIfNeeded'
 
 // ⭐ **THE SURFACE FLAG BITFIELD → `dwCreationFlags`, IN ONE PLACE.** `stdlib/Subprocess.maxon`'s `SpawnFlag`
-// names three bits (hide window, new process group, detach) and both spawn entries pass the same word, so the
-// translation belongs to neither of them.
+// names four bits (hide window, new process group, detach, traced) and both spawn entries pass the same word,
+// so the translation belongs to neither of them.
 //
 // It is BRANCH-FREE — each bit is extracted and MULTIPLIED by the Win32 constant it selects — because a
 // branch per bit would be three merges carrying one accumulator, which is exactly the loop-carried value this
@@ -1044,8 +1049,15 @@ function emitSubpCreationFlags(module StdModule, block IrBlock, ids ValueMinter,
 	let groupConst = emitConst(module, block: block, value: CreateNewProcessGroup, ids: ids)
 	let groupPart = emitBin(module, block: block, a: groupBit, b: groupConst, opcode: StdBinOpcode.mul, ids: ids)
 
+	let tracedShift = emitConst(module, block: block, value: SpawnFlagTracedShift, ids: ids)
+	let tracedShifted = emitBin(module, block: block, a: surfaceFlags, b: tracedShift, opcode: StdBinOpcode.shr, ids: ids)
+	let tracedBit = emitBin(module, block: block, a: tracedShifted, b: one, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let debuggedConst = emitConst(module, block: block, value: DebugOnlyThisProcess, ids: ids)
+	let tracedPart = emitBin(module, block: block, a: tracedBit, b: debuggedConst, opcode: StdBinOpcode.mul, ids: ids)
+
 	let partial = emitBin(module, block: block, a: hidePart, b: groupPart, opcode: StdBinOpcode.add, ids: ids)
-	let creation = emitBin(module, block: block, a: partial, b: detachPart, opcode: StdBinOpcode.add, ids: ids)
+	let withDetach = emitBin(module, block: block, a: partial, b: detachPart, opcode: StdBinOpcode.add, ids: ids)
+	let creation = emitBin(module, block: block, a: withDetach, b: tracedPart, opcode: StdBinOpcode.add, ids: ids)
 	emitStoreField(module, block: block, record: req, offset: SubpReqFlags, value: creation)
 	emitStoreField(module, block: block, record: req, offset: SubpReqDetach, value: detachBit)
 end 'emitSubpCreationFlags'

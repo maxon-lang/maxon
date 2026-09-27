@@ -50,7 +50,154 @@ export type DebugConditionRecord
 	static function create(kind DebugAddress, operand DebugWord, width DebugConditionWidth, signedCompare DebugAddress, op DebugAddress, literal DebugWord) returns DebugConditionRecord
 		return Self{kind: kind, operand: operand, width: width, signedCompare: signedCompare, op: op, literal: literal}
 	end 'create'
+
+	export static function unconditioned() returns DebugConditionRecord
+		return Self{kind: DbgCondKindNone, operand: 0, width: DbgWidthWord64 as DebugConditionWidth, signedCompare: 0, op: 0, literal: 0}
+	end 'unconditioned'
 end 'DebugConditionRecord'
+
+let DbgCondKindNone = 0
+let DbgCondKindRegister = 1
+let DbgCondKindStackSlot = 2
+
+let DbgCondOpEqual = 1
+let DbgCondOpNotEqual = 2
+let DbgCondOpLess = 3
+let DbgCondOpLessOrEqual = 4
+let DbgCondOpGreater = 5
+let DbgCondOpGreaterOrEqual = 6
+
+let DbgCondSignedYes = 1
+
+let DbgWidthByte = 1
+let DbgWidthHalf = 2
+let DbgWidthWord32 = 4
+let DbgWidthWord64 = 8
+
+let DbgGprCount = 16
+
+let ByteWidthMask = 0xFF as DebugWord
+let ByteWidthSignBit = 0x80 as DebugWord
+let ByteWidthSpan = 0x100 as DebugWord
+
+let HalfWidthMask = 0xFFFF as DebugWord
+let HalfWidthSignBit = 0x8000 as DebugWord
+let HalfWidthSpan = 0x10000 as DebugWord
+
+let Word32Mask = 0xFFFFFFFF as DebugWord
+let Word32SignBit = 0x80000000 as DebugWord
+let Word32Span = 0x100000000 as DebugWord
+
+union ConditionOperandRead
+	unreadable
+	word(value DebugWord)
+end 'ConditionOperandRead'
+
+// ⚠ Every road this cannot decide answers TRUE — an unconditioned byte, an operand outside the general file,
+// an unreadable frame slot. A breakpoint the reader armed then stops on every hit, which is the recoverable
+// direction: answering false would swallow the stop and read as a breakpoint that was never placed.
+export function debugConditionHolds(record DebugConditionRecord, memory DebugMemory, framePointer DebugAddress) returns bool
+	if not conditionIsEvaluable(record) 'nothingToJudgeItBy'
+		return true
+	end 'nothingToJudgeItBy'
+
+	let signed = record.signedCompare == DbgCondSignedYes
+
+	match conditionOperandValue(record, memory: memory, framePointer: framePointer) 'read'
+		unreadable then return true
+		word(raw) then return conditionCompare(narrowedToWidth(raw, width: record.width, signed: signed), literal: record.literal, op: record.op, signed: signed)
+	end 'read'
+end 'debugConditionHolds'
+
+function conditionIsEvaluable(record DebugConditionRecord) returns bool
+	if record.kind == DbgCondKindNone 'unconditioned'
+		return false
+	end 'unconditioned'
+
+	return record.op >= DbgCondOpEqual and record.op <= DbgCondOpGreaterOrEqual
+end 'conditionIsEvaluable'
+
+function conditionOperandValue(record DebugConditionRecord, memory DebugMemory, framePointer DebugAddress) returns ConditionOperandRead
+	if record.kind == DbgCondKindRegister 'aRegister'
+		if record.operand < 0 or record.operand >= (DbgGprCount as DebugWord) 'outsideTheGeneralFile'
+			return ConditionOperandRead.unreadable
+		end 'outsideTheGeneralFile'
+
+		return ConditionOperandRead.word(memory.registerValue(record.operand as EngineRegisterNumber))
+	end 'aRegister'
+
+	if record.kind != DbgCondKindStackSlot 'anUnreadableKind'
+		return ConditionOperandRead.unreadable
+	end 'anUnreadableKind'
+
+	let slot = (framePointer as DebugWord) + record.operand
+
+	if slot <= 0 'notAnAddressAtAll'
+		return ConditionOperandRead.unreadable
+	end 'notAnAddressAtAll'
+
+	return ConditionOperandRead.word(try memory.readDebuggeeWord(slot as DebugAddress, width: DbgWidthWord64 as DebugWidth) otherwise return ConditionOperandRead.unreadable)
+end 'conditionOperandValue'
+
+function narrowedToWidth(raw DebugWord, width DebugConditionWidth, signed bool) returns DebugWord
+	if width == DbgWidthByte 'aByte'
+		return signExtended(raw and ByteWidthMask, signBit: ByteWidthSignBit, span: ByteWidthSpan, signed: signed)
+	end 'aByte'
+
+	if width == DbgWidthHalf 'aHalfWord'
+		return signExtended(raw and HalfWidthMask, signBit: HalfWidthSignBit, span: HalfWidthSpan, signed: signed)
+	end 'aHalfWord'
+
+	if width == DbgWidthWord32 'aDoubleWord'
+		return signExtended(raw and Word32Mask, signBit: Word32SignBit, span: Word32Span, signed: signed)
+	end 'aDoubleWord'
+
+	return raw
+end 'narrowedToWidth'
+
+function signExtended(masked DebugWord, signBit DebugWord, span DebugWord, signed bool) returns DebugWord
+	if signed and (masked and signBit) != 0 'negative'
+		return masked - span
+	end 'negative'
+
+	return masked
+end 'signExtended'
+
+function conditionCompare(value DebugWord, literal DebugWord, op DebugAddress, signed bool) returns bool
+	if op == DbgCondOpEqual 'equal'
+		return value == literal
+	end 'equal'
+
+	if op == DbgCondOpNotEqual 'notEqual'
+		return value != literal
+	end 'notEqual'
+
+	if op == DbgCondOpLess 'less'
+		return conditionIsBelow(value, than: literal, signed: signed)
+	end 'less'
+
+	if op == DbgCondOpLessOrEqual 'lessOrEqual'
+		return not conditionIsBelow(literal, than: value, signed: signed)
+	end 'lessOrEqual'
+
+	if op == DbgCondOpGreater 'greater'
+		return conditionIsBelow(literal, than: value, signed: signed)
+	end 'greater'
+
+	return not conditionIsBelow(value, than: literal, signed: signed)
+end 'conditionCompare'
+
+function conditionIsBelow(a DebugWord, than DebugWord, signed bool) returns bool
+	if signed 'aSignedCompare'
+		return a < than
+	end 'aSignedCompare'
+
+	if (a < 0) != (than < 0) 'oneHasTheTopBit'
+		return than < 0
+	end 'oneHasTheTopBit'
+
+	return a < than
+end 'conditionIsBelow'
 
 export union DebugConditionCompile
 	compiled(record DebugConditionRecord)
@@ -126,9 +273,9 @@ function compiledAgainstName(symbols DebugSymbols, offset DebugAddress, site Mxd
 end 'compiledAgainstName'
 
 function compiledAgainstLocal(symbols DebugSymbols, local MxdbgLocalInfo, op DebugAddress, literalSpelling String) returns DebugConditionCompile
-	if local.isAConstant() or local.isAFoldedAggregate() or local.holdsAPointer() or local.locKind == MxdbgLocKindOptimizedOut 'nowhereTheAgentCanRead'
+	if local.isAConstant() or local.isAFoldedAggregate() or local.holdsAPointer() or local.locKind == MxdbgLocKindOptimizedOut 'nowhereTheDriverCanRead'
 		return DebugConditionCompile.unsupported
-	end 'nowhereTheAgentCanRead'
+	end 'nowhereTheDriverCanRead'
 
 	if not symbols.typeIsDescribed(local.typeId) 'noLayout'
 		return DebugConditionCompile.unsupported
@@ -186,9 +333,9 @@ end 'ConditionWidthLookup'
 function conditionWidthOf(record MxdbgTypeInfo) returns ConditionWidthLookup
 	let size = record.size as DebugAddress
 
-	if size == DbgWidthByte or size == DbgWidthHalf or size == DbgWidthWord32 or size == DbgWidthWord64 'aWidthTheAgentLoads'
+	if size == DbgWidthByte or size == DbgWidthHalf or size == DbgWidthWord32 or size == DbgWidthWord64 'aWidthTheDriverLoads'
 		return ConditionWidthLookup.bytes(size as DebugConditionWidth)
-	end 'aWidthTheAgentLoads'
+	end 'aWidthTheDriverLoads'
 
 	return ConditionWidthLookup.none
 end 'conditionWidthOf'

@@ -19,7 +19,11 @@ let MxdbgMagicByte4 = 71
 
 // Bumped on any change to what the file MEANS. A reader refuses a version it does not know rather than
 // misreading it.
-module let MxdbgFormatVersion = 8
+//
+// ⚠ A bump needs TWO self-compiles for the same reason an emitted-runtime change does: the first writes the
+// next compiler's sidecar stamped with the version it itself speaks, so between the two builds that
+// compiler's `--dump-info` refuses its own sidecar by name.
+module let MxdbgFormatVersion = 10
 
 // Appended to the binary's path WITH its extension still on: `foo.exe` -> `foo.exe.mxdbg`.
 export let MxdbgSidecarExtension = ".mxdbg"
@@ -84,7 +88,17 @@ module let MxdbgOffSourceRootOff = 120
 
 module let MxdbgOffSourceRootLen = 124
 
-module let MxdbgHeaderSize = 128
+module let MxdbgOffGlobalTableOff = 128
+
+module let MxdbgOffGlobalCount = 132
+
+module let MxdbgOffLayoutTableOff = 136
+
+module let MxdbgOffLayoutCount = 140
+
+module let MxdbgOffImageBase = 144
+
+module let MxdbgHeaderSize = 152
 
 module let MxdbgFileEntrySize = 8
 
@@ -115,6 +129,24 @@ export let MxdbgInlineRangeEntrySize = 12
 module let MxdbgConstEntrySize = 4
 
 module let MxdbgConstWord = 0
+
+module let MxdbgGlobalEntrySize = 16
+
+module let MxdbgGlobalNameOff = 0
+
+module let MxdbgGlobalNameLen = 4
+
+module let MxdbgGlobalImageOffset = 8
+
+module let MxdbgGlobalSlotBytes = 12
+
+module let MxdbgLayoutEntrySize = 12
+
+module let MxdbgLayoutNameOff = 0
+
+module let MxdbgLayoutNameLen = 4
+
+module let MxdbgLayoutFigure = 8
 
 export let MxdbgNoInlineSite = 0xFFFFFFFF as MxdbgIndex
 
@@ -290,8 +322,9 @@ export typealias MxdbgCodeOffset = int(0 to u32.max)
 export typealias MxdbgCodeOffsetArray = Array with MxdbgCodeOffset
 export typealias MxdbgIndexArray = Array with MxdbgIndex
 
-// A local record's `locValue`: a stack displacement, a register number, or unused, per its `locKind`.
-export typealias MxdbgLocValue = int(i32.min to i32.max)
+// A signed figure a sidecar record carries: a local's stack displacement or register number per its
+// `locKind`, a folded constant word, or a layout figure of the runtime contract.
+export typealias MxdbgRecordFigure = int(i32.min to i32.max)
 
 // ⭐ **WHAT A TYPE RECORD'S `kind` WORD SAYS.** A renderer decides how
 // to read the bytes at a local's location from this word alone, so a kind a reader does not know must
@@ -352,6 +385,7 @@ export enum MxdbgOrigin
 	test
 	generated
 	library
+	runtime
 	synthesized
 end 'MxdbgOrigin'
 
@@ -359,7 +393,8 @@ let MxdbgOriginWordAuthored = 0 as MxdbgIndex
 let MxdbgOriginWordTest = 1 as MxdbgIndex
 let MxdbgOriginWordGenerated = 2 as MxdbgIndex
 let MxdbgOriginWordLibrary = 3 as MxdbgIndex
-let MxdbgOriginWordSynthesized = 4 as MxdbgIndex
+let MxdbgOriginWordRuntime = 4 as MxdbgIndex
+let MxdbgOriginWordSynthesized = 5 as MxdbgIndex
 
 export union MxdbgOriginLookup
 	unknown
@@ -372,6 +407,7 @@ export function mxdbgOriginWord(origin MxdbgOrigin) returns MxdbgIndex
 		test gives MxdbgOriginWordTest
 		generated gives MxdbgOriginWordGenerated
 		library gives MxdbgOriginWordLibrary
+		runtime gives MxdbgOriginWordRuntime
 		synthesized gives MxdbgOriginWordSynthesized
 	end 'which'
 end 'mxdbgOriginWord'
@@ -389,6 +425,10 @@ end 'mxdbgOriginOfWord'
 export function mxdbgOriginIsTheAuthors(origin MxdbgOrigin) returns bool
 	return origin == MxdbgOrigin.authored or origin == MxdbgOrigin.test
 end 'mxdbgOriginIsTheAuthors'
+
+export function mxdbgOriginIsTheRuntimes(origin MxdbgOrigin) returns bool
+	return origin == MxdbgOrigin.runtime or origin == MxdbgOrigin.synthesized
+end 'mxdbgOriginIsTheRuntimes'
 
 // Signedness is a property of the declared type and cannot be recovered from the bits, so a reader
 // without this flag renders a narrow signed local as the unsigned pattern it holds.
@@ -455,24 +495,24 @@ let MxdbgWordModulus = 4294967296
 
 // ⚠ **A `locValue` IS A SIGNED i32 STORED AS ITS TWO'S-COMPLEMENT u32.** A stack slot BELOW the frame
 // pointer is a negative displacement, and reading that word unsigned places it 4 GB above instead.
-module function mxdbgSignedWord(raw MxdbgIndex) returns MxdbgLocValue
+module function mxdbgSignedWord(raw MxdbgIndex) returns MxdbgRecordFigure
 	if raw > MxdbgSignedWordMax 'negative'
-		return (raw - MxdbgWordModulus) as MxdbgLocValue
+		return (raw - MxdbgWordModulus) as MxdbgRecordFigure
 	end 'negative'
 
-	return raw as MxdbgLocValue
+	return raw as MxdbgRecordFigure
 end 'mxdbgSignedWord'
 
 // The u32 word a `locValue` is STORED as — `mxdbgSignedWord`'s inverse, and the other half of the same
 // rule: a displacement below the frame pointer is negative, and a word written unsigned places it 4 GB
 // above instead.
-module function mxdbgLocValueWord(value MxdbgLocValue) returns MxdbgIndex
+module function mxdbgFigureWord(value MxdbgRecordFigure) returns MxdbgIndex
 	if value < 0 'negative'
 		return (value + MxdbgWordModulus) as MxdbgIndex
 	end 'negative'
 
 	return value as MxdbgIndex
-end 'mxdbgLocValueWord'
+end 'mxdbgFigureWord'
 
 // Whether `image` opens with the sidecar magic. Split from the reader so a caller can ask before
 // paying for a parse.

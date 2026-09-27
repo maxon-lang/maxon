@@ -109,14 +109,23 @@ function builtAndLaunched(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, 
 end 'builtAndLaunched'
 
 function launchedInPlaceOfTheLive(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, image DebugImage, targetEnv EnvMap, stopTimeoutMs StopTimeoutMs, traced bool, debug DebugSessionSlot) returns String
+	let replaced = debug.reap(DebugSessionEnding.terminateTheProgram)
+
 	return match DebugToolSession.launch(image, arguments: getOptionalStringListArg(reqDoc, args: args, key: "args"), targetEnv: targetEnv, stopTimeoutMs: stopTimeoutMs, traced: traced) 'started'
-		refused(reason) gives toolErrorText(reqDoc, idNode: idNode, message: "{DebugStartToolName}: {reason}", repoRoot: "")
-		ready(session) gives placedSessionReply(reqDoc, idNode: idNode, session: session, debug: debug)
+		refused(reason) gives refusedStartReply(reqDoc, idNode: idNode, message: "{DebugStartToolName}: {reason}", replaced: replaced)
+		ready(session) gives placedSessionReply(reqDoc, idNode: idNode, session: session, debug: debug, replaced: replaced)
 	end 'started'
 end 'launchedInPlaceOfTheLive'
 
-function placedSessionReply(reqDoc JsonDoc, idNode JsonNodeId, session DebugToolSession, debug DebugSessionSlot) returns String
-	let replaced = debug.reap()
+function refusedStartReply(reqDoc JsonDoc, idNode JsonNodeId, message String, replaced CollectedLines) returns String
+	var doc = JsonDoc.create()
+	var payload = toolErrorPayload(doc, message: message, repoRoot: "")
+	payload.addNode(OutputKey, node: outputArray(doc, output: replaced))
+
+	return toolResultText(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: true)
+end 'refusedStartReply'
+
+function placedSessionReply(reqDoc JsonDoc, idNode JsonNodeId, session DebugToolSession, debug DebugSessionSlot, replaced CollectedLines) returns String
 	debug.place(session)
 
 	return debugToolReply(reqDoc, idNode: idNode, state: session.currentState(), replies: DebugReplyArray.create(), output: replaced.followedBy(session.engine.takeOutput()))
@@ -138,7 +147,7 @@ function ranDebugCommand(reqDoc JsonDoc, idNode JsonNodeId, replies DebugReplyAr
 end 'ranDebugCommand'
 
 function stopDebugSession(reqDoc JsonDoc, idNode JsonNodeId, debug DebugSessionSlot) returns String
-	let output = debug.reap()
+	let output = debug.reap(DebugSessionEnding.terminateTheProgram)
 
 	return debugToolReply(reqDoc, idNode: idNode, state: DebugToolState.ended, replies: DebugReplyArray.create(), output: output)
 end 'stopDebugSession'

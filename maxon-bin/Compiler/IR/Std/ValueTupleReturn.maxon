@@ -560,12 +560,11 @@ function noteAddressTakenByOp(op StdOp, taken FnRefThunkSet)
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
-			osHostSample or
+			osHostProcess or
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe or
-			osDebugHost then break 'op'
+			osSocketServe then break 'op'
 		funcAddr(_, funcName) then taken.insert(funcName)
 	end 'op'
 end 'noteAddressTakenByOp'
@@ -825,12 +824,11 @@ function opCallsACandidate(op StdOp, byName FunctionNameIndex, onTheConvention B
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
-			osHostSample or
+			osHostProcess or
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe or
-			osDebugHost gives false
+			osSocketServe gives false
 		call(_, callee, _) gives isCandidateCallee(byName, callee: callee, onTheConvention: onTheConvention)
 	end 'op'
 end 'opCallsACandidate'
@@ -1015,12 +1013,11 @@ function trackValueOrigin(op StdOp, byName FunctionNameIndex, onTheConvention Bo
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
-			osHostSample or
+			osHostProcess or
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe or
-			osDebugHost then break 'op'
+			osSocketServe then break 'op'
 		call(resultId, callee, args) then trackCallResult(resultId, callee: callee, args: args, byName: byName, onTheConvention: onTheConvention, flow: flow, consts: consts)
 	end 'op'
 end 'trackValueOrigin'
@@ -1177,12 +1174,11 @@ function classifyOneOp(op StdOp, flow FunctionTupleFlow, readByOneOp StdValueUse
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
-			osHostSample or
+			osHostProcess or
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe or
-			osDebugHost then break 'op'
+			osSocketServe then break 'op'
 		ret(retValId) then noteReturnedValue(flow, retValId: retValId)
 		call(_, callee, args) then noteTrivialDrop(flow, callee: callee, args: args)
 		loadIndirect(_, addrId, offset, valueType) then noteHalfLoad(flow, addrId: addrId, offset: offset, valueType: valueType)
@@ -1320,12 +1316,11 @@ function opAccountsForTheValue(op StdOp, value ValueId) returns bool
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
-			osHostSample or
+			osHostProcess or
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe or
-			osDebugHost gives false
+			osSocketServe gives false
 		ret(retValId) gives retValId == value
 		call(_, callee, args) gives callIsTheTrivialDropOf(callee, args: args, value: value)
 		loadIndirect(_, addrId, offset, valueType) gives addrId == value and isAWholeHalf(offset, valueType: valueType)
@@ -1626,12 +1621,11 @@ function noteCallSite(op StdOp, funcIndex FuncIndex, byName FunctionNameIndex, f
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
-			osHostSample or
+			osHostProcess or
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe or
-			osDebugHost then break 'op'
+			osSocketServe then break 'op'
 		call(resultId, callee, _) then noteCandidateCallSite(resultId, callee: callee, funcIndex: funcIndex, byName: byName, flow: flow, onTheConvention: onTheConvention, sites: sites)
 	end 'op'
 end 'noteCallSite'
@@ -2044,12 +2038,11 @@ function noteOrphanedConstant(op StdOp, stillRead StdValueUseSet, orphaned StdVa
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
-			osHostSample or
+			osHostProcess or
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe or
-			osDebugHost then break 'op'
+			osSocketServe then break 'op'
 	end 'op'
 end 'noteOrphanedConstant'
 
@@ -2177,12 +2170,11 @@ function planOneOp(op StdOp, funcIndex FuncIndex, flow FunctionTupleFlow, onTheC
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
-			osHostSample or
+			osHostProcess or
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe or
-			osDebugHost then break 'op'
+			osSocketServe then break 'op'
 		ret(retValId) then planOneReturn(retValId, funcIndex: funcIndex, flow: flow, onTheConvention: onTheConvention, plan: plan)
 		call(resultId, _, _) then planOneCallResult(resultId, flow: flow, onTheConvention: onTheConvention, plan: plan, mint: mint)
 	end 'op'
@@ -2357,12 +2349,11 @@ function rewriteOneOp(module StdModule, opIdx OpIndex, plan ValueTuplePlan, subs
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
-			osHostSample or
+			osHostProcess or
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe or
-			osDebugHost then break 'op'
+			osSocketServe then break 'op'
 		ret(retValId) then rewriteOneReturn(module, opIdx: opIdx, retValId: retValId, plan: plan)
 		call(resultId, callee, args) then rewriteOneCall(module, opIdx: opIdx, resultId: resultId, callee: callee, args: args, plan: plan, doomed: doomed)
 		loadIndirect(resultId, addrId, offset, _) then rewriteOneHalfLoad(opIdx, resultId: resultId, addrId: addrId, offset: offset, plan: plan, subst: subst, doomed: doomed)

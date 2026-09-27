@@ -1,6 +1,6 @@
 let ByteIdenticalDebugInfoCaseLabel = "byte-identical-debug-info"
 
-test 'the sidecar leaves the executable byte-identical, and withdrawing the agent is the one thing that does not'
+test 'every build of one source is the same executable, byte for byte, with no sanctioned exception'
 	let identity = ImageIdentityCase.staging(ByteIdenticalDebugInfoCaseLabel, fixture: SpansFixtureName)
 
 	let firstDefault = identity.built("the first default", extraArguments: StringArray.create(), retainedAs: FirstDefaultImageName)
@@ -14,10 +14,4 @@ test 'the sidecar leaves the executable byte-identical, and withdrawing the agen
 	Expect.isFalse(withoutSidecar.wroteASidecar, message: "`{NoDebugInfoBuildFlag}` is the opt-out and it wrote `{identity.sidecar.filename()}` anyway, so the flag was accepted and did nothing.")
 
 	identity.requireSameImage(firstDefault.retained, second: withoutSidecar.retained, why: "⭐⭐ THE HEADLINE: THE SIDECAR IS METADATA AND NEVER DECIDES AN INSTRUCTION. The binary you debug must be the binary you shipped, byte for byte — otherwise every reading taken under debug info is a reading of a different program, and `{NoDebugInfoBuildFlag}` becomes a flag nobody can safely leave off.")
-
-	let withoutAgent = identity.built("the `{NoDebugAgentOption}`", extraArguments: [NoDebugAgentOption], retainedAs: NoAgentImageName)
-
-	identity.requireDifferentImage(firstDefault.retained, second: withoutAgent.retained, why: "`{NoDebugAgentOption}` is the ONE sanctioned exception to the identity above: it leaves the in-process agent's body, its trap thunk, its control word and the imports they need out of the image, so the two cannot be the same program. An identical image means the flag was accepted and emitted the agent anyway.")
-
-	Expect.isTrue(identity.bytesOf(withoutAgent.retained).count() < identity.bytesOf(firstDefault.retained).count(), message: "`{NoDebugAgentOption}` produced an image that is not SMALLER ({identity.bytesOf(withoutAgent.retained).count()} bytes against {identity.bytesOf(firstDefault.retained).count()}). The flag's whole effect is to leave code out, so a difference that did not shrink the image is a different change wearing its name.")
-end 'the sidecar leaves the executable byte-identical, and withdrawing the agent is the one thing that does not'
+end 'every build of one source is the same executable, byte for byte, with no sanctioned exception'

@@ -125,7 +125,7 @@ tests/
     DebugHarness.maxon                      the shared half: the spawn, the staging, the folds, the event reader
     ImageIdentity.maxon                     the byte-identity half: one source and one output path built repeatedly, each image kept aside and compared
     sidecar-dump.maxtest                    the sidecar says something TRUE about the binary beside it
-    byte-identical-debug-info.maxtest       the sidecar never decides an instruction; `--no-debug-agent` is the one exception
+    byte-identical-debug-info.maxtest       the sidecar never decides an instruction, so the image is the same with and without it
     byte-identical-debug-info-under-inlining.maxtest      a program full of spliced bodies with folded and dead locals builds the same image with and without its sidecar
     dump-info-sections.maxtest              a word that is not a section is refused by name, and a real list prints only itself
     sidecar-local-types.maxtest             every local of a two-file program is described under its own type
@@ -139,13 +139,20 @@ tests/
     debug-refuses-wasm.maxtest              a wasm module is refused by the name of its target
     debug-refuses-foreign-sidecar.maxtest        a sidecar describing another build is refused, its own build the control
     debug-refuses-an-image-built-for-another-host.maxtest        an image built for another host is refused before launch, naming both triples
-    debug-refuses-a-no-debug-agent-build.maxtest      a `--no-debug-agent` binary reports that nothing attached
+    a-no-debug-agent-build-is-refused-as-an-unknown-option.maxtest      `--no-debug-agent` is refused as an unknown option, naming it
+    a-program-with-no-agent-in-it-stops-at-a-breakpoint.maxtest      a debuggee carries no `__dbg_` symbol and stops all the same
+    a-sidecar-names-the-globals-and-layout-tables.maxtest      the sidecar publishes the `.data` words and the record geometry a foreign debugger reads by
+    a-detached-program-runs-to-completion.maxtest      `detach` leaves the program running and the session reports its own ending
+    a-fault-stops-before-it-is-passed-on.maxtest      a fault stops the debugger first and reaches the runtime at the resume
+    a-breakpoint-past-any-fixed-table-size-is-armed.maxtest      the number of instructions armed at once is bounded by the program alone
+    a-roster-past-any-fixed-window-lists-every-worker.maxtest      a listing answers for every live green thread, however many there are
     batch-run-to-exit.maxtest               a completed session exits 0 and reports the program's code as data
     crash-exits-nonzero.maxtest             a fault is a `crash` event and a failed session
     timeout-before-run.maxtest              a program that never stops times out and is not left running
     timeout-during-step.maxtest             a `finish` out of a frame that never returns times out
     heapless-program-attaches.maxtest       a program with no heap still attaches, stops and resumes
     breakpoint-on-each-instruction-class.maxtest      every anchored line is hit and resumed, and the program answers as it does undebugged
+    a-breakpoint-at-an-indirect-call-is-armed-and-hit.maxtest      an indirect call is armed rather than refused, and the one armed byte reaches both functions the value names
     break-in-inlined-function-hits-every-copy.maxtest      a line the inliner copied twice is armed at both copies
     break-fuzzy-function.maxtest            exact, then `Type.method`, then a word prefix
     break-ambiguous-lists-candidates.maxtest      two functions answering one name is an ambiguity, never a silent pick
@@ -169,7 +176,7 @@ tests/
     finish-out-of-a-long-call-is-fast.maxtest     a `finish` runs the rest of the frame to its return address at full speed
     break-in-a-test-body-stops.maxtest            a line of a test body arms and stops, and the stop names the test by its prose
     backtrace-from-a-helper-includes-the-test-frame.maxtest      the test is its helper's caller frame, and the dispatcher `maxon test` generates is no frame of the author's
-    break-in-the-debug-agent-is-refused.maxtest      the agent's own code is refused by where it came from, whatever its name spells; the entry stub is the control
+    break-in-a-non-authored-function-is-refused.maxtest      a body the program's author did not write is refused by where it came from, whatever its name spells; an authored line is the control
     a-leaf-inlined-at-adjacent-calls-stops-at-each-copy.maxtest      two back-to-back copies of one leaf each begin a row of its line, so both arm and both stop
     a-leaf-folded-away-has-no-code.maxtest        a leaf whose every call folds to a constant has no code to arm, and its caller's line does
     break-on-a-line-that-is-only-an-inlined-call-stops.maxtest      a line whose code is an inlined body arms at the body's entry and stops at the call line; `next` runs over the body, `step` enters it
@@ -203,7 +210,7 @@ tests/
     a-false-condition-on-another-thread-does-not-take-the-step.maxtest      steps on main stay on main while workers hit a false condition, and main stays pausable
     a-false-condition-on-a-service-machine-never-takes-mains-step.maxtest      the same, with the false condition hit by services on other machines
     every-walk-from-a-fault-is-refused.maxtest      `finish`, `next`, `until` and `step` at a fault stop are each refused, and the stop stays
-    a-refused-step-keeps-the-stop.maxtest         a step the agent refuses leaves the session stopped where it was
+    a-refused-step-keeps-the-stop.maxtest         a step the debugger refuses leaves the session stopped where it was
     a-step-after-a-pause-steps.maxtest            `next` and `step` from a pause stop each land one line on, in the paused frame
     pause-at-a-stop-is-not-an-error.maxtest       a `pause` asked of a stopped program is answered
     a-repl-that-ends-at-a-stop-reports-the-exit-once.maxtest      a REPL whose input ends at a stop lets the program finish and reports its exit once
@@ -251,7 +258,7 @@ tests/
     launch-hits-a-source-breakpoint.maxtest         initialize, launch, initialized, setBreakpoints, configurationDone, then the stop
     launch-builds-a-source.maxtest          a `.maxon` program is built with debug info and stopped in
     no-code-line-is-unverified.maxtest      a line that emits no code is unverified and says why
-    unsupported-condition-is-unverified-with-a-reason.maxtest      a condition the agent cannot evaluate is unverified, the plain line verifies
+    unsupported-condition-is-unverified-with-a-reason.maxtest      a condition the debugger cannot evaluate is unverified, the plain line verifies
     unsupported-request-is-refused.maxtest          an unserved command is refused by name, a served one succeeds
     function-breakpoints.maxtest            a function breakpoint stops inside the function it names
     set-breakpoints-while-running-is-hit.maxtest      a breakpoint placed mid-run is verified and then fires
@@ -363,6 +370,8 @@ tests/
     locked-relist-doors-recheck-the-owner-with-an-acquire-load.maxtest     both doors that finish a slot free under `__slab_lock` re-read the span's owner word with `ldar`, on both arm64 lanes
     the-debug-stream-ring-is-published-with-a-release-and-its-read-cursor-loaded-with-an-acquire.maxtest     `__ds_reserve` publishes `write_cursor` with `stlr` and reads `read_cursor` with `ldar`, and `__ds_commit` commits the entry header with `stlr`, on both arm64 lanes
     a-shared-segment-word-is-read-with-an-acquire-and-written-with-a-release.maxtest     `__shm_read_word` is one `ldar` and `__shm_write_word` one `stlr`, on both arm64 lanes
+    a-pinned-green-thread-stays-on-its-machine-across-a-park.maxtest     a thread that pinned itself runs on the same machine after every park
+    a-pinned-green-thread-runs-while-another-sits-in-a-blocking-syscall.maxtest     the pinned thread's owner is woken and given a processor even while another machine is inside a blocking call
     fixtures/spawn/main.maxon.fixture       stored name only - see rule 1
     fixtures/heap/main.maxon.fixture        stored name only - see rule 1
     fixtures/shared-segment/main.maxon.fixture   stored name only - see rule 1
@@ -402,6 +411,7 @@ tests/
     dump-ir-answers-the-ir-text.maxtest          `dump_ir` answers the IR of `main` as text, and writes nothing
     two-sessions-debug-one-source.maxtest        two debug sessions of one source each debug a build of their own, and a closed session's build is gone
     stdio-debug-tools.maxtest               the stdio face holds one debug session across calls, refuses a tool before `debug_start`, and builds a source
+    a-refused-debug-start-over-a-live-session-answers-its-final-lines.maxtest      a `debug_start` that is refused still reaps the live session and carries its last output in the error's `output`
     http-roster-matches-stdio.maxtest       `--http` serves the stdio roster, name for name
     http-routes.maxtest                     `GET /mcp` is 405, another path 404, a notification 202 with no body
     http-session-lifecycle.maxtest          `initialize` mints `Mcp-Session-Id`; a missing or unknown id is 404, `DELETE` ends it, idle sessions are swept, `--max-sessions` answers 429
@@ -685,17 +695,17 @@ comment exactly one line of the fixture carries, so no case writes a line number
 ⛔ **A REFUSAL IS ASSERTED BESIDE ITS CONTROL.** `debug-refuses-foreign-sidecar` runs the subject with its
 OWN sidecar first: a refusal equally happy to refuse a good build says nothing about the foreign one.
 
-⛔ **THE CLASSIFIER HAS A GATE OF ITS OWN.** Arming a breakpoint displaces one instruction and resumes by
-executing it out of line, so the driver must answer a LENGTH, a CLASS, a condition nibble and a
-displacement position for it. A line-anchored breakpoint only ever lands on whatever instruction a
-statement happens to begin with, so `x64-classifies-each-instruction-class` asks the classifier directly,
-through `debug --classify=<hex>`, over a table with every class in it — including the two indirect classes
-the agent refuses and bytes this build cannot decode at all.
+⛔ **THE CLASSIFIER HAS A GATE OF ITS OWN.** Arming a breakpoint must land on an instruction boundary and a
+step must know what the instruction does, so the driver answers a LENGTH and a CLASS for the bytes it is
+given. A line-anchored breakpoint only ever
+lands on whatever instruction a statement happens to begin with, so `x64-classifies-each-instruction-class`
+asks the classifier directly, through `debug --classify=<hex>`, over a table with every class in it —
+including the two indirect classes and bytes this build cannot decode at all.
 
-⛔ **A CONDITION IS EVALUATED IN THE AGENT, AND THAT IS WHAT THE `cond-*` CASES MEASURE.** A driver that
-filtered hits of its own would publish every one and swallow the ones it did not want — the same picture
-to a reader and a different program — so each case pins the STOP COUNT against the number of times the
-anchored line runs undebugged. The `condition` fixture calls `hit` from two sites on purpose: a function
+⛔ **A FALSE CONDITION IS RESUMED WITHOUT A STOP THE READER SEES, AND THAT IS WHAT THE `cond-*` CASES
+MEASURE.** A driver that published every hit and swallowed the ones it did not want would show the same
+picture to a reader and a different program — so each case pins the STOP COUNT against the number of times
+the anchored line runs undebugged. The `condition` fixture calls `hit` from two sites on purpose: a function
 the inliner splices has no local records of its own, and a condition is compiled from the record covering
 the breakpoint's pc.
 
@@ -713,16 +723,14 @@ are made true by the fixture rather than hoped for: `workers` sleeps far longer 
 takes, so a parked worker is always there to be named, and `finisher` arms only the short-lived thread's
 line before `run`, so the first stop is necessarily inside it and `running:brief` cannot miss.
 
-⚠ **THERE IS NO CASE FOR ID STABILITY UNDER A TRUNCATED ROSTER, AND THE REASON IS THE AGENT'S ORDER.**
-The page carries 80 records and the driver keeps an identity the listing did not disprove, so an id
-survives a thread being omitted. Nothing here can make that omission happen and then undo it: `dbgGtList`
-walks the agent's roster in CARVE order and writes the first 80 LIVE records, so a live record's rank
-among live ones only ever falls as earlier ones die — once inside the window it never leaves. Present →
-absent → present is therefore unreachable, and the only present → absent is a thread that COMPLETED,
-which is genuine death and is what `gt-park-of-a-finished-thread-is-refused` already measures. A case
-built on a 100-sleeper fixture would go green under the rule it is meant to test AND under the one it
-replaced, which is a gate that cannot fail. The rule is in the driver; the channel that could measure it
-is a `gtList` with a different window, and it does not exist.
+⚠ **THERE IS NO CASE FOR ID STABILITY UNDER A TRUNCATED ROSTER, AND THE REASON IS THAT A LISTING IS NEVER
+TRUNCATED.** The driver reads `__gt_allg` whole, so every live thread appears in every listing and the
+only present → absent is a thread that COMPLETED — genuine death, and what
+`gt-park-of-a-finished-thread-is-refused` already measures. The driver's rule that an identity the listing
+did not disprove survives therefore has nothing here that can exercise it, and a case built on a
+100-sleeper fixture would go green under the rule it is meant to test and under its opposite alike, which
+is a gate that cannot fail. The completeness itself is measured by
+`a-roster-past-any-fixed-window-lists-every-worker`.
 
 ⚠ **A BATCH SCRIPT IS FIXED BEFORE THE SESSION STARTS**, so no case can write `gt-park <id>` for an id
 the run produces. Every word that names a thread therefore names it by selector, and
@@ -740,12 +748,11 @@ id of a thread that goes round its loop ONCE, continues until a second roster no
 the long-lived thread still on that roster, so the reason it went is that it FINISHED and not that the
 program did — and then asks for it and gets `no-such-thread`.
 
-⚠ **THE `trap` STOP REASON HAS NO CASE HERE, AND CANNOT HAVE ONE.** It reports an `int3` the agent does
-not own — no breakpoint, no retired entry, no out-of-line slot, not the pause trampoline. Nothing in the
-language plants one: `OpcodeInt3` appears only as inter-function PADDING and inside two x64-linux runtime
-chunks, no `__Raw` row and no `__Builtins` spelling emits one, and the driver cannot write the debuggee's
-memory. A fixture could therefore only pretend, so the reason is stated here instead and what measures the
-agent's half is `specs/debug-agent.md`.
+⚠ **THE `trap` STOP REASON HAS NO CASE HERE, AND CANNOT HAVE ONE.** It reports an `int3` the debugger does
+not own — no breakpoint of the user's and no return point of a walk's. Nothing in the language plants one:
+`OpcodeInt3` appears only as inter-function PADDING and inside two x64-linux runtime chunks, and no
+`__Raw` row or `__Builtins` spelling emits one. A fixture could therefore only pretend, so the reason is
+stated here instead.
 
 ### `maxon monitor`
 

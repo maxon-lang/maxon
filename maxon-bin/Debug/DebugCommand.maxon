@@ -16,6 +16,8 @@ let TypesSection = "types"
 let LinesSection = "lines"
 let StatementsSection = "statements"
 let InlineSection = "inline"
+let GlobalsSection = "globals"
+let LayoutSection = "layout"
 
 // A section's position in that roster. ⛔ **NOTHING NAMES ONE BY NUMBER**: a second list of positions
 // beside the roster would be the order written twice, and inserting a section into the middle of one of
@@ -53,6 +55,7 @@ module let DecimalBase = 10
 let FunctionNameColumn = 32 as ColumnWidth
 let LocalNameColumn = 20 as ColumnWidth
 let TypeNameColumn = 28 as ColumnWidth
+let GlobalNameColumn = 28 as ColumnWidth
 let FieldNameColumn = 20 as ColumnWidth
 let ElementRowName = "element"
 let SignedTypeMark = " (signed)"
@@ -138,7 +141,6 @@ end 'printDebugUsage'
 let ProgramArgumentsSeparator = "--"
 let LongOptionPrefix = "--"
 
-let SupportedDebugTriple = "x64-windows"
 let RefusedWasmTarget = "wasm32-wasi"
 
 let WasmMagic = b"\x00asm"
@@ -372,7 +374,7 @@ module function debugImageCheckFor(program FilePath, spelled String) returns Deb
 	let opening = try File.readBinary(program) otherwise return DebugImageCheck.refused("cannot read {spelled}")
 
 	if startsWithBytes(opening, magic: WasmMagic) 'aWasmModule'
-		return DebugImageCheck.refused("{spelled} is a {RefusedWasmTarget} module: it carries no `.text` image and hosts no debug agent, so it cannot be debugged")
+		return DebugImageCheck.refused("{spelled} is a {RefusedWasmTarget} module: it carries no `.text` image and hosts no process a debugger can drive")
 	end 'aWasmModule'
 
 	match loadSidecarFor(spelled) 'sidecar'
@@ -384,9 +386,10 @@ end 'debugImageCheckFor'
 function vouchedDebugImage(reader MxdbgReader, code ByteArray, spelled String) returns DebugImageCheck
 	let host = targetToString(detectHostTarget())
 
-	if host != SupportedDebugTriple 'anUnsupportedHost'
-		return DebugImageCheck.refused("the interactive debugger runs only on {SupportedDebugTriple}, and this host is {host}")
-	end 'anUnsupportedHost'
+	match backendForHost(host) 'servedHere'
+		unserved(reason) then return DebugImageCheck.refused(reason)
+		served then break 'servedHere'
+	end 'servedHere'
 
 	let built = targetToString(reader.target)
 
@@ -437,7 +440,6 @@ function runDebugSessionFor(request DebuggerRequest, program FilePath, code Byte
 
 	match DebugSession.launch(program, reader: reader, code: code, arguments: request.programArguments, workingDirectory: inheritedWorkingDirectory(), targetEnv: request.targetEnv, stopTimeoutMs: request.stopTimeoutMs, face: face, traced: request.traced) 'started'
 		refused(reason) then return refuseDebugCommand(reason)
-		noAgent(reason) then return refuseDebugCommand("{reason} {NoDebugAgentFlag}, or its agent never attached")
 		ready(session) then return drivenDebugSession(session, request: request)
 	end 'started'
 end 'runDebugSessionFor'
@@ -525,6 +527,8 @@ function dumpSectionRoster() returns StringArray
 	names.push(LinesSection)
 	names.push(StatementsSection)
 	names.push(InlineSection)
+	names.push(GlobalsSection)
+	names.push(LayoutSection)
 
 	return names
 end 'dumpSectionRoster'
@@ -625,8 +629,37 @@ function dumpSidecar(reader MxdbgReader, framePointer String, path String, secti
 		dumpInlineFrames(reader)
 	end 'theInlineFrames'
 
+	if sectionIsPrinted(sections, section: GlobalsSection) 'theGlobals'
+		dumpGlobals(reader)
+	end 'theGlobals'
+
+	if sectionIsPrinted(sections, section: LayoutSection) 'theLayout'
+		dumpLayoutFigures(reader)
+	end 'theLayout'
+
 	return SucceededExit
 end 'dumpSidecar'
+
+// The `.data` words a debugger reads out of the running program, and the record geometry it reads them by.
+// Printed even when the count is 0, for the same reason the type table is: a missing HEADING cannot be told
+// from a reader that does not know the section exists.
+function dumpGlobals(reader MxdbgReader)
+	print("  globals ({reader.globalCount()}):\n")
+
+	for i in 0 upto reader.globalCount() 'eachGlobal'
+		let global = reader.globalRecord(i as MxdbgIndex)
+		print("    {padRight(global.name, width: GlobalNameColumn)} +0x{global.imageOffset:08x}  {global.slotBytes} bytes\n")
+	end 'eachGlobal'
+end 'dumpGlobals'
+
+function dumpLayoutFigures(reader MxdbgReader)
+	print("  layout ({reader.layoutFigureCount()}):\n")
+
+	for i in 0 upto reader.layoutFigureCount() 'eachFigure'
+		let figure = reader.layoutFigureRecord(i as MxdbgIndex)
+		print("    {padRight(figure.name, width: GlobalNameColumn)} {figure.figure}\n")
+	end 'eachFigure'
+end 'dumpLayoutFigures'
 
 function dumpInlineFrames(reader MxdbgReader)
 	print("  inline sites ({reader.inlineSiteCount()}):\n")

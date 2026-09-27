@@ -1,0 +1,51 @@
+export typealias BackendRegisterNumber = int(0 to 79)
+
+export let BackendRegisterSlots = 80
+export let BackendGprSlots = 16
+export let BackendVectorSlots = 16
+
+let BackendRegSlotSp = 4
+let BackendRegSlotFp = 5
+export let BackendRegSlotFlags = 32
+export let BackendRegSlotPc = 72
+
+export union BackendRegisterRead
+	read(file DebugRegisterFile)
+	unreadable
+end 'BackendRegisterRead'
+
+typealias BackendRegisterWordArray = Array with BackendWord
+
+export type DebugRegisterFile
+	var slots as BackendRegisterWordArray
+
+	export static function create() returns DebugRegisterFile
+		var slots = BackendRegisterWordArray.create()
+
+		for _ in 0 upto BackendRegisterSlots 'eachSlot'
+			slots.push(0)
+		end 'eachSlot'
+
+		return Self{slots: slots}
+	end 'create'
+
+	export function valueOf(number BackendRegisterNumber) returns BackendWord
+		return try self.slots.get(number as ElementIndex) otherwise panic("DebugRegisterFile.valueOf: slot {number} is one of the {BackendRegisterSlots} this file holds")
+	end 'valueOf'
+
+	export function setValue(number BackendRegisterNumber, value BackendWord)
+		try self.slots.set(number as ElementIndex, value: value) otherwise panic("DebugRegisterFile.setValue: slot {number} is one of the {BackendRegisterSlots} this file holds")
+	end 'setValue'
+
+	export function programCounter() returns DebugAddress
+		return debugAddressOrZero(self.valueOf(BackendRegSlotPc as BackendRegisterNumber) as DebugWord)
+	end 'programCounter'
+
+	export function stackPointer() returns DebugAddress
+		return debugAddressOrZero(self.valueOf(BackendRegSlotSp as BackendRegisterNumber) as DebugWord)
+	end 'stackPointer'
+
+	export function framePointer() returns DebugAddress
+		return debugAddressOrZero(self.valueOf(BackendRegSlotFp as BackendRegisterNumber) as DebugWord)
+	end 'framePointer'
+end 'DebugRegisterFile'

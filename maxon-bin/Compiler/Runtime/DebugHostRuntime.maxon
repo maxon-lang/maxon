@@ -1,0 +1,82 @@
+let DebugHostRuntimePrefix = b"__dbgh_"
+
+export let DebugHostReadMemoryName = b"__dbgh_read_memory"
+export let DebugHostWriteMemoryName = b"__dbgh_write_memory"
+export let DebugHostReadContextName = b"__dbgh_read_context"
+export let DebugHostWriteContextName = b"__dbgh_write_context"
+export let DebugHostWaitEventName = b"__dbgh_wait_event"
+export let DebugHostContinueEventName = b"__dbgh_continue_event"
+export let DebugHostBreakName = b"__dbgh_break"
+export let DebugHostAttachName = b"__dbgh_attach"
+export let DebugHostDetachName = b"__dbgh_detach"
+export let DebugHostProtectName = b"__dbgh_protect"
+export let DebugHostFlushCodeName = b"__dbgh_flush_code"
+export let DebugHostCloseHandleName = b"__dbgh_close_handle"
+
+let DebugHostOneWord = 1 as ParamCount
+let DebugHostTwoWords = 2 as ParamCount
+let DebugHostThreeWords = 3 as ParamCount
+let DebugHostFiveWords = 5 as ParamCount
+
+export function isDebugHostRuntimeCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: DebugHostRuntimePrefix)
+end 'isDebugHostRuntimeCallee'
+
+function debugHostParamTypes(count ParamCount) returns StdTypeArray
+	if count == DebugHostOneWord 'oneWord'
+		return oneI64Param()
+	end 'oneWord'
+
+	if count == DebugHostTwoWords 'twoWords'
+		return twoI64Params()
+	end 'twoWords'
+
+	if count == DebugHostThreeWords 'threeWords'
+		return threeI64Params()
+	end 'threeWords'
+
+	if count == DebugHostFiveWords 'fiveWords'
+		return fiveI64Params()
+	end 'fiveWords'
+
+	panic("debugHostParamTypes: no entry point of this family takes {count} words — the four shapes are {DebugHostOneWord}, {DebugHostTwoWords}, {DebugHostThreeWords} and {DebugHostFiveWords}")
+end 'debugHostParamTypes'
+
+function debugHostOperand(index ParamCount, count ParamCount, zero ValueId) returns ValueId
+	return index as ValueId if index < count else zero
+end 'debugHostOperand'
+
+function buildDebugHostEntry(module StdModule, name ByteArray, words ParamCount, service HostProcessCall)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: words, paramTypes: debugHostParamTypes(words), returnLine: 0)
+	var ids = ValueMinter.create(words)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: words)
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+
+	let answer = ids.mint()
+	module.appendOp(entry, op: StdOp.osHostProcess(answer, service: service, a0Id: debugHostOperand(0, count: words, zero: zero), a1Id: debugHostOperand(1, count: words, zero: zero), a2Id: debugHostOperand(2, count: words, zero: zero), a3Id: debugHostOperand(3, count: words, zero: zero), a4Id: debugHostOperand(4, count: words, zero: zero), a5Id: zero))
+	module.setTerminator(entry, op: StdOp.ret(answer))
+
+	module.functions.push(func)
+end 'buildDebugHostEntry'
+
+export function installDebugHostRuntime(module StdModule, usage RuntimeUsage)
+	if not usage.usesProcessDebug 'noProcessDebug'
+		return
+	end 'noProcessDebug'
+
+	buildDebugHostEntry(module, name: DebugHostReadMemoryName, words: DebugHostFiveWords, service: HostProcessCall.readProcessMemory)
+	buildDebugHostEntry(module, name: DebugHostWriteMemoryName, words: DebugHostFiveWords, service: HostProcessCall.writeProcessMemory)
+	buildDebugHostEntry(module, name: DebugHostReadContextName, words: DebugHostTwoWords, service: HostProcessCall.threadContext)
+	buildDebugHostEntry(module, name: DebugHostWriteContextName, words: DebugHostTwoWords, service: HostProcessCall.writeThreadContext)
+	buildDebugHostEntry(module, name: DebugHostWaitEventName, words: DebugHostTwoWords, service: HostProcessCall.waitForDebugEvent)
+	buildDebugHostEntry(module, name: DebugHostContinueEventName, words: DebugHostThreeWords, service: HostProcessCall.continueDebugEvent)
+	buildDebugHostEntry(module, name: DebugHostBreakName, words: DebugHostOneWord, service: HostProcessCall.breakProcess)
+	buildDebugHostEntry(module, name: DebugHostAttachName, words: DebugHostOneWord, service: HostProcessCall.attachToProcess)
+	buildDebugHostEntry(module, name: DebugHostDetachName, words: DebugHostOneWord, service: HostProcessCall.detachFromProcess)
+	buildDebugHostEntry(module, name: DebugHostProtectName, words: DebugHostFiveWords, service: HostProcessCall.protectRegion)
+	buildDebugHostEntry(module, name: DebugHostFlushCodeName, words: DebugHostThreeWords, service: HostProcessCall.flushCode)
+	buildDebugHostEntry(module, name: DebugHostCloseHandleName, words: DebugHostOneWord, service: HostProcessCall.closeHandle)
+end 'installDebugHostRuntime'

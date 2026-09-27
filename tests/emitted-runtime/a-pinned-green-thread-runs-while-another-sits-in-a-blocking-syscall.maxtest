@@ -1,0 +1,45 @@
+let CaseLabel = "pinned-machine-blocked"
+
+let RunDeadline = 30000 as DurationMs
+
+let SoleProcessor = 1 as ProcessorCount
+let TwoProcessors = 2 as ProcessorCount
+let FourProcessors = 4 as ProcessorCount
+
+let FedLine = "go"
+
+let StayedLine = "moved 0 of 20"
+let WithinBudgetLine = "rounds ok"
+
+let CaptureReason = "A pinned green thread's OWNER MACHINE may run nothing but that green thread. Its 20 parks are 10 ms each, so its rounds take about 200 ms — unless the owner M picks up an unrelated green thread that enters a LONG BLOCKING SYSCALL, and this program arranges exactly one: a reader sitting in `Console.stdin().readLine()`, which is `__con_read_stdin`, a synchronous `ReadFile` classed `SyscallClass.blocking` and held in the kernel for about a second by `InputSource.delayed`. An owner captured that way cannot run its pinned thread at all: every other machine that finds the pinned thread refuses it, requeues it, hands the owner its processor and sleeps, so the pinned thread waits out the whole kernel call and `rounds slow` is printed instead of `rounds ok`. Go's answer is `stoplockedm` (`vendor/go/src/runtime/proc.go:3266-3288`), reached from the first three lines of `schedule()` (`proc.go:4158-4161`): a machine with a locked G hands its processor off and PARKS rather than searching, so it is never inside somebody else's syscall when its own thread becomes runnable, and `startlockedm` (`proc.go:3294-3308`) wakes it with a processor in its private slot."
+
+test 'a pinned green thread runs while another sits in a blocking syscall'
+	let staged = stagedProgram(CaseLabel, fixture: PinnedMachineBlockedFixtureName)
+	let executable = buildStagedForHost(staged, caseLabel: CaseLabel)
+
+	var findings = StringArray.create()
+
+	noteCaptureRun(findings, executable: executable, staged: staged, procs: SoleProcessor)
+	noteCaptureRun(findings, executable: executable, staged: staged, procs: TwoProcessors)
+	noteCaptureRun(findings, executable: executable, staged: staged, procs: FourProcessors)
+
+	Expect.isTrue(findings.isEmpty(), message: "a pinned green thread was starved by an unrelated green thread's blocking kernel call:{renderedFindings(findings)}\n\n  {CaptureReason}")
+end 'a pinned green thread runs while another sits in a blocking syscall'
+
+function noteCaptureRun(findings StringArray, executable FilePath, staged FilePath, procs ProcessorCount)
+	let run = runStagedForHost(executable, staged: staged, procs: procs, deadlineMs: RunDeadline, standardInput: InputSource.delayed(FedLine))
+
+	if run.exitCode() != 0 'didNotFinish'
+		findings.push("at {procs} processor(s) the program exited {run.exitCode()} — it said `{oneLine(run.stdout)}` on stdout and `{oneLine(run.stderr)}` on stderr. A run killed at the {RunDeadline} ms deadline never left the kernel call; any other non-zero code is the program's own refusal")
+
+		return
+	end 'didNotFinish'
+
+	if not run.stdout.contains(StayedLine) 'movedMachine'
+		findings.push("at {procs} processor(s) the program exited 0 and said `{oneLine(run.stdout)}` where it says `{StayedLine}` when every park gave the pinned thread back to the machine it pinned itself to")
+	end 'movedMachine'
+
+	if not run.stdout.contains(WithinBudgetLine) 'starved'
+		findings.push("at {procs} processor(s) the program exited 0 and said `{oneLine(run.stdout)}` where it says `{WithinBudgetLine}` when the pinned thread's parks were not held behind the reader's kernel call — `rounds slow` is that starvation, and the figure beside it is how long 20 parks of 10 ms actually took")
+	end 'starved'
+end 'noteCaptureRun'

@@ -1,0 +1,93 @@
+public typealias Tally = int(0 to u64.max)
+
+let Rounds = 24 as Tally
+let SpinSteps = 2000000 as Tally
+let LoopbackHost = "127.0.0.1"
+let AnyFreePort = 0 as NetworkPort
+let Greeting = "x"
+
+type Spinner
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function spin(steps Tally) returns Tally
+		var done = 0 as Tally
+
+		while done < steps 'burn'
+			done = done + 1
+		end 'burn'
+
+		return done
+	end 'spin'
+end 'Spinner'
+
+function accepted(listener TcpListener) returns Tally
+	var taken = try listener.accept() otherwise return 0
+
+	taken.close()
+
+	return 1
+end 'accepted'
+
+function spun(spinner Spinner.handle) returns Tally
+	return try await spinner.spin(SpinSteps) otherwise 0
+end 'spun'
+
+function main() returns ExitCode
+	var listener = try TcpListener.bind(LoopbackHost, port: AnyFreePort) otherwise panic("pinned-machine: could not bind a loopback listener")
+	let port = listener.port() as Tally
+	let accepting = async accepted(listener)
+	let spinner = spawn Spinner.create()
+
+	if __Builtins.pinToMachine() == 0 'refused'
+		print("refused\n")
+
+		return 1
+	end 'refused'
+
+	let pinned = __Builtins.currentMachine()
+
+	if pinned == 0 'noMachine'
+		print("no machine\n")
+
+		return 1
+	end 'noMachine'
+
+	var moved = 0 as Tally
+	var round = 0 as Tally
+
+	while round < Rounds 'eachRound'
+		let burnt = await async spun(spinner)
+
+		if burnt != SpinSteps 'wrongAnswer'
+			print("answer {burnt}\n")
+
+			return 1
+		end 'wrongAnswer'
+
+		if __Builtins.currentMachine() != pinned 'leftItsMachine'
+			moved = moved + 1
+		end 'leftItsMachine'
+
+		round = round + 1
+	end 'eachRound'
+
+	__Builtins.unpinFromMachine()
+
+	var knocker = try TcpClient.connect(LoopbackHost, port: port as NetworkPort) otherwise panic("pinned-machine: could not connect to the loopback listener this program bound")
+	_ = try knocker.send(Greeting) otherwise 0
+	knocker.close()
+
+	let took = await accepting
+
+	if took != 1 'neverAccepted'
+		print("accept {took}\n")
+
+		return 1
+	end 'neverAccepted'
+
+	print("moved {moved} of {Rounds}\n")
+
+	return 0
+end 'main'

@@ -7017,6 +7017,23 @@ let BuiltinsProfileReadWordName = b"__Builtins.profileReadWord"
 let BuiltinsProfileWriteWordName = b"__Builtins.profileWriteWord"
 let BuiltinsProfileNowFileTimeName = b"__Builtins.profileNowFileTime"
 
+let BuiltinsDebugReadMemoryName = b"__Builtins.debugReadMemory"
+let BuiltinsDebugWriteMemoryName = b"__Builtins.debugWriteMemory"
+let BuiltinsDebugReadContextName = b"__Builtins.debugReadContext"
+let BuiltinsDebugWriteContextName = b"__Builtins.debugWriteContext"
+let BuiltinsDebugWaitEventName = b"__Builtins.debugWaitEvent"
+let BuiltinsDebugContinueEventName = b"__Builtins.debugContinueEvent"
+let BuiltinsDebugBreakProcessName = b"__Builtins.debugBreakProcess"
+let BuiltinsDebugAttachProcessName = b"__Builtins.debugAttachProcess"
+let BuiltinsDebugDetachProcessName = b"__Builtins.debugDetachProcess"
+let BuiltinsDebugProtectRegionName = b"__Builtins.debugProtectRegion"
+let BuiltinsDebugFlushCodeName = b"__Builtins.debugFlushCode"
+let BuiltinsDebugCloseHandleName = b"__Builtins.debugCloseHandle"
+
+let BuiltinsPinToMachineName = b"__Builtins.pinToMachine"
+let BuiltinsUnpinFromMachineName = b"__Builtins.unpinFromMachine"
+let BuiltinsCurrentMachineName = b"__Builtins.currentMachine"
+
 // The two positions the POSITIONAL shapes below name. Their own constants rather than the spawn contract's
 // `SubprocessSpawnArgvSlot`, which is also 0 but says something else: these mean "the first/second argument
 // of whatever contract this is", and that one means where a fourteen-wide contract puts its argv blob.
@@ -7239,6 +7256,12 @@ let ProfileThreeArgArity = 3 as ParamCount
 // The suspended window's whole contract: the process, the thread, the three caller-owned scratch records
 // and the window's capacity (`ProfileRuntime.buildProfileSample`).
 let ProfileSampleArity = 6 as ParamCount
+
+let DebugHostNoArgArity = 0 as ParamCount
+let DebugHostOneArgArity = 1 as ParamCount
+let DebugHostTwoArgArity = 2 as ParamCount
+let DebugHostThreeArgArity = 3 as ParamCount
+let DebugHostFiveArgArity = 5 as ParamCount
 
 // ⭐ **IS THIS CALLEE A MEMBER OF THE `__Builtins` TYPE?** THE one test, and it has two askers that
 // must never disagree: the intrinsic table in `parseCallNamed` (which dispatches on it) and the
@@ -9978,7 +10001,6 @@ let StringLiteralRequirement = "string literal"
 // ⭐ What a `__Raw` operand refusal calls its two non-value requirements. Constants for
 // `StringLiteralRequirement`'s reason: a wording a golden pins belongs in one place, not at the throw.
 let RawConstantOperandRequirement = "a compile-time integer constant"
-let RawDebugHostVerbRequirement = "a `DebugHostVerb` code the debug agent's host roster lists"
 let RawScratchSizeRequirement = "a positive whole number of 8-byte slots"
 
 // ⭐ **WHAT A PROMISE-STORAGE MISMATCH SENTENCE CALLS THE PROMISE, ON THE SPAWN ROAD** — beside the phrase
@@ -86127,6 +86149,66 @@ export type Parser
 			if callee.equals(BuiltinsProfileNowFileTimeName) 'profileNowFileTime'
 				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: WallClockNowFileTimeName, arity: ProfileNoArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
 			end 'profileNowFileTime'
+
+			if callee.equals(BuiltinsDebugReadMemoryName) 'debugReadMemory'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: DebugHostReadMemoryName, arity: DebugHostFiveArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
+			end 'debugReadMemory'
+
+			if callee.equals(BuiltinsDebugWriteMemoryName) 'debugWriteMemory'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: DebugHostWriteMemoryName, arity: DebugHostFiveArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
+			end 'debugWriteMemory'
+
+			if callee.equals(BuiltinsDebugReadContextName) 'debugReadContext'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: DebugHostReadContextName, arity: DebugHostTwoArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
+			end 'debugReadContext'
+
+			if callee.equals(BuiltinsDebugWriteContextName) 'debugWriteContext'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: DebugHostWriteContextName, arity: DebugHostTwoArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
+			end 'debugWriteContext'
+
+			if callee.equals(BuiltinsDebugWaitEventName) 'debugWaitEvent'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: DebugHostWaitEventName, arity: DebugHostTwoArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
+			end 'debugWaitEvent'
+
+			if callee.equals(BuiltinsDebugContinueEventName) 'debugContinueEvent'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: DebugHostContinueEventName, arity: DebugHostThreeArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
+			end 'debugContinueEvent'
+
+			if callee.equals(BuiltinsDebugBreakProcessName) 'debugBreakProcess'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: DebugHostBreakName, arity: DebugHostOneArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
+			end 'debugBreakProcess'
+
+			if callee.equals(BuiltinsDebugAttachProcessName) 'debugAttachProcess'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: DebugHostAttachName, arity: DebugHostOneArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
+			end 'debugAttachProcess'
+
+			if callee.equals(BuiltinsDebugDetachProcessName) 'debugDetachProcess'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: DebugHostDetachName, arity: DebugHostOneArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
+			end 'debugDetachProcess'
+
+			if callee.equals(BuiltinsDebugProtectRegionName) 'debugProtectRegion'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: DebugHostProtectName, arity: DebugHostFiveArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
+			end 'debugProtectRegion'
+
+			if callee.equals(BuiltinsDebugFlushCodeName) 'debugFlushCode'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: DebugHostFlushCodeName, arity: DebugHostThreeArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
+			end 'debugFlushCode'
+
+			if callee.equals(BuiltinsDebugCloseHandleName) 'debugCloseHandle'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: DebugHostCloseHandleName, arity: DebugHostOneArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
+			end 'debugCloseHandle'
+
+			if callee.equals(BuiltinsPinToMachineName) 'pinToMachine'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: GtPinMachineName, arity: DebugHostNoArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
+			end 'pinToMachine'
+
+			if callee.equals(BuiltinsUnpinFromMachineName) 'unpinFromMachine'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: GtUnpinMachineName, arity: DebugHostNoArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.void, resultUsed: resultUsed, calleeTok: anchor)
+			end 'unpinFromMachine'
+
+			if callee.equals(BuiltinsCurrentMachineName) 'currentMachine'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: GtCurrentMachineName, arity: DebugHostNoArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
+			end 'currentMachine'
 		end 'builtinsIntrinsic'
 
 		// ⭐⭐ **THE `__DebugStream` MEMBERS THAT REACH THE RING (Workstream O3)** — the second builtin TYPE's
@@ -86256,17 +86338,6 @@ export type Parser
 			constant = try self.reserveRawScratchSlot(func, bytes: constant, callee: callee, calleeTok: calleeTok)
 		end 'frameRecord'
 
-		if intrinsic == RawIntrinsic.osDebugHost 'aVerbOperand'
-			let listed = match debugHostVerbLookup(constant) 'verb'
-				found gives true
-				notListed gives false
-			end 'verb'
-
-			if not listed 'unlistedVerb'
-				throw ParseError.builtinOperandType(String.from(callee), required: RawDebugHostVerbRequirement, got: "{constant}", line: calleeTok.line, column: calleeTok.column)
-			end 'unlistedVerb'
-		end 'aVerbOperand'
-
 		try self.recordFrameDirective(func, intrinsic: intrinsic, calleeTok: calleeTok)
 
 		let result = self.mintValue(rawIntrinsicResultTag(intrinsic), nameId: UnnamedTypeId)
@@ -86328,13 +86399,6 @@ export type Parser
 				osLockInit or
 				osLockEnter or
 				osLockLeave or
-				osDebugHost or
-				dbgEnvironmentValue or
-				dbgAttachSegment or
-				dbgCtlAddr or
-				dbgTextBase or
-				dbgTextLimit or
-				dbgServiceEntryAddr or
 				osThreadCreate or
 				schedTlsTebOffsetAddr or
 				schedAllMachinesAddr or

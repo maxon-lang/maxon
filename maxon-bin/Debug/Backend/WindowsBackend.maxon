@@ -1,0 +1,554 @@
+let ScratchBytes = 0x1000
+
+let WordBytes = 8
+
+let ContextOffset = 0x000
+let EventOffset = 0x600
+let TransferOffset = 0x700
+export let TransferWindowBytes = 512
+
+let TransferBytes = 1024
+let OutWordOffset = TransferOffset + TransferBytes
+let SecondOutWordOffset = OutWordOffset + WordBytes
+
+let HighDwordShift = 32
+let DwordMask = 0xFFFFFFFF
+let TrapFlagBit = 0x100
+
+let ByteMask = 0xFF
+
+let DebugEventCodeException = 1
+let DebugEventCodeCreateThread = 2
+let DebugEventCodeCreateProcess = 3
+let DebugEventCodeExitThread = 4
+let DebugEventCodeExitProcess = 5
+let DebugEventCodeLoadDll = 6
+
+let EventCodeAndPidOffset = 0x00
+let EventThreadIdOffset = 0x08
+let EventPayloadOffset = 0x10
+let EventImageFileOffset = 0x10
+let EventCreateProcessHandleOffset = 0x18
+let EventCreateProcessThreadOffset = 0x20
+let EventExceptionAddressOffset = 0x20
+
+let ExceptionCodeBreakpoint = 0x80000003
+let ExceptionCodeSingleStep = 0x80000004
+
+let ContinueHandled = 0x00010002
+let ContinueUnhandled = 0x80010001
+
+let PageExecuteReadWrite = 0x40
+
+let Win32True = 1
+
+typealias BackendPageOffset = int(0 to 0xFF8)
+
+let MaxBackendPageOffset = 0xFF8
+
+export function requireBackendPageOffsetSpansItsScratch()
+	if MaxBackendPageOffset != ScratchBytes - WordBytes 'aBoundThatIsNotTheScratchs'
+		panic("WindowsBackend: BackendPageOffset is bounded at {MaxBackendPageOffset} and the last whole word of a {ScratchBytes}-byte scratch page begins at {ScratchBytes - WordBytes}")
+	end 'aBoundThatIsNotTheScratchs'
+end 'requireBackendPageOffsetSpansItsScratch'
+
+type BackendThreadEntry
+	export let id as BackendThreadId
+	export let handle as BackendHandle
+
+	static function create(id BackendThreadId, handle BackendHandle) returns BackendThreadEntry
+		return Self{id: id, handle: handle}
+	end 'create'
+end 'BackendThreadEntry'
+
+typealias BackendThreadEntryArray = Array with BackendThreadEntry
+
+union BackendThreadHandleLookup
+	none
+	at(handle BackendHandle)
+end 'BackendThreadHandleLookup'
+
+export let BackendScratchRefusal = "could not reserve the pages the debugger reads a stopped thread's registers through"
+
+export type WindowsBackend
+	var scratch as BackendHandle
+	var process as BackendHandle
+	var processId as BackendWord
+	var threads as BackendThreadEntryArray
+	var pendingProcessId as BackendWord
+	var pendingThreadId as BackendWord
+	var pendingUnowned as bool
+	var stopOutstanding as bool
+	var sawFirstBreakpoint as bool
+	var stopRequested as bool
+	var status as BackendExitStatus
+
+	export static function create() returns WindowsBackend
+		let scratch = __Builtins.profileScratchAlloc(ScratchBytes)
+
+		return Self{scratch: scratch as BackendHandle, process: 0, processId: 0, threads: BackendThreadEntryArray.create(), pendingProcessId: 0, pendingThreadId: 0, pendingUnowned: false, stopOutstanding: false, sawFirstBreakpoint: false, stopRequested: false, status: BackendExitStatus.running}
+	end 'create'
+
+	export function holdsItsScratch() returns bool
+		return self.scratch != 0
+	end 'holdsItsScratch'
+
+	export function close()
+		if self.scratch != 0 'holdsPages'
+			__Builtins.profileScratchFree(self.scratch, ScratchBytes)
+			self.scratch = 0
+		end 'holdsPages'
+	end 'close'
+
+	export function exitStatus() returns BackendExitStatus
+		return self.status
+	end 'exitStatus'
+
+	export function listThreads() returns BackendThreadIdArray
+		var ids = BackendThreadIdArray.create()
+
+		for entry in self.threads 'eachThread'
+			ids.push(entry.id)
+		end 'eachThread'
+
+		return ids
+	end 'listThreads'
+
+	export function stoppedThread() returns BackendThreadId
+		return self.pendingThreadId as BackendThreadId
+	end 'stoppedThread'
+
+	// --- the stop loop ---
+
+	export function waitForStop(budgetMs BackendWaitBudgetMs) returns DebugStopEvent
+		while true 'pump'
+			if hostDebugCall(HostDebugVerb.waitEvent, a0: self.eventAddress(), a1: budgetMs as BackendWord, a2: 0, a3: 0, a4: 0) != Win32True 'nothingArrived'
+				return DebugStopEvent.timedOut
+			end 'nothingArrived'
+
+			let header = self.scratchWord((EventOffset + EventCodeAndPidOffset) as BackendPageOffset)
+			let code = header and DwordMask
+			self.pendingProcessId = (header shr HighDwordShift) and DwordMask
+			self.pendingThreadId = self.scratchWord((EventOffset + EventThreadIdOffset) as BackendPageOffset) and DwordMask
+
+			match self.classified(code) 'event'
+				bookkeeping then continue
+				ended(ending) then return ending
+				stop(stopping) then return stopping
+			end 'event'
+		end 'pump'
+
+		panic("WindowsBackend.waitForStop: the pump leaves only by answering an event, and every class above answers one")
+	end 'waitForStop'
+
+	function classified(code BackendWord) returns BackendEventClass
+		if code == DebugEventCodeCreateProcess 'theProcessArrived'
+			self.process = self.scratchWord((EventOffset + EventCreateProcessHandleOffset) as BackendPageOffset) as BackendHandle
+			self.processId = self.pendingProcessId
+			self.rememberThread(self.pendingThreadId as BackendThreadId, handle: self.scratchWord((EventOffset + EventCreateProcessThreadOffset) as BackendPageOffset) as BackendHandle)
+			self.closeEventImageFile()
+			_ = self.continueEvent(ContinueHandled)
+
+			return BackendEventClass.bookkeeping
+		end 'theProcessArrived'
+
+		if code == DebugEventCodeLoadDll 'aLibraryArrived'
+			self.closeEventImageFile()
+			_ = self.continueEvent(ContinueHandled)
+
+			return BackendEventClass.bookkeeping
+		end 'aLibraryArrived'
+
+		if code == DebugEventCodeCreateThread 'aThreadArrived'
+			self.rememberThread(self.pendingThreadId as BackendThreadId, handle: self.scratchWord((EventOffset + EventPayloadOffset) as BackendPageOffset) as BackendHandle)
+			_ = self.continueEvent(ContinueHandled)
+
+			return BackendEventClass.bookkeeping
+		end 'aThreadArrived'
+
+		if code == DebugEventCodeExitThread 'aThreadLeft'
+			self.forgetThread(self.pendingThreadId as BackendThreadId)
+			_ = self.continueEvent(ContinueHandled)
+
+			return BackendEventClass.bookkeeping
+		end 'aThreadLeft'
+
+		if code == DebugEventCodeExitProcess 'theProcessLeft'
+			let ending = self.scratchWord((EventOffset + EventPayloadOffset) as BackendPageOffset) and DwordMask
+			self.status = BackendExitStatus.ended(ending as BackendExitCode)
+			_ = self.continueEvent(ContinueHandled)
+
+			return BackendEventClass.ended(DebugStopEvent.exited(ending as BackendExitCode))
+		end 'theProcessLeft'
+
+		if code != DebugEventCodeException 'nothingTheDriverActsOn'
+			_ = self.continueEvent(ContinueHandled)
+
+			return BackendEventClass.bookkeeping
+		end 'nothingTheDriverActsOn'
+
+		return BackendEventClass.stop(self.exceptionStop())
+	end 'classified'
+
+	function closeEventImageFile()
+		let file = self.scratchWord((EventOffset + EventImageFileOffset) as BackendPageOffset) as BackendHandle
+
+		if file == 0 'noFileWasHandedOver'
+			return
+		end 'noFileWasHandedOver'
+
+		_ = hostDebugCall(HostDebugVerb.closeHandle, a0: file as BackendWord, a1: 0, a2: 0, a3: 0, a4: 0)
+	end 'closeEventImageFile'
+
+	// ⭐ The breakpoint address is `ExceptionRecord.ExceptionAddress` and never arithmetic on the reported
+	// program counter: the two conventions differ by one byte and this field is authoritative on both.
+	function exceptionStop() returns DebugStopEvent
+		let excCode = self.scratchWord((EventOffset + EventPayloadOffset) as BackendPageOffset) and DwordMask
+		let address = self.scratchWord((EventOffset + EventExceptionAddressOffset) as BackendPageOffset)
+		self.stopOutstanding = true
+
+		if excCode == ExceptionCodeBreakpoint 'aPlantedByteOrTheLoadersOwn'
+			let first = not self.sawFirstBreakpoint
+			self.sawFirstBreakpoint = true
+			self.pendingUnowned = false
+
+			return DebugStopEvent.stopped(self.pendingThreadId as BackendThreadId, reason: self.breakpointExceptionReason(first), faultCode: 0, address: debugAddressOrZero(address as DebugWord))
+		end 'aPlantedByteOrTheLoadersOwn'
+
+		if excCode == ExceptionCodeSingleStep 'aStepLanded'
+			self.pendingUnowned = false
+
+			return DebugStopEvent.stopped(self.pendingThreadId as BackendThreadId, reason: BackendStopReason.singleStep, faultCode: 0, address: debugAddressOrZero(address as DebugWord))
+		end 'aStepLanded'
+
+		self.pendingUnowned = true
+
+		return DebugStopEvent.stopped(self.pendingThreadId as BackendThreadId, reason: BackendStopReason.fault, faultCode: excCode, address: debugAddressOrZero(address as DebugWord))
+	end 'exceptionStop'
+
+	function breakpointExceptionReason(first bool) returns BackendStopReason
+		if first 'theLoadersOwn'
+			return BackendStopReason.entry
+		end 'theLoadersOwn'
+
+		if self.stopRequested 'theDriverAskedForIt'
+			self.stopRequested = false
+
+			return BackendStopReason.interrupt
+		end 'theDriverAskedForIt'
+
+		return BackendStopReason.breakpoint
+	end 'breakpointExceptionReason'
+
+	// --- resuming ---
+
+	export function resumeAll() returns bool
+		if not self.stopOutstanding 'nothingIsStopped'
+			return true
+		end 'nothingIsStopped'
+
+		self.stopOutstanding = false
+
+		return self.continueEvent(ContinueUnhandled if self.pendingUnowned else ContinueHandled)
+	end 'resumeAll'
+
+	export function stepThread(thread BackendThreadId) returns bool
+		if not self.trapFlagSet(thread, armed: true) 'noRegisterFile'
+			return false
+		end 'noRegisterFile'
+
+		return self.resumeAll()
+	end 'stepThread'
+
+	export function requestStop() returns bool
+		self.stopRequested = hostDebugCall(HostDebugVerb.breakProcess, a0: self.process as BackendWord, a1: 0, a2: 0, a3: 0, a4: 0) == Win32True
+
+		return self.stopRequested
+	end 'requestStop'
+
+	export function detach() returns bool
+		_ = self.resumeAll()
+
+		return hostDebugCall(HostDebugVerb.detachProcess, a0: self.processId, a1: 0, a2: 0, a3: 0, a4: 0) == Win32True
+	end 'detach'
+
+	function continueEvent(disposition BackendWord) returns bool
+		return hostDebugCall(HostDebugVerb.continueEvent, a0: self.pendingProcessId, a1: self.pendingThreadId, a2: disposition, a3: 0, a4: 0) == Win32True
+	end 'continueEvent'
+
+	// --- memory ---
+
+	export function readMemory(address DebugAddress, bytes BackendByteCount) returns BackendMemoryRead
+		if bytes == 0 'nothingAsked'
+			return BackendMemoryRead.read(ByteArray.create())
+		end 'nothingAsked'
+
+		if bytes > TransferWindowBytes 'pastTheWindow'
+			return BackendMemoryRead.unreadable
+		end 'pastTheWindow'
+
+		self.setScratchWord(OutWordOffset as BackendPageOffset, value: 0)
+
+		if hostDebugCall(HostDebugVerb.readMemory, a0: self.process as BackendWord, a1: address as BackendWord, a2: self.transferAddress(), a3: bytes as BackendWord, a4: self.outWordAddress()) != Win32True 'notMapped'
+			return BackendMemoryRead.unreadable
+		end 'notMapped'
+
+		if (self.scratchWord(OutWordOffset as BackendPageOffset) and DwordMask) < (bytes as BackendWord) 'aShortRead'
+			return BackendMemoryRead.unreadable
+		end 'aShortRead'
+
+		return BackendMemoryRead.read(self.transferredBytes(bytes))
+	end 'readMemory'
+
+	// ⛔ `.text` is mapped read and execute, so the page's protection is lifted for the write and put back:
+	// a breakpoint is always a write into a page the image maps without WRITE.
+	export function writeMemory(address DebugAddress, bytes ByteArray) returns bool
+		let count = bytes.count()
+
+		if count == 0 'nothingToWrite'
+			return true
+		end 'nothingToWrite'
+
+		if count > TransferWindowBytes 'pastTheWindow'
+			return false
+		end 'pastTheWindow'
+
+		self.fillTransfer(bytes)
+		self.setScratchWord(OutWordOffset as BackendPageOffset, value: 0)
+		self.setScratchWord(SecondOutWordOffset as BackendPageOffset, value: 0)
+
+		let lifted = hostDebugCall(HostDebugVerb.protectRegion, a0: self.process as BackendWord, a1: address as BackendWord, a2: count as BackendWord, a3: PageExecuteReadWrite, a4: self.secondOutWordAddress()) == Win32True
+		let wrote = hostDebugCall(HostDebugVerb.writeMemory, a0: self.process as BackendWord, a1: address as BackendWord, a2: self.transferAddress(), a3: count as BackendWord, a4: self.outWordAddress()) == Win32True
+
+		if lifted 'protectionWasChanged'
+			_ = hostDebugCall(HostDebugVerb.protectRegion, a0: self.process as BackendWord, a1: address as BackendWord, a2: count as BackendWord, a3: self.scratchWord(SecondOutWordOffset as BackendPageOffset) and DwordMask, a4: self.outWordAddress())
+		end 'protectionWasChanged'
+
+		_ = hostDebugCall(HostDebugVerb.flushCode, a0: self.process as BackendWord, a1: address as BackendWord, a2: count as BackendWord, a3: 0, a4: 0)
+
+		return wrote
+	end 'writeMemory'
+
+	// --- registers ---
+
+	export function readRegisters(thread BackendThreadId) returns BackendRegisterRead
+		let handle = self.knownHandleOf(thread)
+
+		if handle == 0 'noSuchThread'
+			return BackendRegisterRead.unreadable
+		end 'noSuchThread'
+
+		if not self.contextRead(handle) 'theContextIsUnreadable'
+			return BackendRegisterRead.unreadable
+		end 'theContextIsUnreadable'
+
+		var file = DebugRegisterFile.create()
+
+		for slot in 0 upto BackendGprSlots 'eachGeneralRegister'
+			file.setValue(slot as BackendRegisterNumber, value: self.scratchWord((ContextOffset + Win64ContextGprBase + slot * WordBytes) as BackendPageOffset))
+		end 'eachGeneralRegister'
+
+		for lane in 0 upto BackendVectorSlots 'eachVectorRegister'
+			file.setValue((BackendGprSlots + lane) as BackendRegisterNumber, value: self.scratchWord((ContextOffset + Win64ContextXmm0Offset + lane * Win64ContextXmmBytes) as BackendPageOffset))
+		end 'eachVectorRegister'
+
+		file.setValue(BackendRegSlotPc as BackendRegisterNumber, value: self.scratchWord((ContextOffset + Win64ContextRipOffset) as BackendPageOffset))
+		file.setValue(BackendRegSlotFlags as BackendRegisterNumber, value: (self.scratchWord((ContextOffset + Win64ContextSegWordOffset) as BackendPageOffset) shr HighDwordShift) and DwordMask)
+
+		return BackendRegisterRead.read(file)
+	end 'readRegisters'
+
+	export function writeRegisters(thread BackendThreadId, file DebugRegisterFile) returns bool
+		let handle = self.knownHandleOf(thread)
+
+		if handle == 0 'noSuchThread'
+			return false
+		end 'noSuchThread'
+
+		if not self.contextRead(handle) 'unreadable'
+			return false
+		end 'unreadable'
+
+		for slot in 0 upto BackendGprSlots 'eachGeneralRegister'
+			self.setScratchWord((ContextOffset + Win64ContextGprBase + slot * WordBytes) as BackendPageOffset, value: file.valueOf(slot as BackendRegisterNumber))
+		end 'eachGeneralRegister'
+
+		self.setScratchWord((ContextOffset + Win64ContextRipOffset) as BackendPageOffset, value: file.valueOf(BackendRegSlotPc as BackendRegisterNumber))
+		self.storeFlags(file.valueOf(BackendRegSlotFlags as BackendRegisterNumber))
+
+		return self.contextWritten(handle)
+	end 'writeRegisters'
+
+	export function setProgramCounter(thread BackendThreadId, address DebugAddress) returns bool
+		return self.contextWordPatched(thread, offset: (ContextOffset + Win64ContextRipOffset) as BackendPageOffset, value: address as BackendWord)
+	end 'setProgramCounter'
+
+	function contextWordPatched(thread BackendThreadId, offset BackendPageOffset, value BackendWord) returns bool
+		let handle = self.knownHandleOf(thread)
+
+		if handle == 0 'noSuchThread'
+			return false
+		end 'noSuchThread'
+
+		if not self.contextRead(handle) 'unreadable'
+			return false
+		end 'unreadable'
+
+		self.setScratchWord(offset, value: value)
+
+		return self.contextWritten(handle)
+	end 'contextWordPatched'
+
+	// ⭐ A step is the x86 trap flag in the thread's own saved register file, not a system call.
+	function trapFlagSet(thread BackendThreadId, armed bool) returns bool
+		let handle = self.knownHandleOf(thread)
+
+		if handle == 0 'noSuchThread'
+			return false
+		end 'noSuchThread'
+
+		if not self.contextRead(handle) 'unreadable'
+			return false
+		end 'unreadable'
+
+		let word = self.scratchWord((ContextOffset + Win64ContextSegWordOffset) as BackendPageOffset)
+		let bit = (TrapFlagBit as BackendWord) shl HighDwordShift
+		self.setScratchWord((ContextOffset + Win64ContextSegWordOffset) as BackendPageOffset, value: word or bit if armed else word - (word and bit))
+
+		return self.contextWritten(handle)
+	end 'trapFlagSet'
+
+	function storeFlags(flags BackendWord)
+		let word = self.scratchWord((ContextOffset + Win64ContextSegWordOffset) as BackendPageOffset)
+		let low = word and DwordMask
+		self.setScratchWord((ContextOffset + Win64ContextSegWordOffset) as BackendPageOffset, value: low or ((flags and DwordMask) shl HighDwordShift))
+	end 'storeFlags'
+
+	// --- the thread table ---
+
+	function rememberThread(id BackendThreadId, handle BackendHandle)
+		self.forgetThread(id)
+		self.threads.push(BackendThreadEntry.create(id, handle: handle))
+	end 'rememberThread'
+
+	function forgetThread(id BackendThreadId)
+		var kept = BackendThreadEntryArray.create()
+
+		for entry in self.threads 'eachThread'
+			if entry.id != id 'anotherThread'
+				kept.push(entry)
+			end 'anotherThread'
+		end 'eachThread'
+
+		self.threads = kept
+	end 'forgetThread'
+
+	// ⛔ The requested families are the LOW dword of this word and `MxCsr` is the HIGH one, so the store
+	// leaves the high half as the host left it: a whole-word store is sound only where the record is never
+	// written back, and `contextWritten` writes it back. `ProfileSampleContract.maxon` owns the rule.
+	function contextRead(handle BackendHandle) returns bool
+		self.setScratchWord(ContextOffset as BackendPageOffset, value: 0)
+
+		let held = self.scratchWord((ContextOffset + Win64ContextFlagsOffset) as BackendPageOffset)
+		self.setScratchWord((ContextOffset + Win64ContextFlagsOffset) as BackendPageOffset, value: (held - (held and DwordMask)) or ((Win64ContextControl or Win64ContextInteger or Win64ContextFloatingPoint) as BackendWord))
+
+		return hostDebugCall(HostDebugVerb.readContext, a0: handle as BackendWord, a1: self.contextAddress(), a2: 0, a3: 0, a4: 0) == Win32True
+	end 'contextRead'
+
+	function contextWritten(handle BackendHandle) returns bool
+		return hostDebugCall(HostDebugVerb.writeContext, a0: handle as BackendWord, a1: self.contextAddress(), a2: 0, a3: 0, a4: 0) == Win32True
+	end 'contextWritten'
+
+	function knownHandleOf(id BackendThreadId) returns BackendHandle
+		return match self.handleOf(id) 'known'
+			none gives 0 as BackendHandle
+			at(found) gives found
+		end 'known'
+	end 'knownHandleOf'
+
+	function handleOf(id BackendThreadId) returns BackendThreadHandleLookup
+		for entry in self.threads 'eachThread'
+			if entry.id == id 'thisOne'
+				return BackendThreadHandleLookup.at(entry.handle)
+			end 'thisOne'
+		end 'eachThread'
+
+		return BackendThreadHandleLookup.none
+	end 'handleOf'
+
+	// --- the scratch region ---
+
+	function scratchWord(offset BackendPageOffset) returns BackendWord
+		return __Builtins.profileReadWord(self.scratch, offset)
+	end 'scratchWord'
+
+	function setScratchWord(offset BackendPageOffset, value BackendWord)
+		__Builtins.profileWriteWord(self.scratch, offset, value)
+	end 'setScratchWord'
+
+	function contextAddress() returns BackendWord
+		return (self.scratch as BackendWord) + ContextOffset
+	end 'contextAddress'
+
+	function eventAddress() returns BackendWord
+		return (self.scratch as BackendWord) + EventOffset
+	end 'eventAddress'
+
+	function transferAddress() returns BackendWord
+		return (self.scratch as BackendWord) + TransferOffset
+	end 'transferAddress'
+
+	function outWordAddress() returns BackendWord
+		return (self.scratch as BackendWord) + OutWordOffset
+	end 'outWordAddress'
+
+	function secondOutWordAddress() returns BackendWord
+		return (self.scratch as BackendWord) + SecondOutWordOffset
+	end 'secondOutWordAddress'
+
+	function transferredBytes(bytes BackendByteCount) returns ByteArray
+		var taken = ByteArray.create()
+		var word = 0 as BackendWord
+		var held = 0
+
+		for index in 0 upto bytes 'eachByte'
+			if held == 0 'aFreshWord'
+				word = self.scratchWord((TransferOffset + index - (index mod WordBytes)) as BackendPageOffset)
+				held = WordBytes
+			end 'aFreshWord'
+
+			taken.push(((word shr ((index mod WordBytes) * BitsPerByte)) and ByteMask) as Byte)
+			held = held - 1
+		end 'eachByte'
+
+		return taken
+	end 'transferredBytes'
+
+	function fillTransfer(bytes ByteArray)
+		var word = 0 as BackendWord
+		var filled = 0
+
+		for (iter, value) in bytes.withIterator() 'eachByte'
+			let index = iter.index()
+			word = word or ((value as BackendWord) shl ((index mod WordBytes) * BitsPerByte))
+			filled = index
+
+			if (index mod WordBytes) == WordBytes - 1 'aWholeWord'
+				self.setScratchWord((TransferOffset + index - WordBytes + 1) as BackendPageOffset, value: word)
+				word = 0
+			end 'aWholeWord'
+		end 'eachByte'
+
+		if (filled mod WordBytes) != WordBytes - 1 'aPartialTail'
+			self.setScratchWord((TransferOffset + filled - (filled mod WordBytes)) as BackendPageOffset, value: word)
+		end 'aPartialTail'
+	end 'fillTransfer'
+end 'WindowsBackend'
+
+let BitsPerByte = 8
+
+union BackendEventClass
+	bookkeeping
+	ended(event DebugStopEvent)
+	stop(event DebugStopEvent)
+end 'BackendEventClass'

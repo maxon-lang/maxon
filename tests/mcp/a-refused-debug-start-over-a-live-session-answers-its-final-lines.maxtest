@@ -1,0 +1,44 @@
+let LiveSessionStagingDir = "temp/mcp-refused-start-live-session"
+let UnusableImageStagingDir = "temp/mcp-refused-start-unusable-image"
+let UnusableImageName = "not-a-program.bin"
+let UnusableImageContent = "this file is not a program, and carries no `.mxdbg` sidecar\n"
+let KilledSessionLine = "the killed session's last words"
+let KilledSessionWaitSeconds = "0.3"
+let KilledSessionDelayMs = 1000
+let KilledSessionLineWrittenMs = 3000
+let NoSessionError = "no debug session"
+
+function killedSessionProgramSource() returns String
+	var source = ""
+	source.append("function main() returns ExitCode\n")
+	source.append("\tsleep({KilledSessionDelayMs})\n")
+	source.append("\tprint(\"{KilledSessionLine}\\n\")\n")
+	source.append("\n")
+	source.append("\treturn 0\n")
+	source.append("end 'main'\n")
+
+	return source
+end 'killedSessionProgramSource'
+
+test 'a refused debug_start over a live session answers the lines the session it killed had written'
+	let liveProgram = stagedProgram(LiveSessionStagingDir, fileName: "main.maxon", source: killedSessionProgramSource())
+	let liveExecutable = buildStagedProgram(liveProgram)
+	let unusable = stagedProgram(UnusableImageStagingDir, fileName: UnusableImageName, source: UnusableImageContent)
+
+	var session = StreamingMcpSession.startFrom(testedCompilerPath())
+	stdioHandshake(session)
+
+	let started = stdioToolCall(session, id: 2, name: DebugStartTool, argumentsJson: argumentsOf([executableMember(liveExecutable), secondsMember(StopTimeoutArgument, seconds: KilledSessionWaitSeconds)]))
+	let continued = stdioToolCall(session, id: 3, name: DebugContinueTool)
+	sleep(KilledSessionLineWrittenMs)
+	let refused = stdioToolCall(session, id: 4, name: DebugStartTool, argumentsJson: debugExecutableArgument(unusable))
+	let afterwards = stdioToolCall(session, id: 5, name: DebugContinueTool)
+
+	_ = try session.close() otherwise 0
+
+	try Expect.isFalse(toolCallIsError(started), message: "the control: `{DebugStartTool}` must launch the first program: {toolCallText(started)}")
+	try Expect.isFalse(debugOutputLines(continued).contains(KilledSessionLine), message: "the control: the first program waits {KilledSessionDelayMs} ms before it writes, so `{DebugContinueTool}`'s answer after {KilledSessionWaitSeconds} s must not carry the line yet; it answered {toolCallText(continued)}")
+	try Expect.isTrue(toolCallIsError(refused), message: "the control: {UnusableImageName} carries no debug information, so the second `{DebugStartTool}` must be refused: {toolCallText(refused)}")
+	try Expect.isTrue(debugOutputLines(refused).contains(KilledSessionLine), message: "⛔ A REFUSED `{DebugStartTool}` HAS ALREADY REAPED THE LIVE SESSION, AND WHAT THAT PROGRAM WROTE IS ANSWERED IN THE REFUSAL OR NOWHERE. The refusal must carry `{KilledSessionLine}`; it answered {toolCallText(refused)}")
+	try Expect.isTrue(toolCallText(afterwards).contains(NoSessionError), message: "the refused `{DebugStartTool}` reaped the live session, so the next `{DebugContinueTool}` must report that there is none: {toolCallText(afterwards)}")
+end 'a refused debug_start over a live session answers the lines the session it killed had written'

@@ -206,41 +206,17 @@ body either way.
 ⭐ **`runtime/SlabRuntime.maxon`'s THIRD, FOURTH AND FIFTH ENTRY POINTS NEEDED NO NEW LINE**, because the
 roster is keyed by FILE and that file was already on it — which is the whole reason it is keyed that way.
 
-⛔⛔ **`runtime/DebugAgent.maxon` IS THE FIRST ALWAYS-REACHED TIER FAMILY, SO EVERY BYTE IT COSTS IS
-CHARGED TO EVERY PROGRAM.** It is rooted by the call the entry stub mints (`DeadFunctionElimination`'s
-`debugAgentRoots`, its own list because `compilerOwnedRoots` refuses a name a declaration carries and these
-four are declared), emitted by default on x64-windows, and dark at run time unless `MAXON_DEBUG` names it a
-control segment. ⇒ **NO GUARDED CONSTRUCT MAY APPEAR IN IT.** A ranged cast or a variable shift mints a
-panic string, and a panic string in this family lands in the `.rdata` of every program the compiler builds
-— which is how it first tripped the stdlib-loading rdata gate. Test a flag by mask, walk bytes over the
-value, and build a needed literal with `storeWord`s into scratch rather than spelling it. `--no-debug-agent`
-is the opt-out, and it is the one debugging flag that changes the executable (`--no-debug-info`'s byte
-identity stands, gated by `tests/debug/byte-identical-debug-info`).
+⛔⛔ **THE DEBUGGER IS OUT OF PROCESS, SO NO PROGRAM CARRIES ANY PART OF IT.** There is no always-reached
+tier family and no tier file whose `.rdata` every program pays for: a debuggee carries the `.mxdbg` sidecar's
+symbols and nothing else, and `__sysmon` is the only suspender of threads again, so `__sched_preempt_ext_lock`
+has ONE holder and the lock order it protects has no second party to exclude.
 
-⚠ **ITS GEOMETRY IS WRITTEN TWICE AND PINNED, ON THE SLAB RUNTIME'S TERMS.**
-`Compiler/Debug/DebugControlLayout.maxon` owns the control segment's layout, the tier restates every figure
-it reads, and `checkDebugAgentGeometry` reads the tier's own constants back out and compares them. So **a pinned
-figure, or a `__Raw` row's arity, takes a STAGED build** — tier file back to the current emitter's values →
-build C1 → restore → build C2 with C1 — exactly as the slab state region does above.
-
-⛔ **TWO x64-windows FACTS THE AGENT RESTS ON, both silent when wrong.** Windows hands a breakpoint trap a
-`CONTEXT.Rip` already backed onto the `int3`, the opposite of the POSIX convention, so the delivered pc IS
-the breakpoint's address. And the trap thunk saves `rsi`/`rdi` by hand: Maxon's own convention treats them
-as volatile (`X64PrologueEpilogue.calleeSavedOrder` is rbx and r12–r15) while Win64 requires a handler to
-preserve them, and nothing in a run reports the difference.
-
-⛔⛔ **THE AGENT IS A SECOND SUSPENDER OF THREADS, AND `__sched_preempt_ext_lock` IS WHAT MAKES THAT
-SOUND.** `__sysmon` and the agent both call `SuspendThread`: every stop suspends every other machine,
-and the agent holds that window across the whole park, so a suspend and `__gt_exit_process` still
-exclude each other. The order is the window, then `__sched_lock`, then the suspends — never the
-other way round, which is what keeps it free of a cycle with `__gt_preempt_m`. ⇒ **A THIRD SUSPENDER, OR
-A ROAD THAT BLOCKS WHILE HOLDING `__sched_lock`, BREAKS BOTH ARGUMENTS AT ONCE.**
-
-⚠ **FIVE SCHEDULER `.data` WORDS ARE LAID OUT IN EVERY x64-windows PROGRAM BECAUSE THE AGENT READS
-THEM** — `__sched_lock`, `__sched_tls_teb_offset`, `__sched_allm`, `__sched_preempt_ext_lock` and
-`__ds_base` — so their gates in `schedRuntimeGlobals` carry `usesDebugAgent` beside `usesGt`. A zero in
-the TEB-offset word is how the agent recognises a program with no scheduler, and `__ds_base` is read at
-the stop rather than at attach because `__dbg_init` runs ahead of `__ds_init`.
+⛔ **THE DRIVER'S HOST CALLS ARE THE `__dbgh_` BAND, `HostFacility.processDebug`, REACHED FROM
+`maxon-bin/Debug/Backend/` THROUGH EXACTLY ONE FUNCTION.** Each entry is one `StdOp.osHostProcess` and a
+return over an import x64-windows alone provides (`Compiler/Runtime/DebugHostRuntime.maxon`,
+`TargetFacilities.calleeHostFacility`). The single calling function is not tidiness: the published seed knows
+none of the `__Builtins.debug*` names, so the first build is only shimmable while ONE body spells them —
+`scripts/seed-shim/README.md` owns that rule.
 
 ⛔⛔ **E3153 IS COMPLETE ON BOTH SIDES, AND THE VALUE SIDE IS COMPLETE BECAUSE IT IS ASKED OF THE VALUE
 RATHER THAN OF THE BINDING FORM.** `parseTypeReference` catches every type a runtime file WRITES.
