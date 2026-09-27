@@ -30,8 +30,6 @@
   none of it is new — `genshareddag` (E3012 unused variable `base`), `genclosure` in both `ranged`
   (E3005 `Integer` + `Word`) and `plain` (E3062 unused typealias `Word`) modes, and `genfsprobe`
   fails to generate at all. `gennest`, `genemit` and `genrangesites` are the ones that work.
-- specs carries 46 ORPHAN golden fragments across four lanes — cases renamed or deleted in older
-  commits. The runner names every one on each run. Delete or rename them.
 - safeffi
 - use code generation for generics to remove monomorphization/witness
 - look into making optimizations into compile error (ie hoisting a static value out of a loop)
@@ -136,4 +134,3 @@ Since you're building the compiler itself, you can provide the AI with a "Mental
 - A `SharedValue` box steps both its own refcount and the cell's refs; any path that retains it with a plain `__mm_incref` instead of `__shv_box_retain` would drop the cell early. No failing program found; the same two-count shape service handles use. Seen reviewing the service registry.
 - A static-call statement now parses through `parsePostfix`, so `Foo.make().field` alone on a line is accepted, as receiver chains already are; a dead-expression statement check would refuse both. Seen reviewing the service registry.
 - tests/warm-rebuild times out 2/2 at its 10 s limit on x64-windows, identically with a compiler built from 1d3610cc8. Seen during the log-as-a-service optimization pass.
-- 528 committed x64-windows goldens are stale against the tree's own compiler (filepath 53, url 43, async-await 37, http-server 33, subprocess 27, netpoll-socket 22, debug-agent 21, …), and `subprocess/subprocess-streaming-poll-termination-reports-how-the-child-ended` has none; measured identical at 1d3610cc8 and after the log-as-a-service change. Re-mint per spec with `--update-required --filter=<spec>/` on every lane.
