@@ -17,11 +17,15 @@
 #   scripts/fetch-seed.sh v0.2.2                 # that release
 #   scripts/fetch-seed.sh arm64-macos            # another target (for a remote host)
 #   scripts/fetch-seed.sh --allow-none           # no published release is a notice, not a failure
+#   scripts/fetch-seed.sh arm64-macos --output=PATH
+#                                                # to PATH, leaving this host's own seed in place;
+#                                                # a relative PATH is from the caller's directory
 #
 # Needs an authenticated `gh`.
 
 set -euo pipefail
 
+caller_dir="$(pwd)"
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 . scripts/lib/host-binaries.sh
@@ -29,10 +33,13 @@ cd "$repo_root"
 tag=""
 target=""
 allow_none=0
+output=""
 
 for argument in "$@"; do
 	case "$argument" in
 		--allow-none)                               allow_none=1 ;;
+		--output=/*|--output=[A-Za-z]:*)            output="${argument#--output=}" ;;
+		--output=?*)                                output="$caller_dir/${argument#--output=}" ;;
 		v[0-9]*)                                    tag="$argument" ;;
 		x64-windows|x64-linux|arm64-macos|arm64-linux) target="$argument" ;;
 		*) echo "fetch-seed.sh: unknown argument: $argument" >&2; exit 2 ;;
@@ -76,9 +83,10 @@ found="$(find "$work/unpacked" -type f \( -name 'maxon' -o -name 'maxon.exe' \) 
 
 seed="$(maxon_downloaded_path)"
 [ "$target" = "$(maxon_host_target)" ] || seed=".bootstrap/$(basename "$found")"
+[ -z "$output" ] || seed="$output"
 
 # Replaced by rename, so a failed copy never leaves a truncated seed where a working one stood.
-mkdir -p .bootstrap
+mkdir -p "$(dirname "$seed")"
 cp "$found" "$seed.partial"
 chmod +x "$seed.partial"
 mv -f "$seed.partial" "$seed"

@@ -1,11 +1,11 @@
 ---
 name: compiler-workflow
-description: Procedures for measuring and host-testing the Maxon compiler that are too long to keep always-loaded — the `run_scale_test` doubling ladder and how to read it, `scripts/fixpoint.sh` (does the compiler reproduce itself byte for byte), hosting the x64-linux lane locally under WSL, and staging `vendor/`. Load when running or interpreting the scale ladder, when checking that the compiler is a fixed point of itself, when a defect might be specific to a host rather than a target, or when `vendor/wasmtime` is missing.
+description: Procedures for measuring and host-testing the Maxon compiler that are too long to keep always-loaded — the `run_scale_test` doubling ladder and how to read it, `scripts/fixpoint.sh` (does the compiler reproduce itself byte for byte), hosting the x64-linux lane locally under WSL, hosting the arm64-macos lane on the shared Mac through `scripts/mac-host.sh`, and staging `vendor/`. Load when running or interpreting the scale ladder, when checking that the compiler is a fixed point of itself, when a defect might be specific to a host rather than a target, when anything must run on the Mac, or when `vendor/wasmtime` is missing.
 ---
 
 # Compiler workflow — instruments and host lanes
 
-The always-loaded rules live in `maxon-bin/AGENTS.md`. This skill holds the four procedures that are
+The always-loaded rules live in `maxon-bin/AGENTS.md`. This skill holds the five procedures that are
 reference material rather than standing constraints.
 
 ## `run_scale_test` — the scaling INSTRUMENT. ⚠ NOT A GATE.
@@ -71,6 +71,33 @@ wsl -- ./temp/linux-lane/maxon2 spec-test
 Linux-HOSTED compiler produced — the defect class the cross lane cannot reach. When the emitted
 runtime changed since the Windows slot was built, it is also the first whose own
 emitted runtime is this tree's.
+
+## Hosting the arm64-macos lane on the shared Mac
+
+⛔ **EVERY STEP GOES THROUGH `scripts/mac-host.sh`, and nothing is built or run in the Mac's shared
+`~/Dev/maxon`** — it may hold a person's uncommitted work. Each agent gets its own clone under
+`~/Dev/agents/<session>/`, and the host lock keeps two suites from sharing the machine, which flakes
+the timing-sensitive specs. `scripts/mac-host.sh` with no arguments prints the full usage.
+
+```
+scripts/mac-host.sh status
+scripts/mac-host.sh clone <session> <commit> --seed             # prints session-key=<KEY>
+scripts/mac-host.sh lock <session> --wait=1800 <purpose>        # prints token=<TOKEN>
+scripts/mac-host.sh run <session> <TOKEN> bash -c '<line>'      # prints job=, pid=, log=
+scripts/mac-host.sh job <session>                               # alive / finished (exit N) + log tail
+scripts/mac-host.sh unlock <session> <TOKEN>                    # only while no job runs
+scripts/mac-host.sh drop <session> <KEY>
+```
+
+- `<commit>` must be pushed: the clone is made from `origin`. `--seed` places the latest release's
+  arm64-macos compiler at `.bootstrap/maxon`. Clone before locking — a clone needs no lock and does
+  not refresh one.
+- **A lock runs one job, and the job's exit releases it.** Watch the job with a Monitor that polls
+  `job <session>`; while the lock is held with no job running, the same poll calls `heartbeat <session>
+  <TOKEN>`, or the lock goes stale and any agent may break it.
+- `drop` the session when done; it releases a lock the session still holds.
+- ⚠ **`mac-host.sh: skipped — MAXON_MAC_HOST is not set` means no Mac is configured.** It exits 0 and
+  touches nothing. Skip the arm64-macos work and say so in the report — it is not a failure.
 
 ## Staging `vendor/`
 
