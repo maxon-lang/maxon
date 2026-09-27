@@ -1,0 +1,170 @@
+// Test: a-conditional-register-fails-when-the-value-moved
+type Config
+	export let n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Config'
+
+default Config = Config.create(1)
+
+function main() returns ExitCode
+	let a = Config.current()
+	Config.register(Config.create(3))
+	let stale = Config.register(Config.create(2), replacing: a)
+	let afterStale = Config.current().n
+
+	let c = Config.current()
+	let fresh = Config.register(Config.create(5), replacing: c)
+
+	if stale or not fresh 'outcomes'
+		return 1
+	end 'outcomes'
+
+	return (afterStale * 10 + Config.current().n) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 35
+---
+data {
+  __default.Config@0 = i64 0
+  __mrt_envp@8 = i64 0
+  __mrt_signal_stack_bytes@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+}
+
+func @Config.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaGlobal x0, __default.Config
+    arm64.bl __shv_current
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 3
+    arm64.bl Config.create
+    arm64.movRegReg x20, x0
+    arm64.leaGlobal x21, __default.Config
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __share_Config
+    arm64.bl __mm_walk_settle
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x20
+    arm64.bl __shv_publish
+    arm64.movImm x0, 2
+    arm64.bl Config.create
+    arm64.movRegReg x20, x0
+    arm64.leaGlobal x21, __default.Config
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __share_Config
+    arm64.bl __mm_walk_settle
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x19
+    arm64.bl __shv_replace
+    arm64.movRegReg x20, x0
+    arm64.leaGlobal x0, __default.Config
+    arm64.bl __shv_current
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.bl __mm_decref
+    arm64.leaGlobal x0, __default.Config
+    arm64.bl __shv_current
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 5
+    arm64.bl Config.create
+    arm64.movRegReg x23, x0
+    arm64.leaGlobal x24, __default.Config
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x23
+    arm64.bl __share_Config
+    arm64.bl __mm_walk_settle
+    arm64.movRegReg x0, x24
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x22
+    arm64.bl __shv_replace
+    arm64.movImm x1, 1
+    arm64.cbnz x20, scmerge
+  orrhs:
+    arm64.eor x0, x0, 1
+    arm64.movRegReg x1, x0
+  scmerge:
+    arm64.cbz x1, ifcont
+  outcomes:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  ifcont:
+    arm64.movImm x16, 10
+    arm64.mul x20, x21, x16
+    arm64.leaGlobal x0, __default.Config
+    arm64.bl __shv_current
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x20, x20, x1
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-conditional-register-fails-when-the-value-moved.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+}

@@ -1,0 +1,27 @@
+// Test: error.defaults-that-reach-each-other
+type Left
+	export let n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Left'
+
+type Right
+	export let n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Right'
+
+default Left = Left.create(Right.current().n + 1)
+default Right = Right.create(Left.current().n + 1)
+
+function main() returns ExitCode
+	return (Left.current().n + Right.current().n) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3172: <fragment>:18:9: the `default`s for `Left` and `Right` reach each other — build one of them without looking up the other

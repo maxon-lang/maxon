@@ -1,0 +1,60 @@
+// Test: error.implementers-of-one-interface-that-disagree-on-a-reply
+enum LeftError implements Error
+	refused
+end 'LeftError'
+
+enum RightError implements Error
+	busy
+end 'RightError'
+
+interface Worker
+	function work() returns Integer throws Error
+end 'Worker'
+
+type Left implements Worker
+	var runs as Integer
+
+	static function create() returns Self
+		return Self{runs: 0}
+	end 'create'
+
+	export function work() returns Integer throws LeftError
+		self.runs = self.runs + 1
+
+		if self.runs > 5 'tooMany'
+			throw LeftError.refused
+		end 'tooMany'
+
+		return 1
+	end 'work'
+end 'Left'
+
+type Right implements Worker
+	var runs as Integer
+
+	static function create() returns Self
+		return Self{runs: 0}
+	end 'create'
+
+	export function work() returns Integer throws RightError
+		self.runs = self.runs + 1
+
+		if self.runs > 5 'tooMany'
+			throw RightError.busy
+		end 'tooMany'
+
+		return 2
+	end 'work'
+end 'Right'
+
+function ask(w Worker.handle) returns Integer
+	return try await w.work() otherwise 0
+end 'ask'
+
+function main() returns ExitCode
+	return (ask(spawn Left.create()) + ask(spawn Right.create())) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3177: <fragment>:51:21: `Worker.work` cannot be sent through `Worker.handle`: `Right` and `Left` declare it with different parameter, return or `throws` types, so one request and one reply cannot serve both — send it through each service's own handle

@@ -1,0 +1,40 @@
+// Test: error.an-argument-that-could-convert-to-two-interface-handles
+interface Tally
+	function total() returns Integer
+end 'Tally'
+
+interface Gauge
+	function level() returns Integer
+end 'Gauge'
+
+type Counter implements Tally, Gauge
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 6}
+	end 'create'
+
+	export function total() returns Integer
+		return self.n
+	end 'total'
+
+	export function level() returns Integer
+		return self.n * 2
+	end 'level'
+end 'Counter'
+
+function probe(t Tally.handle) returns Integer
+	return try await t.total() otherwise 0
+end 'probe'
+
+function probe(g Gauge.handle) returns Integer
+	return try await g.level() otherwise 0
+end 'probe'
+
+function main() returns ExitCode
+	return probe(spawn Counter.create()) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3007: <fragment>:35:9: Ambiguous overload for 'probe': multiple overloads match. Candidates: (t Tally.handle), (g Gauge.handle)

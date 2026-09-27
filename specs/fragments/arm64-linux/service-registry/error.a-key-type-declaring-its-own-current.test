@@ -1,0 +1,23 @@
+// Test: error.a-key-type-declaring-its-own-current
+type Config
+	export let n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	static function current() returns Config
+		return Config.create(0)
+	end 'current'
+end 'Config'
+
+default Config = Config.create(7)
+
+function main() returns ExitCode
+	return Config.current().n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3175: <fragment>:9:18: `Config` is a `default` key, so `Config.current` and `Config.register` are the registry's — its own static `current` would be hidden; rename it
+note: <fragment>:14:9: the `default` for `Config`
