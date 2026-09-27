@@ -16,7 +16,8 @@ npm run build      # static build to ./dist
 npm run preview    # serve the built site locally
 ```
 
-Requires Node.js 22.12+ (Astro 7's minimum).
+Requires Node.js 24 with npm 11, the toolchain CI uses. `package-lock.json` is written in npm 11's
+form, which npm 10's `npm ci` rejects.
 
 ## Project structure
 
