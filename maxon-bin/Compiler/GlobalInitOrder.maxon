@@ -103,21 +103,79 @@ export function dependencyOrderedGlobals(module MaxonModule, project Project, si
 		return globals
 	end 'nothingRunsProgramCode'
 
-	// The index can see no duplicate the pipeline's own does not — it is built BEFORE the two synthesized
-	// functions exist, exactly as `StdlibSource.reachableMaxonFunctionNames`' is — so refusing here reports
-	// the same E4015, at the same declaration, that `PassPipeline.run` would report one screen later.
+	var nodes = InitOrderNodeArray.create()
+
+	for global in globals 'eachGlobal'
+		nodes.push(InitOrderNode.create(global.label, initCallees: global.initCallees))
+	end 'eachGlobal'
+
+	var ordered = ManagedGlobalArray.create()
+
+	for position in try dependencyOrder(module, project: project, signatures: signatures, nodes: nodes, refusal: InitCycleRefusal.globals(globals)) 'eachPosition'
+		ordered.push(globalAt(globals, index: position))
+	end 'eachPosition'
+
+	return ordered
+end 'dependencyOrderedGlobals'
+
+// The `default`s in build order. A default depends on another when its initializer reaches that
+// key's slot label — the `globalAddr` every `current()`/`register()` emits — so the walk that
+// orders the globals orders these; a cycle is E3172.
+export function dependencyOrderedDefaults(module MaxonModule, project Project, signatures ProgramSignatures, defaults DefaultSlotArray) returns DefaultSlotArray throws CompileError
+	if defaults.count() == 0 'nothingToOrder'
+		return defaults
+	end 'nothingToOrder'
+
+	var nodes = InitOrderNodeArray.create()
+
+	for slot in defaults 'eachDefault'
+		var roots = ByteArrayArray.create()
+		roots.push(slot.initializer)
+		nodes.push(InitOrderNode.create(slot.label, initCallees: roots))
+	end 'eachDefault'
+
+	var ordered = DefaultSlotArray.create()
+
+	for position in try dependencyOrder(module, project: project, signatures: signatures, nodes: nodes, refusal: InitCycleRefusal.defaults(defaults)) 'eachPosition'
+		ordered.push(try defaults.get(position) otherwise panic("dependencyOrderedDefaults: defaults.get OOB at {position}, a position this walk minted over the same list"))
+	end 'eachPosition'
+
+	return ordered
+end 'dependencyOrderedDefaults'
+
+type InitOrderNode
+	export let label as ByteArray
+	export let initCallees as ByteArrayArray
+
+	static function create(label ByteArray, initCallees ByteArrayArray) returns InitOrderNode
+		return Self{label: label, initCallees: initCallees}
+	end 'create'
+end 'InitOrderNode'
+
+typealias InitOrderNodeArray = Array with InitOrderNode
+
+union InitCycleRefusal
+	globals(globals ManagedGlobalArray)
+	defaults(defaults DefaultSlotArray)
+end 'InitCycleRefusal'
+
+function dependencyOrder(module MaxonModule, project Project, signatures ProgramSignatures, nodes InitOrderNodeArray, refusal InitCycleRefusal) returns GlobalInitIndexArray throws CompileError
+	// The index can see no duplicate the pipeline's own does not — it is built BEFORE the synthesized
+	// functions exist, exactly as `StdlibSource.reachableMaxonFunctionNames`' is — so refusing here
+	// reports the same E4015, at the same declaration, that `PassPipeline.run` would report one screen
+	// later.
 	let index = try FunctionNameIndex.create(module.functions, project: project)
 
-	let named = initDependencies(module, project: project, signatures: signatures, index: index, globals: globals, edges: EdgeConfidence.named)
-	let possible = initDependencies(module, project: project, signatures: signatures, index: index, globals: globals, edges: EdgeConfidence.possible)
+	let named = initDependencies(module, project: project, signatures: signatures, index: index, nodes: nodes, edges: EdgeConfidence.named)
+	let possible = initDependencies(module, project: project, signatures: signatures, index: index, nodes: nodes, edges: EdgeConfidence.possible)
 
-	return orderedByDependency(globals, deps: try buildEffectiveDeps(globals, named: named, possible: possible, project: project))
-end 'dependencyOrderedGlobals'
+	return orderedByDependency(nodes.count(), deps: try buildEffectiveDeps(nodes.count(), named: named, possible: possible, refusal: refusal, project: project))
+end 'dependencyOrder'
 
 // Does any global's initializer run program code at all? The walk's whole apparatus — a function-name index,
 // two per-root reachability scans — is skipped when none does, which is the answer for a program whose
 // globals are all literals.
-function anyInitializerCalls(globals ManagedGlobalArray) returns bool
+module function anyInitializerCalls(globals ManagedGlobalArray) returns bool
 	for global in globals 'eachGlobal'
 		if global.initCallees.count() > 0 'runsProgramCode'
 			return true
@@ -137,22 +195,22 @@ end 'anyInitializerCalls'
 // have forced is lost and that global reads a zero. The alternative is refusing every program whose overload
 // members happen to cross-reference — MEASURED, and the defect this split repairs. Removing the residual
 // means resolving overloads, which happens after this point in the pipeline.
-function buildEffectiveDeps(globals ManagedGlobalArray, named GlobalInitDependencies, possible GlobalInitDependencies, project Project) returns GlobalInitDependencies throws CompileError
+function buildEffectiveDeps(nodeCount GlobalInitIndex, named GlobalInitDependencies, possible GlobalInitDependencies, refusal InitCycleRefusal, project Project) returns GlobalInitDependencies throws CompileError
 	var effective = GlobalInitDependencies.create()
 
-	for _ in 0 upto globals.count() 'eachGlobal'
+	for _ in 0 upto nodeCount 'eachGlobal'
 		effective.push(GlobalInitIndexArray.create())
 	end 'eachGlobal'
 
-	for i in 0 upto globals.count() 'eachNamedSource'
+	for i in 0 upto nodeCount 'eachNamedSource'
 		for dependency in rowOf(named, index: i) 'eachNamedEdge'
-			try addDependencyEdge(effective, from: i, to: dependency, edges: EdgeConfidence.named, globals: globals, project: project)
+			try addDependencyEdge(effective, from: i, to: dependency, edges: EdgeConfidence.named, refusal: refusal, project: project)
 		end 'eachNamedEdge'
 	end 'eachNamedSource'
 
-	for j in 0 upto globals.count() 'eachPossibleSource'
+	for j in 0 upto nodeCount 'eachPossibleSource'
 		for dependency in rowOf(possible, index: j) 'eachPossibleEdge'
-			try addDependencyEdge(effective, from: j, to: dependency, edges: EdgeConfidence.possible, globals: globals, project: project)
+			try addDependencyEdge(effective, from: j, to: dependency, edges: EdgeConfidence.possible, refusal: refusal, project: project)
 		end 'eachPossibleEdge'
 	end 'eachPossibleSource'
 
@@ -162,7 +220,7 @@ end 'buildEffectiveDeps'
 // ⭐ **ONE EDGE, AND THE CONFIDENCE DECIDES ONLY WHAT A CYCLE MEANS.** `to` already reaching `from` makes the
 // two mutually dependent: by roads the program's own ops name, that is E2012; by a road the walk merely
 // credited, it is an edge to drop.
-function addDependencyEdge(effective GlobalInitDependencies, from GlobalInitIndex, to GlobalInitIndex, edges EdgeConfidence, globals ManagedGlobalArray, project Project) throws CompileError
+function addDependencyEdge(effective GlobalInitDependencies, from GlobalInitIndex, to GlobalInitIndex, edges EdgeConfidence, refusal InitCycleRefusal, project Project) throws CompileError
 	if rowContains(effective, index: from, value: to) 'alreadyAnEdge'
 		return
 	end 'alreadyAnEdge'
@@ -172,7 +230,7 @@ function addDependencyEdge(effective GlobalInitDependencies, from GlobalInitInde
 
 		if arc.count() > 0 'closesACycle'
 			match edges 'edges'
-				named then try refuseInitializationCycle(arc, globals: globals, project: project)
+				named then try refuseInitializationCycle(arc, refusal: refusal, project: project)
 				possible then return
 			end 'edges'
 		end 'closesACycle'
@@ -273,11 +331,11 @@ end 'rowContains'
 //
 // The `reached` array is allocated ONCE and cleared between roots rather than reallocated: the walks are
 // independent, but the array is a function of the module and not of the root.
-function initDependencies(module MaxonModule, project Project, signatures ProgramSignatures, index FunctionNameIndex, globals ManagedGlobalArray, edges EdgeConfidence) returns GlobalInitDependencies
+function initDependencies(module MaxonModule, project Project, signatures ProgramSignatures, index FunctionNameIndex, nodes InitOrderNodeArray, edges EdgeConfidence) returns GlobalInitDependencies
 	var slotOf = GlobalInitIndexByLabel.create()
 
-	for i in 0 upto globals.count() 'eachGlobal'
-		slotOf.upsert(globalAt(globals, index: i).label, value: i)
+	for i in 0 upto nodes.count() 'eachGlobal'
+		slotOf.upsert(nodeAt(nodes, index: i).label, value: i)
 	end 'eachGlobal'
 
 	var reached = BoolArray.create()
@@ -286,20 +344,24 @@ function initDependencies(module MaxonModule, project Project, signatures Progra
 
 	var deps = GlobalInitDependencies.create()
 
-	for j in 0 upto globals.count() 'eachRoot'
-		let global = globalAt(globals, index: j)
+	for j in 0 upto nodes.count() 'eachRoot'
+		let node = nodeAt(nodes, index: j)
 
-		if global.initCallees.count() == 0 'dependsOnNothing'
+		if node.initCallees.count() == 0 'dependsOnNothing'
 			deps.push(GlobalInitIndexArray.create())
 			continue
 		end 'dependsOnNothing'
 
 		clearReached(reached)
-		deps.push(slotsReadFrom(module, project: project, signatures: signatures, index: index, roots: global.initCallees, slotOf: slotOf, reached: reached, names: names, edges: edges))
+		deps.push(slotsReadFrom(module, project: project, signatures: signatures, index: index, roots: node.initCallees, slotOf: slotOf, reached: reached, names: names, edges: edges))
 	end 'eachRoot'
 
 	return deps
 end 'initDependencies'
+
+function nodeAt(nodes InitOrderNodeArray, index GlobalInitIndex) returns InitOrderNode
+	return try nodes.get(index) otherwise panic("nodeAt: nodes.get OOB at {index}, outside the list every position in this walk was minted from")
+end 'nodeAt'
 
 function clearReached(reached BoolArray)
 	for i in 0 upto reached.count() 'eachFunction'
@@ -419,18 +481,18 @@ end 'noteSlotNamed'
 // dependency CHAIN, which nothing bounds: a program of 3,000 statics each reading the next overflowed the
 // compiler's own stack with no diagnostic and no binary (`STATUS_STACK_OVERFLOW`), while the same program
 // with the chain broken compiled. The frames are heap arrays here, so depth costs memory and nothing else.
-function orderedByDependency(globals ManagedGlobalArray, deps GlobalInitDependencies) returns ManagedGlobalArray
+function orderedByDependency(nodeCount GlobalInitIndex, deps GlobalInitDependencies) returns GlobalInitIndexArray
 	var state = GlobalInitVisitArray.create()
 
-	for _ in 0 upto globals.count() 'eachGlobal'
+	for _ in 0 upto nodeCount 'eachGlobal'
 		state.push(GlobalInitVisit.unvisited)
 	end 'eachGlobal'
 
-	var ordered = ManagedGlobalArray.create()
+	var ordered = GlobalInitIndexArray.create()
 	var frames = GlobalInitIndexArray.create()
 	var cursors = GlobalInitCursorArray.create()
 
-	for root in 0 upto globals.count() 'eachRoot'
+	for root in 0 upto nodeCount 'eachRoot'
 		match visitOf(state, index: root) 'root'
 			settled then break 'root'
 			onTheStack then panic("orderedByDependency: global {root} is on the stack between two roots — every frame this walk pushes it also pops")
@@ -459,7 +521,7 @@ function orderedByDependency(globals ManagedGlobalArray, deps GlobalInitDependen
 			_ = try frames.pop() otherwise panic("orderedByDependency: pop from the frame stack this loop just read")
 			_ = try cursors.pop() otherwise panic("orderedByDependency: pop from the cursor stack this loop just read")
 			markVisit(state, index: node, visit: GlobalInitVisit.settled)
-			ordered.push(globalAt(globals, index: node))
+			ordered.push(node)
 		end 'walk'
 	end 'eachRoot'
 
@@ -492,16 +554,42 @@ end 'cursorAt'
 
 // **THE CYCLE.** `arc` is a path whose last member's initializer reads its first, so no member can be filled
 // before the others.
-//
+function refuseInitializationCycle(arc GlobalInitIndexArray, refusal InitCycleRefusal, project Project) throws CompileError
+	match refusal 'subject'
+		globals(globals) then refuseGlobalInitializationCycle(arc, globals: globals, project: project)
+		defaults(defaults) then refuseDefaultCycle(arc, defaults: defaults, project: project)
+	end 'subject'
+
+	throw CompileError.compileError
+end 'refuseInitializationCycle'
+
+function refuseDefaultCycle(arc GlobalInitIndexArray, defaults DefaultSlotArray, project Project)
+	var members = GlobalInitIndexArray.create()
+
+	for member in arc 'eachMember'
+		members.push(member)
+	end 'eachMember'
+
+	members.sort()
+	var keys = ByteArrayArray.create()
+
+	for member in members 'eachDeclared'
+		keys.push((try defaults.get(member) otherwise panic("refuseDefaultCycle: defaults.get OOB at {member}, a position this walk minted")).declaration.key)
+	end 'eachDeclared'
+
+	let anchor = (try defaults.get(try members.get(0) otherwise panic("refuseDefaultCycle: the arc is empty — its caller proves it non-empty")) otherwise panic("refuseDefaultCycle: defaults.get OOB at the arc's first member")).declaration
+	reportPositioned(project, code: ErrorCode.registryDefaultsReachEachOther, message: defaultsReachEachOtherMessage(keys), line: anchor.keyLine, column: anchor.keyColumn, filePath: anchor.declFilePath)
+end 'refuseDefaultCycle'
+
 // It names the ARC and anchors on the LAST-DECLARED member's NAME token — the same two choices
-// `ProgramSignatures.recordCycle` makes for a cycle among top-level constants, under the same code, because
-// it is the same fact one scope over: E2012's entry in `ErrorCodeRegistry.maxon` states the cycle rather
-// than the construct it was found in. Naming the whole in-progress SET instead would call a global that
-// merely LEADS to a cycle circular.
+// `ProgramSignatures.recordCycle` makes for a cycle among top-level constants, under the same code,
+// because it is the same fact one scope over: E2012's entry in `ErrorCodeRegistry.maxon` states the
+// cycle rather than the construct it was found in. Naming the whole in-progress SET instead would
+// call a global that merely LEADS to a cycle circular.
 //
-// ⭐ A ONE-MEMBER ARC IS A DIFFERENT SENTENCE, because a list of one is not an arc an author can follow: it
-// says what the single global does rather than leaving them to infer it.
-function refuseInitializationCycle(arc GlobalInitIndexArray, globals ManagedGlobalArray, project Project) throws CompileError
+// ⭐ A ONE-MEMBER ARC IS A DIFFERENT SENTENCE, because a list of one is not an arc an author can
+// follow: it says what the single global does rather than leaving them to infer it.
+function refuseGlobalInitializationCycle(arc GlobalInitIndexArray, globals ManagedGlobalArray, project Project)
 	var names = ""
 	var owner = try arc.get(0) otherwise panic("refuseInitializationCycle: the arc is empty — its caller adds the closing edge only after proving the path non-empty")
 
@@ -521,8 +609,7 @@ function refuseInitializationCycle(arc GlobalInitIndexArray, globals ManagedGlob
 
 	let anchor = globalAt(globals, index: owner)
 	reportPositioned(project, code: ErrorCode.parserCircularDependency, message: cycleMessage(names, memberCount: arc.count()), line: anchor.nameLine, column: anchor.nameColumn, filePath: anchor.declFilePath)
-	throw CompileError.compileError
-end 'refuseInitializationCycle'
+end 'refuseGlobalInitializationCycle'
 
 function cycleMessage(names String, memberCount GlobalInitIndex) returns String
 	if memberCount == 1 'readsItsOwnSlot'

@@ -1,0 +1,205 @@
+// Test: a-conditional-publish-fails-when-the-value-moved
+type Config
+	export let n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Config'
+
+typealias ConfigCell = SharedValue with Config
+
+function main() returns ExitCode
+	let cell = ConfigCell.create(Config.create(1))
+	let a = cell.current()
+	cell.publish(Config.create(3))
+	let stale = cell.publish(Config.create(2), replacing: a)
+	let afterStale = cell.current().n
+
+	let c = cell.current()
+	let fresh = cell.publish(Config.create(5), replacing: c)
+
+	if stale or not fresh 'outcomes'
+		return 1
+	end 'outcomes'
+
+	return (afterStale * 10 + cell.current().n) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 35
+---
+data {
+  __sched_tls_teb_offset@0 = i64 0
+  __sched_allm@8 = i64 0
+  __sched_lock@16 = i64 0
+  __sched_preempt_ext_lock@24 = i64 0
+  __sched_preempt_context@32 = i64 0
+  __slab_arena_list@40 = i64 0
+  __slab_arena_map_l1@48 = i64 0
+  __slab_state@56 = i64 0
+  __ds_base@64 = i64 0
+  __dbg_ctl@72 = i64 0
+  __mrt_console_probe_stdin@80 = i8 0
+  __mrt_console_probe_stdout@81 = i8 0
+  __mrt_console_probe_stderr@82 = i8 0
+}
+
+func @Config.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegImm32 rcx, 1
+    x64.callDirect Config.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __share_Config
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_walk_settle
+    x64.leaRegFunc rdx, [rip + __mm_decref]
+    x64.leaRegFunc rax, [rip + __mm_retain]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __shv_box_create
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __shv_current
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rcx, 3
+    x64.callDirect Config.create
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r13
+    x64.callDirect __share_Config
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_walk_settle
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect __shv_publish
+    x64.movRegImm32 rcx, 2
+    x64.callDirect Config.create
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r13
+    x64.callDirect __share_Config
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_walk_settle
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r12
+    x64.callDirect __shv_replace
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __shv_current
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.storeSlotReg slot0, rax
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __shv_current
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rcx, 5
+    x64.callDirect Config.create
+    x64.movRegReg r15, r8
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r15
+    x64.callDirect __share_Config
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_walk_settle
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r15
+    x64.movRegReg rax, r14
+    x64.callDirect __shv_replace
+    x64.movRegImm32 rax, 1
+    x64.cmpRegImm32 r13, 0
+    x64.jcc notEqual, scmerge
+  orrhs:
+    x64.xorRegImm32 r8, r8, 1
+    x64.movRegReg rax, r8
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont
+  outcomes:
+    x64.movRegImm32 r13, 1
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __shv_box_drop
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.loadRegSlot rax, slot0
+    x64.imulRegRegImm32 r13, rax, 10
+    x64.movRegReg rcx, rbx
+    x64.callDirect __shv_current
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.leaRegRegReg r13, r13, rax
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r13, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __shv_box_drop
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-conditional-publish-fails-when-the-value-moved.test:26: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -26,7 +26,7 @@
 //
 // ⚠ **THE THREE THINGS A WORKER STRUCTURALLY CANNOT DO** are what shaped the split, and each is a rule
 // with teeth rather than a preference. It may not touch a module `var` — E3143, because a green thread
-// runs on whichever OS thread the scheduler gives it — which rules out the logger, the trace-span stack,
+// runs on whichever OS thread the scheduler gives it — which rules out the trace-span stack,
 // the `.rdata` table and every `Project` table. It may not await — E3139 refuses a service that blocks on
 // another, and this one never sends. And it may not be handed anything a second frame still owns — E3138
 // at the send, exit 96 at run time — which is why a unit is built inside the argument expression and the
@@ -465,7 +465,9 @@ end 'BackendWorker'
 // Only USER functions are present here — x64's `mrt_start` is prepended AFTER this pass by
 // `augmentWithRuntime` (it is hand-built in physical registers).
 export function lowerAndAllocateOnAWorkerPool(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, funcNames FunctionNameIndex, usesGt bool) returns TargetModule throws CompileError
-	logDebug(LogCategory.codegen, message: function() gives "Register allocation ({targetToString(target)})")
+	if compilerLogEnabled(CompilerLogGroup.codegen, level: LogLevel.debug) 'debugging'
+		compilerLogger(CompilerLogGroup.codegen).debug("Register allocation ({targetToString(target)})")
+	end 'debugging'
 
 	// ⭐ THE THREE PER-ISA FACTS THE WHOLE ALLOCATOR RUNS ON, SOURCED ONCE HERE AND CARRIED TOGETHER.
 	// Each is a `match` on the target that must happen exactly once per module: asking any of them
@@ -488,7 +490,10 @@ export function lowerAndAllocateOnAWorkerPool(stdModule StdModule, target Target
 	let sizing = PoolSizing.forJobs(funcCount as PoolJob)
 
 	// Logged above the empty-module return, so a module of no functions still reports its pool.
-	logDebug(LogCategory.codegen, message: function() gives sizing.line(PoolKind.regalloc))
+
+	if compilerLogEnabled(CompilerLogGroup.codegen, level: LogLevel.debug) 'debugging'
+		compilerLogger(CompilerLogGroup.codegen).debug(sizing.line(PoolKind.regalloc))
+	end 'debugging'
 
 	if funcCount == 0 'nothingToLower'
 		return module
@@ -512,7 +517,10 @@ export function lowerAndAllocateOnAWorkerPool(stdModule StdModule, target Target
 	let stealsBefore = __Builtins.schedStealCount()
 	let refused = drainTheBackendPool(stdModule, module: module, workers: workers, workerCount: sizing.workerCount as PoolSize, landed: landed, slots: slots)
 	let stealsAfter = __Builtins.schedStealCount()
-	logDebug(LogCategory.codegen, message: function() gives "regalloc pool: {stealsAfter - stealsBefore} work-steal(s) while the pool drained")
+
+	if compilerLogEnabled(CompilerLogGroup.codegen, level: LogLevel.debug) 'debugging'
+		compilerLogger(CompilerLogGroup.codegen).debug("regalloc pool: {stealsAfter - stealsBefore} work-steal(s) while the pool drained")
+	end 'debugging'
 
 	// ⛔ **EVERY HANDLE GOES BEFORE THIS FRAME DOES.** Dropping the last handle to a service closes its
 	// mailbox, which is what lets the worker's green thread finish; a handle still held at process exit
@@ -531,7 +539,10 @@ export function lowerAndAllocateOnAWorkerPool(stdModule StdModule, target Target
 		foldFunctionAllocation(project, stats: stats, func: func, counters: landing.counters, costs: landing.costs, facts: landing.facts)
 	end 'foldInIndexOrder'
 
-	logDebug(LogCategory.codegen, message: function() gives regAllocStatsMessage(stats))
+	if compilerLogEnabled(CompilerLogGroup.codegen, level: LogLevel.debug) 'debugging'
+		compilerLogger(CompilerLogGroup.codegen).debug(regAllocStatsMessage(stats))
+	end 'debugging'
+
 	return module
 end 'lowerAndAllocateOnAWorkerPool'
 
@@ -574,7 +585,10 @@ function drainTheBackendPool(stdModule StdModule, module TargetModule, workers B
 	end 'fillThePipeline'
 
 	let filled = replies.count()
-	logDebug(LogCategory.codegen, message: function() gives "regalloc pool: the fill put {filled} job(s) in flight over {workerCount} worker(s), bounded at {dispatch.inFlightSizeBudget()} op(s)")
+
+	if compilerLogEnabled(CompilerLogGroup.codegen, level: LogLevel.debug) 'debugging'
+		compilerLogger(CompilerLogGroup.codegen).debug("regalloc pool: the fill put {filled} job(s) in flight over {workerCount} worker(s), bounded at {dispatch.inFlightSizeBudget()} op(s)")
+	end 'debugging'
 
 	while replies.count() > 0 'serveWhoeverFinishedFirst'
 		let ready = __Builtins.awaitAny(replies)

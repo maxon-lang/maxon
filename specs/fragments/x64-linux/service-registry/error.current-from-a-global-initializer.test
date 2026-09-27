@@ -1,0 +1,20 @@
+// Test: error.current-from-a-global-initializer
+type Config
+	export let n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Config'
+
+default Config = Config.create(7)
+
+let limit = Config.current().n
+
+function main() returns ExitCode
+	return limit as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3173: <fragment>:12:13: `Config.current()` is reached from the initializer of `limit`, which runs before any `default` is built — call it from `main`, or from a function `main` calls

@@ -1,0 +1,15 @@
+// Read by `logEvent` alone, which only the main thread calls; a log record's unit is
+// `CompilerLogHandler`'s.
+var currentTraceUnit = 0 as TraceUnit
+
+export function setTraceUnit(unit TraceUnit)
+	currentTraceUnit = unit
+end 'setTraceUnit'
+
+module function logEvent(group CompilerLogGroup, level LogLevel, name TraceName, arg0 TraceArg, arg1 TraceArg)
+	if __DebugStream.enabled() 'attached'
+		if compilerLogEnabled(group, level: level) 'enabled'
+			__DebugStream.event(name, group.ordinal, ringLogLevelOf(level).rawValue, currentTraceUnit, arg0, arg1)
+		end 'enabled'
+	end 'attached'
+end 'logEvent'

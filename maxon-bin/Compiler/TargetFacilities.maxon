@@ -234,7 +234,8 @@ end 'CalleeFacility'
 //
 //   • `__gt_now_ns` — `osReadClock`'s QueryPerformanceCounter/Frequency (`__Builtins.currentTimeNanos`,
 //     `currentTimeMs`, and every `Clock.*` written against them);
-//   • `__clock_*` — `osReadWallClock`'s GetSystemTimeAsFileTime (`__Builtins.currentUnixTimeSeconds`);
+//   • `__clock_*` — `osReadWallClock`'s GetSystemTimePreciseAsFileTime (`__Builtins.currentUnixTimeSeconds`,
+//     `currentUnixTimeNanos`);
 //   • `__gt_sleep` — the green-thread timer park, whose deadline is computed from that same `osReadClock`
 //     reading (`__Builtins.sleep(ms)`, and so every `sleep(ms)` through `stdlib/Sleep.maxon`'s body).
 //   • `__gt_resched` — the cooperative reschedule (`__Builtins.yield()`, and so every `Scheduler.yield()`
@@ -432,6 +433,10 @@ function calleeHostFacility(callee ByteArray) returns CalleeFacility
 	if isSubprocessRuntimeCallee(callee) 'subprocessBand'
 		return CalleeFacility.needs(HostFacility.subprocess)
 	end 'subprocessBand'
+
+	if isServiceRegistryRuntimeCallee(callee) or isInterfaceHandleRuntimeCallee(callee) 'serviceBand'
+		return CalleeFacility.needs(HostFacility.greenThreads)
+	end 'serviceBand'
 
 	if isSharedMemoryRuntimeCallee(callee) 'sharedMemoryBand'
 		return CalleeFacility.needs(HostFacility.sharedMemory)

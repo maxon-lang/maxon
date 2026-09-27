@@ -208,12 +208,14 @@ export type FuncReturnTypeEntry
 	// alias is a whole-program question, and this entry is built during the declaration SWEEP that
 	// answers it. The consumer asks, at parse time, with the index complete.
 	export var returnAliasName as ByteArray
+	export var nameLine as LineNumber
+	export var nameColumn as ColumnNumber
 
 	// ⚠ **THE THREE EMPTY DEFAULTS ARE FRESH, NOT SHARED ANCHORS.** A default naming a module-level `let`
 	// makes that anchor an export nothing calls, which `checkUnusedExports` reports as E3092. An empty
 	// container costs a record; the anchor costs a build.
-	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility = Visibility.file, takesReceiver bool = false, opaqueParams OpaqueParamInfo = sharedNoOpaqueParams, paramNames ByteArrayArray = ByteArrayArray.create(), paramTypes MaxonTypeArray = MaxonTypeArray.create(), returnAliasName ByteArray = EmptySourceText) returns FuncReturnTypeEntry
-		return Self{name: name, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: opaqueParams, paramNames: paramNames, paramTypes: paramTypes, returnAliasName: returnAliasName}
+	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility = Visibility.file, takesReceiver bool = false, opaqueParams OpaqueParamInfo = sharedNoOpaqueParams, paramNames ByteArrayArray = ByteArrayArray.create(), paramTypes MaxonTypeArray = MaxonTypeArray.create(), returnAliasName ByteArray = EmptySourceText, nameLine LineNumber = 0, nameColumn ColumnNumber = 0) returns FuncReturnTypeEntry
+		return Self{name: name, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: opaqueParams, paramNames: paramNames, paramTypes: paramTypes, returnAliasName: returnAliasName, nameLine: nameLine, nameColumn: nameColumn}
 	end 'create'
 end 'FuncReturnTypeEntry'
 
@@ -331,6 +333,8 @@ export type FileParseArtifact
 	// keyed by the op index in THIS artifact's module and folded with the merge's offset. See
 	// `Project.moduleVarAccessSites`.
 	export var moduleVarAccessSites as ModuleVarAccessSiteMap
+
+	export var registryUseSites as RegistryUseSiteTable
 
 	// The mm-trace tag of each compiler-minted box this file allocates that is not any declared type's.
 	// `mergeArtifact` folds it into `project.allocTagSites` with the merge's op offset, exactly as
@@ -533,6 +537,7 @@ export type FileParseArtifact
 			asyncSpawnSites: AsyncSpawnSiteMap.create(),
 			serviceAwaitSites: ServiceAwaitSiteMap.create(),
 			moduleVarAccessSites: ModuleVarAccessSiteMap.create(),
+			registryUseSites: noRegistryUseSites,
 			allocTagSites: AllocTagSiteMap.create(),
 			debugStreamNameSites: DebugStreamNameSiteMap.create(),
 			immortalConstArraySites: ImmortalConstArraySiteMap.create(),
@@ -632,6 +637,22 @@ export type FileParseArtifact
 	export function recordModuleVarAccessSite(site ModuleVarAccessSite)
 		self.moduleVarAccessSites.upsert(self.module.opCount() as OpIndex, value: site.clone())
 	end 'recordModuleVarAccessSite'
+
+	export function recordRegistryUseSite(site RegistryUseSite)
+		var byOp = self.registryUseSitesForWrite()
+		byOp.upsert(self.module.opCount() as OpIndex, value: site)
+	end 'recordRegistryUseSite'
+
+	function registryUseSitesForWrite() returns RegistryUseSiteMap
+		match self.registryUseSites 'state'
+			unwritten then break 'state'
+			entries(byOp) then return byOp
+		end 'state'
+
+		let fresh = RegistryUseSiteMap.create()
+		self.registryUseSites = RegistryUseSiteTable.entries(fresh)
+		return fresh
+	end 'registryUseSitesForWrite'
 
 	// Record the mm-trace TAG of the box the op `emitOp` is about to append allocates — the same
 	// read-it-through-here contract `recordAsyncSpawnSite` states, and for its reason: the tag lands on the
@@ -1006,13 +1027,13 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	end 'spansOutOfStep'
 
 	// ⛔⛔ **THE SAME CHECK FOR THE SIDE TABLES A COUNT CANNOT CATCH.** `opRanges` is an ARRAY, so a missed
-	// reset shows up as the drift above; the six op-KEYED tables below are maps and arrays nothing indexes
+	// reset shows up as the drift above; the op-KEYED tables below are maps and arrays nothing indexes
 	// positionally, so a missed reset is silent — the stale key simply names a different op in the next
-	// round's module and carries the previous round's payload with it. Five of the six were in exactly that
-	// state (see `Queries.resetMergeTargets`). Asked ONCE per round, at the first file, which is O(1) and is
+	// round's module and carries the previous round's payload with it. Asked ONCE per round, at the first file, which is O(1) and is
 	// where the answer is knowable: a round begins with every one of them emptied or with none of them.
 	if opOffset == 0 'theFirstFileOfARound'
 		requireOpKeyedTableIsEmpty("moduleVarAccessSites", held: project.moduleVarAccessSites.count() as OpCount)
+		requireOpKeyedTableIsEmpty("registryUseSites", held: project.registryUseSites.count() as OpCount)
 		requireOpKeyedTableIsEmpty("serviceAwaitSites", held: project.serviceAwaitSites.count() as OpCount)
 		requireOpKeyedTableIsEmpty("asyncSpawnSites", held: project.asyncSpawnSites.count() as OpCount)
 		requireOpKeyedTableIsEmpty("allocTagSites", held: project.allocTagSites.count() as OpCount)
@@ -1020,6 +1041,7 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 		requireOpKeyedTableIsEmpty("immortalConstArraySites", held: project.immortalConstArraySites.count() as OpCount)
 		requireOpKeyedTableIsEmpty("valueOrigins", held: project.valueOrigins.count())
 		requireOpKeyedTableIsEmpty("deferralSources", held: project.deferralSources.count() as OpCount)
+		requireOpKeyedTableIsEmpty("refusedOverloadCalls", held: project.refusedOverloadCalls.count() as OpCount)
 	end 'theFirstFileOfARound'
 
 	// The function offset for the ValueOrigin fold: `IrModule.merge` appends the
@@ -1991,21 +2013,19 @@ function commitPendingFunctionTypeDoors(project Project, artifact FileParseArtif
 	end 'each'
 end 'commitPendingFunctionTypeDoors'
 
-// The one sentence the six op-keyed tables share, written once so a seventh cannot be added with a
+// The one sentence the op-keyed tables share, written once so another cannot be added with a
 // differently-worded net that says less. `held` is the table's own count at the first file of a round.
 function requireOpKeyedTableIsEmpty(name String, held OpCount)
 	if held != 0 'carriedOver'
-		panic("mergeArtifact: `project.{name}` still holds {held} entries at the first file of a fold round — it is keyed by an OP INDEX into the module being rebuilt, and this round's module starts empty, so every one of those keys now names a different op. Add it to `Queries.resetMergeTargets` beside the other five")
+		panic("mergeArtifact: `project.{name}` still holds {held} entries at the first file of a fold round — it is keyed by an OP INDEX into the module being rebuilt, and this round's module starts empty, so every one of those keys now names a different op. Add it to `Queries.resetMergeTargets` beside the other op-keyed tables")
 	end 'carriedOver'
 end 'requireOpKeyedTableIsEmpty'
 
-// Fold this file's THREE diagnostic side tables — the spawn texts E3073 quotes, the service awaits E3139
-// seeds its graph from, and the module accesses E3143 refuses — onto the whole-program tables, RE-KEYED by
-// the merge's op offset. That is the same relocation `opRanges` gets by appending in order, spelled out
-// here because a map cannot express it by position; without the offset every file after the first would
-// name the wrong op.
-//
-// ⚠ It was `commitAsyncSpawnTexts` while it folded one table, and that name outlived the fact by two.
+// Fold this file's FOUR diagnostic side tables — the spawn texts E3073 quotes, the service awaits
+// E3139 seeds its graph from, the module accesses E3143 refuses and the registry uses E3173 refuses
+// — onto the whole-program tables, RE-KEYED by the merge's op offset. That is the same relocation
+// `opRanges` gets by appending in order, spelled out here because a map cannot express it by
+// position; without the offset every file after the first would name the wrong op.
 function commitParserDiagnosticSites(project Project, artifact FileParseArtifact, opOffset OpIndex)
 	for (opIndex, awaitSite) in artifact.serviceAwaitSites 'eachServiceAwait'
 		project.serviceAwaitSites.upsert(opIndex + opOffset, value: awaitSite)
@@ -2015,10 +2035,21 @@ function commitParserDiagnosticSites(project Project, artifact FileParseArtifact
 		project.moduleVarAccessSites.upsert(opIndex + opOffset, value: accessSite)
 	end 'eachModuleVarAccess'
 
+	match artifact.registryUseSites 'registryUses'
+		unwritten then break 'registryUses'
+		entries(byOp) then commitRegistryUseSites(project, byOp: byOp, opOffset: opOffset)
+	end 'registryUses'
+
 	for (opIndex, site) in artifact.asyncSpawnSites 'each'
 		project.asyncSpawnSites.upsert(opIndex + opOffset, value: site)
 	end 'each'
 end 'commitParserDiagnosticSites'
+
+function commitRegistryUseSites(project Project, byOp RegistryUseSiteMap, opOffset OpIndex)
+	for (opIndex, registryUse) in byOp 'eachRegistryUse'
+		project.registryUseSites.upsert(opIndex + opOffset, value: registryUse)
+	end 'eachRegistryUse'
+end 'commitRegistryUseSites'
 
 // Fold this file's mm-trace alloc tags onto the whole-program table, RE-KEYED by the merge's op offset —
 // `commitParserDiagnosticSites`' twin, for its stated reason: without the offset every file after the first would

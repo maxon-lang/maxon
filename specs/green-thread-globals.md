@@ -79,7 +79,7 @@ The rule is about **who writes**, not about what is written, and not about globa
 | a plain function, not reachable from any handler, touches a module-level `var` | **legal** — the program spawning a service somewhere else does not make `main`'s own bookkeeping concurrent |
 | a handler CALLS A CLOSURE VALUE, and a function whose ADDRESS IS TAKEN assigns to a module-level `var` | **refused** — the target is chosen at run time, so no edge can be followed and every function the call could land on is treated as reachable |
 | a handler reaches a WITNESS dispatch, and a function wearing the dispatched requirement's name assigns to a module-level `var` | **refused**, for the same reason — a witness table holds the members of a conformance, so every member wearing that name is treated as reachable |
-| the same, but the assigning function's address is taken nowhere and it wears no name a dispatch the handler reaches is for | **legal** — no dispatch can reach it. Marking it anyway refused `stdlib/Log.maxon` in every service program that used an interface, and a closure in `main` in every service program that keeps a `Map` |
+| the same, but the assigning function's address is taken nowhere and it wears no name a dispatch the handler reaches is for | **legal** — no dispatch can reach it. Marking it anyway refused `stdlib/TraceCapture.maxon` in every service program that used an interface, and a closure in `main` in every service program that keeps a `Map` |
 
 ⛔⛔ **THAT LAST ROW IS THIS RULE'S REFUSING DIRECTION, AND IT IS THE EXACT OPPOSITE OF `services.md`'s
 DEADLOCK RULE ON THE SAME EDGES.** `ServiceCallCycleCheck`'s header says an unknown callee *"contributes no
@@ -980,11 +980,11 @@ ledger=15 count=5
 
 <!-- test: an-interface-in-a-handlers-cone-does-not-implicate-the-stdlib -->
 ⭐⭐ **THE OVER-REFUSAL THAT MADE THIS RULE UNUSABLE, PINNED — one ordinary interface method in a handler's
-cone used to refuse every program that so much as MENTIONED `Log`.**
+cone used to refuse every program that so much as MENTIONED `TraceCapture`.**
 
 A `witnessDispatch` chooses its target at run time, so it triggers the same widening the case above pins.
-The widening used to mark EVERY function in the program, and `stdlib/Log.maxon` holds a module-level `var
-capturing` that `Log.startCapture` writes — so the compiler refused this program with *"`Log.startCapture`
+The widening used to mark EVERY function in the program, and `stdlib/TraceCapture.maxon` holds a module-level `var
+capturing` that `TraceCapture.startCapture` writes — so the compiler refused this program with *"`TraceCapture.startCapture`
 writes the module-level `capturing` … make `capturing` a `let`"*. **The cure names a file the author does not
 own**, `stdlib/Testing.maxon` has the same shape, and interfaces are not exotic: essentially every service
 program that used one was refused.
@@ -992,12 +992,12 @@ program that used one was refused.
 ⭐ **THE NARROWING, AND WHY IT IS SOUND.** A function value in this language comes from exactly two places —
 a `functionRef` (a closure literal, or a named function used as a value) and a witness slot, whose accepted
 member the conformance check files by name. A function that is in neither has no address anywhere in the
-emitted image, so no `indirectCall` and no `witnessDispatch` can reach it. `Log.startCapture` is neither, so
+emitted image, so no `indirectCall` and no `witnessDispatch` can reach it. `TraceCapture.startCapture` is neither, so
 it is not implicated here; `Polite.greet` IS a witness member and remains in the widened set, which is what
 keeps the refusing direction intact for the target the dispatch can genuinely land on.
 
-⚠ **`Log` IS NAMED FROM `main` AND NOT FROM THE HANDLER, and that distinction is the whole case.** A handler
-that CALLS `Log.trace` is still refused, correctly and by a NAMED call path — `Log.trace` reads `capturing`,
+⚠ **`TraceCapture` IS NAMED FROM `main` AND NOT FROM THE HANDLER, and that distinction is the whole case.** A handler
+that CALLS `TraceCapture.trace` is still refused, correctly and by a NAMED call path — `TraceCapture.trace` reads `capturing`,
 and a message reaches it. What this case pins is that a handler which calls neither is left alone.
 ```maxon
 interface Greeter
@@ -1035,10 +1035,10 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	Log.startCapture()
+	TraceCapture.startCapture()
 	let h = spawn Counter.create()
 	let n = try await h.add(5) otherwise 0
-	let keys = Log.stopCapture()
+	let keys = TraceCapture.stopCapture()
 	print("n={n} keys={keys.count()}\n")
 	return n as ExitCode
 end 'main'
@@ -1161,4 +1161,98 @@ typealias Integer = int(i64.min to i64.max)
 ```maxoncstderr
 error E3143: <fragment>:16:3: `Loud.greet` writes the module-level `greetings`, and the message `Counter.add` dispatches through a closure or a witness whose target this compiler cannot name, so it may land here — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares. So `greetings = …` is a load, an add and a store that two of them can interleave, each writing the other's stale value back. Nothing traps when they do; the program answers a number that is too small. Keep it in a field of `self` and hand it back through a reply, or make `greetings` a `let`
 note: <fragment>:40:10: the `spawn` that makes `Counter` a service
+```
+
+<!-- test: a-handler-reads-a-module-let-during-the-exit-drain -->
+**THE EXIT DRAIN RUNS HANDLERS, SO EVERY MODULE `let` A HANDLER READS MUST OUTLIVE IT.** `main` sends three
+messages and returns without awaiting any; the drain that runs them comes after `main`, and each handler reads
+a `let` whose record `__module_init` built at run time. The globals are released only once the drain has
+finished.
+```maxon
+type Label
+	export let text as String
+	export let weight as Integer
+
+	static function create(weight Integer) returns Self
+		return Self{text: "a label built at run time, weight {weight}", weight: weight}
+	end 'create'
+end 'Label'
+
+let label = Label.create(40)
+
+type Printer
+	var printed as Integer
+
+	static function create() returns Self
+		return Self{printed: 0}
+	end 'create'
+
+	export function show(n Integer)
+		self.printed = self.printed + 1
+		print("{n}: {label.text} ({label.weight + n})\n")
+	end 'show'
+end 'Printer'
+
+function main() returns ExitCode
+	let printer = spawn Printer.create()
+	printer.show(1)
+	printer.show(2)
+	printer.show(3)
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```stdout
+1: a label built at run time, weight 40 (41)
+2: a label built at run time, weight 40 (42)
+3: a label built at run time, weight 40 (43)
+```
+```exitcode
+0
+```
+
+<!-- test: a-handler-reads-a-static-let-during-the-exit-drain -->
+The same for a type's `static let`: it is a global too, and the drain's handlers read it after `main` has
+returned.
+```maxon
+type Label
+	export let text as String
+	export let weight as Integer
+
+	static let standard = Label.create(40)
+
+	static function create(weight Integer) returns Self
+		return Self{text: "a label built at run time, weight {weight}", weight: weight}
+	end 'create'
+end 'Label'
+
+type Printer
+	var printed as Integer
+
+	static function create() returns Self
+		return Self{printed: 0}
+	end 'create'
+
+	export function show(n Integer)
+		self.printed = self.printed + 1
+		print("{n}: {Label.standard.text} ({Label.standard.weight + n})\n")
+	end 'show'
+end 'Printer'
+
+function main() returns ExitCode
+	let printer = spawn Printer.create()
+	printer.show(1)
+	printer.show(2)
+	printer.show(3)
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```stdout
+1: a label built at run time, weight 40 (41)
+2: a label built at run time, weight 40 (42)
+3: a label built at run time, weight 40 (43)
+```
+```exitcode
+0
 ```

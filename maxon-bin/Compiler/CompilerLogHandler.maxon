@@ -1,0 +1,137 @@
+// The raw values are the line prefixes `tests/parallel-compile` and `tests/cli` pin byte for byte;
+// the declaration order is the category number the DebugStream ring carries.
+module enum CompilerLogGroup
+	compiler = "CMP"
+	lexer = "LEX"
+	parser = "PAR"
+	semantic = "SEM"
+	ir = "IR "
+	codegen = "GEN"
+	binary = "BIN"
+	testing = "TST"
+end 'CompilerLogGroup'
+
+// The level numbers the DebugStream ring carries and `maxon monitor` prints.
+module enum RingLogLevel
+	error = 1
+	info = 2
+	debug = 3
+	trace = 4
+end 'RingLogLevel'
+
+let GroupAttrKey = "group"
+let UnattributedTraceUnit = 0 as TraceUnit
+let SilencedRankAboveError = 1 as LogRank
+
+enum LogSpecRefusal implements Error
+	unknownLevel
+end 'LogSpecRefusal'
+
+// The trace unit is the handler's own state, so `compilerLogger` reads no module storage and a pool
+// worker may log (E3143). `attribute` arrives through the same mailbox as the records, so the unit
+// it sets precedes every later record from that sender; across senders the last `attribute` wins.
+module type CompilerLogHandler implements LogHandler
+	var unit as TraceUnit
+
+	static function create() returns CompilerLogHandler
+		return Self{unit: UnattributedTraceUnit}
+	end 'create'
+
+	export function attribute(traceUnit TraceUnit)
+		self.unit = traceUnit
+	end 'attribute'
+
+	export function handle(record LogRecord) returns bool
+		let group = recordGroupOf(record)
+
+		if __DebugStream.enabled() 'ring'
+			let msgBytes = record.message.toByteArray()
+			__DebugStream.text(group.ordinal, ringLogLevelOf(record.level).rawValue, self.unit, msgBytes.managed)
+			return true
+		end 'ring'
+
+		printError("[{group.rawValue}] {record.level.name()}: {record.message}\n")
+		return true
+	end 'handle'
+end 'CompilerLogHandler'
+
+module type CompilerLogRoute
+	export let handler as CompilerLogHandler.handle
+
+	module static function create(handler CompilerLogHandler.handle) returns CompilerLogRoute
+		return Self{handler: handler}
+	end 'create'
+end 'CompilerLogRoute'
+
+// The compiler's one handler, reached by `installCompilerLogHandler` and by `compileToProduct`'s
+// `attribute` alike; the `LogSink` default holds it only as a `LogHandler.handle`, which has no
+// `attribute`.
+default CompilerLogRoute = CompilerLogRoute.create(spawn CompilerLogHandler.create())
+
+export function installCompilerLogHandler()
+	Log.setDefault(LogSink.create(CompilerLogRoute.current().handler.clone(), levels: LogLevelVar.create(LogLevels.minimum(LogLevel.info))))
+end 'installCompilerLogHandler'
+
+function recordGroupOf(record LogRecord) returns CompilerLogGroup
+	let bound = try record.attrs.get(0) otherwise panic("CompilerLogHandler: a record carrying no attrs reached the compiler's handler — `compilerLogger` binds its group marker under the record's group on every compiler logger")
+
+	if bound.key != GroupAttrKey 'notTheGroupMarker'
+		panic("CompilerLogHandler: the record's first attr is '{bound.key}', not the group marker `compilerLogger` binds first")
+	end 'notTheGroupMarker'
+
+	let groupName = try bound.groups.get(0) otherwise panic("CompilerLogHandler: the record's first attr '{bound.key}' sits in no group — `compilerLogger` binds it under the logger's group")
+	return try CompilerLogGroup.fromName(groupName) otherwise panic("CompilerLogHandler: '{groupName}' names no compiler log group")
+end 'recordGroupOf'
+
+module function compilerLogger(group CompilerLogGroup) returns Logger
+	var bound = LogAttrArray.create()
+	bound.push(LogAttr.int(GroupAttrKey, value: group.ordinal as LogInteger))
+	return Log.default().withGroup(group.name).withAttrs(bound)
+end 'compilerLogger'
+
+module function compilerLogEnabled(group CompilerLogGroup, level LogLevel) returns bool
+	return level.rank >= Log.groupLevel(group.name).rank
+end 'compilerLogEnabled'
+
+module function ringLogLevelOf(level LogLevel) returns RingLogLevel
+	if level.rank <= LogLevel.trace.rank 'trace'
+		return RingLogLevel.trace
+	end 'trace'
+
+	if level.rank <= LogLevel.debug.rank 'debug'
+		return RingLogLevel.debug
+	end 'debug'
+
+	if level.rank <= LogLevel.info.rank 'info'
+		return RingLogLevel.info
+	end 'info'
+
+	return RingLogLevel.error
+end 'ringLogLevelOf'
+
+export function parseLogOption(option String) returns bool
+	let parts = option.split(":")
+
+	if parts.count() == 1 'noColon'
+		Log.setLevel(try logLevelNamed(option) otherwise return false)
+		return true
+	end 'noColon'
+
+	let categoryStr = try parts.get(0) otherwise return false
+	let levelStr = try parts.get(1) otherwise return false
+	let group = try CompilerLogGroup.fromName(categoryStr) otherwise return false
+
+	Log.setGroupLevel(group.name, level: try logLevelNamed(levelStr) otherwise return false)
+	return true
+end 'parseLogOption'
+
+function logLevelNamed(spelling String) returns LogLevel throws LogSpecRefusal
+	return match spelling.toUpper() 'spelling'
+		"NONE" gives LogLevel.create(LogLevel.error.rank + SilencedRankAboveError)
+		"ERROR" gives LogLevel.error
+		"INFO" gives LogLevel.info
+		"DEBUG" gives LogLevel.debug
+		"TRACE" gives LogLevel.trace
+		default throws LogSpecRefusal.unknownLevel
+	end 'spelling'
+end 'logLevelNamed'

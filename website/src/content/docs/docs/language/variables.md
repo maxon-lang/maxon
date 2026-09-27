@@ -129,7 +129,10 @@ end 'main'
   a call hands back is followed through further calls, witness dispatches and calls through function values;
   a record built fresh from numbers read out of a `let` is legal. The same fact refuses a write, inside a
   function, through a record a call handed back out of a `let` (**E3159**).
-- A `spawn` reachable from a global initializer is **E3164**; start services in `main`.
+- A `spawn` reachable from a global initializer is **E3164**; start services in `main`, or declare a
+  program-wide one with [`default`](/docs/language/async/#program-wide-defaults--default). A `Key.current()` or `Key.register()`
+  reachable from a global initializer is [E3173](/docs/cli/error-codes/#e3173--registryreachedfromglobalinitializer): the
+  defaults are built after every global initializer has run.
 - A top-level declaration is private to its file unless marked `export`, `module` or `public`.
 - A [service](/docs/language/async/#services--spawn) handler may not read or write a module-level `var`
   (**E3143**); keep service state in its fields.

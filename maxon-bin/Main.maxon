@@ -271,6 +271,10 @@ function defineFromPair(pair String) returns Define throws DefinePairError
 end 'defineFromPair'
 
 function main() returns ExitCode
+	// First, so every line the compiler logs takes the `[CMP] LEVEL: msg` shape
+	// `tests/parallel-compile` pins.
+	installCompilerLogHandler()
+
 	let args = MaxonArgs.parse()
 
 	// A refused option aborts before any command runs: proceeding as though it had been honoured is the
@@ -518,12 +522,12 @@ module function runManifestProgram(manifest FilePath, entry ByteArray, speaker S
 	let spoke = quietTheBuildChatter(args)
 
 	let runner = try cachedBuild(manifest, isProject: false, target: detectHostTarget(), entryFunction: entry, speaker: speaker) otherwise 'manifestNotBuilt'
-		setLogLevel(spoke)
+		Log.setLevel(spoke)
 		printError("error: {manifest.filename()} could not be built — the reason is above\n")
 		return ManifestProgramRun.notRun
 	end 'manifestNotBuilt'
 
-	setLogLevel(spoke)
+	Log.setLevel(spoke)
 
 	if announce 'tellTheReader'
 		reportBuildRunner(runner.compiled, manifest: manifest)
@@ -1483,13 +1487,13 @@ module typealias PositionalCount = int(0 to 1)
 // It answers the level it found, so a caller quieting ONE compile of several can put that level
 // back and let the rest be heard.
 module function quietTheBuildChatter(args MaxonArgs) returns LogLevel
-	let inForce = currentLogLevel()
+	let inForce = Log.level()
 
 	if args.logOverridden 'theCallerAskedForLogging'
 		return inForce
 	end 'theCallerAskedForLogging'
 
-	setLogLevel(LogLevel.ERROR)
+	Log.setLevel(LogLevel.error)
 	return inForce
 end 'quietTheBuildChatter'
 

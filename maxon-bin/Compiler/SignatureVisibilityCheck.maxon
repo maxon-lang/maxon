@@ -120,14 +120,15 @@ end 'checkOneRequirement'
 // further than a handle to its service travels, so its surface is capped at the service type's tier.
 // Without the cap a file-private service could not name its own types in its messages.
 function declaredTierOf(signatures ProgramSignatures, func IrFunction) returns Visibility
-	if func.visibility == Visibility.file or not signatures.spawnsAnyService() 'noMessageTierCanNarrowIt'
+	if func.visibility == Visibility.file 'noMessageTierCanNarrowIt'
 		return func.visibility
 	end 'noMessageTierCanNarrowIt'
 
-	match serviceMessageOwnerOf(signatures, callee: func.name) 'message'
-		notAMessage then return func.visibility
-		ofService(typeName, _) then return narrowerTier(func.visibility, other: spawnTargetLayoutOf(signatures, typeName: typeName).visibility)
-	end 'message'
+	if let message = try signatures.serviceMessageOf(func.name) 'aMessage'
+		return narrowerTier(func.visibility, other: spawnTargetLayoutOf(signatures, typeName: message.typeName).visibility)
+	end 'aMessage'
+
+	return func.visibility
 end 'declaredTierOf'
 
 function checkDeclaredSignature(project Project, signatures ProgramSignatures, func IrFunction)

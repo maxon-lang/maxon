@@ -300,7 +300,7 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 	// a layout this writer does not control.
 	let entryPoint = textVAddr + codeResult.mainCallFixupOffset
 
-	logInfo(LogCategory.binary, message: function() gives "Code size: {codeSize} bytes, rodata: {rdataSize} bytes, data: {preludeSize} bytes, entry point: {entryPoint}")
+	compilerLogger(CompilerLogGroup.binary).info("Code size: {codeSize} bytes, rodata: {rdataSize} bytes, data: {preludeSize} bytes, entry point: {entryPoint}")
 
 	// --- Resolve every address into the images before they are written ---
 	// The ONE per-CPU divergence in this writer. arm64 patches the ADRP/ADD PIE pairs (section
@@ -379,11 +379,11 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 	// contents; every POSIX loader derives it from the mode bits, and a file written without them
 	// fails at SPAWN with a permission error — long after the build reported success.
 	try File.writeBinary(outputPath, content: elf, mode: FilePermission.executable) otherwise 'writeErr'
-		logError(LogCategory.binary, message: function() gives "Failed to write ELF file: {outputPath}")
+		compilerLogger(CompilerLogGroup.binary).error("Failed to write ELF file: {outputPath}")
 		return
 	end 'writeErr'
 
-	logInfo(LogCategory.binary, message: function() gives "ELF write complete: {elf.count()} bytes")
+	compilerLogger(CompilerLogGroup.binary).info("ELF write complete: {elf.count()} bytes")
 end 'writeElf'
 
 // Append `.symdata`, `.symtab` / `.strtab`, `.shstrtab` and the section header table, then backpatch
@@ -544,5 +544,7 @@ function writeElfTrailingSections(elf ByteArray, codeResult CodeResult, textVAdd
 	patchWord(elf, offset: shnumFieldOffset, value: sectionCount)
 	patchWord(elf, offset: shstrndxFieldOffset, value: shstrtabShndx)
 
-	logDebug(LogCategory.binary, message: function() gives "ELF trailing sections: {symbolCount} debug symbol(s), {symdataSize} bytes of interned names, section header table at file offset {sectionHeaderTableOffset}")
+	if compilerLogEnabled(CompilerLogGroup.binary, level: LogLevel.debug) 'debugging'
+		compilerLogger(CompilerLogGroup.binary).debug("ELF trailing sections: {symbolCount} debug symbol(s), {symdataSize} bytes of interned names, section header table at file offset {sectionHeaderTableOffset}")
+	end 'debugging'
 end 'writeElfTrailingSections'

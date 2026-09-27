@@ -139,13 +139,14 @@ export type EntryStubCalls
 	export let bracketsDebugStream as bool
 	export let dumpsCoverage as bool
 	export let attachesDebugAgent as bool
+	export let releasesRegistry as bool
 
 	export static function none() returns EntryStubCalls
-		return Self{runsMainOnAGreenThread: false, checksLeaks: false, bracketsDebugStream: false, dumpsCoverage: false, attachesDebugAgent: false}
+		return Self{runsMainOnAGreenThread: false, checksLeaks: false, bracketsDebugStream: false, dumpsCoverage: false, attachesDebugAgent: false, releasesRegistry: false}
 	end 'none'
 
 	export static function fromUsage(usage RuntimeUsage) returns EntryStubCalls
-		return Self{runsMainOnAGreenThread: usage.usesGt, checksLeaks: usage.usesHeap, bracketsDebugStream: usage.usesDebugStream, dumpsCoverage: usage.usesCoverage, attachesDebugAgent: usage.usesDebugAgent}
+		return Self{runsMainOnAGreenThread: usage.usesGt, checksLeaks: usage.usesHeap, bracketsDebugStream: usage.usesDebugStream, dumpsCoverage: usage.usesCoverage, attachesDebugAgent: usage.usesDebugAgent, releasesRegistry: usage.releasesRegistry}
 	end 'fromUsage'
 end 'EntryStubCalls'
 
@@ -331,6 +332,8 @@ end 'seedRoots'
 //
 //   * `__module_init` / `__maxon_global_cleanup` — the managed-global initialization and release the entry
 //     stub brackets `main` with.
+//   * `__maxon_registry_release` — the registry slots' release, which the entry stub calls after `main` in a
+//     program without green threads; with them, `__gt_drain_at_exit` calls it.
 //   * `__mm_leak_check` — both entry stubs' leak gate, emitted from `RuntimeUsage.usesHeap` where
 //     installation is decided; a pruned root leaves a call with no callee, loudly, on every backend.
 //   * `__gt_ready_locked` / `__sched_wake_or_spawn` — a readiness walk's two callees, named by a
@@ -358,6 +361,7 @@ module function compilerOwnedRoots(target Target, stub EntryStubCalls) returns C
 	var roots = CompilerOwnedRootArray.create()
 	roots.push(CompilerOwnedRoot.create(ModuleInitName, isCalledHere: true))
 	roots.push(CompilerOwnedRoot.create(GlobalCleanupName, isCalledHere: true))
+	roots.push(CompilerOwnedRoot.create(RegistryReleaseName, isCalledHere: stub.releasesRegistry and not stub.runsMainOnAGreenThread))
 	roots.push(CompilerOwnedRoot.create(MmLeakCheckName, isCalledHere: stub.checksLeaks))
 	roots.push(CompilerOwnedRoot.create(GtReadyLockedName, isCalledHere: true))
 	roots.push(CompilerOwnedRoot.create(SchedWakeOrSpawnName, isCalledHere: true))
@@ -751,16 +755,22 @@ function sweepUnreachedFunctions(module StdModule, reached BoolArray, project Pr
 
 			kept.push(func)
 		end 'live' else 'dead'
-			// `String.from` runs INSIDE the lazy message, never beside it: this arm is taken once per
+			// `String.from` runs INSIDE the level guard, never beside it: this arm is taken once per
 			// function the pass drops, so materializing the name eagerly would spend an allocation per
 			// SUCCESS — the cost rising with exactly how well the prune works — to render a line that is
 			// off on every build but a `--log=ir:trace` one.
-			logTrace(LogCategory.ir, message: function() gives "dfe: dropping unreachable function '{String.from(func.name)}'")
+			if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.trace) 'tracing'
+				compilerLogger(CompilerLogGroup.ir).trace("dfe: dropping unreachable function '{String.from(func.name)}'")
+			end 'tracing'
 		end 'dead'
 	end 'eachFunc'
 
 	let dropped = total - kept.count()
-	logDebug(LogCategory.ir, message: function() gives "dfe: dropped {dropped} unreachable function(s) of {total}")
+
+	if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.debug) 'debugging'
+		compilerLogger(CompilerLogGroup.ir).debug("dfe: dropped {dropped} unreachable function(s) of {total}")
+	end 'debugging'
+
 	module.functions = kept
 
 	// Nothing dropped ⇒ `newIndexOfOld` is the identity and no row loses its function, so the remap could

@@ -507,17 +507,17 @@ This is preferable to `default throws` or `default panic` because the unhandled 
 The same shape reads well when only the serious cases matter — bare case names, never `Enum.case`, which is E3075 in an arm:
 
 ```maxon
-enum LogLevel
+enum Severity
 	trace
 	debug
 	info
 	warning
 	error
 	fatal
-end 'LogLevel'
+end 'Severity'
 
 // Only act on serious levels
-match level 'filter'
+match severity 'filter'
 	error then handleError()
 	fatal then handleFatal()
 	trace or
@@ -534,7 +534,7 @@ Use descriptive names for match bindings so the code reads clearly.
 ```maxon
 match result 'handle'
 	success(user) then processUser(user)
-	failure(errorCode, message) then logError("{errorCode}: {message}")
+	failure(errorCode, message) then Log.error("{errorCode}: {message}")
 	pending then retry()
 end 'handle'
 ```

@@ -141,9 +141,10 @@ after
 0
 ```
 
-<!-- test: same-name-methods.an-extension-static-beside-the-types-own-static-is-withheld -->
-The type's own static withholds an extension's static of the same name, whatever another extension
-publishes under that name for the instance.
+<!-- test: same-name-methods.error.an-extension-static-colliding-with-the-types-own-static -->
+An extension's static that wears the name of the type's own static is refused at the extension member: the
+two could never both be called, so one of them would be dead. The extension's INSTANCE `m` beside the static
+`m` is a different kind of member and stays legal.
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -175,8 +176,97 @@ function main() returns ExitCode
 	return (T.m() + T.make(1).m()) as ExitCode
 end 'main'
 ```
-```exitcode
-8
+```maxoncstderr
+error E3176: <fragment>:23:18: the extension member `T.m` has the name of `T`'s own static member, which would hide it — rename one
+note: <fragment>:11:18: `T`'s own `m`
+```
+
+<!-- test: same-name-methods.error.an-extension-instance-method-colliding-with-the-types-own -->
+The instance arm of the same rule: a type extension's instance method named like the type's own instance
+method is refused.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type T
+	export var v as Num
+
+	static function make(v Num) returns T
+		return Self{v: v}
+	end 'make'
+
+	function m() returns Num
+		return self.v
+	end 'm'
+end 'T'
+
+extension T
+	function m() returns Num
+		return self.v + 1
+	end 'm'
+end 'T'
+
+function main() returns ExitCode
+	return T.make(1).m() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3176: <fragment>:17:11: the extension member `T.m` has the name of `T`'s own instance member, which would hide it — rename one
+note: <fragment>:11:11: `T`'s own `m`
+```
+
+<!-- test: same-name-methods.error.an-extension-member-colliding-with-an-own-member-in-another-file -->
+The collision is found across files: the type body in one file, the extension in another.
+```maxon
+// --- file: box.maxon
+module typealias Num = int(i64.min to i64.max)
+
+module type Box
+	var v as Num
+
+	module static function make(v Num) returns Box
+		return Self{v: v}
+	end 'make'
+
+	module function size() returns Num
+		return self.v
+	end 'size'
+end 'Box'
+
+// --- file: ext.maxon
+extension Box
+	module function size() returns Num
+		return 0
+	end 'size'
+end 'Box'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return Box.make(3).size() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3176: <fragment>:19:18: the extension member `Box.size` has the name of `Box`'s own instance member, which would hide it — rename one
+note: <fragment>:12:18: `Box`'s own `size`
+```
+
+<!-- test: same-name-methods.error.a-user-extension-of-a-stdlib-type-colliding-with-its-member -->
+A program's extension of a stdlib type is held to the same rule; the note points into the library.
+```maxon
+extension FilePath
+	function stem() returns String
+		return "mine"
+	end 'stem'
+end 'FilePath'
+
+function main() returns ExitCode
+	let path = FilePath from "dir/name.txt"
+	print("{path.stem()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3176: <fragment>:3:11: the extension member `FilePath.stem` has the name of `FilePath`'s own instance member, which would hide it — rename one
+note: stdlib/FilePath.maxon:372:18: `FilePath`'s own `stem`
 ```
 
 <!-- test: same-name-methods.with-params -->

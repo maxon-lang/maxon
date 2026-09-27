@@ -71,6 +71,7 @@ export typealias ShareWalkSet = Set with ByteArray
 // (`installEnumLookupHelpers`). It needs no closure pass: the helper's body compares constants and calls
 // nothing, so a referenced helper reaches nothing further.
 export typealias EnumLookupSet = Set with ByteArray
+export typealias InterfaceConversionNameSet = Set with ByteArray
 
 // The set a LAYOUT WALK tests membership in, whatever per-type runtime entry it is installing — the role
 // `DestructorSet` and `ClonerSet` share, spelled once because `MmRuntime.installStructRuntimeEntries` walks
@@ -473,8 +474,8 @@ export type RuntimeUsage
 	// `__thread_cpu_ticks`). Its own bit rather than `usesWallClock`'s: the two share a file and a shape but
 	// reach different Win32 imports, so a program that reads the calendar must not import
 	// `QueryThreadCycleTime` and a program that measures its own cost must not import
-	// `GetSystemTimeAsFileTime`. Like the wall clock it declares NO transitive dependency — one import call
-	// into frame scratch, no heap and no scheduler.
+	// `GetSystemTimePreciseAsFileTime`. Like the wall clock it declares NO transitive dependency — one import
+	// call into frame scratch, no heap and no scheduler.
 	//
 	// ⚠ **IT ANSWERS "IS THE CLOCK READ", NOT "DOES THE BODY SHIP".** It seeds the word that tells every park
 	// to keep a green thread's clock (`GtRuntime.GtKeepsCpuClockLabel`); the park names the body in every
@@ -498,7 +499,7 @@ export type RuntimeUsage
 	export var usesSharedMemory as bool
 
 	// ⭐⭐ **THE PROGRAM SAMPLES ANOTHER PROCESS'S THREADS (`maxon-bin/Profile/` ⇒ `__prof_*`).** Its own bit,
-	// so a build that profiles nothing carries neither the sixteen entry points nor the two IMPORT bands
+	// so a build that profiles nothing carries neither the `__prof_*` entry points nor the two IMPORT bands
 	// behind them — the process-sampling kernel32 slots, and `ntdll.dll`'s whole directory entry, which
 	// exists in no other binary in the language (`PeWriter.ImportGates.threadWalk`).
 	//
@@ -541,6 +542,11 @@ export type RuntimeUsage
 	//
 	// ⚠ It seeds TRUE, which is every complete target's answer.
 	export var parksOnIo as bool
+
+	export var usesSharedValue = false
+	export var usesServiceRegistry = false
+	export var releasesRegistry = false
+	export var neededInterfaceConversions as InterfaceConversionNameSet = InterfaceConversionNameSet.create()
 
 	static function create() returns RuntimeUsage
 		return Self{usesHeap: false, usesGt: false, usesChildPipes: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesCloneExistential: false, usesCloneUncloneable: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededShareWalks: ShareWalkSet.create(), usesShareWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesManagedListener: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesBackgroundPriority: false, usesProcessLiveness: false, usesTerminalDetection: false, usesCpuCount: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, usesDebugAgent: false, parksOnIo: true}
@@ -722,6 +728,25 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if isGtRuntimeCallee(callee) 'gt'
 		recordGtUsage(usage)
 	end 'gt'
+
+	if isSharedValueRuntimeCallee(callee) 'sharedValue'
+		usage.usesSharedValue = true
+		usage.usesIncref = true
+		usage.usesHeap = true
+	end 'sharedValue'
+
+	if isServiceRegistryRuntimeCallee(callee) 'serviceRegistry'
+		usage.usesServiceRegistry = true
+		recordGtUsage(usage)
+	end 'serviceRegistry'
+
+	if isInterfaceHandleRuntimeCallee(callee) 'interfaceHandle'
+		recordGtUsage(usage)
+	end 'interfaceHandle'
+
+	if isInterfaceHandleConversionCallee(callee) 'interfaceConversion'
+		usage.neededInterfaceConversions.insert(callee)
+	end 'interfaceConversion'
 
 	// A `__gt_io_read` call (the `spawnReadLine` probe) additionally reads a pipe. `usesGt` is already set by
 	// the `__gt_` prefix above. It is evidence about the PROGRAM: only a call the parser lowered from source

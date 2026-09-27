@@ -3285,3 +3285,207 @@ end 'main'
 ```stdout
 measured=62055
 ```
+
+<!-- test: a-float-payload-is-constructed-and-matched -->
+A `float` payload is built, carried in the union's box and bound back out by a match, like any other scalar.
+```maxon
+union Reading
+	celsius(value Real)
+	missing
+end 'Reading'
+
+function describe(r Reading) returns String
+	return match r 'which'
+		celsius(value) gives "celsius {value}"
+		missing gives "missing"
+	end 'which'
+end 'describe'
+
+function main() returns ExitCode
+	print("{describe(Reading.celsius(21.5))}\n")
+	print("{describe(Reading.missing)}\n")
+	print("{describe(Reading.celsius(-3.25))}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+celsius 21.5
+missing
+celsius -3.25
+```
+
+<!-- test: a-float-payload-crosses-a-mailbox -->
+A union with a `float` payload is a message argument like any other; one service prints in FIFO order.
+```maxon
+union Reading
+	celsius(value Real)
+	missing
+end 'Reading'
+
+type Thermometer
+	var shown as Integer
+
+	static function create() returns Self
+		return Self{shown: 0}
+	end 'create'
+
+	export function show(r Reading)
+		self.shown = self.shown + 1
+
+		match r 'which'
+			celsius(value) then print("{self.shown}: celsius {value}\n")
+			missing then print("{self.shown}: missing\n")
+		end 'which'
+	end 'show'
+end 'Thermometer'
+
+function main() returns ExitCode
+	let t = spawn Thermometer.create()
+	t.show(Reading.celsius(21.5))
+	t.show(Reading.missing)
+	t.show(Reading.celsius(-3.25))
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+1: celsius 21.5
+2: missing
+3: celsius -3.25
+```
+
+<!-- test: a-float-payload-beside-other-payloads -->
+A case carrying a `String` and a `float` binds both fields; the managed field is released with the box.
+```maxon
+union Sample
+	labelled(label String, value Real)
+	count(n Integer)
+end 'Sample'
+
+function describe(s Sample) returns String
+	return match s 'which'
+		labelled(label, value) gives "{label}={value}"
+		count(n) gives "count={n}"
+	end 'which'
+end 'describe'
+
+function main() returns ExitCode
+	print("{describe(Sample.labelled("pressure, a label long enough to be a heap string", value: 101.325))}\n")
+	print("{describe(Sample.count(4))}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+pressure, a label long enough to be a heap string=101.325
+count=4
+```
+
+<!-- test: an-int-argument-widens-into-a-float-payload -->
+An integer literal at a `float` payload widens to the float, in a function body and in a top-level `let`'s
+initializer alike.
+```maxon
+union Reading
+	celsius(value Real)
+	missing
+end 'Reading'
+
+let atStart = Reading.celsius(3)
+
+function describe(r Reading) returns String
+	return match r 'which'
+		celsius(value) gives "celsius {value}"
+		missing gives "missing"
+	end 'which'
+end 'describe'
+
+function main() returns ExitCode
+	print("{describe(Reading.celsius(21))}\n")
+	print("{describe(atStart)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+celsius 21.0
+celsius 3.0
+```
+
+<!-- test: a-float-payload-union-is-read-back-through-from-name -->
+`fromName` with a literal case name takes the payload as its extra argument, a `float` one included.
+```maxon
+union Reading
+	celsius(value Real)
+	missing
+end 'Reading'
+
+function main() returns ExitCode
+	let r = try Reading.fromName("celsius", 21.5) otherwise Reading.missing
+
+	match r 'which'
+		celsius(value) then print("celsius {value}\n")
+		missing then print("missing\n")
+	end 'which'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+celsius 21.5
+```
+
+<!-- test: a-float-payload-is-written-back-through-a-var-binding -->
+Matching a `var` binds the payload mutably: the write lands in the union's own payload, and a union rebuilt
+from the bound value carries the new float.
+```maxon
+union Reading
+	celsius(value Real)
+	missing
+end 'Reading'
+
+function describe(r Reading) returns String
+	return match r 'which'
+		celsius(value) gives "celsius {value}"
+		missing gives "missing"
+	end 'which'
+end 'describe'
+
+function main() returns ExitCode
+	var r = Reading.celsius(21.5)
+
+	match r 'adjust'
+		celsius(value) then value = value + 0.25
+		missing then return 1
+	end 'adjust'
+
+	let doubled = match r 'rebuild'
+		celsius(value) gives Reading.celsius(value * 2.0)
+		missing gives Reading.missing
+	end 'rebuild'
+
+	print("{describe(r)}\n")
+	print("{describe(doubled)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+celsius 21.75
+celsius 43.5
+```

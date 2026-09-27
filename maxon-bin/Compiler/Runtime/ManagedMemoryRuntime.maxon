@@ -4335,12 +4335,13 @@ function buildManagedIncref(module StdModule)
 	module.functions.push(func)
 end 'buildManagedIncref'
 
-// Which of the two a co-own of a buffer record spends — `plainBoxRetainCallee`'s twin over the record format
-// that has an immortal member, read by `Parser.retainCalleeForValue`.
+// Which entry a co-own of a buffer record spends — `plainBoxRetainCallee`'s twin over the record format
+// that has an immortal member, read by `ProgramSignatures.retainCalleeOf`.
 export function managedRecordRetainCallee(result RetainResult) returns ByteArray
 	return match result 'shape'
 		discarded gives ManagedIncrefName
-		freshName gives ManagedRetainName
+		freshName or
+			sharedRead gives ManagedRetainName
 	end 'shape'
 end 'managedRecordRetainCallee'
 

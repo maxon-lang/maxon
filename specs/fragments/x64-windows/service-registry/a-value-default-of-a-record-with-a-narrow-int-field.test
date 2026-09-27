@@ -1,0 +1,48 @@
+// Test: a-value-default-of-a-record-with-a-narrow-int-field
+typealias Count = int(0 to 1000)
+
+type Config
+	export let n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Config'
+
+default Config = Config.create(3)
+
+function main() returns ExitCode
+	return Config.current().n as ExitCode
+end 'main'
+---
+ExitCode: 3
+---
+data {
+  __default.Config@0 = i64 0
+  __sched_tls_teb_offset@8 = i64 0
+  __sched_allm@16 = i64 0
+  __sched_lock@24 = i64 0
+  __sched_preempt_ext_lock@32 = i64 0
+  __sched_preempt_context@40 = i64 0
+  __slab_arena_list@48 = i64 0
+  __slab_arena_map_l1@56 = i64 0
+  __slab_state@64 = i64 0
+  __ds_base@72 = i64 0
+  __dbg_ctl@80 = i64 0
+  __mrt_console_probe_stdin@88 = i8 0
+  __mrt_console_probe_stdout@89 = i8 0
+  __mrt_console_probe_stderr@90 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegGlobal rcx, __default.Config
+    x64.callDirect __shv_current
+    x64.andRegImm32 r8, r8, 65535
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

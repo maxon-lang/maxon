@@ -733,7 +733,7 @@ end 'runPersistentWorker'
 // ⛔⛔ **A WORKER'S STDERR IS AN UNDRAINED PIPE, SO THE COMPILER'S LOG CHANNEL HAS TO BE OFF INSIDE
 // ONE.**
 //
-// `Logger.globalLogLevel` defaults to INFO, so every successful build writes
+// The compiler's log level defaults to INFO, so every successful build writes
 // `[CMP] INFO: Wrote N bytes of code to …` to stderr on its way out. In process that is the WORKER's
 // stderr, which NOTHING reads until that worker dies or the pool shuts down (`shutdownAndDrainStderr`;
 // the synchronous drain is itself deliberate — see this file's header). A worker compiles several
@@ -748,12 +748,12 @@ end 'runPersistentWorker'
 //
 // ⚠ **THE INVARIANT THIS RESTORES IS THE ONE THE PROTOCOL NOTE AT THE TOP OF THIS FILE ALREADY STATES
 // ABOUT STDOUT, APPLIED TO STDERR: a worker writes to stderr only when it is DYING.** Anything added
-// to a per-test path that writes there — a `printError` outside a diagnostic capture, a new `logError`
+// to a per-test path that writes there — a `printError` outside a diagnostic capture, a new `Log.error`
 // in the compile pipeline — reintroduces exactly this deadlock, and its symptom is the progress bound
 // firing rather than a stack trace: a worker blocked inside a write says nothing, which is exactly the
 // state that bound reads as a stopped worker.
 function silenceCompilerLogging()
-	setLogLevel(LogLevel.ERROR)
+	Log.setLevel(LogLevel.error)
 end 'silenceCompilerLogging'
 
 // Run every selected test of one spec and emit one record per test, in declaration order.

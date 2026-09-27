@@ -1,0 +1,202 @@
+/// A service that writes records. `handle` answers once the record is written, so awaiting it also
+/// flushes every record sent to the handler before it.
+/// @category System
+public interface LogHandler
+	function handle(record LogRecord) returns bool
+end 'LogHandler'
+
+public enum LogStream
+	standardError
+	standardOutput
+end 'LogStream'
+
+/// Where a handler writes, and whether each record carries its time and the `file:line` that logged
+/// it.
+public type LogHandlerOptions
+	public let stream as LogStream
+	public let addTime as bool
+	public let addSource as bool
+
+	public static function create(stream LogStream, addTime bool, addSource bool) returns LogHandlerOptions
+		return LogHandlerOptions{stream: stream, addTime: addTime, addSource: addSource}
+	end 'create'
+
+	/// Standard error, with the time and without the source.
+	public static function standard() returns LogHandlerOptions
+		return LogHandlerOptions.create(LogStream.standardError, addTime: true, addSource: false)
+	end 'standard'
+
+	// One write per record, so two handlers sharing a stream never split each other's lines.
+	function write(line String)
+		match self.stream 'stream'
+			standardError then printError(line)
+			standardOutput then print(line)
+		end 'stream'
+	end 'write'
+end 'LogHandlerOptions'
+
+/// Writes each record as one line of `key=value` pairs; a value that is empty or holds a space, a
+/// control character, a quote or `=` is quoted.
+public type TextLogHandler implements LogHandler
+	let options as LogHandlerOptions
+
+	public static function create(options LogHandlerOptions) returns TextLogHandler
+		return TextLogHandler{options: options.clone()}
+	end 'create'
+
+	public function handle(record LogRecord) returns bool
+		self.options.write(textLogLine(record, options: self.options))
+		return true
+	end 'handle'
+end 'TextLogHandler'
+
+/// Writes each record as one JSON object per line, a group as a nested object, the time to the
+/// nanosecond.
+public type JsonLogHandler implements LogHandler
+	let options as LogHandlerOptions
+
+	public static function create(options LogHandlerOptions) returns JsonLogHandler
+		return JsonLogHandler{options: options.clone()}
+	end 'create'
+
+	public function handle(record LogRecord) returns bool
+		self.options.write(jsonLogLine(record, options: self.options))
+		return true
+	end 'handle'
+end 'JsonLogHandler'
+
+enum LogTextByte
+	space = 0x20
+	quote = 0x22
+	equals = 0x3D
+	delete = 0x7F
+end 'LogTextByte'
+
+function textLogLine(record LogRecord, options LogHandlerOptions) returns String
+	var line = ""
+
+	if options.addTime 'time'
+		line.append("time={WallClock.rfc3339Millis(record.time)} ")
+	end 'time'
+
+	line.append("level={textLogValue(record.level.name())}")
+
+	if options.addSource 'source'
+		line.append(" source={textLogValue("{record.file}:{record.line}")}")
+	end 'source'
+
+	line.append(" msg={textLogValue(record.message)}")
+
+	for field in record.attrs 'eachField'
+		line.append(" {textLogValue(field.dottedKey())}={textLogFieldValue(field.value)}")
+	end 'eachField'
+
+	line.append("\n")
+	return line
+end 'textLogLine'
+
+function textLogFieldValue(value LogValue) returns String
+	return match value 'value'
+		text(text) gives textLogValue(text)
+		integer(number) gives "{number}"
+		real(number) gives "{number}"
+		boolean(flag) gives "{flag}"
+	end 'value'
+end 'textLogFieldValue'
+
+function textLogValue(text String) returns String
+	return Json.quote(text) if textLogValueNeedsQuoting(text) else text
+end 'textLogValue'
+
+function textLogValueNeedsQuoting(text String) returns bool
+	if text.isEmpty() 'empty'
+		return true
+	end 'empty'
+
+	for b in text.bytes() 'eachByte'
+		if b <= LogTextByte.space or b == LogTextByte.quote or b == LogTextByte.equals or b == LogTextByte.delete 'special'
+			return true
+		end 'special'
+	end 'eachByte'
+
+	return false
+end 'textLogValueNeedsQuoting'
+
+function jsonLogLine(record LogRecord, options LogHandlerOptions) returns String
+	var line = "\{"
+
+	if options.addTime 'time'
+		line.append("\"time\":{Json.quote(WallClock.rfc3339Nanos(record.time))},")
+	end 'time'
+
+	line.append("\"level\":{Json.quote(record.level.name())}")
+
+	if options.addSource 'source'
+		line.append(",\"source\":\{\"file\":{Json.quote(record.file)},\"line\":{record.line}\}")
+	end 'source'
+
+	line.append(",\"msg\":{Json.quote(record.message)}")
+
+	var open = LogGroupPath.create()
+	var objectIsEmpty = false
+
+	for field in record.attrs 'eachField'
+		let shared = sharedLogGroupDepth(open, groups: field.groups)
+
+		while open.count() > shared 'closeEach'
+			_ = try open.pop() otherwise panic("jsonLogLine: open.pop on a path longer than its shared prefix")
+			line.append("\}")
+			objectIsEmpty = false
+		end 'closeEach'
+
+		for depth in shared upto field.groups.count() 'openEach'
+			let group = try field.groups.get(depth) otherwise panic("jsonLogLine: field.groups.get OOB at {depth}")
+			line.append("{jsonLogSeparator(objectIsEmpty)}{Json.quote(group)}:\{")
+			open.push(group)
+			objectIsEmpty = true
+		end 'openEach'
+
+		line.append("{jsonLogSeparator(objectIsEmpty)}{Json.quote(field.key)}:{jsonLogFieldValue(field.value)}")
+		objectIsEmpty = false
+	end 'eachField'
+
+	for _ in open 'closeRest'
+		line.append("\}")
+	end 'closeRest'
+
+	line.append("\}\n")
+	return line
+end 'jsonLogLine'
+
+function jsonLogSeparator(objectIsEmpty bool) returns String
+	return "" if objectIsEmpty else ","
+end 'jsonLogSeparator'
+
+function sharedLogGroupDepth(open LogGroupPath, groups LogGroupPath) returns LogGroupDepth
+	var depth = 0
+
+	for (iter, group) in open.withIterator() 'eachOpen'
+		let wanted = try groups.get(iter.index()) otherwise return depth
+
+		if wanted != group 'diverges'
+			return depth
+		end 'diverges'
+
+		depth = depth + 1
+	end 'eachOpen'
+
+	return depth
+end 'sharedLogGroupDepth'
+
+typealias LogGroupDepth = int(0 to i64.max)
+
+// JSON has no literal for NaN or an infinity, so a non-finite float — the one whose difference with
+// itself is not zero — is written as a string.
+function jsonLogFieldValue(value LogValue) returns String
+	return match value 'value'
+		text(text) gives Json.quote(text)
+		integer(number) gives "{number}"
+		real(number) gives "{number}" if number - number == 0.0 else Json.quote("{number}")
+		boolean(flag) gives "{flag}"
+	end 'value'
+end 'jsonLogFieldValue'

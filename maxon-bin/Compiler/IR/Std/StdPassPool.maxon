@@ -24,12 +24,13 @@
 // in whatever order the pool finished (`tests/parallel-compile/log-order`).
 //
 // ⚠ **WHAT A WORKER STRUCTURALLY CANNOT DO** shaped every seam here, and each is a rule with teeth. It may
-// not touch a module `var` — E3143 — which rules out the logger (`PassLog` buffers its lines), every
+// not touch a module `var` — E3143 — which rules out every
 // `Project` table (`DerivedOrigins` buffers its rows, the target facts come in as two enums and the cost
 // tables as a `PoolPhaseCosts` the driver folds) and the trace-span stack (`PhaseProbe.beginCounters`
 // opens none). It may not call a closure — an indirect dispatch marks every address-taken function in
-// the program message-reachable, which reaches the logger — so a log site builds its text past a guard
-// rather than handing over a thunk. It may not await, and it never sends.
+// the program message-reachable, which reaches module storage — so a log site builds its text past
+// a guard rather than handing over a thunk. It may not await, and it never sends. Its log lines go
+// to a `PassLog` for their ORDER alone.
 //
 // ⛔ **THE MESSAGE'S ERROR SET IS EMPTY, AND THAT IS A PREMISE OF THE PIPELINE'S ERROR GATE.** None of
 // the fanned-out passes raises a diagnostic; `specs/pass-fan-out-order.md` pins the nearest pass that
@@ -149,8 +150,8 @@ module type StdPassWorker
 	// (`PhaseProbe.reopenCounters`): a probe minted per step would be an allocation inside every row.
 	var probe as PhaseProbe
 
-	static function create(cpu CpuArch, os Os, steps StdFanOutStepArray, irLevel LogLevel) returns Self
-		return Self{reducesDivision: targetLowersMulHigh(cpu), budget: hoistPressureBudgetFor(Target.create(cpu, os: os)), log: PassLog.create(irLevel), schedule: steps, steps: StepWorkspaceArray.create(), tallies: StdPassTallyArray.create(), costs: PoolPhaseCosts.create(steps.count()), probe: PhaseProbe.beginCounters()}
+	static function create(cpu CpuArch, os Os, steps StdFanOutStepArray, log PassLog) returns Self
+		return Self{reducesDivision: targetLowersMulHigh(cpu), budget: hoistPressureBudgetFor(Target.create(cpu, os: os)), log: log, schedule: steps, steps: StepWorkspaceArray.create(), tallies: StdPassTallyArray.create(), costs: PoolPhaseCosts.create(steps.count()), probe: PhaseProbe.beginCounters()}
 	end 'create'
 
 	function prepareWorkspaces()
@@ -293,7 +294,10 @@ export function runStdPassesOnAWorkerPool(project Project, module StdModule, mem
 	// Under `codegen`, beside the allocator's line, so that `--log=ir:trace` — whose per-function lines
 	// `tests/parallel-compile/log-order` compares pinned against default — does not carry a worker count
 	// that differs between the two.
-	logDebug(LogCategory.codegen, message: function() gives sizing.line(PoolKind.stdFanOut))
+
+	if compilerLogEnabled(CompilerLogGroup.codegen, level: LogLevel.debug) 'debugging'
+		compilerLogger(CompilerLogGroup.codegen).debug(sizing.line(PoolKind.stdFanOut))
+	end 'debugging'
 
 	var tallies = StdPassTallyArray.create()
 
@@ -307,18 +311,19 @@ export function runStdPassesOnAWorkerPool(project Project, module StdModule, mem
 
 	if funcCount > 0 'somethingToRun'
 		let poolSize = workerCount as PoolSize
-		let irLevel = effectiveLogLevelOf(LogCategory.ir)
-
 		var workers = StdPassWorkerHandleArray.create()
 
 		for _ in 0 upto workerCount 'eachWorker'
-			workers.push(spawn StdPassWorker.create(project.target.cpu, os: project.target.os, steps: members.clone(), irLevel: irLevel))
+			workers.push(spawn StdPassWorker.create(project.target.cpu, os: project.target.os, steps: members.clone(), log: PassLog.create(CompilerLogGroup.ir)))
 		end 'eachWorker'
 
 		let stealsBefore = __Builtins.schedStealCount()
 		drainTheStdPool(module, workers: workers, workerCount: poolSize, landedOrigins: landedOrigins, landedLogs: landedLogs, slots: slots)
 		let stealsAfter = __Builtins.schedStealCount()
-		logDebug(LogCategory.codegen, message: function() gives "stdFanOut pool: {stealsAfter - stealsBefore} work-steal(s) while the pool drained")
+
+		if compilerLogEnabled(CompilerLogGroup.codegen, level: LogLevel.debug) 'debugging'
+			compilerLogger(CompilerLogGroup.codegen).debug("stdFanOut pool: {stealsAfter - stealsBefore} work-steal(s) while the pool drained")
+		end 'debugging'
 
 		// Each worker's costs and tallies come home once, after its last function. Both are SUMS, so the
 		// worker order cannot reach a row or a line.
@@ -367,15 +372,15 @@ export function runStdPassesOverTheBand(project Project, module StdModule, membe
 
 	// One log for the whole run, drained per function so the lines land in the order a reader expects — the
 	// pool's captured logs need a replay because they come home out of order; these do not.
-	var log = PassLog.create(effectiveLogLevelOf(LogCategory.ir))
+	var log = PassLog.create(CompilerLogGroup.ir)
+	let irLog = compilerLogger(CompilerLogGroup.ir)
 
 	for k in 0 upto members.count() 'eachStep'
 		let step = try members.get(k) otherwise panic("runStdPassesOverTheBand: members.get OOB at {k}")
 		let probe = PhaseProbe.beginPhase(project, phase: bandPhaseOfStep(step))
 		var tally = StdPassTally.create()
 		var workspace = workspaceFor(step, tally: tally, log: log)
-		logIr(passBanner(passKindOfFanOutStep(step)))
-		announceStep(step, firstFuncIndex: firstFuncIndex, funcCount: funcCount, reducesDivision: reducesDivision)
+		announceStep(step, into: irLog, firstFuncIndex: firstFuncIndex, funcCount: funcCount, reducesDivision: reducesDivision)
 
 		// An INDEX loop over a range this driver was handed, for the borrow rule `runFanOutStep` states.
 		for funcIndex in firstFuncIndex upto (funcCount as FuncIndex) 'eachFunc'
@@ -385,10 +390,10 @@ export function runStdPassesOverTheBand(project Project, module StdModule, membe
 			var answer = VersioningAnswer.unasked
 			answer = runFanOutStep(workspace, module: module, funcIndex: funcIndex, tally: tally, log: log, origins: origins, reducesDivision: reducesDivision, budget: budget, answer: answer)
 			origins.foldInto(project.valueOrigins, funcIndex: funcIndex)
-			drainFunctionLog(log)
+			drainFunctionLog(log, into: irLog)
 		end 'eachFunc'
 
-		summarizeStep(step, tally: tally, funcCount: funcCount)
+		summarizeStep(step, into: irLog, tally: tally, funcCount: funcCount)
 		recordPhase(project, phase: bandPhaseOfStep(step), probe: probe)
 	end 'eachStep'
 end 'runStdPassesOverTheBand'
@@ -396,13 +401,13 @@ end 'runStdPassesOverTheBand'
 // Hand one function's lines to the logger and leave the log ready for the next — `PassLog.beginFunction`
 // refuses a log still holding lines, which is what makes an undrained one a panic rather than a
 // misattribution.
-function drainFunctionLog(log PassLog)
+function drainFunctionLog(log PassLog, into Logger)
 	if log.isEmpty() 'nothingRecorded'
 		return
 	end 'nothingRecorded'
 
 	let taken = PassLog.taking(log)
-	taken.replayStep(0, category: LogCategory.ir)
+	taken.replayStep(0, into: into)
 end 'drainFunctionLog'
 
 // ⛔⛔ **THE THREE MEMBERS THAT MAY NOT RUN OVER THE BAND — REFUSED HERE RATHER THAN REMEMBERED IN A LIST
@@ -524,35 +529,42 @@ end 'dispatchOneStdJob'
 // ══════════════════════════════════════════════════════════════════════════
 
 function replayFanOutLog(members StdFanOutStepArray, tallies StdPassTallyArray, landedLogs CapturedLogArray, slots LandingSlots, funcCount FuncCount, reducesDivision bool)
+	if not compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.debug) 'nothingRecorded'
+		return
+	end 'nothingRecorded'
+
+	let irLog = compilerLogger(CompilerLogGroup.ir)
+
 	for k in 0 upto members.count() 'eachStep'
 		let step = try members.get(k) otherwise panic("replayFanOutLog: members.get OOB at {k}")
-		logIr(passBanner(passKindOfFanOutStep(step)))
-		announceStep(step, firstFuncIndex: WholeModuleFirstFunction, funcCount: funcCount, reducesDivision: reducesDivision)
+		announceStep(step, into: irLog, firstFuncIndex: WholeModuleFirstFunction, funcCount: funcCount, reducesDivision: reducesDivision)
 
 		for funcIndex in 0 upto funcCount 'eachFunctionInIndexOrder'
 			let captured = try landedLogs.get(slots.slotOf(funcIndex)) otherwise panic("replayFanOutLog: landedLogs.get OOB for function {funcIndex}")
 
 			for log in captured 'theFunctionsLog'
-				log.replayStep(k as LogLineIndex, category: LogCategory.ir)
+				log.replayStep(k as LogLineIndex, into: irLog)
 			end 'theFunctionsLog'
 		end 'eachFunctionInIndexOrder'
 
-		summarizeStep(step, tally: try tallies.get(k) otherwise panic("replayFanOutLog: tallies.get OOB at {k}"), funcCount: funcCount)
+		summarizeStep(step, into: irLog, tally: try tallies.get(k) otherwise panic("replayFanOutLog: tallies.get OOB at {k}"), funcCount: funcCount)
 	end 'eachStep'
 end 'replayFanOutLog'
 
-function logIr(text String)
-	logDebug(LogCategory.ir, message: function() gives text)
-end 'logIr'
-
 // The headline a pass prints before its per-function lines, where it prints one.
-function announceStep(step StdFanOutStep, firstFuncIndex FuncIndex, funcCount FuncCount, reducesDivision bool)
+function announceStep(step StdFanOutStep, into Logger, firstFuncIndex FuncIndex, funcCount FuncCount, reducesDivision bool)
+	if not into.enabled(LogLevel.debug) 'quiet'
+		return
+	end 'quiet'
+
+	into.debug(passBanner(passKindOfFanOutStep(step)))
+
 	match step 'headline'
-		foldConstants then logIr(foldConstantsHeadline(funcCount))
-		strengthReduceDivision then logIr(strengthReduceDivisionHeadline(reducesDivision, firstFuncIndex: firstFuncIndex, funcCount: funcCount))
-		foldConstOperands then logIr(foldConstOperandsHeadline(firstFuncIndex, funcCount: funcCount))
-		commonSubexpressionElimination then logIr(commonSubexpressionEliminationHeadline(funcCount))
-		loopInvariantCodeMotion then logIr(hoistLoopInvariantsHeadline(funcCount))
+		foldConstants then into.debug(foldConstantsHeadline(funcCount))
+		strengthReduceDivision then into.debug(strengthReduceDivisionHeadline(reducesDivision, firstFuncIndex: firstFuncIndex, funcCount: funcCount))
+		foldConstOperands then into.debug(foldConstOperandsHeadline(firstFuncIndex, funcCount: funcCount))
+		commonSubexpressionElimination then into.debug(commonSubexpressionEliminationHeadline(funcCount))
+		loopInvariantCodeMotion then into.debug(hoistLoopInvariantsHeadline(funcCount))
 		pruneDeadBlockArgs or
 			elimTrivialBlockArgs or
 			threadConstantBranches or
@@ -564,15 +576,19 @@ function announceStep(step StdFanOutStep, firstFuncIndex FuncIndex, funcCount Fu
 end 'announceStep'
 
 // The summary a pass prints after its per-function lines, where it prints one.
-function summarizeStep(step StdFanOutStep, tally StdPassTally, funcCount FuncCount)
+function summarizeStep(step StdFanOutStep, into Logger, tally StdPassTally, funcCount FuncCount)
+	if not into.enabled(LogLevel.debug) 'quiet'
+		return
+	end 'quiet'
+
 	match step 'summary'
-		pruneDeadBlockArgs then logIr(pruneDeadBlockArgsSummary(tally, funcCount: funcCount))
-		elimTrivialBlockArgs then logIr(elimTrivialBlockArgsSummary(tally, funcCount: funcCount))
-		threadConstantBranches then logIr(threadConstantBranchesSummary(tally, funcCount: funcCount))
+		pruneDeadBlockArgs then into.debug(pruneDeadBlockArgsSummary(tally, funcCount: funcCount))
+		elimTrivialBlockArgs then into.debug(elimTrivialBlockArgsSummary(tally, funcCount: funcCount))
+		threadConstantBranches then into.debug(threadConstantBranchesSummary(tally, funcCount: funcCount))
 		refineValueRanges or
-			refineVersionedRanges then logIr(refineValueRangesSummary(tally, funcCount: funcCount))
-		unswitchInvariantGuards then logIr(unswitchInvariantGuardsSummary(tally, funcCount: funcCount))
-		foldEstablishedGuards then logIr(foldEstablishedGuardsSummary(tally))
+			refineVersionedRanges then into.debug(refineValueRangesSummary(tally, funcCount: funcCount))
+		unswitchInvariantGuards then into.debug(unswitchInvariantGuardsSummary(tally, funcCount: funcCount))
+		foldEstablishedGuards then into.debug(foldEstablishedGuardsSummary(tally))
 		foldConstants or
 			strengthReduceDivision or
 			foldConstOperands or

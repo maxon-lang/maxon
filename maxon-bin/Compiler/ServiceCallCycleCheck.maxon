@@ -52,7 +52,7 @@
 // awaits another service and then renounces the promise is a program nobody has written, and the
 // alternative is to ask whether each spawn is awaited, which is the linear-await analysis again.
 
-// A service's dense node key is its position in `serviceTypeRoster` — first-spawn order, and therefore
+// A service's dense node key is its position in `serviceCompanionRoster` — first-spawn order, and therefore
 // stable across compiles. It is spelled `CsrIndex` rather than given an alias of its own, on
 // `TypeCycleCheck`'s precedent: the graph walks take that type and a second name for it would have to be
 // unwrapped at every boundary.
@@ -178,7 +178,7 @@ end 'checkServiceCallCycles'
 // closure is linear in the call graph, so `services` sweeps over one shared edge list is the cheaper shape
 // AND leaves the shared closure untouched.
 function buildServiceBlockingGraph(signatures ProgramSignatures, funcNames FunctionNameIndex, survey ServiceProgramSurvey) returns ServiceBlockingGraph
-	var graph = ServiceBlockingGraph.create(serviceTypeRoster(signatures))
+	var graph = ServiceBlockingGraph.create(serviceCompanionRoster(signatures))
 
 	for awaited in 0 upto graph.nodeCount() 'eachAwaitedService'
 		addBlockingEdgesTo(graph, awaited: awaited, funcNames: funcNames, survey: survey)
@@ -194,10 +194,11 @@ end 'buildServiceBlockingGraph'
 // this function a message, and of which service?"* — and a second spelling of it there would be free to
 // disagree about what a message is.
 module function messageOwnerNameOf(signatures ProgramSignatures, callee ByteArray) returns ByteArray
-	return match serviceMessageOwnerOf(signatures, callee: callee) 'owner'
-		notAMessage gives EmptySourceText
-		ofService(typeName, _) gives typeName
-	end 'owner'
+	if let message = try signatures.serviceMessageOf(callee) 'aMessage'
+		return message.typeName
+	end 'aMessage'
+
+	return EmptySourceText
 end 'messageOwnerNameOf'
 
 // One awaited service's closure and the edges it produces. Split from the walk above so each half is one

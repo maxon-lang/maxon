@@ -505,7 +505,7 @@ export type RegAllocFacts
 	end 'create'
 end 'RegAllocFacts'
 
-// Per-run counters + timers, logged under LogCategory.codegen. Counters matter more
+// Per-run counters + timers, logged under CompilerLogGroup.codegen. Counters matter more
 // than the clock at sub-millisecond functions (design §"Stats").
 export type RegAllocStats
 	// Two scalar columns, not one Array with PhaseCost — see CompileTimings' note. These are
@@ -1255,7 +1255,7 @@ module function foldFunctionAllocation(project Project, stats RegAllocStats, fun
 	// so the name below never exists at runtime - which is the whole reason the structured tier
 	// exists, and why it can sit on a per-function path at all.
 	let event = __DebugStream.nameId("regalloc.functionAllocated") as TraceName
-	logEvent(LogCategory.codegen, level: LogLevel.TRACE, name: event, arg0: classRowMax(facts.maxPressure) as TraceArg, arg1: stats.valuesSplit as TraceArg)
+	logEvent(CompilerLogGroup.codegen, level: LogLevel.trace, name: event, arg0: classRowMax(facts.maxPressure) as TraceArg, arg1: stats.valuesSplit as TraceArg)
 end 'foldFunctionAllocation'
 
 // The whole per-function allocation, touching nothing the compile owns: a pool worker runs it, and
@@ -2015,6 +2015,7 @@ function collectOpHints(op TargetOp, hints ColorHints)
 	match op 'hint'
 		movRegReg(dst, src) or
 			movReg32Reg32 then addCopyHint(dst, src: src, hints: hints)
+
 		// None of these is a move, so none carries a copy hint. A two-address reuse, `lock xadd`'s
 		// included, is a constraint `collectReuseHints` reads off the operand model and the colorer
 		// honours through `allocateReuseDef`, and a fixed register such as `divideReg`'s or

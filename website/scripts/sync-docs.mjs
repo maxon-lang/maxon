@@ -82,11 +82,11 @@ const SOURCES = [
       },
       {
         page: 'stdlib/io.md',
-        sections: ['File', 'FilePath', 'Directory', 'Console', 'CommandLine', 'Log', 'Process', 'Subprocess', 'SharedMemory'],
+        sections: ['File', 'FilePath', 'Directory', 'Console', 'CommandLine', 'Log', 'TraceCapture', 'Process', 'Subprocess', 'SharedMemory'],
       },
       { page: 'stdlib/network.md', sections: ['TcpClient', 'TcpListener', 'HttpClient', 'HttpServer', 'URL'] },
       { page: 'stdlib/data.md', sections: ['Json', 'Sha256', 'Hasher'] },
-      { page: 'stdlib/runtime.md', sections: ['Clock', 'Scheduler', 'Math', 'Primitive Extensions'] },
+      { page: 'stdlib/runtime.md', sections: ['Clock', 'Scheduler', 'SharedValue', 'Math', 'Primitive Extensions'] },
       { page: 'stdlib/testing.md', sections: ['Testing'] },
       { page: 'stdlib/build.md', sections: ['Build'] },
     ],

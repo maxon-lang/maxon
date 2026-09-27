@@ -1,0 +1,30 @@
+# Every hunk withdraws a visibility MODIFIER and nothing else. `LibraryReach` carries the tier the
+# signature-visibility rule (E3167) requires of a type a module signature names; `CompilerLogHandler` is
+# module-visible for `CompilerLogRoute`, which 0012 withdraws. The seed's audit reads each as E3094, a
+# module type never referenced outside its declaring file.
+diff --git a/maxon-bin/Compiler/CompilerLogHandler.maxon b/maxon-bin/Compiler/CompilerLogHandler.maxon
+index 2b2bfd090..bd93e17cf 100644
+--- a/maxon-bin/Compiler/CompilerLogHandler.maxon
++++ b/maxon-bin/Compiler/CompilerLogHandler.maxon
+@@ -30,7 +30,7 @@ end 'LogSpecRefusal'
+ // The trace unit is the handler's own state, so `compilerLogger` reads no module storage and a pool
+ // worker may log (E3143). `attribute` arrives through the same mailbox as the records, so the unit
+ // it sets precedes every later record from that sender; across senders the last `attribute` wins.
+-module type CompilerLogHandler implements LogHandler
++type CompilerLogHandler implements LogHandler
+ 	var unit as TraceUnit
+ 
+ 	static function create() returns CompilerLogHandler
+diff --git a/maxon-bin/Compiler/StdlibSource.maxon b/maxon-bin/Compiler/StdlibSource.maxon
+index 03f4a4d26..2d35173c0 100644
+--- a/maxon-bin/Compiler/StdlibSource.maxon
++++ b/maxon-bin/Compiler/StdlibSource.maxon
+@@ -313,7 +313,7 @@ function libraryFactsOf(roster LibraryFunctionRoster, stdlib FunctionNameSet, sp
+ 	return LibraryFacts.create(stdlib, unreachable: split.unreachable, substrateEntries: substrateEntries, runtimeTier: roster.runtimeTier, unreachedRuntimeTier: split.unreachedRuntimeTier, compilerCalledTier: roster.compilerReached, debugAgentTier: roster.debugAgent)
+ end 'libraryFactsOf'
+ 
+-module union LibraryReach
++union LibraryReach
+ 	noLibrarySource
+ 	unreferenced(roster LibraryFunctionRoster, stdlib FunctionNameSet)
+ 	walked(roster LibraryFunctionRoster, stdlib FunctionNameSet, reachable FunctionNameSet)

@@ -183,6 +183,7 @@ top_level_decl
               | typealias_decl
               | top_level_var
               | top_level_let
+              | default_decl
               | conditional_block
 ```
 
@@ -347,7 +348,7 @@ assoc_fields  = assoc_field { ',' assoc_field }
 assoc_field   = IDENTIFIER type_ref
 ```
 
-A case's optional `= raw_value` (§3.3) is its explicit tag (`add(dest Id, src Id) = 5`) or its backing record (`= OpMeta{...}`). When struct-backed, every variant must carry an `= struct_raw_literal` of the same backing struct type. The backing struct is accessible via `.rawValue` on a union value; associated-value payloads are still accessed via `match`. A `float` associated value is not supported yet (E2015), and a `static function` in a union is refused (E2015).
+A case's optional `= raw_value` (§3.3) is its explicit tag (`add(dest Id, src Id) = 5`) or its backing record (`= OpMeta{...}`). When struct-backed, every variant must carry an `= struct_raw_literal` of the same backing struct type. The backing struct is accessible via `.rawValue` on a union value; associated-value payloads are still accessed via `match`. An associated value may be of any type, `float` included, and a `static function` in a union is refused (E2015).
 
 ### 3.5 Interface Declaration
 
@@ -376,7 +377,8 @@ extension_block
 type_base     = IDENTIFIER | 'int' | 'float' | 'bool'
 
                 (* an extension body declares no stored members: a `var` or `let`, static or not,
-                   is E2015 *)
+                   is E2015; a type extension's member with the name and kind (static or
+                   instance) of the type's own member is E3176 *)
 ```
 
 ### 3.7 Type Alias Declaration
@@ -441,6 +443,18 @@ tuple_type    = '(' type_ref ',' type_ref { ',' type_ref } ')'
 top_level_var = visibility_prefix 'var' IDENTIFIER '=' expression NEWLINE
 top_level_let = visibility_prefix 'let' IDENTIFIER '=' expression NEWLINE
 ```
+
+### 3.9 Default Declaration
+
+```
+default_decl  = 'default' IDENTIFIER '=' expression NEWLINE
+```
+
+The IDENTIFIER is the key. An interface key's expression is a `spawn_expr` (§6.7) of a type that
+implements it (E3170); any other key is an all-`let` type the expression builds (E3171). The key gains the
+statics `current()` and `register(value)` / `register(value, replacing: old)`. `default` is also a `match`
+keyword (§5.7); at the start of a top-level declaration it begins this production. Two
+declarations for one key in the program's files, or two in the standard library, are E3169.
 
 ---
 
@@ -936,9 +950,11 @@ spawn_expr    = 'spawn' IDENTIFIER '.' IDENTIFIER '(' [ arg_list ] ')'  (* start
   `spawn f()` (E3134).
 - Naming a type in a `spawn` makes it a service program-wide, which synthesizes `<type>.request` and
   `<type>.handle` beside it. No `type_decl` production changes.
+- A type that `implements` an interface `I` is reached through `I.handle` too; a `<type>.handle` converts to
+  `I.handle` wherever one is expected.
 - A message send has no production of its own: it is `call_expr`'s method form (§6.8) whose receiver is a
-  `<type>.handle`. Dispatch is decided by the receiver's type, so the same spelling is a direct call on a
-  value and a message on a handle.
+  `<type>.handle` or an `I.handle`. Dispatch is decided by the receiver's type, so the same spelling is a
+  direct call on a value and a message on a handle.
 - `spawn` on `wasm32-wasi`, which has no green threads, is refused with E3104.
 
 ### 6.8 Function and Method Calls

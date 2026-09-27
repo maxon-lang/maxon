@@ -1,0 +1,31 @@
+// Test: same-name-methods.error.an-extension-member-colliding-with-an-own-member-in-another-file
+// --- file: box.maxon
+module typealias Num = int(i64.min to i64.max)
+
+module type Box
+	var v as Num
+
+	module static function make(v Num) returns Box
+		return Self{v: v}
+	end 'make'
+
+	module function size() returns Num
+		return self.v
+	end 'size'
+end 'Box'
+
+// --- file: ext.maxon
+extension Box
+	module function size() returns Num
+		return 0
+	end 'size'
+end 'Box'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return Box.make(3).size() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3176: <fragment>:19:18: the extension member `Box.size` has the name of `Box`'s own instance member, which would hide it — rename one
+note: <fragment>:12:18: `Box`'s own `size`

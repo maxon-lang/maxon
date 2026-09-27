@@ -37,10 +37,10 @@ end 'main'
 | [Core](#overview) | [Core Functions](#core-functions) |
 | [Text](/docs/stdlib/text/#string) | String, Character, Ascii, Unicode, CharacterSet |
 | [Collections](/docs/stdlib/collections/#array) | Array, List, Map, Set, Vector, Range, Iterators, Interfaces |
-| [I/O and processes](/docs/stdlib/io/#file) | File, FilePath, Directory, Console, CommandLine, Log, Process, Subprocess, SharedMemory |
+| [I/O and processes](/docs/stdlib/io/#file) | File, FilePath, Directory, Console, CommandLine, Log, TraceCapture, Process, Subprocess, SharedMemory |
 | [Network](/docs/stdlib/network/#tcpclient) | TcpClient, TcpListener, HttpClient, HttpServer, URL |
 | [Data](/docs/stdlib/data/#json) | Json, Sha256, Hasher |
-| [System](/docs/stdlib/runtime/#clock) | Clock, Scheduler, Math, Primitive Extensions |
+| [System](/docs/stdlib/runtime/#clock) | Clock, Scheduler, SharedValue, Math, Primitive Extensions |
 | [Testing](/docs/stdlib/testing/) | Testing |
 | [Build](/docs/stdlib/build/) | Build |
 
@@ -64,6 +64,7 @@ end 'main'
 | `SourceLineNumber` | `int(1 to i32.max)` | Builtins |
 | `FileSize`, `Timestamp` | `int(0 to u64.max)` | File |
 | `DurationMs`, `InstantMs`, `DurationNanos`, `InstantNanos`, `UnixSeconds` | `int(0 to u64.max)` | Clock |
+| `UnixNanos`, `UnixDays` | `int(i64.min to i64.max)` | Clock |
 | `SchedulerProcessorCount` | `int(1 to i64.max)` | Scheduler |
 | `NetworkPort` | `int(0 to 65535)` | TcpClient |
 | `EnvMap` | `Map with String, String` | Subprocess |
@@ -92,6 +93,11 @@ to name one.
 | `JsonFloat` | `float(f64.min to f64.max)` | Json |
 | `ChildCount`, `ChildIndex` | `int(0 to u64.max)` | Json |
 | `Milliseconds` | `int(0 to u64.max)` | Sleep |
+| `CivilYear` / `CivilMonth` / `CivilDay` | `int(i64.min to i64.max)` / `int(1 to 12)` / `int(1 to 31)` | Clock |
+| `LogInteger`, `LogRank` | `int(i64.min to i64.max)` / `int(i32.min to i32.max)` | Log |
+| `LogReal` | `float(f64.min to f64.max)` | Log |
+| `LogGroupPath`, `LogFieldArray` | `Array with String` / `Array with LogField` | Log |
+| `TraceKeyArray` | `Array with String` | TraceCapture |
 | `SocketDeadlineMs` | `int(0 to 4294967295)` — a socket deadline | TcpClient |
 | `RecvCapacity` | `int(1 to i64.max)` | TcpClient |
 | `HttpByteCap` | `int(0 to 1099511627776)` | HttpServer |
@@ -122,6 +128,7 @@ at the call site, rather than failing at run time:
 |--------------------------|-------|
 | `File`, `Directory`, `Console`, `CommandLine` | E3104 |
 | `Clock`, `WallClock`, `sleep`, `Scheduler.yield`, `Scheduler.processorCount` | E3104 |
+| `Log`, `Logger`, `LogSink` and the log handlers: logging runs on services, which need green threads | E3104 |
 | `TcpClient`, `TcpListener`, `HttpClient`, `HttpServer` | E3104 |
 | `Process.executablePath`, `SharedSegment` | E3104 |
 | `Subprocess`, `StreamingSubprocess`, `Configuration`, `Process.environmentVariable` | E3074 |

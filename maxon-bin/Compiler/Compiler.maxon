@@ -118,13 +118,15 @@ export function compileToProduct(inputPaths MaxonSourcePathArray, target Target,
 	// second reading of the command line — so the pre-project `load` bracket and everything after it
 	// agree on which compile they are.
 	//
-	// ⚠ `setTraceUnit` writes a PROCESS-WIDE latch (`Logger.currentTraceUnit`), so it is last-writer-
+	// ⚠ `setTraceUnit` writes a PROCESS-WIDE latch (`TraceEvents.currentTraceUnit`) for `logEvent`'s
+	// events, and `attribute` sets the log handler's own copy for the log records; both are last-writer-
 	// wins across compiles. That is EXACT rather than merely tolerated, for the reason the capture
 	// latch in Diagnostics.maxon states about itself: a compile is SERIAL, so there is no second
 	// compile running whose events this could misattribute. ⛔ That serialness does NOT rest on "the
 	// scheduler is single-M" — read the argument there before leaning on it.
 	let unit = traceUnitOf(try commonAncestorOf(inputPaths))
 	setTraceUnit(unit)
+	CompilerLogRoute.current().handler.attribute(unit)
 
 	// ⭐⭐ **THE ONE PLACE A FAILED COMPILE CLOSES WHAT IT LEFT OPEN (A1v).** Four stages inside phase
 	// brackets can throw — `load`'s project load, `deadFunctions`' E4015, `regalloc`'s E5001 and `link`'s
@@ -183,7 +185,7 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	// the TSV's residency columns asks for `--log=compiler:debug` as well.
 	project.censusByTag = censusByTag
 	project.censusPhase = censusPhase
-	project.samplesResidency = censusByTag or effectiveLogLevelOf(LogCategory.compiler).ordinal >= LogLevel.DEBUG.ordinal
+	project.samplesResidency = censusByTag or compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug)
 
 	if censusByTag 'sizeTheTagTable'
 		project.memory.enableTagCensus()
@@ -303,13 +305,17 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 
 	// Stamp the totals BEFORE anything reads them (every share divides by them, and both
 	// reconciliation panics compare against them), and build the tables lazily behind
-	// logDebug so a build without `--log=compiler:debug` pays only for the handful of
+	// `compilerLogEnabled` so a build without `--log=compiler:debug` pays only for the handful of
 	// counter reads, never for formatting a row.
 	let total = whole.elapsed()
 	project.timings.total = PhaseCost.create(total.nanos, cpuTicks: total.cpuTicks)
 	project.memory.total = total
-	logDebug(LogCategory.compiler, message: function() gives compileTimingsReport(project.timings))
-	logDebug(LogCategory.compiler, message: function() gives compileMemoryReport(project.memory, timings: project.timings))
+
+	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
+		let log = compilerLogger(CompilerLogGroup.compiler)
+		log.debug(compileTimingsReport(project.timings))
+		log.debug(compileMemoryReport(project.memory, timings: project.timings))
+	end 'debugging'
 
 	// Read ONCE, for the three readers below — `--metrics`, the log line and the product. It is one
 	// fact about this build, and three calls are three places a later change could make it two.
@@ -321,7 +327,7 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 		writeMetrics(project, metricsPath: metricsPath, codeBytes: codeBytes)
 	end 'metrics'
 
-	logInfo(LogCategory.compiler, message: function() gives "Wrote {codeBytes} bytes of code to {outputPath} (compiled in {formatSeconds((total.nanos / NanosPerMs) as DurationMs)})")
+	compilerLogger(CompilerLogGroup.compiler).info("Wrote {codeBytes} bytes of code to {outputPath} (compiled in {formatSeconds((total.nanos / NanosPerMs) as DurationMs)})")
 	return CompileProduct.create(outputPath, irText: irText, codeBytes: codeBytes, totalNanos: total.nanos, totalCpuTicks: total.cpuTicks)
 end 'compileMeasured'
 
@@ -391,7 +397,7 @@ function vacateRunningImage(project Project, outputPath FilePath) throws Compile
 
 	moveDebugSidecar(outputPath, to: previous)
 
-	logInfo(LogCategory.compiler, message: function() gives "rebuilding this compiler: moved the running image to {previous.toString()}")
+	compilerLogger(CompilerLogGroup.compiler).info("rebuilding this compiler: moved the running image to {previous.toString()}")
 end 'vacateRunningImage'
 
 // The write failed after `vacateRunningImage` emptied the slot; the image this process runs goes back, for
@@ -400,12 +406,12 @@ function restoreVacatedImage(outputPath FilePath)
 	let previous = siblingImagePath(outputPath, infix: PreviousImageSuffix)
 
 	try File.rename(previous, to: outputPath) otherwise 'unmovable'
-		logError(LogCategory.compiler, message: function() gives "could not move the running compiler back from {previous.toString()} to {outputPath.toString()}; move it back by hand")
+		compilerLogger(CompilerLogGroup.compiler).error("could not move the running compiler back from {previous.toString()} to {outputPath.toString()}; move it back by hand")
 		return
 	end 'unmovable'
 
 	moveDebugSidecar(previous, to: outputPath)
-	logInfo(LogCategory.compiler, message: function() gives "the build failed: moved the running compiler back to {outputPath.toString()}")
+	compilerLogger(CompilerLogGroup.compiler).info("the build failed: moved the running compiler back to {outputPath.toString()}")
 end 'restoreVacatedImage'
 
 // The stamp keeps two held backups apart, and it is digits only so `isRetiredImageName` can tell a retired
@@ -656,11 +662,11 @@ function writeTargetIr(irText String, outputPath FilePath)
 	let irPath = outputPath.changeExtension(IrFileExtension)
 
 	try File.writeText(irPath, content: irText) otherwise 'writeErr'
-		logError(LogCategory.binary, message: function() gives "Failed to write Target IR to {irPath}")
+		compilerLogger(CompilerLogGroup.binary).error("Failed to write Target IR to {irPath}")
 		return
 	end 'writeErr'
 
-	logInfo(LogCategory.compiler, message: function() gives "Wrote Target IR to {irPath}")
+	compilerLogger(CompilerLogGroup.compiler).info("Wrote Target IR to {irPath}")
 end 'writeTargetIr'
 
 // `build` and the warm-rebuild gate both load through here, so the gate's several fresh projects
@@ -1043,8 +1049,12 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 
 	// A `let` no share walk can mark, a `spawn` an initializer reaches, and a `let` initializer reaching a managed
 	// `var` are refused by `semanticCheck`, over the call graph overload resolution settles.
+	let orderedDefaults = try dependencyOrderedDefaults(module, project: project, signatures: signatures, defaults: signatures.defaultSlots()) otherwise 'defaultOrderRefused'
+		try refuseCompile(project)
+	end 'defaultOrderRefused'
+
 	project.managedGlobals = orderedGlobals
-	let usesManagedGlobals = installManagedGlobalInit(module, project: project, globals: orderedGlobals, sharedLets: letShareWalksOf(orderedGlobals, spawnsAService: serviceTypeRoster(signatures).count() > 0).marked)
+	let usesManagedGlobals = installManagedGlobalInit(module, project: project, globals: orderedGlobals, sharedLets: letShareWalksOf(orderedGlobals, spawnsAService: serviceTypeRoster(signatures).count() > 0).marked, defaults: orderedDefaults)
 
 	// ⭐⭐ **SYNTHESIZE `<T>.__loop` FOR EVERY SERVICE — HERE, AND FOR `installManagedGlobalInit`'s REASON ONE
 	// LINE UP (SV1 wave 3, see `Runtime/ServiceLoop`).** It is a Maxon-tier function appended to the merged
@@ -1142,6 +1152,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	end 'debugStreamLogRuntimeNeeds'
 
 	usage.usesManagedGlobals = usesManagedGlobals
+	usage.releasesRegistry = orderedDefaults.count() > 0
 
 	// A managed-payload union's `__destruct_<U>` (P1.3 slice 2) and a managed-field struct's
 	// `__destruct_<Struct>` (P1.4a wave 2) call `__str_decref`/`__mm_free`/nested `__destruct_<T>` inside
@@ -1452,8 +1463,12 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// what runs over the appended band). Its two hand-assembled chunks (`__gt_context_switch`/`__gt_trampoline`) are appended separately at the
 	// Target tier (BackendDispatch), because they are bytes rather than Std ops.
 	if usage.usesGt 'installGt'
-		installGtRuntime(pipeline.stdModule, globalData: project.globalData, asyncTrace: project.asyncTrace, target: project.target, streamState: subprocessStreamStateEnum)
+		installGtRuntime(pipeline.stdModule, globalData: project.globalData, asyncTrace: project.asyncTrace, target: project.target, streamState: subprocessStreamStateEnum, releasesRegistry: usage.releasesRegistry, releasesGlobals: usage.usesManagedGlobals)
 	end 'installGt'
+
+	installInterfaceHandleConversions(pipeline.stdModule, globalData: project.globalData, usage: usage, signatures: signatures)
+	installServiceRegistryRuntime(pipeline.stdModule, globalData: project.globalData, usage: usage)
+	installSharedValueRuntime(pipeline.stdModule, globalData: project.globalData, usage: usage)
 
 	// The String runtime (`__print_string`/`__str_eq`) is installed the SAME way and for the same
 	// reason — already-lowered Std, appended after the pipeline, see this block's header — but it is

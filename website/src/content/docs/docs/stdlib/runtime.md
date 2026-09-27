@@ -33,10 +33,14 @@ Readings are always in nanoseconds, but two back-to-back readings can be equal w
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `WallClock.nowUnixSeconds()` | `UnixSeconds` | Whole seconds since 1970-01-01 00:00:00 UTC. No time zone is applied. |
+| `WallClock.nowUnixSeconds()` | `UnixSeconds` | Whole seconds since 1970-01-01 00:00:00 UTC. |
+| `WallClock.nowUnixNanos()` | `UnixNanos` | Nanoseconds since 1970-01-01 00:00:00 UTC. |
+| `WallClock.rfc3339Millis(nanos UnixNanos)` | `String` | `nanos` as an RFC 3339 UTC time with milliseconds: `2023-11-14T22:13:20.123Z`. |
+| `WallClock.rfc3339Nanos(nanos UnixNanos)` | `String` | The same with nanoseconds: `2023-11-14T22:13:20.123456789Z`. |
 
-`UnixSeconds` is `int(0 to u64.max)`. The wall clock can step backwards (an NTP correction, a resumed
-virtual machine), so never measure a duration with it.
+Every reading and format is in UTC. `UnixSeconds` is `int(0 to u64.max)`; `UnixNanos` is signed, negative
+before 1970. The wall clock can step backwards (an NTP correction, a resumed virtual machine), so measure
+durations with `Clock`.
 
 ```maxon
 function main() returns ExitCode
@@ -49,6 +53,32 @@ end 'main'
 ```
 
 Output: `true true`.
+
+### CivilDate
+
+A `CivilDate` is a date in the proleptic Gregorian calendar, converted to and from a count of days since
+1970-01-01 (`UnixDays`, signed).
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `CivilDate.create(year CivilYear, month CivilMonth, day CivilDay)` | `CivilDate` | A date from its parts. Throws `CivilDateError.impossibleDay` for a day past the end of its month (February 30, or February 29 in a common year). |
+| `CivilDate.fromDays(days UnixDays)` | `CivilDate` | The date `days` after 1970-01-01. |
+| `days()` | `UnixDays` | The inverse of `fromDays`. |
+| `year`, `month`, `day` | `CivilYear`, `CivilMonth`, `CivilDay` | The parts; `month` and `day` count from 1. |
+
+`CivilDateError` is the error `create` throws; its one case is `impossibleDay`.
+
+```maxon
+function main() returns ExitCode
+	let date = CivilDate.fromDays(20000)
+	let march = try CivilDate.create(2000, month: 3, day: 1) otherwise panic("2000-03-01 is a real date")
+	print("{date.year}-{date.month:02}-{date.day:02} {march.days()}\n")
+	print("{WallClock.rfc3339Millis(1700000000123456789)}\n")
+	return 0
+end 'main'
+```
+
+Output: `2024-10-04 11017`, then `2023-11-14T22:13:20.123Z`.
 
 ## Scheduler
 
@@ -79,6 +109,50 @@ end 'main'
 ```
 
 Output: `worker` then `main`.
+
+## SharedValue
+
+`SharedValue with T` is a live cell every thread can read: a reader takes an immutable snapshot lock-free,
+and a writer publishes a whole new value. Use it through an alias:
+`typealias ConfigCell = SharedValue with Config`. `T` is a `String`, a scalar, a service handle, or a type
+whose every field is a `let` over such types ([E3171](/docs/cli/error-codes/#e3171--registryvaluenotshareable)). It is the run-time form of a registry key's
+`default` ([`SharedValue`](/docs/language/async/#sharedvalue--a-live-value-made-at-run-time)).
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `SharedValue.create(value T)` | `SharedValue with T` | A cell holding `value`. A `clone()` of the cell is the same cell, so hand one to a service and it sees every publish. |
+| `current()` | `T` | The value published last. A snapshot stays valid after later publishes. |
+| `publish(value T)` | — | Make `value` current for every later `current()` on every thread. |
+| `publish(value T, replacing T)` | `bool` | Publish only while `replacing` — a value `current()` returned — is still current. On `true` it is published; on `false` the current value stays and `value` is dropped. |
+
+A read-modify-write re-reads `current()` and retries `publish(…, replacing:)` until it answers `true`, so
+concurrent writers each land.
+
+```maxon
+type Config
+	export let n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Config'
+
+typealias Integer = int(i64.min to i64.max)
+typealias ConfigCell = SharedValue with Config
+
+function main() returns ExitCode
+	let cell = ConfigCell.create(Config.create(1))
+	let seen = cell.current()
+	cell.publish(Config.create(3))
+	let stale = cell.publish(Config.create(2), replacing: seen)
+	let latest = cell.current()
+	let fresh = cell.publish(Config.create(5), replacing: latest)
+	print("{seen.n} {stale} {fresh} {cell.current().n}\n")
+	return 0
+end 'main'
+```
+
+Output: `1 false true 5`.
 
 ## Math
 

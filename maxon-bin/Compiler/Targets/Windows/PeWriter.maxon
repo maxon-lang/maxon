@@ -167,9 +167,11 @@ let ImportThunkPasses = 2  // the IAT and the ILT hold identical thunks
 // broken-pipe → EOF); GetCurrentProcessId makes the pipe name process-unique. APPENDED AFTER `VirtualFree` so every existing slot INDEX (and hence every existing `iatCall`
 // relocation) is unchanged — a reorder would silently repoint every prior import.
 //
-// `GetSystemTimeAsFileTime` is the WALL clock — the one import that answers a CALENDAR question rather than
-// a stopwatch one. `__clock_now_unix_s` (`__Builtins.currentUnixTimeSeconds`) reads it into a frame word,
-// shifts the 1601→1970 epoch and divides by the 100 ns tick. It lowers from the Std `osReadWallClock` op.
+// `GetSystemTimePreciseAsFileTime` is the WALL clock — the one import that answers a CALENDAR
+// question rather than a stopwatch one. `runtime/Clock.maxon` reads it into a frame word, shifts
+// the 1601→1970 epoch and scales the 100 ns tick. It lowers from the Std `osReadWallClock` op. Its
+// coarse sibling `GetSystemTimeAsFileTime` ticks every 1–15.6 ms; the precise one sets the Windows
+// 8 floor.
 // APPENDED AFTER `CancelIoEx` so every existing slot INDEX (and hence every existing `iatCall` relocation) is
 // unchanged — a reorder would silently repoint every prior import.
 //
@@ -212,7 +214,7 @@ export enum IatSlot
 	GetLastError = IatSlotMeta{dll: ImportDll.kernel32}
 	GetCurrentProcessId = IatSlotMeta{dll: ImportDll.kernel32}
 	CancelIoEx = IatSlotMeta{dll: ImportDll.kernel32}
-	GetSystemTimeAsFileTime = IatSlotMeta{dll: ImportDll.kernel32}
+	GetSystemTimePreciseAsFileTime = IatSlotMeta{dll: ImportDll.kernel32}
 
 	// ⚠ The `A` variant, deliberately, where `CreateFileW` is already imported two lines up: FILES open
 	// through `CreateFileA`, and `CreateFileW` is reserved for wide DEVICE names and pipe ends — its two
@@ -668,7 +670,7 @@ export function importAnswerOf(slot IatSlot) returns ImportAnswer
 			InitializeCriticalSection or
 			EnterCriticalSection or
 			LeaveCriticalSection or
-			GetSystemTimeAsFileTime or
+			GetSystemTimePreciseAsFileTime or
 			SetLastError or
 			Sleep or
 			freeaddrinfo gives ImportAnswer.nothing
@@ -896,6 +898,7 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 			GetFullPathNameA or
 			WaitForSingleObjectEx or
 			TerminateProcess gives true
+
 		// The ws2_32 and ntdll slots in this arm answer `false` because `dllIsEmitted` gates each of
 		// those runs as a whole; this band decides membership within kernel32's. Answering `true` would
 		// tie them to the kernel32 band's producers: a socket binary with none of those would lose its
@@ -928,7 +931,7 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 			GetLastError or
 			GetCurrentProcessId or
 			CancelIoEx or
-			GetSystemTimeAsFileTime or
+			GetSystemTimePreciseAsFileTime or
 			CreateFileA or
 			GetFileSizeEx or
 			DeleteFileA or
@@ -2109,6 +2112,6 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	end 'writeCoff'
 
 	try File.writeBinary(outputPath, content: pe) otherwise 'writeErr'
-		logError(LogCategory.binary, message: function() gives "Failed to write PE file: {outputPath}")
+		compilerLogger(CompilerLogGroup.binary).error("Failed to write PE file: {outputPath}")
 	end 'writeErr'
 end 'writePe'

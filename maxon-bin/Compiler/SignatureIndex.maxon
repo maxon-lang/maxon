@@ -2819,12 +2819,6 @@ export union PayloadClass
 	// `__mm_decref`). `storage` is the field's own type, which `maxonTypeToStdType` gives a machine word.
 	managed(storage MaxonType, isString bool)
 
-	// A `float` payload — a scalar-only union is int-tagged, so a float payload must go in as bits and come
-	// back out as a float. BOTH bitcast directions now exist (`bitcastF64ToI64` shipped with `float.hash`,
-	// `bitcastI64ToF64` with the decimal-reader convergence); what no site does yet is APPLY them at the
-	// construct and the extract, which is why this case is still a rejection and not a lowering.
-	floatPayload
-
 	// A boxed-union field/payload (a nested payload-bearing union) — a MANAGED owned heap pointer, exactly
 	// like a `managed` struct box: construct MOVES it in (no incref), and the cascade drops it through its
 	// OWN `__destruct_<U>` (or the trivial `__mm_decref` for a scalar-only union box). `storage` is the
@@ -2834,9 +2828,7 @@ export union PayloadClass
 	// ⚠ **IT IS A CASE DISTINCT FROM `managed` BECAUSE ITS SLOT WIDTH AND ITS VALUE TYPE ARE DIFFERENT
 	// ANSWERS, AND FOR NO OTHER REASON (W55)** — stated in full, arm by arm, at `payloadStorageOf`, which is
 	// the one home of that split. What is local to this case: nesting costs NO codegen at any depth, because a
-	// nested box's drop closes at RUN TIME through the destructor pointer in its own allocation header. That is
-	// why the UNION-payload path's old refusal (`requirePayloadLowerable`) was a missing width derivation and
-	// never the missing cascade its message claimed.
+	// nested box's drop closes at RUN TIME through the destructor pointer in its own allocation header.
 	nestedUnion(storage MaxonType)
 
 	// A name no file declares — `TypeResolution` reports it as E3011; the caller keeps the op
@@ -2848,10 +2840,8 @@ export union PayloadClass
 	// kept a case DISTINCT from `managed` by ITS OWN arithmetic: a conformer takes TWO slots (a value half and
 	// a witness half), and a union payload has exactly ONE, because every case of a union shares one slot
 	// region and there is nowhere for a second word to widen into. So a union PAYLOAD at an interface type is
-	// refused — at its DECLARATION (`Parser.requireStorableDeclaredType`), with `requirePayloadLowerable`'s arm
-	// as the backstop — while the STRUCT-field path carves out both slots and lowers it. That refusal is
-	// PERMANENT and arithmetic, which is what distinguishes it from `nestedUnion`'s, now retired: that one was a
-	// missing width derivation for a payload that always fitted in the one slot it had. Its storage is the VALUE
+	// refused — at its DECLARATION (`Parser.requireStorableDeclaredType`) — while the STRUCT-field path carves
+	// out both slots and lowers it. That refusal is PERMANENT and arithmetic. Its storage is the VALUE
 	// half's machine word; the witness half is stored beside it by `Parser.emitFieldStore`, which is the only
 	// site that knows the field's base offset.
 	//
@@ -2960,6 +2950,7 @@ union ExistentialOwnershipProtocol
 	//
 	// ⚠ APPENDED, for the reason the arm above states.
 	serviceHandle
+	sharedValue
 end 'ExistentialOwnershipProtocol'
 
 // ⭐⭐ **THE ONE SPELLING OF "HOW DO I TAKE A REFERENCE UNDER THIS PROTOCOL" (W41-opaque).** Two runtime words
@@ -2982,6 +2973,7 @@ function retainCalleeForProtocol(protocol ExistentialOwnershipProtocol) returns 
 		// The mailbox entry, which is `__mbox_handle_drop_box` read backwards — see the case's own note for
 		// the drain a plain box retain costs.
 		serviceHandle then return MboxHandleRetainBoxName
+		sharedValue then return SharedValueBoxRetainName
 
 		// A green thread is never co-owned — see the arm's own note. EMPTY here is the complete answer, not a
 		// sentinel, exactly as it is for `none`: both readers stamp nothing and the zero word is inert.
@@ -3100,8 +3092,8 @@ export function classifyUnionPayload(signatures ProgramSignatures, typeNames Typ
 
 			// A `cstring` payload is a borrowed address: stored verbatim, moved out verbatim, and released
 			// by nobody.
-			cstring then return PayloadClass.scalar(fieldType)
-		float then return PayloadClass.floatPayload
+			cstring or
+			float then return PayloadClass.scalar(fieldType)
 
 		// A String / struct reference is a managed heap pointer whose move-in and drop are this rung's
 		// work — unless the named type packs inline into a word, which owns no heap and moves as a scalar.
@@ -3142,8 +3134,7 @@ export function classifyUnionPayload(signatures ProgramSignatures, typeNames Typ
 		// `PayloadClass.existential`. A UNION PAYLOAD at one is still refused at the declaration
 		// (`Parser.requireStorableDeclaredType`), because a payload slot IS one machine word — the case list
 		// shares one slot region across every case, so a two-slot payload has nowhere to widen into — and this
-		// classifier serves both, so the refusal lives at the payload's own lowering gate
-		// (`requirePayloadLowerable`) rather than here.
+		// classifier serves both, so the refusal lives at the declaration rather than here.
 		interfaceRef then return PayloadClass.existential
 		named then break 'kind'
 	end 'kind'
@@ -3179,7 +3170,7 @@ export function classifyUnionPayload(signatures ProgramSignatures, typeNames Typ
 	// because it is a different question: that door answers "what type does this name denote", and an int
 	// alias's answer is the bare `named` it already is (its NAME carries the range) — what a PAYLOAD needs
 	// on top is the STORAGE primitive the slot occupies, which only this side wants. A float-underlying
-	// alias cannot reach this line; the door re-tagged it `float` and the `floatPayload` arm above took it.
+	// alias cannot reach this line; the door re-tagged it `float` and the `float` arm above took it.
 	if let underlying = try signatures.aliasUnderlyingInAnyFile(name) 'rangedIntAlias'
 		return PayloadClass.scalar(underlying)
 	end 'rangedIntAlias'
@@ -3278,7 +3269,6 @@ export function payloadClassIsManaged(class PayloadClass) returns bool
 			// `typeIsManaged`.
 			existential gives true
 		scalar or
-			floatPayload or
 			undeclaredName or
 
 			// ⚠ `false` is the declaration view's answer rather than the slot's. Every reader here is a
@@ -3313,7 +3303,6 @@ export function payloadClassIsAGreenThread(class PayloadClass) returns bool
 			scalar or
 			nestedUnion or
 			existential or
-			floatPayload or
 			undeclaredName or
 			typeParam gives false
 	end 'c'
@@ -3345,8 +3334,7 @@ end 'payloadClassIsAGreenThread'
 // one that could be wrongly waved through: its slot's reference protocol is a RUN-TIME fact reached
 // through the instance descriptor (`Parser.moveOpaqueValueInto`), so a plain store would drop the
 // reference the box still holds — and it is unreachable besides, a generic union having no
-// construct syntax. `floatPayload` never reaches a binding at all (`Parser.requirePayloadLowerable`
-// refuses it), and `undeclaredName` is an error path.
+// construct syntax. `undeclaredName` is an error path.
 //
 // A `match` like its siblings, so a case appended to `PayloadClass` fails to compile here rather than
 // being silently absorbed into either answer.
@@ -3358,7 +3346,6 @@ export function payloadBindingAcceptsWrites(class PayloadClass) returns bool
 			greenThread gives true
 		typeParam or
 			existential or
-			floatPayload or
 			undeclaredName gives false
 	end 'c'
 end 'payloadBindingAcceptsWrites'
@@ -3373,7 +3360,6 @@ export function payloadClassIsExistential(class PayloadClass) returns bool
 		managed or
 			nestedUnion or
 			scalar or
-			floatPayload or
 			undeclaredName or
 			typeParam or
 			greenThread gives false
@@ -3392,7 +3378,6 @@ export function payloadClassIsTypeParam(class PayloadClass) returns bool
 			managed or
 			nestedUnion or
 			scalar or
-			floatPayload or
 			undeclaredName or
 			greenThread gives false
 	end 'c'
@@ -3405,7 +3390,6 @@ export function payloadClassIsString(class PayloadClass) returns bool
 	return match class 'c'
 		managed(_, isString) gives isString
 		scalar or
-			floatPayload or
 			nestedUnion or
 
 			// ⚠ An existential's value half is a conformer's record, which may or may not be a String — the
@@ -3428,8 +3412,8 @@ end 'payloadClassIsString'
 
 // ⭐⭐ **THE SLOT'S OWN WIDTH — the type a `loadIndirect`/`storeIndirect` through this slot
 // CARRIES**, and nothing else. **THE ONE HOME of the width-vs-identity split**:
-// `payloadValueTypeOf` answers the other half and points here rather than restating it, and so do
-// `PayloadClass.nestedUnion` and `Parser.requirePayloadLowerable`.
+// `payloadValueTypeOf` answers the other half and points here rather than restating it, and so does
+// `PayloadClass.nestedUnion`.
 //
 // ⛔ **THE WIDTH IS NOT THE IDENTITY, AND FOR MOST CLASSES IT IS NOT EVEN THE SAME TYPE.** Only `managed`
 // (whose `storage` is already a concrete machine-word tag — `structRef`/`string`/`genericInstance`/
@@ -3450,8 +3434,7 @@ end 'payloadClassIsString'
 //   • `undeclaredName` — an error path: the width keeps the op well-formed for the instant before the
 //     pipeline's error gate throws, while the identity stays the name the user wrote, for the diagnostic.
 //
-// ⇒ the three one-word answers below are different reasons that happen to share an answer. A
-// `float` payload is rejected before any store reaches here.
+// ⇒ the three one-word answers below are different reasons that happen to share an answer.
 //
 // ⚠ **"A DECLARED ENUM/UNION OCCUPIES ONE MACHINE WORD" HAS TWO DERIVERS, AND THEY SHARE A HOME** —
 // `declaredAggregateSlotWidth` below. Both are in these two files (`Parser.fieldStorageType`'s `containsEnum`
@@ -3497,7 +3480,6 @@ export function payloadStorageOf(class PayloadClass) returns MaxonType
 		// the ⛔ above.
 		existential or
 			undeclaredName then return MaxonType.integer
-		floatPayload then panic("payloadStorageOf: a float payload has no lowerable storage — requirePayloadLowerable rejects it before any store")
 	end 'c'
 end 'payloadStorageOf'
 
@@ -3533,7 +3515,6 @@ export function payloadValueTypeOf(class PayloadClass, declared MaxonType) retur
 		managed(storage, _) or
 			nestedUnion or
 			greenThread then return storage
-		floatPayload then panic("payloadValueTypeOf: a float payload has no lowerable value type — requirePayloadLowerable rejects it before any load")
 	end 'c'
 end 'payloadValueTypeOf'
 
@@ -4933,7 +4914,7 @@ typealias DisagreeingThrowsNameSet = Set with ByteArray
 // walk — and different things to the call site. A body that can only ever `panic` is left by a BARE call
 // statement (`Parser.terminateAfterDivergingCall`); one that can only ever `throw` is left by a PROPAGATING
 // `try` statement and by nothing else (`Parser.desugarTry`); one whose every `return` hands back a record it
-// built gives its CALLER sole ownership of that record (`Parser.moveIntoGreenThread`); and one that is its own
+// built gives its CALLER sole ownership of that record (`Parser.handIntoGreenThread`); and one that is its own
 // construction is folded by the constant evaluator. `foldFile` splits them onto their own registries at the one
 // point the key is minted.
 //
@@ -5241,7 +5222,7 @@ end 'managedFieldDropCallee'
 // a bare `__mm_incref` stepped only the box. That asymmetry is the bug; a refcount-checked close is not one.
 // A future aggregate whose drop releases more than the box owes an arm here, and it earns one by having that
 // shape — not by owning an OS handle.
-export function managedNameRetainCallee(signatures ProgramSignatures, declaredName ByteArray, result RetainResult) returns ByteArray
+function managedNameRetainCallee(signatures ProgramSignatures, declaredName ByteArray, result RetainResult) returns ByteArray
 	return match compilerOwnedAggregateOf(signatures, name: declaredName) 'compilerOwned'
 		// Kept apart from `userDeclared` below though the callee is the same: these three answer it because
 		// their destruct is refcount-checked, that one because a plain box is a plain box. Same answer, two
@@ -5257,23 +5238,25 @@ export function managedNameRetainCallee(signatures ProgramSignatures, declaredNa
 	end 'compilerOwned'
 end 'managedNameRetainCallee'
 
-// ⭐⭐ **THE TWO SHAPES A RETAIN IS ASKED FOR, AND WHY THE SHAPE IS AN ARGUMENT RATHER THAN A SECOND
+// ⭐⭐ **THE SHAPES A RETAIN IS ASKED FOR, AND WHY THE SHAPE IS AN ARGUMENT RATHER THAN A SECOND
 // SELECTOR.** A retain is needed either for EFFECT — the caller already holds the box's ValueId — or for a
 // FRESH SSA NAME of the same box, which is what a borrow promoted to an owned binding needs
-// (`Parser.retainBorrowedAggregate`). Which FAMILY of entries a value takes is one decision; which shape it
-// is wanted in is another, and splitting them into two selectors is how the returning door came to spell
-// `__mm_retain` unconditionally and free a live mailbox out from under an array's handle (W232's defect, one
-// door over).
+// (`Parser.retainBorrowedAggregate`), or for a SHARED READ, whose caller uses the result as its own
+// reference to a value that may be an immortal record. Which FAMILY of entries a value takes is one
+// decision; which shape it is wanted in is another, and a second selector would let the returning
+// door spell `__mm_retain` for a handle and free a live mailbox out from under an array's handle.
 export enum RetainResult
 	discarded
 	freshName
+	sharedRead
 end 'RetainResult'
 
 // A plain managed box has one entry per shape, because `__mm_incref` returns nothing.
-export function plainBoxRetainCallee(result RetainResult) returns ByteArray
+function plainBoxRetainCallee(result RetainResult) returns ByteArray
 	return match result 'shape'
 		discarded gives MmIncrefName
-		freshName gives MmRetainName
+		freshName or
+			sharedRead gives MmRetainName
 	end 'shape'
 end 'plainBoxRetainCallee'
 
@@ -5476,13 +5459,17 @@ end 'perTypeCascadeSymbol'
 // The SERVICE HANDLE entry for `action`. A handle CLONES into a second handle to the same service; its walks
 // are nothing but its box's count, because the box holds one machine word and no managed field — so it takes
 // the shared leaf rather than a synthesized walk no installer would build for it.
-module function serviceHandleCascadeCallee(action CascadeAction) returns ByteArray
+module function serviceHandleCascadeCallee(action CascadeAction, clone ByteArray) returns ByteArray
 	return match action 'action'
-		clone gives MboxHandleCloneBoxName
+		clone gives clone
 		soleWalk gives MmSoleBoxName
 		shareWalk gives MmShareBoxName
 	end 'action'
 end 'serviceHandleCascadeCallee'
+
+function serviceHandleClonerOf(signatures ProgramSignatures, handleName ByteArray) returns ByteArray
+	return MboxInterfaceCloneBoxName if signatures.isInterfaceHandle(handleName) else MboxHandleCloneBoxName
+end 'serviceHandleClonerOf'
 
 export union UncloneableExistentialSlot
 	none
@@ -5756,7 +5743,7 @@ function managedNameCascadeStrategy(signatures ProgramSignatures, declaredName B
 		// ⭐ **A HANDLE IS THE ONE COMPILER-OWNED AGGREGATE THAT CLONES**, and its clone is the design's own
 		// `handle.clone()`: a SECOND HANDLE to the same service, which steps both mailbox counts and mints a
 		// fresh box. `direct` because that is one entry point taking one record, exactly as a `__clone_<T>` is.
-		serviceHandle then return ManagedCascadeStrategy.direct(serviceHandleCascadeCallee(action))
+		serviceHandle then return ManagedCascadeStrategy.direct(serviceHandleCascadeCallee(action, clone: serviceHandleClonerOf(signatures, handleName: declaredName)))
 		userDeclared then break 'compilerOwned'
 	end 'compilerOwned'
 
@@ -5847,7 +5834,7 @@ function compilerOwnedAggregateOf(signatures ProgramSignatures, name ByteArray) 
 	// The three names above are compiler constants; a handle's is `<T>.handle`, one per service, minted by
 	// `ServiceCompanions` from a type the program spawns. A suffix test would be a second statement of what a
 	// companion is named — and would answer `true` for a name no `spawn` ever produced.
-	if signatures.isServiceHandle(name) 'serviceHandle'
+	if signatures.isAnyServiceHandle(name) 'serviceHandle'
 		return CompilerOwnedAggregate.serviceHandle
 	end 'serviceHandle'
 
@@ -5884,8 +5871,12 @@ function instanceCascadeStrategy(signatures ProgramSignatures, id GenericInstanc
 	// duplicated box: `__clone_<mangled>` would copy the mailbox pointer while stepping neither count. It
 	// sits with the other compiler-owned records rather than at the top, so the containers above pay nothing.
 	if signatures.instanceBaseIsServiceHandle(id) 'serviceHandle'
-		return ManagedCascadeStrategy.direct(serviceHandleCascadeCallee(action))
+		return ManagedCascadeStrategy.direct(serviceHandleCascadeCallee(action, clone: MboxHandleCloneBoxName))
 	end 'serviceHandle'
+
+	if signatures.instanceBaseIsSharedValue(id) 'sharedValue'
+		return ManagedCascadeStrategy.direct(serviceHandleCascadeCallee(action, clone: SharedValueBoxCloneName))
+	end 'sharedValue'
 
 	// ⛔ A base-layout-less instance with no runtime copy of its own (a cursor) has no field list to cascade over
 	// either, so nothing synthesizes its cloner — `declaredInstanceSupportsDeepClone` refuses it at the SAME tier,
@@ -10277,13 +10268,15 @@ typealias FuncReturnDeclFileMap = Map with (ByteArray, FilePath)
 // a `static` handed the enclosing `self` fails an arity check on a parameter its author never wrote, and an
 // instance method denied one is called on nothing. `Parser.ensureSiblingReceivers` reads the same fact off
 // a TOKEN walk for a declaration whose body it can see; this is the answer for one it cannot.
-type FunctionDeclSite
+export type FunctionDeclSite
 	export let visibility as Visibility
 	export let declFilePath as FilePath
 	export let takesReceiver as bool
+	export let nameLine as LineNumber
+	export let nameColumn as ColumnNumber
 
-	static function create(visibility Visibility, declFilePath FilePath, takesReceiver bool) returns FunctionDeclSite
-		return Self{visibility: visibility, declFilePath: declFilePath, takesReceiver: takesReceiver}
+	static function create(visibility Visibility, declFilePath FilePath, takesReceiver bool, nameLine LineNumber, nameColumn ColumnNumber) returns FunctionDeclSite
+		return Self{visibility: visibility, declFilePath: declFilePath, takesReceiver: takesReceiver, nameLine: nameLine, nameColumn: nameColumn}
 	end 'create'
 end 'FunctionDeclSite'
 
@@ -11695,6 +11688,16 @@ export type ProgramSignatures
 	// loop shifted its flag by.
 	var serviceReplyErrorOwners as ServiceReplyErrorOwnerMap
 
+	var defaultDeclarationList as DefaultDeclarationArray = DefaultDeclarationArray.create()
+	var spawnsAnyServiceSettled = false
+	var spawnsAnyServiceAnswer = false
+	var liveDefaultKeyNames as DefaultKeyNameSet = DefaultKeyNameSet.create()
+	var liveKeyAdoptions as LiveKeysRevision = 0
+	var serviceMessages as ServiceMessageIndex = ServiceMessageIndex.create()
+	var interfaceHandleOwners as ServiceHandleOwnerMap = ServiceHandleOwnerMap.create()
+	var interfaceHandleRepresentatives as ServiceHandleOwnerMap = ServiceHandleOwnerMap.create()
+	var interfaceHandleOrder as ByteArrayArray = ByteArrayArray.create()
+
 	// Does any declaration OTHER than the corpus's carry the marker? The gate `isArrayBaseName` puts in front
 	// of the scan — false for every program that declares no container of its own, which is the whole
 	// existing corpus and every one of its goldens.
@@ -12096,29 +12099,352 @@ export type ProgramSignatures
 	// shape: the token walk states what it saw and this index decides nothing yet. The same pair from a second
 	// site is dropped, so a type spawned from twenty places is minted once and the diagnostic every one of
 	// those sites raises is decided from one classification.
-	export function noteServiceSpawnCandidate(typeName ByteArray, member ByteArray, declFilePath FilePath, line LineNumber, column ColumnNumber)
+	export function noteServiceSpawnCandidate(typeName ByteArray, member ByteArray, gate SpawnGate, declFilePath FilePath, line LineNumber, column ColumnNumber)
 		for noted in self.serviceSpawnCandidateList 'eachNoted'
-			if noted.typeName.equals(typeName) and noted.member.equals(member) 'alreadyNoted'
+			if noted.typeName.equals(typeName) and noted.member.equals(member) and spawnGatesAgree(noted.gate, other: gate) 'alreadyNoted'
 				return
 			end 'alreadyNoted'
 		end 'eachNoted'
 
-		self.serviceSpawnCandidateList.push(ServiceSpawnCandidate.create(typeName, member: member, declFilePath: declFilePath, line: line, column: column))
+		self.serviceSpawnCandidateList.push(ServiceSpawnCandidate.create(typeName, member: member, gate: gate, declFilePath: declFilePath, line: line, column: column))
+		self.spawnsAnyServiceSettled = false
 	end 'noteServiceSpawnCandidate'
 
-	// The noted candidates, in note order — read once, by the perform half.
 	export function serviceSpawnCandidates() returns ServiceSpawnCandidateArray
 		return self.serviceSpawnCandidateList
 	end 'serviceSpawnCandidates'
 
-	// ⚡ **DOES THIS PROGRAM SPAWN ANYTHING AT ALL** — the whole-program predicate a PER-STATEMENT service rule
-	// opens with, so that a program declaring no service pays nothing for one
-	// (`Parser.requireServiceReplyDoesNotAliasState`, reached by every managed `return`). A bool rather than a
-	// count read off the accessor above, because the question a gate asks is not "how many" and the answer it
-	// gets must allocate nothing.
+	// Asked per managed `return` (`Parser.requireServiceReplyDoesNotAliasState`), so the answer is
+	// memoized; every write that can move it — a spawn, a `default`, an adopted live-key set — clears
+	// the memo.
 	export function spawnsAnyService() returns bool
-		return self.serviceSpawnCandidateList.count() != 0
+		if not self.spawnsAnyServiceSettled 'askedFirstSinceAChange'
+			self.spawnsAnyServiceAnswer = self.anyServiceSpawnIsLive()
+			self.spawnsAnyServiceSettled = true
+		end 'askedFirstSinceAChange'
+
+		return self.spawnsAnyServiceAnswer
 	end 'spawnsAnyService'
+
+	function anyServiceSpawnIsLive() returns bool
+		for candidate in self.serviceSpawnCandidateList 'eachCandidate'
+			if self.spawnGateIsOpen(candidate.gate) 'aLiveSpawn'
+				return true
+			end 'aLiveSpawn'
+		end 'eachCandidate'
+
+		return false
+	end 'anyServiceSpawnIsLive'
+
+	export function spawnGateIsOpen(gate SpawnGate) returns bool
+		return match gate 'gate'
+			always gives true
+			defaultOf(declaration) gives self.defaultKeyIsLive(declaration.key) and self.defaultDeclarationWins(declaration)
+		end 'gate'
+	end 'spawnGateIsOpen'
+
+	export function noteDefaultDeclaration(declaration DefaultDeclaration)
+		self.defaultDeclarationList.push(declaration)
+		self.spawnsAnyServiceSettled = false
+	end 'noteDefaultDeclaration'
+
+	export function defaultDeclarations() returns DefaultDeclarationArray
+		return self.defaultDeclarationList
+	end 'defaultDeclarations'
+
+	export function declaresADefault() returns bool
+		return self.defaultDeclarationList.count() != 0
+	end 'declaresADefault'
+
+	export function declaresDefaultFor(key ByteArray) returns bool
+		for declaration in self.defaultDeclarationList 'eachDeclaration'
+			if declaration.key.equals(key) 'thisKey'
+				return true
+			end 'thisKey'
+		end 'eachDeclaration'
+
+		return false
+	end 'declaresDefaultFor'
+
+	export function winningDefaultOf(key ByteArray) returns DefaultDeclaration throws MapError
+		var fromTheLibrary = false
+		var libraryIndex = 0 as ElementIndex
+
+		for i in 0 upto self.defaultDeclarationList.count() 'eachDeclaration'
+			let declaration = try self.defaultDeclarationList.get(i) otherwise panic("winningDefaultOf: defaultDeclarationList.get OOB at {i} below its own count")
+
+			if not declaration.key.equals(key) 'anotherKey'
+				continue
+			end 'anotherKey'
+
+			if not declaration.isStdlibSource 'theProgramsOwn'
+				return declaration
+			end 'theProgramsOwn'
+
+			if not fromTheLibrary 'theFirstFromTheLibrary'
+				fromTheLibrary = true
+				libraryIndex = i
+			end 'theFirstFromTheLibrary'
+		end 'eachDeclaration'
+
+		if not fromTheLibrary 'noDeclaration'
+			throw MapError.keyNotFound
+		end 'noDeclaration'
+
+		return try self.defaultDeclarationList.get(libraryIndex) otherwise panic("winningDefaultOf: the library declaration at {libraryIndex} was just read")
+	end 'winningDefaultOf'
+
+	export function defaultDeclarationWins(declaration DefaultDeclaration) returns bool
+		let winner = try self.winningDefaultOf(declaration.key) otherwise panic("defaultDeclarationWins: `{String.from(declaration.key)}` has a declaration, so it has a winner")
+		return winner.isTheSameDeclaration(declaration)
+	end 'defaultDeclarationWins'
+
+	export function earlierDefaultAtTheSameLevel(declaration DefaultDeclaration) returns DefaultDeclaration throws MapError
+		for noted in self.defaultDeclarationList 'eachDeclaration'
+			if noted.isTheSameDeclaration(declaration) 'reachedItself'
+				throw MapError.keyNotFound
+			end 'reachedItself'
+
+			if noted.key.equals(declaration.key) and noted.isStdlibSource == declaration.isStdlibSource 'anEarlierOne'
+				return noted
+			end 'anEarlierOne'
+		end 'eachDeclaration'
+
+		throw MapError.keyNotFound
+	end 'earlierDefaultAtTheSameLevel'
+
+	export function adoptLiveDefaultKeys(filed LiveDefaultKeys)
+		if filed.sameKeysAs(self.liveDefaultKeyNames) 'alreadyAdopted'
+			return
+		end 'alreadyAdopted'
+
+		var names = DefaultKeyNameSet.create()
+
+		for name in filed.names 'eachFiled'
+			names.insert(name)
+		end 'eachFiled'
+
+		self.liveDefaultKeyNames = names
+		self.liveKeyAdoptions = self.liveKeyAdoptions + 1
+		self.spawnsAnyServiceSettled = false
+	end 'adoptLiveDefaultKeys'
+
+	module function fileServiceMessages(messages ServiceMessageIndex)
+		self.serviceMessages = messages
+	end 'fileServiceMessages'
+
+	module function serviceMessageOf(callee ByteArray) returns ServiceMessage throws MapError
+		return try self.serviceMessages.get(callee)
+	end 'serviceMessageOf'
+
+	module function isServiceMessage(callee ByteArray) returns bool
+		return self.serviceMessages.contains(callee)
+	end 'isServiceMessage'
+
+	export function liveDefaultKeys() returns LiveDefaultKeys
+		var keys = LiveDefaultKeys.create()
+		keys.replaceWith(self.liveDefaultKeyNames)
+		return keys
+	end 'liveDefaultKeys'
+
+	export function liveKeysRevision() returns LiveKeysRevision
+		return self.liveKeyAdoptions
+	end 'liveKeysRevision'
+
+	// ⚠ A parse reads liveness only through `spawnsAnyService()` and the defaults its own file
+	// declares, so a file's parse memo key carries only those. A new liveness read in the parse must
+	// join this digest, or a memoized parse outlives the answer it was built on.
+	export function livenessDigestParsedBy(declFilePath FilePath) returns HashDigest
+		var digest = Hasher.empty()
+
+		if self.spawnsAnyService() 'aServiceIsSpawned'
+			digest = Hasher.combined(digest, value: LivenessSpawnsAService)
+		end 'aServiceIsSpawned'
+
+		for declaration in self.defaultDeclarationList 'eachDeclaration'
+			if declaration.declFilePath.equals(declFilePath) and self.defaultKeyIsLive(declaration.key) and self.defaultDeclarationWins(declaration) 'builtByThisFile'
+				digest = Hasher.combined(Hasher.combined(digest, value: LivenessBuildsADefault), bytes: declaration.key)
+			end 'builtByThisFile'
+		end 'eachDeclaration'
+
+		return digest
+	end 'livenessDigestParsedBy'
+
+	export function defaultKeyIsLive(key ByteArray) returns bool
+		return self.liveDefaultKeyNames.contains(key)
+	end 'defaultKeyIsLive'
+
+	export function liveWinningDefaults() returns DefaultDeclarationArray
+		var live = DefaultDeclarationArray.create()
+
+		for declaration in self.defaultDeclarationList 'eachDeclaration'
+			if self.defaultKeyIsLive(declaration.key) and self.defaultDeclarationWins(declaration) 'builtBeforeMain'
+				live.push(declaration)
+			end 'builtBeforeMain'
+		end 'eachDeclaration'
+
+		return live
+	end 'liveWinningDefaults'
+
+	export function defaultSlots() returns DefaultSlotArray
+		var slots = DefaultSlotArray.create()
+
+		for declaration in self.liveWinningDefaults() 'eachBuiltDefault'
+			slots.push(self.defaultSlotOf(declaration))
+		end 'eachBuiltDefault'
+
+		return slots
+	end 'defaultSlots'
+
+	function defaultSlotOf(declaration DefaultDeclaration) returns DefaultSlot
+		if self.defaultKeyIsAService(declaration.key) 'aServiceKey'
+			return DefaultSlot.create(declaration, valueType: MaxonType.structRef(self.typeNames.intern(serviceHandleCompanionName(declaration.key))), kind: DefaultSlotKind.service)
+		end 'aServiceKey'
+
+		let valueType = MaxonType.structRef(self.typeNames.intern(declaration.key))
+		return DefaultSlot.create(declaration, valueType: valueType, kind: self.registryValueKindOf(valueType, readerFilePath: declaration.declFilePath))
+	end 'defaultSlotOf'
+
+	export function registryValueKindOf(valueType MaxonType, readerFilePath FilePath) returns DefaultSlotKind
+		let walk = self.transferWalkOf(transferSubjectOf(maxonTypeTag(valueType), nameId: typeNameIdOf(valueType), typeNames: self.typeNames), action: CascadeAction.shareWalk, roots: TransferRoots.one, readerFilePath: readerFilePath)
+
+		if not self.typeOwesDrop(valueType, from: self.typeNames) 'aValueInTheWord'
+			return DefaultSlotKind.value(EmptySourceText, retainCallee: EmptySourceText, shareWalk: walk)
+		end 'aValueInTheWord'
+
+		return DefaultSlotKind.value(managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: valueType), retainCallee: self.retainCalleeOf(maxonTypeTag(valueType), nameId: typeNameIdOf(valueType), from: self.typeNames, result: RetainResult.sharedRead), shareWalk: walk)
+	end 'registryValueKindOf'
+
+	// ⭐⭐⭐ **WHICH RUNTIME ENTRY TAKES A SECOND OWNER OF A VALUE — the retain side of
+	// `managedNameDropCallee`.** Almost every managed value answers the plain box incref; a
+	// `<T>.handle` does not, because its box stands for a share of a mailbox's `handles`/`refs` pair
+	// that its DROP steps down. A retain that only increfs the box leaves one share owned by two
+	// references, and the second release frees a live mailbox — exit 89, or a segfault above one
+	// processor.
+	//
+	// ⚠ **THE TAG IS TESTED FIRST AND IT IS NOT A MICRO-OPTIMIZATION.** `nameId` is only meaningful
+	// for a value that HAS a declared nominal type; asking it of an integer or a String would be
+	// reading a field that means nothing there. A handle value carries its companion's name on one of
+	// TWO tags — `structRef` for a monomorphic service, `genericInstance` for a generic one, whose
+	// instantiation rides the type — so both are asked.
+	export function retainCalleeOf(tag ValueTypeTag, nameId TypeNameId, from TypeNameInterner, result RetainResult) returns ByteArray
+		// ⚠ Only a shared read takes `__str_retain`, which answers a CLONE of an immortal `.rdata` record
+		// — a different pointer. Every in-place door keeps the plain box retain, which on an immortal
+		// record returns without writing; an in-place door must not be handed a retain whose result is
+		// another pointer.
+		if result == RetainResult.sharedRead and tagIsByteRecord(tag) 'aByteRecordReadBack'
+			return StrRetainName
+		end 'aByteRecordReadBack'
+
+		// ⭐⭐ **AN ARRAY RECORD TAKES THE IMMORTAL-AWARE ENTRY.** A module-level managed constant's record
+		// is `.rdata` (`Parser.emitManagedConstant`), so a refcount read-modify-write on it faults — and
+		// whether a value is one cannot be known here, because it may be a merge phi. So the provenance
+		// test is deferred to run time, exactly as `__str_retain` defers it one representation over, and
+		// what is settled here is only which records that entry may read `capacity@16` out of: a six-slot
+		// buffer record. A struct box's `@16` is an arbitrary field — or past the end of a box too small
+		// to have one — so everything else keeps the plain box incref.
+		if self.isArrayInstanceAt(tag, nameId: nameId) 'bufferRecord'
+			return managedRecordRetainCallee(result)
+		end 'bufferRecord'
+
+		// ⭐⭐ **A GENERIC SERVICE'S HANDLE RETAINS THROUGH THE MAILBOX, AND IT REACHES THIS DOOR ON THE
+		// OTHER TAG.** Its instantiation rides the handle's type, so the nominal router below never sees
+		// it — while its DROP is still `__mbox_handle_drop_box`. A plain incref here would let the
+		// mailbox's handle count reach zero under a live handle: the service drains, and the next send is
+		// answered `ServiceError.stopped`.
+		if tag == ValueTypeTag.genericInstance and self.instanceBaseIsServiceHandle(nameId as GenericInstanceId) 'aGenericServicesHandle'
+			return MboxHandleRetainBoxName
+		end 'aGenericServicesHandle'
+
+		if self.isSharedValueInstanceAt(tag, nameId: nameId) 'aSharedValue'
+			return SharedValueBoxRetainName
+		end 'aSharedValue'
+
+		if tag != ValueTypeTag.structRef 'notNominal'
+			return plainBoxRetainCallee(result)
+		end 'notNominal'
+
+		return managedNameRetainCallee(self, declaredName: foreignNameOf(from, id: nameId), result: result)
+	end 'retainCalleeOf'
+
+	export function sharedValueElementOf(id GenericInstanceId) returns MaxonType
+		return self.substitutedInstanceArg(id, position: 0)
+	end 'sharedValueElementOf'
+
+	export function instanceBaseIsSharedValue(id GenericInstanceId) returns bool
+		return self.genericInstanceBaseName(id).equals(SharedValueTypeName)
+	end 'instanceBaseIsSharedValue'
+
+	export function isSharedValueInstanceAt(tag ValueTypeTag, nameId TypeNameId) returns bool
+		return tag == ValueTypeTag.genericInstance and self.instanceBaseIsSharedValue(nameId as GenericInstanceId)
+	end 'isSharedValueInstanceAt'
+
+	export function defaultKeyIsAService(key ByteArray) returns bool
+		return self.nameDeclaresAnInterface(key)
+	end 'defaultKeyIsAService'
+
+	export function recordInterfaceHandle(handle StructLayout, interfaceName ByteArray, representative ByteArray)
+		self.recordStruct(handle, declaredByTheCorpus: true)
+		try self.interfaceHandleOwners.insert(handle.name, value: interfaceName) otherwise panic("recordInterfaceHandle: `{String.from(handle.name)}` is already filed under an interface — the synthesis asks the struct registry for that very name before minting")
+		self.interfaceHandleRepresentatives.upsert(interfaceName, value: representative)
+		self.interfaceHandleOrder.push(interfaceName)
+	end 'recordInterfaceHandle'
+
+	export function interfacesWithHandles() returns ByteArrayArray
+		return self.interfaceHandleOrder
+	end 'interfacesWithHandles'
+
+	module function interfaceDeclarationOf(name ByteArray) returns DeclaredTypeName
+		return self.interfaceDeclaredIn(name)
+	end 'interfaceDeclarationOf'
+
+	export function interfaceRequirementSlots(interfaceName ByteArray) returns CollectedInterfaceMethodArray throws MapError
+		match lookupInterface(self.interfaces, name: interfaceName) 'iface'
+			found(iface) then return interfaceWitnessSlots(self.interfaces, iface: iface)
+			notFound then throw MapError.keyNotFound
+		end 'iface'
+	end 'interfaceRequirementSlots'
+
+	export function isInterfaceHandle(name ByteArray) returns bool
+		return self.interfaceHandleOwners.contains(name)
+	end 'isInterfaceHandle'
+
+	export function interfaceOfHandle(handleName ByteArray) returns ByteArray
+		return try self.interfaceHandleOwners.get(handleName) otherwise panic("interfaceOfHandle: `{String.from(handleName)}` is filed under no interface — every caller asks `isInterfaceHandle` first")
+	end 'interfaceOfHandle'
+
+	export function interfaceHandleRepresentative(interfaceName ByteArray) returns ByteArray
+		return try self.interfaceHandleRepresentatives.get(interfaceName) otherwise panic("interfaceHandleRepresentative: `{String.from(interfaceName)}` has no handle — every caller holds one")
+	end 'interfaceHandleRepresentative'
+
+	export function typeImplementsInterface(typeName ByteArray, interfaceName ByteArray) returns bool
+		for conformer in self.conformersOf(interfaceName) 'eachConformer'
+			if conformer.equals(typeName) 'thisType'
+				return true
+			end 'thisType'
+		end 'eachConformer'
+
+		return false
+	end 'typeImplementsInterface'
+
+	// ⚠ The one answer to "does this handle convert to that interface handle": every door converts
+	// through `Parser.interfaceHandleOf`, and the type checks accept a `T.handle` for an `I.handle`
+	// only where this answers yes. A door that accepted without converting would hand a box with no
+	// send table to a send that loads one.
+	export function serviceHandleWidensTo(handleName ByteArray, interfaceHandleName ByteArray) returns bool
+		return self.isServiceHandle(handleName) and self.isInterfaceHandle(interfaceHandleName) and self.typeImplementsInterface(self.serviceOfHandle(handleName), interfaceName: self.interfaceOfHandle(interfaceHandleName))
+	end 'serviceHandleWidensTo'
+
+	export function declaresAnInterfaceHandle() returns bool
+		return self.interfaceHandleOwners.count() > 0
+	end 'declaresAnInterfaceHandle'
+
+	// ⭐⭐ **IS THIS TYPE A HANDLE, AT A SERVICE OR AT AN INTERFACE?** `compilerOwnedAggregateOf` asks
+	// it to route the handle's drop and clone, so a type whose calls are sends can never be one whose
+	// box drops as an ordinary struct.
+	export function isAnyServiceHandle(name ByteArray) returns bool
+		return self.isServiceHandle(name) or self.isInterfaceHandle(name)
+	end 'isAnyServiceHandle'
 
 	// ⭐⭐ **REGISTER A SERVICE'S TWO COMPANIONS — through `recordEnum`/`recordStruct`, the SAME doors an
 	// author-written declaration takes (SV1).** That is the whole point of the door rather than a convenience:
@@ -12221,17 +12547,13 @@ export type ProgramSignatures
 		return serviceReplyErrorsCompanionName(messageKey)
 	end 'serviceReplyErrorName'
 
-	// ⭐⭐ **IS THIS TYPE A SERVICE HANDLE? — the door two mechanisms ask.** `compilerOwnedAggregateOf` asks it
-	// to route the handle's drop and clone; `Parser.dispatchMethodOnBase` asks it to route a method call on a
-	// handle to a message SEND rather than to a direct call. One membership test, so a type whose calls are
-	// sends can never be one whose box drops as an ordinary struct.
 	// ⚡ **DOES THIS PROGRAM DECLARE ANY DOTTED TYPE NAME AT ALL?** — the one-`count()` gate in front of every
 	// probe that would have to JOIN two tokens to ask its real question. Companions are the only types whose
 	// names carry a dot, so a program with no `spawn` answers `false` here and never builds a name to look up.
 	// `Parser.parseDottedPrimary`'s own header records what an ungated join at that site measured: a LINEAR
 	// allocation term across the whole scale ladder, paid by every `Point.create(…)` in every program.
 	export function declaresACompanionType() returns bool
-		return self.serviceHandleOwners.count() > 0
+		return self.serviceHandleOwners.count() > 0 or self.interfaceHandleOwners.count() > 0
 	end 'declaresACompanionType'
 
 	// ⭐⭐ **IS THIS INSTANCE'S BASE A SERVICE HANDLE? — THE INSTANCE ROAD'S ONE HOME, and it exists for the
@@ -12750,11 +13072,11 @@ export type ProgramSignatures
 		// conditional does not reconcile the two ownerships, so the build exits 101.
 		if not remap.movesAnything() 'idsUnchanged'
 			for entry in scanned 'eachUnmapped'
-				self.record(entry.name, moduleDirectory: moduleDirectory, returnType: entry.returnType, declaredSurface: entry.declaredSurface, visibility: entry.visibility, declFilePath: filePath, takesReceiver: entry.takesReceiver, opaqueParams: entry.opaqueParams, paramNames: entry.paramNames, paramTypes: entry.paramTypes, returnAliasName: entry.returnAliasName)
+				self.record(entry.name, moduleDirectory: moduleDirectory, returnType: entry.returnType, declaredSurface: entry.declaredSurface, visibility: entry.visibility, declFilePath: filePath, takesReceiver: entry.takesReceiver, opaqueParams: entry.opaqueParams, paramNames: entry.paramNames, paramTypes: entry.paramTypes, returnAliasName: entry.returnAliasName, nameLine: entry.nameLine, nameColumn: entry.nameColumn)
 			end 'eachUnmapped'
 		end 'idsUnchanged' else 'idsMoved'
 			for entry in scanned 'eachRemapped'
-				self.record(entry.name, moduleDirectory: moduleDirectory, returnType: remapMaxonReturnType(entry.returnType, remap: remap), declaredSurface: entry.declaredSurface, visibility: entry.visibility, declFilePath: filePath, takesReceiver: entry.takesReceiver, opaqueParams: entry.opaqueParams, paramNames: entry.paramNames, paramTypes: remapMaxonTypes(entry.paramTypes, remap: remap), returnAliasName: entry.returnAliasName)
+				self.record(entry.name, moduleDirectory: moduleDirectory, returnType: remapMaxonReturnType(entry.returnType, remap: remap), declaredSurface: entry.declaredSurface, visibility: entry.visibility, declFilePath: filePath, takesReceiver: entry.takesReceiver, opaqueParams: entry.opaqueParams, paramNames: entry.paramNames, paramTypes: remapMaxonTypes(entry.paramTypes, remap: remap), returnAliasName: entry.returnAliasName, nameLine: entry.nameLine, nameColumn: entry.nameColumn)
 			end 'eachRemapped'
 		end 'idsMoved'
 
@@ -12876,7 +13198,7 @@ export type ProgramSignatures
 	// ⭐⭐ **THE KEY IS NOT ALWAYS `name`: A `static` MEMBER WHOSE NAME AN INSTANCE MEMBER ALSO WEARS IS FILED
 	// UNDER ITS OWN** — see `noteStaticInstanceDeclaration`, which is asked first because every write below has
 	// to land on one key.
-	function record(name ByteArray, moduleDirectory String, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, declFilePath FilePath, takesReceiver bool, opaqueParams OpaqueParamInfo, paramNames ByteArrayArray, paramTypes MaxonTypeArray, returnAliasName ByteArray)
+	function record(name ByteArray, moduleDirectory String, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, declFilePath FilePath, takesReceiver bool, opaqueParams OpaqueParamInfo, paramNames ByteArrayArray, paramTypes MaxonTypeArray, returnAliasName ByteArray, nameLine LineNumber, nameColumn ColumnNumber)
 		self.noteStaticInstanceDeclaration(name, takesReceiver: takesReceiver)
 		let key = self.sweepRegistrationKey(name, moduleDirectory: moduleDirectory, takesReceiver: takesReceiver)
 
@@ -12906,7 +13228,7 @@ export type ProgramSignatures
 			self.funcReturnDeclFiles.upsert(key, value: declFilePath)
 		end 'aNameThisFileMustBeAbleToResolveLaterOn'
 
-		self.funcDeclSites.upsert(key, value: FunctionDeclSite.create(visibility, declFilePath: declFilePath, takesReceiver: takesReceiver))
+		self.funcDeclSites.upsert(key, value: FunctionDeclSite.create(visibility, declFilePath: declFilePath, takesReceiver: takesReceiver, nameLine: nameLine, nameColumn: nameColumn))
 
 		// ⭐ **APPENDED, NEVER UPSERTED — this is the one registry here that keeps EVERY declaration of a key
 		// rather than the last.** Being able to tell two members of a set apart is the whole of what it is for.
@@ -13406,6 +13728,16 @@ export type ProgramSignatures
 		let site = try self.funcDeclSites.get(self.memberRegistrationKey(qualified, takesReceiver: takesReceiver)) otherwise return false
 		return site.takesReceiver == takesReceiver and not self.extensionPublishedMethods.contains(extensionMemberKindKey(qualified, takesReceiver: takesReceiver))
 	end 'conformerDeclaresOwnMethod'
+
+	export function ownMemberDeclSite(qualified ByteArray, takesReceiver bool) returns FunctionDeclSite
+		let site = try self.funcDeclSites.get(self.memberRegistrationKey(qualified, takesReceiver: takesReceiver)) otherwise panic("ProgramSignatures.ownMemberDeclSite: nothing declares '{String.from(qualified)}' — asked only for a member the fold recorded as shadowed by the type's own declaration")
+
+		if site.nameLine == 0 'noSourceName'
+			panic("ProgramSignatures.ownMemberDeclSite: '{String.from(qualified)}' was recorded with no name position — a type body's member is recorded by `Parser.recordScannedSignature`, which carries its name token")
+		end 'noSourceName'
+
+		return site
+	end 'ownMemberDeclSite'
 
 	// ⭐⭐ **DOES `qualified` CARRY A HIDDEN `self`?** — the receiver half of resolving a bare sibling call to a
 	// declaration whose body the parser cannot see (`Parser.isImplicitSelfMethod`). Wherever the parser CAN see
@@ -17788,6 +18120,10 @@ export type ProgramSignatures
 	// `StdlibSource.markCorpusSlotInitCallees` off the `globalAddr` that keeps the slot alive. That is the
 	// true call graph rather than an approximation of it, and it needs no liveness: the walk asking it is the
 	// walk liveness would have been derived from.
+	//
+	// The built `default`s' initializers are roots too — `__module_init` calls them. Which are built
+	// is the key liveness an earlier fold settled (`Queries.liveDefaultKeysMoved`), not the global
+	// liveness this walk feeds, so they close no cycle either.
 	export function globalInitCallees() returns ByteArrayArray
 		var callees = ByteArrayArray.create()
 
@@ -17803,6 +18139,10 @@ export type ProgramSignatures
 				calls(names) then callees.append(names)
 			end 'initializer'
 		end 'each'
+
+		for declaration in self.liveWinningDefaults() 'eachBuiltDefault'
+			callees.push(defaultInitializerName(declaration.key))
+		end 'eachBuiltDefault'
 
 		return callees
 	end 'globalInitCallees'
@@ -17870,8 +18210,9 @@ export type ProgramSignatures
 		return try self.corpusSlotInitCallees.get(label) otherwise sharedEmptySlotInitCallees
 	end 'initCalleesOfCorpusSlot'
 
-	// EVERY LIVE top-level global in the program, in ARENA (declaration) order, with the label and value
-	// its `.data` slot carries — the door the backend's data-section layout asks through.
+	// EVERY LIVE top-level global in the program, in ARENA (declaration) order, then every built
+	// `default`'s slot, with the label and value its `.data` slot carries — the door the backend's
+	// data-section layout asks through.
 	//
 	// It is asked ONCE per compile (`Compiler.compileToCodeResult`), never per file: it is O(globals),
 	// and a whole-program query under a per-file one is asked once per FILE, which is how a linear
@@ -17912,6 +18253,10 @@ export type ProgramSignatures
 					evaluating then panic("ProgramSignatures.declaredGlobals: '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`")
 			end 'state'
 		end 'each'
+
+		for declaration in self.liveWinningDefaults() 'eachBuiltDefault'
+			entries.push(DataSectionEntry.create(String.from(defaultSlotLabel(declaration.key)), valueType: StdType.i64, value: ManagedGlobalInitialSlot, reach: DataReach.declared))
+		end 'eachBuiltDefault'
 
 		return entries
 	end 'declaredGlobals'
@@ -18287,7 +18632,7 @@ export type ProgramSignatures
 			let produced = self.globalInitValue(try payloads.get(i) otherwise panic("ProgramSignatures.globalUnionCaseConstruct: payloads.get OOB at {i} below the count this arity check just held it to"), calls: calls, declName: declName, elementFilePath: elementFilePath)
 
 			// The store's width through the SAME classification the body's store reads
-			// (`Parser.requirePayloadLowerable` ⇒ `payloadStorageOf`), so a payload written at file scope and one
+			// (`classifyUnionPayload` ⇒ `payloadStorageOf`), so a payload written at file scope and one
 			// written in a function land in the slot at one width.
 			fields.push(GlobalStructField.create(layout.payloadSlotOffset(i), storageType: payloadStorageOf(classifyUnionPayload(self, typeNames: self.typeNames, fieldType: self.payloadTypeOf(field, layout: layout, into: self.typeNames), slotScopeFilePath: layout.declFilePath)), value: produced.value, valueType: produced.valueType))
 		end 'eachPayload'
@@ -29966,7 +30311,8 @@ export type ProgramSignatures
 				aggregate or
 				greenThread or
 				bufferRecord or
-				serviceHandle gives true
+				serviceHandle or
+				sharedValue gives true
 		end 'protocol'
 	end 'instanceArgOwesDrop'
 
@@ -30833,6 +31179,10 @@ export type ProgramSignatures
 			return MboxHandleDropBoxName
 		end 'serviceHandle'
 
+		if self.instanceBaseIsSharedValue(id) 'sharedValue'
+			return SharedValueBoxDropName
+		end 'sharedValue'
+
 		// ⭐ **THE OMISSION A ROUTER WOULD OTHERWISE SWALLOW, MADE LOUD** — its two sibling routers
 		// (`builtinGenericTypeParamCount`, `genericInstanceBoxSize`) panic on a builtin they have no arm
 		// for, and so does this one. A builtin base has NO layout, so `genericInstanceHasManagedField`
@@ -31464,7 +31814,7 @@ export type ProgramSignatures
 
 		// Asked through `denotedAggregateName` because the destroy door below resolves the name that way, and
 		// the two words come off this one answer.
-		if self.isServiceHandle(self.denotedAggregateName(typeName)) 'aServiceHandle'
+		if self.isAnyServiceHandle(self.denotedAggregateName(typeName)) 'aServiceHandle'
 			return ExistentialOwnershipProtocol.serviceHandle
 		end 'aServiceHandle'
 
@@ -31490,7 +31840,8 @@ export type ProgramSignatures
 			// what an Array record's drop IS is exactly what an aggregate's is.
 			aggregate or
 				bufferRecord or
-				serviceHandle then return managedNameDropCallee(self, declaredName: self.denotedAggregateName(typeName))
+				serviceHandle or
+				sharedValue then return managedNameDropCallee(self, declaredName: self.denotedAggregateName(typeName))
 
 			// A conformer whose value half is a green thread releases it the one way a green thread is
 			// released. Its `retainFunc@16` twin is 0 — see the protocol arm for why that pair is uneven here.
@@ -31560,7 +31911,8 @@ export type ProgramSignatures
 				aggregate or
 				greenThread or
 				bufferRecord or
-				serviceHandle gives managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: MaxonType.genericInstance(id))
+				serviceHandle or
+				sharedValue gives managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: MaxonType.genericInstance(id))
 		end 'protocol'
 	end 'instanceDropCallee'
 
@@ -31586,7 +31938,8 @@ export type ProgramSignatures
 			greenThread then return cascadeUnsupportedEntry(action)
 			aggregate or
 				bufferRecord or
-				serviceHandle then return self.aggregateConformerCascadeCallee(self.denotedAggregateName(typeName), action: action)
+				serviceHandle or
+				sharedValue then return self.aggregateConformerCascadeCallee(self.denotedAggregateName(typeName), action: action)
 		end 'protocol'
 	end 'existentialCascadeCallee'
 
@@ -31610,7 +31963,8 @@ export type ProgramSignatures
 			byteRecord or
 				aggregate or
 				bufferRecord or
-				serviceHandle then return self.instanceConformerCascadeCallee(id, action: action)
+				serviceHandle or
+				sharedValue then return self.instanceConformerCascadeCallee(id, action: action)
 		end 'protocol'
 	end 'instanceExistentialCascadeCallee'
 
@@ -31690,7 +32044,8 @@ export type ProgramSignatures
 				aggregate or
 				greenThread or
 				bufferRecord or
-				serviceHandle gives managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: self.canonicalInstanceArg(id, position: position))
+				serviceHandle or
+				sharedValue gives managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: self.canonicalInstanceArg(id, position: position))
 		end 'protocol'
 	end 'typeParamDropCallee'
 
@@ -31772,6 +32127,10 @@ export type ProgramSignatures
 			return ExistentialOwnershipProtocol.serviceHandle
 		end 'aServiceHandle'
 
+		if self.instanceBaseIsSharedValue(denoted) 'aSharedValue'
+			return ExistentialOwnershipProtocol.sharedValue
+		end 'aSharedValue'
+
 		if self.isArrayInstance(denoted) 'aBufferRecord'
 			return ExistentialOwnershipProtocol.bufferRecord
 		end 'aBufferRecord'
@@ -31789,7 +32148,7 @@ export type ProgramSignatures
 			return false
 		end 'namesNoDeclaration'
 
-		return self.isServiceHandle(self.denotedAggregateName(self.nameOfId(typeNameIdOf(t))))
+		return self.isAnyServiceHandle(self.denotedAggregateName(self.nameOfId(typeNameIdOf(t))))
 	end 'declaredTypeNamesAServiceHandle'
 
 	// Is `t` a value held at an INTERFACE type — a two-word fat pointer whose retain and release are its
@@ -33313,6 +33672,12 @@ export type ProgramSignatures
 			return TransferWalk.refused("a managed value of `{String.from(name)}`, which no declaration this rule can read describes")
 		end 'noSuchRecord'
 
+		// A record packed inline is a word and owns no heap; a walk over it would dereference the word as
+		// a box, and `__module_init` would crash sharing a value `default` whose fields pack.
+		if self.nameIsInlineRecord(name) 'aWordRecord'
+			return TransferWalk.closed
+		end 'aWordRecord'
+
 		// `structHasManagedField` cannot see a slot standing at a bare type parameter, and a reference handed to a
 		// second green thread through one would be walked by nobody.
 		if self.recordRestsAnOpaqueSlot(name) 'anOpaqueSlot'
@@ -34756,7 +35121,10 @@ export type ProgramSignatures
 				panic("ProgramSignatures.rowSetAnswersThatMoved: {filePath.toString()} asked {self.rowSetQueryDisplay(told.query)} and was told {rowSetAnswerDisplay(told.answer)}, but the whole program's rows answer {rowSetAnswerDisplay(whole)} — every row a parse sees is merged, and an override only raises an answer, so the rows shrank between the parse and the merge")
 			end 'theWholeProgramIsWeaker'
 
-			logDebug(LogCategory.compiler, message: function() gives "row-set answer moved: {filePath.toString()} asked {self.rowSetQueryDisplay(told.query)}; it was told {rowSetAnswerDisplay(told.answer)}, the whole program's rows answer {rowSetAnswerDisplay(whole)}")
+			if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
+				compilerLogger(CompilerLogGroup.compiler).debug("row-set answer moved: {filePath.toString()} asked {self.rowSetQueryDisplay(told.query)}; it was told {rowSetAnswerDisplay(told.answer)}, the whole program's rows answer {rowSetAnswerDisplay(whole)}")
+			end 'debugging'
+
 			overrides.stand(key, answer: whole)
 			moved = true
 		end 'eachQuestion'
@@ -34984,6 +35352,11 @@ let NamedRowMark = 0x71B3E95A0C2D48F6 as HashDigest
 let DeclShapeDescriptorNeeds = 0x6A09E667BB67AE85 as HashDigest
 let DeclShapeFixedElementCountNeeds = 0x3C6EF372A54FF53A as HashDigest
 let DeclShapeInstantiatedByAParse = 0xA54FF53A510E527F as HashDigest
+
+export typealias LiveKeysRevision = int(0 to u64.max)
+
+let LivenessSpawnsAService = 0x21BC50F31366E445 as HashDigest
+let LivenessBuildsADefault = 0x9B05688C2B3E6C1F as HashDigest
 
 // A set's digest whatever order it iterates in: each member is digested alone and the digests are combined by
 // `xor`, which commutes.

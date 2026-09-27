@@ -2174,3 +2174,14 @@ function __radixDigitText(digit RadixDigit, uppercase bool) returns String
 		default panic("__radixDigitText: {digit} is past the last digit of the widest base this renders")
 	end 'letter'
 end '__radixDigitText'
+
+/// A value every thread reads without a lock and a writer replaces whole. Named through an alias
+/// (`typealias ConfigCell = SharedValue with Config`), `ConfigCell.create(v)` makes one;
+/// `current()` returns the value in force; `publish(v)` replaces it; `publish(v, replacing: old)`
+/// replaces it only while `old` is still current, answers whether it did, and drops `v` when it did
+/// not. `Value` is a record of `let` fields, a `String`, a handle or a scalar (E3171).
+public type SharedValue uses Value
+	// The runtime cell's address, at the offset `ServiceRegistryRuntime` reads; every operation is a
+	// call the compiler emits.
+	let cell = 0
+end 'SharedValue'

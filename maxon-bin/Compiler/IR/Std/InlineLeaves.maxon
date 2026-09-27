@@ -1300,7 +1300,10 @@ function spliceLeaves(project Project, module StdModule, byName FunctionNameInde
 	let plan = buildLeafPlan(module, framesAreRecorded: targetEmitsInlineFrameRecords(project.target), namedByGolden: namedByGolden, meta: meta, round: round, runtimeTier: project.libraryFacts.runtimeTier, byName: byName)
 
 	if plan.eligibleCount == 0 'nothingToInline'
-		logDebug(LogCategory.ir, message: function() gives "inlineLeaves: 0 site(s) inlined, 0 callee(s) eligible")
+		if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.debug) 'debugging'
+			compilerLogger(CompilerLogGroup.ir).debug("inlineLeaves: 0 site(s) inlined, 0 callee(s) eligible")
+		end 'debugging'
+
 		return
 	end 'nothingToInline'
 
@@ -1348,7 +1351,10 @@ function spliceLeaves(project Project, module StdModule, byName FunctionNameInde
 	let declinedGuards = stats.declinedParamGuards
 	let calleesSizeRefused = plan.tooManyOpsCount
 	let calleesWithinLargerBudget = plan.tooManyOpsWithinLargerBudget
-	logDebug(LogCategory.ir, message: function() gives "inlineLeaves: {inlined} site(s) inlined, {eligible} callee(s) eligible, {sizeRefusals} refused-by-size at {MaxInlinedLeafOps} ops ({calleesSizeRefused} callee(s)) of which {sizeRefusalsAtLargerBudget} site(s) / {calleesWithinLargerBudget} callee(s) a budget of {ReportedLargerLeafBudget} would admit, {selfCalls} self-call site(s), {safePointRefusals} site(s) refused as the compiler's own scaffolding spliced into code that is not, {declinedGuards} spliced parameter cascade(s) declined as provably dead")
+
+	if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.debug) 'debugging'
+		compilerLogger(CompilerLogGroup.ir).debug("inlineLeaves: {inlined} site(s) inlined, {eligible} callee(s) eligible, {sizeRefusals} refused-by-size at {MaxInlinedLeafOps} ops ({calleesSizeRefused} callee(s)) of which {sizeRefusalsAtLargerBudget} site(s) / {calleesWithinLargerBudget} callee(s) a budget of {ReportedLargerLeafBudget} would admit, {selfCalls} self-call site(s), {safePointRefusals} site(s) refused as the compiler's own scaffolding spliced into code that is not, {declinedGuards} spliced parameter cascade(s) declined as provably dead")
+	end 'debugging'
 end 'spliceLeaves'
 
 // ⛔⛔ **THE ROW'S PROMISE, ASKED OF THE FINISHED MODULE — AND THAT PLACEMENT IS THE WHOLE OF WHAT MAKES
@@ -2328,7 +2334,10 @@ function spliceCalledOnceCallees(project Project, module StdModule, byName Funct
 	end 'eachFunc'
 
 	if candidateCount == 0 'nothingCalledOnce'
-		logDebug(LogCategory.ir, message: function() gives "inlineLeaves: 0 called-once callee(s) spliced; left as calls: {refusals.summary(CalledOnceRefusal.allCaseNames)}")
+		if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.debug) 'debugging'
+			compilerLogger(CompilerLogGroup.ir).debug("inlineLeaves: 0 called-once callee(s) spliced; left as calls: {refusals.summary(CalledOnceRefusal.allCaseNames)}")
+		end 'debugging'
+
 		return
 	end 'nothingCalledOnce'
 
@@ -2365,7 +2374,10 @@ function spliceCalledOnceCallees(project Project, module StdModule, byName Funct
 
 	let spliced = stats.inlinedSites
 	let declinedGuards = stats.declinedParamGuards
-	logDebug(LogCategory.ir, message: function() gives "inlineLeaves: {spliced} called-once callee(s) spliced, {declinedGuards} spliced parameter cascade(s) declined as provably dead; left as calls: {refusals.summary(CalledOnceRefusal.allCaseNames)}")
+
+	if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.debug) 'debugging'
+		compilerLogger(CompilerLogGroup.ir).debug("inlineLeaves: {spliced} called-once callee(s) spliced, {declinedGuards} spliced parameter cascade(s) declined as provably dead; left as calls: {refusals.summary(CalledOnceRefusal.allCaseNames)}")
+	end 'debugging'
 end 'spliceCalledOnceCallees'
 
 // Caller -> the candidates whose one site it holds, so a caller's facts are taken from the census's
@@ -2407,7 +2419,10 @@ end 'pendingCalleesOf'
 
 function noteCalledOnceRefusal(refusals OrdinalTally, reason CalledOnceRefusal, func IrFunction)
 	refusals.add(reason.ordinal, count: 1)
-	logTrace(LogCategory.ir, message: function() gives "inlineLeaves: called-once callee '{String.from(func.name)}' left as a call — {calledOnceRefusalText(reason)}")
+
+	if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.trace) 'tracing'
+		compilerLogger(CompilerLogGroup.ir).trace("inlineLeaves: called-once callee '{String.from(func.name)}' left as a call — {calledOnceRefusalText(reason)}")
+	end 'tracing'
 end 'noteCalledOnceRefusal'
 
 // One candidate is done, spliced or refused: its caller has one fewer callee to wait for, and joins the
@@ -2561,7 +2576,10 @@ function spliceWave(project Project, module StdModule, byName FunctionNameIndex,
 
 	let readyCount = retiring.count()
 	let callerCount = calleesByCaller.count()
-	logDebug(LogCategory.ir, message: function() gives "inlineLeaves: called-once wave — {readyCount} callee(s) ready across {callerCount} caller(s)")
+
+	if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.debug) 'debugging'
+		compilerLogger(CompilerLogGroup.ir).debug("inlineLeaves: called-once wave — {readyCount} callee(s) ready across {callerCount} caller(s)")
+	end 'debugging'
 
 	let admission = SpliceAdmission.calledOnce(wave)
 
@@ -2642,7 +2660,10 @@ function spliceFitsRegisters(module StdModule, facts CallerSiteFacts, caller IrF
 	let acrossCount = site.across.count() as RegCount
 
 	if acrossCount > budget 'overBeforeTheBody'
-		logTrace(LogCategory.ir, message: function() gives "inlineLeaves: splicing '{String.from(callee.name)}' into '{String.from(caller.name)}' holds {acrossCount} value(s) across the site that its loop reads, over the budget of {budget} before the body is counted")
+		if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.trace) 'tracing'
+			compilerLogger(CompilerLogGroup.ir).trace("inlineLeaves: splicing '{String.from(callee.name)}' into '{String.from(caller.name)}' holds {acrossCount} value(s) across the site that its loop reads, over the budget of {budget} before the body is counted")
+		end 'tracing'
+
 		return false
 	end 'overBeforeTheBody'
 
@@ -2655,12 +2676,19 @@ function spliceFitsRegisters(module StdModule, facts CallerSiteFacts, caller IrF
 	let bodyBound = bodyLiveInBound(callee, valueBound: calleeValueBound, args: site.args, across: across)
 
 	if acrossCount + bodyBound <= budget 'fitsWhateverTheBodyHolds'
-		logTrace(LogCategory.ir, message: function() gives "inlineLeaves: splicing '{String.from(callee.name)}' into '{String.from(caller.name)}' holds {acrossCount} value(s) across the site that its loop reads and at most {bodyBound} more anywhere in the body, against a budget of {budget}")
+		if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.trace) 'tracing'
+			compilerLogger(CompilerLogGroup.ir).trace("inlineLeaves: splicing '{String.from(callee.name)}' into '{String.from(caller.name)}' holds {acrossCount} value(s) across the site that its loop reads and at most {bodyBound} more anywhere in the body, against a budget of {budget}")
+		end 'tracing'
+
 		return true
 	end 'fitsWhateverTheBodyHolds'
 
 	let bodyCount = largestBodyLiveIn(module, func: callee, valueBound: calleeValueBound, args: site.args, across: across, liveness: liveness)
-	logTrace(LogCategory.ir, message: function() gives "inlineLeaves: splicing '{String.from(callee.name)}' into '{String.from(caller.name)}' holds {acrossCount} value(s) across the site that its loop reads and {bodyCount} more at the body's busiest point, against a budget of {budget}")
+
+	if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.trace) 'tracing'
+		compilerLogger(CompilerLogGroup.ir).trace("inlineLeaves: splicing '{String.from(callee.name)}' into '{String.from(caller.name)}' holds {acrossCount} value(s) across the site that its loop reads and {bodyCount} more at the body's busiest point, against a budget of {budget}")
+	end 'tracing'
+
 	return acrossCount + bodyCount <= budget
 end 'spliceFitsRegisters'
 

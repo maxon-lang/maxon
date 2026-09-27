@@ -345,3 +345,158 @@ end 'main'
 ```stdout
 ok=1
 ```
+
+<!-- test: clock.now-unix-nanos-agrees-with-seconds -->
+`WallClock.nowUnixNanos()` reads the same calendar clock as `nowUnixSeconds()`, at nanosecond resolution:
+read after the seconds, its whole seconds are the same second or the next one.
+
+```maxon
+function main() returns ExitCode
+	let seconds = WallClock.nowUnixSeconds()
+	let nanos = WallClock.nowUnixNanos()
+	let wholeSeconds = (nanos / 1_000_000_000) as UnixSeconds
+
+	if wholeSeconds >= seconds and wholeSeconds <= seconds + 1 'agree'
+		print("ok\n")
+		return 0
+	end 'agree'
+
+	print("seconds={seconds} nanos={nanos}\n")
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+ok
+```
+
+<!-- test: clock.now-unix-nanos-has-sub-second-resolution -->
+The nanosecond reading carries a real sub-second part: a clock that multiplied whole seconds, or whole
+milliseconds, up to nanoseconds reads zero below the millisecond every time. One reading in a thousand with a
+non-zero sub-millisecond part is enough; a clock ticking every 100 ns fails to give one with negligible odds.
+
+```maxon
+function main() returns ExitCode
+	for _ in 0 upto 1000 'eachReading'
+		let nanos = WallClock.nowUnixNanos()
+
+		if nanos mod 1_000_000 != 0 'subMillisecond'
+			print("ok\n")
+			return 0
+		end 'subMillisecond'
+	end 'eachReading'
+
+	print("every reading was a whole millisecond\n")
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+ok
+```
+
+<!-- test: clock.rfc3339-formats-fixed-instants -->
+RFC 3339 in UTC: milliseconds for `rfc3339Millis`, nanoseconds for `rfc3339Nanos`, truncated rather than
+rounded. The instants are the epoch, the leap day 2000-02-29 with a sub-second part, a time of day, and the
+leap day 2024-02-29.
+
+```maxon
+function main() returns ExitCode
+	print("{WallClock.rfc3339Millis(0)}\n")
+	print("{WallClock.rfc3339Nanos(0)}\n")
+	print("{WallClock.rfc3339Millis(951782400123456789)}\n")
+	print("{WallClock.rfc3339Nanos(951782400123456789)}\n")
+	print("{WallClock.rfc3339Millis(1234567890123000000)}\n")
+	print("{WallClock.rfc3339Nanos(1234567890123000000)}\n")
+	print("{WallClock.rfc3339Millis(1709164800000000000)}\n")
+	print("{WallClock.rfc3339Nanos(1709164800000000000)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1970-01-01T00:00:00.000Z
+1970-01-01T00:00:00.000000000Z
+2000-02-29T00:00:00.123Z
+2000-02-29T00:00:00.123456789Z
+2009-02-13T23:31:30.123Z
+2009-02-13T23:31:30.123000000Z
+2024-02-29T00:00:00.000Z
+2024-02-29T00:00:00.000000000Z
+```
+
+<!-- test: clock.civil-date-round-trips -->
+`CivilDate.fromDays` maps days since the Unix epoch to a proleptic Gregorian date, and `days()` maps it
+back, on both sides of the epoch.
+
+```maxon
+function show(days UnixDays)
+	let date = CivilDate.fromDays(days)
+	print("{days}: {date.year}-{date.month}-{date.day} -> {date.days()}\n")
+end 'show'
+
+function main() returns ExitCode
+	show(0)
+	show(11016)
+	show(19782)
+	show(-1)
+	show(-719162)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0: 1970-1-1 -> 0
+11016: 2000-2-29 -> 11016
+19782: 2024-2-29 -> 19782
+-1: 1969-12-31 -> -1
+-719162: 1-1-1 -> -719162
+```
+
+<!-- test: clock.civil-date-create-refuses-an-impossible-day -->
+`CivilDate.create` checks the day against its month in its year and throws
+`CivilDateError.impossibleDay` for a day the month does not have: February 29 exists only in a leap year
+(1900 is not one, 2000 and 2024 are), and April has 30 days.
+
+```maxon
+function show(year CivilYear, month CivilMonth, day CivilDay)
+	let date = try CivilDate.create(year, month: month, day: day) otherwise (e) 'refused'
+		match e 'why'
+			impossibleDay then print("{year}-{month}-{day}: refused\n")
+		end 'why'
+
+		return
+	end 'refused'
+
+	print("{date.year}-{date.month}-{date.day}: accepted\n")
+end 'show'
+
+function main() returns ExitCode
+	show(2023, month: 2, day: 29)
+	show(2023, month: 4, day: 31)
+	show(1900, month: 2, day: 29)
+	show(2024, month: 2, day: 29)
+	show(2000, month: 2, day: 29)
+	show(2023, month: 12, day: 31)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2023-2-29: refused
+2023-4-31: refused
+1900-2-29: refused
+2024-2-29: accepted
+2000-2-29: accepted
+2023-12-31: accepted
+```

@@ -92,4 +92,167 @@ public type WallClock
 	public static function nowUnixSeconds() returns UnixSeconds
 		return __Builtins.currentUnixTimeSeconds()
 	end 'nowUnixSeconds'
+
+	/// Nanoseconds since the Unix epoch, UTC, in steps of the host calendar's 100 ns tick.
+	public static function nowUnixNanos() returns UnixNanos
+		return __Builtins.currentUnixTimeNanos()
+	end 'nowUnixNanos'
+
+	/// `nanos` as an RFC 3339 UTC timestamp to the millisecond: `2026-09-26T12:34:56.789Z`.
+	public static function rfc3339Millis(nanos UnixNanos) returns String
+		return "{rfc3339DateTime(nanos)}.{nanosIntoSecond(nanos) / NanosPerMillisecond:03}Z"
+	end 'rfc3339Millis'
+
+	/// `nanos` as an RFC 3339 UTC timestamp to the nanosecond: `2026-09-26T12:34:56.789012300Z`.
+	public static function rfc3339Nanos(nanos UnixNanos) returns String
+		return "{rfc3339DateTime(nanos)}.{nanosIntoSecond(nanos):09}Z"
+	end 'rfc3339Nanos'
 end 'WallClock'
+
+/// Nanoseconds since the Unix epoch, 1970-01-01 00:00:00 UTC; negative before it.
+public typealias UnixNanos = int(i64.min to i64.max)
+
+/// Days since 1970-01-01; negative before it.
+public typealias UnixDays = int(i64.min to i64.max)
+public typealias CivilYear = int(i64.min to i64.max)
+public typealias CivilMonth = int(1 to 12)
+public typealias CivilDay = int(1 to 31)
+
+typealias CalendarCount = int(i64.min to i64.max)
+
+let NanosPerSecond = 1_000_000_000 as CalendarCount
+let NanosPerMillisecond = 1_000_000 as CalendarCount
+let SecondsPerDay = 86_400 as CalendarCount
+let SecondsPerHour = 3_600 as CalendarCount
+let SecondsPerMinute = 60 as CalendarCount
+
+let DaysFromMarchOfYearZeroTo1970 = 719_468 as CalendarCount
+let DaysPerEra = 146_097 as CalendarCount
+let LastDayOfEra = 146_096 as CalendarCount
+let DaysPerCentury = 36_524 as CalendarCount
+let DaysPerFourYears = 1_460 as CalendarCount
+let DaysPerCommonYear = 365 as CalendarCount
+let YearsPerEra = 400 as CalendarCount
+let YearsPerCentury = 100 as CalendarCount
+let YearsPerLeapCycle = 4 as CalendarCount
+let DaysInFiveMonthsFromMarch = 153 as CalendarCount
+let MonthsInFiveMonths = 5 as CalendarCount
+let MonthLengthRoundingOffset = 2 as CalendarCount
+let MonthsFromMarchToYearEnd = 10 as CalendarCount
+let MarchMonthOfMarch = 3 as CalendarCount
+let MonthsFromJanuaryToMarch = 9 as CalendarCount
+let MonthsBeforeMarch = 2 as CalendarCount
+let FebruaryMonth = 2 as CivilMonth
+let AprilMonth = 4 as CivilMonth
+let JuneMonth = 6 as CivilMonth
+let SeptemberMonth = 9 as CivilMonth
+let NovemberMonth = 11 as CivilMonth
+let DaysInLongMonth = 31 as CalendarCount
+let DaysInShortMonth = 30 as CalendarCount
+let DaysInCommonFebruary = 28 as CalendarCount
+let DaysInLeapFebruary = 29 as CalendarCount
+
+/// Why `CivilDate.create` refused its parts: `impossibleDay` is a day past the end of its month,
+/// such as February 30 or February 29 in a common year.
+public enum CivilDateError implements Error
+	impossibleDay
+end 'CivilDateError'
+
+function daysInMonth(year CivilYear, month CivilMonth) returns CalendarCount
+	if month == FebruaryMonth 'february'
+		return DaysInLeapFebruary if isLeapYear(year) else DaysInCommonFebruary
+	end 'february'
+
+	if month == AprilMonth or month == JuneMonth or month == SeptemberMonth or month == NovemberMonth 'thirtyDays'
+		return DaysInShortMonth
+	end 'thirtyDays'
+
+	return DaysInLongMonth
+end 'daysInMonth'
+
+function isLeapYear(year CivilYear) returns bool
+	let yearNumber = year as CalendarCount
+	return dividesEvenly(yearNumber, by: YearsPerLeapCycle) and (not dividesEvenly(yearNumber, by: YearsPerCentury) or dividesEvenly(yearNumber, by: YearsPerEra))
+end 'isLeapYear'
+
+function dividesEvenly(value CalendarCount, by CalendarCount) returns bool
+	return floorDivide(value, by: by) * by == value
+end 'dividesEvenly'
+
+/// A date in the proleptic Gregorian calendar, converted to and from `UnixDays`.
+/// @category System
+public type CivilDate
+	public let year as CivilYear
+	public let month as CivilMonth
+	public let day as CivilDay
+
+	/// The date with these parts; throws `CivilDateError.impossibleDay` for a day the month does not
+	/// have.
+	public static function create(year CivilYear, month CivilMonth, day CivilDay) returns CivilDate throws CivilDateError
+		if (day as CalendarCount) > daysInMonth(year, month: month) 'pastTheMonth'
+			throw CivilDateError.impossibleDay
+		end 'pastTheMonth'
+
+		return Self{year: year, month: month, day: day}
+	end 'create'
+
+	/// The date `days` days after 1970-01-01, or before it for a negative count.
+	public static function fromDays(days UnixDays) returns CivilDate
+		let shifted = (days as CalendarCount) + DaysFromMarchOfYearZeroTo1970
+		let era = floorDivide(shifted, by: DaysPerEra)
+		let dayOfEra = shifted - era * DaysPerEra
+		let yearOfEra = (dayOfEra - dayOfEra / DaysPerFourYears + dayOfEra / DaysPerCentury - dayOfEra / LastDayOfEra) / DaysPerCommonYear
+		let dayOfYear = dayOfEra - (DaysPerCommonYear * yearOfEra + yearOfEra / YearsPerLeapCycle - yearOfEra / YearsPerCentury)
+		let marchMonth = (MonthsInFiveMonths * dayOfYear + MonthLengthRoundingOffset) / DaysInFiveMonthsFromMarch
+		let dayOfMonth = (dayOfYear - (DaysInFiveMonthsFromMarch * marchMonth + MonthLengthRoundingOffset) / MonthsInFiveMonths + 1) as CivilDay
+		let marchYear = yearOfEra + era * YearsPerEra
+
+		// Built directly rather than through `create`: a date derived from a day count is valid by
+		// construction, so it has nothing to throw.
+		if marchMonth >= MonthsFromMarchToYearEnd 'januaryOrFebruary'
+			return Self{year: (marchYear + 1) as CivilYear, month: (marchMonth - MonthsFromJanuaryToMarch) as CivilMonth, day: dayOfMonth}
+		end 'januaryOrFebruary'
+
+		return Self{year: marchYear as CivilYear, month: (marchMonth + MarchMonthOfMarch) as CivilMonth, day: dayOfMonth}
+	end 'fromDays'
+
+	/// Days from 1970-01-01 to this date; negative before it.
+	public function days() returns UnixDays
+		let monthNumber = self.month as CalendarCount
+		let yearNumber = self.year as CalendarCount
+		let startsBeforeMarch = monthNumber <= MonthsBeforeMarch
+		let marchYear = yearNumber - 1 if startsBeforeMarch else yearNumber
+		let marchMonth = monthNumber + MonthsFromJanuaryToMarch if startsBeforeMarch else monthNumber - MarchMonthOfMarch
+		let era = floorDivide(marchYear, by: YearsPerEra)
+		let yearOfEra = marchYear - era * YearsPerEra
+		let dayOfYear = (DaysInFiveMonthsFromMarch * marchMonth + MonthLengthRoundingOffset) / MonthsInFiveMonths + (self.day as CalendarCount) - 1
+		let dayOfEra = yearOfEra * DaysPerCommonYear + yearOfEra / YearsPerLeapCycle - yearOfEra / YearsPerCentury + dayOfYear
+		return (era * DaysPerEra + dayOfEra - DaysFromMarchOfYearZeroTo1970) as UnixDays
+	end 'days'
+end 'CivilDate'
+
+function floorDivide(value CalendarCount, by CalendarCount) returns CalendarCount
+	let quotient = try (value / by) otherwise panic("floorDivide: every caller in this file divides by a positive calendar constant")
+
+	if quotient * by > value 'roundedTowardZero'
+		return quotient - 1
+	end 'roundedTowardZero'
+
+	return quotient
+end 'floorDivide'
+
+function nanosIntoSecond(nanos UnixNanos) returns CalendarCount
+	let count = nanos as CalendarCount
+	return count - floorDivide(count, by: NanosPerSecond) * NanosPerSecond
+end 'nanosIntoSecond'
+
+function rfc3339DateTime(nanos UnixNanos) returns String
+	let seconds = floorDivide(nanos as CalendarCount, by: NanosPerSecond)
+	let days = floorDivide(seconds, by: SecondsPerDay)
+	let secondOfDay = seconds - days * SecondsPerDay
+	let date = CivilDate.fromDays(days as UnixDays)
+	let hour = secondOfDay / SecondsPerHour
+	let minute = (secondOfDay mod SecondsPerHour) / SecondsPerMinute
+	let second = secondOfDay mod SecondsPerMinute
+	return "{date.year:04}-{date.month:02}-{date.day:02}T{hour:02}:{minute:02}:{second:02}"
+end 'rfc3339DateTime'

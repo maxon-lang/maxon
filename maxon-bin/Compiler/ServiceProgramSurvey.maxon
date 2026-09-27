@@ -53,6 +53,21 @@ module type ServiceAwaitRoster
 		return Self{funcIndices: FuncIndexArray.create(), sites: ServiceAwaitSiteArray.create()}
 	end 'create'
 
+	// ⚠ An await through `I.handle` may be answered by any live implementer of `I`, so it is an edge
+	// to each of them (E3139); crediting one would let a wait cycle through another compile.
+	function noteReplyAwait(funcIndex FuncIndex, site ServiceAwaitSite, signatures ProgramSignatures)
+		if not signatures.declaresAnInterfaceHandle() or not signatures.isInterfaceHandle(serviceHandleCompanionName(site.serviceTypeName)) 'oneService'
+			self.note(funcIndex, site: site)
+			return
+		end 'oneService'
+
+		for service in serviceTypeRoster(signatures) 'eachService'
+			if signatures.typeImplementsInterface(service, interfaceName: site.serviceTypeName) 'anImplementer'
+				self.note(funcIndex, site: ServiceAwaitSite.create(service, line: site.line, column: site.column, declFilePath: site.declFilePath))
+			end 'anImplementer'
+		end 'eachService'
+	end 'noteReplyAwait'
+
 	function note(funcIndex FuncIndex, site ServiceAwaitSite)
 		self.funcIndices.push(funcIndex)
 		self.sites.push(site)
@@ -261,7 +276,7 @@ module type ServiceProgramSurvey
 	//   module slot in it.
 	//
 	// ⛔⛔ **EACH NARROWING IS WHAT MAKES THE RULE USABLE AT ALL.** Marking EVERY function let one interface
-	// dispatch implicate `Log.startCapture`, whose cure lives in a file the author does not own; marking every
+	// dispatch implicate `TraceCapture.startCapture`, whose cure lives in a file the author does not own; marking every
 	// address-taken function for a witness dispatch refused every service whose handler keeps a `Map`, because a
 	// `Map` hashes its key through a witness and a closure anywhere in the program was then reachable.
 	//
@@ -339,7 +354,7 @@ module type ServiceProgramSurvey
 				// ⛔ **EVERY await IS NOTED, NOT THE LAST ONE.** See `ServiceAwaitRoster` for the ring that
 				// compiled clean while this kept one site per function.
 				if let awaitSite = try project.serviceAwaitSites.get(opIndex) 'awaitsAReply'
-					self.awaits.note(funcIndex, site: awaitSite)
+					self.awaits.noteReplyAwait(funcIndex, site: awaitSite, signatures: signatures)
 				end 'awaitsAReply'
 
 				if let accessSite = try project.moduleVarAccessSites.get(opIndex) 'touchesModuleStorage'
@@ -400,8 +415,9 @@ export function checkServiceRules(project Project, module MaxonModule, signature
 	let letRuleApplies = unmarkableLets.count() != 0
 	let initializerRuleApplies = spawnsAService and funcNames.byName.contains(ModuleInitName)
 	let letInitializerRuleApplies = aLetInitializerMayReachAVar(project.managedGlobals)
+	let registryRuleApplies = project.registryUseSites.count() != 0 and anyInitializerCalls(project.managedGlobals)
 
-	if not (blockingRuleApplies or globalRuleApplies or letRuleApplies or initializerRuleApplies or letInitializerRuleApplies) 'noRuleHasAnythingToSay'
+	if not (blockingRuleApplies or globalRuleApplies or letRuleApplies or initializerRuleApplies or letInitializerRuleApplies or registryRuleApplies) 'noRuleHasAnythingToSay'
 		return
 	end 'noRuleHasAnythingToSay'
 
@@ -441,6 +457,10 @@ export function checkServiceRules(project Project, module MaxonModule, signature
 	if letInitializerRuleApplies 'e3164'
 		checkLetInitializersReachNoVar(project, funcNames: funcNames, survey: survey, dispatch: dispatch, initializers: initializers)
 	end 'e3164'
+
+	if registryRuleApplies 'e3173'
+		checkRegistryReachedFromInitializers(project, module: module, funcNames: funcNames, survey: survey, dispatch: dispatch, initializers: initializers)
+	end 'e3173'
 end 'checkServiceRules'
 
 // Each managed global's slot label, keyed to its position in `globals`.

@@ -212,7 +212,9 @@ end 'ParamAliasLookup'
 // Run the pass over every function that has recorded range-check sites. Functions with none are skipped
 // without touching their blocks.
 export function insertRangeChecks(project Project, module StdModule)
-	logDebug(LogCategory.ir, message: function() gives "insertRangeChecks: {module.funcCount()} function(s)")
+	if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.debug) 'debugging'
+		compilerLogger(CompilerLogGroup.ir).debug("insertRangeChecks: {module.funcCount()} function(s)")
+	end 'debugging'
 
 	// An INDEX loop: the function's position is the key its minted ids are filed under
 	// (`ValueOriginTable.recordDerived`).
@@ -1830,6 +1832,7 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 			osSocketServe or
 			osDebugHost gives false
 		ret(retValId) or
+
 			// ⚠ A throwing function leaves through `errorReturn`, not `ret`
 			// (`LowerMaxonToStd.emitRetOrErrorReturn` picks the terminator off the `throws` clause). Read
 			// as "not a `ret`", its site gets `notFound` from `retBlockOf` and is dropped silently, leaving

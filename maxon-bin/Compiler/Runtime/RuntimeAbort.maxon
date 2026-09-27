@@ -522,12 +522,15 @@ export function emitRuntimeAbort(module StdModule, func IrFunction, block IrBloc
 	let codeId = ids.mint()
 	module.appendOp(block, op: StdOp.const(codeId, value: code, valueType: StdType.i64))
 	module.appendOp(block, op: StdOp.osExit(codeId))
+	emitDeadTerminator(module, func: func, block: block, ids: ids)
+end 'emitRuntimeAbort'
 
+export function emitDeadTerminator(module StdModule, func IrFunction, block IrBlock, ids ValueMinter)
 	match func.returnType 'deadTerminator'
 		void then module.setTerminator(block, op: StdOp.retVoid)
 		value then emitDeadValueReturn(module, block: block, ids: ids)
 	end 'deadTerminator'
-end 'emitRuntimeAbort'
+end 'emitDeadTerminator'
 
 // The dead `ret 0` a value-returning function's abort block carries. The value is unread by
 // construction — `osExit` above it never returns — so a plain 0 is the honest filler. It is a function

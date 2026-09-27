@@ -37,6 +37,7 @@
 export type ServiceSpawnCandidate
 	export let typeName as ByteArray
 	export let member as ByteArray
+	export var gate as SpawnGate
 
 	// ⭐ **WHERE THE `spawn` IS WRITTEN (SV2) — the note every whole-program service rule needs.** A service
 	// rule fires on a METHOD, and whether that method's type is a service is decided by a `spawn` the author
@@ -48,12 +49,167 @@ export type ServiceSpawnCandidate
 	export let line as LineNumber
 	export let column as ColumnNumber
 
-	export static function create(typeName ByteArray, member ByteArray, declFilePath FilePath, line LineNumber, column ColumnNumber) returns ServiceSpawnCandidate
-		return Self{typeName: typeName, member: member, declFilePath: declFilePath, line: line, column: column}
+	export static function create(typeName ByteArray, member ByteArray, gate SpawnGate, declFilePath FilePath, line LineNumber, column ColumnNumber) returns ServiceSpawnCandidate
+		return Self{typeName: typeName, member: member, gate: gate, declFilePath: declFilePath, line: line, column: column}
 	end 'create'
 end 'ServiceSpawnCandidate'
 
 module typealias ServiceSpawnCandidateArray = Array with ServiceSpawnCandidate
+
+export union SpawnGate
+	always
+	defaultOf(declaration DefaultDeclaration)
+end 'SpawnGate'
+
+export type DefaultDeclaration
+	export let key as ByteArray
+	export let declFilePath as FilePath
+	export let keyLine as LineNumber
+	export let keyColumn as ColumnNumber
+	export let keyRange as SourceRange
+	export let isStdlibSource as bool
+	export let exprStart as TokenIndex
+	export let exprEnd as TokenIndex
+	export let spawnedType as ByteArray
+	export let spawnedMember as ByteArray
+
+	export static function create(key ByteArray, declFilePath FilePath, keyRange SourceRange, isStdlibSource bool, exprStart TokenIndex, exprEnd TokenIndex, spawnedType ByteArray, spawnedMember ByteArray) returns DefaultDeclaration
+		return Self{key: key, declFilePath: declFilePath, keyLine: keyRange.line, keyColumn: keyRange.column, keyRange: keyRange, isStdlibSource: isStdlibSource, exprStart: exprStart, exprEnd: exprEnd, spawnedType: spawnedType, spawnedMember: spawnedMember}
+	end 'create'
+
+	export function isTheSameDeclaration(other DefaultDeclaration) returns bool
+		return self.declFilePath.equals(other.declFilePath) and self.keyLine == other.keyLine and self.keyColumn == other.keyColumn
+	end 'isTheSameDeclaration'
+
+	export function spawnsAService() returns bool
+		return not self.spawnedType.isEmpty()
+	end 'spawnsAService'
+end 'DefaultDeclaration'
+
+export typealias DefaultDeclarationArray = Array with DefaultDeclaration
+export typealias DefaultKeyNameSet = Set with ByteArray
+
+module function spawnGatesAgree(gate SpawnGate, other SpawnGate) returns bool
+	return match gate 'gate'
+		always gives match other 'other'
+			always gives true
+			defaultOf gives false
+		end 'other'
+
+		defaultOf(declaration) gives match other 'other'
+			always gives false
+			defaultOf(otherDeclaration) gives declaration.isTheSameDeclaration(otherDeclaration)
+		end 'other'
+	end 'gate'
+end 'spawnGatesAgree'
+
+export type LiveDefaultKeys
+	export var names as DefaultKeyNameSet
+
+	export static function create() returns LiveDefaultKeys
+		return Self{names: DefaultKeyNameSet.create()}
+	end 'create'
+
+	export function sameKeysAs(other DefaultKeyNameSet) returns bool
+		if self.names.count() != other.count() 'differentCounts'
+			return false
+		end 'differentCounts'
+
+		for name in other 'eachName'
+			if not self.names.contains(name) 'missing'
+				return false
+			end 'missing'
+		end 'eachName'
+
+		return true
+	end 'sameKeysAs'
+
+	export function replaceWith(keys DefaultKeyNameSet)
+		var kept = DefaultKeyNameSet.create()
+
+		for name in keys 'eachName'
+			kept.insert(name)
+		end 'eachName'
+
+		self.names = kept
+	end 'replaceWith'
+end 'LiveDefaultKeys'
+
+export let RegistryCurrentMemberName = b"current"
+export let RegistryRegisterMemberName = b"register"
+export let RegistryPublishMemberName = b"publish"
+export let RegistryCreateMemberName = b"create"
+export let RegistryReplacingLabel = b"replacing"
+export let SharedValueTypeName = b"SharedValue"
+
+module function registryMemberIsNamed(member ByteArray) returns bool
+	return member.equals(RegistryCurrentMemberName) or member.equals(RegistryRegisterMemberName)
+end 'registryMemberIsNamed'
+
+module function defaultsReachEachOtherMessage(keys ByteArrayArray) returns String
+	if keys.count() == 1 'readsItself'
+		return "the `default` for {quotedKeyList(keys)} reaches itself — build it without looking it up"
+	end 'readsItself'
+
+	return "the `default`s for {quotedKeyList(keys)} reach each other — build one of them without looking up the other"
+end 'defaultsReachEachOtherMessage'
+
+function quotedKeyList(keys ByteArrayArray) returns String
+	var listed = ""
+
+	for (position, key) in keys.withIterator() 'eachKey'
+		if position.index() > 0 'notTheFirst'
+			listed.append(" and " if position.index() == keys.count() - 1 else ", ")
+		end 'notTheFirst'
+
+		listed.append("`{String.from(key)}`")
+	end 'eachKey'
+
+	return listed
+end 'quotedKeyList'
+
+module function registryReachedFromInitializerMessage(key ByteArray, member ByteArray, globalName ByteArray) returns String
+	return "`{String.from(key)}.{String.from(member)}()` is reached from the initializer of `{String.from(globalName)}`, which runs before any `default` is built — call it from `main`, or from a function `main` calls"
+end 'registryReachedFromInitializerMessage'
+
+export union DefaultSlotKind
+	service
+	value(dropCallee ByteArray, retainCallee ByteArray, shareWalk TransferWalk)
+end 'DefaultSlotKind'
+
+export type DefaultSlot
+	export let declaration as DefaultDeclaration
+	export let label as ByteArray
+	export let initializer as ByteArray
+	export let valueType as MaxonType
+	export let kind as DefaultSlotKind
+
+	export static function create(declaration DefaultDeclaration, valueType MaxonType, kind DefaultSlotKind) returns DefaultSlot
+		return Self{declaration: declaration, label: defaultSlotLabel(declaration.key), initializer: defaultInitializerName(declaration.key), valueType: valueType, kind: kind}
+	end 'create'
+end 'DefaultSlot'
+
+export typealias DefaultSlotArray = Array with DefaultSlot
+
+let DefaultSlotLabelPrefix = b"__default."
+
+export function defaultSlotLabel(key ByteArray) returns ByteArray
+	return "{String.from(DefaultSlotLabelPrefix)}{String.from(key)}".toByteArray()
+end 'defaultSlotLabel'
+
+let DefaultInitializerPrefix = b"__default_init."
+
+export function defaultInitializerName(key ByteArray) returns ByteArray
+	return "{String.from(DefaultInitializerPrefix)}{String.from(key)}".toByteArray()
+end 'defaultInitializerName'
+
+export function defaultKeyOfSlotLabel(label ByteArray) returns ByteArray throws MapError
+	if not bytesStartWith(label, prefix: DefaultSlotLabelPrefix) 'notASlot'
+		throw MapError.keyNotFound
+	end 'notASlot'
+
+	return try label.slice(DefaultSlotLabelPrefix.count(), endIndex: label.count()) otherwise panic("defaultKeyOfSlotLabel: a label starting with the slot prefix is at least that long")
+end 'defaultKeyOfSlotLabel'
 
 // ⭐⭐ **WHY `spawn <T>.<member>(…)` IS OR IS NOT A SERVICE START.** One verdict, TWO askers — the sweep,
 // which mints the companions for the accepting arm, and `Parser.parseSpawn`, which turns every refusing arm
@@ -455,7 +611,6 @@ end 'replyGraphRefusalOfType'
 module function replyTransferWalk(signatures ProgramSignatures, replyType MaxonType, declFilePath FilePath) returns TransferWalk
 	match classifyUnionPayload(signatures, typeNames: signatures.indexTypeNames(), fieldType: replyType, slotScopeFilePath: declFilePath) 'class'
 		scalar or
-			floatPayload or
 			greenThread then return TransferWalk.closed
 		managed(storage, _) then return declaredTransferWalk(signatures, walked: storage, declFilePath: declFilePath)
 		nestedUnion(storage) then return declaredTransferWalk(signatures, walked: storage, declFilePath: declFilePath)
@@ -587,7 +742,7 @@ end 'untransferableParameterNoun'
 // NEEDED TO BE SHARED.** Every other untransferable shape is refused at the message's DECLARATION and can
 // never be an argument to an accepted one, because its TYPE would not match. A Promise is the exception:
 // its value is a bare INTEGER handle, so `keep(n Integer)` accepts one without a word from the type checker.
-// `Parser.moveIntoGreenThread` therefore asks about the VALUE, and it says the same thing this does.
+// `Parser.handIntoGreenThread` therefore asks about the VALUE, and it says the same thing this does.
 module let PromiseParameterNoun = "a Promise, which is a green-thread handle its awaiter owns"
 
 // ⭐ **THE OPAQUE-LAYOUT NOUN, shared by the bare `T` and by any instance whose arguments still name one** —
@@ -759,7 +914,7 @@ module function serviceRosterRefusalMessage(verdict ServiceRosterVerdict, typeNa
 end 'serviceRosterRefusalMessage'
 
 // ⭐⭐ **THE WORDS FOR A VALUE THAT MAY NOT CROSS TO A SERVICE'S GREEN THREAD — the OWNERSHIP refusal, where
-// the two above are about a DECLARATION.** `Parser.moveIntoGreenThread` decides; these say it, and they live
+// the two above are about a DECLARATION.** `Parser.handIntoGreenThread` decides; these say it, and they live
 // here because every other sentence a service refusal can end with lives here too.
 //
 // ⭐ **THE LESSON IS WRITTEN ONCE AND BOTH FINDINGS END WITH IT**, `borrowLaunderDoorClause`'s arrangement
@@ -772,7 +927,7 @@ end 'serviceRosterRefusalMessage'
 let ServiceTransferLesson = "A send moves this value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands (only a `let` local that solely owns its graph is lent instead). Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name"
 
 // The BORROWED half: this frame does not own the value at all. It names no type, because the rule is uniform
-// over borrows whatever their type (`Parser.moveIntoGreenThread`, ⚖ user ruling).
+// over borrows whatever their type (`Parser.handIntoGreenThread`, ⚖ user ruling).
 module function serviceBorrowedTransferMessage(blame String, source String) returns String
 	return "{blame} is BORROWED{serviceTransferSourceClause(source)} — read out of a field, an element or a parameter — so this frame does not own it. {ServiceTransferLesson}"
 end 'serviceBorrowedTransferMessage'
@@ -1041,7 +1196,7 @@ end 'serviceReplySlotIndex'
 // ⭐⭐ **IS THIS PAYLOAD SLOT THE ONE THE COMPILER FILLED ITSELF? — the one home of that test, because THREE
 // mechanisms turn on it and each of them is silently wrong if it drifts.** `serviceReplySlotIndex` above
 // finds the slot to mint a cell into; `Parser.moveMessagePayloads` SKIPS it, because a cell is not a
-// refcounted box and `moveIntoGreenThread` would refuse it as the author's own argument (E3135); and
+// refcounted box and `handIntoGreenThread` would refuse it as the author's own argument (E3135); and
 // `Parser.emitEnumBox` skips its ARGUMENT TYPE CHECK, because the slot is declared `MaxonType.integer`
 // deliberately (a raw pointer the P1.3 destructor cascade must not follow) while the cell it holds is typed
 // `Promise with (T, E)` since SV4 — an E3005 on every reply-bearing send if it were asked.
@@ -1173,39 +1328,12 @@ module function buildServiceHandleStruct(signatures ProgramSignatures, typeName 
 	return handle
 end 'buildServiceHandleStruct'
 
-// ⛔⛔ **IT IS COLLECT-THEN-APPLY, AND THAT IS FORCED BY THE BORROW RULE RATHER THAN CHOSEN.** Minting inside
-// the walk mutates `signatures` while `candidate` is an element BORROWED out of it:
-// **`E3070: cannot mutate 'signatures' via 'recordServiceCompanions' while it is borrowed by 'candidate'`**.
-// The same shape `ProgramSignatures.rewriteRecordedReturnTypes` states once for all three of its rules: a
-// pass that rewrites the very map it walks collects first. Copying the names first ends the aliasing
-// before any write happens.
-// ⭐⭐ **EVERY TYPE THIS PROGRAM SPAWNS, DEDUPED, IN FIRST-SPAWN ORDER — THE ONE ROSTER OF "WHAT IS A
-// SERVICE HERE?".** Two askers, and a disagreement between them is not a diagnostic: the SWEEP mints the
-// companions from it (below), and `Runtime/ServiceLoop.installServiceLoops` builds the loops from it — one
-// for a monomorphic service, one per spawned INSTANTIATION for a generic one. A type on one list and not the
-// other is a handle whose loop nothing built (a link failure) or a loop for a type with no request union (a
-// panic inside the synthesis) — so it is derived once.
-//
-// ⚠ It DEDUPES, because two `spawn`s of one type through two different factories are two CANDIDATES and one
-// service. The mint below still asks the registry as well, for the reason its own comment gives; this makes
-// the LOOP builder — which has no registry to collide with — correct by construction.
 // ⭐⭐ **WHERE THE `spawn` THAT MADE `typeName` A SERVICE IS WRITTEN (SV2), for the note every
 // whole-program service rule carries.** The FIRST candidate naming the type wins — see
 // `ServiceSpawnCandidate.declFilePath` for why that is a choice and not an accident.
 //
 // ⚠ Asked only of a type already known to be a service, so a miss is a compiler bug: the roster IS the list
 // of types some candidate named.
-// ⭐ **THE SERVICE A QUALIFIED MESSAGE NAME BELONGS TO.** A message is `<T>.<m>` by construction
-// (`qualifiedMethodName` is its one builder), so the owner is the roster entry the name starts with — asked
-// of the ROSTER rather than by splitting the string, because a service type name may itself contain a dot
-// (a namespaced declaration) and a split would pick the wrong half.
-module function serviceTypeOfMessage(signatures ProgramSignatures, messageName ByteArray) returns ByteArray
-	match serviceMessageOwnerOf(signatures, callee: messageName) 'owner'
-		notAMessage then panic("serviceTypeOfMessage: `{String.from(messageName)}` is on no service's message roster — every caller reached it through a `serviceReplyCell`, which only a send of a real message mints")
-		ofService(typeName, _) then return typeName
-	end 'owner'
-end 'serviceTypeOfMessage'
-
 module function serviceSpawnSiteOf(signatures ProgramSignatures, typeName ByteArray) returns ServiceSpawnCandidate
 	for candidate in signatures.serviceSpawnCandidates() 'eachCandidate'
 		if candidate.typeName.equals(typeName) 'theFirstSpawnOfThisType'
@@ -1216,43 +1344,47 @@ module function serviceSpawnSiteOf(signatures ProgramSignatures, typeName ByteAr
 	panic("serviceSpawnSiteOf: nothing spawns `{String.from(typeName)}` — every caller has it off `serviceTypeRoster`, which is built from the candidate list this walks")
 end 'serviceSpawnSiteOf'
 
-// ⭐⭐ **IS THIS FUNCTION A MESSAGE, AND OF WHICH SERVICE? (SV2)** Asked of a qualified method name, which is
-// what an `IrFunction` carries. It is the door the reply-escape rule and the cycle check both ask, so the
-// two cannot come to disagree about what a message is — and the answer is read off the REQUEST UNION, the
-// same roster `dispatchOnServiceHandle` resolves a send against.
+module type ServiceMessage
+	export let callee as ByteArray
+	export let typeName as ByteArray
+	export let methodName as ByteArray
+
+	static function create(callee ByteArray, typeName ByteArray, methodName ByteArray) returns ServiceMessage
+		return Self{callee: callee, typeName: typeName, methodName: methodName}
+	end 'create'
+end 'ServiceMessage'
+
+module typealias ServiceMessageIndex = Map with (ByteArray, ServiceMessage)
+
+// ⭐⭐ **EVERY MESSAGE, KEYED BY ITS QUALIFIED HANDLER NAME, WITH ITS SERVICE (SV2)** — the name is
+// what an `IrFunction` carries. The reply-escape rule and the cycle check both read it, so the two
+// cannot come to disagree about what a message is — and it is read off the REQUEST UNIONS, the same
+// roster `dispatchOnServiceHandle` resolves a send against. Built once, after the companions are
+// minted (`Queries.queryProgramSignatures`), so an ask is one probe.
 //
 // A message is exactly a function `<T>.__loop` calls (`serviceArmAt`), so the pill is never one.
-//
-// ⚡ **IT ALLOCATES PER ASK — the roster, and a qualified name and a boxed arm per variant — so a
-// PER-STATEMENT caller gates on `ProgramSignatures.spawnsAnyService()` first.** That gate lives at the door
-// that needs it (`Parser.requireServiceReplyDoesNotAliasState`) rather than here, because here it could only
-// skip the roster and would still box a `notAMessage` to say so.
-module function serviceMessageOwnerOf(signatures ProgramSignatures, callee ByteArray) returns ServiceMessageOwner
-	for typeName in serviceTypeRoster(signatures) 'eachService'
+module function serviceMessageIndexOf(signatures ProgramSignatures) returns ServiceMessageIndex
+	var index = ServiceMessageIndex.create()
+
+	for typeName in serviceCompanionRoster(signatures) 'eachService'
 		let request = try serviceRequestLayoutOf(signatures, typeName: typeName) otherwise continue
 
 		for caseIndex in 0 upto request.caseCount() 'eachVariant'
-			let isThisMessage = match serviceArmAt(request, typeName: typeName, caseIndex: caseIndex) 'arm'
-				shutdownPill gives false
-				message(handler) gives handler.equals(callee)
+			match serviceArmAt(request, typeName: typeName, caseIndex: caseIndex) 'arm'
+				shutdownPill then continue
+				message(handler) then fileFirstServiceMessage(index, message: ServiceMessage.create(handler, typeName: typeName, methodName: request.caseNameAt(caseIndex)))
 			end 'arm'
-
-			if isThisMessage 'thisMessage'
-				return ServiceMessageOwner.ofService(typeName, methodName: request.caseNameAt(caseIndex))
-			end 'thisMessage'
 		end 'eachVariant'
 	end 'eachService'
 
-	return ServiceMessageOwner.notAMessage
-end 'serviceMessageOwnerOf'
+	return index
+end 'serviceMessageIndexOf'
 
-// The answer above. A union rather than an empty name, because "this function is not a message" is the
-// answer for almost every function in almost every program and an empty `ByteArray` would be a sentinel a
-// caller could index with.
-module union ServiceMessageOwner
-	notAMessage
-	ofService(typeName ByteArray, methodName ByteArray)
-end 'ServiceMessageOwner'
+function fileFirstServiceMessage(index ServiceMessageIndex, message ServiceMessage)
+	if not index.contains(message.callee) 'theFirstOwner'
+		index.upsert(message.callee, value: message)
+	end 'theFirstOwner'
+end 'fileFirstServiceMessage'
 
 // ⭐⭐ **`<T>.request`'s LAYOUT — the ONE door, and it had THREE spellings before SV2 asked for a fourth.**
 // `Parser.dispatchOnServiceHandle` resolves a send against it, `ServiceLoop` builds the dispatch and the
@@ -1316,7 +1448,7 @@ module function requireServiceRequestLayout(signatures ProgramSignatures, typeNa
 end 'requireServiceRequestLayout'
 
 // ⭐⭐ **WHAT `<T>.__loop`'s ARM FOR ONE REQUEST VARIANT RUNS — the ONE answer to "which functions does the
-// loop call?"** `ServiceLoop.buildServiceArm` builds each arm from it, `serviceMessageOwnerOf` answers "is this
+// loop call?"** `ServiceLoop.buildServiceArm` builds each arm from it, `serviceMessageIndexOf` answers "is this
 // function a message?" from it, and `serviceLoopHandlerCallees` hands the reachability walk the same list, so
 // the handlers the loop calls and the stdlib bodies the compile builds for them cannot come apart.
 module union ServiceArm
@@ -1353,10 +1485,40 @@ module function serviceLoopHandlerCallees(signatures ProgramSignatures, typeName
 	return callees
 end 'serviceLoopHandlerCallees'
 
+// ⭐⭐ **EVERY TYPE THIS PROGRAM SPAWNS, DEDUPED, IN FIRST-SPAWN ORDER — THE ROSTERS OF "WHAT IS A
+// SERVICE HERE?".** The SWEEP mints the companions from `serviceCompanionRoster`, which counts
+// every spawn, one inside a `default` whose key is not live included, because the sweep runs before
+// liveness is known. `Runtime/ServiceLoop.installServiceLoops` builds the loops from
+// `serviceTypeRoster`, which leaves those out: nothing built spawns them, so no loop is owed. Both
+// come from one derivation, so a live type cannot be on one list and not the other — a handle whose
+// loop nothing built (a link failure) or a loop for a type with no request union (a panic inside
+// the synthesis).
 module function serviceTypeRoster(signatures ProgramSignatures) returns ByteArrayArray
+	return serviceRosterOf(signatures, liveOnly: true)
+end 'serviceTypeRoster'
+
+module function serviceCompanionRoster(signatures ProgramSignatures) returns ByteArrayArray
+	return serviceRosterOf(signatures, liveOnly: false)
+end 'serviceCompanionRoster'
+
+// ⚠ It DEDUPES, because two `spawn`s of one type through two different factories are two CANDIDATES
+// and one service. The mint still asks the registry as well, for the reason its own comment gives;
+// this makes the LOOP builder — which has no registry to collide with — correct by construction.
+//
+// ⛔⛔ **IT RETURNS NAMES, AND THAT IS FORCED BY THE BORROW RULE RATHER THAN CHOSEN.** Minting inside
+// the walk mutates `signatures` while `candidate` is an element BORROWED out of it: **`E3070:
+// cannot mutate 'signatures' via 'recordServiceCompanions' while it is borrowed by 'candidate'`**.
+// The same shape `ProgramSignatures.rewriteRecordedReturnTypes` states once for all three of its
+// rules: a pass that rewrites the very map it walks collects first. Copying the names first ends
+// the aliasing before any write happens.
+function serviceRosterOf(signatures ProgramSignatures, liveOnly bool) returns ByteArrayArray
 	var services = ByteArrayArray.create()
 
 	for candidate in signatures.serviceSpawnCandidates() 'eachCandidate'
+		if liveOnly and not signatures.spawnGateIsOpen(candidate.gate) 'aDefaultNothingBuilds'
+			continue
+		end 'aDefaultNothingBuilds'
+
 		match classifyServiceTarget(signatures, typeName: candidate.typeName, member: candidate.member) 'verdict'
 			// Refused at the `spawn` by `Parser.parseSpawn`, which asks this same classification. Nothing is
 			// minted for any of them — see this file's header for why the sweep never reports.
@@ -1376,7 +1538,7 @@ module function serviceTypeRoster(signatures ProgramSignatures) returns ByteArra
 	end 'eachCandidate'
 
 	return services
-end 'serviceTypeRoster'
+end 'serviceRosterOf'
 
 // A linear scan, because the list is the number of DISTINCT SERVICE TYPES a program declares — one or two in
 // every program that has any — and a `Set with ByteArray` would cost a hash per candidate to beat a compare
@@ -1405,14 +1567,14 @@ end 'serviceNameAlreadyListed'
 // into `signatures.hash`, and `Queries.currentParseMemoKey` therefore invalidates file A's parse — which is
 // where `Calc` is declared and where a reference to `Calc.handle` resolves.
 module function synthesizeServiceCompanions(signatures ProgramSignatures)
-	let services = serviceTypeRoster(signatures)
+	let services = serviceCompanionRoster(signatures)
 
 	// ⭐⭐ **PASS 1 — EVERY HANDLE, BEFORE ANY REQUEST UNION, AND THE ORDER IS NOT A PREFERENCE.** A message
 	// may take a `<S>.handle` parameter, so a request union's PAYLOAD may be typed at a handle: at the service's
 	// own (`Counter.reportThen(peer Counter.handle)`) or at a peer's
 	// (`Worker.run(sink Logger.handle)`). `serviceRequestPayloads` resolves each parameter through
 	// `declaredSlotType`, which answers `unresolved` for a struct no registry holds yet — and an `unresolved`
-	// payload takes `Parser.requirePayloadLowerable` into `classifyUnionPayload`'s panic. MEASURED as exactly
+	// payload reaches `classifyUnionPayload`'s panic. MEASURED as exactly
 	// that panic, on `services/two-instances-are-independent`, from a one-pass mint that built each pair whole.
 	//
 	// A handle depends on nothing but its own service's layout, so pass 1 can never need pass 2's output and
@@ -1427,6 +1589,10 @@ module function synthesizeServiceCompanions(signatures ProgramSignatures)
 
 		signatures.recordServiceHandle(buildServiceHandleStruct(signatures, typeName: typeName), serviceTypeName: typeName)
 	end 'eachHandle'
+
+	for typeName in services 'eachInterfaceHandle'
+		mintInterfaceHandlesOf(signatures, typeName: typeName)
+	end 'eachInterfaceHandle'
 
 	// PASS 2 — the request unions, now that every handle a payload could be declared at exists.
 	for typeName in services 'eachRequest'
@@ -1453,6 +1619,87 @@ module function synthesizeServiceCompanions(signatures ProgramSignatures)
 		end 'eachMessage'
 	end 'eachReplyErrorType'
 end 'synthesizeServiceCompanions'
+
+function mintInterfaceHandlesOf(signatures ProgramSignatures, typeName ByteArray)
+	let service = spawnTargetLayoutOf(signatures, typeName: typeName)
+
+	if not service.typeParamNames.isEmpty() 'aGenericService'
+		return
+	end 'aGenericService'
+
+	for interfaceName in service.conformsTo 'eachConformance'
+		if not signatures.nameDeclaresAnInterface(interfaceName) 'notAnInterface'
+			continue
+		end 'notAnInterface'
+
+		if signatures.containsStructInAnyFile(serviceHandleCompanionName(interfaceName)) 'alreadyMinted'
+			continue
+		end 'alreadyMinted'
+
+		match signatures.interfaceDeclarationOf(interfaceName) 'site'
+			declared(_, visibility, declFilePath) then signatures.recordInterfaceHandle(buildInterfaceHandleStruct(interfaceName, visibility: visibility, declFilePath: declFilePath), interfaceName: interfaceName, representative: typeName)
+			undeclared then continue
+		end 'site'
+	end 'eachConformance'
+end 'mintInterfaceHandlesOf'
+
+let InterfaceHandleTableFieldName = b"sendTable"
+module let InterfaceHandleTableOffset = 8 as ByteOffset
+module let InterfaceHandleBoxSize = 16 as ParsedInt
+
+function buildInterfaceHandleStruct(interfaceName ByteArray, visibility Visibility, declFilePath FilePath) returns StructLayout
+	var handle = StructLayout.create(serviceHandleCompanionName(interfaceName), visibility: visibility, declFilePath: declFilePath)
+	handle.addField(ServiceHandleMailboxFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText)
+	handle.addField(InterfaceHandleTableFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText)
+
+	if handle.sizeBytes() != InterfaceHandleBoxSize or handle.offsetOfField(0) != ServiceHandleMailboxOffset or handle.offsetOfField(1) != InterfaceHandleTableOffset 'geometryDrifted'
+		panic("buildInterfaceHandleStruct: `{String.from(handle.name)}` lays out {handle.sizeBytes()} byte(s) with its mailbox at {handle.offsetOfField(0)} and its send table at {handle.offsetOfField(1)}, against the {InterfaceHandleBoxSize}/{ServiceHandleMailboxOffset}/{InterfaceHandleTableOffset} the registry runtime spells")
+	end 'geometryDrifted'
+
+	return handle
+end 'buildInterfaceHandleStruct'
+
+module function synthesizeInterfaceRequestUnions(signatures ProgramSignatures)
+	for interfaceName in signatures.interfacesWithHandles() 'eachInterface'
+		if signatures.containsEnumInAnyFile(serviceRequestCompanionName(interfaceName)) 'alreadyMinted'
+			continue
+		end 'alreadyMinted'
+
+		match signatures.interfaceDeclarationOf(interfaceName) 'site'
+			declared(_, visibility, declFilePath) then signatures.recordServiceRequest(buildInterfaceRequestUnion(signatures, interfaceName: interfaceName, visibility: visibility, declFilePath: declFilePath))
+			undeclared then panic("synthesizeInterfaceRequestUnions: `{String.from(interfaceName)}` minted a handle from its declaration site, which is gone")
+		end 'site'
+	end 'eachInterface'
+end 'synthesizeInterfaceRequestUnions'
+
+function buildInterfaceRequestUnion(signatures ProgramSignatures, interfaceName ByteArray, visibility Visibility, declFilePath FilePath) returns EnumLayout
+	let concrete = requireServiceRequestLayout(signatures, typeName: signatures.interfaceHandleRepresentative(interfaceName))
+	var request = EnumLayout.create(serviceRequestCompanionName(interfaceName), isUnion: true, conformsTo: sharedEmptyDeclaredConformances, visibility: visibility, declFilePath: declFilePath, backing: EnumBacking.integer)
+	addServiceRequestCase(request, caseName: ServiceShutdownCaseName, payloads: copiedPayloads(concrete.payloadsAt(ServiceShutdownCaseIndex)))
+	let requirements = try signatures.interfaceRequirementSlots(interfaceName) otherwise CollectedInterfaceMethodArray.create()
+
+	for requirement in requirements 'eachRequirement'
+		let caseIndex = serviceMessageCaseIndex(concrete, member: requirement.method.name)
+
+		if caseIndex >= concrete.caseCount() or request.indexOfCase(requirement.method.name) < request.caseCount() 'notSendable'
+			continue
+		end 'notSendable'
+
+		addServiceRequestCase(request, caseName: requirement.method.name, payloads: copiedPayloads(concrete.payloadsAt(caseIndex)))
+	end 'eachRequirement'
+
+	return request
+end 'buildInterfaceRequestUnion'
+
+function copiedPayloads(payloads PayloadFieldArray) returns PayloadFieldArray
+	var copy = PayloadFieldArray.create()
+
+	for field in payloads 'eachField'
+		copy.push(field)
+	end 'eachField'
+
+	return copy
+end 'copiedPayloads'
 
 // ⭐⭐ **THE THIRD PASS'S BODY FOR ONE MESSAGE — split out so the roster walk above stays two lines and the
 // four gates below read as one sequence.**

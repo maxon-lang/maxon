@@ -296,18 +296,18 @@ end 'main'
 
 <!-- test: builtins-clock.wall-clock-body-is-runtime-source -->
 ⭐⭐ **THE CALENDAR'S BODY IS MAXON SOURCE THE COMPILER READS OUT OF THE TREE, AND THIS IS THE CASE THAT
-SEES IT.** `runtime/Clock.maxon` writes `__clock_now_unix_s` against the `__Raw` floor — a frame word,
-`osReadWallClock` into it, a load, the 1601→1970 shift and the ticks→seconds divide — and the block
-below renders what the back end made of that source. Every OTHER case in this file reads the clock's
-ANSWER, and each would pass just as happily against a body the compiler built itself; only a rendered
-body says which tier it came from.
+SEES IT.** `runtime/Clock.maxon` writes `__clock_now_unix_s` as a call to `clockTicksSince1970` — the
+helper both wall clocks share, which reads the host's FILETIME through a `__Raw` frame word and applies
+the 1601→1970 shift — followed by the ticks→seconds divide, and the block below renders what the back end
+made of that source. Every OTHER case in this file reads the clock's ANSWER, and each would pass just as
+happily against a body the compiler built itself; only a rendered body says which tier it came from.
 
-⚠ **THE DIVIDE IS THE HALF THAT NEEDS WATCHING.** The source states both its types `int(0 to u64.max)`,
-so the quotient is emitted UNSIGNED and reduced to an unsigned magic multiply — and this golden is where
-a range guard would show up, as an `__rc_panic` on the loaded word or on the quotient. The loaded word
-carries a proven whole-word interval, so neither has anything to reject. The divisor is a literal
-constant, which is what keeps the divide BARE: a `__checked_div` call appearing here is a divisor that
-stopped being provably non-zero.
+⚠ **THE DIVIDE IS THE HALF THAT NEEDS WATCHING.** It is inline in this body. The source states both its
+types `int(0 to u64.max)`, so the quotient is emitted UNSIGNED and reduced to an unsigned magic
+multiply — and this golden is where a range guard would show up, as an `__rc_panic` on the helper's
+answer or on the quotient. The helper's answer carries a proven whole-word interval, so neither has
+anything to reject. The divisor is a literal constant, which is what keeps the divide BARE: a
+`__checked_div` call appearing here is a divisor that stopped being provably non-zero.
 
 ⚠ `main` reads the clock TWICE so that the rendered body is the one that runs: a called-once function is
 moved into its caller, which would leave this golden pinning an emitted leftover.

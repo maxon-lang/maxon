@@ -5955,6 +5955,10 @@ export function emitSchedMainHasCompleted(module StdModule, block IrBlock, ids V
 	return emitCmp(module, block: block, a: running, b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
 end 'emitSchedMainHasCompleted'
 
+export function emitSchedDrainIsStuck(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+	return emitSchedPhaseIs(module, block: block, phase: emitLoadAcquireGlobalWord(module, block: block, label: SchedPhaseLabel, ids: ids), want: SchedPhase.stuck, ids: ids)
+end 'emitSchedDrainIsStuck'
+
 // 1 when the loaded phase word `phase` is `want`, else 0.
 function emitSchedPhaseIs(module StdModule, block IrBlock, phase ValueId, want SchedPhase, ids ValueMinter) returns ValueId
 	return emitCmp(module, block: block, a: phase, b: emitConst(module, block: block, value: want.rawValue as ParsedInt, ids: ids), pred: StdCmpPred.eq, ids: ids)

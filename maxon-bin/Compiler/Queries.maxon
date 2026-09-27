@@ -101,7 +101,10 @@ end 'lexedTokens'
 // opens its own `parse` probe, so the two phases are disjoint by construction and neither absorbs the other.
 function tokenizedHere(project Project, content String) returns TokenArray throws LexerError
 	let lexProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.lex)
-	logDebug(LogCategory.lexer, message: function() gives "Starting lexer")
+
+	if compilerLogEnabled(CompilerLogGroup.lexer, level: LogLevel.debug) 'debugging'
+		compilerLogger(CompilerLogGroup.lexer).debug("Starting lexer")
+	end 'debugging'
 
 	let tokens = try tokenize(content, keywords: project.keywords) otherwise (lexErr) 'lexFail'
 		recordPhase(project, phase: CompilePhase.lex, probe: lexProbe)
@@ -248,6 +251,10 @@ end 'programSourceByteCount'
 export function queryProgramSignatures(project Project) returns ProgramSignatures throws CompileError
 	if signaturesCacheValid(project) 'hit'
 		project.db.signatureHits = project.db.signatureHits + 1
+
+		// The sweep reads no liveness, so the memo's key omits the live keys and a hit adopts the current
+		// ones.
+		project.db.signatureCache.value.adoptLiveDefaultKeys(project.db.liveDefaultKeys)
 		return project.db.signatureCache.value
 	end 'hit'
 
@@ -260,6 +267,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// `settleBaseline` — a whole-program hint there would be slots and an arena copied into every worker.
 	project.typeNames.reserveForSource(programSourceByteCount(project))
 	signatures.adoptInstantiatedByAParse(project.db.instantiatedByAParse)
+	signatures.adoptLiveDefaultKeys(project.db.liveDefaultKeys)
 
 	// Set before any file is swept, so every reader below (and every `Parser.create` in every later
 	// query) sees the answer rather than the seeded `false`. See `livesUnderStdlibDirectory`.
@@ -422,6 +430,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// Left unnormalized this would be a wrong SIZE, not just a wrong name: an existential field
 	// occupies two slots and a `named` one.
 	signatures.normalizeSweptInterfaceTypes()
+	synthesizeInterfaceRequestUnions(signatures)
 
 	// Strictly after the two lines above: the interface fold fills the registry this reads a `with`
 	// argument against, and the normalization settles the one spelling an argument arrives in. Before
@@ -449,6 +458,8 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// fan-out must never make.
 	signatures.deriveInstanceNames()
 
+	signatures.fileServiceMessages(serviceMessageIndexOf(signatures))
+
 	// Last: from here on the index is what every parse reads, and a write past it is journaled and undone.
 	signatures.settleBaseline()
 	recordPhase(project, phase: CompilePhase.signatures, probe: constProbe)
@@ -458,11 +469,11 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// board. `admitted` is what THIS compile offered `stdlib/`'s files; `holding` is what the process
 	// has kept — the two are equal while the store is bounded, and only `holding` moves if it ever
 	// stops being.
-	//
-	// The holding count is read HERE rather than inside the message: the message is an address-taken body, which
-	// E3143 may judge a run-time dispatch on a pool worker to land on, and the count reads the process-wide store.
 	let holding = sharedMemoEntryCount()
-	logDebug(LogCategory.compiler, message: function() gives "shared stdlib memo — {project.db.sharedTokenHits} token hit(s), {project.db.sharedActiveTokenHits} active-token hit(s), {project.db.sharedProducerMaskHits} producer-mask hit(s), {project.db.shareableTokenHashes.count()} admitted, {holding} holding")
+
+	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
+		compilerLogger(CompilerLogGroup.compiler).debug("shared stdlib memo — {project.db.sharedTokenHits} token hit(s), {project.db.sharedActiveTokenHits} active-token hit(s), {project.db.sharedProducerMaskHits} producer-mask hit(s), {project.db.shareableTokenHashes.count()} admitted, {holding} holding")
+	end 'debugging'
 
 	project.db.signatureCache = SignatureMemo.create(signatures, keyHash: signatureMemoKey(project), computed: true)
 	return signatures
@@ -618,12 +629,23 @@ end 'discoverWholeProgramTokenFacts'
 function noteWholeProgramTokenFactsIn(project Project, signatures ProgramSignatures, paths MaxonSourcePathArray, isStdlibSource bool) throws CompileError
 	for path in paths 'eachFile'
 		let tokens = try queryActiveTokens(project, path: path)
+		var gate = SpawnGate.always
+		var gateEnd = 0 as TokenIndex
 
 		for i in 0 upto tokens.count() 'eachToken'
 			let tok = try tokens.get(i) otherwise panic("noteWholeProgramTokenFactsIn: tokens.get OOB at {i} below count {tokens.count()}")
 
+			// A spawn inside a `default`'s expression makes its type a service only while the key is live,
+			// so a program that never reaches the key spawns nothing and keeps its single-threaded runtime.
+			if defaultDeclarationAt(tokens, index: i) 'aDefaultDeclaration'
+				let declaration = defaultDeclarationFrom(tokens, index: i, path: path, isStdlibSource: isStdlibSource)
+				signatures.noteDefaultDeclaration(declaration)
+				gate = SpawnGate.defaultOf(declaration)
+				gateEnd = declaration.exprEnd
+			end 'aDefaultDeclaration'
+
 			if tokenIsTheSpawnKeyword(tok) 'aSpawnMayStartHere'
-				noteServiceSpawnFollowing(signatures, tokens: tokens, index: i, path: path)
+				noteServiceSpawnFollowing(signatures, tokens: tokens, index: i, path: path, gate: gate.clone() if i < gateEnd else SpawnGate.always)
 			end 'aSpawnMayStartHere'
 
 			if tok.kind != TokenKind.type 'notATypeKeyword'
@@ -666,7 +688,7 @@ end 'noteWholeProgramTokenFactsIn'
 // service, because `bump` is an instance method — see `ServiceTargetVerdict`. A shape this probe
 // declines is still refused at the site: `Parser.parseSpawn` claims every `spawn <name>` the
 // grammar can reach.
-function noteServiceSpawnFollowing(signatures ProgramSignatures, tokens TokenArray, index TokenIndex, path FilePath)
+function noteServiceSpawnFollowing(signatures ProgramSignatures, tokens TokenArray, index TokenIndex, path FilePath, gate SpawnGate)
 	let typeTok = try tokens.get(index + 1) otherwise return
 
 	if not tokenCanBeAName(typeTok) 'notATypeName'
@@ -694,7 +716,7 @@ function noteServiceSpawnFollowing(signatures ProgramSignatures, tokens TokenArr
 	// The `spawn` KEYWORD's position, not the type token's: it is the construct the note names, and it
 	// is what an author scanning for "where did this become a service?" is looking for.
 	let spawnTok = try tokens.get(index) otherwise return
-	signatures.noteServiceSpawnCandidate(typeTok.value, member: memberTok.value, declFilePath: path, line: spawnTok.line, column: spawnTok.column)
+	signatures.noteServiceSpawnCandidate(typeTok.value, member: memberTok.value, gate: gate, declFilePath: path, line: spawnTok.line, column: spawnTok.column)
 end 'noteServiceSpawnFollowing'
 
 // The walk advances while the token could belong to a header and stops the moment one could not, so
@@ -1112,7 +1134,7 @@ module function parseQueryOf(project Project, path FilePath) returns ParseQuery 
 	let isStdlibSource = isStdlibSourceFile(project, path: path)
 	let buildsBodies = buildsBodiesFor(project, path: path, isStdlibSource: isStdlibSource)
 	let overrides = project.db.rowSetOverrides.of(path)
-	let keyHash = try currentParseMemoKey(project, path: path, signatureHash: signatures.hash, buildsBodies: buildsBodies, overrides: overrides)
+	let keyHash = try currentParseMemoKey(project, path: path, signatureHash: Hasher.combined(signatures.hash, value: signatures.livenessDigestParsedBy(path)), buildsBodies: buildsBodies, overrides: overrides)
 
 	if let memo = try project.db.parseCache.get(path) 'memoized'
 		if memo.keyHash == keyHash 'hit'
@@ -1221,7 +1243,7 @@ function foldTheFrontEnd(project Project, pool FrontEndPool) returns MaxonModule
 	// moved.
 	var merged = try foldEveryFileIntoAModule(project, pool: pool)
 
-	while try growStdlibBodyDemand(project, module: merged, signatures: try queryProgramSignatures(project)) 'demandGrew'
+	while try frontEndMustFoldAgain(project, module: merged) 'demandGrew'
 		// Released before the next round rather than left to the reassignment below, which drops it only
 		// after the replacement is fully built — two whole-program modules alive at once, at the peak.
 		merged.releaseWholly()
@@ -1234,6 +1256,58 @@ function foldTheFrontEnd(project Project, pool FrontEndPool) returns MaxonModule
 
 	return merged
 end 'foldTheFrontEnd'
+
+function frontEndMustFoldAgain(project Project, module MaxonModule) returns bool throws CompileError
+	let signatures = try queryProgramSignatures(project)
+	let reach = try libraryReachOf(project, module: module, signatures: signatures)
+	let demandGrew = try growStdlibBodyDemand(project, reach: reach)
+	let liveKeysMoved = liveDefaultKeysMoved(project, module: module, signatures: signatures, reached: reachedLibraryNamesOf(reach))
+	return demandGrew or liveKeysMoved
+end 'frontEndMustFoldAgain'
+
+// A key goes live when a reached body names its slot, and that changes what its declaring file
+// parses (a `default`'s initializer is built only for a live key), so a moved set folds the front
+// end again.
+function liveDefaultKeysMoved(project Project, module MaxonModule, signatures ProgramSignatures, reached FunctionNameSet) returns bool
+	if not signatures.declaresADefault() or projectHasErrors(project) 'nothingToDecide'
+		return false
+	end 'nothingToDecide'
+
+	var live = DefaultKeyNameSet.create()
+
+	for func in module.functions 'eachFunction'
+		if isLibraryFunction(project, func: func) and not reached.contains(func.name) 'anUnreachedLibraryBody'
+			continue
+		end 'anUnreachedLibraryBody'
+
+		noteDefaultKeysNamedBy(module, func: func, into: live)
+	end 'eachFunction'
+
+	if project.db.liveDefaultKeys.sameKeysAs(live) 'unchanged'
+		return false
+	end 'unchanged'
+
+	project.db.liveDefaultKeys.replaceWith(live)
+	return true
+end 'liveDefaultKeysMoved'
+
+function noteDefaultKeysNamedBy(module MaxonModule, func IrFunction, into DefaultKeyNameSet)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("noteDefaultKeysNamedBy: blockRef from func.blockRefs not in module.blocks")
+
+		for opIndex in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIndex) otherwise panic("noteDefaultKeysNamedBy: opRef {opIndex} not in module.ops")
+
+			if not maxonOpNamesAGlobalLabel(op) 'namesNoSlot'
+				continue
+			end 'namesNoSlot'
+
+			if let key = try defaultKeyOfSlotLabel(maxonOpGlobalLabelName(op)) 'aDefaultSlot'
+				into.insert(key)
+			end 'aDefaultSlot'
+		end 'eachOp'
+	end 'eachBlock'
+end 'noteDefaultKeysNamedBy'
 
 // One round of the merge: every file's artifact folded into a fresh module, with the registries
 // `mergeArtifact` builds reset first. Artifacts are the source of truth for those registries, so a
@@ -1273,7 +1347,10 @@ function foldEveryFileIntoAModule(project Project, pool FrontEndPool) returns Ma
 		merged = MaxonModule.create()
 	end 'untilTheFoldStands'
 
-	logDebug(LogCategory.compiler, message: function() gives "merge: {folds} fold(s) of {project.db.sourcePaths.count()} file(s)")
+	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
+		compilerLogger(CompilerLogGroup.compiler).debug("merge: {folds} fold(s) of {project.db.sourcePaths.count()} file(s)")
+	end 'debugging'
+
 	return merged
 end 'foldEveryFileIntoAModule'
 
@@ -1312,7 +1389,10 @@ function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSigna
 
 	if not newlyInstantiated.isEmpty() 'aParseInstantiatedATypeTheIndexDidNotCount'
 		for name in newlyInstantiated 'eachType'
-			logDebug(LogCategory.compiler, message: function() gives "instantiated by a parse: '{String.from(name)}' — the signature index is settled again")
+			if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
+				compilerLogger(CompilerLogGroup.compiler).debug("instantiated by a parse: '{String.from(name)}' — the signature index is settled again")
+			end 'debugging'
+
 			noteMoved(moved, name: name)
 			project.db.instantiatedByAParse.file(name)
 		end 'eachType'
@@ -1330,7 +1410,10 @@ function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSigna
 
 	if not needless.isEmpty() 'aFiledTypeNoLongerNeedsFiling'
 		for name in needless 'eachType'
-			logDebug(LogCategory.compiler, message: function() gives "no longer instantiated only by a parse: '{String.from(name)}' — the signature index is settled again")
+			if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
+				compilerLogger(CompilerLogGroup.compiler).debug("no longer instantiated only by a parse: '{String.from(name)}' — the signature index is settled again")
+			end 'debugging'
+
 			noteMoved(moved, name: name)
 			project.db.instantiatedByAParse.drop(name)
 		end 'eachType'
@@ -1341,17 +1424,11 @@ function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSigna
 	return FoldVerdict.answersMoved if rowSetAnswersMoved(project, artifacts: artifacts, signatures: signatures) else FoldVerdict.stands
 end 'foldVerdict'
 
-// Reported from the merge rather than from the parse: a worker structurally cannot log through `Logger`
-// (`Diagnostics.maxon` owns that rule), so this is the first place a file's own table can be read out.
 function logTypeNameTable(artifact FileParseArtifact)
-	// The level is read before the message is built: a lazy message is still a capturing closure the
-	// caller allocates whether or not the sink prints it, and this runs once per file per fold round.
-	if effectiveLogLevelOf(LogCategory.compiler).ordinal < LogLevel.DEBUG.ordinal 'notLogging'
-		return
-	end 'notLogging'
-
-	let names = artifact.typeNames
-	logDebug(LogCategory.compiler, message: function() gives "typeNames {artifact.filePath.toString()}: {names.count()} names, {names.arenaByteCount()} bytes, reserved {names.reservedNameCount()} names / {names.reservedArenaByteCount()} bytes, rehashes {names.rehashes()}, regrowths {names.regrowths()}")
+	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
+		let names = artifact.typeNames
+		compilerLogger(CompilerLogGroup.compiler).debug("typeNames {artifact.filePath.toString()}: {names.count()} names, {names.arenaByteCount()} bytes, reserved {names.reservedNameCount()} names / {names.reservedArenaByteCount()} bytes, rehashes {names.rehashes()}, regrowths {names.regrowths()}")
+	end 'debugging'
 end 'logTypeNameTable'
 
 // A name filed or dropped in one front end moves once: the rows a parse mints do not depend on whether a type is
@@ -1873,6 +1950,7 @@ function resetMergeTargets(project Project)
 	// pushes and `lookup` is a first-match linear scan, so a stale row does not lose to the fresh one
 	// — it wins.
 	project.moduleVarAccessSites = ModuleVarAccessSiteMap.create()
+	project.registryUseSites = RegistryUseSiteMap.create()
 	project.serviceAwaitSites = ServiceAwaitSiteMap.create()
 	project.asyncSpawnSites = AsyncSpawnSiteMap.create()
 	project.allocTagSites = AllocTagSiteMap.create()
@@ -1880,6 +1958,7 @@ function resetMergeTargets(project Project)
 	project.immortalConstArraySites = ImmortalConstArraySiteMap.create()
 	project.valueOrigins = ValueOriginTable.create()
 	project.deferralSources = DeferralSourceTable.create()
+	project.refusedOverloadCalls = RefusedOverloadCallSet.create()
 end 'resetMergeTargets'
 
 module function lexerErrorDiagnostic(error LexerError, path FilePath) returns Diagnostic
@@ -2461,6 +2540,8 @@ module function parseErrorDiagnostic(error ParseError, path FilePath, keywords K
 		serviceReplyAliasesState(explanation, line, column, note) gives Diagnostic.create(ErrorCode.semanticServiceReplyAliasesState, message: explanation, line: line, column: column, filePath: path).withNote(note)
 		serviceReplyInstanceUnknown(explanation, line, column) gives Diagnostic.create(ErrorCode.semanticServiceReplyInstanceUnknown, message: explanation, line: line, column: column, filePath: path)
 		lentGraphEscapes(explanation, line, column) gives Diagnostic.create(ErrorCode.semanticLentGraphEscapes, message: explanation, line: line, column: column, filePath: path)
+		registryRefused(code, explanation, line, column, note) gives Diagnostic.create(code, message: explanation, line: line, column: column, filePath: path).withNote(note)
+		extensionMemberHidesOwnMember(explanation, line, column, note) gives Diagnostic.create(ErrorCode.extensionMemberHidesOwnMember, message: explanation, line: line, column: column, filePath: path).withNote(note)
 	end 'kind'
 end 'parseErrorDiagnostic'
 

@@ -40,7 +40,10 @@ export function requirePreemptionFitsTheGuardMargin(module TargetModule, funcNam
 	let arm = preemptArmStackBytes(target)
 	let tree = unguardedTreeBytes(module, funcNames: funcNames, name: GtPreemptName, root: GtPreemptName, target: target, framesLeft: MaxUnguardedTreeFrames)
 	let margin = gtStackGuardMargin(target)
-	logDebug(LogCategory.codegen, message: function() gives "preemption depth ({targetToString(target)}): arm {arm} + tree {tree} = {arm + tree} of a {margin}-byte guard margin")
+
+	if compilerLogEnabled(CompilerLogGroup.codegen, level: LogLevel.debug) 'debugging'
+		compilerLogger(CompilerLogGroup.codegen).debug("preemption depth ({targetToString(target)}): arm {arm} + tree {tree} = {arm + tree} of a {margin}-byte guard margin")
+	end 'debugging'
 
 	if (arm + tree) as ParsedInt > margin 'overflowsTheMargin'
 		panic("requirePreemptionFitsTheGuardMargin: honouring a preemption request takes {arm} bytes for `{String.from(GtGuardTrippedName)}`'s preempt arm and {tree} for `{String.from(GtPreemptName)}`'s call tree on {targetToString(target)}, {arm + tree} in all, but it runs below a guarded function's entry inside the {margin}-byte guard margin — a thread preempted near its guard word would write past its stack. Shrink the tree, or raise GtRuntime.GtStackGuardMarginBytes and measure the self-compile")
@@ -54,7 +57,10 @@ export function requireAsyncPreemptionFitsItsMargin(module TargetModule, funcNam
 	let trampoline = asyncPreemptTrampolineStackBytes(target)
 	let tree = unguardedTreeBytes(module, funcNames: funcNames, name: AsyncPreemptParkName, root: AsyncPreemptParkName, target: target, framesLeft: MaxUnguardedTreeFrames)
 	let margin = gtAsyncPreemptMargin(target)
-	logDebug(LogCategory.codegen, message: function() gives "async preemption depth ({targetToString(target)}): trampoline {trampoline} + tree {tree} = {trampoline + tree} of a {margin}-byte stop margin")
+
+	if compilerLogEnabled(CompilerLogGroup.codegen, level: LogLevel.debug) 'debugging'
+		compilerLogger(CompilerLogGroup.codegen).debug("async preemption depth ({targetToString(target)}): trampoline {trampoline} + tree {tree} = {trampoline + tree} of a {margin}-byte stop margin")
+	end 'debugging'
 
 	if (trampoline + tree) as ParsedInt > margin 'overflowsTheMargin'
 		panic("requireAsyncPreemptionFitsItsMargin: stopping a thread where it stands takes {trampoline} bytes for `{String.from(AsyncPreemptName)}`'s register block and {tree} for `{String.from(AsyncPreemptParkName)}`'s call tree on {targetToString(target)}, {trampoline + tree} in all, but the safe-point predicate only refuses a stack pointer nearer its base than {margin} bytes — a thread stopped just above that floor would write past its stack. Shrink the tree, or raise GtRuntime.GtAsyncPreemptMarginBytes and measure the self-compile")
@@ -68,7 +74,10 @@ export function requireDebugTrapFitsItsReserve(module TargetModule, funcNames Fu
 	let release = unguardedTreeBytes(module, funcNames: funcNames, name: DebugReleaseStackName, root: DebugReleaseStackName, target: target, framesLeft: MaxUnguardedTreeFrames)
 	let preSwitch = thunk + deeperOf(claim, other: release)
 	let reserve = gtStackSystemBytes(target)
-	logDebug(LogCategory.codegen, message: function() gives "debug trap depth ({targetToString(target)}): OS dispatch {dispatch} + thunk {thunk} + the deeper of claim {claim} and release {release} = {dispatch + preSwitch} of a {reserve}-byte reserve")
+
+	if compilerLogEnabled(CompilerLogGroup.codegen, level: LogLevel.debug) 'debugging'
+		compilerLogger(CompilerLogGroup.codegen).debug("debug trap depth ({targetToString(target)}): OS dispatch {dispatch} + thunk {thunk} + the deeper of claim {claim} and release {release} = {dispatch + preSwitch} of a {reserve}-byte reserve")
+	end 'debugging'
 
 	if (dispatch + preSwitch) as ParsedInt > reserve 'overrunsTheReserve'
 		panic("requireDebugTrapFitsItsReserve: a debug trap on a green thread costs {dispatch} bytes of Windows exception dispatch, {thunk} for `{String.from(DebugTrapThunkName)}`'s own frame and {deeperOf(claim, other: release)} for the deeper of `{String.from(DebugClaimStackName)}`'s call tree ({claim}) and `{String.from(DebugReleaseStackName)}`'s ({release}), both of which run on the interrupted stack, {dispatch + preSwitch} in all, but a green thread reserves only {reserve} bytes below its guard word for the OS. Shrink the thunk's pre-switch path, or raise GtRuntime.GtWindowsExceptionDispatchBytes and measure the self-compile")

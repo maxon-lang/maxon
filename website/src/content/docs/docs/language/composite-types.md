@@ -133,8 +133,11 @@ A `static function` belongs to the type rather than an instance. It has no `self
 | Call | `value.name()` | `Type.name()` |
 
 A type may declare a static and an instance method with the same name, in its body or in an `extension` of
-it; `Type.name()` calls the static one and `value.name()` the instance one. A method the type's own body
-declares takes precedence over an extension's method of the same name and kind.
+it; `Type.name()` calls the static one and `value.name()` the instance one. An `extension` member with the
+name and kind of a member the type's own body declares is
+[E3176](/docs/cli/error-codes/#e3176--extensionmemberhidesownmember), in any file and for a standard-library type
+too. An [interface extension](#interface-extensions)'s method is a default: a conforming type may declare its
+own method of that name, and its values call that one.
 
 ### Static Fields
 
@@ -173,7 +176,8 @@ end 'main'
 - A static field is a top-level binding whose name carries the type as a qualifier, so what its initializer
   may reach follows the [Top-Level Variables](/docs/language/variables/#top-level-variables) rules: a `let`'s initializer may not reach
   a module-level `var` that holds a record (**E3165**), a `var`'s may not take a module-level `let`'s record
-  (**E3166**), and a `spawn` reachable from any global initializer is **E3164**.
+  (**E3166**), and a `spawn` reachable from any global initializer is **E3164** — a
+  [`default` declaration](/docs/language/async/#program-wide-defaults--default) starts a program-wide service before `main`.
 - A `let` without `static` in a type body is an ordinary field with a default.
 
 ### Equality and Copying

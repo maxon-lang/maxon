@@ -313,13 +313,21 @@ function libraryFactsOf(roster LibraryFunctionRoster, stdlib FunctionNameSet, sp
 	return LibraryFacts.create(stdlib, unreachable: split.unreachable, substrateEntries: substrateEntries, runtimeTier: roster.runtimeTier, unreachedRuntimeTier: split.unreachedRuntimeTier, compilerCalledTier: roster.compilerReached, debugAgentTier: roster.debugAgent)
 end 'libraryFactsOf'
 
-union LibraryReach
+module union LibraryReach
 	noLibrarySource
 	unreferenced(roster LibraryFunctionRoster, stdlib FunctionNameSet)
 	walked(roster LibraryFunctionRoster, stdlib FunctionNameSet, reachable FunctionNameSet)
 end 'LibraryReach'
 
-function libraryReachOf(project Project, module MaxonModule, signatures ProgramSignatures) returns LibraryReach throws CompileError
+module function reachedLibraryNamesOf(reach LibraryReach) returns FunctionNameSet
+	return match reach 'reach'
+		noLibrarySource or
+			unreferenced gives FunctionNameSet.create()
+		walked(_, _, reachable) gives reachable
+	end 'reach'
+end 'reachedLibraryNamesOf'
+
+module function libraryReachOf(project Project, module MaxonModule, signatures ProgramSignatures) returns LibraryReach throws CompileError
 	// A prior diagnostic leaves the merged module and its registries describing a program that is
 	// already refused, so a walk over it can only be noise, and a compile that stops here builds no
 	// further bodies. Nothing that runs before the pipeline's error gate reads these facts to report
@@ -371,9 +379,7 @@ end 'libraryReachOf'
 // so the walk sees the user's own edges into stdlib and stops there; each later round has the
 // bodies the previous one demanded, so the walk goes one call deeper. It terminates because the
 // demand only ever grows and is bounded by the stdlib functions that exist.
-export function growStdlibBodyDemand(project Project, module MaxonModule, signatures ProgramSignatures) returns bool throws CompileError
-	let reach = try libraryReachOf(project, module: module, signatures: signatures)
-
+module function growStdlibBodyDemand(project Project, reach LibraryReach) returns bool throws CompileError
 	match reach 'reach'
 		noLibrarySource or
 			unreferenced then return false

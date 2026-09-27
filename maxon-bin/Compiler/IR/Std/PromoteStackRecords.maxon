@@ -283,7 +283,9 @@ export function promoteStackRecords(project Project, module StdModule, usesGreen
 		return
 	end 'theFrameCanMOVE'
 
-	logDebug(LogCategory.ir, message: function() gives "promoteStackRecords: {module.funcCount()} function(s)")
+	if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.debug) 'debugging'
+		compilerLogger(CompilerLogGroup.ir).debug("promoteStackRecords: {module.funcCount()} function(s)")
+	end 'debugging'
 
 	// ⚠ **A DUPLICATE FUNCTION NAME DECLINES THE WHOLE PASS, AND THAT IS FAIL-CLOSED RATHER THAN PEDANTIC.**
 	// Every judgement here resolves a callee by NAME — which body is a record constructor, which of its
@@ -661,6 +663,7 @@ type ConstructorScan
 				osFileOpenWriteExecutable or
 				osEnvBlock or
 				osEnvBlockFree or
+
 				// An ordered access to a stack record would be a publication nothing can read — a promoted
 				// record is frame-local. Refusing admission leaves the record on the heap, which is correct.
 				loadAcquire or

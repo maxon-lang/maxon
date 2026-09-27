@@ -52,11 +52,6 @@ export let ProfileScratchFreeName = b"__prof_scratch_free"
 export let ProfileReadWordName = b"__prof_read_word"
 export let ProfileWriteWordName = b"__prof_write_word"
 
-// ⭐ **THE CLOCK THE TICK'S DEADLINE IS ARITHMETIC ON, AND IT IS THE ONE `SetWaitableTimer` READS.** A
-// waitable timer's positive due time is an absolute FILETIME — 100 ns intervals since 1601 — so a deadline
-// computed from any other counter would arm the timer at a moment that is not the one it names.
-export let ProfileNowFileTimeName = b"__prof_now_filetime"
-
 // ⭐ **WHAT THE PROFILER ASKS THE TARGET PROCESS FOR, AND NOTHING MORE.** `PROCESS_QUERY_INFORMATION` is what
 // the thread walk and the region query need; `PROCESS_VM_READ` is what copying a stack window needs.
 let ProcessQueryInformation = 0x0400
@@ -118,8 +113,8 @@ let OneWordScratchBytes = 8 as StackSize
 let OutWordSlot = 0 as SpillSlot
 
 // ⭐ **DOES THIS CALLEE SAMPLE ANOTHER THREAD?** The `__prof_`-only test, read by `scanRuntimeUsage` and by
-// `TargetFacilities.calleeHostFacility`. A PREFIX rather than a sixteen-way `or`, for
-// `isSharedMemoryRuntimeCallee`'s reason: a seventeenth entry point is then covered by construction instead of
+// `TargetFacilities.calleeHostFacility`. A PREFIX rather than an `or` over every name, for
+// `isSharedMemoryRuntimeCallee`'s reason: a new entry point is then covered by construction instead of
 // having to be remembered at two sites.
 export function isProfileRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: ProfileRuntimePrefix)
@@ -604,25 +599,6 @@ function buildProfileWriteWord(module StdModule)
 	module.functions.push(func)
 end 'buildProfileWriteWord'
 
-// `__prof_now_filetime() -> ticks` — `GetSystemTimeAsFileTime` through the one op that reads the host's
-// calendar into a caller-owned word. It is in THIS family rather than reached through `__clock_now_unix_s`
-// because that entry divides its reading down to whole SECONDS, and a kilohertz deadline needs every digit.
-function buildProfileNowFileTime(module StdModule)
-	var func = IrFunction.createFromStd(ProfileNowFileTimeName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
-	var ids = ValueMinter.create(0)
-
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-
-	func.stackSize = OneWordScratchBytes
-	let ticksPtr = ids.mint()
-	module.appendOp(entry, op: StdOp.stackRecordAddr(ticksPtr, slot: OutWordSlot))
-	module.appendOp(entry, op: StdOp.osReadWallClock(ticksPtr))
-	let ticks = emitLoadField(module, block: entry, record: ticksPtr, offset: 0, ids: ids)
-	module.setTerminator(entry, op: StdOp.ret(ticks))
-
-	module.functions.push(func)
-end 'buildProfileNowFileTime'
-
 export function installProfileRuntime(module StdModule, usage RuntimeUsage)
 	if not usage.usesProcessSampling 'noSampling'
 		return
@@ -635,7 +611,6 @@ export function installProfileRuntime(module StdModule, usage RuntimeUsage)
 	buildProfileSample(module)
 	buildProfileTimerCreate(module)
 	buildProfileTimerWait(module)
-	buildProfileNowFileTime(module)
 	buildProfileModuleSnapshot(module)
 	buildProfileModuleFirst(module)
 	buildProfileModuleNext(module)

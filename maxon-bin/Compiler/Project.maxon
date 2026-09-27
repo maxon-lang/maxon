@@ -966,6 +966,7 @@ end 'ServiceAwaitSite'
 
 // `await`/`tryAwait` op index ⇒ the service its reply comes from. See `ServiceAwaitSite`.
 export typealias ServiceAwaitSiteMap = Map with (OpIndex, ServiceAwaitSite)
+export typealias RefusedOverloadCallSet = Set with OpIndex
 
 // ⭐⭐ **WHAT THE SHARED-GLOBAL RULE NEEDS ABOUT ONE ACCESS TO MODULE STORAGE, AND CANNOT GET AT ITS OWN
 // TIER (E3143).** A global's write lowers to `globalAddr` + `storeIndirect` and its read to `globalAddr` +
@@ -1032,6 +1033,26 @@ end 'ModuleSlotReader'
 
 // An op index inside the accessing statement ⇒ the module slot it touches. See `ModuleVarAccessSite`.
 export typealias ModuleVarAccessSiteMap = Map with (OpIndex, ModuleVarAccessSite)
+
+export type RegistryUseSite
+	export let key as ByteArray
+	export let member as ByteArray
+
+	export static function create(key ByteArray, member ByteArray) returns RegistryUseSite
+		return Self{key: key, member: member}
+	end 'create'
+end 'RegistryUseSite'
+
+export typealias RegistryUseSiteMap = Map with (OpIndex, RegistryUseSite)
+
+// `unwritten` until a file records its first registry use: most files name no key, and a Map per
+// artifact would be an allocation every parse pays.
+export union RegistryUseSiteTable
+	unwritten
+	entries(byOp RegistryUseSiteMap)
+end 'RegistryUseSiteTable'
+
+export let noRegistryUseSites = RegistryUseSiteTable.unwritten
 
 // ⭐ `__mm_alloc` call op index ⇒ the mm-trace TAG that box carries. See `Project.allocTagSites`.
 export typealias AllocTagSiteMap = Map with (OpIndex, MmTag)
@@ -3638,17 +3659,21 @@ end 'FunctionRangeChecks'
 // (E3006) — so it survives the merge with no id remap, exactly like `funcSignatures`.
 export typealias RangeCheckPlanMap = Map with (ByteArray, FunctionRangeChecks)
 
-// ⭐ WHAT A FUNCTION VALUE RETURNS, AND WHOSE SLOT THAT TYPE IS — the pair `Parser.functionValueReturn`
-// answers in one walk. They travel together because the second is only knowable in the arm that produced
-// the first, and two walks over one source list is a pair nothing keeps in step.
-export type FunctionValueReturn
+// ⭐ WHAT A FUNCTION VALUE TAKES AND RETURNS, AND WHOSE SLOT THOSE TYPES ARE — what
+// `Parser.functionValueShape` answers in one walk. They travel together because the scope is only
+// knowable in the arm that produced the types, and two walks over one source list is a pair nothing
+// keeps in step.
+export type FunctionValueShape
+	export let paramTypes as MaxonTypeArray
 	export let returnType as MaxonReturnType
 	export let scopeFilePath as FilePath
 
-	export static function create(returnType MaxonReturnType, scopeFilePath FilePath) returns FunctionValueReturn
-		return Self{returnType: returnType, scopeFilePath: scopeFilePath}
+	export static function create(paramTypes MaxonTypeArray, returnType MaxonReturnType, scopeFilePath FilePath) returns FunctionValueShape
+		return Self{paramTypes: paramTypes, returnType: returnType, scopeFilePath: scopeFilePath}
 	end 'create'
-end 'FunctionValueReturn'
+end 'FunctionValueShape'
+
+export typealias FunctionValueShapeMap = Map with (ByteArray, FunctionValueShape)
 
 // ⭐ **A FUNCTION TYPEALIAS (P1.5-A1)** — `typealias UnaryOp = function(Integer) returns Integer`. It is
 // its OWN registry, NOT a `RangedTypeAlias`, because a function alias names a function TYPE, not a ranged
@@ -8474,11 +8499,17 @@ export type Project
 	// service in it, and the check reads that count as its own gate.
 	export var serviceAwaitSites as ServiceAwaitSiteMap
 
+	// The calls `SemanticCheck.reportAmbiguousOverload` refused (E3007), by op index — reset with the
+	// other op-keyed tables each fold round.
+	export var refusedOverloadCalls as RefusedOverloadCallSet = RefusedOverloadCallSet.create()
+
 	// ⭐ Every author-written READ OR WRITE of mutable module storage in the program, by op index (E3143) —
 	// the candidate set of the shared-global rule. Folded from the per-file artifact with the merge's op
 	// offset, exactly as `asyncSpawnSites` is. EMPTY for every program that names no module `var`, and the
 	// check reads that count as its own gate. See `ModuleVarAccessSite`.
 	export var moduleVarAccessSites as ModuleVarAccessSiteMap
+
+	export var registryUseSites as RegistryUseSiteMap
 
 	// ⭐⭐ **THE mm-trace TAG FOR A BOX THE PARSER MINTS THAT IS NOT ANY DECLARED TYPE'S** — an interpolated
 	// part's scratch byte run, a closure's captured environment, and the one-slot cell a reassigned
@@ -8725,6 +8756,7 @@ export type Project
 			asyncSpawnSites: AsyncSpawnSiteMap.create(),
 			serviceAwaitSites: ServiceAwaitSiteMap.create(),
 			moduleVarAccessSites: ModuleVarAccessSiteMap.create(),
+			registryUseSites: RegistryUseSiteMap.create(),
 			allocTagSites: AllocTagSiteMap.create(),
 			debugStreamNameSites: DebugStreamNameSiteMap.create(),
 			immortalConstArraySites: ImmortalConstArraySiteMap.create(),

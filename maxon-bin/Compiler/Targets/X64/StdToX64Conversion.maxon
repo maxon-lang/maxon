@@ -2867,12 +2867,12 @@ export type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.QueryPerformanceCounter)))
 	end 'lowerOsReadClockWin64'
 
-	// Lower `osReadWallClock(ftPtr)` to `GetSystemTimeAsFileTime(ftPtr)`: the out-param pointer in
+	// Lower `osReadWallClock(ftPtr)` to `GetSystemTimePreciseAsFileTime(ftPtr)`: the out-param pointer in
 	// rcx, no result (the 64-bit FILETIME lands in the caller's word). The POSIX spelling is
 	// `clock_gettime(CLOCK_REALTIME)`, whose `timespec` needs a frame to hold the caller's out-param
 	// across it, so it is a chunk rather than an inline sequence.
 	function lowerOsReadWallClock(ftPtrId ValueId, dstBlock IrBlock)
-		self.emitHostCall(dstBlock, callee: self.hostCalleeOn(IatSlot.GetSystemTimeAsFileTime, chunk: HostWallClockName), args: argsOf(ftPtrId))
+		self.emitHostCall(dstBlock, callee: self.hostCalleeOn(IatSlot.GetSystemTimePreciseAsFileTime, chunk: HostWallClockName), args: argsOf(ftPtrId))
 	end 'lowerOsReadWallClock'
 
 	// Lower `osProcessSpawn(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr, envPtr)` to

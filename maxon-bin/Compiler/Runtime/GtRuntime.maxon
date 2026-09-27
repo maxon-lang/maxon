@@ -2255,7 +2255,7 @@ export function ioCompletionShape(target Target) returns IoCompletionShape
 	end 'os'
 end 'ioCompletionShape'
 
-export function installGtRuntime(module StdModule, globalData GlobalDataTable, asyncTrace bool, target Target, streamState EnumLayout)
+export function installGtRuntime(module StdModule, globalData GlobalDataTable, asyncTrace bool, target Target, streamState EnumLayout, releasesRegistry bool, releasesGlobals bool)
 	// The first function index this install owns — the range `assertCompletedPublicationIsOrdered` checks at
 	// the end. Taken from the module rather than assumed to be zero: the runtime installs run after the whole
 	// user program is already lowered into this module.
@@ -2304,7 +2304,7 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtTimerCheck(module)
 	buildGtAnyCompleted(module)
 	buildGtAwaitAny(module)
-	buildGtDrainAtExit(module)
+	buildGtDrainAtExit(module, releasesRegistry: releasesRegistry, releasesGlobals: releasesGlobals)
 	buildGtRunMain(module, target: target)
 	buildGtAwait(module, name: GtAwaitName, throwing: false, arrival: GtAwaitArrival.inTheAwait, asyncTrace: asyncTrace, tags: tags)
 	buildGtAwait(module, name: GtTryAwaitName, throwing: true, arrival: GtAwaitArrival.inTheAwait, asyncTrace: asyncTrace, tags: tags)
@@ -3863,16 +3863,21 @@ end 'buildGtAwaitAny'
 
 // ⭐⭐⭐ **`__gt_drain_at_exit(code) -> code` — THE SCHEDULER'S TEARDOWN, ON THE EXIT PATH.** See
 // `GtDrainAtExitName` for where it is called from and why the join is not optional. It runs on the main
-// machine once `main` has completed, in two steps:
+// machine once `main` has completed, in three steps:
 //
 //   1. **RUN THE SCHEDULER LOOP UNTIL NOBODY OWNS A GREEN THREAD** — or until nothing is left that can run
 //      (`SchedRuntime.SchedPhase`), which leaves the count for the leak gate to report.
-//   2. **STOP AND JOIN THE WORKER Ms** (`__sched_stop_workers`), which is where the counter this exit path is
-//      about to read stops moving.
+//   2. **RELEASE THE REGISTRY SLOTS AND THE MANAGED GLOBALS** (`__maxon_registry_release`,
+//      `__maxon_global_cleanup`). Both stay live through step 1, because a handler still running
+//      there may look a key up or read a module `let`. A loop that stopped with every remaining
+//      green thread parked idle releases them first — which closes the mailboxes only they held —
+//      and runs the loop again.
+//   3. **STOP AND JOIN THE WORKER Ms** (`__sched_stop_workers`), which is where the counter this
+//      exit path is about to read stops moving.
 //
 // ⚠ **`__mm_leak_check` IS UNTOUCHED BY ANY OF IT.** A count still non-zero after the drain is a real leak —
 // a green thread neither awaited nor dropped — and still reports 75.
-function buildGtDrainAtExit(module StdModule)
+function buildGtDrainAtExit(module StdModule, releasesRegistry bool, releasesGlobals bool)
 	var func = IrFunction.createFromStd(GtDrainAtExitName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
@@ -3882,10 +3887,45 @@ function buildGtDrainAtExit(module StdModule)
 	let code = 0 as ValueId
 
 	emitSchedMainLoop(module, block: entry, until: SchedMainLoopUntil.drained, ids: ids)
-	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: SchedStopWorkersName, args: ValueIdArray.create()))
-	module.setTerminator(entry, op: StdOp.ret(code))
+	var drained = emitReleaseOwnersAfterDrain(module, func: func, cur: entry, releasesRegistry: releasesRegistry, releasesGlobals: releasesGlobals, code: code, ids: ids)
+
+	module.appendOp(drained, op: StdOp.call(ids.mint(), callee: SchedStopWorkersName, args: ValueIdArray.create()))
+	module.setTerminator(drained, op: StdOp.ret(code))
 	module.functions.push(func)
 end 'buildGtDrainAtExit'
+
+function emitReleaseOwnersAfterDrain(module StdModule, func IrFunction, cur IrBlock, releasesRegistry bool, releasesGlobals bool, code ValueId, ids ValueMinter) returns IrBlock
+	if not (releasesRegistry or releasesGlobals) 'nothingOwnsAService'
+		return cur
+	end 'nothingOwnsAService'
+
+	var release = module.addBlock(func, label: b"drainreleaseowners", heat: BlockHeat.normal)
+	var settled = module.addBlock(func, label: b"drainsettled", heat: BlockHeat.normal)
+	let drained = module.addBlock(func, label: b"draindone", heat: BlockHeat.normal)
+	module.setTerminator(cur, op: StdOp.condBranch(emitSchedDrainIsStuck(module, block: cur, ids: ids), thenBlockId: release.id, elseBlockId: settled.id))
+
+	emitSchedLockEnter(module, block: release, ids: ids)
+	emitSchedEnterPhaseLocked(module, block: release, phase: SchedPhase.draining, ids: ids)
+	emitSchedLockLeave(module, block: release, ids: ids)
+
+	emitOwnerReleaseCalls(module, block: release, releasesRegistry: releasesRegistry, releasesGlobals: releasesGlobals, code: code, ids: ids)
+	emitSchedMainLoop(module, block: release, until: SchedMainLoopUntil.drained, ids: ids)
+	module.setTerminator(release, op: StdOp.branch(drained.id))
+
+	emitOwnerReleaseCalls(module, block: settled, releasesRegistry: releasesRegistry, releasesGlobals: releasesGlobals, code: code, ids: ids)
+	module.setTerminator(settled, op: StdOp.branch(drained.id))
+	return drained
+end 'emitReleaseOwnersAfterDrain'
+
+function emitOwnerReleaseCalls(module StdModule, block IrBlock, releasesRegistry bool, releasesGlobals bool, code ValueId, ids ValueMinter)
+	if releasesRegistry 'theRegistry'
+		module.appendOp(block, op: StdOp.call(ids.mint(), callee: RegistryReleaseName, args: argsOf(code)))
+	end 'theRegistry'
+
+	if releasesGlobals 'managedGlobals'
+		module.appendOp(block, op: StdOp.call(ids.mint(), callee: GlobalCleanupName, args: argsOf(code)))
+	end 'managedGlobals'
+end 'emitOwnerReleaseCalls'
 
 // `__gt_run_main(entry) -> ExitCode` — see `GtRunMainName`. In order: bring the scheduler up; create `main`'s
 // green thread and ready it onto this machine's ring; start the system monitor; run the scheduler loop until

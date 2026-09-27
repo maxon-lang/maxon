@@ -433,11 +433,12 @@ function reportUnmarkableLetRead(project Project, funcNames FunctionNameIndex, s
 end 'reportUnmarkableLetRead'
 
 // ⭐ **E3164: A `spawn` A GLOBAL INITIALIZER CAN RUN.** `__module_init` marks the `let`s every message may read
-// only after its last initializer returns, so no other green thread may exist before then. Closed from
-// `__module_init` itself, whose calls overload resolution has settled, over the same widened graph E3143 closes.
+// only after its last initializer returns, so no other green thread may exist before then. Closed
+// from the calls the global initializers make (`initializerCallees`), over the same widened graph
+// E3143 closes — not from `__module_init` as a whole, which also builds the `default`s after the
+// marks, where a spawn is legal.
 module function checkSpawnsDuringGlobalInitialization(project Project, module MaxonModule, funcNames FunctionNameIndex, survey ServiceProgramSurvey, dispatch WitnessDispatchTargets, initializers FuncIndexRows)
-	let initIndex = try funcNames.byName.get(ModuleInitName) otherwise panic("checkSpawnsDuringGlobalInitialization: `checkServiceRules` asks this only of a program holding `__module_init`")
-	let reached = functionsSeedsCanRun(funcNames, survey: survey, seeds: oneHotSeeds(survey, funcIndex: initIndex), dispatch: dispatch)
+	let reached = functionsSeedsCanRun(funcNames, survey: survey, seeds: seedsAt(survey, funcIndices: everyInitializerCallee(initializers)), dispatch: dispatch)
 
 	for row in 0 upto survey.spawns.rowCount() 'eachSpawn'
 		let spawnerIndex = survey.spawns.funcAt(row)
@@ -531,7 +532,7 @@ end 'reportLetInitializerReachingAVar'
 // ⭐ **THE DECLARED FUNCTIONS EACH MANAGED GLOBAL'S INITIALIZER CALLS**, one row per `project.managedGlobals`
 // entry, read off `__module_init`, whose calls overload resolution has settled. It emits each global's calls
 // before the `globalAddr` its store opens with, in that list's order, and marks the `let`s only after the last
-// store.
+// store. The walk stops at that store, so the `default`s built after the marks belong to no initializer.
 module function initializerCallees(project Project, module MaxonModule, funcNames FunctionNameIndex) returns FuncIndexRows
 	let globalCount = project.managedGlobals.count()
 	var rows = FuncIndexRows.create()
@@ -578,6 +579,94 @@ module function initializerCallees(project Project, module MaxonModule, funcName
 end 'initializerCallees'
 
 module typealias FuncIndexRows = Array with FuncIndexArray
+
+module function checkRegistryReachedFromInitializers(project Project, module MaxonModule, funcNames FunctionNameIndex, survey ServiceProgramSurvey, dispatch WitnessDispatchTargets, initializers FuncIndexRows)
+	let registryUses = registryUsesByFunction(project, module: module, funcNames: funcNames, survey: survey)
+	let reachedByAny = functionsSeedsCanRun(funcNames, survey: survey, seeds: seedsAt(survey, funcIndices: everyInitializerCallee(initializers)), dispatch: dispatch)
+
+	if not someRegistryUseIsReached(registryUses, reached: reachedByAny) 'noInitializerReachesTheRegistry'
+		return
+	end 'noInitializerReachesTheRegistry'
+
+	for (position, row) in initializers.withIterator() 'eachGlobal'
+		if row.count() == 0 'runsNoProgramCode'
+			continue
+		end 'runsNoProgramCode'
+
+		let reached = functionsSeedsCanRun(funcNames, survey: survey, seeds: seedsAt(survey, funcIndices: row), dispatch: dispatch)
+
+		for use in registryUses 'eachUse'
+			if not reachedAt(reached, funcIndex: use.funcIndex) 'notRunByThisInitializer'
+				continue
+			end 'notRunByThisInitializer'
+
+			let site = try project.registryUseSites.get(use.opIndex) otherwise panic("checkRegistryReachedFromInitializers: op {use.opIndex} was found in `registryUseSites` by `registryUsesByFunction`")
+			let global = managedGlobalAt(project, index: position.index() as SlotSubjectIndex)
+			let range = project.opRanges.get(use.opIndex)
+			reportPositioned(project, code: ErrorCode.registryReachedFromGlobalInitializer, message: registryReachedFromInitializerMessage(site.key, member: site.member, globalName: global.declName), line: range.line, column: range.column, filePath: functionAt(funcNames, index: use.funcIndex).sourceFilePath)
+			return
+		end 'eachUse'
+	end 'eachGlobal'
+
+	panic("checkRegistryReachedFromInitializers: the initializers together reach a registry use, so one of them alone reaches it")
+end 'checkRegistryReachedFromInitializers'
+
+type RegistryUseInFunction
+	export let funcIndex as FuncIndex
+	export let opIndex as OpIndex
+
+	static function create(funcIndex FuncIndex, opIndex OpIndex) returns RegistryUseInFunction
+		return Self{funcIndex: funcIndex, opIndex: opIndex}
+	end 'create'
+end 'RegistryUseInFunction'
+
+typealias RegistryUseInFunctionArray = Array with RegistryUseInFunction
+
+function registryUsesByFunction(project Project, module MaxonModule, funcNames FunctionNameIndex, survey ServiceProgramSurvey) returns RegistryUseInFunctionArray
+	var registryUses = RegistryUseInFunctionArray.create()
+
+	for funcIndex in 0 upto survey.funcCount() 'eachFunc'
+		if let opIndex = try firstRegistryUseIn(project, module: module, func: functionAt(funcNames, index: funcIndex)) 'holdsOne'
+			registryUses.push(RegistryUseInFunction.create(funcIndex, opIndex: opIndex))
+		end 'holdsOne'
+	end 'eachFunc'
+
+	return registryUses
+end 'registryUsesByFunction'
+
+function firstRegistryUseIn(project Project, module MaxonModule, func IrFunction) returns OpIndex throws MapError
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("firstRegistryUseIn: blockRef from func.blockRefs not in module.blocks")
+
+		for opIndex in block.opRefs 'eachOp'
+			if project.registryUseSites.contains(opIndex) 'aRegistryUse'
+				return opIndex
+			end 'aRegistryUse'
+		end 'eachOp'
+	end 'eachBlock'
+
+	throw MapError.keyNotFound
+end 'firstRegistryUseIn'
+
+function someRegistryUseIsReached(registryUses RegistryUseInFunctionArray, reached BoolArray) returns bool
+	for use in registryUses 'eachUse'
+		if reachedAt(reached, funcIndex: use.funcIndex) 'reached'
+			return true
+		end 'reached'
+	end 'eachUse'
+
+	return false
+end 'someRegistryUseIsReached'
+
+function everyInitializerCallee(initializers FuncIndexRows) returns FuncIndexArray
+	var callees = FuncIndexArray.create()
+
+	for row in initializers 'eachGlobal'
+		callees.append(row)
+	end 'eachGlobal'
+
+	return callees
+end 'everyInitializerCallee'
 
 function managedGlobalAt(project Project, index SlotSubjectIndex) returns ManagedGlobal
 	return try project.managedGlobals.get(index) otherwise panic("managedGlobalAt: managedGlobals.get OOB at {index} — every position is one `__module_init` was built over")

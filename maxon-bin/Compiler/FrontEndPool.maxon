@@ -45,6 +45,7 @@ typealias ParseQueryArray = Array with ParseQuery
 
 // At most one index: the baseline a pool's workers hold copies of, or a worker's own copy of it.
 typealias HeldIndexArray = Array with ProgramSignatures
+typealias LiveKeysRevisionArray = Array with LiveKeysRevision
 
 // The rows a worker measures, by the ordinal its costs are indexed with.
 enum FrontEndStage
@@ -169,6 +170,10 @@ type FrontEndWorker
 		self.state.hold(index)
 	end 'adopt'
 
+	export function adoptLiveKeys(keys LiveDefaultKeys)
+		self.state.adoptLiveKeys(keys)
+	end 'adoptLiveKeys'
+
 	// ⚠ The index is released HERE, on the worker's own thread and awaited, rather than left to the drop of
 	// the last handle to this service. Dropping a handle only lets the service's green thread finish when
 	// the scheduler next runs it, and the whole back end can pass before that — leaving one private index
@@ -205,6 +210,11 @@ type FrontEndWorkerState
 		self.ownIndex.clear()
 		self.ownIndex.push(index)
 	end 'hold'
+
+	function adoptLiveKeys(keys LiveDefaultKeys)
+		var index = try self.ownIndex.get(0) otherwise panic("FrontEndWorkerState.adoptLiveKeys: a worker holding no index was sent live keys — the pool sends them only to a worker that adopted the baseline")
+		index.adoptLiveDefaultKeys(keys)
+	end 'adoptLiveKeys'
 
 	function releaseIndex()
 		self.ownIndex.clear()
@@ -281,13 +291,15 @@ module type FrontEndPool
 
 	// By worker slot: whether that worker holds a copy of `baseline`.
 	var adopted as BoolArray
+	var baselineRevision as LiveKeysRevision
+	var heldRevisions as LiveKeysRevisionArray
 
 	// Which stages ran on the workers, so only those rows are folded from them.
 	var lexed as bool
 	var parsed as bool
 
 	module static function create() returns FrontEndPool
-		return Self{workers: FrontEndWorkerHandleArray.create(), inProcess: FrontEndWorkerStateArray.create(), mostFilesDispatched: 0, baseline: HeldIndexArray.create(), adopted: BoolArray.create(), lexed: false, parsed: false}
+		return Self{workers: FrontEndWorkerHandleArray.create(), inProcess: FrontEndWorkerStateArray.create(), mostFilesDispatched: 0, baseline: HeldIndexArray.create(), adopted: BoolArray.create(), baselineRevision: 0, heldRevisions: LiveKeysRevisionArray.create(), lexed: false, parsed: false}
 	end 'create'
 
 	// ⭐ **EVERY FILE WHOSE RESOLVED STREAM NO MEMO HOLDS, LEXED AND FILTERED ON THE WORKERS**, then landed through
@@ -380,9 +392,13 @@ module type FrontEndPool
 				panic("FrontEndPool.close: the pool holds {self.workers.count()} worker(s) where min(P, {filesDispatched}) is {sizing.workerCount} — `requireWorkers` grows it to that size on every drain, so a difference is a pool the reported line does not describe")
 			end 'theReportedPoolIsNotTheOneThatRan'
 
-			logDebug(LogCategory.compiler, message: function() gives sizing.line(PoolKind.frontEnd))
+			if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
+				compilerLogger(CompilerLogGroup.compiler).debug(sizing.line(PoolKind.frontEnd))
+			end 'debugging'
 		end 'onTheWorkers' else 'inProcess'
-			logDebug(LogCategory.compiler, message: function() gives "front end: serial, in process, {filesDispatched} file(s) — this binary's runtime cannot move a shared-record graph")
+			if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
+				compilerLogger(CompilerLogGroup.compiler).debug("front end: serial, in process, {filesDispatched} file(s) — this binary's runtime cannot move a shared-record graph")
+			end 'debugging'
 		end 'inProcess'
 
 		for slot in 0 upto self.workers.count() 'eachReport'
@@ -399,6 +415,7 @@ module type FrontEndPool
 		self.inProcess.clear()
 		self.baseline.clear()
 		self.adopted.clear()
+		self.heldRevisions.clear()
 		recordPhase(project, phase: CompilePhase.frontEndPool, probe: probe)
 	end 'close'
 
@@ -409,20 +426,23 @@ module type FrontEndPool
 		while self.workers.count() < wanted 'eachMissingWorker'
 			self.workers.push(spawn FrontEndWorker.create(project.target.cpu, os: project.target.os, debugStream: project.debugStream))
 			self.adopted.push(false)
+			self.heldRevisions.push(0)
 		end 'eachMissingWorker'
 	end 'requireWorkers'
 
 	// Parse against `signatures` from now on. A worker already holding a copy of this very index keeps it, so the
-	// folds that follow against the same index copy nothing.
+	// folds that follow against the same index copy nothing but the live keys (`refreshLiveKeys`).
 	function holdBaseline(signatures ProgramSignatures)
 		if let held = try self.baseline.get(0) 'held'
 			if held is signatures 'theSameIndex'
+				self.baselineRevision = signatures.liveKeysRevision()
 				return
 			end 'theSameIndex'
 		end 'held'
 
 		self.baseline.clear()
 		self.baseline.push(signatures)
+		self.baselineRevision = signatures.liveKeysRevision()
 		self.adopted.refill(self.workers.count(), value: false)
 	end 'holdBaseline'
 
@@ -436,6 +456,7 @@ module type FrontEndPool
 		let holdsTheBaseline = try self.adopted.get(workerSlot) otherwise panic("FrontEndPool.requireAdopted: adopted.get OOB at {workerSlot} below count {self.adopted.count()}")
 
 		if holdsTheBaseline 'alreadyAdopted'
+			self.refreshLiveKeys(workerSlot)
 			return
 		end 'alreadyAdopted'
 
@@ -450,7 +471,21 @@ module type FrontEndPool
 		// A TEMPORARY, so the send moves it: the copy is the worker's alone.
 		worker.adopt(signatures.clone())
 		try self.adopted.set(workerSlot, value: true) otherwise panic("FrontEndPool.requireAdopted: adopted.set OOB at {workerSlot} below count {self.adopted.count()}")
+		try self.heldRevisions.set(workerSlot, value: self.baselineRevision) otherwise panic("FrontEndPool.requireAdopted: heldRevisions.set OOB at {workerSlot} below count {self.heldRevisions.count()}")
 	end 'requireAdopted'
+
+	// A fold moves the live keys without re-sweeping the index, so a worker takes them as a small
+	// update rather than a fresh copy of the whole index.
+	function refreshLiveKeys(workerSlot PoolSlot)
+		let held = try self.heldRevisions.get(workerSlot) otherwise panic("FrontEndPool.refreshLiveKeys: heldRevisions.get OOB at {workerSlot} below count {self.heldRevisions.count()}")
+
+		if held == self.baselineRevision 'current'
+			return
+		end 'current'
+
+		self.workerAt(workerSlot).adoptLiveKeys(self.baselineIndex().liveDefaultKeys().clone())
+		try self.heldRevisions.set(workerSlot, value: self.baselineRevision) otherwise panic("FrontEndPool.refreshLiveKeys: heldRevisions.set OOB at {workerSlot} below count {self.heldRevisions.count()}")
+	end 'refreshLiveKeys'
 
 	function baselineIndex() returns ProgramSignatures
 		return try self.baseline.get(0) otherwise panic("FrontEndPool.baselineIndex: a parse was dispatched before `holdBaseline` named the index it parses against")

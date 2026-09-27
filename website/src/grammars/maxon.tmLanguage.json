@@ -237,12 +237,33 @@
     "keywords": {
       "patterns": [
         {
+          "comment": "`test` is a CONTEXTUAL keyword: it opens a declaration only at line start followed by its quoted name. A bare \\btest\\b in the keyword.other rule below would paint every ordinary `test` variable (`for test in tests`, `test.name`), which is the exact thing making it contextual exists to avoid.",
+          "match": "^\\s*(test)\\s+('[^']*')",
+          "captures": {
+            "1": {
+              "name": "keyword.other.maxon"
+            },
+            "2": {
+              "name": "entity.name.function.maxon"
+            }
+          }
+        },
+        {
+          "comment": "`module` is contextual too — recognised only immediately before a declaration keyword.",
+          "match": "^\\s*(module)\\s+(?=\\b(function|type|union|enum|interface|typealias|var|let|static|extension)\\b)",
+          "captures": {
+            "1": {
+              "name": "keyword.other.maxon"
+            }
+          }
+        },
+        {
           "name": "keyword.control.maxon",
           "match": "\\b(return|end|if|else|while|for|in|break|continue|gives|throw|try|otherwise|ignore|match|then|fallthrough|default|upto|panic)\\b"
         },
         {
           "name": "keyword.other.maxon",
-          "match": "\\b(function|returns|let|var|type|union|enum|uses|implements|typealias|with|static|export|self|Self|interface|extension|extends|from|to|throws)\\b"
+          "match": "\\b(function|returns|let|var|type|union|enum|uses|implements|typealias|with|static|export|public|self|Self|interface|extension|extends|from|to|throws)\\b"
         },
         {
           "name": "keyword.operator.logical.maxon",
@@ -254,7 +275,12 @@
         },
         {
           "name": "storage.type.maxon",
-          "match": "\\b(of|int|float|bool|byte)\\b"
+          "match": "\\b(int|float|bool|byte)\\b"
+        },
+        {
+          "comment": "`bits` is a CONTEXTUAL type name, not a keyword: it opens a raw-pattern typealias only when followed by `(`. A bare \\bbits\\b in the rule above would paint every ordinary `bits` variable, which is the reason the compiler's lexer does not reserve it either.",
+          "name": "storage.type.maxon",
+          "match": "\\bbits(?=\\()"
         }
       ]
     },
@@ -321,19 +347,13 @@
           }
         },
         {
-          "comment": "Match arm range: identifier to/upto identifier before 'then'/'gives'",
-          "match": "\\b([a-zA-Z_]\\w*)\\s+(to|upto)\\s+([a-zA-Z_]\\w*)\\s+(then|gives)\\b",
+          "comment": "Match arm alternative: identifier before a chain-continuing 'or' at end of line",
+          "match": "\\b([a-zA-Z_]\\w*)\\s+(or)\\s*$",
           "captures": {
             "1": {
               "name": "variable.other.enummember.maxon"
             },
             "2": {
-              "name": "keyword.control.maxon"
-            },
-            "3": {
-              "name": "variable.other.enummember.maxon"
-            },
-            "4": {
               "name": "keyword.control.maxon"
             }
           }

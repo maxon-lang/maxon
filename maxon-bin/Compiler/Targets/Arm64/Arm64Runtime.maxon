@@ -122,7 +122,7 @@ end 'arm64ThreadPointerSource'
 // scalar core, which has no allocator and cannot leak. `initGlobals` gates the managed-global
 // initialization and release the same way — `false` for a program with no managed
 // top-level `var`, which is every program in the scalar corpus.
-export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, debugStream bool, dumpCoverage bool, os Os, entryFunction ByteArray) returns FunctionCodeChunk
+export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, debugStream bool, dumpCoverage bool, releasesRegistry bool, os Os, entryFunction ByteArray) returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
 	var iatRelocs = RelocationArray.create()
@@ -165,15 +165,16 @@ export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drain
 		arm64EmitLeaFuncAddr(code, funcAdrpRelocs: funcAdrpRelocs, dest: arm64RuntimeReg(Arm64Register.x0), funcName: MainThreadEntryName)
 		arm64EmitBranchLink(code, callFixups: callFixups, targetName: GtRunMainName)
 	end 'mainIsAGreenThread' else 'mainOnTheOsStack'
-		arm64EmitMainCall(code, callFixups: callFixups, initGlobals: initGlobals, entryFunction: entryFunction)
+		arm64EmitMainCall(code, callFixups: callFixups, initGlobals: initGlobals, releasesGlobals: initGlobals, entryFunction: entryFunction)
 	end 'mainOnTheOsStack'
 
 	// ⭐⭐ **RUN THE SCHEDULER OUT AND JOIN ITS WORKER Ms, AFTER `main` AND BEFORE THE LEAK GATE.**
 	// The ORDER is the whole point and it is `BackendDispatch.appendGreenThreadDrainGate`'s argument:
-	// AFTER the global cleanup, because a
-	// released managed global may be the last owner of a handle whose drop lets a green thread finish; and
-	// BEFORE `__mm_leak_check`, because a worker M's `__gt_reclaim` steps the very counters that gate reads,
-	// so an un-joined scheduler makes a clean program report 101 intermittently.
+	// the drain releases the managed globals and the registry itself, because a handler still running
+	// there may read one and a released global may be the last owner of a handle whose drop lets a
+	// green thread finish; and BEFORE `__mm_leak_check`, because a worker M's `__gt_reclaim` steps the
+	// very counters that gate reads, so an un-joined scheduler makes a clean program report 101
+	// intermittently.
 	//
 	// `__gt_drain_at_exit` is shaped like `__mm_leak_check` deliberately — ExitCode in x0, ExitCode out — so
 	// on AAPCS64 the value flows through it with no move at all, exactly as it does through the two gates
@@ -181,6 +182,10 @@ export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drain
 	if drainGreenThreads 'greenThreadDrain'
 		arm64EmitBranchLink(code, callFixups: callFixups, targetName: GtDrainAtExitName)
 	end 'greenThreadDrain'
+
+	if releasesRegistry and not drainGreenThreads 'registryRelease'
+		arm64EmitBranchLink(code, callFixups: callFixups, targetName: RegistryReleaseName)
+	end 'registryRelease'
 
 	// The leak gate (future MM milestone). `__mm_leak_check` is an ordinary AAPCS64 function — it
 	// takes the ExitCode in x0 and returns the adjusted code (or 101) in x0 — so the value flows
@@ -242,20 +247,21 @@ export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drain
 end 'buildArm64EntryStubChunk'
 
 // `[bl __module_init]`, `bl main`, `[bl __maxon_global_cleanup]` — the program, wherever it runs: the entry
-// stub of a program without green threads, and the main thread's entry of a program with them.
+// stub of a program without green threads, and the main thread's entry of a program with them, where the
+// cleanup is left to `__gt_drain_at_exit`.
 //
 // The managed globals are filled BEFORE user code — a `static` member's is filled on first
 // access instead (see `ModuleInit`) — and released AFTER it, before the leak gate, where a global still held
 // would count as a leak (exit 101). `__maxon_global_cleanup` takes the ExitCode in x0 and hands it back in
 // x0, the same pass-through shape `__mm_leak_check` has, so on AAPCS64 the value flows through with no move.
-function arm64EmitMainCall(code ByteArray, callFixups CallFixupArray, initGlobals bool, entryFunction ByteArray)
+function arm64EmitMainCall(code ByteArray, callFixups CallFixupArray, initGlobals bool, releasesGlobals bool, entryFunction ByteArray)
 	if initGlobals 'moduleInit'
 		arm64EmitBranchLink(code, callFixups: callFixups, targetName: ModuleInitName)
 	end 'moduleInit'
 
 	arm64EmitBranchLink(code, callFixups: callFixups, targetName: entryFunction)
 
-	if initGlobals 'globalCleanup'
+	if releasesGlobals 'globalCleanup'
 		arm64EmitBranchLink(code, callFixups: callFixups, targetName: GlobalCleanupName)
 	end 'globalCleanup'
 end 'arm64EmitMainCall'
@@ -269,7 +275,7 @@ export function buildArm64MainThreadEntryChunk(initGlobals bool, entryFunction B
 	var asm = Arm64RuntimeAsm.beginRawFunction()
 
 	arm64EmitStpPreIndex(asm.code, frameSize: Arm64FrameRecordBytes)
-	arm64EmitMainCall(asm.code, callFixups: asm.callFixups, initGlobals: initGlobals, entryFunction: entryFunction)
+	arm64EmitMainCall(asm.code, callFixups: asm.callFixups, initGlobals: initGlobals, releasesGlobals: false, entryFunction: entryFunction)
 	arm64EmitLdpPostIndex(asm.code, frameSize: Arm64FrameRecordBytes)
 	arm64EmitRet(asm.code)
 

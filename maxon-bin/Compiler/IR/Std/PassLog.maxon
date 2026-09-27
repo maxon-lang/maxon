@@ -1,20 +1,19 @@
 // PassLog — THE LOG SINK A PER-FUNCTION Std PASS WRITES TO, whichever thread runs it.
 //
-// The twelve passes `StdPassPool` fans out run on pool workers, and a worker may not reach the logger:
-// its level tables are module `var`s, and a module `var` reached from a service message is E3143. So a
-// pass writes its per-function lines HERE — a level and a text per line — and the driver hands them to the
-// logger on the main thread after the pool has drained, in function-index order, so `--log=ir:trace`
-// reads exactly as a serial run of the same passes would (`tests/parallel-compile/log-order`).
+// The twelve passes `StdPassPool` fans out run on pool workers, which finish in any order. So a
+// pass writes its per-function lines HERE — a level and a text per line — and the driver hands them
+// to the logger on the main thread after the pool has drained, in function-index order, so
+// `--log=ir:trace` reads exactly as a serial run of the same passes would
+// (`tests/parallel-compile/log-order`).
 //
-// ⚠ **THE THRESHOLD IS CAPTURED AT CONSTRUCTION, ON THE MAIN THREAD.** `effectiveLogLevelOf` is the one
-// read of the logger's tables, and it happens where a `spawn` argument is built; a worker asks only the
+// ⚠ **THE THRESHOLD IS CAPTURED AT CONSTRUCTION, ON THE MAIN THREAD.** `compilerLogEnabled` is the
+// one read of the levels, and it happens where a `spawn` argument is built; a worker asks only the
 // two booleans it was handed.
 //
-// ⚠ **A LINE IS AN EAGER `String`, GUARDED AT THE SITE, NOT A THUNK.** The logger takes a closure so a
-// disabled line costs nothing; a closure CALLED from a worker is an indirect dispatch, and E3143 answers
-// one by treating every address-taken function in the program as message-reachable — which reaches the
-// logger and refuses the compile. So a site asks `traces`/`debugs` first and builds the text only past
-// the guard, which is the same cost the thunk would have had.
+// ⚠ **A LINE IS AN EAGER `String`, GUARDED AT THE SITE, NOT A THUNK.** A closure CALLED from a
+// worker is an indirect dispatch, and E3143 answers one by treating every address-taken function in
+// the program as message-reachable — which reaches module storage somewhere and refuses the compile.
+// So a site asks `traces`/`debugs` first and builds the text only past the guard.
 //
 // ⭐ **LINES ARE GROUPED BY STEP.** A worker runs one function through every step of the schedule in
 // order and `beginStep` marks where each step's lines start, so the driver can replay pass-major — every
@@ -34,9 +33,8 @@ module type PassLog
 	// The first line of each step begun, in step order; the line count closes the last step.
 	var stepStarts as LogLineIndexArray
 
-	// `level` is the category's effective level, read on the main thread (`effectiveLogLevelOf`).
-	module static function create(level LogLevel) returns PassLog
-		return Self{debugs: level.rawValue >= LogLevel.DEBUG.rawValue, traces: level.rawValue >= LogLevel.TRACE.rawValue, levels: LogLevelArray.create(), lines: StringArray.create(), stepStarts: LogLineIndexArray.create()}
+	module static function create(group CompilerLogGroup) returns PassLog
+		return Self{debugs: compilerLogEnabled(group, level: LogLevel.debug), traces: compilerLogEnabled(group, level: LogLevel.trace), levels: LogLevelArray.create(), lines: StringArray.create(), stepStarts: LogLineIndexArray.create()}
 	end 'create'
 
 	// Start a function: the step starts of the previous one are meaningless for this one. A worker takes
@@ -60,13 +58,13 @@ module type PassLog
 
 	// A DEBUG line. The site has asked `debugs` before building `text`.
 	module function debug(text String)
-		self.levels.push(LogLevel.DEBUG)
+		self.levels.push(LogLevel.debug)
 		self.lines.push(text)
 	end 'debug'
 
 	// A TRACE line. The site has asked `traces` before building `text`.
 	module function trace(text String)
-		self.levels.push(LogLevel.TRACE)
+		self.levels.push(LogLevel.trace)
 		self.lines.push(text)
 	end 'trace'
 
@@ -87,7 +85,7 @@ module type PassLog
 
 	// Hand the lines of step `step` to the logger, in order. A log that recorded nothing has no steps and
 	// replays nothing; one that recorded has a start for every step the worker began.
-	module function replayStep(step LogLineIndex, category LogCategory)
+	module function replayStep(step LogLineIndex, into Logger)
 		if self.stepStarts.count() == 0 'nothingRecorded'
 			return
 		end 'nothingRecorded'
@@ -98,7 +96,7 @@ module type PassLog
 		for index in first upto bound 'eachLine'
 			let level = try self.levels.get(index) otherwise panic("PassLog.replayStep: levels.get OOB at {index} — the two columns are pushed together")
 			let text = try self.lines.get(index) otherwise panic("PassLog.replayStep: lines.get OOB at {index}")
-			logAt(category, level: level, message: function() gives text)
+			into.log(level, message: text)
 		end 'eachLine'
 	end 'replayStep'
 end 'PassLog'

@@ -2,10 +2,11 @@
 // entry point wears, the FILETIME facts the per-target wall-clock chunks are assembled against, and the
 // one clock body that is still built as Std IR here.
 //
-// ⭐ **TWO OF THE THREE ENTRY POINTS ARE MAXON SOURCE, IN `runtime/Clock.maxon`.** `__clock_now_unix_s`
-// and `__uptime_ms` are written there against the `__Raw` floor, so the compiler READS them out of the
-// tree instead of building them. What stays here is what a source file cannot answer: the band
-// predicates, which classify a CALLEE the parser emitted, and `__thread_cpu_ticks`.
+// ⭐ **EVERY ENTRY POINT BUT ONE IS MAXON SOURCE, IN `runtime/Clock.maxon`.** `__clock_now_unix_s`,
+// `__clock_now_unix_ns`, `__clock_now_filetime` and `__uptime_ms` are written there against the
+// `__Raw` floor, so the compiler READS them out of the tree instead of building them. What stays
+// here is what a source file cannot answer: the band predicates, which classify a CALLEE the parser
+// emitted, and `__thread_cpu_ticks`.
 //
 // ⛔ **WHY `__thread_cpu_ticks` IS THE ONE THAT CANNOT MOVE.** Its green-thread arm reads the running
 // green thread's clock offset (`GtRuntime.emitLoadCurrentGtCpuOffset`), which goes through the
@@ -28,12 +29,14 @@
 // lanes, so they do not divide by "may this target run it". They reach three DIFFERENT Win32 imports,
 // and the optional trailing import band is gated per producer: one shared bit would make a program that
 // reads the calendar import `QueryThreadCycleTime`, and a program that measures its own cost import
-// `GetSystemTimeAsFileTime`.
+// `GetSystemTimePreciseAsFileTime`.
 
 // The prefix every wall-clock runtime entry point shares — the "does this program read the CALENDAR?" test.
 let ClockRuntimeCallPrefix = b"__clock_"
 
 export let WallClockNowUnixSecondsName = b"__clock_now_unix_s"
+export let WallClockNowUnixNanosName = b"__clock_now_unix_ns"
+export let WallClockNowFileTimeName = b"__clock_now_filetime"
 
 // The `__thread_` band — the "does this program ask how much CPU TIME its own thread has used?" test, and
 // the second thing `TargetFacilities.calleeHostFacility` reads out of this file, mapping it onto

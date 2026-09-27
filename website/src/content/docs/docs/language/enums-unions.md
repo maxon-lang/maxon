@@ -416,8 +416,8 @@ A case with a payload is constructed like a call — first argument positional, 
 payload fields: `Outcome.failure(404, message: "not found")`. A case without a payload is written like an
 enum case: `Outcome.pending`.
 
-Payloads may be integers, booleans, strings, records, other unions and collections. A `float` payload is
-not supported yet (**E2015**).
+Payloads may be integers, floats, booleans, strings, records, other unions and collections. An integer
+literal passed for a `float` payload widens to the float: `Reading.celsius(21)` carries `21.0`.
 
 ### Pattern Matching
 

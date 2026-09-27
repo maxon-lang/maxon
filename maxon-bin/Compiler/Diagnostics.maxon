@@ -249,7 +249,7 @@ end 'reportPositionedWithNote'
 //
 // ⚠⚠ **THE LATCH IS MODULE-LEVEL, AND THAT IS EXACT ONLY BECAUSE A COMPILE IS SERIAL — AND THIS IS THE
 // ONE PLACE THAT ARGUMENT IS WRITTEN OUT.** Four module-level latches rest on it and this comment is
-// the roster: this capture latch, `Logger.currentTraceUnit` (written by `Compiler.compileToProduct`),
+// the roster: this capture latch, `TraceEvents.currentTraceUnit` (written by `Compiler.compileToProduct`),
 // `PhaseProbe.openPhaseSpans` and `QueryEngine.sharedFileMemos`. Each states WHAT it needs and points
 // here for WHY, so the reason moves in one edit rather than four.
 //
@@ -262,8 +262,8 @@ end 'reportPositionedWithNote'
 //   * **This compiler spawns THREE pools of worker services — `FrontEndPool`, `BackendPool` and
 //     `StdPassPool` — and no worker touches any of these four latches.** A module `var` reached from a
 //     service message is E3143,
-//     so a worker structurally cannot log through `Logger`, open a trace span or write a diagnostic: each
-//     buffers what it has to say (`PassLog`, `PoolPhaseCosts`) and the driver folds it on `main`'s strand
+//     so a worker structurally cannot open a trace span or write a diagnostic: each
+//     buffers what it has to say (`PoolPhaseCosts`) and the driver folds it on `main`'s strand
 //     after the pool has drained. The latches are therefore still written by exactly one strand.
 //   * `compileToProduct` reaches no yield point between its ends except the two drains, and a drain
 //     awaits replies from workers that write none of the four.

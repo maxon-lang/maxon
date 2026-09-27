@@ -1897,6 +1897,9 @@ export union ParseError implements Error
 	// A door a lent graph may not pass, reached by the lent binding itself after its send (E3160). A value read out
 	// of one, and a handler's lent parameter, answer the same rule once every body is parsed (`StorageProvenance`).
 	lentGraphEscapes(explanation String, line LineNumber, column ColumnNumber)
+
+	registryRefused(code ErrorCode, explanation String, line LineNumber, column ColumnNumber, note DiagnosticNote)
+	extensionMemberHidesOwnMember(explanation String, line LineNumber, column ColumnNumber, note DiagnosticNote)
 end 'ParseError'
 
 export typealias ParseErrorArray = Array with ParseError
@@ -1977,6 +1980,58 @@ union ServiceReplyValue
 	cell(promise ValueId)
 end 'ServiceReplyValue'
 
+union MessageRoute
+	mailbox
+	sendTable(slot CaseIndex, interfaceName ByteArray)
+end 'MessageRoute'
+
+union SweptDeclarationPick
+	chosen(decl OverloadedDecl)
+	undecided
+end 'SweptDeclarationPick'
+
+function payloadsAgree(payloads PayloadFieldArray, other PayloadFieldArray) returns bool
+	if payloads.count() != other.count() 'differentArity'
+		return false
+	end 'differentArity'
+
+	for (position, field) in payloads.withIterator() 'eachSlot'
+		let theirs = try other.get(position.index()) otherwise panic("payloadsAgree: other.get OOB at {position.index()} below the equal count just compared")
+
+		if not maxonTypesDenoteSame(field.declaredType, b: theirs.declaredType) 'differentSlot'
+			return false
+		end 'differentSlot'
+	end 'eachSlot'
+
+	return true
+end 'payloadsAgree'
+
+function throwsClausesAgree(clause ThrowsClause, other ThrowsClause) returns bool
+	return match clause 'clause'
+		none gives not throwsClauseIsThrowing(other)
+		throwing(name) gives throwsClauseNames(other, name: name)
+	end 'clause'
+end 'throwsClausesAgree'
+
+function throwsClauseNames(clause ThrowsClause, name String) returns bool
+	return match clause 'clause'
+		none gives false
+		throwing(declared) gives declared.equals(name)
+	end 'clause'
+end 'throwsClauseNames'
+
+function awaitedServiceOf(route MessageRoute, typeName ByteArray) returns ByteArray
+	return match route 'route'
+		mailbox gives typeName
+		sendTable(_, interfaceName) gives interfaceName
+	end 'route'
+end 'awaitedServiceOf'
+
+union RegistryReplacement
+	unconditional
+	replacing(old ValueId)
+end 'RegistryReplacement'
+
 union DestructuredSource
 	tuple(layout StructLayout)
 	deferred
@@ -2017,7 +2072,7 @@ union AsyncCalleeLookup
 	// roads describe the promise differently at every door: an `async` spawn's facts come off the callee's
 	// own signature, a reply's off the message's PLUS `ServiceError`, which the callee's signature does not
 	// mention and never will.
-	serviceReply(messageName ByteArray)
+	serviceReply(messageName ByteArray, awaitedService ByteArray)
 	none
 end 'AsyncCalleeLookup'
 
@@ -2065,16 +2120,16 @@ function asyncCalleeIfMatch(op MaxonOp, promise ValueId) returns AsyncCalleeLook
 		asyncCall(result, callee, _, _, _, _, _) gives foundCalleeIfEqual(result, callee: callee, promise: promise)
 
 		// A reply cell mints a promise too; this arm is how `awaitedPromiseFacts` finds one.
-		serviceReplyCell(result, messageName) gives serviceReplyIfEqual(result, messageName: messageName, promise: promise)
+		serviceReplyCell(result, messageName, awaitedService) gives serviceReplyIfEqual(result, messageName: messageName, awaitedService: awaitedService, promise: promise)
 	end 'op'
 end 'asyncCalleeIfMatch'
 
 // `serviceReply(messageName)` when `result` IS the tracked promise (this `serviceReplyCell` minted it),
 // else `none` — `foundCalleeIfEqual`'s twin one road over, split for its reason: a match arm cannot host the
 // equality test inline.
-function serviceReplyIfEqual(result ValueId, messageName ByteArray, promise ValueId) returns AsyncCalleeLookup
+function serviceReplyIfEqual(result ValueId, messageName ByteArray, awaitedService ByteArray, promise ValueId) returns AsyncCalleeLookup
 	if result == promise 'eq'
-		return AsyncCalleeLookup.serviceReply(messageName)
+		return AsyncCalleeLookup.serviceReply(messageName, awaitedService: awaitedService)
 	end 'eq'
 
 	return AsyncCalleeLookup.none
@@ -3630,6 +3685,7 @@ union CompilerOwnedStaticSurface
 	managedSocket
 	managedMemory
 	containerAlias(giid GenericInstanceId)
+	sharedValue(giid GenericInstanceId)
 	none
 end 'CompilerOwnedStaticSurface'
 
@@ -4028,8 +4084,7 @@ end 'MethodReceiver'
 // be put there for the load to find. A second SPELLING is still refused here.
 //
 // It returns the STRING and each caller throws `ParseError.unsupported(…)` INLINE — never `throw
-// self.helperReturningAParseError(…)`, which leaks two allocations (`floatPayloadMessage` records
-// the family).
+// self.helperReturningAParseError(…)`, which leaks two allocations.
 function structTypedSelfFieldBaseMessage(fieldName ByteArray) returns String
 	return "a field access through '{String.from(fieldName)}', which is a struct-typed FIELD of the enclosing type (its box has to be loaded out of the receiver before it can be addressed)"
 end 'structTypedSelfFieldBaseMessage'
@@ -6669,6 +6724,7 @@ let BuiltinsQualifierPrefix = b"__Builtins."
 let BuiltinsCurrentTimeNanosName = b"__Builtins.currentTimeNanos"
 let BuiltinsCurrentTimeMsName = b"__Builtins.currentTimeMs"
 let BuiltinsCurrentUnixTimeSecondsName = b"__Builtins.currentUnixTimeSeconds"
+let BuiltinsCurrentUnixTimeNanosName = b"__Builtins.currentUnixTimeNanos"
 let BuiltinsSleepName = b"__Builtins.sleep"
 
 // `stdlib/Scheduler.maxon`'s floor — the intrinsic `Scheduler.yield()`'s one-line body calls. It routes to
@@ -6815,7 +6871,7 @@ let DebugStreamNameIdCallee = b"__DebugStream.nameId"
 //
 // ⚠ **THE FOUR EMITTING MEMBERS RETURN NOTHING, WHICH IS WHY THE STATEMENT DOOR HAS TO CLAIM THEM**
 // (`qualifiedStaticCallsAt`). A bare statement is the only position a void call can be written in, and
-// `Logger.logEvent` / `PhaseProbe.begin` — the compiler's own emitters — write exactly that.
+// `TraceEvents.logEvent` / `PhaseProbe.begin` — the compiler's own emitters — write exactly that.
 //
 // ⚠⚠ **THE QUALIFIER IS THE TEST, NOT A ROSTER OF THE FIVE, AND THAT IS `isBuiltinsIntrinsicCallee`'s
 // RULE ONE TYPE OVER.** A member this compiler does not recognize must reach the reserved-callee rejection
@@ -7547,6 +7603,74 @@ module function tokenIsTheSpawnKeyword(tok Token) returns bool
 	return tok.kind == TokenKind.identifier and tok.value.equals(SpawnKeywordName)
 end 'tokenIsTheSpawnKeyword'
 
+function tokenKindIn(tokens TokenArray, index TokenIndex) returns TokenKind
+	if index >= tokens.count() 'pastEnd'
+		return TokenKind.eof
+	end 'pastEnd'
+
+	return (try tokens.get(index) otherwise panic("tokenKindIn: index below count just checked but tokens.get({index}) failed")).kind
+end 'tokenKindIn'
+
+function initializerEndIndexIn(tokens TokenArray, start TokenIndex) returns TokenIndex
+	var i = start
+	var depth = 0 as BracketDepth
+
+	while true 'scan'
+		let kind = tokenKindIn(tokens, index: i)
+
+		if kind == TokenKind.eof 'fileEnd'
+			break
+		end 'fileEnd'
+
+		if kind == TokenKind.newline and depth == 0 'lineEnd'
+			break
+		end 'lineEnd'
+
+		if kind == TokenKind.leftBracket 'openBracket'
+			depth = depth + 1
+		end 'openBracket'
+
+		// Guarded, because `BracketDepth` is unsigned: a stray `]` with no `[` before it would wrap the
+		// counter to its maximum and the scan would swallow the rest of the FILE. Left at 0 it is simply
+		// not a bracket the initializer opened, and the line's own newline still ends the range — which
+		// is what the malformed initializer's diagnostic then names.
+		if kind == TokenKind.rightBracket and depth > 0 'closeBracket'
+			depth = depth - 1
+		end 'closeBracket'
+
+		i = i + 1
+	end 'scan'
+
+	return i
+end 'initializerEndIndexIn'
+
+module function defaultDeclarationAt(tokens TokenArray, index TokenIndex) returns bool
+	if tokenKindIn(tokens, index: index) != TokenKind.default 'notTheKeyword'
+		return false
+	end 'notTheKeyword'
+
+	if index > 0 and tokenKindIn(tokens, index: (index - 1) as TokenIndex) != TokenKind.newline 'notAtAStatementStart'
+		return false
+	end 'notAtAStatementStart'
+
+	return tokenKindIn(tokens, index: index + 1) == TokenKind.identifier and tokenKindIn(tokens, index: index + 2) == TokenKind.equals
+end 'defaultDeclarationAt'
+
+module function defaultDeclarationFrom(tokens TokenArray, index TokenIndex, path FilePath, isStdlibSource bool) returns DefaultDeclaration
+	let keyTok = try tokens.get(index + 1) otherwise panic("defaultDeclarationFrom: `defaultDeclarationAt` saw the key at {index + 1}")
+	let exprStart = (index + 3) as TokenIndex
+	let exprEnd = initializerEndIndexIn(tokens, start: exprStart)
+	let startsWithASpawn = exprStart < tokens.count() and tokenIsTheSpawnKeyword(try tokens.get(exprStart) otherwise panic("defaultDeclarationFrom: exprStart below count just checked")) and tokenKindIn(tokens, index: exprStart + 2) == TokenKind.dot
+
+	if not startsWithASpawn 'aValueDefault'
+		return DefaultDeclaration.create(keyTok.value, declFilePath: path, keyRange: SourceRange.ofToken(keyTok), isStdlibSource: isStdlibSource, exprStart: exprStart, exprEnd: exprEnd, spawnedType: EmptySourceText, spawnedMember: EmptySourceText)
+	end 'aValueDefault'
+
+	let typeTok = try tokens.get(exprStart + 1) otherwise panic("defaultDeclarationFrom: the dot at +2 proves a token at +1")
+	let memberTok = try tokens.get(exprStart + 3) otherwise Token.eof()
+	return DefaultDeclaration.create(keyTok.value, declFilePath: path, keyRange: SourceRange.ofToken(keyTok), isStdlibSource: isStdlibSource, exprStart: exprStart, exprEnd: exprEnd, spawnedType: typeTok.value, spawnedMember: memberTok.value)
+end 'defaultDeclarationFrom'
+
 // ⭐⭐ **`test`'s SPELLING — AN IDENTIFIER, NEVER A KEYWORD, FOR `module`'s AND `spawn`'s REASON AND WITH
 // ITS OWN MEASUREMENT.** `test` stands as an ORDINARY IDENTIFIER in a declaration position **34 times** in
 // `maxon-bin/` + `stdlib/` today — `plain(test ValueId)` (`Parser.maxon:8906`), `let test = try
@@ -7763,6 +7887,29 @@ enum GreenThreadHandOff
 	move
 	lend
 end 'GreenThreadHandOff'
+
+union ThreadHandOffDoor
+	message(blame String)
+	publish(key ByteArray)
+end 'ThreadHandOffDoor'
+
+function handOffDoorBlame(door ThreadHandOffDoor) returns String
+	return match door 'door'
+		message(blame) gives blame
+		publish(key) gives "the value published to `{String.from(key)}`"
+	end 'door'
+end 'handOffDoorBlame'
+
+function handOffDoorKind(door ThreadHandOffDoor) returns GreenThreadHandOff
+	return match door 'door'
+		message gives GreenThreadHandOff.move
+		publish gives GreenThreadHandOff.lend
+	end 'door'
+end 'handOffDoorKind'
+
+function registryNotSolelyOwnedError(key ByteArray, anchor Token) returns ParseError
+	return ParseError.registryRefused(ErrorCode.registryPublishedValueNotSolelyOwned, explanation: "the value published to `{String.from(key)}` is not solely owned here — publish a `.clone()`", line: anchor.line, column: anchor.column, note: DiagnosticNote.none)
+end 'registryNotSolelyOwnedError'
 
 // The walk a hand-off proves its graph with at run time.
 function handOffWalk(handOff GreenThreadHandOff) returns CascadeAction
@@ -8399,7 +8546,7 @@ end 'cursorSurfaceMemberNames'
 // DOWNSTREAM symptom of a different defect belonging to the two `returns Self` members: a **`Self`** return,
 // not a type-parameter one, DECAYING to the base `structRef(Array)` whenever the receiver carried no instance
 // ALIAS SPELLING — `Parser.retypeInstanceMethodResult`, where the arm sat below an alias gate it never needed.
-// Fixed there; `stdlib/Log.maxon:50`'s own `return captured.clone()` was `E3005 Cannot return 'Array' from
+// Fixed there; `stdlib/TraceCapture.maxon`'s own `captured.clone()` was `E3005 Cannot return 'Array' from
 // function declared to return 'TraceKeyArray'` until it was.
 //
 // ⚠ **AND THAT FIX EXPOSED A SECOND ONE BEHIND IT — a DOUBLE FREE, not a diagnostic.** A corpus body is a
@@ -10808,7 +10955,7 @@ union TryTarget
 	// ⚠ **THAT DERIVED TYPE HAS A REGISTERED NAME SINCE SV4** (`<message>.errors`), so the OTHER three arms
 	// can carry it in an ordinary clause — see `caughtErrorFormFor`, which routes them to this arm's dispatch
 	// table by asking the registry rather than by re-deriving anything.
-	serviceReply(messageName ByteArray)
+	serviceReply(messageName ByteArray, awaitedService ByteArray)
 
 	// A call to a callee nothing defines: its `unresolved` result is a deferral to E3004, so every
 	// door passes it through (see `deferredUnresolvedMemberResult`).
@@ -12272,7 +12419,7 @@ end 'SlotMismatchVoice'
 //   • **WHO TAKES OWNERSHIP OF A MANAGED PAYLOAD.** A union CONSTRUCTED here hands its box to this frame, so
 //     a borrowed value may be CO-OWNED (`moveInPayload`, the 2026-08-04 transitive-consume ruling). A message
 //     crosses to another GREEN THREAD, where a second owner is not a refcount pair but a race
-//     (`moveIntoGreenThread`, EC10) — so the same borrowed value must be REFUSED or copied.
+//     (`handIntoGreenThread`, EC10) — so the same borrowed value must be REFUSED or copied.
 //   • **WHAT THE REFUSAL SOUNDS LIKE.** A construct's payload is a payload; a message's is an ARGUMENT, and
 //     it takes the argument sentence every other argument position takes for
 //     `SlotMismatchVoice.containerElementArgument`'s stated reason — it is a call whose arguments never
@@ -14465,7 +14612,7 @@ type FunctionBodyState
 	// This claim rests on a TOKEN-LEVEL whole-program summary (`ProgramSignatures.returnsFreshValue`), so it
 	// earns its own column and its own reader rather than licensing a slot steal.
 	//
-	// ⚠ **ITS READERS ARE THE GREEN-THREAD DOORS** (`moveIntoGreenThread`, `ownerLendsValue`), which need sole
+	// ⚠ **ITS READERS ARE THE GREEN-THREAD DOORS** (`handIntoGreenThread`, `ownerLendsValue`), which need sole
 	// ownership for a reason no other rule in the parser has: the value crosses to a SECOND GREEN THREAD, where
 	// a co-owner left behind on this thread steps a count the service now steps too.
 	//
@@ -15695,18 +15842,18 @@ export type Parser
 	var lastDispatchedMemberIndex as TokenIndex
 	var lastDispatchedReceiver as ValueId
 
-	// ⭐ **THE RETURN TYPE OF EVERY NON-CAPTURING CLOSURE LIFTED IN THIS FILE (P1.5-A2a), keyed by its
-	// synthetic name.** A lifted closure's signature is FILE-LOCAL: it never reaches the whole-program
-	// `SignatureIndex` (built from tokens before any body is parsed, and a closure is an EXPRESSION inside a
-	// body, not a top-level declaration the token sweep can see). So an indirect call through a closure
-	// bound to a local (`let f = function(x) gives x*2; f(8)`) cannot recover its return type the way A1's
-	// `functionValueReturnType` recovers a top-level function's — from the index. This map is that recovery:
-	// `parseClosureExpression` files each lift's return type under its `$`-suffixed name (unwritable in
-	// source, so it can never collide with a real function or alias), and `functionValueReturnType` consults
-	// it first. File-scoped, never reset: names are unique per file and a closure value is only ever CALLED
-	// within its own defining function (returning one out hands the caller a function-ALIAS-typed value,
-	// whose return comes from the alias, not from here).
-	var closureReturns as FuncReturnTypeMap
+	// ⭐ **THE PARAMETER AND RETURN TYPES OF EVERY NON-CAPTURING CLOSURE LIFTED IN THIS FILE
+	// (P1.5-A2a), keyed by its synthetic name.** A lifted closure's signature is FILE-LOCAL: it never
+	// reaches the whole-program `SignatureIndex` (built from tokens before any body is parsed, and a
+	// closure is an EXPRESSION inside a body, not a top-level declaration the token sweep can see). So
+	// an indirect call through a closure bound to a local (`let f = function(x) gives x*2; f(8)`)
+	// cannot recover its shape the way `functionValueShape` recovers a top-level function's — from the
+	// index. This map is that recovery: `parseClosureExpression` files each lift's shape under its
+	// `$`-suffixed name (unwritable in source, so it can never collide with a real function or alias),
+	// and `functionValueShape` consults it first. File-scoped, never reset: names are unique per file
+	// and a closure value is only ever CALLED within its own defining function (returning one out hands
+	// the caller a function-ALIAS-typed value, whose return comes from the alias, not from here).
+	var closureShapes as FunctionValueShapeMap
 
 	// ⭐ **THE ENCLOSING-FUNCTION SCOPES A CLOSURE BODY MUST NOT REACH INTO (P1.5-A2a) — the capture
 	// detector's input.** Empty outside a closure. `parseClosureExpression` pushes the enclosing `Scope` on
@@ -16108,7 +16255,7 @@ export type Parser
 			lastDispatchedReceiver: 0,
 			mintedTests: MintedTestArray.create(),
 			deferredPatternBindings: TokenArray.create(),
-			closureReturns: FuncReturnTypeMap.create(),
+			closureShapes: FunctionValueShapeMap.create(),
 			closureCaptureScopes: ScopeArray.create(),
 			closureEnclosingFuncIndices: FuncIndexArray.create(),
 			fileHasClosureLiteral: false,
@@ -17260,7 +17407,7 @@ export type Parser
 		var sweptParamTypes = MaxonTypeArray.create()
 		let sourceParamNames = self.paramNamesIn(paramsStart, typeParamPositionsOut: scannedTypeParamPositions, collectTypeParamFlags: inGenericScope, typesOut: sweptParamTypes, collectTypes: true)
 		let scannedParamNames = sweptParamNamesFor(sourceParamNames, takesReceiver: takesReceiver)
-		entries.push(FuncReturnTypeEntry.create(funcName, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: self.opaqueParamsDeclaredBy(scannedParamNames, positions: scannedTypeParamPositions), paramNames: sourceParamNames, paramTypes: sweptParamTypes, returnAliasName: returnAliasName))
+		entries.push(FuncReturnTypeEntry.create(funcName, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: self.opaqueParamsDeclaredBy(scannedParamNames, positions: scannedTypeParamPositions), paramNames: sourceParamNames, paramTypes: sweptParamTypes, returnAliasName: returnAliasName, nameLine: nameTok.line, nameColumn: nameTok.column))
 
 		// ⭐⭐ **EVERY FREE FUNCTION'S BARE NAME (N1b's qualified-spelling record, re-cut by N1c)** — recorded
 		// here, from the SAME token walk that records its return type, because it answers two questions only
@@ -21473,7 +21620,7 @@ export type Parser
 	// ⛔ **AND WITHOUT IT A SERVICE CANNOT TAKE A HANDLE, WHICH THE DESIGN REQUIRES.** A message's parameters
 	// ARE the payload fields of the synthesized request union (`ServiceCompanions.serviceRequestPayloads`
 	// resolves each one), so a `run(sink Logger.handle)` recorded `unresolved` builds a payload declared
-	// `unresolved` — and that takes `Parser.requirePayloadLowerable` into `classifyUnionPayload`'s panic.
+	// `unresolved` — and that reaches `classifyUnionPayload`'s panic.
 	// MEASURED as exactly that panic on `services/two-instances-are-independent`, whose `reportThen` takes a
 	// peer's handle.
 	//
@@ -23102,7 +23249,8 @@ export type Parser
 				// the extension's signature has already overwritten the type's in the index. An extension
 				// method shadows rather than overloads because an overload needs a whole-program registry and
 				// this one is per file (`overloadRegistrationNameFor`). The cost: a conformer's own `contains`
-				// hides `Iterable.contains(predicate)` on that type.
+				// hides `Iterable.contains(predicate)` on that type. A TYPE extension's shadowed member is
+				// recorded the same way and refused by the real parse (E3176, `parseExtensionDeclaration`).
 				let qualifiedMethodName = qualifiedMethodName(conformer, methodName: methodName)
 				let shadowed = index.conformerDeclaresOwnMethod(qualifiedMethodName, takesReceiver: memberTakesReceiver)
 
@@ -24319,7 +24467,9 @@ export type Parser
 			// it to REPORT.
 			let decl = try self.readTopLevelBinding(visibility, qualifier: EmptySourceText)
 			try self.raiseBindingFailure(decl)
-		end 'isBinding' else 'notADeclaration'
+		end 'isBinding' else if defaultDeclarationAt(self.tokens, index: self.pos) 'isDefault'
+			try self.parseDefaultDeclaration()
+		end 'isDefault' else 'notADeclaration'
 			let tok = self.current()
 			throw ParseError.expectedDeclaration(tokenDisplayText(tok), line: tok.line, column: tok.column)
 		end 'notADeclaration'
@@ -24470,6 +24620,8 @@ export type Parser
 	// `declaredOutcome` carries the DRIFT GUARD: a `let` the real parse dispatches at top
 	// level must be one the sweep recorded, and a miss panics rather than compiling.
 	function raiseBindingFailure(decl TopLevelDecl) throws ParseError
+		try self.requireInitializerNamesNoRegistry(decl)
+
 		// A REDECLARATION is reported HERE, at the later declaration — the top-level twin of the
 		// duplicate-FUNCTION E3006 `commitFuncSignatures` raises. Checked BEFORE the outcome match
 		// because a duplicate is an error independent of whether the first declaration's initializer
@@ -24501,6 +24653,462 @@ export type Parser
 				evaluating then panic("Parser.raiseBindingFailure: top-level binding '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`, before any file is parsed")
 		end 'outcome'
 	end 'raiseBindingFailure'
+
+	function requireInitializerNamesNoRegistry(decl TopLevelDecl) throws ParseError
+		if not self.signatures.declaresADefault() 'noRegistryToReach'
+			return
+		end 'noRegistryToReach'
+
+		for i in decl.initStart upto decl.initEnd 'eachToken'
+			if not self.registryCallAt(i as TokenIndex) 'notARegistryCall'
+				continue
+			end 'notARegistryCall'
+
+			let keyTok = self.tokenAt(i as TokenIndex)
+			throw ParseError.registryRefused(ErrorCode.registryReachedFromGlobalInitializer, explanation: registryReachedFromInitializerMessage(keyTok.value, member: self.tokenAt(i + 2).value, globalName: decl.name), line: keyTok.line, column: keyTok.column, note: DiagnosticNote.none)
+		end 'eachToken'
+	end 'requireInitializerNamesNoRegistry'
+
+	function requireNoRegistryMemberOnAKey(nameTok Token, takesReceiver bool) throws ParseError
+		if takesReceiver or self.enclosingType.isEmpty() or not self.signatures.declaresADefault() or not registryMemberIsNamed(nameTok.value) or not self.signatures.declaresDefaultFor(self.enclosingType) 'notAKeysRegistryMember'
+			return
+		end 'notAKeysRegistryMember'
+
+		let key = String.from(self.enclosingType)
+		let declaration = try self.signatures.winningDefaultOf(self.enclosingType) otherwise panic("requireNoRegistryMemberOnAKey: `declaresDefaultFor` just answered that `{key}` has a default")
+		throw ParseError.registryRefused(ErrorCode.registryKeyDeclaresARegistryMember, explanation: "`{key}` is a `default` key, so `{key}.{String.from(RegistryCurrentMemberName)}` and `{key}.{String.from(RegistryRegisterMemberName)}` are the registry's — its own static `{String.from(nameTok.value)}` would be hidden; rename it", line: nameTok.line, column: nameTok.column, note: DiagnosticNote.at("the `default` for `{key}`", line: declaration.keyLine, column: declaration.keyColumn, filePath: declaration.declFilePath))
+	end 'requireNoRegistryMemberOnAKey'
+
+	function registryCallAt(index TokenIndex) returns bool
+		if self.kindAt(index) != TokenKind.identifier or self.kindAt(index + 1) != TokenKind.dot or self.kindAt(index + 3) != TokenKind.leftParen 'notTheShape'
+			return false
+		end 'notTheShape'
+
+		if index > 0 and self.kindAt((index - 1) as TokenIndex) == TokenKind.dot 'aMemberOfSomethingElse'
+			return false
+		end 'aMemberOfSomethingElse'
+
+		return registryMemberIsNamed(self.tokenAt(index + 2).value) and self.signatures.declaresDefaultFor(self.tokenAt(index).value)
+	end 'registryCallAt'
+
+	function parseDefaultDeclaration() throws ParseError
+		let declaration = defaultDeclarationFrom(self.tokens, index: self.pos, path: self.filePath, isStdlibSource: self.isStdlibSource)
+		let keyTok = self.tokenAt(self.pos + 1)
+
+		if let earlier = try self.signatures.earlierDefaultAtTheSameLevel(declaration) 'declaredTwice'
+			throw ParseError.registryRefused(ErrorCode.registryDuplicateDefault, explanation: "two `default` declarations for `{String.from(declaration.key)}` in one program — delete one of them", line: keyTok.line, column: keyTok.column, note: DiagnosticNote.at("the other `default` for `{String.from(declaration.key)}`", line: earlier.keyLine, column: earlier.keyColumn, filePath: earlier.declFilePath))
+		end 'declaredTwice'
+
+		let returnType = try self.defaultKeyValueType(declaration, keyTok: keyTok)
+
+		if not (self.signatures.defaultKeyIsLive(declaration.key) and self.signatures.defaultDeclarationWins(declaration)) 'nothingBuildsIt'
+			self.pos = declaration.exprEnd
+			return
+		end 'nothingBuildsIt'
+
+		try self.parseDefaultInitializer(declaration, returnType: returnType)
+	end 'parseDefaultDeclaration'
+
+	function defaultKeyValueType(declaration DefaultDeclaration, keyTok Token) returns MaxonType throws ParseError
+		if self.signatures.defaultKeyIsAService(declaration.key) 'aServiceKey'
+			try self.requireDefaultSpawnsAnImplementer(declaration, keyTok: keyTok)
+			return MaxonType.structRef(self.artifact.typeNames.intern(serviceHandleCompanionName(declaration.key)))
+		end 'aServiceKey'
+
+		if not self.signatures.containsStructFor(declaration.key, readerFilePath: self.filePath) 'namesNoType'
+			throw ParseError.unknownTypeName(String.from(declaration.key), line: keyTok.line, column: keyTok.column)
+		end 'namesNoType'
+
+		try self.requireShareableRegistryValue(declaration.key, anchor: keyTok)
+		return MaxonType.structRef(self.artifact.typeNames.intern(declaration.key))
+	end 'defaultKeyValueType'
+
+	function requireDefaultSpawnsAnImplementer(declaration DefaultDeclaration, keyTok Token) throws ParseError
+		if not declaration.spawnsAService() 'notASpawn'
+			throw ParseError.registryRefused(ErrorCode.registryDefaultServiceDoesNotImplementKey, explanation: "the `default` for `{String.from(declaration.key)}` builds no service — `{String.from(declaration.key)}` is an interface, so its default must `spawn` a type that implements it", line: keyTok.line, column: keyTok.column, note: DiagnosticNote.none)
+		end 'notASpawn'
+
+		if self.signatures.typeImplementsInterface(declaration.spawnedType, interfaceName: declaration.key) and self.signatures.isInterfaceHandle(serviceHandleCompanionName(declaration.key)) 'implementsIt'
+			return
+		end 'implementsIt'
+
+		throw ParseError.registryRefused(ErrorCode.registryDefaultServiceDoesNotImplementKey, explanation: "the `default` for `{String.from(declaration.key)}` spawns `{String.from(declaration.spawnedType)}`, which does not implement `{String.from(declaration.key)}` — declare `type {String.from(declaration.spawnedType)} implements {String.from(declaration.key)}`, or spawn a type that does", line: keyTok.line, column: keyTok.column, note: DiagnosticNote.none)
+	end 'requireDefaultSpawnsAnImplementer'
+
+	function requireShareableRegistryValue(typeName ByteArray, anchor Token) throws ParseError
+		let layout = try self.registryValueLayout(typeName, anchor: anchor)
+
+		for i in 0 upto layout.fieldCount() 'eachField'
+			let writable = try layout.fieldMutable.get(i) otherwise panic("requireShareableRegistryValue: fieldMutable.get OOB at {i} below fieldCount {layout.fieldCount()}")
+
+			if writable 'aVarField'
+				throw self.unshareableRegistryValueError(typeName, reason: "its field `{String.from(layout.fieldNameAt(i))}` is writable", anchor: anchor)
+			end 'aVarField'
+		end 'eachField'
+
+		let subject = transferSubjectOf(ValueTypeTag.structRef, nameId: self.artifact.typeNames.intern(typeName), typeNames: self.artifact.typeNames)
+
+		match self.signatures.transferWalkOf(subject, action: CascadeAction.shareWalk, roots: TransferRoots.one, readerFilePath: self.filePath) 'walk'
+			closed or
+				walkedBy or
+				walkedAlone or
+				walkedThroughWitness then return
+			refused(noun) then throw self.unshareableRegistryValueError(typeName, reason: "it is {noun}", anchor: anchor)
+		end 'walk'
+	end 'requireShareableRegistryValue'
+
+	function requireShareableSharedValue(aliasName ByteArray, baseTok Token) throws ParseError
+		let element = self.sharedValueElementType(self.signatures.genericAliasInstanceFrom(aliasName, readerFilePath: self.filePath))
+
+		let tag = maxonTypeTag(element)
+
+		if tagIsByteRecord(tag) or not self.signatures.typeIsManagedFor(element, from: self.artifact.typeNames, readerFilePath: self.filePath) 'anImmutableWordOrString'
+			return
+		end 'anImmutableWordOrString'
+
+		if tagNamesADeclaredType(tag) or tag == ValueTypeTag.named 'aNamedType'
+			let name = self.internedName(typeNameIdOf(element))
+
+			if self.signatures.containsStructFor(name, readerFilePath: self.filePath) 'aRecord'
+				try self.requireShareableRegistryValue(name, anchor: baseTok)
+				return
+			end 'aRecord'
+
+			if self.signatures.isAnyServiceHandle(name) 'aHandle'
+				return
+			end 'aHandle'
+		end 'aNamedType'
+
+		throw self.unshareableRegistryValueError(self.displayTypeNameOf(tag, nameId: typeNameIdOf(element)).toByteArray(), reason: "it is neither a record of `let` fields, a `String`, a handle nor a scalar", anchor: baseTok)
+	end 'requireShareableSharedValue'
+
+	function registryValueLayout(typeName ByteArray, anchor Token) returns StructLayout throws ParseError
+		match self.signatures.structFor(typeName, readerFilePath: self.filePath) 'declared'
+			declared(found) then return found
+			undeclared then throw ParseError.unknownTypeName(String.from(typeName), line: anchor.line, column: anchor.column)
+		end 'declared'
+	end 'registryValueLayout'
+
+	function unshareableRegistryValueError(typeName ByteArray, reason String, anchor Token) returns ParseError
+		return ParseError.registryRefused(ErrorCode.registryValueNotShareable, explanation: "`{String.from(typeName)}` cannot be a registry value or a `SharedValue`: {reason} — every field must be a `let` of a type a share walk can mark", line: anchor.line, column: anchor.column, note: DiagnosticNote.none)
+	end 'unshareableRegistryValueError'
+
+	function parseDefaultInitializer(declaration DefaultDeclaration, returnType MaxonType) throws ParseError
+		let name = defaultInitializerName(declaration.key)
+		self.pos = declaration.exprStart
+		let anchor = self.current()
+		let declaredReturn = MaxonReturnType.value(returnType)
+
+		self.beginDeclaredBody(0, returnBrand: EmptySourceText, mayReturnAGlobalAlias: false, returnAlias: EmptySourceText, paramSites: sharedEmptyParamSites, carriesLayoutParam: false, countParam: fixedElementCountParamOf(false, paramCount: 0, witnessParamCount: 0), nascentSelfFactory: false, kind: EnclosingBodyKind.declaredFunction, witnessParamBase: 0, witnessParamCount: 0)
+
+		var initializer = IrFunction.create(name, maxonReturnType: declaredReturn, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), valueTags: self.bodyState.valueTags, valueNameIds: self.bodyState.valueNameIds, valueBrandIds: self.bodyState.valueBrandIds, valueMintedSole: self.anchors.functions.mintedSole, valueClosureEnv: self.bodyState.valueClosureEnv, valueIsCapturingClosure: self.bodyState.valueIsCapturingClosure, valueWitnessIds: self.bodyState.valueWitnessIds, returnLine: anchor.line, declaredAt: SourcePosition.declaredAt(self.filePath, nameTok: anchor), placeholders: self.anchors.functions, throwsTypeName: ThrowsClause.none)
+		initializer.visibility = Visibility.global
+
+		let initializerIndex = self.artifact.module.funcCount()
+		self.artifact.module.pushFunc(initializer)
+		self.artifact.setCurrentFuncIndex(initializerIndex as FuncIndex)
+
+		let entry = self.artifact.module.addBlockAt(initializer, label: b"entry", filePath: self.filePath.toString(), firstLine: anchor.line)
+		self.bodyState.currentBlock = entry
+
+		try self.parseCheckedValueReturn(initializer, block: entry, anchor: anchor)
+
+		if self.pos != declaration.exprEnd 'trailingTokens'
+			let stray = self.current()
+			throw ParseError.unexpectedToken("end of default value", got: tokenDisplayText(stray), line: stray.line, column: stray.column)
+		end 'trailingTokens'
+
+		self.artifact.recordFuncReturnType(name, returnType: declaredReturn, declaredSurface: sharedEmptyDeclaredSurface)
+		self.publishExistentialInstances(initializer)
+		self.fileDeferredProvenance(initializer)
+		self.publishDebugLocals(initializer)
+		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(ByteArrayArray.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: ByteArrayArray.create(), paramDeclaredNames: ByteArrayArray.create(), returnAggregateName: self.erasedAggregateNameOfReturn(declaredReturn), paramExistentialSites: sharedEmptyParamExistentialSites, returnExistentialSites: sharedEmptyReturnExistentialSites, extensionConstraints: sharedEmptyWhereConstraints), nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.filePath, synthesized: true)
+		self.commitRangeChecks(name)
+	end 'parseDefaultInitializer'
+
+	function parseRegistryCall(func IrFunction, keyTok Token, resultUsed bool) returns ValueId throws ParseError
+		try self.consume(TokenKind.dot)
+		let memberTok = try self.consume(TokenKind.identifier)
+		try self.consume(TokenKind.leftParen)
+
+		let key = keyTok.value
+		let isService = self.signatures.defaultKeyIsAService(key)
+		let valueType = self.registryValueTypeOf(key, isService: isService)
+
+		if memberTok.value.equals(RegistryCurrentMemberName) 'aLookup'
+			let rparenTok = try self.consume(TokenKind.rightParen)
+			let range = SourceRange.between(keyTok, last: rparenTok)
+			let slot = self.emitRegistrySlot(key, member: RegistryCurrentMemberName, range: range)
+
+			if isService 'aServiceLookup'
+				return self.emitOwnedRuntimeResult(RegistryServiceCurrentName, args: singletonArgs(slot), resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
+			end 'aServiceLookup'
+
+			return self.emitSharedValueRead(slot, valueType: valueType, range: range)
+		end 'aLookup'
+
+		let argTok = self.current()
+		let given = try self.parseExpression(func, block: self.bodyState.currentBlock)
+		let replacement = try self.parseRegistryReplacement(func)
+		let rparenTok = try self.consume(TokenKind.rightParen)
+		let range = SourceRange.between(keyTok, last: rparenTok)
+
+		try self.requireRegistryResultMatchesReplacement(replacement, resultUsed: resultUsed, memberTok: memberTok)
+
+		let slot = self.emitRegistrySlot(key, member: RegistryRegisterMemberName, range: range)
+
+		if isService 'aServiceRegister'
+			return try self.emitServiceRegistration(slot, handleType: valueType, given: given, replacement: replacement, argTok: argTok, range: range)
+		end 'aServiceRegister'
+
+		return try self.emitSharedValuePublish(slot, valueType: valueType, given: given, replacement: replacement, publishedTo: key, argTok: argTok, range: range)
+	end 'parseRegistryCall'
+
+	// Recorded before the `globalAddr` it keys: a site is filed under the op the next append creates,
+	// and that op carries the call's whole range, which is where E3173 reports.
+	function emitRegistrySlot(key ByteArray, member ByteArray, range SourceRange) returns ValueId
+		self.artifact.recordRegistryUseSite(RegistryUseSite.create(key, member: member))
+		return self.emitGlobalAddr(defaultSlotLabel(key), range: range)
+	end 'emitRegistrySlot'
+
+	function registryValueTypeOf(key ByteArray, isService bool) returns MaxonType
+		let name = serviceHandleCompanionName(key) if isService else key
+		return MaxonType.structRef(self.artifact.typeNames.intern(name))
+	end 'registryValueTypeOf'
+
+	function parseRegistryReplacement(func IrFunction) returns RegistryReplacement throws ParseError
+		if not self.at(TokenKind.comma) 'unconditional'
+			return RegistryReplacement.unconditional
+		end 'unconditional'
+
+		try self.consume(TokenKind.comma)
+		self.skipNewlines()
+		let labelTok = try self.consume(TokenKind.identifier)
+
+		if not labelTok.value.equals(RegistryReplacingLabel) 'notTheReplacingLabel'
+			throw ParseError.unexpectedToken("`{String.from(RegistryReplacingLabel)}:`", got: tokenDisplayText(labelTok), line: labelTok.line, column: labelTok.column)
+		end 'notTheReplacingLabel'
+
+		try self.consume(TokenKind.colon)
+		let old = try self.parseExpression(func, block: self.bodyState.currentBlock)
+		return RegistryReplacement.replacing(old)
+	end 'parseRegistryReplacement'
+
+	function requireRegistryResultMatchesReplacement(replacement RegistryReplacement, resultUsed bool, memberTok Token) throws ParseError
+		match replacement 'replacement'
+			replacing then return
+			unconditional then break 'replacement'
+		end 'replacement'
+
+		if resultUsed 'aValueOfAVoidCall'
+			throw ParseError.unsupported("`{String.from(memberTok.value)}(…)` without `replacing:` returns nothing — only the conditional form answers whether it replaced the value", line: memberTok.line, column: memberTok.column)
+		end 'aValueOfAVoidCall'
+	end 'requireRegistryResultMatchesReplacement'
+
+	function emitSharedValueRead(holder ValueId, valueType MaxonType, range SourceRange) returns ValueId
+		let result = self.emitRuntimeCall(SharedValueCurrentName, args: singletonArgs(holder), resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
+
+		if self.valueIsManagedHeap(result) 'aCountedReference'
+			self.trackOwnedTemp(result, exclusivity: OwnedHeapExclusivity.coOwned)
+		end 'aCountedReference'
+
+		return result
+	end 'emitSharedValueRead'
+
+	function emitServiceRegistration(slot ValueId, handleType MaxonType, given ValueId, replacement RegistryReplacement, argTok Token, range SourceRange) returns ValueId throws ParseError
+		let handle = try self.registryHandleOf(given, handleType: handleType, argTok: argTok)
+		let stored = self.coOwnConcreteRecordForSink(handle, range: range)
+
+		return match replacement 'replacement'
+			unconditional gives self.emitRuntimeCall(RegistryServiceRegisterName, args: pairArgs(slot, second: stored), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			replacing(old) gives self.emitRuntimeCall(RegistryServiceReplaceName, args: tripleArgs(slot, second: stored, third: try self.registryHandleOf(old, handleType: handleType, argTok: argTok)), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
+		end 'replacement'
+	end 'emitServiceRegistration'
+
+	function registryHandleOf(given ValueId, handleType MaxonType, argTok Token) returns ValueId throws ParseError
+		let handle = self.interfaceHandleOf(given, declared: handleType, first: argTok, last: argTok)
+		try self.requireManagedValueMatches(handleType, isString: false, value: handle, placeDoor: FunctionTypeDoor.payload, placeName: RegistryRegisterMemberName, placeOwner: EmptySourceText, placeBrand: EmptySourceText, voice: SlotMismatchVoice.containerElementArgument, anchor: argTok)
+		return handle
+	end 'registryHandleOf'
+
+	function emitSharedValuePublish(holder ValueId, valueType MaxonType, given ValueId, replacement RegistryReplacement, publishedTo ByteArray, argTok Token, range SourceRange) returns ValueId throws ParseError
+		let published = try self.publishableValue(given, valueType: valueType, key: publishedTo, placeName: RegistryPublishMemberName, argTok: argTok)
+
+		return match replacement 'replacement'
+			unconditional gives self.emitRuntimeCall(SharedValuePublishName, args: pairArgs(holder, second: published), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			replacing(old) gives self.emitRuntimeCall(SharedValueReplaceName, args: tripleArgs(holder, second: published, third: old), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
+		end 'replacement'
+	end 'emitSharedValuePublish'
+
+	function publishableValue(given ValueId, valueType MaxonType, key ByteArray, placeName ByteArray, argTok Token) returns ValueId throws ParseError
+		try self.requireManagedValueMatches(valueType, isString: tagIsByteRecord(maxonTypeTag(valueType)), value: given, placeDoor: FunctionTypeDoor.payload, placeName: placeName, placeOwner: EmptySourceText, placeBrand: EmptySourceText, voice: SlotMismatchVoice.containerElementArgument, anchor: argTok)
+		try self.requirePublishedValueNamedOnce(given, key: key, argTok: argTok)
+		return try self.handIntoGreenThread(given, door: ThreadHandOffDoor.publish(key), anchor: argTok)
+	end 'publishableValue'
+
+	// ⚠ The ownership proof in `handIntoGreenThread` reads a fresh-return mark that survives an
+	// immutable rebind (`let b = a`), so a value two live names bind would pass it; counting the names
+	// refuses that.
+	function requirePublishedValueNamedOnce(value ValueId, key ByteArray, argTok Token) throws ParseError
+		var names = 0
+
+		for (_, binding) in self.bodyState.scope.allVars() 'eachBinding'
+			if binding.isLiveNameOf(value) 'aLiveName'
+				names = names + 1
+			end 'aLiveName'
+		end 'eachBinding'
+
+		if names > 1 'aliased'
+			throw registryNotSolelyOwnedError(key, anchor: argTok)
+		end 'aliased'
+	end 'requirePublishedValueNamedOnce'
+
+	function interfaceHandleOf(value ValueId, declared MaxonType, first Token, last Token) returns ValueId
+		if not self.handleWidensToSlot(value, declared: declared) 'noConversion'
+			return value
+		end 'noConversion'
+
+		return self.emitInterfaceHandleConversion(value, target: self.internedName(typeNameIdOf(declared)), first: first, last: last)
+	end 'interfaceHandleOf'
+
+	function interfaceHandleNamed(value ValueId, target ByteArray, first Token, last Token) returns ValueId
+		if not self.handleWidensToName(value, target: target) 'noConversion'
+			return value
+		end 'noConversion'
+
+		return self.emitInterfaceHandleConversion(value, target: target, first: first, last: last)
+	end 'interfaceHandleNamed'
+
+	function handleWidensToSlot(value ValueId, declared MaxonType) returns bool
+		if not self.signatures.declaresAnInterfaceHandle() 'noInterfaceHandle'
+			return false
+		end 'noInterfaceHandle'
+
+		let slotTag = maxonTypeTag(declared)
+
+		if not (slotTag == ValueTypeTag.structRef or slotTag == ValueTypeTag.named) 'notAHandleSlot'
+			return false
+		end 'notAHandleSlot'
+
+		return self.handleWidensToName(value, target: self.internedName(typeNameIdOf(declared)))
+	end 'handleWidensToSlot'
+
+	function handleWidensToName(value ValueId, target ByteArray) returns bool
+		return self.signatures.declaresAnInterfaceHandle() and self.tagOf(value) == ValueTypeTag.structRef and self.signatures.serviceHandleWidensTo(self.valueTypeName(value), interfaceHandleName: target)
+	end 'handleWidensToName'
+
+	function emitInterfaceHandleConversion(value ValueId, target ByteArray, first Token, last Token) returns ValueId
+		let conversion = interfaceHandleConversionName(self.signatures.serviceOfHandle(self.valueTypeName(value)), interfaceName: self.signatures.interfaceOfHandle(target))
+		return self.emitOwnedRuntimeResult(conversion, args: singletonArgs(value), resultTag: ValueTypeTag.structRef, resultNameId: self.artifact.typeNames.intern(target), range: SourceRange.between(first, last: last))
+	end 'emitInterfaceHandleConversion'
+
+	function dispatchOnSharedValue(func IrFunction, holder ValueId, baseTok Token, resultUsed bool) returns ValueId throws ParseError
+		let memberTok = try self.consume(TokenKind.identifier)
+		let valueType = self.sharedValueElementType(self.valueInstanceId(holder))
+		try self.consume(TokenKind.leftParen)
+
+		if memberTok.value.equals(RegistryCurrentMemberName) 'aLookup'
+			let rparenTok = try self.consume(TokenKind.rightParen)
+			return self.emitSharedValueRead(holder, valueType: valueType, range: SourceRange.between(baseTok, last: rparenTok))
+		end 'aLookup'
+
+		if memberTok.value.equals(CloneMethodName) 'aSecondHolder'
+			let rparenTok = try self.consume(TokenKind.rightParen)
+			return self.emitOwnedRuntimeResult(SharedValueBoxCloneName, args: singletonArgs(holder), resultTag: self.tagOf(holder), resultNameId: self.valueNameId(holder), range: SourceRange.between(baseTok, last: rparenTok))
+		end 'aSecondHolder'
+
+		if not memberTok.value.equals(RegistryPublishMemberName) 'notAMember'
+			throw ParseError.unknownField(String.from(SharedValueTypeName), fieldName: String.from(memberTok.value), line: memberTok.line, column: memberTok.column)
+		end 'notAMember'
+
+		let argTok = self.current()
+		let given = try self.parseExpression(func, block: self.bodyState.currentBlock)
+		let replacement = try self.parseRegistryReplacement(func)
+		let rparenTok = try self.consume(TokenKind.rightParen)
+		try self.requireRegistryResultMatchesReplacement(replacement, resultUsed: resultUsed, memberTok: memberTok)
+		return try self.emitSharedValuePublish(holder, valueType: valueType, given: given, replacement: replacement, publishedTo: self.internedName(typeNameIdOf(valueType)), argTok: argTok, range: SourceRange.between(baseTok, last: rparenTok))
+	end 'dispatchOnSharedValue'
+
+	function sharedValueElementType(giid GenericInstanceId) returns MaxonType
+		return self.resolvedSlotType(self.signatures.sharedValueElementOf(giid))
+	end 'sharedValueElementType'
+
+	function parseSharedValueCreate(func IrFunction, typeTok Token, giid GenericInstanceId) returns ValueId throws ParseError
+		try self.consume(TokenKind.dot)
+		let memberTok = try self.consume(TokenKind.identifier)
+
+		if not memberTok.value.equals(RegistryCreateMemberName) 'notTheFactory'
+			throw ParseError.unknownStaticMember(String.from(typeTok.value), member: String.from(memberTok.value), line: memberTok.line, column: memberTok.column)
+		end 'notTheFactory'
+
+		try self.consume(TokenKind.leftParen)
+		let argTok = self.current()
+		let given = try self.parseExpression(func, block: self.bodyState.currentBlock)
+		let rparenTok = try self.consume(TokenKind.rightParen)
+		let range = SourceRange.between(typeTok, last: rparenTok)
+		let valueType = self.sharedValueElementType(giid)
+
+		let published = try self.publishableValue(given, valueType: valueType, key: typeTok.value, placeName: RegistryCreateMemberName, argTok: argTok)
+
+		match self.signatures.registryValueKindOf(self.signatures.sharedValueElementOf(giid), readerFilePath: self.filePath) 'kind'
+			service then panic("parseSharedValueCreate: a `SharedValue` holds a value, and `registryValueKindOf` answers `service` for no value type")
+			value(dropCallee, retainCallee, _) then return self.emitOwnedRuntimeResult(SharedValueBoxCreateName, args: tripleArgs(published, second: self.emitOptionalFuncAddr(dropCallee, range: range), third: self.emitOptionalFuncAddr(retainCallee, range: range)), resultTag: ValueTypeTag.genericInstance, resultNameId: giid as TypeNameId, range: range)
+		end 'kind'
+	end 'parseSharedValueCreate'
+
+	function emitOptionalFuncAddr(name ByteArray, range SourceRange) returns ValueId
+		if name.isEmpty() 'noFunction'
+			return self.emitLiteral(NoRuntimeFunction, valueType: MaxonType.integer, range: range)
+		end 'noFunction'
+
+		return self.emitRuntimeFuncAddr(name, range: range)
+	end 'emitOptionalFuncAddr'
+
+	function widenArgsToInterfaceHandles(callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argDefaultSlots ParamCountArray, anchor Token, rparenTok Token)
+		if not self.signatures.declaresAnInterfaceHandle() 'noInterfaceHandle'
+			return
+		end 'noInterfaceHandle'
+
+		match self.sweptDeclarationOf(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'declaration'
+			undecided then return
+			chosen(decl) then self.widenArgsToDeclaration(decl, args: args, argLabels: argLabels, anchor: anchor, rparenTok: rparenTok)
+		end 'declaration'
+	end 'widenArgsToInterfaceHandles'
+
+	function widenArgsToDeclaration(decl OverloadedDecl, args ValueIdArray, argLabels ByteArrayArray, anchor Token, rparenTok Token)
+		let receiverArgs = 1 if decl.takesReceiver else 0
+
+		for i in receiverArgs upto args.count() 'eachSourceArg'
+			let label = try argLabels.get(i) otherwise panic("widenArgsToDeclaration: argLabels.get OOB at {i} — args and argLabels are pushed in lockstep")
+			let swept = try decl.paramTypes.get(argSlotPosition(decl.paramNames, argIndex: i - receiverArgs, label: label)) otherwise continue
+			let given = try args.get(i) otherwise panic("widenArgsToDeclaration: args.get OOB at {i}")
+			try args.set(i, value: self.interfaceHandleOf(given, declared: self.sweptParamType(swept, scopeFilePath: decl.declFilePath), first: anchor, last: rparenTok)) otherwise panic("widenArgsToDeclaration: args.set OOB at {i}")
+		end 'eachSourceArg'
+	end 'widenArgsToDeclaration'
+
+	function widenFunctionValueArgs(callee ValueId, args ValueIdArray, anchor Token, rparenTok Token)
+		if not self.signatures.declaresAnInterfaceHandle() 'noInterfaceHandle'
+			return
+		end 'noInterfaceHandle'
+
+		for (position, declared) in self.functionValueShape(callee).paramTypes.withIterator() 'eachParam'
+			let i = position.index()
+			let given = try args.get(i) otherwise break
+			try args.set(i, value: self.interfaceHandleOf(given, declared: declared, first: anchor, last: rparenTok)) otherwise panic("widenFunctionValueArgs: args.set OOB at {i}")
+		end 'eachParam'
+	end 'widenFunctionValueArgs'
+
+	function widenWitnessArgs(target WitnessDispatchTarget, args ValueIdArray, first Token, last Token)
+		if not self.signatures.declaresAnInterfaceHandle() 'noInterfaceHandle'
+			return
+		end 'noInterfaceHandle'
+
+		for (position, formal) in target.paramTypeNames.withIterator() 'eachFormal'
+			let i = position.index() + WitnessReceiverArgCount
+			let given = try args.get(i) otherwise panic("widenWitnessArgs: args.get OOB at {i} — a dispatch reaching here has the receiver plus one actual per formal")
+			try args.set(i, value: self.interfaceHandleNamed(given, target: formal, first: first, last: last)) otherwise panic("widenWitnessArgs: args.set OOB at {i}")
+		end 'eachFormal'
+	end 'widenWitnessArgs'
 
 	// Re-raise a diagnostic the constant evaluator recorded earlier, on another file's behalf. It exists only to
 	// give the borrowed payload a scope of its own — see `raiseBindingFailure`.
@@ -24582,36 +25190,7 @@ export type Parser
 	// It cannot run away: `kindAt` answers `eof` past the end of the token array (see `tokenAt`), so
 	// an unterminated last line — or an unclosed `[` — stops at the file's end rather than walking off it.
 	function initializerEndIndex(start TokenIndex) returns TokenIndex
-		var i = start
-		var depth = 0 as BracketDepth
-
-		while true 'scan'
-			let kind = self.kindAt(i)
-
-			if kind == TokenKind.eof 'fileEnd'
-				break
-			end 'fileEnd'
-
-			if kind == TokenKind.newline and depth == 0 'lineEnd'
-				break
-			end 'lineEnd'
-
-			if kind == TokenKind.leftBracket 'openBracket'
-				depth = depth + 1
-			end 'openBracket'
-
-			// Guarded, because `BracketDepth` is unsigned: a stray `]` with no `[` before it would wrap the
-			// counter to its maximum and the scan would swallow the rest of the FILE. Left at 0 it is simply
-			// not a bracket the initializer opened, and the line's own newline still ends the range — which
-			// is what the malformed initializer's diagnostic then names.
-			if kind == TokenKind.rightBracket and depth > 0 'closeBracket'
-				depth = depth - 1
-			end 'closeBracket'
-
-			i = i + 1
-		end 'scan'
-
-		return i
+		return initializerEndIndexIn(self.tokens, start: start)
 	end 'initializerEndIndex'
 
 	// Parse a ranged typealias declaration: `typealias <Name> = int(<low> to|upto <high>)` or
@@ -24689,8 +25268,14 @@ export type Parser
 			// ⚠ **AND THE ENTRY IS PUSHED ONLY AFTER THE VERDICT**, so a refused declaration reaches no registry:
 			// pushing first would leave the SWEEP holding a contested alias whose diagnostic the real parse raises
 			// later, i.e. a registry describing a program the compiler rejected.
+			let baseTok = self.current()
 			let entry = try self.readGenericInstanceAlias(nameTok, visibility: visibility)
 			try self.requireTypeNameNotCompilerOwned(nameTok, declares: DeclaredTypeMeaning.genericInstance(entry.baseName, args: entry.args, argCount: entry.argCount))
+
+			if recordFunctionSignature and entry.baseName.equals(SharedValueTypeName) 'aSharedValueInstance'
+				try self.requireShareableSharedValue(nameTok.value, baseTok: baseTok)
+			end 'aSharedValueInstance'
+
 			genericOut.push(entry)
 			return TypeDeclKind.genericAlias
 		end 'genericAlias'
@@ -26686,8 +27271,14 @@ export type Parser
 				// The provenance test is THIS parser's own: the set is keyed by name alone, and the file that
 				// WON must go on emitting its body.
 				let extensionMemberName = qualifiedMethodName(conformer, methodName: self.extensionMemberMethodNameAt(self.pos))
+				let memberTakesReceiver = self.extensionMemberTakesReceiverAt(self.pos)
+				let shadowed = self.signatures.extensionMethodIsShadowed(extensionMemberName, takesReceiver: memberTakesReceiver)
 
-				if self.signatures.extensionMethodIsShadowed(extensionMemberName, takesReceiver: self.extensionMemberTakesReceiverAt(self.pos)) or (self.isStdlibSource and self.signatures.stdlibExtensionMethodIsBeatenByUser(extensionMemberName)) 'anotherDeclarationWearsTheName'
+				if shadowed and not extensionTargetIsAnInterface(header.target) 'hidesTheTypesOwnMember'
+					throw self.extensionMemberHidesOwnMemberError(conformer, qualified: extensionMemberName, takesReceiver: memberTakesReceiver, nameTok: self.tokenAt(self.extensionMemberFunctionKeywordAt(self.pos) + 1))
+				end 'hidesTheTypesOwnMember'
+
+				if shadowed or (self.isStdlibSource and self.signatures.stdlibExtensionMethodIsBeatenByUser(extensionMemberName)) 'anotherDeclarationWearsTheName'
 					self.skipPastExtensionMember()
 					continue
 				end 'anotherDeclarationWearsTheName'
@@ -26715,11 +27306,7 @@ export type Parser
 	// decision has to be taken BEFORE the member is consumed, and a member the decision skips is stepped over
 	// whole rather than parsed.
 	function extensionMemberMethodNameAt(index TokenIndex) returns ByteArray
-		var at = self.pastVisibilityModifier(index)
-
-		if not self.extensionMemberTakesReceiverAt(index) 'staticMember'
-			at = at + 1
-		end 'staticMember'
+		let at = self.extensionMemberFunctionKeywordAt(index)
 
 		if not self.functionDeclarationAt(at) 'notAMethod'
 			return EmptySourceText
@@ -26727,6 +27314,24 @@ export type Parser
 
 		return self.tokenAt(at + 1).value
 	end 'extensionMemberMethodNameAt'
+
+	function extensionMemberFunctionKeywordAt(index TokenIndex) returns TokenIndex
+		let at = self.pastVisibilityModifier(index)
+
+		if self.extensionMemberTakesReceiverAt(index) 'instanceMember'
+			return at
+		end 'instanceMember'
+
+		return at + 1
+	end 'extensionMemberFunctionKeywordAt'
+
+	function extensionMemberHidesOwnMemberError(conformer ByteArray, qualified ByteArray, takesReceiver bool, nameTok Token) returns ParseError
+		let own = self.signatures.ownMemberDeclSite(qualified, takesReceiver: takesReceiver)
+		let kind = "instance" if takesReceiver else "static"
+		let typeName = String.from(conformer)
+		let memberName = String.from(nameTok.value)
+		return ParseError.extensionMemberHidesOwnMember("the extension member `{typeName}.{memberName}` has the name of `{typeName}`'s own {kind} member, which would hide it — rename one", line: nameTok.line, column: nameTok.column, note: DiagnosticNote.at("`{typeName}`'s own `{memberName}`", line: own.nameLine, column: own.nameColumn, filePath: own.declFilePath))
+	end 'extensionMemberHidesOwnMemberError'
 
 	// The one test of an extension member's kind, past its visibility modifier. The fold's shadow note
 	// and the real parse's query are both keyed by kind, so a second spelling of this test would file
@@ -27708,10 +28313,9 @@ export type Parser
 		// ⇒ so every append site below takes the payload list, and no arm may re-mint an empty one: which
 		// raw value a case wrote cannot change which payload slots it declared.
 		//
-		// The managed/float REJECTION is NOT in the reader — it would `throw` in the tolerant sweep
+		// No payload type is refused in the reader — a refusal would `throw` in the tolerant sweep
 		// (`recordScannedEnum`'s `otherwise break`), truncating the layout and misassigning every later case's
-		// tag. The construct and extract sites resolve each field type and reject the ones P1.3 slice 1 cannot
-		// lower, exactly as a struct's `structRef` field is refused at its USE site (`requireStructBase`).
+		// tag.
 		let payloads = try self.readOptionalPayloadFields()
 
 		if not self.at(TokenKind.equals) 'noRawValue'
@@ -28563,7 +29167,7 @@ export type Parser
 
 	// Parse a payload field list `(name Type, name2 Type2)` for a `union`/`enum` case, into a
 	// `PayloadField` array in slot order. Shared by the real parse and the tolerant sweep, so it
-	// captures types WITHOUT rejecting the managed/float ones — see `readEnumCaseInto`'s payload arm
+	// captures types WITHOUT rejecting any — see `readEnumCaseInto`'s payload arm
 	// for why a rejection here would corrupt the sweep. `parseTypeReference` is the same type reader
 	// a struct field and a parameter use, so a payload's type is spelled by one grammar.
 	function readPayloadFieldsInto() returns PayloadFieldArray throws ParseError
@@ -28896,6 +29500,7 @@ export type Parser
 			// `declaredMethodName`, so `Point.create` is checked as `create` and the reserved test never
 			// sees the type prefix (`Self` is fine; a `__method` name is not).
 			try self.requireUnreservedName(nameTok, declaredName: nameTok.value)
+			try self.requireNoRegistryMemberOnAKey(nameTok, takesReceiver: takesReceiver)
 
 			// The fault probe's name, which is reserved HERE and at no other binding site: this is the only door
 			// a declaration reaches the free-function name space through.
@@ -32833,7 +33438,7 @@ export type Parser
 			let staticCallAnchor = self.dottedCallNameToken(self.pos)
 			let staticCallTempFloor = self.bodyState.pendingTempDrops.count()
 			let staticCallOpFloor = self.artifact.module.ops.count()
-			let staticCallResult = try self.parseQualifiedCall(func, resultUsed: false)
+			let staticCallResult = try self.parsePostfix(func, value: try self.parseQualifiedCall(func, resultUsed: false), resultUsed: false)
 			self.finishCallStatement(func, result: staticCallResult, opFloor: staticCallOpFloor, tempFloor: staticCallTempFloor, anchor: staticCallAnchor)
 		end 'qualifiedStaticCallStmt' else if self.namespaceQualifiedChainDotsAt(self.pos, minimumDots: MethodQualifierDots, use: QualifiedChainUse.call) > 0 'namespaceQualifiedCallStmt'
 			// ⭐ **`utils.shout()` / `lib.inner.shout()` ON A LINE OF ITS OWN (N1b)** — a FREE call written with
@@ -36247,16 +36852,13 @@ export type Parser
 	end 'noteLabelledArgumentValue'
 
 	// Is `func` a message of some service — a body a send may lend its parameters to? Only a program that spawns one
-	// has any, and `serviceMessageOwnerOf` allocates to answer.
+	// has any.
 	function bodyIsAMessage(func IrFunction) returns bool
 		if not self.signatures.spawnsAnyService() 'noServiceInThisProgram'
 			return false
 		end 'noServiceInThisProgram'
 
-		return match serviceMessageOwnerOf(self.signatures, callee: func.name) 'owner'
-			notAMessage gives false
-			ofService gives true
-		end 'owner'
+		return self.signatures.isServiceMessage(func.name)
 	end 'bodyIsAMessage'
 
 	// The body's sole-owner marks as a column of their own, sized to them, for the function that keeps them.
@@ -37133,7 +37735,13 @@ export type Parser
 		// character literal coerces to its codepoint there. `return 'a'` from `returns Character` needs
 		// nothing: the literal already IS one. See `integerizedOperand`.
 		let retStart = self.pos
-		let retVal = try self.integerizedOperand(try self.parseExpression(func, block: block), expected: maxonReturnTypeTag(func.maxonReturnType), start: retStart, pastEnd: self.pos)
+		let parsed = try self.integerizedOperand(try self.parseExpression(func, block: block), expected: maxonReturnTypeTag(func.maxonReturnType), start: retStart, pastEnd: self.pos)
+
+		let retVal = match func.maxonReturnType 'declared'
+			void gives parsed
+			value(declared) gives self.interfaceHandleOf(parsed, declared: declared, first: anchor, last: anchor)
+		end 'declared'
+
 		try self.requireNotLentThrough(retVal, source: retVal, door: FreezeDoor.returned, valueTok: self.tokenAt(retStart))
 
 		// ⭐ **ESCAPE (P1.5-A2b): a capturing closure may not be RETURNED** — the env it carries is dropped at
@@ -37309,7 +37917,7 @@ export type Parser
 	// ⭐⭐⭐ **AN `export` METHOD OF A SERVICE MAY NOT RETURN A VALUE ITS OWN STATE CAN STILL REACH (E3137).** A
 	// service's state is COUNTED — one green thread owns it, so its counts step plain — and a reply that aliased
 	// it would put a counted box in two green threads' hands, which corrupts the heap rather than merely being
-	// slow. A reply is always MOVED, never lent: it is the MESSAGE ARGUMENT move (`moveIntoGreenThread`) read
+	// slow. A reply is always MOVED, never lent: it is the MESSAGE ARGUMENT move (`handIntoGreenThread`) read
 	// from the other end, and it asks the SAME question that door does: does this frame provably hold the only
 	// reference?
 	//
@@ -37327,10 +37935,8 @@ export type Parser
 	// proved even where the root is a fresh mint. The soleness question therefore cannot stand in front of the
 	// enclosing-type one, and this door is reached by every managed `return` in the program.
 	//
-	// ⚡ **WHICH IS WHY THE WHOLE-PROGRAM GATE IS SPELLED HERE.** `serviceMessageOwnerOf` costs three
-	// allocations to answer — the roster array, its return, and the boxed verdict — and it cannot dodge the
-	// last of those from the inside; ungated, that is a cost per managed `return` in a program that spawns
-	// nothing at all.
+	// ⚡ **WHICH IS WHY THE WHOLE-PROGRAM GATE IS SPELLED HERE.** Ungated, the message lookup is a hash per
+	// managed `return` in a program that spawns nothing at all.
 	function requireServiceReplyDoesNotAliasState(func IrFunction, value ValueId, anchor Token) throws ParseError
 		if not self.valueIsManagedHeap(value) 'aMachineWord'
 			return
@@ -37340,13 +37946,12 @@ export type Parser
 			return
 		end 'noServiceInThisProgram'
 
-		match serviceMessageOwnerOf(self.signatures, callee: func.name) 'enclosing'
-			notAMessage then return
-			ofService(typeName, methodName) then try self.proveReplyCrossable(value, typeName: typeName, methodName: methodName, anchor: anchor)
-		end 'enclosing'
+		if let message = try self.signatures.serviceMessageOf(func.name) 'aMessage'
+			try self.proveReplyCrossable(value, typeName: message.typeName, methodName: message.methodName, anchor: anchor)
+		end 'aMessage'
 	end 'requireServiceReplyDoesNotAliasState'
 
-	// ⭐⭐ **THE REPLY'S TWO QUESTIONS — `moveIntoGreenThread`'s, read from the other end.** The ROOT must be a
+	// ⭐⭐ **THE REPLY'S TWO QUESTIONS — `handIntoGreenThread`'s, read from the other end.** The ROOT must be a
 	// value this frame minted; what the root POINTS AT must be a graph the runtime can walk, because soleness is
 	// not transitive and a container the handler mints in its own frame whose ELEMENTS are the service's state
 	// passes every static rule there is.
@@ -38522,7 +39127,7 @@ export type Parser
 			for opIdx in block.opRefs 'eachOp'
 				match asyncCalleeIfMatch(try self.artifact.module.ops.get(opIdx) otherwise panic("resolveAsyncCallee: opIdx {opIdx} not in module.ops"), promise: promise) 'm'
 					found(callee) then return AsyncCalleeLookup.found(callee)
-					serviceReply(messageName) then return AsyncCalleeLookup.serviceReply(messageName)
+					serviceReply(messageName, awaitedService) then return AsyncCalleeLookup.serviceReply(messageName, awaitedService: awaitedService)
 					none then break 'm'
 				end 'm'
 			end 'eachOp'
@@ -38532,7 +39137,7 @@ export type Parser
 		for incoming in self.phiIncomingValues(func, phi: promise) 'eachIncoming'
 			match self.resolveAsyncCallee(func, promise: incoming, visited: visited) 'r'
 				found(callee) then return AsyncCalleeLookup.found(callee)
-				serviceReply(messageName) then return AsyncCalleeLookup.serviceReply(messageName)
+				serviceReply(messageName, awaitedService) then return AsyncCalleeLookup.serviceReply(messageName, awaitedService: awaitedService)
 				none then break 'r'
 			end 'r'
 		end 'eachIncoming'
@@ -40027,7 +40632,7 @@ export type Parser
 				witness or
 				promise or
 				deferred then break 'kind'
-			serviceReply(messageName) then return self.serviceReplyCaughtForm(messageName, flag: flag)
+			serviceReply(messageName, _) then return self.serviceReplyCaughtForm(messageName, flag: flag)
 		end 'kind'
 
 		// ⚡ Gated on the one-`count()` question, because the probe below builds a `ByteArray` from the
@@ -41094,7 +41699,7 @@ export type Parser
 			named(callee) gives self.signatures.throwsOf(callee)
 			witness(_, throwsClause) or
 				promise gives throwsClause
-			serviceReply(messageName) gives ThrowsClause.throwing(String.from(self.signatures.serviceReplyErrorName(messageName)))
+			serviceReply(messageName, _) gives ThrowsClause.throwing(String.from(self.signatures.serviceReplyErrorName(messageName)))
 			deferred gives ThrowsClause.none
 		end 'kind'
 	end 'tryTargetThrows'
@@ -41807,59 +42412,16 @@ export type Parser
 		return result
 	end 'emitRuntimeCallInto'
 
-	// ⭐⭐⭐ **WHICH RUNTIME ENTRY TAKES A SECOND OWNER OF THIS VALUE — the retain side of
-	// `SignatureIndex.managedNameDropCallee`.** Almost every managed value answers the plain box incref; a
-	// `<T>.handle` does not, because its box stands for a share of a mailbox's `handles`/`refs` pair that its
-	// DROP steps down. A retain that only increfs the box leaves one share owned by two references, and the
-	// second release frees a live mailbox — exit 89, or a segfault above one processor.
-	//
-	// ⛔ **BOTH RETAIN DOORS ASK THIS, and `result` is which shape they need** — `emitIncref` retains for
-	// effect, `emitRetainCall` needs a fresh SSA name for the same box. The returning door spelled
-	// `__mm_retain` directly, which is how `arr.get(i)` on a handle array freed a live mailbox
-	// (`specs/services.md`, `a-handle-read-out-of-an-array-survives-a-second-send`).
-	//
-	// ⚠ **THE TAG IS TESTED FIRST AND IT IS NOT A MICRO-OPTIMIZATION.** `valueNameId` is only meaningful for
-	// a value that HAS a declared nominal type; asking it of an integer or a String would be reading a field
-	// that means nothing there. A handle value carries its companion's name on one of TWO tags — `structRef`
-	// for a monomorphic service, `genericInstance` for a generic one, whose instantiation rides the type — so
-	// both are asked. A scalar or a String settles on the dense read alone; each nominal tag then pays one
-	// name resolution and one map probe, which is what the two nominal routers are.
-	function retainCalleeForValue(value ValueId, result RetainResult) returns ByteArray
-		// ⭐⭐ **AN ARRAY RECORD TAKES THE IMMORTAL-AWARE ENTRY, AND THIS DOOR DECIDES THE RECORD FORMAT
-		// RATHER THAN THE PROVENANCE.** A module-level managed constant's record is `.rdata`
-		// (`Parser.emitManagedConstant`), so a refcount read-modify-write on it faults — and whether
-		// THIS value is one cannot be known here, because it may be a merge phi. So the provenance test is
-		// deferred to run time, exactly as `__str_retain` defers it one representation over, and what is
-		// settled here is only which records that entry may read `capacity@16` out of: a six-slot buffer
-		// record. A struct box's `@16` is an arbitrary field — or past the end of a box too small to have one
-		// (`IrInterface.WitnessRetainFuncOffset` carries the measurement) — so everything else keeps the plain
-		// box incref.
-		if self.signatures.isArrayInstanceAt(self.tagOf(value), nameId: self.valueNameId(value)) 'bufferRecord'
-			return managedRecordRetainCallee(result)
-		end 'bufferRecord'
-
-		// ⭐⭐ **A GENERIC SERVICE'S HANDLE RETAINS THROUGH THE MAILBOX, AND IT REACHES THIS DOOR ON THE OTHER
-		// TAG.** Its instantiation rides the handle's type, so the nominal router below never sees it — while
-		// its DROP is still `__mbox_handle_drop_box`, which steps a `handles` share, a `refs` share and the
-		// box. A plain incref here steps only the box: that is W232's asymmetry wearing the second tag, and
-		// it is a WRONG ANSWER rather than a leak — the mailbox's handle count reaches zero under a live
-		// handle, the service drains, and the next send is answered `ServiceError.stopped`.
-		if self.tagOf(value) == ValueTypeTag.genericInstance and self.signatures.instanceBaseIsServiceHandle(self.valueInstanceId(value)) 'aGenericServicesHandle'
-			return MboxHandleRetainBoxName
-		end 'aGenericServicesHandle'
-
-		if self.tagOf(value) != ValueTypeTag.structRef 'notNominal'
-			return plainBoxRetainCallee(result)
-		end 'notNominal'
-
-		return managedNameRetainCallee(self.signatures, declaredName: self.valueTypeName(value), result: result)
-	end 'retainCalleeForValue'
-
 	// A void `__mm_incref` of `value`: the one spelling of "take a second owner of this box in place".
 	// `__mm_retain` is the returning twin (`retainBorrowedAggregate`) for when a fresh SSA name is
 	// needed; this form is for when the caller already holds the ValueId it means.
+	//
+	// ⛔ **BOTH RETAIN DOORS ASK `ProgramSignatures.retainCalleeOf`, and `result` is which shape they
+	// need** — this one retains for effect, `emitRetainCall` needs a fresh SSA name for the same box.
+	// A door that spells `__mm_retain` itself frees a live mailbox when the value is a handle
+	// (`specs/services.md`, `a-handle-read-out-of-an-array-survives-a-second-send`).
 	function emitIncref(value ValueId, range SourceRange)
-		self.emitOwnershipRuntimeCall(self.retainCalleeForValue(value, result: RetainResult.discarded), args: singletonArgs(value), range: range)
+		self.emitOwnershipRuntimeCall(self.signatures.retainCalleeOf(self.tagOf(value), nameId: self.valueNameId(value), from: self.artifact.typeNames, result: RetainResult.discarded), args: singletonArgs(value), range: range)
 
 		// ⭐ **AND THE OP IS THE FACT: after this line `value`'s allocation has two owners.** The mark rides
 		// here rather than at the named doors above because that is what makes it unforgettable — see
@@ -43231,7 +43793,7 @@ export type Parser
 
 	// ⭐⭐ **WHICH RETAIN A BORROWED AGGREGATE TAKES — and an EXISTENTIAL takes a DIFFERENT one, because a
 	// CONCRETE type's protocol is a compile-time fact and a conformer's is not (P1.7a-existentials slice 2).**
-	// A concrete value's entry is `retainCalleeForValue`'s, which is the plain box retain for almost
+	// A concrete value's entry is `retainCalleeOf`'s, which is the plain box retain for almost
 	// everything and the mailbox pair for a `<T>.handle`. A conformer may be neither — `int`/`bool` conform
 	// intrinsically and are held at an interface as their RAW
 	// VALUE (which is what makes them representable there where a `float` is not, E3121), and a `String`
@@ -43252,7 +43814,7 @@ export type Parser
 		end 'existential'
 
 		// ⭐⭐ **A BOX WHOSE SLOTS ADDRESS OTHER RECORDS IS THE THIRD REPRESENTATION WITH AN IMMORTAL MEMBER**,
-		// and it earns an arm HERE rather than in `retainCalleeForValue` for one reason: its entry takes the
+		// and it earns an arm HERE rather than in `retainCalleeOf` for one reason: its entry takes the
 		// box's own cloner as a SECOND argument, which a callee selector cannot express. The buffer record's
 		// fork is `__managed_retain`'s, off `capacity@16`; this one is `__mm_own_deep`'s, off the allocation
 		// header, because a declared generic's `@16` — and a struct's — is an author-declared field.
@@ -43263,7 +43825,7 @@ export type Parser
 		// `__mm_retain` gives `source`'s box a second owner exactly as `__mm_incref` does, so the source is
 		// downgraded here for the identical reason — see `markValueCoOwnsHeap`.
 		self.markValueCoOwnsHeap(source)
-		return self.emitRuntimeCall(self.retainCalleeForValue(source, result: RetainResult.freshName), args: singletonArgs(source), resultTag: self.tagOf(source), resultNameId: self.valueNameId(source), range: range)
+		return self.emitRuntimeCall(self.signatures.retainCalleeOf(self.tagOf(source), nameId: self.valueNameId(source), from: self.artifact.typeNames, result: RetainResult.freshName), args: singletonArgs(source), resultTag: self.tagOf(source), resultNameId: self.valueNameId(source), range: range)
 	end 'emitRetainCall'
 
 	// ⭐ **THE ONE `__retain_existential` CALL**, so its argument ORDER — the witness first, matching
@@ -43357,7 +43919,7 @@ export type Parser
 		// mailbox holding ONE share: the original's drop takes that share to zero, the service drains, and
 		// the next send is answered `ServiceError.stopped`. MEASURED as exit 0 where the answer is 3.
 		//
-		// ⚠ It is `emitIncref`, which asks `retainCalleeForValue` — so the reference a sink takes and the
+		// ⚠ It is `emitIncref`, which asks `retainCalleeOf` — so the reference a sink takes and the
 		// reference a scope-exit drop releases are the SAME answer, and stay duals by construction.
 		if self.valueIsAServiceHandle(value) 'aServiceHandle'
 			self.emitIncref(value, range: range)
@@ -43410,7 +43972,7 @@ export type Parser
 	// `compilerOwnedAggregateOf`'s `isServiceHandle` for the name road, `instanceBaseIsServiceHandle` for the
 	// instance road — so this adds no sixth decider, it spends the two that exist.
 	//
-	// ⚠ **IT ANSWERS A PREDICATE, WHERE `retainCalleeForValue` ANSWERS A CALLEE.** A door that needs to know
+	// ⚠ **IT ANSWERS A PREDICATE, WHERE `retainCalleeOf` ANSWERS A CALLEE.** A door that needs to know
 	// WHICH entry to call must ask that one; this is for a door choosing between two SHAPES of ownership
 	// (a share versus a copy), which no callee can express.
 	function valueIsAServiceHandle(value ValueId) returns bool
@@ -43418,11 +43980,11 @@ export type Parser
 			return self.signatures.instanceBaseIsServiceHandle(self.valueInstanceId(value))
 		end 'aGenericServicesHandle'
 
-		return self.valueIsAHeapRecord(value) and self.signatures.isServiceHandle(self.valueTypeName(value))
+		return self.valueIsAHeapRecord(value) and self.signatures.isAnyServiceHandle(self.valueTypeName(value))
 	end 'valueIsAServiceHandle'
 
 	// ⭐⭐ **THE RETURNING `__mm_own` A STRUCT BOX OWES A DURABLE SINK — and the callee is chosen HERE rather
-	// than in `retainCalleeForValue` because a CLONE is right only where the sink outlives the statement.**
+	// than in `retainCalleeOf` because a CLONE is right only where the sink outlives the statement.**
 	// A borrowed aggregate co-owned into a `var` (`var q = p`) must keep ALIASING — `q.x = 100` shows through
 	// to the caller — so that door keeps `__mm_retain`, which hands the same box back. Routing both through
 	// one selector would make the aliasing one clone too.
@@ -51949,8 +52511,7 @@ export type Parser
 	// A RANGED ALIAS answers from its own bounds through `literalInRange` — the one door that knows a range's
 	// upper bound may be an unsigned pattern (`int(0 to u64.max)` stores `high` as -1), so a naive
 	// `high >= 0` would refuse it. A FLOAT alias is skipped first: its bounds are IEEE-754 patterns and this
-	// asks an integer question, the identical domain guard `requireOtherwiseLiteralInRange` makes (and
-	// `requirePayloadLowerable` refuses a float payload binding upstream regardless).
+	// asks an integer question, the identical domain guard `requireOtherwiseLiteralInRange` makes.
 	//
 	// A `named` type that is NOT a ranged alias is refused, which is the arm that covers an ENUM payload:
 	// an enum's tags are its values and need not include 0 at all (`red = 1`), so zero would bind a
@@ -52405,7 +52966,7 @@ export type Parser
 			// spelling A4k retired: a generic-alias payload arrived `named`, i.e. an int (A4i's defect one
 			// slot over).
 			let declared = self.signatures.payloadTypeOf(binding.field, layout: layout, into: self.artifact.typeNames)
-			let class = try self.requirePayloadLowerable(binding.field, declared: declared, layout: layout, posTok: binding.nameTok)
+			let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared, slotScopeFilePath: layout.declFilePath)
 
 			// ⭐ **THE SLOT'S ADDRESS AND ITS WIDTH, DERIVED ONCE AND HANDED TO ALL THREE HALVES** — the
 			// LOAD, the binding that records them for a write-back, and the move-out's null store. They were
@@ -55443,7 +56004,7 @@ export type Parser
 	// nothing fixes it until the factory's ARGUMENTS have been read — so that question is deferred
 	// (`ServiceRosterKnowledge`) and re-asked below, after the call has emitted its ops. A `spawn` refused
 	// there leaves those ops behind; they reach nothing, because a `ParseError` discards the whole artifact
-	// (`Queries.queryFileParse` returns `abortedParseArtifact`), and `moveIntoGreenThread` on the next line
+	// (`Queries.queryFileParse` returns `abortedParseArtifact`), and `handIntoGreenThread` on the next line
 	// has always refused on the same terms.
 	function parseSpawn(func IrFunction) returns ValueId throws ParseError
 		let spawnTok = self.current()
@@ -55556,7 +56117,7 @@ export type Parser
 	// ⭐⭐ **THE SPAWN'S EMIT: MOVE THE STATE ACROSS, START THE SERVICE, AND WRAP ITS MAILBOX IN A HANDLE
 	// BOX.** Three acts, in an order that is not free:
 	//
-	//   1. **The state is MOVED** (`moveIntoGreenThread`) — the service becomes its one owner, and this frame
+	//   1. **The state is MOVED** (`handIntoGreenThread`) — the service becomes its one owner, and this frame
 	//      stops owing its drop. A refusal here leaves nothing behind, which is `emitBinOp`'s ordering rule.
 	//   2. **`serviceSpawn` answers the MAILBOX**, a bare machine word, because that is all the runtime has
 	//      to hand back: it created the mailbox and the green thread, and neither is a managed record.
@@ -55567,7 +56128,7 @@ export type Parser
 	//      shuts the service down. A runtime-minted box would need every one of those taught to it.
 	function emitServiceSpawn(typeName ByteArray, member ByteArray, state ValueId, instance ServiceStateInstance, spawnTok Token, memberTok Token) returns ValueId throws ParseError
 		let range = SourceRange.between(spawnTok, last: memberTok)
-		let moved = try self.moveIntoGreenThread(state, blame: serviceSpawnStateBlame(typeName, member: member), anchor: memberTok)
+		let moved = try self.handIntoGreenThread(state, door: ThreadHandOffDoor.message(serviceSpawnStateBlame(typeName, member: member)), anchor: memberTok)
 
 		let mailbox = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
 		self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.serviceSpawn(mailbox, typeName: typeName, state: moved), range: range)
@@ -55744,6 +56305,11 @@ export type Parser
 		// conversion they protect, so the second position that performs this conversion cannot be given
 		// fewer of them than this one. See that function's ⛔⛔ block.
 		let sourceTag = self.tagOf(value)
+		let widened = self.interfaceHandleOf(value, declared: targetType, first: asTok, last: targetTok)
+
+		if widened != value 'aHandleWidenedToItsInterface'
+			return widened
+		end 'aHandleWidenedToItsInterface'
 
 		// The target's ranged-alias declaration, resolved ONCE for EVERY question that needs it — may
 		// this file NAME it (P1.9), WHICH alias a narrowing check names, and WHAT its range says about
@@ -58077,8 +58643,7 @@ export type Parser
 
 			// A near-miss reports the SAME E3005 as no constraint at all, because the author's cure is the
 			// same sentence: constrain the parameter with the protocol. (Constructed inline rather than
-			// through a shared factory — `throw self.helperReturningAParseError(…)` leaks the boxed union;
-			// see `floatPayloadMessage`.)
+			// through a shared factory — `throw self.helperReturningAParseError(…)` leaks the boxed union.)
 			none then throw ParseError.operatorRequiresConformance(comparisonOpSpelling(op), typeParamName: String.from(self.typeParamDisplayName(self.valueTypeParamId(receiver))), interfaceName: String.from(protocol.name), line: opTok.line, column: opTok.column)
 
 			// TWO constraints genuinely shaped like the protocol. They are two DISTINCT witness slots holding
@@ -58102,8 +58667,7 @@ export type Parser
 	// `compare` the `Ordering` whose tags `emitOrderingVerdict` tests. A near-miss reports the SAME
 	// E3005 as no constraint at all, because the author's cure is the same sentence: constrain the
 	// parameter with the protocol. (Constructed inline at both sites rather than through a shared
-	// factory — `throw self.helperReturningAParseError(…)` leaks the boxed union; see
-	// `floatPayloadMessage`.)
+	// factory — `throw self.helperReturningAParseError(…)` leaks the boxed union.)
 	//
 	// ⚠ **A THROWING METHOD IS REFUSED HERE FOR THE SAME REASON A WRONG-RESULT ONE IS.**
 	// `Equatable.equals` and `Comparable.compare` are synthesized non-throwing, so a user interface whose
@@ -60947,8 +61511,9 @@ export type Parser
 		end 'existentialField'
 
 		if payloadClassIsManaged(class) 'managed'
-			try self.requireManagedSlotValueMatches(class, declared: fieldType, value: value, placeDoor: FunctionTypeDoor.field, placeName: self.fieldNameAt(layout, index: index), placeOwner: layout.name, placeBrand: self.declaredBrand(layout.fieldDeclaredBrand(index), resolved: fieldType), voice: SlotMismatchVoice.assignedPlace, anchor: anchor)
-			return value
+			let widened = self.interfaceHandleOf(value, declared: fieldType, first: anchor, last: anchor)
+			try self.requireManagedSlotValueMatches(class, declared: fieldType, value: widened, placeDoor: FunctionTypeDoor.field, placeName: self.fieldNameAt(layout, index: index), placeOwner: layout.name, placeBrand: self.declaredBrand(layout.fieldDeclaredBrand(index), resolved: fieldType), voice: SlotMismatchVoice.assignedPlace, anchor: anchor)
+			return widened
 		end 'managed'
 
 		// The SAME verdict-plus-coercion the assignment doors ask, through the `field` door — which is what it always
@@ -63159,7 +63724,7 @@ export type Parser
 
 	// ⭐⭐ **`<Union>.fromName("value", 42)` — A LITERAL NAME NAMING A PAYLOAD-BEARING CASE.** The payload
 	// arguments are read, TYPE-CHECKED and MOVED IN here, at the parser, through the very doors
-	// `Container.value(42)` goes through (`requirePayloadLowerable`, `requirePayloadArgType`,
+	// `Container.value(42)` goes through (`classifyUnionPayload`, `requirePayloadArgType`,
 	// `moveInPayload`), and the synthesized helper receives values that are already owned and stores them
 	// verbatim. That split is deliberate: ownership is a fact about the CALLER's bindings — which local was
 	// poisoned, which temporary stopped owing a drop — and a Std-tier body can see none of it.
@@ -63207,10 +63772,10 @@ export type Parser
 		for i in 0 upto arity 'validate'
 			let field = try payloads.get(i) otherwise panic("parseEnumFromNameCase: payloadsAt returned fewer fields than its own count at {i}")
 			let declared = self.signatures.payloadTypeOf(field, layout: layout, into: self.artifact.typeNames)
-			let class = try self.requirePayloadLowerable(field, declared: declared, layout: layout, posTok: memberTok)
+			let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared, slotScopeFilePath: layout.declFilePath)
 			let arg = try slotValues.get(i) otherwise panic("parseEnumFromNameCase: slotValues.get OOB at {i} — the columns are filled one per declared slot")
 			let anchorIndex = try slotAnchors.get(i) otherwise panic("parseEnumFromNameCase: slotAnchors.get OOB at {i} — captured in lockstep with the values")
-			try self.requirePayloadArgType(field, declared: declared, class: class, value: arg, caseTok: memberTok, argTok: self.tokenAt(anchorIndex), voice: SlotMismatchVoice.payloadArgument)
+			try slotValues.set(i, value: try self.requirePayloadArgType(field, declared: declared, class: class, value: arg, caseTok: memberTok, argTok: self.tokenAt(anchorIndex), voice: SlotMismatchVoice.payloadArgument)) otherwise panic("parseEnumFromNameCase: slotValues.set OOB at {i} — the columns are filled one per declared slot")
 			classes.push(class)
 		end 'validate'
 
@@ -63224,7 +63789,15 @@ export type Parser
 			let arg = try slotValues.get(i) otherwise panic("parseEnumFromNameCase: slotValues.get OOB at {i} after the validation pass")
 			let bareLocal = try slotBareLocal.get(i) otherwise panic("parseEnumFromNameCase: slotBareLocal.get OOB at {i} — captured in lockstep with the values")
 			let valueTok = self.tokenAt(try slotAnchors.get(i) otherwise panic("parseEnumFromNameCase: slotAnchors.get OOB at {i} — captured in lockstep with the values"))
-			args.push(try self.moveInPayload(class, arg: arg, argBareLocal: bareLocal, owner: result, anchor: memberTok, range: range, valueTok: valueTok))
+			let moved = try self.moveInPayload(class, arg: arg, argBareLocal: bareLocal, owner: result, anchor: memberTok, range: range, valueTok: valueTok)
+
+			// The helper's parameters are all i64, so a float crosses as its bits; `emitEnumBox` needs no
+			// bitcast because its store is typed at the slot's float width.
+			if tagIsFloat(maxonTypeTag(payloadStorageOf(class))) 'aFloatSlotTravelsAsItsBits'
+				args.push(self.emitUnaryOp(moved, op: MaxonUnaryOp.floatToBits, resultTag: ValueTypeTag.integer, range: range))
+			end 'aFloatSlotTravelsAsItsBits' else 'aWord'
+				args.push(moved)
+			end 'aWord'
 		end 'moveIn'
 
 		return self.trackEnumFromNameResult(layout, result: self.emitRuntimeCallInto(result, callee: enumFromNameCaseSymbol(layout.name, caseName: caseName), args: args, range: range, argLabels: NoRuntimeCallLabels))
@@ -63462,8 +64035,7 @@ export type Parser
 		end 'each'
 	end 'requireAllPayloadsProvided'
 
-	// Emit the box: validate + classify every payload field (reject a float payload, type-check each
-	// argument) BEFORE any op, then `__mm_alloc` the `8 + maxArity*8` bytes, store the case TAG at
+	// Emit the box: validate + classify every payload field (type-check each argument) BEFORE any op, then `__mm_alloc` the `8 + maxArity*8` bytes, store the case TAG at
 	// offset 0, store each payload at `8 + slot*8`, and ZERO-FILL the unused slots `[arity, maxArity)`.
 	//
 	// ⭐ The box is TAGGED `named(<union>)` — the same tag a scalar enum value carries, so `match`
@@ -63488,7 +64060,7 @@ export type Parser
 		for i in 0 upto payloads.count() 'validate'
 			let field = try payloads.get(i) otherwise panic("emitEnumBox: payloadsAt returned fewer fields than its own count at {i}")
 			let declared = self.signatures.payloadTypeOf(field, layout: layout, into: self.artifact.typeNames)
-			let class = try self.requirePayloadLowerable(field, declared: declared, layout: layout, posTok: caseTok)
+			let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared, slotScopeFilePath: layout.declFilePath)
 			classes.push(class)
 
 			// ⛔⛔ **THE `__reply` SLOT'S ARGUMENT IS NOT TYPE-CHECKED, AND SINCE SV4 THAT IS LOAD-BEARING.** Nor is
@@ -63505,7 +64077,7 @@ export type Parser
 
 			let arg = try args.get(i) otherwise panic("emitEnumBox: args.count() was checked to equal the arity but get OOB at {i}")
 			let anchorIndex = try argAnchors.get(i) otherwise panic("emitEnumBox: argAnchors.get OOB at {i} — captured in lockstep with the args")
-			try self.requirePayloadArgType(field, declared: declared, class: class, value: arg, caseTok: caseTok, argTok: self.tokenAt(anchorIndex), voice: payloadFillVoice(fill))
+			try args.set(i, value: try self.requirePayloadArgType(field, declared: declared, class: class, value: arg, caseTok: caseTok, argTok: self.tokenAt(anchorIndex), voice: payloadFillVoice(fill))) otherwise panic("emitEnumBox: args.set OOB at {i} — args.count() was checked to equal the arity")
 		end 'validate'
 
 		// ⭐⭐ **A MESSAGE'S PAYLOADS ARE TRANSFERRED BEFORE THE BOX EXISTS, AND THE ORDER IS THE WHOLE
@@ -63574,7 +64146,7 @@ export type Parser
 	// goes through the ONE message door, `transferMessageArgument`.
 	//
 	// ⛔⛔ **THE `__reply` SLOT IS SKIPPED, AND THAT IS LOAD-BEARING RATHER THAN A SAVING.** A send mints a
-	// real cell there, and `moveIntoGreenThread`'s FIRST question is `valueIsPromise`, asked deliberately
+	// real cell there, and `handIntoGreenThread`'s FIRST question is `valueIsPromise`, asked deliberately
 	// ahead of the scalar short-circuit — so passing the slot through earns **E3135 naming `__reply` as the
 	// author's own argument** on every reply-bearing send in the suite.
 	//
@@ -64047,60 +64619,6 @@ export type Parser
 		self.emitIndirectStore(box, offset: UnionTagOffset, value: tagLit, storageType: MaxonType.integer, range: range)
 	end 'emitUnionTagStore'
 
-	// Classify a payload field's storage, rejecting the one kind the UNION-payload store still cannot
-	// lower — a FLOAT.
-	//
-	// ⚠ THE FLOAT REJECT IS NO LONGER WAITING ON AN OPCODE. Both bitcast directions now exist
-	// (`StdUnaryOpcode.bitcastF64ToI64`/`bitcastI64ToF64`, reachable as `__Builtins.floatToBits`/
-	// `bitsToFloat`), so the INSTRUCTIONS a float payload needs are here. What is still missing is the
-	// LOWERING that uses them: an int-tagged box stores a payload as an i64, so a float field has to be
-	// re-encoded on the way in and decoded on the way out at BOTH the construct and the extract site,
-	// and neither site does that today. Until it does, this refuses cleanly rather than storing an f64
-	// register through an i64 slot. A SCALAR, a String, a struct and a nested boxed UNION are
-	// lowerable; the returned class carries the storage type and, for a managed
-	// payload, whether it is a String. The reject is at the construct/extract USE site (not the
-	// declaration), so the tolerant enum sweep never truncates a layout over it.
-	//
-	// ⚠ A float payload is refused here, positioned, rather than left to fail in the lowering.
-	//
-	// ⚠ **THE nestedUnion REJECT THAT USED TO STAND HERE WAS A MISSING WIDTH, NOT A MISSING CASCADE (W55).**
-	// Its message said a nested payload-bearing union "needs its own destructor cascade"; it never did — the
-	// cascade is generic (`managedFieldDropCallee` → `unionBoxDropCallee`) and a boxed-union STRUCT FIELD had
-	// been dropping through it since P1.4b wave 2c. What the payload path actually lacked was the width-vs-
-	// identity split `payloadStorageOf` now states in full — this door's store width was being asked of the
-	// slot's IDENTITY, and a boxed union's identity is a `named` that `maxonTypeToStdType` panics on. Only
-	// `emitEnumBox`/`declarePayloadBindings` call this; the struct-field path classifies through
-	// `classifyUnionPayload` directly and never reaches here.
-	// `declared` is the payload's type out of `payloadTypeOf` — a signatures-layout id adopted into this
-	// file's interner (or a ranged alias that shifts the interning order makes `classifyUnionPayload` read
-	// the wrong name off the id, the wrong E3005 reject — OPEN #52) AND resolved. It is threaded in rather
-	// than derived here because both callers need it for themselves as well (the arg check's declared tag,
-	// the load's value type), and asking one door twice per payload is what a shared answer replaces.
-	function requirePayloadLowerable(field PayloadField, declared MaxonType, layout EnumLayout, posTok Token) returns PayloadClass throws ParseError
-		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared, slotScopeFilePath: layout.declFilePath)
-
-		match class 'c'
-			// A nested boxed union, an opaque `T` and a green-thread handle each lower as the one machine
-			// word a scalar does (`payloadStorageOf`); what differs for them — the store-side reference
-			// (`moveInPayload`), the ownership — is decided at the move-in and in the drop cascade, not
-			// here.
-			scalar or
-				managed or
-				nestedUnion or
-				undeclaredName or
-				typeParam or
-
-				// An interface-typed payload is refused at a union's declaration
-				// (`requireStorableDeclaredType`), so the one union holding one is a service's request union,
-				// which gives it a witness-half slot of its own (`ServiceCompanions.serviceRequestPayloads`).
-				existential or
-				greenThread then break 'c'
-			floatPayload then throw ParseError.unsupported(self.floatPayloadMessage(field, layout: layout), line: posTok.line, column: posTok.column)
-		end 'c'
-
-		return class
-	end 'requirePayloadLowerable'
-
 	// A payload argument must agree with its field's classified type. A SCALAR uses `checkDeclaredType`,
 	// the same coercion-site rule a struct literal field, a call argument and a `return` ask, PLUS the
 	// nominal identity `checkDeclaredType` structurally cannot ask (`requireSlotAggregateIdentity`); a MANAGED
@@ -64110,14 +64628,14 @@ export type Parser
 	// refusal about the case as a whole belongs (a payload the tier cannot lower, a slot left unfilled);
 	// `argTok` is the token following THIS argument and is where a refusal about ONE argument's type
 	// belongs, which is the position the canonical specs pin (`union-payload.error.wrong-struct`).
-	function requirePayloadArgType(field PayloadField, declared MaxonType, class PayloadClass, value ValueId, caseTok Token, argTok Token, voice SlotMismatchVoice) throws ParseError
+	function requirePayloadArgType(field PayloadField, declared MaxonType, class PayloadClass, value ValueId, caseTok Token, argTok Token, voice SlotMismatchVoice) returns ValueId throws ParseError
 		match class 'c'
 			// An opaque `T` payload takes the scalar rule: `checkDeclaredType`'s type-parameter arm is where
 			// an argument meets an opaque formal. ⚠ Never as a `scalar to typeParam` range: `scalar` is the
 			// first variant of `PayloadClass` and `typeParam` the last, so the range would swallow every
 			// case between.
 			scalar or
-				typeParam then try self.requireScalarPayloadArg(field, declared: declared, value: value, caseTok: caseTok, argTok: argTok, voice: voice)
+				typeParam then return try self.requireScalarPayloadArg(field, declared: declared, value: value, caseTok: caseTok, argTok: argTok, voice: voice)
 			managed(storage, isString) then try self.requireManagedValueMatches(storage, isString: isString, value: value, placeDoor: FunctionTypeDoor.payload, placeName: field.name, placeOwner: EmptySourceText, placeBrand: self.declaredBrand(field.declaredBrand, resolved: storage), voice: voice, anchor: argTok)
 
 			// A nested boxed union takes the managed door, over its `named(<union>)` value type and not over
@@ -64138,9 +64656,10 @@ export type Parser
 			// An undeclared payload name is a user error TypeResolution reports (E3011); the op is kept
 			// well-formed for the instant before the pipeline's error gate throws — nothing to check here.
 			undeclaredName then break 'c'
-			floatPayload then panic("requirePayloadArgType: a float payload reached the arg check — requirePayloadLowerable rejects it first")
 			existential then self.recordExistentialPayloadStore(field, declared: declared, value: value, caseTok: caseTok, argTok: argTok)
 		end 'c'
+
+		return value
 	end 'requirePayloadArgType'
 
 	// ⭐ **A MESSAGE ARGUMENT AT AN INTERFACE-TYPED PARAMETER WIDENS AS A FIELD STORE DOES**, and whether it
@@ -64156,7 +64675,7 @@ export type Parser
 	// FUNCTION-alias payload is a `named` — an int — so `Payload.op(twice)` met the
 	// `functionIntoNonFunction` arm below and was refused E3005 on a program the payload cascade had, until
 	// this rung, never even classified as a scalar. Resolved, it is the function type the value is.
-	function requireScalarPayloadArg(field PayloadField, declared MaxonType, value ValueId, caseTok Token, argTok Token, voice SlotMismatchVoice) throws ParseError
+	function requireScalarPayloadArg(field PayloadField, declared MaxonType, value ValueId, caseTok Token, argTok Token, voice SlotMismatchVoice) returns ValueId throws ParseError
 		let declaredTag = maxonTypeTag(declared)
 		let got = self.tagOf(value)
 
@@ -64199,6 +64718,8 @@ export type Parser
 		// Asked past the verdict rather than instead of it: a tag disagreement is the coarser fact and reads
 		// better said first, and a value that failed it has no identity worth comparing.
 		try self.requireSlotAggregateIdentity(declared, value: value, placeDoor: FunctionTypeDoor.payload, placeName: field.name, placeOwner: EmptySourceText, placeBrand: self.declaredBrand(field.declaredBrand, resolved: declared), voice: SlotMismatchVoice.payloadArgument, anchor: argTok)
+
+		return self.coerceToDeclared(value, declared: declaredTag, anchor: argTok)
 	end 'requireScalarPayloadArg'
 
 	// Load a boxed union's i64 TAG from offset 0 — the DISPATCH SUBJECT a `match` compares against
@@ -64492,6 +65013,10 @@ export type Parser
 		// does this compiler own", and two keys for one alias, are the same duplication in two columns.
 		if self.signatures.isGenericAliasFor(aliasName, readerFilePath: self.filePath) 'containerAliasStatic'
 			let aliasGiid = self.signatures.genericAliasInstanceFrom(aliasName, readerFilePath: self.filePath)
+
+			if self.signatures.instanceBaseIsSharedValue(aliasGiid) 'sharedValueStatic'
+				return CompilerOwnedStaticSurface.sharedValue(aliasGiid)
+			end 'sharedValueStatic'
 
 			// ⭐⭐ **AND IT IS A BUILTIN CONTAINER WHOSE `create` THE COMPILER STILL EMITS (W190).** The
 			// interception exists because a mangled `Base.create` would name a callee no file declares; the
@@ -64850,6 +65375,10 @@ export type Parser
 		// `parseTypeReference`, which is why this second hook exists at all (`recordTypeNameUse`).
 		self.recordTypeNameUse(typeTok.value)
 
+		if self.signatures.declaresADefault() and self.registryCallAt((self.pos - 1) as TokenIndex) 'aRegistryCall'
+			return try self.parseRegistryCall(func, keyTok: typeTok, resultUsed: resultUsed)
+		end 'aRegistryCall'
+
 		// ⭐⭐ **THE GENERIC ALIAS THIS CALL'S BASE NAMES, RESOLVED ONCE — file-scope (`IntBox`) or INNER
 		// (`Plain.IntPair`) — and all FOUR of this routine's alias-driven decisions read THIS name rather than
 		// the written token:** the builtin-container interception below, the base a static mangles onto
@@ -64866,6 +65395,7 @@ export type Parser
 			managedSocket then return try self.parseManagedSocketStaticCall(func, typeTok: typeTok)
 			managedMemory then return try self.parseManagedMemoryStaticCall(func, typeTok: typeTok)
 			containerAlias(giid) then return try self.parseContainerAliasStaticCall(func, aliasTok: typeTok, aliasName: aliasName, giid: giid, resultUsed: resultUsed)
+			sharedValue(giid) then return try self.parseSharedValueCreate(func, typeTok: typeTok, giid: giid)
 		end 'surface'
 
 		try self.consume(TokenKind.dot)
@@ -65620,6 +66150,10 @@ export type Parser
 			return try self.emitPromiseCancel(recv, resultUsed: resultUsed)
 		end 'promiseCancel'
 
+		if self.signatures.isSharedValueInstanceAt(recv.tag, nameId: recv.nameId) 'sharedValueMethod'
+			return try self.dispatchOnSharedValue(func, holder: recv.value, baseTok: recv.anchor, resultUsed: resultUsed)
+		end 'sharedValueMethod'
+
 		// A STRING RECEIVER takes the builtin String methods rather than the struct path, which would reject
 		// it as not a struct. String is the one non-struct type carrying a method table of its own.
 		if recv.tag == ValueTypeTag.string 'stringMethod'
@@ -66246,6 +66780,14 @@ export type Parser
 			return try self.dispatchOnServiceHandle(func, base: base, baseTok: baseTok, memberTok: memberTok, resultUsed: resultUsed)
 		end 'aServiceHandle'
 
+		if self.signatures.isInterfaceHandle(base.layout.name) 'anInterfaceHandle'
+			return try self.dispatchOnInterfaceHandle(func, base: base, baseTok: baseTok, memberTok: memberTok, resultUsed: resultUsed)
+		end 'anInterfaceHandle'
+
+		if self.signatures.isSharedValueInstanceAt(self.tagOf(base.box), nameId: self.valueNameId(base.box)) 'aSharedValue'
+			return try self.dispatchOnSharedValue(func, holder: base.box, baseTok: baseTok, resultUsed: resultUsed)
+		end 'aSharedValue'
+
 		// Read ONCE and threaded to both decisions below, which are the two halves of one question: a member
 		// followed by `(` is a CALL, and a member not followed by one is a READ — so "is it a field?" and
 		// "may it be reported as a missing field?" cannot come to disagree about which shape they saw.
@@ -66387,19 +66929,63 @@ export type Parser
 		let caseIndex = serviceMessageCaseIndex(request, member: memberTok.value)
 
 		if caseIndex < request.caseCount() 'aMessage'
-			return try self.emitServiceSend(func, base: base, baseTok: baseTok, memberTok: memberTok, typeName: typeName, request: request, caseIndex: caseIndex, resultUsed: resultUsed)
+			return try self.emitServiceSend(func, base: base, baseTok: baseTok, memberTok: memberTok, typeName: typeName, request: request, caseIndex: caseIndex, route: MessageRoute.mailbox, resultUsed: resultUsed)
 		end 'aMessage'
 
 		if memberTok.value.equals(ServiceShutdownMethodName) 'thePoisonPill'
-			return try self.emitServiceShutdown(base, baseTok: baseTok, memberTok: memberTok, typeName: typeName, request: request, resultUsed: resultUsed)
+			return try self.emitServiceShutdown(base, baseTok: baseTok, memberTok: memberTok, typeName: typeName, request: request, route: MessageRoute.mailbox, resultUsed: resultUsed)
 		end 'thePoisonPill'
 
 		if memberTok.value.equals(CloneMethodName) 'aSecondHandle'
-			return try self.emitServiceHandleClone(base, baseTok: baseTok, memberTok: memberTok)
+			return try self.emitServiceHandleClone(base, cloner: MboxHandleCloneBoxName, baseTok: baseTok, memberTok: memberTok)
 		end 'aSecondHandle'
 
 		throw ParseError.serviceNotAMessage(serviceNotAMessageRefusal(typeName, handleName: base.layout.name, member: memberTok.value, declaresIt: self.signatures.declaresCallee(qualifiedMethodName(typeName, methodName: memberTok.value))), line: memberTok.line, column: memberTok.column)
 	end 'dispatchOnServiceHandle'
+
+	function requireImplementersAnswerAlike(interfaceName ByteArray, representative ByteArray, request EnumLayout, caseIndex CaseIndex, memberTok Token) throws ParseError
+		let member = memberTok.value
+		let representativeMessage = qualifiedMethodName(representative, methodName: member)
+		let representativeReturn = self.serviceMessageDeclOf(representativeMessage).returnType
+		let representativeThrows = self.signatures.throwsOf(representativeMessage)
+
+		for service in serviceTypeRoster(self.signatures) 'eachService'
+			if service.equals(representative) or not self.signatures.typeImplementsInterface(service, interfaceName: interfaceName) 'notAnotherImplementer'
+				continue
+			end 'notAnotherImplementer'
+
+			let serviceRequest = try serviceRequestLayoutOf(self.signatures, typeName: service) otherwise panic("requireImplementersAnswerAlike: `{String.from(service)}` is on the companion roster, which mints its request union")
+			let message = qualifiedMethodName(service, methodName: member)
+
+			if payloadsAgree(request.payloadsAt(caseIndex), other: serviceRequest.payloadsAt(serviceMessageCaseIndex(serviceRequest, member: member))) and self.returnAnswersAreInterchangeable(representativeReturn, right: self.serviceMessageDeclOf(message).returnType) and throwsClausesAgree(representativeThrows, other: self.signatures.throwsOf(message)) 'answersAlike'
+				continue
+			end 'answersAlike'
+
+			throw ParseError.registryRefused(ErrorCode.interfaceHandleImplementersDisagree, explanation: "`{String.from(interfaceName)}.{String.from(member)}` cannot be sent through `{String.from(interfaceName)}.handle`: `{String.from(service)}` and `{String.from(representative)}` declare it with different parameter, return or `throws` types, so one request and one reply cannot serve both — send it through each service's own handle", line: memberTok.line, column: memberTok.column, note: DiagnosticNote.none)
+		end 'eachService'
+	end 'requireImplementersAnswerAlike'
+
+	function dispatchOnInterfaceHandle(func IrFunction, base StructBase, baseTok Token, memberTok Token, resultUsed bool) returns ValueId throws ParseError
+		let interfaceName = self.signatures.interfaceOfHandle(base.layout.name)
+		let representative = self.signatures.interfaceHandleRepresentative(interfaceName)
+		let request = try serviceRequestLayoutOf(self.signatures, typeName: interfaceName) otherwise panic("dispatchOnInterfaceHandle: nothing declares `union {String.from(serviceRequestCompanionName(interfaceName))}` — `ServiceCompanions.synthesizeInterfaceRequestUnions` mints it beside every interface handle")
+		let caseIndex = serviceMessageCaseIndex(request, member: memberTok.value)
+
+		if caseIndex < request.caseCount() 'aRequirement'
+			try self.requireImplementersAnswerAlike(interfaceName, representative: representative, request: request, caseIndex: caseIndex, memberTok: memberTok)
+			return try self.emitServiceSend(func, base: base, baseTok: baseTok, memberTok: memberTok, typeName: representative, request: request, caseIndex: caseIndex, route: MessageRoute.sendTable(caseIndex, interfaceName: interfaceName), resultUsed: resultUsed)
+		end 'aRequirement'
+
+		if memberTok.value.equals(ServiceShutdownMethodName) 'thePoisonPill'
+			return try self.emitServiceShutdown(base, baseTok: baseTok, memberTok: memberTok, typeName: representative, request: request, route: MessageRoute.sendTable(ServiceShutdownCaseIndex, interfaceName: interfaceName), resultUsed: resultUsed)
+		end 'thePoisonPill'
+
+		if memberTok.value.equals(CloneMethodName) 'aSecondHandle'
+			return try self.emitServiceHandleClone(base, cloner: MboxInterfaceCloneBoxName, baseTok: baseTok, memberTok: memberTok)
+		end 'aSecondHandle'
+
+		throw ParseError.serviceNotAMessage(serviceNotAMessageRefusal(interfaceName, handleName: base.layout.name, member: memberTok.value, declaresIt: false), line: memberTok.line, column: memberTok.column)
+	end 'dispatchOnInterfaceHandle'
 
 	// ⭐⭐ **`h.m(…)` — BUILD THE REQUEST BOX AND ENQUEUE IT.** The arguments are read by the ORDINARY call
 	// reader (`parseCallArgs` + `fillOmittedArgDefaults`), so a message takes labels, defaults and every
@@ -66412,7 +66998,7 @@ export type Parser
 	// `serviceSend` op carries a BOX and not an argument list, so the pass that types a call's arguments has
 	// nothing to type. That is the same position a parser-intrinsic container mutator is in, and the refusal
 	// takes the same voice for the same reason (`SlotMismatchVoice.containerElementArgument`).
-	function emitServiceSend(func IrFunction, base StructBase, baseTok Token, memberTok Token, typeName ByteArray, request EnumLayout, caseIndex CaseIndex, resultUsed bool) returns ValueId throws ParseError
+	function emitServiceSend(func IrFunction, base StructBase, baseTok Token, memberTok Token, typeName ByteArray, request EnumLayout, caseIndex CaseIndex, route MessageRoute, resultUsed bool) returns ValueId throws ParseError
 		let callee = qualifiedMethodName(typeName, methodName: memberTok.value)
 		try self.requireServiceSendResultUnused(resultUsed, request: request, caseIndex: caseIndex, typeName: typeName, memberTok: memberTok)
 		let instance = self.serviceInstanceOfHandle(base.box, typeName: typeName)
@@ -66453,13 +67039,33 @@ export type Parser
 		self.seedMessageSlots(payloads, anchor: memberIndex, slotValues: slotValues, filled: filled, bareLocal: bareLocal, slotAnchors: slotAnchors)
 
 		try self.slotMessageArgs(callee, payloads: payloads, args: args, argLabels: argLabels, argAnchors: argAnchors, memberIndex: memberIndex, slotValues: slotValues, filled: filled, slotAnchors: slotAnchors, memberTok: memberTok)
-		let reply = self.fillMessageReplySlot(payloads, callee: callee, instance: instance, slotValues: slotValues, filled: filled, range: range)
+		self.widenMessageArgsToInterfaceHandles(payloads, slotValues: slotValues, filled: filled, firstTok: baseTok, lastTok: rparenTok)
+		let reply = self.fillMessageReplySlot(payloads, callee: callee, awaitedService: awaitedServiceOf(route, typeName: typeName), instance: instance, slotValues: slotValues, filled: filled, range: range)
 		try self.requireEveryMessageArgumentGiven(callee, payloads: payloads, filled: filled, given: args.count(), memberTok: memberTok)
 
 		self.releaseHandOffBuildTemps(argumentTempFloor, ownedFloor: argumentOwnedFloor, handedOff: slotValues, anchor: memberTok)
 		let box = try self.emitEnumBox(request, caseIndex: caseIndex, args: slotValues, argsBareLocal: bareLocal, argAnchors: slotAnchors, valueStarts: slotAnchors, caseTok: memberTok, range: range, fill: PayloadFill.serviceMessage(typeName))
-		return self.emitServiceSendOp(base, box: box, callee: callee, reply: reply, range: range)
+		return self.emitServiceSendOp(base, box: box, callee: callee, reply: reply, route: route, range: range)
 	end 'emitServiceSend'
+
+	function widenMessageArgsToInterfaceHandles(payloads PayloadFieldArray, slotValues ValueIdArray, filled BoolArray, firstTok Token, lastTok Token)
+		if not self.signatures.declaresAnInterfaceHandle() 'noInterfaceHandle'
+			return
+		end 'noInterfaceHandle'
+
+		for (position, field) in payloads.withIterator() 'eachSlot'
+			let slot = position.index()
+			let given = try filled.get(slot) otherwise panic("widenMessageArgsToInterfaceHandles: filled.get OOB at {slot} — the columns are sized to the variant's payload count")
+
+			if not given or fieldIsTheServiceReplySlot(field) or fieldIsAServiceWitnessHalf(field) 'noArgumentHere'
+				continue
+			end 'noArgumentHere'
+
+			let value = try slotValues.get(slot) otherwise panic("widenMessageArgsToInterfaceHandles: slotValues.get OOB at {slot}")
+			let widened = self.interfaceHandleOf(value, declared: self.signatures.adoptType(field.declaredType, into: self.artifact.typeNames), first: firstTok, last: lastTok)
+			try slotValues.set(slot, value: widened) otherwise panic("widenMessageArgsToInterfaceHandles: slotValues.set OOB at {slot}")
+		end 'eachSlot'
+	end 'widenMessageArgsToInterfaceHandles'
 
 	// ⭐⭐ **A `returns T` REPLY NEEDS THE HANDLE'S INSTANTIATION, AND A DECLARED SLOT CANNOT CARRY ONE
 	// (E3145).** One `<T>.handle` companion serves every instantiation — nothing about it names a type
@@ -66518,7 +67124,7 @@ export type Parser
 	// store writes beside that argument (`emitEnumBox`), so no source argument ever fills it.
 	//
 	// ⚠ **`bareLocal` IS ALL FALSE AND CANNOT BE OTHERWISE, WHICH IS WHY IT IS SEEDED HERE AND NEVER WRITTEN.**
-	// The transfer a message's payload takes is `moveIntoGreenThread`, which resolves the source binding
+	// The transfer a message's payload takes is `handIntoGreenThread`, which resolves the source binding
 	// itself; the union CONSTRUCT's per-slot bare-local column has no reader on this path
 	// (`storedPayloadValue`), and passing a column of the right SHAPE is what lets the two fills share one
 	// emitter instead of two.
@@ -66539,11 +67145,15 @@ export type Parser
 	// ⚠ The BOX is enrolled as an owned temporary by `emitEnumBox`, and it must be DRAINED here: the mailbox
 	// owns it from the moment the op is emitted, and the statement-end drop would free a request the service
 	// is about to read.
-	function emitServiceSendOp(base StructBase, box ValueId, callee ByteArray, reply ServiceReplyValue, range SourceRange) returns ValueId
-		let mailbox = self.emitFieldLoad(base.box, layout: base.layout, index: ServiceHandleMailboxFieldIndex, range: range)
+	function emitServiceSendOp(base StructBase, box ValueId, callee ByteArray, reply ServiceReplyValue, route MessageRoute, range SourceRange) returns ValueId
 		self.removeFromPendingTemps(box)
-		let sent = self.mintValue(ValueTypeTag.void, nameId: UnnamedTypeId)
-		self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.serviceSend(sent, callee: callee, handle: mailbox, request: box), range: range)
+
+		// A table send is a runtime call, not an `indirectCall`, so E3143 does not widen it to every
+		// address-taken function in the program; the stubs it reaches only enqueue.
+		let sent = match route 'route'
+			mailbox gives self.emitMailboxSend(base, box: box, callee: callee, range: range)
+			sendTable(slot, _) gives self.emitRuntimeCall(MboxInterfaceSendName, args: tripleArgs(base.box, second: self.emitLiteral(interfaceSendSlotOffset(slot), valueType: MaxonType.integer, range: range), third: box), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		end 'route'
 
 		// ⭐ **THE VALUE OF AN AWAITABLE SEND IS ITS REPLY CELL, NOT THE SEND (SV2).** The `serviceSend` op
 		// still defines a void `sent` — it is a statement, and every op in this dialect names a result — but
@@ -66555,6 +67165,13 @@ export type Parser
 		end 'r'
 	end 'emitServiceSendOp'
 
+	function emitMailboxSend(base StructBase, box ValueId, callee ByteArray, range SourceRange) returns ValueId
+		let mailbox = self.emitFieldLoad(base.box, layout: base.layout, index: ServiceHandleMailboxFieldIndex, range: range)
+		let sent = self.mintValue(ValueTypeTag.void, nameId: UnnamedTypeId)
+		self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.serviceSend(sent, callee: callee, handle: mailbox, request: box), range: range)
+		return sent
+	end 'emitMailboxSend'
+
 	// ⭐ **`h.shutdown()` — THE COMPILER'S POISON PILL, ENQUEUED LIKE ANY OTHER MESSAGE.** Variant 0 carries
 	// only its reply slot, so the box is built through the same `emitEnumBox` an author's message goes
 	// through and the drain behind it is the loop's.
@@ -66564,18 +67181,17 @@ export type Parser
 	// (`ServiceCompanions.buildServiceRequestUnion` gives it to every request union there will ever be) and
 	// the loop really does complete it, through `MboxOffShutdownReply` at `__mbox_service_exit`. What it has
 	// no DECLARATION for is what comes back: `shutdown` is the HANDLE's own method rather than a message of
-	// the type (`serviceMessageOwnerOf` answers `notAMessage`), so nothing types its reply and no roster
-	// entry names it.
+	// the type (`ProgramSignatures.serviceMessageOf` holds no entry for it), so nothing types its reply and no
+	// roster entry names it.
 	//
-	// ⛔ **UNGATED, THAT WAS A COMPILER PANIC ON A PROGRAM A USER CAN WRITE.** `try await h.shutdown()` minted
-	// the cell, and the await's own bookkeeping asked the message roster for `<T>.shutdown` —
-	// `serviceTypeOfMessage`, whose lookup is TOTAL and correctly so. The cure is here, at the value
-	// position, and not there: making the roster tolerant would give every reader of it a second answer for
-	// a name that is genuinely not on it.
+	// ⛔ **THE GATE IS HERE, AT THE VALUE POSITION, AND NOT IN THE ROSTER.** An awaited reply cell's
+	// bookkeeping names the message it awaits, and `<T>.shutdown` is on no message roster; making the
+	// roster tolerant would give every reader of it a second answer for a name that is genuinely not
+	// on it.
 	//
 	// ⚠ **IT REFUSES BEFORE IT EMITS**, `emitBinOp`'s ordering rule, which is why the gate precedes even the
 	// argument list's two tokens.
-	function emitServiceShutdown(base StructBase, baseTok Token, memberTok Token, typeName ByteArray, request EnumLayout, resultUsed bool) returns ValueId throws ParseError
+	function emitServiceShutdown(base StructBase, baseTok Token, memberTok Token, typeName ByteArray, request EnumLayout, route MessageRoute, resultUsed bool) returns ValueId throws ParseError
 		if resultUsed 'usedForItsValue'
 			throw ParseError.unsupported(serviceShutdownHasNoValueRefusal(typeName), line: memberTok.line, column: memberTok.column)
 		end 'usedForItsValue'
@@ -66597,10 +67213,10 @@ export type Parser
 		var slotAnchors = TokenIndexArray.create()
 		self.seedMessageSlots(payloads, anchor: self.pos, slotValues: slotValues, filled: filled, bareLocal: bareLocal, slotAnchors: slotAnchors)
 		let callee = qualifiedMethodName(typeName, methodName: memberTok.value)
-		let reply = self.fillMessageReplySlot(payloads, callee: callee, instance: self.serviceInstanceOfHandle(base.box, typeName: typeName), slotValues: slotValues, filled: filled, range: range)
+		let reply = self.fillMessageReplySlot(payloads, callee: callee, awaitedService: awaitedServiceOf(route, typeName: typeName), instance: self.serviceInstanceOfHandle(base.box, typeName: typeName), slotValues: slotValues, filled: filled, range: range)
 
 		let box = try self.emitEnumBox(request, caseIndex: ServiceShutdownCaseIndex, args: slotValues, argsBareLocal: bareLocal, argAnchors: slotAnchors, valueStarts: slotAnchors, caseTok: memberTok, range: range, fill: PayloadFill.serviceMessage(typeName))
-		return self.emitServiceSendOp(base, box: box, callee: callee, reply: reply, range: range)
+		return self.emitServiceSendOp(base, box: box, callee: callee, reply: reply, route: route, range: range)
 	end 'emitServiceShutdown'
 
 	// ⭐ **`h.clone()` — A SECOND HANDLE TO THE SAME SERVICE, NEVER A SECOND SERVICE.** It cannot take
@@ -66608,14 +67224,14 @@ export type Parser
 	// builds for a companion, and a blitted copy of the box would name the mailbox twice while its counts said
 	// once. `MboxHandleCloneBoxName` is the SAME entry `SignatureIndex.managedNameCascadeStrategy` hands back for
 	// a handle held in a field or an array element, so a handle cloned three different ways takes one body.
-	function emitServiceHandleClone(base StructBase, baseTok Token, memberTok Token) returns ValueId throws ParseError
+	function emitServiceHandleClone(base StructBase, cloner ByteArray, baseTok Token, memberTok Token) returns ValueId throws ParseError
 		self.advance()
 		try self.consumeEmptyArgList()
 
 		// The receiver's OWN type, not the layout's name: a generic service's handle stands at
 		// `<T>.handle with <Args>`, and a clone that decayed to the base would leave the second handle unable
 		// to resolve a `returns T` reply.
-		return self.emitOwnedRuntimeResult(MboxHandleCloneBoxName, args: singletonArgs(base.box), resultTag: self.tagOf(base.box), resultNameId: self.valueNameId(base.box), range: SourceRange.between(baseTok, last: memberTok))
+		return self.emitOwnedRuntimeResult(cloner, args: singletonArgs(base.box), resultTag: self.tagOf(base.box), resultNameId: self.valueNameId(base.box), range: SourceRange.between(baseTok, last: memberTok))
 	end 'emitServiceHandleClone'
 
 	// ⭐ **A FIRE-AND-FORGET SEND STILL DELIVERS NO REPLY, SO THERE IS STILL NOTHING TO BIND (SV2).** A
@@ -66679,10 +67295,10 @@ export type Parser
 	// spawn's: `markValuePromise` makes `await`/`try await`/E3100 see it, and `pendingTempDrops` makes an
 	// UNBOUND send (`h.say("a")` as a statement) drop it at statement end through `__gt_promise_drop` — the
 	// abandoned-cell road `services.reply-discarded-is-dropped-clean` pins.
-	function fillMessageReplySlot(payloads PayloadFieldArray, callee ByteArray, instance ServiceStateInstance, slotValues ValueIdArray, filled BoolArray, range SourceRange) returns ServiceReplyValue
+	function fillMessageReplySlot(payloads PayloadFieldArray, callee ByteArray, awaitedService ByteArray, instance ServiceStateInstance, slotValues ValueIdArray, filled BoolArray, range SourceRange) returns ServiceReplyValue
 		match serviceReplySlotIndex(payloads) 'reply'
 			absent then return ServiceReplyValue.fireAndForget
-			at(slot) then return self.mintServiceReplyCell(slot, callee: callee, instance: instance, slotValues: slotValues, filled: filled, range: range)
+			at(slot) then return self.mintServiceReplyCell(slot, callee: callee, awaitedService: awaitedService, instance: instance, slotValues: slotValues, filled: filled, range: range)
 		end 'reply'
 	end 'fillMessageReplySlot'
 
@@ -66708,11 +67324,11 @@ export type Parser
 	// ⚠ **`markValuePromise` STAYS, AND IT IS NOT REDUNDANT WITH THE TYPE.** The mark answers *"does THIS
 	// frame owe a `__gt_promise_drop`?"* (`decrefCalleeFor`, `storedPromiseValue`), which a type cannot: a
 	// promise read back out of a container carries the very same type and owes nothing.
-	function mintServiceReplyCell(slot CaseIndex, callee ByteArray, instance ServiceStateInstance, slotValues ValueIdArray, filled BoolArray, range SourceRange) returns ServiceReplyValue
+	function mintServiceReplyCell(slot CaseIndex, callee ByteArray, awaitedService ByteArray, instance ServiceStateInstance, slotValues ValueIdArray, filled BoolArray, range SourceRange) returns ServiceReplyValue
 		let cell = self.mintValue(ValueTypeTag.genericInstance, nameId: self.signatures.internPromiseInstanceForReply(callee, serviceInstance: instance) as TypeNameId)
 		self.markValuePromise(cell)
 		self.bodyState.pendingTempDrops.push(cell)
-		self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.serviceReplyCell(cell, messageName: callee), range: range)
+		self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.serviceReplyCell(cell, messageName: callee, awaitedService: awaitedService), range: range)
 
 		try slotValues.set(slot, value: cell) otherwise panic("mintServiceReplyCell: slotValues.set OOB at {slot} — the columns are sized to the variant's payload count and the slot came from that same list")
 		try filled.set(slot, value: true) otherwise panic("mintServiceReplyCell: filled.set OOB at {slot} — the columns are sized to the variant's payload count and the slot came from that same list")
@@ -66738,10 +67354,12 @@ export type Parser
 	// A message's declared parameter NAMES. Asked through one function because three readers need them and a
 	// disagreement would slot an argument into one position and count it against another.
 	function serviceMessageParamNames(callee ByteArray) returns ByteArrayArray
-		let decls = self.signatures.overloadedDeclsOf(callee)
-		let decl = try decls.get(0) otherwise panic("serviceMessageParamNames: '{String.from(callee)}' is a VARIANT of a request union the sweep built from that declaration, so `overloadedDeclsOf` cannot be empty")
-		return decl.paramNames
+		return self.serviceMessageDeclOf(callee).paramNames
 	end 'serviceMessageParamNames'
+
+	function serviceMessageDeclOf(callee ByteArray) returns OverloadedDecl
+		return try self.signatures.overloadedDeclsOf(callee).get(0) otherwise panic("serviceMessageDeclOf: '{String.from(callee)}' is a VARIANT of a request union the sweep built from that declaration, so `overloadedDeclsOf` cannot be empty")
+	end 'serviceMessageDeclOf'
 
 	// Is this member the SYNTHESIZED struct `clone` — the name `clone`, on a struct that declares no `clone` of
 	// its own? The gate in front of the emit below. `declaresCallee` is the WHOLE-PROGRAM index, not this file:
@@ -66852,7 +67470,7 @@ export type Parser
 				let field = try payloads.get(i) otherwise panic("requireUnionHoldsNoGreenThread: payloadsAt returned fewer fields than its own count at {i}")
 				let declared = self.signatures.payloadTypeOf(field, layout: layout, into: self.artifact.typeNames)
 
-				if payloadClassIsAGreenThread(try self.requirePayloadLowerable(field, declared: declared, layout: layout, posTok: memberTok)) 'aGreenThreadPayload'
+				if payloadClassIsAGreenThread(classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared, slotScopeFilePath: layout.declFilePath)) 'aGreenThreadPayload'
 					throw ParseError.promiseCannotBeBorrowed(String.from(b"clone"), cure: "`{String.from(layout.name)}` carries a promise, and a promise owns a green thread that exactly one owner may reclaim — so a copy would give two of them one thread. `await` the promise and clone a value holding its RESULT", line: memberTok.line, column: memberTok.column)
 				end 'aGreenThreadPayload'
 			end 'eachPayload'
@@ -67149,7 +67767,7 @@ export type Parser
 		// value merged across branches — which is why a synthesized surface hides it completely.
 		//
 		// ⚠ **MEASURED, by striking `slice`/`clone` from `arraySurfaceMemberNames` so `stdlib/Array.maxon`'s
-		// own `returns Self` bodies serve the calls**: `stdlib/Log.maxon:50`'s `return captured.clone()` is
+		// own `returns Self` bodies serve the calls**: `stdlib/TraceCapture.maxon`'s `captured.clone()` is
 		// `E3005 Cannot return 'Array' from function declared to return 'TraceKeyArray'` — a stdlib body
 		// refused for returning exactly what it declared — and every downstream read of a `slice` result is
 		// `E3059 … 'int' does not match expected type 'type parameter'`, because the base `Array` fixes no
@@ -67388,9 +68006,7 @@ export type Parser
 	// *"a struct box OR a generic INSTANCE (`Sizer with bool`, P1.6-B1) can be a method/field base"*.
 	// Left out, a closure that names a captured instance was refused, and the refusal CONTRADICTED
 	// ITSELF: `typeTagName(genericInstance)` prints `"struct"`, so it read *"declared 'struct' and not
-	// a struct type"*. `logDebug(…, message: function() gives "… {module.funcCount()} …")` where
-	// `module` is a `StdModule`, i.e. `IrModule with StdOp`, is that shape, and it occurs in EIGHT
-	// files. It is the same shape `structLayoutOfField`'s header records, one door over, and the same
+	// a struct type"*. It is the same shape `structLayoutOfField`'s header records, one door over, and the same
 	// fix: ask the predicate rather than answer for yourself.
 	function capturedStructBase(baseTok Token, enclosing Scope) returns StructBase throws ParseError
 		let baseName = self.baseBindingName(baseTok)
@@ -72565,7 +73181,8 @@ export type Parser
 		try self.parseCallArgs(func, callee: EmptySourceText, anchor: methodTok, args: userArgs, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, rule: ArgLabelRule.firstMayBeNamed)
 		let rparenTok = try self.consume(TokenKind.rightParen)
 		let target = try self.pickWitnessDispatchByArity(candidates, argCount: userArgs.count(), receiver: receiver, methodTok: methodTok)
-		let args = try self.slottedWitnessArgs(target, receiver: receiver, userArgs: userArgs, argLabels: argLabels, argRanges: argRanges, methodTok: methodTok)
+		var args = try self.slottedWitnessArgs(target, receiver: receiver, userArgs: userArgs, argLabels: argLabels, argRanges: argRanges, methodTok: methodTok)
+		self.widenWitnessArgs(target, args: args, first: methodTok, last: rparenTok)
 
 		// A `Self`-typed formal (`equals(other Self)`) requires an argument that is a value of `T` — a concrete
 		// literal (`self.item.equals(42)`) would be marshalled into the `Self` pointer and faulted. The SAME
@@ -76202,12 +76819,6 @@ export type Parser
 	// here as well as there is exactly how the FUNCTION-alias element goes missing: an
 	// `Array with <function alias>` element stays `named`, i.e. an int.
 	//
-	// ⚠ **THE FLOAT ARM BELOW IS WHAT KEEPS A FLOAT ELEMENT OFF `payloadValueTypeOf`'s PANIC — NOT E2062,
-	// WHICH NEVER HELD IT SHUT.** The type ARGUMENT gate does not catch every float
-	// element one step earlier, in EITHER direction: a diagnostic recorded at a `typealias` is
-	// RECORDED, not thrown, so the file's bodies are walked anyway and the accessor is minted regardless;
-	// and `[1.5, 2.5]`'s instance is MINTED by the compiler and never passes a type-argument gate at all.
-	//
 	// ⭐ **IT TAKES THE SLOT'S DECLARED TYPE, NOT A `giid`, because a `Map`'s VALUE column asks the identical
 	// question of a different slot.** Keyed on the instance it would have had to re-derive "which argument is
 	// the slot" per container, which is the enumeration a two-column container breaks; keyed on the TYPE, an
@@ -76249,17 +76860,6 @@ export type Parser
 				return MaxonType.float if tagIsFloat(maxonTypeTag(underlying)) else declared
 			end 'rangedAlias'
 		end 'named'
-
-		// ⭐ **A BARE FLOAT SLOT IS A FLOAT, and it is answered HERE rather than by the payload classifier
-		// below, which has no arm for one.** `classifyUnionPayload` reports `floatPayload` and
-		// `payloadValueTypeOf` PANICS on it — *"a float payload has no lowerable value type"* — because a
-		// union payload's float is refused before any load reaches it. A container ELEMENT's is not refused:
-		// it rides the slot as its 64 bits (`containerElementWord`) and reads back through the inverse
-		// reinterpretation, so the type it reads as is `float`. MEASURED before this arm, on
-		// `Array with Real` + `.get(0)`: that panic, with a stack trace and no `error E….`
-		if tagIsFloat(tag) 'floatSlot'
-			return MaxonType.float
-		end 'floatSlot'
 
 		return payloadValueTypeOf(classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared, slotScopeFilePath: self.filePath), declared: declared)
 	end 'containerSlotValueType'
@@ -76354,8 +76954,9 @@ export type Parser
 		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared, slotScopeFilePath: self.filePath)
 
 		if payloadClassIsManaged(class) 'managed'
-			try self.requireManagedSlotValueMatches(class, declared: declared, value: element, placeDoor: FunctionTypeDoor.containerElement, placeName: methodTok.value, placeOwner: EmptySourceText, placeBrand: self.elementBrandOf(giid), voice: SlotMismatchVoice.containerElementArgument, anchor: methodTok)
-			return element
+			let widened = self.interfaceHandleOf(element, declared: declared, first: methodTok, last: methodTok)
+			try self.requireManagedSlotValueMatches(class, declared: declared, value: widened, placeDoor: FunctionTypeDoor.containerElement, placeName: methodTok.value, placeOwner: EmptySourceText, placeBrand: self.elementBrandOf(giid), voice: SlotMismatchVoice.containerElementArgument, anchor: methodTok)
+			return widened
 		end 'managed'
 
 		// The `field` door, because an element IS a slot of the container's storage and the noun a function
@@ -76490,7 +77091,7 @@ export type Parser
 	function requirePromiseStorageDescribesSource(source AsyncCalleeLookup, cell ValueId, storage GenericInstanceId, anchor Token) throws ParseError
 		match source 'road'
 			found(callee) then try self.requirePromiseStorageDescribesSpawn(callee, storage: storage, anchor: anchor)
-			serviceReply(messageName) then try self.requirePromiseStorageDescribesReply(messageName, cell: cell, storage: storage, anchor: anchor)
+			serviceReply(messageName, _) then try self.requirePromiseStorageDescribesReply(messageName, cell: cell, storage: storage, anchor: anchor)
 			none then panic("requirePromiseStorageDescribesSource: `promiseSourceStoredHere` throws on `none` and is this function's only caller")
 		end 'road'
 	end 'requirePromiseStorageDescribesSource'
@@ -79858,28 +80459,6 @@ export type Parser
 		return slotStorageType(self.signatures, declared: declared, typeNames: self.artifact.typeNames, readerFilePath: self.filePath)
 	end 'fieldStorageType'
 
-	// ⭐ **THE ONE UNION-PAYLOAD REJECTION MESSAGE, so the construct and the extract site report a refused
-	// payload identically.** The REJECT itself is `requirePayloadLowerable`'s — deferred to the construct and
-	// extract sites rather than taken at the declaration, exactly as a struct-typed field's is refused at its
-	// use site (`requireStructBase`): a rejection at declaration would `throw` in the tolerant enum sweep and
-	// truncate the layout (see `readEnumCaseInto`'s payload arm).
-	//
-	// ⚠ **IT RETURNS THE STRING, and the caller throws `ParseError.unsupported(…)` INLINE** — never
-	// `throw self.helperReturningAParseError(…)`, which LEAKS 2 allocations: a freshly-owned union
-	// returned across a call and immediately re-thrown is not reconciled (the family OPEN.md records
-	// for a `throw` of a call result and for the owned-value ternary). Building the message via a call
-	// that returns a String and throwing the ParseError inline is the non-leaking shape, and it is the
-	// shape three other refusals in this file cite this one for.
-	//
-	// ⚠ **IT HAD A SIBLING — `nestedUnionPayloadMessage`, DELETED WITH ITS REFUSAL (W55).** That message
-	// claimed a nested payload-bearing union payload "needs its own destructor cascade"; the cascade was
-	// generic all along and what the payload path lacked was a slot-width derivation, so both the refusal and
-	// the sentence explaining it are gone rather than reworded. A message describing a refusal that no longer
-	// exists is a defect this project has paid for repeatedly.
-	function floatPayloadMessage(field PayloadField, layout EnumLayout) returns String
-		return "payload field '{String.from(field.name)}' on `{layout.kindWord()} {String.from(layout.name)}`: a `float` payload is not lowered yet (a scalar-only union is int-tagged, so a float must be re-encoded on the way into the slot and decoded on the way out, and neither the construct nor the extract does that)"
-	end 'floatPayloadMessage'
-
 	// A type-qualified numeric bound used as a VALUE (`let x = u16.max`, `if v == u64.max`).
 	// The same three tokens a range declaration's endpoint is built from, resolved through
 	// the same table — so `int(0 to u64.max)` and `v == u64.max` can never disagree about
@@ -80329,7 +80908,7 @@ export type Parser
 	// compile-time fact at all — the reading `LiteralArgPromotion`'s header already records for the String
 	// half of the same question. MEASURED: with the mark, that exact shape `__mm_retain`'d a `.rdata` record
 	// and segfaulted, in the compiler's own `SignatureIndex.plainBoxRetainCallee`. The fork is made at RUN
-	// TIME instead, off the record's own `capacity@16` — see `retainCalleeForValue` and
+	// TIME instead, off the record's own `capacity@16` — see `retainCalleeOf` and
 	// `ManagedMemoryRuntime.__managed_retain`.
 	function emitManagedConstant(bytes ByteArray, kind ManagedConstKind, range SourceRange) returns ValueId throws ParseError
 		return match kind 'k'
@@ -81431,7 +82010,7 @@ export type Parser
 
 		// Patch the return type now the body is known, and register the lift so it is callable (module +
 		// project signature registries) and its return type is resolvable at an indirect call through a
-		// closure-bound local (`closureReturns`, read by `functionValueReturnType`). The signature keeps the
+		// closure-bound local (`closureShapes`, read by `functionValueShape`). The signature keeps the
 		// USER parameters only — an indirect call is positional and never slot-validates against it, and the
 		// `__env` is a lowering-level detail the caller supplies from `valueClosureEnv`, not a source arg.
 		// ⚠ A body that is a call to an undefined callee has no type yet, and `MaxonReturnType.value` has no
@@ -81454,8 +82033,9 @@ export type Parser
 		// `declaredExistentialInstanceAt` to read.
 		self.publishExistentialInstances(lifted)
 		self.publishDebugLocals(lifted)
-		self.artifact.recordFuncSignature(closureName, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: sharedEmptyReturnExistentialSites, extensionConstraints: sharedEmptyWhereConstraints), nameLine: functionTok.line, nameColumn: functionTok.column, sourceFilePath: self.filePath, synthesized: false)
-		self.closureReturns.upsert(closureName, value: returnType)
+		let signature = FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: sharedEmptyReturnExistentialSites, extensionConstraints: sharedEmptyWhereConstraints)
+		self.artifact.recordFuncSignature(closureName, signature: signature, nameLine: functionTok.line, nameColumn: functionTok.column, sourceFilePath: self.filePath, synthesized: false)
+		self.closureShapes.upsert(closureName, value: FunctionValueShape.create(signature.paramTypes, returnType: returnType, scopeFilePath: self.filePath))
 
 		// Commit the closure's OWN range-check sites under its OWN lifted name, so `InsertRangeChecks`
 		// resolves them against the function whose SSA space numbered them. It sits here — after the body,
@@ -81578,7 +82158,7 @@ export type Parser
 			// only place that can say it is the store itself.
 			//
 			// ⛔ **MEASURED AS A DANGLING CAPTURE THROUGH THE SEND, WHICH IS WHAT MADE IT REACHABLE.** A value
-			// a closure captured still read `sole`, so `Parser.moveIntoGreenThread` MOVED it into a service's
+			// a closure captured still read `sole`, so `Parser.handIntoGreenThread` MOVED it into a service's
 			// mailbox — the service freed it, and `peek()` went on reading the env slot that still pointed at
 			// it. `services.error.a-co-owned-value-may-not-be-sent` is that program, and it compiled clean.
 			//
@@ -82864,15 +83444,6 @@ export type Parser
 	function requireConstPayloadValueFits(calls ConstFactoryCallArray, layout EnumLayout, declared PayloadFieldArray, slot CaseIndex, value ConstFactoryArgumentValue, valueTok Token) returns ConstFactoryArgumentValue throws ConstEvalError
 		let field = try declared.get(slot) otherwise panic("requireConstPayloadValueFits: declared.get OOB at slot {slot} — payloadSlotFor returns an in-range slot")
 
-		// ⛔ **THE LOWERABILITY VERDICT IS THE BODY'S OWN, AND IT HAS TO BE ASKED HERE TOO.** A float payload
-		// has no store width at all (`payloadStorageOf` panics on it), so a case the body refuses positionally
-		// would otherwise reach the synthesis and crash the compiler. The CLASS it answers with is the index's
-		// to re-derive where the store is built (`globalUnionCaseConstruct`); what this position needs is the
-		// refusal.
-		_ = try self.requirePayloadLowerable(field, declared: self.signatures.payloadTypeOf(field, layout: layout, into: self.artifact.typeNames), layout: layout, posTok: valueTok) otherwise (err) 'unlowerablePayload'
-			throw ConstEvalError.defective(err)
-		end 'unlowerablePayload'
-
 		match self.signatures.constUnionPayloadCheck(layout, field: field, value: value, calls: calls, elementFilePath: self.filePath) 'verdict'
 			agrees then return value
 
@@ -82880,9 +83451,7 @@ export type Parser
 			// `slotMismatchError` raises for the same mistake written inside a function.
 			mismatch(got, expected) then throw ConstEvalError.defective(ParseError.typeMismatchExpectedGot(expected, got: got, line: valueTok.line, column: valueTok.column))
 
-			// A float payload has no store width and is refused above, so no slot this reaches is float-typed
-			// and there is nothing an integer constant could widen into.
-			widensToFloat then panic("requireConstPayloadValueFits: payload '{String.from(field.name)}' of `{String.from(layout.name)}` was told to widen to float — `requirePayloadLowerable` refuses a float payload one call above")
+			widensToFloat then return self.constWidenedToFloat(value)
 		end 'verdict'
 	end 'requireConstPayloadValueFits'
 
@@ -84871,6 +85440,10 @@ export type Parser
 				return try self.emitClockIntrinsicCall(args, name: callee, runtimeName: WallClockNowUnixSecondsName, calleeTok: anchor)
 			end 'currentUnixTimeSeconds'
 
+			if callee.equals(BuiltinsCurrentUnixTimeNanosName) 'currentUnixTimeNanos'
+				return try self.emitClockIntrinsicCall(args, name: callee, runtimeName: WallClockNowUnixNanosName, calleeTok: anchor)
+			end 'currentUnixTimeNanos'
+
 			// ⭐ **THE ONLY SPELLING OF `sleep` THE PARSER RECOGNIZES — STDLIB'S OWN FLOOR.** A source
 			// `sleep(ms)` is an ordinary call to `stdlib/Sleep.maxon`'s declaration, which the loader
 			// brings into every compile and whose one-line body is exactly this intrinsic; there is no
@@ -85552,7 +86125,7 @@ export type Parser
 			end 'profileWriteWord'
 
 			if callee.equals(BuiltinsProfileNowFileTimeName) 'profileNowFileTime'
-				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: ProfileNowFileTimeName, arity: ProfileNoArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: WallClockNowFileTimeName, arity: ProfileNoArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
 			end 'profileNowFileTime'
 		end 'builtinsIntrinsic'
 
@@ -87225,6 +87798,7 @@ export type Parser
 		// is what makes the consume transfer, the drop enrollment and `slotCallArgs`' arity gate correct for
 		// it with no change to any of them.
 		let argDefaultSlots = try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges)
+		self.widenArgsToInterfaceHandles(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots, anchor: anchor, rparenTok: rparenTok)
 
 		// ⭐ **A FACTORY CALL ON A BARE GENERIC BASE HAS ITS INSTANCE FIXED BY ITS ARGUMENTS**, and this is the
 		// first line at which they are all in hand — the fill above included, so a DEFAULTED argument fixes a
@@ -88340,6 +88914,7 @@ export type Parser
 				managedDirectory or
 				managedSocket or
 				managedMemory or
+				sharedValue or
 				containerAlias then throw ParseError.unsupported("`async {String.from(typeTok.value)}.…` — a static on this type is served by a runtime entry the compiler emits rather than by a function the program declares, and a spawn hands the scheduler the ADDRESS of a linked function. Call it directly, or spawn a function of your own that wraps it", line: typeTok.line, column: typeTok.column)
 		end 'surface'
 	end 'requireAsyncSpawnTargetIsLinkable'
@@ -88585,7 +89160,7 @@ export type Parser
 		match source 'reply'
 			found or
 				none then break 'reply'
-			serviceReply(messageName) then return AwaitedPromise.create(self.serviceReplyResultType(messageName, cell: promise), tryTarget: TryTarget.serviceReply(messageName))
+			serviceReply(messageName, awaitedService) then return AwaitedPromise.create(self.serviceReplyResultType(messageName, cell: promise), tryTarget: TryTarget.serviceReply(messageName, awaitedService: awaitedService))
 		end 'reply'
 
 		// ⭐ **THE STORAGE ROAD BEATS THE SPAWN ROAD, AND IT HAS TO.** A spawn stored into a container keeps
@@ -88646,10 +89221,11 @@ export type Parser
 	// Does this message belong to a service whose instantiation fixes anything at all? Asked of the ROSTER,
 	// which is what knows a qualified name is a message and whose it is.
 	function replyServiceIsGeneric(messageName ByteArray) returns bool
-		return match serviceMessageOwnerOf(self.signatures, callee: messageName) 'owner'
-			notAMessage gives false
-			ofService(typeName, _) gives self.signatures.structDeclaresTypeParams(typeName)
-		end 'owner'
+		if let message = try self.signatures.serviceMessageOf(messageName) 'aMessage'
+			return self.signatures.structDeclaresTypeParams(message.typeName)
+		end 'aMessage'
+
+		return false
 	end 'replyServiceIsGeneric'
 
 	// **THE OPERAND'S TYPE AS THE `await` DIAGNOSTIC NAMES IT** — the value-KIND vocabulary (`integer`,
@@ -88841,7 +89417,7 @@ export type Parser
 				witness or
 				promise or
 				deferred then return
-			serviceReply(messageName) then self.artifact.recordServiceAwaitSite(ServiceAwaitSite.create(serviceTypeOfMessage(self.signatures, messageName: messageName), line: awaitTok.line, column: awaitTok.column, declFilePath: self.filePath))
+			serviceReply(_, awaitedService) then self.artifact.recordServiceAwaitSite(ServiceAwaitSite.create(awaitedService, line: awaitTok.line, column: awaitTok.column, declFilePath: self.filePath))
 		end 'target'
 	end 'recordServiceReplyAwait'
 
@@ -89179,6 +89755,10 @@ export type Parser
 	//     the temporary drained. **No incref: the frame's own `+1` rides into the mailbox**, which is what makes
 	//     the service the record's one owner rather than its second.
 	//
+	// A `publish` door (`Key.register`, `SharedValue.publish`) takes the same three answers and
+	// refuses as E3174; its graph is proved for SHARING rather than for a move, because every thread
+	// reads a published value at once.
+	//
 	// ⚠ `transferConsumedArg` promotes every borrowed byte record, and must: `async` is not a send. Its coroutine
 	// never leaves the caller's green thread, so two references on one thread are two references and the copy
 	// buys nothing there — the whole reason these are two doors rather than one.
@@ -89195,9 +89775,9 @@ export type Parser
 	// on the accepting path — `ProgramSignatures.transferWalkOf` decides refuse-versus-walk in one answer — so a
 	// refused transfer leaves nothing behind. That is `emitBinOp`'s ordering rule, which every door that can throw
 	// mid-expression keeps.
-	function moveIntoGreenThread(value ValueId, blame String, anchor Token) returns ValueId throws ParseError
+	function handIntoGreenThread(value ValueId, door ThreadHandOffDoor, anchor Token) returns ValueId throws ParseError
 		if self.valueIsPromise(value) 'aWaitToken'
-			throw ParseError.serviceValueNotTransferable(serviceUntransferableValueMessage(blame, noun: PromiseParameterNoun), line: anchor.line, column: anchor.column)
+			throw ParseError.serviceValueNotTransferable(serviceUntransferableValueMessage(handOffDoorBlame(door), noun: PromiseParameterNoun), line: anchor.line, column: anchor.column)
 		end 'aWaitToken'
 
 		if not self.valueIsManagedHeap(value) 'aMachineWord'
@@ -89206,39 +89786,53 @@ export type Parser
 
 		if not self.valueIsOwnedHeap(value) 'borrowed'
 			if not self.valueIsAMintedStringLiteral(value) 'someoneElseMayOwnIt'
-				throw ParseError.serviceArgumentNotUnique(serviceBorrowedTransferMessage(blame, source: self.transferredValueName(value)), line: anchor.line, column: anchor.column)
+				throw self.handOffRefusal(door, borrowed: true, value: value, anchor: anchor)
 			end 'someoneElseMayOwnIt'
 
-			// The promoted copy REPLACES the value the caller carries, exactly as `transferConsumedArg`'s arm
-			// does: what crosses is the fresh record, and this frame's own statement drop must not also reach it.
+			// The promoted copy REPLACES the value the caller carries, exactly as `transferConsumedArg`'s
+			// arm does: what crosses is the fresh record, and this frame's own statement drop must not also
+			// reach it.
 			let owned = self.promoteToOwnedString(value, range: SourceRange.ofToken(anchor))
 			self.removeFromPendingTemps(owned)
+			try self.proveSharedGraph(owned, door: door, anchor: anchor)
 			return owned
 		end 'borrowed'
 
 		if not self.valueIsSolelyOwnedHere(value) 'aSecondOwnerMayExist'
-			throw ParseError.serviceArgumentNotUnique(serviceSharedTransferMessage(blame, source: self.transferredValueName(value)), line: anchor.line, column: anchor.column)
+			throw self.handOffRefusal(door, borrowed: false, value: value, anchor: anchor)
 		end 'aSecondOwnerMayExist'
 
-		// ⭐⭐⭐ **AND THE SAME QUESTION ABOUT WHAT THE RECORD HOLDS — the gate the two above cannot be.** Sole
-		// ownership of the BOX licenses nothing about the box's contents; see `proveTransferGraph` for which
-		// shapes are proved at run time rather than refused.
-		try self.proveTransferGraph(value, handOff: GreenThreadHandOff.move, blame: blame, anchor: anchor)
+		// ⭐⭐⭐ **AND THE SAME QUESTION ABOUT WHAT THE RECORD HOLDS — the gate the two above cannot be.**
+		// Sole ownership of the BOX licenses nothing about the box's contents; see `proveTransferGraph`
+		// for which shapes are proved at run time rather than refused.
+		try self.proveTransferGraph(value, handOff: handOffDoorKind(door), blame: handOffDoorBlame(door), anchor: anchor)
 
-		// ⭐ **BOTH HALVES, UNCONDITIONALLY, AND EACH IS A NO-OP ON THE OTHER'S CASE.** A value is never in
-		// `ownedBindings` and `pendingTempDrops` at once (`markValueOwnsHeap`'s invariant), so this is the shape
-		// `transferConsumedArg`'s opaque arm already uses — and unlike `storeOwnedValueIntoDurableSink`, which
-		// had to become an `if`/`else` when it started CO-OWNING a bound value, a move gives up this frame's
-		// reference either way and so has one answer for both.
+		// ⭐ **BOTH HALVES, UNCONDITIONALLY, AND EACH IS A NO-OP ON THE OTHER'S CASE.** A value is never
+		// in `ownedBindings` and `pendingTempDrops` at once (`markValueOwnsHeap`'s invariant), and a
+		// hand-off gives up this frame's reference either way.
 		try self.poisonMoveSource(value, anchor: anchor)
 		self.removeFromPendingTemps(value)
 		return value
-	end 'moveIntoGreenThread'
+	end 'handIntoGreenThread'
+
+	function proveSharedGraph(value ValueId, door ThreadHandOffDoor, anchor Token) throws ParseError
+		match handOffDoorKind(door) 'handOff'
+			move then return
+			lend then try self.proveTransferGraph(value, handOff: GreenThreadHandOff.lend, blame: handOffDoorBlame(door), anchor: anchor)
+		end 'handOff'
+	end 'proveSharedGraph'
+
+	function handOffRefusal(door ThreadHandOffDoor, borrowed bool, value ValueId, anchor Token) returns ParseError
+		return match door 'door'
+			message(blame) gives ParseError.serviceArgumentNotUnique(serviceBorrowedTransferMessage(blame, source: self.transferredValueName(value)) if borrowed else serviceSharedTransferMessage(blame, source: self.transferredValueName(value)), line: anchor.line, column: anchor.column)
+			publish(key) gives registryNotSolelyOwnedError(key, anchor: anchor)
+		end 'door'
+	end 'handOffRefusal'
 
 	// ⭐⭐⭐ **A MESSAGE ARGUMENT: LENT WHEN A LIVE `let` LOCAL OWNS IT, MOVED OTHERWISE (⚖ user ruling).** The
 	// lend is asked first because a `let` already lent is co-owned by its message, and the move door would
 	// refuse it as shared; everything a lend declines — a scalar, a promise, a borrow, a `var`, a temporary —
-	// reaches `moveIntoGreenThread` exactly as before, refusals and all.
+	// reaches `handIntoGreenThread`'s move, refusals and all.
 	function transferMessageArgument(value ValueId, destination MessageArgumentDestination, anchorIndex TokenIndex) returns ValueId throws ParseError
 		let anchor = self.tokenAt(anchorIndex)
 		let owner = self.liveOwnerIndexOf(value)
@@ -89247,7 +89841,7 @@ export type Parser
 			return try self.lendIntoGreenThread(value, owner: owner, destination: destination, anchor: anchor, anchorIndex: anchorIndex)
 		end 'aLetLocalOwnsIt'
 
-		return try self.moveIntoGreenThread(value, blame: destination.blame(), anchor: anchor)
+		return try self.handIntoGreenThread(value, door: ThreadHandOffDoor.message(destination.blame()), anchor: anchor)
 	end 'transferMessageArgument'
 
 	// ⭐⭐ **DOES THE BINDING AT `owner` LEND `value` RATHER THAN MOVE IT?** A live `let` LOCAL owning a managed
@@ -89595,7 +90189,27 @@ export type Parser
 			return sharedUndecidedOverloadPick
 		end 'oneAnswerHoweverItResolves'
 
-		var picked = sharedUndecidedOverloadPick
+		return match self.sweptOverloadAmong(candidates, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'pick'
+			// ADOPTED into this file's interner, exactly as `returnTypeOf` adopts the by-name answer: the
+			// index's ids are its own, and a `named`/`structRef` return read raw would name whatever this
+			// file's table happens to hold at that id.
+			chosen(decl) gives SweptOverloadPick.resolved(self.signatures.adoptReturnType(decl.returnType, into: self.artifact.typeNames))
+			undecided gives sharedUndecidedOverloadPick
+		end 'pick'
+	end 'overloadedCallResultType'
+
+	function sweptDeclarationOf(callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argDefaultSlots ParamCountArray) returns SweptDeclarationPick
+		let candidates = self.signatures.overloadedDeclsOf(callee)
+
+		if candidates.count() == 1 'oneDeclaration'
+			return SweptDeclarationPick.chosen(try candidates.get(0) otherwise panic("sweptDeclarationOf: one declaration was just counted"))
+		end 'oneDeclaration'
+
+		return self.sweptOverloadAmong(candidates, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
+	end 'sweptDeclarationOf'
+
+	function sweptOverloadAmong(candidates OverloadedDeclArray, args ValueIdArray, argLabels ByteArrayArray, argDefaultSlots ParamCountArray) returns SweptDeclarationPick
+		var picked = SweptDeclarationPick.undecided
 		var best = NoCompatibleOverloadScore
 		var holdingBest = 0 as OverloadCandidateCount
 
@@ -89610,7 +90224,7 @@ export type Parser
 				// A parameter the sweep did not read leaves this whole set unjudgeable: a candidate that cannot
 				// be refused cannot be outranked either, so a winner here would be a claim about the members this
 				// door happened to be able to read.
-				unscoreable then return sharedUndecidedOverloadPick
+				unscoreable then return SweptDeclarationPick.undecided
 				incompatible then continue
 				fits(fitScore) then score = fitScore
 			end 'fit'
@@ -89625,17 +90239,13 @@ export type Parser
 			end 'aNewBest'
 
 			holdingBest = holdingBest + 1
-
-			// ADOPTED into this file's interner, exactly as `returnTypeOf` adopts the by-name answer: the
-			// index's ids are its own, and a `named`/`structRef` return read raw would name whatever this
-			// file's table happens to hold at that id.
-			picked = SweptOverloadPick.resolved(self.signatures.adoptReturnType(candidate.returnType, into: self.artifact.typeNames))
+			picked = SweptDeclarationPick.chosen(candidate)
 		end 'eachCandidate'
 
 		// A TIE is `undecided` and never a choice: `SemanticCheck.selectOverload` calls the same tie E3007, so
 		// the program is refused at the call rather than typed from one of the members it cannot mean.
-		return picked if holdingBest == 1 else sharedUndecidedOverloadPick
-	end 'overloadedCallResultType'
+		return picked if holdingBest == 1 else SweptDeclarationPick.undecided
+	end 'sweptOverloadAmong'
 
 	// One candidate's fit, scored on the SWEEP's parameter types. Arity and labels are asked through the
 	// shared `slotCallArgs` — simultaneously the label test and the arity test, and the one label-to-position
@@ -89673,6 +90283,11 @@ export type Parser
 
 			let paramType = self.sweptParamType(swept, scopeFilePath: candidate.declFilePath)
 			let argValue = try slotted.get(firstUser + i) otherwise panic("sweptOverloadArgFit: slotted.get OOB at {firstUser + i} — `slotCallArgs` answered `ordered`, so the counts agree, and `paramNames`/`paramTypes` are pushed in lockstep by the one walk that fills them")
+
+			if self.handleWidensToSlot(argValue, declared: paramType) 'aHandleConversion'
+				score = score + WideningArgScore
+				continue
+			end 'aHandleConversion'
 
 			if not self.sweptArgumentFits(paramType, argValue: argValue) 'refused'
 				return sharedOverloadIncompatible
@@ -90207,6 +90822,7 @@ export type Parser
 		var args = try self.parseIndirectCallArgs(func)
 
 		let rparenTok = try self.consume(TokenKind.rightParen)
+		self.widenFunctionValueArgs(callee, args: args, anchor: anchor, rparenTok: rparenTok)
 
 		// ⭐ **THE ENV TRAVELS WITH THE VALUE — UNIFORMLY (P1.5-A2b-2).** Every indirect call passes an
 		// environment as the trailing arg: the callee VALUE's own env when it carries one (a capturing closure's
@@ -90272,7 +90888,7 @@ export type Parser
 	// void value; every value position (`resultUsed: true` — a binding, `return`, an operand, an argument)
 	// reports E2004 HERE, at the call, the same anchor and text the direct-call diagnostic uses.
 	function mintIndirectCallResult(callee ValueId, resultUsed bool, anchor Token) returns ValueId throws ParseError
-		let recovered = self.functionValueReturn(callee)
+		let recovered = self.functionValueShape(callee)
 
 		match recovered.returnType 'r'
 			value(inner) then return self.mintOwnedCallResult(inner, scopeFilePath: recovered.scopeFilePath)
@@ -90280,7 +90896,7 @@ export type Parser
 		end 'r'
 
 		// A VOID function value used where a value belongs. Reported with the callee's governing function
-		// name (`functionValueReturnType` proved it resolvable to reach the `void` arm), the E2004 spelling
+		// name (`functionValueShape` proved it resolvable to reach the `void` arm), the E2004 spelling
 		// `mintDeclaredCallResult` renders for a void direct call.
 		if resultUsed 'noValueToUse'
 			throw ParseError.voidCallResultUsed(String.from(self.internedName(self.valueNameId(callee))), line: anchor.line, column: anchor.column)
@@ -90289,39 +90905,39 @@ export type Parser
 		return self.mintValue(ValueTypeTag.void, nameId: UnnamedTypeId)
 	end 'mintIndirectCallResult'
 
-	// The return type of a function value, recovered from its governing name (see `MaxonType`'s
-	// `function` arm), paired with the file whose scope that type is resolved in. One walk answers
-	// both, so a new source cannot be given a type without a scope.
+	// The parameter and return types of a function value, recovered from its governing name (see
+	// `MaxonType`'s `function` arm), paired with the file whose scope those types are resolved in. One
+	// walk answers all three, so a new source cannot be given a type without a scope.
 	//
 	// ⚠ The scope is memory safety: an indirect call's result is repaired like any other swept type,
 	// in the scope of the file that declared the slot. Resolved in the calling file, an alias's
 	// `Token` can name a different declaration there, and the call's result is typed as the wrong
 	// type.
-	//   • a lifted closure is this parse's own (`closureReturns` is file-local), so its slot is this
+	//   • a lifted closure is this parse's own (`closureShapes` is file-local), so its slot is this
 	//     file's;
 	//   • a function alias carries its declaring file (`FunctionTypeAlias.declFilePath`);
 	//   • a declared function's slot is `recordedReturnDeclFileOf`'s answer, the door a direct call
 	//     asks.
 	// A name is a function alias or a function, never both, so the order of those two lookups is
 	// immaterial.
-	function functionValueReturn(callee ValueId) returns FunctionValueReturn
+	function functionValueShape(callee ValueId) returns FunctionValueShape
 		let name = self.internedName(self.valueNameId(callee))
 
 		// A closure's `$`-suffixed name is unwritable in source, so it shadows no function or alias.
-		if let closureReturn = try self.closureReturns.get(name) 'closure'
-			return FunctionValueReturn.create(closureReturn, scopeFilePath: self.filePath)
+		if let closure = try self.closureShapes.get(name) 'closure'
+			return closure
 		end 'closure'
 
 		match self.signatures.functionAliasInAnyFile(name) 'alias'
 			// `maxonTypeOfStoredAliasReturn` is the one rebuild of a stored alias return; it recovers
 			// `ExitCode`'s u32 width from the stored name, which a second spelling would drop to a `named`
 			// i64.
-			declared(alias) then return FunctionValueReturn.create(maxonTypeOfStoredAliasReturn(alias, typeNames: self.artifact.typeNames), scopeFilePath: alias.declFilePath)
+			declared(alias) then return FunctionValueShape.create(self.aliasParamTypes(alias), returnType: maxonTypeOfStoredAliasReturn(alias, typeNames: self.artifact.typeNames), scopeFilePath: alias.declFilePath)
 			undeclared then break 'alias'
 		end 'alias'
 
 		match self.signatures.returnTypeOf(name, into: self.artifact.typeNames) 'fn'
-			declared(returnType) then return FunctionValueReturn.create(returnType, scopeFilePath: self.signatures.recordedReturnDeclFileOf(name))
+			declared(returnType) then return FunctionValueShape.create(self.declaredFunctionParamTypes(name), returnType: returnType, scopeFilePath: self.signatures.recordedReturnDeclFileOf(name))
 			undeclared then break 'fn'
 		end 'fn'
 
@@ -90329,11 +90945,38 @@ export type Parser
 		// file. When the declaring file refused the case (E3095, E2004), the call defers and that refusal
 		// reports it.
 		if self.signatures.backsAFunctionBackedEnumCase(name) 'aRefusedEnumCaseBacking'
-			return FunctionValueReturn.create(MaxonReturnType.value(MaxonType.unresolved), scopeFilePath: self.filePath)
+			return FunctionValueShape.create(MaxonTypeArray.create(), returnType: MaxonReturnType.value(MaxonType.unresolved), scopeFilePath: self.filePath)
 		end 'aRefusedEnumCaseBacking'
 
-		panic("functionValueReturn: a `function`-tagged value's governing name '{String.from(name)}' is neither a lifted closure, a function alias, a declared function, nor a function-backed enum case's backing name — every function value is minted from one of the four (parseClosureExpression / parseTypeReference / emitFunctionRef / a function-backed enum's `.rawValue`)")
-	end 'functionValueReturn'
+		panic("functionValueShape: a `function`-tagged value's governing name '{String.from(name)}' is neither a lifted closure, a function alias, a declared function, nor a function-backed enum case's backing name — every function value is minted from one of the four (parseClosureExpression / parseTypeReference / emitFunctionRef / a function-backed enum's `.rawValue`)")
+	end 'functionValueShape'
+
+	function aliasParamTypes(alias FunctionTypeAlias) returns MaxonTypeArray
+		var paramTypes = MaxonTypeArray.create()
+
+		for param in alias.paramTypes 'eachParam'
+			paramTypes.push(self.repairSweptType(maxonTypeOfStoredAliasParam(param, typeNames: self.artifact.typeNames), scopeFilePath: alias.declFilePath))
+		end 'eachParam'
+
+		return paramTypes
+	end 'aliasParamTypes'
+
+	function declaredFunctionParamTypes(name ByteArray) returns MaxonTypeArray
+		var paramTypes = MaxonTypeArray.create()
+		let decls = self.signatures.overloadedDeclsOf(name)
+
+		if decls.count() != 1 'notOneDeclaration'
+			return paramTypes
+		end 'notOneDeclaration'
+
+		let decl = try decls.get(0) otherwise panic("declaredFunctionParamTypes: one declaration was just counted")
+
+		for swept in decl.paramTypes 'eachParam'
+			paramTypes.push(self.sweptParamType(swept, scopeFilePath: decl.declFilePath))
+		end 'eachParam'
+
+		return paramTypes
+	end 'declaredFunctionParamTypes'
 
 	// Parse an integer literal token into a `literal` op, and return the value it defines.
 	// The token's text becomes a number through the shared `intLiteralValue`, so a literal
@@ -92360,7 +93003,7 @@ export type Parser
 
 		// ⭐ **THE SECOND BUILTIN TYPE, ON THE SAME TERMS (Workstream O3).** `__DebugStream`'s four emitting
 		// members return nothing, so a bare statement is the only position they can be written in — and the
-		// compiler's own emitters write exactly that (`Logger.logEvent`, `PhaseProbe.begin`). Without this arm
+		// compiler's own emitters write exactly that (`TraceEvents.logEvent`, `PhaseProbe.begin`). Without this arm
 		// they died as `E2015: Unsupported: identifier statement`, which is `__Builtins.sleep`'s history
 		// repeating for the third time and for the same structural reason: a VOID member of a family whose
 		// other members all return a value.
@@ -92399,6 +93042,10 @@ export type Parser
 		// from `parseModule` alone, and `queryProgramSignatures` sets `allFilesFolded` before the first file
 		// is parsed. So a `false` here MEANS no file declares a type of that name; it never means "not swept
 		// yet".
+		if self.signatures.declaresADefault() and self.registryCallAt(index) 'aRegistryCall'
+			return true
+		end 'aRegistryCall'
+
 		return self.signatures.containsStructFor(baseName, readerFilePath: self.filePath)
 	end 'qualifiedStaticCallsAt'
 

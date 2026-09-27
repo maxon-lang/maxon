@@ -240,7 +240,7 @@ end 'appendDataSectionEntries'
 // `StdToWasm.appendLeakGate`.
 function buildWasmBackend(module StdModule, globalData GlobalDataTable, project Project, usage RuntimeUsage, funcNames FunctionNameIndex) returns CodeResult
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
-	let coreModule = buildWasmCoreModule(module, globalData: globalData, checkLeaks: project.entryStubCalls.checksLeaks, initGlobals: usage.usesManagedGlobals, funcNames: funcNames, entryFunction: project.entryFunctionName)
+	let coreModule = buildWasmCoreModule(module, globalData: globalData, checkLeaks: project.entryStubCalls.checksLeaks, initGlobals: usage.usesManagedGlobals, releasesRegistry: project.entryStubCalls.releasesRegistry, funcNames: funcNames, entryFunction: project.entryFunctionName)
 	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
 
 	return CodeResult.forWasm(module, wasmCoreModule: coreModule)
@@ -292,7 +292,7 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	// inliner's census were built from — never a second spelling of those bits: a stub calling a `__ds_init`
 	// nothing installed, or one the roots did not keep alive, does not link.
 	let stub = project.entryStubCalls
-	augmentWithRuntime(targetModule, target: target, checkLeaks: stub.checksLeaks, initGlobals: usage.usesManagedGlobals, drainGreenThreads: stub.runsMainOnAGreenThread, captureArgv: usage.usesCommandLine, debugStream: stub.bracketsDebugStream, dumpCoverage: stub.dumpsCoverage, attachDebugAgent: stub.attachesDebugAgent, entryFunction: project.entryFunctionName)
+	augmentWithRuntime(targetModule, target: target, checkLeaks: stub.checksLeaks, initGlobals: usage.usesManagedGlobals, drainGreenThreads: stub.runsMainOnAGreenThread, captureArgv: usage.usesCommandLine, debugStream: stub.bracketsDebugStream, dumpCoverage: stub.dumpsCoverage, attachDebugAgent: stub.attachesDebugAgent, releasesRegistry: stub.releasesRegistry, entryFunction: project.entryFunctionName)
 	recordPhase(project, phase: CompilePhase.runtimeAugment, probe: runtimeProbe)
 
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
@@ -430,7 +430,7 @@ end 'refuseDuplicateChunkName'
 // `entryFunction` is `Project.entryFunctionName` — the ONE place this build's entry is written down. The
 // stub calls whatever it names, so a build that enters somewhere other than `main` needs no arm of its own
 // here; see that field.
-function augmentWithRuntime(module TargetModule, target Target, checkLeaks bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, debugStream bool, dumpCoverage bool, attachDebugAgent bool, entryFunction ByteArray)
+function augmentWithRuntime(module TargetModule, target Target, checkLeaks bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, debugStream bool, dumpCoverage bool, attachDebugAgent bool, releasesRegistry bool, entryFunction ByteArray)
 	// Prepended BEFORE the stub, so the stub prepended below lands directly ahead of it — the layout
 	// `recordChunkSymbol` requires of the thread entry.
 	if drainGreenThreads 'mainIsAGreenThread'
@@ -438,11 +438,11 @@ function augmentWithRuntime(module TargetModule, target Target, checkLeaks bool,
 	end 'mainIsAGreenThread'
 
 	match target.os 'os'
-		windows then prependEntryStub(module, target: target, checkLeaks: checkLeaks, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, debugStream: debugStream, dumpCoverage: dumpCoverage, attachDebugAgent: attachDebugAgent, entryFunction: entryFunction)
+		windows then prependEntryStub(module, target: target, checkLeaks: checkLeaks, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, debugStream: debugStream, dumpCoverage: dumpCoverage, attachDebugAgent: attachDebugAgent, releasesRegistry: releasesRegistry, entryFunction: entryFunction)
 
 		// The Linux stub brackets the producer exactly as the Windows one does: x64-linux provides both the
 		// named section and the millisecond stopwatch, so `--debugstream` reaches this arm.
-		linux then prependLinuxEntryStub(module, checkLeaks: checkLeaks, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, captureArgv: captureArgv, debugStream: debugStream, dumpCoverage: dumpCoverage, entryFunction: entryFunction)
+		linux then prependLinuxEntryStub(module, checkLeaks: checkLeaks, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, captureArgv: captureArgv, debugStream: debugStream, dumpCoverage: dumpCoverage, releasesRegistry: releasesRegistry, entryFunction: entryFunction)
 		macos then panic("augmentWithRuntime: there is no x64-macOS backend — `buildBackend` dispatches macOS to the arm64 backend, whose entry stub is a hand-assembled chunk (Arm64Backend.buildArm64Backend), not a module function")
 		wasi then panic("augmentWithRuntime: wasm32-wasi does not use the x64 backend — the wasm backend synthesizes its own $run entry (buildWasmCoreModule), so this module-level pass is never reached for it")
 	end 'os'
@@ -478,7 +478,7 @@ end 'augmentWithRuntime'
 // backtrace in the corpus expects. Its own saved rbp is whatever the loader left, and the
 // walk's `.text` bound is what discards it. When `main` is a green thread the same line
 // comes from `mrt_main_entry` instead — see `prependMainThreadEntry`.
-function prependEntryStub(module TargetModule, target Target, checkLeaks bool, initGlobals bool, drainGreenThreads bool, debugStream bool, dumpCoverage bool, attachDebugAgent bool, entryFunction ByteArray)
+function prependEntryStub(module TargetModule, target Target, checkLeaks bool, initGlobals bool, drainGreenThreads bool, debugStream bool, dumpCoverage bool, attachDebugAgent bool, releasesRegistry bool, entryFunction ByteArray)
 	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var block = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
@@ -498,6 +498,7 @@ function prependEntryStub(module TargetModule, target Target, checkLeaks bool, i
 	appendDebugStreamAttach(module, block: block, debugStream: debugStream)
 	appendProgramCall(module, block: block, initGlobals: initGlobals, greenThreads: drainGreenThreads, entryFunction: entryFunction)
 	appendGreenThreadDrainGate(module, block: block, drainGreenThreads: drainGreenThreads)
+	appendRegistryReleaseGate(module, block: block, releasesRegistry: releasesRegistry and not drainGreenThreads)
 
 	// ⭐ THE LEAK GATE — the one seam on the exit path, and the reason `__mm_decref` has a
 	// reason to be right at all. `main` has returned its ExitCode in R8; `__mm_leak_check` takes
@@ -538,16 +539,17 @@ function appendProgramCall(module TargetModule, block IrBlock, initGlobals bool,
 		module.appendOp(block, op: TargetOp.leaRegFunc(x64PhysReg(X64Register.rcx), funcName: MainThreadEntryName))
 		module.appendOp(block, op: TargetOp.callDirect(GtRunMainName))
 	end 'mainIsAGreenThread' else 'mainOnTheOsStack'
-		appendMainCall(module, block: block, initGlobals: initGlobals, entryFunction: entryFunction)
+		appendMainCall(module, block: block, initGlobals: initGlobals, releasesGlobals: initGlobals, entryFunction: entryFunction)
 	end 'mainOnTheOsStack'
 end 'appendProgramCall'
 
 // `[__module_init]`, `call main`, `[__maxon_global_cleanup]` — the program, wherever it runs: the entry stub
-// of a program without green threads, and the main thread's entry of a program with them.
-function appendMainCall(module TargetModule, block IrBlock, initGlobals bool, entryFunction ByteArray)
+// of a program without green threads, and the main thread's entry of a program with them, where the cleanup
+// is left to `__gt_drain_at_exit`.
+function appendMainCall(module TargetModule, block IrBlock, initGlobals bool, releasesGlobals bool, entryFunction ByteArray)
 	appendModuleInitCall(module, block: block, initGlobals: initGlobals)
 	module.appendOp(block, op: TargetOp.callDirect(entryFunction))
-	appendGlobalCleanupGate(module, block: block, initGlobals: initGlobals)
+	appendGlobalCleanupGate(module, block: block, releasesGlobals: releasesGlobals)
 end 'appendMainCall'
 
 // The main thread's entry (`MainThreadEntryName`): `__gt_trampoline` calls it on `main`'s fresh green-thread
@@ -560,7 +562,7 @@ function prependMainThreadEntry(module TargetModule, initGlobals bool, entryFunc
 	var block = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	module.appendOp(block, op: TargetOp.prologue(MainThreadEntryFrameBytes))
-	appendMainCall(module, block: block, initGlobals: initGlobals, entryFunction: entryFunction)
+	appendMainCall(module, block: block, initGlobals: initGlobals, releasesGlobals: false, entryFunction: entryFunction)
 	module.appendOp(block, op: TargetOp.epilogue(MainThreadEntryFrameBytes))
 	module.setTerminator(block, op: TargetOp.ret)
 
@@ -646,8 +648,8 @@ end 'appendModuleInitCall'
 // It rides `appendExitCodePassThroughCall` because `__maxon_global_cleanup` is shaped like
 // `__mm_leak_check` deliberately: `main`'s ExitCode is the one live value on this path, and a void callee
 // would clobber it in R8 (see `ModuleInit.buildGlobalCleanup`).
-function appendGlobalCleanupGate(module TargetModule, block IrBlock, initGlobals bool)
-	if initGlobals 'globalCleanup'
+function appendGlobalCleanupGate(module TargetModule, block IrBlock, releasesGlobals bool)
+	if releasesGlobals 'globalCleanup'
 		appendExitCodePassThroughCall(module, block: block, callee: GlobalCleanupName)
 	end 'globalCleanup'
 end 'appendGlobalCleanupGate'
@@ -655,8 +657,10 @@ end 'appendGlobalCleanupGate'
 // ⭐⭐ **RUN THE SCHEDULER OUT AND JOIN ITS WORKER Ms, AFTER `main` AND BEFORE THE LEAK GATE** —
 // shared by both entry stubs. The ORDER is the whole point, twice over:
 //
-//   • **AFTER the global cleanup**, because a released managed global may be the last owner of a service
-//     handle, and dropping it is what lets that service's green thread finish.
+//   • **THE DRAIN RELEASES THE MANAGED GLOBALS AND THE REGISTRY ITSELF**
+//     (`GtRuntime.buildGtDrainAtExit`), because a handler still running there may read one, and a
+//     released global may be the last owner of a service handle, whose drop is what lets that
+//     service's green thread finish.
 //   • **BEFORE `__mm_leak_check`**, because a worker M's `__gt_reclaim` steps the very counters that gate
 //     reads. Un-joined, the two race and a clean program reports 101 intermittently — and a green thread
 //     that had not finished yet would report 75 for work that was merely still running.
@@ -669,6 +673,13 @@ function appendGreenThreadDrainGate(module TargetModule, block IrBlock, drainGre
 		appendExitCodePassThroughCall(module, block: block, callee: GtDrainAtExitName)
 	end 'greenThreadDrain'
 end 'appendGreenThreadDrainGate'
+
+// A program with green threads releases the registry inside `__gt_drain_at_exit` instead.
+function appendRegistryReleaseGate(module TargetModule, block IrBlock, releasesRegistry bool)
+	if releasesRegistry 'aRegistry'
+		appendExitCodePassThroughCall(module, block: block, callee: RegistryReleaseName)
+	end 'aRegistry'
+end 'appendRegistryReleaseGate'
 
 // Route `main`'s ExitCode (R8, the custom Maxon ABI's primary return) through `callee` and back into R8:
 // `mov rcx, r8` puts it in argument register 0, and the callee's own primary return lands where the next
@@ -708,7 +719,7 @@ end 'appendExitCodePassThroughCall'
 // shadow space to reserve (raw syscalls carry no imports, and the compiler functions spill to their OWN frames),
 // and exit_group never returns. The kernel zeroes rbp at entry (SysV ABI), so the saved-rbp chain
 // terminates cleanly without this stub setting one up.
-function prependLinuxEntryStub(module TargetModule, checkLeaks bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, debugStream bool, dumpCoverage bool, entryFunction ByteArray)
+function prependLinuxEntryStub(module TargetModule, checkLeaks bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, debugStream bool, dumpCoverage bool, releasesRegistry bool, entryFunction ByteArray)
 	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var block = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
@@ -726,6 +737,7 @@ function prependLinuxEntryStub(module TargetModule, checkLeaks bool, initGlobals
 	appendDebugStreamAttach(module, block: block, debugStream: debugStream)
 	appendProgramCall(module, block: block, initGlobals: initGlobals, greenThreads: drainGreenThreads, entryFunction: entryFunction)
 	appendGreenThreadDrainGate(module, block: block, drainGreenThreads: drainGreenThreads)
+	appendRegistryReleaseGate(module, block: block, releasesRegistry: releasesRegistry and not drainGreenThreads)
 	appendLeakGate(module, block: block, checkLeaks: checkLeaks)
 
 	// ⚠ AFTER the leak gate, and it must be: `__ds_shutdown` clears the segment's producer-alive flag, and

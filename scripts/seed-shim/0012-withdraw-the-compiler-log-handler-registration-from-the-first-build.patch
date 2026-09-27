@@ -1,0 +1,72 @@
+# The seed cannot build the compiler's route to its log handler: `default CompilerLogRoute` is a registry
+# declaration, `CompilerLogRoute.current()` a registry lookup, and `installCompilerLogHandler`'s
+# `LogSink.create` takes a `LogHandler.handle`, a handle at an interface type — none of which the seed
+# knows. For the first build, the route, its default, `installCompilerLogHandler` with `main`'s call to it,
+# and `compileToProduct`'s `attribute(unit)` send through the route are withdrawn; that build logs through
+# 0011's stand-in, and `C1` registers `CompilerLogHandler` in `C2`. The first build's compiler loggers are
+# grouped under their wire prefix (`CMP`, `PAR`, …) rather than their group name, which is the group the
+# stand-in prints.
+diff --git a/maxon-bin/Compiler/Compiler.maxon b/maxon-bin/Compiler/Compiler.maxon
+index e1844198b..7f99b92b4 100644
+--- a/maxon-bin/Compiler/Compiler.maxon
++++ b/maxon-bin/Compiler/Compiler.maxon
+@@ -126,7 +126,6 @@ export function compileToProduct(inputPaths MaxonSourcePathArray, target Target,
+ 	// scheduler is single-M" — read the argument there before leaning on it.
+ 	let unit = traceUnitOf(try commonAncestorOf(inputPaths))
+ 	setTraceUnit(unit)
+-	CompilerLogRoute.current().handler.attribute(unit)
+ 
+ 	// ⭐⭐ **THE ONE PLACE A FAILED COMPILE CLOSES WHAT IT LEFT OPEN (A1v).** Four stages inside phase
+ 	// brackets can throw — `load`'s project load, `deadFunctions`' E4015, `regalloc`'s E5001 and `link`'s
+diff --git a/maxon-bin/Compiler/CompilerLogHandler.maxon b/maxon-bin/Compiler/CompilerLogHandler.maxon
+index 3bb61b6c1..2b2bfd090 100644
+--- a/maxon-bin/Compiler/CompilerLogHandler.maxon
++++ b/maxon-bin/Compiler/CompilerLogHandler.maxon
+@@ -55,23 +55,6 @@ module type CompilerLogHandler implements LogHandler
+ 	end 'handle'
+ end 'CompilerLogHandler'
+ 
+-module type CompilerLogRoute
+-	export let handler as CompilerLogHandler.handle
+-
+-	module static function create(handler CompilerLogHandler.handle) returns CompilerLogRoute
+-		return Self{handler: handler}
+-	end 'create'
+-end 'CompilerLogRoute'
+-
+-// The compiler's one handler, reached by `installCompilerLogHandler` and by `compileToProduct`'s
+-// `attribute` alike; the `LogSink` default holds it only as a `LogHandler.handle`, which has no
+-// `attribute`.
+-default CompilerLogRoute = CompilerLogRoute.create(spawn CompilerLogHandler.create())
+-
+-export function installCompilerLogHandler()
+-	Log.setDefault(LogSink.create(CompilerLogRoute.current().handler.clone(), levels: LogLevelVar.create(LogLevels.minimum(LogLevel.info))))
+-end 'installCompilerLogHandler'
+-
+ function recordGroupOf(record LogRecord) returns CompilerLogGroup
+ 	let bound = try record.attrs.get(0) otherwise panic("CompilerLogHandler: a record carrying no attrs reached the compiler's handler — `compilerLogger` binds its group marker under the record's group on every compiler logger")
+ 
+@@ -86,7 +69,7 @@ end 'recordGroupOf'
+ module function compilerLogger(group CompilerLogGroup) returns Logger
+ 	var bound = LogAttrArray.create()
+ 	bound.push(LogAttr.int(GroupAttrKey, value: group.ordinal as LogInteger))
+-	return Log.default().withGroup(group.name).withAttrs(bound)
++	return Log.default().withGroup(group.rawValue).withAttrs(bound)
+ end 'compilerLogger'
+ 
+ module function compilerLogEnabled(group CompilerLogGroup, level LogLevel) returns bool
+diff --git a/maxon-bin/Main.maxon b/maxon-bin/Main.maxon
+index 38a591ad1..f492b1084 100644
+--- a/maxon-bin/Main.maxon
++++ b/maxon-bin/Main.maxon
+@@ -271,10 +271,6 @@ function defineFromPair(pair String) returns Define throws DefinePairError
+ end 'defineFromPair'
+ 
+ function main() returns ExitCode
+-	// First, so every line the compiler logs takes the `[CMP] LEVEL: msg` shape
+-	// `tests/parallel-compile` pins.
+-	installCompilerLogHandler()
+-
+ 	let args = MaxonArgs.parse()
+ 
+ 	// A refused option aborts before any command runs: proceeding as though it had been honoured is the

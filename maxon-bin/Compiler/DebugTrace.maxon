@@ -1,10 +1,8 @@
 // DebugTrace — the compiler's own events, on the wire.
 //
-// WHY THIS EXISTS. the compiler's Logger formats a String and prints it to stderr. That survives
-// exactly as long as the compiler is single-threaded. The moment the spec harness interleaves
-// N workers into one stderr (P1.0a) and green threads run under them (P1.5), a text log is not
-// degraded — it is USELESS: you cannot tell which worker, which compilation unit, or which
-// phase a line came from, and the lines themselves are torn.
+// WHY THIS EXISTS. The compiler's text log (`CompilerLogHandler`) formats a String and prints it to
+// stderr. When the spec harness interleaves N workers into one stderr and green threads run under
+// them, a text line cannot say which worker, which compilation unit, or which phase it came from.
 //
 // The fix is not a better text format. It is to stop emitting text on the hot path at all: a
 // binary event, into the shared-memory ring the compiled binary already carries, carrying the

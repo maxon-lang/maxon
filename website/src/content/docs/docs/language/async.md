@@ -14,7 +14,9 @@ Maxon has two concurrency tools:
 
 Both run on the runtime's scheduler, which maps green threads onto a pool of OS threads. There are no
 locks or atomics in user code: a value is only ever reachable from one green thread at a time, except
-where a service send lends it read-only (below).
+where it is shared read-only — lent by a service send, held by a module-level `let`, or published through a
+[`default`](#program-wide-defaults--default) or a [`SharedValue`](#sharedvalue--a-live-value-made-at-run-time)
+(below).
 
 ## Starting a Coroutine
 
@@ -298,12 +300,195 @@ A module-level `let` stays readable. In a program that spawns a service, every `
 is atomic; a record two `let`s reach counts both as its owners. A `let` whose graph no walk can mark — one
 holding an OS handle, a value held at an interface type, or a generic instance with no base layout — is
 **E3163** where a message can read it, and legal where only `main` does. A `spawn` a global initializer can
-reach is **E3164**, a `let` whose initializer reaches a module-level `var` holding a record is **E3165**, and
+reach is **E3164** (a [`default`](#program-wide-defaults--default) starts a program-wide service before
+`main`), a `let` whose initializer reaches a module-level `var` holding a record is **E3165**, and
 a `var` whose initializer may take a `let`'s record is **E3166** (see
 [Top-Level Variables](/docs/language/variables/#top-level-variables)).
 
 **Output order.** Text printed by `main` and by a service handler may interleave in any order; sequence it
 through awaited replies when order matters.
+
+## Interface Handles
+
+A service type may `implements` an interface, and `I.handle` is a handle to any running service whose type
+implements `I`. Each requirement of `I` is a message: a call through an `I.handle` is sent to whichever
+service the handle holds, fire-and-forget or awaited by the same rules as the service's own handle.
+
+```maxon
+typealias Count = int(0 to 1000000)
+
+interface Tally
+	function add(by Count)
+	function total() returns Count
+end 'Tally'
+
+type Counter implements Tally
+	var n as Count
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function add(by Count)
+		self.n = self.n + by
+	end 'add'
+
+	export function total() returns Count
+		return self.n
+	end 'total'
+end 'Counter'
+
+function report(t Tally.handle) returns Count
+	t.add(5)
+	return try await t.total() otherwise 0
+end 'report'
+
+function main() returns ExitCode
+	let total = report(spawn Counter.create())
+	print("total={total}\n")                       // total=5
+	return 0
+end 'main'
+```
+
+- A `T.handle` converts to `I.handle` wherever an `I.handle` is expected: a binding, an argument (an
+  overloaded callee's included), a return, a field, an array element, a message argument, a
+  `Key.register` and a call through a function value or a closure. `as I.handle` converts explicitly.
+  A value that converts equally well to two overloads' interface handles is ambiguous (**E3007**).
+- Every requirement must be sendable: its parameters must cross a message (**E3135**) and its reply must be
+  carriable (**E3140**). One send serves every implementer, so the services a program sends to through
+  `I.handle` declare each requirement with the same parameter, return and `throws` types
+  ([E3177](/docs/cli/error-codes/#e3177--interfacehandleimplementersdisagree)); send through each service's own handle
+  otherwise.
+- A handler that sends through an `I.handle` is checked against the implementers of `I`, so
+  [E3139](/docs/cli/error-codes/#e3139--semanticservicecallcycle) finds an await cycle through any of them.
+
+## Program-Wide Defaults — `default`
+
+A top-level `default Key = expression` declares the program-wide default for `Key`. Any thread reads it with
+`Key.current()` and replaces it with `Key.register(x)`; every later `current()` sees the replacement.
+
+- **A service key** is an interface. The expression spawns a type that implements it
+  ([E3170](/docs/cli/error-codes/#e3170--registrydefaultservicedoesnotimplementkey) otherwise), and `Key.current()` returns an
+  owned `Key.handle`.
+- **A value key** is a type whose fields are all `let`, over types a share walk can mark — scalars,
+  `String`, other such records, service handles and `SharedValue`s
+  ([E3171](/docs/cli/error-codes/#e3171--registryvaluenotshareable) otherwise). The expression builds one, and may
+  spawn services for its fields. `Key.current()` returns the published record.
+
+```maxon
+typealias Count = int(i64.min to i64.max)
+
+interface Greeter
+	function greet() returns Count
+end 'Greeter'
+
+type Polite implements Greeter
+	var calls as Count
+
+	static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	export function greet() returns Count
+		self.calls = self.calls + 1
+		return 7
+	end 'greet'
+end 'Polite'
+
+type Config
+	export let retries as Count
+
+	static function create(retries Count) returns Self
+		return Self{retries: retries}
+	end 'create'
+end 'Config'
+
+default Greeter = spawn Polite.create()
+default Config = Config.create(3)
+
+function main() returns ExitCode
+	let answer = try await Greeter.current().greet() otherwise 0
+	Config.register(Config.create(5))
+	print("{answer} {Config.current().retries}\n")     // 7 5
+	return 0
+end 'main'
+```
+
+- **When it is built.** Defaults are built in dependency order after the last global initializer has
+  returned and the module's `let`s are marked shared, and before `main`. Only a default some code reaches —
+  through its key's `current()` or `register()` — is built, so a default's service runs only in a program
+  that uses its key. Defaults whose expressions reach each other are
+  [E3172](/docs/cli/error-codes/#e3172--registrydefaultsreacheachother), and a `current()` or `register()` reachable
+  from a global initializer is [E3173](/docs/cli/error-codes/#e3173--registryreachedfromglobalinitializer).
+- **Precedence.** A program's own `default` for a key replaces the standard library's. Two for one key on
+  the same side are [E3169](/docs/cli/error-codes/#e3169--registryduplicatedefault).
+- **A service lookup is a snapshot.** A handle taken before a `register` keeps reaching the service it was
+  taken from; that service runs until its last holder drops it, then drains its queue and exits.
+- **A value lookup is lock-free**, at the cost of reading a module `let`. A registered value must be solely
+  owned by the caller ([E3174](/docs/cli/error-codes/#e3174--registrypublishedvaluenotsolelyowned); publish a `.clone()`),
+  and it is marked shared before any other thread can read it. A value a reader already holds stays valid
+  after it is replaced.
+- **`Key.register(new, replacing: old)`** publishes `new` only while `old` is still the current value, and
+  returns `true` when it did. On `false`, `new` is consumed and dropped. Build the value again from a fresh
+  `current()` and retry, so two threads updating one key keep both updates.
+- `register` may be called from any thread, a service handler included.
+- `current` and `register` belong to the registry, so a key type that declares a static member of either name
+  is [E3175](/docs/cli/error-codes/#e3175--registrykeydeclaresaregistrymember).
+- **At exit**, the drain that runs the services' queued messages keeps the defaults live, so a handler may
+  still look one up; they are released once every service is idle, and a default's service then drains and
+  exits. Module and `static` `let`s are released inside the drain after the services settle, so a handler
+  may read them there too.
+
+## `SharedValue` — a Live Value Made at Run Time
+
+`SharedValue with T` is a value key's slot created at run time: one live value that every holder of the cell
+reads. `T` follows the value-key rule, or is a `String`, a service handle or a scalar
+([E3171](/docs/cli/error-codes/#e3171--registryvaluenotshareable) otherwise).
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Config
+	export let n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Config'
+
+typealias ConfigCell = SharedValue with Config
+
+type Reader
+	let cell as ConfigCell
+
+	static function create(cell ConfigCell) returns Self
+		return Self{cell: cell}
+	end 'create'
+
+	export function read() returns Count
+		return self.cell.current().n
+	end 'read'
+end 'Reader'
+
+function main() returns ExitCode
+	let cell = ConfigCell.create(Config.create(1))
+	let reader = spawn Reader.create(cell.clone())
+	let before = try await reader.read() otherwise 0
+	cell.publish(Config.create(6))
+	let after = try await reader.read() otherwise 0
+	print("{before} {after}\n")                       // 1 6
+	return 0
+end 'main'
+```
+
+- `ConfigCell.create(v)` makes a cell; `current()` reads its value lock-free; `publish(v)` replaces it
+  for every holder; `publish(v, replacing: old)` is the conditional form, answering as
+  `Key.register(new, replacing: old)` does.
+- Readers take an immutable snapshot and a writer publishes a whole new value, so a value a reader holds
+  stays valid across later publishes. A published value must be solely owned
+  ([E3174](/docs/cli/error-codes/#e3174--registrypublishedvaluenotsolelyowned)).
+- The cell is shared by reference: `clone()` hands out another reference to the same value, and a cell
+  crosses a message like a service handle.
 
 ## I/O and Waiting
 

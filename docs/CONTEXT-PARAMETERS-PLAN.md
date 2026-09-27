@@ -11,11 +11,15 @@ was which one:
 | Compile-time wiring (Dagger) | compile time | compile error | zero | no |
 | Runtime container | runtime | runtime panic | lookup + dynamic dispatch | yes |
 
-**Chosen: context parameters.** Maxon is compile-time monomorphized with no reflection, so a runtime
-container fights the grain (it would need a compiler-provided type key, dynamic dispatch, and shared
-ownership of registered instances). Context parameters are zero-cost, turn a missing dependency into a
+**Chosen: context parameters.** Context parameters are zero-cost, turn a missing dependency into a
 compile error, and are the lowest-level primitive — Dagger-style graph wiring can be built on top of them
 later, but not the reverse.
+
+The language also has the runtime row, for program-wide services with a runtime swap: a
+[registry of replaceable defaults](LANGUAGE_REFERENCE.md#program-wide-defaults--default), keyed by the
+declared type, reached through `Key.current()` and swapped with `Key.register(x)`, with a service key
+dispatched through an interface handle. Context parameters are for dependencies wired at compile time from a
+composition root.
 
 A dependency is declared once as part of a contract, wired from a single composition root, and threaded by
 the compiler — resolved and checked entirely at compile time.

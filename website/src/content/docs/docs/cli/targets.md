@@ -65,6 +65,8 @@ with the same code and what the step printed.
 `x64-windows`, `x64-linux`, `arm64-linux` and `arm64-macos` support the whole standard library. The
 differences a program can meet are:
 
+- **x64-windows needs Windows 8 or later**: its executables read the wall clock through
+  `GetSystemTimePreciseAsFileTime`.
 - **`maxon profile`** runs only on x64-windows. Elsewhere it is refused.
 - **The interactive debugger** — `maxon debug`, `maxon dap-server` and the MCP `debug_*` tools — debugs
   x64-windows programs only, because the debug agent it drives is emitted on that target alone.
@@ -77,7 +79,7 @@ time**, at the call:
 
 | Not available on `wasm32-wasi` | Refused with |
 |--------------------------------|--------------|
-| `async`/`await`, green threads, services, `sleep`, `Scheduler.yield`, `Scheduler.processorCount` | E3104 |
+| `async`/`await`, green threads, services (the standard library's `Log` included), `sleep`, `Scheduler.yield`, `Scheduler.processorCount` | E3104 |
 | Clocks (`Clock`, current time, CPU ticks) | E3104 |
 | Command-line arguments | E3104 |
 | File and directory I/O | E3104 |

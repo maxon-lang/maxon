@@ -1,0 +1,28 @@
+// Test: error.a-default-whose-service-does-not-implement-its-key
+interface Greeter
+	function greet() returns Integer
+end 'Greeter'
+
+type Stranger
+	var calls as Integer
+
+	static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	export function greet() returns Integer
+		self.calls = self.calls + 1
+		return 7
+	end 'greet'
+end 'Stranger'
+
+default Greeter = spawn Stranger.create()
+
+function main() returns ExitCode
+	let answer = try await Greeter.current().greet() otherwise 0
+	return answer as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3170: <fragment>:19:9: the `default` for `Greeter` spawns `Stranger`, which does not implement `Greeter` — declare `type Stranger implements Greeter`, or spawn a type that does

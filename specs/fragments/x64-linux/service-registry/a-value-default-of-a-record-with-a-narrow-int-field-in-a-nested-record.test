@@ -1,0 +1,66 @@
+// Test: a-value-default-of-a-record-with-a-narrow-int-field-in-a-nested-record
+typealias Count = int(0 to 1000)
+
+type Inner
+	export let count as Count
+
+	static function create(count Count) returns Self
+		return Self{count: count}
+	end 'create'
+end 'Inner'
+
+type Config
+	export let inner as Inner
+
+	static function create(count Count) returns Self
+		return Self{inner: Inner.create(count)}
+	end 'create'
+end 'Config'
+
+default Config = Config.create(4)
+
+function main() returns ExitCode
+	return Config.current().inner.count as ExitCode
+end 'main'
+---
+ExitCode: 4
+---
+data {
+  __default.Config@0 = i64 0
+  __mrt_envp@8 = i64 0
+  __mrt_signal_stack_bytes@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.leaRegGlobal rcx, __default.Config
+    x64.callDirect __shv_current
+    x64.loadRegBaseDisp.word64 rbx, [r8 + 0]
+    x64.andRegImm32 rbx, rbx, 65535
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-value-default-of-a-record-with-a-narrow-int-field-in-a-nested-record.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

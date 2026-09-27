@@ -126,16 +126,16 @@ let MetricsNoName = "-"
 // `SpecTestRunner.readCompileCpu`).
 export function writeMetrics(project Project, metricsPath String, codeBytes CodeByteCount)
 	let path = try FilePath.from(metricsPath) otherwise 'badPath'
-		logError(LogCategory.compiler, message: function() gives "Invalid --metrics path '{metricsPath}'")
+		compilerLogger(CompilerLogGroup.compiler).error("Invalid --metrics path '{metricsPath}'")
 		return
 	end 'badPath'
 
 	try File.writeText(path, content: metricsText(project, codeBytes: codeBytes)) otherwise 'writeErr'
-		logError(LogCategory.compiler, message: function() gives "Failed to write metrics to {metricsPath}")
+		compilerLogger(CompilerLogGroup.compiler).error("Failed to write metrics to {metricsPath}")
 		return
 	end 'writeErr'
 
-	logInfo(LogCategory.compiler, message: function() gives "Wrote compile metrics to {metricsPath}")
+	compilerLogger(CompilerLogGroup.compiler).info("Wrote compile metrics to {metricsPath}")
 end 'writeMetrics'
 
 // Number of bytes of emitted code (`CodeResult.emittedCodeBytes`). Bounded by what a PE `.text` section can hold, which is

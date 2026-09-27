@@ -1,5 +1,6 @@
 // The two host clocks a program reads through a NAME the compiler emits: the CALENDAR
-// (`__clock_now_unix_s`) and the machine's UPTIME (`__uptime_ms`).
+// (`__clock_now_unix_s`, `__clock_now_unix_ns`, `__clock_now_filetime`) and the machine's UPTIME
+// (`__uptime_ms`).
 //
 // ⭐ **THE MONOTONIC PAIR IS DELIBERATELY ABSENT.** `__Builtins.currentTimeNanos` / `currentTimeMs` route
 // to the scheduler's `__gt_now_ns`, because that reading and the scheduler's sleep deadlines and netpoll
@@ -11,8 +12,8 @@
 // the running green thread's clock offset through the current-GT pointer, and no `__Raw` row names that
 // op. It stays a Std-IR builder (`Compiler/Runtime/ClockRuntime.maxon`) until one does.
 
-// A FILETIME counts 100-NANOSECOND intervals since 1601-01-01 00:00:00 UTC, and the two facts that turn
-// one into Unix seconds. The 1601→1970 shift is 11,644,473,600 seconds, which is 116444736000000000
+// A FILETIME counts 100-NANOSECOND intervals since 1601-01-01 00:00:00 UTC, and the facts that turn
+// one into Unix seconds and nanoseconds. The 1601→1970 shift is 11,644,473,600 seconds, which is 116444736000000000
 // ticks — an i64 with three orders of magnitude to spare.
 //
 // ⚠ **THE PER-TARGET WALL-CLOCK CHUNKS SPELL THESE TOO** (`Targets/X64/X64LinuxRuntime`,
@@ -26,13 +27,14 @@
 // correction here reaches neither of them.
 let FileTimeTicksPerSecond = 10000000
 let FileTimeTicksFrom1601To1970 = 116444736000000000
+let NanosPerFileTimeTick = 100
 
 // `osReadWallClock` answers through a POINTER, so the reading needs a word of storage. It is a slot of
 // THIS CALL's frame rather than a global: two Ms do not need a yield point to be inside one function at
 // once, and a shared word would hand each the other's reading — a wall clock that jumps.
 let WallClockScratchBytes = 8
 
-// The whole FILETIME the host wrote, and the calendar seconds it scales to. Neither can be negative, and
+// The whole FILETIME the host wrote, and the calendar seconds and nanoseconds it scales to. Neither can be negative, and
 // the unguarded-door rule `runtime/Word.maxon` carries is what says an `int` may spell that here.
 //
 // ⚠ **THE NAME IS `EpochSeconds` AND NOT `UnixSeconds`, WHICH IS WHAT `stdlib/Clock.maxon` PUBLISHES FOR
@@ -41,21 +43,35 @@ let WallClockScratchBytes = 8
 // what `UnixSeconds` means in files that have nothing to do with this tier.
 typealias FileTimeTicks = int(0 to u64.max)
 module typealias EpochSeconds = int(0 to u64.max)
+module typealias EpochNanos = int(0 to i64.max)
 
-// ⭐ **`__clock_now_unix_s()` — WHOLE SECONDS SINCE 1970-01-01 UTC.** The host op reads its calendar into
-// the scratch word and nothing more; the epoch shift and the ticks→seconds scale are HERE, so a lane
-// pays for one host read and shares the arithmetic.
-//
-// The subtraction cannot underflow on any clock a program can observe: a FILETIME below the 1970 offset
-// means the host's calendar is set before 1970, which Windows does not permit (its own minimum system
-// time is 1980).
+// ⭐ **`__clock_now_unix_s()` — WHOLE SECONDS SINCE 1970-01-01 UTC.** The host op only reads its
+// calendar (`__clock_now_filetime`); the epoch shift and the tick scale are HERE, so a lane pays for one
+// host read and shares the arithmetic.
 module function __clock_now_unix_s() returns EpochSeconds
+	return (clockTicksSince1970() / FileTimeTicksPerSecond) as EpochSeconds
+end '__clock_now_unix_s'
+
+module function __clock_now_unix_ns() returns EpochNanos
+	return (clockTicksSince1970() * NanosPerFileTimeTick) as EpochNanos
+end '__clock_now_unix_ns'
+
+// The raw FILETIME, unshifted, is also `__Builtins.profileNowFileTime`: the profiler's
+// `SetWaitableTimer` deadline is an absolute FILETIME, and a deadline counted on any other epoch or
+// scale arms the timer at a moment it does not name.
+module function __clock_now_filetime() returns FileTimeTicks
 	let ticksAddr = __Raw.scratch(WallClockScratchBytes)
 	__Raw.osReadWallClock(ticksAddr)
-	let ticks = __Raw.loadWord(ticksAddr, offset: 0) as FileTimeTicks
+	return __Raw.loadWord(ticksAddr, offset: 0) as FileTimeTicks
+end '__clock_now_filetime'
 
-	return ((ticks - FileTimeTicksFrom1601To1970) / FileTimeTicksPerSecond) as EpochSeconds
-end '__clock_now_unix_s'
+// ⚠ The `FileTimeTicks` range check on the subtraction is load-bearing: a calendar set before 1970
+// (Windows refuses one before 1980; a POSIX `CLOCK_REALTIME` may hold one) would otherwise hand a
+// negative count to the seconds divide, an unsigned magic multiply, and to the non-negative
+// `EpochNanos` — a silent wrong time. The check refuses it.
+function clockTicksSince1970() returns FileTimeTicks
+	return __clock_now_filetime() - FileTimeTicksFrom1601To1970
+end 'clockTicksSince1970'
 
 // ⭐ **`__uptime_ms()` — MILLISECONDS SINCE THE MACHINE BOOTED, STRAIGHT THROUGH.** The absence of any
 // arithmetic is the contract: the DebugStream wire format stamps every ring entry with

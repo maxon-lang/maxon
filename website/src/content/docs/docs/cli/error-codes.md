@@ -773,6 +773,42 @@ A function's signature names a type less visible than the function itself. Whoev
 
 A function declares `throws E`, but nothing in its body can throw. An error leaves a function through a `throw`, a `default throws`, an `otherwise` that throws, or a bare `try` that passes the callee's error on; a handled `try … otherwise`, an `if try`, and a `throw` caught by a block-form `try` handler stay inside it. The clause would make every caller write `try` for an error that cannot arrive. Remove the clause, or throw from the body. Reported once per declaration, at the function's name. A service message is held to it like any function. The entry function (E3054), a `test` body, and a method implementing an interface requirement whose clause E3016 fixes are exempt; a clause E3113 refuses is reported by E3113 alone.
 
+### E3169 — `registryDuplicateDefault`
+
+Two `default` declarations name one key at the same level: two in the program's own files, or two in the standard library. A program's `default` replaces the standard library's for the same key, so only a pair on one side is ambiguous. Reported at the second key; the note is the first. Delete one of them.
+
+### E3170 — `registryDefaultServiceDoesNotImplementKey`
+
+A `default` whose key is an interface does not build a service that implements it. An interface key is a service key: its expression must `spawn` a type declared `implements` that interface, and `Key.current()` returns a `Key.handle` to it. Reported at the key. Declare the spawned type `implements Key`, or spawn a type that does.
+
+### E3171 — `registryValueNotShareable`
+
+A type is used where every thread may read one value at once — as a `default` value key, or as the element of a `SharedValue` — and it cannot be shared that way. Readers take the value with no lock, so it must be immutable and its graph must be one a share walk can mark: every field a `let`, over types that are themselves shareable. A `SharedValue` element may also be a `String`, a service handle or a scalar. Reported at the key or the `SharedValue` type, naming the writable field or the type the walk cannot mark. Make the fields `let`, or hold the mutable part in a service.
+
+### E3172 — `registryDefaultsReachEachOther`
+
+Building one `default` reaches the lookup of another whose build reaches back, or its own lookup. Defaults are built before `main` in dependency order, so a cycle has no first member. Reported at the first key of the cycle, naming every key in it. Build one of them without looking up the other.
+
+### E3173 — `registryReachedFromGlobalInitializer`
+
+`Key.current()` or `Key.register(…)` is reached from a module-level or `static` global's initializer, directly or through the functions it calls, dispatches included. Global initializers run before any `default` is built, so the slot is still empty there. Reported at the call, naming the global. Call it from `main`, or from a function `main` calls.
+
+### E3174 — `registryPublishedValueNotSolelyOwned`
+
+A value handed to `Key.register` or `SharedValue.publish` has another owner: a second live name binds it, or it is held somewhere the caller does not own outright. A published value is read by every thread at once and freed only when no reader can hold it, so no one may write or free it behind the registry. Reported at the argument. Publish a `.clone()`.
+
+### E3175 — `registryKeyDeclaresARegistryMember`
+
+A type that is a `default` key declares its own static `current` or `register`. On a key, `current` and `register` are the registry's members, so the type's own would never be called. Reported at the type's member; the note is the `default`. Rename the member.
+
+### E3176 — `extensionMemberHidesOwnMember`
+
+A type extension declares a member with the name and kind — static or instance — of a member the type itself declares, in any file, the standard library's types included. A call names one member, so one of the two would never be reached. Reported at the extension member; the note is the type's own. Rename one of them. An interface extension's member is a default that a conformer's own member overrides, and is legal.
+
+### E3177 — `interfaceHandleImplementersDisagree`
+
+A message is sent through an interface handle `I.handle`, and two service types implementing `I` declare that requirement with different parameter, return or `throws` types. The handle sends one request and awaits one reply for every implementer, so their shapes must agree. Reported at the member name of the send, naming both services. Send through each service's own handle, or give the requirement one shape.
+
 ## Intermediate Representation (E4xxx)
 
 IR generation.

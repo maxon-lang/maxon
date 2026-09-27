@@ -23,7 +23,7 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 	end 'nothingToDescribe'
 
 	var signatures = try queryProgramSignatures(project) otherwise 'noSignatures'
-		logError(LogCategory.compiler, message: function() gives "Could not read the program's signatures, so no debug-info sidecar was written beside {outputPath}")
+		compilerLogger(CompilerLogGroup.compiler).error("Could not read the program's signatures, so no debug-info sidecar was written beside {outputPath}")
 		return
 	end 'noSignatures'
 
@@ -86,16 +86,16 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 	let image = writer.build(codeBuildId(codeResult.code), targetTriple: targetToString(project.target), sourceRoot: Directory.currentPath().toString())
 
 	let sidecarPath = try FilePath.from(sidecarPathOf(outputPath)) otherwise 'badPath'
-		logError(LogCategory.compiler, message: function() gives "Could not spell the debug-info sidecar path for {outputPath}")
+		compilerLogger(CompilerLogGroup.compiler).error("Could not spell the debug-info sidecar path for {outputPath}")
 		return
 	end 'badPath'
 
 	try File.writeBinary(sidecarPath, content: image) otherwise 'writeErr'
-		logError(LogCategory.compiler, message: function() gives "Failed to write the debug-info sidecar to {sidecarPath}")
+		compilerLogger(CompilerLogGroup.compiler).error("Failed to write the debug-info sidecar to {sidecarPath}")
 		return
 	end 'writeErr'
 
-	logInfo(LogCategory.compiler, message: function() gives "Wrote {image.count()} bytes of debug info to {sidecarPath}")
+	compilerLogger(CompilerLogGroup.compiler).info("Wrote {image.count()} bytes of debug info to {sidecarPath}")
 end 'writeDebugInfoSidecar'
 
 // The rows concat wrote into `__inlframes`, spelled the sidecar's way, so the profiler names the spliced

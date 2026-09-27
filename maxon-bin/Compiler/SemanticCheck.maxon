@@ -789,8 +789,16 @@ function overloadArgTypeFit(project Project, func IrFunction, sig FuncSignature,
 			// `expected 'Array_Integer', got 'Array___ManagedByte'`, naming a parameter the call was never
 			// written against. Pinned by `bytearray-element-size.md`'s
 			// `overload-scoring-admits-a-synthesized-buffer-at-a-byte-buffer-candidate`.
-			if programSignaturesIn(project, asker: "overloadArgTypeFit").aggregatesConflict(expected, expectedTag: paramTag, expectedNameId: typeNameIdOf(paramType), expectedBrand: paramBrandOf(sig, position: i, paramTag: paramTag), got: aggregateNameFor(project, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath), gotTag: argTag, gotNameId: argNameId, gotBrand: valueBrandOf(project, func: func, value: argId)) 'aggregateMismatch'
-				return OverloadFit.incompatible
+			let signatures = programSignaturesIn(project, asker: "overloadArgTypeFit")
+			let got = aggregateNameFor(project, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath)
+
+			if signatures.aggregatesConflict(expected, expectedTag: paramTag, expectedNameId: typeNameIdOf(paramType), expectedBrand: paramBrandOf(sig, position: i, paramTag: paramTag), got: got, gotTag: argTag, gotNameId: argNameId, gotBrand: valueBrandOf(project, func: func, value: argId)) 'aggregateMismatch'
+				if not signatures.serviceHandleWidensTo(got, interfaceHandleName: expected) 'noConversion'
+					return OverloadFit.incompatible
+				end 'noConversion'
+
+				score = score + WideningArgScore
+				continue
 			end 'aggregateMismatch'
 		end 'aggregateComparable'
 
@@ -1145,6 +1153,7 @@ end 'overloadResultValue'
 // by `specs/function-overloads.md`.
 function reportAmbiguousOverload(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, tied ByteArrayArray, module MaxonModule, candidates ByteArrayArray)
 	let range = project.opRanges.get(opIndex)
+	project.refusedOverloadCalls.insert(opIndex)
 	reportPositioned(project, code: ErrorCode.semanticAmbiguousOverload, message: "Ambiguous overload for '{bareMethodName(callee)}': multiple overloads match. Candidates: {renderOverloadCandidates(project, tied: tied)}", line: range.line, column: range.column, filePath: func.sourceFilePath)
 
 	// The op still names a callee, and for a CONTESTED set that name belongs to no declaration — see the
@@ -2718,7 +2727,7 @@ function opConsumesAPromise(op MaxonOp) returns bool
 			errorFlagEncode or
 
 			// A service's green thread is not a promise and no service op reclaims one: a Promise may not be
-			// sent at all (`Parser.moveIntoGreenThread` refuses it), which is what keeps this answer true.
+			// sent at all (`Parser.handIntoGreenThread` refuses it), which is what keeps this answer true.
 			serviceSpawn or
 			serviceSend or
 			serviceReplyCell or
@@ -3551,7 +3560,7 @@ function checkWitnessArgTypes(project Project, func IrFunction, signatures Progr
 			// are owned by the interface rather than by any conformer — which is exactly the owner guard
 			// `ProgramSignatures.substituteThroughInstance` applies, and `witnessFormalDeclaredType` has already
 			// answered `opaque` for them one line up.
-			declared(paramType, preErasedAggregate) then checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: formalName, paramName: witnessFormalName(requirement, position: j), position: j, argId: try args.get(j + WitnessReceiverArgCount) otherwise panic("checkWitnessArgTypes: args.get OOB at {j + WitnessReceiverArgCount} below count {args.count()} — a dispatch reaching here has the receiver plus one actual per formal"), callInstanceSubject: witnessReceiver, paramExistentialSites: sharedEmptyParamExistentialSites, callRange: callRange, filePath: func.sourceFilePath, provenance: provenance)
+			declared(paramType, preErasedAggregate) then checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: formalName, paramName: witnessFormalName(requirement, position: j), position: j, argId: try args.get(j + WitnessReceiverArgCount) otherwise panic("checkWitnessArgTypes: args.get OOB at {j + WitnessReceiverArgCount} below count {args.count()} — a dispatch reaching here has the receiver plus one actual per formal"), callInstanceSubject: witnessReceiver, paramExistentialSites: sharedEmptyParamExistentialSites, callRange: callRange, filePath: func.sourceFilePath, provenance: provenance, overloadRefused: false)
 		end 'formal'
 	end 'eachFormal'
 end 'checkWitnessArgTypes'
@@ -3982,7 +3991,7 @@ function validateCall(project Project, func IrFunction, signatures ProgramSignat
 	let sig = try project.funcSignatures.get(callee) otherwise panic("validateCall: contains('{String.from(callee)}') true but get failed")
 
 	match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'slot'
-		ordered(argIds) then checkSlottedCall(project, func: func, result: result, callee: callee, sig: sig, args: args, argLabels: argLabels, argImmutableNames: argImmutableNames, argIds: argIds, argDefaultSlots: argDefaultSlots, escapeSummary: escapeSummary, mutationSummary: mutationSummary, provenance: provenance, callRange: callRange, filePath: filePath)
+		ordered(argIds) then checkSlottedCall(project, func: func, result: result, callee: callee, sig: sig, args: args, argLabels: argLabels, argImmutableNames: argImmutableNames, argIds: argIds, argDefaultSlots: argDefaultSlots, escapeSummary: escapeSummary, mutationSummary: mutationSummary, provenance: provenance, callRange: callRange, filePath: filePath, overloadRefused: project.refusedOverloadCalls.contains(opIndex))
 		arityMismatch(expected, got) then reportPositioned(project, code: ErrorCode.callArgCountMismatch, message: argArityMismatchMessage(String.from(noun), expected: expected, got: got), line: callRange.line, column: callRange.column, filePath: filePath)
 		unknownLabel(argIndex, label) then reportArgError(project, code: ErrorCode.callUnknownArgLabel, message: argUnknownLabelMessage(String.from(noun), label: label), argRanges: argRanges, argIndex: argIndex, filePath: filePath)
 		duplicateArg(argIndex, paramName) then reportArgError(project, code: ErrorCode.callDuplicateArg, message: argDuplicateMessage(String.from(noun), paramName: paramName), argRanges: argRanges, argIndex: argIndex, filePath: filePath)
@@ -4241,7 +4250,7 @@ function checkIndirectCallArgs(project Project, func IrFunction, opIndex OpIndex
 		// ⚠ The CALLEE is this call's own subject, and it is a function VALUE — never `genericInstance`-tagged —
 		// so the shape substitution declines. That is the right answer as well as an honest one: an indirect
 		// call's declared shape is the function TYPE's own, written in no generic body's declaration view.
-		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: shapeParamIdentity(shape, index: i), declaredParamName: EmptySourceText, paramName: EmptySourceText, position: i, argId: argId, callInstanceSubject: callee, paramExistentialSites: sharedEmptyParamExistentialSites, callRange: callRange, filePath: func.sourceFilePath, provenance: provenance)
+		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: shapeParamIdentity(shape, index: i), declaredParamName: EmptySourceText, paramName: EmptySourceText, position: i, argId: argId, callInstanceSubject: callee, paramExistentialSites: sharedEmptyParamExistentialSites, callRange: callRange, filePath: func.sourceFilePath, provenance: provenance, overloadRefused: false)
 	end 'eachArg'
 end 'checkIndirectCallArgs'
 
@@ -5823,8 +5832,8 @@ end 'targetCanHostSubprocess'
 // the callee PERSISTS (P1.5-A2b-2), then refuse any IMMUTABLE BINDING passed to a parameter the callee
 // WRITES (E3019). The first three read `argIds` in declaration order, so each pairs `argIds[i]` with
 // parameter `i` — the slotting is done once, by `slotCallArgs`, and none re-derives it.
-function checkSlottedCall(project Project, func IrFunction, result ValueId, callee ByteArray, sig FuncSignature, args ValueIdArray, argLabels ByteArrayArray, argImmutableNames ByteArrayArray, argIds ValueIdArray, argDefaultSlots ParamCountArray, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, callRange SourceRange, filePath FilePath)
-	checkArgTypes(project, func: func, result: result, callee: callee, sig: sig, argIds: argIds, argDefaultSlots: argDefaultSlots, callRange: callRange, filePath: filePath, provenance: provenance)
+function checkSlottedCall(project Project, func IrFunction, result ValueId, callee ByteArray, sig FuncSignature, args ValueIdArray, argLabels ByteArrayArray, argImmutableNames ByteArrayArray, argIds ValueIdArray, argDefaultSlots ParamCountArray, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, callRange SourceRange, filePath FilePath, overloadRefused bool)
+	checkArgTypes(project, func: func, result: result, callee: callee, sig: sig, argIds: argIds, argDefaultSlots: argDefaultSlots, callRange: callRange, filePath: filePath, provenance: provenance, overloadRefused: overloadRefused)
 	checkTypeParameterArgs(project, func: func, result: result, sig: sig, argIds: argIds, callRange: callRange, filePath: filePath, provenance: provenance)
 	checkPerInstanceArgs(project, func: func, callee: callee, sig: sig, argIds: argIds, callRange: callRange, filePath: filePath, provenance: provenance)
 	checkCapturingClosureEscape(project, func: func, callee: callee, argIds: argIds, escapeSummary: escapeSummary, callRange: callRange, filePath: filePath)
@@ -6637,7 +6646,7 @@ function closureDefiningOp(project Project, func IrFunction, funcIndex FuncIndex
 	panic("closureDefiningOp: capturing closure v{closure} of '{String.from(func.name)}' has no defining op in `valueOrigins` — the mark is set only on a value `functionRef` defined")
 end 'closureDefiningOp'
 
-function checkArgTypes(project Project, func IrFunction, result ValueId, callee ByteArray, sig FuncSignature, argIds ValueIdArray, argDefaultSlots ParamCountArray, callRange SourceRange, filePath FilePath, provenance ProvenanceTracer)
+function checkArgTypes(project Project, func IrFunction, result ValueId, callee ByteArray, sig FuncSignature, argIds ValueIdArray, argDefaultSlots ParamCountArray, callRange SourceRange, filePath FilePath, provenance ProvenanceTracer, overloadRefused bool)
 	// ⭐⭐ **A CALL THROUGH A CONCRETE INSTANCE JUDGES ITS ARGUMENTS AGAINST THE INSTANCE VIEW OF EACH
 	// PARAMETER, NOT AGAINST THE SHARED BODY'S DECLARATION VIEW.** The compiler compiles one body per
 	// generic type, so `adopt(other Items)` and `merge(source Self)` are declared in terms the
@@ -6702,7 +6711,7 @@ function checkArgTypes(project Project, func IrFunction, result ValueId, callee 
 		// that a diagnostic exists cannot be forgotten by a new report site. It is `Queries.foldOneFileInto`'s
 		// own before/after idiom.
 		let reportedBefore = project.diagnostics.count()
-		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: declaredParamName, paramName: paramName, position: i, argId: argId, callInstanceSubject: instanceSubject, paramExistentialSites: sig.paramExistentialSites, callRange: callRange, filePath: filePath, provenance: provenance)
+		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: declaredParamName, paramName: paramName, position: i, argId: argId, callInstanceSubject: instanceSubject, paramExistentialSites: sig.paramExistentialSites, callRange: callRange, filePath: filePath, provenance: provenance, overloadRefused: overloadRefused)
 
 		if project.diagnostics.count() > reportedBefore 'thisArgumentWasRefused'
 			return
@@ -7743,7 +7752,7 @@ end 'existentialStoreWideningPlace'
 // indirect-call callers hand over `sharedEmptyParamExistentialSites`, which is their honest answer rather than
 // a stand-in — an interface REQUIREMENT's formals are the interface's own spelling, and a function TYPE names
 // its parameters' declarations nowhere at all (the same gap `declaredParamName` has at those two sites).
-function checkOneArgType(project Project, func IrFunction, paramType MaxonType, preErasedAggregate ByteArray, declaredParamName ByteArray, paramName ByteArray, position ParamCount, argId ValueId, callInstanceSubject ValueId, paramExistentialSites ParamExistentialSiteArray, callRange SourceRange, filePath FilePath, provenance ProvenanceTracer)
+function checkOneArgType(project Project, func IrFunction, paramType MaxonType, preErasedAggregate ByteArray, declaredParamName ByteArray, paramName ByteArray, position ParamCount, argId ValueId, callInstanceSubject ValueId, paramExistentialSites ParamExistentialSiteArray, callRange SourceRange, filePath FilePath, provenance ProvenanceTracer, overloadRefused bool)
 	let argTag = try func.valueTags.get(argId) otherwise panic("checkOneArgType: value v{argId} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
 	let argNameId = try func.valueNameIds.get(argId) otherwise panic("checkOneArgType: value v{argId} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
 	let paramTag = maxonTypeTag(paramType)
@@ -7810,7 +7819,12 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 		// (see `ProgramSignatures.byteBufferBoundaryAdmits`). The P1.6-C decay clause the shared door also
 		// carries cannot fire here: it needs an EMPTY `expectedAggregate`, and an empty one only reaches this
 		// line through `argAggregateCannotDecay`, which has already answered the same question wider.
-		if programSignaturesIn(project, asker: "checkOneArgType").aggregatesConflict(expectedAggregate, expectedTag: paramTag, expectedNameId: typeNameIdOf(paramType), expectedBrand: declaredBrandOf(declaredParamName, paramTag: paramTag), got: gotAggregate, gotTag: argTag, gotNameId: argNameId, gotBrand: valueBrandOf(project, func: func, value: argId)) 'aggregateArgMismatch'
+		let signatures = programSignaturesIn(project, asker: "checkOneArgType")
+
+		// A handle the parser left unconverted because the call's overloads tied is already E3007; every
+		// other unconverted `T.handle` at an `I.handle` parameter is a conversion door that was missed,
+		// and is E3005.
+		if signatures.aggregatesConflict(expectedAggregate, expectedTag: paramTag, expectedNameId: typeNameIdOf(paramType), expectedBrand: declaredBrandOf(declaredParamName, paramTag: paramTag), got: gotAggregate, gotTag: argTag, gotNameId: argNameId, gotBrand: valueBrandOf(project, func: func, value: argId)) and not (overloadRefused and signatures.serviceHandleWidensTo(gotAggregate, interfaceHandleName: expectedAggregate)) 'aggregateArgMismatch'
 			// ⚠ **THE OPAQUE TAIL BELONGS HERE TOO, AND FOR ONE FACT THERE IS ONE SENTENCE (W179).** A boxed
 			// UNION parameter carries a nominal identity, so an opaque `T` meeting one is refused by THIS arm and
 			// never reaches the tag rule below — measured on `takeMsg(t)` with a `union Message` formal. Same

@@ -32,10 +32,10 @@ end 'main'
 | [Core](#overview) | [Core Functions](#core-functions) |
 | [Text](#string) | String, Character, Ascii, Unicode, CharacterSet |
 | [Collections](#array) | Array, List, Map, Set, Vector, Range, Iterators, Interfaces |
-| [I/O and processes](#file) | File, FilePath, Directory, Console, CommandLine, Log, Process, Subprocess, SharedMemory |
+| [I/O and processes](#file) | File, FilePath, Directory, Console, CommandLine, Log, TraceCapture, Process, Subprocess, SharedMemory |
 | [Network](#tcpclient) | TcpClient, TcpListener, HttpClient, HttpServer, URL |
 | [Data](#json) | Json, Sha256, Hasher |
-| [System](#clock) | Clock, Scheduler, Math, Primitive Extensions |
+| [System](#clock) | Clock, Scheduler, SharedValue, Math, Primitive Extensions |
 | [Testing](#testing) | Testing |
 | [Build](#build) | Build |
 
@@ -59,6 +59,7 @@ end 'main'
 | `SourceLineNumber` | `int(1 to i32.max)` | Builtins |
 | `FileSize`, `Timestamp` | `int(0 to u64.max)` | File |
 | `DurationMs`, `InstantMs`, `DurationNanos`, `InstantNanos`, `UnixSeconds` | `int(0 to u64.max)` | Clock |
+| `UnixNanos`, `UnixDays` | `int(i64.min to i64.max)` | Clock |
 | `SchedulerProcessorCount` | `int(1 to i64.max)` | Scheduler |
 | `NetworkPort` | `int(0 to 65535)` | TcpClient |
 | `EnvMap` | `Map with String, String` | Subprocess |
@@ -87,6 +88,11 @@ to name one.
 | `JsonFloat` | `float(f64.min to f64.max)` | Json |
 | `ChildCount`, `ChildIndex` | `int(0 to u64.max)` | Json |
 | `Milliseconds` | `int(0 to u64.max)` | Sleep |
+| `CivilYear` / `CivilMonth` / `CivilDay` | `int(i64.min to i64.max)` / `int(1 to 12)` / `int(1 to 31)` | Clock |
+| `LogInteger`, `LogRank` | `int(i64.min to i64.max)` / `int(i32.min to i32.max)` | Log |
+| `LogReal` | `float(f64.min to f64.max)` | Log |
+| `LogGroupPath`, `LogFieldArray` | `Array with String` / `Array with LogField` | Log |
+| `TraceKeyArray` | `Array with String` | TraceCapture |
 | `SocketDeadlineMs` | `int(0 to 4294967295)` — a socket deadline | TcpClient |
 | `RecvCapacity` | `int(1 to i64.max)` | TcpClient |
 | `HttpByteCap` | `int(0 to 1099511627776)` | HttpServer |
@@ -117,6 +123,7 @@ at the call site, rather than failing at run time:
 |--------------------------|-------|
 | `File`, `Directory`, `Console`, `CommandLine` | E3104 |
 | `Clock`, `WallClock`, `sleep`, `Scheduler.yield`, `Scheduler.processorCount` | E3104 |
+| `Log`, `Logger`, `LogSink` and the log handlers: logging runs on services, which need green threads | E3104 |
 | `TcpClient`, `TcpListener`, `HttpClient`, `HttpServer` | E3104 |
 | `Process.executablePath`, `SharedSegment` | E3104 |
 | `Subprocess`, `StreamingSubprocess`, `Configuration`, `Process.environmentVariable` | E3074 |
@@ -1296,26 +1303,209 @@ Run as `program --mode=fast`, it prints `2 fast a=b`.
 
 ## Log
 
-`Log` records trace keys so a test can check which internal path ran. It is not a general logger: there are
-no levels or outputs. While capture is off, `trace` does nothing.
-
-Nothing in the standard library calls `trace`, so a capture holds only the keys the program emitted itself.
-`Log` keeps its capture state in module-level `var`s, so a service message handler may not call any of
-these methods ([E3143](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3143)).
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `Log.trace(key String)` | — | Record `key` when capturing. Use a stable dotted name. |
-| `Log.startCapture()` | — | Start recording, discarding earlier keys. |
-| `Log.stopCapture()` | `StringArray` | Stop, and return the keys in the order they were emitted. |
-| `Log.fired(capturedKeys StringArray, key String)` | `bool` | True when `key` was recorded at least once. |
+`Log` is a structured logger modelled on Go's `log/slog`: a record is a level, a message and typed attributes,
+and a handler service formats and writes it. A program logs with its first call:
 
 ```maxon
 function main() returns ExitCode
-	Log.startCapture()
-	Log.trace("cache.miss")
-	let keys = Log.stopCapture()
-	print("{Log.fired(keys, key: "cache.miss")} {Log.fired(keys, key: "cache.hit")}\n")
+	Log.info("started", attrs: [LogAttr.string("mode", value: "fast"), LogAttr.int("workers", value: 4)])
+	return 0
+end 'main'
+```
+
+writes one line to stderr:
+
+```
+time=2026-09-27T12:34:56.789Z level=INFO msg=started mode=fast workers=4
+```
+
+The standard library's default sink is a `TextLogHandler` on stderr with the time on (RFC 3339, UTC,
+milliseconds) and a minimum level of INFO.
+
+Only an enabled call builds a record: the level is checked at the call, before anything reaches the handler.
+Below ERROR, a call sends its record to the handler and returns, and the handler writes it. `Log.error` —
+and any call at a rank of ERROR or above — returns once the handler has written its record, and so every
+record sent before it too, because the handler takes records in order; a line logged just before a `panic` is
+on the stream. When the program exits normally, every record still queued is written first.
+
+Logging runs on services, so it is refused on `wasm32-wasi`
+([E3104](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3104)), at the call.
+
+### Writing records
+
+Each writer takes `message String`, then `attrs LogAttrArray` (default empty), then `file String` and
+`line SourceLineNumber`, which default to the caller's location and feed the handler's `addSource` output.
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `Log.trace`, `Log.debug`, `Log.info`, `Log.warn`, `Log.error` | — | Log `message` at that level through the default sink. |
+| `Log.log(level LogLevel, message String, …)` | — | Log at any level, a custom one included. |
+| `Log.enabled(level LogLevel)` | `bool` | True when the default sink's minimum admits `level` — a guard for attributes that are costly to compute. |
+| `Log.default()` | `Logger` | A logger over the current default sink. |
+| `Log.setDefault(sink LogSink)` | — | Make `sink` the default for every thread. |
+
+A helper of your own forwards its caller's location by declaring the same two defaulted parameters and
+passing them on:
+
+```maxon
+extension Log
+	public static function audit(message String, attrs LogAttrArray = LogAttrArray.create(), file String = __file__, line SourceLineNumber = __line__)
+		Log.log(LogLevel.named("AUDIT", rank: 2), message: message, attrs: attrs, file: file, line: line)
+	end 'audit'
+end 'Log'
+```
+
+### Levels
+
+A `LogLevel` is a rank; a record is written when its rank is at or above the minimum.
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `LogLevel.trace`, `.debug`, `.info`, `.warn`, `.error` | `LogLevel` | Ranks -8, -4, 0, 4 and 8. |
+| `LogLevel.create(rank LogRank)` | `LogLevel` | A custom level, named relative to a standard level near it: rank 2 prints `INFO+2`, rank -6 `DEBUG-2`, rank 12 `ERROR+4`. |
+| `LogLevel.named(name String, rank LogRank)` | `LogLevel` | A custom level that prints `name`. |
+| `rank` | `LogRank` | The rank. |
+| `name()` | `String` | The printed name. |
+
+### Attributes
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `LogAttr.string(key String, value String)` | `LogAttr` | A text attribute. |
+| `LogAttr.int(key String, value LogInteger)` | `LogAttr` | An integer attribute. |
+| `LogAttr.float(key String, value LogReal)` | `LogAttr` | A float attribute, printed in its shortest round-trip form. |
+| `LogAttr.bool(key String, value bool)` | `LogAttr` | A boolean attribute. |
+| `LogAttr.group(name String, attrs LogAttrArray)` | `LogAttr` | `attrs` qualified by `name`. |
+| `fields` | `LogFieldArray` | The attribute flattened to fields. |
+
+`LogAttrArray` is `Array with LogAttr`, written as an array literal at the call. Groups flatten: each attribute
+becomes a `LogField`, which is what a handler receives.
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `LogField.create(key String, value LogValue, groups LogGroupPath)` | `LogField` | A field. |
+| `groups` | `LogGroupPath` | The enclosing group names, outermost first. |
+| `key`, `value` | `String`, `LogValue` | The key within its innermost group, and the value. |
+| `dottedKey()` | `String` | The groups and the key joined with `.`: `req.method`. |
+
+`LogValue` is a union with the cases `text(value String)`, `integer(value LogInteger)`, `real(value LogReal)`
+and `boolean(value bool)`.
+
+### Loggers
+
+A `Logger` carries attributes and a group to every record it writes. It keeps the sink it was built on and
+obeys that sink's level changes, including the ones made after it was built.
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `withAttrs(attrs LogAttrArray)` | `Logger` | A logger that adds `attrs` before each record's own, under the logger's current group. |
+| `withGroup(name String)` | `Logger` | A logger whose later attributes, bound or passed, are qualified by `name`. |
+| `trace`, `debug`, `info`, `warn`, `error`, `log` | — | As on `Log`, through this logger. |
+| `enabled(level LogLevel)` | `bool` | True when this logger would write `level`, its group's override included. |
+| `level()`, `setLevel`, `groupLevel`, `setGroupLevel`, `clearGroupLevel` | | As on `Log`, on this logger's sink. |
+
+### Changing levels at run time
+
+The levels belong to the sink. A change takes effect on the next call from any thread, for every `Logger`
+on that sink; concurrent changes each land.
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `Log.level()` | `LogLevel` | The minimum. |
+| `Log.setLevel(level LogLevel)` | — | Set the minimum. |
+| `Log.setGroupLevel(group String, level LogLevel)` | — | Give loggers in `group` their own minimum. |
+| `Log.clearGroupLevel(group String)` | — | Return `group` to the minimum. |
+| `Log.groupLevel(group String)` | `LogLevel` | The level in effect for `group`: its override, else the minimum. |
+
+A group is named by its path joined with `.`: a logger made by `withGroup("db").withGroup("pool")` obeys the
+override for `db.pool`, else the one for `db`, else the minimum. `Log`'s own writers are outside every group.
+
+`LogLevels` is the immutable value those calls replace: `LogLevels.minimum(level)`, then `level()`,
+`groupLevel(group)`, `enables(level)`, and the copies `withLevel(level)`, `withGroupLevel(group, level:)` and
+`withoutGroupLevel(group)`. `LogLevelVar` is `SharedValue with LogLevels` — the live cell a sink reads (see
+[SharedValue](#sharedvalue)).
+
+### Handlers and sinks
+
+A `LogHandler` is a service interface with one requirement, `handle(record LogRecord) returns bool`. A sink
+pairs a handler with its levels:
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `LogSink.create(handler LogHandler.handle, levels LogLevelVar)` | `LogSink` | A sink; `handler` is a spawned service. |
+| `handler`, `levels` | `LogHandler.handle`, `LogLevelVar` | Its parts. |
+| `enabled`, `level`, `groupLevel`, `setLevel`, `setGroupLevel`, `clearGroupLevel` | | As on `Log`, on this sink. |
+
+The default sink is a registry key: `Log.setDefault(sink)` registers `sink` for every later lookup on every
+thread, and a program's own top-level `default LogSink = …` declaration takes precedence over the standard library's
+([Program-Wide Defaults](LANGUAGE_REFERENCE.md#program-wide-defaults--default)).
+
+The two handlers write each record with one write, so lines from different threads stay whole:
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `TextLogHandler.create(options LogHandlerOptions)` | `TextLogHandler` | `key=value` pairs in the order `time`, `level`, `source` (`file:line`), `msg`, then the attributes; the time is RFC 3339 with milliseconds. A text value is quoted with `Json.quote`'s escapes when it is empty or holds a space, a control byte, `"` or `=`. A group's attributes print with dotted keys. |
+| `JsonLogHandler.create(options LogHandlerOptions)` | `JsonLogHandler` | One JSON object per line: `time` (RFC 3339 with nanoseconds), `level`, `source` as `{"file":…,"line":…}`, `msg`, then the attributes, a group as a nested object. A non-finite float is a string. |
+| `LogHandlerOptions.create(stream LogStream, addTime bool, addSource bool)` | `LogHandlerOptions` | Where to write, and whether to include the time and the caller's location. |
+| `LogHandlerOptions.standard()` | `LogHandlerOptions` | Stderr, time on, source off. |
+| `stream`, `addTime`, `addSource` | | The options' fields. |
+
+`LogStream` has the cases `standardError` and `standardOutput`.
+
+A handler of your own implements `LogHandler` and receives a `LogRecord`:
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `time` | `UnixNanos` | When the record was made. |
+| `level`, `message` | `LogLevel`, `String` | |
+| `attrs` | `LogFieldArray` | The logger's bound fields, then the call's own. |
+| `file`, `line` | `String`, `SourceLineNumber` | The caller's location. |
+| `LogRecord.create(time, level:, message:, attrs:, file:, line:)` | `LogRecord` | A record. |
+
+```maxon
+function main() returns ExitCode
+	let options = LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
+	let levels = LogLevelVar.create(LogLevels.minimum(LogLevel.debug))
+	Log.setDefault(LogSink.create(spawn JsonLogHandler.create(options), levels: levels))
+
+	let requests = Log.default().withAttrs([LogAttr.string("service", value: "api")]).withGroup("req")
+	requests.debug("served", attrs: [LogAttr.string("method", value: "GET"), LogAttr.int("status", value: 200)])
+	Log.setGroupLevel("req", level: LogLevel.info)
+	requests.debug("filtered")
+	Log.error("failed", attrs: [LogAttr.bool("retry", value: false)])
+	return 0
+end 'main'
+```
+
+Output:
+
+```
+{"level":"DEBUG","msg":"served","service":"api","req":{"method":"GET","status":200}}
+{"level":"ERROR","msg":"failed","retry":false}
+```
+
+## TraceCapture
+
+`TraceCapture` records trace keys so a test can check which internal path ran. `trace` records only between
+`startCapture` and `stopCapture`; for levelled output see [Log](#log).
+
+A capture holds only the keys the program emitted itself. `TraceCapture` keeps its capture state in
+module-level `var`s, so a call to any of these methods from a service message handler is
+[E3143](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3143).
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `TraceCapture.trace(key String)` | — | Record `key` when capturing. Use a stable dotted name. |
+| `TraceCapture.startCapture()` | — | Start recording, discarding earlier keys. |
+| `TraceCapture.stopCapture()` | `TraceKeyArray` | Stop, and return the keys in the order they were emitted. |
+| `TraceCapture.fired(capturedKeys TraceKeyArray, key String)` | `bool` | True when `key` was recorded at least once. |
+
+```maxon
+function main() returns ExitCode
+	TraceCapture.startCapture()
+	TraceCapture.trace("cache.miss")
+	let keys = TraceCapture.stopCapture()
+	print("{TraceCapture.fired(keys, key: "cache.miss")} {TraceCapture.fired(keys, key: "cache.hit")}\n")
 	return 0
 end 'main'
 ```
@@ -2297,10 +2487,14 @@ Readings are always in nanoseconds, but two back-to-back readings can be equal w
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `WallClock.nowUnixSeconds()` | `UnixSeconds` | Whole seconds since 1970-01-01 00:00:00 UTC. No time zone is applied. |
+| `WallClock.nowUnixSeconds()` | `UnixSeconds` | Whole seconds since 1970-01-01 00:00:00 UTC. |
+| `WallClock.nowUnixNanos()` | `UnixNanos` | Nanoseconds since 1970-01-01 00:00:00 UTC. |
+| `WallClock.rfc3339Millis(nanos UnixNanos)` | `String` | `nanos` as an RFC 3339 UTC time with milliseconds: `2023-11-14T22:13:20.123Z`. |
+| `WallClock.rfc3339Nanos(nanos UnixNanos)` | `String` | The same with nanoseconds: `2023-11-14T22:13:20.123456789Z`. |
 
-`UnixSeconds` is `int(0 to u64.max)`. The wall clock can step backwards (an NTP correction, a resumed
-virtual machine), so never measure a duration with it.
+Every reading and format is in UTC. `UnixSeconds` is `int(0 to u64.max)`; `UnixNanos` is signed, negative
+before 1970. The wall clock can step backwards (an NTP correction, a resumed virtual machine), so measure
+durations with `Clock`.
 
 ```maxon
 function main() returns ExitCode
@@ -2313,6 +2507,32 @@ end 'main'
 ```
 
 Output: `true true`.
+
+### CivilDate
+
+A `CivilDate` is a date in the proleptic Gregorian calendar, converted to and from a count of days since
+1970-01-01 (`UnixDays`, signed).
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `CivilDate.create(year CivilYear, month CivilMonth, day CivilDay)` | `CivilDate` | A date from its parts. Throws `CivilDateError.impossibleDay` for a day past the end of its month (February 30, or February 29 in a common year). |
+| `CivilDate.fromDays(days UnixDays)` | `CivilDate` | The date `days` after 1970-01-01. |
+| `days()` | `UnixDays` | The inverse of `fromDays`. |
+| `year`, `month`, `day` | `CivilYear`, `CivilMonth`, `CivilDay` | The parts; `month` and `day` count from 1. |
+
+`CivilDateError` is the error `create` throws; its one case is `impossibleDay`.
+
+```maxon
+function main() returns ExitCode
+	let date = CivilDate.fromDays(20000)
+	let march = try CivilDate.create(2000, month: 3, day: 1) otherwise panic("2000-03-01 is a real date")
+	print("{date.year}-{date.month:02}-{date.day:02} {march.days()}\n")
+	print("{WallClock.rfc3339Millis(1700000000123456789)}\n")
+	return 0
+end 'main'
+```
+
+Output: `2024-10-04 11017`, then `2023-11-14T22:13:20.123Z`.
 
 ## Scheduler
 
@@ -2343,6 +2563,50 @@ end 'main'
 ```
 
 Output: `worker` then `main`.
+
+## SharedValue
+
+`SharedValue with T` is a live cell every thread can read: a reader takes an immutable snapshot lock-free,
+and a writer publishes a whole new value. Use it through an alias:
+`typealias ConfigCell = SharedValue with Config`. `T` is a `String`, a scalar, a service handle, or a type
+whose every field is a `let` over such types ([E3171](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3171)). It is the run-time form of a registry key's
+`default` ([`SharedValue`](LANGUAGE_REFERENCE.md#sharedvalue--a-live-value-made-at-run-time)).
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `SharedValue.create(value T)` | `SharedValue with T` | A cell holding `value`. A `clone()` of the cell is the same cell, so hand one to a service and it sees every publish. |
+| `current()` | `T` | The value published last. A snapshot stays valid after later publishes. |
+| `publish(value T)` | — | Make `value` current for every later `current()` on every thread. |
+| `publish(value T, replacing T)` | `bool` | Publish only while `replacing` — a value `current()` returned — is still current. On `true` it is published; on `false` the current value stays and `value` is dropped. |
+
+A read-modify-write re-reads `current()` and retries `publish(…, replacing:)` until it answers `true`, so
+concurrent writers each land.
+
+```maxon
+type Config
+	export let n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Config'
+
+typealias Integer = int(i64.min to i64.max)
+typealias ConfigCell = SharedValue with Config
+
+function main() returns ExitCode
+	let cell = ConfigCell.create(Config.create(1))
+	let seen = cell.current()
+	cell.publish(Config.create(3))
+	let stale = cell.publish(Config.create(2), replacing: seen)
+	let latest = cell.current()
+	let fresh = cell.publish(Config.create(5), replacing: latest)
+	print("{seen.n} {stale} {fresh} {cell.current().n}\n")
+	return 0
+end 'main'
+```
+
+Output: `1 false true 5`.
 
 ## Math
 

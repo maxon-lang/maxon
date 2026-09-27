@@ -256,26 +256,209 @@ Run as `program --mode=fast`, it prints `2 fast a=b`.
 
 ## Log
 
-`Log` records trace keys so a test can check which internal path ran. It is not a general logger: there are
-no levels or outputs. While capture is off, `trace` does nothing.
-
-Nothing in the standard library calls `trace`, so a capture holds only the keys the program emitted itself.
-`Log` keeps its capture state in module-level `var`s, so a service message handler may not call any of
-these methods ([E3143](/docs/cli/error-codes/#e3143--semanticsharedglobalaccessfromgreenthread)).
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `Log.trace(key String)` | — | Record `key` when capturing. Use a stable dotted name. |
-| `Log.startCapture()` | — | Start recording, discarding earlier keys. |
-| `Log.stopCapture()` | `StringArray` | Stop, and return the keys in the order they were emitted. |
-| `Log.fired(capturedKeys StringArray, key String)` | `bool` | True when `key` was recorded at least once. |
+`Log` is a structured logger modelled on Go's `log/slog`: a record is a level, a message and typed attributes,
+and a handler service formats and writes it. A program logs with its first call:
 
 ```maxon
 function main() returns ExitCode
-	Log.startCapture()
-	Log.trace("cache.miss")
-	let keys = Log.stopCapture()
-	print("{Log.fired(keys, key: "cache.miss")} {Log.fired(keys, key: "cache.hit")}\n")
+	Log.info("started", attrs: [LogAttr.string("mode", value: "fast"), LogAttr.int("workers", value: 4)])
+	return 0
+end 'main'
+```
+
+writes one line to stderr:
+
+```
+time=2026-09-27T12:34:56.789Z level=INFO msg=started mode=fast workers=4
+```
+
+The standard library's default sink is a `TextLogHandler` on stderr with the time on (RFC 3339, UTC,
+milliseconds) and a minimum level of INFO.
+
+Only an enabled call builds a record: the level is checked at the call, before anything reaches the handler.
+Below ERROR, a call sends its record to the handler and returns, and the handler writes it. `Log.error` —
+and any call at a rank of ERROR or above — returns once the handler has written its record, and so every
+record sent before it too, because the handler takes records in order; a line logged just before a `panic` is
+on the stream. When the program exits normally, every record still queued is written first.
+
+Logging runs on services, so it is refused on `wasm32-wasi`
+([E3104](/docs/cli/error-codes/#e3104--targetunsupportedconstruct)), at the call.
+
+### Writing records
+
+Each writer takes `message String`, then `attrs LogAttrArray` (default empty), then `file String` and
+`line SourceLineNumber`, which default to the caller's location and feed the handler's `addSource` output.
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `Log.trace`, `Log.debug`, `Log.info`, `Log.warn`, `Log.error` | — | Log `message` at that level through the default sink. |
+| `Log.log(level LogLevel, message String, …)` | — | Log at any level, a custom one included. |
+| `Log.enabled(level LogLevel)` | `bool` | True when the default sink's minimum admits `level` — a guard for attributes that are costly to compute. |
+| `Log.default()` | `Logger` | A logger over the current default sink. |
+| `Log.setDefault(sink LogSink)` | — | Make `sink` the default for every thread. |
+
+A helper of your own forwards its caller's location by declaring the same two defaulted parameters and
+passing them on:
+
+```maxon
+extension Log
+	public static function audit(message String, attrs LogAttrArray = LogAttrArray.create(), file String = __file__, line SourceLineNumber = __line__)
+		Log.log(LogLevel.named("AUDIT", rank: 2), message: message, attrs: attrs, file: file, line: line)
+	end 'audit'
+end 'Log'
+```
+
+### Levels
+
+A `LogLevel` is a rank; a record is written when its rank is at or above the minimum.
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `LogLevel.trace`, `.debug`, `.info`, `.warn`, `.error` | `LogLevel` | Ranks -8, -4, 0, 4 and 8. |
+| `LogLevel.create(rank LogRank)` | `LogLevel` | A custom level, named relative to a standard level near it: rank 2 prints `INFO+2`, rank -6 `DEBUG-2`, rank 12 `ERROR+4`. |
+| `LogLevel.named(name String, rank LogRank)` | `LogLevel` | A custom level that prints `name`. |
+| `rank` | `LogRank` | The rank. |
+| `name()` | `String` | The printed name. |
+
+### Attributes
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `LogAttr.string(key String, value String)` | `LogAttr` | A text attribute. |
+| `LogAttr.int(key String, value LogInteger)` | `LogAttr` | An integer attribute. |
+| `LogAttr.float(key String, value LogReal)` | `LogAttr` | A float attribute, printed in its shortest round-trip form. |
+| `LogAttr.bool(key String, value bool)` | `LogAttr` | A boolean attribute. |
+| `LogAttr.group(name String, attrs LogAttrArray)` | `LogAttr` | `attrs` qualified by `name`. |
+| `fields` | `LogFieldArray` | The attribute flattened to fields. |
+
+`LogAttrArray` is `Array with LogAttr`, written as an array literal at the call. Groups flatten: each attribute
+becomes a `LogField`, which is what a handler receives.
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `LogField.create(key String, value LogValue, groups LogGroupPath)` | `LogField` | A field. |
+| `groups` | `LogGroupPath` | The enclosing group names, outermost first. |
+| `key`, `value` | `String`, `LogValue` | The key within its innermost group, and the value. |
+| `dottedKey()` | `String` | The groups and the key joined with `.`: `req.method`. |
+
+`LogValue` is a union with the cases `text(value String)`, `integer(value LogInteger)`, `real(value LogReal)`
+and `boolean(value bool)`.
+
+### Loggers
+
+A `Logger` carries attributes and a group to every record it writes. It keeps the sink it was built on and
+obeys that sink's level changes, including the ones made after it was built.
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `withAttrs(attrs LogAttrArray)` | `Logger` | A logger that adds `attrs` before each record's own, under the logger's current group. |
+| `withGroup(name String)` | `Logger` | A logger whose later attributes, bound or passed, are qualified by `name`. |
+| `trace`, `debug`, `info`, `warn`, `error`, `log` | — | As on `Log`, through this logger. |
+| `enabled(level LogLevel)` | `bool` | True when this logger would write `level`, its group's override included. |
+| `level()`, `setLevel`, `groupLevel`, `setGroupLevel`, `clearGroupLevel` | | As on `Log`, on this logger's sink. |
+
+### Changing levels at run time
+
+The levels belong to the sink. A change takes effect on the next call from any thread, for every `Logger`
+on that sink; concurrent changes each land.
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `Log.level()` | `LogLevel` | The minimum. |
+| `Log.setLevel(level LogLevel)` | — | Set the minimum. |
+| `Log.setGroupLevel(group String, level LogLevel)` | — | Give loggers in `group` their own minimum. |
+| `Log.clearGroupLevel(group String)` | — | Return `group` to the minimum. |
+| `Log.groupLevel(group String)` | `LogLevel` | The level in effect for `group`: its override, else the minimum. |
+
+A group is named by its path joined with `.`: a logger made by `withGroup("db").withGroup("pool")` obeys the
+override for `db.pool`, else the one for `db`, else the minimum. `Log`'s own writers are outside every group.
+
+`LogLevels` is the immutable value those calls replace: `LogLevels.minimum(level)`, then `level()`,
+`groupLevel(group)`, `enables(level)`, and the copies `withLevel(level)`, `withGroupLevel(group, level:)` and
+`withoutGroupLevel(group)`. `LogLevelVar` is `SharedValue with LogLevels` — the live cell a sink reads (see
+[SharedValue](/docs/stdlib/runtime/#sharedvalue)).
+
+### Handlers and sinks
+
+A `LogHandler` is a service interface with one requirement, `handle(record LogRecord) returns bool`. A sink
+pairs a handler with its levels:
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `LogSink.create(handler LogHandler.handle, levels LogLevelVar)` | `LogSink` | A sink; `handler` is a spawned service. |
+| `handler`, `levels` | `LogHandler.handle`, `LogLevelVar` | Its parts. |
+| `enabled`, `level`, `groupLevel`, `setLevel`, `setGroupLevel`, `clearGroupLevel` | | As on `Log`, on this sink. |
+
+The default sink is a registry key: `Log.setDefault(sink)` registers `sink` for every later lookup on every
+thread, and a program's own top-level `default LogSink = …` declaration takes precedence over the standard library's
+([Program-Wide Defaults](/docs/language/async/#program-wide-defaults--default)).
+
+The two handlers write each record with one write, so lines from different threads stay whole:
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `TextLogHandler.create(options LogHandlerOptions)` | `TextLogHandler` | `key=value` pairs in the order `time`, `level`, `source` (`file:line`), `msg`, then the attributes; the time is RFC 3339 with milliseconds. A text value is quoted with `Json.quote`'s escapes when it is empty or holds a space, a control byte, `"` or `=`. A group's attributes print with dotted keys. |
+| `JsonLogHandler.create(options LogHandlerOptions)` | `JsonLogHandler` | One JSON object per line: `time` (RFC 3339 with nanoseconds), `level`, `source` as `{"file":…,"line":…}`, `msg`, then the attributes, a group as a nested object. A non-finite float is a string. |
+| `LogHandlerOptions.create(stream LogStream, addTime bool, addSource bool)` | `LogHandlerOptions` | Where to write, and whether to include the time and the caller's location. |
+| `LogHandlerOptions.standard()` | `LogHandlerOptions` | Stderr, time on, source off. |
+| `stream`, `addTime`, `addSource` | | The options' fields. |
+
+`LogStream` has the cases `standardError` and `standardOutput`.
+
+A handler of your own implements `LogHandler` and receives a `LogRecord`:
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `time` | `UnixNanos` | When the record was made. |
+| `level`, `message` | `LogLevel`, `String` | |
+| `attrs` | `LogFieldArray` | The logger's bound fields, then the call's own. |
+| `file`, `line` | `String`, `SourceLineNumber` | The caller's location. |
+| `LogRecord.create(time, level:, message:, attrs:, file:, line:)` | `LogRecord` | A record. |
+
+```maxon
+function main() returns ExitCode
+	let options = LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
+	let levels = LogLevelVar.create(LogLevels.minimum(LogLevel.debug))
+	Log.setDefault(LogSink.create(spawn JsonLogHandler.create(options), levels: levels))
+
+	let requests = Log.default().withAttrs([LogAttr.string("service", value: "api")]).withGroup("req")
+	requests.debug("served", attrs: [LogAttr.string("method", value: "GET"), LogAttr.int("status", value: 200)])
+	Log.setGroupLevel("req", level: LogLevel.info)
+	requests.debug("filtered")
+	Log.error("failed", attrs: [LogAttr.bool("retry", value: false)])
+	return 0
+end 'main'
+```
+
+Output:
+
+```
+{"level":"DEBUG","msg":"served","service":"api","req":{"method":"GET","status":200}}
+{"level":"ERROR","msg":"failed","retry":false}
+```
+
+## TraceCapture
+
+`TraceCapture` records trace keys so a test can check which internal path ran. `trace` records only between
+`startCapture` and `stopCapture`; for levelled output see [Log](#log).
+
+A capture holds only the keys the program emitted itself. `TraceCapture` keeps its capture state in
+module-level `var`s, so a call to any of these methods from a service message handler is
+[E3143](/docs/cli/error-codes/#e3143--semanticsharedglobalaccessfromgreenthread).
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `TraceCapture.trace(key String)` | — | Record `key` when capturing. Use a stable dotted name. |
+| `TraceCapture.startCapture()` | — | Start recording, discarding earlier keys. |
+| `TraceCapture.stopCapture()` | `TraceKeyArray` | Stop, and return the keys in the order they were emitted. |
+| `TraceCapture.fired(capturedKeys TraceKeyArray, key String)` | `bool` | True when `key` was recorded at least once. |
+
+```maxon
+function main() returns ExitCode
+	TraceCapture.startCapture()
+	TraceCapture.trace("cache.miss")
+	let keys = TraceCapture.stopCapture()
+	print("{TraceCapture.fired(keys, key: "cache.miss")} {TraceCapture.fired(keys, key: "cache.hit")}\n")
 	return 0
 end 'main'
 ```

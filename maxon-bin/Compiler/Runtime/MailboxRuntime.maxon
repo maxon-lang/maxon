@@ -186,7 +186,156 @@ export function installMailboxRuntime(module StdModule)
 	buildMboxHandleDropBox(module)
 	buildMboxServiceExit(module)
 	buildMboxAbandon(module)
+	buildMboxInterfaceCloneBox(module)
+	buildMboxInterfaceSend(module)
 end 'installMailboxRuntime'
+
+let MboxInterfaceRuntimePrefix = b"__mbox_iface_"
+export let MboxInterfaceCloneBoxName = b"__mbox_iface_clone_box"
+export let MboxInterfaceSendName = b"__mbox_iface_send"
+let MboxInterfaceConversionPrefix = b"__mbox_iface_from."
+let MboxInterfaceStubPrefix = b"__mbox_iface_stub."
+let MboxInterfaceTablePrefix = b"__mbox_iface_table."
+let MboxInterfaceSlotBytes = 8 as ParsedInt
+
+export function isInterfaceHandleRuntimeCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: MboxInterfaceRuntimePrefix)
+end 'isInterfaceHandleRuntimeCallee'
+
+export function isInterfaceHandleConversionCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: MboxInterfaceConversionPrefix)
+end 'isInterfaceHandleConversionCallee'
+
+export function interfaceHandleConversionName(serviceTypeName ByteArray, interfaceName ByteArray) returns ByteArray
+	return "{String.from(MboxInterfaceConversionPrefix)}{String.from(serviceTypeName)}.{String.from(interfaceName)}".toByteArray()
+end 'interfaceHandleConversionName'
+
+function interfaceHandleStubName(serviceTypeName ByteArray, interfaceName ByteArray, slot CaseIndex) returns ByteArray
+	return "{String.from(MboxInterfaceStubPrefix)}{String.from(serviceTypeName)}.{String.from(interfaceName)}.{slot}".toByteArray()
+end 'interfaceHandleStubName'
+
+function interfaceHandleTableLabel(serviceTypeName ByteArray, interfaceName ByteArray) returns String
+	return "{String.from(MboxInterfaceTablePrefix)}{String.from(serviceTypeName)}.{String.from(interfaceName)}"
+end 'interfaceHandleTableLabel'
+
+export function interfaceSendSlotOffset(slot CaseIndex) returns ParsedInt
+	return (slot as ParsedInt) * MboxInterfaceSlotBytes
+end 'interfaceSendSlotOffset'
+
+function buildMboxInterfaceCloneBox(module StdModule)
+	var func = IrFunction.createFromStd(MboxInterfaceCloneBoxName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	emitParams(module, block: entry, count: 1)
+	let handleBox = 0 as ValueId
+
+	let mbox = emitLoadField(module, block: entry, record: handleBox, offset: ServiceHandleMailboxOffset, ids: ids)
+	let table = emitLoadField(module, block: entry, record: handleBox, offset: InterfaceHandleTableOffset, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(emitInterfaceHandleBox(module, block: entry, mbox: mbox, table: table, ids: ids)))
+	module.functions.push(func)
+end 'buildMboxInterfaceCloneBox'
+
+function emitInterfaceHandleBox(module StdModule, block IrBlock, mbox ValueId, table ValueId, ids ValueMinter) returns ValueId
+	emitMailboxShareTaken(module, block: block, mbox: mbox, ids: ids)
+	return emitInterfaceHandleBoxHolding(module, block: block, mbox: mbox, table: table, ids: ids)
+end 'emitInterfaceHandleBox'
+
+module function emitMailboxShareTaken(module StdModule, block IrBlock, mbox ValueId, ids ValueMinter)
+	_ = emitMboxCountStep(module, block: block, mbox: mbox, offset: MboxOffHandles, delta: MboxCountUp, ids: ids)
+	_ = emitMboxCountStep(module, block: block, mbox: mbox, offset: MboxOffRefs, delta: MboxCountUp, ids: ids)
+end 'emitMailboxShareTaken'
+
+module function emitInterfaceHandleBoxHolding(module StdModule, block IrBlock, mbox ValueId, table ValueId, ids ValueMinter) returns ValueId
+	let boxBytes = emitConst(module, block: block, value: InterfaceHandleBoxSize, ids: ids)
+	let trivial = emitConst(module, block: block, value: TrivialDestructor, ids: ids)
+	let box = ids.mint()
+	emitMmAllocCall(module, block: block, result: box, size: boxBytes, destructor: trivial, tag: mmTagIndex(MmTag.Untagged), ids: ids)
+	emitStoreField(module, block: block, record: box, offset: ServiceHandleMailboxOffset, value: mbox)
+	emitStoreField(module, block: block, record: box, offset: InterfaceHandleTableOffset, value: table)
+	return box
+end 'emitInterfaceHandleBoxHolding'
+
+function buildMboxInterfaceSend(module StdModule)
+	var func = IrFunction.createFromStd(MboxInterfaceSendName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	emitParams(module, block: entry, count: 3)
+	let handleBox = 0 as ValueId
+	let slotOffset = 1 as ValueId
+	let request = 2 as ValueId
+
+	let mbox = emitLoadField(module, block: entry, record: handleBox, offset: ServiceHandleMailboxOffset, ids: ids)
+	let table = emitLoadField(module, block: entry, record: handleBox, offset: InterfaceHandleTableOffset, ids: ids)
+	let stub = emitLoadField(module, block: entry, record: emitBin(module, block: entry, a: table, b: slotOffset, opcode: StdBinOpcode.add, ids: ids), offset: 0, ids: ids)
+	module.appendOp(entry, op: StdOp.callIndirect(ids.mint(), calleeReg: stub, resultType: StdReturnType.void, argFloatMask: 0, args: twoArgs(mbox, second: request)))
+	module.setTerminator(entry, op: StdOp.retVoid)
+	module.functions.push(func)
+end 'buildMboxInterfaceSend'
+
+export function installInterfaceHandleConversions(module StdModule, globalData GlobalDataTable, usage RuntimeUsage, signatures ProgramSignatures)
+	if usage.neededInterfaceConversions.count() == 0 'noConversion'
+		return
+	end 'noConversion'
+
+	for serviceTypeName in serviceCompanionRoster(signatures) 'eachService'
+		let service = spawnTargetLayoutOf(signatures, typeName: serviceTypeName)
+
+		for interfaceName in service.conformsTo 'eachConformance'
+			if usage.neededInterfaceConversions.contains(interfaceHandleConversionName(serviceTypeName, interfaceName: interfaceName)) 'thisPairIsConverted'
+				buildInterfaceHandleConversion(module, globalData: globalData, signatures: signatures, serviceTypeName: serviceTypeName, interfaceName: interfaceName)
+			end 'thisPairIsConverted'
+		end 'eachConformance'
+	end 'eachService'
+end 'installInterfaceHandleConversions'
+
+function buildInterfaceHandleConversion(module StdModule, globalData GlobalDataTable, signatures ProgramSignatures, serviceTypeName ByteArray, interfaceName ByteArray)
+	let interfaceRequest = requireServiceRequestLayout(signatures, typeName: interfaceName)
+	let serviceRequest = requireServiceRequestLayout(signatures, typeName: serviceTypeName)
+	let label = interfaceHandleTableLabel(serviceTypeName, interfaceName: interfaceName)
+	var blob = ByteArray.create()
+	blob.growFilled((interfaceRequest.caseCount() as ParsedInt * MboxInterfaceSlotBytes) as ElementIndex, value: 0)
+	_ = globalData.registerRdataConstantLabeled(label, bytes: blob, kind: RdataPayloadKind.witnessTable)
+
+	for slot in 0 upto interfaceRequest.caseCount() 'eachSlot'
+		let serviceCase = serviceRequest.indexOfCase(interfaceRequest.caseNameAt(slot))
+
+		if serviceCase >= serviceRequest.caseCount() 'notAMessageOfThisService'
+			panic("buildInterfaceHandleConversion: `{String.from(serviceTypeName)}` has no message `{String.from(interfaceRequest.caseNameAt(slot))}` of `{String.from(interfaceName)}` — conformance requires every requirement, and a message is an exported instance method")
+		end 'notAMessageOfThisService'
+
+		let stubName = interfaceHandleStubName(serviceTypeName, interfaceName: interfaceName, slot: slot)
+		buildInterfaceSendStub(module, name: stubName, serviceTag: serviceRequest.tagOfIndex(serviceCase))
+		globalData.recordFuncAbs64InRdata(stubName, rdataLabel: label, offsetInLabel: interfaceSendSlotOffset(slot) as ByteOffset)
+	end 'eachSlot'
+
+	var func = IrFunction.createFromStd(interfaceHandleConversionName(serviceTypeName, interfaceName: interfaceName), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	emitParams(module, block: entry, count: 1)
+	let serviceHandle = 0 as ValueId
+
+	let mbox = emitLoadField(module, block: entry, record: serviceHandle, offset: ServiceHandleMailboxOffset, ids: ids)
+	let table = ids.mint()
+	module.appendOp(entry, op: StdOp.rdataAddr(table, label: globalData.labelBytesOf(label)))
+	module.setTerminator(entry, op: StdOp.ret(emitInterfaceHandleBox(module, block: entry, mbox: mbox, table: table, ids: ids)))
+	module.functions.push(func)
+end 'buildInterfaceHandleConversion'
+
+function buildInterfaceSendStub(module StdModule, name ByteArray, serviceTag ParsedInt)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	emitParams(module, block: entry, count: 2)
+	let mbox = 0 as ValueId
+	let request = 1 as ValueId
+
+	emitStoreField(module, block: entry, record: request, offset: UnionTagOffset, value: emitConst(module, block: entry, value: serviceTag, ids: ids))
+	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: MboxSendName, args: twoArgs(mbox, second: request)))
+	module.setTerminator(entry, op: StdOp.retVoid)
+	module.functions.push(func)
+end 'buildInterfaceSendStub'
 
 // ⭐⭐ **THE WAKE, WRITTEN ONCE FOR THE TWO EVENTS THAT OWE IT — an arriving envelope and a close.** Both
 // are "the parked receiver's reason for waiting has changed", and both must perform the wake in exactly the

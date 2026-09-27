@@ -289,7 +289,7 @@ function buildServiceDrain(fn SynthesizedFunction, project Project, signatures P
 	let teardown = fn.openBlock(b"finished")
 	fn.terminateBlock(drain, op: MaxonOp.condBranch(drained, thenBlockId: teardown.id, elseBlockId: abandonOne.id), range: range)
 
-	// The state was MOVED into this thread at the `spawn` (`Parser.moveIntoGreenThread`), so this frame is
+	// The state was MOVED into this thread at the `spawn` (`Parser.handIntoGreenThread`), so this frame is
 	// its one owner and this is the drop that pairs with that move.
 	fn.emitPositionalCallDiscarding(managedFieldDropCallee(signatures, typeNames: project.typeNames, fieldType: stateType), args: argsOf(ServiceStateParam), range: range)
 	fn.emitPositionalCallDiscarding(MboxServiceExitName, args: argsOf(ServiceMailboxParam), range: range)
@@ -709,7 +709,7 @@ function emitFusedHandlerFlag(fn SynthesizedFunction, signatures ProgramSignatur
 end 'emitFusedHandlerFlag'
 
 // ⭐⭐ **DROP EVERY MANAGED PAYLOAD THE HANDLER DID NOT TAKE OWNERSHIP OF.** The request box holds exactly
-// one reference to each of its managed payloads — the one the send moved in (`Parser.moveIntoGreenThread`) or
+// one reference to each of its managed payloads — the one the send moved in (`Parser.handIntoGreenThread`) or
 // took for a lend (`Parser.lendIntoGreenThread`) — and the handler either consumed it or borrowed it. A
 // borrowed one is still this loop's to release, through the ordinary drop, and releasing it is what balances
 // the move or the lend.

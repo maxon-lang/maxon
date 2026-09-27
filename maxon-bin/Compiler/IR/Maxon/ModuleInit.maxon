@@ -56,32 +56,39 @@ function tagNamesAnIndexInternedType(tag ValueTypeTag) returns bool
 	return tag == ValueTypeTag.named or tagNamesADeclaredType(tag) or tag == ValueTypeTag.interfaceRef or tag == ValueTypeTag.function
 end 'tagNamesAnIndexInternedType'
 
-// The two synthesized names. `__`-prefixed, so `isCompilerInternalCallee` treats them as the compiler's
+// The synthesized names. `__`-prefixed, so `isCompilerInternalCallee` treats them as the compiler's
 // own (no E3004, no signature slotting) and `TargetPrinter.isRuntimeFunction` keeps them out of every
-// golden fragment — a program with no managed global emits neither, so the corpus is unmoved.
+// golden fragment — a program with no managed global and no live `default` emits none, so the corpus is unmoved.
 export let ModuleInitName = b"__module_init"
 export let GlobalCleanupName = b"__maxon_global_cleanup"
+export let RegistryReleaseName = b"__maxon_registry_release"
 
 // `__maxon_global_cleanup`'s single parameter — `main`'s ExitCode — occupying the ValueId the parameter
 // numbering reserves for argument 0. See `buildGlobalCleanup` for why the function takes and returns it.
 let ExitCodeParam = 0 as ValueId
 
-// ⭐ **BUILD BOTH FUNCTIONS INTO `module`, AND ANSWER WHETHER THE PROGRAM HAS ANY.** The single bit every
+// ⭐ **BUILD THE FUNCTIONS INTO `module`, AND ANSWER WHETHER THE PROGRAM HAS ANY.** The single bit every
 // entry stub reads (`RuntimeUsage.usesManagedGlobals`), decided HERE — where the arena is walked — rather
 // than re-derived downstream by probing the module for a function name. That is the same discipline
 // `BackendDispatch`'s header states for the GT/leak gates, and for the reason it states: dead-function
 // elimination can take an installed function back out, so "is it still there?" is not the same question as
 // "was it installed?".
 //
-// A program with no managed global builds NOTHING — no functions, no ops, no `.data` — which is what keeps
-// the entire existing corpus byte-neutral.
-export function installManagedGlobalInit(module MaxonModule, project Project, globals ManagedGlobalArray, sharedLets SharedLetArray) returns bool
-	if globals.count() == 0 'noManagedGlobals'
+// A program with no managed global and no live `default` builds NOTHING — no functions, no ops, no `.data`
+// — which is what keeps the entire existing corpus byte-neutral.
+export function installManagedGlobalInit(module MaxonModule, project Project, globals ManagedGlobalArray, sharedLets SharedLetArray, defaults DefaultSlotArray) returns bool
+	if globals.count() == 0 and defaults.count() == 0 'noManagedGlobals'
 		return false
 	end 'noManagedGlobals'
 
-	buildModuleInit(module, project: project, globals: globals, sharedLets: sharedLets)
-	buildGlobalCleanup(module, project: project, globals: globals)
+	let range = anchorRange(globals, defaults: defaults)
+	buildModuleInit(module, project: project, globals: globals, sharedLets: sharedLets, defaults: defaults, range: range)
+	buildGlobalCleanup(module, project: project, globals: globals, range: range)
+
+	if defaults.count() > 0 'aRegistry'
+		buildRegistryRelease(module, project: project, defaults: defaults, range: range)
+	end 'aRegistry'
+
 	return true
 end 'installManagedGlobalInit'
 
@@ -145,7 +152,7 @@ end 'letShareWalksOf'
 // `GlobalInitOrder.dependencyOrderedGlobals` is what settles that, over the merged module's call graph, and
 // it is the caller's to apply: this function emits the array it is handed, in the order it is handed. A
 // cycle has no such order and is refused there rather than reaching this loop.
-function buildModuleInit(module MaxonModule, project Project, globals ManagedGlobalArray, sharedLets SharedLetArray)
+function buildModuleInit(module MaxonModule, project Project, globals ManagedGlobalArray, sharedLets SharedLetArray, defaults DefaultSlotArray, range SourceRange)
 	var fn = SynthesizedFunction.open(module, project: project, name: ModuleInitName, returnType: MaxonReturnType.void, paramTypes: MaxonTypeArray.create())
 
 	for global in globals 'eachGlobal'
@@ -154,11 +161,64 @@ function buildModuleInit(module MaxonModule, project Project, globals ManagedGlo
 	end 'eachGlobal'
 
 	if sharedLets.count() > 0 'messagesReadTheLets'
-		markLetsShared(fn, sharedLets: sharedLets, range: anchorRange(globals))
+		markLetsShared(fn, sharedLets: sharedLets, range: range)
 	end 'messagesReadTheLets'
 
-	fn.terminate(MaxonOp.retVoid, range: anchorRange(globals))
+	// After the marks: a `default` may spawn, and a service started before them could step a plain
+	// count concurrently with the mark — E3164's reason. The order among the defaults is
+	// `GlobalInitOrder.dependencyOrderedDefaults`'.
+	for slot in defaults 'eachDefault'
+		buildDefault(fn, slot: slot)
+	end 'eachDefault'
+
+	fn.terminate(MaxonOp.retVoid, range: range)
 end 'buildModuleInit'
+
+function buildDefault(fn SynthesizedFunction, slot DefaultSlot)
+	let range = slot.declaration.keyRange
+	let value = fn.emitPositionalCall(slot.initializer, args: ValueIdArray.create(), resultTag: maxonTypeTag(slot.valueType), resultNameId: typeNameIdOf(slot.valueType), range: range)
+	let slotAddr = fn.emitLabelAddr(slot.label, range: range)
+
+	match slot.kind 'kind'
+		service then fn.emitPositionalCallDiscarding(RegistryServiceInstallName, args: pairArgs(slotAddr, second: value), range: range)
+		value(dropCallee, retainCallee, shareWalk) then buildDefaultValue(fn, value: value, slotAddr: slotAddr, dropCallee: dropCallee, retainCallee: retainCallee, shareWalk: shareWalk, range: range)
+	end 'kind'
+end 'buildDefault'
+
+function buildDefaultValue(fn SynthesizedFunction, value ValueId, slotAddr ValueId, dropCallee ByteArray, retainCallee ByteArray, shareWalk TransferWalk, range SourceRange)
+	// Marked before the install publishes it: from then on any thread may retain it.
+	emitDefaultShareWalk(fn, value: value, shareWalk: shareWalk, range: range)
+
+	var installArgs = ValueIdArray.create()
+	installArgs.push(slotAddr)
+	installArgs.push(value)
+	installArgs.push(runtimeFunctionOrNone(fn, callee: dropCallee, range: range))
+	installArgs.push(runtimeFunctionOrNone(fn, callee: retainCallee, range: range))
+	fn.emitPositionalCallDiscarding(SharedValueInstallName, args: installArgs, range: range)
+end 'buildDefaultValue'
+
+function emitDefaultShareWalk(fn SynthesizedFunction, value ValueId, shareWalk TransferWalk, range SourceRange)
+	match shareWalk 'walk'
+		closed then return
+		walkedBy(callee) then emitSettledWalk(fn, value: value, walk: callee, range: range)
+		walkedAlone(callee) then fn.emitPositionalCallDiscarding(callee, args: singletonArgs(value), range: range)
+		walkedThroughWitness then panic("emitDefaultShareWalk: a registry value is a declared struct, and a declared struct's graph is walked by its own per-type walk rather than through a witness")
+		refused then panic("emitDefaultShareWalk: `Parser.requireShareableRegistryValue` refuses a key no share walk can mark (E3171)")
+	end 'walk'
+end 'emitDefaultShareWalk'
+
+function emitSettledWalk(fn SynthesizedFunction, value ValueId, walk ByteArray, range SourceRange)
+	let visits = fn.emitPositionalCall(walk, args: pairArgs(value, second: fn.emitTypedLiteral(NoVisitTable, valueType: MaxonType.integer, range: range)), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+	fn.emitPositionalCallDiscarding(WalkSettleName, args: singletonArgs(visits), range: range)
+end 'emitSettledWalk'
+
+function runtimeFunctionOrNone(fn SynthesizedFunction, callee ByteArray, range SourceRange) returns ValueId
+	if callee.isEmpty() 'noFunction'
+		return fn.emitTypedLiteral(NoRuntimeFunction, valueType: MaxonType.integer, range: range)
+	end 'noFunction'
+
+	return fn.emitRuntimeFuncAddr(callee, range: range)
+end 'runtimeFunctionOrNone'
 
 // ⭐⭐ **EVERY MARKABLE `let` RECORD IS MARKED SHARED BEFORE `main` RUNS**, so the count every message steps on it
 // is atomic; no other green thread exists yet, because a `spawn` a global initializer can reach is refused
@@ -624,10 +684,8 @@ end 'elementRecordOf'
 //
 // Every decref is unconditional and nothing here tests a slot for null: `__module_init` fills every slot in
 // this list before `main`, so a null guard would test a condition the program cannot be in.
-function buildGlobalCleanup(module MaxonModule, project Project, globals ManagedGlobalArray)
-	var paramTypes = MaxonTypeArray.create()
-	paramTypes.push(MaxonType.integer)
-	var fn = SynthesizedFunction.open(module, project: project, name: GlobalCleanupName, returnType: MaxonReturnType.value(MaxonType.integer), paramTypes: paramTypes)
+function buildGlobalCleanup(module MaxonModule, project Project, globals ManagedGlobalArray, range SourceRange)
+	var fn = openExitCodePassThrough(module, project: project, name: GlobalCleanupName)
 
 	for global in globals 'eachGlobal'
 		if not global.owesCleanupDrop 'theSlotHoldsAValue'
@@ -639,15 +697,42 @@ function buildGlobalCleanup(module MaxonModule, project Project, globals Managed
 		fn.emitPositionalCallDiscarding(global.dropCallee, args: singletonArgs(record), range: global.range)
 	end 'eachGlobal'
 
-	fn.terminate(MaxonOp.ret(ExitCodeParam), range: anchorRange(globals))
+	fn.terminate(MaxonOp.ret(ExitCodeParam), range: range)
 end 'buildGlobalCleanup'
 
+function openExitCodePassThrough(module MaxonModule, project Project, name ByteArray) returns SynthesizedFunction
+	var paramTypes = MaxonTypeArray.create()
+	paramTypes.push(MaxonType.integer)
+	return SynthesizedFunction.open(module, project: project, name: name, returnType: MaxonReturnType.value(MaxonType.integer), paramTypes: paramTypes)
+end 'openExitCodePassThrough'
+
+function buildRegistryRelease(module MaxonModule, project Project, defaults DefaultSlotArray, range SourceRange)
+	var fn = openExitCodePassThrough(module, project: project, name: RegistryReleaseName)
+
+	for slot in defaults 'eachDefault'
+		let slotAddr = fn.emitLabelAddr(slot.label, range: slot.declaration.keyRange)
+		let release = match slot.kind 'kind'
+			service gives RegistryServiceReleaseName
+			value gives SharedValueRegistryReleaseName
+		end 'kind'
+
+		fn.emitPositionalCallDiscarding(release, args: singletonArgs(slotAddr), range: slot.declaration.keyRange)
+	end 'eachDefault'
+
+	fn.terminate(MaxonOp.ret(ExitCodeParam), range: range)
+end 'buildRegistryRelease'
+
 // The span a synthesized function's TERMINATOR carries. No source token spawns a `return` that the user
-// did not write, so it rides the FIRST global's initializer — the declaration that caused the whole
-// function to exist. The caller has already established the list is non-empty (`installManagedGlobalInit`
-// builds nothing for an empty one), so the miss is an invariant break rather than a case.
-function anchorRange(globals ManagedGlobalArray) returns SourceRange
-	return (try globals.get(0) otherwise panic("anchorRange: the managed-global list is empty — `installManagedGlobalInit` returns before building a function when it is")).range
+// did not write, so it rides the FIRST global's initializer — or, with none, the first `default`'s
+// key — the declaration that caused the whole function to exist. The caller has already established
+// the lists are not both empty (`installManagedGlobalInit` builds nothing then), so the miss is an
+// invariant break rather than a case.
+function anchorRange(globals ManagedGlobalArray, defaults DefaultSlotArray) returns SourceRange
+	if let global = try globals.get(0) 'aManagedGlobal'
+		return global.range
+	end 'aManagedGlobal'
+
+	return (try defaults.get(0) otherwise panic("anchorRange: no managed global and no default — `installManagedGlobalInit` returns before building a function when both lists are empty")).declaration.keyRange
 end 'anchorRange'
 
 // ⭐ **A MAXON FUNCTION BUILT BY THE COMPILER RATHER THAN PARSED** — the emit + value-minting discipline
@@ -789,10 +874,14 @@ export type SynthesizedFunction
 	// compiler accepted. The OFFSET is not repeated for the same reason: `GlobalSlotOffset` is the one
 	// constant both stores and loads spell.
 	function emitSlotAddr(global ManagedGlobal) returns ValueId
-		let addr = self.mintOfType(MaxonType.integer)
-		self.emit(MaxonOp.globalAddr(addr, label: global.label), range: global.range)
-		return addr
+		return self.emitLabelAddr(global.label, range: global.range)
 	end 'emitSlotAddr'
+
+	function emitLabelAddr(label ByteArray, range SourceRange) returns ValueId
+		let addr = self.mintOfType(MaxonType.integer)
+		self.emit(MaxonOp.globalAddr(addr, label: label), range: range)
+		return addr
+	end 'emitLabelAddr'
 
 	// Pair a value held at an interface type with the value holding its witness half —
 	// `Parser.pairInterfaceWitness`'s twin over this carrier's function, whose column the lowering reads

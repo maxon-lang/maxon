@@ -72,13 +72,14 @@
 // table or an `.rdata` slot looks unreachable to it, and its own header records that it is exact for
 // stdlib source and not in general.
 //
-// ⭐ MEASURED, and it is the whole reason the term exists: with `stdlib/Log.maxon` listed — the module
-// whose `var capturing` / `var captured` this pass's own spec was written for — `function main() returns
-// ExitCode / return 7` emits **2,978 bytes of code against 1,592** without the term, an **+87%** tax on
-// a program that never mentions `Log`. Its globals are read only by `Log.trace`/`startCapture`/
-// `stopCapture`, every one of them unreachable, so the slots, the `__module_init` chain that builds the
-// array and the `__maxon_global_cleanup` drop are all built for nobody. With the term the two numbers are
-// equal — and every further listed module with unreachable top-level state is the same tax again.
+// ⭐ MEASURED, and it is the whole reason the term exists: with `stdlib/TraceCapture.maxon` listed —
+// the module whose `var capturing` / `var captured` this pass's own spec was written for —
+// `function main() returns ExitCode / return 7` emits **2,978 bytes of code against 1,592** without
+// the term, an **+87%** tax on a program that never mentions `TraceCapture`. Its globals are read
+// only by `TraceCapture.trace`/`startCapture`/`stopCapture`, every one of them unreachable, so the
+// slots, the `__module_init` chain that builds the array and the `__maxon_global_cleanup` drop are
+// all built for nobody. With the term the two numbers are equal — and every further listed module
+// with unreachable top-level state is the same tax again.
 
 // The `.data` labels live code can still name. Keyed by `ByteArray` because that is what both sides
 // already hold — the `globalAddr` op's `label` and `TopLevelDecl.dataLabel` are the same bytes, minted
@@ -101,7 +102,7 @@ export typealias LiveGlobalLabelSet = Set with ByteArray
 // per-compile TIME cost that allocates nothing, and a cost that allocates nothing is one `scale-test` is
 // structurally blind to. That argument is why the guard is written — but it cannot be TAKEN:
 // `storedGlobalCount` counts the WHOLE arena, stdlib included (`assignDataLabels`), and the listed
-// `stdlib/Log.maxon` declares `var capturing` and `var captured`. So every compile has a stored global
+// `stdlib/TraceCapture.maxon` declares `var capturing` and `var captured`. So every compile has a stored global
 // whether the user wrote one or not, and the guard stands as the statement of the empty case rather than
 // as a path anything takes. **The next listed module with top-level state does not make this worse; the
 // FIRST one already spent it.**

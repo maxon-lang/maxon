@@ -195,8 +195,6 @@ let MintedAtUnrecorded = "*(unrecorded)*"
 // rendered number that may carry a minus sign.
 export typealias Delta = int(i64.min to i64.max)
 
-typealias CivilPart = int(0 to u64.max)
-typealias DayCount = int(0 to u64.max)
 typealias GroupIndex = int(0 to u64.max)
 
 // A column of one of the log's markdown tables: 0 is `date`, 1 is `minted at`, 2 is `change`, and the
@@ -1033,61 +1031,6 @@ end 'groupDigits'
 // depending on who ran the command. An entry stamped a day "early" because the machine was in
 // Sydney is worse than one stamped in a timezone everyone can agree on.
 function todayUtc() returns String
-	let days = WallClock.nowUnixSeconds() / SecondsPerDay
-	let civil = civilFromDays(days as DayCount)
-	return "{civil.year}-{padTwo(civil.month)}-{padTwo(civil.day)}"
+	let civil = CivilDate.fromDays((WallClock.nowUnixSeconds() / SecondsPerDay) as UnixDays)
+	return "{civil.year}-{civil.month:02}-{civil.day:02}"
 end 'todayUtc'
-
-type CivilDate
-	export let year as CivilPart
-	export let month as CivilPart
-	export let day as CivilPart
-
-	static function create(year CivilPart, month CivilPart, day CivilPart) returns CivilDate
-		return Self{year: year, month: month, day: day}
-	end 'create'
-end 'CivilDate'
-
-// Days-since-the-Unix-epoch to a civil (proleptic Gregorian) date.
-//
-// This is Howard Hinnant's `civil_from_days`, and the reason it looks like nothing is because it is
-// doing something genuinely awkward: the Gregorian calendar's leap rule repeats on a 400-year ERA of
-// exactly 146097 days, but the year does not START where that cycle is easiest to count from. The
-// trick is to shift the epoch to 0000-03-01 (the +719468) so that the leap day lands at the END of
-// the year, which makes February's irregularity fall off the end of the arithmetic instead of
-// sitting in the middle of it. March is then month 0, and the last two lines put January and
-// February back where humans expect them.
-//
-// It is branch-free integer arithmetic, exact for every date, and it is not worth re-deriving. See
-// https://howardhinnant.github.io/date_algorithms.html#civil_from_days
-function civilFromDays(days DayCount) returns CivilDate
-	let shifted = days + 719468
-	let era = shifted / 146097
-	let dayOfEra = shifted - era * 146097
-	let yearOfEra = (dayOfEra - dayOfEra / 1460 + dayOfEra / 36524 - dayOfEra / 146096) / 365
-	let year = yearOfEra + era * 400
-	let dayOfYear = dayOfEra - (365 * yearOfEra + yearOfEra / 4 - yearOfEra / 100)
-
-	// Months counted from March, so a leap day cannot land in the middle of the sequence.
-	let marchMonth = (5 * dayOfYear + 2) / 153
-	let day = dayOfYear - (153 * marchMonth + 2) / 5 + 1
-
-	var month = marchMonth + 3
-	var calendarYear = year
-
-	if marchMonth >= 10 'januaryOrFebruary'
-		// March-relative months 10 and 11 are January and February — of the NEXT calendar year.
-		month = marchMonth - 9
-		calendarYear = year + 1
-	end 'januaryOrFebruary'
-
-	return CivilDate.create(calendarYear as CivilPart, month: month as CivilPart, day: day as CivilPart)
-end 'civilFromDays'
-
-function padTwo(value CivilPart) returns String
-	if value < 10 'single'
-		return "0{value}"
-	end 'single'
-
-	return "{value}"
-end 'padTwo'

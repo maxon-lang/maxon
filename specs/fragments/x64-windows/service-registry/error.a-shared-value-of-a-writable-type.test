@@ -1,0 +1,19 @@
+// Test: error.a-shared-value-of-a-writable-type
+type Config
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Config'
+
+typealias ConfigCell = SharedValue with Config
+
+function main() returns ExitCode
+	let cell = ConfigCell.create(Config.create(2))
+	return cell.current().n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3171: <fragment>:10:24: `Config` cannot be a registry value or a `SharedValue`: its field `n` is writable — every field must be a `let` of a type a share walk can mark

@@ -1,0 +1,74 @@
+/// Lightweight trace event capture for a program's own instrumentation.
+///
+/// This is not a logger (that is `Log`) — there are no severity levels, no categories, no
+/// output streams. It exists so a test can record the stable dotted keys a program emits at its own
+/// decision points and then verify that the internal path it expected executed.
+///
+/// Nothing in the standard library calls `trace`, so a capture holds only the keys the program emitted
+/// itself. `capturing` and `captured` are module-level `var`s, so a service message handler — and
+/// anything it calls — may not reach any function here (E3143).
+///
+/// Usage:
+///   function parseHeader(line String) returns bool
+///     if line.isEmpty() 'blank'
+///       TraceCapture.trace("parseHeader.blank")
+///       return false
+///     end 'blank'
+///
+///     return true
+///   end 'parseHeader'
+///
+///   TraceCapture.startCapture()
+///   let ok = parseHeader(first)
+///   let captured = TraceCapture.stopCapture()
+///   if not TraceCapture.fired(captured, key: "parseHeader.blank") 'missing'
+///     panic("the blank-line branch did not engage on this input")
+///   end 'missing'
+///
+/// Capture is off by default. When off, trace() is a single bool load + branch
+/// and returns immediately. Programs that never reference any `TraceCapture.*` function
+/// pay nothing: the dead-top-level-var pass drops `capturing` and `captured`
+/// along with their initializer's `__module_init` chain.
+/// @category System
+public typealias TraceKeyArray = Array with String
+
+var capturing = false
+var captured = TraceKeyArray.create()
+
+public type TraceCapture
+	/// Emit a trace key. No-op when capture is off.
+	/// Pass a stable identifier like "parseHeader.blank" — keys are matched
+	/// literally by tests, so they should not embed run-specific data.
+	public static function trace(key String)
+		if capturing 'on'
+			captured.push(key)
+		end 'on'
+	end 'trace'
+
+	/// Begin recording trace keys. Discards any previously captured keys.
+	public static function startCapture()
+		captured.clear()
+		capturing = true
+	end 'startCapture'
+
+	/// Stop recording and return the captured keys in emission order.
+	public static function stopCapture() returns TraceKeyArray
+		capturing = false
+		let result = captured.clone()
+		captured.clear()
+		return result
+	end 'stopCapture'
+
+	/// Predicate: did `key` appear at least once in `capturedKeys`?
+	/// Tests assert on this — never on counts or payloads — so a refactor that
+	/// legitimately changes how often a path fires does not break the suite.
+	public static function fired(capturedKeys TraceKeyArray, key String) returns bool
+		for emittedKey in capturedKeys 'scan'
+			if emittedKey == key 'match'
+				return true
+			end 'match'
+		end 'scan'
+
+		return false
+	end 'fired'
+end 'TraceCapture'

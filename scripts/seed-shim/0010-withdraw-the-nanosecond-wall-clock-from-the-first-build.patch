@@ -1,0 +1,20 @@
+# The seed knows no `__Builtins.currentUnixTimeNanos`, so it refuses `stdlib/Clock.maxon` at the one call that
+# asks it (E3004). The intrinsic is withdrawn at that call site alone: its parser arm, its name constant and
+# `runtime/Clock.maxon`'s `__clock_now_unix_ns` are left standing, so `C1` knows it and compiles the unshimmed
+# tree into `C2`.
+#
+# The shimmed reading is the whole-second calendar scaled to nanoseconds, so the first build's sub-second
+# digits read zero — a coarser clock, never a wrong second.
+diff --git a/stdlib/Clock.maxon b/stdlib/Clock.maxon
+index ef8f49099..7c86c69e8 100644
+--- a/stdlib/Clock.maxon
++++ b/stdlib/Clock.maxon
+@@ -95,7 +95,7 @@ public type WallClock
+ 
+ 	/// Nanoseconds since the Unix epoch, UTC, in steps of the host calendar's 100 ns tick.
+ 	public static function nowUnixNanos() returns UnixNanos
+-		return __Builtins.currentUnixTimeNanos()
++		return (__Builtins.currentUnixTimeSeconds() * NanosPerSecond) as UnixNanos
+ 	end 'nowUnixNanos'
+ 
+ 	/// `nanos` as an RFC 3339 UTC timestamp to the millisecond: `2026-09-26T12:34:56.789Z`.
