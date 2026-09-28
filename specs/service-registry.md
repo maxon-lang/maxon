@@ -1594,6 +1594,567 @@ typealias Integer = int(i64.min to i64.max)
 14
 ```
 
+<!-- test: error.a-spawned-service-missing-an-interface-message-is-a-diagnostic -->
+A spawned service that declares an interface it does not fully implement is refused like any other partial conformer, naming the missing requirement.
+```maxon
+typealias Count = int(0 to 1000)
+
+interface Pinger
+	function ping() returns Count
+end 'Pinger'
+
+type A implements Pinger
+	let n as Count
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	export function ping() returns Count
+		return self.n
+	end 'ping'
+end 'A'
+
+type B implements Pinger
+	let n as Count
+
+	static function create() returns Self
+		return Self{n: 9}
+	end 'create'
+
+	export function value() returns Count
+		return self.n
+	end 'value'
+end 'B'
+
+function main() returns ExitCode
+	let h = (spawn A.create()) as Pinger.handle
+	let b = spawn B.create()
+	print("{try await h.ping() otherwise 0}\n")
+	print("{try await b.value() otherwise 0}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:20:6: Partial interface implementation: type 'B' is missing 1 method(s):
+  - ping() returns Count
+```
+
+<!-- test: error.a-non-conforming-service-spawned-first-is-still-reported-as-partial -->
+The same program with the non-conforming service spawned first: the order of the spawns does not decide which diagnostic is reported.
+```maxon
+typealias Count = int(0 to 1000)
+
+interface Pinger
+	function ping() returns Count
+end 'Pinger'
+
+type A implements Pinger
+	let n as Count
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	export function ping() returns Count
+		return self.n
+	end 'ping'
+end 'A'
+
+type B implements Pinger
+	let n as Count
+
+	static function create() returns Self
+		return Self{n: 9}
+	end 'create'
+
+	export function value() returns Count
+		return self.n
+	end 'value'
+end 'B'
+
+function main() returns ExitCode
+	let b = spawn B.create()
+	let h = (spawn A.create()) as Pinger.handle
+	print("{try await h.ping() otherwise 0}\n")
+	print("{try await b.value() otherwise 0}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:20:6: Partial interface implementation: type 'B' is missing 1 method(s):
+  - ping() returns Count
+```
+
+<!-- test: error.a-non-conforming-service-as-the-handle-is-reported-as-partial -->
+The non-conforming service is declared first and is the one converted to the interface handle.
+```maxon
+typealias Count = int(0 to 1000)
+
+interface Pinger
+	function ping() returns Count
+end 'Pinger'
+
+type B implements Pinger
+	let n as Count
+
+	static function create() returns Self
+		return Self{n: 9}
+	end 'create'
+
+	export function value() returns Count
+		return self.n
+	end 'value'
+end 'B'
+
+type A implements Pinger
+	let n as Count
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	export function ping() returns Count
+		return self.n
+	end 'ping'
+end 'A'
+
+function main() returns ExitCode
+	let a = spawn A.create()
+	let h = (spawn B.create()) as Pinger.handle
+	print("{try await h.ping() otherwise 0}\n")
+	print("{try await a.ping() otherwise 0}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:8:6: Partial interface implementation: type 'B' is missing 1 method(s):
+  - ping() returns Count
+```
+
+<!-- test: error.an-interface-message-no-service-implements-is-refused -->
+When no service implementing the interface declares the requirement, the handle has no such message to send.
+```maxon
+typealias Count = int(0 to 1000)
+
+interface Pinger
+	function ping() returns Count
+end 'Pinger'
+
+type B implements Pinger
+	let n as Count
+
+	static function create() returns Self
+		return Self{n: 9}
+	end 'create'
+
+	export function value() returns Count
+		return self.n
+	end 'value'
+end 'B'
+
+function main() returns ExitCode
+	let h = (spawn B.create()) as Pinger.handle
+	let v = try await h.ping() otherwise 0
+	print("{v}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3136: <fragment>:22:22: `interface Pinger` requires `ping`, but no service implementing it declares `ping` as an `export` instance method, so `Pinger.handle` has no such message to send. Implement it on the service
+```
+
+<!-- test: error.a-withheld-interface-message-is-refused -->
+A service that declares the requirement as a private method withholds it: it is not a message, so the handle cannot send it.
+```maxon
+typealias Count = int(0 to 1000)
+
+interface Pinger
+	function ping() returns Count
+end 'Pinger'
+
+type A implements Pinger
+	let n as Count
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	function ping() returns Count
+		return self.n
+	end 'ping'
+end 'A'
+
+type B implements Pinger
+	let n as Count
+
+	static function create() returns Self
+		return Self{n: 9}
+	end 'create'
+
+	export function ping() returns Count
+		return self.n
+	end 'ping'
+end 'B'
+
+function main() returns ExitCode
+	let h = (spawn A.create()) as Pinger.handle
+	let b = spawn B.create()
+	let v = try await h.ping() otherwise 0
+	let w = try await b.ping() otherwise 0
+	print("{v} {w}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3136: <fragment>:35:22: `interface Pinger` requires `ping`, and `type A` implements it, but not as an `export` instance method — so it is not a message of `A`, and `Pinger.handle` cannot send it to every service behind it. Declare `ping` on `A` as an `export` instance method
+```
+<!-- test: a-withheld-interface-message-with-no-send-compiles -->
+The same conformers compile when nothing sends the withheld requirement through the handle.
+```maxon
+typealias Count = int(0 to 1000)
+
+interface Pinger
+	function ping() returns Count
+end 'Pinger'
+
+type A implements Pinger
+	let n as Count
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	function ping() returns Count
+		return self.n
+	end 'ping'
+end 'A'
+
+type B implements Pinger
+	let n as Count
+
+	static function create() returns Self
+		return Self{n: 9}
+	end 'create'
+
+	export function ping() returns Count
+		return self.n
+	end 'ping'
+end 'B'
+
+typealias PingerHandles = Array with Pinger.handle
+
+function main() returns ExitCode
+	var handles = PingerHandles.create()
+	handles.push((spawn A.create()) as Pinger.handle)
+	let b = spawn B.create()
+	let w = try await b.ping() otherwise 0
+	print("{handles.count()} {w}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 9
+```
+<!-- test: an-interface-handle-held-in-an-array-shuts-down-cleanly -->
+An interface handle held in an array element, beside a second service, shuts down cleanly when every conformer exports the requirement.
+```maxon
+typealias Count = int(0 to 1000)
+
+interface Pinger
+	function ping() returns Count
+end 'Pinger'
+
+type A implements Pinger
+	let n as Count
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	export function ping() returns Count
+		return self.n
+	end 'ping'
+end 'A'
+
+type B implements Pinger
+	let n as Count
+
+	static function create() returns Self
+		return Self{n: 9}
+	end 'create'
+
+	export function ping() returns Count
+		return self.n
+	end 'ping'
+end 'B'
+
+typealias PingerHandles = Array with Pinger.handle
+
+function main() returns ExitCode
+	var handles = PingerHandles.create()
+	handles.push((spawn A.create()) as Pinger.handle)
+	let b = spawn B.create()
+	let w = try await b.ping() otherwise 0
+	print("{handles.count()} {w}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 9
+```
+
+<!-- test: an-interface-handle-held-in-a-binding-shuts-down-cleanly -->
+An interface handle held in a binding and sent to, beside a second service, shuts down cleanly.
+```maxon
+typealias Count = int(0 to 1000)
+
+interface Pinger
+	function ping() returns Count
+end 'Pinger'
+
+type A implements Pinger
+	let n as Count
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	export function ping() returns Count
+		return self.n
+	end 'ping'
+end 'A'
+
+type B implements Pinger
+	let n as Count
+
+	static function create() returns Self
+		return Self{n: 9}
+	end 'create'
+
+	export function ping() returns Count
+		return self.n
+	end 'ping'
+end 'B'
+
+function main() returns ExitCode
+	let h = (spawn A.create()) as Pinger.handle
+	let b = spawn B.create()
+	let v = try await h.ping() otherwise 0
+	let w = try await b.ping() otherwise 0
+	print("{v} {w}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7 9
+```
+
+<!-- test: error.a-withheld-interface-message-spawned-first-is-refused -->
+The order of the spawns does not decide whether the withheld requirement is refused.
+```maxon
+typealias Count = int(0 to 1000)
+
+interface Pinger
+	function ping() returns Count
+end 'Pinger'
+
+type A implements Pinger
+	let n as Count
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	function ping() returns Count
+		return self.n
+	end 'ping'
+end 'A'
+
+type B implements Pinger
+	let n as Count
+
+	static function create() returns Self
+		return Self{n: 9}
+	end 'create'
+
+	export function ping() returns Count
+		return self.n
+	end 'ping'
+end 'B'
+
+function main() returns ExitCode
+	let b = spawn B.create()
+	let h = (spawn A.create()) as Pinger.handle
+	let v = try await h.ping() otherwise 0
+	let w = try await b.ping() otherwise 0
+	print("{v} {w}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3136: <fragment>:35:22: `interface Pinger` requires `ping`, and `type A` implements it, but not as an `export` instance method — so it is not a message of `A`, and `Pinger.handle` cannot send it to every service behind it. Declare `ping` on `A` as an `export` instance method
+```
+<!-- test: error.a-withheld-message-behind-a-default-is-refused-in-either-order -->
+A service reached only through a `default` still withholds a private requirement from the interface handle.
+```maxon
+typealias TonePitch = int(0 to 100)
+
+interface Tone
+	function pitch() returns TonePitch
+end 'Tone'
+
+type Loud implements Tone
+	var calls as TonePitch
+
+	static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	export function pitch() returns TonePitch
+		self.calls = self.calls + 1
+		return 9
+	end 'pitch'
+end 'Loud'
+
+type Soft implements Tone
+	var calls as TonePitch
+
+	static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	function pitch() returns TonePitch
+		self.calls = self.calls + 1
+		return 3
+	end 'pitch'
+end 'Soft'
+
+function main() returns ExitCode
+	let h = (spawn Loud.create()) as Tone.handle
+	let pitch = try await h.pitch() otherwise 0
+	return pitch
+end 'main'
+
+default Tone = spawn Soft.create()
+```
+```maxoncstderr
+error E3136: <fragment>:36:26: `interface Tone` requires `pitch`, and `type Soft` implements it, but not as an `export` instance method — so it is not a message of `Soft`, and `Tone.handle` cannot send it to every service behind it. Declare `pitch` on `Soft` as an `export` instance method
+```
+
+<!-- test: error.a-withheld-message-behind-a-default-declared-first-is-refused -->
+The same program with the `default` declared before `main`.
+```maxon
+typealias TonePitch = int(0 to 100)
+
+interface Tone
+	function pitch() returns TonePitch
+end 'Tone'
+
+type Loud implements Tone
+	var calls as TonePitch
+
+	static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	export function pitch() returns TonePitch
+		self.calls = self.calls + 1
+		return 9
+	end 'pitch'
+end 'Loud'
+
+type Soft implements Tone
+	var calls as TonePitch
+
+	static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	function pitch() returns TonePitch
+		self.calls = self.calls + 1
+		return 3
+	end 'pitch'
+end 'Soft'
+
+default Tone = spawn Soft.create()
+
+function main() returns ExitCode
+	let h = (spawn Loud.create()) as Tone.handle
+	let pitch = try await h.pitch() otherwise 0
+	return pitch
+end 'main'
+```
+```maxoncstderr
+error E3136: <fragment>:38:26: `interface Tone` requires `pitch`, and `type Soft` implements it, but not as an `export` instance method — so it is not a message of `Soft`, and `Tone.handle` cannot send it to every service behind it. Declare `pitch` on `Soft` as an `export` instance method
+```
+
+<!-- test: a-service-behind-a-derived-interface-widens-to-the-base-handle -->
+A service implementing a derived interface converts to its base interface's handle, beside a service implementing the base directly.
+```maxon
+typealias Count = int(0 to 1000)
+
+interface Pinger
+	function ping() returns Count
+end 'Pinger'
+
+interface Sub extends Pinger
+	function tag() returns Count
+end 'Sub'
+
+type A implements Sub
+	let n as Count
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	export function ping() returns Count
+		return self.n
+	end 'ping'
+
+	export function tag() returns Count
+		return 1
+	end 'tag'
+end 'A'
+
+type B implements Pinger
+	let n as Count
+
+	static function create() returns Self
+		return Self{n: 9}
+	end 'create'
+
+	export function ping() returns Count
+		return self.n
+	end 'ping'
+end 'B'
+
+function main() returns ExitCode
+	let b = spawn B.create()
+	let h = (spawn A.create()) as Pinger.handle
+	let v = try await h.ping() otherwise 0
+	let w = try await b.ping() otherwise 0
+	print("{v} {w}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7 9
+```
+
 <!-- test: error.two-defaults-for-one-key -->
 ```maxon
 // --- file: a.maxon

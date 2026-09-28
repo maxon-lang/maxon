@@ -274,11 +274,7 @@ module function lspVisibleFieldOf(signatures ProgramSignatures, owner ByteArray,
 end 'lspVisibleFieldOf'
 
 function visibleFieldIn(signatures ProgramSignatures, layout StructLayout, member ByteArray, readerPath FilePath) returns LspVisibleField
-	let index = layout.indexOfField(member)
-
-	if index >= layout.fieldCount() 'declaresNoSuchField'
-		return LspVisibleField.none
-	end 'declaresNoSuchField'
+	let index = try layout.indexOfField(member) otherwise return LspVisibleField.none
 
 	if not signatures.isVisibleFrom(layout.fieldTier(index), declFilePath: layout.declFilePath, readerFilePath: readerPath) 'hiddenHere'
 		return LspVisibleField.hidden

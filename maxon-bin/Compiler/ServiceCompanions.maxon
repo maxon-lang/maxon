@@ -907,7 +907,7 @@ module function serviceRosterRefusalMessage(verdict ServiceRosterVerdict, typeNa
 		rosterIsDispatchable then panic("serviceRosterRefusalMessage: asked for the words of a DISPATCHABLE roster on `type {String.from(typeName)}` — the caller refuses only the other arms")
 		messageIsOverloaded(methodName, declarationCount) then return "`{String.from(typeName)}.{String.from(methodName)}` is a message of the service `{String.from(typeName)}` and is declared {declarationCount} times. A message becomes ONE variant of the synthesized `{String.from(serviceRequestCompanionName(typeName))}` union, and one variant carries one payload shape — so an overloaded message has no single shape to become. Give the overloads distinct names"
 		messageParameterIsNotTransferable(methodName, paramName, noun) then return "parameter `{String.from(paramName)}` of the message `{String.from(typeName)}.{String.from(methodName)}` is {noun}, and this `spawn` makes `{String.from(typeName)}` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message"
-		messageReplyGraphIsNotWalkable(methodName, noun) then return serviceUnclosedRecordTransferMessage(serviceReplyBlame(typeName, methodName: methodName), source: "", noun: noun)
+		messageReplyGraphIsNotWalkable(methodName, noun) then return serviceUnclosedRecordTransferMessage(serviceReplyBlame(typeName, methodName: methodName), sourceClause: NoTransferSourceClause, noun: noun)
 		messageReplyAliasesServiceState(methodName, replyTypeName) then return serviceGenericReplyAliasesStateRefusal(typeName, methodName: methodName, replyTypeName: replyTypeName)
 		messageReplyIsNotCarriable(methodName, noun) then return "the message `{String.from(typeName)}.{String.from(methodName)}` declares {noun}, and this `spawn` makes `{String.from(typeName)}` a service — whose reply-bearing messages resolve through a CELL, a green thread that never runs, carrying one value word and one error word. Return an integer, a `String`, a struct or a service handle, and throw a payload-free `enum`; or drop the `returns` and `throws` clauses, which makes the message fire-and-forget and gives it no reply to carry"
 	end 'why'
@@ -928,15 +928,15 @@ let ServiceTransferLesson = "A send moves this value: the service becomes its on
 
 // The BORROWED half: this frame does not own the value at all. It names no type, because the rule is uniform
 // over borrows whatever their type (`Parser.handIntoGreenThread`, ⚖ user ruling).
-module function serviceBorrowedTransferMessage(blame String, source String) returns String
-	return "{blame} is BORROWED{serviceTransferSourceClause(source)} — read out of a field, an element or a parameter — so this frame does not own it. {ServiceTransferLesson}"
+module function serviceBorrowedTransferMessage(blame String, sourceClause String) returns String
+	return "{blame} is BORROWED{sourceClause} — read out of a field, an element or a parameter — so this frame does not own it. {ServiceTransferLesson}"
 end 'serviceBorrowedTransferMessage'
 
 // The CO-OWNED half: this frame owns a reference, but not provably the only one. Both arrivals are named
 // because the cure differs between them — a second reference taken HERE is one the author can see and remove,
 // while a value that crossed a frame boundary cannot be proven sole from here at all and needs the clone.
-module function serviceSharedTransferMessage(blame String, source String) returns String
-	return "{blame} cannot be proven to have exactly one owner{serviceTransferSourceClause(source)}: this frame has either taken a SECOND reference to it — a container push, a closure capture, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). {ServiceTransferLesson}"
+module function serviceSharedTransferMessage(blame String, sourceClause String) returns String
+	return "{blame} cannot be proven to have exactly one owner{sourceClause}: this frame has either taken a SECOND reference to it — a container push, a closure capture, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). {ServiceTransferLesson}"
 end 'serviceSharedTransferMessage'
 
 // ⭐⭐ **THE THIRD HALF, AND THE ONLY ONE THAT IS ABOUT WHAT THE RECORD *HOLDS*.** The two sentences above
@@ -951,15 +951,17 @@ end 'serviceSharedTransferMessage'
 //
 // ⚠ **IT NAMES NO `.clone()`, WHICH IS WHY IT DOES NOT QUOTE `ServiceTransferLesson`.** Every shape it
 // refuses is refused for a property of the TYPE, so a clone of the same type is refused identically.
-module function serviceUnclosedRecordTransferMessage(blame String, source String, noun String) returns String
-	return "{blame} is {noun}{serviceTransferSourceClause(source)}. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it"
+module function serviceUnclosedRecordTransferMessage(blame String, sourceClause String, noun String) returns String
+	return "{blame} is {noun}{sourceClause}. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it"
 end 'serviceUnclosedRecordTransferMessage'
 
-// The source binding named in parentheses, or nothing at all when no binding holds the value (a temporary, an
-// element read). Split out because both sentences name the source and an author reading two spellings of one
-// fact would read them as two findings.
-function serviceTransferSourceClause(source String) returns String
-	return "" if source.isEmpty() else " (`{source}`)"
+// The source binding named in parentheses, or `NoTransferSourceClause` when no binding holds the value (a
+// temporary, an element read). Split out because both sentences name the source and an author reading two
+// spellings of one fact would read them as two findings.
+module let NoTransferSourceClause = ""
+
+module function serviceTransferSourceClause(source String) returns String
+	return " (`{source}`)"
 end 'serviceTransferSourceClause'
 
 // ⭐ **WHAT A `spawn`'s STATE IS, in the words its refusal needs.** A spawn transfers exactly one value and
@@ -968,6 +970,14 @@ end 'serviceTransferSourceClause'
 module function serviceSpawnStateBlame(typeName ByteArray, member ByteArray) returns String
 	return "the state `spawn {String.from(typeName)}.{String.from(member)}(…)` would start the service with"
 end 'serviceSpawnStateBlame'
+
+module function interfaceMessageUnimplementedRefusal(interfaceName ByteArray, handleName ByteArray, member ByteArray) returns String
+	return "`interface {String.from(interfaceName)}` requires `{String.from(member)}`, but no service implementing it declares `{String.from(member)}` as an `export` instance method, so `{String.from(handleName)}` has no such message to send. Implement it on the service"
+end 'interfaceMessageUnimplementedRefusal'
+
+module function interfaceMessageWithheldRefusal(interfaceName ByteArray, handleName ByteArray, member ByteArray, withholder ByteArray) returns String
+	return "`interface {String.from(interfaceName)}` requires `{String.from(member)}`, and `type {String.from(withholder)}` implements it, but not as an `export` instance method — so it is not a message of `{String.from(withholder)}`, and `{String.from(handleName)}` cannot send it to every service behind it. Declare `{String.from(member)}` on `{String.from(withholder)}` as an `export` instance method"
+end 'interfaceMessageWithheldRefusal'
 
 // ⭐⭐ **THE WORDS FOR A MEMBER THAT IS NOT ON THE HANDLE (SV1 wave 3).** It is neither a missing field nor
 // an undefined function, and saying either would read as a typo: the member exists on the TYPE and the
@@ -1239,11 +1249,7 @@ end 'ServiceReplySlotIndex'
 // then — and this is the site that makes it due.
 module function serviceStoppedErrorFlag(signatures ProgramSignatures) returns ParsedInt
 	let layout = serviceReplyErrorLayout(signatures, errorName: ServiceErrorTypeName)
-	let index = layout.indexOfCase(ServiceErrorStoppedCaseName)
-
-	if index >= layout.caseCount() 'noStoppedCase'
-		panic("serviceStoppedErrorFlag: `enum {String.from(ServiceErrorTypeName)}` declares no `{String.from(ServiceErrorStoppedCaseName)}` case — `stdlib/Builtins.maxon` declares it and `Project.BuiltinErrorOrdinalCheck` verifies the transcription, so reaching here means the stdlib this program was compiled against is not the one that declares it")
-	end 'noStoppedCase'
+	let index = try layout.indexOfCase(ServiceErrorStoppedCaseName) otherwise panic("serviceStoppedErrorFlag: `enum {String.from(ServiceErrorTypeName)}` declares no `{String.from(ServiceErrorStoppedCaseName)}` case — `stdlib/Builtins.maxon` declares it and `Project.BuiltinErrorOrdinalCheck` verifies the transcription, so reaching here means the stdlib this program was compiled against is not the one that declares it")
 
 	return layout.tagOfIndex(index) + ErrorFlagOrdinalBias
 end 'serviceStoppedErrorFlag'
@@ -1406,15 +1412,20 @@ end 'serviceRequestLayoutOf'
 // ⚠ Variant 0 is the compiler's own `__shutdown` pill and is not a message. It is `__`-prefixed, so no
 // source may declare it and no author may name it (E2051); refusing it here is the structural backstop
 // for a spelling that arrives anyway, and it answers as an absent member does.
-module function serviceMessageCaseIndex(request EnumLayout, member ByteArray) returns CaseIndex
-	let caseIndex = request.indexOfCase(member)
+module function serviceMessageCaseIndex(request EnumLayout, member ByteArray) returns CaseIndex throws MapError
+	let caseIndex = try request.indexOfCase(member)
 
-	if caseIndex >= request.caseCount() or caseIndex == ServiceShutdownCaseIndex 'namesNoMessage'
-		return request.caseCount()
+	if caseIndex == ServiceShutdownCaseIndex 'namesNoMessage'
+		throw MapError.keyNotFound
 	end 'namesNoMessage'
 
 	return caseIndex
 end 'serviceMessageCaseIndex'
+
+function serviceDeclaresMessage(request EnumLayout, member ByteArray) returns bool
+	try serviceMessageCaseIndex(request, member: member) otherwise return false
+	return true
+end 'serviceDeclaresMessage'
 
 // Everything an author may spell on a `<T>.handle`: the service's messages, plus the handle's own
 // `shutdown` and `clone`. `serviceHandleAdmits` below is the same roster asked about ONE name, and
@@ -1438,7 +1449,7 @@ module function serviceHandleSurface(request EnumLayout) returns ByteArrayArray
 end 'serviceHandleSurface'
 
 module function serviceHandleAdmits(request EnumLayout, member ByteArray) returns bool
-	return serviceMessageCaseIndex(request, member: member) < request.caseCount() or member.equals(ServiceShutdownMethodName) or member.equals(CloneMethodName)
+	return serviceDeclaresMessage(request, member: member) or member.equals(ServiceShutdownMethodName) or member.equals(CloneMethodName)
 end 'serviceHandleAdmits'
 
 // The request union's layout, or a panic, for a caller that holds a SPAWNED type: its companions were minted
@@ -1660,7 +1671,9 @@ function buildInterfaceHandleStruct(interfaceName ByteArray, visibility Visibili
 end 'buildInterfaceHandleStruct'
 
 module function synthesizeInterfaceRequestUnions(signatures ProgramSignatures)
-	for interfaceName in signatures.interfacesWithHandles() 'eachInterface'
+	let interfaceNames = signatures.interfacesWithHandles().clone()
+
+	for interfaceName in interfaceNames 'eachInterface'
 		if signatures.containsEnumInAnyFile(serviceRequestCompanionName(interfaceName)) 'alreadyMinted'
 			continue
 		end 'alreadyMinted'
@@ -1679,17 +1692,66 @@ function buildInterfaceRequestUnion(signatures ProgramSignatures, interfaceName 
 	let requirements = try signatures.interfaceRequirementSlots(interfaceName) otherwise CollectedInterfaceMethodArray.create()
 
 	for requirement in requirements 'eachRequirement'
-		let caseIndex = serviceMessageCaseIndex(concrete, member: requirement.method.name)
-
-		if caseIndex >= concrete.caseCount() or request.indexOfCase(requirement.method.name) < request.caseCount() 'notSendable'
+		if request.hasCase(requirement.method.name) 'alreadySendable'
 			continue
-		end 'notSendable'
+		end 'alreadySendable'
 
-		addServiceRequestCase(request, caseName: requirement.method.name, payloads: copiedPayloads(concrete.payloadsAt(caseIndex)))
+		let (source, caseIndex) = try interfaceMessageRepresentative(signatures, interfaceName: interfaceName, member: requirement.method.name) otherwise continue
+		addServiceRequestCase(request, caseName: requirement.method.name, payloads: copiedPayloads(requireServiceRequestLayout(signatures, typeName: source).payloadsAt(caseIndex)))
 	end 'eachRequirement'
 
 	return request
 end 'buildInterfaceRequestUnion'
+
+// The recorded representative first, then every other implementer on `serviceCompanionRoster` — the roster
+// `MailboxRuntime.installInterfaceHandleConversions` builds conversions over, so the services a send is
+// vetted against are exactly the services its handle can convert to.
+module function interfaceServiceImplementers(signatures ProgramSignatures, interfaceName ByteArray) returns ByteArrayArray
+	let recorded = signatures.interfaceHandleRepresentative(interfaceName)
+	var implementers = ByteArrayArray.create()
+	implementers.push(recorded)
+
+	for service in serviceCompanionRoster(signatures) 'eachService'
+		if service.equals(recorded) or not signatures.typeImplementsInterface(service, interfaceName: interfaceName) 'notAnotherImplementer'
+			continue
+		end 'notAnotherImplementer'
+
+		implementers.push(service)
+	end 'eachService'
+
+	return implementers
+end 'interfaceServiceImplementers'
+
+// An implementer that declares the requirement but not as an `export` instance method has no request case
+// for it, so its conversion would have no slot to fill; the send is refused (E3136) instead.
+module function interfaceMessageWithholder(signatures ProgramSignatures, interfaceName ByteArray, member ByteArray) returns ByteArray throws MapError
+	for service in interfaceServiceImplementers(signatures, interfaceName: interfaceName) 'eachImplementer'
+		if signatures.declaresCallee(qualifiedMethodName(service, methodName: member)) and not serviceDeclaresMessage(requireServiceRequestLayout(signatures, typeName: service), member: member) 'withholdsIt'
+			return service
+		end 'withholdsIt'
+	end 'eachImplementer'
+
+	throw MapError.keyNotFound
+end 'interfaceMessageWithholder'
+
+function interfaceMessageIsWithheld(signatures ProgramSignatures, interfaceName ByteArray, member ByteArray) returns bool
+	try interfaceMessageWithholder(signatures, interfaceName: interfaceName, member: member) otherwise return false
+	return true
+end 'interfaceMessageIsWithheld'
+
+module function interfaceMessageRepresentative(signatures ProgramSignatures, interfaceName ByteArray, member ByteArray) returns (ByteArray, CaseIndex) throws MapError
+	if interfaceMessageIsWithheld(signatures, interfaceName: interfaceName, member: member) 'anImplementerWithholdsIt'
+		throw MapError.keyNotFound
+	end 'anImplementerWithholdsIt'
+
+	for service in interfaceServiceImplementers(signatures, interfaceName: interfaceName) 'eachSender'
+		if let caseIndex = try serviceMessageCaseIndex(requireServiceRequestLayout(signatures, typeName: service), member: member) 'declaresIt'
+			return (service, caseIndex)
+		end 'declaresIt'
+	end 'eachSender'
+
+	throw MapError.keyNotFound
+end 'interfaceMessageRepresentative'
 
 function copiedPayloads(payloads PayloadFieldArray) returns PayloadFieldArray
 	var copy = PayloadFieldArray.create()

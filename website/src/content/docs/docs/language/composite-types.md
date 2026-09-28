@@ -202,6 +202,8 @@ qualification is inferred — there is no syntax and no annotation for it. A typ
 - it has at least one field;
 - the fields' storage widths sum to **64 bits or fewer**.
 
+A type the program `spawn`s is a heap record whatever its fields: it is the state its service loop owns.
+
 A field's storage width is the array-element ladder under [Storage](/docs/language/types/#storage): `bool` and `int(0 to 1)`
 take 1 bit, `int(0 to 3)` 2, `int(0 to 15)` 4, `int(0 to u8.max)` 8, `int(0 to u16.max)` 16,
 `int(0 to u32.max)` 32, anything wider 64, and `bits(n)` takes its own `n`.

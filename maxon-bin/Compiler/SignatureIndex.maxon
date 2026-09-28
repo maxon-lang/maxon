@@ -2707,20 +2707,11 @@ end 'ScopedGenericInstance'
 // then stays what it was, and the ordinary refusals speak for it — a positioned `E3005` at the
 // reference.
 //
-// A linear scan over both, for `Parser.typeParamPositionOf`'s reason: a type declares a handful of
-// parameters, so a name→index map would be a heap object bought to serve one or two lookups.
+// A linear scan over both: a type declares a handful of parameters, so a name→index map would be a heap
+// object bought to serve one or two lookups.
 function scopeBindsEveryTypeParam(paramNames ByteArrayArray, scopeParamNames ByteArrayArray) returns bool
 	for paramName in paramNames 'eachParam'
-		var bound = false
-
-		for scopeName in scopeParamNames 'eachScopeName'
-			if scopeName.equals(paramName) 'hit'
-				bound = true
-				break
-			end 'hit'
-		end 'eachScopeName'
-
-		if not bound 'notInScope'
+		if not namesInclude(scopeParamNames, name: paramName) 'notInScope'
 			return false
 		end 'notInScope'
 	end 'eachParam'
@@ -3752,7 +3743,7 @@ end 'typeParamTokenFor'
 // a lookup. `ProgramSignatures.typeParamOwnerOf` is the OTHER direction (a caller holding only a token) and
 // they are not two spellings of one rule: they differ in what is available, not in what is true.
 //
-// A linear scan, for `Parser.typeParamPositionOf`'s reason: a declaration names a handful of parameters.
+// A linear scan: a declaration names a handful of parameters.
 // Absence is a THROW rather than a `count()` sentinel — `IrInterface.namePositionIn`'s rule, and
 // its reason: a sentinel index is exactly the shape that let a POSITION stand in for an IDENTITY here.
 export function typeParamPositionIn(token TypeParamId, declarationName ByteArray, paramNames ByteArrayArray) returns TypeParamPosition throws MapError
@@ -3767,26 +3758,10 @@ export function typeParamPositionIn(token TypeParamId, declarationName ByteArray
 	throw MapError.keyNotFound
 end 'typeParamPositionIn'
 
-// ⭐ **THE EXISTENCE HALF OF THE DOOR ABOVE — "does `token` name ANY parameter of `declarationName`?"**
-//
-// ⚠ **IT IS ITS OWN DOOR AND NOT A DISCARDED `typeParamPositionIn`, AND THAT IS A LANGUAGE RULE, NOT A
-// PREFERENCE.** `typeParamPositionIn` is PURE, and a pure function's result may not be dropped in ANY
-// spelling: `_ = f()` and `if let _ = try f()` are both E3064, and an `if try f()` is E3124. The rule's
-// whole point is that a pure call whose answer nobody wants is the WRONG
-// call — so the caller that wants only WHETHER gets a function that answers only that.
-//
-// The two do not duplicate the RULE: what makes a token name a parameter is `typeParamTokenFor`, which both
-// ask and neither states. What differs is only the answer's shape, which is the same reason both exist.
+// Built on `typeParamPositionIn` for `IrInterface.namesInclude`'s reason.
 export function namesTypeParamOf(token TypeParamId, declarationName ByteArray, paramNames ByteArrayArray) returns bool
-	for i in 0 upto paramNames.count() 'eachParam'
-		let paramName = try paramNames.get(i) otherwise panic("namesTypeParamOf: paramNames.get OOB at {i} below count {paramNames.count()}")
-
-		if typeParamTokenFor(declarationName, paramName: paramName) == token 'thisOne'
-			return true
-		end 'thisOne'
-	end 'eachParam'
-
-	return false
+	try typeParamPositionIn(token, declarationName: declarationName, paramNames: paramNames) otherwise return false
+	return true
 end 'namesTypeParamOf'
 
 // ⭐ **WHAT MINTED A TYPE-PARAMETER TOKEN — the reverse of `typeParamTokenFor`, and the record that makes a
@@ -3975,7 +3950,7 @@ export type ParamConsumeInfo
 	end 'anyFeed'
 
 	// The type-parameter position parameter `index` feeds, or `none` — the concrete-site managed-consume
-	// map. Out of range (a non-generic function's empty `feeds`, an unknown label) answers `none`, exactly
+	// map. Out of range (a non-generic function's empty `feeds`) answers `none`, exactly
 	// as `isConsumed` answers `false` for its short `bits`.
 	export function typeParamFeedOf(index ParamCount) returns TypeParamFeed
 		if index >= self.feeds.count() 'past'
@@ -4734,6 +4709,43 @@ end 'ParamDefaultEntry'
 export typealias ParamDefaultEntryArray = Array with ParamDefaultEntry
 export typealias ParamDefaultMap = Map with (ByteArray, ParamDefaultInfo)
 
+export type TypeParamSlots
+	var positions as TypeParamPositionArray
+	var typed as BoolArray
+
+	export static function create() returns TypeParamSlots
+		return Self{positions: TypeParamPositionArray.create(), typed: BoolArray.create()}
+	end 'create'
+
+	export function pushTypeParameter(position TypeParamPosition)
+		self.positions.push(position)
+		self.typed.push(true)
+	end 'pushTypeParameter'
+
+	export function pushConcrete()
+		self.positions.push(0)
+		self.typed.push(false)
+	end 'pushConcrete'
+
+	export function count() returns ParamCount
+		return self.typed.count()
+	end 'count'
+
+	// A slot past the recorded list reads as concrete: outside a generic type the parser records no slots
+	// at all (`Parser.emptyTypeParamPositions`).
+	export function namesATypeParameter(index ParamCount) returns bool
+		return try self.typed.get(index) otherwise false
+	end 'namesATypeParameter'
+
+	export function positionAt(index ParamCount) returns TypeParamPosition throws MapError
+		if not self.namesATypeParameter(index) 'aConcreteSlot'
+			throw MapError.keyNotFound
+		end 'aConcreteSlot'
+
+		return try self.positions.get(index) otherwise panic("TypeParamSlots.positionAt: positions.get OOB at {index} — the two columns are pushed in lockstep")
+	end 'positionAt'
+end 'TypeParamSlots'
+
 // ⭐⭐ **WHICH OF A METHOD'S PARAMETERS ARE DECLARED AS A BARE TYPE PARAMETER, AND WHICH `uses` SLOT EACH
 // NAMES (ARRR)** — the call-aligned `paramNames` (so a call site can slot a LABELLED argument to its
 // position before any `FuncSignature` exists, exactly as `ParamConsumeInfo` and `ParamDefaultInfo` do) and,
@@ -4759,18 +4771,15 @@ export typealias ParamDefaultMap = Map with (ByteArray, ParamDefaultInfo)
 export type OpaqueParamInfo
 	export let paramNames as ByteArrayArray
 
-	// One entry per CALL-ALIGNED slot: the parameter's position in the declaring type's `uses` list, or
-	// `typeParamCount` for a parameter declared with a concrete type. The sentinel is the count for
-	// `Parser.paramTypeParamPositionAt`'s reason — it is the value that walk already writes for a plain
-	// parameter, so this record stores what the sweep computed rather than a re-encoding of it.
-	export let positions as TypeParamPositionArray
+	// One entry per CALL-ALIGNED slot.
+	export let positions as TypeParamSlots
 
-	// The declaring type's `uses` ARITY — the boundary above, and the presence bit. Only
-	// `sharedNoOpaqueParams` has ZERO, because an info is built only when some position is BELOW the count,
-	// which requires the count to be positive.
+	// The declaring type's `uses` ARITY, and the presence bit. Only `sharedNoOpaqueParams` has ZERO,
+	// because an info is built only when some slot names a type parameter, which requires the count to be
+	// positive.
 	export let typeParamCount as TypeParamPosition
 
-	export static function create(paramNames ByteArrayArray, positions TypeParamPositionArray, typeParamCount TypeParamPosition) returns OpaqueParamInfo
+	export static function create(paramNames ByteArrayArray, positions TypeParamSlots, typeParamCount TypeParamPosition) returns OpaqueParamInfo
 		return Self{paramNames: paramNames, positions: positions, typeParamCount: typeParamCount}
 	end 'create'
 
@@ -4781,16 +4790,8 @@ export type OpaqueParamInfo
 		return self.typeParamCount > 0
 	end 'declaresATypeParameterParam'
 
-	// Is the parameter at call-slot `index` a bare type parameter? A slot past the recorded list reads as a
-	// plain one, exactly as `Parser.paramIsTypeParamTyped` reads a short positions array.
-	export function namesATypeParameter(index ParamCount) returns bool
-		return self.positionAt(index) < self.typeParamCount
-	end 'namesATypeParameter'
-
-	// The `uses` position that slot names — asked only past `namesATypeParameter`, which is the gate that
-	// makes the answer meaningful.
-	export function positionAt(index ParamCount) returns TypeParamPosition
-		return try self.positions.get(index) otherwise self.typeParamCount
+	export function positionAt(index ParamCount) returns TypeParamPosition throws MapError
+		return try self.positions.positionAt(index)
 	end 'positionAt'
 
 	// ⭐⭐ **DO TWO DECLARATIONS OF ONE NAME DESCRIBE THE SAME OPAQUE PARAMETERS?** — the test that keeps an
@@ -4813,9 +4814,15 @@ export type OpaqueParamInfo
 		end 'differentShape'
 
 		for i in 0 upto self.positions.count() 'eachPosition'
-			if self.positionAt(i) != other.positionAt(i) 'movedSlot'
+			if self.positions.namesATypeParameter(i) != other.positions.namesATypeParameter(i) 'retypedSlot'
 				return false
-			end 'movedSlot'
+			end 'retypedSlot'
+
+			if let position = try self.positionAt(i) 'aTypeParameterSlot'
+				if position != (try other.positionAt(i) otherwise panic("OpaqueParamInfo.matches: slot {i} names a type parameter on one side only, which the test above refused")) 'movedSlot'
+					return false
+				end 'movedSlot'
+			end 'aTypeParameterSlot'
 		end 'eachPosition'
 
 		return true
@@ -4834,7 +4841,7 @@ export typealias ContestedOpaqueParamNameSet = Set with ByteArray
 // reason: an instance per declaration would be one allocation per function in the program, on the sweep's
 // hottest path, for a record that says "nothing to do". It is READ-ONLY at every holder, which is what
 // separates a safe shared anchor from one a sweep writes through (see `Parser.setParamBit`).
-export let sharedNoOpaqueParams = OpaqueParamInfo.create(ByteArrayArray.create(), positions: TypeParamPositionArray.create(), typeParamCount: 0)
+export let sharedNoOpaqueParams = OpaqueParamInfo.create(ByteArrayArray.create(), positions: TypeParamSlots.create(), typeParamCount: 0)
 
 // ⭐ **THE NAMES WHOSE DECLARATIONS DISAGREE ABOUT THEIR DEFAULT SHAPE (W74).** The defaults registry is
 // keyed by the name the SOURCE wrote and is last-wins, exactly as `funcParamConsumes` is — so a name declared
@@ -5048,9 +5055,9 @@ end 'CalleeConsume'
 // The two askers are `Parser.transferConsumedArgs`, which needs the position anyway to report a
 // double-consume against it, and `ProgramSignatures.recordArgumentCleanup`, which needs only the answer.
 function calleeConsumesArgument(consume CalleeConsume, argIndex ParamCount, label ByteArray) returns bool
-	return match consume 'c'
-		borrowsAll gives false
-		consumes(info) gives info.isConsumed(argSlotPosition(info.paramNames, argIndex: argIndex, label: label))
+	match consume 'c'
+		borrowsAll then return false
+		consumes(info) then return info.isConsumed(try argSlotPosition(info.paramNames, argIndex: argIndex, label: label) otherwise return false)
 	end 'c'
 end 'calleeConsumesArgument'
 
@@ -5073,9 +5080,9 @@ end 'calleeConsumesArgument'
 // and drops the temp at statement end; `__module_init` has no statement, so the two net to the same one
 // reference by this frame taking none and releasing none.
 function calleeKeepsArgumentAtAFeed(consume CalleeConsume, argIndex ParamCount, label ByteArray) returns bool
-	return match consume 'c'
-		borrowsAll gives false
-		consumes(info) gives info.typeParamFeedOf(argSlotPosition(info.paramNames, argIndex: argIndex, label: label)).isFeed()
+	match consume 'c'
+		borrowsAll then return false
+		consumes(info) then return info.typeParamFeedOf(try argSlotPosition(info.paramNames, argIndex: argIndex, label: label) otherwise return false).isFeed()
 	end 'c'
 end 'calleeKeepsArgumentAtAFeed'
 
@@ -5113,9 +5120,9 @@ end 'forwardsIntoAMarkedNode'
 // entry — every runtime callee and, on a program that reassigns no parameter, every user function — and it
 // answers false without slotting anything.
 export function calleeTakesArgumentByRef(byRef CalleeByRefParams, argIndex ParamCount, label ByteArray, forwardingIsLive bool) returns bool
-	return match byRef 'b'
-		allByValue gives false
-		takesByRef(info) gives info.isByRef(argSlotPosition(info.paramNames, argIndex: argIndex, label: label), forwardingIsLive: forwardingIsLive)
+	match byRef 'b'
+		allByValue then return false
+		takesByRef(info) then return info.isByRef(try argSlotPosition(info.paramNames, argIndex: argIndex, label: label) otherwise return false, forwardingIsLive: forwardingIsLive)
 	end 'b'
 end 'calleeTakesArgumentByRef'
 
@@ -9943,60 +9950,57 @@ let QualifiedAliasSeparatorByte = 46
 // separator is never a continuation byte.
 typealias NameSeparatorByte = int(0 to 127)
 
-// ⭐ **THE INDEX OF THE LAST `separator` BYTE IN `name`, or `name.count()` when it holds none** — the ONE
-// scan EVERY separator-divided name in this file is answered from, so "does it divide?", "where?" and
-// "what is the part before it?" cannot come to disagree about which byte the separator is.
+// ⭐ **THE INDEX OF THE LAST `separator` BYTE IN `name`** — the scan every separator-divided name in this
+// file is split at, so "where?" and "what is the part before it?" cannot come to disagree about which byte
+// the separator is.
 //
-// ⚠ **IT TAKES THE SEPARATOR RATHER THAN NAMING ONE, BECAUSE THIS FILE MINTS TWO DIVIDED NAMESPACES AND
-// THE SECOND ARRIVED AS A COPY OF THIS SCAN (N2 review).** The "." divides a namespace-qualified name
-// (`lib.fmt.Score`) and the "$" divides a range-qualified element (`Byte$0_255`); they are two separators,
-// not two algorithms, and a second hand-rolled "find the byte, slice before it" is exactly the shape whose
-// copies drift into a WRONG ANSWER rather than a compile error — the split silently lands one byte off and
-// a name roster quietly stops matching.
+// ⚠ **IT TAKES THE SEPARATOR RATHER THAN NAMING ONE, BECAUSE THIS FILE MINTS TWO DIVIDED NAMESPACES.**
+// The "." divides a namespace-qualified name (`lib.fmt.Score`) and the "$" divides a range-qualified element
+// (`Byte$0_255`); they are two separators, not two algorithms, and a second hand-rolled "find the byte,
+// slice before it" is exactly the shape whose copies drift into a WRONG ANSWER rather than a compile error —
+// the split silently lands one byte off and a name roster quietly stops matching.
 //
-// ⚠ **THE *LAST*, NOT THE FIRST, AND THAT IS WHAT LIFTED THE TWO-SEGMENT CAP (N1b).** A namespace is a
-// DIRECTORY CHAIN — `lib.fmt.Score`, `lib.inner.deepHelper` — so the qualifier is everything before the
-// final separator and the member is the final segment. For the two-segment names that were the only ones
-// before that rung (`Wrapper.Idx`, `Point.create`) first and last are the same byte, so no existing answer
-// moves; for a three-segment one the last is the only split that names the member the author wrote.
+// ⚠ **THE *LAST*, NOT THE FIRST.** A namespace is a DIRECTORY CHAIN — `lib.fmt.Score`,
+// `lib.inner.deepHelper` — so the qualifier is everything before the final separator and the member is the
+// final segment. For a two-segment name (`Wrapper.Idx`, `Point.create`) first and last are the same byte;
+// for a three-segment one the last is the only split that names the member the author wrote.
 // For the "$" reader the two coincide unconditionally: a mint's base is a name `multiplyDeclared` holds,
 // and a mint itself is never contested (it has exactly one declaration), so no name carries two of them.
 //
 // An INDEX loop over a byte range, not `for b in name`: this is a per-named-value-coercion hot path, and an
 // index range allocates no iterator object where the collection form might.
-function lastSeparatorIndex(name ByteArray, separator NameSeparatorByte) returns ElementIndex
-	var found = name.count()
+function lastSeparatorIndex(name ByteArray, separator NameSeparatorByte) returns ElementIndex throws MapError
+	var i = name.count()
 
-	for i in 0 upto name.count() 'scan'
+	while i > 0 'scanBack'
+		i = i - 1
+
 		if (try name.get(i) otherwise panic("lastSeparatorIndex: get OOB despite i < count()")) == separator as Byte 'here'
-			found = i
+			return i
 		end 'here'
-	end 'scan'
+	end 'scanBack'
 
-	return found
+	throw MapError.keyNotFound
 end 'lastSeparatorIndex'
 
-// The index of the FIRST `separator` in `name`, or `name.count()` when there is none — `lastSeparatorIndex`'s
-// twin, and the one `sourceSpelledAliasName` divides at (see there for why the two ends differ). Written as
-// its own scan rather than derived from the other: an early return is what makes it stop at the first hit,
-// which is the entire difference between them.
-function firstSeparatorIndex(name ByteArray, separator NameSeparatorByte) returns ElementIndex
+// `lastSeparatorIndex`'s twin from the other end, and the one `sourceSpelledAliasName` divides at (see there
+// for why the two ends differ).
+function firstSeparatorIndex(name ByteArray, separator NameSeparatorByte) returns ElementIndex throws MapError
 	for i in 0 upto name.count() 'scan'
 		if (try name.get(i) otherwise panic("firstSeparatorIndex: get OOB despite i < count()")) == separator as Byte 'here'
 			return i
 		end 'here'
 	end 'scan'
 
-	return name.count()
+	throw MapError.keyNotFound
 end 'firstSeparatorIndex'
 
 // ⭐ Does `name` contain the qualifier byte at all? The cheap, ALLOCATION-FREE guard that keeps the
 // per-instance machinery off the plain-alias hot path (P1.6-C): a plain name (`Score`) has no ".", so this
 // returns false WITHOUT the two slices `splitQualifiedName` would otherwise allocate on every named-type
-// resolution and every aggregate coercion. Derived from `lastSeparatorIndex` rather than scanning for
-// itself, so the byte this asks about and the byte the split divides on are one line of code.
+// resolution and every aggregate coercion.
 export function containsQualifier(name ByteArray) returns bool
-	return lastSeparatorIndex(name, separator: QualifiedAliasSeparatorByte) < name.count()
+	return name.contains(QualifiedAliasSeparatorByte as Byte)
 end 'containsQualifier'
 
 // `prefix.member` — the base-qualified name of an inner alias ("Wrapper.Idx") and the qualified name of a
@@ -10057,11 +10061,7 @@ end 'QualifiedNameParts'
 export function splitQualifiedName(name ByteArray) returns QualifiedNameParts
 	// The allocation-free short-circuit: a name with no "." is not qualified, so it never reaches the two
 	// slices below — the plain-alias hot path pays only the byte scan.
-	let split = lastSeparatorIndex(name, separator: QualifiedAliasSeparatorByte)
-
-	if split == name.count() 'notQualified'
-		return QualifiedNameParts.notQualified
-	end 'notQualified'
+	let split = try lastSeparatorIndex(name, separator: QualifiedAliasSeparatorByte) otherwise return QualifiedNameParts.notQualified
 
 	let prefix = try name.slice(0, endIndex: split) otherwise panic("splitQualifiedName: slice [0, {split}) of a {name.count()}-byte name is in range by the index `lastSeparatorIndex` just found")
 	let member = try name.slice(split + 1, endIndex: name.count()) otherwise panic("splitQualifiedName: slice [{split + 1}, {name.count()}) is in range by the index `lastSeparatorIndex` just found")
@@ -10252,11 +10252,7 @@ end 'sourceSpelledAliasText'
 //     `Byte`, because only a generic instance's element is ever qualified. One alias, two spellings,
 //     decided by which slot the value happened to flow into.
 export function sourceSpelledAliasName(name ByteArray) returns ByteArray
-	let split = firstSeparatorIndex(name, separator: CompilerQualifiedAliasSeparatorByte)
-
-	if split == name.count() 'notCompilerQualified'
-		return name
-	end 'notCompilerQualified'
+	let split = try firstSeparatorIndex(name, separator: CompilerQualifiedAliasSeparatorByte) otherwise return name
 
 	return try name.slice(0, endIndex: split) otherwise panic("sourceSpelledAliasName: slice [0, {split}) of a {name.count()}-byte name is in range by the index `firstSeparatorIndex` just found")
 end 'sourceSpelledAliasName'
@@ -16901,7 +16897,7 @@ export type ProgramSignatures
 	// states its own bound.
 	function boxedUnionCaseIsImageData(typeName ByteArray, caseName ByteArray) returns bool
 		let layout = self.unionCaseLayoutOf(typeName, caseName: caseName)
-		return layout.payloadArityAt(layout.indexOfCase(caseName)) == 0
+		return layout.payloadArityAt(requireUnionCaseIndex(layout, caseName: caseName)) == 0
 	end 'boxedUnionCaseIsImageData'
 
 	// ⭐⭐ **CAN A CONSTRUCTED STRUCT'S BOX BE LAID DOWN AS BYTES? — the third shape of the ⚖ *a `let` is image
@@ -18662,7 +18658,7 @@ export type ProgramSignatures
 	// `unionCaseLayoutOf`, so the two builds cannot disagree about which cases exist or how wide the box is.
 	function globalUnionCaseConstruct(typeName ByteArray, caseName ByteArray, payloads ConstFactoryArgumentValueArray, calls ConstFactoryCallArray, declName ByteArray, elementFilePath FilePath) returns GlobalInitCall
 		let layout = self.unionCaseLayoutOf(typeName, caseName: caseName)
-		let caseIndex = layout.indexOfCase(caseName)
+		let caseIndex = requireUnionCaseIndex(layout, caseName: caseName)
 		let declared = layout.payloadsAt(caseIndex)
 
 		if payloads.count() != declared.count() 'notSlotParallel'
@@ -19154,10 +19150,6 @@ export type ProgramSignatures
 			panic("ProgramSignatures.unionCaseLayoutOf: '{String.from(typeName)}' declares no payload-carrying case, so its case '{String.from(caseName)}' is a bare TAG rather than a box — the scalar fold owns that shape")
 		end 'aBareTag'
 
-		if not layout.hasCase(caseName) 'noSuchCase'
-			panic("ProgramSignatures.unionCaseLayoutOf: `{String.from(typeName)}` declares no case '{String.from(caseName)}', and yet a constant initializer folded one — `Parser.constEnumCaseOfLayout` asks `hasCase` before either spelling is claimed")
-		end 'noSuchCase'
-
 		return layout
 	end 'unionCaseLayoutOf'
 
@@ -19166,6 +19158,10 @@ export type ProgramSignatures
 	function unionTagSlot(layout EnumLayout, caseIndex CaseIndex) returns GlobalStructField
 		return GlobalStructField.create(UnionTagOffset, storageType: MaxonType.integer, value: GlobalInitArgumentValue.scalar(layout.tagOfIndex(caseIndex)), valueType: MaxonType.integer)
 	end 'unionTagSlot'
+
+	function requireUnionCaseIndex(layout EnumLayout, caseName ByteArray) returns CaseIndex
+		return try layout.indexOfCase(caseName) otherwise panic("ProgramSignatures.requireUnionCaseIndex: `{String.from(layout.name)}` declares no case '{String.from(caseName)}', and yet a constant initializer folded one — `Parser.constEnumCaseOfLayout` asks `hasCase` before either spelling is claimed")
+	end 'requireUnionCaseIndex'
 
 	// ⭐⭐ **THE BOX A PAYLOAD-FREE CASE IS, AS BYTES — the tag at `UnionTagOffset` and zeros to the end.**
 	// It goes through `structBoxImageBytes`, the very builder a constructed struct's image uses, so an
@@ -19178,7 +19174,7 @@ export type ProgramSignatures
 	function boxedUnionCaseImageBytes(typeName ByteArray, caseName ByteArray) returns ByteArray
 		let layout = self.unionCaseLayoutOf(typeName, caseName: caseName)
 		var fields = GlobalStructFieldArray.create()
-		fields.push(unionTagSlot(layout, caseIndex: layout.indexOfCase(caseName)))
+		fields.push(unionTagSlot(layout, caseIndex: requireUnionCaseIndex(layout, caseName: caseName)))
 
 		return structBoxImageBytes(layout.boxSizeBytes(), fields: fields, columns: sharedEmptyImmortalBoxColumns)
 	end 'boxedUnionCaseImageBytes'
@@ -20157,7 +20153,9 @@ export type ProgramSignatures
 
 		let sourceIndex = argIndex - 1 if decl.takesReceiver else argIndex
 
-		return match self.declaredParamAliasAt(decl, position: argSlotPosition(decl.paramNames, argIndex: sourceIndex, label: label)) 'slotAlias'
+		let position = try argSlotPosition(decl.paramNames, argIndex: sourceIndex, label: label) otherwise return false
+
+		return match self.declaredParamAliasAt(decl, position: position) 'slotAlias'
 			declared(alias) gives aliasIsUnsignedFullQuantity(alias)
 			undeclared gives false
 		end 'slotAlias'
@@ -20202,9 +20200,9 @@ export type ProgramSignatures
 
 		let decl = try declarations.get(0) otherwise panic("ProgramSignatures.arrayInstanceDeclaredAtParam: get(0) on the one-element array the line above tested for")
 
-		// `argSlotPosition` answers one PAST the end for a label no parameter wears, so the fetch is also the
-		// arity and unknown-label guard — a call this position cannot be slotted for is refused elsewhere.
-		let declared = try decl.paramTypes.get(argSlotPosition(decl.paramNames, argIndex: sourceIndex, label: label)) otherwise return DeclaredArrayInstance.none
+		// A call this position cannot be slotted for is refused elsewhere.
+		let slot = try argSlotPosition(decl.paramNames, argIndex: sourceIndex, label: label) otherwise return DeclaredArrayInstance.none
+		let declared = try decl.paramTypes.get(slot) otherwise panic("ProgramSignatures.arrayInstanceDeclaredAtParam: paramTypes.get OOB at {slot} — the sweep records one type per parameter name")
 
 		if maxonTypeTag(declared) != ValueTypeTag.named 'namesNoAlias'
 			return DeclaredArrayInstance.none
@@ -22480,26 +22478,14 @@ export type ProgramSignatures
 		return held
 	end 'associatedTypeHeldAt'
 
-	// ⭐ **THE EXISTENCE HALF OF THE READ ABOVE — "is THIS position held at all?"** — for a caller that must only
-	// SKIP a held position and has no use for which interface holds it
-	// (`SemanticCheck.existentialSiteClaimAgainst`).
-	//
-	// ⚠ **IT IS A SEPARATE DOOR BECAUSE THE LANGUAGE MAKES IT ONE**, which is `IrInterface.namesInclude`'s
-	// reason one registry over: `associatedTypeHeldAt` is PURE, so its result may not be dropped in any spelling
-	// — `if let _ = try f()` is E3064 and a bare `if try f()` is E3124 — and binding the name only to leave it
-	// unread is E3012. A caller that wants only WHETHER is given the function that answers only that.
+	// Built on `associatedTypeHeldAt` for `IrInterface.namesInclude`'s reason.
 	//
 	// It is NOT `interfaceHoldsAnAssociatedType` with a position bolted on: that one asks whether the interface
 	// holds ANY position (the gate on the witness table's whole associated-slot block), and answering it for one
 	// position would skip every position of an interface that holds a DIFFERENT one.
 	export function associatedTypeIsHeldAt(interfaceName ByteArray, position ElementIndex) returns bool
-		let row = try self.associatedTypeHoldings.get(interfaceName) otherwise return false
-
-		if position >= row.count() 'pastThisInterfacesPositions'
-			return false
-		end 'pastThisInterfacesPositions'
-
-		return not (try row.get(position) otherwise panic("associatedTypeIsHeldAt: row.get OOB at {position} below width {row.count()} — the guard above excludes it")).isEmpty()
+		try self.associatedTypeHeldAt(interfaceName, position: position) otherwise return false
+		return true
 	end 'associatedTypeIsHeldAt'
 
 	// The COMPILED name of instance `gid`'s type argument at `position` (P1.7a slice 2a) — `mangleTypeArg`'s
@@ -22750,11 +22736,7 @@ export type ProgramSignatures
 			panic("ProgramSignatures.checkFusedWrapperRecordLayouts: `type {String.from(StringConformerName)}` declares {string.fieldCount()} fields and the fused record has slots for {StringDeclaredFieldCount} — `emitFusedWrapperLiteral` passes on `managed` and `{String.from(SingleByteGraphemesFieldName)}` and NOTHING ELSE, so any further field is silently discarded at construction and read back as whatever the record's producer wrote at its offset")
 		end 'stringFieldCount'
 
-		let flagIndex = string.indexOfField(SingleByteGraphemesFieldName)
-
-		if flagIndex >= string.fieldCount() 'noFlagField'
-			panic("ProgramSignatures.checkFusedWrapperRecordLayouts: `type {String.from(StringConformerName)}` declares no `{String.from(SingleByteGraphemesFieldName)}` field, so `emitFusedWrapperLiteral` would classify every literal's bytes instead of using the flag the corpus states — the record's slot behind its embedded buffer record IS that field, and the compiler reads the corpus's spelling rather than inventing one")
-		end 'noFlagField'
+		let flagIndex = try string.indexOfField(SingleByteGraphemesFieldName) otherwise panic("ProgramSignatures.checkFusedWrapperRecordLayouts: `type {String.from(StringConformerName)}` declares no `{String.from(SingleByteGraphemesFieldName)}` field, so `emitFusedWrapperLiteral` would classify every literal's bytes instead of using the flag the corpus states — the record's slot behind its embedded buffer record IS that field, and the compiler reads the corpus's spelling rather than inventing one")
 
 		if string.offsetOfField(flagIndex) != StringSingleByteGraphemesOffset 'flagOffset'
 			panic("ProgramSignatures.checkFusedWrapperRecordLayouts: `type {String.from(StringConformerName)}` puts `{String.from(SingleByteGraphemesFieldName)}` at {string.offsetOfField(flagIndex)} but every producer and reader of the record uses {StringSingleByteGraphemesOffset} — the corpus's declared shape and the record the compiler mints have drifted")
@@ -24172,9 +24154,9 @@ export type ProgramSignatures
 		// POINTER slot however it is typed, so an identity on it would hand back a buffer where the record
 		// holds a pointer to one; and a `managed` of any other type is the defect this predicate exists to
 		// close.
-		// ⚠ A FIELDLESS declaration answers 0 from `inlineManagedFieldIndex` too (it returns the count), and
-		// `fieldSurfaceOf` panics on an index its layout does not have — so the count is tested first.
-		if layout.fieldCount() == 0 or layout.inlineManagedFieldIndex() != 0 'field0IsNotEmbeddedWhole'
+		let managedIndex = try layout.inlineManagedFieldIndex() otherwise return false
+
+		if managedIndex != 0 'field0IsNotEmbeddedWhole'
 			return false
 		end 'field0IsNotEmbeddedWhole'
 
@@ -27326,7 +27308,19 @@ export type ProgramSignatures
 	end 'normalizeSweptInterfaceTypes'
 
 	export function settleInlineRecordGeometry()
+		var serviceStates = StructNameSet.create()
+
+		for service in serviceCompanionRoster(self) 'eachService'
+			serviceStates.insert(service)
+		end 'eachService'
+
+		// A spawned type's state is the service loop's heap record — its receiver, the target of its
+		// mutations, and what shutdown decrefs — so it is never packed, whatever its fields.
 		for (_, layout) in self.structTypes 'eachDeclaredType'
+			if serviceStates.contains(layout.name) 'aServiceState'
+				continue
+			end 'aServiceState'
+
 			match self.inlineRecordShapeOf(layout) 'shape'
 				notInline then continue
 				packed(bitWidths) then layout.settleInlinePacking(bitWidths)
@@ -30361,11 +30355,7 @@ export type ProgramSignatures
 
 	// The layout half of the answer above, split out because a `match` arm holds one statement.
 	function nestedParameterisedInstanceBaseOfFieldIn(layout StructLayout, fieldName ByteArray) returns ByteArray
-		let index = layout.indexOfField(fieldName)
-
-		if index >= layout.fieldCount() 'noSuchField'
-			return EmptySourceText
-		end 'noSuchField'
+		let index = try layout.indexOfField(fieldName) otherwise return EmptySourceText
 
 		let declared = self.declaredSlotType(try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.nestedParameterisedInstanceBaseOfFieldIn: fieldTypes.get OOB at {index} despite index < fieldCount"), into: self.typeNames, slotScopeFilePath: layout.declFilePath)
 
@@ -31119,11 +31109,7 @@ export type ProgramSignatures
 		end 'notStruct'
 
 		let layout = self.structLayoutOf(structName)
-		let index = layout.indexOfField(fieldName)
-
-		if index >= layout.fieldCount() 'noField'
-			return false
-		end 'noField'
+		let index = try layout.indexOfField(fieldName) otherwise return false
 
 		let fieldType = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.isManagedOpaqueTypeParamField: fieldTypes.get OOB at {index} despite index < fieldCount")
 
@@ -34789,7 +34775,10 @@ export type ProgramSignatures
 
 		for i in 0 upto opaqueParams.paramNames.count() 'eachSlot'
 			let paramName = try opaqueParams.paramNames.get(i) otherwise panic("mixOpaqueParams: paramNames.get OOB at {i} despite i < count")
-			mixed = Hasher.combined(mixBytes(mixed, bytes: paramName), value: opaqueParams.positionAt(i) as HashDigest)
+			// A concrete slot hashes as `typeParamCount`, which no `uses` position equals, so it cannot collide
+			// with a type-parameter slot.
+			let slotDigest = (try opaqueParams.positionAt(i) otherwise opaqueParams.typeParamCount) as HashDigest
+			mixed = Hasher.combined(mixBytes(mixed, bytes: paramName), value: slotDigest)
 		end 'eachSlot'
 
 		return Hasher.combined(mixed, value: opaqueParams.typeParamCount as HashDigest)
@@ -35902,8 +35891,10 @@ let CharacterDeclaredFieldCount = 1 as FieldIndex
 // function that reads a String or a Character reads them there. A free function rather than a third arm
 // inside the check, because the two wrappers agree on exactly this much and differ below it.
 function requireInlineManagedFieldFirst(layout StructLayout)
-	if layout.inlineManagedFieldIndex() != 0 'notFirst'
-		panic("ProgramSignatures.checkFusedWrapperRecordLayouts: `type {String.from(layout.name)}` declares its inline `managed` field at index {layout.inlineManagedFieldIndex()} rather than first — the record's `buffer@0`/`length@8` ARE that field's first two slots, so every runtime read of this type would be off by whatever is declared ahead of it")
+	let managedIndex = try layout.inlineManagedFieldIndex() otherwise panic("ProgramSignatures.checkFusedWrapperRecordLayouts: `type {String.from(layout.name)}` declares no inline `managed` field — the record's `buffer@0`/`length@8` ARE that field's first two slots, so every runtime read of this type would read a record it does not have")
+
+	if managedIndex != 0 'notFirst'
+		panic("ProgramSignatures.checkFusedWrapperRecordLayouts: `type {String.from(layout.name)}` declares its inline `managed` field at index {managedIndex} rather than first — the record's `buffer@0`/`length@8` ARE that field's first two slots, so every runtime read of this type would be off by whatever is declared ahead of it")
 	end 'notFirst'
 
 	if layout.offsetOfField(0) != ManagedRecordBufferOffset 'notAtZero'

@@ -3641,9 +3641,7 @@ type WasmFuncEmitter
 				break
 			end 'done'
 
-			let leaf = findLeafMove(dsts, srcs: srcs)
-
-			if leaf < dsts.count() 'foundLeaf'
+			if let leaf = try findLeafMove(dsts, srcs: srcs) 'foundLeaf'
 				let d = try dsts.get(leaf) otherwise panic("sequenceParallelCopy: dsts.get OOB at leaf {leaf}")
 				let s = try srcs.get(leaf) otherwise panic("sequenceParallelCopy: srcs.get OOB at leaf {leaf}")
 				self.emitLocalCopy(d as Wasm32Index, srcLocal: s as Wasm32Index, fromVt: getValtype(self.valtypes, v: s), toVt: getValtype(self.valtypes, v: d))
@@ -3909,9 +3907,9 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 	return false
 end 'decideDispatcher'
 
-// Index of a move whose dst is not any pending move's source (safe to emit now), or the move
-// count when every remaining dst is still needed as a source (a pure cycle).
-function findLeafMove(dsts ValueIdArray, srcs ValueIdArray) returns ValueId
+// Index of a move whose dst is not any pending move's source (safe to emit now). It throws when every
+// remaining dst is still needed as a source: the moves left form a pure cycle.
+function findLeafMove(dsts ValueIdArray, srcs ValueIdArray) returns ValueId throws MapError
 	for i in 0 upto dsts.count() 'each'
 		let d = try dsts.get(i) otherwise panic("findLeafMove: dsts.get OOB at {i}")
 
@@ -3920,7 +3918,7 @@ function findLeafMove(dsts ValueIdArray, srcs ValueIdArray) returns ValueId
 		end 'leaf'
 	end 'each'
 
-	return dsts.count()
+	throw MapError.keyNotFound
 end 'findLeafMove'
 
 function isAnySource(srcs ValueIdArray, valueId ValueId) returns bool

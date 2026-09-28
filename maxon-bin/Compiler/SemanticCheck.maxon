@@ -2433,11 +2433,7 @@ end 'collectStorageReachEdges'
 function addStorageReachEdges(reach StorageReachEdge, callerIndex FuncIndex, callerParamCount ParamCount, funcSignatures FuncSignatureMap, funcIndexByName FuncIndexByName, edges CallParamEdges)
 	let sig = try funcSignatures.get(reach.callee) otherwise return
 	let calleeIndex = try funcIndexByName.get(reach.callee) otherwise return
-	let pos = argSlotPosition(sig.paramNames, argIndex: reach.argColumn, label: EmptySourceText)
-
-	if pos >= sig.paramCount() 'unslottable'
-		return
-	end 'unslottable'
+	let pos = try argSlotPosition(sig.paramNames, argIndex: reach.argColumn, label: EmptySourceText) otherwise return
 
 	for param in 0 upto callerParamCount 'eachCallerParam'
 		if maskHasParam(reach.callerParams, param: param) 'thisParameterOwnsTheStorage'
@@ -2548,7 +2544,7 @@ end 'collectCallParamEdgesAt'
 //
 // A callee with NO signature is skipped: it is either compiler-internal (`__managed_push` and friends, whose
 // receiver writes the parser already recorded directly) or undeclared (E3004, reported by `checkCalls`).
-// A label naming no parameter slots out of range and is skipped for the same reason — `slotCallArgs`
+// A label naming no parameter fills no position and is skipped for the same reason — `slotCallArgs`
 // reports it.
 function addCallParamEdges(project Project, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, func IrFunction, callerIndex FuncIndex, funcIndexByName FuncIndexByName, edges CallParamEdges)
 	let sig = try project.funcSignatures.get(callee) otherwise return
@@ -2561,11 +2557,8 @@ function addCallParamEdges(project Project, callee ByteArray, args ValueIdArray,
 			continue
 		end 'notOneOfOurParameters'
 
-		let pos = argSlotPosition(sig.paramNames, argIndex: i, label: try argLabels.get(i) otherwise panic("addCallParamEdges: argLabels.get OOB at {i} — a call's argument columns are parallel by construction"))
-
-		if pos >= sig.paramCount() 'unslottable'
-			continue
-		end 'unslottable'
+		let label = try argLabels.get(i) otherwise panic("addCallParamEdges: argLabels.get OOB at {i} — a call's argument columns are parallel by construction")
+		let pos = try argSlotPosition(sig.paramNames, argIndex: i, label: label) otherwise continue
 
 		edges.record(calleeIndex, callerIndex: callerIndex, callerParam: paramPositionOfValueId(argId), calleeParam: pos)
 	end 'eachArg'
@@ -3801,9 +3794,6 @@ function witnessFormalDeclaredType(project Project, signatures ProgramSignatures
 	// ⚠ Asked BEFORE `builtinTypeNameTag`, and the order is load-bearing for `LowerMaxonToStd.witnessFormalType`'s
 	// measured reason: a `uses` parameter is an IDENTIFIER, and `ExitCode`/`String` are identifiers too, so
 	// `interface Taker uses ExitCode` would otherwise read a TYPE PARAMETER as the u32 builtin.
-	// `namesInclude`, not a discarded `namePositionIn`: this door answers `opaque` and has no use
-	// for the position, and a PURE result may not be dropped in any spelling (E3064) — which is what the
-	// `if let _ = try …` that stood here did.
 	if namesInclude(declaring.associatedTypeNames, name: formalName) 'aConformerBindsIt'
 		return WitnessFormalType.opaque
 	end 'aConformerBindsIt'
@@ -6137,13 +6127,11 @@ function checkImmutableArgToMutatingParam(project Project, func IrFunction, call
 
 	for i in 0 upto args.count() 'eachArg'
 		let argId = try args.get(i) otherwise panic("checkImmutableArgToMutatingParam: args.get OOB at {i} below its own count")
-		let pos = argSlotPosition(sig.paramNames, argIndex: i, label: try argLabels.get(i) otherwise panic("checkImmutableArgToMutatingParam: argLabels.get OOB at {i} — a call's argument columns are parallel by construction"))
+		let label = try argLabels.get(i) otherwise panic("checkImmutableArgToMutatingParam: argLabels.get OOB at {i} — a call's argument columns are parallel by construction")
 
 		// An argument whose label names no parameter of the callee fills no position a mask can be read at;
 		// `slotCallArgs` has already reported it.
-		if pos >= sig.paramCount() 'fillsNoDeclaredParameter'
-			continue
-		end 'fillsNoDeclaredParameter'
+		let pos = try argSlotPosition(sig.paramNames, argIndex: i, label: label) otherwise continue
 
 		let paramName = try sig.paramNames.get(pos) otherwise panic("checkImmutableArgToMutatingParam: paramNames.get OOB at {pos} inside paramCount()")
 		let aliasesAnImmutableGlobal = func.immutableGlobalAliasValues.contains(argId)

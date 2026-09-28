@@ -274,20 +274,28 @@ function buildMboxInterfaceSend(module StdModule)
 	module.functions.push(func)
 end 'buildMboxInterfaceSend'
 
+// Every interface with a handle, not only the service's own `conformsTo`: a handle widens to an interface
+// its service reaches through `extends` (`ProgramSignatures.serviceHandleWidensTo`), and that conversion is
+// called too.
 export function installInterfaceHandleConversions(module StdModule, globalData GlobalDataTable, usage RuntimeUsage, signatures ProgramSignatures)
 	if usage.neededInterfaceConversions.count() == 0 'noConversion'
 		return
 	end 'noConversion'
 
-	for serviceTypeName in serviceCompanionRoster(signatures) 'eachService'
-		let service = spawnTargetLayoutOf(signatures, typeName: serviceTypeName)
+	var built = 0
 
-		for interfaceName in service.conformsTo 'eachConformance'
+	for serviceTypeName in serviceCompanionRoster(signatures) 'eachService'
+		for interfaceName in signatures.interfacesWithHandles() 'eachInterfaceHandle'
 			if usage.neededInterfaceConversions.contains(interfaceHandleConversionName(serviceTypeName, interfaceName: interfaceName)) 'thisPairIsConverted'
 				buildInterfaceHandleConversion(module, globalData: globalData, signatures: signatures, serviceTypeName: serviceTypeName, interfaceName: interfaceName)
+				built = built + 1
 			end 'thisPairIsConverted'
-		end 'eachConformance'
+		end 'eachInterfaceHandle'
 	end 'eachService'
+
+	if built != usage.neededInterfaceConversions.count() 'aConversionOfADeadService'
+		panic("installInterfaceHandleConversions: {usage.neededInterfaceConversions.count()} conversion(s) are called and {built} were built — a reached body converts the handle of a service that is not on the companion roster, the set `ServiceCompanions.interfaceServiceImplementers` vets")
+	end 'aConversionOfADeadService'
 end 'installInterfaceHandleConversions'
 
 function buildInterfaceHandleConversion(module StdModule, globalData GlobalDataTable, signatures ProgramSignatures, serviceTypeName ByteArray, interfaceName ByteArray)
@@ -299,11 +307,7 @@ function buildInterfaceHandleConversion(module StdModule, globalData GlobalDataT
 	_ = globalData.registerRdataConstantLabeled(label, bytes: blob, kind: RdataPayloadKind.witnessTable)
 
 	for slot in 0 upto interfaceRequest.caseCount() 'eachSlot'
-		let serviceCase = serviceRequest.indexOfCase(interfaceRequest.caseNameAt(slot))
-
-		if serviceCase >= serviceRequest.caseCount() 'notAMessageOfThisService'
-			panic("buildInterfaceHandleConversion: `{String.from(serviceTypeName)}` has no message `{String.from(interfaceRequest.caseNameAt(slot))}` of `{String.from(interfaceName)}` — conformance requires every requirement, and a message is an exported instance method")
-		end 'notAMessageOfThisService'
+		let serviceCase = try serviceRequest.indexOfCase(interfaceRequest.caseNameAt(slot)) otherwise panic("buildInterfaceHandleConversion: `{String.from(serviceTypeName)}` has no message `{String.from(interfaceRequest.caseNameAt(slot))}` of `{String.from(interfaceName)}` — conformance requires every requirement, and a message is an exported instance method")
 
 		let stubName = interfaceHandleStubName(serviceTypeName, interfaceName: interfaceName, slot: slot)
 		buildInterfaceSendStub(module, name: stubName, serviceTag: serviceRequest.tagOfIndex(serviceCase))

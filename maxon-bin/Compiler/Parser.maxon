@@ -3280,10 +3280,11 @@ export typealias ForwardFeedEdgeArray = Array with ForwardFeedEdge
 // disagreement there is not a diagnostic, it is a feed marked at one door and missed at the other.
 type BareTypeParamArg
 	export let paramIndex as ParamCount
+	export let typeParamPosition as TypeParamPosition
 	export let valuePos as TokenIndex
 
-	static function create(paramIndex ParamCount, valuePos TokenIndex) returns BareTypeParamArg
-		return Self{paramIndex: paramIndex, valuePos: valuePos}
+	static function create(paramIndex ParamCount, typeParamPosition TypeParamPosition, valuePos TokenIndex) returns BareTypeParamArg
+		return Self{paramIndex: paramIndex, typeParamPosition: typeParamPosition, valuePos: valuePos}
 	end 'create'
 end 'BareTypeParamArg'
 
@@ -3301,13 +3302,13 @@ export typealias BareTypeParamArgArray = Array with BareTypeParamArg
 type MethodFeedScan
 	export let funcName as ByteArray
 	export let paramNames as ByteArrayArray
-	export let typeParamPositions as TypeParamPositionArray
+	export let typeParamPositions as TypeParamSlots
 	export let directFeeds as TypeParamFeedArray
 	export let edges as ForwardFeedEdgeArray
 	export let takesReceiver as bool
 	export let endPos as TokenIndex
 
-	static function create(funcName ByteArray, paramNames ByteArrayArray, typeParamPositions TypeParamPositionArray, directFeeds TypeParamFeedArray, edges ForwardFeedEdgeArray, takesReceiver bool, endPos TokenIndex) returns MethodFeedScan
+	static function create(funcName ByteArray, paramNames ByteArrayArray, typeParamPositions TypeParamSlots, directFeeds TypeParamFeedArray, edges ForwardFeedEdgeArray, takesReceiver bool, endPos TokenIndex) returns MethodFeedScan
 		return Self{funcName: funcName, paramNames: paramNames, typeParamPositions: typeParamPositions, directFeeds: directFeeds, edges: edges, takesReceiver: takesReceiver, endPos: endPos}
 	end 'create'
 end 'MethodFeedScan'
@@ -15849,9 +15850,9 @@ export type Parser
 	// The SHARED empty type-parameter-POSITION array (P1.6-A/B2) the consume scan passes for every
 	// receiver-less function OUTSIDE a generic type — which is all of them on the generics-free corpus. It is
 	// never mutated (`paramNamesIn` skips the position work when `collectTypeParamFlags` is false, and
-	// `paramIsTypeParamTyped`/`paramTypeParamPositionAt` only read it, OOB-safe), so one allocation per parser
+	// `TypeParamSlots` reads a missing index as a concrete slot), so one allocation per parser
 	// serves every non-generic function's consume scan, keeping that hot path allocation-free.
-	var emptyTypeParamPositions as TypeParamPositionArray
+	var emptyTypeParamPositions as TypeParamSlots
 
 	// ⚡ The shared, NEVER-WRITTEN sink the two walks that want NAMES but no types hand `paramNamesIn`, so a
 	// declaration whose types nobody reads allocates no array for them. `collectTypes: false` is what keeps it
@@ -16314,7 +16315,7 @@ export type Parser
 			extensionAssociatedTypeNames: sharedEmptyExtensionAssociatedTypes,
 			extensionAssociatedTypeBindings: sharedEmptyExtensionAssociatedTypes,
 			genericAliasScratch: GenericAliasEntryArray.create(),
-			emptyTypeParamPositions: TypeParamPositionArray.create(),
+			emptyTypeParamPositions: TypeParamSlots.create(),
 			emptySweptParamTypes: MaxonTypeArray.create(),
 			emptyTypeParams: ByteArrayArray.create(),
 			sharedEmptyPromiseConsumes: PromiseConsumeRecordArray.create(),
@@ -17459,13 +17460,13 @@ export type Parser
 		//
 		// A parameter can be type-parameter-typed ONLY inside a generic type's body (a non-empty `uses` list);
 		// a top-level function and a non-generic type's method have none. Off the generic path the flags stay
-		// the SHARED empty array (⚡ no per-function `TypeParamPositionArray`) and `paramNamesIn` skips the flag
-		// work — `paramIsTypeParamTyped` reads every missing index as `false`.
+		// the SHARED empty slots (⚡ no per-function `TypeParamSlots`) and `paramNamesIn` skips the flag
+		// work — `TypeParamSlots` reads every missing index as a concrete slot.
 		let inGenericScope = not self.enclosingTypeParams.isEmpty()
 		var scannedTypeParamPositions = self.emptyTypeParamPositions
 
 		if inGenericScope 'genericScope'
-			scannedTypeParamPositions = TypeParamPositionArray.create()
+			scannedTypeParamPositions = TypeParamSlots.create()
 
 			if takesReceiver 'theReceiverOccupiesCallAlignedSlotZero'
 				self.pushReceiverTypeParamSlot(scannedTypeParamPositions)
@@ -17583,11 +17584,11 @@ export type Parser
 	// `uses` slot, so a generic type's methods that take no bare `T` cost nothing beyond this scan of an
 	// array the sweep already filled, and a program with no generic type never enters the loop (the shared
 	// empty positions array has no entries).
-	function opaqueParamsDeclaredBy(paramNames ByteArrayArray, positions TypeParamPositionArray) returns OpaqueParamInfo
+	function opaqueParamsDeclaredBy(paramNames ByteArrayArray, positions TypeParamSlots) returns OpaqueParamInfo
 		let typeParamCount = self.enclosingTypeParams.count()
 
 		for i in 0 upto positions.count() 'eachParam'
-			if self.paramIsTypeParamTyped(positions, index: i) 'namesATypeParameter'
+			if positions.namesATypeParameter(i) 'namesATypeParameter'
 				return OpaqueParamInfo.create(paramNames, positions: positions, typeParamCount: typeParamCount)
 			end 'namesATypeParameter'
 		end 'eachParam'
@@ -17783,9 +17784,9 @@ export type Parser
 	end 'paramListDeclaresDefault'
 
 	// ⭐ **THE CALL-ALIGNED PARAMETER LIST of an instance method in a generic type** — `SelfParamName` at slot 0
-	// (its sentinel type-parameter position), then the source parameters, in the SAME order the receiver-prepending
+	// (a concrete slot), then the source parameters, in the SAME order the receiver-prepending
 	// call site pushes them (`parseCallNamed`), so a per-position consume/feed fact lands at the argument's own
-	// call-site position. `typeParamPositionsOut` is filled in lockstep (self's sentinel, then each source
+	// call-site position. `typeParamPositionsOut` is filled in lockstep (self's concrete slot, then each source
 	// parameter's declared position from `paramNamesIn`).
 	//
 	// ⚠ **THE ALIGNMENT IS SPELLED IN TWO SHARED PIECES, NOT IN THIS ONE PLACE, AND THE HEADER SAID OTHERWISE.**
@@ -17796,35 +17797,21 @@ export type Parser
 	// scans from drifting on where `self` sits — a drift that would land a feed on the wrong parameter (a
 	// wrong-consume double-free at the concrete call site). This wrapper is the transitive array-feed scan's
 	// (`scanTypeMethodFeeds`) door onto them.
-	function callAlignedInstanceParams(paramsStart TokenIndex, typeParamPositionsOut TypeParamPositionArray) returns ByteArrayArray
+	function callAlignedInstanceParams(paramsStart TokenIndex, typeParamPositionsOut TypeParamSlots) returns ByteArrayArray
 		self.pushReceiverTypeParamSlot(typeParamPositionsOut)
 		return callAlignedFrom(self.paramNamesIn(paramsStart, typeParamPositionsOut: typeParamPositionsOut, collectTypeParamFlags: true, typesOut: self.emptySweptParamTypes, collectTypes: false))
 	end 'callAlignedInstanceParams'
 
 	// The POSITION half of the alignment above — the receiver's slot-0 entry, which names no `uses` parameter
-	// and so takes the "not a type parameter" sentinel. It is its own routine because the two halves cannot
+	// and so is a concrete slot. It is its own routine because the two halves cannot
 	// be spelled together: this one has to be pushed BEFORE `paramNamesIn` appends the source parameters'
 	// positions, while `callAlignedFrom` prepends to the NAMES the same walk returns. Two callers stand
 	// between those two moments — this file's declaration sweep (`recordScannedSignature`, which needs the
-	// SOURCE names back for the overload surface) and `callAlignedInstanceParams` — so the sentinel is named
-	// once rather than written out at each.
-	function pushReceiverTypeParamSlot(typeParamPositionsOut TypeParamPositionArray)
-		typeParamPositionsOut.push(self.enclosingTypeParams.count())
+	// SOURCE names back for the overload surface) and `callAlignedInstanceParams` — so the receiver's slot is
+	// pushed here once rather than written out at each.
+	function pushReceiverTypeParamSlot(typeParamPositionsOut TypeParamSlots)
+		typeParamPositionsOut.pushConcrete()
 	end 'pushReceiverTypeParamSlot'
-
-	// The type-parameter position parameter `index` was declared with (P1.6-B2), or `enclosingTypeParams.count()`
-	// (the "not a type parameter" sentinel `typeParamPositionOf` uses) when it is a plain type or out of range.
-	// SAFE against the SHARED EMPTY positions array outside a generic type (`collectTypeParamFlags` false): a
-	// missing index reads as the sentinel — a plain parameter.
-	function paramTypeParamPositionAt(positions TypeParamPositionArray, index ParamCount) returns TypeParamPosition
-		return try positions.get(index) otherwise self.enclosingTypeParams.count()
-	end 'paramTypeParamPositionAt'
-
-	// Is parameter `index` type-parameter-typed, per the positions `paramNamesIn` filled? A position below the
-	// type-parameter count names a real `uses` parameter; the sentinel (or a short/empty array) is a plain one.
-	function paramIsTypeParamTyped(positions TypeParamPositionArray, index ParamCount) returns bool
-		return self.paramTypeParamPositionAt(positions, index: index) < self.enclosingTypeParams.count()
-	end 'paramIsTypeParamTyped'
 
 	// One walk over the body collects every fact the sweep publishes about it: which parameters it
 	// takes ownership of (a field store, a promise consume door), hands back (a bare `return p`),
@@ -17838,7 +17825,7 @@ export type Parser
 	// to a consuming callee is left to the borrowed-value refusal. A bare reference strips surrounding
 	// parens as the real parse's `rhsWasBareLocalReference` does (`parenStrippedParamAt`), so the two
 	// agree on what a bare-parameter value is.
-	function scanBodyFacts(funcName ByteArray, funcBareName ByteArray, paramNames ByteArrayArray, typeParamPositions TypeParamPositionArray, bodyStart TokenIndex, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, bodyFacts SweptBodyFactEntryArray, declaresThrows bool, detectFieldStores bool, takesReceiver bool)
+	function scanBodyFacts(funcName ByteArray, funcBareName ByteArray, paramNames ByteArrayArray, typeParamPositions TypeParamSlots, bodyStart TokenIndex, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, bodyFacts SweptBodyFactEntryArray, declaresThrows bool, detectFieldStores bool, takesReceiver bool)
 		// ⚠ **ONE CALL-ALIGNED NAME LIST, READ BY BOTH HALVES** (`sweptParamNamesFor` builds it). The consume
 		// half and the by-reference half ask the same question of the same tokens — which parameter does this
 		// name denote — and every declaration shape owes both answers: an instance method forwards a parameter
@@ -18053,25 +18040,29 @@ export type Parser
 				// rebound by `p = f()` and not by `(p, _) = f()` — one operation, two answers decided by spelling.
 				// See `tupleAssignRebindsANameAt` for why the enclosing `(` is free here.
 				if self.rebindsANameAt(q) or self.tupleAssignRebindsANameAt(q, openBrackets: openBrackets) 'rebindsAName'
-					let target = self.paramIndexIn(paramNames, name: self.tokenAt(q).value)
+					if let position = try namePositionIn(paramNames, name: self.tokenAt(q).value) 'namesAParameter'
+						let target = position as ParamCount
 
-					if target < paramNames.count() and paramNameStillDenotesTheParameter(shadowedInBlock, shadowedOnLine: shadowedOnLine, index: target) 'ofOwnParameter'
-						setParamBit(reassignedDirect, index: target)
-						statesByRef = true
-					end 'ofOwnParameter'
+						if paramNameStillDenotesTheParameter(shadowedInBlock, shadowedOnLine: shadowedOnLine, index: target) 'ofOwnParameter'
+							setParamBit(reassignedDirect, index: target)
+							statesByRef = true
+						end 'ofOwnParameter'
+					end 'namesAParameter'
 				end 'rebindsAName'
 
 				// ⭐⭐ **PBR-2's FORWARDING EDGE: this parameter handed on as a bare argument.** The parameter's bit and
 				// the callee's NAME are recorded together; whether the edge is LIVE is settled whole-program by
 				// `ProgramSignatures.closeByRefForwarding`, which is the only party that can see what the callee does.
 				if self.bareCallArgumentAt(q, braceStack: braceStack) 'handedOn'
-					let forwarded = self.paramIndexIn(paramNames, name: self.tokenAt(q).value)
+					if let position = try namePositionIn(paramNames, name: self.tokenAt(q).value) 'namesAParameter'
+						let forwarded = position as ParamCount
 
-					if forwarded < paramNames.count() and paramNameStillDenotesTheParameter(shadowedInBlock, shadowedOnLine: shadowedOnLine, index: forwarded) 'ofOwnParameter'
-						setParamBit(reassignedForwarded, index: forwarded)
-						noteForwardCall(forwardCalls, call: self.forwardCallOpeningAt(try openBrackets.get(openBrackets.count() - 1) otherwise panic("scanBodyFacts: openBrackets is empty inside a call argument — `bareCallArgumentAt` has just established an open `(`")))
-						statesByRef = true
-					end 'ofOwnParameter'
+						if paramNameStillDenotesTheParameter(shadowedInBlock, shadowedOnLine: shadowedOnLine, index: forwarded) 'ofOwnParameter'
+							setParamBit(reassignedForwarded, index: forwarded)
+							noteForwardCall(forwardCalls, call: self.forwardCallOpeningAt(try openBrackets.get(openBrackets.count() - 1) otherwise panic("scanBodyFacts: openBrackets is empty inside a call argument — `bareCallArgumentAt` has just established an open `(`")))
+							statesByRef = true
+						end 'ofOwnParameter'
+					end 'namesAParameter'
 				end 'handedOn'
 
 				// ⭐⭐ **A PROMISE CONSUME DOOR IS A CONSUME, exactly as a durable store is.** `await p` and
@@ -18079,45 +18070,43 @@ export type Parser
 				// either one is its owner and the caller must move it in. Ungated by `detectFieldStores`,
 				// which excludes an instance method's `Self{f: p}` store on the grounds that such a store is
 				// not a consume — a door is one wherever it is written.
-				let promiseDoorParam = self.promiseConsumeDoorParamAt(q, paramNames: paramNames)
+				if let promiseDoorParam = try self.promiseConsumeDoorParamAt(q, paramNames: paramNames) 'opensAPromiseDoor'
+					if paramNameStillDenotesTheParameter(shadowedInBlock, shadowedOnLine: shadowedOnLine, index: promiseDoorParam) 'consumedThroughAPromiseDoor'
+						setParamBit(consumed, index: promiseDoorParam)
+						any = true
+					end 'consumedThroughAPromiseDoor'
+				end 'opensAPromiseDoor'
 
-				if promiseDoorParam < paramNames.count() and paramNameStillDenotesTheParameter(shadowedInBlock, shadowedOnLine: shadowedOnLine, index: promiseDoorParam) 'consumedThroughAPromiseDoor'
-					setParamBit(consumed, index: promiseDoorParam)
-					any = true
-				end 'consumedThroughAPromiseDoor'
-
-				let returnedParam = self.handedBackParamAt(q, paramNames: paramNames)
-
-				if returnedParam < paramNames.count() and paramNameStillDenotesTheParameter(shadowedInBlock, shadowedOnLine: shadowedOnLine, index: returnedParam) 'handedBackByAReturn'
-					setParamBit(handedBack, index: returnedParam)
-					any = true
-				end 'handedBackByAReturn'
+				if let returnedParam = try self.handedBackParamAt(q, paramNames: paramNames) 'returnsAParameter'
+					if paramNameStillDenotesTheParameter(shadowedInBlock, shadowedOnLine: shadowedOnLine, index: returnedParam) 'handedBackByAReturn'
+						setParamBit(handedBack, index: returnedParam)
+						any = true
+					end 'handedBackByAReturn'
+				end 'returnsAParameter'
 
 				if detectFieldStores and kind == TokenKind.colon and self.braceStackInnermostIsBrace(braceStack) 'fieldSep'
-					let idx = self.consumedParamAfterColon(q, paramNames: paramNames)
-
-					if idx < paramNames.count() and paramNameStillDenotesTheParameter(shadowedInBlock, shadowedOnLine: shadowedOnLine, index: idx) 'isParam'
-						let feedPos = self.paramTypeParamPositionAt(typeParamPositions, index: idx)
-
-						if feedPos < self.enclosingTypeParams.count() 'typeParamField'
-							// ⭐ **A TYPE-PARAMETER-typed store is a FEED, not a plain consume (P1.6-A/B2).**
-							// `Self{value: v}` on `type Box uses T` stores `v` into `T`, whose managed-ness the shared
-							// body cannot see (it is opaque here). P1.6-A EXCLUDED it (the box borrowed, the caller kept
-							// the +1); B2 records WHICH type parameter it feeds instead, so the CONCRETE call site — which
-							// knows the instance's argument at that position — consumes it iff that argument OWNS managed
-							// heap (`Box with String`) and borrows it otherwise (`Box with Point`, byte-identical to A).
-							// The sink is the CONSTRUCTED VALUE: the store lands in a field of the `Self` this call
-							// RETURNS, so the caller's value owns it and this frame must not be enrolled its owner.
-							setParamFeed(feeds, index: idx, feed: TypeParamFeed.feeds(feedPos, sink: FeedSink.constructedValue))
-							any = true
-						end 'typeParamField' else 'plainField'
-							// A NON-type-parameter field store (a monomorphic `Self{value: v}` into an `Integer` field,
-							// or a direct `String`/struct field) — the callee OWNS it whatever the concrete type, so the
-							// plain consume bit is set. A scalar argument makes it inert at the call site anyway.
-							setParamBit(consumed, index: idx)
-							any = true
-						end 'plainField'
-					end 'isParam'
+					if let idx = try self.consumedParamAfterColon(q, paramNames: paramNames) 'movesAParameter'
+						if paramNameStillDenotesTheParameter(shadowedInBlock, shadowedOnLine: shadowedOnLine, index: idx) 'isParam'
+							if let feedPos = try typeParamPositions.positionAt(idx) 'typeParamField'
+								// ⭐ **A TYPE-PARAMETER-typed store is a FEED, not a plain consume (P1.6-A/B2).**
+								// `Self{value: v}` on `type Box uses T` stores `v` into `T`, whose managed-ness the shared
+								// body cannot see (it is opaque here). P1.6-A EXCLUDED it (the box borrowed, the caller kept
+								// the +1); B2 records WHICH type parameter it feeds instead, so the CONCRETE call site — which
+								// knows the instance's argument at that position — consumes it iff that argument OWNS managed
+								// heap (`Box with String`) and borrows it otherwise (`Box with Point`, byte-identical to A).
+								// The sink is the CONSTRUCTED VALUE: the store lands in a field of the `Self` this call
+								// RETURNS, so the caller's value owns it and this frame must not be enrolled its owner.
+								setParamFeed(feeds, index: idx, feed: TypeParamFeed.feeds(feedPos, sink: FeedSink.constructedValue))
+								any = true
+							end 'typeParamField' else 'plainField'
+								// A NON-type-parameter field store (a monomorphic `Self{value: v}` into an `Integer` field,
+								// or a direct `String`/struct field) — the callee OWNS it whatever the concrete type, so the
+								// plain consume bit is set. A scalar argument makes it inert at the call site anyway.
+								setParamBit(consumed, index: idx)
+								any = true
+							end 'plainField'
+						end 'isParam'
+					end 'movesAParameter'
 				end 'fieldSep'
 
 				// ⭐ **`items.push(item)` — AN OPAQUE-`T` `Array` MUTATOR IS A CALLEE-STORAGE FEED (P1.7 slice
@@ -18148,9 +18137,8 @@ export type Parser
 				// not built here.
 				//
 				// ⚡ Gated on `genericScope` because a feed needs a type-parameter-typed parameter and outside a
-				// generic type there is none (`paramIsTypeParamTyped` is false for every index when
-				// `enclosingTypeParams` is empty) — so the whole probe is skipped for every function on a
-				// generics-free program, which the `self`-headed predecessor paid for at every `self` token.
+				// generic type there is none (every slot is concrete when `enclosingTypeParams` is empty) — so
+				// the whole probe is skipped for every function on a generics-free program.
 				if genericScope 'maybeOpaqueFeed'
 					if self.markOpaqueContainerMutatorFeeds(q, paramNames: paramNames, typeParamPositions: typeParamPositions, feeds: feeds, shadowedInBlock: shadowedInBlock, shadowedOnLine: shadowedOnLine) 'fedContainer'
 						any = true
@@ -18389,7 +18377,7 @@ export type Parser
 			return true
 		end 'ofTheEnclosingType'
 
-		if head.kind != TokenKind.identifier or self.typeParamPositionOf(head.value) < self.enclosingTypeParams.count() or self.namesInnerAliasHere(head.value) 'headMayNotNameAType'
+		if head.kind != TokenKind.identifier or namesInclude(self.enclosingTypeParams, name: head.value) or self.namesInnerAliasHere(head.value) 'headMayNotNameAType'
 			return false
 		end 'headMayNotNameAType'
 
@@ -18832,7 +18820,7 @@ export type Parser
 		var bound = BoolArray.create()
 
 		for candidateHead in returnedHeads 'eachHead'
-			bound.push(self.paramIndexIn(paramNames, name: candidateHead) < paramNames.count())
+			bound.push(namesInclude(paramNames, name: candidateHead))
 		end 'eachHead'
 
 		var depth = 0 as BlockDepth
@@ -18934,11 +18922,8 @@ export type Parser
 	// The FIRST rebinding wins: an inner block that rebinds a name an outer one already took must not shorten
 	// the outer one's reach when the inner block closes.
 	function noteParameterShadowedInBlock(namePos TokenIndex, paramNames ByteArrayArray, depth BlockDepth, shadowedInBlock ParamShadowColumn)
-		let index = self.paramIndexIn(paramNames, name: self.tokenAt(namePos).value)
-
-		if index >= paramNames.count() 'namesNoParameter'
-			return
-		end 'namesNoParameter'
+		let position = try namePositionIn(paramNames, name: self.tokenAt(namePos).value) otherwise return
+		let index = position as ParamCount
 
 		while shadowedInBlock.count() <= index 'reach'
 			shadowedInBlock.push(0)
@@ -18954,11 +18939,8 @@ export type Parser
 	// The LINE-scoped twin — a match arm's payload and a closure's parameter, which bind for one expression.
 	// A plain bit, because a line has no depth to remember and the whole column is cleared at the newline.
 	function noteParameterShadowedOnLine(namePos TokenIndex, paramNames ByteArrayArray, shadowedOnLine BoolArray)
-		let index = self.paramIndexIn(paramNames, name: self.tokenAt(namePos).value)
-
-		if index < paramNames.count() 'ofOwnParameter'
-			setParamBit(shadowedOnLine, index: index)
-		end 'ofOwnParameter'
+		let position = try namePositionIn(paramNames, name: self.tokenAt(namePos).value) otherwise return
+		setParamBit(shadowedOnLine, index: position as ParamCount)
 	end 'noteParameterShadowedOnLine'
 
 	// ⭐ **A BLOCK HAS CLOSED, so every rebinding made inside it is out of scope and its parameter has its
@@ -20335,7 +20317,7 @@ export type Parser
 
 	// Is the token at `q` a `<local>.<method>(` call whose receiver `selfTypedLocalBoundAt` recorded — the
 	// self-call the line above makes visible. The name list is a handful of locals per body, so a scan is what
-	// it costs; `typeParamPositionOf` answers the same shape of question the same way.
+	// it costs.
 	function selfTypedLocalCallAt(q TokenIndex, locals ByteArrayArray) returns bool
 		if self.kindAt(q) != TokenKind.identifier or not self.memberCallFollows(q + 1) 'notAMemberCall'
 			return false
@@ -20717,7 +20699,7 @@ export type Parser
 			return false
 		end 'noClose'
 
-		return self.typeParamPositionOf(self.tokenAt(sizeofPos + 2).value) < self.enclosingTypeParams.count()
+		return namesInclude(self.enclosingTypeParams, name: self.tokenAt(sizeofPos + 2).value)
 	end 'sizeofOperandIsTypeParamAt'
 
 	// Is the `countof` at `countofPos` a `countof(<the enclosing declaration's own instance>)` — the 4
@@ -20776,23 +20758,23 @@ export type Parser
 		return try braceStack.get(braceStack.count() - 1) otherwise panic("braceStackInnermostIsBrace: get OOB on non-empty stack")
 	end 'braceStackInnermostIsBrace'
 
-	// The parameter index of the VALUE that follows a struct-field `:` at `colonPos`, or `paramNames.count()`
-	// (a non-parameter) when the value is not a bare parameter reference. The value runs to the field's `,`
+	// The parameter index of the VALUE that follows a struct-field `:` at `colonPos`; throws when the value
+	// is not a bare parameter reference. The value runs to the field's `,`
 	// or the literal's `}`; surrounding parens are stripped (matching `rhsWasBareLocalReference`), so
 	// `f: p`, `f: (p)` and `f: ((p))` all name `p`, while `f: p + 1`, `f: g(p)` and `f: q.x` name none.
-	function consumedParamAfterColon(colonPos TokenIndex, paramNames ByteArrayArray) returns ParamCount
-		let (idx, past) = self.parenStrippedParamAt((colonPos + 1) as TokenIndex, paramNames: paramNames)
+	function consumedParamAfterColon(colonPos TokenIndex, paramNames ByteArrayArray) returns ParamCount throws MapError
+		let (idx, past) = try self.parenStrippedParamAt((colonPos + 1) as TokenIndex, paramNames: paramNames)
 
 		// The value must END here — the next token is the field separator `,` or the literal close `}`.
 		// Anything else (`+`, `.`, `(`) means the parameter was READ inside a larger expression, not moved.
-		if idx < paramNames.count() and (self.kindAt(past) == TokenKind.comma or self.kindAt(past) == TokenKind.rightBrace) 'bareMove'
+		if self.kindAt(past) == TokenKind.comma or self.kindAt(past) == TokenKind.rightBrace 'bareMove'
 			return idx
 		end 'bareMove'
 
-		return paramNames.count()
+		throw MapError.keyNotFound
 	end 'consumedParamAfterColon'
 
-	function parenStrippedParamAt(start TokenIndex, paramNames ByteArrayArray) returns (ParamCount, TokenIndex)
+	function parenStrippedParamAt(start TokenIndex, paramNames ByteArrayArray) returns (ParamCount, TokenIndex) throws MapError
 		var q = start
 		var opens = 0
 
@@ -20806,14 +20788,10 @@ export type Parser
 		// its +1 while the box owns it too: a double free. It claims nothing extra, because a keyword
 		// that names no parameter is dropped by the lookup below exactly as an unrelated identifier is.
 		if not tokenCanBeAName(self.tokenAt(q)) 'notAName'
-			return (paramNames.count(), q)
+			throw MapError.keyNotFound
 		end 'notAName'
 
-		let idx = self.paramIndexIn(paramNames, name: self.tokenAt(q).value)
-
-		if idx >= paramNames.count() 'notParam'
-			return (paramNames.count(), q)
-		end 'notParam'
+		let idx = (try namePositionIn(paramNames, name: self.tokenAt(q).value)) as ParamCount
 
 		q = q + 1
 
@@ -20825,7 +20803,7 @@ export type Parser
 		end 'stripClose'
 
 		if closes != opens 'unbalanced'
-			return (paramNames.count(), q)
+			throw MapError.keyNotFound
 		end 'unbalanced'
 
 		return (idx, q)
@@ -20930,8 +20908,8 @@ export type Parser
 		end 'eachBinderPosition'
 	end 'notePatternRebindings'
 
-	// The parameter a promise consume door reclaims at `q`, or `paramNames.count()` when the token
-	// opens no such door. `await p` takes the thread's result and `p.cancel()` takes nothing, and both
+	// The parameter a promise consume door reclaims at `q`; throws when the token opens no such door.
+	// `await p` takes the thread's result and `p.cancel()` takes nothing, and both
 	// hand the green thread back to the runtime (`consumePromiseThread`). A frame that does that owns
 	// the promise, so the parameter is a consume exactly as a durable store is.
 	//
@@ -20940,16 +20918,16 @@ export type Parser
 	// awaits one nothing enrolled meets E3141 at its own `await`. The caller moves a promise argument
 	// at exactly the positions the same predicate names (`transferConsumedArgs`), so a later read of
 	// the source is E3102/E3142.
-	function promiseConsumeDoorParamAt(q TokenIndex, paramNames ByteArrayArray) returns ParamCount
+	function promiseConsumeDoorParamAt(q TokenIndex, paramNames ByteArrayArray) returns ParamCount throws MapError
 		if self.kindAt(q) == TokenKind.await 'awaitDoor'
 			// The target must be the name alone, parens aside: `await p.inner`, `await f(p)` and `await
 			// ps[i]` read through the parameter rather than moving it, and each is excluded by the token
 			// that follows.
-			let (idx, past) = self.parenStrippedParamAt((q + 1) as TokenIndex, paramNames: paramNames)
+			let (idx, past) = try self.parenStrippedParamAt((q + 1) as TokenIndex, paramNames: paramNames)
 			let after = self.kindAt(past)
 
 			if after == TokenKind.dot or after == TokenKind.leftParen or after == TokenKind.leftBracket 'headsALargerExpression'
-				return paramNames.count()
+				throw MapError.keyNotFound
 			end 'headsALargerExpression'
 
 			return idx
@@ -20960,49 +20938,35 @@ export type Parser
 		// (`xs.get(0).cancel()` stands on a `)`), and the `.` test rejects a qualified one (`self.p.cancel()`),
 		// neither of which names a parameter slot. The index floor keeps both probes inside the token array.
 		if q >= PromiseCancelQualifierBack and self.isDotMethodCallHeadAt(q) and self.tokenAt(q).value.equals(PromiseCancelMethodName) and self.kindAt(q + 2) == TokenKind.rightParen and self.kindAt((q - PromiseCancelQualifierBack) as TokenIndex) != TokenKind.dot 'cancelDoor'
-			return self.bareParamReferenceAt((q - PromiseCancelReceiverBack) as TokenIndex, paramNames: paramNames)
+			return try self.bareParamReferenceAt((q - PromiseCancelReceiverBack) as TokenIndex, paramNames: paramNames)
 		end 'cancelDoor'
 
-		return paramNames.count()
+		throw MapError.keyNotFound
 	end 'promiseConsumeDoorParamAt'
 
-	function handedBackParamAt(q TokenIndex, paramNames ByteArrayArray) returns ParamCount
+	function handedBackParamAt(q TokenIndex, paramNames ByteArrayArray) returns ParamCount throws MapError
 		if self.kindAt(q) != TokenKind.return 'notAReturn'
-			return paramNames.count()
+			throw MapError.keyNotFound
 		end 'notAReturn'
 
-		let (idx, past) = self.parenStrippedParamAt((q + 1) as TokenIndex, paramNames: paramNames)
+		let (idx, past) = try self.parenStrippedParamAt((q + 1) as TokenIndex, paramNames: paramNames)
 
-		if idx < paramNames.count() and self.statementEndsAt(past) 'aBareReturn'
+		if self.statementEndsAt(past) 'aBareReturn'
 			return idx
 		end 'aBareReturn'
 
-		return paramNames.count()
+		throw MapError.keyNotFound
 	end 'handedBackParamAt'
 
 	// Read through `tokenCanBeAName` for `parenStrippedParamAt`'s reason: a parameter's name may be a
 	// keyword.
-	function bareParamReferenceAt(p TokenIndex, paramNames ByteArrayArray) returns ParamCount
+	function bareParamReferenceAt(p TokenIndex, paramNames ByteArrayArray) returns ParamCount throws MapError
 		if not tokenCanBeAName(self.tokenAt(p)) 'notAName'
-			return paramNames.count()
+			throw MapError.keyNotFound
 		end 'notAName'
 
-		return self.paramIndexIn(paramNames, name: self.tokenAt(p).value)
+		return (try namePositionIn(paramNames, name: self.tokenAt(p).value)) as ParamCount
 	end 'bareParamReferenceAt'
-
-	// The index of `name` in `paramNames`, or `paramNames.count()` when absent — the linear-scan door the
-	// consume scan maps a value token back to a parameter position through.
-	function paramIndexIn(paramNames ByteArrayArray, name ByteArray) returns ParamCount
-		for i in 0 upto paramNames.count() 'each'
-			let paramName = try paramNames.get(i) otherwise panic("paramIndexIn: paramNames.get OOB at {i}")
-
-			if paramName.equals(name) 'match'
-				return i
-			end 'match'
-		end 'each'
-
-		return paramNames.count()
-	end 'paramIndexIn'
 
 	// ⭐⭐ **MARK EACH BARE TYPE-PARAMETER ARGUMENT of a `<receiver> . push/set/insert ( … )` CALL AS A
 	// CALLEE-STORAGE FEED**, returning whether any was marked. Cursor `mutatorPos` is the
@@ -21031,7 +20995,7 @@ export type Parser
 	// `__drop_type_param`, which needs a layout descriptor a straight-line body reserves none of. That
 	// disagreement is caught and REFUSED once the body is emitted (`requireDescriptorForOpaqueDrops`); it is not
 	// swallowed here, because nothing at sweep time can resolve the receiver's type.
-	function markOpaqueContainerMutatorFeeds(mutatorPos TokenIndex, paramNames ByteArrayArray, typeParamPositions TypeParamPositionArray, feeds TypeParamFeedArray, shadowedInBlock ParamShadowColumn, shadowedOnLine BoolArray) returns bool
+	function markOpaqueContainerMutatorFeeds(mutatorPos TokenIndex, paramNames ByteArrayArray, typeParamPositions TypeParamSlots, feeds TypeParamFeedArray, shadowedInBlock ParamShadowColumn, shadowedOnLine BoolArray) returns bool
 		if not self.isDotMethodCallHeadAt(mutatorPos) or not tokenCanBeAName(self.tokenAt(mutatorPos)) 'notMethodCall'
 			return false
 		end 'notMethodCall'
@@ -21048,7 +21012,7 @@ export type Parser
 				continue
 			end 'aLocalOfThatNameNow'
 
-			setParamFeed(feeds, index: arg.paramIndex, feed: TypeParamFeed.feeds(self.paramTypeParamPositionAt(typeParamPositions, index: arg.paramIndex), sink: FeedSink.calleeStorage))
+			setParamFeed(feeds, index: arg.paramIndex, feed: TypeParamFeed.feeds(arg.typeParamPosition, sink: FeedSink.calleeStorage))
 			any = true
 		end 'eachArg'
 
@@ -21064,7 +21028,7 @@ export type Parser
 	// A parameter's name may be a KEYWORD (D8), so the bare reference to it is one too — read through
 	// `tokenCanBeAName`, `consumedParamAfterColon`'s rule and for its measured reason (a missed feed leaves the
 	// concrete call site BORROWING a managed argument the owner then destroys).
-	function bareTypeParamArgsIn(argsStart TokenIndex, paramNames ByteArrayArray, typeParamPositions TypeParamPositionArray) returns BareTypeParamArgArray
+	function bareTypeParamArgsIn(argsStart TokenIndex, paramNames ByteArrayArray, typeParamPositions TypeParamSlots) returns BareTypeParamArgArray
 		var found = BareTypeParamArgArray.create()
 		var depth = 1
 		var p = argsStart
@@ -21079,11 +21043,13 @@ export type Parser
 					depth = depth - 1
 				end 'closeArg' else 'notClose'
 					if depth == 1 and tokenCanBeAName(self.tokenAt(p)) and self.isBareArgValueAt(p) 'candidate'
-						let idx = self.paramIndexIn(paramNames, name: self.tokenAt(p).value)
+						if let position = try namePositionIn(paramNames, name: self.tokenAt(p).value) 'namesAParameter'
+							let idx = position as ParamCount
 
-						if idx < paramNames.count() and self.paramIsTypeParamTyped(typeParamPositions, index: idx) 'typeParamArg'
-							found.push(BareTypeParamArg.create(idx, valuePos: p))
-						end 'typeParamArg'
+							if let typeParamPosition = try typeParamPositions.positionAt(idx) 'typeParamArg'
+								found.push(BareTypeParamArg.create(idx, typeParamPosition: typeParamPosition, valuePos: p))
+							end 'typeParamArg'
+						end 'namesAParameter'
 					end 'candidate'
 				end 'notClose'
 			end 'notOpen'
@@ -21105,7 +21071,7 @@ export type Parser
 	// this the caller would BORROW the managed argument the box then destroys — a double-free (`0xC0000005`), the
 	// field-store twin of the array-feed hole `recordTransitiveArrayFeeds` closes. The head test recognises
 	// `self . <field> = <param>` where the RHS is a bare type-parameter parameter.
-	function markOpaqueFieldReassignFeed(selfPos TokenIndex, paramNames ByteArrayArray, typeParamPositions TypeParamPositionArray, feeds TypeParamFeedArray, shadowedInBlock ParamShadowColumn, shadowedOnLine BoolArray) returns bool
+	function markOpaqueFieldReassignFeed(selfPos TokenIndex, paramNames ByteArrayArray, typeParamPositions TypeParamSlots, feeds TypeParamFeedArray, shadowedInBlock ParamShadowColumn, shadowedOnLine BoolArray) returns bool
 		// The field's opacity is NOT queried here: this runs in the SWEEP, before the struct layouts are merged
 		// into `self.signatures` (exactly why `markOpaqueContainerMutatorFeeds` is purely token-based too). It need
 		// not be — a type-parameter argument can be assigned ONLY to a type-parameter (opaque) field, so a bare
@@ -21127,18 +21093,17 @@ export type Parser
 			return false
 		end 'notBareMove'
 
-		let idx = self.paramIndexIn(paramNames, name: self.tokenAt(selfPos + 4).value)
+		let position = try namePositionIn(paramNames, name: self.tokenAt(selfPos + 4).value) otherwise return false
+		let idx = position as ParamCount
 
-		if idx >= paramNames.count() or not self.paramIsTypeParamTyped(typeParamPositions, index: idx) 'notTypeParamArg'
-			return false
-		end 'notTypeParamArg'
+		let feedPos = try typeParamPositions.positionAt(idx) otherwise return false
 
 		// A feed is a consume, so it stops at a rebinding of the name exactly as the two direct doors do.
 		if not paramNameStillDenotesTheParameter(shadowedInBlock, shadowedOnLine: shadowedOnLine, index: idx) 'aLocalOfThatNameNow'
 			return false
 		end 'aLocalOfThatNameNow'
 
-		setParamFeed(feeds, index: idx, feed: TypeParamFeed.feeds(self.paramTypeParamPositionAt(typeParamPositions, index: idx), sink: FeedSink.calleeStorage))
+		setParamFeed(feeds, index: idx, feed: TypeParamFeed.feeds(feedPos, sink: FeedSink.calleeStorage))
 		return true
 	end 'markOpaqueFieldReassignFeed'
 
@@ -21241,7 +21206,7 @@ export type Parser
 			end 'typeEnd'
 
 			if self.functionDeclarationAt(q) 'method'
-				var typeParamPositions = TypeParamPositionArray.create()
+				var typeParamPositions = TypeParamSlots.create()
 				let takesReceiver = self.declarationTakesReceiver(self.functionDeclIsStatic(q))
 				let paramNames = self.feedScanParams((q + 2) as TokenIndex, takesReceiver: takesReceiver, typeParamPositionsOut: typeParamPositions)
 				let scan = self.scanOneMethodFeedSignals(q + 2, funcName: qualifiedMethodName(self.enclosingType, methodName: self.tokenAt(q + 1).value), paramNames: paramNames, typeParamPositions: typeParamPositions, takesReceiver: takesReceiver)
@@ -21261,7 +21226,7 @@ export type Parser
 	// SOURCE list for a receiverless one, whose own parameter list already IS its call-site list. The transitive
 	// fixpoint REPLACES the sweep's entry for a method that gains a feed, so the two alignments have to be the
 	// same list — this is the one place that says which is which.
-	function feedScanParams(paramsStart TokenIndex, takesReceiver bool, typeParamPositionsOut TypeParamPositionArray) returns ByteArrayArray
+	function feedScanParams(paramsStart TokenIndex, takesReceiver bool, typeParamPositionsOut TypeParamSlots) returns ByteArrayArray
 		if not takesReceiver 'receiverless'
 			return self.paramNamesIn(paramsStart, typeParamPositionsOut: typeParamPositionsOut, collectTypeParamFlags: true, typesOut: self.emptySweptParamTypes, collectTypes: false)
 		end 'receiverless'
@@ -21276,7 +21241,7 @@ export type Parser
 	// parameter list and return type carry no `.mutator(` call, no `self.N` shape and no bare-sibling call, so
 	// scanning from `startPos` costs one harmless pass over them — mirroring `scanOneMethodDescriptorSignals`,
 	// which starts at the same token.
-	function scanOneMethodFeedSignals(startPos TokenIndex, funcName ByteArray, paramNames ByteArrayArray, typeParamPositions TypeParamPositionArray, takesReceiver bool) returns MethodFeedScan
+	function scanOneMethodFeedSignals(startPos TokenIndex, funcName ByteArray, paramNames ByteArrayArray, typeParamPositions TypeParamSlots, takesReceiver bool) returns MethodFeedScan
 		var directFeeds = TypeParamFeedArray.create()
 		var edges = ForwardFeedEdgeArray.create()
 
@@ -21352,7 +21317,7 @@ export type Parser
 	// parameter position. A non-parameter argument, an index expression, or a `.`-chain hop is not a bare forward and
 	// is skipped; a plain-typed caller parameter cannot BE a feed, so it is skipped too — which is exactly what
 	// `bareTypeParamArgsIn` answers, and the reason the walk lives there rather than here.
-	function collectForwardFeedEdges(argsStart TokenIndex, calleeName ByteArray, paramNames ByteArrayArray, typeParamPositions TypeParamPositionArray, edges ForwardFeedEdgeArray, shadowedInBlock ParamShadowColumn, shadowedOnLine BoolArray)
+	function collectForwardFeedEdges(argsStart TokenIndex, calleeName ByteArray, paramNames ByteArrayArray, typeParamPositions TypeParamSlots, edges ForwardFeedEdgeArray, shadowedInBlock ParamShadowColumn, shadowedOnLine BoolArray)
 		for arg in self.bareTypeParamArgsIn(argsStart, paramNames: paramNames, typeParamPositions: typeParamPositions) 'eachArg'
 			// A forwarded name a local has taken forwards the LOCAL, exactly as at the direct feed doors.
 			if not paramNameStillDenotesTheParameter(shadowedInBlock, shadowedOnLine: shadowedOnLine, index: arg.paramIndex) 'aLocalOfThatNameNow'
@@ -21422,12 +21387,9 @@ export type Parser
 			for edge in scan.edges 'edge'
 				if let j = try nameToIndex.get(edge.calleeName) 'sibling'
 					let calleeScan = try scans.get(j) otherwise panic("solveAndPublishTransitiveFeeds: scans.get({j}) OOB for callee")
-					let calleePos = self.forwardEdgeCalleePos(edge, calleeScan: calleeScan)
-
-					if calleePos < calleeScan.paramNames.count() 'realEdge'
-						edgeCallee.push((try paramBase.get(j) otherwise panic("solveAndPublishTransitiveFeeds: paramBase.get({j}) OOB")) + (calleePos as CsrIndex))
-						edgeCaller.push(callerBase + (edge.callerParamPos as CsrIndex))
-					end 'realEdge'
+					let calleePos = try self.forwardEdgeCalleePos(edge, calleeScan: calleeScan) otherwise continue
+					edgeCallee.push((try paramBase.get(j) otherwise panic("solveAndPublishTransitiveFeeds: paramBase.get({j}) OOB")) + (calleePos as CsrIndex))
+					edgeCaller.push(callerBase + (edge.callerParamPos as CsrIndex))
 				end 'sibling'
 			end 'edge'
 		end 'edges'
@@ -21469,15 +21431,13 @@ export type Parser
 	end 'solveAndPublishTransitiveFeeds'
 
 	// The callee's parameter position a forward edge targets: its FIRST user parameter for a positional argument,
-	// or the labelled parameter's position (`paramIndexIn`) otherwise — the same slotting a call site applies. The
-	// first user parameter is slot 1 for an INSTANCE method (the receiver holds call-aligned slot 0) and slot 0 for
-	// a receiverless one, which is why the scan carries `takesReceiver` rather than assuming one (W10).
-	function forwardEdgeCalleePos(edge ForwardFeedEdge, calleeScan MethodFeedScan) returns ParamCount
-		if edge.argLabel.isEmpty() 'positional'
-			return (1 if calleeScan.takesReceiver else 0) as ParamCount
-		end 'positional'
-
-		return self.paramIndexIn(calleeScan.paramNames, name: edge.argLabel)
+	// or the labelled parameter's position otherwise — `argSlotPosition`, the same slotting a call site
+	// applies. The first user parameter is slot 1 for an INSTANCE method (the receiver holds call-aligned
+	// slot 0) and slot 0 for a receiverless one, which is why the scan carries `takesReceiver` rather than
+	// assuming one (W10).
+	function forwardEdgeCalleePos(edge ForwardFeedEdge, calleeScan MethodFeedScan) returns ParamCount throws MapError
+		let firstUserParam = (1 if calleeScan.takesReceiver else 0) as ParamCount
+		return try argSlotPosition(calleeScan.paramNames, argIndex: firstUserParam, label: edge.argLabel)
 	end 'forwardEdgeCalleePos'
 
 	// Write each transitively-fed method's final feeds into `paramConsumes`. Only a method that GAINED a feed at a
@@ -21542,7 +21502,8 @@ export type Parser
 			let feedParam = try isFeed.get(nodeBase + p) otherwise panic("feedsMergedOnto: isFeed.get OOB at ({nodeBase}+{p})")
 
 			if feedParam 'feedParam'
-				feeds.push(TypeParamFeed.feeds(self.paramTypeParamPositionAt(scan.typeParamPositions, index: p), sink: FeedSink.calleeStorage))
+				let feedPos = try scan.typeParamPositions.positionAt(p) otherwise panic("feedsMergedOnto: `{String.from(scan.funcName)}` parameter {p} is a fed node and names no type parameter — the fixpoint's seeds are type-parameter feeds and its edges start only at bare type-parameter arguments")
+				feeds.push(TypeParamFeed.feeds(feedPos, sink: FeedSink.calleeStorage))
 			end 'feedParam' else 'sweptParam'
 				feeds.push(prior.typeParamFeedOf(p))
 			end 'sweptParam'
@@ -21553,7 +21514,7 @@ export type Parser
 
 	// ⭐ **READ A PARAMETER LIST IN ONE WALK (P1.6-A/B2)** — the ordered NAMES out of the `(…)` beginning at
 	// `parenPos` (returned), and IN THE SAME PASS the type-parameter POSITION each parameter's declared type
-	// names (the sentinel `enclosingTypeParams.count()` for a plain type), pushed into
+	// names (a concrete slot for a plain type), pushed into
 	// `typeParamPositionsOut`. Peek-only (the cursor is untouched). Each parameter is `name Type`, so the
 	// first token after `(` or a top-level `,` is the name and the type runs to the next top-level `,` or the
 	// closing `)`; `skipParamType` finds that end (paren depth tracked, because a type may itself contain
@@ -21577,7 +21538,7 @@ export type Parser
 	// — see there: it needs a strictly COARSER answer that this grammar cannot give more cheaply, and a shared
 	// walk that returned index COLUMNS measured **+7,794 allocations at rung 0 of the scale ladder, doubling
 	// per rung**, because it put three heap objects on a once-per-function path.
-	function paramNamesIn(parenPos TokenIndex, typeParamPositionsOut TypeParamPositionArray, collectTypeParamFlags bool, typesOut MaxonTypeArray, collectTypes bool) returns ByteArrayArray
+	function paramNamesIn(parenPos TokenIndex, typeParamPositionsOut TypeParamSlots, collectTypeParamFlags bool, typesOut MaxonTypeArray, collectTypes bool) returns ByteArrayArray
 		var names = ByteArrayArray.create()
 		var q = parenPos
 
@@ -21600,7 +21561,7 @@ export type Parser
 			let typeEnd = self.skipParamType(typeStart)
 
 			if collectTypeParamFlags 'flag'
-				typeParamPositionsOut.push(self.paramTypeParamPosition(typeStart, typeEnd: typeEnd))
+				self.pushParamTypeParamSlot(typeParamPositionsOut, typeStart: typeStart, typeEnd: typeEnd)
 			end 'flag'
 
 			if collectTypes 'overloadSurface'
@@ -21622,17 +21583,18 @@ export type Parser
 
 	// The TYPE-PARAMETER POSITION the parameter type spanning `[typeStart, typeEnd)` names (P1.6-A/B2) — a
 	// SINGLE identifier (`typeEnd == typeStart + 1`) whose text is a `uses` parameter of the enclosing type
-	// resolves to its position; anything else yields the "not a type parameter" sentinel
-	// (`enclosingTypeParams.count()`, what `typeParamPositionOf` returns for a non-parameter name). The
-	// consume scan reads it BOTH as "is it a type parameter?" (position below count) and, for B2, as the
-	// feed position — one walk, one fact.
-	function paramTypeParamPosition(typeStart TokenIndex, typeEnd TokenIndex) returns TypeParamPosition
+	// resolves to its position; anything else is a concrete slot. The consume scan reads it BOTH as "is it a
+	// type parameter?" and, for B2, as the feed position — one walk, one fact.
+	function pushParamTypeParamSlot(slots TypeParamSlots, typeStart TokenIndex, typeEnd TokenIndex)
 		if typeEnd == typeStart + 1 and self.kindAt(typeStart) == TokenKind.identifier 'singleIdent'
-			return self.typeParamPositionOf(self.tokenAt(typeStart).value)
+			if let position = try namePositionIn(self.enclosingTypeParams, name: self.tokenAt(typeStart).value) 'namesAUsesParameter'
+				slots.pushTypeParameter(position)
+				return
+			end 'namesAUsesParameter'
 		end 'singleIdent'
 
-		return self.enclosingTypeParams.count()
-	end 'paramTypeParamPosition'
+		slots.pushConcrete()
+	end 'pushParamTypeParamSlot'
 
 	// ⭐⭐ **WHAT THE SWEEP PUBLISHES ABOUT ONE PARAMETER'S DECLARED TYPE — the CALL-side half of an overload
 	// set** (`ProgramSignatures.overloadedDeclsOf`). It is read through `parseTypeReference`, the ONE type
@@ -21762,7 +21724,7 @@ export type Parser
 	//
 	// ⚠ **THE `=` STOP IS NOT ONLY FOR THE DEFAULT WALK — IT IS WHAT KEEPS THE EXISTING SCANS CORRECT**
 	// (BATCH2 slice 4). Every caller reads the SPAN `[typeStart, typeEnd)` as the declared type:
-	// `paramTypeParamPosition` calls a span of length 1 a bare type parameter, and
+	// `pushParamTypeParamSlot` calls a span of length 1 a bare type parameter, and
 	// `innerAliasMemberOfParamType` reads its tokens. Left running to the `,`, `p T = 1` would hand both of
 	// them a three-token "type" and a `uses`-parameter-typed parameter would stop being recognized as one
 	// the moment it gained a default. No type reference can CONTAIN a top-level `=` — `int(0 to 100)` and
@@ -23814,25 +23776,16 @@ export type Parser
 		self.extensionAssociatedTypeBindings = sharedEmptyExtensionAssociatedTypes
 	end 'clearExtensionAssociatedTypes'
 
-	// ⭐ **WHAT THIS EXTENSION BODY'S CONFORMER BINDS `name` TO, or `name` ITSELF when it is not an associated
-	// type of the extended interface** (conditional extensions). Answering the name unchanged is what lets
-	// `parseTypeReference` ask unconditionally: outside an interface extension the columns are the shared
-	// empty, the loop does not run, and the caller resolves exactly the name the author wrote.
+	// ⭐ **WHAT THIS EXTENSION BODY'S CONFORMER BINDS `name` TO** (conditional extensions); it throws when
+	// `name` is not an associated type of the extended interface. Outside an interface extension the columns
+	// are the shared empty, so `parseTypeReference` asks unconditionally and falls back to the name the
+	// author wrote.
 	//
-	// A linear scan for `typeParamPositionOf`'s reason: an interface declares a handful of associated types,
-	// so a per-parse name→binding map would be a heap object bought to serve one or two lookups.
-	function extensionAssociatedTypeBinding(name ByteArray) returns ByteArray
-		for i in 0 upto self.extensionAssociatedTypeNames.count() 'eachAssociated'
-			let associated = try self.extensionAssociatedTypeNames.get(i) otherwise panic("extensionAssociatedTypeBinding: extensionAssociatedTypeNames.get OOB at {i} below count {self.extensionAssociatedTypeNames.count()}")
-
-			if not associated.equals(name) 'notThisOne'
-				continue
-			end 'notThisOne'
-
-			return try self.extensionAssociatedTypeBindings.get(i) otherwise panic("extensionAssociatedTypeBinding: the conformer binds nothing at associated-type position {i}, where the interface declares {self.extensionAssociatedTypeNames.count()} — `openExtensionBodyScope` installs the two columns only when their lengths agree")
-		end 'eachAssociated'
-
-		return name
+	// A linear scan: an interface declares a handful of associated types, so a per-parse name→binding map
+	// would be a heap object bought to serve one or two lookups.
+	function extensionAssociatedTypeBinding(name ByteArray) returns ByteArray throws MapError
+		let i = try namePositionIn(self.extensionAssociatedTypeNames, name: name)
+		return try self.extensionAssociatedTypeBindings.get(i) otherwise panic("extensionAssociatedTypeBinding: the conformer binds nothing at associated-type position {i}, where the interface declares {self.extensionAssociatedTypeNames.count()} — `openExtensionBodyScope` installs the two columns only when their lengths agree")
 	end 'extensionAssociatedTypeBinding'
 
 	// ⭐ **OPEN A GENERIC TYPE'S PARAMETER SCOPE (P1.6-A)** — `type Box uses T` / `type Pair uses A, B`.
@@ -23967,11 +23920,7 @@ export type Parser
 
 		while true 'params'
 			let paramTok = try self.consume(TokenKind.identifier)
-			let paramIndex = self.typeParamPositionOf(paramTok.value)
-
-			if paramIndex >= self.enclosingTypeParams.count() 'notTypeParam'
-				throw ParseError.unsupported("a `where` clause constrains '{String.from(paramTok.value)}', which is not a type parameter of this type — a constraint must name one of its `uses` parameters", line: paramTok.line, column: paramTok.column)
-			end 'notTypeParam'
+			let paramIndex = try namePositionIn(self.enclosingTypeParams, name: paramTok.value) otherwise throw ParseError.unsupported("a `where` clause constrains '{String.from(paramTok.value)}', which is not a type parameter of this type — a constraint must name one of its `uses` parameters", line: paramTok.line, column: paramTok.column)
 
 			try self.consume(TokenKind.is)
 
@@ -25152,7 +25101,8 @@ export type Parser
 
 		for i in receiverArgs upto args.count() 'eachSourceArg'
 			let label = try argLabels.get(i) otherwise panic("widenArgsToDeclaration: argLabels.get OOB at {i} — args and argLabels are pushed in lockstep")
-			let swept = try decl.paramTypes.get(argSlotPosition(decl.paramNames, argIndex: i - receiverArgs, label: label)) otherwise continue
+			let slot = try argSlotPosition(decl.paramNames, argIndex: i - receiverArgs, label: label) otherwise continue
+			let swept = try decl.paramTypes.get(slot) otherwise panic("widenArgsToDeclaration: paramTypes.get OOB at {slot} — the sweep records one type per parameter name")
 			let given = try args.get(i) otherwise panic("widenArgsToDeclaration: args.get OOB at {i}")
 			try args.set(i, value: self.interfaceHandleOf(given, declared: self.sweptParamType(swept, scopeFilePath: decl.declFilePath), first: anchor, last: rparenTok)) otherwise panic("widenArgsToDeclaration: args.set OOB at {i}")
 		end 'eachSourceArg'
@@ -28778,13 +28728,7 @@ export type Parser
 	// `declaresField`-then-`indexOfField` pair under the identical constructor, which is also two linear scans
 	// of one column where one answers both.
 	function requireFieldIndex(struct StructLayout, name ByteArray, anchor Token) returns FieldIndex throws ParseError
-		let index = struct.indexOfField(name)
-
-		if index >= struct.fieldCount() 'noSuchField'
-			throw ParseError.unknownField(String.from(struct.name), fieldName: String.from(name), line: anchor.line, column: anchor.column)
-		end 'noSuchField'
-
-		return index
+		return try struct.indexOfField(name) otherwise throw ParseError.unknownField(String.from(struct.name), fieldName: String.from(name), line: anchor.line, column: anchor.column)
 	end 'requireFieldIndex'
 
 	// ⭐⭐ **DOES THE WRITTEN CONSTANT SUIT THE FIELD'S DECLARED TYPE?** — the rule whose absence was the
@@ -30798,13 +30742,9 @@ export type Parser
 	// `requirementSlotsOf` is not a write standing between an element borrow and its use.
 	function conformanceRequiresMethod(conformance ConformanceDecl, methodName ByteArray) returns bool
 		for interfaceIndex in 0 upto conformance.interfaces.count() 'eachInterface'
-			let slots = self.requirementSlotsOf((try conformance.interfaces.get(interfaceIndex) otherwise panic("conformanceRequiresMethod: interfaceIndex {interfaceIndex} is below conformance.interfaces.count()")).interfaceName)
-
-			for slot in slots 'eachRequirement'
-				if slot.method.name.equals(methodName) 'required'
-					return true
-				end 'required'
-			end 'eachRequirement'
+			if witnessSlotsRequireMethod(self.requirementSlotsOf((try conformance.interfaces.get(interfaceIndex) otherwise panic("conformanceRequiresMethod: interfaceIndex {interfaceIndex} is below conformance.interfaces.count()")).interfaceName), methodName: methodName) 'required'
+				return true
+			end 'required'
 		end 'eachInterface'
 
 		return false
@@ -32338,7 +32278,7 @@ export type Parser
 			// qualified reference at a name that has nothing to do with it. A TYPE extension installs no
 			// bindings at all (its parameters are per-instantiation, and `enclosingTypeParams` is the right
 			// mechanism there) — see `openExtensionBodyScope`.
-			let name = tok.value if qualifierDots > 0 else self.extensionAssociatedTypeBinding(tok.value)
+			let name = tok.value if qualifierDots > 0 else (try self.extensionAssociatedTypeBinding(tok.value) otherwise tok.value)
 
 			// Recorded HERE, above every arm, rather than in the arm that finally decides what the name
 			// denotes: a name written in a type position is a USE whichever way it resolves, and hooking
@@ -32476,7 +32416,7 @@ export type Parser
 			// ⚠ The digest is a pure function of the two names, so the tolerant sweep and the real parse
 			// compute the SAME token with no registry between them — which is the property this arm's
 			// "without a registry" sentence has always rested on and which an intern-order id would break.
-			if self.typeParamPositionOf(name) < self.enclosingTypeParams.count() 'typeParam'
+			if namesInclude(self.enclosingTypeParams, name: name) 'typeParam'
 				return MaxonType.typeParameter(typeParamTokenFor(self.enclosingType, paramName: name))
 			end 'typeParam'
 
@@ -32876,26 +32816,6 @@ export type Parser
 		return self.enclosingWhereConstraints.count()
 	end 'witnessParamCountFor'
 
-	// The POSITION of `name` in the enclosing type's `uses` list (P1.6-A), or `count()` when it is not
-	// a type parameter — the door `parseTypeReference` recognizes a bare `T` through. ⚠ Since W14 the
-	// answer is spent there as a MEMBERSHIP test and nothing more: what the arm mints is
-	// `typeParamTokenFor(enclosingType, paramName: name)`, an identity, not this index. It is still the
-	// position `readWhereClause` records a constraint against, which is why it survives as a position.
-	// A linear scan, for `StructLayout.indexOfField`'s reason: a type
-	// declares a handful of parameters, so a per-parse name→index map would be a heap object bought to
-	// serve two or three lookups.
-	function typeParamPositionOf(name ByteArray) returns TypeParamPosition
-		for i in 0 upto self.enclosingTypeParams.count() 'each'
-			let paramName = try self.enclosingTypeParams.get(i) otherwise panic("typeParamPositionOf: enclosingTypeParams.get OOB at {i}")
-
-			if paramName.equals(name) 'hit'
-				return i
-			end 'hit'
-		end 'each'
-
-		return self.enclosingTypeParams.count()
-	end 'typeParamPositionOf'
-
 	// ⭐⭐ **THE INSTANCE A BARE GENERIC TYPE NAME DENOTES AT THE CURSOR, or `none`** — `Inner` written
 	// inside `type Outer uses T` means `Inner with Outer.T`, at a TYPE reference (`returns Inner`,
 	// `var v as Inner`, a `with` ARGUMENT), at a STATIC CALL base (`Inner.make(items)`), and — through the
@@ -33048,7 +32968,7 @@ export type Parser
 			return false
 		end 'ownName'
 
-		if self.typeParamPositionOf(name) < self.enclosingTypeParams.count() 'typeParam'
+		if namesInclude(self.enclosingTypeParams, name: name) 'typeParam'
 			return false
 		end 'typeParam'
 
@@ -43185,7 +43105,7 @@ export type Parser
 	// moved to, so counting it would report two owners of one value. An O(ownedBindings) scan; a
 	// reassignment is not a hot path.
 	function bindingIsOwned(binding VarInfo) returns bool
-		return not self.noLiveOwner(self.liveOwnerIndexOf(binding.boundValue))
+		return self.hasLiveOwner(binding.boundValue)
 	end 'bindingIsOwned'
 
 	// ⭐ **WHAT MAKES AN OWNED-SET ENTRY THE ONE LIVE OWNER OF `value`**: it holds that value AND has not
@@ -43476,11 +43396,7 @@ export type Parser
 
 		self.removeFromPendingTemps(promise)
 
-		let index = self.liveOwnerIndexOf(promise)
-
-		if self.noLiveOwner(index) 'unownedSpawn'
-			return
-		end 'unownedSpawn'
+		let index = try self.liveOwnerIndexOf(promise) otherwise return
 
 		// A `var` bound from `.get(index)`: the flag is written THROUGH the shared `VarInfo` reference (the
 		// `Scope.setValue` idiom `poisonOwningBinding` uses), so every holder observes it.
@@ -43675,19 +43591,15 @@ export type Parser
 		self.poisonValueAliases(value)
 	end 'poisonMoveSource'
 
-	// ⭐ **WHERE IN `ownedBindings` THE ONE LIVE OWNER OF `value` SITS — or `ownedBindings.count()` when this
-	// frame owns it through no BINDING at all** (a statement-scoped temporary, or a value it does not own).
-	// Past-the-end is the same answer `typeParamPositionOf` gives for a name that is not a parameter, and it is
-	// read the same way: `bindingIndexEscapesLoop` compares it against a loop's `ownedFloor`, which is a mark
-	// taken at loop entry and so never exceeds the count — a past-the-end index is therefore below no floor,
-	// which is exactly right for "no binding owns this, so no move of it can escape anything".
+	// ⭐ **WHERE IN `ownedBindings` THE ONE LIVE OWNER OF `value` SITS** — it throws when this frame owns it
+	// through no BINDING at all (a statement-scoped temporary, or a value it does not own).
 	//
 	// ⚠ **ONE SCAN, BECAUSE ITS TWO CALLERS MUST AGREE ON *WHICH* BINDING THE MOVE IS ABOUT.** The move itself
 	// (`poisonOwningBinding`, which marks that binding `movedFrom`) and the question asked BEFORE moving
 	// (`moveOfValueEscapesLoop`, which decides whether an opaque container store may move at all) would
 	// otherwise be two walks free to settle on two owners — and then a store would take a reference against one
 	// binding's position while the poison landed on another's.
-	function liveOwnerIndexOf(value ValueId) returns BindingMark
+	function liveOwnerIndexOf(value ValueId) returns BindingMark throws MapError
 		var i = 0
 
 		while i < self.bodyState.ownedBindings.count() 'each'
@@ -43700,17 +43612,13 @@ export type Parser
 			i = i + 1
 		end 'each'
 
-		return self.bodyState.ownedBindings.count()
+		throw MapError.keyNotFound
 	end 'liveOwnerIndexOf'
 
-	// ⭐ **DOES A `liveOwnerIndexOf` ANSWER MEAN "NO BINDING OWNS THIS"?** The past-the-end convention above,
-	// given a NAME so that its six readers spell the test identically. Written out, `index >=
-	// ownedBindings.count()` is a bare comparison whose MEANING lives only in the scan's header — and the
-	// day the convention changes (a real sentinel, a lookup union) every copy is a site to find rather than
-	// a body to edit.
-	function noLiveOwner(index BindingMark) returns bool
-		return index >= self.bodyState.ownedBindings.count()
-	end 'noLiveOwner'
+	function hasLiveOwner(value ValueId) returns bool
+		try self.liveOwnerIndexOf(value) otherwise return false
+		return true
+	end 'hasLiveOwner'
 
 	// ⭐ **WOULD MOVING `value` CROSS OUT OF THE INNERMOST ENCLOSING LOOP?** The question a door asks when it
 	// has a second way to discharge its obligation and wants to know whether the cheap one is available — see
@@ -43718,17 +43626,14 @@ export type Parser
 	// the same binding `poisonOwningBinding` would poison, so the two doors cannot disagree about which move
 	// this is.
 	function moveOfValueEscapesLoop(value ValueId) returns bool
-		return self.bindingIndexEscapesLoop(self.liveOwnerIndexOf(value))
+		let index = try self.liveOwnerIndexOf(value) otherwise return false
+		return self.bindingIndexEscapesLoop(index)
 	end 'moveOfValueEscapesLoop'
 
 	// The owned-set half of `poisonMoveSource`: mark the ONE live owner of `value` moved-from, refusing a
 	// move that would escape the innermost loop.
 	function poisonOwningBinding(value ValueId, anchor Token) throws ParseError
-		let index = self.liveOwnerIndexOf(value)
-
-		if self.noLiveOwner(index) 'noBindingOwnsIt'
-			return
-		end 'noBindingOwnsIt'
+		let index = try self.liveOwnerIndexOf(value) otherwise return
 
 		// A `var` bound from `.get(index)`, not a bare `for` element: a field write needs a mutable binding,
 		// and it is written THROUGH the shared `VarInfo` reference (the `Scope.setValue` idiom), so the flag is
@@ -44261,7 +44166,7 @@ export type Parser
 		// nothing else releases is pure churn. The shape that reaches it is a `for` element — declared
 		// IMMUTABLE (`declareLoopVariable`) and enrolled in no owned set, so it satisfies the alias rule
 		// while owning its value through the statement rather than through a name.
-		if self.noLiveOwner(self.liveOwnerIndexOf(value)) 'ownedTemporaryIsAdopted'
+		if not self.hasLiveOwner(value) 'ownedTemporaryIsAdopted'
 			return value
 		end 'ownedTemporaryIsAdopted'
 
@@ -50641,11 +50546,7 @@ export type Parser
 	// ⚠ **IT IS INERT ON A VALUE NO BINDING OWNS**, which is exactly right for both: a temporary scrutinee
 	// has no name to re-read, and so does `ml.remove(ml.insertLast(x))`.
 	function setBindingPartiallyMoved(owner ValueId, value bool)
-		let index = self.liveOwnerIndexOf(owner)
-
-		if self.noLiveOwner(index) 'noBindingToMark'
-			return
-		end 'noBindingToMark'
+		let index = try self.liveOwnerIndexOf(owner) otherwise return
 
 		// A `var` bound from `.get(index)`: the flag is written THROUGH the shared `VarInfo` reference (the
 		// `Scope.setValue` idiom `poisonOwningBinding` uses), so every holder observes it.
@@ -50656,11 +50557,7 @@ export type Parser
 	// Has the binding `owner` denotes had a managed payload moved out of it on the path parsed so far? The
 	// reader half of the pair above. Only the `match` machinery asks — `remove` sets and never re-reads.
 	function bindingIsPartiallyMoved(owner ValueId) returns bool
-		let index = self.liveOwnerIndexOf(owner)
-
-		if self.noLiveOwner(index) 'noBindingToAsk'
-			return false
-		end 'noBindingToAsk'
+		let index = try self.liveOwnerIndexOf(owner) otherwise return false
 
 		let owned = try self.bodyState.ownedBindings.get(index) otherwise panic("bindingIsPartiallyMoved: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf` and was just bounds-tested")
 		return owned.partiallyMoved
@@ -50696,11 +50593,7 @@ export type Parser
 	// `declarePayloadBindings` demotes that combination to read-only at the branch that chose the retain —
 	// see the `borrowedRetain` arm, and the exit-101 leak that measured it.
 	function scrutineeBindingIsMutable(scrut ValueId, isAParameter bool) returns bool
-		let index = self.liveOwnerIndexOf(scrut)
-
-		if self.noLiveOwner(index) 'ownedByNoBinding'
-			return isAParameter
-		end 'ownedByNoBinding'
+		let index = try self.liveOwnerIndexOf(scrut) otherwise return isAParameter
 
 		let owner = try self.bodyState.ownedBindings.get(index) otherwise panic("scrutineeBindingIsMutable: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf` and was just bounds-tested")
 		return owner.mutable
@@ -51469,11 +51362,7 @@ export type Parser
 			return false
 		end 'borrowed'
 
-		let index = self.liveOwnerIndexOf(give)
-
-		if self.noLiveOwner(index) 'ownedTemporary'
-			return false
-		end 'ownedTemporary'
+		let index = try self.liveOwnerIndexOf(give) otherwise return false
 
 		if index >= ownedFloor 'declaredByThisArm'
 			return false
@@ -52734,7 +52623,7 @@ export type Parser
 		end 'caseRange'
 
 		let member = try info.caseMembers.get(index) otherwise panic("collectErrorUnionPatternAtom: caseMembers.get OOB at {index} — every resolver above returns an index into this column")
-		let memberCaseIndex = member.layout.indexOfCase(info.layout.caseNameAt(index))
+		let memberCaseIndex = try member.layout.indexOfCase(info.layout.caseNameAt(index)) otherwise panic("collectErrorUnionPatternAtom: `{String.from(member.layout.name)}` declares no case '{String.from(info.layout.caseNameAt(index))}' — an error union's cases are its members' own cases, so every case it lists belongs to the member it lists it under")
 
 		if self.at(TokenKind.leftParen) 'payloadBind'
 			// ⚠ **THE ARITY IS CHECKED BEFORE THE LIST IS PARSED, because E3035's ANCHOR is the case name
@@ -53262,13 +53151,7 @@ export type Parser
 	// anchors it at the TYPE name and a match arm at the CASE name, so the POSITION is the caller's to
 	// pass, but the lookup and the diagnostic are shared so the two sites cannot drift on either.
 	function enumCaseIndexOrThrow(layout EnumLayout, nameTok Token, posTok Token) returns CaseIndex throws ParseError
-		let index = layout.indexOfCase(nameTok.value)
-
-		if index >= layout.caseCount() 'unknownCase'
-			throw ParseError.enumUnknownCase(layout.kindWord(), caseName: String.from(nameTok.value), line: posTok.line, column: posTok.column)
-		end 'unknownCase'
-
-		return index
+		return try layout.indexOfCase(nameTok.value) otherwise throw ParseError.enumUnknownCase(layout.kindWord(), caseName: String.from(nameTok.value), line: posTok.line, column: posTok.column)
 	end 'enumCaseIndexOrThrow'
 
 	// Resolve a case NAME in a match arm to its declaration index. A QUALIFIED name (`Color.red`) is
@@ -61615,7 +61498,7 @@ export type Parser
 			let nameTok = try self.consume(TokenKind.identifier)
 			try self.consume(TokenKind.colon)
 
-			let index = try self.requireFieldIndex(layout, fieldTok: nameTok)
+			let index = try self.requireFieldIndex(layout, name: nameTok.value, anchor: nameTok)
 
 			let alreadyFilled = try filled.get(index) otherwise panic("parseStructLiteralFields: filled.get OOB at {index} — the columns are sized to the layout's field count")
 
@@ -62495,22 +62378,14 @@ export type Parser
 		try self.requireArrayMarkerDeclaresTheBuffer(layout, anchor: anchor)
 		let tag = try self.requireFusedWrapperTag(layout, anchor: anchor)
 
-		let managedIndex = layout.inlineManagedFieldIndex()
-
-		if managedIndex >= layout.fieldCount() 'noManagedField'
-			// A wrapper conformer with no `managed` field declares itself the compiler's byte record and then
-			// does not carry one. Nothing in the corpus does this; a stdlib edit that did would otherwise
-			// reach `fieldValues.get` past its end.
-			throw ParseError.unsupported("`{String.from(layout.name)}` names a builtin literal marker, so its record is the fused byte record, but it declares no `managed` field for that record's buffer to come from", line: anchor.line, column: anchor.column)
-		end 'noManagedField'
+		// A wrapper conformer with no `managed` field declares itself the compiler's byte record and then
+		// does not carry one. Nothing in the corpus does this; a stdlib edit that did would otherwise
+		// reach `fieldValues.get` past its end.
+		let managedIndex = try layout.inlineManagedFieldIndex() otherwise throw ParseError.unsupported("`{String.from(layout.name)}` names a builtin literal marker, so its record is the fused byte record, but it declares no `managed` field for that record's buffer to come from", line: anchor.line, column: anchor.column)
 
 		let source = try fieldValues.get(managedIndex) otherwise panic("emitFusedWrapperLiteral: fieldValues.get OOB at {managedIndex} — the column is sized to the layout's field count")
 
-		let flagIndex = layout.indexOfField(SingleByteGraphemesFieldName)
-
-		if flagIndex >= layout.fieldCount() 'classifiesItsOwnBytes'
-			return self.emitOwnedRuntimeResult(StrFromBytesName, args: singletonArgs(source), resultTag: tag, resultNameId: self.fusedWrapperNameId(tag, layout: layout), range: range)
-		end 'classifiesItsOwnBytes'
+		let flagIndex = try layout.indexOfField(SingleByteGraphemesFieldName) otherwise return self.emitOwnedRuntimeResult(StrFromBytesName, args: singletonArgs(source), resultTag: tag, resultNameId: self.fusedWrapperNameId(tag, layout: layout), range: range)
 
 		let flag = try fieldValues.get(flagIndex) otherwise panic("emitFusedWrapperLiteral: fieldValues.get OOB at {flagIndex} — the column is sized to the layout's field count")
 		return self.emitOwnedRuntimeResult(StrOfBufferName, args: pairArgs(source, second: flag), resultTag: tag, resultNameId: self.fusedWrapperNameId(tag, layout: layout), range: range)
@@ -63899,11 +63774,7 @@ export type Parser
 		let nameTok = try self.consume(TokenKind.stringLiteral)
 		let wanted = try self.decodedStringLiteralBytes(nameTok)
 
-		let index = layout.indexOfCase(wanted)
-
-		if index >= layout.caseCount() 'noSuchCase'
-			throw ParseError.enumNoCaseNamed(layout.kindWord(), caseName: String.from(wanted), typeName: String.from(layout.name), line: memberTok.line, column: memberTok.column)
-		end 'noSuchCase'
+		let index = try layout.indexOfCase(wanted) otherwise throw ParseError.enumNoCaseNamed(layout.kindWord(), caseName: String.from(wanted), typeName: String.from(layout.name), line: memberTok.line, column: memberTok.column)
 
 		if layout.payloadArityAt(index) == 0 'payloadFree'
 			// A payload-free case takes the name and nothing else; anything further is the arity refusal
@@ -64770,9 +64641,7 @@ export type Parser
 	// would make `var b = …` + `xs.push(b)` a fresh E3077 on programs this ruling exists to ACCEPT, which is a
 	// second behaviour change riding a refcount fix. The answer is deliberately held at exactly what it was.
 	function storeOwnedValueIntoDurableSink(arg ValueId, isString bool, range SourceRange) returns ValueId
-		let index = self.liveOwnerIndexOf(arg)
-
-		if self.noLiveOwner(index) 'ownedTemporaryIsAdopted'
+		let index = try self.liveOwnerIndexOf(arg) otherwise 'ownedTemporaryIsAdopted'
 			self.removeFromPendingTemps(arg)
 			return arg
 		end 'ownedTemporaryIsAdopted'
@@ -65752,7 +65621,9 @@ export type Parser
 			for i in 0 upto args.count() 'eachArgument'
 				let label = try argLabels.get(i) otherwise panic("factoryTypeArgumentAt: argLabels.get OOB at {i} — args and argLabels are pushed in lockstep")
 
-				if argSlotPosition(decl.paramNames, argIndex: i, label: label) != p 'anotherPosition'
+				let slot = try argSlotPosition(decl.paramNames, argIndex: i, label: label) otherwise continue
+
+				if slot != p 'anotherPosition'
 					continue
 				end 'anotherPosition'
 
@@ -66982,9 +66853,8 @@ export type Parser
 		// followed by `(` is a CALL, and a member not followed by one is a READ — so "is it a field?" and
 		// "may it be reported as a missing field?" cannot come to disagree about which shape they saw.
 		let callFollows = self.kindAt(self.pos + 1) == TokenKind.leftParen
-		let fieldIndex = base.layout.indexOfField(memberTok.value)
 
-		if fieldIndex < base.layout.fieldCount() 'fieldMember'
+		if let fieldIndex = try base.layout.indexOfField(memberTok.value) 'fieldMember'
 			// A member that is a FIELD is READ, in two cases: a FUNCTION-typed one however it is spelled (the
 			// `(args)` after it is an INDIRECT call the postfix loop applies, not a method dispatch), and ANY
 			// field with no `(` after it at all — `Inner.make(9).x`, `t.branch().tally`, a plain member access
@@ -67102,7 +66972,8 @@ export type Parser
 	// `ServiceCompanions.serviceHandleSurface` is the same set enumerated for an editor.
 	//
 	// The request union is the roster: it holds one variant per message in declaration order, so "is this
-	// a message?" is `indexOfCase` and needs no second list to fall out of step with `messageMethodNames`.
+	// a message?" is `serviceMessageCaseIndex` and needs no second list to fall out of step with
+	// `messageMethodNames`.
 	//
 	// The variant test comes first, and that is what gives a declared `clone`/`shutdown` precedence. A
 	// service declaring `export function shutdown()` has a variant of that name, so the author's method
@@ -67116,9 +66987,8 @@ export type Parser
 	function dispatchOnServiceHandle(func IrFunction, base StructBase, baseTok Token, memberTok Token, resultUsed bool) returns ValueId throws ParseError
 		let typeName = self.signatures.serviceOfHandle(base.layout.name)
 		let request = try serviceRequestLayoutOf(self.signatures, typeName: typeName) otherwise panic("dispatchOnServiceHandle: nothing declares `union {String.from(serviceRequestCompanionName(typeName))}` — `ServiceCompanions.synthesizeServiceCompanions` mints it beside the handle, and this caller reached a handle")
-		let caseIndex = serviceMessageCaseIndex(request, member: memberTok.value)
 
-		if caseIndex < request.caseCount() 'aMessage'
+		if let caseIndex = try serviceMessageCaseIndex(request, member: memberTok.value) 'aMessage'
 			return try self.emitServiceSend(func, base: base, baseTok: baseTok, memberTok: memberTok, typeName: typeName, request: request, caseIndex: caseIndex, route: MessageRoute.mailbox, resultUsed: resultUsed)
 		end 'aMessage'
 
@@ -67139,15 +67009,19 @@ export type Parser
 		let representativeReturn = self.serviceMessageDeclOf(representativeMessage).returnType
 		let representativeThrows = self.signatures.throwsOf(representativeMessage)
 
-		for service in serviceTypeRoster(self.signatures) 'eachService'
-			if service.equals(representative) or not self.signatures.typeImplementsInterface(service, interfaceName: interfaceName) 'notAnotherImplementer'
+		for service in interfaceServiceImplementers(self.signatures, interfaceName: interfaceName) 'eachService'
+			if service.equals(representative) 'theSender'
 				continue
-			end 'notAnotherImplementer'
+			end 'theSender'
 
 			let serviceRequest = try serviceRequestLayoutOf(self.signatures, typeName: service) otherwise panic("requireImplementersAnswerAlike: `{String.from(service)}` is on the companion roster, which mints its request union")
 			let message = qualifiedMethodName(service, methodName: member)
 
-			if payloadsAgree(request.payloadsAt(caseIndex), other: serviceRequest.payloadsAt(serviceMessageCaseIndex(serviceRequest, member: member))) and self.returnAnswersAreInterchangeable(representativeReturn, right: self.serviceMessageDeclOf(message).returnType) and throwsClausesAgree(representativeThrows, other: self.signatures.throwsOf(message)) 'answersAlike'
+			// An implementer lacking the message does not conform, which `ConformanceCheck` reports (E3016)
+			// after parsing; a program this reaches may still be that one.
+			let serviceCase = try serviceMessageCaseIndex(serviceRequest, member: member) otherwise continue
+
+			if payloadsAgree(request.payloadsAt(caseIndex), other: serviceRequest.payloadsAt(serviceCase)) and self.returnAnswersAreInterchangeable(representativeReturn, right: self.serviceMessageDeclOf(message).returnType) and throwsClausesAgree(representativeThrows, other: self.signatures.throwsOf(message)) 'answersAlike'
 				continue
 			end 'answersAlike'
 
@@ -67159,11 +67033,11 @@ export type Parser
 		let interfaceName = self.signatures.interfaceOfHandle(base.layout.name)
 		let representative = self.signatures.interfaceHandleRepresentative(interfaceName)
 		let request = try serviceRequestLayoutOf(self.signatures, typeName: interfaceName) otherwise panic("dispatchOnInterfaceHandle: nothing declares `union {String.from(serviceRequestCompanionName(interfaceName))}` — `ServiceCompanions.synthesizeInterfaceRequestUnions` mints it beside every interface handle")
-		let caseIndex = serviceMessageCaseIndex(request, member: memberTok.value)
 
-		if caseIndex < request.caseCount() 'aRequirement'
-			try self.requireImplementersAnswerAlike(interfaceName, representative: representative, request: request, caseIndex: caseIndex, memberTok: memberTok)
-			return try self.emitServiceSend(func, base: base, baseTok: baseTok, memberTok: memberTok, typeName: representative, request: request, caseIndex: caseIndex, route: MessageRoute.sendTable(caseIndex, interfaceName: interfaceName), resultUsed: resultUsed)
+		if let caseIndex = try serviceMessageCaseIndex(request, member: memberTok.value) 'aRequirement'
+			let (sender, _) = try interfaceMessageRepresentative(self.signatures, interfaceName: interfaceName, member: memberTok.value) otherwise panic("dispatchOnInterfaceHandle: `union {String.from(serviceRequestCompanionName(interfaceName))}` lists `{String.from(memberTok.value)}`, and `buildInterfaceRequestUnion` lists a requirement only when an implementer declares it as a message")
+			try self.requireImplementersAnswerAlike(interfaceName, representative: sender, request: request, caseIndex: caseIndex, memberTok: memberTok)
+			return try self.emitServiceSend(func, base: base, baseTok: baseTok, memberTok: memberTok, typeName: sender, request: request, caseIndex: caseIndex, route: MessageRoute.sendTable(caseIndex, interfaceName: interfaceName), resultUsed: resultUsed)
 		end 'aRequirement'
 
 		if memberTok.value.equals(ServiceShutdownMethodName) 'thePoisonPill'
@@ -67173,6 +67047,14 @@ export type Parser
 		if memberTok.value.equals(CloneMethodName) 'aSecondHandle'
 			return try self.emitServiceHandleClone(base, cloner: MboxInterfaceCloneBoxName, baseTok: baseTok, memberTok: memberTok)
 		end 'aSecondHandle'
+
+		if witnessSlotsRequireMethod(self.requirementSlotsOf(interfaceName), methodName: memberTok.value) 'aRequirementNoHandleCanSend'
+			if let withholder = try interfaceMessageWithholder(self.signatures, interfaceName: interfaceName, member: memberTok.value) 'anImplementerWithholdsIt'
+				throw ParseError.serviceNotAMessage(interfaceMessageWithheldRefusal(interfaceName, handleName: base.layout.name, member: memberTok.value, withholder: withholder), line: memberTok.line, column: memberTok.column)
+			end 'anImplementerWithholdsIt'
+
+			throw ParseError.serviceNotAMessage(interfaceMessageUnimplementedRefusal(interfaceName, handleName: base.layout.name, member: memberTok.value), line: memberTok.line, column: memberTok.column)
+		end 'aRequirementNoHandleCanSend'
 
 		throw ParseError.serviceNotAMessage(serviceNotAMessageRefusal(interfaceName, handleName: base.layout.name, member: memberTok.value, declaresIt: false), line: memberTok.line, column: memberTok.column)
 	end 'dispatchOnInterfaceHandle'
@@ -67441,7 +67323,7 @@ export type Parser
 
 	// Slot every source argument into the variant's payload column, through `argSlotPosition` — the one home
 	// of the label-to-position mapping, asked over the DECLARATION's own parameter names. A label naming no
-	// parameter lands past the end and is refused here rather than filling a slot it does not mean.
+	// parameter is refused here rather than filling a slot it does not mean.
 	//
 	// ⚠ The names are the declaration's SOURCE-ALIGNED list (`OverloadedDecl.paramNames`, receiver excluded),
 	// which is exactly the shape a send's arguments are in: the service's state is the LOOP's receiver, not
@@ -67451,11 +67333,7 @@ export type Parser
 
 		for i in 0 upto args.count() 'eachArg'
 			let label = try argLabels.get(i) otherwise panic("slotMessageArgs: argLabels.get OOB at {i} — args and argLabels are pushed in lockstep")
-			let parameter = argSlotPosition(paramNames, argIndex: i, label: label)
-
-			if parameter >= paramNames.count() 'namesNoParameter'
-				throw ParseError.unknownField(String.from(callee), fieldName: String.from(label), line: memberTok.line, column: memberTok.column)
-			end 'namesNoParameter'
+			let parameter = try argSlotPosition(paramNames, argIndex: i, label: label) otherwise throw ParseError.unknownField(String.from(callee), fieldName: String.from(label), line: memberTok.line, column: memberTok.column)
 
 			let position = serviceParamPayloadSlot(payloads, paramIndex: parameter)
 
@@ -70411,9 +70289,8 @@ export type Parser
 				continue
 			end 'notNameableFromHere'
 
-			// `argSlotPosition` answers one PAST the end for a label no parameter wears, so the fetch is also the
-			// arity and unknown-label test.
-			let swept = try candidate.paramTypes.get(argSlotPosition(candidate.paramNames, argIndex: sourceIndex, label: label)) otherwise continue
+			let slot = try argSlotPosition(candidate.paramNames, argIndex: sourceIndex, label: label) otherwise continue
+			let swept = try candidate.paramTypes.get(slot) otherwise panic("closureParamOfferAt: paramTypes.get OOB at {slot} — the sweep records one type per parameter name")
 			let slotType = self.slotTypeThroughCallReceiver(self.repairSweptType(self.signatures.adoptType(swept, into: self.artifact.typeNames), scopeFilePath: candidate.declFilePath), args: args, receiverArgs: receiverArgs)
 			let slotTag = maxonTypeTag(slotType)
 
@@ -72493,7 +72370,7 @@ export type Parser
 			// to `__list_remove_node`'s cross-chain abort.
 			let mintedOnThisChain = (try self.bodyState.nodeHandleMintedFrom.get(node) otherwise panic("dispatchManagedListMethod: v{node} has no node-handle mint slot — every SSA value must be minted through mintValue, which seeds the column")) == list
 
-			if self.noLiveOwner(self.liveOwnerIndexOf(node)) and not mintedOnThisChain 'unmarkableHandle'
+			if not self.hasLiveOwner(node) and not mintedOnThisChain 'unmarkableHandle'
 				throw ParseError.unsupported("`{String.from(ManagedListBuiltinBaseName)}.{String.from(RemoveMethod)}` takes the element OUT of the node, so its handle must be one this statement can mark as moved — a name (`{String.from(RemoveMethod)}(n)`) or an insertion on this same chain, handed in inline. A handle arriving any other way — out of a field, an element, a call result, a merge — would go on answering `{String.from(ManagedListNodeValueMethod)}()` from the emptied slot with nothing left to refuse the read; bind it to a name first, or use `{String.from(ManagedListDetachMethod)}`, which leaves the element where it is", line: methodTok.line, column: methodTok.column)
 			end 'unmarkableHandle'
 
@@ -74089,7 +73966,7 @@ export type Parser
 	// takes `interfaceSpelledType`, the SAME typer the fallback in `witnessDispatchValueResult` uses,
 	// so the two answers differ only in what they are answering ABOUT.
 	function constraintBindingResultType(binding ByteArray) returns MaxonType
-		if self.typeParamPositionOf(binding) < self.enclosingTypeParams.count() 'namesAnEnclosingParameter'
+		if namesInclude(self.enclosingTypeParams, name: binding) 'namesAnEnclosingParameter'
 			return MaxonType.typeParameter(typeParamTokenFor(self.enclosingType, paramName: binding))
 		end 'namesAnEnclosingParameter'
 
@@ -78012,7 +77889,7 @@ export type Parser
 
 		let step = try self.resolveFieldChain()
 		let fieldIndex = self.lastConsumedTokenIndex()
-		let index = try self.requireFieldIndex(step.layout, fieldTok: step.lastFieldTok)
+		let index = try self.requireFieldIndex(step.layout, name: step.lastFieldTok.value, anchor: step.lastFieldTok)
 		try self.requireFieldAccessible(step.layout, index: index, fieldTok: step.lastFieldTok)
 
 		let range = SourceRange.between(step.baseTok, last: step.lastFieldTok)
@@ -78312,7 +78189,7 @@ export type Parser
 			return FieldChainStep.create(box, layout: layout, lastFieldTok: fieldTok, baseTok: baseTok, baseBinding: baseBinding)
 		end 'lastField'
 
-		let index = try self.requireFieldIndex(layout, fieldTok: fieldTok)
+		let index = try self.requireFieldIndex(layout, name: fieldTok.value, anchor: fieldTok)
 		try self.requireFieldAccessible(layout, index: index, fieldTok: fieldTok)
 
 		// ⭐⭐ **A `.member(` AFTER THIS FIELD ENDS THE CHAIN — THIS FIELD IS THE RECEIVER.** The chain walks
@@ -78675,7 +78552,7 @@ export type Parser
 		let fieldIndex = self.lastConsumedTokenIndex()
 
 		let layout = try self.enclosingLayout(selfTok)
-		return self.selfFieldReference(try self.requireReceiverValue(selfTok), nameIndex: fieldIndex, layout: layout, index: try self.requireFieldIndex(layout, fieldTok: fieldTok), range: SourceRange.between(selfTok, last: fieldTok))
+		return self.selfFieldReference(try self.requireReceiverValue(selfTok), nameIndex: fieldIndex, layout: layout, index: try self.requireFieldIndex(layout, name: fieldTok.value, anchor: fieldTok), range: SourceRange.between(selfTok, last: fieldTok))
 	end 'parseExplicitSelfFieldRead'
 
 	// `self.x = <expr>`. The explicit spelling, resolving its field token to an index and then
@@ -78699,7 +78576,7 @@ export type Parser
 		// rather than tripping over the enclosing type's layout.
 		let receiver = try self.requireReceiverValue(selfTok)
 		let layout = try self.enclosingLayout(selfTok)
-		try self.emitCheckedSelfFieldStore(func, block: block, receiver: receiver, layout: layout, index: try self.requireFieldIndex(layout, fieldTok: fieldTok), fieldTok: fieldTok, range: SourceRange.between(selfTok, last: fieldTok))
+		try self.emitCheckedSelfFieldStore(func, block: block, receiver: receiver, layout: layout, index: try self.requireFieldIndex(layout, name: fieldTok.value, anchor: fieldTok), fieldTok: fieldTok, range: SourceRange.between(selfTok, last: fieldTok))
 	end 'parseExplicitSelfFieldAssignment'
 
 	// ⭐⭐ **`self.<field> = <expr>` IN A STATIC FACTORY — THE THIRD WAY A FIELD GETS ITS VALUE**
@@ -78717,7 +78594,7 @@ export type Parser
 	// actually built.
 	function parseNascentSelfAssignment(func IrFunction, selfTok Token, fieldTok Token) throws ParseError
 		let layout = try self.enclosingLayout(selfTok)
-		let index = try self.requireFieldIndex(layout, fieldTok: fieldTok)
+		let index = try self.requireFieldIndex(layout, name: fieldTok.value, anchor: fieldTok)
 		let fieldType = self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames)
 
 		let valueStart = self.pos
@@ -78796,12 +78673,7 @@ export type Parser
 			return
 		end 'alreadyOpen'
 
-		let index = layout.indexOfField(fieldTok.value)
-
-		if index >= layout.fieldCount() 'noSuchField'
-			return
-		end 'noSuchField'
-
+		let index = try layout.indexOfField(fieldTok.value) otherwise return
 		try self.declareNascentSlotForField(func, layout: layout, index: index, slotTok: slotTok, range: range)
 	end 'declareOneNascentSelfSlot'
 
@@ -78898,7 +78770,7 @@ export type Parser
 		// The place as written, and the record written: everything before the chain's last `. <field>`.
 		let lastDotIndex = (self.pos - 2) as TokenIndex
 		try self.consume(TokenKind.equals)
-		let index = try self.requireFieldIndex(step.layout, fieldTok: step.lastFieldTok)
+		let index = try self.requireFieldIndex(step.layout, name: step.lastFieldTok.value, anchor: step.lastFieldTok)
 
 		try self.requireWritableInstance(step.baseBinding, nameTok: step.baseTok)
 		try self.requireFieldAccessible(step.layout, index: index, fieldTok: step.lastFieldTok)
@@ -79420,31 +79292,6 @@ export type Parser
 
 		throw ParseError.selfOutsideInstanceMethod(anchor.line, column: anchor.column)
 	end 'requireReceiverInScope'
-
-	// **The declaration index `fieldTok` names in `layout`, or E3018** — asked by every one of the
-	// three places a field is named by a TOKEN: the struct literal's `x:` label, the field READ,
-	// and the field WRITE. One home, because it is one question, and the three must not come to
-	// disagree about what "this type has no such field" means or where the diagnostic points (the
-	// FIELD token — the token that is wrong, never the value it is read from).
-	//
-	// A BARE self-field name does not ask it: its index came off the alias, which
-	// `declareSelfFieldAliases` minted by enumerating the layout, so the field provably exists. A
-	// bare name that is NOT a field is not a self-field alias at all and never reaches a field
-	// path — it is an undefined variable, and reports as one.
-	//
-	// It is also the one place `indexOfField`'s "not found" convention is READ. That answer is
-	// `fieldCount()` — an index one past the end — and every caller comparing against it by hand was
-	// a caller that could get the comparison subtly wrong (`>` rather than `>=`) and index a
-	// neighbouring field's slot instead of reporting an error. Now the convention is decoded once.
-	function requireFieldIndex(layout StructLayout, fieldTok Token) returns FieldIndex throws ParseError
-		let index = layout.indexOfField(fieldTok.value)
-
-		if index >= layout.fieldCount() 'noSuchField'
-			throw ParseError.unknownField(String.from(layout.name), fieldName: String.from(fieldTok.value), line: fieldTok.line, column: fieldTok.column)
-		end 'noSuchField'
-
-		return index
-	end 'requireFieldIndex'
 
 	// ⭐ **E3014 — A FIELD NOT DECLARED `export` IS REACHABLE ONLY FROM ITS OWN TYPE'S BODY.**
 	//
@@ -83156,13 +83003,8 @@ export type Parser
 
 		for i in 0 upto args.count() 'markSupplied'
 			let written = try args.get(i) otherwise panic("appendConstFactoryArgDefaults: args.get OOB at {i} below count {args.count()}")
-			let suppliedSlot = argSlotPosition(info.paramNames, argIndex: i, label: written.label)
-
-			if suppliedSlot >= paramCount 'labelNamesNoParameter'
-				return
-			end 'labelNamesNoParameter'
-
-			try filled.set(suppliedSlot, value: true) otherwise panic("appendConstFactoryArgDefaults: filled.set OOB at {suppliedSlot} despite suppliedSlot < paramCount")
+			let suppliedSlot = try argSlotPosition(info.paramNames, argIndex: i, label: written.label) otherwise return
+			try filled.set(suppliedSlot, value: true) otherwise panic("appendConstFactoryArgDefaults: filled.set OOB at {suppliedSlot} — filled holds one entry per parameter name")
 		end 'markSupplied'
 
 		for slot in 0 upto paramCount 'fillDefaults'
@@ -83241,18 +83083,9 @@ export type Parser
 
 		for i in 0 upto args.count() 'eachArgument'
 			let arg = try args.get(i) otherwise panic("constFactoryConstruction: args.get OOB at {i} below count {args.count()}")
-			let slot = parameterSlotOf(arg, position: i, paramNames: paramNames)
-
-			if slot >= paramNames.count() 'noSuchParameter'
-				return ConstFactoryCall.call(callee.name, args: args)
-			end 'noSuchParameter'
-
-			let fieldName = try paramNames.get(slot) otherwise panic("constFactoryConstruction: paramNames.get OOB at {slot} below a count just compared against")
-			let index = layout.indexOfField(fieldName)
-
-			if index >= layout.fieldCount() 'noSuchField'
-				return ConstFactoryCall.call(callee.name, args: args)
-			end 'noSuchField'
+			let slot = try argSlotPosition(paramNames, argIndex: i, label: arg.label) otherwise return ConstFactoryCall.call(callee.name, args: args)
+			let fieldName = try paramNames.get(slot) otherwise panic("constFactoryConstruction: paramNames.get OOB at {slot}, a position argSlotPosition answered inside the list")
+			let index = try layout.indexOfField(fieldName) otherwise return ConstFactoryCall.call(callee.name, args: args)
 
 			let fitted = try self.requireConstFieldValueFits(calls, layout: layout, index: index, value: arg.value, fieldTok: callee.anchor) otherwise 'doesNotFitTheField'
 				return ConstFactoryCall.call(callee.name, args: args)
@@ -83279,25 +83112,6 @@ export type Parser
 
 		return ConstFactoryCall.construct(layout.name, fields: fields)
 	end 'constFactoryConstruction'
-
-	// Which declared parameter an argument fills: its POSITION when it was written bare, and the position of
-	// its label otherwise. A label naming no parameter answers the count, which the caller reads as "leave it
-	// a call" — the arity and label refusals are `emitCall`'s and are raised where the author wrote them.
-	function parameterSlotOf(arg ConstFactoryArgument, position ParamCount, paramNames ByteArrayArray) returns ParamCount
-		if arg.label.isEmpty() 'positional'
-			return position
-		end 'positional'
-
-		for i in 0 upto paramNames.count() 'eachParameter'
-			let declared = try paramNames.get(i) otherwise panic("parameterSlotOf: paramNames.get OOB at {i} below count {paramNames.count()}")
-
-			if declared.equals(arg.label) 'thisOne'
-				return i
-			end 'thisOne'
-		end 'eachParameter'
-
-		return paramNames.count()
-	end 'parameterSlotOf'
 
 	// ⭐⭐ **READ THE NAME A TOP-LEVEL CALL IS MADE THROUGH, IN EITHER SPELLING** — the one reader, so the
 	// registry key, the diagnostic spelling and the blame anchor are derived together and cannot drift.
@@ -83599,7 +83413,8 @@ export type Parser
 		let caseTok = try self.consumeConst(TokenKind.identifier)
 
 		let layout = requireEnumLayout(self.signatures.enumFor(typeTok.value, readerFilePath: self.filePath))
-		let declared = layout.payloadsAt(layout.indexOfCase(caseTok.value))
+		let caseIndex = try layout.indexOfCase(caseTok.value) otherwise panic("evalConstUnionCaseInto: `{String.from(layout.name)}` declares no case '{String.from(caseTok.value)}' — `atConstUnionCaseConstruction` claimed this form only once `constEnumCaseOfLayout` found the case")
+		let declared = layout.payloadsAt(caseIndex)
 
 		// Parallel to the CASE's declared slots, not to the source — `evalConstStructConstructionInto`'s columns,
 		// for its reason. The seeded value is a placeholder for a slot nothing has written yet, and `filled` is
@@ -83800,7 +83615,7 @@ export type Parser
 			let nameTok = try self.consumeConst(TokenKind.identifier)
 			try self.consumeConstToken(TokenKind.colon)
 
-			let index = try self.requireFieldIndex(layout, fieldTok: nameTok) otherwise (err) 'noSuchField'
+			let index = try self.requireFieldIndex(layout, name: nameTok.value, anchor: nameTok) otherwise (err) 'noSuchField'
 				throw ConstEvalError.defective(err)
 			end 'noSuchField'
 
@@ -85089,7 +84904,8 @@ export type Parser
 	// established that the enum is declared and holds the case, which is what makes both lookups total.
 	function constEnumCasePayloadArity(tok Token, memberTok Token) returns CaseIndex
 		let layout = requireEnumLayout(self.signatures.enumFor(tok.value, readerFilePath: self.filePath))
-		return layout.payloadArityAt(layout.indexOfCase(memberTok.value))
+		let caseIndex = try layout.indexOfCase(memberTok.value) otherwise panic("constEnumCasePayloadArity: `{String.from(layout.name)}` declares no case '{String.from(memberTok.value)}' — asked only once `atConstQualifiedEnumCase` established that it does")
+		return layout.payloadArityAt(caseIndex)
 	end 'constEnumCasePayloadArity'
 
 	// Walk `<BoxedUnion>.<case>`, already claimed by the test above — which is why the three tokens are simply
@@ -88548,13 +88364,8 @@ export type Parser
 
 		for i in 0 upto args.count() 'markSupplied'
 			let label = try argLabels.get(i) otherwise panic("fillArgsFromParamDefaults: argLabels.get OOB at {i} — the label column is pushed in lockstep with args")
-			let suppliedSlot = argSlotPosition(info.paramNames, argIndex: i, label: label)
-
-			if suppliedSlot >= paramCount 'labelNamesNoParameter'
-				return NoDefaultArgSlots
-			end 'labelNamesNoParameter'
-
-			try filled.set(suppliedSlot, value: true) otherwise panic("fillArgsFromParamDefaults: filled.set OOB at {suppliedSlot} despite suppliedSlot < paramCount")
+			let suppliedSlot = try argSlotPosition(info.paramNames, argIndex: i, label: label) otherwise return NoDefaultArgSlots
+			try filled.set(suppliedSlot, value: true) otherwise panic("fillArgsFromParamDefaults: filled.set OOB at {suppliedSlot} — filled holds one entry per parameter name")
 		end 'markSupplied'
 
 		// ⚠ **THE COLUMN IS BUILT OWNED AND THE SHARED EMPTY ONE IS SUBSTITUTED AT THE RETURN** — it may
@@ -89135,15 +88946,11 @@ export type Parser
 		let argCount = self.signatures.genericInstanceArgCount(gid)
 
 		for i in 0 upto args.count() 'eachArg'
-			let slot = argSlotPosition(opaque.paramNames, argIndex: i, label: callArgumentLabel(argLabels, argIndex: i))
-
-			if not opaque.namesATypeParameter(slot) 'concreteParam'
-				continue
-			end 'concreteParam'
+			let slot = try argSlotPosition(opaque.paramNames, argIndex: i, label: callArgumentLabel(argLabels, argIndex: i)) otherwise continue
 
 			// A position past the instance's own argument list is an arity the instantiation was already
 			// refused for (E2056); reading it would index a list that does not describe this type.
-			let position = opaque.positionAt(slot)
+			let position = try opaque.positionAt(slot) otherwise continue
 
 			if position >= argCount 'boundNothingHere'
 				continue
@@ -89772,9 +89579,8 @@ export type Parser
 	// the mapping inline (`i if label.isEmpty() else info.indexOfParam(label)`) is exactly the drift
 	// `argSlotPosition`'s header warns of, and it loses that function's O(P) fast path with it; asking
 	// against a bare name LIST rather than a signature is what makes the shared door reachable from here at
-	// all. A malformed call
-	// (an arity mismatch, an unknown label) leaves the position `>= paramNames.count()`, which `isConsumed`
-	// answers false, so it is left untouched here and reported by SemanticCheck against the real registry.
+	// all. An argument a malformed call leaves unslotted (an arity mismatch, an unknown label) is left
+	// untouched here and reported by SemanticCheck against the real registry.
 	function transferConsumedArgs(info ParamConsumeInfo, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance) throws ParseError
 		// An OPAQUE `T` value consumed at TWO argument positions of a single call inherits ONE reference twice and
 		// so would be dropped twice — a double-free — the call analog of the struct-literal
@@ -89790,7 +89596,7 @@ export type Parser
 
 		for i in 0 upto args.count() 'eachArg'
 			let label = try argLabels.get(i) otherwise panic("transferConsumedArgs: argLabels.get OOB at {i} — args and argLabels are pushed in lockstep")
-			let position = argSlotPosition(info.paramNames, argIndex: i, label: label)
+			let position = try argSlotPosition(info.paramNames, argIndex: i, label: label) otherwise continue
 			let argValue = try args.get(i) otherwise panic("transferConsumedArgs: args.get OOB at {i}")
 
 			// ⭐⭐ **A BY-REFERENCE POSITION IS NEVER CONSUMED, AND THIS IS THE CALLER-SIDE HALF OF THE RULE
@@ -90156,7 +89962,7 @@ export type Parser
 
 	function handOffRefusal(door ThreadHandOffDoor, borrowed bool, value ValueId, anchor Token) returns ParseError
 		return match door 'door'
-			message(blame) gives ParseError.serviceArgumentNotUnique(serviceBorrowedTransferMessage(blame, source: self.transferredValueName(value)) if borrowed else serviceSharedTransferMessage(blame, source: self.transferredValueName(value)), line: anchor.line, column: anchor.column)
+			message(blame) gives ParseError.serviceArgumentNotUnique(serviceBorrowedTransferMessage(blame, sourceClause: self.transferSourceClause(value)) if borrowed else serviceSharedTransferMessage(blame, sourceClause: self.transferSourceClause(value)), line: anchor.line, column: anchor.column)
 			publish(key) gives registryNotSolelyOwnedError(key, anchor: anchor)
 		end 'door'
 	end 'handOffRefusal'
@@ -90167,11 +89973,12 @@ export type Parser
 	// reaches `handIntoGreenThread`'s move, refusals and all.
 	function transferMessageArgument(value ValueId, destination MessageArgumentDestination, anchorIndex TokenIndex) returns ValueId throws ParseError
 		let anchor = self.tokenAt(anchorIndex)
-		let owner = self.liveOwnerIndexOf(value)
 
-		if self.ownerLendsValue(value, owner: owner) 'aLetLocalOwnsIt'
-			return try self.lendIntoGreenThread(value, owner: owner, destination: destination, anchor: anchor, anchorIndex: anchorIndex)
-		end 'aLetLocalOwnsIt'
+		if let owner = try self.liveOwnerIndexOf(value) 'ownedByABinding'
+			if self.ownerLendsValue(value, owner: owner) 'aLetLocalOwnsIt'
+				return try self.lendIntoGreenThread(value, owner: owner, destination: destination, anchor: anchor, anchorIndex: anchorIndex)
+			end 'aLetLocalOwnsIt'
+		end 'ownedByABinding'
 
 		return try self.handIntoGreenThread(value, door: ThreadHandOffDoor.message(destination.blame()), anchor: anchor)
 	end 'transferMessageArgument'
@@ -90182,7 +89989,7 @@ export type Parser
 	// other owner shares (a closure, a container, an alias's retain) is refused exactly as a move of it is,
 	// because that owner is a path to a write the freeze cannot see.
 	function ownerLendsValue(value ValueId, owner BindingMark) returns bool
-		if self.noLiveOwner(owner) or not self.valueIsManagedHeap(value) or not self.valueIsOwnedHeap(value) 'noBindingOwnsARecord'
+		if not self.valueIsManagedHeap(value) or not self.valueIsOwnedHeap(value) 'noBindingOwnsARecord'
 			return false
 		end 'noBindingOwnsARecord'
 
@@ -90253,9 +90060,9 @@ export type Parser
 		var deferred = self.bodyState.deferredProvenance
 		deferred.noteFreezeDoor(FreezeDoorSite.create(value, door: door, line: valueTok.line, column: valueTok.column, token: self.pos, opMark: self.artifact.module.ops.count()))
 
-		let owner = self.lentOwnerIndexOf(source)
+		let owner = try self.lentOwnerIndexOf(source) otherwise return
 
-		if self.noLiveOwner(owner) or self.valueHoldsNothingWritable(value) 'notFrozenHere'
+		if self.valueHoldsNothingWritable(value) 'notFrozenHere'
 			return
 		end 'notFrozenHere'
 
@@ -90276,23 +90083,21 @@ export type Parser
 		return value if source.isSelfField else source.boundValue
 	end 'freezeSourceOf'
 
-	// The owned binding that lent `value` on this path, or `noLiveOwner`'s past-the-end answer. A body that has lent
-	// nothing answers without scanning the owned set.
-	function lentOwnerIndexOf(value ValueId) returns BindingMark
-		let none = self.bodyState.ownedBindings.count()
-
+	// The owned binding that lent `value` on this path. A body that has lent nothing answers without scanning
+	// the owned set.
+	function lentOwnerIndexOf(value ValueId) returns BindingMark throws MapError
 		if self.bodyState.deferredProvenance.lendSites.count() == 0 'nothingLentHere'
-			return none
+			throw MapError.keyNotFound
 		end 'nothingLentHere'
 
-		let owner = self.liveOwnerIndexOf(value)
-
-		if self.noLiveOwner(owner) 'ownedByNoBinding'
-			return none
-		end 'ownedByNoBinding'
-
+		let owner = try self.liveOwnerIndexOf(value)
 		let binding = try self.bodyState.ownedBindings.get(owner) otherwise panic("lentOwnerIndexOf: ownedBindings.get OOB at {owner} — `liveOwnerIndexOf` answered a live owner")
-		return owner if binding.lentOnPath != NotLent else none
+
+		if binding.lentOnPath == NotLent 'notLentOnThisPath'
+			throw MapError.keyNotFound
+		end 'notLentOnThisPath'
+
+		return owner
 	end 'lentOwnerIndexOf'
 
 	// ⭐ **DOES `value`'s TYPE HOLD NOTHING A STATEMENT CAN WRITE?** A lent graph of such a type is frozen by the type
@@ -90336,7 +90141,7 @@ export type Parser
 
 	// E3138 for a graph no per-type walk can be built for, at every door that refuses one.
 	function unwalkableTransferGraphError(value ValueId, blame String, noun String, anchor Token) returns ParseError
-		return ParseError.serviceArgumentNotUnique(serviceUnclosedRecordTransferMessage(blame, source: self.transferredValueName(value), noun: noun), line: anchor.line, column: anchor.column)
+		return ParseError.serviceArgumentNotUnique(serviceUnclosedRecordTransferMessage(blame, sourceClause: self.transferSourceClause(value), noun: noun), line: anchor.line, column: anchor.column)
 	end 'unwalkableTransferGraphError'
 
 	// `callee(walked…, NoVisitTable)` threads the visit table through the whole graph, and `__mm_walk_settle` then
@@ -90354,10 +90159,6 @@ export type Parser
 		_ = self.emitRuntimeCall(WalkSettleName, args: singletonArgs(visits), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'emitTransferWalk'
 
-	// The source NAME a refused transfer should point the author at — the live owning binding's, or the empty
-	// name for a value no binding holds (a temporary, an element read, a field read). Split out because both
-	// refusals need it and neither may resolve it a second way; the sentence builders decide what to say when
-	// it is empty.
 	// ⭐ **DID THIS PARSE MINT `value` AS A STRING LITERAL?** — `knownLiteralBytes`'s criterion asked as a
 	// PREDICATE, so the send door pays one array read rather than a boxed union it would then discard. The
 	// answer is a fact about PROVENANCE and not about the record: a parameter, a field, a merge result and a
@@ -90366,16 +90167,15 @@ export type Parser
 		return self.constPayloadDomain(value) == ConstPayloadDomain.stringLiteralOp
 	end 'valueIsAMintedStringLiteral'
 
-	function transferredValueName(value ValueId) returns String
-		let index = self.liveOwnerIndexOf(value)
+	// The clause naming the source a refused transfer should point the author at — the live owning binding,
+	// or `NoTransferSourceClause` for a value no binding holds (a temporary, an element read, a field read).
+	// Split out because both refusals need it and neither may resolve it a second way.
+	function transferSourceClause(value ValueId) returns String
+		let index = try self.liveOwnerIndexOf(value) otherwise return NoTransferSourceClause
 
-		if self.noLiveOwner(index) 'noBindingHoldsIt'
-			return ""
-		end 'noBindingHoldsIt'
-
-		let owner = try self.bodyState.ownedBindings.get(index) otherwise panic("transferredValueName: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf` and was just bounds-tested")
-		return String.from(owner.name)
-	end 'transferredValueName'
+		let owner = try self.bodyState.ownedBindings.get(index) otherwise panic("transferSourceClause: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf` and was just bounds-tested")
+		return serviceTransferSourceClause(String.from(owner.name))
+	end 'transferSourceClause'
 
 	// ⭐⭐ **ARE THESE TWO DECLARED ANSWERS INTERCHANGEABLE AT A CALL?** — the question a whole-program index
 	// that keeps ONE return type per key silently answers YES to for every declaration wearing that key.

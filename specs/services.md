@@ -833,6 +833,37 @@ typealias Integer = int(i64.min to i64.max)
 7
 ```
 
+<!-- test: a-service-whose-state-is-one-small-immutable-field-shuts-down-cleanly -->
+A service whose whole state is one small immutable field answers and then shuts down cleanly.
+```maxon
+typealias Count = int(0 to 1000)
+
+type A
+	let n as Count
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	export function ping() returns Count
+		return self.n
+	end 'ping'
+end 'A'
+
+function main() returns ExitCode
+	let h = spawn A.create()
+	let v = try await h.ping() otherwise 0
+	print("{v}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
 <!-- test: spawn-send-and-the-service-runs -->
 ⭐ The first case in this file that starts a real green thread. `spawn` hands back a `Counter.handle`; a call
 on that handle is a MESSAGE, enqueued and returned from at once; the service's own green thread runs the

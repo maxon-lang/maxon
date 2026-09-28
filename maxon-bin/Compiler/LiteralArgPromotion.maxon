@@ -530,9 +530,10 @@ function promotionAtWrittenPosition(sig FuncSignature, mask ParamPositionMask, a
 		return promotion
 	end 'alreadyWritable'
 
-	let pos = argSlotPosition(sig.paramNames, argIndex: argIndex, label: try argLabels.get(argIndex) otherwise panic("promotionAtWrittenPosition: argLabels.get OOB at {argIndex} — a call's argument columns are parallel by construction"))
+	let label = try argLabels.get(argIndex) otherwise panic("promotionAtWrittenPosition: argLabels.get OOB at {argIndex} — a call's argument columns are parallel by construction")
+	let pos = try argSlotPosition(sig.paramNames, argIndex: argIndex, label: label) otherwise return WritableRecordPromotion.none
 
-	if pos >= sig.paramCount() or not maskHasParam(mask, param: pos) 'notAWrittenPosition'
+	if not maskHasParam(mask, param: pos) 'notAWrittenPosition'
 		return WritableRecordPromotion.none
 	end 'notAWrittenPosition'
 

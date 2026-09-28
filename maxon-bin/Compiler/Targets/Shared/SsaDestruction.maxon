@@ -189,9 +189,7 @@ function sequenceParallelCopy(dsts RegNumColumn, srcs RegNumColumn) returns Move
 			break
 		end 'allDone'
 
-		let leaf = findLeafMove(dsts, ps: srcs)
-
-		if leaf < dsts.count() 'foundLeaf'
+		if let leaf = try findLeafMove(dsts, ps: srcs) 'foundLeaf'
 			let d = try dsts.get(leaf) otherwise panic("sequenceParallelCopy: dsts.get OOB")
 			let s = try srcs.get(leaf) otherwise panic("sequenceParallelCopy: srcs.get OOB")
 			moves.pushMove(d, src: s, swap: false)
@@ -208,9 +206,9 @@ function sequenceParallelCopy(dsts RegNumColumn, srcs RegNumColumn) returns Move
 	return moves
 end 'sequenceParallelCopy'
 
-// Index of a move whose dst is NOT any pending move's source (safe to emit now), or
-// `pd.count()` if every remaining dst is still needed as a source (a pure cycle).
-function findLeafMove(pd RegNumColumn, ps RegNumColumn) returns MoveIndex
+// Index of a move whose dst is NOT any pending move's source (safe to emit now). It throws when every
+// remaining dst is still needed as a source: the moves left form a pure cycle.
+function findLeafMove(pd RegNumColumn, ps RegNumColumn) returns MoveIndex throws MapError
 	for i in 0 upto pd.count() 'eachMove'
 		let d = try pd.get(i) otherwise panic("findLeafMove: pd.get OOB")
 
@@ -219,7 +217,7 @@ function findLeafMove(pd RegNumColumn, ps RegNumColumn) returns MoveIndex
 		end 'leaf'
 	end 'eachMove'
 
-	return pd.count()
+	throw MapError.keyNotFound
 end 'findLeafMove'
 
 // Remove every pending move whose dst already equals its src (an already-satisfied

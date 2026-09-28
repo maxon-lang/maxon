@@ -4972,19 +4972,17 @@ export type StructLayout
 		panic("StructLayout.requireBuiltinManagedWrapperInterfaceName: `type {String.from(self.name)}` declares no builtin literal marker — the caller establishes conformance with `conformsToBuiltinManagedWrapper` before asking which one")
 	end 'requireBuiltinManagedWrapperInterfaceName'
 
-	// The declaration index of the inline `managed` field, or `fieldCount()` when this layout has none —
-	// PAST-THE-END, which is `indexOfField`'s own spelling of "not found" two screens down, so the two
-	// absent answers on this type are one convention rather than two. The construction needs the SOURCE
+	// The construction needs the SOURCE
 	// value the literal supplied for that field, and the field's position is the only way to find it in a
 	// column parallel to the layout.
-	export function inlineManagedFieldIndex() returns FieldIndex
+	export function inlineManagedFieldIndex() returns FieldIndex throws MapError
 		for i in 0 upto self.fieldCount() 'eachField'
 			if self.isInlineManagedField(try self.fieldNames.get(i) otherwise panic("StructLayout.inlineManagedFieldIndex: fieldNames.get OOB at {i} for `type {String.from(self.name)}` below its own count")) 'found'
 				return i
 			end 'found'
 		end 'eachField'
 
-		return self.fieldCount()
+		throw MapError.keyNotFound
 	end 'inlineManagedFieldIndex'
 
 	// ⭐⭐ **IS FIELD `index` THE INLINE `managed` WHOSE ADDRESS *IS* THE RECEIVER'S? — THE ONE HOME OF A
@@ -5003,13 +5001,13 @@ export type StructLayout
 	// the disagreement is a WRONG ANSWER rather than a compile error: one door hands back the receiver's own
 	// record and the other emits a `loadIndirect` at that field's offset, which for field 0 reads `buffer@0`
 	// — a raw byte pointer where a buffer RECORD is wanted.
-	//
-	// ⚠ **THE MARKER CONJUNCT IS NOT REDUNDANT AND IS ASKED FIRST.** A FIELDLESS layout answers
-	// `fieldCount()` — zero — from the index above, which is its "not found" spelling; an index-only test
-	// would therefore read `index == 0` as TRUE about a field that does not exist. Both callers relied on the
-	// conjunction for that, separately, which is one more reason it belongs in one place.
 	export function fieldIsTheInlineManagedRecord(index FieldIndex) returns bool
-		return self.conformsToBuiltinManagedWrapper() and index == self.inlineManagedFieldIndex()
+		if not self.conformsToBuiltinManagedWrapper() 'notAWrapper'
+			return false
+		end 'notAWrapper'
+
+		let managedIndex = try self.inlineManagedFieldIndex() otherwise return false
+		return index == managedIndex
 	end 'fieldIsTheInlineManagedRecord'
 
 	// ⭐ **REPLACE FIELD `index`'s DECLARED TYPE — the ONE write that is not an append (N3).** The declaration
@@ -5149,20 +5147,10 @@ export type StructLayout
 		return self.fieldNames.count()
 	end 'fieldCount'
 
-	// The declaration index of the field named `wanted`, or `fieldCount()` when the struct declares
-	// no such field. A linear scan, for `indexOfParamIn`'s reason and with its
-	// measurement behind it: field counts are tiny, and a per-layout name→index map would be a
-	// heap object per declared type bought to serve a handful of lookups.
-	export function indexOfField(wanted ByteArray) returns FieldIndex
-		for i in 0 upto self.fieldNames.count() 'each'
-			let fieldName = try self.fieldNames.get(i) otherwise panic("StructLayout.indexOfField: fieldNames.get OOB at {i}")
-
-			if fieldName.equals(wanted) 'match'
-				return i
-			end 'match'
-		end 'each'
-
-		return self.fieldNames.count()
+	// A linear scan: field counts are tiny, and a per-layout name→index map would be a heap object per
+	// declared type bought to serve a handful of lookups.
+	export function indexOfField(wanted ByteArray) returns FieldIndex throws MapError
+		return (try namePositionIn(self.fieldNames, name: wanted)) as FieldIndex
 	end 'indexOfField'
 
 	// The name of field `index` — `EnumLayout.caseNameAt`'s twin, and here so the OOB panic is written once
@@ -5171,13 +5159,9 @@ export type StructLayout
 		return try self.fieldNames.get(index) otherwise panic("StructLayout.fieldNameAt: fieldNames.get OOB at {index} for `type {String.from(self.name)}`, which declares {self.fieldCount()} field(s)")
 	end 'fieldNameAt'
 
-	// Does this type declare a field named `wanted`? — `EnumLayout.hasCase`'s twin, and here for its reason:
-	// `indexOfField`'s "absent" answer is the SENTINEL `fieldCount()`, and every caller that only wants the
-	// yes/no was re-spelling that comparison. Two had (`Parser.enumBackingFieldMember` as
-	// `indexOfField(...) < fieldCount()`, `Parser.emitEnumBackingFieldSelect` as the `>=` throw), which is
-	// the convention written down in three places and changeable in none.
 	export function declaresField(wanted ByteArray) returns bool
-		return self.indexOfField(wanted) < self.fieldCount()
+		try self.indexOfField(wanted) otherwise return false
+		return true
 	end 'declaresField'
 
 	// The byte displacement of field `index` from the box's PAYLOAD pointer — which is what
@@ -6443,42 +6427,23 @@ export type EnumLayout
 		return true
 	end 'tagsAreDeclarationIndices'
 
-	// The declaration index of the case named `wanted`, or `caseCount()` when no case carries that
-	// name. A linear scan for `StructLayout.indexOfField`'s reason: case counts are tiny.
-	export function indexOfCase(wanted ByteArray) returns CaseIndex
-		for i in 0 upto self.caseNames.count() 'each'
-			let caseName = try self.caseNames.get(i) otherwise panic("EnumLayout.indexOfCase: caseNames.get OOB at {i}")
-
-			if caseName.equals(wanted) 'match'
-				return i
-			end 'match'
-		end 'each'
-
-		return self.caseNames.count()
+	// A linear scan for `StructLayout.indexOfField`'s reason: case counts are tiny.
+	export function indexOfCase(wanted ByteArray) returns CaseIndex throws MapError
+		return (try namePositionIn(self.caseNames, name: wanted)) as CaseIndex
 	end 'indexOfCase'
 
 	// Does this enum declare a case named `wanted`?
 	export function hasCase(wanted ByteArray) returns bool
-		return self.indexOfCase(wanted) < self.caseCount()
+		try self.indexOfCase(wanted) otherwise return false
+		return true
 	end 'hasCase'
 
-	// ⭐ **THE TAG OF THE CASE NAMED `wanted` — `indexOfCase` and `tagOfIndex` asked as ONE question (7b3).**
-	// It lives HERE, beside the two halves it composes and beside `hasCase`, because the alternative is what it
-	// replaced: a free function (`orderingTagOf`, below this type) that re-spelled `indexOfCase`'s "absent"
-	// convention as `index >= caseCount()` — a THIRD copy of a sentinel comparison `hasCase` already owns, and
-	// the copy furthest from the convention it was restating. Nothing was wrong; the convention is now written
-	// once. It scans twice for a handful of cases (`indexOfCase`'s own header: case counts are tiny), which is
-	// the price of asking `hasCase` rather than re-deriving its test.
-	//
 	// It PANICS on an absent case rather than returning a sentinel: a caller that does not already know the
 	// layout declares the name asks `hasCase` first, which is what that predicate is for — and its two callers
 	// name cases the layout they pass DECLARES (`Ordering`.s three, read from `stdlib/Interfaces.maxon`).
 	export function tagOfCase(wanted ByteArray) returns ParsedInt
-		if not self.hasCase(wanted) 'noSuchCase'
-			panic("EnumLayout.tagOfCase: `{self.kindWord()} {String.from(self.name)}` declares no case '{String.from(wanted)}' — ask `hasCase` first when the name is not known to be one of this declaration's own")
-		end 'noSuchCase'
-
-		return self.tagOfIndex(self.indexOfCase(wanted))
+		let index = try self.indexOfCase(wanted) otherwise panic("EnumLayout.tagOfCase: `{self.kindWord()} {String.from(self.name)}` declares no case '{String.from(wanted)}' — ask `hasCase` first when the name is not known to be one of this declaration's own")
+		return self.tagOfIndex(index)
 	end 'tagOfCase'
 
 	// The declaring keyword, for a diagnostic — `union` vs `enum`. The WORDS come from
@@ -6840,7 +6805,7 @@ module type BuiltinErrorOrdinalCheck
 	// `EnumLayout.addCase`'s reason: a verb that checked an ordinal without marking the case, or marked it
 	// without checking, would let `requireTotal` pass over a case nothing verified.
 	function recordCase(caseName ByteArray, ordinal ParsedInt, use BuiltinErrorCaseUse)
-		if not self.declaration.hasCase(caseName) 'noSuchCase'
+		let index = try self.declaration.indexOfCase(caseName) otherwise 'noSuchCase'
 			match use 'absentCase'
 				thrown then self.refuse("{String.from(self.installer)} claims ordinal {ordinal} for '{String.from(caseName)}', but `{self.declaration.kindWord()} {String.from(self.declaration.name)}` declares no such case — the runtime throws a case the enum does not have, so no handler arm could ever match it")
 				neverThrown then self.refuse("{String.from(self.installer)} records '{String.from(caseName)}' at ordinal {ordinal} as a case it never throws, but `{self.declaration.kindWord()} {String.from(self.declaration.name)}` declares no such case — an exemption written for a case that is not there excuses nothing, and whichever case it was written for is now unaccounted for")
@@ -6849,12 +6814,6 @@ module type BuiltinErrorOrdinalCheck
 			return
 		end 'noSuchCase'
 
-		// `hasCase` above has already established the name, so this index is a real one. It is taken rather
-		// than asking `tagOfCase` — the pairing 7b3 collapsed into that one method — because the column below
-		// is keyed by declaration index and the index is therefore needed anyway; re-deriving the tag through
-		// the name would scan the case list a third time to reach a position already in hand. The "absent"
-		// convention `tagOfCase` owns is still not re-spelled here: `hasCase` is what asks it.
-		let index = self.declaration.indexOfCase(caseName)
 		let alreadyAccounted = try self.accountedByIndex.get(index) otherwise panic("BuiltinErrorOrdinalCheck.recordCase: accountedByIndex.get OOB at {index} for `{self.declaration.kindWord()} {String.from(self.declaration.name)}`, whose {self.declaration.caseCount()} cases sized this column at construction — the layout was mutated after the check was built")
 
 		if alreadyAccounted 'accountedTwice'
@@ -8042,27 +8001,6 @@ export function argDuplicateMessage(callee String, paramName String) returns Str
 	return "duplicate argument for parameter '{paramName}' of '{callee}'"
 end 'argDuplicateMessage'
 
-// The declaration index of the parameter named `name` in `paramNames`, or `paramNames.count()` when no
-// parameter carries that name (an unknown label). A linear scan — parameter counts are tiny, so no
-// per-signature name→index map is worth its heap object.
-//
-// ⭐ **IT TAKES THE NAME LIST, NOT A SIGNATURE, BECAUSE THREE DIFFERENT RECORDS CARRY ONE** — a
-// `FuncSignature` (SemanticCheck and lowering), a `ParamConsumeInfo` (the parser's consume transfer, which
-// runs before any `FuncSignature` exists) and a `WitnessDispatchTarget` (an interface method, which is in no
-// registry at all). Each of those grew its own copy of this scan; the list is the only thing the scan reads,
-// so taking it directly is what collapses them to one.
-function indexOfParamIn(paramNames ByteArrayArray, name ByteArray) returns ParamCount
-	for i in 0 upto paramNames.count() 'each'
-		let paramName = try paramNames.get(i) otherwise panic("indexOfParamIn: paramNames.get OOB at {i}")
-
-		if paramName.equals(name) 'match'
-			return i
-		end 'match'
-	end 'each'
-
-	return paramNames.count()
-end 'indexOfParamIn'
-
 // Slot a call's `args` (in source order, each paired with its `argLabels` entry — the
 // empty string for a positional argument) into the callee's DECLARATION order, given the
 // callee's `paramNames`. A positional argument at index `i` fills parameter position `i`;
@@ -8072,19 +8010,18 @@ end 'indexOfParamIn'
 // arguments targeting one parameter). THE one place the label→position mapping lives — shared
 // by call validation, call lowering, the parser's consume transfer and witness dispatch.
 // ⭐ **THE LABEL→POSITION MAPPING ITSELF, allocation-free** — a positional argument at index `i` fills
-// parameter `i`; a labelled one fills the position of the parameter it names, which is
-// `paramNames.count()` (one past the end) when no parameter has that name. That out-of-range answer is
-// `indexOfParamIn`'s own not-found convention and is DECODED by the askers rather than re-derived:
-// `slotCallArgs` turns it into `unknownLabel`, and the parameter-mutation edge builder skips the
-// argument (a call whose labels do not resolve is reported by `slotCallArgs`, not by the summary).
+// parameter `i`; a labelled one fills the position of the parameter it names. An argument that fills no
+// parameter (an unknown label, or a positional index past the last parameter) throws: `slotCallArgs`
+// turns that into `unknownLabel`, and the parameter-mutation edge builder skips the argument (a call
+// whose labels do not resolve is reported by `slotCallArgs`, not by the summary).
 //
 // It is factored out because the mutation summary needs the mapping WITHOUT the slotted array
 // (`SemanticCheck.addCallParamEdges` asks "which parameter does source argument `i` fill?" for a handful
 // of arguments and would otherwise pay `slotCallArgs`'s two per-call buffers for every call in the
-// program) — and because a second hand-written copy of `label.isEmpty() ? i : indexOfParamIn(label)` is
+// program) — and because a second hand-written copy of `label.isEmpty() ? i : namePositionIn(label)` is
 // exactly the drift that would let a call be summarised against one slotting and checked against another.
 // ⭐⭐ **THE LABEL USUALLY NAMES THE PARAMETER AT ITS OWN POSITION, AND TESTING THAT FIRST IS WHAT
-// KEEPS A CALL LINEAR IN ITS ARGUMENT COUNT.** `indexOfParamIn` is a scan of the whole name list, so a
+// KEEPS A CALL LINEAR IN ITS ARGUMENT COUNT.** `namePositionIn` is a scan of the whole name list, so a
 // call written `f(a, b: b, c: c)` — Maxon's own spelling, labels in declaration order — costs
 // `1 + 2 + … + P` comparisons, i.e. **O(P²) per call**, and this mapping is asked once per argument by
 // `slotCallArgs`, again by `SemanticCheck.addCallParamEdges`, and again by
@@ -8094,7 +8031,7 @@ end 'indexOfParamIn'
 //
 // ⚠ **IT IS EXACTLY EQUIVALENT, NOT AN APPROXIMATION, AND THE REASON IS THAT PARAMETER NAMES ARE
 // UNIQUE** — a repeated one is E2014 at the DECLARATION (`duplicate parameter name`, measured), so if
-// `paramNames[argIndex]` equals the label then `indexOfParamIn` cannot answer any position but
+// `paramNames[argIndex]` equals the label then `namePositionIn` cannot answer any position but
 // `argIndex`: there is no earlier match for it to find. A signature that DID carry a duplicate belongs
 // to an already-refused program, so the tie-break could only change which diagnostic that program
 // gets — the same reasoning `SemanticCheck.indexModuleFunctionsByName` states for first-index-wins.
@@ -8108,15 +8045,12 @@ end 'indexOfParamIn'
 // at the CALL and nothing at the declaration.
 // A call that does not label `_` never asks about it at all — a positional argument returns at the
 // `label.isEmpty()` line above.
-//
-// MEASURED on `tests/ladders/genmutchain.sh 1 256 <P>` (one chain, depth 256, every argument
-// labelled in declaration order): `phase:semanticCheck` at P = 64 goes **69.8 ms -> 20.5 ms**, and the
-// growth per doubling of P falls from **x3.05 to x1.89** while the program itself doubles at x2.00 —
-// so the quadratic term is GONE rather than merely smaller. It also lands below the PRE-RUNG base
-// (39.6 ms at P = 64), which had the same scan and paid it once instead of twice. Allocations are
-// bit-identical on every rung of that ladder: this buys time and moves no memory.
-export function argSlotPosition(paramNames ByteArrayArray, argIndex ParamCount, label ByteArray) returns ParamCount
+export function argSlotPosition(paramNames ByteArrayArray, argIndex ParamCount, label ByteArray) returns ParamCount throws MapError
 	if label.isEmpty() 'positional'
+		if argIndex >= paramNames.count() 'pastTheLastParameter'
+			throw MapError.keyNotFound
+		end 'pastTheLastParameter'
+
 		return argIndex
 	end 'positional'
 
@@ -8126,15 +8060,14 @@ export function argSlotPosition(paramNames ByteArrayArray, argIndex ParamCount, 
 		return argIndex
 	end 'labelsInDeclarationOrder'
 
-	return indexOfParamIn(paramNames, name: label)
+	return (try namePositionIn(paramNames, name: label)) as ParamCount
 end 'argSlotPosition'
 
 // ⭐ **`argDefaultSlots` IS THE COMPILER'S OWN ANSWER FOR THE ARGUMENTS IT SUPPLIED** — see `MaxonOp.call`.
 // One entry per synthesized parameter default, and they are the TRAILING run of `args`, so the argument at
 // `sourceCount + k` fills slot `argDefaultSlots[k]` and no name is consulted for it. Everything before
-// `sourceCount` is the author's and resolves through `argSlotPosition` exactly as before. A caller with no
-// synthesized defaults (every witness dispatch, every lowering) passes the shared empty array and this
-// function behaves identically to the label-only version it replaced.
+// `sourceCount` is the author's and resolves through `argSlotPosition`. A caller with no synthesized
+// defaults (every witness dispatch, every lowering) passes the shared empty array.
 export function slotCallArgs(paramNames ByteArrayArray, args ValueIdArray, argLabels ByteArrayArray, argDefaultSlots ParamCountArray) returns ArgSlotResult
 	let paramCount = paramNames.count()
 
@@ -8165,13 +8098,9 @@ export function slotCallArgs(paramNames ByteArrayArray, args ValueIdArray, argLa
 		let label = try argLabels.get(i) otherwise panic("slotCallArgs: argLabels.get OOB at {i}")
 
 		// A SYNTHESIZED default names its slot outright; only a SOURCE-written argument is resolved by label.
-		// That split is the whole fix for two `_` parameters: `_` binds nothing, so a signature may declare it
+		// That split is what keeps two `_` parameters apart: `_` binds nothing, so a signature may declare it
 		// twice, and a name lookup then cannot tell the two apart (`MaxonOp.call`'s `argDefaultSlots`).
-		let pos = (try argDefaultSlots.get(i - sourceCount) otherwise panic("slotCallArgs: argDefaultSlots.get OOB at {i - sourceCount} — the synthesized defaults are the trailing run of args")) if i >= sourceCount else argSlotPosition(paramNames, argIndex: i, label: label)
-
-		if pos >= paramCount 'unknown'
-			return ArgSlotResult.unknownLabel(i, label: String.from(label))
-		end 'unknown'
+		let pos = try callArgSlot(paramNames, argDefaultSlots: argDefaultSlots, sourceCount: sourceCount, argIndex: i, label: label) otherwise return ArgSlotResult.unknownLabel(i, label: String.from(label))
 
 		let alreadyFilled = try filled.get(pos) otherwise panic("slotCallArgs: filled.get OOB at {pos}")
 
@@ -8186,6 +8115,22 @@ export function slotCallArgs(paramNames ByteArrayArray, args ValueIdArray, argLa
 
 	return ArgSlotResult.ordered(slotIds)
 end 'slotCallArgs'
+
+// A synthesized default's slot is checked against `paramNames` because the parser filled the defaults
+// from one overload member, and the member resolved later can declare fewer parameters.
+function callArgSlot(paramNames ByteArrayArray, argDefaultSlots ParamCountArray, sourceCount ParamCount, argIndex ParamCount, label ByteArray) returns ParamCount throws MapError
+	if argIndex < sourceCount 'sourceWritten'
+		return try argSlotPosition(paramNames, argIndex: argIndex, label: label)
+	end 'sourceWritten'
+
+	let slot = try argDefaultSlots.get(argIndex - sourceCount) otherwise panic("callArgSlot: argDefaultSlots.get OOB at {argIndex - sourceCount} — the synthesized defaults are the trailing run of args")
+
+	if slot >= paramNames.count() 'pastTheResolvedSignature'
+		throw MapError.keyNotFound
+	end 'pastTheResolvedSignature'
+
+	return slot
+end 'callArgSlot'
 
 export type Project
 	// Incremental query plumbing (source inputs + memo caches + dep graph).

@@ -604,11 +604,7 @@ function phiIncomingValues(module TargetModule, topo FuncTopology, phiValueId Va
 
 	for i in 0 upto topo.numBlocks 'eachBlock'
 		let block = blockAt(module, topo: topo, local: i)
-		let pos = blockArgPosition(block, valueId: phiValueId)
-
-		if pos == block.blockArgs.count() 'notHere'
-			continue
-		end 'notHere'
+		let pos = try blockArgPosition(block, valueId: phiValueId) otherwise continue
 
 		gatherIncomingAtPosition(module, topo: topo, targetBlock: block, position: pos, out: result)
 	end 'eachBlock'
@@ -616,9 +612,7 @@ function phiIncomingValues(module TargetModule, topo FuncTopology, phiValueId Va
 	return result
 end 'phiIncomingValues'
 
-// The index of `valueId` in `block.blockArgs`, or `blockArgs.count()` when it is not a block-arg
-// of this block (a total-order "not found" sentinel, one past every valid index).
-function blockArgPosition(block IrBlock, valueId ValueId) returns PhiIndex
+function blockArgPosition(block IrBlock, valueId ValueId) returns PhiIndex throws MapError
 	for k in 0 upto block.blockArgs.count() 'each'
 		let arg = try block.blockArgs.get(k) otherwise panic("blockArgPosition: blockArgs.get OOB")
 
@@ -627,7 +621,7 @@ function blockArgPosition(block IrBlock, valueId ValueId) returns PhiIndex
 		end 'match'
 	end 'each'
 
-	return block.blockArgs.count()
+	throw MapError.keyNotFound
 end 'blockArgPosition'
 
 // Gather the `position`-th argument of every branch edge targeting `targetBlock` into `out`

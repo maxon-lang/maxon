@@ -11,7 +11,6 @@ let FailedMarker = " failed"
 let ColonByte = 0x3A as Byte
 
 export typealias TestCount = int(0 to u64.max)
-typealias FindResult = int(-1 to i64.max)
 
 export type SpecSummary
 	export var passed as TestCount = 0
@@ -106,16 +105,16 @@ end 'VerdictLabel'
 // Scanning
 // =============================================================================
 
-function firstSeparator(s String) returns FindResult
+function firstSeparator(s String) returns BytePos throws McpError
 	let bytes = s.toByteArray()
 
 	for (iter, b) in bytes.withIterator() 'scan'
 		if b == SlashByte or b == BackslashByte 'sep'
-			return iter.index() as FindResult
+			return iter.index() as BytePos
 		end 'sep'
 	end 'scan'
 
-	return -1
+	throw McpError.notFound
 end 'firstSeparator'
 
 function parseLeadingInt(s String) returns LeadingDigits throws McpError
@@ -201,13 +200,8 @@ function parseVerdictLabel(line String, prefix String) returns VerdictLabel thro
 	let body = sliceBytes(line.toByteArray(), from: prefix.byteLength(), until: line.byteLength())
 	let bodyBytes = body.toByteArray()
 
-	let slash = firstSeparator(body)
-
-	if slash < 0 'noSlash'
-		throw McpError.notFound
-	end 'noSlash'
-
-	let spec = sliceBytes(bodyBytes, from: 0, until: slash as BytePos)
+	let slash = try firstSeparator(body)
+	let spec = sliceBytes(bodyBytes, from: 0, until: slash)
 
 	let nameStart = (slash + 1) as BytePos
 	let total = bodyBytes.count()

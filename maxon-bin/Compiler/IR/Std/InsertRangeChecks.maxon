@@ -791,10 +791,9 @@ type RangeCheckEmitter
 	end 'paramAliasOf'
 
 	// The ranged alias the argument's PARAMETER was declared with. A miss covers every ordinary call:
-	// a callee with no ranged parameter at all files no `paramSites`, an argument landing on an
-	// unranged position matches no site, and a malformed call (bad arity, unknown label) slots past
-	// the end and matches none either — which SemanticCheck reports against the real registry, and
-	// which is not this pass's to diagnose.
+	// a callee with no ranged parameter at all files no `paramSites`, and an argument landing on an
+	// unranged position matches no site. A malformed call (bad arity, unknown label) is SemanticCheck's to
+	// report and does not reach lowering — `calleeParamSlot` panics on one.
 	//
 	// ⚠ The scan is over the callee's RANGED parameters only — usually one, never more than its arity — so
 	// it is bounded by the same `arity` the label lookup it sits beside already walks (`argSlotPosition`
@@ -1883,7 +1882,7 @@ end 'retMatchesValue'
 // a broken invariant rather than a program the user could write.
 function calleeParamSlot(project Project, callee ByteArray, argIndex ParamCount, label ByteArray) returns ParamCount
 	let signature = try project.funcSignatures.get(callee) otherwise panic("calleeParamSlot: '{String.from(callee)}' has range-check data but no FuncSignature — parseFunction records both, keyed by the same name")
-	return argSlotPosition(signature.paramNames, argIndex: argIndex, label: label)
+	return try argSlotPosition(signature.paramNames, argIndex: argIndex, label: label) otherwise panic("calleeParamSlot: argument {argIndex} of a call to '{String.from(callee)}' fills no parameter — SemanticCheck.validateCall slotted every call that reaches lowering against this signature, and lowering refuses one it could not slot")
 end 'calleeParamSlot'
 
 type WaivableParam

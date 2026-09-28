@@ -827,11 +827,12 @@ export type CallSites
 	var described as BoolArray
 	var entries as EntryIndexArray
 
-	// A described callee's index and parameter count, and each argument's parameter position, from `argStarts`.
+	// A described callee's index, and each argument's parameter position and whether it fills one, from
+	// `argStarts`.
 	var callees as FuncIndexArray
-	var paramCounts as ParamCountArray
 	var argStarts as EntryIndexArray
 	var argPositions as ParamCountArray
+	var argFills as BoolArray
 
 	// A callee no summary describes: where it may store what it was handed, and the runtime families it belongs to.
 	var shapes as RuntimeStoreShapeArray
@@ -840,7 +841,7 @@ export type CallSites
 	var linksANewNode as BoolArray
 
 	export static function create(funcCount FuncIndex) returns CallSites
-		return Self{ranges: FunctionRows.create(funcCount), described: BoolArray.create(), entries: EntryIndexArray.create(), callees: FuncIndexArray.create(), paramCounts: ParamCountArray.create(), argStarts: EntryIndexArray.create(), argPositions: ParamCountArray.create(), shapes: RuntimeStoreShapeArray.create(), bookkeeping: BoolArray.create(), forksImages: BoolArray.create(), linksANewNode: BoolArray.create()}
+		return Self{ranges: FunctionRows.create(funcCount), described: BoolArray.create(), entries: EntryIndexArray.create(), callees: FuncIndexArray.create(), argStarts: EntryIndexArray.create(), argPositions: ParamCountArray.create(), argFills: BoolArray.create(), shapes: RuntimeStoreShapeArray.create(), bookkeeping: BoolArray.create(), forksImages: BoolArray.create(), linksANewNode: BoolArray.create()}
 	end 'create'
 
 	export function nextRow() returns ElementIndex
@@ -851,13 +852,13 @@ export type CallSites
 		self.ranges.file(funcIndex, firstRow: firstRow, stopRow: self.described.count())
 	end 'closeRows'
 
-	export function fileDescribedRow(calleeIndex FuncIndex, paramCount ParamCount, slottedArgs ParamCountArray)
+	export function fileDescribedRow(calleeIndex FuncIndex, slottedArgs ParamCountArray, fills BoolArray)
 		self.described.push(true)
 		self.entries.push(self.callees.count())
 		self.callees.push(calleeIndex)
-		self.paramCounts.push(paramCount)
 		self.argStarts.push(self.argPositions.count())
 		self.argPositions.append(slottedArgs)
+		self.argFills.append(fills)
 	end 'fileDescribedRow'
 
 	export function fileRuntimeRow(shape RuntimeStoreShape, isBookkeeping bool, forksAnImage bool, linksANode bool)
@@ -881,12 +882,13 @@ export type CallSites
 		return try self.callees.get(self.entryAt(row)) otherwise panic("CallSites.calleeAt: callees.get OOB at described call-site row {row}")
 	end 'calleeAt'
 
-	export function paramCountAt(row ElementIndex) returns ParamCount
-		return try self.paramCounts.get(self.entryAt(row)) otherwise panic("CallSites.paramCountAt: paramCounts.get OOB at described call-site row {row}")
-	end 'paramCountAt'
-
-	export function argPositionAt(row ElementIndex, argIndex ParamCount) returns ParamCount
+	export function argPositionAt(row ElementIndex, argIndex ParamCount) returns ParamCount throws MapError
 		let at = (try self.argStarts.get(self.entryAt(row)) otherwise panic("CallSites.argPositionAt: argStarts.get OOB at described call-site row {row}")) + (argIndex as ElementIndex)
+
+		if not (try self.argFills.get(at) otherwise panic("CallSites.argPositionAt: argFills.get OOB at {at}")) 'fillsNoParameter'
+			throw MapError.keyNotFound
+		end 'fillsNoParameter'
+
 		return try self.argPositions.get(at) otherwise panic("CallSites.argPositionAt: argPositions.get OOB at {at}")
 	end 'argPositionAt'
 
@@ -1086,15 +1088,16 @@ module type ProvenanceTracer
 	// One function's refusals, reported in source order once every door has asked.
 	var refusals as PendingRefusalArray
 
-	// Each argument's parameter position in the callee being asked about, and how many parameters it has: a
-	// position at or past that count fills none (a label no parameter carries, which E3037 reports).
+	// Each argument's parameter position in the callee being asked about, meaningful only where
+	// `argFillsAParameter` holds: an argument that fills none (a label no parameter carries, which E3037
+	// reports) keeps a placeholder here.
 	var argPositions as ParamCountArray
+	var argFillsAParameter as BoolArray
 
 	// Per argument of the call `argumentsReachAParameter` last asked about, the parameters it may be the record of
 	// and the parameters it may lie within.
 	var argIdentityReach as ParamPositionMaskArray
 	var argWithinReach as ParamPositionMaskArray
-	var calleeParamCount as ParamCount
 	var changed as bool
 
 	var returnedShares as ParamPositionMask
@@ -1228,7 +1231,7 @@ module type ProvenanceTracer
 
 	static function create(project Project, module MaxonModule, signatures ProgramSignatures, funcIndexByName FuncIndexByName, funcCount FuncIndex) returns ProvenanceTracer
 		let noSites = ProvenanceSites.create(ProvenanceColumns.create())
-		return Self{project: project, module: module, signatures: signatures, funcIndexByName: funcIndexByName, conformers: ConformersByInterface.create(), witnessSlots: WitnessSlotsByDeclIndex.create(), witnessImpls: WitnessImplsMemo.create(), functionRefBodies: CallLandingBodies.create(), functionRefBodiesGathered: false, functionValueBodies: FunctionValueBodiesMemo.create(), callSites: CallSites.create(funcCount), stagedEdges: StagedParamEdges.create(funcCount), callSiteFirstRow: 0, callSiteCursor: 0, resolvingCallSites: false, summary: ProvenanceSummary.create(funcCount), sets: RootSets.create(), columnCount: ProvenanceColumn.allCases.count() as RootSetId, setsPerColumn: 0, storeSlots: StoreSlotTable.create(), deepSlots: StoreSlotTable.create(), loadOrigins: StoreSlotKeyArray.create(), hasLoadOrigin: BoolArray.create(), tracked: BoolArray.create(), namedTypeHoldsARecord: NamedTypeRecordMemo.create(), instanceHoldsARecord: InstanceRecordMemo.create(), notARootValue: BoolArray.create(), rootValues: ValueIdArray.create(), rootNames: ByteArrayArray.create(), rootRecordKinds: HeldRecordKindsArray.create(), recordKindsByAggregate: AggregateRecordKindsMemo.create(), recordKindsByInstance: InstanceRecordKindsMemo.create(), noRecordKinds: HeldRecordKinds.create(), anyRecordKinds: anyHeldRecordKinds(), rootRankOfValue: RootRankArray.create(), tracingImmutableBindings: false, writableRank: ParameterTraceWritableRank, isWritableValue: BoolArray.create(), rootIsModuleLet: BoolArray.create(), rootIsImage: BoolArray.create(), rootIsImmutableRecord: BoolArray.create(), rootAliasLastUse: TokenIndexArray.create(), rootBorrows: BoolArray.create(), rootAliased: BoolArray.create(), rootInfos: VarInfoArray.create(), rootDeclTokens: TokenIndexArray.create(), rootLiveUntil: TokenIndexArray.create(), rootSoleBase: BoolArray.create(), rootMovedAt: TokenIndexArray.create(), rootCaptured: BoolArray.create(), writableRankOfValue: RootRankArray.create(), firstWritableValueRank: 0, mutablePlaceWords: ParamPositionMaskArray.create(), parameterRankWords: ParamPositionMaskArray.create(), askedBeforeToken: AskAboutEveryRoot, liveAfterToken: AskAboutEveryRoot, doorSkipsImages: false, immutableGlobalLabels: signatures.immutableGlobalDataLabels(), moduleLetRecordKinds: signatures.recordKindsOfTypes(moduleLetTypesOf(project.managedGlobals)), escapedSet: 0, operands: ValueIdArray.create(), refusals: PendingRefusalArray.create(), argPositions: ParamCountArray.create(), argIdentityReach: ParamPositionMaskArray.create(), argWithinReach: ParamPositionMaskArray.create(), calleeParamCount: 0, changed: false, returnedShares: NoParamPositions, returnedIdentity: NoParamPositions, returnedHolds: NoParamPositions, returnedInside: NoParamPositions, returnedHoldsWithin: NoParamPositions, returnedPlacedWithin: NoParamPositions, returnedEscapes: NoParamPositions, returnedBinds: NoParamPositions, returnedModuleLets: NoParamPositions, moduleLetStorageReached: false, handedAModuleLetsRecord: BoolArray.create(), storedRow: ParamPositionMaskArray.create(), storedDeepRow: ParamPositionMaskArray.create(), recording: false, recordingCaller: 0, dependencyCallees: CsrColumn.create(), dependencyCallers: CsrColumn.create(), enteredIndex: 0, bindingsTraceValid: false, bindingsTraceIndex: 0, bindingsRootCount: 0, receiverWrites: ProvenanceReceiverWrites.create(funcCount), writtenArgFuncs: FuncIndexArray.create(), writtenArgValues: ValueIdArray.create(), writtenArgCalls: SourceRangeArray.create(), writtenArgParams: ByteArrayArray.create(), writtenArgJudged: BoolArray.create(), writtenArgsHere: EntryIndexArray.create(), refusedDoorRanks: 0, rootReadStarts: EntryIndexArray.create(), rootReads: TokenIndexArray.create(), tracedSites: noSites, noSites: noSites, refusedDoorValues: BoolArray.create(), indexedDefinitionsOf: EmptySourceText, definingOps: OpIndexArray.create(), mergingBlocks: BlockIdArray.create(), hopKinds: AccessHopKindArray.create(), hopBases: ValueIdArray.create(), hopSteps: AccessStepArray.create(), soleIncomings: ValueIdArray.create(), soleIncomingSeen: BoolArray.create(), pathSteps: AccessStepArray.create(), otherPathSteps: AccessStepArray.create(), fieldStored: ValueIdArray.create(), otherFieldStored: ValueIdArray.create(), handedPositions: ParamCountArray.create(), rootReadFill: EntryIndexArray.create(), reachWorklist: BlockIdArray.create(), reachVisited: BoolArray.create(), writtenArgCursor: 0, writtenRanks: 0, hygieneIndexed: false, hygieneFirstAtPosition: HygieneIndexByPosition.create(), hygieneNextAtPosition: HygieneIndexArray.create(), hygieneWithdrawn: BoolArray.create(), summaryRow: TracedSummaryRow.create(), blockIndex: BlockIndexById.create(), indexedCalls: CallTokenColumns.create(), callTokenIndex: TokenByPosition.create(), indexedLabelledArguments: LabelledArgumentValues.create(), labelledArgumentRows: LabelledValueRowByPosition.create(), indexedFlowPointsOf: EmptySourceText, flowPoints: FlowPointByOp.create(), writeFreeGraphs: WriteFreeGraphMemo.create(), frozenRanks: RootRankArray.create(), frozenLends: LendSiteArray.create(), frozenReach: BoolArray.create(), frozenRebinds: RebindingArray.create(), frozenBlockCount: 0, frozenDoorValues: BoolArray.create(), handlerEscapes: HandlerEscapeMemo.create()}
+		return Self{project: project, module: module, signatures: signatures, funcIndexByName: funcIndexByName, conformers: ConformersByInterface.create(), witnessSlots: WitnessSlotsByDeclIndex.create(), witnessImpls: WitnessImplsMemo.create(), functionRefBodies: CallLandingBodies.create(), functionRefBodiesGathered: false, functionValueBodies: FunctionValueBodiesMemo.create(), callSites: CallSites.create(funcCount), stagedEdges: StagedParamEdges.create(funcCount), callSiteFirstRow: 0, callSiteCursor: 0, resolvingCallSites: false, summary: ProvenanceSummary.create(funcCount), sets: RootSets.create(), columnCount: ProvenanceColumn.allCases.count() as RootSetId, setsPerColumn: 0, storeSlots: StoreSlotTable.create(), deepSlots: StoreSlotTable.create(), loadOrigins: StoreSlotKeyArray.create(), hasLoadOrigin: BoolArray.create(), tracked: BoolArray.create(), namedTypeHoldsARecord: NamedTypeRecordMemo.create(), instanceHoldsARecord: InstanceRecordMemo.create(), notARootValue: BoolArray.create(), rootValues: ValueIdArray.create(), rootNames: ByteArrayArray.create(), rootRecordKinds: HeldRecordKindsArray.create(), recordKindsByAggregate: AggregateRecordKindsMemo.create(), recordKindsByInstance: InstanceRecordKindsMemo.create(), noRecordKinds: HeldRecordKinds.create(), anyRecordKinds: anyHeldRecordKinds(), rootRankOfValue: RootRankArray.create(), tracingImmutableBindings: false, writableRank: ParameterTraceWritableRank, isWritableValue: BoolArray.create(), rootIsModuleLet: BoolArray.create(), rootIsImage: BoolArray.create(), rootIsImmutableRecord: BoolArray.create(), rootAliasLastUse: TokenIndexArray.create(), rootBorrows: BoolArray.create(), rootAliased: BoolArray.create(), rootInfos: VarInfoArray.create(), rootDeclTokens: TokenIndexArray.create(), rootLiveUntil: TokenIndexArray.create(), rootSoleBase: BoolArray.create(), rootMovedAt: TokenIndexArray.create(), rootCaptured: BoolArray.create(), writableRankOfValue: RootRankArray.create(), firstWritableValueRank: 0, mutablePlaceWords: ParamPositionMaskArray.create(), parameterRankWords: ParamPositionMaskArray.create(), askedBeforeToken: AskAboutEveryRoot, liveAfterToken: AskAboutEveryRoot, doorSkipsImages: false, immutableGlobalLabels: signatures.immutableGlobalDataLabels(), moduleLetRecordKinds: signatures.recordKindsOfTypes(moduleLetTypesOf(project.managedGlobals)), escapedSet: 0, operands: ValueIdArray.create(), refusals: PendingRefusalArray.create(), argPositions: ParamCountArray.create(), argIdentityReach: ParamPositionMaskArray.create(), argWithinReach: ParamPositionMaskArray.create(), argFillsAParameter: BoolArray.create(), changed: false, returnedShares: NoParamPositions, returnedIdentity: NoParamPositions, returnedHolds: NoParamPositions, returnedInside: NoParamPositions, returnedHoldsWithin: NoParamPositions, returnedPlacedWithin: NoParamPositions, returnedEscapes: NoParamPositions, returnedBinds: NoParamPositions, returnedModuleLets: NoParamPositions, moduleLetStorageReached: false, handedAModuleLetsRecord: BoolArray.create(), storedRow: ParamPositionMaskArray.create(), storedDeepRow: ParamPositionMaskArray.create(), recording: false, recordingCaller: 0, dependencyCallees: CsrColumn.create(), dependencyCallers: CsrColumn.create(), enteredIndex: 0, bindingsTraceValid: false, bindingsTraceIndex: 0, bindingsRootCount: 0, receiverWrites: ProvenanceReceiverWrites.create(funcCount), writtenArgFuncs: FuncIndexArray.create(), writtenArgValues: ValueIdArray.create(), writtenArgCalls: SourceRangeArray.create(), writtenArgParams: ByteArrayArray.create(), writtenArgJudged: BoolArray.create(), writtenArgsHere: EntryIndexArray.create(), refusedDoorRanks: 0, rootReadStarts: EntryIndexArray.create(), rootReads: TokenIndexArray.create(), tracedSites: noSites, noSites: noSites, refusedDoorValues: BoolArray.create(), indexedDefinitionsOf: EmptySourceText, definingOps: OpIndexArray.create(), mergingBlocks: BlockIdArray.create(), hopKinds: AccessHopKindArray.create(), hopBases: ValueIdArray.create(), hopSteps: AccessStepArray.create(), soleIncomings: ValueIdArray.create(), soleIncomingSeen: BoolArray.create(), pathSteps: AccessStepArray.create(), otherPathSteps: AccessStepArray.create(), fieldStored: ValueIdArray.create(), otherFieldStored: ValueIdArray.create(), handedPositions: ParamCountArray.create(), rootReadFill: EntryIndexArray.create(), reachWorklist: BlockIdArray.create(), reachVisited: BoolArray.create(), writtenArgCursor: 0, writtenRanks: 0, hygieneIndexed: false, hygieneFirstAtPosition: HygieneIndexByPosition.create(), hygieneNextAtPosition: HygieneIndexArray.create(), hygieneWithdrawn: BoolArray.create(), summaryRow: TracedSummaryRow.create(), blockIndex: BlockIndexById.create(), indexedCalls: CallTokenColumns.create(), callTokenIndex: TokenByPosition.create(), indexedLabelledArguments: LabelledArgumentValues.create(), labelledArgumentRows: LabelledValueRowByPosition.create(), indexedFlowPointsOf: EmptySourceText, flowPoints: FlowPointByOp.create(), writeFreeGraphs: WriteFreeGraphMemo.create(), frozenRanks: RootRankArray.create(), frozenLends: LendSiteArray.create(), frozenReach: BoolArray.create(), frozenRebinds: RebindingArray.create(), frozenBlockCount: 0, frozenDoorValues: BoolArray.create(), handlerEscapes: HandlerEscapeMemo.create()}
 	end 'create'
 
 	// The next trace records every callee it consults as a dependency of `caller`.
@@ -2412,9 +2415,8 @@ module type ProvenanceTracer
 		self.flowModuleLets(result, calleeIndex: calleeIndex)
 
 		for i in 0 upto args.count() 'eachArg'
-			if self.argIsSlotted(i) 'slotted'
-				self.flowThroughSummary(func, result: result, arg: try args.get(i) otherwise panic("ProvenanceTracer.traceCall: args.get OOB at {i}"), calleeIndex: calleeIndex, pos: self.argPositionAt(i))
-			end 'slotted'
+			let pos = try self.argPositionAt(i) otherwise continue
+			self.flowThroughSummary(func, result: result, arg: try args.get(i) otherwise panic("ProvenanceTracer.traceCall: args.get OOB at {i}"), calleeIndex: calleeIndex, pos: pos)
 		end 'eachArg'
 	end 'traceCall'
 
@@ -2466,7 +2468,9 @@ module type ProvenanceTracer
 		end 'bindsNothingOfOurs'
 
 		for i in 0 upto args.count() 'eachArg'
-			if self.argIsSlotted(i) and maskHasParam(binds, param: self.argPositionAt(i)) 'boundByTheCallee'
+			let pos = try self.argPositionAt(i) otherwise continue
+
+			if maskHasParam(binds, param: pos) 'boundByTheCallee'
 				self.returnedBinds = self.returnedBinds or self.wordAt(ProvenanceColumn.identity, value: try args.get(i) otherwise panic("ProvenanceTracer.bindThroughSummary: args.get OOB at {i}"), word: 0)
 			end 'boundByTheCallee'
 		end 'eachArg'
@@ -2504,23 +2508,23 @@ module type ProvenanceTracer
 		for i in 0 upto args.count() 'eachStored'
 			let stored = try args.get(i) otherwise panic("ProvenanceTracer.storeThroughSummary: args.get OOB at {i}")
 
-			if not self.argIsSlotted(i) or not self.isTracked(stored) 'notAStoredRecord'
+			if not self.isTracked(stored) 'notAStoredRecord'
 				continue
 			end 'notAStoredRecord'
 
-			let pos = self.argPositionAt(i)
+			let pos = try self.argPositionAt(i) otherwise continue
 
 			if maskHasParam(escapes, param: pos) 'escapes'
 				self.storeIntoEscapedSet(stored)
 			end 'escapes'
 
 			for j in 0 upto args.count() 'eachReceiver'
-				if j == i or not self.argIsSlotted(j) 'notAnotherParameter'
+				if j == i 'notAnotherParameter'
 					continue
 				end 'notAnotherParameter'
 
+				let into = try self.argPositionAt(j) otherwise continue
 				let receiver = try args.get(j) otherwise panic("ProvenanceTracer.storeThroughSummary: args.get OOB at {j}")
-				let into = self.argPositionAt(j)
 
 				if maskHasParam(self.summary.storesAt(calleeIndex, into: into), param: pos) 'intoAField'
 					self.traceWholeStore(receiver, value: stored, deep: false)
@@ -2553,7 +2557,7 @@ module type ProvenanceTracer
 
 		if self.calleeHasSummary(callee) 'described'
 			self.slotNamedArgs(try self.project.funcSignatures.get(callee) otherwise panic("ProvenanceTracer.nextCallSite: '{String.from(callee)}' left the signature registry after `contains`"), args: args, argLabels: argLabels)
-			self.callSites.fileDescribedRow(try self.funcIndexByName.get(callee) otherwise panic("ProvenanceTracer.nextCallSite: '{String.from(callee)}' left the function index after `contains`"), paramCount: self.calleeParamCount, slottedArgs: self.argPositions)
+			self.callSites.fileDescribedRow(try self.funcIndexByName.get(callee) otherwise panic("ProvenanceTracer.nextCallSite: '{String.from(callee)}' left the function index after `contains`"), slottedArgs: self.argPositions, fills: self.argFillsAParameter)
 			return site
 		end 'described'
 
@@ -2581,41 +2585,62 @@ module type ProvenanceTracer
 	// The argument positions a described call site resolved to, as `slotNamedArgs` leaves them.
 	function slotCallSiteArgs(row ElementIndex, argCount ParamCount)
 		self.argPositions.clear()
-		self.calleeParamCount = self.callSites.paramCountAt(row)
+		self.argFillsAParameter.clear()
 
 		for i in 0 upto argCount 'eachArg'
-			self.argPositions.push(self.callSites.argPositionAt(row, argIndex: i))
+			if let slot = try self.callSites.argPositionAt(row, argIndex: i) 'fillsAParameter'
+				self.pushFilledArg(slot)
+			end 'fillsAParameter' else 'fillsNone'
+				self.pushUnfilledArg(i)
+			end 'fillsNone'
 		end 'eachArg'
 	end 'slotCallSiteArgs'
 
 	// Each argument's parameter position, by its label.
 	function slotNamedArgs(sig FuncSignature, args ValueIdArray, argLabels ByteArrayArray)
 		self.argPositions.clear()
-		self.calleeParamCount = sig.paramCount()
+		self.argFillsAParameter.clear()
 
 		for i in 0 upto args.count() 'eachArg'
 			let label = try argLabels.get(i) otherwise panic("ProvenanceTracer.slotNamedArgs: argLabels.get OOB at {i} — a call's argument columns are parallel by construction")
-			self.argPositions.push(argSlotPosition(sig.paramNames, argIndex: i, label: label))
+
+			if let slot = try argSlotPosition(sig.paramNames, argIndex: i, label: label) 'fillsAParameter'
+				self.pushFilledArg(slot)
+			end 'fillsAParameter' else 'fillsNone'
+				self.pushUnfilledArg(i)
+			end 'fillsNone'
 		end 'eachArg'
 	end 'slotNamedArgs'
 
 	// A witness dispatch's arguments are positional, the receiver first.
 	function slotPositionalArgs(args ValueIdArray)
 		self.argPositions.clear()
-		self.calleeParamCount = args.count()
+		self.argFillsAParameter.clear()
 
 		for i in 0 upto args.count() 'eachArg'
-			self.argPositions.push(i)
+			self.pushFilledArg(i)
 		end 'eachArg'
 	end 'slotPositionalArgs'
 
-	function argPositionAt(i ParamCount) returns ParamCount
+	function pushFilledArg(slot ParamCount)
+		self.argPositions.push(slot)
+		self.argFillsAParameter.push(true)
+	end 'pushFilledArg'
+
+	function pushUnfilledArg(argIndex ParamCount)
+		self.argPositions.push(argIndex)
+		self.argFillsAParameter.push(false)
+	end 'pushUnfilledArg'
+
+	function argPositionAt(i ParamCount) returns ParamCount throws MapError
+		let fills = try self.argFillsAParameter.get(i) otherwise panic("ProvenanceTracer.argPositionAt: argument {i} is past the {self.argFillsAParameter.count()} slotted")
+
+		if not fills 'fillsNoParameter'
+			throw MapError.keyNotFound
+		end 'fillsNoParameter'
+
 		return try self.argPositions.get(i) otherwise panic("ProvenanceTracer.argPositionAt: argument {i} is past the {self.argPositions.count()} slotted")
 	end 'argPositionAt'
-
-	function argIsSlotted(i ParamCount) returns bool
-		return self.argPositionAt(i) < self.calleeParamCount
-	end 'argIsSlotted'
 
 	// A witness dispatch lands on one conformer's implementation, so its result is whatever any of them may
 	// hand back and its stores whatever any of them may make. A conformer this module declares no body for is
@@ -3069,9 +3094,8 @@ module type ProvenanceTracer
 		self.slotCallSiteArgs(site, argCount: args.count())
 
 		for i in 0 upto args.count() 'eachArg'
-			if self.argIsSlotted(i) 'slotted'
-				self.addArgumentRecordEdges(i, calleeIndex: calleeIndex, callerIndex: callerIndex, calleeParam: self.argPositionAt(i))
-			end 'slotted'
+			let pos = try self.argPositionAt(i) otherwise continue
+			self.addArgumentRecordEdges(i, calleeIndex: calleeIndex, callerIndex: callerIndex, calleeParam: pos)
 		end 'eachArg'
 	end 'addNamedCallRecordEdges'
 
@@ -3642,11 +3666,8 @@ module type ProvenanceTracer
 		let token = self.callTokenAt(func, at: call)
 
 		for i in 0 upto args.count() 'eachArg'
-			let pos = argSlotPosition(sig.paramNames, argIndex: i, label: try argLabels.get(i) otherwise panic("ProvenanceTracer.gatherNamedCallDoors: argLabels.get OOB at {i} — a call's argument columns are parallel by construction"))
-
-			if pos >= sig.paramCount() 'fillsNoParameter'
-				continue
-			end 'fillsNoParameter'
+			let label = try argLabels.get(i) otherwise panic("ProvenanceTracer.gatherNamedCallDoors: argLabels.get OOB at {i} — a call's argument columns are parallel by construction")
+			let pos = try argSlotPosition(sig.paramNames, argIndex: i, label: label) otherwise continue
 
 			let at = self.argumentValueAt(func, argRange: try argRanges.get(i) otherwise call)
 			let value = try args.get(i) otherwise panic("ProvenanceTracer.gatherNamedCallDoors: args.get OOB at {i}")
@@ -4463,22 +4484,18 @@ module type ProvenanceTracer
 		self.slotNamedArgs(try self.project.funcSignatures.get(callee) otherwise panic("ProvenanceTracer.callKeepsFieldStoresInView: '{String.from(callee)}' left the signature registry after `contains`"), args: args, argLabels: argLabels)
 
 		for j in handed 'eachHanded'
-			if not self.argIsSlotted(j) 'unslotted'
-				continue
-			end 'unslotted'
-
-			let at = self.argPositionAt(j)
+			let at = try self.argPositionAt(j) otherwise continue
 
 			if maskHasParam(self.summary.sharesAt(calleeIndex) or self.summary.escapesAt(calleeIndex) or self.summary.bindsAt(calleeIndex), param: at) 'aSecondRoad'
 				return false
 			end 'aSecondRoad'
 
 			for i in 0 upto args.count() 'eachOther'
-				if i == j or not self.argIsSlotted(i) 'notAnother'
+				if i == j 'notAnother'
 					continue
 				end 'notAnother'
 
-				let other = self.argPositionAt(i)
+				let other = try self.argPositionAt(i) otherwise continue
 
 				if maskHasParam(self.summary.storesAt(calleeIndex, into: other) or self.summary.storesDeepAt(calleeIndex, into: other), param: at) 'storedAway'
 					return false

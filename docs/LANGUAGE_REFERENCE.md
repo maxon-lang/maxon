@@ -1121,6 +1121,8 @@ qualification is inferred — there is no syntax and no annotation for it. A typ
 - it has at least one field;
 - the fields' storage widths sum to **64 bits or fewer**.
 
+A type the program `spawn`s is a heap record whatever its fields: it is the state its service loop owns.
+
 A field's storage width is the array-element ladder under [Storage](#storage): `bool` and `int(0 to 1)`
 take 1 bit, `int(0 to 3)` 2, `int(0 to 15)` 4, `int(0 to u8.max)` 8, `int(0 to u16.max)` 16,
 `int(0 to u32.max)` 32, anything wider 64, and `bits(n)` takes its own `n`.
@@ -4462,6 +4464,9 @@ end 'main'
   `I.handle` declare each requirement with the same parameter, return and `throws` types
   ([E3177](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3177)); send through each service's own handle
   otherwise.
+- A requirement sent through `I.handle` is a message of every service implementing `I`, so each declares it
+  as an `export` instance method. Sending one that an implementer declares another way (a private method,
+  say), or that no implementer declares, is [E3136](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3136).
 - A handler that sends through an `I.handle` is checked against the implementers of `I`, so
   [E3139](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3139) finds an await cycle through any of them.
 

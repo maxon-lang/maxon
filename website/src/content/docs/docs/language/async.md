@@ -360,6 +360,9 @@ end 'main'
   `I.handle` declare each requirement with the same parameter, return and `throws` types
   ([E3177](/docs/cli/error-codes/#e3177--interfacehandleimplementersdisagree)); send through each service's own handle
   otherwise.
+- A requirement sent through `I.handle` is a message of every service implementing `I`, so each declares it
+  as an `export` instance method. Sending one that an implementer declares another way (a private method,
+  say), or that no implementer declares, is [E3136](/docs/cli/error-codes/#e3136--semanticservicenotamessage).
 - A handler that sends through an `I.handle` is checked against the implementers of `I`, so
   [E3139](/docs/cli/error-codes/#e3139--semanticservicecallcycle) finds an await cycle through any of them.
 

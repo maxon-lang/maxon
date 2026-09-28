@@ -1193,10 +1193,9 @@ export union MaxonOp
 	// exists is that a NAME cannot address a parameter position.** A parameter default is materialized by
 	// `Parser.fillArgsFromParamDefaults` and appended with the parameter's own name as its label, which
 	// `slotCallArgs` then resolves back to a position — and `_`, the ignore name, may be declared MORE THAN
-	// ONCE in one signature (it binds nothing, so two of them cannot collide). `indexOfParamIn` answers the
-	// FIRST occurrence, so `create(_ Integer = 1, _ String = "n", item T)` called `create(2, item: s)` sent
-	// slot 1's default to slot 0 and reported `E3038 duplicate argument for parameter '_'` on a program the
-	// oracle compiles. A lossy key used as an identity — this repo's signature defect.
+	// ONCE in one signature (it binds nothing, so two of them cannot collide). A name lookup answers the
+	// FIRST occurrence, so `create(_ Integer = 1, _ String = "n", item T)` called `create(2, item: s)` would
+	// send slot 1's default to slot 0 and report `E3038 duplicate argument for parameter '_'`.
 	//
 	// ⭐ **ONE ENTRY PER SYNTHESIZED ARGUMENT, AND THEY ARE THE TRAILING RUN OF `args`** — `fillArgsFromParamDefaults`
 	// is the only writer and it APPENDS, so argument `args.count() - argDefaultSlots.count() + k` is the default

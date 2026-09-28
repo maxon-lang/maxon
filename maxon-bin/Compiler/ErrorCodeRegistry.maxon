@@ -1559,16 +1559,22 @@ export enum ErrorCode
 	// parameter from the message and reach the value another way.
 	semanticServiceValueNotTransferable = "E3135"
 
-	// A member was called on a service HANDLE that is not one of the service's messages.
+	// A member was called on a service or interface HANDLE that is not one of its messages.
 	// A handle's surface is exactly its service type's `export` INSTANCE methods, one variant of the
 	// synthesized request union each. That is the isolation boundary, and it is also what makes self-send
 	// deadlock unspellable rather than diagnosed: a private helper is not on the handle, so a call to one from
 	// inside a message body can only ever be a DIRECT call on the service's own state.
-	// Two shapes reach it, and the message tells them apart because the cures differ. The member may be
-	// DECLARED on the service type and merely not exported -- a private helper, or a `static`, which has no
-	// receiver and so can never be a message -- in which case `export` makes it one, or the value can be
-	// reached through a plain (unspawned) value of the type. Or nothing declares it at all, which is an
-	// ordinary misspelling.
+	// On a service's own handle, two shapes reach it, and the message tells them apart because the cures
+	// differ. The member may be DECLARED on the service type and merely not exported -- a private helper, or a
+	// `static`, which has no receiver and so can never be a message -- in which case `export` makes it one, or
+	// the value can be reached through a plain (unspawned) value of the type. Or nothing declares it at all,
+	// which is an ordinary misspelling.
+	// On an interface handle, the member can also be a requirement of the interface that the handle cannot
+	// send. A send through the handle may reach any service implementing the interface, so each of them must
+	// declare the requirement as an `export` instance method. When one implements it another way, such as a
+	// private method, the message names that service; when no implementing service declares it, the handle
+	// has no such message. Declaring the requirement as an `export` instance method on each implementing
+	// service makes it sendable.
 	// It is neither E3018 (a missing FIELD) nor E3004 (an undefined FUNCTION): the member usually exists, on
 	// the type, and saying otherwise would read as a typo.
 	semanticServiceNotAMessage = "E3136"

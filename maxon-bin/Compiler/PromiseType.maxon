@@ -167,10 +167,8 @@ let PromiseInnerFieldName = b"inner"
 // this one sits beside): in both cases the record IS the field, and a `loadIndirect` at the field's offset
 // reads through a pointer the caller wanted the VALUE of.
 //
-// ⚠ **BOTH CONJUNCTS MATTER, for `fieldIsTheInlineManagedRecord`'s reason one type over.** The type test
-// alone would be right today only because `Promise` happens to declare exactly one field; the index test
-// alone is a bare `== 0` about any struct. `indexOfField` answers `fieldCount()` when the name is absent,
-// so a layout that somehow lacked `inner` compares unequal to every valid index rather than matching 0.
+// ⚠ **BOTH CONJUNCTS MATTER.** The type test alone would be right today only because `Promise` happens
+// to declare exactly one field; the index test alone is a bare `== 0` about any struct.
 //
 // ⚠ **THE RECEIVER'S TYPE IS WHAT IS ASKED, NOT THE LAYOUT'S NAME.** `typeIsPromiseStorage` routes
 // through `ProgramSignatures.instanceIsPromiseHandle`, the one place the base name is compared — so this
@@ -181,7 +179,8 @@ export function fieldReadIsThePromiseHandle(signatures ProgramSignatures, receiv
 		return false
 	end 'notAPromise'
 
-	return index == layout.indexOfField(PromiseInnerFieldName)
+	let innerIndex = try layout.indexOfField(PromiseInnerFieldName) otherwise panic("fieldReadIsThePromiseHandle: `{String.from(layout.name)}` is promise storage and declares no `{String.from(PromiseInnerFieldName)}` field — `stdlib/Builtins.maxon` declares the promise's handle field under that name")
+	return index == innerIndex
 end 'fieldReadIsThePromiseHandle'
 
 // `Element` — the type the thunk RETURNS, and what an `await` of this promise yields.
