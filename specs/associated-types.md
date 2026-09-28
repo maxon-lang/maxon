@@ -2594,6 +2594,96 @@ end 'smallOk'
 error E3010: <fragment>:29:28: unneeded cast: 'Percent' already fits in 'Percent'
 ```
 
+<!-- test: an-instance-bound-result-reads-its-alias-where-the-instance-is-written -->
+An interface instance's result is typed by the alias its binding names in the file that writes the instance, not by a same-named alias of the interface's file.
+```maxon
+// --- file: a.maxon
+typealias Level = int(0 to 100)
+
+export interface Cursor uses Element
+	function current() returns Element
+end 'Cursor'
+
+export function wideOk() returns bool
+	let top = 100 as Level
+	return top == 100
+end 'wideOk'
+
+// --- file: z.maxon
+typealias Level = int(0 to 3)
+
+type Tick implements Cursor with Level
+	var v as Level
+
+	static function create() returns Self
+		return Self{v: 2}
+	end 'create'
+
+	function current() returns Level
+		return self.v
+	end 'current'
+end 'Tick'
+
+typealias LevelCursor = Cursor with Level
+
+function read(c LevelCursor) returns Level
+	return c.current() + (1 as Level)
+end 'read'
+
+function main() returns ExitCode
+	if wideOk() 'ok'
+		return read(Tick.create())
+	end 'ok'
+	return 0
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: an-instance-alias-written-in-another-file-types-the-result-by-that-file -->
+An interface instance written in the interface's file keeps that file's `Level` when a file with its own `Level` calls through it.
+```maxon
+// --- file: a.maxon
+export typealias Level = int(0 to 100)
+
+export interface Cursor uses Element
+	function current() returns Element
+end 'Cursor'
+
+export type Tick implements Cursor with Level
+	var v as Level
+
+	export static function create() returns Self
+		return Self{v: 50}
+	end 'create'
+
+	export function current() returns Level
+		return self.v
+	end 'current'
+end 'Tick'
+
+export typealias LevelCursor = Cursor with Level
+
+// --- file: z.maxon
+typealias Level = int(0 to 3)
+
+function isHalf(c LevelCursor) returns bool
+	return c.current() == 50
+end 'isHalf'
+
+function main() returns ExitCode
+	let small = 2 as Level
+	if isHalf(Tick.create()) and small == 2 'half'
+		return 7
+	end 'half'
+	return 1
+end 'main'
+```
+```exitcode
+7
+```
+
 <!-- test: error.associated-return-bound-to-a-generic-instance -->
 ⭐⭐ **E3120 ADMITTED A GENERIC INSTANCE AND THE PROGRAM LEAKED.** A `Box with Integer` IS a machine word
 — a pointer — and it is managed. The predicate asked `declaredNameIsManaged`, which answered `false`,
