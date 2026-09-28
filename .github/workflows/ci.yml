@@ -164,6 +164,13 @@ jobs:
         if: steps.seed.outputs.seeded == 'yes' && matrix.target == 'x64-windows'
         run: ./maxon-bin/.maxon/maxon test tests/mcp
 
+      # `tests/cli` builds wasm32-wasi from this checkout, and wrapping the core module into a
+      # component needs `vendor/wasm-tools` (E6005 without it). `vendor/` is gitignored, so nothing
+      # else stages it.
+      - name: Stage vendor
+        if: steps.seed.outputs.seeded == 'yes'
+        run: ./scripts/fetch-vendor.sh ${{ matrix.target }}
+
       - name: CLI corpus
         if: steps.seed.outputs.seeded == 'yes'
         run: ./maxon-bin/.maxon/maxon test tests/cli

@@ -165,7 +165,12 @@ for tool in $tools; do
 	# ⛔ VERIFY OR REFUSE, and DELETE what failed. Leaving a mismatched archive on disk invites a
 	# second run to find it and skip the download, which is how an unverified file becomes the one in
 	# use.
-	got="$(sha256sum "$archive" | cut -d' ' -f1)"
+	# A stock macOS host has `shasum` but may lack `sha256sum`.
+	if command -v sha256sum >/dev/null 2>&1; then
+		got="$(sha256sum "$archive" | cut -d' ' -f1)"
+	else
+		got="$(shasum -a 256 "$archive" | cut -d' ' -f1)"
+	fi
 	if [ "$got" != "$want" ]; then
 		rm -f "$archive"
 		echo "fetch-vendor.sh: SHA256 MISMATCH for $tool $version ($target) — deleted the download" >&2
