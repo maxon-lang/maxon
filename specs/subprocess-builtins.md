@@ -1154,6 +1154,9 @@ end 'main'
 ```exitcode
 117
 ```
+```stderr
+fatal error: runtime abort 117 (subpCollectSlotReleased)
+```
 
 <!-- test: subprocess-builtins.a-second-collect-on-a-held-slot-is-a-named-stop -->
 <!-- unsupported-targets: wasm32-wasi -->
@@ -1223,6 +1226,9 @@ end 'main'
 ```
 ```exitcode
 117
+```
+```stderr
+fatal error: runtime abort 117 (subpCollectSlotReleased)
 ```
 
 <!-- test: subprocess-builtins.detach-answers-a-pid -->

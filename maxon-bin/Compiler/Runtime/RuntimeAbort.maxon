@@ -514,7 +514,18 @@ end 'lastSegment'
 // the wrong one — which is the failure the previous split into a void helper plus two open-coded
 // value-returning copies left available. (A THROWING runtime function returns `value(i64)` through the
 // dual-register ABI; its `ret` is dead too, so the same answer is right there.)
+//
+// The stderr line is `.rdata` text, so an abort path allocates nothing — an allocator-failure abort
+// among them.
 export function emitRuntimeAbort(module StdModule, func IrFunction, block IrBlock, abort RuntimeAbort, ids ValueMinter)
+	module.runtimeAbortSites.push(RuntimeAbortSite.create(abort, funcName: func.name.clone()))
+
+	let messageAddr = ids.mint()
+	module.appendOp(block, op: StdOp.rdataAddr(messageAddr, label: runtimeAbortMessageLabel(abort)))
+	let messageLength = ids.mint()
+	module.appendOp(block, op: StdOp.const(messageLength, value: runtimeAbortMessage(abort).count() as ParsedInt, valueType: StdType.i64))
+	module.appendOp(block, op: StdOp.osWriteStderr(ids.mint(), bufId: messageAddr, lenId: messageLength))
+
 	// Bound to a local FIRST: the union-case argument type-checker cannot lower an
 	// `EnumMember.rawValue` written directly as a case argument (E9001) — the same reason
 	// `StdToArm64Conversion.vregOf` binds `reg.rawValue` before using it.
@@ -524,6 +535,48 @@ export function emitRuntimeAbort(module StdModule, func IrFunction, block IrBloc
 	module.appendOp(block, op: StdOp.osExit(codeId))
 	emitDeadTerminator(module, func: func, block: block, ids: ids)
 end 'emitRuntimeAbort'
+
+export type RuntimeAbortSite
+	export let abort as RuntimeAbort
+	export let funcName as ByteArray
+
+	static function create(abort RuntimeAbort, funcName ByteArray) returns RuntimeAbortSite
+		return Self{abort: abort, funcName: funcName}
+	end 'create'
+end 'RuntimeAbortSite'
+
+export typealias RuntimeAbortSiteArray = Array with RuntimeAbortSite
+
+let RuntimeAbortMessageLabelPrefix = "__abort_msg_"
+
+function runtimeAbortMessageLabel(abort RuntimeAbort) returns ByteArray
+	return "{RuntimeAbortMessageLabelPrefix}{abort.rawValue}".toByteArray()
+end 'runtimeAbortMessageLabel'
+
+function runtimeAbortMessage(abort RuntimeAbort) returns ByteArray
+	return "fatal error: runtime abort {abort.rawValue} ({abort.name})\n".toByteArray()
+end 'runtimeAbortMessage'
+
+// Asked after dead-function elimination, so a program carries text only for the aborts a surviving
+// function can reach; registered in `allCases` order so the `.rdata` image is deterministic.
+export function registerReachedRuntimeAbortMessages(module StdModule, globalData GlobalDataTable, survivors FunctionNameIndex)
+	var reached = BoolArray.create()
+	reached.refill(RuntimeAbort.allCases.count(), value: false)
+
+	for site in module.runtimeAbortSites 'eachSite'
+		if survivors.byName.contains(site.funcName) 'survived'
+			try reached.set(site.abort.ordinal, value: true) otherwise panic("registerReachedRuntimeAbortMessages: abort ordinal {site.abort.ordinal} is past the {reached.count()} cases RuntimeAbort declares")
+		end 'survived'
+	end 'eachSite'
+
+	for abort in RuntimeAbort.allCases 'eachAbort'
+		let isReached = try reached.get(abort.ordinal) otherwise panic("registerReachedRuntimeAbortMessages: abort ordinal {abort.ordinal} is past the {reached.count()} cases RuntimeAbort declares")
+
+		if isReached 'reachedAbort'
+			_ = globalData.registerRdataConstantLabeled(String.from(runtimeAbortMessageLabel(abort)), bytes: runtimeAbortMessage(abort), kind: RdataPayloadKind.runtimeAbortMessage)
+		end 'reachedAbort'
+	end 'eachAbort'
+end 'registerReachedRuntimeAbortMessages'
 
 export function emitDeadTerminator(module StdModule, func IrFunction, block IrBlock, ids ValueMinter)
 	match func.returnType 'deadTerminator'

@@ -19,6 +19,7 @@ and otherwise sends an `A` query over TCP to the first `nameserver` in `/etc/res
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
 | `TcpClient.connect(host String, port NetworkPort)` | `TcpClient` | `NetworkError` | Resolve `host` and connect. `resolveFailed` or `connectFailed`. |
+| `TcpClient.connect(host String, port NetworkPort, deadlineMs SocketDeadlineMs)` | `TcpClient` | `NetworkError` | The same, throwing `timedOut` when the connection is not made within `deadlineMs`; `0` waits with no deadline. |
 | `TcpClient.adopt(socket)` | `TcpClient` | — | Wrap an already-connected socket; how `TcpListener.accept()` returns its connections. |
 | `send(data String)` | `int(0 to u64.max)` | `NetworkError` | Send every byte, looping over partial sends; returns the byte count. |
 | `recv(bufferSize RecvCapacity)` | `String` | `NetworkError` | Between one and `bufferSize` bytes. Throws `connectionClosed` when the peer has closed. |
@@ -54,7 +55,7 @@ end 'NetworkError'
 | `connectFailed` | The connection was refused or could not be made |
 | `sendFailed`, `recvFailed` | The OS reported an error |
 | `connectionClosed` | The peer closed the connection |
-| `timedOut` | A read, write or accept deadline expired |
+| `timedOut` | A connect, read, write or accept deadline expired |
 | `bindFailed` | The address or port could not be bound |
 | `acceptFailed` | The listener can accept nothing more: it is closed, or the OS refused it for good |
 | `acceptInterrupted` | The OS refused one connection, for example with the process out of descriptors; the listener can take the next |
@@ -119,6 +120,11 @@ ends at its head. Interim `1xx` responses before the final one are skipped, at m
 `HttpError.invalidResponse` is thrown for a `101 Switching Protocols`, a response head over 64 KiB, a body over 1 TiB
 (`HttpLargestBodyBytes`), and a connection that closes before the body is complete.
 
+Every exchange has a deadline: `HttpClientLimits.timeoutMs`, 30000 by default, covers the whole exchange from
+connect to the last body byte, and throws `HttpError.timedOut` when it passes. A body longer than
+`HttpClientLimits.maxBodyBytes` throws `HttpError.bodyTooLarge`, however it is framed; the default is
+`HttpBodyCap.unbounded`.
+
 Limitations: plain HTTP only (no TLS) — a URL whose scheme is anything but `http`, `https` included, throws
 `HttpError.unsupportedScheme` before any connection is attempted. A 3xx is returned as is, and the whole
 response is held in memory. The URL's port defaults to 80.
@@ -127,13 +133,21 @@ response is held in memory. The URL's port defaults to 80.
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `HttpClient.send(request HttpRequest)` | `HttpResponse` | Send a request. |
+| `HttpClient.send(request HttpRequest, limits HttpClientLimits = HttpClientLimits.create())` | `HttpResponse` | Send a request within `limits`. |
 | `HttpClient.get(url String)` | `HttpResponse` | `GET`. |
 | `HttpClient.post(url String, body String)` | `HttpResponse` | `POST` with a body. |
 | `HttpClient.put(url String, body String)` | `HttpResponse` | `PUT` with a body. |
 | `HttpClient.delete(url String)` | `HttpResponse` | `DELETE`. |
 
-All throw `HttpError`.
+All throw `HttpError`. `get`, `post`, `put` and `delete` use the default limits.
+
+### HttpClientLimits
+
+| Member | Type | Description |
+|--------|------|-------------|
+| `HttpClientLimits.create()` | `HttpClientLimits` | The defaults: `timeoutMs` 30000, `maxBodyBytes` `unbounded`. |
+| `timeoutMs` | `HttpExchangeDeadlineMs` | Milliseconds for the whole exchange, connect included. `int(1 to 4294967295)`. |
+| `maxBodyBytes` | `HttpBodyCap` | `unbounded`, or `atMost(bytes HttpByteCap)`. |
 
 ### HttpRequest
 
@@ -175,8 +189,8 @@ field.
 | Enum | Cases |
 |------|-------|
 | `HttpMethod` | `get`, `post`, `put`, `delete`, `head`, `patch`, `options` |
-| `HttpError` | `invalidUrl`, `connectFailed`, `sendFailed`, `recvFailed`, `invalidResponse`, `unsupportedScheme` |
-| `StatusCode` | `ok` 200, `created` 201, `accepted` 202, `noContent` 204, `movedPermanently` 301, `found` 302, `notModified` 304, `badRequest` 400, `unauthorized` 401, `forbidden` 403, `notFound` 404, `methodNotAllowed` 405, `requestTimeout` 408, `conflict` 409, `gone` 410, `lengthRequired` 411, `payloadTooLarge` 413, `tooManyRequests` 429, `headerFieldsTooLarge` 431, `internalServerError` 500, `notImplemented` 501, `badGateway` 502, `serviceUnavailable` 503, `httpVersionNotSupported` 505 |
+| `HttpError` | `invalidUrl`, `connectFailed`, `sendFailed`, `recvFailed`, `invalidResponse`, `unsupportedScheme`, `timedOut`, `bodyTooLarge` |
+| `StatusCode` | A union; `number()` gives the code as an `HttpStatusNumber` (`int(100 to 999)`). Any status without a named case is `other(code HttpStatusNumber)`. Named cases: `ok` 200, `created` 201, `accepted` 202, `noContent` 204, `movedPermanently` 301, `found` 302, `notModified` 304, `badRequest` 400, `unauthorized` 401, `forbidden` 403, `notFound` 404, `methodNotAllowed` 405, `requestTimeout` 408, `conflict` 409, `gone` 410, `lengthRequired` 411, `payloadTooLarge` 413, `tooManyRequests` 429, `headerFieldsTooLarge` 431, `internalServerError` 500, `notImplemented` 501, `badGateway` 502, `serviceUnavailable` 503, `httpVersionNotSupported` 505 |
 
 ```maxon
 function serveOnce(listener TcpListener) returns ExitCode throws NetworkError
@@ -198,7 +212,7 @@ function main() returns ExitCode
 
 	_ = try await server otherwise 9
 	let demo = try response.header("x-demo") otherwise "absent"
-	print("{response.statusCode()} {response.reason()} {response.body()} {demo}\n")
+	print("{response.statusCode().number()} {response.reason()} {response.body()} {demo}\n")
 	return 0
 end 'main'
 ```
@@ -209,7 +223,8 @@ Output: `200 OK hi yes`.
 
 | Function | Returns | Description |
 |----------|---------|-------------|
-| `reasonPhraseOf(code StatusCode)` | `String` | The reason phrase HTTP/1.1 pairs with a status code, such as `Not Found` for 404. |
+| `reasonPhraseOf(code StatusCode)` | `String` | The reason phrase HTTP/1.1 pairs with a status code, such as `Not Found` for 404; empty for `other`. |
+| `statusCodeOf(number HttpStatusNumber)` | `StatusCode` | The named case for `number`, or `other(number)`. |
 
 ### Header parsing
 

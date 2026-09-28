@@ -830,6 +830,10 @@ same pattern and exports a small set of cross-cutting aliases:
 Because every alias is its own type, a quantity crossing from one module's alias to another's is cast at
 the crossing.
 
+A non-exported ranged alias is private to its file: two files may declare one name over different ranges,
+or one over `int` and the other over `float`, and each file's uses mean its own declaration. Two `export`ed
+or `public` declarations of one name in different files over different primitives are **E3105**.
+
 ### Generic-Instance and Function-Type Aliases Are Brands
 
 An alias over a generic instance or a function type follows the same rule. `typealias Xs = Array with
@@ -909,6 +913,9 @@ typealias PoolB = Pool with Integer
 `PoolA.Idx` and `PoolB.Idx` are different types; passing one where the other is expected is **E3005**
 (`expected 'PoolB.Idx', got 'PoolA.Idx'`). Convert with `a as PoolB.Idx`. Literals that fit the range are
 accepted by both.
+
+A ranged alias declared in a type or extension body is a nominal type by the same rule as a file-scope
+one: a value of any other alias, over the same range or not, crosses into it with a cast.
 
 A per-instance **function** alias is not a brand, because no source outside the type can write its name.
 `Array.sort` takes an `Array.SortComparator`, so a field declared with your own `typealias RowComparator =
@@ -2155,6 +2162,9 @@ In a `match`, `caseName(a, b)` binds the payload for that arm; the bindings are 
 - To ignore the whole payload, omit the parentheses: `success then …`. Writing `success(_)` with every
   binding discarded is **E3081**.
 - An `or`-chain can list payload cases bare; their payloads are not accessible in that arm.
+- An arm that binds a payload covers exactly one case: every case in the arm's `or`-chain must bind the
+  slots the arm reads, so a binding beside a payload-less or bare case (`stay or walk(dir)`) is **E3129**.
+  Give each case its own arm.
 - A match on a union must cover every case (**E2026**); use `default throws` or `default panic(…)` for a
   deliberate catch-all (see [Statements](#default-throws-and-default-panic)).
 
@@ -4377,7 +4387,8 @@ either side could write, because the two green threads may run at the same time 
 - Before a send, the runtime also checks the value's whole object graph. The graph may reach one record
   several times — two fields, two slots of an array — when every owner of that record is one of those
   references, and the record is walked once however many paths reach it. If some nested record has an owner
-  outside the graph, the program aborts with exit code **96** before anything is sent. A reply is checked
+  outside the graph, the program prints `fatal error: runtime abort 96 (transferredRecordNotSole)` to
+  stderr and exits with code **96** before anything is sent. A reply is checked
   after the handler's locals and the message's arguments are released, so a reply built from them crosses. A
   generic service's reply is checked at the type its `spawn` fixes: a `returns T` message that hands back a
   container or a reference-holding record from the service's own state is **E3137** at the `spawn`, and a
@@ -4611,6 +4622,8 @@ APIs.
 The [CLI reference](CLI_REFERENCE.md) lists the environment variables a compiled program reads.
 
 ### Exit Codes
+
+Each of these aborts writes `fatal error: runtime abort N (name)` to stderr, then exits with code `N`.
 
 | Exit code | Cause |
 |-----------|-------|

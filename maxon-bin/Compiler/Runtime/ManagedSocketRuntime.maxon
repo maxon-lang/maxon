@@ -346,12 +346,14 @@ let ManagedSocketSendFailedOrdinal = 3 as ParsedInt
 let ManagedSocketRecvFailedOrdinal = 4 as ParsedInt
 let ManagedSocketConnectionClosedOrdinal = 5 as ParsedInt
 let ManagedSocketClosedOrdinal = 6 as ParsedInt
+let ManagedSocketTimedOutOrdinal = 7 as ParsedInt
 let ManagedSocketBufferOutOfBoundsFlag = ManagedSocketBufferOutOfBoundsOrdinal + ErrorFlagOrdinalBias
 let ManagedSocketResolveFailedFlag = ManagedSocketResolveFailedOrdinal + ErrorFlagOrdinalBias
 let ManagedSocketConnectFailedFlag = ManagedSocketConnectFailedOrdinal + ErrorFlagOrdinalBias
 let ManagedSocketSendFailedFlag = ManagedSocketSendFailedOrdinal + ErrorFlagOrdinalBias
 let ManagedSocketRecvFailedFlag = ManagedSocketRecvFailedOrdinal + ErrorFlagOrdinalBias
 let ManagedSocketClosedFlag = ManagedSocketClosedOrdinal + ErrorFlagOrdinalBias
+let ManagedSocketTimedOutFlag = ManagedSocketTimedOutOrdinal + ErrorFlagOrdinalBias
 
 // The `__ms_` prefix that identifies EVERY socket runtime entry point — the one test `scanRuntimeUsage` reads
 // to set `usesManagedSocket`, the one `SemanticCheck` reads for E3104, and the one its yield roster reads.
@@ -726,8 +728,8 @@ end 'emitResolveThroughBuiltinResolver'
 // that could leave. The `addrinfo` LIST is the OS's and goes back through
 // `freeaddrinfo`, never through `__mm_free`.
 function buildManagedSocketTcpConnect(module StdModule, target Target)
-	var func = IrFunction.createFromStd(ManagedSocketTcpConnectName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: managedSocketThrows())
-	var ids = ValueMinter.create(2)
+	var func = IrFunction.createFromStd(ManagedSocketTcpConnectName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0, throwsTypeName: managedSocketThrows())
+	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var init = module.addBlock(func, label: b"msinit", heat: BlockHeat.normal)
@@ -743,11 +745,13 @@ function buildManagedSocketTcpConnect(module StdModule, target Target)
 	var dialing = module.addBlock(func, label: b"msdialgo", heat: BlockHeat.normal)
 	var dialPending = module.addBlock(func, label: b"msdialwait", heat: BlockHeat.normal)
 	var closeAndFail = module.addBlock(func, label: b"msconnclose", heat: BlockHeat.normal)
+	var closeAndTimeOut = module.addBlock(func, label: b"msconnlate", heat: BlockHeat.normal)
 	var connected = module.addBlock(func, label: b"msok", heat: BlockHeat.normal)
 
-	emitParams(module, block: entry, count: 2)
+	emitParams(module, block: entry, count: 3)
 	let hostRec = 0 as ValueId
 	let port = 1 as ValueId
+	let deadlineMs = 2 as ValueId
 
 	// The host arrives as a `__ManagedMemory` record whose buffer carries NO terminator, and `getaddrinfo`
 	// takes an `LPCSTR` — `emitPathToCString`'s whole argument, one family over, and the scratch is this
@@ -801,15 +805,17 @@ function buildManagedSocketTcpConnect(module StdModule, target Target)
 	emitStoreField(module, block: dialing, record: addr, offset: SockaddrFamilyPortAddrOffset, value: addrWord)
 
 	match socketWaitShape(target) 'dialShape'
-		polled then emitSocketPolledDial(module, func: func, ids: ids, dial: dialing, dialPending: dialPending, socket: socket, pollKey: pollKey, addr: addr, connected: connected, failed: closeAndFail, target: target)
-		overlapped then emitSocketWatchedDial(module, func: func, ids: ids, dial: dialing, dialPending: dialPending, socket: socket, addr: addr, connected: connected, failed: closeAndFail)
+		polled then emitSocketPolledDial(module, func: func, ids: ids, dial: dialing, dialPending: dialPending, socket: socket, pollKey: pollKey, addr: addr, deadlineMs: deadlineMs, connected: connected, failed: closeAndFail, late: closeAndTimeOut, target: target)
+		overlapped then emitSocketWatchedDial(module, func: func, ids: ids, dial: dialing, dialPending: dialPending, socket: socket, addr: addr, deadlineMs: deadlineMs, connected: connected, failed: closeAndFail, late: closeAndTimeOut)
 	end 'dialShape'
 
 	// A refused connect leaves an OPEN socket, which no box will ever own — so it is closed here or it leaks
 	// for the process lifetime, invisibly to the exit-101 gate because a socket is not memory.
-	emitSocketPollerRelease(module, block: closeAndFail, pollKey: pollKey, ids: ids)
-	module.appendOp(closeAndFail, op: StdOp.osSocketClose(socket))
-	emitErrorReturn(module, block: closeAndFail, flag: ManagedSocketConnectFailedFlag, ids: ids)
+	emitSocketCloseAndThrow(module, block: closeAndFail, pollKey: pollKey, socket: socket, flag: ManagedSocketConnectFailedFlag, ids: ids)
+	emitSocketCloseAndThrow(module, block: closeAndTimeOut, pollKey: pollKey, socket: socket, flag: ManagedSocketTimedOutFlag, ids: ids)
+
+	// The dial armed the write deadline; left armed, it would bind the socket's first send.
+	emitSocketDeadline(module, block: connected, pollKey: pollKey, mode: NetpollModeWrite, ms: emitConst(module, block: connected, value: 0, ids: ids), ids: ids)
 
 	// The box: one 8-byte slot holding the socket, allocated through `__mm_alloc` so the ordinary ownership
 	// machinery drops it — and the drop it takes is `__ms_destruct`, which CLOSES the socket before freeing
@@ -821,10 +827,21 @@ function buildManagedSocketTcpConnect(module StdModule, target Target)
 	module.functions.push(func)
 end 'buildManagedSocketTcpConnect'
 
+function emitSocketCloseAndThrow(module StdModule, block IrBlock, pollKey ValueId, socket ValueId, flag ParsedInt, ids ValueMinter)
+	emitSocketPollerRelease(module, block: block, pollKey: pollKey, ids: ids)
+	module.appendOp(block, op: StdOp.osSocketClose(socket))
+	emitErrorReturn(module, block: block, flag: flag, ids: ids)
+end 'emitSocketCloseAndThrow'
+
+function emitSocketDeadline(module StdModule, block IrBlock, pollKey ValueId, mode ParsedInt, ms ValueId, ids ValueMinter)
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: NetpollPdDeadlineName, args: threeArgs(pollKey, second: emitConst(module, block: block, value: mode, ids: ids), third: ms)))
+end 'emitSocketDeadline'
+
 // The POLLED lane's dial: issue the non-blocking `connect` and let `emitSocketConnectWait` sort what it said.
 // The operation begins on the record here, ahead of the connect, so the wait carries the life the handshake
 // was issued in; the OVERLAPPED dial watches an event, not this record, and begins nothing on it.
-function emitSocketPolledDial(module StdModule, func IrFunction, ids ValueMinter, dial IrBlock, dialPending IrBlock, socket ValueId, pollKey ValueId, addr ValueId, connected IrBlock, failed IrBlock, target Target)
+function emitSocketPolledDial(module StdModule, func IrFunction, ids ValueMinter, dial IrBlock, dialPending IrBlock, socket ValueId, pollKey ValueId, addr ValueId, deadlineMs ValueId, connected IrBlock, failed IrBlock, late IrBlock, target Target)
+	emitSocketDeadline(module, block: dial, pollKey: pollKey, mode: NetpollModeWrite, ms: deadlineMs, ids: ids)
 	let gen = emitNetpollPdOpBegin(module, block: dial, source: pollKey, ids: ids)
 	let dialResult = ids.mint()
 	module.appendOp(dial, op: StdOp.osSocketConnect(dialResult, sockId: socket, addrPtrId: addr))
@@ -838,7 +855,7 @@ function emitSocketPolledDial(module StdModule, func IrFunction, ids ValueMinter
 	// descriptor this frame opened is already gone.
 	var staleExit = module.addBlock(func, label: b"msdialstale", heat: BlockHeat.normal)
 	emitErrorReturn(module, block: staleExit, flag: ManagedSocketConnectFailedFlag, ids: ids)
-	emitSocketConnectWait(module, func: func, cur: dialPending, answer: dialResult, socket: socket, pollKey: pollKey, gen: gen, connected: connected, failed: failed, stale: staleExit, shape: SocketWaitShape.polled, target: target, ids: ids)
+	emitSocketConnectWait(module, func: func, cur: dialPending, answer: dialResult, socket: socket, pollKey: pollKey, gen: gen, connected: connected, failed: failed, late: late, stale: staleExit, shape: SocketWaitShape.polled, target: target, ids: ids)
 end 'emitSocketPolledDial'
 
 // The overlapped lane's dial: a handshake watched through an event, the one socket operation this
@@ -858,7 +875,7 @@ end 'emitSocketPolledDial'
 // a park nothing can end.
 //
 // The socket stays non-blocking afterwards, which an overlapped `WSARecv` or `WSASend` ignores.
-function emitSocketWatchedDial(module StdModule, func IrFunction, ids ValueMinter, dial IrBlock, dialPending IrBlock, socket ValueId, addr ValueId, connected IrBlock, failed IrBlock)
+function emitSocketWatchedDial(module StdModule, func IrFunction, ids ValueMinter, dial IrBlock, dialPending IrBlock, socket ValueId, addr ValueId, deadlineMs ValueId, connected IrBlock, failed IrBlock, late IrBlock)
 	var noEvent = module.addBlock(func, label: b"msnoevent", heat: BlockHeat.normal)
 	var armWatch = module.addBlock(func, label: b"mswatch", heat: BlockHeat.normal)
 	var watchRefused = module.addBlock(func, label: b"mswatchno", heat: BlockHeat.normal)
@@ -869,6 +886,8 @@ function emitSocketWatchedDial(module StdModule, func IrFunction, ids ValueMinte
 	var verify = module.addBlock(func, label: b"msdialverify", heat: BlockHeat.normal)
 	var giveBack = module.addBlock(func, label: b"msdialgiveback", heat: BlockHeat.normal)
 	var dropEvent = module.addBlock(func, label: b"msdialdropevent", heat: BlockHeat.normal)
+	var notSignalled = module.addBlock(func, label: b"msdialunsignalled", heat: BlockHeat.normal)
+	var dropEventLate = module.addBlock(func, label: b"msdialdropeventlate", heat: BlockHeat.normal)
 
 	let event = ids.mint()
 	module.appendOp(dial, op: StdOp.osEventCreate(event))
@@ -903,6 +922,9 @@ function emitSocketWatchedDial(module StdModule, func IrFunction, ids ValueMinte
 	// The `gone` exit is unreachable here, so `dropEvent` stands in for it: it answers a child that
 	// had already exited, which only a POSIX open can report.
 	let watch = emitNetpollAcquireChildSource(module, func: func, ids: ids, cur: openSource, hProcess: event, cont: watching, gone: dropEvent)
+
+	// The wait is on the event watch's record, so that is where the connect deadline is armed.
+	emitSocketDeadline(module, block: watching, pollKey: watch.source, mode: NetpollModeRead, ms: deadlineMs, ids: ids)
 	let gen = emitNetpollPdOpBegin(module, block: watching, source: watch.source, ids: ids)
 	let verdict = emitNetpollPdWait(module, block: watching, source: watch.source, mode: NetpollModeRead, gen: gen, ids: ids)
 	module.appendOp(watching, op: StdOp.call(ids.mint(), callee: NetpollChildCloseName, args: twoArgs(watch.source, second: watch.token)))
@@ -911,7 +933,10 @@ function emitSocketWatchedDial(module StdModule, func IrFunction, ids ValueMinte
 	// A wait that did not end in the event is a dropped promise, which renounces the park; the
 	// handshake is abandoned along with the socket `failed` closes.
 	let signalled = emitCmp(module, block: awaited, a: verdict, b: emitConst(module, block: awaited, value: NetpollWaitReady, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(awaited, op: StdOp.condBranch(signalled, thenBlockId: verify.id, elseBlockId: dropEvent.id))
+	module.setTerminator(awaited, op: StdOp.condBranch(signalled, thenBlockId: verify.id, elseBlockId: notSignalled.id))
+
+	let ranOut = emitCmp(module, block: notSignalled, a: verdict, b: emitConst(module, block: notSignalled, value: NetpollWaitTimedOut, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(notSignalled, op: StdOp.condBranch(ranOut, thenBlockId: dropEventLate.id, elseBlockId: dropEvent.id))
 
 	let noConnection = emitHandshakeRefused(module, block: verify, socket: socket, ids: ids)
 	module.setTerminator(verify, op: StdOp.condBranch(noConnection, thenBlockId: dropEvent.id, elseBlockId: giveBack.id))
@@ -926,6 +951,9 @@ function emitSocketWatchedDial(module StdModule, func IrFunction, ids ValueMinte
 	// no event association for anything to give back.
 	module.appendOp(dropEvent, op: StdOp.osCloseHandle(event))
 	module.setTerminator(dropEvent, op: StdOp.branch(failed.id))
+
+	module.appendOp(dropEventLate, op: StdOp.osCloseHandle(event))
+	module.setTerminator(dropEventLate, op: StdOp.branch(late.id))
 end 'emitSocketWatchedDial'
 
 export function emitSocketWatchGiveBack(module StdModule, block IrBlock, socket ValueId, event ValueId, ids ValueMinter)
@@ -959,20 +987,20 @@ end 'WinsockError'
 // ⚠ `getsockopt` is the only correct verdict. The descriptor becomes writable for both outcomes, so
 // readiness alone says nothing, and a re-issued `connect` answers `EISCONN` on one kernel, the
 // error on another, and the error only once on a third.
-function emitSocketConnectWait(module StdModule, func IrFunction, cur IrBlock, answer ValueId, socket ValueId, pollKey ValueId, gen ValueId, connected IrBlock, failed IrBlock, stale IrBlock, shape SocketWaitShape, target Target, ids ValueMinter)
+function emitSocketConnectWait(module StdModule, func IrFunction, cur IrBlock, answer ValueId, socket ValueId, pollKey ValueId, gen ValueId, connected IrBlock, failed IrBlock, late IrBlock, stale IrBlock, shape SocketWaitShape, target Target, ids ValueMinter)
 	match shape 'shape'
 		overlapped then panic("emitSocketConnectWait: the overlapped lane watches its handshake through an event rather than through the descriptor's poll record — `emitSocketWatchedDial` is its whole connect, and the built-in resolver that shares this door is built on the two Linux lanes only")
-		polled then emitSocketConnectPolledWait(module, func: func, cur: cur, answer: answer, socket: socket, pollKey: pollKey, gen: gen, connected: connected, failed: failed, stale: stale, target: target, ids: ids)
+		polled then emitSocketConnectPolledWait(module, func: func, cur: cur, answer: answer, socket: socket, pollKey: pollKey, gen: gen, connected: connected, failed: failed, late: late, stale: stale, target: target, ids: ids)
 	end 'shape'
 end 'emitSocketConnectWait'
 
-function emitSocketConnectPolledWait(module StdModule, func IrFunction, cur IrBlock, answer ValueId, socket ValueId, pollKey ValueId, gen ValueId, connected IrBlock, failed IrBlock, stale IrBlock, target Target, ids ValueMinter)
+function emitSocketConnectPolledWait(module StdModule, func IrFunction, cur IrBlock, answer ValueId, socket ValueId, pollKey ValueId, gen ValueId, connected IrBlock, failed IrBlock, late IrBlock, stale IrBlock, target Target, ids ValueMinter)
 	var waitWritable = module.addBlock(func, label: b"msdialready", heat: BlockHeat.normal)
 	var verify = module.addBlock(func, label: b"msdialverify", heat: BlockHeat.normal)
 
 	let pending = emitSocketWouldBlock(module, block: cur, answer: answer, target: target, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(pending, thenBlockId: waitWritable.id, elseBlockId: failed.id))
-	emitSocketWaitReady(module, func: func, block: waitWritable, pollKey: pollKey, gen: gen, mode: NetpollModeWrite, timedOut: failed, stale: stale, ready: verify, ids: ids)
+	emitSocketWaitReady(module, func: func, block: waitWritable, pollKey: pollKey, gen: gen, mode: NetpollModeWrite, timedOut: late, stale: stale, ready: verify, ids: ids)
 
 	let noConnection = emitHandshakeRefused(module, block: verify, socket: socket, ids: ids)
 	module.setTerminator(verify, op: StdOp.condBranch(noConnection, thenBlockId: failed.id, elseBlockId: connected.id))
@@ -1478,7 +1506,7 @@ function buildManagedSocketSetDeadline(module StdModule, name ByteArray, mode Pa
 	let socket = emitLiveSocketOrThrow(module, func: func, entry: entry, join: arm, box: box, ids: ids)
 
 	let pollKey = emitNetpollDescriptorIndex(module, block: arm, target: target, fd: socket, ids: ids)
-	module.appendOp(arm, op: StdOp.call(ids.mint(), callee: NetpollPdDeadlineName, args: threeArgs(pollKey, second: emitConst(module, block: arm, value: mode, ids: ids), third: ms)))
+	emitSocketDeadline(module, block: arm, pollKey: pollKey, mode: mode, ms: ms, ids: ids)
 	emitVoidOkReturn(module, block: arm, ids: ids)
 	module.functions.push(func)
 end 'buildManagedSocketSetDeadline'
@@ -1567,14 +1595,10 @@ export function verifyManagedSocketOrdinals(project Project)
 	end 'declaration'
 end 'verifyManagedSocketOrdinals'
 
-// ⭐⭐ **A CASE APPENDED HERE IS A SEED GENERATION, NOT A DESIGN CHOICE — read this before adding one.**
-// `BuiltinErrorOrdinalCheck.requireTotal` is a PREFIX check: a compiler accepts declared cases it has never
-// heard of, as long as they are a SUFFIX. That is what makes a new case addable — but only by a compiler that
-// CONTAINS the prefix check, and the one compiler that cannot be regenerated from this tree is the released
-// seed CI builds every lane from. ⇒ **A case appended before a release carries the prefix check is four red
-// lanes on `main` with no fix available to anyone.** Until then, a fact that would have been a case crosses as
-// something the enum does not police — `__ManagedSocket.timedOut()` is the worked example, and
-// `stdlib/TcpClient.maxon`'s own `NetworkError` is where it lands.
+// ⭐⭐ **A CASE IS ONLY EVER APPENDED.** `BuiltinErrorOrdinalCheck.requireTotal` is a PREFIX check: a
+// compiler accepts declared cases it has never heard of as long as they are a SUFFIX, and the released seed
+// CI builds every lane from carries that check. A case inserted anywhere else is refused by the seed — four
+// red lanes on `main` with no fix available to anyone.
 function claimManagedSocketOrdinals(project Project, declaration EnumLayout)
 	var socketErrors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: ManagedSocketOrdinalInstaller)
 	socketErrors.claim(ManagedSocketBufferOutOfBoundsCaseName, ordinal: ManagedSocketBufferOutOfBoundsOrdinal)
@@ -1587,6 +1611,7 @@ function claimManagedSocketOrdinals(project Project, declaration EnumLayout)
 	// ordinal block at the top of this file.
 	socketErrors.neverThrown(ManagedSocketConnectionClosedCaseName, ordinal: ManagedSocketConnectionClosedOrdinal)
 	socketErrors.claim(ManagedSocketClosedCaseName, ordinal: ManagedSocketClosedOrdinal)
+	socketErrors.claim(ManagedSocketTimedOutCaseName, ordinal: ManagedSocketTimedOutOrdinal)
 	socketErrors.requireTotal()
 end 'claimManagedSocketOrdinals'
 
@@ -2541,7 +2566,7 @@ function buildManagedSocketDns(module StdModule, target Target)
 	let dialOk = emitConst(module, block: connectStep, value: WinsockCallOk, ids: ids)
 	let dialFailed = emitCmp(module, block: connectStep, a: dialResult, b: dialOk, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(connectStep, op: StdOp.condBranch(dialFailed, thenBlockId: connectWait.id, elseBlockId: sendStep.id))
-	emitSocketConnectWait(module, func: func, cur: connectWait, answer: dialResult, socket: socket, pollKey: pollKey, gen: gen, connected: sendStep, failed: closeFailed, stale: closeFailed, shape: waitShape, target: target, ids: ids)
+	emitSocketConnectWait(module, func: func, cur: connectWait, answer: dialResult, socket: socket, pollKey: pollKey, gen: gen, connected: sendStep, failed: closeFailed, late: closeFailed, stale: closeFailed, shape: waitShape, target: target, ids: ids)
 
 	// A short send is treated as a failure rather than looped over: the query is at most 273 bytes and a
 	// stream socket with an empty send buffer takes it whole, so a partial write here is a broken connection

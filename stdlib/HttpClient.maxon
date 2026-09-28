@@ -8,6 +8,8 @@ public enum HttpError implements Error
 	recvFailed
 	invalidResponse
 	unsupportedScheme
+	timedOut
+	bodyTooLarge
 end 'HttpError'
 
 /// HTTP request methods
@@ -106,37 +108,116 @@ public type HttpRequest
 	end 'body'
 end 'HttpRequest'
 
-/// HTTP status codes.
-public enum StatusCode
-	ok = 200
-	created = 201
-	accepted = 202
-	noContent = 204
-	movedPermanently = 301
-	found = 302
-	notModified = 304
-	badRequest = 400
-	unauthorized = 401
-	forbidden = 403
-	notFound = 404
-	methodNotAllowed = 405
-	requestTimeout = 408
-	conflict = 409
-	gone = 410
-	lengthRequired = 411
-	payloadTooLarge = 413
-	tooManyRequests = 429
-	headerFieldsTooLarge = 431
-	internalServerError = 500
-	notImplemented = 501
-	badGateway = 502
-	serviceUnavailable = 503
-	httpVersionNotSupported = 505
+/// A status code's three-digit number.
+public typealias HttpStatusNumber = int(100 to 999)
+
+/// HTTP status codes. A status with no named case is `other`, carrying its number.
+public union StatusCode
+	ok
+	created
+	accepted
+	noContent
+	movedPermanently
+	found
+	notModified
+	badRequest
+	unauthorized
+	forbidden
+	notFound
+	methodNotAllowed
+	requestTimeout
+	conflict
+	gone
+	lengthRequired
+	payloadTooLarge
+	tooManyRequests
+	headerFieldsTooLarge
+	internalServerError
+	notImplemented
+	badGateway
+	serviceUnavailable
+	httpVersionNotSupported
+	other(code HttpStatusNumber)
+
+	public function number() returns HttpStatusNumber
+		return match self 'which'
+			ok gives 200
+			created gives 201
+			accepted gives 202
+			noContent gives 204
+			movedPermanently gives 301
+			found gives 302
+			notModified gives 304
+			badRequest gives 400
+			unauthorized gives 401
+			forbidden gives 403
+			notFound gives 404
+			methodNotAllowed gives 405
+			requestTimeout gives 408
+			conflict gives 409
+			gone gives 410
+			lengthRequired gives 411
+			payloadTooLarge gives 413
+			tooManyRequests gives 429
+			headerFieldsTooLarge gives 431
+			internalServerError gives 500
+			notImplemented gives 501
+			badGateway gives 502
+			serviceUnavailable gives 503
+			httpVersionNotSupported gives 505
+			other(code) gives code
+		end 'which'
+	end 'number'
 end 'StatusCode'
 
-/// The reason phrase HTTP/1.1 pairs with a status code.
+/// The `StatusCode` for a status number: its named case, or `other(number)`.
+public function statusCodeOf(number HttpStatusNumber) returns StatusCode
+	return match number 'which'
+		200 gives StatusCode.ok
+		201 gives StatusCode.created
+		202 gives StatusCode.accepted
+		204 gives StatusCode.noContent
+		301 gives StatusCode.movedPermanently
+		302 gives StatusCode.found
+		304 gives StatusCode.notModified
+		400 gives StatusCode.badRequest
+		401 gives StatusCode.unauthorized
+		403 gives StatusCode.forbidden
+		404 gives StatusCode.notFound
+		405 gives StatusCode.methodNotAllowed
+		408 gives StatusCode.requestTimeout
+		409 gives StatusCode.conflict
+		410 gives StatusCode.gone
+		411 gives StatusCode.lengthRequired
+		413 gives StatusCode.payloadTooLarge
+		429 gives StatusCode.tooManyRequests
+		431 gives StatusCode.headerFieldsTooLarge
+		500 gives StatusCode.internalServerError
+		501 gives StatusCode.notImplemented
+		502 gives StatusCode.badGateway
+		503 gives StatusCode.serviceUnavailable
+		505 gives StatusCode.httpVersionNotSupported
+		min upto 200 or
+			203 or
+			205 upto 301 or
+			303 or
+			305 upto 400 or
+			402 or
+			406 to 407 or
+			412 or
+			414 upto 429 or
+			430 or
+			432 upto 500 or
+			504 or
+			506 to max gives StatusCode.other(number)
+		default panic("statusCodeOf: {number} fell outside every arm, which together cover every integer")
+	end 'which'
+end 'statusCodeOf'
+
+/// The reason phrase HTTP/1.1 pairs with a status code; empty for `other`.
 public function reasonPhraseOf(code StatusCode) returns String
 	return match code 'which'
+		other gives ""
 		ok gives "OK"
 		created gives "Created"
 		accepted gives "Accepted"
@@ -199,25 +280,52 @@ end 'HttpResponse'
 
 let FormContentType = "application/x-www-form-urlencoded"
 
+public typealias HttpExchangeDeadlineMs = int(1 to 4294967295)
+
+let DefaultExchangeDeadlineMs = 30000
+
+/// The largest response body `HttpClient.send` accepts.
+public union HttpBodyCap
+	unbounded
+	atMost(bytes HttpByteCap)
+end 'HttpBodyCap'
+
+/// Bounds on one `HttpClient.send`. `timeoutMs` covers the whole exchange, connect included, and
+/// defaults to 30000; `maxBodyBytes` defaults to `unbounded`.
+public type HttpClientLimits
+	public var timeoutMs as HttpExchangeDeadlineMs
+	public var maxBodyBytes as HttpBodyCap
+
+	public static function create() returns HttpClientLimits
+		return HttpClientLimits{timeoutMs: DefaultExchangeDeadlineMs, maxBodyBytes: HttpBodyCap.unbounded}
+	end 'create'
+end 'HttpClientLimits'
+
 /// Stateless HTTP/1.1 client. All methods are static.
 /// HTTP only (no TLS). A response body is framed by `Transfer-Encoding`, then `Content-Length`, and
 /// is otherwise read until the server closes the connection.
 public type HttpClient
-	/// Send an HTTP request and return the response.
-	public static function send(request HttpRequest) returns HttpResponse throws HttpError
+	/// Send an HTTP request and return the response. Throws `timedOut` past `limits.timeoutMs` and
+	/// `bodyTooLarge` past `limits.maxBodyBytes`.
+	public static function send(request HttpRequest, limits HttpClientLimits = HttpClientLimits.create()) returns HttpResponse throws HttpError
+		let start = Clock.nowMs()
 		let target = try httpConnectTargetOf(request.url())
 
 		let rawRequest = httpBuildRequest(request, target: target)
 
-		var client = try TcpClient.connect(target.host, port: target.port) otherwise 'connFail'
-			throw HttpError.connectFailed
+		let connectBudgetMs = try remainingBudget(start, timeoutMs: limits.timeoutMs)
+
+		var client = try TcpClient.connect(target.host, port: target.port, deadlineMs: connectBudgetMs) otherwise (cause) 'connFail'
+			throw HttpError.timedOut if cause == NetworkError.timedOut else HttpError.connectFailed
 		end 'connFail'
 
-		_ = try client.send(rawRequest) otherwise 'sendFail'
-			throw HttpError.sendFailed
+		try boundByTheDeadline(client, start: start, timeoutMs: limits.timeoutMs)
+
+		_ = try client.send(rawRequest) otherwise (cause) 'sendFail'
+			throw HttpError.timedOut if cause == NetworkError.timedOut else HttpError.sendFailed
 		end 'sendFail'
 
-		let response = try receiveResponse(client, method: request.method())
+		let response = try receiveResponse(client, method: request.method(), cap: limits.maxBodyBytes)
 		client.close()
 
 		return response
@@ -264,20 +372,47 @@ let ChunkExtensionIntroducer = ";"
 function clientReadFault(cause NetworkError) returns HttpError
 	return match cause 'which'
 		connectionClosed gives HttpError.invalidResponse
-		recvFailed or
-			timedOut gives HttpError.recvFailed
+		recvFailed gives HttpError.recvFailed
+		timedOut gives HttpError.timedOut
 		default panic("HttpClient: `TcpClient.recv` does not throw `{cause.name}`")
 	end 'which'
 end 'clientReadFault'
 
-function receiveResponse(client TcpClient, method HttpMethod) returns HttpResponse throws HttpError
+function remainingBudget(start InstantMs, timeoutMs HttpExchangeDeadlineMs) returns SocketDeadlineMs throws HttpError
+	let spentMs = Clock.elapsedMs(start)
+	let budgetMs = timeoutMs as DurationMs
+
+	if spentMs >= budgetMs 'spent'
+		throw HttpError.timedOut
+	end 'spent'
+
+	return (budgetMs - spentMs) as SocketDeadlineMs
+end 'remainingBudget'
+
+// A `TcpClient` deadline counts from the call that sets it, so both are set once, to what is left of the
+// exchange's budget.
+function boundByTheDeadline(client TcpClient, start InstantMs, timeoutMs HttpExchangeDeadlineMs) throws HttpError
+	let remainingMs = try remainingBudget(start, timeoutMs: timeoutMs)
+
+	try client.setReadDeadline(remainingMs) otherwise panic("HttpClient: a connection it just opened is not closed")
+	try client.setWriteDeadline(remainingMs) otherwise panic("HttpClient: a connection it just opened is not closed")
+end 'boundByTheDeadline'
+
+function exceedsCap(cap HttpBodyCap, bodyBytes BytePos) returns bool
+	return match cap 'which'
+		unbounded gives false
+		atMost(bytes) gives bodyBytes > bytes as BytePos
+	end 'which'
+end 'exceedsCap'
+
+function receiveResponse(client TcpClient, method HttpMethod, cap HttpBodyCap) returns HttpResponse throws HttpError
 	var inbound = HttpInbound.over(client)
 
 	for _ in 0 to MostInterimResponses 'eachHead'
 		let head = try readDelimited(inbound, delimiter: HttpDelimiter.head, cap: MaxResponseHeadBytes)
 
 		match try httpResponseStatusOf(head) 'status'
-			final(response) then return try withFramedBody(inbound, response: response, method: method)
+			final(response) then return try withFramedBody(inbound, response: response, method: method, cap: cap)
 			interim then continue
 		end 'status'
 	end 'eachHead'
@@ -296,12 +431,12 @@ function readDelimited(inbound HttpInbound, delimiter HttpDelimiter, cap BytePos
 	end 'delimited'
 end 'readDelimited'
 
-function withFramedBody(inbound HttpInbound, response HttpResponse, method HttpMethod) returns HttpResponse throws HttpError
+function withFramedBody(inbound HttpInbound, response HttpResponse, method HttpMethod, cap HttpBodyCap) returns HttpResponse throws HttpError
 	let body = match try httpResponseFramingOf(response, method: method) 'framing'
 		bodiless gives ""
-		declared(length) gives try readDeclaredBody(inbound, length: length)
-		chunked gives try readChunkedBody(inbound)
-		closeDelimited gives try readUntilClosed(inbound)
+		declared(length) gives try readCappedDeclaredBody(inbound, length: length, cap: cap)
+		chunked gives try readChunkedBody(inbound, cap: cap)
+		closeDelimited gives try readUntilClosed(inbound, cap: cap)
 	end 'framing'
 
 	return HttpResponse.create(response.statusCode(), reasonPhrase: response.reason(), responseHeaders: response.headers(), responseBody: body)
@@ -315,6 +450,14 @@ function readDeclaredBody(inbound HttpInbound, length BytePos) returns String th
 	return body
 end 'readDeclaredBody'
 
+function readCappedDeclaredBody(inbound HttpInbound, length BytePos, cap HttpBodyCap) returns String throws HttpError
+	if exceedsCap(cap, bodyBytes: length) 'pastTheCap'
+		throw HttpError.bodyTooLarge
+	end 'pastTheCap'
+
+	return try readDeclaredBody(inbound, length: length)
+end 'readCappedDeclaredBody'
+
 function receiveMoreBeforeTheClose(inbound HttpInbound) returns bool throws HttpError
 	try inbound.receiveMore() otherwise (cause) 'recvErr'
 		if cause == NetworkError.connectionClosed 'serverFinished'
@@ -327,7 +470,7 @@ function receiveMoreBeforeTheClose(inbound HttpInbound) returns bool throws Http
 	return true
 end 'receiveMoreBeforeTheClose'
 
-function readUntilClosed(inbound HttpInbound) returns String throws HttpError
+function readUntilClosed(inbound HttpInbound, cap HttpBodyCap) returns String throws HttpError
 	var open = true
 
 	while open 'drain'
@@ -336,12 +479,16 @@ function readUntilClosed(inbound HttpInbound) returns String throws HttpError
 		if inbound.unreadBytes() > HttpLargestBodyBytes 'pastTheLargestBody'
 			throw HttpError.invalidResponse
 		end 'pastTheLargestBody'
+
+		if exceedsCap(cap, bodyBytes: inbound.unreadBytes()) 'pastTheCap'
+			throw HttpError.bodyTooLarge
+		end 'pastTheCap'
 	end 'drain'
 
 	return inbound.take(inbound.unreadBytes())
 end 'readUntilClosed'
 
-function readChunkedBody(inbound HttpInbound) returns String throws HttpError
+function readChunkedBody(inbound HttpInbound, cap HttpBodyCap) returns String throws HttpError
 	var body = StringBuilder.create()
 	var bodyBytes = 0 as BytePos
 	var size = try chunkSizeOf(try readDelimited(inbound, delimiter: HttpDelimiter.line, cap: MaxChunkLineBytes))
@@ -351,8 +498,13 @@ function readChunkedBody(inbound HttpInbound) returns String throws HttpError
 			throw HttpError.invalidResponse
 		end 'pastTheLargestBody'
 
-		body.append(try readDeclaredBody(inbound, length: size))
 		bodyBytes = bodyBytes + size
+
+		if exceedsCap(cap, bodyBytes: bodyBytes) 'pastTheCap'
+			throw HttpError.bodyTooLarge
+		end 'pastTheCap'
+
+		body.append(try readDeclaredBody(inbound, length: size))
 
 		let dataEnd = try readDelimited(inbound, delimiter: HttpDelimiter.line, cap: MaxChunkLineBytes)
 

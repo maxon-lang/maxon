@@ -951,6 +951,9 @@ end 'main'
 ```exitcode
 77
 ```
+```stderr
+fatal error: runtime abort 77 (managedListNodeNotInThisChain)
+```
 
 <!-- test: removing-a-node-the-chain-has-already-let-go -->
 ⭐ **THE `owner@32` GATE ON THE ROUTE THE REFUSAL DOES NOT COVER, AND A SECOND MEASURED SEGFAULT.** The
@@ -1114,6 +1117,9 @@ end 'main'
 ```exitcode
 81
 ```
+```stderr
+fatal error: runtime abort 81 (managedListNodeElementMovedOut)
+```
 ```stdout
 removed [the only element, long enough to be a real heap allocation] count=0
 ```
@@ -1147,6 +1153,9 @@ end 'main'
 ```
 ```exitcode
 81
+```
+```stderr
+fatal error: runtime abort 81 (managedListNodeElementMovedOut)
 ```
 ```stdout
 removed [the only element, long enough to be a real heap allocation] count=0

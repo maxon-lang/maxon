@@ -467,6 +467,9 @@ end 'main'
 ```exitcode
 92
 ```
+```stderr
+fatal error: runtime abort 92 (schedulerDeadlock)
+```
 
 <!-- test: await-any.the-losers-are-dropped-when-the-array-dies -->
 ⭐ The composition: select, serve the winner, and let the array die with the losers still in it. Exit 0

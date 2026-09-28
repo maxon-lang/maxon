@@ -292,10 +292,9 @@ c=1
 d=1
 ```
 
-<!-- test: nonfirst-alternative-payload-binding -->
-A payload binding declared by a non-first alternative (`stay or walk(dir)`) is
-in scope for the arm body. When the payload-less alternative matches, the
-binding reads the shared payload slot (zero here).
+<!-- test: error.nonfirst-alternative-payload-binding -->
+A payload binding declared by a non-first alternative (`stay or walk(dir)`) binds nothing on the
+payload-less alternative's path, so the arm body cannot read it: E3129.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -313,16 +312,11 @@ end 'get'
 
 function main() returns ExitCode
 	print("walk={get(M.walk(5))}\n")
-	print("stay={get(M.stay)}\n")
 	return 0
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-walk=5
-stay=0
+```maxoncstderr
+error E3129: <fragment>:12:9: the payload binding 'dir' cannot be honoured: case 'stay' of `union M` binds nothing at payload slot 0, so on that case's path the arm body would read a value no pattern bound. Give 'stay' an arm of its own
 ```
 
 <!-- test: error.nonfirst-alternative-overlap -->
@@ -352,4 +346,54 @@ end 'main'
 ```
 ```maxoncstderr
 error E2027: specs/fragments/match-enum-or-pattern/error.nonfirst-alternative-overlap.test:15:3: overlapping pattern in match: 'c' is already covered
+```
+
+<!-- test: error.a-payload-less-alternative-cannot-read-a-bound-name -->
+```maxon
+typealias Amount = int(i64.min to i64.max)
+
+union Shape
+	wide(first Amount, second Amount)
+	narrow
+end 'Shape'
+
+function readFirst(shape Shape) returns Amount
+	return match shape 'which'
+		wide(first, _) or
+			narrow gives first
+	end 'which'
+end 'readFirst'
+
+function main() returns ExitCode
+	print("{readFirst(Shape.narrow)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3129: <fragment>:11:8: the payload binding 'first' cannot be honoured: case 'narrow' of `union Shape` binds nothing at payload slot 0, so on that case's path the arm body would read a value no pattern bound. Give 'narrow' an arm of its own
+```
+
+<!-- test: error.a-bare-payload-carrying-alternative-cannot-read-a-bound-name -->
+```maxon
+typealias Amount = int(i64.min to i64.max)
+
+union Shape
+	wide(first Amount, second Amount)
+	twin(left Amount, right Amount)
+end 'Shape'
+
+function readFirst(shape Shape) returns Amount
+	return match shape 'which'
+		wide(first, _) or
+			twin gives first
+	end 'which'
+end 'readFirst'
+
+function main() returns ExitCode
+	print("{readFirst(Shape.twin(99, right: 5))}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3129: <fragment>:11:8: the payload binding 'first' cannot be honoured: case 'twin' of `union Shape` binds nothing at payload slot 0, so on that case's path the arm body would read a value no pattern bound. Give 'twin' an arm of its own
 ```

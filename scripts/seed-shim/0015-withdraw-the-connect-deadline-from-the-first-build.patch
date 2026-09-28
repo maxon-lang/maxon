@@ -1,0 +1,17 @@
+# The seed knows `__ManagedSocket.tcpConnect` with two arguments only, so it refuses `stdlib/TcpClient.maxon` at
+# the dial that passes a connect deadline. Only that argument is withdrawn: the parser arm and the
+# `__ms_tcp_connect` body that take it are left standing, so `C1` knows the three-argument form and compiles
+# the unshimmed tree into `C2`. The shimmed dial has no deadline; `C1` serves no connection.
+diff --git a/stdlib/TcpClient.maxon b/stdlib/TcpClient.maxon
+--- a/stdlib/TcpClient.maxon
++++ b/stdlib/TcpClient.maxon
+@@ -53,7 +53,8 @@ public type TcpClient
+ 	/// Connect as `connect(host, port:)` does, throwing `NetworkError.timedOut` when the connection is
+ 	/// not established within `deadlineMs`.
+ 	public static function connect(host String, port NetworkPort, deadlineMs SocketDeadlineMs) returns TcpClient throws NetworkError
+-		let sock = try __ManagedSocket.tcpConnect(host.addressableBytes(), port: port, milliseconds: deadlineMs) otherwise (e) 'connErr'
++		_ = deadlineMs
++		let sock = try __ManagedSocket.tcpConnect(host.addressableBytes(), port: port) otherwise (e) 'connErr'
+ 			match e 'matchConn'
+ 				resolveFailed then throw NetworkError.resolveFailed
+ 				timedOut then throw NetworkError.timedOut

@@ -53,14 +53,14 @@ public extension Array
 	// out. Written the other way round the two arms remain mutually exclusive
 	// and the program is still sound, but the borrow rule cannot see that and
 	// refuses it (E3070, blaming the arm that in that iteration never runs).
-	function stablePartition(lo SortIndex, hi SortIndex, pivotIndex SortIndex, scratch MergeScratchArray, pivotHold MergeScratchArray, cmp SortComparator) returns SortIndex
+	function stablePartition(lo ElementIndex, hi ElementIndex, pivotIndex ElementIndex, scratch MergeScratchArray, pivotHold MergeScratchArray, cmp SortComparator) returns ElementIndex
 		let pivotAtHome = try managed.get(pivotIndex) otherwise panic("stablePartition: get OOB at pivot")
 		pivotHold.clear()
 		pivotHold.push(pivotAtHome)
 		let pv = try pivotHold.get(0) otherwise panic("stablePartition: pivotHold is empty one line after a push into it")
 
 		// Count the `< pivot` class so we can pick the smaller class to buffer.
-		var lessCount = 0 as SortIndex
+		var lessCount = 0 as ElementIndex
 		var scan = lo
 
 		while scan < hi 'count'
@@ -84,7 +84,7 @@ public extension Array
 			// buffered `>=` class back, right after the in-place `<` class — no
 			// shift, because the `<` class already sits at its final [lo, p).
 			var w = lo
-			var k = 0 as SortIndex
+			var k = 0 as ElementIndex
 			var i = lo
 
 			while i < hi 'splitGe'
@@ -102,7 +102,7 @@ public extension Array
 			end 'splitGe'
 
 			var out = lo + lessCount
-			var s = 0 as SortIndex
+			var s = 0 as ElementIndex
 
 			while s < geCount 'writeGe'
 				let v = try scratch.get(s) otherwise panic("stablePartition: scratch.get OOB (ge)")
@@ -120,7 +120,7 @@ public extension Array
 			// backward copy, to handle the overlap) so it ends at [p, hi), then
 			// drop the buffered `<` class into [lo, p).
 			var w = lo
-			var k = 0 as SortIndex
+			var k = 0 as ElementIndex
 			var i = lo
 
 			while i < hi 'splitLess'
@@ -148,7 +148,7 @@ public extension Array
 			end 'shiftGe'
 
 			var out = lo
-			var s = 0 as SortIndex
+			var s = 0 as ElementIndex
 
 			while s < lessCount 'writeLess'
 				let v = try scratch.get(s) otherwise panic("stablePartition: scratch.get OOB (less)")
@@ -164,11 +164,11 @@ public extension Array
 	// `pivotHold` is `stablePartition`'s one-slot pivot storage, threaded from
 	// `driftsortRange` alongside `scratch` for the same reason: allocated once
 	// per sort rather than once per partition.
-	public function stableQuicksortRange(lo SortIndex, hi SortIndex, scratch MergeScratchArray, scratchCap SortIndex, pivotHold MergeScratchArray, cmp SortComparator)
+	public function stableQuicksortRange(lo ElementIndex, hi ElementIndex, scratch MergeScratchArray, scratchCap ElementIndex, pivotHold MergeScratchArray, cmp SortComparator)
 		self.stableQuicksortWithin(lo, hi: hi, scratch: scratch, scratchCap: scratchCap, pivotHold: pivotHold, cmp: cmp, partitionsLeft: self.sortDepthBudget(hi - lo))
 	end 'stableQuicksortRange'
 
-	function stableMergeSortRange(lo SortIndex, hi SortIndex, scratch MergeScratchArray, scratchCap SortIndex, cmp SortComparator)
+	function stableMergeSortRange(lo ElementIndex, hi ElementIndex, scratch MergeScratchArray, scratchCap ElementIndex, cmp SortComparator)
 		if hi - lo <= SmallSortThreshold 'small'
 			self.smallSortRange(lo, hi: hi, cmp: cmp)
 			return
@@ -184,7 +184,7 @@ public extension Array
 	// on the left and the pivot's own equal-group on the right, and the pivot
 	// is drawn from the slice, so the left side shrinks whenever it is
 	// non-empty and the right side shrinks otherwise.
-	function stableQuicksortWithin(lo SortIndex, hi SortIndex, scratch MergeScratchArray, scratchCap SortIndex, pivotHold MergeScratchArray, cmp SortComparator, partitionsLeft SortIndex)
+	function stableQuicksortWithin(lo ElementIndex, hi ElementIndex, scratch MergeScratchArray, scratchCap ElementIndex, pivotHold MergeScratchArray, cmp SortComparator, partitionsLeft ElementIndex)
 		var curLo = lo
 		var curHi = hi
 		var budget = partitionsLeft
@@ -246,9 +246,9 @@ public extension Array
 		self.smallSortRange(curLo, hi: curHi, cmp: cmp)
 	end 'stableQuicksortWithin'
 
-	module function sortDepthBudget(n SortIndex) returns SortIndex
+	module function sortDepthBudget(n ElementIndex) returns ElementIndex
 		var remaining = n
-		var bits = 0 as SortIndex
+		var bits = 0 as ElementIndex
 
 		while remaining > 1 'halve'
 			remaining = remaining / 2

@@ -24,15 +24,6 @@
 // uninitialized scratch, refcount-bypassing element moves) are deferred until
 // after profiling.
 
-// Named typealiases for `SortRun`'s integer fields. Top-level struct field
-// types can't be inline-ranged in Maxon — they need a named typealias.
-// COORDINATES, like `SortIndex` beside them: `startIndex` is an index into the parent `Array` and
-// `length` a number of its elements, so both are bounded by what that array can hold. Quantities, so
-// their doors refuse a negative; the one thing in this file that needs all 64 bits as VALUES is
-// `nodePowerBetween`'s scale arithmetic, and that has its own `NodePowerWord`.
-public typealias SortRunIndex = int(0 to u64.max)
-public typealias SortRunPower = int(0 to 64)
-
 let EagerRunLengthLimit = SmallSortThreshold * 2
 
 // `nodePowerBetween`'s arithmetic is a raw 64-bit word: `scale * x` reaches ~2^63 and the
@@ -56,16 +47,16 @@ typealias NodePowerWord = bits(64)
 //                defaults this true so existing sorted-run call sites are
 //                unchanged; `initLogical` builds an unsorted one.
 public type SortRun
-	public var startIndex as SortRunIndex
-	public var length as SortRunIndex
-	public var power as SortRunPower
+	public var startIndex as ElementIndex
+	public var length as ElementIndex
+	public var power as Array.NodePower
 	public var sorted as bool
 
-	public static function init(startIndex SortRunIndex, length SortRunIndex, power SortRunPower) returns Self
+	public static function init(startIndex ElementIndex, length ElementIndex, power Array.NodePower) returns Self
 		return Self{startIndex: startIndex, length: length, power: power, sorted: true}
 	end 'init'
 
-	public static function initLogical(startIndex SortRunIndex, length SortRunIndex, power SortRunPower) returns Self
+	public static function initLogical(startIndex ElementIndex, length ElementIndex, power Array.NodePower) returns Self
 		return Self{startIndex: startIndex, length: length, power: power, sorted: false}
 	end 'initLogical'
 end 'SortRun'
@@ -90,7 +81,7 @@ public extension Array
 	// (a handful of steps even for huge n). The result is identical — only
 	// the iteration count differs. The termination test compares `x <= n / x`
 	// rather than `x*x <= n` to avoid overflowing the product for large n.
-	function sqrtApprox(n SortIndex) returns SortIndex
+	function sqrtApprox(n ElementIndex) returns ElementIndex
 		if n < 2 'tiny'
 			return n
 		end 'tiny'
@@ -98,7 +89,7 @@ public extension Array
 		var x = n
 
 		// `x` is >= 1 throughout: it is seeded to n (>= 2 here) and only ever reassigned the Newton
-		// midpoint (x + n/x)/2, which is >= 1 for x, n >= 1. `SortIndex` is 0-inclusive and there is
+		// midpoint (x + n/x)/2, which is >= 1 for x, n >= 1. `ElementIndex` is 0-inclusive and there is
 		// no flow-narrowing to say otherwise, so the divide `n / x` — fallible at the type level —
 		// rides `try`; the `otherwise` is unreachable, so it panics rather than fold a wrong answer.
 		var y = (x + (try (n / x) otherwise panic("sqrtApprox: Newton iterate x reached 0"))) / 2
@@ -121,10 +112,10 @@ public extension Array
 	// up to 64*64 = 4096 the run length is `min(ceil(n/2), 64)`; beyond that it
 	// is `floor(sqrt(n))`. The `ceil(n/2)` form (`n - n/2`) avoids producing a
 	// run longer than half the input on small slices.
-	function minGoodRunLen(n SortIndex) returns SortIndex
+	function minGoodRunLen(n ElementIndex) returns ElementIndex
 		if n <= 4096 'smallN'
 			let half = n - n / 2
-			let cap = 64 as SortIndex
+			let cap = 64 as ElementIndex
 			return half if half < cap else cap
 		end 'smallN'
 
@@ -139,7 +130,7 @@ public extension Array
 	// a strictly-descending run (`a[i] > a[i+1]`). Equal elements belong to the
 	// ascending case so stability is preserved. A descending run is reversed in
 	// place before return, so the returned run is always ascending.
-	function naturalRunLen(lo SortIndex, hi SortIndex, cmp SortComparator) returns SortIndex
+	function naturalRunLen(lo ElementIndex, hi ElementIndex, cmp SortComparator) returns ElementIndex
 		if hi - lo <= 1 'trivial'
 			return hi - lo
 		end 'trivial'
@@ -187,27 +178,27 @@ public extension Array
 	//     logical run; `mergeTopTwo` quicksorts it just before merging.
 	// The eager/lazy choice is the caller's (driftsort sets eager for small
 	// inputs where a sort-then-merge beats deferring); see `driftsortRange`.
-	function createRun(lo SortIndex, hi SortIndex, minGood SortIndex, eager bool, scratch MergeScratchArray, scratchCap SortIndex, pivotHold MergeScratchArray, cmp SortComparator) returns SortRun
+	function createRun(lo ElementIndex, hi ElementIndex, minGood ElementIndex, eager bool, scratch MergeScratchArray, scratchCap ElementIndex, pivotHold MergeScratchArray, cmp SortComparator) returns SortRun
 		let avail = hi - lo
 
 		if avail <= 1 'trivial'
-			return SortRun.init(lo, length: avail, power: 0 as NodePower)
+			return SortRun.init(lo, length: avail, power: 0)
 		end 'trivial'
 
 		let natural = self.naturalRunLen(lo, hi: hi, cmp: cmp)
 
 		if natural >= minGood 'goodNatural'
-			return SortRun.init(lo, length: natural, power: 0 as NodePower)
+			return SortRun.init(lo, length: natural, power: 0)
 		end 'goodNatural'
 
 		let want = minGood if minGood < avail else avail
 
 		if eager 'eagerSort'
 			self.stableQuicksortRange(lo, hi: lo + want, scratch: scratch, scratchCap: scratchCap, pivotHold: pivotHold, cmp: cmp)
-			return SortRun.init(lo, length: want, power: 0 as NodePower)
+			return SortRun.init(lo, length: want, power: 0)
 		end 'eagerSort'
 
-		return SortRun.initLogical(lo, length: want, power: 0 as NodePower)
+		return SortRun.initLogical(lo, length: want, power: 0)
 	end 'createRun'
 
 	// ---------------------------------------------------------------
@@ -225,7 +216,7 @@ public extension Array
 	//
 	// Here the prev run is [s1, s2) and the next is [s2, s2+n2), so the
 	// boundaries are a = s1, b = s2, c = s2 + n2 (s2 already encodes s1+n1).
-	function nodePowerBetween(s1 SortIndex, s2 SortIndex, n2 SortIndex, n SortIndex) returns NodePower
+	function nodePowerBetween(s1 ElementIndex, s2 ElementIndex, n2 ElementIndex, n ElementIndex) returns NodePower
 		// scale = ceil(2^62 / n) = (2^62 + n - 1) / n
 		let twoTo62 = 4611686018427387904 as NodePowerWord  // 2^62
 
@@ -259,7 +250,7 @@ public extension Array
 		return lz
 	end 'nodePowerBetween'
 
-	function mergeTopTwo(stack RunArrayStack, scratch MergeScratchArray, scratchCap SortIndex, pivotHold MergeScratchArray, cmp SortComparator)
+	function mergeTopTwo(stack RunArrayStack, scratch MergeScratchArray, scratchCap ElementIndex, pivotHold MergeScratchArray, cmp SortComparator)
 		let top = stack.count() - 1
 		let right = try stack.get(top) otherwise panic("mergeTopTwo: stack.get OOB at top")
 		let left = try stack.get(top - 1) otherwise panic("mergeTopTwo: stack.get OOB at top-1")
@@ -290,7 +281,7 @@ public extension Array
 	// run's right neighbor (the merged result going forward) won't have
 	// a higher power, so we can finalize it now. Push the new run, repeat.
 	// At end-of-input, drain the stack by merging top-to-bottom.
-	public function driftsortRange(lo SortIndex, hi SortIndex, cmp SortComparator)
+	public function driftsortRange(lo ElementIndex, hi ElementIndex, cmp SortComparator)
 		let n = hi - lo
 
 		if n <= SmallSortThreshold 'small'
@@ -339,7 +330,7 @@ public extension Array
 		end 'byByte'
 
 		if SmallSortThreshold > allocLen 'bySmallSort'
-			allocLen = SmallSortThreshold as SortIndex
+			allocLen = SmallSortThreshold as ElementIndex
 		end 'bySmallSort'
 
 		let scratchCap = allocLen

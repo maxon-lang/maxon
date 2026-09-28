@@ -1,4 +1,4 @@
-// Test: try-block.or-arm-within-one-union-member-binds-its-payload
+// Test: try-block.split-arms-within-one-union-member-bind-their-payload
 typealias Score = int(0 to 1000)
 
 union ErrA implements Error
@@ -40,8 +40,8 @@ function classify(which Score) returns Score
 	end 'work'
 	otherwise (e) 'h'
 		match e 'k'
-			ErrA.bad(code) or
-				ErrA.worse then sum = code + 1
+			ErrA.bad(code) then sum = code + 1
+			ErrA.worse then sum = 1
 			splat then sum = 999
 		end 'k'
 	end 'h'
@@ -58,19 +58,12 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __sched_tls_teb_offset@0 = i64 0
-  __sched_allm@8 = i64 0
-  __sched_lock@16 = i64 0
-  __sched_preempt_ext_lock@24 = i64 0
-  __sched_preempt_context@32 = i64 0
-  __slab_arena_list@40 = i64 0
-  __slab_arena_map_l1@48 = i64 0
-  __slab_state@56 = i64 0
-  __ds_base@64 = i64 0
-  __dbg_ctl@72 = i64 0
-  __mrt_console_probe_stdin@80 = i8 0
-  __mrt_console_probe_stdout@81 = i8 0
-  __mrt_console_probe_stderr@82 = i8 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
 }
 
 func @callA {
@@ -128,7 +121,7 @@ func @callA {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at try-block.or-arm-within-one-union-member-binds-its-payload.test:13: Range check failed: value outside typealias 'Score'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at try-block.split-arms-within-one-union-member-bind-their-payload.test:13: Range check failed: value outside typealias 'Score'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
@@ -164,7 +157,7 @@ func @callB {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at try-block.or-arm-within-one-union-member-binds-its-payload.test:25: Range check failed: value outside typealias 'Score'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at try-block.split-arms-within-one-union-member-bind-their-payload.test:25: Range check failed: value outside typealias 'Score'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
@@ -182,11 +175,11 @@ func @classify {
     x64.prologue 32
     x64.movRegReg rbx, rcx
     x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic#12
-  __rc_chk#13:
+    x64.jcc less, __rc_panic#14
+  __rc_chk#15:
     x64.cmpRegImm32 rbx, 1000
-    x64.jcc greater, __rc_panic#12
-  __rc_ok#11:
+    x64.jcc greater, __rc_panic#14
+  __rc_ok#13:
     x64.movRegReg rcx, rbx
     x64.callDirect callA
     x64.movRegReg r12, r8
@@ -206,22 +199,25 @@ func @classify {
     x64.movRegReg rcx, r10
   tryblkerr:
     x64.cmpRegImm32 rax, 0
-    x64.setccReg greaterEqual, rdx
-    x64.cmpRegImm32 rax, 1
-    x64.setccReg lessEqual, rsi
-    x64.andRegReg rdx, rdx, rsi
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, matchnext
+    x64.jcc notEqual, matchnext#9
   matcharm#5:
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.leaRegRegImm32 rbx, rax, 1
     x64.callDirect __mm_decref
     x64.movRegReg rax, rbx
     x64.jmp matchcont
-  matchnext:
+  matchnext#9:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matchnext#10
+  matcharm#6:
+    x64.movRegImm32 rbx, 1
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, rbx
+    x64.jmp matchcont
+  matchnext#10:
     x64.cmpRegImm32 rax, 2
     x64.jcc notEqual, matchdead
-  matcharm#6:
+  matcharm#7:
     x64.movRegImm32 rax, 999
   matchcont:
     x64.movRegReg r8, rax
@@ -231,18 +227,18 @@ func @classify {
     x64.leaRegRegReg r8, r12, r8
   tryblkcont:
     x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic#15
-  __rc_chk#16:
+    x64.jcc less, __rc_panic#17
+  __rc_chk#18:
     x64.cmpRegImm32 r8, 1000
-    x64.jcc greater, __rc_panic#15
-  __rc_ok#14:
+    x64.jcc greater, __rc_panic#17
+  __rc_ok#16:
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic#12:
-    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at try-block.or-arm-within-one-union-member-binds-its-payload.test:33: Range check failed: value outside typealias 'Score'\x0a"
+  __rc_panic#14:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at try-block.split-arms-within-one-union-member-bind-their-payload.test:33: Range check failed: value outside typealias 'Score'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -250,8 +246,8 @@ func @classify {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic#15:
-    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at try-block.or-arm-within-one-union-member-binds-its-payload.test:49: Range check failed: value outside typealias 'Score'\x0a"
+  __rc_panic#17:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at try-block.split-arms-within-one-union-member-bind-their-payload.test:49: Range check failed: value outside typealias 'Score'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

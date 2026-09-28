@@ -223,6 +223,10 @@ same pattern and exports a small set of cross-cutting aliases:
 Because every alias is its own type, a quantity crossing from one module's alias to another's is cast at
 the crossing.
 
+A non-exported ranged alias is private to its file: two files may declare one name over different ranges,
+or one over `int` and the other over `float`, and each file's uses mean its own declaration. Two `export`ed
+or `public` declarations of one name in different files over different primitives are **E3105**.
+
 ## Generic-Instance and Function-Type Aliases Are Brands
 
 An alias over a generic instance or a function type follows the same rule. `typealias Xs = Array with
@@ -302,6 +306,9 @@ typealias PoolB = Pool with Integer
 `PoolA.Idx` and `PoolB.Idx` are different types; passing one where the other is expected is **E3005**
 (`expected 'PoolB.Idx', got 'PoolA.Idx'`). Convert with `a as PoolB.Idx`. Literals that fit the range are
 accepted by both.
+
+A ranged alias declared in a type or extension body is a nominal type by the same rule as a file-scope
+one: a value of any other alias, over the same range or not, crosses into it with a cast.
 
 A per-instance **function** alias is not a brand, because no source outside the type can write its name.
 `Array.sort` takes an `Array.SortComparator`, so a field declared with your own `typealias RowComparator =

@@ -539,9 +539,9 @@ end 'touchHeldProject'
 
 function heldRootOf(root WorkspaceRoot, readerPath FilePath) returns FilePath
 	return match root 'root'
-		projectDirectory(dir) or
-			documentDirectory or
-			libraryTier gives dir
+		projectDirectory(dir) gives dir
+		documentDirectory(dir) gives dir
+		libraryTier(dir) gives dir
 		singleFile gives readerPath
 	end 'root'
 end 'heldRootOf'
@@ -568,9 +568,9 @@ end 'lspBufferRootOf'
 
 function sourcesUnder(root WorkspaceRoot, selection SourceSelection) returns SourceSweep
 	return match root 'root'
-		projectDirectory(dir) or
-			documentDirectory or
-			libraryTier gives maxonSourcesIn(dir, selection: selection)
+		projectDirectory(dir) gives maxonSourcesIn(dir, selection: selection)
+		documentDirectory(dir) gives maxonSourcesIn(dir, selection: selection)
+		libraryTier(dir) gives maxonSourcesIn(dir, selection: selection)
 		singleFile gives SourceSweep.swept(MaxonSourcePathArray.create())
 	end 'root'
 end 'sourcesUnder'
@@ -653,9 +653,9 @@ end 'rootWithoutAManifest'
 // tiers.
 function sweepableRoot(root WorkspaceRoot) returns WorkspaceRoot
 	return match root 'root'
-		projectDirectory(dir) or
-			documentDirectory or
-			libraryTier gives WorkspaceRoot.singleFile if isAVolumeRoot(dir) else root
+		projectDirectory(dir) gives WorkspaceRoot.singleFile if isAVolumeRoot(dir) else root
+		documentDirectory(dir) gives WorkspaceRoot.singleFile if isAVolumeRoot(dir) else root
+		libraryTier(dir) gives WorkspaceRoot.singleFile if isAVolumeRoot(dir) else root
 		singleFile gives root
 	end 'root'
 end 'sweepableRoot'

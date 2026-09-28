@@ -1480,20 +1480,19 @@ end 'buildValtypeTable'
 function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames FunctionNameIndex)
 	match op 'def'
 		const(resultId, _, valueType) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(valueType))
-		binOp(resultId, _, _, _, operandType) or
-
-			// The immediate form carries its own width, so a fold cannot change a value's class: its
-			// result does not depend on `lhs`, which a fold does not promise agrees (see `emitBinOpImm`).
-			binOpImm then setValtype(valtypes, v: resultId, vt: wasmMachineValTypeOf(operandType))
+		binOp(resultId, _, _, _, operandType) then setValtype(valtypes, v: resultId, vt: wasmMachineValTypeOf(operandType))
+		// The immediate form carries its own width, so a fold cannot change a value's class: its
+		// result does not depend on `lhs`, which a fold does not promise agrees (see `emitBinOpImm`).
+		binOpImm(resultId, _, _, _, operandType) then setValtype(valtypes, v: resultId, vt: wasmMachineValTypeOf(operandType))
 		unaryOp(resultId, _, opcode, operandType) then setValtype(valtypes, v: resultId, vt: unaryResultValType(opcode, operandType: operandType))
 
 		// ⚠ A wasm linear-memory address is an i32, not the i64 pointer width the native backends carry:
 		// `globalAddr` and `rdataAddr` materialize an `i32.const` that `loadIndirect`, `storeIndirect`
 		// and `osWriteStdout` consume as the base address.
-		cmp(resultId, _, _, _, _) or
-			cmpImm or
-			globalAddr or
-			rdataAddr then setValtype(valtypes, v: resultId, vt: WasmValType.i32)
+		cmp(resultId, _, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i32)
+		cmpImm(resultId, _, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i32)
+		globalAddr(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i32)
+		rdataAddr(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i32)
 
 		// ⚠ The machine word. `div`/`mod` have no width of their own and are computed at machine width
 		// whatever their operands' storage widths (`emitDivMod`). A stream write widens the i32 length it
@@ -1502,35 +1501,35 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		// i64, unlike an address consumed in place. The rest are refused at emission on this lane, or
 		// unreachable (`stackRecordAddr`: stack promotion is gated off for wasm32-wasi), but are typed
 		// anyway because this column is built before any lowering decides anything.
-		div(resultId, _, _, _) or
-			mod or
-			osAllocPages or
-			osWriteStdout or
-			funcAddr or
-			osWriteStderr or
-			stackRecordAddr or
-			osOpenNamedSegment or
-			osMapNamedSegment or
-			osTickCountMs or
-			osPipePeek or
-			osEnvRead or
-			osProcessTerminate or
-			osSocketStartup or
-			osSocketResolve or
-			osSocketCreate or
-			osSocketConnect or
-			osSocketError or
-			osSocketSend or
-			osSocketRecv or
-			osCpuCount or
-			osCommitPages or
-			osReservePages or
-			atomicCas or
-			atomicRmw or
-			currentThreadToken or
-			tlsAlloc or
-			tlsSlotLoad or
-			osEnterBackgroundPriority then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		div(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		mod(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		osAllocPages(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		osWriteStdout(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		funcAddr(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		osWriteStderr(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		stackRecordAddr(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		osOpenNamedSegment(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		osMapNamedSegment(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		osTickCountMs(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		osPipePeek(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		osEnvRead(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		osProcessTerminate(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		osSocketStartup(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		osSocketResolve(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		osSocketCreate(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		osSocketConnect(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		osSocketError(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		osSocketSend(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		osSocketRecv(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		osCpuCount(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		osCommitPages(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		osReservePages(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		atomicCas(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		atomicRmw(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		currentThreadToken(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		tlsAlloc(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		tlsSlotLoad(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		osEnterBackgroundPriority(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 
 		// No valtype: these define no value, or have no wasm lowering and so never have a def recorded.
 		condBranch or
@@ -1616,8 +1615,8 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		// answer the `func.paramTypes` sweep recorded and `funcParamValTypes` declares.
 		param(resultId, _, paramType) then setValtype(valtypes, v: resultId, vt: wasmMachineValTypeOf(paramType))
 		call(resultId, callee, _) then setValtype(valtypes, v: resultId, vt: callResultValType(callee, funcNames: funcNames))
-		loadIndirect(resultId, _, _, valueType) or
-			loadAcquire then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(valueType))
+		loadIndirect(resultId, _, _, valueType) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(valueType))
+		loadAcquire(resultId, _, _, valueType) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(valueType))
 		tryCall(resultId, errorFlagId, callee, _) then recordTryCallDefs(valtypes, resultId: resultId, errorFlagId: errorFlagId, callee: callee, funcNames: funcNames)
 
 		// A void indirect callee (a raw element destructor) leaves nothing on the stack, so its
@@ -2165,10 +2164,10 @@ type WasmFuncEmitter
 			// It lapses the day the lane grows a second thread, not the day it grows atomics; the
 			// replacement is `i64.atomic.load`/`i64.atomic.store`, whose sequential consistency subsumes
 			// acquire/release.
-			loadIndirect(resultId, addrId, offset, valueType) or
-				loadAcquire then self.emitLoadIndirect(resultId, addrId: addrId, offset: offset, valueType: valueType)
-			storeIndirect(addrId, offset, valueId, valueType) or
-				storeRelease then self.emitStoreIndirect(addrId, offset: offset, valueId: valueId, valueType: valueType)
+			loadIndirect(resultId, addrId, offset, valueType) then self.emitLoadIndirect(resultId, addrId: addrId, offset: offset, valueType: valueType)
+			loadAcquire(resultId, addrId, offset, valueType) then self.emitLoadIndirect(resultId, addrId: addrId, offset: offset, valueType: valueType)
+			storeIndirect(addrId, offset, valueId, valueType) then self.emitStoreIndirect(addrId, offset: offset, valueId: valueId, valueType: valueType)
+			storeRelease(addrId, offset, valueId, valueType) then self.emitStoreIndirect(addrId, offset: offset, valueId: valueId, valueType: valueType)
 
 			// There is no reservation on this lane, so a reserve is an allocation. Linear memory's only
 			// instruction is `memory.grow`, which takes the address range and backs it in one step, so
@@ -2176,8 +2175,8 @@ type WasmFuncEmitter
 			//
 			// ⚠ A wasm reservation is therefore charged: an arena sized for a 64-bit address space is that
 			// many bytes of linear memory. See `SlabArena`'s header.
-			osAllocPages(resultId, sizeId) or
-				osReservePages then self.emitOsAllocPages(resultId, sizeId: sizeId)
+			osAllocPages(resultId, sizeId) then self.emitOsAllocPages(resultId, sizeId: sizeId)
+			osReservePages(resultId, sizeId) then self.emitOsAllocPages(resultId, sizeId: sizeId)
 			osWriteStdout(resultId, bufId, lenId) then self.emitOsWriteStream(resultId, bufId: bufId, lenId: lenId, stream: OsOutputStream.standardOutput)
 			rdataAddr(resultId, label) then self.emitRdataAddr(resultId, label: label)
 			tryCall(resultId, errorFlagId, callee, args) then self.emitTryCall(resultId, errorFlagId: errorFlagId, callee: callee, args: args)

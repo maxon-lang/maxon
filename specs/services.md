@@ -2061,6 +2061,9 @@ typealias Integer = int(i64.min to i64.max)
 ```exitcode
 96
 ```
+```stderr
+fatal error: runtime abort 96 (transferredRecordNotSole)
+```
 
 <!-- test: deepmove.a-container-crosses-with-its-elements -->
 A container crosses WHOLE. `push` increfs what it is handed, so an element's count says nothing the type can
@@ -2156,6 +2159,9 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 96
+```
+```stderr
+fatal error: runtime abort 96 (transferredRecordNotSole)
 ```
 
 <!-- test: deepmove.a-cloned-array-detaches-its-shared-buffer-at-the-send -->
@@ -2319,6 +2325,9 @@ typealias Integer = int(i64.min to i64.max)
 ```exitcode
 96
 ```
+```stderr
+fatal error: runtime abort 96 (transferredRecordNotSole)
+```
 
 <!-- test: deepmove.a-grown-string-whose-bytes-the-sender-still-views-detaches-at-the-send -->
 <!-- procs: 16 -->
@@ -2464,6 +2473,9 @@ typealias Integer = int(i64.min to i64.max)
 ```exitcode
 96
 ```
+```stderr
+fatal error: runtime abort 96 (transferredRecordNotSole)
+```
 
 <!-- test: deepmove.a-map-crosses-with-its-keys-and-values -->
 A `Map` is a declared record over two element-bearing containers, so it crosses through the ordinary field
@@ -2541,6 +2553,9 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 96
+```
+```stderr
+fatal error: runtime abort 96 (transferredRecordNotSole)
 ```
 
 <!-- test: deepmove.a-map-releases-a-removed-entry-so-the-map-crosses -->
@@ -2852,6 +2867,9 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 96
+```
+```stderr
+fatal error: runtime abort 96 (transferredRecordNotSole)
 ```
 
 <!-- test: deepmove.a-deep-graph-crosses-and-is-released-on-the-service -->
@@ -3767,6 +3785,9 @@ typealias Integer = int(i64.min to i64.max)
 ```exitcode
 96
 ```
+```stderr
+fatal error: runtime abort 96 (transferredRecordNotSole)
+```
 
 <!-- test: deepmove.dag.a-string-and-its-bytes-cross-together -->
 A move meets a view's reference to the String record its bytes live in before it detaches the view, so a moved
@@ -4022,6 +4043,9 @@ typealias Integer = int(i64.min to i64.max)
 ```exitcode
 96
 ```
+```stderr
+fatal error: runtime abort 96 (transferredRecordNotSole)
+```
 
 <!-- test: borrow.a-let-string-stays-readable-after-the-send -->
 A `let` local is LENT, not moved: the service reads the sender's own record and the sender's binding stays
@@ -4119,6 +4143,9 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 96
+```
+```stderr
+fatal error: runtime abort 96 (transferredRecordNotSole)
 ```
 
 <!-- test: borrow.two-services-and-the-sender-read-one-graph -->
@@ -4397,6 +4424,9 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 96
+```
+```stderr
+fatal error: runtime abort 96 (transferredRecordNotSole)
 ```
 
 <!-- test: borrow.a-handler-may-write-a-copy-of-a-record-inside-its-lent-parameter-through-a-self-writing-method -->
@@ -4701,6 +4731,9 @@ typealias Integer = int(i64.min to i64.max)
 ```exitcode
 96
 ```
+```stderr
+fatal error: runtime abort 96 (transferredRecordNotSole)
+```
 
 <!-- test: borrow.dag.a-string-and-its-bytes-are-lent-together -->
 An owned `String` keeps its bytes inline, so a `toByteArray()` view holds a reference to the String's own record.
@@ -4824,6 +4857,9 @@ typealias TextArray = Array with String
 ```exitcode
 96
 ```
+```stderr
+fatal error: runtime abort 96 (transferredRecordNotSole)
+```
 
 <!-- test: borrow.dag.an-outside-owner-of-a-string-its-bytes-reach-first-aborts -->
 The same outside owner with the view declared first. The view's meeting is the record's first, so it is entered
@@ -4865,6 +4901,9 @@ typealias TextArray = Array with String
 ```
 ```exitcode
 96
+```
+```stderr
+fatal error: runtime abort 96 (transferredRecordNotSole)
 ```
 
 <!-- test: borrow.a-lent-handle-may-be-kept-by-the-handler -->
@@ -7559,6 +7598,9 @@ end 'main'
 ```
 ```exitcode
 92
+```
+```stderr
+fatal error: runtime abort 92 (schedulerDeadlock)
 ```
 
 <!-- test: deep-acyclic-chain-runs -->
@@ -10400,6 +10442,9 @@ end 'main'
 ```exitcode
 96
 ```
+```stderr
+fatal error: runtime abort 96 (transferredRecordNotSole)
+```
 
 <!-- test: services.a-service-state-may-hold-a-value-at-an-interface-type -->
 A service's own state may hold a value at an interface type: the `spawn` walks it through the conformer's
@@ -10611,6 +10656,9 @@ end 'main'
 ```
 ```exitcode
 96
+```
+```stderr
+fatal error: runtime abort 96 (transferredRecordNotSole)
 ```
 
 <!-- test: services.a-conformer-holding-a-string-crosses -->
@@ -11141,6 +11189,9 @@ end 'main'
 ```
 ```exitcode
 96
+```
+```stderr
+fatal error: runtime abort 96 (transferredRecordNotSole)
 ```
 
 <!-- test: error.a-conformer-no-walk-reaches-sent-at-its-own-type-is-refused -->

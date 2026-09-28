@@ -1621,9 +1621,9 @@ end 'main'
 0
 ```
 
-<!-- test: try-block.or-arm-within-one-union-member-binds-its-payload -->
-An arm whose alternatives all belong to one error type binds that type's payload by the ordinary `or`-arm rule:
-`worse` carries no slot 0, so on its path `code` reads the zero every box is filled with.
+<!-- test: error.try-block-or-arm-within-one-union-member-reads-a-payload-one-alternative-lacks -->
+An arm whose alternatives all belong to one error type is held to the ordinary `or`-arm rule: `worse` binds
+nothing at slot 0, so on its path the body would read a `code` no pattern bound, and the arm is refused.
 ```maxon
 typealias Score = int(0 to 1000)
 
@@ -1668,6 +1668,71 @@ function classify(which Score) returns Score
 		match e 'k'
 			ErrA.bad(code) or
 				ErrA.worse then sum = code + 1
+			splat then sum = 999
+		end 'k'
+	end 'h'
+
+	return sum
+end 'classify'
+
+function main() returns ExitCode
+	print("{classify(1)}\n")
+	print("{classify(2)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3129: <fragment>:43:13: the payload binding 'code' cannot be honoured: case 'worse' of `union ErrA` binds nothing at payload slot 0, so on that case's path the arm body would read a value no pattern bound. Give 'worse' an arm of its own
+```
+
+
+<!-- test: try-block.split-arms-within-one-union-member-bind-their-payload -->
+Alternatives of one error type that disagree about a payload take an arm each, and the arm that names `bad` binds
+its `code`.
+```maxon
+typealias Score = int(0 to 1000)
+
+union ErrA implements Error
+	bad(code Score)
+	worse
+end 'ErrA'
+
+enum ErrB implements Error
+	splat
+end 'ErrB'
+
+function callA(which Score) returns Score throws ErrA
+	if which == 1 'bad'
+		throw ErrA.bad(50)
+	end 'bad'
+
+	if which == 2 'worse'
+		throw ErrA.worse
+	end 'worse'
+
+	return 5
+end 'callA'
+
+function callB(which Score) returns Score throws ErrB
+	if which > 100 'big'
+		throw ErrB.splat
+	end 'big'
+
+	return 6
+end 'callB'
+
+function classify(which Score) returns Score
+	var sum = 0
+
+	try 'work'
+		let a = callA(which)
+		let b = callB(which)
+		sum = a + b
+	end 'work'
+	otherwise (e) 'h'
+		match e 'k'
+			ErrA.bad(code) then sum = code + 1
+			ErrA.worse then sum = 1
 			splat then sum = 999
 		end 'k'
 	end 'h'

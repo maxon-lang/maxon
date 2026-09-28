@@ -393,8 +393,8 @@ type RangeCheckEmitter
 
 	// ---- alias-named sites (cast, struct-literal field, field store, field default, array element) ----
 
-	// The site rule, asked ONCE for every position — an `as`, a field, a field default, and the call
-	// argument that resolves into one. It raises the compile-time E3005 on its way to its answer and says
+	// The site rule for a position that holds an alias NAME: it resolves the declaration and asks
+	// `runtimeHalfOf`, which an `alias` site holding its resolved declaration asks directly. It raises the compile-time E3005 on its way to its answer and says
 	// whether the RUNTIME half is owed too.
 	//
 	// ⚠ **`needsRuntimeGuard` IS ASKED FIRST AND UNCONDITIONALLY, INCLUDING FOR A POSITION THAT WILL NEVER
@@ -1858,16 +1858,16 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 			osPathQuery or
 			osSocketOverlapped or
 			osSocketServe gives false
-		ret(retValId) or
+		ret(retValId) gives retValId == target
 
-			// ⚠ A throwing function leaves through `errorReturn`, not `ret`
-			// (`LowerMaxonToStd.emitRetOrErrorReturn` picks the terminator off the `throws` clause). Read
-			// as "not a `ret`", its site gets `notFound` from `retBlockOf` and is dropped silently, leaving
-			// the ranged return unguarded. The primary value is what a return site names — no range-check
-			// site is recorded against the error flag — so the comparison is `retValId`'s alone.
-			// `emitDeadReturn` emits the matching `errorReturn` shape for the panic block it splits in
-			// front of, so the guard terminates a throwing function correctly on both edges.
-			errorReturn gives retValId == target
+		// ⚠ A throwing function leaves through `errorReturn`, not `ret`
+		// (`LowerMaxonToStd.emitRetOrErrorReturn` picks the terminator off the `throws` clause). Read
+		// as "not a `ret`", its site gets `notFound` from `retBlockOf` and is dropped silently, leaving
+		// the ranged return unguarded. The primary value is what a return site names — no range-check
+		// site is recorded against the error flag — so the comparison is `retValId`'s alone.
+		// `emitDeadReturn` emits the matching `errorReturn` shape for the panic block it splits in
+		// front of, so the guard terminates a throwing function correctly on both edges.
+		errorReturn(retValId, _) gives retValId == target
 	end 'term'
 end 'retMatchesValue'
 

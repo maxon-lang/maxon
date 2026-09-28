@@ -1211,11 +1211,11 @@ end 'constArrayLiteralEnumName'
 
 function constArrayElementScalar(element ConstArrayElement) returns ParsedInt
 	return match element 'e'
-		integer(payload) or
+		integer(payload) gives payload
 
-			// An enum case's image is its tag, exactly as an integer element's is its number — the same i64
-			// in the same slot, which is what makes an enum array a constant blob at all.
-			enumCase gives payload
+		// An enum case's image is its tag, exactly as an integer element's is its number — the same i64
+		// in the same slot, which is what makes an enum array a constant blob at all.
+		enumCase(payload, _) gives payload
 		string or
 			character panic("constArrayElementScalar: a managed element has no constant image — its slot holds a heap address, which is why `arrayElementMayBeConstantBlob` refuses the instance before this is asked")
 	end 'e'
@@ -3178,7 +3178,7 @@ export function classifyUnionPayload(signatures ProgramSignatures, typeNames Typ
 	// alias's answer is the bare `named` it already is (its NAME carries the range) — what a PAYLOAD needs
 	// on top is the STORAGE primitive the slot occupies, which only this side wants. A float-underlying
 	// alias cannot reach this line; the door re-tagged it `float` and the `float` arm above took it.
-	if let underlying = try signatures.aliasUnderlyingInAnyFile(name) 'rangedIntAlias'
+	if let underlying = try signatures.aliasUnderlyingFor(name, readerFilePath: slotScopeFilePath) 'rangedIntAlias'
 		return PayloadClass.scalar(underlying)
 	end 'rangedIntAlias'
 
@@ -3471,12 +3471,12 @@ end 'declaredAggregateSlotWidth'
 
 export function payloadStorageOf(class PayloadClass) returns MaxonType
 	match class 'c'
-		scalar(storage) or
-			managed or
+		scalar(storage) then return storage
+		managed(storage, _) then return storage
 
-			// The opaque word itself, the same width for every instantiation.
-			typeParam or
-			greenThread then return storage
+		// The opaque word itself, the same width for every instantiation.
+		typeParam(storage) then return storage
+		greenThread(storage) then return storage
 
 		// One machine word — the box POINTER. Not the `named(<union>)` the case carries: that is the slot's
 		// IDENTITY, and it panics the lowering. See the ⛔ above. Through the shared accessor, so this width and
@@ -3519,9 +3519,9 @@ export function payloadValueTypeOf(class PayloadClass, declared MaxonType) retur
 			// what the caller's `retypeOpaqueMethodResult` substitutes and what `decrefCalleeFor` routes to
 			// `__drop_type_param` on.
 			typeParam then return declared
-		managed(storage, _) or
-			nestedUnion or
-			greenThread then return storage
+		managed(storage, _) then return storage
+		nestedUnion(storage) then return storage
+		greenThread(storage) then return storage
 	end 'c'
 end 'payloadValueTypeOf'
 
@@ -4181,8 +4181,8 @@ export typealias ForwardCallArray = Array with ForwardCall
 // payload is read, so a fourth reader cannot come to match one arm and forget the others.
 export function forwardCallName(call ForwardCall) returns ByteArray
 	return match call 'c'
-		bare(name) or
-			throughAReceiver gives name
+		bare(name) gives name
+		throughAReceiver(name) gives name
 		throughSelf(_, name) gives name
 	end 'c'
 end 'forwardCallName'
@@ -7753,6 +7753,8 @@ module let ManagedSocketConnectionClosedCaseName = b"connectionClosed"
 
 module let ManagedSocketClosedCaseName = b"closed"
 
+module let ManagedSocketTimedOutCaseName = b"timedOut"
+
 // The parameter names a `__ManagedSocket` argument mismatch quotes back. Each is part of the
 // declared signature — `tcpConnect(host, port)`, `sendFrom(managed, offset, length)` — and each is
 // also the label an author may write at the call site (`stdlib/TcpClient.maxon:23` writes `port:`).
@@ -7765,6 +7767,7 @@ export let ManagedSocketHostParamName = b"host"
 export let ManagedSocketPortParamName = b"port"
 export let ManagedSocketLengthParamName = b"length"
 export let ManagedSocketDeadlineParamName = b"milliseconds"
+export let ManagedSocketNoDeadlineMs = 0
 
 // ⭐ **THE ERROR A POSSIBLY-ZERO `/` OR `mod` THROWS (A1)**, and the type an `otherwise (e)` handler's
 // `match e` discriminates. Its ONE case lives with the layout, in `Project.builtinDivisionByZeroErrorEnum`.
@@ -9598,8 +9601,8 @@ end 'ExtensionTarget'
 // refusal at `readWhereClause` rather than a silent acceptance.
 export function extensionTargetParamNames(target ExtensionTarget) returns ByteArrayArray
 	match target 'target'
-		interfaceExtension(paramNames, _) or
-			typeExtension then return paramNames
+		interfaceExtension(paramNames, _) then return paramNames
+		typeExtension(paramNames, _) then return paramNames
 		undeclaredTarget then return sharedEmptyDeclaredConformances
 	end 'target'
 end 'extensionTargetParamNames'
@@ -9608,8 +9611,8 @@ end 'extensionTargetParamNames'
 // `conformersOf` for why one answer rather than two derivations.
 export function extensionTargetConformers(target ExtensionTarget) returns ByteArrayArray
 	match target 'target'
-		interfaceExtension(_, conformers) or
-			typeExtension then return conformers
+		interfaceExtension(_, conformers) then return conformers
+		typeExtension(_, conformers) then return conformers
 		undeclaredTarget then return sharedEmptyDeclaredConformances
 	end 'target'
 end 'extensionTargetConformers'
@@ -10106,9 +10109,27 @@ let CompilerQualifiedAliasSeparatorByte = 36
 // ordinal would depend on which claimant the sweep reached first — filesystem enumeration order, which
 // `StdlibLoader`'s header forbids relying on. Two files declaring the same range mint the same name, which
 // is exactly right: they are the same element type, and the corpus is entirely of that shape.
-export function rangeQualifiedAliasName(name ByteArray, low ParsedInt, high ParsedInt) returns ByteArray
-	return "{String.from(name)}{CompilerQualifiedAliasSeparator}{low}_{high}".toByteArray()
+//
+// A float range carries its primitive (`$float…`) and an int range does not: an int spelling starts with a
+// digit or '-', a float one with 'f', so an `int` and a `float` declaration over one range never mint one
+// name.
+export function rangeQualifiedAliasName(name ByteArray, underlying MaxonType, low ParsedInt, high ParsedInt) returns ByteArray
+	return "{String.from(name)}{CompilerQualifiedAliasSeparator}{rangeQualifierPrimitivePrefix(underlying)}{low}_{high}".toByteArray()
 end 'rangeQualifiedAliasName'
+
+function rangeQualifierPrimitivePrefix(underlying MaxonType) returns String
+	let tag = maxonTypeTag(underlying)
+
+	if tag == ValueTypeTag.integer 'anIntegerRange'
+		return ""
+	end 'anIntegerRange'
+
+	if tag == ValueTypeTag.float 'aFloatRange'
+		return rangedAliasUnderlyingName(underlying)
+	end 'aFloatRange'
+
+	panic("rangeQualifierPrimitivePrefix: a ranged alias whose underlying type is neither `int` nor `float`")
+end 'rangeQualifierPrimitivePrefix'
 
 // The qualifier is the shape DIGEST in hex, not the shape spelled out. This mint ends up inside a mangled
 // symbol, where the separators a spelled-out signature needs (`:`, `|`, parentheses) are not symbol
@@ -10883,20 +10904,21 @@ export type ProgramSignatures
 	// ⭐⭐ **THE `<Conformer>.<member>` NAME OF EVERY PER-INSTANCE NESTED `typealias` AN `extension` BODY
 	// DECLARES — THE SCOPE, RECORDED AHEAD OF THE DECLARATIONS (F10).** A nested `typealias` is a MEMBER of
 	// the type it is written in, and `stdlib/helpers/sort/` is where that stops being a same-body question:
-	// six files each write `export extension Array`, `insertionSort.maxon:17` declares `SortIndex` and the
-	// other five spell it BARE from their own bodies. The three registries above answer *what* `Array.SortIndex`
-	// resolves to; this set answers the question that comes first — *is `SortIndex` a member of `Array` here?* —
+	// several files each write `export extension Array`, `insertionSort.maxon` declares `SortComparator` and
+	// the others spell it BARE from their own bodies. The three registries above answer *what*
+	// `Array.SortComparator` resolves to; this set answers the question that comes first — *is
+	// `SortComparator` a member of `Array` here?* —
 	// and it has to be answerable before any of them is filled.
 	//
 	// ⚠ **A SEPARATE SET BECAUSE OF WHEN IT IS WRITTEN, NOT BECAUSE OF WHAT IT HOLDS.** A `type` body's nested
 	// aliases are folded with their file (`recordScannedType` ⇒ `foldFile`), so `declaresInnerAlias` already
 	// answers for them whole-program. An `extension` body's are folded one site at a time by
 	// `Queries.foldExtensionDeclarations`, which READS each body's signatures as it goes — so a body folded
-	// before `insertionSort.maxon`'s would resolve `SortIndex` differently from one folded after it, and the
+	// before `insertionSort.maxon`'s would resolve `SortComparator` differently from one folded after it, and the
 	// answer would be the directory walk's order (`StdlibLoader`'s header rules that out). This set is filled by
 	// a pre-pass over every extension site before the first body is read, which is what makes the answer a
-	// property of the program. ⚠ **THAT PRE-PASS IS NOT NAME-ONLY.** A name settles *is `SortIndex` a
-	// member of `Array`?* and leaves *what does `Array.SortIndex` MEAN?* to the walk order — a question
+	// property of the program. ⚠ **THAT PRE-PASS IS NOT NAME-ONLY.** A name settles *is `X` a
+	// member of `Array`?* and leaves *what does `Array.X` MEAN?* to the walk order — a question
 	// `canonicalTupleElement` asks of every tuple element — so the pre-pass also KEYS each RANGED nested alias
 	// it walks past. See `ProgramSignatures.recordPreVerdictInnerAliasRange` for the measurement and for why the ranged form is
 	// the only one that can be settled ahead of the fold.
@@ -15670,14 +15692,13 @@ export type ProgramSignatures
 	// COMPUTABLE — a REGISTRY OF ITS OWN, and the separation is the whole correctness argument.**
 	//
 	// ⚠⚠ **THE F10 PRE-PASS PUBLISHED NAMES AND CLAIMED THAT WAS ENOUGH; IT IS NOT.**
-	// `extensionInnerAliasMembers` makes *"does this type declare a nested alias called `SortIndex`?"*
-	// order-independent, which is what `parseTypeReference` needs to spell `named("Array.SortIndex")`. It
+	// `extensionInnerAliasMembers` makes *"does this type declare a nested alias called `X`?"*
+	// order-independent, which is what `parseTypeReference` needs to spell `named("Array.X")`. It
 	// settles nothing about what that name MEANS, and `canonicalTupleElement` — which collapses an inner
 	// ranged alias to its underlying primitive so a tuple's identity is keyed on RESOLVED types — asks exactly
-	// that, of a registry only the fold fills. ⛔ **`stdlib/helpers/sort/pdqsort.maxon`'s `partition` returns
-	// `(SortIndex, bool)`, and its `SortIndex` is declared by a SIBLING `extension Array` in another file** — so
-	// without this registry a walk reaching `pdqsort.maxon` first keys that tuple on the unresolved
-	// `Array.SortIndex` rather than on its range, a different type from the one every other reader resolves,
+	// that, of a registry only the fold fills. ⛔ **A tuple element naming a ranged alias a SIBLING
+	// `extension` declares in another file** is keyed, without this registry, on the unresolved `Array.X`
+	// by a walk reaching its file first — a different type from the one every other reader resolves,
 	// decided by directory order.
 	//
 	// ⛔⛔ **AND IT MAY NOT BE WRITTEN INTO `innerAliases`, WHICH IS WHAT THE FIRST CURE DID.** The pre-pass
@@ -16037,7 +16058,9 @@ export type ProgramSignatures
 			seen.insert(spelling)
 
 			if self.keyDeclaresAFunctionVisibleFrom(spelling, readerFilePath: readerFilePath) 'nameableHere'
-				visible.push(spelling)
+				// A parse artifact leaves the FrontEndWorker that keeps this index, so it may hold no record
+				// the index holds.
+				visible.push(spelling.clone())
 			end 'nameableHere'
 		end 'eachSpelling'
 
@@ -16732,8 +16755,8 @@ export type ProgramSignatures
 			// nothing to resolve, only to state. It is the same `genericInstance(id)` a `MapAlias.create()`
 			// global's slot is typed as, which is what makes a literal-built map and a hand-built one one
 			// type.
-			mapLiteral(giid, _) or
-				arrayLiteral gives MaxonType.genericInstance(giid)
+			mapLiteral(giid, _) gives MaxonType.genericInstance(giid)
+			arrayLiteral(giid, _) gives MaxonType.genericInstance(giid)
 
 			// A boxed union's case IS its box pointer, tagged `named(<union>)` — `foldedValueType`'s answer for
 			// the payload-free spelling of the same value, so a case with a payload and one without type their
@@ -18116,8 +18139,8 @@ export type ProgramSignatures
 		callees.push(self.declaredInstanceCreateCallee(giid))
 
 		match self.declaredContainerElementAdd(giid) 'add'
-			push(callee) or
-				upsert then callees.push(callee)
+			push(callee) then callees.push(callee)
+			upsert(callee) then callees.push(callee)
 			unsupported then break 'add'
 		end 'add'
 	end 'appendDeclaredInstanceCreateCallee'
@@ -19766,14 +19789,14 @@ export type ProgramSignatures
 	// A METHOD rather than a free function for exactly that: mangling an instance needs the registry.
 	function constFactoryCallHashName(call ConstFactoryCall) returns ByteArray
 		return match call 'node'
-			call(callee, _) or
-				construct or
+			call(callee, _) gives callee
+			construct(callee, _) gives callee
 
-				// A case fixes its slot's type from the UNION, never from which case was written — the same fact
-				// `boxedUnionValue`'s own arm mixes, and for its reason: the case reaches only `__module_init`.
-				unionCase gives callee
-			mapLiteral(giid, _) or
-				arrayLiteral gives self.mangleGenericInstance(giid)
+			// A case fixes its slot's type from the UNION, never from which case was written — the same fact
+			// `boxedUnionValue`'s own arm mixes, and for its reason: the case reaches only `__module_init`.
+			unionCase(callee, _, _) gives callee
+			mapLiteral(giid, _) gives self.mangleGenericInstance(giid)
+			arrayLiteral(giid, _) gives self.mangleGenericInstance(giid)
 		end 'node'
 	end 'constFactoryCallHashName'
 
@@ -19981,6 +20004,13 @@ export type ProgramSignatures
 		return self.typeAliases.lookup(name, readerFilePath: readerFilePath)
 	end 'aliasOf'
 
+	export function aliasOrInnerAliasOf(name ByteArray, readerFilePath FilePath) returns DeclaredAlias
+		match self.aliasOf(name, readerFilePath: readerFilePath) 'fileScope'
+			declared(alias) then return DeclaredAlias.declared(alias)
+			undeclared then return self.innerAliasOf(name)
+		end 'fileScope'
+	end 'aliasOrInnerAliasOf'
+
 	// ⭐⭐ **THE NOMINAL IDENTITY OF THE RANGED TYPEALIAS `name` DENOTES FOR `readerFilePath` — the whole of
 	// what makes a `typealias` a type of its own.** Every `typealias` names its own type, so the identity IS
 	// the name: `Age` and `Year` over one range are two types, and every declaration of one name is that one
@@ -19995,6 +20025,10 @@ export type ProgramSignatures
 	export function rangedAliasIdentityOf(name ByteArray, readerFilePath FilePath) returns ByteArray
 		// Two declarations of one name over two RANGES are one type under two mints (`Byte` and `Byte$0_100`);
 		// the identity is the name they share, which `sourceSpelledAliasName` recovers from either mint.
+		if self.isInnerAlias(name) 'nestedAlias'
+			return name
+		end 'nestedAlias'
+
 		let spelled = sourceSpelledAliasName(name)
 
 		if not self.readerMeansKind(spelled, readerFilePath: readerFilePath, kind: TypeDeclKind.rangedAlias) 'thisFileMeansAnotherDeclaration'
@@ -20023,6 +20057,10 @@ export type ProgramSignatures
 	// `typealias ParsedInt` would otherwise admit an `int` at a `Box with ParsedInt`'s `T`, to be stored in
 	// the box and freed as a struct.
 	export function isRangedAliasIdentity(identity ByteArray) returns bool
+		if self.isInnerAlias(identity) 'nestedAlias'
+			return true
+		end 'nestedAlias'
+
 		let spelled = sourceSpelledAliasName(identity)
 
 		if self.crossKindContested(spelled) 'twoKindsHoldTheName'
@@ -20039,7 +20077,7 @@ export type ProgramSignatures
 	// struct/union/enum carries its own name, a per-instance alias (`IntWrapper.Idx`) its qualified name, a
 	// plain ranged alias the identity `rangedAliasIdentityOf` spells. A nominal declaration held only for
 	// OTHER files carries no identity in this one (`containsStructFor`'s contest guard), and a base-template
-	// inner alias (`Wrapper.Idx`) is structural.
+	// inner alias (`Wrapper.Idx`) carries its qualified name, nominal exactly like a file-scope alias.
 	export function namedIdentityOf(name ByteArray, readerFilePath FilePath) returns ByteArray
 		if self.containsStructFor(name, readerFilePath: readerFilePath) or self.containsEnumFor(name, readerFilePath: readerFilePath) 'registeredAggregate'
 			return name
@@ -21006,8 +21044,12 @@ export type ProgramSignatures
 		return try self.typeAliases.underlyingInAnyFile(name)
 	end 'aliasUnderlyingInAnyFile'
 
-	// Is `name` a ranged FLOAT typealias (`typealias Weight = float(f64.min to f64.max)`)? The `bool` half
-	// of `aliasUnderlyingInAnyFile`, and the sibling of `isFunctionAlias`/`isGenericAlias` — the three
+	export function aliasUnderlyingFor(name ByteArray, readerFilePath FilePath) returns MaxonType throws MapError
+		return try self.typeAliases.underlyingFor(name, readerFilePath: readerFilePath)
+	end 'aliasUnderlyingFor'
+
+	// Is `name` a ranged FLOAT typealias (`typealias Weight = float(f64.min to f64.max)`) as
+	// `readerFilePath` resolves it? The `bool` half of `aliasUnderlyingFor`, and the sibling of `isFunctionAlias`/`isGenericAlias` — the three
 	// questions `fieldTypeOf` asks of a field declared with a bare NAME, whose meaning the declaration
 	// SWEEP that recorded the layout could not yet know.
 	//
@@ -21015,17 +21057,13 @@ export type ProgramSignatures
 	// everywhere (`tagIsIntegral`), and its NAME is what carries the range and the signedness that
 	// `valueIsUnsigned` and the range checks read off it. A FLOAT alias is the one `named` type whose
 	// VALUE lives in a different register file, so it is the one that cannot be left overloaded.
-	//
-	// Bare-name, exactly as `isFunctionAlias`/`isGenericAlias` are and for `classifyUnionPayload`'s
-	// reason: a `StructLayout` does not record the file its fields were declared in, so there is no
-	// reader file to resolve from.
-	export function isFloatAliasInAnyFile(name ByteArray) returns bool
-		if let underlying = try self.aliasUnderlyingInAnyFile(name) 'rangedAlias'
+	export function isFloatAliasFor(name ByteArray, readerFilePath FilePath) returns bool
+		if let underlying = try self.aliasUnderlyingFor(name, readerFilePath: readerFilePath) 'rangedAlias'
 			return tagIsFloat(maxonTypeTag(underlying))
 		end 'rangedAlias'
 
 		return false
-	end 'isFloatAliasInAnyFile'
+	end 'isFloatAliasFor'
 
 	// --- Inner + per-instance ranged aliases (P1.6-C) ---
 
@@ -21131,8 +21169,25 @@ export type ProgramSignatures
 			return not self.aliasIdentityDecays(expected)
 		end 'anUnnamedValueIntoANamedScalarSlot'
 
+		// A generic method's shared signature can name only the template inner alias, so a per-instance alias
+		// meets it wherever an instance's value crosses that signature.
+		if self.instantiatesInnerAlias(got, template: expected) or self.instantiatesInnerAlias(expected, template: got) 'anInstanceOfTheTemplateAlias'
+			return false
+		end 'anInstanceOfTheTemplateAlias'
+
 		return true
 	end 'identitiesConflict'
+
+	function instantiatesInnerAlias(identity ByteArray, template ByteArray) returns bool
+		if not self.isInnerAlias(template) 'templateIsNoInnerAlias'
+			return false
+		end 'templateIsNoInnerAlias'
+
+		return match splitQualifiedName(identity) 'split'
+			notQualified gives false
+			parts(prefix, member) gives self.perInstanceTemplateName(prefix, member: member, readerFilePath: CompilerOwnedDeclFilePath).equals(template)
+		end 'split'
+	end 'instantiatesInnerAlias'
 
 	// ⭐ **THE GENERIC-INSTANCE ALIAS AT `position` OF INSTANCE `id`, AS THE INSTANTIATION SPELLED IT** — the
 	// brand an element read out of the instance wears, and the brand a value stored into that position must
@@ -21257,8 +21312,12 @@ export type ProgramSignatures
 	// `CompilerOwnedDeclFilePath`, which resolves like a stranger — the same convention
 	// `contestScopedDeclaredType` states for a layout no file declares.
 	function perInstanceAliasFromParts(prefix ByteArray, member ByteArray, readerFilePath FilePath) returns DeclaredAlias
+		return self.innerAliasOf(self.perInstanceTemplateName(prefix, member: member, readerFilePath: readerFilePath))
+	end 'perInstanceAliasFromParts'
+
+	function perInstanceTemplateName(prefix ByteArray, member ByteArray, readerFilePath FilePath) returns ByteArray
 		if not self.isGenericAliasInAnyFile(prefix) 'notInstanceAlias'
-			return DeclaredAlias.undeclared
+			return EmptySourceText
 		end 'notInstanceAlias'
 
 		// ⭐ **`scopedGenericAliasInstance` AND NOT `genericAliasInstanceFrom`, AND THE DIFFERENCE IS BOTH HALVES
@@ -21267,9 +21326,8 @@ export type ProgramSignatures
 		// asked from `SemanticCheck.aggregateNameFor`, which holds the memoized index immutably and would be
 		// refused (E3019). It is also work this site cannot use — an instance's BASE is invariant under
 		// argument scoping, and the base is the whole of what a per-instance alias reads off the prefix.
-		let base = self.genericInstanceBaseName(self.scopedGenericAliasInstance(prefix, readerFilePath: readerFilePath))
-		return self.innerAliasOf(joinQualifiedName(base, member: member))
-	end 'perInstanceAliasFromParts'
+		return joinQualifiedName(self.genericInstanceBaseName(self.scopedGenericAliasInstance(prefix, readerFilePath: readerFilePath)), member: member)
+	end 'perInstanceTemplateName'
 
 	// ⭐⭐ **THE AGGREGATE CONFLICT RULE — the ONE authority every coercion site shares**: the parser's five
 	// symmetric ones (return, reassignment, `otherwise`, match arm, union-payload / struct-literal store) and
@@ -21629,12 +21687,12 @@ export type ProgramSignatures
 	// range the argument check reads (`checkArgAgainstDeclaredTag` is handed the substituted type for exactly
 	// that). A FLOAT alias is the one `named` type whose VALUE lives in a different register file — see
 	// `isFloatAlias` — so it is the one that may not stay overloaded.
-	export function floatAliasResolved(t MaxonType) returns MaxonType
+	export function floatAliasResolved(t MaxonType, readerFilePath FilePath) returns MaxonType
 		if maxonTypeTag(t) != ValueTypeTag.named 'notANamedLeaf'
 			return t
 		end 'notANamedLeaf'
 
-		return MaxonType.float if self.isFloatAliasInAnyFile(self.nameOfId(typeNameIdOf(t))) else t
+		return MaxonType.float if self.isFloatAliasFor(self.nameOfId(typeNameIdOf(t)), readerFilePath: readerFilePath) else t
 	end 'floatAliasResolved'
 
 	// The struct type `name` denotes, declared in ANY file — `aliasOf`'s twin, and the door the
@@ -23298,7 +23356,7 @@ export type ProgramSignatures
 	// one type but the two types the program always had. `__ManagedMemory` inside a tuple therefore means what
 	// the SPELLING'S OWN FILE means by `Byte`, exactly as the same spelling in a struct field does.
 	function canonicalTupleElement(element MaxonType, slotScopeFilePath FilePath) returns MaxonType
-		let resolved = self.canonicalizeRangedAlias(self.declaredSlotType(element, into: self.typeNames, slotScopeFilePath: slotScopeFilePath))
+		let resolved = self.canonicalizeRangedAlias(self.declaredSlotType(element, into: self.typeNames, slotScopeFilePath: slotScopeFilePath), slotScopeFilePath: slotScopeFilePath)
 
 		if maxonTypeTag(resolved) != ValueTypeTag.named 'notNamed'
 			return self.canonicalTupleStructRef(resolved)
@@ -23314,7 +23372,7 @@ export type ProgramSignatures
 		// ⭐⭐ **AND THE PRE-PASS'S ANSWER IF THE FOLD HAS NOT REACHED THE DECLARATION YET — the ONE reader of
 		// `preVerdictInnerAliasRanges`, which is why the fallback is written here and not inside `innerAliasOf`.**
 		// `foldExtensionDeclarations` fills `innerAliases` one site at a time WHILE reading each body's
-		// signatures, so a tuple element naming a sibling `extension` body's `SortIndex` resolves here or
+		// signatures, so a tuple element naming a sibling `extension` body's ranged alias resolves here or
 		// nowhere; that door's own header carries what happened when it resolved nowhere. Every OTHER reader of
 		// an inner alias keeps asking `innerAliases` alone, so a conformer a conditional extension withholds
 		// these declarations from still cannot NAME them (E3011) — the verdict stays the fold's to take.
@@ -24311,7 +24369,7 @@ export type ProgramSignatures
 	// ARR3b. The readers are deliberately NOT counted here: a number beside the thing it counts is one edit
 	// away from being wrong, and this one already was.
 	export function containerElementConformerName(id GenericInstanceId) returns String
-		return self.conformerNameOfType(self.containerElementType(id), idsFrom: self.typeNames)
+		return self.conformerNameOfType(self.containerElementType(id), idsFrom: self.typeNames, readerFilePath: CompilerOwnedDeclFilePath)
 	end 'containerElementConformerName'
 
 	// ⭐⭐ **DOES A CONTAINER INSTANCE'S ELEMENT SATISFY A CONDITIONAL EXTENSION'S `where` CLAUSE? — THE ONE
@@ -26640,11 +26698,7 @@ export type ProgramSignatures
 		// declaration keeps the bare name, which the reader-free cascade resolves to that declaration
 		// (`declaredFormInAnyFile`, whose struct arm is first). Transparent to a pure RANGE contest, where
 		// every declaration of the name is an alias and this always answers true.
-		if not self.readerMeansKind(name, readerFilePath: filePath, kind: TypeDeclKind.rangedAlias) 'thisFileMeansSomethingElseByTheName'
-			return arg
-		end 'thisFileMeansSomethingElseByTheName'
-
-		let scoped = self.typeAliases.rangeScopedName(name, readerFilePath: filePath)
+		let scoped = self.rangeScopedDeclaredName(name, readerFilePath: filePath)
 
 		if scoped.equals(name) 'thisFileNamesTheBareDeclaration'
 			return arg
@@ -26652,6 +26706,14 @@ export type ProgramSignatures
 
 		return MaxonType.named(self.typeNames.intern(scoped))
 	end 'fileScopedArg'
+
+	export function rangeScopedDeclaredName(name ByteArray, readerFilePath FilePath) returns ByteArray
+		if not self.readerMeansKind(name, readerFilePath: readerFilePath, kind: TypeDeclKind.rangedAlias) 'thisFileMeansSomethingElseByTheName'
+			return name
+		end 'thisFileMeansSomethingElseByTheName'
+
+		return self.typeAliases.rangeScopedName(name, readerFilePath: readerFilePath)
+	end 'rangeScopedDeclaredName'
 
 	// ⭐⭐ **SETTLE THE RANGE CONTEST, RE-KEY EVERY DECLARED ALIAS TO ITS OWN FILE'S INSTANCE, AND INTERN
 	// EVERY SCOPED VARIANT A PARSE COULD ASK FOR (N2)** — one pass, at the one moment the whole program is
@@ -28462,7 +28524,7 @@ export type ProgramSignatures
 	// does for a method-signature type name.
 	export function conformerTypeArgName(gid GenericInstanceId, position TypeParamPosition) returns String
 		// An instance's stored ARGUMENT was interned by this index, so its ids are this index's own.
-		return self.conformerNameOfType(self.substitutedInstanceArg(gid, position: position), idsFrom: self.typeNames)
+		return self.conformerNameOfType(self.substitutedInstanceArg(gid, position: position), idsFrom: self.typeNames, readerFilePath: CompilerOwnedDeclFilePath)
 	end 'conformerTypeArgName'
 
 	// ⭐⭐ **THE INSTANCE THAT SAME ARGUMENT NAMES, WHEN IT NAMES ONE (BATCH43)** — `conformerTypeArgName`'s
@@ -28517,13 +28579,14 @@ export type ProgramSignatures
 	// id against this index's table answers with whatever name happens to sit at that number — MEASURED, in
 	// exactly the shape a whole-program answer fails in: `interface-param-declared-after-consumer` refused a
 	// legal `X64Query implements OpQuery` because the two tables had interned in different orders.
-	export function conformerNameOfType(t MaxonType, idsFrom TypeNameInterner) returns String
+	export function conformerNameOfType(t MaxonType, idsFrom TypeNameInterner, readerFilePath FilePath) returns String
 		// The id-bearing arms are resolved against the CALLER's interner and then re-asked of this index BY
 		// NAME — the same "names travel, ids do not" discipline `adoptType` states in full. Every other arm
 		// (a primitive, a `GenericInstanceId`, a type-parameter TOKEN — a source-text digest since W14, not
 		// the position it replaced) carries no per-interner id, so it goes to the shared mangler untouched.
 		if tagMayNameAggregate(maxonTypeTag(t)) 'namesAnAggregate'
-			return self.conformerNameOfDeclaredName(try idsFrom.nameOf(typeNameIdOf(t)) otherwise panic("conformerNameOfType: type-name id {typeNameIdOf(t)} is not in the interner it was resolved against — pass the interner this type's ids live in"))
+			let name = try idsFrom.nameOf(typeNameIdOf(t)) otherwise panic("conformerNameOfType: type-name id {typeNameIdOf(t)} is not in the interner it was resolved against — pass the interner this type's ids live in")
+			return self.conformerNameOfDeclaredName(name, readerFilePath: readerFilePath)
 		end 'namesAnAggregate'
 
 		// ⭐⭐ **EVERY CONFORMING `Array with E` REDUCES TO THE ONE CONFORMER `Array` (array-hashable)** — the
@@ -28650,8 +28713,8 @@ export type ProgramSignatures
 	// primitive's name (`Integer` -> `int`), which is what its intrinsic conformance and its `__witness_int.*`
 	// tables are keyed by; every other name is its own conformer. The name half of `canonicalizeRangedAlias`,
 	// split out so the reduction is stated once whether the caller arrived with a type or with a name.
-	export function conformerNameOfDeclaredName(name ByteArray) returns String
-		if let underlying = try self.aliasUnderlyingInAnyFile(name) 'rangedAlias'
+	export function conformerNameOfDeclaredName(name ByteArray, readerFilePath FilePath) returns String
+		if let underlying = try self.aliasUnderlyingFor(name, readerFilePath: readerFilePath) 'rangedAlias'
 			return primitiveTypeTagName(maxonTypeTag(underlying))
 		end 'rangedAlias'
 
@@ -28739,9 +28802,9 @@ export type ProgramSignatures
 	// ⚠ Bare-name for `classifyUnionPayload`'s reason: the file that governs a generic INSTANCE's type
 	// argument is the one that wrote the instantiation, and a `GenericInstanceId` does not carry it.
 	// Only `underlying` is reachable through that door, never the range.
-	function canonicalizeRangedAlias(t MaxonType) returns MaxonType
+	function canonicalizeRangedAlias(t MaxonType, slotScopeFilePath FilePath) returns MaxonType
 		if maxonTypeTag(t) == ValueTypeTag.named 'named'
-			if let underlying = try self.aliasUnderlyingInAnyFile(self.nameOfId(typeNameIdOf(t))) 'rangedAlias'
+			if let underlying = try self.aliasUnderlyingFor(self.nameOfId(typeNameIdOf(t)), readerFilePath: slotScopeFilePath) 'rangedAlias'
 				return underlying
 			end 'rangedAlias'
 		end 'named'
@@ -31783,7 +31846,7 @@ export type ProgramSignatures
 			// (`typealias X = <primitive>(range)`, which is why `TypeDeclKind` holds one case for both,
 			// exactly as `typeDeclKeyword` gives all three alias forms one keyword), while what the slot
 			// DENOTES differs by the underlying primitive. See `rangedAliasSlotType`.
-			rangedAlias then return try self.rangedAliasSlotType(name)
+			rangedAlias then return try self.rangedAliasSlotType(name, slotScopeFilePath: slotScopeFilePath)
 
 			// A FUNCTION-typed slot (`export var op as UnaryOp`) arrives as a `named` — the SWEEP that
 			// recorded its declaration ran before the function alias was known — so it is re-tagged
@@ -31852,8 +31915,8 @@ export type ProgramSignatures
 	// ⚠ An INT alias is deliberately NOT re-tagged: `named` already reads as an integer everywhere, and its
 	// NAME is what carries the range and the signedness that `valueIsUnsigned` and the range checks read off
 	// it. So it throws, exactly as the enum/union arms do, and for the same reason — it is an ANSWER.
-	function rangedAliasSlotType(name ByteArray) returns MaxonType throws MapError
-		if not self.isFloatAliasInAnyFile(name) 'integerAlias'
+	function rangedAliasSlotType(name ByteArray, slotScopeFilePath FilePath) returns MaxonType throws MapError
+		if not tagIsFloat(maxonTypeTag(try self.aliasUnderlyingFor(name, readerFilePath: slotScopeFilePath))) 'integerAlias'
 			throw MapError.keyNotFound
 		end 'integerAlias'
 

@@ -3798,25 +3798,10 @@ end 'main'
 count=4 sum=28 first=7
 ```
 
-<!-- test: a-boxed-union-constants-payload-slots-are-zeroed -->
-⚠⚠ **THE PATTERN THAT CAN SEE A PAYLOAD SLOT — and finding it took ruling out the obvious candidate.**
-An `or` pattern may bind a payload the matched case does not declare (`none or some(n)`), and reading `n` on
-the `none` path reads the box's payload SLOT directly. `Parser.emitEnumBox` says a diagnostic rests on
-exactly this: E3129 admits the pattern *because* the fill pins a deterministic 0 there, and
-`zeroInhabitsPayloadType` decides whether that 0 is a value of the binding's type. So this program's answer
-IS the slot's contents.
-
-⛔⛔ **WHOSE ZERO IT IS DEPENDS ON THE KEYWORD, AND THIS CASE HOLDS ONLY THE IMAGE'S.** A `let` never reaches
-`__module_init`: its slot's 0 is `structBoxImageBytes`'s `growFilled(sizeBytes, value: 0)`, laid down at
-compile time. The 0 that `ModuleInit.builtUnionCaseBox` STORES is held by the `var` twin below, and by
-nothing else in this suite — MEASURED, with that store's literal changed from `0` to `1`: the twin answers
-1 and **this case stays green**. Three producers now owe the same byte (`emitEnumBox` in a body,
-`builtUnionCaseBox` at module scope, `structBoxImageBytes` in `.rdata`), because ONE `__destruct_<U>` drops
-every box they make.
-
-⚠ **AND THE `.rdata` ZERO IS NOT `__mm_alloc`'s EITHER.** An image record is never allocated, so nothing
-would hand these bytes a zero if `growFilled` stopped writing one — which is what makes this half of the pair
-worth keeping beside the twin rather than folding the two into one case.
+<!-- test: error.a-boxed-union-constant-cannot-be-read-through-a-payload-less-alternative -->
+An `or` pattern binds a payload only on the alternative that names it. `none or some(n)` reads `n` on the
+`none` path too, where no pattern bound it, so the arm is refused (E3129) — for a union constant as for any
+other scrutinee. Give `none` an arm of its own.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -3838,25 +3823,12 @@ function main() returns ExitCode
 	return valueOf(sentinel) as ExitCode
 end 'main'
 ```
-```exitcode
-0
+```maxoncstderr
+error E3129: <fragment>:14:9: the payload binding 'n' cannot be honoured: case 'none' of `union Counter` binds nothing at payload slot 0, so on that case's path the arm body would read a value no pattern bound. Give 'none' an arm of its own
 ```
 
-<!-- test: a-boxed-union-vars-payload-slots-are-zeroed -->
-⭐⭐ **THE `var` TWIN, AND THE ONLY CASE IN THIS SUITE THAT READS A `__module_init`-BUILT BOX'S PAYLOAD SLOT
-BACK.** Same program, same `or` pattern, one keyword changed — and that keyword is what routes the box to
-`ModuleInit.builtUnionCaseBox`'s zero-fill loop instead of to `.rdata`.
-
-⚠ **AND `__mm_alloc` ALREADY RETURNS ZEROED MEMORY, so "delete the fill" is not the sabotage that tests it** —
-the slab would hand back zeros anyway and this case would stay green. The fill is what keeps the guarantee
-once an allocator recycles (`emitEnumBox`'s own note carries that caveat), so the sabotage that moves it is
-storing something ELSE: MEASURED with the literal changed from `0` to `1`, this case answers 1.
-
-⚠ **THE DESTRUCTOR CANNOT SEE IT, WHICH IS WHY THE FIRST VERSION OF THIS PAIR PROVED NOTHING.** It used a
-MANAGED payload (`held(s String)`) on the theory that a slot left un-zeroed would be `__str_decref`'d as a
-bogus pointer at cleanup. MEASURED, that is false: `synthesizeUnionDestructor` is TAG-DISPATCHED — it loads
-the tag and drops managed fields only for the case that matches, and a payload-free case's tag matches no
-managed case and branches straight to the free. That case passed with the slots deliberately filled with `1`.
+<!-- test: error.a-boxed-union-var-cannot-be-read-through-a-payload-less-alternative -->
+The same refusal for a `var` global holding a boxed union.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -3878,8 +3850,8 @@ function main() returns ExitCode
 	return valueOf(sentinel) as ExitCode
 end 'main'
 ```
-```exitcode
-0
+```maxoncstderr
+error E3129: <fragment>:14:9: the payload binding 'n' cannot be honoured: case 'none' of `union Counter` binds nothing at payload slot 0, so on that case's path the arm body would read a value no pattern bound. Give 'none' an arm of its own
 ```
 
 <!-- test: error.a-case-the-union-does-not-declare-is-still-refused -->

@@ -1309,6 +1309,9 @@ end 'main'
 ```exitcode
 118
 ```
+```stderr
+fatal error: runtime abort 118 (promiseSlotConsumedTwice)
+```
 
 <!-- test: async-promise-drop.a-get-and-a-cursor-read-of-one-slot-abort -->
 `get(0)` and a cursor standing at 0 name the same slot through two different doors, so the two reads name one
@@ -1334,6 +1337,9 @@ end 'main'
 ```
 ```exitcode
 118
+```
+```stderr
+fatal error: runtime abort 118 (promiseSlotConsumedTwice)
 ```
 
 <!-- test: async-promise-drop.a-get-read-twice-at-one-runtime-index-aborts -->
@@ -1364,6 +1370,9 @@ end 'main'
 ```
 ```exitcode
 118
+```
+```stderr
+fatal error: runtime abort 118 (promiseSlotConsumedTwice)
 ```
 
 <!-- test: async-promise-drop.a-field-awaited-twice-aborts -->
@@ -1397,6 +1406,9 @@ end 'main'
 ```exitcode
 118
 ```
+```stderr
+fatal error: runtime abort 118 (promiseSlotConsumedTwice)
+```
 
 <!-- test: async-promise-drop.a-field-cancelled-then-awaited-aborts -->
 `cancel` is the other consume door, and it empties the field the same way — so the await behind it finds
@@ -1426,6 +1438,9 @@ end 'main'
 ```
 ```exitcode
 118
+```
+```stderr
+fatal error: runtime abort 118 (promiseSlotConsumedTwice)
 ```
 
 <!-- test: async-promise-drop.a-field-rearmed-between-awaits-answers-both -->

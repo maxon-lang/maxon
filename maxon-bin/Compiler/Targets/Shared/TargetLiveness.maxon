@@ -1698,8 +1698,8 @@ export function unconditionalBranchTargetOf(module TargetModule, block IrBlock) 
 			covInc or
 			x64AluBaseDispReg or
 			x64AluBaseDispImm32 gives UnconditionalBranchTarget.none
-		jmp(target) or
-			arm64Branch gives UnconditionalBranchTarget.blockId(target)
+		jmp(target) gives UnconditionalBranchTarget.blockId(target)
+		arm64Branch(target) gives UnconditionalBranchTarget.blockId(target)
 	end 'check'
 end 'unconditionalBranchTargetOf'
 
@@ -1730,8 +1730,8 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 		let op = try module.ops.get(block.terminatorIndex()) otherwise panic("collectBlockSuccessorIds: terminator not in module.ops")
 
 		match op 'termCtrl'
-			jmp(target) or
-				arm64Branch then out.push(target)
+			jmp(target) then out.push(target)
+			arm64Branch(target) then out.push(target)
 			ret or
 				arm64Ret then break 'termCtrl'
 			prologue or
@@ -1862,8 +1862,8 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 				arm64ThreadPointer then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has an atomic or a thread-token read as its terminator")
 
 			// A jump table's successors are every DISTINCT case target plus the default — see `pushJumpTableSuccessors`.
-			x64JumpTable(_, defaultTarget, caseTargets, _) or
-				arm64JumpTable then pushJumpTableSuccessors(out, defaultTarget: defaultTarget, caseTargets: caseTargets)
+			x64JumpTable(_, defaultTarget, caseTargets, _) then pushJumpTableSuccessors(out, defaultTarget: defaultTarget, caseTargets: caseTargets)
+			arm64JumpTable(_, defaultTarget, caseTargets, _) then pushJumpTableSuccessors(out, defaultTarget: defaultTarget, caseTargets: caseTargets)
 			leaRegBaseIndexScale or
 				loadRegBaseIndexScale or
 				storeBaseIndexScaleReg or
@@ -2295,10 +2295,10 @@ end 'pushJumpTableSuccessors'
 // CFG build; `checkCondBranchIndex` is the half that scans.
 export function condBranchTargetOf(op TargetOp, block IrBlock) returns BlockId
 	match op 'cond'
-		jcc(_, target) or
-			arm64CondBranch or
-			arm64Cbz or
-			arm64Cbnz then return target
+		jcc(_, target) then return target
+		arm64CondBranch(_, target) then return target
+		arm64Cbz(_, target) then return target
+		arm64Cbnz(_, target) then return target
 		default panic("condBranchTargetOf: block '{String.from(block.label)}' records its conditional branch at op {block.condBranchIndex()}, but that op is not a `jcc`/`arm64CondBranch`/`arm64Cbz`/`arm64Cbnz`")
 	end 'cond'
 end 'condBranchTargetOf'

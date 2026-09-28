@@ -472,14 +472,14 @@ extension Holder
 	export typealias Idx = int(0 to 100)
 
 	export function fromA(i Idx) returns Num
-		return self.v + i
+		return self.v + (i as Num)
 	end 'fromA'
 end 'Holder'
 
 // --- file: b.maxon
 extension Holder
 	export function fromB(i Idx) returns Num
-		return self.v + i
+		return self.v + (i as Num)
 	end 'fromB'
 end 'Holder'
 
@@ -570,14 +570,14 @@ extension Holder
 	export typealias Idx = int(0 to 100)
 
 	export function fromA(i Idx) returns Num
-		return self.v + i
+		return self.v + (i as Num)
 	end 'fromA'
 end 'Holder'
 
 // --- file: b.maxon
 extension Other
 	export function fromB(i Idx) returns Num
-		return self.w + i
+		return self.w + (i as Num)
 	end 'fromB'
 end 'Other'
 
@@ -614,7 +614,7 @@ end 'Holder'
 // --- file: b.maxon
 extension Holder
 	export function fromB(i Idx) returns Num
-		return self.v + i
+		return self.v + (i as Num)
 	end 'fromB'
 end 'Holder'
 
@@ -997,4 +997,76 @@ end 'main'
 ```
 ```exitcode
 22
+```
+
+<!-- test: a-nested-pattern-alias-compares-and-prints-unsigned -->
+```maxon
+type Holder
+	typealias Word = bits(64)
+
+	var unused as bool
+
+	static function create() returns Holder
+		return Holder{unused: false}
+	end 'create'
+
+	function top() returns bool
+		let twoTo62 = 4611686018427387904 as Word
+		let top = twoTo62 * 2
+		print("{top} {top > 0}\n")
+		return top > 0
+	end 'top'
+end 'Holder'
+
+function main() returns ExitCode
+	let holder = Holder.create()
+
+	if holder.top() 'positive'
+		return 0
+	end 'positive'
+
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+9223372036854775808 true
+```
+
+<!-- test: a-cast-to-a-nested-ranged-alias-is-range-checked -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Holder
+	typealias Small = int(0 to 10)
+
+	var unused as bool
+
+	static function create() returns Holder
+		return Holder{unused: false}
+	end 'create'
+
+	function narrow(n Integer) returns Integer
+		let small = n as Small
+		return small
+	end 'narrow'
+end 'Holder'
+
+function main() returns ExitCode
+	let holder = Holder.create()
+	print("{holder.narrow(50)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-cast-to-a-nested-ranged-alias-is-range-checked.test:14: Range check failed: value outside typealias 'Small'
+Stack trace:
+  in Holder.narrow
+  in main
+  in mrt_start
 ```

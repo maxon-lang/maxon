@@ -24,6 +24,8 @@ let SendSliceBytes = 1048576
 /// stays far below that.
 public typealias SocketDeadlineMs = int(0 to 4294967295)
 
+let NoDeadlineMs = 0 as SocketDeadlineMs
+
 /// TCP networking errors
 public enum NetworkError implements Error
 	resolveFailed
@@ -45,9 +47,16 @@ public type TcpClient
 	/// Resolves the hostname, creates a TCP socket, and connects.
 	/// The returned TcpClient auto-closes when it goes out of scope.
 	public static function connect(host String, port NetworkPort) returns TcpClient throws NetworkError
-		let sock = try __ManagedSocket.tcpConnect(host.addressableBytes(), port: port) otherwise (e) 'connErr'
+		return try connect(host, port: port, deadlineMs: NoDeadlineMs)
+	end 'connect'
+
+	/// Connect as `connect(host, port:)` does, throwing `NetworkError.timedOut` when the connection is
+	/// not established within `deadlineMs`.
+	public static function connect(host String, port NetworkPort, deadlineMs SocketDeadlineMs) returns TcpClient throws NetworkError
+		let sock = try __ManagedSocket.tcpConnect(host.addressableBytes(), port: port, milliseconds: deadlineMs) otherwise (e) 'connErr'
 			match e 'matchConn'
 				resolveFailed then throw NetworkError.resolveFailed
+				timedOut then throw NetworkError.timedOut
 				default throws NetworkError.connectFailed
 			end 'matchConn'
 		end 'connErr'

@@ -20,7 +20,7 @@ category: type-system
 
 ### Static Methods
 
-- `__ManagedSocket.tcpConnect(managed, port)` — Resolves the hostname and connects a TCP socket. Throws `__ManagedSocketError.resolveFailed` if DNS resolution fails, `connectFailed` if the connection is refused.
+- `__ManagedSocket.tcpConnect(managed, port, milliseconds:)` — Resolves the hostname and connects a TCP socket. `milliseconds:` is optional; `0` or omitted waits with no deadline. Throws `__ManagedSocketError.resolveFailed` if DNS resolution fails, `connectFailed` if the connection is refused, `timedOut` if the deadline passes first.
 
 ### Instance Methods
 

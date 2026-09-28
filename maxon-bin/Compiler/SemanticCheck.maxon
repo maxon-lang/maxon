@@ -35,6 +35,7 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// member's signature and `lowerMaxonToStd` would emit a call to it. It rewrites the ops in place,
 	// so every pass below (and the whole backend) sees the member the call actually meant.
 	resolveOverloadedCalls(project, module: module, signatures: signatures)
+	project.libraryFacts = project.libraryFacts.withSubstrateEntriesOf(module)
 
 	// E3113 — every `throws` clause in the program names a declared enum or union. It runs BEFORE the throws
 	// map below, and before every check that reads one: `buildThrowsMap` and the catch-site decode both treat
@@ -1264,9 +1265,9 @@ end 'OverloadResultValue'
 
 function overloadResultValue(op MaxonOp) returns OverloadResultValue
 	return match op 'op'
-		call(result, _, _, _, _, _, _, _) or
-			tryCall or
-			asyncCall gives OverloadResultValue.defines(result)
+		call(result, _, _, _, _, _, _, _) gives OverloadResultValue.defines(result)
+		tryCall(result, _, _, _, _, _, _, _, _) gives OverloadResultValue.defines(result)
+		asyncCall(result, _, _, _, _, _, _) gives OverloadResultValue.defines(result)
 		default panic("overloadResultValue: asked of an op that binds no direct callee — `maxonOpCalleeKind` answers `direct` for exactly these three")
 	end 'op'
 end 'overloadResultValue'
@@ -1328,8 +1329,8 @@ end 'OverloadCallArgs'
 
 function overloadCallArgs(op MaxonOp) returns OverloadCallArgs
 	return match op 'op'
-		call(_, _, args, argLabels, _, _, defaultSlots, _) or
-			asyncCall gives OverloadCallArgs.supplied(args, argLabels: argLabels, defaultSlots: defaultSlots)
+		call(_, _, args, argLabels, _, _, defaultSlots, _) gives OverloadCallArgs.supplied(args, argLabels: argLabels, defaultSlots: defaultSlots)
+		asyncCall(_, _, args, argLabels, _, _, defaultSlots) gives OverloadCallArgs.supplied(args, argLabels: argLabels, defaultSlots: defaultSlots)
 		tryCall(_, _, _, args, argLabels, _, _, defaultSlots, _) gives OverloadCallArgs.supplied(args, argLabels: argLabels, defaultSlots: defaultSlots)
 		default panic("overloadCallArgs: asked of an op that supplies no argument list — `maxonOpCalleeKind` answers `direct` for exactly these three")
 	end 'op'
@@ -1410,8 +1411,26 @@ end 'requireThrowsClauseNamesADeclaredError'
 // The entry's clause is E3054's to refuse, and a test's is implied by the parser, so neither is the
 // author's to remove.
 function isUnthrownCandidate(project Project, module MaxonModule, func IrFunction) returns bool
-	return not bodyIsUnreadable(func) and func.name != project.entryFunctionName and not isTestFunctionName(func.name) and not functionCanThrow(module, func: func)
+	return not bodyIsUnreadable(func) and func.name != project.entryFunctionName and not isTestFunctionName(func.name) and not functionCanThrow(module, func: func) and not bodyHoldsAnUnresolvedCall(project, module: module, func: func)
 end 'isUnthrownCandidate'
+
+// An unresolved callee's throw behaviour is unknown, so E3168 cannot say this body never throws; the
+// call itself is E3004's to report.
+function bodyHoldsAnUnresolvedCall(project Project, module MaxonModule, func IrFunction) returns bool
+	for opIdx in module.liveOpIndices(func) 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("bodyHoldsAnUnresolvedCall: live op index not in module.ops")
+
+		if maxonOpCalleeKind(op) == MaxonCalleeKind.direct and calleeIsUnresolved(maxonOpCalleeName(op), funcSignatures: project.funcSignatures) 'unresolved'
+			return true
+		end 'unresolved'
+	end 'eachOp'
+
+	return false
+end 'bodyHoldsAnUnresolvedCall'
+
+function calleeIsUnresolved(callee ByteArray, funcSignatures FuncSignatureMap) returns bool
+	return not isSignaturelessCompilerCallee(callee, funcSignatures: funcSignatures) and not funcSignatures.contains(callee)
+end 'calleeIsUnresolved'
 
 function namePositionOf(func IrFunction) returns PositionKey
 	return positionKey(func.nameLine, column: func.nameColumn)
@@ -1750,8 +1769,8 @@ end 'EscapeScanSubject'
 // of re-walking the body once per closure.
 function isTrackedValue(candidate ValueId, subject EscapeScanSubject, func IrFunction) returns bool
 	match subject 'subject'
-		oneParameter(param) or
-			oneCapturingClosure then return candidate == param
+		oneParameter(param) then return candidate == param
+		oneCapturingClosure(param) then return candidate == param
 		everyCapturingClosure then break 'subject'
 	end 'subject'
 
@@ -1860,8 +1879,8 @@ end 'valueEscapeSite'
 // over the ONE op that stopped it, which is O(closures) on the refusal path and never on the accepting one.
 function trackedValueAt(op MaxonOp, subject EscapeScanSubject, func IrFunction, funcSignatures FuncSignatureMap) returns ValueId
 	match subject 'subject'
-		oneParameter(param) or
-			oneCapturingClosure then return param
+		oneParameter(param) then return param
+		oneCapturingClosure(param) then return param
 		everyCapturingClosure then break 'subject'
 	end 'subject'
 
@@ -1938,17 +1957,17 @@ function opEscapesValue(op MaxonOp, subject EscapeScanSubject, func IrFunction, 
 			// The witness half is the address of a constant table; the `storeIndirect` beside it is what persists
 			// the conformer, and it has its own arm.
 			existentialWitness then break 'op'
-		storeIndirect(_, _, stored, _) or
+		storeIndirect(_, _, stored, _) then return isTrackedValue(stored, subject: subject, func: func)
 
-			// A service spawn or send hands its operand to another green thread, as far out of reach as a
-			// value gets. Neither can carry a closure (a `function`-typed message parameter is refused at
-			// the `spawn`, E3135, and a spawn's state is a static factory's own fresh box), so both arms are
-			// a structural backstop, and `closureEscapeReason` answers for each in its own words rather than
-			// reaching that function's disagreement panic.
-			serviceSpawn then return isTrackedValue(stored, subject: subject, func: func)
+		// A service spawn or send hands its operand to another green thread, as far out of reach as a
+		// value gets. Neither can carry a closure (a `function`-typed message parameter is refused at
+		// the `spawn`, E3135, and a spawn's state is a static factory's own fresh box), so both arms are
+		// a structural backstop, and `closureEscapeReason` answers for each in its own words rather than
+		// reaching that function's disagreement panic.
+		serviceSpawn(_, _, stored) then return isTrackedValue(stored, subject: subject, func: func)
 		tryCall(_, _, callee, args, _, _, _, _, _) then return syncCallArgEscapes(callee, args: args, subject: subject, func: func, funcSignatures: funcSignatures)
-		indirectCall(_, _, args) or
-			witnessTryDispatch then return trackedValueInArray(args, subject: subject, func: func)
+		indirectCall(_, _, args) then return trackedValueInArray(args, subject: subject, func: func)
+		witnessTryDispatch(_, _, args, _, _, _, _) then return trackedValueInArray(args, subject: subject, func: func)
 
 		// An async spawn's arguments cross into a green thread, which outlives this frame, so it is not
 		// the pass-down a synchronous call is (`spawnArgEscapes`).
@@ -2469,15 +2488,15 @@ end 'collectCallParamEdges'
 // silently dropping out of the call graph.
 function collectCallParamEdgesAt(project Project, signatures ProgramSignatures, op MaxonOp, func IrFunction, callerIndex FuncIndex, funcIndexByName FuncIndexByName, edges CallParamEdges, conformers ConformersByInterface, witnessSlots WitnessSlotsByDeclIndex)
 	match op 'op'
-		call(_, callee, args, argLabels, _, _, _, _) or
+		call(_, callee, args, argLabels, _, _, _, _) then addCallParamEdges(project, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges)
 
-			// ⚠ An `async` spawn carries the same edge a direct call does. A managed argument is legal
-			// (`requireAsyncScalarParams` refuses a non-integer channel and a consumed parameter, not a
-			// managed one) and the spawn hands the coroutine a reference to it, so `async g(p)` where `g`
-			// writes its parameter writes the caller's own, before the await or after it. Without the edge,
-			// `relay(q)` spawning a writing `replace(q)` would read as writing nothing, and both E3019 and
-			// the freeze on a lent graph would admit a `let` handed to `relay`.
-			asyncCall then addCallParamEdges(project, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges)
+		// ⚠ An `async` spawn carries the same edge a direct call does. A managed argument is legal
+		// (`requireAsyncScalarParams` refuses a non-integer channel and a consumed parameter, not a
+		// managed one) and the spawn hands the coroutine a reference to it, so `async g(p)` where `g`
+		// writes its parameter writes the caller's own, before the await or after it. Without the edge,
+		// `relay(q)` spawning a writing `replace(q)` would read as writing nothing, and both E3019 and
+		// the freeze on a lent graph would admit a `let` handed to `relay`.
+		asyncCall(_, callee, args, argLabels, _, _, _) then addCallParamEdges(project, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges)
 		literal or
 			ret or
 			retVoid or
@@ -4097,7 +4116,7 @@ function validateCall(project Project, func IrFunction, signatures ProgramSignat
 		return
 	end 'compilerOwnCall'
 
-	if not project.funcSignatures.contains(callee) 'unknownFn'
+	if calleeIsUnresolved(callee, funcSignatures: project.funcSignatures) 'unknownFn'
 		// ⭐⭐ **E3095 RE-ASKS A RESOLUTION THE PARSER ALREADY MADE.** A subdirectory's declaration of a contested
 		// free function is registered under its directory-qualified spelling, so a bare callee that found no single
 		// declaration this file may name (`ProgramSignatures.nameABareCallBinds`) reaches this arm still wearing
@@ -5137,12 +5156,12 @@ end 'functionYieldsDirectly'
 // genuinely differ: a service send is an effect and no yield at all, while an `await` is both.
 function opYields(op MaxonOp, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges, runtimeTier FunctionNameSet) returns bool
 	return match op 'op'
-		call(_, callee, _, _, _, _, _, _) or
+		call(_, callee, _, _, _, _, _, _) gives calleeYields(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges, runtimeTier: runtimeTier)
 
-			// A spawn is an edge, not a yield. `async f()` suspends this frame exactly when `f` can suspend,
-			// so it contributes the same edge an ordinary call does — which makes a function that spawns a
-			// yielding function itself yielding, and is exactly the case E3073 rejects when `f` cannot.
-			asyncCall gives calleeYields(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges, runtimeTier: runtimeTier)
+		// A spawn is an edge, not a yield. `async f()` suspends this frame exactly when `f` can suspend,
+		// so it contributes the same edge an ordinary call does — which makes a function that spawns a
+		// yielding function itself yielding, and is exactly the case E3073 rejects when `f` cannot.
+		asyncCall(_, callee, _, _, _, _, _) gives calleeYields(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges, runtimeTier: runtimeTier)
 		literal or
 			ret or
 			retVoid or
@@ -6316,7 +6335,7 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 		// float alias only a `float` one — once nothing else is going to read either as a name. See those two
 		// doors for the programs each refused unresolved; they are disjoint (a name is one kind of alias or
 		// the other, never both), so their order between themselves says nothing.
-		let substituted = signatures.floatAliasResolved(signatures.functionAliasResolved(signatures.canonicalTypeArg(signatures.substitutedInstanceArg(gid, position: position))))
+		let substituted = signatures.floatAliasResolved(signatures.functionAliasResolved(signatures.canonicalTypeArg(signatures.substitutedInstanceArg(gid, position: position))), readerFilePath: filePath)
 		let expected = signatures.typeArgAggregateName(substituted, readerFilePath: filePath)
 		let argId = try argIds.get(i) otherwise panic("checkTypeParameterArgsAt: argIds.get OOB at {i}")
 		let argTag = try func.valueTags.get(argId) otherwise panic("checkTypeParameterArgsAt: value v{argId} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
@@ -7232,7 +7251,7 @@ end 'ExistentialWideningVerdict'
 // emitter and PANICKED there — `a register-to-register move from xmm0 to rcx crosses register files` — with
 // no position and nothing in the message an author could act on. It is E2062's fact one widening position
 // over: dictionary passing gives a type parameter and an existential the SAME opaque slot, so the same limit.
-function existentialWideningVerdict(project Project, valueTag ValueTypeTag, valueNameId TypeNameId, interfaceName ByteArray) returns ExistentialWideningVerdict
+function existentialWideningVerdict(project Project, valueTag ValueTypeTag, valueNameId TypeNameId, interfaceName ByteArray, readerFilePath FilePath) returns ExistentialWideningVerdict
 	if valueTag == ValueTypeTag.float 'floatHasNoWayIntoTheFatPointer'
 		return ExistentialWideningVerdict.floatHasNoValueHalf
 	end 'floatHasNoWayIntoTheFatPointer'
@@ -7241,7 +7260,7 @@ function existentialWideningVerdict(project Project, valueTag ValueTypeTag, valu
 		return ExistentialWideningVerdict.doesNotConform
 	end 'noTypeToShowConformance'
 
-	if not valueWidensToInterface(project, signatures: programSignaturesIn(project, asker: "existentialWideningVerdict"), valueType: maxonTypeOfTag(valueTag, nameId: valueNameId), interfaceName: interfaceName) 'doesNotConform'
+	if not valueWidensToInterface(project, signatures: programSignaturesIn(project, asker: "existentialWideningVerdict"), valueType: maxonTypeOfTag(valueTag, nameId: valueNameId), interfaceName: interfaceName, readerFilePath: readerFilePath) 'doesNotConform'
 		return ExistentialWideningVerdict.doesNotConform
 	end 'doesNotConform'
 
@@ -7456,11 +7475,11 @@ end 'nestedClaimAgainstBinding'
 function conformerBindingThroughInstance(project Project, signatures ProgramSignatures, conformerTag ValueTypeTag, conformerNameId TypeNameId, interfaceName ByteArray, position ElementIndex) returns ByteArray throws MapError
 	if conformerTag != ValueTypeTag.genericInstance 'aNominalConformer'
 		let conformerName = try project.typeNames.nameOf(conformerNameId) otherwise panic("conformerBindingThroughInstance: type-name id {conformerNameId} is not in the project interner — a value's name id is remapped project-global at merge (mergeArtifact)")
-		return try conformerAssociatedBinding(project.conformances, typeName: conformerName, interfaceName: interfaceName, position: position)
+		return try fileScopedConformerBinding(project, signatures: signatures, typeName: conformerName, interfaceName: interfaceName, position: position)
 	end 'aNominalConformer'
 
 	let baseName = signatures.genericInstanceBaseName(conformerNameId as GenericInstanceId)
-	let declared = try conformerAssociatedBinding(project.conformances, typeName: baseName, interfaceName: interfaceName, position: position)
+	let declared = try fileScopedConformerBinding(project, signatures: signatures, typeName: baseName, interfaceName: interfaceName, position: position)
 
 	if let paramPosition = try namePositionIn(signatures.structTypeParamsOf(baseName), name: declared) 'namesTheConformersOwnParameter'
 		return signatures.instanceArgDisplayName(conformerNameId as GenericInstanceId, position: paramPosition)
@@ -7468,6 +7487,11 @@ function conformerBindingThroughInstance(project Project, signatures ProgramSign
 
 	return declared
 end 'conformerBindingThroughInstance'
+
+function fileScopedConformerBinding(project Project, signatures ProgramSignatures, typeName ByteArray, interfaceName ByteArray, position ElementIndex) returns ByteArray throws MapError
+	let decl = try conformanceDeclOf(project.conformances, typeName: typeName)
+	return signatures.rangeScopedDeclaredName(try declAssociatedBinding(decl, interfaceName: interfaceName, position: position), readerFilePath: decl.filePath)
+end 'fileScopedConformerBinding'
 
 // ⭐ **THE SITE'S CLAIM AS THE CALL SEES IT** — the callee's declared `Base with Args` with the CALLER's own
 // generic instance substituted in, so `Taker with T` declared inside `type Box uses T` is `Taker with Integer`
@@ -7772,7 +7796,7 @@ function checkOneReturnedValue(project Project, module MaxonModule, signatures P
 	let valueNameId = try func.valueNameIds.get(value) otherwise panic("checkOneReturnedValue: value v{value} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
 	let displayName = String.from(interfaceName)
 
-	match existentialWideningVerdict(project, valueTag: valueTag, valueNameId: valueNameId, interfaceName: interfaceName) 'widening'
+	match existentialWideningVerdict(project, valueTag: valueTag, valueNameId: valueNameId, interfaceName: interfaceName, readerFilePath: func.sourceFilePath) 'widening'
 		// The parameterized half, asked once conformance is settled — the argument position's twin (W58).
 		widens then checkExistentialSiteClaimAtReturn(project, func: func, returnExistentialSites: returnExistentialSites, valueTag: valueTag, valueNameId: valueNameId, interfaceName: interfaceName, retRange: retRange)
 		floatHasNoValueHalf then reportPositioned(project, code: ErrorCode.floatWidenedToExistential, message: "Cannot return a `float` from '{String.from(func.name)}', which is declared to return the interface type '{displayName}': {floatHasNoValueHalfReason(displayName)}, or declare the return type as `float`", line: retRange.line, column: retRange.column, filePath: func.sourceFilePath)
@@ -7812,7 +7836,7 @@ function checkOneExistentialFieldStore(project Project, module MaxonModule, sign
 	let displayName = String.from(store.interfaceName)
 	let site = String.from(store.fieldSite)
 
-	match existentialWideningVerdict(project, valueTag: valueTag, valueNameId: valueNameId, interfaceName: store.interfaceName) 'widening'
+	match existentialWideningVerdict(project, valueTag: valueTag, valueNameId: valueNameId, interfaceName: store.interfaceName, readerFilePath: func.sourceFilePath) 'widening'
 		widens then checkExistentialSiteClaimAtFieldStore(project, func: func, store: store, valueTag: valueTag, valueNameId: valueNameId)
 		floatHasNoValueHalf then reportPositioned(project, code: ErrorCode.floatWidenedToExistential, message: floatIntoExistentialStoreMessage(store.place, site: site, interfaceName: displayName), line: store.line, column: store.column, filePath: store.filePath)
 		doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage(existentialStoreMismatchSubject(store.place, site: site), conformer: valueTypeDisplayName(project, func: func, value: store.value, tag: valueTag, nameId: valueNameId, readerFilePath: store.filePath), interfaceName: displayName), line: store.line, column: store.column, filePath: store.filePath, cause: valueDeferralCause(project, module: module, signatures: signatures, funcIndex: funcIndex, value: store.value))
@@ -7917,7 +7941,7 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 		let interfaceName = interfaceNameOfType(paramType, typeNames: project.typeNames)
 		let displayName = String.from(interfaceName)
 
-		match existentialWideningVerdict(project, valueTag: argTag, valueNameId: argNameId, interfaceName: interfaceName) 'widening'
+		match existentialWideningVerdict(project, valueTag: argTag, valueNameId: argNameId, interfaceName: interfaceName, readerFilePath: func.sourceFilePath) 'widening'
 			// ⭐ **AND THEN THE PARAMETERIZED half of the same question (W58).** Conformance is the door's
 			// original verdict and says nothing about `with` arguments — a `Runner` implements `Taker` whichever
 			// type the site claims `Element` is. Asked only once conformance is settled, because a

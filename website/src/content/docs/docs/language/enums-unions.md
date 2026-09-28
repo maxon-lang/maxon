@@ -428,6 +428,9 @@ In a `match`, `caseName(a, b)` binds the payload for that arm; the bindings are 
 - To ignore the whole payload, omit the parentheses: `success then …`. Writing `success(_)` with every
   binding discarded is **E3081**.
 - An `or`-chain can list payload cases bare; their payloads are not accessible in that arm.
+- An arm that binds a payload covers exactly one case: every case in the arm's `or`-chain must bind the
+  slots the arm reads, so a binding beside a payload-less or bare case (`stay or walk(dir)`) is **E3129**.
+  Give each case its own arm.
 - A match on a union must cover every case (**E2026**); use `default throws` or `default panic(…)` for a
   deliberate catch-all (see [Statements](/docs/language/statements/#default-throws-and-default-panic)).
 

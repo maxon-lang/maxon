@@ -709,6 +709,67 @@ end 'main'
 37
 ```
 
+<!-- test: contested-bare-call-inside-a-borrow-parses-on-a-worker -->
+The same one-visible resolution, reached from a body that holds a borrow: `for cell in cells` borrows the
+array, and `helper(cell.s)` hands the callee a field of the borrowed element, so the parse records the call
+as a possible write under the name the call binds. That name is beta's qualified spelling, which the whole-
+program index files; the parse's own record must be a copy of it, because the file's parse crosses back from
+a front-end worker that keeps its index. alpha's helper answers 3 and beta's the length of `hello`.
+```maxon
+// --- file: alpha/a.maxon
+module typealias Integer = int(0 to 125)
+
+module function helper(s String) returns Integer
+	return (s.byteLength() + 2) as Integer
+end 'helper'
+
+// --- file: alpha/use.maxon
+export typealias Integer = int(0 to 125)
+
+export function useAlpha() returns Integer
+	return helper("a")
+end 'useAlpha'
+
+// --- file: beta/b.maxon
+export typealias Integer = int(0 to 125)
+
+export function helper(s String) returns Integer
+	return s.byteLength() as Integer
+end 'helper'
+
+// --- file: app/main.maxon
+typealias Count = int(0 to 125)
+
+type Cell
+	export let s as String
+
+	static function create(s String) returns Cell
+		return Self{s: s}
+	end 'create'
+end 'Cell'
+
+typealias Cells = Array with Cell
+
+function total(cells Cells) returns Count
+	var sum = 0 as Count
+
+	for cell in cells 'each'
+		sum = helper(cell.s) as Count
+	end 'each'
+
+	return sum
+end 'total'
+
+function main() returns ExitCode
+	var cells = Cells.create()
+	cells.push(Cell.create("hello"))
+	return (useAlpha() as Count + total(cells)) as ExitCode
+end 'main'
+```
+```exitcode
+8
+```
+
 
 <!-- test: contested-bare-call-resolves-past-a-file-private-competitor-declared-first -->
 A file-private competitor in another directory, folded BEFORE the exported declaration. The two

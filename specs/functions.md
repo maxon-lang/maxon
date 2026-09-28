@@ -1393,6 +1393,24 @@ error E3004: <fragment>:19:32: call to undefined function 'frobnicate'
 error E3059: <fragment>:19:10: type mismatch: 'otherwise type 'unknown' does not match expected type 'Box''
 ```
 
+<!-- test: unknown-function-as-the-only-throwing-call-of-a-throws-function -->
+```maxon
+enum Failure implements Error
+	bad
+end 'Failure'
+
+function maybe() returns ExitCode throws Failure
+	return frobnicate(2)
+end 'maybe'
+
+function main() returns ExitCode
+	return try maybe() otherwise 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:7:9: call to undefined function 'frobnicate'
+```
+
 <!-- test: unknown-function-result-as-a-match-arm-give -->
 ```maxon
 type Box

@@ -858,13 +858,13 @@ export type StdToArm64Lowering
 			// `osProcessSpawnInherit` share one chunk: the flag that separates them on Windows,
 			// `bInheritHandles`, has no POSIX twin — `POSIX_SPAWN_CLOEXEC_DEFAULT` plus the file actions
 			// decide what crosses the exec, whichever op asked.
-			osProcessSpawn(commandId, cwdPtrId, creationFlagsId, startupPtrId, procInfoPtrId, envPtrId) or
-				osProcessSpawnInherit then self.lowerOsProcessSpawn(commandId, cwdPtrId: cwdPtrId, creationFlagsId: creationFlagsId, startupPtrId: startupPtrId, procInfoPtrId: procInfoPtrId, envPtrId: envPtrId, dstRef: dstRef)
+			osProcessSpawn(commandId, cwdPtrId, creationFlagsId, startupPtrId, procInfoPtrId, envPtrId) then self.lowerOsProcessSpawn(commandId, cwdPtrId: cwdPtrId, creationFlagsId: creationFlagsId, startupPtrId: startupPtrId, procInfoPtrId: procInfoPtrId, envPtrId: envPtrId, dstRef: dstRef)
+			osProcessSpawnInherit(commandId, cwdPtrId, creationFlagsId, startupPtrId, procInfoPtrId, envPtrId) then self.lowerOsProcessSpawn(commandId, cwdPtrId: cwdPtrId, creationFlagsId: creationFlagsId, startupPtrId: startupPtrId, procInfoPtrId: procInfoPtrId, envPtrId: envPtrId, dstRef: dstRef)
 			osProcessExitCode(handleId, codePtrId) then self.emitHostCall(dstRef, callee: Arm64HostCallee.chunk(HostProcExitCodeName), args: twoArgs(handleId, second: codePtrId))
 
 			osCloseHandle(handleId) then self.lowerOsCloseHandle(handleId, dstRef: dstRef)
-			osWaitHandle(resultId, handleId, timeoutMsId) or
-				osWaitChild then self.lowerOsWaitHandle(resultId, handleId: handleId, timeoutMsId: timeoutMsId, dstRef: dstRef)
+			osWaitHandle(resultId, handleId, timeoutMsId) then self.lowerOsWaitHandle(resultId, handleId: handleId, timeoutMsId: timeoutMsId, dstRef: dstRef)
+			osWaitChild(resultId, handleId, timeoutMsId) then self.lowerOsWaitHandle(resultId, handleId: handleId, timeoutMsId: timeoutMsId, dstRef: dstRef)
 
 			// The four PAGE-LIFECYCLE ops all lower here — `munmap`, `madvise`, and two spellings of
 			// `mmap`. They are the one OS family on this backend that is NOT x64-windows-gated, and `osAllocPages`
@@ -915,8 +915,8 @@ export type StdToArm64Lowering
 			// descriptor's poll record and reads again when it is readable. The `EAGAIN` never reaches a
 			// caller, which keeps a merely-empty pipe from latching the end of stream a zero-byte read
 			// means.
-			osReadOverlapped(resultId, handleId, bufId, capId, bytesOutPtrId, _) or
-				osReadFile then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostReadFileName), args: fourArgs(handleId, second: bufId, third: capId, fourth: bytesOutPtrId), dstRef: dstRef)
+			osReadOverlapped(resultId, handleId, bufId, capId, bytesOutPtrId, _) then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostReadFileName), args: fourArgs(handleId, second: bufId, third: capId, fourth: bytesOutPtrId), dstRef: dstRef)
+			osReadFile(resultId, handleId, bufId, capId, bytesOutPtrId) then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostReadFileName), args: fourArgs(handleId, second: bufId, third: capId, fourth: bytesOutPtrId), dstRef: dstRef)
 
 			osLastError(resultId) then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostLastErrorName), args: ValueIdArray.create(), dstRef: dstRef)
 
@@ -944,10 +944,10 @@ export type StdToArm64Lowering
 			osReadWallClock(ftPtrId) then self.lowerOsReadWallClock(ftPtrId, dstRef: dstRef)
 
 			osFileOpenRead(resultId, pathPtrId) then self.lowerOsFileOpen(resultId, pathPtrId: pathPtrId, darwinFlags: PosixOpenReadOnly, linuxFlags: PosixOpenReadOnly, mode: PosixNoFileMode as MachineWord, dstRef: dstRef)
-			osFileClose(handleId) or
-				// A socket is a DESCRIPTOR on both lanes, so this is `lowerOsFileClose` one family over and reaches
-				// the same primitive — `closesocket` exists only because a Win32 `SOCKET` is not a file `HANDLE`.
-				osSocketClose then self.lowerOsFileClose(handleId, dstRef: dstRef)
+			osFileClose(handleId) then self.lowerOsFileClose(handleId, dstRef: dstRef)
+			// A socket is a DESCRIPTOR on both lanes, so this is `lowerOsFileClose` one family over and reaches
+			// the same primitive — `closesocket` exists only because a Win32 `SOCKET` is not a file `HANDLE`.
+			osSocketClose(handleId) then self.lowerOsFileClose(handleId, dstRef: dstRef)
 			osFileOpenWrite(resultId, pathPtrId) then self.lowerOsFileOpen(resultId, pathPtrId: pathPtrId, darwinFlags: DarwinOpenCreateTruncateFlags, linuxFlags: LinuxOpenCreateTruncateFlags, mode: PosixCreateFileMode as MachineWord, dstRef: dstRef)
 			osFileSize(resultId, handleId, sizeOutPtrId) then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostFileSizeName), args: twoArgs(handleId, second: sizeOutPtrId), dstRef: dstRef)
 			osFileDelete(resultId, pathPtrId) then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostFileDeleteName), args: argsOf(pathPtrId), dstRef: dstRef)

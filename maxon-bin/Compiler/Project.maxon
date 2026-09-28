@@ -1395,7 +1395,8 @@ export union AliasRecordOutcome
 	// RANGES is exactly what file scoping exists to serve (`specs/duplicate-typealias.md`).
 	accepted
 
-	// Two FILES declare one name over DIFFERENT underlying primitives — E3105. See `record`. It
+	// Two FILES' exported or public declarations of one name disagree about the underlying primitive —
+	// E3105. See `recordNameable`. It
 	// carries the incumbent, because the reporter blames the NEWCOMER — its own file, its own name
 	// token — and names what the incumbent was declared over.
 	conflictingUnderlying(prior RangedTypeAlias)
@@ -1784,6 +1785,7 @@ export function scopedAliasTier(declPath String, readerPath String, declaredByTh
 end 'scopedAliasTier'
 
 export typealias CorpusDeclaringFileSet = Set with String
+export typealias UnderlyingContestedAliasSet = Set with ByteArray
 
 export type RangedAliasRegistry
 	// Every alias under its BARE name — the fallback, and on its own exactly the pre-existing
@@ -1824,6 +1826,7 @@ export type RangedAliasRegistry
 	// ⭐ **AND IT IS ALSO THE DOOR A THIRD FILE RESOLVES A CONTESTED NAME THROUGH** — see `lookup`.
 	var nameable as NameableAliasMap
 	var corpusDeclaringFiles as CorpusDeclaringFileSet
+	var underlyingContested as UnderlyingContestedAliasSet
 
 	// ⭐⭐ **THE NAMES WHOSE DECLARATIONS DISAGREE ABOUT THE RANGE (N2)** — a THIRD derived index over the
 	// same declarations, and the only one that cannot be maintained by `record`: it is a fact about ALL of a
@@ -1880,7 +1883,7 @@ export type RangedAliasRegistry
 	export static function create(os Os) returns RangedAliasRegistry
 		let exitCodeHigh = exitCodeAliasHigh(os)
 		requireExitCodeRangeFitsItsWidth(exitCodeHigh)
-		var registry = Self{byName: RangedTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredAliasMap.create(), storageBytes: AliasStorageBytesMap.create(), packedBits: AliasPackedBitsMap.create(), nameable: NameableAliasMap.create(), corpusDeclaringFiles: CorpusDeclaringFileSet.create(), rangeContested: sharedEmptyRangeContests, exitCodeHigh: exitCodeHigh}
+		var registry = Self{byName: RangedTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredAliasMap.create(), storageBytes: AliasStorageBytesMap.create(), packedBits: AliasPackedBitsMap.create(), nameable: NameableAliasMap.create(), corpusDeclaringFiles: CorpusDeclaringFileSet.create(), underlyingContested: UnderlyingContestedAliasSet.create(), rangeContested: sharedEmptyRangeContests, exitCodeHigh: exitCodeHigh}
 		_ = registry.record(builtinStdlibAlias(CodepointTypeName, low: CodepointAliasLow, high: CodepointAliasHigh, declPathText: CodepointAliasDeclPath), declaredByTheCorpus: true)
 		_ = registry.record(builtinStdlibAlias(ElementIndexAliasName, low: ElementIndexAliasLow, high: ElementIndexAliasHigh, declPathText: ElementIndexAliasDeclPath), declaredByTheCorpus: true)
 		_ = registry.record(builtinStdlibAlias(BytePosAliasName, low: StringPositionAliasLow, high: StringPositionAliasHigh, declPathText: StringPositionAliasDeclPath), declaredByTheCorpus: true)
@@ -1896,29 +1899,30 @@ export type RangedAliasRegistry
 		fingerprint.note("packedBits", value: self.packedBits.count())
 		fingerprint.note("nameable", value: self.nameable.count())
 		fingerprint.note("corpusDeclaringFiles", value: self.corpusDeclaringFiles.count() as EntryCount)
+		fingerprint.note("underlyingContested", value: self.underlyingContested.count() as EntryCount)
 		fingerprint.note("rangeContested", value: self.rangeContested.count())
 		fingerprint.closeGroup()
 	end 'noteFingerprint'
 
-	// File one declaration, and answer whether its UNDERLYING PRIMITIVE conflicts with the one every
-	// earlier declaration of the name shares — the one place that decides it, so the conflict test and
-	// the insert sit on one structure and cannot come to disagree about which declarations conflict.
+	// File one declaration, and answer whether its UNDERLYING PRIMITIVE conflicts with another file's
+	// nameable declaration of the name — the one place that decides it, so the conflict test and the
+	// insert sit on one structure and cannot come to disagree about which declarations conflict.
+	// File-scoped declarations over different primitives are legal; they only mark the name
+	// `underlyingContested`.
 	export function record(alias RangedTypeAlias, declaredByTheCorpus bool) returns AliasRecordOutcome
 		self.noteDeclaringLayer(alias.declFilePath, declaredByTheCorpus: declaredByTheCorpus)
 		self.widenElementWidthFor(alias)
 
 		// Recorded here, ABOVE the first-declaration early return below, so every declaration passes
 		// through it exactly once whatever else the name goes on to do.
-		if nameableFromAnywhere(alias.visibility) 'nameableAnywhere'
-			self.nameable.upsert(alias.name, value: alias)
-		end 'nameableAnywhere'
+		let outcome = self.recordNameable(alias)
 
 		// The FIRST declaration of a name — which, in a program where nothing is redeclared, is every
 		// single one of them — collides with nothing and contests nothing. It costs ONE probe and one
 		// insert, and never touches `multiplyDeclared` or builds anything at all.
 		let sole = try self.byName.get(alias.name) otherwise 'firstDeclarationOfThisName'
 			self.byName.upsert(alias.name, value: alias)
-			return AliasRecordOutcome.accepted
+			return outcome
 		end 'firstDeclarationOfThisName'
 
 		let declPath = alias.declFilePath.toString()
@@ -1927,7 +1931,6 @@ export type RangedAliasRegistry
 		// declarations in every entry that exists — and it doubles as the map to fill if THIS
 		// declaration is the one that makes the name contested.
 		var byFile = try self.multiplyDeclared.get(alias.name) otherwise RangedAliasByDeclaringFile.create()
-		var outcome = AliasRecordOutcome.accepted
 
 		// The two arms below each answer the SAME question — is this newcomer's file already among the
 		// files that declare this name — off two different sources, because "the files that declare
@@ -1954,24 +1957,9 @@ export type RangedAliasRegistry
 			end 'secondFileDeclaresIt'
 		end 'secondDeclarationOfThisName'
 
-		// ⭐ **WHAT MAKES `underlyingInAnyFile` ANSWERABLE AT ALL — the rule, written once.** A
-		// cross-file pair over two RANGES is legal and stays legal; a pair over two PRIMITIVES is not,
-		// because the range is resolved per declaring file and the primitive is not — the file-less
-		// readers (type resolution of a struct field, union payload classification, generic and
-		// conformance canonicalization) all take it from the bare door, which holds exactly one entry
-		// per name. Refusing the pair turns that door's contract from a bet about today's corpus into a
-		// property of every program that compiles: every declaration of a name shares one underlying
-		// primitive, so the bare answer IS the answer a scoped lookup would give, for every reader,
-		// always.
-		//
-		// ⚠ CROSS-FILE ONLY, and never for a same-file pair: a file that declares one name twice is a
-		// duplicate (E3061, from `TypeNameRegistry`) whichever primitives it picked, and diagnosing
-		// that as a cross-file conflict would blame the wrong thing. `sole` carries the comparison
-		// because it is the last declaration recorded for this name, and by induction every earlier one
-		// agrees with it — the first pair that disagreed stopped the program here.
-		if declaredByAnotherFile and maxonTypeTag(alias.underlying) != maxonTypeTag(sole.underlying) 'underlyingConflict'
-			outcome = AliasRecordOutcome.conflictingUnderlying(sole)
-		end 'underlyingConflict'
+		if declaredByAnotherFile and maxonTypeTag(alias.underlying) != maxonTypeTag(sole.underlying) 'underlyingContested'
+			self.underlyingContested.insert(alias.name)
+		end 'underlyingContested'
 
 		// Non-empty here means the name is contested — either it already was, or the branch above
 		// just made it so by filing the incumbent. A same-file redeclaration of a name only one file
@@ -1986,6 +1974,23 @@ export type RangedAliasRegistry
 
 		return outcome
 	end 'record'
+
+	function recordNameable(alias RangedTypeAlias) returns AliasRecordOutcome
+		if not nameableFromAnywhere(alias.visibility) 'fileOrDirectoryScoped'
+			return AliasRecordOutcome.accepted
+		end 'fileOrDirectoryScoped'
+
+		var outcome = AliasRecordOutcome.accepted
+
+		if let prior = try self.nameable.get(alias.name) 'anotherNameableDeclaration'
+			if prior.declFilePath != alias.declFilePath and maxonTypeTag(alias.underlying) != maxonTypeTag(prior.underlying) 'underlyingConflict'
+				outcome = AliasRecordOutcome.conflictingUnderlying(prior)
+			end 'underlyingConflict'
+		end 'anotherNameableDeclaration'
+
+		self.nameable.upsert(alias.name, value: alias)
+		return outcome
+	end 'recordNameable'
 
 	// ⭐⭐ **DOES *SOME* DECLARATION OF `name` MAKE IT NAMEABLE FROM ANY FILE?** — a question about ALL
 	// of a name's declarations, which is why it cannot be asked of `lookup`'s answer: `lookup` returns
@@ -2222,7 +2227,7 @@ export type RangedAliasRegistry
 	export function crossKindIdentityOf(name ByteArray, readerFilePath FilePath) returns ByteArray
 		match self.lookup(name, readerFilePath: readerFilePath) 'resolved'
 			undeclared then return EmptySourceText
-			declared(alias) then return rangeQualifiedAliasName(name, low: alias.low, high: alias.high)
+			declared(alias) then return rangeQualifiedAliasName(name, underlying: alias.underlying, low: alias.low, high: alias.high)
 		end 'resolved'
 	end 'crossKindIdentityOf'
 
@@ -2254,14 +2259,10 @@ export type RangedAliasRegistry
 	// reading it would be reading a stranger's bounds. The contract is stated HERE rather than once
 	// per reader.
 	//
-	// ⭐ **AND THE ANSWER IT GIVES IS FILE-INDEPENDENT, BY CONSTRUCTION — see `record`'s E3105.** The
-	// only way two declarations of one name could disagree about the `int`/`float` keyword is a
-	// cross-file `int`/`float` pair, and `record` refuses to accept one. So this door's answer is the
-	// SAME answer a scoped lookup would give, for every reader, in every program that compiles.
-	// It rests on that refusal and not on a survey of `stdlib/` and the corpus, which would be a bet
-	// and not a contract: without it, a user program declaring `Measure` as `int` in one file and
-	// `float` in another makes the parser (scoped) and this door (bare) disagree, and the x64 emitter
-	// panics on an xmm value in a gpr slot rather than diagnosing anything.
+	// ⚠ Two files may declare one file-scoped name over `int` and `float`, and then no file-independent
+	// answer exists: a reader that answered anyway would hand the emitter an xmm value in a gpr slot.
+	// Such a name is `underlyingContested` and this door panics on it, so a reader that holds a file
+	// and asks here instead of `underlyingFor` fails loudly.
 	//
 	// ⚠ It also costs NOTHING, where a `DeclaredAlias` answer cost one allocation per call: a union
 	// with an associated value is HEAP-BOXED, and `resolveNamedType` asks this once per named TYPE
@@ -2271,8 +2272,24 @@ export type RangedAliasRegistry
 	// `Map.get`'s own and is likewise free.
 	export function underlyingInAnyFile(name ByteArray) returns MaxonType throws MapError
 		let any = try self.byName.get(name)
+
+		if self.underlyingContested.contains(name) 'itsFilesDisagreeAboutThePrimitive'
+			panic("RangedAliasRegistry.underlyingInAnyFile: '{String.from(name)}' is declared over different underlying types by different files, so only a reader's own file can answer — this reader must ask `underlyingFor`")
+		end 'itsFilesDisagreeAboutThePrimitive'
+
 		return any.underlying
 	end 'underlyingInAnyFile'
+
+	export function underlyingFor(name ByteArray, readerFilePath FilePath) returns MaxonType throws MapError
+		if not self.byName.contains(name) 'noFileDeclaresIt'
+			throw MapError.keyNotFound
+		end 'noFileDeclaresIt'
+
+		match self.lookup(name, readerFilePath: readerFilePath) 'resolved'
+			undeclared then panic("RangedAliasRegistry.underlyingFor: '{String.from(name)}' is declared by some file and resolves to no declaration from '{readerFilePath.toString()}'")
+			declared(alias) then return alias.underlying
+		end 'resolved'
+	end 'underlyingFor'
 
 	// The range as SOURCE spells it -- `int(0 to 255)`. A name whose declarations disagree about the range has
 	// no one range to be shown as, so a contested name is refused.
@@ -2586,10 +2603,8 @@ export type RangedAliasRegistry
 		// ⚠ RECORDED BEFORE THE PUBLISH BELOW, and separately from the walk above because `record` writes
 		// `multiplyDeclared` — the very map that walk iterates.
 		for mint in mints 'eachMint'
-			// The outcome is `record`'s cross-file E3105 answer, and a mint can never be the right thing to
-			// blame for one: two claimants of ONE spelling share a range, hence a primitive, and the only way
-			// two ranges could mint one spelling is an `int`/`float` pair whose bounds share a bit pattern —
-			// which the BASE name has already earned E3105 for, against the line the author wrote.
+			// The outcome is always `accepted`: a mint's spelling carries its primitive and its range
+			// (`rangeQualifiedAliasName`), so two mints of one spelling agree about both.
 			_ = self.record(mint, declaredByTheCorpus: true)
 		end 'eachMint'
 
@@ -2650,7 +2665,7 @@ export type RangedAliasRegistry
 		var claimants = RangedTypeAliasArray.create()
 
 		for (_, alias) in self.contestedDeclarations(name) 'eachDeclaringFile'
-			if not holdsRange(claimants, low: alias.low, high: alias.high) 'aRangeNoEarlierDeclarationClaimed'
+			if not holdsRange(claimants, underlying: alias.underlying, low: alias.low, high: alias.high) 'aRangeNoEarlierDeclarationClaimed'
 				claimants.push(alias)
 			end 'aRangeNoEarlierDeclarationClaimed'
 		end 'eachDeclaringFile'
@@ -2685,7 +2700,7 @@ export type RangedAliasRegistry
 			// declaration `lookup` can find — but stated rather than assumed, because a contested name with
 			// no declaration would mean the two indexes had come apart.
 			undeclared then panic("RangedAliasRegistry.rangeScopedName: '{String.from(name)}' is range-contested but resolves to no declaration from '{readerFilePath.toString()}'")
-			declared(alias) then return rangeQualifiedAliasName(name, low: alias.low, high: alias.high)
+			declared(alias) then return rangeQualifiedAliasName(name, underlying: alias.underlying, low: alias.low, high: alias.high)
 		end 'resolved'
 	end 'rangeScopedName'
 end 'RangedAliasRegistry'
@@ -2706,7 +2721,7 @@ function scopedSpellingsOf(name ByteArray, claimants RangedTypeAliasArray, mints
 	var spellings = ByteArrayArray.create()
 
 	for claimant in claimants 'eachDistinctRange'
-		let spelling = rangeQualifiedAliasName(name, low: claimant.low, high: claimant.high)
+		let spelling = rangeQualifiedAliasName(name, underlying: claimant.underlying, low: claimant.low, high: claimant.high)
 		spellings.push(spelling)
 		mints.push(rangeQualifiedMint(claimant, spelling: spelling))
 	end 'eachDistinctRange'
@@ -2723,9 +2738,9 @@ end 'rangeQualifiedMint'
 // is a contest at all — and a `Set` would cost an allocation per multiply-declared name to spare a
 // comparison of two. It compares the BOUNDS and never a rendered name, which is what keeps the uncontested
 // walk allocation-free (see `settleRangeContests`).
-function holdsRange(claimants RangedTypeAliasArray, low ParsedInt, high ParsedInt) returns bool
+function holdsRange(claimants RangedTypeAliasArray, underlying MaxonType, low ParsedInt, high ParsedInt) returns bool
 	for held in claimants 'each'
-		if held.hasBounds(low, highBound: high) 'alreadyClaimed'
+		if held.hasBounds(low, highBound: high) and maxonTypeTag(held.underlying) == maxonTypeTag(underlying) 'alreadyClaimed'
 			return true
 		end 'alreadyClaimed'
 	end 'each'
@@ -3008,9 +3023,8 @@ end 'TypeNameRecordOutcome'
 //     reader may BOTH name is a property of the USE, and it is E3063 at the reference
 //     (`ProgramSignatures.ambiguousAliasCandidates`), not a refusal of the declarations.
 //
-// **OUT OF SCOPE, and unchanged:** two aliases in two files that do not AGREE about the underlying
-// PRIMITIVE are still refused, as E3105 — see `RangedAliasRegistry.record`, whose contract
-// (`underlyingInAnyFile` answers for every file) is what that refusal keeps true.
+// **OUT OF SCOPE:** two exported or public aliases in two files that do not AGREE about the underlying
+// PRIMITIVE are refused, as E3105 — see `RangedAliasRegistry.record`.
 //
 // ⚠ **THIS REGISTRY HOLDS ONLY THE NAMES A DECLARATION SPELLS, AND THAT IS NOW THE WHOLE NAMESPACE.** A
 // generic instantiation spells no name: it COMPILES to a string every per-type symbol is derived from

@@ -12,6 +12,9 @@ let MaxIgnoredLeadingEmptyLines = 4 as IgnoredLineTally
 let FirstInterimStatus = 100 as StatusNumber
 let SwitchingProtocolsStatus = 101 as StatusNumber
 let LastInterimStatus = 199 as StatusNumber
+let NoContentStatus = 204 as StatusNumber
+let NotModifiedStatus = 304 as StatusNumber
+let StatusCodeDigits = 3
 let ChunkedCoding = "chunked"
 let CodingListSeparator = ","
 
@@ -137,32 +140,9 @@ public function httpBuildRequest(request HttpRequest, target HttpConnectTarget) 
 end 'httpBuildRequest'
 
 public function httpStatusAllowsContent(code StatusCode) returns bool
-	return match code 'which'
-		noContent or
-			notModified gives false
-		ok or
-			created or
-			accepted or
-			movedPermanently or
-			found or
-			badRequest or
-			unauthorized or
-			forbidden or
-			notFound or
-			methodNotAllowed or
-			requestTimeout or
-			conflict or
-			gone or
-			lengthRequired or
-			payloadTooLarge or
-			tooManyRequests or
-			headerFieldsTooLarge or
-			internalServerError or
-			notImplemented or
-			badGateway or
-			serviceUnavailable or
-			httpVersionNotSupported gives true
-	end 'which'
+	let number = code.number()
+
+	return number > LastInterimStatus and number != NoContentStatus and number != NotModifiedStatus
 end 'httpStatusAllowsContent'
 
 public function httpBuildResponseHead(response HttpResponse) returns String throws HttpServerError
@@ -177,7 +157,7 @@ public function httpBuildResponseHead(response HttpResponse) returns String thro
 	end 'badReason'
 
 	var raw = StringBuilder.create()
-	raw.append("{HttpSentVersion} {response.statusCode().rawValue} {response.reason()}{HttpLineBreak}")
+	raw.append("{HttpSentVersion} {response.statusCode().number()} {response.reason()}{HttpLineBreak}")
 
 	if carriesContent 'statesItsLength'
 		appendHeaderLine(raw, name: SentContentLengthName, value: "{response.body().byteLength()}")
@@ -527,7 +507,11 @@ public function httpResponseStatusOf(head String) returns HttpResponseStatus thr
 	let codeText = codeAndReason.slice(codeAndReason.startIndex(), endIndex: codeEnd)
 	let reason = urlByteRange(codeAndReason, from: codeEnd.bytePos() + 1, until: codeAndReason.byteLength())
 
-	let codeInt = try int.fromString(codeText) otherwise throw HttpError.invalidResponse
+	if not isStatusCodeText(codeText) 'notThreeDigits'
+		throw HttpError.invalidResponse
+	end 'notThreeDigits'
+
+	let codeInt = try int.fromString(codeText) otherwise panic("httpResponseStatusOf: three decimal digits parse as an integer")
 
 	var headers = HttpHeaders.create()
 	try parseHeaderLines(lines, from: 1, into: headers, side: HttpMessageSide.response) otherwise throw HttpError.invalidResponse
@@ -542,9 +526,11 @@ public function httpResponseStatusOf(head String) returns HttpResponseStatus thr
 		return HttpResponseStatus.interim
 	end 'interim'
 
-	let code = try StatusCode.fromRawValue(codeInt) otherwise throw HttpError.invalidResponse
+	if codeInt < FirstInterimStatus 'belowEveryStatus'
+		throw HttpError.invalidResponse
+	end 'belowEveryStatus'
 
-	return HttpResponseStatus.final(HttpResponse.create(code, reasonPhrase: reason, responseHeaders: headers, responseBody: ""))
+	return HttpResponseStatus.final(HttpResponse.create(statusCodeOf(codeInt as HttpStatusNumber), reasonPhrase: reason, responseHeaders: headers, responseBody: ""))
 end 'httpResponseStatusOf'
 
 function parseHeaderLines(lines StringArray, from HeaderLineIndex, into HttpHeaders, side HttpMessageSide) throws HeaderBlockFault
@@ -610,6 +596,20 @@ function isToken(text String) returns bool
 
 	return true
 end 'isToken'
+
+function isStatusCodeText(text String) returns bool
+	if text.byteLength() != StatusCodeDigits 'notThreeBytes'
+		return false
+	end 'notThreeBytes'
+
+	for b in text.bytes() 'eachByte'
+		if not urlIsDigit(b) 'notADigit'
+			return false
+		end 'notADigit'
+	end 'eachByte'
+
+	return true
+end 'isStatusCodeText'
 
 function isFieldContentByte(b Byte) returns bool
 	return (b >= FirstPrintableByte or b == HorizontalTab) and b != DeleteByte

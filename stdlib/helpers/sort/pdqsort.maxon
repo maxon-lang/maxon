@@ -21,7 +21,7 @@ public extension Array
 	// Three-element comparator-based median: returns the index (a, b, or c)
 	// whose value is the median of arr[a], arr[b], arr[c]. Doesn't reorder
 	// the array — the partition pass does that with `swap`.
-	public function medianOf3Index(a SortIndex, b SortIndex, c SortIndex, cmp SortComparator) returns SortIndex
+	public function medianOf3Index(a ElementIndex, b ElementIndex, c ElementIndex, cmp SortComparator) returns ElementIndex
 		let va = try managed.get(a) otherwise panic("medianOf3Index: get OOB at a")
 		let vb = try managed.get(b) otherwise panic("medianOf3Index: get OOB at b")
 		let vc = try managed.get(c) otherwise panic("medianOf3Index: get OOB at c")
@@ -57,7 +57,7 @@ public extension Array
 	// from each third's first/middle/last, then median-of-3 of those three
 	// medians. Used for n > 128 where a simple median-of-3 is too likely
 	// to pick a degenerate pivot on partially-sorted input.
-	function medianOfMediansIndex(lo SortIndex, hi SortIndex, cmp SortComparator) returns SortIndex
+	function medianOfMediansIndex(lo ElementIndex, hi ElementIndex, cmp SortComparator) returns ElementIndex
 		let n = hi - lo
 		let third = n / 3
 		let m1Lo = lo
@@ -78,7 +78,7 @@ public extension Array
 	// Pick a pivot index for [lo, hi). Uses median-of-3 for small slices,
 	// median-of-medians for large ones. Returns the index of the pivot
 	// element; partition swaps it into its sorted position.
-	public function choosePivot(lo SortIndex, hi SortIndex, cmp SortComparator) returns SortIndex
+	public function choosePivot(lo ElementIndex, hi ElementIndex, cmp SortComparator) returns ElementIndex
 		let n = hi - lo
 
 		if n > 128 'large'
@@ -103,7 +103,7 @@ public extension Array
 	// two-pointer sweep. Branchless-ness is a future optimization — today
 	// the comparator-call-then-branch pattern matches insertion sort's
 	// shape, which keeps the inliner happy.
-	function partition(lo SortIndex, hi SortIndex, pivotIndex SortIndex, cmp SortComparator) returns (SortIndex, bool)
+	function partition(lo ElementIndex, hi ElementIndex, pivotIndex ElementIndex, cmp SortComparator) returns (ElementIndex, bool)
 		// Move pivot to the front of the slice (unconditional swap).
 		// After this `lo` holds the pivot value for the rest of the pass.
 		self.swap(lo, j: pivotIndex)
@@ -168,7 +168,7 @@ public extension Array
 	// Heapsort sift-down: restore max-heap invariant rooted at `start`
 	// within the first `count` elements of [lo, lo+count).
 	// Declared before `heapsort` so the parser sees the symbol at point of use.
-	function siftDown(lo SortIndex, start SortIndex, count SortIndex, cmp SortComparator)
+	function siftDown(lo ElementIndex, start ElementIndex, count ElementIndex, cmp SortComparator)
 		var root = start
 
 		while true 'sift'
@@ -205,7 +205,7 @@ public extension Array
 
 	// Heapsort fallback: O(n log n) worst case, called when pdqsort's bad
 	// allowance is exhausted (too many unbalanced partitions in a row).
-	function heapsort(lo SortIndex, hi SortIndex, cmp SortComparator)
+	function heapsort(lo ElementIndex, hi ElementIndex, cmp SortComparator)
 		let n = hi - lo
 
 		if n <= 1 'trivial'
@@ -241,7 +241,7 @@ public extension Array
 	// element just below the slice (prev pivot), all elements between are
 	// equal to that pivot and don't need re-partitioning. Saves a full pass
 	// on runs of duplicates.
-	function pdqsortRecurse(lo SortIndex, hi SortIndex, badAllowance SortIndex, prevPivotSame bool, cmp SortComparator)
+	function pdqsortRecurse(lo ElementIndex, hi ElementIndex, badAllowance ElementIndex, prevPivotSame bool, cmp SortComparator)
 		var curLo = lo
 		var curHi = hi
 		var allowance = badAllowance
@@ -315,7 +315,7 @@ public extension Array
 		self.smallSortRange(curLo, hi: curHi, cmp: cmp)
 	end 'pdqsortRecurse'
 
-	public function pdqsortRange(lo SortIndex, hi SortIndex, cmp SortComparator)
+	public function pdqsortRange(lo ElementIndex, hi ElementIndex, cmp SortComparator)
 		let n = hi - lo
 
 		if n <= SmallSortThreshold 'small'

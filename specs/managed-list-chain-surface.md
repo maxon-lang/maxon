@@ -119,6 +119,9 @@ end 'main'
 ```exitcode
 77
 ```
+```stderr
+fatal error: runtime abort 77 (managedListNodeNotInThisChain)
+```
 ```stdout
 before
 ```
@@ -143,6 +146,9 @@ end 'main'
 ```
 ```exitcode
 77
+```
+```stderr
+fatal error: runtime abort 77 (managedListNodeNotInThisChain)
 ```
 ```stdout
 before

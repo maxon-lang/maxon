@@ -3163,8 +3163,8 @@ function fieldDefaultHelpersIn(layout StructLayout) returns ByteArrayArray
 		match layout.fieldDefault(i) 'declared'
 			none or
 				literal then break 'declared'
-			helper(name) or
-				bareCreateHelper then helpers.push(name)
+			helper(name) then helpers.push(name)
+			bareCreateHelper(name) then helpers.push(name)
 		end 'declared'
 	end 'eachField'
 
@@ -10951,8 +10951,8 @@ end 'IfBinder'
 // The bool an `if`'s two-way branch tests, whichever shape its condition took.
 function ifConditionTest(cond IfCondition) returns ValueId
 	return match cond 'shape'
-		plain(test) or
-			tryCatch gives test
+		plain(test) gives test
+		tryCatch(test, _, _, _, _, _) gives test
 	end 'shape'
 end 'ifConditionTest'
 
@@ -11050,9 +11050,9 @@ end 'AwaitOperand'
 function tryTargetNoun(target TryTarget, signatures ProgramSignatures) returns ByteArray
 	return match target 'kind'
 		named(callee) gives tryTargetNamedNoun(callee, signatures: signatures)
-		witness(methodName, _) or
-			promise or
-			serviceReply gives methodName
+		witness(methodName, _) gives methodName
+		promise(methodName, _) gives methodName
+		serviceReply(methodName, _) gives methodName
 		deferred panic("tryTargetNoun: a deferred `try` target reached a diagnostic about what it produces — `requireCaughtResultIsSpokenFor` returns before asking for one, and `parseTry` asks only of a `void` result, which no deferred target has")
 	end 'kind'
 end 'tryTargetNoun'
@@ -13409,13 +13409,14 @@ type PayloadBinding
 	export let field as PayloadField
 	export let slot as CaseIndex
 	export let isDiscard as bool
+	export let caseIndex as CaseIndex
 
-	static function bound(nameTok Token, field PayloadField, slot CaseIndex) returns PayloadBinding
-		return Self{nameTok: nameTok, field: field, slot: slot, isDiscard: false}
+	static function bound(nameTok Token, field PayloadField, slot CaseIndex, caseIndex CaseIndex) returns PayloadBinding
+		return Self{nameTok: nameTok, field: field, slot: slot, isDiscard: false, caseIndex: caseIndex}
 	end 'bound'
 
-	static function discard(nameTok Token, field PayloadField, slot CaseIndex) returns PayloadBinding
-		return Self{nameTok: nameTok, field: field, slot: slot, isDiscard: true}
+	static function discard(nameTok Token, field PayloadField, slot CaseIndex, caseIndex CaseIndex) returns PayloadBinding
+		return Self{nameTok: nameTok, field: field, slot: slot, isDiscard: true, caseIndex: caseIndex}
 	end 'discard'
 end 'PayloadBinding'
 
@@ -22826,8 +22827,8 @@ export type Parser
 			// straight into the box (`Parser.fillFieldDefault`) and there is nothing to call.
 			none or
 				literal then return
-			helper(helperName) or
-				bareCreateHelper then self.recordFieldDefaultHelperReturn(helperName, layout: layout, index: index, entries: entries)
+			helper(helperName) then self.recordFieldDefaultHelperReturn(helperName, layout: layout, index: index, entries: entries)
+			bareCreateHelper(helperName) then self.recordFieldDefaultHelperReturn(helperName, layout: layout, index: index, entries: entries)
 		end 'declared'
 	end 'recordScannedFieldDefaultHelper'
 
@@ -23045,17 +23046,17 @@ export type Parser
 	// ⭐⭐ **WHICH NESTED `typealias` MEMBERS THIS EXTENSION BODY DECLARES, PUBLISHED ONTO EVERY CONFORMER, AND
 	// WHAT THE RANGED ONES MEAN (F10).** The first of the two passes `Queries.foldExtensionDeclarations` makes
 	// over the same sites, and it exists because the second one RESOLVES type names while it fills the alias
-	// registries: six files write `export extension Array`, `stdlib/helpers/sort/insertionSort.maxon:17`
-	// declares `SortIndex` and the other five spell it bare, so whichever body the fold reached first would
+	// registries: several files write `export extension Array`, `stdlib/helpers/sort/insertionSort.maxon`
+	// declares `SortComparator` and the others spell it bare, so whichever body the fold reached first would
 	// resolve that name differently from the ones it reached later — a written name meaning what the directory
 	// walk says, which `StdlibLoader`'s header rules out.
 	//
 	// ⛔⛔ **A NAME IS NOT *"THE SMALLEST THING THAT HAS TO BE KNOWN AHEAD OF THE WHOLE FOLD"*.** A name
-	// settles *is `SortIndex` a member of `Array`?*, which is what
-	// `parseTypeReference` needs to spell `named("Array.SortIndex")`. It settles nothing about what that name
+	// settles *is `X` a member of `Array`?*, which is what
+	// `parseTypeReference` needs to spell `named("Array.X")`. It settles nothing about what that name
 	// MEANS — and `canonicalTupleElement` asks exactly that of every tuple element, through `isInnerAlias`,
-	// i.e. through a registry only the fold fills. `pdqsort.maxon`'s `partition` returns `(SortIndex, bool)`
-	// and lost its whole signature on every walk order that folded it before `insertionSort.maxon`. So the
+	// i.e. through a registry only the fold fills. A tuple element naming a ranged alias a sibling extension
+	// declares loses its whole signature on every walk order that folds it first. So the
 	// RANGED declarations are read here too: see `ProgramSignatures.recordPreVerdictInnerAliasRange` for the measurement, and for
 	// why the ranged form is the only one of the four that can be settled ahead of the fold at all.
 	//
@@ -23558,11 +23559,15 @@ export type Parser
 	// consequence is a conditional extension WITHHELD from that conformer and a body parsed with no
 	// substitution — `readOptionalImplementsClause`'s standard, bounded and missing rather than wrong.
 	function conformerAssociatedBindings(header ExtensionHeader, conformer ByteArray, index ProgramSignatures) returns ByteArrayArray
-		match index.structInAnyFile(conformer) 'conformerLayout'
-			declared(layout) then return pairableConformanceBindings(layout.bindingsForInterface(header.nameTok.value), associatedTypeNames: extensionTargetParamNames(header.target))
-			undeclared then panic("Parser.conformerAssociatedBindings: conformer '{String.from(conformer)}' came out of `extensionTargetConformers`, which walks the struct registry this lookup misses")
-		end 'conformerLayout'
+		return pairableConformanceBindings(self.extensionConformerLayout(conformer, index: index).bindingsForInterface(header.nameTok.value), associatedTypeNames: extensionTargetParamNames(header.target))
 	end 'conformerAssociatedBindings'
+
+	function extensionConformerLayout(conformer ByteArray, index ProgramSignatures) returns StructLayout
+		match index.structInAnyFile(conformer) 'conformerLayout'
+			declared(layout) then return layout
+			undeclared then panic("Parser.extensionConformerLayout: conformer '{String.from(conformer)}' came out of `extensionTargetConformers`, which walks the struct registry this lookup misses")
+		end 'conformerLayout'
+	end 'extensionConformerLayout'
 
 	// ⭐ **DOES THIS CONFORMER GET THE EXTENSION'S METHODS?** — the conditional filter, stated once for both
 	// passes. See `ExtensionTarget` for why only the interface door has anything to decide.
@@ -23583,7 +23588,7 @@ export type Parser
 		// Through `conformerAssociatedBindings`, NOT a second `bindingsForInterface` of its own: that accessor
 		// is where the positional-pairing gate lives, and this reader indexes the column exactly as the body
 		// scope does. Reading the column directly is what let the two answer differently — see its header.
-		return checkExtensionConstraints(index, constraints: header.constraints, bindings: self.conformerAssociatedBindings(header, conformer: conformer, index: index))
+		return checkExtensionConstraints(index, constraints: header.constraints, bindings: self.conformerAssociatedBindings(header, conformer: conformer, index: index), readerFilePath: self.extensionConformerLayout(conformer, index: index).declFilePath)
 	end 'extensionConformerVerdict'
 
 	// File the witness constraints a TYPE-extension method adds ON TOP of its target type's own, under the
@@ -25709,8 +25714,8 @@ export type Parser
 	// test is the one token `readTypeAliasDeclaration` discriminates the form on, asked of the same position.
 	//
 	// ⭐⭐ **`readsRangedDeclarations` IS WHERE THE TWO CALLERS PART, AND IT IS THE HALF OF F10 THAT WAS
-	// MISSING.** The names alone make *"does this type declare `SortIndex`?"* order-independent; they leave
-	// *"what does `Array.SortIndex` MEAN?"* to whichever `extension` body the directory walk folds first, which
+	// MISSING.** The names alone make *"does this type declare `X`?"* order-independent; they leave
+	// *"what does `Array.X` MEAN?"* to whichever `extension` body the directory walk folds first, which
 	// is the question `canonicalTupleElement` asks of every tuple element. The extension pre-pass therefore
 	// also READS each RANGED nested alias it walks past — the one form whose meaning is a pure function of its
 	// own tokens — and files it before any body's signatures are folded
@@ -25802,9 +25807,9 @@ export type Parser
 	//
 	// ⛔⛔ **`bits(n)` CANNOT BE ASKED BY KIND, AND OMITTING IT COST A WHOLE SIGNATURE.** `bits` is an ordinary
 	// IDENTIFIER (`byte`'s precedent), so a kind probe answers `identifier`. Without this arm the pre-pass
-	// publishes no range for a `bits(64)` `SortIndex`, and `canonicalTupleElement` keys
-	// `stdlib/helpers/sort/pdqsort.maxon`'s `(SortIndex, bool)` on the qualified spelling instead — ONLY on a
-	// walk that reaches `pdqsort.maxon` before its sibling declares the alias. That is `recordInnerAlias`'s own
+	// publishes no range for a `bits(64)` nested alias, and `canonicalTupleElement` keys a tuple naming it
+	// from a sibling extension on the qualified spelling instead — ONLY on a walk that reaches that file
+	// before its sibling declares the alias. That is `recordInnerAlias`'s own
 	// hazard, re-entered through a form its reader would not know.
 	function nestedAliasDeclaresARange(index TokenIndex) returns bool
 		return self.nestedAliasRhsBeginsWith(index, kind: TokenKind.int) or self.nestedAliasRhsBeginsWith(index, kind: TokenKind.float) or self.nestedAliasRhsDeclaresBits(index)
@@ -26852,14 +26857,14 @@ export type Parser
 	// copy of this match is a second answer waiting to disagree.
 	function functionAliasTypeName(declared MaxonType) returns ByteArray
 		return match declared 'k'
-			named(id) or
-				structRef or
-				function or
+			named(id) gives self.internedName(id)
+			structRef(id) gives self.internedName(id)
+			function(id) gives self.internedName(id)
 
-				// An existential DOES carry a re-internable name — the interface's — so a function alias whose
-				// parameter or result is declared at an interface type round-trips through a reader's interner
-				// exactly as a `structRef` one does.
-				interfaceRef gives self.internedName(id)
+			// An existential DOES carry a re-internable name — the interface's — so a function alias whose
+			// parameter or result is declared at an interface type round-trips through a reader's interner
+			// exactly as a `structRef` one does.
+			interfaceRef(id) gives self.internedName(id)
 			boolean or
 				integer or
 				float or
@@ -30381,7 +30386,7 @@ export type Parser
 	// refuse that name. The obligation is on the MINT — a value tagged `named` carries a real id — and
 	// `parseUnary`'s `-` arm records what it cost when one did not.
 	function declaredAliasOfNameId(nameId TypeNameId) returns DeclaredAlias
-		return self.signatures.aliasOf(self.internedName(nameId), readerFilePath: self.filePath)
+		return self.signatures.aliasOrInnerAliasOf(self.internedName(nameId), readerFilePath: self.filePath)
 	end 'declaredAliasOfNameId'
 
 	// ⭐ **THE SAME QUESTION ASKED OF AN INDEX-SPACE TYPE** — one read out of `ProgramSignatures` (a
@@ -30395,7 +30400,7 @@ export type Parser
 			return DeclaredAlias.undeclared
 		end 'spellsNoAlias'
 
-		return self.signatures.aliasOf(self.signatures.indexSpaceTypeName(indexSpaceType), readerFilePath: self.filePath)
+		return self.signatures.aliasOrInnerAliasOf(self.signatures.indexSpaceTypeName(indexSpaceType), readerFilePath: self.filePath)
 	end 'declaredAliasOfIndexSpaceType'
 
 	// The ranged-alias name a `(tag, nameId)` pair denotes, else EMPTY — the spelling of the question above
@@ -33055,14 +33060,14 @@ export type Parser
 		//     closed with its declaration (`restoreDeclaringTypeScope`).
 		//   • An EXTENSION body — the set below holds only what THIS body declared, and a nested `typealias` is a
 		//     MEMBER of the extended type, so every `extension` over that type may spell it whatever file it
-		//     lives in. `stdlib/helpers/sort/` is the case: six files write `export extension Array`,
-		//     `insertionSort.maxon:17` declares `SortIndex` and the other five spell it bare.
+		//     lives in. `stdlib/helpers/sort/` is the case: several files write `export extension Array`,
+		//     `insertionSort.maxon` declares `SortComparator` and the others spell it bare.
 		//
 		// ⛔ **THESE NAMES ARE NOT FLAT AND PROGRAM-WIDE.** An extension's `typealias` written into a
-		// program-wide table under its BARE name makes `SortIndex` nameable from any file at file scope,
+		// program-wide table under its BARE name makes `SortComparator` nameable from any file at file scope,
 		// and no such table can diagnose two types declaring one member name. The key is
 		// `<Type>.<member>` for exactly that reason (`qualifiedInnerGenericAlias`), and the whole of this
-		// widening is the ENCLOSING TYPE's own members — so `Array.SortIndex` reaches an `extension
+		// widening is the ENCLOSING TYPE's own members — so `Array.SortComparator` reaches an `extension
 		// Array` in any file and reaches nothing else anywhere.
 		//
 		// ⚠ **THE TYPE'S OWN BODY IS NOT GIVEN THIS, AND THAT IS THE PASS STRUCTURE RATHER THAN A PREFERENCE.**
@@ -37170,7 +37175,7 @@ export type Parser
 	function signedOperandAliasName(value ValueId) returns ByteArray
 		let name = self.operandAliasName(value)
 
-		match self.signatures.aliasOf(name, readerFilePath: self.filePath) 'alias'
+		match self.signatures.aliasOrInnerAliasOf(name, readerFilePath: self.filePath) 'alias'
 			undeclared then return EmptySourceText
 			declared(alias) then return EmptySourceText if rangeIsUnsigned(alias.low) else name
 		end 'alias'
@@ -37694,7 +37699,7 @@ export type Parser
 			return ValueTypeTag.integer
 		end 'compilerDeclaredIntAlias'
 
-		return match self.signatures.aliasOf(name, readerFilePath: scopeFilePath) 'a'
+		return match self.signatures.aliasOrInnerAliasOf(name, readerFilePath: scopeFilePath) 'a'
 			declared(alias) gives maxonTypeTag(alias.underlying)
 			undeclared gives ValueTypeTag.named
 		end 'a'
@@ -37729,20 +37734,20 @@ export type Parser
 			return tag
 		end 'notNamed'
 
-		return self.floatResolvedTagOfName(tag, name: self.internedName(nameId))
+		return self.floatResolvedTagOfNameFrom(tag, name: self.internedName(nameId), scopeFilePath: self.filePath)
 	end 'floatResolvedTag'
 
 	// The resolution above, asked of the NAME — the form the constant evaluator's cast target needs (see
 	// `rangedAliasTagOfName`). ONE statement of "a `named` tag over a ranged FLOAT alias is a `float`", so
 	// the body cast and the top-level-`let` cast cannot come to disagree about which types a cast may cross
 	// (`castHasNoLegalConversion`'s float-resolved precondition) or about what a rejection names.
-	function floatResolvedTagOfName(tag ValueTypeTag, name ByteArray) returns ValueTypeTag
+	function floatResolvedTagOfNameFrom(tag ValueTypeTag, name ByteArray, scopeFilePath FilePath) returns ValueTypeTag
 		if tag != ValueTypeTag.named 'notNamed'
 			return tag
 		end 'notNamed'
 
-		return ValueTypeTag.float if tagIsFloat(self.rangedAliasTagOfName(name)) else tag
-	end 'floatResolvedTagOfName'
+		return ValueTypeTag.float if tagIsFloat(self.rangedAliasTagOfNameFrom(name, scopeFilePath: scopeFilePath)) else tag
+	end 'floatResolvedTagOfNameFrom'
 
 	// A `named` tag REDUCED to whatever its ranged alias underlies — `Integer` to `integer`, `Percent`
 	// to `float` — with every other tag passing through. The general form of the two functions above,
@@ -39407,8 +39412,8 @@ export type Parser
 	function requireThrowingTryTarget(target TryTarget, tryTok Token) throws ParseError
 		match target 'kind'
 			named(callee) then try self.requireThrowingNamedTryTarget(callee, tryTok: tryTok)
-			witness(methodName, throwsClause) or
-				promise then try requireThrowingClauseTryTarget(methodName, throwsClause: throwsClause, tryTok: tryTok)
+			witness(methodName, throwsClause) then try requireThrowingClauseTryTarget(methodName, throwsClause: throwsClause, tryTok: tryTok)
+			promise(methodName, throwsClause) then try requireThrowingClauseTryTarget(methodName, throwsClause: throwsClause, tryTok: tryTok)
 
 			// A reply always throws `ServiceError`, whatever the message declares, so there is no
 			// non-throwing reply for E3055 to refuse — `tryTargetThrows` answers `throwing` for every one. A
@@ -41889,8 +41894,8 @@ export type Parser
 	function tryTargetThrows(target TryTarget) returns ThrowsClause
 		return match target 'kind'
 			named(callee) gives self.signatures.throwsOf(callee)
-			witness(_, throwsClause) or
-				promise gives throwsClause
+			witness(_, throwsClause) gives throwsClause
+			promise(_, throwsClause) gives throwsClause
 			serviceReply(messageName, _) gives ThrowsClause.throwing(String.from(self.signatures.serviceReplyErrorName(messageName)))
 			deferred gives ThrowsClause.none
 		end 'kind'
@@ -52072,7 +52077,7 @@ export type Parser
 
 		if scrutTag == ValueTypeTag.named 'aliasScrutinee'
 			let name = self.internedName(self.valueNameId(scrut))
-			return match self.signatures.aliasOf(name, readerFilePath: self.filePath) 'a'
+			return match self.signatures.aliasOrInnerAliasOf(name, readerFilePath: self.filePath) 'a'
 				declared(alias) gives not aliasIsFloat(alias)
 				undeclared gives false
 			end 'a'
@@ -52354,17 +52359,15 @@ export type Parser
 	end 'valueIsBoxedUnion'
 
 	// One arm's enum pattern, reduced to DISPATCH INTERVALS over the case tags (P1.1b + match-dispatch).
-	// Alternatives (`red or blue`) each contribute their interval(s), and EVERY alternative may carry a
-	// payload binding — the arm's bindings are the concatenation, whichever alternative wrote them
-	// (`stay or walk(dir) gives dir`, `specs/match-enum-or-pattern.md`). Replaces the old compare-emitting
-	// `emitEnumPatternCondition`: an enum/union tag is an i64, so an enum arm ALWAYS feeds the interval
-	// plan, and the per-case `== tag` compare is emitted later — once — by the dispatch itself.
+	// Alternatives (`red or blue`) each contribute their interval(s); an enum/union tag is an i64, so an
+	// enum arm ALWAYS feeds the interval plan, and the per-case `== tag` compare is emitted later — once —
+	// by the dispatch itself.
 	//
 	// ⚠ **THE BINDINGS ARE ONE LIST FOR THE WHOLE ARM BECAUSE THEY LOAD AT ONE PLACE** — the head of the
 	// single body block every alternative branches to (`parseMatchCommon` → `declarePayloadBindings`) —
 	// so they are read on EVERY covered case's path, not just the one whose alternative declared them.
-	// That is what makes the spec's shape well defined and what makes four other shapes garbage;
-	// `requireArmBindingsAreDistinct` and `requireOrArmPayloadSlotsAgree` are where the difference is decided.
+	// `requireArmBindingsAreDistinct` and `requireOrArmPayloadSlotsAgree` together make an arm that binds
+	// a payload cover exactly one case.
 	//
 	// `intervalMark` is the arm's own slice of the interval plan — `into` accumulates across ALL arms, so it
 	// is what says which intervals, i.e. which cases, belong to THIS arm. It is PASSED IN rather than
@@ -52539,7 +52542,7 @@ export type Parser
 				end 'installsNothing'
 
 				if earlier.slot == binding.slot 'oneSlotBoundTwice'
-					throw ParseError.matchArmPayloadBindingConflict(String.from(binding.nameTok.value), reason: "payload slot {binding.slot} is already bound by '{String.from(earlier.nameTok.value)}' in this arm. An arm's alternatives share one slot region and one arm body, so binding a slot twice loads the same value twice — and for a managed payload out of a scrutinee this frame owns, moves it out of the box twice and leaves the arm holding null. Bind the slot on ONE alternative and write this one's case name bare: a bare name on a payload-carrying case is legal, and the single binding already serves every alternative", line: binding.nameTok.line, column: binding.nameTok.column)
+					throw ParseError.matchArmPayloadBindingConflict(String.from(binding.nameTok.value), reason: "payload slot {binding.slot} is already bound by '{String.from(earlier.nameTok.value)}' in this arm. An arm's alternatives share one slot region and one arm body, so binding a slot twice loads the same value twice — and for a managed payload out of a scrutinee this frame owns, moves it out of the box twice and leaves the arm holding null. Give each case an arm of its own", line: binding.nameTok.line, column: binding.nameTok.column)
 				end 'oneSlotBoundTwice'
 
 				if earlier.nameTok.value.equals(binding.nameTok.value) 'oneNameBoundTwice'
@@ -52549,39 +52552,15 @@ export type Parser
 		end 'eachBinding'
 	end 'requireArmBindingsAreDistinct'
 
-	// ⭐⭐ **EVERY CASE AN ARM COVERS MUST HOLD WHAT THE ARM'S BINDINGS READ (E3129).** The bindings are
+	// ⭐⭐ **EVERY CASE AN ARM COVERS MUST BIND WHAT THE ARM'S BINDINGS READ (E3129).** The bindings are
 	// loaded once, unconditionally, at the head of the arm BODY, and every alternative of an `or`-chain
-	// branches to that one body — so the load runs on the path of every covered case, and each of them has
-	// to present the bound slot as the binding's own type.
+	// branches to that one body — so the load runs on the path of every covered case. A case that binds
+	// nothing at the slot, payload-less or named bare, would hand the body a value no pattern bound, so
+	// each binding is admitted only on its own case's path.
 	//
-	// ⭐ **THE SPEC'S SHAPE IS ADMITTED BY A CONSTRUCTION GUARANTEE, NOT BY LUCK — AND THE LOAD-BEARING HALF
-	// IS THE ZERO-FILL, NOT THE ALLOCATOR.** `stay or walk(dir) gives dir` reads 0 on the `stay` path because
-	// `emitEnumBox` sizes every box for the WIDEST case (`boxSizeBytes` over `maxPayloadArity`) and then
-	// EXPLICITLY STORES 0 into the slots a narrow case does not fill (its `zeroFill` loop, whose own header
-	// states the fill is MANDATORY); the union cloner preserves it by blitting the whole box. The slab's
-	// zeroing contract (docs/internals/memory-allocator.md) also leaves those slots 0, but it is a property
-	// of the allocator, which this layout does not choose — so this rule cites the store. That is why
-	// `specs/match-enum-or-pattern.md` can pin `stay=0`, and `emitEnumBox` carries the back-reference
-	// saying a diagnostic depends on it.
-	//
-	// ⚠ **WHETHER THAT 0 IS A VALUE AT ALL IS A SEPARATE QUESTION**, asked of the binding's own type by
-	// `zeroInhabitsPayloadType` — see it for the two measured faults that come of asking a drop-ownership
-	// predicate instead.
-	//
-	// ⚠ **THE SHAPES REFUSED HERE ARE WRONG ANSWERS, not a deferred feature:**
-	//   • a bound slot another covered case declares with a DIFFERENT type — `speak(msg String) or
-	//     walk(dir) gives dir` — printed `speak=7078117`, the String record's POINTER read as an integer.
-	//     No crash and no diagnostic, which is the worst of the three.
-	//   • a binding whose type does not admit 0, on a slot a covered case leaves empty — `stay or speak(msg)
-	//     gives msg.count()` dereferenced the zero-filled slot (**0xC0000005**), and so did a FUNCTION-typed
-	//     payload called through address 0. The zero that makes an `int` binding well defined is a null
-	//     pointer for those, so one construction fact decides the two oppositely — see
-	//     `zeroInhabitsPayloadType`, which is the half that says which.
-	// Neither is fixable by emitting better code: the arm body is compiled ONCE and its binding has ONE
-	// type, so no per-alternative edge (block args included) can make one name mean a String on one
-	// incoming edge and an integer on another — and no value exists to give a `String` binding on a case
-	// that carries no String. So the honest answer is a refusal, as it is for the related hazard one
-	// construct over (`rejectFallthroughIntoBindingArm`).
+	// The arm body is compiled ONCE and its binding has ONE type, so no per-alternative edge can make one
+	// name mean a String on one incoming edge and an integer on another; the honest answer is a refusal,
+	// as it is for the related hazard one construct over (`rejectFallthroughIntoBindingArm`).
 	//
 	// Vacuous for a single-case arm — `walk(dir)` covers only `walk`, which declares the slot it binds — so
 	// the rule is stated once for every enum arm rather than behind an "is this an or-chain" test.
@@ -52613,15 +52592,13 @@ export type Parser
 				continue
 			end 'anotherArmsCase'
 
-			let payloads = layout.payloadsAt(ci)
-
 			for binding in arm.bindings 'eachBinding'
 				// A `_` reads nothing, so no case has to hold anything for it.
 				if binding.isDiscard 'discarded'
 					continue
 				end 'discarded'
 
-				try self.requireCaseHoldsBoundSlot(layout, caseIndex: ci, payloads: payloads, binding: binding)
+				try self.requireCaseHoldsBoundSlot(layout, caseIndex: ci, binding: binding)
 			end 'eachBinding'
 		end 'eachCase'
 	end 'requireOrArmPayloadSlotsAgree'
@@ -52655,75 +52632,14 @@ export type Parser
 		return false
 	end 'armCoversTag'
 
-	// One (covered case, binding) pair — the whole of E3129's rule, and both of its arms turn on the same
-	// question: what does THIS case put in the slot the binding reads?
-	function requireCaseHoldsBoundSlot(layout EnumLayout, caseIndex CaseIndex, payloads PayloadFieldArray, binding PayloadBinding) throws ParseError
-		let bound = self.signatures.payloadTypeOf(binding.field, layout: layout, into: self.artifact.typeNames)
-
-		if binding.slot >= payloads.count() 'caseLeavesTheSlotEmpty'
-			// Nothing is ever stored there on this case's path — `emitEnumBox` ZERO-FILLS a narrow case's
-			// unused slots — so the binding reads 0. Legal exactly where 0 is a value of the binding's own
-			// type, which is a question about the SLOT and not about who owes a drop.
-			if self.zeroInhabitsPayloadType(bound) 'zeroIsAValueOfThisType'
-				return
-			end 'zeroIsAValueOfThisType'
-
-			throw ParseError.matchArmPayloadBindingConflict(String.from(binding.nameTok.value), reason: "case '{String.from(layout.caseNameAt(caseIndex))}' of `{layout.kindWord()} {String.from(layout.name)}` carries no payload in slot {binding.slot}, so on that case's path the binding reads the zero the box was filled with — and zero is not a value of the type '{String.from(binding.field.name)}' is declared at. Give '{String.from(layout.caseNameAt(caseIndex))}' an arm of its own", line: binding.nameTok.line, column: binding.nameTok.column)
-		end 'caseLeavesTheSlotEmpty'
-
-		// Both types come from `payloadTypeOf` into THIS file's interner, which is the precondition
-		// `maxonTypesDenoteSame` states for its `named` arm — two ids from different interners would be
-		// incomparable.
-		let here = try payloads.get(binding.slot) otherwise panic("requireCaseHoldsBoundSlot: payloads.get OOB at slot {binding.slot} after the count guard")
-
-		if maxonTypesDenoteSame(self.signatures.payloadTypeOf(here, layout: layout, into: self.artifact.typeNames), b: bound) 'sameTypeInTheSlot'
+	function requireCaseHoldsBoundSlot(layout EnumLayout, caseIndex CaseIndex, binding PayloadBinding) throws ParseError
+		if binding.caseIndex == caseIndex 'thisCaseBindsIt'
 			return
-		end 'sameTypeInTheSlot'
+		end 'thisCaseBindsIt'
 
-		throw ParseError.matchArmPayloadBindingConflict(String.from(binding.nameTok.value), reason: "case '{String.from(layout.caseNameAt(caseIndex))}' of `{layout.kindWord()} {String.from(layout.name)}` declares its own payload '{String.from(here.name)}' in slot {binding.slot}, of a different type from the '{String.from(binding.field.name)}' being bound — so on that case's path the binding would read one type's bytes as another's. Give '{String.from(layout.caseNameAt(caseIndex))}' an arm of its own", line: binding.nameTok.line, column: binding.nameTok.column)
+		let caseName = String.from(layout.caseNameAt(caseIndex))
+		throw ParseError.matchArmPayloadBindingConflict(String.from(binding.nameTok.value), reason: "case '{caseName}' of `{layout.kindWord()} {String.from(layout.name)}` binds nothing at payload slot {binding.slot}, so on that case's path the arm body would read a value no pattern bound. Give '{caseName}' an arm of its own", line: binding.nameTok.line, column: binding.nameTok.column)
 	end 'requireCaseHoldsBoundSlot'
-
-	// ⭐⭐ **IS 0 PROVABLY A VALUE OF THIS PAYLOAD TYPE? — a question about the SLOT, and deliberately NOT
-	// `payloadClassIsManaged`.** That predicate is documented as the single reader of *"does this class own a
-	// heap drop?"*, a DECLARATION-view question, and asking it this one instead FAILS OPEN on every type that
-	// owes no drop yet has no zero: a `function`-typed payload classifies `scalar` (a code pointer is an
-	// inline i64), so `idle or run(op) gives op(3)` called through address 0 — **MEASURED 0xC0000005**, on
-	// `specs/first-class-functions.md`'s own `Action` union; a `typeParam` answers false for the reason
-	// its own header gives (*"the DECLARATION view's answer rather than the slot's"*) while a managed
-	// instantiation makes 0 a null reference; and a ranged alias excluding zero (`int(1 to 10)`) bound 0,
-	// **MEASURED `off=0`**, outside its own declared domain. It is the same one-predicate-two-facts shape
-	// `moveOutManagedPayload` records six segfaults for.
-	//
-	// ⚠ **IT FAILS CLOSED: it admits only what it can PROVE, and every unlisted type is refused.** A new
-	// `ValueTypeTag` therefore lands as a false reject — a diagnostic — rather than as the null dereference
-	// the open default was. That is also why it is written as an explicit admit-list and not as an exhaustive
-	// `match`: the default here must be a REFUSAL, and a `match` arm added by a future tag would have to
-	// choose an answer where "not yet reasoned about" is the honest one.
-	//
-	// A RANGED ALIAS answers from its own bounds through `literalInRange` — the one door that knows a range's
-	// upper bound may be an unsigned pattern (`int(0 to u64.max)` stores `high` as -1), so a naive
-	// `high >= 0` would refuse it. A FLOAT alias is skipped first: its bounds are IEEE-754 patterns and this
-	// asks an integer question, the identical domain guard `requireOtherwiseLiteralInRange` makes.
-	//
-	// A `named` type that is NOT a ranged alias is refused, which is the arm that covers an ENUM payload:
-	// an enum's tags are its values and need not include 0 at all (`red = 1`), so zero would bind a
-	// non-existent case. A struct, a union, a tuple and a generic instance are refused by the same arm, each
-	// because 0 there is a null pointer.
-	function zeroInhabitsPayloadType(slotType MaxonType) returns bool
-		if maxonTypeTag(slotType) == ValueTypeTag.named 'aNamedType'
-			return match self.declaredAliasOfNameId(typeNameIdOf(slotType)) 'a'
-				// `writtenNegative: false` is not a default taken for want of a better one: the subject is the
-				// literal ZERO this predicate is named for, and zero is not a negative number under any spelling.
-				declared(alias) gives not aliasIsFloat(alias) and literalInRange(0, low: alias.low, high: alias.high, isFloat: false, writtenNegative: false)
-				undeclared gives false
-			end 'a'
-		end 'aNamedType'
-
-		// The three primitive domains that contain zero: `int` spans it, `bool` reads it as `false`, and
-		// `ExitCode`'s range starts at 0 (`Project.exitCodeAliasHigh` moves only the upper bound).
-		let tag = maxonTypeTag(slotType)
-		return tag == ValueTypeTag.integer or tag == ValueTypeTag.boolean or tag == ValueTypeTag.exitCode
-	end 'zeroInhabitsPayloadType'
 
 	// One alternative: a single case (`red`, or `walk(dir)` binding its payload) or a case-name range
 	// (`low to high`, `low upto high`). Only the single-case form may carry payload bindings — a range
@@ -53056,9 +52972,9 @@ export type Parser
 				let field = try payloads.get(bindings.count()) otherwise panic("parseCasePayloadBindings: payloads.get OOB below the declared arity")
 
 				if nameTok.value.equals(DiscardBindingName) 'discard'
-					bindings.push(PayloadBinding.discard(nameTok, field: field, slot: bindings.count()))
+					bindings.push(PayloadBinding.discard(nameTok, field: field, slot: bindings.count(), caseIndex: caseIndex))
 				end 'discard' else 'realBinding'
-					bindings.push(PayloadBinding.bound(nameTok, field: field, slot: bindings.count()))
+					bindings.push(PayloadBinding.bound(nameTok, field: field, slot: bindings.count(), caseIndex: caseIndex))
 					allDiscard = false
 				end 'realBinding'
 			end 'withinTheDeclaredArity'
@@ -56048,8 +55964,13 @@ export type Parser
 	// route to this list — its diagnostics are recorded on the declaration and re-raised where the
 	// declaration is written. Both spellings decide by the ONE predicate below and report the ONE
 	// message (`HiddenTypeNameMessage`) at the same anchor; only WHEN they surface differs.
-	function recordHiddenCastTarget(targetAlias DeclaredAlias, targetTok Token)
-		if not self.aliasHiddenFromThisFile(targetAlias) 'visible'
+	function recordHiddenCastTarget(targetType MaxonType, targetAlias DeclaredAlias, targetTok Token)
+		match targetAlias 'resolved'
+			undeclared then return
+			declared then break 'resolved'
+		end 'resolved'
+
+		if not self.aliasHiddenFromThisFile(self.signatures.aliasOf(self.internedName(typeNameIdOf(targetType)), readerFilePath: self.filePath)) 'visible'
 			return
 		end 'visible'
 
@@ -56610,7 +56531,7 @@ export type Parser
 		end 'aBrandOfTheSameInstance'
 
 		let targetAlias = self.declaredAliasOfType(targetType)
-		self.recordHiddenCastTarget(targetAlias, targetTok: targetTok)
+		self.recordHiddenCastTarget(targetType, targetAlias: targetAlias, targetTok: targetTok)
 
 		// ⭐ **E3010, ABOVE THE THREE CONVERSION ARMS** — because it is a question about the two DECLARED
 		// types and not about the conversion any arm chooses: the int→float widening `i as JsonFloat` is as
@@ -56976,7 +56897,7 @@ export type Parser
 			throw ParseError.unknownTypeName(String.from(name), line: asTok.line, column: asTok.column)
 		end 'undeclared'
 
-		return self.floatResolvedTagOfName(maxonTypeTag(denoted), name: name)
+		return self.floatResolvedTagOfNameFrom(maxonTypeTag(denoted), name: name, scopeFilePath: self.filePath)
 	end 'denotedCastTargetTag'
 
 	// ⛔⛔ **A CAST WHOSE SOURCE IS AN ENUM/UNION IS E3009, WHATEVER THE TARGET (A4o)** — the oracle's rule,
@@ -62127,8 +62048,8 @@ export type Parser
 
 				// A bare `<Type>.create()` default is CALLED here exactly as any other expression default is:
 				// the fold that describes it instead belongs to a top-level `let`, which builds no box at all.
-				helper(helperName) or
-					bareCreateHelper then try self.fillFieldDefaultFromHelper(helperName, index: i, fieldValues: fieldValues, filled: filled, anchor: anchor)
+				helper(helperName) then try self.fillFieldDefaultFromHelper(helperName, index: i, fieldValues: fieldValues, filled: filled, anchor: anchor)
+				bareCreateHelper(helperName) then try self.fillFieldDefaultFromHelper(helperName, index: i, fieldValues: fieldValues, filled: filled, anchor: anchor)
 			end 'declared'
 		end 'eachField'
 	end 'applyFieldDefaults'
@@ -64387,12 +64308,8 @@ export type Parser
 			end 'andItsWitnessHalf'
 		end 'storeEach'
 
-		// ⚠ **A DIAGNOSTIC NOW RESTS ON THIS LOOP.** E3129 admits `stay or walk(dir) gives dir` — a binding
-		// read on the path of a case that declares no such slot — because this fill pins a deterministic 0
-		// there, and `Parser.zeroInhabitsPayloadType` decides whether that 0 is a value of the binding's
-		// type. It is THIS store the guarantee rests on, not the slab's zeroing (which carries a
-		// "a future free-list must re-zero" caveat this does not); the union cloner preserves it by blitting
-		// the whole box (`MmRuntime.synthesizeUnionCloner`). Removing the fill silently un-defines that spec.
+		// The fill keeps a box's bytes deterministic whatever the allocator returns; the union cloner blits
+		// the whole box (`MmRuntime.synthesizeUnionCloner`), so it copies these slots too.
 		for j in payloads.count() upto layout.maxPayloadArity() 'zeroFill'
 			let zero = self.emitLiteral(0, valueType: MaxonType.integer, range: range)
 			self.emitIndirectStore(box, offset: layout.payloadSlotOffset(j), value: zero, storageType: MaxonType.integer, range: range)
@@ -64918,13 +64835,13 @@ export type Parser
 			// makes `Wrap.wrap(Other.a(5))` a positioned refusal rather than an `Other` box read back under
 			// `Inner`'s destructor. `isString: false` — a union box is an aggregate, never copied by the
 			// fused-record protocol a String takes.
-			nestedUnion(storage) or
+			nestedUnion(storage) then try self.requireManagedValueMatches(storage, isString: false, value: value, placeDoor: FunctionTypeDoor.payload, placeName: field.name, placeOwner: EmptySourceText, placeBrand: EmptySourceText, voice: voice, anchor: argTok)
 
-				// The promise's own type check, and it must NOT go through `requireScalarPayloadArg`: that door
-				// compares TAGS, and a `genericInstance` against the declared `named` alias is an E3005 about a
-				// promise being stored in the promise slot that declares it. `requireManagedValueMatches` compares
-				// the two as the aggregate identities they are.
-				greenThread then try self.requireManagedValueMatches(storage, isString: false, value: value, placeDoor: FunctionTypeDoor.payload, placeName: field.name, placeOwner: EmptySourceText, placeBrand: EmptySourceText, voice: voice, anchor: argTok)
+			// The promise's own type check, and it must NOT go through `requireScalarPayloadArg`: that door
+			// compares TAGS, and a `genericInstance` against the declared `named` alias is an E3005 about a
+			// promise being stored in the promise slot that declares it. `requireManagedValueMatches` compares
+			// the two as the aggregate identities they are.
+			greenThread(storage) then try self.requireManagedValueMatches(storage, isString: false, value: value, placeDoor: FunctionTypeDoor.payload, placeName: field.name, placeOwner: EmptySourceText, placeBrand: EmptySourceText, voice: voice, anchor: argTok)
 
 			// An undeclared payload name is a user error TypeResolution reports (E3011); the op is kept
 			// well-formed for the instant before the pipeline's error gate throws — nothing to check here.
@@ -68882,14 +68799,14 @@ export type Parser
 		let range = SourceRange.between(typeTok, last: methodTok)
 
 		if methodTok.value.equals(ManagedSocketTcpConnectMethod) 'tcpConnect'
-			return try self.emitManagedSocketDialCall(func, methodTok: methodTok, callee: ManagedSocketTcpConnectName, range: range)
+			return try self.emitManagedSocketTcpConnectCall(func, methodTok: methodTok, range: range)
 		end 'tcpConnect'
 
 		// ⭐ **`bindListener(host, port: p)` — THE SERVER SIDE's ONLY STATIC.** It BINDS and LISTENS in one
 		// call and answers a socket that can do neither `sendFrom` nor `recv`; `stdlib/TcpListener.maxon` is
 		// the wrapper that states that in the type system, and its header carries why the box is this type.
 		if methodTok.value.equals(ManagedSocketBindListenerMethod) 'bindListener'
-			return try self.emitManagedSocketDialCall(func, methodTok: methodTok, callee: ManagedListenerBindName, range: range)
+			return try self.emitManagedSocketBindCall(func, methodTok: methodTok, range: range)
 		end 'bindListener'
 
 		throw ParseError.unsupported("`{String.from(ManagedSocketTypeName)}` static '{String.from(methodTok.value)}' — the type has exactly these two: `tcpConnect` and `bindListener`", line: methodTok.line, column: methodTok.column)
@@ -68970,18 +68887,40 @@ export type Parser
 		throw ParseError.unsupported("`{String.from(ManagedSocketTypeName)}` method '{String.from(methodTok.value)}' — the type has exactly these nine: `sendFrom()`, `recv()`, `close()`, `shutdownWrite()`, `setReadDeadline()`, `setWriteDeadline()`, `timedOut()`, `boundPort()` and `accept()`", line: methodTok.line, column: methodTok.column)
 	end 'dispatchManagedSocketMethod'
 
-	// One body for both `(host, port:)` statics: they differ only in the callee, and two copies of an argument
-	// list is how one of them would quietly acquire a different label rule. Both produce an OWNED box whose
+	// One reader of the `(host, port:)` endpoint for both statics: two copies of an argument list is how one
+	// of them would quietly acquire a different label rule. Both produce an OWNED box whose
 	// drop is `__ms_destruct` — the RAII close (`SignatureIndex.managedNameDropCallee`).
-	function emitManagedSocketDialCall(func IrFunction, methodTok Token, callee ByteArray, range SourceRange) returns ValueId throws ParseError
+	function parseManagedSocketEndpointArgs(func IrFunction, methodTok Token) returns (ValueId, ValueId) throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let host = try self.parseManagedMemoryArg(func, paramName: ManagedSocketHostParamName, methodTok: methodTok)
 		try self.consumeArrayArgLabel(ManagedSocketPortParamName, required: false)
 		let port = try self.parseBuiltinIntegerArg(func, paramName: ManagedSocketPortParamName, methodTok: methodTok)
+		return (host, port)
+	end 'parseManagedSocketEndpointArgs'
+
+	function emitManagedSocketBindCall(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws ParseError
+		let endpoint = try self.parseManagedSocketEndpointArgs(func, methodTok: methodTok)
 		try self.consume(TokenKind.rightParen)
 
-		return self.emitOwnedRuntimeResult(callee, args: pairArgs(host, second: port), resultTag: ValueTypeTag.structRef, resultNameId: self.managedSocketNameId(), range: range)
-	end 'emitManagedSocketDialCall'
+		return self.emitOwnedRuntimeResult(ManagedListenerBindName, args: pairArgs(endpoint.0, second: endpoint.1), resultTag: ValueTypeTag.structRef, resultNameId: self.managedSocketNameId(), range: range)
+	end 'emitManagedSocketBindCall'
+
+	function emitManagedSocketTcpConnectCall(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws ParseError
+		let endpoint = try self.parseManagedSocketEndpointArgs(func, methodTok: methodTok)
+		let deadline = try self.parseManagedSocketConnectDeadline(func, methodTok: methodTok, range: range)
+		try self.consume(TokenKind.rightParen)
+
+		return self.emitOwnedRuntimeResult(ManagedSocketTcpConnectName, args: tripleArgs(endpoint.0, second: endpoint.1, third: deadline), resultTag: ValueTypeTag.structRef, resultNameId: self.managedSocketNameId(), range: range)
+	end 'emitManagedSocketTcpConnectCall'
+
+	function parseManagedSocketConnectDeadline(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws ParseError
+		if self.at(TokenKind.rightParen) 'noDeadlineGiven'
+			return self.emitLiteral(ManagedSocketNoDeadlineMs, valueType: MaxonType.integer, range: range)
+		end 'noDeadlineGiven'
+
+		try self.consumeArrayArgLabel(ManagedSocketDeadlineParamName, required: false)
+		return try self.parseBuiltinIntegerArg(func, paramName: ManagedSocketDeadlineParamName, methodTok: methodTok)
+	end 'parseManagedSocketConnectDeadline'
 
 	// One body for both deadline setters: they differ only in the callee, and two copies of an argument list is
 	// how one of them would quietly acquire a different label rule.
@@ -77153,7 +77092,7 @@ export type Parser
 			// array read AGREE with a function return, which never erased: `function pick(v Byte) returns
 			// Byte` already yields a `named`-tagged value, so `[pick(72)]` was an `Array with Byte` while
 			// `[bytes.get(0)]` was not.
-			if let underlying = try self.signatures.aliasUnderlyingInAnyFile(name) 'rangedAlias'
+			if let underlying = try self.signatures.aliasUnderlyingFor(name, readerFilePath: self.filePath) 'rangedAlias'
 				// A FLOAT-underlying alias resolves to `float` exactly as it does everywhere else
 				// (`resolveFloatAliasType`) — the `named` tag cannot carry a float VALUE, whose class is XMM.
 				return MaxonType.float if tagIsFloat(maxonTypeTag(underlying)) else declared
@@ -83913,8 +83852,8 @@ export type Parser
 				// `requireAllFieldsInitialized` is what says so — not this function.
 				none then continue
 				literal(payload, tag, writtenNegative) then try self.fillConstFieldDefault(calls, layout: layout, index: i, value: ConstFactoryArgumentValue.folded(ConstFoldedValue.scalar(ConstValue.create(payload, tag: tag, writtenNegative: writtenNegative))), fields: fields, filled: filled, anchor: anchor)
-				helper(helperName) or
-					bareCreateHelper then try self.foldFieldDefaultByCall(calls, layout: layout, index: i, helperName: helperName, fields: fields, filled: filled, anchor: anchor)
+				helper(helperName) then try self.foldFieldDefaultByCall(calls, layout: layout, index: i, helperName: helperName, fields: fields, filled: filled, anchor: anchor)
+				bareCreateHelper(helperName) then try self.foldFieldDefaultByCall(calls, layout: layout, index: i, helperName: helperName, fields: fields, filled: filled, anchor: anchor)
 			end 'declared'
 		end 'eachField'
 	end 'applyConstFieldDefaults'
@@ -91088,7 +91027,7 @@ export type Parser
 			return repaired
 		end 'theSlotsMeaningHasNoTrueErasure'
 
-		return try self.signatures.aliasUnderlyingInAnyFile(name) otherwise repaired
+		return try self.signatures.aliasUnderlyingFor(name, readerFilePath: scopeFilePath) otherwise repaired
 	end 'scopeCrossedType'
 
 	function mintOwnedCallResult(inner MaxonType, scopeFilePath FilePath) returns ValueId

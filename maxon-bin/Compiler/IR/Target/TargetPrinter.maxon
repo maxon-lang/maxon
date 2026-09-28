@@ -415,10 +415,12 @@ function rdataPayloadNote(label ByteArray, globalData GlobalDataTable) returns S
 		stringBlob or
 			traceTag or
 			envName or
-			coveragePath gives payloadTextNote(globalData.payloadOf(name))
+			coveragePath or
+			runtimeAbortMessage gives payloadTextNote(globalData.payloadOf(name))
 
 		// A float island needs none — its LABEL is its value (`GlobalDataTable.registerFloatConstant`).
 		floatConstant or
+
 			// STRUCTURE: bytes only a decoder can read, so the label stands alone.
 			byteArrayBlob or
 			jumpTable or
@@ -857,6 +859,7 @@ function opIsArm64Band(op TargetOp) returns bool
 			loadRegBaseIndexScale or
 			storeBaseIndexScaleReg or
 			mulHighReg or
+
 			// ⛔ The counter is one op shared by both ISAs, so `true` here would make a pure-x64 module
 			// holding one report as arm64 and print every op in it against the wrong register file.
 			covInc or
@@ -1144,8 +1147,8 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 		// The jump tables render the biased index, the default, and the slot→target table run-length
 		// encoded (`[lo..hi]=label`), so a range/`or` arm's several identical slots collapse to one entry
 		// and the table stays readable even at the span cap.
-		x64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) or
-			arm64JumpTable gives "jumpTable {sharedVregName(indexReg, cpu: cpu)}, default={blockPrintName(defaultTarget, names: names)} [{formatJumpTableSlots(caseTargets, names: names)}] @{String.from(tableLabel)}"
+		x64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) gives formatJumpTable(indexReg, defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel, cpu: cpu, names: names)
+		arm64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) gives formatJumpTable(indexReg, defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel, cpu: cpu, names: names)
 		callMem(baseReg, disp) gives "callMem [{vregName(baseReg)} + {disp}]"
 
 		// The arm64 stack-argument pair renders the SLOT, not an address, because a slot is all either op
@@ -1157,8 +1160,8 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 		// here is. `arm64VregName` renders a GPR `x<n>` and an FP register `d<n>`, so the operand names
 		// tell the two directions apart (`fmov x0, d1` against `fmov d0, x1`) and both apart from the
 		// FP→FP `fmov` the shared `movRegReg` emits (`fmov d0, d1`).
-		arm64FmovGprFp(dest, src) or
-			arm64FmovFpGpr gives "fmov {arm64VregName(dest)}, {arm64VregName(src)}"
+		arm64FmovGprFp(dest, src) gives formatArm64Fmov(dest, src: src)
+		arm64FmovFpGpr(dest, src) gives formatArm64Fmov(dest, src: src)
 
 		// Printed like its two slot neighbours: the SLOT, not the displacement, because the displacement is
 		// the encoder's and a golden that spelled it would move whenever an unrelated frame grew.
@@ -1220,6 +1223,14 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 		x64AluBaseDispImm32(base, disp, imm, alu) gives "aluBaseDispImm32.{alu.name} [{vregName(base)} + {disp}], {imm}"
 	end 'op'
 end 'formatTargetOp'
+
+function formatArm64Fmov(dest TargetVReg, src TargetVReg) returns String
+	return "fmov {arm64VregName(dest)}, {arm64VregName(src)}"
+end 'formatArm64Fmov'
+
+function formatJumpTable(indexReg TargetVReg, defaultTarget BlockId, caseTargets BlockIdArray, tableLabel ByteArray, cpu CpuArch, names BlockPrintNames) returns String
+	return "jumpTable {sharedVregName(indexReg, cpu: cpu)}, default={blockPrintName(defaultTarget, names: names)} [{formatJumpTableSlots(caseTargets, names: names)}] @{String.from(tableLabel)}"
+end 'formatJumpTable'
 
 // Render a jump table's slot→target array run-length encoded: consecutive slots with the same target
 // become one `[lo..hi]=label` entry (or `[i]=label` for a single slot), so an arm's several slots read

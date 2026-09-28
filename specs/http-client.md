@@ -17,7 +17,11 @@ HTTP/1.1 client for making HTTP requests over TCP connections.
 - `HttpResponse` — represents an HTTP response with status code, headers, body
 - `HttpHeaders` — case-insensitive header map
 - `HttpMethod` — enum of HTTP methods (get, post, put, delete, head, patch)
-- `HttpError` — error enum for HTTP operations
+- `HttpError` — error enum for HTTP operations: `invalidUrl`, `connectFailed`, `sendFailed`, `recvFailed`,
+  `invalidResponse`, `unsupportedScheme`, `timedOut`, `bodyTooLarge`
+- `StatusCode` — union of named status codes plus `other(code HttpStatusNumber)`; `number()` gives the code
+- `HttpClientLimits` — `timeoutMs` bounds the whole exchange, connect included (default 30000);
+  `maxBodyBytes` caps the response body (default `HttpBodyCap.unbounded`)
 
 **Quick usage:**
 
@@ -37,7 +41,7 @@ function postData() returns ExitCode throws HttpError
   request.setHeader("content-type", value: "application/json")
   request.setBody("hello=world")
   let response = try HttpClient.send(request)
-  print(response.statusCode())
+  print(response.statusCode().number())
   return 0
 end 'postData'
 ```
@@ -85,6 +89,8 @@ function main() returns ExitCode
 			sendFailed gives 4
 			recvFailed gives 5
 			invalidResponse gives 6
+			timedOut gives 8
+			bodyTooLarge gives 9
 		end 'why'
 	end 'refused'
 
@@ -191,7 +197,7 @@ function fetch(port NetworkPort, method HttpMethod) returns String
 		return e.name
 	end 'failed'
 
-	return "{response.statusCode().rawValue} [{response.body()}]"
+	return "{response.statusCode().number()} [{response.body()}]"
 end 'fetch'
 
 function exchange(listener TcpListener, method HttpMethod, answer String) returns String
@@ -215,6 +221,226 @@ end 'main'
 ```stdout
 get=200 [hello] prompt=true peer=connectionClosed
 head=200 [] prompt=true peer=connectionClosed
+```
+```exitcode
+0
+```
+
+<!-- test: http-client.an-unlisted-status-is-carried-by-its-number -->
+<!-- procs: 1 -->
+**A FINAL STATUS THE CLIENT HAS NO NAME FOR IS STILL A RESPONSE.** Any three-digit status is valid HTTP, so a
+`299` is carried in `StatusCode.other` with its number, and has an empty reason phrase, as Go's
+`http.StatusText` does; a listed status keeps its named case.
+```maxon
+let RequestBytes = 4096
+
+function answer(listener TcpListener, reply String) returns String
+	let conn = try listener.accept() otherwise return "accept-failed"
+	_ = try conn.recv(RequestBytes) otherwise return "recv-failed"
+	_ = try conn.send(reply) otherwise return "send-failed"
+	conn.close()
+
+	return "answered"
+end 'answer'
+
+function exchange(listener TcpListener, reply String) returns String
+	let peer = async answer(listener, reply: reply)
+
+	let response = try HttpClient.get("http://127.0.0.1:{listener.port()}/") otherwise (e) 'failed'
+		return "{e.name} peer={await peer}"
+	end 'failed'
+
+	let code = response.statusCode()
+
+	return "{code.name} {code.number()} phrase=[{reasonPhraseOf(code)}] [{response.body()}] peer={await peer}"
+end 'exchange'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+
+	print("listed={exchange(listener, reply: "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")}\n")
+	print("unlisted={exchange(listener, reply: "HTTP/1.1 299 Custom\r\nContent-Length: 2\r\n\r\nhi")}\n")
+	print("two-digits={exchange(listener, reply: "HTTP/1.1 99 Short\r\nContent-Length: 2\r\n\r\nhi")}\n")
+	return 0
+end 'main'
+```
+```stdout
+listed=ok 200 phrase=[OK] [ok] peer=answered
+unlisted=other 299 phrase=[] [hi] peer=answered
+two-digits=invalidResponse peer=answered
+```
+```exitcode
+0
+```
+
+<!-- test: http-client.every-named-status-round-trips-through-its-number -->
+```maxon
+typealias NamedCount = int(0 to 100)
+
+function successor(code StatusCode) returns StatusCode
+	return match code 'which'
+		ok gives StatusCode.created
+		created gives StatusCode.accepted
+		accepted gives StatusCode.noContent
+		noContent gives StatusCode.movedPermanently
+		movedPermanently gives StatusCode.found
+		found gives StatusCode.notModified
+		notModified gives StatusCode.badRequest
+		badRequest gives StatusCode.unauthorized
+		unauthorized gives StatusCode.forbidden
+		forbidden gives StatusCode.notFound
+		notFound gives StatusCode.methodNotAllowed
+		methodNotAllowed gives StatusCode.requestTimeout
+		requestTimeout gives StatusCode.conflict
+		conflict gives StatusCode.gone
+		gone gives StatusCode.lengthRequired
+		lengthRequired gives StatusCode.payloadTooLarge
+		payloadTooLarge gives StatusCode.tooManyRequests
+		tooManyRequests gives StatusCode.headerFieldsTooLarge
+		headerFieldsTooLarge gives StatusCode.internalServerError
+		internalServerError gives StatusCode.notImplemented
+		notImplemented gives StatusCode.badGateway
+		badGateway gives StatusCode.serviceUnavailable
+		serviceUnavailable gives StatusCode.httpVersionNotSupported
+		httpVersionNotSupported or
+			other gives StatusCode.other(999)
+	end 'which'
+end 'successor'
+
+function main() returns ExitCode
+	var code = StatusCode.ok
+	var named = 0 as NamedCount
+
+	while code.number() != 999 'eachNamed'
+		let back = statusCodeOf(code.number())
+
+		if reasonPhraseOf(back) != reasonPhraseOf(code) or back.number() != code.number() 'lost'
+			print("{code.number()} [{reasonPhraseOf(code)}] came back as {back.number()} [{reasonPhraseOf(back)}]\n")
+			return 1
+		end 'lost'
+
+		named = named + 1
+		code = successor(code)
+	end 'eachNamed'
+
+	print("{named} named statuses round-trip\n")
+	return 0
+end 'main'
+```
+```stdout
+24 named statuses round-trip
+```
+```exitcode
+0
+```
+
+<!-- test: http-client.the-client-deadline-covers-the-whole-exchange -->
+<!-- procs: 1 -->
+**`HttpClientLimits.timeoutMs` BOUNDS THE WHOLE EXCHANGE, SO A PEER THAT NEVER ANSWERS ENDS IT WITH
+`timedOut`.** The peer accepts, reads the request and stays silent for far longer than the client's limit: a
+prompt `timedOut` and a peer that saw the client leave is the deadline, and a slow answer with a peer that timed
+out is a client that waits as long as the server does.
+```maxon
+let SilentMs = 3000
+let PromptMs = 2000
+let ClientLimitMs = 200
+let RequestBytes = 4096
+
+function staySilent(listener TcpListener) returns String
+	let conn = try listener.accept() otherwise return "accept-failed"
+	_ = try conn.recv(RequestBytes) otherwise return "recv-failed"
+	try conn.setReadDeadline(SilentMs) otherwise return "deadline-failed"
+
+	let heard = try conn.recv(RequestBytes) otherwise (e) 'held'
+		return e.name
+	end 'held'
+
+	return "heard {heard.byteLength()} more bytes"
+end 'staySilent'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let peer = async staySilent(listener)
+	let request = try HttpRequest.create(HttpMethod.get, url: "http://127.0.0.1:{listener.port()}/") otherwise return 2
+	var limits = HttpClientLimits.create()
+	limits.timeoutMs = ClientLimitMs
+	let start = Clock.nowMs()
+
+	let response = try HttpClient.send(request, limits: limits) otherwise (e) 'failed'
+		print("client={e.name} prompt={Clock.elapsedMs(start) < PromptMs} peer={await peer}\n")
+		return 0
+	end 'failed'
+
+	print("client=answered {response.statusCode().number()} peer={await peer}\n")
+	return 0
+end 'main'
+```
+```stdout
+client=timedOut prompt=true peer=connectionClosed
+```
+```exitcode
+0
+```
+
+<!-- test: http-client.a-body-over-the-callers-cap-is-refused -->
+<!-- procs: 1 -->
+**A BODY LONGER THAN `HttpClientLimits.maxBodyBytes` IS REFUSED WITH `bodyTooLarge`, HOWEVER IT IS FRAMED.**
+A declared length over the cap is refused before its bytes are read; a chunked or close-delimited body is refused
+once what arrived passes the cap. The cap is off by default, as Go's client has none, so the same body is read
+whole without one.
+```maxon
+let RequestBytes = 4096
+let TenBytes = "0123456789"
+
+function answer(listener TcpListener, reply String) returns String
+	let conn = try listener.accept() otherwise return "accept-failed"
+	_ = try conn.recv(RequestBytes) otherwise return "recv-failed"
+	_ = try conn.send(reply) otherwise return "send-failed"
+	conn.close()
+
+	return "answered"
+end 'answer'
+
+function exchange(listener TcpListener, reply String, limits HttpClientLimits) returns String
+	let peer = async answer(listener, reply: reply)
+	let request = try HttpRequest.create(HttpMethod.get, url: "http://127.0.0.1:{listener.port()}/") otherwise return "bad-url"
+
+	let response = try HttpClient.send(request, limits: limits) otherwise (e) 'failed'
+		return "{e.name} peer={await peer}"
+	end 'failed'
+
+	return "[{response.body()}] peer={await peer}"
+end 'exchange'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let declared = "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n{TenBytes}"
+	let chunked = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\n0123\r\n6\r\n456789\r\n0\r\n\r\n"
+	let closeDelimited = "HTTP/1.1 200 OK\r\n\r\n{TenBytes}"
+	let uncapped = HttpClientLimits.create()
+	var capped = HttpClientLimits.create()
+	capped.maxBodyBytes = HttpBodyCap.atMost(4)
+	var roomy = HttpClientLimits.create()
+	roomy.maxBodyBytes = HttpBodyCap.atMost(10)
+
+	print("declared-uncapped={exchange(listener, reply: declared, limits: uncapped)}\n")
+	print("declared-at-the-cap={exchange(listener, reply: declared, limits: roomy)}\n")
+	print("declared-over={exchange(listener, reply: declared, limits: capped)}\n")
+	print("chunked-over={exchange(listener, reply: chunked, limits: capped)}\n")
+	print("chunked-at-the-cap={exchange(listener, reply: chunked, limits: roomy)}\n")
+	print("close-delimited-over={exchange(listener, reply: closeDelimited, limits: capped)}\n")
+	print("close-delimited-at-the-cap={exchange(listener, reply: closeDelimited, limits: roomy)}\n")
+	return 0
+end 'main'
+```
+```stdout
+declared-uncapped=[0123456789] peer=answered
+declared-at-the-cap=[0123456789] peer=answered
+declared-over=bodyTooLarge peer=answered
+chunked-over=bodyTooLarge peer=answered
+chunked-at-the-cap=[0123456789] peer=answered
+close-delimited-over=bodyTooLarge peer=answered
+close-delimited-at-the-cap=[0123456789] peer=answered
 ```
 ```exitcode
 0
@@ -259,7 +485,7 @@ function fetch(port NetworkPort) returns String
 		return e.name
 	end 'failed'
 
-	return "{response.statusCode().rawValue} [{response.body()}]"
+	return "{response.statusCode().number()} [{response.body()}]"
 end 'fetch'
 
 function exchange(listener TcpListener, reply String, hold bool) returns String
@@ -333,7 +559,7 @@ function exchange(listener TcpListener, interimCount InterimCount) returns Strin
 		return "{e.name} peer={await peer}"
 	end 'failed'
 
-	return "{response.statusCode().rawValue} [{response.body()}] peer={await peer}"
+	return "{response.statusCode().number()} [{response.body()}] peer={await peer}"
 end 'exchange'
 
 function main() returns ExitCode
@@ -393,7 +619,7 @@ function main() returns ExitCode
 		return 0
 	end 'refused'
 
-	print("client=answered {outcome.statusCode().rawValue} peer={await peer}\n")
+	print("client=answered {outcome.statusCode().number()} peer={await peer}\n")
 	return 0
 end 'main'
 ```
@@ -447,7 +673,7 @@ function main() returns ExitCode
 		return 0
 	end 'failed'
 
-	print("client=answered {outcome.statusCode().rawValue} peer={await peer}\n")
+	print("client=answered {outcome.statusCode().number()} peer={await peer}\n")
 	return 0
 end 'main'
 ```
@@ -584,7 +810,7 @@ no-reason=accepted host=absent
 ```maxon
 function doGet() returns ExitCode throws HttpError
 	let response = try HttpClient.get("http://httpbin.org/get")
-	if response.statusCode() == 200 'ok'
+	if response.statusCode().number() == 200 'ok'
 		return 0
 	end 'ok'
 	return 1
@@ -607,7 +833,7 @@ end 'main'
 ```maxon
 function doPost() returns ExitCode throws HttpError
 	let response = try HttpClient.post("http://httpbin.org/post", body: "hello=world")
-	if response.statusCode() == 200 'ok'
+	if response.statusCode().number() == 200 'ok'
 		return 0
 	end 'ok'
 	return 1
@@ -630,7 +856,7 @@ end 'main'
 ```maxon
 function doGet() returns ExitCode throws HttpError
 	let response = try HttpClient.get("http://httpbin.org/status/404")
-	if response.statusCode() == 404 'notFound'
+	if response.statusCode().number() == 404 'notFound'
 		return 0
 	end 'notFound'
 	return 1
@@ -700,7 +926,7 @@ let settleMs = 200
 
 function doHttp(port NetworkPort) returns ExitCode throws HttpError
 	let response = try HttpClient.get("http://127.0.0.1:{port}/get")
-	if response.statusCode() == StatusCode.ok 'ok'
+	if response.statusCode().number() == StatusCode.ok.number() 'ok'
 		return 0
 	end 'ok'
 	return 1

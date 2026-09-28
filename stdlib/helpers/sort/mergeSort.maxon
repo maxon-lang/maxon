@@ -15,7 +15,7 @@ public extension Array
 	// merging `managed[lo, hi)` in place; `scratch` must be at least
 	// `min(mid-lo, hi-mid)` slots. Saves O(n) scratch when one side is
 	// much smaller than the other — common in driftsort's merges.
-	public function mergeBuffered(lo SortIndex, mid SortIndex, hi SortIndex, scratch MergeScratchArray, cmp SortComparator)
+	public function mergeBuffered(lo ElementIndex, mid ElementIndex, hi ElementIndex, scratch MergeScratchArray, cmp SortComparator)
 		let leftLen = mid - lo
 		let rightLen = hi - mid
 
@@ -40,9 +40,9 @@ public extension Array
 	// cannot see that the two arms exclude each other. `mergeBufferedRight`
 	// below already reads this way round; `driftQuicksort.stablePartition`
 	// carries the same note and the reason the distinction is not cosmetic.
-	function mergeBufferedLeft(lo SortIndex, mid SortIndex, hi SortIndex, scratch MergeScratchArray, cmp SortComparator)
+	function mergeBufferedLeft(lo ElementIndex, mid ElementIndex, hi ElementIndex, scratch MergeScratchArray, cmp SortComparator)
 		let leftLen = mid - lo
-		var i = 0 as SortIndex
+		var i = 0 as ElementIndex
 
 		while i < leftLen 'copyLeft'
 			let v = try managed.get(lo + i) otherwise panic("mergeBufferedLeft: get OOB during copy")
@@ -50,7 +50,7 @@ public extension Array
 			i = i + 1
 		end 'copyLeft'
 
-		var l = 0 as SortIndex
+		var l = 0 as ElementIndex
 		var r = mid
 		var out = lo
 
@@ -91,9 +91,9 @@ public extension Array
 	// earlier in the merged output. The pick rule below tests
 	// "left > right" — equality falls through to "take right", which is
 	// the stability-preserving choice.
-	function mergeBufferedRight(lo SortIndex, mid SortIndex, hi SortIndex, scratch MergeScratchArray, cmp SortComparator)
+	function mergeBufferedRight(lo ElementIndex, mid ElementIndex, hi ElementIndex, scratch MergeScratchArray, cmp SortComparator)
 		let rightLen = hi - mid
-		var i = 0 as SortIndex
+		var i = 0 as ElementIndex
 
 		while i < rightLen 'copyRight'
 			let v = try managed.get(mid + i) otherwise panic("mergeBufferedRight: get OOB during copy")
@@ -138,7 +138,7 @@ public extension Array
 	// Result: original [mid, hi) ends up at [lo, lo + (hi - mid)); original
 	// [lo, mid) ends up at [lo + (hi - mid), hi). Three-reverse algorithm:
 	// reverse each half, then reverse the whole range.
-	function rotateRange(lo SortIndex, mid SortIndex, hi SortIndex)
+	function rotateRange(lo ElementIndex, mid ElementIndex, hi ElementIndex)
 		if lo == mid or mid == hi 'noOp'
 			return
 		end 'noOp'
@@ -154,7 +154,7 @@ public extension Array
 	// element is < target. The "lower bound" form — for stability, equal
 	// elements stay to the LEFT of `target` (i.e., the returned index is
 	// the first slot where inserting target wouldn't cross an equal).
-	function lowerBound(lo SortIndex, hi SortIndex, target Element, cmp SortComparator) returns SortIndex
+	function lowerBound(lo ElementIndex, hi ElementIndex, target Element, cmp SortComparator) returns ElementIndex
 		var l = lo
 		var h = hi
 
@@ -177,7 +177,7 @@ public extension Array
 	// Algorithm: recursively split via binary search; rotate the middle
 	// block to bring the partition point of one side adjacent to the
 	// partition point of the other; recurse on the two sub-merges.
-	public function mergeRotation(lo SortIndex, mid SortIndex, hi SortIndex, cmp SortComparator)
+	public function mergeRotation(lo ElementIndex, mid ElementIndex, hi ElementIndex, cmp SortComparator)
 		let leftLen = mid - lo
 		let rightLen = hi - mid
 
@@ -221,7 +221,7 @@ public extension Array
 	// "Upper bound" binary search: first index in [lo, hi) > target.
 	// Mirror of lowerBound; needed by mergeRotation's right-longer branch
 	// to keep stability when the pivot value sits on the right side.
-	function upperBound(lo SortIndex, hi SortIndex, target Element, cmp SortComparator) returns SortIndex
+	function upperBound(lo ElementIndex, hi ElementIndex, target Element, cmp SortComparator) returns ElementIndex
 		var l = lo
 		var h = hi
 
@@ -245,7 +245,7 @@ public extension Array
 	// side fits the O(log n) buffer for the vast majority of merges). When
 	// even the smaller side exceeds scratchCap, fall back to the in-place
 	// rotation merge, which needs no auxiliary storage.
-	public function mergeAdaptive(lo SortIndex, mid SortIndex, hi SortIndex, scratch MergeScratchArray, scratchCap SortIndex, cmp SortComparator)
+	public function mergeAdaptive(lo ElementIndex, mid ElementIndex, hi ElementIndex, scratch MergeScratchArray, scratchCap ElementIndex, cmp SortComparator)
 		let leftLen = mid - lo
 		let rightLen = hi - mid
 		let smaller = leftLen if leftLen < rightLen else rightLen

@@ -746,15 +746,17 @@ end 'namesInclude'
 // ⚠ **AN INT ALIAS IS DELIBERATELY LEFT ALONE**, and `isFloatAlias`'s own header carries the reason: `named`
 // already reads as an integer everywhere, and its NAME is what carries the range and the signedness the range
 // checks read off it. A FLOAT alias is the ONE that cannot be left overloaded, because the overloading is a
-// register file rather than a range. Same asymmetry, same reason, as `Parser.floatResolvedTagOfName`.
-export function renderedTypeNameAbiType(name ByteArray, signatures ProgramSignatures) returns MaxonType
+// register file rather than a range. Same asymmetry, same reason, as `Parser.floatResolvedTagOfNameFrom`.
+// The name is resolved in `readerFilePath`, because two files may declare one private name over `int`
+// and `float`.
+export function renderedTypeNameAbiType(name ByteArray, readerFilePath FilePath, signatures ProgramSignatures) returns MaxonType
 	let tag = builtinTypeNameTag(name)
 
 	if tag != ValueTypeTag.named 'aBuiltinSpelling'
 		return maxonTypeOfTag(tag, nameId: UnnamedTypeId)
 	end 'aBuiltinSpelling'
 
-	return MaxonType.float if signatures.isFloatAliasInAnyFile(name) else MaxonType.integer
+	return MaxonType.float if signatures.isFloatAliasFor(name, readerFilePath: readerFilePath) else MaxonType.integer
 end 'renderedTypeNameAbiType'
 
 export union AssociatedAbiBinding
@@ -808,6 +810,8 @@ end 'associatedAbiBindingOf'
 // Every conformer's binding held against the first conformer's, in source order: the first that differs, or the
 // one they all share.
 function agreementWith(conformances ConformanceDeclArray, signatures ProgramSignatures, interfaceName ByteArray, position ElementIndex, first ConformanceDecl, firstBinding ByteArray) returns AssociatedAbiBinding
+	let firstScoped = signatures.rangeScopedDeclaredName(firstBinding, readerFilePath: first.filePath)
+
 	for decl in conformances 'eachDeclaringType'
 		for entry in decl.interfaces 'eachInterface'
 			if not bindsAssociatedAt(entry, interfaceName: interfaceName, position: position) 'bindsNothingHere'
@@ -816,13 +820,13 @@ function agreementWith(conformances ConformanceDeclArray, signatures ProgramSign
 
 			let binding = try entry.withArgs.get(position) otherwise panic("agreementWith: withArgs.get OOB at {position}, which `bindsAssociatedAt` excludes")
 
-			if not firstBinding.equals(binding) 'bindingsDisagree'
+			if not firstScoped.equals(signatures.rangeScopedDeclaredName(binding, readerFilePath: decl.filePath)) 'bindingsDisagree'
 				return AssociatedAbiBinding.disagreed(first, firstBinding: firstBinding, second: decl, secondBinding: binding)
 			end 'bindingsDisagree'
 		end 'eachInterface'
 	end 'eachDeclaringType'
 
-	return AssociatedAbiBinding.agreed(first, binding: firstBinding, declaredType: renderedTypeNameAbiType(firstBinding, signatures: signatures))
+	return AssociatedAbiBinding.agreed(first, binding: firstBinding, declaredType: renderedTypeNameAbiType(firstBinding, readerFilePath: first.filePath, signatures: signatures))
 end 'agreementWith'
 
 // Does `entry` conform to `interfaceName` and bind its associated type at `position`? A conformance that bound
@@ -840,16 +844,18 @@ end 'bindsAssociatedAt'
 // A miss — no such conformance, or one that bound too few arguments — is `MapError.keyNotFound` rather than
 // an empty name: both are E3016's to report, and a caller must not stamp a slot naming a type nobody bound.
 export function conformerAssociatedBinding(conformances ConformanceDeclArray, typeName ByteArray, interfaceName ByteArray, position ElementIndex) returns ByteArray throws MapError
-	for decl in conformances 'eachDeclaringType'
-		if not decl.typeName.equals(typeName) 'anotherType'
-			continue
-		end 'anotherType'
+	return try declAssociatedBinding(try conformanceDeclOf(conformances, typeName: typeName), interfaceName: interfaceName, position: position)
+end 'conformerAssociatedBinding'
 
-		return try declAssociatedBinding(decl, interfaceName: interfaceName, position: position)
+export function conformanceDeclOf(conformances ConformanceDeclArray, typeName ByteArray) returns ConformanceDecl throws MapError
+	for decl in conformances 'eachDeclaringType'
+		if decl.typeName.equals(typeName) 'thisType'
+			return decl
+		end 'thisType'
 	end 'eachDeclaringType'
 
 	throw MapError.keyNotFound
-end 'conformerAssociatedBinding'
+end 'conformanceDeclOf'
 
 // ⭐ **THE SAME READ WHEN THE CALLER ALREADY HOLDS THE DECLARATION**, which is what a WALK of the conformance
 // list holds. Split from the name-keyed door above rather than left inside it because the difference is a
@@ -1171,9 +1177,10 @@ end 'interfaceFormalsMatch'
 export type CollectedInterfaceMethod
 	export let method as InterfaceMethodSig
 	export let sourceInterfaceName as ByteArray
+	export let sourceDeclFilePath as FilePath
 
-	export static function create(method InterfaceMethodSig, sourceInterfaceName ByteArray) returns CollectedInterfaceMethod
-		return Self{method: method, sourceInterfaceName: sourceInterfaceName}
+	export static function create(method InterfaceMethodSig, sourceInterfaceName ByteArray, sourceDeclFilePath FilePath) returns CollectedInterfaceMethod
+		return Self{method: method, sourceInterfaceName: sourceInterfaceName, sourceDeclFilePath: sourceDeclFilePath}
 	end 'create'
 end 'CollectedInterfaceMethod'
 
@@ -1240,7 +1247,7 @@ function appendInterfaceWitnessSlots(interfaces IrInterfaceMap, iface IrInterfac
 	visited.insert(iface.name)
 
 	for i in 0 upto iface.methods.count() 'eachOwn'
-		slots.push(CollectedInterfaceMethod.create(try iface.methods.get(i) otherwise panic("appendInterfaceWitnessSlots: methods.get OOB at {i} below count {iface.methods.count()}"), sourceInterfaceName: iface.name))
+		slots.push(CollectedInterfaceMethod.create(try iface.methods.get(i) otherwise panic("appendInterfaceWitnessSlots: methods.get OOB at {i} below count {iface.methods.count()}"), sourceInterfaceName: iface.name, sourceDeclFilePath: iface.declFilePath))
 	end 'eachOwn'
 
 	for j in 0 upto iface.extendsInterfaces.count() 'eachParent'

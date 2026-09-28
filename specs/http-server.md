@@ -117,7 +117,7 @@ function main() returns ExitCode
 	let served = await peer
 	let connection = try response.header("connection") otherwise "absent"
 
-	print("served={served} status={response.statusCode().rawValue} body={response.body()} connection={connection}\n")
+	print("served={served} status={response.statusCode().number()} body={response.body()} connection={connection}\n")
 	server.close()
 
 	return 0
@@ -175,7 +175,7 @@ function main() returns ExitCode
 	let served = await peer
 	let agreed = response.body() == "{sent.byteLength()}"
 
-	print("served={served} status={response.statusCode().rawValue} agreed={agreed} sent={sent.byteLength()}\n")
+	print("served={served} status={response.statusCode().number()} agreed={agreed} sent={sent.byteLength()}\n")
 	server.close()
 
 	return 0
@@ -279,7 +279,7 @@ function main() returns ExitCode
 	server.close()
 	let served = await peer
 
-	print("first={first.statusCode().rawValue} second={second.statusCode().rawValue} body={second.body()} served={served}\n")
+	print("first={first.statusCode().number()} second={second.statusCode().number()} body={second.body()} served={served}\n")
 
 	return 0
 end 'main'
@@ -333,7 +333,7 @@ function main() returns ExitCode
 	server.close()
 	let ended = await peer
 
-	print("first={first.statusCode().rawValue} body={first.body()} second={second.statusCode().rawValue} ended={ended.name}\n")
+	print("first={first.statusCode().number()} body={first.body()} second={second.statusCode().number()} ended={ended.name}\n")
 
 	return 0
 end 'main'
@@ -368,7 +368,7 @@ function main() returns ExitCode
 	let second = await peer
 	server.close()
 
-	print("status={response.statusCode().rawValue} body={response.body()} second={second}\n")
+	print("status={response.statusCode().number()} body={response.body()} second={second}\n")
 
 	return 0
 end 'main'
@@ -723,7 +723,7 @@ function main() returns ExitCode
 	let response = try HttpClient.get("http://127.0.0.1:{port}/after") otherwise return 2
 	let served = await peer
 
-	print("silent={silent} second={response.statusCode().rawValue} body={response.body()} served={served}\n")
+	print("silent={silent} second={response.statusCode().number()} body={response.body()} served={served}\n")
 
 	return 0
 end 'main'
@@ -853,7 +853,7 @@ function main() returns ExitCode
 	var clientSaw = "accepted-a-bad-header-line"
 
 	if let response = try HttpClient.get("http://127.0.0.1:{listener.port()}/") 'answered'
-		clientSaw = "status {response.statusCode().rawValue}"
+		clientSaw = "status {response.statusCode().number()}"
 	end 'answered' else (e) 'refused'
 		clientSaw = e.name
 	end 'refused'
@@ -1060,7 +1060,7 @@ function main() returns ExitCode
 	server.close()
 	let served = await peer
 
-	print("status={response.statusCode().rawValue} body={response.body()} served={served}\n")
+	print("status={response.statusCode().number()} body={response.body()} served={served}\n")
 
 	return 0
 end 'main'
@@ -1109,7 +1109,7 @@ function main() returns ExitCode
 	server.close()
 	let refusal = acceptAfterClose(server)
 
-	print("status={response.statusCode().rawValue} served={served} refusal={refusal}\n")
+	print("status={response.statusCode().number()} served={served} refusal={refusal}\n")
 
 	return 0
 end 'main'
@@ -1498,7 +1498,7 @@ function main() returns ExitCode
 	server.close()
 	let ended = await peer
 
-	print("first={first.statusCode().rawValue} second={second.statusCode().rawValue} body={second.body()} ended={ended.name}\n")
+	print("first={first.statusCode().number()} second={second.statusCode().number()} body={second.body()} ended={ended.name}\n")
 
 	return 0
 end 'main'
@@ -1670,7 +1670,7 @@ function main() returns ExitCode
 	server.close()
 	let ended = await peer
 
-	print("refused={refused} next={response.statusCode().rawValue} body={response.body()} ended={ended.name}\n")
+	print("refused={refused} next={response.statusCode().number()} body={response.body()} ended={ended.name}\n")
 
 	return 0
 end 'main'

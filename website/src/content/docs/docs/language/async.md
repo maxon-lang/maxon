@@ -285,7 +285,8 @@ either side could write, because the two green threads may run at the same time 
 - Before a send, the runtime also checks the value's whole object graph. The graph may reach one record
   several times — two fields, two slots of an array — when every owner of that record is one of those
   references, and the record is walked once however many paths reach it. If some nested record has an owner
-  outside the graph, the program aborts with exit code **96** before anything is sent. A reply is checked
+  outside the graph, the program prints `fatal error: runtime abort 96 (transferredRecordNotSole)` to
+  stderr and exits with code **96** before anything is sent. A reply is checked
   after the handler's locals and the message's arguments are released, so a reply built from them crosses. A
   generic service's reply is checked at the type its `spawn` fixes: a `returns T` message that hands back a
   container or a reference-holding record from the service's own state is **E3137** at the `spawn`, and a
@@ -519,6 +520,8 @@ APIs.
 The [CLI reference](/docs/cli/) lists the environment variables a compiled program reads.
 
 ## Exit Codes
+
+Each of these aborts writes `fatal error: runtime abort N (name)` to stderr, then exits with code `N`.
 
 | Exit code | Cause |
 |-----------|-------|

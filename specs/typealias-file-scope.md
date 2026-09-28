@@ -32,25 +32,16 @@ declaration, so a user's own alias of that name wins for the user's own casts �
 not disturb the stdlib module either. `stdlib/Sleep.maxon` declares `Milliseconds`, which is what
 makes it the case a user actually meets.
 
-## The RANGE is per file. The UNDERLYING PRIMITIVE is not.
+## A private alias is per file. An exported one has one underlying primitive.
 
-File scoping resolves the **range**, because the range is enforced where the declaring file is known
-(`InsertRangeChecks`). The **underlying primitive** — `int` or `float` — is read by a second set of
-readers that have no file to ask from: type resolution of a struct field (a `StructLayout` records no
-declaring file), union payload classification reached from the emitted runtime's walk of the enum
-registry, and generic type-argument and conformance-signature canonicalization. Those all resolve the
-bare name against a registry holding one entry per name.
+A private typealias belongs to its own file, range and underlying primitive alike: two files may each
+declare a private `Measure`, one over `int` and one over `float`, and each file means its own. A
+library file's private alias never claims the name for a user file.
 
-So a name whose declarations disagree about `int`-vs-`float` has **no answer that door can give**, and
-it is refused at the second file's declaration with **E3105** rather than answered arbitrarily. Two
-files declaring one name over different *ranges* stays legal and is the case above.
-
-This is what makes the bare answer safe rather than lucky: because every declaration of a name shares
-one underlying primitive in any program that compiles, the bare answer *is* the answer a scoped lookup
-would give. Without the rule the parser resolved such a name file-scoped while those readers resolved
-it last-wins, and the disagreement reached the backends — the x64 emitter panicked on an xmm value in
-a gpr slot, wasm emitted a module its own validator rejected, and a struct field typed by the alias
-compiled to the wrong width with no diagnostic at all.
+An exported typealias is nameable from every file, so every exported declaration of one name must share
+one underlying primitive — `int` or `float`. Two files exporting one name over different primitives are
+refused at the second declaration with **E3105**. Two files declaring one name over different *ranges*
+stays legal and is the case above.
 
 ## A THIRD file resolves to a declaration it MAY NAME
 
@@ -2034,4 +2025,287 @@ end 'main'
 ```
 ```stdout
 42 8 1779033703
+```
+
+<!-- test: a-library-files-private-alias-does-not-claim-the-name -->
+```maxon
+typealias ProbeWord = float(0.0 to 1.0)
+
+function half(x ProbeWord) returns ProbeWord
+	return x / 2.0
+end 'half'
+
+function main() returns ExitCode
+	print("{half(0.5)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0.25
+```
+
+<!-- test: two-files-private-aliases-of-one-name-over-different-primitives -->
+```maxon
+// --- file: a.maxon
+typealias Measure = int(0 to 100)
+
+export function fromA() returns ExitCode
+	let m = 41 as Measure
+	return m + 1
+end 'fromA'
+
+// --- file: b.maxon
+typealias Measure = float(0.0 to 1.0)
+
+export function fromB() returns ExitCode
+	let m = 0.5 as Measure
+	return trunc(m * 2.0)
+end 'fromB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return fromA() + fromB()
+end 'main'
+```
+```exitcode
+43
+```
+
+<!-- test: private-aliases-over-different-primitives-as-generic-arguments -->
+```maxon
+// --- file: a.maxon
+typealias Measure = int(0 to 100)
+typealias IntMeasures = Array with Measure
+
+export function sumA() returns ExitCode
+	var xs = IntMeasures.create()
+	xs.push(40 as Measure)
+	xs.push(2 as Measure)
+	var total = 0
+	for x in xs 'each'
+		total = total + x
+	end 'each'
+	return total
+end 'sumA'
+
+// --- file: b.maxon
+typealias Measure = float(0.0 to 1.0)
+typealias FloatMeasures = Array with Measure
+
+export function sumB() returns ExitCode
+	var xs = FloatMeasures.create()
+	xs.push(0.25 as Measure)
+	xs.push(0.25 as Measure)
+	var total = 0.0
+	for x in xs 'each'
+		total = total + x
+	end 'each'
+	return trunc(total * 2.0)
+end 'sumB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return sumA() + sumB()
+end 'main'
+```
+```exitcode
+43
+```
+
+<!-- test: private-aliases-over-different-primitives-as-struct-fields -->
+```maxon
+// --- file: a.maxon
+typealias Measure = int(0 to 100)
+
+type IntBox
+	module var m as Measure
+
+	static function of(m Measure) returns Self
+		return Self{m: m}
+	end 'of'
+end 'IntBox'
+
+export function fromA() returns ExitCode
+	let b = IntBox.of(41)
+	return b.m + 1
+end 'fromA'
+
+// --- file: b.maxon
+typealias Measure = float(0.0 to 1.0)
+
+type FloatBox
+	module var m as Measure
+
+	static function of(m Measure) returns Self
+		return Self{m: m}
+	end 'of'
+end 'FloatBox'
+
+export function fromB() returns ExitCode
+	let b = FloatBox.of(0.5)
+	return trunc(b.m * 2.0)
+end 'fromB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return fromA() + fromB()
+end 'main'
+```
+```exitcode
+43
+```
+
+<!-- test: private-aliases-over-different-primitives-as-interface-parameters -->
+```maxon
+// --- file: a.maxon
+typealias Measure = int(0 to 100)
+
+interface IntScaled
+	function scale(k Measure) returns Measure
+end 'IntScaled'
+
+type IntCell implements IntScaled
+	module let n as Measure
+
+	static function of(n Measure) returns Self
+		return Self{n: n}
+	end 'of'
+
+	function scale(k Measure) returns Measure
+		return n + k
+	end 'scale'
+end 'IntCell'
+
+type IntRunner uses T where T is IntScaled
+	module let item as T
+
+	static function of(item T) returns Self
+		return Self{item: item}
+	end 'of'
+
+	function run() returns Measure
+		return self.item.scale(1)
+	end 'run'
+end 'IntRunner'
+
+typealias IntCellRunner = IntRunner with IntCell
+
+export function fromA() returns ExitCode
+	return IntCellRunner.of(IntCell.of(41)).run()
+end 'fromA'
+
+// --- file: b.maxon
+typealias Measure = float(0.0 to 1.0)
+
+interface FloatScaled
+	function scale(k Measure) returns Measure
+end 'FloatScaled'
+
+type FloatCell implements FloatScaled
+	module let n as Measure
+
+	static function of(n Measure) returns Self
+		return Self{n: n}
+	end 'of'
+
+	function scale(k Measure) returns Measure
+		return n * k
+	end 'scale'
+end 'FloatCell'
+
+type FloatRunner uses T where T is FloatScaled
+	module let item as T
+
+	static function of(item T) returns Self
+		return Self{item: item}
+	end 'of'
+
+	function run() returns Measure
+		return self.item.scale(0.5)
+	end 'run'
+end 'FloatRunner'
+
+typealias FloatCellRunner = FloatRunner with FloatCell
+
+export function fromB() returns ExitCode
+	return trunc(FloatCellRunner.of(FloatCell.of(1.0)).run() * 2.0)
+end 'fromB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return fromA() + fromB()
+end 'main'
+```
+```exitcode
+43
+```
+
+<!-- test: private-aliases-over-different-primitives-as-associated-type-bindings -->
+```maxon
+// --- file: a.maxon
+typealias Measure = int(0 to 100)
+
+interface IntSource uses Element
+	function first() returns Element
+end 'IntSource'
+
+type IntCell implements IntSource with Measure
+	module let n as Measure
+
+	static function of(n Measure) returns Self
+		return Self{n: n}
+	end 'of'
+
+	function first() returns Measure
+		return n
+	end 'first'
+end 'IntCell'
+
+typealias MeasureSource = IntSource with Measure
+
+function takeInt(s MeasureSource) returns Measure
+	return s.first()
+end 'takeInt'
+
+export function fromA() returns ExitCode
+	return takeInt(IntCell.of(42))
+end 'fromA'
+
+// --- file: b.maxon
+typealias Measure = float(0.0 to 1.0)
+
+interface FloatSource uses Element
+	function first() returns Element
+end 'FloatSource'
+
+type FloatCell implements FloatSource with Measure
+	module let n as Measure
+
+	static function of(n Measure) returns Self
+		return Self{n: n}
+	end 'of'
+
+	function first() returns Measure
+		return n
+	end 'first'
+end 'FloatCell'
+
+function takeFloat(s FloatCell) returns Measure
+	return s.first()
+end 'takeFloat'
+
+export function fromB() returns ExitCode
+	return trunc(takeFloat(FloatCell.of(0.5)) * 2.0)
+end 'fromB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return fromA() + fromB()
+end 'main'
+```
+```exitcode
+43
 ```

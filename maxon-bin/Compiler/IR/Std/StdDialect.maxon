@@ -4753,106 +4753,106 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 			currentThreadToken or
 			tlsAlloc or
 			osEnterBackgroundPriority then break 'u'
-		binOp(_, lhs, rhs, _, _) or
-			cmp or
-			div or
-			mod or
-			osWriteStdout or
-			osWriteStderr or
-			osWaitHandle or
-			osWaitChild or
-			osThreadCreate or
-			osCreateNamedSegment or
-			osAdoptNamedSegment or
-			osFileSize or
-			osFileRename or
-			osFileFindFirst or
-			osFileFindNext or
-			osDirCurrentPath or
-			osExecutablePath or
-			osMapNamedSegment or
-			osPipePeek or
-			osProcessTerminate or
-			osSocketConnect or
-			osCommitPages or
-			atomicRmw then insertUsePair(referenced, a: lhs, b: rhs)
-		unaryOp(_, operand, _, _) or
-			binOpImm or
-			cmpImm or
-			loadIndirect or
-			loadAcquire or
-			osAllocPages or
-			osReservePages or
-			osFileOpenRead or
-			osFileOpenWrite or
-			osFileOpenWriteExecutable or
-			osFileDelete or
-			osDirCreate or
-			osDirRemove or
-			osFileAttributes or
-			osHandleFileType or
-			osProcessProbe or
-			osProcessExitSignal or
-			osStdHandle or
-			osSocketStartup or
-			tlsSlotLoad then referenced.insert(operand)
-		condBranch(condId, _, _) or
-			ret or
-			osExit or
-			osCloseHandle or
-			osFileClose or
-			osFileFindClose or
-			osHandleSetInherit or
-			osSetEvent or
-			osPanicValue or
+		binOp(_, lhs, rhs, _, _) then insertUsePair(referenced, a: lhs, b: rhs)
+		cmp(_, lhs, rhs, _, _) then insertUsePair(referenced, a: lhs, b: rhs)
+		div(_, lhs, rhs, _) then insertUsePair(referenced, a: lhs, b: rhs)
+		mod(_, lhs, rhs, _) then insertUsePair(referenced, a: lhs, b: rhs)
+		osWriteStdout(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
+		osWriteStderr(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
+		osWaitHandle(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
+		osWaitChild(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
+		osThreadCreate(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
+		osCreateNamedSegment(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
+		osAdoptNamedSegment(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
+		osFileSize(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
+		osFileRename(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
+		osFileFindFirst(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
+		osFileFindNext(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
+		osDirCurrentPath(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
+		osExecutablePath(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
+		osMapNamedSegment(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
+		osPipePeek(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
+		osProcessTerminate(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
+		osSocketConnect(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
+		osCommitPages(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
+		atomicRmw(_, lhs, rhs, _) then insertUsePair(referenced, a: lhs, b: rhs)
+		unaryOp(_, operand, _, _) then referenced.insert(operand)
+		binOpImm(_, operand, _, _, _) then referenced.insert(operand)
+		cmpImm(_, operand, _, _, _) then referenced.insert(operand)
+		loadIndirect(_, operand, _, _) then referenced.insert(operand)
+		loadAcquire(_, operand, _, _) then referenced.insert(operand)
+		osAllocPages(_, operand) then referenced.insert(operand)
+		osReservePages(_, operand) then referenced.insert(operand)
+		osFileOpenRead(_, operand) then referenced.insert(operand)
+		osFileOpenWrite(_, operand) then referenced.insert(operand)
+		osFileOpenWriteExecutable(_, operand) then referenced.insert(operand)
+		osFileDelete(_, operand) then referenced.insert(operand)
+		osDirCreate(_, operand) then referenced.insert(operand)
+		osDirRemove(_, operand) then referenced.insert(operand)
+		osFileAttributes(_, operand) then referenced.insert(operand)
+		osHandleFileType(_, operand) then referenced.insert(operand)
+		osProcessProbe(_, operand) then referenced.insert(operand)
+		osProcessExitSignal(_, operand) then referenced.insert(operand)
+		osStdHandle(_, operand) then referenced.insert(operand)
+		osSocketStartup(_, operand) then referenced.insert(operand)
+		tlsSlotLoad(_, operand) then referenced.insert(operand)
+		condBranch(condId, _, _) then referenced.insert(condId)
+		ret(condId) then referenced.insert(condId)
+		osExit(condId) then referenced.insert(condId)
+		osCloseHandle(condId) then referenced.insert(condId)
+		osFileClose(condId) then referenced.insert(condId)
+		osFileFindClose(condId) then referenced.insert(condId)
+		osHandleSetInherit(condId) then referenced.insert(condId)
+		osSetEvent(condId) then referenced.insert(condId)
+		osPanicValue(condId) then referenced.insert(condId)
 
-			// `switch`'s block-id arrays are deliberately not bound: see `cloneStdOp`'s header on binding a
-			// tail-slot `Array` in an arm of a large statement match.
-			switch or
-			osLockInit or
-			osLockEnter or
-			osLockLeave or
-			osReadWallClock or
-			osEnvBlockFree or
-			osUnpublishNamedSegment or
-			osSocketFreeAddrInfo or
-			osSocketClose then referenced.insert(condId)
+		// `switch`'s block-id arrays are deliberately not bound: see `cloneStdOp`'s header on binding a
+		// tail-slot `Array` in an arm of a large statement match.
+		switch(condId, _, _) then referenced.insert(condId)
+		osLockInit(condId) then referenced.insert(condId)
+		osLockEnter(condId) then referenced.insert(condId)
+		osLockLeave(condId) then referenced.insert(condId)
+		osReadWallClock(condId) then referenced.insert(condId)
+		osEnvBlockFree(condId) then referenced.insert(condId)
+		osUnpublishNamedSegment(condId) then referenced.insert(condId)
+		osSocketFreeAddrInfo(condId) then referenced.insert(condId)
+		osSocketClose(condId) then referenced.insert(condId)
 		call(_, _, args) then insertUseArgs(referenced, args: args)
-		storeIndirect(addrId, _, valueId, _) or
-			storeRelease then insertUsePair(referenced, a: addrId, b: valueId)
+		storeIndirect(addrId, _, valueId, _) then insertUsePair(referenced, a: addrId, b: valueId)
+		storeRelease(addrId, _, valueId, _) then insertUsePair(referenced, a: addrId, b: valueId)
 		tryCall(_, _, _, args) then insertUseArgs(referenced, args: args)
-		errorReturn(retValId, errorFlagId) or
-			osReadClock or
-			osProcessExitCode or
-			osFreePages or
-			osDecommitPages or
-			osCancelIo or
-			osUnmapNamedSegment or
-			osThreadCpuTicks or
-			memFill or
-			tlsSetValue then insertUsePair(referenced, a: retValId, b: errorFlagId)
+		errorReturn(retValId, errorFlagId) then insertUsePair(referenced, a: retValId, b: errorFlagId)
+		osReadClock(retValId, errorFlagId) then insertUsePair(referenced, a: retValId, b: errorFlagId)
+		osProcessExitCode(retValId, errorFlagId) then insertUsePair(referenced, a: retValId, b: errorFlagId)
+		osFreePages(retValId, errorFlagId) then insertUsePair(referenced, a: retValId, b: errorFlagId)
+		osDecommitPages(retValId, errorFlagId) then insertUsePair(referenced, a: retValId, b: errorFlagId)
+		osCancelIo(retValId, errorFlagId) then insertUsePair(referenced, a: retValId, b: errorFlagId)
+		osUnmapNamedSegment(retValId, errorFlagId) then insertUsePair(referenced, a: retValId, b: errorFlagId)
+		osThreadCpuTicks(retValId, errorFlagId) then insertUsePair(referenced, a: retValId, b: errorFlagId)
+		memFill(retValId, errorFlagId, _) then insertUsePair(referenced, a: retValId, b: errorFlagId)
+		tlsSetValue(retValId, errorFlagId) then insertUsePair(referenced, a: retValId, b: errorFlagId)
 		callIndirect(_, calleeReg, _, _, args) then insertUseCalleeAndArgs(referenced, calleeReg: calleeReg, args: args)
-		osProcessSpawn(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr, envPtr) or
-			osProcessSpawnInherit or
-			osPipeCreate then insertUseSextet(referenced, a: cmdlinePtr, b: cwdPtr, c: creationFlags, d: startupPtr, e: procInfoPtr, f: envPtr)
+		osProcessSpawn(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr, envPtr) then insertUseSextet(referenced, a: cmdlinePtr, b: cwdPtr, c: creationFlags, d: startupPtr, e: procInfoPtr, f: envPtr)
+		osProcessSpawnInherit(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr, envPtr) then insertUseSextet(referenced, a: cmdlinePtr, b: cwdPtr, c: creationFlags, d: startupPtr, e: procInfoPtr, f: envPtr)
+		osPipeCreate(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr, envPtr) then insertUseSextet(referenced, a: cmdlinePtr, b: cwdPtr, c: creationFlags, d: startupPtr, e: procInfoPtr, f: envPtr)
 		witnessCall(_, witnessAddr, _, _, _, args) then insertUseCalleeAndArgs(referenced, calleeReg: witnessAddr, args: args)
 		osReadOverlapped(_, handle, buf, cap, bytesOutPtr, ovl) then insertUseQuint(referenced, a: handle, b: buf, c: cap, d: bytesOutPtr, e: ovl)
 		osPipeCreateOutbound(namePtr, saPtr, childReadPtr, parentWritePtr) then insertUseQuad(referenced, a: namePtr, b: saPtr, c: childReadPtr, d: parentWritePtr)
-		osWriteFile(_, handle, buf, len, bytesOutPtr) or
-			osReadFile then insertUseQuad(referenced, a: handle, b: buf, c: len, d: bytesOutPtr)
+		osWriteFile(_, handle, buf, len, bytesOutPtr) then insertUseQuad(referenced, a: handle, b: buf, c: len, d: bytesOutPtr)
+		osReadFile(_, handle, buf, len, bytesOutPtr) then insertUseQuad(referenced, a: handle, b: buf, c: len, d: bytesOutPtr)
 		witnessTryCall(_, _, witnessAddr, _, _, _, args) then insertUseCalleeAndArgs(referenced, calleeReg: witnessAddr, args: args)
 		osHostProcess(_, _, a0, a1, a2, a3, a4, a5) then insertUseSextet(referenced, a: a0, b: a1, c: a2, d: a3, e: a4, f: a5)
 		osNetpoll(_, _, a0, a1, a2, a3, a4) then insertUseQuint(referenced, a: a0, b: a1, c: a2, d: a3, e: a4)
 		osSocketOverlapped(_, _, a0, a1, a2, a3) then insertUseQuad(referenced, a: a0, b: a1, c: a2, d: a3)
-		osSocketServe(_, _, a0, a1, a2) or
-			osPathQuery then insertUseTriple(referenced, a: a0, b: a1, c: a2)
-		osOpenNamedSegment(_, namePtr, bufPtr, bufLen) or
-			osEnvRead or
-			osSocketResolve or
-			osSocketError or
-			osSocketSend or
-			osSocketRecv or
-			atomicCas then insertUseTriple(referenced, a: namePtr, b: bufPtr, c: bufLen)
+		osSocketServe(_, _, a0, a1, a2) then insertUseTriple(referenced, a: a0, b: a1, c: a2)
+		osPathQuery(_, _, a0, a1, a2) then insertUseTriple(referenced, a: a0, b: a1, c: a2)
+		osOpenNamedSegment(_, namePtr, bufPtr, bufLen) then insertUseTriple(referenced, a: namePtr, b: bufPtr, c: bufLen)
+		osEnvRead(_, namePtr, bufPtr, bufLen) then insertUseTriple(referenced, a: namePtr, b: bufPtr, c: bufLen)
+		osSocketResolve(_, namePtr, bufPtr, bufLen) then insertUseTriple(referenced, a: namePtr, b: bufPtr, c: bufLen)
+		osSocketError(_, namePtr, bufPtr, bufLen) then insertUseTriple(referenced, a: namePtr, b: bufPtr, c: bufLen)
+		osSocketSend(_, namePtr, bufPtr, bufLen) then insertUseTriple(referenced, a: namePtr, b: bufPtr, c: bufLen)
+		osSocketRecv(_, namePtr, bufPtr, bufLen) then insertUseTriple(referenced, a: namePtr, b: bufPtr, c: bufLen)
+		atomicCas(_, namePtr, bufPtr, bufLen) then insertUseTriple(referenced, a: namePtr, b: bufPtr, c: bufLen)
 	end 'u'
 end 'collectStdOpUses'
 
@@ -4972,84 +4972,84 @@ end 'StdDefinedValues'
 // name, so a variant joins it only if its def sits there.
 module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 	match op 'r'
-		const(resultId, _, _) or
-			binOp or
-			unaryOp or
-			cmp or
-			binOpImm or
-			cmpImm or
-			div or
-			mod or
-			param or
-			call or
-			globalAddr or
-			loadIndirect or
-			rdataAddr or
-			osAllocPages or
-			osWriteStdout or
-			funcAddr or
-			callIndirect or
-			osWaitHandle or
-			osWaitChild or
-			witnessCall or
-			osEventCreate or
-			osThreadCreate or
-			osReadOverlapped or
-			osLastError or
-			osGetPid or
-			osWriteFile or
-			osFileOpenRead or
-			osReadFile or
-			osFileOpenWrite or
-			osFileOpenWriteExecutable or
-			osEnvBlock or
-			osHandleFileType or
-			osProcessProbe or
-			osProcessExitSignal or
-			osCreateNamedSegment or
-			osAdoptNamedSegment or
-			osHostProcess or
-			osNetpoll or
-			osSocketOverlapped or
-			osSocketServe or
-			osPathQuery or
-			osFileSize or
-			osFileDelete or
-			osFileRename or
-			osFileFindFirst or
-			osFileFindNext or
-			osDirCreate or
-			osDirRemove or
-			osDirCurrentPath or
-			osFileAttributes or
-			osCommandLine or
-			osStdHandle or
-			osExecutablePath or
-			osWriteStderr or
-			stackRecordAddr or
-			osOpenNamedSegment or
-			osMapNamedSegment or
-			osTickCountMs or
-			osPipePeek or
-			osEnvRead or
-			osProcessTerminate or
-			osSocketStartup or
-			osSocketResolve or
-			osSocketCreate or
-			osSocketConnect or
-			osSocketError or
-			osSocketSend or
-			osSocketRecv or
-			osCpuCount or
-			osCommitPages or
-			osReservePages or
-			atomicCas or
-			atomicRmw or
-			currentThreadToken or
-			tlsAlloc or
-			tlsSlotLoad or
-			osEnterBackgroundPriority or
-			loadAcquire then def.recordOne(resultId)
+		const(resultId, _, _) then def.recordOne(resultId)
+		binOp(resultId, _, _, _, _) then def.recordOne(resultId)
+		unaryOp(resultId, _, _, _) then def.recordOne(resultId)
+		cmp(resultId, _, _, _, _) then def.recordOne(resultId)
+		binOpImm(resultId, _, _, _, _) then def.recordOne(resultId)
+		cmpImm(resultId, _, _, _, _) then def.recordOne(resultId)
+		div(resultId, _, _, _) then def.recordOne(resultId)
+		mod(resultId, _, _, _) then def.recordOne(resultId)
+		param(resultId, _, _) then def.recordOne(resultId)
+		call(resultId, _, _) then def.recordOne(resultId)
+		globalAddr(resultId, _) then def.recordOne(resultId)
+		loadIndirect(resultId, _, _, _) then def.recordOne(resultId)
+		rdataAddr(resultId, _) then def.recordOne(resultId)
+		osAllocPages(resultId, _) then def.recordOne(resultId)
+		osWriteStdout(resultId, _, _) then def.recordOne(resultId)
+		funcAddr(resultId, _) then def.recordOne(resultId)
+		callIndirect(resultId, _, _, _, _) then def.recordOne(resultId)
+		osWaitHandle(resultId, _, _) then def.recordOne(resultId)
+		osWaitChild(resultId, _, _) then def.recordOne(resultId)
+		witnessCall(resultId, _, _, _, _, _) then def.recordOne(resultId)
+		osEventCreate(resultId) then def.recordOne(resultId)
+		osThreadCreate(resultId, _, _) then def.recordOne(resultId)
+		osReadOverlapped(resultId, _, _, _, _, _) then def.recordOne(resultId)
+		osLastError(resultId) then def.recordOne(resultId)
+		osGetPid(resultId) then def.recordOne(resultId)
+		osWriteFile(resultId, _, _, _, _) then def.recordOne(resultId)
+		osFileOpenRead(resultId, _) then def.recordOne(resultId)
+		osReadFile(resultId, _, _, _, _) then def.recordOne(resultId)
+		osFileOpenWrite(resultId, _) then def.recordOne(resultId)
+		osFileOpenWriteExecutable(resultId, _) then def.recordOne(resultId)
+		osEnvBlock(resultId) then def.recordOne(resultId)
+		osHandleFileType(resultId, _) then def.recordOne(resultId)
+		osProcessProbe(resultId, _) then def.recordOne(resultId)
+		osProcessExitSignal(resultId, _) then def.recordOne(resultId)
+		osCreateNamedSegment(resultId, _, _) then def.recordOne(resultId)
+		osAdoptNamedSegment(resultId, _, _) then def.recordOne(resultId)
+		osHostProcess(resultId, _, _, _, _, _, _, _) then def.recordOne(resultId)
+		osNetpoll(resultId, _, _, _, _, _, _) then def.recordOne(resultId)
+		osSocketOverlapped(resultId, _, _, _, _, _) then def.recordOne(resultId)
+		osSocketServe(resultId, _, _, _, _) then def.recordOne(resultId)
+		osPathQuery(resultId, _, _, _, _) then def.recordOne(resultId)
+		osFileSize(resultId, _, _) then def.recordOne(resultId)
+		osFileDelete(resultId, _) then def.recordOne(resultId)
+		osFileRename(resultId, _, _) then def.recordOne(resultId)
+		osFileFindFirst(resultId, _, _) then def.recordOne(resultId)
+		osFileFindNext(resultId, _, _) then def.recordOne(resultId)
+		osDirCreate(resultId, _) then def.recordOne(resultId)
+		osDirRemove(resultId, _) then def.recordOne(resultId)
+		osDirCurrentPath(resultId, _, _) then def.recordOne(resultId)
+		osFileAttributes(resultId, _) then def.recordOne(resultId)
+		osCommandLine(resultId) then def.recordOne(resultId)
+		osStdHandle(resultId, _) then def.recordOne(resultId)
+		osExecutablePath(resultId, _, _) then def.recordOne(resultId)
+		osWriteStderr(resultId, _, _) then def.recordOne(resultId)
+		stackRecordAddr(resultId, _) then def.recordOne(resultId)
+		osOpenNamedSegment(resultId, _, _, _) then def.recordOne(resultId)
+		osMapNamedSegment(resultId, _, _) then def.recordOne(resultId)
+		osTickCountMs(resultId) then def.recordOne(resultId)
+		osPipePeek(resultId, _, _) then def.recordOne(resultId)
+		osEnvRead(resultId, _, _, _) then def.recordOne(resultId)
+		osProcessTerminate(resultId, _, _) then def.recordOne(resultId)
+		osSocketStartup(resultId, _) then def.recordOne(resultId)
+		osSocketResolve(resultId, _, _, _) then def.recordOne(resultId)
+		osSocketCreate(resultId) then def.recordOne(resultId)
+		osSocketConnect(resultId, _, _) then def.recordOne(resultId)
+		osSocketError(resultId, _, _, _) then def.recordOne(resultId)
+		osSocketSend(resultId, _, _, _) then def.recordOne(resultId)
+		osSocketRecv(resultId, _, _, _) then def.recordOne(resultId)
+		osCpuCount(resultId) then def.recordOne(resultId)
+		osCommitPages(resultId, _, _) then def.recordOne(resultId)
+		osReservePages(resultId, _) then def.recordOne(resultId)
+		atomicCas(resultId, _, _, _) then def.recordOne(resultId)
+		atomicRmw(resultId, _, _, _) then def.recordOne(resultId)
+		currentThreadToken(resultId) then def.recordOne(resultId)
+		tlsAlloc(resultId) then def.recordOne(resultId)
+		tlsSlotLoad(resultId, _) then def.recordOne(resultId)
+		osEnterBackgroundPriority(resultId) then def.recordOne(resultId)
+		loadAcquire(resultId, _, _, _) then def.recordOne(resultId)
 		condBranch or
 			branch or
 			ret or
@@ -5088,8 +5088,8 @@ module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 			tlsSetValue or
 			osSetEvent or
 			storeRelease then def.recordNone()
-		tryCall(resultId, errorFlagId, _, _) or
-			witnessTryCall then def.recordPair(resultId, errorFlagId: errorFlagId)
+		tryCall(resultId, errorFlagId, _, _) then def.recordPair(resultId, errorFlagId: errorFlagId)
+		witnessTryCall(resultId, errorFlagId, _, _, _, _, _) then def.recordPair(resultId, errorFlagId: errorFlagId)
 	end 'r'
 end 'stdOpDefinedValue'
 

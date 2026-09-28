@@ -609,7 +609,7 @@ function checkOneHeldBinding(project Project, signatures ProgramSignatures, decl
 	// `conformerNameOfDeclaredName` is the ONE reducer every other conformance door already goes through, and
 	// this site was simply not going through it — the arguments are not lost by that, they are checked at the
 	// instantiation SITE by `checkOneInstantiation`'s E3017, which is where a base's `where` clause lives.
-	let boundConformer = signatures.conformerNameOfDeclaredName(binding).toByteArray()
+	let boundConformer = signatures.conformerNameOfDeclaredName(binding, readerFilePath: conformer.filePath).toByteArray()
 
 	if typeConformsTo(declared, interfaces: project.interfaces, typeName: boundConformer, interfaceName: heldAt, discovered: signatures.discoveredConformerOf(boundConformer)) 'widensIntoTheHolding'
 		return
@@ -933,7 +933,7 @@ function requireWrittenBindingMatchesConformers(project Project, signatures Prog
 	// compiled name against a source string would report a difference in RENDERING as a difference in type.
 	let written = signatures.instanceArgDisplayName(site.gid, position: position as TypeParamPosition)
 
-	if written.equals(binding) 'restatesTheSettledBinding'
+	if written.equals(signatures.rangeScopedDeclaredName(binding, readerFilePath: conformer.filePath)) 'restatesTheSettledBinding'
 		return
 	end 'restatesTheSettledBinding'
 
@@ -1357,11 +1357,11 @@ end 'pairableConformanceBindings'
 // `__witness_int.*` tables are filed under. Asking about the alias spelling instead would withhold
 // `contains` from every `Array with <ranged alias>` in the program, which is the motivating case for the
 // feature.
-export function checkExtensionConstraints(signatures ProgramSignatures, constraints WhereConstraintArray, bindings ByteArrayArray) returns ExtensionConstraintCheck
+export function checkExtensionConstraints(signatures ProgramSignatures, constraints WhereConstraintArray, bindings ByteArrayArray, readerFilePath FilePath) returns ExtensionConstraintCheck
 	for i in 0 upto constraints.count() 'eachConstraint'
 		let constraint = try constraints.get(i) otherwise panic("checkExtensionConstraints: constraints.get OOB at {i} below count {constraints.count()}")
 		let binding = try bindings.get(constraint.typeParamIndex) otherwise return ExtensionConstraintCheck.unmet(constraint.interfaceName, bindingName: UnboundAssociatedTypePhrase)
-		let conformer = signatures.conformerNameOfDeclaredName(binding).toByteArray()
+		let conformer = signatures.conformerNameOfDeclaredName(binding, readerFilePath: readerFilePath).toByteArray()
 
 		if not typeConformsTo(signatures.sweptConformanceIndex(), interfaces: signatures.interfaceMap(), typeName: conformer, interfaceName: constraint.interfaceName, discovered: signatures.discoveredConformerOf(conformer)) 'violates'
 			return ExtensionConstraintCheck.unmet(constraint.interfaceName, bindingName: binding)
@@ -1418,12 +1418,12 @@ end 'declaredConformanceIndex'
 // widening, and converting between them needs a runtime table the compiler does not emit. A CONCRETE
 // `Impl implements Derived` reaching a `Base` place is a different question and is
 // ALLOWED — `typeConformsTo` walks `extends`, and `__witness_Impl.Base` has a real impl in every slot.
-export function valueWidensToInterface(project Project, signatures ProgramSignatures, valueType MaxonType, interfaceName ByteArray) returns bool
+export function valueWidensToInterface(project Project, signatures ProgramSignatures, valueType MaxonType, interfaceName ByteArray, readerFilePath FilePath) returns bool
 	if maxonTypeTag(valueType) == ValueTypeTag.interfaceRef 'alreadyExistential'
 		return interfaceNameOfType(valueType, typeNames: project.typeNames).equals(interfaceName)
 	end 'alreadyExistential'
 
-	let conformer = signatures.conformerNameOfType(valueType, idsFrom: project.typeNames).toByteArray()
+	let conformer = signatures.conformerNameOfType(valueType, idsFrom: project.typeNames, readerFilePath: readerFilePath).toByteArray()
 	return typeConformsTo(declaredConformanceIndex(project), interfaces: project.interfaces, typeName: conformer, interfaceName: interfaceName, discovered: signatures.discoveredConformerOf(conformer))
 end 'valueWidensToInterface'
 
@@ -1714,7 +1714,7 @@ function collectInterfaceMethods(project Project, signatures ProgramSignatures, 
 		let ownerNames = associatedTypeNamesDeclaredBy(project, iface: iface, interfaceName: slot.sourceInterfaceName)
 		let declaredArgs = boundArgumentsFor(conformance, entry: entry, interfaceName: slot.sourceInterfaceName)
 		let under = RequirementSubstitution.create(signatures, clauseNames: clauseNames, clauseArgs: entry.withArgs, declaredNames: pairableAssociatedTypeNames(ownerNames, boundTypeNames: declaredArgs), declaredArgs: declaredArgs, ownerNames: ownerNames, ownerInterfaceName: slot.sourceInterfaceName, conformerName: conformance.typeName, conformerTypeParams: typeParamNames)
-		substituted.push(CollectedInterfaceMethod.create(substituteAssociatedTypes(slot.method, under: under), sourceInterfaceName: slot.sourceInterfaceName))
+		substituted.push(CollectedInterfaceMethod.create(substituteAssociatedTypes(slot.method, under: under), sourceInterfaceName: slot.sourceInterfaceName, sourceDeclFilePath: slot.sourceDeclFilePath))
 	end 'eachSlot'
 
 	return substituted
@@ -2473,7 +2473,7 @@ function signatureMatches(project Project, method InterfaceMethodSig, conforming
 		let expected = substituteSelf(try method.paramTypeNames.get(i) otherwise panic("signatureMatches: paramTypeNames.get OOB at {i}"), conformingType: conformingType)
 		let actual = renderDeclaredTypeName(implType, declarationName: conformingType, typeParamNames: typeParamNames, typeNames: project.typeNames, signatures: signatures)
 
-		if expected.equals(actual) or aliasDecaysIntoPrimitive(project, expected: expected, actual: actual) 'oneSpelling'
+		if expected.equals(actual) or aliasDecaysIntoPrimitive(project, expected: expected, actual: actual, readerFilePath: implFunc.sourceFilePath) 'oneSpelling'
 			continue
 		end 'oneSpelling'
 
@@ -2498,7 +2498,7 @@ function signatureMatches(project Project, method InterfaceMethodSig, conforming
 
 	let expectedReturn = substituteSelf(method.returnTypeName, conformingType: conformingType)
 	let actualReturn = renderReturnType(project, returnType: implFunc.maxonReturnType, conformingType: conformingType, typeParamNames: typeParamNames, signatures: signatures)
-	return expectedReturn.equals(actualReturn) or aliasDecaysIntoPrimitive(project, expected: expectedReturn, actual: actualReturn)
+	return expectedReturn.equals(actualReturn) or aliasDecaysIntoPrimitive(project, expected: expectedReturn, actual: actualReturn, readerFilePath: implFunc.sourceFilePath)
 end 'signatureMatches'
 
 // ⭐ **A REQUIREMENT WRITTEN AS A BARE PRIMITIVE IS AN UNNAMED SLOT, AND AN ALIAS OVER THAT PRIMITIVE
@@ -2507,8 +2507,8 @@ end 'signatureMatches'
 // decays into any alias slot of its class and a named value into an unnamed one
 // (`ProgramSignatures.aggregatesConflict`). The reverse — a requirement spelling an alias, an impl spelling
 // the primitive or another alias — is the nominal refusal `signatureMatches` makes.
-function aliasDecaysIntoPrimitive(project Project, expected ByteArray, actual ByteArray) returns bool
-	let underlying = try project.typeAliases.underlyingInAnyFile(actual) otherwise return false
+function aliasDecaysIntoPrimitive(project Project, expected ByteArray, actual ByteArray, readerFilePath FilePath) returns bool
+	let underlying = try project.typeAliases.underlyingFor(actual, readerFilePath: readerFilePath) otherwise return false
 	return maxonTypeName(underlying, typeNames: project.typeNames).toByteArray().equals(expected)
 end 'aliasDecaysIntoPrimitive'
 

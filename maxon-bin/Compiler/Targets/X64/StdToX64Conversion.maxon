@@ -1422,10 +1422,10 @@ export type StdToX64Lowering
 			// The compiler half is not left to these arms: the ordered Std ops declare `isPure: false` and
 			// `isMemory`/`isStore` as their plain twins do, and `classifyLoadOperands` refuses an acquire
 			// load to the loop hoist. Dropping the flavour here is correct only because nothing above did.
-			loadIndirect(resultId, addrId, offset, valueType) or
-				loadAcquire then self.lowerLoadIndirect(resultId, addrId: addrId, offset: offset, valueType: valueType, dstBlock: dstBlock)
-			storeIndirect(addrId, offset, valueId, valueType) or
-				storeRelease then self.lowerStoreIndirect(addrId, offset: offset, valueId: valueId, valueType: valueType, dstBlock: dstBlock)
+			loadIndirect(resultId, addrId, offset, valueType) then self.lowerLoadIndirect(resultId, addrId: addrId, offset: offset, valueType: valueType, dstBlock: dstBlock)
+			loadAcquire(resultId, addrId, offset, valueType) then self.lowerLoadIndirect(resultId, addrId: addrId, offset: offset, valueType: valueType, dstBlock: dstBlock)
+			storeIndirect(addrId, offset, valueId, valueType) then self.lowerStoreIndirect(addrId, offset: offset, valueId: valueId, valueType: valueType, dstBlock: dstBlock)
+			storeRelease(addrId, offset, valueId, valueType) then self.lowerStoreIndirect(addrId, offset: offset, valueId: valueId, valueType: valueType, dstBlock: dstBlock)
 			osAllocPages(resultId, sizeId) then self.lowerOsAllocPages(resultId, sizeId: sizeId, dstBlock: dstBlock)
 			osWriteStdout(resultId, bufId, lenId) then self.lowerOsWriteStream(resultId, bufId: bufId, lenId: lenId, stream: OsOutputStream.standardOutput, dstBlock: dstBlock)
 			rdataAddr(resultId, label) then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRdata(TargetVReg.virtual(resultId), label: label))
@@ -1483,8 +1483,8 @@ export type StdToX64Lowering
 			osThreadCpuTicks(handleId, outPtrId) then self.lowerOsThreadCpuTicks(handleId, outPtrId: outPtrId, dstBlock: dstBlock)
 			osProcessExitCode(handleId, codePtrId) then self.lowerOsProcessExitCode(handleId, codePtrId: codePtrId, dstBlock: dstBlock)
 			osCloseHandle(handleId) then self.lowerOsCloseHandle(handleId, dstBlock: dstBlock)
-			osWaitHandle(resultId, handleId, timeoutMsId) or
-				osWaitChild then self.lowerOsWaitHandle(resultId, handleId: handleId, timeoutMsId: timeoutMsId, syscallClass: stdOpSyscallClassOf(op), dstBlock: dstBlock)
+			osWaitHandle(resultId, handleId, timeoutMsId) then self.lowerOsWaitHandle(resultId, handleId: handleId, timeoutMsId: timeoutMsId, syscallClass: stdOpSyscallClassOf(op), dstBlock: dstBlock)
+			osWaitChild(resultId, handleId, timeoutMsId) then self.lowerOsWaitHandle(resultId, handleId: handleId, timeoutMsId: timeoutMsId, syscallClass: stdOpSyscallClassOf(op), dstBlock: dstBlock)
 
 			// Release a completed GT's (possibly grown) stack. The op covers the full page-lifecycle trio,
 			// which is NOT x64-windows-gated: `osAllocPages` runs on every lane, so

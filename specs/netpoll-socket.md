@@ -588,6 +588,49 @@ timedOut=true
 0
 ```
 
+<!-- test: netpoll-socket.a-connect-deadline-ends-a-handshake-nobody-answers -->
+<!-- procs: 1 -->
+**A CONNECT DEADLINE ANSWERS `timedOut`, AND PROMPTLY.** A listener that never accepts fills its backlog, and
+once the queue is full the kernel drops every further SYN, so the next handshake is never answered and a
+dial with no deadline waits out the kernel's own SYN retries — tens of seconds. The 300 ms deadline must end
+it, and `prompt` is what tells a deadline that fired from one the kernel eventually supplied.
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias HeldClients = Array with TcpClient
+
+let deadlineMs = 300
+let promptMs = 3000
+let dialCap = 1000
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	var held = HeldClients.create()
+	var dialled = 0 as Tally
+
+	while dialled < dialCap 'fill'
+		let start = Clock.nowMs()
+
+		let client = try TcpClient.connect("127.0.0.1", port: listener.port(), deadlineMs: deadlineMs) otherwise (e) 'dialErr'
+			let tookMs = Clock.elapsedMs(start)
+			print("{e.name} prompt={tookMs < promptMs}\n")
+			return 0
+		end 'dialErr'
+
+		held.push(client)
+		dialled = dialled + 1
+	end 'fill'
+
+	print("the backlog never filled\n")
+	return 1
+end 'main'
+```
+```stdout
+timedOut prompt=true
+```
+```exitcode
+0
+```
+
 <!-- test: netpoll-socket.drop-a-parked-reader -->
 <!-- procs: 1 -->
 **A PROMISE DROPPED WHILE ITS COROUTINE IS PARKED IN `recv` DOES NOT HANG THE EXIT.** `main` spawns a reader
@@ -974,6 +1017,9 @@ end 'main'
 ```exitcode
 107
 ```
+```stderr
+fatal error: runtime abort 107 (netpollDoubleWait)
+```
 
 <!-- test: netpoll-socket.a-reader-arriving-before-an-ended-reader-resumes-is-the-same-named-stop -->
 <!-- procs: 1 -->
@@ -1060,6 +1106,9 @@ end 'main'
 ```
 ```exitcode
 107
+```
+```stderr
+fatal error: runtime abort 107 (netpollDoubleWait)
 ```
 
 <!-- test: netpoll-socket.a-loopback-echo-service-accepts-and-answers -->
@@ -1418,6 +1467,9 @@ end 'main'
 ```
 ```exitcode
 107
+```
+```stderr
+fatal error: runtime abort 107 (netpollDoubleWait)
 ```
 
 <!-- test: netpoll-socket.a-second-bind-of-a-live-port-is-refused -->
