@@ -516,10 +516,15 @@ end 'buildMaxonTierPasses'
 // run would have dispatched them (`PassKind.stdFanOut`); the ordering arguments below are about that
 // order and hold on the pool exactly as they held serially, because a worker runs the members in this
 // order over each function.
-export function buildLoweringPasses() returns PassKindArray
+export function buildFrontEndLoweringPasses() returns PassKindArray
 	var passes = PassKindArray.create()
 	passes.push(PassKind.lowerMaxonToStd)
 	passes.push(PassKind.insertRangeChecks)
+	return passes
+end 'buildFrontEndLoweringPasses'
+
+export function buildLoweringPasses() returns PassKindArray
+	var passes = buildFrontEndLoweringPasses()
 	passes.push(PassKind.inlineManagedPrimitives)
 	passes.push(PassKind.inlineLeaves)
 	passes.push(PassKind.noteFoldedRecords)
@@ -769,6 +774,7 @@ export type PassPipeline
 				end 'debugging'
 			end 'announced'
 
+			try requireStillWanted(self.project)
 			try self.dispatch(pass)
 
 			if projectHasErrors(self.project) 'errorGate'
@@ -796,9 +802,9 @@ export type PassPipeline
 			reportDeferredNames then reportDeferredNameDiagnostics(self.project, signatures: self.signatures)
 			checkSignatureVisibility then checkSignatureVisibility(self.project, module: self.maxonModule, signatures: self.signatures)
 			resolveTypes then resolveTypes(self.project, module: self.maxonModule)
-			semanticCheck then semanticCheck(self.project, module: self.maxonModule, signatures: self.signatures, funcNames: self.funcNames)
+			semanticCheck then try semanticCheck(self.project, module: self.maxonModule, signatures: self.signatures, funcNames: self.funcNames)
 			checkUnusedExports then try checkUnusedExports(self.project, module: self.maxonModule, signatures: self.signatures)
-			lowerMaxonToStd then self.stdModule = lowerMaxonToStd(self.maxonModule, project: self.project, funcNames: self.funcNames)
+			lowerMaxonToStd then self.stdModule = try lowerMaxonToStd(self.maxonModule, project: self.project, funcNames: self.funcNames)
 			insertRangeChecks then insertRangeChecks(self.project, module: self.stdModule)
 			inlineManagedPrimitives then inlineManagedPrimitives(self.project, module: self.stdModule)
 			inlineLeaves then inlineLeaves(self.project, module: self.stdModule, round: SpliceRound.everyCaller)

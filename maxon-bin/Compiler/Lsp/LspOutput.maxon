@@ -1,0 +1,115 @@
+export typealias LspDocumentVersion = int(0 to u64.max)
+
+typealias LspDocumentVersionMap = Map with (String, LspDocumentVersion)
+
+typealias LspMessageType = int(1 to 4)
+
+let LogMessageMethod = "window/logMessage"
+let LogMessageTypeKey = "type"
+let LogMessageTextKey = "message"
+let LogMessageTypeLog = 4 as LspMessageType
+
+// The outcome line's wording is parsed by `tests/lsp/LspClient.maxon` (`ProjectCheckReportLead`), so a
+// change to it fails that corpus.
+let ProjectCheckLogLead = "maxon: project check"
+let ProjectCheckLogVersionWord = "version"
+let ProjectCheckLogUnversioned = "unversioned"
+
+export union ClientDocumentVersion
+	stated(number JsonInt)
+	unstated
+end 'ClientDocumentVersion'
+
+export enum ProjectCheckOutcome
+	published = "published"
+	unloadable = "unloadable"
+	unlisted = "unlisted"
+	abandoned = "abandoned"
+	superseded = "superseded"
+end 'ProjectCheckOutcome'
+
+// The one writer of the client's stream, spawned as a service: a project check runs on a strand of its
+// own, and two strands framing onto stdout would interleave their bytes.
+//
+// It also owns each document's current version, and a service handles messages in the order they
+// were sent. The session sends version N+1's `track` before N+1's fast publish, and a check compares at
+// write time (`publishIfCurrent`), so a result for N can never land after N+1's fast set.
+export type LspStdoutWriter
+	var versions as LspDocumentVersionMap
+	var sessionOpen as bool
+
+	module static function create() returns LspStdoutWriter
+		return Self{versions: LspDocumentVersionMap.create(), sessionOpen: true}
+	end 'create'
+
+	export function write(body String)
+		writeLspMessage(body)
+	end 'write'
+
+	export function track(uri String, version LspDocumentVersion)
+		self.versions.upsert(uri, value: version)
+	end 'track'
+
+	export function forget(uri String)
+		_ = self.versions.remove(uri)
+	end 'forget'
+
+	export function endSession()
+		self.versions = LspDocumentVersionMap.create()
+		self.sessionOpen = false
+	end 'endSession'
+
+	export function isCurrent(uri String, version LspDocumentVersion) returns bool
+		let current = try self.versions.get(uri) otherwise return false
+
+		return current == version
+	end 'isCurrent'
+
+	export function publishIfCurrent(uri String, version LspDocumentVersion, clientVersion ClientDocumentVersion, outcome ProjectCheckOutcome, body String)
+		if not self.isCurrent(uri, version: version) 'superseded'
+			self.report(uri, clientVersion: clientVersion, outcome: ProjectCheckOutcome.superseded)
+			return
+		end 'superseded'
+
+		writeLspMessage(body)
+		self.report(uri, clientVersion: clientVersion, outcome: outcome)
+	end 'publishIfCurrent'
+
+	export function report(uri String, clientVersion ClientDocumentVersion, outcome ProjectCheckOutcome)
+		if not self.sessionOpen 'noClientToTell'
+			return
+		end 'noClientToTell'
+
+		writeLspMessage(projectCheckLogText(uri, clientVersion: clientVersion, outcome: outcome))
+	end 'report'
+end 'LspStdoutWriter'
+
+function projectCheckLogText(uri String, clientVersion ClientDocumentVersion, outcome ProjectCheckOutcome) returns String
+	var doc = JsonDoc.create()
+	var params = LspJsonObject.create(doc)
+	params.put(LogMessageTypeKey, value: JsonNode.numberNode(LogMessageTypeLog))
+	params.put(LogMessageTextKey, value: JsonNode.stringNode("{ProjectCheckLogLead} {uri} {ProjectCheckLogVersionWord} {clientVersionText(clientVersion)} {outcome.rawValue}"))
+
+	return lspNotificationText(doc, method: LogMessageMethod, params: params.finish())
+end 'projectCheckLogText'
+
+function clientVersionText(clientVersion ClientDocumentVersion) returns String
+	return match clientVersion 'version'
+		stated(number) gives "{number}"
+		unstated gives ProjectCheckLogUnversioned
+	end 'version'
+end 'clientVersionText'
+
+typealias LspStdoutWriterHandleArray = Array with LspStdoutWriter.handle
+
+var lspStdout = LspStdoutWriterHandleArray.create()
+
+module function startLspOutput()
+	lspStdout.push(spawn LspStdoutWriter.create())
+end 'startLspOutput'
+
+module function lspOutputWriter() returns LspStdoutWriter.handle
+	let writer = try lspStdout.get(0) otherwise panic("lspOutputWriter: `runLspServer` starts the writer before the session reads its first message, and nothing else writes to the client")
+
+	return writer.clone()
+end 'lspOutputWriter'

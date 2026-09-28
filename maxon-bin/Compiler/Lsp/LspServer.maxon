@@ -3,7 +3,9 @@
 // It runs the lifecycle (`initialize`, `shutdown`, `exit`), keeps the open documents in sync,
 // routes every language request through the registry in `LspMethod.maxon` and every Maxon-only
 // request through `LspExtensionMethod` beside it, and pushes `publishDiagnostics` on every document
-// event. A method whose area answers nothing yet is refused with `-32601` and is not advertised.
+// event — for a document under a stated project root, a second time once the project check behind it
+// has run (`LspProjectChecker`). A method whose area answers nothing yet is refused with `-32601` and is
+// not advertised.
 //
 // Nothing in this file is per-area: the dispatch table and the capability builder below have an arm
 // for every method LSP defines for this server, so an area is brought live by editing its own
@@ -39,6 +41,7 @@ let TextDocumentSyncKey = "textDocumentSync"
 let TextDocumentKey = "textDocument"
 let ContentChangesKey = "contentChanges"
 let TextKey = "text"
+let VersionKey = "version"
 let RootUriKey = "rootUri"
 let WorkspaceKey = "workspace"
 let WorkspaceFoldersKey = "workspaceFolders"
@@ -50,6 +53,7 @@ let FoldersRemovedKey = "removed"
 
 // Run the server until the client ends the session, and report how it ended.
 export function runLspServer() returns ExitCode
+	startLspOutput()
 	var session = LspSession.create()
 	return session.run()
 end 'runLspServer'
@@ -61,8 +65,12 @@ type LspSession
 	var stopped = false
 	var streamBroken = false
 
+	// Minted here rather than read from the client, which may state no `version`: every arrival needs
+	// one of its own for a project check to learn it was superseded.
+	var nextDocumentVersion as LspDocumentVersion
+
 	static function create() returns LspSession
-		return Self{documents: LspDocumentTextMap.create(), keywords: KeywordTable.create()}
+		return Self{documents: LspDocumentTextMap.create(), keywords: KeywordTable.create(), nextDocumentVersion: 0}
 	end 'create'
 
 	// The message pump. One turn reads one framed message; the session ends when the client says so
@@ -76,8 +84,29 @@ type LspSession
 			end 'incoming'
 		end 'pump'
 
+		lspOutputWriter().endSession()
+
 		return exitCode()
 	end 'run'
+
+	function documentArrived(uri String, text String, arrival BufferArrival, clientVersion ClientDocumentVersion)
+		self.documents.upsert(uri, value: text)
+		self.nextDocumentVersion = self.nextDocumentVersion + 1
+		let version = self.nextDocumentVersion
+		lspOutputWriter().track(uri.clone(), version: version)
+
+		match publishBufferDiagnostics(uri, text: text, arrival: arrival) 'publish'
+			unchecked then return
+			published(reader, path, fast) then self.requestProjectCheck(LspProjectCheckRequest.create(uri.clone(), path: path.clone(), text: text.clone(), version: version, clientVersion: clientVersion, alone: fast.clone()), reader: reader)
+		end 'publish'
+	end 'documentArrived'
+
+	function requestProjectCheck(request LspProjectCheckRequest, reader LspReaderSearch)
+		match lspProjectCheckRoot(reader) 'root'
+			none then return
+			at(dir) then lspProjectCheckerFor(dir, tiers: reader.tiers).check(request.clone())
+		end 'root'
+	end 'requestProjectCheck'
 
 	function exitCode() returns ExitCode
 		if self.streamBroken 'brokenStream'
@@ -217,12 +246,11 @@ type LspSession
 	function openDocument(doc JsonDoc) throws LspParamsError
 		let (_, textDocument, uri) = try notifiedDocument(doc)
 		let text = try lspMemberText(doc, of: textDocument, key: TextKey)
-		self.documents.upsert(uri, value: text)
-		publishBufferDiagnostics(uri, text: text, arrival: BufferArrival.opened)
+		self.documentArrived(uri, text: text, arrival: BufferArrival.opened, clientVersion: clientVersionOf(doc, textDocument: textDocument))
 	end 'openDocument'
 
 	function changeDocument(doc JsonDoc) throws LspParamsError
-		let (params, _, uri) = try notifiedDocument(doc)
+		let (params, textDocument, uri) = try notifiedDocument(doc)
 		let changes = try lspMember(doc, of: params, key: ContentChangesKey)
 		let changeCount = try doc.arrayLength(changes) otherwise throw LspParamsError.malformed
 
@@ -233,8 +261,7 @@ type LspSession
 		// Under FULL sync every entry is a whole-document replacement, so the LAST one is the document.
 		let latest = try doc.arrayAt(changes, index: ((changeCount - 1) as ChildIndex)) otherwise throw LspParamsError.malformed
 		let text = try lspMemberText(doc, of: latest, key: TextKey)
-		self.documents.upsert(uri, value: text)
-		publishBufferDiagnostics(uri, text: text, arrival: BufferArrival.edited)
+		self.documentArrived(uri, text: text, arrival: BufferArrival.edited, clientVersion: clientVersionOf(doc, textDocument: textDocument))
 	end 'changeDocument'
 
 	// ⭐ **A CLOSED DOCUMENT IS PUBLISHED AS EMPTY, WHICH IS HOW AN EDITOR IS TOLD TO CLEAR IT.** Nothing
@@ -243,6 +270,7 @@ type LspSession
 	function closeDocument(doc JsonDoc) throws LspParamsError
 		let (_, _, uri) = try notifiedDocument(doc)
 		_ = self.documents.remove(uri)
+		lspOutputWriter().forget(uri.clone())
 		clearPublishedDiagnostics(uri)
 	end 'closeDocument'
 
@@ -433,3 +461,9 @@ function notifiedDocument(doc JsonDoc) returns (JsonNodeId, JsonNodeId, String) 
 	let textDocument = try lspMember(doc, of: params, key: TextDocumentKey)
 	return (params, textDocument, try lspMemberText(doc, of: textDocument, key: LspUriKey))
 end 'notifiedDocument'
+
+function clientVersionOf(doc JsonDoc, textDocument JsonNodeId) returns ClientDocumentVersion
+	let stated = try doc.getInt(textDocument, key: VersionKey) otherwise return ClientDocumentVersion.unstated
+
+	return ClientDocumentVersion.stated(stated)
+end 'clientVersionOf'

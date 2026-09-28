@@ -2,8 +2,9 @@
 // front of the author: which file declares a name (`LspDefinition`) and which members a type publishes
 // (`LspCompletion`), and which names `textDocument/publishDiagnostics` may not call undeclared.
 // `LspDocumentProject` is the other half of the pair and answers about the buffer ALONE. A diagnostic is
-// still CHECKED there and never here: this corpus is lexed and its declarations folded, never compiled,
-// so it can say what a name means and never what is wrong with a program.
+// CHECKED there, or by the project check (`LspProjectChecker`, which holds a `Project` of its own), and
+// never here: this corpus is lexed and its declarations folded, never compiled, so it can say what a
+// name means and never what is wrong with a program.
 //
 // A document's project root is a ladder, and the order of its rungs is the design.
 // `workspaceRootOf` holds it: a document under `stdlib/` or `runtime/` is held as one project
@@ -240,7 +241,6 @@ type HeldWorkspace
 	end 'facts'
 end 'HeldWorkspace'
 
-typealias HeldProjectMap = Map with (String, HeldWorkspace)
 typealias HeldProjectKeyArray = Array with String
 
 // Projects are held across requests because building one costs a sweep, a lex of every file and a
@@ -248,7 +248,8 @@ typealias HeldProjectKeyArray = Array with String
 // two roots, so a cache of one turns every round trip into two cold rebuilds. Least recently used
 // out, so a session that wanders cannot grow the process without bound and the root the author is
 // working in is not evicted by a detour through the library. Overflowing this costs a re-fold
-// rather than a re-read: a rebuilt `Project` still hits `QueryEngine`'s process-wide file memos.
+// rather than a re-read: a rebuilt `Project` still hits the shared file memos (`lspFileMemos`). A held
+// root carries its project checker too (`HeldRoot`), so an evicted root's next check builds cold.
 let HeldProjectCapacity = 8
 
 let WorkspaceResweepIntervalMs = 1000 as DurationMs
@@ -256,8 +257,7 @@ let WorkspaceResweepIntervalMs = 1000 as DurationMs
 let ProjectLoadingMethod = "maxon/projectLoading"
 let ProjectLoadingKey = "loading"
 
-var heldProjects = HeldProjectMap.create()
-var heldProjectKeys = HeldProjectKeyArray.create()
+var heldRoots = RecentHeldRoots.create()
 
 var namedClientRoots = LspClientRootArray.create()
 
@@ -311,25 +311,11 @@ function forgetClientRoot(root FilePath)
 
 	namedClientRoots = kept
 
-	dropHeldProjectsUnder(dir)
+	// A root is dropped in two places or not at all: the named-root list, and the projects already built
+	// under it. Nothing but capacity expires a held project, so one left behind outlives the folder the
+	// author closed.
+	heldRoots.dropUnder(dir)
 end 'forgetClientRoot'
-
-// A root is dropped in two places or not at all: the named-root list, and the projects already built
-// under it. Nothing but capacity expires a held project, so one left behind outlives the folder the
-// author closed.
-function dropHeldProjectsUnder(dir FilePath)
-	var kept = HeldProjectKeyArray.create()
-
-	for key in heldProjectKeys 'eachKey'
-		if heldProjectIsUnder(key, dir: dir) 'goesWithTheFolder'
-			_ = heldProjects.remove(key)
-		end 'goesWithTheFolder' else 'staysHeld'
-			kept.push(key)
-		end 'staysHeld'
-	end 'eachKey'
-
-	heldProjectKeys = kept
-end 'dropHeldProjectsUnder'
 
 function heldProjectIsUnder(key String, dir FilePath) returns bool
 	let held = try FilePath.from(key) otherwise return false
@@ -380,9 +366,12 @@ end 'factsUnderTheRootOf'
 // failing to say so.
 function heldProjectFacts(root WorkspaceRoot, readerPath FilePath) returns LspProjectFacts
 	let heldRoot = heldRootOf(root, readerPath: readerPath)
-	let held = try heldProjects.get(heldRoot.toString()) otherwise return LspProjectFacts.unswept(heldRoot)
+	let held = try heldRoots.peek(heldRoot.toString()) otherwise return LspProjectFacts.unswept(heldRoot)
 
-	return held.facts(heldRoot)
+	return match held.workspace 'workspace'
+		built(workspace) gives workspace.facts(heldRoot)
+		notBuilt gives LspProjectFacts.unswept(heldRoot)
+	end 'workspace'
 end 'heldProjectFacts'
 
 module function lspDocumentCorpus(uri String) returns LspCorpus
@@ -390,7 +379,7 @@ module function lspDocumentCorpus(uri String) returns LspCorpus
 	let document = ReaderDocument.of(readerPath)
 
 	return match lspRootSearch() 'search'
-		ready(tiers, workingDirectory) gives capturedCorpus(workspaceRootOf(LspReaderSearch.create(document, tiers: tiers, workingDirectory: workingDirectory)), tiers: tiers, readerPath: readerPath)
+		ready(tiers, workingDirectory) gives sweptWorkspace(workspaceRootOf(LspReaderSearch.create(document, tiers: tiers, workingDirectory: workingDirectory)), tiers: tiers, readerPath: readerPath)
 		unavailable gives LspCorpus.unavailable
 	end 'search'
 end 'lspDocumentCorpus'
@@ -416,11 +405,29 @@ module function lspKnownProjectCorpus(reader LspReaderSearch) returns LspCorpus
 
 	return match root 'root'
 		projectDirectory or
-			libraryTier gives capturedCorpus(root, tiers: reader.tiers, readerPath: reader.document.path)
+			libraryTier gives sweptWorkspace(root, tiers: reader.tiers, readerPath: reader.document.path)
 		documentDirectory or
 			singleFile gives LspCorpus.unavailable
 	end 'root'
 end 'lspKnownProjectCorpus'
+
+module union ProjectCheckRoot
+	at(dir FilePath)
+	none
+end 'ProjectCheckRoot'
+
+module function lspProjectCheckRoot(reader LspReaderSearch) returns ProjectCheckRoot
+	if not lspProjectIsStated(reader) or not selectionAdmits(SourceSelection.productionOnly, name: reader.document.path.filename()) 'notAProgramABuildChecks'
+		return ProjectCheckRoot.none
+	end 'notAProgramABuildChecks'
+
+	return match workspaceRootOf(reader) 'root'
+		projectDirectory(dir) gives ProjectCheckRoot.at(dir)
+		documentDirectory or
+			libraryTier or
+			singleFile gives ProjectCheckRoot.none
+	end 'root'
+end 'lspProjectCheckRoot'
 
 module function lspProjectIsStated(reader LspReaderSearch) returns bool
 	return match reader.tier 'tier'
@@ -468,30 +475,21 @@ function candidateIsNearer(nearest StatedRoot, dir FilePath) returns bool
 	end 'nearest'
 end 'candidateIsNearer'
 
-function capturedCorpus(root WorkspaceRoot, tiers LibraryTiers, readerPath FilePath) returns LspCorpus
-	beginDiagnosticCapture()
-	let corpus = sweptWorkspace(root, tiers: tiers, readerPath: readerPath)
-	discardDiagnosticCapture()
-
-	return corpus
-end 'capturedCorpus'
-
 function sweptWorkspace(root WorkspaceRoot, tiers LibraryTiers, readerPath FilePath) returns LspCorpus
 	let key = heldRootOf(root, readerPath: readerPath).toString()
 
-	if heldProjects.contains(key) 'alreadySeenThisRoot'
-		touchHeldProject(key)
-
-		var held = try heldProjects.get(key) otherwise panic("sweptWorkspace: '{key}' was found among the held projects two lines above")
-
-		return held.corpusFor(root, key: key, tiers: tiers, readerPath: readerPath)
-	end 'alreadySeenThisRoot'
+	if let held = try heldRoots.recentAt(key) 'heldAlready'
+		match held.workspace 'workspace'
+			built(workspace) then return workspace.corpusFor(root, key: key, tiers: tiers, readerPath: readerPath)
+			notBuilt then break 'workspace'
+		end 'workspace'
+	end 'heldAlready'
 
 	var fresh = HeldWorkspace.create()
 	let corpus = fresh.corpusFor(root, key: key, tiers: tiers, readerPath: readerPath)
 
 	match corpus 'outcome'
-		loaded then rememberProject(key, held: fresh)
+		loaded then heldRoots.holdWorkspace(key, workspace: fresh)
 		unavailable then break 'outcome'
 	end 'outcome'
 
@@ -511,31 +509,106 @@ function writeProjectLoadingNotification(rootPath String, loading bool)
 	writeLspNotification(doc, method: ProjectLoadingMethod, params: params.finish())
 end 'writeProjectLoadingNotification'
 
-function rememberProject(key String, held HeldWorkspace)
-	heldProjects.upsert(key, value: held)
-	heldProjectKeys.push(key)
+module function lspProjectCheckerFor(dir FilePath, tiers LibraryTiers) returns LspProjectChecker.handle
+	var held = heldRoots.rootAt(dir.toString())
 
-	if heldProjectKeys.count() <= HeldProjectCapacity 'roomRemains'
-		return
-	end 'roomRemains'
+	match held.checker 'checker'
+		spawned(checker) then return checker.clone()
+		notSpawned then break 'checker'
+	end 'checker'
 
-	let coldest = try heldProjectKeys.remove(0) otherwise panic("rememberProject: the key list is over capacity, so it holds a first element")
-	_ = heldProjects.remove(coldest)
-end 'rememberProject'
+	let checker = spawn LspProjectChecker.create(dir.clone(), stdlibDir: tiers.stdlibDir.clone(), runtimeDir: tiers.runtimeDir.clone(), writer: lspOutputWriter())
+	held.checker = HeldCheckerSlot.spawned(checker.clone())
 
-function touchHeldProject(key String)
-	var kept = HeldProjectKeyArray.create()
+	return checker
+end 'lspProjectCheckerFor'
 
-	for existing in heldProjectKeys 'eachKey'
-		if existing != key 'staysInOrder'
-			kept.push(existing)
-		end 'staysInOrder'
-	end 'eachKey'
+union HeldWorkspaceSlot
+	notBuilt
+	built(workspace HeldWorkspace)
+end 'HeldWorkspaceSlot'
 
-	kept.push(key)
+union HeldCheckerSlot
+	notSpawned
+	spawned(checker LspProjectChecker.handle)
+end 'HeldCheckerSlot'
 
-	heldProjectKeys = kept
-end 'touchHeldProject'
+type HeldRoot
+	module var workspace as HeldWorkspaceSlot
+	module var checker as HeldCheckerSlot
+
+	static function create() returns HeldRoot
+		return Self{workspace: HeldWorkspaceSlot.notBuilt, checker: HeldCheckerSlot.notSpawned}
+	end 'create'
+end 'HeldRoot'
+
+typealias HeldRootMap = Map with (String, HeldRoot)
+
+type RecentHeldRoots
+	var roots as HeldRootMap
+	var order as HeldProjectKeyArray
+
+	static function create() returns RecentHeldRoots
+		return Self{roots: HeldRootMap.create(), order: HeldProjectKeyArray.create()}
+	end 'create'
+
+	function rootAt(key String) returns HeldRoot
+		if not self.roots.contains(key) 'firstUse'
+			self.roots.upsert(key, value: HeldRoot.create())
+		end 'firstUse'
+
+		return try self.recentAt(key) otherwise panic("RecentHeldRoots.rootAt: '{key}' is filed above when absent")
+	end 'rootAt'
+
+	function recentAt(key String) returns HeldRoot throws MapError
+		let held = try self.roots.get(key)
+		self.use(key)
+
+		return held
+	end 'recentAt'
+
+	function holdWorkspace(key String, workspace HeldWorkspace)
+		var held = self.rootAt(key)
+		held.workspace = HeldWorkspaceSlot.built(workspace)
+	end 'holdWorkspace'
+
+	function peek(key String) returns HeldRoot throws MapError
+		return try self.roots.get(key)
+	end 'peek'
+
+	function use(key String)
+		var kept = HeldProjectKeyArray.create()
+
+		for existing in self.order 'eachKey'
+			if existing != key 'staysInOrder'
+				kept.push(existing)
+			end 'staysInOrder'
+		end 'eachKey'
+
+		kept.push(key)
+
+		while kept.count() > HeldProjectCapacity 'overCapacity'
+			let evicted = try kept.remove(0) otherwise panic("RecentHeldRoots.use: the order is over capacity, so it holds a first element")
+			_ = self.roots.remove(evicted)
+		end 'overCapacity'
+
+		self.order = kept
+	end 'use'
+
+	function dropUnder(dir FilePath)
+		var kept = HeldProjectKeyArray.create()
+
+		for key in self.order 'eachKey'
+			if heldProjectIsUnder(key, dir: dir) 'goesWithTheFolder'
+				_ = self.roots.remove(key)
+			end 'goesWithTheFolder' else 'staysHeld'
+				kept.push(key)
+			end 'staysHeld'
+		end 'eachKey'
+
+		self.order = kept
+	end 'dropUnder'
+end 'RecentHeldRoots'
 
 function heldRootOf(root WorkspaceRoot, readerPath FilePath) returns FilePath
 	return match root 'root'
@@ -674,42 +747,11 @@ function climbCeilingOf(stated StatedRoot) returns ProjectClimbCeiling
 end 'climbCeilingOf'
 
 extension Project
-	// ⛔ The pipeline stops at LEX plus SIGNATURES, and `queryAllModule` is never called here. Two
-	// reasons, and either alone would be enough.
-	//
-	// It is WRONG to call: `QueryEngine`'s merged-module memo hands back a module the last compile's
-	// passes rewrote in place, and re-serving one invented diagnostics against a program that had none
-	// and then crashed. That memo's own header owns the rule; a long-lived `Project` answering many
-	// requests is exactly the shape that trips it.
-	//
-	// It is also the expensive half. Lexing and folding signatures is what a name-to-file question
-	// actually needs; parse and merge cost more than the two of them together and answer nothing asked
-	// here.
+	// ⛔ The pipeline stops at LEX plus SIGNATURES, and `queryAllModule` is never called here. Lexing and
+	// folding signatures is what a name-to-file question actually needs; parse and merge cost more than
+	// the two of them together and answer nothing asked here.
 	function sweptOver(walk SourceSweep, readerPath FilePath) returns LspCorpus
-		var kept = MaxonSourcePathSet.create()
-
-		// Seeded from the array the library loops index (`StdlibSource.growStdlibBodyDemand` and its two
-		// siblings), so the keep-set and their domain cannot drift apart. `registerTheReader` names what
-		// a library file missing from the corpus costs.
-		for path in self.librarySourcePaths 'eachLibraryFile'
-			kept.insert(path)
-		end 'eachLibraryFile'
-
-		for path in sweptSourcesOf(walk) 'eachSource'
-			// Kept because the walk listed it, not because it could be read: a file that will not open is
-			// as often held by a save or a scanner as deleted. Only a path the walk no longer lists is
-			// unregistered, and one file that will not open leaves the rest of the corpus answering.
-			kept.insert(path)
-
-			try loadOneSourceFileIfChanged(self, path: path) otherwise ignore
-		end 'eachSource'
-
-		let reader = registeredSpellingOf(self, path: readerPath.resolve(Directory.currentPath()))
-		kept.insert(reader)
-
-		unregisterWhatTheWalkNoLongerLists(self, walk: walk, kept: kept)
-
-		registerTheReader(self, readerPath: reader)
+		let reader = try self.refreshFromWalk(walk, readerPath: readerPath, unreadable: UnreadableSource.skipped) otherwise panic("sweptOver: a corpus skips a source it cannot read, so its refresh refuses nothing")
 
 		var pool = FrontEndPool.create()
 
@@ -723,7 +765,95 @@ extension Project
 		let signatures = try queryProgramSignatures(self) otherwise return LspCorpus.unavailable
 		return LspCorpus.loaded(self, signatures: signatures, readerPath: reader)
 	end 'sweptOver'
+
+	module function refreshFromDisk(readerPath FilePath) returns DiskRefresh throws CompileError
+		let walk = maxonSourcesIn(self.rootPath, selection: SourceSelection.productionOnly)
+
+		if not walkLists(walk, path: readerPath) 'notInTheBuild'
+			return DiskRefresh.unlisted
+		end 'notInTheBuild'
+
+		return DiskRefresh.listed(try self.refreshFromWalk(walk, readerPath: readerPath, unreadable: UnreadableSource.refused))
+	end 'refreshFromDisk'
+
+	function refreshFromWalk(walk SourceSweep, readerPath FilePath, unreadable UnreadableSource) returns FilePath throws CompileError
+		var kept = MaxonSourcePathSet.create()
+
+		// Seeded from the array the library loops index (`StdlibSource.growStdlibBodyDemand` and its two
+		// siblings), so the keep-set and their domain cannot drift apart. `registerTheReader` names what
+		// a library file missing from the corpus costs.
+		let libraryPaths = self.librarySourcePaths.clone()
+
+		for path in libraryPaths 'eachLibraryFile'
+			try self.keptAndRefreshed(path, kept: kept, unreadable: unreadable)
+		end 'eachLibraryFile'
+
+		match walk 'walk'
+			swept then break 'walk'
+			walkFailed then try refuseWhen(unreadable, failure: CompileError.directoryNotFound(self.rootPath))
+		end 'walk'
+
+		for path in sweptSourcesOf(walk) 'eachSource'
+			// Kept because the walk listed it, not because it could be read: a file that will not open is
+			// as often held by a save or a scanner as deleted. Only a path the walk no longer lists is
+			// unregistered. Under `skipped` one file that will not open leaves the rest answering; a
+			// project check refuses instead, as `maxon build` does. The reader is always `skipped`, because
+			// the buffer's text stands in for it (`overlayUnsavedText`).
+			try self.keptAndRefreshed(path, kept: kept, unreadable: UnreadableSource.skipped if namesTheSameFile(path, other: readerPath) else unreadable)
+		end 'eachSource'
+
+		let reader = registeredSpellingOf(self, path: readerPath.resolve(Directory.currentPath()))
+		kept.insert(reader)
+
+		unregisterWhatTheWalkNoLongerLists(self, walk: walk, kept: kept)
+
+		registerTheReader(self, readerPath: reader)
+
+		return reader
+	end 'refreshFromWalk'
+
+	function keptAndRefreshed(path FilePath, kept MaxonSourcePathSet, unreadable UnreadableSource) throws CompileError
+		kept.insert(path)
+
+		try loadOneSourceFileIfChanged(self, path: path) otherwise 'unread'
+			try refuseWhen(unreadable, failure: CompileError.readError(path))
+		end 'unread'
+	end 'keptAndRefreshed'
 end 'Project'
+
+module union DiskRefresh
+	listed(reader FilePath)
+	unlisted
+end 'DiskRefresh'
+
+function walkLists(walk SourceSweep, path FilePath) returns bool
+	match walk 'walk'
+		swept(sources) then return pathIsAmong(sources, path: path)
+		walkFailed then return true
+	end 'walk'
+end 'walkLists'
+
+function pathIsAmong(sources MaxonSourcePathArray, path FilePath) returns bool
+	for source in sources 'eachSource'
+		if namesTheSameFile(source, other: path) 'theSameFile'
+			return true
+		end 'theSameFile'
+	end 'eachSource'
+
+	return false
+end 'pathIsAmong'
+
+enum UnreadableSource
+	skipped
+	refused
+end 'UnreadableSource'
+
+function refuseWhen(unreadable UnreadableSource, failure CompileError) throws CompileError
+	match unreadable 'unreadable'
+		skipped then return
+		refused then throw failure
+	end 'unreadable'
+end 'refuseWhen'
 
 function sweptSourcesOf(walk SourceSweep) returns MaxonSourcePathArray
 	return match walk 'walk'

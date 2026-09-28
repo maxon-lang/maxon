@@ -1,0 +1,76 @@
+let UnreadableSiblingDirName = "diagnostics-project-unreadable-sibling"
+let UnreadableSiblingDeclaringFileName = "a.maxon"
+let UnreadableSiblingBufferFileName = "b.maxon"
+let UnreadableSiblingUnreadableFileName = "c.maxon"
+let UnreadableSiblingDeclaringSource = "module function one() returns ExitCode\n\treturn 1\nend 'one'\n"
+let UnreadableSiblingBufferSource = "function main() returns ExitCode\n\treturn one()\nend 'main'\n"
+let UnreadableSiblingUnreadableSource = "module function two() returns ExitCode\n\treturn 2\nend 'two'\n"
+let UnreadableSiblingMessagePrefix = "error: could not read "
+let UnreadableSiblingLine = 0 as AssertedInt
+let UnreadableSiblingCharacter = 0 as AssertedInt
+
+let WindowsAclCommand = "icacls"
+let WindowsAclDenyFlag = "/deny"
+let WindowsAclRemoveDenyFlag = "/remove:d"
+let WindowsAclReadRight = ":(R)"
+let WindowsUserVariable = "USERNAME"
+let PosixModeCommand = "chmod"
+let PosixNoAccessMode = "000"
+let PosixReadWriteMode = "644"
+
+test 'a sibling the project cannot read is published as a build reports it'
+	let root = stagedProjectDiagnosticsRoot(UnreadableSiblingDirName)
+	writeCorpusFile(root, fileName: UnreadableSiblingDeclaringFileName, content: UnreadableSiblingDeclaringSource)
+	writeCorpusFile(root, fileName: UnreadableSiblingBufferFileName, content: UnreadableSiblingBufferSource)
+	writeCorpusFile(root, fileName: UnreadableSiblingUnreadableFileName, content: UnreadableSiblingUnreadableSource)
+
+	let unreadable = root.join(UnreadableSiblingUnreadableFileName)
+	let expectedMessage = "{UnreadableSiblingMessagePrefix}{unreadable.toString()}"
+
+	setReadAccess(unreadable, access: ReadAccess.denied)
+	let session = probeProjectCheckSession(root, fileName: UnreadableSiblingBufferFileName, content: UnreadableSiblingBufferSource, edits: StringArray.create())
+	setReadAccess(unreadable, access: ReadAccess.restored)
+
+	discardOutsideCheckoutDir(root)
+
+	let reported = try onlyProjectDiagnostic(session.diagnostics, note: "`c.maxon` cannot be read, and a `maxon build` of the staged project reports exactly `{expectedMessage}` and nothing else.")
+
+	try Expect.isTrue(reported.code.isAbsent(), message: "a build reports an unreadable source with no error code, and the server published {reported.code.describe()}: {reported.message}")
+	try Expect.equal(reported.message, expected: expectedMessage, message: "the server must say what the build says.")
+	try Expect.equal(reported.range.startLine as AssertedInt, expected: UnreadableSiblingLine, message: "a file the build could not read has no position in the buffer, so the diagnostic sits at the document's start.")
+	try Expect.equal(reported.range.startCharacter as AssertedInt, expected: UnreadableSiblingCharacter, message: "a file the build could not read has no position in the buffer, so the diagnostic sits at the document's start.")
+	try expectOneProjectCheckOutcome(session.reports, version: InitialDocumentVersion, outcome: ProjectCheckUnloadable, note: "the project cannot be loaded while one of its sources cannot be read.")
+end 'a sibling the project cannot read is published as a build reports it'
+
+enum ReadAccess
+	denied
+	restored
+end 'ReadAccess'
+
+function setReadAccess(file FilePath, access ReadAccess)
+	#if os(Windows)
+		let user = try Process.environmentVariable(WindowsUserVariable) otherwise panic("unreadable sibling: `{WindowsUserVariable}` is unset, so there is no account to deny reading to")
+		let arguments = match access 'access'
+			denied gives [file.toString(), WindowsAclDenyFlag, "{user}{WindowsAclReadRight}"]
+			restored gives [file.toString(), WindowsAclRemoveDenyFlag, user]
+		end 'access'
+
+		let command = WindowsAclCommand
+	#else
+		let mode = match access 'access'
+			denied gives PosixNoAccessMode
+			restored gives PosixReadWriteMode
+		end 'access'
+
+		let arguments = [mode, file.toString()]
+		let command = PosixModeCommand
+	#endif
+
+	let changed = try Subprocess.run(Executable.name(command), arguments: arguments) otherwise (e) 'unspawnable'
+		panic("unreadable sibling: `{command}` could not run: {e.displayReason()}")
+	end 'unspawnable'
+
+	if not changed.succeeded() 'refused'
+		panic("unreadable sibling: `{command}` could not set {file.toString()} {access.name}: {changed.stderr}{changed.stdout}")
+	end 'refused'
+end 'setReadAccess'

@@ -1,0 +1,57 @@
+let SupersededCheckDirName = "diagnostics-project-superseded-check"
+let SupersededCheckEditedSource = "function main() returns ExitCode\n\treturn 1\nend 'main'\n"
+let SupersededCheckEditedVersion = 2 as DocumentVersion
+
+union SupersededCheckOutcome
+	reported(reports ProjectCheckReportArray)
+	broke(detail String)
+end 'SupersededCheckOutcome'
+
+test 'a project check superseded by an edit is abandoned rather than finished first'
+	let root = stagedBusyCheckProject(SupersededCheckDirName)
+
+	var client = LspClient.start()
+	let outcome = supersedeTheRunningCheck(client, root: root)
+	client.release()
+
+	discardOutsideCheckoutDir(root)
+
+	let reports = try supersededCheckReports(outcome)
+
+	try expectOneProjectCheckOutcome(reports, version: InitialDocumentVersion, outcome: ProjectCheckAbandoned, note: "the edit arrived while the check of the opened version was running past its debounce, so that check was working and must have stopped rather than run to the end.")
+	try expectOneProjectCheckOutcome(reports, version: SupersededCheckEditedVersion, outcome: ProjectCheckPublished, note: "the edited version is current and nothing supersedes it, so its check runs and publishes.")
+end 'a project check superseded by an edit is abandoned rather than finished first'
+
+function supersedeTheRunningCheck(client LspClient, root FilePath) returns SupersededCheckOutcome
+	let uri = fileUriOf(root.join(BusyCheckBufferFileName))
+	var outcome = SupersededCheckOutcome.broke(UnreportedSessionEnding)
+
+	try 'session'
+		_ = client.initializeAtRoot(root)
+		client.initialized()
+		client.openDocument(uri, content: BusyCheckBufferSource)
+		_ = client.awaitPublishedDiagnostics(uri)
+		sleep(BusyCheckPastTheDebounceMs)
+
+		client.changeDocument(uri, content: SupersededCheckEditedSource, version: SupersededCheckEditedVersion)
+		_ = client.awaitProjectCheckPublish(uri)
+		outcome = SupersededCheckOutcome.reported(client.awaitProjectCheckReports(uri, through: SupersededCheckEditedVersion))
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed or
+				malformedResponse or
+				serverRefused then outcome = SupersededCheckOutcome.broke(e.explained())
+		end 'reason'
+	end 'failed'
+
+	return outcome
+end 'supersedeTheRunningCheck'
+
+function supersededCheckReports(outcome SupersededCheckOutcome) returns ProjectCheckReportArray throws TestFailure
+	match outcome 'outcome'
+		reported(reports) then return reports
+		broke(detail) then try Expect.fail("the session did not deliver the edited version's project publish and every outcome line through it: {detail}")
+	end 'outcome'
+
+	panic("supersededCheckReports: the `broke` arm always throws, so this line is unreachable")
+end 'supersededCheckReports'

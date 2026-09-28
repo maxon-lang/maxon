@@ -18,10 +18,11 @@ Visual Studio Code extension that provides syntax highlighting and Language Serv
   an element taken out of a generic container, or by a service handle, which offers its service's messages
   plus `shutdown` and `clone`.
 - **Diagnostics that know about your other files**: a name a sibling file of the project declares
-  counts as declared. Each buffer is checked on its own, so errors that span the whole program are the
-  build's to report; while a file is unsaved, errors about its own text are published immediately and
-  name-dependent ones once you save. This needs a workspace folder that contains the file — with none
-  open, each buffer is checked alone.
+  counts as declared. Each buffer is checked on its own at once; in a project with a `.maxproj`, the
+  whole project is then compiled with your unsaved text, a moment after you stop typing, and the file
+  shows the errors `maxon build`'s checks report on it. This needs a workspace folder that contains the
+  file — with none open, each buffer is checked alone. Each project check writes an outcome line to the
+  **Maxon Language Server** output channel.
 - Language configuration: comment support, bracket pairing, and auto-closing pairs
 - **Code formatting**: the language server's formatter, applied on save by default
 - **Compiler Explorer**: View the Target IR the compiler lowers a program to

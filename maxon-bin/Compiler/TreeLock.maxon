@@ -56,9 +56,9 @@
 // without releasing it: killed by hand, or ended with its process tree when an MCP tool call
 // reaches its timeout.
 //
-// So the record is REWRITTEN while its holder works (`touchTreeLock`, throttled to one write every
-// `TouchIntervalMs`), and its FILE MTIME is the liveness signal: a lock nothing has touched for
-// `AbandonedAfterSeconds` is broken automatically, with a printed line saying so.
+// So the record is REWRITTEN while its holder works (`TreeLockHold.touch`, throttled to one write
+// every `TouchIntervalMs`), and its FILE MTIME is the liveness signal: a lock nothing has touched
+// for `AbandonedAfterSeconds` is broken automatically, with a printed line saying so.
 //
 // ⚠ A pid probe answers the wrong question here. The pid is recorded, because a reader needs it to
 // end the holder, but it is never tested: a pid is reused, so "alive" can be a stranger, and a
@@ -127,28 +127,79 @@ type OwnedLock
 	end 'create'
 end 'OwnedLock'
 
-typealias OwnedLockArray = Array with OwnedLock
+union HeldTreeLock
+	held(lock OwnedLock)
+	none
+end 'HeldTreeLock'
 
-// ⚠ **AT MOST ONE ELEMENT, AND THE ARRAY IS THE OPTIONAL** — the shape a module-level global can
-// actually hold. A global's initializer must be a CONSTANT EXPRESSION (E2045), so no struct- or
-// union-valued global can be constructed at module scope; an empty `Array.create()` is one, and from
-// then on the state is MUTATED in place rather than reassigned. That is the same shape
-// `PhaseProbe.openPhaseSpans` uses for the same reason, and it is why the emptiness test below reads
-// as a count.
-//
-// ⚠ It also steers clear of a compiler defect: assigning a union value to a global stores the WRONG
-// SSA value (`std.global_store_i64 @g %1` picks up `mm_alloc`'s size argument instead of the box),
-// which is a silent wrong answer on both x64 and arm64 and an `E9001` crash whenever the stale id has
-// no home in the storing function. Do not "simplify" this into a `union` global until that is fixed.
-var ownedLocks = OwnedLockArray.create()
+export type TreeLockHold
+	var holding as HeldTreeLock
+	var lastTouchMs as InstantMs
 
-// When the record was last rewritten, on the MONOTONIC clock — the right instrument for "how long
-// since", as opposed to the wall clock stamped INTO the record, which is the right one for "when".
-//
-// It starts at zero rather than at `Clock.nowMs()`, which is both what a module-level initializer can
-// express and the right value anyway: a process holding no lock never reads it, and the first touch
-// after one is taken rewrites a record `takeLock` has just written.
-var lastTouchMs = 0 as InstantMs
+	export static function none() returns TreeLockHold
+		return Self{holding: HeldTreeLock.none, lastTouchMs: 0}
+	end 'none'
+
+	// ⭐ Say the holder is still working. Cheap enough to call from anywhere that runs regularly — the
+	// write is throttled to one every `TouchIntervalMs`.
+	//
+	// It is called from the places that are BOTH periodic and load-bearing: every compile phase
+	// (`recordPhaseDelta`), every turn of the spec pool's dispatch loop, every scale rung. Those are the
+	// sites at which "this process is still getting somewhere" is genuinely true, which is what the record
+	// claims.
+	//
+	// ⚠ **THE OWNERSHIP TEST COMES FIRST, AND THAT ORDER IS THE COST.** Almost every caller of this holds
+	// NO lock — every one of the suite's thousands of child compiles reaches `recordPhaseDelta` — so the
+	// common path must be the cheap one: a match on `none`, and no clock read at all.
+	export function touch()
+		match self.holding 'holding'
+			none then return
+			held(lock) then self.touchHeld(lock)
+		end 'holding'
+	end 'touch'
+
+	// Rewrite the record with a fresh mtime and a fresh `heldSeconds`. A failed write is IGNORED: the tree
+	// lock is an advisory guard against two developers' commands, and failing a twelve-minute build over
+	// one unwritable heartbeat would cost far more than the race it prevents. The consequence of a
+	// swallowed failure is bounded and self-correcting — the lock ages out and the next command breaks it,
+	// loudly.
+	function touchHeld(lock OwnedLock)
+		if Clock.elapsedMs(self.lastTouchMs) < TouchIntervalMs 'tooSoon'
+			return
+		end 'tooSoon'
+
+		_ = writeRecord(lock.path, token: lock.token, sinceUnix: lock.sinceUnix, heldSeconds: secondsSince(lock.sinceUnix))
+		self.lastTouchMs = Clock.nowMs()
+	end 'touchHeld'
+
+	// Give the lock up. A no-op for a hold that never took one, so every command may call it on the way
+	// out without asking whether it holds anything.
+	//
+	// ⚠ **IT REMOVES THE FILE ONLY IF THE FILE IS STILL MINE.** A holder that stalled long enough to be
+	// declared abandoned has had its lock broken and RETAKEN by somebody else; deleting the path blindly
+	// would then delete a stranger's live lock and hand the tree to a third process. The token is what
+	// distinguishes them, and it is the reason the record carries one at all.
+	export function release()
+		match self.holding 'holding'
+			none then return
+			held(lock) then self.releaseHeld(lock)
+		end 'holding'
+	end 'release'
+
+	function releaseHeld(lock OwnedLock)
+		if not recordCarriesToken(lock.path, token: lock.token) 'brokenAndRetaken'
+			return
+		end 'brokenAndRetaken'
+
+		try File.delete(lock.path) otherwise ignore
+		self.holding = HeldTreeLock.none
+	end 'releaseHeld'
+
+	function take(lock OwnedLock)
+		self.holding = HeldTreeLock.held(lock)
+		self.lastTouchMs = Clock.nowMs()
+	end 'take'
+end 'TreeLockHold'
 
 // What one read of the lock file found. `present` carries the record's own bytes (echoed verbatim by
 // the refusal) and how long ago it was last touched (the liveness signal, read from the mtime rather
@@ -163,7 +214,7 @@ end 'LockRecord'
 //
 // A refusal is immediate and never a wait: a silent wait turns a fast, legible error into a hang
 // indistinguishable from a wedge.
-export function acquireTreeLock(operand FilePath) returns ExitCode
+export function acquireTreeLock(operand FilePath, into TreeLockHold) returns ExitCode
 	let lockPath = try lockPathFor(operand) otherwise 'noCheckout'
 		// Nothing shared to guard. `operand` has no `stdlib/` above it, so no other command in any
 		// tree writes what this one is about to write.
@@ -171,49 +222,10 @@ export function acquireTreeLock(operand FilePath) returns ExitCode
 	end 'noCheckout'
 
 	return match readLockRecord(lockPath) 'existing'
-		absent gives takeLock(lockPath)
-		present(text, untouchedSeconds) gives claimOverExisting(lockPath, record: text, untouchedSeconds: untouchedSeconds)
+		absent gives takeLock(lockPath, into: into)
+		present(text, untouchedSeconds) gives claimOverExisting(lockPath, record: text, untouchedSeconds: untouchedSeconds, into: into)
 	end 'existing'
 end 'acquireTreeLock'
-
-// ⭐ Say the holder is still working. Cheap enough to call from anywhere that runs regularly — the
-// write is throttled to one every `TouchIntervalMs`.
-//
-// It is called from the places that are BOTH periodic and load-bearing: every compile phase
-// (`recordPhaseDelta`), every turn of the spec pool's dispatch loop, every scale rung. Those are the
-// sites at which "this process is still getting somewhere" is genuinely true, which is what the record
-// claims.
-//
-// ⚠ **THE OWNERSHIP TEST COMES FIRST, AND THAT ORDER IS THE COST.** Almost every caller of this holds
-// NO lock — every one of the suite's thousands of child compiles reaches `recordPhaseDelta` — so the
-// common path must be the cheap one: a lookup on an empty array, and no clock read at all. Measured:
-// `scale-test` reports allocations IDENTICAL to the digit at all six rungs against the row logged
-// before this existed, so the unlocked path allocates nothing.
-export function touchTreeLock()
-	let lock = try ownedLocks.get(0) otherwise return
-
-	if Clock.elapsedMs(lastTouchMs) < TouchIntervalMs 'tooSoon'
-		return
-	end 'tooSoon'
-
-	refreshRecord(lock)
-end 'touchTreeLock'
-
-// Give the lock up. A no-op for a process that never took one, so every command may call it on the way
-// out without asking whether it holds anything.
-//
-// ⚠ **IT REMOVES THE FILE ONLY IF THE FILE IS STILL MINE.** A holder that stalled long enough to be
-// declared abandoned has had its lock broken and RETAKEN by somebody else; deleting the path blindly
-// would then delete a stranger's live lock and hand the tree to a third process. The token is what
-// distinguishes them, and it is the reason the record carries one at all.
-export function releaseTreeLock()
-	let held = try ownedLocks.get(0) otherwise return
-
-	// CLONED out of the array, because `removeOwnRecord` empties the array the borrow would otherwise
-	// pin (E3070) — the same reason the spec pool clones a job out of its in-flight slot.
-	let owned = held.clone()
-	removeOwnRecord(owned)
-end 'releaseTreeLock'
 
 // The lock file for the checkout containing `operand`, or a throw when there is no checkout above it.
 //
@@ -241,7 +253,7 @@ function readLockRecord(lockPath FilePath) returns LockRecord
 end 'readLockRecord'
 
 // A record is already there: refuse to the holder, or break it if it has stopped moving.
-function claimOverExisting(lockPath FilePath, record String, untouchedSeconds LockSeconds) returns ExitCode
+function claimOverExisting(lockPath FilePath, record String, untouchedSeconds LockSeconds, into TreeLockHold) returns ExitCode
 	if untouchedSeconds <= AbandonedAfterSeconds 'stillMoving'
 		return reportBusy(lockPath, record: record, untouchedSeconds: untouchedSeconds)
 	end 'stillMoving'
@@ -250,7 +262,7 @@ function claimOverExisting(lockPath FilePath, record String, untouchedSeconds Lo
 	// stale claim, and for its reason: if this ever breaks a lock whose holder was merely slow, the
 	// line below is the only evidence that would explain the two runs that followed.
 	printError("warning: breaking an ABANDONED tree lock at {lockPath.toString()} — nothing has touched it for {untouchedSeconds} s (a live holder rewrites it every {TouchIntervalMs} ms), so the process that took it is gone or has stopped making progress. It said:\n{indentedRecord(record)}\n")
-	return takeLock(lockPath)
+	return takeLock(lockPath, into: into)
 end 'claimOverExisting'
 
 // ⚠ The read-back is the mutual exclusion, and the pause is what makes it work. Neither the stdlib
@@ -261,7 +273,7 @@ end 'claimOverExisting'
 // A process that stalls longer than `AcquireVerifyDelayMs` between finding the path free and
 // writing it can still overwrite a lock the winner has verified. The contention guarded is
 // human-scale, and the failure left is two runs, never a worse one.
-function takeLock(lockPath FilePath) returns ExitCode
+function takeLock(lockPath FilePath, into TreeLockHold) returns ExitCode
 	let sinceUnix = WallClock.nowUnixSeconds()
 	let pid = __Builtins.currentProcessId()
 
@@ -286,30 +298,9 @@ function takeLock(lockPath FilePath) returns ExitCode
 		return NothingRanExitCode
 	end 'lostTheRace'
 
-	ownedLocks.push(OwnedLock.create(lockPath, token: token, sinceUnix: sinceUnix))
-	lastTouchMs = Clock.nowMs()
+	into.take(OwnedLock.create(lockPath, token: token, sinceUnix: sinceUnix))
 	return SucceededExit
 end 'takeLock'
-
-// Rewrite the record with a fresh mtime and a fresh `heldSeconds`. A failed write is IGNORED: the tree
-// lock is an advisory guard against two developers' commands, and failing a twelve-minute build over
-// one unwritable heartbeat would cost far more than the race it prevents. The consequence of a
-// swallowed failure is bounded and self-correcting — the lock ages out and the next command breaks it,
-// loudly.
-function refreshRecord(lock OwnedLock)
-	_ = writeRecord(lock.path, token: lock.token, sinceUnix: lock.sinceUnix, heldSeconds: secondsSince(lock.sinceUnix))
-	lastTouchMs = Clock.nowMs()
-end 'refreshRecord'
-
-// Remove the record, but only while it still carries this process's token — see `releaseTreeLock`.
-function removeOwnRecord(lock OwnedLock)
-	if not recordCarriesToken(lock.path, token: lock.token) 'brokenAndRetaken'
-		return
-	end 'brokenAndRetaken'
-
-	try File.delete(lock.path) otherwise ignore
-	ownedLocks.clear()
-end 'removeOwnRecord'
 
 // The record's bytes. `argv` is the whole command line, because "which of my four terminals is this?"
 // is the question a reader actually has, and a bare command name does not answer it.

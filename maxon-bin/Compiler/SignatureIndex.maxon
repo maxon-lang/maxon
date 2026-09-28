@@ -34912,7 +34912,7 @@ export type ProgramSignatures
 		self.typeNames.settleBaseline()
 		self.requireInlineRecordMemoIsWithinTheBaseline()
 		self.journal = IndexJournal.create()
-		self.baseline = IndexBaseline.create(self.crossFileConstantReads.count(), canonicalNamesIndexedThrough: self.canonicalNamesIndexedThrough, arrayByteInstance: self.arrayByteInstance, arrayByteInstanceComputed: self.arrayByteInstanceComputed, deepCloneWalkReadInstances: self.deepCloneWalkReadInstances, fingerprint: self.fingerprint(FingerprintDetail.valuesOnly))
+		self.baseline = IndexBaseline.create(self.crossFileConstantReads.count(), canonicalNamesIndexedThrough: self.canonicalNamesIndexedThrough, arrayByteInstance: self.arrayByteInstance, arrayByteInstanceComputed: self.arrayByteInstanceComputed, deepCloneWalkReadInstances: self.deepCloneWalkReadInstances, someRecordHoldsAnInterfaceValue: self.someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: self.recordsHoldingAnInterfaceValueCounted, fingerprint: self.fingerprint(FingerprintDetail.valuesOnly))
 	end 'settleBaseline'
 
 	// Before any declaration is folded: every whole-program answer computed from here on counts these types as
@@ -35095,6 +35095,8 @@ export type ProgramSignatures
 		self.arrayByteInstance = self.baseline.arrayByteInstance
 		self.arrayByteInstanceComputed = self.baseline.arrayByteInstanceComputed
 		self.deepCloneWalkReadInstances = self.baseline.deepCloneWalkReadInstances
+		self.someRecordHoldsAnInterfaceValue = self.baseline.someRecordHoldsAnInterfaceValue
+		self.recordsHoldingAnInterfaceValueCounted = self.baseline.recordsHoldingAnInterfaceValueCounted
 		self.typeNames.restoreBaseline()
 		self.journal = IndexJournal.create()
 	end 'restoreJournaledWrites'
@@ -35506,14 +35508,16 @@ type IndexBaseline
 	export let arrayByteInstance as GenericInstanceId
 	export let arrayByteInstanceComputed as bool
 	export let deepCloneWalkReadInstances as bool
+	export let someRecordHoldsAnInterfaceValue as bool
+	export let recordsHoldingAnInterfaceValueCounted as bool
 	export let fingerprint as IndexFingerprint
 
 	static function unsettled() returns IndexBaseline
-		return Self{settled: false, crossFileConstantReadCount: 0, canonicalNamesIndexedThrough: 0, arrayByteInstance: 0, arrayByteInstanceComputed: false, deepCloneWalkReadInstances: false, fingerprint: IndexFingerprint.create(FingerprintDetail.valuesOnly)}
+		return Self{settled: false, crossFileConstantReadCount: 0, canonicalNamesIndexedThrough: 0, arrayByteInstance: 0, arrayByteInstanceComputed: false, deepCloneWalkReadInstances: false, someRecordHoldsAnInterfaceValue: false, recordsHoldingAnInterfaceValueCounted: false, fingerprint: IndexFingerprint.create(FingerprintDetail.valuesOnly)}
 	end 'unsettled'
 
-	static function create(crossFileConstantReadCount NameInFileIndex, canonicalNamesIndexedThrough GenericInstanceId, arrayByteInstance GenericInstanceId, arrayByteInstanceComputed bool, deepCloneWalkReadInstances bool, fingerprint IndexFingerprint) returns IndexBaseline
-		return Self{settled: true, crossFileConstantReadCount: crossFileConstantReadCount, canonicalNamesIndexedThrough: canonicalNamesIndexedThrough, arrayByteInstance: arrayByteInstance, arrayByteInstanceComputed: arrayByteInstanceComputed, deepCloneWalkReadInstances: deepCloneWalkReadInstances, fingerprint: fingerprint}
+	static function create(crossFileConstantReadCount NameInFileIndex, canonicalNamesIndexedThrough GenericInstanceId, arrayByteInstance GenericInstanceId, arrayByteInstanceComputed bool, deepCloneWalkReadInstances bool, someRecordHoldsAnInterfaceValue bool, recordsHoldingAnInterfaceValueCounted bool, fingerprint IndexFingerprint) returns IndexBaseline
+		return Self{settled: true, crossFileConstantReadCount: crossFileConstantReadCount, canonicalNamesIndexedThrough: canonicalNamesIndexedThrough, arrayByteInstance: arrayByteInstance, arrayByteInstanceComputed: arrayByteInstanceComputed, deepCloneWalkReadInstances: deepCloneWalkReadInstances, someRecordHoldsAnInterfaceValue: someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: recordsHoldingAnInterfaceValueCounted, fingerprint: fingerprint}
 	end 'create'
 end 'IndexBaseline'
 

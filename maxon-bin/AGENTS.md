@@ -680,9 +680,10 @@ facts worth knowing before you get there:
   ```
   ./maxon-bin/.maxon/maxon.exe test tests/test-command
   ```
-  ⚠ **CI runs four of them** — `tests/lsp`, `tests/fmt`, `tests/spec-harness` and `tests/ladders` — and
-  `/land`'s battery runs the last three beside the suite and the self-compile. Every other corpus runs
-  only when someone names it.
+  ⚠ **CI runs four of them on every lane** — `tests/lsp` (with `--timeout=60000`: its cases wait out
+  whole-project checks), `tests/fmt`, `tests/spec-harness` and `tests/ladders` — plus `tests/debug`,
+  `tests/dap` and `tests/mcp` on x64-windows, and `/land`'s battery runs `fmt`, `spec-harness` and
+  `ladders` beside the suite and the self-compile. Every other corpus runs only when someone names it.
 - ⛔ **EXPECTATIONS ARE GENERATED, NEVER HAND-WRITTEN** — e.g. `python
   tests/fmt/generate-expectations.py` runs the compiler and records its real answers, so a corpus
   pins what the tool DOES rather than what its author expected. Re-run the generator after changing

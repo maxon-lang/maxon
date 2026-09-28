@@ -357,14 +357,15 @@ export function runScaleTest(args MaxonArgs) returns ExitCode
 		return brokenRun("the corpus root is not a valid path", detail: "--emit-corpus={args.emitCorpus}")
 	end 'badCorpus'
 
-	let lockExit = acquireTreeLock(corpusRoot)
+	var treeLock = TreeLockHold.none()
+	let lockExit = acquireTreeLock(corpusRoot, into: treeLock)
 
 	if not exitSucceeded(lockExit) 'busyTree'
 		return lockExit
 	end 'busyTree'
 
-	let runExit = measureScaleLadder(args, corpusRoot: corpusRoot)
-	releaseTreeLock()
+	let runExit = measureScaleLadder(args, corpusRoot: corpusRoot, treeLock: treeLock)
+	treeLock.release()
 	return runExit
 end 'runScaleTest'
 
@@ -373,7 +374,7 @@ end 'runScaleTest'
 // the shared helper rather than a second copy of the message, at the ONE count that differs.
 let ScaleTestUsage = "maxon scale-test [--rungs=<n>] [--repeat=<n>] [--note=<text>] [--emit-corpus=<dir>] [--result-json=<path>]"
 
-function measureScaleLadder(args MaxonArgs, corpusRoot FilePath) returns ExitCode
+function measureScaleLadder(args MaxonArgs, corpusRoot FilePath, treeLock TreeLockHold) returns ExitCode
 	// `--update-required` is a spec-test flag, and the driver parses the command line before it knows
 	// which command is running, so without this refusal it would be accepted here and silently do
 	// nothing: this suite has no goldens.
@@ -457,7 +458,7 @@ function measureScaleLadder(args MaxonArgs, corpusRoot FilePath) returns ExitCod
 		// One rung compiled is this run's unit of progress, and the tree lock's heartbeat is what
 		// says the holder is still making it. The compiles themselves are CHILD processes, so none
 		// of the compiler's own phase heartbeats reach this record — the ladder has to say so itself.
-		touchTreeLock()
+		treeLock.touch()
 
 		var result = try compileRung(compilerExe, root: corpusRoot, rung: rung) otherwise (error) 'rungFailed'
 			// A rung that would not compile — or that compiled and then DISAGREED with the generator about

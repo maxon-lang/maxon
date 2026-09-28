@@ -161,11 +161,15 @@ module function writeLspResult(doc JsonDoc, id LspRequestId, result JsonNodeId)
 end 'writeLspResult'
 
 module function writeLspNotification(doc JsonDoc, method String, params JsonNodeId)
+	lspOutputWriter().write(lspNotificationText(doc, method: method, params: params))
+end 'writeLspNotification'
+
+module function lspNotificationText(doc JsonDoc, method String, params JsonNodeId) returns String
 	var envelope = beginJsonRpcMessage(doc)
 	envelope.put(JsonRpcMethodKey, value: JsonNode.stringNode(method))
 	envelope.putNode(JsonRpcParamsKey, value: params)
-	writeJsonRpcMessage(doc, envelope: envelope)
-end 'writeLspNotification'
+	return jsonRpcMessageText(doc, envelope: envelope)
+end 'lspNotificationText'
 
 // Refuse the request `id`. `message` is the human-readable sentence the client displays; `code` is the
 // machine-readable reason it branches on.
@@ -186,7 +190,7 @@ function writeLspResponse(doc JsonDoc, id LspRequestId, memberKey String, payloa
 	var envelope = beginJsonRpcMessage(doc)
 	envelope.put(JsonRpcIdKey, value: idNodeFor(id))
 	envelope.putNode(memberKey, value: payload)
-	writeJsonRpcMessage(doc, envelope: envelope)
+	lspOutputWriter().write(jsonRpcMessageText(doc, envelope: envelope))
 end 'writeLspResponse'
 
 // The one member EVERY JSON-RPC message carries, whichever direction it goes and whether or not it is
@@ -197,11 +201,11 @@ function beginJsonRpcMessage(doc JsonDoc) returns LspJsonObject
 	return envelope
 end 'beginJsonRpcMessage'
 
-// Root `envelope` in its document, serialize it, and frame it onto standard output.
-function writeJsonRpcMessage(doc JsonDoc, envelope LspJsonObject)
+// Root `envelope` in its document and serialize it; `LspStdoutWriter` frames and writes it.
+function jsonRpcMessageText(doc JsonDoc, envelope LspJsonObject) returns String
 	doc.root = envelope.finish()
-	writeLspMessage(Json.stringify(doc))
-end 'writeJsonRpcMessage'
+	return Json.stringify(doc)
+end 'jsonRpcMessageText'
 
 function idNodeFor(id LspRequestId) returns JsonNode
 	return match id 'idShape'

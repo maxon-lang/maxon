@@ -83,14 +83,17 @@ A memo's value is read by every later compile of the same `Project`, so nothing 
 pass that writes into a structure it got from a memo corrupts what the next compile reads.
 
 The merged module is the one exception, and it is handled by dropping it: type resolution and managed-global
-setup do mutate it, so `invalidateAllModuleCache` discards it after every compile. Re-folding it is cheap,
+setup do mutate it, so `invalidateAllModuleCache` discards it as each compile takes it. Re-folding it is cheap,
 and every expensive memo underneath survives. Parse artifacts are also rewritten on their first merge, which
 is safe only within one `Project`.
 
-Across `Project`s in one process, only facts that are a pure function of a file's bytes are shared: the
-standard library's tokens, `#if` views and producer masks, keyed by content hash
-(`QueryEngine.sharedFileMemos`). Parse artifacts and swept declarations carry interned ids and are
-mutated, so they are never shared. Compiles in one process run strictly one at a time.
+Across `Project`s, only facts that are a pure function of a file's bytes are shared: the standard
+library's tokens, `#if` views and producer masks, keyed by content hash, in the store a
+`CompileSession` carries (`CompileSession.fileMemos`) — one per spec worker process, one for the
+language server's document projects, one per MCP session. Parse artifacts and swept declarations carry
+interned ids and are mutated, so they stay with their `Project`. A compile's state lives on its
+`Project` and its `CompileSession`, which lets the language server run project checks in services of
+their own beside its main loop; each store serves one compile at a time.
 
 ## The parallel front end
 

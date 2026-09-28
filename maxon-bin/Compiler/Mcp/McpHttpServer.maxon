@@ -54,9 +54,10 @@ type McpHttpSession
 	export let id as String
 	export var lastSeenMs as SessionMillis
 	export let debug as DebugSessionSlot
+	export var fileMemos as SharedFileMemoMap
 
 	static function create(id String, nowMs SessionMillis) returns McpHttpSession
-		return Self{id: id, lastSeenMs: nowMs, debug: DebugSessionSlot.create()}
+		return Self{id: id, lastSeenMs: nowMs, debug: DebugSessionSlot.create(), fileMemos: SharedFileMemoMap.create()}
 	end 'create'
 
 	export function touch()
@@ -390,7 +391,7 @@ function serveInitialize(exchange HttpExchange, doc JsonDoc, offered OfferedSess
 end 'serveInitialize'
 
 function serveOnSession(exchange HttpExchange, doc JsonDoc, session McpHttpSession, devMode bool, exePath FilePath, minted OfferedSession) throws HttpServerError
-	let reply = handleRpcDocument(doc, exePath: exePath, devMode: devMode, debug: session.debug)
+	let reply = handleRpcDocument(doc, exePath: exePath, devMode: devMode, debug: session.debug, fileMemos: session.fileMemos)
 	session.touch()
 
 	match reply 'answer'

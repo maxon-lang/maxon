@@ -129,7 +129,7 @@ function handleToolsList(reqDoc JsonDoc, idNode JsonNodeId, devMode bool) return
 	return rpcResultText(reqDoc, idNode: idNode, resultDoc: doc, resultRoot: result.build(doc))
 end 'handleToolsList'
 
-function dispatchTool(reqDoc JsonDoc, idNode JsonNodeId, spec McpToolSpec, args OptionalNode, exePath FilePath, devMode bool, debug DebugSessionSlot) returns String
+function dispatchTool(reqDoc JsonDoc, idNode JsonNodeId, spec McpToolSpec, args OptionalNode, exePath FilePath, devMode bool, debug DebugSessionSlot, fileMemos SharedFileMemoMap) returns String
 	if spec.name.equals(BuildToolName) 'tBuild'
 		return withinContext(buildToolContext(reqDoc, idNode: idNode, args: args, exePath: exePath, devMode: devMode), reqDoc: reqDoc, idNode: idNode, args: args, tool: executeBuildToolWithin)
 	end 'tBuild'
@@ -147,11 +147,11 @@ function dispatchTool(reqDoc JsonDoc, idNode JsonNodeId, spec McpToolSpec, args 
 	end 'tFmt'
 
 	if spec.name.equals(CheckToolName) 'tCheck'
-		return executeCheckTool(reqDoc, idNode: idNode, args: args, exePath: exePath)
+		return executeCheckTool(reqDoc, idNode: idNode, args: args, exePath: exePath, fileMemos: fileMemos)
 	end 'tCheck'
 
 	if spec.name.equals(DumpIrToolName) 'tDumpIr'
-		return executeDumpIrTool(reqDoc, idNode: idNode, args: args, exePath: exePath)
+		return executeDumpIrTool(reqDoc, idNode: idNode, args: args, exePath: exePath, fileMemos: fileMemos)
 	end 'tDumpIr'
 
 	if spec.name.equals(InfoToolName) 'tInfo'
@@ -189,7 +189,7 @@ function withinTheTree(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exe
 	return withinContext(resolveTreeContext(reqDoc, idNode: idNode, args: args, exePath: exePath, compiler: TreeCompiler.ownSlot), reqDoc: reqDoc, idNode: idNode, args: args, tool: tool)
 end 'withinTheTree'
 
-function handleToolsCall(reqDoc JsonDoc, idNode JsonNodeId, paramsId JsonNodeId, exePath FilePath, devMode bool, debug DebugSessionSlot) returns String
+function handleToolsCall(reqDoc JsonDoc, idNode JsonNodeId, paramsId JsonNodeId, exePath FilePath, devMode bool, debug DebugSessionSlot, fileMemos SharedFileMemoMap) returns String
 	let toolName = try reqDoc.getString(paramsId, key: "name") otherwise 'noName'
 		return rpcErrorText(reqDoc, idNode: idNode, code: RpcStandardErrorCode.invalidParams, message: "Missing 'name' in tools/call params")
 	end 'noName'
@@ -206,13 +206,13 @@ function handleToolsCall(reqDoc JsonDoc, idNode JsonNodeId, paramsId JsonNodeId,
 		return rpcErrorText(reqDoc, idNode: idNode, code: RpcStandardErrorCode.invalidParams, message: argumentFaultReason(fault))
 	end 'badArgs'
 
-	return dispatchTool(reqDoc, idNode: idNode, spec: spec, args: args, exePath: exePath, devMode: devMode, debug: debug)
+	return dispatchTool(reqDoc, idNode: idNode, spec: spec, args: args, exePath: exePath, devMode: devMode, debug: debug, fileMemos: fileMemos)
 end 'handleToolsCall'
 
-function handleRpcMessage(line String, exePath FilePath, devMode bool, debug DebugSessionSlot) returns RpcReply
+function handleRpcMessage(line String, exePath FilePath, devMode bool, debug DebugSessionSlot, fileMemos SharedFileMemoMap) returns RpcReply
 	let doc = try Json.parse(line) otherwise return unattributedRpcError(RpcStandardErrorCode.parseError, message: "Parse error - invalid JSON")
 
-	return handleRpcDocument(doc, exePath: exePath, devMode: devMode, debug: debug)
+	return handleRpcDocument(doc, exePath: exePath, devMode: devMode, debug: debug, fileMemos: fileMemos)
 end 'handleRpcMessage'
 
 function unattributedRpcError(code RpcStandardErrorCode, message String) returns RpcReply
@@ -222,7 +222,7 @@ function unattributedRpcError(code RpcStandardErrorCode, message String) returns
 	return RpcReply.body(rpcErrorText(errDoc, idNode: nullId, code: code, message: message))
 end 'unattributedRpcError'
 
-export function handleRpcDocument(doc JsonDoc, exePath FilePath, devMode bool, debug DebugSessionSlot) returns RpcReply
+export function handleRpcDocument(doc JsonDoc, exePath FilePath, devMode bool, debug DebugSessionSlot, fileMemos SharedFileMemoMap) returns RpcReply
 	let root = doc.root
 
 	if doc.get(root).kind != JsonKind.jsonObject 'notObj'
@@ -239,11 +239,11 @@ export function handleRpcDocument(doc JsonDoc, exePath FilePath, devMode bool, d
 
 	return match rpcMethodOf(doc) 'asked'
 		absent gives RpcReply.body(rpcErrorText(doc, idNode: idNode, code: RpcStandardErrorCode.invalidRequest, message: "Invalid Request - missing 'method'"))
-		named(method) gives answeredRpcMethod(doc, idNode: idNode, method: method, exePath: exePath, devMode: devMode, debug: debug)
+		named(method) gives answeredRpcMethod(doc, idNode: idNode, method: method, exePath: exePath, devMode: devMode, debug: debug, fileMemos: fileMemos)
 	end 'asked'
 end 'handleRpcDocument'
 
-function answeredRpcMethod(doc JsonDoc, idNode JsonNodeId, method String, exePath FilePath, devMode bool, debug DebugSessionSlot) returns RpcReply
+function answeredRpcMethod(doc JsonDoc, idNode JsonNodeId, method String, exePath FilePath, devMode bool, debug DebugSessionSlot, fileMemos SharedFileMemoMap) returns RpcReply
 	let root = doc.root
 
 	if method.equals(RpcInitializeMethod) 'init'
@@ -257,7 +257,7 @@ function answeredRpcMethod(doc JsonDoc, idNode JsonNodeId, method String, exePat
 	if method.equals("tools/call") 'tc'
 		return match resolveChildKey(doc, parent: root, key: "params") 'pr'
 			none gives RpcReply.body(rpcErrorText(doc, idNode: idNode, code: RpcStandardErrorCode.invalidParams, message: "Missing 'params' for tools/call"))
-			some(paramsId) gives RpcReply.body(handleToolsCall(doc, idNode: idNode, paramsId: paramsId, exePath: exePath, devMode: devMode, debug: debug))
+			some(paramsId) gives RpcReply.body(handleToolsCall(doc, idNode: idNode, paramsId: paramsId, exePath: exePath, devMode: devMode, debug: debug, fileMemos: fileMemos))
 		end 'pr'
 	end 'tc'
 
@@ -321,6 +321,7 @@ end 'runMcpServer'
 function runMcpStdioServer(devMode bool, exePath FilePath) returns ExitCode
 	var stdin = Console.stdin()
 	let debug = DebugSessionSlot.create()
+	var fileMemos = SharedFileMemoMap.create()
 
 	while true 'serverLoop'
 		let line = try stdin.readLine() otherwise 'eof'
@@ -333,7 +334,7 @@ function runMcpStdioServer(devMode bool, exePath FilePath) returns ExitCode
 			continue
 		end 'blank'
 
-		match handleRpcMessage(trimmed, exePath: exePath, devMode: devMode, debug: debug) 'answer'
+		match handleRpcMessage(trimmed, exePath: exePath, devMode: devMode, debug: debug, fileMemos: fileMemos) 'answer'
 			none then break 'answer'
 			body(text) then print("{text}\n")
 		end 'answer'

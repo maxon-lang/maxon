@@ -1,0 +1,80 @@
+let WarmRecheckDirName = "diagnostics-project-warm-recheck"
+let WarmRecheckColdDirName = "diagnostics-project-warm-recheck-cold"
+let WarmRecheckDeclaringFileName = "a.maxon"
+let WarmRecheckBufferFileName = "b.maxon"
+let WarmRecheckDeclaringSource = "module typealias Percent = int(0 to 100)\n\nmodule function clamp(x Percent) returns Percent\n\treturn x\nend 'clamp'\n"
+let WarmRecheckCleanSource = "function main() returns ExitCode\n\treturn clamp(1)\nend 'main'\n"
+let WarmRecheckBrokenSource = "function main() returns ExitCode\n\treturn clamp(101)\nend 'main'\n"
+let WarmRecheckEditedVersion = 2 as DocumentVersion
+
+test 'a warm recheck after an unsaved edit publishes what a cold check of the saved text does'
+	let warmRoot = stagedProjectDiagnosticsRoot(WarmRecheckDirName)
+	writeCorpusFile(warmRoot, fileName: WarmRecheckDeclaringFileName, content: WarmRecheckDeclaringSource)
+	writeCorpusFile(warmRoot, fileName: WarmRecheckBufferFileName, content: WarmRecheckCleanSource)
+
+	var client = LspClient.start()
+	let warm = collectWarmRecheck(client, root: warmRoot)
+	client.release()
+
+	discardOutsideCheckoutDir(warmRoot)
+
+	let coldRoot = stagedProjectDiagnosticsRoot(WarmRecheckColdDirName)
+	writeCorpusFile(coldRoot, fileName: WarmRecheckDeclaringFileName, content: WarmRecheckDeclaringSource)
+	writeCorpusFile(coldRoot, fileName: WarmRecheckBufferFileName, content: WarmRecheckBrokenSource)
+
+	let cold = probeProjectCheckDiagnostics(coldRoot, fileName: WarmRecheckBufferFileName, content: WarmRecheckBrokenSource, edits: StringArray.create())
+
+	discardOutsideCheckoutDir(coldRoot)
+
+	expectNoProjectDiagnostics(projectDiagnosticsPublish(warm, index: ProjectDiagnosticsAtOpen), note: "the buffer opened holding `clamp(1)`, exactly the disk's bytes, and a `maxon build` of the staged project exits 0. This publish is the CONTROL.")
+
+	let warmItems = try projectDiagnosticItems(projectDiagnosticsPublish(warm, index: ProjectDiagnosticsAfterTheEdit), note: "the warm session, after an unsaved `didChange` to `clamp(101)`")
+	let coldItems = try projectDiagnosticItems(cold, note: "the cold session, which opened `clamp(101)` saved on disk")
+
+	try Expect.isFalse(coldItems.isEmpty(), message: "a `maxon build` of the saved `clamp(101)` reports an `E3005`, and the cold session published nothing, so the comparison below would pass vacuously.")
+	try Expect.equal(warmItems.count() as AssertedInt, expected: coldItems.count() as AssertedInt, message: "the warm recheck published {renderedItems(warmItems)} and the cold check {renderedItems(coldItems)}.")
+
+	for i in 0 upto coldItems.count() 'eachItem'
+		let warmItem = try warmItems.get(i) otherwise panic("the counts above are equal, so index {i} exists in both")
+		let coldItem = try coldItems.get(i) otherwise panic("the loop bound is this array's count")
+
+		try Expect.equal(renderedItem(warmItem), expected: renderedItem(coldItem), message: "item {i} differs between the warm recheck and the cold check of the same text.")
+	end 'eachItem'
+end 'a warm recheck after an unsaved edit publishes what a cold check of the saved text does'
+
+function collectWarmRecheck(client LspClient, root FilePath) returns ProjectDiagnosticsProbeArray
+	var probes = ProjectDiagnosticsProbeArray.create()
+	let uri = fileUriOf(root.join(WarmRecheckBufferFileName))
+
+	try 'session'
+		_ = client.initializeAtRoot(root)
+		client.initialized()
+		client.openDocument(uri, content: WarmRecheckCleanSource)
+		probes.push(ProjectDiagnosticsProbe.published(client.awaitProjectCheckPublish(uri).items))
+
+		client.changeDocument(uri, content: WarmRecheckBrokenSource, version: WarmRecheckEditedVersion)
+		probes.push(ProjectDiagnosticsProbe.published(client.awaitProjectCheckPublish(uri).items))
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed or
+				malformedResponse or
+				serverRefused then probes.push(ProjectDiagnosticsProbe.broke(e.explained()))
+		end 'reason'
+	end 'failed'
+
+	return probes
+end 'collectWarmRecheck'
+
+function renderedItem(item PublishedDiagnostic) returns String
+	return "[{item.code.describe()} at {item.range.startLine}:{item.range.startCharacter}-{item.range.endLine}:{item.range.endCharacter} — {item.message}]"
+end 'renderedItem'
+
+function renderedItems(items PublishedDiagnosticArray) returns String
+	var rendered = ""
+
+	for item in items 'eachItem'
+		rendered = "{rendered} {renderedItem(item)}"
+	end 'eachItem'
+
+	return "\{{rendered.trim()}\}"
+end 'renderedItems'

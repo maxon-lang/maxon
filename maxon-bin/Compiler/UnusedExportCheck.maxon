@@ -279,8 +279,11 @@ module function checkUnusedExports(project Project, module MaxonModule, signatur
 		return
 	end 'nothingWiderThanAFile'
 
+	try requireStillWanted(project)
 	collectReferences(module, signatures: signatures, tracked: tracked, moduleTypeNames: project.typeNames)
+	try requireStillWanted(project)
 	try collectFileTypeReferences(project, signatures: signatures, userFiles: sources.userFiles, tracked: tracked)
+	try requireStillWanted(project)
 	emitDiagnostics(project, tracked: tracked, runtimeFiles: sources.runtimeFiles, demanded: reachedSignatureDemands(project, tracked: tracked))
 end 'checkUnusedExports'
 

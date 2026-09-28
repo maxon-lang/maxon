@@ -8677,6 +8677,10 @@ export type Project
 	// day N compiles run at once.
 	export var traceUnit as TraceUnit
 
+	export var openPhaseSpans as TraceNameArray
+
+	export var session as CompileSession
+
 	// The reserved words every lex of this compile, and every diagnostic naming an expected keyword, reads.
 	export let keywords as KeywordTable
 
@@ -8684,7 +8688,7 @@ export type Project
 	// folds and the constant evaluator. A real parse builds its own (`ParseStaging.parseFile`).
 	export var readerAnchors as ParserAnchors
 
-	export static function create(db QueryDatabase, rootPath FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath, debugStream bool) returns Project
+	export static function create(db QueryDatabase, rootPath FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath, debugStream bool, session CompileSession) returns Project
 		return Self{
 			db: db,
 			stdlibDir: stdlibDir,
@@ -8765,6 +8769,8 @@ export type Project
 			timings: CompileTimings.create(),
 			memory: CompileMemory.create(),
 			traceUnit: traceUnitOf(rootPath),
+			openPhaseSpans: TraceNameArray.create(),
+			session: session,
 			keywords: KeywordTable.create(),
 			readerAnchors: ParserAnchors.create()
 		}
@@ -8776,9 +8782,87 @@ end 'Project'
 // Both library roots are passed IN rather than located here so the project is born
 // with valid ones: the library loader reads them before the first pass runs, and a
 // field that is briefly wrong is a field something can read while it is wrong.
-export function createProject(rootPath FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath, debugStream bool) returns Project
-	return Project.create(QueryDatabase.create(target.os), rootPath: rootPath, target: target, stdlibDir: stdlibDir, runtimeDir: runtimeDir, debugStream: debugStream)
+export function createProject(rootPath FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath, debugStream bool, session CompileSession) returns Project
+	return Project.create(QueryDatabase.create(target.os), rootPath: rootPath, target: target, stdlibDir: stdlibDir, runtimeDir: runtimeDir, debugStream: debugStream, session: session)
 end 'createProject'
+
+// Asking a `whileCurrent` interest is a round trip to the stdout writer's service, and the checkpoints
+// are far denser than a lapse needs noticing.
+let CompileInterestPollMs = 50 as DurationMs
+
+export union CompileInterest
+	always
+	whileCurrent(writer LspStdoutWriter.handle, uri String, version LspDocumentVersion)
+
+	export function stillWanted() returns bool
+		match self 'interest'
+			always then return true
+			whileCurrent(writer, uri, version) then return try await writer.isCurrent(uri.clone(), version: version) otherwise false
+		end 'interest'
+	end 'stillWanted'
+end 'CompileInterest'
+
+export type CompileSession
+	export var diagnostics as DiagnosticSink
+	export var fileMemos as SharedFileMemoMap
+	export var treeLock as TreeLockHold
+	var interest as CompileInterest
+	var interestAskedMs as InstantMs
+	var abandoned as bool
+
+	export static function create(diagnostics DiagnosticSink, fileMemos SharedFileMemoMap, treeLock TreeLockHold) returns CompileSession
+		return Self{diagnostics: diagnostics, fileMemos: fileMemos, treeLock: treeLock, interest: CompileInterest.always, interestAskedMs: Clock.nowMs(), abandoned: false}
+	end 'create'
+
+	export static function printing() returns CompileSession
+		return Self.create(DiagnosticSink.printing(), fileMemos: SharedFileMemoMap.create(), treeLock: TreeLockHold.none())
+	end 'printing'
+
+	export static function discarding() returns CompileSession
+		return Self.create(DiagnosticSink.discarding(), fileMemos: SharedFileMemoMap.create(), treeLock: TreeLockHold.none())
+	end 'discarding'
+
+	// `always` answers before any clock is read: checkpoints sit in per-function loops, and a build must
+	// not pay for them.
+	export function stillWanted() returns bool
+		match self.interest 'interest'
+			always then return true
+			whileCurrent then return self.polledStillWanted()
+		end 'interest'
+	end 'stillWanted'
+
+	function polledStillWanted() returns bool
+		if self.abandoned 'abandonedAlready'
+			return false
+		end 'abandonedAlready'
+
+		if Clock.elapsedMs(self.interestAskedMs) < CompileInterestPollMs 'askedRecently'
+			return true
+		end 'askedRecently'
+
+		self.interestAskedMs = Clock.nowMs()
+		self.abandoned = not self.interest.stillWanted()
+
+		return not self.abandoned
+	end 'polledStillWanted'
+
+	export function wantedBy(asker CompileInterest)
+		self.interest = asker
+		self.abandoned = false
+		self.interestAskedMs = Clock.nowMs()
+	end 'wantedBy'
+end 'CompileSession'
+
+// Every call sits ahead of the work it guards, never between a stage and the memo that keeps it:
+// `lowerTheProgram` asks before `invalidateAllModuleCache`, so an abandoned check leaves the merged
+// module for the next one.
+export function requireStillWanted(project Project) throws CompileError
+	if project.session.stillWanted() 'wanted'
+		return
+	end 'wanted'
+
+	throw CompileError.abandoned
+end 'requireStillWanted'
 
 // Is the project root itself under a library tier, as in `maxon build stdlib/URL.maxon`? Asked in
 // this one place because four rules turn on it:
@@ -8820,7 +8904,7 @@ end 'rootIsUnder'
 // ⛔ **BUT IT IS NOT EVERY LINE THIS COMPILER PRINTS, AND THE EXCEPTION CARRIES
 // PATHS.** The `CompileError` arms other than `compileError` never become
 // a `Diagnostic` at all: `Main.reportCompileError` writes them straight to
-// `emitDiagnosticLine`, whose own header owns that argument. They therefore
+// the caller's `DiagnosticSink`, whose own header owns that argument. They therefore
 // bypass BOTH rules stated here, so a staged path in one of them is still
 // printed as the staged path. Nothing has been measured reaching that state
 // under `maxon test`; it is written down because a rule stated at a funnel
@@ -8841,11 +8925,13 @@ end 'projectHasErrors'
 // Render every accumulated diagnostic, one per line, in report order. The driver calls this on the
 // failure path so the exact `error EXXXX: ...` lines the spec compares against reach the user.
 //
-// ⚠ It writes through `emitDiagnosticLine` rather than to stderr directly, which is what lets a
-// caller compiling IN PROCESS read the same bytes a subprocess would have printed — see that
-// function, which owns the argument. There is no second route: the line ending is decided there too.
+// ⚠ It writes through the session's `DiagnosticSink` rather than to stderr directly, which is what
+// lets a caller compiling IN PROCESS read the same bytes a subprocess would have printed — see that
+// type, which owns the argument. There is no second route: the line ending is decided there too.
 export function printDiagnostics(project Project)
+	var sink = project.session.diagnostics
+
 	for diagnostic in project.diagnostics 'each'
-		emitDiagnosticLine(diagnostic.render())
+		sink.emit(diagnostic.render())
 	end 'each'
 end 'printDiagnostics'

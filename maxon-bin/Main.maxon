@@ -874,10 +874,10 @@ function refuseUndeclaredDelegatedTarget(projectFile FilePath, word String, offe
 	return OwnFailureExit
 end 'refuseUndeclaredDelegatedTarget'
 
-module function reportEntryRosterError(e EntryRosterError)
+module function reportEntryRosterError(e EntryRosterError, sink DiagnosticSink = DiagnosticSink.printing())
 	match e 'why'
-		unreadable(driverFile) then reportCompileError(CompileError.readError(driverFile))
-		unlexable(diagnostic) then emitDiagnosticLine(diagnostic.render())
+		unreadable(driverFile) then reportCompileError(CompileError.readError(driverFile), sink: sink)
+		unlexable(diagnostic) then sink.emit(diagnostic.render())
 	end 'why'
 end 'reportEntryRosterError'
 
@@ -1000,14 +1000,15 @@ function buildAndReport(inputPaths MaxonSourcePathArray, target Target, args Max
 		return BuildOutcome.failed(OwnFailureExit)
 	end 'refusedOptions'
 
-	let lockExit = acquireBuildTreeLock(inputPaths, outputOverride: args.outputOverride)
+	var session = CompileSession.printing()
+	let lockExit = acquireBuildTreeLock(inputPaths, outputOverride: args.outputOverride, into: session.treeLock)
 
 	if not exitSucceeded(lockExit) 'busyTree'
 		return BuildOutcome.failed(lockExit)
 	end 'busyTree'
 
-	let outcome = compileAndReport(inputPaths, target: target, args: args, outputOverride: outputOverride, debugInfo: debugInfo, productVersion: productVersion, defines: defines)
-	releaseTreeLock()
+	let outcome = compileAndReport(inputPaths, target: target, args: args, outputOverride: outputOverride, debugInfo: debugInfo, productVersion: productVersion, defines: defines, session: session)
+	session.treeLock.release()
 	return outcome
 end 'buildAndReport'
 
@@ -1051,7 +1052,7 @@ end 'refusedBuildOptions'
 // The root comes from `commonAncestorOf`, the function `loadProject` roots the project at, so the
 // lock and the compile cannot disagree about which tree is written. A root with no `stdlib/` above
 // it takes no lock: `acquireTreeLock` answers that itself.
-function acquireBuildTreeLock(inputPaths MaxonSourcePathArray, outputOverride String) returns ExitCode
+function acquireBuildTreeLock(inputPaths MaxonSourcePathArray, outputOverride String, into TreeLockHold) returns ExitCode
 	if not outputOverride.isEmpty() 'callerOwnsTheOutput'
 		return SucceededExit
 	end 'callerOwnsTheOutput'
@@ -1067,12 +1068,12 @@ function acquireBuildTreeLock(inputPaths MaxonSourcePathArray, outputOverride St
 		return SucceededExit
 	end 'writesBesideOneNamedFile'
 
-	return acquireTreeLock(root)
+	return acquireTreeLock(root, into: into)
 end 'acquireBuildTreeLock'
 
 // Separate from `buildAndReport` so the tree lock has one release: Maxon has no `defer`.
-function compileAndReport(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs, outputOverride String, debugInfo bool, productVersion VersionComponentArray, defines DefineArray) returns BuildOutcome
-	let outputPath = try compile(inputPaths, target: target, outputOverride: outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath, runtimeIrNames: args.runtimeIrNames, asyncTrace: args.asyncTrace, debugStream: args.debugStream, debugInfo: debugInfo, coverage: args.coverage, censusByTag: args.censusByTag, censusPhase: args.censusPhase, allocationsByTag: args.allocationsByTag, allocationsPhase: args.allocationsPhase, productVersion: productVersion, defines: defines) otherwise (e) 'compileErr'
+function compileAndReport(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs, outputOverride String, debugInfo bool, productVersion VersionComponentArray, defines DefineArray, session CompileSession) returns BuildOutcome
+	let outputPath = try compile(inputPaths, target: target, outputOverride: outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath, runtimeIrNames: args.runtimeIrNames, asyncTrace: args.asyncTrace, debugStream: args.debugStream, debugInfo: debugInfo, coverage: args.coverage, censusByTag: args.censusByTag, censusPhase: args.censusPhase, allocationsByTag: args.allocationsByTag, allocationsPhase: args.allocationsPhase, productVersion: productVersion, defines: defines, session: session) otherwise (e) 'compileErr'
 		reportCompileError(e)
 		return BuildOutcome.failed(OwnFailureExit)
 	end 'compileErr'
@@ -1231,14 +1232,15 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	// Two suites share `<specDir>/.spec-tmp`, so one would delete what the other is compiling, and a
 	// build running alongside replaces the binary this run draws verdicts from. Asked after every free
 	// check, so a refusal is instant and precedes any worker.
-	let lockExit = acquireTreeLock(specDir)
+	var treeLock = TreeLockHold.none()
+	let lockExit = acquireTreeLock(specDir, into: treeLock)
 
 	if not exitSucceeded(lockExit) 'busyTree'
 		return lockExit
 	end 'busyTree'
 
-	let suiteExit = runSpecSuite(args, specDir: specDir, harnessExe: harnessExe, effectiveTarget: effectiveTarget)
-	releaseTreeLock()
+	let suiteExit = runSpecSuite(args, specDir: specDir, harnessExe: harnessExe, effectiveTarget: effectiveTarget, treeLock: treeLock)
+	treeLock.release()
 	return suiteExit
 end 'runSpecTest'
 
@@ -1356,8 +1358,8 @@ module function backQuoted(words StringArray) returns StringArray
 end 'backQuoted'
 
 // Separate so `runSpecTest` has one exit that releases the tree lock; see `compileAndReport`.
-function runSpecSuite(args MaxonArgs, specDir FilePath, harnessExe FilePath, effectiveTarget Target) returns ExitCode
-	let run = try runSpecPool(harnessExe, specDir: specDir, filterPatterns: args.filterPatterns, updateRequired: args.updateRequired, workerCount: args.workers, effectiveTarget: effectiveTarget, includeNetwork: args.includeNetwork) otherwise (e) 'runErr'
+function runSpecSuite(args MaxonArgs, specDir FilePath, harnessExe FilePath, effectiveTarget Target, treeLock TreeLockHold) returns ExitCode
+	let run = try runSpecPool(harnessExe, specDir: specDir, filterPatterns: args.filterPatterns, updateRequired: args.updateRequired, workerCount: args.workers, effectiveTarget: effectiveTarget, includeNetwork: args.includeNetwork, treeLock: treeLock) otherwise (e) 'runErr'
 		reportCompileError(e)
 		return OwnFailureExit
 	end 'runErr'
@@ -1614,27 +1616,29 @@ end 'reportUnknownOption'
 // that never reach `project.diagnostics`.
 //
 // The `compileError` arm is silent: its diagnostics were already emitted through the same sink, so
-// a failing build's stderr is exactly those lines (the `maxoncstderr` spec contract).
+// a failing build's stderr is exactly those lines (the `maxoncstderr` spec contract). The `abandoned`
+// arm is silent because nobody is waiting for the answer of a check whose `CompileInterest` lapsed.
 //
-// `emitDiagnosticLine` terminates each line, so no arm carries its own newline.
-module function reportCompileError(e CompileError)
+// `DiagnosticSink` terminates each line, so no arm carries its own newline.
+module function reportCompileError(e CompileError, sink DiagnosticSink = DiagnosticSink.printing())
 	match e 'report'
-		fileNotFound(p) then emitDiagnosticLine("error: file not found: {p}")
-		directoryNotFound(p) then emitDiagnosticLine("error: directory not found: {p}")
-		noSourceFiles(r) then emitDiagnosticLine("error: no source files under {r}")
+		fileNotFound(p) then sink.emit("error: file not found: {p}")
+		directoryNotFound(p) then sink.emit("error: directory not found: {p}")
+		noSourceFiles(r) then sink.emit("error: no source files under {r}")
 
 		// Not "share no directory": two top-level directories on one drive share the drive root, which a
 		// `FilePath` cannot hold (see `Compiler.commonAncestorOf`).
-		noCommonRoot(first, other) then emitDiagnosticLine("error: {first} and {other} have no common directory this build can be rooted at. Name a directory they are both under as one of the paths, or build them separately")
-		twoDriverFiles(first, second) then emitDiagnosticLine("error: {first} and {second} are both in one directory, which holds one {driverFileKindOf(first)} file at most. Merge them into one, or move one into a directory of its own")
-		nestedProjectFile(outer, nested) then emitDiagnosticLine(nestedProjectFileDiagnostic(outer, nested: nested).render())
-		unnamedDirectory(d) then emitDiagnosticLine("error: {d} has no name for its executable to take. Name the output with {OutputFlagPrefix}<path>")
-		invalidOutputPath(spelling) then emitDiagnosticLine("error: {OutputFlagPrefix}{spelling} is not a valid path")
-		readError(p) then emitDiagnosticLine("error: could not read {p}")
-		stdlibNotFound then emitDiagnosticLine("error: could not locate the stdlib/ directory (every compile loads stdlib source)")
-		runtimeNotFound then emitDiagnosticLine("error: could not locate the runtime/ directory beside stdlib/ (every compile loads runtime source)")
-		runtimeTierIsNotAProgram(r) then emitDiagnosticLine("error: {r} is in the runtime/ tier, which every program compiles; it is not a program of its own. Build a program that uses it")
-		compileError then break 'report'
+		noCommonRoot(first, other) then sink.emit("error: {first} and {other} have no common directory this build can be rooted at. Name a directory they are both under as one of the paths, or build them separately")
+		twoDriverFiles(first, second) then sink.emit("error: {first} and {second} are both in one directory, which holds one {driverFileKindOf(first)} file at most. Merge them into one, or move one into a directory of its own")
+		nestedProjectFile(outer, nested) then sink.emit(nestedProjectFileDiagnostic(outer, nested: nested).render())
+		unnamedDirectory(d) then sink.emit("error: {d} has no name for its executable to take. Name the output with {OutputFlagPrefix}<path>")
+		invalidOutputPath(spelling) then sink.emit("error: {OutputFlagPrefix}{spelling} is not a valid path")
+		readError(p) then sink.emit("error: could not read {p}")
+		stdlibNotFound then sink.emit("error: could not locate the stdlib/ directory (every compile loads stdlib source)")
+		runtimeNotFound then sink.emit("error: could not locate the runtime/ directory beside stdlib/ (every compile loads runtime source)")
+		runtimeTierIsNotAProgram(r) then sink.emit("error: {r} is in the runtime/ tier, which every program compiles; it is not a program of its own. Build a program that uses it")
+		compileError or
+			abandoned then break 'report'
 	end 'report'
 end 'reportCompileError'
 

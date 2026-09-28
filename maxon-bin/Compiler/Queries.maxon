@@ -49,9 +49,10 @@ function queryTokens(project Project, path FilePath, lexing LexSource = LexSourc
 
 	project.db.tokenMisses = project.db.tokenMisses + 1
 
-	// The process-wide store is asked only on a per-`Project` miss, and the answer is written back
-	// into this project's own cache before it returns — so the store is a longer-lived memo behind the
-	// query, not a second one beside it. See `QueryEngine.sharedFileMemos`.
+	// The shared store (`CompileSession.fileMemos`) is asked only on a per-`Project` miss, and the
+	// answer is written back into this project's own cache before it returns — so the store is a
+	// longer-lived memo behind the query, not a second one beside it. See QueryEngine.maxon's "The
+	// memo that outlives a `Project`".
 	if let shared = try sharedTokensOf(project, contentHash: entry.contentHash) 'sharedHit'
 		project.db.tokenCache.upsert(path, value: TokenMemo.create(shared, keyHash: entry.contentHash))
 		return shared
@@ -123,7 +124,7 @@ end 'tokenizedHere'
 // neither, which is sound only because a `Project` has exactly one of each for its whole life
 // (`Project.target` and `Project.debugStream` are `let`s, and re-aiming a live `Project` does not
 // compile). Two targets or two flag settings are therefore two `Project`s and two databases, so
-// this cache can never be asked about a build it was not filled for. The process-wide store below
+// this cache can never be asked about a build it was not filled for. The shared store below
 // has no such guarantee — it outlives every `Project` — and so carries both in its key.
 module function queryActiveTokens(project Project, path FilePath, lexing LexSource = LexSource.onThisThread) returns TokenArray throws CompileError
 	// ONE `sourceFiles` probe, validating and stamping from the same hash — see `sourceEntryOf`.
@@ -161,11 +162,11 @@ module function queryActiveTokens(project Project, path FilePath, lexing LexSour
 
 	project.db.activeTokenCache.upsert(path, value: TokenMemo.create(filtered.value, keyHash: entry.contentHash))
 
-	// The process-wide store takes the successes only, where the line above takes the failures too:
+	// The shared store takes the successes only, where the line above takes the failures too:
 	// the empty stream a directive fault produces is paired with a diagnostic on THIS compile's
 	// `project.diagnostics`, and a later compile that merely shares the bytes would have neither.
 	if filtered.filtered 'theFilterSucceeded'
-		shareActiveTokens(entry.contentHash, buildKey: buildKey, activeTokens: filtered.value)
+		shareActiveTokens(project, contentHash: entry.contentHash, buildKey: buildKey, activeTokens: filtered.value)
 	end 'theFilterSucceeded'
 
 	return filtered.value
@@ -213,10 +214,10 @@ function filteredHere(project Project, tokens TokenArray) returns TokenArray thr
 end 'filteredHere'
 
 // Whether a query of `path`'s resolved stream would be answered without a lex — by this project's memo or by
-// the process-wide store — asked without counting, so the query that later answers is the one that counts.
+// the shared store — asked without counting, so the query that later answers is the one that counts.
 module function activeTokensAreHeld(project Project, path FilePath, buildKey BuildKey) returns bool throws CompileError
 	let entry = try sourceEntryOf(project, path: path)
-	_ = try validMemoValue(project.db.activeTokenCache, path: path, entry: entry) otherwise return holdsSharedActiveTokens(entry.contentHash, buildKey: buildKey)
+	_ = try validMemoValue(project.db.activeTokenCache, path: path, entry: entry) otherwise return holdsSharedActiveTokens(project, contentHash: entry.contentHash, buildKey: buildKey)
 	return true
 end 'activeTokensAreHeld'
 
@@ -300,12 +301,14 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	try discoverWholeProgramTokenFacts(project, signatures: signatures, userPaths: userPaths, stdlibPaths: stdlibPaths)
 
 	for path in userPaths 'eachUserFile'
+		try requireStillWanted(project)
 		try foldOneFileInto(project, signatures: signatures, path: path, isStdlibSource: false, isRuntimeSource: isRuntimeSourceFile(project, path: path))
 	end 'eachUserFile'
 
 	try contestStdlibDeclarationsAgainstUserNames(project, signatures: signatures, stdlibPaths: stdlibPaths)
 
 	for path in stdlibPaths 'eachStdlibFile'
+		try requireStillWanted(project)
 		try foldOneFileInto(project, signatures: signatures, path: path, isStdlibSource: true, isRuntimeSource: false)
 	end 'eachStdlibFile'
 
@@ -405,6 +408,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// Before `deriveInstanceNames`: reading a requirement's parameter types can intern a generic
 	// instance no other declaration named, and an instance interned after the warming walk would have
 	// its two name memos derived lazily by the parse, which must only ever read them.
+	try requireStillWanted(project)
 	try foldInterfaceDeclarations(project, signatures: signatures)
 
 	// Only now can an `implements` clause be read to its end: whether a comma opens a second argument
@@ -464,7 +468,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// board. `admitted` is what THIS compile offered `stdlib/`'s files; `holding` is what the process
 	// has kept — the two are equal while the store is bounded, and only `holding` moves if it ever
 	// stops being.
-	let holding = sharedMemoEntryCount()
+	let holding = sharedMemoEntryCount(project)
 
 	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
 		compilerLogger(CompilerLogGroup.compiler).debug("shared stdlib memo — {project.db.sharedTokenHits} token hit(s), {project.db.sharedActiveTokenHits} active-token hit(s), {project.db.sharedProducerMaskHits} producer-mask hit(s), {project.db.shareableTokenHashes.count()} admitted, {holding} holding")
@@ -521,7 +525,7 @@ function producerMaskFor(project Project, signatures ProgramSignatures, path Fil
 	end 'sharedHit'
 
 	let mask = scanner.fileNamesProducerMask()
-	shareProducerMask(contentHash, buildKey: buildKey, mask: mask)
+	shareProducerMask(project, contentHash: contentHash, buildKey: buildKey, mask: mask)
 	return mask
 end 'producerMaskFor'
 
@@ -1256,6 +1260,7 @@ function frontEndMustFoldAgain(project Project, module MaxonModule) returns bool
 	let signatures = try queryProgramSignatures(project)
 	let reach = try libraryReachOf(project, module: module, signatures: signatures)
 	let demandGrew = try growStdlibBodyDemand(project, reach: reach)
+	try requireStillWanted(project)
 	let liveKeysMoved = liveDefaultKeysMoved(project, module: module, signatures: signatures, reached: reachedLibraryNamesOf(reach))
 	return demandGrew or liveKeysMoved
 end 'frontEndMustFoldAgain'
@@ -1373,6 +1378,7 @@ function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSigna
 	var artifacts = try pool.parseEveryFile(project, signatures: signatures)
 
 	for position in 0 upto artifacts.count() 'eachArtifact'
+		try requireStillWanted(project)
 		var artifact = try artifacts.get(position) otherwise panic("foldVerdict: artifacts.get OOB at {position}")
 		logTypeNameTable(artifact)
 		let mergeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.merge)

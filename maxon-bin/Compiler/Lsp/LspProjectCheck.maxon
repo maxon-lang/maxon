@@ -1,0 +1,139 @@
+// Longer than the gap between keystrokes in a burst, so a burst is checked once, at its last version.
+let LspProjectCheckSettleMs = 300 as Milliseconds
+
+module type LspProjectCheckRequest
+	export let uri as String
+	export let path as FilePath
+	export let text as String
+	export let version as LspDocumentVersion
+	export let clientVersion as ClientDocumentVersion
+	export let alone as DiagnosticArray
+
+	module static function create(uri String, path FilePath, text String, version LspDocumentVersion, clientVersion ClientDocumentVersion, alone DiagnosticArray) returns LspProjectCheckRequest
+		return Self{uri: uri, path: path, text: text, version: version, clientVersion: clientVersion, alone: alone}
+	end 'create'
+end 'LspProjectCheckRequest'
+
+union WarmProject
+	notBuilt
+	held(project Project)
+end 'WarmProject'
+
+// While the session is open, every check it is asked for ends in exactly one outcome line, and
+// every version not superseded gets exactly one publish from here, after the session's fast one.
+// `tests/lsp` counts publishes per version, so an outcome that returns without publishing holds a
+// case until its failure bound.
+module type LspProjectChecker
+	let root as FilePath
+	let stdlibDir as FilePath
+	let runtimeDir as FilePath
+	let writer as LspStdoutWriter.handle
+	var warm as WarmProject
+
+	module static function create(root FilePath, stdlibDir FilePath, runtimeDir FilePath, writer LspStdoutWriter.handle) returns LspProjectChecker
+		return Self{root: root, stdlibDir: stdlibDir, runtimeDir: runtimeDir, writer: writer, warm: WarmProject.notBuilt}
+	end 'create'
+
+	export function check(request LspProjectCheckRequest)
+		if not self.interestIn(request).stillWanted() 'supersededBeforeTheSettle'
+			self.report(request, outcome: ProjectCheckOutcome.superseded)
+			return
+		end 'supersededBeforeTheSettle'
+
+		sleep(LspProjectCheckSettleMs)
+
+		if not self.interestIn(request).stillWanted() 'supersededWhileSettling'
+			self.report(request, outcome: ProjectCheckOutcome.superseded)
+			return
+		end 'supersededWhileSettling'
+
+		match self.warm 'warm'
+			notBuilt then self.buildCold(request)
+			held(project) then self.publish(request, check: project.checkedAgainst(request, interest: self.interestIn(request)))
+		end 'warm'
+	end 'check'
+
+	function buildCold(request LspProjectCheckRequest)
+		var project = createProject(self.root, target: detectHostTarget(), stdlibDir: self.stdlibDir, runtimeDir: self.runtimeDir, debugStream: false, session: CompileSession.discarding())
+
+		try loadLibrarySources(project) otherwise (e) 'noLibrary'
+			self.publish(request, check: projectCheckFailedWith(e))
+			return
+		end 'noLibrary'
+
+		let check = project.checkedAgainst(request, interest: self.interestIn(request))
+		self.warm = WarmProject.held(project)
+		self.publish(request, check: check)
+	end 'buildCold'
+
+	function publish(request LspProjectCheckRequest, check ProjectCheck)
+		match check 'check'
+			checked(diagnostics) then self.publishDiagnostics(request, diagnostics: diagnostics, unbuilt: StringArray.create(), outcome: ProjectCheckOutcome.published)
+			unbuilt(failures) then self.publishDiagnostics(request, diagnostics: request.alone, unbuilt: failures, outcome: ProjectCheckOutcome.unloadable)
+			unlisted then self.publishDiagnostics(request, diagnostics: request.alone, unbuilt: StringArray.create(), outcome: ProjectCheckOutcome.unlisted)
+			abandoned then self.report(request, outcome: ProjectCheckOutcome.abandoned)
+		end 'check'
+	end 'publish'
+
+	function publishDiagnostics(request LspProjectCheckRequest, diagnostics DiagnosticArray, unbuilt StringArray, outcome ProjectCheckOutcome)
+		let tokens = lspDocumentTokens(request.text, keywords: KeywordTable.create())
+		let body = documentDiagnosticsText(request.uri, text: request.text, tokens: tokens, diagnostics: diagnostics, path: request.path, unbuilt: unbuilt)
+
+		self.writer.publishIfCurrent(request.uri.clone(), version: request.version, clientVersion: request.clientVersion.clone(), outcome: outcome, body: body)
+	end 'publishDiagnostics'
+
+	function report(request LspProjectCheckRequest, outcome ProjectCheckOutcome)
+		self.writer.report(request.uri.clone(), clientVersion: request.clientVersion.clone(), outcome: outcome)
+	end 'report'
+
+	function interestIn(request LspProjectCheckRequest) returns CompileInterest
+		return CompileInterest.whileCurrent(self.writer.clone(), uri: request.uri.clone(), version: request.version)
+	end 'interestIn'
+end 'LspProjectChecker'
+
+union ProjectCheck
+	checked(diagnostics DiagnosticArray)
+	unbuilt(failures StringArray)
+	unlisted
+	abandoned
+end 'ProjectCheck'
+
+extension Project
+	function checkedAgainst(request LspProjectCheckRequest, interest CompileInterest) returns ProjectCheck
+		self.session.wantedBy(interest)
+
+		let refresh = try self.refreshFromDisk(request.path) otherwise (e) 'unreadable'
+			return projectCheckFailedWith(e)
+		end 'unreadable'
+
+		match refresh 'refresh'
+			listed(reader) then return self.checkedWithTheBuffer(request, reader: reader)
+			unlisted then return ProjectCheck.unlisted
+		end 'refresh'
+	end 'checkedAgainst'
+
+	function checkedWithTheBuffer(request LspProjectCheckRequest, reader FilePath) returns ProjectCheck
+		overlayUnsavedText(self, path: reader, content: request.text)
+
+		try checkFrontEndWithoutWriting(self) otherwise (e) 'unchecked'
+			return projectCheckFailedWith(e)
+		end 'unchecked'
+
+		return ProjectCheck.checked(attributedTo(self.diagnostics, path: request.path, alone: request.alone))
+	end 'checkedWithTheBuffer'
+end 'Project'
+
+function projectCheckFailedWith(failure CompileError) returns ProjectCheck
+	match failure.failure() 'failure'
+		abandoned then return ProjectCheck.abandoned
+		driverFailed then return ProjectCheck.unbuilt(projectFailureLines(failure))
+		reportedDiagnostics then panic("projectCheckFailedWith: a refused check is an answer `checkFrontEndWithoutWriting` returns, and neither a library load nor a disk refresh reports a diagnostic")
+	end 'failure'
+end 'projectCheckFailedWith'
+
+function projectFailureLines(failure CompileError) returns StringArray
+	var sink = DiagnosticSink.capturing()
+	reportCompileError(failure, sink: sink)
+
+	return sink.emitted()
+end 'projectFailureLines'

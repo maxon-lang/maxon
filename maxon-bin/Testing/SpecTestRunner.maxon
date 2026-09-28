@@ -759,13 +759,13 @@ end 'CompileVerdict'
 //
 // `diagnostics` is a FIELD rather than a payload on the two failing arms because EVERY compile has
 // one: a clean build's is the empty string, which is a real answer and not an absence — the same
-// distinction `Diagnostics.endDiagnosticCapture` panics to protect, since `""` is exactly what a
+// distinction `DiagnosticSink.requireCaptured` panics to protect, since `""` is exactly what a
 // compile that said nothing legitimately returns.
 type CompileAnswer
 	export let verdict as CompileVerdict
 
 	// Byte for byte what `maxon build` would have written to stderr, taken at the ONE sink every
-	// compiler-facing line goes through (`Diagnostics.emitDiagnosticLine`) — NOT re-rendered from
+	// compiler-facing line goes through (`DiagnosticSink.emit`) — NOT re-rendered from
 	// `project.diagnostics`, which would be a second spelling of the text the corpus's ```maxoncstderr
 	// blocks are compared against. See `compileOneTest`.
 	export let diagnostics as String
@@ -1005,7 +1005,7 @@ end 'TestRun'
 // `prepared` and `observations` hold exactly one entry per selected test in declaration order, a
 // `notRequired` observation included, so the third pass pairs them by index; a length that disagrees
 // panics rather than misattributing a result.
-export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, filterPatterns FilterPatternArray, updateRequired bool, effectiveTarget Target, includeNetwork bool) returns SpecRun throws CompileError
+export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, filterPatterns FilterPatternArray, updateRequired bool, effectiveTarget Target, includeNetwork bool, fileMemos SharedFileMemoMap) returns SpecRun throws CompileError
 	var results = SpecTestResultArray.create()
 	var cpu = SuiteCpuTally.zero()
 
@@ -1066,7 +1066,7 @@ export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, fil
 	var prepared = PreparedTestArray.create()
 
 	for test in tests 'eachCompile'
-		prepared.push(prepareOneTest(test, specName: specName, tempDir: tempDir, exeExtension: exeExtension, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget))
+		prepared.push(prepareOneTest(test, specName: specName, tempDir: tempDir, exeExtension: exeExtension, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget, fileMemos: fileMemos))
 	end 'eachCompile'
 
 	let observations = executeRuns(prepared, specName: specName, tempDir: tempDir, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget)
@@ -2152,7 +2152,7 @@ typealias PreparedTestArray = Array with PreparedTest
 
 // Compile one test in this process and take its verdict as far as it can go without running the
 // program.
-function prepareOneTest(test SpecTest, specName String, tempDir FilePath, exeExtension String, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns PreparedTest
+function prepareOneTest(test SpecTest, specName String, tempDir FilePath, exeExtension String, fragmentDir FilePath, updateRequired bool, effectiveTarget Target, fileMemos SharedFileMemoMap) returns PreparedTest
 	let exeBase = tempDir.join(test.name)
 
 	// The driver appends the platform extension to the `outputOverride` value
@@ -2164,14 +2164,14 @@ function prepareOneTest(test SpecTest, specName String, tempDir FilePath, exeExt
 
 	match stageTest(tempDir, test: test) 'staging'
 		failed(reason) then return PreparedTest.finished(TestRun.notCompiled(reason))
-		staged(s) then return compileStagedTest(test, specName: specName, staged: s, exeBase: exeBase, exePath: exePath, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
+		staged(s) then return compileStagedTest(test, specName: specName, staged: s, exeBase: exeBase, exePath: exePath, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
 	end 'staging'
 end 'prepareOneTest'
 
 // Compile a test whose source is already on disk and decide as much of its verdict as the compiler's
 // answer alone can decide. Split out of `prepareOneTest` only because staging can FAIL, and a union's
 // arms are the honest way to say so — the two functions are one story read top to bottom.
-function compileStagedTest(test SpecTest, specName String, staged StagedTest, exeBase FilePath, exePath FilePath, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns PreparedTest
+function compileStagedTest(test SpecTest, specName String, staged StagedTest, exeBase FilePath, exePath FilePath, fragmentDir FilePath, updateRequired bool, effectiveTarget Target, fileMemos SharedFileMemoMap) returns PreparedTest
 	// ⭐⭐ **THE BREADCRUMB, IMMEDIATELY BEFORE THE COMPILE, AND THIS IS THE WHOLE REASON IT EXISTS.**
 	// The compile runs in THIS process, so a compiler panic kills this worker and the parent never
 	// receives a single record for the job. The parent's plan tells it which tests it is owed; only
@@ -2180,7 +2180,7 @@ function compileStagedTest(test SpecTest, specName String, staged StagedTest, ex
 	// `SpecWorkerPool.emitWorkerStep`.
 	emitWorkerStep(WorkerStep.compile, label: testLabel(specName, testName: test.name))
 
-	let compiled = compileOneTest(test, staged: staged, exeBase: exeBase, exePath: exePath, pinnable: emitsTargetIr(effectiveTarget), effectiveTarget: effectiveTarget)
+	let compiled = compileOneTest(test, staged: staged, exeBase: exeBase, exePath: exePath, pinnable: emitsTargetIr(effectiveTarget), effectiveTarget: effectiveTarget, fileMemos: fileMemos)
 
 	return match preRunVerdict(test, specName: specName, compile: compiled.compile, staged: staged, exePath: exePath, effectiveTarget: effectiveTarget) 'verdict'
 		// ⭐ THE ONE PLACE A CROSS-TARGET SKIP IS DECIDED, and it is here because here is where the
@@ -2211,24 +2211,18 @@ end 'testLabel'
 // compileToCodeResult → writeExecutable` sequence here: the harness calls the ONE driver and the
 // command line calls it too, so the two cannot come to disagree about what a build is.
 //
-// ⭐ **THE DIAGNOSTIC CAPTURE IS OPENED AROUND THE WHOLE CALL, INCLUDING THE FAILURE REPORT.** A
-// refused compile writes its diagnostics through `emitDiagnosticLine` from inside the pipeline; the
-// five `CompileError` arms that never reach `project.diagnostics` are written by
-// `Main.reportCompileError`, which is called HERE, still inside the capture. So the captured text is
-// what the command line would have printed on stderr for the same build — for every failure shape,
-// not just the diagnostic-carrying one — and there is exactly ONE renderer of it.
-//
-// ⚠ **EVERY EXIT CLOSES THE CAPTURE, AND THAT IS NOT A STYLE POINT.** The latch is module-level (it is
-// exact only because a compile is SERIAL — see `Diagnostics.maxon`), so a path that left it open would
-// splice this test's diagnostics onto the next test's, and `beginDiagnosticCapture` panics on the
-// second open rather than nesting. Both exits below close it, and neither can be reordered past a
-// `return`.
+// ⭐ **ONE CAPTURING SINK SERVES THE WHOLE CALL, INCLUDING THE FAILURE REPORT.** A refused compile
+// writes its diagnostics through the session's `DiagnosticSink` from inside the pipeline; the
+// `CompileError` arms that never reach `project.diagnostics` are written by `Main.reportCompileError`,
+// which is handed the same sink HERE. So the captured text is what the command line would have
+// printed on stderr for the same build — for every failure shape, not just the diagnostic-carrying
+// one — and there is exactly ONE renderer of it.
 //
 // `metricsPath` is deliberately not passed: `--metrics`'s TSV existed on this path only so the CPU
 // total could be read back off disk, and `CompileProduct.totalCpuTicks` IS that total — the same
 // number, from the same whole-compile probe, without the file.
-function compileOneTest(test SpecTest, staged StagedTest, exeBase FilePath, exePath FilePath, pinnable bool, effectiveTarget Target) returns CompiledTest
-	beginDiagnosticCapture()
+function compileOneTest(test SpecTest, staged StagedTest, exeBase FilePath, exePath FilePath, pinnable bool, effectiveTarget Target, fileMemos SharedFileMemoMap) returns CompiledTest
+	var session = CompileSession.create(DiagnosticSink.capturing(), fileMemos: fileMemos, treeLock: TreeLockHold.none())
 
 	// The target is stated EXPLICITLY even when it IS the host — the runner says what it is testing
 	// rather than trusting a default to agree with it, exactly as the old `--target=` argument did.
@@ -2238,15 +2232,15 @@ function compileOneTest(test SpecTest, staged StagedTest, exeBase FilePath, exeP
 	// no printer for a name to reach. An `<!-- AsyncTrace -->` case and a capture case each ask for
 	// their producer per CASE, so no other case pays for it and an untraced program is byte-for-byte
 	// what it was.
-	let product = try compileToProduct(staged.buildTargets, target: effectiveTarget, outputOverride: exeBase.toString(), emitIr: pinnable, runtimeIrNames: test.runtimeNames, asyncTrace: test.asyncTrace, debugStream: traceCaptureMode(test), debugInfo: test.debugInfo, stdlibDirOverride: staged.stdlibDir, runtimeDirOverride: staged.runtimeDir) otherwise (e) 'compileFailed'
-		reportCompileError(e)
-		return CompiledTest.create(test, staged: staged, compile: CompileAnswer.create(compileVerdictOf(e), diagnostics: endDiagnosticCapture()), cpu: CompileCpu.unreported, irText: MissingIrPlaceholder, exePath: exePath)
+	let product = try compileToProduct(staged.buildTargets, target: effectiveTarget, outputOverride: exeBase.toString(), emitIr: pinnable, runtimeIrNames: test.runtimeNames, asyncTrace: test.asyncTrace, debugStream: traceCaptureMode(test), debugInfo: test.debugInfo, stdlibDirOverride: staged.stdlibDir, runtimeDirOverride: staged.runtimeDir, session: session) otherwise (e) 'compileFailed'
+		reportCompileError(e, sink: session.diagnostics)
+		return CompiledTest.create(test, staged: staged, compile: CompileAnswer.create(compileVerdictOf(e), diagnostics: session.diagnostics.text()), cpu: CompileCpu.unreported, irText: MissingIrPlaceholder, exePath: exePath)
 	end 'compileFailed'
 
 	// EMPTY IR is the placeholder: a target that emits no Target IR (`pinnable` false) renders none, and
 	// a fragment is never written for it anyway (`recordFragmentAndCleanup`).
 	let irText = MissingIrPlaceholder if product.irText.isEmpty() else product.irText
-	return CompiledTest.create(test, staged: staged, compile: CompileAnswer.create(CompileVerdict.built, diagnostics: endDiagnosticCapture()), cpu: CompileCpu.reported(product.totalCpuTicks), irText: irText, exePath: exePath)
+	return CompiledTest.create(test, staged: staged, compile: CompileAnswer.create(CompileVerdict.built, diagnostics: session.diagnostics.text()), cpu: CompileCpu.reported(product.totalCpuTicks), irText: irText, exePath: exePath)
 end 'compileOneTest'
 
 // Which of the two failure states a thrown `CompileError` is.
@@ -2256,21 +2250,11 @@ end 'compileOneTest'
 // exists for it and `Main.reportCompileError` prints a sentence of its own instead. The distinction is
 // what `targetRefusalIn` rests on; see `CompileVerdict`.
 function compileVerdictOf(e CompileError) returns CompileVerdict
-	return match e 'arm'
-		compileError gives CompileVerdict.reportedDiagnostics
-		fileNotFound or
-			directoryNotFound or
-			noSourceFiles or
-			readError or
-			noCommonRoot or
-			twoDriverFiles or
-			nestedProjectFile or
-			unnamedDirectory or
-			invalidOutputPath or
-			stdlibNotFound or
-			runtimeNotFound or
-			runtimeTierIsNotAProgram gives CompileVerdict.driverFailed
-	end 'arm'
+	match e.failure() 'failure'
+		reportedDiagnostics then return CompileVerdict.reportedDiagnostics
+		driverFailed then return CompileVerdict.driverFailed
+		abandoned then panic("compileVerdictOf: a spec case compiles under a session no interest can lapse on, so nothing abandons it")
+	end 'failure'
 end 'compileVerdictOf'
 
 // The last step of EVERY test, whichever pass its verdict became final in: record the fragment (or

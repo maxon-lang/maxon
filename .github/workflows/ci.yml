@@ -130,9 +130,11 @@ jobs:
       # almost nothing else is: percent-decoding a uri, un-rooting a drive letter, and
       # `FilePath.equals` being case-insensitive on Windows alone. A single-host lane would leave
       # three hosts' path handling unexercised, and what it misses are wrong ANSWERS, not breaks.
+      # Its cases wait out whole-project checks, and the busiest (120 sibling files) runs well past the
+      # 5 s default deadline.
       - name: LSP corpus
         if: steps.seed.outputs.seeded == 'yes'
-        run: ./maxon-bin/.maxon/maxon test tests/lsp
+        run: ./maxon-bin/.maxon/maxon test tests/lsp --timeout=60000
 
       # These three are tree-level gates `spec-test` does not run.
       - name: Formatter corpus

@@ -105,6 +105,7 @@ function collectProjectDiagnosticsAcrossAnEdit(client LspClient, root FilePath, 
 		client.initialized()
 		client.openDocument(uri, content: content)
 		probes.push(ProjectDiagnosticsProbe.published(client.awaitPublishedDiagnostics(uri).items))
+		_ = client.awaitProjectCheckPublishAfterTheFastOne(uri)
 		client.changeDocument(uri, content: editedContent, version: ProjectDiagnosticsEditedVersion)
 		probes.push(ProjectDiagnosticsProbe.published(client.awaitPublishedDiagnostics(uri).items))
 	end 'session' otherwise (e) 'failed'
@@ -158,13 +159,81 @@ export function expectProjectDiagnosticCodesAndLines(probe ProjectDiagnosticsPro
 	var published = ""
 
 	for item in items 'eachItem'
-		published = "{published} {item.code}@{item.range.startLine}"
+		published = "{published} {item.code.describe()}@{item.range.startLine}"
 	end 'eachItem'
 
 	try Expect.equal(published.trim(), expected: expected, message: "{note} The server published: {projectDiagnosticsRendering(items)}")
 end 'expectProjectDiagnosticCodesAndLines'
 
-function projectDiagnosticItems(probe ProjectDiagnosticsProbe, note String) returns PublishedDiagnosticArray throws TestFailure
+export type ProjectCheckSession
+	export let diagnostics as ProjectDiagnosticsProbe
+	export let reports as ProjectCheckReportArray
+
+	static function create(diagnostics ProjectDiagnosticsProbe, reports ProjectCheckReportArray) returns ProjectCheckSession
+		return Self{diagnostics: diagnostics, reports: reports}
+	end 'create'
+end 'ProjectCheckSession'
+
+export function probeProjectCheckDiagnostics(root FilePath, fileName String, content String, edits StringArray) returns ProjectDiagnosticsProbe
+	return probeProjectCheckSession(root, fileName: fileName, content: content, edits: edits).diagnostics
+end 'probeProjectCheckDiagnostics'
+
+export function probeProjectCheckSession(root FilePath, fileName String, content String, edits StringArray) returns ProjectCheckSession
+	var client = LspClient.start()
+	let session = collectProjectCheckSession(client, root: root, uri: fileUriOf(root.join(fileName)), content: content, edits: edits)
+	client.release()
+
+	return session
+end 'probeProjectCheckSession'
+
+function collectProjectCheckSession(client LspClient, root FilePath, uri String, content String, edits StringArray) returns ProjectCheckSession
+	var session = ProjectCheckSession.create(ProjectDiagnosticsProbe.broke(UnreportedSessionEnding), reports: ProjectCheckReportArray.create())
+	var sent = InitialDocumentVersion
+
+	try 'session'
+		_ = client.initializeAtRoot(root)
+		client.initialized()
+		client.openDocument(uri, content: content)
+		var checked = client.awaitProjectCheckPublish(uri)
+
+		for edit in edits 'eachEdit'
+			sent = sent + 1
+			client.changeDocument(uri, content: edit, version: sent)
+			checked = client.awaitProjectCheckPublish(uri)
+		end 'eachEdit'
+
+		session = ProjectCheckSession.create(ProjectDiagnosticsProbe.published(checked.items), reports: client.awaitProjectCheckReports(uri, through: sent))
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed or
+				malformedResponse or
+				serverRefused then session = ProjectCheckSession.create(ProjectDiagnosticsProbe.broke(e.explained()), reports: ProjectCheckReportArray.create())
+		end 'reason'
+	end 'failed'
+
+	return session
+end 'collectProjectCheckSession'
+
+let OneOutcomePerVersion = 1 as AssertedInt
+
+export let ProjectCheckPublished = "published"
+export let ProjectCheckAbandoned = "abandoned"
+export let ProjectCheckUnloadable = "unloadable"
+
+export function expectOneProjectCheckOutcome(reports ProjectCheckReportArray, version DocumentVersion, outcome String, note String) throws TestFailure
+	var outcomes = StringArray.create()
+
+	for report in reports 'eachReport'
+		if report.version == "{version}" 'thisVersion'
+			outcomes.push(report.outcome)
+		end 'thisVersion'
+	end 'eachReport'
+
+	try Expect.equal(outcomes.count() as AssertedInt, expected: OneOutcomePerVersion, message: "{note} Every project-checked version reports exactly one outcome; version {version} reported {outcomes.count()}.")
+	try Expect.equal(try outcomes.get(0) otherwise panic("the count above is one"), expected: outcome, message: "{note} Version {version}'s project check outcome.")
+end 'expectOneProjectCheckOutcome'
+
+export function projectDiagnosticItems(probe ProjectDiagnosticsProbe, note String) returns PublishedDiagnosticArray throws TestFailure
 	match probe 'probe'
 		published(items) then return items
 		broke(detail) then try Expect.fail("{note} The session broke before a publish arrived: {detail}. An editor learns about an error ONLY from this notification — there is no request it can send to ask.")
@@ -183,7 +252,7 @@ function projectDiagnosticsRendering(items PublishedDiagnosticArray) returns Str
 	var rendered = ""
 
 	for item in items 'eachItem'
-		rendered = "{rendered} [{item.code} at {item.range.startLine}:{item.range.startCharacter} — {item.message}]"
+		rendered = "{rendered} [{item.code.describe()} at {item.range.startLine}:{item.range.startCharacter} — {item.message}]"
 	end 'eachItem'
 
 	return rendered.trim()

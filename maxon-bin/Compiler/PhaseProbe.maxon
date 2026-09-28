@@ -48,9 +48,8 @@ export typealias HeapByteCount = int(0 to u64.max)
 export typealias AllocCountArray = Array with AllocCount
 export typealias ByteCountArray = Array with HeapByteCount
 
-// The phase spans this process has OPENED and not yet closed, innermost LAST.
-typealias TraceNameArray = Array with TraceName
-
+// The phase spans a compile has OPENED and not yet closed, innermost LAST (`Project.openPhaseSpans`).
+//
 // ⚠ **A POOL WORKER'S BRACKETS DO NOT RIDE THIS STACK** — they open with `PhaseProbe.beginCounters`,
 // which opens no span, because brackets on many green threads at once do not strictly nest. The phase
 // that runs the pool has its span, on the main thread.
@@ -71,19 +70,7 @@ typealias TraceNameArray = Array with TraceName
 // ⚠ **CLOSING A SPAN IS NOT RECORDING A PHASE.** The drain emits the END only; it writes no row into the
 // timing or memory tables. An aborted phase consumed a time and a byte count that describe half a stage, and
 // a table whose rows must sum to the whole compile has no honest place to put them (see CompileTimings).
-//
-// ⚠⚠ **THE STACK IS PROCESS-WIDE, AND ONE PROCESS RUNS THOUSANDS OF COMPILES.** `spec-test` compiles
-// every case in this process, so a failed compile that leaves a span open mis-nests not merely the
-// rest of ITS OWN trace but every compile after it, for the life of the worker. That is why the drain
-// hangs off `Compiler.compileToProduct`, the entry EVERY whole build goes through, rather than off the
-// command-line entry.
-//
-// A process-wide stack is exact here for the same reason the diagnostic-capture latch is (see
-// Diagnostics.maxon, which carries that reason for all four latches that rest on it): a compile is
-// SERIAL, so two compiles cannot interleave their brackets. ⛔ NOT because the scheduler is single-M —
-// it is not, and `DefaultMaxProcs` states what holds instead. Compiling two programs at once in one
-// process needs a per-compile home for this, not a lock around it.
-var openPhaseSpans = TraceNameArray.create()
+module typealias TraceNameArray = Array with TraceName
 
 // What one phase consumed. The unit of attribution: every phase in the report is one of
 // these, and the report's job is to prove they sum to the whole compile.
@@ -171,19 +158,19 @@ export type PhaseProbe
 	// `elapsed()` has closed the counters, for the same reason. `elapsed()` stays PURE, which is
 	// what lets `compile` reuse one probe as both the `load` bracket and the whole-compile total
 	// without emitting a second, unpaired END.)
-	export static function begin(name TraceName, unit TraceUnit) returns PhaseProbe
+	export static function begin(name TraceName, unit TraceUnit, spans TraceNameArray) returns PhaseProbe
 		__DebugStream.phaseBegin(name, unit)
 
 		// Recorded OUTSIDE the counters, beside the emission it pairs with, so the span the stack knows
-		// about and the span the trace shows are opened by the same statement (see `openPhaseSpans`).
-		openPhaseSpans.push(name)
+		// about and the span the trace shows are opened by the same statement (see `TraceNameArray`).
+		spans.push(name)
 
 		// ⭐ THE PROCESS-WIDE COLUMNS, DELIBERATELY. A trace span is the MAIN THREAD's — the pool's workers
 		// open none (see `beginCounters`) — so this bracket is the one that must agree with the run total.
 		return Self.openOn(CounterSource.processWide)
 	end 'begin'
 
-	// ⭐ **THE COUNTERS ALONE — no trace span, and therefore no `Project` and no process-wide stack.**
+	// ⭐ **THE COUNTERS ALONE — no trace span, and therefore no `Project` and no span stack.**
 	//
 	// A POOL WORKER's bracket opens with this. It runs on whichever worker the pool gave the function to,
 	// and a span stack that strictly nests cannot describe brackets opened on many green threads at once —
@@ -229,7 +216,7 @@ export type PhaseProbe
 	// Open a bracket around a pipeline phase. The name comes from the phase, so the span the
 	// trace shows and the row the timing table shows can never disagree about which phase it is.
 	export static function beginPhase(project Project, phase CompilePhase) returns PhaseProbe
-		return Self.begin(compilePhaseName(phase), unit: project.traceUnit)
+		return Self.begin(compilePhaseName(phase), unit: project.traceUnit, spans: project.openPhaseSpans)
 	end 'beginPhase'
 
 	// Close the bracket.
@@ -342,16 +329,16 @@ function recordPhaseDelta(project Project, phase CompilePhase, delta PhaseDelta)
 		project.memory.recordAllocTally(phase)
 	end 'churn'
 
-	closePhaseSpan(compilePhaseName(phase), unit: project.traceUnit)
+	closePhaseSpan(compilePhaseName(phase), unit: project.traceUnit, spans: project.openPhaseSpans)
 
 	// A CLOSED PHASE IS THE PROOF OF PROGRESS THE TREE LOCK'S HEARTBEAT NEEDS, and this is the only
 	// place a compile produces one. A `build maxon-bin` that stops writing here has stopped getting
 	// anywhere, which is exactly what a second command must be allowed to conclude — and the write
 	// itself is throttled to one every few seconds, so the per-phase call costs a clock read (see
-	// `touchTreeLock`). The register allocator's own per-FUNCTION probes deliberately do not ride
+	// `TreeLockHold.touch`). The register allocator's own per-FUNCTION probes deliberately do not ride
 	// this: they go through `addRegAllocDelta`, and one heartbeat per compile phase is already
 	// twelve times finer than the window it feeds.
-	touchTreeLock()
+	project.session.treeLock.touch()
 end 'recordPhaseDelta'
 
 function tagCensusCovers(wanted TagCensusPhases, phase CompilePhase) returns bool
@@ -368,8 +355,8 @@ end 'tagCensusCovers'
 // a trace built from interleaved spans reports a phase's events under a phase it never ran inside. That is
 // the same defect class `PhaseDelta.minus`' non-negative range traps for on the timing side, so it fails the
 // same way rather than quietly picking a spelling.
-function closePhaseSpan(name TraceName, unit TraceUnit)
-	let innermost = try openPhaseSpans.pop() otherwise panic("closePhaseSpan: a phase was recorded with no span open — every `record*Delta` closes a bracket `PhaseProbe.begin` opened, so this is a delta recorded twice or a probe that never began")
+function closePhaseSpan(name TraceName, unit TraceUnit, spans TraceNameArray)
+	let innermost = try spans.pop() otherwise panic("closePhaseSpan: a phase was recorded with no span open — every `record*Delta` closes a bracket `PhaseProbe.begin` opened, so this is a delta recorded twice or a probe that never began")
 
 	if innermost != name 'notInnermost'
 		panic("closePhaseSpan: closing trace span {name} while {innermost} is the innermost one still open — two phase brackets INTERLEAVE rather than nest, so every event inside them is attributed to a phase it did not run in")
@@ -379,14 +366,14 @@ function closePhaseSpan(name TraceName, unit TraceUnit)
 end 'closePhaseSpan'
 
 // Close every span a FAILED compile left open, innermost first. The one place a throwing stage's span is
-// accounted for — see `openPhaseSpans` for why it is here and not at each throw site, and for why its one
-// caller is `Compiler.compileToProduct` rather than the command-line entry above it.
+// accounted for — see `TraceNameArray` for why it is here and not at each throw site, and
+// `Compiler.compileToProduct` for why a whole build drains there rather than at the command-line entry.
 //
 // It is a no-op after a successful compile (every bracket recorded its own delta), which is what lets the
 // caller run it unconditionally on its failure path without asking which stage failed.
-export function closeOpenPhaseSpans(unit TraceUnit)
-	while openPhaseSpans.count() > 0 'drain'
-		__DebugStream.phaseEnd(try openPhaseSpans.pop() otherwise panic("closeOpenPhaseSpans: pop from a non-empty span stack"), unit)
+export function closeOpenPhaseSpans(spans TraceNameArray, unit TraceUnit)
+	while spans.count() > 0 'drain'
+		__DebugStream.phaseEnd(try spans.pop() otherwise panic("closeOpenPhaseSpans: pop from a non-empty span stack"), unit)
 	end 'drain'
 end 'closeOpenPhaseSpans'
 

@@ -16,7 +16,7 @@
 // compile sees this file plus both library tiers, `stdlib/` and `runtime/` — never the user's other
 // sources. A CHECK run here is therefore about a program the author did not write — which is why what it
 // reports is corrected against `LspWorkspace`'s project corpus before anything is published, and why a
-// diagnostic only the merged program could raise is out of reach from here altogether.
+// diagnostic only the merged program could raise is left to the project check (`LspProjectChecker`).
 //
 // ⛔ **BOTH TIERS OR NOTHING.** Every compile the driver runs loads them together, so a project built
 // here from one of them would answer a diagnostic about a program no build ever sees — the editor
@@ -121,8 +121,14 @@ module union OpenBuffer
 	none
 end 'OpenBuffer'
 
+var lspFileMemos = SharedFileMemoMap.create()
+
+// ⚠ The diagnostics are DISCARDED, never printed: a client cannot drain this server's stderr
+// (`tests/lsp/LspClient.maxon`'s header), so a compile that printed them would fill the pipe and leave
+// both processes waiting on each other. What a caller reports is `project.diagnostics`. The project
+// check's session discards for the same reason.
 module function libraryTierProject(root FilePath, tiers LibraryTiers, buffer OpenBuffer) returns Project throws CompileError
-	var project = createProject(root, target: detectHostTarget(), stdlibDir: tiers.stdlibDir, runtimeDir: tiers.runtimeDir, debugStream: false)
+	var project = createProject(root, target: detectHostTarget(), stdlibDir: tiers.stdlibDir, runtimeDir: tiers.runtimeDir, debugStream: false, session: CompileSession.create(DiagnosticSink.discarding(), fileMemos: lspFileMemos, treeLock: TreeLockHold.none()))
 
 	registerTheOpenBuffer(project, buffer: buffer)
 

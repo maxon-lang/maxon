@@ -7,7 +7,7 @@
 // (see StdDialect: there is no MIR tier). The backend runs backend-direct (a
 // CodeResult is not an IR module, so it does not fit the pass-dispatch model). On
 // any failure the accumulated diagnostics go to
-// `emitDiagnosticLine` — stderr for a command line, an open capture for a caller
+// the session's `DiagnosticSink` — stderr for a command line, a capture for a caller
 // compiling in process — so the exact `error EXXXX: ...` lines the spec compares
 // against reach the reader whichever of the two it is.
 //
@@ -36,8 +36,8 @@
 //
 // A file/IO error (`fileNotFound` / `noSourceFiles` / `readError`) propagates from here UNCHANGED —
 // `compileToProduct`'s drain owns that reason.
-export function compile(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false, debugInfo bool = false, coverage bool = false, censusByTag bool = false, censusPhase TagCensusPhases = TagCensusPhases.everyPhase, allocationsByTag bool = false, allocationsPhase TagCensusPhases = TagCensusPhases.everyPhase, productVersion VersionComponentArray = VersionComponentArray.create(), defines DefineArray = DefineArray.create()) returns FilePath throws CompileError
-	let product = try compileToProduct(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, debugInfo: debugInfo, coverage: coverage, censusByTag: censusByTag, censusPhase: censusPhase, allocationsByTag: allocationsByTag, allocationsPhase: allocationsPhase, productVersion: productVersion, defines: defines)
+export function compile(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false, debugInfo bool = false, coverage bool = false, censusByTag bool = false, censusPhase TagCensusPhases = TagCensusPhases.everyPhase, allocationsByTag bool = false, allocationsPhase TagCensusPhases = TagCensusPhases.everyPhase, productVersion VersionComponentArray = VersionComponentArray.create(), defines DefineArray = DefineArray.create(), session CompileSession = CompileSession.printing()) returns FilePath throws CompileError
+	let product = try compileToProduct(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, debugInfo: debugInfo, coverage: coverage, censusByTag: censusByTag, censusPhase: censusPhase, allocationsByTag: allocationsByTag, allocationsPhase: allocationsPhase, productVersion: productVersion, defines: defines, session: session)
 
 	if emitIr 'emitIr'
 		writeTargetIr(product.irText, outputPath: product.outputPath)
@@ -110,49 +110,34 @@ end 'CompileProduct'
 // Two failure channels: (1) file/IO errors (`fileNotFound`, `noSourceFiles`, `readError`) carry NO
 // diagnostics and propagate straight out, and the caller prints a specific message; (2) reported
 // diagnostics (semantic/lexer) are printed inside `compileToCodeResult` — through
-// `emitDiagnosticLine`, so a caller may CAPTURE them instead (see Diagnostics.maxon) — and
+// `session`'s `DiagnosticSink`, so a caller may CAPTURE them instead — and
 // re-signaled as a FRESH `compileError`.
-export function compileToProduct(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false, debugInfo bool = false, coverage bool = false, censusByTag bool = false, censusPhase TagCensusPhases = TagCensusPhases.everyPhase, allocationsByTag bool = false, allocationsPhase TagCensusPhases = TagCensusPhases.everyPhase, stdlibDirOverride String = "", runtimeDirOverride String = "", entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(), productVersion VersionComponentArray = VersionComponentArray.create(), defines DefineArray = DefineArray.create()) returns CompileProduct throws CompileError
+export function compileToProduct(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false, debugInfo bool = false, coverage bool = false, censusByTag bool = false, censusPhase TagCensusPhases = TagCensusPhases.everyPhase, allocationsByTag bool = false, allocationsPhase TagCensusPhases = TagCensusPhases.everyPhase, stdlibDirOverride String = "", runtimeDirOverride String = "", entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(), productVersion VersionComponentArray = VersionComponentArray.create(), defines DefineArray = DefineArray.create(), session CompileSession = CompileSession.printing()) returns CompileProduct throws CompileError
 	// Every trace event this compile emits is attributed to this unit. Derived from the project ROOT
 	// — through the same `commonAncestorOf` the project itself is rooted at below, rather than from a
 	// second reading of the command line — so the pre-project `load` bracket and everything after it
 	// agree on which compile they are.
-	//
-	// ⚠ `setTraceUnit` writes a PROCESS-WIDE latch (`TraceEvents.currentTraceUnit`) for `logEvent`'s
-	// events, and `attribute` sets the log handler's own copy for the log records; both are last-writer-
-	// wins across compiles. That is EXACT rather than merely tolerated, for the reason the capture
-	// latch in Diagnostics.maxon states about itself: a compile is SERIAL, so there is no second
-	// compile running whose events this could misattribute. ⛔ That serialness does NOT rest on "the
-	// scheduler is single-M" — read the argument there before leaning on it.
 	let unit = traceUnitOf(try commonAncestorOf(inputPaths))
-	setTraceUnit(unit)
 	CompilerLogRoute.current().handler.attribute(unit)
+	var spans = TraceNameArray.create()
 
-	// ⭐⭐ **THE ONE PLACE A FAILED COMPILE CLOSES WHAT IT LEFT OPEN (A1v).** Four stages inside phase
-	// brackets can throw — `load`'s project load, `deadFunctions`' E4015, `regalloc`'s E5001 and `link`'s
-	// chunk-label refusal — and none of them reaches the `record*Delta` that would emit its span's END. The
-	// split exists ONLY to give that drain one home: an END at each throw site would be the same fact
-	// written once per site, forgotten by the next throwing exit exactly as it was by the last two (see
-	// `PhaseProbe.openPhaseSpans`).
+	// ⭐⭐ **WHERE A FAILED BUILD CLOSES WHAT IT LEFT OPEN.** Four stages inside phase brackets can throw —
+	// `load`'s project load, `deadFunctions`' E4015, `regalloc`'s E5001 and `link`'s chunk-label refusal —
+	// and none of them reaches the `record*Delta` that would emit its span's END. The split exists ONLY to
+	// give that drain one home rather than an END at each throw site (see `closeOpenPhaseSpans`).
 	//
 	// ⚠⚠ **IT SITS ON THIS FUNCTION RATHER THAN ON `compile`, BECAUSE A CALLER SURVIVES A FAILED COMPILE
-	// AND THEN DOES THOUSANDS MORE.** `openPhaseSpans` is process-wide, so a compile that threw with spans
-	// open leaves every later compile in that process reading as nested inside a phase that had already
-	// finished. `spec-test` compiles IN PROCESS, so the drain cannot lean on *"a throw out of it ends the
-	// process"* and sits at the entry EVERY whole build goes through.
+	// AND THEN DOES THOUSANDS MORE.** The trace is one stream for the whole process, so a compile that
+	// threw with spans open leaves every later compile in that process reading as nested inside a phase
+	// that had already finished. `spec-test` compiles IN PROCESS, so the drain cannot lean on *"a throw out
+	// of it ends the process"* and sits at the entry EVERY whole build goes through.
 	//
 	// The error is RE-THROWN unchanged, never flattened: `Main` distinguishes the file/IO cases
 	// (`fileNotFound`/`noSourceFiles`/`readError`) from a reported `compileError` and prints a different
 	// message for each, so a fresh `compileError` here would replace three specific messages with one wrong
 	// one.
-	//
-	// `verifyWarmRebuild` drives `compileToCodeResult` directly and so does not pass through here. It
-	// needs no drain of its own — but that is now a claim about ITS caller rather than about compiles
-	// in general: it is reached only from `Main.runVerifyWarmRebuild`, which turns a throw into an exit
-	// code, so a throw really does end the process there with nothing left to mis-nest. An in-process
-	// caller of THAT gate would need this drain too.
-	return try compileMeasured(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, debugInfo: debugInfo, coverage: coverage, censusByTag: censusByTag, censusPhase: censusPhase, allocationsByTag: allocationsByTag, allocationsPhase: allocationsPhase, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, productVersion: productVersion, defines: defines, unit: unit) otherwise (e) 'compileFailed'
-		closeOpenPhaseSpans(unit)
+	return try compileMeasured(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, debugInfo: debugInfo, coverage: coverage, censusByTag: censusByTag, censusPhase: censusPhase, allocationsByTag: allocationsByTag, allocationsPhase: allocationsPhase, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, productVersion: productVersion, defines: defines, unit: unit, spans: spans, session: session) otherwise (e) 'compileFailed'
+		closeOpenPhaseSpans(spans, unit: unit)
 		throw e
 	end 'compileFailed'
 end 'compileToProduct'
@@ -160,12 +145,13 @@ end 'compileToProduct'
 // The build itself, from the whole-compile probe to the timing report — everything `compileToProduct`
 // measures. It is a separate function for the single reason its caller states: one failure path to hang
 // the trace-span drain on, rather than one per `try` in this body.
-function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputOverride String, emitIr bool, metricsPath String, runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool, debugStream bool, debugInfo bool, coverage bool, censusByTag bool, censusPhase TagCensusPhases, allocationsByTag bool, allocationsPhase TagCensusPhases, stdlibDirOverride String, runtimeDirOverride String, entryFunction ByteArray, compilerWrittenSources CompilerWrittenSourceArray, sourceSelection SourceSelection, stagedSourceOrigins StagedSourceOriginArray, productVersion VersionComponentArray, defines DefineArray, unit TraceUnit) returns CompileProduct throws CompileError
-	let whole = PhaseProbe.begin(compilePhaseName(CompilePhase.load), unit: unit)
+function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputOverride String, emitIr bool, metricsPath String, runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool, debugStream bool, debugInfo bool, coverage bool, censusByTag bool, censusPhase TagCensusPhases, allocationsByTag bool, allocationsPhase TagCensusPhases, stdlibDirOverride String, runtimeDirOverride String, entryFunction ByteArray, compilerWrittenSources CompilerWrittenSourceArray, sourceSelection SourceSelection, stagedSourceOrigins StagedSourceOriginArray, productVersion VersionComponentArray, defines DefineArray, unit TraceUnit, spans TraceNameArray, session CompileSession) returns CompileProduct throws CompileError
+	let whole = PhaseProbe.begin(compilePhaseName(CompilePhase.load), unit: unit, spans: spans)
 
 	// Loading starts the instant the compile does, so `whole` is also the `load` phase's
 	// probe — a second set of reads here would sample the same instant.
-	var project = try loadProject(inputPaths, target: target, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, debugStream: debugStream)
+	var project = try loadProject(inputPaths, target: target, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, debugStream: debugStream, session: session)
+	project.openPhaseSpans = spans
 	project.asyncTrace = asyncTrace
 	project.debugInfo = debugInfo
 	project.requestedRuntimeBodies = runtimeIrNames
@@ -611,14 +597,22 @@ function requireOutputWritten(project Project, outputPath FilePath) throws Compi
 	try refuseCompile(project)
 end 'requireOutputWritten'
 
-// ⚠ A fresh throw, never a rethrow of the caught object. Re-throwing the error a `try … otherwise`
-// caught risks a NULL incref on the rethrow, whereas a fresh throw of the same arm propagates cleanly.
-// That is the fact this function exists to hold in one place, for every site that refuses a build after
-// accumulating diagnostics.
 module function refuseCompile(project Project) throws CompileError
 	printDiagnostics(project)
 	throw CompileError.compileError
 end 'refuseCompile'
+
+// An abandoned compile stays `abandoned` and prints nothing: its diagnostics are those of a half-run
+// check, and a caller that read them as a refusal would publish them as the program's.
+function refuseUnlessAbandoned(project Project, failure CompileError) throws CompileError
+	match failure.failure() 'failure'
+		abandoned then throw CompileError.abandoned
+		reportedDiagnostics or
+			driverFailed then printDiagnostics(project)
+	end 'failure'
+
+	throw CompileError.compileError
+end 'refuseUnlessAbandoned'
 
 // What a compile that writes nothing produced. Either way `project.diagnostics` holds what it reported.
 module union CheckedCompile
@@ -673,9 +667,9 @@ end 'writeTargetIr'
 //
 // File and IO errors (`fileNotFound`, `noSourceFiles`, `readError`, raised by `loadSourceFiles`)
 // carry no diagnostics and propagate straight to the caller, which prints a specific message.
-export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride String = "", runtimeDirOverride String = "", entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(), debugStream bool = false) returns Project throws CompileError
+export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride String = "", runtimeDirOverride String = "", entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(), debugStream bool = false, session CompileSession = CompileSession.printing()) returns Project throws CompileError
 	let stdlibDir = try stdlibDirFor(stdlibDirOverride)
-	var project = createProject(try commonAncestorOf(inputPaths), target: target, stdlibDir: stdlibDir, runtimeDir: try runtimeDirFor(runtimeDirOverride, stdlibDir: stdlibDir), debugStream: debugStream)
+	var project = createProject(try commonAncestorOf(inputPaths), target: target, stdlibDir: stdlibDir, runtimeDir: try runtimeDirFor(runtimeDirOverride, stdlibDir: stdlibDir), debugStream: debugStream, session: session)
 
 	if rootIsUnder(project, libraryRoot: project.runtimeDir, cwd: Directory.currentPath()) 'aRuntimeTierRoot'
 		throw CompileError.runtimeTierIsNotAProgram(project.rootPath)
@@ -786,16 +780,7 @@ function requireNoUnresolvedTagsSurvivedTheMaxonTier(module MaxonModule)
 	end 'eachFunc'
 end 'requireNoUnresolvedTagsSurvivedTheMaxonTier'
 
-// Drive the query spine + mid/lowering pipeline + backend for an already-loaded
-// `project`, returning the emitted `CodeResult` (NOT yet written to disk). This is
-// the single compile path both `compile` (which then writes the executable) and
-// `verifyWarmRebuild` (which byte-compares two independently-produced CodeResults)
-// route through — no duplicated pipeline-driving code.
-//
-// The mid + lowering pipeline owns one of the three error gates below: it throws once a pass
-// (semanticCheck) reports a diagnostic. What each gate then DOES is `refuseCompile`'s, in one place
-// (including the reason it must be a fresh throw rather than a rethrow).
-export function compileToCodeResult(project Project) returns CodeResult throws CompileError
+function lowerTheProgram(project Project, passes PassKindArray) returns LoweredProgram throws CompileError
 	// ⭐ **THE DIAGNOSTICS OF *THIS* COMPILE, NOT OF EVERY COMPILE THIS PROJECT HAS EVER RUN.** Nothing
 	// cleared this sink, which no `maxon build` could notice (a build gets a fresh `Project` and runs one
 	// compile) and which an editor notices immediately: re-check a file whose error you have just FIXED and
@@ -804,6 +789,10 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// (`queryParseOps`, "only cache a clean parse"), and every later check re-runs over the re-folded
 	// module below.
 	project.diagnostics.clear()
+
+	// Fresh per compile, because a warm project lowers again. Sound only while nothing in the front end,
+	// whose results outlive a compile, writes it.
+	project.globalData = GlobalDataTable.create()
 
 	// ⚠ `var`, not `let`: `installManagedGlobalInit` below APPENDS to this module (P1.7 slice 2a), and
 	// `resolveTypes` rewrites its signatures in place.
@@ -815,6 +804,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// 71-file one. Dropped HERE, immediately after the read and before the first mutation, so a compile
 	// that throws part way through leaves no more behind than one that completes. The full argument, the
 	// measurements, and why this rather than a clone, are in `invalidateAllModuleCache`.
+	try requireStillWanted(project)
 	invalidateAllModuleCache(project)
 	reportDefineProblems(project)
 
@@ -859,27 +849,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// E3005 is caught by the pipeline's error gate after `resolveTypes`.
 	checkLiteralInitConformance(project)
 
-	// ⭐ LAY OUT THE `.data` SECTION — once per compile, and HERE rather than inside
-	// `queryProgramSignatures`.
-	//
-	// ⚠ That placement is the whole cost story. `queryProgramSignatures` is a whole-program query
-	// sitting UNDER a per-file one, so it is ASKED once per file; doing O(globals) work inside it
-	// would be O(files × globals), the exact shape of the two quadratics this query has already
-	// grown and had removed (docs/internals/query-spine.md, Whole-program queries under per-file
-	// ones). The query is memoized, so the ARENA is built once — but the layout is not the arena's
-	// business anyway: it is a BACKEND fact (offsets, an image, a section), and it belongs at the one
-	// point that runs once and knows a backend is about to run.
-	//
-	// It REBUILDS rather than appends, so it is idempotent: `verifyWarmRebuild` compiles the same
-	// project twice, and a layout that accumulated would double every slot on the second pass.
-	// Same discipline as `resetMergeTargets` — the arena is the source of truth, the derived table
-	// is rebuilt from it.
-	// ⭐ **WHERE-CONSTRAINT VALIDATION (P1.7a slice 2a — E3017) — HERE, after the instances are interned.**
-	// Every `Box with Foo where T is Digest` instantiation is checked: `Foo` must declare `implements Digest`,
-	// else E3017 anchored on the `typealias`. It reads the interned generic instances (`queryProgramSignatures`)
-	// and the declared conformances (`checkConformance` already validated them), so it runs after both. Any
-	// E3017 it records is caught by the pipeline's error gate, exactly as an E3016 is.
-	// ⭐ **A CYCLIC GENERIC ALIAS IS REFUSED FIRST (P1.7, E3091)** — before the two checks below and before
+	// ⭐ **A CYCLIC GENERIC ALIAS IS REFUSED FIRST (E3091)** — before the two checks below and before
 	// the pipeline. An alias whose type arguments lead back to it denotes an INFINITE type, so every later
 	// reader (the where-constraint check, the compiled-name space, the argument identity read) would be
 	// asking questions of a type that does not exist. Refusing here is what lets all of them assume it does.
@@ -893,6 +863,11 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// is caught by the pipeline's error gate, exactly as an E3017 is.
 	checkTypeReferenceCycles(project, signatures: signatures)
 
+	// ⭐ **WHERE-CONSTRAINT VALIDATION (E3017) — HERE, after the instances are interned.**
+	// Every `Box with Foo where T is Digest` instantiation is checked: `Foo` must declare `implements Digest`,
+	// else E3017 anchored on the `typealias`. It reads the interned generic instances (`queryProgramSignatures`)
+	// and the declared conformances (`checkConformance` already validated them), so it runs after both. Any
+	// E3017 it records is caught by the pipeline's error gate, exactly as an E3016 is.
 	checkWhereConstraints(project, signatures: signatures)
 
 	// ⭐ **THE COMPILED TYPE-NAME NAMESPACE (E3006) — HERE, for `checkWhereConstraints`'s two reasons.**
@@ -980,6 +955,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// the pipeline's error gate before anything stamps a total or reads a table. So the nesting the
 	// disjointness contract forbids cannot be observed; it is stated because the next reader deserves
 	// to know it was checked rather than assumed.
+	try requireStillWanted(project)
 	let needsProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.deriveRuntimeNeeds)
 
 	// ⭐ STDLIB SOURCE THIS PROGRAM CANNOT REACH MUST DECIDE NOTHING ABOUT IT. Stdlib is loaded into
@@ -1010,8 +986,8 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// So nothing is refused later, and one derivation feeds
 	// both readers instead of one reader re-deriving it. See `FunctionNameIndex`, which records what each
 	// index site can actually see.
-	project.libraryFacts = try deriveLibraryFacts(project, module: module, signatures: signatures) otherwise 'libraryFactsRefused'
-		try refuseCompile(project)
+	project.libraryFacts = try deriveLibraryFacts(project, module: module, signatures: signatures) otherwise (failure) 'libraryFactsRefused'
+		try refuseUnlessAbandoned(project, failure: failure)
 	end 'libraryFactsRefused'
 
 	// ⭐ **WHICH GLOBALS CAN THE PROGRAM STILL NAME — ASKED BEFORE ANYTHING IS BUILT FROM THEM** (P1.7
@@ -1042,14 +1018,14 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// `GlobalInitOrder`). That walk must sit between `liveGlobalLabels` and the synthesis for the reason
 	// `liveGlobalLabels`' own position has: `__module_init` opens every global with a `globalAddr` of its own
 	// slot, so a dependency walk run after it would find every global depending on itself.
-	let orderedGlobals = try dependencyOrderedGlobals(module, project: project, signatures: signatures, globals: signatures.managedGlobals(liveGlobals)) otherwise 'initOrderRefused'
-		try refuseCompile(project)
+	let orderedGlobals = try dependencyOrderedGlobals(module, project: project, signatures: signatures, globals: signatures.managedGlobals(liveGlobals)) otherwise (failure) 'initOrderRefused'
+		try refuseUnlessAbandoned(project, failure: failure)
 	end 'initOrderRefused'
 
 	// A `let` no share walk can mark, a `spawn` an initializer reaches, and a `let` initializer reaching a managed
 	// `var` are refused by `semanticCheck`, over the call graph overload resolution settles.
-	let orderedDefaults = try dependencyOrderedDefaults(module, project: project, signatures: signatures, defaults: signatures.defaultSlots()) otherwise 'defaultOrderRefused'
-		try refuseCompile(project)
+	let orderedDefaults = try dependencyOrderedDefaults(module, project: project, signatures: signatures, defaults: signatures.defaultSlots()) otherwise (failure) 'defaultOrderRefused'
+		try refuseUnlessAbandoned(project, failure: failure)
 	end 'defaultOrderRefused'
 
 	project.managedGlobals = orderedGlobals
@@ -1074,12 +1050,12 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// that give a byte record handed to a writing parameter one the write may land in. The runtime-needs
 	// scan below then walks the FINAL Maxon module, and the lowering stage runs after it. Both neighbours
 	// are forced, and both were measured — see `buildMaxonTierPasses`.
-	var pipeline = try PassPipeline.create(project, maxonModule: module, signatures: signatures) otherwise 'duplicateFunctionName'
-		try refuseCompile(project)
+	var pipeline = try PassPipeline.create(project, maxonModule: module, signatures: signatures) otherwise (failure) 'duplicateFunctionName'
+		try refuseUnlessAbandoned(project, failure: failure)
 	end 'duplicateFunctionName'
 
-	try pipeline.run(buildMaxonTierPasses()) otherwise 'maxonTierFailed'
-		try refuseCompile(project)
+	try pipeline.run(buildMaxonTierPasses()) otherwise (failure) 'maxonTierFailed'
+		try refuseUnlessAbandoned(project, failure: failure)
 	end 'maxonTierFailed'
 
 	requireNoUnresolvedTagsSurvivedTheMaxonTier(module)
@@ -1090,6 +1066,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 		recordPhase(project, phase: CompilePhase.releaseIr, probe: frontEndReleaseProbe)
 	end 'noLaterQueryWillAsk'
 
+	try requireStillWanted(project)
 	let scanProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.deriveRuntimeNeeds)
 
 	// ⭐ THE HEAP IS CARRIED ONLY BY PROGRAMS THAT REACH IT. A `return 42` program allocates nothing,
@@ -1261,9 +1238,69 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// has answered and no Std pass has yet run.
 	pipeline.usesGreenThreads = usage.usesGt
 
-	try pipeline.run(buildLoweringPasses()) otherwise 'loweringFailed'
-		try refuseCompile(project)
+	try pipeline.run(passes) otherwise (failure) 'loweringFailed'
+		try refuseUnlessAbandoned(project, failure: failure)
 	end 'loweringFailed'
+
+	return LoweredProgram.create(pipeline, usage: usage, signatures: signatures, asyncSpawnTargets: asyncSpawnTargets, serviceReplyTargets: serviceReplyTargets, userGlobals: userGlobals, parksOnIo: parksOnIo)
+end 'lowerTheProgram'
+
+type LoweredProgram
+	module var pipeline as PassPipeline
+	module var usage as RuntimeUsage
+	module var signatures as ProgramSignatures
+	module let asyncSpawnTargets as ByteArrayArray
+	module let serviceReplyTargets as ByteArrayArray
+	module let userGlobals as DataSectionEntryArray
+	module let parksOnIo as bool
+
+	static function create(pipeline PassPipeline, usage RuntimeUsage, signatures ProgramSignatures, asyncSpawnTargets ByteArrayArray, serviceReplyTargets ByteArrayArray, userGlobals DataSectionEntryArray, parksOnIo bool) returns LoweredProgram
+		return Self{pipeline: pipeline, usage: usage, signatures: signatures, asyncSpawnTargets: asyncSpawnTargets, serviceReplyTargets: serviceReplyTargets, userGlobals: userGlobals, parksOnIo: parksOnIo}
+	end 'create'
+end 'LoweredProgram'
+
+module function checkFrontEndWithoutWriting(project Project) throws CompileError
+	_ = try lowerTheProgram(project, passes: buildFrontEndLoweringPasses()) otherwise (failure) 'failed'
+		closeOpenPhaseSpans(project.openPhaseSpans, unit: project.traceUnit)
+		try rethrowUnlessRefused(failure)
+		return
+	end 'failed'
+
+	try reportBindingHygieneDiagnostics(project) otherwise return
+end 'checkFrontEndWithoutWriting'
+
+function rethrowUnlessRefused(failure CompileError) throws CompileError
+	match failure.failure() 'failure'
+		reportedDiagnostics then return
+		abandoned or
+			driverFailed then throw failure
+	end 'failure'
+end 'rethrowUnlessRefused'
+
+// Drive the query spine + mid/lowering pipeline + backend for an already-loaded
+// `project`, returning the emitted `CodeResult` (NOT yet written to disk). This is
+// the single compile path both `compile` (which then writes the executable) and
+// `verifyWarmRebuild` (which byte-compares two independently-produced CodeResults)
+// route through — no duplicated pipeline-driving code.
+//
+// It closes a failed compile's open spans itself, as `checkFrontEndWithoutWriting` does: the
+// in-process callers reach it without `compileToProduct`'s drain and may compile the same project again.
+export function compileToCodeResult(project Project) returns CodeResult throws CompileError
+	return try codeResultOf(project) otherwise (failure) 'failed'
+		closeOpenPhaseSpans(project.openPhaseSpans, unit: project.traceUnit)
+		throw failure
+	end 'failed'
+end 'compileToCodeResult'
+
+function codeResultOf(project Project) returns CodeResult throws CompileError
+	var lowered = try lowerTheProgram(project, passes: buildLoweringPasses())
+	var pipeline = lowered.pipeline
+	var usage = lowered.usage
+	var signatures = lowered.signatures
+	let asyncSpawnTargets = lowered.asyncSpawnTargets
+	let serviceReplyTargets = lowered.serviceReplyTargets
+	let userGlobals = lowered.userGlobals
+	let parksOnIo = lowered.parksOnIo
 
 	// ⚠ After the WHOLE lowering list and not after `lowerMaxonToStd`: `ValueTupleReturn` is the last pass
 	// that reads `func.maxonReturnType`, and a released column answers `void` rather than failing.
@@ -1755,7 +1792,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	try reportBindingHygieneDiagnostics(project)
 
 	return codeResult
-end 'compileToCodeResult'
+end 'codeResultOf'
 
 // ⭐⭐ **REPORT THE HYGIENE DIAGNOSTICS THE PARSER DECIDED, NOW THAT EVERY PASS THAT COULD EXPLAIN THE BODY
 // INSTEAD HAS RUN.** Both verdicts (E3012 unused, E3077 var-should-be-let) are facts about ONE function,
@@ -1781,10 +1818,14 @@ end 'compileToCodeResult'
 // rule would cost an index to make a distinction nothing observes. It errs toward reporting LESS, which for
 // a hygiene diagnostic is the harmless direction.
 //
-// ⚠ **THE GATE IS NOT REDUNDANT, THOUGH NOTHING CAN TRIP IT FROM HERE TODAY.** Every `otherwise` above
-// refuses the compile, so reaching this call means the sink is empty — but that is a property of the
-// CALLER, and a hygiene diagnostic stacked on top of a real one is precisely the defect this deferral
-// exists to prevent. The rule is written where the rule is, not left resting on the control flow above it.
+// `checkFrontEndWithoutWriting` calls it with no backend behind it, so an editor can show a hygiene
+// diagnostic where a build stops at E5001 or E4015 instead.
+//
+// ⚠ **THE GATE IS NOT REDUNDANT, THOUGH NOTHING CAN TRIP IT FROM HERE TODAY.** Both callers reach this
+// call only once every stage before it has passed its error gate, so the sink is empty — but that is a
+// property of the CALLERS, and a hygiene diagnostic stacked on top of a real one is precisely the defect
+// this deferral exists to prevent. The rule is written where the rule is, not left resting on the control
+// flow above it.
 function reportBindingHygieneDiagnostics(project Project) throws CompileError
 	if project.bindingHygieneDiagnostics.count() == 0 or projectHasErrors(project) 'nothingToSayOrSomethingRealerSaidIt'
 		return
@@ -2204,6 +2245,13 @@ function registeredSourceMatchesDisk(project Project, path FilePath) returns boo
 
 	return stamp.describes(info)
 end 'registeredSourceMatchesDisk'
+
+// The stamp is dropped with the disk text: kept, it would still describe the file on disk, and the next
+// `loadOneSourceFileIfChanged` would keep this text in its place.
+module function overlayUnsavedText(project Project, path FilePath, content String)
+	fileChanged(project, path: path, content: content)
+	_ = project.db.sourceStamps.remove(path)
+end 'overlayUnsavedText'
 
 function stampRegisteredSource(project Project, path FilePath, observedAt Timestamp)
 	let info = try File.info(path) otherwise return

@@ -1,0 +1,26 @@
+let ProjectSiblingReturnRangeDirName = "diagnostics-project-sibling-return-range"
+let ProjectSiblingReturnRangeDeclaringFileName = "a.maxon"
+let ProjectSiblingReturnRangeBufferFileName = "b.maxon"
+let ProjectSiblingReturnRangeDeclaringSource = "module typealias Percent = int(0 to 100)\n"
+let ProjectSiblingReturnRangeBufferSource = "function pick() returns Percent\n\treturn 200\nend 'pick'\n\nfunction main() returns ExitCode\n\treturn pick() as ExitCode\nend 'main'\n"
+let ProjectSiblingReturnRangeCode = "E3005"
+let ProjectSiblingReturnRangeMessage = "Value 200 is outside the range of 'Percent' (int(0 to 100))"
+let ProjectSiblingReturnRangeLine = 1 as AssertedInt
+let ProjectSiblingReturnRangeCharacter = 1 as AssertedInt
+
+test 'a literal returned out of the range a sibling file declares is reported'
+	let root = stagedProjectDiagnosticsRoot(ProjectSiblingReturnRangeDirName)
+	writeCorpusFile(root, fileName: ProjectSiblingReturnRangeDeclaringFileName, content: ProjectSiblingReturnRangeDeclaringSource)
+	writeCorpusFile(root, fileName: ProjectSiblingReturnRangeBufferFileName, content: ProjectSiblingReturnRangeBufferSource)
+
+	let probe = probeProjectCheckDiagnostics(root, fileName: ProjectSiblingReturnRangeBufferFileName, content: ProjectSiblingReturnRangeBufferSource, edits: StringArray.create())
+
+	discardOutsideCheckoutDir(root)
+
+	let reported = try onlyProjectDiagnostic(probe, note: "`pick` returns `200` as the sibling's `Percent = int(0 to 100)`. A `maxon build` of the staged project reports exactly one `{ProjectSiblingReturnRangeCode}` and nothing else.")
+
+	try Expect.equal(reported.code.describe(), expected: ProjectSiblingReturnRangeCode, message: "the one error a build of this project reports is {ProjectSiblingReturnRangeCode}; the server published {reported.code.describe()}: {reported.message}")
+	try Expect.equal(reported.message, expected: ProjectSiblingReturnRangeMessage, message: "the server must quote the range the build quotes.")
+	try Expect.equal(reported.range.startLine as AssertedInt, expected: ProjectSiblingReturnRangeLine, message: "the build anchors the error on line 2.")
+	try Expect.equal(reported.range.startCharacter as AssertedInt, expected: ProjectSiblingReturnRangeCharacter, message: "the build anchors the error at column 2, the `return`.")
+end 'a literal returned out of the range a sibling file declares is reported'

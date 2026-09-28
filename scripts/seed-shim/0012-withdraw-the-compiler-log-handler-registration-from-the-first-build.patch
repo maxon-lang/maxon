@@ -7,19 +7,19 @@
 # grouped under their wire prefix (`CMP`, `PAR`, …) rather than their group name, which is the group the
 # stand-in prints.
 diff --git a/maxon-bin/Compiler/Compiler.maxon b/maxon-bin/Compiler/Compiler.maxon
-index e1844198b..7f99b92b4 100644
+index 937795b..fdbe545 100644
 --- a/maxon-bin/Compiler/Compiler.maxon
 +++ b/maxon-bin/Compiler/Compiler.maxon
-@@ -126,7 +126,6 @@ export function compileToProduct(inputPaths MaxonSourcePathArray, target Target,
- 	// scheduler is single-M" — read the argument there before leaning on it.
+@@ -118,7 +118,6 @@ export function compileToProduct(inputPaths MaxonSourcePathArray, target Target,
+ 	// second reading of the command line — so the pre-project `load` bracket and everything after it
+ 	// agree on which compile they are.
  	let unit = traceUnitOf(try commonAncestorOf(inputPaths))
- 	setTraceUnit(unit)
 -	CompilerLogRoute.current().handler.attribute(unit)
+ 	var spans = TraceNameArray.create()
  
- 	// ⭐⭐ **THE ONE PLACE A FAILED COMPILE CLOSES WHAT IT LEFT OPEN (A1v).** Four stages inside phase
- 	// brackets can throw — `load`'s project load, `deadFunctions`' E4015, `regalloc`'s E5001 and `link`'s
+ 	// ⭐⭐ **WHERE A FAILED BUILD CLOSES WHAT IT LEFT OPEN.** Four stages inside phase brackets can throw —
 diff --git a/maxon-bin/Compiler/CompilerLogHandler.maxon b/maxon-bin/Compiler/CompilerLogHandler.maxon
-index 3bb61b6c1..2b2bfd090 100644
+index 3bb61b6..2b2bfd0 100644
 --- a/maxon-bin/Compiler/CompilerLogHandler.maxon
 +++ b/maxon-bin/Compiler/CompilerLogHandler.maxon
 @@ -55,23 +55,6 @@ module type CompilerLogHandler implements LogHandler
@@ -56,10 +56,10 @@ index 3bb61b6c1..2b2bfd090 100644
  
  module function compilerLogEnabled(group CompilerLogGroup, level LogLevel) returns bool
 diff --git a/maxon-bin/Main.maxon b/maxon-bin/Main.maxon
-index 38a591ad1..f492b1084 100644
+index d2ee486..4d02f4a 100644
 --- a/maxon-bin/Main.maxon
 +++ b/maxon-bin/Main.maxon
-@@ -271,10 +271,6 @@ function defineFromPair(pair String) returns Define throws DefinePairError
+@@ -267,10 +267,6 @@ function defineFromPair(pair String) returns Define throws DefinePairError
  end 'defineFromPair'
  
  function main() returns ExitCode

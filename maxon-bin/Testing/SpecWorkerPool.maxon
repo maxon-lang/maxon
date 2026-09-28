@@ -685,6 +685,7 @@ export function runPersistentWorker(specDir FilePath, filterPatterns FilterPatte
 	silenceCompilerLogging()
 
 	var stdin = Console.stdin()
+	var fileMemos = SharedFileMemoMap.create()
 	print("{WorkerReadyMarker}\n")
 
 	while true 'jobLoop'
@@ -711,7 +712,7 @@ export function runPersistentWorker(specDir FilePath, filterPatterns FilterPatte
 			let prefix = jobPrefixOf(runs)
 
 			if job.startsWith(prefix) 'thisKind'
-				runSpecJob(specDir, specName: sliceAfterPrefix(job, prefix: prefix), runs: runs, filterPatterns: filterPatterns, updateRequired: updateRequired, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)
+				runSpecJob(specDir, specName: sliceAfterPrefix(job, prefix: prefix), runs: runs, filterPatterns: filterPatterns, updateRequired: updateRequired, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, fileMemos: fileMemos)
 				ran = true
 				break
 			end 'thisKind'
@@ -765,8 +766,8 @@ end 'silenceCompilerLogging'
 // when it dies, so panicking routes this diagnostic through `abortOnDeadWorker`, which prints it.
 // Returning quietly instead would leave the parent to notice a missing record and abort with no
 // idea why.
-function runSpecJob(specDir FilePath, specName String, runs SpecRuns, filterPatterns FilterPatternArray, updateRequired bool, effectiveTarget Target, includeNetwork bool)
-	let run = try runOneSpec(specDir, specName: specName, runs: runs, filterPatterns: filterPatterns, updateRequired: updateRequired, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork) otherwise (e) 'specFailed'
+function runSpecJob(specDir FilePath, specName String, runs SpecRuns, filterPatterns FilterPatternArray, updateRequired bool, effectiveTarget Target, includeNetwork bool, fileMemos SharedFileMemoMap)
+	let run = try runOneSpec(specDir, specName: specName, runs: runs, filterPatterns: filterPatterns, updateRequired: updateRequired, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, fileMemos: fileMemos) otherwise (e) 'specFailed'
 		reportCompileError(e)
 		panic("spec worker: could not run spec '{specName}' — see the error above")
 	end 'specFailed'
@@ -2040,7 +2041,7 @@ end 'takeDispatchableJob'
 // `harnessExe` is THIS executable — what each worker process is relaunched as, and (since every test
 // is compiled in process) the compiler under test as well. See `spawnNoWait` for why that is one
 // parameter again and not two.
-export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPatterns FilterPatternArray, updateRequired bool, workerCount WorkerCount, effectiveTarget Target, includeNetwork bool) returns PoolRun throws CompileError
+export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPatterns FilterPatternArray, updateRequired bool, workerCount WorkerCount, effectiveTarget Target, includeNetwork bool, treeLock TreeLockHold) returns PoolRun throws CompileError
 	// Asked here rather than in `scale-test`: a gate only the instrument's own command reaches is one
 	// nobody runs on the way to a merge.
 	requireScaleHistoryRefusalsFire()
@@ -2179,8 +2180,8 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 		// so it is refreshed HERE, at the top, rather than at the three places progress happens. A
 		// suite parked on its last slow spec is still a live holder, and one placed on completions
 		// alone would age out under exactly that tail. The write is throttled to one every few
-		// seconds, so a poll loop pays a clock read (see `touchTreeLock`).
-		touchTreeLock()
+		// seconds, so a poll loop pays a clock read (see `TreeLockHold.touch`).
+		treeLock.touch()
 
 		// Feed the pool before draining it: the parallelism does not exist until every worker has a
 		// job, so an idle slot always outranks a ready answer.

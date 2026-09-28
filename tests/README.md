@@ -567,6 +567,10 @@ whether the case passed or threw. The staging function itself is private, so no 
 the checkout without that removal. An interface rather than a closure, because a closure may not throw
 (E3101). In `lsp/` each case discards its directory once its session is a value, before it asserts.
 
+⚠ **RUN `lsp/` AS `maxon test tests/lsp --timeout=60000`.** A case that opens a document under a
+`.maxproj` waits for the project check behind it, counting that version's publishes, and the busiest
+case checks a project of 120 sibling files — well past the 5,000 ms default.
+
 ## `spec-harness/` — the spec harness's own refusals and gates
 
 `spec-test` refuses a malformed spec by PANICKING while it parses its own corpus, so a refusal is
@@ -1080,10 +1084,10 @@ what makes the absences a reading rather than a search that found nothing.
 is the other reason each case demands a presence beside its absences: the acquire COUNT in the steal
 case, and an acquire ahead of the first slab call in the other.
 
-⚠ **NOTHING IN `ci.yml` RUNS THIS CORPUS**: that workflow runs `spec-test`, `tests/lsp`, `tests/fmt`,
-`tests/spec-harness` and `tests/ladders` only, so this gate is one a `/land` battery or a contributor
-runs by name —
-`maxon test tests/emitted-runtime`.
+⚠ **THIS CORPUS RUNS BY NAME ALONE**: `ci.yml` runs `spec-test`, `tests/lsp` (with
+`--timeout=60000`), `tests/fmt`, `tests/spec-harness`, `tests/ladders` and — once `vendor/` is staged —
+`tests/cli` on every lane, and `tests/debug`, `tests/dap` and `tests/mcp` on x64-windows. This gate is one
+a `/land` battery or a contributor runs by name — `maxon test tests/emitted-runtime`.
 
 It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (every child runs in a staging
 directory under `temp/emitted-runtime/`, named for the CASE, because `maxon test` runs files

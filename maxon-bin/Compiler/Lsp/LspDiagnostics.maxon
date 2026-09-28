@@ -39,14 +39,19 @@ let QuotedNameSegment = 1
 // not locate `stdlib/`, or was handed a uri spelling no path, has checked nothing and knows
 // nothing. Saying nothing leaves the editor showing what it already had, which is what "not
 // checked" looks like.
-module function publishBufferDiagnostics(uri String, text String, arrival BufferArrival)
-	let path = try FilePath.from(uri) otherwise return
+module function publishBufferDiagnostics(uri String, text String, arrival BufferArrival) returns BufferPublish
+	let path = try FilePath.from(uri) otherwise return BufferPublish.unchecked
 
 	match lspDocumentProject(path, content: text) 'buffer'
-		loaded(project, reader) then project.publishDocumentDiagnostics(uri, reader: reader, arrival: arrival, path: path, text: text)
-		unavailable then return
+		loaded(project, reader) then return project.publishDocumentDiagnostics(uri, reader: reader, arrival: arrival, path: path, text: text)
+		unavailable then return BufferPublish.unchecked
 	end 'buffer'
 end 'publishBufferDiagnostics'
+
+module union BufferPublish
+	published(reader LspReaderSearch, path FilePath, fast DiagnosticArray)
+	unchecked
+end 'BufferPublish'
 
 module enum BufferArrival
 	opened
@@ -88,7 +93,7 @@ typealias SiblingVerdictMap = Map with (ByteArray, bool)
 
 // Tell the editor this document has nothing on it — the notification a closed document is owed.
 module function clearPublishedDiagnostics(uri String)
-	writeDiagnosticsNotification(uri, items: JsonNodeIdArray.create(), doc: JsonDoc.create())
+	lspOutputWriter().write(diagnosticsNotificationText(uri, items: JsonNodeIdArray.create(), doc: JsonDoc.create()))
 end 'clearPublishedDiagnostics'
 
 // ⚖ **THESE STEPS ARE THE PROJECT'S OWN, WHICH IS WHAT LETS A `match` PAYLOAD REACH THEM.** The compile
@@ -96,25 +101,7 @@ end 'clearPublishedDiagnostics'
 // outside; the same work spelled `publishCheckedDiagnostics(project: project)` hands that payload to a
 // parameter the callee writes, which is E3019.
 extension Project
-	// ⛔⛔ **THE COMPILE IS CAPTURED, AND THAT IS WHAT KEEPS THE SESSION ALIVE RATHER THAN TIDINESS.** Every
-	// diagnostic the pipeline reports is written to STDERR by `emitDiagnosticLine`, and a client cannot
-	// drain this server's stderr — `tests/lsp/LspClient.maxon`'s header states why it cannot, and that a
-	// full pipe buffer leaves both processes waiting on each other for ever. The capture is where those
-	// bytes go instead; the ARRAY standing on the project is what a caller reports.
-	//
-	// ⚠ **THE PARSE ROADS BELOW DELIBERATELY RUN WITHOUT ONE**, and that is safe only because a query
-	// REPORTS a diagnostic onto the project without emitting it: `emitDiagnosticLine` is reached from
-	// `printDiagnostics` alone, whose only caller is `refuseCompile`, which only a compile runs. A road
-	// that emits has to be brought inside a capture rather than left to stderr — and not by nesting one,
-	// because `beginDiagnosticCapture` panics on a second open.
-	module function compileBufferCaptured() returns CheckedCompile
-		beginDiagnosticCapture()
-		let outcome = checkWithoutWriting(self)
-		discardDiagnosticCapture()
-		return outcome
-	end 'compileBufferCaptured'
-
-	function publishDocumentDiagnostics(uri String, reader LspReaderSearch, arrival BufferArrival, path FilePath, text String)
+	function publishDocumentDiagnostics(uri String, reader LspReaderSearch, arrival BufferArrival, path FilePath, text String) returns BufferPublish
 		// Built before the check: a correction then reuses the held project, and the
 		// `maxon/projectLoading` pair reaches the client ahead of this document's diagnostics.
 		match arrival 'arrival'
@@ -124,7 +111,10 @@ extension Project
 
 		let tokens = lspDocumentTokens(text, keywords: self.keywords)
 
-		writeDocumentDiagnostics(uri, text: text, tokens: tokens, diagnostics: self.documentDiagnostics(reader, path: path, text: text, tokens: tokens), path: path)
+		let fast = self.documentDiagnostics(reader, path: path, text: text, tokens: tokens)
+		lspOutputWriter().write(documentDiagnosticsText(uri, text: text, tokens: tokens, diagnostics: fast, path: path, unbuilt: StringArray.create()))
+
+		return BufferPublish.published(reader, path: path, fast: fast)
 	end 'publishDocumentDiagnostics'
 
 	function documentDiagnostics(reader LspReaderSearch, path FilePath, text String, tokens TokenArray) returns DiagnosticArray
@@ -144,7 +134,7 @@ extension Project
 	end 'documentDiagnostics'
 
 	function checkedDiagnostics() returns DiagnosticArray
-		_ = compileBufferCaptured()
+		_ = checkWithoutWriting(self)
 
 		return self.diagnostics.clone()
 	end 'checkedDiagnostics'
@@ -248,7 +238,7 @@ extension Project
 	end 'unsuppressedRefusals'
 end 'Project'
 
-function writeDocumentDiagnostics(uri String, text String, tokens TokenArray, diagnostics DiagnosticArray, path FilePath)
+module function documentDiagnosticsText(uri String, text String, tokens TokenArray, diagnostics DiagnosticArray, path FilePath, unbuilt StringArray) returns String
 	var doc = JsonDoc.create()
 	let index = LspLineIndex.build(text)
 	var items = JsonNodeIdArray.create()
@@ -257,8 +247,12 @@ function writeDocumentDiagnostics(uri String, text String, tokens TokenArray, di
 		items.push(diagnosticNode(doc, diagnostic: diagnostic, source: text, index: index, tokens: tokens))
 	end 'each'
 
-	writeDiagnosticsNotification(uri, items: items, doc: doc)
-end 'writeDocumentDiagnostics'
+	for failure in unbuilt 'eachFailure'
+		items.push(unbuiltProjectNode(doc, failure: failure, source: text, index: index))
+	end 'eachFailure'
+
+	return diagnosticsNotificationText(uri, items: items, doc: doc)
+end 'documentDiagnosticsText'
 
 function thisDocumentsOwn(diagnostics DiagnosticArray, path FilePath) returns DiagnosticArray
 	var kept = DiagnosticArray.create()
@@ -273,6 +267,30 @@ function thisDocumentsOwn(diagnostics DiagnosticArray, path FilePath) returns Di
 
 	return kept
 end 'thisDocumentsOwn'
+
+module function attributedTo(diagnostics DiagnosticArray, path FilePath, alone DiagnosticArray) returns DiagnosticArray
+	var kept = DiagnosticArray.create()
+
+	for diagnostic in thisDocumentsOwn(diagnostics, path: path) 'each'
+		if diagnostic.filePath.isEmpty() and not raisedAmong(diagnostic, others: alone) 'reportedOverTheWholeProject'
+			continue
+		end 'reportedOverTheWholeProject'
+
+		kept.push(diagnostic)
+	end 'each'
+
+	return kept
+end 'attributedTo'
+
+function raisedAmong(diagnostic Diagnostic, others DiagnosticArray) returns bool
+	for other in others 'eachOther'
+		if other.filePath.isEmpty() and other.code == diagnostic.code and other.message == diagnostic.message 'theSamePositionlessClaim'
+			return true
+		end 'theSamePositionlessClaim'
+	end 'eachOther'
+
+	return false
+end 'raisedAmong'
 
 function tokenStreamsAgree(live TokenArray, swept TokenArray) returns bool
 	if live.count() != swept.count() 'differentLengths'
@@ -539,7 +557,8 @@ end 'identifierSubjectAt'
 // author is editing. "This program declares no entry point" would sit on the first line of every
 // library file an editor opens. The unused-export family (E3092/E3093/E3094) says nothing else in the
 // program references a declaration, and none of the program's other files is in this compile. The
-// corpus does not rescue either: it is lexed and folded, never checked.
+// corpus does not rescue either: it is lexed and folded, never checked. `attributedTo` reads this same
+// filter, so the project check withholds these codes too.
 //
 // ⚠ A member is added by measurement, never by guessing. Suppressing a diagnostic that is genuinely
 // about this file hides a real error, which is worse than the squiggle it removes; the leading digit
@@ -554,9 +573,10 @@ end 'claimsAboutTheWholeProgram'
 // A diagnostic naming no file at all was reported without a position (`Diagnostic`'s header: "empty
 // when program-wide"), and it is taken to be this document's because every road that reaches here
 // reported over this document alone — the buffer compile holds one file plus the library tiers, and the
-// corpus road parses the reader's file and nothing else. ⚠ A positionless diagnostic carries nothing to
-// narrow BY, so a road that ever reports over more than this document owes its own narrowing before it
-// gets here. One naming ANOTHER file is a library's, and painting it into the author's document would put
+// corpus road parses the reader's file and nothing else — or narrowed first: the project check reports
+// over the whole project, and `attributedTo` keeps a positionless diagnostic only where the buffer
+// compile raised it too. ⚠ A positionless diagnostic carries nothing to narrow BY, so a road that ever
+// reports over more than this document owes its own narrowing before it gets here. One naming ANOTHER file is a library's, and painting it into the author's document would put
 // a squiggle on a line they did not write.
 module function reportsOn(diagnostic Diagnostic, path FilePath) returns bool
 	return diagnostic.filePath.isEmpty() or namesTheSameFile(diagnostic.filePath, other: path)
@@ -566,21 +586,32 @@ end 'reportsOn'
 // registered a file by, which is not always the spelling the request arrived with
 // (`registeredSpellingOf` owns that rule). A text compare drops every one of those diagnostics and
 // publishes an empty array, which reads as "this document is clean".
-function namesTheSameFile(one FilePath, other FilePath) returns bool
+module function namesTheSameFile(one FilePath, other FilePath) returns bool
 	return one.resolve(Directory.currentPath()).equals(other.resolve(Directory.currentPath()))
 end 'namesTheSameFile'
 
-function diagnosticNode(doc JsonDoc, diagnostic Diagnostic, source String, index LspLineIndex, tokens TokenArray) returns JsonNodeId
+// A line `maxon build` prints for a project it could not load (`Main.reportCompileError`). It is no
+// `Diagnostic`, so it carries no code and no position, and sits at the document's start.
+function unbuiltProjectNode(doc JsonDoc, failure String, source String, index LspLineIndex) returns JsonNodeId
+	return errorItemAt(doc, span: documentStartSpan(), message: failure, source: source, index: index).finish()
+end 'unbuiltProjectNode'
+
+function errorItemAt(doc JsonDoc, span LspSpan, message String, source String, index LspLineIndex) returns LspJsonObject
 	var item = LspJsonObject.create(doc)
-	item.putNode(LspRangeKey, value: lspSpanRangeNode(doc, source: source, index: index, span: diagnosticSpan(diagnostic, source: source, index: index, tokens: tokens)))
+	item.putNode(LspRangeKey, value: lspSpanRangeNode(doc, source: source, index: index, span: span))
 	item.put(DiagnosticSeverityKey, value: JsonNode.numberNode(LspErrorSeverity))
+	item.put(DiagnosticSourceKey, value: JsonNode.stringNode(DiagnosticSourceName))
+	item.put(DiagnosticMessageKey, value: JsonNode.stringNode(message))
+	return item
+end 'errorItemAt'
+
+function diagnosticNode(doc JsonDoc, diagnostic Diagnostic, source String, index LspLineIndex, tokens TokenArray) returns JsonNodeId
+	var item = errorItemAt(doc, span: diagnosticSpan(diagnostic, source: source, index: index, tokens: tokens), message: diagnostic.message, source: source, index: index)
 
 	// The code, because it is the field a Maxon author can act on: `E3005` can be looked up in the
 	// error code reference, where the message alone cannot. `rawValue` is the registry's own spelling
 	// of it, so no source file writes the number down a second time.
 	item.put(DiagnosticCodeKey, value: JsonNode.stringNode(diagnostic.code.rawValue))
-	item.put(DiagnosticSourceKey, value: JsonNode.stringNode(DiagnosticSourceName))
-	item.put(DiagnosticMessageKey, value: JsonNode.stringNode(diagnostic.message))
 	return item.finish()
 end 'diagnosticNode'
 
@@ -626,12 +657,12 @@ module function documentStartSpan() returns LspSpan
 	return LspSpan.create(0, endByte: 1)
 end 'documentStartSpan'
 
-// `PublishDiagnosticsParams` for `uri`, framed and written. The document travels with the items because
-// each of them is a node inside it.
-function writeDiagnosticsNotification(uri String, items JsonNodeIdArray, doc JsonDoc)
+// `PublishDiagnosticsParams` for `uri`, as the message's text. The document travels with the items
+// because each of them is a node inside it.
+function diagnosticsNotificationText(uri String, items JsonNodeIdArray, doc JsonDoc) returns String
 	var params = LspJsonObject.create(doc)
 	params.put(LspUriKey, value: JsonNode.stringNode(uri))
 	params.putNode(DiagnosticsKey, value: doc.add(JsonNode.arrayNode(items)))
 
-	writeLspNotification(doc, method: PublishDiagnosticsMethod, params: params.finish())
-end 'writeDiagnosticsNotification'
+	return lspNotificationText(doc, method: PublishDiagnosticsMethod, params: params.finish())
+end 'diagnosticsNotificationText'

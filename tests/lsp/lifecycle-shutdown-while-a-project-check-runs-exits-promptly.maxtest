@@ -1,0 +1,74 @@
+let BusyCheckDirName = "lifecycle-shutdown-while-a-project-check-runs"
+export let BusyCheckBufferFileName = "main.maxon"
+export let BusyCheckBufferSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let BusyCheckSiblingFileCount = 120
+let BusyCheckFunctionsPerSibling = 400
+export let BusyCheckPastTheDebounceMs = 1000 as Milliseconds
+let BusyCheckCleanExitCode = 0 as ProcessExitCode
+
+union BusyCheckOutcome
+	exited(code ProcessExitCode)
+	broke(detail String)
+end 'BusyCheckOutcome'
+
+test 'shutdown while a project check runs exits promptly and clean'
+	let root = stagedBusyCheckProject(BusyCheckDirName)
+
+	var client = LspClient.start()
+	let outcome = shutDownDuringTheCheck(client, root: root)
+	client.release()
+
+	discardOutsideCheckoutDir(root)
+
+	match outcome 'termination'
+		exited(code) then Expect.equal(code as AssertedInt, expected: BusyCheckCleanExitCode as AssertedInt, message: "the server did not exit 0 after `shutdown` then `exit` sent while its project check of {BusyCheckSiblingFileCount} sibling files was running.")
+		broke(detail) then Expect.fail("the shutdown sequence did not complete while a project check was running: {detail}. `waitForExit` gives the server {ServerExitDeadlineMs} ms, far less than the check takes, so a server that waits the check out before exiting fails here.")
+	end 'termination'
+end 'shutdown while a project check runs exits promptly and clean'
+
+function shutDownDuringTheCheck(client LspClient, root FilePath) returns BusyCheckOutcome
+	let uri = fileUriOf(root.join(BusyCheckBufferFileName))
+	var outcome = BusyCheckOutcome.broke(UnreportedSessionEnding)
+
+	try 'session'
+		_ = client.initializeAtRoot(root)
+		client.initialized()
+		client.openDocument(uri, content: BusyCheckBufferSource)
+		_ = client.awaitPublishedDiagnostics(uri)
+		sleep(BusyCheckPastTheDebounceMs)
+		client.shutdown()
+		client.exit()
+		outcome = BusyCheckOutcome.exited(client.waitForExit())
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed or
+				malformedResponse or
+				serverRefused then outcome = BusyCheckOutcome.broke(e.explained())
+		end 'reason'
+	end 'failed'
+
+	return outcome
+end 'shutDownDuringTheCheck'
+
+export function stagedBusyCheckProject(dirName String) returns FilePath
+	let root = stagedProjectDiagnosticsRoot(dirName)
+	let sibling = busyCheckSiblingSource()
+
+	for k in 0 upto BusyCheckSiblingFileCount 'eachSibling'
+		writeCorpusFile(root, fileName: "busy{k}.maxon", content: sibling)
+	end 'eachSibling'
+
+	writeCorpusFile(root, fileName: BusyCheckBufferFileName, content: BusyCheckBufferSource)
+
+	return root
+end 'stagedBusyCheckProject'
+
+function busyCheckSiblingSource() returns String
+	var source = ""
+
+	for i in 0 upto BusyCheckFunctionsPerSibling 'eachFunction'
+		source = "{source}function busy{i}(n ExitCode) returns ExitCode\n\tvar total = n\n\ttotal = total + 1\n\tif total > 3 'big'\n\t\treturn 3\n\tend 'big'\n\n\treturn total\nend 'busy{i}'\n\n"
+	end 'eachFunction'
+
+	return source
+end 'busyCheckSiblingSource'

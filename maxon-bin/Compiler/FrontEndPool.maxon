@@ -329,7 +329,7 @@ module type FrontEndPool
 
 		var outcomes = FrontEndOutcomeArray.create()
 		var slots = LandingSlots.create(project.db.sourcePaths.count())
-		self.drainEveryJob(project, input: FrontEndDrainInput.lexing(project), files: files, sizes: sizes, outcomes: outcomes, slots: slots)
+		try self.drainEveryJob(project, input: FrontEndDrainInput.lexing(project), files: files, sizes: sizes, outcomes: outcomes, slots: slots)
 
 		for fileIndex in files 'landInSourcePathOrder'
 			_ = try queryActiveTokens(project, path: sourcePathAt(project, fileIndex: fileIndex), lexing: LexSource.pooled(lexOutcomeOf(landedOutcome(outcomes, slots: slots, fileIndex: fileIndex))))
@@ -346,6 +346,7 @@ module type FrontEndPool
 		var sizes = PoolJobSizeArray.create()
 
 		for fileIndex in 0 upto project.db.sourcePaths.count() 'eachFile'
+			try requireStillWanted(project)
 			let query = try parseQueryOf(project, path: sourcePathAt(project, fileIndex: fileIndex))
 			noteParseJob(query, fileIndex: fileIndex, files: files, sizes: sizes)
 			queries.push(query)
@@ -360,8 +361,9 @@ module type FrontEndPool
 
 		let probe = PhaseProbe.beginPhase(project, phase: CompilePhase.frontEndPool)
 		self.holdBaseline(signatures)
+		try requireStillWanted(project)
 		self.parsed = true
-		self.drainEveryJob(project, input: FrontEndDrainInput.parsing(queries), files: files, sizes: sizes, outcomes: outcomes, slots: slots)
+		try self.drainEveryJob(project, input: FrontEndDrainInput.parsing(queries), files: files, sizes: sizes, outcomes: outcomes, slots: slots)
 
 		let artifacts = landParses(project, queries: queries, outcomes: outcomes, slots: slots)
 		recordPhase(project, phase: CompilePhase.frontEndPool, probe: probe)
@@ -492,14 +494,14 @@ module type FrontEndPool
 	end 'baselineIndex'
 
 	// Every job of one drain, on the workers or on this thread, landed by file either way.
-	function drainEveryJob(project Project, input FrontEndDrainInput, files PoolJobArray, sizes PoolJobSizeArray, outcomes FrontEndOutcomeArray, slots LandingSlots)
+	function drainEveryJob(project Project, input FrontEndDrainInput, files PoolJobArray, sizes PoolJobSizeArray, outcomes FrontEndOutcomeArray, slots LandingSlots) throws CompileError
 		self.mostFilesDispatched = files.count() if files.count() > self.mostFilesDispatched else self.mostFilesDispatched
 
 		if FrontEndPool.RuntimeMovesSharedRecords 'onTheWorkers'
 			self.requireWorkers(project, filesDispatched: files.count())
-			self.drain(input, files: files, sizes: sizes, workerCount: self.drainWorkerCount(input, sizes: sizes), outcomes: outcomes, slots: slots)
+			try self.drain(project, input: input, files: files, sizes: sizes, workerCount: self.drainWorkerCount(input, sizes: sizes), outcomes: outcomes, slots: slots)
 		end 'onTheWorkers' else 'inProcess'
-			self.drainInProcess(project, input: input, files: files, outcomes: outcomes, slots: slots)
+			try self.drainInProcess(project, input: input, files: files, outcomes: outcomes, slots: slots)
 		end 'inProcess'
 	end 'drainEveryJob'
 
@@ -512,10 +514,11 @@ module type FrontEndPool
 
 	// ⭐ **THE WORKER'S OWN WORK, DONE ON THIS THREAD** — the same job, the same answer and the same landing as a
 	// drain on the pool, with nothing moved.
-	function drainInProcess(project Project, input FrontEndDrainInput, files PoolJobArray, outcomes FrontEndOutcomeArray, slots LandingSlots)
+	function drainInProcess(project Project, input FrontEndDrainInput, files PoolJobArray, outcomes FrontEndOutcomeArray, slots LandingSlots) throws CompileError
 		var worker = self.inProcessWorker(project, input: input)
 
 		for job in 0 upto files.count() 'eachJob'
+			try requireStillWanted(project)
 			let fileIndex = fileOfJob(files, job: job)
 
 			let outcome = match input 'input'
@@ -546,7 +549,7 @@ module type FrontEndPool
 
 	// ⭐⭐ **THE DISPATCH LOOP: fill the pipeline, then serve whoever finished first.** The protocol is
 	// `PoolDispatch`'s, shared with the backend's two pools.
-	function drain(input FrontEndDrainInput, files PoolJobArray, sizes PoolJobSizeArray, workerCount PoolSize, outcomes FrontEndOutcomeArray, slots LandingSlots)
+	function drain(project Project, input FrontEndDrainInput, files PoolJobArray, sizes PoolJobSizeArray, workerCount PoolSize, outcomes FrontEndOutcomeArray, slots LandingSlots) throws CompileError
 		var dispatch = PoolDispatch.create(sizes, workerCount: workerCount)
 		var replies = FrontEndReplyPromiseArray.create()
 
@@ -563,6 +566,7 @@ module type FrontEndPool
 			landOutcome(answer.outcome, fileIndex: fileIndex, outcomes: outcomes, slots: slots)
 
 			if dispatch.hasUndispatched() 'handTheFreedWorkerTheNextJob'
+				try requireStillWanted(project)
 				self.dispatchJob(input, files: files, workerSlot: freedWorker, dispatch: dispatch, replies: replies)
 			end 'handTheFreedWorkerTheNextJob'
 		end 'serveWhoeverFinishedFirst'

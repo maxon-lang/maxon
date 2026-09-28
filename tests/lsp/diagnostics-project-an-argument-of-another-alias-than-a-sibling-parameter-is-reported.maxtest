@@ -1,0 +1,26 @@
+let ProjectSiblingArgumentAliasDirName = "diagnostics-project-sibling-argument-alias"
+let ProjectSiblingArgumentAliasDeclaringFileName = "a.maxon"
+let ProjectSiblingArgumentAliasBufferFileName = "b.maxon"
+let ProjectSiblingArgumentAliasDeclaringSource = "module typealias Slot = int(0 to 1000)\n"
+let ProjectSiblingArgumentAliasBufferSource = "function widen(n Slot) returns ExitCode\n\treturn n as ExitCode\nend 'widen'\n\nfunction main() returns ExitCode\n\tlet small = 300 as Small\n\treturn widen(small)\nend 'main'\n\ntypealias Small = int(0 to 255)\n"
+let ProjectSiblingArgumentAliasCode = "E3005"
+let ProjectSiblingArgumentAliasMessage = "argument type mismatch for 'n': expected 'Slot', got 'Small'"
+let ProjectSiblingArgumentAliasLine = 6 as AssertedInt
+let ProjectSiblingArgumentAliasCharacter = 8 as AssertedInt
+
+test 'an argument of another alias than the parameter a sibling file declares is reported'
+	let root = stagedProjectDiagnosticsRoot(ProjectSiblingArgumentAliasDirName)
+	writeCorpusFile(root, fileName: ProjectSiblingArgumentAliasDeclaringFileName, content: ProjectSiblingArgumentAliasDeclaringSource)
+	writeCorpusFile(root, fileName: ProjectSiblingArgumentAliasBufferFileName, content: ProjectSiblingArgumentAliasBufferSource)
+
+	let probe = probeProjectCheckDiagnostics(root, fileName: ProjectSiblingArgumentAliasBufferFileName, content: ProjectSiblingArgumentAliasBufferSource, edits: StringArray.create())
+
+	discardOutsideCheckoutDir(root)
+
+	let reported = try onlyProjectDiagnostic(probe, note: "the buffer passes a `Small` to `widen`, whose parameter is the sibling's `Slot`. A `maxon build` of the staged project reports exactly one `{ProjectSiblingArgumentAliasCode}` and nothing else.")
+
+	try Expect.equal(reported.code.describe(), expected: ProjectSiblingArgumentAliasCode, message: "the one error a build of this project reports is {ProjectSiblingArgumentAliasCode}; the server published {reported.code.describe()}: {reported.message}")
+	try Expect.equal(reported.message, expected: ProjectSiblingArgumentAliasMessage, message: "the server must say what the build says.")
+	try Expect.equal(reported.range.startLine as AssertedInt, expected: ProjectSiblingArgumentAliasLine, message: "the build anchors the error on line 7.")
+	try Expect.equal(reported.range.startCharacter as AssertedInt, expected: ProjectSiblingArgumentAliasCharacter, message: "the build anchors the error at column 9, the callee's name.")
+end 'an argument of another alias than the parameter a sibling file declares is reported'

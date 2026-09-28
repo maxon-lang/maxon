@@ -768,17 +768,18 @@ export type ValueOriginRowIndex
 	export var derived as FunctionRowCsr
 	var appendedOps as AppendedRowsByFunction
 	var appendedDerived as AppendedRowsByFunction
+	var noAppendedRows as OriginRowRangeArray
 
 	export static function create(ops FunctionRowCsr, derived FunctionRowCsr) returns ValueOriginRowIndex
-		return Self{ops: ops, derived: derived, appendedOps: AppendedRowsByFunction.create(), appendedDerived: AppendedRowsByFunction.create()}
+		return Self{ops: ops, derived: derived, appendedOps: AppendedRowsByFunction.create(), appendedDerived: AppendedRowsByFunction.create(), noAppendedRows: OriginRowRangeArray.create()}
 	end 'create'
 
 	function appendedOpsOf(funcIndex FuncIndex) returns OriginRowRangeArray
-		return try self.appendedOps.get(funcIndex) otherwise sharedNoAppendedRows
+		return try self.appendedOps.get(funcIndex) otherwise self.noAppendedRows
 	end 'appendedOpsOf'
 
 	function appendedDerivedOf(funcIndex FuncIndex) returns OriginRowRangeArray
-		return try self.appendedDerived.get(funcIndex) otherwise sharedNoAppendedRows
+		return try self.appendedDerived.get(funcIndex) otherwise self.noAppendedRows
 	end 'appendedDerivedOf'
 
 	// Note the rows one splice appended for `funcIndex`; an empty range files nothing.
@@ -800,9 +801,6 @@ end 'OriginRowRange'
 
 typealias OriginRowRangeArray = Array with OriginRowRange
 typealias AppendedRowsByFunction = Map with (FuncIndex, OriginRowRangeArray)
-
-// The empty answer for a function nothing was spliced into — the common case — read and never written.
-var sharedNoAppendedRows = OriginRowRangeArray.create()
 
 function noteAppendedRange(appended AppendedRowsByFunction, funcIndex FuncIndex, range OriginRowRange)
 	if range.first >= range.bound 'nothingAppended'

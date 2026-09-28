@@ -205,8 +205,34 @@ export union CompileError implements Error
 	// is why this is not `stdlibNotFound`.
 	runtimeNotFound
 	runtimeTierIsNotAProgram(root FilePath)
+	abandoned
 	compileError
+
+	export function failure() returns CompileFailure
+		return match self 'failure'
+			compileError gives CompileFailure.reportedDiagnostics
+			abandoned gives CompileFailure.abandoned
+			fileNotFound or
+				directoryNotFound or
+				noSourceFiles or
+				readError or
+				noCommonRoot or
+				twoDriverFiles or
+				nestedProjectFile or
+				unnamedDirectory or
+				invalidOutputPath or
+				stdlibNotFound or
+				runtimeNotFound or
+				runtimeTierIsNotAProgram gives CompileFailure.driverFailed
+		end 'failure'
+	end 'failure'
 end 'CompileError'
+
+export enum CompileFailure
+	reportedDiagnostics
+	abandoned
+	driverFailed
+end 'CompileFailure'
 
 export function reportPositioned(project Project, code ErrorCode, message String, line LineNumber, column ColumnNumber, filePath FilePath, cause DiagnosticCause = DiagnosticCause.standsAlone)
 	reportDiagnostic(project, diagnostic: Diagnostic.create(code, message: message, line: line, column: column, filePath: filePath).withCause(cause))
@@ -244,6 +270,17 @@ export function reportPositionedWithNote(project Project, code ErrorCode, messag
 	reportDiagnostic(project, diagnostic: Diagnostic.create(code, message: message, line: line, column: column, filePath: filePath).withNote(note))
 end 'reportPositionedWithNote'
 
+// One entry per diagnostic, exactly as `emit` was handed it and unterminated. An entry can span lines — a
+// blamed diagnostic's `note:`, E3016's and E5001's lists — so it is never split: `emitted()` gives a
+// caller one item per diagnostic, and `text()` adds the one line ending stderr would have received.
+typealias CapturedDiagnosticTextArray = Array with String
+
+enum DiagnosticDestination
+	standardError
+	captured
+	discarded
+end 'DiagnosticDestination'
+
 // ⭐⭐ **THE ONE WRITER OF A COMPILER-FACING DIAGNOSTIC LINE — so a caller compiling IN PROCESS can
 // READ exactly what a command line would have PRINTED.**
 //
@@ -254,108 +291,64 @@ end 'reportPositionedWithNote'
 // CONSTRUCTION, not by two spellings happening to agree.
 //
 // ✅ **THE WHOLE SET ROUTES THROUGH IT.** `Project.printDiagnostics` brings every `Diagnostic`;
-// `Main.reportCompileError` brings every `CompileError` arm other than `compileError`, none of which
-// reaches `project.diagnostics` at all. A caller that calls `reportCompileError` INSIDE its capture
-// (`SpecTestRunner.compileOneTest`) therefore reads back what a command line would have written for the
-// same build, whichever way the build failed.
-//
-// ⚠⚠ **THE LATCH IS MODULE-LEVEL, AND THAT IS EXACT ONLY BECAUSE A COMPILE IS SERIAL — AND THIS IS THE
-// ONE PLACE THAT ARGUMENT IS WRITTEN OUT.** Four module-level latches rest on it and this comment is
-// the roster: this capture latch, `TraceEvents.currentTraceUnit` (written by `Compiler.compileToProduct`),
-// `PhaseProbe.openPhaseSpans` and `QueryEngine.sharedFileMemos`. Each states WHAT it needs and points
-// here for WHY, so the reason moves in one edit rather than four.
-//
-// ⛔⛔ **THE PREMISE IS NOT "the compiler's SCHEDULER IS SINGLE-M"** — the default processor count is the
-// machine's, and this compiler really does run on several Ms. What carries the conclusion:
-//
-//   * A green thread and its coroutines form a STRAND, and one machine runs one member of a strand at a
-//     time (`GtRuntime.GtOffStrandHolder`; `SchedRuntime.maxon`'s header states the invariant in full).
-//     An `async` frame is a COROUTINE of the green thread that created it — a member of `main`'s strand.
-//   * **This compiler spawns THREE pools of worker services — `FrontEndPool`, `BackendPool` and
-//     `StdPassPool` — and no worker touches any of these four latches.** A module `var` reached from a
-//     service message is E3143,
-//     so a worker structurally cannot open a trace span or write a diagnostic: each
-//     buffers what it has to say (`PoolPhaseCosts`) and the driver folds it on `main`'s strand
-//     after the pool has drained. The latches are therefore still written by exactly one strand.
-//   * `compileToProduct` reaches no yield point between its ends except the two drains, and a drain
-//     awaits replies from workers that write none of the four.
-//
-// ⇒ two compiles cannot interleave inside one process — which makes a second `begin` while one is open a
-// CALLER BUG rather than a race, and is why it panics instead of nesting. A compiler that ever runs two
-// compiles concurrently in one process — by yielding inside the pipeline to another compile — needs a
-// per-compile home for all four, not a lock around this one.
+// `Main.reportCompileError` brings every `CompileError` arm other than `compileError` and `abandoned`,
+// none of which reaches `project.diagnostics` at all. A caller that hands `reportCompileError` its
+// capturing sink (`SpecTestRunner.compileOneTest`) therefore reads back what a command line would have
+// written for the same build, whichever way the build failed.
+export type DiagnosticSink
+	let destination as DiagnosticDestination
+	var capturedLines as CapturedDiagnosticTextArray
 
-// The exact bytes each captured line would have been printed as, in report order — TERMINATED, so
-// that joining them is a concatenation rather than a second decision about the line ending.
-typealias CapturedDiagnosticTextArray = Array with String
+	export static function printing() returns DiagnosticSink
+		return Self.to(DiagnosticDestination.standardError)
+	end 'printing'
 
-var diagnosticCaptureOpen = false
-var capturedDiagnosticText = CapturedDiagnosticTextArray.create()
-
-// Print `line` to stderr, or append it to the open capture. Nothing else may write a diagnostic.
-//
-// ⚠ One CALL is one diagnostic, which is not always one physical line: `Diagnostic.render()` puts a
-// blamed diagnostic's `note:` on a second line, and E3016/E5001 render whole indented lists. That is
-// exactly what stderr received before, so the sink terminates what it is HANDED and never inspects
-// it — a splitter here would be a second opinion about a shape `render` already decided.
-export function emitDiagnosticLine(line String)
-	// ONE value, both destinations. A `printError` here and a separately-assembled string there is
-	// precisely the drift this sink exists to make unrepresentable.
-	let text = "{line}\n"
-
-	if diagnosticCaptureOpen 'capturing'
-		capturedDiagnosticText.push(text)
-		return
+	export static function capturing() returns DiagnosticSink
+		return Self.to(DiagnosticDestination.captured)
 	end 'capturing'
 
-	printError(text)
-end 'emitDiagnosticLine'
+	export static function discarding() returns DiagnosticSink
+		return Self.to(DiagnosticDestination.discarded)
+	end 'discarding'
 
-// Begin capturing. Every `emitDiagnosticLine` until the matching close is buffered, not printed.
-export function beginDiagnosticCapture()
-	if diagnosticCaptureOpen 'alreadyOpen'
-		panic("beginDiagnosticCapture: a capture is already open — the latch is module-level because a compile is SERIAL (see this section's header), so a second open would splice two compiles' diagnostics into one text")
-	end 'alreadyOpen'
+	static function to (destination DiagnosticDestination) returns DiagnosticSink
+		return Self{destination: destination, capturedLines: CapturedDiagnosticTextArray.create()}
+	end 'to'
 
-	diagnosticCaptureOpen = true
-	capturedDiagnosticText = CapturedDiagnosticTextArray.create()
-end 'beginDiagnosticCapture'
+	export function emit(line String)
+		match self.destination 'destination'
+			standardError then printError(terminatedDiagnosticLine(line))
+			captured then self.capturedLines.push(line)
+			discarded then return
+		end 'destination'
+	end 'emit'
 
-module function discardDiagnosticCapture()
-	requireDiagnosticCaptureOpen("discardDiagnosticCapture")
-	closeDiagnosticCapture()
-end 'discardDiagnosticCapture'
+	export function emitted() returns CapturedDiagnosticTextArray
+		self.requireCaptured("emitted")
+		return self.capturedLines.clone()
+	end 'emitted'
 
-// ⚠ Closing a capture that was never opened is a hard failure and not an empty answer. `""` is a
-// legitimate result — a compile that reported nothing produces it — so an unpaired close hands back
-// the value a clean compile gives, and a caller that forgot to open reads every refused compile as
-// having said nothing at all. That is the silent-wrong-answer shape, so it panics.
-function requireDiagnosticCaptureOpen(closer String)
-	if diagnosticCaptureOpen 'open'
-		return
-	end 'open'
+	export function text() returns String
+		self.requireCaptured("text")
 
-	panic("{closer}: no diagnostic capture is open — every close pairs with a `beginDiagnosticCapture`, and an unpaired one cannot be told from a compile that legitimately reported nothing")
-end 'requireDiagnosticCaptureOpen'
+		var joined = StringBuilder.create()
 
-// Stop capturing and hand back everything captured, byte for byte as stderr would have received it.
-export function endDiagnosticCapture() returns String
-	requireDiagnosticCaptureOpen("endDiagnosticCapture")
+		for line in self.capturedLines 'each'
+			joined.append(terminatedDiagnosticLine(line))
+		end 'each'
 
-	var joined = StringBuilder.create()
+		return joined.build()
+	end 'text'
 
-	for text in capturedDiagnosticText 'each'
-		joined.append(text)
-	end 'each'
+	function requireCaptured(asker String)
+		match self.destination 'destination'
+			captured then return
+			standardError or
+				discarded then panic("DiagnosticSink.{asker}: this sink keeps none of what it is handed, so an empty answer here could not be told from a compile that reported nothing")
+		end 'destination'
+	end 'requireCaptured'
+end 'DiagnosticSink'
 
-	closeDiagnosticCapture()
-
-	return joined.build()
-end 'endDiagnosticCapture'
-
-// Drop the latch and the buffer together, so no close can leave a finished compile's text behind for
-// the next one to inherit.
-function closeDiagnosticCapture()
-	diagnosticCaptureOpen = false
-	capturedDiagnosticText = CapturedDiagnosticTextArray.create()
-end 'closeDiagnosticCapture'
+function terminatedDiagnosticLine(line String) returns String
+	return "{line}\n"
+end 'terminatedDiagnosticLine'

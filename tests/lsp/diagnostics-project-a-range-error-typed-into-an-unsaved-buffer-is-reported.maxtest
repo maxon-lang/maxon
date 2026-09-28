@@ -1,0 +1,30 @@
+let ProjectUnsavedRangeDirName = "diagnostics-project-unsaved-range-error"
+let ProjectUnsavedRangeDeclaringFileName = "a.maxon"
+let ProjectUnsavedRangeBufferFileName = "b.maxon"
+let ProjectUnsavedRangeDeclaringSource = "module typealias Percent = int(0 to 100)\n\nmodule function clamp(x Percent) returns Percent\n\treturn x\nend 'clamp'\n"
+let ProjectUnsavedRangeSavedSource = "function main() returns ExitCode\n\treturn clamp(1)\nend 'main'\n"
+let ProjectUnsavedRangeTypedSource = "function main() returns ExitCode\n\treturn clamp(101)\nend 'main'\n"
+let ProjectUnsavedRangeCode = "E3005"
+let ProjectUnsavedRangeMessage = "Value 101 is outside the range of 'Percent' (int(0 to 100))"
+let ProjectUnsavedRangeLine = 1 as AssertedInt
+let ProjectUnsavedRangeCharacter = 8 as AssertedInt
+
+test 'a range error typed into a buffer that is not saved is reported'
+	let root = stagedProjectDiagnosticsRoot(ProjectUnsavedRangeDirName)
+	writeCorpusFile(root, fileName: ProjectUnsavedRangeDeclaringFileName, content: ProjectUnsavedRangeDeclaringSource)
+	writeCorpusFile(root, fileName: ProjectUnsavedRangeBufferFileName, content: ProjectUnsavedRangeSavedSource)
+
+	var edits = StringArray.create()
+	edits.push(ProjectUnsavedRangeTypedSource)
+
+	let probe = probeProjectCheckDiagnostics(root, fileName: ProjectUnsavedRangeBufferFileName, content: ProjectUnsavedRangeSavedSource, edits: edits)
+
+	discardOutsideCheckoutDir(root)
+
+	let reported = try onlyProjectDiagnostic(probe, note: "the disk holds `clamp(1)`, and a `didChange` that was never saved made the buffer `clamp(101)` against the sibling's `Percent = int(0 to 100)`. A `maxon build` of the staged tree holding the buffer's text reports exactly one `{ProjectUnsavedRangeCode}` and nothing else.")
+
+	try Expect.equal(reported.code.describe(), expected: ProjectUnsavedRangeCode, message: "the one error a build of the buffer's text reports is {ProjectUnsavedRangeCode}; the server published {reported.code.describe()}: {reported.message}")
+	try Expect.equal(reported.message, expected: ProjectUnsavedRangeMessage, message: "the server must quote the range the build quotes.")
+	try Expect.equal(reported.range.startLine as AssertedInt, expected: ProjectUnsavedRangeLine, message: "the build anchors the error at the `clamp(101)` call on line 2.")
+	try Expect.equal(reported.range.startCharacter as AssertedInt, expected: ProjectUnsavedRangeCharacter, message: "the build anchors the error at column 9, the callee's name.")
+end 'a range error typed into a buffer that is not saved is reported'

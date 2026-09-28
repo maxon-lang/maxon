@@ -773,9 +773,9 @@ function requireSiteOrdinalsAscend(sites RangeCheckSiteArray, order RangeSiteInd
 	end 'outOfOrder'
 end 'requireSiteOrdinalsAscend'
 
-export function lowerMaxonToStd(maxonModule MaxonModule, project Project, funcNames FunctionNameIndex) returns StdModule
+export function lowerMaxonToStd(maxonModule MaxonModule, project Project, funcNames FunctionNameIndex) returns StdModule throws CompileError
 	registerProgramLiteralBlobs(maxonModule, globalData: project.globalData, libraryFacts: project.libraryFacts)
-	return MaxonToStdLowering.create(maxonModule, project: project, funcNames: funcNames).lower(project)
+	return try MaxonToStdLowering.create(maxonModule, project: project, funcNames: funcNames).lower(project)
 end 'lowerMaxonToStd'
 
 // ⭐⭐ **EVERY BLOB THE PROGRAM'S OWN SOURCE NAMES IS REGISTERED BEFORE ANY THE COMPILER COMPOSES — the
@@ -1317,7 +1317,7 @@ type MaxonToStdLowering
 		return project.debugSpanTable.intern(file, line: range.line, column: range.column)
 	end 'spanOf'
 
-	function lower(project Project) returns StdModule
+	function lower(project Project) returns StdModule throws CompileError
 		// ⭐ **THE STD TIER IS WHERE A SPAN STARTS BEING CARRIED RATHER THAN LOOKED UP.** `StdOp` has no
 		// range field, so what crosses this boundary is an interned id in a column parallel to `ops`,
 		// pushed by the cursor the walk below sets at each Maxon op. Off unless the build asked for debug
@@ -1395,6 +1395,7 @@ type MaxonToStdLowering
 		// recorded as writing that same storage. ⚖ Canonical note at
 		// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 		for fnIndex in 0 upto self.stdModule.functions.count() 'eachFunc'
+			try requireStillWanted(project)
 			let srcFunc = try self.stdModule.functions.get(fnIndex) otherwise panic("lowerFunctionBodies: fnIndex {fnIndex} is below self.stdModule.functions.count()")
 
 			// ⭐⭐ **A LIBRARY FUNCTION THE BACK END NEVER RECEIVES HAS NO BODY LOWERED, AND THE REASON IS THE

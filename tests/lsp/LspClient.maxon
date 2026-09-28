@@ -22,15 +22,17 @@
 // 2. A stderr write can deadlock both processes. Nothing here drains the server's stderr, and
 //    nothing can: stdlib's readers block and this client has no threads. That is safe only while
 //    the server is quiet: `LspServer.failOnBrokenStream` writes one line, once, on the path that
-//    ends the session, and `LspDiagnostics.compileBufferCaptured` captures the diagnostics of the
-//    whole compile the server runs per `didOpen` and per `maxon/generateIR`. A server that becomes
-//    chatty, or panics with a long stack trace, fills the pipe and both sides wait for ever, which
-//    `maxon test`'s shard deadline reports as timed out. The cure is a drain on the server's side.
+//    ends the session, and every compile the server runs hands its diagnostics to a discarding
+//    `DiagnosticSink` (`LspDocumentProject.libraryTierProject`, `LspProjectChecker`). A server that
+//    becomes chatty, or panics with a long stack trace, fills the pipe and both sides wait for ever,
+//    which `maxon test`'s shard deadline reports as timed out. The cure is a drain on the server's side.
 //
 // 3. A notification can arrive before the response. The server publishes diagnostics on every
-//    `didOpen`, and announces a project load ahead of the diagnostics of the open or the reply to
-//    the request that caused it, so correlation is strict on the integer `id`: a message carrying
-//    another id is dropped, and one carrying no id is stashed for `awaitPublishedDiagnostics` and
+//    `didOpen` — twice per version for a document under a project root, and with a
+//    `window/logMessage` outcome line per project check — and announces a project load ahead of the
+//    diagnostics of the open or the reply to the request that caused it, so correlation is strict on
+//    the integer `id`: a message carrying another id is dropped, and one carrying no id is stashed
+//    for `awaitPublishedDiagnostics`, `awaitProjectCheckPublish`, `awaitProjectCheckReports` and
 //    `takeProjectLoadingNotices`.
 //
 // JSON is parsed and serialized by `stdlib/Json.maxon`, not here.
@@ -50,7 +52,7 @@ let LspServerCommandName = "lsp-server"
 // How long the server is given to exit once its stdin is closed or `exit` has been sent. It is well
 // under `maxon test`'s 5000 ms shard deadline on purpose: a server that hangs should be reported by this
 // client, naming the request, rather than by the harness killing the whole file.
-let ServerExitDeadlineMs = 3000
+public let ServerExitDeadlineMs = 3000
 
 // ============================================================================================
 // DOMAIN TYPES
@@ -292,14 +294,35 @@ end 'SemanticTokensResult'
 public type PublishedDiagnostic
 	public var range as LspRange
 	public var severity as DiagnosticSeverityCode
-	public var code as String
+	public var code as PublishedDiagnosticCode
 	public var source as String
 	public var message as String
 
-	static function create(range LspRange, severity DiagnosticSeverityCode, code String, source String, message String) returns PublishedDiagnostic
+	static function create(range LspRange, severity DiagnosticSeverityCode, code PublishedDiagnosticCode, source String, message String) returns PublishedDiagnostic
 		return Self{range: range, severity: severity, code: code, source: source, message: message}
 	end 'create'
 end 'PublishedDiagnostic'
+
+public union PublishedDiagnosticCode
+	coded(value String)
+	absent
+
+	public function isAbsent() returns bool
+		return match self 'code'
+			coded gives false
+			absent gives true
+		end 'code'
+	end 'isAbsent'
+
+	public function describe() returns String
+		return match self 'code'
+			coded(value) gives value
+			absent gives AbsentDiagnosticCodeRendering
+		end 'code'
+	end 'describe'
+end 'PublishedDiagnosticCode'
+
+let AbsentDiagnosticCodeRendering = "no code"
 
 // One `textDocument/publishDiagnostics` notification.
 //
@@ -358,6 +381,17 @@ public type ListProjectsResult
 	end 'of'
 end 'ListProjectsResult'
 
+public type ProjectCheckReport
+	public var version as String
+	public var outcome as String
+
+	static function create(version String, outcome String) returns ProjectCheckReport
+		return Self{version: version, outcome: outcome}
+	end 'create'
+end 'ProjectCheckReport'
+
+public typealias ProjectCheckReportArray = Array with ProjectCheckReport
+
 public type ProjectLoadingNotice
 	public var rootPath as String
 	public var loading as bool
@@ -369,6 +403,29 @@ end 'ProjectLoadingNotice'
 
 typealias StashedNotificationArray = Array with JsonDoc
 typealias StashedNotificationTest = function(JsonDoc) returns bool
+
+typealias VersionPublishTally = int(0 to 64)
+
+let PublishesPerProjectDocumentVersion = 2 as VersionPublishTally
+let FastPublishesPerDocumentVersion = 1 as VersionPublishTally
+// A failure bound and nothing else: the waits count publishes and outcome lines, so a passing case never
+// runs it out.
+let ProjectCheckPublishFailureBoundMs = 15000 as DurationMs
+let ProjectCheckPollPauseMs = 50 as Milliseconds
+
+union StashTake
+	first
+	every
+end 'StashTake'
+
+function stashTakeIsSatisfied(take StashTake, taken StashedNotificationTally) returns bool
+	return match take 'take'
+		first gives taken > 0
+		every gives false
+	end 'take'
+end 'stashTakeIsSatisfied'
+
+typealias StashedNotificationTally = int(0 to i64.max)
 
 // Whether a stashed publish for the asked-about uri was there to take.
 union StashedPublish
@@ -645,16 +702,51 @@ public type LspClient
 		throw LspClientError.transportFailed("no textDocument/publishDiagnostics for {uri} arrived within {UnaddressedMessageBudget} messages")
 	end 'awaitPublishedDiagnostics'
 
-	// The most recent stashed publish for `uri`, removed from the stash along with every earlier one for
-	// the same document. A stale publish left behind would be indistinguishable from a fresh one.
-	function takeStashedPublish(uri String) returns StashedPublish throws LspClientError
-		var taken = StashedPublish.none
+	public function awaitProjectCheckPublish(uri String) returns PublishedDiagnostics throws LspClientError
+		return try self.awaitPublishesOfThisVersion(uri, still: PublishesPerProjectDocumentVersion)
+	end 'awaitProjectCheckPublish'
 
-		for doc in try self.takeStashedWhere(function(candidate JsonDoc) gives publishesFor(candidate, uri: uri)) 'eachPublish'
-			taken = StashedPublish.found(try readPublishedDiagnostics(doc, uri: uri))
+	public function awaitProjectCheckPublishAfterTheFastOne(uri String) returns PublishedDiagnostics throws LspClientError
+		return try self.awaitPublishesOfThisVersion(uri, still: PublishesPerProjectDocumentVersion - FastPublishesPerDocumentVersion)
+	end 'awaitProjectCheckPublishAfterTheFastOne'
+
+	function awaitPublishesOfThisVersion(uri String, still VersionPublishTally) returns PublishedDiagnostics throws LspClientError
+		let started = Clock.nowMs()
+		var arrived = 0 as VersionPublishTally
+		var latest = PublishedDiagnostics.of(uri.clone(), items: PublishedDiagnosticArray.create())
+
+		while Clock.elapsedMs(started) < ProjectCheckPublishFailureBoundMs 'untilChecked'
+			// A request is what reads the wire: every notification that arrives ahead of its reply is stashed.
+			_ = try self.documentSymbols(uri)
+
+			for doc in try self.takeStashedWhere(function(candidate JsonDoc) gives publishesFor(candidate, uri: uri), take: StashTake.every) 'eachPublish'
+				latest = try readPublishedDiagnostics(doc, uri: uri)
+				arrived = arrived + 1
+			end 'eachPublish'
+
+			if arrived > still 'tooMany'
+				throw LspClientError.malformedResponse("{arrived} publishes for {uri} arrived where {still} were still owed for one document version; a document under a project root gets {PublishesPerProjectDocumentVersion}: the buffer's own set, then the project check's")
+			end 'tooMany'
+
+			if arrived == still 'checked'
+				return latest
+			end 'checked'
+
+			sleep(ProjectCheckPollPauseMs)
+		end 'untilChecked'
+
+		throw LspClientError.transportFailed("{arrived} of the {still} publishes still owed for one version of {uri} arrived within {ProjectCheckPublishFailureBoundMs} ms, so the project check's set never did; the last publish held {latest.items.count()} diagnostic(s)")
+	end 'awaitPublishesOfThisVersion'
+
+	// The OLDEST stashed publish for `uri`, and only that one. A project document gets two per version, so
+	// taking a later one here would consume the project check's set before
+	// `awaitProjectCheckPublishAfterTheFastOne` could count it.
+	function takeStashedPublish(uri String) returns StashedPublish throws LspClientError
+		for doc in try self.takeStashedWhere(function(candidate JsonDoc) gives publishesFor(candidate, uri: uri), take: StashTake.first) 'eachPublish'
+			return StashedPublish.found(try readPublishedDiagnostics(doc, uri: uri))
 		end 'eachPublish'
 
-		return taken
+		return StashedPublish.none
 	end 'takeStashedPublish'
 
 	// Reads the stash alone. A load's notices arrive ahead of the diagnostics of the open or the reply
@@ -663,14 +755,39 @@ public type LspClient
 	public function takeProjectLoadingNotices() returns ProjectLoadingNoticeArray throws LspClientError
 		var notices = ProjectLoadingNoticeArray.create()
 
-		for doc in try self.takeStashedWhere(function(candidate JsonDoc) gives isNotificationOf(candidate, method: MethodProjectLoading)) 'eachNotice'
+		for doc in try self.takeStashedWhere(function(candidate JsonDoc) gives isNotificationOf(candidate, method: MethodProjectLoading), take: StashTake.every) 'eachNotice'
 			notices.push(try readProjectLoadingNotice(doc))
 		end 'eachNotice'
 
 		return notices
 	end 'takeProjectLoadingNotices'
 
-	function takeStashedWhere(wanted StashedNotificationTest) returns StashedNotificationArray throws LspClientError
+	public function awaitProjectCheckReports(uri String, through DocumentVersion) returns ProjectCheckReportArray throws LspClientError
+		let started = Clock.nowMs()
+		let prefix = projectCheckReportPrefix(uri)
+		let last = "{through}"
+		var reports = ProjectCheckReportArray.create()
+
+		while Clock.elapsedMs(started) < ProjectCheckPublishFailureBoundMs 'untilReported'
+			_ = try self.documentSymbols(uri)
+
+			for doc in try self.takeStashedWhere(function(candidate JsonDoc) gives isProjectCheckReport(candidate, prefix: prefix), take: StashTake.every) 'eachReport'
+				reports.push(try readProjectCheckReport(doc, prefix: prefix))
+			end 'eachReport'
+
+			for report in reports 'eachTaken'
+				if report.version == last 'reachedTheLastVersion'
+					return reports
+				end 'reachedTheLastVersion'
+			end 'eachTaken'
+
+			sleep(ProjectCheckPollPauseMs)
+		end 'untilReported'
+
+		throw LspClientError.transportFailed("no project check outcome for version {through} of {uri} arrived within {ProjectCheckPublishFailureBoundMs} ms; {reports.count()} outcome line(s) for earlier versions did")
+	end 'awaitProjectCheckReports'
+
+	function takeStashedWhere(wanted StashedNotificationTest, take StashTake) returns StashedNotificationArray throws LspClientError
 		var kept = StringArray.create()
 		var taken = StashedNotificationArray.create()
 
@@ -679,7 +796,7 @@ public type LspClient
 				throw LspClientError.malformedResponse("a stashed notification body is not valid JSON: {body}")
 			end 'notJson'
 
-			if wanted(doc) 'ours'
+			if wanted(doc) and not stashTakeIsSatisfied(take, taken: taken.count()) 'ours'
 				taken.push(doc)
 			end 'ours' else 'somebodyElse'
 				kept.push(body.clone())
@@ -1494,6 +1611,32 @@ function isNotificationOf(doc JsonDoc, method String) returns bool
 	return named == method
 end 'isNotificationOf'
 
+function projectCheckReportPrefix(uri String) returns String
+	return "{ProjectCheckReportLead} {uri} {ProjectCheckReportVersionWord} "
+end 'projectCheckReportPrefix'
+
+function isProjectCheckReport(doc JsonDoc, prefix String) returns bool
+	if not isNotificationOf(doc, method: MethodLogMessage) 'otherNotification'
+		return false
+	end 'otherNotification'
+
+	let params = try memberNode(doc, of: doc.root, key: JsonRpcParamsKey) otherwise return false
+	let message = try doc.getString(params, key: MessageKey) otherwise return false
+
+	return message.startsWith(prefix)
+end 'isProjectCheckReport'
+
+function readProjectCheckReport(doc JsonDoc, prefix String) returns ProjectCheckReport throws LspClientError
+	let message = try stringMember(doc, of: try memberNode(doc, of: doc.root, key: JsonRpcParamsKey), key: MessageKey)
+	let words = message.replaceFirst(prefix, with: "").split(ReportWordSeparator)
+
+	if words.count() != ProjectCheckReportTailWords 'notVersionThenOutcome'
+		throw LspClientError.malformedResponse("a project check outcome line does not end in a version and one outcome: '{message}'")
+	end 'notVersionThenOutcome'
+
+	return ProjectCheckReport.create(try words.get(0) otherwise panic("the count above is 2"), outcome: try words.get(1) otherwise panic("the count above is 2"))
+end 'readProjectCheckReport'
+
 function readProjectLoadingNotice(doc JsonDoc) returns ProjectLoadingNotice throws LspClientError
 	let params = try memberNode(doc, of: doc.root, key: JsonRpcParamsKey)
 	let rootPath = try stringMember(doc, of: params, key: RootPathKey)
@@ -1508,7 +1651,7 @@ function readPublishedDiagnostics(doc JsonDoc, uri String) returns PublishedDiag
 	for element in try elementsOf(doc, id: try memberNode(doc, of: params, key: DiagnosticsKey)) 'eachDiagnostic'
 		let range = try readRange(doc, id: try memberNode(doc, of: element, key: RangeKey))
 		let severity = (try integerMember(doc, of: element, key: SeverityKey)) as DiagnosticSeverityCode
-		let code = try stringMember(doc, of: element, key: CodeKey)
+		let code = try readDiagnosticCode(doc, of: element)
 		let source = try stringMember(doc, of: element, key: SourceKey)
 
 		items.push(PublishedDiagnostic.create(range, severity: severity, code: code, source: source, message: try stringMember(doc, of: element, key: MessageKey)))
@@ -1516,6 +1659,14 @@ function readPublishedDiagnostics(doc JsonDoc, uri String) returns PublishedDiag
 
 	return PublishedDiagnostics.of(uri, items: items)
 end 'readPublishedDiagnostics'
+
+function readDiagnosticCode(doc JsonDoc, of JsonNodeId) returns PublishedDiagnosticCode throws LspClientError
+	if not hasMember(doc, of: of, key: CodeKey) 'uncoded'
+		return PublishedDiagnosticCode.absent
+	end 'uncoded'
+
+	return PublishedDiagnosticCode.coded(try stringMember(doc, of: of, key: CodeKey))
+end 'readDiagnosticCode'
 
 function readTextEdits(doc JsonDoc, id JsonNodeId) returns TextEditArray throws LspClientError
 	var edits = TextEditArray.create()
@@ -1682,6 +1833,11 @@ let MethodNeverServed = "maxon/aMethodNoServerServes"
 
 let MethodPublishDiagnostics = "textDocument/publishDiagnostics"
 let MethodProjectLoading = "maxon/projectLoading"
+let MethodLogMessage = "window/logMessage"
+let ProjectCheckReportLead = "maxon: project check"
+let ProjectCheckReportVersionWord = "version"
+let ReportWordSeparator = " "
+let ProjectCheckReportTailWords = 2
 
 let CapabilitiesKey = "capabilities"
 let TextDocumentKey = "textDocument"
@@ -1777,7 +1933,7 @@ let TriggerCharacterKind = 2
 
 // The language a `didOpen` announces, and the version a freshly opened document carries.
 let MaxonLanguageId = "maxon"
-let InitialDocumentVersion = 1 as DocumentVersion
+public let InitialDocumentVersion = 1 as DocumentVersion
 
 // How hover sections are stacked when a server answers with a list.
 let HoverSectionSeparator = "\n"

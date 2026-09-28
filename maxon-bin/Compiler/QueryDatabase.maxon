@@ -104,9 +104,9 @@ end 'ModuleMemo'
 //
 // ⭐⭐ **EVERYTHING BELOW IS A PURE FUNCTION OF A FILE'S BYTES, AND THAT IS THE WHOLE ADMISSION
 // TEST.** A `Project`-scoped memo may hold anything, because it dies with the ids and the module it
-// was derived against. A PROCESS-scoped one may hold only what carries no identity — see
-// `QueryEngine.sharedFileMemos` for the argument, and for the two things that are deliberately NOT
-// here (a parse artifact, a swept declaration).
+// was derived against. One shared across `Project`s (`CompileSession.fileMemos`) may hold only what
+// carries no identity — see QueryEngine.maxon's section of the same name for the argument, and for
+// the two things that are deliberately NOT here (a parse artifact, a swept declaration).
 //
 // The unit is the file's CONTENT HASH rather than its path: `tokenize` reads the bytes and nothing
 // else, so two files with the same bytes have the same tokens whatever they are called, and an
@@ -119,9 +119,9 @@ export typealias BuildKey = bits(64)
 
 // One build's view of one file, and it is per build because the `#if` filter is.
 // `queryActiveTokens`' per-`Project` memo gets that for free from "a `Project` has exactly one
-// target and one flag set for its whole life"; a process-wide memo does not. A shared stdlib entry
-// that omitted the target would bake the build machine's OS into a cross-compiled binary's stdlib,
-// and one that omitted `debugStream` would hand a traced build the untraced arm of every
+// target and one flag set for its whole life"; a memo shared across them does not. A shared stdlib
+// entry that omitted the target would bake the build machine's OS into a cross-compiled binary's
+// stdlib, and one that omitted `debugStream` would hand a traced build the untraced arm of every
 // `#if debugstream(true)` — a spec worker compiles both kinds in one process. Both fields below are
 // functions of (these bytes, this build key) and of nothing else.
 export type SharedBuildView
@@ -186,8 +186,8 @@ export type SharedFileMemo
 	end 'addView'
 end 'SharedFileMemo'
 
-// Raised when the process-wide memo is not holding what it was asked for. An ANSWER — "nothing in
-// this process has lexed these bytes yet", or "not for this build" — never a compiler bug, exactly
+// Raised when the shared memo is not holding what it was asked for. An ANSWER — "nothing sharing
+// this store has lexed these bytes yet", or "not for this build" — never a compiler bug, exactly
 // as `TypeNameInterner.idOf`'s `unknownName` is and unlike its `unknownId`.
 export union SharedMemoMiss implements Error
 	notHeld
@@ -195,7 +195,7 @@ end 'SharedMemoMiss'
 
 export typealias SharedFileMemoMap = Map with (HashDigest, SharedFileMemo)
 
-// The byte-contents this compile is willing to hand to the process-wide memo — filled by
+// The byte-contents this compile is willing to hand to the shared memo — filled by
 // `StdlibLoader.loadLibrarySources`, which is the one place that knows a file came out of an
 // enumeration of `stdlib/`.
 //
@@ -359,9 +359,9 @@ export type QueryDatabase
 	// two to three times per file per compile, so the memo is what keeps that off the per-file path.
 	export var fileProvenance as FileProvenanceMemo
 
-	// The byte-contents `StdlibLoader` marked worth sharing process-wide (see `HashDigestSet`).
+	// The byte-contents `StdlibLoader` marked worth sharing across `Project`s (see `HashDigestSet`).
 	// Per-`Project` because the answer is "did THIS compile load the file from `stdlib/`"; the store
-	// it admits into is the process's (`QueryEngine.sharedFileMemos`).
+	// it admits into is the session's (`CompileSession.fileMemos`).
 	export var shareableTokenHashes as HashDigestSet
 
 	// Per-file memo caches (absence = not cached; validity via keyHash compare).
@@ -422,7 +422,7 @@ export type QueryDatabase
 	export var allModuleHits as QueryCount
 	export var allModuleMisses as QueryCount
 
-	// ⭐ **WHAT THIS COMPILE TOOK OUT OF THE PROCESS-WIDE MEMO.** Counted separately from
+	// ⭐ **WHAT THIS COMPILE TOOK OUT OF THE SHARED MEMO.** Counted separately from
 	// `tokenHits`/`tokenMisses` and never folded into them, because the two answer different
 	// questions and one of them is already gated: `tokenHits` is the WARM-REBUILD property
 	// (`VerifyWarmRebuild` asserts exact deltas on it), and a shared hit is a per-`Project` MISS by

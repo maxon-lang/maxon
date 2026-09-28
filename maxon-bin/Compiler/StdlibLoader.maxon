@@ -49,11 +49,11 @@
 // ⚠ **THERE IS NO SEPARATE PARSED-STDLIB CACHE.** These files are registered as ordinary sources,
 // so the query spine's content-hash memo already covers them and a second cache would be the same
 // fact stored twice. A worker compiles thousands of programs in one process, so that memo keeps a
-// stdlib file's TOKENS for the life of the PROCESS rather than of a `Project`
-// (`QueryEngine.sharedFileMemos`), and the loop below is what admits them. The shared store sits
-// BEHIND the per-`Project` cache and is read only on its miss, and it holds only what is a pure
-// function of the file's BYTES — never a PARSED module, which carries interned ids a fold rewrites
-// in place.
+// stdlib file's TOKENS for the life of its `CompileSession.fileMemos` store rather than of a
+// `Project` (QueryEngine.maxon, "The memo that outlives a `Project`"), and the loop below is what
+// admits them. The shared store sits BEHIND the per-`Project` cache and is read only on its miss,
+// and it holds only what is a pure function of the file's BYTES — never a PARSED module, which
+// carries interned ids a fold rewrites in place.
 //
 // ⭐ THE ONE INVARIANT, WHICH OUTLIVED THE FILTER AND IS NOW THE WHOLE RULE: adding a module to
 // `stdlib/` changes NOTHING for a program that does not reach it. A program that never calls Clock must
@@ -299,9 +299,9 @@ function loadLibraryRoot(project Project, root FilePath, usersOwn MaxonSourcePat
 		// which resolves both sides against the working directory (see StdlibSource's header).
 		project.librarySourcePaths.push(path)
 
-		// AND ADMITTED to the process-wide token memo, from the same loop and for the same reason: this
+		// AND ADMITTED to the shared token memo, from the same loop and for the same reason: this
 		// is the one place that knows a file came out of such an enumeration, and a memo that outlives the
-		// `Project` has to be told which files are worth the memory. See `QueryEngine.sharedFileMemos`, and
+		// `Project` has to be told which files are worth the memory. See `CompileSession.fileMemos`, and
 		// the header bullet above on why this is that memo's SCOPE widening rather than a second cache
 		// beside it.
 		try markSharedTokenSource(project, path: path)

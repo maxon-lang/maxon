@@ -191,16 +191,6 @@ export typealias GlobalAliasValueSet = Set with ValueId
 // Never mutated.
 let sharedEmptyGlobalAliasValues = GlobalAliasValueSet.create()
 
-// ⭐ The `paramGuards` and `inlineSites` columns a merged copy of a function starts from (`shallowCopy`), on the main
-// thread only — a parsed function starts from its parser's placeholders (`FunctionPlaceholders`). Neither column is
-// written through while it is EMPTY: `recordParamGuard` and `recordInlineSite` replace an empty column before they
-// push, so every function may share one.
-// ⛔ **`var`s, BECAUSE A `let` HOLDING AN EMPTY CONTAINER IS IMAGE DATA** (⚖ user ruling), and every field seeded
-// from an immortal record is handed a private CLONE (`Parser.coOwnConcreteRecordForSink`) — an allocation exactly
-// where the sharing exists to avoid one.
-var sharedEmptyParamGuards = RangeCheckParamGuardArray.create()
-var sharedEmptyInlineSites = InlineSiteArray.create()
-
 export union DebugFoldedConstant
 	none
 	immediate(value ParsedInt)
@@ -2052,11 +2042,11 @@ export type IrFunction
 			// lowering (`relocateFunction` is `IrModule.merge`'s), and this column is filled by
 			// `InsertRangeChecks`, which runs after the last of them. A copy that carried it would carry
 			// BLOCK IDS into a function whose blocks the copy has yet to be given.
-			paramGuards: sharedEmptyParamGuards,
+			paramGuards: src.paramGuards if src.paramGuards.isEmpty() else RangeCheckParamGuardArray.create(),
 
 			// Not carried either: the table is filled by the inliner, which also runs after the last copy, and
 			// its entries are meaningful only against the blocks that name them.
-			inlineSites: sharedEmptyInlineSites
+			inlineSites: src.inlineSites if src.inlineSites.isEmpty() else InlineSiteArray.create()
 		}
 	end 'shallowCopy'
 

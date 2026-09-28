@@ -1675,14 +1675,15 @@ headers. It takes no arguments and is normally started by an editor, not by hand
 
 **Lifecycle.** `initialize` returns the server's capabilities; `initialized` is accepted. `shutdown`
 answers `null`, and `exit` ends the process with code **0** after a `shutdown` and **1** otherwise (as
-it does when stdin closes or a message cannot be framed).
+it does when stdin closes or a message cannot be framed). The process ends at once, stopping any
+project check still running.
 
 **Documents.** Text synchronization is **full**: every `textDocument/didChange` carries the whole
 document. The server handles `didOpen`, `didChange` and `didClose`. Each buffer is analysed from its
 in-memory text, for the host target.
 
 **Every feature reads the project, where the document has one, and diagnostics are checked per
-buffer.** Hover, definition and completion resolve names through a separate index built by lexing every
+buffer and then across the project.** Hover, definition and completion resolve names through a separate index built by lexing every
 source under the document's project root and folding its declarations — a lexing pass, far lighter than
 a compile — so a name declared in another file resolves, and a type declared there offers its members.
 The index matches what the matching command compiles: for a `.maxon` document it holds the project's
@@ -1690,10 +1691,10 @@ The index matches what the matching command compiles: for a `.maxon` document it
 sees the helpers its sibling test files declare and a production source sees production sources only.
 Diagnostics use that same index for two corrections: a name a sibling file declares counts as declared,
 and a refusal that exists only because the buffer was compiled alone is dropped — an overload call, or a
-held-back parse error, whose argument derives from a call a sibling file declares. The *checking* runs
-on the buffer together with the standard library, so an error only the whole program merged across files
-could raise — two sibling files contesting one name, for example — is the build's to report, and the
-build remains the authority.
+held-back parse error, whose argument derives from a call a sibling file declares. This *buffer check*
+runs on the buffer together with the standard library. An error only the whole program merged across
+files can raise — two sibling files contesting one name, for example — comes from the *project check*
+described under **Diagnostics** below, which compiles the project as `maxon build` does.
 
 **A document's uri may carry any scheme, and what the server can do with a document turns on the path
 that uri spells.** Every scheme is accepted, so an editor that forwards whatever uri a buffer carries is
@@ -1704,10 +1705,11 @@ scratch buffer (`untitled:Untitled-1`) is checked and resolved against `stdlib/`
 uri that spells a path outside the filesystem (`git://host/repo/file.maxon`) gets hover, definition and
 completion from the buffer alone, and diagnostics are published for filesystem documents only.
 
-**While a buffer is unsaved, some diagnostics are withheld.** As long as the buffer matches the file on
-disk, the server reports what a build of that file reports. Once it has been edited, diagnostics about
-the buffer's own text — syntax, tokens, literals — are still published immediately, while diagnostics
-that turn on what a declaration says are held back until the buffer matches disk again. That is what
+**While a buffer is unsaved, the buffer check holds some diagnostics back.** As long as the buffer
+matches the file on disk, the buffer check reports what compiling that file with the standard library
+reports. Once it has been edited, diagnostics about the buffer's own text — syntax, tokens, literals —
+are still published immediately, while diagnostics that turn on what a declaration says wait for the
+project check, which compiles the edited text, or for the buffer to match disk again. That is what
 stops an editor inventing errors about names it cannot see, and it applies only when the buffer does use
 a name that only the project declares. This project view needs a workspace folder that contains the
 file, or a file inside `stdlib/` or `runtime/`; a file the client named no root over gets the per-buffer
@@ -1755,8 +1757,50 @@ it as gone.
 **Diagnostics** are published with `textDocument/publishDiagnostics` after every `didOpen` and
 `didChange`, and cleared on `didClose`. Each has the error code (for example `E3005`) as `code`,
 `source: "maxon"` and severity Error. "No `main` function" (E3001) and the unused-export diagnostics
-(E3092, E3093, E3094) are not reported, because a single buffer is not a whole program: an export the
-buffer never uses may be read by a sibling file the check cannot see.
+(E3092, E3093, E3094) appear in `maxon build`'s output alone.
+
+**A `.maxon` document in a project is published twice per version: the buffer check's set, then the
+project check's.** This applies where the document's root is a directory holding a `.maxproj`, inside a
+workspace folder the client named. The buffer check's set is published at once. The project check then
+compiles the document's whole project from disk, with the buffer's current text — saved or not — in
+place of the file, through type checking and range checking, and publishes the diagnostics that compile
+reports on this document: a range error in a call to a function a sibling file declares, a partial
+implementation of a sibling's interface, an unused variable, and every other error `maxon build` reports
+before code generation. A diagnostic with no position of its own is published when the buffer check
+raised it too. `.maxtest`, `.maxproj` and `.maxtasks` documents, and files of `stdlib/` and `runtime/`,
+get the buffer check's set alone.
+
+The project check starts once edits have paused for 300 ms, so a burst of keystrokes is checked once, at
+its last version. When the client sends a newer version, the older version's check is superseded: one
+that has not started is skipped, one that is running stops, and a result that arrives late is dropped,
+so the editor receives only sets for the version it holds. Each project root keeps its compiled project
+between checks, so a re-check re-reads, re-lexes and re-parses only the files that changed, and runs the
+whole-program checks again in full. Hover, definition, completion and the other requests are answered
+while a check runs.
+
+When the project cannot be loaded — a source under the root cannot be read, or the root cannot be
+walked — the second publish is the buffer check's set plus the line `maxon build` prints for that
+failure (for example `error: could not read <path>`), as an item carrying only a message, at the
+document's first character. A document the project's walk skips, such as one under a directory a
+`.maxonignore` marks, has the buffer check's set published a second time.
+
+Each project check the server is asked for sends one `window/logMessage` notification, with `type` 4
+(Log) and this `message`:
+
+```
+maxon: project check <uri> version <version> <outcome>
+```
+
+`<version>` is the `version` the client sent with the document, or `unversioned` when it sent none.
+`<outcome>` is one of:
+
+| Outcome | What happened |
+|---------|---------------|
+| `published` | the project check's diagnostics were published |
+| `unloadable` | the project could not be loaded, and the buffer check's set was published with the build's error line |
+| `unlisted` | the project's walk skips the document, and the buffer check's set was published again |
+| `abandoned` | a newer version arrived while the check ran, and the check stopped |
+| `superseded` | a newer version arrived before the check started or before its result was written, and the result was dropped |
 
 **Requests served:**
 

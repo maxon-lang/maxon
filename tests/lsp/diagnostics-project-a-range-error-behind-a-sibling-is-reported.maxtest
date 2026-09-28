@@ -1,0 +1,29 @@
+let ProjectSiblingRangeDirName = "diagnostics-project-sibling-range-error"
+let ProjectSiblingRangeDeclaringFileName = "a.maxon"
+let ProjectSiblingRangeBufferFileName = "b.maxon"
+let ProjectSiblingRangeDeclaringSource = "module typealias Percent = int(0 to 100)\n\nmodule function clamp(x Percent) returns Percent\n\treturn x\nend 'clamp'\n"
+let ProjectSiblingRangeBufferSource = "function main() returns ExitCode\n\treturn clamp(101)\nend 'main'\n"
+let ProjectSiblingRangeCode = "E3005"
+let ProjectSiblingRangeMessage = "Value 101 is outside the range of 'Percent' (int(0 to 100))"
+let ProjectSiblingRangeLine = 1 as AssertedInt
+let ProjectSiblingRangeCharacter = 8 as AssertedInt
+let ProjectSiblingRangeEndCharacter = 13 as AssertedInt
+
+test 'a literal argument out of the range a sibling file declares is reported'
+	let root = stagedProjectDiagnosticsRoot(ProjectSiblingRangeDirName)
+	writeCorpusFile(root, fileName: ProjectSiblingRangeDeclaringFileName, content: ProjectSiblingRangeDeclaringSource)
+	writeCorpusFile(root, fileName: ProjectSiblingRangeBufferFileName, content: ProjectSiblingRangeBufferSource)
+
+	let session = probeProjectCheckSession(root, fileName: ProjectSiblingRangeBufferFileName, content: ProjectSiblingRangeBufferSource, edits: StringArray.create())
+
+	discardOutsideCheckoutDir(root)
+
+	let reported = try onlyProjectDiagnostic(session.diagnostics, note: "the buffer passes `101` to `clamp`, whose parameter is the sibling's `Percent = int(0 to 100)`. A `maxon build` of the staged project reports exactly one `{ProjectSiblingRangeCode}` at that call and nothing else.")
+
+	try Expect.equal(reported.code.describe(), expected: ProjectSiblingRangeCode, message: "the one error a build of this project reports is {ProjectSiblingRangeCode}; the server published {reported.code.describe()}: {reported.message}")
+	try Expect.equal(reported.message, expected: ProjectSiblingRangeMessage, message: "the server must quote the range the build quotes.")
+	try Expect.equal(reported.range.startLine as AssertedInt, expected: ProjectSiblingRangeLine, message: "the build anchors the error at the `clamp(101)` call on line 2.")
+	try Expect.equal(reported.range.startCharacter as AssertedInt, expected: ProjectSiblingRangeCharacter, message: "the build anchors the error at column 9, the callee's name.")
+	try Expect.equal(reported.range.endCharacter as AssertedInt, expected: ProjectSiblingRangeEndCharacter, message: "the error spans the callee's name, `clamp`.")
+	try expectOneProjectCheckOutcome(session.reports, version: InitialDocumentVersion, outcome: ProjectCheckPublished, note: "the opened version is current and the project loads, so its check runs and publishes.")
+end 'a literal argument out of the range a sibling file declares is reported'

@@ -16,8 +16,6 @@ module let RepeatOption = "repeat"
 
 typealias SnippetSerial = int(0 to u64.max)
 
-var snippetsStaged = 0 as SnippetSerial
-
 // =============================================================================
 // Spawning
 // =============================================================================
@@ -96,13 +94,27 @@ function stageSnippet(source String) returns FilePath throws McpError
 		throw McpError.notFound
 	end 'unusable'
 
-	snippetsStaged = snippetsStaged + 1
-
-	let file = childPath(dir, segment: "{SnippetStem}{SnippetNameSeparator}{__Builtins.currentProcessId()}{SnippetNameSeparator}{snippetsStaged}{SnippetExtension}")
+	let file = unusedSnippetPath(dir)
 	try File.writeText(file, content: source) otherwise throw McpError.notFound
 
 	return file
 end 'stageSnippet'
+
+function unusedSnippetPath(dir FilePath) returns FilePath
+	var serial = Clock.nowNanos() as SnippetSerial
+
+	while true 'untilUnused'
+		let candidate = childPath(dir, segment: "{SnippetStem}{SnippetNameSeparator}{__Builtins.currentProcessId()}{SnippetNameSeparator}{serial}{SnippetExtension}")
+
+		if not File.exists(candidate) 'unused'
+			return candidate
+		end 'unused'
+
+		serial = serial + 1
+	end 'untilUnused'
+
+	panic("unusedSnippetPath: the search returns from inside its loop")
+end 'unusedSnippetPath'
 
 export function sweepStaleSnippets()
 	let root = try hostCacheRoot() otherwise return
@@ -397,28 +409,28 @@ end 'InProcessCompile'
 // program rather than producing or running one, so there is no binary, no `.ir` file and no child whose
 // output has to be read back: the pipeline stops at a `CodeResult`, exactly as `maxon lsp-server` compiles
 // a buffer. The capture keeps the pipeline's diagnostics off this server's own streams.
-function compileInProcess(reqDoc JsonDoc, args OptionalNode, rendersTargetIr bool) returns InProcessCompile
+function compileInProcess(reqDoc JsonDoc, args OptionalNode, rendersTargetIr bool, fileMemos SharedFileMemoMap) returns InProcessCompile
 	let pathArg = getOptionalStringArg(reqDoc, args: args, key: "path", defaultVal: "")
-	beginDiagnosticCapture()
+	var session = CompileSession.create(DiagnosticSink.capturing(), fileMemos: fileMemos, treeLock: TreeLockHold.none())
 
 	let path = try FilePath.from(pathArg) otherwise 'badPath'
-		emitDiagnosticLine("error: invalid path: {pathArg}")
-		return InProcessCompile.refused(endDiagnosticCapture())
+		session.diagnostics.emit("error: invalid path: {pathArg}")
+		return InProcessCompile.refused(session.diagnostics.text())
 	end 'badPath'
 
 	var paths = MaxonSourcePathArray.create()
 	paths.push(path)
 
-	var project = try loadProject(paths, target: detectHostTarget()) otherwise (e) 'notLoaded'
-		reportCompileError(e)
-		return InProcessCompile.refused(endDiagnosticCapture())
+	var project = try loadProject(paths, target: detectHostTarget(), session: session) otherwise (e) 'notLoaded'
+		reportCompileError(e, sink: session.diagnostics)
+		return InProcessCompile.refused(session.diagnostics.text())
 	end 'notLoaded'
 
 	project.rendersTargetIr = rendersTargetIr
 
 	return match checkWithoutWriting(project) 'compile'
-		compiled(codeResult) gives InProcessCompile.compiled(project, codeResult: codeResult, diagnostics: endDiagnosticCapture())
-		refused gives InProcessCompile.refused(endDiagnosticCapture())
+		compiled(codeResult) gives InProcessCompile.compiled(project, codeResult: codeResult, diagnostics: session.diagnostics.text())
+		refused gives InProcessCompile.refused(session.diagnostics.text())
 	end 'compile'
 end 'compileInProcess'
 
@@ -447,19 +459,19 @@ function addInProcessAttribution(doc JsonDoc, payload JsonObjectBuilder, exePath
 	payload.addString(doc, key: "stdlibRoot", value: stdlibRootLabel())
 end 'addInProcessAttribution'
 
-export function executeCheckTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath) returns String
+export function executeCheckTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath, fileMemos SharedFileMemoMap) returns String
 	var doc = JsonDoc.create()
 	var payload = JsonObjectBuilder.create()
-	let succeeded = addCompileOutcome(doc, payload: payload, compile: compileInProcess(reqDoc, args: args, rendersTargetIr: false))
+	let succeeded = addCompileOutcome(doc, payload: payload, compile: compileInProcess(reqDoc, args: args, rendersTargetIr: false, fileMemos: fileMemos))
 	addInProcessAttribution(doc, payload: payload, exePath: exePath)
 
 	return toolResultText(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: not succeeded)
 end 'executeCheckTool'
 
-export function executeDumpIrTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath) returns String
+export function executeDumpIrTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath, fileMemos SharedFileMemoMap) returns String
 	var doc = JsonDoc.create()
 	var payload = JsonObjectBuilder.create()
-	let compile = compileInProcess(reqDoc, args: args, rendersTargetIr: true)
+	let compile = compileInProcess(reqDoc, args: args, rendersTargetIr: true, fileMemos: fileMemos)
 	let succeeded = addCompileOutcome(doc, payload: payload, compile: compile)
 	addInProcessAttribution(doc, payload: payload, exePath: exePath)
 

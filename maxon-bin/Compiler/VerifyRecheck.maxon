@@ -43,7 +43,7 @@ let SemanticBreakEditText = "function recheckProbeBroken() returns bool\n\tretur
 
 // Every property loads its projects here, so a define reaches each check exactly as it reaches a build.
 function definedProject(inputPath FilePath, target Target, defines DefineArray) returns Project throws CompileError
-	var project = try loadProject([inputPath], target: target)
+	var project = try loadProject([inputPath], target: target, session: CompileSession.discarding())
 	project.defines = defines
 
 	return project
@@ -53,12 +53,11 @@ end 'definedProject'
 //
 // ⚠ **THE REFUSAL IS AN EXPECTED OUTCOME HERE, NOT AN ERROR TO REPORT.** Half of this gate's runs are
 // over a deliberately broken buffer, where `compileToCodeResult` prints and throws by design. The
-// throw is swallowed and the printing is captured so the gate's own output stays readable; the
-// MEASUREMENT is `project.diagnostics`, which the refusing and the succeeding path both leave behind.
+// throw is swallowed and the printing discarded (`definedProject`'s session) so the gate's own output
+// stays readable; the MEASUREMENT is `project.diagnostics`, which the refusing and the succeeding path
+// both leave behind.
 function checkOnce(project Project) returns DiagnosticTally
-	beginDiagnosticCapture()
 	_ = compileCompleted(project)
-	discardDiagnosticCapture()
 
 	return project.diagnostics.count()
 end 'checkOnce'
@@ -199,34 +198,25 @@ end 'verifyDiagnosticsClear'
 
 // --- Property 3: isolation (a second live project does not contaminate the first) ---
 //
-// THE SHAPE A LANGUAGE SERVER ACTUALLY RUNS, AND NOTHING IN THIS TREE HAS EVER RUN IT. A
-// `ProjectManager` holds one `Project` per open editor project - several at a time, for hours,
-// checked in interleaved order as the user moves between files. Every other caller here holds exactly
-// ONE: `maxon build` compiles one project and exits, `spec-test` compiles cases one after another,
-// and `verify-warm-rebuild` builds each probe on its own fresh project.
+// THE SHAPE A LANGUAGE SERVER RUNS. It holds one `Project` per open editor project - several at a time,
+// for hours, checked in interleaved order as the user moves between files. This asks whether checking B
+// changes what A answers.
 //
-// => "Two projects can be open at once" is an untested premise, and the module-level latches
-// `Diagnostics`' capture latch rosters all rest on it being false: each documents its soundness as
-// resting on compiles in a process being STRICTLY SERIAL. Interleaved IS still serial - no two compiles
-// overlap - so this asks the weaker and answerable question: does checking B change what A answers?
+// It is deliberately NOT a concurrency test. The language server does compile in parallel — each
+// `LspProjectChecker` is a service — and what keeps those compiles apart is structural: a service
+// handler cannot reach module-level state (E3143), so a compile's state is its own `Project` and
+// `CompileSession`.
 //
-// It is deliberately NOT a concurrency test. What makes genuinely parallel compiles unreachable is NOT
-// that the scheduler is single-M - it is not, the default processor count is the machine's - but that
-// this compiler creates green threads only through `async`: coroutines of their caller, never published
-// where a worker M could take them, and never through `spawn`. Diagnostics.maxon carries that argument.
-// A gate pretending otherwise would be testing a configuration that cannot occur.
+// ⚠⚠ **READ THIS AS A REGRESSION PIN, NOT AS EVIDENCE OF A FIX — NO SABOTAGE WAS FOUND THAT IT
+// CATCHES.** Removing `compileToCodeResult`'s `project.diagnostics.clear()` reddens the CLEARING
+// property and leaves this one green, because that sink is per-`Project` and never crossed between
+// them. Nor can it see a shared file memo: `definedProject` gives each project a session of its own,
+// where the language server's document projects share one (`lspFileMemos`).
 //
-// ⚠⚠ **READ THIS AS A REGRESSION PIN, NOT AS EVIDENCE OF A FIX — IT WAS GREEN THE FIRST TIME IT RAN,
-// AND NO SABOTAGE WAS FOUND THAT IT CATCHES.** Two were tried. Removing
-// `compileToCodeResult`'s `project.diagnostics.clear()` reddens the CLEARING property and leaves this
-// one green, because that sink is per-`Project` and never crossed between them. Keying
-// `sharedFileMemos` by path instead of content hash would be the right shape, but that store admits
-// only `stdlib/` files, so a user-file edit never reaches it.
-//
-// ⇒ The contamination this guards against does not exist today, and this cannot prove it would be
-// caught. What it IS: the only thing in the tree that opens two `Project`s at once, standing where a
-// future change to the three module-level latches would have to walk past it. Cheap (one extra load),
-// honest about what it is worth, and not to be cited as though a sabotage had confirmed it.
+// ⇒ This cannot prove the contamination it guards against would be caught. What it IS: a gate that
+// opens two `Project`s at once, standing where a future change to what two projects share would have to
+// walk past it. Cheap (one extra load), honest about what it is worth, and not to be cited as though a
+// sabotage had confirmed it.
 function verifyProjectIsolation(inputPath FilePath, target Target, defines DefineArray) returns bool throws CompileError
 	var first = try definedProject(inputPath, target: target, defines: defines)
 	var second = try definedProject(inputPath, target: target, defines: defines)
@@ -252,7 +242,7 @@ function verifyProjectIsolation(inputPath FilePath, target Target, defines Defin
 	let firstBeside = checkOnce(first)
 
 	if firstBeside != firstAlone 'contaminated'
-		printError("FAIL isolation: project A reported {firstAlone} diagnostic(s) alone and {firstBeside} while a second, BROKEN project was live. B's state is reaching A — the module-level latches (the Diagnostics capture, PhaseProbe.openPhaseSpans, QueryEngine.sharedFileMemos) are where to look, and each documents its soundness as resting on there being one compile at a time.\n")
+		printError("FAIL isolation: project A reported {firstAlone} diagnostic(s) alone and {firstBeside} while a second, BROKEN project was live. B's state is reaching A — a record both projects hold, their `CompileSession`s first, is where to look.\n")
 		return false
 	end 'contaminated'
 

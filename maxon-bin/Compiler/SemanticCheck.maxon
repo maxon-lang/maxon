@@ -28,13 +28,14 @@ export let MainFunctionName = b"main"
 // `__maxon_test_main`, naming the one function it was never going to look for. A constant cannot say that,
 // so there is no constant: one producer, at the one place the name is in hand.
 
-module function semanticCheck(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex)
+module function semanticCheck(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex) throws CompileError
 	// ⭐ **OVERLOAD RESOLUTION RUNS FIRST, BEFORE ANYTHING READS A CALLEE**. Until it has run, a call
 	// to an overloaded name carries the BARE name the source wrote, which is the registration name of
 	// the FIRST declaration only — so `checkCalls` would validate every one of them against that
 	// member's signature and `lowerMaxonToStd` would emit a call to it. It rewrites the ops in place,
 	// so every pass below (and the whole backend) sees the member the call actually meant.
 	resolveOverloadedCalls(project, module: module, signatures: signatures)
+	try requireStillWanted(project)
 	project.libraryFacts = project.libraryFacts.withSubstrateEntriesOf(module)
 
 	// E3113 — every `throws` clause in the program names a declared enum or union. It runs BEFORE the throws
@@ -58,6 +59,7 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// The interprocedural closure-escape summary — built once, read at every call site to
 	// refuse a capturing closure passed to a callee that persists the parameter.
 	let escapeSummary = buildEscapeSummary(module, funcNames: funcNames, funcSignatures: project.funcSignatures, edges: callEdges, byCallee: edgesByCallee)
+	try requireStillWanted(project)
 
 	// The interprocedural PARAMETER-MUTATION summary (E3019, the call-site half) — built once, read at every
 	// call site to refuse an immutable binding handed to a parameter the callee writes. It reads the same
@@ -72,13 +74,15 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// through a call's result, a retain or a merge (`ProvenanceTracer.collectProvenanceParamEdges`), which the
 	// storage-provenance summary is what can say. The record-write column's relation also holds an argument that
 	// may lie WITHIN one.
-	var provenance = buildStorageProvenance(project, module: module, signatures: signatures, funcNames: funcNames)
+	var provenance = try buildStorageProvenance(project, module: module, signatures: signatures, funcNames: funcNames)
+	try requireStillWanted(project)
 	let (mutationEdges, recordEdges) = provenance.collectProvenanceParamEdges(callEdges, funcNames: funcNames)
 	let mutationEdgesByCallee = adjacencyOf(mutationEdges, base: callEdges, baseByCallee: edgesByCallee, funcCount: funcNames.functions.count())
 
 	let storageEdges = collectStorageReachEdges(mutationEdges, module: module, funcSignatures: project.funcSignatures, funcIndexByName: funcNames.byName)
 	let mutationSummary = buildParamMutationSummary(funcNames, funcSignatures: project.funcSignatures, edges: mutationEdges, byCallee: mutationEdgesByCallee, recordEdges: recordEdges, storageEdges: storageEdges, provenanceWrites: provenance.receiverWrites)
-	checkCalls(project, module: module, signatures: signatures, funcNames: funcNames, throwsMap: throwsMap, escapeSummary: escapeSummary, mutationSummary: mutationSummary, provenance: provenance)
+	try checkCalls(project, module: module, signatures: signatures, funcNames: funcNames, throwsMap: throwsMap, escapeSummary: escapeSummary, mutationSummary: mutationSummary, provenance: provenance)
+	try requireStillWanted(project)
 
 	// After `checkCalls`: the E3004 explaining an undefined call precedes the refusal it caused.
 	reportDeferredParseErrors(project, module: module, signatures: signatures)
@@ -88,6 +92,7 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// `checkCalls`, so a program with a bad argument reports it first, in the order the reader meets them.
 	provenance.checkStorageDoors(mutationSummary)
 	provenance.checkVarInitializersTakeNoLetRecord(funcNames)
+	try requireStillWanted(project)
 
 	// The RETURN half of the interface-widening rule. After `checkCalls` so a program with
 	// both a bad argument and a bad return reports the argument first, in the order the reader meets them.
@@ -107,6 +112,7 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// `resolveOverloadedCalls`, whose rewrite is what makes a call op's `callee` the name the summary is
 	// keyed by.
 	checkDiscardedResults(project, module: module, signatures: signatures, funcNames: funcNames)
+	try requireStillWanted(project)
 
 	// E3073 — a spawn whose callee can never suspend. Whole-program like the summary above it, and for the same
 	// reason: whether `f` yields depends on what `f` calls, which is only knowable once every file has merged.
@@ -118,12 +124,14 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// messages BLOCK ON a service, the second what a message RUNS. Their gates, their order and the single
 	// sweep they share are all in `checkServiceRules`.
 	checkServiceRules(project, module: module, signatures: signatures, funcNames: funcNames)
+	try requireStillWanted(project)
 
 	// E3070: a collection mutated while an element borrowed out of it is still live. The facts are the
 	// PARSER's (a binding exists nowhere else in the compiler), and this is the first point that holds the
 	// whole-program `mutationSummary` its call-argument half asks — which is why it runs here rather than in
 	// a `CompilePhase` of its own. See `BorrowCheck.checkBorrowConflicts`.
 	checkBorrowConflicts(project, module: module, mutationSummary: mutationSummary)
+	try requireStillWanted(project)
 
 	// E3099: the derived capturing-closure use invariant. Runs after `checkCalls` so a call site the
 	// interprocedural check owns reports through that check's own, better-informed wording (it can
@@ -3367,7 +3375,7 @@ function deferredParseErrorDiagnostic(project Project, module MaxonModule, signa
 	return parseErrorDiagnostic(deferred.error, path: deferred.filePath, keywords: project.keywords).withCause(valueDeferralCause(project, module: module, signatures: signatures, funcIndex: deferred.funcIndex, value: deferred.value))
 end 'deferredParseErrorDiagnostic'
 
-function checkCalls(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, throwsMap FuncThrowsMap, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, provenance ProvenanceTracer)
+function checkCalls(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, throwsMap FuncThrowsMap, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, provenance ProvenanceTracer) throws CompileError
 	// ⚠ **THE MEMO IS NOT AN OPTIMIZATION** — the note `LowerMaxonToStd.witnessSlotsOf` carries, one pass
 	// over. `interfaceWitnessSlots` walks the `extends` graph and builds a fresh array plus a visited set on
 	// every call; asked once per dispatch OP that is a quadratic in a program's dispatch count. The list is a
@@ -3377,6 +3385,7 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 	var witnessSlots = WitnessSlotsByDeclIndex.create()
 
 	for funcIndex in 0 upto module.functions.count() 'eachFunc'
+		try requireStillWanted(project)
 		let func = try module.functions.get(funcIndex) otherwise panic("checkCalls: functions.get OOB at {funcIndex} below its own count")
 		provenance.enterFunction(funcIndex)
 

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
-# THE SHARED-STDLIB-MEMO GATE — does a compile that reads the stdlib out of the PROCESS-WIDE store
+# THE SHARED-STDLIB-MEMO GATE — does a compile that reads the stdlib out of the SHARED store
 # produce exactly what a compile that lexed it itself produces?
 #
-# G20 wave 2 made `spec-test` compile every case IN PROCESS. Wave 3 used that to give ONE memo a
-# longer life: a stdlib file's tokens, its `#if`-resolved stream and the producer mask derived from
-# it are now held for the life of the PROCESS rather than of a `Project`
-# (`QueryEngine.sharedFileMemos`). Every compile after the first in a worker therefore reads a stdlib
-# file's tokens out of an array some EARLIER, UNRELATED program's compile produced.
+# `spec-test` compiles every case IN PROCESS, and a stdlib file's tokens, its `#if`-resolved stream
+# and the producer mask derived from it are held for the life of the worker process's store
+# (`CompileSession.fileMemos`) rather than of a `Project`. Every compile after the first in a worker
+# therefore reads a stdlib file's tokens out of an array some EARLIER, UNRELATED program's compile
+# produced.
 #
 # That is a sharing this compiler has never done before, and the property it must not break is byte
 # identity: what a program compiles to may not depend on what was compiled before it.

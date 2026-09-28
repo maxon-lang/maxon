@@ -340,10 +340,6 @@ let ParameterTraceWritableRank = RootBitIndexMask + 1
 let ResultLiesWithinAModuleLet = 1 as ParamPositionMask
 let ResultHoldsAModuleLet = 2 as ParamPositionMask
 
-// The row of a function whose body stores no parameter into another. Shared and never mutated: a widening
-// REPLACES a function's row before writing it. A `var`, because a row read back to be widened may be this one.
-var NoStoredParameters = ParamPositionMaskArray.create()
-
 // The sets each value carries, one root set apiece — see the table above.
 enum ProvenanceColumn
 	shares
@@ -520,9 +516,12 @@ export type ProvenanceSummary
 	var moduleLets as ParamPositionMaskArray
 	var storesInto as ParamMaskRows
 	var storesDeep as ParamMaskRows
+	var noStoredParameters as ParamPositionMaskArray
 
 	export static function create(funcCount FuncIndex) returns ProvenanceSummary
-		return Self{shares: emptySummaryColumn(funcCount), identity: emptySummaryColumn(funcCount), holds: emptySummaryColumn(funcCount), inside: emptySummaryColumn(funcCount), holdsWithin: emptySummaryColumn(funcCount), placedWithin: emptySummaryColumn(funcCount), escapes: emptySummaryColumn(funcCount), binds: emptySummaryColumn(funcCount), moduleLets: emptySummaryColumn(funcCount), storesInto: emptyStoreRows(funcCount), storesDeep: emptyStoreRows(funcCount)}
+		var noStoredParameters = ParamPositionMaskArray.create()
+
+		return Self{shares: emptySummaryColumn(funcCount), identity: emptySummaryColumn(funcCount), holds: emptySummaryColumn(funcCount), inside: emptySummaryColumn(funcCount), holdsWithin: emptySummaryColumn(funcCount), placedWithin: emptySummaryColumn(funcCount), escapes: emptySummaryColumn(funcCount), binds: emptySummaryColumn(funcCount), moduleLets: emptySummaryColumn(funcCount), storesInto: emptyStoreRows(funcCount, sharedEmptyRow: noStoredParameters), storesDeep: emptyStoreRows(funcCount, sharedEmptyRow: noStoredParameters), noStoredParameters: noStoredParameters}
 	end 'create'
 
 	export function resultMayReachAModuleLet(index FuncIndex) returns bool
@@ -587,14 +586,14 @@ export type ProvenanceSummary
 		grew = widenSummaryColumn(self.escapes, index: index, by: row.escapes) or grew
 		grew = widenSummaryColumn(self.binds, index: index, by: row.binds) or grew
 		grew = widenSummaryColumn(self.moduleLets, index: index, by: row.moduleLets) or grew
-		grew = widenStoreRow(self.storesInto, index: index, by: row.stores) or grew
-		return widenStoreRow(self.storesDeep, index: index, by: row.deepStores) or grew
+		grew = widenStoreRow(self.storesInto, index: index, by: row.stores, sharedEmptyRow: self.noStoredParameters) or grew
+		return widenStoreRow(self.storesDeep, index: index, by: row.deepStores, sharedEmptyRow: self.noStoredParameters) or grew
 	end 'widen'
 end 'ProvenanceSummary'
 
-function emptyStoreRows(funcCount FuncIndex) returns ParamMaskRows
+function emptyStoreRows(funcCount FuncIndex, sharedEmptyRow ParamPositionMaskArray) returns ParamMaskRows
 	var rows = ParamMaskRows.create()
-	rows.refill(funcCount as ElementIndex, value: NoStoredParameters)
+	rows.refill(funcCount as ElementIndex, value: sharedEmptyRow)
 	return rows
 end 'emptyStoreRows'
 
@@ -604,7 +603,7 @@ function storeRowMaskAt(rows ParamMaskRows, index FuncIndex, into ParamCount) re
 	return try row.get(into) otherwise NoParamPositions
 end 'storeRowMaskAt'
 
-function widenStoreRow(rows ParamMaskRows, index FuncIndex, by ParamPositionMaskArray) returns bool
+function widenStoreRow(rows ParamMaskRows, index FuncIndex, by ParamPositionMaskArray, sharedEmptyRow ParamPositionMaskArray) returns bool
 	var row = try rows.get(index) otherwise panic("widenStoreRow: function index {index} is outside the store rows — they are built over `funcNames.functions`")
 	var grew = false
 
@@ -615,7 +614,7 @@ function widenStoreRow(rows ParamMaskRows, index FuncIndex, by ParamPositionMask
 			continue
 		end 'nothingStoredHere'
 
-		if row is NoStoredParameters 'firstStore'
+		if row is sharedEmptyRow 'firstStore'
 			row = ParamPositionMaskArray.create()
 			row.refill(by.count(), value: NoParamPositions)
 			try rows.set(index, value: row) otherwise panic("widenStoreRow: rows.set OOB at {index}")
@@ -676,13 +675,14 @@ end 'widenSummaryColumn'
 // began. Its dependency rows repeat per call site and per pass of its walk, and a trace whose every input is
 // as it last read them answers the masks it already widened by, so skipping it leaves every summary exactly
 // as tracing it would.
-module function buildStorageProvenance(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex) returns ProvenanceTracer
+module function buildStorageProvenance(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex) returns ProvenanceTracer throws CompileError
 	let funcCount = funcNames.functions.count()
 	var tracer = ProvenanceTracer.create(project, module: module, signatures: signatures, funcIndexByName: funcNames.byName, funcCount: funcCount)
 	var worklist = FuncIndexArray.create()
 	var queued = BoolArray.create()
 
 	for i in 0 upto funcCount 'firstTrace'
+		try requireStillWanted(project)
 		let func = try funcNames.functions.get(i) otherwise panic("buildStorageProvenance: functions.get OOB at {i} below its own count")
 		queued.push(false)
 
@@ -713,6 +713,7 @@ module function buildStorageProvenance(project Project, module MaxonModule, sign
 	var head = 0 as CsrIndex
 
 	while head < worklist.count() 'drain'
+		try requireStillWanted(project)
 		let calleeIndex = try worklist.get(head) otherwise panic("buildStorageProvenance: worklist.get OOB at {head}")
 		head = head + 1
 		try queued.set(calleeIndex, value: false) otherwise panic("buildStorageProvenance: queued.set OOB at {calleeIndex}")
