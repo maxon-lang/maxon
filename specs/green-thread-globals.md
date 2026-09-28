@@ -147,7 +147,7 @@ end 'Counter'
 function main() returns ExitCode
 	let h = spawn Counter.create()
 	h.add(5)
-	return 0 as ExitCode
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -191,7 +191,7 @@ end 'Counter'
 function main() returns ExitCode
 	let h = spawn Counter.create()
 	h.add(5)
-	return 0 as ExitCode
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -355,7 +355,7 @@ function main() returns ExitCode
 	end 'collect'
 
 	print("worst={worst}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```

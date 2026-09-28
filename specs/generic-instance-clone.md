@@ -303,7 +303,7 @@ function main() returns ExitCode
 	b.addRow(r)
 	let c = b.copyRows()
 	print("{c.count()}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -355,7 +355,7 @@ function main() returns ExitCode
 	b.addRow(r)
 	let c = b.copyRows()
 	print("{c.count()}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode

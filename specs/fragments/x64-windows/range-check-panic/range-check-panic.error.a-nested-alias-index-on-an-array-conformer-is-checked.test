@@ -1,0 +1,32 @@
+// Test: range-check-panic.error.a-nested-alias-index-on-an-array-conformer-is-checked
+typealias Num = int(0 to 1000)
+
+type Array uses Element implements BuiltinArrayLiteral
+  export typealias ElementMemory = __ManagedMemory with Element
+  typealias Idx = int(0 to 9)
+  export var managed as ElementMemory
+
+  static function init(managed ElementMemory) returns Self
+    return Self{managed: managed}
+  end 'init'
+
+  static function create() returns Self
+    return Self{}
+  end 'create'
+
+  function get(index Idx) returns Element throws ArrayError
+    return try managed.get(index) otherwise throw ArrayError.indexOutOfBounds
+  end 'get'
+end 'Array'
+
+typealias NumArray = Array with Num
+
+function main() returns ExitCode
+  var a = NumArray.create()
+  a.push(7)
+  let v = try a.get(-1) otherwise 0
+  return v
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:27:17: Value -1 is outside the range of 'Idx' (int(0 to 9))

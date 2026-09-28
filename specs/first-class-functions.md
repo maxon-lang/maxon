@@ -1132,7 +1132,7 @@ what is silently accepted.
 ```maxon
 function main() returns ExitCode
 	cb()
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -1343,7 +1343,7 @@ function main() returns ExitCode
 	let h = Holder.create(greet)
 	h.op()
 	h.op()
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode

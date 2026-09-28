@@ -2737,6 +2737,13 @@ export union DeclaredAlias
 	undeclared
 end 'DeclaredAlias'
 
+export function requireDeclaredAlias(resolved DeclaredAlias) returns RangedTypeAlias throws MapError
+	match resolved 'resolved'
+		declared(alias) then return alias
+		undeclared then throw MapError.keyNotFound
+	end 'resolved'
+end 'requireDeclaredAlias'
+
 // What the index knows about a FUNCTION typealias (P1.5-A1) — `DeclaredAlias`'s twin, and a union for
 // the identical reason: "no file declares a function alias of this name" is an ANSWER, not a failure.
 // THE door `Parser.parseTypeReference` asks "is this name a function type?" through — a hit re-tags the
@@ -7066,7 +7073,7 @@ end 'surfaceNodeAt'
 // emptiness test.
 function surfaceRootNode(surface DeclaredSurface) returns DeclaredSurfaceNode
 	if surfaceIsPlain(surface) 'noNodes'
-		return 0 as DeclaredSurfaceNode
+		return 0
 	end 'noNodes'
 
 	return surfaceNodeAt(surface, at: 0)
@@ -13537,7 +13544,7 @@ export type ProgramSignatures
 	// that one string between them, so this needs no second key and no knowledge that inner aliases exist.
 	function derivedAliasSurfaceBits(declared MaxonType) returns DeclaredSurfaceNode
 		if maxonTypeTag(declared) != ValueTypeTag.named 'notANamedAlias'
-			return 0 as DeclaredSurfaceNode
+			return 0
 		end 'notANamedAlias'
 
 		return self.bufferAliasSurfaceBits(self.nameOfId(typeNameIdOf(declared)))
@@ -13606,7 +13613,7 @@ export type ProgramSignatures
 		end 'thePositionISTheArgument'
 
 		match self.declarationViewInstanceOf(declared, scopeOwner: self.genericInstanceBaseName(id), interner: interner, readerFilePath: readerFilePath) 'holder'
-			notInScope then return 0 as DeclaredSurfaceNode
+			notInScope then return 0
 			instance(nested) then return self.elementBitOfInstanceArg(nested, id: id)
 		end 'holder'
 	end 'surfaceBitsThroughInstanceArg'
@@ -13649,11 +13656,11 @@ export type ProgramSignatures
 	// open one.
 	function elementBitOfInstanceArg(nested GenericInstanceId, id GenericInstanceId) returns DeclaredSurfaceNode
 		if self.genericInstanceArgCount(nested) <= BufferSurfaceArgPosition 'noArgumentToHoldIt'
-			return 0 as DeclaredSurfaceNode
+			return 0
 		end 'noArgumentToHoldIt'
 
 		if not self.namesBufferArgOf(self.substitutedInstanceArg(nested, position: BufferSurfaceArgPosition), id: id) 'itHoldsSomethingElse'
-			return 0 as DeclaredSurfaceNode
+			return 0
 		end 'itHoldsSomethingElse'
 
 		return SurfaceBitElementIsBuffer
@@ -14905,6 +14912,9 @@ export type ProgramSignatures
 	//   • The `uses` ARITY rides (R7's fact, unchanged): it decides whether the comma in `implements Duo with
 	//     A, B` opens a second ARGUMENT or a second INTERFACE, so it changes what a conformance in any file
 	//     PARSES — a reader that did not re-parse would go on binding the old count.
+	//   • The declaring FILE rides: a dispatch in any file resolves the formals as that file sees them
+	//     (`interfaceFormalAlias`), so moving the interface to another file changes what its callers
+	//     check.
 	//   • Each method's NAME, RETURN TYPE, FORMAL TYPES, FORMAL NAMES and `throws` ride: a witness dispatch in
 	//     any file picks its table SLOT, its result type, its `Self`-formal rejection, its `name:` label
 	//     vocabulary and its calling ABI off exactly those five (`Parser.findWitnessDispatchCandidates`), and every one
@@ -14953,7 +14963,8 @@ export type ProgramSignatures
 			self.interfaceNamesInDeclOrder.push(iface.name)
 		end 'firstDeclarationOfThisName'
 
-		self.hash = Hasher.combined(mixBytes(Hasher.combined(self.hash, value: DeclShapeInterface), bytes: iface.name), value: iface.associatedTypeNames.count())
+		let named = mixBytes(Hasher.combined(self.hash, value: DeclShapeInterface), bytes: iface.name)
+		self.hash = Hasher.combined(mixBytes(named, bytes: iface.declFilePath.toString().toByteArray()), value: iface.associatedTypeNames.count())
 
 		for parentName in iface.extendsInterfaces 'eachParent'
 			self.hash = mixBytes(Hasher.combined(self.hash, value: DeclShapeInterfaceParent), bytes: parentName)
@@ -14983,6 +14994,17 @@ export type ProgramSignatures
 	export function interfaceMap() returns IrInterfaceMap
 		return self.interfaces
 	end 'interfaceMap'
+
+	export function declaringInterface(interfaceName ByteArray) returns IrInterface
+		match lookupInterface(self.interfaces, name: interfaceName) 'declaring'
+			found(iface) then return iface
+			notFound then panic("ProgramSignatures.declaringInterface: no interface '{String.from(interfaceName)}' declares the requirement being read — a witness dispatch's declaring interface comes out of this index")
+		end 'declaring'
+	end 'declaringInterface'
+
+	export function interfaceDeclaresAssociatedType(interfaceName ByteArray, name ByteArray) returns bool
+		return namesInclude(self.declaringInterface(interfaceName).associatedTypeNames, name: name)
+	end 'interfaceDeclaresAssociatedType'
 
 	module function interfaceDeclarationSites() returns InterfaceDeclSiteArray
 		return self.interfaceDeclSites
@@ -20039,20 +20061,18 @@ export type ProgramSignatures
 	// `InsertRangeChecks.guardRangedParams` to stand at, and the declared bound has to be fetched from the
 	// declaration and applied at the CALL instead.
 	//
-	// ⚠ **IT RESOLVES THE NAME FROM THE DECLARING FILE, NOT THE READER'S.** A ranged alias is file-scoped
-	// (`RangedAliasRegistry.lookup`) and `stdlib/Array.maxon`'s `ElementIndex` is not `public`, so asked
-	// from the calling file it resolves to nothing at all. The file that DECLARED the parameter is the file
-	// whose `ElementIndex` that parameter means, and `OverloadedDecl` carries it.
+	// ⚠ **IT RESOLVES THE NAME FROM THE DECLARING FILE, NOT THE READER'S.** A ranged alias is
+	// file-scoped (`RangedAliasRegistry.lookup`) and `stdlib/Array.maxon`'s `ElementIndex` is not
+	// `public`, so asked from the calling file it resolves to nothing at all. The file that DECLARED
+	// the parameter is the file whose `ElementIndex` that parameter means, and `OverloadedDecl`
+	// carries it. `declaredParamAliasAt` resolves it there, falling back to an alias nested in a type
+	// or extension body.
 	//
-	// ⛔⛔ **AND RESOLVING IT HERE IS ONLY HALF THE JOB — THE ANSWER HAS TO SURVIVE THE TRIP.** This door
-	// returned the right declaration from the day it was written and the emitted check still came out of the
-	// WRONG one, because `Parser.recordRangedTargetSite` kept only the alias's NAME and `InsertRangeChecks`
-	// re-resolved it against the CALLING file. `stdlib/Array.maxon` and `stdlib/Vector.maxon` EACH declare
-	// `ElementIndex`, and any program may add its own, so "the same name" was never
-	// "the same declaration" — and the wrong one won. The site carries the declaring
-	// file — `RangeCheckSiteTarget.alias` — and a reader arriving here
-	// should take that as the shape of the obligation: **a fact resolved against a scope must travel with
-	// the scope it was resolved in, or the next reader resolves it against theirs.**
+	// ⛔⛔ **AND RESOLVING IT HERE IS ONLY HALF THE JOB — THE ANSWER HAS TO SURVIVE THE TRIP.**
+	// `stdlib/Array.maxon` and `stdlib/Vector.maxon` EACH declare `ElementIndex`, and any program may
+	// add its own, so "the same name" is not "the same declaration". The site carries the declaration
+	// itself (`RangeCheckSiteTarget.alias`): **a fact resolved against a scope must travel with the scope it
+	// was resolved in, or the next reader resolves it against theirs.**
 	//
 	// ⚠ **AN OVERLOAD SET ANSWERS `undeclared`.** Two declarations of one member may narrow the same
 	// position differently, and which one a call resolves to is not settled where this is asked — so a
@@ -20068,20 +20088,19 @@ export type ProgramSignatures
 		end 'noSingleDeclaration'
 
 		let decl = try declarations.get(0) otherwise panic("ProgramSignatures.firstParamAliasOf: get(0) on the one-element array the line above tested for")
+		return self.declaredParamAliasAt(decl, position: 0)
+	end 'firstParamAliasOf'
 
-		if decl.paramTypes.isEmpty() 'declaresNoParameter'
-			return DeclaredAlias.undeclared
-		end 'declaresNoParameter'
-
-		let declared = try decl.paramTypes.get(0) otherwise panic("ProgramSignatures.firstParamAliasOf: paramTypes.get(0) on a list the line above proved non-empty")
+	function declaredParamAliasAt(decl OverloadedDecl, position ParamCount) returns DeclaredAlias
+		let declared = try decl.paramTypes.get(position) otherwise return DeclaredAlias.undeclared
 
 		if maxonTypeTag(declared) != ValueTypeTag.named 'namesNoAlias'
 			return DeclaredAlias.undeclared
 		end 'namesNoAlias'
 
-		let name = try self.typeNames.nameOf(typeNameIdOf(declared)) otherwise panic("ProgramSignatures.firstParamAliasOf: a recorded `named` parameter type carries an id this index's own interner does not hold")
-		return self.aliasOf(name, readerFilePath: decl.declFilePath)
-	end 'firstParamAliasOf'
+		let name = try self.typeNames.nameOf(typeNameIdOf(declared)) otherwise panic("ProgramSignatures.declaredParamAliasAt: a recorded `named` parameter type carries an id this index's own interner does not hold")
+		return self.fileScopedOrInnerAliasNamed(name, readerFilePath: decl.declFilePath)
+	end 'declaredParamAliasAt'
 
 	export function mayTakeUnsignedQuantityAt(callee ByteArray, argIndex ParamCount, label ByteArray) returns bool
 		for decl in self.overloadedDeclsOf(callee) 'eachDeclaration'
@@ -20099,18 +20118,11 @@ export type ProgramSignatures
 		end 'theReceiver'
 
 		let sourceIndex = argIndex - 1 if decl.takesReceiver else argIndex
-		let declared = try decl.paramTypes.get(argSlotPosition(decl.paramNames, argIndex: sourceIndex, label: label)) otherwise return false
 
-		if maxonTypeTag(declared) != ValueTypeTag.named 'namesNoAlias'
-			return false
-		end 'namesNoAlias'
-
-		let name = try self.typeNames.nameOf(typeNameIdOf(declared)) otherwise panic("ProgramSignatures.declarationTakesUnsignedQuantityAt: a recorded `named` parameter type carries an id this index's own interner does not hold")
-
-		return match self.aliasOf(name, readerFilePath: decl.declFilePath) 'alias'
-			undeclared gives false
+		return match self.declaredParamAliasAt(decl, position: argSlotPosition(decl.paramNames, argIndex: sourceIndex, label: label)) 'slotAlias'
 			declared(alias) gives aliasIsUnsignedFullQuantity(alias)
-		end 'alias'
+			undeclared gives false
+		end 'slotAlias'
 	end 'declarationTakesUnsignedQuantityAt'
 
 	// ⭐⭐ **THE `Array` INSTANCE `callee` DECLARES AT ONE ARGUMENT POSITION — what an array literal written
@@ -21055,6 +21067,31 @@ export type ProgramSignatures
 		return DeclaredAlias.declared(alias)
 	end 'innerAliasOf'
 
+	export function rangeCheckedAliasNamed(name ByteArray, readerFilePath FilePath) returns RangedTypeAlias throws MapError
+		return try requireDeclaredAlias(self.fileScopedOrInnerAliasNamed(name, readerFilePath: readerFilePath))
+	end 'rangeCheckedAliasNamed'
+
+	export function fileScopedOrInnerAliasNamed(name ByteArray, readerFilePath FilePath) returns DeclaredAlias
+		return self.fileScopedOrInnerDeclaredAlias(self.aliasOf(name, readerFilePath: readerFilePath), name: name)
+	end 'fileScopedOrInnerAliasNamed'
+
+	export function interfaceFormalAlias(interfaceName ByteArray, formalName ByteArray) returns RangedTypeAlias throws MapError
+		let declaring = self.declaringInterface(interfaceName)
+
+		if namesInclude(declaring.associatedTypeNames, name: formalName) 'aConformerBindsIt'
+			throw MapError.keyNotFound
+		end 'aConformerBindsIt'
+
+		return try self.rangeCheckedAliasNamed(formalName, readerFilePath: declaring.declFilePath)
+	end 'interfaceFormalAlias'
+
+	export function fileScopedOrInnerDeclaredAlias(fileScoped DeclaredAlias, name ByteArray) returns DeclaredAlias
+		match fileScoped 'fileScoped'
+			declared then return fileScoped
+			undeclared then return self.innerAliasOf(name)
+		end 'fileScoped'
+	end 'fileScopedOrInnerDeclaredAlias'
+
 	// The BARE member of the base-qualified inner alias `name` (`Wrapper.Idx` ⇒ `Idx`), or `EmptySourceText`
 	// when `name` is not an inner alias. What the method-return retype re-qualifies (`{receiverAlias}.{member}`).
 	export function innerAliasMember(name ByteArray) returns ByteArray
@@ -21308,8 +21345,10 @@ export type ProgramSignatures
 	// erasure door: both collapse to their `int`/`float` underlying before lowering, exactly as a plain
 	// ranged alias does; only the per-instance one ALSO carries nominal identity (kept in the value column).
 	export function qualifiedAliasOf(name ByteArray, readerFilePath FilePath) returns DeclaredAlias
-		match self.innerAliasOf(name) 'inner'
-			declared(alias) then return DeclaredAlias.declared(alias)
+		let inner = self.innerAliasOf(name)
+
+		match inner 'inner'
+			declared then return inner
 			undeclared then break 'inner'
 		end 'inner'
 
@@ -31500,6 +31539,16 @@ export type ProgramSignatures
 
 		return self.declaredSlotType(declared, into: into, slotScopeFilePath: layout.declFilePath)
 	end 'fieldTypeOf'
+
+	export function declaredFieldTypeName(layout StructLayout, index FieldIndex) returns ByteArray throws MapError
+		let declared = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.declaredFieldTypeName: field {index} is out of range for `type {String.from(layout.name)}`, which declares {layout.fieldCount()} — every index handed out came from `indexOfField`")
+
+		if maxonTypeTag(declared) != ValueTypeTag.named 'namesNoAlias'
+			throw MapError.keyNotFound
+		end 'namesNoAlias'
+
+		return self.nameOfId(typeNameIdOf(declared))
+	end 'declaredFieldTypeName'
 
 	// ⭐ **THE `Base with Args` INSTANCE AN INTERFACE-TYPED FIELD WAS DECLARED AT** — the field's twin of
 	// `Parser.paramExistentialSitesOf`, read off the declared SPELLING the layout keeps, because the field's

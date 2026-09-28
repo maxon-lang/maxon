@@ -35,7 +35,7 @@ function main() returns ExitCode
 	sleep(1000)
 	let wakes = __Builtins.schedParkWakeCount() - before
 	print("quiet={wakes <= quietWakes}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -58,7 +58,7 @@ function main() returns ExitCode
 	sleep(1000)
 	let wakes = __Builtins.schedParkWakeCount() - before
 	print("quiet={wakes <= quietWakes}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -111,7 +111,7 @@ function main() returns ExitCode
 	let tookMs = Clock.elapsedMs(start) as Integer
 	let v = try await r otherwise 0
 	print("late={tookMs >= lateMs} v={v}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -172,7 +172,7 @@ function main() returns ExitCode
 	let took = try await r2 otherwise 0
 	let slept = try await r1 otherwise 0
 	print("late={took >= lateMs} spun={settled > 0} {busy > 0} slept={slept >= 900}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout

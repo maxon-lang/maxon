@@ -666,7 +666,7 @@ function main() returns ExitCode
 	let fresh = subpWait(h2)
 	subpRelease(h2)
 	print("first={first} firstLine={firstLine.byteLength()} stale={stale} staleLine={staleLine} fresh={fresh} freshLine={freshLine}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -697,7 +697,7 @@ function main() returns ExitCode
 	let fresh = subpWait(h2)
 	subpRelease(h2)
 	print("first={first} firstLine={firstLine.byteLength()} stale={stale} staleLine={staleLine} fresh={fresh} freshLine={freshLine}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -731,7 +731,7 @@ function main() returns ExitCode
 	_ = subpWait(h)
 	subpRelease(h)
 	print("n={n} polled={parks >= 1}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout

@@ -145,7 +145,7 @@ SLOTS=64
 
 		echo "function main() returns ExitCode"
 		echo "	print(\"{mpMany(7)}\")"
-		echo "	return 0 as ExitCode"
+		echo "	return 0"
 		echo "end 'main'"
 		;;
 	spread)
@@ -165,7 +165,7 @@ SLOTS=64
 			echo "	acc = acc + mpOne$i(7)"
 		done
 		echo "	print(\"{acc}\")"
-		echo "	return 0 as ExitCode"
+		echo "	return 0"
 		echo "end 'main'"
 		;;
 	nosites)
@@ -179,7 +179,7 @@ SLOTS=64
 
 		echo "function main() returns ExitCode"
 		echo "	print(\"{mpNone(7)}\")"
-		echo "	return 0 as ExitCode"
+		echo "	return 0"
 		echo "end 'main'"
 		;;
 	esac

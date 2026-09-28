@@ -434,7 +434,7 @@ function main() returns ExitCode
 	let wakes = __Builtins.schedParkWakeCount() - beforeWakes
 	let parks = __Builtins.schedNetpollBlockCount() - beforeParks
 	print("quiet={wakes <= quietWakes} onpoller={parks >= pollerParks}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -477,7 +477,7 @@ function main() returns ExitCode
 	let wakes = __Builtins.schedParkWakeCount() - beforeWakes
 	let parks = __Builtins.schedNetpollBlockCount() - beforeParks
 	print("quiet={wakes <= quietWakes} onpoller={parks >= pollerParks}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```

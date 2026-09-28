@@ -45,10 +45,10 @@ inliner's slow-arm re-run is gone, and a leaf with a store and a panic is inline
 callee or the callee's blocks; the exit codes below are the same either way, which is what makes them
 a control on the answer and not on the shape.
 
-**`wasm32-wasi` has no inline frame records, so the rule fails closed there.** A wasm panic executes
-`unreachable` and wasmtime prints its OWN frames from the engine's call stack (`StdToWasm.maxon`,
-`mrt_panic` ON WASM) — there is no saved-frame-pointer chain to walk and no printer of ours to teach, so a
-trace raised inside a spliced body would lose the callee's frame with no record to restore it. On a target
+**`wasm32-wasi` has no inline frame records, so the rule fails closed there.** A wasm panic prints the
+frames each function recorded on entry to its frame stack (`StdToWasm.appendPanicRuntime`) — there is no
+saved-frame-pointer chain and no inline frame table beside it, so a trace raised inside a spliced body
+would lose the callee's frame with no record to restore it. On a target
 whose backend emits no inline frame records (`TargetFacilities.targetEmitsInlineFrameRecords`) the
 called-once rule refuses every callee (refusal `noInlineFrameRecords`, tallied and logged like the others),
 and the leaf rule refuses any body holding a panic op or a `div`/`mod` — the shapes whose diagnostic names

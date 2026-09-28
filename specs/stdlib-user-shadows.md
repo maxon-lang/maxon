@@ -345,7 +345,7 @@ end 'FileInfo'
 
 function main() returns ExitCode
 	let info = try File.info(Directory.currentPath()) otherwise 'missing'
-		return 90 as ExitCode
+		return 90
 	end 'missing'
 	return (FileInfo.make().tag + (1 if info.isDirectory else 0)) as ExitCode
 end 'main'

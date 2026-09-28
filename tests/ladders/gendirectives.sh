@@ -120,7 +120,7 @@ emit_fn() {
 emit_main() {
 	{
 		echo "function main() returns ExitCode"
-		echo "	return 0 as ExitCode"
+		echo "	return 0"
 		echo "end 'main'"
 	} > "$OUT/z_main.maxon"
 }

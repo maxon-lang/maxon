@@ -416,10 +416,10 @@ function main() returns ExitCode
 	var b = Bag.create()
 	fill(b)
 	let got = try b.first() otherwise 'e'
-		return 9 as ExitCode
+		return 9
 	end 'e'
 	print(got)
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -590,7 +590,7 @@ function main() returns ExitCode
 	var b = SmallBag.create()
 	fill(b)
 	let got = try b.first() otherwise 'e'
-		return 9 as ExitCode
+		return 9
 	end 'e'
 	return got
 end 'main'
@@ -718,7 +718,7 @@ function main() returns ExitCode
 	var b = IntBag.create()
 	fill(b)
 	let got = try b.first() otherwise 'e'
-		return 9 as ExitCode
+		return 9
 	end 'e'
 	return got as ExitCode
 end 'main'
@@ -912,7 +912,7 @@ end 'fill'
 function main() returns ExitCode
 	let b = fill()
 	print("{b.first()}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -1041,9 +1041,9 @@ end 'fill'
 function main() returns ExitCode
 	var b = StrBag.create()
 	fill(b)
-	let got = try b.first() otherwise return 9 as ExitCode
+	let got = try b.first() otherwise return 9
 	print("{got}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -1117,7 +1117,7 @@ function main() returns ExitCode
 	var b = StrBag.create()
 	let boxed = makeOne(b)
 	print("{boxed.value()}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -1187,7 +1187,7 @@ function main() returns ExitCode
 		i = i + 1
 	end 'fill'
 	print("{kept.count()}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -1267,7 +1267,7 @@ function main() returns ExitCode
 	print("\n")
 	print(s2)
 	print("\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -1566,7 +1566,7 @@ end 'heapString'
 function main() returns ExitCode
 	let h = StrHolder.create(heapString("a heap key ", b: "long enough to allocate"), v: 7)
 	print("second {h.second()}\n")
-	return 4 as ExitCode
+	return 4
 end 'main'
 ```
 ```stdout
@@ -1620,7 +1620,7 @@ function main() returns ExitCode
 	let h = StrHolder.create(heapString("a heap key ", b: "long enough to allocate"), v: 7)
 	let t = SmallHolder.create(5, v: 6)
 	print("second {h.second()} {t.second()}\n")
-	return 4 as ExitCode
+	return 4
 end 'main'
 ```
 ```stdout
@@ -1668,7 +1668,7 @@ function main() returns ExitCode
 	let h = StrHolder.create(heapString("a heap key ", b: "long enough to allocate"), v: 7)
 	let p = h.pair()
 	print("pair {p.0} {p.1}\n")
-	return 4 as ExitCode
+	return 4
 end 'main'
 ```
 ```stdout
@@ -1702,7 +1702,7 @@ function main() returns ExitCode
 	let m = ["a": 1, "b": 2, "c": 3]
 	let mapped = m.map(function(p) gives p)
 	var e = EnvMap.create()
-	try e.insert("k", value: "v") otherwise return 9 as ExitCode
+	try e.insert("k", value: "v") otherwise return 9
 	print("mapped {mapped.count()}\n")
 	return (mapped.count() + envSize(e)) as ExitCode
 end 'main'

@@ -327,7 +327,10 @@ function resolveOneOverloadedCall(project Project, module MaxonModule, signature
 		return
 	end 'cannotDiscriminate'
 
-	match selectOverload(project, func: func, op: op, candidates: candidates) 'pick'
+	let pick = selectOverload(project, func: func, op: op, candidates: candidates, retype: argumentsAsWritten)
+	retireDisambiguatingLiteralCasts(project, func: func, op: op, candidates: candidates, pick: pick)
+
+	match pick 'pick'
 		chosen(member) then bindOverloadChoice(project, module: module, func: func, opIndex: opIndex, callee: callee, member: member, valueDefiners: valueDefiners)
 
 		// ⛔⛔ **AN AMBIGUOUS CALL IS *ALSO* LEFT ON A DECLARED MEMBER, AND LEAVING IT ON THE BARE NAME
@@ -646,12 +649,12 @@ typealias OverloadArgScoreArray = Array with OverloadArgScore
 // candidate that FITS always scores at least `WideningArgScore` (a zero-argument candidate is floored there
 // by `overloadArgTypeFit`), so zero is unreachable for a fitting candidate and `best` staying zero means
 // nothing fitted.
-function selectOverload(project Project, func IrFunction, op MaxonOp, candidates ByteArrayArray) returns OverloadPick
+function selectOverload(project Project, func IrFunction, op MaxonOp, candidates ByteArrayArray, retype ArgumentRetype) returns OverloadPick
 	var scores = OverloadArgScoreArray.create()
 	var best = NoCompatibleOverloadScore
 
 	for candidate in candidates 'eachCandidate'
-		let score = match overloadCandidateScore(project, func: func, op: op, candidate: candidate) 'fit'
+		let score = match overloadCandidateScore(project, func: func, op: op, candidate: candidate, retype: retype) 'fit'
 			fits(fitScore) gives fitScore
 			incompatible gives NoCompatibleOverloadScore
 		end 'fit'
@@ -704,7 +707,7 @@ end 'OverloadFit'
 // with no candidate fitting, `leaveUnmatchedCallOnFirstCandidate` points the call at the FIRST member and the
 // program is refused against a signature it was never written against. The `result` is threaded down for
 // exactly that reason — see `overloadArgTypeFit`'s own header.
-function overloadCandidateScore(project Project, func IrFunction, op MaxonOp, candidate ByteArray) returns OverloadFit
+function overloadCandidateScore(project Project, func IrFunction, op MaxonOp, candidate ByteArray, retype ArgumentRetype) returns OverloadFit
 	let sig = try project.funcSignatures.get(candidate) otherwise panic("overloadCandidateScore: candidate '{String.from(candidate)}' is not in funcSignatures — `overloadCandidates` filtered on exactly that")
 	let result = match maxonOpResultValue(op) 'result'
 		value(id) gives id
@@ -712,14 +715,13 @@ function overloadCandidateScore(project Project, func IrFunction, op MaxonOp, ca
 	end 'result'
 
 	match overloadCallArgs(op) 'args'
-		supplied(args, argLabels, defaultSlots) then return overloadSlottedFit(project, func: func, sig: sig, result: result, args: args, argLabels: argLabels, defaultSlots: defaultSlots)
-		default panic("overloadCandidateScore: asked of an op that supplies no argument list — `maxonOpCalleeKind` answers `direct` for exactly the three ops `overloadCallArgs` covers")
+		supplied(args, argLabels, defaultSlots) then return overloadSlottedFit(project, func: func, sig: sig, result: result, args: args, argLabels: argLabels, defaultSlots: defaultSlots, retype: retype)
 	end 'args'
 end 'overloadCandidateScore'
 
-function overloadSlottedFit(project Project, func IrFunction, sig FuncSignature, result ValueId, args ValueIdArray, argLabels ByteArrayArray, defaultSlots ParamCountArray) returns OverloadFit
+function overloadSlottedFit(project Project, func IrFunction, sig FuncSignature, result ValueId, args ValueIdArray, argLabels ByteArrayArray, defaultSlots ParamCountArray, retype ArgumentRetype) returns OverloadFit
 	match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels, argDefaultSlots: defaultSlots) 'slot'
-		ordered(argIds) then return overloadArgTypeFit(project, func: func, sig: sig, result: result, argIds: argIds)
+		ordered(argIds) then return overloadArgTypeFit(project, func: func, sig: sig, result: result, argIds: argIds, retype: retype)
 
 		// An arity mismatch, a label naming no parameter, or two arguments at one parameter: this candidate is
 		// not what the call was written against.
@@ -743,14 +745,14 @@ end 'overloadSlottedFit'
 // So the subject is read HERE the same way `checkArgTypes` reads it — one `callInstanceSubject` per candidate,
 // off that candidate's own signature, because whether the receiver IS the subject depends on
 // `sig.takesReceiver()` and the candidates of one set need not agree about that.
-function overloadArgTypeFit(project Project, func IrFunction, sig FuncSignature, result ValueId, argIds ValueIdArray) returns OverloadFit
+function overloadArgTypeFit(project Project, func IrFunction, sig FuncSignature, result ValueId, argIds ValueIdArray, retype ArgumentRetype) returns OverloadFit
 	let instanceSubject = callInstanceSubject(sig, result: result, argIds: argIds)
 	var score = NoCompatibleOverloadScore
 
 	for i in 0 upto argIds.count() 'eachArg'
 		let argId = try argIds.get(i) otherwise panic("overloadArgTypeFit: argIds.get OOB at {i} inside its own count()")
 		let paramType = paramTypeThroughCallInstance(project, func: func, subject: instanceSubject, paramType: try sig.paramTypes.get(i) otherwise panic("overloadArgTypeFit: paramTypes.get OOB at {i} — `slotCallArgs` answered `ordered`, so the counts agree"))
-		let argTag = try func.valueTags.get(argId) otherwise panic("overloadArgTypeFit: value v{argId} of '{String.from(func.name)}' has no recorded type — every SSA value is minted through Parser.mintValue")
+		let argTag = scoredArgTag(func, argId: argId, retype: retype)
 		let paramTag = maxonTypeTag(paramType)
 
 		if checkDeclaredType(argTag, declared: paramTag) != DeclaredTypeMatch.ok 'refused'
@@ -772,7 +774,7 @@ function overloadArgTypeFit(project Project, func IrFunction, sig FuncSignature,
 		// `over(x Integer)` for a boxed-union argument (measured: exit 25 from arithmetic on the payload
 		// word). Asking the same question the argument check asks is also what makes this function's own
 		// promise true — that a candidate it accepts cannot then be rejected downstream.
-		let argNameId = try func.valueNameIds.get(argId) otherwise panic("overloadArgTypeFit: value v{argId} of '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
+		let argNameId = scoredArgNameId(func, argId: argId, retype: retype)
 
 		if not expected.isEmpty() or (tagAdmitsNoAggregate(paramTag) and argAggregateCannotDecay(project, tag: argTag, nameId: argNameId)) 'aggregateComparable'
 			// ⚠ **`aggregatesConflict`, NOT the bare rule** — the shared door carries the byte-element
@@ -792,7 +794,7 @@ function overloadArgTypeFit(project Project, func IrFunction, sig FuncSignature,
 			let signatures = programSignaturesIn(project, asker: "overloadArgTypeFit")
 			let got = aggregateNameFor(project, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath)
 
-			if signatures.aggregatesConflict(expected, expectedTag: paramTag, expectedNameId: typeNameIdOf(paramType), expectedBrand: paramBrandOf(sig, position: i, paramTag: paramTag), got: got, gotTag: argTag, gotNameId: argNameId, gotBrand: valueBrandOf(project, func: func, value: argId)) 'aggregateMismatch'
+			if signatures.aggregatesConflict(expected, expectedTag: paramTag, expectedNameId: typeNameIdOf(paramType), expectedBrand: paramBrandOf(sig, position: i, paramTag: paramTag), got: got, gotTag: argTag, gotNameId: argNameId, gotBrand: scoredArgBrand(project, func: func, argId: argId, retype: retype)) 'aggregateMismatch'
 				if not signatures.serviceHandleWidensTo(got, interfaceHandleName: expected) 'noConversion'
 					return OverloadFit.incompatible
 				end 'noConversion'
@@ -811,6 +813,128 @@ function overloadArgTypeFit(project Project, func IrFunction, sig FuncSignature,
 	// score the caller can compare.
 	return OverloadFit.fits(score if score > NoCompatibleOverloadScore else WideningArgScore)
 end 'overloadArgTypeFit'
+
+union ArgumentRetype
+	asWritten
+	uncastLiterals(casts LiteralCastMap)
+end 'ArgumentRetype'
+
+let argumentsAsWritten = ArgumentRetype.asWritten
+
+function retypesArgument(retype ArgumentRetype, argId ValueId) returns bool
+	return match retype 'retype'
+		asWritten gives false
+		uncastLiterals(casts) gives casts.contains(argId)
+	end 'retype'
+end 'retypesArgument'
+
+function uncastLiteralOf(retype ArgumentRetype, argId ValueId) returns LiteralCast throws MapError
+	match retype 'retype'
+		asWritten then throw MapError.keyNotFound
+		uncastLiterals(casts) then return try casts.get(argId)
+	end 'retype'
+end 'uncastLiteralOf'
+
+function scoredArgTag(func IrFunction, argId ValueId, retype ArgumentRetype) returns ValueTypeTag
+	if let uncast = try uncastLiteralOf(retype, argId: argId) 'theUncastLiteral'
+		return uncast.literalTag
+	end 'theUncastLiteral'
+
+	return try func.valueTags.get(argId) otherwise panic("scoredArgTag: value v{argId} of '{String.from(func.name)}' has no recorded type — every SSA value is minted through Parser.mintValue")
+end 'scoredArgTag'
+
+function scoredArgNameId(func IrFunction, argId ValueId, retype ArgumentRetype) returns TypeNameId
+	if retypesArgument(retype, argId: argId) 'theUncastLiteral'
+		return UnnamedTypeId
+	end 'theUncastLiteral'
+
+	return try func.valueNameIds.get(argId) otherwise panic("scoredArgNameId: value v{argId} of '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
+end 'scoredArgNameId'
+
+function scoredArgBrand(project Project, func IrFunction, argId ValueId, retype ArgumentRetype) returns ByteArray
+	if retypesArgument(retype, argId: argId) 'theUncastLiteral'
+		return EmptySourceText
+	end 'theUncastLiteral'
+
+	return valueBrandOf(project, func: func, value: argId)
+end 'scoredArgBrand'
+
+// The unneeded literal casts of one call are uncast TOGETHER and the set re-scored, and they are
+// reported only if the same member is still chosen: the diagnostics tell the author to remove every
+// one of them, and removing two individually harmless casts together can silently select another
+// overload.
+function retireDisambiguatingLiteralCasts(project Project, func IrFunction, op MaxonOp, candidates ByteArrayArray, pick OverloadPick)
+	if func.literalCastArguments.count() == 0 'noLiteralCastArgument'
+		return
+	end 'noLiteralCastArgument'
+
+	if uncastingTheUnneededKeepsThePick(project, func: func, op: op, candidates: candidates, pick: pick) 'everyUnneededCastCanGo'
+		return
+	end 'everyUnneededCastCanGo'
+
+	let args = match overloadCallArgs(op) 'args'
+		supplied(supplied, _, _) gives supplied
+	end 'args'
+
+	for argId in args 'retireEach'
+		_ = func.literalCastArguments.remove(argId)
+	end 'retireEach'
+end 'retireDisambiguatingLiteralCasts'
+
+function uncastingTheUnneededKeepsThePick(project Project, func IrFunction, op MaxonOp, candidates ByteArrayArray, pick OverloadPick) returns bool
+	return match pick 'pick'
+		chosen(member) gives uncastingTheUnneededKeepsTheMember(project, func: func, op: op, candidates: candidates, member: member)
+		ambiguous or
+			noMatch gives false
+	end 'pick'
+end 'uncastingTheUnneededKeepsThePick'
+
+function uncastingTheUnneededKeepsTheMember(project Project, func IrFunction, op MaxonOp, candidates ByteArrayArray, member ByteArray) returns bool
+	let unneeded = unneededLiteralCastArguments(project, func: func, op: op, member: member)
+
+	if unneeded.count() == 0 'nothingToUncast'
+		return true
+	end 'nothingToUncast'
+
+	return chosenMemberIs(selectOverload(project, func: func, op: op, candidates: candidates, retype: ArgumentRetype.uncastLiterals(unneeded)), member: member)
+end 'uncastingTheUnneededKeepsTheMember'
+
+function unneededLiteralCastArguments(project Project, func IrFunction, op MaxonOp, member ByteArray) returns LiteralCastMap
+	let sig = try project.funcSignatures.get(member) otherwise panic("unneededLiteralCastArguments: the chosen member '{String.from(member)}' is not in funcSignatures — `overloadCandidates` filtered on exactly that")
+
+	let slotted = match overloadCallArgs(op) 'args'
+		supplied(args, argLabels, defaultSlots) gives slotCallArgs(sig.paramNames, args: args, argLabels: argLabels, argDefaultSlots: defaultSlots)
+	end 'args'
+
+	let argIds = match slotted 'slot'
+		ordered(slottedIds) gives slottedIds
+		default panic("unneededLiteralCastArguments: the chosen member '{String.from(member)}' fitted the call, and only a call `slotCallArgs` orders can fit")
+	end 'slot'
+
+	var unneeded = LiteralCastMap.create()
+
+	for i in 0 upto argIds.count() 'eachArg'
+		let argId = try argIds.get(i) otherwise panic("unneededLiteralCastArguments: argIds.get OOB at {i} inside its own count()")
+		let cast = try func.literalCastArguments.get(argId) otherwise continue
+		let destination = try calleeParamAlias(project, callee: member, position: i) otherwise continue
+
+		// A cast to any other alias stays as written: uncast, it could move the pick and suppress a real
+		// E3010.
+		if cast.repeats(destination) 'repeatsTheChosenParameter'
+			unneeded.upsert(argId, value: cast)
+		end 'repeatsTheChosenParameter'
+	end 'eachArg'
+
+	return unneeded
+end 'unneededLiteralCastArguments'
+
+function chosenMemberIs(pick OverloadPick, member ByteArray) returns bool
+	return match pick 'pick'
+		chosen(chosenMember) gives chosenMember.equals(member)
+		ambiguous or
+			noMatch gives false
+	end 'pick'
+end 'chosenMemberIs'
 
 // ⭐⭐ **A CONSTANT ARGUMENT'S RANGE IS CHECKED AGAINST A CALLEE'S DECLARED PARAMETER ALIAS, AND THAT SITE WAS
 // RECORDED PER NAME AT PARSE TIME (P1.9) — so it has to be RETARGETED when the call resolves elsewhere.**
@@ -3539,14 +3663,16 @@ end 'checkWitnessDispatchOp'
 // rather than being absorbed.
 function checkWitnessArgTypes(project Project, func IrFunction, signatures ProgramSignatures, witnessSlots WitnessSlotsByDeclIndex, opIndex OpIndex, args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, provenance ProvenanceTracer)
 	let dispatched = dispatchedInterfaceAt(signatures, interfaceDeclIndex: interfaceDeclIndex)
-	let requirement = witnessSlotAt(signatures, witnessSlots: witnessSlots, dispatched: dispatched, interfaceDeclIndex: interfaceDeclIndex, methodIndex: methodIndex).method
+	let slot = witnessSlotAt(signatures, witnessSlots: witnessSlots, dispatched: dispatched, interfaceDeclIndex: interfaceDeclIndex, methodIndex: methodIndex)
+	let requirement = slot.method
+	let declaring = signatures.declaringInterface(slot.sourceInterfaceName)
 	let callRange = project.opRanges.get(opIndex)
 	let witnessReceiver = witnessDispatchReceiver(args)
 
 	for j in 0 upto requirement.paramTypeNames.count() 'eachFormal'
 		let formalName = try requirement.paramTypeNames.get(j) otherwise panic("checkWitnessArgTypes: paramTypeNames.get OOB at {j} below count {requirement.paramTypeNames.count()}")
 
-		match witnessFormalDeclaredType(project, signatures: signatures, dispatched: dispatched, formalName: formalName) 'formal'
+		match witnessFormalDeclaredType(project, signatures: signatures, declaring: declaring, formalName: formalName) 'formal'
 			opaque then continue
 
 			// ⭐ `declaredParamName` is the formal's OWN rendered name, which is exactly the pre-erasure SPELLING
@@ -3560,10 +3686,33 @@ function checkWitnessArgTypes(project Project, func IrFunction, signatures Progr
 			// are owned by the interface rather than by any conformer — which is exactly the owner guard
 			// `ProgramSignatures.substituteThroughInstance` applies, and `witnessFormalDeclaredType` has already
 			// answered `opaque` for them one line up.
-			declared(paramType, preErasedAggregate) then checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: formalName, paramName: witnessFormalName(requirement, position: j), position: j, argId: try args.get(j + WitnessReceiverArgCount) otherwise panic("checkWitnessArgTypes: args.get OOB at {j + WitnessReceiverArgCount} below count {args.count()} — a dispatch reaching here has the receiver plus one actual per formal"), callInstanceSubject: witnessReceiver, paramExistentialSites: sharedEmptyParamExistentialSites, callRange: callRange, filePath: func.sourceFilePath, provenance: provenance, overloadRefused: false)
+			declared(paramType, preErasedAggregate) then checkWitnessArgument(project, func: func, signatures: signatures, interfaceName: slot.sourceInterfaceName, formalName: formalName, paramType: paramType, preErasedAggregate: preErasedAggregate, paramName: witnessFormalName(requirement, position: j), position: j, argId: try args.get(j + WitnessReceiverArgCount) otherwise panic("checkWitnessArgTypes: args.get OOB at {j + WitnessReceiverArgCount} below count {args.count()} — a dispatch reaching here has the receiver plus one actual per formal"), callInstanceSubject: witnessReceiver, callRange: callRange, provenance: provenance)
 		end 'formal'
 	end 'eachFormal'
 end 'checkWitnessArgTypes'
+
+function checkWitnessArgument(project Project, func IrFunction, signatures ProgramSignatures, interfaceName ByteArray, formalName ByteArray, paramType MaxonType, preErasedAggregate ByteArray, paramName ByteArray, position ParamCount, argId ValueId, callInstanceSubject ValueId, callRange SourceRange, provenance ProvenanceTracer)
+	if argumentIsRefused(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: formalName, paramName: paramName, position: position, argId: argId, callInstanceSubject: callInstanceSubject, paramExistentialSites: sharedEmptyParamExistentialSites, callRange: callRange, filePath: func.sourceFilePath, provenance: provenance, overloadRefused: false) 'thisArgumentWasRefused'
+		return
+	end 'thisArgumentWasRefused'
+
+	if let cast = try func.literalCastArguments.get(argId) 'aLiteralCastArgument'
+		if let destination = try signatures.interfaceFormalAlias(interfaceName, formalName: formalName) 'aRangedFormal'
+			reportUnneededLiteralCastArgument(project, cast: cast, destination: destination, filePath: func.sourceFilePath)
+		end 'aRangedFormal'
+	end 'aLiteralCastArgument'
+end 'checkWitnessArgument'
+
+// ⚠ **ASKED OF `project.diagnostics` RATHER THAN THREADED BACK AS A BOOL**, and that is the safer
+// spelling rather than the lazier one: `checkOneArgType` reports from six sites across four
+// functions, so a returned flag is six places to remember and one place to silently forget — where
+// the record that a diagnostic exists cannot be forgotten by a new report site. It is
+// `Queries.foldOneFileInto`'s own before/after idiom.
+function argumentIsRefused(project Project, func IrFunction, paramType MaxonType, preErasedAggregate ByteArray, declaredParamName ByteArray, paramName ByteArray, position ParamCount, argId ValueId, callInstanceSubject ValueId, paramExistentialSites ParamExistentialSiteArray, callRange SourceRange, filePath FilePath, provenance ProvenanceTracer, overloadRefused bool) returns bool
+	let reportedBefore = project.diagnostics.count()
+	checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: declaredParamName, paramName: paramName, position: position, argId: argId, callInstanceSubject: callInstanceSubject, paramExistentialSites: paramExistentialSites, callRange: callRange, filePath: filePath, provenance: provenance, overloadRefused: overloadRefused)
+	return project.diagnostics.count() > reportedBefore
+end 'argumentIsRefused'
 
 // The formal's own NAME, for the diagnostic — the INTERFACE's, which is the vocabulary the call binds
 // against (`WitnessDispatchTarget.paramNames` carries the same list for the same reason). Parallel to
@@ -3607,14 +3756,14 @@ end 'witnessSlotAt'
 
 // ⭐⭐ **WHAT AN INTERFACE FORMAL DENOTES AT THE ARGUMENT CHECK, or that there is nothing here to compare
 // against.** An interface stores its formals as RENDERED SOURCE NAMES (`IrInterface`'s header), so this door
-// re-derives what a declaration derived once — the same re-derivation `Parser.interfaceReturnMaxonType` makes
+// re-derives what a declaration derived once — the same re-derivation `Parser.interfaceSpelledType` makes
 // for the RETURN, sourced from the same `builtinTypeNameTag` table so the two cannot drift.
 //
 // ⚠ **`opaque` IS AN ANSWER, NOT A GAP TO BE FILLED IN LATER.** Three of its four sources are positions where
 // a comparison HERE would be wrong rather than merely absent, and the fourth is a name this pass cannot
 // resolve at all — in every case refusing on a guess would be a false refusal, which is the failure mode a
 // door that starts comparing types most easily acquires.
-function witnessFormalDeclaredType(project Project, signatures ProgramSignatures, dispatched IrInterface, formalName ByteArray) returns WitnessFormalType
+function witnessFormalDeclaredType(project Project, signatures ProgramSignatures, declaring IrInterface, formalName ByteArray) returns WitnessFormalType
 	// A `Self`-typed formal (`Equatable.equals(other Self)`) is the RECEIVER's own type, which the shared body
 	// does not know. `Parser.requireWitnessSelfArgs` already refuses a concrete value there — the check that
 	// exists because marshalling an int literal into a `Self` pointer FAULTS — so this is not an unguarded
@@ -3624,9 +3773,11 @@ function witnessFormalDeclaredType(project Project, signatures ProgramSignatures
 	end 'selfFormal'
 
 	// An ASSOCIATED TYPE denotes whatever each CONFORMER binds (`implements Taker with float`), so the
-	// interface cannot state it and neither can this. That the conformers must all bind it ALIKE is E3119's,
-	// reported by `ConformanceCheck` with a position; asking `associatedAbiBindingOf` here would re-derive that
-	// fold to refuse an argument against one conformer's binding in a body compiled for all of them.
+	// interface cannot state it and neither can this. That the conformers must all bind it ALIKE is
+	// E3119's, reported by `ConformanceCheck` with a position; asking `associatedAbiBindingOf` here
+	// would re-derive that fold to refuse an argument against one conformer's binding in a body
+	// compiled for all of them. It is asked of the DECLARING interface, whose text the formal is: a
+	// derived interface dispatched through does not list its base's associated types.
 	//
 	// ⚠ Asked BEFORE `builtinTypeNameTag`, and the order is load-bearing for `LowerMaxonToStd.witnessFormalType`'s
 	// measured reason: a `uses` parameter is an IDENTIFIER, and `ExitCode`/`String` are identifiers too, so
@@ -3634,7 +3785,7 @@ function witnessFormalDeclaredType(project Project, signatures ProgramSignatures
 	// `namesInclude`, not a discarded `namePositionIn`: this door answers `opaque` and has no use
 	// for the position, and a PURE result may not be dropped in any spelling (E3064) — which is what the
 	// `if let _ = try …` that stood here did.
-	if namesInclude(dispatched.associatedTypeNames, name: formalName) 'aConformerBindsIt'
+	if namesInclude(declaring.associatedTypeNames, name: formalName) 'aConformerBindsIt'
 		return WitnessFormalType.opaque
 	end 'aConformerBindsIt'
 
@@ -3662,18 +3813,15 @@ function witnessFormalDeclaredType(project Project, signatures ProgramSignatures
 
 	// A struct, an interface, an enum/union, a ranged alias — the whole-program cascade, one door.
 	// ⚠ A GENERIC-INSTANCE alias and a TUPLE alias are in NEITHER this cascade nor the one above, so both land
-	// on `notDeclared` and are opaque. That is the honest answer and not an omission: both resolve through a
-	// READER'S FILE (`genericAliasInstanceFrom`, `qualifiedAliasOf`), and a requirement's formal is a
-	// whole-program name with no reading file to scope a contested prefix by.
+	// on `notDeclared` and are opaque.
 	//
-	// ⚠ **AND IT ASKS ON NO FILE'S BEHALF — `CompilerOwnedDeclFilePath`, which is that fact's one spelling (see its header).** A requirement's formal is a
-	// whole-program name written inside an `interface`, and `IrInterface` records no declaring file; the
-	// paragraph above already says a name that resolves through a READER is opaque here for exactly that
-	// reason, and a cross-KIND contested name is the same shape one registry over.
-	let denoted = try denotedNamedType(signatures, name: formalName, id: id, readerFilePath: CompilerOwnedDeclFilePath) otherwise return WitnessFormalType.opaque
+	// ⚠ **AND IT ASKS ON THE DECLARING INTERFACE'S BEHALF — `declaring.declFilePath`.** A
+	// requirement's formal is written inside that `interface`, so its name means what that file sees,
+	// whichever file holds the call.
+	let denoted = try denotedNamedType(signatures, name: formalName, id: id, readerFilePath: declaring.declFilePath) otherwise return WitnessFormalType.opaque
 
 	// The identity `resolveTypes` took off this formal, if it took one — see `erasedFormalIdentity`.
-	return WitnessFormalType.declared(denoted, preErasedAggregate: erasedFormalIdentity(project, denoted: denoted, id: id))
+	return WitnessFormalType.declared(denoted, preErasedAggregate: erasedFormalIdentity(project, denoted: denoted, id: id, readerFilePath: declaring.declFilePath))
 end 'witnessFormalDeclaredType'
 
 // ⭐⭐ **THE IDENTITY THE FORMAL'S RESOLUTION DESTROYED, ASKED OF THE ONE WHOLE-PROGRAM CLASSIFIER — and
@@ -3690,22 +3838,22 @@ end 'witnessFormalDeclaredType'
 // `v=10019`. One compiler answering one question two ways — the defect this batch exists to close, surviving
 // inside the door the batch added, because the two doors classified the same fact apart.
 //
-// ⚠ **IT WRITES NO FOURTH RULE. It asks `aggregateNameFor` TWICE — LIVE, then PRE-ERASURE** — which is
-// exactly the two steps `checkOneArgType` takes for every argument it judges. A formal whose identity SURVIVED (a struct's
-// `structRef`, an existential's `interfaceRef`) is read live by the checker and must carry nothing, or one
-// name would sit in two places; a formal whose identity did NOT survive arrives as bare `integer`, and the
-// pre-resolution `named(id)` is the only thing that still knows what it was. `aggregateNameFor` decides both
-// asks, so the enum arm, the per-instance-alias arm and any arm added later reach this door by construction
-// rather than by a second author remembering them.
-// ⚠ `CompilerOwnedDeclFilePath` for `witnessFormalDeclaredType`'s reason, which is this function's caller: a
-// requirement's formal is a whole-program name written inside an `interface`, and `IrInterface` records no
-// declaring file.
-function erasedFormalIdentity(project Project, denoted MaxonType, id TypeNameId) returns ByteArray
-	if not aggregateNameFor(project, tag: maxonTypeTag(denoted), nameId: typeNameIdOf(denoted), readerFilePath: CompilerOwnedDeclFilePath).isEmpty() 'survivedResolution'
+// ⚠ **IT WRITES NO FOURTH RULE. It asks `aggregateNameFor` TWICE — LIVE, then PRE-ERASURE** — which
+// is exactly the two steps `checkOneArgType` takes for every argument it judges. A formal whose
+// identity SURVIVED (a struct's `structRef`, an existential's `interfaceRef`) is read live by the
+// checker and must carry nothing, or one name would sit in two places; a formal whose identity did
+// NOT survive arrives as bare `integer`, and the pre-resolution `named(id)` is the only thing that
+// still knows what it was. `aggregateNameFor` decides both asks, so the enum arm, the
+// per-instance-alias arm and any arm added later reach this door by construction rather than by a
+// second author remembering them.
+// ⚠ `readerFilePath` is the one `witnessFormalDeclaredType` resolved the formal with, the declaring
+// interface's file: the denoted type and its pre-erasure identity must come from one declaration.
+function erasedFormalIdentity(project Project, denoted MaxonType, id TypeNameId, readerFilePath FilePath) returns ByteArray
+	if not aggregateNameFor(project, tag: maxonTypeTag(denoted), nameId: typeNameIdOf(denoted), readerFilePath: readerFilePath).isEmpty() 'survivedResolution'
 		return EmptySourceText
 	end 'survivedResolution'
 
-	return aggregateNameFor(project, tag: ValueTypeTag.named, nameId: id, readerFilePath: CompilerOwnedDeclFilePath)
+	return aggregateNameFor(project, tag: ValueTypeTag.named, nameId: id, readerFilePath: readerFilePath)
 end 'erasedFormalIdentity'
 
 // The noun a diagnostic about this call must use. Every message below that quotes a callee asks
@@ -6704,18 +6852,17 @@ function checkArgTypes(project Project, func IrFunction, result ValueId, callee 
 		// ⚠ **IT IS THE ONE CALL'S RULE AND NOT A FIRST-ERROR GATE.** Two separately-bad calls still earn two
 		// diagnostics here. Nothing in the corpus asks for the narrower behaviour, and
 		// `project.diagnostics` being first-class is the point.
-		//
-		// ⚠ **ASKED OF `project.diagnostics` RATHER THAN THREADED BACK AS A BOOL**, and that is the safer
-		// spelling rather than the lazier one: `checkOneArgType` reports from six sites across four functions,
-		// so a returned flag is six places to remember and one place to silently forget — where the record
-		// that a diagnostic exists cannot be forgotten by a new report site. It is `Queries.foldOneFileInto`'s
-		// own before/after idiom.
-		let reportedBefore = project.diagnostics.count()
-		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: declaredParamName, paramName: paramName, position: i, argId: argId, callInstanceSubject: instanceSubject, paramExistentialSites: sig.paramExistentialSites, callRange: callRange, filePath: filePath, provenance: provenance, overloadRefused: overloadRefused)
-
-		if project.diagnostics.count() > reportedBefore 'thisArgumentWasRefused'
+		if argumentIsRefused(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: declaredParamName, paramName: paramName, position: i, argId: argId, callInstanceSubject: instanceSubject, paramExistentialSites: sig.paramExistentialSites, callRange: callRange, filePath: filePath, provenance: provenance, overloadRefused: overloadRefused) 'thisArgumentWasRefused'
 			return
 		end 'thisArgumentWasRefused'
+
+		// Outside `argumentIsRefused`'s count: an unneeded cast refuses nothing, so every argument's is
+		// reported.
+		if let cast = try func.literalCastArguments.get(argId) 'aLiteralCastArgument'
+			if let destination = try calleeParamAlias(project, callee: callee, position: i) 'aRangedParameter'
+				reportUnneededLiteralCastArgument(project, cast: cast, destination: destination, filePath: filePath)
+			end 'aRangedParameter'
+		end 'aLiteralCastArgument'
 	end 'eachArg'
 end 'checkArgTypes'
 
@@ -6959,8 +7106,7 @@ end 'slotThroughCallInstance'
 // rather than at the parameter loop and the return slot, which is where a pair like this comes apart.
 function resolvedSlotThroughCallInstance(project Project, signatures ProgramSignatures, slotType MaxonType, gid GenericInstanceId) returns MaxonType
 	// ⚠ **`CompilerOwnedDeclFilePath` — a reader with no file: a generic instance's type ARGUMENT was interned before any file read it**, so
-	// there is no reading file to scope a cross-KIND contested name by — the same absence
-	// `witnessFormalDeclaredType` records, reached from the other side of the same crossing.
+	// there is no reading file to scope a cross-KIND contested name by.
 	return resolveType(project, signatures: signatures, t: slotThroughCallInstance(project, signatures: signatures, slotType: slotType, gid: gid), readerFilePath: CompilerOwnedDeclFilePath)
 end 'resolvedSlotThroughCallInstance'
 
@@ -7859,6 +8005,19 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 
 	_ = checkArgAgainstDeclaredTag(project, argTag: argTag, argNameId: argNameId, declaredType: paramType, declaredAggregate: expectedAggregate, declaredName: declaredParamName, paramName: paramName, position: position, callRange: callRange, filePath: filePath, argId: argId, provenance: provenance)
 end 'checkOneArgType'
+
+function reportUnneededLiteralCastArgument(project Project, cast LiteralCast, destination RangedTypeAlias, filePath FilePath)
+	if not cast.repeats(destination) 'theParameterDeclaresAnotherType'
+		return
+	end 'theParameterDeclaresAnotherType'
+
+	reportPositioned(project, code: ErrorCode.semanticUnneededCast, message: unneededLiteralCastMessage(cast), line: cast.asRange.line, column: cast.asRange.column, filePath: filePath)
+end 'reportUnneededLiteralCastArgument'
+
+function calleeParamAlias(project Project, callee ByteArray, position ParamCount) returns RangedTypeAlias throws MapError
+	let checks = try project.rangeChecks.get(callee)
+	return try checks.paramAliasAt(position)
+end 'calleeParamAlias'
 
 // ⭐⭐ **A FUNCTION VALUE MEETING A FUNCTION-TYPED ARGUMENT POSITION — the comparison and its sentence, for
 // BOTH doors that reach one.** Answers whether it REPORTED, so each caller stops on a refusal exactly as it

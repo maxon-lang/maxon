@@ -280,7 +280,7 @@ end 'Box'
 typealias Box = int(0 to 10)
 
 function useIt() returns Box
-	return 5 as Box
+	return 5
 end 'useIt'
 
 export function fromB() returns ExitCode
@@ -540,7 +540,7 @@ are file-private, so each answers for its own file and neither is a duplicate.
 export typealias Handler = int(0 to 10)
 
 export function useA() returns Handler
-	return 5 as Handler
+	return 5
 end 'useA'
 
 // --- file: b.maxon

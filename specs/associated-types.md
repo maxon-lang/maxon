@@ -418,7 +418,7 @@ type SingleByte implements ByteSource with Byte
 end 'SingleByte'
 
 function main() returns ExitCode
-	let s = SingleByte.create(42 as Byte)
+	let s = SingleByte.create(42)
 	let b = s.getByte()
 	return b
 end 'main'
@@ -1653,7 +1653,7 @@ end 'Box'
 typealias RunnerBox = Box with Runner
 
 function main() returns ExitCode
-	return RunnerBox.create(Runner.create(20)).run(11 as ExitCode) as ExitCode
+	return RunnerBox.create(Runner.create(20)).run(11) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -1687,7 +1687,7 @@ function useIt(t Taker, c ExitCode) returns Integer
 end 'useIt'
 
 function main() returns ExitCode
-	return useIt(Runner.create(20), c: 11 as ExitCode) as ExitCode
+	return useIt(Runner.create(20), c: 11) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -1759,7 +1759,7 @@ type Runner implements Giver with float
 	let base as Integer
 
 	function give() returns Real
-		return 1.5 as Real
+		return 1.5
 	end 'give'
 
 	static function create(base Integer) returns Self
@@ -2335,6 +2335,263 @@ typealias Real = float(f64.min to f64.max)
 ```
 ```exitcode
 31
+```
+
+<!-- test: an-inherited-requirement-returns-the-bound-type-through-the-derived-interface -->
+A base interface's requirement that returns its associated type, called through the derived interface, returns the conformer's binding.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Source uses Item
+	function take(item Item) returns Item
+end 'Source'
+
+interface Sink extends Source uses Item
+	function extra() returns Integer
+end 'Sink'
+
+type Keeper implements Sink with Integer
+	let base as Integer
+
+	function take(item Integer) returns Integer
+		return self.base + item
+	end 'take'
+
+	function extra() returns Integer
+		return 1
+	end 'extra'
+
+	static function create() returns Self
+		return Self{base: 0}
+	end 'create'
+end 'Keeper'
+
+function useIt(t Sink) returns Integer
+	return t.take(50) + t.extra()
+end 'useIt'
+
+function main() returns ExitCode
+	if useIt(Keeper.create()) == 51 'taken'
+		return 0
+	end 'taken'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: an-inherited-requirement-result-is-not-a-same-named-file-alias -->
+The same call beside a file-scope alias that shares the associated type's name: the result is still the binding.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Item = int(0 to 3)
+
+interface Source uses Item
+	function take(item Item) returns Item
+end 'Source'
+
+interface Sink extends Source uses Item
+	function extra() returns Integer
+end 'Sink'
+
+type Keeper implements Sink with Integer
+	let base as Integer
+
+	function take(item Integer) returns Integer
+		return self.base + item
+	end 'take'
+
+	function extra() returns Integer
+		return 1
+	end 'extra'
+
+	static function create() returns Self
+		return Self{base: 0}
+	end 'create'
+end 'Keeper'
+
+function useIt(t Sink) returns Integer
+	return t.take(50) + t.extra()
+end 'useIt'
+
+function small() returns bool
+	let one = 1 as Item
+	return one == 1
+end 'small'
+
+function main() returns ExitCode
+	if useIt(Keeper.create()) == 51 and small() 'taken'
+		return 0
+	end 'taken'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-base-interfaces-associated-type-through-a-derived-interface-that-does-not-redeclare-it -->
+A derived interface that declares no `uses` of its own still returns the binding of its base's associated type, beside a file-scope alias of the same name.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Item = int(0 to 3)
+
+interface Source uses Item
+	function take(item Item) returns Item
+end 'Source'
+
+interface Sink extends Source
+	function extra() returns Integer
+end 'Sink'
+
+type Keeper implements Source with Integer, Sink
+	let base as Integer
+
+	function take(item Integer) returns Integer
+		return self.base + item
+	end 'take'
+
+	function extra() returns Integer
+		return 1
+	end 'extra'
+
+	static function create() returns Self
+		return Self{base: 0}
+	end 'create'
+end 'Keeper'
+
+function useIt(t Sink) returns Integer
+	return t.take(50) + t.extra()
+end 'useIt'
+
+function small() returns bool
+	let one = 1 as Item
+	return one == 1
+end 'small'
+
+function main() returns ExitCode
+	if useIt(Keeper.create()) == 51 and small() 'taken'
+		return 0
+	end 'taken'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-constraint-bound-result-crosses-from-the-owner-types-file -->
+A `where` constraint's binding names the alias of the file that declares the constrained type, not a same-named alias of another file.
+```maxon
+// --- file: a.maxon
+typealias Level = int(0 to 100)
+
+interface Cursor uses Element
+	function current() returns Element
+end 'Cursor'
+
+type Gauge implements Cursor with Level
+	var v as Level
+
+	static function create() returns Self
+		return Self{v: 90}
+	end 'create'
+
+	function current() returns Level
+		return self.v
+	end 'current'
+end 'Gauge'
+
+type W uses S where S is Cursor with Level
+	var s as S
+
+	static function create(s S) returns Self
+		return Self{s: s}
+	end 'create'
+
+	function read() returns Level
+		return self.s.current()
+	end 'read'
+end 'W'
+
+typealias GaugeW = W with Gauge
+
+function main() returns ExitCode
+	let w = GaugeW.create(Gauge.create())
+	if smallOk() 'ok'
+		return w.read()
+	end 'ok'
+	return 1
+end 'main'
+
+// --- file: z.maxon
+typealias Level = int(0 to 3)
+
+export function smallOk() returns bool
+	let low = 1 as Level
+	return low == 1
+end 'smallOk'
+```
+```exitcode
+90
+```
+
+<!-- test: error.unneeded.a-constraint-bound-float-result-cast-to-its-own-alias -->
+A value the constraint's binding already types as `Percent` gains nothing from a cast to `Percent`.
+```maxon
+// --- file: a.maxon
+typealias Percent = float(0.0 to 100.0)
+
+interface Cursor uses Element
+	function current() returns Element
+end 'Cursor'
+
+type Gauge implements Cursor with Percent
+	var v as Percent
+
+	static function create() returns Self
+		return Self{v: 90.0}
+	end 'create'
+
+	function current() returns Percent
+		return self.v
+	end 'current'
+end 'Gauge'
+
+type W uses S where S is Cursor with Percent
+	var s as S
+
+	static function create(s S) returns Self
+		return Self{s: s}
+	end 'create'
+
+	function read() returns Percent
+		let p = self.s.current() as Percent
+		return p
+	end 'read'
+end 'W'
+
+typealias GaugeW = W with Gauge
+
+function main() returns ExitCode
+	let w = GaugeW.create(Gauge.create())
+	if smallOk() 'ok'
+		return trunc(w.read())
+	end 'ok'
+	return 1
+end 'main'
+
+// --- file: z.maxon
+typealias Percent = float(0.0 to 1.0)
+
+export function smallOk() returns bool
+	let low = 0.5 as Percent
+	return low < 1.0
+end 'smallOk'
+```
+```maxoncstderr
+error E3010: <fragment>:29:28: unneeded cast: 'Percent' already fits in 'Percent'
 ```
 
 <!-- test: error.associated-return-bound-to-a-generic-instance -->

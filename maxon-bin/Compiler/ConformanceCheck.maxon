@@ -2249,7 +2249,7 @@ function requireSameErrorType(project Project, signatures ProgramSignatures, con
 		return
 	end 'sameErrorType'
 
-	if throwsRequirementIsAbstract(project, signatures: signatures, required: required) 'abstractRequirement'
+	if throwsRequirementIsAbstract(project, signatures: signatures, required: required, interfaceName: collectedMethod.sourceInterfaceName) 'abstractRequirement'
 		requireImplErrorIsANarrowableError(project, signatures: signatures, conformance: conformance, collectedMethod: collectedMethod, required: required, declared: declared)
 		return
 	end 'abstractRequirement'
@@ -2263,10 +2263,10 @@ end 'requireSameErrorType'
 // ONCE; what belongs here is only what this caller does with them. `undeclared` reads as NOT abstract, which
 // is the whole point of the classifier's third box: a typo'd requirement must not buy the abstract
 // requirement's narrowing, so it falls to the strict same-name rule and is refused by it.
-function throwsRequirementIsAbstract(project Project, signatures ProgramSignatures, required String) returns bool
-	// `CompilerOwnedDeclFilePath`: a requirement's `throws` type is written inside an `interface`, which
-	// records no declaring file — see the classifier's own header.
-	return match classifyThrowsClauseName(project, signatures: signatures, name: required, readerFilePath: CompilerOwnedDeclFilePath) 'kind'
+function throwsRequirementIsAbstract(project Project, signatures ProgramSignatures, required String, interfaceName ByteArray) returns bool
+	// The declaring interface's file: a requirement's `throws` type is written inside that
+	// `interface` — see the classifier's own header.
+	return match classifyThrowsClauseName(project, signatures: signatures, name: required, readerFilePath: signatures.declaringInterface(interfaceName).declFilePath) 'kind'
 		concreteError gives false
 		abstractInterface gives true
 		undeclared gives false
@@ -2316,8 +2316,7 @@ end 'ThrowsClauseKind'
 // declaration — so a `throws Fault` written where `Fault` means a ranged alias would otherwise have been
 // sorted `concreteError` off a DIFFERENT file's enum, and the catch would decode against cases the clause's
 // own file never named. The two callers each have a reader to give: a plain function's is its declaring
-// file, and an interface REQUIREMENT's is `CompilerOwnedDeclFilePath` — a requirement is written inside an
-// `interface`, which records no declaring file (`SemanticCheck.witnessFormalDeclaredType` says the same).
+// file, and an interface REQUIREMENT's is its declaring interface's file.
 export function classifyThrowsClauseName(project Project, signatures ProgramSignatures, name String, readerFilePath FilePath) returns ThrowsClauseKind
 	let key = name.toByteArray()
 

@@ -62,7 +62,7 @@ function main() returns ExitCode
 	let stored = try segment.readWord(0) otherwise return 5
 	segment.close()
 	print("stored={stored}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -85,7 +85,7 @@ function main() returns ExitCode
 	let second = try segment.readWord(8) otherwise return 7
 	segment.close()
 	print("first={first} second={second}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -110,7 +110,7 @@ function main() returns ExitCode
 	let b2 = try octets.get(2) otherwise return 6
 	let b3 = try octets.get(3) otherwise return 7
 	print("count={octets.count()} b0={b0} b1={b1} b2={b2} b3={b3}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -140,7 +140,7 @@ function main() returns ExitCode
 	end 'eachCycle'
 
 	print("named={named}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -168,7 +168,7 @@ function createOutcome(name String) returns ExitCode
 	end 'refused'
 
 	segment.close()
-	return 5 as ExitCode
+	return 5
 end 'createOutcome'
 
 function main() returns ExitCode
@@ -179,7 +179,7 @@ function main() returns ExitCode
 	let backslash = createOutcome("maxon-spec\\shm")
 	let nul = createOutcome("maxon-spec\0shm")
 	print("at-limit={atLimit} past-limit={pastLimit} empty={empty} slash={slash} backslash={backslash} nul={nul}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -208,7 +208,7 @@ function main() returns ExitCode
 
 	segment.close()
 	print("read {word} past the end\n")
-	return 5 as ExitCode
+	return 5
 end 'main'
 ```
 ```exitcode
@@ -232,7 +232,7 @@ function main() returns ExitCode
 	end 'refused'
 
 	segment.close()
-	return 5 as ExitCode
+	return 5
 end 'main'
 ```
 ```exitcode
@@ -257,7 +257,7 @@ function main() returns ExitCode
 
 	segment.close()
 	print("copied {octets.count()} bytes past the end\n")
-	return 5 as ExitCode
+	return 5
 end 'main'
 ```
 ```exitcode
@@ -282,7 +282,7 @@ function main() returns ExitCode
 	later.close()
 	publisher.close()
 	print("adopter={seen} later={stillSeen}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -308,7 +308,7 @@ function publishOutcome(name String) returns ExitCode
 	end 'refused'
 
 	segment.close()
-	return 5 as ExitCode
+	return 5
 end 'publishOutcome'
 
 function main() returns ExitCode
@@ -317,7 +317,7 @@ function main() returns ExitCode
 	first.close()
 	let afterClose = publishOutcome("maxon-spec-shm-publish-twice")
 	print("while-held={whileHeld} after-close={afterClose}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -343,7 +343,7 @@ function createOutcome(name String, bytes SegmentByteCount) returns ExitCode
 	end 'refused'
 
 	segment.close()
-	return 5 as ExitCode
+	return 5
 end 'createOutcome'
 
 function main() returns ExitCode
@@ -352,7 +352,7 @@ function main() returns ExitCode
 	let same = createOutcome("maxon-spec-shm-too-small", bytes: 4096)
 	publisher.close()
 	print("larger={larger} same={same}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout

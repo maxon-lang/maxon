@@ -135,8 +135,8 @@ WASI *is* `0 to 255`, which is contained in itself. The cast is REQUIRED — a `
 and `as` is the one door between two aliases (`nominal-typealias.md`) — and **no range check is emitted
 for it**: the containment is a **proof** that the source range lies inside the destination, and a runtime
 bounds cascade behind that proof tests a value that cannot fail it. E3010 is a different question, asked
-of the NAMES: it refuses a cast to the value's own alias, and never one between two aliases whatever
-their ranges.
+of the NAMES: it refuses a cast to the value's own alias and a literal cast to the type its destination
+already declares, and never one between two aliases whatever their ranges.
 
 **The rule is the containment relation and nothing else** — *emit nothing when the source's declared range
 is inside the destination's* — asked through one predicate (`TypeRules.rangeCoversRange`). It is not a
@@ -322,6 +322,536 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: specs/fragments/range-check-panic/range-check-panic.error.literal-argument.test:9:10: Value 101 is outside the range of 'Percent' (int(0 to 100))
+```
+
+<!-- test: range-check-panic.error.literal-argument-through-interface -->
+And through an interface-typed receiver, where the interface's declared parameter is the range the literal must fit.
+```maxon
+typealias ByteCount = int(1 to 8)
+typealias Address = int(0 to 4096)
+
+interface Backend
+  function readMemory(address Address, bytes ByteCount) returns ByteCount
+end 'Backend'
+
+type Ram implements Backend
+  let base as Address
+
+  static function create() returns Self
+    return Self{base: 0}
+  end 'create'
+
+  function readMemory(address Address, bytes ByteCount) returns ByteCount
+    if address == self.base 'start'
+      return bytes
+    end 'start'
+    return 1
+  end 'readMemory'
+end 'Ram'
+
+type Debugger
+  let backend as Backend
+
+  static function create() returns Self
+    return Self{backend: Ram.create()}
+  end 'create'
+
+  function readWide(address Address) returns ByteCount
+    return self.backend.readMemory(address, bytes: 9)
+  end 'readWide'
+end 'Debugger'
+
+function main() returns ExitCode
+  let debugger = Debugger.create()
+  return debugger.readWide(0)
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:32:25: Value 9 is outside the range of 'ByteCount' (int(1 to 8))
+```
+
+<!-- test: range-check-panic.witness-literal-argument-to-an-associated-type-is-not-checked-against-a-same-named-alias -->
+A literal argument at a parameter written as an associated type is checked against the conformer's binding, not against an unrelated alias that happens to share the associated type's name.
+```maxon
+// --- file: a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Accumulator uses Item
+  function add(item Item) returns Self
+  function total() returns Integer
+end 'Accumulator'
+
+type IntSum implements Accumulator with Integer
+  let sum as Integer
+
+  function add(item Integer) returns IntSum
+    return IntSum{sum: sum + item}
+  end 'add'
+
+  function total() returns Integer
+    return sum
+  end 'total'
+
+  static function create(sum Integer) returns Self
+    return Self{sum: sum}
+  end 'create'
+end 'IntSum'
+
+typealias IntAccumulator = Accumulator with Integer
+
+function addNine(acc IntAccumulator) returns Integer
+  let next = acc.add(9)
+  return next.total()
+end 'addNine'
+
+function main() returns ExitCode
+  if isEmpty() 'empty'
+    return addNine(IntSum.create(0))
+  end 'empty'
+  return 1
+end 'main'
+
+// --- file: b.maxon
+typealias Item = int(0 to 3)
+
+export function isEmpty() returns bool
+  let count = 0 as Item
+  return count == 0
+end 'isEmpty'
+```
+```exitcode
+9
+```
+
+<!-- test: range-check-panic.witness-literal-argument-checks-the-interface-files-alias -->
+A literal argument through an interface-typed receiver is checked against the alias the interface's own file declares, not against a file-private alias of the same name in a later file.
+```maxon
+// --- file: a.maxon
+typealias Item = int(0 to 100)
+
+interface Store
+  function put(item Item) returns Item
+end 'Store'
+
+type Shelf implements Store
+  let base as Item
+
+  static function create() returns Self
+    return Self{base: 0}
+  end 'create'
+
+  function put(item Item) returns Item
+    if item > self.base 'above'
+      return item
+    end 'above'
+    return self.base
+  end 'put'
+end 'Shelf'
+
+type Holder
+  let store as Store
+
+  static function create() returns Self
+    return Self{store: Shelf.create()}
+  end 'create'
+
+  function stock() returns Item
+    return self.store.put(50)
+  end 'stock'
+end 'Holder'
+
+function main() returns ExitCode
+  let holder = Holder.create()
+  if holder.stock() == 50 and tiny() 'stocked'
+    return 0
+  end 'stocked'
+  return 1
+end 'main'
+
+// --- file: z.maxon
+typealias Item = int(0 to 3)
+
+export function tiny() returns bool
+  let one = 1 as Item
+  return one == 1
+end 'tiny'
+```
+```exitcode
+0
+```
+
+<!-- test: range-check-panic.field-store-checks-the-fields-own-alias -->
+A literal stored to a field is checked against the alias the field was declared with, not a same-named alias of the storing file.
+```maxon
+// --- file: a.maxon
+export typealias Item = int(0 to 255)
+
+export type Box
+  export var item as Item
+
+  export static function create() returns Self
+    return Self{item: 0}
+  end 'create'
+end 'Box'
+
+// --- file: main.maxon
+typealias Item = int(0 to 200)
+
+function main() returns ExitCode
+  let floor = 0 as Item
+  var b = Box.create()
+  b.item = 250
+  if floor == 0 'stored'
+    return b.item
+  end 'stored'
+  return 1
+end 'main'
+```
+```exitcode
+250
+```
+
+<!-- test: range-check-panic.witness-literal-argument-to-a-base-interfaces-associated-type -->
+A literal argument at a base interface's associated-type parameter, dispatched through the derived interface, is checked against the conformer's binding, not against an alias that shares the associated type's name.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Item = int(0 to 3)
+
+interface Source uses Item
+  function take(item Item) returns Item
+end 'Source'
+
+interface Sink extends Source uses Item
+  function extra() returns Integer
+end 'Sink'
+
+type Keeper implements Sink with Integer
+  let base as Integer
+
+  function take(item Integer) returns Integer
+    return self.base + item
+  end 'take'
+
+  function extra() returns Integer
+    return 1
+  end 'extra'
+
+  static function create() returns Self
+    return Self{base: 0}
+  end 'create'
+end 'Keeper'
+
+function useIt(t Sink) returns Integer
+  let taken = t.take(50)
+  return taken
+end 'useIt'
+
+function small() returns bool
+  let one = 1 as Item
+  return one == 1
+end 'small'
+
+function main() returns ExitCode
+  if useIt(Keeper.create()) == 50 and small() 'taken'
+    return 0
+  end 'taken'
+  return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: range-check-panic.an-interface-result-crossing-into-a-same-named-alias-is-guarded -->
+An interface call's result is typed by the interface file's alias, so returning it where another file's same-named alias is declared converts between two aliases and carries that alias's guard.
+```maxon
+// --- file: a.maxon
+export typealias Level = int(0 to 100)
+
+export interface Gauge
+  function read() returns Level
+end 'Gauge'
+
+type Tank implements Gauge
+  let fill as Level
+
+  static function create() returns Self
+    return Self{fill: 90}
+  end 'create'
+
+  function read() returns Level
+    return self.fill
+  end 'read'
+end 'Tank'
+
+export function makeTank() returns Gauge
+  return Tank.create()
+end 'makeTank'
+
+// --- file: z.maxon
+typealias Level = int(0 to 3)
+
+function relay(g Gauge) returns Level
+  return g.read()
+end 'relay'
+
+function main() returns ExitCode
+  return relay(makeTank())
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at z.maxon:4: Range check failed: value outside typealias 'Level'
+Stack trace:
+  in relay
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-hash-result-into-a-same-named-alias-is-guarded -->
+`hash()` returns the standard library's `HashValue`; returning it where the file declares its own `HashValue` converts between two aliases and carries that alias's guard.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias HashValue = int(0 to 3)
+
+function h(x Integer) returns HashValue
+  return x.hash()
+end 'h'
+
+function main() returns ExitCode
+  return h(12345)
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-hash-result-into-a-same-named-alias-is-guarded.test:6: Range check failed: value outside typealias 'HashValue'
+Stack trace:
+  in h
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.error.literal-cast-to-inner-alias -->
+A literal cast to an alias declared inside an extension body is checked against that alias's range.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntegerArray = Array with Integer
+
+extension Array
+  typealias Level = int(0 to 64)
+
+  function topLevel() returns Level
+    let top = 100 as Level
+    return top
+  end 'topLevel'
+end 'Array'
+
+function main() returns ExitCode
+  let values = IntegerArray.create()
+  return values.topLevel()
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:19: Value 100 is outside the range of 'Level' (int(0 to 64))
+```
+
+<!-- test: range-check-panic.a-nested-full-unsigned-alias-parameter-admits-its-top-value -->
+A full-unsigned alias declared inside an extension body admits `u64.max` at a direct call, as a file-scope one does.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Meter
+  let reading as Integer
+
+  static function create() returns Self
+    return Self{reading: 0}
+  end 'create'
+
+  function raw() returns Integer
+    return self.reading
+  end 'raw'
+end 'Meter'
+
+extension Meter
+  typealias Wide = int(0 to u64.max)
+
+  function take(w Wide) returns bool
+    return w == u64.max
+  end 'take'
+end 'Meter'
+
+function main() returns ExitCode
+  let meter = Meter.create()
+  if meter.take(u64.max) and meter.raw() == 0 'top'
+    return 0
+  end 'top'
+  return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: range-check-panic.a-nested-full-unsigned-alias-parameter-through-an-interface-keeps-the-entry-check -->
+Through an interface the conformer keeps its entry check, and that check is the signed test, so `u64.max` panics there.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Meter
+  let reading as Integer
+
+  static function create() returns Self
+    return Self{reading: 0}
+  end 'create'
+
+  function raw() returns Integer
+    return self.reading
+  end 'raw'
+end 'Meter'
+
+extension Meter
+  typealias Wide = int(0 to u64.max)
+end 'Meter'
+
+interface Taker
+  function take(w Meter.Wide) returns bool
+end 'Taker'
+
+extension Meter implements Taker
+  function take(w Meter.Wide) returns bool
+    return w == u64.max
+  end 'take'
+end 'Meter'
+
+function drive(t Taker) returns bool
+  return t.take(u64.max)
+end 'drive'
+
+function main() returns ExitCode
+  let meter = Meter.create()
+  if drive(meter) and meter.raw() == 0 'top'
+    return 0
+  end 'top'
+  return 1
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-nested-full-unsigned-alias-parameter-through-an-interface-keeps-the-entry-check.test:25: Range check failed: value outside typealias 'Wide'
+Stack trace:
+  in Meter.take
+  in drive
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.error.a-nested-alias-index-on-an-array-conformer-is-checked -->
+A program's own `Array` declares its `get` index as an alias nested in its body, and an out-of-range literal index is refused against that alias.
+```maxon
+typealias Num = int(0 to 1000)
+
+type Array uses Element implements BuiltinArrayLiteral
+  export typealias ElementMemory = __ManagedMemory with Element
+  typealias Idx = int(0 to 9)
+  export var managed as ElementMemory
+
+  static function init(managed ElementMemory) returns Self
+    return Self{managed: managed}
+  end 'init'
+
+  static function create() returns Self
+    return Self{}
+  end 'create'
+
+  function get(index Idx) returns Element throws ArrayError
+    return try managed.get(index) otherwise throw ArrayError.indexOutOfBounds
+  end 'get'
+end 'Array'
+
+typealias NumArray = Array with Num
+
+function main() returns ExitCode
+  var a = NumArray.create()
+  a.push(7)
+  let v = try a.get(-1) otherwise 0
+  return v
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:27:17: Value -1 is outside the range of 'Idx' (int(0 to 9))
+```
+
+<!-- test: range-check-panic.inner-alias-cast-guard -->
+A runtime value cast to an alias declared inside an extension body carries that alias's guard.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Meter
+  let scale as Integer
+
+  static function create() returns Self
+    return Self{scale: 100}
+  end 'create'
+
+  function scaleOf() returns Integer
+    return self.scale
+  end 'scaleOf'
+end 'Meter'
+
+extension Meter
+  typealias Level = int(0 to 64)
+
+  function level() returns Level
+    return self.scaleOf() as Level
+  end 'level'
+end 'Meter'
+
+function main() returns ExitCode
+  let meter = Meter.create()
+  return meter.level()
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.inner-alias-cast-guard.test:20: Range check failed: value outside typealias 'Level'
+Stack trace:
+  in Meter.level
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.error.literal-float-field-out-of-range -->
+A float literal at a struct-literal field is checked against the field's float range.
+```maxon
+typealias Real = float(0.0 to 100.0)
+
+type Gauge
+  let level as Real
+
+  static function create() returns Self
+    return Self{level: 150.0}
+  end 'create'
+
+  function value() returns Real
+    return self.level
+  end 'value'
+end 'Gauge'
+
+function main() returns ExitCode
+  let gauge = Gauge.create()
+  return trunc(gauge.value())
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:8:17: Value 150 is outside the range of 'Real' (float(0 to 100))
 ```
 
 <!-- test: range-check-panic.error.literal-struct-field -->
@@ -927,8 +1457,8 @@ element store, or the entry guard of a callee that gets inlined here — **canno
 compiler does not emit it.
 
 ⚠ **IT IS AN INTERVAL, NOT A TYPE.** The counter's written type is still the bare `int` its bounds were
-written at: nothing NAMES `0 … 63`, so `r as RegNum` is **not** an *unneeded cast* (E3010 quotes two
-declared aliases and there is only one here), and a counter that happens to exclude zero does **not**
+written at: nothing NAMES `0 … 63`, so `r as RegNum` is **not** an *unneeded cast* (E3010 refuses a cast to
+the value's own alias, or a literal's cast to its destination's declared type, and a counter is neither), and a counter that happens to exclude zero does **not**
 make `n / r` an infallible divide. Only the questions about whether a runtime GUARD can fail read it.
 
 **Both bounds must be constants the compiler can fold** — a literal, or an immutable top-level `let`.

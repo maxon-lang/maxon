@@ -1,0 +1,127 @@
+// Test: a-base-interfaces-associated-type-through-a-derived-interface-that-does-not-redeclare-it
+typealias Integer = int(i64.min to i64.max)
+typealias Item = int(0 to 3)
+
+interface Source uses Item
+	function take(item Item) returns Item
+end 'Source'
+
+interface Sink extends Source
+	function extra() returns Integer
+end 'Sink'
+
+type Keeper implements Source with Integer, Sink
+	let base as Integer
+
+	function take(item Integer) returns Integer
+		return self.base + item
+	end 'take'
+
+	function extra() returns Integer
+		return 1
+	end 'extra'
+
+	static function create() returns Self
+		return Self{base: 0}
+	end 'create'
+end 'Keeper'
+
+function useIt(t Sink) returns Integer
+	return t.take(50) + t.extra()
+end 'useIt'
+
+function small() returns bool
+	let one = 1 as Item
+	return one == 1
+end 'small'
+
+function main() returns ExitCode
+	if useIt(Keeper.create()) == 51 and small() 'taken'
+		return 0
+	end 'taken'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+}
+
+func @Keeper.take {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegReg r8, rax, rdx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Keeper.extra {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+  __il_body#7:
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+  __il_cont#6:
+    x64.leaRegRdata rbx, [rip + __witness_Keeper.Sink]
+  __il_body#8:
+    x64.movRegImm32 rdx, 50
+    x64.movRegReg rcx, r12
+    x64.callMem [rbx + 56]
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r12
+    x64.callMem [rbx + 48]
+    x64.leaRegRegReg rax, r13, r8
+  __il_cont#5:
+    x64.cmpRegImm32 rax, 51
+    x64.movRegImm32 rbx, 0
+    x64.jcc notEqual, scmerge
+  __il_body#10:
+    x64.movRegImm32 rbx, 1
+  scmerge:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc equal, ifcont
+  taken:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

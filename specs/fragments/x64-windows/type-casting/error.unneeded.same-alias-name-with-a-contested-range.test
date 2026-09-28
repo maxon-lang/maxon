@@ -1,0 +1,29 @@
+// Test: error.unneeded.same-alias-name-with-a-contested-range
+// --- file: a.maxon
+typealias Byte = int(0 to 255)
+typealias Bytes = Array with Byte
+
+function main() returns ExitCode
+	var values = Bytes.create()
+	values.push(7)
+	if atLimit() 'limit'
+		return 1
+	end 'limit'
+
+	for b in values 'each'
+		let c = b as Byte
+		return c
+	end 'each'
+	return 0
+end 'main'
+
+// --- file: b.maxon
+typealias Byte = int(0 to 200)
+
+export function atLimit() returns bool
+	let top = 199 as Byte
+	return top == 200
+end 'atLimit'
+---
+CompilerError:
+error E3010: <fragment>:14:13: unneeded cast: 'Byte' already fits in 'Byte'

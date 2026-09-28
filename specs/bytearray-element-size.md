@@ -1539,7 +1539,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	print(String.from("hi".toByteArray()))
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout

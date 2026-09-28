@@ -165,7 +165,7 @@ if [ "$MODE" = "onefunc" ]; then
 	{
 		echo "function main() returns ExitCode"
 		echo "	print(\"{rcMany(7)}\")"
-		echo "	return 0 as ExitCode"
+		echo "	return 0"
 		echo "end 'main'"
 	} > "$OUT/z_main.maxon"
 elif [ "$MODE" = "params" ]; then
@@ -196,7 +196,7 @@ elif [ "$MODE" = "params" ]; then
 			echo "	acc = acc + rcParam$i(seed + $i)"
 		done
 		echo "	print(\"{acc}\")"
-		echo "	return 0 as ExitCode"
+		echo "	return 0"
 		echo "end 'main'"
 	} > "$OUT/z_main.maxon"
 else
@@ -219,7 +219,7 @@ else
 			echo "	acc = acc + rcOne$i(7)"
 		done
 		echo "	print(\"{acc}\")"
-		echo "	return 0 as ExitCode"
+		echo "	return 0"
 		echo "end 'main'"
 	} > "$OUT/z_main.maxon"
 fi

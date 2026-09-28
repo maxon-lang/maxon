@@ -56,18 +56,18 @@ end 'requireSpecVerdictMapping'
 // exact trap the C# row documents having sprung. So the EXPECTATION is derived from the strategy and
 // what is asserted is the CONSEQUENCE: the observation that lane produces, mapped to a verdict.
 function checkLaunchFailureVerdicts(broken StringArray)
+	// ⛔ THE DANGEROUS DIRECTION, THE SAME VERDICT ON EVERY TARGET WITHOUT EXCEPTION. A launch that
+	// was ATTEMPTED and did not work is a defect in the binary, the runner or the OS, and it must be a
+	// FAIL — including on a lane whose OTHER cases are legitimately unrun. Excusing it is how a
+	// program this compiler had just emitted and could not start gets waved through.
+	let attempted = verdictOf(RunObservation.failed("the OS refused it"))
+
+	if not isFailVerdict(attempted) 'excusedAFailedLaunch'
+		broken.push("a binary that FAILED TO LAUNCH earned '{verdictLine(attempted, label: SelfTestName)}' instead of a FAIL. A launch that was attempted and did not work is a defect, and running the program is what exists to catch it.\n")
+	end 'excusedAFailedLaunch'
+
 	for target in supportedTargets() 'eachTarget'
 		let key = targetToString(target)
-
-		// ⛔ THE DANGEROUS DIRECTION, ASSERTED FOR EVERY TARGET WITHOUT EXCEPTION. A launch that was
-		// ATTEMPTED and did not work is a defect in the binary, the runner or the OS, and it must be a
-		// FAIL — including on a lane whose OTHER cases are legitimately unrun. Excusing it is how a
-		// program this compiler had just emitted and could not start gets waved through.
-		let attempted = verdictOf(RunObservation.failed("the OS refused it"), target: target)
-
-		if not isFailVerdict(attempted) 'excusedAFailedLaunch'
-			broken.push("{key}: a binary that FAILED TO LAUNCH earned '{verdictLine(attempted, label: key)}' instead of a FAIL. A launch that was attempted and did not work is a defect, and running the program is what exists to catch it.\n")
-		end 'excusedAFailedLaunch'
 
 		let unperformed = match runStrategyFor(target) 'lane'
 			individually gives false
@@ -76,7 +76,7 @@ function checkLaunchFailureVerdicts(broken StringArray)
 
 			// Executions ARE performed on this lane — by a compiler inside the guest, which asks this
 			// same question of itself there and answers `individually`. The row below therefore does not
-			// apply, while the launch-failure row above still does and is asserted for every target.
+			// apply, while the launch-failure row above still does, for every target.
 			inGuest gives false
 		end 'lane'
 
@@ -88,7 +88,7 @@ function checkLaunchFailureVerdicts(broken StringArray)
 		// that target, so `executeRuns` answers `notRunnableHere` for every case that needed one. That
 		// observation must be NOTRUN — neither a pass (nothing was proved) nor a failure of the case
 		// (nothing about the case went wrong).
-		let verdict = verdictOf(RunObservation.notRunnableHere, target: target)
+		let verdict = verdictOf(RunObservation.notRunnableHere)
 		let named = match verdict 'v'
 			notRunHere gives true
 			pass gives false
@@ -115,10 +115,10 @@ end 'isFailVerdict'
 
 // The verdict one observation earns, through the runner's own conversion. A `run` expectation with the
 // simplest possible pins, because what is under test is the OBSERVATION arm and not the assertions.
-function verdictOf(observation RunObservation, target Target) returns TestOutcome
+function verdictOf(observation RunObservation) returns TestOutcome
 	// `traceCapture: off` — what is under test here is the OBSERVATION arm, and a trace capture changes a
 	// COMPARISON these unpinned expectations never reach.
-	return checkObservedRun(SpecExitCode.unpinned, stderr: SpecStderr.unpinned, stdout: SpecStdout.unpinned, observation: observation, effectiveTarget: target, traceCapture: SpecTraceCapture.off)
+	return checkObservedRun(SpecExitCode.unpinned, stderr: SpecStderr.unpinned, stdout: SpecStdout.unpinned, observation: observation, traceCapture: SpecTraceCapture.off)
 end 'verdictOf'
 
 // ⭐ ROW 2 — a test nothing ran is not a pass, and a run whose every case was unperformed is not green.

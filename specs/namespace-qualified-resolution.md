@@ -136,7 +136,7 @@ function take(v api.Score) returns api.Score
 end 'take'
 
 function main() returns ExitCode
-	let a = take(41 as api.Score)
+	let a = take(41)
 	return lib.inner.from(a)
 end 'main'
 ```

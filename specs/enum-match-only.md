@@ -295,7 +295,7 @@ end 'WrapA'
 function main() returns ExitCode
 	let b = BoxB.code(7)
 	let w = WrapA.create(b)
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr

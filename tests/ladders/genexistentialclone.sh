@@ -115,8 +115,8 @@ fi
     h=$(( h + 1 ))
   done
   printf '\tif acc > 0 %s\n' "'ok'"
-  echo -e "\t\treturn 7 as ExitCode"
+  echo -e "\t\treturn 7"
   echo -e "\tend 'ok'"
-  echo -e "\treturn 1 as ExitCode"
+  echo -e "\treturn 1"
   echo "end 'main'"
 } > "$OUT"

@@ -1287,6 +1287,27 @@ export type RangedTypeAlias
 	export static function create(name ByteArray, underlying MaxonType, low ParsedInt, high ParsedInt, visibility Visibility, declFilePath FilePath, nameLine LineNumber, nameColumn ColumnNumber, rawBitWidth BitWidth = NotARawPattern) returns RangedTypeAlias
 		return Self{name: name, underlying: underlying, low: low, high: high, visibility: visibility, declFilePath: declFilePath, nameLine: nameLine, nameColumn: nameColumn, rawBitWidth: rawBitWidth}
 	end 'create'
+
+	export function isTheSameDeclarationAs(other RangedTypeAlias) returns bool
+		let spelled = sourceSpelledAliasName(self.name)
+
+		if not spelled.equals(sourceSpelledAliasName(other.name)) 'twoNames'
+			return false
+		end 'twoNames'
+
+		// A range-contested name arrives under its mint (`Byte$0_200`), and within one file the mint and
+		// the bare name resolve to one declaration, so the bounds are what tell the contest's members
+		// apart.
+		if spelled.count() != self.name.count() or spelled.count() != other.name.count() 'aRangeMint'
+			return self.hasBounds(other.low, highBound: other.high)
+		end 'aRangeMint'
+
+		return self.declFilePath == other.declFilePath and self.nameLine == other.nameLine and self.nameColumn == other.nameColumn
+	end 'isTheSameDeclarationAs'
+
+	export function hasBounds(lowBound ParsedInt, highBound ParsedInt) returns bool
+		return self.low == lowBound and self.high == highBound
+	end 'hasBounds'
 end 'RangedTypeAlias'
 
 // The `<declaring file>|<type name>` keys of every declaration a collision was reported for — see
@@ -2704,7 +2725,7 @@ end 'rangeQualifiedMint'
 // walk allocation-free (see `settleRangeContests`).
 function holdsRange(claimants RangedTypeAliasArray, low ParsedInt, high ParsedInt) returns bool
 	for held in claimants 'each'
-		if held.low == low and held.high == high 'alreadyClaimed'
+		if held.hasBounds(low, highBound: high) 'alreadyClaimed'
 			return true
 		end 'alreadyClaimed'
 	end 'each'
@@ -3338,8 +3359,9 @@ end 'RangeCheckGuard'
 // records one of these owes BOTH halves — the array element was the last that owed only the
 // compile-time half, and its guard now goes at the STORE (`Parser.requireContainerElementType`). A field
 // holding one value at every site is a fact written twice, and the copy that goes stale is the prose.
-// The call-argument door is the one position that still owes the compile-time half alone, and it holds
-// no site at all: it asks `guardVerdict` directly (`InsertRangeChecks.checkArgAgainstParamRange`).
+// The constant call-argument door (`RangeCheckArgSite`) is the one position that still owes the
+// compile-time half alone, and it holds none of these: it asks `guardVerdict` directly
+// (`InsertRangeChecks.checkArgAgainstParamRange`).
 // ⚠ **AN ARGUMENT AT AN OPAQUE `T` PARAMETER RECORDS ONE OF THESE (ARRR)**, and is not a counter-example to
 // the paragraph above: its alias is not the CALLEE's to name — the callee has none — it is the receiver
 // instance's substituted type argument, which the call site holds. So it is an ordinary alias-named door
@@ -3377,29 +3399,28 @@ end 'BorrowOperandsColumn'
 
 export let noBorrowOperands = BorrowOperandsColumn.unwritten
 
-// ⭐⭐ **WHICH FILE'S DECLARATION OF `aliasName` AN `alias` SITE RESOLVED — the site's own answer, not a
-// question left for the enforcer to re-ask.** `InsertRangeChecks` gets the BOUNDS by looking the name
-// up again (`guardVerdict`), and a lookup takes a READER, so the site has to say which reader it meant.
-// Recorded straight off the `RangedTypeAlias` the parser already resolved (`declFilePath`), so the
-// re-lookup lands on that same declaration by construction rather than by agreement.
+// ⭐⭐ **THE DECLARATION AN `alias` SITE RESOLVED — the site's own answer, not a question left for
+// the enforcer to re-ask.** `InsertRangeChecks` reads the bounds off it and never looks the name up
+// again: that lookup cannot see an alias declared inside a type or extension body, and can land on
+// another file's alias of the same name.
 //
 // The arm-served index resolves `ElementIndex` in the CALLEE's file (`recordArmServedIndexRangeCheck`).
 // Re-resolved against the calling file, a program's own `ElementIndex`, or `stdlib/Vector.maxon`'s twin,
 // would decide what `Array.set` accepts; `typealias-file-scope/*contested-element-index*` pins it.
 export union RangeCheckSiteTarget
-	alias(aliasName ByteArray, aliasFilePath FilePath)
+	alias(alias RangedTypeAlias)
 	callArgument(callResult ValueId, argIndex ParamCount, label ByteArray, sourceMayBeNegative bool)
 end 'RangeCheckSiteTarget'
 
 export typealias RangeCheckSiteArray = Array with RangeCheckSite
 
-// ⭐ **THE ONE POSITION WHOSE ALIAS THE PARSER CANNOT NAME.** Every door above holds the DECLARED type
-// with its alias still on it, so it resolves the name on the spot. A call argument does not: the
-// parameter it lands on belongs to a callee that may be declared in another file, and a file's parse is
-// a pure function of its own tokens plus the token-swept `ProgramSignatures` — which carries return
-// types, not parameter types. So the site names the CALLEE and the argument's own position, and the
-// whole-program `InsertRangeChecks` pass — which runs after every file has merged — reads the alias back
-// off that callee's own `FunctionRangeChecks.paramSites`.
+// ⭐ **THE ONE POSITION WHOSE ALIAS THE PARSER CANNOT NAME.** Every door above holds the DECLARED
+// type with its alias still on it, so it resolves the name on the spot. A direct call argument does
+// not: the parameter it lands on belongs to a callee that may be declared in another file, and a
+// file's parse is a pure function of its own tokens plus the token-swept `ProgramSignatures` —
+// which carries return types, not parameter types. So the site names the CALLEE and the argument's
+// own position, and the whole-program `InsertRangeChecks` pass — which runs after every file has
+// merged — reads the alias back off that callee's own `FunctionRangeChecks.paramSites`.
 //
 // `label` rides along unslotted because the label→position mapping has ONE home (`argSlotPosition`), and
 // it needs the callee's `paramNames`, which is another whole-program read. Slotting it here would be a
@@ -3433,6 +3454,11 @@ export type RangeCheckArgSite
 	export var argIndex as ParamCount
 	export var label as ByteArray
 
+	// A witness dispatch names no callee whose `paramSites` could be read, but its formal is the
+	// interface's, which the parse can resolve — in the interface's declaring file — so the site
+	// carries it.
+	export let parameter as ArgSiteParameter
+
 	// ⚠ **WRITTEN AND NEVER READ, AND IT IS STALE FOR ONE CONSTRUCT IF A READER EVER APPEARS.** A call
 	// argument owes the compile-time half alone, so nothing spends this block today. But it is recorded at
 	// the parse, and a ternary's TRUE ARM is RELOCATED onto a block minted afterwards
@@ -3446,15 +3472,20 @@ export type RangeCheckArgSite
 
 	// ⚠ `bareCallee` is a COPY and not a second store of the same record: one value written into two fields
 	// of one literal is a repeated owning store, which single ownership refuses.
-	export static function create(value ValueId, callee ByteArray, argIndex ParamCount, label ByteArray, block BlockId, line LineNumber, column ColumnNumber) returns RangeCheckArgSite
-		return Self{value: value, bareCallee: callee.clone(), callee: callee, argIndex: argIndex, label: label, block: block, line: line, column: column}
+	export static function create(value ValueId, callee ByteArray, argIndex ParamCount, label ByteArray, parameter ArgSiteParameter, block BlockId, line LineNumber, column ColumnNumber) returns RangeCheckArgSite
+		return Self{value: value, bareCallee: callee.clone(), callee: callee, argIndex: argIndex, label: label, parameter: parameter, block: block, line: line, column: column}
 	end 'create'
 end 'RangeCheckArgSite'
+
+export union ArgSiteParameter
+	ofCallee
+	interfaceFormal(alias RangedTypeAlias)
+end 'ArgSiteParameter'
 
 export typealias RangeCheckArgSiteArray = Array with RangeCheckArgSite
 
 // One `return <expr>` in a function whose declared return type is a ranged alias. The pass guards the
-// `ret` terminator of `block` and reports against the function's `returnAliasName`.
+// `ret` terminator of `block` and reports against the function's `returnAlias`.
 //
 // ⚠⚠ **`block` IS WHAT MAKES A SITE'S GUARD ITS OWN, AND IT IS NOT AN OPTIMIZATION.** Naming only
 // the `value` and letting `InsertRangeChecks` find "the first block still returning it" is an
@@ -3534,20 +3565,20 @@ export function provenIntRangeOf(column ProvenIntRangeColumn, value ValueId) ret
 	end 'state'
 end 'provenIntRangeOf'
 
-// ⭐⭐ **ONE NARROWED-RANGE PARAMETER OF A FUNCTION — AND IT IS A SITE, NOT MERELY A PUBLICATION (A1f).**
-// It began as `paramAliasNames`, a name per parameter that no check in the declaring function read: the
-// pre-erasure alias each PARAMETER was declared with, captured where `returnAliasName` is and for the
-// identical reason (`TypeResolution.resolveNamedType` collapses a plain ranged alias to its primitive and
-// drops the range), purely so a CALLER's `RangeCheckArgSite` could read the bounds back.
+// ⭐⭐ **ONE NARROWED-RANGE PARAMETER OF A FUNCTION — AND IT IS A SITE, NOT MERELY A PUBLICATION
+// (A1f).** It carries the pre-erasure alias the PARAMETER was declared with, captured where
+// `returnAlias` is and for the identical reason (`TypeResolution.resolveNamedType` collapses a
+// plain ranged alias to its primitive and drops the range), so a CALLER's `RangeCheckArgSite` can
+// read the bounds back.
 //
-// ⭐ **IT IS NOW ALSO WHERE THE RUNTIME GUARD GOES**, which is what promoted it from a column of names to
-// a site with a source position. A call argument is the one door whose runtime check cannot be emitted
-// where it is written — a check is a BRANCH, and a call argument is evaluated part-way through building
-// an argument list, so the guard would land PAST the call with the callee already run
-// (`RangeCheckGuard`). The premise is therefore enforced at the CALLEE'S ENTRY instead: one guard per
-// narrowed parameter per function, standing in front of every call, including a call through a function
-// value that has no argument list to blame. `line`/`column` anchor its panic message on the parameter's
-// own declaration — the line the premise is DECLARED on, which is the only line one shared guard can
+// ⭐ **IT IS ALSO WHERE THE RUNTIME GUARD GOES**, which is why it is a site with a source position.
+// A call argument is the one door whose runtime check cannot be emitted where it is written — a
+// check is a BRANCH, and a call argument is evaluated part-way through building an argument list,
+// so the guard would land PAST the call with the callee already run (`RangeCheckGuard`). The
+// premise is therefore enforced at the CALLEE'S ENTRY instead: one guard per narrowed parameter per
+// function, standing in front of every call, including a call through a function value that has no
+// argument list to blame. `line`/`column` anchor its panic message on the parameter's own
+// declaration — the line the premise is DECLARED on, which is the only line one shared guard can
 // honestly name.
 //
 // ⚠ **SPARSE — one entry per RANGED parameter, never one per parameter.** `index` is the parameter's
@@ -3557,12 +3588,12 @@ end 'provenIntRangeOf'
 // nothing may read; the sparse form has no padding to describe and no lie to tell.
 export type RangeCheckParamSite
 	export var index as ParamCount
-	export var aliasName as ByteArray
+	export var alias as RangedTypeAlias
 	export var line as LineNumber
 	export var column as ColumnNumber
 
-	export static function create(index ParamCount, aliasName ByteArray, line LineNumber, column ColumnNumber) returns RangeCheckParamSite
-		return Self{index: index, aliasName: aliasName, line: line, column: column}
+	export static function create(index ParamCount, alias RangedTypeAlias, line LineNumber, column ColumnNumber) returns RangeCheckParamSite
+		return Self{index: index, alias: alias, line: line, column: column}
 	end 'create'
 end 'RangeCheckParamSite'
 
@@ -3605,7 +3636,7 @@ end 'RangeCheckParamGuard'
 module typealias RangeCheckParamGuardArray = Array with RangeCheckParamGuard
 
 // Every range-check site in one function. `filePath` is stamped by `mergeArtifact` (the
-// function's file); `returnAliasName` is EMPTY unless the function returns a ranged INT alias.
+// function's file); `returnAlias` is `undeclared` unless the function returns a ranged alias.
 export type FunctionRangeChecks
 	export var filePath as FilePath
 	export var sites as RangeCheckSiteArray
@@ -3619,7 +3650,7 @@ export type FunctionRangeChecks
 	// allocation for each of them (MEASURED at +1,133/+31,079 across the scale ladder as exactly that).
 	export var positionsResolved as bool
 	export var argSites as RangeCheckArgSiteArray
-	export var returnAliasName as ByteArray
+	export var returnAlias as DeclaredAlias
 	export var returnSites as RangeCheckReturnSiteArray
 
 	// The function's narrowed-range parameters — see `RangeCheckParamSite`. Empty (the shared array) for a
@@ -3648,9 +3679,19 @@ export type FunctionRangeChecks
 
 	export var borrowOperands as BorrowOperandsColumn
 
-	export static function create(filePath FilePath, sites RangeCheckSiteArray, argSites RangeCheckArgSiteArray, returnAliasName ByteArray, returnSites RangeCheckReturnSiteArray, paramSites RangeCheckParamSiteArray, provenValueRanges ProvenIntRangeColumn, writtenNegativeLiterals ValueMarkColumn, borrowOperands BorrowOperandsColumn) returns FunctionRangeChecks
-		return Self{filePath: filePath, sites: sites, positionsResolved: false, argSites: argSites, returnAliasName: returnAliasName, returnSites: returnSites, paramSites: paramSites, provenValueRanges: provenValueRanges, writtenNegativeLiterals: writtenNegativeLiterals, borrowOperands: borrowOperands}
+	export static function create(filePath FilePath, sites RangeCheckSiteArray, argSites RangeCheckArgSiteArray, returnAlias DeclaredAlias, returnSites RangeCheckReturnSiteArray, paramSites RangeCheckParamSiteArray, provenValueRanges ProvenIntRangeColumn, writtenNegativeLiterals ValueMarkColumn, borrowOperands BorrowOperandsColumn) returns FunctionRangeChecks
+		return Self{filePath: filePath, sites: sites, positionsResolved: false, argSites: argSites, returnAlias: returnAlias, returnSites: returnSites, paramSites: paramSites, provenValueRanges: provenValueRanges, writtenNegativeLiterals: writtenNegativeLiterals, borrowOperands: borrowOperands}
 	end 'create'
+
+	export function paramAliasAt(slot ParamCount) returns RangedTypeAlias throws MapError
+		for paramSite in self.paramSites 'eachRangedParam'
+			if paramSite.index == slot 'thisSlotsParameter'
+				return paramSite.alias
+			end 'thisSlotsParameter'
+		end 'eachRangedParam'
+
+		throw MapError.keyNotFound
+	end 'paramAliasAt'
 end 'FunctionRangeChecks'
 
 // Registry: function name -> its range-check sites. Populated by `mergeArtifact` from each

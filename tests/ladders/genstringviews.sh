@@ -90,7 +90,7 @@
 #   ⚠ **IT IS DELIBERATELY NOT WALL-TIMED, and that is a statement about the instrument.** A `print` loop
 #   measures `WriteFile` at ~450 us per call, which swamps the difference by three orders of magnitude. CODE
 #   SIZE and the emitted IR are the instruments that can see this one. The runtime FLOOR is unaffected
-#   either way: a bare `return 0 as ExitCode` emits no data section, because it calls no `print`.
+#   either way: a bare `return 0` emits no data section, because it calls no `print`.
 #
 # --- W49 WAVE 6 A/B (2026-08-08). Same SOURCE, two builds, interleaved, min-of-5, 524,288 bytes x 5
 #     reps, ascii seed. base = the pre-retirement build, tip = the retirement. ---

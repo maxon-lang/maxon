@@ -2666,7 +2666,7 @@ export type UseIndex
 		var spillSlot = SpillSlotArray.create()
 		spillSlot.resize(valueCount)
 
-		return Self{valueCount: valueCount, numBlocks: numBlocks, opCount: 0 as OpSeq, seqLimit: seqLimitFor(numBlocks), useOpIdx: OpIndexArray.create(), useSeq: OpSeqArray.create(), useOnEdge: BoolArray.create(), useCountOfValue: useCountOfValue, lastUseOfValue: lastUseOfValue, nextUseOfValue: UseRecordIndexArray.create(), useCountInBlock: useCountInBlock, firstUseInBlock: firstUseInBlock, nextUseInBlock: UseRecordIndexArray.create(), hasOpDef: falseColumn(valueCount as ColumnLength), defOpIdx: defOpIdx, defOpBlock: defOpBlock, isPhi: falseColumn(valueCount as ColumnLength), phiBlock: phiBlock, edgePassed: falseColumn(valueCount as ColumnLength), spillStored: falseColumn(valueCount as ColumnLength), slotResident: falseColumn(valueCount as ColumnLength), spillSlot: spillSlot, touchesHotLoop: falseColumn(valueCount as ColumnLength)}
+		return Self{valueCount: valueCount, numBlocks: numBlocks, opCount: 0, seqLimit: seqLimitFor(numBlocks), useOpIdx: OpIndexArray.create(), useSeq: OpSeqArray.create(), useOnEdge: BoolArray.create(), useCountOfValue: useCountOfValue, lastUseOfValue: lastUseOfValue, nextUseOfValue: UseRecordIndexArray.create(), useCountInBlock: useCountInBlock, firstUseInBlock: firstUseInBlock, nextUseInBlock: UseRecordIndexArray.create(), hasOpDef: falseColumn(valueCount as ColumnLength), defOpIdx: defOpIdx, defOpBlock: defOpBlock, isPhi: falseColumn(valueCount as ColumnLength), phiBlock: phiBlock, edgePassed: falseColumn(valueCount as ColumnLength), spillStored: falseColumn(valueCount as ColumnLength), slotResident: falseColumn(valueCount as ColumnLength), spillSlot: spillSlot, touchesHotLoop: falseColumn(valueCount as ColumnLength)}
 	end 'create'
 
 	// How many use sites `valueId` has — the BOUND of the walk below, and the only thing that says a
@@ -4040,6 +4040,7 @@ function collectEntryParamCaptures(module TargetModule, topo FuncTopology, param
 
 		match op 'capture'
 			movRegReg(dst, src) then recordParamCapture(captures, dst: dst, src: src, paramCount: paramCount)
+
 			// An incoming stack parameter (`arm64LoadIncomingArg`) is deliberately not a capture: this set
 			// stops one parameter's capture destination from clobbering a sibling's incoming register, and a
 			// parameter that arrives in the caller's frame has no incoming register to clobber.
@@ -5362,6 +5363,7 @@ let VerifyOpVariantFacts = false
 function deriveSlotRole(op TargetOp) returns OpSlotRole
 	return match op 'k'
 		storeSlotReg gives OpSlotRole.spillStore
+
 		// ⚠ Three ops below name memory and are deliberately not spill stores. `storeBaseDispReg`
 		// writes a global at a link-time address, not a `SpillSlot` this frame owns.
 		// `arm64StoreOutgoingArg` writes the argument region, a different index space, and answering

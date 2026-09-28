@@ -277,7 +277,7 @@ end 'emit'
 
 function main() returns ExitCode
 	emit(true)
-	return 0 as ExitCode
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -300,7 +300,7 @@ end 'emit'
 
 function main() returns ExitCode
 	print("{emit(1)}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -1715,7 +1715,7 @@ end 'same'
 
 function main() returns ExitCode
 	print("{same("ok")} {same(3)}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout

@@ -2811,6 +2811,39 @@ end 'ValueDeclaredAliasTable'
 
 let noValueDeclaredAliases = ValueDeclaredAliasTable.unwritten
 
+// A literal cast and the token extent `[first, pastEnd)` of the expression that wrote it. A bare
+// local read returns its binding's own `ValueId`, so without the extent `let x = 1 as S` then
+// `f(x)` would report the binding's cast at the call.
+type LiteralCastSpan
+	export let cast as LiteralCast
+	let first as TokenIndex
+	let pastEnd as TokenIndex
+
+	static function create(cast LiteralCast, first TokenIndex, pastEnd TokenIndex) returns LiteralCastSpan
+		return Self{cast: cast, first: first, pastEnd: pastEnd}
+	end 'create'
+
+	function covers(expressionFirst TokenIndex, expressionPastEnd TokenIndex) returns bool
+		return self.first == expressionFirst and self.pastEnd == expressionPastEnd
+	end 'covers'
+end 'LiteralCastSpan'
+
+typealias LiteralCastSpanMap = Map with (ValueId, LiteralCastSpan)
+
+union LiteralCastTable
+	unwritten
+	entries(recorded LiteralCastSpanMap)
+end 'LiteralCastTable'
+
+let noLiteralCasts = LiteralCastTable.unwritten
+
+union LiteralCastArgumentTable
+	unwritten
+	entries(confirmed LiteralCastMap)
+end 'LiteralCastArgumentTable'
+
+let noLiteralCastArguments = LiteralCastArgumentTable.unwritten
+
 // The op index of each character literal's `stringLiteral`, filed as it is emitted so the retype to a
 // codepoint is an O(1) read rather than `ValueOriginTable`'s linear scan.
 union CharLiteralOpTable
@@ -12864,9 +12897,9 @@ enum DeclaredStoragePosition
 	// `StdOp.callIndirect`, which carries its whole signature ON THE OP and has room for one result.
 	functionTypeReturnType
 
-	// An interface REQUIREMENT's return. Dispatched through a witness-table slot, whose signature is rebuilt
-	// from the requirement's rendered return-type NAME (`Parser.interfaceReturnMaxonType`) — a spelling that
-	// cannot denote an interface at all.
+	// An interface REQUIREMENT's return. Dispatched through a witness-table slot, whose signature is
+	// rebuilt from the requirement's rendered return-type NAME (`Parser.interfaceSpelledType`) — a
+	// spelling that cannot denote an interface at all.
 	interfaceRequirementReturnType
 
 	// ⭐ A FUNCTION VALUE's return, which is the position `functionTypeReturnType` does not cover: that one is
@@ -14174,9 +14207,12 @@ export type ParserAnchors
 	export var noDeferredProvenance as DeferredProvenance
 	export var detachedBlock as IrBlock
 
+	export var undeclaredAlias as DeclaredAlias
+	export var calleeArgParameter as ArgSiteParameter
+
 	export static function create() returns ParserAnchors
 		let functions = FunctionPlaceholders.create()
-		return Self{interfaceAliases: GenericAliasEntryArray.create(), iterationLocks: VarInfoArray.create(), pendingDefaultHelpers: PendingDefaultHelperArray.create(), surfaceRoster: ByteArrayArray.create(), boxedUnionAnswers: BoxedUnionAnswerArray.create(), moveSiteLists: MoveSiteLists.create(), awaitedMoveReads: MoveSiteListIndexArray.create(), lentOnPath: TokenIndexArray.create(), mutableVarShadowed: MutableVarPositionArray.create(), blockExtentEnds: TokenIndexColumn.create(), bodyOpFlowBlocks: BlockIdArray.create(), bodyOpFlowPositions: BlockOpPosArray.create(), functions: functions, noDeferredProvenance: DeferredProvenance.create(functions.provenance), detachedBlock: IrBlock.create(0, label: DetachedBlockLabel, heat: BlockHeat.normal, inlineSite: InlineSiteRef.none)}
+		return Self{interfaceAliases: GenericAliasEntryArray.create(), iterationLocks: VarInfoArray.create(), pendingDefaultHelpers: PendingDefaultHelperArray.create(), surfaceRoster: ByteArrayArray.create(), boxedUnionAnswers: BoxedUnionAnswerArray.create(), moveSiteLists: MoveSiteLists.create(), awaitedMoveReads: MoveSiteListIndexArray.create(), lentOnPath: TokenIndexArray.create(), mutableVarShadowed: MutableVarPositionArray.create(), blockExtentEnds: TokenIndexColumn.create(), bodyOpFlowBlocks: BlockIdArray.create(), bodyOpFlowPositions: BlockOpPosArray.create(), functions: functions, noDeferredProvenance: DeferredProvenance.create(functions.provenance), detachedBlock: IrBlock.create(0, label: DetachedBlockLabel, heat: BlockHeat.normal, inlineSite: InlineSiteRef.none), undeclaredAlias: DeclaredAlias.undeclared, calleeArgParameter: ArgSiteParameter.ofCallee}
 	end 'create'
 end 'ParserAnchors'
 
@@ -14824,6 +14860,9 @@ type FunctionBodyState
 	export var valueDeclaredAlias as ValueDeclaredAliasTable
 	export var borrowOperands as BorrowOperandsColumn
 
+	export var literalCasts as LiteralCastTable
+	export var literalCastArguments as LiteralCastArgumentTable
+
 	// ⭐⭐ **THE INTERVAL A COUNTED LOOP PROVED FOR EACH OF ITS COUNTERS (EC7)** — see `ProvenIntRange` for
 	// what an interval nothing NAMES may and may not decide. Reset per function and SWAPPED across a closure
 	// body, exactly like the sibling value columns, and for their reason: its keys are ids in THIS function's
@@ -15216,7 +15255,7 @@ type FunctionBodyState
 	export var inheritedWitnessCaptures as InheritedWitnessCaptureArray
 
 	export var closureEnv as ClosureEnvParam
-	export var rangeCheckReturnAlias as ByteArray
+	export var rangeCheckReturnAlias as DeclaredAlias
 	export var rangeCheckParamSites as RangeCheckParamSiteArray
 
 	// ⭐ **DID THE FUNCTION BEING PARSED RESERVE THE LAYOUT-DESCRIPTOR PARAMETER, and did it nevertheless emit an
@@ -15289,7 +15328,7 @@ type FunctionBodyState
 	// so a column left standing would name an unrelated value or block in the next body. ⚠ Every field
 	// is a fresh or shared-empty object, because a closure's saved state still holds the enclosing
 	// body's objects; only `recycledDeferredProvenance` reuses one, for a declared body.
-	static function fresh(anchors ParserAnchors, firstValueId ValueId, returnBrand ByteArray, provenance DeferredProvenance, mayReturnAGlobalAlias bool, capturedImmutableGlobalReads ValueMarkColumn, closureEnv ClosureEnvParam, returnAlias ByteArray, paramSites RangeCheckParamSiteArray, carriesLayoutParam bool, countParam FixedElementCountParam, nascentSelfFactory bool, kind EnclosingBodyKind) returns FunctionBodyState
+	static function fresh(anchors ParserAnchors, firstValueId ValueId, returnBrand ByteArray, provenance DeferredProvenance, mayReturnAGlobalAlias bool, capturedImmutableGlobalReads ValueMarkColumn, closureEnv ClosureEnvParam, returnAlias DeclaredAlias, paramSites RangeCheckParamSiteArray, carriesLayoutParam bool, countParam FixedElementCountParam, nascentSelfFactory bool, kind EnclosingBodyKind) returns FunctionBodyState
 		return Self{
 			scope: Scope.create(),
 			valueIds: ValueIdRef.create(firstValueId),
@@ -15380,6 +15419,8 @@ type FunctionBodyState
 			valueExistentialInstance: noValueExistentialInstances,
 			existentialFieldStores: sharedEmptyExistentialFieldStores,
 			valueDeclaredAlias: noValueDeclaredAliases,
+			literalCasts: noLiteralCasts,
+			literalCastArguments: noLiteralCastArguments,
 			borrowOperands: noBorrowOperands,
 			countedValueRanges: noProvenIntRanges,
 			charLiteralOps: noCharLiteralOps,
@@ -16222,7 +16263,7 @@ export type Parser
 			artifact: FileParseArtifact.create(job.path, livesUnderStdlibDirectory: job.livesUnderStdlibDirectory, sourceBytes: sourceByteCountOf(tokens)),
 			libraryBlame: LibraryBlame.unblamed,
 			topLevelBorrowSubjects: noTopLevelBorrowSubjects,
-			bodyState: FunctionBodyState.fresh(anchors, firstValueId: 0, returnBrand: EmptySourceText, provenance: anchors.noDeferredProvenance, mayReturnAGlobalAlias: false, capturedImmutableGlobalReads: noValueMarks, closureEnv: ClosureEnvParam.none, returnAlias: EmptySourceText, paramSites: sharedEmptyParamSites, carriesLayoutParam: false, countParam: FixedElementCountParam.none, nascentSelfFactory: false, kind: EnclosingBodyKind.declaredFunction),
+			bodyState: FunctionBodyState.fresh(anchors, firstValueId: 0, returnBrand: EmptySourceText, provenance: anchors.noDeferredProvenance, mayReturnAGlobalAlias: false, capturedImmutableGlobalReads: noValueMarks, closureEnv: ClosureEnvParam.none, returnAlias: anchors.undeclaredAlias, paramSites: sharedEmptyParamSites, carriesLayoutParam: false, countParam: FixedElementCountParam.none, nascentSelfFactory: false, kind: EnclosingBodyKind.declaredFunction),
 			claimOpFloor: 0,
 			heldAwaits: HeldAwaitArray.create(),
 			errorMatchRefusal: ErrorMatchRefusal.none,
@@ -24825,7 +24866,7 @@ export type Parser
 		let anchor = self.current()
 		let declaredReturn = MaxonReturnType.value(returnType)
 
-		self.beginDeclaredBody(0, returnBrand: EmptySourceText, mayReturnAGlobalAlias: false, returnAlias: EmptySourceText, paramSites: sharedEmptyParamSites, carriesLayoutParam: false, countParam: fixedElementCountParamOf(false, paramCount: 0, witnessParamCount: 0), nascentSelfFactory: false, kind: EnclosingBodyKind.declaredFunction, witnessParamBase: 0, witnessParamCount: 0)
+		self.beginDeclaredBody(0, returnBrand: EmptySourceText, mayReturnAGlobalAlias: false, returnAlias: self.anchors.undeclaredAlias, paramSites: sharedEmptyParamSites, carriesLayoutParam: false, countParam: fixedElementCountParamOf(false, paramCount: 0, witnessParamCount: 0), nascentSelfFactory: false, kind: EnclosingBodyKind.declaredFunction, witnessParamBase: 0, witnessParamCount: 0)
 
 		var initializer = IrFunction.create(name, maxonReturnType: declaredReturn, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), valueTags: self.bodyState.valueTags, valueNameIds: self.bodyState.valueNameIds, valueBrandIds: self.bodyState.valueBrandIds, valueMintedSole: self.anchors.functions.mintedSole, valueClosureEnv: self.bodyState.valueClosureEnv, valueIsCapturingClosure: self.bodyState.valueIsCapturingClosure, valueWitnessIds: self.bodyState.valueWitnessIds, returnLine: anchor.line, declaredAt: SourcePosition.declaredAt(self.filePath, nameTok: anchor), placeholders: self.anchors.functions, throwsTypeName: ThrowsClause.none)
 		initializer.visibility = Visibility.global
@@ -27591,7 +27632,7 @@ export type Parser
 		end 'theFold'
 
 		self.closeTypeParamScope()
-		return IrInterface.create(nameTok.value, methods: methods, extendsInterfaces: extendsInterfaces, associatedTypeNames: associatedTypeNames)
+		return IrInterface.create(nameTok.value, methods: methods, extendsInterfaces: extendsInterfaces, associatedTypeNames: associatedTypeNames, declFilePath: self.filePath)
 	end 'readInterfaceDeclaration'
 
 	// The optional `extends P1, P2` and `uses A, B` clauses of an interface header, in either order. A
@@ -29787,8 +29828,8 @@ export type Parser
 
 		// The global-alias answer is read once here rather than at each `return`: it cannot change while
 		// one body is parsed, and its door sits on the promotion path of every returned aggregate. The
-		// return and parameter alias names are read here because `resolveTypes` erases both.
-		self.beginDeclaredBody(paramCount as ValueId, returnBrand: self.returnBrandOf(returnType, returnTypeStart: returnTypeStart), mayReturnAGlobalAlias: self.functionMayReturnAGlobalAlias(name), returnAlias: self.rangedReturnAliasName(returnType), paramSites: try self.rangedParamSites(paramTypes, paramRanges: paramRanges) otherwise sharedEmptyParamSites, carriesLayoutParam: needsLayoutParam, countParam: fixedElementCountParamOf(needsCountParam, paramCount: paramCount, witnessParamCount: witnessParamCount), nascentSelfFactory: nascentSelfFactory, kind: EnclosingBodyKind.testBody if isTest else EnclosingBodyKind.declaredFunction, witnessParamBase: (paramCount - witnessParamCount) as ValueId, witnessParamCount: witnessParamCount)
+		// return and parameter aliases are read here because `resolveTypes` erases both.
+		self.beginDeclaredBody(paramCount as ValueId, returnBrand: self.returnBrandOf(returnType, returnTypeStart: returnTypeStart), mayReturnAGlobalAlias: self.functionMayReturnAGlobalAlias(name), returnAlias: self.rangedReturnAlias(returnType), paramSites: try self.rangedParamSites(paramTypes, paramRanges: paramRanges) otherwise sharedEmptyParamSites, carriesLayoutParam: needsLayoutParam, countParam: fixedElementCountParamOf(needsCountParam, paramCount: paramCount, witnessParamCount: witnessParamCount), nascentSelfFactory: nascentSelfFactory, kind: EnclosingBodyKind.testBody if isTest else EnclosingBodyKind.declaredFunction, witnessParamBase: (paramCount - witnessParamCount) as ValueId, witnessParamCount: witnessParamCount)
 
 		for paramType in paramTypes 'seedParamTypes'
 			// ⭐ A FLOAT-ALIAS parameter is a genuine FLOAT value, so its value TAG must be `float`, not the
@@ -30189,25 +30230,28 @@ export type Parser
 			return
 		end 'noSideData'
 
-		self.artifact.recordFunctionRangeChecks(name, checks: FunctionRangeChecks.create(self.filePath, sites: self.bodyState.rangeCheckSites, argSites: self.bodyState.rangeCheckArgSites, returnAliasName: self.bodyState.rangeCheckReturnAlias, returnSites: self.bodyState.rangeCheckReturnSites, paramSites: self.bodyState.rangeCheckParamSites, provenValueRanges: self.bodyState.countedValueRanges, writtenNegativeLiterals: self.bodyState.writtenNegativeLiterals, borrowOperands: self.bodyState.borrowOperands))
+		self.artifact.recordFunctionRangeChecks(name, checks: FunctionRangeChecks.create(self.filePath, sites: self.bodyState.rangeCheckSites, argSites: self.bodyState.rangeCheckArgSites, returnAlias: self.bodyState.rangeCheckReturnAlias, returnSites: self.bodyState.rangeCheckReturnSites, paramSites: self.bodyState.rangeCheckParamSites, provenValueRanges: self.bodyState.countedValueRanges, writtenNegativeLiterals: self.bodyState.writtenNegativeLiterals, borrowOperands: self.bodyState.borrowOperands))
 	end 'commitRangeChecks'
 
-	// The name of the function's return type IF it is a ranged alias — integer or float — else EMPTY
+	// The function's return type IF it is a ranged alias — integer or float — else `undeclared`
 	// (`ExitCode`, a bare primitive, void: none is a user ranged alias). Asked once per function, off
 	// the DECLARED return type, before `resolveTypes` collapses the alias away — which is the whole
 	// reason the pass reads a side table rather than the resolved return type.
 	//
-	// ⭐ A FLOAT ALIAS USED TO BE EXCLUDED HERE, and removing that exclusion is what closed #19. The
-	// carve-out was the ONLY thing keeping float bit patterns away from `InsertRangeChecks`' signed
-	// integer compares — which made the pass's correctness rest on a caller's discretion. The pass now
-	// carries its own float arm (`aliasIsFloat` and the predicates it forks), so the domain is decided
-	// where the bounds are read rather than where the site is recorded.
-	function rangedReturnAliasName(returnType MaxonReturnType) returns ByteArray
-		return match returnType 'r'
-			void gives EmptySourceText
-			value(inner) gives self.rangedAliasName(maxonTypeTag(inner), nameId: typeNameIdOf(inner))
+	// ⭐ A FLOAT ALIAS IS INCLUDED: the pass carries its own float arm (`aliasIsFloat` and the
+	// predicates it forks), so the domain is decided where the bounds are read rather than where the
+	// site is recorded.
+	function rangedReturnAlias(returnType MaxonReturnType) returns DeclaredAlias
+		match returnType 'r'
+			void then return self.anchors.undeclaredAlias
+			value(inner) then return self.rangeCheckedDeclaredAlias(inner)
 		end 'r'
-	end 'rangedReturnAliasName'
+	end 'rangedReturnAlias'
+
+	function rangeCheckedDeclaredAlias(t MaxonType) returns DeclaredAlias
+		let alias = try self.rangeCheckedAliasOf(t) otherwise return self.anchors.undeclaredAlias
+		return DeclaredAlias.declared(alias.clone())
+	end 'rangeCheckedDeclaredAlias'
 
 	// ⭐ **THE PARAMETER TWIN OF THE LINE ABOVE — one site per RANGED-ALIAS parameter, and a THROW when none
 	// of them is.** Asked once per function, off the declared parameter types, at the one point they still
@@ -30245,14 +30289,10 @@ export type Parser
 
 		for i in 0 upto paramTypes.count() 'eachParam'
 			let paramType = try paramTypes.get(i) otherwise panic("rangedParamSites: paramTypes.get OOB at {i}")
-			let aliasName = self.rangedAliasName(maxonTypeTag(paramType), nameId: typeNameIdOf(paramType))
-
-			if aliasName.isEmpty() 'notRanged'
-				continue
-			end 'notRanged'
+			let alias = try self.rangeCheckedAliasOf(paramType) otherwise continue
 
 			let nameRange = try paramRanges.get(i) otherwise panic("rangedParamSites: paramRanges.get OOB at {i} — one range is pushed per parameter name token, so the two lists have the same length")
-			sites.push(RangeCheckParamSite.create(i, aliasName: aliasName, line: nameRange.line, column: nameRange.column))
+			sites.push(RangeCheckParamSite.create(i, alias: alias.clone(), line: nameRange.line, column: nameRange.column))
 		end 'eachParam'
 
 		return sites
@@ -30261,22 +30301,30 @@ export type Parser
 	// ⭐ **DOES THIS PARAMETER LIST DECLARE A RANGED ALIAS AT ALL** — the question `rangedParamSites` must
 	// answer BEFORE it builds anything, so that a function with none allocates no list to report it with.
 	//
-	// It answers a `bool` rather than the first ranged index, and that is the same rule this pair exists to
-	// obey: an index would need a *"none"* spelling, and the only ones available are a sentinel past the end
-	// or a second error — one sentinel traded for another. The cost is that the fill loop below re-probes
-	// from 0; that is `count()` extra `rangedAliasName` lookups on the RARE path where a ranged parameter
-	// exists, against zero allocations on the common path where none does.
+	// It answers a `bool` rather than the first ranged index, and that is the same rule this pair
+	// exists to obey: an index would need a *"none"* spelling, and the only ones available are a
+	// sentinel past the end or a second error — one sentinel traded for another. The cost is that the
+	// fill loop below re-probes from 0; that is `count()` extra `rangeCheckedAliasOf` lookups on the
+	// RARE path where a ranged parameter exists, against zero allocations on the common path where
+	// none does.
 	function declaresARangedParam(paramTypes MaxonTypeArray) returns bool
 		for i in 0 upto paramTypes.count() 'eachParam'
 			let paramType = try paramTypes.get(i) otherwise panic("declaresARangedParam: paramTypes.get OOB at {i}")
 
-			if not self.rangedAliasName(maxonTypeTag(paramType), nameId: typeNameIdOf(paramType)).isEmpty() 'ranged'
+			if self.declaresARangedAlias(self.declaredAliasOfType(paramType), t: paramType) 'ranged'
 				return true
 			end 'ranged'
 		end 'eachParam'
 
 		return false
 	end 'declaresARangedParam'
+
+	function declaresARangedAlias(fileScoped DeclaredAlias, t MaxonType) returns bool
+		return match self.fileScopedOrInnerAliasOfType(fileScoped, t: t) 'resolved'
+			declared gives true
+			undeclared gives false
+		end 'resolved'
+	end 'declaresARangedAlias'
 
 	// ⭐ **THE ONE PLACE A `MaxonType` IS ASKED WHETHER IT DENOTES A RANGED ALIAS.** Every reader of that
 	// question goes through here — the return path above, and the `as`-cast path's TWO readers (which
@@ -30292,6 +30340,25 @@ export type Parser
 
 		return self.declaredAliasOfNameId(typeNameIdOf(t))
 	end 'declaredAliasOfType'
+
+	// The file-scoped alias, else one declared inside a type or extension body, which
+	// `declaredAliasOfType` cannot see: a range check resolved through that alone guards no nested
+	// alias at all.
+	function rangeCheckedAliasOf(t MaxonType) returns RangedTypeAlias throws MapError
+		return try self.rangeCheckedAlias(self.declaredAliasOfType(t), t: t)
+	end 'rangeCheckedAliasOf'
+
+	function rangeCheckedAlias(fileScoped DeclaredAlias, t MaxonType) returns RangedTypeAlias throws MapError
+		return try requireDeclaredAlias(self.fileScopedOrInnerAliasOfType(fileScoped, t: t))
+	end 'rangeCheckedAlias'
+
+	function fileScopedOrInnerAliasOfType(fileScoped DeclaredAlias, t MaxonType) returns DeclaredAlias
+		if maxonTypeTag(t) != ValueTypeTag.named 'notNamed'
+			return fileScoped
+		end 'notNamed'
+
+		return self.signatures.fileScopedOrInnerDeclaredAlias(fileScoped, name: self.internedName(typeNameIdOf(t)))
+	end 'fileScopedOrInnerAliasOfType'
 
 	// The same question asked of a VALUE rather than of a written type — the shape the `try … otherwise`
 	// check needs, where what is in hand is the try's result and not the callee's declared return type.
@@ -31332,7 +31399,7 @@ export type Parser
 		// A helper reserves no witness parameters, so a dispatch inside one has none to name and
 		// `witnessParamValueId` says so. ⚠ A lifted closure is not this case: its body deliberately
 		// leaves the declaring function's pair standing (see `parseClosureExpression`).
-		self.beginDeclaredBody(helperParamCount, returnBrand: EmptySourceText, mayReturnAGlobalAlias: self.functionMayReturnAGlobalAlias(helperName), returnAlias: self.rangedReturnAliasName(returnType), paramSites: sharedEmptyParamSites, carriesLayoutParam: needsLayoutParam, countParam: fixedElementCountParamOf(needsCountParam, paramCount: helperParamCount, witnessParamCount: 0), nascentSelfFactory: false, kind: EnclosingBodyKind.declaredFunction, witnessParamBase: 0, witnessParamCount: 0)
+		self.beginDeclaredBody(helperParamCount, returnBrand: EmptySourceText, mayReturnAGlobalAlias: self.functionMayReturnAGlobalAlias(helperName), returnAlias: self.rangedReturnAlias(returnType), paramSites: sharedEmptyParamSites, carriesLayoutParam: needsLayoutParam, countParam: fixedElementCountParamOf(needsCountParam, paramCount: helperParamCount, witnessParamCount: 0), nascentSelfFactory: false, kind: EnclosingBodyKind.declaredFunction, witnessParamBase: 0, witnessParamCount: 0)
 
 		var helper = IrFunction.create(helperName, maxonReturnType: returnType, paramCount: helperParamCount, maxonParamTypes: MaxonTypeArray.create(), valueTags: self.bodyState.valueTags, valueNameIds: self.bodyState.valueNameIds, valueBrandIds: self.bodyState.valueBrandIds, valueMintedSole: self.anchors.functions.mintedSole, valueClosureEnv: self.bodyState.valueClosureEnv, valueIsCapturingClosure: self.bodyState.valueIsCapturingClosure, valueWitnessIds: self.bodyState.valueWitnessIds, returnLine: anchor.line, declaredAt: SourcePosition.declaredAt(self.filePath, nameTok: anchor), placeholders: self.anchors.functions, throwsTypeName: ThrowsClause.none)
 
@@ -36628,6 +36695,11 @@ export type Parser
 			entries(byValue) then func.valueExistentialInstances = byValue
 		end 'function'
 
+		match self.bodyState.literalCastArguments 'function'
+			unwritten then break 'function'
+			entries(confirmed) then func.literalCastArguments = confirmed
+		end 'function'
+
 		func.existentialFieldStores = self.bodyState.existentialFieldStores
 
 		// ⭐ **W117's per-value marks travel to SemanticCheck the same way, at the same moment, for the same
@@ -36659,7 +36731,7 @@ export type Parser
 		return self.bodyState.deferredProvenance
 	end 'recycledDeferredProvenance'
 
-	function beginDeclaredBody(firstValueId ValueId, returnBrand ByteArray, mayReturnAGlobalAlias bool, returnAlias ByteArray, paramSites RangeCheckParamSiteArray, carriesLayoutParam bool, countParam FixedElementCountParam, nascentSelfFactory bool, kind EnclosingBodyKind, witnessParamBase ValueId, witnessParamCount ParamCount)
+	function beginDeclaredBody(firstValueId ValueId, returnBrand ByteArray, mayReturnAGlobalAlias bool, returnAlias DeclaredAlias, paramSites RangeCheckParamSiteArray, carriesLayoutParam bool, countParam FixedElementCountParam, nascentSelfFactory bool, kind EnclosingBodyKind, witnessParamBase ValueId, witnessParamCount ParamCount)
 		self.requireNoAwaitHeldAcrossFunctions()
 		self.bodyState = FunctionBodyState.fresh(self.anchors, firstValueId: firstValueId, returnBrand: returnBrand, provenance: self.recycledDeferredProvenance(), mayReturnAGlobalAlias: mayReturnAGlobalAlias, capturedImmutableGlobalReads: noValueMarks, closureEnv: ClosureEnvParam.none, returnAlias: returnAlias, paramSites: paramSites, carriesLayoutParam: carriesLayoutParam, countParam: countParam, nascentSelfFactory: nascentSelfFactory, kind: kind)
 		self.declaringWitnessParamBase = witnessParamBase
@@ -36960,29 +37032,23 @@ export type Parser
 		byValue.upsert(value, value: instance)
 	end 'recordValueExistentialInstance'
 
-	// ⭐ **RECORD THE RANGED TYPEALIAS A VALUE'S DECLARED TYPE NAMES** (see `ValueDeclaredAliasMap` for what
-	// this map is for and why it exists beside the two type columns). An `undeclared` alias records nothing:
-	// a cast to `ExitCode`, to a bare primitive or to a struct names no ranged alias, and a value with no
-	// entry simply falls back to its own `named` tag (`valueDenotedAlias`).
+	// ⭐ **RECORD THE RANGED TYPEALIAS A VALUE'S DECLARED TYPE NAMES** (see `ValueDeclaredAliasMap` for
+	// what this map is for and why it exists beside the two type columns). Only a declared ranged
+	// alias is recorded: a cast to `ExitCode`, to a bare primitive or to a struct names none, and a
+	// value with no entry simply falls back to its own `named` tag (`valueDenotedAlias`).
 	//
 	// ⚠ **THE CALLER OWNS THE ALIASING QUESTION.** This writes the value it is given, so a caller holding a
 	// value that another BINDING also names must not call it — see `ValueDeclaredAliasMap`'s gate and
 	// `applyCast`, the one door where that can happen.
-	function recordValueDeclaredAlias(value ValueId, alias DeclaredAlias)
-		match alias 'a'
-			undeclared then break 'a'
-			declared(declaredAlias) then self.recordValueDeclaredAliasName(value, aliasName: declaredAlias.name)
-		end 'a'
-	end 'recordValueDeclaredAlias'
-
-	// The write itself, off the alias's NAME — split out because `mintOwnedCallResult` reaches it holding a
-	// `MaxonType` rather than a resolved `DeclaredAlias`, and both must land the same entry.
-	function recordValueDeclaredAliasName(value ValueId, aliasName ByteArray)
+	function recordValueDeclaredAliasId(value ValueId, aliasId TypeNameId)
 		// COPY-ON-WRITE off the shared empty map, exactly as `readNestedRangedAlias` does and for its
 		// reason: a function with no float-alias value and no `as` cast never allocates one.
-		let aliasId = self.artifact.typeNames.intern(aliasName)
 		var recorded = self.valueDeclaredAliasesForWrite()
 		recorded.upsert(value, value: aliasId)
+	end 'recordValueDeclaredAliasId'
+
+	function recordValueDeclaredAliasName(value ValueId, aliasName ByteArray)
+		self.recordValueDeclaredAliasId(value, aliasId: self.artifact.typeNames.intern(aliasName))
 	end 'recordValueDeclaredAliasName'
 
 	// ⭐ **THE RANGED TYPEALIAS AN EXPRESSION'S VALUE DENOTES** — the SOURCE half of every containment
@@ -36994,22 +37060,34 @@ export type Parser
 	// statement about the same value: `identity(42) as Byte` hands back the call result untouched, and that
 	// result's type column still says `Integer` while the expression now denotes a `Byte`.
 	function valueDenotedAlias(value ValueId) returns DeclaredAlias
-		let recorded = self.recordedCastAlias(value)
-
-		return match recorded 'r'
-			declared gives recorded
-			undeclared gives self.provenAliasOfValue(value)
-		end 'r'
+		let aliasId = try self.denotedAliasId(value) otherwise return DeclaredAlias.undeclared
+		return self.castAliasNamedBy(aliasId)
 	end 'valueDenotedAlias'
 
-	// ⭐ **THE ALIAS A CAST RECORDED ON THIS VALUE, OR `undeclared`** — the map read the two denoted-alias
-	// readers share, spelled once. They differ ONLY in what they fall back to when nothing was recorded,
-	// and that difference is the whole of why there are two (see `domainDeclaringAlias`); the lookup
-	// itself is one fact and lives in one place.
+	function denotedAliasId(value ValueId) returns TypeNameId throws MapError
+		match self.recordedCastAlias(value) 'castAlias'
+			declared then return try self.castAliasOf(value)
+			undeclared then break 'castAlias'
+		end 'castAlias'
+
+		match self.provenAliasOfValue(value) 'proven'
+			declared then return self.valueNameId(value)
+			undeclared then throw MapError.keyNotFound
+		end 'proven'
+	end 'denotedAliasId'
+
+	// ⭐ **THE ALIAS A CAST RECORDED ON THIS VALUE, OR `undeclared`** — the map read the two
+	// denoted-alias readers (`denotedAliasId`, `domainDeclaringAlias`) share, spelled once. They
+	// differ ONLY in what they fall back to when nothing was recorded, and that difference is the
+	// whole of why there are two (see `domainDeclaringAlias`).
 	function recordedCastAlias(value ValueId) returns DeclaredAlias
 		let aliasId = try self.castAliasOf(value) otherwise return DeclaredAlias.undeclared
-		return self.declaredAliasOfNameId(aliasId)
+		return self.castAliasNamedBy(aliasId)
 	end 'recordedCastAlias'
+
+	function castAliasNamedBy(aliasId TypeNameId) returns DeclaredAlias
+		return self.signatures.fileScopedOrInnerAliasNamed(self.internedName(aliasId), readerFilePath: self.filePath)
+	end 'castAliasNamedBy'
 
 	// ⭐⭐ **THE RANGED ALIAS AN INTEGER VALUE'S DECLARED TYPE NAMES — `valueDenotedAlias` WITH THE OTHER
 	// FALLBACK, AND THE DIFFERENCE IS A MEASURED ONE (X10 review).** Same map, same precedence; where
@@ -37847,12 +37925,18 @@ export type Parser
 		// character literal coerces to its codepoint there. `return 'a'` from `returns Character` needs
 		// nothing: the literal already IS one. See `integerizedOperand`.
 		let retStart = self.pos
-		let parsed = try self.integerizedOperand(try self.parseExpression(func, block: block), expected: maxonReturnTypeTag(func.maxonReturnType), start: retStart, pastEnd: self.pos)
+		let expression = try self.parseExpression(func, block: block)
+		let parsed = try self.integerizedOperand(expression, expected: maxonReturnTypeTag(func.maxonReturnType), start: retStart, pastEnd: self.pos)
 
 		let retVal = match func.maxonReturnType 'declared'
 			void gives parsed
 			value(declared) gives self.interfaceHandleOf(parsed, declared: declared, first: anchor, last: anchor)
 		end 'declared'
+
+		match func.maxonReturnType 'unneeded'
+			void then break 'unneeded'
+			value(declared) then self.reportUnneededLiteralCastAt(expression, first: retStart, declared: declared)
+		end 'unneeded'
 
 		try self.requireNotLentThrough(retVal, source: retVal, door: FreezeDoor.returned, valueTok: self.tokenAt(retStart))
 
@@ -37964,14 +38048,15 @@ export type Parser
 		// in is not reliably the one holding the `ret`.
 		//
 		// ⭐⭐ **AND A `return` WHOSE VALUE THE DECLARED TYPE PROVABLY ADMITS IS NOT A SITE (A4f) — THE
-		// DOOR THIS DEFECT WAS FOUND AT.** `return b` from a `returns ExitCode` function, `b` a
-		// `Byte = int(0 to u8.max)`, emitted a `0 ≤ x ≤ 4294967295` cascade with an `mrt_panic` arm on a
-		// value that cannot fail it — while the SAME compile reported `b as ExitCode` as E3010 *"'Byte'
-		// already fits in 'ExitCode'"*, which is that cascade's own impossibility, proved. The alias-named
-		// doors ask this inside `recordRangeCheckSite`; a `return` asks it through `returnGuardIsDead`
+		// DOOR THIS DEFECT WAS FOUND AT.** `return b` from a `returns ExitCode` function, `b` a `Byte =
+		// int(0 to u8.max)`, emitted a `0 ≤ x ≤ 4294967295` cascade with an `mrt_panic` arm on a value
+		// that cannot fail it — while the SAME compile reported `b as ExitCode` as E3010 *"'Byte' already
+		// fits in 'ExitCode'"*, which is that cascade's own impossibility, proved. The alias-named doors
+		// ask this inside `recordRangedTargetSite`; a `return` asks it through `recordRangedReturnSite`
 		// because its destination is the FUNCTION's declared type rather than one written at the site.
-		if not self.bodyState.rangeCheckReturnAlias.isEmpty() and not self.returnGuardIsDead(returned, declaredNameId: declaredNameId) 'rangedReturn'
-			self.bodyState.rangeCheckReturnSites.push(RangeCheckReturnSite.create(returned, block: self.bodyState.currentBlock.id, line: anchor.line, column: anchor.column))
+		match self.bodyState.rangeCheckReturnAlias 'rangedReturn'
+			undeclared then break 'rangedReturn'
+			declared(alias) then self.recordRangedReturnSite(returned, alias: alias, anchor: anchor)
 		end 'rangedReturn'
 	end 'parseCheckedValueReturn'
 
@@ -38106,18 +38191,13 @@ export type Parser
 		return ParseError.serviceReplyAliasesState(serviceReplyAliasesStateRefusal(typeName, methodName: methodName), line: anchor.line, column: anchor.column, note: DiagnosticNote.at(serviceSpawnNoteText(typeName), line: site.line, column: site.column, filePath: site.declFilePath))
 	end 'serviceReplyAliasesStateError'
 
-	// ⭐ **IS THE `return` DOOR'S GUARD PROVABLY DEAD? — the destination unwrapped, then the one shared
-	// containment (A4f).** It is reached only behind `rangeCheckReturnAlias` being non-empty, which is the
-	// tag-checked answer to *"does the declared return type name a ranged alias?"* (`rangedReturnAliasName`)
-	// — so `undeclared` here is the SAME name failing to resolve twice and cannot mean the return type is
-	// unranged. It answers `false` for it all the same, because a destination with no bounds proves nothing
-	// and the safe direction is to keep the check.
-	function returnGuardIsDead(returned ValueId, declaredNameId TypeNameId) returns bool
-		return match self.declaredAliasOfNameId(declaredNameId) 'returnAlias'
-			undeclared gives false
-			declared(alias) gives self.valueIsProvablyInRange(returned, target: alias)
-		end 'returnAlias'
-	end 'returnGuardIsDead'
+	function recordRangedReturnSite(returned ValueId, alias RangedTypeAlias, anchor Token)
+		if self.valueIsProvablyInRange(returned, target: alias) 'provablyInRange'
+			return
+		end 'provablyInRange'
+
+		self.bodyState.rangeCheckReturnSites.push(RangeCheckReturnSite.create(returned, block: self.bodyState.currentBlock.id, line: anchor.line, column: anchor.column))
+	end 'recordRangedReturnSite'
 
 	// ⭐ **EMIT A VALUE `ret` THAT HANDS ITS VALUE TO THE CALLER AS AN OWNED ONE** — the shared tail of a
 	// value `return` and a non-capturing closure body's `gives <expr>`. A closure body IS a
@@ -38394,7 +38474,7 @@ export type Parser
 	// address (`fieldStorageType` gives it `integer`).
 	function moveOutThrownField(value ValueId, anchor Token)
 		let range = SourceRange.ofToken(anchor)
-		let zero = self.emitLiteral(0 as ParsedInt, valueType: MaxonType.integer, range: range)
+		let zero = self.emitLiteral(0, valueType: MaxonType.integer, range: range)
 		self.emitIndirectStore(self.bodyState.lastFieldReadBox, offset: self.bodyState.lastFieldReadOffset, value: zero, storageType: MaxonType.integer, range: range)
 		self.markValueOwnsHeap(value, exclusivity: OwnedHeapExclusivity.coOwned)
 	end 'moveOutThrownField'
@@ -43491,7 +43571,7 @@ export type Parser
 	// (`withIterator.nested-loops-over-two-promise-arrays`). A field a frame is MOVING a promise out of goes
 	// through the checked door instead.
 	function emitEmptyPromiseField(box ValueId, offset ByteOffset, range SourceRange)
-		let zero = self.emitLiteral(0 as ParsedInt, valueType: MaxonType.integer, range: range)
+		let zero = self.emitLiteral(0, valueType: MaxonType.integer, range: range)
 		self.emitIndirectStore(box, offset: offset, value: zero, storageType: MaxonType.integer, range: range)
 	end 'emitEmptyPromiseField'
 
@@ -52634,7 +52714,7 @@ export type Parser
 			return match self.declaredAliasOfNameId(typeNameIdOf(slotType)) 'a'
 				// `writtenNegative: false` is not a default taken for want of a better one: the subject is the
 				// literal ZERO this predicate is named for, and zero is not a negative number under any spelling.
-				declared(alias) gives not aliasIsFloat(alias) and literalInRange(0 as ParsedInt, low: alias.low, high: alias.high, isFloat: false, writtenNegative: false)
+				declared(alias) gives not aliasIsFloat(alias) and literalInRange(0, low: alias.low, high: alias.high, isFloat: false, writtenNegative: false)
 				undeclared gives false
 			end 'a'
 		end 'aNamedType'
@@ -53202,7 +53282,7 @@ export type Parser
 		// overstating is a stolen slot. `OwnedHeapExclusivity`'s own safety argument decides it.
 		self.ownPayloadBinding(bindingInfo, loaded: loaded, exclusivity: OwnedHeapExclusivity.coOwned)
 
-		let zero = self.emitLiteral(0 as ParsedInt, valueType: MaxonType.integer, range: range)
+		let zero = self.emitLiteral(0, valueType: MaxonType.integer, range: range)
 		self.emitIndirectStore(scrutBox, offset: offset, value: zero, storageType: storage, range: range)
 
 		// The HOLE this just made, recorded ON the binding that made it. A write-back through this binding
@@ -54067,14 +54147,14 @@ export type Parser
 	end 'recordMergeAliasProofAgainst'
 
 	// ⭐ **DOES ONE INCOMING EDGE PROVABLY LIE INSIDE `alias`? — THE SAME PAIR OF TESTS A DOOR APPLIES,
-	// AND THE PAIR IS SPLIT ACROSS TWO TIERS RATHER THAN HELD BY ONE FUNCTION.** A door reaches "no guard"
-	// two ways and only two: the value already denotes a range the destination covers — asked HERE, at the
-	// parse, by `recordRangedTargetSite`/`returnGuardIsDead` through the shared `rangeCoversDenotedRange` —
-	// or it is a compile-time constant of the destination's own domain that lands inside it, which
-	// `InsertRangeChecks.needsRuntimeGuard` asks of the recorded site. A merge is not a door, but *"is this
-	// value in range"* is the door's question, so it is answered out of the same two rules rather than a
-	// third way; the containment arithmetic itself (`rangeCoversDenotedRange`, `literalInRange`) is
-	// `TypeRules`', spelled once for every asker.
+	// AND THE PAIR IS SPLIT ACROSS TWO TIERS RATHER THAN HELD BY ONE FUNCTION.** A door reaches "no
+	// guard" two ways and only two: the value already denotes a range the destination covers — asked
+	// HERE, at the parse, by `recordRangedTargetSite`/`recordRangedReturnSite` through the shared
+	// `rangeCoversDenotedRange` — or it is a compile-time constant of the destination's own domain
+	// that lands inside it, which `InsertRangeChecks.needsRuntimeGuard` asks of the recorded site. A
+	// merge is not a door, but *"is this value in range"* is the door's question, so it is answered
+	// out of the same two rules rather than a third way; the containment arithmetic itself
+	// (`rangeCoversDenotedRange`, `literalInRange`) is `TypeRules`', spelled once for every asker.
 	//
 	// ⚠ The CONSTANT half reads the PARSER's const columns while `needsRuntimeGuard` reads the Std pass's
 	// `intConsts`/`floatConsts`, and the two need not agree. Neither disagreement is a wrong answer, and the
@@ -55473,15 +55553,16 @@ export type Parser
 	// wrong shift through here, because what it exposes is `0` and `0` is itself a count the instruction
 	// takes as written.
 	//
-	// ⛔⛔ **`valueDenotedAlias`, NOT `declaredAliasOfValue` — A MERGE'S DECLARED ALIAS IS NOT A PROOF, AND
-	// SPENDING IT AS ONE HERE COSTS THE ANSWER (G14; caught by EC6's review).** The list the paragraph above
-	// ends with names `Array.resize` as the one producer that crossed no door; **a phi is the second, and it
-	// is far more reachable** — an ASSIGNMENT is a door on no tier, so a `var` of a ranged alias reassigned
-	// around a loop carries whatever the body computed while its header phi keeps the alias's NAME. This
-	// function is a PROOF reader by its own name, so it takes the proof-aware spelling every other proof
-	// reader takes (`divisorProof`, `returnGuardIsDead`, E3010): a recorded cast target first — an `as`
-	// emits the guard, which is what makes `i as Bits` inside a loop a genuine proof — then
-	// `provenAliasOfValue`, which withholds a merge nothing lifted (`recordMergeAliasProof`).
+	// ⛔⛔ **`valueDenotedAlias`, NOT `declaredAliasOfValue` — A MERGE'S DECLARED ALIAS IS NOT A PROOF,
+	// AND SPENDING IT AS ONE HERE COSTS THE ANSWER (G14; caught by EC6's review).** The list the
+	// paragraph above ends with names `Array.resize` as the one producer that crossed no door; **a phi
+	// is the second, and it is far more reachable** — an ASSIGNMENT is a door on no tier, so a `var`
+	// of a ranged alias reassigned around a loop carries whatever the body computed while its header
+	// phi keeps the alias's NAME. This function is a PROOF reader by its own name, so it takes the
+	// proof-aware spelling every other proof reader takes (`divisorProof`, `recordRangedReturnSite`,
+	// E3010): a recorded cast target first — an `as` emits the guard, which is what makes `i as Bits`
+	// inside a loop a genuine proof — then `provenAliasOfValue`, which withholds a merge nothing
+	// lifted (`recordMergeAliasProof`).
 	//
 	// With `declaredAliasOfValue` here, where the answer must be `0`, `var n = 1 as Bits` stepped to
 	// 71 around a `while` prints `1 shl n` as **128** (the hardware's masked `1 shl 7`), and `try f()
@@ -55842,6 +55923,7 @@ export type Parser
 		// BINDING also names (see `ValueDeclaredAliasMap`). A later hop of the loop casts a CAST RESULT,
 		// which is this parse's own temporary and is bound to no name, so the answer is false from then on.
 		var currentIsBareLocal = self.rhsWasBareLocalReference(operandStart)
+		var currentIsALiteral = self.spansANumericLiteral(operandStart)
 
 		while self.at(TokenKind.as) 'cast'
 			let asTok = try self.consume(TokenKind.as)
@@ -55856,12 +55938,101 @@ export type Parser
 				self.releaseCompletedOperand()
 			end 'theCastProducesTheValue'
 
+			// Asked of the literal before the cast: the cast's result denotes the target alias itself, so it
+			// would admit an out-of-range literal too.
+			let admittingAlias = self.aliasAdmittingLiteral(current, targetType: targetType) if currentIsALiteral else self.anchors.undeclaredAlias
 			current = try self.applyCast(current, targetType: targetType, asTok: asTok, targetTok: targetTok, sourceIsBareLocal: currentIsBareLocal)
 			currentIsBareLocal = false
+			currentIsALiteral = false
+
+			match admittingAlias 'aLiteralTheTargetAlreadyAdmits'
+				undeclared then break 'aLiteralTheTargetAlreadyAdmits'
+				declared(alias) then self.recordLiteralCast(current, alias: alias, first: operandStart, asTok: asTok)
+			end 'aLiteralTheTargetAlreadyAdmits'
 		end 'cast'
 
 		return current
 	end 'parseCast'
+
+	function spansANumericLiteral(first TokenIndex) returns bool
+		let literalAt = self.literalPastItsSign(first)
+
+		if literalAt + 1 != self.pos 'moreThanOneLiteral'
+			return false
+		end 'moreThanOneLiteral'
+
+		let kind = self.kindAt(literalAt)
+		return kind == TokenKind.intLiteral or kind == TokenKind.floatLiteral
+	end 'spansANumericLiteral'
+
+	function literalPastItsSign(first TokenIndex) returns TokenIndex
+		return first + 1 if self.kindAt(first) == TokenKind.minus else first
+	end 'literalPastItsSign'
+
+	function aliasAdmittingLiteral(literal ValueId, targetType MaxonType) returns DeclaredAlias
+		let alias = try self.rangeCheckedAliasOf(targetType) otherwise return self.anchors.undeclaredAlias
+
+		if not (self.edgeProvesAlias(literal, alias: alias) or self.integerLiteralWidensInto(literal, alias: alias)) 'theLiteralFallsOutside'
+			return self.anchors.undeclaredAlias
+		end 'theLiteralFallsOutside'
+
+		return DeclaredAlias.declared(alias)
+	end 'aliasAdmittingLiteral'
+
+	function integerLiteralWidensInto(literal ValueId, alias RangedTypeAlias) returns bool
+		return aliasIsFloat(alias) and self.constIsKnown(literal) and literalInRange(foldSiToFp(self.constOf(literal)), low: alias.low, high: alias.high, isFloat: true, writtenNegative: false)
+	end 'integerLiteralWidensInto'
+
+	function recordLiteralCast(result ValueId, alias RangedTypeAlias, first TokenIndex, asTok Token)
+		let literalAt = self.literalPastItsSign(first)
+		let literalTok = self.tokenAt(literalAt)
+		let literalTag = ValueTypeTag.float if literalTok.kind == TokenKind.floatLiteral else ValueTypeTag.integer
+		let cast = LiteralCast.create(literalTok.value, negative: literalAt != first, target: alias.clone(), asRange: SourceRange.ofToken(asTok), literalTag: literalTag)
+		var recorded = self.literalCastsForWrite()
+		recorded.upsert(result, value: LiteralCastSpan.create(cast, first: first, pastEnd: self.pos))
+	end 'recordLiteralCast'
+
+	function recordedLiteralCast(value ValueId) returns LiteralCastSpan throws MapError
+		match self.bodyState.literalCasts 'function'
+			unwritten then throw MapError.keyNotFound
+			entries(recorded) then return try recorded.get(value)
+		end 'function'
+	end 'recordedLiteralCast'
+
+	function literalCastSpanning(value ValueId, first TokenIndex) returns LiteralCast throws MapError
+		let span = try self.recordedLiteralCast(value)
+
+		if not span.covers(first, expressionPastEnd: self.pos) 'aDifferentExpression'
+			throw MapError.keyNotFound
+		end 'aDifferentExpression'
+
+		return span.cast
+	end 'literalCastSpanning'
+
+	function reportUnneededLiteralCastAt(value ValueId, first TokenIndex, declared MaxonType)
+		let cast = try self.literalCastSpanning(value, first: first) otherwise return
+		let destination = try self.rangeCheckedAliasOf(declared) otherwise return
+		self.reportUnneededLiteralCast(cast, destination: destination)
+	end 'reportUnneededLiteralCastAt'
+
+	function reportUnneededLiteralCastInto(value ValueId, first TokenIndex, destination RangedTypeAlias)
+		let cast = try self.literalCastSpanning(value, first: first) otherwise return
+		self.reportUnneededLiteralCast(cast, destination: destination)
+	end 'reportUnneededLiteralCastInto'
+
+	function reportUnneededLiteralCast(cast LiteralCast, destination RangedTypeAlias)
+		if not cast.repeats(destination) 'theDestinationDeclaresAnotherType'
+			return
+		end 'theDestinationDeclaresAnotherType'
+
+		self.recordArtifactDiagnostic(ErrorCode.semanticUnneededCast, message: unneededLiteralCastMessage(cast), range: cast.asRange)
+	end 'reportUnneededLiteralCast'
+
+	function noteLiteralCastArgument(value ValueId, passed ValueId, first TokenIndex)
+		let cast = try self.literalCastSpanning(value, first: first) otherwise return
+		var confirmed = self.literalCastArgumentsForWrite()
+		confirmed.upsert(passed, value: cast)
+	end 'noteLiteralCastArgument'
 
 	// ⭐ **A BODY CAST WHOSE TARGET NAMES AN ALIAS THIS FILE CANNOT SEE — RECORDED, NOT THROWN.**
 	//
@@ -56452,7 +56623,7 @@ export type Parser
 		// the cast NAMES the value's own alias; that one asks whether the source range is provably inside the
 		// target's. A widening cast between two names answers "no" here and "elide the guard" there, which is
 		// exactly the pair `a-widening-cast-emits-no-guard` pins: a real door, and no instruction behind it.
-		self.reportUnneededCast(self.valueDenotedAlias(value), target: targetAlias, asTok: asTok)
+		self.reportUnneededCast(self.valueDenotedAlias(value), target: self.fileScopedOrInnerAliasOfType(targetAlias, t: targetType), asTok: asTok)
 
 		return try self.convertValueToDeclaredType(value, sourceTag: sourceTag, targetType: targetType, targetAlias: targetAlias, opTok: asTok, sourceIsBareLocal: sourceIsBareLocal, mustCarryTargetType: false)
 	end 'applyCast'
@@ -56525,12 +56696,12 @@ export type Parser
 			// door is no longer checking; anchoring on the result is what stops a `float(0.0 to 1.0)` operand
 			// vouching for an integer, and a freshly minted result denotes no alias at all.
 			let narrowed = self.emitUnaryOp(value, op: MaxonUnaryOp.trunc, resultTag: ValueTypeTag.integer, range: SourceRange.ofToken(opTok))
-			self.recordRangeCheckSite(narrowed, targetAlias: targetAlias, line: opTok.line, column: opTok.column)
-			return self.finishCast(narrowed, source: value, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal)
+			self.recordCastRangeCheckSite(narrowed, targetAlias: targetAlias, targetType: targetType, opTok: opTok)
+			return self.finishCast(narrowed, source: value, targetAlias: targetAlias, targetType: targetType, sourceIsBareLocal: sourceIsBareLocal)
 		end 'floatToInt'
 
 		if not sourceIsFloat and targetIsFloat 'intToFloat'
-			return self.finishCast(self.promoteToFloat(value, opTok: opTok), source: value, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal)
+			return self.finishCast(self.promoteToFloat(value, opTok: opTok), source: value, targetAlias: targetAlias, targetType: targetType, sourceIsBareLocal: sourceIsBareLocal)
 		end 'intToFloat'
 
 		// ⚠ **THE RANGE-CHECK SITE IS THE SOURCE, NOT THE MINTED RESULT, AND THAT IS A CORRECTNESS
@@ -56543,7 +56714,7 @@ export type Parser
 		// time — `ranged-typealias.error.unsigned-max-upper-literal-out-of-range` is the case that says
 		// so. The float→int cast above anchors on its RESULT for the opposite reason, stated there:
 		// `trunc` changes the number, so the source is not the value being checked.
-		self.recordRangeCheckSite(value, targetAlias: targetAlias, line: opTok.line, column: opTok.column)
+		self.recordCastRangeCheckSite(value, targetAlias: targetAlias, targetType: targetType, opTok: opTok)
 
 		// ⭐ **A CAST THAT CHANGES WHAT THE VALUE'S TYPE SAYS IS A CONVERSION, NOT A RE-TAG.** It yields a
 		// DISTINCT result value of the target type and leaves the SOURCE untouched, because the source
@@ -56565,7 +56736,7 @@ export type Parser
 		// five: `applyCast` passes `false`, which is what keeps a plain `x as Byte` a no-op — see
 		// `castChangesTheElementPacking`'s ⛔⛔ block for the two programs that broke when every cast retagged.
 		if mustCarryTargetType or self.castRetags(value, targetType: targetType, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal) 'retaggingCast'
-			return self.finishCast(self.emitRetaggedCastValue(value, targetType: targetType, range: SourceRange.ofToken(opTok)), source: value, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal)
+			return self.finishCast(self.emitRetaggedCastValue(value, targetType: targetType, range: SourceRange.ofToken(opTok)), source: value, targetAlias: targetAlias, targetType: targetType, sourceIsBareLocal: sourceIsBareLocal)
 		end 'retaggingCast'
 
 		// ⭐⭐ **RENAME, NOT MINT — the third answer, and the one a narrowing `as` needs.** A cast to an alias
@@ -56578,7 +56749,7 @@ export type Parser
 			self.retypeValue(value, valueType: targetType)
 		end 'renameInPlace'
 
-		return self.finishCast(value, source: value, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal)
+		return self.finishCast(value, source: value, targetAlias: targetAlias, targetType: targetType, sourceIsBareLocal: sourceIsBareLocal)
 	end 'convertValueToDeclaredType'
 
 	function castRetags(value ValueId, targetType MaxonType, targetAlias DeclaredAlias, sourceIsBareLocal bool) returns bool
@@ -56646,16 +56817,23 @@ export type Parser
 	// when the operand was a bare local: `let a = 42` then `let b = a as Byte` leaves ONE value under two
 	// names, and stamping it would make a later `a as Byte` — a narrowing the program genuinely needs —
 	// report E3010 against a plain `int`. See `ValueDeclaredAliasMap` for the false negative that trades for.
-	function finishCast(result ValueId, source ValueId, targetAlias DeclaredAlias, sourceIsBareLocal bool) returns ValueId
+	//
+	// ⚠ Only a target spelled by NAME is recorded: a target handed over as a resolved type
+	// (`processIsAlive`'s `alias.underlying`) carries no name id, and its 0 would name whatever this
+	// file interned first.
+	function finishCast(result ValueId, source ValueId, targetAlias DeclaredAlias, targetType MaxonType, sourceIsBareLocal bool) returns ValueId
 		if result == source and sourceIsBareLocal 'sharedWithABinding'
 			return result
 		end 'sharedWithABinding'
 
-		self.recordValueDeclaredAlias(result, alias: targetAlias)
+		if maxonTypeTag(targetType) == ValueTypeTag.named and self.declaresARangedAlias(targetAlias, t: targetType) 'theTargetNamesARangedAlias'
+			self.recordValueDeclaredAliasId(result, aliasId: typeNameIdOf(targetType))
+		end 'theTargetNamesARangedAlias'
+
 		return result
 	end 'finishCast'
 
-	// ⭐⭐ **E3010 — "unneeded cast: 'A' already fits in 'B'".** It fires only when BOTH ends are
+	// ⭐⭐ **E3010 — "unneeded cast: 'A' already fits in 'B'".** This form fires only when BOTH ends are
 	// DECLARED ranged typealiases, and that gate is the whole discriminator rather than a convenience:
 	// `let x = 42` then `x as Float` is LEGAL — the source is a bare `int`, which names no alias and
 	// so states nothing the cast could be repeating — while `let i = identity(42)`, whose callee
@@ -56744,13 +56922,11 @@ export type Parser
 	// twice. MEASURED before the fix, from `bytearray-element-size`'s narrow `Byte`: **`unneeded cast:
 	// 'Byte$0_200' already fits in 'ExitCode'`**, which names no line the author wrote.
 	function reportUnneededCastBetween(source RangedTypeAlias, target RangedTypeAlias, asTok Token)
-		// Compared as SOURCE spells them: a range-contested `Byte` reaches here under its mint (`Byte$0_200`),
-		// and within one file the mint and the bare name resolve to one declaration.
-		if not sourceSpelledAliasName(source.name).equals(sourceSpelledAliasName(target.name)) 'aDoorBetweenTwoTypes'
+		if not source.isTheSameDeclarationAs(target) 'aDoorBetweenTwoTypes'
 			return
 		end 'aDoorBetweenTwoTypes'
 
-		self.recordArtifactDiagnostic(ErrorCode.semanticUnneededCast, message: "unneeded cast: '{sourceSpelledAliasText(source.name)}' already fits in '{sourceSpelledAliasText(target.name)}'", range: SourceRange.ofToken(asTok))
+		self.recordArtifactDiagnostic(ErrorCode.semanticUnneededCast, message: unneededAliasCastMessage(source.name, targetName: target.name), range: SourceRange.ofToken(asTok))
 	end 'reportUnneededCastBetween'
 
 	// ⭐ **THE CAST TARGET'S KIND AS THE AUTHORITY DENOTES IT — not as `maxonTypeTag` reads the
@@ -57287,10 +57463,6 @@ export type Parser
 	// reaches the slot). Anchoring on the block alone puts the guard at the block's END and lets the whole
 	// rest of the body run first — see `RangeCheckSite`.
 	//
-	// It takes the RESOLVED alias rather than the declared type because `applyCast` already holds one: its
-	// shift-fill predicate asks the identical question of the identical type, and `signatures.aliasOf`
-	// allocates per call.
-	//
 	// The anchor arrives as line/column rather than a `Token` because the field-DEFAULT door has no token
 	// of its own: the default is a literal from a declaration that may live in another file, so its
 	// diagnostic is anchored on the struct literal that took it, which that door holds as a `SourceRange`.
@@ -57309,12 +57481,17 @@ export type Parser
 	// through to its `integer` tag) — so containment cannot hold for one, and every literal door still
 	// records. Where a folded constant DOES carry an alias it got it from a cast, whose own site reported
 	// the E3005 already; a range inside the destination cannot then put it outside the destination.
-	function recordRangeCheckSite(value ValueId, targetAlias DeclaredAlias, line LineNumber, column ColumnNumber)
-		match targetAlias 'a'
-			declared(alias) then self.recordRangedTargetSite(value, target: alias, line: line, column: column)
-			undeclared then break 'a'
-		end 'a'
+	function recordRangeCheckSite(value ValueId, destination MaxonType, line LineNumber, column ColumnNumber)
+		let alias = try self.rangeCheckedAliasOf(destination) otherwise return
+		self.recordRangedTargetSite(value, target: alias, line: line, column: column)
 	end 'recordRangeCheckSite'
+
+	// The cast door hands over the alias `applyCast` already resolved: its shift-fill predicate asks
+	// the identical question of the identical type, and `signatures.aliasOf` allocates per call.
+	function recordCastRangeCheckSite(value ValueId, targetAlias DeclaredAlias, targetType MaxonType, opTok Token)
+		let alias = try self.rangeCheckedAlias(targetAlias, t: targetType) otherwise return
+		self.recordRangedTargetSite(value, target: alias, line: opTok.line, column: opTok.column)
+	end 'recordCastRangeCheckSite'
 
 	// ⚠ **THE SOURCE RANGE IS RESOLVED HERE AND NOT ONE FRAME UP, BECAUSE A DESTINATION THAT NAMES NO
 	// RANGED ALIAS MUST NOT PAY FOR IT.** `valueDenotedAlias` CONSTRUCTS a `DeclaredAlias`, and the doors
@@ -57327,10 +57504,9 @@ export type Parser
 			return
 		end 'provablyInRange'
 
-		// The DECLARATION rides with the site, not just its name — see `RangeCheckSiteTarget` for the
-		// wrong answer a name alone produced at the one door whose alias is not the calling file's. Both are the
-		// site's own copies: the alias is the signature index's record, and the site rides the artifact.
-		self.bodyState.rangeCheckSites.push(RangeCheckSite.create(value, target: RangeCheckSiteTarget.alias(target.name, aliasFilePath: target.declFilePath), block: self.bodyState.currentBlock.id, maxonOpPos: self.bodyState.currentBlock.opRefs.count(), line: line, column: column))
+		// The site's own copy: the alias is the signature index's record, and the site rides the
+		// artifact, which may hold no record from outside itself.
+		self.bodyState.rangeCheckSites.push(RangeCheckSite.create(value, target: RangeCheckSiteTarget.alias(target.clone()), block: self.bodyState.currentBlock.id, maxonOpPos: self.bodyState.currentBlock.opRefs.count(), line: line, column: column))
 	end 'recordRangedTargetSite'
 
 	// Is `t` in the FLOAT domain — the bare `float` keyword, or a `named` type that denotes a ranged
@@ -57601,11 +57777,11 @@ export type Parser
 	// division"**. Demanding a `try` there refuses a program that no source spelling satisfies, since
 	// a proved range means there is no throw to catch.
 	//
-	// ⚠ **G14's WITHHOLD IS UNTOUCHED, because it lives in the FALLBACK.** `valueDenotedAlias` is
-	// `recordedCastAlias` first and `provenAliasOfValue` second, so a merge whose declared alias nothing
-	// proved still answers `undeclared` here and still gets `possiblyZero`. What the recorded arm adds is a
-	// value whose range WAS enforced — an `as` cast and a ranged `return` both emit the guard, which is the
-	// same enforcement the list below turns on.
+	// ⚠ **G14's WITHHOLD IS UNTOUCHED, because it lives in the FALLBACK.** `valueDenotedAlias` is a
+	// recorded cast alias first and `provenAliasOfValue` second (`denotedAliasId`), so a merge whose
+	// declared alias nothing proved still answers `undeclared` here and still gets `possiblyZero`.
+	// What the recorded arm adds is a value whose range WAS enforced — an `as` cast and a ranged
+	// `return` both emit the guard, which is the same enforcement the list below turns on.
 	//
 	// ⚠⚠ **THE ALIAS ARM IS ONLY AS SOUND AS THE RANGE IS ENFORCED, AND THE ENFORCEMENT IS NOT THIS
 	// FUNCTION'S — it is `InsertRangeChecks`', and this verdict is WRONG rather than merely coarse
@@ -57765,9 +57941,11 @@ export type Parser
 		self.recordBorrowOperands(result, lhs: left, rhs: right, op: op)
 
 		// ⭐ **THE ONE OPERATOR WHOSE RESULT KEEPS ITS OPERANDS' RANGED ALIAS.** See
-		// `bitAndInheritedAlias` — and `rangeIsClosedUnderBitAnd`, which is the proof that makes the
+		// `bitAndInheritedAliasId` — and `rangeIsClosedUnderBitAnd`, which is the proof that makes the
 		// inheritance a fact about the VALUE rather than a label on it.
-		self.recordValueDeclaredAlias(result, alias: self.bitAndInheritedAlias(op, lhs: lhs, rhs: rhs, resultTag: resultTag))
+		if let inherited = try self.bitAndInheritedAliasId(op, lhs: lhs, rhs: rhs, resultTag: resultTag) 'inheritsAnAlias'
+			self.recordValueDeclaredAliasId(result, aliasId: inherited)
+		end 'inheritsAnAlias'
 
 		self.recordBinOpFold(result, lhs: lhs, rhs: rhs, op: op, resultTag: resultTag)
 
@@ -57787,25 +57965,24 @@ export type Parser
 	// AArch64's own logical-immediate encoder — `arm64EncodeLogicalImm` is exactly this expression, and its
 	// `imms` came out 63 (the RESERVED encoding) instead of 47.
 	//
-	// It reads `valueDenotedAlias` of each operand rather than the tag column, so an operand that acquired
-	// its alias through an `as` cast hands it down too — and an operand that is a merge nothing proved hands
-	// down nothing. See `aliasClosedUnderBitAnd` for why that door and not the signedness one: the answer is
-	// RECORDED, and a recorded alias is spent as a proof.
+	// It reads `denotedAliasId` of each operand rather than the tag column, so an operand that
+	// acquired its alias through an `as` cast hands it down too — and an operand that is a merge
+	// nothing proved hands down nothing. See `aliasIdClosedUnderBitAnd` for why that door and not the
+	// signedness one: the answer is RECORDED, and a recorded alias is spent as a proof.
 	//
 	// The gate is the BITWISE reading (`tagIsInteger(resultTag)`), not the operator alone: `wordOpResultTag`
 	// answers `boolean` for `flagA and flagB`, and a bool carries no ranged-integer identity to inherit.
-	function bitAndInheritedAlias(op MaxonBinOp, lhs ValueId, rhs ValueId, resultTag ValueTypeTag) returns DeclaredAlias
+	function bitAndInheritedAliasId(op MaxonBinOp, lhs ValueId, rhs ValueId, resultTag ValueTypeTag) returns TypeNameId throws MapError
 		if op != MaxonBinOp.bitAnd or not tagIsInteger(resultTag) 'notABitwiseAnd'
-			return DeclaredAlias.undeclared
+			throw MapError.keyNotFound
 		end 'notABitwiseAnd'
 
-		let fromLeft = self.aliasClosedUnderBitAnd(lhs)
+		if let fromLeft = try self.aliasIdClosedUnderBitAnd(lhs) 'theLeftOperandsAlias'
+			return fromLeft
+		end 'theLeftOperandsAlias'
 
-		return match fromLeft 'l'
-			declared gives fromLeft
-			undeclared gives self.aliasClosedUnderBitAnd(rhs)
-		end 'l'
-	end 'bitAndInheritedAlias'
+		return try self.aliasIdClosedUnderBitAnd(rhs)
+	end 'bitAndInheritedAliasId'
 
 	// One operand's contribution to the rule above: the alias it declares, WITHHELD unless that alias is
 	// closed under `and`. A float alias is withheld too — `and` has no float reading at all, so a `named`
@@ -57831,14 +58008,16 @@ export type Parser
 	// `value and elementMask`, and `bitwise-operators.md`'s `andThenShift`/`andThenDivide` — is proven and
 	// still hands its alias down. Only a merge nothing proved is withheld, and a withheld operand leaves the
 	// `and` result exactly where it was before this rule existed: a bare `int`.
-	function aliasClosedUnderBitAnd(value ValueId) returns DeclaredAlias
-		let declaring = self.valueDenotedAlias(value)
+	function aliasIdClosedUnderBitAnd(value ValueId) returns TypeNameId throws MapError
+		let aliasId = try self.denotedAliasId(value)
+		let alias = try requireDeclaredAlias(self.castAliasNamedBy(aliasId)) otherwise panic("aliasIdClosedUnderBitAnd: v{value}'s denoted alias id {aliasId} resolves to no alias — denotedAliasId answers only an id castAliasNamedBy resolves")
 
-		return match declaring 'a'
-			undeclared gives DeclaredAlias.undeclared
-			declared(alias) gives declaring if not aliasIsFloat(alias) and rangeIsClosedUnderBitAnd(alias.low) else DeclaredAlias.undeclared
-		end 'a'
-	end 'aliasClosedUnderBitAnd'
+		if aliasIsFloat(alias) or not rangeIsClosedUnderBitAnd(alias.low) 'notClosedUnderBitAnd'
+			throw MapError.keyNotFound
+		end 'notClosedUnderBitAnd'
+
+		return aliasId
+	end 'aliasIdClosedUnderBitAnd'
 
 	// Fold, when the parser holds both operands — so `x shl 63 + 1` is a count of 64 and not an unknown.
 	// RECORDED, not rewritten: the fold's answer lands in the parser's CONSTANT DOMAIN, where diagnostics
@@ -59989,6 +60168,28 @@ export type Parser
 		return fresh
 	end 'valueDeclaredAliasesForWrite'
 
+	function literalCastsForWrite() returns LiteralCastSpanMap
+		match self.bodyState.literalCasts 'state'
+			unwritten then break 'state'
+			entries(table) then return table
+		end 'state'
+
+		let fresh = LiteralCastSpanMap.create()
+		self.bodyState.literalCasts = LiteralCastTable.entries(fresh)
+		return fresh
+	end 'literalCastsForWrite'
+
+	function literalCastArgumentsForWrite() returns LiteralCastMap
+		match self.bodyState.literalCastArguments 'state'
+			unwritten then break 'state'
+			entries(table) then return table
+		end 'state'
+
+		let fresh = LiteralCastMap.create()
+		self.bodyState.literalCastArguments = LiteralCastArgumentTable.entries(fresh)
+		return fresh
+	end 'literalCastArgumentsForWrite'
+
 	// The witness-slot memo.
 	function witnessSlotsForWrite() returns WitnessSlotsByInterfaceMap
 		match self.witnessSlotsByInterface 'state'
@@ -61514,7 +61715,7 @@ export type Parser
 			// The COERCED value is what fills the slot — `Self{v: 3}` into a `float` field stores the
 			// widened f64, not the integer's bytes. A widening only ever produces a fresh scalar, so the
 			// ownership questions below still read the value the source actually named.
-			let value = try self.requireFieldType(layout, index: index, fieldType: fieldType, value: parsed, anchor: nameTok)
+			let value = try self.requireFieldType(layout, index: index, fieldType: fieldType, value: parsed, valueStart: valueStart, anchor: nameTok)
 			try self.rejectDoubleOwningStore(movedOwningValues, value: parsed, valueStart: valueStart)
 
 			// ⭐ **ESCAPE (P1.5-A2b): a capturing closure may not fill a struct field at CONSTRUCTION either** —
@@ -61563,7 +61764,7 @@ export type Parser
 	//
 	// A MANAGED field returns its value untouched — there is no scalar widening on a pointer, and the
 	// move-in the callers perform is a separate decision made downstream.
-	function requireFieldType(layout StructLayout, index FieldIndex, fieldType MaxonType, value ValueId, anchor Token) returns ValueId throws ParseError
+	function requireFieldType(layout StructLayout, index FieldIndex, fieldType MaxonType, value ValueId, valueStart TokenIndex, anchor Token) returns ValueId throws ParseError
 		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: fieldType, slotScopeFilePath: layout.declFilePath)
 
 		// ⭐⭐ **AN INTERFACE-TYPED FIELD ASKS ITS OWN QUESTION (P1.7a-existentials slice 2)** — it is the one
@@ -61598,13 +61799,23 @@ export type Parser
 		// (an int meeting a declared float) it is a different SSA id. All three field doors — the struct
 		// literal, the field write, the self-field write — funnel through here, so one record covers them.
 		//
-		// ⚠ **A ranged FLOAT alias field is NOT reached**: `declaredSlotType` re-tags a float alias to bare
-		// `float` before `fieldTypeOf` answers, so `declaredAliasOfType` sees no alias and the slot is
-		// unchecked. That is a named boundary of this rung — the erasure is `declaredSlotType`'s, whose own
-		// comment records it — and not something this door can decide.
-		self.recordRangeCheckSite(stored, targetAlias: self.declaredAliasOfType(fieldType), line: anchor.line, column: anchor.column)
+		// ⚠ The alias is read off the field's DECLARED spelling, in the declaring file: `fieldType` has a
+		// ranged float alias erased to bare `float` (`declaredSlotType`), and a store written in another
+		// file must not be checked against that file's same-named alias.
+		self.recordFieldRangeChecks(value, stored: stored, valueStart: valueStart, layout: layout, index: index, storedType: fieldType, anchor: anchor)
 		return stored
 	end 'requireFieldType'
+
+	function recordFieldRangeChecks(value ValueId, stored ValueId, valueStart TokenIndex, layout StructLayout, index FieldIndex, storedType MaxonType, anchor Token)
+		if let declaredName = try self.signatures.declaredFieldTypeName(layout, index: index) 'theFieldNamesItsType'
+			let destination = try self.signatures.rangeCheckedAliasNamed(declaredName, readerFilePath: layout.declFilePath) otherwise return
+			self.reportUnneededLiteralCastInto(value, first: valueStart, destination: destination)
+			self.recordRangedTargetSite(stored, target: destination, line: anchor.line, column: anchor.column)
+			return
+		end 'theFieldNamesItsType'
+
+		self.recordRangeCheckSite(stored, destination: storedType, line: anchor.line, column: anchor.column)
+	end 'recordFieldRangeChecks'
 
 	// ⭐ **REJECT A REPEATED OWNING STORE OF ONE VALUE INTO TWO FIELDS OF ONE LITERAL** — a clean E3102
 	// on `Self{a: v, b: v}` instead of a double-free, for the ONE class of value whose store still
@@ -62007,7 +62218,7 @@ export type Parser
 		// ⚠ **A4f'S CONTAINMENT ELISION CANNOT FIRE HERE**: `emitLiteral` mints the value two lines up, and a
 		// freshly minted literal denotes no ranged alias — so the compile-time half this door exists for is
 		// untouched.
-		self.recordRangeCheckSite(value, targetAlias: self.declaredAliasOfType(declared), line: range.line, column: range.column)
+		self.recordRangeCheckSite(value, destination: declared, line: range.line, column: range.column)
 
 		self.recordFieldDefaultValue(index, value: value, fieldValues: fieldValues, filled: filled)
 	end 'fillFieldDefault'
@@ -63776,7 +63987,7 @@ export type Parser
 		if layout.payloadArityAt(index) == 0 'payloadFree'
 			// A payload-free case takes the name and nothing else; anything further is the arity refusal
 			// below's business, stated once for both directions.
-			try self.requireNoFurtherPayloadArgs(wanted, expected: 0 as CaseIndex, memberTok: memberTok)
+			try self.requireNoFurtherPayloadArgs(wanted, expected: 0, memberTok: memberTok)
 			try self.consume(TokenKind.rightParen)
 			return self.emitEnumFromNameCall(layout, args: singletonArgs(self.emitStringLiteral(wanted, range: SourceRange.ofToken(nameTok))), range: range)
 		end 'payloadFree'
@@ -64066,7 +64277,7 @@ export type Parser
 	// parens before any lookup).
 	function payloadSlotFor(layout EnumLayout, payloads PayloadFieldArray, argIndex ParamCount, label ByteArray, labelTok Token, caseTok Token) returns CaseIndex throws ParseError
 		if argIndex == 0 'positional'
-			return 0 as CaseIndex
+			return 0
 		end 'positional'
 
 		for i in 0 upto payloads.count() 'each'
@@ -64183,7 +64394,7 @@ export type Parser
 		// "a future free-list must re-zero" caveat this does not); the union cloner preserves it by blitting
 		// the whole box (`MmRuntime.synthesizeUnionCloner`). Removing the fill silently un-defines that spec.
 		for j in payloads.count() upto layout.maxPayloadArity() 'zeroFill'
-			let zero = self.emitLiteral(0 as ParsedInt, valueType: MaxonType.integer, range: range)
+			let zero = self.emitLiteral(0, valueType: MaxonType.integer, range: range)
 			self.emitIndirectStore(box, offset: layout.payloadSlotOffset(j), value: zero, storageType: MaxonType.integer, range: range)
 		end 'zeroFill'
 
@@ -70422,7 +70633,7 @@ export type Parser
 		// ⚠ **A DIRECT CALL CANNOT REACH IT, WHICH IS WHY IT SURVIVED REVIEW.** `[code(), code()]` over a
 		// `function code() returns ExitCode` compiles, because a direct call's result is not `exitCode`-tagged.
 		// `wordSlotStorageType`'s header names the two doors that DO mint one — `mintIndirectCallResult` (an
-		// indirect call through a function alias) and `interfaceReturnMaxonType` (an interface method
+		// indirect call through a function alias) and `interfaceSpelledType` (an interface method
 		// `returns ExitCode`) — and both reach this column. That header is also this arm's ANSWER: it maps
 		// `exitCode` to `MaxonType.integer` at the env-slot sink because an `exitCode` lowers to `StdType.u32`,
 		// for which `accessWidthFor` has no memory-access form and panics on every backend. An
@@ -73245,6 +73456,7 @@ export type Parser
 		let target = try self.pickWitnessDispatchByArity(candidates, argCount: userArgs.count(), receiver: receiver, methodTok: methodTok)
 		var args = try self.slottedWitnessArgs(target, receiver: receiver, userArgs: userArgs, argLabels: argLabels, argRanges: argRanges, methodTok: methodTok)
 		self.widenWitnessArgs(target, args: args, first: methodTok, last: rparenTok)
+		self.recordWitnessConstantArgRangeChecks(args, target: target, anchor: methodTok)
 
 		// A `Self`-typed formal (`equals(other Self)`) requires an argument that is a value of `T` — a concrete
 		// literal (`self.item.equals(42)`) would be marshalled into the `Self` pointer and faulted. The SAME
@@ -73401,7 +73613,7 @@ export type Parser
 	// Is interface formal `formalIndex` declared `float`? Both askers stay within the declared formals — one
 	// loops the formals directly, the other loops actuals a checked arity has made equinumerous with them
 	// (see `floatWidenedWitnessArgs`) — so an out-of-range index is a compiler defect, not an arity mismatch
-	// to absorb. The name is spelled by `FloatConformerName`, the same constant `interfaceReturnMaxonType`
+	// to absorb. The name is spelled by `FloatConformerName`, the same constant `interfaceSpelledType`
 	// reads it by.
 	function witnessFormalIsFloat(target WitnessDispatchTarget, formalIndex ElementIndex) returns bool
 		return (try target.paramTypeNames.get(formalIndex) otherwise panic("witnessFormalIsFloat: paramTypeNames.get OOB at {formalIndex} below count {target.paramTypeNames.count()} — a dispatch reaching here has one actual per formal")).equals(FloatConformerName)
@@ -73819,13 +74031,25 @@ export type Parser
 		// parameter on the DECLARATION — and above the fallback for the identical reason: the fallback reads
 		// the associated type's NAME as though it were a concrete type's.
 		if let bound = try self.associatedReturnThroughConstraintBinding(target, receiver: receiver) 'theConstraintBindsIt'
-			return self.mintOwnedCallResult(bound, scopeFilePath: CompilerOwnedDeclFilePath)
+			return self.mintOwnedCallResult(bound, scopeFilePath: self.constrainedParamDeclFilePath(receiver))
 		end 'theConstraintBindsIt'
 
-		// `CompilerOwnedDeclFilePath` for the two arms above's reason: a requirement's return type is written
-		// inside an `interface`, and `IrInterface` records no declaring file.
-		return self.mintOwnedCallResult(self.interfaceReturnMaxonType(target.returnTypeName), scopeFilePath: CompilerOwnedDeclFilePath)
+		// Minted as the interface's own file reads its text, so a float is lifted and a contested ranged
+		// name re-spelled once, the crossing a direct call's result makes from its callee's file. Read as
+		// this file's, a same-named narrower alias here elides the return guard.
+		return self.mintOwnedCallResult(self.unboundRequirementResultType(target), scopeFilePath: self.signatures.declaringInterface(target.declaringInterfaceName).declFilePath)
 	end 'witnessDispatchValueResult'
+
+	// An associated type no receiver binds is named `<DeclaringInterface>.<Item>`: under its bare name
+	// a program typealias of that name would capture it, and the result would carry that alias's
+	// range.
+	function unboundRequirementResultType(target WitnessDispatchTarget) returns MaxonType
+		if not self.signatures.interfaceDeclaresAssociatedType(target.declaringInterfaceName, name: target.returnTypeName) 'aProgramTypeName'
+			return self.interfaceSpelledType(target.returnTypeName)
+		end 'aProgramTypeName'
+
+		return MaxonType.named(self.artifact.typeNames.intern(joinQualifiedName(target.declaringInterfaceName, member: target.returnTypeName)))
+	end 'unboundRequirementResultType'
 
 	// ⭐⭐ **WHAT THE RECEIVER'S `with` ARGUMENTS SAY THIS ASSOCIATED-TYPE RETURN IS (W57).** `current()` on a
 	// `Cursor with Element` hands back an `Element`, and the fallback below this arm hands back
@@ -73918,19 +74142,31 @@ export type Parser
 		return self.constraintBindingResultType(try bindings.get(position) otherwise panic("constraintBoundAssociatedType: bindings.get OOB at {position} below count {bindings.count()}"))
 	end 'constraintBoundAssociatedType'
 
-	// ⭐ **WHAT A CONSTRAINT'S BINDING DENOTES IN THE DECLARATION THAT WROTE IT.** A binding is a rendered type
-	// name, and inside a shared generic body the interesting ones name the enclosing declaration's OWN
-	// parameters — `where Source is Iterator with Element` inside `type WithIterIterator uses Source, Element`
-	// binds a `typeParameter`, which is what makes the declared `returns (Source, Element)` and the built
-	// tuple ONE type. Everything else is a concrete name and takes `interfaceReturnMaxonType`, the SAME typer
-	// the fallback one function up uses, so the two answers differ only in what they are answering ABOUT.
+	// ⭐ **WHAT A CONSTRAINT'S BINDING DENOTES IN THE DECLARATION THAT WROTE IT.** A binding is a
+	// rendered type name, and inside a shared generic body the interesting ones name the enclosing
+	// declaration's OWN parameters — `where Source is Iterator with Element` inside `type
+	// WithIterIterator uses Source, Element` binds a `typeParameter`, which is what makes the declared
+	// `returns (Source, Element)` and the built tuple ONE type. Everything else is a concrete name and
+	// takes `interfaceSpelledType`, the SAME typer the fallback in `witnessDispatchValueResult` uses,
+	// so the two answers differ only in what they are answering ABOUT.
 	function constraintBindingResultType(binding ByteArray) returns MaxonType
 		if self.typeParamPositionOf(binding) < self.enclosingTypeParams.count() 'namesAnEnclosingParameter'
 			return MaxonType.typeParameter(typeParamTokenFor(self.enclosingType, paramName: binding))
 		end 'namesAnEnclosingParameter'
 
-		return self.interfaceReturnMaxonType(binding)
+		return self.interfaceSpelledType(binding)
 	end 'constraintBindingResultType'
+
+	// The OWNER type's file, not this call's: a `where` clause is stored only from the type
+	// declaration, while the dispatch may be written in an extension in another file.
+	function constrainedParamDeclFilePath(receiver ValueId) returns FilePath
+		let owner = try self.signatures.typeParamOwnerOf(self.valueTypeParamId(receiver)) otherwise panic("constrainedParamDeclFilePath: v{receiver}'s type parameter has no owner, yet its owner's `where` clause bound this dispatch's result")
+
+		return match self.signatures.structInAnyFile(owner.declaringTypeName) 'owner'
+			declared(layout) gives layout.declFilePath
+			undeclared panic("constrainedParamDeclFilePath: no `type {String.from(owner.declaringTypeName)}` is declared, yet its `where` clause bound this dispatch's result — `structWhereConstraints` read that declaration under the same key")
+		end 'owner'
+	end 'constrainedParamDeclFilePath'
 
 	// ⭐⭐ **IS THIS DISPATCH'S RESULT AN ASSOCIATED TYPE THE PROGRAM HOLDS AT AN INTERFACE?** — the position
 	// within the DISPATCHED interface's own `uses` names, plus the interface it is held at, or
@@ -74021,10 +74257,16 @@ export type Parser
 		return result
 	end 'mintSelfReturnedWitnessResult'
 
-	// A non-void, non-`Self` interface return TYPE NAME as a `MaxonType`: the primitive
-	// keywords map to their tags, `String` to the builtin, and every other name — a user ranged alias
-	// (`Code`), a struct — to a `named` type `mintOwnedCallResult` resolves through the same alias/struct doors
-	// a direct call's return does.
+	// The result type of a synthesized-protocol direct call (`emitBuiltinConformanceCall`,
+	// `emitByteRecordOrdering`), lifted as its compiler-owned interface sees it: a program alias of
+	// the same name is range-checked against rather than inherited.
+	function interfaceReturnMaxonType(returnTypeName ByteArray) returns MaxonType
+		return self.repairSweptType(self.interfaceSpelledType(returnTypeName), scopeFilePath: CompilerOwnedDeclFilePath)
+	end 'interfaceReturnMaxonType'
+
+	// An interface TYPE NAME as a `MaxonType`: the primitive keywords map to their tags, `String` to
+	// the builtin, and every other name — a user ranged alias (`Code`), a struct — to a `named` type
+	// `mintOwnedCallResult` resolves through the same alias/struct doors a direct call's return does.
 	//
 	// ⭐ **`ExitCode` IS CLAIMED WITH THE KEYWORDS AND NOT WITH THE USER NAMES, AND THE REASON IS A WIDTH
 	// WIDTH.** An interface stores its return type as a rendered source STRING, so this
@@ -74043,20 +74285,15 @@ export type Parser
 	// not in it. `named` is its answer for every name it does not own, which is exactly what
 	// `maxonTypeOfTag`'s `named` arm rebuilds from this file's interned id — and the intern is paid only on
 	// that answer, never for a builtin whose type carries no name at all.
-	// ⛔⛔ **THE RETURN COLUMN'S HALF OF THE FLOAT-ALIAS HOLE — the twin of `renderedTypeNameAbiType`'s, and
-	// the two are one fix.** `builtinTypeNameTag` answers `named` for a ranged FLOAT alias, and a `named`
-	// result is read as an i64, so an interface method `returns Real` captures its result out of the INTEGER
-	// return register while the impl leaves it in XMM0. The ranged-typealias rule makes the alias the ONLY
-	// legal spelling, which is what puts the hole on the only road there is.
 	//
-	// ⚠ **IT FLOAT-RESOLVES AND NOTHING ELSE**, so the `named` identity a ranged INT alias carries — the
-	// range and the signedness the VALUE column reads off its name — survives exactly as this function's
-	// header insists it must. `floatResolvedTagOfName` is the one statement of that asymmetry; asking it here
-	// is what keeps the interface door and the two cast doors from answering it differently.
-	function interfaceReturnMaxonType(returnTypeName ByteArray) returns MaxonType
-		let tag = self.floatResolvedTagOfName(builtinTypeNameTag(returnTypeName), name: returnTypeName)
-		return maxonTypeOfTag(tag, nameId: UnnamedTypeId if tag != ValueTypeTag.named else self.artifact.typeNames.intern(returnTypeName))
-	end 'interfaceReturnMaxonType'
+	// ⛔⛔ **UNLIFTED: a ranged FLOAT alias is `named` here**, and a `named` result is read as an i64,
+	// so an interface method `returns Real` would capture its result out of the INTEGER return
+	// register while the impl leaves it in XMM0. Every caller lifts it through `repairSweptType`
+	// (`mintOwnedCallResult`) with the file whose text it is.
+	function interfaceSpelledType(typeName ByteArray) returns MaxonType
+		let tag = builtinTypeNameTag(typeName)
+		return maxonTypeOfTag(tag, nameId: UnnamedTypeId if tag != ValueTypeTag.named else self.artifact.typeNames.intern(typeName))
+	end 'interfaceSpelledType'
 
 	// The token shape of a method call on an ARRAY FIELD reached through a field chain — `<base>(.<field>)+
 	// .<method>(` with AT LEAST TWO dots (a one-dot `b.m(…)` is `methodCallsAt`'s). `resolveFieldChainFrom`
@@ -76603,7 +76840,7 @@ export type Parser
 	// `InsertRangeChecks.paramAliasOf` resolves an arg site against the CALLEE's ranged PARAMETERS, and a
 	// parameter declared at an enum type is never among them (an enum has no `int(lo to hi)` declaration for
 	// `paramSites` to hold). So the site was a parse-time allocation per call site with a structurally
-	// guaranteed `ParamAliasLookup.none` at the other end — the `+N per call site, parse only` shape
+	// guaranteed `paramAliasOf` miss at the other end — the `+N per call site, parse only` shape
 	// `docs/optimization-log.md` has caught three times. This restores the pre-tick reach exactly.
 	//
 	// ⚠ It asks whether the name is a DECLARED ENUM and not merely whether the tag is `named`, because a
@@ -77048,7 +77285,7 @@ export type Parser
 		// ⚠ **WHAT IS STILL UNENFORCED IS NOT A DOOR** — it is the zero-initialized slot `Array.resize`
 		// EXPOSES, which no value ever crosses into, so there is nothing for a store guard to stand in front
 		// of. Pinned by `specs/safety.md`'s `divide-by-zero-fault-through-a-resized-array-slot`.
-		self.recordRangeCheckSite(stored, targetAlias: self.declaredAliasOfType(declared), line: methodTok.line, column: methodTok.column)
+		self.recordRangeCheckSite(stored, destination: declared, line: methodTok.line, column: methodTok.column)
 		return stored
 	end 'requireContainerElementType'
 
@@ -77332,14 +77569,10 @@ export type Parser
 	// It is also why a program's OWN array conformer is checked against ITS declaration and not the
 	// corpus's: `arrayReceiverDeclaredName` names whichever one this receiver was built from.
 	//
-	// ⛔⛔ **THE PARAGRAPH ABOVE WAS A CLAIM, AND IT WAS FALSE FOR THIS DOOR'S WHOLE LIFE (found
-	// 2026-08-30).** The range WAS read out of `stdlib/Array.maxon` here — and then thrown away: the site
-	// recorded only the alias's NAME (`recordRangedTargetSite`), and `InsertRangeChecks` re-resolved that
-	// name against the CALLING file. So the bound actually enforced came from `stdlib/Vector.maxon`'s
-	// identically-named twin, or — measured, and far worse — from a `typealias ElementIndex` the calling
-	// PROGRAM declared privately for its own use, which refused `a.set(9, …)` on a 20-element array. The
-	// claim holds because `RangeCheckSiteTarget.alias` carries the declaration this door picked; that
-	// field holds the sabotage in both directions.
+	// ⛔⛔ **THE SITE CARRIES THE DECLARATION THIS DOOR PICKED, NOT ITS NAME (`RangeCheckSiteTarget.alias`).**
+	// The name re-resolved against the CALLING file enforces `stdlib/Vector.maxon`'s identically-named
+	// twin, or a `typealias ElementIndex` the calling PROGRAM declares for its own use — which refuses
+	// `a.set(9, …)` on a 20-element array.
 	//
 	// ⚠ **THE STDLIB HALF WAS INVISIBLE, WHICH IS WHY IT SURVIVED REVIEW**: both stdlib declarations
 	// (`Array.maxon`'s and `Vector.maxon`'s) carry the same `int(0 to i64.max)`, so the wrong
@@ -77363,8 +77596,10 @@ export type Parser
 			return
 		end 'aMachineWordNotAStdlibAlias'
 
-		let declared = self.signatures.firstParamAliasOf(qualifiedMethodName(self.arrayReceiverDeclaredName(giid), methodName: member))
-		self.recordRangeCheckSite(value, targetAlias: declared, line: anchor.line, column: anchor.column)
+		match self.signatures.firstParamAliasOf(qualifiedMethodName(self.arrayReceiverDeclaredName(giid), methodName: member)) 'declared'
+			declared(alias) then self.recordRangedTargetSite(value, target: alias, line: anchor.line, column: anchor.column)
+			undeclared then break 'declared'
+		end 'declared'
 	end 'recordArmServedIndexRangeCheck'
 
 	// The ` , <label> : ` separating one of a builtin method's positional arguments from the next —
@@ -78421,7 +78656,7 @@ export type Parser
 
 		// The COERCED value is what the store writes — `count = 3` into a `float` field stores the widened
 		// f64. Same door as the struct literal and the `p.v = 3` spelling.
-		let value = try self.requireFieldType(layout, index: index, fieldType: self.storedFieldType(receiver, layout: layout, index: index), value: parsed, anchor: fieldTok)
+		let value = try self.requireFieldType(layout, index: index, fieldType: self.storedFieldType(receiver, layout: layout, index: index), value: parsed, valueStart: valueStart, anchor: fieldTok)
 
 		// Routed through `emitFieldWrite`, exactly as `parseFieldAssignment` is: a MANAGED self-field
 		// (`name = n`) must MOVE the new value in and only THEN drop the value it displaces (a borrowed String
@@ -78551,7 +78786,7 @@ export type Parser
 
 		// The coercion is the LITERAL's, through the same door — `self.v = 3` into a `float` field holds the
 		// widened f64, exactly as `Self{v: 3}` stores one, because the two spellings fill one slot.
-		let value = try self.requireFieldType(layout, index: index, fieldType: fieldType, value: parsed, anchor: fieldTok)
+		let value = try self.requireFieldType(layout, index: index, fieldType: fieldType, value: parsed, valueStart: valueStart, anchor: fieldTok)
 		let sourceName = self.rhsRootLocalName(valueStart)
 		let sourceReadsAField = self.rhsSpanReadsAField(valueStart)
 
@@ -78800,7 +79035,7 @@ export type Parser
 
 		// The COERCED value is what the store writes — `p.v = 3` into a `float` field stores the widened
 		// f64. Same door as the struct literal and the bare self-field spelling.
-		let value = try self.requireFieldType(step.layout, index: index, fieldType: self.storedFieldType(step.box, layout: step.layout, index: index), value: parsed, anchor: step.lastFieldTok)
+		let value = try self.requireFieldType(step.layout, index: index, fieldType: self.storedFieldType(step.box, layout: step.layout, index: index), value: parsed, valueStart: valueStart, anchor: step.lastFieldTok)
 
 		self.noteWriteThroughAField(func, target: step.box, baseIndex: baseIndex, lastDotIndex: lastDotIndex, anchor: step.baseTok)
 		try self.emitFieldWrite(func, box: step.box, layout: step.layout, index: index, value: value, argBareLocal: self.rhsWasBareLocalReference(valueStart), anchor: step.lastFieldTok, range: SourceRange.between(step.baseTok, last: step.lastFieldTok), valueTok: self.tokenAt(valueStart))
@@ -81962,7 +82197,7 @@ export type Parser
 		// `witnessValueForConstraint` is the one door that tells the two routes apart. A reset would
 		// leave `witnessParamValueId` nothing to name in every closure that dispatches. Nothing inside a
 		// closure body writes the pair.
-		self.bodyState = FunctionBodyState.fresh(self.anchors, firstValueId: ((paramCount + 1) as ParamCount) as ValueId, returnBrand: EmptySourceText, provenance: DeferredProvenance.create(self.anchors.functions.provenance), mayReturnAGlobalAlias: false, capturedImmutableGlobalReads: savedBody.immutableGlobalReads, closureEnv: ClosureEnvParam.param(paramCount), returnAlias: EmptySourceText, paramSites: paramSites, carriesLayoutParam: false, countParam: FixedElementCountParam.none, nascentSelfFactory: false, kind: EnclosingBodyKind.closureBody)
+		self.bodyState = FunctionBodyState.fresh(self.anchors, firstValueId: ((paramCount + 1) as ParamCount) as ValueId, returnBrand: EmptySourceText, provenance: DeferredProvenance.create(self.anchors.functions.provenance), mayReturnAGlobalAlias: false, capturedImmutableGlobalReads: savedBody.immutableGlobalReads, closureEnv: ClosureEnvParam.param(paramCount), returnAlias: self.anchors.undeclaredAlias, paramSites: paramSites, carriesLayoutParam: false, countParam: FixedElementCountParam.none, nascentSelfFactory: false, kind: EnclosingBodyKind.closureBody)
 
 		// The enclosing scope becomes a CAPTURE scope for the duration of the body — a body name resolving
 		// into it (an enclosing local/param/self-field, not the closure's own params) is a capture. Pushed
@@ -82243,7 +82478,7 @@ export type Parser
 	// there would move every following field.
 	//
 	// An `exitCode` value arrives from two producers — an indirect call through a function alias
-	// (`mintIndirectCallResult`) and an interface method (`interfaceReturnMaxonType`) — so the
+	// (`mintIndirectCallResult`) and an interface method (`interfaceSpelledType`) — so the
 	// widening is at this sink rather than at either. Pinned by
 	// `closure-capture.capture-exitcode-from-alias-call`, `.capture-exitcode-from-interface-method`
 	// and `.capture-exitcode-wide-value`; only the last carries a value wider than one byte, so only
@@ -86833,7 +87068,7 @@ export type Parser
 		// The table label is the FIRST argument and is therefore positional — the language's rule for the
 		// first argument of every call, inherited rather than restated. Asked BEFORE the literal is
 		// consumed so a labelled one earns E2052 instead of "expected a string literal".
-		_ = try self.consumeArgLabel(0 as ParamCount, rule: ArgLabelRule.ordinary)
+		_ = try self.consumeArgLabel(0, rule: ArgLabelRule.ordinary)
 
 		let labelTok = try self.consume(TokenKind.stringLiteral)
 		let label = try self.decodedStringLiteralBytes(labelTok)
@@ -86848,7 +87083,7 @@ export type Parser
 		try self.consume(TokenKind.comma)
 
 		let indexTok = self.current()
-		let argLabel = try self.consumeArgLabel(1 as ParamCount, rule: ArgLabelRule.ordinary)
+		let argLabel = try self.consumeArgLabel(1, rule: ArgLabelRule.ordinary)
 
 		if not argLabel.equals(ucdIndexParamNameOf(load)) 'notTheDeclaredParameter'
 			throw ParseError.builtinUnknownArgLabel(String.from(callee), label: String.from(argLabel), line: indexTok.line, column: indexTok.column)
@@ -86885,7 +87120,7 @@ export type Parser
 	// too, so the consume succeeds and the interpolation start is then what the `)` finds.
 	// `__Builtins.ucdByteAt`'s label answers the same way, so the shapes of one mistake read alike.
 	function parseDebugStreamNameId(func IrFunction, anchor Token) returns ValueId throws ParseError
-		_ = try self.consumeArgLabel(0 as ParamCount, rule: ArgLabelRule.ordinary)
+		_ = try self.consumeArgLabel(0, rule: ArgLabelRule.ordinary)
 
 		// A non-literal argument is refused with the sentence `parsePanicMessage` uses for the identical
 		// requirement, quoting the TYPE the author actually wrote — which means parsing the expression to
@@ -87643,6 +87878,7 @@ export type Parser
 				// `checkImmutableArgToMutatingParam` refuses with E3019 a phase later; the spill keeps the IR
 				// well-formed until that diagnostic is reported, exactly as every other recovery here does).
 				let passed = try self.byRefArgumentValue(value, byRefPosition: byRefPosition, handedTheCell: handedTheCell, anchor: valueTok)
+				self.noteLiteralCastArgument(value, passed: passed, first: valueStart)
 
 				self.noteArgumentMayWriteItsBinding(valueTok, valueStart: valueStart)
 
@@ -88777,20 +89013,12 @@ export type Parser
 		for i in 0 upto args.count() 'eachArg'
 			let argValue = try args.get(i) otherwise panic("recordConstantArgRangeChecks: args.get OOB at {i}")
 
-			if not (self.constIsKnown(argValue) or tagIsFloat(self.tagOf(argValue))) 'cannotBeALiteral'
+			if not self.argMayBeACheckedConstant(argValue) 'notACheckedConstant'
 				continue
-			end 'cannotBeALiteral'
+			end 'notACheckedConstant'
 
-			// An ENUM value is a known constant since `enum-narrow-storage` and can never be checked against
-			// a ranged parameter — see `argIsAnEnumValue` for why the site would be a guaranteed dead
-			// allocation at every call site in every program that passes one.
-			if self.argIsAnEnumValue(argValue) 'noRangedParameterCanDeclareIt'
-				continue
-			end 'noRangedParameterCanDeclareIt'
-
-			// The site's own copies: a filled-in label or a resolved callee may be a record the signature index holds.
-			let label = try argLabels.get(i) otherwise EmptySourceText
-			self.bodyState.rangeCheckArgSites.push(RangeCheckArgSite.create(argValue, callee: callee, argIndex: i, label: label, block: self.bodyState.currentBlock.id, line: anchor.line, column: anchor.column))
+			let label = callArgumentLabel(argLabels, argIndex: i)
+			self.recordConstantArgSite(argValue, callee: callee, argIndex: i, label: label, parameter: self.anchors.calleeArgParameter, anchor: anchor)
 		end 'eachArg'
 	end 'recordConstantArgRangeChecks'
 
@@ -88806,7 +89034,7 @@ export type Parser
 
 		for i in 0 upto args.count() 'eachArg'
 			let argValue = try args.get(i) otherwise panic("recordCallArgumentSites: args.get OOB at {i}")
-			let label = EmptySourceText if argLabels.isEmpty() else try argLabels.get(i) otherwise panic("recordCallArgumentSites: argLabels.get OOB at {i} on a list the line above proved one per argument")
+			let label = callArgumentLabel(argLabels, argIndex: i)
 
 			if not self.argIsAnIntegerQuantity(argValue) or not self.signatures.mayTakeUnsignedQuantityAt(callee, argIndex: i, label: label) 'noSignFloorAtThisSlot'
 				continue
@@ -88821,6 +89049,45 @@ export type Parser
 		let tag = self.tagOf(argValue)
 		return tag == ValueTypeTag.integer or tag == ValueTypeTag.named
 	end 'argIsAnIntegerQuantity'
+
+	function recordWitnessConstantArgRangeChecks(args ValueIdArray, target WitnessDispatchTarget, anchor Token)
+		for i in 0 upto args.count() 'eachArg'
+			let argValue = try args.get(i) otherwise panic("recordWitnessConstantArgRangeChecks: args.get OOB at {i}")
+
+			if not self.argMayBeACheckedConstant(argValue) 'notACheckedConstant'
+				continue
+			end 'notACheckedConstant'
+
+			let parameter = try self.interfaceFormalParameterAt(target, argIndex: i) otherwise continue
+			self.recordConstantArgSite(argValue, callee: EmptySourceText, argIndex: i, label: EmptySourceText, parameter: parameter, anchor: anchor)
+		end 'eachArg'
+	end 'recordWitnessConstantArgRangeChecks'
+
+	function argMayBeACheckedConstant(argValue ValueId) returns bool
+		if not (self.constIsKnown(argValue) or tagIsFloat(self.tagOf(argValue))) 'cannotBeALiteral'
+			return false
+		end 'cannotBeALiteral'
+
+		// An ENUM value is a known constant since `enum-narrow-storage` and can never be checked against
+		// a ranged parameter — see `argIsAnEnumValue` for why the site would be a guaranteed dead
+		// allocation at every call site in every program that passes one.
+		return not self.argIsAnEnumValue(argValue)
+	end 'argMayBeACheckedConstant'
+
+	function recordConstantArgSite(argValue ValueId, callee ByteArray, argIndex ParamCount, label ByteArray, parameter ArgSiteParameter, anchor Token)
+		self.bodyState.rangeCheckArgSites.push(RangeCheckArgSite.create(argValue, callee: callee, argIndex: argIndex, label: label, parameter: parameter, block: self.bodyState.currentBlock.id, line: anchor.line, column: anchor.column))
+	end 'recordConstantArgSite'
+
+	function interfaceFormalParameterAt(target WitnessDispatchTarget, argIndex ParamCount) returns ArgSiteParameter throws MapError
+		if argIndex < WitnessReceiverArgCount 'theBorrowedReceiver'
+			throw MapError.keyNotFound
+		end 'theBorrowedReceiver'
+
+		let formalName = try target.paramTypeNames.get(argIndex - WitnessReceiverArgCount) otherwise panic("interfaceFormalParameterAt: paramTypeNames.get OOB at {argIndex - WitnessReceiverArgCount} — a witness dispatch carries the receiver plus one actual per formal")
+
+		let alias = try self.signatures.interfaceFormalAlias(target.declaringInterfaceName, formalName: formalName)
+		return ArgSiteParameter.interfaceFormal(alias.clone())
+	end 'interfaceFormalParameterAt'
 
 	// ⭐⭐ **AN ARGUMENT AT AN OPAQUE TYPE PARAMETER IS CHECKED AGAINST WHAT THE INSTANCE BOUND IT TO — AND
 	// THIS DOOR OWES BOTH HALVES, BECAUSE THE CALLEE CANNOT OWE EITHER (ARRR).**
@@ -88929,7 +89196,7 @@ export type Parser
 		let argCount = self.signatures.genericInstanceArgCount(gid)
 
 		for i in 0 upto args.count() 'eachArg'
-			let slot = argSlotPosition(opaque.paramNames, argIndex: i, label: try argLabels.get(i) otherwise EmptySourceText)
+			let slot = argSlotPosition(opaque.paramNames, argIndex: i, label: callArgumentLabel(argLabels, argIndex: i))
 
 			if not opaque.namesATypeParameter(slot) 'concreteParam'
 				continue
@@ -88949,7 +89216,7 @@ export type Parser
 			// `requireContainerElementType` both cross through this same door).
 			let substituted = self.resolvedSlotType(self.signatures.substitutedInstanceArg(gid, position: position))
 			let argValue = try args.get(i) otherwise panic("recordSubstitutedArgRangeChecks: args.get OOB at {i} inside its own count()")
-			self.recordRangeCheckSite(argValue, targetAlias: self.declaredAliasOfType(substituted), line: anchor.line, column: anchor.column)
+			self.recordRangeCheckSite(argValue, destination: substituted, line: anchor.line, column: anchor.column)
 		end 'eachArg'
 	end 'recordSubstitutedArgRangeChecks'
 
@@ -93375,3 +93642,11 @@ module function insertOwnedName(names UsedTypeNameSet, name ByteArray)
 
 	names.insert(name.clone())
 end 'insertOwnedName'
+
+function callArgumentLabel(argLabels ByteArrayArray, argIndex ParamCount) returns ByteArray
+	if argLabels.isEmpty() 'anUnlabelledCall'
+		return EmptySourceText
+	end 'anUnlabelledCall'
+
+	return try argLabels.get(argIndex) otherwise panic("callArgumentLabel: argLabels.get OOB at {argIndex} of {argLabels.count()} — a call's label list is empty or one per argument")
+end 'callArgumentLabel'

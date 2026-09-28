@@ -3930,7 +3930,7 @@ typealias O = Outer with Integer
 function main() returns ExitCode
 	var o = O.create()
 	print("{o.build(42)}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -3965,7 +3965,7 @@ typealias O = Outer with Integer
 function main() returns ExitCode
 	var o = O.create()
 	print("{o.build(42)}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -4047,7 +4047,7 @@ typealias O = Outer with String
 function main() returns ExitCode
 	var o = O.create()
 	print("{o.build("ab")}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -4127,7 +4127,7 @@ typealias O = Outer with Integer
 function main() returns ExitCode
 	var o = O.create()
 	print("{o.build(42)}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr

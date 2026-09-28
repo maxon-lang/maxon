@@ -47,7 +47,7 @@ esac
   echo "typealias Count = int(0 to u64.max)"
   echo ""
   echo "type Pair uses A, B"
-  echo -e "\tvar a as A"
+  echo -e "\texport var a as A"
   echo -e "\tvar b as B"
   echo -e "\tstatic function create(x A, y B) returns Self"
   echo -e "\t\treturn Self{a: x, b: y}"
@@ -76,6 +76,6 @@ esac
 
   echo "function main() returns ExitCode"
   echo -e "\tlet base = P0.create(1, y: 2)"
-  echo -e "\treturn 7 as ExitCode"
+  echo -e "\treturn 7 if base.a == 1 else 1"
   echo "end 'main'"
 } > "$OUT"

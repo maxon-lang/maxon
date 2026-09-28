@@ -323,9 +323,9 @@ x64-linux moved to the message side in rung A1j (2026-07-31): it was measured si
 were written, and the reason was never the ELF lane — `mrt_panic` simply was not appended to it, while
 every primitive it assembles was. wasm32-wasi moved in rung W3 for the same shape of reason: it had no
 `mrt_panic` at all, and *"wasm cannot print a backtrace"* had been read as a property of the target when
-it was a property of the backend. It cannot walk a frame chain — there is none — so its panic runtime
-writes the message and TRAPS, and the frames come from wasmtime's own unwind, symbolized from the
-module's "name" section (`StdToWasm.appendPanicRuntime`, `SpecTestRunner.wasmPanicReport`).
+it was a property of the backend. It has no saved-frame-pointer chain, so every function records itself on a
+frame stack in linear memory, and its panic runtime writes the message, walks that stack for the
+frames and exits with the panic exit code (`StdToWasm.appendPanicRuntime`).
 
 ⇒ **The silent halves are DELETED rather than given a `stderr` block of their own**, which would have
 made them byte-for-byte duplicates of their twins under a different `unsupported-targets:` line. Nothing they
@@ -343,9 +343,8 @@ message-only cases with no marker, and the cross-target gate went red on x64-lin
 EMPTY `actual` — which READS exactly like "the guard is missing on this target" and was not. The
 identical program over a USER-declared `typealias Percent = int(0 to 100)`, touching neither
 stdlib nor `Codepoint`, exited 1 with empty stderr on wasm and 1 with the full message on x64.
-Both cases now run on every lane: the guard is target-neutral and the panic text is reconstructed on
-wasm from wasmtime's own trap report (`SpecTestRunner.wasmPanicReport`), so there is no lane left that
-cannot answer them.
+Both cases now run on every lane: the guard is target-neutral and wasm's panic runtime prints the same
+message and trace as the native ones, so there is no lane left that cannot answer them.
 
 <!-- test: stdlib-range-panic-names-the-alias -->
 ### A REACHABLE stdlib function still gets its range guard, and the panic names the alias

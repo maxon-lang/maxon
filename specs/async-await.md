@@ -1712,7 +1712,7 @@ function countThunk() returns Tally throws DrainError
 		throw DrainError.broken
 	end 'present'
 
-	return 2 as Tally
+	return 2
 end 'countThunk'
 
 function main() returns ExitCode

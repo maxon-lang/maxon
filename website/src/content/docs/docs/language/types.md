@@ -237,6 +237,7 @@ end 'main'
 | float → integer | **E3009** `Cannot cast from float to int` — use a rounding function |
 | `bool` ↔ number, `String` → number, struct ↔ anything | **E3009** |
 | a value to its own alias (`b as Byte` when `b` is a `Byte`) | **E3010** `unneeded cast` |
+| a literal to the alias its destination declares (`open(8080 as Port)` for a `Port` parameter) | **E3010** `unneeded cast: the literal 8080 already fits in 'Port'` — see [Construction](/docs/language/ranged-typealiases/#construction) |
 | one container instance to a different one | **E3131** |
 
 ### Floats to Integers

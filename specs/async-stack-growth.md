@@ -1231,7 +1231,7 @@ function main() returns ExitCode
 	let p = async work(7)
 	let r = await p
 	print("r={r}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -1260,7 +1260,7 @@ function main() returns ExitCode
 	sleep(1)
 	let depth = down(2000000)
 	print("depth={depth}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -1397,7 +1397,7 @@ function main() returns ExitCode
 	let later = async seedBytes()
 	let after = await later
 	print("total={total} larger={after > before}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -1674,7 +1674,7 @@ function main() returns ExitCode
 	let later = async seedBytes()
 	let after = await later
 	print("deep={deepTotal} shallow={shallowTotal} raised={raised > before} restored={after == before}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout

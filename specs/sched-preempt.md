@@ -107,7 +107,7 @@ function main() returns ExitCode
 	let q = try await spun otherwise 0
 	let spinEndedAtMs = try await s.endedAt() otherwise 0 - 1
 	print("prompt={pingAtMs < spinEndedAtMs} ping={p} spun={q > 0} preempted={__Builtins.schedPreemptCount() > 0}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -188,7 +188,7 @@ function main() returns ExitCode
 	let wrong = try await churned otherwise 0 - 1
 	let churnEndedAtMs = try await r.endedAt() otherwise 0 - 1
 	print("prompt={pingAtMs < churnEndedAtMs} ping={p} wrong={wrong}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -299,7 +299,7 @@ function main() returns ExitCode
 		j = j + 1
 	end 'earliest'
 	print("prompt={pingAtMs < firstEndMs} spinners={ran == spinners.count()} ping={p}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -381,11 +381,11 @@ function main() returns ExitCode
 		end 'neverStarted'
 
 		print("owner={seenByOwner} sibling={seenBySibling} busy={q > 0} preempted={__Builtins.schedPreemptCount() > preemptsBefore}\n")
-		return 0 as ExitCode
+		return 0
 	end 'attempts'
 
 	print("busy had not started in {attemptCap} attempts\n")
-	return 3 as ExitCode
+	return 3
 end 'main'
 ```
 ```stdout
@@ -464,7 +464,7 @@ function main() returns ExitCode
 	let wrong1 = try await churned1 otherwise 0 - 1
 	let wrong2 = try await churned2 otherwise 0 - 1
 	print("wrong={wrong1 + wrong2} preempted={__Builtins.schedPreemptCount() > 1}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -536,7 +536,7 @@ function main() returns ExitCode
 	let q = try await spun otherwise 0
 	let spinEndedAtMs = try await s.endedAt() otherwise 0 - 1
 	print("prompt={pingAtMs < spinEndedAtMs} ping={p} spun={q > 0} preempted={__Builtins.schedPreemptCount() > 0}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -636,7 +636,7 @@ function main() returns ExitCode
 		j = j + 1
 	end 'earliest'
 	print("prompt={pingAtMs < firstEndMs} spinners={ran == spinners.count()} ping={p}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -751,7 +751,7 @@ function main() returns ExitCode
 	sleep(20)
 	let wrong = try await churned otherwise 0 - 1
 	print("wrong={wrong} preempted={__Builtins.schedPreemptCount() > 0}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -807,7 +807,7 @@ function main() returns ExitCode
 	end 'hold'
 	let p = try await reply otherwise 0 - 1
 	print("ping={p} held={acc mod 2 + 1 > 0} preempted={__Builtins.schedPreemptCount()} retaken={__Builtins.schedRetakeCount()}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -915,7 +915,7 @@ end 'attempt'
 
 function monitorNeverAsked() returns ExitCode
 	print("the monitor never asked in {burstCap} bursts\n")
-	return 3 as ExitCode
+	return 3
 end 'monitorNeverAsked'
 
 function main() returns ExitCode
@@ -930,10 +930,10 @@ function main() returns ExitCode
 			end 'why'
 		end 'disturbed'
 		print("first={outcome.0} sum={outcome.1}\n")
-		return 0 as ExitCode
+		return 0
 	end 'attempts'
 	print("no undisturbed attempt in {attemptCap}\n")
-	return 3 as ExitCode
+	return 3
 end 'main'
 ```
 ```stdout
@@ -995,7 +995,7 @@ function main() returns ExitCode
 	let run = try Subprocess.runConfiguration(config) otherwise return 4
 
 	print("child exit={run.exitCode()}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout

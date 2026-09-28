@@ -230,7 +230,7 @@ function main() returns ExitCode
 
 	print("every={every}\n")
 	print("aggregate={aggregate}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -307,7 +307,7 @@ function main() returns ExitCode
 
 	print("procs={__Builtins.schedProcessorCount()}\n")
 	print("aggregate={aggregate}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -384,7 +384,7 @@ function main() returns ExitCode
 	end 'collect'
 
 	print("aggregate={aggregate}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -485,7 +485,7 @@ function main() returns ExitCode
 
 	print("clamped={clamped}\n")
 	print("aggregate={aggregate}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout

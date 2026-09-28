@@ -36,11 +36,11 @@ type Array uses Element implements BuiltinArrayLiteral
 
 	// THE REVERSE DIRECTION, bare: a sibling call to a name the buffer also has still means the record.
 	function swapEnds()
-		swap(0 as Slot, j: (count() - 1) as Slot)
+		swap(0, j: (count() - 1) as Slot)
 	end 'swapEnds'
 
 	function reverseAll()
-		reverseRange(0 as Slot, hi: count() as Slot)
+		reverseRange(0, hi: count() as Slot)
 	end 'reverseAll'
 end 'Array'
 
@@ -64,25 +64,18 @@ function main() returns ExitCode
 	let y = try a.get(2) otherwise panic("2 is in range")
 	let z = try a.get(3) otherwise panic("3 is in range")
 	print("{w} {x} {y} {z} {a.count()}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ---
 ExitCode: 0
 ---
 data {
-  __sched_tls_teb_offset@0 = i64 0
-  __sched_allm@8 = i64 0
-  __sched_lock@16 = i64 0
-  __sched_preempt_ext_lock@24 = i64 0
-  __sched_preempt_context@32 = i64 0
-  __slab_arena_list@40 = i64 0
-  __slab_arena_map_l1@48 = i64 0
-  __slab_state@56 = i64 0
-  __ds_base@64 = i64 0
-  __dbg_ctl@72 = i64 0
-  __mrt_console_probe_stdin@80 = i8 0
-  __mrt_console_probe_stdout@81 = i8 0
-  __mrt_console_probe_stderr@82 = i8 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
 }
 
 func @Array.swap {
@@ -90,28 +83,10 @@ func @Array.swap {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic#4
-  __rc_ok#3:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc less, __rc_panic#6
-  __rc_ok#5:
     x64.callDirect __managed_mem_swap
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
   tryok:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#4:
-    x64.leaRegRdata rcx, [rip + __str_blob_16]  ; "panic at a-managed-swap-through-the-buffer-is-not-the-records-own.test:19: Range check failed: value outside typealias 'Slot'\x0a"
-    x64.callDirect mrt_panic
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#6:
-    x64.leaRegRdata rcx, [rip + __str_blob_16]  ; "panic at a-managed-swap-through-the-buffer-is-not-the-records-own.test:19: Range check failed: value outside typealias 'Slot'\x0a"
-    x64.callDirect mrt_panic
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -163,16 +138,19 @@ func @main {
   __il_body#36:
     x64.movRegImm32 r13, 0
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-  __rc_ok#44:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc less, __rc_panic#47
-  __rc_ok#46:
+  __il_body#38:
     x64.cmpRegImm32 rax, 1
     x64.jcc belowEqual, forstep
   ifcont:
     x64.leaRegRegImm32 r14, rax, -1
     x64.jmp whilehdr
   loop:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic#45
+  __rc_ok#44:
+    x64.cmpRegImm32 r14, 0
+    x64.jcc less, __rc_panic#47
+  __rc_ok#46:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
     x64.movRegReg rax, r14
@@ -436,8 +414,20 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __rc_panic#45:
+    x64.leaRegRdata rcx, [rip + __str_blob_16]  ; "panic at a-managed-swap-through-the-buffer-is-not-the-records-own.test:31: Range check failed: value outside typealias 'Slot'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 216
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   __rc_panic#47:
-    x64.leaRegRdata rcx, [rip + __str_blob_17]  ; "panic at a-managed-swap-through-the-buffer-is-not-the-records-own.test:24: Range check failed: value outside typealias 'Slot'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_16]  ; "panic at a-managed-swap-through-the-buffer-is-not-the-records-own.test:31: Range check failed: value outside typealias 'Slot'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 216
@@ -449,7 +439,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#32:
-    x64.leaRegRdata rcx, [rip + __str_blob_18]  ; "panic at a-managed-swap-through-the-buffer-is-not-the-records-own.test:39: Range check failed: value outside typealias 'Slot'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_17]  ; "panic at a-managed-swap-through-the-buffer-is-not-the-records-own.test:39: Range check failed: value outside typealias 'Slot'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 216

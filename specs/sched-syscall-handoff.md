@@ -220,7 +220,7 @@ function main() returns ExitCode
 	let tail = try await tailReply otherwise 0
 
 	print("aggregate={aggregate} last={tail}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -320,7 +320,7 @@ function main() returns ExitCode
 	let tail = try await tailReply otherwise 0
 
 	print("aggregate={aggregate} last={tail}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -431,10 +431,10 @@ function main() returns ExitCode
 
 	let n = try await reader.read(sentinel) otherwise 0
 	if n == 0 'unread'
-		return 1 as ExitCode
+		return 1
 	end 'unread'
 
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -524,10 +524,10 @@ function main() returns ExitCode
 
 	let n = try await reader.read(sentinel) otherwise 0
 	if n == 0 'unread'
-		return 1 as ExitCode
+		return 1
 	end 'unread'
 
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -611,7 +611,7 @@ function main() returns ExitCode
 
 	let n = try await reader.read(sentinel) otherwise 0
 	if n == 0 'unread'
-		return 1 as ExitCode
+		return 1
 	end 'unread'
 
 	var mark = "no"
@@ -620,7 +620,7 @@ function main() returns ExitCode
 	end 'retaken'
 	print("retaken={mark}\n")
 
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -737,10 +737,10 @@ function main() returns ExitCode
 	let finished = try await waiter.outlast(sentinel) otherwise 0
 
 	if finished == 0 'noChild'
-		return 1 as ExitCode
+		return 1
 	end 'noChild'
 
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -789,10 +789,10 @@ function main() returns ExitCode
 	let n = line.count()
 	print("read={n} blocked={blocked}\n")
 	if n == 0 'unread'
-		return 1 as ExitCode
+		return 1
 	end 'unread'
 
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -941,7 +941,7 @@ function main() returns ExitCode
 	let p = try await reply otherwise 0
 	print("retaken={retaken} woken={answered == 1} ran={n + s + p}\n")
 
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -998,7 +998,7 @@ function main() returns ExitCode
 	end 'blocked'
 	print("done sibling={tail} read={line.count()} blocked={blocked}\n")
 
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -1024,7 +1024,7 @@ function main() returns ExitCode
 	let entered = __Builtins.schedSyscallCount() - before
 	print("entered={entered > 0}\n")
 
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout

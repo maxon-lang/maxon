@@ -173,7 +173,7 @@ let G = Outer.create()
 
 function main() returns ExitCode
 	print("value={G.value()}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode

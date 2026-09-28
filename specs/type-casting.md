@@ -17,8 +17,9 @@ Only widening casts that never lose data are permitted:
 
 ```text
 int -> float      // 64-bit signed to 64-bit double (may lose precision for large values)
-same -> same      // No-op (any type to itself)
 ```
+
+A cast to the type the value already has converts nothing and is refused (E3010, below).
 
 Casts between ranged-int typealiases (e.g. `int(0 to u8.max)` to `int(i64.min to i64.max)`) are
 always permitted, and they are REQUIRED: every `typealias` is a nominally distinct type, and `as` is
@@ -341,6 +342,12 @@ error E3009: specs/fragments/type-casting/error.byte-to-bool.test:7:12: Cannot c
 ### Unneeded Casts (Compile Error E3010)
 
 A cast whose target names the value's OWN alias is rejected: it converts nothing.
+So is a numeric literal cast to exactly the type its destination already declares — a call
+argument's parameter, a `return`'s declared result, a struct-literal field or a stored field:
+the literal is checked against that type without the cast. A literal cast stays legal where
+nothing declares the type — an untyped `let`/`var`, an operand, an array-literal element, a
+join of `gives`/`if`-`else`/`otherwise` arms, a generic `T` slot — and where the cast decides
+which overload a call selects.
 A cast naming a DIFFERENT alias is real work whichever way the two ranges run — it
 re-declares the value's type and carries the target's range check — so it compiles.
 
@@ -395,6 +402,535 @@ end 'main'
 ```
 ```maxoncstderr
 error E3010: specs/fragments/type-casting/error.unneeded.same-type-byte.test:7:12: unneeded cast: 'Byte' already fits in 'Byte'
+```
+
+<!-- test: error.unneeded.literal-named-argument -->
+A literal cast to the type its parameter already declares converts nothing: the argument is range-checked against that type anyway.
+```maxon
+typealias ByteCount = int(1 to 8)
+typealias Address = int(0 to 4096)
+
+function readMemory(address Address, bytes ByteCount) returns ByteCount
+	if address == 0 'start'
+		return bytes
+	end 'start'
+	return 1
+end 'readMemory'
+
+function main() returns ExitCode
+	return readMemory(0, bytes: 1 as ByteCount)
+end 'main'
+```
+```maxoncstderr
+error E3010: <fragment>:13:32: unneeded cast: the literal 1 already fits in 'ByteCount'
+```
+
+<!-- test: error.unneeded.literal-argument-through-interface -->
+The same argument reached through an interface-typed receiver: the interface's declared parameter is the destination.
+```maxon
+typealias ByteCount = int(1 to 8)
+typealias Address = int(0 to 4096)
+
+interface Backend
+	function readMemory(address Address, bytes ByteCount) returns ByteCount
+end 'Backend'
+
+type Ram implements Backend
+	let base as Address
+
+	static function create() returns Self
+		return Self{base: 0}
+	end 'create'
+
+	function readMemory(address Address, bytes ByteCount) returns ByteCount
+		if address == self.base 'start'
+			return bytes
+		end 'start'
+		return 1
+	end 'readMemory'
+end 'Ram'
+
+type Debugger
+	let backend as Backend
+
+	static function create() returns Self
+		return Self{backend: Ram.create()}
+	end 'create'
+
+	function readByte(address Address) returns ByteCount
+		return self.backend.readMemory(address, bytes: 1 as ByteCount)
+	end 'readByte'
+end 'Debugger'
+
+function main() returns ExitCode
+	let debugger = Debugger.create()
+	return debugger.readByte(0)
+end 'main'
+```
+```maxoncstderr
+error E3010: <fragment>:32:52: unneeded cast: the literal 1 already fits in 'ByteCount'
+```
+
+<!-- test: error.unneeded.literal-positional-argument -->
+A positional argument, and a negative literal: the minus is part of the literal.
+```maxon
+typealias Delta = int(-10 to 10)
+
+function shift(by Delta) returns Delta
+	return by
+end 'shift'
+
+function main() returns ExitCode
+	if shift(-3 as Delta) == -3 'shifted'
+		return 0
+	end 'shifted'
+	return 1
+end 'main'
+```
+```maxoncstderr
+error E3010: <fragment>:9:14: unneeded cast: the literal -3 already fits in 'Delta'
+```
+
+<!-- test: error.unneeded.literal-return -->
+```maxon
+typealias Score = int(0 to 100)
+
+function passing() returns Score
+	return 50 as Score
+end 'passing'
+
+function main() returns ExitCode
+	return passing()
+end 'main'
+```
+```maxoncstderr
+error E3010: <fragment>:5:12: unneeded cast: the literal 50 already fits in 'Score'
+```
+
+<!-- test: error.unneeded.literal-struct-field -->
+```maxon
+typealias Score = int(0 to 100)
+
+type Result
+	let score as Score
+
+	static function create() returns Self
+		return Self{score: 7 as Score}
+	end 'create'
+
+	function value() returns Score
+		return self.score
+	end 'value'
+end 'Result'
+
+function main() returns ExitCode
+	let result = Result.create()
+	return result.value()
+end 'main'
+```
+```maxoncstderr
+error E3010: <fragment>:8:24: unneeded cast: the literal 7 already fits in 'Score'
+```
+
+<!-- test: error.unneeded.literal-field-store -->
+```maxon
+typealias Score = int(0 to 100)
+
+type Counter
+	var score as Score
+
+	static function create() returns Self
+		return Self{score: 0}
+	end 'create'
+
+	function bump()
+		self.score = 9 as Score
+	end 'bump'
+
+	function value() returns Score
+		return self.score
+	end 'value'
+end 'Counter'
+
+function main() returns ExitCode
+	var counter = Counter.create()
+	counter.bump()
+	return counter.value()
+end 'main'
+```
+```maxoncstderr
+error E3010: <fragment>:12:18: unneeded cast: the literal 9 already fits in 'Score'
+```
+
+<!-- test: error.unneeded.literal-float-argument -->
+```maxon
+typealias Real = float(0.0 to 100.0)
+
+function half(x Real) returns Real
+	return x / 2.0
+end 'half'
+
+function main() returns ExitCode
+	if half(2.5 as Real) == 1.25 'halved'
+		return 0
+	end 'halved'
+	return 1
+end 'main'
+```
+```maxoncstderr
+error E3010: <fragment>:9:14: unneeded cast: the literal 2.5 already fits in 'Real'
+```
+
+<!-- test: error.unneeded.integer-literal-to-float-argument -->
+An integer literal meets a float parameter without a cast, so the cast converts nothing here either.
+```maxon
+typealias Real = float(0.0 to 100.0)
+
+function half(x Real) returns Real
+	return x / 2.0
+end 'half'
+
+function main() returns ExitCode
+	if half(5 as Real) == 2.5 'halved'
+		return 0
+	end 'halved'
+	return 1
+end 'main'
+```
+```maxoncstderr
+error E3010: <fragment>:9:12: unneeded cast: the literal 5 already fits in 'Real'
+```
+
+<!-- test: error.unneeded.literal-cast-to-nested-alias -->
+The destination's type may be an alias declared inside an extension body.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntegerArray = Array with Integer
+
+extension Array
+	typealias Level = int(0 to 64)
+
+	function topLevel() returns Level
+		return 64 as Level
+	end 'topLevel'
+end 'Array'
+
+function main() returns ExitCode
+	let values = IntegerArray.create()
+	return values.topLevel()
+end 'main'
+```
+```maxoncstderr
+error E3010: <fragment>:9:13: unneeded cast: the literal 64 already fits in 'Level'
+```
+
+<!-- test: error.unneeded.literal-float-field-store -->
+```maxon
+typealias Real = float(0.0 to 100.0)
+
+type Gauge
+	var level as Real
+
+	static function create() returns Self
+		return Self{level: 0.0}
+	end 'create'
+
+	function fill()
+		self.level = 2.5 as Real
+	end 'fill'
+
+	function value() returns Real
+		return self.level
+	end 'value'
+end 'Gauge'
+
+function main() returns ExitCode
+	var gauge = Gauge.create()
+	gauge.fill()
+	if gauge.value() == 2.5 'filled'
+		return 0
+	end 'filled'
+	return 1
+end 'main'
+```
+```maxoncstderr
+error E3010: <fragment>:12:20: unneeded cast: the literal 2.5 already fits in 'Real'
+```
+
+<!-- test: error.unneeded.literal-arguments-all-reported -->
+Every redundant literal cast in one call is reported, not only the first.
+```maxon
+typealias Nib = int(0 to 15)
+
+function pack(a Nib, b Nib) returns Nib
+	if a < b 'ordered'
+		return b
+	end 'ordered'
+	return a
+end 'pack'
+
+function main() returns ExitCode
+	return pack(1 as Nib, b: 2 as Nib)
+end 'main'
+```
+```maxoncstderr
+error E3010: <fragment>:12:16: unneeded cast: the literal 1 already fits in 'Nib'
+error E3010: <fragment>:12:29: unneeded cast: the literal 2 already fits in 'Nib'
+```
+
+<!-- test: distinct-nested-aliases-with-one-member-name-are-not-unneeded -->
+Two inner aliases that share a member name are still two aliases, so a cast from one to the other is real work.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntegerArray = Array with Integer
+
+type Meter
+	let reading as Integer
+
+	static function create() returns Self
+		return Self{reading: 7}
+	end 'create'
+
+	function raw() returns Integer
+		return self.reading
+	end 'raw'
+end 'Meter'
+
+extension Meter
+	typealias Level = int(0 to 10)
+
+	function level() returns Level
+		return self.raw() as Level
+	end 'level'
+end 'Meter'
+
+extension Array
+	typealias Level = int(0 to 64)
+
+	function levelOf(meter Meter) returns Level
+		return meter.level() as Level
+	end 'levelOf'
+end 'Array'
+
+function main() returns ExitCode
+	let values = IntegerArray.create()
+	return values.levelOf(Meter.create())
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-nested-alias-and-a-file-scope-alias-of-one-name-are-not-unneeded -->
+An alias declared inside an extension body is a different alias from a file-scope one that shares its member name.
+```maxon
+typealias Level = int(0 to 64)
+typealias Integer = int(i64.min to i64.max)
+
+type Meter
+	let reading as Integer
+
+	static function create() returns Self
+		return Self{reading: 7}
+	end 'create'
+
+	function raw() returns Integer
+		return self.reading
+	end 'raw'
+end 'Meter'
+
+extension Meter
+	typealias Level = int(0 to 10)
+
+	function level() returns Level
+		return self.raw() as Level
+	end 'level'
+end 'Meter'
+
+function main() returns ExitCode
+	let meter = Meter.create()
+	let narrow = meter.raw() as Meter.Level
+	let wide = narrow as Level
+	return wide
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-literal-cast-that-picks-the-overload-is-not-unneeded -->
+The cast decides which overload the call selects, so it is not unneeded.
+```maxon
+typealias Small = int(0 to 9)
+typealias Integer = int(i64.min to i64.max)
+
+function pick(x Small) returns ExitCode
+	if x > 0 'positive'
+		return 1
+	end 'positive'
+	return 3
+end 'pick'
+
+function pick(x Integer) returns ExitCode
+	if x > 0 'positive'
+		return 2
+	end 'positive'
+	return 4
+end 'pick'
+
+function main() returns ExitCode
+	return pick(3 as Small)
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: literal-casts-that-together-pick-the-overload-are-not-unneeded -->
+Each cast alone could go, but removing both would pick the `Integer` overload, so neither is unneeded.
+```maxon
+typealias Real = float(0.0 to 100.0)
+typealias Integer = int(i64.min to i64.max)
+
+function pick(a Real, b Real) returns ExitCode
+	if a + b > 0.0 'positive'
+		return 1
+	end 'positive'
+	return 3
+end 'pick'
+
+function pick(a Integer, b Integer) returns ExitCode
+	if a + b > 0 'positive'
+		return 2
+	end 'positive'
+	return 4
+end 'pick'
+
+function main() returns ExitCode
+	return pick(1 as Real, b: 2 as Real)
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: error.unneeded.literal-cast-beside-a-cast-that-picks-nothing -->
+A cast to a different alias than its parameter selects no overload, so it does not excuse the redundant cast beside it.
+```maxon
+typealias Real = float(0.0 to 100.0)
+typealias Other = float(0.0 to 10.0)
+typealias Integer = int(i64.min to i64.max)
+
+function g(x Real, y Real) returns ExitCode
+	if x < y 'ordered'
+		return 1
+	end 'ordered'
+	return 2
+end 'g'
+
+function g(x Integer, y Integer) returns ExitCode
+	if x < y 'ordered'
+		return 3
+	end 'ordered'
+	return 4
+end 'g'
+
+function main() returns ExitCode
+	return g(1 as Real, y: 2 as Other)
+end 'main'
+```
+```maxoncstderr
+error E3010: <fragment>:21:13: unneeded cast: the literal 1 already fits in 'Real'
+```
+
+<!-- test: error.unneeded.same-alias-name-with-a-contested-range -->
+Two files declaring one alias name with different ranges still leave each file's alias its own, so a cast to it repeats it.
+```maxon
+// --- file: a.maxon
+typealias Byte = int(0 to 255)
+typealias Bytes = Array with Byte
+
+function main() returns ExitCode
+	var values = Bytes.create()
+	values.push(7)
+	if atLimit() 'limit'
+		return 1
+	end 'limit'
+
+	for b in values 'each'
+		let c = b as Byte
+		return c
+	end 'each'
+	return 0
+end 'main'
+
+// --- file: b.maxon
+typealias Byte = int(0 to 200)
+
+export function atLimit() returns bool
+	let top = 199 as Byte
+	return top == 200
+end 'atLimit'
+```
+```maxoncstderr
+error E3010: <fragment>:14:13: unneeded cast: 'Byte' already fits in 'Byte'
+```
+
+<!-- test: error.unneeded.same-nested-alias -->
+A cast to an alias declared inside an extension body is unneeded when the value already has that alias.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Meter
+	let reading as Integer
+
+	static function create() returns Self
+		return Self{reading: 7}
+	end 'create'
+
+	function raw() returns Integer
+		return self.reading
+	end 'raw'
+end 'Meter'
+
+extension Meter
+	typealias Idx = int(0 to 9)
+
+	function index() returns Idx
+		let x = self.raw() as Idx
+		let y = x as Idx
+		return y
+	end 'index'
+end 'Meter'
+
+function main() returns ExitCode
+	let meter = Meter.create()
+	return meter.index()
+end 'main'
+```
+```maxoncstderr
+error E3010: <fragment>:21:13: unneeded cast: 'Idx' already fits in 'Idx'
+```
+
+<!-- test: a-literal-cast-to-a-same-named-alias-from-another-file-is-not-unneeded -->
+The cast names this file's `Item`, and the parameter is declared with the other file's, so the cast is not the destination's own type.
+```maxon
+// --- file: a.maxon
+export typealias Item = int(0 to 255)
+
+export function put(x Item) returns ExitCode
+	return x
+end 'put'
+
+// --- file: main.maxon
+typealias Item = int(0 to 200)
+
+function main() returns ExitCode
+	return put(5 as Item)
+end 'main'
+```
+```exitcode
+5
 ```
 
 <!-- test: error.unneeded.same-alias-byte -->

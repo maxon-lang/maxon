@@ -461,7 +461,7 @@ function main() returns ExitCode
 	print("verbatim={out == expected} len={out.byteLength()} kind={__Builtins.subprocessResultStatusKind(r)}")
 	__Builtins.subprocessResultRelease(r)
 	__Builtins.subprocessReleaseHandle(h)
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -493,7 +493,7 @@ function main() returns ExitCode
 	__Builtins.subprocessCloseStdin(-1)
 	__Builtins.subprocessReleaseHandle(-1)
 	print("readOut={outLine.byteLength()} readErr={errLine.byteLength()} voidsReturned=true\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -519,7 +519,7 @@ function main() returns ExitCode
 	let err = String.init(__Builtins.subprocessResultStderr(0))
 	__Builtins.subprocessResultRelease(-1)
 	print("kind={kind} code={code} duration={duration} out={out.byteLength()} err={err.byteLength()} releaseReturned=true\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -545,7 +545,7 @@ function main() returns ExitCode
 	subpCloseStdin(-1)
 	subpRelease(-1)
 	print("read={line.byteLength()} readErr={errLine.byteLength()} write={wrote} wait={code} voidsReturned=true\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -589,7 +589,7 @@ function main() returns ExitCode
 	let reason = String.init(__Builtins.subprocessLastErrorMessage())
 	let expected = "os error 3"
 	print("spawn={h} reason={reason == expected}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -636,7 +636,7 @@ function main() returns ExitCode
 	print("outHasPayload={out.startsWith(fed)} errHasOops={err.startsWith(oops)} kind={__Builtins.subprocessResultStatusKind(r)}")
 	__Builtins.subprocessResultRelease(r)
 	__Builtins.subprocessReleaseHandle(h)
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -680,7 +680,7 @@ function main() returns ExitCode
 	print("kind={__Builtins.subprocessResultStatusKind(r)} code={__Builtins.subprocessResultStatusCode(r)} echoed={echoed} outLen={out.byteLength()}")
 	__Builtins.subprocessResultRelease(r)
 	__Builtins.subprocessReleaseHandle(h)
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -727,7 +727,7 @@ function main() returns ExitCode
 	print("out={out == expectedOut} err={err == expectedErr} outLen={out.byteLength()} errLen={err.byteLength()}")
 	__Builtins.subprocessResultRelease(r)
 	__Builtins.subprocessReleaseHandle(h)
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -1252,7 +1252,7 @@ function main() returns ExitCode
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
 	let pid = __Builtins.subprocessDetach(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 4)
 	print("positive={pid > 0}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -1291,7 +1291,7 @@ function main() returns ExitCode
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
 	let pid = __Builtins.subprocessDetach(argv, 1, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 4)
 	print("positive={pid > 0}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -1343,7 +1343,7 @@ function main() returns ExitCode
 		end 'failed'
 	end 'detachLoop'
 	print("spawned={spawned} firstFailure={firstFailure}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -1389,7 +1389,7 @@ function main() returns ExitCode
 		end 'failed'
 	end 'detachLoop'
 	print("spawned={spawned} firstFailure={firstFailure}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -1463,7 +1463,7 @@ function main() returns ExitCode
 	print("detached={pid > 0} newSession={newSession}\n")
 	__Builtins.subprocessResultRelease(readerResult)
 	__Builtins.subprocessReleaseHandle(readerHandle)
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -1518,7 +1518,7 @@ function main() returns ExitCode
 	let inherited = runEcho("<nul set /p=visible", outKind: 1)
 	let discarded = runEcho("<nul set /p=invisible", outKind: 0)
 	print("] inheritCollected={inherited} discardCollected={discarded}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -1576,7 +1576,7 @@ function main() returns ExitCode
 	let inherited = runEcho("visible", outKind: 1)
 	let discarded = runEcho("invisible", outKind: 0)
 	print("] inheritCollected={inherited} discardCollected={discarded}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -1623,7 +1623,7 @@ function main() returns ExitCode
 	print("echoed={out.startsWith(quoted)} len={out.byteLength()}")
 	__Builtins.subprocessResultRelease(r)
 	__Builtins.subprocessReleaseHandle(h)
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -1667,7 +1667,7 @@ function main() returns ExitCode
 	print("kind={__Builtins.subprocessResultStatusKind(r)} code={__Builtins.subprocessResultStatusCode(r)} outLen={out.byteLength()}")
 	__Builtins.subprocessResultRelease(r)
 	__Builtins.subprocessReleaseHandle(h)
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -1719,7 +1719,7 @@ function main() returns ExitCode
 	print("kind={__Builtins.subprocessResultStatusKind(r)} code={__Builtins.subprocessResultStatusCode(r)} outLen={out.byteLength()} errLen={err.byteLength()}")
 	__Builtins.subprocessResultRelease(r)
 	__Builtins.subprocessReleaseHandle(h)
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -1760,7 +1760,7 @@ function main() returns ExitCode
 	print("kind={__Builtins.subprocessResultStatusKind(r)} code={__Builtins.subprocessResultStatusCode(r)} capped={out.byteLength() <= 64}")
 	__Builtins.subprocessResultRelease(r)
 	__Builtins.subprocessReleaseHandle(h)
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -1810,7 +1810,7 @@ function main() returns ExitCode
 	let expected = "ping"
 	print("wrote={wrote} echoed={line.startsWith(expected)} lineLen={line.byteLength()} code={code}")
 	__Builtins.subprocessReleaseHandle(h)
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -1871,7 +1871,7 @@ function main() returns ExitCode
 	let code = __Builtins.subprocessWaitExit(h, 0)
 	print("wrote={wrote} first={first} second={second} restLen={rest.byteLength()} eofLen={afterEof.byteLength()} code={code}\n")
 	__Builtins.subprocessReleaseHandle(h)
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -1922,7 +1922,7 @@ function main() returns ExitCode
 	let code = __Builtins.subprocessWaitExit(h, 0)
 	print("wrote={wrote} lineLen={line.byteLength()} after={after} code={code}\n")
 	__Builtins.subprocessReleaseHandle(h)
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -1981,7 +1981,7 @@ function main() returns ExitCode
 	let code = __Builtins.subprocessWaitExit(h, 0)
 	print("wrote={wrote} negLen={refused.byteLength()} state={state.name} still={still} code={code}\n")
 	__Builtins.subprocessReleaseHandle(h)
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -2039,7 +2039,7 @@ function main() returns ExitCode
 	let released = __Builtins.subprocessStdoutState(h)
 	let invented = __Builtins.subprocessStderrState(-1)
 	print("wrote={wrote} before={before.name} errBefore={errBefore.name} outLen={all.byteLength()} after={after.name} errLen={errLine.byteLength()} errAfter={errAfter.name} code={code} released={released.name} invented={invented.name}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -2117,7 +2117,7 @@ function main() returns ExitCode
 	print("wait: {waitAfterRelease(child)}\n")
 	child.closeStdin()
 	print("closeStdin: returned\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -2151,7 +2151,7 @@ function main() returns ExitCode
 	let unresolvedText = String.init(unresolved)
 	let colon = ":"
 	print("grew={resolved.byteLength() > 3} absolute={resolved.contains(colon)} missIsNull={unresolvedIsNull} missEchoed={unresolvedText == missing}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -2190,7 +2190,7 @@ function main() returns ExitCode
 	let failed = String.init(__Builtins.subprocessLastErrorMessage())
 	let expected = "os error 2"
 	print("cleanLen={clean.byteLength()} spawn={h} message={failed == expected}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -2252,7 +2252,7 @@ function main() returns ExitCode
 	print("spawned={h >= 0} echoed={out.startsWith("seen")} len={out.byteLength()}")
 	__Builtins.subprocessResultRelease(r)
 	__Builtins.subprocessReleaseHandle(h)
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -2310,7 +2310,7 @@ function main() returns ExitCode
 	print("spawned={h >= 0} echoed={out.startsWith("probe=seen home=")} len={out.byteLength()}")
 	__Builtins.subprocessResultRelease(r)
 	__Builtins.subprocessReleaseHandle(h)
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -2422,7 +2422,7 @@ function main() returns ExitCode
 	config.workingDirectory = try FilePath.from("") otherwise return 1
 	let r = try Subprocess.runConfiguration(config) otherwise return 2
 	print("exit={r.exitCode()} out={r.stdout}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -2446,7 +2446,7 @@ function main() returns ExitCode
 	config.workingDirectory = try FilePath.from("") otherwise return 1
 	let r = try Subprocess.runConfiguration(config) otherwise return 2
 	print("exit={r.exitCode()} out={r.stdout.trim()}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout

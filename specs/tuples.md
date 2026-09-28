@@ -1875,7 +1875,7 @@ function main() returns ExitCode
 		print("{copied.0}{copied.1}\n")
 		return (cp.count() + arr.count()) as ExitCode
 	end 'each'
-	return 9 as ExitCode
+	return 9
 end 'main'
 ```
 ```exitcode
@@ -1912,7 +1912,7 @@ function main() returns ExitCode
 		print("{copied.0}{copied.1.name}\n")
 		return (cp.count() + arr.count()) as ExitCode
 	end 'each'
-	return 9 as ExitCode
+	return 9
 end 'main'
 ```
 ```exitcode

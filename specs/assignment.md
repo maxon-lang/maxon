@@ -447,7 +447,7 @@ end 'bump'
 function main() returns ExitCode
 	let r = bump(0)
 	print("unreachable r={r}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -492,7 +492,7 @@ function main() returns ExitCode
 	var f = 1.5
 	f = 5
 	print("{f}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout

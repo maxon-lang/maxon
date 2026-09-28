@@ -171,10 +171,12 @@ let opLocalTee = 0x22
 let opI32Const = 0x41
 let opI64Const = 0x42
 
-// ⚠ NO i32 COMPARE FAMILY: an integer comparison is emitted at the machine word (X5 review — see the
-// i32 ALU note below `i64ExtendI32U`), so only `i32.eqz` — which tests a 0/1 bool, not a number — is
-// reachable at this width.
+// ⚠ NO i32 COMPARE FAMILY: an integer comparison is emitted at the machine word (X5 review — see
+// the i32 ALU note below `i64ExtendI32U`), so only `i32.eqz` — which tests a 0/1 bool, not a number
+// — and the panic frame walk's `i32.ge_u` over its own linear-memory counters are reachable at this
+// width.
 let opI32Eqz = 0x45
+let opI32GeU = 0x4F
 
 let opI64Eq = 0x51
 let opI64Ne = 0x52
@@ -192,14 +194,17 @@ let opI64GtU = 0x56
 let opI64LeU = 0x58
 let opI64GeU = 0x5A
 
-// ⚠ NO `i32.div_s`/`i32.rem_s`, and no i32 multiply, bitwise-and/or or shift either — the absence is
-// DELIBERATE. `div`/`mod` are the two Std ops with no operand type, and the rest
-// were selected by an operand type whose narrowness describes STORAGE, not arithmetic; this backend
-// computes every integer op at MACHINE WIDTH (`StdToWasm.wasmMachineValTypeOf`), so no 32-bit arithmetic
-// is ever emitted. The file's rule is that an opcode is here because the slice needs it, and no 32-bit
-// arithmetic op is. What is left is address arithmetic
-// (`add`/`sub` over an i32 linear-memory address) and `logicalNot`'s bit flip (`xor`).
+// ⚠ NO `i32.div_s`/`i32.rem_s`, and no i32 multiply or bitwise-or either — the absence is
+// DELIBERATE. `div`/`mod` are the two Std ops with no operand type, and the rest were selected by
+// an operand type whose narrowness describes STORAGE, not arithmetic; this backend computes every
+// integer op at MACHINE WIDTH (`StdToWasm.wasmMachineValTypeOf`), so no 32-bit arithmetic is ever
+// emitted. The file's rule is that an opcode is here because the slice needs it, and no 32-bit
+// arithmetic op is. What is left is address arithmetic (`add`/`sub` over an i32 linear-memory
+// address, and the frame stack's `and`/`shl` masking a ring slot into one) and `logicalNot`'s bit
+// flip (`xor`).
 let opI32Add = 0x6A
+let opI32And = 0x71
+let opI32Shl = 0x74
 let opI32Sub = 0x6B
 let opI32Xor = 0x73
 
@@ -309,6 +314,8 @@ let opF64Store = 0x39
 // forms grow the file when that cast lands.
 let opI32Load8U = 0x2D
 let opI32Store8 = 0x3A
+let opI32Load = 0x28
+let opI32Store = 0x36
 
 // `memory.grow` (opcode 0x40) — the wasm slab-allocator primitive.
 // It grows linear memory 0 by the i32 page count on the stack and pushes the PREVIOUS page count, or
@@ -334,6 +341,7 @@ let wasmBulkMemoryMemZero = 0x00
 // value is always legal and is the canonical choice. The word forms are 8-byte (word64) accesses,
 // so their hint is 3 (2^3 = 8); a byte access is 1-byte, so its hint is 0 (2^0 = 1).
 let wasmMemAlignByte = 0
+let wasmMemAlignWord32 = 2
 let wasmMemAlignWord64 = 3
 
 // The function-value funcref table. `call_indirect` dispatches through a single table of
@@ -626,6 +634,18 @@ export type WasmBody
 		self.buf.push(opI32Eqz)
 	end 'i32Eqz'
 
+	export function i32And()
+		self.buf.push(opI32And)
+	end 'i32And'
+
+	export function i32Shl()
+		self.buf.push(opI32Shl)
+	end 'i32Shl'
+
+	export function i32GeU()
+		self.buf.push(opI32GeU)
+	end 'i32GeU'
+
 	// f64 constant. `v` is the double's IEEE-754 bit pattern reinterpreted as a signed integer
 	// (the ParsedInt a `const` op carries — the SAME value the `.data`/`.rdata` scalar serializer
 	// renders), written as 8 RAW little-endian bytes. Fixed-width, NOT SLEB128: `f64.const` is the
@@ -764,6 +784,14 @@ export type WasmBody
 		self.pushMemAccess(opI32Store8, align: wasmMemAlignByte, offset: offset)
 	end 'i32Store8'
 
+	export function i32Load(offset Wasm32Index)
+		self.pushMemAccess(opI32Load, align: wasmMemAlignWord32, offset: offset)
+	end 'i32Load'
+
+	export function i32Store(offset Wasm32Index)
+		self.pushMemAccess(opI32Store, align: wasmMemAlignWord32, offset: offset)
+	end 'i32Store'
+
 	// `memory.grow(pages)` — grow linear memory 0 by the i32 page count on the stack; pushes the
 	// previous page count, or -1 on OOM. The slab allocator's `osAllocPages` lowering wraps this
 	// with the size→pages rounding and the OOM trap (StdToWasm's `emitOsAllocPages`).
@@ -816,12 +844,12 @@ let wasmSectionData = 11
 
 // --- The "name" custom section ---
 //
-// ⭐ **IT IS WHAT MAKES A PANIC BACKTRACE READABLE ON THIS TARGET, AND IT IS THE ONLY THING THAT CAN
-// BE.** wasm has no frame-pointer chain, so the panic runtime cannot walk one (see `StdToWasm`'s
-// `appendPanicRuntime`): the frames in a wasm panic report are the HOST's — wasmtime unwinds its own
-// trap and prints one line per wasm frame. Without this section every one of those lines reads
-// `<wasm function 7>`, because a core module carries no function names anywhere else. With it they read
-// `main`, `mrt_start` — the same words `Targets/Shared/BacktraceFormat` gives the two native walkers.
+// ⭐ **IT NAMES THE FRAMES THE ENGINE AND A DEBUGGER PRINT.** A panic prints its own trace
+// (`StdToWasm`'s `WasmFrameStack`), but a fault or a stack overflow traps, and wasmtime unwinds
+// that trap and prints one line per wasm frame. Without this section every one of those lines reads
+// `<wasm function 7>`, because a core module carries no function names anywhere else. With it they
+// read `main`, `mrt_start` — the same words `Targets/Shared/BacktraceFormat` gives the two native
+// walkers.
 //
 // Format (WebAssembly Name Section spec): a custom section whose name is `name`, holding subsections in
 // ASCENDING id order — 0 = module name, 1 = a `namemap` of function names, 2 = local names (unused).
@@ -831,10 +859,9 @@ let WasmNameSectionName = b"name"
 let wasmNameSubsectionModule = 0
 let wasmNameSubsectionFunction = 1
 
-// The module's own debug name. Cosmetic — it is the `maxon` in wasmtime's `maxon!main` frame line, where
-// an unnamed module reads `<unknown>!main` — and read by nothing this project parses (the runner splits
-// a frame line on `!` and takes the text AFTER it). Emitted because a named module is what a hand-run
-// `wasm-objdump` wants, and it costs eight bytes.
+// The module's own debug name. Cosmetic — it is the `maxon` in wasmtime's `maxon!main` frame line,
+// where an unnamed module reads `<unknown>!main` — and read by nothing this project parses. Emitted
+// because a named module is what a hand-run `wasm-objdump` wants, and it costs eight bytes.
 let WasmModuleDebugName = b"maxon"
 
 // A data segment's leading byte. `0x00` selects the active, memory-0, i32.const-offset form; in
@@ -1135,6 +1162,10 @@ export type WasmModuleBuilder
 		end 'slotDrift'
 	end 'requireDebugNameSlot'
 
+	export function functionDebugNames() returns ByteArrayArray
+		return self.funcDebugNames
+	end 'functionDebugNames'
+
 	export function exportFunc(name ByteArray, funcIdx Wasm32Index)
 		self.exportEntries.push(WasmExport.create(name, kind: wasmExportKindFunc, index: funcIdx))
 	end 'exportFunc'
@@ -1368,9 +1399,10 @@ export type WasmModuleBuilder
 	// The "name" custom section — the module's debug name and one name per function, in index order.
 	// See the constants above for why it exists and for the format.
 	//
-	// Emitted unconditionally: every module has functions, and this is the only source of the words a
-	// panic backtrace prints on this target. Both subsections are written in ascending id order, each
-	// LENGTH-PREFIXED, which is what lets a reader that does not know a subsection id skip it.
+	// Emitted unconditionally: every module has functions, and this is the only source of the words an
+	// engine trap's backtrace prints on this target. Both subsections are written in ascending id
+	// order, each LENGTH-PREFIXED, which is what lets a reader that does not know a subsection id skip
+	// it.
 	function emitNameSection(module ByteArray)
 		var contents = ByteArray.create()
 		writeWasmName(contents, name: WasmNameSectionName)

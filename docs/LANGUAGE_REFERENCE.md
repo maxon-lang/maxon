@@ -567,6 +567,7 @@ end 'main'
 | float → integer | **E3009** `Cannot cast from float to int` — use a rounding function |
 | `bool` ↔ number, `String` → number, struct ↔ anything | **E3009** |
 | a value to its own alias (`b as Byte` when `b` is a `Byte`) | **E3010** `unneeded cast` |
+| a literal to the alias its destination declares (`open(8080 as Port)` for a `Port` parameter) | **E3010** `unneeded cast: the literal 8080 already fits in 'Port'` — see [Construction](#construction) |
 | one container instance to a different one | **E3131** |
 
 #### Floats to Integers
@@ -706,8 +707,21 @@ function main() returns ExitCode
 end 'main'
 ```
 
-Write `value as Alias` when the alias should be visible at the use site, or to convert a value of another
-alias.
+A cast of that literal to the alias the destination declares converts nothing and is **E3010**
+(`unneeded cast: the literal 8080 already fits in 'Port'`). The destinations are a call argument (direct or
+through an interface), a `return` (a parameter default included), a struct-literal field and a store to a
+declared field — `open(8080 as Port)`, `return 0 as ExitCode` from `main`, `Config{port: 8080 as Port}`.
+A cast to a different alias of the same name converts and is legal: this file's `Item = int(0 to 200)` at a
+parameter declared with another file's `Item = int(0 to 255)`, or an alias nested in a type or extension
+body at a place declared with a file-scope one.
+
+A literal cast is how a type is fixed where nothing declares one, and there it is legal: an unannotated
+`let`/`var` (`let p = 8080 as Port`), an array-literal element, an argument or field of a generic type
+parameter, an operator operand, and a value joined by `if`/`else`, `gives` or `otherwise`. At an overloaded
+call, the unneeded literal casts of one call are reported together, and only when removing all of them
+still selects the same overload — a cast that decides which overload runs is needed.
+
+Write `value as Alias` to convert a value of another alias.
 
 ### Arithmetic
 
@@ -740,6 +754,9 @@ where the value lands (next section). All integer arithmetic is 64-bit and wraps
 
 A value is checked where it reaches a place **declared** with the alias: a call argument, a `return`, a
 struct-literal field, a field store, a field's declared default, an array element, or an explicit `as`.
+The rules below hold for every ranged alias, integer or float, including one declared inside a type or
+extension body. A field is checked against the alias its declaring file names, and a literal passed through
+an interface is checked at compile time against the interface's own parameter type.
 
 - A value the compiler can compute — a literal, a constant expression — that is out of range is a
   compile error, **E3005** (`Value 101 is outside the range of 'Percent' (int(0 to 100))`).

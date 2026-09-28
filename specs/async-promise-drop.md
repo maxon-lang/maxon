@@ -58,7 +58,7 @@ end 'trivial'
 
 function main() returns ExitCode
 	_ = async trivial()
-	return 0 as ExitCode
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -143,7 +143,7 @@ function main() returns ExitCode
 		_ = async trivial()
 		i = i + 1
 	end 'loop'
-	return 0 as ExitCode
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -501,7 +501,7 @@ function main() returns ExitCode
 		p = async trivial()
 		i = i + 1
 	end 'loop'
-	return 0 as ExitCode
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -528,7 +528,7 @@ function main() returns ExitCode
 	if positive() 'b'
 		p = async trivial()
 	end 'b'
-	return 0 as ExitCode
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -697,14 +697,14 @@ function main() returns ExitCode
 
 	arm(slots, slot: 0, n: 11)
 	if not completesUnderTheDrive(slots) 'pushedThreadCancelled'
-		return 1 as ExitCode
+		return 1
 	end 'pushedThreadCancelled'
 	let first = try slots.get(0) otherwise panic("slot 0 was just armed")
 	var sum = await first
 
 	arm(slots, slot: 0, n: 31)
 	if not completesUnderTheDrive(slots) 'setThreadCancelled'
-		return 2 as ExitCode
+		return 2
 	end 'setThreadCancelled'
 	let second = try slots.get(0) otherwise panic("slot 0 was just re-armed")
 	sum = sum + (await second)
@@ -762,14 +762,14 @@ function main() returns ExitCode
 
 	arm(slots, slot: 0, n: 11)
 	if not completesUnderTheDrive(slots) 'pushedThreadCancelled'
-		return 1 as ExitCode
+		return 1
 	end 'pushedThreadCancelled'
 	let first = try slots.get(0) otherwise panic("slot 0 was just armed")
 	var sum = await first
 
 	arm(slots, slot: 0, n: 31)
 	if not completesUnderTheDrive(slots) 'setThreadCancelled'
-		return 2 as ExitCode
+		return 2
 	end 'setThreadCancelled'
 	let second = try slots.get(0) otherwise panic("slot 0 was just re-armed")
 	sum = sum + (await second)
@@ -800,7 +800,7 @@ end 'plain'
 function main() returns ExitCode
 		var s = IntPromiseArray.create()
 		s.push(async plain())
-		return 0 as ExitCode
+		return 0
 end 'main'
 ```
 ```exitcode
@@ -829,7 +829,7 @@ function main() returns ExitCode
 		s.push(async plain())
 		let p = try s.pop() otherwise panic("just pushed one")
 		print("popped a thread {p.inner > 0}, array now {s.count()}")
-		return 0 as ExitCode
+		return 0
 end 'main'
 ```
 ```stdout
@@ -1063,7 +1063,7 @@ end 'abandon'
 function main() returns ExitCode
 	let p = async work()
 	abandon(p)
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -1812,7 +1812,7 @@ end 'start'
 function main() returns ExitCode
 	let p = start()
 	print("{await p}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -1842,7 +1842,7 @@ end 'start'
 function main() returns ExitCode
 	let p = start()
 	print("{await p}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -1880,7 +1880,7 @@ end 'run'
 
 function main() returns ExitCode
 	print("{run(false)}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -1917,7 +1917,7 @@ end 'run'
 
 function main() returns ExitCode
 	print("{run(false)}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -1949,7 +1949,7 @@ end 'pass'
 function main() returns ExitCode
 	let p = pass(async work(1))
 	print("{await p}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -1978,7 +1978,7 @@ end 'pass'
 function main() returns ExitCode
 	let p = pass(async work(1))
 	print("{await p}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -2013,7 +2013,7 @@ function main() returns ExitCode
 	let q = async work(10)
 	let r = finish(p, q: q)
 	print("{r} {await p}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -2044,7 +2044,7 @@ function main() returns ExitCode
 	let p = async work(1)
 	let q = async work(10)
 	print("{finish(p, q: q)}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout

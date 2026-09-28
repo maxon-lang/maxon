@@ -51,7 +51,7 @@ end 'main'
 let deadArr = [1, 2, 3, 4, 5]
 
 function main() returns ExitCode
-	return 7 as ExitCode
+	return 7
 end 'main'
 ```
 ```exitcode

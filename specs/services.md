@@ -822,7 +822,7 @@ end 'risky'
 function main() returns ExitCode
 	let v = try risky(0) otherwise (e) 'failed'
 		match e 'why'
-			stopped then return 7 as ExitCode
+			stopped then return 7
 		end 'why'
 	end 'failed'
 	return v as ExitCode
@@ -6693,8 +6693,8 @@ function main() returns ExitCode
 	let h = spawn Calc.create()
 	let v = try await h.divide(10, by: 0) otherwise (e) 'oops'
 		match e 'why'
-			stopped then return 70 as ExitCode
-			divideByZero then return 71 as ExitCode
+			stopped then return 70
+			divideByZero then return 71
 		end 'why'
 	end 'oops'
 	return v as ExitCode
@@ -6725,7 +6725,7 @@ function main() returns ExitCode
 	h.shutdown()
 	let v = try await h.total() otherwise (e) 'gone'
 		match e 'why'
-			stopped then return 9 as ExitCode
+			stopped then return 9
 		end 'why'
 	end 'gone'
 	return v as ExitCode
@@ -6963,8 +6963,8 @@ function main() returns ExitCode
 	let h = spawn Calc.create()
 	let v = try fetch(h) otherwise (e) 'oops'
 		match e 'why'
-			stopped then return 70 as ExitCode
-			divideByZero then return 71 as ExitCode
+			stopped then return 70
+			divideByZero then return 71
 		end 'why'
 	end 'oops'
 	return v as ExitCode
@@ -7077,7 +7077,7 @@ end 'Echo'
 function main() returns ExitCode
 	let h = spawn Echo.create()
 	let out = try await h.say("hi") otherwise 'gone'
-		return 9 as ExitCode
+		return 9
 	end 'gone'
 	print("{out}\n")
 	return 0
@@ -7702,11 +7702,11 @@ function main() returns ExitCode
 	let p = try ps.get(0) otherwise panic("the reply was pushed into slot 0")
 	try await p otherwise (e) 'oops'
 		match e 'why'
-			stopped then return 70 as ExitCode
-			divideByZero then return 71 as ExitCode
+			stopped then return 70
+			divideByZero then return 71
 		end 'why'
 	end 'oops'
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -7752,7 +7752,7 @@ function main() returns ExitCode
 	var ps = TallyReplyArray.create()
 	ps.push(h.bumped(4))
 	let p = try ps.remove(0) otherwise panic("the reply was pushed into slot 0")
-	let tally = try await p otherwise return 70 as ExitCode
+	let tally = try await p otherwise return 70
 	return tally.n as ExitCode
 end 'main'
 ```
@@ -8144,7 +8144,7 @@ typealias HandleArray = Array with SmallBoxHandle
 function main() returns ExitCode
 	var hs = HandleArray.create()
 	hs.push(spawn Box.create(6 as Small))
-	let h = try hs.get(0) otherwise return 1 as ExitCode
+	let h = try hs.get(0) otherwise return 1
 	let s = try await h.peek() otherwise 0
 	return s as ExitCode
 end 'main'
@@ -8990,7 +8990,7 @@ function main() returns ExitCode
 	end 'rounds'
 
 	print("parked={parked}\n")
-	return 42 as ExitCode
+	return 42
 end 'main'
 ```
 ```exitcode
@@ -9137,7 +9137,7 @@ function main() returns ExitCode
 	let a = try await r1 otherwise 0
 	let b = try await r2 otherwise 0
 	print("a={a} b={b}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -9173,7 +9173,7 @@ end 'Reader'
 function main() returns ExitCode
 	let reader = spawn Reader.create()
 	_ = reader
-	return 7 as ExitCode
+	return 7
 end 'main'
 ```
 ```exitcode
@@ -9205,7 +9205,7 @@ function main() returns ExitCode
 	let named = spawn Box.create("one")
 	_ = small
 	_ = named
-	return 7 as ExitCode
+	return 7
 end 'main'
 ```
 ```exitcode
@@ -10859,7 +10859,7 @@ function main() returns ExitCode
 	factory.inspect(labelOf(5))
 	let shape = try await factory.make(1234) otherwise (e) 'gone'
 		match e 'why'
-			stopped then return 9 as ExitCode
+			stopped then return 9
 		end 'why'
 	end 'gone'
 	return shape.area() as ExitCode

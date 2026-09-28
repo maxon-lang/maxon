@@ -216,6 +216,18 @@ export function reportAtFunctionName(project Project, func IrFunction, code Erro
 	reportPositioned(project, code: code, message: message, line: func.nameLine, column: func.nameColumn, filePath: func.sourceFilePath)
 end 'reportAtFunctionName'
 
+module function unneededAliasCastMessage(sourceName ByteArray, targetName ByteArray) returns String
+	return unneededCastMessage("'{sourceSpelledAliasText(sourceName)}'", targetName: targetName)
+end 'unneededAliasCastMessage'
+
+module function unneededLiteralCastMessage(cast LiteralCast) returns String
+	return unneededCastMessage("the literal {cast.spelledText()}", targetName: cast.target.name)
+end 'unneededLiteralCastMessage'
+
+function unneededCastMessage(repeated String, targetName ByteArray) returns String
+	return "unneeded cast: {repeated} already fits in '{sourceSpelledAliasText(targetName)}'"
+end 'unneededCastMessage'
+
 // ⭐⭐ **THE SAME FUNNEL FOR A DIAGNOSTIC THAT CARRIES A SECOND SITE — the note producer that is not a BLAME
 // SWAP (SV2).** `Diagnostic.blamedAt` was the only `DiagnosticNote.at` there had ever been, and it is a swap
 // with FIXED text: it moves a library line into the note and puts the user's construct in the primary slot.

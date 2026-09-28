@@ -1,0 +1,53 @@
+// Test: error.unneeded.a-constraint-bound-float-result-cast-to-its-own-alias
+// --- file: a.maxon
+typealias Percent = float(0.0 to 100.0)
+
+interface Cursor uses Element
+	function current() returns Element
+end 'Cursor'
+
+type Gauge implements Cursor with Percent
+	var v as Percent
+
+	static function create() returns Self
+		return Self{v: 90.0}
+	end 'create'
+
+	function current() returns Percent
+		return self.v
+	end 'current'
+end 'Gauge'
+
+type W uses S where S is Cursor with Percent
+	var s as S
+
+	static function create(s S) returns Self
+		return Self{s: s}
+	end 'create'
+
+	function read() returns Percent
+		let p = self.s.current() as Percent
+		return p
+	end 'read'
+end 'W'
+
+typealias GaugeW = W with Gauge
+
+function main() returns ExitCode
+	let w = GaugeW.create(Gauge.create())
+	if smallOk() 'ok'
+		return trunc(w.read())
+	end 'ok'
+	return 1
+end 'main'
+
+// --- file: z.maxon
+typealias Percent = float(0.0 to 1.0)
+
+export function smallOk() returns bool
+	let low = 0.5 as Percent
+	return low < 1.0
+end 'smallOk'
+---
+CompilerError:
+error E3010: <fragment>:29:28: unneeded cast: 'Percent' already fits in 'Percent'

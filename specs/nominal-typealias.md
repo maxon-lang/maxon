@@ -23,14 +23,16 @@ takesYear(a as Year)     // the one door between two aliases
 ```
 
 `as` crosses in BOTH directions. A widening cast (the source range provably fits the target) emits no
-guard; a narrowing cast keeps its runtime range check. E3010 fires only when the cast names the value's
-OWN alias.
+guard; a narrowing cast keeps its runtime range check. E3010 fires when the cast names the value's OWN
+alias, and when a numeric literal is cast to exactly the type its destination already declares (an
+argument's parameter, a `return`'s result, a struct-literal or stored field).
 
 **A `return` carries the cast.** `return x` from a function declared `returns T` is `return x as T`: the
 one door with an implicit conversion, and it performs exactly what the written cast would. A widening
 return emits no guard, a narrowing return keeps its runtime guard, and `main` may return an alias-typed
-value without spelling `ExitCode`. Nothing else converts implicitly — an argument, a rebind, a field
-store, an `otherwise` value and a match-arm merge still demand the cast. Only a NOMINAL difference
+value without spelling `ExitCode`. Nothing else converts a NAMED value implicitly — at an argument, a
+rebind, a field store, an `otherwise` value and a match-arm merge an aliased value still demands the
+cast. A literal names no alias and demands none (see Decay). Only a NOMINAL difference
 converts: a different struct, a boxed union where a scalar is declared, or a lossy float where an int is
 declared is refused at the `return` exactly as before.
 

@@ -300,7 +300,7 @@ every host. The idle count is read first, because it is the query that brings th
 function main() returns ExitCode
 	let idle = __Builtins.schedIdleProcessorCount()
 	print("everyButMain={idle == __Builtins.schedProcessorCount() - 1}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -375,7 +375,7 @@ function main() returns ExitCode
 	end 'settle'
 	let settled = __Builtins.schedIdleProcessorCount() == everyButMain
 	print("total={total} settled={settled}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout

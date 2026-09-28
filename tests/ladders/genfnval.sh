@@ -182,8 +182,8 @@ done
     i=$(( i + 1 ))
   done
   echo -e "\tif total > 0 'ok'"
-  echo -e "\t\treturn 0 as ExitCode"
+  echo -e "\t\treturn 0"
   echo -e "\tend 'ok'"
-  echo -e "\treturn 1 as ExitCode"
+  echo -e "\treturn 1"
   echo "end 'main'"
 } > "$OUT"

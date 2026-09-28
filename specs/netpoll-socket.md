@@ -153,17 +153,17 @@ function main() returns ExitCode
 		tries = tries + 1
 		let outcome = try attempt() otherwise (e) 'disturbed'
 			match e 'why'
-				noListener then return 1 as ExitCode
+				noListener then return 1
 				disturbed then continue
 			end 'why'
 		end 'disturbed'
 
 		print("ok={outcome.0} stuck={outcome.1}\n")
-		return 0 as ExitCode
+		return 0
 	end 'attempts'
 
 	print("ok={readers} stuck=true\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -242,7 +242,7 @@ function main() returns ExitCode
 	end 'peer'
 
 	print("ok={ok} brackets={brackets}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -318,7 +318,7 @@ function main() returns ExitCode
 	end 'peer'
 
 	print("ok={ok} blocked={blocked}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -453,7 +453,7 @@ function main() returns ExitCode
 	end 'reading'
 
 	print("heard={heard} timeouts={timeouts}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -520,7 +520,7 @@ function main() returns ExitCode
 	end 'reading'
 
 	print("reported={reported} timeouts={timeouts} heard={heard}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -685,7 +685,7 @@ function main() returns ExitCode
 	let stillWaiting = __Builtins.gtIsComplete(reader.inner) == 0
 
 	print("dropped={parked and stillWaiting}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -736,7 +736,7 @@ function main() returns ExitCode
 	let stillWaiting = __Builtins.gtIsComplete(reader.inner) == 0
 
 	print("dropped={parked > 0 and stillWaiting}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -803,7 +803,7 @@ function main() returns ExitCode
 	let code = await reader
 
 	print("parked={parked > 0} code={code}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -910,7 +910,7 @@ function main() returns ExitCode
 
 	let echoed = echo == "reuse\n"
 	print("echoed={echoed} outcome={outcome}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -1055,7 +1055,7 @@ function main() returns ExitCode
 	let second = readOutcome(client)
 	let unreachable = await canceller
 	print("second={second} canceller={unreachable}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -1101,7 +1101,7 @@ function main() returns ExitCode
 	let served = await peer
 
 	print("echoed={echoed} served={served}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -1161,7 +1161,7 @@ function main() returns ExitCode
 	let parked = parks >= acceptors
 
 	print("served={served} dialled={dialled} parked={parked}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -1220,7 +1220,7 @@ function main() returns ExitCode
 	let served = await peer
 
 	print("earlier={earlierOk} later={laterOk} served={served}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -1317,7 +1317,7 @@ function main() returns ExitCode
 	let code = await acceptor
 
 	print("parked={parked > 0} code={code}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -1447,7 +1447,7 @@ function main() returns ExitCode
 	end 'again'
 
 	print("refused={refused}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout

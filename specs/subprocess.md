@@ -1545,7 +1545,7 @@ end 'runChild'
 function main() returns ExitCode
 	if CommandLine.args().count() > 1 'childMode'
 		runChild()
-		return 0 as ExitCode
+		return 0
 	end 'childMode'
 
 	let exe = Executable.path(try Process.executablePath() otherwise return 2)
@@ -1555,7 +1555,7 @@ function main() returns ExitCode
 
 	print("{describe("stdout", text: result.stdout)}\n")
 	print("{describe("stderr", text: result.stderr)}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -1634,7 +1634,7 @@ end 'runChild'
 function main() returns ExitCode
 	if CommandLine.args().count() > 1 'childMode'
 		runChild()
-		return 0 as ExitCode
+		return 0
 	end 'childMode'
 
 	let exe = Executable.path(try Process.executablePath() otherwise return 2)
@@ -1651,7 +1651,7 @@ function main() returns ExitCode
 	print("{describe("bytes", text: counted)}\n")
 	print("{describe("line", text: lined)}\n")
 	print("{describe("errline", text: errored)}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode

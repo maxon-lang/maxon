@@ -241,9 +241,9 @@ function main() returns ExitCode
 	end 'burn'
 	let elapsed = Clock.elapsedMs(start)
 	if elapsed >= 0 'nonNegative'
-		return 7 as ExitCode
+		return 7
 	end 'nonNegative'
-	return 1 as ExitCode
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -258,9 +258,9 @@ function main() returns ExitCode
 	let a = Clock.nowNanos()
 	let b = Clock.nowNanos()
 	if b >= a 'nonDecreasing'
-		return 4 as ExitCode
+		return 4
 	end 'nonDecreasing'
-	return 1 as ExitCode
+	return 1
 end 'main'
 ```
 ```exitcode

@@ -200,15 +200,6 @@ union RetBlockLookup
 	found(block IrBlock)
 end 'RetBlockLookup'
 
-// The parameter alias a call-argument site resolves to, once the callee's own `FunctionRangeChecks` is
-// in hand: the alias NAME, and the FILE whose declaration of it applies — the CALLEE's, never the
-// caller's (`RangedAliasRegistry` resolves a name per declaring file, and a parameter's range is the one
-// visible where the function was written).
-union ParamAliasLookup
-	none
-	found(aliasName ByteArray, declFilePath FilePath)
-end 'ParamAliasLookup'
-
 // Run the pass over every function that has recorded range-check sites. Functions with none are skipped
 // without touching their blocks.
 export function insertRangeChecks(project Project, module StdModule)
@@ -397,9 +388,7 @@ type RangeCheckEmitter
 			self.processArgSite(argSite, filePath: checks.filePath)
 		end 'eachArgSite'
 
-		if not checks.returnAliasName.isEmpty() 'rangedReturn'
-			self.processReturnSites(checks)
-		end 'rangedReturn'
+		self.processReturnSites(checks)
 	end 'run'
 
 	// ---- alias-named sites (cast, struct-literal field, field store, field default, array element) ----
@@ -413,30 +402,19 @@ type RangeCheckEmitter
 	// Both halves of the rule are one decision (`range-check-panic.md` says so outright), and splitting
 	// them so a `compileTimeOnly` position could skip the call would be two deciders that can drift.
 	//
-	// ⭐ **TWO FILES, AND THEY ARE NOT THE SAME QUESTION.** `aliasFilePath` picks WHICH declaration of the
-	// name applies — a file's own `Limit` governs it even where another file declares that name over a
-	// wider range (`RangedAliasRegistry`). `filePath` is where the DIAGNOSTIC and the runtime panic message
-	// point. They are one file at every door the parser resolved for itself; they DIFFER at a call
-	// argument, where the parameter's range is the CALLEE's to declare and the error belongs to the line
-	// that wrote the argument. Conflated, `utf16LeadSurrogate(1000000000)` reported the caller's line and
-	// column against the STDLIB's path — a position that names a `typealias` declaration, in a file the
-	// program never wrote a call in. (Measured, on `string-views`.)
+	// ⭐ **TWO FILES, AND THEY ARE NOT THE SAME QUESTION.** `alias` is the declaration the door
+	// resolved — at a call argument the CALLEE's, whose parameter range it is. `filePath` is where the
+	// DIAGNOSTIC and the runtime panic message point, and at a call argument that is the line that
+	// wrote the argument. Conflated, `utf16LeadSurrogate(1000000000)` reports the caller's line and
+	// column against the STDLIB's path — a position that names a `typealias` declaration, in a file
+	// the program never wrote a call in.
 	//
-	// It takes the position's parts rather than a `RangeCheckSite` because the call-argument door has no
-	// site to hand it: synthesizing one there would have to invent a `maxonOpPos` the position does not
-	// have and no reader would ever spend — a magic value one refactor away from being believed.
-	//
-	// `undeclared` — a builtin like `ExitCode`, or an alias no loaded file declares — is the "not a
-	// checkable range" case and guards nothing.
-	function guardVerdict(value ValueId, aliasName ByteArray, guard RangeCheckGuard, line LineNumber, column ColumnNumber, aliasFilePath FilePath, filePath FilePath) returns RangeGuardVerdict
-		return match self.project.typeAliases.lookup(aliasName, readerFilePath: aliasFilePath) 'bounds'
-			undeclared gives RangeGuardVerdict.noGuard
-			declared(alias) gives self.runtimeHalfOf(alias, value: value, aliasName: aliasName, guard: guard, line: line, column: column, filePath: filePath)
-		end 'bounds'
-	end 'guardVerdict'
-
-	function runtimeHalfOf(alias RangedTypeAlias, value ValueId, aliasName ByteArray, guard RangeCheckGuard, line LineNumber, column ColumnNumber, filePath FilePath) returns RangeGuardVerdict
-		if not self.needsRuntimeGuard(value, alias: alias, aliasName: aliasName, line: line, column: column, filePath: filePath) 'settledAtCompileTime'
+	// It takes the position's parts rather than a `RangeCheckSite` because the constant call-argument
+	// door (`RangeCheckArgSite`) has no such site to hand it: synthesizing one there would have to
+	// invent a `maxonOpPos` the position does not have and no reader would ever spend — a magic value
+	// one refactor away from being believed.
+	function guardVerdict(value ValueId, alias RangedTypeAlias, guard RangeCheckGuard, line LineNumber, column ColumnNumber, filePath FilePath) returns RangeGuardVerdict
+		if not self.needsRuntimeGuard(value, alias: alias, line: line, column: column, filePath: filePath) 'settledAtCompileTime'
 			return RangeGuardVerdict.noGuard
 		end 'settledAtCompileTime'
 
@@ -445,26 +423,28 @@ type RangeCheckEmitter
 		end 'compileTimeHalfOnly'
 
 		return RangeGuardVerdict.guard(alias)
-	end 'runtimeHalfOf'
+	end 'guardVerdict'
 
-	// An alias-named site: the site's own `stdOpPos` is where in its block the guard goes. Every one
-	// of them owes the runtime half, so no site carries a `RangeCheckGuard` to be asked for.
+	// A range site: the site's own `stdOpPos` is where in its block the guard goes. An `alias` site is
+	// guarded against its alias; a `callArgument` site is a full-unsigned parameter's call-site check
+	// (`guardCallArgument`). Every one of them owes the runtime half, so no site carries a
+	// `RangeCheckGuard` to be asked for.
 	//
-	// The two files are not always one here. The cast, the field store, the struct-literal field and
-	// the array element resolve their alias in this function's own file, but the arm-served index's
-	// alias is the callee's (`Parser.recordArmServedIndexRangeCheck`), so the site carries the
-	// declaration it resolved in `RangeCheckSiteTarget.alias`.
+	// The two files are not always one here. The cast and the array element resolve their alias in
+	// this function's own file, a field in its declaring file, and the arm-served index in the
+	// callee's (`Parser.recordArmServedIndexRangeCheck`), so the site carries the declaration it
+	// resolved (`RangeCheckSiteTarget.alias`).
 	function processSite(site RangeCheckSite, filePath FilePath)
 		match site.target 'target'
-			alias(aliasName, aliasFilePath) then self.guardSiteAgainst(site, aliasName: aliasName, aliasFilePath: aliasFilePath, filePath: filePath)
+			alias(alias) then self.guardSiteAgainst(site, alias: alias, filePath: filePath)
 			callArgument(callResult, argIndex, label, sourceMayBeNegative) then self.guardCallArgument(site, callResult: callResult, argIndex: argIndex, label: label, sourceMayBeNegative: sourceMayBeNegative, filePath: filePath)
 		end 'target'
 	end 'processSite'
 
-	function guardSiteAgainst(site RangeCheckSite, aliasName ByteArray, aliasFilePath FilePath, filePath FilePath)
-		match self.guardVerdict(site.value, aliasName: aliasName, guard: RangeCheckGuard.runtime, line: site.line, column: site.column, aliasFilePath: aliasFilePath, filePath: filePath) 'verdict'
+	function guardSiteAgainst(site RangeCheckSite, alias RangedTypeAlias, filePath FilePath)
+		match self.guardVerdict(site.value, alias: alias, guard: RangeCheckGuard.runtime, line: site.line, column: site.column, filePath: filePath) 'verdict'
 			noGuard then return
-			guard(alias) then _ = self.emitGuardAt(self.guardSiteAt(site.block, stdOpPos: site.stdOpPos), operand: GuardedOperand.asIs(site.value), alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: aliasName), chain: GuardChain.blockChain(site.block), span: sourceSpanOf(self.project, filePath: filePath, line: site.line, column: site.column))
+			guard(guarded) then _ = self.emitGuardAt(self.guardSiteAt(site.block, stdOpPos: site.stdOpPos), operand: GuardedOperand.asIs(site.value), alias: guarded, chain: GuardChain.blockChain(site.block), filePath: filePath, line: site.line, column: site.column)
 		end 'verdict'
 	end 'guardSiteAgainst'
 
@@ -475,7 +455,7 @@ type RangeCheckEmitter
 
 		match self.waivers.waivedParamOfCall(self.funcIndex, callResult: callResult, argIndex: argIndex, label: label, project: self.project) 'param'
 			none then return
-			found(param) then self.guardSiteAgainst(site, aliasName: param.aliasName, aliasFilePath: param.declFilePath, filePath: filePath)
+			found(param) then self.guardSiteAgainst(site, alias: param.alias, filePath: filePath)
 		end 'param'
 	end 'guardCallArgument'
 
@@ -531,13 +511,14 @@ type RangeCheckEmitter
 	// DIAGNOSTIC file are the callee's own — a parameter's range is the one visible where the function was
 	// written, and the panic points at the parameter itself.
 	//
-	// ⚠ **"THE ONE VISIBLE WHERE THE FUNCTION WAS WRITTEN" IS ONLY AS GOOD AS `RangedAliasRegistry.lookup`.**
-	// Handing it the callee's path is right and is all this site can do. **A name the callee's file does not
-	// itself declare resolves to a declaration that file MAY NAME**, so this site gets the callee's own
-	// exported/stdlib alias — LAST-WINS there lets a user `typealias Codepoint = int(0 to 100)` make
-	// `stdlib/helpers/string/utf16.maxon`'s `utf16LeadSurrogate(codepoint Codepoint)` panic on a legal
-	// `70000` against a range from a file it has never seen. What remains open, and is E3063's, is a
-	// contest between two declarations the reader may BOTH name.
+	// ⚠ **"THE ONE VISIBLE WHERE THE FUNCTION WAS WRITTEN" IS ONLY AS GOOD AS
+	// `RangedAliasRegistry.lookup`,** which the parser asks with the callee's own path. **A name the
+	// callee's file does not itself declare resolves to a declaration that file MAY NAME**, so this
+	// site gets the callee's own exported/stdlib alias — LAST-WINS there lets a user `typealias
+	// Codepoint = int(0 to 100)` make `stdlib/helpers/string/utf16.maxon`'s
+	// `utf16LeadSurrogate(codepoint Codepoint)` panic on a legal `70000` against a range from a file
+	// it has never seen. What remains open, and is E3063's, is a contest between two declarations the
+	// reader may BOTH name.
 	//
 	// ⚠ A parameter is never a folded constant (its ValueId is defined by a `param` op, not a `const`), so
 	// `guardVerdict`'s compile-time half never fires here; what it decides for a parameter is the one thing
@@ -548,7 +529,7 @@ type RangeCheckEmitter
 	// parameter needs nothing of its own — and guarding only the integer half would replace *five doors of
 	// which four guard* with *parameters of which only the int ones guard*, which is a fresh instance of
 	// the very defect this pass exists to delete. `rangedParamSites` records a float alias for the same
-	// reason `rangedReturnAliasName` excludes none: the domain is decided where
+	// reason `rangedReturnAlias` excludes none: the domain is decided where
 	// the BOUNDS are read, never where the site is recorded.
 	//
 	// ⭐ **A `function f(x T) returns T … return x` GUARDS THE VALUE ONCE — HERE.** The `return` site's
@@ -567,7 +548,7 @@ type RangeCheckEmitter
 
 		let paramValue = rangedParamValue(site)
 
-		match self.guardVerdict(paramValue, aliasName: site.aliasName, guard: RangeCheckGuard.runtime, line: site.line, column: site.column, aliasFilePath: filePath, filePath: filePath) 'verdict'
+		match self.guardVerdict(paramValue, alias: site.alias, guard: RangeCheckGuard.runtime, line: site.line, column: site.column, filePath: filePath) 'verdict'
 			noGuard then return
 			guard(alias) then self.emitParamGuard(site, alias: alias, entryId: entryId, filePath: filePath)
 		end 'verdict'
@@ -598,7 +579,7 @@ type RangeCheckEmitter
 		// bumps it, so `[firstMintedId, nextBlockId)` is exactly this guard's blocks with no second list
 		// to keep in step.
 		let firstMintedId = self.func.nextBlockId
-		let ok = self.emitGuardAt(guardSite, operand: self.paramOperand(site), alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName), chain: GuardChain.blockChain(entryId), span: sourceSpanOf(self.project, filePath: filePath, line: site.line, column: site.column))
+		let ok = self.emitGuardAt(guardSite, operand: self.paramOperand(site), alias: alias, chain: GuardChain.blockChain(entryId), filePath: filePath, line: site.line, column: site.column)
 
 		if ok.id == headId 'bothBoundsElided'
 			return
@@ -776,71 +757,67 @@ type RangeCheckEmitter
 
 	// ---- call-argument sites ----
 
-	// ⭐ **THE ONE SITE KIND WHOSE ALIAS IS RESOLVED HERE RATHER THAN AT THE PARSE.** A call argument's
+	// ⭐ **A CALL ARGUMENT'S ALIAS IS FOUND HERE RATHER THAN AT THE PARSE** — this constant-argument
+	// site's and the `callArgument` range site's alike (`guardCallArgument`). A direct call argument's
 	// declared type belongs to the callee, which the caller's file may never have seen (see
-	// `RangeCheckArgSite`); this pass runs once, after every file has merged, so the callee's own record is
-	// in hand. Resolved, it asks the SAME `guardVerdict` every other position asks — there is no second
-	// decision anywhere for a call argument.
+	// `RangeCheckArgSite`); this pass runs once, after every file has merged, so the callee's own
+	// record is in hand. Found, it asks the SAME `guardVerdict` every other position asks — there is
+	// no second decision anywhere for a call argument.
 	//
-	// ⚠ The alias reader file is the CALLEE's, never this function's: the range a parameter was declared
-	// with is the one visible where the FUNCTION was written. The diagnostic's file stays this function's
-	// — see `guardVerdict`.
+	// ⚠ The alias is the CALLEE's declaration, never one this function's file resolves: the range a
+	// parameter was declared with is the one visible where the FUNCTION was written. The diagnostic's
+	// file stays this function's — see `guardVerdict`.
 	function processArgSite(site RangeCheckArgSite, filePath FilePath)
-		match self.paramAliasOf(site) 'p'
-			none then return
-			found(aliasName, declFilePath) then self.checkArgAgainstParamRange(site, aliasName: aliasName, declFilePath: declFilePath, filePath: filePath)
-		end 'p'
+		let alias = try self.paramAliasOf(site) otherwise return
+		self.checkArgAgainstParamRange(site, alias: alias, filePath: filePath)
 	end 'processArgSite'
 
 	// A call argument owes the COMPILE-TIME half and NOTHING ELSE (`RangeCheckGuard`), so it asks the
 	// shared decider purely for the E3005 that decider raises on its way to an answer. The `guard` arm is
 	// unreachable by construction — the argument is asked as `compileTimeOnly` — and says so, rather than
 	// quietly anchoring a guard at a position a call argument has no way to name.
-	function checkArgAgainstParamRange(site RangeCheckArgSite, aliasName ByteArray, declFilePath FilePath, filePath FilePath)
-		match self.guardVerdict(site.value, aliasName: aliasName, guard: RangeCheckGuard.compileTimeOnly, line: site.line, column: site.column, aliasFilePath: declFilePath, filePath: filePath) 'verdict'
+	function checkArgAgainstParamRange(site RangeCheckArgSite, alias RangedTypeAlias, filePath FilePath)
+		match self.guardVerdict(site.value, alias: alias, guard: RangeCheckGuard.compileTimeOnly, line: site.line, column: site.column, filePath: filePath) 'verdict'
 			noGuard then return
-			guard then panic("checkArgAgainstParamRange: the call to '{String.from(site.callee)}' was asked as `compileTimeOnly` and came back owing a RUNTIME guard — `runtimeHalfOf` must never answer `guard` for a compile-time-only position")
+			guard then panic("checkArgAgainstParamRange: the call to '{String.from(site.callee)}' was asked as `compileTimeOnly` and came back owing a RUNTIME guard — `guardVerdict` must never answer `guard` for a compile-time-only position")
 		end 'verdict'
 	end 'checkArgAgainstParamRange'
 
-	// The ranged-alias name the argument's PARAMETER was declared with, plus the callee's file. `none`
-	// covers every ordinary call: a callee with no ranged parameter at all files no `paramSites`, an
-	// argument landing on an unranged position matches no site, and a malformed call (bad arity, unknown
-	// label) slots past the end and matches none either — which SemanticCheck reports against the real
-	// registry, and which is not this pass's to diagnose.
+	function paramAliasOf(site RangeCheckArgSite) returns RangedTypeAlias throws MapError
+		match site.parameter 'parameter'
+			ofCallee then return try self.calleeParamAliasOf(site)
+			interfaceFormal(alias) then return alias
+		end 'parameter'
+	end 'paramAliasOf'
+
+	// The ranged alias the argument's PARAMETER was declared with. A miss covers every ordinary call:
+	// a callee with no ranged parameter at all files no `paramSites`, an argument landing on an
+	// unranged position matches no site, and a malformed call (bad arity, unknown label) slots past
+	// the end and matches none either — which SemanticCheck reports against the real registry, and
+	// which is not this pass's to diagnose.
 	//
 	// ⚠ The scan is over the callee's RANGED parameters only — usually one, never more than its arity — so
 	// it is bounded by the same `arity` the label lookup it sits beside already walks (`argSlotPosition`
 	// scans `paramNames`), and it adds no growth shape this call did not already have.
-	function paramAliasOf(site RangeCheckArgSite) returns ParamAliasLookup
-		let calleeChecks = try self.project.rangeChecks.get(site.callee) otherwise return ParamAliasLookup.none
+	function calleeParamAliasOf(site RangeCheckArgSite) returns RangedTypeAlias throws MapError
+		let calleeChecks = try self.project.rangeChecks.get(site.callee)
 
 		if calleeChecks.paramSites.isEmpty() 'noRangedParam'
-			return ParamAliasLookup.none
+			throw MapError.keyNotFound
 		end 'noRangedParam'
 
-		// A `rangeChecks` entry and a `funcSignatures` entry are written by the SAME `parseFunction`, one
-		// statement apart and under the same name, so a callee present in one and absent from the other is a
-		// broken invariant rather than a program the user could write.
 		let slot = calleeParamSlot(self.project, callee: site.callee, argIndex: site.argIndex, label: site.label)
-
-		for paramSite in calleeChecks.paramSites 'eachRangedParam'
-			if paramSite.index == slot 'thisArgumentsParameter'
-				return ParamAliasLookup.found(paramSite.aliasName, declFilePath: calleeChecks.filePath)
-			end 'thisArgumentsParameter'
-		end 'eachRangedParam'
-
-		return ParamAliasLookup.none
-	end 'paramAliasOf'
+		return try calleeChecks.paramAliasAt(slot)
+	end 'calleeParamAliasOf'
 
 	// ---- return sites ----
 
-	// `checks.filePath` picks the alias, exactly as it does for a cast — a ranged `return` is checked
-	// against the range declared where the FUNCTION was written. It takes the whole `FunctionRangeChecks`
-	// because `guardReturns` needs the PARAMETER sites too (see `entryGuardAlreadyCovers`), and threading
-	// a fifth field through would leave the two halves of one question arriving separately.
+	// A ranged `return` is checked against the range declared where the FUNCTION was written, which
+	// the parser resolved into `checks.returnAlias`. It takes the whole `FunctionRangeChecks` because
+	// `guardReturns` needs the PARAMETER sites too (see `entryGuardAlreadyCovers`), and threading a
+	// fifth field through would leave the two halves of one question arriving separately.
 	function processReturnSites(checks FunctionRangeChecks)
-		match self.project.typeAliases.lookup(checks.returnAliasName, readerFilePath: checks.filePath) 'bounds'
+		match checks.returnAlias 'bounds'
 			undeclared then return
 			declared(alias) then self.guardReturns(alias, checks: checks)
 		end 'bounds'
@@ -850,19 +827,19 @@ type RangeCheckEmitter
 		for site in checks.returnSites 'eachSite'
 			// Asked first and unconditionally: it raises the compile-time E3005 on its way to an answer
 			// (`guardVerdict` keeps the same discipline), and it is what makes the elision below legitimate.
-			// Clause 4 is that the entry guard exists, and only this function answering `false` for the same
-			// value against the same alias could have stopped it existing.
-			if not self.needsRuntimeGuard(site.value, alias: alias, aliasName: checks.returnAliasName, line: site.line, column: site.column, filePath: checks.filePath) 'noGuard'
+			// Clause 4 is that the parameter is guarded, and only this function answering `false` for the
+			// same value against the same alias could have stopped its entry guard existing.
+			if not self.needsRuntimeGuard(site.value, alias: alias, line: site.line, column: site.column, filePath: checks.filePath) 'noGuard'
 				continue
 			end 'noGuard'
 
-			if self.entryGuardAlreadyCovers(site.value, checks: checks) 'guardedAtTheEntry'
+			if self.entryGuardAlreadyCovers(site.value, alias: alias, checks: checks) 'guardedAtTheEntry'
 				continue
 			end 'guardedAtTheEntry'
 
 			match self.retBlockOf(site) 'ret'
 				notFound then break 'ret'
-				found(retBlock) then _ = self.emitGuardAt(GuardSite.create(retBlock, position: retBlock.opRefs.count()), operand: GuardedOperand.asIs(site.value), alias: alias, message: self.rangeCheckMessage(checks.filePath, line: site.line, aliasName: checks.returnAliasName), chain: GuardChain.retChain, span: sourceSpanOf(self.project, filePath: checks.filePath, line: site.line, column: site.column))
+				found(retBlock) then _ = self.emitGuardAt(GuardSite.create(retBlock, position: retBlock.opRefs.count()), operand: GuardedOperand.asIs(site.value), alias: alias, chain: GuardChain.retChain, filePath: checks.filePath, line: site.line, column: site.column)
 			end 'ret'
 		end 'eachSite'
 	end 'guardReturns'
@@ -878,27 +855,28 @@ type RangeCheckEmitter
 	//      `var` shadow reassigned before the `return` carries a different id (`Scope.setValue` rebinds),
 	//      and a parameter cannot be mutated at all (E2013). ⇒ `return-of-a-reassigned-shadow-is-still-guarded`,
 	//      `return-of-a-computed-value-is-still-guarded`.
-	//   2. **THE SAME ALIAS.** Both names are resolved through `checks.filePath` — `guardRangedParam` and
-	//      `processReturnSites` hand `lookup` the identical reader — so equal NAMES are one declaration and
-	//      therefore one pair of bounds. A narrower return alias over the same parameter is a different name
-	//      and gets its guard. ⇒ `return-through-a-narrower-alias-is-still-guarded`.
+	//   2. **THE SAME ALIAS.** `isTheSameDeclarationAs` compares DECLARATIONS, so a match is one pair of
+	//      bounds. A narrower return alias over the same parameter is a different declaration and gets its
+	//      guard. ⇒ `return-through-a-narrower-alias-is-still-guarded`.
 	//   3. **DOMINANCE.** `guardRangedParams` splits the ENTRY block at `func.paramCount`, which is exactly
 	//      past `emitParams` and before a single body op, so every path to every `return` runs the cascade
 	//      first. This is the one clause no program can break — there is no `return` reachable without
 	//      passing the entry. ⇒ `entry-guard-covers-a-return-inside-a-branch`.
-	//   4. **THE ENTRY GUARD EXISTS.** Both sites route through the same `needsRuntimeGuard` with the same
-	//      value and the same alias, and `guardReturns` asks it BEFORE this — so this is reached only on the
-	//      answer that made the entry guard fire. The two remaining ways a guard can be skipped are shared
-	//      too: `lookup` is the same call (we are inside its `declared` arm), and `emitGuardAt`'s
-	//      both-bounds-elided return is a function of the alias alone, so it fires at neither site or both.
+	//   4. **THE PARAMETER IS GUARDED.** Both sites route through the same `needsRuntimeGuard` with
+	//      the same value and the same alias, and `guardReturns` asks it BEFORE this — so this is
+	//      reached only on the answer that made the entry guard fire. A full-unsigned parameter whose
+	//      entry guard is waived (`EntryGuardWaivers`) is in range on entry all the same: every direct
+	//      caller checked its argument or passed an unsigned source. The one remaining way a guard can
+	//      be skipped is shared too: `emitGuardAt`'s both-bounds-elided return is a function of the
+	//      alias alone, so it fires at neither site or both.
 	//
 	// ⚠ **A LINEAR SCAN, AND BOUNDED BY THE ARITY** — `paramSites` is SPARSE (one entry per RANGED
-	// parameter, never per parameter), so this walks at most the function's ranged parameters, which is
-	// usually one and never more than `MaxAbiArgs`. It is the same bound `paramAliasOf`'s scan already has
-	// and adds no growth shape a call did not have.
-	function entryGuardAlreadyCovers(value ValueId, checks FunctionRangeChecks) returns bool
+	// parameter, never per parameter), so this walks at most the function's ranged parameters, which
+	// is usually one and never more than `MaxAbiArgs`. It is the same bound `paramAliasAt`'s scan
+	// already has and adds no growth shape a call did not have.
+	function entryGuardAlreadyCovers(value ValueId, alias RangedTypeAlias, checks FunctionRangeChecks) returns bool
 		for paramSite in checks.paramSites 'eachRangedParam'
-			if rangedParamValue(paramSite) == value and paramSite.aliasName.equals(checks.returnAliasName) 'sameValueSameAlias'
+			if rangedParamValue(paramSite) == value and paramSite.alias.isTheSameDeclarationAs(alias) 'sameValueSameAlias'
 				return true
 			end 'sameValueSameAlias'
 		end 'eachRangedParam'
@@ -925,7 +903,7 @@ type RangeCheckEmitter
 	// clean into such a parameter and printed 18446744073709551615. Reordered, the
 	// signed-full `int(i64.min to i64.max)` is unaffected (every integer satisfies it, so the literal arm
 	// answers in-range for it and always will) and only the unsigned-full range gains a verdict.
-	function needsRuntimeGuard(value ValueId, alias RangedTypeAlias, aliasName ByteArray, line LineNumber, column ColumnNumber, filePath FilePath) returns bool
+	function needsRuntimeGuard(value ValueId, alias RangedTypeAlias, line LineNumber, column ColumnNumber, filePath FilePath) returns bool
 		let isFloat = aliasIsFloat(alias)
 
 		let literals = self.floatConsts if isFloat else self.intConsts
@@ -934,7 +912,7 @@ type RangeCheckEmitter
 			let v = literals.constantOf(value)
 
 			if not literalInRange(v, low: alias.low, high: alias.high, isFloat: isFloat, writtenNegative: valueIsMarked(self.writtenNegativeLiterals, value: value)) 'outOfRange'
-				reportPositioned(self.project, code: ErrorCode.typeMismatch, message: literalOutOfRangeMessage(v, aliasName: String.from(aliasName), low: alias.low, high: alias.high, isFloat: isFloat, rawBitWidth: alias.rawBitWidth), line: line, column: column, filePath: filePath)
+				reportPositioned(self.project, code: ErrorCode.typeMismatch, message: literalOutOfRangeMessage(v, aliasName: String.from(alias.name), low: alias.low, high: alias.high, isFloat: isFloat, rawBitWidth: alias.rawBitWidth), line: line, column: column, filePath: filePath)
 			end 'outOfRange'
 
 			return false
@@ -958,7 +936,7 @@ type RangeCheckEmitter
 	//
 	// The guard's ops carry the checked site's span, so a line whose only code is a guard still has a
 	// line row; the span is cleared after, so nothing this pass emits next inherits it.
-	function emitGuardAt(site GuardSite, operand GuardedOperand, alias RangedTypeAlias, message ByteArray, chain GuardChain, span SpanId) returns IrBlock
+	function emitGuardAt(site GuardSite, operand GuardedOperand, alias RangedTypeAlias, chain GuardChain, filePath FilePath, line LineNumber, column ColumnNumber) returns IrBlock
 		let isFloat = aliasIsFloat(alias)
 		let checks = boundChecks(alias.low, high: alias.high, isFloat: isFloat)
 
@@ -968,8 +946,8 @@ type RangeCheckEmitter
 			return site.block
 		end 'noBoundNeeded'
 
-		self.module.spans.current = span
-		let ok = self.emitCheckedGuard(site, operand: operand, checks: checks, message: message, chain: chain, isFloat: isFloat, checksBorrow: not isFloat and aliasIsUnsignedFullQuantity(alias))
+		self.module.spans.current = sourceSpanOf(self.project, filePath: filePath, line: line, column: column)
+		let ok = self.emitCheckedGuard(site, operand: operand, checks: checks, message: self.rangeCheckMessage(filePath, line: line, alias: alias), chain: chain, isFloat: isFloat, checksBorrow: not isFloat and aliasIsUnsignedFullQuantity(alias))
 		self.module.spans.current = NoSpanId
 
 		return ok
@@ -1412,8 +1390,8 @@ type RangeCheckEmitter
 	// SLOTS one alias can guard: a value flowing into an array ELEMENT carried the qualified spelling while
 	// the identical alias on a plain PARAMETER carried the bare one, because only an instance's element is
 	// ever qualified — one alias, two spellings, decided by where the value happened to land.
-	function rangeCheckMessage(filePath FilePath, line LineNumber, aliasName ByteArray) returns ByteArray
-		return panicMessageLine(filePath, line: line, text: "Range check failed: value outside typealias '{sourceSpelledAliasText(aliasName)}'")
+	function rangeCheckMessage(filePath FilePath, line LineNumber, alias RangedTypeAlias) returns ByteArray
+		return panicMessageLine(filePath, line: line, text: "Range check failed: value outside typealias '{sourceSpelledAliasText(alias.name)}'")
 	end 'rangeCheckMessage'
 
 	// Map each `const` result value id to its constant — the literals whose out-of-range use is the
@@ -1900,6 +1878,9 @@ end 'retMatchesValue'
 // own — `collectConsts`, which keeps ONE MAP PER DOMAIN (a float payload is a bit pattern) and
 // additionally folds a `neg` of a `const` (`recordConstNeg`) that FoldConstOperands has no reason to.
 
+// A `rangeChecks` entry and a `funcSignatures` entry are written by the SAME `parseFunction`, one
+// statement apart and under the same name, so a callee present in one and absent from the other is
+// a broken invariant rather than a program the user could write.
 function calleeParamSlot(project Project, callee ByteArray, argIndex ParamCount, label ByteArray) returns ParamCount
 	let signature = try project.funcSignatures.get(callee) otherwise panic("calleeParamSlot: '{String.from(callee)}' has range-check data but no FuncSignature — parseFunction records both, keyed by the same name")
 	return argSlotPosition(signature.paramNames, argIndex: argIndex, label: label)
@@ -1907,12 +1888,11 @@ end 'calleeParamSlot'
 
 type WaivableParam
 	export let index as ParamCount
-	export let aliasName as ByteArray
-	export let declFilePath as FilePath
+	export let alias as RangedTypeAlias
 	export var waived as bool
 
-	static function create(index ParamCount, aliasName ByteArray, declFilePath FilePath) returns WaivableParam
-		return Self{index: index, aliasName: aliasName, declFilePath: declFilePath, waived: true}
+	static function create(index ParamCount, alias RangedTypeAlias) returns WaivableParam
+		return Self{index: index, alias: alias, waived: true}
 	end 'create'
 end 'WaivableParam'
 
@@ -1965,15 +1945,12 @@ type EntryGuardWaivers
 		let checks = try project.rangeChecks.get(func.name) otherwise return
 
 		for paramSite in checks.paramSites 'eachRangedParam'
-			match project.typeAliases.lookup(paramSite.aliasName, readerFilePath: checks.filePath) 'bounds'
-				undeclared then continue
-				declared(alias) then self.addCandidateIfUnsignedFull(func.name, alias: alias, param: WaivableParam.create(paramSite.index, aliasName: paramSite.aliasName, declFilePath: checks.filePath))
-			end 'bounds'
+			self.addCandidateIfUnsignedFull(func.name, param: WaivableParam.create(paramSite.index, alias: paramSite.alias))
 		end 'eachRangedParam'
 	end 'collectCandidates'
 
-	function addCandidateIfUnsignedFull(callee ByteArray, alias RangedTypeAlias, param WaivableParam)
-		if not aliasIsUnsignedFullQuantity(alias) 'hasAnotherFloor'
+	function addCandidateIfUnsignedFull(callee ByteArray, param WaivableParam)
+		if not aliasIsUnsignedFullQuantity(param.alias) 'hasAnotherFloor'
 			return
 		end 'hasAnotherFloor'
 

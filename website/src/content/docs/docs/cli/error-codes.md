@@ -261,7 +261,7 @@ A conversion that cannot be proven safe: an explicit cast whose source range doe
 
 ### E3010 — `semanticUnneededCast`
 
-A cast names the value's own typealias, so it converts nothing.
+A cast converts nothing: it names the value's own typealias (`b as Byte` on a `Byte`), or it casts a numeric literal that fits to the very typealias its destination declares -- a call argument, a `return`, a struct-literal field or a store to a declared field (`open(8080 as Port)` where `open` takes a `Port`). Remove the cast. A literal cast stays legal where it is what fixes the type: an unannotated `let`/`var`, an array-literal element, a generic parameter, an operator operand. At an overloaded call the casts are reported only when removing all of them still selects the same overload.
 
 ### E3011 — `unknownType`
 

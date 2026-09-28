@@ -49,6 +49,10 @@ The implicit and explicit forms agree exactly, in both directions:
 | `int` -> `float` | `100 as Real` -- OK      | `takeFloat(100)` -- OK                 |
 | `float` -> `int` | `5.0 as Count` -- **E3009** | `takeInt(5.0)` -- **E3009**          |
 
+The explicit column is a cast where nothing declares the type, such as `let r = 100 as Real`. Where the
+destination already declares it — `takeFloat(100 as Real)` against a `Real` parameter — the cast is
+redundant and refused as unneeded (E3010); the implicit spelling is the one to write there.
+
 That agreement is the point, and it was once broken: this file used to say `float` -> `int`
 truncated implicitly while `type-casting.md` rejected the identical explicit cast — so writing
 `as` got you an error telling you to use `trunc`, and writing nothing at all got you the

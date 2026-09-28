@@ -34,6 +34,10 @@ export function requireWorkerFunctionPlaceholdersAreFresh()
 		aliased.push("valueExistentialInstances")
 	end 'existentialInstances'
 
+	if first.literalCastArguments is second.literalCastArguments 'literalCastArguments'
+		aliased.push("literalCastArguments")
+	end 'literalCastArguments'
+
 	if first.existentialFieldStores is second.existentialFieldStores 'existentialFieldStores'
 		aliased.push("existentialFieldStores")
 	end 'existentialFieldStores'
@@ -72,5 +76,5 @@ export function requireWorkerFunctionPlaceholdersAreFresh()
 		named.append("\n  {name}")
 	end 'eachAliased'
 
-	panic("IrFunctionSelfTest: {aliased.count()} of `IrFunction.createFromStd`'s managed placeholders came back as ONE box shared by two functions:{named}\n\nThat door is the register allocator's pool-worker door, so a shared placeholder is retained and released on every worker OS thread at once, against a plain refcount — a lost update, and a leak at exit on some runs. Allocate each placeholder fresh in `createFromStd`'s literal, as its five siblings do. `create` is the parser's door and keeps the shared singletons deliberately; do not point this check at it.")
+	panic("IrFunctionSelfTest: {aliased.count()} of `IrFunction.createFromStd`'s managed placeholders came back as ONE box shared by two functions:{named}\n\nThat door is the register allocator's pool-worker door, so a shared placeholder is retained and released on every worker OS thread at once, against a plain refcount — a lost update, and a leak at exit on some runs. Allocate each placeholder fresh in `createFromStd`'s literal, as every placeholder this check passes already is. `create` is the parser's door and keeps the shared singletons deliberately; do not point this check at it.")
 end 'requireWorkerFunctionPlaceholdersAreFresh'

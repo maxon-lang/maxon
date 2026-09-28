@@ -240,8 +240,8 @@ end 'Meter'
 
 function main() returns ExitCode
 	var m = Meter.create()
-	let first = m.record(40 as Percent)
-	let second = m.record(2 as Percent)
+	let first = m.record(40)
+	let second = m.record(2)
 	return (second - first + 40) as ExitCode
 end 'main'
 ```
@@ -417,7 +417,7 @@ function doubled(b Byte) returns Integer
 end 'doubled'
 
 function main() returns ExitCode
-	return doubled(21 as Byte) as ExitCode
+	return doubled(21) as ExitCode
 end 'main'
 ```
 ```exitcode

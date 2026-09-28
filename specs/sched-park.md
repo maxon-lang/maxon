@@ -188,7 +188,7 @@ function main() returns ExitCode
 	let v = try await r otherwise 0
 	print("v={v}\n")
 	try File.delete(FilePath from "sched-park-flag-one.txt") otherwise ignore
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -244,7 +244,7 @@ function main() returns ExitCode
 	let v = try await r otherwise 0
 	print("v={v}\n")
 	try File.delete(FilePath from "sched-park-flag-four.txt") otherwise ignore
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -300,7 +300,7 @@ function main() returns ExitCode
 	print("late={tookMs >= lateMs}\n")
 	let v = try await r otherwise 0
 	print("v={v}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -343,7 +343,7 @@ function main() returns ExitCode
 	let h = spawn Handler.create()
 	let r = try await h.work() otherwise 0
 	print("r={r}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -399,7 +399,7 @@ function main() returns ExitCode
 	let p = async child()
 	Scheduler.yield()
 	p.cancel()
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode

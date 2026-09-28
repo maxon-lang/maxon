@@ -232,7 +232,7 @@ function buildServiceLoop(module MaxonModule, project Project, signatures Progra
 	var entry = fn.currentBlock()
 	var receive = fn.openBlock(b"serve")
 	let req = fn.emitPositionalCall(MboxRecvName, args: argsOf(ServiceMailboxParam), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
-	let noRequest = fn.emitCompare(req, rhs: fn.emitTypedLiteral(0 as ParsedInt, valueType: MaxonType.integer, range: range), op: MaxonCmpOp.eq, range: range)
+	let noRequest = fn.emitCompare(req, rhs: fn.emitTypedLiteral(0, valueType: MaxonType.integer, range: range), op: MaxonCmpOp.eq, range: range)
 	fn.terminateBlock(entry, op: MaxonOp.branch(receive.id), range: range)
 
 	var dispatch = fn.openBlock(b"dispatch")
@@ -268,7 +268,7 @@ end 'buildServiceLoop'
 function buildServiceDrain(fn SynthesizedFunction, project Project, signatures ProgramSignatures, stateType MaxonType, exit IrBlock, range SourceRange)
 	var drain = fn.openBlock(b"drain")
 	let leftover = fn.emitPositionalCall(MboxRecvName, args: argsOf(ServiceMailboxParam), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
-	let drained = fn.emitCompare(leftover, rhs: fn.emitTypedLiteral(0 as ParsedInt, valueType: MaxonType.integer, range: range), op: MaxonCmpOp.eq, range: range)
+	let drained = fn.emitCompare(leftover, rhs: fn.emitTypedLiteral(0, valueType: MaxonType.integer, range: range), op: MaxonCmpOp.eq, range: range)
 	fn.terminateBlock(exit, op: MaxonOp.branch(drain.id), range: range)
 
 	// ⭐ **AN ABANDONED REQUEST TAKES `<T>.__abandon`, WHERE A HANDLED ONE TAKES A SHELL DECREF — and the

@@ -174,7 +174,7 @@ type Packed
 end 'Packed'
 
 function main() returns ExitCode
-	let p = Packed.create(15 as Nib4, b: 9 as Nib4, w: 0xFFFFFFFF as Word32, h: 0xFFFF as Half16)
+	let p = Packed.create(15, b: 9, w: 0xFFFFFFFF, h: 0xFFFF)
 
 	print("{p.a} {p.b} {p.w} {p.h}\n")
 
@@ -901,7 +901,7 @@ type Handle
 end 'Handle'
 
 function main() returns ExitCode
-	let h = Handle.create(0xFFFFFFFFFFFFFFFF as Word)
+	let h = Handle.create(0xFFFFFFFFFFFFFFFF)
 
 	print("{h.w}\n")
 

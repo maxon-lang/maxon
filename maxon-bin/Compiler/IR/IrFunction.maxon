@@ -91,6 +91,32 @@ export typealias ThrowsClauseArray = Array with ThrowsClause
 // `IrFunction.valueExistentialInstances`.
 export typealias ValueExistentialInstanceMap = Map with (ValueId, GenericInstanceId)
 
+export type LiteralCast
+	let spelling as ByteArray
+	let negative as bool
+	export let target as RangedTypeAlias
+	export let asRange as SourceRange
+	export let literalTag as ValueTypeTag
+
+	export static function create(spelling ByteArray, negative bool, target RangedTypeAlias, asRange SourceRange, literalTag ValueTypeTag) returns LiteralCast
+		return Self{spelling: spelling, negative: negative, target: target, asRange: asRange, literalTag: literalTag}
+	end 'create'
+
+	export function repeats(destination RangedTypeAlias) returns bool
+		return self.target.isTheSameDeclarationAs(destination)
+	end 'repeats'
+
+	export function spelledText() returns String
+		if self.negative 'writtenNegative'
+			return "-{String.from(self.spelling)}"
+		end 'writtenNegative'
+
+		return String.from(self.spelling)
+	end 'spelledText'
+end 'LiteralCast'
+
+export typealias LiteralCastMap = Map with (ValueId, LiteralCast)
+
 // ⭐⭐ **ONE STORE INTO AN INTERFACE-TYPED FIELD, AS THE WHOLE-PROGRAM WIDENING CHECK READS IT.** A field store
 // widens like a call argument, and whether `value` conforms is not the parser's to decide — a conformer's
 // `implements` clause is recorded when its own file is parsed — so the store is recorded here and
@@ -1157,9 +1183,11 @@ export type FunctionPlaceholders
 	// The borrow facts of a function that borrowed nothing (`Parser.borrowFactsOf` replaces them at the first).
 	export var noBorrows as BorrowFacts
 
+	export var noLiteralCastArguments as LiteralCastMap
+
 	export static function create() returns FunctionPlaceholders
 		let provenance = ProvenanceColumns.create()
-		return Self{provenance: provenance, noSites: ProvenanceSites.create(provenance), noFiledProvenance: FiledProvenance.none, paramGuards: RangeCheckParamGuardArray.create(), inlineSites: InlineSiteArray.create(), mintedSole: BoolArray.create(), noBorrows: BorrowFacts.create()}
+		return Self{provenance: provenance, noSites: ProvenanceSites.create(provenance), noFiledProvenance: FiledProvenance.none, paramGuards: RangeCheckParamGuardArray.create(), inlineSites: InlineSiteArray.create(), mintedSole: BoolArray.create(), noBorrows: BorrowFacts.create(), noLiteralCastArguments: LiteralCastMap.create()}
 	end 'create'
 end 'FunctionPlaceholders'
 
@@ -1189,6 +1217,7 @@ let sharedReleasedTypeNameIds = TypeNameIdArray.create()
 let sharedReleasedValueFlags = BoolArray.create()
 let sharedReleasedValueIds = ValueIdArray.create()
 let sharedReleasedExistentialInstances = ValueExistentialInstanceMap.create()
+let sharedReleasedLiteralCastArguments = LiteralCastMap.create()
 
 // `stores` ready to be pushed into: itself, or a fresh column in place of the shared empty.
 export function writableExistentialFieldStores(stores ExistentialFieldStoreArray) returns ExistentialFieldStoreArray
@@ -1459,6 +1488,11 @@ export type IrFunction
 	// Empty on a Std-phase function (`createFromStd`) and on a function that declared no parameterized
 	// existential, which is very nearly all of them.
 	export var valueExistentialInstances as ValueExistentialInstanceMap
+
+	// The arguments written as a literal cast, whose E3010 waits for SemanticCheck: an overloaded
+	// call's parameter is not known until overload resolution. Handed over like
+	// `valueExistentialInstances`.
+	export var literalCastArguments as LiteralCastMap
 
 	// Every store this function makes into an interface-typed field — see `ExistentialFieldStore`. Handed over
 	// at the function's end by the parser (`Parser.publishExistentialInstances`) and appended to by
@@ -1850,6 +1884,7 @@ export type IrFunction
 			valueIsCapturingClosure: valueIsCapturingClosure,
 			valueWitnessIds: valueWitnessIds,
 			valueExistentialInstances: ValueExistentialInstanceMap.create(),
+			literalCastArguments: placeholders.noLiteralCastArguments,
 			existentialFieldStores: sharedEmptyExistentialFieldStores,
 			throwsTypeName: throwsTypeName,
 			scope: Scope.create(),
@@ -1925,6 +1960,7 @@ export type IrFunction
 			valueIsCapturingClosure: BoolArray.create(),
 			valueWitnessIds: ValueIdArray.create(),
 			valueExistentialInstances: ValueExistentialInstanceMap.create(),
+			literalCastArguments: LiteralCastMap.create(),
 			existentialFieldStores: ExistentialFieldStoreArray.create(),
 			throwsTypeName: throwsTypeName,
 			scope: Scope.create(),
@@ -1991,6 +2027,7 @@ export type IrFunction
 			valueIsCapturingClosure: src.valueIsCapturingClosure,
 			valueWitnessIds: src.valueWitnessIds,
 			valueExistentialInstances: src.valueExistentialInstances,
+			literalCastArguments: src.literalCastArguments,
 			existentialFieldStores: src.existentialFieldStores,
 			throwsTypeName: src.throwsTypeName,
 			scope: src.scope,
@@ -2267,6 +2304,7 @@ export type IrFunction
 		self.valueClosureEnv = sharedReleasedValueIds
 		self.valueWitnessIds = sharedReleasedValueIds
 		self.valueExistentialInstances = sharedReleasedExistentialInstances
+		self.literalCastArguments = sharedReleasedLiteralCastArguments
 		self.existentialFieldStores = sharedEmptyExistentialFieldStores
 		self.filedProvenance = FiledProvenance.none
 		self.valueColumnsArePrivate = false

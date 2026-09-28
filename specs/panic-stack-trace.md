@@ -134,3 +134,185 @@ Stack trace:
   in main
   in mrt_start
 ```
+
+<!-- test: a-deep-panic-trace-is-complete-on-every-target -->
+A trace deeper than 20 frames prints every frame, innermost first, on every target.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function descend(n Integer) returns Integer
+	if n == 0 'bottom'
+		panic("at the bottom")
+	end 'bottom'
+	return 1 + descend(n - 1)
+end 'descend'
+
+function main() returns ExitCode
+	return descend(30) as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-deep-panic-trace-is-complete-on-every-target.test:6: at the bottom
+Stack trace:
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in main
+  in mrt_start
+```
+
+<!-- test: a-panic-trace-past-the-cap-ends-with-an-elision-line -->
+A trace deeper than 100 frames prints the innermost 100 and ends with the elision line, on every target.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function descend(n Integer) returns Integer
+	if n == 0 'bottom'
+		panic("at the bottom")
+	end 'bottom'
+	return 1 + descend(n - 1)
+end 'descend'
+
+function main() returns ExitCode
+	return descend(150) as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-panic-trace-past-the-cap-ends-with-an-elision-line.test:6: at the bottom
+Stack trace:
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  ...additional frames elided...
+```

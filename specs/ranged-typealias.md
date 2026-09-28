@@ -12,7 +12,7 @@ Ranged typealiases require every use of `int`, `float`, and `byte` in type posit
 - Syntax: `typealias Age = int(0 to 150)` or `int(0 upto 150)` (exclusive upper bound)
 - Type-qualified `min`/`max` bounds: `typealias FullInt = int(i64.min to i64.max)`
 - Type-qualified bounds: `typealias Handle = int(0 to u32.max)`
-- Construction: `42 as Age` (compile-time checked for literals, runtime checked for expressions)
+- Construction: `42 as Age` (compile-time checked for literals, runtime checked for expressions); a literal reaching a slot that declares its type (argument, `return`, field) takes no cast, and casting it there is E3010
 - Every typealias is a nominally distinct type: a value of one alias reaches a slot of another only through `as`, in either direction (`nominal-typealias.md`)
 - `int / int` produces `int` (truncating), not `float`
 - The standard library exports the cross-cutting aliases `ExitCode`, `HashValue` and `Codepoint`; every other alias is declared by the module that owns it, named for its purpose
@@ -51,7 +51,8 @@ var myAge = 25 as Age
 
 A literal needs no cast — when it flows into a slot that already has a
 known ranged type (a function parameter, struct field, or function
-return), the literal is checked against that target type directly. Between
+return), the literal is checked against that target type directly, and
+a cast to exactly that type there is refused as unneeded (E3010). Between
 two ALIASES the cast is required: an `Age` is not a `Year` whatever their
 ranges, and `as` is the one door between them. A narrowing cast carries a
 runtime range check; a widening cast provably cannot fail one and emits

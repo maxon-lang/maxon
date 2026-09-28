@@ -202,7 +202,7 @@ function main() returns ExitCode
 	let ra = await a
 	let rb = await b
 	print("ra={ra} rb={rb} posA={posA} posB={posB} posC={posC}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -250,7 +250,7 @@ function main() returns ExitCode
 	let p3 = async third()
 	let s = (await p3) + (await p2) + (await p1)
 	print("s={s} a1={a1} a2={a2} a3={a3}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -309,7 +309,7 @@ function main() returns ExitCode
 		sum = sum + (try await p otherwise 0)
 	end 'drainthemall'
 	print("first={first} sum={sum}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -446,7 +446,7 @@ function main() returns ExitCode
 	let seen = await y
 	let done = await s
 	print("seen={seen} done={done}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -523,7 +523,7 @@ function main() returns ExitCode
 	end 'loop'
 
 	print("ran={ran} recycled={__Builtins.schedGtRecycleCount()}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -579,7 +579,7 @@ function main() returns ExitCode
 
 	let recycled = __Builtins.schedGtRecycleCount() - recycledBefore
 	print("total={total} finished={finished} recycled={recycled}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -663,7 +663,7 @@ function main() returns ExitCode
 
 	let recycled = __Builtins.schedGtRecycleCount() - recycledBefore
 	print("total={total} stillParked={stillParked} recycled={recycled}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -730,7 +730,7 @@ function main() returns ExitCode
 	let bound = peakLive + listSlack * (__Builtins.schedProcessorCount() - 1)
 	let carved = __Builtins.schedGtRecordsCarved()
 	print("total={total} stillParked={stillParked} bounded={carved <= bound}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -763,7 +763,7 @@ function main() returns ExitCode
 	let p = async work(5)
 	let r = await p
 	print("r={r} steals={__Builtins.schedStealCount()}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -860,7 +860,7 @@ function main() returns ExitCode
 	end 'collect'
 
 	print("ran={ran}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -943,7 +943,7 @@ function main() returns ExitCode
 	end 'rounds'
 
 	print("sum={sum}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -1082,7 +1082,7 @@ function main() returns ExitCode
 
 	let waited = try await tally.slicesWaited() otherwise 0 - 1
 	print("runCount={runCount} pushed={burstPushes > 0} within={waited <= fairnessInterval}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -1224,7 +1224,7 @@ function main() returns ExitCode
 	let sPos = try await tally.spawneePosition() otherwise 0
 	let yPos = try await tally.yielderPosition() otherwise 0
 	print("sPos={sPos} yPos={yPos}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -1315,7 +1315,7 @@ function main() returns ExitCode
 	end 'collect'
 
 	print("done={done} steals={__Builtins.schedStealCount()}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -1386,7 +1386,7 @@ function main() returns ExitCode
 	let service = spawn Ping.create()
 	let seen = try await service.hit() otherwise panic("the one message this frame sends to a service it owns cannot fail")
 	print("hits={seen}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```

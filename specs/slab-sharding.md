@@ -287,7 +287,7 @@ end 'cycle'
 function main() returns ExitCode
 	// The whole cycle runs inside a green thread, so this program carries the SHARDED allocator and its
 	// spans are parked and re-owned against a real processor.
-	let p = async cycle(3 as Seed)
+	let p = async cycle(3)
 
 	if await p != 12000 'lostBuffers'
 		return 1
@@ -569,7 +569,7 @@ function main() returns ExitCode
 
 	print("delivered={delivered} remote={__Builtins.slabRemoteFreeCount()}\n")
 
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout

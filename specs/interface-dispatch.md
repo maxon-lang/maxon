@@ -1183,7 +1183,7 @@ function make(seed Integer) returns Producer
 end 'make'
 
 function main() returns ExitCode
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -1208,7 +1208,7 @@ function pick() returns Ranked
 end 'pick'
 
 function main() returns ExitCode
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -2255,7 +2255,7 @@ type Runner implements Exiter
 end 'Runner'
 
 function useExiter(e Exiter) returns Integer
-	return e.take(11 as ExitCode)
+	return e.take(11)
 end 'useExiter'
 
 function main() returns ExitCode
@@ -2295,7 +2295,7 @@ type Box uses T where T is Exiter
 	let item as T
 
 	function run() returns Integer
-		return self.item.take(11 as ExitCode)
+		return self.item.take(11)
 	end 'run'
 
 	static function create(item T) returns Self
@@ -2350,7 +2350,7 @@ type Box uses T where T is Exiter
 	let item as T
 
 	function run() returns Integer
-		return try self.item.take(11 as ExitCode) otherwise 55
+		return try self.item.take(11) otherwise 55
 	end 'run'
 
 	static function create(item T) returns Self
@@ -3293,7 +3293,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	let h = Holder.create(Thing.create(7), n: 3 as ExitCode)
+	let h = Holder.create(Thing.create(7), n: 3)
 	h.p.show()
 	return h.n
 end 'main'
@@ -3339,7 +3339,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	let h = Holder.create(Thing.create(7), n: 3 as ExitCode)
+	let h = Holder.create(Thing.create(7), n: 3)
 	return h.n
 end 'main'
 ```
@@ -3490,4 +3490,66 @@ end 'main'
 ```
 ```stdout
 digesting 3
+```
+
+<!-- test: a-witness-argument-of-a-contested-nominal-name-reads-the-interfaces-file -->
+A witness call's formal names the type the interface's own file declares, not a file-private alias of the same name in another file.
+```maxon
+// --- file: a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Msg
+	ping(n Integer)
+	quit
+end 'Msg'
+
+interface Sink
+	function take(m Msg) returns Integer
+end 'Sink'
+
+type Counter implements Sink
+	let base as Integer
+
+	static function create() returns Self
+		return Self{base: 0}
+	end 'create'
+
+	function take(m Msg) returns Integer
+		match m 'which'
+			ping(n) then return self.base + n
+			quit then return self.base
+		end 'which'
+	end 'take'
+end 'Counter'
+
+type Post
+	let sink as Sink
+
+	static function create() returns Self
+		return Self{sink: Counter.create()}
+	end 'create'
+
+	function send() returns Integer
+		return self.sink.take(Msg.ping(1))
+	end 'send'
+end 'Post'
+
+function main() returns ExitCode
+	let post = Post.create()
+	if post.send() == 1 and bothWays() 'sent'
+		return 1
+	end 'sent'
+	return 0
+end 'main'
+
+// --- file: z.maxon
+typealias Msg = int(0 to 3)
+
+export function bothWays() returns bool
+	let low = 1 as Msg
+	return low == 1
+end 'bothWays'
+```
+```exitcode
+1
 ```

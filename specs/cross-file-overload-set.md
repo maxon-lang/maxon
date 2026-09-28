@@ -277,7 +277,7 @@ end 'pick'
 
 function main() returns ExitCode
 	pick(7)
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -338,7 +338,7 @@ function main() returns ExitCode
 	print("{b.first}\n")
 	let g = pick("zz")
 	print("{g.first}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```exitcode

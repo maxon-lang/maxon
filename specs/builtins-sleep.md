@@ -96,9 +96,9 @@ function main() returns ExitCode
 	nap(60)
 	let elapsed = Clock.elapsedMs(start)
 	if elapsed >= 40 'slept'
-		return 7 as ExitCode
+		return 7
 	end 'slept'
-	return 1 as ExitCode
+	return 1
 end 'main'
 ```
 ```exitcode

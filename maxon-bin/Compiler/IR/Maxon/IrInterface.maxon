@@ -655,9 +655,10 @@ export type IrInterface
 	export let methods as InterfaceMethodSigArray
 	export let extendsInterfaces as ByteArrayArray
 	export let associatedTypeNames as ByteArrayArray
+	export let declFilePath as FilePath
 
-	export static function create(name ByteArray, methods InterfaceMethodSigArray, extendsInterfaces ByteArrayArray, associatedTypeNames ByteArrayArray) returns IrInterface
-		return Self{name: name, methods: methods, extendsInterfaces: extendsInterfaces, associatedTypeNames: associatedTypeNames}
+	export static function create(name ByteArray, methods InterfaceMethodSigArray, extendsInterfaces ByteArrayArray, associatedTypeNames ByteArrayArray, declFilePath FilePath) returns IrInterface
+		return Self{name: name, methods: methods, extendsInterfaces: extendsInterfaces, associatedTypeNames: associatedTypeNames, declFilePath: declFilePath}
 	end 'create'
 end 'IrInterface'
 
@@ -1432,19 +1433,19 @@ end 'unaryInterfaceMethod'
 function singleMethodInterface(name ByteArray, method InterfaceMethodSig) returns IrInterface
 	var methods = InterfaceMethodSigArray.create()
 	methods.push(method)
-	return IrInterface.create(name, methods: methods, extendsInterfaces: ByteArrayArray.create(), associatedTypeNames: ByteArrayArray.create())
+	return IrInterface.create(name, methods: methods, extendsInterfaces: ByteArrayArray.create(), associatedTypeNames: ByteArrayArray.create(), declFilePath: CompilerOwnedDeclFilePath)
 end 'singleMethodInterface'
 
 // A marker interface with NO methods (`Error`). A type conforms to it by declaring
 // `implements Error` alone; there is nothing to check.
 function markerInterface(name ByteArray) returns IrInterface
-	return IrInterface.create(name, methods: InterfaceMethodSigArray.create(), extendsInterfaces: ByteArrayArray.create(), associatedTypeNames: ByteArrayArray.create())
+	return IrInterface.create(name, methods: InterfaceMethodSigArray.create(), extendsInterfaces: ByteArrayArray.create(), associatedTypeNames: ByteArrayArray.create(), declFilePath: CompilerOwnedDeclFilePath)
 end 'markerInterface'
 
 // ⭐⭐ **THE Std RESULT TYPE OF A SYNTHESIZED PROTOCOL METHOD — ONE FACT, READ BY EVERY BUILDER THAT MUST
 // AGREE WITH IT.** A witness table's method slot is typed by the INTERFACE, so three
 // parties have to spell one signature: the DISPATCH SITE (which derives it from the declarations just below,
-// through `Parser.interfaceReturnMaxonType` → `valueTagToStdType`), the synthesized IMPL that lands in the
+// through `Parser.interfaceSpelledType` → `valueTagToStdType`), the synthesized IMPL that lands in the
 // slot (`BuiltinConformanceRuntime`, `StringRuntime.buildStrEq`), and the hand-built `Set` runtime whose
 // bodies dispatch `hash`/`equals` through witnesses of their own. Nothing makes a synthesized
 // impl obey a conformance check — there is none to run — so without this the three are three copies.

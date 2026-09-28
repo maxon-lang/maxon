@@ -328,7 +328,7 @@ function main() returns ExitCode
 	let first = try b.get(0) otherwise "?"
 	let last = try b.get(2) otherwise "?"
 	print("{a.count()} {b.count()} {first} {last}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -667,7 +667,7 @@ type Array uses Element implements BuiltinArrayLiteral
 	end 'create'
 
 	function count() returns Num
-		return 99 as Num
+		return 99
 	end 'count'
 
 	function bareCount() returns Num
@@ -781,7 +781,7 @@ function main() returns ExitCode
 	let head = a.at(0)
 	let tail = a.at(1)
 	print("{head} {tail} {a.count()}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -849,7 +849,7 @@ function main() returns ExitCode
 	a.wipe()
 	a.push("gamma")
 	print("{a.at(0)} {a.count()}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -894,7 +894,7 @@ function main() returns ExitCode
 	a.push("beta")
 	let b = a.buffer()
 	print("{b.length()} {a.count()}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -997,7 +997,7 @@ function main() returns ExitCode
 	end 'rounds'
 
 	print("{seen} {a.count()} {a.lastOne()} {a.at(0)}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -1073,7 +1073,7 @@ function main() returns ExitCode
 	let outsideOwn = a.elementSize()
 
 	print("{a.bufferBare()} {a.bufferViaSelf()} {outsideBuffer} {a.ownBare()} {a.ownViaSelf()} {outsideOwn}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -1134,11 +1134,11 @@ type Array uses Element implements BuiltinArrayLiteral
 
 	// THE REVERSE DIRECTION, bare: a sibling call to a name the buffer also has still means the record.
 	function swapEnds()
-		swap(0 as Slot, j: (count() - 1) as Slot)
+		swap(0, j: (count() - 1) as Slot)
 	end 'swapEnds'
 
 	function reverseAll()
-		reverseRange(0 as Slot, hi: count() as Slot)
+		reverseRange(0, hi: count() as Slot)
 	end 'reverseAll'
 end 'Array'
 
@@ -1162,7 +1162,7 @@ function main() returns ExitCode
 	let y = try a.get(2) otherwise panic("2 is in range")
 	let z = try a.get(3) otherwise panic("3 is in range")
 	print("{w} {x} {y} {z} {a.count()}")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout

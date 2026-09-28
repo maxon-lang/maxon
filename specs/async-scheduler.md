@@ -230,7 +230,7 @@ end 'compute'
 
 function main() returns ExitCode
 	_ = async compute()
-	return 7 as ExitCode
+	return 7
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -536,7 +536,7 @@ function main() returns ExitCode
 		i = i + 1
 	end 'rounds'
 	print("sum={sum} recycled={__Builtins.schedGtRecycleCount()}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout
@@ -589,7 +589,7 @@ function main() returns ExitCode
 	let second = wave(1000)
 	let afterSecond = __Builtins.schedGtRecycleCount()
 	print("first={first} second={second} wave1={afterFirst} wave2={afterSecond - afterFirst}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
 ```stdout

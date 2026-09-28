@@ -242,7 +242,7 @@ end 'wide'
 
 function main() returns ExitCode
 	let big = wide(u64.max)
-	let three = wide(3 as Wide)
+	let three = wide(3)
 
 	if three < big 'ordered'
 		return 42
@@ -275,7 +275,7 @@ end 'narrow'
 
 function main() returns ExitCode
 	let big = wide(u64.max)
-	let small = narrow(3 as Narrow)
+	let small = narrow(3)
 
 	if big > (small as Wide) 'ordered'
 		return 42
@@ -301,7 +301,7 @@ function wide(n Wide) returns Wide
 end 'wide'
 
 function main() returns ExitCode
-	let three = wide(3 as Wide)
+	let three = wide(3)
 
 	if three > u64.max 'impossible'
 		return 1
@@ -327,7 +327,7 @@ function wide(n Wide) returns Wide
 end 'wide'
 
 function main() returns ExitCode
-	let three = wide(3 as Wide)
+	let three = wide(3)
 
 	if three > -1 'aboveNegativeOne'
 		return 42
@@ -359,7 +359,7 @@ function signed(n Signed) returns Signed
 end 'signed'
 
 function main() returns ExitCode
-	let three = signed(3 as Signed)
+	let three = signed(3)
 	let minusOne = signed(-1)
 
 	if three > minusOne 'ordered'
@@ -427,13 +427,13 @@ typealias Slot = int(-1 to 4095)
 
 function findSlot(key Slot) returns Slot
 	if key == 7 'found'
-		return 3 as Slot
+		return 3
 	end 'found'
 	return -1
 end 'findSlot'
 
 function main() returns ExitCode
-	let slot = findSlot(9 as Slot)
+	let slot = findSlot(9)
 
 	if slot >= 0 'wronglyFound'
 		return 1

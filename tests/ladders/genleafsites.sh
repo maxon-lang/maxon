@@ -226,7 +226,7 @@ GUARD_ALIAS="LeafReg"
 	pressure) echo "	print(\"{leafMany(1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7)}\")" ;;
 	*) echo "	print(\"{leafMany(7)}\")" ;;
 	esac
-	echo "	return 0 as ExitCode"
+	echo "	return 0"
 	echo "end 'main'"
 } > "$OUT/a_leafsites.maxon"
 

@@ -75,6 +75,6 @@ UNITS="$1"; OUT="$2"
     k=$(( k + 1 ))
   done
   echo -e "\tprint(\"acc={acc}\")"
-  echo -e "\treturn 0 as ExitCode"
+  echo -e "\treturn 0"
   echo "end 'main'"
 } > "$OUT"
