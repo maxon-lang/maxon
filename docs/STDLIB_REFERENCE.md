@@ -1754,6 +1754,7 @@ request after request. A read parks the calling green thread until data arrives.
 | `StreamingSubprocess.spawn(executable, arguments:)` | `StreamingSubprocess` | `SubprocessError` | Spawn in the parent's working directory. |
 | `StreamingSubprocess.spawnWithCwd(executable, arguments:, workingDirectory:)` | `StreamingSubprocess` | `SubprocessError` | With a working directory. |
 | `StreamingSubprocess.spawnWithEnvironment(executable, arguments:, workingDirectory:, environment Environment)` | `StreamingSubprocess` | `SubprocessError` | With a working directory (empty for the parent's) and an environment. |
+| `StreamingSubprocess.spawnTraceable(executable, arguments:, workingDirectory:, environment Environment, traced bool)` | `StreamingSubprocess` | `SubprocessError` | As `spawnWithEnvironment`; with `traced`, the child is created with this process as its debugger. |
 | `writeStdinLine(line String)` | — | `SubprocessError` | Write `line` and a newline. Throws on a broken pipe. |
 | `readStdoutLine()` | `String` | `SubprocessError` | The next line without its terminator (CRLF or LF). `""` means end of stream. Lines over 1 MiB arrive in pieces. |
 | `readStdoutLineCapped(maxBytes)` | `String` | `SubprocessError` | With an explicit per-call cap. |
