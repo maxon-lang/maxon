@@ -482,8 +482,14 @@ its verification is a build, so that row is already satisfied unless the rebase 
 **No agent rebases, stashes, commits or pushes.** Git state is the coordinator's, start to finish.
 
 ```bash
+git fetch && git log --oneline HEAD..origin/main    # empty: nothing to rebase onto — skip the rest of §7
 git stash push -u -m land && git pull --rebase && git stash pop
 ```
+
+**Check before you stash.** The pop rewrites every changed file, so a stash round-trip with nothing to
+rebase onto still moves their mtimes past the compiler binary's: `spec-test` then refuses it as STALE
+and §8 pays a full `maxon run build` — two stages when the diff holds emitted runtime — for identical
+content. Stash and rebase only when the log above prints commits.
 
 **Rebase FIRST, so §8 runs on the tree you will actually push.** Other agents land on `main` between and
 during changes; a battery run before the rebase measured a tree that no longer exists.
