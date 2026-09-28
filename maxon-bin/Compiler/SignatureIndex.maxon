@@ -20050,7 +20050,7 @@ export type ProgramSignatures
 	// re-resolved it against the CALLING file. `stdlib/Array.maxon` and `stdlib/Vector.maxon` EACH declare
 	// `ElementIndex`, and any program may add its own, so "the same name" was never
 	// "the same declaration" — and the wrong one won. The site carries the declaring
-	// file now — `RangeCheckSite.aliasFilePath`, which holds the measurement — and a reader arriving here
+	// file — `RangeCheckSiteTarget.alias` — and a reader arriving here
 	// should take that as the shape of the obligation: **a fact resolved against a scope must travel with
 	// the scope it was resolved in, or the next reader resolves it against theirs.**
 	//
@@ -20082,6 +20082,36 @@ export type ProgramSignatures
 		let name = try self.typeNames.nameOf(typeNameIdOf(declared)) otherwise panic("ProgramSignatures.firstParamAliasOf: a recorded `named` parameter type carries an id this index's own interner does not hold")
 		return self.aliasOf(name, readerFilePath: decl.declFilePath)
 	end 'firstParamAliasOf'
+
+	export function mayTakeUnsignedQuantityAt(callee ByteArray, argIndex ParamCount, label ByteArray) returns bool
+		for decl in self.overloadedDeclsOf(callee) 'eachDeclaration'
+			if self.declarationTakesUnsignedQuantityAt(decl, argIndex: argIndex, label: label) 'thisOneDoes'
+				return true
+			end 'thisOneDoes'
+		end 'eachDeclaration'
+
+		return false
+	end 'mayTakeUnsignedQuantityAt'
+
+	function declarationTakesUnsignedQuantityAt(decl OverloadedDecl, argIndex ParamCount, label ByteArray) returns bool
+		if decl.takesReceiver and argIndex == 0 'theReceiver'
+			return false
+		end 'theReceiver'
+
+		let sourceIndex = argIndex - 1 if decl.takesReceiver else argIndex
+		let declared = try decl.paramTypes.get(argSlotPosition(decl.paramNames, argIndex: sourceIndex, label: label)) otherwise return false
+
+		if maxonTypeTag(declared) != ValueTypeTag.named 'namesNoAlias'
+			return false
+		end 'namesNoAlias'
+
+		let name = try self.typeNames.nameOf(typeNameIdOf(declared)) otherwise panic("ProgramSignatures.declarationTakesUnsignedQuantityAt: a recorded `named` parameter type carries an id this index's own interner does not hold")
+
+		return match self.aliasOf(name, readerFilePath: decl.declFilePath) 'alias'
+			undeclared gives false
+			declared(alias) gives aliasIsUnsignedFullQuantity(alias)
+		end 'alias'
+	end 'declarationTakesUnsignedQuantityAt'
 
 	// ⭐⭐ **THE `Array` INSTANCE `callee` DECLARES AT ONE ARGUMENT POSITION — what an array literal written
 	// there has to be BUILT at (`Parser.stateArrayLiteralTargetForArgument`, the only asker).** An element

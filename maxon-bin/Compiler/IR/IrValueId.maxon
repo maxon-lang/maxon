@@ -64,11 +64,11 @@ end 'ValueMarkColumn'
 
 export let noValueMarks = ValueMarkColumn.unwritten
 
-// ⭐ **THE INSTALL, ONCE FOR EVERY MARK COLUMN.** Ten fields hold one of these and differ only in which
-// field that is, which Maxon cannot abstract over — so the two halves a write needs are written here and
-// each field's door is the two lines that spend them. `unwritten` is a state the caller REPLACES, so the
-// install ANSWERS the column rather than writing through it.
-export function installedValueMarks(column ValueMarkColumn) returns ValueMarkColumn
+// ⭐ **THE INSTALL, ONCE FOR EVERY MARK COLUMN.** Many fields hold one of these and differ only in which
+// field that is, which Maxon cannot abstract over — so the write is `withValueMarked` and each field's
+// door is the one assignment of its answer. `unwritten` is a state the caller REPLACES, so the install
+// ANSWERS the column rather than writing through it.
+function installedValueMarks(column ValueMarkColumn) returns ValueMarkColumn
 	match column 'state'
 		unwritten then break 'state'
 		entries then return column
@@ -77,9 +77,16 @@ export function installedValueMarks(column ValueMarkColumn) returns ValueMarkCol
 	return ValueMarkColumn.entries(ValueMarkSet.create())
 end 'installedValueMarks'
 
-// The set an installed column holds. The refusal is an invariant break rather than a reachable case: every
-// caller stores `installedValueMarks`' answer first.
-export function markSetOf(column ValueMarkColumn) returns ValueMarkSet
+export function withValueMarked(column ValueMarkColumn, value ValueId) returns ValueMarkColumn
+	var installed = installedValueMarks(column)
+	var marked = markSetOf(installed)
+	marked.insert(value)
+	return installed
+end 'withValueMarked'
+
+// The set an installed column holds. The refusal is an invariant break rather than a reachable case: its
+// one caller asks it of `installedValueMarks`' answer.
+function markSetOf(column ValueMarkColumn) returns ValueMarkSet
 	match column 'state'
 		unwritten then panic("markSetOf: the column holds no set — a writer stores `installedValueMarks`' answer before asking")
 		entries(marked) then return marked

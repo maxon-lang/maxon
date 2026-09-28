@@ -76,10 +76,10 @@ var c = (-8) shr 1 // -4, not 9223372036854775804
 
 **A LOW BOUND OF 0 IS WHAT MAKES A TYPE UNSIGNED HERE**, and a right shift of one **zero-fills**.
 Two spellings carry that low bound over the whole word and they differ at the DOOR, not at the shift:
-`bits(64)` is a raw PATTERN, so a value whose top bit is set is one of its values; `int(0 to u64.max)`
-is a checked QUANTITY, whose door refuses a value that arrived from a signed domain. The cases below
+`bits(64)` is a raw PATTERN, so every value of a signed type is one of its values; `int(0 to u64.max)`
+is a checked QUANTITY, whose door refuses a negative that arrives from a signed type. The cases below
 are written over `bits(64)` because a top-bit operand is the only thing that tells the two shift
-readings apart, and only a pattern can hold one.
+readings apart, and a pattern admits one from any source.
 
 ```maxon
 typealias Wide = bits(64)

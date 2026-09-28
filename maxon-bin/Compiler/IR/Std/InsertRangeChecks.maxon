@@ -216,6 +216,8 @@ export function insertRangeChecks(project Project, module StdModule)
 		compilerLogger(CompilerLogGroup.ir).debug("insertRangeChecks: {module.funcCount()} function(s)")
 	end 'debugging'
 
+	let waivers = EntryGuardWaivers.derive(project, module: module)
+
 	// An INDEX loop: the function's position is the key its minted ids are filed under
 	// (`ValueOriginTable.recordDerived`).
 	for funcIndex in 0 upto module.functions.count() 'eachFunc'
@@ -247,7 +249,7 @@ export function insertRangeChecks(project Project, module StdModule)
 		end 'noChecks'
 
 		let checks = try project.rangeChecks.get(func.name) otherwise panic("insertRangeChecks: rangeChecks.contains said yes but get failed for '{String.from(func.name)}'")
-		var emitter = RangeCheckEmitter.create(project, module: module, func: func, funcIndex: funcIndex)
+		var emitter = RangeCheckEmitter.create(project, module: module, func: func, funcIndex: funcIndex, waivers: waivers)
 		emitter.run(checks)
 	end 'eachFunc'
 end 'insertRangeChecks'
@@ -297,6 +299,8 @@ type RangeCheckEmitter
 	// and does not otherwise hold the function's checks. See `Parser.writtenNegativeLiterals`.
 	var writtenNegativeLiterals as ValueMarkColumn
 
+	var borrowOperands as BorrowOperandsColumn
+
 	// Where each of this function's blocks currently ENDS — a blockRef index (+1, `buildBlockIdIndex`'s
 	// sentinel encoding) per block id. It starts as the plain block-id => blockRef index (every block is
 	// its own chain end), and each guard MOVES its site block's entry to the continuation the split
@@ -327,8 +331,10 @@ type RangeCheckEmitter
 	// away. Built and shared exactly as the two columns above are.
 	var guardChainSource as PreSplitOpsByBlock
 
-	static function create(project Project, module StdModule, func IrFunction, funcIndex FuncIndex) returns RangeCheckEmitter
-		return Self{project: project, module: module, func: func, funcIndex: funcIndex, ids: ValueMinter.resuming(nextFreeValueId(module, func: func)), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), writtenNegativeLiterals: noValueMarks, guardChainTail: sharedEmptyGuardChainTail, guardChainBase: sharedEmptyGuardChainBase, guardChainSource: sharedEmptyGuardChainSource}
+	var waivers as EntryGuardWaivers
+
+	static function create(project Project, module StdModule, func IrFunction, funcIndex FuncIndex, waivers EntryGuardWaivers) returns RangeCheckEmitter
+		return Self{project: project, module: module, func: func, funcIndex: funcIndex, waivers: waivers, ids: ValueMinter.resuming(nextFreeValueId(module, func: func)), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), writtenNegativeLiterals: noValueMarks, borrowOperands: noBorrowOperands, guardChainTail: sharedEmptyGuardChainTail, guardChainBase: sharedEmptyGuardChainBase, guardChainSource: sharedEmptyGuardChainSource}
 	end 'create'
 
 	// A fresh ValueId for a guard op. The colored register file / dense value columns downstream grow to
@@ -359,6 +365,7 @@ type RangeCheckEmitter
 		// const maps because `needsRuntimeGuard` asks both per value and holds neither otherwise. See
 		// `writtenNegativeLiterals`.
 		self.writtenNegativeLiterals = checks.writtenNegativeLiterals
+		self.borrowOperands = checks.borrowOperands
 
 		// A site's `stdOpPos` is `lowerMaxonToStd`'s answer rather than the parser's (see `RangeSiteWalk`),
 		// and 0 is a legitimate one — so the promise is checked HERE, once per function, rather than
@@ -446,13 +453,31 @@ type RangeCheckEmitter
 	// The two files are not always one here. The cast, the field store, the struct-literal field and
 	// the array element resolve their alias in this function's own file, but the arm-served index's
 	// alias is the callee's (`Parser.recordArmServedIndexRangeCheck`), so the site carries the
-	// declaration it resolved in `RangeCheckSite.aliasFilePath`.
+	// declaration it resolved in `RangeCheckSiteTarget.alias`.
 	function processSite(site RangeCheckSite, filePath FilePath)
-		match self.guardVerdict(site.value, aliasName: site.aliasName, guard: RangeCheckGuard.runtime, line: site.line, column: site.column, aliasFilePath: site.aliasFilePath, filePath: filePath) 'verdict'
-			noGuard then return
-			guard(alias) then _ = self.emitGuardAt(self.guardSiteAt(site.block, stdOpPos: site.stdOpPos), operand: GuardedOperand.asIs(site.value), alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName), chain: GuardChain.blockChain(site.block), span: sourceSpanOf(self.project, filePath: filePath, line: site.line, column: site.column))
-		end 'verdict'
+		match site.target 'target'
+			alias(aliasName, aliasFilePath) then self.guardSiteAgainst(site, aliasName: aliasName, aliasFilePath: aliasFilePath, filePath: filePath)
+			callArgument(callResult, argIndex, label, sourceMayBeNegative) then self.guardCallArgument(site, callResult: callResult, argIndex: argIndex, label: label, sourceMayBeNegative: sourceMayBeNegative, filePath: filePath)
+		end 'target'
 	end 'processSite'
+
+	function guardSiteAgainst(site RangeCheckSite, aliasName ByteArray, aliasFilePath FilePath, filePath FilePath)
+		match self.guardVerdict(site.value, aliasName: aliasName, guard: RangeCheckGuard.runtime, line: site.line, column: site.column, aliasFilePath: aliasFilePath, filePath: filePath) 'verdict'
+			noGuard then return
+			guard(alias) then _ = self.emitGuardAt(self.guardSiteAt(site.block, stdOpPos: site.stdOpPos), operand: GuardedOperand.asIs(site.value), alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: aliasName), chain: GuardChain.blockChain(site.block), span: sourceSpanOf(self.project, filePath: filePath, line: site.line, column: site.column))
+		end 'verdict'
+	end 'guardSiteAgainst'
+
+	function guardCallArgument(site RangeCheckSite, callResult ValueId, argIndex ParamCount, label ByteArray, sourceMayBeNegative bool, filePath FilePath)
+		if not sourceMayBeNegative or self.intConsts.contains(site.value) 'nothingToTestAtRunTime'
+			return
+		end 'nothingToTestAtRunTime'
+
+		match self.waivers.waivedParamOfCall(self.funcIndex, callResult: callResult, argIndex: argIndex, label: label, project: self.project) 'param'
+			none then return
+			found(param) then self.guardSiteAgainst(site, aliasName: param.aliasName, aliasFilePath: param.declFilePath, filePath: filePath)
+		end 'param'
+	end 'guardCallArgument'
 
 	// ---- narrowed PARAMETERS: the runtime half of the call-argument door ----
 
@@ -536,6 +561,10 @@ type RangeCheckEmitter
 	// doors cannot reach this shape: a cast and a `return` both name a value the body computed, and a cell
 	// binding's read is already a `loadIndirect` by the time either sees it.
 	function guardRangedParam(site RangeCheckParamSite, entryId BlockId, filePath FilePath)
+		if self.waivers.isWaived(self.func.name, index: site.index) 'everyCallerGuardsIt'
+			return
+		end 'everyCallerGuardsIt'
+
 		let paramValue = rangedParamValue(site)
 
 		match self.guardVerdict(paramValue, aliasName: site.aliasName, guard: RangeCheckGuard.runtime, line: site.line, column: site.column, aliasFilePath: filePath, filePath: filePath) 'verdict'
@@ -793,12 +822,7 @@ type RangeCheckEmitter
 		// A `rangeChecks` entry and a `funcSignatures` entry are written by the SAME `parseFunction`, one
 		// statement apart and under the same name, so a callee present in one and absent from the other is a
 		// broken invariant rather than a program the user could write.
-		let signature = try self.project.funcSignatures.get(site.callee) otherwise panic("paramAliasOf: '{String.from(site.callee)}' has range-check data but no FuncSignature — parseFunction records both, keyed by the same name")
-
-		// `argSlotPosition` is the ONE label->position mapping in the compiler; asking it here is what keeps
-		// a labelled argument checked against the parameter it actually lands on rather than the one it
-		// happens to sit beside.
-		let slot = argSlotPosition(signature.paramNames, argIndex: site.argIndex, label: site.label)
+		let slot = calleeParamSlot(self.project, callee: site.callee, argIndex: site.argIndex, label: site.label)
 
 		for paramSite in calleeChecks.paramSites 'eachRangedParam'
 			if paramSite.index == slot 'thisArgumentsParameter'
@@ -945,13 +969,13 @@ type RangeCheckEmitter
 		end 'noBoundNeeded'
 
 		self.module.spans.current = span
-		let ok = self.emitCheckedGuard(site, operand: operand, checks: checks, message: message, chain: chain, isFloat: isFloat)
+		let ok = self.emitCheckedGuard(site, operand: operand, checks: checks, message: message, chain: chain, isFloat: isFloat, checksBorrow: not isFloat and aliasIsUnsignedFullQuantity(alias))
 		self.module.spans.current = NoSpanId
 
 		return ok
 	end 'emitGuardAt'
 
-	function emitCheckedGuard(site GuardSite, operand GuardedOperand, checks RangeBoundCheckArray, message ByteArray, chain GuardChain, isFloat bool) returns IrBlock
+	function emitCheckedGuard(site GuardSite, operand GuardedOperand, checks RangeBoundCheckArray, message ByteArray, chain GuardChain, isFloat bool, checksBorrow bool) returns IrBlock
 		// The split advances the chain inside itself, before `emitPanicBlock`, and that order is
 		// load-bearing — see `extendGuardChain`.
 		let ok = self.splitFor(site, chain: chain)
@@ -961,10 +985,37 @@ type RangeCheckEmitter
 		// immediately ahead of the cascade that reads it. It appends an op, never a block, so
 		// `extendGuardChain`'s "the last block registered is the continuation" invariant holds.
 		let compared = self.comparedValue(operand, head: site.block, isFloat: isFloat)
+		let tested = self.borrowWitnessOf(compared, head: site.block) if checksBorrow else compared
 		let panicBlock = self.emitPanicBlock(message)
-		self.emitCascade(site.block, value: compared, checks: checks, panicId: panicBlock.id, okId: ok.id, isFloat: isFloat)
+		self.emitCascade(site.block, value: tested, checks: checks, panicId: panicBlock.id, okId: ok.id, isFloat: isFloat)
 		return ok
 	end 'emitCheckedGuard'
+
+	// A full-unsigned difference is refused only on a real borrow (lhs < rhs unsigned). Bit 63 of
+	// `(~lhs & rhs) | (~(lhs ^ rhs) & difference)` is that borrow, so the cascade's sign test reads it;
+	// `TypeRules.unsignedSubtractionBorrows` folds the same identity and the two must agree.
+	function borrowWitnessOf(difference ValueId, head IrBlock) returns ValueId
+		let recorded = match self.borrowOperands 'column'
+			unwritten gives sharedNoBorrowOperands
+			entries(byDifference) gives byDifference
+		end 'column'
+
+		let operands = try recorded.get(difference) otherwise return difference
+		let allOnes = self.mintDerived(difference)
+		self.module.appendOp(head, op: StdOp.const(allOnes, value: UnsignedFullUpperPattern, valueType: StdType.i64))
+		let notLhs = self.appendWordOp(head, lhs: operands.lhs, rhs: allOnes, opcode: StdBinOpcode.bitXor, source: difference)
+		let borrowedByRhs = self.appendWordOp(head, lhs: notLhs, rhs: operands.rhs, opcode: StdBinOpcode.bitAnd, source: difference)
+		let operandsDiffer = self.appendWordOp(head, lhs: operands.lhs, rhs: operands.rhs, opcode: StdBinOpcode.bitXor, source: difference)
+		let operandsAgree = self.appendWordOp(head, lhs: operandsDiffer, rhs: allOnes, opcode: StdBinOpcode.bitXor, source: difference)
+		let borrowedThrough = self.appendWordOp(head, lhs: operandsAgree, rhs: difference, opcode: StdBinOpcode.bitAnd, source: difference)
+		return self.appendWordOp(head, lhs: borrowedByRhs, rhs: borrowedThrough, opcode: StdBinOpcode.bitOr, source: difference)
+	end 'borrowWitnessOf'
+
+	function appendWordOp(head IrBlock, lhs ValueId, rhs ValueId, opcode StdBinOpcode, source ValueId) returns ValueId
+		let result = self.mintDerived(source)
+		self.module.appendOp(head, op: StdOp.binOp(result, lhs: lhs, rhs: rhs, opcode: opcode, operandType: StdType.i64))
+		return result
+	end 'appendWordOp'
 
 	// ⭐⭐ **THE VALUE THE CASCADE ACTUALLY COMPARES — see `GuardedOperand` for why a parameter can be a
 	// cell.** The load's type is the CASCADE's operand type rather than the parameter's declared Std type,
@@ -1658,12 +1709,13 @@ function boundChecks(low ParsedInt, high ParsedInt, isFloat bool) returns RangeB
 	// backend fuses to `cmp value,0; jl ok; cmp value,low; jl panic; jmp ok`.
 	//
 	// ⚠⚠ **GATED ON A POSITIVE LOW, AND WITHOUT THAT GATE THE CASCADE IS UNREACHABLE CODE.** The
-	// full-unsigned `int(0 to u64.max)` reaches `boundChecks` now that it is a guarded QUANTITY, and its
+	// full-unsigned `int(0 to u64.max)` reaches `boundChecks` as a guarded QUANTITY, and its
 	// `low` IS the sign boundary — so this arm would emit `value < 0 → in range` followed by
 	// `value < 0 → panic`, whose second compare is only reached when the first was false and can
 	// therefore never fire. Falling through to the ordinary path gives it the one check it wants:
 	// `rangeNeedsLowerCheck` is true (`0 > i64.min`) and `rangeNeedsUpperCheck` is false (the unsigned
-	// upper is unbounded), which is exactly `value < 0 → panic`.
+	// upper is unbounded), which is exactly `value < 0 → panic`. It is reached only for a value whose
+	// source may be negative, and a recorded unsigned difference is tested through `borrowWitnessOf`.
 	//
 	// ⚠ A FLOAT IS NEVER ELIGIBLE. The shape reinterprets a signed bound as an unsigned one; IEEE-754
 	// ordering is sign-and-magnitude and matches neither, so a float bound whose pattern happens to
@@ -1847,3 +1899,231 @@ end 'retMatchesValue'
 // copied privately here. Only the POPULATE walk stays this pass's
 // own — `collectConsts`, which keeps ONE MAP PER DOMAIN (a float payload is a bit pattern) and
 // additionally folds a `neg` of a `const` (`recordConstNeg`) that FoldConstOperands has no reason to.
+
+function calleeParamSlot(project Project, callee ByteArray, argIndex ParamCount, label ByteArray) returns ParamCount
+	let signature = try project.funcSignatures.get(callee) otherwise panic("calleeParamSlot: '{String.from(callee)}' has range-check data but no FuncSignature — parseFunction records both, keyed by the same name")
+	return argSlotPosition(signature.paramNames, argIndex: argIndex, label: label)
+end 'calleeParamSlot'
+
+type WaivableParam
+	export let index as ParamCount
+	export let aliasName as ByteArray
+	export let declFilePath as FilePath
+	export var waived as bool
+
+	static function create(index ParamCount, aliasName ByteArray, declFilePath FilePath) returns WaivableParam
+		return Self{index: index, aliasName: aliasName, declFilePath: declFilePath, waived: true}
+	end 'create'
+end 'WaivableParam'
+
+typealias WaivableParamArray = Array with WaivableParam
+typealias WaivableParamsByCallee = Map with (ByteArray, WaivableParamArray)
+typealias CallTargetMap = Map with (ValueId, ByteArray)
+typealias CallTargetsByFunction = Map with (FuncIndex, CallTargetMap)
+typealias RecordedCallArguments = Map with (ValueId, RangeCheckSiteArray)
+
+union WaivableParamLookup
+	none
+	found(param WaivableParam)
+end 'WaivableParamLookup'
+
+// A full-unsigned parameter's entry guard is waived only when every direct call records its argument
+// site, because that call-site guard is then the one check. It fails closed: a callee taken as a
+// function value, referenced from data, or called by a call that recorded no site keeps its entry guard.
+type EntryGuardWaivers
+	var candidates as WaivableParamsByCallee
+	var callTargets as CallTargetsByFunction
+
+	static function derive(project Project, module StdModule) returns EntryGuardWaivers
+		var waivers = Self{candidates: WaivableParamsByCallee.create(), callTargets: CallTargetsByFunction.create()}
+
+		for func in module.functions 'eachFunc'
+			waivers.collectCandidates(project, func: func)
+		end 'eachFunc'
+
+		if waivers.candidates.count() == 0 'nothingToWaive'
+			return waivers
+		end 'nothingToWaive'
+
+		for reloc in project.globalData.pendingRdataRelocs 'eachDataReference'
+			waivers.denyAll(reloc.funcName)
+		end 'eachDataReference'
+
+		for target in project.functionValueTargets 'eachFunctionValue'
+			waivers.denyAll(target)
+		end 'eachFunctionValue'
+
+		waivers.denyCallsThatDidNotRecord(project, module: module)
+		return waivers
+	end 'derive'
+
+	function collectCandidates(project Project, func IrFunction)
+		if project.libraryFacts.bodyIsSwept(func.name) 'notInTheProgram'
+			return
+		end 'notInTheProgram'
+
+		let checks = try project.rangeChecks.get(func.name) otherwise return
+
+		for paramSite in checks.paramSites 'eachRangedParam'
+			match project.typeAliases.lookup(paramSite.aliasName, readerFilePath: checks.filePath) 'bounds'
+				undeclared then continue
+				declared(alias) then self.addCandidateIfUnsignedFull(func.name, alias: alias, param: WaivableParam.create(paramSite.index, aliasName: paramSite.aliasName, declFilePath: checks.filePath))
+			end 'bounds'
+		end 'eachRangedParam'
+	end 'collectCandidates'
+
+	function addCandidateIfUnsignedFull(callee ByteArray, alias RangedTypeAlias, param WaivableParam)
+		if not aliasIsUnsignedFullQuantity(alias) 'hasAnotherFloor'
+			return
+		end 'hasAnotherFloor'
+
+		var params = try self.candidates.get(callee) otherwise WaivableParamArray.create()
+		params.push(param)
+		self.candidates.upsert(callee, value: params)
+	end 'addCandidateIfUnsignedFull'
+
+	function denyAll(callee ByteArray)
+		let params = try self.candidates.get(callee) otherwise return
+
+		for i in 0 upto params.count() 'eachParam'
+			denyParamAt(params, at: i)
+		end 'eachParam'
+	end 'denyAll'
+
+	function denyCallsThatDidNotRecord(project Project, module StdModule)
+		var byName = FuncIndexByName.create()
+
+		for (position, func) in module.functions.withIterator() 'eachFunc'
+			byName.upsert(func.name, value: position.index() as FuncIndex)
+		end 'eachFunc'
+
+		var reference = StdFunctionReference.create()
+		var call = StdCallOperands.create()
+
+		for (position, func) in module.functions.withIterator() 'eachCaller'
+			if project.libraryFacts.bodyIsSwept(func.name) 'notInTheProgram'
+				continue
+			end 'notInTheProgram'
+
+			var recorded = RecordedCallArguments.create()
+
+			if let checks = try project.rangeChecks.get(func.name) 'recordsSites'
+				for site in checks.sites 'eachSite'
+					indexCallArgumentSite(recorded, site: site)
+				end 'eachSite'
+			end 'recordsSites'
+
+			for opIdx in module.liveOpIndices(func) 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("EntryGuardWaivers: live op index {opIdx} not in module.ops")
+				stdFunctionReferenceOf(op, byName: byName, into: reference)
+
+				if reference.kind == StdFunctionReferenceKind.none 'namesNoFunction'
+					continue
+				end 'namesNoFunction'
+
+				let callee = module.getFunc(reference.funcIndex).name
+
+				if not self.candidates.contains(callee) 'noWaivableParam'
+					continue
+				end 'noWaivableParam'
+
+				classifyCallOperands(op, call: call)
+
+				if not call.namesACallee() 'takenAsAValue'
+					self.denyAll(callee)
+					continue
+				end 'takenAsAValue'
+
+				self.recordCallTarget(position.index() as FuncIndex, callResult: call.resultId, callee: callee)
+				self.denyParamsTheCallDidNotRecord(project, callee: callee, sites: try recorded.get(call.resultId) otherwise sharedNoCallArgumentSites)
+			end 'eachOp'
+		end 'eachCaller'
+	end 'denyCallsThatDidNotRecord'
+
+	function recordCallTarget(caller FuncIndex, callResult ValueId, callee ByteArray)
+		var targets = try self.callTargets.get(caller) otherwise CallTargetMap.create()
+		targets.upsert(callResult, value: callee)
+		self.callTargets.upsert(caller, value: targets)
+	end 'recordCallTarget'
+
+	function denyParamsTheCallDidNotRecord(project Project, callee ByteArray, sites RangeCheckSiteArray)
+		let params = try self.candidates.get(callee) otherwise panic("EntryGuardWaivers.denyParamsTheCallDidNotRecord: '{String.from(callee)}' was just found among the candidates")
+
+		for i in 0 upto params.count() 'eachParam'
+			let param = try params.get(i) otherwise panic("EntryGuardWaivers.denyParamsTheCallDidNotRecord: params.get OOB at {i}")
+
+			if not callRecordedSlot(project, callee: callee, sites: sites, slot: param.index) 'unrecorded'
+				denyParamAt(params, at: i)
+			end 'unrecorded'
+		end 'eachParam'
+	end 'denyParamsTheCallDidNotRecord'
+
+	function isWaived(callee ByteArray, index ParamCount) returns bool
+		return match self.waivableParamAt(callee, index: index) 'param'
+			none gives false
+			found(param) gives param.waived
+		end 'param'
+	end 'isWaived'
+
+	function waivedParamOfCall(caller FuncIndex, callResult ValueId, argIndex ParamCount, label ByteArray, project Project) returns WaivableParamLookup
+		let targets = try self.callTargets.get(caller) otherwise return WaivableParamLookup.none
+		let callee = try targets.get(callResult) otherwise return WaivableParamLookup.none
+		let lookup = self.waivableParamAt(callee, index: calleeParamSlot(project, callee: callee, argIndex: argIndex, label: label))
+
+		return match lookup 'param'
+			none gives lookup
+			found(param) gives lookup if param.waived else WaivableParamLookup.none
+		end 'param'
+	end 'waivedParamOfCall'
+
+	function waivableParamAt(callee ByteArray, index ParamCount) returns WaivableParamLookup
+		let params = try self.candidates.get(callee) otherwise return WaivableParamLookup.none
+
+		for param in params 'eachParam'
+			if param.index == index 'thisOne'
+				return WaivableParamLookup.found(param)
+			end 'thisOne'
+		end 'eachParam'
+
+		return WaivableParamLookup.none
+	end 'waivableParamAt'
+end 'EntryGuardWaivers'
+
+let sharedNoCallArgumentSites = RangeCheckSiteArray.create()
+
+function indexCallArgumentSite(recorded RecordedCallArguments, site RangeCheckSite)
+	match site.target 'target'
+		alias then return
+		callArgument(callResult, _, _, _) then appendCallArgumentSite(recorded, callResult: callResult, site: site)
+	end 'target'
+end 'indexCallArgumentSite'
+
+function appendCallArgumentSite(recorded RecordedCallArguments, callResult ValueId, site RangeCheckSite)
+	var sites = try recorded.get(callResult) otherwise RangeCheckSiteArray.create()
+	sites.push(site)
+	recorded.upsert(callResult, value: sites)
+end 'appendCallArgumentSite'
+
+function callRecordedSlot(project Project, callee ByteArray, sites RangeCheckSiteArray, slot ParamCount) returns bool
+	for site in sites 'eachSite'
+		if siteRecordsSlot(project, callee: callee, site: site, slot: slot) 'recorded'
+			return true
+		end 'recorded'
+	end 'eachSite'
+
+	return false
+end 'callRecordedSlot'
+
+function siteRecordsSlot(project Project, callee ByteArray, site RangeCheckSite, slot ParamCount) returns bool
+	return match site.target 'target'
+		alias gives false
+		callArgument(_, argIndex, label, _) gives calleeParamSlot(project, callee: callee, argIndex: argIndex, label: label) == slot
+	end 'target'
+end 'siteRecordsSlot'
+
+function denyParamAt(params WaivableParamArray, at ElementIndex)
+	var denied = try params.get(at) otherwise panic("denyParamAt: params.get OOB at {at}")
+	denied.waived = false
+end 'denyParamAt'
+
+let sharedNoBorrowOperands = BorrowOperandsMap.create()

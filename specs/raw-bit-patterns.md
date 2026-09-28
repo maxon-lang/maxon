@@ -267,15 +267,14 @@ Stack trace:
   in mrt_start
 ```
 
-<!-- test: an-unsigned-quantity-refuses-its-own-bit-63-values-at-a-door -->
-### ⚠⚠ THE SHARP EDGE — an unsigned QUANTITY cannot carry a bit-63 value through a door
+<!-- test: an-unsigned-quantity-parameter-admits-an-unsigned-bit-63-value -->
+### An unsigned QUANTITY carries a bit-63 value through a door
 `Count`'s declared value set reaches `u64.max`, and `u64.max as Count` is accepted, because a written
-`u64.max` carries no sign. But a DOOR has only the 64 bits to look at, and the bit-63 patterns a
-quantity must refuse — a laundered negative — are the SAME bits as the values above `i64.max` it
-would like to admit. There is no runtime information that separates them, so the door refuses both.
-⇒ **A type that genuinely needs the whole word is a PATTERN, and `bits(64)` is how it says so.** This
-is the one thing `int(0 to u64.max)` gives up in exchange for catching an underflow, and it is why
-this file exists.
+`u64.max` carries no sign. A door cannot tell a laundered negative from a value above `i64.max` by
+its 64 bits, so it decides by the value's STATIC type instead: a source whose type is signed is
+checked for a negative, and a source whose type is already unsigned — `Count` itself here — is
+admitted with nothing to test. A parameter's check therefore stands at the CALL, where the argument's
+type is known, and not at the callee's entry.
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -290,14 +289,10 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
-1
+0
 ```
-```stderr
-panic at an-unsigned-quantity-refuses-its-own-bit-63-values-at-a-door.test:4: Range check failed: value outside typealias 'Count'
-Stack trace:
-  in take
-  in main
-  in mrt_start
+```stdout
+18446744073709551615
 ```
 
 <!-- test: error.a-written-negative-into-a-pattern-is-refused -->
@@ -501,7 +496,7 @@ end 'main'
 `bits(64) as int(0 to u64.max)` is free, so a value that arrived through a `Word` reaches a `Count`
 RETURN and a `Count` BINDING with nothing to test, bit 63 set and all. Both doors read the pattern the
 `Word` already held and print it as the unsigned quantity it now denotes. The case below is the same
-value at the remaining door, and it panics.
+value at the remaining door.
 ```maxon
 typealias Word = bits(64)
 typealias Count = int(0 to u64.max)
@@ -535,15 +530,10 @@ end 'main'
 18446744073709551613
 ```
 
-<!-- test: a-word-sourced-value-still-refuses-an-unsigned-quantity-parameter -->
-### ⚠⚠ …AND THE ARGUMENT DOOR REFUSES IT ANYWAY
-The sharp edge above, asked of the route a `bits(64)` value takes. `Word` is where a bit-63 pattern is
-legitimately at home, and `Word as Count` is free — but neither fact travels with the value. A PARAMETER
-door has only the 64 bits to look at, exactly as it does for a value that never met a `Word`, so it
-cannot separate this laundered `-3` from the quantity 18446744073709551613 it just printed. It refuses
-both, and this program dies on the argument the one above returned and bound.
-⇒ **THE SOURCE OF A VALUE NEVER RELAXES A DOOR.** A type that needs the whole word through a CALL is a
-`bits(64)` parameter; converting to `int(0 to u64.max)` at the call site converts nothing away.
+<!-- test: a-word-sourced-value-is-free-at-an-unsigned-quantity-parameter -->
+### …and the ARGUMENT door is free too
+The same route at a parameter. The argument's static type is `Count`, which is unsigned, so the call
+has no sign to test and the value arrives as the quantity 18446744073709551613.
 ```maxon
 typealias Word = bits(64)
 typealias Count = int(0 to u64.max)
@@ -564,12 +554,889 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
+0
+```
+```stdout
+18446744073709551613
+```
+
+<!-- test: a-full-unsigned-quantity-parameter-admits-u64-max -->
+### An unsigned source reaches an unsigned-quantity PARAMETER with nothing to test
+```maxon
+typealias WidePid = int(0 to u64.max)
+
+function show(p WidePid) returns WidePid
+	return p
+end 'show'
+
+function main() returns ExitCode
+	print("{show(u64.max as WidePid)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+18446744073709551615
+```
+
+<!-- test: a-full-unsigned-quantity-return-admits-a-shifted-top-bit -->
+### An unsigned shift result reaches an unsigned-quantity RETURN with nothing to test
+```maxon
+typealias Count = int(0 to u64.max)
+
+function topBit(one Count) returns Count
+	return one shl 63
+end 'topBit'
+
+function main() returns ExitCode
+	print("{topBit(1)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+9223372036854775808
+```
+
+<!-- test: a-full-unsigned-quantity-store-admits-a-shifted-top-bit -->
+### An unsigned shift result reaches an unsigned-quantity FIELD with nothing to test
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Tally
+	export var total as Count
+
+	static function create(one Count) returns Tally
+		var t = Self{total: one shl 62}
+		t.total = one shl 63
+		return t
+	end 'create'
+end 'Tally'
+
+function main() returns ExitCode
+	print("{Tally.create(1).total}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+9223372036854775808
+```
+
+<!-- test: a-signed-counter-argument-to-an-unsigned-quantity-parameter-panics -->
+### A signed source still meets the underflow check, at the CALL
+A counter over a signed interval is a signed value with no alias, so it reaches a `Count` parameter
+without a cast, and the call is where its sign is known.
+```maxon
+typealias Count = int(0 to u64.max)
+
+function show(c Count) returns Count
+	return c
+end 'show'
+
+function main() returns ExitCode
+	for i in -2 upto 1 'each'
+		print("{show(i)}\n")
+	end 'each'
+	return 0
+end 'main'
+```
+```exitcode
 1
 ```
 ```stderr
-panic at a-word-sourced-value-still-refuses-an-unsigned-quantity-parameter.test:10: Range check failed: value outside typealias 'Count'
+panic at a-signed-counter-argument-to-an-unsigned-quantity-parameter-panics.test:10: Range check failed: value outside typealias 'Count'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: a-signed-counter-through-a-function-value-to-an-unsigned-quantity-parameter-panics -->
+### …and at a call through a FUNCTION VALUE, where the callee keeps its entry guard
+A function taken as a value can be called from anywhere, so no set of call sites is known to have
+checked its argument, and the callee guards itself.
+```maxon
+typealias Count = int(0 to u64.max)
+
+function show(c Count) returns Count
+	return c
+end 'show'
+
+function main() returns ExitCode
+	let f = show
+
+	for i in -2 upto 1 'each'
+		print("{f(i)}\n")
+	end 'each'
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-signed-counter-through-a-function-value-to-an-unsigned-quantity-parameter-panics.test:4: Range check failed: value outside typealias 'Count'
 Stack trace:
   in show
+  in __fnref_show
+  in main
+  in mrt_start
+```
+
+<!-- test: a-narrower-unsigned-topped-parameter-still-refuses-below-its-floor -->
+### A narrower unsigned-topped range keeps its entry guard
+```maxon
+typealias AboveTen = int(10 to u64.max)
+
+function show(c AboveTen) returns AboveTen
+	return c
+end 'show'
+
+function main() returns ExitCode
+	print("{show(u64.max as AboveTen)}\n")
+
+	for i in 5 upto 6 'each'
+		print("{show(i)}\n")
+	end 'each'
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stdout
+18446744073709551615
+```
+```stderr
+panic at a-narrower-unsigned-topped-parameter-still-refuses-below-its-floor.test:4: Range check failed: value outside typealias 'AboveTen'
+Stack trace:
+  in show
+  in main
+  in mrt_start
+```
+
+<!-- test: a-subtraction-on-an-unsigned-quantity-argument-panics-at-the-call -->
+### A subtraction on an unsigned quantity can go below 0, so it is checked at the call
+`c - 5` wears `Count`, but a subtraction is not a source that cannot go negative. Only an unsigned value
+itself, or a shift, `and`, `or`, `+` or `*` of such values, reaches a full-unsigned quantity unchecked.
+```maxon
+typealias Count = int(0 to u64.max)
+
+function show(c Count) returns Count
+	return c
+end 'show'
+
+function lessFive(c Count) returns Count
+	return show(c - 5)
+end 'lessFive'
+
+function main() returns ExitCode
+	print("{lessFive(3)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-subtraction-on-an-unsigned-quantity-argument-panics-at-the-call.test:9: Range check failed: value outside typealias 'Count'
+Stack trace:
+  in lessFive
+  in main
+  in mrt_start
+```
+
+<!-- test: a-mixed-overload-set-guards-at-the-call-against-the-resolved-member -->
+### An overload set whose members disagree at the slot is checked against the member the call resolves to
+```maxon
+typealias Count = int(0 to u64.max)
+
+function show(c Count) returns Count
+	return c
+end 'show'
+
+function show(s String) returns Count
+	print(s)
+	return 0
+end 'show'
+
+function main() returns ExitCode
+	for i in -2 upto 1 'each'
+		print("{show(i)}\n")
+	end 'each'
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-mixed-overload-set-guards-at-the-call-against-the-resolved-member.test:15: Range check failed: value outside typealias 'Count'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: a-signed-counter-through-an-interface-to-an-unsigned-quantity-parameter-panics -->
+### …and at a call through an INTERFACE, where the conformer keeps its entry guard
+```maxon
+typealias Count = int(0 to u64.max)
+
+interface Shower
+	function show(c Count) returns Count
+end 'Shower'
+
+type Plain
+	export var tag as Count
+
+	static function create() returns Plain
+		return Self{tag: 0}
+	end 'create'
+end 'Plain'
+
+extension Plain implements Shower
+	function show(c Count) returns Count
+		return c + self.tag
+	end 'show'
+end 'Plain'
+
+function drive(s Shower) returns ExitCode
+	for i in -2 upto 1 'each'
+		print("{s.show(i)}\n")
+	end 'each'
+	return 0
+end 'drive'
+
+function main() returns ExitCode
+	return drive(Plain.create())
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-signed-counter-through-an-interface-to-an-unsigned-quantity-parameter-panics.test:17: Range check failed: value outside typealias 'Count'
+Stack trace:
+  in Plain.show
+  in drive
+  in main
+  in mrt_start
+```
+
+<!-- test: a-signed-counter-into-an-async-unsigned-quantity-parameter-panics -->
+### …and at an `async` call, where the callee keeps its entry guard
+```maxon
+typealias Count = int(0 to u64.max)
+typealias Integer = int(i64.min to i64.max)
+
+function half(n Count) returns Integer
+	sleep(1)
+	return (n shr 1) as Integer
+end 'half'
+
+function main() returns ExitCode
+	for i in -2 upto 1 'each'
+		let p = async half(i)
+		print("{await p}\n")
+	end 'each'
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-signed-counter-into-an-async-unsigned-quantity-parameter-panics.test:5: Range check failed: value outside typealias 'Count'
+Stack trace:
+  in half
+  in __gt_trampoline
+```
+
+<!-- test: a-signed-counter-through-an-associated-type-to-an-unsigned-quantity-parameter-panics -->
+### …and at a call through an interface whose formal is an ASSOCIATED TYPE, where the conformer keeps its entry guard
+```maxon
+typealias Count = int(0 to u64.max)
+
+interface Shower uses Shown
+	function show(c Shown) returns Shown
+end 'Shower'
+
+type Plain implements Shower with Count
+	export var tag as Count
+
+	static function create() returns Plain
+		return Self{tag: 0}
+	end 'create'
+
+	function show(c Count) returns Count
+		return c + self.tag
+	end 'show'
+end 'Plain'
+
+function drive(s Shower) returns ExitCode
+	for i in -2 upto 1 'each'
+		print("{s.show(i)}\n")
+	end 'each'
+	return 0
+end 'drive'
+
+function main() returns ExitCode
+	return drive(Plain.create())
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-signed-counter-through-an-associated-type-to-an-unsigned-quantity-parameter-panics.test:15: Range check failed: value outside typealias 'Count'
+Stack trace:
+  in Plain.show
+  in drive
+  in main
+  in mrt_start
+```
+
+<!-- test: a-folded-negative-argument-to-an-unsigned-quantity-parameter-panics-at-the-call -->
+### A folded negative is a signed source, refused at the call
+`0 - 1` folds to a constant, and a subtraction can go below 0, so the constant is the negative
+number it denotes rather than the pattern `u64.max`.
+```maxon
+typealias Count = int(0 to u64.max)
+
+function show(c Count) returns Count
+	return c
+end 'show'
+
+function main() returns ExitCode
+	print("{show(0 - 1)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-folded-negative-argument-to-an-unsigned-quantity-parameter-panics-at-the-call.test:9: Range check failed: value outside typealias 'Count'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: a-folded-negative-from-a-local-to-an-unsigned-quantity-parameter-panics-at-the-call -->
+### …and so is one folded through a local
+```maxon
+typealias Count = int(0 to u64.max)
+
+function show(c Count) returns Count
+	return c
+end 'show'
+
+function main() returns ExitCode
+	let d = 2
+	print("{show(d - 3)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-folded-negative-from-a-local-to-an-unsigned-quantity-parameter-panics-at-the-call.test:10: Range check failed: value outside typealias 'Count'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: a-folded-negative-returned-as-an-unsigned-quantity-panics -->
+### …and at a return
+```maxon
+typealias Count = int(0 to u64.max)
+
+function below() returns Count
+	let d = 2
+	return d - 3
+end 'below'
+
+function main() returns ExitCode
+	print("{below()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-folded-negative-returned-as-an-unsigned-quantity-panics.test:6: Range check failed: value outside typealias 'Count'
+Stack trace:
+  in below
+  in main
+  in mrt_start
+```
+
+<!-- test: a-folded-negative-stored-as-an-unsigned-quantity-panics -->
+### …and at a store
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Tally
+	export var total as Count
+
+	static function create() returns Tally
+		let d = 2
+		return Self{total: d - 3}
+	end 'create'
+end 'Tally'
+
+function main() returns ExitCode
+	print("{Tally.create().total}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-folded-negative-stored-as-an-unsigned-quantity-panics.test:9: Range check failed: value outside typealias 'Count'
+Stack trace:
+  in Tally.create
+  in main
+  in mrt_start
+```
+
+<!-- test: a-folded-negative-into-an-async-unsigned-quantity-parameter-panics-at-the-entry -->
+### …and at an `async` call, where the callee's entry guard refuses it
+```maxon
+typealias Count = int(0 to u64.max)
+typealias Integer = int(i64.min to i64.max)
+
+function half(n Count) returns Integer
+	sleep(1)
+	return (n shr 1) as Integer
+end 'half'
+
+function main() returns ExitCode
+	let p = async half(0 - 1)
+	print("{await p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-folded-negative-into-an-async-unsigned-quantity-parameter-panics-at-the-entry.test:5: Range check failed: value outside typealias 'Count'
+Stack trace:
+  in half
+  in __gt_trampoline
+```
+
+<!-- test: folded-unsigned-constants-reach-an-unsigned-quantity-parameter -->
+### A constant folded from unsigned operands is the unsigned value it names, at a PARAMETER
+A folded constant takes its sign from how it was produced: unsigned operands give the exact unsigned
+value, whatever its bit pattern, and a literal written above `i64.max` is unsigned too.
+```maxon
+typealias Count = int(0 to u64.max)
+
+function take(c Count) returns Count
+	return c
+end 'take'
+
+function main() returns ExitCode
+	print("{take(u64.max - 1)}\n")
+	print("{take(u64.max xor 1)}\n")
+	print("{take((u64.max as Count) / 1)}\n")
+	print("{take(0xcbf29ce484222325 * 1)}\n")
+	print("{take(0x8000000000000000 or 1)}\n")
+	print("{take(0xcbf29ce484222325 xor 5)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+18446744073709551614
+18446744073709551614
+18446744073709551615
+14695981039346656037
+9223372036854775809
+14695981039346656032
+```
+
+<!-- test: folded-unsigned-constants-reach-an-unsigned-quantity-binding -->
+### …at a BINDING
+```maxon
+typealias Count = int(0 to u64.max)
+
+function main() returns ExitCode
+	let a = (u64.max - 1) as Count
+	let b = (u64.max xor 1) as Count
+	let c = ((u64.max as Count) / 1) as Count
+	let d = (0xcbf29ce484222325 * 1) as Count
+	let e = (0x8000000000000000 or 1) as Count
+	let h = (0xcbf29ce484222325 xor 5) as Count
+	print("{a} {b} {c}\n")
+	print("{d} {e} {h}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+18446744073709551614 18446744073709551614 18446744073709551615
+14695981039346656037 9223372036854775809 14695981039346656032
+```
+
+<!-- test: folded-unsigned-constants-reach-an-unsigned-quantity-field -->
+### …at a STORE
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Tally
+	export var a as Count
+	export var b as Count
+	export var c as Count
+	export var d as Count
+	export var e as Count
+	export var h as Count
+
+	static function create() returns Tally
+		var t = Self{a: u64.max - 1, b: 0, c: 0, d: 0, e: 0, h: 0}
+		t.b = u64.max xor 1
+		t.c = (u64.max as Count) / 1
+		t.d = 0xcbf29ce484222325 * 1
+		t.e = 0x8000000000000000 or 1
+		t.h = 0xcbf29ce484222325 xor 5
+		return t
+	end 'create'
+end 'Tally'
+
+function main() returns ExitCode
+	let t = Tally.create()
+	print("{t.a} {t.b} {t.c}\n")
+	print("{t.d} {t.e} {t.h}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+18446744073709551614 18446744073709551614 18446744073709551615
+14695981039346656037 9223372036854775809 14695981039346656032
+```
+
+<!-- test: unsigned-division-over-a-top-bit-variable-reaches-an-unsigned-quantity-parameter -->
+### `/` over an unsigned value stays unsigned, at run time as at a fold
+```maxon
+typealias Count = int(0 to u64.max)
+
+function take(c Count) returns Count
+	return c
+end 'take'
+
+function top(one Count) returns Count
+	return one shl 63
+end 'top'
+
+function main() returns ExitCode
+	let a = top(1)
+	print("{take(a / 1)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+9223372036854775808
+```
+
+<!-- test: xor-over-a-top-bit-variable-reaches-an-unsigned-quantity-parameter -->
+### …and so does `xor`
+```maxon
+typealias Count = int(0 to u64.max)
+
+function take(c Count) returns Count
+	return c
+end 'take'
+
+function top(one Count) returns Count
+	return one shl 63
+end 'top'
+
+function main() returns ExitCode
+	let a = top(1)
+	print("{take(a xor 1)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+9223372036854775809
+```
+
+<!-- test: wrapping-unsigned-folds-reach-an-unsigned-quantity-parameter -->
+### Arithmetic wraps, so a fold over unsigned operands admits the wrapped value
+`+`, `*` and `-` wrap at run time (two's complement), and a fold agrees with what the running program
+computes: the wrapped value is what reaches the parameter.
+```maxon
+typealias Count = int(0 to u64.max)
+
+function take(c Count) returns Count
+	return c
+end 'take'
+
+function main() returns ExitCode
+	print("{take(0xFFFFFFFFFFFFFFFF + 1)}\n")
+	print("{take(0x100000000 * 0x100000000)}\n")
+	print("{take(0 - 0xFFFFFFFFFFFFFFFF)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+0
+1
+```
+
+<!-- test: a-signed-overflow-fold-is-refused-at-an-unsigned-quantity-parameter -->
+### Two signed operands overflow into a negative, and the fold refuses it
+`i64.max + 1` is signed arithmetic that wraps to `i64.min`, a negative number, not the unsigned 2^63.
+```maxon
+typealias Count = int(0 to u64.max)
+
+function take(c Count) returns Count
+	return c
+end 'take'
+
+function main() returns ExitCode
+	print("{take(i64.max + 1)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-signed-overflow-fold-is-refused-at-an-unsigned-quantity-parameter.test:9: Range check failed: value outside typealias 'Count'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: signed-division-over-a-top-bit-literal-folds-as-signed -->
+### `/` over a top-bit literal with no unsigned type is signed, folded or not
+A literal carries no unsigned type, so `/` over it is the signed division at run time, and the fold
+computes the same signed answer.
+```maxon
+typealias Count = int(0 to u64.max)
+
+function take(c Count) returns Count
+	return c
+end 'take'
+
+function main() returns ExitCode
+	print("{take(0xFFFFFFFFFFFFFFFF / 2)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+```
+
+<!-- test: an-unsigned-subtraction-without-a-borrow-reaches-every-unsigned-quantity-door -->
+### An unsigned subtraction is refused only on a real borrow, and `u64.max - 1` has none
+Both operands are unsigned, so `c - 1` is the unsigned difference: it is checked for a borrow
+(`c < 1`, compared unsigned), never for the sign bit of its result.
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Tally
+	export var total as Count
+
+	static function create(c Count) returns Tally
+		var t = Self{total: 0}
+		t.total = c - 1
+		return t
+	end 'create'
+end 'Tally'
+
+function take(c Count) returns Count
+	return c
+end 'take'
+
+function viaParameter(c Count) returns Count
+	return take(c - 1)
+end 'viaParameter'
+
+function viaReturn(c Count) returns Count
+	return c - 1
+end 'viaReturn'
+
+function main() returns ExitCode
+	print("{viaParameter(u64.max)}\n")
+	print("{viaReturn(u64.max)}\n")
+	print("{Tally.create(u64.max).total}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+18446744073709551614
+18446744073709551614
+18446744073709551614
+```
+
+<!-- test: an-unsigned-subtraction-that-borrows-is-refused-at-a-return -->
+### …and a real borrow is refused, at a return
+```maxon
+typealias Count = int(0 to u64.max)
+
+function lessFive(c Count) returns Count
+	return c - 5
+end 'lessFive'
+
+function main() returns ExitCode
+	print("{lessFive(3)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at an-unsigned-subtraction-that-borrows-is-refused-at-a-return.test:5: Range check failed: value outside typealias 'Count'
+Stack trace:
+  in lessFive
+  in main
+  in mrt_start
+```
+
+<!-- test: an-unsigned-subtraction-that-borrows-is-refused-at-a-store -->
+### …and at a store
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Tally
+	export var total as Count
+
+	static function create(c Count) returns Tally
+		var t = Self{total: 0}
+		t.total = c - 5
+		return t
+	end 'create'
+end 'Tally'
+
+function main() returns ExitCode
+	print("{Tally.create(3).total}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at an-unsigned-subtraction-that-borrows-is-refused-at-a-store.test:9: Range check failed: value outside typealias 'Count'
+Stack trace:
+  in Tally.create
+  in main
+  in mrt_start
+```
+
+<!-- test: an-unsigned-difference-without-a-borrow-is-admitted-folded-and-at-run-time -->
+### A fold and the running program give an unsigned difference one verdict: no borrow, admitted
+```maxon
+typealias Count = int(0 to u64.max)
+
+function take(c Count) returns Count
+	return c
+end 'take'
+
+function difference(a Count, b Count) returns Count
+	return take(a - b)
+end 'difference'
+
+function main() returns ExitCode
+	print("{take((u64.max as Count) - (1 as Count))}\n")
+	print("{difference(u64.max, b: 1)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+18446744073709551614
+18446744073709551614
+```
+
+<!-- test: an-unsigned-difference-that-borrows-is-refused-when-folded -->
+### …and a borrow is refused, folded
+```maxon
+typealias Count = int(0 to u64.max)
+
+function take(c Count) returns Count
+	return c
+end 'take'
+
+function main() returns ExitCode
+	print("{take((0 as Count) - (1 as Count))}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at an-unsigned-difference-that-borrows-is-refused-when-folded.test:9: Range check failed: value outside typealias 'Count'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: an-unsigned-difference-that-borrows-is-refused-at-run-time -->
+### …and at run time
+```maxon
+typealias Count = int(0 to u64.max)
+
+function take(c Count) returns Count
+	return c
+end 'take'
+
+function difference(a Count, b Count) returns Count
+	return take(a - b)
+end 'difference'
+
+function main() returns ExitCode
+	print("{difference(0, b: 1)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at an-unsigned-difference-that-borrows-is-refused-at-run-time.test:9: Range check failed: value outside typealias 'Count'
+Stack trace:
+  in difference
   in main
   in mrt_start
 ```

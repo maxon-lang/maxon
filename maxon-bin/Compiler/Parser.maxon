@@ -14822,6 +14822,7 @@ type FunctionBodyState
 	// say so (E3010)** — see `ValueDeclaredAliasMap` for the two cases and for why the cast writer is gated.
 	// Reset per function and SWAPPED across a closure body, exactly like the sibling value columns.
 	export var valueDeclaredAlias as ValueDeclaredAliasTable
+	export var borrowOperands as BorrowOperandsColumn
 
 	// ⭐⭐ **THE INTERVAL A COUNTED LOOP PROVED FOR EACH OF ITS COUNTERS (EC7)** — see `ProvenIntRange` for
 	// what an interval nothing NAMES may and may not decide. Reset per function and SWAPPED across a closure
@@ -15066,6 +15067,7 @@ type FunctionBodyState
 	// (no interning), so a mark on one occurrence cannot reach another value. Sparse, reset per function
 	// and SWAPPED across a closure body, exactly like the sibling value marks.
 	export var unsignedMaxLiterals as ValueMarkColumn
+	export var unsignedPatternValues as ValueMarkColumn
 
 	// ⭐⭐ **THE LITERALS THE SOURCE WROTE AS NEGATIVE NUMBERS — `unsignedMaxLiterals`' COMPANION, AND THE
 	// OTHER HALF OF WHAT 64 BITS CANNOT SAY.**
@@ -15378,6 +15380,7 @@ type FunctionBodyState
 			valueExistentialInstance: noValueExistentialInstances,
 			existentialFieldStores: sharedEmptyExistentialFieldStores,
 			valueDeclaredAlias: noValueDeclaredAliases,
+			borrowOperands: noBorrowOperands,
 			countedValueRanges: noProvenIntRanges,
 			charLiteralOps: noCharLiteralOps,
 			stringBytesViewOps: noStringBytesViewOps,
@@ -15394,6 +15397,7 @@ type FunctionBodyState
 			bufferSurfaceElements: noValueMarks,
 			sizedContainerBufferValues: noValueMarks,
 			unsignedMaxLiterals: noValueMarks,
+			unsignedPatternValues: noValueMarks,
 			writtenNegativeLiterals: noValueMarks,
 			rangeCheckSites: RangeCheckSiteArray.create(),
 			rangeCheckArgSites: RangeCheckArgSiteArray.create(),
@@ -30185,7 +30189,7 @@ export type Parser
 			return
 		end 'noSideData'
 
-		self.artifact.recordFunctionRangeChecks(name, checks: FunctionRangeChecks.create(self.filePath, sites: self.bodyState.rangeCheckSites, argSites: self.bodyState.rangeCheckArgSites, returnAliasName: self.bodyState.rangeCheckReturnAlias, returnSites: self.bodyState.rangeCheckReturnSites, paramSites: self.bodyState.rangeCheckParamSites, provenValueRanges: self.bodyState.countedValueRanges, writtenNegativeLiterals: self.bodyState.writtenNegativeLiterals))
+		self.artifact.recordFunctionRangeChecks(name, checks: FunctionRangeChecks.create(self.filePath, sites: self.bodyState.rangeCheckSites, argSites: self.bodyState.rangeCheckArgSites, returnAliasName: self.bodyState.rangeCheckReturnAlias, returnSites: self.bodyState.rangeCheckReturnSites, paramSites: self.bodyState.rangeCheckParamSites, provenValueRanges: self.bodyState.countedValueRanges, writtenNegativeLiterals: self.bodyState.writtenNegativeLiterals, borrowOperands: self.bodyState.borrowOperands))
 	end 'commitRangeChecks'
 
 	// The name of the function's return type IF it is a ranged alias — integer or float — else EMPTY
@@ -31718,8 +31722,7 @@ export type Parser
 			// `moveOpaqueValueInto` to read, which is the one place that has to tell this parameter from a
 			// borrow the body itself produced. Guarded by the same tag test, first, for its measured reason.
 			if self.tagOf(i as ValueId) == ValueTypeTag.typeParameter and self.signatures.paramFeedOf(funcName, index: i).isFeed() 'anyOpaqueFeed'
-				var marked = self.constructorFeedParamsForWrite()
-				marked.insert(i as ValueId)
+				self.bodyState.constructorFeedParams = withValueMarked(self.bodyState.constructorFeedParams, value: i as ValueId)
 			end 'anyOpaqueFeed'
 		end 'eachParam'
 	end 'bindParameters'
@@ -37215,8 +37218,95 @@ export type Parser
 	// an E2015 over a bare `binOp`), and `a-merge-fed-by-a-counted-loop-denotes-no-alias` stops compiling if
 	// `edgeProvesAlias` does (the merge's declared name comes back into circulation and its `as` is E3010).
 	function valueIsProvablyInRange(value ValueId, target RangedTypeAlias) returns bool
-		return rangeCoversDenotedRange(target, source: self.valueDenotedAlias(value)) or self.countedRangeCovers(value, target: target)
+		return rangeCoversDenotedRange(target, source: self.valueDenotedAlias(value)) or self.countedRangeCovers(value, target: target) or self.unsignedSourceFillsUnsignedQuantity(value, target: target)
 	end 'valueIsProvablyInRange'
+
+	function unsignedSourceFillsUnsignedQuantity(value ValueId, target RangedTypeAlias) returns bool
+		if not aliasIsUnsignedFullQuantity(target) 'targetHasNoSignFloorOnly'
+			return false
+		end 'targetHasNoSignFloorOnly'
+
+		return self.valueIsNonNegativeSource(value)
+	end 'unsignedSourceFillsUnsignedQuantity'
+
+	function valueIsNonNegativeSource(value ValueId) returns bool
+		if self.valueCarriesAnUnsignedPattern(value) 'anUnsignedPattern'
+			return true
+		end 'anUnsignedPattern'
+
+		if self.constIsKnown(value) and self.constOf(value) >= 0 'aNonNegativeConstant'
+			return true
+		end 'aNonNegativeConstant'
+
+		return self.valueDeclaresUnsigned(value) and not self.aliasIsUnproven(value)
+	end 'valueIsNonNegativeSource'
+
+	function valueCarriesAnUnsignedPattern(value ValueId) returns bool
+		return valueIsMarked(self.bodyState.unsignedPatternValues, value: value) or valueIsMarked(self.bodyState.unsignedMaxLiterals, value: value)
+	end 'valueCarriesAnUnsignedPattern'
+
+	function valueDeclaresUnsigned(value ValueId) returns bool
+		return match self.domainDeclaringAlias(value) 'source'
+			undeclared gives false
+			declared(source) gives not aliasIsFloat(source) and rangeIsUnsigned(source.low)
+		end 'source'
+	end 'valueDeclaresUnsigned'
+
+	function markUnsignedArithmeticResult(result ValueId, lhs ValueId, rhs ValueId, op MaxonBinOp)
+		if not self.arithmeticStaysUnsigned(lhs, rhs: rhs, op: op) 'mayGoNegative'
+			return
+		end 'mayGoNegative'
+
+		self.bodyState.unsignedPatternValues = withValueMarked(self.bodyState.unsignedPatternValues, value: result)
+	end 'markUnsignedArithmeticResult'
+
+	function arithmeticStaysUnsigned(lhs ValueId, rhs ValueId, op MaxonBinOp) returns bool
+		if not self.operandsAreInTheUnsignedDomain(lhs, rhs: rhs) 'signedArithmetic'
+			return false
+		end 'signedArithmetic'
+
+		if binOpKeepsUnsignedOperandsUnsigned(op) 'closedOverUnsigned'
+			return true
+		end 'closedOverUnsigned'
+
+		return op == MaxonBinOp.sub and self.constIsKnown(lhs) and self.constIsKnown(rhs) and not unsignedSubtractionBorrows(self.constOf(lhs), rhs: self.constOf(rhs))
+	end 'arithmeticStaysUnsigned'
+
+	function operandsAreInTheUnsignedDomain(lhs ValueId, rhs ValueId) returns bool
+		if not (self.valueIsNonNegativeSource(lhs) and self.valueIsNonNegativeSource(rhs)) 'aSignedOperand'
+			return false
+		end 'aSignedOperand'
+
+		return self.valueIsInTheUnsignedDomain(lhs) or self.valueIsInTheUnsignedDomain(rhs)
+	end 'operandsAreInTheUnsignedDomain'
+
+	function recordBorrowOperands(difference ValueId, lhs ValueId, rhs ValueId, op MaxonBinOp)
+		if op != MaxonBinOp.sub or (self.constIsKnown(lhs) and self.constIsKnown(rhs)) 'noRunTimeBorrow'
+			return
+		end 'noRunTimeBorrow'
+
+		if not self.operandsAreInTheUnsignedDomain(lhs, rhs: rhs) 'signedSubtraction'
+			return
+		end 'signedSubtraction'
+
+		var recorded = self.borrowOperandsForWrite()
+		recorded.upsert(difference, value: BorrowOperands.create(lhs, rhs: rhs))
+	end 'recordBorrowOperands'
+
+	function borrowOperandsForWrite() returns BorrowOperandsMap
+		match self.bodyState.borrowOperands 'state'
+			unwritten then break 'state'
+			entries(byDifference) then return byDifference
+		end 'state'
+
+		let fresh = BorrowOperandsMap.create()
+		self.bodyState.borrowOperands = BorrowOperandsColumn.entries(fresh)
+		return fresh
+	end 'borrowOperandsForWrite'
+
+	function valueIsInTheUnsignedDomain(value ValueId) returns bool
+		return self.valueCarriesAnUnsignedPattern(value) or self.valueDeclaresUnsigned(value)
+	end 'valueIsInTheUnsignedDomain'
 
 	// The brand `value` wears (`WrapperA`, `Xs`), or `EmptySourceText` when it has none — a `self` receiver,
 	// a literal, a merge of unbranded arms, or any non-instance value. `UnnamedTypeId` IS the empty name.
@@ -42419,7 +42509,7 @@ export type Parser
 		// `notMinted`: a runtime entry's callee is not the author's bytes either, but its noun is a question
 		// about the NAME — `GtRuntime.runtimeCalleeSourceMethod` answers it, keyed by name, and may be. Only the
 		// primitive-static mint needs the per-SITE bit. See `CalleeMint`.
-		self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: labels, argRanges: uniformArgRanges(args, range: range), argImmutableNames: NoImmutableArgNames, argDefaultSlots: NoDefaultArgSlots, mint: CalleeMint.notMinted), range: range)
+		self.emitDirectCallOp(MaxonOp.call(result, callee: callee, args: args, argLabels: labels, argRanges: uniformArgRanges(args, range: range), argImmutableNames: NoImmutableArgNames, argDefaultSlots: NoDefaultArgSlots, mint: CalleeMint.notMinted), callee: callee, callResult: result, args: args, argLabels: labels, range: range)
 
 		// The call door for every compiler-emitted callee, which is how `arr.get(i)`, `map.get(k)` and a
 		// checked divide reach an enclosing `try` block or a test body's implied handler. It declines on
@@ -57237,10 +57327,10 @@ export type Parser
 			return
 		end 'provablyInRange'
 
-		// The DECLARATION rides with the site, not just its name — see `RangeCheckSite.aliasFilePath` for the
+		// The DECLARATION rides with the site, not just its name — see `RangeCheckSiteTarget` for the
 		// wrong answer a name alone produced at the one door whose alias is not the calling file's. Both are the
 		// site's own copies: the alias is the signature index's record, and the site rides the artifact.
-		self.bodyState.rangeCheckSites.push(RangeCheckSite.create(value, aliasName: target.name, aliasFilePath: target.declFilePath, block: self.bodyState.currentBlock.id, maxonOpPos: self.bodyState.currentBlock.opRefs.count(), line: line, column: column))
+		self.bodyState.rangeCheckSites.push(RangeCheckSite.create(value, target: RangeCheckSiteTarget.alias(target.name, aliasFilePath: target.declFilePath), block: self.bodyState.currentBlock.id, maxonOpPos: self.bodyState.currentBlock.opRefs.count(), line: line, column: column))
 	end 'recordRangedTargetSite'
 
 	// Is `t` in the FLOAT domain — the bare `float` keyword, or a `named` type that denotes a ranged
@@ -57671,6 +57761,8 @@ export type Parser
 
 		// The result WEARS its operands' typealias and PROVES nothing about it — see `adoptOperandAlias`.
 		self.adoptOperandAlias(result, aliasName: aliasName, resultTag: resultTag)
+		self.markUnsignedArithmeticResult(result, lhs: left, rhs: right, op: op)
+		self.recordBorrowOperands(result, lhs: left, rhs: right, op: op)
 
 		// ⭐ **THE ONE OPERATOR WHOSE RESULT KEEPS ITS OPERANDS' RANGED ALIAS.** See
 		// `bitAndInheritedAlias` — and `rangeIsClosedUnderBitAnd`, which is the proof that makes the
@@ -57776,6 +57868,16 @@ export type Parser
 		end 'notBothKnown'
 
 		self.recordFold(result, fold: foldIntBinOp(op, lhs: self.constOf(lhs), rhs: self.constOf(rhs)))
+
+		if not self.constIsKnown(result) 'notFolded'
+			return
+		end 'notFolded'
+
+		self.markUnsignedArithmeticResult(result, lhs: lhs, rhs: rhs, op: op)
+
+		if not valueIsMarked(self.bodyState.unsignedPatternValues, value: result) 'aSignedFold'
+			self.markWrittenNegative(result, value: self.constOf(result))
+		end 'aSignedFold'
 	end 'recordBinOpFold'
 
 	// One operand of a binary op or comparison, moved into the float domain if the PAIR meets
@@ -59687,12 +59789,6 @@ export type Parser
 		end 'function'
 	end 'functionProvedAnInterval'
 
-	// The written-negative literal column.
-	function writtenNegativeLiteralsForWrite() returns ValueMarkSet
-		self.bodyState.writtenNegativeLiterals = installedValueMarks(self.bodyState.writtenNegativeLiterals)
-		return markSetOf(self.bodyState.writtenNegativeLiterals)
-	end 'writtenNegativeLiteralsForWrite'
-
 	// The parameterized-interface instance column.
 	function valueExistentialInstancesForWrite() returns ValueExistentialInstanceMap
 		match self.bodyState.valueExistentialInstance 'state'
@@ -59737,12 +59833,6 @@ export type Parser
 		return fresh
 	end 'borrowSubjectsForWrite'
 
-	// The array-element surface column.
-	function bufferSurfaceElementsForWrite() returns ValueMarkSet
-		self.bodyState.bufferSurfaceElements = installedValueMarks(self.bodyState.bufferSurfaceElements)
-		return markSetOf(self.bodyState.bufferSurfaceElements)
-	end 'bufferSurfaceElementsForWrite'
-
 	// The tuple-slot surface column.
 	function bufferSurfaceSlotsForWrite() returns ValueSlotSurfaceMap
 		match self.bodyState.bufferSurfaceSlots 'state'
@@ -59755,12 +59845,6 @@ export type Parser
 		return fresh
 	end 'bufferSurfaceSlotsForWrite'
 
-	// The buffer-surface column.
-	function bufferSurfaceValuesForWrite() returns ValueMarkSet
-		self.bodyState.bufferSurfaceValues = installedValueMarks(self.bodyState.bufferSurfaceValues)
-		return markSetOf(self.bodyState.bufferSurfaceValues)
-	end 'bufferSurfaceValuesForWrite'
-
 	// The character-literal op table.
 	function charLiteralOpsForWrite() returns CharLiteralOpMap
 		match self.bodyState.charLiteralOps 'state'
@@ -59772,12 +59856,6 @@ export type Parser
 		self.bodyState.charLiteralOps = CharLiteralOpTable.entries(fresh)
 		return fresh
 	end 'charLiteralOpsForWrite'
-
-	// The constructor-feed parameter column.
-	function constructorFeedParamsForWrite() returns ValueMarkSet
-		self.bodyState.constructorFeedParams = installedValueMarks(self.bodyState.constructorFeedParams)
-		return markSetOf(self.bodyState.constructorFeedParams)
-	end 'constructorFeedParamsForWrite'
 
 	// The corpus-member verdict memo.
 	function corpusVerdictsForWrite() returns DescriptorNeedMap
@@ -59827,12 +59905,6 @@ export type Parser
 		return fresh
 	end 'graphemeVerdictsForWrite'
 
-	// The immutable-global read column.
-	function immutableGlobalReadsForWrite() returns ValueMarkSet
-		self.bodyState.immutableGlobalReads = installedValueMarks(self.bodyState.immutableGlobalReads)
-		return markSetOf(self.bodyState.immutableGlobalReads)
-	end 'immutableGlobalReadsForWrite'
-
 	// The nested-typealias roster of the enclosing declaration.
 	function innerAliasesForWrite() returns InnerAliasNameSet
 		match self.enclosingInnerAliases 'state'
@@ -59881,30 +59953,6 @@ export type Parser
 		return fresh
 	end 'overloadMembersForWrite'
 
-	// The rebindable-slot read column.
-	function rebindableSlotReadsForWrite() returns ValueMarkSet
-		self.bodyState.rebindableSlotReads = installedValueMarks(self.bodyState.rebindableSlotReads)
-		return markSetOf(self.bodyState.rebindableSlotReads)
-	end 'rebindableSlotReadsForWrite'
-
-	// The opaque-slot owner column.
-	function recordsOwningOpaqueSlotsForWrite() returns ValueMarkSet
-		self.bodyState.recordsOwningOpaqueSlots = installedValueMarks(self.bodyState.recordsOwningOpaqueSlots)
-		return markSetOf(self.bodyState.recordsOwningOpaqueSlots)
-	end 'recordsOwningOpaqueSlotsForWrite'
-
-	// The referenced-opaque-slot column.
-	function referencedOpaqueRecordsForWrite() returns ValueMarkSet
-		self.bodyState.recordsHoldingReferencedOpaqueSlots = installedValueMarks(self.bodyState.recordsHoldingReferencedOpaqueSlots)
-		return markSetOf(self.bodyState.recordsHoldingReferencedOpaqueSlots)
-	end 'referencedOpaqueRecordsForWrite'
-
-	// The sized-container record column.
-	function sizedContainerBufferValuesForWrite() returns ValueMarkSet
-		self.bodyState.sizedContainerBufferValues = installedValueMarks(self.bodyState.sizedContainerBufferValues)
-		return markSetOf(self.bodyState.sizedContainerBufferValues)
-	end 'sizedContainerBufferValuesForWrite'
-
 	// The byte-view op table.
 	function stringBytesViewOpsForWrite() returns StringBytesViewOpMap
 		match self.bodyState.stringBytesViewOps 'state'
@@ -59928,12 +59976,6 @@ export type Parser
 		self.filedTupleNames = FiledTupleNameRoster.entries(fresh)
 		return fresh
 	end 'filedTupleNamesForWrite'
-
-	// The unsigned-extreme literal column.
-	function unsignedMaxLiteralsForWrite() returns ValueMarkSet
-		self.bodyState.unsignedMaxLiterals = installedValueMarks(self.bodyState.unsignedMaxLiterals)
-		return markSetOf(self.bodyState.unsignedMaxLiterals)
-	end 'unsignedMaxLiteralsForWrite'
 
 	// The declared-alias column.
 	function valueDeclaredAliasesForWrite() returns ValueDeclaredAliasMap
@@ -62234,15 +62276,13 @@ export type Parser
 	// The ONE writer of `recordsOwningOpaqueSlots` (W41-opaque) — `markRebindableSlotRead`'s twin, through
 	// the same install door discipline (`ValueMarkColumn`).
 	function markRecordOwningOpaqueSlots(box ValueId)
-		var marked = self.recordsOwningOpaqueSlotsForWrite()
-		marked.insert(box)
+		self.bodyState.recordsOwningOpaqueSlots = withValueMarked(self.bodyState.recordsOwningOpaqueSlots, value: box)
 	end 'markRecordOwningOpaqueSlots'
 
 	// The ONE writer of `recordsHoldingReferencedOpaqueSlots` — its twin above, through the same copy-on-write
 	// home and for the identical reason.
 	function markRecordHoldingReferencedOpaqueSlot(box ValueId)
-		var marked = self.referencedOpaqueRecordsForWrite()
-		marked.insert(box)
+		self.bodyState.recordsHoldingReferencedOpaqueSlots = withValueMarked(self.bodyState.recordsHoldingReferencedOpaqueSlots, value: box)
 	end 'markRecordHoldingReferencedOpaqueSlot'
 
 	// ⭐ **ALLOCATE THE HEAP RECORD A STRUCT-SHAPED LITERAL LIVES IN, AND ENROL IT AS THIS STATEMENT'S OWNED
@@ -77298,7 +77338,7 @@ export type Parser
 	// name against the CALLING file. So the bound actually enforced came from `stdlib/Vector.maxon`'s
 	// identically-named twin, or — measured, and far worse — from a `typealias ElementIndex` the calling
 	// PROGRAM declared privately for its own use, which refused `a.set(9, …)` on a 20-element array. The
-	// claim holds now because `RangeCheckSite.aliasFilePath` carries the declaration this door picked; that
+	// claim holds because `RangeCheckSiteTarget.alias` carries the declaration this door picked; that
 	// field holds the sabotage in both directions.
 	//
 	// ⚠ **THE STDLIB HALF WAS INVISIBLE, WHICH IS WHY IT SURVIVED REVIEW**: both stdlib declarations
@@ -80496,8 +80536,7 @@ export type Parser
 		// second derivation of it. Every other extreme (`i64.max`, `u32.max`, `i8.min`) materializes a
 		// pattern whose signed reading IS its value, so none of them needs marking and none is marked.
 		if bound.namesUnsignedMax 'wroteTheUnsignedExtreme'
-			var marked = self.unsignedMaxLiteralsForWrite()
-			marked.insert(value)
+			self.bodyState.unsignedMaxLiterals = withValueMarked(self.bodyState.unsignedMaxLiterals, value: value)
 		end 'wroteTheUnsignedExtreme'
 
 		// ⭐ **THE SAME HAND-OFF, THE OTHER DIRECTION** (`writtenNegativeLiterals`): `i8.min` … `i64.min` name
@@ -81116,8 +81155,7 @@ export type Parser
 	// ⭐ **THE ONE WRITER OF `immutableGlobalReads`** — the read that mints a mark and the merge that
 	// PROPAGATES one both come through here (P1.7 slice 2b), so the install-on-first-mark is stated once.
 	function markImmutableGlobalRead(value ValueId)
-		var marked = self.immutableGlobalReadsForWrite()
-		marked.insert(value)
+		self.bodyState.immutableGlobalReads = withValueMarked(self.bodyState.immutableGlobalReads, value: value)
 	end 'markImmutableGlobalRead'
 
 	// ⭐⭐ **DID THE WHOLE-PROGRAM SWEEP PUBLISH THIS NAME AS ONE WHOSE RESULT MAY ALIAS A `let`-DECLARED
@@ -81181,8 +81219,7 @@ export type Parser
 	// DERIVED by grepping `self.markRebindableSlotRead(` rather than remembered — the census
 	// `markBufferSurface` keeps two functions down, for this reason.
 	function markRebindableSlotRead(value ValueId)
-		var marked = self.rebindableSlotReadsForWrite()
-		marked.insert(value)
+		self.bodyState.rebindableSlotReads = withValueMarked(self.bodyState.rebindableSlotReads, value: value)
 	end 'markRebindableSlotRead'
 
 	// ⭐ **THE ONE WRITER OF `bufferSurfaceValues` (R4.4)** — `markImmutableGlobalRead`'s twin, through the
@@ -81227,8 +81264,7 @@ export type Parser
 	// site that binds the value, and marks it here. There is no second surface mechanism: this mark stays the
 	// one authority, and `dispatchArrayMethod` needed no change for it.
 	function markBufferSurface(value ValueId)
-		var marked = self.bufferSurfaceValuesForWrite()
-		marked.insert(value)
+		self.bodyState.bufferSurfaceValues = withValueMarked(self.bodyState.bufferSurfaceValues, value: value)
 	end 'markBufferSurface'
 
 	// ⭐ `markBufferSurface`'s inverse — the value no longer denotes a buffer because the record it denoted no
@@ -81270,8 +81306,7 @@ export type Parser
 	// ⭐ **THE ONE WRITER OF `bufferSurfaceElements` (A2m)** — `markBufferSurface`'s twin for an ARRAY whose
 	// ELEMENTS are buffers, on the same discipline and against the same anchor hazard.
 	function markBufferSurfaceElements(value ValueId)
-		var marked = self.bufferSurfaceElementsForWrite()
-		marked.insert(value)
+		self.bodyState.bufferSurfaceElements = withValueMarked(self.bodyState.bufferSurfaceElements, value: value)
 	end 'markBufferSurfaceElements'
 
 	// ⭐ **THE ONE WRITER OF `sizedContainerBufferValues` (W192)** — `markBufferSurface`'s twin for the one
@@ -81289,8 +81324,7 @@ export type Parser
 	// A CALL-SITE LIST**: `markBufferSurface`'s header records that exact sentence being wrong five times.
 	function markSizedContainerBuffer(value ValueId)
 		self.markBufferSurface(value)
-		var marked = self.sizedContainerBufferValuesForWrite()
-		marked.insert(value)
+		self.bodyState.sizedContainerBufferValues = withValueMarked(self.bodyState.sizedContainerBufferValues, value: value)
 	end 'markSizedContainerBuffer'
 
 	// ⭐⭐ **THE ONE DECISION: A TYPE SPELLED `__ManagedMemory` DENOTES THE BUFFER (A2j).** ⚖ **USER RULING,
@@ -87958,7 +87992,7 @@ export type Parser
 		self.recordConstantArgRangeChecks(callee, args: args, argLabels: argLabels, anchor: anchor)
 		self.recordOpaqueArgRangeChecks(callee, args: args, argLabels: argLabels, anchor: anchor, constructorInstance: constructed)
 		let opIdx = self.artifact.module.ops.count()
-		self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(argImmutableNames), argDefaultSlots: argDefaultSlots, mint: mint), range: SourceRange.between(anchor, last: rparenTok))
+		self.emitDirectCallOp(MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(argImmutableNames), argDefaultSlots: argDefaultSlots, mint: mint), callee: callee, callResult: result, args: args, argLabels: argLabels, range: SourceRange.between(anchor, last: rparenTok))
 		self.noteCallToken(SourceRange.between(anchor, last: rparenTok), args: args)
 
 		// ⭐ **AND WHERE THAT OP LANDED, WHEN IT IS ONE A LATER FOLD MAY DROP.** Only the two index accessors
@@ -88759,6 +88793,34 @@ export type Parser
 			self.bodyState.rangeCheckArgSites.push(RangeCheckArgSite.create(argValue, callee: callee, argIndex: i, label: label, block: self.bodyState.currentBlock.id, line: anchor.line, column: anchor.column))
 		end 'eachArg'
 	end 'recordConstantArgRangeChecks'
+
+	function emitDirectCallOp(op MaxonOp, callee ByteArray, callResult ValueId, args ValueIdArray, argLabels ByteArrayArray, range SourceRange)
+		self.recordCallArgumentSites(callee, callResult: callResult, args: args, argLabels: argLabels, range: range)
+		self.artifact.emitOp(self.bodyState.currentBlock, op: op, range: range)
+	end 'emitDirectCallOp'
+
+	function recordCallArgumentSites(callee ByteArray, callResult ValueId, args ValueIdArray, argLabels ByteArrayArray, range SourceRange)
+		if not argLabels.isEmpty() and argLabels.count() != args.count() 'labelsOutOfStep'
+			panic("recordCallArgumentSites: the call to '{String.from(callee)}' carries {argLabels.count()} labels for {args.count()} arguments — a call's label list is empty or one per argument")
+		end 'labelsOutOfStep'
+
+		for i in 0 upto args.count() 'eachArg'
+			let argValue = try args.get(i) otherwise panic("recordCallArgumentSites: args.get OOB at {i}")
+			let label = EmptySourceText if argLabels.isEmpty() else try argLabels.get(i) otherwise panic("recordCallArgumentSites: argLabels.get OOB at {i} on a list the line above proved one per argument")
+
+			if not self.argIsAnIntegerQuantity(argValue) or not self.signatures.mayTakeUnsignedQuantityAt(callee, argIndex: i, label: label) 'noSignFloorAtThisSlot'
+				continue
+			end 'noSignFloorAtThisSlot'
+
+			let target = RangeCheckSiteTarget.callArgument(callResult, argIndex: i, label: label, sourceMayBeNegative: not self.valueIsNonNegativeSource(argValue))
+			self.bodyState.rangeCheckSites.push(RangeCheckSite.create(argValue, target: target, block: self.bodyState.currentBlock.id, maxonOpPos: self.bodyState.currentBlock.opRefs.count(), line: range.line, column: range.column))
+		end 'eachArg'
+	end 'recordCallArgumentSites'
+
+	function argIsAnIntegerQuantity(argValue ValueId) returns bool
+		let tag = self.tagOf(argValue)
+		return tag == ValueTypeTag.integer or tag == ValueTypeTag.named
+	end 'argIsAnIntegerQuantity'
 
 	// ⭐⭐ **AN ARGUMENT AT AN OPAQUE TYPE PARAMETER IS CHECKED AGAINST WHAT THE INSTANCE BOUND IT TO — AND
 	// THIS DOOR OWES BOTH HALVES, BECAUSE THE CALLEE CANNOT OWE EITHER (ARRR).**
@@ -91048,7 +91110,13 @@ export type Parser
 	function parseIntLiteral() returns ValueId throws ParseError
 		let tok = try self.consume(TokenKind.intLiteral)
 		let value = try self.intLiteralValue(tok, negated: false)
-		return self.emitLiteral(value, valueType: MaxonType.integer, range: SourceRange.ofToken(tok))
+		let result = self.emitLiteral(value, valueType: MaxonType.integer, range: SourceRange.ofToken(tok))
+
+		if value < 0 'writtenAboveTheSignedTop'
+			self.bodyState.unsignedPatternValues = withValueMarked(self.bodyState.unsignedPatternValues, value: result)
+		end 'writtenAboveTheSignedTop'
+
+		return result
 	end 'parseIntLiteral'
 
 	// Parse a FLOAT literal token into a `literal` op, and return the value it defines.
@@ -91109,8 +91177,7 @@ export type Parser
 			return
 		end 'notNegative'
 
-		var marked = self.writtenNegativeLiteralsForWrite()
-		marked.insert(result)
+		self.bodyState.writtenNegativeLiterals = withValueMarked(self.bodyState.writtenNegativeLiterals, value: result)
 	end 'markWrittenNegative'
 
 	// Append a `literal` op into the CURRENT block; return the ValueId it defines.

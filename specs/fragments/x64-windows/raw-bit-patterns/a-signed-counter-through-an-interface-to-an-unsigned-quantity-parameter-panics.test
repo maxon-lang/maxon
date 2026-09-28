@@ -1,0 +1,76 @@
+// Test: a-signed-counter-through-an-interface-to-an-unsigned-quantity-parameter-panics
+typealias Count = int(0 to u64.max)
+
+interface Shower
+	function show(c Count) returns Count
+end 'Shower'
+
+type Plain
+	export var tag as Count
+
+	static function create() returns Plain
+		return Self{tag: 0}
+	end 'create'
+end 'Plain'
+
+extension Plain implements Shower
+	function show(c Count) returns Count
+		return c + self.tag
+	end 'show'
+end 'Plain'
+
+function drive(s Shower) returns ExitCode
+	for i in -2 upto 1 'each'
+		print("{s.show(i)}\n")
+	end 'each'
+	return 0
+end 'drive'
+
+function main() returns ExitCode
+	return drive(Plain.create())
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+}
+
+func @Plain.show {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegReg r8, rdx, rax
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+  __il_body:
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+  __il_cont:
+    x64.leaRegRdata rax, [rip + __witness_Plain.Shower]
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-signed-counter-through-an-interface-to-an-unsigned-quantity-parameter-panics.test:24: Range check failed: value outside typealias 'Count'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

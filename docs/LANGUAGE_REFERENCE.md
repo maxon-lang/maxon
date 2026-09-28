@@ -405,10 +405,11 @@ typealias Tally = int(0 to u64.max)
 - **Bitwise** operations use the word operators `and`, `or`, `xor`, `not`, `shl` and `shr` (see
   [Expressions](#logical-and-bitwise-operators)).
 - An alias whose lower bound is `0` is **unsigned**: `shr` zero-fills it rather than extending the sign,
-  and its range check refuses a negative value instead of letting an underflow become a huge number.
-  Because a check sees only the 64 bits, a quantity cannot carry a value above `i64.max` through a
-  checked door — `int(0 to u64.max)` panics on one. A value that genuinely needs all 64 bits is a bit
-  pattern: use [`bits(64)`](#bit-patterns--bitsn).
+  and its range check refuses a negative value from a signed source. `int(0 to u64.max)` holds every
+  value up to `u64.max`: a value from an unsigned source — an unsigned alias, `u64.max`, a literal above
+  `i64.max`, or arithmetic over unsigned operands — passes its door unchecked (see
+  [Range Checks](#range-checks)). A value that is a pattern rather than a count is a
+  [`bits(64)`](#bit-patterns--bitsn).
 
 ### Floats
 
@@ -744,6 +745,14 @@ struct-literal field, a field store, a field's declared default, an array elemen
   compile error, **E3005** (`Value 101 is outside the range of 'Percent' (int(0 to 100))`).
 - Any other value gets a run-time check where needed. A check is omitted when the value's own range
   provably fits.
+- A full-unsigned quantity (`int(0 to u64.max)`) is checked only for a negative from a signed source.
+  A value from an unsigned alias, `u64.max`, a literal above `i64.max`, or `+ * and or xor shl shr` and
+  unsigned `/` `mod` over unsigned operands passes unchecked. An unsigned subtraction panics when it
+  borrows (the left operand is smaller than the right); its difference passed through a merge or further
+  arithmetic is tested for a negative. A constant expression folds with the same two's-complement
+  wrapping as the run time and is judged by that same rule.
+- A full-unsigned parameter is checked at each direct call. Its function checks it on entry when it is
+  called as a function value, as an interface method, as `async`, or from code the compiler generates.
 - A failed run-time check is a **panic**, not a recoverable error: the program prints
   `panic at <file>:<line>: Range check failed: value outside typealias '<Name>'` and a stack trace, and exits
   with code 1. No `try` is involved.

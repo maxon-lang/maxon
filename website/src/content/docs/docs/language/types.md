@@ -75,10 +75,11 @@ typealias Tally = int(0 to u64.max)
 - **Bitwise** operations use the word operators `and`, `or`, `xor`, `not`, `shl` and `shr` (see
   [Expressions](/docs/language/expressions/#logical-and-bitwise-operators)).
 - An alias whose lower bound is `0` is **unsigned**: `shr` zero-fills it rather than extending the sign,
-  and its range check refuses a negative value instead of letting an underflow become a huge number.
-  Because a check sees only the 64 bits, a quantity cannot carry a value above `i64.max` through a
-  checked door — `int(0 to u64.max)` panics on one. A value that genuinely needs all 64 bits is a bit
-  pattern: use [`bits(64)`](#bit-patterns--bitsn).
+  and its range check refuses a negative value from a signed source. `int(0 to u64.max)` holds every
+  value up to `u64.max`: a value from an unsigned source — an unsigned alias, `u64.max`, a literal above
+  `i64.max`, or arithmetic over unsigned operands — passes its door unchecked (see
+  [Range Checks](/docs/language/ranged-typealiases/#range-checks)). A value that is a pattern rather than a count is a
+  [`bits(64)`](#bit-patterns--bitsn).
 
 ## Floats
 

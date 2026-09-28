@@ -83,8 +83,10 @@ Three consequences follow, and all three are pinned below:
 refused by E3005 and never builds, so no entry guard ever runs for it. A parameter that promises
 nothing gains nothing — no guard, no frame, byte-identical codegen — and there are exactly three such
 shapes: the signed-full `int(i64.min to i64.max)`, a raw `bits(64)` pattern, and a full-range float.
-The unsigned-full `int(0 to u64.max)` is NOT one of them: it is a quantity, so its door refuses a
-value that arrived from a signed domain.
+An unsigned-full `int(0 to u64.max)` parameter gains no entry guard either, for a different reason:
+it is a quantity, whose only test is for a negative from a signed type, and that test stands at the
+CALL, where the argument's type is known — an argument whose type is already unsigned passes with
+nothing to test.
 
 ### An ARRAY ELEMENT goes the other way, and the difference is where the ALIAS is known (A1f-arrayelem)
 

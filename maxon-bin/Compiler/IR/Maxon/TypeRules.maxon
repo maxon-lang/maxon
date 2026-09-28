@@ -1622,6 +1622,36 @@ export function aliasAdmitsEveryValue(alias RangedTypeAlias) returns bool
 	return alias.low == i64.min and alias.high == i64.max
 end 'aliasAdmitsEveryValue'
 
+export function aliasIsUnsignedFullQuantity(alias RangedTypeAlias) returns bool
+	return not aliasIsFloat(alias) and alias.low == 0 and alias.high == UnsignedFullUpperPattern
+end 'aliasIsUnsignedFullQuantity'
+
+export function binOpKeepsUnsignedOperandsUnsigned(op MaxonBinOp) returns bool
+	return match op 'op'
+		add or
+			mul or
+			bitAnd or
+			bitOr or
+			bitXor or
+			shl or
+			shr or
+			shrLogical or
+			divUnsigned or
+			modUnsigned gives true
+		sub or
+			div or
+			mod or
+			min or
+			max gives false
+	end 'op'
+end 'binOpKeepsUnsignedOperandsUnsigned'
+
+export function unsignedSubtractionBorrows(lhs ParsedInt, rhs ParsedInt) returns bool
+	let difference = lhs - rhs
+	let witness = ((lhs xor UnsignedFullUpperPattern) and rhs) or (((lhs xor rhs) xor UnsignedFullUpperPattern) and difference)
+	return witness < 0
+end 'unsignedSubtractionBorrows'
+
 export function isLegalBitWidth(width ParsedInt) returns bool
 	return width == 1 or width == 2 or width == 4 or width == 8 or width == 16 or width == 32 or width == 64
 end 'isLegalBitWidth'
