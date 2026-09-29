@@ -479,25 +479,25 @@ end 'main'
 lt
 ```
 
-<!-- test: error.string-ordering-still-refused -->
-### Ordering a String Is Still Refused
+<!-- test: a-string-is-ordered-as-its-bytes -->
+### A String Is Ordered as Its Bytes
 
-The NEGATIVE CONTROL for Character ordering. A `String` and a `Character` are the same byte record, but
-only the `Character` is ordered: `String` declares no `Comparable` conformance in the corpus
-(`stdlib/String.maxon`), so `<` on two Strings has no meaning to give.
+A `String` and a `Character` are the same byte record, and both are `Comparable` in the same
+byte-lexicographic order, a shorter prefix first.
 
 ```maxon
 function main() returns ExitCode
 	let a = "apple"
 	let b = "banana"
-	if a < b 'lt'
-		return 1
-	end 'lt'
-	return 0
+	let c = "app"
+	if a < b and c < a and not (b <= a) 'ordered'
+		return 0
+	end 'ordered'
+	return 1
 end 'main'
 ```
-```maxoncstderr
-error E3005: specs/fragments/character-type/error.string-ordering-still-refused.test:5:7: cannot order String values using '<': a String is a byte record with no ordering, so its only comparisons are '==' and '!='
+```exitcode
+0
 ```
 
 <!-- test: error.character-arithmetic-still-refused -->

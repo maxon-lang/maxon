@@ -965,7 +965,7 @@ end 'encodeMovsdBaseDispReg'
 // no register.
 function encodeMovsdRegRip(code ByteArray, rdataRelocs RdataRelocationArray, dest X64Register, label ByteArray)
 	encodeModRmRipRelative(code, twoByteEscape: true, opcode: OpcodeMovsdRegRm, regField: dest, wide: false, ssePrefix: SseMandatoryPrefix.scalarDouble)
-	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: String.from(label), kind: RdataRelocKind.ripRelDisp32))
+	rdataRelocs.push(RdataRelocation.create(codeHere(code), rdataLabel: String.from(label), kind: RdataRelocKind.ripRelDisp32))
 	writeDword(code, value: 0)
 end 'encodeMovsdRegRip'
 
@@ -1365,7 +1365,7 @@ let JmpRel8Bytes = 2
 // Point a forward branch recorded by a placeholder emitter at the CURRENT end of `code` — the FORWARD twin
 // of `encodeJccBackward`, and the other half of what a macro-op containing a size dispatch needs.
 function patchLocalForwardBranch(code ByteArray, dispOffset CodeOffset, what PatchSite)
-	patchChunkRel32(code, codeOffset: dispOffset, targetOffset: code.count(), what: what)
+	patchChunkRel32(code, codeOffset: dispOffset, targetOffset: codeHere(code), what: what)
 end 'patchLocalForwardBranch'
 
 // --- The dense-match jump table (x64) ---
@@ -1533,7 +1533,7 @@ function encodeX64MemFill(code ByteArray, fillByte ParsedInt)
 	encodeGrp1RegImm32(code, ext: Grp1ExtAdd, reg: MemFillCursorReg, imm: MemFillLoopStride)
 	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: MemFillCountReg, imm: MemFillLoopStride)
 	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: MemFillCountReg, imm: MemFillLoopStride)
-	encodeJccBackward(code, cond: X64CondCode.aboveEqual, targetOffset: loopTop, what: PatchSite.x64MemFillRel32)
+	encodeJccBackward(code, cond: X64CondCode.aboveEqual, targetOffset: loopTop as CodeOffset, what: PatchSite.x64MemFillRel32)
 	encodeMemFillQwordRun(code, base: MemFillEndReg, startDisp: -(MemFillLoopStride as Imm32), count: MemFillLoopStride / MemFillQwordBytes)
 	let doneFromLoop = encodeJmpPlaceholder(code)
 
@@ -1569,7 +1569,7 @@ function encodeX64MemFill(code ByteArray, fillByte ParsedInt)
 	// The cursor advance FIRST: it writes flags, and the count decrement below is what the `jnz` reads.
 	encodeGrp1RegImm32(code, ext: Grp1ExtAdd, reg: MemFillCursorReg, imm: 1)
 	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: MemFillCountReg, imm: 1)
-	encodeJccBackward(code, cond: X64CondCode.notEqual, targetOffset: byteLoopTop, what: PatchSite.x64MemFillRel32)
+	encodeJccBackward(code, cond: X64CondCode.notEqual, targetOffset: byteLoopTop as CodeOffset, what: PatchSite.x64MemFillRel32)
 
 	patchLocalForwardBranch(code, dispOffset: doneFromLoop, what: PatchSite.x64MemFillRel32)
 	patchLocalForwardBranch(code, dispOffset: doneFromRep, what: PatchSite.x64MemFillRel32)
@@ -1621,7 +1621,7 @@ end 'encodeModRmRipRelative'
 // runtime function's inline string). Resolved by `resolveChunkRel32Fixups`.
 export function encodeLeaRegLabel(code ByteArray, rel32Fixups ChunkRel32FixupArray, dest X64Register, targetLabel BlockId, site PatchSite)
 	emitLeaRipRelPrefix(code, dest: dest)
-	rel32Fixups.push(ChunkRel32Fixup.create(code.count(), targetLabel: targetLabel, site: site))
+	rel32Fixups.push(ChunkRel32Fixup.create(codeHere(code), targetLabel: targetLabel, site: site))
 	writeDword(code, value: 0)
 end 'encodeLeaRegLabel'
 
@@ -1632,7 +1632,7 @@ end 'encodeLeaRegLabel'
 // resolution patches this with no new relocation kind.
 export function encodeLeaRegFuncAddr(code ByteArray, callFixups CallFixupArray, dest X64Register, targetName ByteArray)
 	emitLeaRipRelPrefix(code, dest: dest)
-	callFixups.push(CallFixup.create(code.count(), targetName: targetName))
+	callFixups.push(CallFixup.create(codeHere(code), targetName: targetName))
 	writeDword(code, value: 0)
 end 'encodeLeaRegFuncAddr'
 
@@ -1648,7 +1648,7 @@ end 'encodeLeaRegFuncAddr'
 // what `RdataRelocKind` discriminates.
 export function encodeLeaRegGlobal(code ByteArray, rdataRelocs RdataRelocationArray, dest X64Register, label ByteArray)
 	emitLeaRipRelPrefix(code, dest: dest)
-	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: String.from(label), kind: RdataRelocKind.dataSectionRipRelDisp32))
+	rdataRelocs.push(RdataRelocation.create(codeHere(code), rdataLabel: String.from(label), kind: RdataRelocKind.dataSectionRipRelDisp32))
 	writeDword(code, value: 0)
 end 'encodeLeaRegGlobal'
 
@@ -1670,10 +1670,10 @@ end 'encodeLeaRegGlobal'
 function encodeCovInc(code ByteArray, rdataRelocs RdataRelocationArray, covOffsets CovPointOffsetArray, pointId CovPointId)
 	// Recorded where the INSTRUCTION starts, before a byte of it exists — the sidecar's coverage record
 	// names the address the counter's code begins at, and a point absent from this channel is ELIMINATED.
-	covOffsets.push(CovPointOffset.create(code.count(), pointId: pointId))
+	covOffsets.push(CovPointOffset.create(codeHere(code), pointId: pointId))
 	code.push(LockPrefix)
 	encodeModRmRipRelative(code, twoByteEscape: false, opcode: OpcodeGroup5, regField: X64Register.rax, wide: true)
-	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: CoverageImageGlobal, kind: RdataRelocKind.dataSectionRipRelDisp32, addend: covCounterOffset(pointId as MxcovPointIndex) as ByteOffset))
+	rdataRelocs.push(RdataRelocation.create(codeHere(code), rdataLabel: CoverageImageGlobal, kind: RdataRelocKind.dataSectionRipRelDisp32, addend: covCounterOffset(pointId as MxcovPointIndex) as ByteOffset))
 	writeDword(code, value: 0)
 end 'encodeCovInc'
 
@@ -1684,7 +1684,7 @@ end 'encodeCovInc'
 // disp32 from `.rdata`'s RVA rather than `.data`'s.
 function encodeLeaRegRdata(code ByteArray, rdataRelocs RdataRelocationArray, dest X64Register, label ByteArray)
 	emitLeaRipRelPrefix(code, dest: dest)
-	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: String.from(label), kind: RdataRelocKind.ripRelDisp32))
+	rdataRelocs.push(RdataRelocation.create(codeHere(code), rdataLabel: String.from(label), kind: RdataRelocKind.ripRelDisp32))
 	writeDword(code, value: 0)
 end 'encodeLeaRegRdata'
 
@@ -1907,7 +1907,7 @@ function encodeStackProbe(code ByteArray, stackSize StackSize)
 	// as negative under a signed compare.
 	let toLanding = encodeJccPlaceholder(code, cond: X64CondCode.belowEqual)
 	encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: 0, srcReg: StackProbeScratchReg, wide: true)
-	encodeJmpBackwardShort(code, targetOffset: walkStart)
+	encodeJmpBackwardShort(code, targetOffset: walkStart as CodeOffset)
 
 	patchLocalForwardBranch(code, dispOffset: toLanding, what: PatchSite.x64StackProbeRel32)
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rsp, src: StackProbeScratchReg, wide: true)
@@ -1926,7 +1926,7 @@ end 'encodeEpilogue'
 // it to the callee's placement.
 export function encodeCallDirect(code ByteArray, callFixups CallFixupArray, targetName ByteArray)
 	code.push(OpcodeCallRel32)
-	callFixups.push(CallFixup.create(code.count(), targetName: targetName))
+	callFixups.push(CallFixup.create(codeHere(code), targetName: targetName))
 	writeDword(code, value: 0)
 end 'encodeCallDirect'
 
@@ -1944,7 +1944,7 @@ end 'encodeCallReg'
 export function encodeIatCall(code ByteArray, iatRelocs RelocationArray, slotIndex RelocSlotIndex)
 	code.push(OpcodeCallIndirect)
 	emitModRmRipRel(code, regFieldBits: Grp5ExtCall)
-	iatRelocs.push(Relocation.create(code.count(), slotIndex: slotIndex))
+	iatRelocs.push(Relocation.create(codeHere(code), slotIndex: slotIndex))
 	writeDword(code, value: 0)
 end 'encodeIatCall'
 
@@ -2711,16 +2711,16 @@ type EmitMark
 	end 'rollBack'
 end 'EmitMark'
 
-function opAt(module TargetModule, opIdx OpIndex) returns TargetOp
+function opAt(module TargetModule, opIdx ElementIndex) returns TargetOp
 	return try module.ops.get(opIdx) otherwise panic("emitFunctionChunk: opIdx {opIdx} not in module.ops")
 end 'opAt'
 
-function opRefAt(block IrBlock, pos BlockOpPos) returns OpIndex
+function opRefAt(block IrBlock, pos ElementIndex) returns ElementIndex
 	return try block.opRefs.get(pos) otherwise panic("emitFunctionChunk: op position {pos} is past the end of block '{String.from(block.label)}'")
 end 'opRefAt'
 
 // Emit `first`, then `last` when it is a second op, returning where the unit's last op begins.
-function emitUnitOps(module TargetModule, first OpIndex, last OpIndex, code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, spillBaseDisp StackSize, usesGt bool, threadPointerSegment X64ThreadPointerSegment) returns CodeOffset
+function emitUnitOps(module TargetModule, first ElementIndex, last ElementIndex, code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, spillBaseDisp StackSize, usesGt bool, threadPointerSegment X64ThreadPointerSegment) returns CodeOffset
 	var lastStart = code.count()
 	emitTargetOp(opAt(module, opIdx: first), code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment)
 
@@ -2736,7 +2736,7 @@ end 'emitUnitOps'
 // emitted first and measured after, so no encoder's width is tabled: only a `covered` unit that straddles a
 // window is rolled back, padded to the next boundary and emitted again. Line rows are noted once the
 // placement is final, so a row lands on its instruction and never on the pad before it.
-function emitUnit(module TargetModule, first OpIndex, last OpIndex, covered bool, mark EmitMark, code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, spillBaseDisp StackSize, usesGt bool, threadPointerSegment X64ThreadPointerSegment, lineRows DebugLineRowBuilder, runOffsets DebugRunOffsets, captureSpans bool)
+function emitUnit(module TargetModule, first ElementIndex, last ElementIndex, covered bool, mark EmitMark, code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, spillBaseDisp StackSize, usesGt bool, threadPointerSegment X64ThreadPointerSegment, lineRows DebugLineRowBuilder, runOffsets DebugRunOffsets, captureSpans bool)
 	if covered 'markable'
 		mark.take(code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables)
 	end 'markable'
@@ -2744,7 +2744,7 @@ function emitUnit(module TargetModule, first OpIndex, last OpIndex, covered bool
 	var firstStart = code.count()
 	var lastStart = emitUnitOps(module, first: first, last: last, code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment)
 
-	if covered and straddlesBranchWindow(firstStart, unitEnd: code.count()) 'straddles'
+	if covered and straddlesBranchWindow(firstStart as CodeOffset, unitEnd: codeHere(code)) 'straddles'
 		let width = code.count() - firstStart
 
 		if width >= BranchWindowBytes 'tooWide'
@@ -2756,23 +2756,23 @@ function emitUnit(module TargetModule, first OpIndex, last OpIndex, covered bool
 		firstStart = code.count()
 		lastStart = emitUnitOps(module, first: first, last: last, code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment)
 
-		if straddlesBranchWindow(firstStart, unitEnd: code.count()) 'stillStraddles'
+		if straddlesBranchWindow(firstStart as CodeOffset, unitEnd: codeHere(code)) 'stillStraddles'
 			panic("emitUnit: a unit re-emitted on a window boundary still straddles it — an encoder emitted different bytes at a different offset")
 		end 'stillStraddles'
 	end 'straddles'
 
 	if captureSpans 'rows'
-		lineRows.note(module.spans.at(first), codeOffset: firstStart)
+		lineRows.note(module.spans.at(first), codeOffset: firstStart as CodeOffset)
 
 		if last != first 'pair'
 			lineRows.note(module.spans.at(last), codeOffset: lastStart)
 		end 'pair'
 	end 'rows'
 
-	runOffsets.note(first, codeStart: firstStart, codeEnd: lastStart if last != first else code.count())
+	runOffsets.note(first, codeStart: firstStart as CodeOffset, codeEnd: lastStart if last != first else codeHere(code))
 
 	if last != first 'pairedOp'
-		runOffsets.note(last, codeStart: lastStart, codeEnd: code.count())
+		runOffsets.note(last, codeStart: lastStart, codeEnd: codeHere(code))
 	end 'pairedOp'
 end 'emitUnit'
 
@@ -2849,7 +2849,7 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 		// Record this block's chunk-local start BEFORE emitting its ops, so branches
 		// (from any block) can resolve to it. Blocks are emitted in blockRefs order.
 		let blockStart = code.count()
-		chunkLabelOffsets.place(block.id, value: blockStart)
+		chunkLabelOffsets.place(block.id, value: blockStart as CodeOffset)
 
 		lineRows.openBlock(block.id, site: block.inlineSite)
 
@@ -2859,13 +2859,13 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 			// Everything the guard emitted is where an asynchronous stop may NOT land — see
 			// `FunctionCodeChunk.asyncUnsafePrefixBytes`. Read off the buffer rather than re-derived from the
 			// guard's shape, so a guard that grows an instruction moves this with it.
-			unsafePrefixBytes = code.count()
+			unsafePrefixBytes = codeHere(code)
 		end 'guard'
 
 		isFirstBlock = false
 
 		let opCount = block.opRefs.count()
-		var opPos = 0 as BlockOpPos
+		var opPos = 0 as ElementIndex
 
 		while opPos < opCount 'eachOp'
 			let opIdx = opRefAt(block, pos: opPos)
@@ -2893,8 +2893,8 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 			emitUnit(module, first: termIdx, last: termIdx, covered: isBranchWindowUnit(branchWindowRoleOf(opAt(module, opIdx: termIdx)), usesGt: usesGt), mark: mark, code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment, lineRows: lineRows, runOffsets: runOffsets, captureSpans: captureSpans)
 		end 'hasTerm'
 
-		chunkBlockEnds.place(block.id, value: code.count())
-		inlineRanges.note(block.inlineSite, codeStart: blockStart, codeEnd: code.count())
+		chunkBlockEnds.place(block.id, value: codeHere(code))
+		inlineRanges.note(block.inlineSite, codeStart: blockStart as CodeOffset, codeEnd: codeHere(code))
 	end 'eachBlock'
 
 	resolveChunkRel32Fixups(code, labelOffsets: chunkLabelOffsets, rel32Fixups: rel32Fixups)
@@ -3133,39 +3133,39 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 
 	// A label claimed twice is a wrong `.text` address, never a near miss — see `recordChunkLabel`, which
 	// owns the rule and the refusal for both native backends.
-	var labelsLaid = 0 as ChunkLabelCount
+	var labelsLaid = 0 as EntryCount
 
 	for chunk in chunks 'eachChunk'
 		// Every chunk starts on a branch-window boundary, so the window `emitFunctionChunk` placed a jump
 		// in by chunk-local offset is the window its final address falls in. The gap is `int3`, so a stray
 		// jump into it traps rather than sliding into the next function.
-		padTo(code, size: alignUp(code.count(), alignment: BranchWindowBytes), fill: OpcodeInt3)
+		padTo(code, size: alignUp(code.count() as BytePos, alignment: BranchWindowBytes), fill: OpcodeInt3)
 		let funcStart = code.count()
-		try recordChunkLabel(labelOffsets, name: chunk.funcName, offset: funcStart, laidOut: labelsLaid, project: project, funcNames: funcNames)
+		try recordChunkLabel(labelOffsets, name: chunk.funcName, offset: funcStart as CodeOffset, laidOut: labelsLaid, project: project, funcNames: funcNames)
 		labelsLaid = labelsLaid + 1
-		recordChunkSymbol(debugSymbols, chunk: chunk, codeOffset: funcStart)
-		let inlineSiteBase = inlineFrames.appendChunk(chunk, funcStart: funcStart)
+		recordChunkSymbol(debugSymbols, chunk: chunk, codeOffset: funcStart as CodeOffset)
+		let inlineSiteBase = inlineFrames.appendChunk(chunk, funcStart: funcStart as CodeOffset)
 
 		if captureSpans 'debugInfo'
-			foldChunkDebugInfo(chunk, funcStart: funcStart, inlineSiteBase: inlineSiteBase, functions: debugFunctions, lineRows: debugLineRows, covPointOffsets: covPointOffsets)
+			foldChunkDebugInfo(chunk, funcStart: funcStart as CodeOffset, inlineSiteBase: inlineSiteBase, functions: debugFunctions, lineRows: debugLineRows, covPointOffsets: covPointOffsets)
 		end 'debugInfo'
 
 		code.append(chunk.code)
 
 		// Rebase chunk-local fixup offsets to absolute `.text` offsets.
 		for fx in chunk.callFixups 'rebaseCalls'
-			callFixups.push(CallFixup.create(funcStart + fx.codeOffset, targetName: fx.targetName))
+			callFixups.push(CallFixup.create(funcStart as CodeOffset + fx.codeOffset, targetName: fx.targetName))
 		end 'rebaseCalls'
 
 		for r in chunk.iatRelocs 'rebaseIat'
-			relocations.push(Relocation.create(funcStart + r.codeOffset, slotIndex: r.slotIndex))
+			relocations.push(Relocation.create(funcStart as CodeOffset + r.codeOffset, slotIndex: r.slotIndex))
 		end 'rebaseIat'
 
 		// A code -> .data reference is rebased exactly as the two above are, and RESOLVED here to
 		// its slot's offset within `.data`. The writer then adds the section's RVA — the only part
 		// of the address the backend cannot know, because sections are not laid out yet.
 		for rr in chunk.rdataRelocs 'rebaseRdata'
-			var reloc = RdataRelocation.create(funcStart + rr.codeOffset, rdataLabel: rr.rdataLabel, kind: rr.kind)
+			var reloc = RdataRelocation.create(funcStart as CodeOffset + rr.codeOffset, rdataLabel: rr.rdataLabel, kind: rr.kind)
 
 			// The chunk-local `rdataOffset` is the ADDEND inside the named object; this resolves the object and
 			// folds the two into the section-relative offset the writer adds an RVA to.
@@ -3177,7 +3177,7 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 		// step: a block's offset is `funcStart + its chunk-local offset`). The writer patches the `.rdata`
 		// blob against these — the `Arm64FuncAdrpReloc.textOffset` rebase, per slot.
 		for jt in chunk.jumpTableRelocs 'rebaseJumpTables'
-			jumpTableRelocs.push(rebaseJumpTableReloc(jt, funcStart: funcStart))
+			jumpTableRelocs.push(rebaseJumpTableReloc(jt, funcStart: funcStart as CodeOffset))
 		end 'rebaseJumpTables'
 	end 'eachChunk'
 
@@ -3185,15 +3185,15 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 	// depends on it: a second claim on the label would move that bound and silently mis-size every
 	// backtrace, so it claims its label through the same door as every chunk. It is data, so it has no
 	// `debugSymbols` entry; one would let a walk symbolize a stray return address into the table.
-	padTo(code, size: alignUp(code.count(), alignment: SymbolTableAlignment))
-	try recordChunkLabel(labelOffsets, name: SymbolTableName, offset: code.count(), laidOut: labelsLaid, project: project, funcNames: funcNames)
+	padTo(code, size: alignUp(code.count() as BytePos, alignment: SymbolTableAlignment))
+	try recordChunkLabel(labelOffsets, name: SymbolTableName, offset: codeHere(code), laidOut: labelsLaid, project: project, funcNames: funcNames)
 	labelsLaid = labelsLaid + 1
 	code.append(buildSymbolTableBytes(debugSymbols, target: project.target))
 
 	// The inline frame tables follow the whole of `__symtable` — names and flag run both — under their own
 	// label (`BacktraceFormat`), past the `[mrt_start, __symtable)` window the walkers symbolize in.
-	padTo(code, size: alignUp(code.count(), alignment: SymbolTableAlignment))
-	try recordChunkLabel(labelOffsets, name: InlineFrameTableName, offset: code.count(), laidOut: labelsLaid, project: project, funcNames: funcNames)
+	padTo(code, size: alignUp(code.count() as BytePos, alignment: SymbolTableAlignment))
+	try recordChunkLabel(labelOffsets, name: InlineFrameTableName, offset: codeHere(code), laidOut: labelsLaid, project: project, funcNames: funcNames)
 	code.append(buildInlineFrameTableBytes(inlineFrames))
 
 	resolveCallFixups(code, labelOffsets: labelOffsets, callFixups: callFixups)

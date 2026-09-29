@@ -54,7 +54,7 @@ public typealias SlotStateArray = Array with SlotState
 /// `maxon-bin/Compiler/Targets/X64/X64Runtime.maxon`. A shared home has to be checked against the whole
 /// tree, not only against the two files it is being shared by (`StdlibLoader`'s collision rule).
 public typealias TableSlotIndex = int(0 to 4611686018427387904)
-public typealias TableCapacity = int(0 to 4611686018427387904)
+public typealias TableCapacity = int(0 to 4611686018427387904) implements ElementIndex
 
 /// Find the next slot index >= `from` whose state is Occupied. Throws `IterationError.exhausted` if no
 /// occupied slot is found before `capacity`.
@@ -65,7 +65,7 @@ public function findNextOccupied(states SlotStateArray, capacity TableCapacity, 
 	var i = from
 
 	while i < (capacity as TableSlotIndex) 'scan'
-		let state = try states.get(i) otherwise SlotState.Empty
+		let state = try states.get((i as ElementIndex)) otherwise SlotState.Empty
 		let isOccupied = match state 'so'
 			Occupied gives true
 			Empty gives false

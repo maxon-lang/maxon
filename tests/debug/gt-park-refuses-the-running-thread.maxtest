@@ -23,13 +23,13 @@ test 'gt-park of the thread that is running is refused by reason, and the progra
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
 	let rosters = eventsOfKind(events, kind: ThreadsEventName)
-	Expect.equal(rosters.count() as AssertedInt, expected: 1, message: "`{ThreadsCommand}` printed no `{ThreadsEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(rosters.count(), expected: 1, message: "`{ThreadsCommand}` printed no `{ThreadsEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let roster = eventAt(rosters, index: 0)
-	Expect.equal(countThreadsWhere(roster, key: StatusKey, value: RunningThreadStatus) as AssertedInt, expected: 1, message: "⛔ THE STOP IS STOP-THE-WORLD AND THIS RUN HAS ONE PROCESSOR, so exactly one green thread is `{RunningThreadStatus}` — the one that took the trap, which is the thread `{onAMachine}` names. The roster held: {renderedThreads(roster)}. {said}")
+	Expect.equal(countThreadsWhere(roster, key: StatusKey, value: RunningThreadStatus), expected: 1, message: "⛔ THE STOP IS STOP-THE-WORLD AND THIS RUN HAS ONE PROCESSOR, so exactly one green thread is `{RunningThreadStatus}` — the one that took the trap, which is the thread `{onAMachine}` names. The roster held: {renderedThreads(roster)}. {said}")
 
 	let holds = eventsOfKind(events, kind: GtParkEventName)
-	Expect.equal(holds.count() as AssertedInt, expected: 1, message: "a refusal is an answer, so `{selectorCommand(GtParkCommand, selector: onAMachine)}` must print one `{GtParkEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(holds.count(), expected: 1, message: "a refusal is an answer, so `{selectorCommand(GtParkCommand, selector: onAMachine)}` must print one `{GtParkEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let refused = eventAt(holds, index: 0)
 	let chosen = reportedThreadId(refused)
@@ -41,8 +41,8 @@ test 'gt-park of the thread that is running is refused by reason, and the progra
 	Expect.notEqual(textOf(refused, node: refused.root, key: ReasonKey), expected: AbsentEventText, message: "the refusal carries no `{ReasonKey}`, so a reader is told only that it did not work. {said}")
 
 	let exits = eventsOfKind(events, kind: ExitEventName)
-	Expect.equal(exits.count() as AssertedInt, expected: 1, message: "a refused hold must leave the program exactly as it was, so the session still runs it to its end. {said}")
+	Expect.equal(exits.count(), expected: 1, message: "a refused hold must leave the program exactly as it was, so the session still runs it to its end. {said}")
 
 	let exited = eventAt(exits, index: 0)
-	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the debugged program answered a different exit code than the same program run with nothing attached. {said}")
+	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey), expected: undebugged.exitCode() as EventNumber, message: "the debugged program answered a different exit code than the same program run with nothing attached. {said}")
 end 'gt-park of the thread that is running is refused by reason, and the program runs on'

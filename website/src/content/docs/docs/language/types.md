@@ -201,9 +201,10 @@ A `type` whose fields are all `let` and all of packable types, summing to 64 bit
 ## Primitive Conformances
 
 The primitives implement the standard interfaces directly: `int` and `float` are `Hashable`, `Equatable`,
-`Comparable`, `Stringable` and `Cloneable`; `bool` is `Comparable`, `Stringable` and `Cloneable`;
-`Character` is `Hashable`, `Equatable`, `Comparable`, `Stringable` and `Cloneable`; `String` is
-`Hashable`, `Equatable`, `Cloneable` and `Iterable`. Every integer alias therefore works as a `Map` key or `Set` element. You can add methods to
+`Comparable`, `Stringable` and `Cloneable`; `bool` is `Equatable`, `Comparable`, `Stringable` and
+`Cloneable`; `Character` is `Hashable`, `Equatable`, `Comparable`, `Stringable` and `Cloneable`; `String`
+is `Hashable`, `Equatable`, `Comparable` (byte order, a shorter prefix first), `Cloneable` and `Iterable`.
+Every alias of `int` or `float` conforms as its primitive does. Every integer alias therefore works as a `Map` key or `Set` element. You can add methods to
 a primitive with an [extension](/docs/language/composite-types/#extensions-over-primitives).
 
 ## Type Conversions

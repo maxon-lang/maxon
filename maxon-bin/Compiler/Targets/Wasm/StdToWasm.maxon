@@ -54,7 +54,7 @@
 // (= int(0 to u32.max)) and `Wasm32IndexArray` for every function/type/local/dispatch index,
 // so the values flow into the `WasmBinary` seam's params with no cast. The narrowings are the two
 // places a value crosses in from an IR-tier id space: the `ValueId → local index` boundary, and
-// `dispatchIndexOf`'s read of the shared `BlockRefIndex` table. Both always fit u32.
+// `dispatchIndexOf`'s read of the shared `blockIndexById` table. Both always fit u32.
 
 // The cycle-break scratch local reserved for each valtype that appears among a function's
 // block-args — the local a phi-copy cycle stages through (wasm has no register exchange).
@@ -251,7 +251,7 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 	// Both are shared by the per-function emitters (a `globalAddr` resolves against `.data`, an
 	// `rdataAddr` against `.rdata`) and by the module's memory + data sections.
 	let dataImage = globalData.dataSectionImage()
-	let rdataBase = wasmRdataBase(WasmDataBaseOffset, dataSize: dataImage.count())
+	let rdataBase = wasmRdataBase(WasmDataBaseOffset, dataSize: dataImage.count() as BytePos)
 
 	// An `.rdata` slot naming another `.rdata` payload — a String record's `buffer@0`, an imaged string
 	// table's element slot — holds an ABSOLUTE address that exists only once `rdataBase` is fixed. wasm is
@@ -260,7 +260,7 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 	var rdataImage = globalData.rdataImage()
 	applyRdataAbsRelocs(rdataImage, globalData: globalData, rdataBase: rdataBase)
 	bakeFuncTableIndexRelocs(rdataImage, globalData: globalData, funcNames: funcNames)
-	let frames = WasmFrameStack.above((rdataBase as BytePos) + rdataImage.count())
+	let frames = WasmFrameStack.above((rdataBase as BytePos) + rdataImage.count() as BytePos)
 
 	// The WASI imports were added FIRST (above), in the order the `*ImportFuncIdx` constants fix, so every
 	// defined function gets the index `wasmFuncIdxOf` computes (`WasmImportCount + position`). Order
@@ -293,7 +293,7 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 	// even with no globals, so the WASI `run` skeleton's mandatory memory export is always at least
 	// one page). Each non-empty image is laid as its own active segment at its base — an empty image
 	// emits none.
-	builder.exportMemory(WasmMemoryExportName, minPages: wasmMemoryMinPages(frames.base, dataSize: frameImage.count()))
+	builder.exportMemory(WasmMemoryExportName, minPages: wasmMemoryMinPages(frames.base, dataSize: frameImage.count() as BytePos))
 
 	if dataImage.count() > 0 'hasGlobals'
 		builder.addDataSegment(WasmDataBaseOffset, bytes: dataImage)
@@ -632,18 +632,18 @@ type WasmFrameStack
 
 		let elidedOffset = prefix.count()
 		prefix.append(ElidedFramesLine)
-		writeZeros(prefix, n: alignUp(prefix.count(), alignment: WasmFrameSlotBytes) - prefix.count())
+		writeZeros(prefix, n: alignUp(prefix.count() as BytePos, alignment: WasmFrameSlotBytes) - prefix.count() as BytePos)
 
 		return Self{
 			base: base,
-			depthAddress: wasmLinearAddress(base, byteOffset: depthOffset),
-			ringBase: wasmLinearAddress(base, byteOffset: ringOffset) as Wasm32Index,
+			depthAddress: wasmLinearAddress(base, byteOffset: depthOffset as ByteOffset),
+			ringBase: wasmLinearAddress(base, byteOffset: ringOffset as ByteOffset) as Wasm32Index,
 			ringMask: (ringSlots - 1) as Imm32,
-			headerAddress: wasmLinearAddress(base, byteOffset: headerOffset),
+			headerAddress: wasmLinearAddress(base, byteOffset: headerOffset as ByteOffset),
 			headerLength: BacktraceHeader.count() as Imm32,
-			elidedAddress: wasmLinearAddress(base, byteOffset: elidedOffset),
+			elidedAddress: wasmLinearAddress(base, byteOffset: elidedOffset as ByteOffset),
 			elidedLength: ElidedFramesLine.count() as Imm32,
-			lineTableBase: wasmLinearAddress(base, byteOffset: prefix.count()) as Wasm32Index,
+			lineTableBase: wasmLinearAddress(base, byteOffset: prefix.count() as ByteOffset) as Wasm32Index,
 			prefix: prefix
 		}
 	end 'above'
@@ -658,7 +658,7 @@ type WasmFrameStack
 			lines.append(FrameLinePrefix)
 			lines.append(name)
 			lines.append(FrameLineTerminator)
-			writeDword(image, value: wasmLinearAddress(self.base, byteOffset: linesOffset + lineStart) as MachineWord)
+			writeDword(image, value: wasmLinearAddress(self.base, byteOffset: (linesOffset + lineStart) as ByteOffset) as MachineWord)
 			writeDword(image, value: (lines.count() - lineStart) as MachineWord)
 		end 'eachName'
 
@@ -1003,14 +1003,14 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 			osPathQuery or
 			osSocketOverlapped or
 			osSocketServe then break 'k'
-		callIndirect(_, _, resultType, argFloatMask, args) then internIndirectCallType(map, builder: builder, resultType: resultType, argFloatMask: argFloatMask, argCount: args.count(), isThrowing: false)
+		callIndirect(_, _, resultType, argFloatMask, args) then internIndirectCallType(map, builder: builder, resultType: resultType, argFloatMask: argFloatMask, argCount: args.count() as ParamCount, isThrowing: false)
 
 		// A witness call is an indirect call on wasm: its callee is a funcref-table index loaded out of a
 		// witness-table slot, so its functype goes through the same door as `callIndirect`'s, and the
 		// interned type and the call-site immediate cannot disagree. The throwing form's signature also
 		// carries the trailing i64 error flag as a second result (`funcSignatureResultValTypes`).
-		witnessCall(_, _, _, resultType, argFloatMask, args) then internIndirectCallType(map, builder: builder, resultType: resultType, argFloatMask: argFloatMask, argCount: args.count(), isThrowing: false)
-		witnessTryCall(_, _, _, _, resultType, argFloatMask, args) then internIndirectCallType(map, builder: builder, resultType: resultType, argFloatMask: argFloatMask, argCount: args.count(), isThrowing: true)
+		witnessCall(_, _, _, resultType, argFloatMask, args) then internIndirectCallType(map, builder: builder, resultType: resultType, argFloatMask: argFloatMask, argCount: args.count() as ParamCount, isThrowing: false)
+		witnessTryCall(_, _, _, _, resultType, argFloatMask, args) then internIndirectCallType(map, builder: builder, resultType: resultType, argFloatMask: argFloatMask, argCount: args.count() as ParamCount, isThrowing: true)
 	end 'k'
 end 'internIndirectCallTypeFor'
 
@@ -1389,7 +1389,7 @@ end 'getValtype'
 // Write `vt` at `v`, extending the (i64-filled) table to reach it. `growFilled` grows the
 // backing geometrically, so recording defs in id order is amortized-linear.
 function setValtype(valtypes WasmValTypeArray, v ValueId, vt WasmValType)
-	if v >= valtypes.count() 'extend'
+	if v >= valtypes.count() as ValueId 'extend'
 		valtypes.growFilled(((v + 1) as ElementIndex), value: WasmValType.i64)
 	end 'extend'
 
@@ -1481,6 +1481,7 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 	match op 'def'
 		const(resultId, _, valueType) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(valueType))
 		binOp(resultId, _, _, _, operandType) then setValtype(valtypes, v: resultId, vt: wasmMachineValTypeOf(operandType))
+
 		// The immediate form carries its own width, so a fold cannot change a value's class: its
 		// result does not depend on `lhs`, which a fold does not promise agrees (see `emitBinOpImm`).
 		binOpImm(resultId, _, _, _, operandType) then setValtype(valtypes, v: resultId, vt: wasmMachineValTypeOf(operandType))
@@ -1754,7 +1755,7 @@ type WasmFuncEmitter
 	function buildLocalDeclarations()
 		let valueLocalCount = self.valtypes.count()
 
-		for i in self.func.paramCount upto valueLocalCount 'valueLocals'
+		for i in self.func.paramCount upto valueLocalCount as ParamCount 'valueLocals'
 			self.localTypes.push(getValtype(self.valtypes, v: i as ValueId))
 		end 'valueLocals'
 
@@ -1963,7 +1964,7 @@ type WasmFuncEmitter
 	// `block` nested per basic block; a `br_table` off the dispatch local jumps to block N's
 	// code (which sits just after the N-th nested `end`). Each block ends by either returning or
 	// setting the dispatch local and branching back to the loop. Handles any reducible CFG.
-	function emitDispatcher(blockCount BlockCount)
+	function emitDispatcher(blockCount ElementIndex)
 		self.body.beginLoop()
 
 		for _ in 0 upto blockCount 'nest'
@@ -3025,7 +3026,7 @@ type WasmFuncEmitter
 	function emitCallIndirect(resultId ValueId, calleeReg ValueId, args ValueIdArray, resultType StdReturnType, argFloatMask ArgFloatMask)
 		self.pushIndirectArgs(args, argFloatMask: argFloatMask)
 		self.pushOperandAt(calleeReg, targetVt: WasmValType.i32)
-		self.emitIndirectCallOp(resultType, argFloatMask: argFloatMask, argCount: args.count(), isThrowing: false, what: "emitCallIndirect")
+		self.emitIndirectCallOp(resultType, argFloatMask: argFloatMask, argCount: args.count() as ParamCount, isThrowing: false, what: "emitCallIndirect")
 		self.captureIndirectResult(resultId, resultType: resultType)
 	end 'emitCallIndirect'
 
@@ -3099,7 +3100,7 @@ type WasmFuncEmitter
 		self.body.i64Load(witnessMethodSlotOffset(methodIndex) as Wasm32Index)
 		self.body.i32WrapI64()
 
-		self.emitIndirectCallOp(resultType, argFloatMask: argFloatMask, argCount: args.count(), isThrowing: isThrowing, what: what)
+		self.emitIndirectCallOp(resultType, argFloatMask: argFloatMask, argCount: args.count() as ParamCount, isThrowing: isThrowing, what: what)
 	end 'emitWitnessCallSequence'
 
 	// Value return: push the return value and `return`. A `void` return type here means a value
@@ -3481,7 +3482,7 @@ type WasmFuncEmitter
 		// exposes `distinct[m − k]`. The loop is `loopDepth + m − k` deep at the k-th code point.
 		for k in 0 upto (m + 1) 'landings'
 			self.body.endOp()
-			let landingLoopDepth = (loopDepth + m - k) as Wasm32Index
+			let landingLoopDepth = (loopDepth + m as Wasm32Index - k) as Wasm32Index
 			var target = defaultTarget
 
 			if k > 0 'caseLanding'
@@ -3565,7 +3566,7 @@ type WasmFuncEmitter
 	end 'slotLandingDepths'
 
 	// The narrowing to `Wasm32Index` is at the READ and not in the table because the table is the
-	// IR-tier `BlockRefIndex` column every backend shares; a `blockRefs` position always fits u32
+	// IR-tier `blockIndexById` column every backend shares; a `blockRefs` position always fits u32
 	// for the same reason a function's block count does.
 	function dispatchIndexOf(blockId BlockId) returns Wasm32Index
 		let position = try self.blockDispatchById.get(blockId) otherwise panic("dispatchIndexOf: branch targets block id {blockId} not in func.blockRefs")
@@ -3909,7 +3910,7 @@ end 'decideDispatcher'
 
 // Index of a move whose dst is not any pending move's source (safe to emit now). It throws when every
 // remaining dst is still needed as a source: the moves left form a pure cycle.
-function findLeafMove(dsts ValueIdArray, srcs ValueIdArray) returns ValueId throws MapError
+function findLeafMove(dsts ValueIdArray, srcs ValueIdArray) returns ElementIndex throws MapError
 	for i in 0 upto dsts.count() 'each'
 		let d = try dsts.get(i) otherwise panic("findLeafMove: dsts.get OOB at {i}")
 
@@ -3943,14 +3944,14 @@ function removeSatisfiedMoves(dsts ValueIdArray, srcs ValueIdArray)
 		let s = try srcs.get(i) otherwise panic("removeSatisfiedMoves: srcs.get OOB at {i}")
 
 		if d == s 'satisfied'
-			removeMoveAt(dsts, srcs: srcs, idx: i)
+			removeMoveAt(dsts, srcs: srcs, idx: i as ValueId)
 		end 'satisfied'
 	end 'each'
 end 'removeSatisfiedMoves'
 
-function removeMoveAt(dsts ValueIdArray, srcs ValueIdArray, idx ValueId)
-	_ = try dsts.remove(idx as ElementIndex) otherwise panic("removeMoveAt: dsts.remove OOB at {idx}")
-	_ = try srcs.remove(idx as ElementIndex) otherwise panic("removeMoveAt: srcs.remove OOB at {idx}")
+function removeMoveAt(dsts ValueIdArray, srcs ValueIdArray, idx ElementIndex)
+	_ = try dsts.remove(idx) otherwise panic("removeMoveAt: dsts.remove OOB at {idx}")
+	_ = try srcs.remove(idx) otherwise panic("removeMoveAt: srcs.remove OOB at {idx}")
 end 'removeMoveAt'
 
 // After exchanging locals a and b, a pending move reading a now finds its value in b and

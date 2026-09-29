@@ -551,7 +551,7 @@ end 'widest'
 function main() returns ExitCode
 	let digest = sha256("hi".toByteArray())
 
-	return ((widest() - 900) + digest.count()) as ExitCode
+	return ((widest() - 900) + (digest.count() as Tally)) as ExitCode
 end 'main'
 ```
 ```exitcode

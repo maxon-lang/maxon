@@ -252,7 +252,7 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function weigh(a WordArray, i Word) returns Word
-	let v = try a.get(i) otherwise 0
+	let v = try a.get(i as ElementIndex) otherwise 0
 	if v > 2 'heavy'
 		print("")
 	end 'heavy'

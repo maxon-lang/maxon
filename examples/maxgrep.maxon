@@ -2,8 +2,8 @@ typealias LineNumber = int(1 to u64.max)
 typealias MatchCount = int(0 to u64.max)
 typealias FileCount = int(0 to u64.max)
 typealias WorkerCount = int(1 to 256)
-typealias BufferPos = int(0 to u64.max)
-typealias PieceIndex = int(0 to u64.max)
+typealias BufferPos = int(0 to u64.max) implements ElementIndex
+typealias PieceIndex = int(0 to u64.max) implements ElementIndex
 
 typealias PathArray = Array with FilePath
 typealias NameSet = Set with String
@@ -271,7 +271,7 @@ function readByte(source ByteArray, at BufferPos) returns (Byte, BufferPos) thro
 		return (symbol, at + 1)
 	end 'plain'
 
-	if at + 1 >= source.count() 'nothingEscaped'
+	if at + 1 >= source.count() as BufferPos 'nothingEscaped'
 		throw PatternError.trailingBackslash
 	end 'nothingEscaped'
 
@@ -294,12 +294,12 @@ end 'readAtom'
 
 function readClass(source ByteArray, at BufferPos, fold ByteFold) returns (Atom, BufferPos) throws PatternError
 	var members = ByteMembership.create()
-	let negated = at < source.count() and byteAt(source, position: at) == '^'
+	let negated = at < source.count() as BufferPos and byteAt(source, position: at) == '^'
 	var cursor = at + 1 if negated else at
 	var named = false
 
 	while true 'eachMember'
-		if cursor >= source.count() 'unterminated'
+		if cursor >= source.count() as BufferPos 'unterminated'
 			throw PatternError.unterminatedClass
 		end 'unterminated'
 
@@ -334,7 +334,7 @@ function readClass(source ByteArray, at BufferPos, fold ByteFold) returns (Atom,
 end 'readClass'
 
 function readRepeat(source ByteArray, at BufferPos) returns (Repeat, BufferPos)
-	if at >= source.count() 'patternEnd'
+	if at >= source.count() as BufferPos 'patternEnd'
 		return (Repeat.once, at)
 	end 'patternEnd'
 
@@ -367,11 +367,11 @@ type FixedMatcher implements Matcher
 	function matchesLine(text ByteArray, lineStart BufferPos, lineEnd BufferPos) returns bool
 		let needleLength = self.needle.count()
 
-		if lineStart + needleLength > lineEnd 'lineTooShort'
+		if lineStart + needleLength as BufferPos > lineEnd 'lineTooShort'
 			return false
 		end 'lineTooShort'
 
-		for start in lineStart to lineEnd - needleLength 'eachStart'
+		for start in lineStart to lineEnd - needleLength as BufferPos 'eachStart'
 			if matchesAt(text, start: start) 'found'
 				return true
 			end 'found'
@@ -434,7 +434,7 @@ type RegexMatcher implements Matcher
 	end 'matchesLine'
 
 	function matchHere(text ByteArray, at BufferPos, lineEnd BufferPos, piece PieceIndex) returns bool
-		if piece == self.pieces.count() 'patternDone'
+		if piece == self.pieces.count() as PieceIndex 'patternDone'
 			return at == lineEnd or not self.anchoredAtEnd
 		end 'patternDone'
 
@@ -545,7 +545,7 @@ type Searcher
 				report.selectedCount = report.selectedCount + 1
 
 				if self.request.keepsLines and not isBinary 'keepText'
-					let text = try buffer.slice(lineStart, endIndex: lineEnd as ElementIndex) otherwise panic("searchBuffer: a line lies inside its buffer")
+					let text = try buffer.slice(lineStart, endIndex: lineEnd) otherwise panic("searchBuffer: a line lies inside its buffer")
 					report.lines.push(LineMatch.create(lineNumber, text: String.from(text)))
 				end 'keepText'
 
@@ -565,7 +565,7 @@ end 'Searcher'
 function lineEndFrom(buffer ByteArray, lineStart BufferPos) returns BufferPos
 	var position = lineStart
 
-	while position < buffer.count() and byteAt(buffer, position: position) != ControlByte.newline 'scan'
+	while position < buffer.count() as BufferPos and byteAt(buffer, position: position) != ControlByte.newline 'scan'
 		position = position + 1
 	end 'scan'
 
@@ -785,7 +785,7 @@ function main() returns ExitCode
 		let files = findFiles(options, summary: summary)
 
 		if not files.isEmpty() 'anyFiles'
-			let workers = options.workersFor(files.count())
+			let workers = options.workersFor(files.count() as FileCount)
 			summary.workers = workers
 			searchFiles(files, request: request, style: style, workers: workers, summary: summary)
 		end 'anyFiles'

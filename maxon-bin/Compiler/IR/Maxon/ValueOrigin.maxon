@@ -1,4 +1,4 @@
-// ValueOrigin — the (funcIndex, ValueId) -> Maxon OpIndex map that lets a diagnostic
+// ValueOrigin — the (funcIndex, ValueId) -> Maxon op index map that lets a diagnostic
 // discovered at the TARGET tier (the register allocator's E5001) point back at
 // source. Source spans die at the Maxon->Std boundary by design (`SourceRangeTable` is
 // keyed by Maxon op index and does not survive `lowerMaxonToStd`'s fresh module), but
@@ -37,7 +37,7 @@
 // A dense column of function indices, one per recorded value origin. Same dense-int
 // representation as `ValueIdArray`/`OpIndexArray` and a DIFFERENT type from either — each names its own
 // quantity, and `as` is the door between two of them.
-export typealias FuncIndexArray = Array with FuncIndex
+export typealias FuncIndexArray = Array with ElementIndex
 
 // The result-value of a Maxon op: `value(id)` for an op that DEFINES an SSA value
 // (`literal`/`binOp`/`unaryOp`/`compare`/`call`), `none` for one that defines none
@@ -224,7 +224,7 @@ end 'appendPair'
 // misattribute a diagnostic to the wrong op.
 export union ValueOriginLookup
 	none
-	found(opIndex OpIndex)
+	found(opIndex ElementIndex)
 end 'ValueOriginLookup'
 
 // The value a compiler-minted id stands in for, or `none` for an id no pass filed as derived. A union
@@ -270,14 +270,14 @@ export type ParamOriginTable
 		return Self{funcIndices: FuncIndexArray.create(), valueIds: ValueIdArray.create(), startBytes: ByteOffsetArray.create(), endBytes: ByteOffsetArray.create(), lines: LineNumberArray.create(), columns: ColumnNumberArray.create()}
 	end 'create'
 
-	export function count() returns OpCount
+	export function count() returns ElementIndex
 		return self.funcIndices.count()
 	end 'count'
 
 	// Record that parameter `valueId` in function `funcIndex` is declared at `range`.
 	// The six columns are only ever pushed together here, so they stay the same length by
 	// construction.
-	export function record(funcIndex FuncIndex, valueId ValueId, range SourceRange)
+	export function record(funcIndex ElementIndex, valueId ValueId, range SourceRange)
 		self.funcIndices.push(funcIndex)
 		self.valueIds.push(valueId)
 		self.startBytes.push(range.startByte)
@@ -290,7 +290,7 @@ export type ParamOriginTable
 	// `valueId` is not a recorded parameter of that function (any body value). A linear scan
 	// — THE COLD PATH — and a parameter appears at most once, so the first match is
 	// authoritative.
-	export function lookup(funcIndex FuncIndex, valueId ValueId) returns ParamOriginLookup
+	export function lookup(funcIndex ElementIndex, valueId ValueId) returns ParamOriginLookup
 		for i in 0 upto self.count() 'each'
 			let f = try self.funcIndices.get(i) otherwise panic("ParamOriginTable.lookup: funcIndices.get OOB at {i}")
 
@@ -317,7 +317,7 @@ export type ParamOriginTable
 	// artifact's functions. ValueIds and spans pass through verbatim (ValueIds are
 	// function-local; a span is absolute in its own file's source buffer). No `opOffset`
 	// analogue: these entries store spans, not op indices.
-	export function appendFrom(source ParamOriginTable, funcOffset FuncIndex)
+	export function appendFrom(source ParamOriginTable, funcOffset ElementIndex)
 		for i in 0 upto source.count() 'each'
 			let f = try source.funcIndices.get(i) otherwise panic("ParamOriginTable.appendFrom: funcIndices.get OOB at {i}")
 			let v = try source.valueIds.get(i) otherwise panic("ParamOriginTable.appendFrom: valueIds.get OOB at {i}")
@@ -375,11 +375,11 @@ type RowCompaction
 		return Self{oldRows: oldRows}
 	end 'of'
 
-	function count() returns OpCount
+	function count() returns ElementIndex
 		return self.oldRows.count()
 	end 'count'
 
-	function oldRowOf(write OpCount) returns OpIndex
+	function oldRowOf(write ElementIndex) returns ElementIndex
 		return try self.oldRows.get(write) otherwise panic("RowCompaction.oldRowOf: no surviving row {write} of {self.oldRows.count()}")
 	end 'oldRowOf'
 end 'RowCompaction'
@@ -426,7 +426,7 @@ function compactColumnNumbers(column ColumnNumberArray, rows RowCompaction)
 	column.resize(rows.count())
 end 'compactColumnNumbers'
 
-// ValueOriginTable — the (funcIndex, ValueId) -> Maxon OpIndex store, as three dense
+// ValueOriginTable — the (funcIndex, ValueId) -> Maxon op index store, as three dense
 // scalar columns. Entry `i` records that value `valueIds[i]` in function `funcIndices[i]`
 // was defined by the Maxon op at `opIndices[i]`. One entry per value-PRODUCING op (a
 // value is defined exactly once — SSA single-def — so no (funcIndex, valueId) pair is
@@ -457,7 +457,7 @@ export type ValueOriginTable
 		return Self{funcIndices: FuncIndexArray.create(), valueIds: ValueIdArray.create(), opIndices: OpIndexArray.create(), paramOrigins: ParamOriginTable.create(), derivedFuncIndices: FuncIndexArray.create(), derivedFirstIds: ValueIdArray.create(), derivedEndIds: ValueIdArray.create(), derivedSourceIds: ValueIdArray.create()}
 	end 'create'
 
-	export function count() returns OpCount
+	export function count() returns ElementIndex
 		return self.funcIndices.count()
 	end 'count'
 
@@ -466,7 +466,7 @@ export type ValueOriginTable
 	// (the only site that mints an op-defined value), so a value cannot enter the IR
 	// without its origin. The three columns are only ever pushed together here, so they
 	// stay the same length by construction.
-	export function record(funcIndex FuncIndex, valueId ValueId, opIndex OpIndex)
+	export function record(funcIndex ElementIndex, valueId ValueId, opIndex ElementIndex)
 		self.funcIndices.push(funcIndex)
 		self.valueIds.push(valueId)
 		self.opIndices.push(opIndex)
@@ -476,13 +476,13 @@ export type ValueOriginTable
 	// Delegates to the parameter sub-table; called by `FileParseArtifact.recordParamOrigin`
 	// as the parser binds each parameter (a param is minted by no op, so it cannot ride the
 	// `record` op-lockstep and needs its own recording site).
-	export function recordParam(funcIndex FuncIndex, valueId ValueId, range SourceRange)
+	export function recordParam(funcIndex ElementIndex, valueId ValueId, range SourceRange)
 		self.paramOrigins.record(funcIndex, valueId: valueId, range: range)
 	end 'recordParam'
 
 	// Record that the ids `[first, bound)` of function `funcIndex` stand in for `sourceId` — see the
 	// derived columns. An empty range files nothing.
-	export function recordDerivedRange(funcIndex FuncIndex, first ValueId, bound ValueId, sourceId ValueId)
+	export function recordDerivedRange(funcIndex ElementIndex, first ValueId, bound ValueId, sourceId ValueId)
 		if first >= bound 'nothingMinted'
 			return
 		end 'nothingMinted'
@@ -493,13 +493,13 @@ export type ValueOriginTable
 		self.derivedSourceIds.push(sourceId)
 	end 'recordDerivedRange'
 
-	export function recordDerived(funcIndex FuncIndex, valueId ValueId, sourceId ValueId)
+	export function recordDerived(funcIndex ElementIndex, valueId ValueId, sourceId ValueId)
 		self.recordDerivedRange(funcIndex, first: valueId, bound: valueId + 1, sourceId: sourceId)
 	end 'recordDerived'
 
 	// The value `valueId` of function `funcIndex` stands in for, or `none`. A linear scan — THE COLD
 	// PATH, only a diagnostic asks. A derived id is filed once, so the first match is authoritative.
-	export function derivationOf(funcIndex FuncIndex, valueId ValueId) returns ValueDerivation
+	export function derivationOf(funcIndex ElementIndex, valueId ValueId) returns ValueDerivation
 		for i in 0 upto self.derivedFuncIndices.count() 'each'
 			let f = try self.derivedFuncIndices.get(i) otherwise panic("ValueOriginTable.derivationOf: derivedFuncIndices.get OOB at {i}")
 
@@ -522,7 +522,7 @@ export type ValueOriginTable
 	// non-parameter value. The E5001 diagnostic tries this FIRST: a parameter in a blocking
 	// set resolves to its declaration here, never to the op-origin/phi chase (which no param
 	// participates in).
-	export function paramRange(funcIndex FuncIndex, valueId ValueId) returns ParamOriginLookup
+	export function paramRange(funcIndex ElementIndex, valueId ValueId) returns ParamOriginLookup
 		return self.paramOrigins.lookup(funcIndex, valueId: valueId)
 	end 'paramRange'
 
@@ -530,7 +530,7 @@ export type ValueOriginTable
 	// when no op did (a phi/block-arg, or a value minted after parsing — a spill reload /
 	// rematerialized constant). A linear scan: THE COLD PATH — only a diagnostic asks. A
 	// value defined by an op appears exactly once, so the first match is authoritative.
-	export function lookup(funcIndex FuncIndex, valueId ValueId) returns ValueOriginLookup
+	export function lookup(funcIndex ElementIndex, valueId ValueId) returns ValueOriginLookup
 		for i in 0 upto self.count() 'each'
 			let f = try self.funcIndices.get(i) otherwise panic("ValueOriginTable.lookup: funcIndices.get OOB at {i}")
 
@@ -601,11 +601,11 @@ export type ValueOriginTable
 	// against a table with one entry per value-producing op in the whole program.
 	//
 	// ⚠ **IT INDEXES ONLY THE FUNCTIONS `selected` NAMES, AND THAT IS THE COST DECISION.** The rows array
-	// would otherwise be a second copy of the whole table (one `OpIndex` per value in the program) for a
-	// consumer that reads a few hundred tiny functions' worth of it. `rowStarts` stays dense over the
-	// function space — it is one word per function, and a sparse map here would be a hash probe on the
-	// splice path.
-	export function indexRowsOfFunctions(selected BoolArray, funcCount FuncIndex) returns ValueOriginRowIndex
+	// would otherwise be a second copy of the whole table (one op index per value in the program) for
+	// a consumer that reads a few hundred tiny functions' worth of it. `rowStarts` stays dense over
+	// the function space — it is one word per function, and a sparse map here would be a hash probe on
+	// the splice path.
+	export function indexRowsOfFunctions(selected BoolArray, funcCount ElementIndex) returns ValueOriginRowIndex
 		return ValueOriginRowIndex.create(indexRowsByFunction(self.funcIndices, selected: selected, funcCount: funcCount), derived: indexRowsByFunction(self.derivedFuncIndices, selected: selected, funcCount: funcCount))
 	end 'indexRowsOfFunctions'
 
@@ -643,9 +643,9 @@ export type ValueOriginTable
 	// ⭐ **THE ROWS IT APPENDS FOR `toFunc` ARE NOTED IN THE INDEX**, so a later splice of `toFunc` into ITS
 	// caller re-files them too — a nested body's values keep their provenance through every level — and the
 	// index is built once per phase rather than once per splice wave.
-	export function copyRows(index ValueOriginRowIndex, fromFunc FuncIndex, toFunc FuncIndex, subst ValueIdArray, calleeParamCount ParamCount)
-		let firstAppendedOp = self.count() as OpIndex
-		let firstAppendedDerived = self.derivedFuncIndices.count() as OpIndex
+	export function copyRows(index ValueOriginRowIndex, fromFunc ElementIndex, toFunc ElementIndex, subst ValueIdArray, calleeParamCount ParamCount)
+		let firstAppendedOp = self.count()
+		let firstAppendedDerived = self.derivedFuncIndices.count()
 
 		for k in index.ops.firstRowOf(fromFunc) upto index.ops.endRowOf(fromFunc) 'eachIndexedRow'
 			self.copyOpRow(index.ops.rowAt(k), toFunc: toFunc, subst: subst, calleeParamCount: calleeParamCount)
@@ -667,10 +667,10 @@ export type ValueOriginTable
 			end 'eachAppendedDerivedRow'
 		end 'eachAppendedDerivedRange'
 
-		index.noteAppended(toFunc, opRows: OriginRowRange.create(firstAppendedOp, bound: self.count() as OpIndex), derivedRows: OriginRowRange.create(firstAppendedDerived, bound: self.derivedFuncIndices.count() as OpIndex))
+		index.noteAppended(toFunc, opRows: OriginRowRange.create(firstAppendedOp, bound: self.count()), derivedRows: OriginRowRange.create(firstAppendedDerived, bound: self.derivedFuncIndices.count()))
 	end 'copyRows'
 
-	function copyOpRow(row OpIndex, toFunc FuncIndex, subst ValueIdArray, calleeParamCount ParamCount)
+	function copyOpRow(row ElementIndex, toFunc ElementIndex, subst ValueIdArray, calleeParamCount ParamCount)
 		let v = try self.valueIds.get(row) otherwise panic("ValueOriginTable.copyRows: valueIds.get OOB at row {row}")
 		let opIndex = try self.opIndices.get(row) otherwise panic("ValueOriginTable.copyRows: opIndices.get OOB at row {row}")
 
@@ -686,19 +686,19 @@ export type ValueOriginTable
 	// contiguous only while every id of the range is below the column's bound, which a row is not the
 	// place to rest on. A source below the parameter count maps onto the call site's own argument, which
 	// is what the copied id stands in for there.
-	function copyDerivedRow(row OpIndex, toFunc FuncIndex, subst ValueIdArray)
+	function copyDerivedRow(row ElementIndex, toFunc ElementIndex, subst ValueIdArray)
 		let first = try self.derivedFirstIds.get(row) otherwise panic("ValueOriginTable.copyDerivedRow: derivedFirstIds.get OOB at row {row}")
 		let bound = try self.derivedEndIds.get(row) otherwise panic("ValueOriginTable.copyDerivedRow: derivedEndIds.get OOB at row {row}")
 		let sourceId = try self.derivedSourceIds.get(row) otherwise panic("ValueOriginTable.copyDerivedRow: derivedSourceIds.get OOB at row {row}")
 		let clonedSource = try subst.get(sourceId) otherwise return
 
 		for v in first upto bound 'eachId'
-			let cloned = try subst.get(v) otherwise continue
+			let cloned = try subst.get(v as ElementIndex) otherwise continue
 			self.recordDerived(toFunc, valueId: cloned, sourceId: clonedSource)
 		end 'eachId'
 	end 'copyDerivedRow'
 
-	export function appendFrom(source ValueOriginTable, funcOffset FuncIndex, opOffset OpIndex)
+	export function appendFrom(source ValueOriginTable, funcOffset ElementIndex, opOffset ElementIndex)
 		for i in 0 upto source.count() 'each'
 			let f = try source.funcIndices.get(i) otherwise panic("ValueOriginTable.appendFrom: funcIndices.get OOB at {i}")
 			let v = try source.valueIds.get(i) otherwise panic("ValueOriginTable.appendFrom: valueIds.get OOB at {i}")
@@ -739,7 +739,7 @@ export type DerivedOrigins
 		self.sourceIds.push(sourceId)
 	end 'record'
 
-	export function foldInto(table ValueOriginTable, funcIndex FuncIndex)
+	export function foldInto(table ValueOriginTable, funcIndex ElementIndex)
 		for i in 0 upto self.valueIds.count() 'eachRow'
 			let valueId = try self.valueIds.get(i) otherwise panic("DerivedOrigins.foldInto: valueIds.get OOB at {i}")
 			let sourceId = try self.sourceIds.get(i) otherwise panic("DerivedOrigins.foldInto: sourceIds.get OOB at {i} — the two columns are pushed together")
@@ -752,7 +752,7 @@ end 'DerivedOrigins'
 // answered `false` rather than refused: a caller that selected nothing beyond function K has no rows to
 // find past it, and reading the length as the answer is what lets the caller size its column by the
 // functions it cares about instead of by the module.
-function isSelectedFunction(selected BoolArray, funcIndex FuncIndex) returns bool
+function isSelectedFunction(selected BoolArray, funcIndex ElementIndex) returns bool
 	return try selected.get(funcIndex) otherwise false
 end 'isSelectedFunction'
 
@@ -774,16 +774,16 @@ export type ValueOriginRowIndex
 		return Self{ops: ops, derived: derived, appendedOps: AppendedRowsByFunction.create(), appendedDerived: AppendedRowsByFunction.create(), noAppendedRows: OriginRowRangeArray.create()}
 	end 'create'
 
-	function appendedOpsOf(funcIndex FuncIndex) returns OriginRowRangeArray
+	function appendedOpsOf(funcIndex ElementIndex) returns OriginRowRangeArray
 		return try self.appendedOps.get(funcIndex) otherwise self.noAppendedRows
 	end 'appendedOpsOf'
 
-	function appendedDerivedOf(funcIndex FuncIndex) returns OriginRowRangeArray
+	function appendedDerivedOf(funcIndex ElementIndex) returns OriginRowRangeArray
 		return try self.appendedDerived.get(funcIndex) otherwise self.noAppendedRows
 	end 'appendedDerivedOf'
 
 	// Note the rows one splice appended for `funcIndex`; an empty range files nothing.
-	function noteAppended(funcIndex FuncIndex, opRows OriginRowRange, derivedRows OriginRowRange)
+	function noteAppended(funcIndex ElementIndex, opRows OriginRowRange, derivedRows OriginRowRange)
 		noteAppendedRange(self.appendedOps, funcIndex: funcIndex, range: opRows)
 		noteAppendedRange(self.appendedDerived, funcIndex: funcIndex, range: derivedRows)
 	end 'noteAppended'
@@ -791,18 +791,18 @@ end 'ValueOriginRowIndex'
 
 // A contiguous run `[first, bound)` of origin-table rows.
 type OriginRowRange
-	export var first as OpIndex
-	export var bound as OpIndex
+	export var first as ElementIndex
+	export var bound as ElementIndex
 
-	static function create(first OpIndex, bound OpIndex) returns OriginRowRange
+	static function create(first ElementIndex, bound ElementIndex) returns OriginRowRange
 		return Self{first: first, bound: bound}
 	end 'create'
 end 'OriginRowRange'
 
 typealias OriginRowRangeArray = Array with OriginRowRange
-typealias AppendedRowsByFunction = Map with (FuncIndex, OriginRowRangeArray)
+typealias AppendedRowsByFunction = Map with (ElementIndex, OriginRowRangeArray)
 
-function noteAppendedRange(appended AppendedRowsByFunction, funcIndex FuncIndex, range OriginRowRange)
+function noteAppendedRange(appended AppendedRowsByFunction, funcIndex ElementIndex, range OriginRowRange)
 	if range.first >= range.bound 'nothingAppended'
 		return
 	end 'nothingAppended'
@@ -827,15 +827,15 @@ export type FunctionRowCsr
 		return Self{rowStarts: rowStarts, rows: rows}
 	end 'create'
 
-	export function firstRowOf(funcIndex FuncIndex) returns OpIndex
+	export function firstRowOf(funcIndex ElementIndex) returns ElementIndex
 		return try self.rowStarts.get(funcIndex) otherwise panic("FunctionRowCsr.firstRowOf: function index {funcIndex} is outside the {self.rowStarts.count() - 1}-function span this index was built over")
 	end 'firstRowOf'
 
-	export function endRowOf(funcIndex FuncIndex) returns OpIndex
+	export function endRowOf(funcIndex ElementIndex) returns ElementIndex
 		return try self.rowStarts.get(funcIndex + 1) otherwise panic("FunctionRowCsr.endRowOf: function index {funcIndex} is outside the {self.rowStarts.count() - 1}-function span this index was built over")
 	end 'endRowOf'
 
-	export function rowAt(position OpIndex) returns OpIndex
+	export function rowAt(position ElementIndex) returns ElementIndex
 		return try self.rows.get(position) otherwise panic("FunctionRowCsr.rowAt: position {position} is outside the {self.rows.count()} indexed row(s)")
 	end 'rowAt'
 end 'FunctionRowCsr'
@@ -843,7 +843,7 @@ end 'FunctionRowCsr'
 // The CSR over `funcIndices` for the functions `selected` names: a count per function into slot `f + 1`,
 // a prefix sum that turns the counts into starts in place, then a scatter through a SEPARATE cursor per
 // function so `rowStarts` survives intact.
-function indexRowsByFunction(funcIndices FuncIndexArray, selected BoolArray, funcCount FuncIndex) returns FunctionRowCsr
+function indexRowsByFunction(funcIndices FuncIndexArray, selected BoolArray, funcCount ElementIndex) returns FunctionRowCsr
 	var rowStarts = OpIndexArray.create()
 	rowStarts.resize(funcCount + 1)
 
@@ -859,7 +859,7 @@ function indexRowsByFunction(funcIndices FuncIndexArray, selected BoolArray, fun
 		try rowStarts.set(at, value: prior + 1) otherwise panic("indexRowsByFunction: rowStarts.set OOB at {at}")
 	end 'countEach'
 
-	var total = 0 as OpIndex
+	var total = 0 as ElementIndex
 
 	for f in 0 upto funcCount + 1 'prefixSum'
 		total = total + (try rowStarts.get(f) otherwise panic("indexRowsByFunction: rowStarts.get OOB at {f}"))
@@ -897,7 +897,7 @@ end 'indexRowsByFunction'
 // in the enclosing function.
 export union DeferralSource
 	none
-	value(funcIndex FuncIndex, valueId ValueId)
+	value(funcIndex ElementIndex, valueId ValueId)
 
 	export function isDeferred() returns bool
 		return match self 'source'
@@ -917,11 +917,9 @@ end 'DeferredChainCalls'
 
 typealias DeferredChainCallsArray = Array with DeferredChainCalls
 
-export typealias DeferralRowCount = int(0 to u64.max)
-
 union DeferralRowLookup
 	absent
-	at(row DeferralRowCount)
+	at(row ElementIndex)
 end 'DeferralRowLookup'
 
 export type DeferralSourceTable
@@ -935,11 +933,11 @@ export type DeferralSourceTable
 		return Self{funcIndices: FuncIndexArray.create(), valueIds: ValueIdArray.create(), sourceFuncIndices: FuncIndexArray.create(), sourceIds: ValueIdArray.create(), chainCallKinds: DeferredChainCallsArray.create()}
 	end 'create'
 
-	export function count() returns DeferralRowCount
+	export function count() returns ElementIndex
 		return self.funcIndices.count()
 	end 'count'
 
-	export function record(funcIndex FuncIndex, valueId ValueId, sourceFuncIndex FuncIndex, sourceId ValueId, chainCalls DeferredChainCalls)
+	export function record(funcIndex ElementIndex, valueId ValueId, sourceFuncIndex ElementIndex, sourceId ValueId, chainCalls DeferredChainCalls)
 		self.funcIndices.push(funcIndex)
 		self.valueIds.push(valueId)
 		self.sourceFuncIndices.push(sourceFuncIndex)
@@ -950,14 +948,14 @@ export type DeferralSourceTable
 	// Both readers scan only the rows from `floor` up, a count the caller takes just before the
 	// expression it asks about: a row below it is an earlier statement's (`let v = c.describe()` then
 	// `try (v)` stays E2015), and the bound keeps each scan to one statement's rows.
-	export function lastLinkIsACallAbove(floor DeferralRowCount, funcIndex FuncIndex, valueId ValueId) returns bool
+	export function lastLinkIsACallAbove(floor ElementIndex, funcIndex ElementIndex, valueId ValueId) returns bool
 		return match self.rowOf(funcIndex, valueId: valueId, floor: floor) 'row'
 			absent gives false
 			at(row) gives self.chainCallsAt(row) == DeferredChainCalls.lastLinkIsACall
 		end 'row'
 	end 'lastLinkIsACallAbove'
 
-	export function recordsACallAbove(floor DeferralRowCount) returns bool
+	export function recordsACallAbove(floor ElementIndex) returns bool
 		for i in floor upto self.count() 'each'
 			if self.chainCallsAt(i) != DeferredChainCalls.noCall 'aCallWasDeferred'
 				return true
@@ -967,25 +965,25 @@ export type DeferralSourceTable
 		return false
 	end 'recordsACallAbove'
 
-	function chainCallsAt(row DeferralRowCount) returns DeferredChainCalls
+	function chainCallsAt(row ElementIndex) returns DeferredChainCalls
 		return try self.chainCallKinds.get(row) otherwise panic("DeferralSourceTable.chainCallsAt: chainCallKinds.get OOB at {row}")
 	end 'chainCallsAt'
 
 	// A linear scan: it is asked only while tracing the cause of a refusal.
-	export function sourceOf(funcIndex FuncIndex, valueId ValueId) returns DeferralSource
+	export function sourceOf(funcIndex ElementIndex, valueId ValueId) returns DeferralSource
 		return match self.rowOf(funcIndex, valueId: valueId, floor: 0) 'row'
 			absent gives DeferralSource.none
 			at(row) gives self.sourceAt(row)
 		end 'row'
 	end 'sourceOf'
 
-	function sourceAt(row DeferralRowCount) returns DeferralSource
+	function sourceAt(row ElementIndex) returns DeferralSource
 		let sourceFunc = try self.sourceFuncIndices.get(row) otherwise panic("DeferralSourceTable.sourceAt: sourceFuncIndices.get OOB at {row}")
 		let sourceId = try self.sourceIds.get(row) otherwise panic("DeferralSourceTable.sourceAt: sourceIds.get OOB at {row}")
 		return DeferralSource.value(sourceFunc, valueId: sourceId)
 	end 'sourceAt'
 
-	function rowOf(funcIndex FuncIndex, valueId ValueId, floor DeferralRowCount) returns DeferralRowLookup
+	function rowOf(funcIndex ElementIndex, valueId ValueId, floor ElementIndex) returns DeferralRowLookup
 		for row in floor upto self.count() 'each'
 			let f = try self.funcIndices.get(row) otherwise panic("DeferralSourceTable.rowOf: funcIndices.get OOB at {row}")
 			let v = try self.valueIds.get(row) otherwise panic("DeferralSourceTable.rowOf: valueIds.get OOB at {row}")
@@ -998,7 +996,7 @@ export type DeferralSourceTable
 		return DeferralRowLookup.absent
 	end 'rowOf'
 
-	export function appendFrom(source DeferralSourceTable, funcOffset FuncIndex)
+	export function appendFrom(source DeferralSourceTable, funcOffset ElementIndex)
 		for i in 0 upto source.count() 'each'
 			let f = try source.funcIndices.get(i) otherwise panic("DeferralSourceTable.appendFrom: funcIndices.get OOB at {i}")
 			let v = try source.valueIds.get(i) otherwise panic("DeferralSourceTable.appendFrom: valueIds.get OOB at {i}")

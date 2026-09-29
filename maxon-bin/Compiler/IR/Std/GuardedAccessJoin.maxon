@@ -22,7 +22,7 @@ export type GuardedAccessJoinReader
 
 	// Meaningful once `joins` has answered true: the guard's compare, whose predicate is false on every
 	// edge into the join.
-	export var guardCompareOpIdx as OpIndex
+	export var guardCompareOpIdx as ElementIndex
 
 	export static function create() returns GuardedAccessJoinReader
 		return Self{branch: StdBranchOperands.create(), slowBranch: StdBranchOperands.create(), guard: ManagedGuardOperands.create(), call: StdCallOperands.create(), guardCompareOpIdx: 0}
@@ -30,13 +30,13 @@ export type GuardedAccessJoinReader
 
 	// Whether the block at `position` is such a join: exactly two predecessors, the arms of one guard.
 	// Either predecessor may be the slow arm.
-	export function joins(module StdModule, func IrFunction, tree StdDominatorTree, reader StdShapeReader, position BlockRefIndex) returns bool
+	export function joins(module StdModule, func IrFunction, tree StdDominatorTree, reader StdShapeReader, position ElementIndex) returns bool
 		if tree.pred.degree(position as CsrIndex) != 2 'notTwoEdges'
 			return false
 		end 'notTwoEdges'
 
-		let first = tree.pred.neighbour(position as CsrIndex, k: 0) as BlockRefIndex
-		let second = tree.pred.neighbour(position as CsrIndex, k: 1) as BlockRefIndex
+		let first = tree.pred.neighbour(position as CsrIndex, k: 0)
+		let second = tree.pred.neighbour(position as CsrIndex, k: 1)
 
 		if first == second 'oneBlockTwice'
 			return false
@@ -47,14 +47,14 @@ export type GuardedAccessJoinReader
 
 	// Whether `slow` and `fast` are the then and else arms of one bound guard on `length@8`, each with
 	// that guard as its only way in, the slow one calling the accessor and succeeding into the join.
-	function armsJoin(module StdModule, func IrFunction, tree StdDominatorTree, reader StdShapeReader, position BlockRefIndex, slow BlockRefIndex, fast BlockRefIndex) returns bool
+	function armsJoin(module StdModule, func IrFunction, tree StdDominatorTree, reader StdShapeReader, position ElementIndex, slow ElementIndex, fast ElementIndex) returns bool
 		if tree.pred.degree(slow as CsrIndex) != 1 or tree.pred.degree(fast as CsrIndex) != 1 'anArmHasAnotherWayIn'
 			return false
 		end 'anArmHasAnotherWayIn'
 
-		let guardPosition = tree.pred.neighbour(slow as CsrIndex, k: 0) as BlockRefIndex
+		let guardPosition = tree.pred.neighbour(slow as CsrIndex, k: 0)
 
-		if tree.pred.neighbour(fast as CsrIndex, k: 0) as BlockRefIndex != guardPosition 'differentGuards'
+		if tree.pred.neighbour(fast as CsrIndex, k: 0) != guardPosition 'differentGuards'
 			return false
 		end 'differentGuards'
 
@@ -88,7 +88,7 @@ export type GuardedAccessJoinReader
 
 	// Whether the slow arm exits by testing, against zero, the error flag of a `tryCall` to an accessor
 	// that succeeds only in bounds on the guard's record and index, with the join on the success side.
-	function slowArmSucceedsIntoJoin(module StdModule, func IrFunction, reader StdShapeReader, position BlockRefIndex, slow BlockRefIndex) returns bool
+	function slowArmSucceedsIntoJoin(module StdModule, func IrFunction, reader StdShapeReader, position ElementIndex, slow ElementIndex) returns bool
 		let slowBlock = module.blockAtPosition(func, position: slow)
 
 		if not closingCompareOf(module, block: slowBlock, branch: self.slowBranch, reader: reader) 'noTestCloses'

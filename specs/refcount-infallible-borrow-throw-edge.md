@@ -50,7 +50,7 @@ read hands the reader its own `+1`).
 An infallible cursor borrow dropped on a sibling `advance()` throw edge must not
 release the collection's element, or the array teardown double-frees it.
 ```maxon
-typealias Tag = int(0 to u64.max)
+typealias Tag = int(0 to u64.max) implements ElementIndex
 
 type Item
 	export var name as String

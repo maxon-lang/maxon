@@ -882,7 +882,7 @@ end 'launder'
 
 function main() returns ExitCode
 	let arr = [10, 20, 30]
-	let val = try arr.get(launder(-1)) otherwise 99
+	let val = try arr.get(launder(-1) as ElementIndex) otherwise 99
 	return val
 end 'main'
 ```
@@ -906,7 +906,7 @@ end 'launder'
 
 function main() returns ExitCode
 	var arr = [10, 20, 30]
-	try arr.set(launder(-1), value: 5) otherwise return 99
+	try arr.set(launder(-1) as ElementIndex, value: 5) otherwise return 99
 	return 0
 end 'main'
 ```

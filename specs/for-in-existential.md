@@ -383,11 +383,11 @@ type IntCursor
 	end 'create'
 
 	function current() returns Integer
-		return try self.items.get(self.pos) otherwise 0
+		return try self.items.get(self.pos as ElementIndex) otherwise 0
 	end 'current'
 
 	function advance() throws IterationError
-		if self.pos + 1 >= self.items.count() 'atTheLast'
+		if self.pos + 1 >= (self.items.count() as Integer) 'atTheLast'
 			throw IterationError.exhausted
 		end 'atTheLast'
 		self.pos = self.pos + 1

@@ -1,0 +1,52 @@
+// Test: a-private-alias-of-one-name-implements-a-parent-per-file
+// --- file: a.maxon
+typealias Small = int(0 to 100)
+typealias Id = int(0 to 10) implements Small
+
+function takeSmall(s Small) returns ExitCode
+	return 3 if s > 50 else 4
+end 'takeSmall'
+
+export function checkA() returns ExitCode
+	let i = 7 as Id
+	return takeSmall(i)
+end 'checkA'
+
+// --- file: b.maxon
+typealias Big = int(0 to 1000)
+typealias Id = int(0 to 10) implements Big
+
+function takeBig(b Big) returns ExitCode
+	return 5 if b > 5 else 6
+end 'takeBig'
+
+export function checkB() returns ExitCode
+	let i = 7 as Id
+	return takeBig(i)
+end 'checkB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return checkA() + checkB()
+end 'main'
+---
+ExitCode: 9
+---
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  ternaryfalse:
+    x64.movRegImm32 rax, 4
+  __il_cont:
+    x64.leaRegRegImm32 r8, rax, 5
+  __rc_ok:
+    x64.popReg rbp
+    x64.ret
+}

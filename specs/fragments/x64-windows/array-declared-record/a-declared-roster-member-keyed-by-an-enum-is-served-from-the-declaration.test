@@ -1,0 +1,248 @@
+// Test: a-declared-roster-member-keyed-by-an-enum-is-served-from-the-declaration
+typealias Num = int(0 to 1000)
+
+enum End
+	front
+	back
+end 'End'
+
+type Array uses Element implements BuiltinArrayLiteral
+	export typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function get(side End) returns Element throws ArrayError
+		if side == End.front 'front'
+			return try managed.get(0) otherwise throw ArrayError.indexOutOfBounds
+		end 'front'
+
+		return try managed.get(1) otherwise throw ArrayError.indexOutOfBounds
+	end 'get'
+end 'Array'
+
+typealias NumArray = Array with Num
+
+function main() returns ExitCode
+	var a = NumArray.create()
+	a.push(40 as Num)
+	a.push(2 as Num)
+	return ((try a.get(End.front) otherwise 0) + (try a.get(End.back) otherwise 0)) as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+}
+
+func @Array.get {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rax
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, ifcont
+  front:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rcx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride#11
+  __im_word#9:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#8
+  __im_load#13:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp __im_loaded#12
+  __im_stride#11:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow#8
+  __im_byte#10:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#8
+  __im_load#14:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+  __im_loaded#12:
+    x64.movRegImm32 rsi, 0
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 40]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc equal, critsplit#25
+  __im_empty#15:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow#8
+  critsplit#26:
+    x64.movRegReg rdx, rax
+    x64.jmp __im_cont#7
+  critsplit#25:
+    x64.movRegReg rdx, rax
+    x64.jmp __im_cont#7
+  __im_slow#8:
+    x64.callDirect __managed_get
+    x64.movRegReg rdx, r8
+    x64.movRegReg rsi, r10
+  __im_cont#7:
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, tryok#2
+  tryerr#3:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#2:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __retain_type_param
+    x64.movRegImm32 r10, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rdx, 1
+    x64.loadRegBaseDisp.word64 rax, [rcx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride#20
+  __im_word#18:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rax, 1
+    x64.jcc belowEqual, __im_slow#17
+  __im_load#22:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegImm32 rax, rax, 8
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp __im_loaded#21
+  __im_stride#20:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow#17
+  __im_byte#19:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rax, 1
+    x64.jcc belowEqual, __im_slow#17
+  __im_load#23:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+  __im_loaded#21:
+    x64.movRegImm32 rsi, 0
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 40]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc equal, critsplit#27
+  __im_empty#24:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow#17
+  critsplit#28:
+    x64.movRegReg rdx, rax
+    x64.jmp __im_cont#16
+  critsplit#27:
+    x64.movRegReg rdx, rax
+    x64.jmp __im_cont#16
+  __im_slow#17:
+    x64.callDirect __managed_get
+    x64.movRegReg rdx, r8
+    x64.movRegReg rsi, r10
+  __im_cont#16:
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, tryok#5
+  tryerr#6:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#5:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __retain_type_param
+    x64.movRegImm32 r10, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 2
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 40
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 0
+    x64.leaRegRdata rax, [rip + __layout_Array_Num]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Array.get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.movRegImm32 r12, 0
+    x64.jmp trycont#3
+  tryok#1:
+    x64.movRegReg r12, r8
+  trycont#3:
+    x64.movRegImm32 rdx, 1
+    x64.leaRegRdata rax, [rip + __layout_Array_Num]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Array.get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#4
+  tryerr#5:
+    x64.movRegImm32 rax, 0
+    x64.jmp trycont#6
+  tryok#4:
+    x64.movRegReg rax, r8
+  trycont#6:
+    x64.leaRegRegReg r12, r12, rax
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-declared-roster-member-keyed-by-an-enum-is-served-from-the-declaration.test:37: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -166,7 +166,7 @@ end 'main'
 
 <!-- test: guard-protects-right-side -->
 ```maxon
-typealias Index = int(0 to u64.max)
+typealias Index = int(0 to u64.max) implements ElementIndex
 
 function main() returns ExitCode
 	let arr = [10 as Index, 20 as Index, 30 as Index]

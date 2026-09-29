@@ -15,16 +15,11 @@ typealias BitWordArray = Array with MachineWord
 // addresses the 64-bit word holding it, and from the BYTE counts the object writers deal in: they
 // are all non-negative integers, and naming them alike is how a bit index ends up passed where a
 // word offset belongs.
-export typealias BitIndex = int(0 to u64.max)
-
-typealias BitWordIndex = int(0 to u64.max)
-
-// A number of 64-bit WORDS: a row's width (`wordsPerRow`), a matrix's total size.
-export typealias BitWordCount = int(0 to u64.max)
+export typealias BitIndex = int(0 to u64.max) implements ElementIndex
 
 // A bit's position within ONE 64-bit word. HARD BOUND: there are 64 of them, so a value outside
 // 0..63 is a bug in the word arithmetic, not a legal position.
-export typealias WordBitIndex = int(0 to 63)
+export typealias WordBitIndex = int(0 to 63) implements ElementIndex
 
 // How many bits are SET in one 64-bit word. HARD BOUND at 64 — a full word — which is one MORE
 // than `WordBitIndex` admits, so the two are not interchangeable.
@@ -46,24 +41,24 @@ let PopcountByteSelect = 0xFF
 
 // Words needed to hold `bitCount` bits (ceil-divide, min 1 so an empty row still
 // occupies a word and row arithmetic never touches a zero-width slice).
-export function bitsetWordsFor(bitCount BitIndex) returns BitWordCount
-	let words = ((bitCount + BitsPerWord - 1) shr BitWordShift) as BitWordCount
+export function bitsetWordsFor(bitCount BitIndex) returns ElementIndex
+	let words = ((bitCount + BitsPerWord - 1) shr BitWordShift) as ElementIndex
 	return words if words > 0 else 1
 end 'bitsetWordsFor'
 
-function wordIndexOf(bit BitIndex) returns BitWordIndex
-	return (bit shr BitWordShift) as BitWordIndex
+function wordIndexOf(bit BitIndex) returns ElementIndex
+	return (bit shr BitWordShift) as ElementIndex
 end 'wordIndexOf'
 
 function bitOf(bit BitIndex) returns MachineWord
 	return 1 shl (bit and BitIndexMask)
 end 'bitOf'
 
-function summaryIndexOf(word BitWordIndex) returns BitWordIndex
-	return (word shr BitWordShift) as BitWordIndex
+function summaryIndexOf(word ElementIndex) returns ElementIndex
+	return (word shr BitWordShift) as ElementIndex
 end 'summaryIndexOf'
 
-function summaryBitOf(word BitWordIndex) returns MachineWord
+function summaryBitOf(word ElementIndex) returns MachineWord
 	return 1 shl (word and BitIndexMask)
 end 'summaryBitOf'
 
@@ -90,11 +85,11 @@ export type BitRow
 	// the ask at face value, so a row extended a word at a time is reallocated and copied IN FULL at
 	// every 64-id tick — Θ(wordsPerRow²) over a function. `growFilled` grows capacity geometrically
 	// and zeroes only the words it added.
-	export function widen(wordCount BitWordCount)
+	export function widen(wordCount ElementIndex)
 		let summaryCount = bitsetWordsFor(wordCount as BitIndex)
-		self.words.growFilled(wordCount as ElementIndex, value: 0)
-		self.summary.growFilled(summaryCount as ElementIndex, value: 0)
-		self.topSummary.growFilled(bitsetWordsFor(summaryCount as BitIndex) as ElementIndex, value: 0)
+		self.words.growFilled(wordCount, value: 0)
+		self.summary.growFilled(summaryCount, value: 0)
+		self.topSummary.growFilled(bitsetWordsFor(summaryCount as BitIndex), value: 0)
 	end 'widen'
 
 	export function test(bit BitIndex) returns bool
@@ -172,13 +167,13 @@ export type BitRow
 
 			while topRemaining != 0 'eachOccupiedSummaryWord'
 				let lowestSummary = topRemaining and -topRemaining
-				let s = ((t shl BitWordShift) + trailingZeroCount(lowestSummary)) as BitWordIndex
+				let s = ((t shl BitWordShift) + trailingZeroCount(lowestSummary)) as ElementIndex
 				var remaining = try self.summary.get(s) otherwise panic("BitRow.collect: summary word {s} out of range")
 				visited = visited + 1
 
 				while remaining != 0 'eachOccupiedWord'
 					let lowest = remaining and -remaining
-					let idx = ((s shl BitWordShift) + (trailingZeroCount(lowest) as BitWordIndex)) as BitWordIndex
+					let idx = ((s shl BitWordShift) + (trailingZeroCount(lowest))) as ElementIndex
 					visited = visited + 1
 					appendSetBitsOfWord(try self.words.get(idx) otherwise panic("BitRow.collect: word {idx} out of range"), bitBase: (idx shl BitWordShift) as BitIndex, out: out)
 					remaining = remaining and (remaining - 1)
@@ -200,13 +195,13 @@ export type BitRow
 
 			while topRemaining != 0 'eachOccupiedSummaryWord'
 				let lowestSummary = topRemaining and -topRemaining
-				let s = ((t shl BitWordShift) + trailingZeroCount(lowestSummary)) as BitWordIndex
+				let s = ((t shl BitWordShift) + trailingZeroCount(lowestSummary)) as ElementIndex
 				var remaining = try self.summary.get(s) otherwise panic("BitRow.clear: summary word {s} out of range")
 				visited = visited + 1
 
 				while remaining != 0 'eachOccupiedWord'
 					let lowest = remaining and -remaining
-					let idx = ((s shl BitWordShift) + (trailingZeroCount(lowest) as BitWordIndex)) as BitWordIndex
+					let idx = ((s shl BitWordShift) + (trailingZeroCount(lowest))) as ElementIndex
 					visited = visited + 1
 					try self.words.set(idx, value: 0) otherwise panic("BitRow.clear: set OOB at word {idx} of {self.words.count()}")
 					remaining = remaining and (remaining - 1)
@@ -226,7 +221,7 @@ export type BitRow
 	// are LIVENESS data, so a bit left standing is a wrong live set, hence a wrong victim and a
 	// silently wrong program. "The row is empty" is checkable where "exactly the bits a fill could
 	// have set" is an argument.
-	export function reset(wordCount BitWordCount)
+	export function reset(wordCount ElementIndex)
 		self.widen(wordCount)
 		self.clear()
 	end 'reset'
@@ -257,9 +252,9 @@ export type BitRow
 	export function requireSummaryIsExact(what String)
 		for w in 0 upto self.words.count() 'eachWord'
 			let word = try self.words.get(w) otherwise panic("BitRow.requireSummaryIsExact: word {w} out of range")
-			let s = summaryIndexOf(w as BitWordIndex)
+			let s = summaryIndexOf(w as ElementIndex)
 			let sw = try self.summary.get(s) otherwise panic("BitRow.requireSummaryIsExact: summary word {s} out of range for word {w}")
-			let summarised = (sw and summaryBitOf(w as BitWordIndex)) != 0
+			let summarised = (sw and summaryBitOf(w as ElementIndex)) != 0
 
 			if summarised != (word != 0) 'summaryDisagrees'
 				panic("{what}: summary bit for word {w} says {summarised} but the word is {word} — a set bit the enumeration cannot reach, or an empty word it walks for nothing")
@@ -268,9 +263,9 @@ export type BitRow
 
 		for s in 0 upto self.summary.count() 'eachSummaryWord'
 			let summaryWord = try self.summary.get(s) otherwise panic("BitRow.requireSummaryIsExact: summary word {s} out of range")
-			let t = summaryIndexOf(s as BitWordIndex)
+			let t = summaryIndexOf(s as ElementIndex)
 			let tw = try self.topSummary.get(t) otherwise panic("BitRow.requireSummaryIsExact: top-summary word {t} out of range for summary word {s}")
-			let summarised = (tw and summaryBitOf(s as BitWordIndex)) != 0
+			let summarised = (tw and summaryBitOf(s as ElementIndex)) != 0
 
 			if summarised != (summaryWord != 0) 'topSummaryDisagrees'
 				panic("{what}: top-summary bit for summary word {s} says {summarised} but that summary word is {summaryWord} — an occupied row word the enumeration cannot reach, or an empty summary word it walks for nothing")
@@ -471,7 +466,7 @@ end 'runtimeFrameSlots'
 // A number of registers, or of simultaneously-live values (register PRESSURE) — the
 // quantity the E5001 feasibility test compares against the pool size. Distinct in
 // PURPOSE from a byte count or a CFG index even though all are non-negative ints.
-export typealias RegCount = int(0 to u64.max)
+export typealias RegCount = int(0 to u64.max) implements ElementIndex
 
 // A PHYSICAL REGISTER NUMBER: an `X64Register`'s raw value, and the key every register mask, the
 // coloring column and the parallel-move plans are stated in.
@@ -486,7 +481,7 @@ export typealias RegCount = int(0 to u64.max)
 // It was `MachineWord` — the alias for a raw 64-bit word, which is also what a `movRegImm`
 // IMMEDIATE and a bitset WORD are. A register number and a 64-bit constant are not the same kind
 // of thing, and this is the narrowest range in the allocator, so it is the one worth stating.
-export typealias RegNum = int(0 to 63)
+export typealias RegNum = int(0 to 63) implements ElementIndex
 
 // The FIRST XMM's register number in the X64 file — its GPR/XMM boundary, and the bit that
 // classifies one x64 register. Named because `regClassOf` and `x64RegisterFile` would otherwise
@@ -525,7 +520,7 @@ let FirstXmmRegisterNumber = 16 as RegNum
 export function assertRegisterFileMatchesEnum()
 	let x64File = x64RegisterFile()
 
-	if x64File.size != X64Register.allCases.count() 'fileSize'
+	if x64File.size != X64Register.allCases.count() as RegCount 'fileSize'
 		panic("assertRegisterFileMatchesEnum: x64RegisterFile().size is {x64File.size} but the X64Register enum has {X64Register.allCases.count()} cases — every x64 class mask is now the wrong width, so a register outside it is unaddressable and the caller-saved clobber assert drifts. Move x64RegisterFile().size and the enum together.")
 	end 'fileSize'
 

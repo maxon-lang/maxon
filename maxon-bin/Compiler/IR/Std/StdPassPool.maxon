@@ -44,12 +44,9 @@ typealias StdPassWorkerHandleArray = Array with StdPassWorker.handle
 // through `LandingSlots.slotOf`.
 typealias DerivedOriginsArray = Array with DerivedOrigins
 
-// A position in the schedule the fan-out runs.
-typealias StepIndex = int(0 to u64.max)
-
 // The pool runs every member from the first function of the module; `runStdPassesOverTheBand` runs the
 // same members from the index the appended band begins at.
-let WholeModuleFirstFunction = 0 as FuncIndex
+let WholeModuleFirstFunction = 0 as ElementIndex
 
 // ⭐ **THE SCHEDULE'S STEPS — the fan-out's members as the pipeline schedules them and a worker receives
 // them.** A `PassKind` is a union, which may neither hold its own kind as a payload nor cross to a
@@ -192,7 +189,7 @@ module type StdPassWorker
 	end 'runSteps'
 
 	// One step, over the unit's one function.
-	function runStep(k StepIndex, unitModule StdModule, origins DerivedOrigins, answer VersioningAnswer)
+	function runStep(k ElementIndex, unitModule StdModule, origins DerivedOrigins, answer VersioningAnswer)
 		var tally = try self.tallies.get(k) otherwise panic("StdPassWorker.runStep: tallies.get OOB at {k} — one tally per step, pushed together at create")
 		answer = runFanOutStep(try self.steps.get(k) otherwise panic("StdPassWorker.runStep: steps.get OOB at {k}"), module: unitModule, funcIndex: UnitFunctionIndex, tally: tally, origins: origins, reducesDivision: self.reducesDivision, budget: self.budget, answer: answer)
 	end 'runStep'
@@ -210,7 +207,7 @@ end 'StdPassWorker'
 // `refineVersionedRanges` visits exactly the functions `unswitchInvariantGuards` rewrote. A driver that
 // cannot carry the answer between two steps of one function hands `unasked` and earns the panic naming the
 // pairing, which is what keeps the band schedule from holding the pair.
-function runFanOutStep(workspace StepWorkspace, module StdModule, funcIndex FuncIndex, tally StdPassTally, origins DerivedOrigins, reducesDivision bool, budget HoistPressureBudget, answer VersioningAnswer) returns VersioningAnswer
+function runFanOutStep(workspace StepWorkspace, module StdModule, funcIndex ElementIndex, tally StdPassTally, origins DerivedOrigins, reducesDivision bool, budget HoistPressureBudget, answer VersioningAnswer) returns VersioningAnswer
 	match workspace 'step'
 		blockArgPrune then tally.removedBlockArgs = tally.removedBlockArgs + (pruneDeadBlockArgsInFunc(module, func: module.getFunc(funcIndex)) as TallyCount)
 		blockArgFold then tally.removedBlockArgs = tally.removedBlockArgs + (elimTrivialBlockArgsInFunc(module, func: module.getFunc(funcIndex)) as TallyCount)
@@ -231,7 +228,7 @@ end 'runFanOutStep'
 
 // The division reduction is a no-op on a target with no high-multiply lowering — the same gate the
 // serial entry asks of the compile's target, asked once at `spawn`.
-function reduceDivisionsIfLowered(module StdModule, funcIndex FuncIndex, reduces bool, reduction DivisionReduction, magic DivisionMagic, def StdFoldableDef)
+function reduceDivisionsIfLowered(module StdModule, funcIndex ElementIndex, reduces bool, reduction DivisionReduction, magic DivisionMagic, def StdFoldableDef)
 	if not reduces 'targetCannotSpellTheMultiply'
 		return
 	end 'targetCannotSpellTheMultiply'
@@ -246,7 +243,7 @@ end 'versioningAnswerOf'
 // The second range refinement, over the shape the versioning made — for exactly the functions
 // `unswitchInFunc` answered it rewrote. A schedule that reaches this step before that one has no answer
 // to read, and says so rather than visiting nothing.
-function refineVersionedRangesInFunc(module StdModule, funcIndex FuncIndex, scratch RangeScratch, answer VersioningAnswer)
+function refineVersionedRangesInFunc(module StdModule, funcIndex ElementIndex, scratch RangeScratch, answer VersioningAnswer)
 	match answer 'answer'
 		unasked then panic("refineVersionedRanges: the schedule reached the second range refinement before `unswitchInvariantGuards` answered which functions it rewrote — that pass scopes this one and must precede it")
 		leftAlone then return
@@ -276,7 +273,7 @@ end 'StdPassWorkerReport'
 // (`PassPipeline.requireFanOutMembership`).
 export function runStdPassesOnAWorkerPool(project Project, module StdModule, members StdFanOutStepArray)
 	let funcCount = module.funcCount()
-	let sizing = PoolSizing.forJobs(funcCount as PoolJob)
+	let sizing = PoolSizing.forJobs(funcCount)
 	let workerCount = sizing.workerCount
 	let reducesDivision = targetLowersMulHigh(project.target.cpu)
 
@@ -291,7 +288,7 @@ export function runStdPassesOnAWorkerPool(project Project, module StdModule, mem
 	end 'eachStep'
 
 	var landedOrigins = DerivedOriginsArray.create()
-	var slots = LandingSlots.create(funcCount as PoolJob)
+	var slots = LandingSlots.create(funcCount)
 
 	if funcCount > 0 'somethingToRun'
 		let poolSize = workerCount as PoolSize
@@ -344,7 +341,7 @@ end 'runStdPassesOnAWorkerPool'
 // means step k finishes every function before step k+1 begins, so what `unswitchInvariantGuards` answered
 // about a function cannot reach `refineVersionedRanges` on it; that pass panics on `unasked` rather than
 // visiting nothing, which is what keeps the pair out of a band schedule instead of a comment doing it.
-export function runStdPassesOverTheBand(project Project, module StdModule, members StdFanOutStepArray, firstFuncIndex FuncIndex)
+export function runStdPassesOverTheBand(project Project, module StdModule, members StdFanOutStepArray, firstFuncIndex ElementIndex)
 	let funcCount = module.funcCount()
 
 	for step in members 'eachScheduledStep'
@@ -364,7 +361,7 @@ export function runStdPassesOverTheBand(project Project, module StdModule, membe
 		announceStep(step, into: irLog, firstFuncIndex: firstFuncIndex, funcCount: funcCount, reducesDivision: reducesDivision)
 
 		// An INDEX loop over a range this driver was handed, for the borrow rule `runFanOutStep` states.
-		for funcIndex in firstFuncIndex upto (funcCount as FuncIndex) 'eachFunc'
+		for funcIndex in firstFuncIndex upto funcCount 'eachFunc'
 			var origins = DerivedOrigins.create()
 			var answer = VersioningAnswer.unasked
 			answer = runFanOutStep(workspace, module: module, funcIndex: funcIndex, tally: tally, origins: origins, reducesDivision: reducesDivision, budget: budget, answer: answer)
@@ -465,7 +462,7 @@ function drainTheStdPool(module StdModule, workers StdPassWorkerHandleArray, wor
 		let ready = __Builtins.awaitAny(replies)
 		let freedWorker = dispatch.workerAt(ready)
 		let job = dispatch.land(ready, outstanding: replies.count())
-		let funcIndex = job as FuncIndex
+		let funcIndex = job
 		let reply = try replies.remove(ready) otherwise panic("drainTheStdPool: replies.remove({ready}) — `awaitAny` answered a slot of this very array")
 
 		let body = try await reply otherwise panic("{workerGoneMessage("drainTheStdPool", subject: "the worker running function {funcIndex}")}")
@@ -483,13 +480,13 @@ end 'drainTheStdPool'
 // recorded the job in. The unit is built INSIDE the argument and stored nowhere, which is E3138's rule
 // and not a style: the one shape the check admits is a call whose every `return` is a record literal
 // (`StdUnit.extract`).
-function dispatchOneStdJob(module StdModule, workers StdPassWorkerHandleArray, workerSlot PoolSlot, dispatch PoolDispatch, replies StdPassReplyArray)
+function dispatchOneStdJob(module StdModule, workers StdPassWorkerHandleArray, workerSlot ElementIndex, dispatch PoolDispatch, replies StdPassReplyArray)
 	var worker = try workers.get(workerSlot) otherwise panic("dispatchOneStdJob: workers.get OOB at {workerSlot} below count {workers.count()}")
-	let funcIndex = dispatch.nextJob(workerSlot) as FuncIndex
+	let funcIndex = dispatch.nextJob(workerSlot)
 	replies.push(worker.run(StdUnit.extract(module, func: module.getFunc(funcIndex), funcIndex: funcIndex)))
 end 'dispatchOneStdJob'
 
-function announceAndSummarizeSteps(members StdFanOutStepArray, tallies StdPassTallyArray, funcCount FuncCount, reducesDivision bool)
+function announceAndSummarizeSteps(members StdFanOutStepArray, tallies StdPassTallyArray, funcCount ElementIndex, reducesDivision bool)
 	if not compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.debug) 'quiet'
 		return
 	end 'quiet'
@@ -503,7 +500,7 @@ function announceAndSummarizeSteps(members StdFanOutStepArray, tallies StdPassTa
 	end 'eachStep'
 end 'announceAndSummarizeSteps'
 
-function announceStep(step StdFanOutStep, into Logger, firstFuncIndex FuncIndex, funcCount FuncCount, reducesDivision bool)
+function announceStep(step StdFanOutStep, into Logger, firstFuncIndex ElementIndex, funcCount ElementIndex, reducesDivision bool)
 	if not into.enabled(LogLevel.debug) 'quiet'
 		return
 	end 'quiet'
@@ -526,7 +523,7 @@ function announceStep(step StdFanOutStep, into Logger, firstFuncIndex FuncIndex,
 	end 'headline'
 end 'announceStep'
 
-function summarizeStep(step StdFanOutStep, into Logger, tally StdPassTally, funcCount FuncCount)
+function summarizeStep(step StdFanOutStep, into Logger, tally StdPassTally, funcCount ElementIndex)
 	if not into.enabled(LogLevel.debug) 'quiet'
 		return
 	end 'quiet'

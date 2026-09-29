@@ -135,8 +135,8 @@ typealias FixturePathArray = Array with FilePath
 // so there is nothing to go red — which is why it is asked once, here, of the corpus as a whole.
 test 'the fixture corpus is covered case for case'
 	// Both sides are bound to locals first so the two values a reader compares sit on lines of their own.
-	let cases = countFixtureCases() as AssertedInt
-	let files = countCaseFiles() as AssertedInt
+	let cases = countFixtureCases()
+	let files = countCaseFiles()
 	Expect.equal(files, expected: cases, message: "the corpus under {FixturesDir} and the case files in {ProjectDir} do not correspond one to one. Each case directory needs a `<case>{TestSourceSuffix}` beside {SharedHelperFileName}; a case with no test proves nothing and reads exactly like one that passed.")
 end 'the fixture corpus is covered case for case'
 
@@ -191,9 +191,9 @@ export function checkFixture(caseName String) throws TestFailure
 	let run = runFixture(caseName)
 
 	// Bound to locals first for `the fixture corpus is covered case for case`'s reason.
-	let expectedExit = expectedExitCodeIn(caseDir, caseName: caseName) as AssertedInt
-	let observedExit = run.exitCode() as AssertedInt
-	try Expect.equal(observedExit, expected: expectedExit, message: "'{caseName}' exited differently from its {ExpectedExitFileName}. The exit code is the half of this report a SCRIPT reads, and the half that decides whether a red run stops anything. It printed: {run.stdout}")
+	let expectedExit = expectedExitCodeIn(caseDir, caseName: caseName)
+	let observedExit = run.exitCode()
+	try Expect.equal(observedExit, expected: expectedExit as ExitInt, message: "'{caseName}' exited differently from its {ExpectedExitFileName}. The exit code is the half of this report a SCRIPT reads, and the half that decides whether a red run stops anything. It printed: {run.stdout}")
 	let expectedStdout = requiredFixtureText(caseDir, fileName: ExpectedStdoutFileName, caseName: caseName, holds: "the exact stdout this case's run must print")
 	let observedStdout = run.stdout
 	try Expect.equal(observedStdout, expected: expectedStdout)

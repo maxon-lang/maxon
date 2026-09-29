@@ -276,7 +276,7 @@ function cycle(rounds Seed) returns Seed
 		for k in 0 upto 4000 'alloc'
 			wave.push(build(((r * 4000) + k) as Seed))
 		end 'alloc'
-		seen = (seen + wave.count()) as Seed
+		seen = (seen + (wave.count() as Seed)) as Seed
 		// Dropping the whole wave empties every span of this class: each one parks on mcentral with
 		// its owner cleared, and the next round's allocations must take them back and re-own them.
 		wave = Bufs.create()

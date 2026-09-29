@@ -101,18 +101,18 @@ module function functionsSeedsCanRun(funcNames FunctionNameIndex, survey Service
 
 	for (position, seeded) in seeds.withIterator() 'eachSeed'
 		if seeded 'aSeed'
-			walk.reach(position.index() as FuncIndex)
+			walk.reach(position.index())
 		end 'aSeed'
 	end 'eachSeed'
 
 	var head = 0 as CsrIndex
 
-	while head < walk.worklist.count() 'drain'
-		let node = try walk.worklist.get(head) otherwise panic("functionsSeedsCanRun: worklist.get OOB at {head} below its own count")
+	while head < walk.worklist.count() as CsrIndex 'drain'
+		let node = try walk.worklist.get(head as ElementIndex) otherwise panic("functionsSeedsCanRun: worklist.get OOB at {head} below its own count")
 		head = head + 1
 
 		for k in 0 upto survey.calleeGraph.degree(node as CsrIndex) 'eachCallee'
-			walk.reach(survey.calleeGraph.neighbour(node as CsrIndex, k: k) as FuncIndex)
+			walk.reach(survey.calleeGraph.neighbour(node as CsrIndex, k: k))
 		end 'eachCallee'
 
 		survey.widenFrom(node, walk: walk, widening: widening, dispatch: dispatch, funcIndexByName: funcNames.byName)
@@ -132,7 +132,7 @@ export type CalleeWalk
 		return Self{reached: reached, worklist: FuncIndexArray.create()}
 	end 'create'
 
-	export function reach(funcIndex FuncIndex)
+	export function reach(funcIndex ElementIndex)
 		let already = try self.reached.get(funcIndex) otherwise panic("CalleeWalk.reach: reached.get OOB at {funcIndex} — every index comes from the list the survey swept")
 
 		if already 'reachedAlready'
@@ -159,17 +159,17 @@ end 'aReachedFunctionDispatchesBlindly'
 
 // What ONE function can run. Error path only — the widened answer above says a message reaches a run-time
 // dispatch without saying whose, and this is what asks each message in turn.
-function coneOf(survey ServiceProgramSurvey, funcIndex FuncIndex) returns BoolArray
+function coneOf(survey ServiceProgramSurvey, funcIndex ElementIndex) returns BoolArray
 	return reverseReachabilityMark(survey.calleeGraph, seeds: oneHotSeeds(survey, funcIndex: funcIndex))
 end 'coneOf'
 
 // Who can run ONE function — the same graph rowed the way every other summary in the compiler rows it.
 // Error path only, for `blameForSharedGlobalAccess`'s stated reason.
-function callersReaching(survey ServiceProgramSurvey, funcIndex FuncIndex) returns BoolArray
+function callersReaching(survey ServiceProgramSurvey, funcIndex ElementIndex) returns BoolArray
 	return markSeededCallers(survey.edges, seeds: oneHotSeeds(survey, funcIndex: funcIndex), nodeCount: survey.funcCount())
 end 'callersReaching'
 
-function oneHotSeeds(survey ServiceProgramSurvey, funcIndex FuncIndex) returns BoolArray
+function oneHotSeeds(survey ServiceProgramSurvey, funcIndex ElementIndex) returns BoolArray
 	var one = FuncIndexArray.create()
 	one.push(funcIndex)
 	return seedsAt(survey, funcIndices: one)
@@ -261,7 +261,7 @@ end 'reportFirstAccessAMessageCanRun'
 // reaches it and carrying the `spawn` that made the type a service as a NOTE — what every whole-program
 // service rule owes (`specs/services.md` §"What the compiler synthesizes"), because the `spawn` may be in
 // another file.
-function reportSharedGlobalAccess(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, survey ServiceProgramSurvey, funcIndex FuncIndex, site ModuleVarAccessSite)
+function reportSharedGlobalAccess(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, survey ServiceProgramSurvey, funcIndex ElementIndex, site ModuleVarAccessSite)
 	let blame = blameForSharedGlobalAccess(survey, funcIndex: funcIndex)
 	let writer = functionAt(funcNames, index: funcIndex)
 	let message = functionAt(funcNames, index: blame.messageIndex)
@@ -274,10 +274,10 @@ end 'reportSharedGlobalAccess'
 // the sentence may not claim a call path when the only thing that reached the writer was the widening, or
 // the author goes looking for a call that is not in their program.
 type SharedGlobalAccessBlame
-	export let messageIndex as FuncIndex
+	export let messageIndex as ElementIndex
 	export let route as SharedGlobalAccessRoute
 
-	static function create(messageIndex FuncIndex, route SharedGlobalAccessRoute) returns SharedGlobalAccessBlame
+	static function create(messageIndex ElementIndex, route SharedGlobalAccessRoute) returns SharedGlobalAccessBlame
 		return Self{messageIndex: messageIndex, route: route}
 	end 'create'
 end 'SharedGlobalAccessBlame'
@@ -300,7 +300,7 @@ end 'SharedGlobalAccessRoute'
 // asks the question the other way round — who can reach the writer? — and the earliest message in that set
 // is the answer. Earliest by function index, which is declaration order, so it is the one the author wrote
 // first rather than whatever a worklist happened to drain first.
-function blameForSharedGlobalAccess(survey ServiceProgramSurvey, funcIndex FuncIndex) returns SharedGlobalAccessBlame
+function blameForSharedGlobalAccess(survey ServiceProgramSurvey, funcIndex ElementIndex) returns SharedGlobalAccessBlame
 	if survey.isAMessage(funcIndex) 'theWriterIsTheMessage'
 		return SharedGlobalAccessBlame.create(funcIndex, route: SharedGlobalAccessRoute.itself)
 	end 'theWriterIsTheMessage'
@@ -322,7 +322,7 @@ end 'blameForSharedGlobalAccess'
 // the widening is what marked it — and the widening fires exactly because some message's own cone holds a
 // run-time dispatch. One forward closure per MESSAGE, on the error path of a program with one or two
 // services; the earliest such message is the one named, for `blameForSharedGlobalAccess`'s ordering reason.
-function messageReachingAnUnnameableDispatch(survey ServiceProgramSurvey) returns FuncIndex
+function messageReachingAnUnnameableDispatch(survey ServiceProgramSurvey) returns ElementIndex
 	for candidate in 0 upto survey.funcCount() 'eachMessage'
 		if not survey.isAMessage(candidate) 'notAMessage'
 			continue
@@ -393,7 +393,7 @@ function sharedGlobalAccessVerb(access ModuleVarAccess) returns String
 	end 'access'
 end 'sharedGlobalAccessVerb'
 
-function reachedAt(reached BoolArray, funcIndex FuncIndex) returns bool
+function reachedAt(reached BoolArray, funcIndex ElementIndex) returns bool
 	return try reached.get(funcIndex) otherwise panic("reachedAt: reached.get OOB at {funcIndex} below count {reached.count()} — every function index comes from the list the closure was sized to")
 end 'reachedAt'
 
@@ -461,10 +461,10 @@ end 'checkSpawnsDuringGlobalInitialization'
 // ⭐ **THE GLOBAL WHOSE INITIALIZER REACHES `spawnerIndex`.** Error path only. The widened closure of every
 // initializer together is the one that marked the spawner, and each target a widening adds is added by some one
 // initializer's closure, so one initializer reaches it.
-function initializerReaching(project Project, funcNames FunctionNameIndex, survey ServiceProgramSurvey, dispatch WitnessDispatchTargets, initializers FuncIndexRows, spawnerIndex FuncIndex) returns ManagedGlobal
+function initializerReaching(project Project, funcNames FunctionNameIndex, survey ServiceProgramSurvey, dispatch WitnessDispatchTargets, initializers FuncIndexRows, spawnerIndex ElementIndex) returns ManagedGlobal
 	for (position, callees) in initializers.withIterator() 'eachGlobal'
 		if reachedAt(functionsSeedsCanRun(funcNames, survey: survey, seeds: seedsAt(survey, funcIndices: callees), dispatch: dispatch), funcIndex: spawnerIndex) 'itsInitializerReachesIt'
-			return managedGlobalAt(project, index: position.index() as SlotSubjectIndex)
+			return managedGlobalAt(project, index: position.index())
 		end 'itsInitializerReachesIt'
 	end 'eachGlobal'
 
@@ -483,7 +483,7 @@ module function checkLetInitializersReachNoVar(project Project, funcNames Functi
 	var everyLetsCallees = FuncIndexArray.create()
 
 	for (position, row) in initializers.withIterator() 'eachGlobal'
-		if not managedGlobalAt(project, index: position.index() as SlotSubjectIndex).isAVar() 'aLet'
+		if not managedGlobalAt(project, index: position.index()).isAVar() 'aLet'
 			everyLetsCallees.append(row)
 		end 'aLet'
 	end 'eachGlobal'
@@ -492,7 +492,7 @@ module function checkLetInitializersReachNoVar(project Project, funcNames Functi
 		let userIndex = survey.globalUses.sites.funcAt(useRow)
 
 		for (position, row) in initializers.withIterator() 'eachGlobal'
-			let global = managedGlobalAt(project, index: position.index() as SlotSubjectIndex)
+			let global = managedGlobalAt(project, index: position.index())
 
 			if not global.isAVar() and reachedAt(functionsSeedsCanRun(funcNames, survey: survey, seeds: seedsAt(survey, funcIndices: row), dispatch: dispatch), funcIndex: userIndex) 'thisLetReachesIt'
 				reportLetInitializerReachingAVar(project, funcNames: funcNames, survey: survey, letGlobal: global, useRow: useRow)
@@ -601,7 +601,7 @@ module function checkRegistryReachedFromInitializers(project Project, module Max
 			end 'notRunByThisInitializer'
 
 			let site = try project.registryUseSites.get(use.opIndex) otherwise panic("checkRegistryReachedFromInitializers: op {use.opIndex} was found in `registryUseSites` by `registryUsesByFunction`")
-			let global = managedGlobalAt(project, index: position.index() as SlotSubjectIndex)
+			let global = managedGlobalAt(project, index: position.index())
 			let range = project.opRanges.get(use.opIndex)
 			reportPositioned(project, code: ErrorCode.registryReachedFromGlobalInitializer, message: registryReachedFromInitializerMessage(site.key, member: site.member, globalName: global.declName), line: range.line, column: range.column, filePath: functionAt(funcNames, index: use.funcIndex).sourceFilePath)
 			return
@@ -612,10 +612,10 @@ module function checkRegistryReachedFromInitializers(project Project, module Max
 end 'checkRegistryReachedFromInitializers'
 
 type RegistryUseInFunction
-	export let funcIndex as FuncIndex
-	export let opIndex as OpIndex
+	export let funcIndex as ElementIndex
+	export let opIndex as ElementIndex
 
-	static function create(funcIndex FuncIndex, opIndex OpIndex) returns RegistryUseInFunction
+	static function create(funcIndex ElementIndex, opIndex ElementIndex) returns RegistryUseInFunction
 		return Self{funcIndex: funcIndex, opIndex: opIndex}
 	end 'create'
 end 'RegistryUseInFunction'
@@ -634,7 +634,7 @@ function registryUsesByFunction(project Project, module MaxonModule, funcNames F
 	return registryUses
 end 'registryUsesByFunction'
 
-function firstRegistryUseIn(project Project, module MaxonModule, func IrFunction) returns OpIndex throws MapError
+function firstRegistryUseIn(project Project, module MaxonModule, func IrFunction) returns ElementIndex throws MapError
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("firstRegistryUseIn: blockRef from func.blockRefs not in module.blocks")
 
@@ -668,7 +668,7 @@ function everyInitializerCallee(initializers FuncIndexRows) returns FuncIndexArr
 	return callees
 end 'everyInitializerCallee'
 
-function managedGlobalAt(project Project, index SlotSubjectIndex) returns ManagedGlobal
+function managedGlobalAt(project Project, index ElementIndex) returns ManagedGlobal
 	return try project.managedGlobals.get(index) otherwise panic("managedGlobalAt: managedGlobals.get OOB at {index} — every position is one `__module_init` was built over")
 end 'managedGlobalAt'
 
@@ -684,7 +684,7 @@ function seedsAt(survey ServiceProgramSurvey, funcIndices FuncIndexArray) return
 	return seeds
 end 'seedsAt'
 
-function functionAt(funcNames FunctionNameIndex, index FuncIndex) returns IrFunction
+function functionAt(funcNames FunctionNameIndex, index ElementIndex) returns IrFunction
 	return try funcNames.functions.get(index) otherwise panic("functionAt: functions.get OOB at {index} — every index comes from the list the survey swept")
 end 'functionAt'
 
@@ -692,7 +692,7 @@ end 'functionAt'
 module union RunTimeTarget
 	named
 	closureValue
-	witnessSlot(methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex)
+	witnessSlot(methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex)
 end 'RunTimeTarget'
 
 // Does this op hand control somewhere no NAME can be recovered for, and through which door? The bands are

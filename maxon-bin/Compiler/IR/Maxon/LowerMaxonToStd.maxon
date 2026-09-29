@@ -21,7 +21,7 @@
 // An interface's transitive witness-slot list, held per interface for the module being lowered — keyed by
 // the declaration-order handle a `witnessDispatch` names its interface by, so the memo is asked with the
 // very scalar the op carries and needs no name round-trip. See `MaxonToStdLowering.witnessSlotsOf`.
-typealias WitnessSlotListMemo = Map with (InterfaceDeclIndex, CollectedInterfaceMethodArray)
+typealias WitnessSlotListMemo = Map with (ElementIndex, CollectedInterfaceMethodArray)
 
 // The `.rdata` label prefix a module-level constructed-struct `let`'s box registers under — distinct from
 // `__str_rec_` and `__barr_rec_` so a reader of the section can tell a user struct from the two
@@ -75,6 +75,7 @@ export function valueTagToStdType(tag ValueTypeTag) returns StdType
 		boolean then return StdType.i1
 		integer or
 			named or
+
 			// Every reference is one machine word: a struct or generic instance is its box's address, a
 			// String or Character its record's, a function value a `.text` code address, a `cstring` a
 			// raw address. A type parameter is an opaque word, which is what lets a generic type's method
@@ -624,11 +625,7 @@ end 'NullWitnessArgRequest'
 
 typealias NullWitnessArgRequestArray = Array with NullWitnessArgRequest
 
-// An index into ONE function's `FunctionRangeChecks.sites`. Distinct from `BlockOpPos` (a position
-// WITHIN a block) and from `OpIndex` (a position in the module's flat ops array) — the three are all
-// integers and all three appear together in `RangeSiteWalk`.
-typealias RangeSiteIndex = int(0 to u64.max)
-typealias RangeSiteIndexArray = Array with RangeSiteIndex
+typealias RangeSiteIndexArray = Array with ElementIndex
 
 // ⭐⭐ **HANDS EACH OF ONE FUNCTION'S RANGE-CHECK SITES THE STD `opRefs` POSITION ITS VALUE COMES TO
 // REST AT — the translation only this pass can make.** The parser records a site's position as a
@@ -689,7 +686,7 @@ type RangeSiteWalk
 		checks.positionsResolved = true
 
 		self.runEnd.clear()
-		self.runEnd.growFilled(blockCount as ElementIndex, value: 0)
+		self.runEnd.growFilled(blockCount, value: 0)
 
 		for site in checks.sites 'countPerBlock'
 			let seen = try self.runEnd.get(site.block) otherwise panic("RangeSiteWalk.beginFunction: a site names block id {site.block}, outside the function's id space of {blockCount}")
@@ -697,8 +694,8 @@ type RangeSiteWalk
 		end 'countPerBlock'
 
 		self.cursor.clear()
-		self.cursor.reserve(blockCount as ElementIndex)
-		var total = 0 as RangeSiteIndex
+		self.cursor.reserve(blockCount)
+		var total = 0 as ElementIndex
 
 		for id in 0 upto blockCount 'accumulate'
 			total = total + (try self.runEnd.get(id) otherwise panic("RangeSiteWalk.beginFunction: runEnd.get OOB at block {id} despite the upto bound"))
@@ -727,7 +724,7 @@ type RangeSiteWalk
 	// Called once per Maxon body op AND once past the last, so a site whose value is spent by the block's
 	// TERMINATOR (a cast feeding the `if` that ends the block) is served at the end of the body rather
 	// than left unserved.
-	function recordAt(blockId BlockId, maxonOpPos BlockOpPos, stdOpPos BlockOpPos)
+	function recordAt(blockId BlockId, maxonOpPos ElementIndex, stdOpPos ElementIndex)
 		if self.order.isEmpty() 'noSitesInThisFunction'
 			return
 		end 'noSitesInThisFunction'
@@ -758,7 +755,7 @@ end 'RangeSiteWalk'
 // left. `recordAt` consumes a run strictly in order, so a run that is out of order would hand an earlier
 // site a LATER position: a guard emitted past the statement it exists to precede, silently, and with the
 // suite still green. The premise is enforced here rather than trusted.
-function requireSiteOrdinalsAscend(sites RangeCheckSiteArray, order RangeSiteIndexArray, at RangeSiteIndex, site RangeCheckSite, runEnd RangeSiteIndexArray)
+function requireSiteOrdinalsAscend(sites RangeCheckSiteArray, order RangeSiteIndexArray, at ElementIndex, site RangeCheckSite, runEnd RangeSiteIndexArray)
 	let runStop = try runEnd.get(site.block) otherwise panic("requireSiteOrdinalsAscend: runEnd.get OOB at block {site.block}, which the placement pass already read in range")
 
 	if at + 1 >= runStop 'lastOfItsRun'
@@ -880,13 +877,16 @@ function registerIfProgramLiteral(op MaxonOp, globalData GlobalDataTable)
 			witnessDispatch or
 			witnessTryDispatch or
 			panicAbortValue or
+
 			// The error-flag encode's only constant is the bias, which the lowering mints for itself.
 			errorFlagEncode or
+
 			// A `spawn`'s bytes are a type name the lowering turns into two symbols, and a send's and a
 			// reply cell's are callee names no `.rdata` blob holds.
 			serviceSpawn or
 			serviceSend or
 			serviceReplyCell or
+
 			// ⚠ An imaged struct record and an imaged string table register at their own lowering: what
 			// each registers is not a blob but interlocking payloads — the allocation header and the box,
 			// or a String record per element, the buffer of addresses over them and the Array record —
@@ -896,6 +896,7 @@ function registerIfProgramLiteral(op MaxonOp, globalData GlobalDataTable)
 			immortalStringTable or
 			covPoint or
 			rawIntrinsic or
+
 			// A witness table is registered by `ensureWitnessTable` when the op is lowered.
 			existentialWitness then break 'op'
 		stringLiteral(_, bytes) then _ = registerStringBlob(globalData, bytes: bytes)
@@ -1124,7 +1125,7 @@ type MaxonToStdLowering
 	// The whole-program Maxon op index of the op being lowered. Published by the block walk, exactly as
 	// `rangeSites` is and for the same reason: an op's SIDE TABLES are keyed by its index, and the walk is
 	// the only thing that knows it.
-	var currentMaxonOpIndex as OpIndex
+	var currentMaxonOpIndex as ElementIndex
 
 	// The per-value EXISTENTIAL-INSTANCE column of the function CURRENTLY being lowered — re-pointed per
 	// function like `valueTags`, from `IrFunction.valueExistentialInstances`. `witnessFormalType` reads the
@@ -1308,8 +1309,8 @@ type MaxonToStdLowering
 	// ⚠ An index past `opRanges` is answered `NoSpanId` rather than refused: the table is recorded at the
 	// merge, so an op minted into the Maxon module after it genuinely HAS no recorded position, and
 	// "belongs to no statement" is the honest answer to give a line table.
-	function spanOf(opIdx OpIndex, file DebugFileId, project Project) returns SpanId
-		if not project.debugInfo or opIdx >= project.opRanges.count() as OpIndex 'noSpan'
+	function spanOf(opIdx ElementIndex, file DebugFileId, project Project) returns SpanId
+		if not project.debugInfo or opIdx >= project.opRanges.count() 'noSpan'
 			return NoSpanId
 		end 'noSpan'
 
@@ -1379,7 +1380,7 @@ type MaxonToStdLowering
 			// `paramCount` counts them, `maxonParamTypes` does not (each is an i64 pointer with no source type).
 			// Grow the Std parameter list to `paramCount` so `emitParams` materializes every incoming register and
 			// the wasm functype covers every slot.
-			for _ in func.maxonParamTypes.count() upto func.paramCount 'envParam'
+			for _ in func.maxonParamTypes.count() as ParamCount upto func.paramCount 'envParam'
 				stdParams.push(StdType.i64)
 			end 'envParam'
 
@@ -1460,7 +1461,7 @@ type MaxonToStdLowering
 			self.currentMaxonReturnType = srcFunc.maxonReturnType
 
 			// The next free ValueId is the count of the dense per-value column the parser handed over.
-			self.nextValueId = srcFunc.valueTags.count()
+			self.nextValueId = srcFunc.valueTags.count() as ValueId
 
 			// Point the range-check site walk at THIS function, so the block walk below can hand each of its
 			// sites the Std position the parser's Maxon ordinal became. See `RangeSiteWalk`.
@@ -1767,8 +1768,8 @@ type MaxonToStdLowering
 		end 's'
 	end 'lowerImmortalStructRecord'
 
-	function emitImmortalStructRecord(result ValueId, nodes ImmortalBoxNodeArray, root ImmortalBoxNodeId, dstBlock IrBlock)
-		let label = self.ensureImmortalBoxNode(nodes, node: root, below: nodes.count() as ImmortalBoxNodeId)
+	function emitImmortalStructRecord(result ValueId, nodes ImmortalBoxNodeArray, root ElementIndex, dstBlock IrBlock)
+		let label = self.ensureImmortalBoxNode(nodes, node: root, below: nodes.count())
 		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: self.globalData.labelBytesOf(label)))
 	end 'emitImmortalStructRecord'
 
@@ -1791,12 +1792,12 @@ type MaxonToStdLowering
 	// is what makes this recursion TERMINATE.** The builder appends a FINISHED node, so every node a
 	// construction named already holds a lower slot (`Parser.pushConstNode`'s discipline, one tier up); an
 	// arena that violated it would describe a box containing itself, which no allocation can be.
-	function ensureImmortalBoxNode(nodes ImmortalBoxNodeArray, node ImmortalBoxNodeId, below ImmortalBoxNodeId) returns String
+	function ensureImmortalBoxNode(nodes ImmortalBoxNodeArray, node ElementIndex, below ElementIndex) returns String
 		if node >= below 'notBelowItsNamer'
 			panic("ensureImmortalBoxNode: node {node} is named from a slot that may only reach below {below}, in a {nodes.count()}-entry arena — the tree is built bottom-up, so a forward reference is a box that contains itself")
 		end 'notBelowItsNamer'
 
-		let entry = try nodes.get(node as ElementIndex) otherwise panic("ensureImmortalBoxNode: node id {node} is outside a {nodes.count()}-entry arena — the op carries the whole tree its root names")
+		let entry = try nodes.get(node) otherwise panic("ensureImmortalBoxNode: node id {node} is outside a {nodes.count()}-entry arena — the op carries the whole tree its root names")
 		var slotLabels = StringArray.create()
 
 		for column in entry.columns 'eachSlot'
@@ -1820,7 +1821,7 @@ type MaxonToStdLowering
 	end 'ensureImmortalBoxNode'
 
 	// The `.rdata` label one pointer slot addresses — the two shapes an image object can be, dispatched once.
-	function immortalBoxSlotLabel(nodes ImmortalBoxNodeArray, below ImmortalBoxNodeId, value ImmortalBoxSlotValue) returns String
+	function immortalBoxSlotLabel(nodes ImmortalBoxNodeArray, below ElementIndex, value ImmortalBoxSlotValue) returns String
 		match value 'slot'
 			emptyArray(elementSize, elementDestroy) then return self.ensureImmortalEmptyArrayRecord(elementSize, elementDestroy: elementDestroy)
 			box(child) then return self.ensureImmortalBoxNode(nodes, node: child, below: below)
@@ -2157,7 +2158,7 @@ type MaxonToStdLowering
 	// free function needs a descriptor, and the caller then panics in `materializeStaticConstructorLayout`
 	// looking for a generic instance to source one from.
 	function functionHasDescriptorParam(func IrFunction) returns bool
-		return func.paramCount > func.maxonParamTypes.count() + countParamsWithTag(func.maxonParamTypes, tag: ValueTypeTag.function) + countParamsWithTag(func.maxonParamTypes, tag: ValueTypeTag.interfaceRef) + self.fixedElementCountParamCountFor(func.name) + self.witnessParamCountForFunc(func)
+		return func.paramCount > func.maxonParamTypes.count() as ParamCount + countParamsWithTag(func.maxonParamTypes, tag: ValueTypeTag.function) + countParamsWithTag(func.maxonParamTypes, tag: ValueTypeTag.interfaceRef) + self.fixedElementCountParamCountFor(func.name) + self.witnessParamCountForFunc(func)
 	end 'functionHasDescriptorParam'
 
 	// ⭐⭐ **DOES `callee` CARRY THE HIDDEN FIXED-ELEMENT-COUNT PARAMETER?** — asked BY NAME, of the
@@ -2570,7 +2571,7 @@ type MaxonToStdLowering
 		// `methodIndex` indexes; the associated block is addressed from that same count and is not part of
 		// it, so widening this word would move every reader's idea of where the methods end.
 		var blob = ByteArray.create()
-		blob.append(scalarImage(methodCount, byteCount: WitnessSlotBytes as BytePos))
+		blob.append(scalarImage(methodCount as ParsedInt, byteCount: WitnessSlotBytes as BytePos))
 		blob.growFilled((WitnessTableHeaderBytes + WitnessSlotBytes * (methodCount + associatedCount)) as ElementIndex, value: 0)
 		_ = self.globalData.registerRdataConstantLabeled(label, bytes: blob, kind: RdataPayloadKind.witnessTable)
 
@@ -2605,7 +2606,7 @@ type MaxonToStdLowering
 			self.globalData.recordFuncAbs64InRdata(self.witnessSlotCallee(typeName, instance: table, slot: slot), rdataLabel: label, offsetInLabel: witnessMethodSlotOffset(i))
 		end 'eachMethod'
 
-		self.stampAssociatedWitnessSlots(typeName, interfaceName: interfaceName, label: label, methodCount: methodCount, associatedCount: associatedCount)
+		self.stampAssociatedWitnessSlots(typeName, interfaceName: interfaceName, label: label, methodCount: methodCount as WitnessMethodIndex, associatedCount: associatedCount)
 		return label
 	end 'ensureWitnessTable'
 
@@ -2790,7 +2791,7 @@ type MaxonToStdLowering
 	// argument's ids are the SIGNATURE index's, not the project's, so resolving a declared name here would
 	// read the wrong interner. See there for the alias spelling a project-interner read answers `shared` for,
 	// and for the legal program it refuses.
-	function constraintArgumentInstance(gid GenericInstanceId, position TypeParamPosition) returns WitnessTableInstance
+	function constraintArgumentInstance(gid GenericInstanceId, position ElementIndex) returns WitnessTableInstance
 		if let instance = try self.signatures.conformerTypeArgInstance(gid, position: position) 'namesAnInstance'
 			return WitnessTableInstance.perInstance(instance)
 		end 'namesAnInstance'
@@ -2884,7 +2885,7 @@ type MaxonToStdLowering
 	// op takes a reference instead: the compiler's return convention promotes a borrowed managed value to an owned
 	// one (`Parser.emitOwnedValueReturn` — *"a borrowed struct/union/instance INCREFS"*), which is the
 	// language's answer to "I need to hold this element", and costs one incref/decref per lowered op.
-	function maxonOpAt(opIdx OpIndex) returns MaxonOp
+	function maxonOpAt(opIdx ElementIndex) returns MaxonOp
 		return try self.maxonModule.ops.get(opIdx) otherwise panic("maxonOpAt: op {opIdx} is not in maxonModule.ops")
 	end 'maxonOpAt'
 
@@ -2892,7 +2893,7 @@ type MaxonToStdLowering
 	// across the op loop (see there), so the per-op ref comes back through the module each time: an indexed
 	// load for the block and one for the ref. It is a method rather than an inlined pair of `get`s so the
 	// two panics that describe the invariant are written once.
-	function maxonBlockOpRefAt(blockRef BlockRef, pos ElementIndex) returns OpIndex
+	function maxonBlockOpRefAt(blockRef ElementIndex, pos ElementIndex) returns ElementIndex
 		let block = try self.maxonModule.blocks.get(blockRef) otherwise panic("maxonBlockOpRefAt: blockRef {blockRef} is not in maxonModule.blocks")
 		return try block.opRefs.get(pos) otherwise panic("maxonBlockOpRefAt: opRefs.get OOB at {pos} in block {blockRef}")
 	end 'maxonBlockOpRefAt'
@@ -2949,10 +2950,10 @@ type MaxonToStdLowering
 
 		// Every id below `args.count()` is a parameter or a dictionary address, so the call's own result is
 		// the next one — and the error flag, when the impl produces one, the one after that.
-		let resultId = args.count()
+		let resultId = args.count() as ValueId
 
 		if functionUsesSecondaryReturnSlot(impl.maxonReturnType, throws: impl.throwsTypeName) 'aSecondReturnWord'
-			let errorFlagId = (resultId + 1) as ValueId
+			let errorFlagId = resultId + 1
 			self.stdModule.appendOp(entry, op: StdOp.tryCall(resultId, errorFlagId: errorFlagId, callee: request.implName, args: args))
 			self.stdModule.setTerminator(entry, op: StdOp.errorReturn(resultId, errorFlagId: errorFlagId))
 		end 'aSecondReturnWord' else 'oneReturnWord'
@@ -3009,7 +3010,7 @@ type MaxonToStdLowering
 		self.requireWitnessSlotImplIgnoresDictionary(request, impl: impl, project: project)
 
 		for _ in request.slotArity upto impl.paramCount 'eachHiddenParam'
-			let zeroId = args.count()
+			let zeroId = args.count() as ValueId
 			self.stdModule.appendOp(entry, op: StdOp.const(zeroId, value: 0, valueType: StdType.i64))
 			args.push(zeroId)
 		end 'eachHiddenParam'
@@ -3032,7 +3033,7 @@ type MaxonToStdLowering
 	// at the end is the two copies of that number meeting.
 	function appendInstanceAdapterDictionary(args ValueIdArray, request WitnessAdapterRequest, impl IrFunction, entry IrBlock, gid GenericInstanceId, sig FuncSignature)
 		if self.layoutNeedingFuncs.contains(request.implName) 'aLayoutDescriptor'
-			let descId = args.count()
+			let descId = args.count() as ValueId
 			self.stdModule.appendOp(entry, op: StdOp.rdataAddr(descId, label: self.globalData.labelBytesOf(self.ensureLayoutDescriptor(gid))))
 			args.push(descId)
 		end 'aLayoutDescriptor'
@@ -3045,7 +3046,7 @@ type MaxonToStdLowering
 				panic("appendInstanceAdapterDictionary: '{String.from(request.implName)}' reads a fixed element count and the per-instance table for '{String.from(self.signatures.mangleGenericInstance(gid))}' states none — a table is keyed by an instance only when `instanceIsFullyConcrete` accepted it, and a concrete instance states its own count")
 			end 'statesNoCount'
 
-			let countId = args.count()
+			let countId = args.count() as ValueId
 			self.stdModule.appendOp(entry, op: StdOp.const(countId, value: self.signatures.genericInstanceFixedSize(gid) as ParsedInt, valueType: StdType.i64))
 			args.push(countId)
 		end 'aFixedElementCount'
@@ -3054,12 +3055,12 @@ type MaxonToStdLowering
 
 		for i in 0 upto constraints.count() 'eachConstraint'
 			let constraint = try constraints.get(i) otherwise panic("appendInstanceAdapterDictionary: whereConstraints.get OOB at {i} for '{String.from(request.implName)}'")
-			let witnessId = args.count()
+			let witnessId = args.count() as ValueId
 			self.stdModule.appendOp(entry, op: StdOp.rdataAddr(witnessId, label: self.globalData.labelBytesOf(self.instanceConstraintWitnessLabel(gid, constraint: constraint, implName: request.implName))))
 			args.push(witnessId)
 		end 'eachConstraint'
 
-		if args.count() != impl.paramCount 'theTwoParameterListsDisagree'
+		if args.count() as ParamCount != impl.paramCount 'theTwoParameterListsDisagree'
 			panic("appendInstanceAdapterDictionary: the adapter for '{String.from(request.implName)}' built {args.count()} argument(s) and the impl declares {impl.paramCount} — the three hidden blocks are asked of the same predicates the call-site appender uses, so a difference means one of them answers differently for an adapter than for a direct call")
 		end 'theTwoParameterListsDisagree'
 	end 'appendInstanceAdapterDictionary'
@@ -4023,7 +4024,7 @@ type MaxonToStdLowering
 		// about to occupy is read AFTER it and immediately before the append — the same discipline
 		// `Parser.emitRuntimeCallInto` states for its own op index.
 		let callArgs = self.opaqueCopyArgsWithDescriptor(callee, args: args, dstBlock: dstBlock)
-		self.recordStaticElementFacts(args, opIndex: self.stdModule.opCount() as OpIndex)
+		self.recordStaticElementFacts(args, opIndex: self.stdModule.opCount())
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: callArgs))
 	end 'appendRuntimeCall'
 
@@ -4065,7 +4066,7 @@ type MaxonToStdLowering
 	// tier mints its own (`mintStdValueId` — a layout descriptor, a destructor slot); such a value can never be
 	// argument 0 of an element access today, and a `return` rather than a panic is what keeps that from being a
 	// premise this function rests on.
-	function recordStaticElementFacts(args ValueIdArray, opIndex OpIndex)
+	function recordStaticElementFacts(args ValueIdArray, opIndex ElementIndex)
 		let container = try args.get(0) otherwise 'noArguments'
 			return
 		end 'noArguments'
@@ -4393,7 +4394,7 @@ type MaxonToStdLowering
 	// hands the other's impl bits it reads as something else. MEASURED, x64 SEGFAULTED on one such pair and
 	// silently answered 1 for 51 on another. That is refused whole-program by E3119, on every target, because
 	// the register targets are the half that fails quietly.
-	function witnessFormalTypes(methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, receiver ValueId) returns MaxonTypeArray
+	function witnessFormalTypes(methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, receiver ValueId) returns MaxonTypeArray
 		let slot = self.witnessRequirementSlot(methodIndex, interfaceDeclIndex: interfaceDeclIndex)
 		let formals = slot.method.paramTypeNames
 
@@ -4413,7 +4414,7 @@ type MaxonToStdLowering
 		// It also catches the ONE way the two can legitimately differ: a `static` requirement, which has no
 		// receiver to seed and which `SemanticCheck` refuses to dispatch through (E3116). Reaching here with
 		// one means that refusal did not fire.
-		if types.count() != self.witnessSlotAbiArity(slot.method) 'theTwoArityStatementsDisagree'
+		if types.count() as ParamCount != self.witnessSlotAbiArity(slot.method) 'theTwoArityStatementsDisagree'
 			panic("witnessFormalTypes: slot '{String.from(slot.method.name)}' passes {types.count()} argument(s) here and `witnessSlotAbiArity` says {self.witnessSlotAbiArity(slot.method)} — the call site and the adapter builder must cut the same list, and a `static` requirement (which has no receiver) must not have reached a dispatch at all")
 		end 'theTwoArityStatementsDisagree'
 
@@ -4446,11 +4447,11 @@ type MaxonToStdLowering
 	// ACTUAL's tag instead was this slice's own defect one level down: it is the unresolved `valueTags`
 	// column, it PANICKED `maxonTypeToStdType` outright on a `named` actual, and it cannot see a binding the
 	// actual does not happen to match.
-	function witnessFormalType(formalName ByteArray, formalFilePath FilePath, interfaceDeclIndex InterfaceDeclIndex, receiver ValueId) returns MaxonType
+	function witnessFormalType(formalName ByteArray, formalFilePath FilePath, interfaceDeclIndex ElementIndex, receiver ValueId) returns MaxonType
 		let dispatched = self.interfaceAtDeclIndex(interfaceDeclIndex)
 
 		if let position = try namePositionIn(dispatched.associatedTypeNames, name: formalName) 'aConformerBindsIt'
-			return self.associatedFormalType(dispatched.name, position: position as ElementIndex, formalName: formalName, receiver: receiver)
+			return self.associatedFormalType(dispatched.name, position: position, formalName: formalName, receiver: receiver)
 		end 'aConformerBindsIt'
 
 		return renderedTypeNameAbiType(formalName, readerFilePath: formalFilePath, signatures: self.signatures)
@@ -4476,7 +4477,7 @@ type MaxonToStdLowering
 	// reachable and the machine word constrains nothing — unchanged by the per-site rule, which narrows WHICH
 	// conformers can arrive and cannot conjure one where there are none.
 	function associatedFormalType(interfaceName ByteArray, position ElementIndex, formalName ByteArray, receiver ValueId) returns MaxonType
-		if let siteBinding = try self.receiverSiteBinding(receiver, position: position as TypeParamPosition, interfaceName: interfaceName) 'theReceiverClaimsIt'
+		if let siteBinding = try self.receiverSiteBinding(receiver, position: position, interfaceName: interfaceName) 'theReceiverClaimsIt'
 			return renderedTypeNameAbiType(siteBinding, readerFilePath: self.currentSourceFilePath, signatures: self.signatures)
 		end 'theReceiverClaimsIt'
 
@@ -4500,7 +4501,7 @@ type MaxonToStdLowering
 	// arrangement one tier up: `ConformanceCheck.receiverClaimedPositions` reads the two stores in this order
 	// and for this reason, so the refusal that admits the dispatch and the ABI this emits for it cannot come to
 	// disagree about what the site fixed.
-	function receiverSiteBinding(receiver ValueId, position TypeParamPosition, interfaceName ByteArray) returns ByteArray throws MapError
+	function receiverSiteBinding(receiver ValueId, position ElementIndex, interfaceName ByteArray) returns ByteArray throws MapError
 		if let instance = try self.currentExistentialInstances.get(receiver) 'declaredAtAnInstantiatedExistential'
 			if position >= self.signatures.genericInstanceArgCount(instance) 'boundNothingHere'
 				throw MapError.keyNotFound
@@ -4526,7 +4527,7 @@ type MaxonToStdLowering
 	// Witness slot `methodIndex` of the interface `interfaceDeclIndex` names — the same `(interface, slot)` pair
 	// `Parser.appendInterfaceDispatchCandidates` numbered the dispatch by, so the requirement this recovers is
 	// the one the call was resolved against.
-	function witnessRequirementSlot(methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex) returns CollectedInterfaceMethod
+	function witnessRequirementSlot(methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex) returns CollectedInterfaceMethod
 		let slots = self.witnessSlotsOf(interfaceDeclIndex)
 		return try slots.get(methodIndex) otherwise panic("witnessRequirementSlot: slot {methodIndex} is outside the {slots.count()} witness slots of interface {interfaceDeclIndex} — the op's `(interfaceDeclIndex, methodIndex)` pair was numbered against a different slot list")
 	end 'witnessRequirementSlot'
@@ -4546,7 +4547,7 @@ type MaxonToStdLowering
 	// compared here rather than hoped for: one `interfaceWitnessSlots` walk of the signature-index
 	// declaration against the memoized walk of the merged one, on the FIRST dispatch through each interface
 	// and never again.
-	function interfaceAtDeclIndex(interfaceDeclIndex InterfaceDeclIndex) returns IrInterface
+	function interfaceAtDeclIndex(interfaceDeclIndex ElementIndex) returns IrInterface
 		let name = self.signatures.interfaceNameAtDeclIndex(interfaceDeclIndex)
 
 		match lookupInterface(self.interfaces, name: name) 'resolve'
@@ -4559,7 +4560,7 @@ type MaxonToStdLowering
 	// its slot list is first built. It walks the SIGNATURE-INDEX declaration — the one the parser numbered
 	// against — and compares its slot count with the merged one's, which is the only property `methodIndex`
 	// rests on.
-	function requireSlotNumberingAgrees(interfaceDeclIndex InterfaceDeclIndex, mergedSlots CollectedInterfaceMethodArray)
+	function requireSlotNumberingAgrees(interfaceDeclIndex ElementIndex, mergedSlots CollectedInterfaceMethodArray)
 		let name = self.signatures.interfaceNameAtDeclIndex(interfaceDeclIndex)
 
 		match lookupInterface(self.signatures.interfaceMap(), name: name) 'asTheParserSawIt'
@@ -4578,7 +4579,7 @@ type MaxonToStdLowering
 	// the parser's memo exists to remove, ported into a second pass. Keyed the same way, on the same property:
 	// the list is a pure function of the interface, which is fixed before any body is parsed. The two-store
 	// agreement check rides the same first walk, so it costs one extra walk per INTERFACE, not per dispatch.
-	function witnessSlotsOf(interfaceDeclIndex InterfaceDeclIndex) returns CollectedInterfaceMethodArray
+	function witnessSlotsOf(interfaceDeclIndex ElementIndex) returns CollectedInterfaceMethodArray
 		if let memoized = try self.witnessSlotMemo.get(interfaceDeclIndex) 'alreadyWalked'
 			return memoized
 		end 'alreadyWalked'
@@ -4624,7 +4625,7 @@ type MaxonToStdLowering
 	// reservation (`Parser.witnessParamValueId`), so a constrained type parameter and an existential
 	// receiver — whose witness is the fat pointer's own second half — both arrive here already pointing at a
 	// value, and this is the single Std emission for them.
-	function appendWitnessCall(dstBlock IrBlock, result ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, isVoid bool)
+	function appendWitnessCall(dstBlock IrBlock, result ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, isVoid bool)
 		let resultType = self.witnessCallResultType(result, isVoid: isVoid)
 		let declaredParams = self.witnessFormalTypes(methodIndex, interfaceDeclIndex: interfaceDeclIndex, receiver: witnessDispatchReceiver(args))
 		self.stdModule.appendOp(dstBlock, op: StdOp.witnessCall(result, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: paramFloatMask(declaredParams), args: self.crossFloatDomainArgs(args, paramTypes: declaredParams, callee: NoNamedCallee, dstBlock: dstBlock)))
@@ -4634,7 +4635,7 @@ type MaxonToStdLowering
 	// the two differ ONLY in which Std op they append and in the second result the throwing one defines. A
 	// helper for the same reason its twin is one: `lowerWitnessTryDispatch`'s arm must hand `args` to a
 	// function and touch it no other way.
-	function appendWitnessTryCall(dstBlock IrBlock, result ValueId, errorFlag ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, isVoid bool)
+	function appendWitnessTryCall(dstBlock IrBlock, result ValueId, errorFlag ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, isVoid bool)
 		let resultType = self.witnessCallResultType(result, isVoid: isVoid)
 		let declaredParams = self.witnessFormalTypes(methodIndex, interfaceDeclIndex: interfaceDeclIndex, receiver: witnessDispatchReceiver(args))
 		self.stdModule.appendOp(dstBlock, op: StdOp.witnessTryCall(result, errorFlagId: errorFlag, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: paramFloatMask(declaredParams), args: self.crossFloatDomainArgs(args, paramTypes: declaredParams, callee: NoNamedCallee, dstBlock: dstBlock)))
@@ -5140,6 +5141,7 @@ type MaxonToStdLowering
 				shl or
 				shr or
 				shrLogical or
+
 				// `min`/`max` need no `lowerDivision`-style fork: they are float-only outright
 				// (`stdBinOpcodeIsFloatOnly`) and the parser has already promoted both operands.
 				min or
@@ -5530,7 +5532,7 @@ type MaxonToStdLowering
 			// (`__managed_get`, `__managed_set`, `__managed_mem_set`) — the same facts about the same argument,
 			// so the two doors share the one recorder rather than each testing the argument for itself.
 			let tryCallArgs = self.opaqueCopyArgsWithDescriptor(callee, args: args, dstBlock: dstBlock)
-			self.recordStaticElementFacts(args, opIndex: self.stdModule.opCount() as OpIndex)
+			self.recordStaticElementFacts(args, opIndex: self.stdModule.opCount())
 			self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: tryCallArgs))
 			return
 		end 'compilerOwnTryCall'

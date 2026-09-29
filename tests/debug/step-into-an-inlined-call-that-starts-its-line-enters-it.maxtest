@@ -12,12 +12,12 @@ test 'a breakpoint on a line whose first code is an inlined call stops before th
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let stops = eventsOfKind(events, kind: StopEventName)
 
-	try Expect.equal(stops.count() as AssertedInt, expected: 2, message: "the breakpoint on the call line and the `{StepCommand}` are two stops. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(stops.count(), expected: 2, message: "the breakpoint on the call line and the `{StepCommand}` are two stops. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let atTheCall = eventAt(stops, index: 0)
-	try Expect.equal(numberOf(atTheCall, node: atTheCall.root, key: LineKey) as AssertedInt, expected: callLine as AssertedInt, message: "the breakpoint stops on the call line. {said}")
+	try Expect.equal(numberOf(atTheCall, node: atTheCall.root, key: LineKey), expected: callLine as EventNumber, message: "the breakpoint stops on the call line. {said}")
 
 	let entered = eventAt(stops, index: 1)
 	try Expect.equal(textOf(entered, node: entered.root, key: FunctionKey), expected: LeafFunctionName, message: "⛔ THE LINE'S FIRST CODE IS THE INLINED BODY, so its breakpoint must arm at the call's entry and not at the first row the line enters after the body ran; armed late, `{StepCommand}` has no call left to enter and lands on the next line of `{CallerFunctionName}`. {said}")
-	try Expect.equal(numberOf(entered, node: entered.root, key: LineKey) as AssertedInt, expected: bodyLine as AssertedInt, message: "`{StepCommand}` enters the inlined body at its line. {said}")
+	try Expect.equal(numberOf(entered, node: entered.root, key: LineKey), expected: bodyLine as EventNumber, message: "`{StepCommand}` enters the inlined body at its line. {said}")
 end 'a breakpoint on a line whose first code is an inlined call stops before the call, and step enters it'

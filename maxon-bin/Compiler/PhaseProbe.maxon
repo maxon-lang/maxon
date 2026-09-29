@@ -406,10 +406,6 @@ module function foldPoolPhaseDelta(project Project, phase CompilePhase, driver C
 	project.memory.addPhase(phase, delta: delta)
 end 'foldPoolPhaseDelta'
 
-// A position in a `PoolPhaseCosts` — an ordinal of whichever phase enum, or a step of whichever schedule,
-// the holder was sized for.
-export typealias PoolPhaseIndex = int(0 to u64.max)
-
 // ⭐⭐ **ONE UNIT OF POOL WORK'S PER-PHASE COSTS, MEASURED WITHOUT A `Project`.**
 //
 // A pool worker has no `Project` — a module `var` reached from a message is E3143, and `Project` is how
@@ -439,7 +435,7 @@ export type PoolPhaseCosts
 	// The one delta every `record` closes its probe into, so closing a bracket allocates nothing.
 	var closing as PhaseDelta
 
-	export static function create(width PoolPhaseIndex) returns PoolPhaseCosts
+	export static function create(width ElementIndex) returns PoolPhaseCosts
 		var spentNanos = DurationNanosArray.create()
 		spentNanos.resize(width)
 		var spentCpu = CpuTicksArray.create()
@@ -459,11 +455,11 @@ export type PoolPhaseCosts
 		return Self{nanos: source.nanos.clone(), cpuTicks: source.cpuTicks.clone(), allocs: source.allocs.clone(), frees: source.frees.clone(), bytes: source.bytes.clone(), closing: PhaseDelta.zero()}
 	end 'copyOf'
 
-	export function width() returns PoolPhaseIndex
+	export function width() returns ElementIndex
 		return self.nanos.count()
 	end 'width'
 
-	export function add(index PoolPhaseIndex, delta PhaseDelta)
+	export function add(index ElementIndex, delta PhaseDelta)
 		try self.nanos.set(index, value: (try self.nanos.get(index) otherwise panic("PoolPhaseCosts.add: index {index} is outside the {self.width()} phases this record was sized for")) + delta.nanos) otherwise panic("PoolPhaseCosts.add: nanos.set OOB at {index}")
 		try self.cpuTicks.set(index, value: (try self.cpuTicks.get(index) otherwise panic("PoolPhaseCosts.add: cpuTicks.get OOB at {index}")) + delta.cpuTicks) otherwise panic("PoolPhaseCosts.add: cpuTicks.set OOB at {index}")
 		try self.allocs.set(index, value: (try self.allocs.get(index) otherwise panic("PoolPhaseCosts.add: allocs.get OOB at {index}")) + delta.allocs) otherwise panic("PoolPhaseCosts.add: allocs.set OOB at {index}")
@@ -473,7 +469,7 @@ export type PoolPhaseCosts
 
 	// Everything one phase has claimed so far — the "before" snapshot `recordExcluding` subtracts
 	// against, and what the driver folds home one phase at a time.
-	export function accumulated(index PoolPhaseIndex) returns PhaseDelta
+	export function accumulated(index ElementIndex) returns PhaseDelta
 		let spentNanos = try self.nanos.get(index) otherwise panic("PoolPhaseCosts.accumulated: index {index} is outside the {self.width()} phases this record was sized for")
 		let spentCpu = try self.cpuTicks.get(index) otherwise panic("PoolPhaseCosts.accumulated: cpuTicks.get OOB at {index}")
 		let spentAllocs = try self.allocs.get(index) otherwise panic("PoolPhaseCosts.accumulated: allocs.get OOB at {index}")
@@ -482,7 +478,7 @@ export type PoolPhaseCosts
 		return PhaseDelta.create(spentNanos, cpuTicks: spentCpu, allocs: spentAllocs, frees: spentFrees, bytes: spentBytes)
 	end 'accumulated'
 
-	export function record(index PoolPhaseIndex, probe PhaseProbe)
+	export function record(index ElementIndex, probe PhaseProbe)
 		probe.elapsedInto(self.closing)
 		self.add(index, delta: self.closing)
 	end 'record'
@@ -496,7 +492,7 @@ export type PoolPhaseCosts
 	// the outer one opened; this subtracts what it grew by. The two brackets NEST on one worker's counters,
 	// so every component of the subtraction is non-negative — `PhaseDelta.minus` traps if that ever stops
 	// holding.
-	export function recordExcluding(index PoolPhaseIndex, probe PhaseProbe, innerIndex PoolPhaseIndex, innerBefore PhaseDelta)
+	export function recordExcluding(index ElementIndex, probe PhaseProbe, innerIndex ElementIndex, innerBefore PhaseDelta)
 		let innerGrowth = self.accumulated(innerIndex).minus(innerBefore)
 		probe.elapsedInto(self.closing)
 		self.add(index, delta: self.closing.minus(innerGrowth))

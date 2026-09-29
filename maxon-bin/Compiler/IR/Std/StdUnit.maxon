@@ -38,7 +38,7 @@
 // dump are byte-identical to a serial run (`tests/parallel-compile/byte-identical`).
 
 // The one function a unit module holds.
-export let UnitFunctionIndex = 0 as FuncIndex
+export let UnitFunctionIndex = 0 as ElementIndex
 
 module typealias StdUnitBodyArray = Array with StdUnitBody
 
@@ -68,12 +68,12 @@ end 'StdUnitBody'
 // THE MESSAGE ARGUMENT: which function, and its body in a one-slot holder the worker pops (see
 // `StdUnitBody.afterRunning`).
 export type StdUnit
-	export var funcIndex as FuncIndex
+	export var funcIndex as ElementIndex
 	export var holder as StdUnitBodyArray
 
 	// ⭐ **EVERY RETURN IS `Self{…}` AND THERE IS ONLY ONE**, which is what makes a call to this the
 	// argument of a send (E3138, `SignatureIndex.returnsFreshValue`).
-	module static function extract(module StdModule, func IrFunction, funcIndex FuncIndex) returns StdUnit
+	module static function extract(module StdModule, func IrFunction, funcIndex ElementIndex) returns StdUnit
 		var holder = StdUnitBodyArray.create()
 		holder.push(StdUnitBody.extract(module, func: func))
 		return Self{funcIndex: funcIndex, holder: holder}
@@ -97,7 +97,7 @@ export function extractUnitModule(module StdModule, func IrFunction) returns Std
 	unitFunc.nextBlockId = func.nextBlockId
 	unitFunc.blockRefs.reserve(func.blockRefs.count())
 	unitModule.blocks.reserve(func.blockRefs.count())
-	unitModule.ops.reserve(liveOpTallyOf(module.blocks, func: func) as ElementIndex)
+	unitModule.ops.reserve(liveOpTallyOf(module.blocks, func: func))
 
 	for blockRef in func.blockRefs 'eachBlock'
 		let copy = copiedBlock(module, blockRef: blockRef, into: unitModule)
@@ -115,7 +115,7 @@ end 'extractUnitModule'
 //
 // The ops go in through `unitModule.ops` directly rather than `appendOp`: that door stamps the CURSOR's
 // span, and a copied op keeps the span the real module recorded for it.
-function copiedBlock(module StdModule, blockRef BlockRef, into StdModule) returns IrBlock
+function copiedBlock(module StdModule, blockRef ElementIndex, into StdModule) returns IrBlock
 	let block = module.getBlock(blockRef)
 	requireNoCondBranchOp(block)
 	var copy = block.clone()
@@ -141,7 +141,7 @@ function requireNoCondBranchOp(block IrBlock)
 end 'requireNoCondBranchOp'
 
 // One op deep-cloned at the unit's next index, with the span the real module recorded for it.
-function copiedOp(module StdModule, opIdx OpIndex, into StdModule) returns OpIndex
+function copiedOp(module StdModule, opIdx ElementIndex, into StdModule) returns ElementIndex
 	let unitIdx = into.ops.count()
 	into.ops.push(module.getOp(opIdx).clone())
 	into.spans.pushId(unitIdx, spanId: module.spans.at(opIdx))
@@ -201,6 +201,6 @@ module function spliceStdUnit(module StdModule, func IrFunction, body StdUnitBod
 end 'spliceStdUnit'
 
 // One unit op placed into the real module, with the span the unit's column holds for it.
-function placedOp(module StdModule, slots OpSlotSupply, unitModule StdModule, unitIdx OpIndex) returns OpIndex
+function placedOp(module StdModule, slots OpSlotSupply, unitModule StdModule, unitIdx ElementIndex) returns ElementIndex
 	return module.placeOp(slots, op: unitModule.getOp(unitIdx), spanId: unitModule.spans.at(unitIdx))
 end 'placedOp'

@@ -1317,7 +1317,7 @@ function formatEachFile(files FilePathArray) returns ExitCode
 		end 'differs'
 	end 'eachFile'
 
-	print("fmt: {changed} file(s) changed, {files.count() - changed} unchanged.\n")
+	print("fmt: {changed} file(s) changed, {files.count() as FormattedFileCount - changed} unchanged.\n")
 	return SucceededExit
 end 'formatEachFile'
 
@@ -1462,7 +1462,7 @@ end 'specDirSpelling'
 // only partly understood. `allowed` is a count because some commands read none, and for them the
 // first positional is already the typo. `module` for `Testing/ScaleTestRunner`.
 module function refusedPositionalBeyond(args MaxonArgs, allowed PositionalCount, usage String) returns bool
-	if args.paths.count() <= allowed 'withinBudget'
+	if args.paths.count() as PositionalCount <= allowed 'withinBudget'
 		return false
 	end 'withinBudget'
 
@@ -1472,7 +1472,7 @@ module function refusedPositionalBeyond(args MaxonArgs, allowed PositionalCount,
 	return true
 end 'refusedPositionalBeyond'
 
-module typealias PositionalCount = int(0 to 1)
+module typealias PositionalCount = int(0 to 1) implements ElementIndex
 
 // A command's streams belong to its subject: at the default INFO level every compile announces the
 // bytes it wrote, which is noise on `test`'s fixture-compared stdout, on `run`'s program streams,
@@ -2707,11 +2707,9 @@ export type MaxonArgs
 	end 'parse'
 end 'MaxonArgs'
 
-typealias CommandLineIndex = int(0 to u32.max)
-
 // No arm of the parser consumes the child's command line and nothing rewrites it. A function rather
 // than a loop in `parse`, whose loop is register-bound (see its note).
-function monitorTail(args StringArray, from CommandLineIndex) returns SourcePathSpellingArray
+function monitorTail(args StringArray, from ElementIndex) returns SourcePathSpellingArray
 	var tail = SourcePathSpellingArray.create()
 
 	for position in from upto args.count() 'eachTailArgument'

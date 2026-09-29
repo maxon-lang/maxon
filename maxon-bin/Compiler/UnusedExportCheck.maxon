@@ -87,12 +87,11 @@ type TrackedDecl
 end 'TrackedDecl'
 
 typealias TrackedDeclArray = Array with TrackedDecl
-typealias TrackedDeclIndex = int(0 to u64.max)
 
 // ⛔⛔ **A BARE NAME IS NOT A DECLARATION'S IDENTITY, AND KEYING THIS BY ONE PANICKED.** Two files in
 // DIFFERENT DIRECTORIES may each declare `type NsDeep` or `function pick` — that is what a namespace is
 // FOR, and `specs/namespace-qualified-resolution.md` is thirty cases about it. The index was a
-// `Map with (ByteArray, TrackedDeclIndex)`, so the second declaration's `insert` threw `keyAlreadyExists`
+// `Map with (ByteArray, ElementIndex)`, so the second declaration's `insert` threw `keyAlreadyExists`
 // and the pass aborted the compile: MEASURED by `scale-test`'s generated corpus, which emits a namespace
 // ladder — and NOT by any of the 6,377 spec cases, because none of them declares a contested name in a
 // program that also compiles clean.
@@ -103,7 +102,7 @@ typealias TrackedDeclIndex = int(0 to u64.max)
 // finding, while resolving to the wrong one of two claimants would report a live declaration as dead.
 // Telling them apart needs the reader's own namespace precedence, which is `ProgramSignatures`' answer to
 // give, not this pass's to re-derive.
-typealias TrackedDeclIndexArray = Array with TrackedDeclIndex
+typealias TrackedDeclIndexArray = Array with ElementIndex
 typealias TrackedDeclIndexMap = Map with (ByteArray, TrackedDeclIndexArray)
 
 // ⭐⭐ **EVERY STORED GLOBAL'S `.data` LABEL, MAPPED TO THE DECLARATION THAT OWNS IT.** A `globalAddr`
@@ -120,7 +119,7 @@ typealias TrackedDeclIndexMap = Map with (ByteArray, TrackedDeclIndexArray)
 // scan step ALLOCATES NOTHING.** It copies a `TopLevelDecl`, which RETAINS six managed handles (its
 // whole `TokenArray` among them) and releases them again, so the entire quadratic was refcount traffic.
 // That is the class the CPU column was added to catch, and no other column of the instrument could see it.
-typealias GlobalLabelIndexMap = Map with (ByteArray, TopLevelDeclIndex)
+typealias GlobalLabelIndexMap = Map with (ByteArray, ElementIndex)
 
 // The type names each reader file has already been credited with, one key per `(reader, name)` pair. What a
 // transitive walk credits is a function of the name and the READER alone, and a credit only ever widens, so
@@ -133,19 +132,14 @@ typealias CreditedTypeNameIdMap = Map with (ByteArray, CreditedTypeNameId)
 
 let AuditedFileKeyShift = 32 as CreditedTypeNameKey
 
-// A source file a declaration lives in or a reference is read from, with what every credit asks about it
-// answered once. One per `FilePath.toString()` spelling, so equal indexes mean equal spellings — which is
-// the same-file test `noteRead` needs and the one it made by comparing those two strings.
-typealias AuditedFileIndex = int(0 to u32.max)
-
 type AuditedFile
-	export let index as AuditedFileIndex
+	export let index as ElementIndex
 	export let path as FilePath
 	export let pathText as String
 	export let moduleDirectory as String
 	export let isLibrary as bool
 
-	static function create(index AuditedFileIndex, path FilePath, pathText String, moduleDirectory String, isLibrary bool) returns AuditedFile
+	static function create(index ElementIndex, path FilePath, pathText String, moduleDirectory String, isLibrary bool) returns AuditedFile
 		return Self{index: index, path: path, pathText: pathText, moduleDirectory: moduleDirectory, isLibrary: isLibrary}
 	end 'create'
 end 'AuditedFile'
@@ -206,7 +200,7 @@ type TrackedDecls
 			return known
 		end 'known'
 
-		let file = AuditedFile.create(self.files.count() as AuditedFileIndex, path: path, pathText: pathText, moduleDirectory: signatures.moduleDirectoryOf(path), isLibrary: self.libraryFiles.contains(pathText))
+		let file = AuditedFile.create(self.files.count(), path: path, pathText: pathText, moduleDirectory: signatures.moduleDirectoryOf(path), isLibrary: self.libraryFiles.contains(pathText))
 		self.files.upsert(pathText, value: file)
 		return file
 	end 'fileOf'
@@ -247,7 +241,7 @@ type TrackedDecls
 	// ⚠ The existing list is COPIED out before the write rather than pushed to in place: `get` hands back a
 	// borrow of the map's own slot, and mutating the map through `upsert` while that borrow is live is
 	// E3070. Built fresh, the borrow ends at the `if`.
-	function indexUnder(index TrackedDeclIndexMap, key ByteArray, at TrackedDeclIndex)
+	function indexUnder(index TrackedDeclIndexMap, key ByteArray, at ElementIndex)
 		var claimants = TrackedDeclIndexArray.create()
 
 		if let existing = try index.get(key) 'alreadyClaimed'
@@ -258,7 +252,7 @@ type TrackedDecls
 		index.upsert(key, value: claimants)
 	end 'indexUnder'
 
-	function at(index TrackedDeclIndex) returns TrackedDecl
+	function at(index ElementIndex) returns TrackedDecl
 		return try self.entries.get(index) otherwise panic("TrackedDecls.at: OOB at {index} — every index handed out is one this seed minted")
 	end 'at'
 end 'TrackedDecls'
@@ -390,7 +384,7 @@ function seedFunctions(module MaxonModule, signatures ProgramSignatures, entryPo
 			continue
 		end 'synthesizedFunction'
 
-		if isSynthesizedName(func.name) or entryPoints.contains(func.name) 'noSourceLevelCaller'
+		if isSynthesizedName(func.name) or entryPoints.contains(func.name) or signatures.isGenericInstanceName(func.name) 'noSourceLevelCaller'
 			continue
 		end 'noSourceLevelCaller'
 
@@ -410,6 +404,14 @@ function seedFunctions(module MaxonModule, signatures ProgramSignatures, entryPo
 		// qualified (`alpha.alpha.pick`), which a second copy of the join here would have got wrong.
 		tracked.add(TrackedDecl.create(TrackedDeclKind.trackedFunction, key: func.name, displayName: String.from(signatures.diagnosticCalleeSpelling(func.name)), noun: "function", visibility: func.visibility, declFile: tracked.fileOf(func.sourceFilePath, signatures: signatures), nameLine: func.nameLine, nameColumn: func.nameColumn))
 	end 'eachFunc'
+
+	for template in signatures.genericTemplateRoster() 'eachTemplate'
+		if not tierIsAudited(template.visibility) or namesAMethodOnATrackedType(signatures, qualifiedName: template.key) 'notAudited'
+			continue
+		end 'notAudited'
+
+		tracked.add(TrackedDecl.create(TrackedDeclKind.trackedFunction, key: template.key, displayName: String.from(signatures.diagnosticCalleeSpelling(template.key)), noun: "function", visibility: template.visibility, declFile: tracked.fileOf(template.declFilePath, signatures: signatures), nameLine: template.line, nameColumn: template.column))
+	end 'eachTemplate'
 end 'seedFunctions'
 
 // `Owner.method` where `Owner` is a declared struct or enum. The owner is split off the LAST dot, so a
@@ -747,9 +749,10 @@ end 'noteCrossFileConstantReads'
 
 function noteFunctionName(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, reader AuditedFile)
 	noteQualifiedOwner(signatures, tracked: tracked, callee: name, reader: reader)
+	let declared = signatures.genericTemplateKeyOf(name)
 
-	if let claimants = try tracked.functionIndex.get(name) 'tracked'
-		noteEveryClaimant(signatures, tracked: tracked, name: name, claimants: claimants, reader: reader)
+	if let claimants = try tracked.functionIndex.get(declared) 'tracked'
+		noteEveryClaimant(signatures, tracked: tracked, name: declared, claimants: claimants, reader: reader)
 	end 'tracked'
 end 'noteFunctionName'
 
@@ -915,7 +918,7 @@ end 'noteGlobalLabel'
 // about a program's directory layout rather than about its visibility. Only a STRICTLY NESTED reader
 // keeps a declaration downgradable — which is why the equality case is excluded here rather than left
 // to `moduleDirectoryContains`, whose own answer includes it.
-function noteRead(tracked TrackedDecls, index TrackedDeclIndex, reader AuditedFile)
+function noteRead(tracked TrackedDecls, index ElementIndex, reader AuditedFile)
 	var decl = tracked.at(index)
 
 	// Both bits only ever widen, so a declaration already read from outside its subtree has nothing left to learn.
@@ -1138,7 +1141,7 @@ end 'noteEveryClaimant'
 // ⭐ **REFERENCING A BINDING USES ITS TYPE** — see `ProgramSignatures.globalSlotType` for the measurement.
 // The slot type is walked with the same transitive rules a field type is, so naming `db` reaches
 // `Database`, the `EntryMap` it holds and the `Entry` inside that.
-function noteSlotType(signatures ProgramSignatures, tracked TrackedDecls, index TopLevelDeclIndex, reader AuditedFile)
+function noteSlotType(signatures ProgramSignatures, tracked TrackedDecls, index ElementIndex, reader AuditedFile)
 	match signatures.globalSlotType(index) 'slot'
 		notFound then return
 

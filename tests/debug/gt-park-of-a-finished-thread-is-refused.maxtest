@@ -30,7 +30,7 @@ test 'gt-park of a thread that has finished is refused by name, because its reco
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
 	let selections = eventsOfKind(events, kind: GtSelectEventName)
-	Expect.equal(selections.count() as AssertedInt, expected: 1, message: "`{selectorCommand(GtSelectCommand, selector: theBriefThread)}` printed no `{GtSelectEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(selections.count(), expected: 1, message: "`{selectorCommand(GtSelectCommand, selector: theBriefThread)}` printed no `{GtSelectEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let selected = eventAt(selections, index: 0)
 	let brief = reportedThreadId(selected)
@@ -38,17 +38,17 @@ test 'gt-park of a thread that has finished is refused by name, because its reco
 	Expect.isFalse(reportsNoThreadId(selected), message: "the selection names no thread, so there is no id to ask about after it has gone. {said}")
 
 	let rosters = eventsOfKind(events, kind: ThreadsEventName)
-	Expect.equal(rosters.count() as AssertedInt, expected: 2, message: "the session asks for the roster twice — once while the short-lived thread is alive and once after it has gone. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(rosters.count(), expected: 2, message: "the session asks for the roster twice — once while the short-lived thread is alive and once after it has gone. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let early = eventAt(rosters, index: 0)
 	Expect.equal(threadFieldOfId(early, id: brief, key: FunctionKey), expected: BriefFunctionName, message: "⭐ THE EVENT SAYS WHICH THREAD IT SELECTED AND THIS IS WHERE THAT IS CHECKED, IN THE SAME SESSION AND AT THE SAME STOP. #{brief} is not the `{BriefFunctionName}` thread. The roster held: {renderedThreads(early)}. {said}")
 
 	let late = eventAt(rosters, index: 1)
 	Expect.equal(threadFieldOfId(late, id: brief, key: FunctionKey), expected: AbsentEventText, message: "⭐ THE PRECONDITION OF THE WHOLE CASE. After {ContinuesPastTheBriefThread} continues the short-lived thread has gone round its loop once and returned, so a roster that still lists #{brief} is one taken before it finished and the refusal below would be about a LIVE thread. The roster held: {renderedThreads(late)}. {said}")
-	Expect.atLeast(countThreadsWhere(late, key: FunctionKey, value: LastingFunctionName) as AssertedInt, than: 1, message: "⛔ THE CONTROL FOR THE LINE ABOVE. The long-lived thread must still be on the roster, or the reason #{brief} is absent is that the program ended rather than that one thread did. The roster held: {renderedThreads(late)}. {said}")
+	Expect.atLeast(countThreadsWhere(late, key: FunctionKey, value: LastingFunctionName), than: 1, message: "⛔ THE CONTROL FOR THE LINE ABOVE. The long-lived thread must still be on the roster, or the reason #{brief} is absent is that the program ended rather than that one thread did. The roster held: {renderedThreads(late)}. {said}")
 
 	let holds = eventsOfKind(events, kind: GtParkEventName)
-	Expect.equal(holds.count() as AssertedInt, expected: 1, message: "a refusal is an answer, so the hold asked after the thread finished must print one `{GtParkEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(holds.count(), expected: 1, message: "a refusal is an answer, so the hold asked after the thread finished must print one `{GtParkEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let refused = eventAt(holds, index: 0)
 	Expect.equal(textOf(refused, node: refused.root, key: ResultKey), expected: RefusedResult, message: "⭐⭐ A HANDLE IS AN ADDRESS AND A FINISHED RECORD IS NOT A THREAD. The word that named #{brief} while it was alive names a record the scheduler may hand to somebody else once it has completed, so holding it must be `{RefusedResult}` rather than a request against whatever now lives there. {said}")
@@ -56,8 +56,8 @@ test 'gt-park of a thread that has finished is refused by name, because its reco
 	Expect.isTrue(reportsNoThreadId(refused), message: "⛔ A REFUSAL THAT NAMED A THREAD WOULD BE ONE THAT RESOLVED THE WORD AGAINST A ROSTER ROW. Nothing answers to it any more, so the event must carry no id at all. {said}")
 
 	let exits = eventsOfKind(events, kind: ExitEventName)
-	Expect.equal(exits.count() as AssertedInt, expected: 1, message: "a refused hold must leave the program exactly as it was, so the session still runs it to its end. {said}")
+	Expect.equal(exits.count(), expected: 1, message: "a refused hold must leave the program exactly as it was, so the session still runs it to its end. {said}")
 
 	let exited = eventAt(exits, index: 0)
-	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the debugged program answered a different exit code than the same program run with nothing attached. {said}")
+	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey), expected: undebugged.exitCode() as EventNumber, message: "the debugged program answered a different exit code than the same program run with nothing attached. {said}")
 end 'gt-park of a thread that has finished is refused by name, because its record is no longer a thread'

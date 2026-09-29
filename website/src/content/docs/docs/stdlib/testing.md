@@ -39,13 +39,13 @@ Every matcher also takes `message String = ""`, `file String = __file__` and
 
 | Matcher | Argument types | Holds when |
 |---------|----------------|------------|
-| `Expect.equal(actual, expected:)` | integer, `String`, `bool` | `actual == expected` |
-| `Expect.notEqual(actual, expected:)` | integer, `String`, `bool` | `actual != expected` |
-| `Expect.greaterThan(actual, than:)` | integer, float | `actual > than` |
-| `Expect.lessThan(actual, than:)` | integer, float | `actual < than` |
-| `Expect.atLeast(actual, than:)` | integer, float | `actual >= than` |
-| `Expect.atMost(actual, than:)` | integer, float | `actual <= than` |
-| `Expect.close(actual, expected:, within:)` | float | `abs(actual - expected) <= within` |
+| `Expect.equal(actual, expected:)` | any `Equatable` type | `actual == expected` |
+| `Expect.notEqual(actual, expected:)` | any `Equatable` type | `actual != expected` |
+| `Expect.greaterThan(actual, than:)` | any `Comparable` type | `actual > than` |
+| `Expect.lessThan(actual, than:)` | any `Comparable` type | `actual < than` |
+| `Expect.atLeast(actual, than:)` | any `Comparable` type | `actual >= than` |
+| `Expect.atMost(actual, than:)` | any `Comparable` type | `actual <= than` |
+| `Expect.close(actual, expected:, within:)` | `AssertedReal` | `abs(actual - expected) <= within` |
 | `Expect.isTrue(actual)` | `bool` | `actual` is `true` |
 | `Expect.isFalse(actual)` | `bool` | `actual` is `false` |
 | `Expect.contains(haystack, needle:)` | `String` | `haystack` contains `needle` |
@@ -54,15 +54,16 @@ Every matcher also takes `message String = ""`, `file String = __file__` and
 | `Expect.isEmpty(haystack)` | `String` | no characters |
 | `Expect.fail(message)` | — | never; fails unconditionally |
 
-Each name is one overload set chosen by argument type, including through a method call
-(`Expect.equal(parts.count(), expected: 3)`) and through an enum's `name`, `ordinal` and `rawValue`.
-`String` values are quoted in the report, so empty or space-padded values stay visible.
+`equal`, `notEqual` and the four ordering matchers are each one
+[generic function](/docs/language/composite-types/#generic-functions): the type is inferred from the two arguments, so
+`Expect.equal(parts.count(), expected: 3)` compares two `ElementIndex` values and a value of any alias needs
+no cast. Each value is printed as its interpolation prints it; `String` values are quoted, so empty or
+space-padded values stay visible.
 
-Floats have no `equal`: exact float equality can pass on one target and fail on another, so
-`Expect.equal(1.5, expected: 1.5)` does not compile. Use `close(…, within:)`. NaN satisfies no comparison,
-so it fails every float matcher.
+`close` compares two floats within a tolerance and takes `AssertedReal`, so a non-float argument is refused
+at the call. NaN satisfies no comparison, so it fails `close` and every ordering matcher.
 
-For any other `Equatable` and `Stringable` type, `isTrue` is the general form:
+`isTrue` is the general form for any predicate:
 `Expect.isTrue(a == b, message: "expected {b}, got {a}")`.
 
 ```maxon

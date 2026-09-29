@@ -26,6 +26,15 @@ E3004, and one finding per declaration rather than one call site. Such a patch w
 nothing else: the declarations, their bodies and every table stay, which is what leaves `C1` able to
 compile the unshimmed tree.
 
+⭐ **A LANGUAGE FORM THE SEED CANNOT PARSE IS THE FOURTH CASE, AND ITS PATCH IS GENERATED.** A clause
+such as `typealias X = int(range) implements Parent` is an E2001 to a release that predates it, and
+withdrawing it is not enough: the seed then judges every crossing the clause licensed by its older rule,
+so the patch also writes each cast that rule demands. A generic function (`function f(...) uses T`) is
+withdrawn whole, which is sound because the compiler calls none. Only those forms and the casts go; the
+declarations and every table stay, so `C1` knows the forms and compiles the unshimmed tree. The casts are
+found by building with the seed until it is clean, so the one patch for every such form is written by
+`generate-seed-language-shim.py` and not by hand — regenerate it whenever the sources it touches move.
+
 ⛔ **Delete a patch once a release has shipped the compiler that accepts what it withdraws.** It is dead
 from that moment — the plain build succeeds and nothing here is read — and a patch that no longer
 applies turns the next genuine refusal into a confusing failure.

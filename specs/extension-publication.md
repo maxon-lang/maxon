@@ -341,7 +341,7 @@ error E3004: <fragment>:14:10: call to undefined function 'missing'
 ⭐ **`String.filter` IS A `String` METHOD, AND THE FALL-THROUGH REFUSED IT.** It is published onto
 `String` by `stdlib/Interfaces.maxon`'s `extension Iterable`, so `String`'s own body does not declare it
 — and the door asked whether the conformer declares it in its own body. The refusal read
-**`E2015 … 'filter' — the compiler provides hash/equals; that list IS the surface, so nothing else is served
+**`E2015 … 'filter' — the compiler provides hash/equals/compare; that list IS the surface, so nothing else is served
 here`**, about a method the program plainly has.
 ```maxon
 function main() returns ExitCode
@@ -366,7 +366,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:11: Unsupported: `String` member 'reticulate' — the compiler provides hash/equals; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:4:11: Unsupported: `String` member 'reticulate' — the compiler provides hash/equals/compare; that list IS the surface, so nothing else is served here
 ```
 
 ### A conformance an extension adds

@@ -109,7 +109,7 @@ function main() returns ExitCode
 	let removed = try arr.remove(0) otherwise 'err'
 		return 99
 	end 'err'
-	return removed + arr.count()
+	return removed + (arr.count() as Int)
 end 'main'
 ```
 ```exitcode
@@ -1351,7 +1351,7 @@ end 'launder'
 function main() returns ExitCode
 	var xs = StrArray.create()
 	xs.push("a published string, long enough to require an allocation")
-	try xs.set(launder(-1), value: "a string refused for a negative index, long enough to allocate") otherwise 'negativeIndex'
+	try xs.set(launder(-1) as ElementIndex, value: "a string refused for a negative index, long enough to allocate") otherwise 'negativeIndex'
 		return 42
 	end 'negativeIndex'
 	return 5
@@ -1984,7 +1984,7 @@ function main() returns ExitCode
 	arr.push(30)
 	let popped = try arr.pop() otherwise return 2
 	let head = try arr.first() otherwise return 3
-	return (arr.count() + popped + head) as ExitCode
+	return ((arr.count() as Int) + popped + head) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -2652,7 +2652,7 @@ function main() returns ExitCode
 	arr.push(1 as Byte)
 	arr.push(2 as Byte)
 	let m = arr.managed
-	var total = m.length() + bufLength(arr.managed) + bufferOf(arr).length() + arr.count()
+	var total = m.length() + bufLength(arr.managed) + bufferOf(arr).length() + (arr.count() as Integer)
 	var i = 0
 	while i < 4 'round'
 		total = total + bufLength(arr.managed)
@@ -2766,7 +2766,7 @@ function main() returns ExitCode
 	end 'each'
 
 	a = "xyz".toByteArray()
-	total = total + bufLength(a.managed) + a.count()
+	total = total + bufLength(a.managed) + (a.count() as Integer)
 
 	print("{total}")
 	return 0
@@ -4129,7 +4129,7 @@ function main() returns ExitCode
 	var xs = Nums.create()
 	xs.push(7 as Int2)
 	let b = Bag.create(xs)
-	return (seed() + b.items.count()) as ExitCode
+	return (seed() + (b.items.count() as Int)) as ExitCode
 end 'main'
 ```
 ```exitcode

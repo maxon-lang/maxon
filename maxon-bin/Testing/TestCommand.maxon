@@ -307,16 +307,13 @@ end 'reportNothingToRun'
 // COMPILE AND RUN
 // ============================================================================================
 
-// How far through the report order the run has already emitted.
-typealias ReportCursor = int(0 to u64.max)
-
 // ⭐ **EMIT EVERY FILE THAT HAS RUN AND HAS NO UNEMITTED FILE BEFORE IT IN REPORT ORDER.** The cursor
 // is what makes that a PREFIX rather than a set: results still appear as they land, and where they
 // land in the transcript does not depend on which file the walk handed back first.
 //
 // `ran` holds one entry per group in walk order, so a group's index into it is its position in the
 // walk — which is what `ReportFile.index` names.
-function emitReadyFiles(files TestFileResultsArray, ran TestFileResultsArray, order ReportFileArray, from ReportCursor, args MaxonArgs, color bool) returns ReportCursor
+function emitReadyFiles(files TestFileResultsArray, ran TestFileResultsArray, order ReportFileArray, from ElementIndex, args MaxonArgs, color bool) returns ElementIndex
 	var cursor = from
 
 	while cursor < order.count() 'inReportOrder'
@@ -391,7 +388,7 @@ function runBuiltTests(args MaxonArgs, staged StagedTestBuild, binary FilePath, 
 	let reportOrder = reportFileOrder(staged.groups)
 	var ran = TestFileResultsArray.create()
 	var files = TestFileResultsArray.create()
-	var emitted = 0 as ReportCursor
+	var emitted = 0 as ElementIndex
 
 	// The RUN follows the walk, so an order dependence that changes a RESULT still surfaces; only the
 	// REPORT is ordered, by `emitReadyFiles`.

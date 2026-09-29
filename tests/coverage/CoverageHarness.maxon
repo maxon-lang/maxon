@@ -174,7 +174,7 @@ end 'requirePlainBuild'
 
 // What both builds above are held to: a zero exit, and a file where the exit says one is.
 function requireBuiltExecutable(build CollectedOutput, output FilePath, what String, reason String) throws TestFailure
-	try Expect.equal(build.exitCode() as AssertedInt, expected: 0, message: "`{what}` exited {build.exitCode()}. {reason} It wrote to stderr: {build.stderr}")
+	try Expect.equal(build.exitCode(), expected: 0, message: "`{what}` exited {build.exitCode()}. {reason} It wrote to stderr: {build.stderr}")
 	try Expect.isTrue(File.exists(output), message: "`{what}` exited 0 and wrote no executable to {output.toString()}.")
 end 'requireBuiltExecutable'
 
@@ -191,7 +191,7 @@ export function requireCoverageRunReport(staged FilePath, executable FilePath) r
 	arguments.push(executable.toString())
 
 	let run = spawnCompiler(arguments, staged: staged, what: "`{TestedCompilerStem} {CoverageCommandName} {RunVerbName}`")
-	try Expect.equal(run.exitCode() as AssertedInt, expected: 0, message: "`{CoverageCommandName} {RunVerbName}` exited {run.exitCode()} over a binary this compiler built with `{CoverageBuildFlag}`. This tool's own exit code answers ONE question — did the MEASUREMENT complete — so a non-zero here says the run never produced counters at all. It wrote to stderr: {run.stderr}")
+	try Expect.equal(run.exitCode(), expected: 0, message: "`{CoverageCommandName} {RunVerbName}` exited {run.exitCode()} over a binary this compiler built with `{CoverageBuildFlag}`. This tool's own exit code answers ONE question — did the MEASUREMENT complete — so a non-zero here says the run never produced counters at all. It wrote to stderr: {run.stderr}")
 
 	let report = withoutCarriageReturns(run.stdout)
 	try Expect.isFalse(report.isEmpty(), message: "`{CoverageCommandName} {RunVerbName}` exited 0 and printed NOTHING to stdout. stdout is the report and nothing else — the measured program's own output goes to stderr — so every assertion a case makes about the report would then be made about an empty string.")

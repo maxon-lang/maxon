@@ -30,14 +30,14 @@ test 'a breakpoint at an indirect call is armed rather than refused, and the one
 	let callRows = statementOffsetsOfLine(executable, staged: staged, line: callLine)
 	let afterRows = statementOffsetsOfLine(executable, staged: staged, line: afterLine)
 
-	Expect.equal(callRows.count() as AssertedInt, expected: RowsOfTheCallLine, message: "this case needs `{CallLineAnchor}` to be ONE statement row, so the bytes between it and `{AfterCallLineAnchor}` are exactly that statement's instructions; the line table gives it {callRows.count()}")
-	Expect.atLeast(afterRows.count() as AssertedInt, than: 1, message: "this case needs `{AfterCallLineAnchor}` to carry a statement row, which is where the call statement's bytes end; the line table gives it {afterRows.count()}")
+	Expect.equal(callRows.count(), expected: RowsOfTheCallLine, message: "this case needs `{CallLineAnchor}` to be ONE statement row, so the bytes between it and `{AfterCallLineAnchor}` are exactly that statement's instructions; the line table gives it {callRows.count()}")
+	Expect.atLeast(afterRows.count(), than: 1, message: "this case needs `{AfterCallLineAnchor}` to carry a statement row, which is where the call statement's bytes end; the line table gives it {afterRows.count()}")
 
 	let windowStart = try callRows.get(0) otherwise panic("{IndirectCallCaseLabel}: the row count was asserted on the line above")
 	let windowLimit = try afterRows.get(0) otherwise panic("{IndirectCallCaseLabel}: the row count was asserted on the line above")
 
-	Expect.greaterThan(windowLimit as AssertedInt, than: windowStart as AssertedInt, message: "the call statement's bytes run from {hexSpelling(windowStart)} up to the next line's first row, and that row is not after it")
-	Expect.atMost((windowLimit - windowStart) as AssertedInt, than: WidestSearchedWindow, message: "this case arms every byte of the call statement one at a time, and {windowLimit - windowStart} bytes is more than a call through a value can be")
+	Expect.greaterThan(windowLimit, than: windowStart, message: "the call statement's bytes run from {hexSpelling(windowStart)} up to the next line's first row, and that row is not after it")
+	Expect.atMost((windowLimit - windowStart), than: WidestSearchedWindow, message: "this case arms every byte of the call statement one at a time, and {windowLimit - windowStart} bytes is more than a call through a value can be")
 
 	var probed = SidecarNumberArray.create()
 	var probeCommands = StringArray.create()
@@ -52,7 +52,7 @@ test 'a breakpoint at an indirect call is armed rather than refused, and the one
 	let probeSaid = renderedEvents(probe.stdout, stderr: probe.stderr)
 	let answers = eventsOfKind(probeEvents, kind: BreakpointEventName)
 
-	Expect.equal(answers.count() as AssertedInt, expected: probed.count() as AssertedInt, message: "{probed.count()} arming requests are {probed.count()} answers, one per request. It printed: {renderedRows(eventKinds(probeEvents))}. {probeSaid}")
+	Expect.equal(answers.count(), expected: probed.count(), message: "{probed.count()} arming requests are {probed.count()} answers, one per request. It printed: {renderedRows(eventKinds(probeEvents))}. {probeSaid}")
 
 	var starts = SidecarNumberArray.create()
 	var refusedForItsClass = StringArray.create()
@@ -70,7 +70,7 @@ test 'a breakpoint at an indirect call is armed rather than refused, and the one
 	end 'eachAnswer'
 
 	Expect.isEmpty(renderedRows(refusedForItsClass), message: "⛔ AN INSTRUCTION THE DECODER READS IS ARMABLE, WHATEVER CLASS IT IS. A breakpoint is the original byte saved, an `int3` written over it, and — to step over it — the byte restored, the instruction single-stepped and the `int3` re-planted, so what the instruction DOES is no part of arming it; the only thing that can refuse is bytes the decoder cannot measure a length for. These bytes of an indirect call's statement were refused for their class: {renderedRows(refusedForItsClass)}. {probeSaid}")
-	Expect.equal(starts.count() as AssertedInt, expected: InstructionsOfTheCallStatement, message: "this case needs `{CallLineAnchor}` to compile to exactly {InstructionsOfTheCallStatement} instructions — the argument set-up and the call through the value — so that the LAST of them is the call: the statement's value comes from the call, so nothing of the statement can follow it. The bytes from {hexSpelling(windowStart)} up to {hexSpelling(windowLimit)} begin {starts.count()} instructions. {probeSaid}")
+	Expect.equal(starts.count(), expected: InstructionsOfTheCallStatement, message: "this case needs `{CallLineAnchor}` to compile to exactly {InstructionsOfTheCallStatement} instructions — the argument set-up and the call through the value — so that the LAST of them is the call: the statement's value comes from the call, so nothing of the statement can follow it. The bytes from {hexSpelling(windowStart)} up to {hexSpelling(windowLimit)} begin {starts.count()} instructions. {probeSaid}")
 
 	let callOffset = try starts.get(CallInstructionRow) otherwise panic("{IndirectCallCaseLabel}: the instruction count was asserted on the line above")
 
@@ -86,7 +86,7 @@ test 'a breakpoint at an indirect call is armed rather than refused, and the one
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let breakpoints = eventsOfKind(events, kind: BreakpointEventName)
 
-	Expect.atLeast(breakpoints.count() as AssertedInt, than: 1, message: "`{BreakCommand} {exactOffsetTarget(callOffset)}` printed no `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.atLeast(breakpoints.count(), than: 1, message: "`{BreakCommand} {exactOffsetTarget(callOffset)}` printed no `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let armed = eventAt(breakpoints, index: 0)
 
@@ -109,7 +109,7 @@ test 'a breakpoint at an indirect call is armed rather than refused, and the one
 	wanted.push("{CallingFunctionName} {hexSpelling(callOffset)}")
 	wanted.push(FirstCalleeName)
 
-	Expect.equal(stops.count() as AssertedInt, expected: StopsAtTheCallAndItsCallees, message: "⛔ ONE ARMED BYTE, THREE HITS, AND TWO DIFFERENT FUNCTIONS REACHED FROM IT. The loop runs three rounds, so the armed call is hit three times, and each hit is followed by a stop in whichever function the value named that round. A hit that is missed, or a resume that does not arrive at the callee, is a breakpoint at an indirect call that the driver plants and cannot get past. The session stopped: {renderedRows(walked)}. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(stops.count(), expected: StopsAtTheCallAndItsCallees, message: "⛔ ONE ARMED BYTE, THREE HITS, AND TWO DIFFERENT FUNCTIONS REACHED FROM IT. The loop runs three rounds, so the armed call is hit three times, and each hit is followed by a stop in whichever function the value named that round. A hit that is missed, or a resume that does not arrive at the callee, is a breakpoint at an indirect call that the driver plants and cannot get past. The session stopped: {renderedRows(walked)}. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	var wrong = StringArray.create()
 
@@ -127,21 +127,21 @@ test 'a breakpoint at an indirect call is armed rather than refused, and the one
 	let insideTheCallee = eventAt(stops, index: StopAtTheFirstCallee)
 	let frames = childrenOf(insideTheCallee, node: insideTheCallee.root, key: BacktraceKey)
 
-	Expect.atLeast(frames.count() as AssertedInt, than: FramesAtACalleesStop, message: "a stop inside `{FirstCalleeName}` carries its own frame and the frame of the function that called it. {said}")
+	Expect.atLeast(frames.count(), than: FramesAtACalleesStop, message: "a stop inside `{FirstCalleeName}` carries its own frame and the frame of the function that called it. {said}")
 
 	let callerFrame = nodeAt(frames, index: CallerFrameRow)
 	let callSite = hexValue(textOf(insideTheCallee, node: callerFrame, key: OffsetKey))
 
 	Expect.equal(textOf(insideTheCallee, node: callerFrame, key: FunctionKey), expected: CallingFunctionName, message: "frame {CallerFrameRow} is the function that made the call. {said}")
-	Expect.atLeast(callSite as AssertedInt, than: callOffset as AssertedInt, message: "⛔ THIS IS WHAT MEASURES THE ARMED INSTRUCTION'S IDENTITY RATHER THAN ASSUMING IT. The caller's frame stands at the call it is inside, so its offset {hexSpelling(callSite)} falls within the instruction that made the call — and that instruction is the one armed at {hexSpelling(callOffset)} only if the offset is at or past it. {said}")
-	Expect.lessThan(callSite as AssertedInt, than: windowLimit as AssertedInt, message: "the caller's frame stands inside the armed instruction, which is the last of the statement, so its offset is before the next line's first byte {hexSpelling(windowLimit)}. {said}")
+	Expect.atLeast(callSite, than: callOffset, message: "⛔ THIS IS WHAT MEASURES THE ARMED INSTRUCTION'S IDENTITY RATHER THAN ASSUMING IT. The caller's frame stands at the call it is inside, so its offset {hexSpelling(callSite)} falls within the instruction that made the call — and that instruction is the one armed at {hexSpelling(callOffset)} only if the offset is at or past it. {said}")
+	Expect.lessThan(callSite, than: windowLimit, message: "the caller's frame stands inside the armed instruction, which is the last of the statement, so its offset is before the next line's first byte {hexSpelling(windowLimit)}. {said}")
 
 	let exits = eventsOfKind(events, kind: ExitEventName)
 
-	Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the last `{ContinueCommand}` runs the program out, so nothing here says the resumes off the armed call were correct. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(exits.count(), expected: 1, message: "the last `{ContinueCommand}` runs the program out, so nothing here says the resumes off the armed call were correct. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let exited = eventAt(exits, index: 0)
 
-	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the debugged program answered a different exit code than the same program run with nothing attached. {said}")
+	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey), expected: undebugged.exitCode() as EventNumber, message: "the debugged program answered a different exit code than the same program run with nothing attached. {said}")
 	Expect.contains(withoutCarriageReturns(session.stderr), needle: withoutCarriageReturns(undebugged.stdout).trim(), message: "the debugged program did not print what it prints undebugged, so the byte restored over the `int3` at the call was not the byte taken from there. In `{DebugBatchOption}` the debuggee's own streams go to the driver's STDERR, so stdout stays pure JSON. Undebugged it printed: {undebugged.stdout}. {said}")
 end 'a breakpoint at an indirect call is armed rather than refused, and the one armed byte is hit ahead of each function the value names'

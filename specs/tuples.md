@@ -1715,6 +1715,33 @@ typealias Pair = (Integer, Integer)
 3
 ```
 
+<!-- test: a-tuple-alias-type-argument-declared-above-its-instantiation-is-constructible -->
+The same program with `Pair` declared ABOVE the instantiation: the sweep then spells the argument as a tuple
+record under its written element names, and it still denotes the canonical tuple.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Pair = (Integer, Integer)
+
+type Box uses T
+	export var item as T
+
+	static function create(item T) returns Box
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+typealias BoxA = Box with Pair
+
+function main() returns ExitCode
+	let b = BoxA.create((6, 3))
+
+	return (b.item.0 - b.item.1) as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+
 <!-- test: shared-body-reassign-with-a-heap-owning-tuple-alias-instantiation -->
 
 ⭐ A shared generic body reassigns its opaque `T` field, and the SAME generic is ALSO instantiated at a tuple

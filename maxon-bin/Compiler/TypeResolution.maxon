@@ -576,14 +576,14 @@ end 'functionTypeRegistryOf'
 // for `fn(Real) returns Real` — the very silent wrong answer this exists to close. Nor is it the NOMINAL
 // display comparison `checkValueMergeSignatures` makes; see FunctionShape for why a door and a merge ask
 // different questions and get different rules.
-export function functionShapesAgree(registry FunctionTypeRegistry, signatures ProgramSignatures, declared FunctionShape, got FunctionShape) returns bool
-	return shapesAgreeUnder(registry, signatures: signatures, declared: declared, got: got, pending: sharedEmptyFunctionTypePairs)
+export function functionShapesAgree(registry FunctionTypeRegistry, signatures ProgramSignatures, declared FunctionShape, got FunctionShape, readerFilePath FilePath) returns bool
+	return shapesAgreeUnder(registry, signatures: signatures, declared: declared, got: got, pending: sharedEmptyFunctionTypePairs, readerFilePath: readerFilePath)
 end 'functionShapesAgree'
 
 // The rule proper, carrying the pairs of function-type names already under comparison further down the
 // same descent (see `FunctionTypePair`). Split from the entry point above only so the cycle guard is one
 // argument the three call sites never have to know about.
-function shapesAgreeUnder(registry FunctionTypeRegistry, signatures ProgramSignatures, declared FunctionShape, got FunctionShape, pending FunctionTypePairArray) returns bool
+function shapesAgreeUnder(registry FunctionTypeRegistry, signatures ProgramSignatures, declared FunctionShape, got FunctionShape, pending FunctionTypePairArray, readerFilePath FilePath) returns bool
 	if declared.paramTypes.count() != got.paramTypes.count() 'arity'
 		return false
 	end 'arity'
@@ -592,7 +592,7 @@ function shapesAgreeUnder(registry FunctionTypeRegistry, signatures ProgramSigna
 		let declaredParam = try declared.paramTypes.get(i) otherwise panic("shapesAgreeUnder: declared.paramTypes.get OOB at {i} — the count was just read from the same array")
 		let gotParam = try got.paramTypes.get(i) otherwise panic("shapesAgreeUnder: got.paramTypes.get OOB at {i} — the arity check above proved the two counts equal")
 
-		if not resolvedTypesMatch(registry, signatures: signatures, declared: declaredParam, got: gotParam, pending: pending) 'paramMismatch'
+		if not resolvedTypesMatch(registry, signatures: signatures, declared: declaredParam, got: gotParam, pending: pending, readerFilePath: readerFilePath) 'paramMismatch'
 			return false
 		end 'paramMismatch'
 
@@ -615,14 +615,14 @@ function shapesAgreeUnder(registry FunctionTypeRegistry, signatures ProgramSigna
 		// `function(Integer)` reaching a `function(Color)` place would have the callee read an ordinal as a
 		// number, or a number as an ordinal. `identitiesConflict` is the same rule every coercion site asks,
 		// so a ranged alias — a scalar wearing a name — decays here exactly as it does there.
-		if signatures.identitiesConflict(shapeParamIdentity(declared, index: i), got: shapeParamIdentity(got, index: i)) 'paramIdentityMismatch'
+		if signatures.identitiesConflict(shapeParamIdentity(declared, index: i), got: shapeParamIdentity(got, index: i), readerFilePath: readerFilePath) 'paramIdentityMismatch'
 			return false
 		end 'paramIdentityMismatch'
 	end 'eachParam'
 
 	// The RETURN slot asks both halves too, and for the same measurement — a shape carries ONE return identity
 	// rather than a per-position array, because a function type returns exactly one thing.
-	return returnSlotsMatch(registry, signatures: signatures, declared: declared.returnType, got: got.returnType, pending: pending) and not signatures.identitiesConflict(declared.returnAggregateName, got: got.returnAggregateName)
+	return returnSlotsMatch(registry, signatures: signatures, declared: declared.returnType, got: got.returnType, pending: pending, readerFilePath: readerFilePath) and not signatures.identitiesConflict(declared.returnAggregateName, got: got.returnAggregateName, readerFilePath: readerFilePath)
 end 'shapesAgreeUnder'
 
 // ⭐ **RENDER A RESOLVED SHAPE THE WAY IT WAS WRITTEN — the diagnostic twin of `functionShapesAgree`, and it
@@ -683,10 +683,10 @@ let sharedEmptyFunctionTypePairs = FunctionTypePairArray.create()
 // Two resolved RETURN slots are the same slot: both return nothing, or both return the same type. A `void`
 // meeting a value (or the reverse) is a real disagreement — a call site that expects a result register from
 // a function that writes none reads whatever was there.
-function returnSlotsMatch(registry FunctionTypeRegistry, signatures ProgramSignatures, declared MaxonReturnType, got MaxonReturnType, pending FunctionTypePairArray) returns bool
+function returnSlotsMatch(registry FunctionTypeRegistry, signatures ProgramSignatures, declared MaxonReturnType, got MaxonReturnType, pending FunctionTypePairArray, readerFilePath FilePath) returns bool
 	match declared 'declaredSlot'
 		void then return isVoidReturnType(got)
-		value(declaredValue) then return not isVoidReturnType(got) and resolvedTypesMatch(registry, signatures: signatures, declared: declaredValue, got: returnedValueType(got), pending: pending)
+		value(declaredValue) then return not isVoidReturnType(got) and resolvedTypesMatch(registry, signatures: signatures, declared: declaredValue, got: returnedValueType(got), pending: pending, readerFilePath: readerFilePath)
 	end 'declaredSlot'
 end 'returnSlotsMatch'
 
@@ -715,7 +715,7 @@ end 'returnedValueType'
 // Which tags carry an identity is stated as an exhaustive match rather than a list of "interesting" ones,
 // so a tag added to `ValueTypeTag` cannot default into "compare the tag only" and silently let two distinct
 // types agree.
-function resolvedTypesMatch(registry FunctionTypeRegistry, signatures ProgramSignatures, declared MaxonType, got MaxonType, pending FunctionTypePairArray) returns bool
+function resolvedTypesMatch(registry FunctionTypeRegistry, signatures ProgramSignatures, declared MaxonType, got MaxonType, pending FunctionTypePairArray, readerFilePath FilePath) returns bool
 	let declaredTag = maxonTypeTag(declared)
 
 	if declaredTag != maxonTypeTag(got) 'differentTag'
@@ -730,7 +730,7 @@ function resolvedTypesMatch(registry FunctionTypeRegistry, signatures ProgramSig
 	// nested types genuinely differ, `runner`'s own body calls `f` through `InnerB`'s signature while the
 	// caller supplied an `InnerA`, and the wrong answer lands one level in where nothing else looks.
 	if declaredTag == ValueTypeTag.function 'nestedFunctionType'
-		return nestedFunctionTypesAgree(registry, signatures: signatures, declaredId: typeNameIdOf(declared), gotId: typeNameIdOf(got), pending: pending)
+		return nestedFunctionTypesAgree(registry, signatures: signatures, declaredId: typeNameIdOf(declared), gotId: typeNameIdOf(got), pending: pending, readerFilePath: readerFilePath)
 	end 'nestedFunctionType'
 
 	let identifiedByName = match declaredTag 'k'
@@ -787,7 +787,7 @@ end 'resolvedTypesMatch'
 // every ordinary program: a nested function parameter almost always spells the same alias on both sides, and
 // that case allocates nothing and touches no registry. It is also what makes the cycle guard cheap — a
 // SELF-referential alias meets itself here and never descends at all.
-function nestedFunctionTypesAgree(registry FunctionTypeRegistry, signatures ProgramSignatures, declaredId TypeNameId, gotId TypeNameId, pending FunctionTypePairArray) returns bool
+function nestedFunctionTypesAgree(registry FunctionTypeRegistry, signatures ProgramSignatures, declaredId TypeNameId, gotId TypeNameId, pending FunctionTypePairArray, readerFilePath FilePath) returns bool
 	if declaredId == gotId 'sameFunctionType'
 		return true
 	end 'sameFunctionType'
@@ -806,7 +806,7 @@ function nestedFunctionTypesAgree(registry FunctionTypeRegistry, signatures Prog
 		return false
 	end 'twoBrandsOfOneShape'
 
-	return shapesAgreeUnder(registry, signatures: signatures, declared: requireFunctionShapeOf(registry, name: declaredName, side: "nested declared"), got: requireFunctionShapeOf(registry, name: gotName, side: "nested arriving"), pending: pendingWithPair(pending, declaredName: declaredName, gotName: gotName))
+	return shapesAgreeUnder(registry, signatures: signatures, declared: requireFunctionShapeOf(registry, name: declaredName, side: "nested declared"), got: requireFunctionShapeOf(registry, name: gotName, side: "nested arriving"), pending: pendingWithPair(pending, declaredName: declaredName, gotName: gotName), readerFilePath: readerFilePath)
 end 'nestedFunctionTypesAgree'
 
 // ⭐ **THE NAME BEHIND A `function`-TAGGED TYPE'S ID — the ONE reader.** Every consumer of a function type
@@ -935,7 +935,7 @@ function syncResolvedSignature(project Project, func IrFunction)
 	end 'noSig'
 
 	let sig = try project.funcSignatures.get(func.name) otherwise panic("syncResolvedSignature: contains({String.from(func.name)}) true but get failed")
-	project.funcSignatures.upsert(func.name, value: FuncSignature.create(sig.paramNames, paramTypes: sourceParamTypesOf(func, declaredCount: sig.paramNames.count()), paramAggregateNames: sig.paramAggregateNames, paramDeclaredNames: sig.paramDeclaredNames, returnAggregateName: sig.returnAggregateName, paramExistentialSites: sig.paramExistentialSites, returnExistentialSites: sig.returnExistentialSites, extensionConstraints: sig.extensionConstraints))
+	project.funcSignatures.upsert(func.name, value: FuncSignature.create(sig.paramNames, paramTypes: sourceParamTypesOf(func, declaredCount: sig.paramNames.count() as ParamCount), paramAggregateNames: sig.paramAggregateNames, paramDeclaredNames: sig.paramDeclaredNames, returnAggregateName: sig.returnAggregateName, paramExistentialSites: sig.paramExistentialSites, returnExistentialSites: sig.returnExistentialSites, extensionConstraints: sig.extensionConstraints))
 end 'syncResolvedSignature'
 
 // ⭐ **THE FUNCTION'S SOURCE PARAMETER TYPES — WHICH IS NOT ALWAYS ALL OF `maxonParamTypes`.** A LIFTED
@@ -954,7 +954,7 @@ end 'syncResolvedSignature'
 // aligned with it by construction (the env is APPENDED), so the fix is a prefix. A fresh array is built only
 // when the counts differ, i.e. only for a lifted closure.
 function sourceParamTypesOf(func IrFunction, declaredCount ParamCount) returns MaxonTypeArray
-	if func.maxonParamTypes.count() == declaredCount 'alreadyExact'
+	if func.maxonParamTypes.count() as ParamCount == declaredCount 'alreadyExact'
 		return func.maxonParamTypes
 	end 'alreadyExact'
 

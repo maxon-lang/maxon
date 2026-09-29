@@ -94,9 +94,9 @@ typealias PreSplitOpsByBlock = Array with OpIndexArray
 // fire AT its site rather than at the end of its block — see `guardSiteAt`.
 type GuardSite
 	export var block as IrBlock
-	export var position as BlockOpPos
+	export var position as ElementIndex
 
-	static function create(block IrBlock, position BlockOpPos) returns GuardSite
+	static function create(block IrBlock, position ElementIndex) returns GuardSite
 		return Self{block: block, position: position}
 	end 'create'
 end 'GuardSite'
@@ -272,7 +272,7 @@ type RangeCheckEmitter
 	var project as Project
 	var module as StdModule
 	var func as IrFunction
-	var funcIndex as FuncIndex
+	var funcIndex as ElementIndex
 	var ids as ValueMinter
 
 	// The function's compile-time constants, PARTITIONED BY DOMAIN: an integer `const`'s payload is a
@@ -324,7 +324,7 @@ type RangeCheckEmitter
 
 	var waivers as EntryGuardWaivers
 
-	static function create(project Project, module StdModule, func IrFunction, funcIndex FuncIndex, waivers EntryGuardWaivers) returns RangeCheckEmitter
+	static function create(project Project, module StdModule, func IrFunction, funcIndex ElementIndex, waivers EntryGuardWaivers) returns RangeCheckEmitter
 		return Self{project: project, module: module, func: func, funcIndex: funcIndex, waivers: waivers, ids: ValueMinter.resuming(nextFreeValueId(module, func: func)), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), writtenNegativeLiterals: noValueMarks, borrowOperands: noBorrowOperands, guardChainTail: sharedEmptyGuardChainTail, guardChainBase: sharedEmptyGuardChainBase, guardChainSource: sharedEmptyGuardChainSource}
 	end 'create'
 
@@ -432,7 +432,7 @@ type RangeCheckEmitter
 	//
 	// The two files are not always one here. The cast and the array element resolve their alias in
 	// this function's own file, a field in its declaring file, and the arm-served index in the
-	// callee's (`Parser.recordArmServedIndexRangeCheck`), so the site carries the declaration it
+	// callee's (`Parser.requireArmServedIndexArgument`), so the site carries the declaration it
 	// resolved (`RangeCheckSiteTarget.alias`).
 	function processSite(site RangeCheckSite, filePath FilePath)
 		match site.target 'target'
@@ -570,7 +570,7 @@ type RangeCheckEmitter
 	// A guard whose bounds both elide splits nothing and is not a cascade to record: `emitGuardAt`
 	// hands back the head it was given.
 	function emitParamGuard(site RangeCheckParamSite, alias RangedTypeAlias, entryId BlockId, filePath FilePath)
-		let guardSite = self.guardSiteAt(entryId, stdOpPos: self.func.paramCount as BlockOpPos)
+		let guardSite = self.guardSiteAt(entryId, stdOpPos: self.func.paramCount)
 		let headId = guardSite.block.id
 		self.requireGuardHeadHoldsOnlyParams(guardSite)
 
@@ -736,7 +736,7 @@ type RangeCheckEmitter
 	end 'requireGuardHeadHoldsOnlyParams'
 
 	// The refusal both non-`param` arms share — ONE message, because they say one thing.
-	function refuseNonParamAheadOfAGuard(pos BlockOpPos)
+	function refuseNonParamAheadOfAGuard(pos ElementIndex)
 		panic("requireGuardHeadHoldsOnlyParams: op {pos} of '{String.from(self.func.name)}'s entry block stands AHEAD of its parameter guard and is not a `param` op — the guard is anchored at `paramCount` on the premise that the first `paramCount` ops are the incoming-register captures, and `InlineLeaves` drops that whole block when it declines the cascade")
 	end 'refuseNonParamAheadOfAGuard'
 
@@ -1033,7 +1033,7 @@ type RangeCheckEmitter
 	// one column without the other and the (k+1)-th guard lands at an offset measured against a block it
 	// is no longer in. It is also where the pending tail STARTS, which is what `materializeChainTails`
 	// reads it as.
-	function extendGuardChain(siteBlockId BlockId, continuation IrBlock, splitAt BlockOpPos)
+	function extendGuardChain(siteBlockId BlockId, continuation IrBlock, splitAt ElementIndex)
 		let okRef = try self.func.blockRefs.get(self.func.blockRefs.count() - 1) otherwise panic("extendGuardChain: `addBlock` made the continuation of '{String.from(self.func.name)}' but registered no blockRef for it")
 
 		if self.module.getBlock(okRef).id != continuation.id 'notTheContinuation'
@@ -1138,7 +1138,7 @@ type RangeCheckEmitter
 				continue
 			end 'notInThisFunction'
 
-			var chainEnd = self.module.getBlock(((tailRef - 1) as BlockRef))
+			var chainEnd = self.module.getBlock((tailRef - 1) as ElementIndex)
 
 			if chainEnd.id == blockId 'neverSplit'
 				continue
@@ -1283,7 +1283,7 @@ type RangeCheckEmitter
 	// names was recorded by the parser and therefore predates the pass. Its ROWS are only ever the
 	// parser's block ids — a continuation is written as a VALUE at its site block's row and never gets a
 	// row of its own — so it stays exactly `func.nextBlockId` wide however many blocks the pass appends.
-	function guardSiteAt(blockId BlockId, stdOpPos BlockOpPos) returns GuardSite
+	function guardSiteAt(blockId BlockId, stdOpPos ElementIndex) returns GuardSite
 		self.ensureChainIndex()
 
 		let block = blockById(self.module, refByBlockId: self.guardChainTail, id: blockId, from: self.func.name)
@@ -1371,9 +1371,9 @@ type RangeCheckEmitter
 
 		self.guardChainTail = buildBlockIdIndex(self.module, func: self.func)
 		self.guardChainBase = BlockOpPosArray.create()
-		self.guardChainBase.growFilled(self.func.nextBlockId as ElementIndex, value: 0)
+		self.guardChainBase.growFilled(self.func.nextBlockId, value: 0)
 		self.guardChainSource = PreSplitOpsByBlock.create()
-		self.guardChainSource.growFilled(self.func.nextBlockId as ElementIndex, value: OpIndexArray.create())
+		self.guardChainSource.growFilled(self.func.nextBlockId, value: OpIndexArray.create())
 	end 'ensureChainIndex'
 
 	// ---- the panic message ----
@@ -1615,7 +1615,7 @@ let RangeCheckOkLabel = b"__rc_ok"
 // carves nothing. ⇒ The product term is MEASURED-LINEAR-IN-PRACTICE, not absent. A primitive that
 // carves MID-block, or a pass that merges a throwing call's blocks, reinstates it with nothing in the
 // way — re-run that ladder then, and take `splitChainEnd` if it bends.
-export function splitBlockInPlace(module StdModule, func IrFunction, head IrBlock, position BlockOpPos, label ByteArray) returns IrBlock
+export function splitBlockInPlace(module StdModule, func IrFunction, head IrBlock, position ElementIndex, label ByteArray) returns IrBlock
 	var headBlock = head
 	var tailOps = OpIndexArray.create()
 
@@ -1624,7 +1624,7 @@ export function splitBlockInPlace(module StdModule, func IrFunction, head IrBloc
 		tailOps.push(opIdx)
 	end 'moveTail'
 
-	headBlock.opRefs.truncate(position as ElementIndex)
+	headBlock.opRefs.truncate(position)
 
 	var ok = splitBlockExit(module, func: func, head: headBlock, label: label)
 	ok.opRefs = tailOps
@@ -1898,7 +1898,7 @@ end 'WaivableParam'
 typealias WaivableParamArray = Array with WaivableParam
 typealias WaivableParamsByCallee = Map with (ByteArray, WaivableParamArray)
 typealias CallTargetMap = Map with (ValueId, ByteArray)
-typealias CallTargetsByFunction = Map with (FuncIndex, CallTargetMap)
+typealias CallTargetsByFunction = Map with (ElementIndex, CallTargetMap)
 typealias RecordedCallArguments = Map with (ValueId, RangeCheckSiteArray)
 
 union WaivableParamLookup
@@ -1970,7 +1970,7 @@ type EntryGuardWaivers
 		var byName = FuncIndexByName.create()
 
 		for (position, func) in module.functions.withIterator() 'eachFunc'
-			byName.upsert(func.name, value: position.index() as FuncIndex)
+			byName.upsert(func.name, value: position.index())
 		end 'eachFunc'
 
 		var reference = StdFunctionReference.create()
@@ -2010,13 +2010,13 @@ type EntryGuardWaivers
 					continue
 				end 'takenAsAValue'
 
-				self.recordCallTarget(position.index() as FuncIndex, callResult: call.resultId, callee: callee)
+				self.recordCallTarget(position.index(), callResult: call.resultId, callee: callee)
 				self.denyParamsTheCallDidNotRecord(project, callee: callee, sites: try recorded.get(call.resultId) otherwise sharedNoCallArgumentSites)
 			end 'eachOp'
 		end 'eachCaller'
 	end 'denyCallsThatDidNotRecord'
 
-	function recordCallTarget(caller FuncIndex, callResult ValueId, callee ByteArray)
+	function recordCallTarget(caller ElementIndex, callResult ValueId, callee ByteArray)
 		var targets = try self.callTargets.get(caller) otherwise CallTargetMap.create()
 		targets.upsert(callResult, value: callee)
 		self.callTargets.upsert(caller, value: targets)
@@ -2041,7 +2041,7 @@ type EntryGuardWaivers
 		end 'param'
 	end 'isWaived'
 
-	function waivedParamOfCall(caller FuncIndex, callResult ValueId, argIndex ParamCount, label ByteArray, project Project) returns WaivableParamLookup
+	function waivedParamOfCall(caller ElementIndex, callResult ValueId, argIndex ParamCount, label ByteArray, project Project) returns WaivableParamLookup
 		let targets = try self.callTargets.get(caller) otherwise return WaivableParamLookup.none
 		let callee = try targets.get(callResult) otherwise return WaivableParamLookup.none
 		let lookup = self.waivableParamAt(callee, index: calleeParamSlot(project, callee: callee, argIndex: argIndex, label: label))

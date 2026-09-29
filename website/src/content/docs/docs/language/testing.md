@@ -70,7 +70,7 @@ end 'describe'
 
 ```maxon
 test 'boiling point converts'
-	Expect.equal(toFahrenheit(100) as AssertedInt, expected: 212)
+	Expect.equal(toFahrenheit(100), expected: 212)
 end 'boiling point converts'
 
 test 'zero is freezing'
@@ -79,7 +79,7 @@ test 'zero is freezing'
 end 'zero is freezing'
 
 test 'body temperature'
-	Expect.equal(toFahrenheit(37) as AssertedInt, expected: 98, message: "rounds toward zero")
+	Expect.equal(toFahrenheit(37), expected: 98, message: "rounds toward zero")
 end 'body temperature'
 ```
 
@@ -96,13 +96,13 @@ temperature/temperature.maxtest:
  3 tests across 1 file.
 ```
 
-The integer assertions take `AssertedInt` (`int(i64.min to i64.max)`), so a value of another alias is cast
-to it; float assertions take `AssertedReal`. The matchers:
+The comparing matchers are [generic functions](/docs/language/composite-types/#generic-functions): the type is inferred from the two
+arguments, so a value of any alias is passed as it is. `close` takes `AssertedReal` floats. The matchers:
 
 | Matcher | Checks |
 |---------|--------|
-| `Expect.equal(actual, expected:)`, `Expect.notEqual(actual, expected:)` | integers, strings, booleans |
-| `Expect.greaterThan(actual, than:)`, `lessThan`, `atLeast`, `atMost` | integers and floats |
+| `Expect.equal(actual, expected:)`, `Expect.notEqual(actual, expected:)` | any `Equatable` type |
+| `Expect.greaterThan(actual, than:)`, `lessThan`, `atLeast`, `atMost` | any `Comparable` type |
 | `Expect.close(actual, expected:, within:)` | floats within a tolerance |
 | `Expect.isTrue(actual)`, `Expect.isFalse(actual)` | booleans |
 | `Expect.contains(haystack, needle:)`, `startsWith`, `endsWith`, `isEmpty` | strings |

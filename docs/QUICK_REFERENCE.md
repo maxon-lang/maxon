@@ -49,6 +49,15 @@ var x = 70000 as Port               // compile error: out of range
 var y = someExpression as Port      // runtime range check (panics on violation)
 ```
 
+Subtypes: an alias that `implements` another widens to it, and to its ancestors, with no cast:
+```maxon
+typealias BlockId = int(0 to u64.max) implements ElementIndex   // indexes any Array
+typealias LoopHead = int(0 to 1000) implements BlockId          // range fits the parent's (E3178)
+```
+An ancestor narrows to a subtype only by cast; two subtypes of one parent are different types. Arithmetic
+over two subtypes lands in a destination either operand's alias satisfies; elsewhere it is their nearest
+common ancestor. `Array` indexes, `count()` included, are `ElementIndex`.
+
 Storage in arrays and globals uses the smallest fitting integer width (u8/i8, u16/i16, u32/i32, or i64). All arithmetic uses 64-bit operations regardless of storage type.
 
 Standard library aliases: `ExitCode`, `HashValue`, `Codepoint`, `NetworkPort`. Each module also defines its own domain-specific numeric aliases (e.g. `String.ByteCount`, `String.GraphemeCount`, `Math.Real`) — declare a local typealias for your own domain rather than reusing a generic `Count`/`Index`.
@@ -251,6 +260,19 @@ greet("Smith", title: "Dr.")
 **Function overloads:** Multiple functions can share the same name if they differ by parameter types or parameter names. The compiler auto-selects by argument types when unambiguous. When signatures are identical, named arguments are required (E3007).
 
 **Discarding parameters:** Use `_` as a parameter name to suppress the unused-variable error (E3012): `function onClick(_ MouseEvent)`.
+
+**Generic functions:** a free function or `static` method declares type parameters with `uses` and
+constrains them with `where`; a call infers them from its arguments (two aliases give their nearest common
+ancestor, E3180 when there is none). Each inferred type compiles its own copy. Numbers, their aliases,
+`String`, `bool` and `Character` are `Equatable` and `Comparable`.
+```maxon
+function larger(a T, b T) uses T returns T where T is Comparable
+	return a if a > b else b
+end 'larger'
+
+larger(3, b: 7)                  // 7
+larger("pear", b: "apple")       // "pear"
+```
 
 ## Closures
 

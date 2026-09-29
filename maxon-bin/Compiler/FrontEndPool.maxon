@@ -284,7 +284,7 @@ module type FrontEndPool
 	var inProcess as FrontEndWorkerStateArray
 
 	// The most files one drain of this pool dispatched — what the pool is sized to.
-	var mostFilesDispatched as PoolJob
+	var mostFilesDispatched as ElementIndex
 
 	// The main thread's index the workers' copies are taken from — empty until the first parse is dispatched.
 	var baseline as HeldIndexArray
@@ -390,7 +390,7 @@ module type FrontEndPool
 			// observation of the pool that ran; without this, that case would compare the rule with itself.
 			// Equality holds by construction — `requireWorkers` grows the pool to `min(P, filesDispatched)` on
 			// every drain and `min` is monotone in a maximum — so this catches a future divergence loudly.
-			if sizing.workerCount != self.workers.count() as PoolJob 'theReportedPoolIsNotTheOneThatRan'
+			if sizing.workerCount != self.workers.count() 'theReportedPoolIsNotTheOneThatRan'
 				panic("FrontEndPool.close: the pool holds {self.workers.count()} worker(s) where min(P, {filesDispatched}) is {sizing.workerCount} — `requireWorkers` grows it to that size on every drain, so a difference is a pool the reported line does not describe")
 			end 'theReportedPoolIsNotTheOneThatRan'
 
@@ -422,7 +422,7 @@ module type FrontEndPool
 	end 'close'
 
 	// Sized by what this drain hands out, so a warm front end that re-parses one file spawns one worker.
-	function requireWorkers(project Project, filesDispatched PoolJob)
+	function requireWorkers(project Project, filesDispatched ElementIndex)
 		let wanted = PoolSizing.forJobs(filesDispatched).workerCount
 
 		while self.workers.count() < wanted 'eachMissingWorker'
@@ -454,7 +454,7 @@ module type FrontEndPool
 	//
 	// Copied while the main thread's index is at its settled baseline: the fold restores it before it parses, and a
 	// drain writes nothing into it.
-	function requireAdopted(workerSlot PoolSlot)
+	function requireAdopted(workerSlot ElementIndex)
 		let holdsTheBaseline = try self.adopted.get(workerSlot) otherwise panic("FrontEndPool.requireAdopted: adopted.get OOB at {workerSlot} below count {self.adopted.count()}")
 
 		if holdsTheBaseline 'alreadyAdopted'
@@ -478,7 +478,7 @@ module type FrontEndPool
 
 	// A fold moves the live keys without re-sweeping the index, so a worker takes them as a small
 	// update rather than a fresh copy of the whole index.
-	function refreshLiveKeys(workerSlot PoolSlot)
+	function refreshLiveKeys(workerSlot ElementIndex)
 		let held = try self.heldRevisions.get(workerSlot) otherwise panic("FrontEndPool.refreshLiveKeys: heldRevisions.get OOB at {workerSlot} below count {self.heldRevisions.count()}")
 
 		if held == self.baselineRevision 'current'
@@ -574,7 +574,7 @@ module type FrontEndPool
 
 	// The tokens are copied rather than LENT: the parser keeps them in a field, which the freeze on a lent value
 	// refuses (E3160).
-	function dispatchJob(input FrontEndDrainInput, files PoolJobArray, workerSlot PoolSlot, dispatch PoolDispatch, replies FrontEndReplyPromiseArray)
+	function dispatchJob(input FrontEndDrainInput, files PoolJobArray, workerSlot ElementIndex, dispatch PoolDispatch, replies FrontEndReplyPromiseArray)
 		let fileIndex = fileOfJob(files, job: dispatch.nextJob(workerSlot))
 
 		match input 'input'
@@ -583,12 +583,12 @@ module type FrontEndPool
 		end 'input'
 	end 'dispatchJob'
 
-	function workerAt(workerSlot PoolSlot) returns FrontEndWorker.handle
+	function workerAt(workerSlot ElementIndex) returns FrontEndWorker.handle
 		return try self.workers.get(workerSlot) otherwise panic("FrontEndPool.workerAt: workers.get OOB at {workerSlot} below count {self.workers.count()}")
 	end 'workerAt'
 
 	// The worker at `workerSlot`, holding its copy of the baseline.
-	function adoptedWorkerAt(workerSlot PoolSlot) returns FrontEndWorker.handle
+	function adoptedWorkerAt(workerSlot ElementIndex) returns FrontEndWorker.handle
 		self.requireAdopted(workerSlot)
 		return self.workerAt(workerSlot)
 	end 'adoptedWorkerAt'
@@ -610,30 +610,30 @@ module type FrontEndPool
 	end 'ranOnTheWorkers'
 end 'FrontEndPool'
 
-function sourcePathAt(project Project, fileIndex PoolJob) returns FilePath
+function sourcePathAt(project Project, fileIndex ElementIndex) returns FilePath
 	return try project.db.sourcePaths.get(fileIndex) otherwise panic("FrontEndPool: file {fileIndex} is not below project.db.sourcePaths.count() {project.db.sourcePaths.count()}")
 end 'sourcePathAt'
 
-function sourceTextAt(project Project, fileIndex PoolJob) returns String
+function sourceTextAt(project Project, fileIndex ElementIndex) returns String
 	let entry = try sourceEntryOf(project, path: sourcePathAt(project, fileIndex: fileIndex)) otherwise panic("FrontEndPool.sourceTextAt: file {fileIndex} has no source entry — the pool sized its job from it")
 	return entry.content
 end 'sourceTextAt'
 
-function queryAt(queries ParseQueryArray, fileIndex PoolJob) returns ParseQuery
+function queryAt(queries ParseQueryArray, fileIndex ElementIndex) returns ParseQuery
 	return try queries.get(fileIndex) otherwise panic("FrontEndPool.queryAt: queries.get OOB at {fileIndex} below count {queries.count()}")
 end 'queryAt'
 
 // Recorded by FILE, so the landing after the drain reads every answer in source-path order.
-function landOutcome(outcome FrontEndOutcome, fileIndex PoolJob, outcomes FrontEndOutcomeArray, slots LandingSlots)
+function landOutcome(outcome FrontEndOutcome, fileIndex ElementIndex, outcomes FrontEndOutcomeArray, slots LandingSlots)
 	slots.record(fileIndex, slot: outcomes.count())
 	outcomes.push(outcome)
 end 'landOutcome'
 
-function fileOfJob(files PoolJobArray, job PoolJob) returns PoolJob
+function fileOfJob(files PoolJobArray, job ElementIndex) returns ElementIndex
 	return try files.get(job) otherwise panic("FrontEndPool: job {job} is not below the {files.count()} file(s) dispatched")
 end 'fileOfJob'
 
-function noteJob(fileIndex PoolJob, size PoolJobSize, files PoolJobArray, sizes PoolJobSizeArray)
+function noteJob(fileIndex ElementIndex, size PoolJobSize, files PoolJobArray, sizes PoolJobSizeArray)
 	files.push(fileIndex)
 	sizes.push(size)
 end 'noteJob'
@@ -661,14 +661,14 @@ function parseDrainWorkerCount(sizes PoolJobSizeArray, poolSize PoolSize) return
 end 'parseDrainWorkerCount'
 
 // A memoized parse is nothing to dispatch; a needed one is a job sized by its resolved tokens.
-function noteParseJob(query ParseQuery, fileIndex PoolJob, files PoolJobArray, sizes PoolJobSizeArray)
+function noteParseJob(query ParseQuery, fileIndex ElementIndex, files PoolJobArray, sizes PoolJobSizeArray)
 	match query 'query'
 		memoized then return
-		needed(_, tokens, _, _) then noteJob(fileIndex, size: tokens.count(), files: files, sizes: sizes)
+		needed(_, tokens, _, _) then noteJob(fileIndex, size: tokens.count() as PoolJobSize, files: files, sizes: sizes)
 	end 'query'
 end 'noteParseJob'
 
-function landedOutcome(outcomes FrontEndOutcomeArray, slots LandingSlots, fileIndex PoolJob) returns FrontEndOutcome
+function landedOutcome(outcomes FrontEndOutcomeArray, slots LandingSlots, fileIndex ElementIndex) returns FrontEndOutcome
 	return try outcomes.get(slots.slotOf(fileIndex)) otherwise panic("FrontEndPool.landedOutcome: outcomes.get OOB for file {fileIndex}")
 end 'landedOutcome'
 
@@ -697,7 +697,7 @@ function landParses(project Project, queries ParseQueryArray, outcomes FrontEndO
 	return artifacts
 end 'landParses'
 
-function landedArtifact(project Project, query ParseQuery, fileIndex PoolJob, outcomes FrontEndOutcomeArray, slots LandingSlots) returns FileParseArtifact
+function landedArtifact(project Project, query ParseQuery, fileIndex ElementIndex, outcomes FrontEndOutcomeArray, slots LandingSlots) returns FileParseArtifact
 	return match query 'query'
 		memoized(artifact) gives artifact
 		needed(_, _, _, keyHash) gives landParseOutcome(project, path: sourcePathAt(project, fileIndex: fileIndex), outcome: parseOutcomeOf(landedOutcome(outcomes, slots: slots, fileIndex: fileIndex)), keyHash: keyHash)

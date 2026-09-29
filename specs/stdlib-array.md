@@ -1423,7 +1423,7 @@ function main() returns ExitCode
 	end 'err'
 
 	// removed.id==1, arr is now [Item{id:2}, Item{id:3}]
-	return removed.id + arr.count()
+	return removed.id + (arr.count() as Int)
 end 'main'
 ```
 ```exitcode

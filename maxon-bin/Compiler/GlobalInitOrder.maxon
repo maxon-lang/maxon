@@ -54,25 +54,14 @@
 // a walk root. ⚠ That is NOT "no program pays": a live `CharacterSet` preset is a calling-initializer global,
 // so any program that reads one has roots here.
 
-// A global's position in the list `__module_init` fills — ARENA order on the way in
-// (`ProgramSignatures.managedGlobals`) and dependency order on the way out. The cycle report reads
-// "later-declared" off it, exactly as the top-level constant evaluator reads it off an arena index.
-typealias GlobalInitIndex = int(0 to u64.max)
-typealias GlobalInitIndexArray = Array with GlobalInitIndex
-typealias GlobalInitIndexSet = Set with GlobalInitIndex
-typealias GlobalInitIndexByLabel = Map with (ByteArray, GlobalInitIndex)
+typealias GlobalInitIndexArray = Array with ElementIndex
+typealias GlobalInitIndexSet = Set with ElementIndex
+typealias GlobalInitIndexByLabel = Map with (ByteArray, ElementIndex)
 
 // One row per global: the globals its initializer reads, as positions in the incoming list.
 typealias GlobalInitDependencies = Array with GlobalInitIndexArray
 
-// A frame's depth on the ordering walk's explicit stack. Its own alias because it indexes the FRAMES and not
-// the globals, and the two spaces coincide only while every global is on the stack at once.
-typealias GlobalInitStackDepth = int(0 to u64.max)
-
-// How far a frame has got through its global's dependency row — a position in that ROW, which is a third
-// space again.
-typealias GlobalInitCursor = int(0 to u64.max)
-typealias GlobalInitCursorArray = Array with GlobalInitCursor
+typealias GlobalInitCursorArray = Array with ElementIndex
 
 // How much a walk may credit — see the header's two-edge-sets paragraph.
 enum EdgeConfidence
@@ -195,7 +184,7 @@ end 'anyInitializerCalls'
 // have forced is lost and that global reads a zero. The alternative is refusing every program whose overload
 // members happen to cross-reference — MEASURED, and the defect this split repairs. Removing the residual
 // means resolving overloads, which happens after this point in the pipeline.
-function buildEffectiveDeps(nodeCount GlobalInitIndex, named GlobalInitDependencies, possible GlobalInitDependencies, refusal InitCycleRefusal, project Project) returns GlobalInitDependencies throws CompileError
+function buildEffectiveDeps(nodeCount ElementIndex, named GlobalInitDependencies, possible GlobalInitDependencies, refusal InitCycleRefusal, project Project) returns GlobalInitDependencies throws CompileError
 	var effective = GlobalInitDependencies.create()
 
 	for _ in 0 upto nodeCount 'eachGlobal'
@@ -220,7 +209,7 @@ end 'buildEffectiveDeps'
 // ⭐ **ONE EDGE, AND THE CONFIDENCE DECIDES ONLY WHAT A CYCLE MEANS.** `to` already reaching `from` makes the
 // two mutually dependent: by roads the program's own ops name, that is E2012; by a road the walk merely
 // credited, it is an edge to drop.
-function addDependencyEdge(effective GlobalInitDependencies, from GlobalInitIndex, to GlobalInitIndex, edges EdgeConfidence, refusal InitCycleRefusal, project Project) throws CompileError
+function addDependencyEdge(effective GlobalInitDependencies, from ElementIndex, to ElementIndex, edges EdgeConfidence, refusal InitCycleRefusal, project Project) throws CompileError
 	if rowContains(effective, index: from, value: to) 'alreadyAnEdge'
 		return
 	end 'alreadyAnEdge'
@@ -244,7 +233,7 @@ end 'addDependencyEdge'
 // still empty reaches nothing but itself, so only a SELF edge can close a cycle through it. Without this the
 // exact test below walks everything reachable from `to` once per edge, which is quadratic in a program whose
 // globals form one long chain — the shape a 10,000-deep probe is made of.
-function reachesBack(effective GlobalInitDependencies, from GlobalInitIndex, to GlobalInitIndex) returns bool
+function reachesBack(effective GlobalInitDependencies, from ElementIndex, to ElementIndex) returns bool
 	return to == from or rowOf(effective, index: to).count() > 0
 end 'reachesBack'
 
@@ -254,7 +243,7 @@ end 'reachesBack'
 //
 // Iterative, with a parent column, for `orderedByDependency`'s reason: nothing here may recurse to the depth
 // of a user's dependency chain.
-function pathBetween(deps GlobalInitDependencies, from GlobalInitIndex, to GlobalInitIndex) returns GlobalInitIndexArray
+function pathBetween(deps GlobalInitDependencies, from ElementIndex, to ElementIndex) returns GlobalInitIndexArray
 	var seen = BoolArray.create()
 	seen.resize(deps.count())
 	var parent = GlobalInitIndexArray.create()
@@ -292,7 +281,7 @@ end 'pathBetween'
 
 // The walked path, source first. `from`'s own parent entry is never read, which is what lets the climb
 // terminate on it rather than on a sentinel.
-function pathBackFrom(node GlobalInitIndex, from GlobalInitIndex, parent GlobalInitIndexArray) returns GlobalInitIndexArray
+function pathBackFrom(node ElementIndex, from ElementIndex, parent GlobalInitIndexArray) returns GlobalInitIndexArray
 	var reversed = GlobalInitIndexArray.create()
 	var walker = node
 	reversed.push(walker)
@@ -313,11 +302,11 @@ end 'pathBackFrom'
 
 // One dependency row. The bound is the caller's own loop or a position this walk minted, so a miss is an
 // invariant break rather than a case.
-function rowOf(deps GlobalInitDependencies, index GlobalInitIndex) returns GlobalInitIndexArray
+function rowOf(deps GlobalInitDependencies, index ElementIndex) returns GlobalInitIndexArray
 	return try deps.get(index) otherwise panic("rowOf: deps.get OOB at {index} — one row is built per global")
 end 'rowOf'
 
-function rowContains(deps GlobalInitDependencies, index GlobalInitIndex, value GlobalInitIndex) returns bool
+function rowContains(deps GlobalInitDependencies, index ElementIndex, value ElementIndex) returns bool
 	for member in rowOf(deps, index: index) 'eachMember'
 		if member == value 'found'
 			return true
@@ -359,7 +348,7 @@ function initDependencies(module MaxonModule, project Project, signatures Progra
 	return deps
 end 'initDependencies'
 
-function nodeAt(nodes InitOrderNodeArray, index GlobalInitIndex) returns InitOrderNode
+function nodeAt(nodes InitOrderNodeArray, index ElementIndex) returns InitOrderNode
 	return try nodes.get(index) otherwise panic("nodeAt: nodes.get OOB at {index}, outside the list every position in this walk was minted from")
 end 'nodeAt'
 
@@ -481,7 +470,7 @@ end 'noteSlotNamed'
 // dependency CHAIN, which nothing bounds: a program of 3,000 statics each reading the next overflowed the
 // compiler's own stack with no diagnostic and no binary (`STATUS_STACK_OVERFLOW`), while the same program
 // with the chain broken compiled. The frames are heap arrays here, so depth costs memory and nothing else.
-function orderedByDependency(nodeCount GlobalInitIndex, deps GlobalInitDependencies) returns GlobalInitIndexArray
+function orderedByDependency(nodeCount ElementIndex, deps GlobalInitDependencies) returns GlobalInitIndexArray
 	var state = GlobalInitVisitArray.create()
 
 	for _ in 0 upto nodeCount 'eachGlobal'
@@ -530,25 +519,25 @@ end 'orderedByDependency'
 
 // Open a frame on `index` and mark it in progress, in one act — the pair that must not come apart, since the
 // stack is what `settled` is decided against.
-function descendTo(index GlobalInitIndex, state GlobalInitVisitArray, frames GlobalInitIndexArray, cursors GlobalInitCursorArray)
+function descendTo(index ElementIndex, state GlobalInitVisitArray, frames GlobalInitIndexArray, cursors GlobalInitCursorArray)
 	markVisit(state, index: index, visit: GlobalInitVisit.onTheStack)
 	frames.push(index)
 	cursors.push(0)
 end 'descendTo'
 
-function visitOf(state GlobalInitVisitArray, index GlobalInitIndex) returns GlobalInitVisit
+function visitOf(state GlobalInitVisitArray, index ElementIndex) returns GlobalInitVisit
 	return try state.get(index) otherwise panic("visitOf: state.get OOB at {index}, outside the column built over the global list")
 end 'visitOf'
 
-function markVisit(state GlobalInitVisitArray, index GlobalInitIndex, visit GlobalInitVisit)
+function markVisit(state GlobalInitVisitArray, index ElementIndex, visit GlobalInitVisit)
 	try state.set(index, value: visit) otherwise panic("markVisit: state.set OOB at {index}, outside the column built over the global list")
 end 'markVisit'
 
-function frameAt(frames GlobalInitIndexArray, depth GlobalInitStackDepth) returns GlobalInitIndex
+function frameAt(frames GlobalInitIndexArray, depth ElementIndex) returns ElementIndex
 	return try frames.get(depth) otherwise panic("frameAt: frames.get OOB at depth {depth}, above the stack this walk pushed")
 end 'frameAt'
 
-function cursorAt(cursors GlobalInitCursorArray, depth GlobalInitStackDepth) returns GlobalInitCursor
+function cursorAt(cursors GlobalInitCursorArray, depth ElementIndex) returns ElementIndex
 	return try cursors.get(depth) otherwise panic("cursorAt: cursors.get OOB at depth {depth}, above the stack this walk pushed")
 end 'cursorAt'
 
@@ -611,7 +600,7 @@ function refuseGlobalInitializationCycle(arc GlobalInitIndexArray, globals Manag
 	reportPositioned(project, code: ErrorCode.parserCircularDependency, message: cycleMessage(names, memberCount: arc.count()), line: anchor.nameLine, column: anchor.nameColumn, filePath: anchor.declFilePath)
 end 'refuseGlobalInitializationCycle'
 
-function cycleMessage(names String, memberCount GlobalInitIndex) returns String
+function cycleMessage(names String, memberCount ElementIndex) returns String
 	if memberCount == 1 'readsItsOwnSlot'
 		return "Circular dependency detected among global initializers: {names} reads its own slot, directly or through a function its initializer calls"
 	end 'readsItsOwnSlot'
@@ -621,6 +610,6 @@ end 'cycleMessage'
 
 // One global by position. The bound is the caller's own loop or a position this walk minted, so a miss is an
 // invariant break rather than a case.
-function globalAt(globals ManagedGlobalArray, index GlobalInitIndex) returns ManagedGlobal
+function globalAt(globals ManagedGlobalArray, index ElementIndex) returns ManagedGlobal
 	return try globals.get(index) otherwise panic("globalAt: globals.get OOB at {index}, outside the list every position in this walk was minted from")
 end 'globalAt'

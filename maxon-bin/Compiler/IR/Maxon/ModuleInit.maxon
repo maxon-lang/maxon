@@ -364,7 +364,7 @@ function builtContainerRecord(fn SynthesizedFunction, create ContainerCreateCall
 	// declared `Set`. `ProgramSignatures.containerCreateCall` is where "which container is this?" is already
 	// decided, so it answers this too rather than a second test living in the synthesis.
 	if elements.count() > 0 'hasElements'
-		let add = elementAddCallee(create, count: elements.count())
+		let add = elementAddCallee(create, count: elements.count() as ParsedInt)
 
 		for element in elements 'eachElement'
 			_ = fn.emitPositionalCall(add, args: pairArgs(record, second: elementRecordOf(fn, element: element, range: range)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
@@ -404,7 +404,7 @@ function builtMapLiteralRecord(fn SynthesizedFunction, create ContainerCreateCal
 	let record = bornContainerRecord(fn, create: create, valueType: valueType, range: range)
 
 	if entries.count() > 0 'hasPairs'
-		let add = keyedElementAddCallee(create, count: entries.count())
+		let add = keyedElementAddCallee(create, count: entries.count() as ParsedInt)
 
 		for entry in entries 'eachPair'
 			emitMapEntryUpsert(fn, add: add, record: record, entry: entry, calls: calls, range: range)
@@ -428,7 +428,7 @@ function builtArrayLiteralRecord(fn SynthesizedFunction, create ContainerCreateC
 	let record = bornContainerRecord(fn, create: create, valueType: valueType, range: range)
 
 	if elements.count() > 0 'hasElements'
-		let add = elementAddCallee(create, count: elements.count())
+		let add = elementAddCallee(create, count: elements.count() as ParsedInt)
 
 		for element in elements 'eachElement'
 			_ = fn.emitPositionalCall(add, args: pairArgs(record, second: materializedValue(fn, value: element.value, valueType: element.valueType, calls: calls, range: range)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
@@ -518,7 +518,7 @@ end 'containerStampValue'
 // `valueType` is supplied by whoever RECEIVES the result — the global's slot for the root, the argument or
 // field for a nested one — which is why no arena entry carries a return type of its own, and why both arms
 // mint at it identically.
-function initializerNodeRecord(fn SynthesizedFunction, calls GlobalInitCallArray, id InitializerCallId, valueType MaxonType, range SourceRange) returns ValueId
+function initializerNodeRecord(fn SynthesizedFunction, calls GlobalInitCallArray, id ElementIndex, valueType MaxonType, range SourceRange) returns ValueId
 	return match globalInitCallAt(calls, id: id) 'node'
 		call(callee, args) gives calledFactoryRecord(fn, callee: callee, args: args, calls: calls, valueType: valueType, range: range)
 		construct(sizeBytes, fields) gives builtStructBox(fn, sizeBytes: sizeBytes, fields: fields, calls: calls, valueType: valueType, range: range)
@@ -756,7 +756,7 @@ export type SynthesizedFunction
 	var project as Project
 
 	// This function's position in `module.functions` — the key `ValueOriginTable` files an origin under.
-	var funcIndex as FuncIndex
+	var funcIndex as ElementIndex
 
 	// The function itself, so a second block can be minted into it. Held BESIDE the index rather than looked
 	// up from it because `MaxonModule` exposes no by-index accessor, and adding one to serve a single caller
@@ -796,8 +796,8 @@ export type SynthesizedFunction
 		// `DeadFunctionElimination.markCompilerOwnedRoot` (E4015 again, for a program that installs neither and
 		// so has no pair to count) and at `TargetPrinter.isRuntimeFunction`. Both functions run on `main`'s green
 		// thread in a program with green threads, so both carry its stack guard (`IrFunction.needsGreenThreadStackGuard`).
-		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramTypes.count(), maxonParamTypes: paramTypes, valueTags: valueTags, valueNameIds: valueNameIds, valueBrandIds: valueBrandIds, valueMintedSole: valueMintedSole, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure, valueWitnessIds: ValueIdArray.create(), returnLine: 0, declaredAt: SourcePosition.synthesized(), placeholders: project.readerAnchors.functions, needsGreenThreadStackGuard: true)
-		let funcIndex = module.funcCount() as FuncIndex
+		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramTypes.count() as ParamCount, maxonParamTypes: paramTypes, valueTags: valueTags, valueNameIds: valueNameIds, valueBrandIds: valueBrandIds, valueMintedSole: valueMintedSole, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure, valueWitnessIds: ValueIdArray.create(), returnLine: 0, declaredAt: SourcePosition.synthesized(), placeholders: project.readerAnchors.functions, needsGreenThreadStackGuard: true)
+		let funcIndex = module.funcCount()
 		module.pushFunc(func)
 
 		return Self{module: module, project: project, funcIndex: funcIndex, func: func, block: module.addBlock(func, label: b"entry", heat: BlockHeat.normal), valueTags: valueTags, valueNameIds: valueNameIds, valueBrandIds: valueBrandIds, valueMintedSole: valueMintedSole, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure}
@@ -887,7 +887,7 @@ export type SynthesizedFunction
 	// `Parser.pairInterfaceWitness`'s twin over this carrier's function, whose column the lowering reads
 	// (`LowerMaxonToStd.pairedWitnessOf`).
 	export function pairWitness(value ValueId, witness ValueId)
-		while self.func.valueWitnessIds.count() <= value 'growToReachIt'
+		while self.func.valueWitnessIds.count() as ValueId <= value 'growToReachIt'
 			self.func.valueWitnessIds.push(0)
 		end 'growToReachIt'
 
@@ -916,7 +916,7 @@ export type SynthesizedFunction
 	export function emit(op MaxonOp, range SourceRange)
 		let opIndex = self.module.opCount()
 		self.module.appendOp(self.block, op: op)
-		self.recordOpTables(op, opIndex: opIndex as OpIndex, range: range)
+		self.recordOpTables(op, opIndex: opIndex, range: range)
 	end 'emit'
 
 	// ⭐ **OPEN A FRESH BLOCK AND CONTINUE EMITTING INTO IT.**
@@ -947,7 +947,7 @@ export type SynthesizedFunction
 	export function terminateBlock(target IrBlock, op MaxonOp, range SourceRange)
 		let opIndex = self.module.opCount()
 		self.module.setTerminator(target, op: op)
-		self.recordOpTables(op, opIndex: opIndex as OpIndex, range: range)
+		self.recordOpTables(op, opIndex: opIndex, range: range)
 	end 'terminateBlock'
 
 	// Terminate the block ops are CURRENTLY landing in. It is `terminateBlock` over `self.block` and nothing
@@ -958,7 +958,7 @@ export type SynthesizedFunction
 
 	// The span + value-origin recording both emitters share, so a body op and a terminator cannot come to
 	// disagree about which tables an op joins.
-	function recordOpTables(op MaxonOp, opIndex OpIndex, range SourceRange)
+	function recordOpTables(op MaxonOp, opIndex ElementIndex, range SourceRange)
 		self.project.opRanges.record(opIndex, range: range)
 
 		match maxonOpResultValue(op) 'result'

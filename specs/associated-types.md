@@ -1026,7 +1026,7 @@ type Sack implements Bag
 	let n as Integer
 
 	function take(xs StrArray) returns Integer
-		return n + xs.count()
+		return n + (xs.count() as Integer)
 	end 'take'
 
 	static function create() returns Self
@@ -1069,7 +1069,7 @@ type Sack implements Bag
 	let n as Integer
 
 	function take(xs AlsoIntArray) returns Integer
-		return n + xs.count()
+		return n + (xs.count() as Integer)
 	end 'take'
 
 	static function create() returns Self
@@ -1107,7 +1107,7 @@ type Sack implements Bag
 	let n as Integer
 
 	function take(xs IntArray) returns Integer
-		return n + xs.count()
+		return n + (xs.count() as Integer)
 	end 'take'
 
 	static function create() returns Self

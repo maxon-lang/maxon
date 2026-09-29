@@ -672,10 +672,10 @@ end 'value'
 
 function arm(slots IntPromiseArray, slot Integer, n Integer)
 	let p = async value(n)
-	if slot == slots.count() 'firstUse'
+	if slot == (slots.count() as Integer) 'firstUse'
 		slots.push(p)
 	end 'firstUse' else 'reuse'
-		try slots.set(slot, value: p) otherwise panic("the slot exists — this arm is only taken when it does")
+		try slots.set(slot as ElementIndex, value: p) otherwise panic("the slot exists — this arm is only taken when it does")
 	end 'reuse'
 end 'arm'
 
@@ -737,8 +737,8 @@ end 'value'
 
 function arm(slots IntPromiseArray, slot Integer, n Integer)
 	let p = async value(n)
-	if slot < slots.count() 'reuse'
-		try slots.set(slot, value: p) otherwise panic("the slot exists — this arm is only taken when it does")
+	if slot < (slots.count() as Integer) 'reuse'
+		try slots.set(slot as ElementIndex, value: p) otherwise panic("the slot exists — this arm is only taken when it does")
 	end 'reuse' else 'firstUse'
 		slots.push(p)
 	end 'firstUse'
@@ -1363,8 +1363,8 @@ end 'zero'
 function main() returns ExitCode
 	var s = IntPromiseArray.create()
 	s.push(async plain(4))
-	let a = try s.get(zero()) otherwise panic("has one")
-	let b = try s.get(zero()) otherwise panic("has one")
+	let a = try s.get(zero() as ElementIndex) otherwise panic("has one")
+	let b = try s.get(zero() as ElementIndex) otherwise panic("has one")
 	return ((await a) + (await b)) as ExitCode
 end 'main'
 ```

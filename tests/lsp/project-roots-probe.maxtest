@@ -213,7 +213,7 @@ export function soleProbeAnswered(outcome WorkspaceFolderDefinitionOutcome) retu
 end 'soleProbeAnswered'
 
 export function soleProject(result ListProjectsResult, note String) returns ProjectEntry throws TestFailure
-	try Expect.equal(result.projects.count() as AssertedInt, expected: 1, message: "{note} The server answered {result.projects.count()} projects instead of one, which is what it does when it files every OPEN DOCUMENT as a project of its own instead of asking which project each document belongs to.")
+	try Expect.equal(result.projects.count(), expected: 1, message: "{note} The server answered {result.projects.count()} projects instead of one, which is what it does when it files every OPEN DOCUMENT as a project of its own instead of asking which project each document belongs to.")
 
 	return try result.projects.get(0) otherwise panic("project roots: the count was just held to one")
 end 'soleProject'
@@ -227,8 +227,8 @@ export function requireProjectRootedAtADirectory(project ProjectEntry, expectedT
 	try Expect.isFalse(project.isSingleFile, message: "{note} The project was answered as a SINGLE FILE although it is a directory holding a `.maxproj` and several sources — which is the flag the extension reads to decide whether cross-file answers are available at all.")
 end 'requireProjectRootedAtADirectory'
 
-export function projectsRootedAt(result ListProjectsResult, expectedTail String) returns AssertedInt
-	var found = 0 as AssertedInt
+export function projectsRootedAt(result ListProjectsResult, expectedTail String) returns ElementIndex
+	var found = 0
 
 	for project in result.projects 'eachProject'
 		if foldedRootPath(project.rootPath).endsWith(expectedTail) 'thisOne'

@@ -4294,7 +4294,7 @@ end 'apply'
 function main() returns ExitCode
 	var s = SmallArray.create()
 	s.push(3)
-	return (apply(buildFields) + s.count()) as ExitCode
+	return (apply(buildFields) + (s.count() as Integer)) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -4338,7 +4338,7 @@ end 'apply'
 function main() returns ExitCode
 	var s = SmallArray.create()
 	s.push(3)
-	return (apply(countFields) + s.count()) as ExitCode
+	return (apply(countFields) + (s.count() as Integer)) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -4503,7 +4503,7 @@ function main() returns ExitCode
 	var s = SmallArray.create()
 	s.push(3)
 	let f = Field.create(1)
-	return (f.runIt(buildFields) + s.count()) as ExitCode
+	return (f.runIt(buildFields) + (s.count() as Integer)) as ExitCode
 end 'main'
 ```
 ```exitcode

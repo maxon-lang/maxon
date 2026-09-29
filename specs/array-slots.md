@@ -269,7 +269,7 @@ function main() returns ExitCode
 	var arr = SlotArray.create()
 	arr.reserve(2)
 	try arr.managed.setLength(2) otherwise panic("setLength: capacity just reserved for 2")
-	try arr.get(launder(-1)) otherwise (e) 'handler'
+	try arr.get(launder(-1) as ElementIndex) otherwise (e) 'handler'
 		match e 'check'
 			emptySlot then return 42
 			indexOutOfBounds then return 99

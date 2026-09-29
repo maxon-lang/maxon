@@ -93,7 +93,7 @@ export type Allocation
 		// (`rangedAliasStorageBytes`), so a buffer filled as one and read as the other would hand every later
 		// read a stride it was not written at.
 		var color = RegNumColumn.create()
-		color.refill(valueCount as ElementIndex, value: Uncolored)
+		color.refill(valueCount, value: Uncolored)
 		var holderOfReg = ValueIdArray.create()
 		holderOfReg.refill(RegisterFileSize, value: 0)
 
@@ -194,7 +194,7 @@ export type ReuseCopyPlan
 	// two register reads rather than one union answer: a payload-bearing union heap-boxes every case
 	// including the payload-free one (`CseLookup`), and this is asked at every body op of every function.
 	export function hasCopyAt(seq OpSeq) returns bool
-		if seq >= self.present.count() 'pastLastCopy'
+		if seq >= self.present.count() as OpSeq 'pastLastCopy'
 			return false
 		end 'pastLastCopy'
 
@@ -275,7 +275,7 @@ export type ColdCallBracketPlan
 	var nextSlot as SpillSlot
 
 	// The rewrite's position in `saveSeqs`: the bracket at `cursor - 1` is the one last taken.
-	var cursor as ColumnLength
+	var cursor as ElementIndex
 
 	export static function create() returns ColdCallBracketPlan
 		return Self{saveSeqs: OpSeqArray.create(), reloadSeqs: OpSeqArray.create(), ends: ColumnLengthColumn.create(), regs: RegNumColumn.create(), slots: SpillSlotArray.create(), slotOfReg: SpillSlotArray.create(), regHasSlot: BoolArray.create(), nextSlot: 0, cursor: 0}
@@ -319,7 +319,7 @@ export type ColdCallBracketPlan
 			remaining = regMaskRemove(remaining, regNum: regNum)
 		end 'eachHeldRegister'
 
-		self.ends.push(self.regs.count() as ColumnLength)
+		self.ends.push(self.regs.count())
 	end 'record'
 
 	function slotFor(regNum RegNum) returns SpillSlot
@@ -349,7 +349,7 @@ export type ColdCallBracketPlan
 	// The rewrite's read: does the next run start at layout sequence `seq`? When it does, it becomes
 	// the open bracket and the cursor moves past it.
 	export function takeAt(seq OpSeq) returns bool
-		if self.cursor >= (self.saveSeqs.count() as ColumnLength) 'pastTheLastBracket'
+		if self.cursor >= (self.saveSeqs.count()) 'pastTheLastBracket'
 			return false
 		end 'pastTheLastBracket'
 
@@ -366,7 +366,7 @@ export type ColdCallBracketPlan
 	// A bracket the rewrite never reached would be a save and a reload silently missing from a cold run,
 	// so the walk that consumes the plan asks this when it is done.
 	export function requireAllTaken()
-		if self.cursor != (self.saveSeqs.count() as ColumnLength) 'bracketsLeftOver'
+		if self.cursor != (self.saveSeqs.count()) 'bracketsLeftOver'
 			panic("ColdCallBracketPlan.requireAllTaken: {self.saveSeqs.count() - self.cursor} bracket(s) were planned at layout sequences the rewrite never visited — the colorer's numbering and the rewrite's have drifted")
 		end 'bracketsLeftOver'
 	end 'requireAllTaken'
@@ -376,21 +376,21 @@ export type ColdCallBracketPlan
 		return try self.reloadSeqs.get(self.openIndex()) otherwise panic("ColdCallBracketPlan.openReloadSeq: reloadSeqs.get OOB at the open bracket")
 	end 'openReloadSeq'
 
-	export function openEntryCount() returns ColumnLength
+	export function openEntryCount() returns ElementIndex
 		let index = self.openIndex()
 		return self.entryEnd(index) - self.entryStart(index)
 	end 'openEntryCount'
 
-	export function openRegAt(entry ColumnLength) returns RegNum
+	export function openRegAt(entry ElementIndex) returns RegNum
 		return try self.regs.get(self.entryStart(self.openIndex()) + entry) otherwise panic("ColdCallBracketPlan.openRegAt: entry {entry} is past the {self.openEntryCount()} the open bracket holds")
 	end 'openRegAt'
 
-	export function openSlotAt(entry ColumnLength) returns SpillSlot
+	export function openSlotAt(entry ElementIndex) returns SpillSlot
 		return try self.slots.get(self.entryStart(self.openIndex()) + entry) otherwise panic("ColdCallBracketPlan.openSlotAt: entry {entry} is past the {self.openEntryCount()} the open bracket holds")
 	end 'openSlotAt'
 
 	// The bracket `takeAt` last took.
-	function openIndex() returns ColumnLength
+	function openIndex() returns ElementIndex
 		if self.cursor == 0 'nothingTaken'
 			panic("ColdCallBracketPlan.openIndex: no bracket has been taken — the rewrite reads a bracket only after `takeAt` answered true for it")
 		end 'nothingTaken'
@@ -398,11 +398,11 @@ export type ColdCallBracketPlan
 		return self.cursor - 1
 	end 'openIndex'
 
-	function entryStart(index ColumnLength) returns ColumnLength
+	function entryStart(index ElementIndex) returns ElementIndex
 		return 0 if index == 0 else self.entryEnd(index - 1)
 	end 'entryStart'
 
-	function entryEnd(index ColumnLength) returns ColumnLength
+	function entryEnd(index ElementIndex) returns ElementIndex
 		return try self.ends.get(index) otherwise panic("ColdCallBracketPlan.entryEnd: no bracket {index} of {self.saveSeqs.count()}")
 	end 'entryEnd'
 end 'ColdCallBracketPlan'
@@ -1185,7 +1185,7 @@ end 'assertRegisterFacts'
 // function is re-extracted from the untouched Std module and taken through the same isel, the same edge
 // split and the same core, so it refuses at the same peak. A compile that reaches here is failing, so the
 // second run (and the fresh variant memo it builds) costs nothing anybody will see.
-module function refuseForRegisterPressure(project Project, stdModule StdModule, funcIndex FuncIndex, target Target, abi CalleeAbiTable, usesGt bool, pool RegMask, callerSaved RegMask, file RegisterFile) throws CompileError
+module function refuseForRegisterPressure(project Project, stdModule StdModule, funcIndex ElementIndex, target Target, abi CalleeAbiTable, usesGt bool, pool RegMask, callerSaved RegMask, file RegisterFile) throws CompileError
 	let body = BackendUnitBody.extract(stdModule, func: stdModule.getFunc(funcIndex))
 	var costs = PoolPhaseCosts.create(RegAllocPhase.allCases.count())
 	var iselCost = PhaseDelta.zero()
@@ -1194,7 +1194,7 @@ module function refuseForRegisterPressure(project Project, stdModule StdModule, 
 end 'refuseForRegisterPressure'
 
 // The re-run's allocation of the lowered unit, which rewrites the unit's module and function in place.
-function refuseLoweredUnit(project Project, lowered LoweredUnit, authorFilePath FilePath, funcIndex FuncIndex, hasAuthor bool, pool RegMask, callerSaved RegMask, file RegisterFile, costs PoolPhaseCosts) throws CompileError
+function refuseLoweredUnit(project Project, lowered LoweredUnit, authorFilePath FilePath, funcIndex ElementIndex, hasAuthor bool, pool RegMask, callerSaved RegMask, file RegisterFile, costs PoolPhaseCosts) throws CompileError
 	var func = lowered.targetModule.getFunc(UnitFunctionIndex)
 
 	// The unit's function is synthesized and names no file; the diagnostic locates the loop in the
@@ -1215,7 +1215,7 @@ end 'refuseLoweredUnit'
 
 // Render the E5001 a refused core run recorded. The core throws without a `Project` and leaves the
 // analysis state in `refusal`; this is the only place that state is read.
-function renderRegisterPressureRefusal(project Project, module TargetModule, func IrFunction, funcIndex FuncIndex, pool RegMask, refusal RegAllocRefusalSite) throws CompileError
+function renderRegisterPressureRefusal(project Project, module TargetModule, func IrFunction, funcIndex ElementIndex, pool RegMask, refusal RegAllocRefusalSite) throws CompileError
 	match refusal.refused 'what'
 		none then panic("renderRegisterPressureRefusal: the core refused '{String.from(func.name)}' and left no site - `noVictimAtPeak` records the site and throws in one statement, so a `RegAllocRefusal` without one means a second thrower reached this path")
 		at(liveness, lineage, peak) then try raiseRegisterPressure(project, module: module, func: func, funcIndex: funcIndex, liveness: liveness, peak: peak, pool: pool, lineage: lineage)
@@ -1392,7 +1392,7 @@ function harvestDebugValueRanges(module TargetModule, func IrFunction, liveness 
 	var ordinalOfOp = DebugOrdinalColumn.create()
 	ordinalOfOp.refill(module.ops.count(), value: NoDebugOrdinal)
 	var placeOfLocal = DebugPlaceColumn.create()
-	placeOfLocal.refill(topo.numBlocks as ElementIndex, value: NoDebugPlace)
+	placeOfLocal.refill(topo.numBlocks, value: NoDebugPlace)
 	var localOfPlace = CfgIndexArray.create()
 	var blockIdOfPlace = BlockIdColumn.create()
 	var siteKeyOfPlace = DebugSiteKeyColumn.create()
@@ -1414,7 +1414,7 @@ function harvestDebugValueRanges(module TargetModule, func IrFunction, liveness 
 			ordinal = ordinal + 1
 		end 'hasTerminator'
 
-		try placeOfLocal.set(localOfBlockId(topo, blockId: block.id) as ElementIndex, value: (localOfPlace.count() + DebugAnchorBias) as DebugPlace) otherwise panic("harvestDebugValueRanges: placeOfLocal.set OOB for block {block.id} of the topology's {topo.numBlocks}")
+		try placeOfLocal.set(localOfBlockId(topo, blockId: block.id), value: (localOfPlace.count() + DebugAnchorBias) as DebugPlace) otherwise panic("harvestDebugValueRanges: placeOfLocal.set OOB for block {block.id} of the topology's {topo.numBlocks}")
 		localOfPlace.push(localOfBlockId(topo, blockId: block.id))
 		blockIdOfPlace.push(block.id)
 		siteKeyOfPlace.push(debugSiteKeyOf(block.inlineSite))
@@ -1500,7 +1500,7 @@ type DebugNameIndex
 		for site in 0 upto bySite.nodeCount() 'eachSite'
 			for k in 0 upto bySite.degree(site) 'eachNameOfTheSite'
 				let name = bySite.neighbour(site, k: k)
-				values.push((try roster.valueIds.get(name as ElementIndex) otherwise panic("DebugNameIndex.over: name {name} is past the roster's {roster.valueIds.count()} values")) as CsrIndex)
+				values.push((try roster.valueIds.get(name) otherwise panic("DebugNameIndex.over: name {name} is past the roster's {roster.valueIds.count()} values")) as CsrIndex)
 				siteOrdered.push(name)
 			end 'eachNameOfTheSite'
 		end 'eachSite'
@@ -1551,7 +1551,7 @@ type DebugNameIndex
 	end 'collectNamesAt'
 
 	function siteKeyOf(name CsrIndex) returns DebugSiteKey
-		return debugSiteKeyAt(self.siteKeys, at: name as ElementIndex)
+		return debugSiteKeyAt(self.siteKeys, at: name)
 	end 'siteKeyOf'
 end 'DebugNameIndex'
 
@@ -1613,7 +1613,7 @@ function collectDebugTouches(touches DebugTouches, liveness LivenessResult, name
 
 		match index.defKindOf(value) 'def'
 			none then break 'def'
-			opDef then noteDebugTouches(touches, names: names, value: value, place: debugPlaceOf(placeOfLocal, local: index.defBlockOf(value)), ordinal: debugOrdinalAt(ordinalOfOp, at: index.requireDefOp(value) as ElementIndex), siteKeyOfPlace: siteKeyOfPlace, scratch: scratch)
+			opDef then noteDebugTouches(touches, names: names, value: value, place: debugPlaceOf(placeOfLocal, local: index.defBlockOf(value)), ordinal: debugOrdinalAt(ordinalOfOp, at: index.requireDefOp(value)), siteKeyOfPlace: siteKeyOfPlace, scratch: scratch)
 			phiDef then noteDebugTouches(touches, names: names, value: value, place: debugPlaceOf(placeOfLocal, local: index.defBlockOf(value)), ordinal: debugBlockOpening(blockFirst, place: debugPlaceOf(placeOfLocal, local: index.defBlockOf(value))), siteKeyOfPlace: siteKeyOfPlace, scratch: scratch)
 		end 'def'
 
@@ -1626,14 +1626,14 @@ function collectDebugTouches(touches DebugTouches, liveness LivenessResult, name
 		var record = index.firstUseOf(value)
 
 		for _ in 0 upto useSites 'eachUse'
-			noteDebugTouches(touches, names: names, value: value, place: debugPlaceOf(placeOfLocal, local: index.useBlockAt(record)), ordinal: debugOrdinalAt(ordinalOfOp, at: index.useOpAt(record) as ElementIndex), siteKeyOfPlace: siteKeyOfPlace, scratch: scratch)
+			noteDebugTouches(touches, names: names, value: value, place: debugPlaceOf(placeOfLocal, local: index.useBlockAt(record)), ordinal: debugOrdinalAt(ordinalOfOp, at: index.useOpAt(record)), siteKeyOfPlace: siteKeyOfPlace, scratch: scratch)
 			record = index.nextUseOf(record)
 		end 'eachUse'
 	end 'eachValue'
 end 'collectDebugTouches'
 
-function debugPlaceOf(placeOfLocal DebugPlaceColumn, local CfgIndex) returns DebugPlace
-	return try placeOfLocal.get(local as ElementIndex) otherwise panic("harvestDebugValueRanges: block {local} is past the {placeOfLocal.count()} blocks of the topology the place column was sized to")
+function debugPlaceOf(placeOfLocal DebugPlaceColumn, local ElementIndex) returns DebugPlace
+	return try placeOfLocal.get(local) otherwise panic("harvestDebugValueRanges: block {local} is past the {placeOfLocal.count()} blocks of the topology the place column was sized to")
 end 'debugPlaceOf'
 
 function debugBlockOpening(blockFirst DebugOrdinalColumn, place DebugPlace) returns DebugOpAnchor
@@ -1727,24 +1727,24 @@ type StuckValues
 		self.occupantCount.push(self.occupants.count() - (try self.occupantStart.get(self.occupantStart.count() - 1) otherwise panic("StuckValues.record: occupantStart.get OOB on the entry just pushed")))
 	end 'record'
 
-	function count() returns ColumnLength
+	function count() returns ElementIndex
 		return self.values.count()
 	end 'count'
 
-	function valueAt(k ColumnLength) returns ValueId
+	function valueAt(k ElementIndex) returns ValueId
 		return try self.values.get(k) otherwise panic("StuckValues.valueAt: no stuck value at {k} of {self.values.count()}")
 	end 'valueAt'
 
-	function freeAt(k ColumnLength) returns RegMask
+	function freeAt(k ElementIndex) returns RegMask
 		return try self.freeMasks.get(k) otherwise panic("StuckValues.freeAt: no free mask at {k} of {self.freeMasks.count()}")
 	end 'freeAt'
 
-	function occupantCountAt(k ColumnLength) returns ColumnLength
+	function occupantCountAt(k ElementIndex) returns ElementIndex
 		return try self.occupantCount.get(k) otherwise panic("StuckValues.occupantCountAt: no entry at {k} of {self.occupantCount.count()}")
 	end 'occupantCountAt'
 
 	// Occupant `j` of stuck value `k`, in ascending register order.
-	function occupantAt(k ColumnLength, j ColumnLength) returns ValueId
+	function occupantAt(k ElementIndex, j ElementIndex) returns ValueId
 		let start = try self.occupantStart.get(k) otherwise panic("StuckValues.occupantAt: no entry at {k} of {self.occupantStart.count()}")
 		return try self.occupants.get(start + j) otherwise panic("StuckValues.occupantAt: occupant {j} of stuck value {k} is past the {self.occupantCountAt(k)} recorded for it")
 	end 'occupantAt'
@@ -1937,10 +1937,10 @@ type ColorHints
 		// `copyHint` needs no such treatment: `ValueIdArray` and `DenseColumn` are both `Array with
 		// int(0 to u64.max)`, one instance under two alias spellings.
 		var fixedHint = RegNumColumn.create()
-		fixedHint.refill(valueCount as ElementIndex, value: NoFixedHint)
+		fixedHint.refill(valueCount, value: NoFixedHint)
 
 		var copyHint = ValueIdArray.create()
-		copyHint.refill(valueCount as ElementIndex, value: valueCount)
+		copyHint.refill(valueCount, value: valueCount)
 
 		return Self{fixedHint: fixedHint, copyHint: copyHint, noPartner: valueCount}
 	end 'create'
@@ -2279,15 +2279,15 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 		for pos in 0 upto ordered.count() 'eachOp'
 			let opIdx = try ordered.get(pos) otherwise panic("colorFunction: ordered.get OOB")
 
-			match runs.runAt(pos as BlockOpPos) 'run'
+			match runs.runAt(pos as ElementIndex) 'run'
 				none then break 'run'
-				run(id) then recordColdRunBracketIfFirst(module, ordered: ordered, runs: runs, id: id, pos: pos as BlockOpPos, blockBaseSeq: blockBaseSeq, inUse: inUse, deaths: deaths, alloc: alloc, liveness: liveness, brackets: brackets, buf: buf)
+				run(id) then recordColdRunBracketIfFirst(module, ordered: ordered, runs: runs, id: id, pos: pos as ElementIndex, blockBaseSeq: blockBaseSeq, inUse: inUse, deaths: deaths, alloc: alloc, liveness: liveness, brackets: brackets, buf: buf)
 			end 'run'
 
 			inUse = colorOpForward(module, opIdx: opIdx, pos: pos, seq: blockBaseSeq + pos, inUse: inUse, deaths: deaths, hints: hints, alloc: alloc, liveness: liveness, pool: pool, callerSaved: callerSaved, counters: counters, buf: buf, reuseCopies: reuseCopies, stuck: stuck)
 		end 'eachOp'
 
-		blockBaseSeq = blockBaseSeq + ordered.count()
+		blockBaseSeq = blockBaseSeq + ordered.count() as OpSeq
 	end 'eachBlock'
 
 	return alloc
@@ -2298,7 +2298,7 @@ end 'colorFunction'
 // live — `inUse` less the registers of the values dead by that op. A register is bracketed whichever
 // value holds it, so no value is looked up; a dead phi's register, held for the whole block, is
 // bracketed with the rest, which costs a store and a load in a block that seldom runs.
-function recordColdRunBracketIfFirst(module TargetModule, ordered OpIndexArray, runs ColdBlockRuns, id ColdRunId, pos BlockOpPos, blockBaseSeq OpSeq, inUse RegMask, deaths BlockDeaths, alloc Allocation, liveness LivenessResult, brackets ColdCallBracketPlan, buf OperandList)
+function recordColdRunBracketIfFirst(module TargetModule, ordered OpIndexArray, runs ColdBlockRuns, id ElementIndex, pos ElementIndex, blockBaseSeq OpSeq, inUse RegMask, deaths BlockDeaths, alloc Allocation, liveness LivenessResult, brackets ColdCallBracketPlan, buf OperandList)
 	if pos != runs.firstOf(id) 'notTheFirstOp'
 		return
 	end 'notTheFirstOp'
@@ -2329,7 +2329,7 @@ end 'recordColdRunBracketIfFirst'
 // O(blocks × values) — the quadratic that dominated register allocation on a large function — and
 // a live set holds a handful of values out of thousands of ids. `liveBuf` is a scratch buffer
 // reused across blocks, so this allocates nothing.
-function seedInUse(liveness LivenessResult, local CfgIndex, alloc Allocation, liveBuf ValueIdArray) returns RegMask
+function seedInUse(liveness LivenessResult, local ElementIndex, alloc Allocation, liveBuf ValueIdArray) returns RegMask
 	liveness.liveInInto(local, out: liveBuf)
 
 	var mask = 0 as RegMask
@@ -2821,7 +2821,7 @@ end 'pickPreferredRegister'
 // that die here (so a def may reuse a dying use's register), allocate the def (a reuse
 // def goes through `allocateReuseDef`, which may record a copy), then return the
 // block's in-use mask for the point AFTER the op.
-function colorOpForward(module TargetModule, opIdx OpIndex, pos BlockOpPos, seq OpSeq, inUse RegMask, deaths BlockDeaths, hints ColorHints, alloc Allocation, liveness LivenessResult, pool RegMask, callerSaved RegMask, counters RegAllocCounters, buf OperandList, reuseCopies ReuseCopyPlan, stuck StuckValues) returns RegMask
+function colorOpForward(module TargetModule, opIdx ElementIndex, pos ElementIndex, seq OpSeq, inUse RegMask, deaths BlockDeaths, hints ColorHints, alloc Allocation, liveness LivenessResult, pool RegMask, callerSaved RegMask, counters RegAllocCounters, buf OperandList, reuseCopies ReuseCopyPlan, stuck StuckValues) returns RegMask
 	let op = try module.ops.get(opIdx) otherwise panic("colorOpForward: opIdx not in module.ops")
 	targetOpOperands(op, buf: buf)
 
@@ -2871,7 +2871,7 @@ end 'colorOpForward'
 // register (never another dying operand's — a copy into it would clobber a value the op
 // still reads); when the input OUTLIVES, no operand register is free before the op, so
 // the dest may reuse none. `defDyingRegs` encodes exactly that.
-function allocateReuseDef(o Operand, seq OpSeq, pos BlockOpPos, deaths BlockDeaths, buf OperandList, working RegMask, hints ColorHints, alloc Allocation, liveness LivenessResult, pool RegMask, callerSaved RegMask, counters RegAllocCounters, reuseCopies ReuseCopyPlan, stuck StuckValues) returns RegMask
+function allocateReuseDef(o Operand, seq OpSeq, pos ElementIndex, deaths BlockDeaths, buf OperandList, working RegMask, hints ColorHints, alloc Allocation, liveness LivenessResult, pool RegMask, callerSaved RegMask, counters RegAllocCounters, reuseCopies ReuseCopyPlan, stuck StuckValues) returns RegMask
 	let destId = operandValueId(o)
 	let inputId = operandReuseInputValueId(o, buf: buf)
 	let inputReg = alloc.regNumOf(inputId)
@@ -2929,7 +2929,7 @@ type BlockDeaths
 
 	// True iff `v` dies at op position `pos`. A linear scan of the op's dying values — at most the
 	// op's operand count, so this is O(1) in practice.
-	function dies(pos BlockOpPos, v ValueId) returns bool
+	function dies(pos ElementIndex, v ValueId) returns bool
 		for k in 0 upto self.byPos.degree(pos as CsrIndex) 'each'
 			if self.byPos.neighbour(pos as CsrIndex, k: k) as ValueId == v 'match'
 				return true
@@ -2941,7 +2941,7 @@ type BlockDeaths
 
 	// The register mask of every COLORED value dying at op `pos` — the registers a def at this op
 	// may reuse. (An uncolored dead def is handled by the caller's live-def computation, not here.)
-	function dyingRegsAt(pos BlockOpPos, alloc Allocation) returns RegMask
+	function dyingRegsAt(pos ElementIndex, alloc Allocation) returns RegMask
 		var mask = 0 as RegMask
 
 		for k in 0 upto self.byPos.degree(pos as CsrIndex) 'each'
@@ -2960,7 +2960,7 @@ end 'BlockDeaths'
 // is not live below it. `seenBelow` is a single dense row (bits flip at every op, so a bitset is the
 // right shape INSIDE a block) — seeded from the SPARSE live-out list and cleared back to zero in
 // O(live) by the caller, never copied a full value-space row at a time.
-function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness LivenessResult, local CfgIndex, block IrBlock, buf OperandList, seenBelow BitRow, seedBuf ValueIdArray, liveByClass RegCountColumn) returns BlockDeaths
+function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness LivenessResult, local ElementIndex, block IrBlock, buf OperandList, seenBelow BitRow, seedBuf ValueIdArray, liveByClass RegCountColumn) returns BlockDeaths
 	let n = ordered.count()
 
 	liveness.liveOutInto(local, out: seedBuf)
@@ -2985,7 +2985,7 @@ function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness 
 
 	// Collected backward as (pos, value) pairs, then bucketed by position — the scan discovers them
 	// in reverse, and a counting sort restores order in O(pairs + ops). `posOf` is the CSR KEY column
-	// (its entries are `BlockOpPos`), `valueOf` the value column.
+	// (its entries are `ElementIndex`), `valueOf` the value column.
 	var posOf = CsrColumn.create()
 	var valueOf = CsrColumn.create()
 
@@ -3030,7 +3030,7 @@ function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness 
 
 	// The scan discovered the deaths in REVERSE op order; the counting sort in `buildCsr`
 	// restores forward order in O(pairs + ops), keyed by the op's position in the block.
-	return BlockDeaths.create(buildCsr(posOf, to: valueOf, nodeCount: n))
+	return BlockDeaths.create(buildCsr(posOf, to: valueOf, nodeCount: n as CsrIndex))
 end 'computeBlockDeaths'
 
 // ==========================================================================

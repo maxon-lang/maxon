@@ -244,7 +244,7 @@ type Counter
 	export var n as Count
 
 	static function create(xs Bytes) returns Self
-		return Self{n: xs.count()}
+		return Self{n: xs.count() as Count}
 	end 'create'
 end 'Counter'
 
@@ -304,7 +304,7 @@ type Mixed
 	export var tag as String
 
 	static function create(kept Bytes, seen Bytes, tag String) returns Self
-		return Self{kept: kept, n: seen.count(), tag: tag}
+		return Self{kept: kept, n: seen.count() as Count, tag: tag}
 	end 'create'
 end 'Mixed'
 
@@ -312,7 +312,7 @@ var m = Mixed.create(Bytes.create(), seen: Bytes.create(), tag: "hi")
 
 function main() returns ExitCode
 	print("{m.tag}\n")
-	return m.n + m.kept.count()
+	return m.n + (m.kept.count() as Count)
 end 'main'
 ```
 ```exitcode

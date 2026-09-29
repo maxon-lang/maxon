@@ -23,7 +23,7 @@ function callFormCode(form X64CallForm) returns DebugAddress
 	end 'form'
 end 'callFormCode'
 
-export typealias X64Offset = int(0 to u64.max)
+export typealias X64Offset = int(0 to u64.max) implements ElementIndex
 export typealias X64Address = int(0 to 0x00007FFFFFFFFFFF)
 export typealias X64Displacement = int(i32.min to i32.max)
 export typealias X64Length = int(0 to 15)
@@ -173,7 +173,7 @@ function codeHoldsAt(code ByteArray, at X64Offset, bytes ByteArray) returns bool
 	end 'pastTheCode'
 
 	for (iter, expected) in bytes.withIterator() 'eachByte'
-		if (try code.get(at + (iter.index() as X64Offset)) otherwise panic("codeHoldsAt: offset {at} plus {iter.index()} was bounds-checked against {code.count()} bytes")) != expected 'aDifferentByte'
+		if (try code.get((at + (iter.index() as X64Offset)) as ElementIndex) otherwise panic("codeHoldsAt: offset {at} plus {iter.index()} was bounds-checked against {code.count()} bytes")) != expected 'aDifferentByte'
 			return false
 		end 'aDifferentByte'
 	end 'eachByte'

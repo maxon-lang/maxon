@@ -123,12 +123,12 @@ end 'DebugValueRoster'
 // THE MESSAGE ARGUMENT: which function, and its body in a one-slot holder the worker pops (see
 // `BackendUnitReply.afterRunning`).
 export type BackendUnit
-	export var funcIndex as FuncIndex
+	export var funcIndex as ElementIndex
 	export var holder as BackendUnitBodyArray
 
 	// ⭐ **EVERY RETURN IS `Self{…}` AND THERE IS ONLY ONE**, which is what makes a call to this the
 	// argument of a send (E3138, `SignatureIndex.returnsFreshValue`).
-	export static function extract(module StdModule, func IrFunction, funcIndex FuncIndex) returns BackendUnit
+	export static function extract(module StdModule, func IrFunction, funcIndex ElementIndex) returns BackendUnit
 		var holder = BackendUnitBodyArray.create()
 		holder.push(BackendUnitBody.extract(module, func: func))
 		return Self{funcIndex: funcIndex, holder: holder}
@@ -244,7 +244,7 @@ export function spliceBackendUnit(module TargetModule, func IrFunction, unitModu
 	func.debugLocalRanges = unitFunc.debugLocalRanges
 end 'spliceBackendUnit'
 
-function resolveDebugRanges(unitModule TargetModule, unitFunc IrFunction, opOffset OpIndex)
+function resolveDebugRanges(unitModule TargetModule, unitFunc IrFunction, opOffset ElementIndex)
 	if unitFunc.debugLocalRanges.count() == 0 'noRanges'
 		return
 	end 'noRanges'
@@ -258,6 +258,6 @@ function resolveDebugRanges(unitModule TargetModule, unitFunc IrFunction, opOffs
 	end 'eachRange'
 end 'resolveDebugRanges'
 
-function splicedOpOf(liveOps OpIndexArray, ordinal DebugOpAnchor, opOffset OpIndex) returns DebugOpAnchor
-	return ((try liveOps.get(ordinal as ElementIndex) otherwise panic("spliceBackendUnit: live-op ordinal {ordinal} is past the {liveOps.count()} ops of the unit the allocator numbered it against")) + opOffset) as DebugOpAnchor
+function splicedOpOf(liveOps OpIndexArray, ordinal DebugOpAnchor, opOffset ElementIndex) returns DebugOpAnchor
+	return ((try liveOps.get(ordinal) otherwise panic("spliceBackendUnit: live-op ordinal {ordinal} is past the {liveOps.count()} ops of the unit the allocator numbered it against")) + opOffset) as DebugOpAnchor
 end 'splicedOpOf'

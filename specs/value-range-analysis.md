@@ -84,7 +84,7 @@ function main() returns ExitCode
 	for i in 0 upto 6 'seed'
 		a.push(i * i)
 	end 'seed'
-	if total(a, n: a.count()) != 55 'sum'
+	if total(a, n: a.count() as Word) != 55 'sum'
 		return 1
 	end 'sum'
 	return 0
@@ -103,9 +103,9 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function bump(a WordArray, i Word) returns Word
-	let before = try a.get(i) otherwise panic("bump: i is in range")
-	try a.set(i, value: before + 1) otherwise panic("bump: i is in range")
-	return try a.get(i) otherwise panic("bump: i is in range")
+	let before = try a.get(i as ElementIndex) otherwise panic("bump: i is in range")
+	try a.set(i as ElementIndex, value: before + 1) otherwise panic("bump: i is in range")
+	return try a.get(i as ElementIndex) otherwise panic("bump: i is in range")
 end 'bump'
 
 function main() returns ExitCode
@@ -138,9 +138,9 @@ function reverseMiddle(a WordArray, first Word)
 
 	while low < high 'swap'
 		let atLow = try a.get(low) otherwise panic("reverseMiddle: low < high < first <= a.count()")
-		let atHigh = try a.get(high) otherwise panic("reverseMiddle: high < first <= a.count()")
+		let atHigh = try a.get(high as ElementIndex) otherwise panic("reverseMiddle: high < first <= a.count()")
 		try a.set(low, value: atHigh) otherwise panic("reverseMiddle: low is in range")
-		try a.set(high, value: atLow) otherwise panic("reverseMiddle: high is in range")
+		try a.set(high as ElementIndex, value: atLow) otherwise panic("reverseMiddle: high is in range")
 		low = low + 1
 		high = high - 1
 	end 'swap'
@@ -254,7 +254,7 @@ function main() returns ExitCode
 		return 2
 	end 'small'
 	let wrapped = big + 1
-	let v = try a.get(wrapped) otherwise 5
+	let v = try a.get(wrapped as ElementIndex) otherwise 5
 	return 3 if v == 5 else 4
 end 'main'
 ```
@@ -284,7 +284,7 @@ function main() returns ExitCode
 	if v >= 0 'nonNegative'
 		return 2
 	end 'nonNegative'
-	let w = try a.get(v) otherwise 5
+	let w = try a.get(v as ElementIndex) otherwise 5
 	return 3 if w == 5 else 4
 end 'main'
 ```

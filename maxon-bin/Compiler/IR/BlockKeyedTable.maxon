@@ -105,8 +105,8 @@ export type BlockKeyedTable uses Value
 	// Empty, and sized as `forBlockCount` sizes one, in the storage the table already holds.
 	export function resetForBlockCount(blockCount BlockId)
 		self.values.clear()
-		self.values.reserve(blockCount as ElementIndex)
-		self.present.refill(blockCount as ElementIndex, value: false)
+		self.values.reserve(blockCount)
+		self.present.refill(blockCount, value: false)
 	end 'resetForBlockCount'
 
 	// Record `value` for block `id`.
@@ -134,7 +134,7 @@ export type BlockKeyedTable uses Value
 		// than take its own, which two stores would then release twice. So `set` is the arm for an id
 		// ALREADY inside the column — exactly the case `growFilled` declines to write, since it no-ops when
 		// `newLength <= existing`.
-		if needed > self.values.count() 'extendsColumn'
+		if needed > self.values.count() as BlockId 'extendsColumn'
 			self.values.growFilled(needed as ElementIndex, value: value)
 		end 'extendsColumn' else 'alreadySized'
 			try self.values.set(id, value: value) otherwise panic("BlockKeyedTable.place: values.set OOB for block {id} — the column already holds at least {needed} slots")

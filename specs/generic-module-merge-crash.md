@@ -13,7 +13,7 @@ category: type-system
 
 <!-- test: generic-module-merge -->
 ```maxon
-typealias Count = int(0 to u64.max)
+typealias Count = int(0 to u64.max) implements ElementIndex
 typealias Integer = int(i64.min to i64.max)
 
 interface Mergeable uses Func

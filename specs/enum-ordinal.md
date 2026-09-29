@@ -197,7 +197,7 @@ would reject it.
 
 <!-- test: enum-ordinal.bare-case-arithmetic-index -->
 ```maxon
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 typealias IdxArray = Array with Idx
 
 enum Col

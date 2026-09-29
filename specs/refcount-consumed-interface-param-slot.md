@@ -107,7 +107,7 @@ end 'forFunc'
 // Pre-loop borrow + early-return guard + per-item loop consume
 // (mirrors allocateRegistersWithTarget).
 function withTarget(items ItemArray, p Payload) returns Integer
-	let n = borrowCount(p, base: items.count())
+	let n = borrowCount(p, base: items.count() as Integer)
 	if n == 0 'empty'
 		return 0
 	end 'empty'

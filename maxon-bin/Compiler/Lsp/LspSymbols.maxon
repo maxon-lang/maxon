@@ -208,11 +208,11 @@ end 'lspDocumentTokens'
 // unit every rule in this directory is written against — a block header, a label, an `end`, a field
 // declaration and an enum case are each exactly one line's worth of tokens.
 module type LspTokenLine
-	module let firstIndex as TokenIndex
-	module let lastIndex as TokenIndex
+	module let firstIndex as ElementIndex
+	module let lastIndex as ElementIndex
 	module let line as LineNumber
 
-	module static function create(firstIndex TokenIndex, lastIndex TokenIndex, line LineNumber) returns LspTokenLine
+	module static function create(firstIndex ElementIndex, lastIndex ElementIndex, line LineNumber) returns LspTokenLine
 		return Self{firstIndex: firstIndex, lastIndex: lastIndex, line: line}
 	end 'create'
 end 'LspTokenLine'
@@ -289,7 +289,7 @@ end 'pastTheLastLine'
 // `function(n) gives n * 2` is a closure literal, not a declaration: it names nothing and closes nothing.
 // And inside an `interface` body a `function` line is a bodyless signature — the same shape and the same
 // absence of an `end`.
-function lineOpensNoBody(open OpenBlockArray, tokens TokenArray, keyword Token, keywordIndex TokenIndex, tokenLine LspTokenLine) returns bool
+function lineOpensNoBody(open OpenBlockArray, tokens TokenArray, keyword Token, keywordIndex ElementIndex, tokenLine LspTokenLine) returns bool
 	return keyword.kind == TokenKind.function and (opensAClosure(tokens, keywordIndex: keywordIndex, tokenLine: tokenLine) or innermostKindIs(open, kind: LspBlockKind.interfaceBody))
 end 'lineOpensNoBody'
 
@@ -352,8 +352,8 @@ function closeMatching(open OpenBlockArray, closed LspDocumentBlockArray, label 
 
 		if candidate.name.equals(label.value) 'matched'
 			let endLine = lspLineOf(label.line)
-			closed.push(LspDocumentBlock.create(candidate.kind, name: candidate.name, nameSpan: candidate.nameSpan, closing: LspBlockClosing.spelled(LspSpan.create(label.startByte, endByte: label.endByte)), startLine: candidate.startLine, endLine: endLine, depth: depth))
-			recordUnterminated(open, closed: closed, endLine: endLine, depth: depth + 1)
+			closed.push(LspDocumentBlock.create(candidate.kind, name: candidate.name, nameSpan: candidate.nameSpan, closing: LspBlockClosing.spelled(LspSpan.create(label.startByte, endByte: label.endByte)), startLine: candidate.startLine, endLine: endLine, depth: depth as LspBlockDepth))
+			recordUnterminated(open, closed: closed, endLine: endLine, depth: (depth + 1) as LspBlockDepth)
 			_ = try open.pop() otherwise panic("closeMatching: the unwind stopped just above the match, so the match itself is still on the stack")
 			return
 		end 'matched'
@@ -370,14 +370,14 @@ end 'closeMatching'
 // ⚠ The extent is the ENCLOSING `end`, never the end of the buffer. `lspBlockDirectlyHoldsLine` discards
 // a block reaching past its own container, so one drained to EOF would be invisible again.
 function recordUnterminated(open OpenBlockArray, closed LspDocumentBlockArray, endLine LspLineNumber, depth LspBlockDepth)
-	while open.count() > depth 'unwind'
+	while open.count() as LspBlockDepth > depth 'unwind'
 		let unmatched = try open.pop() otherwise panic("recordUnterminated: the count is above `depth` and so at least one entry remains")
 
 		if unmatched.kind == LspBlockKind.labelled 'neverOpenedABlock'
 			continue
 		end 'neverOpenedABlock'
 
-		closed.push(LspDocumentBlock.create(unmatched.kind, name: unmatched.name, nameSpan: unmatched.nameSpan, closing: LspBlockClosing.unterminated, startLine: unmatched.startLine, endLine: endLine, depth: open.count()))
+		closed.push(LspDocumentBlock.create(unmatched.kind, name: unmatched.name, nameSpan: unmatched.nameSpan, closing: LspBlockClosing.unterminated, startLine: unmatched.startLine, endLine: endLine, depth: open.count() as LspBlockDepth))
 	end 'unwind'
 end 'recordUnterminated'
 
@@ -393,8 +393,8 @@ end 'innermostKindIs'
 // Group the stream into source lines, layout tokens excluded.
 module function lspTokenLines(tokens TokenArray) returns LspTokenLineArray
 	var lines = LspTokenLineArray.create()
-	var firstIndex = 0 as TokenIndex
-	var lastIndex = 0 as TokenIndex
+	var firstIndex = 0 as ElementIndex
+	var lastIndex = 0 as ElementIndex
 	var currentLine = 0 as LineNumber
 	var open = false
 
@@ -403,7 +403,7 @@ module function lspTokenLines(tokens TokenArray) returns LspTokenLineArray
 			continue
 		end 'notCode'
 
-		let index = position.index() as TokenIndex
+		let index = position.index()
 
 		if open and token.line == currentLine 'sameLine'
 			lastIndex = index
@@ -429,7 +429,7 @@ end 'lspTokenLines'
 
 // The token index a line's declaration keyword would sit at, past `export` / `public` / `module` /
 // `static`. Every one of those may precede a declaration and none of them opens a block itself.
-function pastVisibilityModifiers(tokens TokenArray, tokenLine LspTokenLine) returns TokenIndex
+function pastVisibilityModifiers(tokens TokenArray, tokenLine LspTokenLine) returns ElementIndex
 	var index = tokenLine.firstIndex
 
 	while index < tokenLine.lastIndex 'skipModifiers'
@@ -525,7 +525,7 @@ function declarationBlockKind(kind TokenKind) returns LspBlockKind
 end 'declarationBlockKind'
 
 // `function` immediately followed by `(` is a closure literal.
-function opensAClosure(tokens TokenArray, keywordIndex TokenIndex, tokenLine LspTokenLine) returns bool
+function opensAClosure(tokens TokenArray, keywordIndex ElementIndex, tokenLine LspTokenLine) returns bool
 	if keywordIndex >= tokenLine.lastIndex 'nothingFollows'
 		return false
 	end 'nothingFollows'
@@ -541,7 +541,7 @@ end 'opensAClosure'
 // A line with no word at all yields an EOF token, which is this walk's "there is no name here" — a real
 // token kind that cannot be mistaken for one, rather than a span at offset 0 that a document legitimately
 // has.
-function declaredNameToken(tokens TokenArray, keywordIndex TokenIndex, tokenLine LspTokenLine, keyword TokenKind) returns Token
+function declaredNameToken(tokens TokenArray, keywordIndex ElementIndex, tokenLine LspTokenLine, keyword TokenKind) returns Token
 	var index = keywordIndex + 1
 	var found = Token.eof()
 
@@ -578,6 +578,6 @@ end 'lspLineOf'
 
 // Every index this file forms is derived from an `LspTokenLine`, whose bounds came from the same array — so an
 // out-of-range read is a defect in this walk and not an input a document can present.
-module function lspTokenAt(tokens TokenArray, index TokenIndex) returns Token
+module function lspTokenAt(tokens TokenArray, index ElementIndex) returns Token
 	return try tokens.get(index) otherwise panic("lspTokenAt: index {index} is outside a {tokens.count()}-token stream — every index here is derived from an LspTokenLine built off this same array")
 end 'lspTokenAt'

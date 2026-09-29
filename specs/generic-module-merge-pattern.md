@@ -18,7 +18,7 @@ Exercises the full IrModule pattern from the self-hosted compiler: a generic typ
 <!-- test: generic-module-merge -->
 ```maxon
 typealias ExitCode = int(0 to 125)
-typealias Count = int(0 to u64.max)
+typealias Count = int(0 to u64.max) implements ElementIndex
 typealias Integer = int(i64.min to i64.max)
 
 type Item
@@ -117,7 +117,7 @@ type GenModule uses Op implements Mergeable with Item
 	end 'cloneFunc'
 
 	function appendOp(block Block, op Op)
-		let idx = self.ops.count()
+		let idx = self.ops.count() as Integer
 		self.ops.push(op)
 		block.opRefs.append(idx)
 	end 'appendOp'

@@ -753,7 +753,7 @@ end 'launder'
 
 function main() returns ExitCode
 		var a = b"hey"
-		a.resize(launder(-2))
+		a.resize(launder(-2) as ElementIndex)
 		return 0
 end 'main'
 ```

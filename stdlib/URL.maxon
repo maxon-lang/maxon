@@ -1,7 +1,5 @@
 /// RFC 3986 compliant URL parsing, serialization, and reference resolution.
 /// @category Network
-public typealias PortNumber = int(0 to 65535)
-
 public enum URLError implements Error
 	invalidScheme
 	invalidHost
@@ -18,7 +16,7 @@ public type URL implements Equatable, Stringable
 	var path as String
 	var userinfo as String
 	var host as String
-	var port as PortNumber
+	var port as NetworkPort
 	var query as String
 	var fragment as String
 	var hasHost as bool
@@ -47,7 +45,7 @@ public type URL implements Equatable, Stringable
 		return host
 	end 'host'
 
-	public function port() returns PortNumber throws URLError
+	public function port() returns NetworkPort throws URLError
 		if not hasPort 'absent'
 			throw URLError.fieldNotPresent
 		end 'absent'
@@ -264,7 +262,7 @@ public type URL implements Equatable, Stringable
 		return try URL.forOriginForm(scheme, authority: authority, target: originTarget)
 	end 'forAbsoluteForm'
 
-	static function ofRequestTarget(scheme String, host String, port PortNumber, hasHost bool, hasPort bool, path URLOriginForm) returns URL
+	static function ofRequestTarget(scheme String, host String, port NetworkPort, hasHost bool, hasPort bool, path URLOriginForm) returns URL
 		return URL{
 			scheme: scheme,
 			path: path.path,
@@ -503,7 +501,7 @@ end 'URL'
 
 typealias Ipv6WordCount = int(0 to 9)
 
-let MaxPortNumber = 65535 as PortNumber
+let MaxPortNumber = 65535 as NetworkPort
 let SchemeAuthorityMark = "://"
 let AuthorityEndBytes = "/?#"
 let PathEndBytes = "?#"
@@ -537,10 +535,10 @@ let Ipv4MaxOctet = 255
 
 type URLHostAuthority
 	export let host as String
-	export let port as PortNumber
+	export let port as NetworkPort
 	export let hasPort as bool
 
-	static function create(host String, port PortNumber, hasPort bool) returns URLHostAuthority
+	static function create(host String, port NetworkPort, hasPort bool) returns URLHostAuthority
 		return URLHostAuthority{host: host, port: port, hasPort: hasPort}
 	end 'create'
 end 'URLHostAuthority'
@@ -724,9 +722,9 @@ function urlIsDecOctet(octet String) returns bool
 	end 'octet'
 end 'urlIsDecOctet'
 
-function urlPortOf(authority String, from BytePos) returns PortNumber throws URLError
+function urlPortOf(authority String, from BytePos) returns NetworkPort throws URLError
 	match urlDecimalWithin(authority, from: from, until: authority.byteLength(), bound: MaxPortNumber as UrlDecimalBound) 'port'
-		value(number) then return number as PortNumber
+		value(number) then return number as NetworkPort
 		notADecimal or
 			aboveTheBound then throw URLError.invalidPort
 	end 'port'

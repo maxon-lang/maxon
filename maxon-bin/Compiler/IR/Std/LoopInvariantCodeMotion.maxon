@@ -171,7 +171,7 @@
 // straight-line Std IR with their loops already hand-hoisted — a second run there would walk every
 // appended function to find nothing, and it is also what keeps Rule 1's thread premise narrow, because
 // the runtime's own handshakes never pass through here.
-module function hoistLoopInvariantsHeadline(funcCount FuncCount) returns String
+module function hoistLoopInvariantsHeadline(funcCount ElementIndex) returns String
 	return "hoistLoopInvariants: {funcCount} function(s)"
 end 'hoistLoopInvariantsHeadline'
 
@@ -202,7 +202,7 @@ module function hoistInFunc(module StdModule, func IrFunction, scratch LicmScrat
 	// dominator solve and a child adjacency, all to be told there was no loop to use them on.
 	let succ = buildStdSuccessorGraph(module, func: func, blockCount: blockCount)
 
-	let loops = NaturalLoops.find(succ, nodeCount: blockCount)
+	let loops = NaturalLoops.find(succ, nodeCount: blockCount as CsrIndex)
 
 	if loops.headers.count() == 0 'loopless'
 		return
@@ -211,12 +211,12 @@ module function hoistInFunc(module StdModule, func IrFunction, scratch LicmScrat
 	let tree = StdDominatorTree.buildFromSuccessors(succ, blockCount: blockCount)
 
 	for header in loops.headers 'eachLoop'
-		hoistFromLoop(module, func: func, tree: tree, loops: loops, header: header as BlockRefIndex, scratch: scratch)
+		hoistFromLoop(module, func: func, tree: tree, loops: loops, header: header, scratch: scratch)
 	end 'eachLoop'
 end 'hoistInFunc'
 
 // Analyse ONE natural loop and move what it admits into that loop's preheader.
-function hoistFromLoop(module StdModule, func IrFunction, tree StdDominatorTree, loops NaturalLoops, header BlockRefIndex, scratch LicmScratch)
+function hoistFromLoop(module StdModule, func IrFunction, tree StdDominatorTree, loops NaturalLoops, header ElementIndex, scratch LicmScratch)
 	scratch.beginLoop(tree.blockCount)
 	loops.collect(tree.pred, header: header as CsrIndex, into: scratch.members)
 
@@ -228,7 +228,7 @@ end 'hoistFromLoop'
 
 // The half of `hoistFromLoop` that runs once a preheader is known — split out so the `match` above has
 // nothing but the two answers in it.
-function hoistIntoPreheader(module StdModule, func IrFunction, tree StdDominatorTree, loops NaturalLoops, header BlockRefIndex, preheader BlockRefIndex, scratch LicmScratch)
+function hoistIntoPreheader(module StdModule, func IrFunction, tree StdDominatorTree, loops NaturalLoops, header ElementIndex, preheader ElementIndex, scratch LicmScratch)
 	scanLoopEffects(module, func: func, scratch: scratch)
 
 	if not scratch.effects.admitsAnyHoist() 'aCallCrossesEveryHoistedRange'
@@ -251,13 +251,13 @@ end 'hoistIntoPreheader'
 // ══════════════════════════════════════════════════════════════════════════
 
 // How many predecessors of a loop header lie outside the loop — the number `soleLoopEntry` needs to be
-// exactly one. A COUNT, not a block position, which is why it is not a `BlockRefIndex`.
+// exactly one. A COUNT, not a block position.
 typealias PredecessorCount = int(0 to u64.max)
 
 // Which block a loop is entered THROUGH, when there is exactly one and it goes nowhere else.
 module union LoopPreheader
 	none
-	position(preheader BlockRefIndex)
+	position(preheader ElementIndex)
 end 'LoopPreheader'
 
 // The loop's preheader: the unique predecessor of `header` outside the loop, whose ONLY successor is
@@ -275,7 +275,7 @@ end 'LoopPreheader'
 // block and re-pointing branch-edge argument lists — a CFG change this pass does not make, and one whose
 // interaction with `branchEdges` (the phi model the register allocator consumes) is a change of its
 // own. A loop entered from two places, or through a conditional branch, is skipped whole.
-module function soleLoopEntry(tree StdDominatorTree, members LoopMembership, header BlockRefIndex) returns LoopPreheader
+module function soleLoopEntry(tree StdDominatorTree, members LoopMembership, header ElementIndex) returns LoopPreheader
 	var found = LoopPreheader.none
 	var entries = 0 as PredecessorCount
 
@@ -287,7 +287,7 @@ module function soleLoopEntry(tree StdDominatorTree, members LoopMembership, hea
 		end 'aLatch'
 
 		entries = entries + 1
-		found = LoopPreheader.position(predecessor as BlockRefIndex)
+		found = LoopPreheader.position(predecessor)
 	end 'eachPredecessor'
 
 	if entries != 1 'notAUniqueEntry'
@@ -299,10 +299,10 @@ end 'soleLoopEntry'
 
 // Whether the ONE entry predecessor found above goes nowhere but the loop header — the second half of
 // `soleLoopEntry`'s condition, applied to the candidate the first half produced.
-function soleEntryLeadsOnlyToTheHeader(tree StdDominatorTree, entry LoopPreheader, header BlockRefIndex) returns LoopPreheader
+function soleEntryLeadsOnlyToTheHeader(tree StdDominatorTree, entry LoopPreheader, header ElementIndex) returns LoopPreheader
 	match entry 'candidate'
 		none then panic("soleEntryLeadsOnlyToTheHeader: asked of no candidate — the caller counted exactly one entry predecessor before calling")
-		position(preheader) then return entry if tree.succ.degree(preheader as CsrIndex) == 1 and tree.succ.neighbour(preheader as CsrIndex, k: 0) as BlockRefIndex == header else LoopPreheader.none
+		position(preheader) then return entry if tree.succ.degree(preheader as CsrIndex) == 1 and tree.succ.neighbour(preheader as CsrIndex, k: 0) == header else LoopPreheader.none
 	end 'candidate'
 end 'soleEntryLeadsOnlyToTheHeader'
 
@@ -322,22 +322,22 @@ end 'soleEntryLeadsOnlyToTheHeader'
 //
 // ⚠ A duplicate in the named set (a latch that is also an exit) is harmless: its chain is climbed twice
 // and the required count is two higher, so the equality still selects exactly the blocks on all chains.
-function markMustExecuteBlocks(tree StdDominatorTree, loops NaturalLoops, header BlockRefIndex, scratch LicmScratch)
+function markMustExecuteBlocks(tree StdDominatorTree, loops NaturalLoops, header ElementIndex, scratch LicmScratch)
 	for position in scratch.members.blocks 'eachExit'
-		if not blockLeavesTheLoop(tree, position: position as BlockRefIndex, members: scratch.members) 'notAnExit'
+		if not blockLeavesTheLoop(tree, position: position, members: scratch.members) 'notAnExit'
 			continue
 		end 'notAnExit'
 
-		scratch.mustExecute.climbChainFrom(position as BlockRefIndex, header: header, tree: tree)
+		scratch.mustExecute.climbChainFrom(position, header: header, tree: tree)
 	end 'eachExit'
 
 	for k in 0 upto loops.latches.degree(header as CsrIndex) 'eachLatch'
-		scratch.mustExecute.climbChainFrom(loops.latches.neighbour(header as CsrIndex, k: k) as BlockRefIndex, header: header, tree: tree)
+		scratch.mustExecute.climbChainFrom(loops.latches.neighbour(header as CsrIndex, k: k), header: header, tree: tree)
 	end 'eachLatch'
 end 'markMustExecuteBlocks'
 
 // Whether control can leave the loop from `position` — it has a successor outside the member set.
-function blockLeavesTheLoop(tree StdDominatorTree, position BlockRefIndex, members LoopMembership) returns bool
+function blockLeavesTheLoop(tree StdDominatorTree, position ElementIndex, members LoopMembership) returns bool
 	for k in 0 upto tree.succ.degree(position as CsrIndex) 'eachSuccessor'
 		if not members.contains(tree.succ.neighbour(position as CsrIndex, k: k)) 'anExitEdge'
 			return true
@@ -432,7 +432,7 @@ function scanLoopEffects(module StdModule, func IrFunction, scratch LicmScratch)
 	scratch.effects.reset()
 
 	for position in scratch.members.blocks 'eachBlock'
-		let block = blockAtPosition(module, func: func, position: position as BlockRefIndex)
+		let block = blockAtPosition(module, func: func, position: position)
 
 		for opIdx in block.opRefs 'eachOp'
 			scratch.effects.note(try module.ops.get(opIdx) otherwise panic("scanLoopEffects: op index {opIdx} from block.opRefs not in module.ops"))
@@ -455,7 +455,7 @@ end 'scanLoopEffects'
 // Walk the loop's blocks in dominator preorder (`recordLoopPreorder`), deciding op by op, and rebuild
 // each block's `opRefs` without the ops it gives up. One pass, no fixpoint: the preorder visits every
 // operand's def before the op that reads it, and the back-edge values were recorded variant first.
-function analyzeLoopBlocks(module StdModule, func IrFunction, tree StdDominatorTree, header BlockRefIndex, memoryIsStable bool, scratch LicmScratch)
+function analyzeLoopBlocks(module StdModule, func IrFunction, tree StdDominatorTree, header ElementIndex, memoryIsStable bool, scratch LicmScratch)
 	scratch.walkOrder.clear()
 	recordLoopPreorder(tree, members: scratch.members, header: header, into: scratch.walkOrder)
 
@@ -474,7 +474,7 @@ end 'analyzeLoopBlocks'
 // a fresh `OpIndexArray` per block per loop is one allocation each for a column that mostly comes out
 // identical. The terminator is not considered at all — it computes no value (`classifyArithOperands`
 // answers `neither` for every control op) and moving one would leave the block with no exit.
-function analyzeLoopBlock(module StdModule, block IrBlock, position BlockRefIndex, memoryIsStable bool, scratch LicmScratch)
+function analyzeLoopBlock(module StdModule, block IrBlock, position ElementIndex, memoryIsStable bool, scratch LicmScratch)
 	let mustExecute = scratch.mustExecute.holds(position)
 	scratch.leaving.clear()
 
@@ -515,14 +515,9 @@ end 'analyzeLoopBlock'
 // this does not. It does not need to, because `tryCall`/`witnessTryCall` are `neither` in the arithmetic
 // roster and are not loads, so no admission in this pass can ever name one.
 
-// How far through the `leaving` batch the rebuild has read. It indexes the BATCH, never the block — the
-// same split `SpliceBatchIndex` makes for the insert direction, and named apart from it because there is
-// no splice here.
-typealias LeavingIndex = int(0 to u64.max)
-
 function keepingAllBut(refs OpIndexArray, leaving BlockOpPosArray) returns OpIndexArray
 	var kept = OpIndexArray.create()
-	var next = 0 as LeavingIndex
+	var next = 0 as ElementIndex
 
 	for slot in 0 upto refs.count() 'eachRef'
 		if next < leaving.count() and slot == (try leaving.get(next) otherwise panic("keepingAllBut: leaving.get OOB at {next}")) 'hoisted'
@@ -538,7 +533,7 @@ end 'keepingAllBut'
 
 // Decide ONE op, recording its result as invariant when the answer is yes — the two phases' single
 // admission point.
-function admitsOp(module StdModule, opIdx OpIndex, mustExecute bool, memoryIsStable bool, scratch LicmScratch) returns bool
+function admitsOp(module StdModule, opIdx ElementIndex, mustExecute bool, memoryIsStable bool, scratch LicmScratch) returns bool
 	let op = try module.ops.get(opIdx) otherwise panic("admitsOp: op index {opIdx} from block.opRefs not in module.ops")
 
 	classifyArithOperands(op, operands: scratch.arith)
@@ -613,7 +608,7 @@ end 'admitsInvariantLoad'
 // another hoisted op was collected first and lands first: an operand's defining block is an ancestor of
 // its reader's, and a preorder visits an ancestor first. The def-before-use order the ops had inside the
 // loop is the order they arrive in.
-function appendToPreheader(module StdModule, func IrFunction, preheader BlockRefIndex, ops OpIndexArray)
+function appendToPreheader(module StdModule, func IrFunction, preheader ElementIndex, ops OpIndexArray)
 	var block = blockAtPosition(module, func: func, position: preheader)
 
 	for opIdx in ops 'eachHoisted'
@@ -622,7 +617,7 @@ function appendToPreheader(module StdModule, func IrFunction, preheader BlockRef
 end 'appendToPreheader'
 
 // The block at one position in `func.blockRefs` — the descent every walk above makes, written once.
-function blockAtPosition(module StdModule, func IrFunction, position BlockRefIndex) returns IrBlock
+function blockAtPosition(module StdModule, func IrFunction, position ElementIndex) returns IrBlock
 	let blockRef = try func.blockRefs.get(position) otherwise panic("hoistLoopInvariants: blockRefs.get OOB at {position}")
 	return try module.blocks.get(blockRef) otherwise panic("hoistLoopInvariants: blockRef from func.blockRefs not in module.blocks")
 end 'blockAtPosition'
@@ -655,19 +650,19 @@ type MustExecuteCounter
 		return Self{onChains: DominatorChainCountColumn.create(), touched: BlockPositionColumn.create(), climbs: 0}
 	end 'create'
 
-	function reset(blockCount BlockRefIndex)
+	function reset(blockCount ElementIndex)
 		for position in self.touched 'eachTouched'
 			try self.onChains.set(position, value: 0) otherwise panic("MustExecuteCounter.reset: onChains.set OOB at {position}")
 		end 'eachTouched'
 
 		self.touched.clear()
 		self.climbs = 0
-		self.onChains.growFilled(blockCount as ElementIndex, value: 0)
+		self.onChains.growFilled(blockCount, value: 0)
 	end 'reset'
 
 	// Walk one block's immediate-dominator chain up to the loop header, counting every block on it. The
 	// header terminates the walk because it dominates every member, so it is on the chain of each.
-	function climbChainFrom(from BlockRefIndex, header BlockRefIndex, tree StdDominatorTree)
+	function climbChainFrom(from ElementIndex, header ElementIndex, tree StdDominatorTree)
 		self.climbs = self.climbs + 1
 
 		var walk = from
@@ -694,7 +689,7 @@ type MustExecuteCounter
 	// occur (a natural loop is found from a back edge, so it always has at least one latch), and the
 	// equality would then be vacuously true for every block, which is why it is refused rather than
 	// answered.
-	function holds(position BlockRefIndex) returns bool
+	function holds(position ElementIndex) returns bool
 		if self.climbs == 0 'noChains'
 			panic("MustExecuteCounter.holds: no dominator chain was climbed for this loop — a natural loop is discovered from a back edge and therefore always has a latch to climb from")
 		end 'noChains'
@@ -815,7 +810,7 @@ module type LicmScratch
 	// `walkOrder` (`analyzeLoopBlocks`) and `leaving` (`analyzeLoopBlock`, per BLOCK rather than per
 	// loop). Clearing them twice would cost a second walk and buy nothing. Every column that IS reset here is reset by the positions or ids the
 	// last loop touched, never by the space it is dense over.
-	function beginLoop(blockCount BlockRefIndex)
+	function beginLoop(blockCount ElementIndex)
 		self.definedInLoop.beginLoop()
 		self.invariant.beginLoop()
 		self.mustExecute.reset(blockCount)

@@ -55,7 +55,7 @@ export typealias WitnessSlotIndex = int(0 to u16.max)
 // The index of a requirement within an interface's TRANSITIVE requirement list — slot `i` of the
 // witness table holds `interfaceWitnessSlots(…)[i]`. An interface
 // declares a handful of methods, so 16 bits is ample.
-export typealias WitnessMethodIndex = int(0 to u16.max)
+export typealias WitnessMethodIndex = int(0 to u16.max) implements ElementIndex
 
 // ⭐ **WITNESS-TABLE BYTE LAYOUT**: a header of
 // `methodCount@0`, `destroyFunc@8`, `retainFunc@16`, `soleWalkFunc@24`, `shareWalkFunc@32`,
@@ -162,7 +162,7 @@ end 'witnessMethodSlotOffset'
 // ⚠ **THE SLOT HOLDS A SELF-RELATIVE BYTE OFFSET, NOT AN ADDRESS** — see
 // `GlobalDataTable.recordRdataSelfRelativeOffset` for why `.rdata` cannot point at itself with any
 // relocation this compiler has, and why a distance can.
-export function witnessAssociatedSlotOffset(methodCount WitnessMethodIndex, position TypeParamPosition) returns ByteOffset
+export function witnessAssociatedSlotOffset(methodCount WitnessMethodIndex, position ElementIndex) returns ByteOffset
 	return witnessMethodSlotOffset(methodCount + (position as WitnessMethodIndex))
 end 'witnessAssociatedSlotOffset'
 
@@ -682,7 +682,7 @@ end 'IrInterface'
 // a handful at most, so the scan is cheaper than building a map would be and it allocates nothing. Absence is a
 // THROW rather than a sentinel index or a `count()`-means-no answer, both of which are exactly the shape this
 // project forbids; `MapError.keyNotFound` is the absence channel every other registry here already speaks.
-export function namePositionIn(names ByteArrayArray, name ByteArray) returns TypeParamPosition throws MapError
+export function namePositionIn(names ByteArrayArray, name ByteArray) returns ElementIndex throws MapError
 	for i in 0 upto names.count() 'eachName'
 		if (try names.get(i) otherwise panic("namePositionIn: names.get OOB at {i} below count {names.count()}")).equals(name) 'isThisOne'
 			return i
@@ -994,7 +994,7 @@ export type WitnessDispatchTarget
 	// is Base's. `methodIndex` is meaningless without it, so the pair travels together onto the emitted op —
 	// it is what lets `LowerMaxonToStd` recover the requirement's declared FORMALS and derive the call's
 	// per-argument ABI widths from the CALLEE's signature rather than from the actuals.
-	export let interfaceDeclIndex as InterfaceDeclIndex
+	export let interfaceDeclIndex as ElementIndex
 	export let returnTypeName as ByteArray
 	export let paramTypeNames as ByteArrayArray
 
@@ -1030,7 +1030,7 @@ export type WitnessDispatchTarget
 	// the last field of the requirement the two ambiguity/arity rejects need and the only one nothing else reads.
 	export let isStatic as bool
 
-	export static function create(witnessValue ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, returnTypeName ByteArray, paramTypeNames ByteArrayArray, throwsClause ThrowsClause, methodName ByteArray, paramNames ByteArrayArray, declaringInterfaceName ByteArray, isStatic bool) returns WitnessDispatchTarget
+	export static function create(witnessValue ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, returnTypeName ByteArray, paramTypeNames ByteArrayArray, throwsClause ThrowsClause, methodName ByteArray, paramNames ByteArrayArray, declaringInterfaceName ByteArray, isStatic bool) returns WitnessDispatchTarget
 		return Self{witnessValue: witnessValue, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, returnTypeName: returnTypeName, paramTypeNames: paramTypeNames, throwsClause: throwsClause, methodName: methodName, paramNames: paramNames, declaringInterfaceName: declaringInterfaceName, isStatic: isStatic}
 	end 'create'
 end 'WitnessDispatchTarget'
@@ -1427,7 +1427,7 @@ function unaryInterfaceMethod(name ByteArray, paramName ByteArray, paramTypeName
 	paramNames.push(paramName)
 	var paramTypeNames = ByteArrayArray.create()
 	paramTypeNames.push(paramTypeName)
-	return InterfaceMethodSig.create(name, paramNames: paramNames, paramTypeNames: paramTypeNames, returnTypeName: returnTypeName, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: InterfaceMethodSig.noBufferParams(paramNames.count()), nameLine: 0, nameColumn: 0)
+	return InterfaceMethodSig.create(name, paramNames: paramNames, paramTypeNames: paramTypeNames, returnTypeName: returnTypeName, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: InterfaceMethodSig.noBufferParams(paramNames.count() as ParamCount), nameLine: 0, nameColumn: 0)
 end 'unaryInterfaceMethod'
 
 // An interface with exactly one method and no `extends`/`uses` — every synthesized
@@ -1945,7 +1945,7 @@ export function isIntrinsicBuiltinConformance(typeName ByteArray, interfaceName 
 	end 'int'
 
 	if typeName.equals(StringConformerName) 'string'
-		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName)
+		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName) or interfaceName.equals(ComparableInterfaceName)
 	end 'string'
 
 	// ⭐ A `Character` hashes and compares as a `String` does — both ARE the fused byte record — and it is
@@ -1965,7 +1965,7 @@ export function isIntrinsicBuiltinConformance(typeName ByteArray, interfaceName 
 	end 'float'
 
 	if typeName.equals(BoolConformerName) 'bool'
-		return interfaceName.equals(ComparableInterfaceName)
+		return interfaceName.equals(EquatableInterfaceName) or interfaceName.equals(ComparableInterfaceName)
 	end 'bool'
 
 	// ⭐⭐ **`Array` IS THE SIXTH CONFORMER AND THE FIRST *CONDITIONAL* ONE.**

@@ -20,7 +20,7 @@ typealias IndentDepth = int(0 to u64.max)
 // How deeply `(`/`[`/`{` are nested at the token being emitted. Its only reader asks whether a line
 // starts a match ARM or merely continues a bracketed literal inside an arm body, so any depth past
 // zero answers the same — the width just has to hold what a real file nests.
-typealias BracketDepth = int(0 to u64.max)
+typealias GroupDepth = int(0 to u64.max)
 
 // How wide one indent level is when it is spent on SPACES — LSP's `tabSize`. Bounded because the
 // emitter writes this many characters per level on every indented line: no editor offers an indent
@@ -48,11 +48,6 @@ typealias BlankLineCount = int(0 to 1)
 // The counter behind a `unique` group key. Monotonic for one `format` call; two lines that must
 // never be treated as one group get two different keys from it.
 typealias GroupKeyOrdinal = int(0 to u64.max)
-
-// A 0-based line index into `SourceLines`, and how many such lines a source has. DISTINCT from
-// `LineNumber`, which is the 1-based number a token carries and a reader sees in a diagnostic — the
-// comment index is keyed by the second, and the raw scan walks the first.
-export typealias LineIndex = int(0 to u64.max)
 
 // What a line's group key IS. Two lines belong to one group when their keys are equal, and exactly one
 // blank line separates adjacent groups.
@@ -216,8 +211,8 @@ type SourceLines
 		var lineStart = 0 as ByteOffset
 		var i = 0 as ByteOffset
 
-		while i < bytes.count() 'eachByte'
-			let b = try bytes.get(i) otherwise panic("SourceLines.of: index {i} below the {bytes.count()}-byte source")
+		while i < bytes.count() as ByteOffset 'eachByte'
+			let b = try bytes.get(i as ElementIndex) otherwise panic("SourceLines.of: index {i} below the {bytes.count()}-byte source")
 
 			if b == Ascii.lf 'endOfLine'
 				starts.push(lineStart)
@@ -233,22 +228,22 @@ type SourceLines
 		return Self{bytes: bytes, starts: starts, ends: ends}
 	end 'of'
 
-	function count() returns LineIndex
+	function count() returns ElementIndex
 		return starts.count()
 	end 'count'
 
-	function length(index LineIndex) returns ByteOffset
+	function length(index ElementIndex) returns ByteOffset
 		return self.endOf(index) - self.startOf(index)
 	end 'length'
 
 	// The byte at `offset` within line `index`. The callers bound `offset` by `length` first.
-	function byteAt(index LineIndex, offset ByteOffset) returns Byte
+	function byteAt(index ElementIndex, offset ByteOffset) returns Byte
 		let at = self.startOf(index) + offset
-		return try bytes.get(at) otherwise panic("SourceLines.byteAt: byte {at} outside the {bytes.count()}-byte source")
+		return try bytes.get(at as ElementIndex) otherwise panic("SourceLines.byteAt: byte {at} outside the {bytes.count()}-byte source")
 	end 'byteAt'
 
 	// The text of `[from, to)` within line `index`.
-	function textIn(index LineIndex, from ByteOffset, to ByteOffset) returns String
+	function textIn(index ElementIndex, from ByteOffset, to ByteOffset) returns String
 		let lo = self.startOf(index) + from
 		let hi = self.startOf(index) + to
 		let span = try bytes.slice(lo as ElementIndex, endIndex: hi as ElementIndex) otherwise panic("SourceLines.textIn: [{lo}, {hi}) outside the {bytes.count()}-byte source")
@@ -257,7 +252,7 @@ type SourceLines
 
 	// Is `[from, to)` within line `index` nothing but layout? The test that decides whether a comment
 	// owns its line.
-	function blankBetween(index LineIndex, from ByteOffset, to ByteOffset) returns bool
+	function blankBetween(index ElementIndex, from ByteOffset, to ByteOffset) returns bool
 		var i = from
 
 		while i < to 'eachByte'
@@ -271,11 +266,11 @@ type SourceLines
 		return true
 	end 'blankBetween'
 
-	function startOf(index LineIndex) returns ByteOffset
+	function startOf(index ElementIndex) returns ByteOffset
 		return try starts.get(index) otherwise panic("SourceLines.startOf: line {index} of {starts.count()}")
 	end 'startOf'
 
-	function endOf(index LineIndex) returns ByteOffset
+	function endOf(index ElementIndex) returns ByteOffset
 		return try ends.get(index) otherwise panic("SourceLines.endOf: line {index} of {ends.count()}")
 	end 'endOf'
 end 'SourceLines'
@@ -307,7 +302,7 @@ type CommentScan
 
 	// The line the scan is on, 0-based, and the offset within it. Both move inside the block-comment
 	// walk, which is why they are fields rather than loop variables.
-	var line as LineIndex
+	var line as ElementIndex
 	var at as ByteOffset
 
 	static function create(lines SourceLines) returns CommentScan
@@ -464,12 +459,12 @@ type CommentScan
 
 	// One line's worth of a block comment. A segment owns its line when nothing follows it there AND
 	// either it is a continuation line or nothing preceded the `/*` on the opening one.
-	function recordSegment(text String, startLine LineIndex, startPrefixBlank bool, ownsTheLine bool)
+	function recordSegment(text String, startLine ElementIndex, startPrefixBlank bool, ownsTheLine bool)
 		let wholeLine = ownsTheLine and (self.line != startLine or startPrefixBlank)
 		self.record(self.line, comment: SourceComment.create(text, wholeLine: wholeLine))
 	end 'recordSegment'
 
-	function record(index LineIndex, comment SourceComment)
+	function record(index ElementIndex, comment SourceComment)
 		self.comments.upsert(((index + 1) as LineNumber), value: comment)
 	end 'record'
 
@@ -699,7 +694,7 @@ type FormatState
 
 	// Open `(` `[` `{`. A match arm's pattern is never inside one, so this is what keeps a line that
 	// merely CONTINUES a bracketed literal in an arm body from being read as a fresh arm.
-	var groupDepth as BracketDepth
+	var groupDepth as GroupDepth
 
 	// Between a match arm's first token and its `then`/`gives`/`panic`/`throws`.
 	var inArmPattern as bool
@@ -734,7 +729,7 @@ type FormatState
 	// Walk every token, then hand over the built text. A formatted file always ends with exactly one
 	// newline and no trailing layout.
 	export function run() returns String
-		var index = 0 as TokenIndex
+		var index = 0 as ElementIndex
 
 		while index < tokens.count() 'eachToken'
 			index = self.emitToken(index)
@@ -744,7 +739,7 @@ type FormatState
 	end 'run'
 
 	// Emit the token at `index`; returns the index the walk resumes at.
-	function emitToken(index TokenIndex) returns TokenIndex
+	function emitToken(index ElementIndex) returns ElementIndex
 		// By VALUE, not a borrow — `emitRealToken` below mutates `self`. See `tokenAt`.
 		let tok = self.tokenAt(index)
 
@@ -832,7 +827,7 @@ type FormatState
 		self.atLineStart = true
 	end 'emitNewline'
 
-	function emitRealToken(index TokenIndex, tok Token) returns TokenIndex
+	function emitRealToken(index ElementIndex, tok Token) returns ElementIndex
 		self.newlineRun = 0
 
 		if not self.hasEmitted and tok.line >= 1 'headComments'
@@ -1164,7 +1159,7 @@ type FormatState
 	end 'emitGapComments'
 
 	// Decide the blank line before this line's first token, then write the indent.
-	function openLine(tok Token, index TokenIndex, lineIsBlockCloser bool)
+	function openLine(tok Token, index ElementIndex, lineIsBlockCloser bool)
 		let grouping = self.currentGrouping()
 		let userHadBlankBeforeLine = self.hasEmitted and tok.line >= self.lastEmittedSourceLine + 2
 
@@ -1223,7 +1218,7 @@ type FormatState
 
 	// The tentative group key of the line beginning at `index`. A line that turns out to OPEN a block has
 	// this overwritten at line end, so the next line is always forced onto its own group.
-	function deriveGroupKey(index TokenIndex, grouping ScopeGrouping, lineIsBlockCloser bool) returns GroupKey
+	function deriveGroupKey(index ElementIndex, grouping ScopeGrouping, lineIsBlockCloser bool) returns GroupKey
 		if self.kindAt(index) == TokenKind.docComment 'docBlock'
 			return GroupKey.of(GroupKeyKind.doc)
 		end 'docBlock'
@@ -1281,7 +1276,7 @@ type FormatState
 	// ⚠ **THE LOOKAHEAD MUST NOT SKIP NEWLINES.** The declared name sits on the SAME line as the keyword,
 	// so skipping them makes a bare case named `function` borrow the NEXT case's name, read as a
 	// declaration, and open a block that never closes — thousands of lines re-indented across the tree.
-	function caseListKeywordDeclaresABody(index TokenIndex, kind TokenKind) returns bool
+	function caseListKeywordDeclaresABody(index ElementIndex, kind TokenKind) returns bool
 		if not (kindOpensADeclarationBlock(kind) or labeledBlockOpener(kind)) 'notAKeywordCase'
 			return false
 		end 'notAKeywordCase'
@@ -1293,7 +1288,7 @@ type FormatState
 	// declares. Walks the LINE and stops at its newline, whose index is the answer when the line declares
 	// nothing: `static` alone on a line is a bare enum case NAME, and a walk that stepped over the
 	// newline would take the next case's keyword for it.
-	function firstDeclaredIndexOnLine(index TokenIndex) returns TokenIndex
+	function firstDeclaredIndexOnLine(index ElementIndex) returns ElementIndex
 		var at = index
 
 		while at < tokens.count() 'eachToken'
@@ -1456,7 +1451,7 @@ type FormatState
 	// mutably, so calling one while that borrow is live is **E3070**: `cannot mutate 'tokens' via
 	// 'emitRealToken' while it is borrowed by 'tok'`. Returning the token out of a function ends the
 	// borrow at the return, which is exactly why `Parser.tokenAt` exists in the same shape.
-	function tokenAt(index TokenIndex) returns Token
+	function tokenAt(index ElementIndex) returns Token
 		if index >= tokens.count() 'pastEnd'
 			return Token.eof()
 		end 'pastEnd'
@@ -1464,7 +1459,7 @@ type FormatState
 		return try tokens.get(index) otherwise panic("FormatState.tokenAt: index<count just checked but tokens.get({index}) failed")
 	end 'tokenAt'
 
-	function kindAt(index TokenIndex) returns TokenKind
+	function kindAt(index ElementIndex) returns TokenKind
 		// `eof` past the end is the honest answer rather than a sentinel: the stream really has ended,
 		// and every caller is asking "what follows", which is nothing.
 		let tok = try tokens.get(index) otherwise return TokenKind.eof
@@ -1477,7 +1472,7 @@ type FormatState
 	// write out. `maybeChainLabel` RETURNS this index — the walk resumes there and every token in
 	// between is never emitted — so admitting `docComment` would silently delete the comment in
 	// `end 'x' /// note` followed by `else`. The two questions share a shape and not an answer.
-	function indexPastNewlinesFrom(index TokenIndex) returns TokenIndex
+	function indexPastNewlinesFrom(index ElementIndex) returns ElementIndex
 		var at = index
 
 		while at < tokens.count() and self.kindAt(at) == TokenKind.newline 'skip'
@@ -1488,7 +1483,7 @@ type FormatState
 	end 'indexPastNewlinesFrom'
 
 	// Where a run of `_` bindings separated by commas stops, starting at `index`.
-	function allDiscardedBindingsEndAt(index TokenIndex) returns TokenIndex
+	function allDiscardedBindingsEndAt(index ElementIndex) returns ElementIndex
 		var at = index
 
 		while at < tokens.count() 'eachBinding'
@@ -1518,7 +1513,7 @@ type FormatState
 	// not on the compile path, so no rung of that corpus ever calls it and every column there would read a
 	// flat zero — the blind spot, not a result. The shape that WOULD bend is many UNMATCHED openers, each
 	// scanning to EOF; `specs/lexer-parser-robustness.md` carries such cases and they are tiny.
-	function closerIsOnAnotherLine(index TokenIndex, tok Token) returns bool
+	function closerIsOnAnotherLine(index ElementIndex, tok Token) returns bool
 		let closing = TokenKind.rightBracket if tok.kind == TokenKind.leftBracket else TokenKind.rightBrace
 		var depth = 1
 		var at = index + 1
@@ -1548,13 +1543,13 @@ type FormatState
 	// Does the literal at `index` carry interpolations? A plain `"…"` is ONE `stringLiteral` and is
 	// re-quoted from its own value; an interpolated one is a run of fragments and is sliced out of the
 	// source.
-	function interpolatedLiteralOpensAt(index TokenIndex) returns bool
+	function interpolatedLiteralOpensAt(index ElementIndex) returns bool
 		return self.kindAt(index) == TokenKind.stringLiteral and self.kindAt(index + 1) == TokenKind.stringInterpStart
 	end 'interpolatedLiteralOpensAt'
 
 	// The index of the literal's FINAL fragment. Nesting is counted, because `"{f("{y}")}"` is legal and
 	// the inner literal's own markers must not be mistaken for the outer one's.
-	function lastInterpolationFragment(index TokenIndex) returns TokenIndex
+	function lastInterpolationFragment(index ElementIndex) returns ElementIndex
 		var last = index
 
 		// The caller has established that `index + 1` opens an interpolation.
@@ -1606,10 +1601,10 @@ type FormatState
 	// the literal's own quotes, braces and all. Addressed by BYTE offset: `String.slice` is
 	// GRAPHEME-indexed and is the wrong tool for a span the lexer measured in bytes. Escape sequences are
 	// safe: the lexer keeps escape bytes RAW in a fragment, so they were never decoded.
-	function sourceSpanBetween(first TokenIndex, last TokenIndex) returns String
+	function sourceSpanBetween(first ElementIndex, last ElementIndex) returns String
 		let opening = try tokens.get(first) otherwise panic("FormatState.sourceSpanBetween: index {first} below the {tokens.count()}-token stream")
 		let closing = try tokens.get(last) otherwise panic("FormatState.sourceSpanBetween: index {last} below the {tokens.count()}-token stream")
-		let span = try source.slice(opening.startByte as ElementIndex, endIndex: closing.endByte as ElementIndex) otherwise panic("FormatState.sourceSpanBetween: [{opening.startByte}, {closing.endByte}) outside the {source.count()}-byte source")
+		let span = try source.slice(opening.startByte, endIndex: closing.endByte) otherwise panic("FormatState.sourceSpanBetween: [{opening.startByte}, {closing.endByte}) outside the {source.count()}-byte source")
 		return String.from(span)
 	end 'sourceSpanBetween'
 
@@ -1748,7 +1743,7 @@ export function format(source String, options FormatOptions = FormatOptions.tabs
 	let bytes = source.toByteArray()
 
 	return match findSectionSeparator(bytes) 'separator'
-		at(offset) gives "{formatCore(sliceOf(bytes, from: 0, to: offset), options: options)}{sliceOf(bytes, from: offset, to: bytes.count())}"
+		at(offset) gives "{formatCore(sliceOf(bytes, from: 0, to: offset), options: options)}{sliceOf(bytes, from: offset, to: bytes.count() as ByteOffset)}"
 		absent gives formatCore(source, options: options)
 	end 'separator'
 end 'format'
@@ -1767,7 +1762,7 @@ end 'formatCore'
 // line whose first non-layout characters are `---` and which carries nothing but layout after them.
 function findSectionSeparator(bytes ByteArray) returns SectionSeparator
 	let lines = SourceLines.of(bytes)
-	var index = 0 as LineIndex
+	var index = 0 as ElementIndex
 
 	while index < lines.count() 'eachLine'
 		var at = 0 as ByteOffset
@@ -1789,7 +1784,7 @@ function findSectionSeparator(bytes ByteArray) returns SectionSeparator
 end 'findSectionSeparator'
 
 function sliceOf(bytes ByteArray, from ByteOffset, to ByteOffset) returns String
-	let span = try bytes.slice(from as ElementIndex, endIndex: to as ElementIndex) otherwise panic("sliceOf: [{from}, {to}) outside the {bytes.count()}-byte source")
+	let span = try bytes.slice(from, endIndex: to) otherwise panic("sliceOf: [{from}, {to}) outside the {bytes.count()}-byte source")
 	return String.from(span)
 end 'sliceOf'
 

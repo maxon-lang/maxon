@@ -55,8 +55,8 @@ export function formattedDocumentText(source String, insertSpaces bool) returns 
 end 'formattedDocumentText'
 
 function wholeDocumentEdit(editCount FormattingEditTally, newText String) returns String throws TestFailure
-	let observedEdits = editCount as AssertedInt
-	let leastEdits = MinimumFormattingEdits as AssertedInt
+	let observedEdits = editCount
+	let leastEdits = MinimumFormattingEdits
 	try Expect.atLeast(observedEdits, than: leastEdits, message: "the server answered `textDocument/formatting` with no edits at all. Every fixture in this file is unindented source the formatter has work to do on, so an empty edit list is a wrong answer rather than 'already formatted'.")
 	try Expect.isFalse(newText.isEmpty(), message: "the server answered with an edit whose replacement text is empty, which would delete the document rather than format it.")
 
@@ -101,7 +101,7 @@ function formattingProbeOf(result FormattingResult) returns FormattingProbe
 	end 'noEdits'
 
 	let firstEdit = try result.edits.get(0) otherwise panic("format-indent: the first edit of a non-empty edit list cannot be out of bounds")
-	return FormattingProbe.formatted(editCount, text: firstEdit.newText)
+	return FormattingProbe.formatted(editCount as FormattingEditTally, text: firstEdit.newText)
 end 'formattingProbeOf'
 
 // ⭐ `-32601` naming `textDocument/formatting` now means the handler STOPPED being served, so the

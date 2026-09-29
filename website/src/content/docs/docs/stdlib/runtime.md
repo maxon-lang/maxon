@@ -189,13 +189,13 @@ Output: `0.0 1.0 3.0 1024.0` and `0.7853981633974483 true`.
 ## Primitive Extensions
 
 `int`, `float` and `bool` conform to the core interfaces, so they work as `Map` keys, `Set` elements, in
-`sort()` and in generic code.
+`sort()` and in generic code. Every alias of `int` or `float` conforms as its primitive does.
 
 | Type | Conforms to | Notes |
 |------|-------------|-------|
 | `int` | `Hashable`, `Equatable`, `Comparable`, `Stringable`, `Cloneable` | `hash()` is the low 32 bits of the value. |
 | `float` | `Hashable`, `Equatable`, `Comparable`, `Stringable`, `Cloneable` | `compare` is a total order: NaN equals NaN and sorts below every other value. `hash()` folds the 64-bit IEEE-754 pattern into 32 bits, `(bits xor (bits shr 32)) and 0xFFFFFFFF`, except that `-0.0` hashes as `0.0` does (`0`). |
-| `bool` | `Comparable`, `Stringable`, `Cloneable` | `false` sorts before `true`. |
+| `bool` | `Equatable`, `Comparable`, `Stringable`, `Cloneable` | `false` sorts before `true`. |
 
 | Method | Returns | Description |
 |--------|---------|-------------|

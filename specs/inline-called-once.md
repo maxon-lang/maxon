@@ -82,9 +82,9 @@ function flipOnce(current IntArray, temp IntArray, n Integer) returns Integer
 
 	while low < high 'reverse'
 		let atLow = try temp.get(low) otherwise panic("flipOnce: low < high <= firstValue < n")
-		let atHigh = try temp.get(high) otherwise panic("flipOnce: high <= firstValue < n")
+		let atHigh = try temp.get(high as ElementIndex) otherwise panic("flipOnce: high <= firstValue < n")
 		try temp.set(low, value: atHigh) otherwise panic("flipOnce: low < n")
-		try temp.set(high, value: atLow) otherwise panic("flipOnce: high < n")
+		try temp.set(high as ElementIndex, value: atLow) otherwise panic("flipOnce: high < n")
 		low = low + 1
 		high = high - 1
 	end 'reverse'
@@ -146,7 +146,7 @@ function outer(a IntArray, n Integer) returns Integer
 	end 'fill'
 
 	let before = inner(a, n: n)
-	let last = try a.get(n - 1) otherwise panic("outer: n >= 1")
+	let last = try a.get((n - 1) as ElementIndex) otherwise panic("outer: n >= 1")
 	return before + last
 end 'outer'
 
@@ -184,9 +184,9 @@ function flipOnce(current IntArray, temp IntArray, n Integer) returns Integer
 
 	while low < high 'reverse'
 		let atLow = try temp.get(low) otherwise panic("flipOnce: low < high <= firstValue < n")
-		let atHigh = try temp.get(high) otherwise panic("flipOnce: high <= firstValue < n")
+		let atHigh = try temp.get(high as ElementIndex) otherwise panic("flipOnce: high <= firstValue < n")
 		try temp.set(low, value: atHigh) otherwise panic("flipOnce: low < n")
-		try temp.set(high, value: atLow) otherwise panic("flipOnce: high < n")
+		try temp.set(high as ElementIndex, value: atLow) otherwise panic("flipOnce: high < n")
 		low = low + 1
 		high = high - 1
 	end 'reverse'
@@ -445,7 +445,7 @@ enum FillError
 end 'FillError'
 
 function fillChecked(a IntArray, n Integer) returns Integer throws FillError
-	if a.count() < n 'short'
+	if (a.count() as Integer) < n 'short'
 		throw FillError.tooShort
 	end 'short'
 

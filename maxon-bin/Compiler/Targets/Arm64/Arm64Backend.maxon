@@ -1835,7 +1835,7 @@ end 'emitArm64TargetOp'
 // scratch pair (outside the allocatable pool), so the live index reg is
 // provably neither — no aliasing guard needed, unlike x64's r10/r11.
 function arm64EmitJumpTable(code ByteArray, rdataRelocs RdataRelocationArray, branchFixups Arm64BlockBranchFixupArray, jumpTables JumpTablePendingArray, indexReg MachineWord, defaultTarget BlockId, caseTargets BlockIdArray, tableLabel ByteArray)
-	arm64EmitMovImm(code, rd: Arm64Ip0, value: caseTargets.count())
+	arm64EmitMovImm(code, rd: Arm64Ip0, value: caseTargets.count() as MachineWord)
 	arm64EmitCmpReg(code, rn: indexReg, rm: Arm64Ip0)
 	arm64EmitCondBranch(code, fixups: branchFixups, cond: Arm64CondCode.hs, targetBlock: defaultTarget)
 	arm64EmitAdrpAddPair(code, rdataRelocs: rdataRelocs, dest: Arm64Ip1, label: tableLabel, adrpKind: RdataRelocKind.arm64Adrp, pageOffKind: RdataRelocKind.arm64PageOff)
@@ -1949,40 +1949,40 @@ function arm64EmitMemFill(code ByteArray, fillByte ParsedInt)
 	arm64EmitAddImmSigned(code, rd: Arm64MemFillCursor, rn: Arm64MemFillCursor, imm: Arm64MemFillLoopStride)
 	arm64EmitSubImmSigned(code, rd: Arm64MemFillCount, rn: Arm64MemFillCount, imm: Arm64MemFillLoopStride)
 	arm64EmitCmpImm(code, rn: Arm64MemFillCount, imm: Arm64MemFillLoopStride)
-	arm64PatchBranch19(code, codeOffset: arm64EmitLocalCondBranch(code, cond: Arm64CondCode.hs), targetOffset: loopTop)
+	arm64PatchBranch19(code, codeOffset: arm64EmitLocalCondBranch(code, cond: Arm64CondCode.hs), targetOffset: loopTop as CodeOffset)
 	arm64EmitFillPairRun(code, baseReg: Arm64MemFillEnd, startOffset: -(Arm64MemFillLoopStride as Imm32), count: Arm64MemFillLoopStride / Arm64MemFillPairBytes)
 	let doneFromLoop = arm64EmitLocalBranch(code)
 
-	arm64PatchBranch19(code, codeOffset: toTwoPairs, targetOffset: code.count())
+	arm64PatchBranch19(code, codeOffset: toTwoPairs, targetOffset: codeHere(code))
 	arm64EmitFillOverlappingSpan(code, spanBytes: Arm64MemFillTwoPairBytes)
 	let doneFromTwoPairs = arm64EmitLocalBranch(code)
 
-	arm64PatchBranch19(code, codeOffset: toOnePair, targetOffset: code.count())
+	arm64PatchBranch19(code, codeOffset: toOnePair, targetOffset: codeHere(code))
 	arm64EmitFillOverlappingSpan(code, spanBytes: Arm64MemFillPairBytes)
 	let doneFromOnePair = arm64EmitLocalBranch(code)
 
 	// 8..15: one word from each end. A PAIR does not fit twice here, so this is the one band the STP run
 	// above cannot serve — hence the STR/STUR spelling, and hence `Arm64MemFillWordBytes` existing at all.
-	arm64PatchBranch19(code, codeOffset: toOneWord, targetOffset: code.count())
+	arm64PatchBranch19(code, codeOffset: toOneWord, targetOffset: codeHere(code))
 	arm64EmitScaledMem(code, opcode: Arm64OpStrX, rt: Arm64MemFillPattern, baseReg: Arm64MemFillCursor, byteOffset: 0, scale: SpillSlotBytes)
 	arm64EmitUnscaledMem(code, opcode: Arm64OpSturX, rt: Arm64MemFillPattern, baseReg: Arm64MemFillEnd, byteOffset: -(Arm64MemFillWordBytes as Imm32))
 	let doneFromOneWord = arm64EmitLocalBranch(code)
 
 	// 0..7: a byte loop. There is no whole word to anchor an overlap on, and this band is the rare one.
-	arm64PatchBranch19(code, codeOffset: toByteLoop, targetOffset: code.count())
+	arm64PatchBranch19(code, codeOffset: toByteLoop, targetOffset: codeHere(code))
 	let doneFromEmpty = arm64EmitLocalCbz(code, reg: Arm64MemFillCount)
 	let byteLoopTop = code.count()
 	arm64EmitScaledMem(code, opcode: Arm64OpStrB, rt: Arm64MemFillPattern, baseReg: Arm64MemFillCursor, byteOffset: 0, scale: Arm64ByteAccessScale)
 	arm64EmitAddImmSigned(code, rd: Arm64MemFillCursor, rn: Arm64MemFillCursor, imm: 1)
 	arm64EmitSubImmSigned(code, rd: Arm64MemFillCount, rn: Arm64MemFillCount, imm: 1)
-	arm64PatchBranch19(code, codeOffset: arm64EmitLocalCbnz(code, reg: Arm64MemFillCount), targetOffset: byteLoopTop)
+	arm64PatchBranch19(code, codeOffset: arm64EmitLocalCbnz(code, reg: Arm64MemFillCount), targetOffset: byteLoopTop as CodeOffset)
 
 	let done = code.count()
-	arm64PatchBranch26(code, codeOffset: doneFromLoop, targetOffset: done)
-	arm64PatchBranch26(code, codeOffset: doneFromTwoPairs, targetOffset: done)
-	arm64PatchBranch26(code, codeOffset: doneFromOnePair, targetOffset: done)
-	arm64PatchBranch26(code, codeOffset: doneFromOneWord, targetOffset: done)
-	arm64PatchBranch19(code, codeOffset: doneFromEmpty, targetOffset: done)
+	arm64PatchBranch26(code, codeOffset: doneFromLoop, targetOffset: done as CodeOffset)
+	arm64PatchBranch26(code, codeOffset: doneFromTwoPairs, targetOffset: done as CodeOffset)
+	arm64PatchBranch26(code, codeOffset: doneFromOnePair, targetOffset: done as CodeOffset)
+	arm64PatchBranch26(code, codeOffset: doneFromOneWord, targetOffset: done as CodeOffset)
+	arm64PatchBranch19(code, codeOffset: doneFromEmpty, targetOffset: done as CodeOffset)
 end 'arm64EmitMemFill'
 
 // storeSlotReg / loadRegSlot are CLASS-AGNOSTIC (an 8-byte slot holds a GPR or an f64); the
@@ -2095,8 +2095,8 @@ export function arm64EmitAtomicCas(code ByteArray, dest MachineWord, addrReg Mac
 	arm64EmitCmpReg(code, rn: Arm64AtomicValue, rm: expectedReg)
 	let toExit = arm64EmitLocalCondBranch(code, cond: Arm64CondCode.ne)
 	arm64EmitStlxr(code, rt: replacementReg, rn: addrReg)
-	arm64PatchBranch19(code, codeOffset: arm64EmitLocalCbnz(code, reg: Arm64AtomicStatus), targetOffset: loopTop)
-	arm64PatchBranch19(code, codeOffset: toExit, targetOffset: code.count())
+	arm64PatchBranch19(code, codeOffset: arm64EmitLocalCbnz(code, reg: Arm64AtomicStatus), targetOffset: loopTop as CodeOffset)
+	arm64PatchBranch19(code, codeOffset: toExit, targetOffset: codeHere(code))
 	arm64EmitCset(code, rd: dest, cond: Arm64CondCode.eq)
 end 'arm64EmitAtomicCas'
 
@@ -2126,7 +2126,7 @@ export function arm64EmitAtomicRmw(code ByteArray, dest MachineWord, addrReg Mac
 	arm64EmitLdaxr(code, rn: addrReg)
 	emitArm64Rrr(code, opcode: applyOpcode, rd: Arm64AtomicValue, rn: Arm64AtomicValue, rm: operandReg)
 	arm64EmitStlxr(code, rt: Arm64AtomicValue, rn: addrReg)
-	arm64PatchBranch19(code, codeOffset: arm64EmitLocalCbnz(code, reg: Arm64AtomicStatus), targetOffset: loopTop)
+	arm64PatchBranch19(code, codeOffset: arm64EmitLocalCbnz(code, reg: Arm64AtomicStatus), targetOffset: loopTop as CodeOffset)
 	emitArm64Rrr(code, opcode: inverseOpcode, rd: dest, rn: Arm64AtomicValue, rm: operandReg)
 end 'arm64EmitAtomicRmw'
 
@@ -2155,7 +2155,7 @@ end 'arm64EmitAtomicRmw'
 function arm64EmitCovInc(code ByteArray, rdataRelocs RdataRelocationArray, covOffsets CovPointOffsetArray, pointId CovPointId)
 	// Recorded where the SEQUENCE starts, on the x64 encoder's contract: the sidecar names the address the
 	// counter's code begins at, and a point absent from this channel is ELIMINATED.
-	covOffsets.push(CovPointOffset.create(code.count(), pointId: pointId))
+	covOffsets.push(CovPointOffset.create(codeHere(code), pointId: pointId))
 	arm64EmitPushPairGpr(code, rt1: Arm64CovAddr, rt2: Arm64CovAddrPartner)
 	arm64EmitAdrpAddPair(code, rdataRelocs: rdataRelocs, dest: Arm64CovAddr, label: CoverageImageGlobal.toByteArray(), adrpKind: RdataRelocKind.dataSectionArm64Adrp, pageOffKind: RdataRelocKind.dataSectionArm64PageOff, addend: covCounterOffset(pointId as MxcovPointIndex) as ByteOffset)
 
@@ -2163,7 +2163,7 @@ function arm64EmitCovInc(code ByteArray, rdataRelocs RdataRelocationArray, covOf
 	arm64EmitLdaxr(code, rn: Arm64CovAddr)
 	arm64EmitAddSubImm12(code, opcode: Arm64OpAddImm, rd: Arm64AtomicValue, rn: Arm64AtomicValue, imm12: CovCounterStep, shiftHi: false)
 	arm64EmitStlxr(code, rt: Arm64AtomicValue, rn: Arm64CovAddr)
-	arm64PatchBranch19(code, codeOffset: arm64EmitLocalCbnz(code, reg: Arm64AtomicStatus), targetOffset: loopTop)
+	arm64PatchBranch19(code, codeOffset: arm64EmitLocalCbnz(code, reg: Arm64AtomicStatus), targetOffset: loopTop as CodeOffset)
 
 	arm64EmitPopPairGpr(code, rt1: Arm64CovAddr, rt2: Arm64CovAddrPartner)
 end 'arm64EmitCovInc'
@@ -2225,13 +2225,13 @@ end 'arm64EmitMsub'
 // PC-relative 26-bit displacement). Exported so the hand-assembled entry stub (`Arm64Runtime`) emits
 // its `bl main` through the same primitive the isel does.
 export function arm64EmitBranchLink(code ByteArray, callFixups CallFixupArray, targetName ByteArray)
-	callFixups.push(CallFixup.create(code.count(), targetName: targetName))
+	callFixups.push(CallFixup.create(codeHere(code), targetName: targetName))
 	emitArm64Insn(code, insn: Arm64OpBl)
 end 'arm64EmitBranchLink'
 
 // `b` to a named function — a tail call, its imm26 resolved by name as `arm64EmitBranchLink`'s is.
 module function arm64EmitTailBranch(code ByteArray, callFixups CallFixupArray, targetName ByteArray)
-	callFixups.push(CallFixup.create(code.count(), targetName: targetName))
+	callFixups.push(CallFixup.create(codeHere(code), targetName: targetName))
 	emitArm64Insn(code, insn: Arm64OpB)
 end 'arm64EmitTailBranch'
 
@@ -2248,7 +2248,7 @@ end 'arm64EmitImportCall'
 // Relocation's `codeOffset` and `codeOffset + 4` — so the Relocation is filed AT the ADRP. EXPORTED for
 // `Arm64GtRuntime.arm64EmitLibcCall`, which hands the address to the system-stack door instead of calling it.
 export function arm64EmitLoadImportAddress(code ByteArray, iatRelocs RelocationArray, slotIndex RelocSlotIndex)
-	iatRelocs.push(Relocation.create(code.count(), slotIndex: slotIndex))
+	iatRelocs.push(Relocation.create(codeHere(code), slotIndex: slotIndex))
 	emitArm64Insn(code, insn: Arm64OpAdrp or Arm64Ip0)
 	arm64EmitScaledMem(code, opcode: Arm64OpLdrX, rt: Arm64Ip0, baseReg: Arm64Ip0, byteOffset: 0, scale: SpillSlotBytes)
 end 'arm64EmitLoadImportAddress'
@@ -2400,9 +2400,9 @@ end 'arm64EmitCsel'
 // It defaults to 0: most callers want the object itself, and only a slot within one (a coverage counter)
 // needs the displacement.
 export function arm64EmitAdrpAddPair(code ByteArray, rdataRelocs RdataRelocationArray, dest MachineWord, label ByteArray, adrpKind RdataRelocKind, pageOffKind RdataRelocKind, addend ByteOffset = 0)
-	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: String.from(label), kind: adrpKind, addend: addend))
+	rdataRelocs.push(RdataRelocation.create(codeHere(code), rdataLabel: String.from(label), kind: adrpKind, addend: addend))
 	emitArm64Insn(code, insn: Arm64OpAdrp or dest)
-	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: String.from(label), kind: pageOffKind, addend: addend))
+	rdataRelocs.push(RdataRelocation.create(codeHere(code), rdataLabel: String.from(label), kind: pageOffKind, addend: addend))
 	arm64EmitAddSubImm12(code, opcode: Arm64OpAddImm, rd: dest, rn: dest, imm12: 0, shiftHi: false)
 end 'arm64EmitAdrpAddPair'
 
@@ -2424,7 +2424,7 @@ end 'arm64EmitFpLoadRdata'
 // function symbol rather than a data label, so a dedicated code→`.text` reloc channel rather than the
 // section-targeting `rdataRelocs`.
 export function arm64EmitLeaFuncAddr(code ByteArray, funcAdrpRelocs Arm64FuncAdrpRelocArray, dest MachineWord, funcName ByteArray)
-	funcAdrpRelocs.push(Arm64FuncAdrpReloc.create(code.count(), funcName: funcName))
+	funcAdrpRelocs.push(Arm64FuncAdrpReloc.create(codeHere(code), funcName: funcName))
 	emitArm64Insn(code, insn: Arm64OpAdrp or dest)
 	arm64EmitAddSubImm12(code, opcode: Arm64OpAddImm, rd: dest, rn: dest, imm12: 0, shiftHi: false)
 end 'arm64EmitLeaFuncAddr'
@@ -2617,7 +2617,7 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThrea
 		let block = try module.blocks.get(blockRef) otherwise panic("emitArm64FunctionChunk: blockRef from func.blockRefs not in module.blocks")
 
 		let blockStart = code.count()
-		blockOffsets.place(block.id, value: blockStart)
+		blockOffsets.place(block.id, value: blockStart as CodeOffset)
 		lineRows.openBlock(block.id, site: block.inlineSite)
 
 		// The green-thread stack guard, before the prologue, so a thread whose stack would overflow grows
@@ -2627,35 +2627,35 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThrea
 			emitArm64GtStackGuard(code, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: arm64PrologueFrameBytes(module, block: block), margin: gtStackGuardMargin(target), site: GtGuardSite.functionEntry, target: target)
 
 			// x64's twin: the guard's bytes are where an asynchronous stop may not land, read off the buffer.
-			unsafePrefixBytes = code.count()
+			unsafePrefixBytes = codeHere(code)
 		end 'guard'
 
 		isFirstBlock = false
 
 		for opIdx in block.opRefs 'eachOp'
 			if captureSpans 'aRowMayOpenHere'
-				lineRows.note(module.spans.at(opIdx), codeOffset: code.count())
+				lineRows.note(module.spans.at(opIdx), codeOffset: codeHere(code))
 			end 'aRowMayOpenHere'
 
 			let opStart = code.count()
 			let op = try module.ops.get(opIdx) otherwise panic("emitArm64FunctionChunk: opIdx {opIdx} not in module.ops")
 			emitArm64TargetOp(op, code: code, covOffsets: covOffsets, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, funcAdrpRelocs: funcAdrpRelocs, branchFixups: branchFixups, jumpTables: jumpTables, greenThreads: greenThreads)
-			runOffsets.note(opIdx, codeStart: opStart, codeEnd: code.count())
+			runOffsets.note(opIdx, codeStart: opStart as CodeOffset, codeEnd: codeHere(code))
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'hasTerm'
 			if captureSpans 'aRowMayOpenAtTheTerminator'
-				lineRows.note(module.spans.at(block.terminatorIndex()), codeOffset: code.count())
+				lineRows.note(module.spans.at(block.terminatorIndex()), codeOffset: codeHere(code))
 			end 'aRowMayOpenAtTheTerminator'
 
 			let termStart = code.count()
 			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("emitArm64FunctionChunk: terminator not in module.ops")
 			emitArm64TargetOp(termOp, code: code, covOffsets: covOffsets, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, funcAdrpRelocs: funcAdrpRelocs, branchFixups: branchFixups, jumpTables: jumpTables, greenThreads: greenThreads)
-			runOffsets.note(block.terminatorIndex(), codeStart: termStart, codeEnd: code.count())
+			runOffsets.note(block.terminatorIndex(), codeStart: termStart as CodeOffset, codeEnd: codeHere(code))
 		end 'hasTerm'
 
-		blockEnds.place(block.id, value: code.count())
-		inlineRanges.note(block.inlineSite, codeStart: blockStart, codeEnd: code.count())
+		blockEnds.place(block.id, value: codeHere(code))
+		inlineRanges.note(block.inlineSite, codeStart: blockStart as CodeOffset, codeEnd: codeHere(code))
 	end 'eachBlock'
 
 	arm64ResolveBlockBranches(code, blockOffsets: blockOffsets, fixups: branchFixups)
@@ -2758,33 +2758,33 @@ function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModul
 	// A label claimed twice is a wrong `.text` address, never a near miss — see `recordChunkLabel`, which
 	// owns the rule and the refusal for both native backends. `__symtable` and `__inlframes` go through
 	// the same door after the loop.
-	var labelsLaid = 0 as ChunkLabelCount
+	var labelsLaid = 0 as EntryCount
 
 	for chunk in chunks 'eachChunk'
 		let funcStart = code.count()
-		try recordChunkLabel(labelOffsets, name: chunk.funcName, offset: funcStart, laidOut: labelsLaid, project: project, funcNames: funcNames)
+		try recordChunkLabel(labelOffsets, name: chunk.funcName, offset: funcStart as CodeOffset, laidOut: labelsLaid, project: project, funcNames: funcNames)
 		labelsLaid = labelsLaid + 1
-		recordChunkSymbol(debugSymbols, chunk: chunk, codeOffset: funcStart)
-		let inlineSiteBase = inlineFrames.appendChunk(chunk, funcStart: funcStart)
+		recordChunkSymbol(debugSymbols, chunk: chunk, codeOffset: funcStart as CodeOffset)
+		let inlineSiteBase = inlineFrames.appendChunk(chunk, funcStart: funcStart as CodeOffset)
 
 		if captureSpans 'debugInfo'
-			foldChunkDebugInfo(chunk, funcStart: funcStart, inlineSiteBase: inlineSiteBase, functions: debugFunctions, lineRows: debugLineRows, covPointOffsets: covPointOffsets)
+			foldChunkDebugInfo(chunk, funcStart: funcStart as CodeOffset, inlineSiteBase: inlineSiteBase, functions: debugFunctions, lineRows: debugLineRows, covPointOffsets: covPointOffsets)
 		end 'debugInfo'
 
 		code.append(chunk.code)
 
 		for fx in chunk.callFixups 'rebaseCalls'
-			callFixups.push(CallFixup.create(funcStart + fx.codeOffset, targetName: fx.targetName))
+			callFixups.push(CallFixup.create(funcStart as CodeOffset + fx.codeOffset, targetName: fx.targetName))
 		end 'rebaseCalls'
 
 		// GOT import calls (the entry stub's `_exit`) rebase into the writer's slot-indexed relocations,
 		// the same channel as x64's IAT relocations. The writer patches the ADRP+LDR pair at each.
 		for r in chunk.iatRelocs 'rebaseImports'
-			relocations.push(Relocation.create(funcStart + r.codeOffset, slotIndex: r.slotIndex))
+			relocations.push(Relocation.create(funcStart as CodeOffset + r.codeOffset, slotIndex: r.slotIndex))
 		end 'rebaseImports'
 
 		for rr in chunk.rdataRelocs 'rebaseRdata'
-			var reloc = RdataRelocation.create(funcStart + rr.codeOffset, rdataLabel: rr.rdataLabel, kind: rr.kind)
+			var reloc = RdataRelocation.create(funcStart as CodeOffset + rr.codeOffset, rdataLabel: rr.rdataLabel, kind: rr.kind)
 
 			// The chunk-local `rdataOffset` is the ADDEND inside the named object; this resolves the object and
 			// folds the two into the section-relative offset the writer adds a VMADDR to.
@@ -2797,13 +2797,13 @@ function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModul
 		// `textOffset` is filled by `arm64ResolveFuncAdrpRelocs` after the loop — the same reason
 		// `arm64ResolveCallFixups` runs there.
 		for fr in chunk.funcAdrpRelocs 'rebaseFuncAddr'
-			funcAdrpRelocs.push(Arm64FuncAdrpReloc.create(funcStart + fr.codeOffset, funcName: fr.funcName))
+			funcAdrpRelocs.push(Arm64FuncAdrpReloc.create(funcStart as CodeOffset + fr.codeOffset, funcName: fr.funcName))
 		end 'rebaseFuncAddr'
 
 		// Rebase each jump-table reloc's per-slot target offsets from chunk-local to whole-`.text` (the crux
 		// step: a block's offset is `funcStart + its chunk-local offset`), exactly as x64's concat does.
 		for jt in chunk.jumpTableRelocs 'rebaseJumpTables'
-			jumpTableRelocs.push(rebaseJumpTableReloc(jt, funcStart: funcStart))
+			jumpTableRelocs.push(rebaseJumpTableReloc(jt, funcStart: funcStart as CodeOffset))
 		end 'rebaseJumpTables'
 	end 'eachChunk'
 
@@ -2811,16 +2811,16 @@ function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModul
 	// depends on it: a second claim on the label would move that bound and silently mis-size every
 	// backtrace, so it claims its label through the same door as every chunk. It is data, so it has no
 	// `debugSymbols` entry; one would let a walk symbolize a stray return address into the table.
-	padTo(code, size: alignUp(code.count(), alignment: SymbolTableAlignment))
-	try recordChunkLabel(labelOffsets, name: SymbolTableName, offset: code.count(), laidOut: labelsLaid, project: project, funcNames: funcNames)
+	padTo(code, size: alignUp(code.count() as BytePos, alignment: SymbolTableAlignment))
+	try recordChunkLabel(labelOffsets, name: SymbolTableName, offset: codeHere(code), laidOut: labelsLaid, project: project, funcNames: funcNames)
 	labelsLaid = labelsLaid + 1
 	code.append(buildSymbolTableBytes(debugSymbols, target: project.target))
 
 	// The inline frame tables follow the whole of `__symtable` — names and flag run both — under their own
 	// label (`BacktraceFormat`), past the `[mrt_start, __symtable)` window the walkers symbolize in; x64's
 	// concat lays them out the same way.
-	padTo(code, size: alignUp(code.count(), alignment: SymbolTableAlignment))
-	try recordChunkLabel(labelOffsets, name: InlineFrameTableName, offset: code.count(), laidOut: labelsLaid, project: project, funcNames: funcNames)
+	padTo(code, size: alignUp(code.count() as BytePos, alignment: SymbolTableAlignment))
+	try recordChunkLabel(labelOffsets, name: InlineFrameTableName, offset: codeHere(code), laidOut: labelsLaid, project: project, funcNames: funcNames)
 	code.append(buildInlineFrameTableBytes(inlineFrames))
 
 	arm64ResolveCallFixups(code, labelOffsets: labelOffsets, callFixups: callFixups)

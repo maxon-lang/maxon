@@ -78,7 +78,7 @@ test 'every branch arm is counted, including the implicit else and the case no r
 	let report = requireCoverageRunReport(staged, executable: executable)
 
 	let rows = branchSectionRows(report)
-	Expect.notEqual(rows.count() as AssertedInt, expected: 0, message: "the report has no `{BranchesSectionHeading}` section, or an empty one, over a fixture holding two `if`s and a three-way `match`. Line coverage over branching code without branch coverage is a number that cannot see the arm nobody took. The report reads:{LineFeed}{report}")
+	Expect.notEqual(rows.count(), expected: 0, message: "the report has no `{BranchesSectionHeading}` section, or an empty one, over a fixture holding two `if`s and a three-way `match`. Line coverage over branching code without branch coverage is a number that cannot see the arm nobody took. The report reads:{LineFeed}{report}")
 
 	requireSummaryCountsArms(report)
 	requireImplicitElseCounted(rows, staged: staged, report: report)
@@ -96,8 +96,8 @@ function requireSummaryCountsArms(report String) throws TestFailure
 	let arms = summaryTokenAfter(report, key: BranchesSummaryKey)
 	let taken = ratioNumerator(arms)
 	let instrumented = ratioDenominator(arms)
-	try Expect.greaterThan(instrumented as AssertedInt, than: 0, message: "the summary reports `{BranchesSummaryKey}{arms} arms taken` — no arms instrumented at all — over a fixture with two `if`s and a three-way `match`. A zero denominator does not mean the program never branches — it means the report mints no arm points at all, and it makes every per-arm assertion below vacuous. The report reads:{LineFeed}{report}")
-	try Expect.lessThan(taken as AssertedInt, than: instrumented as AssertedInt, message: "the summary reports `{BranchesSummaryKey}{arms} arms taken` — every arm taken — over a fixture whose `match` deliberately holds a case no run reaches. A green branch total on code with an untested arm is the worst answer this tool can give, because a green number gets trusted. The report reads:{LineFeed}{report}")
+	try Expect.greaterThan(instrumented, than: 0, message: "the summary reports `{BranchesSummaryKey}{arms} arms taken` — no arms instrumented at all — over a fixture with two `if`s and a three-way `match`. A zero denominator does not mean the program never branches — it means the report mints no arm points at all, and it makes every per-arm assertion below vacuous. The report reads:{LineFeed}{report}")
+	try Expect.lessThan(taken, than: instrumented, message: "the summary reports `{BranchesSummaryKey}{arms} arms taken` — every arm taken — over a fixture whose `match` deliberately holds a case no run reaches. A green branch total on code with an untested arm is the worst answer this tool can give, because a green number gets trusted. The report reads:{LineFeed}{report}")
 end 'requireSummaryCountsArms'
 
 // ============================================================================================
@@ -117,7 +117,7 @@ end 'requireImplicitElseCounted'
 
 function requireIfArms(row String, line FixtureLineNumber) throws TestFailure
 	let arms = armsOf(row)
-	try Expect.equal(arms.count() as AssertedInt, expected: 2, message: "the `if` at line {line} reports {arms.count()} arms. An `if` has two whether or not the source writes the second — an arm roster that only holds the arms with source text can never report the edge that was not taken. Its row reads: {row}")
+	try Expect.equal(arms.count(), expected: 2, message: "the `if` at line {line} reports {arms.count()} arms. An `if` has two whether or not the source writes the second — an arm roster that only holds the arms with source text can never report the edge that was not taken. Its row reads: {row}")
 
 	match armWithKindSuffix(arms, suffix: ImplicitArmSuffix) 'implicit'
 		none then try Expect.fail("the `if` at line {line} reports no `{ImplicitArmSuffix}` arm. The source writes no `else`, so that arm has no line table row and CANNOT have one; naming it implicit is what tells a reader the count belongs to an edge rather than to a statement. Its row reads: {row}")
@@ -126,16 +126,16 @@ function requireIfArms(row String, line FixtureLineNumber) throws TestFailure
 
 	match armWithKind(arms, kind: ThenArmKind) 'taken'
 		none then try Expect.fail("the `if` at line {line} reports no `{ThenArmKind}` arm. Its row reads: {row}")
-		found(arm) then try Expect.equal(armLine(arm) as AssertedInt, expected: line as AssertedInt, message: "the `{ThenArmKind}` arm of the `if` at line {line} names line {armLine(arm)} instead. Every arm names the line to LOOK at, and for an `if` that is the `if` itself. Its row reads: {row}")
+		found(arm) then try Expect.equal(armLine(arm), expected: line, message: "the `{ThenArmKind}` arm of the `if` at line {line} names line {armLine(arm)} instead. Every arm names the line to LOOK at, and for an `if` that is the `if` itself. Its row reads: {row}")
 	end 'taken'
 end 'requireIfArms'
 
 function requireImplicitArm(arm String, line FixtureLineNumber, row String) throws TestFailure
-	try Expect.equal(armLine(arm) as AssertedInt, expected: line as AssertedInt, message: "the implicit `else` of the `if` at line {line} names line {armLine(arm)}. An arm with no source text still has a line to send a reader to, and it is the `if`'s. Its row reads: {row}")
+	try Expect.equal(armLine(arm), expected: line, message: "the implicit `else` of the `if` at line {line} names line {armLine(arm)}. An arm with no source text still has a line to send a reader to, and it is the `if`'s. Its row reads: {row}")
 
 	// ⭐ THE HEADLINE. The fixture calls `classify` with values that fall through the `if`, so this edge is
 	// taken and no line table anywhere can say so.
-	try Expect.greaterThan(armCount(arm) as AssertedInt, than: 0, message: "the implicit `else` of the `if` at line {line} is reported as never taken, over a fixture that drives that edge on every call but one. An arm minted and never incremented is worse than an arm nobody minted: it is a report that positively claims the untested half was untested. Its row reads: {row}")
+	try Expect.greaterThan(armCount(arm), than: 0, message: "the implicit `else` of the `if` at line {line} is reported as never taken, over a fixture that drives that edge on every call but one. An arm minted and never incremented is worse than an arm nobody minted: it is a report that positively claims the untested half was untested. Its row reads: {row}")
 end 'requireImplicitArm'
 
 // ============================================================================================
@@ -156,7 +156,7 @@ end 'requireDispatchArmsCounted'
 function requireMatchArms(row String, line FixtureLineNumber, staged FilePath) throws TestFailure
 	let arms = armsOf(row)
 	let declared = declaredMatchArmCount(staged)
-	try Expect.equal(arms.count() as AssertedInt, expected: declared as AssertedInt, message: "the `match` at line {line} reports {arms.count()} arms where the staged fixture declares {declared} cases. A branch summary that can only hold a PAIR has to report every `match` as two-way or as nothing at all. Its row reads: {row}")
+	try Expect.equal(arms.count(), expected: declared as ElementIndex, message: "the `match` at line {line} reports {arms.count()} arms where the staged fixture declares {declared} cases. A branch summary that can only hold a PAIR has to report every `match` as two-way or as nothing at all. Its row reads: {row}")
 
 	for arm in arms 'eachArm'
 		let kind = armKind(arm)
@@ -167,7 +167,7 @@ function requireMatchArms(row String, line FixtureLineNumber, staged FilePath) t
 
 	match armAtLine(arms, line: takenLine) 'taken'
 		none then try Expect.fail("the `match` at line {line} reports no arm at line {takenLine}, which the staged fixture anchors as the case its run reaches. Each case arm names its OWN line, so a reader can see which case was missed. Its row reads: {row}")
-		found(arm) then try Expect.greaterThan(armCount(arm) as AssertedInt, than: 0, message: "the case arm at line {takenLine} is reported as never taken, over a fixture that dispatches to it. Its row reads: {row}")
+		found(arm) then try Expect.greaterThan(armCount(arm), than: 0, message: "the case arm at line {takenLine} is reported as never taken, over a fixture that dispatches to it. Its row reads: {row}")
 	end 'taken'
 
 	// ⭐ THE HEADLINE. A zero here is the whole point; blank, absent, or folded into the taken tally are
@@ -176,7 +176,7 @@ function requireMatchArms(row String, line FixtureLineNumber, staged FilePath) t
 
 	match armAtLine(arms, line: untakenLine) 'untaken'
 		none then try Expect.fail("the `match` at line {line} reports no arm at line {untakenLine}, which the staged fixture anchors as the case NOTHING reaches. An arm roster built from the arms that ran cannot contain the one that did not, which is the only arm anyone needed the report for. Its row reads: {row}")
-		found(arm) then try Expect.equal(armCount(arm) as AssertedInt, expected: 0, message: "the case arm at line {untakenLine} is reported as taken {armCount(arm)} times, over a fixture that never dispatches to it. Its row reads: {row}")
+		found(arm) then try Expect.equal(armCount(arm), expected: 0, message: "the case arm at line {untakenLine} is reported as taken {armCount(arm)} times, over a fixture that never dispatches to it. Its row reads: {row}")
 	end 'untaken'
 end 'requireMatchArms'
 

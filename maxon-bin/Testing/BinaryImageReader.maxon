@@ -57,7 +57,7 @@ export function imageSlice(image ByteArray, start ByteOffset, count BytePos) ret
 	var out = ByteArray.create()
 
 	for i in 0 upto count 'each'
-		out.push(try image.get(start + i) otherwise panic("imageSlice: get OOB at {start + i} — the caller is required to have checked spanFitsWithin(start, count) first"))
+		out.push(try image.get((start + i) as ElementIndex) otherwise panic("imageSlice: get OOB at {start + i} — the caller is required to have checked spanFitsWithin(start, count) first"))
 	end 'each'
 
 	return out
@@ -77,7 +77,7 @@ export function imageNameAt(image ByteArray, at ByteOffset, maxBytes BytePos) re
 	var name = ByteArray.create()
 
 	for i in 0 upto maxBytes 'each'
-		let b = try image.get(at + i) otherwise return ""
+		let b = try image.get((at + i) as ElementIndex) otherwise return ""
 
 		if b == 0 'nulTerminator'
 			break

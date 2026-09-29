@@ -21,14 +21,14 @@
 // ParamCount: the number of parameters a function takes.
 // StdTypeArray: array of StdType (function parameter/return type lists).
 
-export typealias ValueId = int(0 to u64.max)
+export typealias ValueId = int(0 to u64.max) implements ElementIndex
 
 // Dense value-operand list — call arguments, enum payloads, match bindings, and
 // the block-arg lists on `BranchEdge`. A flat i64 array, NOT an array of heap
 // name objects: that is the whole point of minting ValueIds in the parser.
 export typealias ValueIdArray = Array with ValueId
 export typealias VarSlot = int(0 to u64.max)
-export typealias BlockId = int(0 to u64.max)
+export typealias BlockId = int(0 to u64.max) implements ElementIndex
 export typealias BlockIdArray = Array with BlockId
 
 export typealias BlockIdSet = Set with BlockId
@@ -136,7 +136,7 @@ export function distinctSwitchTargets(caseTargets BlockIdArray, exclude BlockId)
 	end 'eachSlotForTheBound'
 
 	var seen = BoolArray.create()
-	seen.resize(highest + 1)
+	seen.resize((highest + 1) as ElementIndex)
 
 	// Seeding with `exclude` drops every default/hole slot in the same membership test that dedups the
 	// real targets — no separate `!= exclude` compare per slot.
@@ -167,11 +167,8 @@ export function blockIdArrayContains(list BlockIdArray, value BlockId) returns b
 	return false
 end 'blockIdArrayContains'
 
-// BlockRef: an index into a module's flat blocks array. Functions record their
-// ordered set of blocks as a BlockRefArray.
-export typealias BlockRef = int(0 to u64.max)
-export typealias BlockRefArray = Array with BlockRef
-export typealias ParamCount = int(0 to u64.max)
+export typealias BlockRefArray = Array with ElementIndex
+export typealias ParamCount = int(0 to u64.max) implements ElementIndex
 
 // The Std ABI numbers a function's parameters first: parameter `position` owns ValueId `position`, and
 // position `paramCount` is the first id a body value can hold. These two are the ONE spelling of that
@@ -219,21 +216,6 @@ export function allocValueId(ref ValueIdRef) returns ValueId
 	return id
 end 'allocValueId'
 
-// OpIndex: a plain integer index into a module's flat ops array.
-// Shared across all IR phases (Maxon, Std, Target).
-//
-// A block's `opRefs` and a function's `blockRefs` are flat ARRAYS of these, not linked
-// lists. They were `List` once, which cost a heap node per op reference plus a heap
-// iterator per traversal — ~17% of every allocation the compiler made — and bought
-// nothing: `List`'s only asymptotic edge is O(1) insert at a NODE, and every caller here
-// names a POSITION, so it paid `walkTo`'s O(n) pointer chase anyway. Indexed access, which
-// the register allocator does constantly, was O(n) on a list and is O(1) on an array.
-export typealias OpIndex = int(0 to u64.max)
-export typealias OpIndexArray = Array with OpIndex
+export typealias OpIndexArray = Array with ElementIndex
 
-// An op's position WITHIN ONE BLOCK — an index into `block.opRefs` (or into the
-// `collectBlockOps` list, which appends the terminator). Restarts at 0 in every block, and
-// SHIFTS whenever the splitter splices an op in, which is why nothing caches one. Distinct
-// from `OpIndex`, which indexes the module's flat ops array.
-export typealias BlockOpPos = int(0 to u64.max)
-export typealias BlockOpPosArray = Array with BlockOpPos
+export typealias BlockOpPosArray = Array with ElementIndex

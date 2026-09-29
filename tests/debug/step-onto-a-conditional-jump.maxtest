@@ -13,7 +13,7 @@ test 'a single step that lands on an armed conditional jump publishes it, and th
 	let executable = builtExecutable(staged)
 	let rows = statementOffsetsOfLine(executable, staged: staged, line: branchLine)
 
-	try Expect.atLeast(rows.count() as AssertedInt, than: StatementRowsOfTheBranchLine, message: "this case needs the condition's TEST and its JUMP to be two statement rows of the branch line, so both can be armed; the line table gives it {rows.count()}")
+	try Expect.atLeast(rows.count(), than: StatementRowsOfTheBranchLine, message: "this case needs the condition's TEST and its JUMP to be two statement rows of the branch line, so both can be armed; the line table gives it {rows.count()}")
 
 	let comparison = try rows.get(TestRowOfTheBranchLine) otherwise panic("step-onto-a-conditional-jump: the row count was asserted on the line above")
 	let jump = try rows.get(JumpRowOfTheBranchLine) otherwise panic("step-onto-a-conditional-jump: the row count was asserted on the line above")
@@ -28,7 +28,7 @@ test 'a single step that lands on an armed conditional jump publishes it, and th
 		walked.push("{textOf(stop, node: stop.root, key: ReasonKey)} {textOf(stop, node: stop.root, key: FunctionKey)}:{numberOf(stop, node: stop.root, key: LineKey)} {textOf(stop, node: stop.root, key: OffsetKey)}")
 	end 'eachStop'
 
-	try Expect.equal(stops.count() as AssertedInt, expected: StopsOntoAndOffTheJump, message: "⛔ THE REGRESSION THIS GUARDS IS SILENCE. The first step is one instruction that LANDS on the armed jump, whose `int3` never runs; the second is a step off an armed byte, which the driver restores and single-steps, so its landing has no `int3` to publish. The breakpoint on the test, the landing on the jump and the landing past it are three stops. The session stopped: {renderedRows(walked)}. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(stops.count(), expected: StopsOntoAndOffTheJump, message: "⛔ THE REGRESSION THIS GUARDS IS SILENCE. The first step is one instruction that LANDS on the armed jump, whose `int3` never runs; the second is a step off an armed byte, which the driver restores and single-steps, so its landing has no `int3` to publish. The breakpoint on the test, the landing on the jump and the landing past it are three stops. The session stopped: {renderedRows(walked)}. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let onTheTest = eventAt(stops, index: 0)
 	try Expect.equal(textOf(onTheTest, node: onTheTest.root, key: OffsetKey), expected: hexSpelling(comparison), message: "the first stop is the breakpoint on the condition's test. The session stopped: {renderedRows(walked)}. {said}")
@@ -38,5 +38,5 @@ test 'a single step that lands on an armed conditional jump publishes it, and th
 
 	let pastTheJump = eventAt(stops, index: 2)
 	try Expect.equal(textOf(pastTheJump, node: pastTheJump.root, key: ReasonKey), expected: StepStopReason, message: "the stop off the single-stepped jump is the step's. The session stopped: {renderedRows(walked)}. {said}")
-	try Expect.equal(numberOf(pastTheJump, node: pastTheJump.root, key: LineKey) as AssertedInt, expected: takenLine as AssertedInt, message: "the second step lands where the branch went, which for this fixture is the arm the condition takes. The session stopped: {renderedRows(walked)}. {said}")
+	try Expect.equal(numberOf(pastTheJump, node: pastTheJump.root, key: LineKey), expected: takenLine as EventNumber, message: "the second step lands where the branch went, which for this fixture is the arm the condition takes. The session stopped: {renderedRows(walked)}. {said}")
 end 'a single step that lands on an armed conditional jump publishes it, and the step off it lands where the jump goes'

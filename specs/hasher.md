@@ -174,7 +174,7 @@ function taggedFold(state HashDigest, text String) returns HashDigest
 	let bytes = text.toByteArray()
 	var hasher = Hasher.resume(state)
 	hasher.combine(bytes)
-	hasher.combine(bytes.count())
+	hasher.combine(bytes.count() as HashDigest)
 	return hasher.finalize()
 end 'taggedFold'
 
@@ -306,7 +306,7 @@ would redden here rather than silently rekeying every memo in the query spine.
 typealias PartArray = Array with String
 
 function mixBytes(state HashDigest, bytes ByteArray) returns HashDigest
-	return Hasher.combined(Hasher.combined(state, bytes: bytes), value: bytes.count())
+	return Hasher.combined(Hasher.combined(state, bytes: bytes), value: bytes.count() as HashDigest)
 end 'mixBytes'
 
 function foldParts(parts PartArray) returns HashDigest

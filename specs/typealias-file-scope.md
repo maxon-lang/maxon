@@ -176,8 +176,8 @@ error E3005: <fragment>:6:14: Value 600 is outside the range of 'Limit' (int(0 t
 
 
 <!-- test: wide-file-cast-still-accepted -->
-The opposite direction, and the shape of the collision `stdlib/helpers/string/` already contains:
-`utf16.maxon` declares `Utf16UnitCount = int(1 to 2)` while `views.maxon` declares the same name as
+The opposite direction, and the shape of a same-name collision across two files:
+one file declares `Utf16UnitCount = int(1 to 2)` while another declares the same name as
 `int(0 to i64.max)`. Each file's cast is checked against its OWN range, so the wide file's `40`
 compiles even though a narrower alias of that name exists elsewhere. Under one whole-program registry
 this program did not merely answer wrongly — whichever file merged last decided whether it compiled
@@ -820,7 +820,7 @@ typealias Q = Array with P
 
 function main() returns ExitCode
 	var q = Q.create()
-	return fromA() + q.count()
+	return fromA() + (q.count() as ExitCode)
 end 'main'
 ```
 ```maxoncstderr
@@ -1219,7 +1219,7 @@ function main() returns ExitCode
 	var mine = Bag.create()
 	mine.push("x")
 	var theirs = makeBag()
-	return ((try theirs.get(1) otherwise 0) * 10 + mine.count()) as ExitCode
+	return ((try theirs.get(1) otherwise 0) * 10 + (mine.count() as Num)) as ExitCode
 end 'main'
 ```
 ```exitcode

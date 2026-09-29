@@ -299,7 +299,7 @@ end 'checkOneAssociatedType'
 // are positional and `checkGenericInstance` reports a short one — so "the first k positions" is the whole of
 // what a receiver can claim. A `Map` per interface rather than a flat pair key because the consumer asks it
 // once per interface, walking that interface's own slot list.
-typealias DispatchedSlotClaims = Map with (WitnessMethodIndex, TypeParamPosition)
+typealias DispatchedSlotClaims = Map with (WitnessMethodIndex, ElementIndex)
 typealias DispatchedSlotMap = Map with (ByteArray, DispatchedSlotClaims)
 
 typealias AssociatedTypeNameSet = Set with ByteArray
@@ -398,7 +398,7 @@ end 'noteDispatchedSlot'
 // The body the two dispatch ops share — ONE interface-name resolution, feeding both the slot's key and the
 // question asked of the receiver. The two arms differ only in where `args` sits in the op, so they must not
 // also be two chances to key a claim to a different interface than the slot it is recorded under.
-function noteOneDispatchedSlot(slots DispatchedSlotMap, signatures ProgramSignatures, func IrFunction, args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex)
+function noteOneDispatchedSlot(slots DispatchedSlotMap, signatures ProgramSignatures, func IrFunction, args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex)
 	let interfaceName = signatures.interfaceNameAtDeclIndex(interfaceDeclIndex)
 	recordDispatchedSlot(slots, interfaceName: interfaceName, methodIndex: methodIndex, claimed: receiverClaimedPositions(func, signatures: signatures, args: args, interfaceName: interfaceName))
 end 'noteOneDispatchedSlot'
@@ -416,7 +416,7 @@ end 'noteOneDispatchedSlot'
 // ZERO for every receiver that claims nothing — a bare `Taker` parameter, an UNBOUND constrained type
 // parameter, a field load, a merge phi — which is the shape all three of E3119's recorded failures have, and
 // is why they stay refused.
-function receiverClaimedPositions(func IrFunction, signatures ProgramSignatures, args ValueIdArray, interfaceName ByteArray) returns TypeParamPosition
+function receiverClaimedPositions(func IrFunction, signatures ProgramSignatures, args ValueIdArray, interfaceName ByteArray) returns ElementIndex
 	let receiver = witnessDispatchReceiver(args)
 
 	if let instance = try func.valueExistentialInstances.get(receiver) 'declaredAtAnInstantiatedExistential'
@@ -441,7 +441,7 @@ end 'receiverClaimedPositions'
 // so it is still bounded by the program's requirement count and not by its op count. Every repeat that adds
 // nothing — the common case, since one requirement is called from many sites and they usually claim alike —
 // leaves through the probe having allocated nothing.
-function recordDispatchedSlot(slots DispatchedSlotMap, interfaceName ByteArray, methodIndex WitnessMethodIndex, claimed TypeParamPosition)
+function recordDispatchedSlot(slots DispatchedSlotMap, interfaceName ByteArray, methodIndex WitnessMethodIndex, claimed ElementIndex)
 	if slotClaimAlreadyAtOrBelow(slots, interfaceName: interfaceName, methodIndex: methodIndex, claimed: claimed) 'nothingNew'
 		return
 	end 'nothingNew'
@@ -454,7 +454,7 @@ end 'recordDispatchedSlot'
 
 // The probe half of the rebuild above, split out so the borrow of `slots` ENDS before the `upsert` — which is
 // the whole reason the set is rebuilt rather than added to.
-function slotClaimAlreadyAtOrBelow(slots DispatchedSlotMap, interfaceName ByteArray, methodIndex WitnessMethodIndex, claimed TypeParamPosition) returns bool
+function slotClaimAlreadyAtOrBelow(slots DispatchedSlotMap, interfaceName ByteArray, methodIndex WitnessMethodIndex, claimed ElementIndex) returns bool
 	if let recorded = try slots.get(interfaceName) 'thisInterfaceHasSlotsAlready'
 		if let already = try recorded.get(methodIndex) 'thisSlotHasBeenSeen'
 			return already <= claimed
@@ -534,7 +534,7 @@ end 'dispatchedAssociatedNamesOf'
 // conformers that KEEP the claim may be widened into it; `SemanticCheck.checkExistentialSiteClaimAtArgument`
 // refuses the rest, at the one place a concrete conformer and a claim meet. Narrowing here without that
 // refusal in place would be E3119's own recorded failure with an extra step.
-function unclaimedAssociatedPosition(iface IrInterface, name ByteArray, claimed TypeParamPosition) returns bool
+function unclaimedAssociatedPosition(iface IrInterface, name ByteArray, claimed ElementIndex) returns bool
 	let position = try namePositionIn(iface.associatedTypeNames, name: name) otherwise return false
 	return position >= claimed
 end 'unclaimedAssociatedPosition'
@@ -900,7 +900,7 @@ function checkOneAssociatedBinding(project Project, signatures ProgramSignatures
 	// ⚠ It sits BELOW the held-position arm on purpose. A holding is not a restatement of a conformer's binding
 	// at all (see that arm), and `T` names no interface to hold a position at, so deferring it there would drop
 	// a real refusal rather than move one.
-	if maxonTypeTag(signatures.substitutedInstanceArg(site.gid, position: position as TypeParamPosition)) == ValueTypeTag.typeParameter 'deferredToTheWidening'
+	if maxonTypeTag(signatures.substitutedInstanceArg(site.gid, position: position)) == ValueTypeTag.typeParameter 'deferredToTheWidening'
 		return
 	end 'deferredToTheWidening'
 
@@ -918,20 +918,20 @@ end 'checkOneAssociatedBinding'
 // The settle records the FIRST site's answer, so a contradicting one is refused here rather than silently
 // losing — which is what "a use site restates a settled fact" means when the fact is a holding.
 function requireWrittenBindingNamesTheHolding(project Project, signatures ProgramSignatures, site GenericInstantiationSite, iface IrInterface, position ElementIndex, heldAt ByteArray)
-	if let written = try signatures.instanceArgHeldInterfaceName(site.gid, position: position as TypeParamPosition) 'namesAnInterface'
+	if let written = try signatures.instanceArgHeldInterfaceName(site.gid, position: position) 'namesAnInterface'
 		if written.equals(heldAt) 'namesTheSettledHolding'
 			return
 		end 'namesTheSettledHolding'
 	end 'namesAnInterface'
 
 	let name = try iface.associatedTypeNames.get(position) otherwise panic("requireWrittenBindingNamesTheHolding: associatedTypeNames.get OOB at {position} below count {iface.associatedTypeNames.count()} — the caller's loop bounds this position by that same list")
-	reportPositioned(project, code: ErrorCode.interfaceInstantiationBindingDisagreement, message: "this use of '{String.from(iface.name)}' binds its associated type '{String.from(name)}' to '{String.from(signatures.instanceArgDisplayName(site.gid, position: position as TypeParamPosition))}', but this program HOLDS '{String.from(name)}' at the interface type '{String.from(heldAt)}' — a held position has exactly one holding, because the requirement's shared body is compiled once against it and every dispatch reads the nested table from a slot laid out for that one interface. Write '{String.from(heldAt)}', or give the two readings different interfaces", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
+	reportPositioned(project, code: ErrorCode.interfaceInstantiationBindingDisagreement, message: "this use of '{String.from(iface.name)}' binds its associated type '{String.from(name)}' to '{String.from(signatures.instanceArgDisplayName(site.gid, position: position))}', but this program HOLDS '{String.from(name)}' at the interface type '{String.from(heldAt)}' — a held position has exactly one holding, because the requirement's shared body is compiled once against it and every dispatch reads the nested table from a slot laid out for that one interface. Write '{String.from(heldAt)}', or give the two readings different interfaces", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
 end 'requireWrittenBindingNamesTheHolding'
 
 function requireWrittenBindingMatchesConformers(project Project, signatures ProgramSignatures, site GenericInstantiationSite, iface IrInterface, position ElementIndex, conformer ConformanceDecl, binding ByteArray)
 	// The SOURCE spelling, which is the side a conformance's `withArgs` is also recorded in — comparing the
 	// compiled name against a source string would report a difference in RENDERING as a difference in type.
-	let written = signatures.instanceArgDisplayName(site.gid, position: position as TypeParamPosition)
+	let written = signatures.instanceArgDisplayName(site.gid, position: position)
 
 	if written.equals(signatures.rangeScopedDeclaredName(binding, readerFilePath: conformer.filePath)) 'restatesTheSettledBinding'
 		return

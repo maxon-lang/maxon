@@ -77,12 +77,7 @@
 // docs/internals/register-allocation.md states for the whole allocator (Scaling: "scratch buffers are allocated
 // once and reused across calls").
 
-// A value's position in ONE PROGRAM POINT's live-value list — the "values" side of the bipartite
-// matching below, and the key its two inverse maps are stated in. It is NOT a ValueId (the matching
-// renumbers the point's live values 0..live.count()) and NOT a CfgIndex: a block index and a live-set
-// position are unrelated spaces that merely share a representation. `live.count()` is its "no value" sentinel.
-typealias LiveIndex = int(0 to u64.max)
-typealias LiveIndexColumn = Array with LiveIndex
+typealias LiveIndexColumn = Array with ElementIndex
 
 // The registers `valueId` may actually be coloured into: the registers of ITS OWN CLASS that the pool
 // offers, minus every register an op wrote while the value was live across it (`forbidden` — a call's
@@ -173,11 +168,11 @@ export type EffectivePools
 	// How many values are CONSTRAINED (an effective pool strictly smaller than THEIR OWN CLASS's full
 	// one). Zero in a call-free, idiv-free function, which is what lets its pressure sweeps skip the
 	// census entirely.
-	var constrained as ColumnLength
+	var constrained as ElementIndex
 
 	// How many values live in the XMM file. It is what lets a function with no float at all skip the
 	// census entirely — see `anyXmm`.
-	var xmmValues as ColumnLength
+	var xmmValues as ElementIndex
 
 	export static function create() returns EffectivePools
 		return Self{sizes: RegCountColumn.create(), constrained: 0, xmmValues: 0}
@@ -213,10 +208,10 @@ export type EffectivePools
 	// `LivenessResult.growValueSpace`, which is where a fresh id's class comes from and why.
 	export function growTo(valueCount ValueId, pool RegMask, class RegClass, file RegisterFile)
 		// Counted from what `growFilled` ACTUALLY added, never as `valueCount - count()`: that
-		// subtraction reads as an enormous positive on a `ColumnLength` the moment the column is
+		// subtraction reads as an enormous positive on an `ElementIndex` the moment the column is
 		// already long enough, and it would corrupt the tally silently.
 		let before = self.sizes.count()
-		self.sizes.growFilled(valueCount as ElementIndex, value: classPoolSizeOf(pool, class: class, file: file))
+		self.sizes.growFilled(valueCount, value: classPoolSizeOf(pool, class: class, file: file))
 
 		if class == RegClass.xmm 'xmmValues'
 			self.xmmValues = self.xmmValues + (self.sizes.count() - before)
@@ -394,7 +389,7 @@ export type RegPoolCensus
 		var confinedSoFar = 0 as RegCount
 
 		for p in smallestPool upto fullPoolSize 'prefixSum'
-			confinedSoFar = confinedSoFar + (try self.byPoolSize.get(p) otherwise panic("RegPoolCensus.screenViolates: byPoolSize.get OOB at {p}"))
+			confinedSoFar = confinedSoFar + (try self.byPoolSize.get(p as ElementIndex) otherwise panic("RegPoolCensus.screenViolates: byPoolSize.get OOB at {p}"))
 
 			if confinedSoFar > p 'violates'
 				return true
@@ -657,7 +652,7 @@ export function hallVerdictAt(liveness LivenessResult, live ValueIdArray, pool R
 
 	var verdict = scratch.verdict
 
-	if matched == valueCount 'saturated'
+	if matched == valueCount as RegCount 'saturated'
 		verdict.becomeFeasible()
 		return verdict
 	end 'saturated'
@@ -670,10 +665,10 @@ export function hallVerdictAt(liveness LivenessResult, live ValueIdArray, pool R
 	// confined to the witness is reachable through the register it holds. So the two ways of counting
 	// it must agree, and a disagreement means the matching or the reachability walk is wrong — which
 	// would silently corrupt the deficit this reports.
-	let expected = regMaskPopcount(witness) + (valueCount - matched)
+	let expected = regMaskPopcount(witness) + (valueCount as RegCount - matched) as RegCount
 
 	if tight != expected 'inconsistentTightSet'
-		panic("hallVerdictAt: {tight} live values are confined to the witness {witness} but the matching's tight set has {expected} (witness {regMaskPopcount(witness)} + unmatched {valueCount - matched}) — the maximum matching and its alternating-path reachability disagree")
+		panic("hallVerdictAt: {tight} live values are confined to the witness {witness} but the matching's tight set has {expected} (witness {regMaskPopcount(witness)} + unmatched {valueCount as RegCount - matched}) — the maximum matching and its alternating-path reachability disagree")
 	end 'inconsistentTightSet'
 
 	verdict.becomeOverflow(witness, confinedCount: tight)
@@ -689,7 +684,7 @@ end 'hallVerdictAt'
 // ITERATIVE — a worklist plus one parent link per register — like every other graph walk in the
 // allocator. The parent links are not just an anti-recursion device: they ARE the path the
 // augmentation walks back along.
-function augmentValue(start LiveIndex, scratch HallScratch, noRegister RegNum, noValue LiveIndex) returns bool
+function augmentValue(start ElementIndex, scratch HallScratch, noRegister RegNum, noValue ElementIndex) returns bool
 	var allowed = scratch.allowed
 	var valueOfReg = scratch.valueOfReg
 
@@ -704,7 +699,7 @@ function augmentValue(start LiveIndex, scratch HallScratch, noRegister RegNum, n
 	queue.clear()
 	queue.push(start)
 
-	var head = 0 as ColumnLength
+	var head = 0 as ElementIndex
 
 	while head < queue.count() 'alternatingPaths'
 		let u = try queue.get(head) otherwise panic("augmentValue: queue.get OOB at {head}")
@@ -742,7 +737,7 @@ end 'augmentValue'
 // register on it is re-assigned to the value that offered it, and THAT value's previous register —
 // vacated by the re-assignment — is the next one to hand on. The walk ends at `start`, which held no
 // register, so the matching finishes one edge larger.
-function applyAugmentingPath(freeReg RegNum, start LiveIndex, scratch HallScratch, noRegister RegNum)
+function applyAugmentingPath(freeReg RegNum, start ElementIndex, scratch HallScratch, noRegister RegNum)
 	var parentOfReg = scratch.parentOfReg
 	var regOfValue = scratch.regOfValue
 	var valueOfReg = scratch.valueOfReg
@@ -750,10 +745,10 @@ function applyAugmentingPath(freeReg RegNum, start LiveIndex, scratch HallScratc
 	var reachedStart = false
 
 	while not reachedStart 'walkBack'
-		let u = try parentOfReg.get(reg) otherwise panic("applyAugmentingPath: parentOfReg.get OOB at {reg}")
+		let u = try parentOfReg.get(reg as ElementIndex) otherwise panic("applyAugmentingPath: parentOfReg.get OOB at {reg}")
 		let vacated = try regOfValue.get(u) otherwise panic("applyAugmentingPath: regOfValue.get OOB for value position {u}")
 
-		try valueOfReg.set(reg, value: u) otherwise panic("applyAugmentingPath: valueOfReg.set OOB at {reg}")
+		try valueOfReg.set(reg as ElementIndex, value: u) otherwise panic("applyAugmentingPath: valueOfReg.set OOB at {reg}")
 		try regOfValue.set(u, value: reg) otherwise panic("applyAugmentingPath: regOfValue.set OOB for value position {u}")
 
 		reachedStart = u == start
@@ -774,7 +769,7 @@ end 'applyAugmentingPath'
 // set and outnumber it by the deficiency. That is the set Hall's condition fails on, and it is why
 // removing any ONE of its values drops the deficiency by exactly one: the freed register lets an
 // unmatched value augment into the chain.
-function tightRegisterSet(scratch HallScratch, valueCount LiveIndex, noRegister RegNum, noValue LiveIndex) returns RegMask
+function tightRegisterSet(scratch HallScratch, valueCount ElementIndex, noRegister RegNum, noValue ElementIndex) returns RegMask
 	var allowed = scratch.allowed
 	var regOfValue = scratch.regOfValue
 	var valueOfReg = scratch.valueOfReg
@@ -791,7 +786,7 @@ function tightRegisterSet(scratch HallScratch, valueCount LiveIndex, noRegister 
 		end 'unmatched'
 	end 'seedUnmatched'
 
-	var head = 0 as ColumnLength
+	var head = 0 as ElementIndex
 
 	while head < queue.count() 'alternatingPaths'
 		let u = try queue.get(head) otherwise panic("tightRegisterSet: queue.get OOB at {head}")
@@ -825,7 +820,7 @@ end 'tightRegisterSet'
 
 // How many of the point's live values are confined to `witness` — every register they could take
 // lies inside it. This is the set the overflow is about, and the number the deficit is measured from.
-function countConfinedTo(allowed RegMaskColumn, witness RegMask, valueCount LiveIndex) returns RegCount
+function countConfinedTo(allowed RegMaskColumn, witness RegMask, valueCount ElementIndex) returns RegCount
 	var confined = 0 as RegCount
 
 	for i in 0 upto valueCount 'eachValue'

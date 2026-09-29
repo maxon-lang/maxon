@@ -400,7 +400,7 @@ let AsciiCarriageReturn = 0x0D
 export typealias WorkerCount = int(1 to u32.max)
 
 // A worker's slot in the pool. Also the round-robin cursors, which are slot numbers.
-typealias WorkerId = int(0 to u32.max)
+typealias WorkerId = int(0 to u32.max) implements ElementIndex
 
 // A TALLY of workers, which — unlike a pool size — may legitimately be zero ("no worker exited
 // non-zero"). A separate alias precisely because `WorkerCount` may not be.
@@ -414,10 +414,6 @@ typealias JobTally = int(0 to u64.max)
 // count — a spec's cost tracks how much source the compiler must chew, and 15 one-liners are
 // cheaper than 6 register-pressure monsters.
 typealias JobWeight = int(0 to u64.max)
-
-// A spec's index into the parent's plan array, which IS the report order. Every job carries it,
-// so an answer that comes back out of order still lands in its place.
-export typealias PlanIndex = int(0 to u64.max)
 
 // ⭐⭐ **HOW MANY WORKERS WHEN NOBODY SAID: THE WHOLE MACHINE — AND IT USED TO BE THE LITERAL `12`.**
 // That number was measured on an 8-core arm64-macOS host (this file's own timeout analysis says so), so
@@ -590,12 +586,12 @@ end 'buildPlans'
 // the wire format to the parent's working directory) plus everything the parent needs to file the
 // answer away (`planIndex`) and to order the queue (`weight`).
 type SpecJob
-	export let planIndex as PlanIndex
+	export let planIndex as ElementIndex
 	export let specName as String
 	export let runs as SpecRuns
 	export let weight as JobWeight
 
-	static function create(planIndex PlanIndex, specName String, runs SpecRuns, weight JobWeight) returns SpecJob
+	static function create(planIndex ElementIndex, specName String, runs SpecRuns, weight JobWeight) returns SpecJob
 		return Self{planIndex: planIndex, specName: specName, runs: runs, weight: weight}
 	end 'create'
 
@@ -2089,7 +2085,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 	var poolSize = workerCount
 	let jobCount = jobQueue.count() + aloneQueue.count()
 
-	if jobCount < poolSize 'moreWorkersThanJobs'
+	if jobCount as WorkerCount < poolSize 'moreWorkersThanJobs'
 		poolSize = jobCount as WorkerCount
 	end 'moreWorkersThanJobs'
 
@@ -2312,7 +2308,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 		let idleFor = Clock.elapsedMs(lastProgressMs)
 
 		if idleFor >= WedgeWatchdogMs 'wedged'
-			abortOnWedgedPool(busy, inFlight: inFlight, drains: drains, dispatchedAt: dispatchedAt, spokeAt: spokeAt, expired: expired, idleFor: idleFor, queued: jobQueue.count() + aloneQueue.count(), dispatched: dispatched, completed: completed)
+			abortOnWedgedPool(busy, inFlight: inFlight, drains: drains, dispatchedAt: dispatchedAt, spokeAt: spokeAt, expired: expired, idleFor: idleFor, queued: (jobQueue.count() + aloneQueue.count()) as JobTally, dispatched: dispatched, completed: completed)
 		end 'wedged'
 
 		// Park, so the scheduler can run the drain green threads — every one of them blocked on an
@@ -2334,7 +2330,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 	// test contributes exactly one reading (`SpecTestRunner.TestRun` carries the verdict and the cost
 	// together), so a disagreement here means a job's CPU record was decoded against the wrong job — for the
 	// same reason `resultsFromLines` checks its records, and it costs one comparison.
-	if cpu.tests() != results.count() 'cpuCoverageGap'
+	if cpu.tests() != results.count() as TestTally 'cpuCoverageGap'
 		panic("runSpecPool: the compile-CPU tally covers {cpu.tests()} test(s) but the run reported {results.count()} — a job's {WorkerJobCpuMarker} record was counted against the wrong job")
 	end 'cpuCoverageGap'
 
@@ -2577,9 +2573,9 @@ function sendAndDrain(workers PersistentWorkerHandleArray, slot WorkerId, job Sp
 	// only ever writes its own slot, and only the dispatcher ever reads one.
 	let drain = async drainResultsThunk(handle.child, spokeAt: spokeAt, slot: slot)
 
-	if slot == drains.count() 'firstDispatchToThisSlot'
+	if slot == drains.count() as WorkerId 'firstDispatchToThisSlot'
 		drains.push(drain)
-	end 'firstDispatchToThisSlot' else if slot < drains.count() 'redispatch'
+	end 'firstDispatchToThisSlot' else if slot < drains.count() as WorkerId 'redispatch'
 		try drains.set(slot, value: drain) otherwise panic("sendAndDrain: drains.set({slot}) is in bounds by construction")
 	end 'redispatch' else 'indexGap'
 		panic("sendAndDrain: slot {slot} has no promise slot yet and is not the next one ({drains.count()}) — the initial dispatch went out of slot order")
@@ -2621,7 +2617,7 @@ function findIdleSlot(busy BoolArray, cursor WorkerId) returns WorkerId throws N
 	let poolSize = busy.count()
 
 	for offset in 0 upto poolSize 'scan'
-		let slot = wrapSlot(cursor + offset, poolSize: poolSize)
+		let slot = wrapSlot(cursor + offset, poolSize: poolSize as WorkerCount)
 		let isBusy = try busy.get(slot) otherwise panic("findIdleSlot: busy.get({slot}) is in bounds by construction")
 
 		if not isBusy 'isIdle'
@@ -2639,7 +2635,7 @@ function findReadyDrain(busy BoolArray, drains DrainPromiseArray, cursor WorkerI
 	let poolSize = busy.count()
 
 	for offset in 0 upto poolSize 'scan'
-		let slot = wrapSlot(cursor + offset, poolSize: poolSize)
+		let slot = wrapSlot(cursor + offset, poolSize: poolSize as WorkerCount)
 		let isBusy = try busy.get(slot) otherwise panic("findReadyDrain: busy.get({slot}) is in bounds by construction")
 
 		if not isBusy 'skipIdle'

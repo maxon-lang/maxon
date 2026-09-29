@@ -22,8 +22,9 @@ does for `int.hash` / `int.equals`). `int.compare(other)` is `lessThan` when `se
 `greaterThan` when `self > other`, and `equalTo` otherwise. A ranged int alias conforms through its
 primitive, so `Pair with Integer where T is Comparable` is legal.
 
-`String` does NOT conform to `Comparable` — a byte record has no ordering, and neither reference
-compiler gives it one.
+Every integer and float primitive and every alias of one conforms to `Comparable` and `Equatable` the
+same way. `String` conforms to `Comparable` in byte-lexicographic order, a shorter prefix first; `bool`
+conforms to both.
 
 Inside a generic body the concrete type is unknown, so both forms of ordering on a constrained type
 parameter dispatch through the runtime WITNESS TABLE (dictionary-passing):
@@ -76,8 +77,7 @@ rebase — so the witness cases run everywhere, carrying no target marker (as th
 `string-conformance` and `where-clauses` witness cases do). The compile-error cases and the
 pure-`Ordering` value cases were always target-independent.
 
-Direct `i.compare(j)` on a concrete primitive value, float/bool `Comparable`, `Character` ordering, and
-sorting are separate future mechanisms and are NOT covered here.
+`Character` and `String` ordering is specified in `character-type.md`.
 
 ## Tests
 

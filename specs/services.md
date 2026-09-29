@@ -3841,7 +3841,7 @@ type Reader
 	end 'create'
 
 	export function read(h Holder) returns Integer
-		return h.text.byteLength() + h.bytes.count()
+		return h.text.byteLength() + (h.bytes.count() as BytePos)
 	end 'read'
 end 'Reader'
 
@@ -4168,7 +4168,7 @@ function main() returns ExitCode
 	let s = "payload {42}"
 	let bytes = s.toByteArray()
 	let n = try await h.measure(s) otherwise 0
-	return (n + bytes.count()) as ExitCode
+	return (n + (bytes.count() as Integer)) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -4788,7 +4788,7 @@ type Reader
 	end 'create'
 
 	export function read(h Holder) returns Integer
-		return h.text.byteLength() + h.bytes.count()
+		return h.text.byteLength() + (h.bytes.count() as BytePos)
 	end 'read'
 end 'Reader'
 
@@ -4829,7 +4829,7 @@ type Reader
 	end 'create'
 
 	export function read(h Holder) returns Integer
-		return h.text.byteLength() + h.bytes.count()
+		return h.text.byteLength() + (h.bytes.count() as BytePos)
 	end 'read'
 end 'Reader'
 
@@ -4869,7 +4869,7 @@ type Reader
 	end 'create'
 
 	export function read(h Holder) returns Integer
-		return h.text.byteLength() + h.bytes.count()
+		return h.text.byteLength() + (h.bytes.count() as BytePos)
 	end 'read'
 end 'Reader'
 
@@ -4914,7 +4914,7 @@ type Reader
 	end 'create'
 
 	export function read(h Holder) returns Integer
-		return h.text.byteLength() + h.bytes.count()
+		return h.text.byteLength() + (h.bytes.count() as BytePos)
 	end 'read'
 end 'Reader'
 
@@ -10025,7 +10025,7 @@ type Maker uses T
 	static function create(seed T) returns Self
 		var first = Items.create()
 		first.push(seed)
-		return Self{seen: first.count()}
+		return Self{seen: first.count() as Integer}
 	end 'create'
 
 	export function make() returns Items

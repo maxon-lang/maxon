@@ -248,7 +248,7 @@ function isBig(b Octet) returns bool
 end 'isBig'
 
 function check(bytes OctetArray, i Octet) returns ExitCode
-	if isBig(try bytes.get(i) otherwise 0) 'big'
+	if isBig(try bytes.get(i as ElementIndex) otherwise 0) 'big'
 		return 1
 	end 'big'
 	return 0

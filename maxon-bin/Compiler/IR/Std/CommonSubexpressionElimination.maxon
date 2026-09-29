@@ -89,7 +89,7 @@
 // Like `foldConstants` it takes no start index: its other caller would be the appended runtime band,
 // and those hand-built bodies (`MmRuntime`, `GtRuntime`, the synthesized cascades) recompute nothing —
 // a second run there would walk every appended function to find nothing.
-module function commonSubexpressionEliminationHeadline(funcCount FuncCount) returns String
+module function commonSubexpressionEliminationHeadline(funcCount ElementIndex) returns String
 	return "eliminateCommonSubexpressions: {funcCount} function(s)"
 end 'commonSubexpressionEliminationHeadline'
 
@@ -196,7 +196,7 @@ type CseScopeStack
 	// Open a scope for one block: remember what leaving it must restore, then analyse it. Both marks
 	// are taken BEFORE the block is analysed, so `close` undoes exactly what this block and its whole
 	// subtree added.
-	function open(module StdModule, func IrFunction, position BlockRefIndex, subst ValueIdArray, scratch CseScratch)
+	function open(module StdModule, func IrFunction, position ElementIndex, subst ValueIdArray, scratch CseScratch)
 		self.entryMark.push(scratch.table.mark())
 		self.callsOnEntry.push(scratch.table.callsOnPath)
 
@@ -217,7 +217,7 @@ end 'CseScopeStack'
 // walk nothing to exclude it. A terminator computes no value (branches, returns, the jump table and the
 // process exits are all `StdArithShape.neither`) and it is not a CALL either, so neither the expression
 // half nor the call-barrier half of `analyzeOp` has anything to learn from one.
-function analyzeBlock(module StdModule, func IrFunction, position BlockRefIndex, subst ValueIdArray, scratch CseScratch)
+function analyzeBlock(module StdModule, func IrFunction, position ElementIndex, subst ValueIdArray, scratch CseScratch)
 	let blockRef = try func.blockRefs.get(position) otherwise panic("eliminateCommonSubexpressions: blockRefs.get OOB at {position}")
 	let block = try module.blocks.get(blockRef) otherwise panic("eliminateCommonSubexpressions: blockRef from func.blockRefs not in module.blocks")
 
@@ -232,7 +232,7 @@ end 'analyzeBlock'
 // The operands are read THROUGH the pending substitution column before anything is compared, so a
 // value this pass has already redirected is compared as its canonical self — which is what lets a chain
 // collapse in one walk: the third `x * 31` matches the first through the second.
-function analyzeOp(module StdModule, opIdx OpIndex, subst ValueIdArray, scratch CseScratch)
+function analyzeOp(module StdModule, opIdx ElementIndex, subst ValueIdArray, scratch CseScratch)
 	let op = try module.ops.get(opIdx) otherwise panic("eliminateCommonSubexpressions: op index {opIdx} from block.opRefs not in module.ops")
 	canonicalExpressionOf(op, operands: scratch.current, subst: subst)
 
@@ -289,9 +289,9 @@ end 'canonicalExpressionOf'
 // Mixing the SECOND half of the expression into the key separates them. It is still one flat integer
 // column and still no `Map` — the key identifies an expression rather than one
 // of its operands. Collisions are ordinary and cost only a `computesSameValueAs` that answers false.
-function bucketOf(operands StdArithOperands, bucketCount CseBucketCount) returns CseBucketIndex
+function bucketOf(operands StdArithOperands, bucketCount CseBucketCount) returns ElementIndex
 	let key = (operands.lhs as CseKeyPart) * FirstOperandStride + secondKeyOf(operands)
-	return (try (key mod (bucketCount as CseKeyPart)) otherwise panic("bucketOf: a bucket count of 0 past its own type")) as CseBucketIndex
+	return (try (key mod (bucketCount as CseKeyPart)) otherwise panic("bucketOf: a bucket count of 0 past its own type")) as ElementIndex
 end 'bucketOf'
 
 // An odd multiplier for the first operand, so `lhs` and the second key cannot cancel each other out for
@@ -373,14 +373,9 @@ function redundantDefs(module StdModule, func IrFunction, subst ValueIdArray, op
 	return doomed
 end 'redundantDefs'
 
-// A position in the pass's flat expression columns, and a mark into them.
-typealias CseEntryIndex = int(0 to u64.max)
-typealias CseEntryIndexColumn = Array with CseEntryIndex
+typealias CseEntryIndexColumn = Array with ElementIndex
 
-// A bucket in the expression table, and the parts the key is mixed from. Both are ordinary
-// non-negative integers — a ValueId, an `Imm32` biased into range, an enum ordinal, or a modulus.
-typealias CseBucketIndex = int(0 to u64.max)
-typealias CseBucketIndexColumn = Array with CseBucketIndex
+typealias CseBucketIndexColumn = Array with ElementIndex
 
 // The number of buckets, which is a DIVISOR and so is typed to exclude zero — `mod` by a
 // possibly-zero value is E3057, and a runtime guard for a count that cannot be zero would be a check
@@ -469,7 +464,7 @@ end 'CseLookup'
 // to what it was, with no per-bucket bookkeeping and no clearing pass over the value space.
 type CseExpressionTable
 	// TWO COLUMNS for one map, exactly as `ConstValueMap` is: "is there a bucket here" and "where its
-	// chain starts". A single column would need an index that means "empty", and every `CseEntryIndex`
+	// chain starts". A single column would need an index that means "empty", and every entry index
 	// is a real entry.
 	var bucketHasEntry as BoolArray
 	var bucketHead as CseEntryIndexColumn
@@ -531,14 +526,14 @@ type CseExpressionTable
 	end 'beginFunction'
 
 	// Where this scope's entries will start. Paired with `rollbackTo`.
-	function mark() returns CseEntryIndex
+	function mark() returns ElementIndex
 		return self.entryOpIndex.count()
 	end 'mark'
 
 	// Forget every expression recorded at or after `mark`, restoring the buckets to exactly what they
 	// held when the mark was taken. Newest-first, which is what makes each removal a bucket-head write
 	// rather than a chain search.
-	function rollbackTo(mark CseEntryIndex)
+	function rollbackTo(mark ElementIndex)
 		while self.entryOpIndex.count() > mark 'unwind'
 			let entry = self.entryOpIndex.count() - 1
 			let bucket = try self.entryBucket.get(entry) otherwise panic("CseExpressionTable.rollbackTo: entryBucket.get OOB at {entry}")
@@ -562,7 +557,7 @@ type CseExpressionTable
 	// nothing in correctness (every entry in a bucket is a candidate and each is compared in full) and
 	// finds the NEAREST equal expression when there is more than one, keeping the substituted value's
 	// live range as short as the scope allows.
-	function record(bucket CseBucketIndex, opIndex OpIndex)
+	function record(bucket ElementIndex, opIndex ElementIndex)
 		let entry = self.entryOpIndex.count()
 		self.entryBucket.push(bucket)
 		self.entryOpIndex.push(opIndex)
@@ -585,7 +580,7 @@ type CseExpressionTable
 	// miscompile a leaked entry causes. The function scope makes that true by construction; this says so
 	// out loud, at a cost of one comparison per function, because the failure it guards is a wrong answer
 	// in a function nothing about the leak names.
-	function requireEmptyAt(functionScope CseEntryIndex)
+	function requireEmptyAt(functionScope ElementIndex)
 		if functionScope != 0 'notEmpty'
 			panic("CseExpressionTable.requireEmptyAt: {functionScope} expression(s) survived the previous function — a ValueId is function-local, so a leaked entry matches an id in a different value space")
 		end 'notEmpty'
@@ -596,7 +591,7 @@ type CseExpressionTable
 	// Each candidate is re-derived from its op through `canonicalExpressionOf`, the same function that
 	// produced `expression` — so the two sides of every comparison are canonicalized by one piece of
 	// code and cannot disagree about, say, which way round a commutative op's operands go.
-	function findEqual(module StdModule, expression StdArithOperands, bucket CseBucketIndex, subst ValueIdArray, candidate StdArithOperands, outcome CseLookup)
+	function findEqual(module StdModule, expression StdArithOperands, bucket ElementIndex, subst ValueIdArray, candidate StdArithOperands, outcome CseLookup)
 		outcome.recordMiss()
 
 		let bucketIsOccupied = try self.bucketHasEntry.get(bucket) otherwise panic("CseExpressionTable.findEqual: bucketHasEntry.get OOB at {bucket}")

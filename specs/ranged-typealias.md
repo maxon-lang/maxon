@@ -1768,7 +1768,7 @@ end 'main'
 <!-- test: cast-to-stdlib-internal-typealias -->
 A typealias declared inside the stdlib is reachable as a cast target from any
 file, regardless of its source-level visibility modifier. The stdlib's internal
-ranged aliases (`ElementIndex`, `NodeIndex`, …) appear in the public collection
+ranged aliases (`ElementIndex`, `EntryCount`, …) appear in the public collection
 API, so user code must be able to name them in an `as` cast — `5 as ElementIndex`
 resolves rather than failing with "Expected type name after 'as'".
 ```maxon
@@ -2728,7 +2728,7 @@ function main() returns ExitCode
 	var a = PA.create()
 	a.push(3)
 	let s = Box.make(5)
-	return take(b.v) + a.count() + s.v
+	return take(b.v) + (a.count() as Percent) + s.v
 end 'main'
 ```
 ```exitcode

@@ -42,7 +42,7 @@ function rowWalkFixtureStatements(repetitions BlockRepetition) returns Statement
 	return FixtureSetupStatements + StatementsPerBlock * repetitions
 end 'rowWalkFixtureStatements'
 
-function rowWordsIn(stderr String) returns AssertedInt
+function rowWordsIn(stderr String) returns ReportedTally
 	let parts = stderr.split(RowWordsFieldPrefix)
 
 	if parts.count() < 2 'namesNoField'
@@ -53,14 +53,14 @@ function rowWordsIn(stderr String) returns AssertedInt
 	return try reportedTally(tail) otherwise panic("regalloc-live-row-walks: the gate could not run - `{RowWordsFieldPrefix}` states no count. It wrote to stderr: {stderr}")
 end 'rowWordsIn'
 
-function rowWordsFor(dir FilePath, appDirName String, repetitions BlockRepetition) returns AssertedInt throws TestFailure
+function rowWordsFor(dir FilePath, appDirName String, repetitions BlockRepetition) returns ReportedTally throws TestFailure
 	let app = createdStagedDirectory(dir.join(appDirName))
 
 	try File.writeText(app.join(MainFileName), content: rowWalkFixtureSource(repetitions)) otherwise panic("regalloc-live-row-walks: the gate could not run - could not write the {repetitions}-block fixture source")
 
 	let built = runDriver([BuildCommandWord, appDirName, LogFlag], workingDirectory: dir)
 
-	try Expect.equal(built.exitCode() as AssertedInt, expected: 0, message: "the {repetitions}-block fixture did not build under {LogFlag}, so its row walks were never measured. It wrote to stderr: {built.stderr}")
+	try Expect.equal(built.exitCode(), expected: 0, message: "the {repetitions}-block fixture did not build under {LogFlag}, so its row walks were never measured. It wrote to stderr: {built.stderr}")
 
 	return rowWordsIn(built.stderr)
 end 'rowWordsFor'
@@ -78,8 +78,8 @@ type RowWalksScaleWithTheLiveSet implements OutsideCheckoutCase
 		let smallWords = try rowWordsFor(dir, appDirName: SmallAppDirName, repetitions: SmallRepetitions)
 		let largeWords = try rowWordsFor(dir, appDirName: LargeAppDirName, repetitions: LargeRepetitions)
 
-		let smallStatements = rowWalkFixtureStatements(SmallRepetitions) as AssertedInt
-		let largeStatements = rowWalkFixtureStatements(LargeRepetitions) as AssertedInt
+		let smallStatements = rowWalkFixtureStatements(SmallRepetitions) as ReportedTally
+		let largeStatements = rowWalkFixtureStatements(LargeRepetitions) as ReportedTally
 
 		try Expect.isTrue(largeWords - smallWords < RowWordsPerStatementBound * (largeStatements - smallStatements), message: "the allocator visited {smallWords} row words over a body of {smallStatements} statements and {largeWords} over a body of {largeStatements}, so {largeStatements - smallStatements} more statements cost {largeWords - smallWords} more words - more than {RowWordsPerStatementBound} per statement, which is a walk over the value space rather than over the live set. A clobber op must cost the live population, not `values/64` words.")
 	end 'requireHeldIn'

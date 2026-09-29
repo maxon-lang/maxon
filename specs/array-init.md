@@ -457,7 +457,7 @@ end 'apply'
 function main() returns ExitCode
 	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(2) otherwise return 2
-	let r = apply(function(n Integer) gives ByteArray.init(mm).count() + n, x: 5)
+	let r = apply(function(n Integer) gives (ByteArray.init(mm).count() as Integer) + n, x: 5)
 	return (r * 10 + mm.length()) as ExitCode
 end 'main'
 ```
@@ -475,7 +475,7 @@ reference — leaving the adopted array the LAST owner, whose drop must free the
 Strings. A wrong drop callee for the retained value is exit **101** or a double free; neither is
 expressible as a wrong count.
 ```maxon
-typealias Count = int(0 to u64.max)
+typealias Count = int(0 to u64.max) implements ElementIndex
 
 type Container uses Element
 	typealias ElementArray = Array with Element

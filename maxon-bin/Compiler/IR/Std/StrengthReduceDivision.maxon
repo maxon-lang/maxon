@@ -484,7 +484,7 @@ end 'classifyDivision'
 
 // The pass's headline: what it is about to do, or why it does nothing on this target. `reduces` is
 // `targetLowersMulHigh`'s answer for the compile's CPU.
-module function strengthReduceDivisionHeadline(reduces bool, firstFuncIndex FuncIndex, funcCount FuncCount) returns String
+module function strengthReduceDivisionHeadline(reduces bool, firstFuncIndex ElementIndex, funcCount ElementIndex) returns String
 	if not reduces 'targetCannotSpellTheMultiply'
 		return "strengthReduceDivision: skipped — this target lowers neither `mulHighSigned` nor `mulHighUnsigned`"
 	end 'targetCannotSpellTheMultiply'
@@ -688,7 +688,7 @@ end 'opIsIntegerDivision'
 
 // Append the ops that belong at `opIdx` — the original op, or the sequence a reducible division
 // becomes.
-function appendReducedOp(module StdModule, opIdx OpIndex, constMap ConstValueMap, reduction DivisionReduction, magic DivisionMagic, mint ValueMinter, rebuilt OpIndexArray, detached ValueIdArray)
+function appendReducedOp(module StdModule, opIdx ElementIndex, constMap ConstValueMap, reduction DivisionReduction, magic DivisionMagic, mint ValueMinter, rebuilt OpIndexArray, detached ValueIdArray)
 	let op = try module.ops.get(opIdx) otherwise panic("appendReducedOp: opIdx {opIdx} from block.opRefs not in module.ops")
 
 	match op 'site'
@@ -814,7 +814,7 @@ function appendReducedOp(module StdModule, opIdx OpIndex, constMap ConstValueMap
 end 'appendReducedOp'
 
 // One `div`/`mod`: classify it, and either keep it or emit its sequence.
-function reduceOneDivision(module StdModule, opIdx OpIndex, resultId ValueId, dividend ValueId, divisorId ValueId, signedness IntegerSignedness, isRemainder bool, constMap ConstValueMap, reduction DivisionReduction, magic DivisionMagic, mint ValueMinter, rebuilt OpIndexArray, detached ValueIdArray)
+function reduceOneDivision(module StdModule, opIdx ElementIndex, resultId ValueId, dividend ValueId, divisorId ValueId, signedness IntegerSignedness, isRemainder bool, constMap ConstValueMap, reduction DivisionReduction, magic DivisionMagic, mint ValueMinter, rebuilt OpIndexArray, detached ValueIdArray)
 	if not constMap.contains(divisorId) 'divisorIsNotAConstant'
 		rebuilt.push(opIdx)
 		return
@@ -1035,7 +1035,7 @@ end 'emitReducedConst'
 // which would place it at the block's END rather than at the division's position.
 // (`PromoteStackRecords.appendModuleOp` is the same three lines for the same reason; it is a private
 // `function` there, so this file states them rather than reaching across.)
-function appendReducedSequenceOp(module StdModule, op StdOp) returns OpIndex
+function appendReducedSequenceOp(module StdModule, op StdOp) returns ElementIndex
 	let opIdx = module.ops.count()
 	module.ops.push(op)
 	module.spans.pushCurrent(opIdx)

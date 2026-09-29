@@ -2146,7 +2146,7 @@ end 'buildManagedSocketSlurp'
 // its scratch has to be released — and therefore has to come from the tracked allocator `emitRawFree`
 // answers. The terminator needs no store: an `__mm_alloc` block is zeroed.
 function emitOwnedCString(module StdModule, block IrBlock, text ByteArray, ids ValueMinter) returns ValueId
-	let size = emitConst(module, block: block, value: text.count() + 1, ids: ids)
+	let size = emitConst(module, block: block, value: (text.count() + 1) as ParsedInt, ids: ids)
 	let buf = emitRawAlloc(module, block: block, byteCount: size, ids: ids)
 
 	for k in 0 upto text.count() 'eachByte'
@@ -2301,7 +2301,7 @@ function buildManagedSocketNameserver(module StdModule)
 	let cap = 1 as ValueId
 
 	let keyword = emitOwnedCString(module, block: entry, text: ResolveNameserverKeyword, ids: ids)
-	let keywordLength = emitConst(module, block: entry, value: ResolveNameserverKeyword.count(), ids: ids)
+	let keywordLength = emitConst(module, block: entry, value: ResolveNameserverKeyword.count() as ParsedInt, ids: ids)
 	let linePos = ids.mint()
 	let lineEnd = ids.mint()
 	emitResolverLineWalk(module, entry: entry, lineHeader: lineHeader, lineStart: lineStart, nextLine: nextLine, notFound: notFound, path: ResolveConfPath, buf: buf, cap: cap, linePos: linePos, lineEnd: lineEnd, ids: ids)

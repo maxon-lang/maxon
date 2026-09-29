@@ -504,7 +504,7 @@ function nthPerm4(k Integer) returns IntArray
 		// unreachable (matching the `panic` used for this function's other impossible failures).
 		let idx = trunc(try (remaining / d) otherwise panic("nthPerm4: divs entry was 0"))
 		remaining = try (remaining mod d) otherwise panic("nthPerm4: divs entry was 0")
-		let v = try pool.get(idx) otherwise panic("pool OOB")
+		let v = try pool.get(idx as ElementIndex) otherwise panic("pool OOB")
 		result.push(v)
 		try pool.remove(idx as ElementIndex) otherwise panic("pool.remove OOB")
 	end 'pick'
@@ -1216,7 +1216,7 @@ function main() returns ExitCode
 		end 'outOfOrder'
 	end 'walk'
 
-	if ordered and tally.calls <= 32 * a.count() 'withinTheBound'
+	if ordered and tally.calls <= 32 * (a.count() as Integer) 'withinTheBound'
 		print("sorted within n log n\n")
 	end 'withinTheBound' else 'overTheBound'
 		print("ordered={ordered} compares={tally.calls}\n")
@@ -1265,11 +1265,11 @@ type Adversary
 	end 'create'
 
 	function valueOf(item Integer) returns Integer
-		return try self.values.get(item) otherwise panic("Adversary.valueOf: every item the sort holds is one this adversary numbered")
+		return try self.values.get(item as ElementIndex) otherwise panic("Adversary.valueOf: every item the sort holds is one this adversary numbered")
 	end 'valueOf'
 
 	function freeze(item Integer)
-		try self.values.set(item, value: self.solid) otherwise panic("Adversary.freeze: every item the sort holds is one this adversary numbered")
+		try self.values.set(item as ElementIndex, value: self.solid) otherwise panic("Adversary.freeze: every item the sort holds is one this adversary numbered")
 		self.solid = self.solid + 1
 	end 'freeze'
 

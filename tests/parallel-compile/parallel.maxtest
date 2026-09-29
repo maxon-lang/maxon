@@ -1,3 +1,5 @@
+typealias ReportedPoolCount = int(i64.min to i64.max)
+
 // parallel.maxtest — the shared half of the compiler's PARALLEL-POOL gate: how a fixture program is
 // staged, how the compiler is spawned at it with the processor count pinned or left to the machine, and
 // the two things asked of the corpus itself. The per-contract `test` declarations are the files beside
@@ -275,7 +277,7 @@ export function requireFrontEndPoolAtDefault(run CollectedOutput) throws TestFai
 	let workers = reportedCount(words, position: PoolLineWorkersPosition, line: line)
 	let processors = reportedCount(words, position: PoolLineProcessorsPosition, line: line)
 	let files = reportedCount(words, position: PoolLineFilesPosition, line: line)
-	let machine = defaultProcessorCount() as AssertedInt
+	let machine = defaultProcessorCount() as ReportedPoolCount
 
 	try Expect.equal(processors, expected: machine, message: "the front end reported a pool over {processors} processor(s) with nothing pinned, where the machine has {machine}. It wrote: {line}")
 	try Expect.equal(workers, expected: files if files < machine else machine, message: "the front end reported {workers} worker(s) over {processors} processor(s) for {files} file(s) dispatched — the pool is min(P, F) workers, because a worker with no file is a mailbox bought for nothing and a file with no worker waits. It wrote: {line}")
@@ -287,7 +289,7 @@ function frontEndPoolLine(run CollectedOutput) returns String
 	return (try afterPrefix.split(LineFeed).get(0) otherwise panic("parallel-compile.test: splitting a string always yields its first piece")).trim()
 end 'frontEndPoolLine'
 
-function reportedCount(words StringArray, position ElementIndex, line String) returns AssertedInt
+function reportedCount(words StringArray, position ElementIndex, line String) returns ReportedPoolCount
 	let word = try words.get(position) otherwise panic("parallel-compile.test: the front end's pool line has no word at position {position}. It wrote: {line}")
 	return try int.fromString(word) otherwise panic("parallel-compile.test: the front end's pool line holds '{word}' where a count belongs. It wrote: {line}")
 end 'reportedCount'
@@ -295,7 +297,7 @@ end 'reportedCount'
 // The front end reports its pool once per build, never once per file or per batch.
 export function requireOneFrontEndPoolLine(run CollectedOutput) throws TestFailure
 	let lines = run.stderr.split(FrontEndPoolLinePrefix).count() - 1
-	try Expect.equal(lines as AssertedInt, expected: 1, message: "`{CompilerDebugLogFlag}` printed {lines} lines starting `{FrontEndPoolLinePrefix}`. The front end builds ONE pool per build and reports it once. It wrote to stderr: {run.stderr}")
+	try Expect.equal(lines, expected: 1, message: "`{CompilerDebugLogFlag}` printed {lines} lines starting `{FrontEndPoolLinePrefix}`. The front end builds ONE pool per build and reports it once. It wrote to stderr: {run.stderr}")
 end 'requireOneFrontEndPoolLine'
 
 // The processor count the scheduler resolves when nothing pins it: the machine's.
@@ -372,13 +374,13 @@ export function requireIdenticalImagesAcrossProcessorCounts(staged FilePath, pro
 	let noArguments = StringArray.create()
 
 	let pinnedRun = spawnBuild(staged, label: "single-processor", extraArguments: noArguments, singleProcessor: true, wholeDirectory: wholeDirectory)
-	let pinnedExit = pinnedRun.exitCode() as AssertedInt
+	let pinnedExit = pinnedRun.exitCode()
 	try Expect.equal(pinnedExit, expected: 0, message: "the {programName} did not compile pinned to one processor. It wrote to stderr: {pinnedRun.stderr}")
 
 	let pinnedImage = retainImage(staged)
 
 	let defaultRun = spawnBuild(staged, label: "default-processors", extraArguments: noArguments, singleProcessor: false, wholeDirectory: wholeDirectory)
-	let defaultExit = defaultRun.exitCode() as AssertedInt
+	let defaultExit = defaultRun.exitCode()
 	try Expect.equal(defaultExit, expected: 0, message: "the {programName} did not compile at the default processor count. It wrote to stderr: {defaultRun.stderr}")
 
 	try requireIdenticalBytes(pinnedImage, second: builtExecutable(staged))

@@ -341,11 +341,6 @@ end 'buildX64Backend'
 // passes key exactly this map with exactly this meaning.
 export typealias FuncLabelOffsetMap = Map with (ByteArray, CodeOffset)
 
-// How many labels a concat pass has laid so far — the ordinal `recordChunkLabel` compares the map's height
-// against. Not a `FuncIndex`: a chunk is not a module function (the entry stub, the hand-assembled runtime
-// chunks and `__symtable` have no position in `stdModule.functions`).
-module typealias ChunkLabelCount = int(0 to u64.max)
-
 // ⭐⭐ **LAY ONE CHUNK'S LABEL DOWN, AND REFUSE A SECOND CLAIM ON THAT NAME.**
 //
 // ⚠ **THIS IS A REACHABLE, SILENT MISCOMPILE, AND IT IS MEASURED — not a hygiene guard.** A `.text`
@@ -368,10 +363,10 @@ module typealias ChunkLabelCount = int(0 to u64.max)
 // The count trick is `FunctionNameIndex.create`'s, for its reason: this is called with `laidOut` labels
 // already in the map, so the height IS `laidOut + 1` afterwards unless one insert collapsed two names —
 // one integer compare, and no second hash probe on a per-chunk loop.
-module function recordChunkLabel(labelOffsets FuncLabelOffsetMap, name ByteArray, offset CodeOffset, laidOut ChunkLabelCount, project Project, funcNames FunctionNameIndex) throws CompileError
+module function recordChunkLabel(labelOffsets FuncLabelOffsetMap, name ByteArray, offset CodeOffset, laidOut EntryCount, project Project, funcNames FunctionNameIndex) throws CompileError
 	labelOffsets.upsert(name, value: offset)
 
-	if labelOffsets.count() as ChunkLabelCount != laidOut + 1 'duplicateChunkName'
+	if labelOffsets.count() != laidOut + 1 'duplicateChunkName'
 		try refuseDuplicateChunkName(name, project: project, funcNames: funcNames)
 	end 'duplicateChunkName'
 end 'recordChunkLabel'

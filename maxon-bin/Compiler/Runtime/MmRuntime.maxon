@@ -171,7 +171,7 @@ export function immortalBoxHeaderBytes(debugStream bool, recordBytes ParsedInt) 
 	appendHeaderSlot(header, base: base, expectedOffset: HeaderSizeOffset, value: recordBytes)
 	appendHeaderSlot(header, base: base, expectedOffset: HeaderRefcountOffset, value: MmImmortalRefcount)
 
-	if header.count() != boxPrefixBytes(debugStream) 'sizeDrift'
+	if header.count() as ParsedInt != boxPrefixBytes(debugStream) 'sizeDrift'
 		panic("immortalBoxHeaderBytes: assembled {header.count()} bytes, not the {boxPrefixBytes(debugStream)} `__mm_alloc` prepends — an image record addressed through a header of the wrong width reads its neighbour's bytes")
 	end 'sizeDrift'
 
@@ -1170,7 +1170,7 @@ end 'emitFieldAccumulate'
 // It lives here rather than with any one runtime family because "a literal as a C string" is a property of
 // the Std tier and of Win32's ABI: the scheduler, the poller and the subprocess runner all spell one.
 export function emitLiteralCString(module StdModule, block IrBlock, ids ValueMinter, text ByteArray) returns ValueId
-	let sizeConst = emitConst(module, block: block, value: text.count() + 1, ids: ids)
+	let sizeConst = emitConst(module, block: block, value: (text.count() + 1) as ParsedInt, ids: ids)
 	let buf = ids.mint()
 	module.appendOp(block, op: StdOp.call(buf, callee: SlabAllocName, args: argsOf(sizeConst)))
 	emitStoreLiteralBytes(module, block: block, base: buf, offset: 0, text: text, ids: ids)

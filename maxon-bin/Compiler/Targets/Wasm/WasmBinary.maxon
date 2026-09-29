@@ -30,7 +30,7 @@
 // The wasm spec index space: function/type/local/memory indices, label depths, and page
 // counts are all u32 in the binary format. UNSIGNED, which also makes `shr` on this type a
 // LOGICAL shift (see writeUleb128) — exactly what unsigned LEB128 wants.
-export typealias Wasm32Index = int(0 to u32.max)
+export typealias Wasm32Index = int(0 to u32.max) implements ElementIndex
 export typealias Wasm32IndexArray = Array with Wasm32Index
 
 // --- LEB128 ---
@@ -1157,7 +1157,7 @@ export type WasmModuleBuilder
 	// frame would print a neighbouring function's name. There is no shape of that mistake a wasm
 	// validator would catch: the module stays perfectly well-formed and only the diagnostic lies.
 	function requireDebugNameSlot(funcIdx Wasm32Index, what ByteArray)
-		if self.funcDebugNames.count() != funcIdx 'slotDrift'
+		if self.funcDebugNames.count() as Wasm32Index != funcIdx 'slotDrift'
 			panic("WasmModuleBuilder: adding '{String.from(what)}' as function index {funcIdx}, but {self.funcDebugNames.count()} debug names have been collected — an import was added after a defined function, so the name section would name every later function wrongly")
 		end 'slotDrift'
 	end 'requireDebugNameSlot'

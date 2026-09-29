@@ -13,7 +13,7 @@ test 'a program with more green threads than any fixed record window would hold 
 	let workers = stagedLinesContaining(staged, needle: WorkerSpawnSpelling)
 	let loopLine = anchorLine(staged, anchor: WorkerLoopAnchorName)
 
-	Expect.atLeast(workers as AssertedInt, than: MoreThanAFixedWindowWouldHold, message: "this case is about a roster longer than any fixed window over the thread records, and the fixture spawns {workers}.")
+	Expect.atLeast(workers, than: MoreThanAFixedWindowWouldHold, message: "this case is about a roster longer than any fixed window over the thread records, and the fixture spawns {workers}.")
 
 	let commands = debugCommandLine(["{BreakCommand} {lineTarget(loopLine)}", RunCommand, ThreadsCommand, "{ClearCommand} {lineTarget(loopLine)}", ContinueCommand])
 	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: [targetEnvOption(MaxProcsVariableName, value: OneProcessorForTheRoster)])
@@ -21,21 +21,21 @@ test 'a program with more green threads than any fixed record window would hold 
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let rosters = eventsOfKind(events, kind: ThreadsEventName)
 
-	Expect.equal(rosters.count() as AssertedInt, expected: 1, message: "`{ThreadsCommand}` at a stop printed no `{ThreadsEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(rosters.count(), expected: 1, message: "`{ThreadsCommand}` at a stop printed no `{ThreadsEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let roster = eventAt(rosters, index: 0)
 	let listed = renderedThreads(roster)
 
-	Expect.atLeast(threadRows(roster).count() as AssertedInt, than: workers as AssertedInt, message: "⭐⭐ EVERY WORKER, NOT AS MANY AS FIT. All {workers} workers are spawned before `main` first parks, so all {workers} exist at this stop and `main` is a green thread besides. A roster that stops short is one read through a window with a size in it, and the threads past that size are ones a reader cannot select, park or backtrace. It held: {listed}. {said}")
-	Expect.atLeast(countThreadsWhere(roster, key: FunctionKey, value: RosterWorkerFunctionName) as AssertedInt, than: workers as AssertedInt, message: "a roster of the right LENGTH proves nothing if the entries are not the workers: every one of the {workers} is named by the function its record's entry pc is inside. It held: {listed}. {said}")
+	Expect.atLeast(threadRows(roster).count(), than: workers as ElementIndex, message: "⭐⭐ EVERY WORKER, NOT AS MANY AS FIT. All {workers} workers are spawned before `main` first parks, so all {workers} exist at this stop and `main` is a green thread besides. A roster that stops short is one read through a window with a size in it, and the threads past that size are ones a reader cannot select, park or backtrace. It held: {listed}. {said}")
+	Expect.atLeast(countThreadsWhere(roster, key: FunctionKey, value: RosterWorkerFunctionName), than: workers, message: "a roster of the right LENGTH proves nothing if the entries are not the workers: every one of the {workers} is named by the function its record's entry pc is inside. It held: {listed}. {said}")
 
 	let truncated = memberOf(roster, node: roster.root, key: TruncatedKey)
-	Expect.equal(truncated.count() as AssertedInt, expected: 1, message: "the roster carries no `{TruncatedKey}`, so a reader cannot tell a short list from a complete one. {said}")
+	Expect.equal(truncated.count(), expected: 1, message: "the roster carries no `{TruncatedKey}`, so a reader cannot tell a short list from a complete one. {said}")
 	Expect.isFalse(flagOf(roster, node: roster.root, key: TruncatedKey), message: "the roster reports itself truncated, which is the positive statement that entries were lost. A roster read whole cannot be truncated at any length. It held: {listed}. {said}")
 
 	let exits = eventsOfKind(events, kind: ExitEventName)
-	Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the breakpoint is cleared at the one stop, so the program runs on to its end. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(exits.count(), expected: 1, message: "the breakpoint is cleared at the one stop, so the program runs on to its end. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let exited = eventAt(exits, index: 0)
-	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the debugged program answered a different exit code than the same image run with nothing attached. {said}")
+	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey), expected: undebugged.exitCode() as EventNumber, message: "the debugged program answered a different exit code than the same image run with nothing attached. {said}")
 end 'a program with more green threads than any fixed record window would hold has every one of them named in the roster'

@@ -3,7 +3,7 @@ export typealias DebugAddressArray = Array with DebugAddress
 export typealias DebugLineNumber = int(0 to u32.max)
 export typealias DebugColumnNumber = int(0 to u32.max)
 export typealias DebugFrameNumber = int(0 to u32.max)
-export typealias DebugTally = int(0 to u32.max)
+export typealias DebugTally = int(0 to u32.max) implements ElementIndex
 export typealias DebugExitCode = int(i64.min to i64.max)
 
 // Signed, although a debuggee word is not: the range is what the debuggee's own `int(0 to u64.max)` is
@@ -173,8 +173,7 @@ export type DebugStop
 	end 'create'
 end 'DebugStop'
 
-export typealias DebugValueIndex = int(0 to u32.max)
-export typealias DebugValueIndexArray = Array with DebugValueIndex
+export typealias DebugValueIndexArray = Array with ElementIndex
 
 export type DebugValueNode
 	export var name as String
@@ -211,13 +210,13 @@ export type DebugValueTree
 		return Self{nodes: DebugValueNodeArray.create(), roots: DebugValueIndexArray.create()}
 	end 'create'
 
-	export function add(node DebugValueNode) returns DebugValueIndex
+	export function add(node DebugValueNode) returns ElementIndex
 		self.nodes.push(node)
 
-		return (self.nodes.count() - 1) as DebugValueIndex
+		return (self.nodes.count() - 1) as ElementIndex
 	end 'add'
 
-	export function nodeAt(index DebugValueIndex) returns DebugValueNode
+	export function nodeAt(index ElementIndex) returns DebugValueNode
 		return try self.nodes.get(index) otherwise panic("DebugValueTree.nodeAt: index {index} is past the {self.nodes.count()} nodes this tree holds")
 	end 'nodeAt'
 end 'DebugValueTree'

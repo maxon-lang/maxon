@@ -18,9 +18,6 @@ enum NotFound implements Error
 	notFound
 end 'NotFound'
 
-// File-private byte aliases — mirrors the trick in stdlib/String.maxon, since
-// the self-hosted compiler's stdlib whitelist may not yet pull in File.maxon.
-typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 // Chunk size for each underlying __Builtins.readStdin call. 4 KiB balances
@@ -95,7 +92,7 @@ public type Stdin
 				throw ConsoleError.endOfFile
 			end 'empty'
 
-			let rest = takePrefix(pending.count())
+			let rest = takePrefix(pending.count() as BytePos)
 			return String.from(rest)
 		end 'noTerminator'
 
@@ -107,11 +104,11 @@ public type Stdin
 	/// Read up to `n` bytes. Returns fewer than `n` only when EOF is reached
 	/// before the count is satisfied. Returns an empty array at EOF.
 	function readBytes(n BytePos) returns ByteArray
-		while pending.count() < n and not eofSeen 'fillLoop'
+		while pending.count() as BytePos < n and not eofSeen 'fillLoop'
 			fillOnce()
 		end 'fillLoop'
 
-		let available = pending.count()
+		let available = pending.count() as BytePos
 		var take = n
 
 		if available < n 'cap'
@@ -173,8 +170,8 @@ public type Stdin
 		var rebuilt = ByteArray.create()
 		var i = n
 
-		while i < len 'copy'
-			let b = try pending.get(i) otherwise 'getErr'
+		while i < len as BytePos 'copy'
+			let b = try pending.get((i as ElementIndex)) otherwise 'getErr'
 				panic("Stdin.shiftLeft: index just bounds-checked")
 			end 'getErr'
 

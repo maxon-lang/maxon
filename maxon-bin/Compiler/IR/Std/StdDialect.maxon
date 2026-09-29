@@ -4221,7 +4221,7 @@ module type StdCallOperands
 	function takeCallee(name ByteArray, arguments ValueIdArray)
 		self.callee.clear()
 		self.callee.append(name)
-		self.argCount = arguments.count()
+		self.argCount = arguments.count() as ParamCount
 
 		if self.argCount != 0 'hasArguments'
 			self.firstArg = try arguments.get(0) otherwise panic("StdCallOperands.takeCallee: arguments.get(0) failed on a non-empty argument list")
@@ -4380,7 +4380,7 @@ export type StdValueDefs
 	// Re-index for `func`, keeping every column's capacity — what a scratch held across the functions of a
 	// compile calls, so it allocates only when a function outgrows every one before it.
 	export function rebuild(module StdModule, func IrFunction)
-		let bound = nextFreeValueId(module, func: func) as ElementIndex
+		let bound = nextFreeValueId(module, func: func)
 		self.opOf.refill(bound, value: 0)
 		self.hasOp.refill(bound, value: false)
 		module.collectLiveOpIndices(func, into: self.liveOps)
@@ -4400,7 +4400,7 @@ export type StdValueDefs
 		end 'eachOp'
 	end 'rebuild'
 
-	function record(valueId ValueId, opIdx OpIndex)
+	function record(valueId ValueId, opIdx ElementIndex)
 		try self.opOf.set(valueId, value: opIdx) otherwise panic("StdValueDefs.record: value {valueId} is outside the column sized by nextFreeValueId")
 		try self.hasOp.set(valueId, value: true) otherwise panic("StdValueDefs.record: value {valueId} is outside the column sized by nextFreeValueId")
 	end 'record'
@@ -4412,7 +4412,7 @@ export type StdValueDefs
 	end 'valueBound'
 
 	export function isDefinedByAnOp(valueId ValueId) returns bool
-		if valueId >= self.hasOp.count() 'beyondTheColumn'
+		if valueId >= self.hasOp.count() as ValueId 'beyondTheColumn'
 			return false
 		end 'beyondTheColumn'
 
@@ -4420,7 +4420,7 @@ export type StdValueDefs
 	end 'isDefinedByAnOp'
 
 	// The op defining `valueId`. Panics for a value no op defines — callers ask `isDefinedByAnOp` first.
-	export function definingOp(valueId ValueId) returns OpIndex
+	export function definingOp(valueId ValueId) returns ElementIndex
 		if not self.isDefinedByAnOp(valueId) 'notAnOpResult'
 			panic("StdValueDefs.definingOp: value {valueId} is a block arg or outside this function — ask `isDefinedByAnOp` first")
 		end 'notAnOpResult'
@@ -4588,7 +4588,7 @@ export type StdValueUseSet
 			for id in self.insertedIds 'eachInserted'
 				try self.member.set(id, value: false) otherwise panic("StdValueUseSet.clear: member.set OOB at {id} against a column of {self.member.count()} — every recorded id was inserted, and `insert` grows the column to hold it")
 
-				if id < self.repeated.count() 'alsoCounted'
+				if id < self.repeated.count() as ValueId 'alsoCounted'
 					try self.repeated.set(id, value: false) otherwise panic("StdValueUseSet.clear: repeated.set OOB at {id} after a bounds test")
 				end 'alsoCounted'
 			end 'eachInserted'
@@ -4613,7 +4613,7 @@ export type StdValueUseSet
 			panic("StdValueUseSet.containsRepeat: this set was built by `create()`, which records membership only — a reader that needs multiplicity must build it with `createTrackingRepeats()`")
 		end 'notCounting'
 
-		if valueId >= self.repeated.count() 'neverRepeated'
+		if valueId >= self.repeated.count() as ValueId 'neverRepeated'
 			return false
 		end 'neverRepeated'
 
@@ -4641,7 +4641,7 @@ export type StdValueUseSet
 	end 'insert'
 
 	export function contains(valueId ValueId) returns bool
-		if valueId >= self.member.count() 'neverInserted'
+		if valueId >= self.member.count() as ValueId 'neverInserted'
 			return false
 		end 'neverInserted'
 
@@ -4888,7 +4888,7 @@ export function nextFreeValueId(module StdModule, func IrFunction) returns Value
 	return maxId + 1
 end 'nextFreeValueId'
 
-function maxDefinedIdAfter(module StdModule, opIdx OpIndex, maxId ValueId, def StdDefinedValues) returns ValueId
+function maxDefinedIdAfter(module StdModule, opIdx ElementIndex, maxId ValueId, def StdDefinedValues) returns ValueId
 	stdOpDefinedValue(try module.ops.get(opIdx) otherwise panic("nextFreeValueId: op index {opIdx} not in module.ops"), def: def)
 	return def.maxDefinedId(maxId)
 end 'maxDefinedIdAfter'
@@ -5388,7 +5388,7 @@ end 'remappedValue'
 module function recordValueSubstitution(subst ValueIdArray, resultId ValueId, replacement ValueId)
 	var next = subst.count()
 
-	while next <= resultId 'grow'
+	while next as ValueId <= resultId 'grow'
 		subst.push(next)
 		next = next + 1
 	end 'grow'
@@ -5414,7 +5414,7 @@ module function compressValueSubstitutions(subst ValueIdArray)
 			at = remappedValue(at, subst: subst)
 			followed = followed + 1
 
-			if followed > longestAcyclicChain 'aCycle'
+			if followed > longestAcyclicChain as ValueId 'aCycle'
 				panic("compressValueSubstitutions: the chain from value {i} never reaches a fixpoint — a substitution column maps some value back onto itself through {at}")
 			end 'aCycle'
 		end 'followTheChain'
@@ -5805,7 +5805,7 @@ end 'substituteValuesInBlock'
 
 // The op half, on its own for a caller that holds the READ SITES of the values it rewrites
 // (`unswitchInvariantGuards` indexes them) and so touches only the ops that read one.
-module function substituteOpUses(module StdModule, opIdx OpIndex, subst ValueIdArray)
+module function substituteOpUses(module StdModule, opIdx ElementIndex, subst ValueIdArray)
 	let op = module.getOp(opIdx)
 	try module.ops.set(opIdx, value: remapStdOpUses(op, subst: subst)) otherwise panic("substituteValuesInBlock: ops.set({opIdx}) OOB")
 end 'substituteOpUses'
@@ -5907,7 +5907,7 @@ function blockDefinesADoomedValue(module StdModule, block IrBlock, doomed StdVal
 	return false
 end 'blockDefinesADoomedValue'
 
-function opDefinesADoomedValue(module StdModule, opIdx OpIndex, doomed StdValueUseSet, def StdDefinedValues) returns bool
+function opDefinesADoomedValue(module StdModule, opIdx ElementIndex, doomed StdValueUseSet, def StdDefinedValues) returns bool
 	stdOpDefinedValue(try module.ops.get(opIdx) otherwise panic("removeOpsDefining: opIdx {opIdx} from block.opRefs not in module.ops"), def: def)
 
 	if def.definesNothing() 'noDef'

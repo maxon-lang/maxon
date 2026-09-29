@@ -633,15 +633,15 @@ export type GlobalDataTable
 	// length is a multiple of 8* — rather than a property each producer has to preserve and one of them
 	// silently did not. See `RdataPayloadAlignment` for the defect that shape produced.
 	function appendRdataPayload(label String, bytes ByteArray, kind RdataPayloadKind, labelAt ByteOffset)
-		if labelAt > bytes.count() 'labelPastPayload'
+		if labelAt > bytes.count() as ByteOffset 'labelPastPayload'
 			panic("GlobalDataTable.appendRdataPayload: '{label}' would be addressed at offset {labelAt} of a {bytes.count()}-byte payload — a label names a point WITHIN what it registers, and an EMPTY payload (a `b\"\"` blob) has only its start")
 		end 'labelPastPayload'
 
 		let payload = paddedTo(bytes, alignment: RdataPayloadAlignment)
 		self.rdataOffsets.upsert(label, value: self.rdataSizeSoFar)
 		self.rdataLabelOffsets.upsert(label, value: labelAt)
-		self.rdataSizeSoFar = self.rdataSizeSoFar + payload.count()
-		self.nameIndex.upsert(label, value: self.names.count())
+		self.rdataSizeSoFar = self.rdataSizeSoFar + payload.count() as ByteOffset
+		self.nameIndex.upsert(label, value: self.names.count() as MachineWord)
 		self.names.push(label)
 		self.nameBytes.push(label.toByteArray())
 		self.values.push(payload)
@@ -835,7 +835,7 @@ export type GlobalDataTable
 			let label = try self.names.get(iter.index()) otherwise panic("GlobalDataTable.rdataImage: values has {self.values.count()} payloads but names has {self.names.count()} — the two columns are pushed together and cannot disagree")
 			let offset = try self.rdataOffsets.get(label) otherwise panic("GlobalDataTable.rdataImage: '{label}' has no recorded offset — every label registerRdataConstant mints gets one in the same call")
 
-			if image.count() != offset 'drift'
+			if image.count() as ByteOffset != offset 'drift'
 				panic("GlobalDataTable.rdataImage: '{label}' is recorded at offset {offset} but the image has reached {image.count()} — the offsets relocations resolve against and the bytes this places have drifted")
 			end 'drift'
 
@@ -894,7 +894,7 @@ export type GlobalDataTable
 	// `TargetPrinter`, which renders a String blob's text beside the label that names it.
 	export function payloadOf(label String) returns ByteArray
 		let index = self.payloadIndexOf(label, what: "payloadOf")
-		return try self.values.get(index) otherwise panic("GlobalDataTable.payloadOf: nameIndex maps '{label}' to {index}, which values does not hold — the two columns are pushed together and cannot disagree")
+		return try self.values.get(index as ElementIndex) otherwise panic("GlobalDataTable.payloadOf: nameIndex maps '{label}' to {index}, which values does not hold — the two columns are pushed together and cannot disagree")
 	end 'payloadOf'
 
 	// One record, shared by every op that addresses this payload. That is sound because a Std op's label is
@@ -902,14 +902,14 @@ export type GlobalDataTable
 	// is a deep clone.
 	export function labelBytesOf(label String) returns ByteArray
 		let index = self.payloadIndexOf(label, what: "labelBytesOf")
-		return try self.nameBytes.get(index) otherwise panic("GlobalDataTable.labelBytesOf: nameIndex maps '{label}' to {index}, which nameBytes does not hold — the spelling is pushed in the same `appendRdataPayload` call as the name and the payload, so the columns cannot disagree")
+		return try self.nameBytes.get(index as ElementIndex) otherwise panic("GlobalDataTable.labelBytesOf: nameIndex maps '{label}' to {index}, which nameBytes does not hold — the spelling is pushed in the same `appendRdataPayload` call as the name and the payload, so the columns cannot disagree")
 	end 'labelBytesOf'
 
 	// WHAT the payload under `label` is — see `RdataPayloadKind`. The question a reader of the table must
 	// ask before interpreting any of its bytes.
 	export function payloadKindOf(label String) returns RdataPayloadKind
 		let index = self.payloadIndexOf(label, what: "payloadKindOf")
-		return try self.payloadKinds.get(index) otherwise panic("GlobalDataTable.payloadKindOf: nameIndex maps '{label}' to {index}, which payloadKinds does not hold — the kind is pushed in the same `appendRdataPayload` call as the name and the payload, so the three columns cannot disagree")
+		return try self.payloadKinds.get(index as ElementIndex) otherwise panic("GlobalDataTable.payloadKindOf: nameIndex maps '{label}' to {index}, which payloadKinds does not hold — the kind is pushed in the same `appendRdataPayload` call as the name and the payload, so the three columns cannot disagree")
 	end 'payloadKindOf'
 
 	// ⭐ RESERVE a contiguous `.data` run of `bytes.count()` bytes under `label` — the writable
@@ -929,7 +929,7 @@ export type GlobalDataTable
 			panic("GlobalDataTable.registerDataBlob: '{label}' already names a reserved .data run — one label names one address, so a second reservation would leave every reference resolving to whichever run the index kept")
 		end 'alreadyReserved'
 
-		self.dataBlobIndex.upsert(label, value: self.dataBlobs.count())
+		self.dataBlobIndex.upsert(label, value: self.dataBlobs.count() as MachineWord)
 		self.dataBlobs.push(DataBlobEntry.create(label, bytes: paddedTo(bytes, alignment: MaxDataSlotBytes)))
 	end 'registerDataBlob'
 
@@ -943,7 +943,7 @@ export type GlobalDataTable
 	// resolved in either direction.
 	export function stampDataBlob(label String, bytes ByteArray)
 		let index = try self.dataBlobIndex.get(label) otherwise panic("GlobalDataTable.stampDataBlob: no .data run is labelled '{label}' — a stamp rewrites a run `registerDataBlob` reserved, so an unknown label means the reservation never ran or the two spell it differently")
-		var entry = try self.dataBlobs.get(index) otherwise panic("GlobalDataTable.stampDataBlob: dataBlobIndex maps '{label}' to {index}, which dataBlobs does not hold — the index is written in the same call as the push and cannot disagree")
+		var entry = try self.dataBlobs.get(index as ElementIndex) otherwise panic("GlobalDataTable.stampDataBlob: dataBlobIndex maps '{label}' to {index}, which dataBlobs does not hold — the index is written in the same call as the push and cannot disagree")
 
 		if bytes.count() != entry.bytes.count() 'lengthDiffers'
 			panic("GlobalDataTable.stampDataBlob: '{label}' reserves {entry.bytes.count()} bytes but the stamp carries {bytes.count()} — the reserved run is the registered length padded up to {MaxDataSlotBytes}, and resizing it would move every scalar global behind it")
@@ -1032,7 +1032,7 @@ export type GlobalDataTable
 		var image = ByteArray.create()
 
 		for blob in self.dataBlobs 'eachRun'
-			if image.count() != blob.offset 'runDrift'
+			if image.count() as ByteOffset != blob.offset 'runDrift'
 				panic("GlobalDataTable.dataSectionImage: run '{blob.label}' is laid out at offset {blob.offset} but the image has reached {image.count()} — layOut's ordering and this rendering disagree")
 			end 'runDrift'
 
@@ -1046,7 +1046,7 @@ export type GlobalDataTable
 				panic("GlobalDataTable.dataSectionImage: '{entry.label}' is laid out at offset {entry.offset} but the image, aligned for its {stdTypeStorageBytes(entry.valueType)}-byte slot, has reached {slotStart} — layOut's ordering and this rendering disagree")
 			end 'drift'
 
-			image.growFilled(slotStart as ElementIndex, value: PadByte)
+			image.growFilled(slotStart, value: PadByte)
 			appendLittleEndianScalar(image, value: entry.value, byteCount: stdTypeStorageBytes(entry.valueType))
 		end 'each'
 
@@ -1070,12 +1070,12 @@ export type GlobalDataTable
 	// an absent word from a misspelt one.
 	export function dataSectionSlotOf(label String) returns DataSectionSlotLookup
 		if let runIndex = try self.dataBlobIndex.get(label) 'reservedRun'
-			let blob = try self.dataBlobs.get(runIndex) otherwise panic("GlobalDataTable.dataSectionSlotOf: dataBlobIndex maps '{label}' to {runIndex}, which dataBlobs does not hold — the index is written in the same call as the push and cannot disagree")
-			return DataSectionSlotLookup.at(blob.offset, bytes: blob.bytes.count())
+			let blob = try self.dataBlobs.get(runIndex as ElementIndex) otherwise panic("GlobalDataTable.dataSectionSlotOf: dataBlobIndex maps '{label}' to {runIndex}, which dataBlobs does not hold — the index is written in the same call as the push and cannot disagree")
+			return DataSectionSlotLookup.at(blob.offset, bytes: blob.bytes.count() as BytePos)
 		end 'reservedRun'
 
 		if let index = try self.dataIndex.get(label) 'aScalarSlot'
-			let entry = try self.dataSection.get(index) otherwise panic("GlobalDataTable.dataSectionSlotOf: dataIndex maps '{label}' to {index}, which dataSection does not hold — the two fell out of lockstep")
+			let entry = try self.dataSection.get(index as ElementIndex) otherwise panic("GlobalDataTable.dataSectionSlotOf: dataIndex maps '{label}' to {index}, which dataSection does not hold — the two fell out of lockstep")
 			return DataSectionSlotLookup.at(entry.offset, bytes: stdTypeStorageBytes(entry.valueType))
 		end 'aScalarSlot'
 
@@ -1177,15 +1177,15 @@ end 'naturallyAlignedSlotOffset'
 // and a structural one by a reader that knows its own slot count. Nothing may derive a count from a
 // stored payload's length.
 function paddedTo(bytes ByteArray, alignment BytePos) returns ByteArray
-	let storedCount = alignUp(bytes.count(), alignment: alignment)
+	let storedCount = alignUp(bytes.count() as BytePos, alignment: alignment)
 
-	if storedCount == bytes.count() 'alreadyAligned'
+	if storedCount == bytes.count() as BytePos 'alreadyAligned'
 		return bytes
 	end 'alreadyAligned'
 
 	var padded = ByteArray.create()
 	padded.append(bytes)
-	padded.growFilled(storedCount as ElementIndex, value: PadByte)
+	padded.growFilled(storedCount, value: PadByte)
 	return padded
 end 'paddedTo'
 

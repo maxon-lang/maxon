@@ -21,7 +21,7 @@ test 'bare cache names the root in use and states how many builds it holds'
 	publishCachedBuild(dir, cacheRoot: cacheRoot, program: SecondProgramFileName)
 
 	let owned = cacheRoot.join(CacheVendorDirName)
-	let planted = filesUnder(owned).count() as AssertedInt
+	let planted = filesUnder(owned).count()
 
 	// ⚠ Without this the assertion below cannot tell a build count from a file count, and a driver counting
 	// sidecars would satisfy both.
@@ -30,7 +30,7 @@ test 'bare cache names the root in use and states how many builds it holds'
 	let reported = runWithCacheRoot([CacheCommandWord], cacheRoot: cacheRoot, workingDirectory: dir)
 	let said = "It wrote to stdout: {reported.stdout} and to stderr: {reported.stderr}"
 
-	Expect.equal(reported.exitCode() as AssertedInt, expected: 0, message: "`maxon {CacheCommandWord}` did not succeed over a cache holding {PublishedBuilds} builds. Asking what is cached is a question, not a mistake. {said}")
+	Expect.equal(reported.exitCode(), expected: 0, message: "`maxon {CacheCommandWord}` did not succeed over a cache holding {PublishedBuilds} builds. Asking what is cached is a question, not a mistake. {said}")
 	Expect.isEmpty(reported.stderr.trim(), message: "`maxon {CacheCommandWord}` wrote to stderr while answering. The report is what the command was asked for and belongs on stdout. {said}")
 
 	let state = try reportedStateOf(reported.stdout, directory: owned) otherwise panic("{CaseDirName}: `maxon {CacheCommandWord}` named no line for {owned.toString()}, the root it was pointed at through {CacheRootVariable}. {said}")

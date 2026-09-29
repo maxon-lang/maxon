@@ -1423,7 +1423,7 @@ function main() returns ExitCode
 	let xs = [Foo.create(1), Foo.create(2)]
 	let m = Array_Foo.create(7)
 
-	return (xs.count() + m.tag) as ExitCode
+	return ((xs.count() as Num) + m.tag) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -1459,7 +1459,7 @@ function main() returns ExitCode
 	let xs = [Foo.create("a"), Foo.create("b")]
 	let m = Array_Foo.create(7)
 
-	return (xs.count() + m.tag) as ExitCode
+	return ((xs.count() as Num) + m.tag) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -1506,7 +1506,7 @@ function main() returns ExitCode
 	let xs = [Bar.create(1), Bar.create(2)]
 	let m = Array_Foo.create(7)
 
-	return (xs.count() + m.tag) as ExitCode
+	return ((xs.count() as Num) + m.tag) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -1553,7 +1553,7 @@ function main() returns ExitCode
 	let xs = [Foo.create(1), Foo.create(2)]
 	let m = Array_Foo.create(7)
 
-	return (xs.count() + m.tag) as ExitCode
+	return ((xs.count() as Num) + m.tag) as ExitCode
 end 'main'
 ```
 ```exitcode

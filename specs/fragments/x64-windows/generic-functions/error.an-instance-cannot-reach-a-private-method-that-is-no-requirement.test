@@ -1,0 +1,41 @@
+// Test: error.an-instance-cannot-reach-a-private-method-that-is-no-requirement
+// --- file: lib.maxon
+export function weigh(a T, b T) uses T returns bool where T is Comparable
+	if a < b 'first'
+		return a.heavy()
+	end 'first'
+
+	return b.heavy()
+end 'weigh'
+
+// --- file: main.maxon
+typealias Rank = int(0 to 100)
+
+type Point implements Comparable
+	export var rank as Rank
+
+	static function create(rank Rank) returns Self
+		return Self{rank: rank}
+	end 'create'
+
+	function heavy() returns bool
+		return self.rank > 5
+	end 'heavy'
+
+	function compare(other Self) returns Ordering
+		if self.rank < other.rank 'lower'
+			return Ordering.lessThan
+		end 'lower'
+
+		return Ordering.equalTo
+	end 'compare'
+end 'Point'
+
+function main() returns ExitCode
+	print("{weigh(Point.create(9), b: Point.create(3))}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3008: <fragment>:5:12: function 'Point.heavy' is not exported
+error E3008: <fragment>:8:11: function 'Point.heavy' is not exported

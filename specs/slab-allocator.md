@@ -393,7 +393,7 @@ function build(n Len, seed Len) returns ByteArray
 end 'build'
 
 function verify(b ByteArray, n Len, seed Len) returns Integer
-	if b.count() != n 'length'
+	if (b.count() as Len) != n 'length'
 		return 1
 	end 'length'
 	var wrong = 0

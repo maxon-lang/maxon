@@ -664,7 +664,7 @@ export function eventsOfKind(events JsonDocArray, kind String) returns JsonDocAr
 end 'eventsOfKind'
 
 export function eventAt(events JsonDocArray, index EventIndex) returns JsonDoc
-	return try events.get(index) otherwise panic("debug tests: the gate could not run — event {index} was looked up in a stream of {events.count()}")
+	return try events.get(index as ElementIndex) otherwise panic("debug tests: the gate could not run — event {index} was looked up in a stream of {events.count()}")
 end 'eventAt'
 
 // ============================================================================================
@@ -738,7 +738,7 @@ end 'anchorLine'
 
 export function sourceColumnOf(staged FilePath, line SourceLine, spelling String) returns EventNumber
 	let program = staged.join(StagedProgramFileName)
-	let text = try linesOfStagedSource(program).get(line - FirstSourcePosition) otherwise panic("debug tests: the gate could not run — {program.toString()} has no line {line}.")
+	let text = try linesOfStagedSource(program).get((line - FirstSourcePosition) as ElementIndex) otherwise panic("debug tests: the gate could not run — {program.toString()} has no line {line}.")
 	let before = try text.split(spelling).get(0) otherwise panic("debug tests: the gate could not run — splitting a line always answers its first piece.")
 
 	if before == text 'notOnTheLine'
@@ -1106,7 +1106,7 @@ export function valueNamed(doc JsonDoc, node JsonNodeId, key String, name String
 end 'valueNamed'
 
 export function nodeAt(nodes JsonNodeIdArray, index EventIndex) returns JsonNodeId
-	return try nodes.get(index) otherwise panic("debug tests: the gate could not run — node {index} was looked up in a list of {nodes.count()}")
+	return try nodes.get(index as ElementIndex) otherwise panic("debug tests: the gate could not run — node {index} was looked up in a list of {nodes.count()}")
 end 'nodeAt'
 
 export let ChildrenKey = "children"
@@ -1545,7 +1545,7 @@ export function reportedThreadId(doc JsonDoc) returns EventNumber
 end 'reportedThreadId'
 
 export function kindAfter(events JsonDocArray, index EventNumber) returns String
-	let next = try events.get(index + 1) otherwise return AbsentEventText
+	let next = try events.get((index + 1) as ElementIndex) otherwise return AbsentEventText
 
 	return eventKind(next)
 end 'kindAfter'

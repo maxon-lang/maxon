@@ -113,7 +113,7 @@
 // name for the file (`VarInfo.createModuleStorageSubject`). Leaving module storage out was a
 // reachable use-after-free on four spellings; `specs/borrow-liveness.md`'s `module-storage-*`
 // cases pin each of them.
-export typealias BorrowSubjectId = int(0 to u64.max)
+export typealias BorrowSubjectId = int(0 to u64.max) implements ElementIndex
 
 // The `via '<x>'` text for a mutation that is a REBIND of the source binding rather than a method
 // call on it (`arr = other`, `items = other`, `self.items = other`): the write is named with the
@@ -165,7 +165,7 @@ export typealias PendingBorrowArray = Array with PendingBorrow
 // A length of, or an index into, the pending-claim list. It is one STATEMENT long
 // (`Parser.dropUnclaimedPendingBorrows`) and in practice 0 or 1, but nothing CAPS it — a statement may
 // spell as many element accessors as it likes — so the range stays wide until one is provable.
-export typealias PendingBorrowCount = int(0 to u64.max)
+export typealias PendingBorrowCount = int(0 to u64.max) implements ElementIndex
 
 // A completed borrow: binding `borrower` holds an element of subject `subject` from `activationToken`
 // until its own last use.
@@ -181,10 +181,10 @@ export type BorrowRecord
 
 	// The token at which the borrowing name came into scope. A write BELOW it — a `try` handler's,
 	// or anything earlier in the body — cannot conflict, because the borrow does not exist there yet.
-	export let activationToken as TokenIndex
+	export let activationToken as ElementIndex
 	export let borrowLine as LineNumber
 
-	export static function create(subject BorrowSubjectId, borrower VarInfo, activationToken TokenIndex, borrowLine LineNumber) returns BorrowRecord
+	export static function create(subject BorrowSubjectId, borrower VarInfo, activationToken ElementIndex, borrowLine LineNumber) returns BorrowRecord
 		return Self{subject: subject, borrower: borrower, activationToken: activationToken, borrowLine: borrowLine}
 	end 'create'
 end 'BorrowRecord'
@@ -205,7 +205,7 @@ export type MutationSite
 	// The name the SOURCE wrote at this write, which is what the diagnostic blames. It may differ
 	// from the spelling the borrow used (`items` vs `self.items`) while naming the one subject.
 	export let subjectName as ByteArray
-	export let token as TokenIndex
+	export let token as ElementIndex
 	export let line as LineNumber
 	export let column as ColumnNumber
 
@@ -225,11 +225,11 @@ export type MutationSite
 	export let argColumn as ParamCount
 	export let argLabel as ByteArray
 
-	export static function createContainerWrite(subject BorrowSubjectId, subjectName ByteArray, token TokenIndex, line LineNumber, column ColumnNumber, display ByteArray) returns MutationSite
+	export static function createContainerWrite(subject BorrowSubjectId, subjectName ByteArray, token ElementIndex, line LineNumber, column ColumnNumber, display ByteArray) returns MutationSite
 		return Self{subject: subject, subjectName: subjectName, token: token, line: line, column: column, display: display, callee: EmptySourceText, argColumn: 0, argLabel: EmptySourceText}
 	end 'createContainerWrite'
 
-	export static function createCallArgWrite(subject BorrowSubjectId, subjectName ByteArray, token TokenIndex, line LineNumber, column ColumnNumber, callee ByteArray, argColumn ParamCount, argLabel ByteArray) returns MutationSite
+	export static function createCallArgWrite(subject BorrowSubjectId, subjectName ByteArray, token ElementIndex, line LineNumber, column ColumnNumber, callee ByteArray, argColumn ParamCount, argLabel ByteArray) returns MutationSite
 		return Self{subject: subject, subjectName: subjectName, token: token, line: line, column: column, display: calleeDisplayName(callee), callee: callee, argColumn: argColumn, argLabel: argLabel}
 	end 'createCallArgWrite'
 end 'MutationSite'
@@ -398,7 +398,7 @@ function checkFunctionBorrowConflicts(project Project, func IrFunction, mutation
 		borrowRows.push(i)
 	end 'eachBorrow'
 
-	let bySubject = buildCsr(subjectKeys, to: borrowRows, nodeCount: facts.subjects.count())
+	let bySubject = buildCsr(subjectKeys, to: borrowRows, nodeCount: facts.subjects.count() as CsrIndex)
 
 	// ⭐⭐ **THE PER-SUBJECT WALK CURSOR — what makes this pass LINEAR instead of sites × borrows.** A
 	// borrow that is DEAD at one site is dead at every LATER site (its last use is fixed once parsing ends,
@@ -557,7 +557,7 @@ end 'pendingAt'
 export function composePendingBorrowOntoBases(facts BorrowFacts, firstPending PendingBorrowCount, borrowValue ValueId, range SourceRange)
 	var scan = firstPending
 
-	while scan < facts.pending.count() 'eachLinkOfTheChain'
+	while scan < facts.pending.count() as PendingBorrowCount 'eachLinkOfTheChain'
 		let borrowedStorage = try facts.subjects.get(pendingAt(facts, index: scan).subject) otherwise panic("composePendingBorrowOntoBases: subjects.get OOB at the subject of pending {scan} — a subject id is minted by `Parser.borrowSubjectIdOf` against this very column")
 
 		for k in 0 upto facts.borrows.count() 'eachBorrowOfThisBody'
@@ -620,7 +620,7 @@ end 'pendingBorrowStorageOf'
 // Does the chain built from `from` on already name `subject`? See the ⚠ block above — this is the
 // termination condition, not a tidiness check.
 function pendingCarriesSubject(facts BorrowFacts, from PendingBorrowCount, subject BorrowSubjectId) returns bool
-	for k in from upto facts.pending.count() 'eachLinkSoFar'
+	for k in from upto facts.pending.count() as PendingBorrowCount 'eachLinkSoFar'
 		if pendingAt(facts, index: k).subject == subject 'alreadyNamed'
 			return true
 		end 'alreadyNamed'

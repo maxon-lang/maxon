@@ -120,7 +120,7 @@ export union Terminator
 	unset
 	dead
 	fallthrough
-	opIndex(index OpIndex)
+	opIndex(index ElementIndex)
 end 'Terminator'
 
 // ⭐ **THE TWO QUESTIONS ABOUT A TERMINATOR SLOT, ASKED OF THE SLOT ITSELF.** `IrBlock.hasTerminatorOp` /
@@ -151,7 +151,7 @@ end 'terminatorNamesAnOp'
 
 // The op index a terminator slot names. Panics for a slot that names none — guard with
 // `terminatorNamesAnOp`, exactly as `IrBlock.terminatorIndex` asks its callers to.
-module function terminatorOpIndexOf(terminator Terminator) returns OpIndex
+module function terminatorOpIndexOf(terminator Terminator) returns ElementIndex
 	match terminator 'unwrap'
 		opIndex(index) then return index
 		default panic("terminatorOpIndexOf: this terminator slot names no op")
@@ -178,7 +178,7 @@ end 'terminatorOpIndexOf'
 // CFG construction O(total ops) instead of O(blocks + edges).
 export union CondBranch
 	none
-	opIndex(index OpIndex)
+	opIndex(index ElementIndex)
 end 'CondBranch'
 
 // How often a block is expected to run, as far as the pass that minted it can say. `cold` is a block
@@ -204,15 +204,12 @@ export function colderHeat(a BlockHeat, b BlockHeat) returns BlockHeat
 	return BlockHeat.cold if a == BlockHeat.cold or b == BlockHeat.cold else BlockHeat.normal
 end 'colderHeat'
 
-// An index into `IrFunction.inlineSites`.
-export typealias InlineSiteIndex = int(0 to u64.max)
-
 // Which spliced body a block belongs to. `none` is a block of the function's own text; `site` names the
 // entry of the function's site table the block was copied under. A union rather than a sentinel index,
 // because site 0 is a real site.
 export union InlineSiteRef
 	none
-	site(index InlineSiteIndex)
+	site(index ElementIndex)
 end 'InlineSiteRef'
 
 export typealias InlineSiteRefArray = Array with InlineSiteRef
@@ -240,7 +237,7 @@ function isOwnText(site InlineSiteRef) returns bool
 	end 's'
 end 'isOwnText'
 
-function isSite(site InlineSiteRef, index InlineSiteIndex) returns bool
+function isSite(site InlineSiteRef, index ElementIndex) returns bool
 	return match site 's'
 		none gives false
 		site(held) gives held == index
@@ -323,8 +320,8 @@ export type IrBlock
 	// `shift`: the block's ops were appended after `shift` others in the module it now belongs to
 	// (`IrModule.merge`, the backend unit splice). The two unions are re-minted whole, so the block shares
 	// no box with whatever it was relocated from.
-	export function shiftOpIndices(shift OpCount)
-		let delta = shift as OpIndex
+	export function shiftOpIndices(shift ElementIndex)
+		let delta = shift
 
 		for pos in 0 upto self.opRefs.count() 'eachOp'
 			let opIdx = try self.opRefs.get(pos) otherwise panic("IrBlock.shiftOpIndices: opRefs.get OOB at {pos}")
@@ -367,11 +364,11 @@ export type IrBlock
 	// ⭐ **HOW MANY OPS THE BLOCK RUNS, AND WHICH ONE RUNS AT EACH POSITION** — its body ops, then the terminator,
 	// which lives in a slot of its own (`Terminator`) and so is NOT in `opRefs`. A caller ordering two program
 	// points within a block asks these rather than `opRefs`, whose last position is one op short of the block's end.
-	export function opCountInRunOrder() returns BlockOpPos
+	export function opCountInRunOrder() returns ElementIndex
 		return self.opRefs.count() + 1 if terminatorNamesAnOp(self.terminator) else self.opRefs.count()
 	end 'opCountInRunOrder'
 
-	export function opInRunOrderAt(position BlockOpPos) returns OpIndex
+	export function opInRunOrderAt(position ElementIndex) returns ElementIndex
 		if position < self.opRefs.count() 'aBodyOp'
 			return try self.opRefs.get(position) otherwise panic("opInRunOrderAt: opRefs.get OOB at {position}")
 		end 'aBodyOp'
@@ -385,7 +382,7 @@ export type IrBlock
 
 	// Returns the op index of the block's terminator. Panics if the
 	// terminator is not opIndex(_); callers must guard with hasTerminatorOp.
-	export function terminatorIndex() returns OpIndex
+	export function terminatorIndex() returns ElementIndex
 		if not terminatorNamesAnOp(self.terminator) 'noTerminatorOp'
 			panic("terminatorIndex: block '{String.from(self.label)}' has no terminator op")
 		end 'noTerminatorOp'
@@ -404,7 +401,7 @@ export type IrBlock
 
 	// The op index of the block's conditional branch. Panics when it has none; callers
 	// must guard with `hasCondBranchOp` or match on `condBranch` directly.
-	export function condBranchIndex() returns OpIndex
+	export function condBranchIndex() returns ElementIndex
 		match self.condBranch 'unwrap'
 			opIndex(index) then return index
 			none then panic("condBranchIndex: block '{String.from(self.label)}' has no conditional-branch op")
@@ -452,17 +449,13 @@ export typealias IrBlockArray = Array with IrBlock
 // the previous iteration has already moved. That is not a style preference: it is the
 // quadratic the register allocator's splitter is MEASURED paying, and the reason its
 // positions are read out of an index instead of searched for.
-export function insertOpRef(block IrBlock, at BlockOpPos, opIdx OpIndex)
+export function insertOpRef(block IrBlock, at ElementIndex, opIdx ElementIndex)
 	if at > block.opRefs.count() 'oob'
 		panic("insertOpRef: position {at} is past the end of block '{String.from(block.label)}' (opRefs count={block.opRefs.count()})")
 	end 'oob'
 
-	block.opRefs.insert(at as ElementIndex, value: opIdx)
+	block.opRefs.insert(at, value: opIdx)
 end 'insertOpRef'
-
-// An index into a BATCH of pending splices — a position in the caller's parallel (position, opIndex)
-// arrays. Deliberately not a `BlockOpPos`: it addresses the batch, never the block.
-export typealias SpliceBatchIndex = int(0 to u64.max)
 
 // Insert a whole BATCH of op references in ONE pass — `opIdxs[k]` at position `positions[k]`, for k in
 // `[from, to)`.
@@ -478,7 +471,7 @@ export typealias SpliceBatchIndex = int(0 to u64.max)
 // pays Θ(M + K) instead, and it allocates nothing beyond the one growth. The insertions being held back
 // until the batch is complete is also what keeps every position in one coordinate system, which is what
 // lets the splitter read a position out of its use index rather than search for it.
-export function spliceOpRefs(block IrBlock, positions BlockOpPosArray, opIdxs OpIndexArray, from SpliceBatchIndex, to SpliceBatchIndex)
+export function spliceOpRefs(block IrBlock, positions BlockOpPosArray, opIdxs OpIndexArray, from ElementIndex, to ElementIndex)
 	let pending = to - from
 
 	if pending == 0 'nothingToSplice'

@@ -22,7 +22,7 @@ test 'an edited program is rebuilt and the new answer runs'
 	let program = stagedMain(staged)
 
 	let first = runProgram(staged, program: program)
-	let firstExit = first.exitCode() as AssertedInt
+	let firstExit = first.exitCode()
 	Expect.equal(firstExit, expected: 0, message: "the first run failed, so there is no build for an edit to invalidate. It said: {first.stdout}{first.stderr}")
 	Expect.equal(withoutCarriageReturns(first.stdout), expected: "{HelloGreeting}{LineFeed}", message: "the first run did not print what the program prints")
 
@@ -31,7 +31,7 @@ test 'an edited program is rebuilt and the new answer runs'
 	rewriteStagedMain(staged, replacing: HelloGreeting, becoming: EditedGreeting)
 
 	let second = runProgram(staged, program: program)
-	let secondExit = second.exitCode() as AssertedInt
+	let secondExit = second.exitCode()
 	Expect.equal(secondExit, expected: 0, message: "the run after the edit failed. It said: {second.stdout}{second.stderr}")
 	Expect.equal(withoutCarriageReturns(second.stdout), expected: "{EditedGreeting}{LineFeed}", message: "the run after the edit printed the OLD program's answer, so a cached build was served for a source that had changed")
 

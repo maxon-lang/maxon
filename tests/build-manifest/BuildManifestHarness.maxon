@@ -38,8 +38,8 @@ export let CoverageNeedsDebugInfoWording = "requires the debug-info sidecar"
 
 // A build the driver refuses before compiling anything exits 1; one refused because the checkout is
 // busy exits the driver's `NothingRanExitCode`. Two copies of the driver's numbers.
-export let RefusedExitCode = 1 as AssertedInt
-export let NothingRanExitCode = 2 as AssertedInt
+export let RefusedExitCode = 1
+export let NothingRanExitCode = 2
 
 // A stable fragment of the tree lock's busy refusal (`TreeLock.reportBusy`).
 export let TreeLockBusyWording = "holds its tree lock"
@@ -88,7 +88,7 @@ export let PeTargetOption = "--target=x64-windows"
 export let MachOTargetOption = "--target=arm64-macos"
 
 export let RebuildWithOutputMarkerFileName = "ran.txt"
-let RebuildWithOutputExitCode = 7 as AssertedInt
+let RebuildWithOutputExitCode = 7
 let SecondStageRecordLine = "stage=1\n"
 let ArgumentRecordPrefix = "arg="
 let RecordLineEnd = "\n"
@@ -273,11 +273,11 @@ end 'plantHeldTreeLock'
 //
 // Every wording in `wordings` must appear: a refusal that carries several facts is pinned on all of them, so
 // dropping one from the message is a failure rather than a message that still matches.
-export function requireRefused(staged FilePath, options StringArray, exitCode AssertedInt, wordings StringArray, what String) throws TestFailure
+export function requireRefused(staged FilePath, options StringArray, exitCode ExitInt, wordings StringArray, what String) throws TestFailure
 	let build = spawnManifestBuild(staged, options: options)
 	let stderr = withoutCarriageReturns(build.stderr)
 
-	try Expect.equal(build.exitCode() as AssertedInt, expected: exitCode, message: "`{what}` over the staged manifest exited {build.exitCode()} and must be refused with exit {exitCode}. It wrote to stdout: {build.stdout} and to stderr: {stderr}")
+	try Expect.equal(build.exitCode(), expected: exitCode, message: "`{what}` over the staged manifest exited {build.exitCode()} and must be refused with exit {exitCode}. It wrote to stdout: {build.stdout} and to stderr: {stderr}")
 
 	for wording in wordings 'eachWording'
 		try Expect.contains(stderr, needle: wording, message: "`{what}` over the staged manifest was not refused for the reason under test. It wrote to stderr: {stderr}")
@@ -292,7 +292,7 @@ export function requireRepeatedWithOutput(caseLabel String, option String) throw
 	let build = spawnManifestBuild(staged, options: [option])
 	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
 
-	try Expect.equal(build.exitCode() as AssertedInt, expected: RebuildWithOutputExitCode, message: "`maxon build {option}` over a manifest asking to rebuild with its output did not exit with the written program's own exit code. {said}")
+	try Expect.equal(build.exitCode(), expected: RebuildWithOutputExitCode, message: "`maxon build {option}` over a manifest asking to rebuild with its output did not exit with the written program's own exit code. {said}")
 
 	let marker = staged.join(RebuildWithOutputMarkerFileName)
 	try Expect.isTrue(File.exists(marker), message: "the written program never ran: it leaves {marker.toString()} behind whenever it does. {said}")

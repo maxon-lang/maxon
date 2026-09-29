@@ -15,7 +15,7 @@ test 'two variables naming one cache directory clear it once and count it once'
 	publishCachedBuild(dir, cacheRoot: cacheRoot)
 
 	let owned = cacheRoot.join(CacheVendorDirName)
-	let planted = filesUnder(owned).count() as AssertedInt
+	let planted = filesUnder(owned).count()
 	Expect.greaterThan(planted, than: 0, message: "the gate could not run - {owned.toString()} holds no file at all, so a count taken over it says nothing")
 
 	var naming = EnvMap.create()
@@ -25,10 +25,10 @@ test 'two variables naming one cache directory clear it once and count it once'
 	let cleared = runWithCacheRoots([CacheCommandWord, CacheClearVerb], naming: naming, workingDirectory: dir)
 	let said = "It wrote to stdout: {cleared.stdout} and to stderr: {cleared.stderr}"
 
-	Expect.equal(cleared.exitCode() as AssertedInt, expected: 0, message: "`maxon {CacheCommandWord} {CacheClearVerb}` did not succeed over one directory that {CacheRootVariable} and {HostTempVariable} both name. A second walk over a tree the first one removed is not a removal that failed. {said}")
+	Expect.equal(cleared.exitCode(), expected: 0, message: "`maxon {CacheCommandWord} {CacheClearVerb}` did not succeed over one directory that {CacheRootVariable} and {HostTempVariable} both name. A second walk over a tree the first one removed is not a removal that failed. {said}")
 
 	Expect.isFalse(Directory.exists(owned), message: "`maxon {CacheCommandWord} {CacheClearVerb}` left {owned.toString()} standing. {said}")
 
 	let reported = try reportedTally(cleared.stdout) otherwise panic("{CaseDirName}: the gate could not run - `maxon {CacheCommandWord} {CacheClearVerb}` stated no count at all, so there is no number to compare. {said}")
-	Expect.equal(reported, expected: planted, message: "`maxon {CacheCommandWord} {CacheClearVerb}` reported {reported} files removed where {planted} were on disk. Two variables naming one directory is one cache, not two. {said}")
+	Expect.equal(reported, expected: planted as ReportedTally, message: "`maxon {CacheCommandWord} {CacheClearVerb}` reported {reported} files removed where {planted} were on disk. Two variables naming one directory is one cache, not two. {said}")
 end 'two variables naming one cache directory clear it once and count it once'

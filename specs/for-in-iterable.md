@@ -60,11 +60,11 @@ type IntCursor
 	end 'create'
 
 	function current() returns Integer
-		return try self.items.get(self.pos) otherwise panic("oob")
+		return try self.items.get(self.pos as ElementIndex) otherwise panic("oob")
 	end 'current'
 
 	function advance() throws IterationError
-		if self.pos + 1 >= self.items.count() 'atEnd'
+		if self.pos + 1 >= (self.items.count() as Integer) 'atEnd'
 			throw IterationError.exhausted
 		end 'atEnd'
 		self.pos = self.pos + 1
@@ -120,11 +120,11 @@ type IntCursor
 	end 'create'
 
 	function current() returns Integer
-		return try self.items.get(self.pos) otherwise panic("oob")
+		return try self.items.get(self.pos as ElementIndex) otherwise panic("oob")
 	end 'current'
 
 	function advance() throws IterationError
-		if self.pos + 1 >= self.items.count() 'atEnd'
+		if self.pos + 1 >= (self.items.count() as Integer) 'atEnd'
 			throw IterationError.exhausted
 		end 'atEnd'
 		self.pos = self.pos + 1
@@ -189,11 +189,11 @@ type IntCursor
 	end 'create'
 
 	function current() returns Integer
-		return try self.items.get(self.pos) otherwise panic("oob")
+		return try self.items.get(self.pos as ElementIndex) otherwise panic("oob")
 	end 'current'
 
 	function advance() throws IterationError
-		if self.pos + 1 >= self.items.count() 'atEnd'
+		if self.pos + 1 >= (self.items.count() as Integer) 'atEnd'
 			throw IterationError.exhausted
 		end 'atEnd'
 		self.pos = self.pos + 1
@@ -317,11 +317,11 @@ type Resumable
 	end 'create'
 
 	function current() returns Integer
-		return try self.items.get(self.pos) otherwise panic("oob")
+		return try self.items.get(self.pos as ElementIndex) otherwise panic("oob")
 	end 'current'
 
 	function advance() throws IterationError
-		if self.pos + 1 >= self.items.count() 'atEnd'
+		if self.pos + 1 >= (self.items.count() as Integer) 'atEnd'
 			throw IterationError.exhausted
 		end 'atEnd'
 		self.pos = self.pos + 1

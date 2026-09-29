@@ -365,7 +365,7 @@ let Headings = ["## Deferred", "## Notes"]
 function main() returns ExitCode
 	let first = try Headings.get(0) otherwise ""
 	let second = try Headings.get(1) otherwise ""
-	return (first.byteLength() + second.byteLength() + Headings.count()) as ExitCode
+	return (first.byteLength() + second.byteLength() + (Headings.count() as BytePos)) as ExitCode
 end 'main'
 ```
 ```exitcode

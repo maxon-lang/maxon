@@ -28,7 +28,7 @@
 
 // A 0-based LSP line number. Distinct from `LineNumber`, which is this compiler's 1-based one, and
 // deliberately not an alias of it: the whole point is that the two are not interchangeable.
-module typealias LspLineNumber = int(0 to u64.max)
+module typealias LspLineNumber = int(0 to u64.max) implements ElementIndex
 
 // A 0-based offset in UTF-16 CODE UNITS from the start of a line. Not bytes, not codepoints.
 module typealias LspCharacter = int(0 to u64.max)
@@ -103,7 +103,7 @@ module type LspLineIndex
 
 	// The byte offset where `line` begins, clamped to the last line for a line past the end.
 	function startOfLine(line LspLineNumber) returns ByteOffset
-		if line >= lineStarts.count() 'pastEnd'
+		if line >= lineStarts.count() as LspLineNumber 'pastEnd'
 			return try lineStarts.get(lineStarts.count() - 1) otherwise panic("LspLineIndex.startOfLine: lineStarts is never empty — build pushes 0 before it scans")
 		end 'pastEnd'
 
@@ -147,7 +147,7 @@ module type LspLineIndex
 
 	// The byte offset just past `line`'s content — before its `\r\n` or `\n`, or the buffer end.
 	function endOfLineContent(line LspLineNumber) returns ByteOffset
-		if line >= lineContentEnds.count() 'pastEnd'
+		if line >= lineContentEnds.count() as LspLineNumber 'pastEnd'
 			return try lineContentEnds.get(lineContentEnds.count() - 1) otherwise panic("LspLineIndex.endOfLineContent: lineContentEnds is never empty — build pushes the final line's end unconditionally")
 		end 'pastEnd'
 
@@ -251,8 +251,8 @@ end 'LspSpan'
 // every token at the position its scan started and scans never overlap, so anchors never decrease; two
 // tokens may share one (an empty string fragment and the `{` after it), and the FIRST of them answers.
 module function tokenSpanAt(tokens TokenArray, line LineNumber, column ColumnNumber) returns LspSpan
-	var low = 0 as TokenIndex
-	var high = tokens.count() as TokenIndex
+	var low = 0 as ElementIndex
+	var high = tokens.count()
 
 	while low < high 'lowerBound'
 		let middle = low + (high - low) / 2

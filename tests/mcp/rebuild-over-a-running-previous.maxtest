@@ -34,7 +34,7 @@ test 'a self-rebuild succeeds while another process runs the previous image, and
 	try File.writeText(program, content: printingProgramSource(KnownLine)) otherwise panic("could not write {program.path}")
 
 	let first = rebuildOwnImage(dir, compiler: compiler, program: program)
-	Expect.equal(first.exitCode() as AssertedInt, expected: 0, message: "`{BuildCommandName} {ProgramFileName} {OutputOptionPrefix}{imageName}`, run by {imageName} itself while an mcp-server runs {previousName}, exited {first.exitCode()}. It must move the held {previousName} aside and vacate its own image. The compiler said: {first.stderr}")
+	Expect.equal(first.exitCode(), expected: 0, message: "`{BuildCommandName} {ProgramFileName} {OutputOptionPrefix}{imageName}`, run by {imageName} itself while an mcp-server runs {previousName}, exited {first.exitCode()}. It must move the held {previousName} aside and vacate its own image. The compiler said: {first.stderr}")
 
 	let vacatedBytes = try File.readBinary(previous) otherwise panic("could not read {previous.path}")
 	Expect.isTrue(vacatedBytes.equals(originalBytes), message: "{previousName} should hold the compiler image the build vacated ({originalBytes.count()} bytes); it holds {vacatedBytes.count()} bytes that differ.")
@@ -43,11 +43,11 @@ test 'a self-rebuild succeeds while another process runs the previous image, and
 	Expect.equal(built.stdout.trim(), expected: KnownLine, message: "{imageName} should now be the program the build wrote. It exited {built.exitCode()} and wrote to stderr: {built.stderr}")
 
 	let exitCode = session.close()
-	Expect.equal(exitCode as AssertedInt, expected: 0, message: "mcp-server should exit 0 on stdin EOF")
+	Expect.equal(exitCode, expected: 0, message: "mcp-server should exit 0 on stdin EOF")
 
 	let fresh = stagedCopyOf(testedCompilerPath(), dir: dir, name: CompilerStem)
 	let second = rebuildOwnImage(dir, compiler: fresh, program: program)
-	Expect.equal(second.exitCode() as AssertedInt, expected: 0, message: "the second self-rebuild, with nothing holding any image, exited {second.exitCode()}. The compiler said: {second.stderr}")
+	Expect.equal(second.exitCode(), expected: 0, message: "the second self-rebuild, with nothing holding any image, exited {second.exitCode()}. The compiler said: {second.stderr}")
 
 	let allowed = [ProgramFileName, imageName, "{imageName}{SidecarExtension}", previousName, "{previousName}{SidecarExtension}"]
 	let entries = try Directory.list(dir) otherwise panic("could not list {dir.path}")

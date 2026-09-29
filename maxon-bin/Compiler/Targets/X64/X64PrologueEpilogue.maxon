@@ -170,7 +170,7 @@ function insertFrameForFunction(module TargetModule, func IrFunction)
 
 	// The SAME `computeFrameBytes` the GT stack guard reaches through `x64PrologueFrameOf` — one formula, two
 	// callers, so the guard's projected rsp and this `sub rsp, N` can never disagree.
-	let frameBytes = computeFrameBytes(func, makesCall: makesCall, pushCount: usedCallee.count(), xmmSaveCount: usedXmm.count())
+	let frameBytes = computeFrameBytes(func, makesCall: makesCall, pushCount: usedCallee.count() as RegCount, xmmSaveCount: usedXmm.count() as RegCount)
 
 	// The callee-saved XMM slots sit directly above the allocator's own spill slots, on the same grid.
 	let xmmBaseSlot = func.stackSize / SpillSlotBytes
@@ -211,7 +211,7 @@ module function x64PrologueFrameOf(module TargetModule, func IrFunction) returns
 	let coloured = colouredPhysicalRegs(module, func: func)
 	let pushCount = usedRegsFrom(calleeSavedOrder, coloured: coloured).count()
 	let xmmSaveCount = usedRegsFrom(calleeSavedXmmOrder, coloured: coloured).count()
-	return X64PrologueFrame.create(pushCount, frameBytes: computeFrameBytes(func, makesCall: makesCall, pushCount: pushCount, xmmSaveCount: xmmSaveCount))
+	return X64PrologueFrame.create(pushCount as RegCount, frameBytes: computeFrameBytes(func, makesCall: makesCall, pushCount: pushCount as RegCount, xmmSaveCount: xmmSaveCount as RegCount))
 end 'x64PrologueFrameOf'
 
 // Everything one call of `func` puts on the stack below its caller's frame: the return address, the frame pointer
@@ -334,7 +334,7 @@ function insertPrologueAtEntry(module TargetModule, block IrBlock, usedCallee X6
 	for xi in 0 upto usedXmm.count() 'eachXmmSaveRev'
 		let slotIndex = usedXmm.count() - 1 - xi
 		let reg = try usedXmm.get(slotIndex) otherwise panic("insertPrologueAtEntry: usedXmm.get OOB")
-		prependOp(module, block: block, op: TargetOp.storeSlotReg(xmmBaseSlot + slotIndex, srcReg: x64PhysReg(reg)))
+		prependOp(module, block: block, op: TargetOp.storeSlotReg(xmmBaseSlot + slotIndex as SpillSlot, srcReg: x64PhysReg(reg)))
 	end 'eachXmmSaveRev'
 
 	if frameBytes > 0 'reserve'
@@ -426,7 +426,7 @@ function functionMakesCall(module TargetModule, func IrFunction) returns bool
 	return false
 end 'functionMakesCall'
 
-function opAtIsCall(module TargetModule, opIdx OpIndex) returns bool
+function opAtIsCall(module TargetModule, opIdx ElementIndex) returns bool
 	let op = try module.ops.get(opIdx) otherwise panic("functionMakesCall: opIdx {opIdx} not in module.ops")
 	return op.rawValue.isCall
 end 'opAtIsCall'

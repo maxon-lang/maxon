@@ -549,6 +549,50 @@ end 'Tagged'
   'Digest' required by type parameter 'T' of 'Tagged'`).
 - A constraint can bind an associated type: `where S is Cursor with E`.
 
+### Generic Functions
+
+A free function or a `static` method declares type parameters with `uses` after its parameter list, and
+constrains them with `where` at the end of the declaration line:
+
+```maxon
+typealias Score = int(0 to 100)
+
+function larger(a T, b T) uses T returns T where T is Comparable
+	if a > b 'first'
+		return a
+	end 'first'
+
+	return b
+end 'larger'
+
+function main() returns ExitCode
+	print("{larger(30 as Score, b: 70)} {larger("pear", b: "apple")}\n")   // 70 pear
+	return 0
+end 'main'
+```
+
+A call infers `T` from the arguments whose parameters are declared `T`:
+
+- Arguments of one alias give that alias. An argument with no alias (a literal, arithmetic over literals)
+  adopts the other arguments' alias. Two different aliases give their nearest common ancestor under
+  [`implements`](/docs/language/ranged-typealiases/#subtypes-with-implements), and two with none are **E3180**.
+- A type parameter binds a number, `String`, `bool`, `Character`, a typealias, a record or an enum; any
+  other argument is **E3181**. A type parameter no parameter is declared with is **E3179**.
+- An inferred type that does not conform to a `where` interface is **E3017**.
+
+Each distinct inferred type compiles its own copy of the function in the declaring file, and the body is
+checked against that type. Every integer and float type, every alias of one, `String`, `bool` and
+`Character` conform to `Equatable` and `Comparable` (see [Primitive Conformances](/docs/language/types/#primitive-conformances)),
+and a record that implements `Comparable` is ordered by `<`, `>`, `<=` and `>=` through its `compare`.
+
+A copy may call its argument type's `where` requirements — `compare`, `equals`, any method of the
+constraining interface — whatever their visibility, because the caller granted the conformance by passing
+the type. Every other method of the type needs ordinary visibility from the declaring file. A generic
+function is itself visible like any function: a private one called from another file is **E3008**.
+
+A non-generic declaration of the same name is chosen when its parameter types are exactly the argument
+types. Two generic declarations that both infer a type for one call are **E3007**.
+
 ### Associated Types
 
 An interface can declare associated types with `uses`; a conforming type binds them with `with`:

@@ -38,11 +38,23 @@ declared is refused at the `return` exactly as before.
 
 **Decay.** A value with NO alias fits any alias slot of its structural type: a literal, a counted-loop
 counter, a bare `var` initialised from a literal, the raw value of a payload-free `enum` case. A named
-value fits an unnamed slot. Only two DIFFERENT names conflict.
+value fits an unnamed slot. Two DIFFERENT names conflict unless one `implements` the other.
+
+**Subtypes.** `typealias BlockId = int(0 to u64.max) implements ElementIndex` makes `BlockId` a subtype
+of `ElementIndex`: a `BlockId` goes wherever an `ElementIndex` (or any alias `ElementIndex` implements)
+is declared, with no cast. The relation is one way — an `ElementIndex` needs a cast to become a
+`BlockId`, and a cast to an ancestor is E3010 — and two subtypes of one parent are still two types. The
+subtype's range must fit its parent's over the same primitive and signedness (E3178), a chain that comes
+back to itself is E3091, and a parent that is not a ranged typealias is E2003.
 
 **Arithmetic.** `a + a2` over one alias yields that alias. `a + 1` yields it too — an UNNAMED operand
-adopts the named one. `a + y` over two different aliases is an error; the same rule governs comparisons,
-`min`/`max` and unary minus. A shift adopts its LEFT operand only, so `n shl w` is `n`'s type whatever
+adopts the named one, and so does an ancestor: `block + offset` over a `BlockId` and an `ElementIndex` is a
+`BlockId`. `block + varId` over two subtypes of one parent is a MIXED expression: it lands in a destination
+any operand's alias satisfies (a parameter, a field, a merge), computed into a range-checked temporary of
+the destination's type, and elsewhere it is the nearest alias both implement — which is what a diagnostic
+names. Two aliases with no common ancestor are an error; the same rule governs comparisons,
+`min`/`max` and unary minus. The `match` and ternary arms of two subtypes join to their nearest common
+ancestor the same way. A shift adopts its LEFT operand only, so `n shl w` is `n`'s type whatever
 `w` is. Negation adopts a SIGNED alias's identity; negating an UNSIGNED alias yields an unnamed value,
 because the result is outside the alias's own range — `-x` for an unsigned `x` renders as a signed
 number.
@@ -98,6 +110,938 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: <fragment>:11:10: argument type mismatch for 'w': expected 'Wide', got 'Narrow'
+```
+
+<!-- test: error.an-aliased-index-into-array-get -->
+`Array.get` declares its index `ElementIndex`, so a value of another alias is refused there like at any
+other parameter.
+```maxon
+typealias Offset = int(0 to u64.max)
+typealias Row = int(0 to 1000)
+typealias RowArray = Array with Row
+
+function main() returns ExitCode
+	var rows = RowArray.create()
+	rows.push(4)
+	let o = 0 as Offset
+	let r = try rows.get(o) otherwise 0
+	print("{r}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:10:19: argument type mismatch for 'index': expected 'ElementIndex', got 'Offset'
+```
+
+<!-- test: error.an-aliased-index-into-array-set -->
+```maxon
+typealias Offset = int(0 to u64.max)
+typealias Row = int(0 to 1000)
+typealias RowArray = Array with Row
+
+function main() returns ExitCode
+	var rows = RowArray.create()
+	rows.push(4)
+	let o = 0 as Offset
+	try rows.set(o, value: 7) otherwise panic("the row exists")
+	print("{rows.count()}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:10:11: argument type mismatch for 'index': expected 'ElementIndex', got 'Offset'
+```
+
+<!-- test: error.an-aliased-length-into-array-resize -->
+```maxon
+typealias Offset = int(0 to u64.max)
+typealias Row = int(0 to 1000)
+typealias RowArray = Array with Row
+
+function main() returns ExitCode
+	var rows = RowArray.create()
+	let o = 3 as Offset
+	rows.resize(o)
+	print("{rows.count()}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:7: argument type mismatch for 'newLength': expected 'ElementIndex', got 'Offset'
+```
+
+<!-- test: error.array-count-into-another-alias -->
+`count()` answers an `ElementIndex`, which is not the parameter's alias.
+```maxon
+typealias Narrow = int(0 to 1000)
+typealias NarrowArray = Array with Narrow
+
+function takesNarrow(n Narrow) returns Narrow
+	return n
+end 'takesNarrow'
+
+function main() returns ExitCode
+	var arr = NarrowArray.create()
+	arr.push(4)
+	let a = takesNarrow(arr.count())
+	print("{a}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:12:10: argument type mismatch for 'n': expected 'Narrow', got 'ElementIndex'
+```
+
+<!-- test: error.array-count-cast-to-element-index-is-unneeded -->
+```maxon
+typealias Narrow = int(0 to 1000)
+typealias NarrowArray = Array with Narrow
+
+function main() returns ExitCode
+	var arr = NarrowArray.create()
+	arr.push(4)
+	let n = arr.count() as ElementIndex
+	print("{n}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3010: <fragment>:8:22: unneeded cast: 'ElementIndex' already fits in 'ElementIndex'
+```
+
+<!-- test: an-alias-of-element-index-indexes-an-array -->
+An alias that `implements` another is its subtype: a `BlockId` goes wherever an `ElementIndex` is
+expected, with no cast.
+```maxon
+typealias BlockId = int(0 to u64.max) implements ElementIndex
+typealias Row = int(0 to 1000)
+typealias RowArray = Array with Row
+
+function main() returns ExitCode
+	var rows = RowArray.create()
+	rows.push(4)
+	rows.push(9)
+	let last = 1 as BlockId
+	let r = try rows.get(last) otherwise 0
+	print("{r}")
+	return 0
+end 'main'
+```
+```stdout
+9
+```
+
+<!-- test: a-subtype-widens-at-a-parameter-transitively -->
+`typealias LoopHead = int(0 to u64.max) implements BlockId` is a subtype of `BlockId` and of `ElementIndex` both.
+```maxon
+typealias BlockId = int(0 to u64.max) implements ElementIndex
+typealias LoopHead = int(0 to u64.max) implements BlockId
+
+function takesBlock(b BlockId) returns BlockId
+	return b
+end 'takesBlock'
+
+function takesIndex(i ElementIndex) returns ElementIndex
+	return i
+end 'takesIndex'
+
+function main() returns ExitCode
+	let h = 3 as LoopHead
+	let b = takesBlock(h)
+	let i = takesIndex(h)
+	print("{b} {i}")
+	return 0
+end 'main'
+```
+```stdout
+3 3
+```
+
+<!-- test: error.a-sibling-subtype-is-refused -->
+Two subtypes of one alias do not meet: a `VarId` is not a `BlockId`.
+```maxon
+typealias BlockId = int(0 to u64.max) implements ElementIndex
+typealias VarId = int(0 to u64.max) implements ElementIndex
+
+function takesBlock(b BlockId) returns BlockId
+	return b
+end 'takesBlock'
+
+function main() returns ExitCode
+	let v = 3 as VarId
+	let b = takesBlock(v)
+	print("{b}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:11:10: argument type mismatch for 'b': expected 'BlockId', got 'VarId'
+```
+
+<!-- test: error.a-supertype-does-not-narrow-to-its-subtype -->
+Widening is one way: a plain `ElementIndex` needs a cast to become a `BlockId`.
+```maxon
+typealias BlockId = int(0 to u64.max) implements ElementIndex
+
+function takesBlock(b BlockId) returns BlockId
+	return b
+end 'takesBlock'
+
+function main() returns ExitCode
+	let i = 3 as ElementIndex
+	let b = takesBlock(i)
+	print("{b}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:10:10: argument type mismatch for 'b': expected 'BlockId', got 'ElementIndex'
+```
+
+<!-- test: a-subtype-with-its-ancestor-is-the-subtype -->
+Arithmetic over an alias and its ancestor, in either order, or with an unaliased operand, yields the
+MORE-DERIVED alias: `block + offset`, `offset + block` and `block + 1` are all `BlockId`s.
+```maxon
+typealias BlockId = int(0 to u64.max) implements ElementIndex
+
+function takesBlock(b BlockId) returns BlockId
+	return b
+end 'takesBlock'
+
+function main() returns ExitCode
+	let block = 3 as BlockId
+	let offset = 4 as ElementIndex
+	let a = takesBlock(block + offset)
+	let b = takesBlock(offset + block)
+	let c = takesBlock(block + 1)
+	print("{a} {b} {c}")
+	return 0
+end 'main'
+```
+```stdout
+7 7 4
+```
+
+<!-- test: an-expression-satisfies-any-operands-alias -->
+An arithmetic expression satisfies a target alias when ANY of its operands does: `block + varId` passes
+to a `BlockId` parameter, to a `VarId` parameter, and to an `ElementIndex` one.
+```maxon
+typealias BlockId = int(0 to u64.max) implements ElementIndex
+typealias VarId = int(0 to u64.max) implements ElementIndex
+
+function takesBlock(b BlockId) returns BlockId
+	return b
+end 'takesBlock'
+
+function takesVar(v VarId) returns VarId
+	return v
+end 'takesVar'
+
+function takesIndex(i ElementIndex) returns ElementIndex
+	return i
+end 'takesIndex'
+
+function main() returns ExitCode
+	let block = 3 as BlockId
+	let varId = 4 as VarId
+	let a = takesBlock(block + varId)
+	let b = takesVar(block + varId)
+	let c = takesIndex(block + varId)
+	let x = block + varId
+	let d = takesIndex(x)
+	print("{a} {b} {c} {d}")
+	return 0
+end 'main'
+```
+```stdout
+7 7 7 7
+```
+
+<!-- test: a-mixed-expression-is-guarded-as-its-destination -->
+`takesBlock(block + varId)` computes the sum into a temporary `BlockId`, so the sum must pass
+`BlockId`'s range check at the door.
+```maxon
+typealias Small = int(0 to 10)
+typealias BlockId = int(0 to 10) implements Small
+typealias VarId = int(0 to 10) implements Small
+
+function takesBlock(b BlockId) returns BlockId
+	return b
+end 'takesBlock'
+
+function main() returns ExitCode
+	let block = 8 as BlockId
+	let varId = 5 as VarId
+	let b = takesBlock(block + varId)
+	print("{b}")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-mixed-expression-is-guarded-as-its-destination.test:13: Range check failed: value outside typealias 'BlockId'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: a-mixed-expression-is-guarded-as-a-struct-literal-field -->
+```maxon
+typealias Small = int(0 to 10)
+typealias BlockId = int(0 to 10) implements Small
+typealias VarId = int(0 to 10) implements Small
+
+type Holder
+	export var block as BlockId
+
+	static function create(block BlockId, varId VarId) returns Self
+		return Self{block: block + varId}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(8, varId: 5)
+	print("{h.block}")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-mixed-expression-is-guarded-as-a-struct-literal-field.test:10: Range check failed: value outside typealias 'BlockId'
+Stack trace:
+  in Holder.create
+  in main
+  in mrt_start
+```
+<!-- test: a-mixed-expression-is-guarded-as-an-assigned-field -->
+```maxon
+typealias Small = int(0 to 10)
+typealias BlockId = int(0 to 10) implements Small
+typealias VarId = int(0 to 10) implements Small
+
+type Holder
+	export var block as BlockId
+
+	static function create() returns Self
+		return Self{block: 1}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let block = 8 as BlockId
+	let varId = 5 as VarId
+	var h = Holder.create()
+	h.block = block + varId
+	print("{h.block}")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-mixed-expression-is-guarded-as-an-assigned-field.test:18: Range check failed: value outside typealias 'BlockId'
+Stack trace:
+  in main
+  in mrt_start
+```
+<!-- test: a-mixed-expression-in-range-is-stored-in-a-field -->
+```maxon
+typealias Small = int(0 to 10)
+typealias BlockId = int(0 to 10) implements Small
+typealias VarId = int(0 to 10) implements Small
+
+type Holder
+	export var block as BlockId
+	export var other as VarId
+
+	static function create(block BlockId, varId VarId) returns Self
+		return Self{block: block + varId, other: block + varId}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(3, varId: 4)
+	print("{h.block} {h.other}")
+	return 0
+end 'main'
+```
+```stdout
+7 7
+```
+<!-- test: a-mixed-expression-is-guarded-as-its-otherwise-merge -->
+```maxon
+typealias Small = int(0 to 10)
+typealias BlockId = int(0 to 10) implements Small
+typealias VarId = int(0 to 10) implements Small
+
+enum Miss
+	none
+end 'Miss'
+
+function find(ok bool) returns BlockId throws Miss
+	if not ok 'missing'
+		throw Miss.none
+	end 'missing'
+
+	return 1
+end 'find'
+
+function pick(block BlockId, varId VarId) returns BlockId
+	return try find(false) otherwise block + varId
+end 'pick'
+
+function main() returns ExitCode
+	let r = pick(8, varId: 5)
+	print("{r}")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-mixed-expression-is-guarded-as-its-otherwise-merge.test:19: Range check failed: value outside typealias 'BlockId'
+Stack trace:
+  in pick
+  in main
+  in mrt_start
+```
+<!-- test: a-mixed-expression-is-guarded-as-its-match-arm-merge -->
+```maxon
+typealias Small = int(0 to 10)
+typealias BlockId = int(0 to 10) implements Small
+typealias VarId = int(0 to 10) implements Small
+
+enum Pick
+	first
+	second
+end 'Pick'
+
+function choose(p Pick, block BlockId, varId VarId) returns BlockId
+	let r = match p 'p'
+		first gives block
+		second gives block + varId
+	end 'p'
+	return r
+end 'choose'
+
+function main() returns ExitCode
+	let r = choose(Pick.second, block: 8, varId: 5)
+	print("{r}")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-mixed-expression-is-guarded-as-its-match-arm-merge.test:16: Range check failed: value outside typealias 'BlockId'
+Stack trace:
+  in choose
+  in main
+  in mrt_start
+```
+<!-- test: a-mixed-expression-into-an-overload-is-guarded-at-the-call -->
+```maxon
+typealias Small = int(0 to 10)
+typealias BlockId = int(0 to 10) implements Small
+typealias VarId = int(0 to 10) implements Small
+
+function show(b BlockId) returns String
+	return "block {b}"
+end 'show'
+
+function show(s String) returns String
+	return s
+end 'show'
+
+function main() returns ExitCode
+	let block = 8 as BlockId
+	let varId = 5 as VarId
+	print(show(block + varId))
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-mixed-expression-into-an-overload-is-guarded-at-the-call.test:17: Range check failed: value outside typealias 'BlockId'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: an-overload-is-chosen-by-an-operand-of-a-mixed-expression -->
+```maxon
+typealias Small = int(0 to 10)
+typealias BlockId = int(0 to 10) implements Small
+typealias VarId = int(0 to 10) implements Small
+typealias Row = int(0 to 1000)
+
+function describe(b BlockId) returns String
+	return "block {b}"
+end 'describe'
+
+function describe(r Row) returns String
+	return "row {r}"
+end 'describe'
+
+function main() returns ExitCode
+	let block = 3 as BlockId
+	let varId = 4 as VarId
+	print(describe(block + varId))
+	return 0
+end 'main'
+```
+```stdout
+block 7
+```
+
+<!-- test: error.a-mixed-expression-no-operand-of-which-fits-the-field -->
+```maxon
+typealias Small = int(0 to 10)
+typealias BlockId = int(0 to 10) implements Small
+typealias VarId = int(0 to 10) implements Small
+
+type Holder
+	export var block as BlockId
+
+	static function create(v VarId, w VarId) returns Self
+		return Self{block: v + w}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(3, w: 4)
+	print("{h.block}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:10:15: cannot assign a value of type 'VarId' to field 'block' of 'Holder', which holds 'BlockId'
+```
+<!-- test: error.a-mixed-expression-fits-no-overload -->
+```maxon
+typealias Small = int(0 to 10)
+typealias BlockId = int(0 to 10) implements Small
+typealias VarId = int(0 to 10) implements Small
+typealias Row = int(0 to 1000)
+typealias Col = int(0 to 1000)
+
+function describe(r Row) returns String
+	return "row {r}"
+end 'describe'
+
+function describe(c Col) returns String
+	return "col {c}"
+end 'describe'
+
+function main() returns ExitCode
+	let block = 3 as BlockId
+	let varId = 4 as VarId
+	print(describe(block + varId))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:19:8: argument type mismatch for 'r': expected 'Row', got 'Small'
+```
+
+<!-- test: error.a-mixed-expression-that-fits-two-overloads-is-ambiguous -->
+Each operand of `block + varId` satisfies one of the two overloads, so the call is ambiguous and is refused
+at the call.
+```maxon
+typealias Small = int(0 to 10)
+typealias BlockId = int(0 to 10) implements Small
+typealias VarId = int(0 to 10) implements Small
+
+function show(b BlockId) returns String
+	return "block {b}"
+end 'show'
+
+function show(v VarId) returns String
+	return "var {v}"
+end 'show'
+
+function main() returns ExitCode
+	let block = 3 as BlockId
+	let varId = 4 as VarId
+	print(show(block + varId))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3007: <fragment>:17:8: Ambiguous overload for 'show': multiple overloads match. Candidates: (b BlockId), (v VarId)
+```
+
+<!-- test: an-implements-alias-widens-to-its-parent -->
+`typealias FooId = int(0 to 1000) implements ElementIndex` keeps its own range and is a subtype of
+`ElementIndex`: it passes to an `ElementIndex` parameter and indexes an Array with no cast.
+```maxon
+typealias FooId = int(0 to 1000) implements ElementIndex
+typealias Row = int(0 to 1000)
+typealias RowArray = Array with Row
+
+function takesIndex(i ElementIndex) returns ElementIndex
+	return i
+end 'takesIndex'
+
+function main() returns ExitCode
+	var rows = RowArray.create()
+	rows.push(4)
+	rows.push(9)
+	let foo = 1 as FooId
+	let i = takesIndex(foo)
+	let r = try rows.get(foo) otherwise 0
+	print("{i} {r}")
+	return 0
+end 'main'
+```
+```stdout
+1 9
+```
+
+<!-- test: an-implements-alias-is-transitive -->
+```maxon
+typealias FooId = int(0 to 1000) implements ElementIndex
+typealias BarId = int(0 to 10) implements FooId
+
+function takesIndex(i ElementIndex) returns ElementIndex
+	return i
+end 'takesIndex'
+
+function takesFoo(f FooId) returns FooId
+	return f
+end 'takesFoo'
+
+function main() returns ExitCode
+	let bar = 7 as BarId
+	print("{takesIndex(bar)} {takesFoo(bar)}")
+	return 0
+end 'main'
+```
+```stdout
+7 7
+```
+
+<!-- test: error.an-implements-range-must-fit-its-parent -->
+```maxon
+typealias FooId = int(0 to 1000)
+typealias WideId = int(0 to 5000) implements FooId
+
+function main() returns ExitCode
+	let w = 3 as WideId
+	print("{w}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3178: <fragment>:3:46: typealias 'WideId' does not fit the alias it implements: its range is not inside the range of 'FooId'
+```
+
+<!-- test: error.an-implements-alias-must-share-its-parents-primitive -->
+```maxon
+typealias FooId = int(0 to 1000)
+typealias Ratio = float(0.0 to 1.0) implements FooId
+
+function main() returns ExitCode
+	let r = 0.5 as Ratio
+	print("{r}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3178: <fragment>:3:48: typealias 'Ratio' does not fit the alias it implements: it is a `float` range and 'FooId' is an unsigned `int` range
+```
+
+<!-- test: a-value-narrowed-into-an-implements-alias-is-guarded -->
+```maxon
+typealias FooId = int(0 to 1000) implements ElementIndex
+
+function takesFoo(f FooId) returns FooId
+	return f
+end 'takesFoo'
+
+function main() returns ExitCode
+	let i = 4000 as ElementIndex
+	let f = takesFoo(i as FooId)
+	print("{f}")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-value-narrowed-into-an-implements-alias-is-guarded.test:10: Range check failed: value outside typealias 'FooId'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: a-ternary-over-two-siblings-joins-to-their-parent -->
+The arms of a ternary over two subtypes of one alias join to that alias.
+```maxon
+typealias Base = int(0 to 1000)
+typealias Left = int(0 to 100) implements Base
+typealias Right = int(0 to 200) implements Base
+
+function leftOf() returns Left
+	return 3
+end 'leftOf'
+
+function rightOf() returns Right
+	return 7
+end 'rightOf'
+
+function pick(flag bool) returns Base
+	let a = leftOf() if flag else rightOf()
+	return a
+end 'pick'
+
+function main() returns ExitCode
+	print("{pick(false)}")
+	return 0
+end 'main'
+```
+```stdout
+7
+```
+
+<!-- test: a-match-over-two-siblings-joins-to-their-parent -->
+```maxon
+typealias Base = int(0 to 1000)
+typealias Left = int(0 to 100) implements Base
+typealias Right = int(0 to 200) implements Base
+
+enum Side
+	left
+	right
+end 'Side'
+
+function leftOf() returns Left
+	return 3
+end 'leftOf'
+
+function rightOf() returns Right
+	return 7
+end 'rightOf'
+
+function pick(s Side) returns Base
+	let a = match s 's'
+		left gives leftOf()
+		right gives rightOf()
+	end 's'
+	return a
+end 'pick'
+
+function main() returns ExitCode
+	print("{pick(Side.right)}")
+	return 0
+end 'main'
+```
+```stdout
+7
+```
+
+<!-- test: error.a-joined-ternary-is-its-parent-not-its-arm -->
+```maxon
+typealias Base = int(0 to 1000)
+typealias Left = int(0 to 100) implements Base
+typealias Right = int(0 to 200) implements Base
+
+function leftOf() returns Left
+	return 3
+end 'leftOf'
+
+function rightOf() returns Right
+	return 7
+end 'rightOf'
+
+function takesLeft(l Left) returns Left
+	return l
+end 'takesLeft'
+
+function main() returns ExitCode
+	let a = leftOf() if true else rightOf()
+	print("{takesLeft(a)}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:20:10: argument type mismatch for 'l': expected 'Left', got 'Base'
+```
+
+<!-- test: error.a-ternary-over-unrelated-aliases -->
+```maxon
+typealias Left = int(0 to 100)
+typealias Right = int(0 to 200)
+
+function leftOf() returns Left
+	return 3
+end 'leftOf'
+
+function rightOf() returns Right
+	return 7
+end 'rightOf'
+
+function main() returns ExitCode
+	let a = leftOf() if true else rightOf()
+	print("{a}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2028: <fragment>:14:19: ternary expression type mismatch: true branch is 'Left' but false branch is 'Right'
+```
+
+<!-- test: a-private-alias-of-one-name-implements-a-parent-per-file -->
+Two files each declare a private `Id` implementing a different parent; each file's `Id` widens to its own
+parent.
+```maxon
+// --- file: a.maxon
+typealias Small = int(0 to 100)
+typealias Id = int(0 to 10) implements Small
+
+function takeSmall(s Small) returns ExitCode
+	return 3 if s > 50 else 4
+end 'takeSmall'
+
+export function checkA() returns ExitCode
+	let i = 7 as Id
+	return takeSmall(i)
+end 'checkA'
+
+// --- file: b.maxon
+typealias Big = int(0 to 1000)
+typealias Id = int(0 to 10) implements Big
+
+function takeBig(b Big) returns ExitCode
+	return 5 if b > 5 else 6
+end 'takeBig'
+
+export function checkB() returns ExitCode
+	let i = 7 as Id
+	return takeBig(i)
+end 'checkB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return checkA() + checkB()
+end 'main'
+```
+```exitcode
+9
+```
+
+<!-- test: an-implements-parent-may-be-qualified -->
+```maxon
+// --- file: api/base.maxon
+export typealias Base = int(0 to 100)
+
+// --- file: main.maxon
+typealias Kid = int(0 to 10) implements api.Base
+
+function takeBase(b api.Base) returns api.Base
+	return b
+end 'takeBase'
+
+function main() returns ExitCode
+	let k = 4 as Kid
+	print("{takeBase(k)}")
+	return 0
+end 'main'
+```
+```stdout
+4
+```
+
+<!-- test: error.an-expression-no-operand-of-which-satisfies-the-target -->
+```maxon
+typealias BlockId = int(0 to u64.max) implements ElementIndex
+typealias VarId = int(0 to u64.max) implements ElementIndex
+
+function takesBlock(b BlockId) returns BlockId
+	return b
+end 'takesBlock'
+
+function main() returns ExitCode
+	let v = 3 as VarId
+	let w = 4 as VarId
+	let b = takesBlock(v + w)
+	print("{b}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:12:10: argument type mismatch for 'b': expected 'BlockId', got 'VarId'
+```
+
+<!-- test: error.a-bound-mixed-expression-is-the-common-ancestor -->
+With no target where it lands, `block + varId` takes the nearest common ancestor of its operands, so
+`x` is an `ElementIndex` and no longer satisfies `BlockId`.
+```maxon
+typealias BlockId = int(0 to u64.max) implements ElementIndex
+typealias VarId = int(0 to u64.max) implements ElementIndex
+
+function takesBlock(b BlockId) returns BlockId
+	return b
+end 'takesBlock'
+
+function main() returns ExitCode
+	let block = 3 as BlockId
+	let varId = 4 as VarId
+	let x = block + varId
+	let y = takesBlock(x)
+	print("{y}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:13:10: argument type mismatch for 'b': expected 'BlockId', got 'ElementIndex'
+```
+
+<!-- test: error.an-alias-of-an-alias-is-refused -->
+A subtype is declared with its range and `implements`; `typealias X = Y` naming another alias is not a
+typealias form.
+```maxon
+typealias BlockId = ElementIndex
+
+function main() returns ExitCode
+	let b = 3 as BlockId
+	print("{b}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:2:21: Unsupported: a typealias over 'identifier' (a typealias names `int(low to high)`, `float(low to high)`, `bits(n)`, `function(...)`, a tuple `(A, B)` or a generic instance `Base with …`)
+```
+
+<!-- test: error.an-alias-over-the-same-range-is-still-distinct -->
+Only an alias that `implements` another is compatible with it. One spelled over the same range is its own
+type.
+```maxon
+typealias Position = int(0 to u64.max)
+typealias Row = int(0 to 1000)
+typealias RowArray = Array with Row
+
+function main() returns ExitCode
+	var rows = RowArray.create()
+	rows.push(4)
+	let p = 0 as Position
+	let r = try rows.get(p) otherwise 0
+	print("{r}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:10:19: argument type mismatch for 'index': expected 'ElementIndex', got 'Position'
 ```
 
 <!-- test: a-narrow-value-converts-at-a-wide-return -->

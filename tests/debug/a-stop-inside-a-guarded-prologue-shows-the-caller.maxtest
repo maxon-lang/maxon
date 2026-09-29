@@ -8,7 +8,7 @@ test 'a stop after a green-thread callee passed its stack guard and pushed its f
 	let codeStart = functionCodeStart(executable, staged: staged, name: GuardedCalleeName)
 	let prologueStart = functionPrologueStart(executable, staged: staged, name: GuardedCalleeName)
 
-	try Expect.greaterThan(prologueStart as AssertedInt, than: codeStart as AssertedInt, message: "the control: `{GuardedCalleeName}` runs on a green thread and reserves a frame, so the stack guard opens it and its prologue starts past its entry. With no guard ahead of the prologue this case measures nothing the unguarded prologue cases do not.")
+	try Expect.greaterThan(prologueStart, than: codeStart, message: "the control: `{GuardedCalleeName}` runs on a green thread and reserves a frame, so the stack guard opens it and its prologue starts past its entry. With no guard ahead of the prologue this case measures nothing the unguarded prologue cases do not.")
 
 	let afterThePush = exactOffsetTarget(prologueStart + PushedFramePointerBytes)
 	let commands = debugCommandLine(["{BreakCommand} {afterThePush}", RunCommand, BacktraceCommand])
@@ -17,7 +17,7 @@ test 'a stop after a green-thread callee passed its stack guard and pushed its f
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let walks = eventsOfKind(events, kind: BacktraceEventName)
 
-	try Expect.equal(walks.count() as AssertedInt, expected: 1, message: "the `{BacktraceCommand}` at `{afterThePush}` printed no walk. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(walks.count(), expected: 1, message: "the `{BacktraceCommand}` at `{afterThePush}` printed no walk. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let walked = eventAt(walks, index: 0)
 	var names = StringArray.create()

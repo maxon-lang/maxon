@@ -620,12 +620,12 @@ export type VarInfo
 	// expire a borrow the program is still holding — a use-after-free with no diagnostic anywhere.
 	//
 	// Constructed 0, and left 0 for every binding kind no borrow can name, where nothing reads it.
-	export var lastUseToken as TokenIndex
+	export var lastUseToken as ElementIndex
 
 	// The last token at which the program itself reads this name — `lastUseToken` without the lexical extent a
 	// `for … in` element's borrow is seeded with. A mutable door asks whether an immutable name is READ after it
 	// (`StorageProvenance`), and the iteration reading the container is no read of the element's record.
-	export var lastReadToken as TokenIndex = 0
+	export var lastReadToken as ElementIndex = 0
 
 	// ⭐ **DOES THIS NAME DENOTE MODULE STORAGE — a top-level `var` — RATHER THAN A BINDING OF THIS
 	// FRAME?** True only for the E3070 subject stand-in `Parser.topLevelBorrowSubjectOf` mints.
@@ -749,19 +749,19 @@ export type VarInfo
 	// Path-sensitive like `movedFrom`, and carried by `Parser.MoveMark` for the same reason: a door on one branch
 	// of an `if` is not before a read on the other. An index rather than the list, so a binding holds no record a
 	// parse worker would share.
-	export var awaitingMoveReads as MoveSiteListIndex = NoMoveSiteList
+	export var awaitingMoveReads as ElementIndex = NoMoveSiteList
 
 	// ⭐ **THE ARGUMENT TOKEN OF THE SEND THAT FIRST LENT THIS `let`, ON ANY PATH — `NotLent` until one does**
 	// (`Parser.lendIntoGreenThread`). Not per-path, because what it answers is not: the lend's retain marks the
 	// record co-owned on every path, so a later send of the binding lends again rather than refusing it as shared
 	// (`Parser.ownerLendsValue`).
-	export var lentAt as TokenIndex = NotLent
+	export var lentAt as ElementIndex = NotLent
 
 	// ⭐ **THE ARGUMENT TOKEN OF A SEND THAT LENT THIS `let` ON THE CURRENT PATH — `NotLent` where none did.** From
 	// that send on the graph is frozen (E3160, `Parser.requireNotLentThrough`). Path-sensitive like `movedFrom` and
 	// carried by `Parser.MoveMark` for its reason: a lend on one arm of an `if` is not before a door on the other,
 	// and past a join a lend on any reaching path is.
-	export var lentOnPath as TokenIndex = NotLent
+	export var lentOnPath as ElementIndex = NotLent
 
 	// The merge renumbering that last rewrote this binding's type ids (`ParseStaging.renumberArtifact`). One
 	// binding is filed in several places, and a name renumbering applied twice moves an id it already moved.
@@ -913,14 +913,11 @@ end 'VarInfo'
 
 export typealias VarInfoMap = Map with (ByteArray, VarInfo)
 
-// A list of the doors a binding waits on, by its place in the parser's `moveSiteLists`; the first is the empty one.
-module typealias MoveSiteListIndex = int(0 to u64.max)
-
-module let NoMoveSiteList = 0 as MoveSiteListIndex
+module let NoMoveSiteList = 0 as ElementIndex
 
 // `VarInfo.lentAt` of a binding no send has lent. Token 0 opens its file, and no send argument can: a send
 // stands inside a function body.
-module let NotLent = 0 as TokenIndex
+module let NotLent = 0 as ElementIndex
 
 // What E3073 needs about one `async <call>` spawn and cannot get anywhere else: the text to quote and the
 // place to point at. See `Project.asyncSpawnSites`.
@@ -941,7 +938,7 @@ export type AsyncSpawnSite
 end 'AsyncSpawnSite'
 
 // `asyncCall` op index ⇒ that spawn's quotable text and position. See `Project.asyncSpawnSites`.
-export typealias AsyncSpawnSiteMap = Map with (OpIndex, AsyncSpawnSite)
+export typealias AsyncSpawnSiteMap = Map with (ElementIndex, AsyncSpawnSite)
 
 // ⭐⭐ **WHAT THE ACYCLIC BLOCKING GRAPH NEEDS ABOUT ONE `await` AND CANNOT GET AT ITS OWN TIER (SV2).**
 // Whether an `await` blocks on a SERVICE — and on which — is `Parser.awaitedPromiseFacts`' answer, and that
@@ -965,8 +962,8 @@ export type ServiceAwaitSite
 end 'ServiceAwaitSite'
 
 // `await`/`tryAwait` op index ⇒ the service its reply comes from. See `ServiceAwaitSite`.
-export typealias ServiceAwaitSiteMap = Map with (OpIndex, ServiceAwaitSite)
-export typealias RefusedOverloadCallSet = Set with OpIndex
+export typealias ServiceAwaitSiteMap = Map with (ElementIndex, ServiceAwaitSite)
+export typealias RefusedOverloadCallSet = Set with ElementIndex
 
 // ⭐⭐ **WHAT THE SHARED-GLOBAL RULE NEEDS ABOUT ONE ACCESS TO MODULE STORAGE, AND CANNOT GET AT ITS OWN
 // TIER (E3143).** A global's write lowers to `globalAddr` + `storeIndirect` and its read to `globalAddr` +
@@ -1032,7 +1029,7 @@ export union ModuleSlotReader
 end 'ModuleSlotReader'
 
 // An op index inside the accessing statement ⇒ the module slot it touches. See `ModuleVarAccessSite`.
-export typealias ModuleVarAccessSiteMap = Map with (OpIndex, ModuleVarAccessSite)
+export typealias ModuleVarAccessSiteMap = Map with (ElementIndex, ModuleVarAccessSite)
 
 export type RegistryUseSite
 	export let key as ByteArray
@@ -1043,7 +1040,7 @@ export type RegistryUseSite
 	end 'create'
 end 'RegistryUseSite'
 
-export typealias RegistryUseSiteMap = Map with (OpIndex, RegistryUseSite)
+export typealias RegistryUseSiteMap = Map with (ElementIndex, RegistryUseSite)
 
 // `unwritten` until a file records its first registry use: most files name no key, and a Map per
 // artifact would be an allocation every parse pays.
@@ -1055,11 +1052,11 @@ end 'RegistryUseSiteTable'
 export let noRegistryUseSites = RegistryUseSiteTable.unwritten
 
 // ⭐ `__mm_alloc` call op index ⇒ the mm-trace TAG that box carries. See `Project.allocTagSites`.
-export typealias AllocTagSiteMap = Map with (OpIndex, MmTag)
+export typealias AllocTagSiteMap = Map with (ElementIndex, MmTag)
 
 // ⭐ `__ds_name_id` call op index ⇒ the compile-time NAME that call interns. See
 // `Project.debugStreamNameSites`.
-export typealias DebugStreamNameSiteMap = Map with (OpIndex, ByteArray)
+export typealias DebugStreamNameSiteMap = Map with (ElementIndex, ByteArray)
 
 // ⭐⭐ **WHICH IMAGE-DATA RECORD A MODULE-LEVEL `let` IS — the three shapes, and the whole of what a
 // materializing site cannot read off its own op.**
@@ -1098,23 +1095,23 @@ export union ImmortalRecordKind
 	// not a `__ManagedMemory` record and no `constArrayLiteral` op can carry it.
 	//
 	// ⚠ Declared after `stringTable`.
-	containerBox(nodes ImmortalBoxNodeArray, root ImmortalBoxNodeId)
+	containerBox(nodes ImmortalBoxNodeArray, root ElementIndex)
 end 'ImmortalRecordKind'
 
 // ⭐ The `constArrayLiteral` op indices whose record is IMAGE DATA rather than an allocation, each carrying
 // which shape it is — `constBlob` or `emptyContainer`, never `stringTable`. See
 // `Project.immortalConstArraySites`.
-export typealias ImmortalConstArraySiteMap = Map with (OpIndex, ImmortalRecordKind)
+export typealias ImmortalConstArraySiteMap = Map with (ElementIndex, ImmortalRecordKind)
 
 // ⭐⭐ **STD** op index ⇒ the compile-time `element_size@24` stamp of the container that call operates on.
 // ⚠ The three maps above are keyed by **MAXON** op indices and are folded by `mergeArtifact`; this one is
 // keyed by an index into the **Std** module's `ops` and is never merged. The name says `stdOp` for that
 // reason. See `Project.stdOpElementStrides`.
-export typealias StdOpElementStrideMap = Map with (OpIndex, ElementStride)
+export typealias StdOpElementStrideMap = Map with (ElementIndex, ElementStride)
 
 // ⭐⭐ The **STD** op indices, in `StdOpElementStrideMap`'s key space, whose container's element owes no drop.
 // See `Project.stdOpTrivialElementSites`.
-export typealias StdOpTrivialElementSiteSet = Set with OpIndex
+export typealias StdOpTrivialElementSiteSet = Set with ElementIndex
 
 // A list of BINDINGS, held by reference (VarInfo is a heap `type`). Scope keeps the
 // bindings a frame displaced in one; the parser keeps its mutable bindings in one.
@@ -1203,9 +1200,9 @@ export type UnusedBindingCandidate
 	export let binding as VarInfo
 	export let nameRange as SourceRange
 	export let kind as UnusedBindingKind
-	export let declToken as TokenIndex
+	export let declToken as ElementIndex
 
-	export static function create(binding VarInfo, nameRange SourceRange, kind UnusedBindingKind, declToken TokenIndex) returns UnusedBindingCandidate
+	export static function create(binding VarInfo, nameRange SourceRange, kind UnusedBindingKind, declToken ElementIndex) returns UnusedBindingCandidate
 		return Self{binding: binding, nameRange: nameRange, kind: kind, declToken: declToken}
 	end 'create'
 end 'UnusedBindingCandidate'
@@ -1315,6 +1312,30 @@ end 'RangedTypeAlias'
 export typealias CollidedTypeNameSet = Set with ByteArray
 
 export typealias RangedTypeAliasArray = Array with RangedTypeAlias
+
+export type AliasImplementsClause
+	export var name as ByteArray
+	export var parentName as ByteArray
+	export var visibility as Visibility
+	export var declFilePath as FilePath
+	export var isFloat as bool
+	export var low as ParsedInt
+	export var high as ParsedInt
+
+	export static function create(name ByteArray, parentName ByteArray, visibility Visibility, declFilePath FilePath, isFloat bool, low ParsedInt, high ParsedInt) returns AliasImplementsClause
+		return Self{name: name, parentName: parentName, visibility: visibility, declFilePath: declFilePath, isFloat: isFloat, low: low, high: high}
+	end 'create'
+end 'AliasImplementsClause'
+
+export typealias AliasImplementsClauseArray = Array with AliasImplementsClause
+
+export union AliasImplementsVerdict
+	resolved
+	cycle
+	notARangedAlias
+	rangeDoesNotFit
+	primitiveDiffers(own String, parents String)
+end 'AliasImplementsVerdict'
 
 // One source file's path ⇒ the index its first coverage point took in `Project.covPoints`.
 export typealias CovPointBaseMap = Map with (String, CovPointId)
@@ -1898,8 +1919,8 @@ export type RangedAliasRegistry
 		fingerprint.note("storageBytes", value: self.storageBytes.count())
 		fingerprint.note("packedBits", value: self.packedBits.count())
 		fingerprint.note("nameable", value: self.nameable.count())
-		fingerprint.note("corpusDeclaringFiles", value: self.corpusDeclaringFiles.count() as EntryCount)
-		fingerprint.note("underlyingContested", value: self.underlyingContested.count() as EntryCount)
+		fingerprint.note("corpusDeclaringFiles", value: self.corpusDeclaringFiles.count())
+		fingerprint.note("underlyingContested", value: self.underlyingContested.count())
 		fingerprint.note("rangeContested", value: self.rangeContested.count())
 		fingerprint.closeGroup()
 	end 'noteFingerprint'
@@ -3384,13 +3405,13 @@ export type RangeCheckSite
 	export var value as ValueId
 	export var target as RangeCheckSiteTarget
 	export var block as BlockId
-	export var maxonOpPos as BlockOpPos
-	export var stdOpPos as BlockOpPos
+	export var maxonOpPos as ElementIndex
+	export var stdOpPos as ElementIndex
 	export var line as LineNumber
 	export var column as ColumnNumber
 
 	// `stdOpPos` is not a parameter: it is the LOWERING's to write, and the parser has no way to know it.
-	export static function create(value ValueId, target RangeCheckSiteTarget, block BlockId, maxonOpPos BlockOpPos, line LineNumber, column ColumnNumber) returns RangeCheckSite
+	export static function create(value ValueId, target RangeCheckSiteTarget, block BlockId, maxonOpPos ElementIndex, line LineNumber, column ColumnNumber) returns RangeCheckSite
 		return Self{value: value, target: target, block: block, maxonOpPos: maxonOpPos, stdOpPos: 0, line: line, column: column}
 	end 'create'
 end 'RangeCheckSite'
@@ -3418,9 +3439,10 @@ export let noBorrowOperands = BorrowOperandsColumn.unwritten
 // again: that lookup cannot see an alias declared inside a type or extension body, and can land on
 // another file's alias of the same name.
 //
-// The arm-served index resolves `ElementIndex` in the CALLEE's file (`recordArmServedIndexRangeCheck`).
-// Re-resolved against the calling file, a program's own `ElementIndex`, or `stdlib/Vector.maxon`'s twin,
-// would decide what `Array.set` accepts; `typealias-file-scope/*contested-element-index*` pins it.
+// The arm-served index resolves `ElementIndex` in the CALLEE's file
+// (`requireArmServedIndexArgument`). Re-resolved against the calling file, a program's own
+// `ElementIndex` would decide what `Array.set` accepts;
+// `typealias-file-scope/*contested-element-index*` pins it.
 export union RangeCheckSiteTarget
 	alias(alias RangedTypeAlias)
 	callArgument(callResult ValueId, argIndex ParamCount, label ByteArray, sourceMayBeNegative bool)
@@ -4172,7 +4194,7 @@ export type FunctionAliasRegistry
 		fingerprint.note("byName", value: self.byName.count())
 		fingerprint.note("multiplyDeclared", value: self.multiplyDeclared.count())
 		fingerprint.note("nameable", value: self.nameable.count())
-		fingerprint.note("corpusDeclaringFiles", value: self.corpusDeclaringFiles.count() as EntryCount)
+		fingerprint.note("corpusDeclaringFiles", value: self.corpusDeclaringFiles.count())
 		fingerprint.note("shapeScoped", value: self.shapeScoped.count())
 		fingerprint.closeGroup()
 	end 'noteFingerprint'
@@ -4249,13 +4271,13 @@ export typealias FunctionShapeMap = Map with (ByteArray, FunctionShape)
 // The index of a field within its struct's declaration order. It IS the field's identity — the
 // offset is derived from it (`StructLayout.offsetOfField`) rather than stored, so there is no
 // second number to keep in step. Bounded by the fields a struct may declare.
-export typealias FieldIndex = int(0 to 65535)
+export typealias FieldIndex = int(0 to 65535) implements ElementIndex
 
 // The index of a case within its enum's declaration order — the enum twin of `FieldIndex`, and
 // bounded the same way (the cases an enum may declare). It IS the case's identity: an enum RANGE
 // arm is a slice of this index (OPEN #21), never of the tag, which is the whole point of storing
 // cases in declaration order.
-export typealias CaseIndex = int(0 to 65535)
+export typealias CaseIndex = int(0 to 65535) implements ElementIndex
 
 // ⭐ **ONE 8-BYTE SLOT IS WHAT A FIELD OCCUPIES, AND THE LAYOUT COUNTS SLOTS RATHER THAN BYTES.** It is
 // not an alignment convenience: a struct FIELD of struct type is a POINTER (`valueTagToStdType(structRef)`
@@ -4482,11 +4504,11 @@ export typealias FieldDefaultArray = Array with FieldDefault
 // witness SLOT, which is the `(parameter, interface)` pair, and one slot holds one table however the
 // associated positions are written.
 export type WhereConstraint
-	export let typeParamIndex as TypeParamPosition
+	export let typeParamIndex as ElementIndex
 	export let interfaceName as ByteArray
 	export let associatedBindings as ByteArrayArray
 
-	export static function create(typeParamIndex TypeParamPosition, interfaceName ByteArray, associatedBindings ByteArrayArray = sharedEmptyDeclaredConformances) returns WhereConstraint
+	export static function create(typeParamIndex ElementIndex, interfaceName ByteArray, associatedBindings ByteArrayArray = sharedEmptyDeclaredConformances) returns WhereConstraint
 		return Self{typeParamIndex: typeParamIndex, interfaceName: interfaceName, associatedBindings: associatedBindings}
 	end 'create'
 end 'WhereConstraint'
@@ -4559,7 +4581,7 @@ end 'conditionalExtensionWithheldMessage'
 
 export function renderWhereConstraints(constraints WhereConstraintArray, paramNames ByteArrayArray) returns String
 	var text = "where "
-	var previousParam = 0 as TypeParamPosition
+	var previousParam = 0 as ElementIndex
 
 	for i in 0 upto constraints.count() 'eachConstraint'
 		let constraint = try constraints.get(i) otherwise panic("renderWhereConstraints: constraints.get OOB at {i} below count {constraints.count()}")
@@ -5264,7 +5286,7 @@ end 'EnumBackingField'
 // The index of one entry in a case's flat entry array — `Parser.readEnumBackingEntryInto` pushes them and
 // `Parser.requireEnumBackingEntryFilling` hands them back. Bounded like `FieldIndex`, and named apart from
 // it because the two count different things: a field of a struct, and an entry of one case's backing.
-export typealias EnumBackingEntryIndex = int(0 to 65535)
+export typealias EnumBackingEntryIndex = int(0 to 65535) implements ElementIndex
 
 // ⭐⭐ **WHICH STRUCT CONSTANT AN ENTRY FILLS A FIELD OF** — `RootBackingGroup` for the case's own backing
 // struct, and the OWNING ENTRY's index for a nested one. The two live in one number space because the root
@@ -8072,7 +8094,7 @@ export function slotCallArgs(paramNames ByteArrayArray, args ValueIdArray, argLa
 	let paramCount = paramNames.count()
 
 	if args.count() != paramCount 'arity'
-		return ArgSlotResult.arityMismatch(paramCount, got: args.count())
+		return ArgSlotResult.arityMismatch(paramCount as ParamCount, got: args.count() as ParamCount)
 	end 'arity'
 
 	// Fresh per-call buffers (paramCount is tiny); `filled` starts all-false so the
@@ -8118,7 +8140,7 @@ end 'slotCallArgs'
 
 // A synthesized default's slot is checked against `paramNames` because the parser filled the defaults
 // from one overload member, and the member resolved later can declare fewer parameters.
-function callArgSlot(paramNames ByteArrayArray, argDefaultSlots ParamCountArray, sourceCount ParamCount, argIndex ParamCount, label ByteArray) returns ParamCount throws MapError
+function callArgSlot(paramNames ByteArrayArray, argDefaultSlots ParamCountArray, sourceCount ElementIndex, argIndex ParamCount, label ByteArray) returns ParamCount throws MapError
 	if argIndex < sourceCount 'sourceWritten'
 		return try argSlotPosition(paramNames, argIndex: argIndex, label: label)
 	end 'sourceWritten'
@@ -8618,7 +8640,7 @@ export type Project
 	// instantiation.
 	export var stdOpTrivialElementSites as StdOpTrivialElementSiteSet
 
-	// (funcIndex, ValueId) -> Maxon OpIndex for every op-defined value in the
+	// (funcIndex, ValueId) -> Maxon op index for every op-defined value in the
 	// whole-program Maxon module (see ValueOrigin). Folded from the per-file artifact
 	// tables by `mergeArtifact`, in the same source-path order the module merges. A
 	// MAXON-TIER table read on the cold path only — today the backend's E5001

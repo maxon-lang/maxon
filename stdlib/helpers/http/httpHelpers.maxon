@@ -1,6 +1,5 @@
 /// Internal helpers that build and parse HTTP/1.1 messages for `HttpClient` and `HttpServer`.
 /// @category Internal
-typealias HeaderLineIndex = int(0 to u64.max)
 typealias IgnoredLineTally = int(0 to 4)
 typealias StatusNumber = int(i64.min to i64.max)
 
@@ -100,7 +99,7 @@ public function httpConnectTargetOf(url URL) returns HttpConnectTarget throws Ht
 	let host = try url.host() otherwise throw HttpError.invalidUrl
 	let port = try url.port() otherwise DefaultHttpPort
 
-	return HttpConnectTarget.create(host, port: port as NetworkPort)
+	return HttpConnectTarget.create(host, port: port)
 end 'httpConnectTargetOf'
 
 public function httpBuildRequest(request HttpRequest, target HttpConnectTarget) returns String
@@ -533,7 +532,7 @@ public function httpResponseStatusOf(head String) returns HttpResponseStatus thr
 	return HttpResponseStatus.final(HttpResponse.create(statusCodeOf(codeInt as HttpStatusNumber), reasonPhrase: reason, responseHeaders: headers, responseBody: ""))
 end 'httpResponseStatusOf'
 
-function parseHeaderLines(lines StringArray, from HeaderLineIndex, into HttpHeaders, side HttpMessageSide) throws HeaderBlockFault
+function parseHeaderLines(lines StringArray, from ElementIndex, into HttpHeaders, side HttpMessageSide) throws HeaderBlockFault
 	let fieldLines = try unfoldedFieldLines(lines, from: from, side: side)
 
 	for line in fieldLines 'eachLine'
@@ -549,7 +548,7 @@ function parseHeaderLines(lines StringArray, from HeaderLineIndex, into HttpHead
 	end 'eachLine'
 end 'parseHeaderLines'
 
-function unfoldedFieldLines(lines StringArray, from HeaderLineIndex, side HttpMessageSide) returns StringArray throws HeaderBlockFault
+function unfoldedFieldLines(lines StringArray, from ElementIndex, side HttpMessageSide) returns StringArray throws HeaderBlockFault
 	var logical = StringArray.create()
 	var lineIdx = from
 

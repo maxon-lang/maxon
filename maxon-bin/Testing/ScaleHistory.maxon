@@ -197,10 +197,6 @@ export typealias Delta = int(i64.min to i64.max)
 
 typealias GroupIndex = int(0 to u64.max)
 
-// A column of one of the log's markdown tables: 0 is `date`, 1 is `minted at`, 2 is `change`, and the
-// rest are rungs.
-typealias ColumnIndex = int(0 to u64.max)
-
 let SecondsPerDay = 86400 as UnixSeconds
 let DigitGroupSize = 3 as GroupIndex
 
@@ -429,7 +425,7 @@ function assertLeadingHeadings(header StringArray, marker String, source String)
 	try assertHeading(header, index: NoteColumnIndex, expected: NoteColumnHeading, marker: marker, source: source)
 end 'assertLeadingHeadings'
 
-function assertHeading(header StringArray, index ColumnIndex, expected String, marker String, source String) throws ScaleError
+function assertHeading(header StringArray, index ElementIndex, expected String, marker String, source String) throws ScaleError
 	let heading = try cellAt(header, index: index, source: source)
 
 	if heading != expected 'wrongColumn'
@@ -739,7 +735,7 @@ end 'byteColumnOf'
 
 // One cell of an already-parsed row, as a THROW rather than a panic: every caller is reading a file a
 // human may have edited, so a cell that is not there is bad input, not a bug in this file.
-function cellAt(cells StringArray, index ColumnIndex, source String) returns String throws ScaleError
+function cellAt(cells StringArray, index ElementIndex, source String) returns String throws ScaleError
 	return try cells.get(index) otherwise throw ScaleError.reason("a row in {source} has {cells.count()} cell(s); column {index} was expected")
 end 'cellAt'
 
@@ -752,7 +748,7 @@ end 'cellAt'
 // which table or which column. Adding a context parameter THERE would make four other call sites carry a
 // sentence two of them discard unread; the caller that knows the document is the one that says so. This
 // is that caller, and the column index is what turns "a cell" into a RUNG a reader can go and look at.
-function parseGroupedCount(cell String, source String, column ColumnIndex) returns ParsedCount throws ScaleError
+function parseGroupedCount(cell String, source String, column ElementIndex) returns ParsedCount throws ScaleError
 	let value = try parseCount(cell.replace(",", with: "")) otherwise (error) 'notACount'
 		throw ScaleError.reason("column {column} of a row in {source} is not a count — {scaleErrorText(error)}. Every column past the {LeadingColumns} leading ones is one rung's number, written with digit-group commas.")
 	end 'notACount'

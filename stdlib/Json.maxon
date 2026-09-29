@@ -6,7 +6,6 @@
 /// arena of `JsonNode`s; arrays and objects reference their children by
 /// `JsonNodeId`. Callers walk the tree through accessor methods on `JsonDoc`
 /// rather than pattern-matching a recursive union.
-typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 /// A handle into a `JsonDoc`'s node arena. The root of every parsed document
@@ -14,10 +13,8 @@ typealias ByteArray = Array with Byte
 /// Exported so callers can hold and pass node ids by name across files.
 /// An id is an index into that arena, and the arena is one `Array`; a child count and a child index
 /// are the same over the children list. All three are therefore bounded by a signed machine word.
-public typealias JsonNodeId = int(0 to u64.max)
+public typealias JsonNodeId = int(0 to u64.max) implements ElementIndex
 public typealias JsonNodeIdArray = Array with JsonNodeId
-public typealias ChildCount = int(0 to u64.max)
-public typealias ChildIndex = int(0 to u64.max)
 
 public typealias JsonInt = int(i64.min to i64.max)
 public typealias JsonFloat = float(f64.min to f64.max)
@@ -190,7 +187,7 @@ public type JsonDoc
 	end 'getBool'
 
 	/// Array length. Throws if the node isn't an array.
-	public function arrayLength(id JsonNodeId) returns ChildCount throws JsonAccessError
+	public function arrayLength(id JsonNodeId) returns ElementIndex throws JsonAccessError
 		let node = get(id)
 
 		match node.kind 'k'
@@ -200,7 +197,7 @@ public type JsonDoc
 	end 'arrayLength'
 
 	/// Array element by index.
-	public function arrayAt(id JsonNodeId, index ChildIndex) returns JsonNodeId throws JsonAccessError
+	public function arrayAt(id JsonNodeId, index ElementIndex) returns JsonNodeId throws JsonAccessError
 		let node = get(id)
 
 		match node.kind 'k'
@@ -304,11 +301,11 @@ type JsonParser
 	end 'commitRoot'
 
 	function atEnd() returns bool
-		return pos >= bytes.count()
+		return pos >= bytes.count() as BytePos
 	end 'atEnd'
 
 	function peek() returns Byte throws JsonError
-		if pos >= bytes.count() 'eof'
+		if pos >= bytes.count() as BytePos 'eof'
 			throw JsonError.unexpectedEof
 		end 'eof'
 
@@ -318,7 +315,7 @@ type JsonParser
 	end 'peek'
 
 	function advance() throws JsonError
-		if pos >= bytes.count() 'eof'
+		if pos >= bytes.count() as BytePos 'eof'
 			throw JsonError.unexpectedEof
 		end 'eof'
 
@@ -328,7 +325,7 @@ type JsonParser
 	function skipWhitespace()
 		let len = bytes.count()
 
-		while pos < len 'scan'
+		while pos < len as BytePos 'scan'
 			let b = try bytes.get(pos) otherwise 'getErr'
 				panic("JsonParser.skipWhitespace: pos < len just checked")
 			end 'getErr'
@@ -746,7 +743,7 @@ function numberFromBytes(bytes ByteArray, start BytePos, endPos BytePos) returns
 	var intValue = 0.0
 
 	while i < endPos 'intLoop'
-		let b = try bytes.get(i) otherwise 'b2'
+		let b = try bytes.get(i as ElementIndex) otherwise 'b2'
 			throw JsonError.invalidNumber
 		end 'b2'
 
@@ -762,7 +759,7 @@ function numberFromBytes(bytes ByteArray, start BytePos, endPos BytePos) returns
 	var fracScale = 1.0
 
 	if i < endPos 'maybeDot'
-		let b = try bytes.get(i) otherwise 'b3'
+		let b = try bytes.get(i as ElementIndex) otherwise 'b3'
 			throw JsonError.invalidNumber
 		end 'b3'
 
@@ -770,7 +767,7 @@ function numberFromBytes(bytes ByteArray, start BytePos, endPos BytePos) returns
 			i = i + 1
 
 			while i < endPos 'fracLoop'
-				let fb = try bytes.get(i) otherwise 'b4'
+				let fb = try bytes.get(i as ElementIndex) otherwise 'b4'
 					throw JsonError.invalidNumber
 				end 'b4'
 
@@ -793,7 +790,7 @@ function numberFromBytes(bytes ByteArray, start BytePos, endPos BytePos) returns
 	var expNegative = false
 
 	if i < endPos 'maybeExp'
-		let b = try bytes.get(i) otherwise 'b5'
+		let b = try bytes.get(i as ElementIndex) otherwise 'b5'
 			throw JsonError.invalidNumber
 		end 'b5'
 
@@ -801,7 +798,7 @@ function numberFromBytes(bytes ByteArray, start BytePos, endPos BytePos) returns
 			i = i + 1
 
 			if i < endPos 'expSign'
-				let s = try bytes.get(i) otherwise 'b6'
+				let s = try bytes.get(i as ElementIndex) otherwise 'b6'
 					throw JsonError.invalidNumber
 				end 'b6'
 
@@ -816,7 +813,7 @@ function numberFromBytes(bytes ByteArray, start BytePos, endPos BytePos) returns
 			end 'expSign'
 
 			while i < endPos 'expLoop'
-				let eb = try bytes.get(i) otherwise 'b7'
+				let eb = try bytes.get(i as ElementIndex) otherwise 'b7'
 					throw JsonError.invalidNumber
 				end 'b7'
 

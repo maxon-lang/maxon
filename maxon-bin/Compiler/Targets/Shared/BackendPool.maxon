@@ -54,8 +54,8 @@ typealias BackendReply = Promise with (BackendUnitReply, BackendWorker.run.error
 typealias BackendReplyArray = Array with BackendReply
 typealias BackendWorkerHandleArray = Array with BackendWorker.handle
 
-// A position in a pool's own arrays — a worker slot, an in-flight reply, a job in the dispatch order.
-export typealias PoolSlot = int(0 to u64.max)
+export typealias InFlightCount = int(0 to u64.max)
+typealias InFlightCountArray = Array with InFlightCount
 
 // How many workers a pool holds, or how many jobs it has to run. NARROWED to exclude zero, which is what
 // lets the round-robin and the key unpacking DIVIDE by one: both are reached only past a guard that has
@@ -63,44 +63,39 @@ export typealias PoolSlot = int(0 to u64.max)
 // of being remembered at it.
 export typealias PoolSize = int(1 to u32.max)
 
-export typealias PoolSlotArray = Array with PoolSlot
+export typealias PoolSlotArray = Array with ElementIndex
 
-// One job of a pool, by its position in the caller's own job list — a function index for the two backend
-// pools, a position among the files the front end dispatches.
-export typealias PoolJob = int(0 to u64.max)
-export typealias PoolJobArray = Array with PoolJob
+export typealias PoolJobArray = Array with ElementIndex
 
 // How much work one job is — what the dispatch orders by: a function's live ops, a file's bytes or tokens.
 export typealias PoolJobSize = int(0 to u64.max)
 export typealias PoolJobSizeArray = Array with PoolJobSize
 
-// A position in a pool's landing array — where one job's answer was pushed as it arrived.
-export typealias LandingSlot = int(0 to u64.max)
-export typealias LandingSlotArray = Array with LandingSlot
+export typealias LandingSlotArray = Array with ElementIndex
 
 // ⭐ **WHERE EACH JOB'S ANSWER LANDED — the column that turns arrival order back into job order.** A drain
 // pushes answers as they arrive and records the slot here; the fold after the drain walks the jobs in
 // order and reads each one's answer through `slotOf`. One record for every pool.
 export type LandingSlots
 	var slotOfJob as LandingSlotArray
-	var jobCount as PoolJob
+	var jobCount as ElementIndex
 
 	// Filled with the one value no landing slot has — the job count — so a job that never landed is a panic
 	// at the fold rather than job 0's answer folded twice.
-	export static function create(jobCount PoolJob) returns LandingSlots
+	export static function create(jobCount ElementIndex) returns LandingSlots
 		var slotOfJob = LandingSlotArray.create()
-		slotOfJob.refill(jobCount as ElementIndex, value: jobCount as LandingSlot)
+		slotOfJob.refill(jobCount, value: jobCount)
 		return Self{slotOfJob: slotOfJob, jobCount: jobCount}
 	end 'create'
 
-	export function record(job PoolJob, slot LandingSlot)
+	export function record(job ElementIndex, slot ElementIndex)
 		try self.slotOfJob.set(job, value: slot) otherwise panic("LandingSlots.record: slotOfJob.set OOB at {job} below {self.jobCount}")
 	end 'record'
 
-	export function slotOf(job PoolJob) returns LandingSlot
+	export function slotOf(job ElementIndex) returns ElementIndex
 		let slot = try self.slotOfJob.get(job) otherwise panic("LandingSlots.slotOf: slotOfJob.get OOB at {job} below {self.jobCount}")
 
-		if slot == self.jobCount as LandingSlot 'neverLanded'
+		if slot == self.jobCount 'neverLanded'
 			panic("LandingSlots.slotOf: job {job} never came home from the pool — the drain awaits every reply, so a job with no landing slot is a dispatch that never happened")
 		end 'neverLanded'
 
@@ -129,11 +124,11 @@ export type PoolDispatch
 	var sizeInDispatchOrder as PoolJobSizeArray
 	var jobCount as PoolSize
 	var workerCount as PoolSize
-	var dispatched as PoolSlot
+	var dispatched as ElementIndex
 	var replyJob as PoolJobArray
 	var replyWorker as PoolSlotArray
 	var replySize as PoolJobSizeArray
-	var outstandingPerWorker as PoolSlotArray
+	var outstandingPerWorker as InFlightCountArray
 	var inFlightSize as PoolJobSize
 	var sizeBound as InFlightSizeBound
 
@@ -155,14 +150,14 @@ export type PoolDispatch
 		var order = PoolJobArray.create()
 		var sizeInDispatchOrder = PoolJobSizeArray.create()
 		fillLongestFirstOrder(sizes, jobCount: jobCount, order: order, sizeInDispatchOrder: sizeInDispatchOrder)
-		var outstandingPerWorker = PoolSlotArray.create()
-		outstandingPerWorker.refill(workerCount as ElementIndex, value: 0 as PoolSlot)
+		var outstandingPerWorker = InFlightCountArray.create()
+		outstandingPerWorker.refill(workerCount as ElementIndex, value: 0 as InFlightCount)
 		return Self{order: order, sizeInDispatchOrder: sizeInDispatchOrder, jobCount: jobCount, workerCount: workerCount, dispatched: 0, replyJob: PoolJobArray.create(), replyWorker: PoolSlotArray.create(), replySize: PoolJobSizeArray.create(), outstandingPerWorker: outstandingPerWorker, inFlightSize: 0, sizeBound: sizeBound}
 	end 'withBound'
 
 	// How many jobs the fill hands out before the first await: the pipeline, or every job when there are
 	// fewer.
-	export function initialInFlight() returns PoolSlot
+	export function initialInFlight() returns InFlightCount
 		match self.sizeBound 'bound'
 			unbounded then break 'bound'
 			upTo(budget) then panic("PoolDispatch.initialInFlight: this dispatch is bounded at {budget} op(s) in flight, which a count-only fill cannot honour — fill it for as long as `fillAdmitsAnother` says so")
@@ -170,14 +165,14 @@ export type PoolDispatch
 
 		let pipeline = self.workerCount * JobsInFlightPerWorker
 		let inFlight = pipeline if pipeline < self.jobCount else self.jobCount
-		return inFlight as PoolSlot
+		return inFlight as InFlightCount
 	end 'initialInFlight'
 
 	export function fillAdmitsAnother() returns bool
 		return self.admitsAJobFor(self.fillWorker())
 	end 'fillAdmitsAnother'
 
-	export function admitsAJobFor(worker PoolSlot) returns bool
+	export function admitsAJobFor(worker ElementIndex) returns bool
 		if not self.hasUndispatched() 'nothingLeftToHandOut'
 			return false
 		end 'nothingLeftToHandOut'
@@ -191,7 +186,7 @@ export type PoolDispatch
 			return true
 		end 'theWorkerHoldsNothing'
 
-		if held >= JobsInFlightPerWorker as PoolSlot 'itsPipelineIsFull'
+		if held >= JobsInFlightPerWorker as InFlightCount 'itsPipelineIsFull'
 			return false
 		end 'itsPipelineIsFull'
 
@@ -208,22 +203,22 @@ export type PoolDispatch
 		end 'bound'
 	end 'inFlightSizeBudget'
 
-	function outstandingOf(worker PoolSlot) returns PoolSlot
+	function outstandingOf(worker ElementIndex) returns InFlightCount
 		return try self.outstandingPerWorker.get(worker) otherwise panic("PoolDispatch.outstandingOf: worker {worker} is not one of the {self.workerCount} this pool holds")
 	end 'outstandingOf'
 
 	// The worker the fill's next job goes to: round-robin over the pool.
-	export function fillWorker() returns PoolSlot
-		return try (self.dispatched mod (self.workerCount as PoolSlot)) otherwise panic("PoolDispatch.fillWorker: a pool of no workers never reaches the dispatch loop")
+	export function fillWorker() returns ElementIndex
+		return try (self.dispatched mod (self.workerCount as ElementIndex)) otherwise panic("PoolDispatch.fillWorker: a pool of no workers never reaches the dispatch loop")
 	end 'fillWorker'
 
 	export function hasUndispatched() returns bool
-		return self.dispatched < self.jobCount as PoolSlot
+		return self.dispatched < self.jobCount as ElementIndex
 	end 'hasUndispatched'
 
 	// Take the next job in dispatch order for `worker`. The caller pushes the worker's reply now, at the
 	// slot these columns just gained.
-	export function nextJob(worker PoolSlot) returns PoolJob
+	export function nextJob(worker ElementIndex) returns ElementIndex
 		let job = try self.order.get(self.dispatched) otherwise panic("PoolDispatch.nextJob: the dispatch order holds {self.order.count()} job(s) and slot {self.dispatched} is past the end — ask `hasUndispatched` first")
 		let size = try self.sizeInDispatchOrder.get(self.dispatched) otherwise panic("PoolDispatch.nextJob: the size column holds {self.sizeInDispatchOrder.count()} entry(ies) against {self.order.count()} job(s) — one walk fills both")
 		let held = self.outstandingOf(worker)
@@ -237,14 +232,14 @@ export type PoolDispatch
 	end 'nextJob'
 
 	// The worker holding the reply at `ready`, free once the caller lands that slot.
-	export function workerAt(ready ElementIndex) returns PoolSlot
+	export function workerAt(ready ElementIndex) returns ElementIndex
 		return try self.replyWorker.get(ready) otherwise panic("PoolDispatch.workerAt: {ready} is not an outstanding slot — {self.replyWorker.count()} are in flight")
 	end 'workerAt'
 
 	// Land the reply at `ready` — `awaitAny`'s answer over the caller's reply array — and say which job it
 	// was for. `outstanding` is that array's count before the caller removes its reply, so the two sequences
 	// are checked to be one.
-	export function land(ready ElementIndex, outstanding ElementIndex) returns PoolJob
+	export function land(ready ElementIndex, outstanding ElementIndex) returns ElementIndex
 		if outstanding != self.replyJob.count() 'columnsOutOfStep'
 			panic("PoolDispatch.land: the caller holds {outstanding} reply(ies) against {self.replyJob.count()} job(s) in flight — a reply was pushed without `nextJob`, or a job taken without its reply being pushed")
 		end 'columnsOutOfStep'
@@ -274,15 +269,15 @@ end 'PoolKind'
 // which is the whole of what pinning does. The job count bounds it because a worker with no job to run
 // is a mailbox and a green thread bought for nothing.
 //
-// `workerCount` is a `PoolJob` rather than a `PoolSize` because zero is a legal answer: a caller with
+// `workerCount` is an `ElementIndex` rather than a `PoolSize` because zero is a legal answer: a caller with
 // no jobs still logs its line, and each consumer casts to `PoolSize` past its own `> 0` guard.
 export type PoolSizing
-	export var workerCount as PoolJob
-	var processors as PoolJob
-	var jobCount as PoolJob
+	export var workerCount as ElementIndex
+	var processors as ElementIndex
+	var jobCount as ElementIndex
 
-	export static function forJobs(jobCount PoolJob) returns PoolSizing
-		let processors = Scheduler.processorCount() as PoolJob
+	export static function forJobs(jobCount ElementIndex) returns PoolSizing
+		let processors = Scheduler.processorCount() as ElementIndex
 
 		// `Scheduler.processorCount()` is declared `int(1 to i64.max)`, so this is belt and braces at the
 		// boundary the count arrives on: an empty pool runs nothing and reports nothing, which is a
@@ -487,7 +482,7 @@ export function lowerAndAllocateOnAWorkerPool(stdModule StdModule, target Target
 	let abi = CalleeAbiTable.build(funcNames)
 	var module = assembleTargetModule(stdModule)
 	let funcCount = stdModule.funcCount()
-	let sizing = PoolSizing.forJobs(funcCount as PoolJob)
+	let sizing = PoolSizing.forJobs(funcCount)
 
 	// Logged above the empty-module return, so a module of no functions still reports its pool.
 
@@ -506,8 +501,8 @@ export function lowerAndAllocateOnAWorkerPool(stdModule StdModule, target Target
 	end 'eachWorker'
 
 	var landed = BackendUnitLandingArray.create()
-	landed.reserve(funcCount as ElementIndex)
-	var slots = LandingSlots.create(funcCount as PoolJob)
+	landed.reserve(funcCount)
+	var slots = LandingSlots.create(funcCount)
 
 	// ⭐ **WHAT THE SCHEDULER DID WHILE THE POOL RAN.** A pool of W workers over P processors is only
 	// parallel if the runtime actually SPREADS it, and a work-STEAL is the one event that says an idle
@@ -527,7 +522,7 @@ export function lowerAndAllocateOnAWorkerPool(stdModule StdModule, target Target
 	// is a service that never ends and an exit that never comes.
 	workers.clear()
 
-	if refused < funcCount as FuncIndex 'aFunctionDidNotFitTheMachine'
+	if refused < funcCount 'aFunctionDidNotFitTheMachine'
 		try refuseForRegisterPressure(project, stdModule: stdModule, funcIndex: refused, target: target, abi: abi, usesGt: usesGt, pool: pool, callerSaved: callerSaved, file: file)
 	end 'aFunctionDidNotFitTheMachine'
 
@@ -573,10 +568,10 @@ end 'assembleTargetModule'
 // ⚠ **`awaitAny` IS WHAT KEEPS THE POOL BUSY.** Awaiting the promises in dispatch order would idle every
 // worker that finished early behind whichever job is at the head — and the head is, by the longest-first
 // rule below, the biggest job in the module.
-function drainTheBackendPool(stdModule StdModule, module TargetModule, workers BackendWorkerHandleArray, workerCount PoolSize, landed BackendUnitLandingArray, slots LandingSlots) returns FuncIndex
+function drainTheBackendPool(stdModule StdModule, module TargetModule, workers BackendWorkerHandleArray, workerCount PoolSize, landed BackendUnitLandingArray, slots LandingSlots) returns ElementIndex
 	// The sentinel is "one past the last function", spelled in the FUNCTION-INDEX space rather than the
 	// pool's: a refusal of function 0 has to be storable here, and `PoolSize` starts at one.
-	var refused = stdModule.funcCount() as FuncIndex
+	var refused = stdModule.funcCount()
 	var dispatch = PoolDispatch.boundedByInFlightSize(functionOpTallies(stdModule.functions, blocks: stdModule.blocks), workerCount: workerCount)
 	var replies = BackendReplyArray.create()
 
@@ -594,7 +589,7 @@ function drainTheBackendPool(stdModule StdModule, module TargetModule, workers B
 		let ready = __Builtins.awaitAny(replies)
 		let freedWorker = dispatch.workerAt(ready)
 		let job = dispatch.land(ready, outstanding: replies.count())
-		let funcIndex = job as FuncIndex
+		let funcIndex = job
 		let reply = try replies.remove(ready) otherwise panic("drainTheBackendPool: replies.remove({ready}) — `awaitAny` answered a slot of this very array")
 
 		if let answer = try await reply 'finished'
@@ -629,9 +624,9 @@ end 'workerGoneMessage'
 // style: a value this frame has taken a second reference to cannot be proven sole at the send, and the
 // only shape the check admits is a call whose every `return` is a record literal (see
 // `BackendUnit.extract`).
-function dispatchOneBackendJob(stdModule StdModule, workers BackendWorkerHandleArray, workerSlot PoolSlot, dispatch PoolDispatch, replies BackendReplyArray)
+function dispatchOneBackendJob(stdModule StdModule, workers BackendWorkerHandleArray, workerSlot ElementIndex, dispatch PoolDispatch, replies BackendReplyArray)
 	var worker = try workers.get(workerSlot) otherwise panic("dispatchOneBackendJob: workers.get OOB at {workerSlot} below count {workers.count()}")
-	let funcIndex = dispatch.nextJob(workerSlot) as FuncIndex
+	let funcIndex = dispatch.nextJob(workerSlot)
 	replies.push(worker.run(BackendUnit.extract(stdModule, func: stdModule.getFunc(funcIndex), funcIndex: funcIndex)))
 end 'dispatchOneBackendJob'
 
@@ -660,7 +655,7 @@ function fillLongestFirstOrder(sizes PoolJobSizeArray, jobCount PoolSize, order 
 
 	for k in 0 upto keys.count() 'largestFirst'
 		let key = try keys.get(keys.count() - 1 - k) otherwise panic("fillLongestFirstOrder: keys.get OOB walking back from {keys.count()}")
-		order.push((try (key mod keyStride) otherwise panic("fillLongestFirstOrder: a pool of no jobs never reaches the ordering")) as PoolJob)
+		order.push((try (key mod keyStride) otherwise panic("fillLongestFirstOrder: a pool of no jobs never reaches the ordering")) as ElementIndex)
 		sizeInDispatchOrder.push((try (key / keyStride) otherwise panic("fillLongestFirstOrder: a pool of no jobs never reaches the ordering")) as PoolJobSize)
 	end 'largestFirst'
 end 'fillLongestFirstOrder'
@@ -680,8 +675,8 @@ end 'functionOpTallies'
 // How many ops one function holds. Counted rather than collected: `IrModule.liveOpIndices` answers the
 // same number and allocates an array per function to do it, and this runs on every function of every
 // compile — here to order the dispatch, and in `extractUnitModule` to reserve a unit's op array.
-export function liveOpTallyOf(blocks IrBlockArray, func IrFunction) returns OpCount
-	var tally = 0 as OpCount
+export function liveOpTallyOf(blocks IrBlockArray, func IrFunction) returns ElementIndex
+	var tally = 0 as ElementIndex
 
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try blocks.get(blockRef) otherwise panic("liveOpTallyOf: blockRef {blockRef} is not in the module's blocks")

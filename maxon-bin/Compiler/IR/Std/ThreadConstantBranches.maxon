@@ -55,8 +55,6 @@
 // that rewrote anything, not only where a Y visibly lost its last predecessor.
 
 typealias ThreadedSiteCount = int(0 to u64.max)
-typealias CandidateIndex = int(0 to u64.max)
-typealias ArgSlot = int(0 to u64.max)
 
 // Why the rule left a SHAPED block alone. Counted per reason into the pass summary, so a reader can
 // tell what widening the rule would buy before writing the widening.
@@ -90,7 +88,7 @@ module type ThreadScratch
 end 'ThreadScratch'
 
 // The pass's summary line, from the tally its runs over every function summed into (`StdPassPool`).
-module function threadConstantBranchesSummary(tally StdPassTally, funcCount FuncCount) returns String
+module function threadConstantBranchesSummary(tally StdPassTally, funcCount ElementIndex) returns String
 	return "threadConstantBranches: threaded {tally.threadedSites} site(s) across {funcCount} function(s); shaped blocks left alone: {tally.threadRefusals.summary(ThreadRefusal.allCaseNames)}"
 end 'threadConstantBranchesSummary'
 
@@ -98,17 +96,17 @@ end 'threadConstantBranchesSummary'
 // which target it keeps. Positions are `func.blockRefs` positions, the key space `StdDominatorTree`
 // answers in.
 type ThreadCandidate
-	export var position as BlockRefIndex
-	export var blockRef as BlockRef
+	export var position as ElementIndex
+	export var blockRef as ElementIndex
 	export var blockId as BlockId
-	export var compareOpIdx as OpIndex
+	export var compareOpIdx as ElementIndex
 
 	// The compare's result, read only by the terminator.
 	export var condId as ValueId
 
 	// The block arg the compare tests, and its slot.
 	export var testedArg as ValueId
-	export var testedSlot as ArgSlot
+	export var testedSlot as ElementIndex
 	export var imm as Imm32
 	export var pred as StdCmpPred
 	export var operandType as StdType
@@ -119,10 +117,10 @@ type ThreadCandidate
 	// Filled by `admit`: the target every constant-passing predecessor decides (X), its position, and
 	// the other target (Y).
 	export var keptTarget as BlockId = 0
-	export var keptPosition as BlockRefIndex = 0
+	export var keptPosition as ElementIndex = 0
 	export var droppedTarget as BlockId = 0
 
-	static function create(position BlockRefIndex, blockRef BlockRef, blockId BlockId, compareOpIdx OpIndex, condId ValueId, testedArg ValueId, testedSlot ArgSlot, imm Imm32, pred StdCmpPred, operandType StdType, thenBlockId BlockId, elseBlockId BlockId) returns ThreadCandidate
+	static function create(position ElementIndex, blockRef ElementIndex, blockId BlockId, compareOpIdx ElementIndex, condId ValueId, testedArg ValueId, testedSlot ElementIndex, imm Imm32, pred StdCmpPred, operandType StdType, thenBlockId BlockId, elseBlockId BlockId) returns ThreadCandidate
 		return Self{position: position, blockRef: blockRef, blockId: blockId, compareOpIdx: compareOpIdx, condId: condId, testedArg: testedArg, testedSlot: testedSlot, imm: imm, pred: pred, operandType: operandType, thenBlockId: thenBlockId, elseBlockId: elseBlockId}
 	end 'create'
 end 'ThreadCandidate'
@@ -201,7 +199,7 @@ end 'collectThreadCandidates'
 // The last two shape questions, asked once the terminator is known to be a `condBranch`: it must test
 // THIS compare, the compare must read one of the block's own args, and the two arms must differ (one
 // arm named twice has two edges to tell apart — the case `foldConstants.foldCondBranch` refuses too).
-function pushIfBranchOnTheCompare(candidates ThreadCandidateArray, block IrBlock, position BlockRefIndex, blockRef BlockRef, compareOpIdx OpIndex, operands StdArithOperands, condId ValueId, thenBlockId BlockId, elseBlockId BlockId)
+function pushIfBranchOnTheCompare(candidates ThreadCandidateArray, block IrBlock, position ElementIndex, blockRef ElementIndex, compareOpIdx ElementIndex, operands StdArithOperands, condId ValueId, thenBlockId BlockId, elseBlockId BlockId)
 	if condId != operands.resultId or thenBlockId == elseBlockId 'notTheShape'
 		return
 	end 'notTheShape'
@@ -240,7 +238,7 @@ type FunctionAnalysis
 		return Self{constMap: constMap, tree: tree, stamps: DominatorStamps.build(tree), valueUses: valueUses, positionById: module.blockIndexById(func), refusals: scratch.tally.threadRefusals, branch: scratch.branch}
 	end 'gather'
 
-	function positionOf(blockId BlockId) returns BlockRefIndex
+	function positionOf(blockId BlockId) returns ElementIndex
 		return try self.positionById.get(blockId) otherwise panic("threadConstantBranches: block {blockId} is a branch target of this function but is not in its blockRefs")
 	end 'positionOf'
 end 'FunctionAnalysis'
@@ -290,7 +288,7 @@ function decideTargetFromPredecessors(module StdModule, func IrFunction, analysi
 	let join = module.getBlock(candidate.blockRef)
 
 	for k in 0 upto analysis.tree.pred.degree(candidate.position as CsrIndex) 'eachPred'
-		let predPosition = analysis.tree.pred.neighbour(candidate.position as CsrIndex, k: k) as BlockRefIndex
+		let predPosition = analysis.tree.pred.neighbour(candidate.position as CsrIndex, k: k)
 		let pred = module.blockAtPosition(func, position: predPosition)
 
 		if not predecessorBranchesOnlyTo(module, pred: pred, targetId: candidate.blockId, branch: analysis.branch) 'notABranchPredecessor'
@@ -352,7 +350,7 @@ end 'soleEdge'
 // Index C's block args by value id: which admitted candidate owns each (its index plus one, so the
 // zero-filled column carries its own "no candidate" answer, as `buildBlockIdIndex` does) and at which
 // slot. Both are what the read walk and the edge substitution look up per value, in O(1).
-function recordBlockArgOwner(module StdModule, candidate ThreadCandidate, index CandidateIndex, argOwner ValueIdArray, argSlot ValueIdArray)
+function recordBlockArgOwner(module StdModule, candidate ThreadCandidate, index ElementIndex, argOwner ValueIdArray, argSlot ValueIdArray)
 	let block = module.getBlock(candidate.blockRef)
 
 	for slot in 0 upto block.blockArgs.count() 'eachArg'
@@ -369,7 +367,7 @@ let UnownedBlockArg = 0 as ValueId
 // and parameters, which no candidate owns. Two questions rather than one returned union, for
 // `StdFoldableDef`'s measured reason: this is asked once per value READ in the function.
 function isOwnedByACandidate(valueId ValueId, argOwner ValueIdArray) returns bool
-	if valueId >= argOwner.count() 'notABlockArg'
+	if valueId >= argOwner.count() as ValueId 'notABlockArg'
 		return false
 	end 'notABlockArg'
 
@@ -379,14 +377,14 @@ end 'isOwnedByACandidate'
 
 // The candidate that owns block arg `valueId`. Panics for one no candidate owns — every caller has
 // asked `isOwnedByACandidate` first, and no index answers for "none" that is not some candidate's.
-function candidateOwning(valueId ValueId, argOwner ValueIdArray) returns CandidateIndex
+function candidateOwning(valueId ValueId, argOwner ValueIdArray) returns ElementIndex
 	let ownerPlusOne = try argOwner.get(valueId) otherwise panic("threadConstantBranches: argOwner.get OOB at {valueId}")
 
 	if ownerPlusOne == UnownedBlockArg 'unowned'
 		panic("threadConstantBranches: block arg {valueId} is owned by no admitted candidate — ask `isOwnedByACandidate` first")
 	end 'unowned'
 
-	return (ownerPlusOne - 1) as CandidateIndex
+	return (ownerPlusOne - 1) as ElementIndex
 end 'candidateOwning'
 
 // The last clause of the rule, for every admitted candidate in ONE walk of the function's reads: a
@@ -415,7 +413,7 @@ function refuseEscapingReads(module StdModule, func IrFunction, analysis Functio
 	end 'eachBlock'
 end 'refuseEscapingReads'
 
-function refuseEscapingOpReads(module StdModule, opIdx OpIndex, position BlockRefIndex, analysis FunctionAnalysis, candidates ThreadCandidateArray, argOwner ValueIdArray, reads StdValueUseSet)
+function refuseEscapingOpReads(module StdModule, opIdx ElementIndex, position ElementIndex, analysis FunctionAnalysis, candidates ThreadCandidateArray, argOwner ValueIdArray, reads StdValueUseSet)
 	reads.clear()
 	collectStdOpUses(module.getOp(opIdx), referenced: reads)
 
@@ -424,7 +422,7 @@ function refuseEscapingOpReads(module StdModule, opIdx OpIndex, position BlockRe
 	end 'eachRead'
 end 'refuseEscapingOpReads'
 
-function refuseIfReadEscapes(valueId ValueId, position BlockRefIndex, isEdgeArg bool, analysis FunctionAnalysis, candidates ThreadCandidateArray, argOwner ValueIdArray)
+function refuseIfReadEscapes(valueId ValueId, position ElementIndex, isEdgeArg bool, analysis FunctionAnalysis, candidates ThreadCandidateArray, argOwner ValueIdArray)
 	if not isOwnedByACandidate(valueId, argOwner: argOwner) 'unowned'
 		return
 	end 'unowned'
@@ -433,7 +431,7 @@ function refuseIfReadEscapes(valueId ValueId, position BlockRefIndex, isEdgeArg 
 	refuseIfOwnedReadEscapes(try candidates.get(index) otherwise panic("threadConstantBranches: candidates.get OOB at {index}"), valueId: valueId, position: position, isEdgeArg: isEdgeArg, analysis: analysis)
 end 'refuseIfReadEscapes'
 
-function refuseIfOwnedReadEscapes(candidate ThreadCandidate, valueId ValueId, position BlockRefIndex, isEdgeArg bool, analysis FunctionAnalysis)
+function refuseIfOwnedReadEscapes(candidate ThreadCandidate, valueId ValueId, position ElementIndex, isEdgeArg bool, analysis FunctionAnalysis)
 	if not candidate.admitted or valueId == candidate.testedArg 'nothingToCheck'
 		return
 	end 'nothingToCheck'
@@ -497,14 +495,14 @@ end 'applyAdmitted'
 // The rewrite of one join block C and its predecessors. The tree's predecessor list is read AFTER
 // earlier rewrites in the same function and is still exact — see the header for why no rewrite
 // changes an admitted candidate's predecessors.
-function threadOne(module StdModule, func IrFunction, origins DerivedOrigins, analysis FunctionAnalysis, candidate ThreadCandidate, index CandidateIndex, argOwner ValueIdArray, argSlot ValueIdArray, minter ValueMinter)
+function threadOne(module StdModule, func IrFunction, origins DerivedOrigins, analysis FunctionAnalysis, candidate ThreadCandidate, index ElementIndex, argOwner ValueIdArray, argSlot ValueIdArray, minter ValueMinter)
 	var join = module.getBlock(candidate.blockRef)
 	let dropped = module.blockAtPosition(func, position: analysis.positionOf(candidate.droppedTarget))
 	let droppedTakesArgs = dropped.blockArgs.count() != 0
 	let argsToDropped = edgeArgsTo(join, targetId: candidate.droppedTarget, takesArgs: droppedTakesArgs)
 
 	for k in 0 upto analysis.tree.pred.degree(candidate.position as CsrIndex) 'eachPred'
-		let predPosition = analysis.tree.pred.neighbour(candidate.position as CsrIndex, k: k) as BlockRefIndex
+		let predPosition = analysis.tree.pred.neighbour(candidate.position as CsrIndex, k: k)
 		var pred = module.blockAtPosition(func, position: predPosition)
 		let incoming = incomingArgAt(soleEdge(pred), k: candidate.testedSlot as ValueId, pred: pred, target: join)
 
@@ -539,7 +537,7 @@ end 'edgeArgsTo'
 // Give one non-constant predecessor P the test: the compare on its own incoming value, a `condBranch`
 // in C's then/else orientation with the dropped target's arm pointing there and the other arm at C, and
 // a fresh edge column — the edge to C it had, plus the edge to the dropped target when that takes args.
-function duplicateTestInto(module StdModule, pred IrBlock, candidate ThreadCandidate, index CandidateIndex, incoming ValueId, argsToDropped ValueIdArray, droppedTakesArgs bool, argOwner ValueIdArray, argSlot ValueIdArray, origins DerivedOrigins, minter ValueMinter)
+function duplicateTestInto(module StdModule, pred IrBlock, candidate ThreadCandidate, index ElementIndex, incoming ValueId, argsToDropped ValueIdArray, droppedTakesArgs bool, argOwner ValueIdArray, argSlot ValueIdArray, origins DerivedOrigins, minter ValueMinter)
 	var predBlock = pred
 	let argsToJoin = soleEdge(predBlock).argIds
 
@@ -567,7 +565,7 @@ end 'duplicateTestInto'
 // C's edge args to the dropped target, as P must pass them: a block arg of C becomes the value P passes
 // to that slot; anything else — including another join's block arg — is defined in a block dominating
 // C, hence P, and passes through.
-function substituteJoinArgs(argsToDropped ValueIdArray, incoming ValueIdArray, index CandidateIndex, argOwner ValueIdArray, argSlot ValueIdArray) returns ValueIdArray
+function substituteJoinArgs(argsToDropped ValueIdArray, incoming ValueIdArray, index ElementIndex, argOwner ValueIdArray, argSlot ValueIdArray) returns ValueIdArray
 	var substituted = ValueIdArray.create()
 
 	for argId in argsToDropped 'eachArg'

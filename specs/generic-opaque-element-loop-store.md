@@ -51,7 +51,7 @@ gate reports the second as exit 101 while the program still prints the right ans
 
 <!-- test: one-opaque-value-written-into-three-slots -->
 ```maxon
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 
 type Bag uses Element
 	typealias Items = Array with Element
@@ -111,7 +111,7 @@ TEXT that the store happened.
 
 <!-- test: a-loop-that-never-runs-still-releases-the-value -->
 ```maxon
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 
 type Bag uses Element
 	typealias Items = Array with Element
@@ -163,7 +163,7 @@ the poison byte.
 
 <!-- test: one-opaque-value-written-into-a-hundred-slots -->
 ```maxon
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 
 type Bag uses Element
 	typealias Items = Array with Element
@@ -219,7 +219,7 @@ is the one every slot was filled with.
 
 <!-- test: a-trivial-element-loop-store-is-inert -->
 ```maxon
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 typealias Num = int(0 to 1000)
 
 type Bag uses Element
@@ -271,7 +271,7 @@ takes away, and the one a body that fills a column and then reports what it fill
 
 <!-- test: the-filled-value-is-still-readable-after-the-loop -->
 ```maxon
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 
 type Bag uses Element
 	typealias Items = Array with Element
@@ -325,7 +325,7 @@ release is exit 101.
 
 <!-- test: a-borrowed-element-stored-in-a-loop-takes-a-reference-per-slot -->
 ```maxon
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 typealias Strs = Array with String
 
 type Bag uses Element
@@ -400,7 +400,7 @@ it took. A missing retain is a double free at teardown and a surplus one is exit
 
 <!-- test: a-consuming-sibling-called-in-a-loop-takes-a-reference-per-call -->
 ```maxon
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 
 type Bag uses Element
 	typealias Items = Array with Element

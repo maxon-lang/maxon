@@ -72,7 +72,7 @@ The shape the pass was opened for. In `pick`'s fragment the fast arm loads the e
 of the flag — while `__im_slow`'s call is followed by the `cmp`/`jcc` to `tryerr`.
 ```maxon
 typealias Word = int(i64.min to i64.max)
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 typealias WordArray = Array with Word
 
 function pick(a WordArray, i Idx) returns Word
@@ -104,7 +104,7 @@ handler on a genuine failure, while the fast arm's value phi still reaches the c
 elements read at nine indices: 0+1+2+3+4 from the array and 99 four times from the handler.
 ```maxon
 typealias Word = int(i64.min to i64.max)
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 typealias WordArray = Array with Word
 
 function pickOr(a WordArray, i Idx) returns Word
@@ -135,7 +135,7 @@ The block-form handler is a block of its own reached from the duplicated test; i
 function's exit, so a test that fell into the continuation instead would print 5 where 7 is right.
 ```maxon
 typealias Word = int(i64.min to i64.max)
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 typealias WordArray = Array with Word
 
 function probe(a WordArray, i Idx) returns Word
@@ -167,7 +167,7 @@ Every slot is written and read back, and the one write past the end must still t
 and land in the handler.
 ```maxon
 typealias Word = int(i64.min to i64.max)
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 typealias WordArray = Array with Word
 
 function put(a WordArray, i Idx, v Word) returns bool
@@ -235,7 +235,7 @@ The flag is read in the handler to decode `e`, so the rule refuses the site and 
 it always did: `indexOutOfBounds` is what an index past the end reports.
 ```maxon
 typealias Word = int(i64.min to i64.max)
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 typealias WordArray = Array with Word
 
 function classify(a WordArray, i Idx) returns Word
@@ -270,7 +270,7 @@ compare and the site is refused. The caller's own `otherwise` is the ordinary sh
 rewritten; the two must compose.
 ```maxon
 typealias Word = int(i64.min to i64.max)
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 typealias WordArray = Array with Word
 
 function twice(a WordArray, i Idx) returns Word throws ArrayError

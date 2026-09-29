@@ -23,14 +23,14 @@
 // `foldConstants.dropUnreachableBlocks` also rests on, and the one thing about `blockRefs` order that IS
 // guaranteed.
 
-// A dense column of block POSITIONS — the same non-negative integer as `BlockRefIndex` (the scalar,
-// declared beside `IrModule.blockIndexById`) and as `CsrGraph`'s own key space, so a column of them is
+// A dense column of block POSITIONS — the same `ElementIndex` as `IrModule.blockIndexById` holds
+// and as `CsrGraph`'s own key space, so a column of them is
 // the `CsrColumn` `buildCsr` takes with no conversion at any call site.
-export typealias BlockPositionColumn = Array with BlockRefIndex
+export typealias BlockPositionColumn = Array with ElementIndex
 
 export type StdDominatorTree
 	// `func.blockRefs.count()` — the node count every column below spans.
-	export var blockCount as BlockRefIndex
+	export var blockCount as ElementIndex
 
 	// Whether the ENTRY can reach this block. An unreachable block has no dominator (nothing on the way
 	// to it is on a path from the entry, because there is no such path), so `idom` is meaningless for it
@@ -80,13 +80,13 @@ export type StdDominatorTree
 	// the answer is NO for most functions. Building the tree first would pay for the predecessor graph,
 	// the reverse postorder, the Cooper–Harvey–Kennedy solve and the child adjacency of every loopless
 	// function in the module before discovering there was nothing to do with them.
-	export static function buildFromSuccessors(succ CsrGraph, blockCount BlockRefIndex) returns StdDominatorTree
+	export static function buildFromSuccessors(succ CsrGraph, blockCount ElementIndex) returns StdDominatorTree
 		// The PREDECESSOR graph is the same edge list with its two columns swapped — `buildCsr`'s
 		// counting sort does not care which way round the relation is read.
 		let pred = buildCsr(succ.list, to: startsRepeatedPerNode(succ), nodeCount: blockCount as CsrIndex)
 
 		var tree = Self{blockCount: blockCount, reachable: BoolArray.create(), idom: BlockPositionColumn.create(), children: CsrGraph.create(CsrColumn.create(), list: CsrColumn.create()), succ: succ, pred: pred, reverseOrder: BlockPositionColumn.create()}
-		tree.reachable.growFilled(blockCount as ElementIndex, value: false)
+		tree.reachable.growFilled(blockCount, value: false)
 		tree.idom.resize(blockCount)
 
 		let rpo = tree.buildReversePostorder(succ)
@@ -100,7 +100,7 @@ export type StdDominatorTree
 	// Whether the ENTRY can reach `position` — the one question `reachable` answers for a consumer, and
 	// the guard every walk over `func.blockRefs` owes. An unreachable block has no dominator, so every
 	// other query below is meaningless for one.
-	export function canReach(position BlockRefIndex) returns bool
+	export function canReach(position ElementIndex) returns bool
 		return try self.reachable.get(position) otherwise panic("StdDominatorTree.canReach: reachable.get OOB at {position}")
 	end 'canReach'
 
@@ -114,7 +114,7 @@ export type StdDominatorTree
 	// it is "which blocks dominate ALL of these", which one climb per named block answers in
 	// O(named × depth) by counting how many climbs visited each block. Handing back the step is what lets
 	// the caller phrase it that way; a predicate would have hidden the shape and cost more.
-	export function immediateDominatorOf(position BlockRefIndex) returns BlockRefIndex
+	export function immediateDominatorOf(position ElementIndex) returns ElementIndex
 		if not self.canReach(position) 'unreachable'
 			panic("StdDominatorTree.immediateDominatorOf: block position {position} is not reachable from the entry, so it has no dominator — ask `canReach` first")
 		end 'unreachable'
@@ -156,7 +156,7 @@ export type StdDominatorTree
 
 			try stackNextChild.set(top, value: nextChild + 1) otherwise panic("StdDominatorTree.buildReversePostorder: stackNextChild.set OOB at {top}")
 
-			let successor = graph.neighbour(position as CsrIndex, k: nextChild) as BlockRefIndex
+			let successor = graph.neighbour(position as CsrIndex, k: nextChild)
 			let seenBefore = try self.reachable.get(successor) otherwise panic("StdDominatorTree.buildReversePostorder: reachable.get OOB at {successor}")
 
 			if not seenBefore 'firstVisit'
@@ -187,7 +187,7 @@ export type StdDominatorTree
 
 		try self.idom.set(StdEntryBlockPosition, value: StdEntryBlockPosition) otherwise panic("StdDominatorTree.solveImmediateDominators: idom.set OOB at the entry")
 		var solved = BoolArray.create()
-		solved.growFilled(self.blockCount as ElementIndex, value: false)
+		solved.growFilled(self.blockCount, value: false)
 		try solved.set(StdEntryBlockPosition, value: true) otherwise panic("StdDominatorTree.solveImmediateDominators: solved.set OOB at the entry")
 
 		var changed = true
@@ -211,12 +211,12 @@ export type StdDominatorTree
 
 	// Recompute one block's immediate dominator from its solved predecessors, answering whether it
 	// MOVED — which is the whole of what the fixpoint loop above needs to know.
-	function meetSolvedPredecessorsOf(position BlockRefIndex, predecessors CsrGraph, rpo RpoOrder, solved BoolArray) returns bool
+	function meetSolvedPredecessorsOf(position ElementIndex, predecessors CsrGraph, rpo RpoOrder, solved BoolArray) returns bool
 		var candidate = StdEntryBlockPosition
 		var haveCandidate = false
 
 		for k in 0 upto predecessors.degree(position as CsrIndex) 'eachPredecessor'
-			let predecessor = predecessors.neighbour(position as CsrIndex, k: k) as BlockRefIndex
+			let predecessor = predecessors.neighbour(position as CsrIndex, k: k)
 
 			if not (try solved.get(predecessor) otherwise panic("StdDominatorTree.meetSolvedPredecessorsOf: solved.get OOB at {predecessor}")) 'notSolvedYet'
 				continue
@@ -245,7 +245,7 @@ export type StdDominatorTree
 	// The nearest block that dominates both — walk whichever candidate is DEEPER in reverse postorder
 	// (the larger index) up the partial tree until the two meet. Terminates because the entry is its own
 	// dominator and is the shallowest node, so both walks converge on it at worst.
-	function commonDominatorOf(a BlockRefIndex, other BlockRefIndex, rpo RpoOrder) returns BlockRefIndex
+	function commonDominatorOf(a ElementIndex, other ElementIndex, rpo RpoOrder) returns ElementIndex
 		var left = a
 		var right = other
 
@@ -296,7 +296,7 @@ export type DominatorStamps
 
 		var walk = StdDominatorWalk.create()
 		walk.begin(tree)
-		var clock = 0 as BlockRefIndex
+		var clock = 0 as ElementIndex
 
 		while walk.advance(tree) 'depthFirst'
 			match walk.step 'step'
@@ -308,19 +308,19 @@ export type DominatorStamps
 		return stamps
 	end 'build'
 
-	function stampEntry(position BlockRefIndex, clock BlockRefIndex) returns BlockRefIndex
+	function stampEntry(position ElementIndex, clock ElementIndex) returns ElementIndex
 		try self.enterAt.set(position, value: clock) otherwise panic("DominatorStamps: enterAt.set OOB at {position}")
 		return clock + 1
 	end 'stampEntry'
 
-	function stampExit(position BlockRefIndex, clock BlockRefIndex) returns BlockRefIndex
+	function stampExit(position ElementIndex, clock ElementIndex) returns ElementIndex
 		try self.leaveAt.set(position, value: clock) otherwise panic("DominatorStamps: leaveAt.set OOB at {position}")
 		return clock + 1
 	end 'stampExit'
 
 	// Whether `a` dominates `b`. Both must be reachable — an unreachable block was never stamped, and
 	// its zero interval would read as the entry's; callers ask `StdDominatorTree.canReach` first.
-	export function dominates(a BlockRefIndex, b BlockRefIndex) returns bool
+	export function dominates(a ElementIndex, b ElementIndex) returns bool
 		let aEnter = try self.enterAt.get(a) otherwise panic("DominatorStamps.dominates: enterAt.get OOB at {a}")
 		let bEnter = try self.enterAt.get(b) otherwise panic("DominatorStamps.dominates: enterAt.get OOB at {b}")
 		let aLeave = try self.leaveAt.get(a) otherwise panic("DominatorStamps.dominates: leaveAt.get OOB at {a}")
@@ -356,7 +356,7 @@ export type StdDominatorWalk
 
 	// The step `advance` last yielded, and the block it concerns.
 	export var step as StdDominatorStep
-	export var position as BlockRefIndex
+	export var position as ElementIndex
 
 	export static function create() returns StdDominatorWalk
 		return Self{open: BlockPositionColumn.create(), nextChild: CsrColumn.create(), rpoIndex: BlockPositionColumn.create(), entryPending: false, step: StdDominatorStep.enter, position: StdEntryBlockPosition}
@@ -403,10 +403,10 @@ export type StdDominatorWalk
 		end 'everyChildVisited'
 
 		try self.nextChild.set(top, value: slot + 1) otherwise panic("StdDominatorWalk.advance: nextChild.set OOB at {top}")
-		let child = tree.children.neighbour(parent as CsrIndex, k: slot) as BlockRefIndex
+		let child = tree.children.neighbour(parent as CsrIndex, k: slot)
 
 		if slot > 0 'hasAnElderSibling'
-			let sibling = tree.children.neighbour(parent as CsrIndex, k: slot - 1) as BlockRefIndex
+			let sibling = tree.children.neighbour(parent as CsrIndex, k: slot - 1)
 
 			if self.rpoIndexOf(sibling) >= self.rpoIndexOf(child) 'outOfOrder'
 				panic("StdDominatorWalk.advance: the dominator tree lists block position {child} after {sibling} under {parent}, which is not reverse postorder")
@@ -417,14 +417,14 @@ export type StdDominatorWalk
 		return true
 	end 'advance'
 
-	function openBlock(block BlockRefIndex)
+	function openBlock(block ElementIndex)
 		self.open.push(block)
 		self.nextChild.push(0)
 		self.step = StdDominatorStep.enter
 		self.position = block
 	end 'openBlock'
 
-	function rpoIndexOf(block BlockRefIndex) returns BlockRefIndex
+	function rpoIndexOf(block ElementIndex) returns ElementIndex
 		return try self.rpoIndex.get(block) otherwise panic("StdDominatorWalk.rpoIndexOf: rpoIndex.get OOB at {block}")
 	end 'rpoIndexOf'
 end 'StdDominatorWalk'
@@ -432,7 +432,7 @@ end 'StdDominatorWalk'
 // The entry block is `func.blockRefs` position 0. Named because it is an INVARIANT of that array
 // (`IrModule.addBlock` appends, and the entry is the first block a function gets) rather than a number
 // that happens to appear here.
-export let StdEntryBlockPosition = 0 as BlockRefIndex
+export let StdEntryBlockPosition = 0 as ElementIndex
 
 // A reverse postorder plus its inverse: `order` lists the reachable blocks, and `indexOf` answers where
 // a block sits in it. Both halves are needed together — the solve iterates the list and the meet
@@ -449,7 +449,7 @@ type RpoOrder
 	end 'create'
 
 	// Reverse a DFS postorder into a reverse postorder, recording each block's place as it goes.
-	static function fromPostorder(postorder BlockPositionColumn, blockCount BlockRefIndex) returns RpoOrder
+	static function fromPostorder(postorder BlockPositionColumn, blockCount ElementIndex) returns RpoOrder
 		var order = BlockPositionColumn.create()
 		var rpoIndex = BlockPositionColumn.create()
 		rpoIndex.resize(blockCount)
@@ -466,7 +466,7 @@ type RpoOrder
 		return Self.create(order, rpoIndex: rpoIndex)
 	end 'fromPostorder'
 
-	function indexOf(position BlockRefIndex) returns BlockRefIndex
+	function indexOf(position ElementIndex) returns ElementIndex
 		return try self.rpoIndex.get(position) otherwise panic("RpoOrder.indexOf: rpoIndex.get OOB at {position}")
 	end 'indexOf'
 
@@ -500,7 +500,7 @@ end 'RpoOrder'
 // it hands a `match` dispatch test a second predecessor from a block that can only be reached through it,
 // which `NaturalLoops` reads as a back edge, and the member set of that phantom loop is everything from
 // the dispatch to the block before it — one walk of the function per `match`.
-module function buildStdSuccessorGraph(module StdModule, func IrFunction, blockCount BlockRefIndex) returns CsrGraph
+module function buildStdSuccessorGraph(module StdModule, func IrFunction, blockCount ElementIndex) returns CsrGraph
 	var edgeFrom = CsrColumn.create()
 	var edgeTo = CsrColumn.create()
 	let byId = module.blockIndexById(func)

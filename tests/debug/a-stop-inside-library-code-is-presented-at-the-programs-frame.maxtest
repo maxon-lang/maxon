@@ -13,16 +13,16 @@ test 'a breakpoint inside a library function stops at the program frame that cal
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let stops = eventsOfKind(events, kind: StopEventName)
 
-	try Expect.equal(stops.count() as AssertedInt, expected: 1, message: "the breakpoint at `{LibraryFunctionName}`'s entry stops the one sort. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(stops.count(), expected: 1, message: "the breakpoint at `{LibraryFunctionName}`'s entry stops the one sort. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let stopped = eventAt(stops, index: 0)
-	try Expect.atLeast(childrenOf(stopped, node: stopped.root, key: BacktraceKey).count() as AssertedInt, than: 1, message: "a stop in library code is a stop inside the program's own call; its frames start at the program frame that made the call, and a stop with none has nowhere to show. {said}")
+	try Expect.atLeast(childrenOf(stopped, node: stopped.root, key: BacktraceKey).count(), than: 1, message: "a stop in library code is a stop inside the program's own call; its frames start at the program frame that made the call, and a stop with none has nowhere to show. {said}")
 	try Expect.equal(textOf(stopped, node: stopped.root, key: FunctionKey), expected: MainFunctionName, message: "the stop is presented at the program's frame that called into the library. {said}")
-	try Expect.equal(numberOf(stopped, node: stopped.root, key: LineKey) as AssertedInt, expected: callLine as AssertedInt, message: "the program frame is on the line that called the sort. {said}")
+	try Expect.equal(numberOf(stopped, node: stopped.root, key: LineKey), expected: callLine as EventNumber, message: "the program frame is on the line that called the sort. {said}")
 
 	let walks = eventsOfKind(events, kind: BacktraceEventName)
-	try Expect.equal(walks.count() as AssertedInt, expected: 1, message: "`{BacktraceCommand}` at the stop printed no `{BacktraceEventName}` event. {said}")
+	try Expect.equal(walks.count(), expected: 1, message: "`{BacktraceCommand}` at the stop printed no `{BacktraceEventName}` event. {said}")
 
 	let walked = eventAt(walks, index: 0)
-	try Expect.atLeast(childrenOf(walked, node: walked.root, key: FramesKey).count() as AssertedInt, than: 1, message: "the backtrace of a stop in library code walks the program's frames. {said}")
+	try Expect.atLeast(childrenOf(walked, node: walked.root, key: FramesKey).count(), than: 1, message: "the backtrace of a stop in library code walks the program's frames. {said}")
 end 'a breakpoint inside a library function stops at the program frame that called into it'

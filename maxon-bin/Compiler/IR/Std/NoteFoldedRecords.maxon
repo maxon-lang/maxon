@@ -46,15 +46,15 @@ function noteFoldedRecordsInFunc(module StdModule, func IrFunction, liveOps OpIn
 	let valueBound = namedOrDefinedValueBound(module, func: func)
 
 	var ownerOfValue = FoldedOwnerColumn.create()
-	ownerOfValue.refill(valueBound as ElementIndex, value: NoFoldedOwner)
+	ownerOfValue.refill(valueBound, value: NoFoldedOwner)
 	var namedOfValue = ValueIdArray.create()
-	namedOfValue.refill(valueBound as ElementIndex, value: 0 as ValueId)
+	namedOfValue.refill(valueBound, value: 0 as ValueId)
 
 	for (iter, local) in func.debugLocals.withIterator() 'eachBinding'
 		for named in local.valueIds 'eachValue'
 			let carrier = resolveThroughPhis(carried, value: named, argBound: argBound)
-			try ownerOfValue.set(carrier as ElementIndex, value: (iter.index() + FoldedOwnerBias) as FoldedOwnerSlot) otherwise panic("noteFoldedRecords: ownerOfValue.set OOB at value {carrier} of the {ownerOfValue.count()} this function defines")
-			try namedOfValue.set(carrier as ElementIndex, value: named) otherwise panic("noteFoldedRecords: namedOfValue.set OOB at value {carrier} of the {namedOfValue.count()} this function defines")
+			try ownerOfValue.set(carrier, value: (iter.index() + FoldedOwnerBias) as FoldedOwnerSlot) otherwise panic("noteFoldedRecords: ownerOfValue.set OOB at value {carrier} of the {ownerOfValue.count()} this function defines")
+			try namedOfValue.set(carrier, value: named) otherwise panic("noteFoldedRecords: namedOfValue.set OOB at value {carrier} of the {namedOfValue.count()} this function defines")
 		end 'eachValue'
 	end 'eachBinding'
 
@@ -147,7 +147,7 @@ function anyStoreIntoANamedValue(module StdModule, liveOps OpIndexArray, ownerOf
 	return false
 end 'anyStoreIntoANamedValue'
 
-function opAt(module StdModule, opIdx OpIndex) returns StdOp
+function opAt(module StdModule, opIdx ElementIndex) returns StdOp
 	return try module.ops.get(opIdx) otherwise panic("noteFoldedRecords: opIdx {opIdx} from liveOpIndices is not in module.ops")
 end 'opAt'
 
@@ -176,11 +176,11 @@ function refuse(refused BoolArray, owner FoldedOwnerSlot)
 end 'refuse'
 
 function ownerAt(ownerOfValue FoldedOwnerColumn, value ValueId) returns FoldedOwnerSlot
-	return try ownerOfValue.get(value as ElementIndex) otherwise NoFoldedOwner
+	return try ownerOfValue.get(value) otherwise NoFoldedOwner
 end 'ownerAt'
 
 function namedAt(namedOfValue ValueIdArray, value ValueId) returns ValueId
-	return try namedOfValue.get(value as ElementIndex) otherwise value
+	return try namedOfValue.get(value) otherwise value
 end 'namedAt'
 
 function compareFoldedFieldWrites(left FoldedFieldWrite, right FoldedFieldWrite) returns Ordering

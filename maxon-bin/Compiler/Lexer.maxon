@@ -684,7 +684,7 @@ type Lexer
 	let keywords as KeywordTable
 
 	static function create(source String, bytes ByteArray, cursor ByteCursor, keywords KeywordTable) returns Lexer
-		return Self{source: source, bytes: bytes, cursor: cursor, tokens: TokenArray.create(), len: bytes.count(), line: 1, column: 1, pendingError: LexerError.unexpectedEof(0, column: 0), hasPendingError: false, emittedAtEof: false, keywords: keywords}
+		return Self{source: source, bytes: bytes, cursor: cursor, tokens: TokenArray.create(), len: bytes.count() as ByteOffset, line: 1, column: 1, pendingError: LexerError.unexpectedEof(0, column: 0), hasPendingError: false, emittedAtEof: false, keywords: keywords}
 	end 'create'
 
 	// --- Navigation helpers ---
@@ -796,14 +796,14 @@ type Lexer
 	// prefixed forms, so every numeric token carries both.
 	function emitNumber(kind TokenKind, numStart ByteOffset, startLine LineNumber, startCol ColumnNumber)
 		let endByte = sliceNumberEndByte()
-		let value = try bytes.slice(numStart as ElementIndex, endIndex: endByte as ElementIndex) otherwise panic("Lexer.emitNumber: invariant violated")
+		let value = try bytes.slice(numStart, endIndex: endByte) otherwise panic("Lexer.emitNumber: invariant violated")
 		tokens.push(Token.create(kind, line: startLine, column: startCol, value: value, startByte: numStart, endByte: endByte))
 	end 'emitNumber'
 
 	// Emit a string-literal-shaped token (charLiteral/stringLiteral) capturing its
 	// source byte range and byte slice.
 	function emitStringLit(kind TokenKind, strStart ByteOffset, endByte ByteOffset, startLine LineNumber, startCol ColumnNumber)
-		let value = try bytes.slice(strStart as ElementIndex, endIndex: endByte as ElementIndex) otherwise panic("Lexer.emitStringLit: invariant violated")
+		let value = try bytes.slice(strStart, endIndex: endByte) otherwise panic("Lexer.emitStringLit: invariant violated")
 		tokens.push(Token.create(kind, line: startLine, column: startCol, value: value, startByte: strStart, endByte: endByte))
 	end 'emitStringLit'
 
@@ -888,7 +888,7 @@ type Lexer
 			return atEof
 		end 'isAt'
 
-		let charClass = try charClassTable.get(ch) otherwise panic("Lexer: charClassTable lookup failed for byte {ch}")
+		let charClass = try charClassTable.get(ch as ElementIndex) otherwise panic("Lexer: charClassTable lookup failed for byte {ch}")
 		var atEnd = false
 		try advance() otherwise 'lastChar'
 			atEnd = true
@@ -901,7 +901,7 @@ type Lexer
 
 			if not atEnd 'hasNext'
 				let nextCh = cursor.current()
-				nextClass = try charClassTable.get(nextCh) otherwise panic("Lexer: charClassTable lookup failed for byte {nextCh}")
+				nextClass = try charClassTable.get(nextCh as ElementIndex) otherwise panic("Lexer: charClassTable lookup failed for byte {nextCh}")
 			end 'hasNext'
 
 			state = try transitionTable.get(state * CharClass.COUNT + nextClass) otherwise panic("Lexer: transitionTable lookup failed from state {state} for charClass {nextClass}")
@@ -1347,7 +1347,7 @@ type Lexer
 		let stop = cursorByte()
 
 		while i < stop 'scan'
-			let b = try bytes.get(i) otherwise return false
+			let b = try bytes.get(i as ElementIndex) otherwise return false
 
 			if b == Ascii.dquote 'hit'
 				return true
@@ -1532,7 +1532,7 @@ type Lexer
 			atEof = true
 		end 'includeDecLast'
 
-		let numBytes = try bytes.slice(numStart as ElementIndex, endIndex: endOfs as ElementIndex) otherwise panic("Lexer: number-slice invariant violated")
+		let numBytes = try bytes.slice(numStart, endIndex: endOfs as ElementIndex) otherwise panic("Lexer: number-slice invariant violated")
 
 		if isFloat 'emitFloat'
 			emitWithSource(TokenKind.floatLiteral, value: numBytes, startLine: startLine, startCol: startCol, startByte: numStart, endByte: endOfs)
@@ -1622,7 +1622,7 @@ type Lexer
 			atEof = true
 		end 'includeLastByte'
 
-		let identBytes = try bytes.slice(startPos as ElementIndex, endIndex: identEnd as ElementIndex) otherwise panic("Lexer: identifier-slice invariant violated")
+		let identBytes = try bytes.slice(startPos, endIndex: identEnd as ElementIndex) otherwise panic("Lexer: identifier-slice invariant violated")
 		let kind = keywords.classify(identBytes)
 		emitWithSource(kind, value: identBytes, startLine: startLine, startCol: startCol, startByte: startPos, endByte: identEnd)
 
@@ -1671,7 +1671,7 @@ type Lexer
 			nameEnd = nameEnd + 1
 		end 'includeLastByte'
 
-		let nameBytes = try bytes.slice(nameStart as ElementIndex, endIndex: nameEnd as ElementIndex) otherwise panic("Lexer.scanDirective: invariant violated")
+		let nameBytes = try bytes.slice(nameStart, endIndex: nameEnd as ElementIndex) otherwise panic("Lexer.scanDirective: invariant violated")
 		let name = String.from(nameBytes)
 		let kind = classifyDirective(name)
 
@@ -1684,7 +1684,7 @@ type Lexer
 			throw CursorError.exhausted
 		end 'unknown'
 
-		let fullSpanBytes = try bytes.slice(hashStart as ElementIndex, endIndex: nameEnd as ElementIndex) otherwise panic("Lexer.scanDirective: span slice invariant violated")
+		let fullSpanBytes = try bytes.slice(hashStart, endIndex: nameEnd as ElementIndex) otherwise panic("Lexer.scanDirective: span slice invariant violated")
 		emitWithSource(kind, value: fullSpanBytes, startLine: startLine, startCol: startCol, startByte: hashStart, endByte: nameEnd)
 
 		if atEof 'directiveDone'
@@ -1765,7 +1765,7 @@ type Lexer
 		// At EOF the cursor still sits ON the last byte — `advance` refuses to step past it — so that byte
 		// is part of the text and the span runs to the end of the source.
 		let textEnd = len if atEof else cursorByte()
-		let value = try bytes.slice(textStart as ElementIndex, endIndex: textEnd as ElementIndex) otherwise panic("Lexer.scanDocComment: slice [{textStart}, {textEnd}) outside the {len}-byte source")
+		let value = try bytes.slice(textStart, endIndex: textEnd) otherwise panic("Lexer.scanDocComment: slice [{textStart}, {textEnd}) outside the {len}-byte source")
 		emitWithSource(TokenKind.docComment, value: value, startLine: startLine, startCol: startCol, startByte: startByte, endByte: textEnd)
 
 		if atEof 'docCommentEndsTheFile'

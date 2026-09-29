@@ -15,7 +15,7 @@ export function nameBlobIn(symdata ByteArray, magic ByteArray) returns StringArr
 	var cursor = 0 as ByteOffset
 
 	match findByteRun(symdata, needle: magic, from: 0) 'located'
-		found(offset) then cursor = offset + magic.count()
+		found(offset) then cursor = offset + magic.count() as ByteOffset
 		absent then return names
 	end 'located'
 
@@ -26,7 +26,7 @@ export function nameBlobIn(symdata ByteArray, magic ByteArray) returns StringArr
 		let length = readBlobField(symdata, at: cursor)
 		cursor = cursor + DsNameBlobFieldBytes
 
-		if not spanFitsWithin(cursor, count: length, total: symdata.count()) 'runsPastTheSection'
+		if not spanFitsWithin(cursor, count: length, total: symdata.count() as BytePos) 'runsPastTheSection'
 			break
 		end 'runsPastTheSection'
 
@@ -41,7 +41,7 @@ end 'nameBlobIn'
 // call and cannot come to disagree about width. A field running past the section reads 0, which ends the
 // walk at the next bound check.
 function readBlobField(symdata ByteArray, at ByteOffset) returns BytePos
-	if not spanFitsWithin(at, count: DsNameBlobFieldBytes, total: symdata.count()) 'runsPastTheSection'
+	if not spanFitsWithin(at, count: DsNameBlobFieldBytes, total: symdata.count() as BytePos) 'runsPastTheSection'
 		return 0
 	end 'runsPastTheSection'
 

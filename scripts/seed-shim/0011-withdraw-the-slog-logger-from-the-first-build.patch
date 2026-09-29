@@ -8,10 +8,10 @@
 # `[CMP] ERROR:` is as visible as the second's. `LogHandlers.maxon` keeps only the `LogHandler` interface,
 # and `Builtins.maxon`'s `SharedValue`, which nothing in the stand-in names, goes with them.
 diff --git a/stdlib/Builtins.maxon b/stdlib/Builtins.maxon
-index 2377ede51..3d517f7c0 100644
+index a2d121c..5360cea 100644
 --- a/stdlib/Builtins.maxon
 +++ b/stdlib/Builtins.maxon
-@@ -2174,14 +2174,3 @@ function __radixDigitText(digit RadixDigit, uppercase bool) returns String
+@@ -2165,14 +2165,3 @@ function __radixDigitText(digit RadixDigit, uppercase bool) returns String
  		default panic("__radixDigitText: {digit} is past the last digit of the widest base this renders")
  	end 'letter'
  end '__radixDigitText'
@@ -27,7 +27,7 @@ index 2377ede51..3d517f7c0 100644
 -	let cell = 0
 -end 'SharedValue'
 diff --git a/stdlib/Log.maxon b/stdlib/Log.maxon
-index 4819cc8e9..3cd05ee35 100644
+index 4819cc8..3cd05ee 100644
 --- a/stdlib/Log.maxon
 +++ b/stdlib/Log.maxon
 @@ -1,41 +1,20 @@
@@ -573,7 +573,7 @@ index 4819cc8e9..3cd05ee35 100644
  	end 'error'
  end 'Logger'
 diff --git a/stdlib/LogHandlers.maxon b/stdlib/LogHandlers.maxon
-index 0ff75c8ae..39c431112 100644
+index 80cca9c..39c4311 100644
 --- a/stdlib/LogHandlers.maxon
 +++ b/stdlib/LogHandlers.maxon
 @@ -1,202 +1,3 @@
@@ -722,14 +722,14 @@ index 0ff75c8ae..39c431112 100644
 -	for field in record.attrs 'eachField'
 -		let shared = sharedLogGroupDepth(open, groups: field.groups)
 -
--		while open.count() > shared 'closeEach'
+-		while open.count() as LogGroupDepth > shared 'closeEach'
 -			_ = try open.pop() otherwise panic("jsonLogLine: open.pop on a path longer than its shared prefix")
 -			line.append("\}")
 -			objectIsEmpty = false
 -		end 'closeEach'
 -
--		for depth in shared upto field.groups.count() 'openEach'
--			let group = try field.groups.get(depth) otherwise panic("jsonLogLine: field.groups.get OOB at {depth}")
+-		for depth in shared upto field.groups.count() as LogGroupDepth 'openEach'
+-			let group = try field.groups.get((depth as ElementIndex)) otherwise panic("jsonLogLine: field.groups.get OOB at {depth}")
 -			line.append("{jsonLogSeparator(objectIsEmpty)}{Json.quote(group)}:\{")
 -			open.push(group)
 -			objectIsEmpty = true

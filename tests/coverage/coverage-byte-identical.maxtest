@@ -94,15 +94,15 @@ end 'retainImage'
 function requireIdenticalBytes(first FilePath, second FilePath) throws TestFailure
 	let firstBytes = fileBytes(first)
 	let secondBytes = fileBytes(second)
-	try Expect.notEqual(firstBytes.count() as AssertedInt, expected: 0, message: "positive control: {first.toString()} is empty. A build that wrote nothing has nothing to compare, and two of them would agree.")
+	try Expect.notEqual(firstBytes.count(), expected: 0, message: "positive control: {first.toString()} is empty. A build that wrote nothing has nothing to compare, and two of them would agree.")
 	try Expect.isTrue(bytesAreIdentical(firstBytes, second: secondBytes), message: "two ORDINARY builds of one staged source to one output path produced DIFFERENT images ({firstBytes.count()} bytes against {secondBytes.count()}). Nothing varied between them — no writer stamps a clock into an image — so the build is not reproducible, and the difference this case goes on to attribute to `{CoverageBuildFlag}` could not be attributed to anything.")
 end 'requireIdenticalBytes'
 
 function requireDifferentBytes(first FilePath, second FilePath) throws TestFailure
 	let firstBytes = fileBytes(first)
 	let secondBytes = fileBytes(second)
-	try Expect.notEqual(firstBytes.count() as AssertedInt, expected: 0, message: "positive control: {first.toString()} is empty, so this comparison would report a difference whatever the other side held.")
-	try Expect.notEqual(secondBytes.count() as AssertedInt, expected: 0, message: "positive control: {second.toString()} is empty, so this comparison would report a difference whatever the other side held.")
+	try Expect.notEqual(firstBytes.count(), expected: 0, message: "positive control: {first.toString()} is empty, so this comparison would report a difference whatever the other side held.")
+	try Expect.notEqual(secondBytes.count(), expected: 0, message: "positive control: {second.toString()} is empty, so this comparison would report a difference whatever the other side held.")
 	try Expect.isFalse(bytesAreIdentical(firstBytes, second: secondBytes), message: "`{BuildCommandName} … {CoverageBuildFlag}` emitted the SAME image as an ordinary build. Instrumenting adds a counter increment per coverage point and a dump on the way out, so the two cannot be the same program: an identical image means the flag was accepted and did nothing, and every counter a report then reads is a zero that is indistinguishable from untested code.")
 end 'requireDifferentBytes'
 

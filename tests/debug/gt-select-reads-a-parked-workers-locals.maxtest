@@ -35,13 +35,13 @@ test 'gt selects a parked worker, and print, locals and backtrace answer about i
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
 	let rosters = eventsOfKind(events, kind: ThreadsEventName)
-	Expect.equal(rosters.count() as AssertedInt, expected: 1, message: "`{ThreadsCommand}` printed no `{ThreadsEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(rosters.count(), expected: 1, message: "`{ThreadsCommand}` printed no `{ThreadsEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let roster = eventAt(rosters, index: 0)
-	Expect.atLeast(countThreadsWhere(roster, key: StatusKey, value: WaitingThreadStatus) as AssertedInt, than: 1, message: "⛔ THE PRECONDITION THE SELECTOR NEEDS. Each worker sleeps inside its loop for far longer than a stop-and-continue takes, so by the {ContinuesBeforeTheSelection}rd stop at least one of them is parked and `{parked}` names it. The roster held: {renderedThreads(roster)}. {said}")
+	Expect.atLeast(countThreadsWhere(roster, key: StatusKey, value: WaitingThreadStatus), than: 1, message: "⛔ THE PRECONDITION THE SELECTOR NEEDS. Each worker sleeps inside its loop for far longer than a stop-and-continue takes, so by the {ContinuesBeforeTheSelection}rd stop at least one of them is parked and `{parked}` names it. The roster held: {renderedThreads(roster)}. {said}")
 
 	let selections = eventsOfKind(events, kind: GtSelectEventName)
-	Expect.equal(selections.count() as AssertedInt, expected: 2, message: "selecting a thread and clearing the selection are two `{GtSelectEventName}` events. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(selections.count(), expected: 2, message: "selecting a thread and clearing the selection are two `{GtSelectEventName}` events. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let selected = eventAt(selections, index: 0)
 	let chosen = reportedThreadId(selected)
@@ -51,21 +51,21 @@ test 'gt selects a parked worker, and print, locals and backtrace answer about i
 	Expect.equal(threadFieldOfId(roster, id: chosen, key: FunctionKey), expected: WorkerFunctionName, message: "#{chosen} is not inside `{WorkerFunctionName}`, so the selection is of a thread this case is not about. The roster held: {renderedThreads(roster)}. {said}")
 
 	let listings = eventsOfKind(events, kind: LocalsEventName)
-	Expect.equal(listings.count() as AssertedInt, expected: 1, message: "`{LocalsCommand}` under a selection printed no `{LocalsEventName}` event. {said}")
+	Expect.equal(listings.count(), expected: 1, message: "`{LocalsCommand}` under a selection printed no `{LocalsEventName}` event. {said}")
 
 	let listed = eventAt(listings, index: 0)
 	let rows = renderedRows(valueRows(listed, node: listed.root, key: LocalsKey))
 	Expect.equal(textOf(listed, node: listed.root, key: FunctionKey), expected: WorkerFunctionName, message: "⭐ THE SELECTION IS WHAT `{LocalsCommand}` RESOLVES AGAINST. A listing that named the stopping thread's function is one that ignored the selection and answered about a thread the reader did not ask about. It listed: {rows}. {said}")
-	Expect.equal(valueNamed(listed, node: listed.root, key: LocalsKey, name: WorkerLocalName).count() as AssertedInt, expected: 1, message: "the selected worker's own parameter `{WorkerLocalName}` is not in the listing. A register-located local of a parked thread is reported `unavailable`, which is still a row under its name. It listed: {rows}. {said}")
+	Expect.equal(valueNamed(listed, node: listed.root, key: LocalsKey, name: WorkerLocalName).count(), expected: 1, message: "the selected worker's own parameter `{WorkerLocalName}` is not in the listing. A register-located local of a parked thread is reported `unavailable`, which is still a row under its name. It listed: {rows}. {said}")
 
 	let walks = eventsOfKind(events, kind: BacktraceEventName)
-	Expect.equal(walks.count() as AssertedInt, expected: 1, message: "`{BacktraceCommand}` under a selection printed no `{BacktraceEventName}` event. {said}")
+	Expect.equal(walks.count(), expected: 1, message: "`{BacktraceCommand}` under a selection printed no `{BacktraceEventName}` event. {said}")
 
 	let walked = eventAt(walks, index: 0)
 	Expect.equal(innermostPhysicalFrameFunction(walked, key: FramesKey), expected: WorkerFunctionName, message: "`{BacktraceCommand}` under a selection walks the SELECTED thread's saved frames. ⚠ The innermost frame WITH A FRAME OF ITS OWN, because the worker parks inside the `sleep` the compiler spliced into it. {said}")
 
 	let errors = eventsOfKindBeforeTheExit(events, kind: ErrorEventName)
-	Expect.equal(errors.count() as AssertedInt, expected: 1, message: "⛔ STEPPING IS A PROPERTY OF THE STOPPED MACHINE AND A SELECTED THREAD IS NOT ON ONE. The `{StepCommand}` issued under the selection must be refused with exactly one `{ErrorEventName}`, and the `{StepCommand}` issued after the selection is cleared must work — two errors means the clear did not take. ⚠ Counted up to the `{ExitEventName}`: this script issues more `{ContinueCommand}`s than the program has stops, and every one past the end is refused by name. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(errors.count(), expected: 1, message: "⛔ STEPPING IS A PROPERTY OF THE STOPPED MACHINE AND A SELECTED THREAD IS NOT ON ONE. The `{StepCommand}` issued under the selection must be refused with exactly one `{ErrorEventName}`, and the `{StepCommand}` issued after the selection is cleared must work — two errors means the clear did not take. ⚠ Counted up to the `{ExitEventName}`: this script issues more `{ContinueCommand}`s than the program has stops, and every one past the end is refused by name. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let refused = eventAt(errors, index: 0)
 	Expect.contains(textOf(refused, node: refused.root, key: MessageKey), needle: GtSelectCommand, message: "the refusal must name the selection that caused it — a reader who has forgotten they selected a thread has no other way to learn why stepping stopped working. {said}")
@@ -76,8 +76,8 @@ test 'gt selects a parked worker, and print, locals and backtrace answer about i
 	Expect.equal(kindAfter(events, index: lastIndexOfKind(events, kind: GtSelectEventName)), expected: StopEventName, message: "⭐ THE CLEAR MUST GIVE STEPPING BACK. The `{StepCommand}` issued straight after it answered '{kindAfter(events, index: lastIndexOfKind(events, kind: GtSelectEventName))}' rather than a `{StopEventName}`, so the selection was still on. ⚠ The stop's REASON is not pinned: a walk reports `{BreakpointStopReason}` whenever it lands on an armed address, and every worker of this fixture is stopping at the one armed line. {said}")
 
 	let exits = eventsOfKind(events, kind: ExitEventName)
-	Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the session did not run the program to its end. {said}")
+	Expect.equal(exits.count(), expected: 1, message: "the session did not run the program to its end. {said}")
 
 	let exited = eventAt(exits, index: 0)
-	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the debugged program answered a different exit code than the same program run with nothing attached. {said}")
+	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey), expected: undebugged.exitCode() as EventNumber, message: "the debugged program answered a different exit code than the same program run with nothing attached. {said}")
 end 'gt selects a parked worker, and print, locals and backtrace answer about it until the selection is cleared'

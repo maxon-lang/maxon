@@ -19,7 +19,7 @@ test 'step enters the callee, next steps over it, and finish returns to the call
 		walked.push("{textOf(stop, node: stop.root, key: ReasonKey)} {textOf(stop, node: stop.root, key: FunctionKey)}:{numberOf(stop, node: stop.root, key: LineKey)}")
 	end 'eachStop'
 
-	Expect.equal(stops.count() as AssertedInt, expected: 4, message: "the breakpoint and the three walks are four stops. The session stopped: {renderedRows(walked)}. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(stops.count(), expected: 4, message: "the breakpoint and the three walks are four stops. The session stopped: {renderedRows(walked)}. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let entered = eventAt(stops, index: 1)
 	Expect.equal(textOf(entered, node: entered.root, key: FunctionKey), expected: InnerFunctionName, message: "`{StepCommand}` at a call statement enters the callee; a step that landed back in `{OuterFunctionName}` stepped OVER it and is `{NextCommand}`. The session stopped: {renderedRows(walked)}. {said}")
@@ -30,5 +30,5 @@ test 'step enters the callee, next steps over it, and finish returns to the call
 
 	let steppedOver = eventAt(stops, index: 3)
 	Expect.equal(textOf(steppedOver, node: steppedOver.root, key: FunctionKey), expected: OuterFunctionName, message: "`{NextCommand}` stays in the frame it was issued from. The session stopped: {renderedRows(walked)}. {said}")
-	Expect.equal(numberOf(steppedOver, node: steppedOver.root, key: LineKey) as AssertedInt, expected: afterLine as AssertedInt, message: "`{NextCommand}` from the call line lands on the next line of the same function. The session stopped: {renderedRows(walked)}. {said}")
+	Expect.equal(numberOf(steppedOver, node: steppedOver.root, key: LineKey), expected: afterLine as EventNumber, message: "`{NextCommand}` from the call line lands on the next line of the same function. The session stopped: {renderedRows(walked)}. {said}")
 end 'step enters the callee, next steps over it, and finish returns to the caller'

@@ -6,8 +6,8 @@ let UnreadableSiblingDeclaringSource = "module function one() returns ExitCode\n
 let UnreadableSiblingBufferSource = "function main() returns ExitCode\n\treturn one()\nend 'main'\n"
 let UnreadableSiblingUnreadableSource = "module function two() returns ExitCode\n\treturn 2\nend 'two'\n"
 let UnreadableSiblingMessagePrefix = "error: could not read "
-let UnreadableSiblingLine = 0 as AssertedInt
-let UnreadableSiblingCharacter = 0 as AssertedInt
+let UnreadableSiblingLine = 0
+let UnreadableSiblingCharacter = 0
 
 let WindowsAclCommand = "icacls"
 let WindowsAclDenyFlag = "/deny"
@@ -37,8 +37,8 @@ test 'a sibling the project cannot read is published as a build reports it'
 
 	try Expect.isTrue(reported.code.isAbsent(), message: "a build reports an unreadable source with no error code, and the server published {reported.code.describe()}: {reported.message}")
 	try Expect.equal(reported.message, expected: expectedMessage, message: "the server must say what the build says.")
-	try Expect.equal(reported.range.startLine as AssertedInt, expected: UnreadableSiblingLine, message: "a file the build could not read has no position in the buffer, so the diagnostic sits at the document's start.")
-	try Expect.equal(reported.range.startCharacter as AssertedInt, expected: UnreadableSiblingCharacter, message: "a file the build could not read has no position in the buffer, so the diagnostic sits at the document's start.")
+	try Expect.equal(reported.range.startLine, expected: UnreadableSiblingLine, message: "a file the build could not read has no position in the buffer, so the diagnostic sits at the document's start.")
+	try Expect.equal(reported.range.startCharacter, expected: UnreadableSiblingCharacter, message: "a file the build could not read has no position in the buffer, so the diagnostic sits at the document's start.")
 	try expectOneProjectCheckOutcome(session.reports, version: InitialDocumentVersion, outcome: ProjectCheckUnloadable, note: "the project cannot be loaded while one of its sources cannot be read.")
 end 'a sibling the project cannot read is published as a build reports it'
 

@@ -1,0 +1,21 @@
+let ImplementsVerdictDirName = "diagnostics-project-implements-verdict"
+let ImplementsVerdictFileName = "main.maxon"
+let ImplementsVerdictSavedSource = "typealias VerdictSmall = int(0 to 10)\ntypealias VerdictBig = int(0 to 1000) implements VerdictSmall\n\nfunction main() returns ExitCode\n\tlet n = 1 as VerdictBig\n\treturn n as ExitCode\nend 'main'\n"
+let ImplementsVerdictTypedSource = "typealias VerdictSmall = int(0 to 1000) implements VerdictBig\ntypealias VerdictBig = int(0 to 1000) implements VerdictSmall\n\nfunction main() returns ExitCode\n\tlet n = 1 as VerdictBig\n\treturn n as ExitCode\nend 'main'\n"
+let ImplementsVerdictSavedCode = "E3178"
+let ImplementsVerdictTypedCode = "E3091"
+
+test 'an implements verdict that moves from a range misfit to a cycle is reported again'
+	let root = stagedProjectDiagnosticsRoot(ImplementsVerdictDirName)
+	writeCorpusFile(root, fileName: ImplementsVerdictFileName, content: ImplementsVerdictSavedSource)
+
+	let probes = probeProjectDiagnosticsAcrossAnEdit(root, fileName: ImplementsVerdictFileName, content: ImplementsVerdictSavedSource, editedContent: ImplementsVerdictTypedSource)
+
+	discardOutsideCheckoutDir(root)
+
+	let atOpen = onlyProjectDiagnostic(projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAtOpen), note: "the buffer opened holding the disk's bytes, where `VerdictBig`'s range does not fit inside `VerdictSmall`'s.")
+	Expect.equal(atOpen.code.describe(), expected: ImplementsVerdictSavedCode, message: "the saved text's `implements` clause names a parent whose range cannot hold the alias, which is a range misfit.")
+
+	let afterTheEdit = onlyProjectDiagnostic(projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAfterTheEdit), note: "the `didChange` widened `VerdictSmall` and made it implement `VerdictBig`, so the two clauses now name each other.")
+	Expect.equal(afterTheEdit.code.describe(), expected: ImplementsVerdictTypedCode, message: "the edit moved the same failing clause from a range misfit to a cycle. The parse memo is keyed on the implements verdicts, so a key that ignored which verdict failed would serve the stale parse and republish the range misfit.")
+end 'an implements verdict that moves from a range misfit to a cycle is reported again'

@@ -6,7 +6,7 @@
 
 test 'standard mcp-server initialize returns protocol version and server info'
 	let docs = responseDocs(runMcpSingle(initRequest(1)))
-	Expect.equal(docs.count() as AssertedInt, expected: 1, message: "expected 1 response line")
+	Expect.equal(docs.count(), expected: 1, message: "expected 1 response line")
 
 	let doc = try docs.get(0) otherwise panic("no response")
 	let resId = resultNode(doc)
@@ -24,19 +24,19 @@ test 'standard mcp-server notifications/initialized produces no response'
 	reqs.push(toolsListRequest(2))
 
 	let docs = responseDocs(runMcp(reqs))
-	Expect.equal(docs.count() as AssertedInt, expected: 2, message: "a notification must produce no response")
+	Expect.equal(docs.count(), expected: 2, message: "a notification must produce no response")
 
 	let doc1 = try docs.get(0) otherwise panic("no first response")
 	let doc2 = try docs.get(1) otherwise panic("no second response")
-	Expect.equal((try doc1.getInt(doc1.root, key: "id") otherwise 0) as AssertedInt, expected: 1)
-	Expect.equal((try doc2.getInt(doc2.root, key: "id") otherwise 0) as AssertedInt, expected: 2)
+	Expect.equal((try doc1.getInt(doc1.root, key: "id") otherwise 0), expected: 1)
+	Expect.equal((try doc2.getInt(doc2.root, key: "id") otherwise 0), expected: 2)
 end 'standard mcp-server notifications/initialized produces no response'
 
 let DebugToolNames = ["debug_start", "debug_break", "debug_clear", "debug_continue", "debug_step", "debug_pause", "debug_backtrace", "debug_locals", "debug_eval", "debug_threads", "debug_gt", "debug_trace", "debug_stop"]
 
 test 'standard mcp-server advertises exactly the twenty-one user-facing tools'
 	let names = toolNames(listTools())
-	Expect.equal(names.count() as AssertedInt, expected: 21, message: "standard mode must advertise exactly 21 tools: the eight that serve someone writing Maxon, and the thirteen that hold a debug session")
+	Expect.equal(names.count(), expected: 21, message: "standard mode must advertise exactly 21 tools: the eight that serve someone writing Maxon, and the thirteen that hold a debug session")
 
 	Expect.isTrue(names.contains(BuildTool), message: "missing build")
 	Expect.isTrue(names.contains(ExecuteTool), message: "missing execute")
@@ -118,7 +118,7 @@ test 'standard mcp-server refuses a tools/call missing a required argument'
 	let doc = callTool("lookup_error_code")
 
 	Expect.isTrue(hasChildKey(doc, parent: doc.root, key: "error"), message: "a missing required argument is a protocol error")
-	Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: RpcInvalidParamsCode)
+	Expect.equal(rpcErrorCode(doc), expected: RpcInvalidParamsCode)
 	Expect.contains(rpcErrorMessage(doc), needle: "requires the `code` argument")
 end 'standard mcp-server refuses a tools/call missing a required argument'
 
@@ -126,10 +126,10 @@ end 'standard mcp-server refuses a tools/call missing a required argument'
 // never honoured it.
 test 'standard mcp-server refuses an argument no tool declares'
 	let doc = callTool("run_spec_test_typo", argumentsJson: "\{\}")
-	Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: RpcMethodNotFoundCode)
+	Expect.equal(rpcErrorCode(doc), expected: RpcMethodNotFoundCode)
 
 	let stray = callTool(FmtTool, argumentsJson: "\{\"mmTrace\":true\}")
-	Expect.equal(rpcErrorCode(stray) as AssertedInt, expected: RpcInvalidParamsCode)
+	Expect.equal(rpcErrorCode(stray), expected: RpcInvalidParamsCode)
 	Expect.contains(rpcErrorMessage(stray), needle: "has no argument `mmTrace`")
 end 'standard mcp-server refuses an argument no tool declares'
 
@@ -137,7 +137,7 @@ test 'standard mcp-server refuses a contributor argument in user mode'
 	for tool in [BuildTool, ExecuteTool, TestTool, FmtTool] 'eachToolTakingARepoRoot'
 		let doc = callTool(tool, argumentsJson: "\{\"repoRoot\":\"/somewhere\"\}")
 
-		Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: RpcInvalidParamsCode, message: "{tool} answered a user-mode repoRoot instead of refusing it")
+		Expect.equal(rpcErrorCode(doc), expected: RpcInvalidParamsCode, message: "{tool} answered a user-mode repoRoot instead of refusing it")
 		Expect.contains(rpcErrorMessage(doc), needle: "started without --dev")
 	end 'eachToolTakingARepoRoot'
 end 'standard mcp-server refuses a contributor argument in user mode'
@@ -145,7 +145,7 @@ end 'standard mcp-server refuses a contributor argument in user mode'
 test 'standard mcp-server refuses an argument of the wrong JSON type'
 	let doc = callTool(FmtTool, argumentsJson: "\{\"path\":42\}")
 
-	Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: RpcInvalidParamsCode)
+	Expect.equal(rpcErrorCode(doc), expected: RpcInvalidParamsCode)
 	Expect.contains(rpcErrorMessage(doc), needle: "must be of type string")
 end 'standard mcp-server refuses an argument of the wrong JSON type'
 
@@ -162,15 +162,15 @@ end 'standard mcp-server info reports this compiler'
 test 'standard mcp-server refuses the contributor tools by name'
 	let doc = callTool("run_spec_test")
 
-	Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: RpcMethodNotFoundCode)
+	Expect.equal(rpcErrorCode(doc), expected: RpcMethodNotFoundCode)
 	Expect.contains(rpcErrorMessage(doc), needle: "Unknown tool: run_spec_test")
 end 'standard mcp-server refuses the contributor tools by name'
 
 test 'standard mcp-server answers unknown methods and malformed input'
 	let unknown = try responseDocs(runMcpSingle(unknownMethodRequest())).get(0) otherwise panic("no response")
-	Expect.equal(rpcErrorCode(unknown) as AssertedInt, expected: RpcMethodNotFoundCode)
+	Expect.equal(rpcErrorCode(unknown), expected: RpcMethodNotFoundCode)
 	Expect.contains(rpcErrorMessage(unknown), needle: "Method not found: unknown/method")
 
 	let malformed = try responseDocs(runMcpSingle("not valid json at all")).get(0) otherwise panic("no response")
-	Expect.equal(rpcErrorCode(malformed) as AssertedInt, expected: -32700)
+	Expect.equal(rpcErrorCode(malformed), expected: -32700)
 end 'standard mcp-server answers unknown methods and malformed input'

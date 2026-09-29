@@ -387,7 +387,7 @@ export type X64RuntimeAsm
 	// Fix `label` at the current offset. Every branch to it — already emitted or not — is
 	// patched by `finishFunction`.
 	export function placeLabel(label BlockId)
-		self.labelOffsets.place(label, value: self.code.count())
+		self.labelOffsets.place(label, value: codeHere(self.code))
 	end 'placeLabel'
 
 	// The label of a NUL-terminated string constant in this chunk, laying it out on first
@@ -1598,7 +1598,7 @@ function buildPanicChunk(exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool
 	var callFixups = CallFixupArray.create()
 	var rdataRelocs = RdataRelocationArray.create()
 	emitPanicStackGuard(entry, callFixups: callFixups, rdataRelocs: rdataRelocs, usesGt: usesGt, target: target)
-	let guardBytes = entry.count() as CodeOffset
+	let guardBytes = codeHere(entry)
 	var asm = X64RuntimeAsm.beginFunctionAfterEntry(entry, callFixups: callFixups, rdataRelocs: rdataRelocs, slots: 0)
 
 	// (1) The caller's message — already in RCX, NUL-terminated and newline-suffixed by the pass.

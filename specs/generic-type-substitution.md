@@ -856,7 +856,7 @@ type Box uses Element
 	end 'create'
 
 	static function create(first IntArray) returns Self
-		return Self{n: first.count()}
+		return Self{n: first.count() as Int}
 	end 'create'
 end 'Box'
 

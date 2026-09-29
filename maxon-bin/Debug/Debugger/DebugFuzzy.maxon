@@ -76,7 +76,7 @@ end 'nearestName'
 function editDistance(left String, other String) returns FuzzyDistance
 	let mine = left.toByteArray()
 	let theirs = other.toByteArray()
-	let width = (theirs.count() as FuzzyMatchWidth) + 1
+	let width = (theirs.count()) + 1
 	var previous = distanceRow(width)
 	var current = distanceRow(width)
 
@@ -126,14 +126,12 @@ end 'FuzzyRung'
 
 typealias FuzzyDistanceRow = Array with FuzzyDistance
 
-function distanceRow(width FuzzyMatchWidth) returns FuzzyDistanceRow
+function distanceRow(width ElementIndex) returns FuzzyDistanceRow
 	var row = FuzzyDistanceRow.create()
-	row.refill(width as ElementIndex, value: 0)
+	row.refill(width, value: 0)
 
 	return row
 end 'distanceRow'
-
-typealias FuzzyMatchWidth = int(0 to u64.max)
 
 function smallerOf(value FuzzyDistance, other FuzzyDistance) returns FuzzyDistance
 	return value if value < other else other
@@ -151,7 +149,7 @@ function spellingsOf(name String) returns StringArray
 end 'spellingsOf'
 
 function suggestionBudget(candidate String) returns FuzzyDistance
-	let allowed = ((candidate.count() as FuzzyMatchWidth) / SuggestionLengthDivisor) as FuzzyDistance
+	let allowed = ((candidate.count()) / SuggestionLengthDivisor) as FuzzyDistance
 
 	return MaxSuggestionDistance if allowed > MaxSuggestionDistance else allowed
 end 'suggestionBudget'
@@ -186,10 +184,10 @@ function isWordPrefix(spelling String, of String) returns bool
 		return true
 	end 'theWholeName'
 
-	return startsANewWord(of, at: spelling.count() as FuzzyMatchWidth)
+	return startsANewWord(of, at: spelling.count())
 end 'isWordPrefix'
 
-function startsANewWord(name String, at FuzzyMatchWidth) returns bool
+function startsANewWord(name String, at ElementIndex) returns bool
 	let code = try name.toByteArray().get(at) otherwise return false
 
 	return (code >= AsciiUpperAValue and code <= AsciiUpperZValue) or code == AsciiDotValue

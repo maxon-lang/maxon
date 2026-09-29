@@ -14,13 +14,6 @@
 // register, the phi's consumer computes the wrong answer, and the test's exit-code assertion
 // fails — and, before that, the `.test` golden of every affected function stops matching.
 
-// Which MOVE of a sequenced parallel copy — an index into an `EdgeMovePlan`'s / `MoveSequence`'s
-// three parallel columns, or a count of them. Not an op position and not a phi position: the copy is
-// RESEQUENCED (leaves first, cycles broken with `xchg`), so a move's index says nothing about which
-// phi it serves.
-// ⚠ Not exported: the move columns are built and drained inside this file, and `checkUnusedExports`
-// (E3092) refuses an export nothing reads.
-typealias MoveIndex = int(0 to u64.max)
 
 // Where an edge's parallel copy may be placed without running on a sibling edge.
 enum EdgePlacement
@@ -45,38 +38,38 @@ end 'EdgePlacement'
 // That is why floats needed no case here: a `mov` becomes a `movsd`, and a `swap` — which x64
 // has no `xchg` form of for XMMs — becomes a triple-`xorpd`, without this file knowing either.
 export type EdgeMovePlan
-	export var predLocal as CfgIndex
-	export var succLocal as CfgIndex
+	export var predLocal as ElementIndex
+	export var succLocal as ElementIndex
 	export var predBlockId as BlockId
 	export var succBlockId as BlockId
 
 	// Flat `module.blocks` indices — the splice mutates `module` while holding the
 	// block, which requires a FIELD-level borrow (`module.blocks.get`), not the
 	// whole-module borrow `getBlockByIdIn` takes.
-	export var predBlockRef as BlockRef
-	export var succBlockRef as BlockRef
+	export var predBlockRef as ElementIndex
+	export var succBlockRef as ElementIndex
 	export var moveDsts as RegNumColumn
 	export var moveSrcs as RegNumColumn
 	export var moveIsSwap as BoolArray
 	export var placement as EdgePlacement
 
-	static function create(predLocal CfgIndex, succLocal CfgIndex, predBlockId BlockId, succBlockId BlockId, predBlockRef BlockRef, succBlockRef BlockRef, moves MoveSequence, placement EdgePlacement) returns EdgeMovePlan
+	static function create(predLocal ElementIndex, succLocal ElementIndex, predBlockId BlockId, succBlockId BlockId, predBlockRef ElementIndex, succBlockRef ElementIndex, moves MoveSequence, placement EdgePlacement) returns EdgeMovePlan
 		return Self{predLocal: predLocal, succLocal: succLocal, predBlockId: predBlockId, succBlockId: succBlockId, predBlockRef: predBlockRef, succBlockRef: succBlockRef, moveDsts: moves.dsts, moveSrcs: moves.srcs, moveIsSwap: moves.isSwap, placement: placement}
 	end 'create'
 
-	function moveCount() returns MoveIndex
+	function moveCount() returns ElementIndex
 		return self.moveDsts.count()
 	end 'moveCount'
 
-	function moveDstAt(i MoveIndex) returns RegNum
+	function moveDstAt(i ElementIndex) returns RegNum
 		return try self.moveDsts.get(i) otherwise panic("EdgeMovePlan.moveDstAt: OOB")
 	end 'moveDstAt'
 
-	function moveSrcAt(i MoveIndex) returns RegNum
+	function moveSrcAt(i ElementIndex) returns RegNum
 		return try self.moveSrcs.get(i) otherwise panic("EdgeMovePlan.moveSrcAt: OOB")
 	end 'moveSrcAt'
 
-	function moveIsSwapAt(i MoveIndex) returns bool
+	function moveIsSwapAt(i ElementIndex) returns bool
 		return try self.moveIsSwap.get(i) otherwise panic("EdgeMovePlan.moveIsSwapAt: OOB")
 	end 'moveIsSwapAt'
 end 'EdgeMovePlan'
@@ -99,7 +92,7 @@ type MoveSequence
 		self.isSwap.push(swap)
 	end 'pushMove'
 
-	function count() returns MoveIndex
+	function count() returns ElementIndex
 		return self.dsts.count()
 	end 'count'
 end 'MoveSequence'
@@ -126,7 +119,7 @@ export function buildSsaDestructionPlan(module TargetModule, alloc Allocation, l
 	return plans
 end 'buildSsaDestructionPlan'
 
-function buildEdgePlan(module TargetModule, topo FuncTopology, predBlock IrBlock, predLocal CfgIndex, edge BranchEdge, alloc Allocation) returns EdgeMovePlan
+function buildEdgePlan(module TargetModule, topo FuncTopology, predBlock IrBlock, predLocal ElementIndex, edge BranchEdge, alloc Allocation) returns EdgeMovePlan
 	let succLocal = localOfBlockId(topo, blockId: edge.targetBlockId)
 	let targetBlock = blockAt(module, topo: topo, local: succLocal)
 	let view = PhiEdgeView.resolve(targetBlock, argIds: edge.argIds, context: PhiEdgeConsumer.ssaDestruction)
@@ -154,7 +147,7 @@ end 'buildEdgePlan'
 // Where the edge's moves may go: at the predecessor's end when it has one
 // successor; at the successor's start when it has one predecessor; otherwise the
 // edge is CRITICAL and gets its own split block.
-function classifyPlacement(topo FuncTopology, predLocal CfgIndex, succLocal CfgIndex) returns EdgePlacement
+function classifyPlacement(topo FuncTopology, predLocal ElementIndex, succLocal ElementIndex) returns EdgePlacement
 	if topo.succ.degree(predLocal as CsrIndex) == 1 'predSingleSucc'
 		return EdgePlacement.predEnd
 	end 'predSingleSucc'
@@ -208,7 +201,7 @@ end 'sequenceParallelCopy'
 
 // Index of a move whose dst is NOT any pending move's source (safe to emit now). It throws when every
 // remaining dst is still needed as a source: the moves left form a pure cycle.
-function findLeafMove(pd RegNumColumn, ps RegNumColumn) returns MoveIndex throws MapError
+function findLeafMove(pd RegNumColumn, ps RegNumColumn) returns ElementIndex throws MapError
 	for i in 0 upto pd.count() 'eachMove'
 		let d = try pd.get(i) otherwise panic("findLeafMove: pd.get OOB")
 
@@ -246,9 +239,9 @@ function isAnySource(ps RegNumColumn, reg RegNum) returns bool
 	return false
 end 'isAnySource'
 
-function removeMoveAt(pd RegNumColumn, ps RegNumColumn, idx MoveIndex)
-	_ = try pd.remove(idx as ElementIndex) otherwise panic("removeMoveAt: pd.remove OOB")
-	_ = try ps.remove(idx as ElementIndex) otherwise panic("removeMoveAt: ps.remove OOB")
+function removeMoveAt(pd RegNumColumn, ps RegNumColumn, idx ElementIndex)
+	_ = try pd.remove(idx) otherwise panic("removeMoveAt: pd.remove OOB")
+	_ = try ps.remove(idx) otherwise panic("removeMoveAt: ps.remove OOB")
 end 'removeMoveAt'
 
 // After `xchg a, b`, registers a and b hold each other's old contents, so a pending
@@ -336,7 +329,7 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 		end 'runLeftOpen'
 
 		block.opRefs = newRefs
-		seq = seq + bodyCount
+		seq = seq + bodyCount as OpSeq
 
 		if block.hasTerminatorOp() 'hasTerm'
 			let ti = block.terminatorIndex()
@@ -911,7 +904,7 @@ export function splitCriticalEdges(module TargetModule, target Target)
 	end 'eachFunc'
 end 'splitCriticalEdges'
 
-function splitCriticalEdgesInFunc(module TargetModule, funcIdx FuncIndex, target Target)
+function splitCriticalEdgesInFunc(module TargetModule, funcIdx ElementIndex, target Target)
 	// The SKELETON is built through a helper so `func`'s borrow is scoped to it — the
 	// split loop below mutates `module.functions[funcIdx]` (adding block refs), which
 	// must not overlap a live borrow of that function.
@@ -961,7 +954,7 @@ function splitCriticalEdgesInFunc(module TargetModule, funcIdx FuncIndex, target
 	end 'eachSplit'
 end 'splitCriticalEdgesInFunc'
 
-function performCriticalSplit(module TargetModule, funcIdx FuncIndex, predRef BlockRef, succId BlockId, heat BlockHeat, inlineSite InlineSiteRef, target Target)
+function performCriticalSplit(module TargetModule, funcIdx ElementIndex, predRef ElementIndex, succId BlockId, heat BlockHeat, inlineSite InlineSiteRef, target Target)
 	let newRef = addSplitBlock(module, funcIdx: funcIdx, succId: succId, heat: heat, inlineSite: inlineSite, target: target)
 	let newBlock = try module.blocks.get(newRef) otherwise panic("performCriticalSplit: newRef not in module.blocks")
 	let newId = newBlock.id
@@ -976,7 +969,7 @@ end 'performCriticalSplit'
 // `arm64Branch` for arm64 — so the split block speaks the same ISA as the code around it.
 // The inline site is COPIED: the predecessor keeps its own box, and the module travels home from a
 // pool worker in a reply that must own everything it reaches.
-function addSplitBlock(module TargetModule, funcIdx FuncIndex, succId BlockId, heat BlockHeat, inlineSite InlineSiteRef, target Target) returns BlockRef
+function addSplitBlock(module TargetModule, funcIdx ElementIndex, succId BlockId, heat BlockHeat, inlineSite InlineSiteRef, target Target) returns ElementIndex
 	var func = module.getFunc(funcIdx)
 	let newId = func.nextBlockId
 	func.nextBlockId = func.nextBlockId + 1
@@ -1002,13 +995,13 @@ end 'unconditionalBranchTo'
 // successor) is where SSA destruction places their moves. The pred and split block
 // borrows are scoped to separate helpers so two live borrows of `module.blocks`
 // never coexist.
-function moveBranchEdgeToSplit(module TargetModule, predRef BlockRef, succId BlockId, splitRef BlockRef)
+function moveBranchEdgeToSplit(module TargetModule, predRef ElementIndex, succId BlockId, splitRef ElementIndex)
 	let movedArgs = extractPredEdge(module, predRef: predRef, succId: succId)
 	addSplitEdge(module, splitRef: splitRef, succId: succId, argIds: movedArgs)
 end 'moveBranchEdgeToSplit'
 
 // Remove the predecessor's `branchEdge` to `succId` and return its phi args.
-function extractPredEdge(module TargetModule, predRef BlockRef, succId BlockId) returns ValueIdArray
+function extractPredEdge(module TargetModule, predRef ElementIndex, succId BlockId) returns ValueIdArray
 	var movedArgs = ValueIdArray.create()
 	var found = false
 	var keptEdges = BranchEdgeArray.create()
@@ -1032,14 +1025,14 @@ function extractPredEdge(module TargetModule, predRef BlockRef, succId BlockId) 
 end 'extractPredEdge'
 
 // Give the split block its outgoing phi `branchEdge` to `succId`.
-function addSplitEdge(module TargetModule, splitRef BlockRef, succId BlockId, argIds ValueIdArray)
+function addSplitEdge(module TargetModule, splitRef ElementIndex, succId BlockId, argIds ValueIdArray)
 	var splitBlock = try module.blocks.get(splitRef) otherwise panic("addSplitEdge: splitRef not in module.blocks")
 	splitBlock.branchEdges.push(BranchEdge.create(succId, argIds: argIds))
 end 'addSplitEdge'
 
 // Build a function's CFG skeleton by INDEX, so the `func` borrow it needs is scoped to this
 // helper and never held across the caller's mutation of the same function.
-function buildFuncTopologyByIndex(module TargetModule, funcIdx FuncIndex) returns FuncTopology
+function buildFuncTopologyByIndex(module TargetModule, funcIdx ElementIndex) returns FuncTopology
 	let func = module.getFunc(funcIdx)
 	return buildFuncTopology(module, func: func)
 end 'buildFuncTopologyByIndex'
@@ -1059,7 +1052,7 @@ end 'buildFuncTopologyByIndex'
 // search the CFG builder avoids (see `CondBranch`). The rewrite is in place at
 // the op's existing index, so the recorded index stays valid and there is no cached target
 // to invalidate.
-export function retargetControlOp(module TargetModule, predRef BlockRef, oldTarget BlockId, newTarget BlockId)
+export function retargetControlOp(module TargetModule, predRef ElementIndex, oldTarget BlockId, newTarget BlockId)
 	var retargeted = false
 
 	// ⚠ **THE PREDECESSOR IS READ OUT AND LET GO BEFORE THE FIRST WRITE.** `module.blocks.get` hands back a
@@ -1099,7 +1092,7 @@ end 'retargetControlOp'
 // The CONDITIONAL half of the retarget above — the block's `condBranch` op, whichever of the four spellings
 // this target uses. `predBlockId` is carried only for the panic, because the block itself may not be held
 // across the writes these arms make (see the caller).
-function retargetCondBranchOp(module TargetModule, opIdx OpIndex, predBlockId BlockId, oldTarget BlockId, newTarget BlockId) returns bool
+function retargetCondBranchOp(module TargetModule, opIdx ElementIndex, predBlockId BlockId, oldTarget BlockId, newTarget BlockId) returns bool
 	let op = try module.ops.get(opIdx) otherwise panic("retargetCondBranchOp: conditional branch op {opIdx} not in module.ops")
 
 	match op 'cond'
@@ -1116,7 +1109,7 @@ end 'retargetCondBranchOp'
 
 // The TERMINATOR half — the block's terminator op. Every arm that is not a real terminator panics, which is
 // the roster the caller would otherwise carry inline.
-function retargetTerminatorOp(module TargetModule, opIdx OpIndex, oldTarget BlockId, newTarget BlockId) returns bool
+function retargetTerminatorOp(module TargetModule, opIdx ElementIndex, oldTarget BlockId, newTarget BlockId) returns bool
 	let op = try module.ops.get(opIdx) otherwise panic("retargetTerminatorOp: terminator not in module.ops")
 
 	match op 'term'
@@ -1278,7 +1271,7 @@ function retargetTerminatorOp(module TargetModule, opIdx OpIndex, oldTarget Bloc
 	end 'term'
 end 'retargetTerminatorOp'
 
-function retargetJcc(module TargetModule, opIdx OpIndex, cond X64CondCode, target BlockId, oldTarget BlockId, newTarget BlockId) returns bool
+function retargetJcc(module TargetModule, opIdx ElementIndex, cond X64CondCode, target BlockId, oldTarget BlockId, newTarget BlockId) returns bool
 	if target != oldTarget 'notThis'
 		return false
 	end 'notThis'
@@ -1287,7 +1280,7 @@ function retargetJcc(module TargetModule, opIdx OpIndex, cond X64CondCode, targe
 	return true
 end 'retargetJcc'
 
-function retargetJmp(module TargetModule, opIdx OpIndex, target BlockId, oldTarget BlockId, newTarget BlockId) returns bool
+function retargetJmp(module TargetModule, opIdx ElementIndex, target BlockId, oldTarget BlockId, newTarget BlockId) returns bool
 	if target != oldTarget 'notThis'
 		return false
 	end 'notThis'
@@ -1299,7 +1292,7 @@ end 'retargetJmp'
 // The arm64 twins of `retargetJcc`/`retargetJmp`: rewrite an arm64 branch's target block id when it
 // is the edge being redirected, preserving the branch's other operands (its condition or its register
 // zero-test). Same in-place rewrite at the recorded op index, so the CFG's branch indices stay valid.
-function retargetArm64CondBranch(module TargetModule, opIdx OpIndex, cond Arm64CondCode, target BlockId, oldTarget BlockId, newTarget BlockId) returns bool
+function retargetArm64CondBranch(module TargetModule, opIdx ElementIndex, cond Arm64CondCode, target BlockId, oldTarget BlockId, newTarget BlockId) returns bool
 	if target != oldTarget 'notThis'
 		return false
 	end 'notThis'
@@ -1308,7 +1301,7 @@ function retargetArm64CondBranch(module TargetModule, opIdx OpIndex, cond Arm64C
 	return true
 end 'retargetArm64CondBranch'
 
-function retargetArm64Cbz(module TargetModule, opIdx OpIndex, reg TargetVReg, target BlockId, oldTarget BlockId, newTarget BlockId) returns bool
+function retargetArm64Cbz(module TargetModule, opIdx ElementIndex, reg TargetVReg, target BlockId, oldTarget BlockId, newTarget BlockId) returns bool
 	if target != oldTarget 'notThis'
 		return false
 	end 'notThis'
@@ -1317,7 +1310,7 @@ function retargetArm64Cbz(module TargetModule, opIdx OpIndex, reg TargetVReg, ta
 	return true
 end 'retargetArm64Cbz'
 
-function retargetArm64Cbnz(module TargetModule, opIdx OpIndex, reg TargetVReg, target BlockId, oldTarget BlockId, newTarget BlockId) returns bool
+function retargetArm64Cbnz(module TargetModule, opIdx ElementIndex, reg TargetVReg, target BlockId, oldTarget BlockId, newTarget BlockId) returns bool
 	if target != oldTarget 'notThis'
 		return false
 	end 'notThis'
@@ -1326,7 +1319,7 @@ function retargetArm64Cbnz(module TargetModule, opIdx OpIndex, reg TargetVReg, t
 	return true
 end 'retargetArm64Cbnz'
 
-function retargetArm64Branch(module TargetModule, opIdx OpIndex, target BlockId, oldTarget BlockId, newTarget BlockId) returns bool
+function retargetArm64Branch(module TargetModule, opIdx ElementIndex, target BlockId, oldTarget BlockId, newTarget BlockId) returns bool
 	if target != oldTarget 'notThis'
 		return false
 	end 'notThis'
@@ -1340,7 +1333,7 @@ end 'retargetArm64Branch'
 // something matched — the same "did I retarget?" bool the branch retargeters return, so the caller's
 // no-match panic still fires for an edge the table does not name. The two arms differ only in the op they
 // reconstruct (x64 vs arm64); the remap itself is the shared `remapJumpTargets`.
-function retargetJumpTableX64(module TargetModule, opIdx OpIndex, indexReg TargetVReg, defaultTarget BlockId, caseTargets BlockIdArray, tableLabel ByteArray, oldTarget BlockId, newTarget BlockId) returns bool
+function retargetJumpTableX64(module TargetModule, opIdx ElementIndex, indexReg TargetVReg, defaultTarget BlockId, caseTargets BlockIdArray, tableLabel ByteArray, oldTarget BlockId, newTarget BlockId) returns bool
 	if not jumpTableNamesTarget(defaultTarget, caseTargets: caseTargets, oldTarget: oldTarget) 'notThis'
 		return false
 	end 'notThis'
@@ -1351,7 +1344,7 @@ function retargetJumpTableX64(module TargetModule, opIdx OpIndex, indexReg Targe
 	return true
 end 'retargetJumpTableX64'
 
-function retargetJumpTableArm64(module TargetModule, opIdx OpIndex, indexReg TargetVReg, defaultTarget BlockId, caseTargets BlockIdArray, tableLabel ByteArray, oldTarget BlockId, newTarget BlockId) returns bool
+function retargetJumpTableArm64(module TargetModule, opIdx ElementIndex, indexReg TargetVReg, defaultTarget BlockId, caseTargets BlockIdArray, tableLabel ByteArray, oldTarget BlockId, newTarget BlockId) returns bool
 	if not jumpTableNamesTarget(defaultTarget, caseTargets: caseTargets, oldTarget: oldTarget) 'notThis'
 		return false
 	end 'notThis'
@@ -1381,7 +1374,7 @@ function remapJumpTargets(caseTargets BlockIdArray, oldTarget BlockId, newTarget
 end 'remapJumpTargets'
 
 // The physical op for move `i` of a plan: an `xchg` for a cycle-break, else a `mov`.
-function moveOpOf(plan EdgeMovePlan, i MoveIndex) returns TargetOp
+function moveOpOf(plan EdgeMovePlan, i ElementIndex) returns TargetOp
 	let dst = TargetVReg.physical(plan.moveDstAt(i))
 	let src = TargetVReg.physical(plan.moveSrcAt(i))
 

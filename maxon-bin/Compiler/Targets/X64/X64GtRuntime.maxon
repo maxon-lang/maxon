@@ -188,7 +188,7 @@ end 'gtXmmSaveAreaBytes'
 // would save 8 of every 16 bytes and destroy the upper halves of xmm6-15 across every `await`.
 function assertGtFrameConsistent(target Target)
 	let gprBytes = calleeSavedOrder.count() * StackWordBytes
-	let framedBytes = gprBytes + gtXmmSaveAreaBytes() + StackWordBytes
+	let framedBytes = gprBytes as StackSize + gtXmmSaveAreaBytes() + StackWordBytes
 
 	let declared = gtInitialFrameBytes(target) as StackSize
 
@@ -732,7 +732,6 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 			CreateToolhelp32Snapshot or
 			Module32FirstW or
 			Module32NextW or
-
 			WaitForDebugEvent or
 			WriteProcessMemory or
 			DebugActiveProcess or
@@ -874,7 +873,6 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 			GetSystemDirectoryA or
 			GetWindowsDirectoryA or
 			GetFullPathNameA or
-
 			ContinueDebugEvent or
 			DebugActiveProcessStop or
 			DebugBreakProcess gives SyscallClass.schedulerBound
@@ -1181,11 +1179,11 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 	encodeJmp(code, rel32Fixups: shimFixups, targetBlockId: ShimDoneLabel)
 
 	// direct: the non-switched call (an M's scheduler context, or no M at all).
-	shimLabels.place(ShimDirectLabel, value: code.count())
+	shimLabels.place(ShimDirectLabel, value: codeHere(code))
 	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: slotIndex)
 
 	// done: patch the shim's own forward branches now that both labels' offsets are known.
-	shimLabels.place(ShimDoneLabel, value: code.count())
+	shimLabels.place(ShimDoneLabel, value: codeHere(code))
 	resolveChunkRel32Fixups(code, labelOffsets: shimLabels, rel32Fixups: shimFixups)
 end 'emitGtShimmedIatCall'
 
@@ -1324,7 +1322,7 @@ end 'GtRegisterBlockDirection'
 function emitGtRegisterBlock(code ByteArray, gprs X64RegisterArray, stackedBytes StackSize, direction GtRegisterBlockDirection) returns StackSize
 	let pushedBytes = (gprs.count() * StackWordBytes) as StackSize
 	let aboveFrame = stackedBytes + pushedBytes
-	let frameBytes = alignUpStack(aboveFrame + ShadowSpaceBytes + (argFpRegisters.count() * XmmSaveSlotBytes), alignment: StackFrameAlignment) - aboveFrame
+	let frameBytes = alignUpStack(aboveFrame + ShadowSpaceBytes + (argFpRegisters.count() * XmmSaveSlotBytes) as StackSize, alignment: StackFrameAlignment) - aboveFrame
 
 	if direction == GtRegisterBlockDirection.save 'save'
 		for reg in gprs 'push'
@@ -1413,7 +1411,7 @@ function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
 	encodeGrp1RegImm32(code, ext: Grp1ExtAdd, reg: GtMoreNewBaseReg, imm: gtStackGuardHeight(target) as Imm32)  // r15 = need
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: GtMoreNewSizeReg, src: GtMoreOldSizeReg, wide: true)
 
-	growLabels.place(GrowDoubleLabel, value: code.count())
+	growLabels.place(GrowDoubleLabel, value: codeHere(code))
 	encodeRmRegDirect(code, opcode: OpcodeAddRmReg, dest: GtMoreNewSizeReg, src: GtMoreNewSizeReg, wide: true)  // r14 += r14
 	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: GtMoreNewSizeReg, imm: GtMaxStackBytes as Imm32)
 	encodeJcc(code, rel32Fixups: growFixups, cond: X64CondCode.above, targetBlockId: GrowExhaustedLabel)
@@ -1473,14 +1471,14 @@ function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
 	// before its function's prologue, so the entry rsp holds the return into that function and the word above
 	// it the function's own return address, while rbp is still its caller's frame. Storing rbp over the first
 	// word makes the pair the frame record the prologue would have pushed; the process never returns there.
-	growLabels.place(GrowExhaustedLabel, value: code.count())
+	growLabels.place(GrowExhaustedLabel, value: codeHere(code))
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rsp, disp: ferriedRspDisp, wide: true)
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rax, disp: FrameOffSavedFramePointer as Imm32, wide: true)
 	encodeStoreBaseDispReg(code, base: X64Register.rax, disp: FrameOffSavedFramePointer as Imm32, srcReg: X64Register.rbp, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.rax, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.r8, src: X64Register.rax, wide: true)
 	encodeCallDirect(code, callFixups: callFixups, targetName: GtStackOverflowName)
-	growLabels.place(GrowRefusedLabel, value: code.count())
+	growLabels.place(GrowRefusedLabel, value: codeHere(code))
 	encodeX64ProcessExit(code, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, callFixups: callFixups, route: x64OsCallKind(target.os), exitCode: RuntimeAbort.greenThreadStackAllocationFailed.rawValue as MachineWord, usesGt: true, target: target)
 	resolveChunkRel32Fixups(code, labelOffsets: growLabels, rel32Fixups: growFixups)
 
@@ -1609,7 +1607,7 @@ function emitGtRelocateRebase(code ByteArray, reg X64Register)
 	encodeJcc(code, rel32Fixups: fixups, cond: X64CondCode.aboveEqual, targetBlockId: RebaseSkipLabel)
 	encodeRmRegDirect(code, opcode: OpcodeAddRmReg, dest: reg, src: RelocOffsetReg, wide: true)
 
-	labels.place(RebaseSkipLabel, value: code.count())
+	labels.place(RebaseSkipLabel, value: codeHere(code))
 	resolveChunkRel32Fixups(code, labelOffsets: labels, rel32Fixups: fixups)
 end 'emitGtRelocateRebase'
 
@@ -1628,7 +1626,7 @@ function emitGtRelocateChainWalk(code ByteArray)
 	var walkFixups = ChunkRel32FixupArray.create()
 	var walkLabels = BlockOffsetTable.create()
 
-	walkLabels.place(WalkHeadLabel, value: code.count())
+	walkLabels.place(WalkHeadLabel, value: codeHere(code))
 	encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: RelocWalkReg, src: RelocNewLowReg, wide: true)
 	encodeJcc(code, rel32Fixups: walkFixups, cond: X64CondCode.below, targetBlockId: WalkDoneLabel)
 	encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: RelocWalkReg, src: RelocNewHighReg, wide: true)
@@ -1637,7 +1635,7 @@ function emitGtRelocateChainWalk(code ByteArray)
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: RelocWalkReg, src: RelocLinkReg, wide: true)
 	encodeJmp(code, rel32Fixups: walkFixups, targetBlockId: WalkHeadLabel)
 
-	walkLabels.place(WalkDoneLabel, value: code.count())
+	walkLabels.place(WalkDoneLabel, value: codeHere(code))
 	resolveChunkRel32Fixups(code, labelOffsets: walkLabels, rel32Fixups: walkFixups)
 end 'emitGtRelocateChainWalk'
 
@@ -1678,7 +1676,7 @@ export function emitGtStackGuard(code ByteArray, callFixups CallFixupArray, rdat
 	if site == GtGuardSite.mrtPanic 'withdrawARequest'
 		emitGtBranchUnlessPreemptRequest(code, fixups: guardFixups, unlessRequested: GuardCompareLabel)
 		emitGtGuardWordRestore(code, gt: ShimGtReg, scratch: ShimGtRspReg, target: target)
-		guardLabels.place(GuardCompareLabel, value: code.count())
+		guardLabels.place(GuardCompareLabel, value: codeHere(code))
 	end 'withdrawARequest'
 
 	// projectedRsp (r10) = rsp - (frameBytes + margin) ; enough room (>= stackGuard) → skip.
@@ -1697,13 +1695,13 @@ export function emitGtStackGuard(code ByteArray, callFixups CallFixupArray, rdat
 
 	if site == GtGuardSite.functionEntry 'mayPark'
 		encodeCallDirect(code, callFixups: callFixups, targetName: GtGuardTrippedName)
-		encodeJmpBackwardShort(code, targetOffset: guardTop)
+		encodeJmpBackwardShort(code, targetOffset: guardTop as CodeOffset)
 	end 'mayPark' else 'mustNotPark'
 		encodeCallDirect(code, callFixups: callFixups, targetName: GtMorestackName)
 	end 'mustNotPark'
 
 	// skip:
-	guardLabels.place(GuardSkipLabel, value: code.count())
+	guardLabels.place(GuardSkipLabel, value: codeHere(code))
 	resolveChunkRel32Fixups(code, labelOffsets: guardLabels, rel32Fixups: guardFixups)
 end 'emitGtStackGuard'
 
@@ -1724,7 +1722,7 @@ function buildGtGuardTrippedChunk() returns FunctionCodeChunk
 	emitGtBranchUnlessPreemptRequest(code, fixups: fixups, unlessRequested: TrippedGrowLabel)
 	_ = emitGtPreemptArm(code, callFixups: callFixups)
 
-	labels.place(TrippedGrowLabel, value: code.count())
+	labels.place(TrippedGrowLabel, value: codeHere(code))
 	encodeJmpDirect(code, callFixups: callFixups, targetName: GtMorestackName)
 	resolveChunkRel32Fixups(code, labelOffsets: labels, rel32Fixups: fixups)
 
@@ -1839,7 +1837,7 @@ function assertAsyncPreemptGprOrder()
 	let file = x64RegisterFile()
 	let expected = (file.firstVector as RegCount) - AsyncPreemptUnspilledGprs
 
-	if AsyncPreemptGprOrder.count() != expected 'incomplete'
+	if AsyncPreemptGprOrder.count() as RegCount != expected 'incomplete'
 		panic("assertAsyncPreemptGprOrder: `__gt_async_preempt` spills {AsyncPreemptGprOrder.count()} general registers but the x64 file has {file.firstVector} of them and the frame restores {AsyncPreemptUnspilledGprs} — a stop lands at an arbitrary instruction, so every register missing from that list is one the interrupted function loses with no fault and no diagnostic")
 	end 'incomplete'
 end 'assertAsyncPreemptGprOrder'
@@ -2132,7 +2130,7 @@ function asyncPreemptXmmOrder() returns X64RegisterArray
 		all.push(reg)
 	end 'calleeSaved'
 
-	if all.count() != vectorRegisterCount(x64RegisterFile()) 'notTheWholeFile'
+	if all.count() as RegCount != vectorRegisterCount(x64RegisterFile()) 'notTheWholeFile'
 		panic("asyncPreemptXmmOrder: the caller-saved and callee-saved XMM lists name {all.count()} registers between them, not the {vectorRegisterCount(x64RegisterFile())} the file has — a stop lands at an arbitrary instruction, so a register missing from this block is one the interrupted function loses")
 	end 'notTheWholeFile'
 

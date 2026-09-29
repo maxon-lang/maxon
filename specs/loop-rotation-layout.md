@@ -149,7 +149,7 @@ function grid(a WordArray, rows Word, width Word) returns Word
 	for r in 0 upto rows 'row'
 		var line = 0
 		for c in 0 upto width 'col'
-			line = line + (try a.get(r * width + c) otherwise panic("grid: r * width + c < rows * width = a.count()"))
+			line = line + (try a.get((r * width + c) as ElementIndex) otherwise panic("grid: r * width + c < rows * width = a.count()"))
 		end 'col'
 		t = t + line * (r + 1)
 	end 'row'
@@ -308,7 +308,7 @@ function walkDown(a WordArray, start Word) returns Word
 	var t = 0
 	var i = start
 	while i > -2 'down'
-		t = t + (try a.get(i) otherwise 0)
+		t = t + (try a.get(i as ElementIndex) otherwise 0)
 		i = i - 1
 	end 'down'
 	return t

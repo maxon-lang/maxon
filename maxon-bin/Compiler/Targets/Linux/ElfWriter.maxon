@@ -281,9 +281,9 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 	// with the file offset modulo the page, as a PT_LOAD requires.
 	let textFileOffset = headerSize + (ElfTextAlign - headerSize mod ElfTextAlign) mod ElfTextAlign
 	let textVAddr = ElfLoadAddr + textFileOffset
-	let rodataFileOffset = textFileOffset + alignUp(codeSize, alignment: ElfSectionAlign)
+	let rodataFileOffset = textFileOffset + alignUp(codeSize as BytePos, alignment: ElfSectionAlign)
 	let rodataVAddr = ElfLoadAddr + rodataFileOffset
-	let codeSegmentSize = rodataFileOffset + rdataSize
+	let codeSegmentSize = rodataFileOffset + rdataSize as BytePos
 
 	// --- Segment 2 (R+W): .data (the top-level `var` globals prelude) ---
 	// ⚠ NO BSS/heap tail. The allocator mmaps its own arenas (`osAllocPages`), so `.data` holds
@@ -373,7 +373,7 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 	// while the segment's floor is a loader concern (see `ElfDataSegmentMinBytes`). The padding
 	// between them stays inside the segment and outside the section, exactly as Mach-O's page padding
 	// sits outside `__DATA,__data`.
-	writeElfTrailingSections(elf, codeResult: codeResult, textVAddr: textVAddr, textFileOffset: textFileOffset, codeSize: codeSize, rodataVAddr: rodataVAddr as MachineWord, rodataFileOffset: rodataFileOffset as MachineWord, rdataSize: rdataSize, dataVAddr: dataVAddr as MachineWord, dataFileOffset: dataFileOffset as MachineWord, dataSize: preludeSize, shoffFieldOffset: shoffFieldOffset, shentsizeFieldOffset: shentsizeFieldOffset, shnumFieldOffset: shnumFieldOffset, shstrndxFieldOffset: shstrndxFieldOffset)
+	writeElfTrailingSections(elf, codeResult: codeResult, textVAddr: textVAddr, textFileOffset: textFileOffset, codeSize: codeSize as BytePos, rodataVAddr: rodataVAddr as MachineWord, rodataFileOffset: rodataFileOffset as MachineWord, rdataSize: rdataSize as BytePos, dataVAddr: dataVAddr as MachineWord, dataFileOffset: dataFileOffset as MachineWord, dataSize: preludeSize as BytePos, shoffFieldOffset: shoffFieldOffset as ByteOffset, shentsizeFieldOffset: shentsizeFieldOffset as ByteOffset, shnumFieldOffset: shnumFieldOffset as ByteOffset, shstrndxFieldOffset: shstrndxFieldOffset as ByteOffset)
 
 	// `mode` is NOT optional. PeWriter omits it because Windows derives executability from the file's
 	// contents; every POSIX loader derives it from the mode bits, and a file written without them
@@ -463,7 +463,7 @@ function writeElfTrailingSections(elf ByteArray, codeResult CodeResult, textVAdd
 	// The interned name tables, first in the tail because they are the only part of it a RUNNING tool
 	// reads. Written before the offsets below are taken, so those describe a cursor that already
 	// accounts for them.
-	let symdataFileOffset = alignUp(elf.count(), alignment: ElfSectionAlign)
+	let symdataFileOffset = alignUp(elf.count() as BytePos, alignment: ElfSectionAlign)
 
 	if hasSymdata 'symdataBytes'
 		padTo(elf, size: symdataFileOffset)
@@ -473,9 +473,9 @@ function writeElfTrailingSections(elf ByteArray, codeResult CodeResult, textVAdd
 	// Lay the three tables and the section header table out on an 8-byte cursor. A build with no debug
 	// symbols contributes zero to both symbol-table extents rather than skipping the arithmetic, so the
 	// cursor below it is one expression either way.
-	let symtabFileOffset = alignUp(elf.count(), alignment: ElfSectionAlign)
+	let symtabFileOffset = alignUp(elf.count() as BytePos, alignment: ElfSectionAlign)
 	let symtabSize = (symbolCount + 1) * ElfSymbolSize if hasSymbols else 0  // + the leading STN_UNDEF
-	let strtabFileOffset = symtabFileOffset + symtabSize
+	let strtabFileOffset = symtabFileOffset + symtabSize as BytePos
 	let strtabSize = strtab.count() if hasSymbols else 0
 
 	// ⭐ **THE PRODUCER STRING, IN THE SECTION EVERY OTHER COMPILER USES FOR IT.** `readelf -p .comment`
@@ -488,11 +488,11 @@ function writeElfTrailingSections(elf ByteArray, codeResult CodeResult, textVAdd
 	comment.append("Maxon {CompilerVersion}".toByteArray())
 	comment.push(0)
 
-	let commentFileOffset = strtabFileOffset + strtabSize
+	let commentFileOffset = strtabFileOffset + strtabSize as BytePos
 	let commentSize = comment.count()
-	let shstrtabFileOffset = commentFileOffset + commentSize
+	let shstrtabFileOffset = commentFileOffset + commentSize as BytePos
 	let shstrtabSize = shstrtab.count()
-	let sectionHeaderTableOffset = alignUp(shstrtabFileOffset + shstrtabSize, alignment: ElfSectionAlign)
+	let sectionHeaderTableOffset = alignUp(shstrtabFileOffset + shstrtabSize as BytePos, alignment: ElfSectionAlign)
 
 	// `.symtab`: the reserved STN_UNDEF entry, then one Elf64_Sym per function. Every function lives
 	// in `.text`, so each symbol's `st_shndx` is `textShndx`.
@@ -534,12 +534,12 @@ function writeElfTrailingSections(elf ByteArray, codeResult CodeResult, textVAdd
 	// `sh_link` of a SYMTAB names its string table; `sh_info` is the index of the first non-local
 	// symbol (see `ElfSymtabFirstGlobal`).
 	if hasSymbols 'symbolShdrs'
-		writeElfSectionHeader(elf, nameOffset: symtabNameOffset as MachineWord, sectionType: ElfShtSymtab, flags: 0, addr: 0, fileOffset: symtabFileOffset as MachineWord, size: symtabSize, link: strtabShndx, info: ElfSymtabFirstGlobal, addralign: ElfSectionAlign, entsize: ElfSymbolSize)
-		writeElfSectionHeader(elf, nameOffset: strtabNameOffset as MachineWord, sectionType: ElfShtStrtab, flags: 0, addr: 0, fileOffset: strtabFileOffset as MachineWord, size: strtabSize, link: 0, info: 0, addralign: ElfStrtabAlign, entsize: 0)
+		writeElfSectionHeader(elf, nameOffset: symtabNameOffset as MachineWord, sectionType: ElfShtSymtab, flags: 0, addr: 0, fileOffset: symtabFileOffset as MachineWord, size: symtabSize as MachineWord, link: strtabShndx, info: ElfSymtabFirstGlobal, addralign: ElfSectionAlign, entsize: ElfSymbolSize)
+		writeElfSectionHeader(elf, nameOffset: strtabNameOffset as MachineWord, sectionType: ElfShtStrtab, flags: 0, addr: 0, fileOffset: strtabFileOffset as MachineWord, size: strtabSize as MachineWord, link: 0, info: 0, addralign: ElfStrtabAlign, entsize: 0)
 	end 'symbolShdrs'
 
 	writeElfSectionHeader(elf, nameOffset: commentNameOffset as MachineWord, sectionType: ElfShtProgbits, flags: 0, addr: 0, fileOffset: commentFileOffset as MachineWord, size: commentSize as MachineWord, link: 0, info: 0, addralign: 1, entsize: 0)
-	writeElfSectionHeader(elf, nameOffset: shstrtabNameOffset as MachineWord, sectionType: ElfShtStrtab, flags: 0, addr: 0, fileOffset: shstrtabFileOffset as MachineWord, size: shstrtabSize, link: 0, info: 0, addralign: ElfStrtabAlign, entsize: 0)
+	writeElfSectionHeader(elf, nameOffset: shstrtabNameOffset as MachineWord, sectionType: ElfShtStrtab, flags: 0, addr: 0, fileOffset: shstrtabFileOffset as MachineWord, size: shstrtabSize as MachineWord, link: 0, info: 0, addralign: ElfStrtabAlign, entsize: 0)
 
 	patchQword(elf, offset: shoffFieldOffset, value: sectionHeaderTableOffset as MachineWord)
 	patchWord(elf, offset: shentsizeFieldOffset, value: ElfSectionHeaderSize)

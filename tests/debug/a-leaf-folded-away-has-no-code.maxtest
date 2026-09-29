@@ -10,7 +10,7 @@ test 'a one-line leaf whose every call folds to a constant has no code to break 
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let breakpoints = eventsOfKind(events, kind: BreakpointEventName)
 
-	try Expect.equal(breakpoints.count() as AssertedInt, expected: 2, message: "each `{BreakCommand}` answers one `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(breakpoints.count(), expected: 2, message: "each `{BreakCommand}` answers one `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let leaf = eventAt(breakpoints, index: 0)
 	try Expect.equal(textOf(leaf, node: leaf.root, key: ActionKey), expected: NoCodeAction, message: "`double(2) == 4` folds to the constant `true` before any instruction is chosen, so no instruction of the leaf's body survives in either caller; a breakpoint there has nowhere to go, and saying so is the honest answer. {said}")
@@ -19,6 +19,6 @@ test 'a one-line leaf whose every call folds to a constant has no code to break 
 	try Expect.equal(textOf(caller, node: caller.root, key: ActionKey), expected: SetAction, message: "the control: the calling line keeps the folded constant's code, so it arms. {said}")
 
 	let stops = eventsOfKind(events, kind: StopEventName)
-	try Expect.equal(stops.count() as AssertedInt, expected: 1, message: "the calling line stops the program once. It printed: {renderedRows(eventKinds(events))}. {said}")
-	try Expect.equal(numberOf(eventAt(stops, index: 0), node: eventAt(stops, index: 0).root, key: LineKey) as AssertedInt, expected: callLine as AssertedInt, message: "the stop is on the calling line. {said}")
+	try Expect.equal(stops.count(), expected: 1, message: "the calling line stops the program once. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(numberOf(eventAt(stops, index: 0), node: eventAt(stops, index: 0).root, key: LineKey), expected: callLine as EventNumber, message: "the stop is on the calling line. {said}")
 end 'a one-line leaf whose every call folds to a constant has no code to break on, and its callers line does'

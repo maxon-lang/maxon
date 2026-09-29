@@ -27,7 +27,7 @@ test 'upgrade --dry-run from a script install names that install and runs nothin
 
 	let run = runDriver([UpgradeCommandWord, DryRunFlag], binary: staged, environment: Environment.inheritUpdating([InstallVariable: decoy]))
 
-	let observedExit = run.exitCode() as AssertedInt
+	let observedExit = run.exitCode()
 	Expect.equal(observedExit, expected: 0, message: "`maxon {UpgradeCommandWord} {DryRunFlag}` from the script install at {installRoot.toString()} did not succeed. It said: {run.stdout}{run.stderr}")
 	Expect.isEmpty(run.stderr, message: "`maxon {UpgradeCommandWord} {DryRunFlag}` from a script install wrote to stderr, and nothing went wrong")
 
@@ -47,5 +47,5 @@ test 'upgrade --dry-run from a script install names that install and runs nothin
 	// The install script fills `<root>/stdlib`, so a dry run that ran it leaves the staged one non-empty.
 	let stdlib = installRoot.join("{StdlibDirName}")
 	let installed = try Directory.list(stdlib) otherwise panic("upgrade dry run: the gate could not run - could not list {stdlib.toString()}, which this case staged moments ago")
-	Expect.equal(installed.count() as AssertedInt, expected: 0, message: "`maxon {UpgradeCommandWord} {DryRunFlag}` wrote into {stdlib.toString()}; a dry run runs nothing")
+	Expect.equal(installed.count(), expected: 0, message: "`maxon {UpgradeCommandWord} {DryRunFlag}` wrote into {stdlib.toString()}; a dry run runs nothing")
 end 'upgrade --dry-run from a script install names that install and runs nothing'

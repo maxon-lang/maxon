@@ -56,41 +56,36 @@ FAIL main.maxon:12: Expect.equal
   message: two plus two
 ```
 
-### `equal` is one name
+### Each matcher is one generic function
 
-`equal` and `notEqual` are overloaded across integer, `String` and `bool` rather than split into
-`equalInt` / `equalText`. One name is what makes the library learnable, and overload resolution
-sees through a method call, so `Expect.equal(parts.count(), expected: 3)` resolves.
+`equal` and `notEqual` are one generic function each over any `Equatable` type, and `greaterThan`,
+`lessThan`, `atLeast` and `atMost` one each over any `Comparable` type (`specs/generic-functions.md`).
+The type is inferred from the two arguments, so `Expect.equal(parts.count(), expected: 3)` compares
+two `ElementIndex` values and an author's own alias needs no cast.
 
 `String` values are rendered **quoted**, so a trailing space or an empty string is visible in the
-report; integers and bools are rendered bare.
+report; every other value is rendered as its interpolation prints it.
 
-### Floats get `close`, and deliberately get no `equal`
+### Floats compare with `close`
 
-There is no `equal` overload for floats. A float `==` matcher is a matcher that passes on one
-target and fails on another, so the rule is enforced by the signature list rather than by
-documentation: `Expect.equal(1.0, expected: 1.0)` does not compile.
-
-Floats are compared with an explicit tolerance instead:
+Two floats that should agree are compared with an explicit tolerance:
 
 ```text
 Expect.close(measured, expected: 1.5, within: 0.01)
 ```
 
-Ordering matchers (`greaterThan`, `lessThan`, `atLeast`, `atMost`) *do* have float overloads.
-Comparing a float against a threshold is a stable question — the hazard that removes `equal` is
-exact bit-equality, which an ordering test does not ask for.
+`close` takes `AssertedReal` values, so a non-float argument is refused at the call.
 
 ### The roster
 
 | Matcher | Holds when |
 |---|---|
-| `equal(actual, expected:)` | `actual == expected` — integer, `String` or `bool` |
-| `notEqual(actual, expected:)` | `actual != expected` — integer, `String` or `bool` |
-| `greaterThan(actual, than:)` | `actual > than` — integer or float |
-| `lessThan(actual, than:)` | `actual < than` — integer or float |
-| `atLeast(actual, than:)` | `actual >= than` — integer or float |
-| `atMost(actual, than:)` | `actual <= than` — integer or float |
+| `equal(actual, expected:)` | `actual == expected` — any `Equatable` type |
+| `notEqual(actual, expected:)` | `actual != expected` — any `Equatable` type |
+| `greaterThan(actual, than:)` | `actual > than` — any `Comparable` type |
+| `lessThan(actual, than:)` | `actual < than` — any `Comparable` type |
+| `atLeast(actual, than:)` | `actual >= than` — any `Comparable` type |
+| `atMost(actual, than:)` | `actual <= than` — any `Comparable` type |
 | `close(actual, expected:, within:)` | `abs(actual - expected) <= within` — float |
 | `isTrue(actual)` / `isFalse(actual)` | the `bool` is `true` / `false` |
 | `contains(haystack, needle:)` | `haystack` contains `needle` |
@@ -98,10 +93,9 @@ exact bit-equality, which an ordering test does not ask for.
 | `isEmpty(haystack)` | the `String` has no characters |
 | `fail(message)` | never — the escape hatch |
 
-**NaN fails every float matcher.** NaN satisfies no comparison, so each float arm is written as
-"fail unless the assertion HOLDS" rather than "fail when its negation holds" — the two differ
-only for NaN, and the negated form reported a NaN as green. A test whose subject produced NaN
-did not meet its bound, and says so.
+**NaN fails every ordering matcher and `close`.** NaN satisfies no comparison, so each is written
+as "fail unless the assertion HOLDS" — the negated form would report a NaN as green. A test whose
+subject produced NaN did not meet its bound, and says so.
 
 `fail` is what an unreachable branch calls. It has no pair of values to compare, so its report
 carries only the message.
@@ -115,8 +109,7 @@ where the values go:
 Expect.isTrue(a == b, message: "expected {b}, got {a}")
 ```
 
-That works for any type that is `Equatable` (for `==`) and `Stringable` (for the interpolation),
-which is the escape hatch for types the roster above does not name.
+That works for any type that is `Equatable` (for `==`) and `Stringable` (for the interpolation).
 
 ## Tests
 
@@ -498,21 +491,56 @@ FAIL main.maxon:5: Expect.fail
   message: a negative reading should be impossible: -3
 ```
 
-<!-- test: error.float-has-no-equal -->
-The design rule is enforced by the signature list rather than by documentation: with no float
-`equal` to select, the float argument is measured against the integer arm and refused as a lossy
-implicit conversion. Either way it is a compile error, which is the point — a float `==` matcher
-would pass on one target and fail on another.
+<!-- test: equal-infers-its-type-with-no-cast -->
+`equal` is one generic matcher over any `Equatable` type, so an `ElementIndex`, a plain integer
+expression and an author's own alias all reach it without a cast.
 ```maxon
 // --- file: main.maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Word = Array with Integer
+
 function main() returns ExitCode
+	var xs = Word.create()
+	xs.push(1)
+	xs.push(2)
+	xs.push(3)
+	let i = 5 as Integer
+
+	try Expect.equal(xs.count(), expected: 3) otherwise ignore
+	try Expect.equal(2 + 2, expected: 4) otherwise ignore
+	try Expect.equal(i, expected: 5) otherwise ignore
 	try Expect.equal(1.5, expected: 1.5) otherwise ignore
+
+	print("all held\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+all held
+```
+
+<!-- test: a-failing-equal-on-an-alias-prints-both-values -->
+```maxon
+// --- file: main.maxon
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	let i = 5 as Integer
+	try Expect.equal(i, expected: 6) otherwise ignore
 
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3009: specs/fragments/testing-assertions/error.float-has-no-equal.test:4:13: argument 'actual': cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
+```exitcode
+0
+```
+```stderr
+FAIL main.maxon:5: Expect.equal
+  expected: 6
+  received: 5
 ```
 
 <!-- test: error.forgotten-try -->

@@ -93,15 +93,15 @@ export type SourceRangeTable
 		return Self{startBytes: ByteOffsetArray.create(), endBytes: ByteOffsetArray.create(), lines: LineNumberArray.create(), columns: ColumnNumberArray.create()}
 	end 'create'
 
-	export function count() returns OpCount
+	export function count() returns ElementIndex
 		return self.startBytes.count()
 	end 'count'
 
 	// Append `range` as the span of op `opIndex`, decomposing it into the four
 	// columns. `opIndex` must be the next unrecorded slot — that is what keeps the
 	// table parallel to `module.ops`.
-	export function record(opIndex OpIndex, range SourceRange)
-		if opIndex != self.count() as OpIndex 'outOfStep'
+	export function record(opIndex ElementIndex, range SourceRange)
+		if opIndex != self.count() 'outOfStep'
 			panic("SourceRangeTable.record: op {opIndex} recorded into slot {self.count()} — an op was appended without a span, and every later span would be misattributed")
 		end 'outOfStep'
 
@@ -120,8 +120,8 @@ export type SourceRangeTable
 	// of the source, so it panics instead. The four columns are only ever pushed
 	// together by `record`, so once the index is in range all four hold it — their
 	// `otherwise` arms are unreachable-by-construction, not error handling.
-	export function get(opIndex OpIndex) returns SourceRange
-		if opIndex >= self.count() as OpIndex 'noSpan'
+	export function get(opIndex ElementIndex) returns SourceRange
+		if opIndex >= self.count() 'noSpan'
 			panic("SourceRangeTable.get: op {opIndex} has no recorded span (table holds {self.count()}) — an op was created without going through FileParseArtifact.emitOp")
 		end 'noSpan'
 
@@ -154,11 +154,11 @@ end 'SourceRangeTable'
 // an index in the column is what lets an inlined body keep its own file while every tier moves a
 // scalar. Interning is also what makes "the span CHANGED" a comparison of two ints, which is the
 // rule the sidecar writes its line rows by.
-export typealias SpanId = int(0 to u32.max)
+export typealias SpanId = int(0 to u32.max) implements ElementIndex
 export typealias SpanIdArray = Array with SpanId
 
 // A source file registered in a `DebugSpanTable`, as a line row names one.
-export typealias DebugFileId = int(0 to u32.max)
+export typealias DebugFileId = int(0 to u32.max) implements ElementIndex
 typealias DebugFileIdArray = Array with DebugFileId
 
 // Entry 0 of every table is the POSITIONLESS span. An op that was never given a position resolves to
@@ -315,12 +315,12 @@ export type DebugSpanColumn
 		return Self{}
 	end 'create'
 
-	export function count() returns OpCount
+	export function count() returns ElementIndex
 		return self.ids.count()
 	end 'count'
 
 	// The span of op `opIndex`, or `NoSpanId` when this module carries none.
-	export function at(opIndex OpIndex) returns SpanId
+	export function at(opIndex ElementIndex) returns SpanId
 		return try self.ids.get(opIndex) otherwise NoSpanId
 	end 'at'
 
@@ -329,7 +329,7 @@ export type DebugSpanColumn
 	// ⚠ **THE INDEX MUST BE THE NEXT UNRECORDED SLOT**, which is `SourceRangeTable.record`'s rule for
 	// its reason: an op that entered `module.ops` by a route that does not record here fails loudly on
 	// the FOLLOWING op instead of shifting every later span by one.
-	export function pushCurrent(opIndex OpIndex)
+	export function pushCurrent(opIndex ElementIndex)
 		if not self.armed 'notCapturing'
 			return
 		end 'notCapturing'
@@ -341,7 +341,7 @@ export type DebugSpanColumn
 	// Attribute a newly appended op to NO statement — a spill, a reload, a parallel-copy move. Such an
 	// op is the allocator's rather than the author's, and a line row at it would stop a debugger on a
 	// statement whose code it is not.
-	export function pushNone(opIndex OpIndex)
+	export function pushNone(opIndex ElementIndex)
 		if not self.armed 'notCapturing'
 			return
 		end 'notCapturing'
@@ -351,7 +351,7 @@ export type DebugSpanColumn
 	end 'pushNone'
 
 	// Attribute a newly appended op to a span the caller already resolved.
-	export function pushId(opIndex OpIndex, spanId SpanId)
+	export function pushId(opIndex ElementIndex, spanId SpanId)
 		if not self.armed 'notCapturing'
 			return
 		end 'notCapturing'
@@ -362,7 +362,7 @@ export type DebugSpanColumn
 
 	// Attribute an op that was written over an index this column already holds (`ops.set` on a
 	// recycled slot) rather than appended.
-	export function placeAt(opIndex OpIndex, spanId SpanId)
+	export function placeAt(opIndex ElementIndex, spanId SpanId)
 		if not self.armed 'notCapturing'
 			return
 		end 'notCapturing'
@@ -373,7 +373,7 @@ export type DebugSpanColumn
 	// Fold `count` of `source`'s entries onto the end of this column, in order. A source module that
 	// carries no spans contributes positionless ones, which is what keeps this column parallel to an
 	// `ops` array that just grew by a band nobody recorded.
-	export function appendFrom(source Self, count OpCount)
+	export function appendFrom(source Self, count ElementIndex)
 		if not self.armed 'notCapturing'
 			return
 		end 'notCapturing'
@@ -392,7 +392,7 @@ export type DebugSpanColumn
 	// keyed BY INDEX and a short column simply answers `NoSpanId` — a line table with a hole in it that
 	// loads, reads clean, and is silently wrong about the ops past it. The COUNT is the only thing that
 	// can see that, so it is asked wherever a module stops being appended to.
-	export function requireParallelTo(opCount OpCount, what String)
+	export function requireParallelTo(opCount ElementIndex, what String)
 		if not self.armed or self.ids.count() == opCount 'inStep'
 			return
 		end 'inStep'
@@ -405,16 +405,16 @@ export type DebugSpanColumn
 		self.current = NoSpanId
 	end 'releaseRows'
 
-	export function swapAt(i OpIndex, j OpIndex)
-		self.ids.swap(i as ElementIndex, j: j as ElementIndex)
+	export function swapAt(i ElementIndex, j ElementIndex)
+		self.ids.swap(i, j: j)
 	end 'swapAt'
 
 	export function dropLast()
 		_ = try self.ids.pop() otherwise panic("DebugSpanColumn.dropLast: pop on an empty column")
 	end 'dropLast'
 
-	function requireNextSlot(opIndex OpIndex)
-		if opIndex != self.ids.count() as OpIndex 'outOfStep'
+	function requireNextSlot(opIndex ElementIndex)
+		if opIndex != self.ids.count() 'outOfStep'
 			panic("DebugSpanColumn: op {opIndex} recorded into slot {self.ids.count()} — an op reached module.ops without a span, and every later span would be misattributed")
 		end 'outOfStep'
 	end 'requireNextSlot'

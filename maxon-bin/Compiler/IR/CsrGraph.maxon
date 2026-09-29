@@ -24,7 +24,7 @@
 
 // A dense node key, a neighbour, or a count — one non-negative integer, so one graph type serves
 // every key domain (blocks, values, functions); a consumer casts at its own door.
-export typealias CsrIndex = int(0 to u64.max)
+export typealias CsrIndex = int(0 to u64.max) implements ElementIndex
 export typealias CsrColumn = Array with CsrIndex
 
 // `list[start[n] .. start[n+1])` are the values associated with key `n`.
@@ -39,14 +39,14 @@ export type CsrGraph
 	// Number of neighbours of node `n`.
 	export function degree(n CsrIndex) returns CsrIndex
 		let lo = try self.start.get(n) otherwise panic("CsrGraph.degree: node {n} out of range")
-		let hi = try self.start.get(n + 1) otherwise panic("CsrGraph.degree: node {n}+1 out of range")
+		let hi = try self.start.get((n + 1) as ElementIndex) otherwise panic("CsrGraph.degree: node {n}+1 out of range")
 		return hi - lo
 	end 'degree'
 
 	// The `k`-th neighbour of node `n`.
 	export function neighbour(n CsrIndex, k CsrIndex) returns CsrIndex
 		let lo = try self.start.get(n) otherwise panic("CsrGraph.neighbour: node {n} out of range")
-		return try self.list.get(lo + k) otherwise panic("CsrGraph.neighbour: neighbour {k} of node {n} out of range")
+		return try self.list.get((lo + k) as ElementIndex) otherwise panic("CsrGraph.neighbour: neighbour {k} of node {n} out of range")
 	end 'neighbour'
 
 	// How many nodes the graph spans — the count it was BUILT over, which `start` already carries as one
@@ -68,12 +68,12 @@ export function buildCsr(from CsrColumn, to CsrColumn, nodeCount CsrIndex) retur
 	let edgeCount = from.count()
 
 	var start = CsrColumn.create()
-	start.resize(nodeCount + 1)
+	start.resize((nodeCount + 1) as ElementIndex)
 
 	for k in 0 upto edgeCount 'countDeg'
 		let f = try from.get(k) otherwise panic("buildCsr: from.get OOB")
-		let cur = try start.get(f + 1) otherwise panic("buildCsr: key {f} is outside the {nodeCount}-key space")
-		try start.set(f + 1, value: cur + 1) otherwise panic("buildCsr: start.set OOB")
+		let cur = try start.get((f + 1) as ElementIndex) otherwise panic("buildCsr: key {f} is outside the {nodeCount}-key space")
+		try start.set((f + 1) as ElementIndex, value: cur + 1) otherwise panic("buildCsr: start.set OOB")
 	end 'countDeg'
 
 	for n in 0 upto nodeCount 'prefix'
@@ -138,8 +138,8 @@ export function reverseReachabilityMark(graph CsrGraph, seeds BoolArray) returns
 
 	var head = 0 as CsrIndex
 
-	while head < worklist.count() 'drain'
-		let node = try worklist.get(head) otherwise panic("reverseReachabilityMark: worklist.get({head}) OOB")
+	while head < worklist.count() as CsrIndex 'drain'
+		let node = try worklist.get(head as ElementIndex) otherwise panic("reverseReachabilityMark: worklist.get({head}) OOB")
 		head = head + 1
 
 		for k in 0 upto graph.degree(node) 'neighbour'
@@ -254,8 +254,8 @@ export function shortestCycleThrough(graph CsrGraph, start CsrIndex) returns Csr
 
 	var head = 0 as CsrIndex
 
-	while head < frontier.count() 'eachFrontierNode'
-		let node = try frontier.get(head) otherwise panic("shortestCycleThrough: frontier.get({head}) below its own count()")
+	while head < frontier.count() as CsrIndex 'eachFrontierNode'
+		let node = try frontier.get(head as ElementIndex) otherwise panic("shortestCycleThrough: frontier.get({head}) below its own count()")
 		head = head + 1
 
 		for k in 0 upto graph.degree(node) 'eachNeighbour'
@@ -290,7 +290,7 @@ function cycleThrough(cameFrom CsrColumn, closedBy CsrIndex, start CsrIndex) ret
 
 	while at != start 'walkBackUpTheTree'
 		backwards.push(at)
-		at = try cameFrom.get(at) otherwise panic("cycleThrough: node {at} is on the BFS tree but has no recorded parent")
+		at = try cameFrom.get(at as ElementIndex) otherwise panic("cycleThrough: node {at} is on the BFS tree but has no recorded parent")
 	end 'walkBackUpTheTree'
 
 	backwards.push(start)
@@ -401,9 +401,9 @@ type SccWalk
 	// more members IS a cycle; a lone member is one only when it names itself.
 	function closeComponent(root CsrIndex, namesItself bool)
 		let base = try self.openAt.get(root) otherwise panic("SccWalk.closeComponent: node {root} outside the walk's node space")
-		let cyclic = self.componentStack.count() - base > 1 or namesItself
+		let cyclic = self.componentStack.count() as CsrIndex - base > 1 or namesItself
 
-		while self.componentStack.count() > base 'popMember'
+		while self.componentStack.count() as CsrIndex > base 'popMember'
 			let member = try self.componentStack.pop() otherwise panic("SccWalk.closeComponent: pop from a componentStack already at its base")
 			try self.isOpen.set(member, value: false) otherwise panic("SccWalk.closeComponent: node {member} outside the walk's node space")
 

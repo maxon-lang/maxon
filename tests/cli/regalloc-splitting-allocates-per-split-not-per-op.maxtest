@@ -51,7 +51,7 @@ function fixtureStatements(repetitions BlockRepetition) returns StatementTally
 	return FixtureSetupStatements + StatementsPerBlock * repetitions
 end 'fixtureStatements'
 
-function splittingAllocationsIn(table String) returns AssertedInt
+function splittingAllocationsIn(table String) returns ReportedTally
 	for row in table.split(MetricsRowSeparator) 'eachRow'
 		let line = row.trimEnd()
 
@@ -79,7 +79,7 @@ function splittingAllocationsIn(table String) returns AssertedInt
 	panic("regalloc-splitting: the gate could not run - the metrics table carries no `{MetricsRegAllocKind}` row named `{SplittingPhaseName}`, so the pressure sweep's allocations were never measured. The table was: {table}")
 end 'splittingAllocationsIn'
 
-function splittingAllocationsFor(dir FilePath, appDirName String, repetitions BlockRepetition) returns AssertedInt throws TestFailure
+function splittingAllocationsFor(dir FilePath, appDirName String, repetitions BlockRepetition) returns ReportedTally throws TestFailure
 	let app = createdStagedDirectory(dir.join(appDirName))
 
 	try File.writeText(app.join(MainFileName), content: fixtureSource(repetitions)) otherwise panic("regalloc-splitting: the gate could not run - could not write the {repetitions}-block fixture source")
@@ -87,7 +87,7 @@ function splittingAllocationsFor(dir FilePath, appDirName String, repetitions Bl
 	let metricsFileName = "{appDirName}{MetricsFileSuffix}"
 	let built = runDriver([BuildCommandWord, appDirName, "{MetricsFlagPrefix}{metricsFileName}"], workingDirectory: dir)
 
-	try Expect.equal(built.exitCode() as AssertedInt, expected: 0, message: "the {repetitions}-block fixture did not build, so the sweep was never measured over it. It wrote to stderr: {built.stderr}")
+	try Expect.equal(built.exitCode(), expected: 0, message: "the {repetitions}-block fixture did not build, so the sweep was never measured over it. It wrote to stderr: {built.stderr}")
 
 	let table = try File.readText(dir.join(metricsFileName)) otherwise panic("regalloc-splitting: the gate could not run - the {repetitions}-block build wrote no metrics table at {metricsFileName}")
 	return splittingAllocationsIn(table)
@@ -106,8 +106,8 @@ type SplittingAllocatesPerSplit implements OutsideCheckoutCase
 		let smallAllocs = try splittingAllocationsFor(dir, appDirName: SmallAppDirName, repetitions: SmallRepetitions)
 		let largeAllocs = try splittingAllocationsFor(dir, appDirName: LargeAppDirName, repetitions: LargeRepetitions)
 
-		let smallStatements = fixtureStatements(SmallRepetitions) as AssertedInt
-		let largeStatements = fixtureStatements(LargeRepetitions) as AssertedInt
+		let smallStatements = fixtureStatements(SmallRepetitions) as ReportedTally
+		let largeStatements = fixtureStatements(LargeRepetitions) as ReportedTally
 
 		try Expect.isTrue(largeAllocs - smallAllocs < largeStatements - smallStatements, message: "the `{SplittingPhaseName}` sub-phase allocated {smallAllocs} boxes over a body of {smallStatements} statements and {largeAllocs} over a body of {largeStatements}, so {largeStatements - smallStatements} more statements cost {largeAllocs - smallAllocs} more allocations: the pressure sweep allocates at least one box per op it visits. Its verdicts must cost nothing per op - only per function and per split.")
 	end 'requireHeldIn'

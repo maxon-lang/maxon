@@ -171,7 +171,7 @@ export function readPeSectionData(path FilePath, sectionName String) returns Byt
 		let rawPointer = imageReadU32(image, at: ((header + SectionRawPointerOffset) as ByteOffset))
 		let size = virtualSize if virtualSize < rawSize else rawSize
 
-		if not spanFitsWithin(rawPointer as ByteOffset, count: size as BytePos, total: image.count()) 'runsPastEof'
+		if not spanFitsWithin(rawPointer as ByteOffset, count: size as BytePos, total: image.count() as BytePos) 'runsPastEof'
 			throw PeReadError.truncated(path, sectionName: sectionName)
 		end 'runsPastEof'
 
@@ -292,7 +292,7 @@ export function findByteRun(haystack ByteArray, needle ByteArray, from ByteOffse
 		return SectionPayloadMatch.absent
 	end 'longerThanTheSection'
 
-	for start in from upto haystack.count() - needle.count() + 1 'eachStart'
+	for start in from upto (haystack.count() - needle.count() + 1) as ByteOffset 'eachStart'
 		if byteRunMatchesAt(haystack, needle: needle, start: start) 'thisOne'
 			return SectionPayloadMatch.found(start)
 		end 'thisOne'
@@ -306,7 +306,7 @@ end 'findByteRun'
 function byteRunMatchesAt(haystack ByteArray, needle ByteArray, start ByteOffset) returns bool
 	for i in 0 upto needle.count() 'eachByte'
 		let want = try needle.get(i) otherwise panic("byteRunMatchesAt: needle.get OOB at {i} despite the upto bound")
-		let got = try haystack.get(start + i) otherwise panic("byteRunMatchesAt: haystack.get OOB at {start + i} — the caller's bound keeps the window inside the section")
+		let got = try haystack.get((start + i) as ElementIndex) otherwise panic("byteRunMatchesAt: haystack.get OOB at {start + i} — the caller's bound keeps the window inside the section")
 
 		if want != got 'differs'
 			return false
@@ -377,8 +377,8 @@ function utf8PinBytes(valueText String) returns ByteArray throws TypedValueError
 	var out = ByteArray.create()
 	var i = 1 as ByteOffset
 
-	while i < bodyEnd 'eachByte'
-		let ch = try raw.get(i) otherwise panic("utf8PinBytes: i < bodyEnd just held but get({i}) failed")
+	while i < bodyEnd as ByteOffset 'eachByte'
+		let ch = try raw.get(i as ElementIndex) otherwise panic("utf8PinBytes: i < bodyEnd just held but get({i}) failed")
 
 		if ch != PinBackslash 'aPlainByte'
 			out.push(ch)
@@ -386,11 +386,11 @@ function utf8PinBytes(valueText String) returns ByteArray throws TypedValueError
 			continue
 		end 'aPlainByte'
 
-		if i + 1 >= bodyEnd 'danglingBackslash'
+		if i + 1 >= bodyEnd as ByteOffset 'danglingBackslash'
 			throw TypedValueError.unknownEscape(pinEscapeText(PinBackslash))
 		end 'danglingBackslash'
 
-		let marker = try raw.get(i + 1) otherwise panic("utf8PinBytes: i + 1 < bodyEnd just held but get({i + 1}) failed")
+		let marker = try raw.get((i + 1) as ElementIndex) otherwise panic("utf8PinBytes: i + 1 < bodyEnd just held but get({i + 1}) failed")
 		out.push(try pinEscapeByte(marker))
 		i = i + 2
 	end 'eachByte'

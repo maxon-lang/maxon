@@ -715,7 +715,7 @@ type Lookup
 	end 'make'
 
 	function getName(i Idx) returns String
-		return try self.names.get(i) otherwise "?"
+		return try self.names.get(i as ElementIndex) otherwise "?"
 	end 'getName'
 
 	function nameLen(t Idx) returns Idx

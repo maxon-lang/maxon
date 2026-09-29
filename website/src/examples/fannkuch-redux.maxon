@@ -62,10 +62,10 @@ function initialPermutation(current IntArray, count IntArray, temp IntArray, fac
 	var i = n - 1
 
 	while i > 0 'digits'
-		let factorialOfI = try fact.get(i) otherwise panic("initialPermutation: i < n < fact.count()")
+		let factorialOfI = try fact.get(i as ElementIndex) otherwise panic("initialPermutation: i < n < fact.count()")
 		let d = try (remaining / factorialOfI) otherwise panic("initialPermutation: a factorial is never 0")
 		remaining = try (remaining mod factorialOfI) otherwise panic("initialPermutation: a factorial is never 0")
-		try count.set(i, value: d) otherwise panic("initialPermutation: i < n = count.count()")
+		try count.set(i as ElementIndex, value: d) otherwise panic("initialPermutation: i < n = count.count()")
 
 		for j in 0 upto n 'copy'
 			let element = try current.get(j) otherwise panic("initialPermutation: j < n = current.count()")
@@ -74,7 +74,7 @@ function initialPermutation(current IntArray, count IntArray, temp IntArray, fac
 
 		for j in 0 to i 'rotate'
 			let source = j + d if j + d <= i else j + d - i - 1
-			let rotated = try temp.get(source) otherwise panic("initialPermutation: d <= i and j <= i, so 0 <= source <= i < n")
+			let rotated = try temp.get(source as ElementIndex) otherwise panic("initialPermutation: d <= i and j <= i, so 0 <= source <= i < n")
 			try current.set(j, value: rotated) otherwise panic("initialPermutation: j <= i < n")
 		end 'rotate'
 
@@ -93,9 +93,9 @@ function flipCount(current IntArray, temp IntArray, n Integer) returns Integer
 	var flips = 1
 	var firstValue = try current.get(0) otherwise panic("flipCount: n >= 1")
 
-	while (try temp.get(firstValue) otherwise panic("flipCount: firstValue is a permutation element, so it is < n")) > 0 'flip'
-		let newFirstValue = try temp.get(firstValue) otherwise panic("flipCount: firstValue < n")
-		try temp.set(firstValue, value: firstValue) otherwise panic("flipCount: firstValue < n")
+	while (try temp.get(firstValue as ElementIndex) otherwise panic("flipCount: firstValue is a permutation element, so it is < n")) > 0 'flip'
+		let newFirstValue = try temp.get(firstValue as ElementIndex) otherwise panic("flipCount: firstValue < n")
+		try temp.set(firstValue as ElementIndex, value: firstValue) otherwise panic("flipCount: firstValue < n")
 
 		if firstValue > 2 'reverseMiddle'
 			var low = 1
@@ -103,9 +103,9 @@ function flipCount(current IntArray, temp IntArray, n Integer) returns Integer
 
 			while low < high 'reverse'
 				let atLow = try temp.get(low) otherwise panic("flipCount: low < high < firstValue < n")
-				let atHigh = try temp.get(high) otherwise panic("flipCount: high < firstValue < n")
+				let atHigh = try temp.get(high as ElementIndex) otherwise panic("flipCount: high < firstValue < n")
 				try temp.set(low, value: atHigh) otherwise panic("flipCount: low < n")
-				try temp.set(high, value: atLow) otherwise panic("flipCount: high < n")
+				try temp.set(high as ElementIndex, value: atLow) otherwise panic("flipCount: high < n")
 				low = low + 1
 				high = high - 1
 			end 'reverse'
@@ -159,7 +159,7 @@ function main() returns ExitCode
 	end 'badArgument'
 
 	var fact = IntArray.create()
-	fact.resize(n + 1)
+	fact.resize((n + 1) as ElementIndex)
 	try fact.set(0, value: 1) otherwise panic("main: fact holds n + 1 >= 1 slots")
 
 	for i in 1 to n 'factorials'
@@ -167,16 +167,16 @@ function main() returns ExitCode
 		try fact.set(i, value: i * previous) otherwise panic("main: i <= n < fact.count()")
 	end 'factorials'
 
-	let permutationCount = try fact.get(n) otherwise panic("main: n < fact.count()")
+	let permutationCount = try fact.get(n as ElementIndex) otherwise panic("main: n < fact.count()")
 	let lastIndex = permutationCount - 1
 
 	// The block body's three working arrays, allocated once for the whole run.
 	var count = IntArray.create()
-	count.resize(n)
+	count.resize(n as ElementIndex)
 	var current = IntArray.create()
-	current.resize(n)
+	current.resize(n as ElementIndex)
 	var temp = IntArray.create()
-	temp.resize(n)
+	temp.resize(n as ElementIndex)
 
 	initialPermutation(current, count: count, temp: temp, fact: fact, n: n, firstIndex: 0)
 

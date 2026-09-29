@@ -214,7 +214,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:15: Unsupported: `String` member 'addressableByte' — the compiler provides hash/equals; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:3:15: Unsupported: `String` member 'addressableByte' — the compiler provides hash/equals/compare; that list IS the surface, so nothing else is served here
 ```
 
 And the roster a user program is handed NAMES the stdlib-only method it still serves. This is the case
@@ -229,5 +229,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:15: Unsupported: `String` member 'frobnicate' — the compiler provides hash/equals; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:3:15: Unsupported: `String` member 'frobnicate' — the compiler provides hash/equals/compare; that list IS the surface, so nothing else is served here
 ```

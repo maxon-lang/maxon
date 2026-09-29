@@ -61,7 +61,7 @@ end 'main'
 | `DurationMs`, `InstantMs`, `DurationNanos`, `InstantNanos`, `UnixSeconds` | `int(0 to u64.max)` | Clock |
 | `UnixNanos`, `UnixDays` | `int(i64.min to i64.max)` | Clock |
 | `SchedulerProcessorCount` | `int(1 to i64.max)` | Scheduler |
-| `NetworkPort` | `int(0 to 65535)` | TcpClient |
+| `NetworkPort` | `int(0 to 65535)` | TcpClient; also `URL.port()` |
 | `EnvMap` | `Map with String, String` | Subprocess |
 | `JsonNodeId` / `JsonNodeIdArray` | `int(0 to u64.max)` / `Array with JsonNodeId` | Json |
 | `SegmentByteCount`, `SegmentOffset`, `SegmentWord` | see [SharedMemory](#sharedmemory) | SharedMemory |
@@ -76,9 +76,8 @@ to name one.
 
 | Name | Definition | Declared by |
 |------|------------|-------------|
-| `ElementIndex` | `int(0 to u64.max)` | Array, Vector |
+| `ElementIndex` | `int(0 to u64.max)` | Array |
 | `ReportedCapacity` | `int(i64.min to i64.max)` | Array |
-| `NodeCount`, `NodeIndex` | `int(0 to u64.max)` | List |
 | `EntryCount` | `int(0 to 4611686018427387904)` | Map |
 | `MemberCount` | `int(0 to 4611686018427387904)` | Set |
 | `IterPos` | `int(0 to u64.max)` | Range |
@@ -86,7 +85,6 @@ to name one.
 | `Utf8ByteCount` | `int(0 to u64.max)` | Character |
 | `JsonInt` | `int(i64.min to i64.max)` | Json |
 | `JsonFloat` | `float(f64.min to f64.max)` | Json |
-| `ChildCount`, `ChildIndex` | `int(0 to u64.max)` | Json |
 | `Milliseconds` | `int(0 to u64.max)` | Sleep |
 | `CivilYear` / `CivilMonth` / `CivilDay` | `int(i64.min to i64.max)` / `int(1 to 12)` / `int(1 to 31)` | Clock |
 | `LogInteger`, `LogRank` | `int(i64.min to i64.max)` / `int(i32.min to i32.max)` | Log |
@@ -102,13 +100,12 @@ to name one.
 | `EnvSourceValue` | `int(0 to 1)` | Subprocess |
 | `StdioKindValue` | `int(0 to 5)` | Subprocess |
 | `SpawnEnvironment`, `StdioRuntimeTriple` | the records `Subprocess` hands the runtime | Subprocess |
-| `PortNumber` | `int(0 to 65535)` | URL |
-| `AssertedInt` | `int(i64.min to i64.max)` | Testing |
 | `AssertedReal` | `float(f64.min to f64.max)` | Testing |
 | `Tolerance` | `float(0.0 to f64.max)` | Testing |
 
-`Byte` is declared by several modules at one definition each; `BytePos` is declared once, in `String`.
-See the table above.
+`Byte` and `BytePos` are declared once, in `String` (see the table above). `BytePos`, `GraphemeIndex`,
+`JsonNodeId` and `EntryCount` implement `ElementIndex`, and `MemberCount` implements `EntryCount`, so each
+indexes an `Array` with no cast; an index of any other alias, or of a non-integer type, is **E3005** (see [Subtypes With `implements`](LANGUAGE_REFERENCE.md#subtypes-with-implements)).
 
 ### Target support
 
@@ -244,7 +241,8 @@ cluster**, a user-perceived character: `"é👍🏽".count()` is 2, although it 
 Positions are `StringIndex` values, which carry both a grapheme index and a byte position so stepping
 never rescans the string.
 
-`String` implements `Hashable`, `Equatable`, `Iterable` (over `Character`) and `Cloneable`.
+`String` implements `Hashable`, `Equatable`, `Comparable` (byte order, a shorter prefix first), `Iterable`
+(over `Character`) and `Cloneable`.
 
 ```maxon
 function main() returns ExitCode
@@ -2659,13 +2657,13 @@ Output: `0.0 1.0 3.0 1024.0` and `0.7853981633974483 true`.
 ## Primitive Extensions
 
 `int`, `float` and `bool` conform to the core interfaces, so they work as `Map` keys, `Set` elements, in
-`sort()` and in generic code.
+`sort()` and in generic code. Every alias of `int` or `float` conforms as its primitive does.
 
 | Type | Conforms to | Notes |
 |------|-------------|-------|
 | `int` | `Hashable`, `Equatable`, `Comparable`, `Stringable`, `Cloneable` | `hash()` is the low 32 bits of the value. |
 | `float` | `Hashable`, `Equatable`, `Comparable`, `Stringable`, `Cloneable` | `compare` is a total order: NaN equals NaN and sorts below every other value. `hash()` folds the 64-bit IEEE-754 pattern into 32 bits, `(bits xor (bits shr 32)) and 0xFFFFFFFF`, except that `-0.0` hashes as `0.0` does (`0`). |
-| `bool` | `Comparable`, `Stringable`, `Cloneable` | `false` sorts before `true`. |
+| `bool` | `Equatable`, `Comparable`, `Stringable`, `Cloneable` | `false` sorts before `true`. |
 
 | Method | Returns | Description |
 |--------|---------|-------------|
@@ -2724,13 +2722,13 @@ Every matcher also takes `message String = ""`, `file String = __file__` and
 
 | Matcher | Argument types | Holds when |
 |---------|----------------|------------|
-| `Expect.equal(actual, expected:)` | integer, `String`, `bool` | `actual == expected` |
-| `Expect.notEqual(actual, expected:)` | integer, `String`, `bool` | `actual != expected` |
-| `Expect.greaterThan(actual, than:)` | integer, float | `actual > than` |
-| `Expect.lessThan(actual, than:)` | integer, float | `actual < than` |
-| `Expect.atLeast(actual, than:)` | integer, float | `actual >= than` |
-| `Expect.atMost(actual, than:)` | integer, float | `actual <= than` |
-| `Expect.close(actual, expected:, within:)` | float | `abs(actual - expected) <= within` |
+| `Expect.equal(actual, expected:)` | any `Equatable` type | `actual == expected` |
+| `Expect.notEqual(actual, expected:)` | any `Equatable` type | `actual != expected` |
+| `Expect.greaterThan(actual, than:)` | any `Comparable` type | `actual > than` |
+| `Expect.lessThan(actual, than:)` | any `Comparable` type | `actual < than` |
+| `Expect.atLeast(actual, than:)` | any `Comparable` type | `actual >= than` |
+| `Expect.atMost(actual, than:)` | any `Comparable` type | `actual <= than` |
+| `Expect.close(actual, expected:, within:)` | `AssertedReal` | `abs(actual - expected) <= within` |
 | `Expect.isTrue(actual)` | `bool` | `actual` is `true` |
 | `Expect.isFalse(actual)` | `bool` | `actual` is `false` |
 | `Expect.contains(haystack, needle:)` | `String` | `haystack` contains `needle` |
@@ -2739,15 +2737,16 @@ Every matcher also takes `message String = ""`, `file String = __file__` and
 | `Expect.isEmpty(haystack)` | `String` | no characters |
 | `Expect.fail(message)` | — | never; fails unconditionally |
 
-Each name is one overload set chosen by argument type, including through a method call
-(`Expect.equal(parts.count(), expected: 3)`) and through an enum's `name`, `ordinal` and `rawValue`.
-`String` values are quoted in the report, so empty or space-padded values stay visible.
+`equal`, `notEqual` and the four ordering matchers are each one
+[generic function](LANGUAGE_REFERENCE.md#generic-functions): the type is inferred from the two arguments, so
+`Expect.equal(parts.count(), expected: 3)` compares two `ElementIndex` values and a value of any alias needs
+no cast. Each value is printed as its interpolation prints it; `String` values are quoted, so empty or
+space-padded values stay visible.
 
-Floats have no `equal`: exact float equality can pass on one target and fail on another, so
-`Expect.equal(1.5, expected: 1.5)` does not compile. Use `close(…, within:)`. NaN satisfies no comparison,
-so it fails every float matcher.
+`close` compares two floats within a tolerance and takes `AssertedReal`, so a non-float argument is refused
+at the call. NaN satisfies no comparison, so it fails `close` and every ordering matcher.
 
-For any other `Equatable` and `Stringable` type, `isTrue` is the general form:
+`isTrue` is the general form for any predicate:
 `Expect.isTrue(a == b, message: "expected {b}, got {a}")`.
 
 ```maxon

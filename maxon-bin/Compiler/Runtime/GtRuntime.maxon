@@ -1503,7 +1503,7 @@ end 'GtTraceTags'
 
 // One tag's bytes, interned in `.rdata` and deduped by content like every other rdata constant.
 function registerGtTraceTag(globalData GlobalDataTable, text ByteArray) returns GtTraceTag
-	return GtTraceTag.create(globalData.registerRdataConstant(GtTraceTagPrefix, bytes: text, kind: RdataPayloadKind.traceTag).toByteArray(), length: text.count())
+	return GtTraceTag.create(globalData.registerRdataConstant(GtTraceTagPrefix, bytes: text, kind: RdataPayloadKind.traceTag).toByteArray(), length: text.count() as ParsedInt)
 end 'registerGtTraceTag'
 
 // ⭐ The operation suffixes in `GtIoOperation` ORDINAL ORDER, because the walk IS `allCases` — the enum's
@@ -2385,8 +2385,8 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	// `LowerMaxonToStd.lowerServiceSpawn` emits.
 	installMailboxRuntime(module)
 
-	assertCompletedPublicationIsOrdered(module, firstFuncIndex: firstFuncIndex as FuncIndex)
-	assertRunQueueObservationIsOrdered(module, firstFuncIndex: firstFuncIndex as FuncIndex)
+	assertCompletedPublicationIsOrdered(module, firstFuncIndex: firstFuncIndex)
+	assertRunQueueObservationIsOrdered(module, firstFuncIndex: firstFuncIndex)
 end 'installGtRuntime'
 
 // ⚠ **THE RUN-QUEUE LOCK IS UNCONDITIONAL**: every green-thread program has a second cross-thread mutator (a
@@ -4704,8 +4704,8 @@ let CompletedPublicationCheckName = "assertCompletedPublicationIsOrdered"
 //
 // ⚠ It is a PANIC and not a diagnostic: no program can provoke it, because the ops it inspects are the
 // compiler's own emission. A user-facing error code would name a rule a user cannot break.
-function assertCompletedPublicationIsOrdered(module StdModule, firstFuncIndex FuncIndex)
-	for index in firstFuncIndex upto module.funcCount() as FuncIndex 'eachFunc'
+function assertCompletedPublicationIsOrdered(module StdModule, firstFuncIndex ElementIndex)
+	for index in firstFuncIndex upto module.funcCount() 'eachFunc'
 		assertOneFuncPublishesInOrder(module, func: module.getFunc(index))
 	end 'eachFunc'
 end 'assertCompletedPublicationIsOrdered'
@@ -4749,7 +4749,7 @@ end 'assertOneFuncPublishesInOrder'
 // The op at an index the live-op walk just handed out — so an out-of-range answer is a broken module rather
 // than a bad argument, and every walk over an installed runtime says so once instead of each spelling it.
 // `reader` names the checker, because the panic sends a reader to the walk that tripped it.
-export function liveRuntimeOpAt(module StdModule, opIdx OpIndex, reader String) returns StdOp
+export function liveRuntimeOpAt(module StdModule, opIdx ElementIndex, reader String) returns StdOp
 	return try module.ops.get(opIdx) otherwise panic("{reader}: opIdx {opIdx} from the live-op walk is not in module.ops")
 end 'liveRuntimeOpAt'
 

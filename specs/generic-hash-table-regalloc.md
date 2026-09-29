@@ -61,7 +61,7 @@ program.
 subject here is the ALLOCATION, and the two accessors pin that the function still did its work.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias Cap = int(0 to u64.max)
+typealias Cap = int(0 to u64.max) implements ElementIndex
 
 enum SlotState
 	Empty
@@ -151,7 +151,7 @@ type Tbl uses Key where Key is Hashable and Equatable
 				end 'skip_hash'
 
 				var index = spreadHash(hash) and mask
-				var currentState = try states.get(index) otherwise SlotState.Empty
+				var currentState = try states.get(index as ElementIndex) otherwise SlotState.Empty
 				var isNotEmpty = match currentState 'ns1'
 					Empty gives false
 					Occupied gives true
@@ -159,7 +159,7 @@ type Tbl uses Key where Key is Hashable and Equatable
 				end 'ns1'
 				while isNotEmpty 'find_slot'
 					index = (index + 1) and mask
-					currentState = try states.get(index) otherwise SlotState.Empty
+					currentState = try states.get(index as ElementIndex) otherwise SlotState.Empty
 					isNotEmpty = match currentState 'ns2'
 						Empty gives false
 						Occupied gives true

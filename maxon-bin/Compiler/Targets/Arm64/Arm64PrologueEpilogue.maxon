@@ -83,7 +83,7 @@ function insertArm64FrameForFunction(module TargetModule, func IrFunction)
 	// (`BacktraceFormat.FrameRecordAlignment`); `alignUp` below keeps the frame as a whole, and so SP,
 	// 16-aligned. It is 0 for every function whose calls fit the eight register slots of each file.
 	let recordOffset = func.outgoingArgSize
-	let frameSize = alignUpStack(recordOffset + Arm64FrameRecordBytes + func.stackSize + calleeBytes, alignment: StackFrameAlignment)
+	let frameSize = alignUpStack(recordOffset + Arm64FrameRecordBytes + func.stackSize + calleeBytes as StackSize, alignment: StackFrameAlignment)
 
 	// Resolve the isel's slot-only `arm64LoadIncomingArg`s now that BOTH terms of their displacement are
 	// known — this is the pass that knows them, and the reason the op exists at all.
@@ -334,7 +334,7 @@ end 'resolveArm64IncomingArgs'
 // `insertArm64PrologueEpilogue` is the LAST IR pass in `buildArm64Backend` — encoding follows it directly
 // — so no later pass can splice anything between the `add` and the load. A new IR pass placed after this
 // one breaks that, and would have to give this fold a register of its own or run before the prologue.
-function resolveOneArm64IncomingArg(module TargetModule, opIdx OpIndex, at BlockOpPos, dest TargetVReg, byteOffset StackSize, foldPositions BlockOpPosArray, foldOps OpIndexArray)
+function resolveOneArm64IncomingArg(module TargetModule, opIdx ElementIndex, at ElementIndex, dest TargetVReg, byteOffset StackSize, foldPositions BlockOpPosArray, foldOps OpIndexArray)
 	// ⚠ THE FIT QUESTION AND THE OP MINTED FROM IT MUST BE ASKED AT ONE ACCESS WIDTH, so the width is read
 	// ONCE and both take it. `arm64DispHasScaledForm` is the SAME door the isel asks of a data access, and
 	// it derives the scale from this very value (`arm64AccessScale`) — so the predicate and the encoder that
@@ -362,7 +362,7 @@ end 'resolveOneArm64IncomingArg'
 
 // Overwrite `opIdx` with the resolved incoming-argument load. Both the direct and the folded arm land
 // here so the op's shape — a `[base + disp]` load at the caller's width — is spelled once.
-function arm64SetIncomingArgLoad(module TargetModule, opIdx OpIndex, dest TargetVReg, base RegNum, disp Imm32, width X64AccessWidth)
+function arm64SetIncomingArgLoad(module TargetModule, opIdx ElementIndex, dest TargetVReg, base RegNum, disp Imm32, width X64AccessWidth)
 	try module.ops.set(opIdx, value: TargetOp.loadRegBaseDisp(dest, base: TargetVReg.physical(base), disp: disp, width: width)) otherwise panic("resolveArm64IncomingArgs: ops.set OOB at {opIdx}")
 end 'arm64SetIncomingArgLoad'
 

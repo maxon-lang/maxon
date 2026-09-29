@@ -78,11 +78,11 @@ type IntList implements HasItems with Integer
 	var idx as Integer
 
 	function current() returns Integer
-		return try data.get(idx) otherwise panic("IntList.current: idx out of bounds")
+		return try data.get(idx as ElementIndex) otherwise panic("IntList.current: idx out of bounds")
 	end 'current'
 
 	function advance() throws IterationError
-		if idx + 1 >= data.count() 'done'
+		if idx + 1 >= (data.count() as Integer) 'done'
 			throw IterationError.exhausted
 		end 'done'
 		idx = idx + 1
@@ -257,11 +257,11 @@ type HashBucket implements Bucket with HashItem
 	var idx as Integer
 
 	function current() returns HashItem
-		return try items.get(idx) otherwise panic("HashBucket.current: idx out of bounds")
+		return try items.get(idx as ElementIndex) otherwise panic("HashBucket.current: idx out of bounds")
 	end 'current'
 
 	function advance() throws IterationError
-		if idx + 1 >= items.count() 'done'
+		if idx + 1 >= (items.count() as Integer) 'done'
 			throw IterationError.exhausted
 		end 'done'
 		idx = idx + 1
@@ -335,11 +335,11 @@ type NotEqSeq implements Seq with NotEq
 	var idx as Integer
 
 	function current() returns NotEq
-		return try items.get(idx) otherwise panic("NotEqSeq.current: idx out of bounds")
+		return try items.get(idx as ElementIndex) otherwise panic("NotEqSeq.current: idx out of bounds")
 	end 'current'
 
 	function advance() throws IterationError
-		if idx + 1 >= items.count() 'done'
+		if idx + 1 >= (items.count() as Integer) 'done'
 			throw IterationError.exhausted
 		end 'done'
 		idx = idx + 1

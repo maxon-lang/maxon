@@ -25,9 +25,6 @@ typealias StringArray = Array with String
 // that read it are members of `Process`.
 public let EnvNameValueSeparator = 61 as Byte
 
-// A byte position inside one `NAME=VALUE` environment entry.
-typealias EnvEntryBytePos = int(0 to u64.max)
-
 /// Errors raised by current-process introspection APIs (e.g. `Process.executablePath`).
 public enum ProcessIntrospectionError implements Error
 	pathUnavailable
@@ -154,7 +151,7 @@ public type Process
 	/// flourish: a Windows process's environment begins with entries like `=C:=C:\dir` recording the
 	/// current directory of each drive, whose NAME is `=C:`. Splitting at byte 0 would give every one of
 	/// them the empty name, and they would then collide with each other in the override lookup.
-	static function envEntrySeparatorAt(bytes ByteArray) returns EnvEntryBytePos
+	static function envEntrySeparatorAt(bytes ByteArray) returns ElementIndex
 		let n = bytes.count()
 
 		for i in 1 upto n 'eachByte'
@@ -168,7 +165,7 @@ public type Process
 		return n
 	end 'envEntrySeparatorAt'
 
-	static function envEntryBytes(bytes ByteArray, from EnvEntryBytePos, to EnvEntryBytePos) returns String
+	static function envEntryBytes(bytes ByteArray, from ElementIndex, to ElementIndex) returns String
 		var taken = ByteArray.create()
 
 		for i in from upto to 'eachByte'

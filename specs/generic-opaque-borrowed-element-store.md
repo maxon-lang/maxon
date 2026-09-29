@@ -51,7 +51,7 @@ and a missing release turns into exit 101.
 
 <!-- test: a-borrowed-element-read-from-another-container-is-stored -->
 ```maxon
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 typealias Strs = Array with String
 
 type Bag uses Element
@@ -107,7 +107,7 @@ does not own, and push it. Each iteration takes its own reference and each slot 
 
 <!-- test: the-loop-form-copies-every-borrowed-element -->
 ```maxon
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 typealias Strs = Array with String
 
 type Bag uses Element
@@ -169,7 +169,7 @@ faults on the poison byte.
 
 <!-- test: a-hundred-borrowed-stores-balance -->
 ```maxon
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 typealias Strs = Array with String
 
 type Bag uses Element
@@ -276,7 +276,7 @@ field and the container releases the slot, and they are two references to one St
 
 <!-- test: a-borrowed-opaque-field-read-is-stored -->
 ```maxon
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 
 type Bag uses Element
 	typealias Items = Array with Element
@@ -326,7 +326,7 @@ an argument that owns no record, so the store costs a load and the container's w
 
 <!-- test: a-trivial-elements-borrowed-store-is-inert -->
 ```maxon
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 typealias Num = int(0 to 1000)
 typealias Nums = Array with Num
 
@@ -380,7 +380,7 @@ the element survives its original owner and prints after it is gone.
 
 <!-- test: the-borrows-owner-may-be-destroyed-first -->
 ```maxon
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 typealias Strs = Array with String
 
 type Bag uses Element

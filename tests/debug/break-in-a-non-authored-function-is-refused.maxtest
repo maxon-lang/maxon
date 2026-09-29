@@ -13,7 +13,7 @@ test 'a breakpoint in a function the program did not author is refused for where
 	let executable = builtExecutable(staged)
 	let dump = spawnDumpInfo(executable, staged: staged, sections: StringArray.create())
 
-	try Expect.equal(dump.exitCode() as AssertedInt, expected: 0, message: "`{DebugSubcommandName} {DumpInfoOptionName} <exe>` did not print the sidecar. It wrote to stderr: {dump.stderr}")
+	try Expect.equal(dump.exitCode(), expected: 0, message: "`{DebugSubcommandName} {DumpInfoOptionName} <exe>` did not print the sidecar. It wrote to stderr: {dump.stderr}")
 
 	let functionRows = dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading)
 	let runtimeRow = functionRowOf(functionRows, name: RuntimeHelperName)
@@ -30,7 +30,7 @@ test 'a breakpoint in a function the program did not author is refused for where
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let answers = eventsOfKind(events, kind: BreakpointEventName)
 
-	try Expect.equal(answers.count() as AssertedInt, expected: 2, message: "each `{BreakCommand}` answers one `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(answers.count(), expected: 2, message: "each `{BreakCommand}` answers one `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let runtimeBody = eventAt(answers, index: 0)
 	try Expect.equal(textOf(runtimeBody, node: runtimeBody.root, key: ActionKey), expected: RefusedAction, message: "a trap in a body the program's author did not write cannot be serviced, and `{RuntimeHelperName}` is the runtime's by where it came from, whatever its name spells. {said}")
@@ -39,7 +39,7 @@ test 'a breakpoint in a function the program did not author is refused for where
 	let stub = eventAt(answers, index: 1)
 	try Expect.equal(textOf(stub, node: stub.root, key: ActionKey), expected: RefusedAction, message: "the control: the entry stub the compiler assembles is runtime code. {said}")
 	try Expect.equal(textOf(stub, node: stub.root, key: ReasonKey), expected: InsideRuntimeSymbolReason, message: "the control's refusal names why. {said}")
-	try Expect.equal(eventsOfKind(events, kind: ExitEventName).count() as AssertedInt, expected: 1, message: "nothing was armed, so the program runs to its exit. {said}")
+	try Expect.equal(eventsOfKind(events, kind: ExitEventName).count(), expected: 1, message: "nothing was armed, so the program runs to its exit. {said}")
 end 'a breakpoint in a function the program did not author is refused for where the body came from'
 
 function originIn(row String) returns String

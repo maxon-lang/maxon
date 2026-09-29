@@ -221,7 +221,7 @@ test 'an option ahead of the command word is still refused'
 	arguments.push(TestedCommandName)
 	let run = spawnCompiler(arguments, workingDirectory: staged, what: "the option-ahead-of-command probe")
 
-	Expect.notEqual(run.exitCode() as AssertedInt, expected: 0, message: "`--emit-ir fmt` SUCCEEDED. An option this driver implements was swallowed by its own arm before `fmt` could refuse it, so `fmt` ran on a command line whose flag went unread — which for this command means rewriting a directory in place. See MaxonArgs.anyOption.")
+	Expect.notEqual(run.exitCode(), expected: 0, message: "`--emit-ir fmt` SUCCEEDED. An option this driver implements was swallowed by its own arm before `fmt` could refuse it, so `fmt` ran on a command line whose flag went unread — which for this command means rewriting a directory in place. See MaxonArgs.anyOption.")
 
 	let after = fileBody(staged.join("Ugly.maxon"))
 	Expect.equal(after, expected: before, message: "`--emit-ir fmt` was refused but WROTE ANYWAY. The refusal has to happen before the walk, not after it: a non-zero status over an already-rewritten tree is the incident with a better exit code.")
@@ -244,7 +244,7 @@ test 'a directory walk formats a .maxproj, a .maxtasks and a .maxtest beside its
 	let run = spawnFmtOverStagedTree(stagingDirName, what: "the .maxproj, .maxtasks and .maxtest walk")
 	let said = "It wrote to stdout: {run.stdout} and to stderr: {run.stderr}"
 
-	Expect.equal(run.exitCode() as AssertedInt, expected: SuccessExitCode, message: "`{TestedCommandName} .` over a tree holding a .maxproj, a .maxtasks and a .maxtest did not succeed. {said}")
+	Expect.equal(run.exitCode(), expected: SuccessExitCode, message: "`{TestedCommandName} .` over a tree holding a .maxproj, a .maxtasks and a .maxtest did not succeed. {said}")
 	Expect.equal(lastNonBlankLine(run.stdout.replace(CarriageReturn, with: "")), expected: summaryLine(4, unchanged: 0), message: "`{TestedCommandName} .` did not format all four files: the walk must select `app.maxproj`, `dev.maxtasks` and `pricing.maxtest` as it selects `Main.maxon`. {said}")
 
 	let formatted = fileBody(source)
@@ -407,10 +407,10 @@ type FixtureCase
 	// empty on both sides. ONE place, so that order and the sentence explaining each question exist
 	// once rather than once per caller.
 	function checkStreams(run CollectedOutput, expectedStdout String, expectedStderr String, runLabel String) throws TestFailure
-		let observedExit = run.exitCode() as AssertedInt
-		let expectedStatus = expectedExit() as AssertedInt
+		let observedExit = run.exitCode()
+		let expectedStatus = expectedExit()
 		let observedStderr = normalized(run.stderr)
-		try Expect.equal(observedExit, expected: expectedStatus, message: "'{self.name}' exited differently from its {ExpectedExitFileName} on {runLabel}. The status is the half of this report a SCRIPT reads, and the half that decides whether a refusal stops anything. It wrote to stderr: {observedStderr}")
+		try Expect.equal(observedExit, expected: expectedStatus as ExitInt, message: "'{self.name}' exited differently from its {ExpectedExitFileName} on {runLabel}. The status is the half of this report a SCRIPT reads, and the half that decides whether a refusal stops anything. It wrote to stderr: {observedStderr}")
 
 		try Expect.equal(observedStderr, expected: expectedStderr, message: "'{self.name}' wrote different stderr on {runLabel}. Every `fmt` refusal goes here and prints NOTHING to stdout, so on a refusal case this is the whole message.")
 
@@ -536,7 +536,7 @@ end 'totalFilesSeen'
 
 // One of the summary line's two counts.
 function countWordAt(words StringArray, index FileTally, summary String, caseName String) returns FileTally
-	let word = try words.get(index) otherwise panic("fmt-fixtures.test: the gate could not run — the '{caseName}' case's summary line '{summary}' has no word {index}.")
+	let word = try words.get(index as ElementIndex) otherwise panic("fmt-fixtures.test: the gate could not run — the '{caseName}' case's summary line '{summary}' has no word {index}.")
 	return try int.fromString(word) otherwise panic("fmt-fixtures.test: the gate could not run — the '{caseName}' case's summary line '{summary}' holds '{word}' where a file count belongs.")
 end 'countWordAt'
 
@@ -1224,7 +1224,7 @@ test 'formatting real sources keeps every comment, every doc comment and every l
 	// say is exactly `0 changed` over every file the walk found, and the walk found what was staged.
 	let secondRun = spawnFmtOverStagedTree(CensusStagingDirName, what: CensusSpawnName)
 	requireFmtRunSucceeded(secondRun, runLabel: SecondRunLabel, over: CensusTreeDescription)
-	requireSecondRunFoundNothingToDo(secondRun, stagedCount: sources.count(), over: CensusTreeDescription)
+	requireSecondRunFoundNothingToDo(secondRun, stagedCount: sources.count() as FileTally, over: CensusTreeDescription)
 end 'formatting real sources keeps every comment, every doc comment and every line of code'
 
 // ⛔ **AN EMPTY ROSTER IS A PANIC, NOT A PASS.** A test that formatted nothing reports exactly what a
@@ -1315,7 +1315,7 @@ end 'spawnCompiler'
 
 // Asked before anything the run left is compared, for the reason its message gives.
 export function requireFmtRunSucceeded(run CollectedOutput, runLabel String, over String) throws TestFailure
-	let observed = run.exitCode() as AssertedInt
+	let observed = run.exitCode()
 	let expected = SuccessExitCode
 	try Expect.equal(observed, expected: expected, message: "`{TestedCommandName}` did not succeed on {runLabel} over {over}. A run that refused wrote nothing, so every property asked of what it left would hold and the failure would read as a pass. It wrote to stderr: {run.stderr}")
 end 'requireFmtRunSucceeded'

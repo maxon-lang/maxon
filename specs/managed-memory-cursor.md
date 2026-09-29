@@ -458,7 +458,7 @@ function main() returns ExitCode
 	let cursor = try arr.managed.createCursor() otherwise return 99
 	let first = cursor.current()
 	arr.clear()
-	return first + arr.count()
+	return first + (arr.count() as Byte)
 end 'main'
 ```
 ```exitcode

@@ -531,9 +531,10 @@ A `type` whose fields are all `let` and all of packable types, summing to 64 bit
 ### Primitive Conformances
 
 The primitives implement the standard interfaces directly: `int` and `float` are `Hashable`, `Equatable`,
-`Comparable`, `Stringable` and `Cloneable`; `bool` is `Comparable`, `Stringable` and `Cloneable`;
-`Character` is `Hashable`, `Equatable`, `Comparable`, `Stringable` and `Cloneable`; `String` is
-`Hashable`, `Equatable`, `Cloneable` and `Iterable`. Every integer alias therefore works as a `Map` key or `Set` element. You can add methods to
+`Comparable`, `Stringable` and `Cloneable`; `bool` is `Equatable`, `Comparable`, `Stringable` and
+`Cloneable`; `Character` is `Hashable`, `Equatable`, `Comparable`, `Stringable` and `Cloneable`; `String`
+is `Hashable`, `Equatable`, `Comparable` (byte order, a shorter prefix first), `Cloneable` and `Iterable`.
+Every alias of `int` or `float` conforms as its primitive does. Every integer alias therefore works as a `Map` key or `Set` element. You can add methods to
 a primitive with an [extension](#extensions-over-primitives).
 
 ### Type Conversions
@@ -680,13 +681,58 @@ end 'main'
 - Casting a value to its own alias is **E3010** (`unneeded cast: 'Age' already fits in 'Age'`).
 - A value with **no** alias fits any alias of its kind: a literal, a counted-loop counter, a `var`
   initialized from a literal, the raw value of a payload-free enum case. A named value also fits an
-  unnamed slot. Only two *different* names conflict.
+  unnamed slot. Two *different* names conflict unless one implements the other (next section).
 - The same alias name declared over the same range in two files is one type.
+- An `Array` is indexed by the standard library's `ElementIndex`: `get`, `set` and `resize` take one and
+  `count()` returns one. The index must be an `ElementIndex` or an alias that implements it; any other
+  alias, or a non-integer such as a `String`, is **E3005** — cast it, or declare it `implements ElementIndex`.
+  A program's own array record that declares `get`, `set` or `resize` with a first parameter that is not an
+  integer alias has an ordinary method: the call is served from that declaration, not the array surface.
 
 **`return` converts.** `return x` in a function declared `returns T` behaves as `return x as T` — the one
 implicit conversion between aliases. A widening return emits no check, a narrowing one keeps its check,
 and `main` may return any integer alias without spelling `ExitCode`. A different struct, a union where a
 scalar is declared, or a lossy float where an integer is declared is still refused.
+
+### Subtypes With `implements`
+
+A ranged alias may name a parent alias after its range. It is then a **subtype** of the parent, and of every
+alias the parent implements:
+
+```maxon
+typealias BlockId = int(0 to u64.max) implements ElementIndex
+typealias LoopHead = int(0 to u64.max) implements BlockId
+typealias VarId = int(0 to u64.max) implements ElementIndex
+typealias Row = int(0 to 1000)
+typealias RowArray = Array with Row
+
+function takesBlock(b BlockId) returns BlockId
+	return b
+end 'takesBlock'
+
+function main() returns ExitCode
+	var rows = RowArray.create()
+	rows.push(4)
+	rows.push(9)
+	let head = 1 as LoopHead
+	let r = try rows.get(head) otherwise 0    // a LoopHead is an ElementIndex
+	print("{r} {takesBlock(head)}\n")          // 9 1
+	// takesBlock(3 as VarId)                 // E3005: expected 'BlockId', got 'VarId'
+	return 0
+end 'main'
+```
+
+- A subtype goes wherever an ancestor is declared, with no cast. Casting it to an ancestor is **E3010**.
+- The relation is one way: an ancestor value needs a cast to become the subtype, and that cast keeps its
+  run-time range check. Two subtypes of one parent are two different types.
+- The subtype's range lies inside the parent's, over the same primitive and signedness (**E3178**). Its own
+  range is what its values are checked against.
+- A parent is a ranged typealias (**E2003** otherwise), and may be qualified (`typealias Id = int(0 to 9)
+  implements shapes.Index`). A chain that returns to itself is **E3091**.
+- `implements` applies to `int` and `float` ranges. An alias of an alias, `typealias X = Y`, is **E2015**.
+
+**Joins.** The arms of a `match` or a ternary that give two different aliases have the type of their nearest
+common ancestor; arms with no common ancestor are refused.
 
 ### Construction
 
@@ -726,8 +772,16 @@ Write `value as Alias` to convert a value of another alias.
 ### Arithmetic
 
 Arithmetic keeps the alias of its operands. Two operands of one alias give that alias; an unnamed operand
-(a literal, a loop counter) adopts the named one; two different aliases are **E3005** until one side is
-cast. The same rule governs comparisons. A shift takes the alias of its left operand.
+(a literal, a loop counter) adopts the named one, and so does an ancestor (`block + offset` over a
+`BlockId` and an `ElementIndex` is a `BlockId`); two aliases with no common ancestor are **E3005** until
+one side is cast. The same rule governs comparisons. A shift takes the alias of its left operand.
+
+Two subtypes of one parent make a *mixed* expression. It lands in any destination one of its operands'
+aliases satisfies — a parameter, a field, an `otherwise` or `match` merge — computed into a temporary of the
+destination's alias, so the result is range-checked there. Anywhere else its type is the operands' nearest
+common ancestor, and a diagnostic names that ancestor. At an overloaded call each operand's alias counts:
+`show(block + varId)` against `show(b BlockId)` and `show(v VarId)` is **E3007**, and the candidate list
+names the aliases (`Candidates: (b BlockId), (v VarId)`).
 Negating a signed alias keeps the alias; negating an unsigned one gives an unnamed value.
 
 ```maxon
@@ -1467,6 +1521,50 @@ end 'Tagged'
 - An instantiation whose argument does not conform is **E3017** (`Type 'X' does not satisfy constraint
   'Digest' required by type parameter 'T' of 'Tagged'`).
 - A constraint can bind an associated type: `where S is Cursor with E`.
+
+### Generic Functions
+
+A free function or a `static` method declares type parameters with `uses` after its parameter list, and
+constrains them with `where` at the end of the declaration line:
+
+```maxon
+typealias Score = int(0 to 100)
+
+function larger(a T, b T) uses T returns T where T is Comparable
+	if a > b 'first'
+		return a
+	end 'first'
+
+	return b
+end 'larger'
+
+function main() returns ExitCode
+	print("{larger(30 as Score, b: 70)} {larger("pear", b: "apple")}\n")   // 70 pear
+	return 0
+end 'main'
+```
+
+A call infers `T` from the arguments whose parameters are declared `T`:
+
+- Arguments of one alias give that alias. An argument with no alias (a literal, arithmetic over literals)
+  adopts the other arguments' alias. Two different aliases give their nearest common ancestor under
+  [`implements`](#subtypes-with-implements), and two with none are **E3180**.
+- A type parameter binds a number, `String`, `bool`, `Character`, a typealias, a record or an enum; any
+  other argument is **E3181**. A type parameter no parameter is declared with is **E3179**.
+- An inferred type that does not conform to a `where` interface is **E3017**.
+
+Each distinct inferred type compiles its own copy of the function in the declaring file, and the body is
+checked against that type. Every integer and float type, every alias of one, `String`, `bool` and
+`Character` conform to `Equatable` and `Comparable` (see [Primitive Conformances](#primitive-conformances)),
+and a record that implements `Comparable` is ordered by `<`, `>`, `<=` and `>=` through its `compare`.
+
+A copy may call its argument type's `where` requirements — `compare`, `equals`, any method of the
+constraining interface — whatever their visibility, because the caller granted the conformance by passing
+the type. Every other method of the type needs ordinary visibility from the declaring file. A generic
+function is itself visible like any function: a private one called from another file is **E3008**.
+
+A non-generic declaration of the same name is chosen when its parameter types are exactly the argument
+types. Two generic declarations that both infer a type for one call are **E3007**.
 
 ### Associated Types
 
@@ -3828,7 +3926,7 @@ end 'describe'
 
 ```maxon
 test 'boiling point converts'
-	Expect.equal(toFahrenheit(100) as AssertedInt, expected: 212)
+	Expect.equal(toFahrenheit(100), expected: 212)
 end 'boiling point converts'
 
 test 'zero is freezing'
@@ -3837,7 +3935,7 @@ test 'zero is freezing'
 end 'zero is freezing'
 
 test 'body temperature'
-	Expect.equal(toFahrenheit(37) as AssertedInt, expected: 98, message: "rounds toward zero")
+	Expect.equal(toFahrenheit(37), expected: 98, message: "rounds toward zero")
 end 'body temperature'
 ```
 
@@ -3854,13 +3952,13 @@ temperature/temperature.maxtest:
  3 tests across 1 file.
 ```
 
-The integer assertions take `AssertedInt` (`int(i64.min to i64.max)`), so a value of another alias is cast
-to it; float assertions take `AssertedReal`. The matchers:
+The comparing matchers are [generic functions](#generic-functions): the type is inferred from the two
+arguments, so a value of any alias is passed as it is. `close` takes `AssertedReal` floats. The matchers:
 
 | Matcher | Checks |
 |---------|--------|
-| `Expect.equal(actual, expected:)`, `Expect.notEqual(actual, expected:)` | integers, strings, booleans |
-| `Expect.greaterThan(actual, than:)`, `lessThan`, `atLeast`, `atMost` | integers and floats |
+| `Expect.equal(actual, expected:)`, `Expect.notEqual(actual, expected:)` | any `Equatable` type |
+| `Expect.greaterThan(actual, than:)`, `lessThan`, `atLeast`, `atMost` | any `Comparable` type |
 | `Expect.close(actual, expected:, within:)` | floats within a tolerance |
 | `Expect.isTrue(actual)`, `Expect.isFalse(actual)` | booleans |
 | `Expect.contains(haystack, needle:)`, `startsWith`, `endsWith`, `isEmpty` | strings |
@@ -4076,7 +4174,7 @@ single declaration is reported in that file. When several do:
 Two typealiases with the same name in **one** file are **E3061**, which qualification cannot resolve.
 
 Every typealias a `public` standard-library signature names is itself `public`, so a value can always be cast
-to the alias a library signature asks for (`x as AssertedInt`). A standard-library typealias with no modifier
+to the alias a library signature asks for (`x as ElementIndex`). A standard-library typealias with no modifier
 is private to its declaring file exactly as anyone's is — `Math.maxon`'s `SeriesTermLimit` is one — and
 naming it from another file is **E2003**.
 

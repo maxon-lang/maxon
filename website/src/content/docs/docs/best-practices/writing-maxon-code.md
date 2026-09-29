@@ -1169,12 +1169,12 @@ compiles them with the rest of the project, so the project needs no `main`.
 
 ```maxon
 test 'a quarter off'
-	Expect.equal(discounted(400, percent: 25) as AssertedInt, expected: 300)
+	Expect.equal(discounted(400, percent: 25), expected: 300)
 end 'a quarter off'
 
 test 'too large a discount is caught'
 	let price = try discounted(400, percent: 150) otherwise 0
-	Expect.equal(price as AssertedInt, expected: 0)
+	Expect.equal(price, expected: 0)
 end 'too large a discount is caught'
 ```
 
@@ -1182,8 +1182,8 @@ end 'too large a discount is caught'
 - A test body is an implied `try`: a throwing call, a throwing interface call or an `await` needs no `try`,
   and any error fails the test. A helper function a test calls, or a closure written in one, still needs
   `try` (E3057).
-- Integer assertions take `AssertedInt` (`int(i64.min to i64.max)`) and float ones `AssertedReal`; a value
-  of an alias with another range needs a cast (`x as AssertedInt`), or the call is E3005.
+- `equal` and `notEqual` take any `Equatable` type and the ordering matchers any `Comparable` one, inferred
+  from the two arguments, so a value of any alias needs no cast. `close` takes `AssertedReal` floats.
 - The matchers, with their labels: `equal(actual, expected:)`, `notEqual(actual, expected:)`,
   `greaterThan` / `lessThan` / `atLeast` / `atMost(actual, than:)`, `close(actual, expected:, within:)`,
   `isTrue(actual)`, `isFalse(actual)`, `contains` / `startsWith` / `endsWith(haystack, needle:)`,

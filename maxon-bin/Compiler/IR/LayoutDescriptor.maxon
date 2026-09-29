@@ -424,7 +424,7 @@ end 'ConstArrayBlob'
 // lay down different bytes and only a byte-pin would ever say so. Callers now supply the numbers; the
 // composition is here.
 export function constArrayBlobOf(values ParsedIntArray, stride ElementStride) returns ConstArrayBlob
-	return ConstArrayBlob.create(stride, elementCount: values.count(), bytes: constantElementsImage(values, stride: stride))
+	return ConstArrayBlob.create(stride, elementCount: values.count() as ParsedInt, bytes: constantElementsImage(values, stride: stride))
 end 'constArrayBlobOf'
 
 function constantElementsImage(values ParsedIntArray, stride ElementStride) returns ByteArray
@@ -487,7 +487,7 @@ let ByteMask = 0xFF as MachineWord
 // byte-strided run is the stride's to make and not a caller's.
 function packConstantElements(values ParsedIntArray, packedBits PackedBitWidth) returns ByteArray
 	var out = ByteArray.create()
-	out.resize(elementsByteLen(values.count(), stride: -packedBits) as ElementIndex)
+	out.resize(elementsByteLen(values.count() as ParsedInt, stride: -packedBits) as ElementIndex)
 
 	let fieldMask = (1 shl packedBits) - 1
 
@@ -677,9 +677,9 @@ end 'LayoutDescriptor'
 // words. The three function-pointer slots (+32 copyFunc, +40 destroyFunc, +64 retainFunc) and the
 // field-offsets slot (+48) are zero on disk for a trivial instance: it has no thunk, owes no reference and
 // has no field-offset blob, so nothing patches them and the blob needs no relocation.
-module function encodeLayoutDescriptor(d LayoutDescriptor, typeParamCount TypeParamPosition) returns ByteArray
+module function encodeLayoutDescriptor(d LayoutDescriptor, typeParamCount ElementIndex) returns ByteArray
 	var buf = ByteArray.create()
-	buf.reserve(layoutDescriptorBytesFor(typeParamCount) as ElementIndex)
+	buf.reserve(layoutDescriptorBytesFor(typeParamCount))
 
 	for _ in 0 upto typeParamCount 'eachTypeParam'
 		writeLayoutWord(buf, value: d.size)
@@ -724,13 +724,13 @@ end 'encodeLayoutDescriptor'
 // The header fields (size, alignment, elementSize, elementLogicalSize) are the INSTANCE's and are the
 // same in every block, so block `i` is a complete dictionary for parameter `i` and a reader never has
 // to hold two pointers.
-function layoutDescriptorBytesFor(typeParamCount TypeParamPosition) returns ByteOffset
+function layoutDescriptorBytesFor(typeParamCount ElementIndex) returns ByteOffset
 	return LAYOUT_DESCRIPTOR_BYTE_SIZE * (typeParamCount as ByteOffset)
 end 'layoutDescriptorBytesFor'
 
 // The byte offset of type parameter `position`'s own dictionary block — what a reader adds to the
 // descriptor address before using any of the field offsets above. THE one speller of the stride.
-export function layoutBlockOffsetFor(position TypeParamPosition) returns ByteOffset
+export function layoutBlockOffsetFor(position ElementIndex) returns ByteOffset
 	return LAYOUT_DESCRIPTOR_BYTE_SIZE * (position as ByteOffset)
 end 'layoutBlockOffsetFor'
 

@@ -13,10 +13,10 @@ test 'a finish from a stop between push rbp and mov rbp, rsp returns to the call
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let stops = eventsOfKind(events, kind: StopEventName)
 
-	try Expect.equal(stops.count() as AssertedInt, expected: 2, message: "the exact-offset breakpoint and the `{FinishCommand}` are two stops. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(stops.count(), expected: 2, message: "the exact-offset breakpoint and the `{FinishCommand}` are two stops. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let returned = eventAt(stops, index: 1)
 	try Expect.equal(textOf(returned, node: returned.root, key: FunctionKey), expected: CallerFunctionName, message: "⛔ BEFORE `mov rbp, rsp` THE FRAME POINTER IS STILL THE CALLER'S, so a walk that reads its identity from rbp returns past `{CallerFunctionName}` into the runtime that called it. {said}")
-	try Expect.equal(numberOf(returned, node: returned.root, key: LineKey) as AssertedInt, expected: callLine as AssertedInt, message: "`{FinishCommand}` stops at the return address, on the call's line. {said}")
+	try Expect.equal(numberOf(returned, node: returned.root, key: LineKey), expected: callLine as EventNumber, message: "`{FinishCommand}` stops at the return address, on the call's line. {said}")
 	try Expect.equal(textOf(returned, node: returned.root, key: ReasonKey), expected: StepStopReason, message: "the walk's own return is a `{StepStopReason}`. {said}")
 end 'a finish from a stop between push rbp and mov rbp, rsp returns to the caller, not the caller of the caller'

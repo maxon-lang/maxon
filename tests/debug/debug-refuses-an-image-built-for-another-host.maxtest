@@ -10,10 +10,10 @@ test 'an image built for another host is refused by both triples before it is la
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let reported = "{session.stdout}{session.stderr}"
 
-	Expect.equal(session.exitCode() as AssertedInt, expected: ForeignHostRefusalExitCode, message: "a {foreign} image cannot run on this {host} host, so a session over one must be refused. {said}")
+	Expect.equal(session.exitCode(), expected: ForeignHostRefusalExitCode, message: "a {foreign} image cannot run on this {host} host, so a session over one must be refused. {said}")
 	Expect.contains(reported, needle: foreign, message: "the refusal does not name the image's own target, `{foreign}`. {said}")
 	Expect.contains(reported, needle: host, message: "the refusal does not name the host, `{host}`, so a reader is not told what the image would have to be built for. {said}")
-	Expect.equal(eventsOfKind(batchEvents(session.stdout), kind: StopEventName).count() as AssertedInt, expected: 0, message: "⛔ THE REFUSAL COMES BEFORE THE SPAWN. An image of another host's format handed to the process spawner fails as a spawn error, or worse, runs something else. {said}")
+	Expect.equal(eventsOfKind(batchEvents(session.stdout), kind: StopEventName).count(), expected: 0, message: "⛔ THE REFUSAL COMES BEFORE THE SPAWN. An image of another host's format handed to the process spawner fails as a spawn error, or worse, runs something else. {said}")
 end 'an image built for another host is refused by both triples before it is launched'
 
 function foreignNativeTriple() returns String

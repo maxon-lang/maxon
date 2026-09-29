@@ -11,8 +11,6 @@ typealias Sha256Words = Array with Word32
 // and at either end one half of that pair shifts by the whole word.
 typealias RotateAmount = int(1 to 31)
 
-typealias BufferPos = int(0 to u64.max)
-
 // An index into the eight-word state. It is the one alias here that narrows to its real domain, which is
 // what makes the `otherwise` arms on `Sha256State.get`/`set` unreachable.
 typealias StateSlot = int(0 to 7)
@@ -93,7 +91,7 @@ function sha256SmSigma1(v Word32) returns Word32
 	return (r17 xor r19 xor s10) and 0xFFFFFFFF
 end 'sha256SmSigma1'
 
-function sha256ReadBE32(buf ByteArray, off BufferPos) returns Word32
+function sha256ReadBE32(buf ByteArray, off ElementIndex) returns Word32
 	// The caller (sha256Compress's schedule loop) guarantees off+3 < buf.count(); the otherwise
 	// branch is unreachable but must be syntactically present since Array.get throws.
 	let b0 = try buf.get(off) otherwise panic("sha256: read past the block the caller sized")
@@ -108,7 +106,7 @@ end 'sha256ReadBE32'
 // It is a function of its own rather than the body of sha256's block loop because the message
 // schedule, the padding buffer and the block offset are then not all live at once: the compression
 // needs the schedule and the state, and the caller needs the buffer and the offset.
-function sha256Compress(state Sha256State, padded ByteArray, blockOff BufferPos)
+function sha256Compress(state Sha256State, padded ByteArray, blockOff ElementIndex)
 	// Message schedule: 64 extended words. An Array and not a Vector, because round r reads
 	// w[r-2], w[r-7], w[r-15], w[r-16] — indexes computed from a loop counter, which no fixed size
 	// makes constant. All four are in range by the loop header, so the otherwise branches below are

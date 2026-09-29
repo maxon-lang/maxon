@@ -20,7 +20,7 @@ typealias WalkStamp = int(0 to u64.max)
 typealias WalkStampColumn = Array with WalkStamp
 
 module type StdLiveness
-	var blockCount as BlockRefIndex
+	var blockCount as ElementIndex
 
 	// The CFG of the function last computed, in both directions — kept readable so the loop nest and
 	// the natural-loop finder are built over the same graph rather than a second copy of it.
@@ -69,7 +69,7 @@ module type StdLiveness
 	end 'recompute'
 
 	// The values live on entry to the block at `position`, into `out`.
-	module function collectLiveIn(position BlockRefIndex, out ValueIdArray)
+	module function collectLiveIn(position ElementIndex, out ValueIdArray)
 		out.clear()
 
 		for k in 0 upto self.liveIn.degree(position as CsrIndex) 'eachLive'
@@ -80,7 +80,7 @@ module type StdLiveness
 	// The values live immediately AFTER the op at `opPos` of the block at `position`, less the values that
 	// op itself defines — what its successors need plus what the ops after it read, less what those ops
 	// and the op itself define — inserted into `into`.
-	module function collectLiveAcrossOp(module StdModule, func IrFunction, position BlockRefIndex, opPos BlockOpPos, into StdValueUseSet)
+	module function collectLiveAcrossOp(module StdModule, func IrFunction, position ElementIndex, opPos ElementIndex, into StdValueUseSet)
 		let block = module.blockAtPosition(func, position: position)
 
 		// The stamp marks what the ops from `opPos` on define; a value they define is not live across.
@@ -105,27 +105,27 @@ module type StdLiveness
 		end 'eachEdge'
 
 		for k in 0 upto self.succ.degree(position as CsrIndex) 'eachSuccessor'
-			let successor = self.succ.neighbour(position as CsrIndex, k: k) as BlockRefIndex
+			let successor = self.succ.neighbour(position as CsrIndex, k: k)
 
-			for j in 0 upto self.liveIn.degree(successor as CsrIndex) 'eachLive'
+			for j in 0 upto self.liveIn.degree(successor) 'eachLive'
 				self.insertUnlessMarked(self.liveInAt(successor, k: j), into: into)
 			end 'eachLive'
 		end 'eachSuccessor'
 	end 'collectLiveAcrossOp'
 
-	function liveInAt(position BlockRefIndex, k CsrIndex) returns ValueId
+	function liveInAt(position ElementIndex, k CsrIndex) returns ValueId
 		return self.liveIn.neighbour(position as CsrIndex, k: k) as ValueId
 	end 'liveInAt'
 
-	function opRefAt(block IrBlock, pos BlockOpPos) returns OpIndex
+	function opRefAt(block IrBlock, pos ElementIndex) returns ElementIndex
 		return try block.opRefs.get(pos) otherwise panic("StdLiveness: block '{String.from(block.label)}' has no op at position {pos}")
 	end 'opRefAt'
 
-	function definingBlockOf(valueId ValueId) returns BlockRefIndex
+	function definingBlockOf(valueId ValueId) returns ElementIndex
 		return try self.definedIn.get(valueId) otherwise panic("StdLiveness: value {valueId} is outside the {self.definedIn.count()}-value space this liveness was computed over")
 	end 'definingBlockOf'
 
-	function recordOpDefs(op StdOp, position BlockRefIndex)
+	function recordOpDefs(op StdOp, position ElementIndex)
 		stdOpDefinedValue(op, def: self.def)
 
 		if self.def.definesNothing() 'noDef'
@@ -139,7 +139,7 @@ module type StdLiveness
 		end 'twoDefs'
 	end 'recordOpDefs'
 
-	function recordDef(valueId ValueId, position BlockRefIndex)
+	function recordDef(valueId ValueId, position ElementIndex)
 		try self.definedIn.set(valueId, value: position) otherwise panic("StdLiveness.recordDef: value {valueId} is outside the {self.definedIn.count()}-value space this liveness was computed over")
 	end 'recordDef'
 
@@ -189,7 +189,7 @@ module type StdLiveness
 		return buildCsr(self.useValue, to: self.useBlock, nodeCount: self.definedIn.count() as CsrIndex)
 	end 'collectDefsAndUses'
 
-	function recordOpDefsAndUses(op StdOp, position BlockRefIndex)
+	function recordOpDefsAndUses(op StdOp, position ElementIndex)
 		self.recordOpDefs(op, position: position)
 		collectStdOpUses(op, referenced: self.reads)
 	end 'recordOpDefsAndUses'
@@ -212,7 +212,7 @@ module type StdLiveness
 			let defBlock = self.definingBlockOf(valueId)
 
 			for k in 0 upto uses.degree(valueId as CsrIndex) 'eachReadingBlock'
-				self.stack.push(uses.neighbour(valueId as CsrIndex, k: k) as BlockRefIndex)
+				self.stack.push(uses.neighbour(valueId as CsrIndex, k: k))
 			end 'eachReadingBlock'
 
 			while self.stack.count() != 0 'walk'
@@ -228,7 +228,7 @@ module type StdLiveness
 				self.liveInValue.push(valueId)
 
 				for k in 0 upto self.pred.degree(position as CsrIndex) 'eachPredecessor'
-					let predecessor = self.pred.neighbour(position as CsrIndex, k: k) as BlockRefIndex
+					let predecessor = self.pred.neighbour(position as CsrIndex, k: k)
 
 					if predecessor != defBlock 'notTheDefiningBlock'
 						self.stack.push(predecessor)

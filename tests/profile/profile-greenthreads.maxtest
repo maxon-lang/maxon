@@ -55,7 +55,7 @@ test 'two green threads are profiled as themselves and the scheduler is not'
 	pinned.push("{TargetEnvFlagPrefix}{PinnedProcessorCount}")
 
 	let run = runProfiler(staged, extraArguments: pinned)
-	Expect.equal(run.exitCode() as AssertedInt, expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb} {TargetEnvFlagPrefix}{PinnedProcessorCount}` did not complete a measurement of the green-thread fixture. `{TargetEnvFlagPrefix}` is the only way to pin the scheduler's worker count, and without it this profile measures the host as much as the program. It printed:{LineFeed}{run.stdout}{LineFeed}— and wrote to stderr: {run.stderr}")
+	Expect.equal(run.exitCode(), expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb} {TargetEnvFlagPrefix}{PinnedProcessorCount}` did not complete a measurement of the green-thread fixture. `{TargetEnvFlagPrefix}` is the only way to pin the scheduler's worker count, and without it this profile measures the host as much as the program. It printed:{LineFeed}{run.stdout}{LineFeed}— and wrote to stderr: {run.stderr}")
 
 	let lines = outputLines(run.stdout)
 	Expect.isFalse(reportHasLineStartingWith(lines, prefix: TooFewSamplesPrefix), message: "the profiler reported too few samples to rank anything, so the ordering of the two green threads below would be a coin flip. It printed:{LineFeed}{run.stdout}")
@@ -77,12 +77,12 @@ test 'two green threads are profiled as themselves and the scheduler is not'
 
 	let busierColumn = nameColumn(treeRowFor(treeRows, names: treeNames, wanted: BusierTaskName))
 	let quieterColumn = nameColumn(treeRowFor(treeRows, names: treeNames, wanted: QuieterTaskName))
-	Expect.equal(busierColumn as AssertedInt, expected: quieterColumn as AssertedInt, message: "the call tree indents `{BusierTaskName}` and `{QuieterTaskName}` differently, though neither called the other: two green threads are siblings under the frame that spawned them. A difference here means one task's stack was walked into the other's. It printed:{LineFeed}{renderedRows(treeRows)}")
+	Expect.equal(busierColumn, expected: quieterColumn, message: "the call tree indents `{BusierTaskName}` and `{QuieterTaskName}` differently, though neither called the other: two green threads are siblings under the frame that spawned them. A difference here means one task's stack was walked into the other's. It printed:{LineFeed}{renderedRows(treeRows)}")
 
 	// ⭐ CLAIM 2 — two stacks, because two green threads ran. Nothing enumerated them; their stack allocations
 	// did.
 	let stackNames = rowNames(significantRows(sectionRows(lines, header: StacksHeader), totalSamples: samples))
-	Expect.equal(stackNames.count() as AssertedInt, expected: GreenThreadStackCount, message: "the report lists {stackNames.count()} stack(s) above this corpus's floor, and the fixture runs {GreenThreadStackCount} green threads on {PinnedProcessorCount}. ONE would mean both tasks were folded onto the worker that happened to run them, which is the whole failure this case exists to catch. It listed:{LineFeed}{renderedRows(stackNames)}")
+	Expect.equal(stackNames.count(), expected: GreenThreadStackCount, message: "the report lists {stackNames.count()} stack(s) above this corpus's floor, and the fixture runs {GreenThreadStackCount} green threads on {PinnedProcessorCount}. ONE would mean both tasks were folded onto the worker that happened to run them, which is the whole failure this case exists to catch. It listed:{LineFeed}{renderedRows(stackNames)}")
 
 	// ⭐⭐ CLAIM 3 — and the scheduler is nowhere, at any floor, in any section. Asserted over the WHOLE report
 	// rather than over the rows above a floor: a scheduler summarized into a "not shown" count is still a
@@ -96,11 +96,11 @@ function requireBothTasksRanked(names StringArray, section String, report String
 	try Expect.isTrue(names.contains(QuieterTaskName), message: "'{section}' does not list `{QuieterTaskName}`, the second green thread — half the work of `{BusierTaskName}`, which is several times this corpus's floor rather than a rounding error. A report naming only one of two tasks is one that folded them together. It listed:{LineFeed}{renderedRows(names)}{LineFeed}The whole report was:{LineFeed}{report}")
 	let busierPosition = positionOf(names, wanted: BusierTaskName)
 	let quieterPosition = positionOf(names, wanted: QuieterTaskName)
-	try Expect.lessThan(busierPosition as AssertedInt, than: quieterPosition as AssertedInt, message: "'{section}' ranks `{QuieterTaskName}` above `{BusierTaskName}`, though the fixture gives `{BusierTaskName}` twice the work. The ratio is deliberate: with equal work this ordering would be a coin flip, and with it the ordering is a fact about the program. It listed:{LineFeed}{renderedRows(names)}")
+	try Expect.lessThan(busierPosition, than: quieterPosition, message: "'{section}' ranks `{QuieterTaskName}` above `{BusierTaskName}`, though the fixture gives `{BusierTaskName}` twice the work. The ratio is deliberate: with equal work this ordering would be a coin flip, and with it the ordering is a fact about the program. It listed:{LineFeed}{renderedRows(names)}")
 end 'requireBothTasksRanked'
 
 // The call-tree row a name was found on. The name's presence has already been asserted, so the lookup cannot
 // fail.
 function treeRowFor(rows StringArray, names StringArray, wanted String) returns String
-	return try rows.get(positionOf(names, wanted: wanted)) otherwise panic("profile-greenthreads.test: the gate could not run — '{wanted}' was found among {names.count()} names taken from these {rows.count()} rows.")
+	return try rows.get(positionOf(names, wanted: wanted) as ElementIndex) otherwise panic("profile-greenthreads.test: the gate could not run — '{wanted}' was found among {names.count()} names taken from these {rows.count()} rows.")
 end 'treeRowFor'

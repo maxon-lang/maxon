@@ -54,7 +54,7 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// either builder because a second walk over every call in the program, to derive the same relation, is the
 	// duplication `buildParamMutationSummary`'s header refuses.
 	let callEdges = collectCallParamEdges(project, signatures: signatures, module: module, funcIndexByName: funcNames.byName)
-	let edgesByCallee = callEdges.byCallee(funcNames.functions.count())
+	let edgesByCallee = callEdges.byCallee(funcNames.functions.count() as CsrIndex)
 
 	// The interprocedural closure-escape summary — built once, read at every call site to
 	// refuse a capturing closure passed to a callee that persists the parameter.
@@ -77,7 +77,7 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	var provenance = try buildStorageProvenance(project, module: module, signatures: signatures, funcNames: funcNames)
 	try requireStillWanted(project)
 	let (mutationEdges, recordEdges) = provenance.collectProvenanceParamEdges(callEdges, funcNames: funcNames)
-	let mutationEdgesByCallee = adjacencyOf(mutationEdges, base: callEdges, baseByCallee: edgesByCallee, funcCount: funcNames.functions.count())
+	let mutationEdgesByCallee = adjacencyOf(mutationEdges, base: callEdges, baseByCallee: edgesByCallee, funcCount: funcNames.functions.count() as CsrIndex)
 
 	let storageEdges = collectStorageReachEdges(mutationEdges, module: module, funcSignatures: project.funcSignatures, funcIndexByName: funcNames.byName)
 	let mutationSummary = buildParamMutationSummary(funcNames, funcSignatures: project.funcSignatures, edges: mutationEdges, byCallee: mutationEdgesByCallee, recordEdges: recordEdges, storageEdges: storageEdges, provenanceWrites: provenance.receiverWrites)
@@ -220,7 +220,7 @@ end 'resolveOverloadedCalls'
 // per use — one fact, three copies, in a shape where a future edit to one of them reads as deliberate.
 // A parameter carries no borrow of `module`, so each use is just `func`. It is also the shape the two Std
 // passes already take (`foldConstOperandsInFunc`, `elimTrivialBlockArgsInFunc`).
-function resolveOverloadedCallsInFunc(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndex FuncIndex, valueDefiners FunctionValueOrigins)
+function resolveOverloadedCallsInFunc(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndex ElementIndex, valueDefiners FunctionValueOrigins)
 	for opIdx in module.liveOpIndices(func) 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("resolveOverloadedCallsInFunc: opIdx {opIdx} from liveOpIndices is not in module.ops")
 
@@ -270,7 +270,7 @@ type FunctionValueOrigins
 	// asks only about a value `Parser.emitDefaultArgValue` synthesized — the result of a nullary helper
 	// `call`, and of nothing else: `retypeOpaqueMethodResult` answers `asItStands` on an empty argument
 	// list, so no reinterpretation is ever wrapped around it and the call's own result IS the argument.
-	function definingOp(module MaxonModule, func IrFunction, value ValueId) returns OpIndex
+	function definingOp(module MaxonModule, func IrFunction, value ValueId) returns ElementIndex
 		match self.originOf(module, func: func, value: value) 'origin'
 			found(opIndex) then return opIndex
 			none then panic("FunctionValueOrigins.definingOp: value v{value} of '{String.from(func.name)}' is defined by no live op — it was read back as a synthesized default ARGUMENT, which `Parser.emitDefaultArgValue` produces as a nullary call's result")
@@ -312,7 +312,7 @@ type FunctionValueOrigins
 		self.filled = true
 	end 'fill'
 
-	function record(value ValueId, at OpIndex, func IrFunction)
+	function record(value ValueId, at ElementIndex, func IrFunction)
 		try self.definedAt.set(value, value: at) otherwise panic("FunctionValueOrigins.record: op {at} of '{String.from(func.name)}' defines v{value}, which is past the function's own value count")
 		try self.isDefined.set(value, value: true) otherwise panic("FunctionValueOrigins.record: isDefined.set OOB at v{value} — the two columns are pushed in lockstep")
 	end 'record'
@@ -325,7 +325,7 @@ end 'FunctionValueOrigins'
 // op handed IN would leave its caller holding a released pointer, and an op held ACROSS the rewrite here
 // would be read after free. The rule this pass now keeps, once: **no function both holds an op borrow and
 // replaces that op.** E3070 is what named it, on this compiler's own source.
-function resolveOneOverloadedCall(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndex FuncIndex, opIndex OpIndex, valueDefiners FunctionValueOrigins)
+function resolveOneOverloadedCall(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndex ElementIndex, opIndex ElementIndex, valueDefiners FunctionValueOrigins)
 	let op = try module.ops.get(opIndex) otherwise panic("resolveOneOverloadedCall: ops.get({opIndex}) OOB — the index came from liveOpIndices")
 	let callee = maxonOpCalleeName(op)
 	let members = try project.overloadSets.get(callee) otherwise return
@@ -385,7 +385,7 @@ end 'resolveOneOverloadedCall'
 //
 // A set with NO live candidate is left alone, and there the bare name is the honest answer: nothing the
 // call could name survived to the registry.
-function leaveUnmatchedCallOnFirstCandidate(project Project, module MaxonModule, opIndex OpIndex, callee ByteArray, candidates ByteArrayArray)
+function leaveUnmatchedCallOnFirstCandidate(project Project, module MaxonModule, opIndex ElementIndex, callee ByteArray, candidates ByteArrayArray)
 	if project.funcSignatures.contains(callee) 'theBareNameIsItselfAMember'
 		return
 	end 'theBareNameIsItselfAMember'
@@ -417,7 +417,7 @@ end 'leaveUnmatchedCallOnFirstCandidate'
 //
 // The refusal carries the undeclared calls an `unresolved` argument derives from (`deferralCause`),
 // so the editor can drop it when it compiled a buffer alone and a sibling file declares them all.
-function refuseOpaqueOverloadArgument(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndex FuncIndex, opIndex OpIndex, callee ByteArray, origins FunctionValueOrigins)
+function refuseOpaqueOverloadArgument(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndex ElementIndex, opIndex ElementIndex, callee ByteArray, origins FunctionValueOrigins)
 	let range = project.opRanges.get(opIndex)
 	let args = match overloadCallArgs(try module.ops.get(opIndex) otherwise panic("refuseOpaqueOverloadArgument: ops.get({opIndex}) OOB — the index is the call being refused")) 'args'
 		supplied(supplied, _, _) gives supplied
@@ -440,7 +440,7 @@ end 'opaqueOverloadArgumentMessage'
 // to a declared function, a definer with no opaque operand — makes the diagnostic `standsAlone`,
 // and the editor publishes it. A cause naming calls the refusal does not rest on would hide a real
 // error.
-function deferralCause(project Project, module MaxonModule, signatures ProgramSignatures, funcIndex FuncIndex, seeds ValueIdArray, origins FunctionValueOrigins) returns DiagnosticCause
+function deferralCause(project Project, module MaxonModule, signatures ProgramSignatures, funcIndex ElementIndex, seeds ValueIdArray, origins FunctionValueOrigins) returns DiagnosticCause
 	var calls = SourceRangeArray.create()
 
 	if not traceUndeclaredCalls(project, module: module, signatures: signatures, funcIndex: funcIndex, seeds: seeds, origins: origins, calls: calls) or calls.isEmpty() 'noUndeclaredCallExplainsIt'
@@ -450,11 +450,11 @@ function deferralCause(project Project, module MaxonModule, signatures ProgramSi
 	return DiagnosticCause.undeclaredCalls(calls, filePath: module.getFunc(funcIndex).sourceFilePath)
 end 'deferralCause'
 
-module function valueDeferralCause(project Project, module MaxonModule, signatures ProgramSignatures, funcIndex FuncIndex, value ValueId) returns DiagnosticCause
-	return deferralCause(project, module: module, signatures: signatures, funcIndex: funcIndex, seeds: singletonArgs(value), origins: FunctionValueOrigins.create())
-end 'valueDeferralCause'
+module function valuesDeferralCause(project Project, module MaxonModule, signatures ProgramSignatures, funcIndex ElementIndex, values ValueIdArray) returns DiagnosticCause
+	return deferralCause(project, module: module, signatures: signatures, funcIndex: funcIndex, seeds: values, origins: FunctionValueOrigins.create())
+end 'valuesDeferralCause'
 
-function traceUndeclaredCalls(project Project, module MaxonModule, signatures ProgramSignatures, funcIndex FuncIndex, seeds ValueIdArray, origins FunctionValueOrigins, calls SourceRangeArray) returns bool
+function traceUndeclaredCalls(project Project, module MaxonModule, signatures ProgramSignatures, funcIndex ElementIndex, seeds ValueIdArray, origins FunctionValueOrigins, calls SourceRangeArray) returns bool
 	let func = module.getFunc(funcIndex)
 	var pending = ValueIdArray.create()
 	pending.append(seeds)
@@ -486,7 +486,7 @@ function traceUndeclaredCalls(project Project, module MaxonModule, signatures Pr
 	return true
 end 'traceUndeclaredCalls'
 
-function traceDeferredValue(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndex FuncIndex, value ValueId, origins FunctionValueOrigins, calls SourceRangeArray, pending ValueIdArray) returns bool
+function traceDeferredValue(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndex ElementIndex, value ValueId, origins FunctionValueOrigins, calls SourceRangeArray, pending ValueIdArray) returns bool
 	match project.deferralSources.sourceOf(funcIndex, valueId: value) 'recorded'
 		value(sourceFuncIndex, sourceId) then return followDeferralSource(project, module: module, signatures: signatures, funcIndex: funcIndex, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId, calls: calls, pending: pending)
 		none then break 'recorded'
@@ -498,7 +498,7 @@ function traceDeferredValue(project Project, module MaxonModule, signatures Prog
 	end 'origin'
 end 'traceDeferredValue'
 
-function followDeferralSource(project Project, module MaxonModule, signatures ProgramSignatures, funcIndex FuncIndex, sourceFuncIndex FuncIndex, sourceId ValueId, calls SourceRangeArray, pending ValueIdArray) returns bool
+function followDeferralSource(project Project, module MaxonModule, signatures ProgramSignatures, funcIndex ElementIndex, sourceFuncIndex ElementIndex, sourceId ValueId, calls SourceRangeArray, pending ValueIdArray) returns bool
 	if sourceFuncIndex == funcIndex 'thisFunctionsValue'
 		pending.push(sourceId)
 		return true
@@ -507,7 +507,7 @@ function followDeferralSource(project Project, module MaxonModule, signatures Pr
 	return traceUndeclaredCalls(project, module: module, signatures: signatures, funcIndex: sourceFuncIndex, seeds: singletonArgs(sourceId), origins: FunctionValueOrigins.create(), calls: calls)
 end 'followDeferralSource'
 
-function traceDeferredDefiner(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, definer OpIndex, calls SourceRangeArray, pending ValueIdArray) returns bool
+function traceDeferredDefiner(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, definer ElementIndex, calls SourceRangeArray, pending ValueIdArray) returns bool
 	let op = try module.ops.get(definer) otherwise panic("traceDeferredDefiner: ops.get({definer}) OOB — the index came from liveOpIndices")
 
 	if maxonOpCalleeKind(op) == MaxonCalleeKind.direct 'aCall'
@@ -588,7 +588,7 @@ end 'valueTagsInclude'
 // the first member's registration name IS the bare name — so without this the value would silently take one
 // overload's body and one overload's signature, and every indirect call through it would be checked against
 // them. There is no way to be right here, so it says so.
-function refuseOverloadedFunctionValue(project Project, func IrFunction, opIndex OpIndex, name ByteArray)
+function refuseOverloadedFunctionValue(project Project, func IrFunction, opIndex ElementIndex, name ByteArray)
 	if not project.overloadSets.contains(name) 'notOverloaded'
 		return
 	end 'notOverloaded'
@@ -803,7 +803,7 @@ function overloadArgTypeFit(project Project, func IrFunction, sig FuncSignature,
 			let signatures = programSignaturesIn(project, asker: "overloadArgTypeFit")
 			let got = aggregateNameFor(project, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath)
 
-			if signatures.aggregatesConflict(expected, expectedTag: paramTag, expectedNameId: typeNameIdOf(paramType), expectedBrand: paramBrandOf(sig, position: i, paramTag: paramTag), got: got, gotTag: argTag, gotNameId: argNameId, gotBrand: scoredArgBrand(project, func: func, argId: argId, retype: retype)) 'aggregateMismatch'
+			if signatures.aggregatesConflict(expected, expectedTag: paramTag, expectedNameId: typeNameIdOf(paramType), expectedBrand: paramBrandOf(sig, position: i, paramTag: paramTag), got: got, gotTag: argTag, gotNameId: argNameId, gotBrand: scoredArgBrand(project, func: func, argId: argId, retype: retype), readerFilePath: func.sourceFilePath) 'aggregateMismatch'
 				if not signatures.serviceHandleWidensTo(got, interfaceHandleName: expected) 'noConversion'
 					return OverloadFit.incompatible
 				end 'noConversion'
@@ -968,7 +968,7 @@ end 'chosenMemberIs'
 // sites are then indistinguishable, so the second claim is refused rather than allowed to overwrite the
 // first. The cure for that residual is to key the site by its call's op index, which is a change to the P1.9
 // record and its pass, not to this one.
-function bindOverloadChoice(project Project, module MaxonModule, func IrFunction, opIndex OpIndex, callee ByteArray, member ByteArray, valueDefiners FunctionValueOrigins)
+function bindOverloadChoice(project Project, module MaxonModule, func IrFunction, opIndex ElementIndex, callee ByteArray, member ByteArray, valueDefiners FunctionValueOrigins)
 	// ⛔⛔ **THE ARGUMENT COLUMNS ARE READ OFF THE OP BEFORE THE COMMIT, AND READING THEM AFTER IT IS A
 	// USE-AFTER-FREE.** `commitOverloadChoice` stores a rewritten op at this index, which RELEASES the
 	// record `overloadCallArgs` reads its `args`/`defaultSlots` columns out of — and a freed box still holds
@@ -993,7 +993,7 @@ end 'bindOverloadChoice'
 // that kept the bare name has nothing to move — while a defaulted argument's TYPE was read off a by-name
 // registry that is LAST-WINS over the whole set, so that member's argument may still be tagged as another
 // member's and owes the same reconcile every other member owes.
-function bindOverloadChoiceArguments(project Project, module MaxonModule, func IrFunction, opIndex OpIndex, callee ByteArray, member ByteArray, args ValueIdArray, defaultSlots ParamCountArray, origins FunctionValueOrigins)
+function bindOverloadChoiceArguments(project Project, module MaxonModule, func IrFunction, opIndex ElementIndex, callee ByteArray, member ByteArray, args ValueIdArray, defaultSlots ParamCountArray, origins FunctionValueOrigins)
 	repointDefaultedArgHelpers(project, module: module, func: func, callee: callee, member: member, args: args, defaultSlots: defaultSlots, origins: origins)
 
 	if member.equals(callee) 'firstMemberKeptTheBareName'
@@ -1006,7 +1006,7 @@ end 'bindOverloadChoiceArguments'
 // Point every constant-argument range-check site this call owns at the member it resolved to. A function with
 // no such site files no entry at all (`Parser.commitRangeChecks`), which is the common case and costs one
 // lookup.
-function retargetArgRangeSites(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, member ByteArray, args ValueIdArray)
+function retargetArgRangeSites(project Project, func IrFunction, opIndex ElementIndex, callee ByteArray, member ByteArray, args ValueIdArray)
 	var checks = try project.rangeChecks.get(func.name) otherwise return
 
 	// Index-based, so `site` is a mutable binding: the retarget writes the record's own `callee` field, and a
@@ -1112,7 +1112,7 @@ end 'repointDefaultedArgHelpers'
 // use-after-free as `bindOverloadChoice`'s, one frame down: `module.ops.set` drops the old element, and
 // `reconcileOverloadResultType`'s `overloadResultValue(op)` would then read a released record. The op is
 // read here rather than handed in for the reason `resolveOneOverloadedCall`'s header states.
-function commitOverloadChoice(project Project, module MaxonModule, func IrFunction, opIndex OpIndex, member ByteArray, disagreement OverloadDisagreementSubject)
+function commitOverloadChoice(project Project, module MaxonModule, func IrFunction, opIndex ElementIndex, member ByteArray, disagreement OverloadDisagreementSubject)
 	let op = try module.ops.get(opIndex) otherwise panic("commitOverloadChoice: ops.get({opIndex}) OOB — the index came from liveOpIndices")
 	let rewritten = withRewrittenCallee(op, callee: member)
 	reconcileOverloadResultType(project, func: func, opIndex: opIndex, op: op, member: member, disagreement: disagreement)
@@ -1167,14 +1167,14 @@ let sharedCallResultSubject = OverloadDisagreementSubject.theCallsResult
 // is a false diagnostic, not a wrong answer, and it cannot arise for a set whose members agree on their
 // return type, nor for one the parse-time decider settled — which is the common case.
 // What is left is the decider's own boundary: a compound parameter type it does not read, and a tie.
-function reconcileOverloadResultType(project Project, func IrFunction, opIndex OpIndex, op MaxonOp, member ByteArray, disagreement OverloadDisagreementSubject)
+function reconcileOverloadResultType(project Project, func IrFunction, opIndex ElementIndex, op MaxonOp, member ByteArray, disagreement OverloadDisagreementSubject)
 	match overloadResultValue(op) 'result'
 		defines(result) then reconcileOverloadResultTag(project, func: func, opIndex: opIndex, result: result, member: member, disagreement: disagreement)
 		definesNothing then break 'result'
 	end 'result'
 end 'reconcileOverloadResultType'
 
-function reconcileOverloadResultTag(project Project, func IrFunction, opIndex OpIndex, result ValueId, member ByteArray, disagreement OverloadDisagreementSubject)
+function reconcileOverloadResultTag(project Project, func IrFunction, opIndex ElementIndex, result ValueId, member ByteArray, disagreement OverloadDisagreementSubject)
 	let declared = try project.funcReturnTypes.get(member) otherwise return
 
 	match declared 'declared'
@@ -1208,7 +1208,7 @@ end 'reconcileOverloadResultTag'
 //
 // A `void`-tagged result is the agreement, and it is the only one: no repair is possible in either
 // direction, because the divergence is over whether there is a value AT ALL.
-function requireOverloadVoidResult(project Project, func IrFunction, opIndex OpIndex, result ValueId, member ByteArray, disagreement OverloadDisagreementSubject)
+function requireOverloadVoidResult(project Project, func IrFunction, opIndex ElementIndex, result ValueId, member ByteArray, disagreement OverloadDisagreementSubject)
 	let currentTag = try func.valueTags.get(result) otherwise panic("requireOverloadVoidResult: value v{result} of '{String.from(func.name)}' has no recorded type — every SSA value is minted through Parser.mintValue")
 
 	if currentTag == ValueTypeTag.void 'alreadyRight'
@@ -1218,7 +1218,7 @@ function requireOverloadVoidResult(project Project, func IrFunction, opIndex OpI
 	reportOverloadReturnDisagreement(project, range: project.opRanges.get(opIndex), filePath: func.sourceFilePath, member: member, current: currentTag, declared: ValueTypeTag.void, disagreement: disagreement)
 end 'requireOverloadVoidResult'
 
-function requireOverloadResultTagAgrees(project Project, func IrFunction, opIndex OpIndex, result ValueId, member ByteArray, declared MaxonType, disagreement OverloadDisagreementSubject)
+function requireOverloadResultTagAgrees(project Project, func IrFunction, opIndex ElementIndex, result ValueId, member ByteArray, declared MaxonType, disagreement OverloadDisagreementSubject)
 	let currentTag = try func.valueTags.get(result) otherwise panic("requireOverloadResultTagAgrees: value v{result} of '{String.from(func.name)}' has no recorded type — every SSA value is minted through Parser.mintValue")
 	let declaredTag = maxonTypeTag(declared)
 
@@ -1284,7 +1284,7 @@ end 'overloadResultValue'
 // where the author must add a label), naming the callee as WRITTEN with its type qualifier stripped, and
 // listing the tied candidates' parameter lists in declaration order. The wording is pinned byte for byte
 // by `specs/function-overloads.md`.
-function reportAmbiguousOverload(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, tied ByteArrayArray, module MaxonModule, candidates ByteArrayArray)
+function reportAmbiguousOverload(project Project, func IrFunction, opIndex ElementIndex, callee ByteArray, tied ByteArrayArray, module MaxonModule, candidates ByteArrayArray)
 	let range = project.opRanges.get(opIndex)
 	project.refusedOverloadCalls.insert(opIndex)
 	reportPositioned(project, code: ErrorCode.semanticAmbiguousOverload, message: "Ambiguous overload for '{bareMethodName(callee)}': multiple overloads match. Candidates: {renderOverloadCandidates(project, tied: tied)}", line: range.line, column: range.column, filePath: func.sourceFilePath)
@@ -1294,8 +1294,8 @@ function reportAmbiguousOverload(project Project, func IrFunction, opIndex OpInd
 	leaveUnmatchedCallOnFirstCandidate(project, module: module, opIndex: opIndex, callee: callee, candidates: candidates)
 end 'reportAmbiguousOverload'
 
-// `(name String), (label String)` — each tied candidate's parameter list, receiver excluded. Post-resolution
-// types, so a ranged alias reads as the primitive it is; the one spec case pins the aggregate spellings.
+// `(name String), (label Age)` — each tied candidate's parameter list, receiver excluded, a ranged
+// alias shown by its name. `specs/function-overloads.md` pins the spellings.
 function renderOverloadCandidates(project Project, tied ByteArrayArray) returns String
 	var rendered = ""
 
@@ -1315,14 +1315,16 @@ end 'renderOverloadCandidates'
 function renderOverloadParams(project Project, sig FuncSignature) returns String
 	var rendered = ""
 
-	for i in firstUserParamIndex(sig.takesReceiver()) upto sig.paramNames.count() 'eachParam'
+	for i in firstUserParamIndex(sig.takesReceiver()) upto sig.paramNames.count() as ParamCount 'eachParam'
 		if not rendered.isEmpty() 'separator'
 			rendered = "{rendered}, "
 		end 'separator'
 
-		let paramName = try sig.paramNames.get(i) otherwise panic("renderOverloadParams: paramNames.get OOB at {i} inside its own count()")
-		let paramType = try sig.paramTypes.get(i) otherwise panic("renderOverloadParams: paramTypes.get OOB at {i} — a signature's param columns are built in lockstep")
-		rendered = "{rendered}{String.from(paramName)} {maxonTypeName(paramType, typeNames: project.typeNames)}"
+		let paramName = try sig.paramNames.get(i as ElementIndex) otherwise panic("renderOverloadParams: paramNames.get OOB at {i} inside its own count()")
+		let paramType = try sig.paramTypes.get(i as ElementIndex) otherwise panic("renderOverloadParams: paramTypes.get OOB at {i} — a signature's param columns are built in lockstep")
+		let declaredName = try sig.paramDeclaredNames.get(i as ElementIndex) otherwise panic("renderOverloadParams: paramDeclaredNames.get OOB at {i} — a signature's param columns are built in lockstep")
+		let spelled = sourceSpelledAliasText(declaredName) if not declaredName.isEmpty() and (tagIsInteger(maxonTypeTag(paramType)) or tagIsFloat(maxonTypeTag(paramType))) else maxonTypeName(paramType, typeNames: project.typeNames)
+		rendered = "{rendered}{String.from(paramName)} {spelled}"
 	end 'eachParam'
 
 	return rendered
@@ -1444,10 +1446,9 @@ function namePositionOf(func IrFunction) returns PositionKey
 	return positionKey(func.nameLine, column: func.nameColumn)
 end 'namePositionOf'
 
-typealias UnthrownClauseIndex = int(0 to u64.max)
-typealias UnthrownClauseIndexArray = Array with UnthrownClauseIndex
+typealias UnthrownClauseIndexArray = Array with ElementIndex
 typealias UnthrownClauseIndexesByPosition = Map with (PositionKey, UnthrownClauseIndexArray)
-typealias UnthrownClauseIndexByName = Map with (ByteArray, UnthrownClauseIndex)
+typealias UnthrownClauseIndexByName = Map with (ByteArray, ElementIndex)
 
 type UnthrownClause
 	export let func as IrFunction
@@ -1489,7 +1490,7 @@ type UnthrownClauses
 			return
 		end 'notACandidate'
 
-		let index = self.clauses.count() as UnthrownClauseIndex
+		let index = self.clauses.count()
 		let position = namePositionOf(func)
 		let site = try self.siteAt(position, path: func.sourceFilePath) otherwise index
 		self.clauses.push(UnthrownClause.create(func, declared: declared))
@@ -1507,7 +1508,7 @@ type UnthrownClauses
 		self.byPosition.upsert(position, value: indexes)
 	end 'noteIfCandidate'
 
-	function siteAt(position PositionKey, path FilePath) returns UnthrownClauseIndex throws MapError
+	function siteAt(position PositionKey, path FilePath) returns ElementIndex throws MapError
 		let atPosition = try self.byPosition.get(position)
 
 		for index in atPosition 'eachClause'
@@ -1541,7 +1542,7 @@ type UnthrownClauses
 		end 'eachSlot'
 	end 'settleAnsweredSites'
 
-	function settle(site UnthrownClauseIndex)
+	function settle(site ElementIndex)
 		try self.settled.set(site, value: true) otherwise panic("settle: settled is parallel to clauses, and site {site} is one of them")
 	end 'settle'
 
@@ -1690,7 +1691,7 @@ end 'buildEscapeSummary'
 // past it is a parser/IR disagreement, not a parameter of some other type — hence the bounds test, and the
 // `panic` behind it for the read the bounds test has already made impossible.
 function isFunctionTypedParam(func IrFunction, param ValueId) returns bool
-	return param < func.valueTags.count() and (try func.valueTags.get(param) otherwise panic("isFunctionTypedParam: valueTags.get OOB at {param} inside its own count()")) == ValueTypeTag.function
+	return param < func.valueTags.count() as ValueId and (try func.valueTags.get(param) otherwise panic("isFunctionTypedParam: valueTags.get OOB at {param} inside its own count()")) == ValueTypeTag.function
 end 'isFunctionTypedParam'
 
 // Does `func` take at least one `function`-typed parameter? The cheap gate that keeps the escape scan off
@@ -1789,7 +1790,7 @@ end 'isTrackedValue'
 // has no mark slot and is no closure — `Parser.mintValue` seeds the column per SSA value, so it only ever
 // trails the values it describes.
 function isMarkedCapturingClosure(value ValueId, func IrFunction) returns bool
-	return value < func.valueIsCapturingClosure.count() and (try func.valueIsCapturingClosure.get(value) otherwise panic("isMarkedCapturingClosure: valueIsCapturingClosure.get OOB at {value} inside its own count()"))
+	return value < func.valueIsCapturingClosure.count() as ValueId and (try func.valueIsCapturingClosure.get(value) otherwise panic("isMarkedCapturingClosure: valueIsCapturingClosure.get OOB at {value} inside its own count()"))
 end 'isMarkedCapturingClosure'
 
 // Does this scan track capturing closures rather than one parameter? Asked at exactly ONE slot — an `async`
@@ -1813,7 +1814,7 @@ end 'subjectTracksCapturingClosures'
 union ValueEscapeSite
 	// A body op or terminator places `value` where the frame's environment cannot follow — `opIndex` is that
 	// op's flat `module.ops` index.
-	persistedBy(value ValueId, opIndex OpIndex)
+	persistedBy(value ValueId, opIndex ElementIndex)
 
 	// A branch edge carries `value` into a block-arg phi. One slot, joining every incoming edge, and it
 	// carries the code pointer alone — the environment rides a per-value side column no phi can merge.
@@ -2239,7 +2240,7 @@ export type ParamMutationSummary
 	end 'maskAt'
 
 	// The indexed read under all of them, split out so a caller holding a resolved index pays no second hash.
-	function maskAtIndex(column ParamPositionMaskArray, index FuncIndex) returns ParamPositionMask
+	function maskAtIndex(column ParamPositionMaskArray, index ElementIndex) returns ParamPositionMask
 		return try column.get(index) otherwise panic("ParamMutationSummary.maskAtIndex: function index {index} is outside the mask column — every column is built over `module.functions` in one pass")
 	end 'maskAtIndex'
 end 'ParamMutationSummary'
@@ -2268,7 +2269,7 @@ export type CallParamEdges
 
 	// The four columns are only ever pushed together here, so they stay the same length by construction —
 	// `pushCallArg`'s reason, reaching the third family of parallel columns in the compiler.
-	export function record(calleeIndex FuncIndex, callerIndex FuncIndex, callerParam ParamCount, calleeParam ParamCount)
+	export function record(calleeIndex ElementIndex, callerIndex ElementIndex, callerParam ParamCount, calleeParam ParamCount)
 		self.calleeIndices.push(calleeIndex)
 		self.callerIndices.push(callerIndex)
 		self.callerParams.push(callerParam)
@@ -2290,11 +2291,11 @@ export type CallParamEdges
 
 	export function appendRowsIn(other CallParamEdges, firstRow CsrIndex, stopRow CsrIndex)
 		for k in firstRow upto stopRow 'eachRow'
-			let callee = try other.calleeIndices.get(k) otherwise panic("CallParamEdges.appendRowsIn: calleeIndices.get OOB at {k}")
-			let caller = try other.callerIndices.get(k) otherwise panic("CallParamEdges.appendRowsIn: callerIndices.get OOB at {k} — the four columns are parallel by construction")
-			let callerParam = try other.callerParams.get(k) otherwise panic("CallParamEdges.appendRowsIn: callerParams.get OOB at {k} — the four columns are parallel by construction")
-			let calleeParam = try other.calleeParams.get(k) otherwise panic("CallParamEdges.appendRowsIn: calleeParams.get OOB at {k} — the four columns are parallel by construction")
-			self.record(callee as FuncIndex, callerIndex: caller, callerParam: callerParam, calleeParam: calleeParam)
+			let callee = try other.calleeIndices.get(k as ElementIndex) otherwise panic("CallParamEdges.appendRowsIn: calleeIndices.get OOB at {k}")
+			let caller = try other.callerIndices.get(k as ElementIndex) otherwise panic("CallParamEdges.appendRowsIn: callerIndices.get OOB at {k} — the four columns are parallel by construction")
+			let callerParam = try other.callerParams.get(k as ElementIndex) otherwise panic("CallParamEdges.appendRowsIn: callerParams.get OOB at {k} — the four columns are parallel by construction")
+			let calleeParam = try other.calleeParams.get(k as ElementIndex) otherwise panic("CallParamEdges.appendRowsIn: calleeParams.get OOB at {k} — the four columns are parallel by construction")
+			self.record(callee, callerIndex: caller, callerParam: callerParam, calleeParam: calleeParam)
 		end 'eachRow'
 	end 'appendRowsIn'
 
@@ -2378,7 +2379,7 @@ function buildParamMutationSummary(funcNames FunctionNameIndex, funcSignatures F
 	// lie within a parameter's record, because its question is whether the GRAPH a call site handed over gets
 	// written: `nudge(t)` whose body is `t.inner.bump()` writes it (`ProvenanceTracer.collectProvenanceParamEdges`).
 	let funcCount = funcNames.functions.count()
-	let recordByCallee = adjacencyOf(recordEdges, base: edges, baseByCallee: byCallee, funcCount: funcCount)
+	let recordByCallee = adjacencyOf(recordEdges, base: edges, baseByCallee: byCallee, funcCount: funcCount as CsrIndex)
 	propagateParamMasks(recordWriteMasks, edges: recordEdges, byCallee: recordByCallee, receiverSlotStopsHere: sharedNoExemptCallees)
 
 	// ⚖ **THE SAME SEED OVER THE ARGUMENT EDGES ALONE, WITH THE RECEIVER EXEMPTION APPLIED** — the `let` BINDING's
@@ -2386,7 +2387,7 @@ function buildParamMutationSummary(funcNames FunctionNameIndex, funcSignatures F
 	// is stated.
 	propagateParamMasks(bindingWriteMasks, edges: edges, byCallee: byCallee, receiverSlotStopsHere: methodReceivers)
 
-	let storageByCallee = adjacencyOf(storageEdges, base: edges, baseByCallee: byCallee, funcCount: funcCount)
+	let storageByCallee = adjacencyOf(storageEdges, base: edges, baseByCallee: byCallee, funcCount: funcCount as CsrIndex)
 	propagateParamMasks(storageMasks, edges: storageEdges, byCallee: storageByCallee, receiverSlotStopsHere: sharedNoExemptCallees)
 	return ParamMutationSummary.create(masks, storageMasks: storageMasks, recordWriteMasks: recordWriteMasks, bindingWriteMasks: bindingWriteMasks, funcIndexByName: funcIndexByName)
 end 'buildParamMutationSummary'
@@ -2438,7 +2439,7 @@ end 'collectStorageReachEdges'
 //
 // A callee with no signature is skipped exactly as it is there: it is compiler-internal or undeclared, and
 // either way has no mask for a bit to travel to.
-function addStorageReachEdges(reach StorageReachEdge, callerIndex FuncIndex, callerParamCount ParamCount, funcSignatures FuncSignatureMap, funcIndexByName FuncIndexByName, edges CallParamEdges)
+function addStorageReachEdges(reach StorageReachEdge, callerIndex ElementIndex, callerParamCount ParamCount, funcSignatures FuncSignatureMap, funcIndexByName FuncIndexByName, edges CallParamEdges)
 	let sig = try funcSignatures.get(reach.callee) otherwise return
 	let calleeIndex = try funcIndexByName.get(reach.callee) otherwise return
 	let pos = try argSlotPosition(sig.paramNames, argIndex: reach.argColumn, label: EmptySourceText) otherwise return
@@ -2490,7 +2491,7 @@ end 'collectCallParamEdges'
 // bodies it can land on is the interface's conformers, which is a whole-program fact this pass
 // already holds. Every variant is named, so a newly appended op fails to compile here rather than
 // silently dropping out of the call graph.
-function collectCallParamEdgesAt(project Project, signatures ProgramSignatures, op MaxonOp, func IrFunction, callerIndex FuncIndex, funcIndexByName FuncIndexByName, edges CallParamEdges, conformers ConformersByInterface, witnessSlots WitnessSlotsByDeclIndex)
+function collectCallParamEdgesAt(project Project, signatures ProgramSignatures, op MaxonOp, func IrFunction, callerIndex ElementIndex, funcIndexByName FuncIndexByName, edges CallParamEdges, conformers ConformersByInterface, witnessSlots WitnessSlotsByDeclIndex)
 	match op 'op'
 		call(_, callee, args, argLabels, _, _, _, _) then addCallParamEdges(project, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges)
 
@@ -2554,7 +2555,7 @@ end 'collectCallParamEdgesAt'
 // receiver writes the parser already recorded directly) or undeclared (E3004, reported by `checkCalls`).
 // A label naming no parameter fills no position and is skipped for the same reason — `slotCallArgs`
 // reports it.
-function addCallParamEdges(project Project, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, func IrFunction, callerIndex FuncIndex, funcIndexByName FuncIndexByName, edges CallParamEdges)
+function addCallParamEdges(project Project, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, func IrFunction, callerIndex ElementIndex, funcIndexByName FuncIndexByName, edges CallParamEdges)
 	let sig = try project.funcSignatures.get(callee) otherwise return
 	let calleeIndex = try funcIndexByName.get(callee) otherwise return
 
@@ -2593,7 +2594,7 @@ end 'addCallParamEdges'
 // roster `declaredConformersOf` walks. Those impls are compiler-synthesized to the requirement's shape and
 // write no parameter, so no edge is lost — and if one ever could, `witnessSlotImpl`'s own gate is where
 // that set is decided, not here.
-function addWitnessParamEdges(project Project, signatures ProgramSignatures, args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, func IrFunction, callerIndex FuncIndex, funcIndexByName FuncIndexByName, edges CallParamEdges, conformers ConformersByInterface, witnessSlots WitnessSlotsByDeclIndex)
+function addWitnessParamEdges(project Project, signatures ProgramSignatures, args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, func IrFunction, callerIndex ElementIndex, funcIndexByName FuncIndexByName, edges CallParamEdges, conformers ConformersByInterface, witnessSlots WitnessSlotsByDeclIndex)
 	if func.paramCount == 0 'passesNothingOfItsOwn'
 		return
 	end 'passesNothingOfItsOwn'
@@ -2620,7 +2621,7 @@ end 'CallLandingBodies'
 // A witness dispatch lands on one body per conformer of the requirement's interface whose implementation this
 // module declares; a conformer's implementation it does not declare is compiler-synthesized. See
 // `addWitnessParamEdges` for why the union over them is the answer.
-module function witnessDispatchImpls(project Project, signatures ProgramSignatures, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, funcIndexByName FuncIndexByName, conformers ConformersByInterface, witnessSlots WitnessSlotsByDeclIndex) returns CallLandingBodies
+module function witnessDispatchImpls(project Project, signatures ProgramSignatures, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, funcIndexByName FuncIndexByName, conformers ConformersByInterface, witnessSlots WitnessSlotsByDeclIndex) returns CallLandingBodies
 	let slot = witnessSlotAt(signatures, witnessSlots: witnessSlots, dispatched: dispatchedInterfaceAt(signatures, interfaceDeclIndex: interfaceDeclIndex), interfaceDeclIndex: interfaceDeclIndex, methodIndex: methodIndex)
 	let requirement = slot.method.name
 	let sourceInterface = slot.sourceInterfaceName
@@ -2657,7 +2658,7 @@ end 'conformersOfMemoized'
 // One conformer's edges. The argument list is POSITIONAL and its position 0 is the receiver
 // (`witnessDispatchReceiver`), which is the implementation's own `self` — so argument `i` fills parameter `i`
 // with no slotting to do, where a named call needs `argSlotPosition` to undo a label permutation.
-function addWitnessConformerEdges(args ValueIdArray, calleeIndex FuncIndex, func IrFunction, callerIndex FuncIndex, edges CallParamEdges)
+function addWitnessConformerEdges(args ValueIdArray, calleeIndex ElementIndex, func IrFunction, callerIndex ElementIndex, edges CallParamEdges)
 	for i in 0 upto args.count() 'eachArg'
 		let argId = try args.get(i) otherwise panic("addWitnessConformerEdges: args.get OOB at {i} below its own count")
 
@@ -2688,8 +2689,8 @@ function propagateParamMasks(masks ParamPositionMaskArray, edges CallParamEdges,
 
 	var head = 0 as CsrIndex
 
-	while head < worklist.count() 'drain'
-		let calleeIndex = try worklist.get(head) otherwise panic("propagateParamMasks: worklist.get OOB at {head}")
+	while head < worklist.count() as CsrIndex 'drain'
+		let calleeIndex = try worklist.get(head as ElementIndex) otherwise panic("propagateParamMasks: worklist.get OOB at {head}")
 		head = head + 1
 		try queued.set(calleeIndex, value: false) otherwise panic("propagateParamMasks: queued.set OOB at {calleeIndex}")
 		propagateAcrossEdges(byCallee, masks: masks, edges: edges, calleeIndex: calleeIndex, receiverSlotStopsHere: receiverSlotStopsHere, worklist: worklist, queued: queued)
@@ -2701,7 +2702,7 @@ end 'propagateParamMasks'
 let sharedNoExemptCallees = BoolArray.create()
 
 // Propagate one callee's mask across every edge that reaches it, enqueueing each caller whose own mask grew.
-function propagateAcrossEdges(byCallee CsrGraph, masks ParamPositionMaskArray, edges CallParamEdges, calleeIndex FuncIndex, receiverSlotStopsHere BoolArray, worklist FuncIndexArray, queued BoolArray)
+function propagateAcrossEdges(byCallee CsrGraph, masks ParamPositionMaskArray, edges CallParamEdges, calleeIndex ElementIndex, receiverSlotStopsHere BoolArray, worklist FuncIndexArray, queued BoolArray)
 	var calleeMask = try masks.get(calleeIndex) otherwise panic("propagateAcrossEdges: masks.get OOB at {calleeIndex}")
 
 	// ⚖ **A CALLEE THAT CALLS A SELF-WRITING METHOD ON ITS PARAMETER IS NOT MUTATING THAT PARAMETER** (user
@@ -2890,7 +2891,7 @@ end 'opConsumesAPromise'
 // deterministic (worker-invariant). Only built for await-bearing functions, behind the `functionHasAwait` gate.
 type AwaitSite
 	export let block as IrBlock
-	export let pos as BlockOpPos
+	export let pos as ElementIndex
 	export let promise as ValueId
 
 	// WHICH consume this site is. It decides the SENTENCE and nothing else — the rule is one rule — because
@@ -2898,7 +2899,7 @@ type AwaitSite
 	// `p.cancel()` would be describing a line the author did not write.
 	export let kind as PromiseConsume
 
-	static function create(block IrBlock, pos BlockOpPos, promise ValueId, kind PromiseConsume) returns AwaitSite
+	static function create(block IrBlock, pos ElementIndex, promise ValueId, kind PromiseConsume) returns AwaitSite
 		return Self{block: block, pos: pos, promise: promise, kind: kind}
 	end 'create'
 end 'AwaitSite'
@@ -2984,7 +2985,7 @@ end 'calleeReclaimsAPromise'
 // Record a `__gt_promise_drop(p)` call as a CANCEL site. Split out so the `call` arm above stays one
 // statement, and so the "which callee reclaims a green thread" test has one home shared with
 // `classifyOpForPromise`'s matching arm.
-function pushIfPromiseDrop(sites AwaitSiteArray, block IrBlock, pos BlockOpPos, callee ByteArray, args ValueIdArray)
+function pushIfPromiseDrop(sites AwaitSiteArray, block IrBlock, pos ElementIndex, callee ByteArray, args ValueIdArray)
 	if not calleeReclaimsAPromise(callee) 'notAReclaim'
 		return
 	end 'notAReclaim'
@@ -3005,7 +3006,7 @@ end 'checkAwaitSite'
 // Report E3100 at the SECOND await's own `await`-keyword span — the await that is "already" spent — and
 // return `true` so the caller stops at the first violation. Never spells the
 // number: `ErrorCode.promiseAlreadyAwaited` is the registry member.
-function reportedViolation(project Project, func IrFunction, secondOpIdx OpIndex, first PromiseConsume) returns bool
+function reportedViolation(project Project, func IrFunction, secondOpIdx ElementIndex, first PromiseConsume) returns bool
 	let range = project.opRanges.get(secondOpIdx)
 	reportPositioned(project, code: ErrorCode.promiseAlreadyAwaited, message: alreadyConsumedMessage(first), line: range.line, column: range.column, filePath: func.sourceFilePath)
 	return true
@@ -3029,7 +3030,7 @@ end 'alreadyConsumedMessage'
 // The outcome of scanning one block's body ops for a re-await of the tracked promise.
 union AwaitScan
 	// A second `await` of the tracked promise — its flat op index, which keys the diagnostic's source span.
-	foundSecond(secondOpIdx OpIndex)
+	foundSecond(secondOpIdx ElementIndex)
 
 	// The tracked promise's DEFINING `asyncCall` was re-passed: the promise is re-armed here (a fresh green
 	// thread), so this path is dead for the await the walk started from.
@@ -3041,7 +3042,7 @@ end 'AwaitScan'
 
 // The result of the whole reachability walk from one first-await.
 union ReachableReawait
-	found(secondOpIdx OpIndex)
+	found(secondOpIdx ElementIndex)
 	none
 end 'ReachableReawait'
 
@@ -3062,7 +3063,7 @@ end 'OpAwaitRole'
 // each block entered from its top at most once (`visited`). A path DIES at the `asyncCall` that re-defines
 // `promise` (the re-arm). A block reached again via a loop back-edge is scanned from the top — which is what
 // makes a single lexical await inside a loop reach ITSELF and be refused.
-function reachableReawait(module MaxonModule, blockIndex BlockIndexById, func IrFunction, startBlock IrBlock, startPos BlockOpPos, promise ValueId) returns ReachableReawait
+function reachableReawait(module MaxonModule, blockIndex BlockIndexById, func IrFunction, startBlock IrBlock, startPos ElementIndex, promise ValueId) returns ReachableReawait
 	match scanBlockForReawait(module, block: startBlock, from: startPos + 1, promise: promise) 'tail'
 		foundSecond(idx) then return ReachableReawait.found(idx)
 
@@ -3076,7 +3077,7 @@ function reachableReawait(module MaxonModule, blockIndex BlockIndexById, func Ir
 	var worklist = BlockIdArray.create()
 	collectMaxonBlockSuccessors(module, block: startBlock, into: worklist)
 
-	var head = 0 as BlockOpPos
+	var head = 0 as ElementIndex
 
 	while head < worklist.count() 'bfs'
 		let blockId = try worklist.get(head) otherwise panic("reachableReawait: worklist.get OOB at {head}")
@@ -3136,7 +3137,7 @@ end 'blockRedefinesPromise'
 // Scan `block`'s body ops from position `from` for the tracked promise: a re-await (`foundSecond`), the
 // re-arming definition (`rearmed`), or neither (`ranOff`). Only BODY ops (`opRefs`) can be an `await`/`asyncCall`
 // — a terminator is a branch/return, handled by `collectMaxonBlockSuccessors` — so this never inspects the terminator.
-function scanBlockForReawait(module MaxonModule, block IrBlock, from BlockOpPos, promise ValueId) returns AwaitScan
+function scanBlockForReawait(module MaxonModule, block IrBlock, from ElementIndex, promise ValueId) returns AwaitScan
 	for pos in from upto block.opRefs.count() 'eachOp'
 		let opIdx = try block.opRefs.get(pos) otherwise panic("scanBlockForReawait: opRefs.get OOB at {pos}")
 
@@ -3372,7 +3373,7 @@ end 'reportDeferredParseErrors'
 
 function deferredParseErrorDiagnostic(project Project, module MaxonModule, signatures ProgramSignatures, entryIndex ElementIndex) returns Diagnostic
 	let deferred = try project.deferredParseErrors.get(entryIndex) otherwise panic("deferredParseErrorDiagnostic: entryIndex {entryIndex} is below project.deferredParseErrors.count()")
-	return parseErrorDiagnostic(deferred.error, path: deferred.filePath, keywords: project.keywords).withCause(valueDeferralCause(project, module: module, signatures: signatures, funcIndex: deferred.funcIndex, value: deferred.value))
+	return parseErrorDiagnostic(deferred.error, path: deferred.filePath, keywords: project.keywords).withCause(valuesDeferralCause(project, module: module, signatures: signatures, funcIndex: deferred.funcIndex, values: singletonArgs(deferred.value)))
 end 'deferredParseErrorDiagnostic'
 
 function checkCalls(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, throwsMap FuncThrowsMap, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, provenance ProvenanceTracer) throws CompileError
@@ -3557,7 +3558,7 @@ end 'checkCalls'
 // PARAMETERS to be GPR scalars. The argument-VALUE and RESULT scalar checks are the parser's (it holds the
 // pre-resolution types and must type the promise safely); this is the one check the parser cannot make — a
 // callee declared in another file, whose param types only the whole-program `funcSignatures` registry has.
-function validateAsyncCall(project Project, func IrFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, opIndex OpIndex, result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argDefaultSlots ParamCountArray, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, blameTargetErrorsHere bool)
+function validateAsyncCall(project Project, func IrFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, opIndex ElementIndex, result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argDefaultSlots ParamCountArray, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, blameTargetErrorsHere bool)
 	// `notMinted`: `Parser.asyncSpawnCallee` admits only a name the author wrote — a free call's identifier or
 	// a `<Type>.<static>` mangle of two written tokens — and refuses a MINTED callee in words, because
 	// `MaxonOp.asyncCall` carries no `mint` field to tell the two apart.
@@ -3588,7 +3589,7 @@ end 'validateAsyncCall'
 // today, so this narrows a refusal rather than opening a hole: a double
 // free is the alternative, and a diagnostic is the honest boundary. **The transitive-consume fixpoint is
 // what would decide it properly; that is the slice this waits on.**
-function requireAsyncScalarParams(project Project, func IrFunction, signatures ProgramSignatures, opIndex OpIndex, callee ByteArray)
+function requireAsyncScalarParams(project Project, func IrFunction, signatures ProgramSignatures, opIndex ElementIndex, callee ByteArray)
 	let sig = try project.funcSignatures.get(callee) otherwise return
 
 	for i in 0 upto sig.paramCount() 'eachParam'
@@ -3629,7 +3630,7 @@ end 'asyncParamOwnsHeap'
 //
 // The diagnostic names the METHOD, which the op does not carry — but `project.opRanges` positions it exactly
 // on the dispatch the author wrote, and the wording matches the direct-call form the author already knows.
-function requireTriedWitnessDispatch(project Project, func IrFunction, opIndex OpIndex, isThrowing bool)
+function requireTriedWitnessDispatch(project Project, func IrFunction, opIndex ElementIndex, isThrowing bool)
 	if not isThrowing 'nonThrowing'
 		return
 	end 'nonThrowing'
@@ -3640,7 +3641,7 @@ end 'requireTriedWitnessDispatch'
 
 // The witness slot list per dispatched interface, keyed by the declaration-order handle a `witnessDispatch`
 // op carries. See `checkCalls`, where the one instance is created, for why it exists.
-module typealias WitnessSlotsByDeclIndex = Map with (InterfaceDeclIndex, CollectedInterfaceMethodArray)
+module typealias WitnessSlotsByDeclIndex = Map with (ElementIndex, CollectedInterfaceMethodArray)
 
 // What an interface FORMAL denotes at the argument check. `opaque` is a real answer — see
 // `witnessFormalDeclaredType` for its four sources and for why each is a position where comparing would be
@@ -3654,7 +3655,7 @@ end 'WitnessFormalType'
 
 // The two obligations a PLAIN `witnessDispatch` carries here, in one call so the big match's arm binds its
 // `args` once. A `witnessTryDispatch` asks only the second — it IS the `try`.
-function checkWitnessDispatchOp(project Project, func IrFunction, signatures ProgramSignatures, witnessSlots WitnessSlotsByDeclIndex, opIndex OpIndex, args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, isThrowing bool, provenance ProvenanceTracer)
+function checkWitnessDispatchOp(project Project, func IrFunction, signatures ProgramSignatures, witnessSlots WitnessSlotsByDeclIndex, opIndex ElementIndex, args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, isThrowing bool, provenance ProvenanceTracer)
 	requireTriedWitnessDispatch(project, func: func, opIndex: opIndex, isThrowing: isThrowing)
 	checkWitnessArgTypes(project, func: func, signatures: signatures, witnessSlots: witnessSlots, opIndex: opIndex, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, provenance: provenance)
 end 'checkWitnessDispatchOp'
@@ -3682,7 +3683,7 @@ end 'checkWitnessDispatchOp'
 // `Parser.floatWidenedWitnessArgs` and `requireGenuineSelfArgs` walk. The counts agree by construction — the
 // parser's arity check ran before the op was emitted — so a short `args` is a compiler defect and panics
 // rather than being absorbed.
-function checkWitnessArgTypes(project Project, func IrFunction, signatures ProgramSignatures, witnessSlots WitnessSlotsByDeclIndex, opIndex OpIndex, args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, provenance ProvenanceTracer)
+function checkWitnessArgTypes(project Project, func IrFunction, signatures ProgramSignatures, witnessSlots WitnessSlotsByDeclIndex, opIndex ElementIndex, args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, provenance ProvenanceTracer)
 	let dispatched = dispatchedInterfaceAt(signatures, interfaceDeclIndex: interfaceDeclIndex)
 	let slot = witnessSlotAt(signatures, witnessSlots: witnessSlots, dispatched: dispatched, interfaceDeclIndex: interfaceDeclIndex, methodIndex: methodIndex)
 	let requirement = slot.method
@@ -3747,7 +3748,7 @@ end 'witnessFormalName'
 // `Parser.witnessSlotsOf` also walks). Reading the merged `project.interfaces` instead would be a second
 // writer of what must be one declaration, and `LowerMaxonToStd.interfaceAtDeclIndex` has to assert that seam
 // precisely because it reads the other store; asking the numbering's own store leaves nothing to assert.
-module function dispatchedInterfaceAt(signatures ProgramSignatures, interfaceDeclIndex InterfaceDeclIndex) returns IrInterface
+module function dispatchedInterfaceAt(signatures ProgramSignatures, interfaceDeclIndex ElementIndex) returns IrInterface
 	let name = signatures.interfaceNameAtDeclIndex(interfaceDeclIndex)
 
 	match lookupInterface(signatures.interfaceMap(), name: name) 'resolve'
@@ -3758,7 +3759,7 @@ end 'dispatchedInterfaceAt'
 
 // `interfaceDeclIndex`'s transitive witness slot list, walked once per INTERFACE — see `checkCalls`, where
 // the memo is created, for why that is a correctness-shaped concern rather than a speed one.
-function witnessSlotsAt(signatures ProgramSignatures, witnessSlots WitnessSlotsByDeclIndex, dispatched IrInterface, interfaceDeclIndex InterfaceDeclIndex) returns CollectedInterfaceMethodArray
+function witnessSlotsAt(signatures ProgramSignatures, witnessSlots WitnessSlotsByDeclIndex, dispatched IrInterface, interfaceDeclIndex ElementIndex) returns CollectedInterfaceMethodArray
 	if let memoized = try witnessSlots.get(interfaceDeclIndex) 'alreadyWalked'
 		return memoized
 	end 'alreadyWalked'
@@ -3770,7 +3771,7 @@ end 'witnessSlotsAt'
 
 // The requirement a witness dispatch names: slot `methodIndex` of the one list every reader of the op's
 // `(interfaceDeclIndex, methodIndex)` pair numbers it against.
-module function witnessSlotAt(signatures ProgramSignatures, witnessSlots WitnessSlotsByDeclIndex, dispatched IrInterface, interfaceDeclIndex InterfaceDeclIndex, methodIndex WitnessMethodIndex) returns CollectedInterfaceMethod
+module function witnessSlotAt(signatures ProgramSignatures, witnessSlots WitnessSlotsByDeclIndex, dispatched IrInterface, interfaceDeclIndex ElementIndex, methodIndex WitnessMethodIndex) returns CollectedInterfaceMethod
 	let slots = witnessSlotsAt(signatures, witnessSlots: witnessSlots, dispatched: dispatched, interfaceDeclIndex: interfaceDeclIndex)
 	return try slots.get(methodIndex) otherwise panic("witnessSlotAt: slot {methodIndex} is outside the {slots.count()} witness slots of interface '{String.from(dispatched.name)}' — the op's `(interfaceDeclIndex, methodIndex)` pair was numbered against a different slot list")
 end 'witnessSlotAt'
@@ -4028,7 +4029,7 @@ end 'divisionRequiresTryMessage'
 
 // A plain call: validate its arguments, then — if it targets a THROWING callee — report E3057 (a throwing
 // call made without `try`). The `tryCall` path skips this: it IS the `try`.
-function validatePlainCall(project Project, func IrFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, opIndex OpIndex, result ValueId, callee ByteArray, mint CalleeMint, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argDefaultSlots ParamCountArray, throwsMap FuncThrowsMap, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, blameTargetErrorsHere bool)
+function validatePlainCall(project Project, func IrFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, opIndex ElementIndex, result ValueId, callee ByteArray, mint CalleeMint, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argDefaultSlots ParamCountArray, throwsMap FuncThrowsMap, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, blameTargetErrorsHere bool)
 	validateCall(project, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIndex, result: result, callee: callee, mint: mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, escapeSummary: escapeSummary, mutationSummary: mutationSummary, provenance: provenance, blameTargetErrorsHere: blameTargetErrorsHere)
 
 	// A THROWING BUILTIN reaching here as a plain `call` — not a `tryCall` — was written WITHOUT a `try`, so its
@@ -4072,13 +4073,13 @@ end 'validatePlainCall'
 // cleanly slotted call, the per-argument TYPES). The call site's own span
 // (`project.opRanges[opIndex]`) anchors the callee/arity/type errors; an argument's own span
 // (`argRanges[argIndex]`) anchors a per-argument label error.
-function validateCall(project Project, func IrFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, opIndex OpIndex, result ValueId, callee ByteArray, mint CalleeMint, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argDefaultSlots ParamCountArray, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, blameTargetErrorsHere bool)
+function validateCall(project Project, func IrFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, opIndex ElementIndex, result ValueId, callee ByteArray, mint CalleeMint, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argDefaultSlots ParamCountArray, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, blameTargetErrorsHere bool)
 	let callRange = project.opRanges.get(opIndex)
 	let filePath = func.sourceFilePath
 
 	// Resolved ONCE, at the top, so every message below quotes one string — and so the decode runs once per
 	// call rather than once per message. For all but the primitive-static mint it IS `callee`, at no cost.
-	let noun = callDiagnosticNoun(callee, mint: mint)
+	let noun = callDiagnosticNoun(signatures.genericTemplateKeyOf(callee), mint: mint)
 
 	// ⭐ THE TARGET GATE IS ASKED OF EVERY CALLEE, compiler-owned or not: a `__gt_now_ns` the parser
 	// emitted and a `Clock.nowMs` stdlib declared are the same refusal, and asking it here — once,
@@ -4139,11 +4140,22 @@ function validateCall(project Project, func IrFunction, signatures ProgramSignat
 			return
 		end 'aMethodMissOnAResolvedType'
 
+		if signatures.isGenericFunctionKey(callee) and valueTagsInclude(func, args: args, tag: ValueTypeTag.unresolved) 'aGenericCallWaitingOnADeferredArgument'
+			// An argument deferred only by undeclared calls is reported by their own E3004.
+			match provenance.causeOfArguments(args) 'cause'
+				undeclaredCalls then return
+				standsAlone then break 'cause'
+			end 'cause'
+
+			reportPositioned(project, code: ErrorCode.genericTypeParameterNotInferable, message: "the type parameters of '{String.from(noun)}' cannot be inferred: an argument's type is not known", line: callRange.line, column: callRange.column, filePath: filePath)
+			return
+		end 'aGenericCallWaitingOnADeferredArgument'
+
 		reportPositioned(project, code: ErrorCode.callUnknownFunction, message: "call to undefined function '{String.from(noun)}'", line: callRange.line, column: callRange.column, filePath: filePath)
 		return
 	end 'unknownFn'
 
-	if not calleeVisibleFrom(project, signatures: signatures, funcNames: funcNames, callee: callee, mint: mint, readerFilePath: filePath) 'notVisibleHere'
+	if not calleeVisibleFrom(project, signatures: signatures, funcNames: funcNames, callee: callee, callerName: func.name, mint: mint, readerFilePath: filePath) 'notVisibleHere'
 		// A root declaration keeps the bare key, so a bare call can arrive here holding one this file may not
 		// name; it is no candidate, and the visible declarations elsewhere decide the refusal.
 		if reportAmbiguousCrossFileCall(project, signatures: signatures, callee: callee, callRange: callRange, filePath: filePath) 'ambiguousPastAnInvisibleRootDeclaration'
@@ -4180,7 +4192,7 @@ end 'validateCall'
 // Nobody wrote it, so no file can be refused it, and comparing its empty path against a real caller's would
 // refuse every call to it. A callee the index does not know at all is exempt for the same reason it cannot
 // be checked: there is no declaration to read a tier off.
-function calleeVisibleFrom(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, callee ByteArray, mint CalleeMint, readerFilePath FilePath) returns bool
+function calleeVisibleFrom(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, callee ByteArray, callerName ByteArray, mint CalleeMint, readerFilePath FilePath) returns bool
 	// ⭐ **A CALLEE NAME THE AUTHOR DID NOT WRITE HAS NO VISIBILITY TO ANSWER FOR** — visibility governs what
 	// a file may NAME, and a minted callee is one the compiler spelled out of something else the author
 	// wrote (`int.fromString` ⇒ `__int_fromString`, an omitted argument ⇒ its default helper,
@@ -4222,6 +4234,13 @@ function calleeVisibleFrom(project Project, signatures ProgramSignatures, funcNa
 	if signatures.isVisibleFrom(declared.visibility, declFilePath: declared.sourceFilePath, readerFilePath: readerFilePath) 'theOrdinaryRule'
 		return true
 	end 'theOrdinaryRule'
+
+	// A generic instance may call its argument type's constraint requirements whatever their
+	// visibility: the caller that bound the type granted the conformance. Every other method keeps the
+	// ordinary rule.
+	if signatures.genericInstanceCallsARequirement(callerName, callee: callee) 'aConformanceTheCallerGranted'
+		return true
+	end 'aConformanceTheCallerGranted'
 
 	// ⭐⭐ **AND A `runtime/` ENTRY POINT ANSWERS TO NO DIRECTORY'S MODULE SCOPE.** The tier is loaded into
 	// every program and the compiler reaches an entry BY NAME, out of whatever file wrote the construct that
@@ -4368,7 +4387,7 @@ end 'hiddenSymbolDiagnostic'
 //
 // Re-matched in a SMALL match so `args` is bound in a single-call arm, never in `checkCalls`' big one —
 // the tail-slot-`Array` decref corruption `LowerMaxonToStd.lowerIndirectCall` documents.
-function checkIndirectCall(project Project, func IrFunction, opIndex OpIndex, op MaxonOp, provenance ProvenanceTracer)
+function checkIndirectCall(project Project, func IrFunction, opIndex ElementIndex, op MaxonOp, provenance ProvenanceTracer)
 	match op 'ic'
 		indirectCall(_, callee, args) then checkIndirectCallArgs(project, func: func, opIndex: opIndex, callee: callee, args: args, provenance: provenance)
 		default panic("checkIndirectCall: expected an `indirectCall` op, got a different MaxonOp variant — `checkCalls` routes only `indirectCall` here")
@@ -4377,7 +4396,7 @@ end 'checkIndirectCall'
 
 // The arity and per-argument type checks, against the callee value's declared shape. A helper because the
 // arm above must hand `args` to a function and touch it no other way (see there).
-function checkIndirectCallArgs(project Project, func IrFunction, opIndex OpIndex, callee ValueId, args ValueIdArray, provenance ProvenanceTracer)
+function checkIndirectCallArgs(project Project, func IrFunction, opIndex ElementIndex, callee ValueId, args ValueIdArray, provenance ProvenanceTracer)
 	let callRange = project.opRanges.get(opIndex)
 
 	// A call through a value reads the value's OWN shape, never the brand a cast gave it: the brand is a
@@ -4396,7 +4415,7 @@ function checkIndirectCallArgs(project Project, func IrFunction, opIndex OpIndex
 	let suppliedCount = args.count() - IndirectCallEnvArgCount
 
 	if suppliedCount != shape.paramTypes.count() 'arity'
-		reportPositioned(project, code: ErrorCode.callArgCountMismatch, message: argArityMismatchMessage(String.from(calleeName), expected: shape.paramTypes.count(), got: suppliedCount), line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
+		reportPositioned(project, code: ErrorCode.callArgCountMismatch, message: argArityMismatchMessage(String.from(calleeName), expected: shape.paramTypes.count() as ParamCount, got: suppliedCount as ParamCount), line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
 		return
 	end 'arity'
 
@@ -4523,7 +4542,7 @@ function checkOneFunctionTypeDoor(project Project, door PendingFunctionTypeDoor)
 	// `as <declared type>` would perform (`Parser.admitReturnedAggregate`). Both still compare the SHAPES.
 	let brandsConflict = door.door != FunctionTypeDoor.cast and door.door != FunctionTypeDoor.returned and signatures.functionBrandsConflict(door.declaredName, gotName: door.gotName)
 
-	if functionShapesAgree(functionTypeRegistryOf(project), signatures: signatures, declared: declared, got: got) and not brandsConflict 'agree'
+	if functionShapesAgree(functionTypeRegistryOf(project), signatures: signatures, declared: declared, got: got, readerFilePath: door.filePath) and not brandsConflict 'agree'
 		return
 	end 'agree'
 
@@ -4576,7 +4595,7 @@ end 'checkAsyncYielding'
 
 // One op. Only an `asyncCall` has anything to answer for; every other op is named so a newly
 // appended one fails to compile here rather than silently escaping the check.
-function reportIfNonYielding(project Project, op MaxonOp, opIndex OpIndex, func IrFunction, funcNames FunctionNameIndex, yields BoolArray)
+function reportIfNonYielding(project Project, op MaxonOp, opIndex ElementIndex, func IrFunction, funcNames FunctionNameIndex, yields BoolArray)
 	match op 'op'
 		call or
 			literal or
@@ -4644,7 +4663,7 @@ end 'reportIfNonYielding'
 // ⚠ **THE TWO REFUSALS ARE EXCLUSIVE, AND THAT IS WHY THE GATE LIVES HERE AND NOT BESIDE THE OTHER E3104s.**
 // A NON-YIELDING spawn is wrong on every target and its message says so; adding a second line about the
 // target would make one defect read as two, and `async-await.md`'s `error.no-yield` pins exactly one.
-function reportSpawnOfNonYielding(project Project, callee ByteArray, opIndex OpIndex, func IrFunction, funcNames FunctionNameIndex, yields BoolArray)
+function reportSpawnOfNonYielding(project Project, callee ByteArray, opIndex ElementIndex, func IrFunction, funcNames FunctionNameIndex, yields BoolArray)
 	let calleeIndex = try funcNames.byName.get(callee) otherwise return
 	let calleeYieldsSomewhere = try yields.get(calleeIndex) otherwise panic("reportSpawnOfNonYielding: yields.get({calleeIndex}) OOB below count {yields.count()} — the column is built over `funcNames.functions`, which is the index space `byName` resolves into")
 
@@ -4666,17 +4685,13 @@ end 'reportSpawnOfNonYielding'
 // cases — each of which pins the ONE E3104 its own construct earns — grew a second line about the spawn
 // beneath it; with it, `async compute()` on `--target=x64-linux` answers E3104 rather than dying
 // at `StdToX64Conversion.lowerTlsAlloc`.
-function requireTargetHostsSpawn(project Project, func IrFunction, opIndex OpIndex)
+function requireTargetHostsSpawn(project Project, func IrFunction, opIndex ElementIndex)
 	if projectHasErrors(project) 'alreadyRefused'
 		return
 	end 'alreadyRefused'
 
 	requireTargetSupportsServiceEntry(project, func: func, opIndex: opIndex, subject: "an `async` spawn", entry: GtSpawnName, blameTargetErrorsHere: blameTargetErrorsIn(project, func: func))
 end 'requireTargetHostsSpawn'
-
-// A position in `Project.pendingDiscardedResults`. Sites are filed one per discarding statement, so the
-// bound is the program's statement count.
-typealias DiscardSiteIndex = int(0 to u64.max)
 
 // ⭐⭐ **WHAT ONE FILED SITE EARNED — THE TWO ARMS OF ONE VERDICT.** A pure callee's result may not be
 // dropped in any position (E3064); an impure one's may, but only through the `_ =` the message names, so a
@@ -4696,7 +4711,7 @@ union DiscardResolution
 	settled(verdict DiscardVerdict)
 
 	// The callee's slot in the effect-free column is the rest of this site's answer.
-	purityOf(calleeIndex FuncIndex)
+	purityOf(calleeIndex ElementIndex)
 end 'DiscardResolution'
 
 // ⭐⭐ **E3064 — A CALL WHOSE RESULT NOBODY TOOK, WHEN THE CALLEE HAD NO OTHER REASON TO RUN.** Drains the
@@ -4771,7 +4786,7 @@ end 'effectFreeSummaryIfConsulted'
 //     wrote (`PendingDiscardedResult.subject`), which is the spelling the author used: `Array.first`, never
 //     `__managed_first`. A runtime entry no lowering arm named is left alone, which is the safe direction —
 //     a missed diagnostic, never a legal program refused under a symbol nobody wrote.
-function resolveDiscardSite(project Project, siteIndex DiscardSiteIndex, funcNames FunctionNameIndex) returns DiscardResolution
+function resolveDiscardSite(project Project, siteIndex ElementIndex, funcNames FunctionNameIndex) returns DiscardResolution
 	let site = try project.pendingDiscardedResults.get(siteIndex) otherwise panic("resolveDiscardSite: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")
 
 	if site.calleeIsACompilerIntrinsic 'anIntrinsicWhosePurityIsSettled'
@@ -4807,7 +4822,7 @@ end 'resolveDiscardSite'
 // where the callee is in `funcNames` and the summary actually walked its body. A lowered runtime
 // entry off the effect-free roster is therefore left alone in both directions: the roster is a whitelist of
 // READS, and absence from a whitelist is not proof of an effect.
-function declaredCalleeVerdict(project Project, siteIndex DiscardSiteIndex, calleeIndex FuncIndex, effectFree BoolArray) returns DiscardVerdict
+function declaredCalleeVerdict(project Project, siteIndex ElementIndex, calleeIndex ElementIndex, effectFree BoolArray) returns DiscardVerdict
 	let site = try project.pendingDiscardedResults.get(siteIndex) otherwise panic("declaredCalleeVerdict: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")
 	let calleeIsEffectFree = try effectFree.get(calleeIndex) otherwise panic("declaredCalleeVerdict: effectFree.get({calleeIndex}) OOB below count {effectFree.count()} — the column is built over `funcNames.functions`, which is the index space `byName` resolves into, and it is built whenever any site resolves to a purity question, which this one did")
 
@@ -4823,7 +4838,7 @@ end 'declaredCalleeVerdict'
 
 // The verdict a LOWERED RUNTIME READ earns. Split out so the lookup miss above reads as a question with its
 // own answer rather than as a fallthrough.
-function runtimeReadVerdict(project Project, siteIndex DiscardSiteIndex) returns DiscardVerdict
+function runtimeReadVerdict(project Project, siteIndex ElementIndex) returns DiscardVerdict
 	let site = try project.pendingDiscardedResults.get(siteIndex) otherwise panic("runtimeReadVerdict: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")
 
 	if site.subject.isEmpty() or not effectFreeRuntimeCallee(site.callee) 'notALoweredPureRead'
@@ -4835,7 +4850,7 @@ end 'runtimeReadVerdict'
 
 // What one site's verdict is SAID as — the two codes and their messages, and silence for the site that
 // earned neither.
-function reportDiscardVerdict(project Project, siteIndex DiscardSiteIndex, verdict DiscardVerdict)
+function reportDiscardVerdict(project Project, siteIndex ElementIndex, verdict DiscardVerdict)
 	match verdict 'earned'
 		none then break 'earned'
 		pureResultUnused(subject) then reportAtDiscardSite(project, siteIndex: siteIndex, code: ErrorCode.semanticDiscardedPureResult, message: "result of pure function '{subject}' must be used")
@@ -4846,7 +4861,7 @@ end 'reportDiscardVerdict'
 // Where a discard diagnostic points, for either code — the site's own anchor, which is the position the two
 // arms share. Scalars off the borrow, a fresh inline read for the managed half: `reportPositioned` writes the
 // same storage the element borrows, so the borrow must not be live across it (see the loop's note).
-function reportAtDiscardSite(project Project, siteIndex DiscardSiteIndex, code ErrorCode, message String)
+function reportAtDiscardSite(project Project, siteIndex ElementIndex, code ErrorCode, message String)
 	let site = try project.pendingDiscardedResults.get(siteIndex) otherwise panic("reportAtDiscardSite: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")
 	let line = site.line
 	let column = site.column
@@ -4922,7 +4937,7 @@ function buildEffectFreeSummary(module MaxonModule, signatures ProgramSignatures
 	end 'eachFunc'
 
 	var effectFree = BoolArray.create()
-	let effectful = markSeededCallers(edges, seeds: seeds, nodeCount: funcNames.functions.count())
+	let effectful = markSeededCallers(edges, seeds: seeds, nodeCount: funcNames.functions.count() as CsrIndex)
 
 	for i in 0 upto effectful.count() 'invert'
 		effectFree.push(not (try effectful.get(i) otherwise panic("buildEffectFreeSummary: effectful.get({i}) OOB below count {effectful.count()}")))
@@ -5003,7 +5018,7 @@ export type WitnessDispatchTargets
 
 	// The requirement's declared name, off the SAME slot list `checkWitnessArgTypes` reads — so the candidate
 	// set and the argument check cannot come to name different requirements for one op.
-	module function requirementNameAt(methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex) returns ByteArray
+	module function requirementNameAt(methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex) returns ByteArray
 		return witnessSlotAt(self.signatures, witnessSlots: self.slots, dispatched: dispatchedInterfaceAt(self.signatures, interfaceDeclIndex: interfaceDeclIndex), interfaceDeclIndex: interfaceDeclIndex, methodIndex: methodIndex).method.name
 	end 'requirementNameAt'
 
@@ -5057,7 +5072,7 @@ end 'WitnessDispatchTargets'
 // `array-conditional-conformance-withheld.the-cloneable-witness-route-is-opened-by-the-instance-dictionary`
 // — `_ = copyIt(src)` over `function copyIt(c Cloneable) returns Cloneable` — is REFUSED E3064, which is the
 // over-refusing direction this summary must never take.
-function witnessDispatchShowsAnEffect(dispatch WitnessDispatchTargets, func IrFunction, args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges, runtimeTier FunctionNameSet) returns bool
+function witnessDispatchShowsAnEffect(dispatch WitnessDispatchTargets, func IrFunction, args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, funcIndexByName FuncIndexByName, callerIndex ElementIndex, edges CallGraphEdges, runtimeTier FunctionNameSet) returns bool
 	if (try func.valueTags.get(witnessDispatchReceiver(args)) otherwise return true) != ValueTypeTag.typeParameter 'chosenAtRunTime'
 		return true
 	end 'chosenAtRunTime'
@@ -5084,7 +5099,7 @@ end 'witnessDispatchShowsAnEffect'
 // ⭐⭐ **THE WHOLE-PROGRAM YIELD CLOSURE — E3073.** Which functions can give up the green thread, closed over
 // the call graph exactly as `buildEffectFreeSummary` closes "shows an effect": seed each function from its own
 // body, then let `reverseReachabilityMark` push every yielding callee's mark up into everyone who calls it.
-// The result indexes by `FuncIndex` and answers "a spawn of THIS function is a spawn of something that can
+// The result indexes by `ElementIndex` and answers "a spawn of THIS function is a spawn of something that can
 // actually suspend".
 //
 // ⭐ **THE SEEDS ARE THE RUNTIME'S PARK POINTS, NOT A TRANSCRIBED LIST OF STDLIB ENTRY POINTS.** The parser
@@ -5108,7 +5123,7 @@ function buildYieldingSummary(module MaxonModule, funcNames FunctionNameIndex, r
 		seeds.push(functionYieldsDirectly(module, func: func, funcIndexByName: funcNames.byName, callerIndex: i, edges: edges, runtimeTier: runtimeTier))
 	end 'eachFunc'
 
-	return markSeededCallers(edges, seeds: seeds, nodeCount: funcNames.functions.count())
+	return markSeededCallers(edges, seeds: seeds, nodeCount: funcNames.functions.count() as CsrIndex)
 end 'buildYieldingSummary'
 
 // ⛔⛔ **THE CLOSURE STEP OF EVERY WHOLE-PROGRAM SUMMARY IN THIS FILE, AND THE ORIENTATION IS THE WHOLE FACT.**
@@ -5132,7 +5147,7 @@ end 'markSeededCallers'
 //
 // A body this pass cannot read proves nothing, so by the erring-toward-accepting rule above it counts as
 // yielding — the same direction `functionShowsAnEffect` resolves it in, off the same predicate.
-function functionYieldsDirectly(module MaxonModule, func IrFunction, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges, runtimeTier FunctionNameSet) returns bool
+function functionYieldsDirectly(module MaxonModule, func IrFunction, funcIndexByName FuncIndexByName, callerIndex ElementIndex, edges CallGraphEdges, runtimeTier FunctionNameSet) returns bool
 	if bodyIsUnreadable(func) 'noBodyToProveAnythingAbout'
 		return true
 	end 'noBodyToProveAnythingAbout'
@@ -5153,7 +5168,7 @@ end 'functionYieldsDirectly'
 // The per-op arm. Every op is named, as in `opShowsAnEffect`, so a newly appended op fails to
 // compile here too. The two part company where "suspends the green thread" and "is observable"
 // genuinely differ: a service send is an effect and no yield at all, while an `await` is both.
-function opYields(op MaxonOp, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges, runtimeTier FunctionNameSet) returns bool
+function opYields(op MaxonOp, funcIndexByName FuncIndexByName, callerIndex ElementIndex, edges CallGraphEdges, runtimeTier FunctionNameSet) returns bool
 	return match op 'op'
 		call(_, callee, _, _, _, _, _, _) gives calleeYields(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges, runtimeTier: runtimeTier)
 
@@ -5223,7 +5238,7 @@ end 'opYields'
 // entry point in `funcIndexByName`, the edge is recorded, the closure reads the body's own (non-yielding)
 // answer, and every `async` over a caller of it inverts. The whole tier is covered, because every family
 // still to migrate would otherwise flip on the day it moves.
-function calleeYields(callee ByteArray, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges, runtimeTier FunctionNameSet) returns bool
+function calleeYields(callee ByteArray, funcIndexByName FuncIndexByName, callerIndex ElementIndex, edges CallGraphEdges, runtimeTier FunctionNameSet) returns bool
 	if ioYieldingRuntimeCallee(callee) 'parksTheGreenThread'
 		return true
 	end 'parksTheGreenThread'
@@ -5242,7 +5257,7 @@ end 'calleeYields'
 // it as *"no edge"* (its accepting direction). The two answers are opposite because the two diagnostics
 // refuse in opposite directions, which is exactly why the verdict is the CALLER's and the recording is
 // shared. ⚠ `module`, for `CallGraphEdges`' reason.
-module function recordCallGraphEdge(callee ByteArray, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges) returns bool
+module function recordCallGraphEdge(callee ByteArray, funcIndexByName FuncIndexByName, callerIndex ElementIndex, edges CallGraphEdges) returns bool
 	let calleeIndex = try funcIndexByName.get(callee) otherwise return false
 	edges.record(calleeIndex, callerIndex: callerIndex)
 	return true
@@ -5327,7 +5342,7 @@ export type CallGraphEdges
 	// by the one caller straight off the two columns — `buildCsr(calleeIndices, to: callerIndices)` — rather
 	// than through a method of this type: a one-line delegation would add a name without adding a fact, and
 	// the column ORDER is the fact worth reading at the call site.
-	export function record(calleeIndex FuncIndex, callerIndex FuncIndex)
+	export function record(calleeIndex ElementIndex, callerIndex ElementIndex)
 		self.calleeIndices.push(calleeIndex)
 		self.callerIndices.push(callerIndex)
 	end 'record'
@@ -5340,7 +5355,7 @@ end 'CallGraphEdges'
 // (callee, this) exists only to carry a CALLEE's mark up into this function, and this function is already
 // marked. Its own mark reaches its callers through the edges THEY record. The op loop returns early for the
 // same reason.
-function functionShowsAnEffect(module MaxonModule, func IrFunction, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges, dispatch WitnessDispatchTargets, runtimeTier FunctionNameSet) returns bool
+function functionShowsAnEffect(module MaxonModule, func IrFunction, funcIndexByName FuncIndexByName, callerIndex ElementIndex, edges CallGraphEdges, dispatch WitnessDispatchTargets, runtimeTier FunctionNameSet) returns bool
 	// Nothing this pass can read, so nothing about it is provable.
 	if bodyIsUnreadable(func) 'noBodyToProveAnythingAbout'
 		return true
@@ -5410,7 +5425,7 @@ end 'functionReturnsNothing'
 // the edge the closure will carry the callee's answer back along. Every op is named, so an op added
 // later fails to compile here rather than silently reading as effect-free, which is load-bearing in
 // the refusing direction (see `buildEffectFreeSummary`'s safety argument).
-function opShowsAnEffect(op MaxonOp, func IrFunction, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges, dispatch WitnessDispatchTargets, runtimeTier FunctionNameSet) returns bool
+function opShowsAnEffect(op MaxonOp, func IrFunction, funcIndexByName FuncIndexByName, callerIndex ElementIndex, edges CallGraphEdges, dispatch WitnessDispatchTargets, runtimeTier FunctionNameSet) returns bool
 	return match op 'op'
 		call(_, callee, _, _, _, _, _, _) gives calleeShowsAnEffect(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges, runtimeTier: runtimeTier)
 		literal or
@@ -5507,7 +5522,7 @@ end 'opShowsAnEffect'
 // verdict: a pure `module function` helper in a runtime file would classify effect-free, propagate that to
 // any user function whose only effect is calling it, and earn E3064 on a legal program. The roster is
 // asked FIRST, because a read-only entry is read-only wherever its body is written.
-function calleeShowsAnEffect(callee ByteArray, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges, runtimeTier FunctionNameSet) returns bool
+function calleeShowsAnEffect(callee ByteArray, funcIndexByName FuncIndexByName, callerIndex ElementIndex, edges CallGraphEdges, runtimeTier FunctionNameSet) returns bool
 	if effectFreeRuntimeCallee(callee) 'aRuntimeEntryThatObservesNothing'
 		return false
 	end 'aRuntimeEntryThatObservesNothing'
@@ -5720,7 +5735,7 @@ let TargetUnsupportedUnnamedSubject = "this construct"
 // `callee` is the KEY (the registry is keyed by the EMITTED name) and `noun` is what the message QUOTES —
 // the two part company for a primitive-static mint, and the caller has already resolved which is which
 // (`callDiagnosticNoun`). They are the same bytes for every other callee, at no cost.
-function requireTargetSupportsCallee(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, noun ByteArray, blameTargetErrorsHere bool)
+function requireTargetSupportsCallee(project Project, func IrFunction, opIndex ElementIndex, callee ByteArray, noun ByteArray, blameTargetErrorsHere bool)
 	// ⚠ `blameTargetErrorsHere` already carries BOTH preconditions — the target can refuse something, and
 	// this function is where such a refusal belongs — because both are constant per function and this runs
 	// at every call op of the program. Do not re-ask the target here: that would be one fact tested in two
@@ -5803,7 +5818,7 @@ end 'requireTargetSupportsCallee'
 //
 // ⚠ `blameTargetErrorsHere` carries both preconditions for `requireTargetSupportsCallee`'s stated reason —
 // it is constant per function and the caller has already settled it — so the target is not re-asked here.
-function requireTargetSupportsServiceEntry(project Project, func IrFunction, opIndex OpIndex, subject String, entry ByteArray, blameTargetErrorsHere bool)
+function requireTargetSupportsServiceEntry(project Project, func IrFunction, opIndex ElementIndex, subject String, entry ByteArray, blameTargetErrorsHere bool)
 	if not blameTargetErrorsHere 'nothingRefusableHere'
 		return
 	end 'nothingRefusableHere'
@@ -5830,7 +5845,7 @@ end 'requireTargetSupportsServiceEntry'
 // whole of what `__Raw` is: there is no symbol between a row and the machine, so the sentence below would
 // send the reader looking for something that does not exist. The CODE is the same E3104 and the span is the
 // same crossing — only the noun differs.
-function reportRawIntrinsicUnsupported(project Project, func IrFunction, opIndex OpIndex, subject String, intrinsic RawIntrinsic)
+function reportRawIntrinsicUnsupported(project Project, func IrFunction, opIndex ElementIndex, subject String, intrinsic RawIntrinsic)
 	let callRange = project.opRanges.get(opIndex)
 	reportPositioned(project, code: ErrorCode.targetUnsupportedConstruct, message: "{subject} reaches '{String.from(rawIntrinsicCalleeName(intrinsic))}', a raw machine operation the {targetToString(project.target)} lane does not provide", line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
 end 'reportRawIntrinsicUnsupported'
@@ -5838,14 +5853,14 @@ end 'reportRawIntrinsicUnsupported'
 // The one wire format of E3104 for a callee, so the two subjects cannot drift into two spellings of one
 // rejection. The span is materialized HERE rather than at the gate because `SourceRangeTable.get` builds a
 // heap `SourceRange` and this is the cold path — the gate itself runs over every call op of every function.
-function reportTargetUnsupportedCallee(project Project, func IrFunction, opIndex OpIndex, subject String, entry ByteArray)
+function reportTargetUnsupportedCallee(project Project, func IrFunction, opIndex ElementIndex, subject String, entry ByteArray)
 	let callRange = project.opRanges.get(opIndex)
 	reportPositioned(project, code: ErrorCode.targetUnsupportedConstruct, message: "{subject} lowers to the runtime entry '{String.from(entry)}', which has no {targetToString(project.target)} implementation", line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
 end 'reportTargetUnsupportedCallee'
 
 // What this pass has to say about taking a named function's ADDRESS: the target gate every call op gets, and
 // the uniform-ABI rule below that only a function VALUE is subject to.
-function checkFunctionRef(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, blameTargetErrorsHere bool)
+function checkFunctionRef(project Project, func IrFunction, opIndex ElementIndex, callee ByteArray, blameTargetErrorsHere bool)
 	requireTargetSupportsCallee(project, func: func, opIndex: opIndex, callee: callee, noun: callee, blameTargetErrorsHere: blameTargetErrorsHere)
 	requireFunctionValueTargetTakesNoWitness(project, func: func, opIndex: opIndex, callee: callee)
 end 'checkFunctionRef'
@@ -5871,7 +5886,7 @@ end 'checkFunctionRef'
 //
 // The FIRST offending parameter is named and the walk stops, the shape `Parser.firstExistentialParam` gives
 // the closure and requirement positions: one sentence per declaration is what the author has to act on.
-function requireFunctionValueTargetTakesNoWitness(project Project, func IrFunction, opIndex OpIndex, callee ByteArray)
+function requireFunctionValueTargetTakesNoWitness(project Project, func IrFunction, opIndex ElementIndex, callee ByteArray)
 	let sig = try project.funcSignatures.get(callee) otherwise return
 
 	for i in 0 upto sig.paramTypes.count() 'eachParam'
@@ -6284,12 +6299,12 @@ function checkUnboundTypeParameterArgs(project Project, func IrFunction, base By
 		// The EXPECTED side is asked of the shared producer rather than written as the empty name it must be:
 		// "an opaque place carries no nominal identity" is `typeArgAggregateName`'s sentence, and a second
 		// spelling of it here is a second place for it to change.
-		if not signatures.aggregatesConflict(signatures.typeArgAggregateName(paramType, readerFilePath: filePath), expectedTag: ValueTypeTag.typeParameter, expectedNameId: typeNameIdOf(paramType), expectedBrand: paramBrandOf(sig, position: i, paramTag: ValueTypeTag.typeParameter), got: aggregateNameFor(project, tag: argTag, nameId: argNameId, readerFilePath: filePath), gotTag: argTag, gotNameId: argNameId, gotBrand: valueBrandOf(project, func: func, value: argId)) 'claimsNoConcreteIdentity'
+		if not signatures.aggregatesConflict(signatures.typeArgAggregateName(paramType, readerFilePath: filePath), expectedTag: ValueTypeTag.typeParameter, expectedNameId: typeNameIdOf(paramType), expectedBrand: paramBrandOf(sig, position: i, paramTag: ValueTypeTag.typeParameter), got: aggregateNameFor(project, tag: argTag, nameId: argNameId, readerFilePath: filePath), gotTag: argTag, gotNameId: argNameId, gotBrand: valueBrandOf(project, func: func, value: argId), readerFilePath: filePath) 'claimsNoConcreteIdentity'
 			continue
 		end 'claimsNoConcreteIdentity'
 
 		let paramName = try sig.paramNames.get(i) otherwise panic("checkUnboundTypeParameterArgs: paramNames.get OOB at {i}")
-		reportPositioned(project, code: ErrorCode.typeMismatch, message: "{argTypeMismatchMessage(paramName, position: i, expected: typeTagName(ValueTypeTag.typeParameter), got: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath))}: {ConcreteValueAtOpaquePlaceSuffix}", line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArgument(argId))
+		reportPositioned(project, code: ErrorCode.typeMismatch, message: "{argTypeMismatchMessage(paramName, position: i, expected: typeTagName(ValueTypeTag.typeParameter), got: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath))}: {ConcreteValueAtOpaquePlaceSuffix}", line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArguments(singletonArgs(argId)))
 		return
 	end 'eachArg'
 end 'checkUnboundTypeParameterArgs'
@@ -6353,7 +6368,7 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 		// It also carries the byte-element boundary, and that is not theoretical here either: without it
 		// `MemBox.create(<a cwd buffer>)` at a `Box with Bytes` is refused
 		// `expected 'Bytes', got 'Array___ManagedByte'`.
-		if signatures.aggregatesConflict(expected, expectedTag: maxonTypeTag(substituted), expectedNameId: typeNameIdOf(substituted), expectedBrand: signatures.instanceArgBrand(gid, position: position), got: got, gotTag: argTag, gotNameId: argNameId, gotBrand: valueBrandOf(project, func: func, value: argId)) 'wrongTypeArgument'
+		if signatures.aggregatesConflict(expected, expectedTag: maxonTypeTag(substituted), expectedNameId: typeNameIdOf(substituted), expectedBrand: signatures.instanceArgBrand(gid, position: position), got: got, gotTag: argTag, gotNameId: argNameId, gotBrand: valueBrandOf(project, func: func, value: argId), readerFilePath: filePath) 'wrongTypeArgument'
 			// The EXPECTED side names the concrete TYPE ARGUMENT, not the identity that was compared: the
 			// two agree for an aggregate (`typeArgAggregateName`'s nominal arm IS this call), and where
 			// they differ — a scalar / `String` / ranged-alias argument, whose identity is deliberately
@@ -6364,7 +6379,7 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 			// way (user ruling, 2026-08-04). The compiled twin read `expected 'Box_Leaf', got 'OtherBox'`
 			// on a program that declares `typealias LeafBox = Box with Leaf` — the `got` side quoting the
 			// author and the `expected` side quoting the mangler.
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: i, expected: String.from(signatures.instanceArgDisplayName(gid, position: position)), got: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath)), line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArgument(argId))
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: i, expected: String.from(signatures.instanceArgDisplayName(gid, position: position)), got: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath)), line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArguments(singletonArgs(argId)))
 			return
 		end 'wrongTypeArgument'
 
@@ -6565,7 +6580,7 @@ function checkPerInstanceArgsWith(project Project, signatures ProgramSignatures,
 
 		if namedAggregatesConflict(expected, got: got) 'wrongInstance'
 			let paramName = try sig.paramNames.get(i) otherwise panic("checkPerInstanceArgsWith: paramNames.get OOB at {i}")
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: i, expected: String.from(expected), got: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath)), line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArgument(argId))
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: i, expected: String.from(expected), got: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath)), line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArguments(singletonArgs(argId)))
 			return
 		end 'wrongInstance'
 	end 'eachArg'
@@ -6611,7 +6626,7 @@ end 'valueTypeDisplayName'
 
 // The display of a type that may wear a brand — a value's, or a declared parameter's (`expected 'Ys'`).
 function brandedTypeDisplayName(project Project, tag ValueTypeTag, nameId TypeNameId, brand ByteArray, readerFilePath FilePath) returns String
-	if not brand.isEmpty() 'aBrandIsTheType'
+	if brandIsTheType(brand) 'aBrandIsTheType'
 		return String.from(programSignaturesIn(project, asker: "brandedTypeDisplayName").brandDisplayName(brand, gid: nameId as GenericInstanceId))
 	end 'aBrandIsTheType'
 
@@ -6680,7 +6695,7 @@ end 'checkCapturingClosureEscape'
 // in every case the token the user must change.
 function checkCapturingClosureUses(project Project, module MaxonModule)
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
-		checkCapturingClosureUsesInFunction(project, module: module, func: module.getFunc(funcIndex as FuncIndex), funcIndex: funcIndex as FuncIndex)
+		checkCapturingClosureUsesInFunction(project, module: module, func: module.getFunc(funcIndex as ElementIndex), funcIndex: funcIndex as ElementIndex)
 	end 'eachFunc'
 end 'checkCapturingClosureUses'
 
@@ -6692,7 +6707,7 @@ end 'checkCapturingClosureUses'
 // function's op count grows with its closure count that measured ~4x per doubling of C. It reports the first
 // offending USE in scan order and stops — one diagnostic per function, chosen deterministically so the choice
 // is worker-invariant.
-function checkCapturingClosureUsesInFunction(project Project, module MaxonModule, func IrFunction, funcIndex FuncIndex)
+function checkCapturingClosureUsesInFunction(project Project, module MaxonModule, func IrFunction, funcIndex ElementIndex)
 	if not boolArrayAny(func.valueIsCapturingClosure) 'noCapturingClosure'
 		return
 	end 'noCapturingClosure'
@@ -6710,7 +6725,7 @@ end 'checkCapturingClosureUsesInFunction'
 // above so the fetch is a plain `let` — a `try … otherwise panic` nested two levels deep inside a labelled
 // ARGUMENT reaches `E9001: assign value … not in valueMap`, which is a property of the compiler building
 // this source, not of the rule.
-function reportClosureEscapeAtOp(project Project, module MaxonModule, func IrFunction, funcIndex FuncIndex, closure ValueId, opIndex OpIndex)
+function reportClosureEscapeAtOp(project Project, module MaxonModule, func IrFunction, funcIndex ElementIndex, closure ValueId, opIndex ElementIndex)
 	let op = try module.ops.get(opIndex) otherwise panic("reportClosureEscapeAtOp: escape site op {opIndex} not in module.ops")
 	reportClosureEscape(project, func: func, funcIndex: funcIndex, closure: closure, reason: closureEscapeReason(op))
 end 'reportClosureEscapeAtOp'
@@ -6791,14 +6806,14 @@ function runtimeEntryClosureEscapeMessage() returns String
 end 'runtimeEntryClosureEscapeMessage'
 
 // Report E3099 at `closure`'s defining `functionRef` — the closure literal's own `function` keyword.
-function reportClosureEscape(project Project, func IrFunction, funcIndex FuncIndex, closure ValueId, reason String)
+function reportClosureEscape(project Project, func IrFunction, funcIndex ElementIndex, closure ValueId, reason String)
 	let range = project.opRanges.get(closureDefiningOp(project, func: func, funcIndex: funcIndex, closure: closure))
 	reportPositioned(project, code: ErrorCode.capturingClosureEscapes, message: reason, line: range.line, column: range.column, filePath: func.sourceFilePath)
 end 'reportClosureEscape'
 
 // The op that DEFINED `closure` — the `functionRef` `parseClosureExpression` emits, whose span is the
 // closure literal's `function` keyword.
-function closureDefiningOp(project Project, func IrFunction, funcIndex FuncIndex, closure ValueId) returns OpIndex
+function closureDefiningOp(project Project, func IrFunction, funcIndex ElementIndex, closure ValueId) returns ElementIndex
 	match project.valueOrigins.lookup(funcIndex, valueId: closure) 'origin'
 		found(opIndex) then return opIndex
 		none then break 'origin'
@@ -6876,7 +6891,9 @@ function checkArgTypes(project Project, func IrFunction, result ValueId, callee 
 		// reported.
 		if let cast = try func.literalCastArguments.get(argId) 'aLiteralCastArgument'
 			if let destination = try calleeParamAlias(project, callee: callee, position: i) 'aRangedParameter'
-				reportUnneededLiteralCastArgument(project, cast: cast, destination: destination, filePath: filePath)
+				if not programSignaturesIn(project, asker: "checkArgTypes").genericInstanceBindsParam(callee, position: i) 'theCastDoesNotFixATypeParameter'
+					reportUnneededLiteralCastArgument(project, cast: cast, destination: destination, filePath: filePath)
+				end 'theCastDoesNotFixATypeParameter'
 			end 'aRangedParameter'
 		end 'aLiteralCastArgument'
 	end 'eachArg'
@@ -7427,7 +7444,7 @@ end 'existentialSiteClaimAgainst'
 // them is a `genericInstance` — MEASURED: a tag test read `Iterable with (Integer, IntIterator)`'s second
 // argument as a bare `named` and let the wrong-iterator program through, still leaking.
 function heldPositionNestedClaim(project Project, signatures ProgramSignatures, siteInstance GenericInstanceId, conformerTag ValueTypeTag, conformerNameId TypeNameId, iface IrInterface, position ElementIndex) returns ExistentialSiteClaim
-	let nestedInstance = try signatures.instanceArgHeldInstance(siteInstance, position: position as TypeParamPosition) otherwise 'theSiteNamesTheBareInterface'
+	let nestedInstance = try signatures.instanceArgHeldInstance(siteInstance, position: position) otherwise 'theSiteNamesTheBareInterface'
 		return ExistentialSiteClaim.agreeing()
 	end 'theSiteNamesTheBareInterface'
 
@@ -7715,7 +7732,7 @@ function checkReturnedValueTypes(project Project, module MaxonModule, signatures
 
 		match func.maxonReturnType 'declaredReturn'
 			void then break 'declaredReturn'
-			value(inner) then checkReturnsAgainstInterface(project, module: module, signatures: signatures, func: func, funcIndex: iter.index() as FuncIndex, declaredReturn: inner)
+			value(inner) then checkReturnsAgainstInterface(project, module: module, signatures: signatures, func: func, funcIndex: iter.index(), declaredReturn: inner)
 		end 'declaredReturn'
 	end 'eachFunc'
 end 'checkReturnedValueTypes'
@@ -7724,7 +7741,7 @@ end 'checkReturnedValueTypes'
 // TERMINATOR and occasionally a body op (a mid-block return), so the walk is `liveOpIndices` — the single
 // home of the blockRefs → opRefs+terminator descent — rather than a scan of `opRefs` that would miss most of
 // them, or of the append-only `module.ops` that would report against dead ops from an earlier pass.
-function checkReturnsAgainstInterface(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndex FuncIndex, declaredReturn MaxonType)
+function checkReturnsAgainstInterface(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndex ElementIndex, declaredReturn MaxonType)
 	if maxonTypeTag(declaredReturn) != ValueTypeTag.interfaceRef 'notAnExistentialReturn'
 		return
 	end 'notAnExistentialReturn'
@@ -7788,7 +7805,7 @@ end 'checkReturnsAgainstInterface'
 
 // One `return`'s value against the interface its function promised — the verdict shared with the argument
 // position, worded for this one. Anchored on the `return` itself, the line an author would change.
-function checkOneReturnedValue(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndex FuncIndex, value ValueId, interfaceName ByteArray, returnExistentialSites GenericInstanceIdArray, retRange SourceRange)
+function checkOneReturnedValue(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndex ElementIndex, value ValueId, interfaceName ByteArray, returnExistentialSites GenericInstanceIdArray, retRange SourceRange)
 	let valueTag = try func.valueTags.get(value) otherwise panic("checkOneReturnedValue: value v{value} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
 	let valueNameId = try func.valueNameIds.get(value) otherwise panic("checkOneReturnedValue: value v{value} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
 	let displayName = String.from(interfaceName)
@@ -7797,7 +7814,7 @@ function checkOneReturnedValue(project Project, module MaxonModule, signatures P
 		// The parameterized half, asked once conformance is settled — the argument position's twin (W58).
 		widens then checkExistentialSiteClaimAtReturn(project, func: func, returnExistentialSites: returnExistentialSites, valueTag: valueTag, valueNameId: valueNameId, interfaceName: interfaceName, retRange: retRange)
 		floatHasNoValueHalf then reportPositioned(project, code: ErrorCode.floatWidenedToExistential, message: "Cannot return a `float` from '{String.from(func.name)}', which is declared to return the interface type '{displayName}': {floatHasNoValueHalfReason(displayName)}, or declare the return type as `float`", line: retRange.line, column: retRange.column, filePath: func.sourceFilePath)
-		doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage("return type mismatch in '{String.from(func.name)}'", conformer: typeDisplayName(project, tag: valueTag, nameId: valueNameId, readerFilePath: func.sourceFilePath), interfaceName: displayName), line: retRange.line, column: retRange.column, filePath: func.sourceFilePath, cause: valueDeferralCause(project, module: module, signatures: signatures, funcIndex: funcIndex, value: value))
+		doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage("return type mismatch in '{String.from(func.name)}'", conformer: typeDisplayName(project, tag: valueTag, nameId: valueNameId, readerFilePath: func.sourceFilePath), interfaceName: displayName), line: retRange.line, column: retRange.column, filePath: func.sourceFilePath, cause: valuesDeferralCause(project, module: module, signatures: signatures, funcIndex: funcIndex, values: singletonArgs(value)))
 	end 'widening'
 end 'checkOneReturnedValue'
 
@@ -7822,12 +7839,12 @@ function checkExistentialFieldStores(project Project, module MaxonModule, signat
 		end 'notInTheProgram'
 
 		for store in func.existentialFieldStores 'eachStore'
-			checkOneExistentialFieldStore(project, module: module, signatures: signatures, func: func, funcIndex: iter.index() as FuncIndex, store: store)
+			checkOneExistentialFieldStore(project, module: module, signatures: signatures, func: func, funcIndex: iter.index(), store: store)
 		end 'eachStore'
 	end 'eachFunc'
 end 'checkExistentialFieldStores'
 
-function checkOneExistentialFieldStore(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndex FuncIndex, store ExistentialFieldStore)
+function checkOneExistentialFieldStore(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndex ElementIndex, store ExistentialFieldStore)
 	let valueTag = try func.valueTags.get(store.value) otherwise panic("checkOneExistentialFieldStore: value v{store.value} of function '{String.from(func.name)}' has no recorded type — every SSA value is minted with its type columns")
 	let valueNameId = try func.valueNameIds.get(store.value) otherwise panic("checkOneExistentialFieldStore: value v{store.value} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
 	let displayName = String.from(store.interfaceName)
@@ -7836,7 +7853,7 @@ function checkOneExistentialFieldStore(project Project, module MaxonModule, sign
 	match existentialWideningVerdict(project, valueTag: valueTag, valueNameId: valueNameId, interfaceName: store.interfaceName, readerFilePath: func.sourceFilePath) 'widening'
 		widens then checkExistentialSiteClaimAtFieldStore(project, func: func, store: store, valueTag: valueTag, valueNameId: valueNameId)
 		floatHasNoValueHalf then reportPositioned(project, code: ErrorCode.floatWidenedToExistential, message: floatIntoExistentialStoreMessage(store.place, site: site, interfaceName: displayName), line: store.line, column: store.column, filePath: store.filePath)
-		doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage(existentialStoreMismatchSubject(store.place, site: site), conformer: valueTypeDisplayName(project, func: func, value: store.value, tag: valueTag, nameId: valueNameId, readerFilePath: store.filePath), interfaceName: displayName), line: store.line, column: store.column, filePath: store.filePath, cause: valueDeferralCause(project, module: module, signatures: signatures, funcIndex: funcIndex, value: store.value))
+		doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage(existentialStoreMismatchSubject(store.place, site: site), conformer: valueTypeDisplayName(project, func: func, value: store.value, tag: valueTag, nameId: valueNameId, readerFilePath: store.filePath), interfaceName: displayName), line: store.line, column: store.column, filePath: store.filePath, cause: valuesDeferralCause(project, module: module, signatures: signatures, funcIndex: funcIndex, values: singletonArgs(store.value)))
 	end 'widening'
 end 'checkOneExistentialFieldStore'
 
@@ -7945,7 +7962,7 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 			// non-conformer's bindings are not the fault worth reporting.
 			widens then checkExistentialSiteClaimAtArgument(project, func: func, paramExistentialSites: paramExistentialSites, position: position, argTag: argTag, argNameId: argNameId, interfaceName: interfaceName, paramName: paramName, callInstanceSubject: callInstanceSubject, callRange: callRange, filePath: filePath)
 			floatHasNoValueHalf then reportPositioned(project, code: ErrorCode.floatWidenedToExistential, message: "Cannot pass a `float` as {argParamLabel(paramName, position: position)}, which is declared at the interface type '{displayName}': {floatHasNoValueHalfReason(displayName)}, or take the parameter as a `float`", line: callRange.line, column: callRange.column, filePath: filePath)
-			doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage("argument type mismatch for {argParamLabel(paramName, position: position)}", conformer: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath), interfaceName: displayName), line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArgument(argId))
+			doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage("argument type mismatch for {argParamLabel(paramName, position: position)}", conformer: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath), interfaceName: displayName), line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArguments(singletonArgs(argId)))
 		end 'widening'
 
 		return
@@ -7991,7 +8008,7 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 		// A handle the parser left unconverted because the call's overloads tied is already E3007; every
 		// other unconverted `T.handle` at an `I.handle` parameter is a conversion door that was missed,
 		// and is E3005.
-		if signatures.aggregatesConflict(expectedAggregate, expectedTag: paramTag, expectedNameId: typeNameIdOf(paramType), expectedBrand: declaredBrandOf(declaredParamName, paramTag: paramTag), got: gotAggregate, gotTag: argTag, gotNameId: argNameId, gotBrand: valueBrandOf(project, func: func, value: argId)) and not (overloadRefused and signatures.serviceHandleWidensTo(gotAggregate, interfaceHandleName: expectedAggregate)) 'aggregateArgMismatch'
+		if signatures.aggregatesConflict(expectedAggregate, expectedTag: paramTag, expectedNameId: typeNameIdOf(paramType), expectedBrand: declaredBrandOf(declaredParamName, paramTag: paramTag), got: gotAggregate, gotTag: argTag, gotNameId: argNameId, gotBrand: valueBrandOf(project, func: func, value: argId), readerFilePath: filePath) and not (overloadRefused and signatures.serviceHandleWidensTo(gotAggregate, interfaceHandleName: expectedAggregate)) 'aggregateArgMismatch'
 			// ⚠ **THE OPAQUE TAIL BELONGS HERE TOO, AND FOR ONE FACT THERE IS ONE SENTENCE (W179).** A boxed
 			// UNION parameter carries a nominal identity, so an opaque `T` meeting one is refused by THIS arm and
 			// never reaches the tag rule below — measured on `takeMsg(t)` with a `union Message` formal. Same
@@ -8000,7 +8017,7 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 			let expectedDisplay = paramDisplayName(project, paramType: paramType, paramTag: paramTag, aggregate: expectedAggregate, declaredName: declaredParamName, argTag: argTag, readerFilePath: func.sourceFilePath)
 			let gotDisplay = valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath)
 			var argSignatures = programSignaturesIn(project, asker: "checkOneArgType")
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: argMismatchWithOpaqueTail(argTypeMismatchMessage(paramName, position: position, expected: expectedDisplay, got: gotDisplay, expectedNote: contestedInstanceNote(argSignatures, tag: paramTag, nameId: typeNameIdOf(paramType)), gotNote: contestedInstanceNote(argSignatures, tag: argTag, nameId: argNameId)), argTag: argTag), line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArgument(argId))
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: argMismatchWithOpaqueTail(argTypeMismatchMessage(paramName, position: position, expected: expectedDisplay, got: gotDisplay, expectedNote: contestedInstanceNote(argSignatures, tag: paramTag, nameId: typeNameIdOf(paramType)), gotNote: contestedInstanceNote(argSignatures, tag: argTag, nameId: argNameId)), argTag: argTag), line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArguments(singletonArgs(argId)))
 			return
 		end 'aggregateArgMismatch'
 	end 'aggregateComparable'
@@ -8072,7 +8089,7 @@ function checkFunctionArgShape(project Project, func IrFunction, declaredShape F
 	// shapes are compared here, whole-program and resolved, so its brands are too.
 	let brandsConflict = signatures.functionBrandsConflict(declaredBrand, gotName: gotBrand)
 
-	if functionShapesAgree(functionTypeRegistryOf(project), signatures: signatures, declared: declaredShape, got: gotShape) and not brandsConflict 'agree'
+	if functionShapesAgree(functionTypeRegistryOf(project), signatures: signatures, declared: declaredShape, got: gotShape, readerFilePath: filePath) and not brandsConflict 'agree'
 		return false
 	end 'agree'
 
@@ -8109,7 +8126,7 @@ function checkArgAgainstDeclaredTag(project Project, argTag ValueTypeTag, argNam
 
 	match verdict 'declared'
 		ok then break 'declared'
-		mismatch then reportPositioned(project, code: ErrorCode.typeMismatch, message: argMismatchWithOpaqueTail(argTypeMismatchMessage(paramName, position: position, expected: paramDisplayName(project, paramType: declaredType, paramTag: declaredTag, aggregate: declaredAggregate, declaredName: declaredName, argTag: argTag, readerFilePath: filePath), got: typeDisplayName(project, tag: argTag, nameId: argNameId, readerFilePath: filePath)), argTag: argTag), line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArgument(argId))
+		mismatch then reportPositioned(project, code: ErrorCode.typeMismatch, message: argMismatchWithOpaqueTail(argTypeMismatchMessage(paramName, position: position, expected: paramDisplayName(project, paramType: declaredType, paramTag: declaredTag, aggregate: declaredAggregate, declaredName: declaredName, argTag: argTag, readerFilePath: filePath), got: typeDisplayName(project, tag: argTag, nameId: argNameId, readerFilePath: filePath)), argTag: argTag), line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArguments(singletonArgs(argId)))
 
 		// ⚠ **THE TWO ARMS BELOW SPELL THE PARAMETER BY ITS RESOLVED CLASS WORD AND NOT BY ITS DECLARATION,
 		// AND THAT IS THE CANONICAL COROLLARY OF THE DISPLAY RULE RATHER THAN AN EXCEPTION TO IT.** Each is
@@ -8123,13 +8140,13 @@ function checkArgAgainstDeclaredTag(project Project, argTag ValueTypeTag, argNam
 		// The parameter is still NAMED, unlike the parser's three sites, because the reader's next
 		// question is which argument — but the rule's own sentence is `implicitNarrowingMessage`'s,
 		// shared verbatim, so the four sites cannot come to explain one rule four ways.
-		narrowsFloatToInt then reportPositioned(project, code: ErrorCode.semanticUnsafeCast, message: "argument {argParamLabel(paramName, position: position)}: {implicitNarrowingMessage(typeTagName(argTag), targetType: typeTagName(declaredTag))}", line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArgument(argId))
+		narrowsFloatToInt then reportPositioned(project, code: ErrorCode.semanticUnsafeCast, message: "argument {argParamLabel(paramName, position: position)}: {implicitNarrowingMessage(typeTagName(argTag), targetType: typeTagName(declaredTag))}", line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArguments(singletonArgs(argId)))
 
 		// A FUNCTION VALUE passed to a NON-function parameter (P1.5-A1) — the argument twin of the
 		// parser's assignment/return sites, sharing `FunctionValueMisuseSuffix` so all four explain one
 		// rule one way. (Reached only through the whole-program signature the parser cannot see, which
 		// is why the rule's argument arm lives here rather than at the call site.)
-		functionIntoNonFunction then reportPositioned(project, code: ErrorCode.typeMismatch, message: "cannot pass a value of type 'function' as argument {argParamLabel(paramName, position: position)}, which holds '{typeTagName(declaredTag)}': {FunctionValueMisuseSuffix}", line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArgument(argId))
+		functionIntoNonFunction then reportPositioned(project, code: ErrorCode.typeMismatch, message: "cannot pass a value of type 'function' as argument {argParamLabel(paramName, position: position)}, which holds '{typeTagName(declaredTag)}': {FunctionValueMisuseSuffix}", line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArguments(singletonArgs(argId)))
 	end 'declared'
 
 	return verdict

@@ -63,7 +63,7 @@
 
 // How many times a blocking value is READ inside the OVERFLOWING REGION — the move-cost rank key
 // (fewer reads in it => fewer reloads after the array rewrite). A count of READS, so it is neither
-// a `UseOrdinal` (which use, of one value) nor a `UseRecordIndex` (which record, of the function).
+// a `UseOrdinal` (which use, of one value) nor a use-record index (which record, of the function).
 //
 // ⚠⚠ **IT COUNTS OP OPERANDS AND NOT BRANCH-EDGE ARGS, WHICH IS WHY THE PRINTED WORD IS `read` AND
 // NOT "used" — a different claim, and a false one.** A loop-carried `var` — one the loop only ASSIGNS,
@@ -94,11 +94,7 @@ end 'PressureCandidate'
 
 typealias PressureCandidateArray = Array with PressureCandidate
 
-// A candidate's position in the blocking-value list — what `sortedOrder` permutes and
-// `candidateList` walks. It indexes the CANDIDATES, not the CFG (it was a `CfgIndex`, which said
-// "block" about the rank of a value in a worklist).
-typealias CandidateIndex = int(0 to u64.max)
-typealias CandidateOrder = Array with CandidateIndex
+typealias CandidateOrder = Array with ElementIndex
 
 // Report the E5001 diagnostic for a HOT register-pressure overflow onto `project.diagnostics`
 // and THROW. The overflow point (`peak`) genuinely needs `peak.pressure` registers but only
@@ -110,7 +106,7 @@ typealias CandidateOrder = Array with CandidateIndex
 // elsewhere leaves an owned `CompileError` box in flight across the throw boundary, which the
 // runtime does not reclaim (a stderr "MM leak" line that would corrupt the diagnostic — the very
 // thing the `maxoncstderr` block compares).
-export function raiseRegisterPressure(project Project, module TargetModule, func IrFunction, funcIndex FuncIndex, liveness LivenessResult, peak PressurePeak, pool RegMask, lineage SplitLineage) throws CompileError
+export function raiseRegisterPressure(project Project, module TargetModule, func IrFunction, funcIndex ElementIndex, liveness LivenessResult, peak PressurePeak, pool RegMask, lineage SplitLineage) throws CompileError
 	let message = buildRegisterPressureMessage(project, module: module, func: func, funcIndex: funcIndex, liveness: liveness, peak: peak, pool: pool, lineage: lineage)
 
 	// Whole-program-anchored (line 0), so `Diagnostic.render` emits `error E5001:` once and
@@ -122,7 +118,7 @@ end 'raiseRegisterPressure'
 // Assemble the multi-line E5001 message. Structure: a headline with the exact deficit, a
 // paragraph naming the constrained register count that actually applies at the point, the
 // ranked worklist of blocking values with their source def sites, and the transformation.
-function buildRegisterPressureMessage(project Project, module TargetModule, func IrFunction, funcIndex FuncIndex, liveness LivenessResult, peak PressurePeak, pool RegMask, lineage SplitLineage) returns String
+function buildRegisterPressureMessage(project Project, module TargetModule, func IrFunction, funcIndex ElementIndex, liveness LivenessResult, peak PressurePeak, pool RegMask, lineage SplitLineage) returns String
 	// THE POOL THE DEFICIT IS MEASURED AGAINST IS THE PEAK'S OWN WITNESS — the register set Hall's
 	// condition failed on. E5001 is raised ONLY for a FULL-POOL overflow (a CONFINED one is always
 	// relievable by a forced bracket, and `noVictimAtPeak` panics rather than let one surface here),
@@ -174,7 +170,7 @@ function buildRegisterPressureMessage(project Project, module TargetModule, func
 	// that is a no-op at a hot-loop peak (there the corrections are ≤ `available`, so
 	// `peak.pressure - available ≤ candidates.count()`).
 	let heldCount = candidates.count()
-	let deficit = minCount(peak.pressure - available, b: heldCount)
+	let deficit = minCount(peak.pressure - available, b: heldCount as RegCount)
 
 	// TWO WORDINGS, ONE SET OF NUMBERS. Every quantity above is computed once and both bodies read it, so
 	// the two can differ in prose and never in arithmetic. The LOOP body is byte-for-byte what it has always
@@ -241,7 +237,7 @@ end 'candidateList'
 // value's def site, which RULE 3 guarantees is real user source. Reporting `:0` — a source position that
 // does not exist — is the one answer neither route may give, so the guard is stated once here rather
 // than in each route.
-function pressureAnchorLine(module TargetModule, project Project, funcIndex FuncIndex, peak PressurePeak, peakInLoop bool, candidates PressureCandidateArray, regionOps OpIndexArray) returns LineNumber
+function pressureAnchorLine(module TargetModule, project Project, funcIndex ElementIndex, peak PressurePeak, peakInLoop bool, candidates PressureCandidateArray, regionOps OpIndexArray) returns LineNumber
 	var scanned = 0 as LineNumber
 
 	if peakInLoop 'loop'
@@ -293,7 +289,7 @@ end 'earliestCandidateLine'
 // value", which is the one property this computes.
 //
 // 0 when no op of the region has an origin; `pressureAnchorLine` owns what that means.
-function regionAnchorLine(module TargetModule, project Project, funcIndex FuncIndex, regionOps OpIndexArray) returns LineNumber
+function regionAnchorLine(module TargetModule, project Project, funcIndex ElementIndex, regionOps OpIndexArray) returns LineNumber
 	var best = 0 as LineNumber
 	var found = false
 	var buf = OperandList.create()
@@ -359,7 +355,7 @@ function regionBlocks(cfg FuncCfg, peak PressurePeak, peakInLoop bool) returns B
 	end 'inLoop'
 
 	var everyBlock = BoolArray.create()
-	everyBlock.refill(cfg.topo.numBlocks as ElementIndex, value: true)
+	everyBlock.refill(cfg.topo.numBlocks, value: true)
 	return everyBlock
 end 'regionBlocks'
 
@@ -367,7 +363,7 @@ end 'regionBlocks'
 // defines no origin-carrying value (a control/spill op, or a phi-fed value). Used only to find
 // the message's anchor line, so a 0 result is fine: the region scan skips such an op, and
 // `pressureAnchorLine` turns a 0 from the peak op itself into the earliest blocking value's line.
-function firstOriginLineOfOp(project Project, funcIndex FuncIndex, op TargetOp, buf OperandList) returns LineNumber
+function firstOriginLineOfOp(project Project, funcIndex ElementIndex, op TargetOp, buf OperandList) returns LineNumber
 	targetOpOperands(op, buf: buf)
 
 	for o in buf 'eachOperand'
@@ -396,7 +392,7 @@ end 'firstOriginLineOfOp'
 // It tests each id of the value space rather than walking the row's set bits, which is the opposite
 // of what `BitRow.collect`'s contract asks of every consumer on a hot path: `peak` arrives as a
 // `let` and collecting writes the row's own counter. This runs once, on the E5001 refusal path.
-function collectCandidates(project Project, module TargetModule, func IrFunction, cfg FuncCfg, funcIndex FuncIndex, peak PressurePeak, lineage SplitLineage, regionOps OpIndexArray) returns PressureCandidateArray
+function collectCandidates(project Project, module TargetModule, func IrFunction, cfg FuncCfg, funcIndex ElementIndex, peak PressurePeak, lineage SplitLineage, regionOps OpIndexArray) returns PressureCandidateArray
 	let wordsPerRow = bitsetWordsFor(cfg.valueCount as BitIndex)
 	var candidates = PressureCandidateArray.create()
 
@@ -444,7 +440,7 @@ end 'sortedOrder'
 
 // True iff `candidates[aIndex]` sorts AFTER `candidates[bIndex]` under (reads-in-loop asc, then
 // value id asc). Reads two candidates (shared borrows, no mutation), so no borrow conflict.
-function candidateAtGreater(candidates PressureCandidateArray, aIndex CandidateIndex, bIndex CandidateIndex) returns bool
+function candidateAtGreater(candidates PressureCandidateArray, aIndex ElementIndex, bIndex ElementIndex) returns bool
 	let a = try candidates.get(aIndex) otherwise panic("candidateAtGreater: get OOB at {aIndex}")
 	let b = try candidates.get(bIndex) otherwise panic("candidateAtGreater: get OOB at {bIndex}")
 
@@ -508,7 +504,7 @@ union ValueSource
 	derived(sourceId ValueId)
 
 	// A value defined by a Maxon op — that op's index (into `project.opRanges`).
-	opDefined(opIndex OpIndex)
+	opDefined(opIndex ElementIndex)
 
 	// No direct source: a phi/block-arg, chased to the incoming values its edges pass it.
 	phi
@@ -520,7 +516,7 @@ end 'ValueSource'
 // fresh id is in exactly the derivation table of the pass that minted it and in neither origin
 // table; an op-defined value is in `ValueOriginTable`; a phi is in none — so the order only decides
 // which single table answers, never which of two.
-function classifyValue(project Project, funcIndex FuncIndex, valueId ValueId, lineage SplitLineage) returns ValueSource
+function classifyValue(project Project, funcIndex ElementIndex, valueId ValueId, lineage SplitLineage) returns ValueSource
 	match project.valueOrigins.paramRange(funcIndex, valueId: valueId) 'param'
 		found(range) then return ValueSource.param(range)
 		none then break 'param'
@@ -554,7 +550,7 @@ end 'classifyValue'
 // the user cannot act on. It is the backstop guarding the E5001 contract, and what keeps it
 // unreached is the CALLER's guarantee that no source-less function ever raises E5001 — not a
 // property of the four routes, which cannot answer for such a function at all (see the file header).
-function defRangeOf(project Project, module TargetModule, func IrFunction, topo FuncTopology, funcIndex FuncIndex, valueId ValueId, wordsPerRow BitWordCount, lineage SplitLineage) returns SourceRange
+function defRangeOf(project Project, module TargetModule, func IrFunction, topo FuncTopology, funcIndex ElementIndex, valueId ValueId, wordsPerRow ElementIndex, lineage SplitLineage) returns SourceRange
 	var ranges = SourceRangeArray.create()
 	var visited = BitRow.create()
 	visited.widen(wordsPerRow)
@@ -571,7 +567,7 @@ end 'defRangeOf'
 // a phi's incoming spans transitively, a split-derived value's source span transitively.
 // `visited` bounds the recursion (a phi's back-edge incoming can transitively reference the phi;
 // a lineage chase is acyclic but shares the guard), so each value is explored once.
-function collectReachableRanges(project Project, module TargetModule, topo FuncTopology, funcIndex FuncIndex, valueId ValueId, lineage SplitLineage, visited BitRow, out SourceRangeArray)
+function collectReachableRanges(project Project, module TargetModule, topo FuncTopology, funcIndex ElementIndex, valueId ValueId, lineage SplitLineage, visited BitRow, out SourceRangeArray)
 	if visited.test(valueId as BitIndex) 'seen'
 		return
 	end 'seen'
@@ -590,7 +586,7 @@ end 'collectReachableRanges'
 // nothing when the value is not a block-arg of any block — that leaves the caller's `out` free
 // of a span from this value, and only a value with no other route contributes none at all
 // (Rule 3).
-function chasePhiIncomings(project Project, module TargetModule, topo FuncTopology, funcIndex FuncIndex, phiValueId ValueId, lineage SplitLineage, visited BitRow, out SourceRangeArray)
+function chasePhiIncomings(project Project, module TargetModule, topo FuncTopology, funcIndex ElementIndex, phiValueId ValueId, lineage SplitLineage, visited BitRow, out SourceRangeArray)
 	for incoming in phiIncomingValues(module, topo: topo, phiValueId: phiValueId) 'each'
 		collectReachableRanges(project, module: module, topo: topo, funcIndex: funcIndex, valueId: incoming, lineage: lineage, visited: visited, out: out)
 	end 'each'
@@ -612,7 +608,7 @@ function phiIncomingValues(module TargetModule, topo FuncTopology, phiValueId Va
 	return result
 end 'phiIncomingValues'
 
-function blockArgPosition(block IrBlock, valueId ValueId) returns PhiIndex throws MapError
+function blockArgPosition(block IrBlock, valueId ValueId) returns ElementIndex throws MapError
 	for k in 0 upto block.blockArgs.count() 'each'
 		let arg = try block.blockArgs.get(k) otherwise panic("blockArgPosition: blockArgs.get OOB")
 
@@ -628,7 +624,7 @@ end 'blockArgPosition'
 // (the values predecessors pass to that phi). Routed through `PhiEdgeView` so that the
 // positional `blockArgs[k] <-> argIds[k]` invariant every phi consumer rests on is enforced in
 // ONE place — this was the last reader indexing an edge's `argIds` raw.
-function gatherIncomingAtPosition(module TargetModule, topo FuncTopology, targetBlock IrBlock, position PhiIndex, out ValueIdArray)
+function gatherIncomingAtPosition(module TargetModule, topo FuncTopology, targetBlock IrBlock, position ElementIndex, out ValueIdArray)
 	for i in 0 upto topo.numBlocks 'eachBlock'
 		let block = blockAt(module, topo: topo, local: i)
 

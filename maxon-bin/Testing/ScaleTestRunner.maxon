@@ -182,13 +182,13 @@ export typealias PhaseMetricArray = Array with PhaseMetric
 // `parseRungMetrics`.
 export type RungResult
 	export let rung as RungIndex
-	export let sourceBytes as SourceByteCount
+	export let sourceBytes as BytePos
 	export let codeBytes as CodeByteCount
 	export let total as PhaseMetric
 	export let phases as PhaseMetricArray
 	export let regAlloc as PhaseMetricArray
 
-	export static function create(rung RungIndex, sourceBytes SourceByteCount, codeBytes CodeByteCount, total PhaseMetric, phases PhaseMetricArray, regAlloc PhaseMetricArray) returns RungResult
+	export static function create(rung RungIndex, sourceBytes BytePos, codeBytes CodeByteCount, total PhaseMetric, phases PhaseMetricArray, regAlloc PhaseMetricArray) returns RungResult
 		return Self{rung: rung, sourceBytes: sourceBytes, codeBytes: codeBytes, total: total, phases: phases, regAlloc: regAlloc}
 	end 'create'
 
@@ -1142,7 +1142,7 @@ end 'printMintedElsewhereReason'
 // A rung this run climbed that the logged row did not have is not a delta of zero; it is not a delta
 // at all. (`assertRecordable` refuses to LOG such a run, but a --rungs=3 run with no --note is a
 // perfectly reasonable thing to do while iterating, and it still prints.)
-function countDeltaText(current AllocCount, logged AllocCountArray, rung LadderIndex) returns String
+function countDeltaText(current AllocCount, logged AllocCountArray, rung ElementIndex) returns String
 	let before = try logged.get(rung) otherwise return NoBaselineText
 	return signedDeltaText(current as Delta, before: before as Delta)
 end 'countDeltaText'
@@ -1152,7 +1152,7 @@ end 'countDeltaText'
 // `WithheldDeltaText` rather than `NoBaselineText`, and they must not look alike: "the logged run never
 // climbed this rung" and "these two rows were measured against different yardsticks" are different
 // facts, and a reader who cannot tell them apart learns neither.
-function byteDeltaText(current HeapByteCount, logged ByteCountArray, rung LadderIndex, bytes ByteDelta) returns String
+function byteDeltaText(current HeapByteCount, logged ByteCountArray, rung ElementIndex, bytes ByteDelta) returns String
 	match bytes 'b'
 		withheld then return WithheldDeltaText
 		comparable then break 'b'
@@ -1174,11 +1174,6 @@ function signedDeltaText(current Delta, before Delta) returns String
 
 	return groupDigits(current - before)
 end 'signedDeltaText'
-
-// A position in the ladder — an index into the parallel per-rung arrays (this run's results, and
-// the logged run's columns), which is NOT the same thing as `RungIndex`: those arrays may be shorter
-// than the ladder the log recorded, and that is exactly the case the delta report has to handle.
-export typealias LadderIndex = int(0 to u64.max)
 
 // ⭐ WHAT THE COMPILER'S OWN SOURCE WALK ACTUALLY TOUCHED — the files it found and the directories it
 // listed, under the `stdlib/` every rung of this run compiles against.
@@ -1237,7 +1232,7 @@ function printTierWalk(label String, dir FilePath) throws ScaleError
 	var sources = MaxonSourcePathArray.create()
 	let directories = try collectMaxonSources(dir, into: sources) otherwise throw ScaleError.reason("{dir.toString()} could not be listed")
 
-	print("{padRight(label, width: LibraryWalkLabelWidth)}{groupDigits(sources.count())} source file(s) in {groupDigits(directories as Delta)} directory(ies) under {dir.toString()}\n")
+	print("{padRight(label, width: LibraryWalkLabelWidth)}{groupDigits(sources.count() as Delta)} source file(s) in {groupDigits(directories as Delta)} directory(ies) under {dir.toString()}\n")
 end 'printTierWalk'
 
 // Indented to the same column as every other line of the report. A label carries no trailing space of

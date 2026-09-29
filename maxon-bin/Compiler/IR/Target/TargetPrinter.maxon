@@ -348,7 +348,7 @@ end 'hexByte'
 // One lowercase hex digit.
 function hexDigit(nibble MachineWord) returns String
 	let digits = b"0123456789abcdef"
-	return oneByteText((try digits.get(nibble) otherwise panic("hexDigit: nibble {nibble} is out of range — every caller masks with `HexDigitMask`") as MachineWord))
+	return oneByteText((try digits.get(nibble as ElementIndex) otherwise panic("hexDigit: nibble {nibble} is out of range — every caller masks with `HexDigitMask`") as MachineWord))
 end 'hexDigit'
 
 // ONE byte as a one-character String. A `ByteArray` of length one rather than a `String` index: both
@@ -748,7 +748,7 @@ end 'printTargetFunction'
 // One op, indented, ISA-prefixed, newline-terminated. An out-of-range op index
 // is an invariant violation (a block references an op not in `module.ops`), not
 // a user error, so it panics rather than printing a sentinel.
-function printOpLine(module TargetModule, opIdx OpIndex, names BlockPrintNames, cpu CpuArch, globalData GlobalDataTable) returns String
+function printOpLine(module TargetModule, opIdx ElementIndex, names BlockPrintNames, cpu CpuArch, globalData GlobalDataTable) returns String
 	let op = try module.ops.get(opIdx) otherwise panic("printOpLine: op index {opIdx} out of range in module.ops")
 	return "{OpIndent}{opIsaPrefix(cpu)}{formatTargetOp(op, names: names, cpu: cpu, globalData: globalData)}\n"
 end 'printOpLine'

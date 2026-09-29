@@ -180,14 +180,14 @@ type InlineCarve
 	// Takes the ORIGINAL result ids as its block args and holds every op that followed the call.
 	export var cont as IrBlock
 
-	// The `BlockRef` naming that continuation, CAPTURED at the split rather than searched for afterwards.
-	// The split is the one moment it is knowable in O(1) — `splitBlockExit` is the only `addBlock` inside
-	// it, so the continuation is the function's last-registered block exactly then and never again. A
-	// search for it later would be O(blocks) per site, i.e. Θ(sites × blocks) over a function that
-	// accesses many elements — which is precisely the function this pass exists for.
-	export var contRef as BlockRef
+	// The block ref naming that continuation, CAPTURED at the split rather than searched for
+	// afterwards. The split is the one moment it is knowable in O(1) — `splitBlockExit` is the only
+	// `addBlock` inside it, so the continuation is the function's last-registered block exactly then
+	// and never again. A search for it later would be O(blocks) per site, i.e. Θ(sites × blocks) over
+	// a function that accesses many elements — which is precisely the function this pass exists for.
+	export var contRef as ElementIndex
 
-	static function create(cont IrBlock, contRef BlockRef) returns InlineCarve
+	static function create(cont IrBlock, contRef ElementIndex) returns InlineCarve
 		return Self{cont: cont, contRef: contRef}
 	end 'create'
 end 'InlineCarve'
@@ -208,15 +208,16 @@ end 'InlineFrame'
 // access uses. The two travel together for `SingleOpStride`'s own reason — a stride and the memory type an
 // access at that stride names are one statement, and a site able to spell them apart can spell them wrongly.
 //
-// ⚠ **IT NAMES THE BLOCK BY `BlockRef` AND NOT BY `IrBlock`.** An `IrBlock` reached through a `let` binding —
-// which is what a `for … in` element is — cannot be handed to the emitters, all of which MUTATE the block
-// they are given (E3019). The ref is an `int`, so it carries out of the loop and `blockAt` hands back a block
-// the emitter may write: the same discipline the expanders already had, one indirection wider.
+// ⚠ **IT NAMES THE BLOCK BY ITS REF AND NOT BY `IrBlock`.** An `IrBlock` reached through a `let`
+// binding — which is what a `for … in` element is — cannot be handed to the emitters, all of which
+// MUTATE the block they are given (E3019). The ref is an `int`, so it carries out of the loop and
+// `blockAt` hands back a block the emitter may write: the same discipline the expanders already
+// had, one indirection wider.
 type StrideArm
-	export let blockRef as BlockRef
+	export let blockRef as ElementIndex
 	export let stride as SingleOpStride
 
-	static function create(blockRef BlockRef, stride SingleOpStride) returns StrideArm
+	static function create(blockRef ElementIndex, stride SingleOpStride) returns StrideArm
 		return Self{blockRef: blockRef, stride: stride}
 	end 'create'
 end 'StrideArm'
@@ -227,10 +228,10 @@ typealias StrideArmArray = Array with StrideArm
 // not the block the arm started in) and the element it read. A record because the two are one answer and
 // the caller needs both — the tail reads the value and writes into the block.
 type BoundedLoad
-	export let blockRef as BlockRef
+	export let blockRef as ElementIndex
 	export let value as ValueId
 
-	static function create(blockRef BlockRef, value ValueId) returns BoundedLoad
+	static function create(blockRef ElementIndex, value ValueId) returns BoundedLoad
 		return Self{blockRef: blockRef, value: value}
 	end 'create'
 end 'BoundedLoad'
@@ -294,11 +295,11 @@ type PrimitiveInliner
 
 	// The id the minter was seeded at — the first id of the site whose expansion seeded it.
 	var seedFloor as ValueId
-	var funcIndex as FuncIndex
+	var funcIndex as ElementIndex
 	var origins as ValueOriginTable
 	export var expanded as InlinedSiteCount
 
-	static function create(module StdModule, func IrFunction, funcIndex FuncIndex, origins ValueOriginTable, strides StdOpElementStrideMap, trivialElements StdOpTrivialElementSiteSet) returns PrimitiveInliner
+	static function create(module StdModule, func IrFunction, funcIndex ElementIndex, origins ValueOriginTable, strides StdOpElementStrideMap, trivialElements StdOpTrivialElementSiteSet) returns PrimitiveInliner
 		return Self{module: module, func: func, strides: strides, trivialElements: trivialElements, ids: sharedUnseededMinter, seeded: false, seedFloor: 0, funcIndex: funcIndex, origins: origins, expanded: 0}
 	end 'create'
 
@@ -363,9 +364,9 @@ type PrimitiveInliner
 	// and why `run`'s bound is SNAPSHOTTED: every block this pass appends is appended to the very array that
 	// loop is walking. There is no worklist either: a carve hands back exactly ONE block to carry on in, so
 	// a chain of carves is this loop rather than a list, and a function with no site allocates nothing here.
-	function expandChainFrom(blockRef BlockRef)
+	function expandChainFrom(blockRef ElementIndex)
 		var current = blockRef
-		var pos = 0 as BlockOpPos
+		var pos = 0 as ElementIndex
 
 		while pos < self.blockAt(current).opRefs.count() 'eachOp'
 			let next = self.expandAt(current, pos: pos)
@@ -390,7 +391,7 @@ type PrimitiveInliner
 	// ⛔ That is an allocation decision. This routine is called once per op in the whole module,
 	// and a payload-bearing union heap-boxes every case, payload-free ones included (`Parser`'s
 	// `enumOf` note), so a classification and an outcome as two such unions cost two allocations
-	// per Std op in the program. `BlockRef` is an `int`, so this answer is a register.
+	// per Std op in the program. A block ref is an `int`, so this answer is a register.
 	//
 	// ⚠ The `StdOp` match is EXHAUSTIVE: the two call variants are named and so is every other variant, so
 	// a variant added later fails to compile here until it is consciously placed.
@@ -398,7 +399,7 @@ type PrimitiveInliner
 	// ⚠ `tryCall` is ALSO how an EXISTENTIAL-returning call is spelled (its second def is the paired witness
 	// table, not an error flag — `LowerMaxonToStd.appendDirectCall`). Dispatching on the callee NAME is what
 	// keeps the two apart: no `__managed_*` entry returns an interface.
-	function expandAt(blockRef BlockRef, pos BlockOpPos) returns BlockRef
+	function expandAt(blockRef ElementIndex, pos ElementIndex) returns ElementIndex
 		match self.opAt(blockRef, pos: pos) 'op'
 			const or
 				binOp or
@@ -534,7 +535,7 @@ type PrimitiveInliner
 	// that emit those entries are one fact rather than two.
 	// One site's expansion, with every id it mints filed as derived from the site's result
 	// (`fileMintedSince`); the two call shapes differ only in the op, so the filing is done once here.
-	function expandFiled(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ManagedCallFlag) returns BlockRef
+	function expandFiled(blockRef ElementIndex, pos ElementIndex, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ManagedCallFlag) returns ElementIndex
 		let wasSeeded = self.seeded
 		let before = self.mintedSoFar()
 		let next = match errorFlagId 'shape'
@@ -546,7 +547,7 @@ type PrimitiveInliner
 		return next
 	end 'expandFiled'
 
-	function expandPlainCall(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId) returns BlockRef
+	function expandPlainCall(blockRef ElementIndex, pos ElementIndex, callee ByteArray, args ValueIdArray, resultId ValueId) returns ElementIndex
 		if callee.equals(ManagedCountName) 'count'
 			return self.rewriteCountInPlace(blockRef, pos: pos, args: args, resultId: resultId, callee: callee)
 		end 'count'
@@ -565,7 +566,7 @@ type PrimitiveInliner
 	// so they share an expander and the difference is this dispatch's `limitOffset` argument and nothing else.
 	// `guardIndexInRange` is where that field's two answers are stated; ⚖ the capacity bound is a USER
 	// RULING, carried by `ManagedMemSetName`.
-	function expandThrowingCall(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId) returns BlockRef
+	function expandThrowingCall(blockRef ElementIndex, pos ElementIndex, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId) returns ElementIndex
 		if callee.equals(ManagedGetName) 'checkedGet'
 			return self.expandCheckedGet(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
 		end 'checkedGet'
@@ -587,7 +588,7 @@ type PrimitiveInliner
 	// index, keeping `resultId`, and not one block or edge moves. `IrModule.ops` is indexed by
 	// `block.opRefs`, so an in-place replacement is invisible to every other reference in the function —
 	// the same discipline the register allocator's colorer states for itself.
-	function rewriteCountInPlace(blockRef BlockRef, pos BlockOpPos, args ValueIdArray, resultId ValueId, callee ByteArray) returns BlockRef
+	function rewriteCountInPlace(blockRef ElementIndex, pos ElementIndex, args ValueIdArray, resultId ValueId, callee ByteArray) returns ElementIndex
 		let arr = argAt(args, index: 0, callee: callee)
 		let opIdx = self.opIndexAt(blockRef, pos: pos)
 		try self.module.ops.set(opIdx, value: StdOp.loadIndirect(resultId, addrId: arr, offset: ManagedRecordLengthOffset, valueType: StdType.i64)) otherwise panic("rewriteCountInPlace: module.ops.set OOB at {opIdx}, which block {blockRef} of '{String.from(self.func.name)}' names at position {pos}")
@@ -604,7 +605,7 @@ type PrimitiveInliner
 	// re-reads the length live on every trip and a managed array cannot hold an empty slot inside
 	// `[0, count)` (`ManagedGetUncheckedName`'s header states both, and names the parser rule the second
 	// rests on). Adding one here would be this pass deciding something, which it does not do.
-	function expandUncheckedGet(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId) returns BlockRef
+	function expandUncheckedGet(blockRef ElementIndex, pos ElementIndex, callee ByteArray, args ValueIdArray, resultId ValueId) returns ElementIndex
 		let arr = argAt(args, index: 0, callee: callee)
 		let index = argAt(args, index: 1, callee: callee)
 
@@ -640,7 +641,7 @@ type PrimitiveInliner
 	// carve still happens, because the expansion is several ops where the call was one and `block.opRefs` has
 	// no insert — the continuation takes the ORIGINAL result id as its block arg exactly as `closeFrame` does,
 	// so no op after the site changes, and `elimTrivialBlockArgs` folds the single-predecessor arg away.
-	function expandUncheckedGetUnguarded(blockRef BlockRef, pos BlockOpPos, arr ValueId, index ValueId, resultId ValueId, stride SingleOpStride) returns BlockRef
+	function expandUncheckedGetUnguarded(blockRef ElementIndex, pos ElementIndex, arr ValueId, index ValueId, resultId ValueId, stride SingleOpStride) returns ElementIndex
 		let carve = self.carveContinuation(blockRef, pos: pos)
 		var head = self.blockAt(blockRef)
 		let value = self.emitElementLoad(head, arr: arr, index: index, stride: stride)
@@ -673,7 +674,7 @@ type PrimitiveInliner
 	// `element_size@24` live across it to re-ask which width this is; the tail is up to six and reads only
 	// the loaded VALUE, so the two arms rejoin at `loaded` carrying it as a block arg and the tail is
 	// written — and emitted — once.
-	function expandCheckedGet(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId) returns BlockRef
+	function expandCheckedGet(blockRef ElementIndex, pos ElementIndex, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId) returns ElementIndex
 		let arr = argAt(args, index: 0, callee: callee)
 		let index = argAt(args, index: 1, callee: callee)
 
@@ -801,7 +802,7 @@ type PrimitiveInliner
 	// (`emitDestroyRejectedElement`). Both are the runtime's, both are gated on this field, and a fast arm
 	// that stored over an occupant would be a leak — measured at exit 101 when that call was missing from
 	// `__managed_set` itself.
-	function expandElementStore(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId, limitOffset ByteOffset) returns BlockRef
+	function expandElementStore(blockRef ElementIndex, pos ElementIndex, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId, limitOffset ByteOffset) returns ElementIndex
 		let arr = argAt(args, index: 0, callee: callee)
 		let index = argAt(args, index: 1, callee: callee)
 		let value = argAt(args, index: 2, callee: callee)
@@ -889,7 +890,7 @@ type PrimitiveInliner
 	//
 	// ⚠ The key is the call's op index, which is the block's to give only until the carve moves the call —
 	// every expander reads its site facts (this plan and `trivialElements`) before it carves.
-	function stridePlanFor(site OpIndex) returns StrideDispatchPlan
+	function stridePlanFor(site ElementIndex) returns StrideDispatchPlan
 		let stamp = try self.strides.get(site) otherwise 'nothingRecorded'
 			return StrideDispatchPlan.runtimeFork
 		end 'nothingRecorded'
@@ -905,7 +906,7 @@ type PrimitiveInliner
 	// from, so the access is emitted where the call was, the head is not terminated here at all, and the arm
 	// costs neither a block nor a jump. It is `blockRef` and not the head's `IrBlock` for the reason
 	// `StrideArm` gives: the emitters MUTATE the block they are handed, and a `for … in` element is a `let`.
-	function openStrideArms(blockRef BlockRef, arr ValueId, slow BlockId, plan StrideDispatchPlan) returns StrideArmArray
+	function openStrideArms(blockRef ElementIndex, arr ValueId, slow BlockId, plan StrideDispatchPlan) returns StrideArmArray
 		match plan 'plan'
 			runtimeFork then break 'plan'
 			singleArm(stride) then return singleStrideArm(blockRef, stride: stride)
@@ -1012,7 +1013,7 @@ type PrimitiveInliner
 	// ⚠ The original op is left behind as an ORPHAN in `module.ops`. That is the tier's own model
 	// (`IrModule.ops` is append-only and retains what block-rebuilding passes replace), and it is why every
 	// reader asks `liveOpIndices` rather than scanning the array.
-	function openPlain(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId, slowHeat BlockHeat) returns InlineFrame
+	function openPlain(blockRef ElementIndex, pos ElementIndex, callee ByteArray, args ValueIdArray, resultId ValueId, slowHeat BlockHeat) returns InlineFrame
 		var frame = self.carveFrame(blockRef, pos: pos, slowHeat: slowHeat)
 		let slowResult = self.valueIds().mint()
 		self.module.appendOp(frame.slow, op: StdOp.call(slowResult, callee: callee, args: args))
@@ -1024,7 +1025,7 @@ type PrimitiveInliner
 	// `openPlain`'s dual-register twin: a `tryCall` defines a VALUE and an ERROR FLAG, so both are minted
 	// fresh on the slow arm and both become continuation block args. It differs from its twin in exactly
 	// that — the op and the arity — which is why the carve and the wiring either side of it are shared.
-	function openThrowing(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId, slowHeat BlockHeat) returns InlineFrame
+	function openThrowing(blockRef ElementIndex, pos ElementIndex, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId, slowHeat BlockHeat) returns InlineFrame
 		var frame = self.carveFrame(blockRef, pos: pos, slowHeat: slowHeat)
 		let slowResult = self.valueIds().mint()
 		let slowFlag = self.valueIds().mint()
@@ -1042,7 +1043,7 @@ type PrimitiveInliner
 	// ⚠ **THE TWO STEPS ARE SEQUENCED AND NOT WRITTEN AS ONE EXPRESSION.** `carveContinuation`'s ref read is
 	// valid only while the continuation is the function's LAST-registered block, and the `addBlock` below is
 	// precisely what ends that — so the order between them may not be left to argument evaluation.
-	function carveFrame(blockRef BlockRef, pos BlockOpPos, slowHeat BlockHeat) returns InlineFrame
+	function carveFrame(blockRef ElementIndex, pos ElementIndex, slowHeat BlockHeat) returns InlineFrame
 		let carve = self.carveContinuation(blockRef, pos: pos)
 		let slow = self.module.addBlock(self.func, label: ManagedSlowLabel, heat: slowHeat)
 		return InlineFrame.create(carve, slow: slow)
@@ -1064,7 +1065,7 @@ type PrimitiveInliner
 
 	// `carveFrame` without the slow arm — the whole carve for an expansion that has no precondition left to
 	// fail (`expandUncheckedGetUnguarded`), and the first half of it for every other.
-	function carveContinuation(blockRef BlockRef, pos BlockOpPos) returns InlineCarve
+	function carveContinuation(blockRef ElementIndex, pos ElementIndex) returns InlineCarve
 		// ⛔⛔ **THE MINTER IS SEEDED HERE, BEFORE THE CARVE, AND THAT ORDER IS LOAD-BEARING.**
 		// `nextFreeValueId` derives its floor from the function's LIVE ops (`IrModule.liveOpIndices`) and its
 		// block args — and the carve on the next line makes the call an ORPHAN, out of every `opRefs`, while
@@ -1121,31 +1122,31 @@ type PrimitiveInliner
 	// It reuses `InsertRangeChecks`' splitter rather than adding a second one: what a split has to get right
 	// is moving the block's whole EXIT (terminator, conditional branch and outgoing edge args) onto the
 	// continuation while leaving the head un-terminated, and that is one rule with one home.
-	function carve(blockRef BlockRef, pos BlockOpPos) returns IrBlock
+	function carve(blockRef ElementIndex, pos ElementIndex) returns IrBlock
 		var head = self.blockAt(blockRef)
 		let cont = splitBlockInPlace(self.module, func: self.func, head: head, position: pos + 1, label: ManagedContLabel)
-		head.opRefs.truncate(pos as ElementIndex)
+		head.opRefs.truncate(pos)
 		return cont
 	end 'carve'
 
 	// The outcome every carved expansion returns, plus the one counter bump they share. It takes the CARVE
 	// rather than the frame because one expansion has no frame at all — see `expandUncheckedGetUnguarded`.
-	function finish(carve InlineCarve) returns BlockRef
+	function finish(carve InlineCarve) returns ElementIndex
 		self.expanded = self.expanded + 1
 		return carve.contRef
 	end 'finish'
 
 	// --- block/op access ---
 
-	function blockAt(blockRef BlockRef) returns IrBlock
+	function blockAt(blockRef ElementIndex) returns IrBlock
 		return try self.module.blocks.get(blockRef) otherwise panic("PrimitiveInliner: blockRef {blockRef} of '{String.from(self.func.name)}' is not in module.blocks")
 	end 'blockAt'
 
-	function opIndexAt(blockRef BlockRef, pos BlockOpPos) returns OpIndex
+	function opIndexAt(blockRef ElementIndex, pos ElementIndex) returns ElementIndex
 		return try self.blockAt(blockRef).opRefs.get(pos) otherwise panic("PrimitiveInliner: block {blockRef} of '{String.from(self.func.name)}' has no op at position {pos}")
 	end 'opIndexAt'
 
-	function opAt(blockRef BlockRef, pos BlockOpPos) returns StdOp
+	function opAt(blockRef ElementIndex, pos ElementIndex) returns StdOp
 		return self.module.getOp(self.opIndexAt(blockRef, pos: pos))
 	end 'opAt'
 end 'PrimitiveInliner'
@@ -1163,7 +1164,7 @@ end 'everyArmIsDead'
 
 // `openStrideArms`' one-arm answer. A free function so that the `match` arm above it stays the single
 // statement a `match` arm is.
-function singleStrideArm(blockRef BlockRef, stride SingleOpStride) returns StrideArmArray
+function singleStrideArm(blockRef ElementIndex, stride SingleOpStride) returns StrideArmArray
 	var arms = StrideArmArray.create()
 	arms.push(StrideArm.create(blockRef, stride: stride))
 	return arms

@@ -38,7 +38,7 @@ export typealias TestSelection = Array with bool
 // Whether this run selected the test at `index`. Out of range answers FALSE, which is the honest
 // answer and not a swallowed error: the selection is built with one entry per DISCOVERED test, so an
 // index outside it names no test at all.
-export function testIsSelected(selected TestSelection, index TestRunIndex) returns bool
+export function testIsSelected(selected TestSelection, index ElementIndex) returns bool
 	return try selected.get(index) otherwise false
 end 'testIsSelected'
 
@@ -199,7 +199,7 @@ end 'hitTheDeadline'
 // One test as the stream reported it — finished the moment its successor began or the stream ended, and
 // never mutated afterwards.
 type ObservedTest
-	export let index as TestRunIndex
+	export let index as ElementIndex
 
 	// Whether an END marker closed it. FALSE means the process stopped while this test was running.
 	export let ended as bool
@@ -208,7 +208,7 @@ type ObservedTest
 	export let thrown as ThrownReport
 	export let output as String
 
-	static function create(index TestRunIndex, ended bool, passed bool, nanos DurationNanos, thrown ThrownReport, output String) returns ObservedTest
+	static function create(index ElementIndex, ended bool, passed bool, nanos DurationNanos, thrown ThrownReport, output String) returns ObservedTest
 		return Self{index: index, ended: ended, passed: passed, nanos: nanos, thrown: thrown, output: output}
 	end 'create'
 end 'ObservedTest'
@@ -231,7 +231,7 @@ type TestStreamWalk
 	// exactly ONE reader of them (`closeInFlight`) and exactly one writer of the set (`began`), so
 	// they cannot be read in a state nobody set them for.
 	var inFlight as bool
-	var inFlightIndex as TestRunIndex
+	var inFlightIndex as ElementIndex
 	var inFlightEnded as bool
 	var inFlightPassed as bool
 	var inFlightNanos as DurationNanos
@@ -244,7 +244,7 @@ type TestStreamWalk
 
 	// A begin marker. Whatever was already running is closed first — a begin with no matching end is
 	// exactly how a crash names its victim, and dropping the earlier test here would lose that.
-	function began(index TestRunIndex)
+	function began(index ElementIndex)
 		closeInFlight()
 
 		inFlight = true
@@ -259,7 +259,7 @@ type TestStreamWalk
 	// An end marker. One for a test that did not begin — or for the wrong one — is IGNORED: the
 	// dispatcher cannot emit that, so the stream is damaged, and leaving the running test open reports
 	// it as crashed, which is the loud outcome that deserves.
-	function ended(index TestRunIndex, passed bool, nanos DurationNanos)
+	function ended(index ElementIndex, passed bool, nanos DurationNanos)
 		if not inFlight or inFlightIndex != index 'notTheTestThatIsRunning'
 			return
 		end 'notTheTestThatIsRunning'
@@ -334,7 +334,7 @@ union ObservedLookup
 	absent
 end 'ObservedLookup'
 
-function observedAt(observed ObservedTestArray, index TestRunIndex) returns ObservedLookup
+function observedAt(observed ObservedTestArray, index ElementIndex) returns ObservedLookup
 	for candidate in observed 'eachObserved'
 		if candidate.index == index 'thisOne'
 			return ObservedLookup.found(candidate)
@@ -454,7 +454,7 @@ function asLeaked(result UnitTestResult) returns UnitTestResult
 	return UnitTestResult.create(result.index, test: result.test, outcome: UnitTestOutcome.leaked, nanos: result.nanos, thrown: result.thrown, output: result.output)
 end 'asLeaked'
 
-function leakedAlone(plan TestLaunchPlan, index TestRunIndex) returns bool
+function leakedAlone(plan TestLaunchPlan, index ElementIndex) returns bool
 	return match launchTests(plan, indices: soleIndex(index)) 'how'
 		ran(exitCode, _) gives isLeakDetectedExit(exitCode as ExitCode)
 
@@ -472,7 +472,7 @@ end 'leakedAlone'
 // One process launch's worth of work: the run indices it runs, all from ONE file.
 typealias TestShardArray = Array with TestRunIndexArray
 
-module function soleIndex(index TestRunIndex) returns TestRunIndexArray
+module function soleIndex(index ElementIndex) returns TestRunIndexArray
 	var only = TestRunIndexArray.create()
 	only.push(index)
 	return only
@@ -572,7 +572,7 @@ end 'unobservedVerdicts'
 
 // The discovered test one run index names. A scan, and the bound is the reason: a shard is built from
 // ONE group's own members, so this walks that file's tests and not the run's.
-function testOf(group TestFileGroup, index TestRunIndex) returns DiscoveredTest
+function testOf(group TestFileGroup, index ElementIndex) returns DiscoveredTest
 	for member in group.tests 'eachMember'
 		if member.index == index 'thisOne'
 			return member.test

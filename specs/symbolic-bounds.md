@@ -99,9 +99,9 @@ function flips(p WordArray) returns Word
 	var count = 1
 	var first = try p.get(0) otherwise panic("flips: p is not empty")
 
-	while (try p.get(first) otherwise panic("flips: first is an element, so an index into p")) > 0 'flip'
-		let next = try p.get(first) otherwise panic("flips: first < p.count()")
-		try p.set(first, value: first) otherwise panic("flips: first < p.count()")
+	while (try p.get(first as ElementIndex) otherwise panic("flips: first is an element, so an index into p")) > 0 'flip'
+		let next = try p.get(first as ElementIndex) otherwise panic("flips: first < p.count()")
+		try p.set(first as ElementIndex, value: first) otherwise panic("flips: first < p.count()")
 
 		if first > 2 'reverseMiddle'
 			var low = 1
@@ -109,9 +109,9 @@ function flips(p WordArray) returns Word
 
 			while low < high 'swap'
 				let atLow = try p.get(low) otherwise panic("flips: low < high < first < p.count()")
-				let atHigh = try p.get(high) otherwise panic("flips: high < first < p.count()")
+				let atHigh = try p.get(high as ElementIndex) otherwise panic("flips: high < first < p.count()")
 				try p.set(low, value: atHigh) otherwise panic("flips: low is in range")
-				try p.set(high, value: atLow) otherwise panic("flips: high is in range")
+				try p.set(high as ElementIndex, value: atLow) otherwise panic("flips: high is in range")
 				low = low + 1
 				high = high - 1
 			end 'swap'

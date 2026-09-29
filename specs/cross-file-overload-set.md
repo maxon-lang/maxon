@@ -247,7 +247,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3007: <fragment>:18:9: Ambiguous overload for 'f': multiple overloads match. Candidates: (a int), (a int)
+error E3007: <fragment>:18:9: Ambiguous overload for 'f': multiple overloads match. Candidates: (a Integer), (a Count)
 ```
 
 ### The parse-time decider's own boundary
@@ -387,7 +387,7 @@ function main() returns ExitCode
 	var mine = Bag.create()
 	mine.push("x")
 	var theirs = makeBag()
-	return ((try theirs.get(1) otherwise 0) * 10 + mine.count()) as ExitCode
+	return ((try theirs.get(1) otherwise 0) * 10 + (mine.count() as Num)) as ExitCode
 end 'main'
 ```
 ```exitcode

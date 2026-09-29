@@ -143,14 +143,14 @@ function jsonLogLine(record LogRecord, options LogHandlerOptions) returns String
 	for field in record.attrs 'eachField'
 		let shared = sharedLogGroupDepth(open, groups: field.groups)
 
-		while open.count() > shared 'closeEach'
+		while open.count() as LogGroupDepth > shared 'closeEach'
 			_ = try open.pop() otherwise panic("jsonLogLine: open.pop on a path longer than its shared prefix")
 			line.append("\}")
 			objectIsEmpty = false
 		end 'closeEach'
 
-		for depth in shared upto field.groups.count() 'openEach'
-			let group = try field.groups.get(depth) otherwise panic("jsonLogLine: field.groups.get OOB at {depth}")
+		for depth in shared upto field.groups.count() as LogGroupDepth 'openEach'
+			let group = try field.groups.get((depth as ElementIndex)) otherwise panic("jsonLogLine: field.groups.get OOB at {depth}")
 			line.append("{jsonLogSeparator(objectIsEmpty)}{Json.quote(group)}:\{")
 			open.push(group)
 			objectIsEmpty = true

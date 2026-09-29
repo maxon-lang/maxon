@@ -273,7 +273,7 @@ element types are specialized as usual: the difference between the two is the wh
 ```maxon
 typealias Word = int(i64.min to i64.max)
 typealias Byte = int(0 to 255)
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 
 type Bag uses Element
 	typealias Items = Array with Element

@@ -351,7 +351,7 @@ export type FileParseArtifact
 	// `debugStreamNameSites` is. See `Project.immortalConstArraySites`.
 	export var immortalConstArraySites as ImmortalConstArraySiteMap
 
-	// (funcIndex, ValueId) -> Maxon OpIndex for every value an op DEFINES in this file
+	// (funcIndex, ValueId) -> the Maxon op index of every value an op DEFINES in this file
 	// (see ValueOrigin). Recorded inside the emit choke points below in the same
 	// op/value lockstep `opRanges` uses, and folded into `project.valueOrigins` by
 	// `mergeArtifact` with the merge's function + op offsets. What lets the backend's
@@ -427,6 +427,8 @@ export type FileParseArtifact
 	// `typealias Box` came SECOND is nowhere in them, and a collision must blame the later one.
 	export var typeNameDecls as TypeNameDeclArray
 
+	export var genericInstanceRequests as GenericFunctionInstanceArray = GenericFunctionInstanceArray.create()
+
 	// Every type NAME this file wrote in a TYPE POSITION — the set `Parser.recordTypeNameUse` builds for
 	// E3062, kept past the parse because `checkUnusedExports` asks the same question one scope wider:
 	// E3062 asks "did this FILE use its own alias?" and E3092 asks "did any OTHER file use this one?".
@@ -479,7 +481,7 @@ export type FileParseArtifact
 	// index it landed at, and `parseClosureExpression` saves/sets/restores it around the lifted body — so
 	// every value is filed under the index its function actually occupies. Zero for the tolerant
 	// declaration sweep, which parses no bodies and records no origins.
-	export var currentFuncIndex as FuncIndex
+	export var currentFuncIndex as ElementIndex
 
 	// ⭐ DIAGNOSTICS THE PARSER RAISES WITHOUT UNWINDING (P1.6-A). The parser reports a malformed
 	// construct by THROWING a `ParseError` (which aborts the file's parse), but a WHOLE-PROGRAM
@@ -613,21 +615,21 @@ export type FileParseArtifact
 	export function emitOp(block IrBlock, op MaxonOp, range SourceRange)
 		let opIndex = self.module.opCount()
 		self.module.appendOp(block, op: artifactOwnedOp(op))
-		self.opRanges.record(opIndex as OpIndex, range: range)
-		self.recordValueOrigin(op, opIndex: opIndex as OpIndex)
+		self.opRanges.record(opIndex, range: range)
+		self.recordValueOrigin(op, opIndex: opIndex)
 	end 'emitOp'
 
 	// Record an `async <call>` spawn's SOURCE TEXT against the op `emitOp` is about to append. The caller reads
 	// `self.module.opCount()` through this rather than being handed an index, so the text lands on the same op
 	// the very next `emitOp` creates and the two cannot be wired to different ops by a later edit.
 	export function recordAsyncSpawnSite(site AsyncSpawnSite)
-		self.asyncSpawnSites.upsert(self.module.opCount() as OpIndex, value: site)
+		self.asyncSpawnSites.upsert(self.module.opCount(), value: site)
 	end 'recordAsyncSpawnSite'
 
 	// The SV2 twin, on the same read-it-through-here contract and for its reason: the site lands on the op
 	// the parser is ABOUT to append, so the key is the current count.
 	export function recordServiceAwaitSite(site ServiceAwaitSite)
-		self.serviceAwaitSites.upsert(self.module.opCount() as OpIndex, value: site.clone())
+		self.serviceAwaitSites.upsert(self.module.opCount(), value: site.clone())
 	end 'recordServiceAwaitSite'
 
 	// The E3143 twin, on the same read-it-through-here contract. ⚠ Here the key is the op the assignment
@@ -635,12 +637,12 @@ export type FileParseArtifact
 	// is all its one reader needs: it asks which FUNCTION the write sits in, and every op the statement emits
 	// belongs to that one.
 	export function recordModuleVarAccessSite(site ModuleVarAccessSite)
-		self.moduleVarAccessSites.upsert(self.module.opCount() as OpIndex, value: site.clone())
+		self.moduleVarAccessSites.upsert(self.module.opCount(), value: site.clone())
 	end 'recordModuleVarAccessSite'
 
 	export function recordRegistryUseSite(site RegistryUseSite)
 		var byOp = self.registryUseSitesForWrite()
-		byOp.upsert(self.module.opCount() as OpIndex, value: site)
+		byOp.upsert(self.module.opCount(), value: site)
 	end 'recordRegistryUseSite'
 
 	function registryUseSitesForWrite() returns RegistryUseSiteMap
@@ -658,20 +660,20 @@ export type FileParseArtifact
 	// read-it-through-here contract `recordAsyncSpawnSite` states, and for its reason: the tag lands on the
 	// op the very next append creates, so the two cannot be wired to different ops by a later edit.
 	export function recordAllocTagSite(tag MmTag)
-		self.allocTagSites.upsert(self.module.opCount() as OpIndex, value: tag)
+		self.allocTagSites.upsert(self.module.opCount(), value: tag)
 	end 'recordAllocTagSite'
 
 	// Record the compile-time NAME the `__ds_name_id` marker `emitOp` is about to append interns — the same
 	// read-it-through-here contract its two neighbours state, and for their reason.
 	export function recordDebugStreamNameSite(name ByteArray)
-		self.debugStreamNameSites.upsert(self.module.opCount() as OpIndex, value: name.clone())
+		self.debugStreamNameSites.upsert(self.module.opCount(), value: name.clone())
 	end 'recordDebugStreamNameSite'
 
 	// Record that the `constArrayLiteral` `emitOp` is about to append materializes an IMMORTAL `.rdata`
 	// record of `kind` — the same read-it-through-here contract its two neighbours state, and for their
 	// reason.
 	export function recordImmortalConstArraySite(kind ImmortalRecordKind)
-		self.immortalConstArraySites.upsert(self.module.opCount() as OpIndex, value: kind)
+		self.immortalConstArraySites.upsert(self.module.opCount(), value: kind)
 	end 'recordImmortalConstArraySite'
 
 	// THE emit choke point for a Maxon block terminator. Same op/span lockstep as
@@ -704,8 +706,8 @@ export type FileParseArtifact
 
 		let opIndex = self.module.opCount()
 		self.module.setTerminator(block, op: artifactOwnedOp(op))
-		self.opRanges.record(opIndex as OpIndex, range: range)
-		self.recordValueOrigin(op, opIndex: opIndex as OpIndex)
+		self.opRanges.record(opIndex, range: range)
+		self.recordValueOrigin(op, opIndex: opIndex)
 	end 'emitTerminator'
 
 	// Record the origin of the value `op` defines (if any) as this file's contribution
@@ -716,7 +718,7 @@ export type FileParseArtifact
 	// parsed in the middle of its enclosing function's body does not make `funcCount()` name
 	// the wrong function. A `none`-result op (`ret`/`retVoid`/`condBranch`/`branch`) defines no
 	// value and records nothing.
-	function recordValueOrigin(op MaxonOp, opIndex OpIndex)
+	function recordValueOrigin(op MaxonOp, opIndex ElementIndex)
 		match maxonOpResultValue(op) 'result'
 			none then break 'result'
 			value(id) then self.valueOrigins.record(self.currentFuncIndex, valueId: id, opIndex: opIndex)
@@ -731,7 +733,7 @@ export type FileParseArtifact
 		self.valueOrigins.recordParam(self.currentFuncIndex, valueId: valueId, range: range)
 	end 'recordParamOrigin'
 
-	export function recordDeferralSource(valueId ValueId, sourceFuncIndex FuncIndex, sourceId ValueId, chainCalls DeferredChainCalls)
+	export function recordDeferralSource(valueId ValueId, sourceFuncIndex ElementIndex, sourceId ValueId, chainCalls DeferredChainCalls)
 		self.deferralSources.record(self.currentFuncIndex, valueId: valueId, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId, chainCalls: chainCalls)
 	end 'recordDeferralSource'
 
@@ -739,7 +741,7 @@ export type FileParseArtifact
 	// `recordValueOrigin`/`recordParamOrigin` file every origin under. `parseFunction` calls this with the
 	// index the function was just pushed at; `parseClosureExpression` saves the current value, sets the
 	// lifted closure's index for the body, and restores it afterwards.
-	export function setCurrentFuncIndex(index FuncIndex)
+	export function setCurrentFuncIndex(index ElementIndex)
 		self.currentFuncIndex = index
 	end 'setCurrentFuncIndex'
 
@@ -858,6 +860,16 @@ export type FileParseArtifact
 	// Copy-on-write off the shared empty on the first push, exactly as `recordInterface` — and here it
 	// buys more, because the two `Parser` sites that are not the real parse never reach this function at
 	// all (see `sharedEmptyTypeNameDecls`).
+	export function recordGenericInstanceRequest(instance GenericFunctionInstance)
+		for requested in self.genericInstanceRequests 'eachRequested'
+			if requested.instanceName.equals(instance.instanceName) 'requestedAlready'
+				return
+			end 'requestedAlready'
+		end 'eachRequested'
+
+		self.genericInstanceRequests.push(instance)
+	end 'recordGenericInstanceRequest'
+
 	export function recordTypeNameDecl(decl TypeNameDecl)
 		if self.typeNameDecls.count() == 0 'firstTypeNameDecl'
 			self.typeNameDecls = TypeNameDeclArray.create()
@@ -1032,16 +1044,16 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	// round's module and carries the previous round's payload with it. Asked ONCE per round, at the first file, which is O(1) and is
 	// where the answer is knowable: a round begins with every one of them emptied or with none of them.
 	if opOffset == 0 'theFirstFileOfARound'
-		requireOpKeyedTableIsEmpty("moduleVarAccessSites", held: project.moduleVarAccessSites.count() as OpCount)
-		requireOpKeyedTableIsEmpty("registryUseSites", held: project.registryUseSites.count() as OpCount)
-		requireOpKeyedTableIsEmpty("serviceAwaitSites", held: project.serviceAwaitSites.count() as OpCount)
-		requireOpKeyedTableIsEmpty("asyncSpawnSites", held: project.asyncSpawnSites.count() as OpCount)
-		requireOpKeyedTableIsEmpty("allocTagSites", held: project.allocTagSites.count() as OpCount)
-		requireOpKeyedTableIsEmpty("debugStreamNameSites", held: project.debugStreamNameSites.count() as OpCount)
-		requireOpKeyedTableIsEmpty("immortalConstArraySites", held: project.immortalConstArraySites.count() as OpCount)
+		requireOpKeyedTableIsEmpty("moduleVarAccessSites", held: project.moduleVarAccessSites.count())
+		requireOpKeyedTableIsEmpty("registryUseSites", held: project.registryUseSites.count())
+		requireOpKeyedTableIsEmpty("serviceAwaitSites", held: project.serviceAwaitSites.count())
+		requireOpKeyedTableIsEmpty("asyncSpawnSites", held: project.asyncSpawnSites.count())
+		requireOpKeyedTableIsEmpty("allocTagSites", held: project.allocTagSites.count())
+		requireOpKeyedTableIsEmpty("debugStreamNameSites", held: project.debugStreamNameSites.count())
+		requireOpKeyedTableIsEmpty("immortalConstArraySites", held: project.immortalConstArraySites.count())
 		requireOpKeyedTableIsEmpty("valueOrigins", held: project.valueOrigins.count())
-		requireOpKeyedTableIsEmpty("deferralSources", held: project.deferralSources.count() as OpCount)
-		requireOpKeyedTableIsEmpty("refusedOverloadCalls", held: project.refusedOverloadCalls.count() as OpCount)
+		requireOpKeyedTableIsEmpty("deferralSources", held: project.deferralSources.count())
+		requireOpKeyedTableIsEmpty("refusedOverloadCalls", held: project.refusedOverloadCalls.count())
 	end 'theFirstFileOfARound'
 
 	// The function offset for the ValueOrigin fold: `IrModule.merge` appends the
@@ -1056,8 +1068,8 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	commitAllocTagSites(project, artifact: artifact, opOffset: opOffset)
 	commitDebugStreamNameSites(project, artifact: artifact, opOffset: opOffset)
 	commitImmortalConstArraySites(project, artifact: artifact, opOffset: opOffset)
-	project.valueOrigins.appendFrom(artifact.valueOrigins, funcOffset: funcOffset as FuncIndex, opOffset: opOffset)
-	project.deferralSources.appendFrom(artifact.deferralSources, funcOffset: funcOffset as FuncIndex)
+	project.valueOrigins.appendFrom(artifact.valueOrigins, funcOffset: funcOffset, opOffset: opOffset)
+	project.deferralSources.appendFrom(artifact.deferralSources, funcOffset: funcOffset)
 	commitFuncReturnTypes(project, artifact: artifact)
 	commitFuncSignatures(project, artifact: artifact)
 	commitOverloadSets(project, artifact: artifact)
@@ -1080,7 +1092,7 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	commitInferredInstantiationSites(project, artifact: artifact)
 	commitDiagnostics(project, artifact: artifact)
 	commitDeferredNameDiagnostics(project, artifact: artifact)
-	commitDeferredParseErrors(project, artifact: artifact, funcOffset: funcOffset as FuncIndex)
+	commitDeferredParseErrors(project, artifact: artifact, funcOffset: funcOffset)
 	commitWrittenGenericAliasNames(project, artifact: artifact, signatures: signatures)
 end 'mergeArtifact'
 
@@ -1118,7 +1130,7 @@ function commitDeferredNameDiagnostics(project Project, artifact FileParseArtifa
 	end 'hidden'
 end 'commitDeferredNameDiagnostics'
 
-function commitDeferredParseErrors(project Project, artifact FileParseArtifact, funcOffset FuncIndex)
+function commitDeferredParseErrors(project Project, artifact FileParseArtifact, funcOffset ElementIndex)
 	var target = project.deferredParseErrors
 
 	for deferred in artifact.deferredParseErrors 'each'
@@ -2015,7 +2027,7 @@ end 'commitPendingFunctionTypeDoors'
 
 // The one sentence the op-keyed tables share, written once so another cannot be added with a
 // differently-worded net that says less. `held` is the table's own count at the first file of a round.
-function requireOpKeyedTableIsEmpty(name String, held OpCount)
+function requireOpKeyedTableIsEmpty(name String, held ElementIndex)
 	if held != 0 'carriedOver'
 		panic("mergeArtifact: `project.{name}` still holds {held} entries at the first file of a fold round — it is keyed by an OP INDEX into the module being rebuilt, and this round's module starts empty, so every one of those keys now names a different op. Add it to `Queries.resetMergeTargets` beside the other op-keyed tables")
 	end 'carriedOver'
@@ -2026,7 +2038,7 @@ end 'requireOpKeyedTableIsEmpty'
 // — onto the whole-program tables, RE-KEYED by the merge's op offset. That is the same relocation
 // `opRanges` gets by appending in order, spelled out here because a map cannot express it by
 // position; without the offset every file after the first would name the wrong op.
-function commitParserDiagnosticSites(project Project, artifact FileParseArtifact, opOffset OpIndex)
+function commitParserDiagnosticSites(project Project, artifact FileParseArtifact, opOffset ElementIndex)
 	for (opIndex, awaitSite) in artifact.serviceAwaitSites 'eachServiceAwait'
 		project.serviceAwaitSites.upsert(opIndex + opOffset, value: awaitSite)
 	end 'eachServiceAwait'
@@ -2045,7 +2057,7 @@ function commitParserDiagnosticSites(project Project, artifact FileParseArtifact
 	end 'each'
 end 'commitParserDiagnosticSites'
 
-function commitRegistryUseSites(project Project, byOp RegistryUseSiteMap, opOffset OpIndex)
+function commitRegistryUseSites(project Project, byOp RegistryUseSiteMap, opOffset ElementIndex)
 	for (opIndex, registryUse) in byOp 'eachRegistryUse'
 		project.registryUseSites.upsert(opIndex + opOffset, value: registryUse)
 	end 'eachRegistryUse'
@@ -2054,7 +2066,7 @@ end 'commitRegistryUseSites'
 // Fold this file's mm-trace alloc tags onto the whole-program table, RE-KEYED by the merge's op offset —
 // `commitParserDiagnosticSites`' twin, for its stated reason: without the offset every file after the first would
 // tag the wrong allocation.
-function commitAllocTagSites(project Project, artifact FileParseArtifact, opOffset OpIndex)
+function commitAllocTagSites(project Project, artifact FileParseArtifact, opOffset ElementIndex)
 	for (opIndex, tag) in artifact.allocTagSites 'each'
 		project.allocTagSites.upsert(opIndex + opOffset, value: tag)
 	end 'each'
@@ -2066,7 +2078,7 @@ end 'commitAllocTagSites'
 // ⚠ It does NOT intern anything. The order names take their INDICES in must be the LOWERING's, which walks
 // the merged module once; interning here would give them the merge's file order instead, and the two are the
 // same only while every file is merged before any is lowered — a property of today's pipeline, not a rule.
-function commitDebugStreamNameSites(project Project, artifact FileParseArtifact, opOffset OpIndex)
+function commitDebugStreamNameSites(project Project, artifact FileParseArtifact, opOffset ElementIndex)
 	for (opIndex, name) in artifact.debugStreamNameSites 'each'
 		project.debugStreamNameSites.upsert(opIndex + opOffset, value: name)
 	end 'each'
@@ -2074,7 +2086,7 @@ end 'commitDebugStreamNameSites'
 
 // Fold this file's immortal-record `constArrayLiteral` sites onto the whole-program table, RE-KEYED by the
 // merge's op offset — `commitDebugStreamNameSites`' twin, for its stated reason.
-function commitImmortalConstArraySites(project Project, artifact FileParseArtifact, opOffset OpIndex)
+function commitImmortalConstArraySites(project Project, artifact FileParseArtifact, opOffset ElementIndex)
 	for (opIndex, kind) in artifact.immortalConstArraySites 'each'
 		project.immortalConstArraySites.upsert(opIndex + opOffset, value: kind)
 	end 'each'

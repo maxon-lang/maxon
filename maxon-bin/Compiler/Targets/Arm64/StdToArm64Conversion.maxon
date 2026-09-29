@@ -506,7 +506,7 @@ export type StdToArm64Lowering
 	// Per-function lowering
 	// ==========================================================================
 
-	function lowerFunction(funcIdx FuncIndex)
+	function lowerFunction(funcIdx ElementIndex)
 		// Every read of the source function happens HERE, before the walk, so the walk holds no borrow of it
 		// while `applyOutgoingArgSize` writes to the TARGET function of the same index (E3019).
 		self.prepareFunctionTables(funcIdx)
@@ -518,7 +518,7 @@ export type StdToArm64Lowering
 	// function: the borrow ends with this call, which is `lowerFunction`'s stated reason for reading
 	// everything up front. Both must precede the walk because a compare is lowered long before the branch
 	// or the phi edge that decides what it has to produce.
-	function prepareFunctionTables(funcIdx FuncIndex)
+	function prepareFunctionTables(funcIdx ElementIndex)
 		let srcFunc = self.stdModule.getFunc(funcIdx)
 		self.scaledIndexFolds.computeForFunction(self.stdModule, func: srcFunc, memoryForm: IndexedMemoryForm.accessWidthScaleAtZeroOffset)
 		self.compareFusion.computeForFunction(self.stdModule, func: srcFunc)
@@ -529,7 +529,7 @@ export type StdToArm64Lowering
 	// running MAX, not a sum, because the region is REUSED by every call site. Only compiler-to-compiler calls
 	// contribute on arm64: its OS primitives (`write`, `mmap`, `exit`) are all ≤6-argument, register-only,
 	// which is why there is no `stdOpOutgoingArgBytes` table here to mirror x64's.
-	function lowerFunctionBlocks(funcIdx FuncIndex) returns StackSize
+	function lowerFunctionBlocks(funcIdx ElementIndex) returns StackSize
 		let srcFunc = self.stdModule.getFunc(funcIdx)
 		let returnType = srcFunc.returnType
 
@@ -559,7 +559,7 @@ export type StdToArm64Lowering
 	// Record the function's outgoing stack-argument reservation on the TARGET function — the arm64 twin of
 	// x64's `applyOutgoingArgSize`, in a scope holding no `srcFunc` borrow of the same object. Skips the
 	// assignment when zero, so a function whose calls all fit the register files is untouched.
-	function applyOutgoingArgSize(funcIdx FuncIndex, bytes StackSize)
+	function applyOutgoingArgSize(funcIdx ElementIndex, bytes StackSize)
 		if bytes == 0 'none'
 			return
 		end 'none'
@@ -572,7 +572,7 @@ export type StdToArm64Lowering
 	// outgoing stack-argument region any of its calls needs. The terminator's phi edges were copied onto
 	// that block by `prepareSkeleton` and stay there — nothing splits the block, so there is no
 	// continuation to move them to.
-	function lowerOneBlock(blockRef BlockRef, returnType StdReturnType, paramFloatMask ArgFloatMask) returns StackSize
+	function lowerOneBlock(blockRef ElementIndex, returnType StdReturnType, paramFloatMask ArgFloatMask) returns StackSize
 		let opCount = self.stdBlockOpCount(blockRef)
 		var outgoingArgBytes = 0 as StackSize
 
@@ -721,11 +721,11 @@ export type StdToArm64Lowering
 				osPathQuery or
 				osNetpoll or
 				osSocketOverlapped gives 0
-			call(_, callee, args) gives self.callOutgoingArgBytes(calleeArgFloatMask(self.abi, callee: callee, argCount: args.count(), registerCapacity: arm64RegisterArgCapacity()), argCount: args.count())
-			tryCall(_, _, callee, args) gives self.callOutgoingArgBytes(calleeArgFloatMask(self.abi, callee: callee, argCount: args.count(), registerCapacity: arm64RegisterArgCapacity()), argCount: args.count())
-			callIndirect(_, _, _, argFloatMask, args) gives self.callOutgoingArgBytes(argFloatMask, argCount: args.count())
-			witnessCall(_, _, _, _, argFloatMask, args) gives self.callOutgoingArgBytes(argFloatMask, argCount: args.count())
-			witnessTryCall(_, _, _, _, _, argFloatMask, args) gives self.callOutgoingArgBytes(argFloatMask, argCount: args.count())
+			call(_, callee, args) gives self.callOutgoingArgBytes(calleeArgFloatMask(self.abi, callee: callee, argCount: args.count() as ParamCount, registerCapacity: arm64RegisterArgCapacity()), argCount: args.count() as ParamCount)
+			tryCall(_, _, callee, args) gives self.callOutgoingArgBytes(calleeArgFloatMask(self.abi, callee: callee, argCount: args.count() as ParamCount, registerCapacity: arm64RegisterArgCapacity()), argCount: args.count() as ParamCount)
+			callIndirect(_, _, _, argFloatMask, args) gives self.callOutgoingArgBytes(argFloatMask, argCount: args.count() as ParamCount)
+			witnessCall(_, _, _, _, argFloatMask, args) gives self.callOutgoingArgBytes(argFloatMask, argCount: args.count() as ParamCount)
+			witnessTryCall(_, _, _, _, _, argFloatMask, args) gives self.callOutgoingArgBytes(argFloatMask, argCount: args.count() as ParamCount)
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -738,53 +738,53 @@ export type StdToArm64Lowering
 
 	// Scoped reads of a Std block: each returns a scalar or a COPIED op, never a borrowed block, so the
 	// walk never holds a `stdModule.blocks` borrow across an `emit` into `targetModule` (E3019).
-	function stdBlockOpCount(blockRef BlockRef) returns BlockOpPos
+	function stdBlockOpCount(blockRef ElementIndex) returns ElementIndex
 		let block = try self.stdModule.blocks.get(blockRef) otherwise panic("stdBlockOpCount: blockRef {blockRef} not in stdModule.blocks")
 		return block.opRefs.count()
 	end 'stdBlockOpCount'
 
 	// The flat `stdModule.ops` index a block names at `index` — the coordinate a span is keyed by, which
 	// `stdBlockOpAt` resolves away. Read through a function for that helper's borrow reason.
-	function stdBlockOpIndexAt(blockRef BlockRef, index BlockOpPos) returns OpIndex
+	function stdBlockOpIndexAt(blockRef ElementIndex, index ElementIndex) returns ElementIndex
 		let block = try self.stdModule.blocks.get(blockRef) otherwise panic("stdBlockOpIndexAt: blockRef {blockRef} not in stdModule.blocks")
 		return try block.opRefs.get(index) otherwise panic("stdBlockOpIndexAt: opRefs.get OOB at {index}")
 	end 'stdBlockOpIndexAt'
 
 	// The flat `stdModule.ops` index of a block's terminator, for the same reason.
-	function stdBlockTerminatorIndex(blockRef BlockRef) returns OpIndex
+	function stdBlockTerminatorIndex(blockRef ElementIndex) returns ElementIndex
 		let block = try self.stdModule.blocks.get(blockRef) otherwise panic("stdBlockTerminatorIndex: blockRef {blockRef} not in stdModule.blocks")
 		return block.terminatorIndex()
 	end 'stdBlockTerminatorIndex'
 
-	function stdBlockOpAt(blockRef BlockRef, index BlockOpPos) returns StdOp
+	function stdBlockOpAt(blockRef ElementIndex, index ElementIndex) returns StdOp
 		let block = try self.stdModule.blocks.get(blockRef) otherwise panic("stdBlockOpAt: blockRef {blockRef} not in stdModule.blocks")
 		let opIdx = try block.opRefs.get(index) otherwise panic("stdBlockOpAt: opRefs.get OOB at {index}")
 		return try self.stdModule.ops.get(opIdx) otherwise panic("stdBlockOpAt: opIdx {opIdx} not in stdModule.ops")
 	end 'stdBlockOpAt'
 
-	function stdBlockHasTerminator(blockRef BlockRef) returns bool
+	function stdBlockHasTerminator(blockRef ElementIndex) returns bool
 		let block = try self.stdModule.blocks.get(blockRef) otherwise panic("stdBlockHasTerminator: blockRef {blockRef} not in stdModule.blocks")
 		return block.hasTerminatorOp()
 	end 'stdBlockHasTerminator'
 
-	function stdBlockTerminator(blockRef BlockRef) returns StdOp
+	function stdBlockTerminator(blockRef ElementIndex) returns StdOp
 		let block = try self.stdModule.blocks.get(blockRef) otherwise panic("stdBlockTerminator: blockRef {blockRef} not in stdModule.blocks")
 		return try self.stdModule.ops.get(block.terminatorIndex()) otherwise panic("stdBlockTerminator: terminatorIndex not in stdModule.ops")
 	end 'stdBlockTerminator'
 
 	// Append `op` to the Target block named by `dstRef`, in a scope that holds the block borrow only for
 	// the append.
-	function emit(dstRef BlockRef, op TargetOp)
+	function emit(dstRef ElementIndex, op TargetOp)
 		var block = try self.targetModule.blocks.get(dstRef) otherwise panic("emit: dstRef {dstRef} not in targetModule.blocks")
 		self.targetModule.appendOp(block, op: op)
 	end 'emit'
 
-	function emitCondBranch(dstRef BlockRef, op TargetOp)
+	function emitCondBranch(dstRef ElementIndex, op TargetOp)
 		var block = try self.targetModule.blocks.get(dstRef) otherwise panic("emitCondBranch: dstRef {dstRef} not in targetModule.blocks")
 		self.targetModule.appendCondBranch(block, op: op)
 	end 'emitCondBranch'
 
-	function emitTerminator(dstRef BlockRef, op TargetOp)
+	function emitTerminator(dstRef ElementIndex, op TargetOp)
 		var block = try self.targetModule.blocks.get(dstRef) otherwise panic("emitTerminator: dstRef {dstRef} not in targetModule.blocks")
 		self.targetModule.setTerminator(block, op: op)
 	end 'emitTerminator'
@@ -797,7 +797,7 @@ export type StdToArm64Lowering
 	// (`emitArm64GtGatedImportCall`) and a raw `svc` alike; `__con_read_stdin`, the read this exists
 	// for, takes the first. Which ops take it is `opTakesSyscallBracket`, in the shared lowering; only
 	// the `bl` that spells the two announcements is this ISA's.
-	function lowerBodyOp(op StdOp, dstRef BlockRef, returnType StdReturnType, paramFloatMask ArgFloatMask)
+	function lowerBodyOp(op StdOp, dstRef ElementIndex, returnType StdReturnType, paramFloatMask ArgFloatMask)
 		let bracketed = opTakesSyscallBracket(op, target: self.target, usesGt: self.usesGt)
 
 		if bracketed 'announceTheCall'
@@ -945,6 +945,7 @@ export type StdToArm64Lowering
 
 			osFileOpenRead(resultId, pathPtrId) then self.lowerOsFileOpen(resultId, pathPtrId: pathPtrId, darwinFlags: PosixOpenReadOnly, linuxFlags: PosixOpenReadOnly, mode: PosixNoFileMode as MachineWord, dstRef: dstRef)
 			osFileClose(handleId) then self.lowerOsFileClose(handleId, dstRef: dstRef)
+
 			// A socket is a DESCRIPTOR on both lanes, so this is `lowerOsFileClose` one family over and reaches
 			// the same primitive — `closesocket` exists only because a Win32 `SOCKET` is not a file `HANDLE`.
 			osSocketClose(handleId) then self.lowerOsFileClose(handleId, dstRef: dstRef)
@@ -1123,7 +1124,7 @@ export type StdToArm64Lowering
 		end 'readTheVerdict'
 	end 'lowerBodyOp'
 
-	function lowerTerminatorOp(op StdOp, dstRef BlockRef, returnType StdReturnType)
+	function lowerTerminatorOp(op StdOp, dstRef ElementIndex, returnType StdReturnType)
 		match op 'lower'
 			ret(retValId) then self.lowerReturn(retValId, dstRef: dstRef, returnType: returnType, asTerminator: true)
 			retVoid then self.lowerVoidReturn(dstRef, returnType: returnType, asTerminator: true)
@@ -1265,19 +1266,19 @@ export type StdToArm64Lowering
 	// `lowerFloatConst` requests its float island); the op carries the blob's label — a placeholder until
 	// the driver registers the blob and patches it (`RdataRequests`) — which the ADRP+ADD pair addresses and
 	// the writer patches. RE-MATCHES `op` in a SMALL match, the same discipline x64 uses.
-	function lowerSwitch(op StdOp, dstRef BlockRef)
+	function lowerSwitch(op StdOp, dstRef ElementIndex)
 		match op 'sw'
 			switch(subjectId, denseTargetBlockIds, defaultBlockId) then self.emitJumpTable(subjectId, caseTargets: denseTargetBlockIds, defaultTarget: defaultBlockId, dstRef: dstRef)
 			default panic("lowerSwitch: expected a `switch` op, got a different StdOp variant — `lowerTerminatorOp` routes only `switch` here")
 		end 'sw'
 	end 'lowerSwitch'
 
-	function emitJumpTable(subjectId ValueId, caseTargets BlockIdArray, defaultTarget BlockId, dstRef BlockRef)
+	function emitJumpTable(subjectId ValueId, caseTargets BlockIdArray, defaultTarget BlockId, dstRef ElementIndex)
 		self.emitTerminator(dstRef, op: TargetOp.arm64JumpTable(TargetVReg.virtual(subjectId), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: self.rdata.jumpTable(caseTargets.count())))
 	end 'emitJumpTable'
 
 	// Materialize a constant. The `movz`/`movk` ladder is the encoder's; the isel emits one op.
-	function lowerConst(resultId ValueId, value ParsedInt, valueType StdType, dstRef BlockRef)
+	function lowerConst(resultId ValueId, value ParsedInt, valueType StdType, dstRef ElementIndex)
 		if stdTypeIsFloat(valueType) 'float'
 			self.lowerFloatConst(resultId, value: value, valueType: valueType, dstRef: dstRef)
 			return
@@ -1293,14 +1294,14 @@ export type StdToArm64Lowering
 	// The island's NAME and its eight bytes are both the shared table's
 	// (`GlobalDataTable.registerFloatConstant`, requested through the log as x64 does): the width and the
 	// serializer are the same fact x64 needs. What is genuinely arm64's stays — the type check and the load op.
-	function lowerFloatConst(resultId ValueId, value ParsedInt, valueType StdType, dstRef BlockRef)
+	function lowerFloatConst(resultId ValueId, value ParsedInt, valueType StdType, dstRef ElementIndex)
 		arm64RequireScalarDouble(valueType, what: "lowerFloatConst")
 		self.emit(dstRef, op: TargetOp.arm64FpLoadRdata(TargetVReg.virtual(resultId), label: self.rdata.floatConstant(value)))
 	end 'lowerFloatConst'
 
 	// Lower an integer binary op to its 3-address arm64 instruction. arm64 has no two-address form, so
 	// `dest`/`lhs`/`rhs` are independent and no seed copy is ever needed — cleaner than x64.
-	function lowerBinOp(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, operandType StdType, dstRef BlockRef)
+	function lowerBinOp(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, operandType StdType, dstRef ElementIndex)
 		if stdTypeIsFloat(operandType) 'float'
 			self.lowerFloatBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, operandType: operandType, dstRef: dstRef)
 			return
@@ -1349,7 +1350,7 @@ export type StdToArm64Lowering
 	// scaling instruction and the `add` it fed. It is pressure-neutral even in that case — `index` was
 	// live to the scaling op and its RESULT live from there to the `add`; now `index` is live to the
 	// `add` and there is no intermediate at all.
-	function lowerScaledIndexAddress(resultId ValueId, dstRef BlockRef)
+	function lowerScaledIndexAddress(resultId ValueId, dstRef ElementIndex)
 		if self.scaledIndexFolds.fusesIntoMemoryOp(resultId) 'carriedByTheAccess'
 			return
 		end 'carriedByTheAccess'
@@ -1359,7 +1360,7 @@ export type StdToArm64Lowering
 
 	// Lower a FLOAT binary op to its scalar-double NEON instruction. All four are genuine 3-address ops
 	// (arm64 FP has a real 3-operand form), so plain defs, no copy. Order matters for `fsub`/`fdiv`.
-	function lowerFloatBinOp(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, operandType StdType, dstRef BlockRef)
+	function lowerFloatBinOp(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, operandType StdType, dstRef ElementIndex)
 		arm64RequireScalarDouble(operandType, what: "lowerFloatBinOp")
 		let dest = TargetVReg.virtual(resultId)
 		let lhsReg = TargetVReg.virtual(lhs)
@@ -1406,7 +1407,7 @@ export type StdToArm64Lowering
 	//
 	// The two ops are emitted BACK TO BACK because `fcsel` reads the flags `fcmp` set — the same
 	// adjacency `lowerCmp`'s `fcmp` + `cset` already relies on.
-	function lowerFloatMinMax(dest TargetVReg, lhsReg TargetVReg, rhsReg TargetVReg, kind FloatMinMaxKind, dstRef BlockRef)
+	function lowerFloatMinMax(dest TargetVReg, lhsReg TargetVReg, rhsReg TargetVReg, kind FloatMinMaxKind, dstRef ElementIndex)
 		let cond = arm64FloatCondForPred(floatMinMaxSelectPred(kind))
 
 		self.emit(dstRef, op: TargetOp.arm64Fcmp(lhsReg, rhs: rhsReg))
@@ -1415,7 +1416,7 @@ export type StdToArm64Lowering
 
 	// Variable-count shift: arm64's `lslv`/`asrv`/`lsrv` take the count in an ordinary GPR (no fixed CL
 	// like x64), so the count stays a virtual and no register is pinned — 3-address, plain def.
-	function lowerShiftReg(dest TargetVReg, lhsReg TargetVReg, rhsReg TargetVReg, instr Arm64ShiftInstr, dstRef BlockRef)
+	function lowerShiftReg(dest TargetVReg, lhsReg TargetVReg, rhsReg TargetVReg, instr Arm64ShiftInstr, dstRef ElementIndex)
 		match instr 'i'
 			lsl then self.emit(dstRef, op: TargetOp.arm64Lslv(dest, lhs: lhsReg, rhs: rhsReg))
 			asr then self.emit(dstRef, op: TargetOp.arm64Asrv(dest, lhs: lhsReg, rhs: rhsReg))
@@ -1425,7 +1426,7 @@ export type StdToArm64Lowering
 
 	// Constant-count shift (the imm8 twin). The cast is CHECKED: `constFitsBinOpImmediate` promised
 	// 0..63 for a shift, and this is where that promise is collected.
-	function lowerShiftImm(dest TargetVReg, src TargetVReg, imm Imm32, instr Arm64ShiftInstr, dstRef BlockRef)
+	function lowerShiftImm(dest TargetVReg, src TargetVReg, imm Imm32, instr Arm64ShiftInstr, dstRef ElementIndex)
 		let count = imm as ShiftCount
 
 		match instr 'i'
@@ -1442,7 +1443,7 @@ export type StdToArm64Lowering
 	//   • `logicalNot` — `eor dest, src, #1`: a bool is 0/1, so flipping bit 0 negates it.
 	// The two conversions cross files: `siToFp` → `scvtf` (int → f64), `fpToSi` → `fcvtzs` (f64 → int,
 	// TRUNCATING toward zero — the `z`, which is why it is right for `trunc()`).
-	function lowerUnaryOp(resultId ValueId, operand ValueId, opcode StdUnaryOpcode, operandType StdType, dstRef BlockRef)
+	function lowerUnaryOp(resultId ValueId, operand ValueId, opcode StdUnaryOpcode, operandType StdType, dstRef ElementIndex)
 		if stdTypeIsFloat(operandType) != stdUnaryOperandIsFloat(opcode) 'domain'
 			panic("lowerUnaryOp: no arm64 form of {opcode.name} over Std type {operandType.name} — an opcode's operand DOMAIN is part of the opcode (`stdUnaryOperandIsFloat`); an f64 negate in particular is `fneg` (a sign-bit flip, the `fneg` instruction), never the integer `neg`")
 		end 'domain'
@@ -1495,7 +1496,7 @@ export type StdToArm64Lowering
 	// ASK their encoder's own predicate before selecting the `#imm` form, `mul` never has one to select,
 	// and all three fall back the same way: materialise the constant into the IP scratch, use the
 	// register form.
-	function lowerBinOpImm(resultId ValueId, lhs ValueId, imm Imm32, opcode StdBinOpcode, dstRef BlockRef)
+	function lowerBinOpImm(resultId ValueId, lhs ValueId, imm Imm32, opcode StdBinOpcode, dstRef ElementIndex)
 		// An element-index scaling the shifted-register `ADD` above carries. Neither the scratch
 		// materialisation nor the `MUL` is emitted.
 		if self.scaledIndexFolds.retiresScaleDef(resultId) 'foldedIntoAddress'
@@ -1527,7 +1528,7 @@ export type StdToArm64Lowering
 	// immediate form fits" fallback in this file shares. The materialisation and the op that reads it
 	// are emitted adjacently; see `Arm64Scratch` for why that is NOT the invariant the scheme rests on
 	// (the splitter splices between them, measured) and for what actually is.
-	function materialiseIntoScratch(imm Imm32, dstRef BlockRef) returns TargetVReg
+	function materialiseIntoScratch(imm Imm32, dstRef ElementIndex) returns TargetVReg
 		let scratch = arm64PhysReg(Arm64Scratch)
 		self.emit(dstRef, op: TargetOp.arm64MovImm(scratch, value: imm32ToWord(imm)))
 		return scratch
@@ -1543,7 +1544,7 @@ export type StdToArm64Lowering
 	// a SUB of its magnitude (and vice versa), so `x + -1000000007` is as inencodable as
 	// `x - 1000000007`. The materialised constant is the immediate's full 64-bit two's complement, which
 	// is what keeps the register form's answer identical to the immediate form's on both signs.
-	function lowerAddSubImm(dest TargetVReg, src TargetVReg, imm Imm32, isSub bool, dstRef BlockRef)
+	function lowerAddSubImm(dest TargetVReg, src TargetVReg, imm Imm32, isSub bool, dstRef ElementIndex)
 		if arm64ImmIsEncodableAddSub(imm) 'fits'
 			self.emit(dstRef, op: TargetOp.arm64SubImm(dest, src: src, imm: imm) if isSub else TargetOp.arm64AddImm(dest, src: src, imm: imm))
 			return
@@ -1557,7 +1558,7 @@ export type StdToArm64Lowering
 	// into the IP scratch plus a register `MUL` — TWO instructions and a scratch clobber for what x64
 	// does in one `imul r64, r/m64, imm32`. `arm64MulImmForm` names the two shapes that escape it, and
 	// carries the reason the ADMISSION rule upstream is deliberately not narrowed to match.
-	function lowerMulImm(dest TargetVReg, src TargetVReg, imm Imm32, dstRef BlockRef)
+	function lowerMulImm(dest TargetVReg, src TargetVReg, imm Imm32, dstRef ElementIndex)
 		match arm64MulImmForm(imm, scale: self.mulScale) 'form'
 			shiftLeft then self.emit(dstRef, op: TargetOp.arm64LslImm(dest, src: src, imm: log2OfPowerOfTwo(imm as ParsedInt)))
 
@@ -1574,7 +1575,7 @@ export type StdToArm64Lowering
 	// so this choice can never disagree with what it will encode. A non-bitmask immediate is materialised
 	// into the IP scratch (x16, exactly as `lowerAddSubImm` and `lowerMulImm`) and the register form is
 	// used.
-	function lowerLogicalImm(dest TargetVReg, src TargetVReg, imm Imm32, opcode StdBinOpcode, dstRef BlockRef)
+	function lowerLogicalImm(dest TargetVReg, src TargetVReg, imm Imm32, opcode StdBinOpcode, dstRef ElementIndex)
 		if arm64ImmIsEncodableLogical(imm) 'bitmask'
 			match opcode 'imm'
 				bitAnd then self.emit(dstRef, op: TargetOp.arm64AndImm(dest, src: src, imm: imm))
@@ -1612,7 +1613,7 @@ export type StdToArm64Lowering
 	// choice: an offset inside the add/sub band becomes one `add x16, base, #imm` (or the hi/lo pair),
 	// and a wider one the `movz`/`movk` ladder that arm already owns — so the folded form's reach IS the
 	// arithmetic band, stated once, and cannot come to disagree with it.
-	function addressFor(base TargetVReg, offset ByteOffset, width X64AccessWidth, dstRef BlockRef) returns Arm64MemOperand
+	function addressFor(base TargetVReg, offset ByteOffset, width X64AccessWidth, dstRef ElementIndex) returns Arm64MemOperand
 		let disp = memoryDisplacement(offset)
 
 		if arm64DispHasScaledForm(disp, width: width) 'direct'
@@ -1624,7 +1625,7 @@ export type StdToArm64Lowering
 		return Arm64MemOperand.create(scratch, disp: 0)
 	end 'addressFor'
 
-	function lowerLoadIndirect(resultId ValueId, addrId ValueId, offset ByteOffset, valueType StdType, dstRef BlockRef)
+	function lowerLoadIndirect(resultId ValueId, addrId ValueId, offset ByteOffset, valueType StdType, dstRef ElementIndex)
 		let width = accessWidthFor(valueType)
 
 		// The address is a `base + index*scale` chain nothing else reads, and it is one the
@@ -1639,7 +1640,7 @@ export type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.loadRegBaseDisp(TargetVReg.virtual(resultId), base: mem.base, disp: mem.disp, width: width))
 	end 'lowerLoadIndirect'
 
-	function lowerStoreIndirect(addrId ValueId, offset ByteOffset, valueId ValueId, valueType StdType, dstRef BlockRef)
+	function lowerStoreIndirect(addrId ValueId, offset ByteOffset, valueId ValueId, valueType StdType, dstRef ElementIndex)
 		let width = accessWidthFor(valueType)
 
 		// The store mirror of the indexed load above.
@@ -1668,7 +1669,7 @@ export type StdToArm64Lowering
 	// ⚠ **x16 IS SAFE ACROSS THE PAIR FOR `addressFor`'s REASON, WHICH IS THE STANDING ONE**
 	// (`Arm64Scratch`'s header): nothing a post-isel pass splices writes x16 — a spliced wide-frame address
 	// fold writes x17 — so no reload can land between the `add` and the access that reads it.
-	function orderedAccessBase(addrId ValueId, offset ByteOffset, dstRef BlockRef) returns TargetVReg
+	function orderedAccessBase(addrId ValueId, offset ByteOffset, dstRef ElementIndex) returns TargetVReg
 		let base = TargetVReg.virtual(addrId)
 		let disp = memoryDisplacement(offset)
 
@@ -1681,11 +1682,11 @@ export type StdToArm64Lowering
 		return scratch
 	end 'orderedAccessBase'
 
-	function lowerLoadAcquire(resultId ValueId, addrId ValueId, offset ByteOffset, valueType StdType, dstRef BlockRef)
+	function lowerLoadAcquire(resultId ValueId, addrId ValueId, offset ByteOffset, valueType StdType, dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.arm64LoadAcquire(TargetVReg.virtual(resultId), base: self.orderedAccessBase(addrId, offset: offset, dstRef: dstRef), width: accessWidthFor(valueType)))
 	end 'lowerLoadAcquire'
 
-	function lowerStoreRelease(addrId ValueId, offset ByteOffset, valueId ValueId, valueType StdType, dstRef BlockRef)
+	function lowerStoreRelease(addrId ValueId, offset ByteOffset, valueId ValueId, valueType StdType, dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.arm64StoreRelease(self.orderedAccessBase(addrId, offset: offset, dstRef: dstRef), src: TargetVReg.virtual(valueId), width: accessWidthFor(valueType)))
 	end 'lowerStoreRelease'
 
@@ -1705,7 +1706,7 @@ export type StdToArm64Lowering
 	// the value space), so it goes through the IP scratch x16: `sdiv x16, lhs, divisor; msub dest, x16,
 	// divisor, lhs`. x16 is non-allocatable, so no value is coloured into it across the pair — see
 	// `Arm64Scratch` for why "adjacent" is not the argument and what is.
-	function lowerDivMod(resultId ValueId, lhs ValueId, rhs ValueId, isRemainder bool, signedness IntegerSignedness, dstRef BlockRef)
+	function lowerDivMod(resultId ValueId, lhs ValueId, rhs ValueId, isRemainder bool, signedness IntegerSignedness, dstRef ElementIndex)
 		let divisor = TargetVReg.virtual(rhs)
 		let dest = TargetVReg.virtual(resultId)
 		let lhsReg = TargetVReg.virtual(lhs)
@@ -1723,7 +1724,7 @@ export type StdToArm64Lowering
 	// Two INDEPENDENT consumers, exactly as x64 has: the branch terminating this block may read the flags
 	// (`lowerCondBranch`), and anything holding the compare as a value needs the `cset`. Both at once is
 	// legal — `cset` reads NZCV and writes none, so the `b.cond` still sees the compare's flags.
-	function lowerCmp(resultId ValueId, lhs ValueId, rhs ValueId, pred StdCmpPred, operandType StdType, dstRef BlockRef)
+	function lowerCmp(resultId ValueId, lhs ValueId, rhs ValueId, pred StdCmpPred, operandType StdType, dstRef ElementIndex)
 		let isFloat = stdTypeIsFloat(operandType)
 
 		if isFloat 'float'
@@ -1745,7 +1746,7 @@ export type StdToArm64Lowering
 	// `cond` holds, and `b.cond` branches when `cond` holds. Neither ever inverts, so the NaN-safe float
 	// conditions (`mi`/`ls`/`gt`/`ge`) are preserved and their TRUE-on-NaN complements `pl`/`hi` stay
 	// unreachable — see `Arm64CondCode`.
-	function materialiseCompareIfRead(resultId ValueId, pred StdCmpPred, operandType StdType, dstRef BlockRef)
+	function materialiseCompareIfRead(resultId ValueId, pred StdCmpPred, operandType StdType, dstRef ElementIndex)
 		if not self.compareFusion.valueIsReadFromRegister(resultId) 'flagsOnly'
 			return
 		end 'flagsOnly'
@@ -1769,7 +1770,7 @@ export type StdToArm64Lowering
 	// it happens HERE rather than inside `arm64EmitCmpImm`: a write of x16 AFTER register allocation is
 	// invisible to the allocator, to the liveness model and to the emitted IR, and nothing would check
 	// that no op had landed between an ISel-minted `movz` and its consumer.
-	function lowerCmpImm(resultId ValueId, lhs ValueId, imm Imm32, pred StdCmpPred, operandType StdType, dstRef BlockRef)
+	function lowerCmpImm(resultId ValueId, lhs ValueId, imm Imm32, pred StdCmpPred, operandType StdType, dstRef ElementIndex)
 		let lhsReg = TargetVReg.virtual(lhs)
 
 		if arm64ImmIsEncodableCmp(imm) 'fits'
@@ -1809,7 +1810,7 @@ export type StdToArm64Lowering
 	//
 	// The non-S forms this file leans on make the rest free: `add`/`sub`/`orr`/`eor`/`and`, the shifts,
 	// `madd`/`msub`, `sdiv`/`udiv`, `adrp`+`add`, `movz`/`movk` and every load/store write no flag at all.
-	function lowerCondBranch(condId ValueId, thenBlockId BlockId, elseBlockId BlockId, dstRef BlockRef)
+	function lowerCondBranch(condId ValueId, thenBlockId BlockId, elseBlockId BlockId, dstRef ElementIndex)
 		if not self.compareFusion.blockFusesCompare(dstRef) 'notFused'
 			self.emitCondBranch(dstRef, op: TargetOp.arm64Cbnz(TargetVReg.virtual(condId), targetBlockId: thenBlockId))
 			self.emitTerminator(dstRef, op: TargetOp.arm64Branch(elseBlockId))
@@ -1823,7 +1824,7 @@ export type StdToArm64Lowering
 
 	// Value return: move the value into the primary-return register (x0 for an integer, d0 for a float),
 	// then `ret`. Frame teardown is the prologue/epilogue pass's job.
-	function lowerReturn(retValId ValueId, dstRef BlockRef, returnType StdReturnType, asTerminator bool)
+	function lowerReturn(retValId ValueId, dstRef ElementIndex, returnType StdReturnType, asTerminator bool)
 		self.emitPrimaryReturnMove(retValId, dstRef: dstRef, returnType: returnType)
 		self.emitRet(dstRef, asTerminator: asTerminator)
 	end 'lowerReturn'
@@ -1831,7 +1832,7 @@ export type StdToArm64Lowering
 	// Void return: nothing moves to the return register. The declared type must AGREE — a `retVoid` in a
 	// value-returning function would leave x0 unwritten, handing the caller garbage; the parser rejects
 	// that source (E3013), so a disagreement here is a lowering bug.
-	function lowerVoidReturn(dstRef BlockRef, returnType StdReturnType, asTerminator bool)
+	function lowerVoidReturn(dstRef ElementIndex, returnType StdReturnType, asTerminator bool)
 		if not stdReturnTypeIsVoid(returnType) 'valueExpected'
 			panic("StdToArm64Lowering: a `retVoid` in a value-returning function — the return register would never be written and the caller would read garbage")
 		end 'valueExpected'
@@ -1839,7 +1840,7 @@ export type StdToArm64Lowering
 		self.emitRet(dstRef, asTerminator: asTerminator)
 	end 'lowerVoidReturn'
 
-	function emitRet(dstRef BlockRef, asTerminator bool)
+	function emitRet(dstRef ElementIndex, asTerminator bool)
 		if asTerminator 'asTerm'
 			self.emitTerminator(dstRef, op: TargetOp.arm64Ret)
 		end 'asTerm' else 'asBody'
@@ -1851,7 +1852,7 @@ export type StdToArm64Lowering
 	// ordinary `ret` (via `emitPrimaryReturnMove`, which rejects a void return type first) and the throwing
 	// `errorReturn` (whose void form legitimately carries a family-default zero-int value:
 	// `stdReturnTypeIsFloat(void)` is `false`, so it lands in x0, where a GPR zero belongs).
-	function emitReturnValueMove(retValId ValueId, dstRef BlockRef, returnType StdReturnType)
+	function emitReturnValueMove(retValId ValueId, dstRef ElementIndex, returnType StdReturnType)
 		let retReg = Arm64FloatReturnReg if stdReturnTypeIsFloat(returnType) else Arm64IntReturnReg
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(retReg), srcReg: TargetVReg.virtual(retValId)))
 	end 'emitReturnValueMove'
@@ -1860,7 +1861,7 @@ export type StdToArm64Lowering
 	// function — a lowering bug, since a void return lowers to `retVoid` (guarded oppositely in
 	// `lowerVoidReturn`). The throwing `errorReturn` path does NOT come through here — its void form has a
 	// real dummy value to place, so it calls `emitReturnValueMove` directly.
-	function emitPrimaryReturnMove(retValId ValueId, dstRef BlockRef, returnType StdReturnType)
+	function emitPrimaryReturnMove(retValId ValueId, dstRef ElementIndex, returnType StdReturnType)
 		if stdReturnTypeIsVoid(returnType) 'void'
 			panic("StdToArm64Lowering: a value `ret` in a void-returning function — a void return lowers to `StdOp.retVoid`, which never reaches this path")
 		end 'void'
@@ -1883,7 +1884,7 @@ export type StdToArm64Lowering
 	// WHERE. Its incoming arguments sit at `[x29 + frameSize - outgoingArgSize + slot*8]`, and neither term
 	// is known until the allocator has finished. So the isel names the SLOT and `Arm64PrologueEpilogue` —
 	// the one pass that knows both — resolves `arm64LoadIncomingArg` into a concrete `[x29 + disp]` load.
-	function lowerParam(resultId ValueId, index ParamCount, paramType StdType, paramFloatMask ArgFloatMask, dstRef BlockRef)
+	function lowerParam(resultId ValueId, index ParamCount, paramType StdType, paramFloatMask ArgFloatMask, dstRef ElementIndex)
 		let capacity = arm64RegisterArgCapacity()
 
 		if abiArgIsOnStack(paramFloatMask, index: index, capacity: capacity) 'stackParam'
@@ -1910,13 +1911,13 @@ export type StdToArm64Lowering
 	// float written to d0 here read back from d0 in the callee — the mask this hands the placement rule is
 	// the very one the callee's `lowerParam` folds out of its declared parameter types. Shared by `lowerCall`
 	// and `lowerTryCall`, whose argument passing is identical.
-	function emitCallArgMoves(callee ByteArray, args ValueIdArray, dstRef BlockRef)
-		self.emitArgMovesByFloatMask(args, argFloatMask: calleeArgFloatMask(self.abi, callee: callee, argCount: args.count(), registerCapacity: arm64RegisterArgCapacity()), dstRef: dstRef)
+	function emitCallArgMoves(callee ByteArray, args ValueIdArray, dstRef ElementIndex)
+		self.emitArgMovesByFloatMask(args, argFloatMask: calleeArgFloatMask(self.abi, callee: callee, argCount: args.count() as ParamCount, registerCapacity: arm64RegisterArgCapacity()), dstRef: dstRef)
 	end 'emitCallArgMoves'
 
 	// Lower a Std `call`: move each argument into its ABI register (`emitCallArgMoves`), `bl` the callee,
 	// then move the return value (`callResultRegister`) into the result.
-	function lowerCall(resultId ValueId, callee ByteArray, args ValueIdArray, dstRef BlockRef)
+	function lowerCall(resultId ValueId, callee ByteArray, args ValueIdArray, dstRef ElementIndex)
 		self.emitCallArgMoves(callee, args: args, dstRef: dstRef)
 		self.emit(dstRef, op: TargetOp.arm64BranchLink(callee))
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(self.callResultRegister(callee))))
@@ -1928,7 +1929,7 @@ export type StdToArm64Lowering
 	// `lowerCall`: there is no callee NAME to class the result or arguments against, so both come from the
 	// function value's SIGNATURE carried on the op — a float result is captured from **d0** (else
 	// **x0**), and each argument is routed by its own type (a float to d0..d7, else x0..x7).
-	function lowerCallIndirect(resultId ValueId, calleeReg ValueId, args ValueIdArray, resultType StdReturnType, argFloatMask ArgFloatMask, dstRef BlockRef)
+	function lowerCallIndirect(resultId ValueId, calleeReg ValueId, args ValueIdArray, resultType StdReturnType, argFloatMask ArgFloatMask, dstRef ElementIndex)
 		self.emitArgMovesByFloatMask(args, argFloatMask: argFloatMask, dstRef: dstRef)
 		self.emit(dstRef, op: TargetOp.arm64BranchLinkReg(TargetVReg.virtual(calleeReg)))
 		self.captureIndirectResult(resultId, resultType: resultType, dstRef: dstRef)
@@ -1939,7 +1940,7 @@ export type StdToArm64Lowering
 	// void interface method) leaves nothing to capture — `resultId` is a dead slot with no def, so no move is
 	// emitted and it never enters liveness/coloring. Shared by the three so they cannot drift on the result
 	// register, exactly as `emitArgMovesByFloatMask` keeps them from drifting on argument slotting.
-	function captureIndirectResult(resultId ValueId, resultType StdReturnType, dstRef BlockRef)
+	function captureIndirectResult(resultId ValueId, resultType StdReturnType, dstRef ElementIndex)
 		match resultType 'r'
 			void then break 'r'
 			value(inner) then self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(arm64IndirectResultRegister(inner))))
@@ -1964,7 +1965,7 @@ export type StdToArm64Lowering
 	// for the reason x64's twin gives about `callMem`'s base register: each argument move is a PHYSICAL def,
 	// and liveness adds every such def to `forbiddenPhys` for the values live across it, so the table address
 	// can never be coloured onto an argument register the moves have already written.
-	function lowerWitnessCall(resultId ValueId, witnessAddr ValueId, methodIndex WitnessMethodIndex, args ValueIdArray, resultType StdReturnType, argFloatMask ArgFloatMask, dstRef BlockRef)
+	function lowerWitnessCall(resultId ValueId, witnessAddr ValueId, methodIndex WitnessMethodIndex, args ValueIdArray, resultType StdReturnType, argFloatMask ArgFloatMask, dstRef ElementIndex)
 		self.emitWitnessCallSequence(witnessAddr, methodIndex: methodIndex, args: args, argFloatMask: argFloatMask, dstRef: dstRef)
 		self.captureIndirectResult(resultId, resultType: resultType, dstRef: dstRef)
 	end 'lowerWitnessCall'
@@ -1973,7 +1974,7 @@ export type StdToArm64Lowering
 	// results are captured. ONE home, shared by the throwing and non-throwing forms so the two cannot drift
 	// on the slot offset or on argument slotting; a divergence there would be a silently mis-dispatched
 	// method, not a compile error.
-	function emitWitnessCallSequence(witnessAddr ValueId, methodIndex WitnessMethodIndex, args ValueIdArray, argFloatMask ArgFloatMask, dstRef BlockRef)
+	function emitWitnessCallSequence(witnessAddr ValueId, methodIndex WitnessMethodIndex, args ValueIdArray, argFloatMask ArgFloatMask, dstRef ElementIndex)
 		self.emitArgMovesByFloatMask(args, argFloatMask: argFloatMask, dstRef: dstRef)
 		let callee = arm64PhysReg(Arm64Scratch)
 
@@ -1992,7 +1993,7 @@ export type StdToArm64Lowering
 	// the same two-move shape (see `lowerTryCall` for why the pair cannot clobber itself).
 	//
 	// A VOID throwing method captures nothing for its primary, leaving the flag capture alone after the call.
-	function lowerWitnessTryCall(resultId ValueId, errorFlagId ValueId, witnessAddr ValueId, methodIndex WitnessMethodIndex, args ValueIdArray, resultType StdReturnType, argFloatMask ArgFloatMask, dstRef BlockRef)
+	function lowerWitnessTryCall(resultId ValueId, errorFlagId ValueId, witnessAddr ValueId, methodIndex WitnessMethodIndex, args ValueIdArray, resultType StdReturnType, argFloatMask ArgFloatMask, dstRef ElementIndex)
 		self.emitWitnessCallSequence(witnessAddr, methodIndex: methodIndex, args: args, argFloatMask: argFloatMask, dstRef: dstRef)
 		self.captureIndirectResult(resultId, resultType: resultType, dstRef: dstRef)
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(errorFlagId), srcReg: arm64PhysReg(Arm64FlagReturnReg)))
@@ -2015,7 +2016,7 @@ export type StdToArm64Lowering
 	// Forward-order emission within the register phase is then sound (each physical arg-register def
 	// liveness forbids to values live across it, keyed on `RegNum` and class-agnostic), now covering the
 	// SIMD arg registers too.
-	function emitArgMovesByFloatMask(args ValueIdArray, argFloatMask ArgFloatMask, dstRef BlockRef)
+	function emitArgMovesByFloatMask(args ValueIdArray, argFloatMask ArgFloatMask, dstRef ElementIndex)
 		let capacity = arm64RegisterArgCapacity()
 
 		for k in 0 upto args.count() 'eachStackArg'
@@ -2050,7 +2051,7 @@ export type StdToArm64Lowering
 	// `functionUsesSecondaryReturnSlot` is the one predicate that decides a callee writes it. The two capture
 	// moves are emitted consecutively right after the call, in source order, exactly as x64's are; why
 	// neither can overwrite the other's source is `colorAndDropSelfMoves`'s (SsaDestruction).
-	function lowerTryCall(resultId ValueId, errorFlagId ValueId, callee ByteArray, args ValueIdArray, dstRef BlockRef)
+	function lowerTryCall(resultId ValueId, errorFlagId ValueId, callee ByteArray, args ValueIdArray, dstRef ElementIndex)
 		self.emitCallArgMoves(callee, args: args, dstRef: dstRef)
 		self.emit(dstRef, op: TargetOp.arm64BranchLink(callee))
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(self.callResultRegister(callee))))
@@ -2069,7 +2070,7 @@ export type StdToArm64Lowering
 	// `lowerThrowError` (LowerMaxonToStd) types the throw-edge primary default to the return type via
 	// `emitZeroConstOfReturnType` — a d0-classed float zero for a float return — so both the OK path (real
 	// float → d0) and the throw path (a dead d0 zero the caller ignores) reach `emitReturnValueMove` correctly classed.
-	function lowerErrorReturn(retValId ValueId, errorFlagId ValueId, dstRef BlockRef, returnType StdReturnType, asTerminator bool)
+	function lowerErrorReturn(retValId ValueId, errorFlagId ValueId, dstRef ElementIndex, returnType StdReturnType, asTerminator bool)
 		self.emitReturnValueMove(retValId, dstRef: dstRef, returnType: returnType)
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64FlagReturnReg), srcReg: TargetVReg.virtual(errorFlagId)))
 		self.emitRet(dstRef, asTerminator: asTerminator)
@@ -2078,7 +2079,7 @@ export type StdToArm64Lowering
 	// Lower `osExit(code)` to the platform's process-exit primitive — libSystem `_exit` through the GOT
 	// on macOS, `exit_group` via `svc #0` on Linux — the arm64 twin of x64's ExitProcess path (the same
 	// primitive the arm64 entry stub uses). AAPCS64 and the Linux syscall ABI both put the code in x0.
-	function lowerOsExit(codeId ValueId, dstRef BlockRef)
+	function lowerOsExit(codeId ValueId, dstRef ElementIndex)
 		self.emitHostCall(dstRef, callee: self.hostCalleeOn(OsImportSlot.exit, linux: Arm64LinuxRoute.syscall(Arm64LinuxSyscallExitGroup)), args: argsOf(codeId))
 	end 'lowerOsExit'
 
@@ -2091,7 +2092,7 @@ export type StdToArm64Lowering
 	// genuine per-OS difference — how the process finally exits — lives INSIDE the chunk, where
 	// `Arm64PanicRuntime` derives it from the same `arm64OsCallKind` door this file consults for every
 	// other primitive.
-	function lowerPanic(label ByteArray, dstRef BlockRef)
+	function lowerPanic(label ByteArray, dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.arm64LeaRdata(arm64PhysReg(Arm64Register.x0), label: label))
 		self.emit(dstRef, op: TargetOp.arm64BranchLink(PanicName))
 	end 'lowerPanic'
@@ -2100,14 +2101,14 @@ export type StdToArm64Lowering
 	// `panic at …\n` line, NUL terminator included — so it MOVES into x0 where the baked form materializes
 	// a label address there. Everything after is identical: one `mrt_panic`, one cstr contract, two ways
 	// of producing the bytes.
-	function lowerPanicValue(messagePtrId ValueId, dstRef BlockRef)
+	function lowerPanicValue(messagePtrId ValueId, dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(messagePtrId)))
 		self.emit(dstRef, op: TargetOp.arm64BranchLink(PanicName))
 	end 'lowerPanicValue'
 
 	// The POSIX page source, `mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_ANON|MAP_PRIVATE, -1, 0)`.
 	// `MAP_ANON` returns zeroed pages, which satisfies the slab's zeroing contract.
-	function lowerOsAllocPages(resultId ValueId, sizeId ValueId, dstRef BlockRef)
+	function lowerOsAllocPages(resultId ValueId, sizeId ValueId, dstRef ElementIndex)
 		self.lowerMmap(resultId, base: PageBase.osChooses, sizeId: sizeId, protection: MmapProtReadWrite, flags: mmapAnonPrivateFlags(self.target.os), dstRef: dstRef)
 	end 'lowerOsAllocPages'
 
@@ -2126,7 +2127,7 @@ export type StdToArm64Lowering
 	// relocations, so an unpatched `adrp x16, #0; ldr x16, [x16]; blr x16` would ship as a jump
 	// through the first word of its own `.text` page — unlike a `bl` into a chunk a lane never built,
 	// which is a `CallFixup` that `arm64ResolveCallFixups` panics on.
-	function lowerOsCpuCount(resultId ValueId, dstRef BlockRef)
+	function lowerOsCpuCount(resultId ValueId, dstRef ElementIndex)
 		match arm64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsCpuCountDarwin(resultId, dstRef: dstRef)
 			syscall then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostCpuCountName), args: ValueIdArray.create(), dstRef: dstRef)
@@ -2135,7 +2136,7 @@ export type StdToArm64Lowering
 
 	// The libSystem arm: the `_SC_` parameter into x0 and the import. Its own function rather than an inline
 	// arm because a `match` arm is one expression and this is two.
-	function lowerOsCpuCountDarwin(resultId ValueId, dstRef BlockRef)
+	function lowerOsCpuCountDarwin(resultId ValueId, dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: DarwinScNprocessorsOnln))
 		self.lowerHostValue(resultId, callee: Arm64HostCallee.import(OsImportSlot.sysconf), args: ValueIdArray.create(), dstRef: dstRef)
 	end 'lowerOsCpuCountDarwin'
@@ -2149,7 +2150,7 @@ export type StdToArm64Lowering
 	// answer is widened (`emitCaptureImportAnswer`); `specs/process-id.md`'s `fits-in-a-dword` asserts
 	// the id lands under 2^32, which a stale high word would break. The Linux syscall answers a full
 	// `long`.
-	function lowerOsGetPid(resultId ValueId, dstRef BlockRef)
+	function lowerOsGetPid(resultId ValueId, dstRef ElementIndex)
 		self.lowerHostValue(resultId, callee: self.hostCalleeOn(OsImportSlot.getpid, linux: Arm64LinuxRoute.syscall(Arm64LinuxSyscallGetPid)), args: ValueIdArray.create(), dstRef: dstRef)
 	end 'lowerOsGetPid'
 
@@ -2176,7 +2177,7 @@ export type StdToArm64Lowering
 	// ⚠ The route is asked ONCE and the body is its own function, `StdToX64Conversion.lowerOsGetPid`'s shape:
 	// this op makes TWO route-dependent calls, so an inline `match` per call would ask the same question twice
 	// and owe a second refusal message that could only echo the first.
-	function lowerOsEnterBackgroundPriority(resultId ValueId, dstRef BlockRef)
+	function lowerOsEnterBackgroundPriority(resultId ValueId, dstRef ElementIndex)
 		match arm64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsEnterBackgroundPriorityDarwin(resultId, dstRef: dstRef)
 			syscall then self.lowerOsEnterBackgroundPriorityLinux(resultId, dstRef: dstRef)
@@ -2201,7 +2202,7 @@ export type StdToArm64Lowering
 	// where this is two inline `svc`s; no case reaches it, because every `processPriority` spec reads the
 	// value back on the calling thread. The `processPriority` row in `targetProvidesFacility` carries the
 	// same statement beside the `true` that rests on it.
-	function lowerOsEnterBackgroundPriorityLinux(resultId ValueId, dstRef BlockRef)
+	function lowerOsEnterBackgroundPriorityLinux(resultId ValueId, dstRef ElementIndex)
 		self.emitPriorityScopeArgs(dstRef)
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: PosixBackgroundNiceValue))
 		self.emitHostCall(dstRef, callee: Arm64HostCallee.syscall(Arm64LinuxSyscallSetPriority), args: ValueIdArray.create())
@@ -2217,7 +2218,7 @@ export type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.arm64Sub(TargetVReg.virtual(resultId), lhs: bias, rhs: TargetVReg.virtual(answer)))
 	end 'lowerOsEnterBackgroundPriorityLinux'
 
-	function lowerOsEnterBackgroundPriorityDarwin(resultId ValueId, dstRef BlockRef)
+	function lowerOsEnterBackgroundPriorityDarwin(resultId ValueId, dstRef ElementIndex)
 		self.emitPriorityScopeArgs(dstRef)
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: PosixBackgroundNiceValue))
 		self.emitHostCall(dstRef, callee: Arm64HostCallee.import(OsImportSlot.setpriority), args: ValueIdArray.create())
@@ -2229,7 +2230,7 @@ export type StdToArm64Lowering
 	// The `(which, who)` pair BOTH priority calls open with — `setpriority` then adds its value in x2. One
 	// emitter rather than two, because it IS the same pair: a divergence between the scope the set used and
 	// the scope the read used would change the process and then report on something else.
-	function emitPriorityScopeArgs(dstRef BlockRef)
+	function emitPriorityScopeArgs(dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: PosixPrioProcess))
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x1), value: PosixPriorityWhoIsSelf))
 	end 'emitPriorityScopeArgs'
@@ -2239,7 +2240,7 @@ export type StdToArm64Lowering
 	// is `sxtw` and `lsr #32` is `uxtw`, chosen by the width `osImportAnswerOf` states for the import.
 	// An import answering a `long`, pointer or `ssize_t` is captured unwidened: sign-extending from
 	// bit 31 would truncate it.
-	function emitWidenedCallResult(resultId ValueId, answer ImportAnswer, dstRef BlockRef)
+	function emitWidenedCallResult(resultId ValueId, answer ImportAnswer, dstRef ElementIndex)
 		let answered = self.fresh.mint()
 		let raised = self.fresh.mint()
 		self.emitCaptureReturnReg(answered, dstRef: dstRef)
@@ -2247,7 +2248,7 @@ export type StdToArm64Lowering
 		self.emit(dstRef, op: dwordExtensionOp(answer, into: TargetVReg.virtual(resultId), src: TargetVReg.virtual(raised)))
 	end 'emitWidenedCallResult'
 
-	function emitCaptureImportAnswer(resultId ValueId, slot OsImportSlot, dstRef BlockRef)
+	function emitCaptureImportAnswer(resultId ValueId, slot OsImportSlot, dstRef ElementIndex)
 		let answer = osImportAnswerOf(slot)
 
 		match answer 'width'
@@ -2259,7 +2260,7 @@ export type StdToArm64Lowering
 		end 'width'
 	end 'emitCaptureImportAnswer'
 
-	function emitCaptureReturnReg(resultId ValueId, dstRef BlockRef)
+	function emitCaptureReturnReg(resultId ValueId, dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
 	end 'emitCaptureReturnReg'
 
@@ -2283,21 +2284,21 @@ export type StdToArm64Lowering
 	// a `bl` into a chunk a lane never built is a `CallFixup` that `arm64ResolveCallFixups` panics on
 	// at build time. An import call has no such backstop (see `lowerOsCpuCount`), which is why an op
 	// that emits one asks the route through `hostCalleeOn`.
-	function lowerOsReadWallClock(ftPtrId ValueId, dstRef BlockRef)
+	function lowerOsReadWallClock(ftPtrId ValueId, dstRef ElementIndex)
 		self.emitHostCall(dstRef, callee: Arm64HostCallee.chunk(HostWallClockName), args: argsOf(ftPtrId))
 	end 'lowerOsReadWallClock'
 
 	// ⚠ This one branches to a lane-private symbol: `monotonicClock` is reached only through
 	// `__gt_now_ns`, a scheduler entry, so its chunk lands with the green-thread floor rather than
 	// with the shared `mrt_host_*` clocks.
-	function lowerOsReadClock(ticksPtrId ValueId, freqPtrId ValueId, dstRef BlockRef)
+	function lowerOsReadClock(ticksPtrId ValueId, freqPtrId ValueId, dstRef ElementIndex)
 		self.emitHostCall(dstRef, callee: Arm64HostCallee.chunk(HostMonotonicClockName), args: twoArgs(ticksPtrId, second: freqPtrId))
 	end 'lowerOsReadClock'
 
 	// ⚠ **THE SUBJECT OPERAND IS DROPPED, AND THAT IS THE OP'S OWN STATED CONTRACT.** Both POSIX lanes read
 	// `CLOCK_THREAD_CPUTIME_ID`, which always names the CALLING thread — there is no clock id for another
 	// thread's cost, so a handle here would have nowhere to go and translating it would be a guess.
-	function lowerOsThreadCpuTicks(outPtrId ValueId, dstRef BlockRef)
+	function lowerOsThreadCpuTicks(outPtrId ValueId, dstRef ElementIndex)
 		self.emitHostCall(dstRef, callee: Arm64HostCallee.chunk(HostThreadCpuName), args: argsOf(outPtrId))
 	end 'lowerOsThreadCpuTicks'
 
@@ -2308,7 +2309,7 @@ export type StdToArm64Lowering
 	//
 	// It is a chunk because the caller's pointer must still be live after a call that answers in a
 	// register, twice over on Darwin (the `realpath` canonicalization is a second such call).
-	function lowerOsExecutablePath(resultId ValueId, bufLenId ValueId, bufPtrId ValueId, dstRef BlockRef)
+	function lowerOsExecutablePath(resultId ValueId, bufLenId ValueId, bufPtrId ValueId, dstRef ElementIndex)
 		self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostExePathName), args: twoArgs(bufPtrId, second: bufLenId), dstRef: dstRef)
 	end 'lowerOsExecutablePath'
 
@@ -2318,7 +2319,7 @@ export type StdToArm64Lowering
 	// ⚠ The moves are emitted in order and that is what makes them sound: an operand coloured into an
 	// argument register the sequence has already written is prevented by the physical def of that
 	// register, exactly as `lowerCall`'s own argument moves are.
-	function emitHostCall(dstRef BlockRef, callee Arm64HostCallee, args ValueIdArray)
+	function emitHostCall(dstRef ElementIndex, callee Arm64HostCallee, args ValueIdArray)
 		var index = 0 as ParamCount
 
 		for arg in args 'eachArg'
@@ -2331,7 +2332,7 @@ export type StdToArm64Lowering
 
 	// A chunk computes its own answer as a full 64-bit value (a BOOL, a byte count, a handle, an
 	// attribute mask) and a `svc` answers one, so only an import's answer can need widening.
-	function lowerHostValue(resultId ValueId, callee Arm64HostCallee, args ValueIdArray, dstRef BlockRef)
+	function lowerHostValue(resultId ValueId, callee Arm64HostCallee, args ValueIdArray, dstRef ElementIndex)
 		self.emitHostCall(dstRef, callee: callee, args: args)
 
 		match callee 'answer'
@@ -2346,7 +2347,7 @@ export type StdToArm64Lowering
 	// `getenv` answers a POINTER `shm_open` takes directly, so the scratch buffer and its length go nowhere;
 	// arm64-Linux reads the value into that buffer with `mrt_host_env_read` and then opens the path built
 	// from it, which is `GetEnvironmentVariableA`'s own shape (`StdOp.osOpenNamedSegment`).
-	function lowerNamedSegmentAttach(resultId ValueId, namePtrId ValueId, bufPtrId ValueId, bufLenId ValueId, dstRef BlockRef)
+	function lowerNamedSegmentAttach(resultId ValueId, namePtrId ValueId, bufPtrId ValueId, bufLenId ValueId, dstRef ElementIndex)
 		match arm64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(DarwinShmOpenName), args: argsOf(namePtrId), dstRef: dstRef)
 			syscall then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(LinuxShmOpenName), args: threeArgs(namePtrId, second: bufPtrId, third: bufLenId), dstRef: dstRef)
@@ -2357,7 +2358,7 @@ export type StdToArm64Lowering
 	// fold; a chunk on arm64-Linux, because the name has to become a `/dev/shm` path first. The status is
 	// discarded either way for `mrt_host_file_close`'s reason: a name that could not be removed leaves a
 	// caller nothing to do.
-	function lowerOsUnpublishNamedSegment(namePtrId ValueId, dstRef BlockRef)
+	function lowerOsUnpublishNamedSegment(namePtrId ValueId, dstRef ElementIndex)
 		self.emitHostCall(dstRef, callee: self.hostCalleeOn(OsImportSlot.shmUnlink, linux: Arm64LinuxRoute.chunk(LinuxShmUnlinkName)), args: argsOf(namePtrId))
 	end 'lowerOsUnpublishNamedSegment'
 
@@ -2365,7 +2366,7 @@ export type StdToArm64Lowering
 	// macOS `open` takes its permission bits as a vararg, which AAPCS64 passes on the stack, where an isel has
 	// no frame to write. On Linux a raw `svc` answers `-errno` where the Std tier tests for exactly `-1`, and
 	// the chunk stashes the reason for the `osLastError` that follows.
-	function lowerOsFileOpen(resultId ValueId, pathPtrId ValueId, darwinFlags MachineWord, linuxFlags MachineWord, mode MachineWord, dstRef BlockRef)
+	function lowerOsFileOpen(resultId ValueId, pathPtrId ValueId, darwinFlags MachineWord, linuxFlags MachineWord, mode MachineWord, dstRef ElementIndex)
 		let flags = match arm64OsCallKind(self.target.os) 'route'
 			importCall gives darwinFlags
 			syscall gives linuxFlags
@@ -2382,7 +2383,7 @@ export type StdToArm64Lowering
 	// contract rather than this lowering's laziness (`StdOp.osFileClose` defines no result, because a failed
 	// close leaves a caller nothing to do). Since nothing is read back, the Linux arm needs no chunk and no
 	// errno stash — it is `lowerOsFreePages`'s shape exactly.
-	function lowerOsFileClose(handleId ValueId, dstRef BlockRef)
+	function lowerOsFileClose(handleId ValueId, dstRef ElementIndex)
 		self.emitHostCall(dstRef, callee: self.hostCalleeOn(OsImportSlot.close, linux: Arm64LinuxRoute.syscall(Arm64LinuxSyscallClose)), args: argsOf(handleId))
 	end 'lowerOsFileClose'
 
@@ -2401,13 +2402,13 @@ export type StdToArm64Lowering
 	//
 	// ⚠ The `WSADATA` operand is deliberately unread: it is a scratch buffer the Windows API demands, and the
 	// Std tier frees it the moment the call returns.
-	function lowerOsSocketStartup(resultId ValueId, dstRef BlockRef)
+	function lowerOsSocketStartup(resultId ValueId, dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.arm64MovImm(TargetVReg.virtual(resultId), value: PosixCallSucceeded as MachineWord))
 	end 'lowerOsSocketStartup'
 
 	// ⭐ **`getaddrinfo(host, NULL, hints, out)` — four register arguments and macOS's alone.** The service
 	// argument is always NULL; see the op's own header for why no port is ever formatted as a string.
-	function lowerOsSocketResolve(resultId ValueId, hostPtrId ValueId, hintsPtrId ValueId, outPtrId ValueId, dstRef BlockRef)
+	function lowerOsSocketResolve(resultId ValueId, hostPtrId ValueId, hintsPtrId ValueId, outPtrId ValueId, dstRef ElementIndex)
 		match arm64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsSocketResolveDarwin(resultId, hostPtrId: hostPtrId, hintsPtrId: hintsPtrId, outPtrId: outPtrId, dstRef: dstRef)
 			syscall then panic("StdToArm64Lowering: `osSocketResolve` asks for `getaddrinfo`, which is a libc FUNCTION rather than a syscall — it reads `/etc/nsswitch.conf` and `/etc/resolv.conf` and speaks DNS, and a raw static image links nothing that does. This lane resolves through a DIFFERENT Std graph (`ManagedSocketRuntime.SocketResolveShape.builtinResolver`) which never emits this op, so reaching here means the addrinfo graph was installed for a target that has no `getaddrinfo`")
@@ -2416,7 +2417,7 @@ export type StdToArm64Lowering
 
 	// The libSystem arm. The `int` is WIDENED for `lowerOsFileOpenDarwin`'s reason: the Std tier compares the
 	// answer against 0, and a stale high word makes a successful resolve read as a failed one.
-	function lowerOsSocketResolveDarwin(resultId ValueId, hostPtrId ValueId, hintsPtrId ValueId, outPtrId ValueId, dstRef BlockRef)
+	function lowerOsSocketResolveDarwin(resultId ValueId, hostPtrId ValueId, hintsPtrId ValueId, outPtrId ValueId, dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(hostPtrId)))
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x1), value: SocketNoServiceName))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x2), srcReg: TargetVReg.virtual(hintsPtrId)))
@@ -2426,7 +2427,7 @@ export type StdToArm64Lowering
 
 	// `freeaddrinfo(list)` — one register argument, nothing captured (the call returns void). Refused on the
 	// syscall route for its producer's reason: a lane with no `getaddrinfo` allocates no list to release.
-	function lowerOsSocketFreeAddrInfo(addrInfoPtrId ValueId, dstRef BlockRef)
+	function lowerOsSocketFreeAddrInfo(addrInfoPtrId ValueId, dstRef ElementIndex)
 		match arm64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsSocketFreeAddrInfoDarwin(addrInfoPtrId, dstRef: dstRef)
 			syscall then panic("StdToArm64Lowering: `osSocketFreeAddrInfo` releases a list `getaddrinfo` allocated, and this lane has no `getaddrinfo` to allocate one — it resolves through `ManagedSocketRuntime.SocketResolveShape.builtinResolver`, which emits neither op. Reaching here means the addrinfo graph was installed for a target that has no `getaddrinfo`")
@@ -2436,7 +2437,7 @@ export type StdToArm64Lowering
 	// The libSystem arm: one pointer argument and a call whose `void` return there is nothing to capture. Its
 	// own function because a `match` arm carries one statement and this is two — `lowerOsCpuCountDarwin`'s
 	// split, for its reason.
-	function lowerOsSocketFreeAddrInfoDarwin(addrInfoPtrId ValueId, dstRef BlockRef)
+	function lowerOsSocketFreeAddrInfoDarwin(addrInfoPtrId ValueId, dstRef ElementIndex)
 		self.emitHostCall(dstRef, callee: Arm64HostCallee.import(OsImportSlot.freeaddrinfo), args: argsOf(addrInfoPtrId))
 	end 'lowerOsSocketFreeAddrInfoDarwin'
 
@@ -2444,7 +2445,7 @@ export type StdToArm64Lowering
 	// (`ManagedSocketRuntime`'s protocol block owns them, because the `hints` it fills must agree with them),
 	// and all three values are portable. The TYPE argument also carries Linux's two birth flags, which is why
 	// it is asked for rather than spelled — see `lowerStatusAnswer`.
-	function lowerOsSocketCreate(resultId ValueId, dstRef BlockRef)
+	function lowerOsSocketCreate(resultId ValueId, dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: AfInet as MachineWord))
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x1), value: self.socketCreateType()))
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: IpprotoTcp as MachineWord))
@@ -2461,7 +2462,7 @@ export type StdToArm64Lowering
 	// `connect(sock, addr, sizeof(sockaddr_in))` — the length is the Std tier's `SockaddrInBytes`, which is
 	// also the size of the block it allocated for the address. ⚠ MEASURED on Darwin: an `addrlen` below 16 is
 	// refused with `EINVAL`, so the two really are one number.
-	function lowerOsSocketConnect(resultId ValueId, sockId ValueId, addrPtrId ValueId, dstRef BlockRef)
+	function lowerOsSocketConnect(resultId ValueId, sockId ValueId, addrPtrId ValueId, dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(sockId)))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(addrPtrId)))
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: SockaddrInBytes as MachineWord))
@@ -2470,7 +2471,7 @@ export type StdToArm64Lowering
 
 	// `getsockopt(sock, SOL_SOCKET, SO_ERROR, valuePtr, lenPtr)` — see `StdOp.osSocketError`. The level and the
 	// option are per-OS (`PosixRuntime.posixSolSocket`), which is why they are asked for rather than spelled.
-	function lowerOsSocketError(resultId ValueId, sockId ValueId, valuePtrId ValueId, lenPtrId ValueId, dstRef BlockRef)
+	function lowerOsSocketError(resultId ValueId, sockId ValueId, valuePtrId ValueId, lenPtrId ValueId, dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(sockId)))
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x1), value: posixSolSocket(self.target.os)))
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: posixSoError(self.target.os)))
@@ -2484,7 +2485,7 @@ export type StdToArm64Lowering
 	// supplies the two address arguments a stream socket does not use. Each caller names both routes'
 	// identity, as `hostCalleeOn`'s callers do, so a direction cannot be wired to the right import
 	// slot and the wrong syscall number.
-	function lowerOsSocketTransfer(resultId ValueId, sockId ValueId, bufPtrId ValueId, lenId ValueId, importSlot OsImportSlot, syscallNumber MachineWord, suppressSigpipe bool, dstRef BlockRef)
+	function lowerOsSocketTransfer(resultId ValueId, sockId ValueId, bufPtrId ValueId, lenId ValueId, importSlot OsImportSlot, syscallNumber MachineWord, suppressSigpipe bool, dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(sockId)))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(bufPtrId)))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x2), srcReg: TargetVReg.virtual(lenId)))
@@ -2499,7 +2500,7 @@ export type StdToArm64Lowering
 	// The syscall arm's two extra arguments: `sendto`/`recvfrom` take a peer address and its length, and a
 	// CONNECTED stream socket has neither to give — a NULL pair is what makes the six-argument call mean the
 	// four-argument one.
-	function lowerLinuxSocketTransfer(resultId ValueId, syscallNumber MachineWord, dstRef BlockRef)
+	function lowerLinuxSocketTransfer(resultId ValueId, syscallNumber MachineWord, dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x4), value: LinuxSocketNoPeerAddress))
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x5), value: LinuxSocketNoPeerAddress))
 		self.lowerHostValue(resultId, callee: Arm64HostCallee.syscall(syscallNumber), args: ValueIdArray.create(), dstRef: dstRef)
@@ -2526,7 +2527,7 @@ export type StdToArm64Lowering
 	// one. AArch64 Linux has `accept4` and takes `SOCK_NONBLOCK | SOCK_CLOEXEC` in its fourth
 	// argument; Darwin has no `accept4`, so its route calls plain `accept` and hands the descriptor to
 	// `mrt_host_socket_birth`, the same chunk a fresh `socket()` goes through.
-	function lowerOsSocketServe(resultId ValueId, verb SocketServeVerb, operands ValueIdArray, dstRef BlockRef)
+	function lowerOsSocketServe(resultId ValueId, verb SocketServeVerb, operands ValueIdArray, dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(socketServeOperand(operands, index: 0))))
 
 		match verb 'v'
@@ -2550,17 +2551,17 @@ export type StdToArm64Lowering
 		self.lowerStatusAnswer(resultId, callee: self.hostCalleeOn(socketServeImportSlot(verb), linux: Arm64LinuxRoute.syscall(socketServeSyscall(verb))), darwinFold: socketServeFold(verb), dstRef: dstRef)
 	end 'lowerOsSocketServe'
 
-	function emitArm64ArgPtrThenImm(ptrId ValueId, third MachineWord, dstRef BlockRef)
+	function emitArm64ArgPtrThenImm(ptrId ValueId, third MachineWord, dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(ptrId)))
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: third))
 	end 'emitArm64ArgPtrThenImm'
 
-	function emitArm64ArgPtrThenPtr(ptrId ValueId, secondPtrId ValueId, dstRef BlockRef)
+	function emitArm64ArgPtrThenPtr(ptrId ValueId, secondPtrId ValueId, dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(ptrId)))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x2), srcReg: TargetVReg.virtual(secondPtrId)))
 	end 'emitArm64ArgPtrThenPtr'
 
-	function emitArm64AcceptArgs(dstRef BlockRef)
+	function emitArm64AcceptArgs(dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x1), value: LinuxSocketNoPeerAddress))
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: LinuxSocketNoPeerAddress))
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x3), value: (LinuxSockNonBlock + LinuxSockCloexec) as MachineWord))
@@ -2612,7 +2613,7 @@ export type StdToArm64Lowering
 	// answer at its own width (a `ssize_t` count is not sign-extended from bit 31) and hands it to a fold chunk that
 	// fetches and negates the errno. The Std tier has to tell `EAGAIN` and `EINPROGRESS` from a real
 	// failure, which is why nothing folds them together.
-	function lowerStatusAnswer(resultId ValueId, callee Arm64HostCallee, darwinFold ByteArray, dstRef BlockRef)
+	function lowerStatusAnswer(resultId ValueId, callee Arm64HostCallee, darwinFold ByteArray, dstRef ElementIndex)
 		match callee 'route'
 			import then self.lowerFoldedImportAnswer(resultId, callee: callee, fold: darwinFold, dstRef: dstRef)
 			chunk(name) then panic("lowerStatusAnswer: a socket call reaches the OS through an import or a syscall, and `{String.from(name)}` is a chunk — its answer would skip the Darwin fold on one lane and the raw `-errno` on the other")
@@ -2620,7 +2621,7 @@ export type StdToArm64Lowering
 		end 'route'
 	end 'lowerStatusAnswer'
 
-	function lowerFoldedImportAnswer(resultId ValueId, callee Arm64HostCallee, fold ByteArray, dstRef BlockRef)
+	function lowerFoldedImportAnswer(resultId ValueId, callee Arm64HostCallee, fold ByteArray, dstRef ElementIndex)
 		let answer = self.fresh.mint()
 		self.lowerHostValue(answer, callee: callee, args: ValueIdArray.create(), dstRef: dstRef)
 		self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(fold), args: argsOf(answer), dstRef: dstRef)
@@ -2637,7 +2638,7 @@ export type StdToArm64Lowering
 	// ⚠ The relation the subtraction rests on is ASSERTED rather than trusted — see
 	// `ConsoleRuntime.assertStdHandleSelectorsMapToPosixFds`, which fails the build if the two families ever
 	// stop being consecutive runs.
-	function lowerOsStdHandle(resultId ValueId, whichId ValueId, dstRef BlockRef)
+	function lowerOsStdHandle(resultId ValueId, whichId ValueId, dstRef ElementIndex)
 		let base = arm64PhysReg(Arm64Scratch)
 		self.emit(dstRef, op: TargetOp.arm64MovImm(base, value: StdInputHandleSelector as MachineWord))
 		self.emit(dstRef, op: TargetOp.arm64Sub(TargetVReg.virtual(resultId), lhs: base, rhs: TargetVReg.virtual(whichId)))
@@ -2651,7 +2652,7 @@ export type StdToArm64Lowering
 	//
 	// The op carries its length, and that is what makes this lowerable at all: no `munmap` spelling
 	// takes a base alone.
-	function lowerOsFreePages(addrId ValueId, sizeId ValueId, dstRef BlockRef)
+	function lowerOsFreePages(addrId ValueId, sizeId ValueId, dstRef ElementIndex)
 		self.emitHostCall(dstRef, callee: self.hostCalleeOn(OsImportSlot.munmap, linux: Arm64LinuxRoute.syscall(Arm64LinuxSyscallMunmap)), args: twoArgs(addrId, second: sizeId))
 	end 'lowerOsFreePages'
 
@@ -2663,7 +2664,7 @@ export type StdToArm64Lowering
 	// ⚠ The two OSes do not promise the same CONTENTS afterwards — Linux refaults zeros, Darwin's `MADV_FREE`
 	// may hand the same dirty page back. `StdDialect.osDecommitPages` carries that obligation; nothing here may
 	// paper over it, because there is no Darwin advice that both keeps the reservation and promises zeros.
-	function lowerOsDecommitPages(addrId ValueId, sizeId ValueId, dstRef BlockRef)
+	function lowerOsDecommitPages(addrId ValueId, sizeId ValueId, dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(addrId)))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(sizeId)))
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: madviseDecommitAdvice(self.target.os)))
@@ -2673,7 +2674,7 @@ export type StdToArm64Lowering
 	// `mmap(NULL, size, PROT_NONE, MAP_ANON|MAP_PRIVATE, -1, 0)`. `PROT_NONE` is what makes it a
 	// reservation rather than an allocation: the kernel records the range and backs nothing, and a
 	// touch faults.
-	function lowerOsReservePages(resultId ValueId, sizeId ValueId, dstRef BlockRef)
+	function lowerOsReservePages(resultId ValueId, sizeId ValueId, dstRef ElementIndex)
 		self.lowerMmap(resultId, base: PageBase.osChooses, sizeId: sizeId, protection: MmapProtNone, flags: mmapAnonPrivateFlags(self.target.os), dstRef: dstRef)
 	end 'lowerOsReservePages'
 
@@ -2687,7 +2688,7 @@ export type StdToArm64Lowering
 	//
 	// `MAP_FIXED` is ORed in at this one site, so the per-OS half of the flag word is stated only in
 	// `mmapAnonPrivateFlags`.
-	function lowerOsCommitPages(resultId ValueId, addrId ValueId, sizeId ValueId, dstRef BlockRef)
+	function lowerOsCommitPages(resultId ValueId, addrId ValueId, sizeId ValueId, dstRef ElementIndex)
 		self.lowerMmap(resultId, base: PageBase.at(addrId), sizeId: sizeId, protection: MmapProtReadWrite, flags: mmapAnonPrivateFlags(self.target.os) or MmapFixed, dstRef: dstRef)
 	end 'lowerOsCommitPages'
 
@@ -2697,7 +2698,7 @@ export type StdToArm64Lowering
 	// to every value live across it, the argument `lowerCall` makes. The call's caller-saved clobber
 	// confines any value live across it to the callee-saved half, which keeps `__slab_alloc`'s
 	// bookkeeping correct.
-	function lowerMmap(resultId ValueId, base PageBase, sizeId ValueId, protection MachineWord, flags MachineWord, dstRef BlockRef)
+	function lowerMmap(resultId ValueId, base PageBase, sizeId ValueId, protection MachineWord, flags MachineWord, dstRef ElementIndex)
 		match base 'base'
 			osChooses then self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: MmapKernelChoosesBase))
 			at(addressId) then self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(addressId)))
@@ -2718,7 +2719,7 @@ export type StdToArm64Lowering
 	//
 	// The fill BYTE is moved nowhere: it is broadcast across the word at compile time and rides the op as an
 	// immediate (`memFillPatternWord`), which is the whole reason `StdOp.memFill`'s value is a constant.
-	function lowerMemFill(destId ValueId, byteCountId ValueId, value ParsedInt, dstRef BlockRef)
+	function lowerMemFill(destId ValueId, byteCountId ValueId, value ParsedInt, dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.physical(Arm64MemFillCursorRegNum), srcReg: TargetVReg.virtual(destId)))
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.physical(Arm64MemFillCountRegNum), srcReg: TargetVReg.virtual(byteCountId)))
 		self.emit(dstRef, op: TargetOp.arm64MemFill(memFillByte(value)))
@@ -2734,7 +2735,7 @@ export type StdToArm64Lowering
 	//
 	// The answer is `-errno` on both lanes, because `StringRuntime.buildStreamWrite` re-issues a write that
 	// answers `-EINTR`.
-	function lowerOsWriteStream(resultId ValueId, bufId ValueId, lenId ValueId, stream OsOutputStream, dstRef BlockRef)
+	function lowerOsWriteStream(resultId ValueId, bufId ValueId, lenId ValueId, stream OsOutputStream, dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: posixStreamFd(stream)))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(bufId)))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x2), srcReg: TargetVReg.virtual(lenId)))
@@ -2750,11 +2751,11 @@ export type StdToArm64Lowering
 	//
 	// ⚠ Not routed through `arm64OsCallKind`, for `lowerMemFill`'s reason: an atomic is an ISA fact, and
 	// LDAXR/STLXR are the same instructions on macOS and Linux.
-	function lowerAtomicCas(resultId ValueId, addrId ValueId, expectedId ValueId, replacementId ValueId, dstRef BlockRef)
+	function lowerAtomicCas(resultId ValueId, addrId ValueId, expectedId ValueId, replacementId ValueId, dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.arm64AtomicCas(TargetVReg.virtual(resultId), addrReg: TargetVReg.virtual(addrId), expectedReg: TargetVReg.virtual(expectedId), replacementReg: TargetVReg.virtual(replacementId)))
 	end 'lowerAtomicCas'
 
-	function lowerAtomicRmw(resultId ValueId, addrId ValueId, operandId ValueId, opcode StdAtomicRmwOpcode, dstRef BlockRef)
+	function lowerAtomicRmw(resultId ValueId, addrId ValueId, operandId ValueId, opcode StdAtomicRmwOpcode, dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.arm64AtomicRmw(TargetVReg.virtual(resultId), addrReg: TargetVReg.virtual(addrId), operandReg: TargetVReg.virtual(operandId), opcode: opcode))
 	end 'lowerAtomicRmw'
 
@@ -2772,7 +2773,7 @@ export type StdToArm64Lowering
 	// `tlsAlloc(result)` ⇒ `pthread_key_create(&key, NULL)`, through a chunk: the key is an OUT-PARAM and an
 	// isel has no frame to give the pointer. The chunk also carries the two assertions that keep a key of 0
 	// from becoming a scheduler that silently never runs.
-	function lowerTlsAlloc(resultId ValueId, dstRef BlockRef)
+	function lowerTlsAlloc(resultId ValueId, dstRef ElementIndex)
 		self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostTlsAllocName), args: ValueIdArray.create(), dstRef: dstRef)
 	end 'lowerTlsAlloc'
 
@@ -2784,7 +2785,7 @@ export type StdToArm64Lowering
 	// The `int` `pthread_setspecific` answers is DISCARDED for `osEnterBackgroundPriority`'s reason — the
 	// only failure it can report is an invalid key, and the key came from `mrt_host_tls_alloc`, which panics
 	// rather than handing one out.
-	function lowerTlsSetValue(indexId ValueId, valueId ValueId, dstRef BlockRef)
+	function lowerTlsSetValue(indexId ValueId, valueId ValueId, dstRef ElementIndex)
 		self.emitHostCall(dstRef, callee: self.hostCalleeOn(OsImportSlot.pthreadSetspecific, linux: Arm64LinuxRoute.chunk(LinuxTlsSetName)), args: twoArgs(indexId, second: valueId))
 	end 'lowerTlsSetValue'
 
@@ -2818,7 +2819,7 @@ export type StdToArm64Lowering
 	// fold — the one splice that DOES write x17 — happens at a VIRTUAL operand's use. x17 is live here only
 	// across the load, whose operands are both physical, so no reload can land inside it. x16 spans the whole
 	// sequence and is safe by the invariant.
-	function lowerTlsSlotLoad(resultId ValueId, tebOffsetId ValueId, dstRef BlockRef)
+	function lowerTlsSlotLoad(resultId ValueId, tebOffsetId ValueId, dstRef ElementIndex)
 		let scratch = arm64PhysReg(Arm64Scratch)
 		let flag = arm64PhysReg(Arm64Register.x17)
 		let offset = TargetVReg.virtual(tebOffsetId)
@@ -2833,13 +2834,13 @@ export type StdToArm64Lowering
 
 	// `osEventCreate(result)` ⇒ a fresh auto-reset event object. `CreateEventA(NULL, FALSE, FALSE, NULL)`
 	// there, `mrt_host_wait_new(kind: event)` here.
-	function lowerOsEventCreate(resultId ValueId, dstRef BlockRef)
+	function lowerOsEventCreate(resultId ValueId, dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: PosixWaitKindEvent))
 		self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostWaitNewName), args: ValueIdArray.create(), dstRef: dstRef)
 	end 'lowerOsEventCreate'
 
 	// `osSetEvent(handle)` ⇒ signal it and wake one waiter.
-	function lowerOsSetEvent(handleId ValueId, dstRef BlockRef)
+	function lowerOsSetEvent(handleId ValueId, dstRef ElementIndex)
 		self.emitHostCall(dstRef, callee: Arm64HostCallee.chunk(HostEventSetName), args: argsOf(handleId))
 	end 'lowerOsSetEvent'
 
@@ -2851,20 +2852,20 @@ export type StdToArm64Lowering
 	// routine is `void*(*)(void*)` — argument and result in x0 — and this backend's internal ABI
 	// passes an integer argument in x0 and returns in x0 too, so `__sched_worker_loop(p)` is a valid
 	// start routine as compiled. The Linux chunk `blr`s it with the same pair of registers.
-	function lowerOsThreadCreate(resultId ValueId, entryPtrId ValueId, argId ValueId, dstRef BlockRef)
+	function lowerOsThreadCreate(resultId ValueId, entryPtrId ValueId, argId ValueId, dstRef ElementIndex)
 		self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostThreadCreateName), args: twoArgs(entryPtrId, second: argId), dstRef: dstRef)
 	end 'lowerOsThreadCreate'
 
 	// `osWaitHandle(result, handle, timeoutMs)` ⇒ the one wait that dispatches on the object's KIND — a
 	// condvar wait for an event, a join for a thread. `Arm64DarwinRuntime`'s layout header carries why one
 	// object has to serve both.
-	function lowerOsWaitHandle(resultId ValueId, handleId ValueId, timeoutMsId ValueId, dstRef BlockRef)
+	function lowerOsWaitHandle(resultId ValueId, handleId ValueId, timeoutMsId ValueId, dstRef ElementIndex)
 		self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostWaitOneName), args: twoArgs(handleId, second: timeoutMsId), dstRef: dstRef)
 	end 'lowerOsWaitHandle'
 
 	// `osNetpoll(result, verb, a0…a4)` ⇒ the lane's `mrt_host_netpoll_*` chunk with the operands that verb reads —
 	// epoll on arm64-Linux and kqueue on macOS, one chunk name each. `openTimer` needs no object on either lane.
-	function lowerOsNetpoll(resultId ValueId, verb NetpollVerb, operands ValueIdArray, dstRef BlockRef)
+	function lowerOsNetpoll(resultId ValueId, verb NetpollVerb, operands ValueIdArray, dstRef ElementIndex)
 		match verb 'v'
 			openTimer then self.emit(dstRef, op: TargetOp.arm64MovImm(TargetVReg.virtual(resultId), value: PosixNoTimerObject as MachineWord))
 			openPoller or
@@ -2884,7 +2885,7 @@ export type StdToArm64Lowering
 	end 'lowerOsNetpoll'
 
 	// `osCloseHandle(handle)` ⇒ destroy a wait object's primitives and release it.
-	function lowerOsCloseHandle(handleId ValueId, dstRef BlockRef)
+	function lowerOsCloseHandle(handleId ValueId, dstRef ElementIndex)
 		self.emitHostCall(dstRef, callee: Arm64HostCallee.chunk(HostWaitCloseName), args: argsOf(handleId))
 	end 'lowerOsCloseHandle'
 
@@ -2911,7 +2912,7 @@ export type StdToArm64Lowering
 	// a post-isel pass splices in writes x16 — while the Darwin call's answer is captured into a virtual,
 	// because a physical read of x0 after a call is what a cold-call bracket's reload would land ahead of
 	// (`mintVirtual`). One load then dereferences whichever it is, straight into the result.
-	function lowerOsEnvBlock(resultId ValueId, dstRef BlockRef)
+	function lowerOsEnvBlock(resultId ValueId, dstRef ElementIndex)
 		let slotAddr = match arm64OsCallKind(self.target.os) 'route'
 			importCall gives self.lowerEnvironSlotAddrDarwin(dstRef)
 			syscall gives self.lowerEnvironSlotAddrLinux(dstRef)
@@ -2921,13 +2922,13 @@ export type StdToArm64Lowering
 	end 'lowerOsEnvBlock'
 
 	// `_NSGetEnviron()` answers the address of `environ` in the return register; the register holding it.
-	function lowerEnvironSlotAddrDarwin(dstRef BlockRef) returns TargetVReg
+	function lowerEnvironSlotAddrDarwin(dstRef ElementIndex) returns TargetVReg
 		let slotAddr = self.fresh.mint()
 		self.lowerHostValue(slotAddr, callee: Arm64HostCallee.import(OsImportSlot.nsGetEnviron), args: ValueIdArray.create(), dstRef: dstRef)
 		return TargetVReg.virtual(slotAddr)
 	end 'lowerEnvironSlotAddrDarwin'
 
-	function lowerEnvironSlotAddrLinux(dstRef BlockRef) returns TargetVReg
+	function lowerEnvironSlotAddrLinux(dstRef ElementIndex) returns TargetVReg
 		let scratch = arm64PhysReg(Arm64Scratch)
 		self.emit(dstRef, op: TargetOp.arm64LeaGlobal(scratch, label: LinuxEnvpLabel))
 		return scratch
@@ -2937,7 +2938,7 @@ export type StdToArm64Lowering
 	// the shape that lane's spawn primitive takes — `SubprocessRuntime.SpawnEnvironmentShape` settles
 	// that one tier up, so a POSIX chunk receives a finished `char *const envp[]` and not a block. A
 	// zero is `Environment.inherit`, the default, and means the parent's own environment.
-	function lowerOsProcessSpawn(commandId ValueId, cwdPtrId ValueId, creationFlagsId ValueId, startupPtrId ValueId, procInfoPtrId ValueId, envPtrId ValueId, dstRef BlockRef)
+	function lowerOsProcessSpawn(commandId ValueId, cwdPtrId ValueId, creationFlagsId ValueId, startupPtrId ValueId, procInfoPtrId ValueId, envPtrId ValueId, dstRef ElementIndex)
 		self.emitHostCall(dstRef, callee: Arm64HostCallee.chunk(HostSpawnName), args: sixArgs(commandId, second: cwdPtrId, third: creationFlagsId, fourth: startupPtrId, fifth: procInfoPtrId, sixth: envPtrId))
 	end 'lowerOsProcessSpawn'
 
@@ -2946,18 +2947,18 @@ export type StdToArm64Lowering
 	//
 	// ⚠ **IT ASKS NO ROUTE AND NAMES NO OP.** A message baked in here would refuse a second caller under
 	// the FIRST one's name. A route is the caller's question; this is only the abort.
-	function lowerRuntimeAbort(dstRef BlockRef, message ByteArray)
+	function lowerRuntimeAbort(dstRef ElementIndex, message ByteArray)
 		self.lowerPanic(self.rdata.stringBlob(message), dstRef: dstRef)
 	end 'lowerRuntimeAbort'
 
 	// `osEnvRead(result, namePtr, bufPtr, bufLen)` ⇒ `getenv` plus the copy Windows's API does for itself.
-	function lowerOsEnvRead(resultId ValueId, namePtrId ValueId, bufPtrId ValueId, bufLenId ValueId, dstRef BlockRef)
+	function lowerOsEnvRead(resultId ValueId, namePtrId ValueId, bufPtrId ValueId, bufLenId ValueId, dstRef ElementIndex)
 		self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostEnvReadName), args: threeArgs(namePtrId, second: bufPtrId, third: bufLenId), dstRef: dstRef)
 	end 'lowerOsEnvRead'
 
 	// `osLockInit(region)` ⇒ `mrt_host_lock_init`, a chunk so the "does a Darwin mutex fit `OsLockBytes`?"
 	// assertion has a build-time home on the path it protects.
-	function lowerOsLockInit(lockPtrId ValueId, dstRef BlockRef)
+	function lowerOsLockInit(lockPtrId ValueId, dstRef ElementIndex)
 		self.emitHostCall(dstRef, callee: Arm64HostCallee.chunk(HostLockInitName), args: argsOf(lockPtrId))
 	end 'lowerOsLockInit'
 
@@ -2970,7 +2971,7 @@ export type StdToArm64Lowering
 	// loop in it (`Arm64LinuxRuntime.buildArm64LinuxLockEnterChunk`), and a loop needs a body. ⚠ Both
 	// are recursive by the owning thread, which is `InitializeCriticalSection`'s contract; a
 	// non-recursive lock hangs.
-	function lowerOsLockImport(lockPtrId ValueId, importSlot OsImportSlot, chunk ByteArray, dstRef BlockRef)
+	function lowerOsLockImport(lockPtrId ValueId, importSlot OsImportSlot, chunk ByteArray, dstRef ElementIndex)
 		self.emitHostCall(dstRef, callee: self.hostCalleeOn(importSlot, linux: Arm64LinuxRoute.chunk(chunk)), args: argsOf(lockPtrId))
 	end 'lowerOsLockImport'
 
@@ -2983,7 +2984,7 @@ export type StdToArm64Lowering
 	// Linux: the `gettid` syscall. ⚠ `TPIDRRO_EL0` is NOT the answer there — the read-only thread ID
 	// register reads 0 unless something has written it, and the compiler's Linux lane is a raw static binary with
 	// no libc to do so. `StdOp.currentThreadToken` carries that argument in full.
-	function lowerCurrentThreadToken(resultId ValueId, dstRef BlockRef)
+	function lowerCurrentThreadToken(resultId ValueId, dstRef ElementIndex)
 		match arm64OsCallKind(self.target.os) 'route'
 			importCall then self.emit(dstRef, op: TargetOp.arm64ThreadPointer(TargetVReg.virtual(resultId), source: Arm64ThreadPointerSource.darwinMaskedReadOnly))
 			syscall then self.lowerCurrentThreadTokenLinux(resultId, dstRef: dstRef)
@@ -2992,7 +2993,7 @@ export type StdToArm64Lowering
 
 	// It names the syscall directly rather than asking `hostCalleeOn`: this arm is already the Linux
 	// one, and there is no macOS import to name — the macOS answer is a register read, not a call.
-	function lowerCurrentThreadTokenLinux(resultId ValueId, dstRef BlockRef)
+	function lowerCurrentThreadTokenLinux(resultId ValueId, dstRef ElementIndex)
 		self.lowerHostValue(resultId, callee: Arm64HostCallee.syscall(Arm64LinuxSyscallGettid), args: ValueIdArray.create(), dstRef: dstRef)
 	end 'lowerCurrentThreadTokenLinux'
 end 'StdToArm64Lowering'

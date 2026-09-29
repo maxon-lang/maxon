@@ -276,14 +276,14 @@ function requireReverseTable(table ByteArray, what String, base ParsedInt, step 
 
 	for entry in table 'eachEntry'
 		let want = base + i * step
-		let size = try sizes.get(entry) otherwise panic("slab reverse table: {what}[{i}] names class {entry}, which is outside the ladder")
+		let size = try sizes.get(entry as ElementIndex) otherwise panic("slab reverse table: {what}[{i}] names class {entry}, which is outside the ladder")
 
 		if size as ParsedInt < want 'doesNotFit'
 			panic("slab reverse table: {what}[{i}] names class {entry} ({size} bytes) for a {want}-byte request, which it cannot hold")
 		end 'doesNotFit'
 
 		if entry > 0 'hasAPredecessor'
-			let below = try sizes.get(entry - 1) otherwise panic("slab reverse table: class {entry} has no predecessor")
+			let below = try sizes.get((entry - 1) as ElementIndex) otherwise panic("slab reverse table: class {entry} has no predecessor")
 
 			if below as ParsedInt >= want 'notTheSmallest'
 				panic("slab reverse table: {what}[{i}] names class {entry} for a {want}-byte request, but class {entry - 1} ({below} bytes) already holds it")

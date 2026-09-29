@@ -526,7 +526,7 @@ let ProseFenceOpen = "```text"
 // block's first line. The header is why a file's line 1 is not the block's line 1 — see
 // `SpecSourceFile.mergedLineOffset`, and `SpecTestRunner.fragmentSource`, which writes it.
 export let FileMarker = "// --- file:"
-let FragmentHeaderLines = 1 as LineIndex
+let FragmentHeaderLines = 1 as ElementIndex
 
 // ⭐⭐ **THE STDLIB-OVERLAY MARKER — how a case reaches a rule that only `<stdlibDir>/Builtins.maxon`
 // can trip.** Its value is a path RELATIVE TO `stdlib/`, and the section's text is written at the TOP
@@ -569,11 +569,6 @@ export let ParentSegment = ".."
 export let PathSeparator = "/"
 export let WindowsPathSeparator = "\\"
 export let DriveLetterSeparator = ":"
-
-// A 0-based line index into a spec file — and, on `SpecSourceFile.mergedLineOffset`, the distance
-// between a compiled file's line numbers and the merged fragment's. Exported because the RUNNER is
-// what applies that distance to a diagnostic.
-export typealias LineIndex = int(0 to u64.max)
 
 // A process exit code — shared by the EXPECTED value parsed here and the OBSERVED
 // value the runner reads back, so they compare without a cast. Exported so the
@@ -690,9 +685,9 @@ export type SpecSourceFile
 	//
 	// It counts the marker line, everything above it, and the one `// Test: <name>` header line the
 	// fragment carries.
-	export let mergedLineOffset as LineIndex
+	export let mergedLineOffset as ElementIndex
 
-	export static function create(name String, source String, mergedLineOffset LineIndex) returns SpecSourceFile
+	export static function create(name String, source String, mergedLineOffset ElementIndex) returns SpecSourceFile
 		return Self{name: name, source: source, mergedLineOffset: mergedLineOffset}
 	end 'create'
 end 'SpecSourceFile'
@@ -974,9 +969,9 @@ export typealias SpecTestArray = Array with SpecTest
 // instead of copy-pasted fence walking.
 type FenceBlock
 	export let text as String
-	export let nextIndex as LineIndex
+	export let nextIndex as ElementIndex
 
-	static function create(text String, nextIndex LineIndex) returns FenceBlock
+	static function create(text String, nextIndex ElementIndex) returns FenceBlock
 		return Self{text: text, nextIndex: nextIndex}
 	end 'create'
 end 'FenceBlock'
@@ -1116,7 +1111,7 @@ function extractTests(lines StringArray, specPath FilePath, effectiveTargetKey S
 	return tests
 end 'extractTests'
 
-function afterLineOutsideAnyCase(lines StringArray, index LineIndex, line String, openings StringArray, site UnreadCommentSite, specPath FilePath) returns LineIndex
+function afterLineOutsideAnyCase(lines StringArray, index ElementIndex, line String, openings StringArray, site UnreadCommentSite, specPath FilePath) returns ElementIndex
 	refuseUnreadComment(openings, lineIndex: index, specPath: specPath, site: site)
 
 	let fenceLine = line.trim()
@@ -1131,7 +1126,7 @@ end 'afterLineOutsideAnyCase'
 //
 // It panics in the parent, before a worker exists, as this file's other spec-authoring refusals do;
 // `tests/spec-harness/refusals/unterminated-test-marker` is what proves it still fires.
-function closedOpening(opening String, markerIndex LineIndex, specPath FilePath) returns String
+function closedOpening(opening String, markerIndex ElementIndex, specPath FilePath) returns String
 	if opening.contains(MarkerEnd) 'properlyClosed'
 		return opening
 	end 'properlyClosed'
@@ -1139,7 +1134,7 @@ function closedOpening(opening String, markerIndex LineIndex, specPath FilePath)
 	panic("SpecParser: {specPath.toString()}:{markerIndex + 1}: this test marker is never closed — its own '{CommentOpen}' has no '{MarkerEnd}' after it, so everything past the '{MarkerNameSep}' would be read as the case NAME: '{opening}'. That is how a case its author COMMENTED OUT gets run: the `-->` ends up below the case's fences, the marker parses anyway, and the harness compiles and runs a program the file says is switched off. The reference parser declines this marker outright, so the same file already means two different things to two compilers. Close the marker on its own line — and if the case is not meant to run, delete it")
 end 'closedOpening'
 
-function exitCodeExpectationIn(text String, fenceIndex LineIndex, specPath FilePath) returns ExitCodeValue
+function exitCodeExpectationIn(text String, fenceIndex ElementIndex, specPath FilePath) returns ExitCodeValue
 	let parsed = try int.fromString(text) otherwise panic("SpecParser: {specPath.toString()}:{fenceIndex + 1}: this test's `{ExitCodeFence}` block holds '{text}', which is not a number — so nothing would be pinned about the case's exit status and the case would run as though the block were not there")
 
 	if parsed < 0 or parsed > u32.max 'noProcessReportsOne'
@@ -1149,7 +1144,7 @@ function exitCodeExpectationIn(text String, fenceIndex LineIndex, specPath FileP
 	return parsed as ExitCodeValue
 end 'exitCodeExpectationIn'
 
-function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine String, markerOpenings StringArray, testOpening String, tests SpecTestArray, specPath FilePath, effectiveTargetKey String) returns LineIndex
+function scanTestFromMarker(lines StringArray, markerIndex ElementIndex, markerLine String, markerOpenings StringArray, testOpening String, tests SpecTestArray, specPath FilePath, effectiveTargetKey String) returns ElementIndex
 	let closed = closedOpening(testOpening, markerIndex: markerIndex, specPath: specPath)
 	var builder = CaseBuilder.create(markerValueOf(closed), markerIndex: markerIndex, specPath: specPath, effectiveTargetKey: effectiveTargetKey)
 	builder.refuseCrowdedLine(markerOpenings, line: markerLine, lineIndex: markerIndex)
@@ -1187,15 +1182,15 @@ end 'scanTestFromMarker'
 // walker that disagreed about where a case ends would write the block into a neighbouring case or a
 // prose block.
 export type TraceSlice
-	export let blockStart as LineIndex
-	export let blockEnd as LineIndex
+	export let blockStart as ElementIndex
+	export let blockEnd as ElementIndex
 
-	static function create(blockStart LineIndex, blockEnd LineIndex) returns TraceSlice
+	static function create(blockStart ElementIndex, blockEnd ElementIndex) returns TraceSlice
 		return Self{blockStart: blockStart, blockEnd: blockEnd}
 	end 'create'
 end 'TraceSlice'
 
-function sliceAfterLastContent(lines StringArray, markerIndex LineIndex, caseEnd LineIndex) returns TraceSlice
+function sliceAfterLastContent(lines StringArray, markerIndex ElementIndex, caseEnd ElementIndex) returns TraceSlice
 	var boundary = caseEnd
 
 	while boundary > markerIndex + 1 'trailingBlankLines'
@@ -1246,7 +1241,7 @@ end 'directiveOf'
 type CaseBuilder
 	let site as UnreadCommentSite
 	let name as String
-	let markerIndex as LineIndex
+	let markerIndex as ElementIndex
 	let specPath as FilePath
 	let effectiveTargetKey as String
 	var claimedBlocks as StringArray
@@ -1290,11 +1285,11 @@ type CaseBuilder
 	// runs beside others, not a default standing in for an unread marker.
 	var runs as SpecRuns
 
-	static function create(name String, markerIndex LineIndex, specPath FilePath, effectiveTargetKey String) returns CaseBuilder
+	static function create(name String, markerIndex ElementIndex, specPath FilePath, effectiveTargetKey String) returns CaseBuilder
 		return Self{site: UnreadCommentSite.insideCase(name), name: name, markerIndex: markerIndex, specPath: specPath, effectiveTargetKey: effectiveTargetKey, claimedBlocks: StringArray.create(), claimedDirectives: CaseDirectiveArray.create(), fenceSeen: false, program: CaseProgram.absent, exitCode: SpecExitCode.unpinned, compilerError: TargetPreferredText.create(), stderr: TargetPreferredText.create(), stdout: TargetPreferredText.create(), sectionPins: SpecSectionPinArray.create(), unsupportedTargets: TargetKeyArray.create(), runtimeNames: RuntimeFunctionNameArray.create(), programArgs: ProgramArgArray.create(), asyncTrace: false, debugInfo: false, markedFamily: MarkedTraceFamily.none, captureBlock: CaptureBlock.absent, network: SpecNetwork.none, procs: SpecProcs.unset, preempt: SpecPreempt.unset, stdin: SpecStdin.closed, runs: SpecRuns.shared}
 	end 'create'
 
-	function refuseCrowdedLine(openings StringArray, line String, lineIndex LineIndex)
+	function refuseCrowdedLine(openings StringArray, line String, lineIndex ElementIndex)
 		if openings.count() <= DirectivesPerLine 'oneAtMost'
 			return
 		end 'oneAtMost'
@@ -1309,7 +1304,7 @@ type CaseBuilder
 		panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: this line carries {openings.count()} directives: '{line.trim()}'. Each line is read for one marker, so every directive after the first would be discarded without a word. Give each directive a line of its own")
 	end 'refuseCrowdedLine'
 
-	function readDirectiveLine(openings StringArray, line String, lineIndex LineIndex)
+	function readDirectiveLine(openings StringArray, line String, lineIndex ElementIndex)
 		self.refuseCrowdedLine(openings, line: line, lineIndex: lineIndex)
 		let opening = try openings.first() otherwise panic("SpecParser.CaseBuilder.readDirectiveLine: the caller hands it a line whose openings are non-empty, so its first cannot be absent")
 
@@ -1319,7 +1314,7 @@ type CaseBuilder
 		end 'directive'
 	end 'readDirectiveLine'
 
-	function readDirective(directive CaseDirective, opening String, lineIndex LineIndex)
+	function readDirective(directive CaseDirective, opening String, lineIndex ElementIndex)
 		let spelling = directive.spelling()
 
 		if claimedDirectives.contains(directive) 'repeated'
@@ -1348,14 +1343,14 @@ type CaseBuilder
 		end 'directive'
 	end 'readDirective'
 
-	function markTraceFamily(family TraceFamily, lineIndex LineIndex)
+	function markTraceFamily(family TraceFamily, lineIndex ElementIndex)
 		match markedFamily 'marked'
 			none then markedFamily = MarkedTraceFamily.marked(family)
 			marked(earlier) then panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{name}' carries both `{traceMarkerOf(earlier)} -->` and `{traceMarkerOf(family)} -->`. A case captures one trace family, so one of the two would be discarded without a word. Keep the one this case asserts")
 		end 'marked'
 	end 'markTraceFamily'
 
-	function refuseUnreadDirective(opening String, lineIndex LineIndex)
+	function refuseUnreadDirective(opening String, lineIndex ElementIndex)
 		// The retired whitelist spelling gets its own refusal. `refuseUnreadOpening` would catch it too,
 		// but only this arm can say what the line meant — the inverse of what `UnsupportedTargetsMarker`
 		// names — and which spelling replaces it.
@@ -1366,7 +1361,7 @@ type CaseBuilder
 		refuseUnreadOpening(opening, lineIndex: lineIndex, specPath: specPath, site: site)
 	end 'refuseUnreadDirective'
 
-	function readLine(lines StringArray, index LineIndex, fenceLine String) returns LineIndex
+	function readLine(lines StringArray, index ElementIndex, fenceLine String) returns ElementIndex
 		// Asked before the fence arms: they match by prefix, so a prose line such as
 		// `` ```RequiredRuntime block, one name per line: `` would be consumed as a block and its words
 		// read as function names.
@@ -1456,14 +1451,14 @@ type CaseBuilder
 		return afterUnclaimedLine(lines, index: index, fenceLine: fenceLine, specPath: specPath, site: site)
 	end 'readLine'
 
-	function readCaptureBlock(lines StringArray, index LineIndex, family TraceFamily) returns LineIndex
+	function readCaptureBlock(lines StringArray, index ElementIndex, family TraceFamily) returns ElementIndex
 		self.claimBlock(captureBlockKind(), lineIndex: index)
 		let block = readFence(lines, openIndex: index, specPath: specPath)
 		captureBlock = CaptureBlock.read(family, trace: block.text, span: TraceSlice.create(index, blockEnd: block.nextIndex))
 		return block.nextIndex
 	end 'readCaptureBlock'
 
-	function claimBlock(kind String, lineIndex LineIndex)
+	function claimBlock(kind String, lineIndex ElementIndex)
 		if claimedBlocks.contains(kind) 'repeated'
 			panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{name}' carries a second '{kind}' block. A case holds one of each, so the later block would silently replace the earlier one, and a case whose own marker is missing merges into the case above it in exactly this way. Give each case its own `{TestMarker} NAME -->` line, or delete one of the two blocks")
 		end 'repeated'
@@ -1471,7 +1466,7 @@ type CaseBuilder
 		claimedBlocks.push(kind)
 	end 'claimBlock'
 
-	function build(lines StringArray, caseEnd LineIndex) returns SpecTest
+	function build(lines StringArray, caseEnd ElementIndex) returns SpecTest
 		let source = match program 'program'
 			absent panic("SpecParser: {specPath.toString()}:{markerIndex + 1}: test '{name}' has no ```maxon block, so there is no program to run and the case would run nowhere with nothing reported. Add its source under the marker, or delete the marker")
 			read(text) gives text
@@ -1481,7 +1476,7 @@ type CaseBuilder
 		return SpecTest.create(name, source: source, expectation: self.expectationFor(traceCapture), unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin, runs: runs)
 	end 'build'
 
-	function settledCapture(lines StringArray, caseEnd LineIndex) returns SpecTraceCapture
+	function settledCapture(lines StringArray, caseEnd ElementIndex) returns SpecTraceCapture
 		return match markedFamily 'marker'
 			none gives self.unmarkedCapture()
 			marked(family) gives self.markedCapture(family, lines: lines, caseEnd: caseEnd)
@@ -1495,7 +1490,7 @@ type CaseBuilder
 		end 'block'
 	end 'unmarkedCapture'
 
-	function markedCapture(family TraceFamily, lines StringArray, caseEnd LineIndex) returns SpecTraceCapture
+	function markedCapture(family TraceFamily, lines StringArray, caseEnd ElementIndex) returns SpecTraceCapture
 		return match captureBlock 'block'
 			absent gives SpecTraceCapture.unpinned(family, insertAt: sliceAfterLastContent(lines, markerIndex: markerIndex, caseEnd: caseEnd))
 			read(blockFamily, trace, span) gives self.agreeingCapture(family, blockFamily: blockFamily, trace: trace, span: span)
@@ -1551,7 +1546,7 @@ function captureBlockKind() returns String
 	return "{MmTraceFence} or {LogTraceFence}"
 end 'captureBlockKind'
 
-function refuseFenceShapedProse(fenceLine String, lineIndex LineIndex, specPath FilePath)
+function refuseFenceShapedProse(fenceLine String, lineIndex ElementIndex, specPath FilePath)
 	if fenceOpenCarriesProse(fenceLine) 'proseLineOpeningWithAFencePrefix'
 		panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: this line begins with a fence delimiter and its info string contains a space, so it is a PROSE line that every fence arm would claim by prefix and read as a block body: '{fenceLine}'. Every fence tag in this grammar is a single token. Write the name as inline code (one backtick) if it is prose, or make the line a real fence")
 	end 'proseLineOpeningWithAFencePrefix'
@@ -1559,7 +1554,7 @@ end 'refuseFenceShapedProse'
 
 // A prose block is consumed to its close in one step, inside a case or outside any, so a marker or
 // fence it quotes is never read as one.
-function afterUnclaimedLine(lines StringArray, index LineIndex, fenceLine String, specPath FilePath, site UnreadCommentSite) returns LineIndex
+function afterUnclaimedLine(lines StringArray, index ElementIndex, fenceLine String, specPath FilePath, site UnreadCommentSite) returns ElementIndex
 	if opensProseFence(fenceLine) 'proseBlock'
 		return readFence(lines, openIndex: index, specPath: specPath).nextIndex
 	end 'proseBlock'
@@ -1571,7 +1566,7 @@ function afterUnclaimedLine(lines StringArray, index LineIndex, fenceLine String
 	return index + 1
 end 'afterUnclaimedLine'
 
-function refuseUnreadFence(fenceLine String, lineIndex LineIndex, specPath FilePath, site UnreadCommentSite)
+function refuseUnreadFence(fenceLine String, lineIndex ElementIndex, specPath FilePath, site UnreadCommentSite)
 	let consequence = match site 'where'
 		insideCase(name) gives "test '{name}' opens a fence this parser does not implement: '{fenceLine}'. The fences a case may open are the whole set this parser reads, so this block is silently skipped: it pins NOTHING while reading as coverage. Delete it (what pins the emitted code here is the minted fragment golden) or implement the fence"
 		outsideAnyCase gives "the `{TestsHeading}` region opens a fence outside any case: '{fenceLine}'. Only a `{TestMarker} NAME -->` line opens a case, so a program or expectation no marker opened runs nowhere, with nothing reported. Put it under its case's marker, or make it prose (a bare `{FenceDelimiter}` or `{ProseFenceOpen}` block)"
@@ -1613,7 +1608,7 @@ end 'opensProseFence'
 // ⚠ Pins ACCUMULATE, which is why this pushes rather than assigns: a case may pin both sections, and
 // a second block of the same kind is still a second claim about the same link rather than a
 // replacement for the first.
-function pushSectionPin(lines StringArray, openIndex LineIndex, testName String, fence String, section LinkedSectionKind, pins SpecSectionPinArray, specPath FilePath) returns LineIndex
+function pushSectionPin(lines StringArray, openIndex ElementIndex, testName String, fence String, section LinkedSectionKind, pins SpecSectionPinArray, specPath FilePath) returns ElementIndex
 	let block = readFence(lines, openIndex: openIndex, specPath: specPath)
 	let text = block.text.trim()
 
@@ -1634,7 +1629,7 @@ end 'pushSectionPin'
 // ⚠ Names ACCUMULATE across blocks, for `pushSectionPin`'s reason and one more: an ASSIGN would make a
 // case carrying two ```RequiredRuntime blocks silently render only the second one's bodies while
 // reading as though it had asked for both.
-function pushRuntimeNames(lines StringArray, openIndex LineIndex, testName String, names RuntimeFunctionNameArray, specPath FilePath) returns LineIndex
+function pushRuntimeNames(lines StringArray, openIndex ElementIndex, testName String, names RuntimeFunctionNameArray, specPath FilePath) returns ElementIndex
 	let block = readFence(lines, openIndex: openIndex, specPath: specPath)
 
 	// What THIS block contributed is the difference the accumulator itself reports — not a counter
@@ -1710,7 +1705,7 @@ end 'pinsAnyResult'
 // resume the block scan from. Its target-qualified twin is below, and the pair is why the three portable
 // arms are three lines each instead of the same five lines written out three times: what differs between
 // a ```maxoncstderr, a ```stderr and a ```stdout block is WHICH SLOT it lands in, and nothing else.
-function recordPortableText(lines StringArray, openIndex LineIndex, slot TargetPreferredText, specPath FilePath) returns LineIndex
+function recordPortableText(lines StringArray, openIndex ElementIndex, slot TargetPreferredText, specPath FilePath) returns ElementIndex
 	let block = readFence(lines, openIndex: openIndex, specPath: specPath)
 	slot.recordPortable(block.text.trim())
 	return block.nextIndex
@@ -1726,7 +1721,7 @@ end 'recordPortableText'
 // arbitrary text: a `## ` line inside one ENDS the test at that point, so an unconsumed
 // `` ```Maxoncstderr:arm64-macos `` sitting above a case's ```maxon block silently deletes the whole
 // case from the run. Only the block naming this run's target is KEPT.
-function recordTargetQualifiedText(lines StringArray, openIndex LineIndex, openLine String, fencePrefix String, effectiveTargetKey String, slot TargetPreferredText, specPath FilePath, testName String) returns LineIndex
+function recordTargetQualifiedText(lines StringArray, openIndex ElementIndex, openLine String, fencePrefix String, effectiveTargetKey String, slot TargetPreferredText, specPath FilePath, testName String) returns ElementIndex
 	let qualifier = valueAfterKey(openLine, key: fencePrefix)
 	requireSupportedTargetKey(qualifier, spelledIn: "the fence '{openLine}'", specPath: specPath, testName: testName)
 	let block = readFence(lines, openIndex: openIndex, specPath: specPath)
@@ -1842,7 +1837,7 @@ function splitSourceSections(testName String, source String) returns SpecSourceS
 	var body = ""
 	var kind = SpecSectionKind.notAMarker
 	var haveMarker = false
-	var offset = 0 as LineIndex
+	var offset = 0 as ElementIndex
 
 	for i in 0 upto lineCount 'eachLine'
 		let line = try lines.get(i) otherwise panic("SpecParser.splitSourceSections: index {i} >= lineCount {lineCount} despite the upto bound")
@@ -1915,7 +1910,7 @@ end 'refuseSectionsWithoutAProgram'
 // File the section just closed into the list its marker chose. Split out because the scan closes a
 // section in two places — at the next marker and at end of block — and the two must agree about which
 // list, which trimming and which offset a section gets.
-function pushSection(files SpecSourceFileArray, overlays SpecSourceFileArray, runtimeFiles SpecSourceFileArray, kind SpecSectionKind, name String, body String, offset LineIndex)
+function pushSection(files SpecSourceFileArray, overlays SpecSourceFileArray, runtimeFiles SpecSourceFileArray, kind SpecSectionKind, name String, body String, offset ElementIndex)
 	let section = SpecSourceFile.create(name, source: body.trim(), mergedLineOffset: offset)
 
 	match kind 'toItsList'
@@ -2159,13 +2154,13 @@ union UnreadCommentSite
 	outsideAnyCase
 end 'UnreadCommentSite'
 
-function refuseUnreadComment(openings StringArray, lineIndex LineIndex, specPath FilePath, site UnreadCommentSite)
+function refuseUnreadComment(openings StringArray, lineIndex ElementIndex, specPath FilePath, site UnreadCommentSite)
 	for opening in openings 'each'
 		refuseUnreadOpening(opening, lineIndex: lineIndex, specPath: specPath, site: site)
 	end 'each'
 end 'refuseUnreadComment'
 
-function refuseUnreadOpening(opening String, lineIndex LineIndex, specPath FilePath, site UnreadCommentSite)
+function refuseUnreadOpening(opening String, lineIndex ElementIndex, specPath FilePath, site UnreadCommentSite)
 	let quoted = "'{markerBodyOf(opening).trim()} {MarkerEnd}'"
 
 	let consequence = match site 'where'
@@ -2200,7 +2195,7 @@ let RosterSeparator = ", "
 // with nothing anywhere saying why. That is the same failure `AsyncTraceMarker` records having shipped —
 // a marker the file states and the harness declines — arriving through a value rather than through a
 // missing arm.
-function parseNetworkValue(opening String, lineIndex LineIndex, specPath FilePath, testName String) returns SpecNetwork
+function parseNetworkValue(opening String, lineIndex ElementIndex, specPath FilePath, testName String) returns SpecNetwork
 	let value = markerValueOf(opening)
 
 	if value == NetworkLiveValue 'live'
@@ -2218,7 +2213,7 @@ end 'parseNetworkValue'
 // as "leave the default alone" (`SchedRuntime.emitResolveMaxProcs`) — which is the right answer for a value
 // a USER typed at a shell and the wrong one for a value a SPEC FILE states, because only one of the two is
 // a committed claim somebody expects to be checked.
-function parseProcsValue(opening String, lineIndex LineIndex, specPath FilePath, testName String) returns SpecProcs
+function parseProcsValue(opening String, lineIndex ElementIndex, specPath FilePath, testName String) returns SpecProcs
 	let value = markerValueOf(opening)
 	let count = try int.fromString(value) otherwise panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{testName}' carries `{ProcsMarker} {value} -->`, and this marker takes a positive decimal processor count. It becomes `{String.from(MaxProcsEnvName)}={value}` in the environment of this case's program alone, so a value the harness cannot read is a claim the file makes and nothing honours")
 
@@ -2239,7 +2234,7 @@ end 'parseProcsValue'
 // that takes it, and report the answer as though the switch had been honoured. The scheduler refuses a
 // malformed `MAXON_PREEMPT` too (`SchedRuntime.emitResolvePreemptSwitch`); this refusal comes first, at
 // parse, so the file's claim never reaches a child.
-function parsePreemptValue(opening String, lineIndex LineIndex, specPath FilePath, testName String) returns SpecPreempt
+function parsePreemptValue(opening String, lineIndex ElementIndex, specPath FilePath, testName String) returns SpecPreempt
 	let value = markerValueOf(opening)
 
 	if value == String.from(PreemptEnvOffValue) 'off'
@@ -2253,7 +2248,7 @@ end 'parsePreemptValue'
 //
 // ⛔ **AN UNRECOGNIZED VALUE IS A PANIC, NOT A `shared`**, for `parseNetworkValue`'s reason exactly: a defaulted
 // value would run the case beside a full pool, which is the one condition the marker exists to keep it from.
-function parseRunsValue(opening String, lineIndex LineIndex, specPath FilePath, testName String) returns SpecRuns
+function parseRunsValue(opening String, lineIndex ElementIndex, specPath FilePath, testName String) returns SpecRuns
 	let value = markerValueOf(opening)
 
 	if value == RunsAloneValue 'alone'
@@ -2269,7 +2264,7 @@ end 'parseRunsValue'
 // same fail-open shape: a typo or a blank value read as "the default stdin" hands the case an INSTANT
 // EOF, and a case written to assert that something blocks would then pass without anything ever having
 // blocked — a green result from a program that never entered the state under test.
-function parseStdinValue(opening String, lineIndex LineIndex, specPath FilePath, testName String) returns SpecStdin
+function parseStdinValue(opening String, lineIndex ElementIndex, specPath FilePath, testName String) returns SpecStdin
 	let value = markerValueOf(opening)
 
 	if value == StdinHoldValue 'held'
@@ -2441,7 +2436,7 @@ end 'TextJoiner'
 // VERBATIM — the runner prepends the one `// Test: <name>` line and nothing else,
 // which is what keeps a spec's code at the fragment line number its diagnostics
 // name (SpecTestRunner's `fragmentSource`).
-function readFence(lines StringArray, openIndex LineIndex, specPath FilePath) returns FenceBlock
+function readFence(lines StringArray, openIndex ElementIndex, specPath FilePath) returns FenceBlock
 	let lineCount = lines.count()
 	var text = TextJoiner.create(LineSeparator)
 	var i = openIndex + 1

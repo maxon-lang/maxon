@@ -551,11 +551,11 @@ end 'totalCost'
 ```maxon
 // pricing/pricing.maxtest
 test 'a small order pays full price'
-	Expect.equal(totalCost(250, quantity: 4) as AssertedInt, expected: 1000)
+	Expect.equal(totalCost(250, quantity: 4), expected: 1000)
 end 'a small order pays full price'
 
 test 'ten items take the bulk discount'
-	Expect.equal(totalCost(250, quantity: 10) as AssertedInt, expected: 2500)
+	Expect.equal(totalCost(250, quantity: 10), expected: 2500)
 end 'ten items take the bulk discount'
 ```
 

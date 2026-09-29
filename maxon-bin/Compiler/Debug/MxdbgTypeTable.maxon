@@ -205,13 +205,13 @@ export type MxdbgTypeTable
 	end 'idOf'
 
 	export function aggregateWordCount(name ByteArray) returns MxdbgIndex
-		let entry = try self.entries.get(self.idOf(name) as ElementIndex) otherwise panic("MxdbgTypeTable.aggregateWordCount: '{String.from(name)}' has an id this table's own entries do not hold")
+		let entry = try self.entries.get(self.idOf(name)) otherwise panic("MxdbgTypeTable.aggregateWordCount: '{String.from(name)}' has an id this table's own entries do not hold")
 
 		return mxdbgFoldedAggregateWordCount(entry.desc.kind, fieldCount: entry.desc.fields.count() as MxdbgIndex)
 	end 'aggregateWordCount'
 
 	export function holdsAPointer(name ByteArray) returns bool
-		let entry = try self.entries.get(self.idOf(name) as ElementIndex) otherwise panic("MxdbgTypeTable.holdsAPointer: '{String.from(name)}' has an id this table's own entries do not hold")
+		let entry = try self.entries.get(self.idOf(name)) otherwise panic("MxdbgTypeTable.holdsAPointer: '{String.from(name)}' has an id this table's own entries do not hold")
 
 		return mxdbgTypeKindIsIndirect(entry.desc.kind)
 	end 'holdsAPointer'
@@ -343,7 +343,7 @@ end 'mxdbgDescribeType'
 // A struct's fields in DECLARATION order, at the very offsets codegen laid them out at.
 function mxdbgDescribeStruct(project Project, signatures ProgramSignatures, layout StructLayout) returns MxdbgTypeDesc
 	var fields = MxdbgFieldDescArray.create()
-	fields.reserve(layout.fieldCount() as ElementIndex)
+	fields.reserve(layout.fieldCount())
 
 	for i in 0 upto layout.fieldCount() 'eachField'
 		let fieldType = try layout.fieldTypes.get(i) otherwise panic("mxdbgDescribeStruct: fieldTypes.get OOB at {i} for `type {String.from(layout.name)}`, whose columns are index-parallel")
@@ -361,7 +361,7 @@ end 'mxdbgDescribeStruct'
 // managed-record placeholder for a multi-value payload, which has no single type in this model.
 function mxdbgDescribeEnum(project Project, signatures ProgramSignatures, layout EnumLayout) returns MxdbgTypeDesc
 	var fields = MxdbgFieldDescArray.create()
-	fields.reserve(layout.caseCount() as ElementIndex)
+	fields.reserve(layout.caseCount())
 
 	for i in 0 upto layout.caseCount() 'eachCase'
 		let tag = try layout.caseTags.get(i) otherwise panic("mxdbgDescribeEnum: caseTags.get OOB at {i} for `{String.from(layout.name)}`, whose columns are index-parallel")

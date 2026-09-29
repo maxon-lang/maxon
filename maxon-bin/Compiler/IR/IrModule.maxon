@@ -8,16 +8,11 @@
 //   typealias StdModule    = IrModule with StdOp
 //   typealias TargetModule = IrModule with TargetOp
 
-export typealias OpCount = int(0 to u64.max)
-export typealias BlockCount = int(0 to u64.max)
-export typealias FuncCount = int(0 to u64.max)
-export typealias FuncIndex = int(0 to u64.max)
 
-export typealias BlockRefIndex = int(0 to u64.max)
 
 // The result of `IrModule.blockIndexById`: a function's `BlockId` to its position in
-// `func.blockRefs`. Named here beside `BlockRefIndex`, which is what it holds.
-export typealias BlockIndexById = BlockKeyedTable with BlockRefIndex
+// `func.blockRefs`.
+export typealias BlockIndexById = BlockKeyedTable with ElementIndex
 
 // Thrown by IrModule.findBlockRef when the given block isn't registered in
 // the function's block list — used by the parser's statement-line recorder
@@ -237,7 +232,7 @@ export type IrModule uses Op
 		return Self{}
 	end 'create'
 
-	export function opCount() returns OpCount
+	export function opCount() returns ElementIndex
 		return self.ops.count()
 	end 'opCount'
 
@@ -254,8 +249,8 @@ export type IrModule uses Op
 	// log is enabled or `--dump-stages` is on. The walk is O(blocks +
 	// total opRefs entries) per call, dwarfed by anything diagnostic
 	// modes already pay.
-	export function liveOpCount() returns OpCount
-		var count = 0 as OpCount
+	export function liveOpCount() returns ElementIndex
+		var count = 0 as ElementIndex
 
 		for func in self.functions 'eachFunc'
 			count = count + self.liveOpIndices(func).count()
@@ -313,11 +308,12 @@ export type IrModule uses Op
 	// names its successors by `BlockId`, `blockRefs` is in LAYOUT order, and there is otherwise no
 	// route from the one to the other short of a linear scan per branch.
 	//
-	// The POSITION is what it stores, not the `BlockRef`, because that is the form both callers need
-	// and the one the other is recoverable from: the wasm backend's `loop`+`br_table` dispatcher
-	// indexes blocks by exactly this position (`StdToWasm.dispatchIndexOf`), and a caller that wants
-	// the block itself composes `func.blockRefs.get(position)` — one more array read, no second
-	// table. Storing `BlockRef` instead would have made the wasm side unserviceable.
+	// The POSITION is what it stores, not the block's ref into `self.blocks`, because that is the form
+	// both callers need and the one the other is recoverable from: the wasm backend's
+	// `loop`+`br_table` dispatcher indexes blocks by exactly this position
+	// (`StdToWasm.dispatchIndexOf`), and a caller that wants the block itself composes
+	// `func.blockRefs.get(position)` — one more array read, no second table. Storing the ref instead
+	// would have made the wasm side unserviceable.
 	//
 	// It is a dense `BlockKeyedTable` and not a `Map with (BlockId, …)` for the reason that type's
 	// header states at length: block ids ARE the index space, and the hash was measured to be a
@@ -342,12 +338,12 @@ export type IrModule uses Op
 		end 'eachBlock'
 	end 'placeBlockPositions'
 
-	// Refill `scratch` for a splice of `func`'s rebuilt body: its live op slots, and its `BlockId -> BlockRef`
-	// map as a dense column over its id space, with `absent` — a ref no block has — standing for an id the
-	// function does not own, so such an id reads as absent rather than as block 0. One pass over the block
-	// list rather than `getBlockByIdIn` per lookup, which is a scan and would make a per-block splice
-	// quadratic in a function's block count. The id space is dense per function but not gap-free, so the
-	// holes are real.
+	// Refill `scratch` for a splice of `func`'s rebuilt body: its live op slots, and its `BlockId ->
+	// block ref` map as a dense column over its id space, with `absent` — a ref no block has —
+	// standing for an id the function does not own, so such an id reads as absent rather than as block
+	// 0. One pass over the block list rather than `getBlockByIdIn` per lookup, which is a scan and
+	// would make a per-block splice quadratic in a function's block count. The id space is dense per
+	// function but not gap-free, so the holes are real.
 	module function prepareSplice(func IrFunction, scratch SpliceScratch)
 		self.collectLiveOpIndices(func, into: scratch.slots.recycled)
 		scratch.slots.taken = 0
@@ -430,7 +426,7 @@ export type IrModule uses Op
 			end 'orphan'
 
 			if newIdx != oldIdx 'needsSwap'
-				self.ops.swap(newIdx as ElementIndex, j: oldIdx as ElementIndex)
+				self.ops.swap(newIdx, j: oldIdx as ElementIndex)
 
 				if compactSpans 'swapSpan'
 					self.spans.swapAt(newIdx, j: oldIdx)
@@ -518,10 +514,10 @@ export type IrModule uses Op
 			end 'orphan'
 
 			if newIdx != oldIdx 'needsSwap'
-				self.blocks.swap(newIdx as ElementIndex, j: oldIdx as ElementIndex)
+				self.blocks.swap(newIdx, j: oldIdx as ElementIndex)
 
 				if compactSourceInfo 'swapInfo'
-					self.blockSourceInfo.swap(newIdx as ElementIndex, j: oldIdx as ElementIndex)
+					self.blockSourceInfo.swap(newIdx, j: oldIdx as ElementIndex)
 				end 'swapInfo'
 			end 'needsSwap'
 		end 'move'
@@ -550,17 +546,17 @@ export type IrModule uses Op
 		self.spans.appendFrom(source.spans, count: source.ops.count())
 	end 'appendOps'
 
-	export function blockCount() returns BlockCount
+	export function blockCount() returns ElementIndex
 		return self.blocks.count()
 	end 'blockCount'
 
-	export function getBlock(index BlockRef) returns IrBlock
+	export function getBlock(index ElementIndex) returns IrBlock
 		return try self.blocks.get(index) otherwise panic("getBlock: index out of bounds")
 	end 'getBlock'
 
 	// The block at a `func.blockRefs` POSITION — the key space `StdDominatorTree` answers in. Read through
 	// a function so the borrow of the module ends at the return, as `getOp` explains.
-	export function blockAtPosition(func IrFunction, position BlockRefIndex) returns IrBlock
+	export function blockAtPosition(func IrFunction, position ElementIndex) returns IrBlock
 		return self.getBlock(try func.blockRefs.get(position) otherwise panic("blockAtPosition: position {position} is outside func.blockRefs, which holds {func.blockRefs.count()} block(s)"))
 	end 'blockAtPosition'
 
@@ -568,7 +564,7 @@ export type IrModule uses Op
 	// written inline borrows the module for as long as the value lives, and a pass that mutates the module
 	// in the next breath (an `appendOp`, an `ops.set`) is refused by the self-compile. Reading through this
 	// ends the borrow at the return, which is why every op read on a mutating path comes here.
-	export function getOp(index OpIndex) returns Op
+	export function getOp(index ElementIndex) returns Op
 		return try self.ops.get(index) otherwise panic("getOp: op index {index} out of bounds")
 	end 'getOp'
 
@@ -577,11 +573,11 @@ export type IrModule uses Op
 		self.blockSourceInfo.push(BlockSourceInfo.empty())
 	end 'pushBlock'
 
-	export function funcCount() returns FuncCount
+	export function funcCount() returns ElementIndex
 		return self.functions.count()
 	end 'funcCount'
 
-	export function getFunc(index FuncIndex) returns IrFunction
+	export function getFunc(index ElementIndex) returns IrFunction
 		return try self.functions.get(index) otherwise panic("getFunc: index out of bounds")
 	end 'getFunc'
 
@@ -653,7 +649,7 @@ export type IrModule uses Op
 	// (an `ops.set`, which the column mirrors with a `set` of its own) or APPENDED (a push past the tail,
 	// which it mirrors with a push) — and a caller that had to mirror that choice itself would be the one
 	// place the two halves could disagree.
-	module function placeOp(slots OpSlotSupply, op Op, spanId SpanId) returns OpIndex
+	module function placeOp(slots OpSlotSupply, op Op, spanId SpanId) returns ElementIndex
 		if slots.taken < slots.recycled.count() 'reuseThisFunctionsOwnSlot'
 			let recycledIdx = try slots.recycled.get(slots.taken) otherwise panic("IrModule.placeOp: recycled.get OOB at {slots.taken} below count {slots.recycled.count()}")
 			slots.taken = slots.taken + 1
@@ -789,23 +785,23 @@ module type OpSlotSupply
 end 'OpSlotSupply'
 
 // WHAT A SPLICE REUSES ACROSS EVERY FUNCTION OF A POOL DRAIN, refilled per function by
-// `IrModule.prepareSplice`: the function's live op slots and its `BlockId -> BlockRef` column. A drain over
-// the module then allocates neither once per function, and `Array.clear`/`refill` keep the capacity the
-// largest function reached.
+// `IrModule.prepareSplice`: the function's live op slots and its `BlockId -> block ref` column. A
+// drain over the module then allocates neither once per function, and `Array.clear`/`refill` keep
+// the capacity the largest function reached.
 module type SpliceScratch
 	export var slots as OpSlotSupply
 	export var blockRefById as BlockRefArray
 
 	// The ref `blockRefById` answers for an id the function does not own: `blocks.count()` at the refill,
 	// which no block of the function has.
-	export var absent as BlockRef
+	export var absent as ElementIndex
 
 	module static function create() returns SpliceScratch
 		return Self{slots: OpSlotSupply.create(), blockRefById: BlockRefArray.create(), absent: 0}
 	end 'create'
 
 	// The function's ref for block `id`, or `absent`.
-	module function blockRefOf(id BlockId) returns BlockRef
+	module function blockRefOf(id BlockId) returns ElementIndex
 		return try self.blockRefById.get(id) otherwise self.absent
 	end 'blockRefOf'
 end 'SpliceScratch'
@@ -823,10 +819,10 @@ end 'SpliceScratch'
 // entry-typed and stay on the module; the index arithmetic is shared here.
 type OpCompactionPlan
 	export var forward as OpIndexArray
-	export var liveCount as OpCount
-	export var deadMarker as OpIndex
+	export var liveCount as ElementIndex
+	export var deadMarker as ElementIndex
 
-	static function create(forward OpIndexArray, liveCount OpCount, deadMarker OpIndex) returns OpCompactionPlan
+	static function create(forward OpIndexArray, liveCount ElementIndex, deadMarker ElementIndex) returns OpCompactionPlan
 		return Self{forward: forward, liveCount: liveCount, deadMarker: deadMarker}
 	end 'create'
 end 'OpCompactionPlan'
@@ -840,11 +836,11 @@ end 'OpCompactionPlan'
 // are consumed by the time index `old` is reached), which is what makes the
 // leftward in-place move in `compactOps`/`compactBlocks` clobber-free. Orphans
 // (entries with `live[i] == false`) are left at `deadMarker` (= `count`).
-function assignCompactionSlots(live BoolArray, count OpCount) returns OpCompactionPlan
+function assignCompactionSlots(live BoolArray, count ElementIndex) returns OpCompactionPlan
 	let deadMarker = count
 	var forward = OpIndexArray.create()
 	forward.resize(count)
-	var nextSlot = 0 as OpIndex
+	var nextSlot = 0 as ElementIndex
 
 	for oldIdx in 0 upto count 'assign'
 		let isLive = try live.get(oldIdx) otherwise panic("assignCompactionSlots: live.get OOB at {oldIdx}")
@@ -857,7 +853,7 @@ function assignCompactionSlots(live BoolArray, count OpCount) returns OpCompacti
 		end 'assignDead'
 	end 'assign'
 
-	return OpCompactionPlan.create(forward, liveCount: nextSlot as OpCount, deadMarker: deadMarker as OpIndex)
+	return OpCompactionPlan.create(forward, liveCount: nextSlot as ElementIndex, deadMarker: deadMarker)
 end 'assignCompactionSlots'
 
 // Compute the in-place compaction forwarding map for a module's ops array.
@@ -866,7 +862,7 @@ end 'assignCompactionSlots'
 // walk is O(blocks + total opRefs); the two `opCount`-sized arrays (live flags +
 // forwarding) are the only allocations and are dwarfed by the orphan bytes
 // reclaimed.
-function computeOpCompaction(functions IrFunctionArray, blocks IrBlockArray, opCount OpCount) returns OpCompactionPlan
+function computeOpCompaction(functions IrFunctionArray, blocks IrBlockArray, opCount ElementIndex) returns OpCompactionPlan
 	var live = BoolArray.create()
 	live.resize(opCount)
 
@@ -945,7 +941,7 @@ end 'rewriteBlockOpRefs'
 // blocks appear in no function's refs and stay unmarked. The bitmap then goes to
 // the shared `assignCompactionSlots`. O(total blockRefs); the two blockCount-
 // sized arrays (live flags + forwarding) are the only allocations.
-function computeBlockCompaction(functions IrFunctionArray, blockCount BlockCount) returns OpCompactionPlan
+function computeBlockCompaction(functions IrFunctionArray, blockCount ElementIndex) returns OpCompactionPlan
 	var live = BoolArray.create()
 	live.resize(blockCount)
 
@@ -955,7 +951,7 @@ function computeBlockCompaction(functions IrFunctionArray, blockCount BlockCount
 		end 'markRef'
 	end 'markFunc'
 
-	return assignCompactionSlots(live, count: blockCount as OpCount)
+	return assignCompactionSlots(live, count: blockCount)
 end 'computeBlockCompaction'
 
 // Rewrite every function's `blockRefs` (flat `blocks[]` indices) through a block
@@ -986,7 +982,7 @@ end 'rewriteFuncBlockRefs'
 // module is the parse memo's. Safe because no Maxon-tier pass mutates it, and the one
 // in-place writer anywhere in the compiler (`rewriteEdgeArgsIn`, at the Target tier)
 // copies before it writes. See IrBlock's header for the ownership rules.
-function relocateIrBlock(src IrBlock, opOffset OpCount) returns IrBlock
+function relocateIrBlock(src IrBlock, opOffset ElementIndex) returns IrBlock
 	var block = IrBlock.createLike(src)
 	block.blockArgs = src.blockArgs
 	block.branchEdges = src.branchEdges

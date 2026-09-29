@@ -36,7 +36,7 @@ type AnErrorNotAPanic implements OutsideCheckoutCase
 		let build = runDriver([BuildCommandWord, sourcePath.toString(), "{OutputOptionPrefix}{output.toString()}", WasmTargetOption], binary: installedCompilerIn(dir), workingDirectory: work)
 		let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
 
-		try Expect.equal(build.exitCode() as AssertedInt, expected: 1, message: "a wasm build with no `wasm-tools` anywhere exited {build.exitCode()}, where an ordinary error exits 1. {said}")
+		try Expect.equal(build.exitCode(), expected: 1, message: "a wasm build with no `wasm-tools` anywhere exited {build.exitCode()}, where an ordinary error exits 1. {said}")
 		try Expect.contains(build.stderr, needle: MissingToolWording, message: "a wasm build with no `wasm-tools` did not name what is missing. {said}")
 		try Expect.isFalse(build.stderr.toLower().contains(PanicWording), message: "a wasm build with no `wasm-tools` panicked; a missing tool is the environment, not a compiler fault. {said}")
 		try Expect.isFalse(File.exists(work.join("{OutputStem}{WasmExtension}")), message: "a wasm build with no `wasm-tools` still wrote a module. {said}")

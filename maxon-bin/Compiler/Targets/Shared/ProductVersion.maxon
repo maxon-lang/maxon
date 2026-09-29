@@ -11,9 +11,6 @@ let DecimalBase = 10
 export typealias VersionComponent = int(0 to 16777215)
 export typealias VersionComponentArray = Array with VersionComponent
 
-// How many components a version has, or where one sits in it (counted from 1, as a reader counts).
-export typealias VersionComponentCount = int(0 to u64.max)
-
 // A component's value while its digits are read. One digit past any field's limit still fits, and reading
 // stops there.
 typealias VersionNumeral = int(0 to u32.max)
@@ -46,8 +43,8 @@ end 'versionStampSiteOf'
 
 export union ProductVersionError implements Error
 	notANumber(component String)
-	doesNotFit(component String, position VersionComponentCount, limit VersionComponent, fieldName String)
-	tooManyComponents(count VersionComponentCount, held VersionComponentCount, fieldName String)
+	doesNotFit(component String, position ElementIndex, limit VersionComponent, fieldName String)
+	tooManyComponents(count ElementIndex, held ElementIndex, fieldName String)
 end 'ProductVersionError'
 
 // The components `dotted` stamps into `target`'s binary: none for an unversioned build or a format with no
@@ -85,7 +82,7 @@ end 'productVersionProblem'
 // Every component is a decimal numeral by now.
 function componentsFitting(components StringArray, layout VersionFieldLayout) returns VersionComponentArray throws ProductVersionError
 	if components.count() > layout.limits.count() 'tooMany'
-		throw ProductVersionError.tooManyComponents(components.count() as VersionComponentCount, held: layout.limits.count() as VersionComponentCount, fieldName: layout.name)
+		throw ProductVersionError.tooManyComponents(components.count(), held: layout.limits.count(), fieldName: layout.name)
 	end 'tooMany'
 
 	var fitted = VersionComponentArray.create()
@@ -98,7 +95,7 @@ function componentsFitting(components StringArray, layout VersionFieldLayout) re
 			value = value * DecimalBase + ((b - '0') as VersionNumeral)
 
 			if value > (limit as VersionNumeral) 'overflows'
-				throw ProductVersionError.doesNotFit(component, position: (iter.index() + 1) as VersionComponentCount, limit: limit, fieldName: layout.name)
+				throw ProductVersionError.doesNotFit(component, position: (iter.index() + 1) as ElementIndex, limit: limit, fieldName: layout.name)
 			end 'overflows'
 		end 'eachDigit'
 

@@ -17,10 +17,10 @@
 export union TestEvent
 	// A test is about to run. Written BEFORE the body, which is what makes a process death
 	// attributable at all.
-	began(index TestRunIndex)
+	began(index ElementIndex)
 
 	// A test finished under its own power, passing or failing.
-	ended(index TestRunIndex, passed bool, nanos DurationNanos)
+	ended(index ElementIndex, passed bool, nanos DurationNanos)
 
 	// An error reached the end of a test body unhandled, reported by the handler the compiler
 	// substitutes. It arrives BEFORE the `ended` of the test it belongs to.
@@ -142,7 +142,7 @@ function parseBeganLine(fields StringArray) returns ProtocolLineParse
 
 	match parseProtocolNumber(index) 'theIndex'
 		invalid then return ProtocolLineParse.notProtocol
-		value(number) then return ProtocolLineParse.event(TestEvent.began(number as TestRunIndex))
+		value(number) then return ProtocolLineParse.event(TestEvent.began(number as ElementIndex))
 	end 'theIndex'
 end 'parseBeganLine'
 
@@ -171,7 +171,7 @@ end 'parseEndedLine'
 function endedEventFor(index ProtocolNumber, outcome String, nanosField String) returns ProtocolLineParse
 	match parseProtocolNumber(nanosField) 'theDuration'
 		invalid then return ProtocolLineParse.notProtocol
-		value(nanos) then return ProtocolLineParse.event(TestEvent.ended(index as TestRunIndex, passed: outcome == TestProtocolOutcomePass, nanos: nanos as DurationNanos))
+		value(nanos) then return ProtocolLineParse.event(TestEvent.ended(index as ElementIndex, passed: outcome == TestProtocolOutcomePass, nanos: nanos as DurationNanos))
 	end 'theDuration'
 end 'endedEventFor'
 

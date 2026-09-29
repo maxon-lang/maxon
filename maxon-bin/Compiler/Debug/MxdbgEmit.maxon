@@ -462,11 +462,11 @@ type DebugRunsByOrdinal
 	end 'over'
 
 	export function count(ordinal ElementIndex) returns ElementIndex
-		return self.byOrdinal.degree(ordinal as CsrIndex) as ElementIndex
+		return self.byOrdinal.degree(ordinal as CsrIndex)
 	end 'count'
 
 	export function at(ordinal ElementIndex, k ElementIndex) returns DebugLocalCodeRange
-		let run = self.byOrdinal.neighbour(ordinal as CsrIndex, k: k as CsrIndex) as ElementIndex
+		let run = self.byOrdinal.neighbour(ordinal as CsrIndex, k: k as CsrIndex)
 
 		return try self.ranges.get(run) otherwise panic("debug info: run {run} is outside the {self.ranges.count()} this function's code ranges hold")
 	end 'at'
@@ -560,7 +560,7 @@ end 'MxdbgLocalDraft'
 // A local's site is relative to its own chunk, so it passes that chunk's `inlineSiteBase`; a site's
 // parent in `CodeResult.inlineSites` is already rebased by `InlineFrameTables.appendChunk` and
 // passes 0.
-function sidecarSiteOf(site InlineSiteRef, siteBase InlineSiteIndex) returns MxdbgIndex
+function sidecarSiteOf(site InlineSiteRef, siteBase ElementIndex) returns MxdbgIndex
 	return match site 's'
 		none gives MxdbgNoInlineSite
 		site(index) gives (siteBase + index) as MxdbgIndex
@@ -641,13 +641,13 @@ function mxdbgFunctionIndex(module TargetModule) returns MxdbgFunctionIndexMap
 
 	for i in 0 upto module.funcCount() 'eachFunction'
 		let func = try module.functions.get(i) otherwise panic("mxdbgFunctionIndex: functions.get OOB at {i} below the module's {module.funcCount()}")
-		index.upsert(func.name, value: i as FuncIndex)
+		index.upsert(func.name, value: i as ElementIndex)
 	end 'eachFunction'
 
 	return index
 end 'mxdbgFunctionIndex'
 
-typealias MxdbgFunctionIndexMap = Map with (ByteArray, FuncIndex)
+typealias MxdbgFunctionIndexMap = Map with (ByteArray, ElementIndex)
 
 // ⚠ **A CHUNK NEED NOT HAVE AN `IrFunction` AT ALL.** The panic runtime and the entry stub are
 // hand-assembled chunks the backends append past the module's own functions, and they have no bindings

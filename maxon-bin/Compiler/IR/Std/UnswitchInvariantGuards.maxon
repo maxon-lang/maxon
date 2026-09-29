@@ -90,14 +90,14 @@
 // rewrote — a loop versioned, or a loop's record fields hoisted in place — and no other (`StdPassPool`).
 
 typealias LoopOpCount = int(0 to u64.max)
-typealias GuardCount = int(0 to u64.max)
+typealias GuardSiteCount = int(0 to u64.max)
 typealias HoistedValueCount = int(0 to u64.max)
 
 let MaxOpsPerLoop = 256 as LoopOpCount
 
 // Guard SITES, before the numbering merges the ones that ask one compare; the copy's size is
 // `MaxOpsPerLoop`'s to bound.
-let MaxGuardsPerLoop = 32 as GuardCount
+let MaxGuardsPerLoop = 32 as GuardSiteCount
 
 // Hoisted values the copy reads are live across its whole body; past this many the trade is a
 // callee-saved register or a forced reload per use against one record load per use.
@@ -148,7 +148,7 @@ module enum UnswitchRefusal
 end 'UnswitchRefusal'
 
 // The pass's summary line, from the tally its runs over every function summed into (`StdPassPool`).
-module function unswitchInvariantGuardsSummary(tally StdPassTally, funcCount FuncCount) returns String
+module function unswitchInvariantGuardsSummary(tally StdPassTally, funcCount ElementIndex) returns String
 	return "unswitchInvariantGuards: rewrote {tally.rewrittenLoops} loop(s) — {tally.versionedLoops} versioned, {tally.hoistedLoops} hoisted in place — in {tally.rewrittenFunctions} of {funcCount} function(s); loops left alone: {tally.unswitchRefusals.summary(UnswitchRefusal.allCaseNames)}; invariant compares of another shape left in place: {tally.genericGuardsLeftAlone}"
 end 'unswitchInvariantGuardsSummary'
 
@@ -167,7 +167,7 @@ module function unswitchInFunc(module StdModule, func IrFunction, origins Derive
 	end 'nothingToVersion'
 
 	let succ = buildStdSuccessorGraph(module, func: func, blockCount: blockCount)
-	let loops = NaturalLoops.find(succ, nodeCount: blockCount)
+	let loops = NaturalLoops.find(succ, nodeCount: blockCount as CsrIndex)
 
 	if loops.headers.count() == 0 'loopless'
 		return false
@@ -182,8 +182,8 @@ module function unswitchInFunc(module StdModule, func IrFunction, origins Derive
 
 	while next > 0 'eachLoopOutermostFirst'
 		next = next - 1
-		let header = (try loops.headers.get(next) otherwise panic("unswitchInvariantGuards: headers.get OOB at {next}")) as BlockRefIndex
-		loops.collect(analysis.tree.pred, header: header as CsrIndex, into: scratch.members)
+		let header = (try loops.headers.get(next) otherwise panic("unswitchInvariantGuards: headers.get OOB at {next}"))
+		loops.collect(analysis.tree.pred, header: header, into: scratch.members)
 
 		var plan = UnswitchPlan.create(header, members: scratch.members.blocks)
 
@@ -213,7 +213,7 @@ module function unswitchInFunc(module StdModule, func IrFunction, origins Derive
 
 	dropUnreachableBlocks(module, func: func)
 
-	scratch.tally.rewrittenLoops = scratch.tally.rewrittenLoops + plans.count()
+	scratch.tally.rewrittenLoops = scratch.tally.rewrittenLoops + plans.count() as TallyCount
 	scratch.tally.rewrittenFunctions = scratch.tally.rewrittenFunctions + 1
 	return true
 end 'unswitchInFunc'
@@ -270,11 +270,11 @@ type UnswitchFunction
 		return Self{tree: tree, stamps: DominatorStamps.build(tree), reader: reader, sites: ReadSites.collect(module, func: func, valueBound: valueBound, scratch: scratch), valueBound: valueBound, insideVersioned: insideVersioned, versionedHeader: versionedHeader}
 	end 'gather'
 
-	function isInsideAVersionedLoop(position BlockRefIndex) returns bool
+	function isInsideAVersionedLoop(position ElementIndex) returns bool
 		return try self.insideVersioned.get(position) otherwise panic("unswitchInvariantGuards: insideVersioned.get OOB at {position}")
 	end 'isInsideAVersionedLoop'
 
-	function isAVersionedHeader(position BlockRefIndex) returns bool
+	function isAVersionedHeader(position ElementIndex) returns bool
 		return try self.versionedHeader.get(position) otherwise panic("unswitchInvariantGuards: versionedHeader.get OOB at {position}")
 	end 'isAVersionedHeader'
 
@@ -287,9 +287,9 @@ type UnswitchFunction
 	end 'markVersioned'
 
 	// Whether `position` has a CFG edge to `target`.
-	function branchesTo(position BlockRefIndex, target BlockRefIndex) returns bool
+	function branchesTo(position ElementIndex, target ElementIndex) returns bool
 		for k in 0 upto self.tree.succ.degree(position as CsrIndex) 'eachSuccessor'
-			if self.tree.succ.neighbour(position as CsrIndex, k: k) as BlockRefIndex == target 'found'
+			if self.tree.succ.neighbour(position as CsrIndex, k: k) == target 'found'
 				return true
 			end 'found'
 		end 'eachSuccessor'
@@ -339,7 +339,7 @@ type ReadSites
 	end 'collect'
 
 	// An op that reads nothing is no site.
-	function recordOpSite(module StdModule, opIdx OpIndex, position BlockRefIndex, readValue CsrColumn, readSite CsrColumn, scratch UnswitchScratch)
+	function recordOpSite(module StdModule, opIdx ElementIndex, position ElementIndex, readValue CsrColumn, readSite CsrColumn, scratch UnswitchScratch)
 		scratch.reads.clear()
 		collectStdOpUses(module.getOp(opIdx), referenced: scratch.reads)
 
@@ -357,11 +357,11 @@ type ReadSites
 		end 'eachRead'
 	end 'recordOpSite'
 
-	function opOfSite(site CsrIndex) returns OpIndex
+	function opOfSite(site CsrIndex) returns ElementIndex
 		return try self.siteOp.get(site) otherwise panic("unswitchInvariantGuards: siteOp.get OOB at {site}")
 	end 'opOfSite'
 
-	function positionOfSite(site CsrIndex) returns BlockRefIndex
+	function positionOfSite(site CsrIndex) returns ElementIndex
 		return try self.sitePosition.get(site) otherwise panic("unswitchInvariantGuards: sitePosition.get OOB at {site}")
 	end 'positionOfSite'
 end 'ReadSites'
@@ -373,8 +373,8 @@ end 'ReadSites'
 // One recognised guard of the loop: a shape guard the copy folds, or a bound guard a store is checked
 // against. `index` is meaningful for a bound only.
 type UnswitchGuard
-	export let position as BlockRefIndex
-	export let compareOpIdx as OpIndex
+	export let position as ElementIndex
+	export let compareOpIdx as ElementIndex
 	export let condId as ValueId
 	export let kind as ManagedGuardKind
 	export let record as ValueId
@@ -384,7 +384,7 @@ type UnswitchGuard
 	export let index as ValueId
 	export let elseBlockId as BlockId
 
-	static function create(position BlockRefIndex, compareOpIdx OpIndex, condId ValueId, guard ManagedGuardOperands, elseBlockId BlockId) returns UnswitchGuard
+	static function create(position ElementIndex, compareOpIdx ElementIndex, condId ValueId, guard ManagedGuardOperands, elseBlockId BlockId) returns UnswitchGuard
 		return Self{position: position, compareOpIdx: compareOpIdx, condId: condId, kind: guard.kind, record: guard.record, indexIsVariable: guard.indexIsVariable, index: guard.index, elseBlockId: elseBlockId}
 	end 'create'
 end 'UnswitchGuard'
@@ -393,12 +393,12 @@ typealias UnswitchGuardArray = Array with UnswitchGuard
 
 // One element store of the loop, by the record and index its slot address names.
 type ElementStoreSite
-	export let position as BlockRefIndex
+	export let position as ElementIndex
 	export let record as ValueId
 	export let indexIsVariable as bool
 	export let index as ValueId
 
-	static function create(position BlockRefIndex, slot ElementSlotOperands) returns ElementStoreSite
+	static function create(position ElementIndex, slot ElementSlotOperands) returns ElementStoreSite
 		return Self{position: position, record: slot.record, indexIsVariable: slot.indexIsVariable, index: slot.index}
 	end 'create'
 end 'ElementStoreSite'
@@ -406,8 +406,8 @@ end 'ElementStoreSite'
 typealias ElementStoreSiteArray = Array with ElementStoreSite
 
 type UnswitchPlan
-	export var header as BlockRefIndex
-	export var preheader as BlockRefIndex = 0
+	export var header as ElementIndex
+	export var preheader as ElementIndex = 0
 
 	// Whether the loop is copied and its guards folded, or only its invariant fields hoisted.
 	export var versioned = false
@@ -434,18 +434,18 @@ type UnswitchPlan
 	export var hoistedWalk as ValueIdArray
 	export var hoistedCanonical as ValueIdArray
 	export var hasExit = false
-	export var exit as BlockRefIndex = 0
+	export var exit as ElementIndex = 0
 
 	// The loop's block args read after it, their types, and (once applied) the phis the exit takes.
 	export var escaping as ValueIdArray
 	export var escapingTypes as StdTypeArray
 	export var exitPhis as ValueIdArray
 
-	static function create(header BlockRefIndex, members CsrColumn) returns UnswitchPlan
+	static function create(header ElementIndex, members CsrColumn) returns UnswitchPlan
 		var positions = BlockPositionColumn.create()
 
 		for member in members 'eachMember'
-			positions.push(member as BlockRefIndex)
+			positions.push(member)
 		end 'eachMember'
 
 		return Self{header: header, members: positions, walkOrder: BlockPositionColumn.create(), guards: UnswitchGuardArray.create(), bounds: UnswitchGuardArray.create(), stores: ElementStoreSiteArray.create(), knownRecords: ValueIdArray.create(), writerRecords: ValueIdArray.create(), hoisted: StdValueUseSet.create(), hoistedWalk: ValueIdArray.create(), hoistedCanonical: ValueIdArray.create(), escaping: ValueIdArray.create(), escapingTypes: StdTypeArray.create(), exitPhis: ValueIdArray.create()}
@@ -453,7 +453,7 @@ type UnswitchPlan
 
 	// The canonical of the `ordinal`-th hoisted op in walk order, which must be `valueId`'s: the
 	// numbering and the chain walk the members in one order, and a disagreement is a defect.
-	function canonicalOfHoisted(ordinal HoistedValueCount, valueId ValueId) returns ValueId
+	function canonicalOfHoisted(ordinal ElementIndex, valueId ValueId) returns ValueId
 		let recorded = try self.hoistedWalk.get(ordinal) otherwise panic("unswitchInvariantGuards: hoisted op {ordinal} defining {valueId} was not numbered — the chain walk found more hoisted ops than the numbering did")
 
 		if recorded != valueId 'anotherOp'
@@ -479,7 +479,7 @@ type UnswitchPlan
 	// An INDEX loop rather than `withIterator`, here and at the two sites below: an iterator's `current`
 	// and `advance` are witness dispatches, and this pass runs on a pool worker, where a dispatch the
 	// compiler cannot name widens E3143 over every address-taken function in the program.
-	function guardAt(position BlockRefIndex) returns GuardCount
+	function guardAt(position ElementIndex) returns GuardSiteCount
 		for index in 0 upto self.guards.count() 'eachGuard'
 			let guard = try self.guards.get(index) otherwise panic("unswitchInvariantGuards: guards.get OOB at {index}")
 
@@ -494,7 +494,7 @@ end 'UnswitchPlan'
 
 typealias UnswitchPlanArray = Array with UnswitchPlan
 
-let NoGuardAtBlock = 0 as GuardCount
+let NoGuardAtBlock = 0 as GuardSiteCount
 
 // ══════════════════════════════════════════════════════════════════════════
 // Admission
@@ -595,7 +595,7 @@ function sizeFits(module StdModule, func IrFunction, plan UnswitchPlan, scratch 
 			end 'notClonable'
 		end 'eachOp'
 
-		ops = ops + block.opRefs.count()
+		ops = ops + block.opRefs.count() as LoopOpCount
 	end 'eachMember'
 
 	if ops > MaxOpsPerLoop 'overBudget'
@@ -624,7 +624,7 @@ function scanCalls(module StdModule, func IrFunction, plan UnswitchPlan, scratch
 	return true
 end 'scanCalls'
 
-function admitCall(module StdModule, opIdx OpIndex, plan UnswitchPlan, scratch UnswitchScratch) returns bool
+function admitCall(module StdModule, opIdx ElementIndex, plan UnswitchPlan, scratch UnswitchScratch) returns bool
 	let op = module.getOp(opIdx)
 
 	if not op.rawValue.isCall 'notACall'
@@ -693,7 +693,7 @@ function classifyBody(module StdModule, func IrFunction, analysis UnswitchFuncti
 	return true
 end 'classifyBody'
 
-function classifyBodyOp(module StdModule, opIdx OpIndex, position BlockRefIndex, analysis UnswitchFunction, plan UnswitchPlan, scratch UnswitchScratch) returns bool
+function classifyBodyOp(module StdModule, opIdx ElementIndex, position ElementIndex, analysis UnswitchFunction, plan UnswitchPlan, scratch UnswitchScratch) returns bool
 	let op = module.getOp(opIdx)
 
 	if op.rawValue.isCall 'scannedAlready'
@@ -720,7 +720,7 @@ end 'classifyBodyOp'
 
 // A store is admitted only as an element store — anything else, a field or global write among them,
 // refuses the loop. Whether its record is one a callee names is asked once every call has been read.
-function admitStore(op StdOp, position BlockRefIndex, analysis UnswitchFunction, plan UnswitchPlan, scratch UnswitchScratch) returns bool
+function admitStore(op StdOp, position ElementIndex, analysis UnswitchFunction, plan UnswitchPlan, scratch UnswitchScratch) returns bool
 	if not storeStaysInABuffer(op, analysis: analysis, scratch: scratch) 'notASlot'
 		return refuse(UnswitchRefusal.storeNotAnElementSlot, scratch: scratch)
 	end 'notASlot'
@@ -789,7 +789,7 @@ end 'admitPureIfInvariant'
 // A `condBranch` on a recognised guard: a bound is recorded for the stores, and — like a shape guard —
 // admitted for folding when its condition is invariant, which a constant index against an invariant
 // length is. An invariant condition of any other shape is counted and left.
-function classifyTerminator(module StdModule, block IrBlock, position BlockRefIndex, analysis UnswitchFunction, plan UnswitchPlan, scratch UnswitchScratch)
+function classifyTerminator(module StdModule, block IrBlock, position ElementIndex, analysis UnswitchFunction, plan UnswitchPlan, scratch UnswitchScratch)
 	let terminatorIdx = block.terminatorIndex()
 	classifyBranch(module.getOp(terminatorIdx), out: scratch.branch)
 
@@ -916,7 +916,7 @@ function resolveExit(module StdModule, func IrFunction, analysis UnswitchFunctio
 		let position = try plan.members.get(index) otherwise panic("unswitchInvariantGuards: members.get OOB at {index}")
 
 		for k in 0 upto analysis.tree.succ.degree(position as CsrIndex) 'eachSuccessor'
-			let successor = analysis.tree.succ.neighbour(position as CsrIndex, k: k) as BlockRefIndex
+			let successor = analysis.tree.succ.neighbour(position as CsrIndex, k: k)
 
 			if servesAsTheExit(successor, analysis: analysis, scratch: scratch) 'found'
 				plan.hasExit = true
@@ -941,7 +941,7 @@ function readOutsideTheLoop(valueId ValueId, analysis UnswitchFunction, scratch 
 	end 'eachOpRead'
 
 	for k in 0 upto sites.edgeReaders.degree(valueId as CsrIndex) 'eachEdgeRead'
-		if recordEscapingRead(sites.edgeReaders.neighbour(valueId as CsrIndex, k: k) as BlockRefIndex, analysis: analysis, scratch: scratch) 'escapes'
+		if recordEscapingRead(sites.edgeReaders.neighbour(valueId as CsrIndex, k: k), analysis: analysis, scratch: scratch) 'escapes'
 			escapes = true
 		end 'escapes'
 	end 'eachEdgeRead'
@@ -951,7 +951,7 @@ end 'readOutsideTheLoop'
 
 // Whether a read at `position` is outside the loop, recording it. A read the entry cannot reach is in
 // a block no path runs and no phi could serve.
-function recordEscapingRead(position BlockRefIndex, analysis UnswitchFunction, scratch UnswitchScratch) returns bool
+function recordEscapingRead(position ElementIndex, analysis UnswitchFunction, scratch UnswitchScratch) returns bool
 	if scratch.members.contains(position as CsrIndex) or not analysis.tree.canReach(position) 'insideTheLoopOrUnreachable'
 		return false
 	end 'insideTheLoopOrUnreachable'
@@ -960,7 +960,7 @@ function recordEscapingRead(position BlockRefIndex, analysis UnswitchFunction, s
 	return true
 end 'recordEscapingRead'
 
-function opResultEscapes(module StdModule, opIdx OpIndex, analysis UnswitchFunction, scratch UnswitchScratch) returns bool
+function opResultEscapes(module StdModule, opIdx ElementIndex, analysis UnswitchFunction, scratch UnswitchScratch) returns bool
 	stdOpDefinedValue(module.getOp(opIdx), def: scratch.def)
 
 	if scratch.def.definesNothing() 'noDef'
@@ -975,7 +975,7 @@ function opResultEscapes(module StdModule, opIdx OpIndex, analysis UnswitchFunct
 end 'opResultEscapes'
 
 // A non-member every predecessor of which is a member, dominating every escaping read.
-function servesAsTheExit(position BlockRefIndex, analysis UnswitchFunction, scratch UnswitchScratch) returns bool
+function servesAsTheExit(position ElementIndex, analysis UnswitchFunction, scratch UnswitchScratch) returns bool
 	if scratch.members.contains(position as CsrIndex) 'aMember'
 		return false
 	end 'aMember'
@@ -1245,7 +1245,7 @@ function estimateLiveAcross(module StdModule, func IrFunction, plan UnswitchPlan
 end 'estimateLiveAcross'
 
 // How many of one op's reads name a value defined outside the loop that the estimate has not counted yet.
-function outsideReadsOf(module StdModule, opIdx OpIndex, scratch UnswitchScratch) returns RegCount
+function outsideReadsOf(module StdModule, opIdx ElementIndex, scratch UnswitchScratch) returns RegCount
 	scratch.reads.clear()
 	collectStdOpUses(module.getOp(opIdx), referenced: scratch.reads)
 
@@ -1268,7 +1268,7 @@ function outsideReadOf(valueId ValueId, scratch UnswitchScratch) returns RegCoun
 	return 1
 end 'outsideReadOf'
 
-function countHoistedReads(module StdModule, opIdx OpIndex, plan UnswitchPlan, scratch UnswitchScratch)
+function countHoistedReads(module StdModule, opIdx ElementIndex, plan UnswitchPlan, scratch UnswitchScratch)
 	scratch.reads.clear()
 	collectStdOpUses(module.getOp(opIdx), referenced: scratch.reads)
 
@@ -1450,11 +1450,11 @@ end 'mintCopyValues'
 // The chain under construction: the block ops are being appended to, and every test — its block and
 // the condition it branches on — so far. A test's successors are wired once all of them are known.
 type TestChain
-	export var currentRef as BlockRef
+	export var currentRef as ElementIndex
 	export var open as bool
 
 	// The chain's first block — where the preheader now branches — and whether one exists yet.
-	export var firstRef as BlockRef
+	export var firstRef as ElementIndex
 	export var started as bool
 	export var testRefs as BlockRefArray
 	export var testConds as ValueIdArray
@@ -1510,8 +1510,8 @@ end 'TestChain'
 // original) and whose pass goes on to the next test, the last pass entering the copy.
 function emitTestChain(module StdModule, func IrFunction, plan UnswitchPlan, analysis UnswitchFunction, scratch UnswitchScratch, columns RewriteColumns, minter ValueMinter)
 	var chain = TestChain.create(module.blockAtPosition(func, position: plan.header).inlineSite)
-	var guardCursor = 0 as GuardCount
-	var hoistCursor = 0 as HoistedValueCount
+	var guardCursor = 0 as ElementIndex
+	var hoistCursor = 0 as ElementIndex
 
 	for position in plan.walkOrder 'eachBlock'
 		let block = module.blockAtPosition(func, position: position)
@@ -1703,7 +1703,7 @@ end 'wireTests'
 // One member's copy: its phis, its ops less the hoisted ones, its exit — an admitted guard's
 // `condBranch` becomes `branch(else)` and keeps only that edge — and its edges, with the exit phis'
 // values appended on every edge into the exit block.
-function copyMember(module StdModule, func IrFunction, plan UnswitchPlan, position BlockRefIndex, copyRef BlockRef, scratch UnswitchScratch, columns RewriteColumns)
+function copyMember(module StdModule, func IrFunction, plan UnswitchPlan, position ElementIndex, copyRef ElementIndex, scratch UnswitchScratch, columns RewriteColumns)
 	let original = module.blockAtPosition(func, position: position)
 	var copy = module.getBlock(copyRef)
 
@@ -1736,7 +1736,7 @@ function copyMember(module StdModule, func IrFunction, plan UnswitchPlan, positi
 
 	if guardPlusOne != NoGuardAtBlock 'foldTheGuard'
 		folded = true
-		keptTargetId = (try plan.guards.get(guardPlusOne - 1) otherwise panic("unswitchInvariantGuards: guards.get OOB at {guardPlusOne - 1}")).elseBlockId
+		keptTargetId = (try plan.guards.get((guardPlusOne - 1) as ElementIndex) otherwise panic("unswitchInvariantGuards: guards.get OOB at {guardPlusOne - 1}")).elseBlockId
 		module.setTerminator(copy, op: StdOp.branch(clonedBlock(keptTargetId, subst: columns.blockSubst)))
 	end 'foldTheGuard' else 'cloneTheExit'
 		module.setTerminator(copy, op: scratch.cloner.clone(module.getOp(terminatorIdx), valueSubst: columns.valueSubst, blockSubst: columns.blockSubst, payloads: ClonePayloads.owned))
@@ -1857,7 +1857,7 @@ function substituteExitPhis(module StdModule, func IrFunction, analysis Unswitch
 				continue
 			end 'insideTheLoop'
 
-			substituteEdgeArgsInBlock(module.blockAtPosition(func, position: position as BlockRefIndex), subst: columns.valueSubst)
+			substituteEdgeArgsInBlock(module.blockAtPosition(func, position: position), subst: columns.valueSubst)
 		end 'eachEdgeRead'
 	end 'eachValue'
 
@@ -1865,7 +1865,7 @@ function substituteExitPhis(module StdModule, func IrFunction, analysis Unswitch
 end 'substituteExitPhis'
 
 // `scratch.members` holds the loop analysed LAST; a rewrite reloads its own plan's set from the list.
-function reloadMembers(plan UnswitchPlan, scratch UnswitchScratch, blockCount BlockRefIndex)
+function reloadMembers(plan UnswitchPlan, scratch UnswitchScratch, blockCount ElementIndex)
 	scratch.members.reset(blockCount as CsrIndex)
 
 	for position in plan.members 'eachMember'

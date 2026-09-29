@@ -26,7 +26,7 @@ test 'a committed golden that contradicts the compiler is named, counted and quo
 	let mint = runSpecTest(staged, includeNetwork: false)
 	let minted = driftGoldensIn(staged)
 
-	try Expect.equal(minted.count() as AssertedInt, expected: DriftGateGoldenCount, message: "the fixture's mint run left {minted.count()} golden(s), not {DriftGateGoldenCount}. Its cases must PASS and pin emitted code, or there is nothing to corrupt. The mint run said:\n{everythingSaid(mint)}") otherwise (failure) 'mintedTheWrongCount'
+	try Expect.equal(minted.count(), expected: DriftGateGoldenCount, message: "the fixture's mint run left {minted.count()} golden(s), not {DriftGateGoldenCount}. Its cases must PASS and pin emitted code, or there is nothing to corrupt. The mint run said:\n{everythingSaid(mint)}") otherwise (failure) 'mintedTheWrongCount'
 		discardStaging(staged)
 		throw failure
 	end 'mintedTheWrongCount'
@@ -78,7 +78,7 @@ test 'a committed golden that contradicts the compiler is named, counted and quo
 		broken.push("the trailer named the drifted goldens but did not show what DIFFERS: the line written into them never appears. It said:\n{said}\n")
 	end 'showedNoDifference'
 
-	let summary = driftSummary(corruptedGoldens.count())
+	let summary = driftSummary(corruptedGoldens.count() as DriftTally)
 
 	if not onStdout.contains(summary) 'summaryStayedSilent'
 		broken.push("the run's SUMMARY, on STDOUT, says nothing about the {corruptedGoldens.count()} drifted goldens. Expected '{summary}', and the run said:\n{said}\n")

@@ -5,8 +5,8 @@ let ProjectSiblingReturnRangeDeclaringSource = "module typealias Percent = int(0
 let ProjectSiblingReturnRangeBufferSource = "function pick() returns Percent\n\treturn 200\nend 'pick'\n\nfunction main() returns ExitCode\n\treturn pick() as ExitCode\nend 'main'\n"
 let ProjectSiblingReturnRangeCode = "E3005"
 let ProjectSiblingReturnRangeMessage = "Value 200 is outside the range of 'Percent' (int(0 to 100))"
-let ProjectSiblingReturnRangeLine = 1 as AssertedInt
-let ProjectSiblingReturnRangeCharacter = 1 as AssertedInt
+let ProjectSiblingReturnRangeLine = 1
+let ProjectSiblingReturnRangeCharacter = 1
 
 test 'a literal returned out of the range a sibling file declares is reported'
 	let root = stagedProjectDiagnosticsRoot(ProjectSiblingReturnRangeDirName)
@@ -21,6 +21,6 @@ test 'a literal returned out of the range a sibling file declares is reported'
 
 	try Expect.equal(reported.code.describe(), expected: ProjectSiblingReturnRangeCode, message: "the one error a build of this project reports is {ProjectSiblingReturnRangeCode}; the server published {reported.code.describe()}: {reported.message}")
 	try Expect.equal(reported.message, expected: ProjectSiblingReturnRangeMessage, message: "the server must quote the range the build quotes.")
-	try Expect.equal(reported.range.startLine as AssertedInt, expected: ProjectSiblingReturnRangeLine, message: "the build anchors the error on line 2.")
-	try Expect.equal(reported.range.startCharacter as AssertedInt, expected: ProjectSiblingReturnRangeCharacter, message: "the build anchors the error at column 2, the `return`.")
+	try Expect.equal(reported.range.startLine, expected: ProjectSiblingReturnRangeLine, message: "the build anchors the error on line 2.")
+	try Expect.equal(reported.range.startCharacter, expected: ProjectSiblingReturnRangeCharacter, message: "the build anchors the error at column 2, the `return`.")
 end 'a literal returned out of the range a sibling file declares is reported'

@@ -199,9 +199,11 @@ export function installBuiltinConformanceRuntime(module StdModule, globalData Gl
 	let floatHash = candidateImplName(impls, conformerName: FloatConformerName, methodName: HashMethodName)
 	let floatEquals = candidateImplName(impls, conformerName: FloatConformerName, methodName: EqualsMethodName)
 	let floatCompare = candidateImplName(impls, conformerName: FloatConformerName, methodName: CompareMethodName)
+	let boolEquals = candidateImplName(impls, conformerName: BoolConformerName, methodName: EqualsMethodName)
 	let boolCompare = candidateImplName(impls, conformerName: BoolConformerName, methodName: CompareMethodName)
 	let strHash = candidateImplName(impls, conformerName: StringConformerName, methodName: HashMethodName)
 	let strEquals = candidateImplName(impls, conformerName: StringConformerName, methodName: EqualsMethodName)
+	let strCompare = candidateImplName(impls, conformerName: StringConformerName, methodName: CompareMethodName)
 	let charHash = candidateImplName(impls, conformerName: CharacterConformerName, methodName: HashMethodName)
 	let charEquals = candidateImplName(impls, conformerName: CharacterConformerName, methodName: EqualsMethodName)
 	let charCompare = candidateImplName(impls, conformerName: CharacterConformerName, methodName: CompareMethodName)
@@ -244,6 +246,10 @@ export function installBuiltinConformanceRuntime(module StdModule, globalData Gl
 	// Std `i1` already IS 0 or 1 in its machine word, so the mapping is the identity and the cascade is
 	// literally the same ops. One builder, two symbols — the symbol must still be `bool.compare`, because
 	// that is what the parser mints and what a `__witness_bool.Comparable` slot would name.
+	if referenced.contains(boolEquals) 'boolEquals'
+		buildBuiltinEquals(module, name: boolEquals, operandType: StdType.i64)
+	end 'boolEquals'
+
 	if referenced.contains(boolCompare) 'boolCompare'
 		buildOrderingCompare(module, name: boolCompare, operandType: StdType.i64, ordering: ordering)
 	end 'boolCompare'
@@ -264,6 +270,10 @@ export function installBuiltinConformanceRuntime(module StdModule, globalData Gl
 	// `__str_eq`'s content compare answer for a Character exactly as they answer for a String; two
 	// transcriptions could only ever come to disagree about what equality MEANS for a pair that hashes alike.
 	// The SYMBOLS must still be Character's — see `CharacterConformerName` for why they may not be shared.
+	if referenced.contains(strCompare) 'strCompare'
+		buildByteRecordCompare(module, name: strCompare, ordering: ordering)
+	end 'strCompare'
+
 	if referenced.contains(charHash) 'charHash'
 		buildStrHash(module, name: charHash)
 	end 'charHash'

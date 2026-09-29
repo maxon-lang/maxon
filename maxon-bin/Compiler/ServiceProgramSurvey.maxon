@@ -55,7 +55,7 @@ module type ServiceAwaitRoster
 
 	// ⚠ An await through `I.handle` may be answered by any live implementer of `I`, so it is an edge
 	// to each of them (E3139); crediting one would let a wait cycle through another compile.
-	function noteReplyAwait(funcIndex FuncIndex, site ServiceAwaitSite, signatures ProgramSignatures)
+	function noteReplyAwait(funcIndex ElementIndex, site ServiceAwaitSite, signatures ProgramSignatures)
 		if not signatures.declaresAnInterfaceHandle() or not signatures.isInterfaceHandle(serviceHandleCompanionName(site.serviceTypeName)) 'oneService'
 			self.note(funcIndex, site: site)
 			return
@@ -68,7 +68,7 @@ module type ServiceAwaitRoster
 		end 'eachService'
 	end 'noteReplyAwait'
 
-	function note(funcIndex FuncIndex, site ServiceAwaitSite)
+	function note(funcIndex ElementIndex, site ServiceAwaitSite)
 		self.funcIndices.push(funcIndex)
 		self.sites.push(site)
 	end 'note'
@@ -81,7 +81,7 @@ module type ServiceAwaitRoster
 		return try self.sites.get(row) otherwise panic("ServiceAwaitRoster.siteAt: sites.get OOB at {row} below count {self.rowCount()}")
 	end 'siteAt'
 
-	function funcIndexAt(row CsrIndex) returns FuncIndex
+	function funcIndexAt(row CsrIndex) returns ElementIndex
 		return try self.funcIndices.get(row) otherwise panic("ServiceAwaitRoster.funcIndexAt: funcIndices.get OOB at {row} below count {self.rowCount()}")
 	end 'funcIndexAt'
 
@@ -101,7 +101,7 @@ module type ServiceAwaitRoster
 
 	// The FIRST row in which `funcIndex` itself awaits `awaitedName`, or `NoAwaitRow` when it blocks on that
 	// service only through a helper.
-	module function rowWhere(funcIndex FuncIndex, awaitedName ByteArray) returns CsrIndex
+	module function rowWhere(funcIndex ElementIndex, awaitedName ByteArray) returns CsrIndex
 		for row in 0 upto self.rowCount() 'eachRow'
 			if self.funcIndexAt(row) == funcIndex and self.siteAt(row).serviceTypeName.equals(awaitedName) 'awaitsItHere'
 				return row
@@ -125,10 +125,8 @@ module type ServiceAwaitRoster
 	end 'firstRowAwaiting'
 end 'ServiceAwaitRoster'
 
-// A global's position in the list a slot roster files its ops against, and that list keyed by its slot's label.
-export typealias SlotSubjectIndex = int(0 to u64.max)
-typealias SlotSubjectIndexArray = Array with SlotSubjectIndex
-module typealias SlotSubjectByLabel = Map with (ByteArray, SlotSubjectIndex)
+typealias SlotSubjectIndexArray = Array with ElementIndex
+module typealias SlotSubjectByLabel = Map with (ByteArray, ElementIndex)
 
 // One row per op of one kind: the op, and the function whose body holds it, in function-major then op-major
 // order.
@@ -140,7 +138,7 @@ module type OpRoster
 		return Self{funcs: FuncIndexArray.create(), ops: OpIndexArray.create()}
 	end 'create'
 
-	function note(funcIndex FuncIndex, opIndex OpIndex)
+	function note(funcIndex ElementIndex, opIndex ElementIndex)
 		self.funcs.push(funcIndex)
 		self.ops.push(opIndex)
 	end 'note'
@@ -149,11 +147,11 @@ module type OpRoster
 		return self.ops.count()
 	end 'rowCount'
 
-	module function funcAt(row CsrIndex) returns FuncIndex
+	module function funcAt(row CsrIndex) returns ElementIndex
 		return try self.funcs.get(row) otherwise panic("OpRoster.funcAt: funcs.get OOB at {row} below count {self.rowCount()}")
 	end 'funcAt'
 
-	module function opAt(row CsrIndex) returns OpIndex
+	module function opAt(row CsrIndex) returns ElementIndex
 		return try self.ops.get(row) otherwise panic("OpRoster.opAt: ops.get OOB at {row} below count {self.rowCount()}")
 	end 'opAt'
 end 'OpRoster'
@@ -168,14 +166,14 @@ module type SlotRoster
 		return Self{sites: OpRoster.create(), subjects: SlotSubjectIndexArray.create()}
 	end 'create'
 
-	function noteIfListed(label ByteArray, listed SlotSubjectByLabel, funcIndex FuncIndex, opIndex OpIndex)
+	function noteIfListed(label ByteArray, listed SlotSubjectByLabel, funcIndex ElementIndex, opIndex ElementIndex)
 		if let subject = try listed.get(label) 'aListedSlot'
 			self.sites.note(funcIndex, opIndex: opIndex)
 			self.subjects.push(subject)
 		end 'aListedSlot'
 	end 'noteIfListed'
 
-	module function subjectAt(row CsrIndex) returns SlotSubjectIndex
+	module function subjectAt(row CsrIndex) returns ElementIndex
 		return try self.subjects.get(row) otherwise panic("SlotRoster.subjectAt: subjects.get OOB at {row} below count {self.sites.rowCount()}")
 	end 'subjectAt'
 end 'SlotRoster'
@@ -236,11 +234,11 @@ module type ServiceProgramSurvey
 		return self.messageSeeds.count()
 	end 'funcCount'
 
-	module function isAMessage(funcIndex FuncIndex) returns bool
+	module function isAMessage(funcIndex ElementIndex) returns bool
 		return try self.messageSeeds.get(funcIndex) otherwise panic("ServiceProgramSurvey.isAMessage: messageSeeds.get OOB at {funcIndex} below count {self.funcCount()}")
 	end 'isAMessage'
 
-	module function serviceOf(funcIndex FuncIndex) returns ByteArray
+	module function serviceOf(funcIndex ElementIndex) returns ByteArray
 		return try self.ownerPerFunc.get(funcIndex) otherwise panic("ServiceProgramSurvey.serviceOf: ownerPerFunc.get OOB at {funcIndex} below count {self.funcCount()}")
 	end 'serviceOf'
 
@@ -248,7 +246,7 @@ module type ServiceProgramSurvey
 		return self.accessSites.count()
 	end 'accessRowCount'
 
-	module function accessFuncAt(row CsrIndex) returns FuncIndex
+	module function accessFuncAt(row CsrIndex) returns ElementIndex
 		return try self.accessFuncs.get(row) otherwise panic("ServiceProgramSurvey.accessFuncAt: accessFuncs.get OOB at {row} below count {self.accessRowCount()}")
 	end 'accessFuncAt'
 
@@ -257,7 +255,7 @@ module type ServiceProgramSurvey
 	end 'accessSiteAt'
 
 	// Does this function choose a callee at run time — a closure call or a witness dispatch?
-	module function dispatchesAtRunTime(funcIndex FuncIndex) returns bool
+	module function dispatchesAtRunTime(funcIndex ElementIndex) returns bool
 		let closure = try self.callsAClosure.get(funcIndex) otherwise panic("ServiceProgramSurvey.dispatchesAtRunTime: callsAClosure.get OOB at {funcIndex} below count {self.funcCount()}")
 		let witness = try self.dispatchesThroughAWitness.get(funcIndex) otherwise panic("ServiceProgramSurvey.dispatchesAtRunTime: dispatchesThroughAWitness.get OOB at {funcIndex} below count {self.funcCount()}")
 		return closure or witness
@@ -282,14 +280,14 @@ module type ServiceProgramSurvey
 	//
 	// ⚠ **THE SAFE DIRECTION IS KEPT WITHIN EACH SET**: every function in one is queued, so the walk goes on to
 	// what it calls — which may itself dispatch.
-	module function widenFrom(funcIndex FuncIndex, walk CalleeWalk, widening DispatchWidening, dispatch WitnessDispatchTargets, funcIndexByName FuncIndexByName)
+	module function widenFrom(funcIndex ElementIndex, walk CalleeWalk, widening DispatchWidening, dispatch WitnessDispatchTargets, funcIndexByName FuncIndexByName)
 		let bodyCallsAClosure = try self.callsAClosure.get(funcIndex) otherwise panic("ServiceProgramSurvey.widenFrom: callsAClosure.get OOB at {funcIndex} below count {self.funcCount()}")
 
 		if bodyCallsAClosure and not widening.closureTargetsMarked 'aClosureIsCalled'
 			widening.closureTargetsMarked = true
 
 			for target in self.addressTaken 'eachAddressTaken'
-				walk.reach(target as FuncIndex)
+				walk.reach(target)
 			end 'eachAddressTaken'
 		end 'aClosureIsCalled'
 
@@ -320,7 +318,7 @@ module type ServiceProgramSurvey
 	// ⭐⭐ **ONE FUNCTION'S EDGES, ITS AWAITS, ITS RUN-TIME DISPATCHES, ITS ADDRESS-TAKING AND ITS MODULE
 	// ACCESSES — ALL OUT OF THE SAME OP SWEEP.** Five facts about one body; five walks of it would be five
 	// chances to disagree about which ops that body has, which is this file's whole reason for existing.
-	function noteFunction(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndexByName FuncIndexByName, funcIndex FuncIndex, dispatch WitnessDispatchTargets, globalsByLabel SlotSubjectByLabel)
+	function noteFunction(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndexByName FuncIndexByName, funcIndex ElementIndex, dispatch WitnessDispatchTargets, globalsByLabel SlotSubjectByLabel)
 		let owner = messageOwnerNameOf(signatures, callee: func.name)
 		self.messageSeeds.push(not owner.isEmpty())
 		self.ownerPerFunc.push(owner)
@@ -376,7 +374,7 @@ module type ServiceProgramSurvey
 		self.dispatchesThroughAWitness.push(self.witnessDispatchFuncs.count() > witnessDispatchesBefore)
 	end 'noteFunction'
 
-	function noteWitnessDispatch(funcIndex FuncIndex, requirement ByteArray)
+	function noteWitnessDispatch(funcIndex ElementIndex, requirement ByteArray)
 		self.witnessDispatchFuncs.push(funcIndex)
 		self.witnessDispatchRequirements.push(requirement)
 	end 'noteWitnessDispatch'
@@ -468,7 +466,7 @@ function managedGlobalsByLabel(globals ManagedGlobalArray) returns SlotSubjectBy
 	var byLabel = SlotSubjectByLabel.create()
 
 	for (position, global) in globals.withIterator() 'eachGlobal'
-		byLabel.upsert(global.label, value: position.index() as SlotSubjectIndex)
+		byLabel.upsert(global.label, value: position.index())
 	end 'eachGlobal'
 
 	return byLabel

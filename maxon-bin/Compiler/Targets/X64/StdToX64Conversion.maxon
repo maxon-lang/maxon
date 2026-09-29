@@ -675,14 +675,14 @@ type OrderedBlockRoster
 		return Self{refs: BlockRefArray.create(), ids: BlockIdArray.create()}
 	end 'create'
 
-	function record(blockRef BlockRef, id BlockId)
+	function record(blockRef ElementIndex, id BlockId)
 		self.refs.push(blockRef)
 		self.ids.push(id)
 	end 'record'
 
 	// An index loop rather than `withIterator`: an iterator's methods dispatch through a witness slot,
 	// which this isel may not reach (E3143).
-	function idOf(blockRef BlockRef) returns BlockId throws OrderedBlockLookup
+	function idOf(blockRef ElementIndex) returns BlockId throws OrderedBlockLookup
 		for k in 0 upto self.refs.count() 'eachSplit'
 			let ref = try self.refs.get(k) otherwise panic("OrderedBlockRoster.idOf: refs.get OOB at {k} below {self.refs.count()}")
 
@@ -1226,17 +1226,17 @@ export type StdToX64Lowering
 			// The two NAME-callee calls: the callee's declared parameter files decide which arguments overflow,
 			// exactly as they decide which register each of the others travels in (`emitCallArgMoves` reads the
 			// same mask through the same `calleeArgFloatMask`).
-			call(_, callee, args) gives callOutgoingArgBytes(calleeArgFloatMask(self.abi, callee: callee, argCount: args.count(), registerCapacity: x64RegisterArgCapacity()), argCount: args.count())
-			tryCall(_, _, callee, args) gives callOutgoingArgBytes(calleeArgFloatMask(self.abi, callee: callee, argCount: args.count(), registerCapacity: x64RegisterArgCapacity()), argCount: args.count())
+			call(_, callee, args) gives callOutgoingArgBytes(calleeArgFloatMask(self.abi, callee: callee, argCount: args.count() as ParamCount, registerCapacity: x64RegisterArgCapacity()), argCount: args.count() as ParamCount)
+			tryCall(_, _, callee, args) gives callOutgoingArgBytes(calleeArgFloatMask(self.abi, callee: callee, argCount: args.count() as ParamCount, registerCapacity: x64RegisterArgCapacity()), argCount: args.count() as ParamCount)
 
 			// The two VALUE-callee calls carry their own per-argument mask (there is no callee name to look one
 			// up by), and overflow through the identical shared rule.
-			callIndirect(_, _, _, argFloatMask, args) gives callOutgoingArgBytes(argFloatMask, argCount: args.count())
-			witnessCall(_, _, _, _, argFloatMask, args) gives callOutgoingArgBytes(argFloatMask, argCount: args.count())
+			callIndirect(_, _, _, argFloatMask, args) gives callOutgoingArgBytes(argFloatMask, argCount: args.count() as ParamCount)
+			witnessCall(_, _, _, _, argFloatMask, args) gives callOutgoingArgBytes(argFloatMask, argCount: args.count() as ParamCount)
 
 			// The throwing witness call marshals its arguments identically (its extra result is a REGISTER
 			// capture, not an outgoing argument), so it reserves the same outgoing space.
-			witnessTryCall(_, _, _, _, _, argFloatMask, args) gives callOutgoingArgBytes(argFloatMask, argCount: args.count())
+			witnessTryCall(_, _, _, _, _, argFloatMask, args) gives callOutgoingArgBytes(argFloatMask, argCount: args.count() as ParamCount)
 
 			// Both pipe creates reserve the larger of `CreateNamedPipeW`'s and `CreateFileW`'s stack tails.
 			osPipeCreate or
@@ -1272,7 +1272,7 @@ export type StdToX64Lowering
 	// before it nor the walk after it may hold a borrow of it across it. The function is
 	// therefore threaded by INDEX and re-fetched inside each phase — the discipline
 	// `splitCriticalEdgesInFunc` follows for the same reason, and which E3019 enforces.
-	function lowerFunction(funcIdx FuncIndex)
+	function lowerFunction(funcIdx ElementIndex)
 		self.prepareFunctionTables(funcIdx)
 
 		// ⚠ CAPTURED BEFORE PHASE 2, which appends its `ordered` refs to this very array. The walk
@@ -1294,7 +1294,7 @@ export type StdToX64Lowering
 	// the x64 ISEL — not the target-neutral String runtime — because the need is an x64 ABI fact (arm64's
 	// `write` is all-register and reserves nothing). Skips the assignment when zero, so a non-printing
 	// function is untouched.
-	function applyOutgoingArgSize(funcIdx FuncIndex, bytes StackSize)
+	function applyOutgoingArgSize(funcIdx ElementIndex, bytes StackSize)
 		if bytes == 0 'none'
 			return
 		end 'none'
@@ -1307,7 +1307,7 @@ export type StdToX64Lowering
 	// only means anything within its own function, and both the fused branch and the value uses
 	// that consume it are in the same function. All are computed BEFORE the op walk, because a
 	// compare is lowered long before the branch or the phi edge that decides what it must produce.
-	function prepareFunctionTables(funcIdx FuncIndex)
+	function prepareFunctionTables(funcIdx ElementIndex)
 		let srcFunc = self.stdModule.getFunc(funcIdx)
 		self.valueDefs.rebuild(self.stdModule, func: srcFunc)
 		self.compareFusion.computeForFunction(self.stdModule, func: srcFunc)
@@ -1318,14 +1318,14 @@ export type StdToX64Lowering
 
 	// The function's block count as the STD module knows it — a scoped read, so the caller holds
 	// no borrow of the function across the mint that follows.
-	function stdBlockCountOf(funcIdx FuncIndex) returns BlockCount
+	function stdBlockCountOf(funcIdx ElementIndex) returns ElementIndex
 		let srcFunc = self.stdModule.getFunc(funcIdx)
 		return srcFunc.blockRefs.count()
 	end 'stdBlockCountOf'
 
 	// Phase 3 — the op walk. `originalBlockCount` bounds it to the Std module's own blocks; see
 	// `lowerFunction`.
-	function lowerFunctionBlocks(funcIdx FuncIndex, originalBlockCount BlockCount) returns StackSize
+	function lowerFunctionBlocks(funcIdx ElementIndex, originalBlockCount ElementIndex) returns StackSize
 		let srcFunc = self.stdModule.getFunc(funcIdx)
 
 		// The max outgoing stack-arg bytes any op in this function needs — a running MAX (a call REUSES the
@@ -1596,7 +1596,7 @@ export type StdToX64Lowering
 
 	// Lower a block terminator — the two branch terminators and `ret`. A
 	// `const`/`binOp`/`unaryOp`/`cmp` terminator is a lowering bug (none is a terminator).
-	function lowerTerminatorOp(op StdOp, dstBlock IrBlock, returnType StdReturnType, blockRef BlockRef)
+	function lowerTerminatorOp(op StdOp, dstBlock IrBlock, returnType StdReturnType, blockRef ElementIndex)
 		match op 'lower'
 			ret(retValId) then self.lowerReturn(retValId, dstBlock: dstBlock, returnType: returnType, asTerminator: true)
 			retVoid then self.lowerVoidReturn(dstBlock, returnType: returnType, asTerminator: true)
@@ -2422,7 +2422,7 @@ export type StdToX64Lowering
 	// is the very one the callee's `lowerParam` folds out of its declared parameter types. Shared by
 	// `lowerCall` and `lowerTryCall`, whose argument passing is identical (extracted so the two cannot drift).
 	function emitCallArgMoves(callee ByteArray, args ValueIdArray, dstBlock IrBlock)
-		self.emitArgMovesByFloatMask(args, argFloatMask: calleeArgFloatMask(self.abi, callee: callee, argCount: args.count(), registerCapacity: x64RegisterArgCapacity()), dstBlock: dstBlock)
+		self.emitArgMovesByFloatMask(args, argFloatMask: calleeArgFloatMask(self.abi, callee: callee, argCount: args.count() as ParamCount, registerCapacity: x64RegisterArgCapacity()), dstBlock: dstBlock)
 	end 'emitCallArgMoves'
 
 	// Lower a Std `call` to the x64 call sequence: move each argument into its ABI register
@@ -5033,7 +5033,7 @@ export type StdToX64Lowering
 	// index a block's then-edge is only findable by scanning every op of the block, which is
 	// what made building the CFG skeleton O(total ops) (see `CondBranch`). It also seals the
 	// block: `appendOp` refuses to append past a conditional branch.
-	function lowerCondBranch(condId ValueId, thenBlockId BlockId, elseBlockId BlockId, dstBlock IrBlock, blockRef BlockRef)
+	function lowerCondBranch(condId ValueId, thenBlockId BlockId, elseBlockId BlockId, dstBlock IrBlock, blockRef ElementIndex)
 		let orderedId = try self.orderedBlockIds.idOf(blockRef) otherwise 'notFloatEquality'
 			let cond = self.branchConditionCode(condId, blockRef: blockRef, dstBlock: dstBlock)
 			self.targetModule.appendCondBranch(dstBlock, op: TargetOp.jcc(cond, targetBlockId: thenBlockId))
@@ -5054,7 +5054,7 @@ export type StdToX64Lowering
 	// even before the RPO reorder moves it again — and this lowering emits BOTH edges for the
 	// reason `lowerCondBranch` gives above: correctness may never rest on block ordering. What
 	// turns the pair into a real fall-through is `BranchCleanup`, once the layout is final.
-	function lowerFloatEqualityBranch(blockRef BlockRef, thenBlockId BlockId, elseBlockId BlockId, orderedId BlockId, dstBlock IrBlock)
+	function lowerFloatEqualityBranch(blockRef ElementIndex, thenBlockId BlockId, elseBlockId BlockId, orderedId BlockId, dstBlock IrBlock)
 		let pred = self.compareFusion.fusedPredicateOf(blockRef)
 		let parityTarget = parityTargetOf(pred, thenBlockId: thenBlockId, elseBlockId: elseBlockId)
 		self.targetModule.appendCondBranch(dstBlock, op: TargetOp.jcc(X64CondCode.parity, targetBlockId: parityTarget))
@@ -5085,7 +5085,7 @@ export type StdToX64Lowering
 
 	// The condition code the branch's `jcc` tests, emitting the truth-test `cmp reg, 0` first
 	// when the condition is a value rather than a fused compare's flags.
-	function branchConditionCode(condId ValueId, blockRef BlockRef, dstBlock IrBlock) returns X64CondCode
+	function branchConditionCode(condId ValueId, blockRef ElementIndex, dstBlock IrBlock) returns X64CondCode
 		if not self.compareFusion.blockFusesCompare(blockRef) 'notFused'
 			self.targetModule.appendOp(dstBlock, op: TargetOp.cmpRegImm32(TargetVReg.virtual(condId), imm: BoolFalseImm))
 			return X64CondCode.notEqual
@@ -5139,7 +5139,7 @@ export type StdToX64Lowering
 	// whole of every block (its `dstBlock`) — the rule `moveBranchEdgeToSplit` scopes its helpers
 	// apart to obey. It also pushes to `srcFunc.blockRefs`, which the walk reads by index.
 	// Running it before either borrow exists is what makes both safe.
-	function reserveFloatEqualityBlocks(funcIdx FuncIndex) returns OrderedBlockRoster
+	function reserveFloatEqualityBlocks(funcIdx ElementIndex) returns OrderedBlockRoster
 		// COLLECT FIRST, THEN MINT — `splitCriticalEdgesInFunc`'s exact discipline, and for its
 		// exact reason: the mint below fetches and MUTATES the function, so no borrow of it may
 		// still be live, and it also appends to the very `blockRefs` this would otherwise iterate.
@@ -5168,7 +5168,7 @@ export type StdToX64Lowering
 	//
 	// It is also a scoped READ of the function (the un-fuse touches only the census's predicate map), complete
 	// before `reserveFloatEqualityBlocks` mints anything.
-	function blocksNeedingFloatEqualitySplit(funcIdx FuncIndex) returns BlockRefArray
+	function blocksNeedingFloatEqualitySplit(funcIdx ElementIndex) returns BlockRefArray
 		let srcFunc = self.stdModule.getFunc(funcIdx)
 		var toSplit = BlockRefArray.create()
 
@@ -5186,7 +5186,7 @@ export type StdToX64Lowering
 	// asked of one branch — and because their order is a REQUIREMENT (un-fuse first, or a branch
 	// about to lose its fusion is still handed an `ordered` block), which is structural here
 	// instead of a note about pass ordering.
-	function settleFloatEqualityBranch(blockRef BlockRef) returns bool
+	function settleFloatEqualityBranch(blockRef ElementIndex) returns bool
 		let block = try self.stdModule.blocks.get(blockRef) otherwise panic("settleFloatEqualityBranch: blockRef {blockRef} not in stdModule.blocks")
 
 		if not block.hasTerminatorOp() 'noTerm'
@@ -5335,7 +5335,7 @@ export type StdToX64Lowering
 	//   • anything else ⇒ no split. An UNFUSED condition is an ordinary bool in a register; an
 	//     INTEGER compare has no unordered answer; an ORDERED float predicate is answered by a
 	//     single `ja`/`jae` on swapped operands and needs no second jump at all.
-	function settleFloatEqualityCondition(blockRef BlockRef, condId ValueId) returns bool
+	function settleFloatEqualityCondition(blockRef ElementIndex, condId ValueId) returns bool
 		if not self.isFusedFloatEquality(blockRef, condId: condId) 'notFloatEquality'
 			return false
 		end 'notFloatEquality'
@@ -5354,7 +5354,7 @@ export type StdToX64Lowering
 
 	// True iff `condId` is defined by a FUSED compare that is a FLOAT `==` or `!=` — the one
 	// compare shape whose branch cannot be a single jump.
-	function isFusedFloatEquality(blockRef BlockRef, condId ValueId) returns bool
+	function isFusedFloatEquality(blockRef ElementIndex, condId ValueId) returns bool
 		if not self.compareFusion.blockFusesCompare(blockRef) 'notFused'
 			return false
 		end 'notFused'
@@ -5371,7 +5371,7 @@ export type StdToX64Lowering
 	//
 	// Every step is its own scoped helper, so no two live borrows of `targetModule.blocks` ever
 	// coexist. Reads come first, then the mint, then the writes.
-	function buildOrderedBlock(funcIdx FuncIndex, blockRef BlockRef) returns BlockId
+	function buildOrderedBlock(funcIdx ElementIndex, blockRef ElementIndex) returns BlockId
 		// The condition value is not needed here: the predicate is looked up by BLOCK
 		// (see `FusedPredColumn`), which is the same key this split was selected under.
 		let (_, thenBlockId, elseBlockId) = self.condBranchFieldsOf(blockRef)
@@ -5396,7 +5396,7 @@ export type StdToX64Lowering
 	// The function is fetched HERE, by index, and mutated directly — its borrow never escapes to a
 	// caller that could still be holding one. Same shape as `addSplitBlock`, down to the inline site
 	// being COPIED: the original block keeps its own box, and the module travels home in a reply.
-	function addOrderedBlock(funcIdx FuncIndex, heat BlockHeat, inlineSite InlineSiteRef) returns BlockRef
+	function addOrderedBlock(funcIdx ElementIndex, heat BlockHeat, inlineSite InlineSiteRef) returns ElementIndex
 		var srcFunc = self.stdModule.getFunc(funcIdx)
 		let newId = srcFunc.nextBlockId
 		srcFunc.nextBlockId = srcFunc.nextBlockId + 1
@@ -5407,14 +5407,14 @@ export type StdToX64Lowering
 	end 'addOrderedBlock'
 
 	// `blockRef`'s block — a scoped read whose borrow ends with the one field the caller takes off it.
-	function blockAt(blockRef BlockRef) returns IrBlock
+	function blockAt(blockRef ElementIndex) returns IrBlock
 		return try self.targetModule.blocks.get(blockRef) otherwise panic("blockAt: blockRef {blockRef} not in targetModule.blocks")
 	end 'blockAt'
 
 	// Emit the `ordered` block's whole body: the ordered equality test to `then`, the `jmp` to
 	// `else`, and the phi edges it inherited. Uniform for both `==` and `!=` — only `cond`
 	// differs (`je` vs `jne`), because the unordered answer was already decided by the `jp`.
-	function emitOrderedBlockBody(blockRef BlockRef, cond X64CondCode, thenBlockId BlockId, elseBlockId BlockId, edges BranchEdgeArray)
+	function emitOrderedBlockBody(blockRef ElementIndex, cond X64CondCode, thenBlockId BlockId, elseBlockId BlockId, edges BranchEdgeArray)
 		var block = try self.targetModule.blocks.get(blockRef) otherwise panic("emitOrderedBlockBody: blockRef {blockRef} not in targetModule.blocks")
 		block.branchEdges = edges
 		self.targetModule.appendCondBranch(block, op: TargetOp.jcc(cond, targetBlockId: thenBlockId))
@@ -5428,7 +5428,7 @@ export type StdToX64Lowering
 	// `rewriteEdgeArgsIn` swaps an edge's `argIds` to repoint it at a reload), so two blocks
 	// sharing one edge object would let a later rewrite of one silently move the other. `argIds`
 	// IS shared, and that is correct — nothing mutates it in place (see `prepareSkeleton`).
-	function cloneBranchEdgesOf(blockRef BlockRef) returns BranchEdgeArray
+	function cloneBranchEdgesOf(blockRef ElementIndex) returns BranchEdgeArray
 		let block = try self.targetModule.blocks.get(blockRef) otherwise panic("cloneBranchEdgesOf: blockRef {blockRef} not in targetModule.blocks")
 		var copied = BranchEdgeArray.create()
 
@@ -5444,7 +5444,7 @@ export type StdToX64Lowering
 	// panic arms written three times, and a fourth field would have to be added to all of them.
 	// (A tuple, not a payload-carrying union: `fuseIfDefines`'s heap-box warning is about unions,
 	// and this runs once per SPLIT rather than once per op regardless.)
-	function condBranchFieldsOf(blockRef BlockRef) returns (ValueId, BlockId, BlockId)
+	function condBranchFieldsOf(blockRef ElementIndex) returns (ValueId, BlockId, BlockId)
 		let block = try self.stdModule.blocks.get(blockRef) otherwise panic("condBranchFieldsOf: blockRef {blockRef} not in stdModule.blocks")
 		let term = try self.stdModule.ops.get(block.terminatorIndex()) otherwise panic("condBranchFieldsOf: terminatorIndex of block ref {blockRef} not in stdModule.ops")
 		return match term 'term'

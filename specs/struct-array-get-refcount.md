@@ -40,13 +40,13 @@ type List
 		function pushFront(value Integer)
 				let node = Node.create(value, next: self.head)
 				self.nodes.push(node)
-				self.head = self.nodes.count() - 1
+				self.head = (self.nodes.count() as Integer) - 1
 		end 'pushFront'
 
 		function walk()
 				var current = self.head
 				while current != -1 'w'
-						let node = try self.nodes.get(current) otherwise Node.create(0, next: -1)
+						let node = try self.nodes.get(current as ElementIndex) otherwise Node.create(0, next: -1)
 						current = node.next
 				end 'w'
 		end 'walk'
@@ -182,7 +182,7 @@ function main() returns ExitCode
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
-	let v = try arr.get(9) otherwise [1, 2].count()
+	let v = try arr.get(9) otherwise [1, 2].count() as Integer
 	return v
 end 'main'
 ```

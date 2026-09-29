@@ -156,7 +156,7 @@ export function filterConditionalTokens(tokens TokenArray, facts ConditionFacts)
 
 	var out = TokenArray.create()
 	var frames = DirectiveFrameArray.create()
-	var scan = 0 as TokenIndex
+	var scan = 0 as ElementIndex
 
 	while scan < tokens.count() 'walk'
 		let tok = try tokens.get(scan) otherwise panic("filterConditionalTokens: scan<count just checked but tokens.get({scan}) failed")
@@ -173,7 +173,7 @@ export function filterConditionalTokens(tokens TokenArray, facts ConditionFacts)
 			// dead region's condition tokens simply fall through the `not live` drop below, which is
 			// the same answer reached by the rule that was already there.
 			if regionLive 'liveParent'
-				var cursor = ConditionCursor.create((scan + 1) as TokenIndex)
+				var cursor = ConditionCursor.create((scan + 1) as ElementIndex)
 				let taken = try evaluateCondition(tokens, cursor: cursor, facts: facts)
 				try expectConditionEnd(tokens, cursor: cursor)
 				frames.push(DirectiveFrame.create(taken, takenAlready: taken, line: tok.line, column: tok.column))
@@ -306,9 +306,9 @@ end 'enclosingRegionIsLive'
 // index alongside the value from each of five productions would put the same two-field tuple in
 // five signatures and make each caller re-thread it; one shared cursor is the fact written down once.
 type ConditionCursor
-	export var value as TokenIndex
+	export var value as ElementIndex
 
-	static function create(value TokenIndex) returns ConditionCursor
+	static function create(value ElementIndex) returns ConditionCursor
 		return Self{value: value}
 	end 'create'
 end 'ConditionCursor'
@@ -522,7 +522,7 @@ end 'readConditionArgument'
 // The token at an absolute index, or a synthetic EOF past the end — the same past-the-end rule
 // `Parser.tokenAt` writes down, so a malformed condition that runs off the array reports a position
 // instead of faulting. The lexer appends a real EOF, so the synthetic one is a guard.
-function tokenAtOrEof(tokens TokenArray, index TokenIndex) returns Token
+function tokenAtOrEof(tokens TokenArray, index ElementIndex) returns Token
 	if index >= tokens.count() 'pastEnd'
 		return Token.eof()
 	end 'pastEnd'

@@ -67,13 +67,13 @@ test 'collapsed stacks carry every path the fixture runs, whatever floor the too
 	arguments.push("{MinPercentFlagPrefix}{FoldedIgnoredFloorShare}")
 
 	let run = spawnCompiler(arguments, staged: staged, what: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb} {FoldedFlag}`")
-	Expect.equal(run.exitCode() as AssertedInt, expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb} … {FoldedFlag}` did not complete a measurement. It printed:{LineFeed}{run.stdout}{LineFeed}— and wrote to stderr: {run.stderr}")
+	Expect.equal(run.exitCode(), expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb} … {FoldedFlag}` did not complete a measurement. It printed:{LineFeed}{run.stdout}{LineFeed}— and wrote to stderr: {run.stderr}")
 
 	let paths = foldedPathsAboveFloor(run.stdout)
 
 	// ⭐ THE HEADLINE, and its own positive control: a `--folded` that honoured `--min-percent` would leave
 	// exactly one of these, and a run that measured nothing would leave none.
-	Expect.equal(paths.count() as AssertedInt, expected: FoldedPathCount, message: "`{FoldedFlag}` printed {paths.count()} path(s) worth at least {FoldedSampleFloor} samples, and the fixture runs exactly {FoldedPathCount}: `{InteriorFrameName}` calls two leaves and nothing else in the program does work. ONE path would mean the format honoured the `{MinPercentFlagPrefix}{FoldedIgnoredFloorShare}` it was handed, which it must not — a flamegraph tool wants every path and thresholds for itself. It printed:{LineFeed}{run.stdout}")
+	Expect.equal(paths.count(), expected: FoldedPathCount, message: "`{FoldedFlag}` printed {paths.count()} path(s) worth at least {FoldedSampleFloor} samples, and the fixture runs exactly {FoldedPathCount}: `{InteriorFrameName}` calls two leaves and nothing else in the program does work. ONE path would mean the format honoured the `{MinPercentFlagPrefix}{FoldedIgnoredFloorShare}` it was handed, which it must not — a flamegraph tool wants every path and thresholds for itself. It printed:{LineFeed}{run.stdout}")
 
 	requirePathEndsWith(paths, position: HottestPathPosition, leaf: HotFunctionName)
 	requirePathEndsWith(paths, position: SecondPathPosition, leaf: WarmFunctionName)
@@ -87,7 +87,7 @@ end 'collapsed stacks carry every path the fixture runs, whatever floor the tool
 
 // One path's tail, which is the part of it the FIXTURE decides: `…;main;work;<leaf>`.
 function requirePathEndsWith(paths StringArray, position FoldedPathPosition, leaf String) throws TestFailure
-	let path = try paths.get(position) otherwise panic("profile-folded.test: position {position} is inside a list whose count was just asserted")
+	let path = try paths.get(position as ElementIndex) otherwise panic("profile-folded.test: position {position} is inside a list whose count was just asserted")
 	let tail = "{FoldedFrameSeparator}{ProgramEntryFrameName}{FoldedFrameSeparator}{InteriorFrameName}{FoldedFrameSeparator}{leaf}"
 	try Expect.endsWith(path, needle: tail, message: "the collapsed path at position {position} is `{path}`, which does not end in `{tail}`. The chain is one the fixture DECLARES — `{ProgramEntryFrameName}` calls `{InteriorFrameName}` calls `{leaf}` — so a different tail is a walker that lost a frame or a symbolizer that named the wrong one, and the order of the two paths is the order `{InteriorFrameName}` calls them in.")
 end 'requirePathEndsWith'
@@ -106,7 +106,7 @@ function foldedPathsAboveFloor(report String) returns StringArray throws TestFai
 		end 'blank'
 
 		let tokens = whitespaceTokens(line)
-		try Expect.atLeast(tokens.count() as AssertedInt, than: FoldedMinimumFields, message: "`{FoldedFlag}` printed '{line}', which is not the `path{FoldedCountSeparator}<count>` pair every consumer of this format splits on.")
+		try Expect.atLeast(tokens.count(), than: FoldedMinimumFields, message: "`{FoldedFlag}` printed '{line}', which is not the `path{FoldedCountSeparator}<count>` pair every consumer of this format splits on.")
 
 		let samples = try tokens.get(tokens.count() - 1) otherwise panic("profile-folded.test: a list whose count was just asserted has a last element")
 		let path = foldedPathIn(tokens)

@@ -605,7 +605,7 @@ export function installSlabRuntime(module StdModule, globalData GlobalDataTable,
 	buildSlabCensusEntry(module, name: SlabCensusBucketCountName, callee: SlabCensusBucketCountWalkName, argument: SlabCensusArgument.forwarded, model: model)
 	buildSlabCensusEntry(module, name: SlabCensusBucketBytesName, callee: SlabCensusBucketBytesWalkName, argument: SlabCensusArgument.forwarded, model: model)
 
-	assertSpanOwnerAccessIsOrdered(module, firstFuncIndex: firstFuncIndex as FuncIndex)
+	assertSpanOwnerAccessIsOrdered(module, firstFuncIndex: firstFuncIndex)
 end 'installSlabRuntime'
 
 // The one `.data` slot the object layer owns. `runtime/SlabRuntime.maxon`'s `__slab_state_base` is its only
@@ -2920,12 +2920,12 @@ end 'SpanOwnerAccessCensus'
 // ⚠ It sees the plain and the ordered forms only. An atomic carries no displacement to key on, and the
 // bodies lowered from `runtime/SlabRuntime.maxon` are installed before `firstFuncIndex` and are outside the
 // walk — `__slab_meta_free`'s `Freed` stamp and the census walk's read of the word among them.
-function assertSpanOwnerAccessIsOrdered(module StdModule, firstFuncIndex FuncIndex)
+function assertSpanOwnerAccessIsOrdered(module StdModule, firstFuncIndex ElementIndex)
 	var census = SpanOwnerAccessCensus.create()
 	var opIndices = OpIndexArray.create()
 	var access = StdAccessOperands.create()
 
-	for index in firstFuncIndex upto module.funcCount() as FuncIndex 'eachFunc'
+	for index in firstFuncIndex upto module.funcCount() 'eachFunc'
 		requireOrderedSpanOwnerAccessIn(module, func: module.getFunc(index), census: census, opIndices: opIndices, access: access)
 	end 'eachFunc'
 

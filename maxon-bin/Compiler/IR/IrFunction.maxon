@@ -232,7 +232,7 @@ export type DebugLocalDecl
 		var splicedValues = ValueIdArray.create()
 
 		for value in self.valueIds 'eachValue'
-			if value >= subst.count() 'definedByNoOp'
+			if value >= subst.count() as ValueId 'definedByNoOp'
 				continue
 			end 'definedByNoOp'
 
@@ -306,7 +306,7 @@ end 'DebugValueLocation'
 
 export typealias DebugValueLocationArray = Array with DebugValueLocation
 
-export typealias DebugOpAnchor = int(0 to u64.max)
+export typealias DebugOpAnchor = int(0 to u64.max) implements ElementIndex
 
 export type DebugValueRange
 	export var valueOrdinal as ElementIndex
@@ -341,7 +341,7 @@ export type ImmutableBindings
 		return Self{values: ValueIdArray.create(), names: ByteArrayArray.create(), moduleLets: BoolArray.create(), images: BoolArray.create(), borrows: BoolArray.create(), declTokens: TokenIndexArray.create(), infos: VarInfoArray.create()}
 	end 'create'
 
-	export function record(value ValueId, name ByteArray, moduleLet bool, image bool, borrowsIt bool, declToken TokenIndex, info VarInfo)
+	export function record(value ValueId, name ByteArray, moduleLet bool, image bool, borrowsIt bool, declToken ElementIndex, info VarInfo)
 		self.values.push(value)
 		self.names.push(name)
 		self.moduleLets.push(moduleLet)
@@ -362,7 +362,7 @@ export function positionKey(line LineNumber, column ColumnNumber) returns Positi
 end 'positionKey'
 
 // The token each call of a body ends at, by the call's position.
-export typealias TokenByPosition = Map with (PositionKey, TokenIndex)
+export typealias TokenByPosition = Map with (PositionKey, ElementIndex)
 
 // ⭐ **A DOOR WHOSE VERDICT IS A WHOLE-PROGRAM QUESTION, SO THE SITE WAITS FOR `StorageProvenance`.** `name` is
 // what the author wrote there: the mutable binding a value was bound or assigned to, the mutable name that
@@ -373,9 +373,9 @@ export type StorageSite
 	export let value as ValueId
 	export let line as LineNumber
 	export let column as ColumnNumber
-	export let token as TokenIndex
+	export let token as ElementIndex
 
-	export static function create(name ByteArray, value ValueId, line LineNumber, column ColumnNumber, token TokenIndex) returns StorageSite
+	export static function create(name ByteArray, value ValueId, line LineNumber, column ColumnNumber, token ElementIndex) returns StorageSite
 		return Self{name: name, value: value, line: line, column: column, token: token}
 	end 'create'
 end 'StorageSite'
@@ -391,9 +391,9 @@ export typealias StorageSiteArray = Array with StorageSite
 // a block recorded as the ops were emitted can be the wrong one, and the op cannot be.
 export type FlowPoint
 	export var block as BlockId
-	export var at as BlockOpPos
+	export var at as ElementIndex
 
-	export static function create(block BlockId, at BlockOpPos) returns FlowPoint
+	export static function create(block BlockId, at ElementIndex) returns FlowPoint
 		return Self{block: block, at: at}
 	end 'create'
 
@@ -402,7 +402,7 @@ export type FlowPoint
 		return Self{block: 0, at: 0}
 	end 'unplaced'
 
-	export function place(blockId BlockId, position BlockOpPos)
+	export function place(blockId BlockId, position ElementIndex)
 		self.block = blockId
 		self.at = position
 	end 'place'
@@ -419,11 +419,11 @@ export type ReceiverWriteSite
 	export let line as LineNumber
 	export let column as ColumnNumber
 	export let blameable as bool
-	export let token as TokenIndex
-	export let opMark as OpIndex
+	export let token as ElementIndex
+	export let opMark as ElementIndex
 	export var point as FlowPoint
 
-	export static function create(receiver ValueId, place ByteArray, method ByteArray, line LineNumber, column ColumnNumber, blameable bool, token TokenIndex, opMark OpIndex) returns ReceiverWriteSite
+	export static function create(receiver ValueId, place ByteArray, method ByteArray, line LineNumber, column ColumnNumber, blameable bool, token ElementIndex, opMark ElementIndex) returns ReceiverWriteSite
 		return Self{receiver: receiver, place: place, method: method, line: line, column: column, blameable: blameable, token: token, opMark: opMark, point: FlowPoint.unplaced()}
 	end 'create'
 end 'ReceiverWriteSite'
@@ -452,11 +452,11 @@ export type FreezeDoorSite
 	export let door as FreezeDoor
 	export let line as LineNumber
 	export let column as ColumnNumber
-	export let token as TokenIndex
-	export let opMark as OpIndex
+	export let token as ElementIndex
+	export let opMark as ElementIndex
 	export var point as FlowPoint
 
-	export static function create(value ValueId, door FreezeDoor, line LineNumber, column ColumnNumber, token TokenIndex, opMark OpIndex) returns FreezeDoorSite
+	export static function create(value ValueId, door FreezeDoor, line LineNumber, column ColumnNumber, token ElementIndex, opMark ElementIndex) returns FreezeDoorSite
 		return Self{value: value, door: door, line: line, column: column, token: token, opMark: opMark, point: FlowPoint.unplaced()}
 	end 'create'
 end 'FreezeDoorSite'
@@ -478,11 +478,11 @@ export type LendSite
 	export let column as ColumnNumber
 	export let sendLine as LineNumber
 	export let sendColumn as ColumnNumber
-	export let token as TokenIndex
-	export let opMark as OpIndex
+	export let token as ElementIndex
+	export let opMark as ElementIndex
 	export var point as FlowPoint
 
-	export static function create(value ValueId, root ByteArray, serviceType ByteArray, message ByteArray, param ByteArray, line LineNumber, column ColumnNumber, sendLine LineNumber, sendColumn ColumnNumber, token TokenIndex, opMark OpIndex) returns LendSite
+	export static function create(value ValueId, root ByteArray, serviceType ByteArray, message ByteArray, param ByteArray, line LineNumber, column ColumnNumber, sendLine LineNumber, sendColumn ColumnNumber, token ElementIndex, opMark ElementIndex) returns LendSite
 		return Self{value: value, root: root, serviceType: serviceType, message: message, param: param, line: line, column: column, sendLine: sendLine, sendColumn: sendColumn, token: token, opMark: opMark, point: FlowPoint.unplaced()}
 	end 'create'
 end 'LendSite'
@@ -528,9 +528,7 @@ export type LabelledArgumentValues
 	end 'byPosition'
 end 'LabelledArgumentValues'
 
-// The row a labelled call argument's value was recorded at, by its label's position.
-export typealias LabelledValueRow = int(0 to u64.max)
-export typealias LabelledValueRowByPosition = Map with (PositionKey, LabelledValueRow)
+export typealias LabelledValueRowByPosition = Map with (PositionKey, ElementIndex)
 
 // ⭐ **A NAME BOUND OR ASSIGNED WHOLE TO A MUTABLE NAME, AND THE FIRST READ OF IT AFTER.** Filed where a `let` — or
 // a `var`, whose E3077 verdict needs the same fact — is bound or assigned to a mutable name (`destination`). Whether
@@ -545,13 +543,13 @@ export type MoveSite
 	export let destination as ByteArray
 	export let line as LineNumber
 	export let column as ColumnNumber
-	export let token as TokenIndex
+	export let token as ElementIndex
 	export let escapesLoop as bool
 	export var readAfter as bool = false
 	export var readLine as LineNumber = 0
 	export var readColumn as ColumnNumber = 0
 
-	export static function create(value ValueId, source ByteArray, sourceValue ValueId, sourceIsMutable bool, destination ByteArray, line LineNumber, column ColumnNumber, token TokenIndex, escapesLoop bool) returns MoveSite
+	export static function create(value ValueId, source ByteArray, sourceValue ValueId, sourceIsMutable bool, destination ByteArray, line LineNumber, column ColumnNumber, token ElementIndex, escapesLoop bool) returns MoveSite
 		return Self{value: value, source: source, sourceValue: sourceValue, sourceIsMutable: sourceIsMutable, destination: destination, line: line, column: column, token: token, escapesLoop: escapesLoop}
 	end 'create'
 
@@ -601,7 +599,7 @@ export type TokenSpans
 		return Self{starts: TokenIndexArray.create(), ends: TokenIndexArray.create()}
 	end 'create'
 
-	export function record(start TokenIndex, finish TokenIndex)
+	export function record(start ElementIndex, finish ElementIndex)
 		self.starts.push(start)
 		self.ends.push(finish)
 	end 'record'
@@ -624,7 +622,7 @@ export type LetReads
 		return Self{values: ValueIdArray.create(), tokens: TokenIndexArray.create()}
 	end 'create'
 
-	export function record(value ValueId, token TokenIndex)
+	export function record(value ValueId, token ElementIndex)
 		self.values.push(value)
 		self.tokens.push(token)
 	end 'record'
@@ -645,7 +643,7 @@ export type CallTokenColumns
 		return Self{positions: PositionKeyArray.create(), tokens: TokenIndexArray.create()}
 	end 'create'
 
-	export function record(position PositionKey, token TokenIndex)
+	export function record(position PositionKey, token ElementIndex)
 		self.positions.push(position)
 		self.tokens.push(token)
 	end 'record'
@@ -703,7 +701,7 @@ export type DeferredWriteThroughs
 		return Self{targets: ValueIdArray.create(), placeStarts: TokenIndexArray.create(), placeEnds: TokenIndexArray.create(), lines: LineNumberArray.create(), columns: ColumnNumberArray.create(), tokens: TokenIndexArray.create()}
 	end 'create'
 
-	export function record(target ValueId, placeStart TokenIndex, placeEnd TokenIndex, line LineNumber, column ColumnNumber, token TokenIndex)
+	export function record(target ValueId, placeStart ElementIndex, placeEnd ElementIndex, line LineNumber, column ColumnNumber, token ElementIndex)
 		self.targets.push(target)
 		self.placeStarts.push(placeStart)
 		self.placeEnds.push(placeEnd)
@@ -735,7 +733,7 @@ export type DeferredReceiverWrites
 		return Self{receivers: ValueIdArray.create(), methodIndices: TokenIndexArray.create(), blameable: BoolArray.create(), opMarks: OpIndexArray.create()}
 	end 'create'
 
-	export function record(receiver ValueId, methodIndex TokenIndex, blames bool, opMark OpIndex)
+	export function record(receiver ValueId, methodIndex ElementIndex, blames bool, opMark ElementIndex)
 		self.receivers.push(receiver)
 		self.methodIndices.push(methodIndex)
 		self.blameable.push(blames)
@@ -905,7 +903,7 @@ export type DeferredProvenance
 		end 'someLabelledArgument'
 	end 'fileFreezeInto'
 
-	export function noteLetRead(value ValueId, token TokenIndex)
+	export function noteLetRead(value ValueId, token ElementIndex)
 		if self.letReads is self.empty.letReads 'firstRead'
 			self.letReads = LetReads.create()
 		end 'firstRead'
@@ -913,7 +911,7 @@ export type DeferredProvenance
 		self.letReads.record(value, token: token)
 	end 'noteLetRead'
 
-	export function noteLetCapture(value ValueId, token TokenIndex)
+	export function noteLetCapture(value ValueId, token ElementIndex)
 		if self.letCaptures is self.empty.letReads 'firstCapture'
 			self.letCaptures = LetReads.create()
 		end 'firstCapture'
@@ -921,7 +919,7 @@ export type DeferredProvenance
 		self.letCaptures.record(value, token: token)
 	end 'noteLetCapture'
 
-	export function noteExclusiveArms(thenStart TokenIndex, thenEnd TokenIndex, elseStart TokenIndex, elseEnd TokenIndex)
+	export function noteExclusiveArms(thenStart ElementIndex, thenEnd ElementIndex, elseStart ElementIndex, elseEnd ElementIndex)
 		if self.exclusiveArms is self.empty.tokenSpans 'firstArms'
 			self.exclusiveArms = TokenSpans.create()
 		end 'firstArms'
@@ -930,7 +928,7 @@ export type DeferredProvenance
 		self.exclusiveArms.record(elseStart, finish: elseEnd)
 	end 'noteExclusiveArms'
 
-	export function noteCall(position PositionKey, token TokenIndex)
+	export function noteCall(position PositionKey, token ElementIndex)
 		if self.calls is self.empty.calls 'firstCall'
 			self.calls = CallTokenColumns.create()
 		end 'firstCall'
@@ -946,7 +944,7 @@ export type DeferredProvenance
 		self.moduleLets.record(value, name: name, image: image)
 	end 'noteModuleLetRead'
 
-	export function noteLoop(start TokenIndex, finish TokenIndex)
+	export function noteLoop(start ElementIndex, finish ElementIndex)
 		if self.loops is self.empty.tokenSpans 'firstLoop'
 			self.loops = TokenSpans.create()
 		end 'firstLoop'
@@ -995,7 +993,7 @@ export type DeferredProvenance
 		self.nameBindSites.push(site)
 	end 'noteNameBindSite'
 
-	export function noteWriteThrough(target ValueId, placeStart TokenIndex, placeEnd TokenIndex, line LineNumber, column ColumnNumber, token TokenIndex)
+	export function noteWriteThrough(target ValueId, placeStart ElementIndex, placeEnd ElementIndex, line LineNumber, column ColumnNumber, token ElementIndex)
 		if self.writeThroughs is self.empty.writeThroughs 'firstWrite'
 			self.writeThroughs = DeferredWriteThroughs.create()
 		end 'firstWrite'
@@ -1003,7 +1001,7 @@ export type DeferredProvenance
 		self.writeThroughs.record(target, placeStart: placeStart, placeEnd: placeEnd, line: line, column: column, token: token)
 	end 'noteWriteThrough'
 
-	export function noteReceiverWrite(receiver ValueId, methodIndex TokenIndex, blameable bool, opMark OpIndex)
+	export function noteReceiverWrite(receiver ValueId, methodIndex ElementIndex, blameable bool, opMark ElementIndex)
 		if self.receiverWrites is self.empty.deferredReceiverWrites 'firstWrite'
 			self.receiverWrites = DeferredReceiverWrites.create()
 		end 'firstWrite'
@@ -1102,7 +1100,7 @@ export type ProvenanceSites
 		return Self{letReads: empty.letReads, letCaptures: empty.letReads, exclusiveArms: empty.tokenSpans, immutableBindings: empty.immutableBindings, mutableBindingSites: empty.storageSites, nameBindSites: empty.storageSites, writeThroughSites: empty.storageSites, receiverWrites: empty.receiverWrites, fieldWrites: empty.values, moveSites: empty.moveSites, writableValues: empty.values, loops: empty.tokenSpans, calls: empty.calls, varCandidates: empty.varCandidates, hasVarCandidates: false, freezeDoors: empty.freezeDoors, lendSites: empty.lendSites, labelledArguments: empty.labelledArguments, empty: empty}
 	end 'create'
 
-	export function recordImmutableName(value ValueId, name ByteArray, moduleLet bool, image bool, borrowsIt bool, declToken TokenIndex, info VarInfo)
+	export function recordImmutableName(value ValueId, name ByteArray, moduleLet bool, image bool, borrowsIt bool, declToken ElementIndex, info VarInfo)
 		if self.immutableBindings is self.empty.immutableBindings 'firstName'
 			self.immutableBindings = ImmutableBindings.create()
 		end 'firstName'
@@ -2139,7 +2137,7 @@ export type IrFunction
 	// destination's, so every ref into them moves by the destination's prior block
 	// count. Offset 0 serves a backend that needs the function to keep pointing at the
 	// source's body blocks in place.
-	export static function relocateFunction(src IrFunction, blockOffset BlockRef = 0) returns IrFunction
+	export static function relocateFunction(src IrFunction, blockOffset ElementIndex = 0) returns IrFunction
 		var relocated = IrFunction.shallowCopy(src)
 
 		for blockRef in src.blockRefs 'eachBlock'
@@ -2168,7 +2166,7 @@ export type IrFunction
 			self.inlineSites = InlineSiteArray.create()
 		end 'stillShared'
 
-		let index = self.inlineSites.count() as InlineSiteIndex
+		let index = self.inlineSites.count()
 		self.inlineSites.push(site)
 		return InlineSiteRef.site(index)
 	end 'recordInlineSite'
@@ -2192,7 +2190,7 @@ export type IrFunction
 		self.debugLocals.push(local)
 	end 'recordSplicedLocal'
 
-	export function recordImmutableBinding(value ValueId, bindingName ByteArray, borrows bool, info VarInfo, declToken TokenIndex, empty ProvenanceColumns)
+	export function recordImmutableBinding(value ValueId, bindingName ByteArray, borrows bool, info VarInfo, declToken ElementIndex, empty ProvenanceColumns)
 		var sites = self.provenanceSitesForWrite(empty)
 		sites.recordImmutableName(value, name: bindingName, moduleLet: false, image: false, borrowsIt: borrows, declToken: declToken, info: info)
 	end 'recordImmutableBinding'

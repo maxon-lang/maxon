@@ -297,8 +297,8 @@ end 'rebaseJumpTableReloc'
 
 // One chunk's debug info, folded into the whole-module tables. Both native concat passes call it
 // where they push a `DebugSymbol`, the one place holding a chunk and its `.text` start.
-export function foldChunkDebugInfo(chunk FunctionCodeChunk, funcStart CodeOffset, inlineSiteBase InlineSiteIndex, functions DebugFunctionRangeArray, lineRows DebugLineRowArray, covPointOffsets CovPointOffsetArray)
-	functions.push(DebugFunctionRange.create(chunk.funcName, codeStart: funcStart, codeEnd: funcStart + chunk.code.count(), prologueOffset: chunk.asyncUnsafePrefixBytes, frameSize: chunk.frameSize, paramCount: chunk.paramCount, spillSlotBase: chunk.spillSlotBase, frameLinkBytes: chunk.frameLinkBytes, localRanges: chunk.localRanges, inlineSiteBase: inlineSiteBase))
+export function foldChunkDebugInfo(chunk FunctionCodeChunk, funcStart CodeOffset, inlineSiteBase ElementIndex, functions DebugFunctionRangeArray, lineRows DebugLineRowArray, covPointOffsets CovPointOffsetArray)
+	functions.push(DebugFunctionRange.create(chunk.funcName, codeStart: funcStart, codeEnd: funcStart + codeHere(chunk.code), prologueOffset: chunk.asyncUnsafePrefixBytes, frameSize: chunk.frameSize, paramCount: chunk.paramCount, spillSlotBase: chunk.spillSlotBase, frameLinkBytes: chunk.frameLinkBytes, localRanges: chunk.localRanges, inlineSiteBase: inlineSiteBase))
 
 	for row in chunk.lineRows 'eachRow'
 		lineRows.push(DebugLineRow.create(funcStart + row.codeOffset, spanId: row.spanId, entersTheLine: row.entersTheLine))
@@ -456,7 +456,7 @@ let NoDebugRunOffset = 0 as CodeOffset
 let DebugRunOffsetBias = 1 as CodeOffset
 
 export type DebugRunOffsets
-	var base as OpIndex
+	var base as ElementIndex
 	var starts as DebugRunOffsetColumn
 	var ends as DebugRunOffsetColumn
 	var armed as bool
@@ -466,7 +466,7 @@ export type DebugRunOffsets
 			return Self{base: 0, starts: DebugRunOffsetColumn.create(), ends: DebugRunOffsetColumn.create(), armed: false}
 		end 'nothingToResolve'
 
-		let opening = (try func.debugLocalRanges.get(0) otherwise panic("DebugRunOffsets.forFunction: the roster was asked non-empty before this call")).first as OpIndex
+		let opening = (try func.debugLocalRanges.get(0) otherwise panic("DebugRunOffsets.forFunction: the roster was asked non-empty before this call")).first
 		var low = opening
 		var high = opening
 
@@ -475,10 +475,10 @@ export type DebugRunOffsets
 		// `first`. A window taken from one field alone is short of the other, and the ops outside it
 		// lose their offsets silently.
 		for range in func.debugLocalRanges 'eachRun'
-			low = debugRunLower(low, other: range.first as OpIndex)
-			low = debugRunLower(low, other: range.last as OpIndex)
-			high = debugRunHigher(high, other: range.first as OpIndex)
-			high = debugRunHigher(high, other: range.last as OpIndex)
+			low = debugRunLower(low, other: range.first)
+			low = debugRunLower(low, other: range.last)
+			high = debugRunHigher(high, other: range.first)
+			high = debugRunHigher(high, other: range.last)
 		end 'eachRun'
 
 		var starts = DebugRunOffsetColumn.create()
@@ -489,7 +489,7 @@ export type DebugRunOffsets
 		return Self{base: low, starts: starts, ends: ends, armed: true}
 	end 'forFunction'
 
-	export function note(opIdx OpIndex, codeStart CodeOffset, codeEnd CodeOffset)
+	export function note(opIdx ElementIndex, codeStart CodeOffset, codeEnd CodeOffset)
 		if not self.armed or opIdx < self.base 'outsideTheWindow'
 			return
 		end 'outsideTheWindow'
@@ -514,8 +514,8 @@ export type DebugRunOffsets
 		for range in func.debugLocalRanges 'eachRun'
 			let blockStart = try blockStarts.get(range.blockId) otherwise continue
 			let blockEnd = try blockEnds.get(range.blockId) otherwise continue
-			let codeStart = blockStart if range.fromBlockEntry else self.startOf(range.first as OpIndex, orElse: blockStart)
-			let codeEnd = self.endOf(range.last as OpIndex, orElse: blockEnd)
+			let codeStart = blockStart if range.fromBlockEntry else self.startOf(range.first, orElse: blockStart)
+			let codeEnd = self.endOf(range.last, orElse: blockEnd)
 
 			if codeEnd <= codeStart 'coversNoCode'
 				continue
@@ -527,19 +527,19 @@ export type DebugRunOffsets
 		return ranges
 	end 'resolve'
 
-	function startOf(opIdx OpIndex, orElse CodeOffset) returns CodeOffset
+	function startOf(opIdx ElementIndex, orElse CodeOffset) returns CodeOffset
 		let at = self.offsetOf(self.starts, opIdx: opIdx)
 
 		return orElse if at == NoDebugRunOffset else at - DebugRunOffsetBias
 	end 'startOf'
 
-	function endOf(opIdx OpIndex, orElse CodeOffset) returns CodeOffset
+	function endOf(opIdx ElementIndex, orElse CodeOffset) returns CodeOffset
 		let at = self.offsetOf(self.ends, opIdx: opIdx)
 
 		return orElse if at == NoDebugRunOffset else at - DebugRunOffsetBias
 	end 'endOf'
 
-	function offsetOf(column DebugRunOffsetColumn, opIdx OpIndex) returns CodeOffset
+	function offsetOf(column DebugRunOffsetColumn, opIdx ElementIndex) returns CodeOffset
 		if opIdx < self.base 'beforeTheWindow'
 			panic("DebugRunOffsets.offsetOf: op {opIdx} lies below the window at {self.base}, which was opened over both ends of every run")
 		end 'beforeTheWindow'
@@ -548,11 +548,11 @@ export type DebugRunOffsets
 	end 'offsetOf'
 end 'DebugRunOffsets'
 
-function debugRunLower(at OpIndex, other OpIndex) returns OpIndex
+function debugRunLower(at DebugOpAnchor, other DebugOpAnchor) returns DebugOpAnchor
 	return other if other < at else at
 end 'debugRunLower'
 
-function debugRunHigher(at OpIndex, other OpIndex) returns OpIndex
+function debugRunHigher(at DebugOpAnchor, other DebugOpAnchor) returns DebugOpAnchor
 	return other if other > at else at
 end 'debugRunHigher'
 
@@ -576,9 +576,9 @@ export type DebugFunctionRange
 	// Chunk-local, unlike `codeStart`: `MxdbgEmit.mergedLiveRanges` adds `codeStart` to every run.
 	export var localRanges as DebugLocalCodeRangeArray
 
-	export var inlineSiteBase as InlineSiteIndex
+	export var inlineSiteBase as ElementIndex
 
-	export static function create(name ByteArray, codeStart CodeOffset, codeEnd CodeOffset, prologueOffset CodeOffset, frameSize StackSize, paramCount ParamCount, spillSlotBase StackSize, frameLinkBytes StackSize, localRanges DebugLocalCodeRangeArray, inlineSiteBase InlineSiteIndex) returns DebugFunctionRange
+	export static function create(name ByteArray, codeStart CodeOffset, codeEnd CodeOffset, prologueOffset CodeOffset, frameSize StackSize, paramCount ParamCount, spillSlotBase StackSize, frameLinkBytes StackSize, localRanges DebugLocalCodeRangeArray, inlineSiteBase ElementIndex) returns DebugFunctionRange
 		return Self{name: name, codeStart: codeStart, codeEnd: codeEnd, prologueOffset: prologueOffset, frameSize: frameSize, paramCount: paramCount, spillSlotBase: spillSlotBase, frameLinkBytes: frameLinkBytes, localRanges: localRanges, inlineSiteBase: inlineSiteBase}
 	end 'create'
 end 'DebugFunctionRange'

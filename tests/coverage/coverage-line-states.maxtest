@@ -82,8 +82,8 @@ test 'the four line states are told apart and each marker names its own line'
 	// The state that is a number, asked as an ORDER rather than as a value.
 	let hot = decimalValue(anchoredMarker(report, staged: staged, anchor: HotAnchor))
 	let loopHeader = decimalValue(anchoredMarker(report, staged: staged, anchor: LoopHeaderAnchor))
-	Expect.greaterThan(hot as AssertedInt, than: 0, message: "the line the fixture anchors as `{HotAnchor}` runs on every iteration of a loop the program definitely enters, and the listing gives it no positive count. A line that ran and is reported as not having run is the failure mode that makes a coverage number worth less than none. The report reads:{LineFeed}{report}")
-	Expect.greaterThan(hot as AssertedInt, than: loopHeader as AssertedInt, message: "the loop BODY (`{HotAnchor}`, counted {hot}) did not outrun the loop HEADER (`{LoopHeaderAnchor}`, counted {loopHeader}). The header is evaluated once per entry and the body once per iteration, so a body that does not exceed it means the counts are not per-execution at all — a point incremented once per line rather than once per pass reads as a plausible listing of ones. The report reads:{LineFeed}{report}")
+	Expect.greaterThan(hot, than: 0, message: "the line the fixture anchors as `{HotAnchor}` runs on every iteration of a loop the program definitely enters, and the listing gives it no positive count. A line that ran and is reported as not having run is the failure mode that makes a coverage number worth less than none. The report reads:{LineFeed}{report}")
+	Expect.greaterThan(hot, than: loopHeader, message: "the loop BODY (`{HotAnchor}`, counted {hot}) did not outrun the loop HEADER (`{LoopHeaderAnchor}`, counted {loopHeader}). The header is evaluated once per entry and the body once per iteration, so a body that does not exceed it means the counts are not per-execution at all — a point incremented once per line rather than once per pass reads as a plausible listing of ones. The report reads:{LineFeed}{report}")
 
 	requireSummaryAgrees(report)
 end 'the four line states are told apart and each marker names its own line'
@@ -99,11 +99,11 @@ function requireSummaryAgrees(report String) throws TestFailure
 	let lines = summaryTokenAfter(report, key: LinesSummaryKey)
 	let covered = ratioNumerator(lines)
 	let instrumented = ratioDenominator(lines)
-	try Expect.greaterThan(instrumented as AssertedInt, than: 0, message: "the summary reports `{LinesSummaryKey}{lines}`, instrumenting no lines at all. Zero instrumented lines is not an empty measurement — it is a binary nobody instrumented, and every per-line assertion over it passes vacuously. The report reads:{LineFeed}{report}")
-	try Expect.lessThan(covered as AssertedInt, than: instrumented as AssertedInt, message: "the summary reports `{LinesSummaryKey}{lines}` — every instrumented line covered — over a fixture that deliberately holds a line no run reaches. A green total on code with an untested line is the worst answer a coverage tool can give, because a green number gets trusted. The report reads:{LineFeed}{report}")
+	try Expect.greaterThan(instrumented, than: 0, message: "the summary reports `{LinesSummaryKey}{lines}`, instrumenting no lines at all. Zero instrumented lines is not an empty measurement — it is a binary nobody instrumented, and every per-line assertion over it passes vacuously. The report reads:{LineFeed}{report}")
+	try Expect.lessThan(covered, than: instrumented, message: "the summary reports `{LinesSummaryKey}{lines}` — every instrumented line covered — over a fixture that deliberately holds a line no run reaches. A green total on code with an untested line is the worst answer a coverage tool can give, because a green number gets trusted. The report reads:{LineFeed}{report}")
 
 	let eliminated = decimalValue(summaryTokenAfter(report, key: EliminatedSummaryKey))
-	try Expect.greaterThan(eliminated as AssertedInt, than: 0, message: "the summary reports `{EliminatedSummaryKey}{eliminated} lines` over a fixture whose `neverCalled` is removed whole by dead-function elimination. Eliminated lines are counted separately BECAUSE they are not a coverage failure; a zero here means they were folded into one of the other two states and the distinction was lost. The report reads:{LineFeed}{report}")
+	try Expect.greaterThan(eliminated, than: 0, message: "the summary reports `{EliminatedSummaryKey}{eliminated} lines` over a fixture whose `neverCalled` is removed whole by dead-function elimination. Eliminated lines are counted separately BECAUSE they are not a coverage failure; a zero here means they were folded into one of the other two states and the distinction was lost. The report reads:{LineFeed}{report}")
 end 'requireSummaryAgrees'
 
 // ============================================================================================

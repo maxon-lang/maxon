@@ -87,7 +87,7 @@ export type SpecReport
 	end 'passedCount'
 
 	export function failedCount() returns TestCount
-		return self.tests.count() - passedCount()
+		return self.tests.count() as TestCount - passedCount()
 	end 'failedCount'
 end 'SpecReport'
 
@@ -140,7 +140,7 @@ function parseLeadingInt(s String) returns LeadingDigits throws McpError
 		throw McpError.notFound
 	end 'noDigits'
 
-	return LeadingDigits.create(value, rest: sliceBytes(bytes, from: i, until: n))
+	return LeadingDigits.create(value, rest: sliceBytes(bytes, from: i, until: n as BytePos))
 end 'parseLeadingInt'
 
 function findByteSequence(haystack ByteArray, needle String) returns BytePos throws McpError
@@ -179,7 +179,7 @@ end 'findByteSequence'
 function sliceAfter(s String, marker String) returns String throws McpError
 	let bytes = s.toByteArray()
 	let pos = try findByteSequence(bytes, needle: marker)
-	return sliceBytes(bytes, from: pos + marker.byteLength(), until: bytes.count())
+	return sliceBytes(bytes, from: pos + marker.byteLength(), until: bytes.count() as BytePos)
 end 'sliceAfter'
 
 function joinLines(lines StringArray) returns String
@@ -204,11 +204,11 @@ function parseVerdictLabel(line String, prefix String) returns VerdictLabel thro
 	let spec = sliceBytes(bodyBytes, from: 0, until: slash)
 
 	let nameStart = (slash + 1) as BytePos
-	let total = bodyBytes.count()
+	let total = bodyBytes.count() as BytePos
 	var colon = nameStart
 
 	while colon < total 'findColon'
-		let b = try bodyBytes.get(colon) otherwise panic("parseVerdictLabel: the while guard keeps every probe inside the line")
+		let b = try bodyBytes.get(colon as ElementIndex) otherwise panic("parseVerdictLabel: the while guard keeps every probe inside the line")
 
 		if b == ColonByte 'foundColon'
 			break

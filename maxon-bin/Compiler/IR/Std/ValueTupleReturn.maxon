@@ -79,14 +79,14 @@
 
 // A tally of one value's uses, by category. Counts, not indices: the rewrite walk re-reads the ops it is
 // changing, so nothing here has to remember where they were.
-typealias UseTally = int(0 to u64.max)
+typealias UseTally = int(0 to u64.max) implements ElementIndex
 typealias UseTallyArray = Array with UseTally
 
 // Op indices this pass deletes. A `Set` and not a dense column: op indices are MODULE-wide, so a dense
 // mark would cost one bool per op in the whole program for each function rewritten, and the doomed set is
 // a handful of entries. (`StdDialect.removeOpsDefining` deletes by DEF instead, which cannot serve here:
 // a `storeIndirect` into a deleted record defines nothing.)
-typealias DoomedOpSet = Set with OpIndex
+typealias DoomedOpSet = Set with ElementIndex
 
 // A tuple that rides the two return registers is exactly two whole machine words, at the offsets
 // `LayoutDescriptor` gives a record of two word-sized fields.
@@ -120,7 +120,7 @@ end 'trivialDropOf'
 // space, and a value minted by the rewrite itself lies past their extent — outside is a `false` answer,
 // not an error.
 function columnMarks(column BoolArray, value ValueId) returns bool
-	if value >= column.count() 'outsideTheValueSpace'
+	if value >= column.count() as ValueId 'outsideTheValueSpace'
 		return false
 	end 'outsideTheValueSpace'
 
@@ -133,7 +133,7 @@ union TupleValueOrigin
 	freshBox
 
 	// A direct `call` to a candidate: a pair that may arrive in registers.
-	directCall(calleeIndex FuncIndex)
+	directCall(calleeIndex ElementIndex)
 
 	// A `const` in this function. A tuple-returning function cannot return a constant, so the only way one
 	// reaches a `ret` here is `InsertRangeChecks.emitDeadReturn` — the unreachable terminator it appends
@@ -217,9 +217,9 @@ type FunctionTupleFlow
 
 	static function create(valueBound ValueId) returns FunctionTupleFlow
 		var hasRow = BoolArray.create()
-		hasRow.growFilled(valueBound as ElementIndex, value: false)
+		hasRow.growFilled(valueBound, value: false)
 		var rowAt = UseTallyArray.create()
-		rowAt.growFilled(valueBound as ElementIndex, value: 0)
+		rowAt.growFilled(valueBound, value: 0)
 		return Self{rows: TupleValueRowArray.create(), hasRow: hasRow, rowAt: rowAt}
 	end 'create'
 
@@ -265,7 +265,7 @@ union ValueTupleRetKind
 	freshPair
 
 	// The result of a direct call to a candidate, used by nothing but this return.
-	forwarded(calleeIndex FuncIndex)
+	forwarded(calleeIndex ElementIndex)
 
 	// The unreachable zero a range-check panic block returns: both registers get it.
 	unreachableZero(zero ValueId)
@@ -276,10 +276,10 @@ end 'ValueTupleRetKind'
 
 // One recorded `ret` of one candidate.
 type ValueTupleRetVerdict
-	export let funcIndex as FuncIndex
+	export let funcIndex as ElementIndex
 	export let kind as ValueTupleRetKind
 
-	static function create(funcIndex FuncIndex, kind ValueTupleRetKind) returns ValueTupleRetVerdict
+	static function create(funcIndex ElementIndex, kind ValueTupleRetKind) returns ValueTupleRetVerdict
 		return Self{funcIndex: funcIndex, kind: kind}
 	end 'create'
 end 'ValueTupleRetVerdict'
@@ -300,11 +300,11 @@ end 'ValueTupleCallShape'
 
 // One recorded call site: which function holds it, which candidate it calls, and what it can do.
 type ValueTupleCallSite
-	export let callerIndex as FuncIndex
-	export let calleeIndex as FuncIndex
+	export let callerIndex as ElementIndex
+	export let calleeIndex as ElementIndex
 	export let shape as ValueTupleCallShape
 
-	static function create(callerIndex FuncIndex, calleeIndex FuncIndex, shape ValueTupleCallShape) returns ValueTupleCallSite
+	static function create(callerIndex ElementIndex, calleeIndex ElementIndex, shape ValueTupleCallShape) returns ValueTupleCallSite
 		return Self{callerIndex: callerIndex, calleeIndex: calleeIndex, shape: shape}
 	end 'create'
 end 'ValueTupleCallSite'
@@ -689,11 +689,11 @@ function allocArg(args ValueIdArray, index ParamCount) returns ValueId
 	return try args.get(index) otherwise panic("allocArg: args.get({index}) OOB on an `__mm_alloc` of at least two arguments")
 end 'allocArg'
 
-function isOnTheConvention(onTheConvention BoolArray, funcIndex FuncIndex) returns bool
+function isOnTheConvention(onTheConvention BoolArray, funcIndex ElementIndex) returns bool
 	return try onTheConvention.get(funcIndex) otherwise panic("isOnTheConvention: onTheConvention.get OOB at {funcIndex} — the column has one entry per module function")
 end 'isOnTheConvention'
 
-function flowOf(flows FunctionTupleFlowSlotArray, funcIndex FuncIndex) returns FunctionTupleFlow throws NoFunctionFlow
+function flowOf(flows FunctionTupleFlowSlotArray, funcIndex ElementIndex) returns FunctionTupleFlow throws NoFunctionFlow
 	match try flows.get(funcIndex) otherwise panic("flowOf: flows.get OOB at {funcIndex} — the column has one entry per module function") 'slot'
 		absent then throw NoFunctionFlow.notAnalysed
 		present(flow) then return flow
@@ -1037,7 +1037,7 @@ function trackCallResult(resultId ValueId, callee ByteArray, args ValueIdArray, 
 	// allocation a row would make the classifier's per-op scan of the rows grow with the function's
 	// allocation count.
 	if callee.equals(MmAllocName) and args.count() >= MmAllocMinArgCount 'aHeapBox'
-		if not flow.tracks(resultId) and isATwoWordTrivialBox(callee, argCount: args.count(), sizeId: allocArg(args, index: 0), destructorId: allocArg(args, index: 1), consts: consts) 'aPairSizedBox'
+		if not flow.tracks(resultId) and isATwoWordTrivialBox(callee, argCount: args.count() as ParamCount, sizeId: allocArg(args, index: 0), destructorId: allocArg(args, index: 1), consts: consts) 'aPairSizedBox'
 			flow.track(resultId)
 		end 'aPairSizedBox'
 
@@ -1431,7 +1431,7 @@ function collectRetVerdicts(module StdModule, flows FunctionTupleFlowSlotArray, 
 	return verdicts
 end 'collectRetVerdicts'
 
-function noteRetVerdict(op StdOp, funcIndex FuncIndex, flow FunctionTupleFlow, verdicts ValueTupleRetVerdictArray)
+function noteRetVerdict(op StdOp, funcIndex ElementIndex, flow FunctionTupleFlow, verdicts ValueTupleRetVerdictArray)
 	// ⭐ **THE ROLE ANSWERS FOR EVERY OTHER VARIANT.** `OpRole.ret` is declared on `ret` and `retVoid` and
 	// on nothing else, so one test replaces 107 arms that named themselves only to say "not a return".
 	//
@@ -1483,7 +1483,7 @@ function unreachableZeroKindOf(row TupleValueRow, retValId ValueId) returns Valu
 	return ValueTupleRetKind.unreachableZero(retValId)
 end 'unreachableZeroKindOf'
 
-function forwardedKindOf(row TupleValueRow, calleeIndex FuncIndex) returns ValueTupleRetKind
+function forwardedKindOf(row TupleValueRow, calleeIndex ElementIndex) returns ValueTupleRetKind
 	if not row.isForwardedToTheReturn() 'thePairIsAlsoReadHere'
 		return ValueTupleRetKind.unusable
 	end 'thePairIsAlsoReadHere'
@@ -1507,7 +1507,7 @@ function collectCallSites(module StdModule, byName FunctionNameIndex, flows Func
 	return sites
 end 'collectCallSites'
 
-function noteCallSite(op StdOp, funcIndex FuncIndex, byName FunctionNameIndex, flow FunctionTupleFlow, onTheConvention BoolArray, sites ValueTupleCallSiteArray)
+function noteCallSite(op StdOp, funcIndex ElementIndex, byName FunctionNameIndex, flow FunctionTupleFlow, onTheConvention BoolArray, sites ValueTupleCallSiteArray)
 	match op 'op'
 		const or
 			binOp or
@@ -1630,7 +1630,7 @@ function noteCallSite(op StdOp, funcIndex FuncIndex, byName FunctionNameIndex, f
 	end 'op'
 end 'noteCallSite'
 
-function noteCandidateCallSite(resultId ValueId, callee ByteArray, funcIndex FuncIndex, byName FunctionNameIndex, flow FunctionTupleFlow, onTheConvention BoolArray, sites ValueTupleCallSiteArray)
+function noteCandidateCallSite(resultId ValueId, callee ByteArray, funcIndex ElementIndex, byName FunctionNameIndex, flow FunctionTupleFlow, onTheConvention BoolArray, sites ValueTupleCallSiteArray)
 	let calleeIndex = try byName.byName.get(callee) otherwise return
 
 	if not isOnTheConvention(onTheConvention, funcIndex: calleeIndex) 'notACandidate'
@@ -1718,7 +1718,7 @@ function collectDependencyEdges(dependedOn CsrColumn, dependent CsrColumn, retVe
 	end 'eachSite'
 end 'collectDependencyEdges'
 
-function noteDependency(dependedOn CsrColumn, dependent CsrColumn, dependedOnIndex FuncIndex, dependentIndex FuncIndex)
+function noteDependency(dependedOn CsrColumn, dependent CsrColumn, dependedOnIndex ElementIndex, dependentIndex ElementIndex)
 	dependedOn.push(dependedOnIndex as CsrIndex)
 	dependent.push(dependentIndex as CsrIndex)
 end 'noteDependency'
@@ -1743,7 +1743,7 @@ function seedRefusals(seeds BoolArray, retVerdicts ValueTupleRetVerdictArray, ca
 	end 'eachSite'
 end 'seedRefusals'
 
-function markSeed(seeds BoolArray, funcIndex FuncIndex)
+function markSeed(seeds BoolArray, funcIndex ElementIndex)
 	try seeds.set(funcIndex, value: true) otherwise panic("markSeed: seeds.set OOB at {funcIndex} against a column of {seeds.count()}")
 end 'markSeed'
 
@@ -1857,17 +1857,17 @@ end 'ValueTuplePlan'
 
 function markColumn(valueBound ValueId) returns BoolArray
 	var column = BoolArray.create()
-	column.growFilled(valueBound as ElementIndex, value: false)
+	column.growFilled(valueBound, value: false)
 	return column
 end 'markColumn'
 
 function halfColumn(valueBound ValueId) returns ValueIdArray
 	var column = ValueIdArray.create()
-	column.growFilled(valueBound as ElementIndex, value: 0)
+	column.growFilled(valueBound, value: 0)
 	return column
 end 'halfColumn'
 
-function rewriteOneFunction(module StdModule, funcIndex FuncIndex, flow FunctionTupleFlow, onTheConvention BoolArray)
+function rewriteOneFunction(module StdModule, funcIndex ElementIndex, flow FunctionTupleFlow, onTheConvention BoolArray)
 	let func = module.getFunc(funcIndex)
 	let liveOps = module.liveOpIndices(func)
 
@@ -2057,7 +2057,7 @@ end 'noteUnreadValue'
 // Decide what happens to one op's value. Both marks come off the SETTLED verdict, so a shape the fixpoint
 // refused cannot be reached here — and a `ret` of a candidate that is neither admitted shape is an
 // internal disagreement rather than a program this pass declines, which is why it panics.
-function planOneOp(op StdOp, funcIndex FuncIndex, flow FunctionTupleFlow, onTheConvention BoolArray, plan ValueTuplePlan, mint ValueMinter)
+function planOneOp(op StdOp, funcIndex ElementIndex, flow FunctionTupleFlow, onTheConvention BoolArray, plan ValueTuplePlan, mint ValueMinter)
 	match op 'op'
 		const or
 			binOp or
@@ -2180,7 +2180,7 @@ function planOneOp(op StdOp, funcIndex FuncIndex, flow FunctionTupleFlow, onTheC
 	end 'op'
 end 'planOneOp'
 
-function planOneReturn(retValId ValueId, funcIndex FuncIndex, flow FunctionTupleFlow, onTheConvention BoolArray, plan ValueTuplePlan)
+function planOneReturn(retValId ValueId, funcIndex ElementIndex, flow FunctionTupleFlow, onTheConvention BoolArray, plan ValueTuplePlan)
 	if not isOnTheConvention(onTheConvention, funcIndex: funcIndex) 'theHeapConvention'
 		return
 	end 'theHeapConvention'
@@ -2227,7 +2227,7 @@ function markTheBoxIfFrameLocal(box ValueId, flow FunctionTupleFlow, plan ValueT
 	plan.markFrameLocalPair(box, low: row.storedLow, high: row.storedHigh)
 end 'markTheBoxIfFrameLocal'
 
-function markThePairIfTheCalleeKeptTheConvention(resultId ValueId, calleeIndex FuncIndex, onTheConvention BoolArray, plan ValueTuplePlan, mint ValueMinter)
+function markThePairIfTheCalleeKeptTheConvention(resultId ValueId, calleeIndex ElementIndex, onTheConvention BoolArray, plan ValueTuplePlan, mint ValueMinter)
 	if not isOnTheConvention(onTheConvention, funcIndex: calleeIndex) 'refusedByTheFixpoint'
 		return
 	end 'refusedByTheFixpoint'
@@ -2238,7 +2238,7 @@ end 'markThePairIfTheCalleeKeptTheConvention'
 // Rewrite one op in place, or doom it. A `ret` may be a TERMINATOR or the rare mid-block body op, so both
 // are reached through the one live-op walk and rewritten by `ops.set` at the index they already occupy —
 // a terminator names its op by index, so nothing else has to move.
-function rewriteOneOp(module StdModule, opIdx OpIndex, plan ValueTuplePlan, subst ValueIdArray, doomed DoomedOpSet)
+function rewriteOneOp(module StdModule, opIdx ElementIndex, plan ValueTuplePlan, subst ValueIdArray, doomed DoomedOpSet)
 	match try module.ops.get(opIdx) otherwise panic("rewriteOneOp: live op index {opIdx} not in module.ops") 'op'
 		const or
 			binOp or
@@ -2361,7 +2361,7 @@ function rewriteOneOp(module StdModule, opIdx OpIndex, plan ValueTuplePlan, subs
 	end 'op'
 end 'rewriteOneOp'
 
-function rewriteOneReturn(module StdModule, opIdx OpIndex, retValId ValueId, plan ValueTuplePlan)
+function rewriteOneReturn(module StdModule, opIdx ElementIndex, retValId ValueId, plan ValueTuplePlan)
 	if not plan.returnsAPair(retValId) 'anOrdinaryReturn'
 		return
 	end 'anOrdinaryReturn'
@@ -2373,7 +2373,7 @@ function rewriteOneReturn(module StdModule, opIdx OpIndex, retValId ValueId, pla
 	try module.ops.set(opIdx, value: StdOp.errorReturn(plan.lowHalfOf(retValId), errorFlagId: plan.highHalfOf(retValId))) otherwise panic("rewriteOneReturn: ops.set({opIdx}) OOB")
 end 'rewriteOneReturn'
 
-function rewriteOneCall(module StdModule, opIdx OpIndex, resultId ValueId, callee ByteArray, args ValueIdArray, plan ValueTuplePlan, doomed DoomedOpSet)
+function rewriteOneCall(module StdModule, opIdx ElementIndex, resultId ValueId, callee ByteArray, args ValueIdArray, plan ValueTuplePlan, doomed DoomedOpSet)
 	// Before the register-pair arm: a frame-local box is BOTH, and its allocation is deleted, not captured.
 	if callee.equals(MmAllocName) and plan.isAnElidedBox(resultId) 'theBoxThatIsNoLongerBuilt'
 		doomed.insert(opIdx)
@@ -2392,7 +2392,7 @@ function rewriteOneCall(module StdModule, opIdx OpIndex, resultId ValueId, calle
 	end 'theDropOfANonExistentRecord'
 end 'rewriteOneCall'
 
-function rewriteOneHalfLoad(opIdx OpIndex, resultId ValueId, addrId ValueId, offset ByteOffset, plan ValueTuplePlan, subst ValueIdArray, doomed DoomedOpSet)
+function rewriteOneHalfLoad(opIdx ElementIndex, resultId ValueId, addrId ValueId, offset ByteOffset, plan ValueTuplePlan, subst ValueIdArray, doomed DoomedOpSet)
 	if not plan.isARegisterPair(addrId) 'notAHalfOfACapturedPair'
 		return
 	end 'notAHalfOfACapturedPair'
@@ -2402,7 +2402,7 @@ function rewriteOneHalfLoad(opIdx OpIndex, resultId ValueId, addrId ValueId, off
 	doomed.insert(opIdx)
 end 'rewriteOneHalfLoad'
 
-function doomAStoreIntoAnElidedBox(opIdx OpIndex, addrId ValueId, plan ValueTuplePlan, doomed DoomedOpSet)
+function doomAStoreIntoAnElidedBox(opIdx ElementIndex, addrId ValueId, plan ValueTuplePlan, doomed DoomedOpSet)
 	if not plan.isAnElidedBox(addrId) 'notTheBoxThatIsNoLongerBuilt'
 		return
 	end 'notTheBoxThatIsNoLongerBuilt'

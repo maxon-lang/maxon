@@ -1231,7 +1231,7 @@ function buildImportSection(idataRva Rva, gates ImportGates) returns ImportSecti
 			writeZeros(data, n: 8)  // TimeDateStamp + ForwarderChain
 			writeDword(data, value: rvaWord(idataRva, offset: nameCursor))  // Name RVA
 			writeDword(data, value: rvaWord(idataRva, offset: iatOffset + runOffset))  // FirstThunk (IAT RVA)
-			nameCursor = nameCursor + dllNameField(dllFileName(dll)).count()
+			nameCursor = nameCursor + dllNameField(dllFileName(dll)).count() as ByteOffset
 		end 'live'
 	end 'descriptors'
 
@@ -1429,7 +1429,7 @@ function writeCoffSymbolEntry(pe ByteArray, stringTable ByteArray, name String, 
 		end 'pad'
 	end 'short' else 'long'
 		writeDword(pe, value: 0)
-		writeDword(pe, value: stringTable.count())
+		writeDword(pe, value: stringTable.count() as MachineWord)
 		stringTable.append(nameBytes)
 		stringTable.push(0)
 	end 'long'
@@ -1473,7 +1473,7 @@ function writeCoffSymbolTable(pe ByteArray, debugSymbols DebugSymbolArray, secti
 		total = total + 1
 	end 'funcSyms'
 
-	patchDword(stringTable, offset: 0, value: stringTable.count())
+	patchDword(stringTable, offset: 0, value: stringTable.count() as MachineWord)
 	pe.append(stringTable)
 	return total
 end 'writeCoffSymbolTable'
@@ -1555,7 +1555,7 @@ function peVersionComponent(productVersion VersionComponentArray, index ProductV
 	return (try productVersion.get(index) otherwise 0) as VersionField
 end 'peVersionComponent'
 
-typealias ProductVersionIndex = int(0 to 3)
+typealias ProductVersionIndex = int(0 to 3) implements ElementIndex
 
 // The version resource for one output.
 //
@@ -1645,7 +1645,7 @@ end 'verPadding'
 // `base` is the offset the buffer's own zero sits at inside the enclosing structure, because
 // alignment is a property of the position in the RESOURCE, not in this array.
 function verAppendChild(buf ByteArray, base BytePos, child ByteArray)
-	buf.append(verPadding(base + buf.count()))
+	buf.append(verPadding(base + buf.count() as BytePos))
 	buf.append(child)
 end 'verAppendChild'
 
@@ -1657,7 +1657,7 @@ function verStringEntry(key String, value String) returns ByteArray
 
 	var body = ByteArray.create()
 	body.append(keyBytes)
-	body.append(verPadding(VerHeaderBytes + body.count()))
+	body.append(verPadding((VerHeaderBytes + body.count()) as BytePos))
 	body.append(valueBytes)
 
 	var out = ByteArray.create()
@@ -1675,7 +1675,7 @@ function verContainer(key String, children ByteArray) returns ByteArray
 
 	var body = ByteArray.create()
 	body.append(keyBytes)
-	body.append(verPadding(VerHeaderBytes + body.count()))
+	body.append(verPadding((VerHeaderBytes + body.count()) as BytePos))
 	body.append(children)
 
 	var out = ByteArray.create()
@@ -1750,7 +1750,7 @@ function buildVersionResource(version PeVersionInfo) returns ByteArray
 	let translationKey = verUtf16("Translation")
 	var varBody = ByteArray.create()
 	varBody.append(translationKey)
-	varBody.append(verPadding(VerHeaderBytes + varBody.count()))
+	varBody.append(verPadding((VerHeaderBytes + varBody.count()) as BytePos))
 	varBody.append(translation)
 
 	var varEntry = ByteArray.create()
@@ -1765,9 +1765,9 @@ function buildVersionResource(version PeVersionInfo) returns ByteArray
 
 	var rootBody = ByteArray.create()
 	rootBody.append(rootKey)
-	rootBody.append(verPadding(VerHeaderBytes + rootBody.count()))
+	rootBody.append(verPadding((VerHeaderBytes + rootBody.count()) as BytePos))
 	rootBody.append(fixed)
-	rootBody.append(verPadding(VerHeaderBytes + rootBody.count()))
+	rootBody.append(verPadding((VerHeaderBytes + rootBody.count()) as BytePos))
 	verAppendChild(rootBody, base: VerHeaderBytes, child: stringFileInfo)
 	verAppendChild(rootBody, base: VerHeaderBytes, child: varFileInfo)
 
@@ -1850,7 +1850,7 @@ function buildRsrcSection(rsrcRva Rva, version PeVersionInfo) returns ByteArray
 	let versionBlob = buildVersionResource(version)
 
 	// The version blob is padded so the manifest that follows starts 32-bit aligned.
-	let versionPad = verPadding(versionBlob.count())
+	let versionPad = verPadding(versionBlob.count() as BytePos)
 	let manifestOffset = RsrcFirstBlobOffset + versionBlob.count() + versionPad.count()
 
 	// Root: two ID entries, ascending.
@@ -1877,12 +1877,12 @@ function buildRsrcSection(rsrcRva Rva, version PeVersionInfo) returns ByteArray
 	writeDword(rsrc, value: RsrcManifestDataEntryOffset)
 
 	writeDword(rsrc, value: ((rsrcRva + RsrcFirstBlobOffset) as MachineWord))
-	writeDword(rsrc, value: versionBlob.count())
+	writeDword(rsrc, value: versionBlob.count() as MachineWord)
 	writeDword(rsrc, value: 0)
 	writeDword(rsrc, value: 0)
 
-	writeDword(rsrc, value: ((rsrcRva + manifestOffset) as MachineWord))
-	writeDword(rsrc, value: manifest.count())
+	writeDword(rsrc, value: ((rsrcRva + manifestOffset as Rva) as MachineWord))
+	writeDword(rsrc, value: manifest.count() as MachineWord)
 	writeDword(rsrc, value: 0)
 	writeDword(rsrc, value: 0)
 
@@ -1932,35 +1932,35 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// .text — its RVA is the page-aligned `SectionAlignment`, so every branch window the x64 encoder padded
 	// against `.text`-relative offsets lands on a window in the loaded image; the 512-byte FILE alignment
 	// decides only where the bytes sit on disk, never an execution address.
-	let codeSizeAligned = alignUp(codeSize, alignment: FileAlignment)
-	let codeSizeVirtual = alignUp(codeSize, alignment: SectionAlignment)
+	let codeSizeAligned = alignUp(codeSize as BytePos, alignment: FileAlignment)
+	let codeSizeVirtual = alignUp(codeSize as BytePos, alignment: SectionAlignment)
 	let textRva = SectionAlignment
 
 	// .rdata (optional)
 	let rdataRva = textRva + codeSizeVirtual
-	let rdataSizeAligned = alignUp(rdataSize, alignment: FileAlignment)
+	let rdataSizeAligned = alignUp(rdataSize as BytePos, alignment: FileAlignment)
 	var rdataSizeVirtual = 0
 
 	if hasRdata 'rdataVirtual'
-		rdataSizeVirtual = alignUp(rdataSize, alignment: SectionAlignment)
+		rdataSizeVirtual = alignUp(rdataSize as BytePos, alignment: SectionAlignment)
 	end 'rdataVirtual'
 
 	// .symtab (optional)
 	let symdataRva = rdataRva + rdataSizeVirtual
-	let symdataSizeAligned = alignUp(symdataSize, alignment: FileAlignment)
+	let symdataSizeAligned = alignUp(symdataSize as BytePos, alignment: FileAlignment)
 	var symdataSizeVirtual = 0
 
 	if hasSymdata 'symdataVirtual'
-		symdataSizeVirtual = alignUp(symdataSize, alignment: SectionAlignment)
+		symdataSizeVirtual = alignUp(symdataSize as BytePos, alignment: SectionAlignment)
 	end 'symdataVirtual'
 
 	// .data (optional) — WRITABLE, and laid out between .symtab and .idata.
 	let dataRva = symdataRva + symdataSizeVirtual
-	let dataSizeAligned = alignUp(dataSize, alignment: FileAlignment)
+	let dataSizeAligned = alignUp(dataSize as BytePos, alignment: FileAlignment)
 	var dataSizeVirtual = 0
 
 	if hasData 'dataVirtual'
-		dataSizeVirtual = alignUp(dataSize, alignment: SectionAlignment)
+		dataSizeVirtual = alignUp(dataSize as BytePos, alignment: SectionAlignment)
 	end 'dataVirtual'
 
 	// .idata
@@ -1984,8 +1984,8 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	let gates = ImportGates.create(optionalImports, sockets: codeResult.stdModule.usesSockets, threadWalk: codeResult.stdModule.usesProcessSampling)
 	let idata = buildImportSection(idataRva as Rva, gates: gates)
 	let idataSize = idata.data.count()
-	let idataSizeAligned = alignUp(idataSize, alignment: FileAlignment)
-	let idataSizeVirtual = alignUp(idataSize, alignment: SectionAlignment)
+	let idataSizeAligned = alignUp(idataSize as BytePos, alignment: FileAlignment)
+	let idataSizeVirtual = alignUp(idataSize as BytePos, alignment: SectionAlignment)
 
 	// .rsrc — the version resource and the embedded `asInvoker` manifest, ALWAYS emitted. Placed LAST so no
 	// existing section RVA shifts (the IAT relocations are RVA-sensitive). The manifest's
@@ -1994,8 +1994,8 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	let rsrcRva = idataRva + idataSizeVirtual
 	let rsrcData = buildRsrcSection(rsrcRva as Rva, version: peVersionInfoFor(outputPath, productVersion: productVersion))
 	let rsrcSize = rsrcData.count()
-	let rsrcSizeAligned = alignUp(rsrcSize, alignment: FileAlignment)
-	let rsrcSizeVirtual = alignUp(rsrcSize, alignment: SectionAlignment)
+	let rsrcSizeAligned = alignUp(rsrcSize as BytePos, alignment: FileAlignment)
+	let rsrcSizeVirtual = alignUp(rsrcSize as BytePos, alignment: SectionAlignment)
 
 	let imageSize = rsrcRva + rsrcSizeVirtual
 
@@ -2067,7 +2067,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	writeDword(pe, value: idata.importDirRva as MachineWord)
 	writeDword(pe, value: idata.importDirSize as MachineWord)
 	writeDword(pe, value: rsrcRva as MachineWord)
-	writeDword(pe, value: rsrcSize)
+	writeDword(pe, value: rsrcSize as MachineWord)
 	writeZeros(pe, n: DataDirEntrySize * 9)
 	writeDword(pe, value: idata.iatRva as MachineWord)
 	writeDword(pe, value: idata.iatDirSize as MachineWord)
@@ -2075,26 +2075,26 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 
 	// === Section headers ===
 	var nextFilePointer = headersAligned + codeSizeAligned
-	writeSectionHeader(pe, name: ".text", virtualSize: codeSize, virtualAddress: textRva, rawDataSize: codeSizeAligned, rawDataPointer: headersAligned as ByteOffset, characteristics: SectionTextFlags)
+	writeSectionHeader(pe, name: ".text", virtualSize: codeSize as BytePos, virtualAddress: textRva, rawDataSize: codeSizeAligned, rawDataPointer: headersAligned as ByteOffset, characteristics: SectionTextFlags)
 
 	if hasRdata 'rdataHeader'
-		writeSectionHeader(pe, name: ".rdata", virtualSize: rdataSize, virtualAddress: rdataRva as Rva, rawDataSize: rdataSizeAligned, rawDataPointer: nextFilePointer as ByteOffset, characteristics: SectionRdataFlags)
+		writeSectionHeader(pe, name: ".rdata", virtualSize: rdataSize as BytePos, virtualAddress: rdataRva as Rva, rawDataSize: rdataSizeAligned, rawDataPointer: nextFilePointer as ByteOffset, characteristics: SectionRdataFlags)
 		nextFilePointer = nextFilePointer + rdataSizeAligned
 	end 'rdataHeader'
 
 	if hasSymdata 'symtabHeader'
-		writeSectionHeader(pe, name: ".symtab", virtualSize: symdataSize, virtualAddress: symdataRva as Rva, rawDataSize: symdataSizeAligned, rawDataPointer: nextFilePointer as ByteOffset, characteristics: SectionSymtabFlags)
+		writeSectionHeader(pe, name: ".symtab", virtualSize: symdataSize as BytePos, virtualAddress: symdataRva as Rva, rawDataSize: symdataSizeAligned, rawDataPointer: nextFilePointer as ByteOffset, characteristics: SectionSymtabFlags)
 		nextFilePointer = nextFilePointer + symdataSizeAligned
 	end 'symtabHeader'
 
 	if hasData 'dataHeader'
-		writeSectionHeader(pe, name: ".data", virtualSize: dataSize, virtualAddress: dataRva as Rva, rawDataSize: dataSizeAligned, rawDataPointer: nextFilePointer as ByteOffset, characteristics: SectionDataFlags)
+		writeSectionHeader(pe, name: ".data", virtualSize: dataSize as BytePos, virtualAddress: dataRva as Rva, rawDataSize: dataSizeAligned, rawDataPointer: nextFilePointer as ByteOffset, characteristics: SectionDataFlags)
 		nextFilePointer = nextFilePointer + dataSizeAligned
 	end 'dataHeader'
 
-	writeSectionHeader(pe, name: ".idata", virtualSize: idataSize, virtualAddress: idataRva as Rva, rawDataSize: idataSizeAligned, rawDataPointer: nextFilePointer as ByteOffset, characteristics: SectionIdataFlags)
+	writeSectionHeader(pe, name: ".idata", virtualSize: idataSize as BytePos, virtualAddress: idataRva as Rva, rawDataSize: idataSizeAligned, rawDataPointer: nextFilePointer as ByteOffset, characteristics: SectionIdataFlags)
 	nextFilePointer = nextFilePointer + idataSizeAligned
-	writeSectionHeader(pe, name: ".rsrc", virtualSize: rsrcSize, virtualAddress: rsrcRva as Rva, rawDataSize: rsrcSizeAligned, rawDataPointer: nextFilePointer as ByteOffset, characteristics: SectionRsrcFlags)
+	writeSectionHeader(pe, name: ".rsrc", virtualSize: rsrcSize as BytePos, virtualAddress: rsrcRva as Rva, rawDataSize: rsrcSizeAligned, rawDataPointer: nextFilePointer as ByteOffset, characteristics: SectionRsrcFlags)
 
 	padTo(pe, size: headersAligned)
 
@@ -2126,10 +2126,10 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// === COFF symbol table (appended past the last loadable section) ===
 	if codeResult.debugSymbols.count() > 0 'writeCoff'
 		let symbolTableFileOffset = pe.count()
-		let sections = buildSectionList(codeSize, hasRdata: hasRdata, rdataSize: rdataSize, hasSymdata: hasSymdata, symdataSize: symdataSize, hasData: hasData, dataSize: dataSize, idataSize: idataSize, rsrcSize: rsrcSize)
+		let sections = buildSectionList(codeSize as BytePos, hasRdata: hasRdata, rdataSize: rdataSize as BytePos, hasSymdata: hasSymdata, symdataSize: symdataSize as BytePos, hasData: hasData, dataSize: dataSize as BytePos, idataSize: idataSize as BytePos, rsrcSize: rsrcSize as BytePos)
 		let totalSymbolCount = writeCoffSymbolTable(pe, debugSymbols: codeResult.debugSymbols, sections: sections)
-		patchDword(pe, offset: pointerToSymbolTableOffset, value: symbolTableFileOffset)
-		patchDword(pe, offset: numberOfSymbolsOffset, value: totalSymbolCount as MachineWord)
+		patchDword(pe, offset: pointerToSymbolTableOffset as ByteOffset, value: symbolTableFileOffset as MachineWord)
+		patchDword(pe, offset: numberOfSymbolsOffset as ByteOffset, value: totalSymbolCount as MachineWord)
 	end 'writeCoff'
 
 	try File.writeBinary(outputPath, content: pe) otherwise 'writeErr'

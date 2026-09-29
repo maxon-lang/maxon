@@ -4130,9 +4130,9 @@ end 'runqTaintCarriesValue'
 // The two walks are ordered. Attribution crosses a function boundary only by argument and by return, so it
 // must settle over the whole module before any load is judged; and the second walk collects each function
 // again before refusing anything in it, because the value ids are dropped at every function's start.
-export function assertRunQueueObservationIsOrdered(module StdModule, firstFuncIndex FuncIndex)
+export function assertRunQueueObservationIsOrdered(module StdModule, firstFuncIndex ElementIndex)
 	var taint = RunqRingTaint.create()
-	let funcLimit = module.funcCount() as FuncIndex
+	let funcLimit = module.funcCount()
 	var opIndices = OpIndexArray.create()
 	var settling = true
 
@@ -4518,7 +4518,7 @@ end 'requireOrderedRingReadsIn'
 
 let PublishedWordCheckName = "assertPublishedWordAccessIsOrdered"
 
-export function assertPublishedWordAccessIsOrdered(module StdModule, entries DataSectionEntryArray, firstFuncIndex FuncIndex)
+export function assertPublishedWordAccessIsOrdered(module StdModule, entries DataSectionEntryArray, firstFuncIndex ElementIndex)
 	let labels = publishedFromTheLockLabels(entries)
 
 	if labels.isEmpty() 'noSlotClaimsTheClass'
@@ -4539,7 +4539,7 @@ export function assertPublishedWordAccessIsOrdered(module StdModule, entries Dat
 	var access = StdAccessOperands.create()
 	var opUses = StdValueUseSet.createTrackingRepeats()
 
-	for index in firstFuncIndex upto module.funcCount() as FuncIndex 'eachFunc'
+	for index in firstFuncIndex upto module.funcCount() 'eachFunc'
 		requireOrderedPublishedAccessIn(module, func: module.getFunc(index), labels: labels, present: present, releases: releases, acquires: acquires, opIndices: opIndices, access: access, opUses: opUses)
 	end 'eachFunc'
 

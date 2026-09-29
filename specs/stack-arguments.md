@@ -249,7 +249,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function totalCount(a Integer, b Integer, c Integer, d Integer, e Integer, f IntArray, g IntArray, h IntArray) returns Integer
-	return a + b + c + d + e + f.count() + g.count() + h.count()
+	return a + b + c + d + e + (f.count() as Integer) + (g.count() as Integer) + (h.count() as Integer)
 end 'totalCount'
 
 function main() returns ExitCode

@@ -108,6 +108,7 @@ let SymtabNotScaffolding = 0
 // The widest unsafe prefix, in granules, the byte's seven safe-point bits can carry. A guard past
 // it is refused rather than truncated into a safe point that is not one.
 let SymtabMaxUnsafeGranules = SymtabSafeFromMask - SymtabSafeFromBias
+
 export typealias SafePointGranule = int(1 to 4)
 
 let X64SafePointGranule = 1 as SafePointGranule
@@ -272,9 +273,9 @@ end 'assertInlineTableStrides'
 export type InlineRange
 	export var codeStart as CodeOffset
 	export var codeEnd as CodeOffset
-	export var site as InlineSiteIndex
+	export var site as ElementIndex
 
-	export static function create(codeStart CodeOffset, codeEnd CodeOffset, site InlineSiteIndex) returns InlineRange
+	export static function create(codeStart CodeOffset, codeEnd CodeOffset, site ElementIndex) returns InlineRange
 		return Self{codeStart: codeStart, codeEnd: codeEnd, site: site}
 	end 'create'
 end 'InlineRange'
@@ -301,7 +302,7 @@ export type InlineRangeBuilder
 		end 'site'
 	end 'note'
 
-	function extendOrOpen(index InlineSiteIndex, codeStart CodeOffset, codeEnd CodeOffset)
+	function extendOrOpen(index ElementIndex, codeStart CodeOffset, codeEnd CodeOffset)
 		if self.ranges.count() != 0 'mayExtend'
 			var last = try self.ranges.get(self.ranges.count() - 1) otherwise panic("InlineRangeBuilder.extendOrOpen: ranges.get OOB at the last of {self.ranges.count()}")
 
@@ -342,8 +343,8 @@ export type InlineFrameTables
 		return Self{sites: InlineSiteArray.create(), ranges: InlineRangeArray.create()}
 	end 'create'
 
-	export function appendChunk(chunk FunctionCodeChunk, funcStart CodeOffset) returns InlineSiteIndex
-		let siteBase = self.sites.count() as InlineSiteIndex
+	export function appendChunk(chunk FunctionCodeChunk, funcStart CodeOffset) returns ElementIndex
+		let siteBase = self.sites.count()
 
 		for site in chunk.inlineSites 'eachSite'
 			let parent = match site.parent 'p'
@@ -374,12 +375,12 @@ export function buildInlineFrameTableBytes(tables InlineFrameTables) returns Byt
 	assertInlineTableStrides()
 	var table = ByteArray.create()
 	var names = ByteArray.create()
-	let namesStart = (InlineTableOffSites as ParsedInt) + InlineSiteEntryBytes * tables.sites.count() + InlineRangeEntryBytes * tables.ranges.count()
+	let namesStart = (InlineTableOffSites as ParsedInt) + InlineSiteEntryBytes * tables.sites.count() as ParsedInt + InlineRangeEntryBytes * tables.ranges.count() as ParsedInt
 	writeDword(table, value: tables.sites.count() as MachineWord)
 	writeDword(table, value: tables.ranges.count() as MachineWord)
 
 	for site in tables.sites 'eachSite'
-		writeDword(table, value: (namesStart + names.count()) as MachineWord)
+		writeDword(table, value: (namesStart + names.count() as ParsedInt) as MachineWord)
 		writeDword(table, value: inlineParentWord(site.parent))
 		names.append(site.calleeName)
 		names.push(0)
@@ -398,7 +399,7 @@ export function buildInlineFrameTableBytes(tables InlineFrameTables) returns Byt
 		writeDword(table, value: range.site as MachineWord)
 	end 'eachRange'
 
-	if table.count() != namesStart 'headerWidth'
+	if table.count() as ParsedInt != namesStart 'headerWidth'
 		panic("buildInlineFrameTableBytes: wrote {table.count()} header bytes where the declared entry widths give {namesStart} — the emitted columns and the widths the walkers stride by have drifted")
 	end 'headerWidth'
 
@@ -629,7 +630,7 @@ export function buildSymbolTableBytes(symbols DebugSymbolArray, target Target) r
 	var flags = ByteArray.create()
 	var table = ByteArray.create()
 	table.reserve(headerSize)
-	writeDword(table, value: symbols.count())
+	writeDword(table, value: symbols.count() as MachineWord)
 
 	// The flags run starts where the names end, and the names are built below — so the column is written
 	// as a placeholder and patched once their length is known. A reader that had to SCAN the names to find
@@ -648,7 +649,7 @@ export function buildSymbolTableBytes(symbols DebugSymbolArray, target Target) r
 
 		let entryStart = table.count()
 		writeDword(table, value: sym.codeOffset as MachineWord)
-		writeDword(table, value: headerSize + names.count())
+		writeDword(table, value: (headerSize + names.count()) as MachineWord)
 
 		// These two writes are POSITIONAL — they are the only place an entry's column order
 		// is stated — so this ties them back to the declared width the walker sizes its
@@ -667,7 +668,7 @@ export function buildSymbolTableBytes(symbols DebugSymbolArray, target Target) r
 	// The flags run is pushed once per entry in the loop above, so its length is the symbol count by
 	// construction and the patched offset is where the names end.
 	table.append(names)
-	patchDword(table, offset: flagsOffsetField, value: table.count())
+	patchDword(table, offset: flagsOffsetField as ByteOffset, value: table.count() as MachineWord)
 	table.append(flags)
 	return table
 end 'buildSymbolTableBytes'

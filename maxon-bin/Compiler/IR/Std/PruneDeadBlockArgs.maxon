@@ -70,7 +70,7 @@
 export typealias ValueFlagColumn = Array with bool
 
 // The pass's summary line, from the tally its runs over every function summed into (`StdPassPool`).
-module function pruneDeadBlockArgsSummary(tally StdPassTally, funcCount FuncCount) returns String
+module function pruneDeadBlockArgsSummary(tally StdPassTally, funcCount ElementIndex) returns String
 	return "pruneDeadBlockArgs: removed {tally.removedBlockArgs} dead block-arg(s) across {funcCount} function(s)"
 end 'pruneDeadBlockArgsSummary'
 
@@ -247,7 +247,7 @@ export function blockById(module StdModule, refByBlockId ValueIdArray, id BlockI
 		panic("blockById: '{String.from(from)}' names block id {id}, which is not registered in the function")
 	end 'notInFunction'
 
-	return try module.blocks.get(refPlusOne - 1) otherwise panic("blockById: blockRef for block id {id} not in module.blocks")
+	return try module.blocks.get((refPlusOne - 1) as ElementIndex) otherwise panic("blockById: blockRef for block id {id} not in module.blocks")
 end 'blockById'
 
 // The least fixpoint of "useful": an OP-read block-arg is useful, and whatever an edge passes

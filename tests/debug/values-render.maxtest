@@ -22,7 +22,7 @@ test 'every kind of local renders as itself, and an enum shows the case name its
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let listings = eventsOfKind(events, kind: LocalsEventName)
 
-	Expect.equal(listings.count() as AssertedInt, expected: 1, message: "`{LocalsCommand}` at a stop printed no `{LocalsEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(listings.count(), expected: 1, message: "`{LocalsCommand}` at a stop printed no `{LocalsEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let listed = eventAt(listings, index: 0)
 	let rows = renderedRows(valueRows(listed, node: listed.root, key: LocalsKey))
@@ -36,20 +36,20 @@ test 'every kind of local renders as itself, and an enum shows the case name its
 	Expect.contains(rows, needle: GradeLocalRendering, message: "an enum field's sidecar offset is its RAW TAG, and this enum's tags are not its ordinals — so an enum rendered by ORDINAL prints a different case's name and a reader cannot see that it did. The locals were: {rows}. {said}")
 
 	let parcelValues = valueNamed(listed, node: listed.root, key: LocalsKey, name: ParcelLocalName)
-	Expect.equal(parcelValues.count() as AssertedInt, expected: 1, message: "the struct local `{ParcelLocalName}` is not in the listing. The locals were: {rows}. {said}")
+	Expect.equal(parcelValues.count(), expected: 1, message: "the struct local `{ParcelLocalName}` is not in the listing. The locals were: {rows}. {said}")
 
 	let parcelFields = renderedRows(valueRows(listed, node: nodeAt(parcelValues, index: 0), key: ChildrenKey))
 	Expect.contains(parcelFields, needle: "width=3", message: "a struct renders its FIELDS as children, each under its own name. `{ParcelLocalName}`'s children were: {parcelFields}. {said}")
 	Expect.contains(parcelFields, needle: "height=4", message: "`{ParcelLocalName}`'s children were: {parcelFields}. {said}")
 
 	let itemValues = valueNamed(listed, node: listed.root, key: LocalsKey, name: ItemsLocalName)
-	Expect.equal(itemValues.count() as AssertedInt, expected: 1, message: "the Array local `{ItemsLocalName}` is not in the listing. The locals were: {rows}. {said}")
+	Expect.equal(itemValues.count(), expected: 1, message: "the Array local `{ItemsLocalName}` is not in the listing. The locals were: {rows}. {said}")
 
 	let itemElements = renderedRows(valueRows(listed, node: nodeAt(itemValues, index: 0), key: ChildrenKey))
 	Expect.contains(itemElements, needle: "=1", message: "an Array renders its ELEMENTS as children. `{ItemsLocalName}`'s children were: {itemElements}. {said}")
 	Expect.contains(itemElements, needle: "=2", message: "`{ItemsLocalName}`'s children were: {itemElements}. {said}")
 
 	let shipmentValues = valueNamed(listed, node: listed.root, key: LocalsKey, name: ShipmentLocalName)
-	Expect.equal(shipmentValues.count() as AssertedInt, expected: 1, message: "the union local `{ShipmentLocalName}` is not in the listing. The locals were: {rows}. {said}")
+	Expect.equal(shipmentValues.count(), expected: 1, message: "the union local `{ShipmentLocalName}` is not in the listing. The locals were: {rows}. {said}")
 	Expect.contains(textOf(listed, node: nodeAt(shipmentValues, index: 0), key: DisplayKey), needle: CarryingCaseName, message: "a payload union renders the CASE it is holding; a union shown as its payload alone says nothing about which case that payload belongs to. The locals were: {rows}. {said}")
 end 'every kind of local renders as itself, and an enum shows the case name its raw tag stands for'

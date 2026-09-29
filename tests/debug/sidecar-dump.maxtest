@@ -82,7 +82,7 @@ test 'the sidecar names this build, this source and every function the fixture d
 
 	let noSections = StringArray.create()
 	let dumpRun = spawnDumpInfo(executable, staged: staged, sections: noSections)
-	Expect.equal(dumpRun.exitCode() as AssertedInt, expected: 0, message: "`{TestedCompilerStem} {DebugSubcommandName} {DumpInfoOptionName} <exe>` did not print the sidecar. A sidecar nothing can read back is the same as no sidecar. It printed: {dumpRun.stdout} — and wrote to stderr: {dumpRun.stderr}")
+	Expect.equal(dumpRun.exitCode(), expected: 0, message: "`{TestedCompilerStem} {DebugSubcommandName} {DumpInfoOptionName} <exe>` did not print the sidecar. A sidecar nothing can read back is the same as no sidecar. It printed: {dumpRun.stdout} — and wrote to stderr: {dumpRun.stderr}")
 
 	let dump = withoutCarriageReturns(dumpRun.stdout)
 
@@ -104,7 +104,7 @@ test 'the sidecar names this build, this source and every function the fixture d
 	// function grows this roster with it — listed with a code range that is not empty.
 	let functionRows = dumpSectionRows(dump, heading: DumpFunctionsHeading)
 	let declared = declaredFunctionNames(staged)
-	Expect.notEqual(declared.count() as AssertedInt, expected: 0, message: "sidecar-dump.test: no `{FunctionDeclarationPrefix}` line was found in the staged fixture, so this case would assert nothing at all about the function table.")
+	Expect.notEqual(declared.count(), expected: 0, message: "sidecar-dump.test: no `{FunctionDeclarationPrefix}` line was found in the staged fixture, so this case would assert nothing at all about the function table.")
 
 	var missing = StringArray.create()
 	var degenerate = StringArray.create()
@@ -137,7 +137,7 @@ test 'the sidecar names this build, this source and every function the fixture d
 	symbolizeArguments.push(executable.toString())
 	symbolizeArguments.push(probeOffset)
 	let symbolizeRun = spawnCompiler(symbolizeArguments, staged: staged, what: "the symbolize lookup")
-	Expect.equal(symbolizeRun.exitCode() as AssertedInt, expected: 0, message: "`{TestedCompilerStem} {DebugSubcommandName} {SymbolizeOption} <exe> {probeOffset}` failed on an offset the dump itself published. It printed: {symbolizeRun.stdout} — and wrote to stderr: {symbolizeRun.stderr}")
+	Expect.equal(symbolizeRun.exitCode(), expected: 0, message: "`{TestedCompilerStem} {DebugSubcommandName} {SymbolizeOption} <exe> {probeOffset}` failed on an offset the dump itself published. It printed: {symbolizeRun.stdout} — and wrote to stderr: {symbolizeRun.stderr}")
 
 	let symbolized = withoutCarriageReturns(symbolizeRun.stdout)
 	Expect.contains(symbolized, needle: StagedProgramFileName, message: "`{SymbolizeOption}` resolved {probeOffset} — a row of this binary's own line table, inside `{probeName}` — without naming `{StagedProgramFileName}`. The offset came out of the sidecar being asked, so an answer naming another file, or none, is the two tables disagreeing.")
@@ -145,8 +145,8 @@ test 'the sidecar names this build, this source and every function the fixture d
 	let resolvedLine = lineNumberAfter(symbolized, marker: StagedProgramFileName)
 	let bodyStart = sourceLineStartingWith(staged, prefix: "{FunctionDeclarationPrefix}{probeName}{DeclarationNameEnd}", what: "the declaration of `{probeName}`")
 	let bodyEnd = sourceLineStartingWith(staged, prefix: "{FunctionEndPrefix}{probeName}{FunctionEndSuffix}", what: "the `{FunctionEndPrefix}{probeName}{FunctionEndSuffix}` closing `{probeName}`")
-	Expect.atLeast(resolvedLine as AssertedInt, than: bodyStart as AssertedInt, message: "`{SymbolizeOption}` placed {probeOffset} at {StagedProgramFileName}:{resolvedLine}, ABOVE `{probeName}`, which the staged source declares over lines {bodyStart}-{bodyEnd}. An offset inside a function must resolve to a line inside it. It printed: {symbolized}")
-	Expect.atMost(resolvedLine as AssertedInt, than: bodyEnd as AssertedInt, message: "`{SymbolizeOption}` placed {probeOffset} at {StagedProgramFileName}:{resolvedLine}, BELOW `{probeName}`, which the staged source declares over lines {bodyStart}-{bodyEnd}. It printed: {symbolized}")
+	Expect.atLeast(resolvedLine, than: bodyStart, message: "`{SymbolizeOption}` placed {probeOffset} at {StagedProgramFileName}:{resolvedLine}, ABOVE `{probeName}`, which the staged source declares over lines {bodyStart}-{bodyEnd}. An offset inside a function must resolve to a line inside it. It printed: {symbolized}")
+	Expect.atMost(resolvedLine, than: bodyEnd, message: "`{SymbolizeOption}` placed {probeOffset} at {StagedProgramFileName}:{resolvedLine}, BELOW `{probeName}`, which the staged source declares over lines {bodyStart}-{bodyEnd}. It printed: {symbolized}")
 end 'the sidecar names this build, this source and every function the fixture declares'
 
 // ============================================================================================

@@ -3,7 +3,6 @@ typealias DapWakePromiseArray = Array with DapWakePromise
 typealias DapFrameRefArray = Array with DapFrameRef
 typealias DapVariableRefArray = Array with DapVariableRef
 typealias DapSourceBreakpointsArray = Array with DapSourceBreakpoints
-typealias DapRefIndex = int(0 to i64.max)
 typealias DapBreakpointAskArray = Array with DapBreakpointAsk
 
 let DapPollSliceMs = 10 as Milliseconds
@@ -141,8 +140,8 @@ type DapFrameRef
 end 'DapFrameRef'
 
 union DapVariableRef
-	frameLocals(frame DapRefIndex)
-	children(tree DapRefIndex, node DebugValueIndex)
+	frameLocals(frame ElementIndex)
+	children(tree ElementIndex, node ElementIndex)
 end 'DapVariableRef'
 
 type DapSourceBreakpoints
@@ -587,7 +586,7 @@ type DapAdapter
 			return
 		end 'noSuchFrame'
 
-		self.variableRefs.push(DapVariableRef.frameLocals((frameId - FirstReference) as DapRefIndex))
+		self.variableRefs.push(DapVariableRef.frameLocals((frameId - FirstReference) as ElementIndex))
 
 		var doc = JsonDoc.create()
 		self.writer.respond(request, doc: doc, body: DapBody.object(dapLocalsScopesBody(doc, reference: self.variableRefs.count() as DapNumber)))
@@ -602,7 +601,7 @@ type DapAdapter
 			return
 		end 'noSuchReference'
 
-		let held = try self.variableRefs.get((reference - FirstReference) as DapRefIndex) otherwise panic("DapAdapter.variablesOf: the reference was bounds-checked on the line above")
+		let held = try self.variableRefs.get((reference - FirstReference) as ElementIndex) otherwise panic("DapAdapter.variablesOf: the reference was bounds-checked on the line above")
 
 		match held 'which'
 			frameLocals(frame) then self.respondFrameLocals(request, session: session, frame: frame)
@@ -610,7 +609,7 @@ type DapAdapter
 		end 'which'
 	end 'variablesOf'
 
-	function respondFrameLocals(request DapRequest, session DebugToolSession, frame DapRefIndex)
+	function respondFrameLocals(request DapRequest, session DebugToolSession, frame ElementIndex)
 		let held = (try self.frameRefs.get(frame) otherwise panic("DapAdapter.respondFrameLocals: a scope reference names a frame this stop handed out")).clone()
 		let answers = self.delivered(session, replies: session.conversation.localsOfFrame(held.frame, onTheStoppedThread: held.onTheStoppedThread), announceResume: false)
 
@@ -623,19 +622,19 @@ type DapAdapter
 		self.refuseWith(request, answers: answers)
 	end 'respondFrameLocals'
 
-	function respondChildren(request DapRequest, tree DapRefIndex, node DebugValueIndex)
+	function respondChildren(request DapRequest, tree ElementIndex, node ElementIndex)
 		let held = try self.renderedTrees.get(tree) otherwise panic("DapAdapter.respondChildren: a child reference names a tree this stop rendered")
 		let children = held.nodeAt(node).children.clone()
 		self.respondValues(request, tree: tree, indices: children)
 	end 'respondChildren'
 
-	function held(tree DebugValueTree) returns DapRefIndex
+	function held(tree DebugValueTree) returns ElementIndex
 		self.renderedTrees.push(tree)
 
-		return (self.renderedTrees.count() - 1) as DapRefIndex
+		return (self.renderedTrees.count() - 1) as ElementIndex
 	end 'held'
 
-	function respondValues(request DapRequest, tree DapRefIndex, indices DebugValueIndexArray)
+	function respondValues(request DapRequest, tree ElementIndex, indices DebugValueIndexArray)
 		let values = try self.renderedTrees.get(tree) otherwise panic("DapAdapter.respondValues: the tree was registered before its values were asked for")
 		var doc = JsonDoc.create()
 		var nodes = JsonNodeIdArray.create()
@@ -648,7 +647,7 @@ type DapAdapter
 		self.writer.respond(request, doc: doc, body: DapBody.object(dapVariablesBody(doc, nodes: nodes)))
 	end 'respondValues'
 
-	function childReference(tree DapRefIndex, node DebugValueIndex, value DebugValueNode) returns DapNumber
+	function childReference(tree ElementIndex, node ElementIndex, value DebugValueNode) returns DapNumber
 		if value.children.count() == 0 'aLeaf'
 			return NoChildren
 		end 'aLeaf'

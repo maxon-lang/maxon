@@ -719,7 +719,7 @@ and it is silently reformatted. The marker is a FLAG whose contents are never re
 honour it — `fmt`'s and the compiler's own `collectMaxonSources`.
 
 ⚠ **THE FORMATTER ENGINE'S GATE IS `tests/fmt/engine-cases.maxtest`, NOT `spec-test`.** It formats
-the 28 sources in `tests/fmt/engine-cases/` (4 of them unlexable) with the real `maxon fmt`, twice, and
+the 29 sources in `tests/fmt/engine-cases/` (4 of them unlexable) with the real `maxon fmt`, twice, and
 goes red if an answer differs from its `.expected`, a comment is lost or duplicated, a lexer-error
 sentinel is written into a file, or a second run moves anything. `UrlInPlainString`,
 `NoMultilineLiteral` and `PlainStringNoInterpolation` are negative controls that must stay GREEN.

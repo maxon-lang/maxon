@@ -1746,3 +1746,209 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:7:10: Unsupported: `Vector` implements `BuiltinStringLiteral`, one of `stdlib/Builtins.maxon`'s literal markers, so its record would be the compiler's own fused byte record rather than the fields it declares. The compiler mints that record only for the two names it owns the record FOR — `String` and `Character` — because a conformer of any other name gets a VALUE whose bytes are a byte record's and whose IDENTITY is a struct's: every declared field the fused record has no slot for is discarded at construction, and the struct cascade that later drops or clones it reads past the record's end
 ```
+
+<!-- test: a-declared-roster-member-keyed-by-another-type-is-served-from-the-declaration -->
+The record declares `get` keyed by a `String`, which no element index can be, so the call reaches the
+declaration's own body: the empty key has count 0 and reads the one element pushed.
+```maxon
+typealias Num = int(0 to 1000)
+
+type Array uses Element implements BuiltinArrayLiteral
+	export typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function get(key String) returns Element throws ArrayError
+		return try managed.get(key.count()) otherwise throw ArrayError.indexOutOfBounds
+	end 'get'
+end 'Array'
+
+typealias NumArray = Array with Num
+
+function main() returns ExitCode
+	var a = NumArray.create()
+	a.push(42 as Num)
+	return (try a.get("") otherwise 7) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.a-declared-roster-member-keyed-by-another-type-refuses-an-index -->
+The same declaration handed an integer is an argument of the wrong type for `key`.
+```maxon
+typealias Num = int(0 to 1000)
+
+type Array uses Element implements BuiltinArrayLiteral
+	export typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function get(key String) returns Element throws ArrayError
+		return try managed.get(key.count()) otherwise throw ArrayError.indexOutOfBounds
+	end 'get'
+end 'Array'
+
+typealias NumArray = Array with Num
+
+function main() returns ExitCode
+	var a = NumArray.create()
+	a.push(42 as Num)
+	return (try a.get(0) otherwise 7) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:27:16: argument type mismatch for 'key': expected 'String', got 'int'
+```
+
+<!-- test: a-declared-roster-member-keyed-by-an-enum-is-served-from-the-declaration -->
+An enum is not an element index either, so a `get` keyed by one is the declaration's own.
+```maxon
+typealias Num = int(0 to 1000)
+
+enum End
+	front
+	back
+end 'End'
+
+type Array uses Element implements BuiltinArrayLiteral
+	export typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function get(side End) returns Element throws ArrayError
+		if side == End.front 'front'
+			return try managed.get(0) otherwise throw ArrayError.indexOutOfBounds
+		end 'front'
+
+		return try managed.get(1) otherwise throw ArrayError.indexOutOfBounds
+	end 'get'
+end 'Array'
+
+typealias NumArray = Array with Num
+
+function main() returns ExitCode
+	var a = NumArray.create()
+	a.push(40 as Num)
+	a.push(2 as Num)
+	return ((try a.get(End.front) otherwise 0) + (try a.get(End.back) otherwise 0)) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.a-declared-ranged-index-refuses-another-alias -->
+A `get` declared over a ranged index alias is served by the compiler, and its index argument must be that alias.
+```maxon
+typealias Num = int(0 to 1000)
+typealias Slot = int(0 to 100)
+typealias Other = int(0 to 100)
+
+type Array uses Element implements BuiltinArrayLiteral
+	export typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function get(index Slot) returns Element throws ArrayError
+		return try managed.get(index) otherwise throw ArrayError.indexOutOfBounds
+	end 'get'
+end 'Array'
+
+typealias NumArray = Array with Num
+
+function main() returns ExitCode
+	var a = NumArray.create()
+	a.push(42 as Num)
+	let at = 0 as Other
+	return (try a.get(at) otherwise 7) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:30:16: argument type mismatch for 'index': expected 'Slot', got 'Other'
+```
+
+<!-- test: error.a-declared-ranged-index-refuses-a-string -->
+A `String` is no index at all, whatever alias the declaration names.
+```maxon
+typealias Num = int(0 to 1000)
+typealias Slot = int(0 to 100)
+
+type Array uses Element implements BuiltinArrayLiteral
+	export typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function get(index Slot) returns Element throws ArrayError
+		return try managed.get(index) otherwise throw ArrayError.indexOutOfBounds
+	end 'get'
+end 'Array'
+
+typealias NumArray = Array with Num
+
+function main() returns ExitCode
+	var a = NumArray.create()
+	a.push(42 as Num)
+	return (try a.get("") otherwise 7) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:28:16: argument type mismatch for 'index': expected 'Slot', got 'String'
+```
+
+<!-- test: error.the-library-arrays-index-refuses-a-string -->
+The library `Array`'s `get` refuses a `String` index the same way.
+```maxon
+typealias Num = int(0 to 1000)
+typealias NumArray = Array with Num
+
+function main() returns ExitCode
+	var a = NumArray.create()
+	a.push(42 as Num)
+	return (try a.get("") otherwise 7) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:8:16: argument type mismatch for 'index': expected 'ElementIndex', got 'String'
+```

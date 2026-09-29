@@ -263,6 +263,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// `settleBaseline` — a whole-program hint there would be slots and an arena copied into every worker.
 	project.typeNames.reserveForSource(programSourceByteCount(project))
 	signatures.adoptInstantiatedByAParse(project.db.instantiatedByAParse)
+	signatures.adoptGenericFunctionInstances(project.db.genericInstances)
 	signatures.adoptLiveDefaultKeys(project.db.liveDefaultKeys)
 
 	// Set before any file is swept, so every reader below (and every `Parser.create` in every later
@@ -331,6 +332,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// which is why the parser's whole-program semantic checks read this flag before spending anything
 	// on a verdict they would have to throw away.
 	signatures.allFilesFolded = true
+	signatures.settleAliasImplementsClauses()
 
 	// Before anything can read an enum case's function: the contest that decides the name is complete only now.
 	signatures.settleFunctionBackedEnumCases()
@@ -629,7 +631,7 @@ function noteWholeProgramTokenFactsIn(project Project, signatures ProgramSignatu
 	for path in paths 'eachFile'
 		let tokens = try queryActiveTokens(project, path: path)
 		var gate = SpawnGate.always
-		var gateEnd = 0 as TokenIndex
+		var gateEnd = 0 as ElementIndex
 
 		for i in 0 upto tokens.count() 'eachToken'
 			let tok = try tokens.get(i) otherwise panic("noteWholeProgramTokenFactsIn: tokens.get OOB at {i} below count {tokens.count()}")
@@ -657,7 +659,7 @@ function noteWholeProgramTokenFactsIn(project Project, signatures ProgramSignatu
 				continue
 			end 'malformedDeclaration'
 
-			if not headerDeclaresTheArrayLiteralMarker(tokens, headerStart: (i + 2) as TokenIndex) 'notAConformer'
+			if not headerDeclaresTheArrayLiteralMarker(tokens, headerStart: (i + 2) as ElementIndex) 'notAConformer'
 				continue
 			end 'notAConformer'
 
@@ -687,7 +689,7 @@ end 'noteWholeProgramTokenFactsIn'
 // service, because `bump` is an instance method — see `ServiceTargetVerdict`. A shape this probe
 // declines is still refused at the site: `Parser.parseSpawn` claims every `spawn <name>` the
 // grammar can reach.
-function noteServiceSpawnFollowing(signatures ProgramSignatures, tokens TokenArray, index TokenIndex, path FilePath, gate SpawnGate)
+function noteServiceSpawnFollowing(signatures ProgramSignatures, tokens TokenArray, index ElementIndex, path FilePath, gate SpawnGate)
 	let typeTok = try tokens.get(index + 1) otherwise return
 
 	if not tokenCanBeAName(typeTok) 'notATypeName'
@@ -727,7 +729,7 @@ end 'noteServiceSpawnFollowing'
 // implements Holds with (BuiltinArrayLiteral, E)`, where the name is a conformance ARGUMENT: the
 // declaration conforms to `Holds`, not to the marker, and admitting it would hand an ordinary
 // struct the managed record's identity.
-function headerDeclaresTheArrayLiteralMarker(tokens TokenArray, headerStart TokenIndex) returns bool
+function headerDeclaresTheArrayLiteralMarker(tokens TokenArray, headerStart ElementIndex) returns bool
 	var atAConformanceHead = false
 	var pastImplements = false
 	var parenDepth = 0
@@ -870,7 +872,7 @@ function refuseContestedNamesUsedAsMembers(project Project, signatures ProgramSi
 	end 'eachStdlibFile'
 end 'refuseContestedNamesUsedAsMembers'
 
-function tokenIsAMemberSpelling(tokens TokenArray, index TokenIndex) returns bool
+function tokenIsAMemberSpelling(tokens TokenArray, index ElementIndex) returns bool
 	if index > 0 'hasPredecessor'
 		let previous = try tokens.get(index - 1) otherwise panic("tokenIsAMemberSpelling: tokens.get OOB at {index - 1}")
 
@@ -1394,14 +1396,47 @@ function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSigna
 			project.db.instantiatedByAParse.file(name)
 		end 'eachType'
 
-		project.diagnostics.truncate(diagnosticsBeforeTheFold as ElementIndex)
+		project.diagnostics.truncate(diagnosticsBeforeTheFold)
 		return FoldVerdict.indexMoved
 	end 'aParseInstantiatedATypeTheIndexDidNotCount'
+
+	let requested = genericInstancesRequestedBy(artifacts)
+	var newlyRequested = false
+
+	for (name, instance) in requested 'eachRequested'
+		if not project.db.genericInstances.byName.contains(name) 'notFiledYet'
+			noteMoved(moved, name: name)
+			project.db.genericInstances.file(instance)
+			newlyRequested = true
+		end 'notFiledYet'
+	end 'eachRequested'
+
+	if newlyRequested 'aParseRequestedAGenericInstanceTheIndexDidNotDeclare'
+		project.diagnostics.truncate(diagnosticsBeforeTheFold)
+		return FoldVerdict.indexMoved
+	end 'aParseRequestedAGenericInstanceTheIndexDidNotDeclare'
 
 	// A program already refused has a half-merged index, so its answers are no evidence either way.
 	if projectHasErrors(project) 'refused'
 		return FoldVerdict.stands
 	end 'refused'
+
+	var needlessInstances = ByteArrayArray.create()
+
+	for (name, _) in project.db.genericInstances.byName 'eachFiled'
+		if not requested.contains(name) 'noParseRequestsIt'
+			needlessInstances.push(name)
+		end 'noParseRequestsIt'
+	end 'eachFiled'
+
+	if not needlessInstances.isEmpty() 'aFiledInstanceNoLongerNeedsFiling'
+		for name in needlessInstances 'eachNeedless'
+			noteMoved(moved, name: name)
+			project.db.genericInstances.drop(name)
+		end 'eachNeedless'
+
+		return FoldVerdict.indexMoved
+	end 'aFiledInstanceNoLongerNeedsFiling'
 
 	let needless = signatures.typesFiledNeedlessly()
 
@@ -1416,6 +1451,18 @@ function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSigna
 
 	return FoldVerdict.answersMoved if rowSetAnswersMoved(project, artifacts: artifacts, signatures: signatures) else FoldVerdict.stands
 end 'foldVerdict'
+
+function genericInstancesRequestedBy(artifacts FileParseArtifactArray) returns GenericFunctionInstanceMap
+	var requested = GenericFunctionInstanceMap.create()
+
+	for artifact in artifacts 'eachArtifact'
+		for instance in artifact.genericInstanceRequests 'eachRequest'
+			requested.upsert(instance.instanceName, value: instance)
+		end 'eachRequest'
+	end 'eachArtifact'
+
+	return requested
+end 'genericInstancesRequestedBy'
 
 function logTypeNameTable(artifact FileParseArtifact)
 	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
@@ -1510,7 +1557,7 @@ function checkOneValueMergeSignature(project Project, check PendingFnMergeCheck)
 
 		let otherDisplay = armFnTypeDisplay(project, name: otherName)
 
-		if not armFnShapesAgree(project, first: firstName, other: otherName) 'mismatch'
+		if not armFnShapesAgree(project, first: firstName, other: otherName, readerFilePath: check.filePath) 'mismatch'
 			// The construct→E2028/E3005 noun is decided by the ONE shared mapping
 			// (`valueMergeMismatchError`), the same the parse-time give-type mismatch (#80) uses — so a
 			// whole-program function-signature mismatch and a parse-time give mismatch read identically for
@@ -1526,9 +1573,9 @@ end 'checkOneValueMergeSignature'
 // `armFnTypeDisplay` spells a `named` slot by its interned name (`Integer`) where `formatFunctionShapeDisplay`
 // spells the class word (`int`), so two different types can render alike and two renderings of one type can
 // differ. Comparing captions refuses a merge that is legal and accepts one that is not.
-function armFnShapesAgree(project Project, first ByteArray, other ByteArray) returns bool
+function armFnShapesAgree(project Project, first ByteArray, other ByteArray, readerFilePath FilePath) returns bool
 	let registry = functionTypeRegistryOf(project)
-	return functionShapesAgree(registry, signatures: programSignaturesIn(project, asker: "armFnShapesAgree"), declared: requireFunctionShapeOf(registry, name: first, side: "first arm"), got: requireFunctionShapeOf(registry, name: other, side: "arriving arm"))
+	return functionShapesAgree(registry, signatures: programSignaturesIn(project, asker: "armFnShapesAgree"), declared: requireFunctionShapeOf(registry, name: first, side: "first arm"), got: requireFunctionShapeOf(registry, name: other, side: "arriving arm"), readerFilePath: readerFilePath)
 end 'armFnShapesAgree'
 
 function armDeclaringFileNote(project Project, name ByteArray, captionsDiffer bool) returns String
@@ -2381,7 +2428,6 @@ module function parseErrorDiagnostic(error ParseError, path FilePath, keywords K
 		// The OPERATOR half of the existential-identity rule; its METHOD half is the `unsupported` arm
 		// `Parser.requireWitnessSelfArgs` throws, and both messages end in the same shared sentence.
 		existentialNotComparable(op, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "cannot compare values held at an interface type using '{op}': {ExistentialPairUnprovableReason}, so the comparison would be answered by the two fat pointers' ADDRESSES rather than by their values. Compare concrete values, or dispatch a requirement the interface declares", line: line, column: column, filePath: path)
-		stringNotOrderable(op, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "cannot order String values using '{op}': a String is a byte record with no ordering, so its only comparisons are '==' and '!='", line: line, column: column, filePath: path)
 
 		// ⚠ The E3068 sentence is pinned byte-for-byte only in its NON-NEGATED form —
 		// `reference-identity.md`'s `primitive-error` `maxoncstderr` golden pins `'is'` for `a is b`. For
@@ -2510,6 +2556,15 @@ module function parseErrorDiagnostic(error ParseError, path FilePath, keywords K
 		// The DECLARATION-SITE typealias arms. Pinned byte-for-byte by `ranged-typealias.md` and
 		// `export-keyword.md`, in both suites.
 		bareSizedTypeAlias(typeName, line, column) gives Diagnostic.create(ErrorCode.parserExpectedType, message: "Bare sized type '{typeName}' is not allowed. Use explicit range syntax, e.g. 'int({typeName}.min to {typeName}.max)'", line: line, column: column, filePath: path)
+		typealiasCycle(aliasName, line, column) gives Diagnostic.create(ErrorCode.semanticTypeResolutionCycle, message: "typealias '{aliasName}' forms a type cycle: the alias it implements refers back to '{aliasName}'", line: line, column: column, filePath: path)
+		typealiasOverANonRangedName(parentName, line, column) gives Diagnostic.create(ErrorCode.parserExpectedType, message: "'{parentName}' is not a ranged typealias: a typealias implements one declared over `int(low to high)` or `float(low to high)`", line: line, column: column, filePath: path)
+		implementsRangeDoesNotFit(aliasName, parentName, line, column) gives Diagnostic.create(ErrorCode.aliasImplementsRangeDoesNotFit, message: "typealias '{aliasName}' does not fit the alias it implements: its range is not inside the range of '{parentName}'", line: line, column: column, filePath: path)
+		implementsPrimitiveDiffers(aliasName, parentName, own, parents, line, column) gives Diagnostic.create(ErrorCode.aliasImplementsRangeDoesNotFit, message: "typealias '{aliasName}' does not fit the alias it implements: it is {own} and '{parentName}' is {parents}", line: line, column: column, filePath: path)
+		genericTypeParameterNotInferable(paramName, functionName, line, column) gives Diagnostic.create(ErrorCode.genericTypeParameterNotInferable, message: "type parameter '{paramName}' of '{functionName}' cannot be inferred: no parameter is declared '{paramName}'", line: line, column: column, filePath: path)
+		genericArgumentsHaveNoCommonType(functionName, paramName, first, second, line, column) gives Diagnostic.create(ErrorCode.genericArgumentsHaveNoCommonType, message: "the arguments of '{functionName}' give type parameter '{paramName}' no one type: '{first}' and '{second}' share no alias they both implement", line: line, column: column, filePath: path)
+		genericConstraintNotSatisfied(typeName, interfaceName, paramName, functionName, line, column) gives Diagnostic.create(ErrorCode.semanticWhereConstraintViolation, message: "Type '{typeName}' does not satisfy constraint '{interfaceName}' required by type parameter '{paramName}' of '{functionName}'", line: line, column: column, filePath: path)
+		genericCallAmbiguous(functionName, candidates, line, column) gives Diagnostic.create(ErrorCode.semanticAmbiguousOverload, message: "Ambiguous overload for '{functionName}': {candidates} generic declarations infer a type for this call", line: line, column: column, filePath: path)
+		genericArgumentKindUnsupported(functionName, paramName, typeName, line, column) gives Diagnostic.create(ErrorCode.genericArgumentKindUnsupported, message: "type parameter '{paramName}' of '{functionName}' cannot be '{typeName}': a generic function's type parameter is inferred as a number, `String`, `bool`, `Character`, a typealias, a record or an enum", line: line, column: column, filePath: path)
 		illegalBitWidth(width, line, column) gives Diagnostic.create(ErrorCode.semanticIllegalBitWidth, message: "'bits({width})' is not a legal width: bits(n) takes 1, 2, 4, 8, 16, 32 or 64 — the widths a slot or a sub-byte packed field can hold", line: line, column: column, filePath: path)
 		barePrimitiveType(spelling, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: barePrimitiveTypeMessage(spelling), line: line, column: column, filePath: path)
 		barePrimitiveCastTarget(spelling, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: barePrimitiveCastMessage(spelling), line: line, column: column, filePath: path)

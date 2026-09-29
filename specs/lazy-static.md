@@ -237,7 +237,7 @@ type Lookup
 	static var values = [10, 20, 30]
 
 	static function get(index Integer) returns Integer
-		return try Lookup.values.get(index) otherwise -1
+		return try Lookup.values.get(index as ElementIndex) otherwise -1
 	end 'get'
 end 'Lookup'
 

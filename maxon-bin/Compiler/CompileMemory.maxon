@@ -131,7 +131,7 @@ end 'deltaSum'
 
 // Index into a dense per-phase column. Bounded by the enums it indexes, both of which are
 // a couple of dozen arms.
-export typealias PhaseIndex = int(0 to 1024)
+export typealias PhaseIndex = int(0 to 1024) implements ElementIndex
 
 typealias ColumnCell = int(0 to u64.max)
 typealias PhaseColumnArray = Array with ColumnCell
@@ -144,7 +144,7 @@ export type RegAllocMemory
 	export var columns as PhaseMemoryColumns
 
 	export static function create() returns RegAllocMemory
-		return Self{columns: PhaseMemoryColumns.create(RegAllocPhase.allCases.count())}
+		return Self{columns: PhaseMemoryColumns.create(RegAllocPhase.allCases.count() as PhaseIndex)}
 	end 'create'
 
 	export function addPhase(phase RegAllocPhase, delta PhaseDelta)
@@ -215,16 +215,16 @@ export type PhaseResidencyColumns
 
 	export static function create(phaseCount PhaseIndex) returns PhaseResidencyColumns
 		return Self{
-			live: phaseColumn(phaseCount as ColumnLength),
-			free: phaseColumn(phaseCount as ColumnLength),
-			cachedFree: phaseColumn(phaseCount as ColumnLength),
-			parked: phaseColumn(phaseCount as ColumnLength),
-			committed: phaseColumn(phaseCount as ColumnLength)
+			live: phaseColumn(phaseCount),
+			free: phaseColumn(phaseCount),
+			cachedFree: phaseColumn(phaseCount),
+			parked: phaseColumn(phaseCount),
+			committed: phaseColumn(phaseCount)
 		}
 	end 'create'
 
 	export function raiseTo(index PhaseIndex, reading PhaseResidency)
-		let slot = index as ColumnSlot
+		let slot = index
 
 		raiseColumn(self.live, index: slot, value: reading.liveBytes as ColumnCell)
 		raiseColumn(self.free, index: slot, value: reading.freeBytes as ColumnCell)
@@ -234,29 +234,29 @@ export type PhaseResidencyColumns
 	end 'raiseTo'
 
 	export function at(index PhaseIndex) returns PhaseResidency
-		let slot = index as ColumnSlot
+		let slot = index
 
 		return PhaseResidency.create(readColumn(self.live, index: slot) as HeapByteCount, freeBytes: readColumn(self.free, index: slot) as HeapByteCount, cachedFreeBytes: readColumn(self.cachedFree, index: slot) as HeapByteCount, parkedBytes: readColumn(self.parked, index: slot) as HeapByteCount, committedBytes: readColumn(self.committed, index: slot) as HeapByteCount)
 	end 'at'
 end 'PhaseResidencyColumns'
 
-function phaseColumn(cells ColumnLength) returns PhaseColumnArray
+function phaseColumn(cells ElementIndex) returns PhaseColumnArray
 	var column = PhaseColumnArray.create()
 	column.resize(cells)
 	return column
 end 'phaseColumn'
 
-function raiseColumn(column PhaseColumnArray, index ColumnSlot, value ColumnCell)
+function raiseColumn(column PhaseColumnArray, index ElementIndex, value ColumnCell)
 	if value > readColumn(column, index: index) 'higher'
 		writeColumn(column, index: index, value: value)
 	end 'higher'
 end 'raiseColumn'
 
-function readColumn(column PhaseColumnArray, index ColumnSlot) returns ColumnCell
+function readColumn(column PhaseColumnArray, index ElementIndex) returns ColumnCell
 	return try column.get(index) otherwise panic("a per-phase column was read at slot {index} and holds {column.count()} — it was not sized to its phase enum")
 end 'readColumn'
 
-function writeColumn(column PhaseColumnArray, index ColumnSlot, value ColumnCell)
+function writeColumn(column PhaseColumnArray, index ElementIndex, value ColumnCell)
 	try column.set(index, value: value) otherwise panic("a per-phase column was written at slot {index} and holds {column.count()} — it was not sized to its phase enum")
 end 'writeColumn'
 
@@ -278,20 +278,17 @@ let TagTableBytesColumnTitle = "bytes"
 let TagLabelWidth = 34 as ColumnWidth
 let TagCensusRuleWidth = (TagLabelWidth + MemAllocsWidth + MemBytesWidth) as ColumnWidth
 
-export typealias TagBucketIndex = int(0 to 2047)
+export typealias TagBucketIndex = int(0 to 2047) implements ElementIndex
 export typealias TagCensusMode = int(0 to 1)
 typealias TagRowCount = int(0 to 5)
-typealias ColumnSlot = int(0 to 2099199)
-typealias ColumnLength = int(0 to 2099200)
 
 let TagBucketIndexCeiling = 2048
 let TagRowCountCeiling = 5
-let ColumnSlotCeiling = 2099200
 
 // A typealias bound may not name a constant (E2010), so the ranges above are written out and checked
 // here instead. Without this a bucket count the tier raised would be a range panic at the first sampling
 // rather than a refusal.
-function requireTagCensusRangesCoverTheTable(phaseCount PhaseIndex)
+function requireTagCensusRangesCoverTheTable()
 	if TagBucketIndexCeiling != SlabCensusTagBuckets 'bucketRangeDrifted'
 		panic("CompileMemory: `TagBucketIndex` is `int(0 to {TagBucketIndexCeiling - 1})` and the tier's bucket count is {SlabCensusTagBuckets} — the typealias no longer covers a bucket")
 	end 'bucketRangeDrifted'
@@ -299,14 +296,10 @@ function requireTagCensusRangesCoverTheTable(phaseCount PhaseIndex)
 	if TagRowCountCeiling != TagCensusTopRows 'topRowRangeDrifted'
 		panic("CompileMemory: `TagRowCount` is `int(0 to {TagRowCountCeiling})` and the line shows {TagCensusTopRows} rows — the typealias no longer covers what `tagTopLine` counts")
 	end 'topRowRangeDrifted'
-
-	if (phaseCount as ColumnLength) * (SlabCensusTagBuckets as ColumnLength) > ColumnSlotCeiling 'slotRangeDrifted'
-		panic("CompileMemory: `ColumnLength` is `int(0 to {ColumnSlotCeiling})` and {phaseCount} phases of {SlabCensusTagBuckets} buckets need {phaseCount * SlabCensusTagBuckets} cells")
-	end 'slotRangeDrifted'
 end 'requireTagCensusRangesCoverTheTable'
 
-function tagCensusSlotOf(index PhaseIndex, bucket TagBucketIndex) returns ColumnSlot
-	return ((index as ColumnSlot) * (SlabCensusTagBuckets as ColumnSlot) + (bucket as ColumnSlot)) as ColumnSlot
+function tagCensusSlotOf(index PhaseIndex, bucket TagBucketIndex) returns ElementIndex
+	return (index) * (SlabCensusTagBuckets as ElementIndex) + (bucket)
 end 'tagCensusSlotOf'
 
 export union TagCensusPhases
@@ -345,8 +338,8 @@ export type PhaseTagCensus
 		self.liveBytes = __Builtins.slabLiveBytes() as HeapByteCount
 
 		for bucket in 0 upto SlabCensusTagBuckets 'eachBucket'
-			writeColumn(self.counts, index: bucket as ColumnSlot, value: __Builtins.slabCensusBucketCount(bucket) as ColumnCell)
-			writeColumn(self.bytes, index: bucket as ColumnSlot, value: __Builtins.slabCensusBucketBytes(bucket) as ColumnCell)
+			writeColumn(self.counts, index: bucket as ElementIndex, value: __Builtins.slabCensusBucketCount(bucket) as ColumnCell)
+			writeColumn(self.bytes, index: bucket as ElementIndex, value: __Builtins.slabCensusBucketBytes(bucket) as ColumnCell)
 		end 'eachBucket'
 
 		self.rawLiveSlots = __Builtins.mmRawAllocLive() as AllocCount
@@ -368,11 +361,11 @@ export type TagBucketColumns
 	end 'off'
 
 	export function size(phaseCount PhaseIndex, tallyMode TagCensusMode)
-		requireTagCensusRangesCoverTheTable(phaseCount)
+		requireTagCensusRangesCoverTheTable()
 
 		self.mode = tallyMode
-		self.counts = phaseColumn((phaseCount * SlabCensusTagBuckets) as ColumnLength)
-		self.bytes = phaseColumn((phaseCount * SlabCensusTagBuckets) as ColumnLength)
+		self.counts = phaseColumn((phaseCount * SlabCensusTagBuckets) as ElementIndex)
+		self.bytes = phaseColumn((phaseCount * SlabCensusTagBuckets) as ElementIndex)
 		self.sampled.resize(phaseCount)
 		self.names = tagCensusNames(tallyMode)
 	end 'size'
@@ -443,9 +436,9 @@ export type PhaseTagCensusColumns
 	export function enable(phaseCount PhaseIndex, tallyMode TagCensusMode)
 		self.enabled = true
 		self.buckets.size(phaseCount, tallyMode: tallyMode)
-		self.liveBytes = phaseColumn(phaseCount as ColumnLength)
-		self.rawLiveSlots = phaseColumn(phaseCount as ColumnLength)
-		self.tallyBytes = phaseColumn(phaseCount as ColumnLength)
+		self.liveBytes = phaseColumn(phaseCount)
+		self.rawLiveSlots = phaseColumn(phaseCount)
+		self.tallyBytes = phaseColumn(phaseCount)
 		self.scratch = PhaseTagCensus.sized()
 	end 'enable'
 
@@ -464,26 +457,26 @@ export type PhaseTagCensusColumns
 		end 'notTheHighest'
 
 		for bucket in 0 upto SlabCensusTagBuckets 'eachBucket'
-			let read = bucket as ColumnSlot
+			let read = bucket as ElementIndex
 			self.buckets.setBucket(index, bucket: bucket, countCell: readColumn(reading.counts, index: read), bytesCell: readColumn(reading.bytes, index: read))
 		end 'eachBucket'
 
-		writeColumn(self.liveBytes, index: index as ColumnSlot, value: reading.liveBytes as ColumnCell)
-		writeColumn(self.rawLiveSlots, index: index as ColumnSlot, value: reading.rawLiveSlots as ColumnCell)
-		writeColumn(self.tallyBytes, index: index as ColumnSlot, value: reading.tallyBytes as ColumnCell)
+		writeColumn(self.liveBytes, index: index, value: reading.liveBytes as ColumnCell)
+		writeColumn(self.rawLiveSlots, index: index, value: reading.rawLiveSlots as ColumnCell)
+		writeColumn(self.tallyBytes, index: index, value: reading.tallyBytes as ColumnCell)
 		self.buckets.markSampled(index)
 	end 'keepIfHighest'
 
 	export function liveBytesAt(index PhaseIndex) returns HeapByteCount
-		return readColumn(self.liveBytes, index: index as ColumnSlot) as HeapByteCount
+		return readColumn(self.liveBytes, index: index) as HeapByteCount
 	end 'liveBytesAt'
 
 	export function rawLiveSlotsAt(index PhaseIndex) returns AllocCount
-		return readColumn(self.rawLiveSlots, index: index as ColumnSlot) as AllocCount
+		return readColumn(self.rawLiveSlots, index: index) as AllocCount
 	end 'rawLiveSlotsAt'
 
 	export function tallyBytesAt(index PhaseIndex) returns HeapByteCount
-		return readColumn(self.tallyBytes, index: index as ColumnSlot) as HeapByteCount
+		return readColumn(self.tallyBytes, index: index) as HeapByteCount
 	end 'tallyBytesAt'
 end 'PhaseTagCensusColumns'
 
@@ -506,8 +499,8 @@ export type PhaseAllocTally
 		self.runTotal = __Builtins.mmAllocTotal() as AllocCount
 
 		for bucket in 0 upto SlabCensusTagBuckets 'eachBucket'
-			writeColumn(self.counts, index: bucket as ColumnSlot, value: __Builtins.mmAllocTotalByTag(bucket) as ColumnCell)
-			writeColumn(self.bytes, index: bucket as ColumnSlot, value: __Builtins.mmAllocBytesByTag(bucket) as ColumnCell)
+			writeColumn(self.counts, index: bucket as ElementIndex, value: __Builtins.mmAllocTotalByTag(bucket) as ColumnCell)
+			writeColumn(self.bytes, index: bucket as ElementIndex, value: __Builtins.mmAllocBytesByTag(bucket) as ColumnCell)
 		end 'eachBucket'
 	end 'take'
 end 'PhaseAllocTally'
@@ -540,7 +533,7 @@ export type PhaseAllocTallyColumns
 		self.scratch.take()
 
 		for bucket in 0 upto SlabCensusTagBuckets 'eachBucket'
-			let read = bucket as ColumnSlot
+			let read = bucket as ElementIndex
 			let nowCount = readColumn(self.scratch.counts, index: read)
 			let nowBytes = readColumn(self.scratch.bytes, index: read)
 
@@ -577,8 +570,8 @@ export type CompileMemory
 
 	export static function create() returns CompileMemory
 		return Self{
-			columns: PhaseMemoryColumns.create(CompilePhase.allCases.count()),
-			residency: PhaseResidencyColumns.create(CompilePhase.allCases.count()),
+			columns: PhaseMemoryColumns.create(CompilePhase.allCases.count() as PhaseIndex),
+			residency: PhaseResidencyColumns.create(CompilePhase.allCases.count() as PhaseIndex),
 			tagCensus: PhaseTagCensusColumns.off(),
 			allocTally: PhaseAllocTallyColumns.off(),
 			total: PhaseDelta.zero(),
@@ -599,7 +592,7 @@ export type CompileMemory
 	end 'residencyOf'
 
 	export function enableTagCensus()
-		self.tagCensus.enable(CompilePhase.allCases.count(), tallyMode: tagCensusModeForThisBuild())
+		self.tagCensus.enable(CompilePhase.allCases.count() as PhaseIndex, tallyMode: tagCensusModeForThisBuild())
 	end 'enableTagCensus'
 
 	export function recordTagCensus(phase CompilePhase)
@@ -607,7 +600,7 @@ export type CompileMemory
 	end 'recordTagCensus'
 
 	export function enableAllocTally()
-		self.allocTally.enable(CompilePhase.allCases.count())
+		self.allocTally.enable(CompilePhase.allCases.count() as PhaseIndex)
 	end 'enableAllocTally'
 
 	export function recordAllocTally(phase CompilePhase)

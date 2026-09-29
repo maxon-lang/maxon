@@ -18,7 +18,7 @@
 // They are written twice below — a constant and a position in an array — and `requireLegendPosition`
 // CHECKS the two agree on every `initialize`, because a legend that drifts from the indices does not
 // fail: it recolours the whole file, silently, in every editor at once.
-typealias LspSemanticTokenType = int(0 to 15)
+typealias LspSemanticTokenType = int(0 to 15) implements ElementIndex
 
 let KeywordTokenType = 0 as LspSemanticTokenType
 let TypeTokenType = 1 as LspSemanticTokenType
@@ -156,7 +156,7 @@ function encodedTokensOf(source String, keywords KeywordTable) returns LspSemant
 
 		let start = index.positionOf(source, offset: token.startByte)
 		let finish = index.positionOf(source, offset: token.endByte)
-		let tokenType = tokenTypeOf(tokens, at: position.index() as TokenIndex, token: token, firstOnLine: firstOnLine, inCaseList: insideCaseList(blocks, line: start.line))
+		let tokenType = tokenTypeOf(tokens, at: position.index(), token: token, firstOnLine: firstOnLine, inCaseList: insideCaseList(blocks, line: start.line))
 
 		var deltaLine = start.line
 		var deltaCharacter = start.character
@@ -187,7 +187,7 @@ end 'encodedTokensOf'
 // SYNTHESIZED token carries, and no token this walk reaches is synthesized.
 let NoLineYet = 0 as LineNumber
 
-function tokenTypeOf(tokens TokenArray, at TokenIndex, token Token, firstOnLine bool, inCaseList bool) returns LspSemanticTokenType
+function tokenTypeOf(tokens TokenArray, at ElementIndex, token Token, firstOnLine bool, inCaseList bool) returns LspSemanticTokenType
 	// A case list is spelled one name per line, so the line's FIRST word is the case and anything after it
 	// belongs to its associated values.
 	if inCaseList and firstOnLine 'aCaseName'
@@ -221,7 +221,7 @@ end 'tokenTypeOf'
 
 // What an identifier NAMES, decided by the keyword in front of it. Anything else is a `variable`, which is
 // what an ordinary reference is and what an editor's default theme leaves alone.
-function declaredNameTokenType(tokens TokenArray, at TokenIndex) returns LspSemanticTokenType
+function declaredNameTokenType(tokens TokenArray, at ElementIndex) returns LspSemanticTokenType
 	if at == 0 'nothingBefore'
 		return VariableTokenType
 	end 'nothingBefore'

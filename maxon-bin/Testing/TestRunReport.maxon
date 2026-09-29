@@ -115,7 +115,7 @@ end 'ThrownReport'
 // ⭐ ONE TEST'S RESULT.
 export type UnitTestResult
 	// Position in DISCOVERY order — the number that crossed the wire, and what a selection names.
-	export let index as TestRunIndex
+	export let index as ElementIndex
 
 	// What was discovered, carrying both of the test's names plus its file and line.
 	export let test as DiscoveredTest
@@ -131,7 +131,7 @@ export type UnitTestResult
 	// crash it is the process's dying output, which is where the panic message is.
 	export let output as String
 
-	export static function create(index TestRunIndex, test DiscoveredTest, outcome UnitTestOutcome, nanos DurationNanos, thrown ThrownReport, output String) returns UnitTestResult
+	export static function create(index ElementIndex, test DiscoveredTest, outcome UnitTestOutcome, nanos DurationNanos, thrown ThrownReport, output String) returns UnitTestResult
 		return Self{index: index, test: test, outcome: outcome, nanos: nanos, thrown: thrown, output: output}
 	end 'create'
 
@@ -213,16 +213,13 @@ export type TestRunReport
 	end 'create'
 end 'TestRunReport'
 
-// Where the walk found one file, so a result collected in walk order can be placed in report order.
-export typealias ReportFileIndex = int(0 to u64.max)
-
 // One file's place in a report: the path its section is headed with, and where the walk found it.
 export type ReportFile
 	export let displayPath as String
-	export let index as ReportFileIndex
+	export let index as ElementIndex
 	export let group as TestFileGroup
 
-	export static function create(displayPath String, index ReportFileIndex, group TestFileGroup) returns ReportFile
+	export static function create(displayPath String, index ElementIndex, group TestFileGroup) returns ReportFile
 		return Self{displayPath: displayPath, index: index, group: group}
 	end 'create'
 end 'ReportFile'
@@ -241,7 +238,7 @@ export function reportFileOrder(groups TestFileGroupArray) returns ReportFileArr
 	var ordered = ReportFileArray.create()
 
 	for (iter, group) in groups.withIterator() 'eachGroup'
-		ordered.push(ReportFile.create(reportPathDisplay(group.file), index: iter.index() as ReportFileIndex, group: group))
+		ordered.push(ReportFile.create(reportPathDisplay(group.file), index: iter.index(), group: group))
 	end 'eachGroup'
 
 	// TOTAL, because one file is one group and no two groups name the same path. ⚠ The measure is BYTES

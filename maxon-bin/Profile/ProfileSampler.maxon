@@ -205,7 +205,7 @@
 
 		let peOffset = imageReadU32(image, at: ProfilePeSignatureOffsetField) as ByteOffset
 
-		if not spanFitsWithin(peOffset, count: ProfileCoffHeaderBytes as BytePos, total: image.count()) or imageReadU32(image, at: peOffset) != ProfilePeMagic 'notPe'
+		if not spanFitsWithin(peOffset, count: ProfileCoffHeaderBytes as BytePos, total: image.count() as BytePos) or imageReadU32(image, at: peOffset) != ProfilePeMagic 'notPe'
 			return profileNotAPeImage(binary)
 		end 'notPe'
 
@@ -221,7 +221,7 @@
 		for index in 0 upto sectionCount 'eachSection'
 			let header = firstSection + (index * ProfileSectionHeaderBytes) as ByteOffset
 
-			if not spanFitsWithin(header, count: ProfileSectionHeaderBytes as BytePos, total: image.count()) or imageNameAt(image, at: header, maxBytes: ProfileSectionNameBytes) != ProfileTextSectionName 'notTheCode'
+			if not spanFitsWithin(header, count: ProfileSectionHeaderBytes as BytePos, total: image.count() as BytePos) or imageNameAt(image, at: header, maxBytes: ProfileSectionNameBytes) != ProfileTextSectionName 'notTheCode'
 				continue
 			end 'notTheCode'
 
@@ -230,7 +230,7 @@
 			let rawPointer = imageReadU32(image, at: header + ProfileSectionRawPointerOffset) as ByteOffset
 			let stored = virtualSize as BytePos if (virtualSize as BytePos) < rawSize else rawSize
 
-			if not spanFitsWithin(rawPointer, count: stored, total: image.count()) 'runsPastTheEnd'
+			if not spanFitsWithin(rawPointer, count: stored, total: image.count() as BytePos) 'runsPastTheEnd'
 				return ProfilePlacementRead.refused("{reportPathDisplay(binary)} claims a {ProfileTextSectionName} section that runs past the end of the file")
 			end 'runsPastTheEnd'
 

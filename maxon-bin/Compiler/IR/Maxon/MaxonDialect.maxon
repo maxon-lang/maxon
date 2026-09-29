@@ -48,7 +48,7 @@ end 'isTrivialOwnership'
 // interner (Chunk C) so identical named references share one backing String and
 // structural identity is a single integer compare. Wide range: the interner is
 // unbounded (one entry per distinct named reference seen in source).
-export typealias TypeNameId = int(0 to u64.max)
+export typealias TypeNameId = int(0 to u64.max) implements ElementIndex
 
 // ⭐⭐ **A GENERIC TYPE'S TYPE-PARAMETER REFERENCE: `T` in `type Box uses T`. THE ID IS A
 // DIGEST OF `(declaring type name, parameter name)` — NOT A POSITION.**
@@ -82,23 +82,11 @@ export typealias TypeNameId = int(0 to u64.max)
 // `TypeNameId` and `GenericInstanceId` counters — all three are checked, which is what the mask buys.
 export typealias TypeParamId = int(0 to u64.max)
 
-// ⭐ **A TYPE PARAMETER'S POSITION IN ITS DECLARING TYPE'S `uses` LIST — a DIFFERENT number from
-// `TypeParamId`, and that is the whole point of naming it apart.** `Box with X` binds
-// argument 0 to the parameter at position 0, so the position is what indexes an instance's
-// `argTypes`, a `where` clause's witness slot and a `StructLayout.typeParamNames` entry.
-//
-// ⛔ **SPELL THE ID AS THE POSITION AND A LOSSY KEY BECOMES AN IDENTITY.** One number for both makes
-// `constraint.typeParamIndex == valueNameId(receiver)` compare a POSITION against an IDENTITY and
-// read as correct code (`Parser.findWitnessDispatchCandidates`). Named apart, every such site has to
-// say which it means. They share an underlying range because both are unbounded counts, so the
-// compiler cannot catch a mix-up — the NAMES are what make one readable.
-export typealias TypeParamPosition = int(0 to u64.max)
-
 // A generic INSTANCE `Base with Args`: `Box with Integer`. The id keys the
 // `GenericInstanceRegistry` (SignatureIndex), which holds the `(baseId, argTypes)` payload OUT OF
 // LINE — inlining it into the union would make `MaxonType` recursively aggregate (E4014). Same
 // underlying range as `TypeNameId` for the reason `TypeParamId` is.
-export typealias GenericInstanceId = int(0 to u64.max)
+export typealias GenericInstanceId = int(0 to u64.max) implements ElementIndex
 
 // --- MaxonType: source-level type system ---
 //
@@ -1108,10 +1096,6 @@ export enum CalleeMint
 	rangeOperator
 end 'CalleeMint'
 
-// A node's position in the arena an `immortalStructRecord` op carries. Minted from that array's own count,
-// so it takes `InitializerCallId`'s range for `InitializerCallId`'s reason.
-export typealias ImmortalBoxNodeId = int(0 to u64.max)
-
 // ⭐⭐ **WHICH IMAGE OBJECT ONE POINTER SLOT OF AN IMAGED BOX ADDRESSES.** A slot's bytes are an ADDRESS,
 // and the address of one `.rdata` object written into another is a data-to-data relocation — so a slot is
 // describable exactly when the object it names is one of the shapes below.
@@ -1125,7 +1109,7 @@ export union ImmortalBoxSlotValue
 	// ⭐⭐ **ANOTHER IMAGED BOX — a nested struct, a `Map`/`Set` box, a payload-free union case's tag box.**
 	// An INDEX into the op's node arena rather than the node itself, because a union carrying one would make
 	// the type name itself, which Maxon refuses outright (E4014).
-	box(node ImmortalBoxNodeId)
+	box(node ElementIndex)
 end 'ImmortalBoxSlotValue'
 
 // ⭐⭐ **ONE SLOT OF AN IMAGED RECORD BOX THAT ADDRESSES ANOTHER IMAGE OBJECT** — a `Map`'s or a `Set`'s
@@ -1551,7 +1535,7 @@ export union MaxonOp
 	// tier invariant holds: it is an IDENTITY, and `LowerMaxonToStd` does the width collapse, recovering the
 	// requirement's declared FORMALS from it so a call's per-argument ABI comes from the CALLEE's signature
 	// rather than from whatever the actuals happen to be typed.
-	witnessDispatch(result ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, isVoid bool, isThrowing bool) = MaxonOpMeta{category: OpCategory.callFree}
+	witnessDispatch(result ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, isVoid bool, isThrowing bool) = MaxonOpMeta{category: OpCategory.callFree}
 
 	// --- the THROWING witness dispatch ---
 	//
@@ -1567,7 +1551,7 @@ export union MaxonOp
 	//
 	// ⚠ Its `args` is bound only in a SMALL match (`lowerWitnessTryDispatch`), never in `lowerOp`'s big one —
 	// `witnessDispatch`'s trap, unchanged.
-	witnessTryDispatch(result ValueId, errorFlag ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, isVoid bool) = MaxonOpMeta{category: OpCategory.callFree}
+	witnessTryDispatch(result ValueId, errorFlag ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, isVoid bool) = MaxonOpMeta{category: OpCategory.callFree}
 
 	// --- a panic whose message is RENDERED AT RUN TIME ---
 	//
@@ -1688,7 +1672,7 @@ export union MaxonOp
 	// a box of scalars carries none and its `bytes` are the finished record. It is one op rather than two
 	// because the payload and the registration are identical either way — an arena of one node with no
 	// columns IS the scalar shape.
-	immortalStructRecord(result ValueId, nodes ImmortalBoxNodeArray, root ImmortalBoxNodeId) = MaxonOpMeta{category: OpCategory.plain}
+	immortalStructRecord(result ValueId, nodes ImmortalBoxNodeArray, root ElementIndex) = MaxonOpMeta{category: OpCategory.plain}
 
 	// --- A module-level `let` holding an array of string LITERALS ---
 	//

@@ -42,7 +42,8 @@ export enum ErrorCode
 	// a + b)`, whose transform takes ONE parameter), so it has no declared slot
 	// to take a type from -- see specs/closure-param-type-inference.md. An
 	// untyped parameter in a position that offers nothing at all is E2015
-	// instead, which names the construct that does infer.
+	// instead, which names the construct that does infer. A typealias's `implements` clause naming
+	// anything but a ranged typealias is E2003 too.
 	parserExpectedType = "E2003"
 
 	// An expression is not well formed, or is well formed and not usable where only a constant is. Broader than its name suggests: five distinct message families report under it -- a primary was required and the token stream had something else; a name in an expression has no binding in scope; a binary arithmetic/shift operator got a non-numeric operand; a unary '-' got a non-numeric operand; and a top-level binding's initializer does not fold to a compile-time constant.
@@ -436,7 +437,8 @@ export enum ErrorCode
 	// call site cannot pick a unique overload because multiple
 	// variants have indistinguishable signatures at this call. Emitted when
 	// two overloads share the same parameter types and the caller doesn't
-	// disambiguate with named arguments.
+	// disambiguate with named arguments, or when two generic functions of one name both infer a type
+	// for the call.
 	semanticAmbiguousOverload = "E3007"
 
 	// A symbol is referenced from another file but is not declared 'export'.
@@ -459,7 +461,8 @@ export enum ErrorCode
 	// Port)` where `open` takes a `Port`). Remove the cast. A literal cast stays legal where it is
 	// what fixes the type: an unannotated `let`/`var`, an array-literal element, a generic parameter,
 	// an operator operand. At an overloaded call the casts are reported only when removing all of them
-	// still selects the same overload.
+	// still selects the same overload. A cast to an alias the value's own alias implements, directly
+	// or through its parents, is unneeded too: the value already widens to it.
 	semanticUnneededCast = "E3010"
 
 	// A named type resolves to no declared type -- a typo, or a type this compiler slice does not have.
@@ -812,7 +815,7 @@ export enum ErrorCode
 	// subtree only) but accessed from outside that subtree.
 	symbolNotInModuleScope = "E3088"
 
-	// A typealias chain refers back to itself.
+	// A typealias refers back to itself, through a chain of aliases or of `implements` clauses.
 	semanticTypeResolutionCycle = "E3091"
 
 	// An 'export' symbol is never referenced outside its declaring file. Drop the modifier, make it 'module', or say 'public' if it is API surface.
@@ -2072,6 +2075,29 @@ export enum ErrorCode
 	// the member name of the send, naming both services. Send through each service's own handle, or
 	// give the requirement one shape.
 	interfaceHandleImplementersDisagree = "E3177"
+
+	// A typealias's `implements` clause names a parent its range does not fit. The alias's bounds must
+	// lie inside the parent's, over the same primitive and signedness: `int(0 to 9) implements Small`
+	// where `Small` is `int(0 to 5)` is refused, and so is a `float` alias implementing an `int` one.
+	// Reported at the clause. Narrow the alias's range, or implement a wider parent.
+	aliasImplementsRangeDoesNotFit = "E3178"
+
+	// A generic function's type parameter cannot be inferred: no parameter is declared with it, or an
+	// argument that would decide it has a type the compiler cannot determine. Reported at its name in
+	// the `uses` clause in the first case and at the call in the second. Declare a parameter of that
+	// type, or give the argument a known type.
+	genericTypeParameterNotInferable = "E3179"
+
+	// A generic function's arguments give one type parameter two types with no common one: two
+	// different kinds (`int` and `String`), or two typealiases that implement no alias in common.
+	// Reported at the call, naming both. Cast one argument so the two agree.
+	genericArgumentsHaveNoCommonType = "E3180"
+
+	// A generic function's type parameter would be inferred from an argument of a kind it cannot take.
+	// A type parameter binds a number, `String`, `bool`, `Character`, a typealias, a record or an
+	// enum; a function value, an `Array` or other generic instance, an interface value or a `cstring`
+	// is none of those. Reported at the call.
+	genericArgumentKindUnsupported = "E3181"
 
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
 	invalidFieldAccess = "E4006"

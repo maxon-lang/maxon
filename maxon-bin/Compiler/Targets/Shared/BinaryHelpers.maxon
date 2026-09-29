@@ -2,7 +2,7 @@
 
 // `BytePos` is NOT declared here: `stdlib/String.maxon` exports it, and the flat namespace refuses a
 // second copy.
-export typealias ByteOffset = int(0 to u64.max)
+export typealias ByteOffset = int(0 to u64.max) implements ElementIndex
 
 // Dense column of byte offsets — the two span columns of `SourceRangeTable`.
 export typealias ByteOffsetArray = Array with ByteOffset
@@ -31,6 +31,10 @@ export typealias Imm32 = int(i32.min to i32.max)
 export typealias CodeOffset = int(0 to u64.max)
 export typealias CodeOffsetArray = Array with CodeOffset
 export typealias StackSize = int(0 to u64.max)
+
+export function codeHere(code ByteArray) returns CodeOffset
+	return code.count() as CodeOffset
+end 'codeHere'
 
 export function writeWord(buf ByteArray, value MachineWord)
 	buf.push(value and 0xFF)
@@ -74,7 +78,7 @@ function writeAscii(buf ByteArray, text String)
 end 'writeAscii'
 
 export function padTo(buf ByteArray, size BytePos, fill Byte = 0)
-	while buf.count() < size 'pad'
+	while buf.count() as BytePos < size 'pad'
 		buf.push(fill)
 	end 'pad'
 end 'padTo'
@@ -94,16 +98,16 @@ export union ByteReadError implements Error
 end 'ByteReadError'
 
 export function readDword(buf ByteArray, offset ByteOffset) returns MachineWord throws ByteReadError
-	if offset + 4 > buf.count() 'oob'
-		throw ByteReadError.outOfRange(offset, width: 4, available: buf.count())
+	if offset + 4 > buf.count() as ByteOffset 'oob'
+		throw ByteReadError.outOfRange(offset, width: 4, available: buf.count() as BytePos)
 	end 'oob'
 
 	var result = 0
 	try 'readBytes'
 		let b0 = buf.get(offset)
-		let b1 = buf.get(offset + 1)
-		let b2 = buf.get(offset + 2)
-		let b3 = buf.get(offset + 3)
+		let b1 = buf.get((offset + 1) as ElementIndex)
+		let b2 = buf.get((offset + 2) as ElementIndex)
+		let b3 = buf.get((offset + 3) as ElementIndex)
 		result = (b0 as MachineWord) or ((b1 as MachineWord) shl 8) or ((b2 as MachineWord) shl 16) or ((b3 as MachineWord) shl 24)
 	end 'readBytes' otherwise (e) 'badRead'
 		match e 'kind'
@@ -127,7 +131,7 @@ export function patchWord(buf ByteArray, offset ByteOffset, value MachineWord)
 	// Caller's contract: offset+2 <= buf.count(). Both byte writes share this single invariant.
 	try 'writeBytes'
 		buf.set(offset, value: value and 0xFF)
-		buf.set(offset + 1, value: (value shr 8) and 0xFF)
+		buf.set((offset + 1) as ElementIndex, value: (value shr 8) and 0xFF)
 	end 'writeBytes' otherwise (e) 'badWrite'
 		match e 'kind'
 			indexOutOfBounds then panic("patchWord: caller must ensure offset+2 <= buf.count() (offset={offset}, buf.count={buf.count()})")
@@ -140,9 +144,9 @@ export function patchDword(buf ByteArray, offset ByteOffset, value MachineWord)
 	// Caller's contract: offset+4 <= buf.count(). All four byte writes share this single invariant.
 	try 'writeBytes'
 		buf.set(offset, value: value and 0xFF)
-		buf.set(offset + 1, value: (value shr 8) and 0xFF)
-		buf.set(offset + 2, value: (value shr 16) and 0xFF)
-		buf.set(offset + 3, value: (value shr 24) and 0xFF)
+		buf.set((offset + 1) as ElementIndex, value: (value shr 8) and 0xFF)
+		buf.set((offset + 2) as ElementIndex, value: (value shr 16) and 0xFF)
+		buf.set((offset + 3) as ElementIndex, value: (value shr 24) and 0xFF)
 	end 'writeBytes' otherwise (e) 'badWrite'
 		match e 'kind'
 			indexOutOfBounds then panic("patchDword: caller must ensure offset+4 <= buf.count() (offset={offset}, buf.count={buf.count()})")

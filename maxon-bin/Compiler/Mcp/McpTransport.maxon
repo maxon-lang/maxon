@@ -362,7 +362,7 @@ export function sliceBytes(bytes ByteArray, from BytePos, until BytePos) returns
 	var out = ByteArray.create()
 
 	for i in from upto until 'copy'
-		let b = try bytes.get(i) otherwise panic("sliceBytes: {i} is outside a range derived from the array's own length")
+		let b = try bytes.get(i as ElementIndex) otherwise panic("sliceBytes: {i} is outside a range derived from the array's own length")
 		out.push(b)
 	end 'copy'
 
@@ -373,9 +373,9 @@ export function lastBytes(s String, max BytePos) returns String
 	let bytes = s.toByteArray()
 	let n = bytes.count()
 
-	if n <= max 'fits'
+	if n as BytePos <= max 'fits'
 		return s
 	end 'fits'
 
-	return sliceBytes(bytes, from: (n - max) as BytePos, until: n as BytePos)
+	return sliceBytes(bytes, from: (n as BytePos - max) as BytePos, until: n as BytePos)
 end 'lastBytes'

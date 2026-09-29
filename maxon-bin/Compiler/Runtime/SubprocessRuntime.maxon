@@ -2501,7 +2501,7 @@ function buildSubpLastError(module StdModule)
 	// time, the digits after it by the shared `__int_to_string`, which writes into a caller buffer and answers
 	// the length it wrote — then copied out once, and the scratch given back.
 	let prefixBytes = SubpErrorPrefix.count() as ByteOffset
-	let scratchSize = emitConst(module, block: render, value: SubpErrorPrefix.count() + DecimalDigitsMax, ids: ids)
+	let scratchSize = emitConst(module, block: render, value: (SubpErrorPrefix.count() + DecimalDigitsMax) as ParsedInt, ids: ids)
 	let scratch = ids.mint()
 	module.appendOp(render, op: StdOp.call(scratch, callee: SlabAllocName, args: argsOf(scratchSize)))
 	emitStoreLiteralBytes(module, block: render, base: scratch, offset: 0, text: SubpErrorPrefix, ids: ids)
@@ -2511,7 +2511,7 @@ function buildSubpLastError(module StdModule)
 	let digitsDest = emitFieldAddr(module, block: render, record: scratch, offset: prefixBytes, ids: ids)
 	let digitCount = ids.mint()
 	module.appendOp(render, op: StdOp.call(digitCount, callee: IntToStringName, args: twoArgs(code2, second: digitsDest)))
-	let prefixLen = emitConst(module, block: render, value: SubpErrorPrefix.count(), ids: ids)
+	let prefixLen = emitConst(module, block: render, value: SubpErrorPrefix.count() as ParsedInt, ids: ids)
 	let total = emitBin(module, block: render, a: prefixLen, b: digitCount, opcode: StdBinOpcode.add, ids: ids)
 
 	let record = ids.mint()

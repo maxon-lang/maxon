@@ -45,7 +45,7 @@ The parser met a token that cannot appear at this point in the grammar.
 
 ### E2003 — `parserExpectedType`
 
-A type was required here and the token stream had something else. The compiler emits it for the two shapes where a name IS present but is not a usable type: a bare sized type as a typealias RHS (`typealias I = i64`), and an `as` cast target that names a typealias the reading file cannot see. A cast target no declaration binds ANYWHERE is E3011 instead, which is sharper than a blanket E2003 -- see specs/cast-target-type-resolution.md. It also covers the shape where NO name is present and none can be inferred: an untyped closure parameter past the arity of the function type its call argument is declared with (`nums.map(function(a, b) gives a + b)`, whose transform takes ONE parameter), so it has no declared slot to take a type from -- see specs/closure-param-type-inference.md. An untyped parameter in a position that offers nothing at all is E2015 instead, which names the construct that does infer.
+A type was required here and the token stream had something else. The compiler emits it for the two shapes where a name IS present but is not a usable type: a bare sized type as a typealias RHS (`typealias I = i64`), and an `as` cast target that names a typealias the reading file cannot see. A cast target no declaration binds ANYWHERE is E3011 instead, which is sharper than a blanket E2003 -- see specs/cast-target-type-resolution.md. It also covers the shape where NO name is present and none can be inferred: an untyped closure parameter past the arity of the function type its call argument is declared with (`nums.map(function(a, b) gives a + b)`, whose transform takes ONE parameter), so it has no declared slot to take a type from -- see specs/closure-param-type-inference.md. An untyped parameter in a position that offers nothing at all is E2015 instead, which names the construct that does infer. A typealias's `implements` clause naming anything but a ranged typealias is E2003 too.
 
 ### E2004 — `parserExpressionError`
 
@@ -249,7 +249,7 @@ A name is declared twice where exactly one binding is legal: two functions with 
 
 ### E3007 — `semanticAmbiguousOverload`
 
-A call cannot pick a unique overload: two or more candidates match it indistinguishably. call site cannot pick a unique overload because multiple variants have indistinguishable signatures at this call. Emitted when two overloads share the same parameter types and the caller doesn't disambiguate with named arguments.
+A call cannot pick a unique overload: two or more candidates match it indistinguishably. call site cannot pick a unique overload because multiple variants have indistinguishable signatures at this call. Emitted when two overloads share the same parameter types and the caller doesn't disambiguate with named arguments, or when two generic functions of one name both infer a type for the call.
 
 ### E3008 — `symbolNotExported`
 
@@ -261,7 +261,7 @@ A conversion that cannot be proven safe: an explicit cast whose source range doe
 
 ### E3010 — `semanticUnneededCast`
 
-A cast converts nothing: it names the value's own typealias (`b as Byte` on a `Byte`), or it casts a numeric literal that fits to the very typealias its destination declares -- a call argument, a `return`, a struct-literal field or a store to a declared field (`open(8080 as Port)` where `open` takes a `Port`). Remove the cast. A literal cast stays legal where it is what fixes the type: an unannotated `let`/`var`, an array-literal element, a generic parameter, an operator operand. At an overloaded call the casts are reported only when removing all of them still selects the same overload.
+A cast converts nothing: it names the value's own typealias (`b as Byte` on a `Byte`), or it casts a numeric literal that fits to the very typealias its destination declares -- a call argument, a `return`, a struct-literal field or a store to a declared field (`open(8080 as Port)` where `open` takes a `Port`). Remove the cast. A literal cast stays legal where it is what fixes the type: an unannotated `let`/`var`, an array-literal element, a generic parameter, an operator operand. At an overloaded call the casts are reported only when removing all of them still selects the same overload. A cast to an alias the value's own alias implements, directly or through its parents, is unneeded too: the value already widens to it.
 
 ### E3011 — `unknownType`
 
@@ -453,7 +453,7 @@ A 'module'-visible symbol is accessed from outside its declaring directory subtr
 
 ### E3091 — `semanticTypeResolutionCycle`
 
-A typealias chain refers back to itself.
+A typealias refers back to itself, through a chain of aliases or of `implements` clauses.
 
 ### E3092 — `semanticUnusedExportedSymbol`
 
@@ -808,6 +808,22 @@ A type extension declares a member with the name and kind — static or instance
 ### E3177 — `interfaceHandleImplementersDisagree`
 
 A message is sent through an interface handle `I.handle`, and two service types implementing `I` declare that requirement with different parameter, return or `throws` types. The handle sends one request and awaits one reply for every implementer, so their shapes must agree. Reported at the member name of the send, naming both services. Send through each service's own handle, or give the requirement one shape.
+
+### E3178 — `aliasImplementsRangeDoesNotFit`
+
+A typealias's `implements` clause names a parent its range does not fit. The alias's bounds must lie inside the parent's, over the same primitive and signedness: `int(0 to 9) implements Small` where `Small` is `int(0 to 5)` is refused, and so is a `float` alias implementing an `int` one. Reported at the clause. Narrow the alias's range, or implement a wider parent.
+
+### E3179 — `genericTypeParameterNotInferable`
+
+A generic function's type parameter cannot be inferred: no parameter is declared with it, or an argument that would decide it has a type the compiler cannot determine. Reported at its name in the `uses` clause in the first case and at the call in the second. Declare a parameter of that type, or give the argument a known type.
+
+### E3180 — `genericArgumentsHaveNoCommonType`
+
+A generic function's arguments give one type parameter two types with no common one: two different kinds (`int` and `String`), or two typealiases that implement no alias in common. Reported at the call, naming both. Cast one argument so the two agree.
+
+### E3181 — `genericArgumentKindUnsupported`
+
+A generic function's type parameter would be inferred from an argument of a kind it cannot take. A type parameter binds a number, `String`, `bool`, `Character`, a typealias, a record or an enum; a function value, an `Array` or other generic instance, an interface value or a `cstring` is none of those. Reported at the call.
 
 ## Intermediate Representation (E4xxx)
 

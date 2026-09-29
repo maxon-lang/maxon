@@ -11,7 +11,7 @@ test 'a step from a breakpoint on a conditional jump arrives as a step stop on t
 	let executable = builtExecutable(staged)
 	let rows = statementOffsetsOfLine(executable, staged: staged, line: branchLine)
 
-	Expect.atLeast(rows.count() as AssertedInt, than: StatementRowsOfTheBranchLine, message: "this case needs the condition's TEST and its JUMP to be two statement rows of the branch line, so the jump's own offset can be armed; the line table gives it {rows.count()}")
+	Expect.atLeast(rows.count(), than: StatementRowsOfTheBranchLine, message: "this case needs the condition's TEST and its JUMP to be two statement rows of the branch line, so the jump's own offset can be armed; the line table gives it {rows.count()}")
 
 	let jump = try rows.get(JumpRowOfTheBranchLine) otherwise panic("step-off-a-conditional-jump: the row count was asserted on the line above")
 	let commands = debugCommandLine(["{BreakCommand} {exactOffsetTarget(jump)}", RunCommand, StepCommand])
@@ -21,7 +21,7 @@ test 'a step from a breakpoint on a conditional jump arrives as a step stop on t
 	let breakpoints = eventsOfKind(events, kind: BreakpointEventName)
 	let stops = eventsOfKind(events, kind: StopEventName)
 
-	Expect.equal(breakpoints.count() as AssertedInt, expected: 1, message: "`{BreakCommand} {exactOffsetTarget(jump)}` printed no `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(breakpoints.count(), expected: 1, message: "`{BreakCommand} {exactOffsetTarget(jump)}` printed no `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let armed = eventAt(breakpoints, index: 0)
 	Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: SetAction, message: "the conditional jump of the branch line was not armed. {said}")
@@ -33,12 +33,12 @@ test 'a step from a breakpoint on a conditional jump arrives as a step stop on t
 		walked.push("{textOf(stop, node: stop.root, key: ReasonKey)} {textOf(stop, node: stop.root, key: FunctionKey)}:{numberOf(stop, node: stop.root, key: LineKey)} {textOf(stop, node: stop.root, key: OffsetKey)}")
 	end 'eachStop'
 
-	Expect.equal(stops.count() as AssertedInt, expected: StopsOffTheJump, message: "⛔ THE REGRESSION THIS GUARDS IS SILENCE. The step off the armed jump restores the byte, single-steps the real jump and re-plants, so the landing carries no `int3` of its own to publish, and the stop after it goes missing with no event of any kind. The breakpoint and the step are two stops. The session stopped: {renderedRows(walked)}. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(stops.count(), expected: StopsOffTheJump, message: "⛔ THE REGRESSION THIS GUARDS IS SILENCE. The step off the armed jump restores the byte, single-steps the real jump and re-plants, so the landing carries no `int3` of its own to publish, and the stop after it goes missing with no event of any kind. The breakpoint and the step are two stops. The session stopped: {renderedRows(walked)}. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let onTheJump = eventAt(stops, index: 0)
 	Expect.equal(textOf(onTheJump, node: onTheJump.root, key: OffsetKey), expected: hexSpelling(jump), message: "the first stop is the breakpoint on the jump itself. The session stopped: {renderedRows(walked)}. {said}")
 
 	let pastTheJump = eventAt(stops, index: 1)
 	Expect.equal(textOf(pastTheJump, node: pastTheJump.root, key: ReasonKey), expected: StepStopReason, message: "the stop that follows the single-stepped jump is the STEP's — it is what says the landing was published at all rather than swallowed because no `int3` fired there. The session stopped: {renderedRows(walked)}. {said}")
-	Expect.equal(numberOf(pastTheJump, node: pastTheJump.root, key: LineKey) as AssertedInt, expected: takenLine as AssertedInt, message: "the step lands where the branch went, which for this fixture is the arm the condition takes. The session stopped: {renderedRows(walked)}. {said}")
+	Expect.equal(numberOf(pastTheJump, node: pastTheJump.root, key: LineKey), expected: takenLine as EventNumber, message: "the step lands where the branch went, which for this fixture is the arm the condition takes. The session stopped: {renderedRows(walked)}. {said}")
 end 'a step from a breakpoint on a conditional jump arrives as a step stop on the line the jump lands on'

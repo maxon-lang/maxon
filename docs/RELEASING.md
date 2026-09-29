@@ -34,7 +34,7 @@ restores every file before `C1` builds `C2`.
 than a way of shipping a hobbled compiler: the seed accepts the compiler's own parser arm, runtime
 installer and name constants, so `C1` knows the builtin and compiles the unshimmed tree.
 
-There are three things a patch may withdraw. One is a `stdlib/` or `runtime/` declaration the seed refuses
+There are four things a patch may withdraw. One is a `stdlib/` or `runtime/` declaration the seed refuses
 outright; only `C1`'s own copy of that function is then stubbed, and nothing in a build calls it. Another
 is a CALL SITE in the compiler's own source — the compiler is a Maxon program too, so it can call
 an intrinsic this tree adds and the seed refuses it there with E3004 rather than at the declaration.
@@ -47,6 +47,13 @@ rule about what a signature may name decides a declaration's tier, so a seed tha
 those tiers by the older one and reports E3092/E3093/E3094 at every declaration the new rule widened.
 Withdrawing the modifier leaves the declaration, its body and every table standing, so `C1` is unaffected
 and compiles the unshimmed tree; what the first build loses is the wider tier and no code.
+
+The fourth is a LANGUAGE FORM the seed cannot parse, such as a typealias's `implements` clause or a generic
+function. The patch withdraws the form and writes whatever the seed's older rule then demands in its place
+(for `implements`, a cast at every crossing the clause licensed; a generic function is withdrawn whole,
+since the compiler calls none), leaving every table standing. The casts are found by building with the seed until
+it is clean, so that patch is generated (`scripts/seed-shim/generate-seed-language-shim.py`) and regenerated
+whenever the sources it touches move.
 
 ⛔ **Delete the patch in the release after the one that ships the entry.** It is inert from the moment a
 published seed accepts the declaration — the plain build succeeds and the directory is never read — and

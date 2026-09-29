@@ -98,14 +98,13 @@
 //   • a decided compare is rewritten only at its own definition (`applyCompareDecisions`).
 
 typealias FixpointRound = int(0 to u64.max)
-typealias TrailMark = int(0 to u64.max)
-typealias TrailMarkColumn = Array with TrailMark
+typealias TrailMarkColumn = Array with ElementIndex
 
 // The `symBasePlusOne` of a value with no symbolic bound — ValueId 0 is a real base.
 let NoSymbolicBase = 0 as ValueId
 
 // The `defPosition` of a value nothing this pass indexed defines.
-let NoDefPosition = 0 as BlockRefIndex
+let NoDefPosition = 0 as ElementIndex
 
 // The rounds a function may take before every block arg is forced to the whole range. Widening moves
 // each side of a block arg at most once, so a chain of loops that hands a widened bound from one header
@@ -417,13 +416,13 @@ module type RangeScratch
 		try self.modelled.set(valueId, value: true) otherwise panic("refineValueRanges: modelled.set OOB at {valueId} against a column sized by nextFreeValueId")
 	end 'markModelled'
 
-	function recordDefPosition(valueId ValueId, position BlockRefIndex)
+	function recordDefPosition(valueId ValueId, position ElementIndex)
 		try self.defPosition.set(valueId, value: position + 1) otherwise panic("refineValueRanges: defPosition.set OOB at {valueId} against a column sized by nextFreeValueId")
 	end 'recordDefPosition'
 
 	// One past the position of the block defining `valueId`, or `NoDefPosition` for a value no block
 	// defines.
-	function defPositionPlusOne(valueId ValueId) returns BlockRefIndex
+	function defPositionPlusOne(valueId ValueId) returns ElementIndex
 		return try self.defPosition.get(valueId) otherwise panic("refineValueRanges: in '{String.from(self.funcName)}', value {valueId} is read but lies outside the {self.defPosition.count()} ids `nextFreeValueId` answered — nothing defines it")
 	end 'defPositionPlusOne'
 
@@ -534,7 +533,7 @@ module type RangeScratch
 		self.commitRefinement(valueId, wasComputed: wasComputed, refined: self.result)
 	end 'attachSym'
 
-	function restoreTrailTo(mark TrailMark)
+	function restoreTrailTo(mark ElementIndex)
 		while self.trailValue.count() > mark 'eachEntry'
 			let valueId = try self.trailValue.pop() otherwise panic("refineValueRanges: trailValue.pop on a non-empty trail failed")
 			let savedLo = try self.trailLo.pop() otherwise panic("refineValueRanges: trailLo.pop on a non-empty trail failed")
@@ -550,12 +549,12 @@ module type RangeScratch
 		end 'eachEntry'
 	end 'restoreTrailTo'
 
-	function isBlockDead(position BlockRefIndex) returns bool
+	function isBlockDead(position ElementIndex) returns bool
 		return try self.blockDead.get(position) otherwise panic("refineValueRanges: blockDead.get OOB at {position}")
 	end 'isBlockDead'
 
 	// Record this round's verdict on a block; a flip is a change the fixpoint must run out.
-	function recordBlockDead(position BlockRefIndex, dead bool)
+	function recordBlockDead(position ElementIndex, dead bool)
 		if self.isBlockDead(position) == dead 'unchanged'
 			return
 		end 'unchanged'
@@ -566,7 +565,7 @@ module type RangeScratch
 end 'RangeScratch'
 
 // The pass's summary line, from the tally its runs over every function summed into (`StdPassPool`).
-module function refineValueRangesSummary(tally StdPassTally, funcCount FuncCount) returns String
+module function refineValueRangesSummary(tally StdPassTally, funcCount ElementIndex) returns String
 	return "refineValueRanges: decided {tally.decidedCompares} compare(s) ({tally.symbolicDecisions} by a symbolic bound) and folded {tally.foldedBranches} branch(es) in {tally.touchedFunctions} of the {tally.visitedFunctions} function(s) visited of {funcCount}; unbounded: {tally.unboundedReasons.summary(UnboundedReason.allCaseNames)}"
 end 'refineValueRangesSummary'
 
@@ -581,7 +580,7 @@ module function refineValueRangesInFunc(module StdModule, func IrFunction, scrat
 	end 'nothingDecided'
 
 	scratch.tally.touchedFunctions = scratch.tally.touchedFunctions + 1
-	scratch.tally.decidedCompares = scratch.tally.decidedCompares + scratch.decisions.count()
+	scratch.tally.decidedCompares = scratch.tally.decidedCompares + scratch.decisions.count() as TallyCount
 	scratch.tally.foldedBranches = scratch.tally.foldedBranches + foldedHere
 end 'refineValueRangesInFunc'
 
@@ -743,7 +742,7 @@ end 'prepareFunction'
 
 // The block that defines whatever `op` defines — every def, modelled or not: a load is the base a
 // symbolic bound names most often.
-function recordOpDefPositions(op StdOp, position BlockRefIndex, scratch RangeScratch)
+function recordOpDefPositions(op StdOp, position ElementIndex, scratch RangeScratch)
 	stdOpDefinedValue(op, def: scratch.defined)
 
 	if scratch.defined.definesNothing() 'noDef'
@@ -771,7 +770,7 @@ end 'walkDominatorTree'
 
 // Open one block: apply the refinement its entry carries, and unless that or an enclosing subtree is
 // dead, evaluate its block args and then its ops.
-function enterBlock(module StdModule, func IrFunction, analysis RangeFunction, position BlockRefIndex, scratch RangeScratch)
+function enterBlock(module StdModule, func IrFunction, analysis RangeFunction, position ElementIndex, scratch RangeScratch)
 	scratch.walkTrailMark.push(scratch.trailValue.count())
 	scratch.entryIsDead = false
 
@@ -820,7 +819,7 @@ end 'leaveBlock'
 // sees that compare's operands narrowed — a second edge in would carry values the predicate says nothing
 // about — and a block reached by exactly the two arms of one guarded access sees the guard's predicate
 // false (see the header's join paragraph).
-function refineOnEntry(module StdModule, func IrFunction, analysis RangeFunction, position BlockRefIndex, scratch RangeScratch)
+function refineOnEntry(module StdModule, func IrFunction, analysis RangeFunction, position ElementIndex, scratch RangeScratch)
 	if position == StdEntryBlockPosition 'theEntry'
 		return
 	end 'theEntry'
@@ -836,8 +835,8 @@ function refineOnEntry(module StdModule, func IrFunction, analysis RangeFunction
 	end 'theArmsOfOneGuard'
 end 'refineOnEntry'
 
-function refineFromSoleEdge(module StdModule, func IrFunction, analysis RangeFunction, position BlockRefIndex, scratch RangeScratch)
-	let pred = module.blockAtPosition(func, position: analysis.tree.pred.neighbour(position as CsrIndex, k: 0) as BlockRefIndex)
+function refineFromSoleEdge(module StdModule, func IrFunction, analysis RangeFunction, position ElementIndex, scratch RangeScratch)
+	let pred = module.blockAtPosition(func, position: analysis.tree.pred.neighbour(position as CsrIndex, k: 0))
 
 	if not closingCompareOf(module, block: pred, branch: scratch.branch, reader: analysis.reader) 'noCompareCloses'
 		return
@@ -1020,7 +1019,7 @@ end 'compareIsOrderable'
 // second round on. A block arg with no contribution keeps what it holds — unwritten until a later round
 // feeds it, or its last live value where every reaching predecessor is dead. A symbolic bound survives
 // the join only when its base's definition dominates the block.
-function evaluateBlockArgs(module StdModule, func IrFunction, analysis RangeFunction, position BlockRefIndex, block IrBlock, scratch RangeScratch)
+function evaluateBlockArgs(module StdModule, func IrFunction, analysis RangeFunction, position ElementIndex, block IrBlock, scratch RangeScratch)
 	for slot in 0 upto block.blockArgs.count() 'eachArg'
 		let arg = try block.blockArgs.get(slot) otherwise panic("refineValueRanges: blockArgs.get OOB at {slot}")
 
@@ -1054,7 +1053,7 @@ end 'evaluateBlockArgs'
 
 // Whether the block defining `base` dominates the block at `position`, which is what makes `base` one
 // word for every value the block's args take.
-function baseDominates(base ValueId, position BlockRefIndex, analysis RangeFunction, scratch RangeScratch) returns bool
+function baseDominates(base ValueId, position ElementIndex, analysis RangeFunction, scratch RangeScratch) returns bool
 	let definedAtPlusOne = scratch.defPositionPlusOne(base)
 
 	if definedAtPlusOne == NoDefPosition 'notADef'
@@ -1072,12 +1071,12 @@ end 'baseDominates'
 //
 // The phi model records one edge per predecessor of a block that takes args, so a reachable predecessor
 // with no edge here is a broken invariant, never a missing contribution.
-function joinIncomingEdges(module StdModule, func IrFunction, analysis RangeFunction, position BlockRefIndex, block IrBlock, slot ElementIndex, scratch RangeScratch) returns bool
+function joinIncomingEdges(module StdModule, func IrFunction, analysis RangeFunction, position ElementIndex, block IrBlock, slot ElementIndex, scratch RangeScratch) returns bool
 	var any = false
 	let tree = analysis.tree
 
 	for k in 0 upto tree.pred.degree(position as CsrIndex) 'eachPred'
-		let predPosition = tree.pred.neighbour(position as CsrIndex, k: k) as BlockRefIndex
+		let predPosition = tree.pred.neighbour(position as CsrIndex, k: k)
 
 		if not tree.canReach(predPosition) 'deadPredecessor'
 			continue
@@ -1128,7 +1127,7 @@ end 'joinIncomingEdges'
 
 // The interval one arithmetic op defines, written for its result. A compare additionally records a
 // decision when the intervals settle it.
-function evaluateArithOp(opIdx OpIndex, scratch RangeScratch)
+function evaluateArithOp(opIdx ElementIndex, scratch RangeScratch)
 	if scratch.arith.isComparison() or scratch.arith.isComparisonImm() 'compare'
 		evaluateCompare(opIdx, scratch: scratch)
 		return
@@ -1272,7 +1271,7 @@ end 'shiftRightIntervals'
 
 // A compare's result is an i1; the intervals decide it where one operand's whole interval sits on one
 // side of the other's, and a symbolic bound decides it against its own base.
-function evaluateCompare(opIdx OpIndex, scratch RangeScratch)
+function evaluateCompare(opIdx ElementIndex, scratch RangeScratch)
 	readOperands(scratch)
 
 	if compareIsOrderable(scratch) 'orderable'
@@ -1292,7 +1291,7 @@ end 'evaluateCompare'
 
 // The symbolic decision: the lhs bounded by the rhs, or the rhs by the lhs, at the strictness the
 // predicate asks; a signed compare needs the base non-negative as well (see the header).
-function decideSymbolically(opIdx OpIndex, scratch RangeScratch)
+function decideSymbolically(opIdx ElementIndex, scratch RangeScratch)
 	if not scratch.arith.hasSecondValueOperand() 'noBaseToName'
 		recordUndecided(scratch)
 		return
@@ -1334,12 +1333,12 @@ function boundedBy(value Interval, base ValueId, baseInterval Interval, strict b
 	return value.symOffset <= (-1 if strict else 0)
 end 'boundedBy'
 
-function recordDecision(opIdx OpIndex, holds bool, scratch RangeScratch)
+function recordDecision(opIdx ElementIndex, holds bool, scratch RangeScratch)
 	scratch.decisions.push(CompareDecision.create(opIdx, resultId: scratch.arith.resultId, holds: holds))
 	scratch.result.setPoint(boolPayload(holds))
 end 'recordDecision'
 
-function recordSymbolicDecision(opIdx OpIndex, holds bool, scratch RangeScratch)
+function recordSymbolicDecision(opIdx ElementIndex, holds bool, scratch RangeScratch)
 	scratch.symbolicThisRound = scratch.symbolicThisRound + 1
 	recordDecision(opIdx, holds: holds, scratch: scratch)
 end 'recordSymbolicDecision'

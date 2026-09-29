@@ -1,0 +1,163 @@
+export enum GenericArgumentKind
+	integer
+	float
+	boolean
+	string
+	character
+	rangedAlias
+	record
+	enumeration
+end 'GenericArgumentKind'
+
+export type GenericFunctionArgument
+	export let kind as GenericArgumentKind
+	export let name as ByteArray
+
+	export static function create(kind GenericArgumentKind, name ByteArray) returns Self
+		return Self{kind: kind, name: name}
+	end 'create'
+
+	export function spelling() returns ByteArray
+		return match self.kind 'kind'
+			integer gives b"int"
+			float gives b"float"
+			boolean gives b"bool"
+			string gives b"String"
+			character gives b"Character"
+			rangedAlias or
+				record or
+				enumeration gives self.name
+		end 'kind'
+	end 'spelling'
+
+	export function sameAs(other GenericFunctionArgument) returns bool
+		return self.kind == other.kind and self.name.equals(other.name)
+	end 'sameAs'
+end 'GenericFunctionArgument'
+
+export typealias GenericFunctionArgumentArray = Array with GenericFunctionArgument
+
+export enum GenericParamSlot
+	concrete
+	typeParameter
+end 'GenericParamSlot'
+
+export typealias GenericParamSlotArray = Array with GenericParamSlot
+export typealias TypeParamIndexArray = Array with ElementIndex
+
+export let ConcreteParamTypeParamIndex = 0 as ElementIndex
+
+export union GenericBinding
+	bound(argument GenericFunctionArgument)
+	unbound
+end 'GenericBinding'
+
+export union BoundGenericType
+	resolved(bound MaxonType)
+	byName
+end 'BoundGenericType'
+
+export type GenericFunctionTemplate
+	export let key as ByteArray
+	export let declFilePath as FilePath
+	export let line as LineNumber
+	export let column as ColumnNumber
+	export let typeParamNames as ByteArrayArray
+	export let paramNames as ByteArrayArray
+	export let paramSlots as GenericParamSlotArray
+	export let paramTypeParams as TypeParamIndexArray
+	export let constraints as WhereConstraintArray
+	export let takesReceiver as bool
+	export let visibility as Visibility
+
+	export static function create(key ByteArray, declFilePath FilePath, line LineNumber, column ColumnNumber, typeParamNames ByteArrayArray, paramNames ByteArrayArray, paramSlots GenericParamSlotArray, paramTypeParams TypeParamIndexArray, constraints WhereConstraintArray, takesReceiver bool, visibility Visibility) returns Self
+		return Self{key: key, declFilePath: declFilePath, line: line, column: column, typeParamNames: typeParamNames, paramNames: paramNames, paramSlots: paramSlots, paramTypeParams: paramTypeParams, constraints: constraints, takesReceiver: takesReceiver, visibility: visibility}
+	end 'create'
+
+	export function siteKey() returns ByteArray
+		return "{self.declFilePath.toString()}:{self.line}:{self.column}".toByteArray()
+	end 'siteKey'
+
+	// A private template's key is shared by every file declaring that name, and two files can hold it
+	// at one line and column, so its instances also carry a hash of the declaring file's name. The
+	// name and not the path: the instance name reaches goldens, which must not depend on the
+	// checkout's location.
+	export function instanceName(arguments GenericFunctionArgumentArray) returns ByteArray
+		var suffix = "{GenericInstanceSuffixHead}{self.line}_{self.column}"
+
+		if self.visibility == Visibility.file 'privateToItsFile'
+			suffix = "{suffix}_{mixBytes(Hasher.empty(), bytes: self.declFilePath.filename().toByteArray())}"
+		end 'privateToItsFile'
+
+		for argument in arguments 'eachArgument'
+			suffix = "{suffix}#{String.from(argument.spelling())}"
+		end 'eachArgument'
+
+		return overloadRegistrationName(self.key, suffix: suffix.toByteArray())
+	end 'instanceName'
+end 'GenericFunctionTemplate'
+
+export typealias GenericFunctionTemplateArray = Array with GenericFunctionTemplate
+export typealias GenericFunctionTemplateMap = Map with (ByteArray, GenericFunctionTemplateArray)
+
+let GenericInstanceSuffixHead = "__with"
+
+export type GenericFunctionInstance
+	export let templateKey as ByteArray
+	export let siteKey as ByteArray
+	export let arguments as GenericFunctionArgumentArray
+	export let instanceName as ByteArray
+
+	export static function create(templateKey ByteArray, siteKey ByteArray, arguments GenericFunctionArgumentArray, instanceName ByteArray) returns Self
+		return Self{templateKey: templateKey, siteKey: siteKey, arguments: arguments, instanceName: instanceName}
+	end 'create'
+end 'GenericFunctionInstance'
+
+export typealias GenericFunctionInstanceArray = Array with GenericFunctionInstance
+export typealias GenericFunctionInstanceMap = Map with (ByteArray, GenericFunctionInstance)
+export typealias GenericFunctionInstancesBySite = Map with (ByteArray, GenericFunctionInstanceArray)
+
+export type RequestedGenericInstances
+	export var byName as GenericFunctionInstanceMap
+	export var filed as InstantiatedByAParse
+
+	export static function create() returns RequestedGenericInstances
+		return Self{byName: GenericFunctionInstanceMap.create(), filed: InstantiatedByAParse.create()}
+	end 'create'
+
+	export function file(instance GenericFunctionInstance)
+		self.filed.file(instance.instanceName)
+		self.byName.upsert(instance.instanceName, value: instance)
+	end 'file'
+
+	export function drop(name ByteArray)
+		self.filed.drop(name)
+
+		if not self.byName.remove(name) 'filedWithoutAnInstance'
+			panic("RequestedGenericInstances.drop: '{String.from(name)}' is filed with no instance beside it — `file` records both")
+		end 'filedWithoutAnInstance'
+	end 'drop'
+end 'RequestedGenericInstances'
+
+export union GenericInference
+	inferred(instance GenericFunctionInstance)
+	notApplicable
+end 'GenericInference'
+
+export union GenericUnification
+	agreed(argument GenericFunctionArgument)
+	disagreed
+end 'GenericUnification'
+
+export function genericArgumentDisplay(argument GenericFunctionArgument) returns String
+	return match argument.kind 'kind'
+		rangedAlias gives String.from(sourceSpelledAliasName(argument.name))
+		integer or
+			float or
+			boolean or
+			string or
+			character or
+			record or
+			enumeration gives String.from(argument.spelling())
+	end 'kind'
+end 'genericArgumentDisplay'

@@ -29,13 +29,13 @@ type CensusOnlyWhenAskedFor implements OutsideCheckoutCase
 
 		let plain = runDriver([BuildCommandWord, AppDirName, DebugLogFlag], workingDirectory: dir)
 		let plainSaid = "It wrote to stderr: {plain.stderr}"
-		try Expect.equal(plain.exitCode() as AssertedInt, expected: 0, message: "a one-file directory did not build under {DebugLogFlag}. {plainSaid}")
+		try Expect.equal(plain.exitCode(), expected: 0, message: "a one-file directory did not build under {DebugLogFlag}. {plainSaid}")
 		try Expect.isTrue(plain.stderr.contains(ResidencyHeadline), message: "{DebugLogFlag} printed no residency table, so this case cannot tell the census apart from it. {plainSaid}")
 		try Expect.isFalse(plain.stderr.contains(CensusHeadline), message: "a build without {CensusByTagFlag} printed the census anyway. {plainSaid}")
 
 		let censused = runDriver([BuildCommandWord, AppDirName, DebugLogFlag, CensusByTagFlag], workingDirectory: dir)
 		let said = "It wrote to stderr: {censused.stderr}"
-		try Expect.equal(censused.exitCode() as AssertedInt, expected: 0, message: "a one-file directory did not build under {CensusByTagFlag}. {said}")
+		try Expect.equal(censused.exitCode(), expected: 0, message: "a one-file directory did not build under {CensusByTagFlag}. {said}")
 		try Expect.isTrue(censused.stderr.contains(CensusHeadline), message: "{CensusByTagFlag} printed no census headline. {said}")
 		try Expect.isTrue(censused.stderr.contains(CensusColumnTitle), message: "{CensusByTagFlag} printed no census table. {said}")
 		try Expect.isTrue(censused.stderr.contains(CensusRawSlots), message: "{CensusByTagFlag} printed no raw-slot bound. {said}")

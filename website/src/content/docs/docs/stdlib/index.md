@@ -66,7 +66,7 @@ end 'main'
 | `DurationMs`, `InstantMs`, `DurationNanos`, `InstantNanos`, `UnixSeconds` | `int(0 to u64.max)` | Clock |
 | `UnixNanos`, `UnixDays` | `int(i64.min to i64.max)` | Clock |
 | `SchedulerProcessorCount` | `int(1 to i64.max)` | Scheduler |
-| `NetworkPort` | `int(0 to 65535)` | TcpClient |
+| `NetworkPort` | `int(0 to 65535)` | TcpClient; also `URL.port()` |
 | `EnvMap` | `Map with String, String` | Subprocess |
 | `JsonNodeId` / `JsonNodeIdArray` | `int(0 to u64.max)` / `Array with JsonNodeId` | Json |
 | `SegmentByteCount`, `SegmentOffset`, `SegmentWord` | see [SharedMemory](/docs/stdlib/io/#sharedmemory) | SharedMemory |
@@ -81,9 +81,8 @@ to name one.
 
 | Name | Definition | Declared by |
 |------|------------|-------------|
-| `ElementIndex` | `int(0 to u64.max)` | Array, Vector |
+| `ElementIndex` | `int(0 to u64.max)` | Array |
 | `ReportedCapacity` | `int(i64.min to i64.max)` | Array |
-| `NodeCount`, `NodeIndex` | `int(0 to u64.max)` | List |
 | `EntryCount` | `int(0 to 4611686018427387904)` | Map |
 | `MemberCount` | `int(0 to 4611686018427387904)` | Set |
 | `IterPos` | `int(0 to u64.max)` | Range |
@@ -91,7 +90,6 @@ to name one.
 | `Utf8ByteCount` | `int(0 to u64.max)` | Character |
 | `JsonInt` | `int(i64.min to i64.max)` | Json |
 | `JsonFloat` | `float(f64.min to f64.max)` | Json |
-| `ChildCount`, `ChildIndex` | `int(0 to u64.max)` | Json |
 | `Milliseconds` | `int(0 to u64.max)` | Sleep |
 | `CivilYear` / `CivilMonth` / `CivilDay` | `int(i64.min to i64.max)` / `int(1 to 12)` / `int(1 to 31)` | Clock |
 | `LogInteger`, `LogRank` | `int(i64.min to i64.max)` / `int(i32.min to i32.max)` | Log |
@@ -107,13 +105,12 @@ to name one.
 | `EnvSourceValue` | `int(0 to 1)` | Subprocess |
 | `StdioKindValue` | `int(0 to 5)` | Subprocess |
 | `SpawnEnvironment`, `StdioRuntimeTriple` | the records `Subprocess` hands the runtime | Subprocess |
-| `PortNumber` | `int(0 to 65535)` | URL |
-| `AssertedInt` | `int(i64.min to i64.max)` | Testing |
 | `AssertedReal` | `float(f64.min to f64.max)` | Testing |
 | `Tolerance` | `float(0.0 to f64.max)` | Testing |
 
-`Byte` is declared by several modules at one definition each; `BytePos` is declared once, in `String`.
-See the table above.
+`Byte` and `BytePos` are declared once, in `String` (see the table above). `BytePos`, `GraphemeIndex`,
+`JsonNodeId` and `EntryCount` implement `ElementIndex`, and `MemberCount` implements `EntryCount`, so each
+indexes an `Array` with no cast; an index of any other alias, or of a non-integer type, is **E3005** (see [Subtypes With `implements`](/docs/language/ranged-typealiases/#subtypes-with-implements)).
 
 ### Target support
 

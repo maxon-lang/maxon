@@ -103,7 +103,7 @@ end 'promoteArgsNeedingAWritableRecord'
 // borrowed struct/union/instance INCREFS"*), so the caller holds a `+1` that no write to the module can
 // invalidate. That is the language's answer to "I need to keep this element", and it costs one incref per
 // function of the program.
-function functionAt(module MaxonModule, index FuncIndex) returns IrFunction
+function functionAt(module MaxonModule, index ElementIndex) returns IrFunction
 	return try module.functions.get(index) otherwise panic("functionAt: module.functions.get OOB at {index}")
 end 'functionAt'
 
@@ -115,7 +115,7 @@ end 'functionAt'
 // a compile that changes nothing pay for it: seeding the provenance columns first would allocate two dense
 // columns for every `print("hello")` in the program, and folding the two walks together would allocate them
 // before knowing whether anything can consume them.
-function promoteInFunction(project Project, module MaxonModule, func IrFunction, funcIndex FuncIndex, mutationSummary ParamMutationSummary)
+function promoteInFunction(project Project, module MaxonModule, func IrFunction, funcIndex ElementIndex, mutationSummary ParamMutationSummary)
 	if not callsAWritingCallee(module, func: func, mutationSummary: mutationSummary) 'writesNothingItWasHanded'
 		return
 	end 'writesNothingItWasHanded'
@@ -354,7 +354,7 @@ end 'ArgProvenance'
 // artifact's own list and would corrupt every later compile of the project; `opRefs`, by contrast, is
 // rebuilt fresh by `relocateIrBlock`, so this block's belongs to the merged module alone. It is the same
 // split `IrBlock`'s header states for the phi model.
-function promoteInBlock(project Project, module MaxonModule, block IrBlock, func IrFunction, funcIndex FuncIndex, provenance ArgProvenance, minter PromotedValueMinter, mutationSummary ParamMutationSummary)
+function promoteInBlock(project Project, module MaxonModule, block IrBlock, func IrFunction, funcIndex ElementIndex, provenance ArgProvenance, minter PromotedValueMinter, mutationSummary ParamMutationSummary)
 	var newRefs = OpIndexArray.create()
 	var promotedAny = false
 
@@ -372,7 +372,7 @@ end 'promoteInBlock'
 // The per-op arm of the rewrite walk. Appends `opIdx` to `newRefs` — preceded by its promotions and followed
 // by its releases when this op is a call that needs them — and answers whether anything was spliced in.
 // Same arm list, same band discipline and same `asyncCall` exclusion as the gate above.
-function promoteCallAt(project Project, module MaxonModule, opIdx OpIndex, func IrFunction, funcIndex FuncIndex, provenance ArgProvenance, minter PromotedValueMinter, mutationSummary ParamMutationSummary, newRefs OpIndexArray) returns bool
+function promoteCallAt(project Project, module MaxonModule, opIdx ElementIndex, func IrFunction, funcIndex ElementIndex, provenance ArgProvenance, minter PromotedValueMinter, mutationSummary ParamMutationSummary, newRefs OpIndexArray) returns bool
 	let op = try module.ops.get(opIdx) otherwise panic("promoteCallAt: opIdx {opIdx} not in module.ops")
 
 	match op 'op'
@@ -433,7 +433,7 @@ end 'promoteCallAt'
 // ⚠ **IT REPLACES THE OP AT `opIdx`, SO IT DOES NOT TAKE THE OP.** The store releases the record, and a
 // caller that had handed its own borrow in would be left holding a released pointer — E3070's shape, and the
 // reason this door reads the op back for itself at the one line that needs it.
-function promoteArgsOf(project Project, module MaxonModule, opIdx OpIndex, func IrFunction, funcIndex FuncIndex, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, provenance ArgProvenance, minter PromotedValueMinter, mutationSummary ParamMutationSummary, newRefs OpIndexArray) returns bool
+function promoteArgsOf(project Project, module MaxonModule, opIdx ElementIndex, func IrFunction, funcIndex ElementIndex, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, provenance ArgProvenance, minter PromotedValueMinter, mutationSummary ParamMutationSummary, newRefs OpIndexArray) returns bool
 	let mask = mutationSummary.maskOf(callee)
 
 	// Short-circuited, so the second lookup is paid only by the handful of calls whose callee writes
@@ -548,9 +548,9 @@ end 'promotionAtWrittenPosition'
 // It appends to `module.ops` and hands the index back rather than going through `IrModule.appendOp`,
 // because the caller SPLICES the index into a rebuilt `opRefs` at a chosen position — where `appendOp`
 // would push it onto the block's tail, which is past the call it must precede.
-function appendPromotionRuntimeCall(module MaxonModule, project Project, funcIndex FuncIndex, result ValueId, callee ByteArray, arg ValueId, range SourceRange) returns OpIndex
+function appendPromotionRuntimeCall(module MaxonModule, project Project, funcIndex ElementIndex, result ValueId, callee ByteArray, arg ValueId, range SourceRange) returns ElementIndex
 	let args = singletonArgs(arg)
-	let opIndex = module.opCount() as OpIndex
+	let opIndex = module.opCount()
 	module.ops.push(MaxonOp.call(result, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range), argImmutableNames: NoImmutableArgNames, argDefaultSlots: NoDefaultArgSlots, mint: CalleeMint.notMinted))
 	project.opRanges.record(opIndex, range: range)
 	project.valueOrigins.record(funcIndex, valueId: result, opIndex: opIndex)

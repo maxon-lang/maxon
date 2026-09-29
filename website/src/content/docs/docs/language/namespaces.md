@@ -152,7 +152,7 @@ single declaration is reported in that file. When several do:
 Two typealiases with the same name in **one** file are **E3061**, which qualification cannot resolve.
 
 Every typealias a `public` standard-library signature names is itself `public`, so a value can always be cast
-to the alias a library signature asks for (`x as AssertedInt`). A standard-library typealias with no modifier
+to the alias a library signature asks for (`x as ElementIndex`). A standard-library typealias with no modifier
 is private to its declaring file exactly as anyone's is — `Math.maxon`'s `SeriesTermLimit` is one — and
 naming it from another file is **E2003**.
 

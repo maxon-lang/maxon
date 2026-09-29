@@ -244,7 +244,7 @@ export function dapDeclarationLine(staged FilePath, needle String) returns Sourc
 end 'dapDeclarationLine'
 
 export function dapSourceColumnOf(staged FilePath, line SourceLine, spelling String) returns DapNumber
-	let text = try dapStagedLines(staged).get(line - FirstSourceLine) otherwise panic("dap tests: the staged source under {staged.toString()} has no line {line}")
+	let text = try dapStagedLines(staged).get((line - FirstSourceLine) as ElementIndex) otherwise panic("dap tests: the staged source under {staged.toString()} has no line {line}")
 	let before = try text.split(spelling).get(0) otherwise panic("dap tests: splitting a line always answers its first piece")
 
 	if before == text 'notOnTheLine'
@@ -723,7 +723,7 @@ end 'dapBreakpointHasMessage'
 export typealias BreakpointIndex = int(0 to 1000)
 
 function dapBreakpointNode(doc JsonDoc, index BreakpointIndex) returns JsonNodeId
-	return try dapListNodes(doc, key: BreakpointsKey).get(index) otherwise panic("dap tests: `setBreakpoints` answered fewer than {index + 1} breakpoints: {Json.stringify(doc)}")
+	return try dapListNodes(doc, key: BreakpointsKey).get(index as ElementIndex) otherwise panic("dap tests: `setBreakpoints` answered fewer than {index + 1} breakpoints: {Json.stringify(doc)}")
 end 'dapBreakpointNode'
 
 export function dapStackFrameNames(doc JsonDoc) returns StringArray
@@ -751,7 +751,7 @@ end 'dapNumbersOf'
 export typealias DapNumberArray = Array with DapNumber
 
 export function dapFrameNumberAt(values DapNumberArray, frame FramePosition) returns DapNumber
-	return try values.get(frame) otherwise panic("dap tests: a stack of {values.count()} frames holds no frame {frame}")
+	return try values.get(frame as ElementIndex) otherwise panic("dap tests: a stack of {values.count()} frames holds no frame {frame}")
 end 'dapFrameNumberAt'
 
 export function dapThreadIds(doc JsonDoc) returns DapNumberArray
@@ -759,7 +759,7 @@ export function dapThreadIds(doc JsonDoc) returns DapNumberArray
 end 'dapThreadIds'
 
 export function dapFrameNameAt(names StringArray, frame FramePosition) returns String
-	return try names.get(frame) otherwise panic("dap tests: a stack of {names.count()} frames holds no frame {frame}: {dapRendered(names)}")
+	return try names.get(frame as ElementIndex) otherwise panic("dap tests: a stack of {names.count()} frames holds no frame {frame}: {dapRendered(names)}")
 end 'dapFrameNameAt'
 
 export typealias FramePosition = int(0 to 1000)

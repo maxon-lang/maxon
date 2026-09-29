@@ -26,24 +26,24 @@ test 'a break target names a file by the most specific spelling it was given'
 
 	let relative = runSession(executable, staged: staged, commands: appendedCommands(["{BreakCommand} {FirstUtilFile}:{firstLine}", RunCommand], rest: repeatedCommand(ContinueCommand, times: ContinuesPastEveryStop)))
 	try Expect.isEmpty(renderedRows(stopsOutside(relative, expected: FirstFunctionName)), message: "`{FirstUtilFile}:{firstLine}` names one file, so every stop is in `{FirstFunctionName}`; the stops outside it were:{renderedRows(stopsOutside(relative, expected: FirstFunctionName))}")
-	try Expect.equal(stopsAtLine(relative, line: firstLine) as AssertedInt, expected: RoundsTheProgramRuns, message: "`{FirstFunctionName}` runs {RoundsTheProgramRuns} times, so its breakpoint stops {RoundsTheProgramRuns} times. It printed: {renderedRows(eventKinds(relative))}")
+	try Expect.equal(stopsAtLine(relative, line: firstLine), expected: RoundsTheProgramRuns, message: "`{FirstFunctionName}` runs {RoundsTheProgramRuns} times, so its breakpoint stops {RoundsTheProgramRuns} times. It printed: {renderedRows(eventKinds(relative))}")
 
 	let absolute = staged.join(SecondUtilFile).toString()
 	let full = runSession(executable, staged: staged, commands: appendedCommands(["{BreakCommand} {absolute}:{secondLine}", RunCommand], rest: repeatedCommand(ContinueCommand, times: ContinuesPastEveryStop)))
 	try Expect.isEmpty(renderedRows(stopsOutside(full, expected: SecondFunctionName)), message: "the full path `{absolute}:{secondLine}` names one file, so every stop is in `{SecondFunctionName}`; the stops outside it were:{renderedRows(stopsOutside(full, expected: SecondFunctionName))}")
-	try Expect.equal(stopsAtLine(full, line: secondLine) as AssertedInt, expected: RoundsTheProgramRuns, message: "`{SecondFunctionName}` runs {RoundsTheProgramRuns} times, so its breakpoint stops {RoundsTheProgramRuns} times. It printed: {renderedRows(eventKinds(full))}")
+	try Expect.equal(stopsAtLine(full, line: secondLine), expected: RoundsTheProgramRuns, message: "`{SecondFunctionName}` runs {RoundsTheProgramRuns} times, so its breakpoint stops {RoundsTheProgramRuns} times. It printed: {renderedRows(eventKinds(full))}")
 
 	let bare = runSession(executable, staged: staged, commands: ["{BreakCommand} {UtilBaseName}:{firstLine}", QuitCommand])
 	let bareAnswers = eventsOfKind(bare, kind: BreakpointEventName)
-	try Expect.equal(bareAnswers.count() as AssertedInt, expected: 1, message: "`{BreakCommand} {UtilBaseName}:{firstLine}` answers one `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(bare))}")
+	try Expect.equal(bareAnswers.count(), expected: 1, message: "`{BreakCommand} {UtilBaseName}:{firstLine}` answers one `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(bare))}")
 
 	let bareAnswer = eventAt(bareAnswers, index: 0)
 	try Expect.equal(textOf(bareAnswer, node: bareAnswer.root, key: ActionKey), expected: AmbiguousAction, message: "a bare `{UtilBaseName}` names two files, which is an ambiguity answered with its candidates, never a silent pick of both")
-	try Expect.equal(stringsOf(bareAnswer, node: bareAnswer.root, key: CandidatesKey).count() as AssertedInt, expected: 2, message: "the ambiguity names both `{UtilBaseName}` files as its candidates; it named{renderedRows(stringsOf(bareAnswer, node: bareAnswer.root, key: CandidatesKey))}")
+	try Expect.equal(stringsOf(bareAnswer, node: bareAnswer.root, key: CandidatesKey).count(), expected: 2, message: "the ambiguity names both `{UtilBaseName}` files as its candidates; it named{renderedRows(stringsOf(bareAnswer, node: bareAnswer.root, key: CandidatesKey))}")
 
 	let cleared = runSession(executable, staged: staged, commands: appendedCommands(["{BreakCommand} {FirstUtilFile}:{firstLine}", "{BreakCommand} {SecondUtilFile}:{secondLine}", "{ClearCommand} {FirstUtilFile}:{firstLine}", RunCommand], rest: repeatedCommand(ContinueCommand, times: ContinuesPastEveryStop)))
 	try Expect.isEmpty(renderedRows(stopsOutside(cleared, expected: SecondFunctionName)), message: "`{ClearCommand} {FirstUtilFile}:{firstLine}` clears `{FirstFunctionName}`'s breakpoint and no other, so every stop is in `{SecondFunctionName}`; the stops outside it were:{renderedRows(stopsOutside(cleared, expected: SecondFunctionName))}")
-	try Expect.equal(stopsAtLine(cleared, line: secondLine) as AssertedInt, expected: RoundsTheProgramRuns, message: "`{SecondFunctionName}`'s breakpoint survives the clear of the other file's and stops {RoundsTheProgramRuns} times. It printed: {renderedRows(eventKinds(cleared))}")
+	try Expect.equal(stopsAtLine(cleared, line: secondLine), expected: RoundsTheProgramRuns, message: "`{SecondFunctionName}`'s breakpoint survives the clear of the other file's and stops {RoundsTheProgramRuns} times. It printed: {renderedRows(eventKinds(cleared))}")
 end 'a break target names a file by the most specific spelling it was given'
 
 function runSession(executable FilePath, staged FilePath, commands StringArray) returns JsonDocArray

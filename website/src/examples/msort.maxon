@@ -1,8 +1,8 @@
-typealias LineCount = int(0 to u64.max)
-typealias ChunkPosition = int(0 to u64.max)
+typealias LineCount = int(0 to u64.max) implements ElementIndex
+typealias ChunkPosition = int(0 to u64.max) implements ElementIndex
 typealias FieldNumber = int(0 to 1024)
 typealias WorkerCount = int(1 to 256)
-typealias BytePosition = int(0 to u64.max)
+typealias BytePosition = int(0 to u64.max) implements ElementIndex
 typealias SortNumber = int(i64.min to i64.max)
 
 typealias PathArray = Array with FilePath
@@ -520,7 +520,7 @@ function sortedChunks(lines LineArray, settings SortSettings, workers WorkerCoun
 	for slot in 0 upto workers 'sendChunks'
 		var sorter = try sorters.get(slot) otherwise panic("sortedChunks: one sorter per slot")
 		let remaining = (workers - slot) as WorkerCount
-		let share = (lines.count() - first) / remaining
+		let share = (lines.count() - first) as WorkerCount / remaining
 		let stop = first + share
 		var chunk = LineArray.create()
 		chunk.reserve(share as ElementIndex)
@@ -687,9 +687,9 @@ function main() returns ExitCode
 	let maker = settings.keyMaker()
 	let compare = settings.comparator()
 	let lines = readInput(options, summary: summary)
-	summary.linesRead = lines.count()
+	summary.linesRead = lines.count() as LineCount
 
-	summary.workers = options.workersFor(lines.count())
+	summary.workers = options.workersFor(lines.count() as LineCount)
 	let sorted = sortedRows(lines, settings: settings, workers: summary.workers, maker: maker, summary: summary)
 	printRows(withoutDuplicates(sorted, compare: compare) if options.unique else sorted)
 

@@ -30,24 +30,24 @@ test 'a program that carves no green thread publishes no roster word and answers
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let stops = eventsOfKind(events, kind: StopEventName)
 
-	Expect.atLeast(stops.count() as AssertedInt, than: 1, message: "a program with no scheduler in it never stopped. Attaching, planting the byte and reading the sidecar must all work on a program the runtime contract is mostly absent from. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.atLeast(stops.count(), than: 1, message: "a program with no scheduler in it never stopped. Attaching, planting the byte and reading the sidecar must all work on a program the runtime contract is mostly absent from. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let stopped = eventAt(stops, index: 0)
-	Expect.equal(numberOf(stopped, node: stopped.root, key: LineKey) as AssertedInt, expected: hotLine as AssertedInt, message: "the stop is not on the anchored line. {said}")
+	Expect.equal(numberOf(stopped, node: stopped.root, key: LineKey), expected: hotLine as EventNumber, message: "the stop is not on the anchored line. {said}")
 	Expect.equal(textOf(stopped, node: stopped.root, key: ReasonKey), expected: BreakpointStopReason, message: "the stop does not name a breakpoint as its reason. {said}")
 
 	let rosters = eventsOfKind(events, kind: ThreadsEventName)
-	Expect.equal(rosters.count() as AssertedInt, expected: 1, message: "`{ThreadsCommand}` printed no `{ThreadsEventName}` event. A program with no green threads answers the roster it HAS — an empty one — rather than refusing the question or failing the session. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(rosters.count(), expected: 1, message: "`{ThreadsCommand}` printed no `{ThreadsEventName}` event. A program with no green threads answers the roster it HAS — an empty one — rather than refusing the question or failing the session. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let roster = eventAt(rosters, index: 0)
-	Expect.equal(threadRows(roster).count() as AssertedInt, expected: 0, message: "the roster of a program that carves no green thread is not empty: it held {renderedThreads(roster)}. A row here is a record read at an address the sidecar never published. {said}")
-	Expect.equal(memberOf(roster, node: roster.root, key: TruncatedKey).count() as AssertedInt, expected: 1, message: "the roster carries no `{TruncatedKey}`, so a reader cannot tell an empty list from a list cut short. {said}")
+	Expect.equal(threadRows(roster).count(), expected: 0, message: "the roster of a program that carves no green thread is not empty: it held {renderedThreads(roster)}. A row here is a record read at an address the sidecar never published. {said}")
+	Expect.equal(memberOf(roster, node: roster.root, key: TruncatedKey).count(), expected: 1, message: "the roster carries no `{TruncatedKey}`, so a reader cannot tell an empty list from a list cut short. {said}")
 	Expect.isFalse(flagOf(roster, node: roster.root, key: TruncatedKey), message: "an empty roster reporting itself truncated says entries were lost, when the answer is that there are none. {said}")
 	Expect.equal(textOf(roster, node: roster.root, key: ThreadsUnavailableKey), expected: AbsentEventText, message: "the roster carries `{ThreadsUnavailableKey}`, which is how a REFUSAL is spelled — and it reads '{textOf(roster, node: roster.root, key: ThreadsUnavailableKey)}'. A program with no roster word has an EMPTY list of green threads, which is an answer; unavailable says the debugger could not find out. {said}")
 
 	let exits = eventsOfKind(events, kind: ExitEventName)
-	Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the session did not run the program to its end. {said}")
+	Expect.equal(exits.count(), expected: 1, message: "the session did not run the program to its end. {said}")
 
 	let exited = eventAt(exits, index: 0)
-	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the debugged program answered a different exit code than the same program run with nothing attached. {said}")
+	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey), expected: undebugged.exitCode() as EventNumber, message: "the debugged program answered a different exit code than the same program run with nothing attached. {said}")
 end 'a program that carves no green thread publishes no roster word and answers threads with an empty list'

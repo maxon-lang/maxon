@@ -70,7 +70,7 @@ union SweptParse
 end 'SweptParse'
 
 union DiagnosticSubject
-	named(name ByteArray, index TokenIndex)
+	named(name ByteArray, index ElementIndex)
 	unattributable
 end 'DiagnosticSubject'
 
@@ -298,7 +298,7 @@ function tokenStreamsAgree(live TokenArray, swept TokenArray) returns bool
 	end 'differentLengths'
 
 	for (iter, token) in live.withIterator() 'eachToken'
-		let sweptToken = try swept.get(iter.index() as TokenIndex) otherwise panic("tokenStreamsAgree: the two streams were compared equal in length one line above, so {iter.index()} indexes both")
+		let sweptToken = try swept.get(iter.index()) otherwise panic("tokenStreamsAgree: the two streams were compared equal in length one line above, so {iter.index()} indexes both")
 
 		if token.kind != sweptToken.kind or token.line != sweptToken.line or token.column != sweptToken.column or not token.value.equals(sweptToken.value) 'differsHere'
 			return false
@@ -333,7 +333,7 @@ end 'refusalsThisRoadMayPublish'
 
 function aNameOnlyTheProjectDeclares(tokens TokenArray, verdicts SiblingVerdictMap, buffer FilePath, document HoverDocument, corpus ProgramSignatures, reader FilePath, own ProgramSignatures) returns bool
 	for (iter, token) in tokens.withIterator() 'eachToken'
-		let index = iter.index() as TokenIndex
+		let index = iter.index()
 
 		if token.kind != TokenKind.identifier or lspCursorNamesAMember(tokens, cursor: index) 'notANameThisFileHadToResolve'
 			continue
@@ -383,7 +383,7 @@ function theProjectDeclaresTheSubject(subject DiagnosticSubject, verdicts Siblin
 	end 'subject'
 end 'theProjectDeclaresTheSubject'
 
-function settledVerdictFor(name ByteArray, verdicts SiblingVerdictMap, index TokenIndex, buffer FilePath, document HoverDocument, corpus ProgramSignatures, reader FilePath, own ProgramSignatures) returns bool
+function settledVerdictFor(name ByteArray, verdicts SiblingVerdictMap, index ElementIndex, buffer FilePath, document HoverDocument, corpus ProgramSignatures, reader FilePath, own ProgramSignatures) returns bool
 	if let settled = try verdicts.get(name) 'askedAlready'
 		return settled
 	end 'askedAlready'
@@ -405,7 +405,7 @@ function declaredOutsideTheReader(corpus ProgramSignatures, name ByteArray, read
 	end 'declaration'
 end 'declaredOutsideTheReader'
 
-function theBufferBindsTheName(name ByteArray, index TokenIndex, document HoverDocument, own ProgramSignatures, buffer FilePath) returns bool
+function theBufferBindsTheName(name ByteArray, index ElementIndex, document HoverDocument, own ProgramSignatures, buffer FilePath) returns bool
 	match declaringFileOfTheSubject(own, name: name, reader: buffer) 'atTopLevel'
 		declared then return true
 		undeclared then break 'atTopLevel'
@@ -476,7 +476,7 @@ function subjectAnchoredAt(tokens TokenArray, line LineNumber, column ColumnNumb
 			continue
 		end 'notTheAnchor'
 
-		return subjectBesideAnchor(tokens, anchor: iter.index() as TokenIndex)
+		return subjectBesideAnchor(tokens, anchor: iter.index())
 	end 'eachToken'
 
 	return DiagnosticSubject.unattributable
@@ -504,7 +504,7 @@ function unknownTypeSubjectNamed(diagnostic Diagnostic, tokens TokenArray, typeN
 			continue
 		end 'notTheName'
 
-		return DiagnosticSubject.named(token.value, index: iter.index() as TokenIndex)
+		return DiagnosticSubject.named(token.value, index: iter.index())
 	end 'eachToken'
 
 	return DiagnosticSubject.unattributable
@@ -524,11 +524,11 @@ end 'quotedNameIn'
 // anchor of `CompilePhase.load` is `load`, which IS an identifier — so a bare-name rule asked first
 // answers `load`, finds no declaration of it anywhere, and publishes the invented refusal the base would
 // have explained.
-function subjectBesideAnchor(tokens TokenArray, anchor TokenIndex) returns DiagnosticSubject
+function subjectBesideAnchor(tokens TokenArray, anchor ElementIndex) returns DiagnosticSubject
 	let anchored = try tokens.get(anchor) otherwise panic("subjectBesideAnchor: {anchor} is the index the walk above stopped at, inside [0, {tokens.count()})")
 
 	if anchored.kind == TokenKind.as 'aCastTarget'
-		return identifierSubjectAt(tokens, index: (anchor + 1) as TokenIndex)
+		return identifierSubjectAt(tokens, index: (anchor + 1) as ElementIndex)
 	end 'aCastTarget'
 
 	if not lspCursorNamesAMember(tokens, cursor: anchor) 'aBareName'
@@ -539,10 +539,10 @@ function subjectBesideAnchor(tokens TokenArray, anchor TokenIndex) returns Diagn
 		return DiagnosticSubject.unattributable
 	end 'noRoomForABase'
 
-	return identifierSubjectAt(tokens, index: (anchor - TokensBetweenAReceiverAndItsMember) as TokenIndex)
+	return identifierSubjectAt(tokens, index: (anchor - TokensBetweenAReceiverAndItsMember) as ElementIndex)
 end 'subjectBesideAnchor'
 
-function identifierSubjectAt(tokens TokenArray, index TokenIndex) returns DiagnosticSubject
+function identifierSubjectAt(tokens TokenArray, index ElementIndex) returns DiagnosticSubject
 	let token = try tokens.get(index) otherwise return DiagnosticSubject.unattributable
 
 	if token.kind != TokenKind.identifier 'notAName'

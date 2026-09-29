@@ -16,18 +16,18 @@ test 'a program carrying no agent stops at a breakpoint, ends with its own code,
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let stops = eventsOfKind(events, kind: StopEventName)
 
-	Expect.equal(stops.count() as AssertedInt, expected: 1, message: "the breakpoint is cleared at the one stop it answers, so the session has exactly one. A session over a program with nothing of the debugger in it must still stop where it was asked to. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(stops.count(), expected: 1, message: "the breakpoint is cleared at the one stop it answers, so the session has exactly one. A session over a program with nothing of the debugger in it must still stop where it was asked to. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let stopped = eventAt(stops, index: 0)
-	Expect.equal(numberOf(stopped, node: stopped.root, key: LineKey) as AssertedInt, expected: hotLine as AssertedInt, message: "the stop is not on the anchored line. {said}")
+	Expect.equal(numberOf(stopped, node: stopped.root, key: LineKey), expected: hotLine as EventNumber, message: "the stop is not on the anchored line. {said}")
 	Expect.equal(textOf(stopped, node: stopped.root, key: ReasonKey), expected: BreakpointStopReason, message: "the stop does not name a breakpoint as its reason. {said}")
 
 	let exits = eventsOfKind(events, kind: ExitEventName)
-	Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the breakpoint was cleared before the `{ContinueCommand}`, so the program runs to its end and the session reports one `{ExitEventName}`. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(exits.count(), expected: 1, message: "the breakpoint was cleared before the `{ContinueCommand}`, so the program runs to its end and the session reports one `{ExitEventName}`. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let exited = eventAt(exits, index: 0)
-	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "⭐ THE PROGRAM'S OWN CODE, NOT THE DEBUGGER'S. The debugged run answered a different code than the same image run with nothing attached, so being debugged changed what the program reported. {said}")
-	Expect.equal(session.exitCode() as AssertedInt, expected: CompletedSessionExitCode, message: "a session that ran its script and saw the program end is a successful one. {said}")
+	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey), expected: undebugged.exitCode() as EventNumber, message: "⭐ THE PROGRAM'S OWN CODE, NOT THE DEBUGGER'S. The debugged run answered a different code than the same image run with nothing attached, so being debugged changed what the program reported. {said}")
+	Expect.equal(session.exitCode(), expected: CompletedSessionExitCode, message: "a session that ran its script and saw the program end is a successful one. {said}")
 
 	let dump = spawnDumpInfo(executable, staged: staged, sections: StringArray.create())
 

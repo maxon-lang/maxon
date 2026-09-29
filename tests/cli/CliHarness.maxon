@@ -1,3 +1,5 @@
+export typealias ReportedTally = int(i64.min to i64.max)
+
 // CliHarness.maxon — the shared half every case under `tests/cli/` reaches for: the compiler it spawns,
 // one run of it, a copy of it staged where an install would put it, and the three readings of what it
 // printed that let these cases assert WITHOUT keeping a list of commands of their own.
@@ -372,7 +374,7 @@ export function expectALibraryFileBesideAProgramIsReadOnce(caseDirName String, l
 	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
 
 	try Expect.isFalse(build.stderr.contains(DuplicateDefinitionCode), message: "`{libraryFile}` was named on the command line and is also {whoseFile}, so the build loaded it twice and every declaration in it collided with itself. {said}")
-	try Expect.equal(build.exitCode() as AssertedInt, expected: 0, message: "a program built together with `{libraryFile}` did not build. The file is {whoseFile} whether or not a command line names it, and a build that reads it once compiles clean. {said}")
+	try Expect.equal(build.exitCode(), expected: 0, message: "a program built together with `{libraryFile}` did not build. The file is {whoseFile} whether or not a command line names it, and a build that reads it once compiles clean. {said}")
 	try Expect.isTrue(File.exists(built.executable), message: "the build exited 0 and wrote no executable. {said}")
 end 'expectALibraryFileBesideAProgramIsReadOnce'
 
@@ -699,7 +701,7 @@ end 'collectFiles'
 
 // ⭐ **WHAT A REPORT SAYS IT REMOVED, read as the first run of digits in it.** A case comparing the
 // clear's answer against what was on disk asks the number and never the wording around it.
-export function reportedTally(report String) returns AssertedInt throws ReportReadingError
+export function reportedTally(report String) returns ReportedTally throws ReportReadingError
 	var value = 0
 	var seen = false
 
@@ -712,7 +714,7 @@ export function reportedTally(report String) returns AssertedInt throws ReportRe
 			continue
 		end 'notADigit'
 
-		value = value * DecimalBase + (byte as AssertedInt) - (AsciiZero as AssertedInt)
+		value = value * DecimalBase + (byte) - (AsciiZero)
 		seen = true
 	end 'eachByte'
 
@@ -1056,7 +1058,7 @@ export function firstFew(words ListedWordArray, count WordTally) returns ListedW
 	var taken = ListedWordArray.create()
 
 	for word in words 'eachWord'
-		if taken.count() >= count 'enough'
+		if taken.count() >= count as ElementIndex 'enough'
 			break
 		end 'enough'
 

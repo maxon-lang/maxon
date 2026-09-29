@@ -32,14 +32,14 @@ test 'two debug sessions of one source each stop in their own build, and closing
 
 	try server.stop()
 
-	try Expect.equal(firstInitialized.statusCode as AssertedInt, expected: OkStatus as AssertedInt)
-	try Expect.equal(secondInitialized.statusCode as AssertedInt, expected: OkStatus as AssertedInt)
+	try Expect.equal(firstInitialized.statusCode, expected: OkStatus)
+	try Expect.equal(secondInitialized.statusCode, expected: OkStatus)
 	try Expect.isFalse(toolCallIsError(firstStarted), message: "the first session's `{DebugStartTool}` must build the source and launch it: {toolCallText(firstStarted)}")
 	try Expect.isFalse(toolCallIsError(secondStarted), message: "the second session's `{DebugStartTool}` builds the same source while the first session's program runs, and must not build over the image that program runs from: {toolCallText(secondStarted)}")
 	try Expect.isTrue(debugEventLines(firstContinued, kind: DebugStopEventName).contains("{anchored}"), message: "the first session must stop at the anchored line {anchored}; it answered {toolCallText(firstContinued)}")
 	try Expect.isTrue(debugEventLines(secondContinued, kind: DebugStopEventName).contains("{anchored}"), message: "the second session must stop at the anchored line {anchored}; it answered {toolCallText(secondContinued)}")
-	try Expect.equal(imagesWhileLive.count() as AssertedInt, expected: SessionsDebuggingOneSource as AssertedInt, message: "each live session debugs a build of its own; {builds.toString()} held{renderedStrings(imagesWhileLive)}")
-	try Expect.equal(imagesAfterFirst.count() as AssertedInt, expected: (SessionsDebuggingOneSource - 1) as AssertedInt, message: "`{DebugStopTool}` removes the image its session built and no other; {builds.toString()} held{renderedStrings(imagesAfterFirst)}")
+	try Expect.equal(imagesWhileLive.count(), expected: SessionsDebuggingOneSource, message: "each live session debugs a build of its own; {builds.toString()} held{renderedStrings(imagesWhileLive)}")
+	try Expect.equal(imagesAfterFirst.count(), expected: (SessionsDebuggingOneSource - 1), message: "`{DebugStopTool}` removes the image its session built and no other; {builds.toString()} held{renderedStrings(imagesAfterFirst)}")
 	try Expect.isEmpty(renderedStrings(leftAfterBoth), message: "once both sessions have ended nothing they built is left in {builds.toString()}; it held {renderedStrings(leftAfterBoth)}")
 end 'two debug sessions of one source each stop in their own build, and closing one removes its build'
 

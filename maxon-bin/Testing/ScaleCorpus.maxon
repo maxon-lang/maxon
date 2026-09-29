@@ -162,9 +162,6 @@ export let MinRungCount = 1 as RungCount
 export let MaxRungCount = 8 as RungCount
 export let DefaultRungCount = 6 as RungCount
 
-// Total bytes of generated source in one rung — the denominator of the degeneracy check.
-export typealias SourceByteCount = int(0 to u32.max)
-
 // The outcome of parsing `--rungs=<n>`. A union rather than a throw, because the caller is inside
 // the argument loop and must neither diverge nor invent a value: `invalid` is recorded as a bad
 // option and the driver then refuses to run at all.
@@ -206,7 +203,7 @@ typealias KnobSize = int(1 to 1048576)
 // `chainLinkName(0)` for the chain's base and `chainLinkName(i - 1)` for each link's callee — which is one
 // below `KnobSize`'s minimum. A range that describes the wrong quantity reads as correct until something
 // measures it.
-typealias KnobIndex = int(0 to 1048575)
+typealias KnobIndex = int(0 to 1048575) implements ElementIndex
 
 // ===========================================================================================
 // The knobs, and their rung-0 sizes
@@ -1480,9 +1477,9 @@ export let RungDirPrefix = "rung"
 export type ScaleRung
 	export let index as RungIndex
 	export let dir as FilePath
-	export let sourceBytes as SourceByteCount
+	export let sourceBytes as BytePos
 
-	export static function create(index RungIndex, dir FilePath, sourceBytes SourceByteCount) returns ScaleRung
+	export static function create(index RungIndex, dir FilePath, sourceBytes BytePos) returns ScaleRung
 		return Self{index: index, dir: dir, sourceBytes: sourceBytes}
 	end 'create'
 end 'ScaleRung'
@@ -1548,7 +1545,7 @@ function generateRung(root FilePath, rung RungIndex) returns ScaleRung throws Sc
 	let funcCount = knobAt(FunctionsBase, rung: rung)
 	let localCount = knobAt(LocalsPerFunctionBase, rung: rung)
 
-	var sourceBytes = 0 as SourceByteCount
+	var sourceBytes = 0 as BytePos
 	var written = StringArray.create()
 
 	// Every generated entry point `main` threads the accumulator through, IN CALL ORDER — filled by
@@ -1700,7 +1697,7 @@ end 'RungDriver'
 // ⚠ The caller owns creating the directory. This writes a file and does not mkdir, because the knob that
 // needs a subdirectory also needs it recorded in `written` — one caller, one place, rather than a
 // create-if-missing here that would leave the prune's set to be filled in somewhere else.
-function writeRungFile(dir FilePath, name String, source String, written StringArray, drivers StringArray, driver RungDriver) returns SourceByteCount throws ScaleError
+function writeRungFile(dir FilePath, name String, source String, written StringArray, drivers StringArray, driver RungDriver) returns BytePos throws ScaleError
 	let fileName = "{name}{MaxonSourceExtension}"
 	let path = dir.join(fileName)
 
@@ -1717,7 +1714,7 @@ function writeRungFile(dir FilePath, name String, source String, written StringA
 		threadsNothing then break 'driver'
 	end 'driver'
 
-	return content.byteLength() as SourceByteCount
+	return content.byteLength()
 end 'writeRungFile'
 
 // Delete everything in the rung directory TREE that this run did not just generate — see the header.
@@ -1913,10 +1910,10 @@ end 'opaqueCalleeValue'
 // This is the ONE file whose functions register individually rather than through `writeRungFile`'s
 // `driver` parameter: it writes N files holding N*k functions, so there is no single entry point to
 // declare, and the names are known only inside the loop that mints them.
-function writeManyFunctions(dir FilePath, fileCount KnobSize, funcCount KnobSize, written StringArray, drivers StringArray) returns SourceByteCount throws ScaleError
+function writeManyFunctions(dir FilePath, fileCount KnobSize, funcCount KnobSize, written StringArray, drivers StringArray) returns BytePos throws ScaleError
 	let perFile = bucketCount(funcCount, perBucket: fileCount)
 
-	var total = 0 as SourceByteCount
+	var total = 0 as BytePos
 
 	for fileIndex in 0 upto fileCount 'eachFile'
 		var out = StringBuilder.create()
@@ -2120,7 +2117,7 @@ end 'chainLinkName'
 // ⚠ A one-link chain would make the base the DRIVER, and a driver must hand back its argument. The knob
 // cannot reach that (`CallChainBase` is 8 and rungs only double it), and the check below says so rather
 // than leaving the next person to retune it to 1 and get a rung that exits 1 for no visible reason.
-function writeCallChain(dir FilePath, length KnobSize, written StringArray, drivers StringArray) returns SourceByteCount throws ScaleError
+function writeCallChain(dir FilePath, length KnobSize, written StringArray, drivers StringArray) returns BytePos throws ScaleError
 	if length < MinCallChainLength 'baseWouldBeTheDriver'
 		panic("ScaleCorpus.writeCallChain: a chain of {length} makes the un-witnessed base link the knob's DRIVER, and a driver must return its argument — raise CallChainBase back to at least {MinCallChainLength}")
 	end 'baseWouldBeTheDriver'
@@ -5221,8 +5218,8 @@ end 'tryCoOwnPick'
 // `isVisibleFrom`'s expensive `file` arm rather than only the cheap `global` one. Every file-private
 // declaration there is untouched, and this knob ADDS a private free function and a private alias per
 // module — so the `file` arm gets MORE traffic here, not less, and the `module` arm gets its first.
-function writeNamespacedModules(dir FilePath, moduleCount KnobSize, written StringArray, drivers StringArray) returns SourceByteCount throws ScaleError
-	var total = 0 as SourceByteCount
+function writeNamespacedModules(dir FilePath, moduleCount KnobSize, written StringArray, drivers StringArray) returns BytePos throws ScaleError
+	var total = 0 as BytePos
 	var consumer = StringBuilder.create()
 	consumer.append("// Generated by ScaleCorpus: the namespace knob's CONSUMER — one qualified reference group per module, written from the ROOT namespace.\n")
 	consumer.append(witnessedDriverHeader(NamespacesDriver))
@@ -5417,10 +5414,10 @@ end 'qualifiedReferenceGroup'
 // (This corpus emits no `where` clause, so there are zero sites today. The shape is kept honest for the
 // rung that adds one — and that cost is in TIME, which this instrument cannot see, so the corpus paying
 // it would show nothing while slowing every run.)
-function writeInterfaceTypes(dir FilePath, count KnobSize, written StringArray, drivers StringArray) returns SourceByteCount throws ScaleError
+function writeInterfaceTypes(dir FilePath, count KnobSize, written StringArray, drivers StringArray) returns BytePos throws ScaleError
 	let fileCount = bucketCount(count, perBucket: InterfacesPerFile)
 
-	var total = 0 as SourceByteCount
+	var total = 0 as BytePos
 
 	for fileIndex in 0 upto fileCount 'eachFile'
 		let driverName = "{InterfaceFileDriverPrefix}{fileIndex}"
@@ -5829,7 +5826,7 @@ end 'assertCorpusCompiled'
 // The corpus's own growth, rung over rung — PRINTED, and in `--result-json`, because a reader looking
 // at a set of memory numbers is entitled to see the evidence that they are numbers about a program
 // that was actually compiled rather than one that folded away.
-export function codeGrowthAt(results RungResultArray, rung LadderIndex) returns GrowthReading
+export function codeGrowthAt(results RungResultArray, rung ElementIndex) returns GrowthReading
 	if rung == 0 'bottomRung'
 		return GrowthReading.noBaseline
 	end 'bottomRung'

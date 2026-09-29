@@ -1,3 +1,5 @@
+typealias StatedDefault = int(i64.min to i64.max)
+
 // scale-defaults-agree-with-help.maxtest — the `run_scale_test` tool and `maxon help scale-test` state
 // the same default for each option they share. The tool describes the command it runs, so a default that
 // differs between the two is one of them telling its reader something false.
@@ -25,7 +27,7 @@ test 'run_scale_test states the defaults maxon help scale-test states'
 	let tools = listTools(true)
 
 	let helpRun = runIn(Directory.currentPath(), binary: testedCompilerPath(), arguments: [HelpCommandWord, ScaleCommandWord])
-	Expect.equal(helpRun.exitCode() as AssertedInt, expected: 0, message: "`maxon {HelpCommandWord} {ScaleCommandWord}` was refused. It said: {helpRun.stdout}{helpRun.stderr}")
+	Expect.equal(helpRun.exitCode(), expected: 0, message: "`maxon {HelpCommandWord} {ScaleCommandWord}` was refused. It said: {helpRun.stdout}{helpRun.stderr}")
 
 	requireSameDefault(tools, help: helpRun.stdout, property: RungsProperty, option: RungsOption)
 	requireSameDefault(tools, help: helpRun.stdout, property: RepeatProperty, option: RepeatOption)
@@ -67,7 +69,7 @@ function helpEntryFor(help String, option String) returns String
 	return entry
 end 'helpEntryFor'
 
-function statedDefault(text String, where String) returns AssertedInt throws TestFailure
+function statedDefault(text String, where String) returns StatedDefault throws TestFailure
 	let parts = text.split(DefaultWord)
 	try Expect.isTrue(parts.count() >= 2, message: "{where} states no `{DefaultWord}<n>`: {text}")
 

@@ -222,7 +222,7 @@ function main() returns ExitCode
 	a.push(22)
 	a.push(33)
 
-	let n = a.count()
+	let n = a.count() as Int
 	if readAt(a, i: -n) != -7 'minusCount'
 		return 1
 	end 'minusCount'
@@ -426,7 +426,7 @@ function main() returns ExitCode
 	end 'countUnchanged'
 
 	// The ARRAY surface: the `otherwise` is unreachable — the door panics first.
-	return try a.get(launder(-1)) otherwise 99
+	return try a.get(launder(-1) as ElementIndex) otherwise 99
 end 'main'
 ```
 ```exitcode

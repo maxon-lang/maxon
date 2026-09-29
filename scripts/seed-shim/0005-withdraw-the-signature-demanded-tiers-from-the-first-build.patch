@@ -3,30 +3,32 @@
 # that rule, so it reads each of these as E3092/E3093/E3094 and refuses the tree; at the tier this
 # patch writes, its audit agrees. What the shimmed first build loses is the wider tier and no code.
 diff --git a/maxon-bin/Compiler/CompileMemory.maxon b/maxon-bin/Compiler/CompileMemory.maxon
+index 29ccb58..41e1869 100644
 --- a/maxon-bin/Compiler/CompileMemory.maxon
 +++ b/maxon-bin/Compiler/CompileMemory.maxon
 @@ -131,7 +131,7 @@ end 'deltaSum'
  
  // Index into a dense per-phase column. Bounded by the enums it indexes, both of which are
  // a couple of dozen arms.
--export typealias PhaseIndex = int(0 to 1024)
-+typealias PhaseIndex = int(0 to 1024)
+-export typealias PhaseIndex = int(0 to 1024) implements ElementIndex
++typealias PhaseIndex = int(0 to 1024) implements ElementIndex
  
  typealias ColumnCell = int(0 to u64.max)
  typealias PhaseColumnArray = Array with ColumnCell
-@@ -278,7 +278,7 @@ let TagTableBytesColumnTitle = "bytes"
+@@ -272,7 +272,7 @@ let TagTableBytesColumnTitle = "bytes"
  let TagLabelWidth = 34 as ColumnWidth
  let TagCensusRuleWidth = (TagLabelWidth + MemAllocsWidth + MemBytesWidth) as ColumnWidth
  
--export typealias TagBucketIndex = int(0 to 2047)
-+typealias TagBucketIndex = int(0 to 2047)
+-export typealias TagBucketIndex = int(0 to 2047) implements ElementIndex
++typealias TagBucketIndex = int(0 to 2047) implements ElementIndex
  export typealias TagCensusMode = int(0 to 1)
  typealias TagRowCount = int(0 to 5)
- typealias ColumnSlot = int(0 to 2099199)
+ 
 diff --git a/maxon-bin/Compiler/Compiler.maxon b/maxon-bin/Compiler/Compiler.maxon
+index 9ecd352..69f09a2 100644
 --- a/maxon-bin/Compiler/Compiler.maxon
 +++ b/maxon-bin/Compiler/Compiler.maxon
-@@ -1938,7 +1938,7 @@ export function collectMaxonSources(dir FilePath, into MaxonSourcePathArray, sel
+@@ -1955,7 +1955,7 @@ export function collectMaxonSources(dir FilePath, into MaxonSourcePathArray, sel
  	return try collectListedSources(entries, into: into, selection: selection, nestedProjects: nestedProjects)
  end 'collectMaxonSources'
  
@@ -35,7 +37,7 @@ diff --git a/maxon-bin/Compiler/Compiler.maxon b/maxon-bin/Compiler/Compiler.max
  	refused
  	pruned
  end 'NestedProjectRule'
-@@ -2432,7 +2432,7 @@ end 'mintedNamesInclude'
+@@ -2449,7 +2449,7 @@ end 'mintedNamesInclude'
  // A call that returns at all lists at least the directory it was handed, so the answer is 1 or more; a
  // root that cannot be listed throws instead. The floor is 0 because the type has no narrower honest
  // bound to state, not because a walk reports it.
@@ -45,9 +47,10 @@ diff --git a/maxon-bin/Compiler/Compiler.maxon b/maxon-bin/Compiler/Compiler.max
  // The same paths where the question is MEMBERSHIP rather than order, so it is answered by one hash
  // instead of a scan — and each pair a scan would compare is about four String allocations, because
 diff --git a/maxon-bin/Compiler/Formatter.maxon b/maxon-bin/Compiler/Formatter.maxon
+index ac853e5..e945c3e 100644
 --- a/maxon-bin/Compiler/Formatter.maxon
 +++ b/maxon-bin/Compiler/Formatter.maxon
-@@ -178,7 +178,7 @@ typealias FormatBlockKindArray = Array with FormatBlockKind
+@@ -173,7 +173,7 @@ typealias FormatBlockKindArray = Array with FormatBlockKind
  /// A block comment with code BOTH before and after it on one line (`var y = /* note */ 5`) cannot be
  /// cleanly relocated by a formatter that does not parse; it comes out as a trailing comment. The
  /// comment is PRESERVED — only its position within the line is lost.
@@ -56,7 +59,7 @@ diff --git a/maxon-bin/Compiler/Formatter.maxon b/maxon-bin/Compiler/Formatter.m
  	export let text as String
  	export let wholeLine as bool
  
-@@ -1696,7 +1696,7 @@ end 'blockKindOpenedBy'
+@@ -1691,7 +1691,7 @@ end 'blockKindOpenedBy'
  ///
  /// The two constructors are the only way in, so no caller can hand the emitter an indent unit that is
  /// not whitespace.
@@ -65,34 +68,11 @@ diff --git a/maxon-bin/Compiler/Formatter.maxon b/maxon-bin/Compiler/Formatter.m
  	module let indentUnit as String
  
  	/// One tab per level — the language's own rule, and what `maxon fmt` always wants.
-diff --git a/maxon-bin/Compiler/IR/IrFunction.maxon b/maxon-bin/Compiler/IR/IrFunction.maxon
---- a/maxon-bin/Compiler/IR/IrFunction.maxon
-+++ b/maxon-bin/Compiler/IR/IrFunction.maxon
-@@ -513,7 +513,7 @@ export type LabelledArgumentValues
- end 'LabelledArgumentValues'
- 
- // The row a labelled call argument's value was recorded at, by its label's position.
--export typealias LabelledValueRow = int(0 to u64.max)
-+typealias LabelledValueRow = int(0 to u64.max)
- export typealias LabelledValueRowByPosition = Map with (PositionKey, LabelledValueRow)
- 
- // ⭐ **A NAME BOUND OR ASSIGNED WHOLE TO A MUTABLE NAME, AND THE FIRST READ OF IT AFTER.** Filed where a `let` — or
-diff --git a/maxon-bin/Compiler/IR/IrModule.maxon b/maxon-bin/Compiler/IR/IrModule.maxon
---- a/maxon-bin/Compiler/IR/IrModule.maxon
-+++ b/maxon-bin/Compiler/IR/IrModule.maxon
-@@ -10,7 +10,7 @@
- 
- export typealias OpCount = int(0 to u64.max)
- export typealias BlockCount = int(0 to u64.max)
--export typealias FuncCount = int(0 to u64.max)
-+module typealias FuncCount = int(0 to u64.max)
- export typealias FuncIndex = int(0 to u64.max)
- 
- export typealias BlockRefIndex = int(0 to u64.max)
 diff --git a/maxon-bin/Compiler/IR/Maxon/ModuleInit.maxon b/maxon-bin/Compiler/IR/Maxon/ModuleInit.maxon
+index 5f75e65..dd0c42c 100644
 --- a/maxon-bin/Compiler/IR/Maxon/ModuleInit.maxon
 +++ b/maxon-bin/Compiler/IR/Maxon/ModuleInit.maxon
-@@ -86,7 +86,7 @@ export function installManagedGlobalInit(module MaxonModule, project Project, gl
+@@ -93,7 +93,7 @@ export function installManagedGlobalInit(module MaxonModule, project Project, gl
  end 'installManagedGlobalInit'
  
  // A `let` `__module_init` marks shared, and the walk that marks it.
@@ -102,6 +82,7 @@ diff --git a/maxon-bin/Compiler/IR/Maxon/ModuleInit.maxon b/maxon-bin/Compiler/I
  	export let walk as ByteArray
  
 diff --git a/maxon-bin/Compiler/IR/PassPipeline.maxon b/maxon-bin/Compiler/IR/PassPipeline.maxon
+index 262e339..1312684 100644
 --- a/maxon-bin/Compiler/IR/PassPipeline.maxon
 +++ b/maxon-bin/Compiler/IR/PassPipeline.maxon
 @@ -20,7 +20,7 @@
@@ -114,9 +95,10 @@ diff --git a/maxon-bin/Compiler/IR/PassPipeline.maxon b/maxon-bin/Compiler/IR/Pa
  	reportDeferredNames
  	checkSignatureVisibility
 diff --git a/maxon-bin/Compiler/IR/Std/StdPassPool.maxon b/maxon-bin/Compiler/IR/Std/StdPassPool.maxon
+index e0538f7..80ce2f3 100644
 --- a/maxon-bin/Compiler/IR/Std/StdPassPool.maxon
 +++ b/maxon-bin/Compiler/IR/Std/StdPassPool.maxon
-@@ -266,7 +266,7 @@ end 'refineVersionedRangesInFunc'
+@@ -253,7 +253,7 @@ end 'refineVersionedRangesInFunc'
  
  // EVERYTHING ONE WORKER HANDS BACK AT THE END: its per-step costs and tallies, as records nothing else
  // holds (a reply moves).
@@ -126,6 +108,7 @@ diff --git a/maxon-bin/Compiler/IR/Std/StdPassPool.maxon b/maxon-bin/Compiler/IR
  	export var tallies as StdPassTallyArray
  
 diff --git a/maxon-bin/Compiler/IR/Target/TargetDialect.maxon b/maxon-bin/Compiler/IR/Target/TargetDialect.maxon
+index 6aa431c..4b46b9a 100644
 --- a/maxon-bin/Compiler/IR/Target/TargetDialect.maxon
 +++ b/maxon-bin/Compiler/IR/Target/TargetDialect.maxon
 @@ -1889,7 +1889,7 @@ end 'X64AccessWidth'
@@ -151,6 +134,7 @@ diff --git a/maxon-bin/Compiler/IR/Target/TargetDialect.maxon b/maxon-bin/Compil
  // A dense per-value column of scales — what `ScaledIndexFolds` records against each address it matched.
  export typealias MemoryIndexScaleArray = Array with MemoryIndexScale
 diff --git a/maxon-bin/Compiler/Mcp/McpTools.maxon b/maxon-bin/Compiler/Mcp/McpTools.maxon
+index d3015df..0d240bc 100644
 --- a/maxon-bin/Compiler/Mcp/McpTools.maxon
 +++ b/maxon-bin/Compiler/Mcp/McpTools.maxon
 @@ -25,7 +25,7 @@ var snippetsStaged = 0 as SnippetSerial
@@ -171,19 +155,8 @@ diff --git a/maxon-bin/Compiler/Mcp/McpTools.maxon b/maxon-bin/Compiler/Mcp/McpT
  	usable(ctx ToolContext)
  	answered(reply String)
  end 'TreeContext'
-diff --git a/maxon-bin/Compiler/PhaseProbe.maxon b/maxon-bin/Compiler/PhaseProbe.maxon
---- a/maxon-bin/Compiler/PhaseProbe.maxon
-+++ b/maxon-bin/Compiler/PhaseProbe.maxon
-@@ -421,7 +421,7 @@ end 'foldPoolPhaseDelta'
- 
- // A position in a `PoolPhaseCosts` — an ordinal of whichever phase enum, or a step of whichever schedule,
- // the holder was sized for.
--export typealias PoolPhaseIndex = int(0 to u64.max)
-+typealias PoolPhaseIndex = int(0 to u64.max)
- 
- // ⭐⭐ **ONE UNIT OF POOL WORK'S PER-PHASE COSTS, MEASURED WITHOUT A `Project`.**
- //
 diff --git a/maxon-bin/Compiler/Project.maxon b/maxon-bin/Compiler/Project.maxon
+index eb99fa3..d9bda7e 100644
 --- a/maxon-bin/Compiler/Project.maxon
 +++ b/maxon-bin/Compiler/Project.maxon
 @@ -395,7 +395,7 @@ export function tierOrdinal(visibility Visibility) returns VisibilityTier
@@ -196,9 +169,10 @@ diff --git a/maxon-bin/Compiler/Project.maxon b/maxon-bin/Compiler/Project.maxon
  // ⚠ **THE ONE READER THAT RANKS `public` ABOVE `global`** — E3167 asks a CLAIM question, not a REACH one,
  // so the equivalence `isProgramWideTier` states does not hold here: a `public` signature naming an
 diff --git a/maxon-bin/Compiler/RawIntrinsics.maxon b/maxon-bin/Compiler/RawIntrinsics.maxon
+index 5b81e64..3448fee 100644
 --- a/maxon-bin/Compiler/RawIntrinsics.maxon
 +++ b/maxon-bin/Compiler/RawIntrinsics.maxon
-@@ -247,7 +247,7 @@ end 'RawIntrinsic'
+@@ -233,7 +233,7 @@ end 'RawIntrinsic'
  // position is a compile-time integer the emitted instruction CARRIES in place of an operand: a scratch
  // record's size fixes a frame slot, a field offset is encoded in the addressing mode, and a fill byte is
  // broadcast into an immediate, so none of the three can be a value computed at run time.
@@ -208,9 +182,10 @@ diff --git a/maxon-bin/Compiler/RawIntrinsics.maxon b/maxon-bin/Compiler/RawIntr
  	oneWord
  	twoWords
 diff --git a/maxon-bin/Compiler/Runtime/ManagedSocketRuntime.maxon b/maxon-bin/Compiler/Runtime/ManagedSocketRuntime.maxon
+index bb4141e..6c625d8 100644
 --- a/maxon-bin/Compiler/Runtime/ManagedSocketRuntime.maxon
 +++ b/maxon-bin/Compiler/Runtime/ManagedSocketRuntime.maxon
-@@ -598,7 +598,7 @@ end 'emitSocketPollerRelease'
+@@ -600,7 +600,7 @@ end 'emitSocketPollerRelease'
  // be that written TWICE, once per Linux arch, with two chances to get a label-length check wrong. Written
  // here it is one body compiled by the isel that already lowers every op it uses, which is the same
  // arrangement that lets `mrt_host_proc_reap` serve both POSIX lanes from one place.
@@ -220,6 +195,7 @@ diff --git a/maxon-bin/Compiler/Runtime/ManagedSocketRuntime.maxon b/maxon-bin/C
  	// first entry's `ai_addr`. ⚠ **THE `ai_addr` OFFSET IS THE SAME 32 ON BOTH, AND THAT IS MEASURED RATHER
  	// THAN ASSUMED** — Darwin orders `ai_canonname` before `ai_addr` exactly as Win64 does (`offsetof` on
 diff --git a/maxon-bin/Compiler/Runtime/SlabClassTable.maxon b/maxon-bin/Compiler/Runtime/SlabClassTable.maxon
+index 6f4d636..0a52c7b 100644
 --- a/maxon-bin/Compiler/Runtime/SlabClassTable.maxon
 +++ b/maxon-bin/Compiler/Runtime/SlabClassTable.maxon
 @@ -154,7 +154,7 @@ end 'slabClassCount'
@@ -232,9 +208,10 @@ diff --git a/maxon-bin/Compiler/Runtime/SlabClassTable.maxon b/maxon-bin/Compile
  // --- The two reverse lookups ---
  //
 diff --git a/maxon-bin/Compiler/Runtime/SlabRuntime.maxon b/maxon-bin/Compiler/Runtime/SlabRuntime.maxon
+index 98864d4..a2b7240 100644
 --- a/maxon-bin/Compiler/Runtime/SlabRuntime.maxon
 +++ b/maxon-bin/Compiler/Runtime/SlabRuntime.maxon
-@@ -1090,7 +1090,7 @@ end 'slabShardProc'
+@@ -1091,7 +1091,7 @@ end 'slabShardProc'
  // into it carry `SlabRawShardRow` — that is what "serialised" means here, a thread serialising exactly when
  // the row it takes is the shared one — so both of that row's addresses are emitted inside the arm and no
  // edge carries either.
@@ -244,9 +221,10 @@ diff --git a/maxon-bin/Compiler/Runtime/SlabRuntime.maxon b/maxon-bin/Compiler/R
  	export let sole as SlabShardSite
  	export let serial as SlabShardSite
 diff --git a/maxon-bin/Compiler/SignatureIndex.maxon b/maxon-bin/Compiler/SignatureIndex.maxon
+index 94fb953..50909d1 100644
 --- a/maxon-bin/Compiler/SignatureIndex.maxon
 +++ b/maxon-bin/Compiler/SignatureIndex.maxon
-@@ -5585,7 +5585,7 @@ export union ManagedCascadeStrategy
+@@ -5568,7 +5568,7 @@ export union ManagedCascadeStrategy
  end 'ManagedCascadeStrategy'
  
  // What a graph handed to another green thread is, as far as walking it goes.
@@ -255,7 +233,7 @@ diff --git a/maxon-bin/Compiler/SignatureIndex.maxon b/maxon-bin/Compiler/Signat
  	// A String or a Character: its bytes can be viewed, and a view is an owner no compile-time fact sees.
  	byteRecord
  	instance(id GenericInstanceId)
-@@ -8371,7 +8371,7 @@ typealias CanonicalInstanceNameIndex = Map with (ByteArray, GenericInstanceId)
+@@ -8361,7 +8361,7 @@ typealias CanonicalInstanceNameIndex = Map with (ByteArray, GenericInstanceId)
  // no id: it IS its name (`ProgramSignatures.tupleCanonicalNames`).
  export typealias TupleCanonicalNameMap = Map with (ByteArray, ByteArray)
  
@@ -265,6 +243,7 @@ diff --git a/maxon-bin/Compiler/SignatureIndex.maxon b/maxon-bin/Compiler/Signat
  	undeclared
  end 'ScopedGenericAliasDecl'
 diff --git a/maxon-bin/Compiler/Targets/Arm64/Arm64Backend.maxon b/maxon-bin/Compiler/Targets/Arm64/Arm64Backend.maxon
+index 4306a8e..36d64e8 100644
 --- a/maxon-bin/Compiler/Targets/Arm64/Arm64Backend.maxon
 +++ b/maxon-bin/Compiler/Targets/Arm64/Arm64Backend.maxon
 @@ -1444,7 +1444,7 @@ end 'arm64NonNegDisp'
@@ -277,18 +256,10 @@ diff --git a/maxon-bin/Compiler/Targets/Arm64/Arm64Backend.maxon b/maxon-bin/Com
  	export var targetBlock as BlockId
  	export var wide as bool
 diff --git a/maxon-bin/Compiler/Targets/Shared/BackendPool.maxon b/maxon-bin/Compiler/Targets/Shared/BackendPool.maxon
+index 0342267..d54d232 100644
 --- a/maxon-bin/Compiler/Targets/Shared/BackendPool.maxon
 +++ b/maxon-bin/Compiler/Targets/Shared/BackendPool.maxon
-@@ -75,7 +75,7 @@ export typealias PoolJobSize = int(0 to u64.max)
- export typealias PoolJobSizeArray = Array with PoolJobSize
- 
- // A position in a pool's landing array — where one job's answer was pushed as it arrived.
--export typealias LandingSlot = int(0 to u64.max)
-+typealias LandingSlot = int(0 to u64.max)
- export typealias LandingSlotArray = Array with LandingSlot
- 
- // ⭐ **WHERE EACH JOB'S ANSWER LANDED — the column that turns arrival order back into job order.** A drain
-@@ -331,7 +331,7 @@ typealias LongestFirstKey = int(0 to u64.max)
+@@ -326,7 +326,7 @@ typealias LongestFirstKey = int(0 to u64.max)
  typealias LongestFirstKeyArray = Array with LongestFirstKey
  
  // The isel of one ISA, as a worker holds it for the whole compile.
@@ -298,21 +269,23 @@ diff --git a/maxon-bin/Compiler/Targets/Shared/BackendPool.maxon b/maxon-bin/Com
  	arm64(lowering StdToArm64Lowering)
  end 'UnitLowering'
 diff --git a/maxon-bin/Compiler/Targets/Shared/BacktraceFormat.maxon b/maxon-bin/Compiler/Targets/Shared/BacktraceFormat.maxon
+index 891e2f7..23a9411 100644
 --- a/maxon-bin/Compiler/Targets/Shared/BacktraceFormat.maxon
 +++ b/maxon-bin/Compiler/Targets/Shared/BacktraceFormat.maxon
 @@ -109,7 +109,7 @@ let SymtabNotScaffolding = 0
- // The widest unsafe prefix, in granules, the byte's seven safe-point bits can carry. A guard past
  // it is refused rather than truncated into a safe point that is not one.
  let SymtabMaxUnsafeGranules = SymtabSafeFromMask - SymtabSafeFromBias
+ 
 -export typealias SafePointGranule = int(1 to 4)
 +typealias SafePointGranule = int(1 to 4)
  
  let X64SafePointGranule = 1 as SafePointGranule
  
 diff --git a/maxon-bin/Compiler/Targets/Shared/CodeResult.maxon b/maxon-bin/Compiler/Targets/Shared/CodeResult.maxon
+index 9ed76d0..19835a7 100644
 --- a/maxon-bin/Compiler/Targets/Shared/CodeResult.maxon
 +++ b/maxon-bin/Compiler/Targets/Shared/CodeResult.maxon
-@@ -230,7 +230,7 @@ export let JumpTableSlotBytes = 4 as BytePos
+@@ -237,7 +237,7 @@ export let JumpTableSlotBytes = 4 as BytePos
  // is slot `i`'s target block's `.text` offset — CHUNK-LOCAL when the chunk emits it, rebased to a whole-`.text`
  // offset by the concat pass (`+ funcStart`, exactly as `Arm64FuncAdrpReloc.textOffset` is resolved). One
  // record per switch (not per slot), so the whole N-slot table is patched from a single walk.
@@ -322,30 +295,33 @@ diff --git a/maxon-bin/Compiler/Targets/Shared/CodeResult.maxon b/maxon-bin/Comp
  	export var targetTextOffsets as CodeOffsetArray
  
 diff --git a/maxon-bin/Compiler/Targets/Shared/RegBits.maxon b/maxon-bin/Compiler/Targets/Shared/RegBits.maxon
+index c64245c..9518419 100644
 --- a/maxon-bin/Compiler/Targets/Shared/RegBits.maxon
 +++ b/maxon-bin/Compiler/Targets/Shared/RegBits.maxon
-@@ -24,7 +24,7 @@ export typealias BitWordCount = int(0 to u64.max)
+@@ -19,7 +19,7 @@ export typealias BitIndex = int(0 to u64.max) implements ElementIndex
  
  // A bit's position within ONE 64-bit word. HARD BOUND: there are 64 of them, so a value outside
  // 0..63 is a bug in the word arithmetic, not a legal position.
--export typealias WordBitIndex = int(0 to 63)
-+typealias WordBitIndex = int(0 to 63)
+-export typealias WordBitIndex = int(0 to 63) implements ElementIndex
++typealias WordBitIndex = int(0 to 63) implements ElementIndex
  
  // How many bits are SET in one 64-bit word. HARD BOUND at 64 — a full word — which is one MORE
  // than `WordBitIndex` admits, so the two are not interchangeable.
 diff --git a/maxon-bin/Compiler/Targets/Shared/SsaDestruction.maxon b/maxon-bin/Compiler/Targets/Shared/SsaDestruction.maxon
+index 90c656e..e2021bb 100644
 --- a/maxon-bin/Compiler/Targets/Shared/SsaDestruction.maxon
 +++ b/maxon-bin/Compiler/Targets/Shared/SsaDestruction.maxon
-@@ -44,7 +44,7 @@ end 'EdgePlacement'
+@@ -37,7 +37,7 @@ end 'EdgePlacement'
  // encoder, from `regClassOf` of the register (`emitRegRegMove` / `emitRegRegSwap` in X64Backend).
  // That is why floats needed no case here: a `mov` becomes a `movsd`, and a `swap` — which x64
  // has no `xchg` form of for XMMs — becomes a triple-`xorpd`, without this file knowing either.
 -export type EdgeMovePlan
 +type EdgeMovePlan
- 	export var predLocal as CfgIndex
- 	export var succLocal as CfgIndex
+ 	export var predLocal as ElementIndex
+ 	export var succLocal as ElementIndex
  	export var predBlockId as BlockId
 diff --git a/maxon-bin/Compiler/Targets/X64/X64Runtime.maxon b/maxon-bin/Compiler/Targets/X64/X64Runtime.maxon
+index 8fe5f37..e06eb71 100644
 --- a/maxon-bin/Compiler/Targets/X64/X64Runtime.maxon
 +++ b/maxon-bin/Compiler/Targets/X64/X64Runtime.maxon
 @@ -80,7 +80,7 @@ let VehContinueSearch = 0
@@ -358,9 +334,10 @@ diff --git a/maxon-bin/Compiler/Targets/X64/X64Runtime.maxon b/maxon-bin/Compile
  // The two NTSTATUS codes Windows delivers for the `#DE` that `idiv` raises. `idiv` raises the SAME trap
  // for a zero divisor and for a quotient that does not fit (`i64.min / -1`), and the CPU distinguishes them
 diff --git a/maxon-bin/Debug/DebugCommand.maxon b/maxon-bin/Debug/DebugCommand.maxon
+index 04e58d7..ccb6716 100644
 --- a/maxon-bin/Debug/DebugCommand.maxon
 +++ b/maxon-bin/Debug/DebugCommand.maxon
-@@ -83,7 +83,7 @@ let MaxCodeOffset = u32.max as OffsetAccumulator
+@@ -85,7 +85,7 @@ let MaxCodeOffset = u32.max as OffsetAccumulator
  typealias DigitValue = int(0 to 15)
  
  // How many leading characters of a token are its base prefix rather than digits.
@@ -370,9 +347,10 @@ diff --git a/maxon-bin/Debug/DebugCommand.maxon b/maxon-bin/Debug/DebugCommand.m
  // Whether a command-line token named an offset at all. A union rather than a `-1`, because "not a
  // number" is a refusal the caller reports by name and 0 is a perfectly good offset.
 diff --git a/maxon-bin/Main.maxon b/maxon-bin/Main.maxon
+index 878529b..725fc91 100644
 --- a/maxon-bin/Main.maxon
 +++ b/maxon-bin/Main.maxon
-@@ -398,7 +398,7 @@ let ProductPathSeparator = "/"
+@@ -407,7 +407,7 @@ let ProductPathSeparator = "/"
  let DescribedBuildsOpen = "["
  let DescribedBuildsClose = "]"
  
@@ -381,16 +359,16 @@ diff --git a/maxon-bin/Main.maxon b/maxon-bin/Main.maxon
  
  module union ManifestBase
  	workingDirectory
-@@ -1383,7 +1383,7 @@ module function refusedPositionalBeyond(args MaxonArgs, allowed PositionalCount,
+@@ -1470,7 +1470,7 @@ module function refusedPositionalBeyond(args MaxonArgs, allowed PositionalCount,
  	return true
  end 'refusedPositionalBeyond'
  
--module typealias PositionalCount = int(0 to 1)
-+typealias PositionalCount = int(0 to 1)
+-module typealias PositionalCount = int(0 to 1) implements ElementIndex
++typealias PositionalCount = int(0 to 1) implements ElementIndex
  
  // A command's streams belong to its subject: at the default INFO level every compile announces the
  // bytes it wrote, which is noise on `test`'s fixture-compared stdout, on `run`'s program streams,
-@@ -2211,7 +2211,7 @@ export typealias SourcePathSpellingArray = Array with String
+@@ -2295,7 +2295,7 @@ export typealias SourcePathSpellingArray = Array with String
  export typealias FilterPatternArray = Array with String
  
  // `module` because `Testing/ScaleTestRunner` takes the parsed args.

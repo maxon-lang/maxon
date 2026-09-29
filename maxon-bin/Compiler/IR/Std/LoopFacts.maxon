@@ -40,7 +40,7 @@ module type LoopValueStamps
 	end 'insert'
 
 	module function contains(valueId ValueId) returns bool
-		if valueId >= self.stampOf.count() 'neverStamped'
+		if valueId >= self.stampOf.count() as ValueId 'neverStamped'
 			return false
 		end 'neverStamped'
 
@@ -98,7 +98,7 @@ end 'LoopValueMap'
 // halves, so there is nothing here to forget.
 module function collectLoopDefs(module StdModule, func IrFunction, members LoopMembership, definedInLoop LoopValueStamps, def StdDefinedValues)
 	for position in members.blocks 'eachBlock'
-		let block = module.blockAtPosition(func, position: position as BlockRefIndex)
+		let block = module.blockAtPosition(func, position: position)
 
 		for blockArg in block.blockArgs 'eachPhi'
 			definedInLoop.insert(blockArg.valueId)
@@ -114,7 +114,7 @@ module function collectLoopDefs(module StdModule, func IrFunction, members LoopM
 	end 'eachBlock'
 end 'collectLoopDefs'
 
-function recordDefsOf(module StdModule, opIdx OpIndex, definedInLoop LoopValueStamps, def StdDefinedValues)
+function recordDefsOf(module StdModule, opIdx ElementIndex, definedInLoop LoopValueStamps, def StdDefinedValues)
 	stdOpDefinedValue(module.getOp(opIdx), def: def)
 
 	if def.definesNothing() 'noDef'
@@ -146,7 +146,7 @@ end 'operandIsInvariant'
 // member hangs below a non-member. That is what makes the prune below sound and the walk O(the loop)
 // instead of O(the function). Children are pushed in the tree's order and popped last first — the
 // order both passes' outputs are laid out in.
-module function recordLoopPreorder(tree StdDominatorTree, members LoopMembership, header BlockRefIndex, into BlockPositionColumn)
+module function recordLoopPreorder(tree StdDominatorTree, members LoopMembership, header ElementIndex, into BlockPositionColumn)
 	var stack = BlockPositionColumn.create()
 	stack.push(header)
 

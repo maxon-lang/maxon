@@ -35,7 +35,7 @@ a wrong answer and not merely a slower one.
 <!-- test: aggregate-argument-is-shared-not-copied -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias Index = int(0 to u64.max)
+typealias Index = int(0 to u64.max) implements ElementIndex
 
 type Cell
 	export var n as Integer
@@ -91,7 +91,7 @@ end 'main'
 <!-- test: string-argument-outlives-its-source -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias Index = int(0 to u64.max)
+typealias Index = int(0 to u64.max) implements ElementIndex
 
 type Holder uses Element
 	typealias EArray = Array with Element
@@ -138,7 +138,7 @@ end 'main'
 <!-- test: trivial-argument-takes-no-reference -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias Index = int(0 to u64.max)
+typealias Index = int(0 to u64.max) implements ElementIndex
 typealias SmallInt = int(0 to 100)
 
 type Holder uses Element
@@ -614,7 +614,7 @@ which a single store could not tell from a rounding error and a hundred can.
 
 <!-- test: a-hundred-borrowed-stores-into-the-parameters-own-container-balance -->
 ```maxon
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 
 type Bag uses Element
 	typealias Items = Array with Element
@@ -932,7 +932,7 @@ afterwards. **MEASURED: exit 0.** A refusal that fired here would be refusing a 
 <!-- test: a-record-built-from-a-borrow-may-die-in-the-frame -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 
 type Box uses T
 	export let x as T
@@ -1704,7 +1704,7 @@ function main() returns ExitCode
 	var e = EnvMap.create()
 	try e.insert("k", value: "v") otherwise return 9
 	print("mapped {mapped.count()}\n")
-	return (mapped.count() + envSize(e)) as ExitCode
+	return ((mapped.count() as Cnt) + envSize(e)) as ExitCode
 end 'main'
 ```
 ```stdout

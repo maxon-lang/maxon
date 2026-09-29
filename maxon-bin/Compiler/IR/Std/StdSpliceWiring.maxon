@@ -65,15 +65,15 @@ module function attachBlockArgs(block IrBlock, valueIds ValueIdArray, argType St
 	target.blockArgs = blockArgs
 end 'attachBlockArgs'
 
-// ⭐ **THE `BlockRef` OF A BLOCK JUST REGISTERED — CHECKED BY IDENTITY, not assumed by position.**
-// `IrModule.addBlock` and `splitBlockInPlace` hand back the BLOCK, and a `BlockRef` is what may be held
+// ⭐ **THE REF OF A BLOCK JUST REGISTERED — CHECKED BY IDENTITY, not assumed by position.**
+// `IrModule.addBlock` and `splitBlockInPlace` hand back the BLOCK, and its ref is what may be held
 // across the blocks a splice goes on adding (an `IrBlock` alias answers a different question —
 // `getBlockByIdIn`'s header states the discipline, and a search for the ref later would be O(blocks) per
 // site, i.e. Θ(sites × blocks) over exactly the function these passes exist for). The ref is only
 // knowable in O(1) at the moment the block is the function's last, so this must be called IMMEDIATELY
 // after the append it is about — and it COMPARES rather than trusting, because a reordering that slipped
 // another `addBlock` in between would hand back a different block entirely, silently.
-module function registeredBlockRef(module StdModule, func IrFunction, block IrBlock) returns BlockRef
+module function registeredBlockRef(module StdModule, func IrFunction, block IrBlock) returns ElementIndex
 	let last = try func.blockRefs.get(func.blockRefs.count() - 1) otherwise panic("registeredBlockRef: '{String.from(func.name)}' has no blocks")
 	let lastId = try module.blocks.get(last) otherwise panic("registeredBlockRef: blockRef {last} of '{String.from(func.name)}' is not in module.blocks")
 

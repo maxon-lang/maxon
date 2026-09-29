@@ -76,7 +76,7 @@ end 'definitionTarget'
 // A `function` or `type` opener is not counted and does not need to be: any EARLIER function body is
 // enclosed by an `end` the walk has already stepped over, while a genuinely enclosing one (a closure's,
 // whose body does capture the outer locals) has none.
-function definitionLocalBinding(tokens TokenArray, before TokenIndex, name ByteArray) returns Token throws LspDeclarationLookupError
+function definitionLocalBinding(tokens TokenArray, before ElementIndex, name ByteArray) returns Token throws LspDeclarationLookupError
 	var closedLabels = TokenIndexArray.create()
 	var i = before
 
@@ -104,7 +104,7 @@ end 'definitionLocalBinding'
 // it — and matching the two BY NAME is precisely what Maxon's `end 'label'` rule is for. Walking
 // backward the closer is met first, so its label is pushed and its own opener pops it. Matching by
 // name is also what keeps an ordinary character literal (`let c = 'a'`) from being read as a block.
-function definitionTrackBlockNesting(closedLabels TokenIndexArray, tokens TokenArray, at TokenIndex)
+function definitionTrackBlockNesting(closedLabels TokenIndexArray, tokens TokenArray, at ElementIndex)
 	if definitionClosesABlock(tokens, at: at) 'aCloser'
 		closedLabels.push(at)
 		return
@@ -125,7 +125,7 @@ function definitionTrackBlockNesting(closedLabels TokenIndexArray, tokens TokenA
 	_ = try closedLabels.pop() otherwise panic("definitionTrackBlockNesting: the stack was tested non-empty above")
 end 'definitionTrackBlockNesting'
 
-function definitionClosesABlock(tokens TokenArray, at TokenIndex) returns bool
+function definitionClosesABlock(tokens TokenArray, at ElementIndex) returns bool
 	if at == 0 'nothingBefore'
 		return false
 	end 'nothingBefore'
@@ -141,7 +141,7 @@ end 'definitionClosesABlock'
 // `otherwise (e)`. Those are introduced by punctuation rather than by a keyword, and reading a `(` as a
 // declaration would be answering from shape. They resolve to nothing, which is a miss rather than a
 // confident wrong line.
-function definitionBoundName(tokens TokenArray, keyword Token, at TokenIndex, name ByteArray) returns Token throws LspDeclarationLookupError
+function definitionBoundName(tokens TokenArray, keyword Token, at ElementIndex, name ByteArray) returns Token throws LspDeclarationLookupError
 	if keyword.kind == TokenKind.let or keyword.kind == TokenKind.var 'oneBinding'
 		return try definitionIdentifierNamed(tokens, at: at + 1, name: name)
 	end 'oneBinding'
@@ -157,7 +157,7 @@ function definitionBoundName(tokens TokenArray, keyword Token, at TokenIndex, na
 	throw LspDeclarationLookupError.nothingThere
 end 'definitionBoundName'
 
-function definitionIdentifierNamed(tokens TokenArray, at TokenIndex, name ByteArray) returns Token throws LspDeclarationLookupError
+function definitionIdentifierNamed(tokens TokenArray, at ElementIndex, name ByteArray) returns Token throws LspDeclarationLookupError
 	let token = try tokens.get(at) otherwise throw LspDeclarationLookupError.nothingThere
 
 	if not tokenCanBeAName(token) or not token.value.equals(name) 'notThatName'
@@ -170,7 +170,7 @@ end 'definitionIdentifierNamed'
 // A loop's variables are every name between `for` and its `in` — one for `for item in items`, two for
 // `for (key, value) in map`. A line break ends the search as well: an `in` that never arrives means the
 // buffer is mid-edit, not that the rest of the file is the binding list.
-function definitionLoopVariableNamed(tokens TokenArray, from TokenIndex, name ByteArray) returns Token throws LspDeclarationLookupError
+function definitionLoopVariableNamed(tokens TokenArray, from ElementIndex, name ByteArray) returns Token throws LspDeclarationLookupError
 	var i = from
 
 	while i < tokens.count() 'scan'
@@ -191,7 +191,7 @@ end 'definitionLoopVariableNamed'
 
 // A parameter name is the first token inside the parentheses and the one after each top-level comma;
 // everything else between them is a type, a default value, or a nested list.
-function definitionParameterNamed(tokens TokenArray, from TokenIndex, name ByteArray) returns Token throws LspDeclarationLookupError
+function definitionParameterNamed(tokens TokenArray, from ElementIndex, name ByteArray) returns Token throws LspDeclarationLookupError
 	var i = from
 	var depth = 0
 	var sawTheList = false
@@ -246,14 +246,14 @@ end 'definitionParameterNamed'
 // Where the document declares `name`, in the order the file states it.
 function definitionDeclarationOf(tokens TokenArray, name ByteArray) returns Token throws LspDeclarationLookupError
 	for (iter, keyword) in tokens.withIterator() 'eachToken'
-		let declared = try definitionDeclaredName(tokens, keyword: keyword, at: iter.index() as TokenIndex, name: name) otherwise continue
+		let declared = try definitionDeclaredName(tokens, keyword: keyword, at: iter.index(), name: name) otherwise continue
 		return declared
 	end 'eachToken'
 
 	throw LspDeclarationLookupError.nothingThere
 end 'definitionDeclarationOf'
 
-function definitionDeclaredName(tokens TokenArray, keyword Token, at TokenIndex, name ByteArray) returns Token throws LspDeclarationLookupError
+function definitionDeclaredName(tokens TokenArray, keyword Token, at ElementIndex, name ByteArray) returns Token throws LspDeclarationLookupError
 	if definitionDeclaresAType(keyword.kind) 'aType'
 		return try definitionIdentifierNamed(tokens, at: at + 1, name: name)
 	end 'aType'
@@ -276,7 +276,7 @@ end 'definitionDeclaresAType'
 
 // `function Printable.print()` declares `print`; the name before the dot is the interface's, and it is
 // declared where the interface is.
-function definitionFunctionNameIndex(tokens TokenArray, at TokenIndex) returns TokenIndex throws LspDeclarationLookupError
+function definitionFunctionNameIndex(tokens TokenArray, at ElementIndex) returns ElementIndex throws LspDeclarationLookupError
 	let afterTheFirstName = try tokens.get(at + 2) otherwise throw LspDeclarationLookupError.nothingThere
 	return at + 3 if afterTheFirstName.kind == TokenKind.dot else at + 1
 end 'definitionFunctionNameIndex'
@@ -287,7 +287,7 @@ end 'definitionFunctionNameIndex'
 // a confident wrong line where nothing is the honest answer. A field carrying a declaration DEFAULT
 // (`var value = 0`) falls on the far side of it and resolves to nothing; the reference server draws the
 // same boundary, from indentation rather than from the annotation.
-function definitionFieldNamed(tokens TokenArray, at TokenIndex, name ByteArray) returns Token throws LspDeclarationLookupError
+function definitionFieldNamed(tokens TokenArray, at ElementIndex, name ByteArray) returns Token throws LspDeclarationLookupError
 	let named = try definitionIdentifierNamed(tokens, at: at, name: name)
 	let afterTheName = try tokens.get(at + 1) otherwise throw LspDeclarationLookupError.nothingThere
 
@@ -337,7 +337,7 @@ extension Project
 	// ⚠ And an index position is not in the unit an answer is spelled in. `lspSpanRangeNode` converts a
 	// byte span to LSP's UTF-16 coordinates, while the index holds 1-based compiler coordinates; a second
 	// converter here is the defect `tests/lsp/position-characters.maxtest` exists to catch.
-	module function definitionInTheCorpus(corpus LspCorpus, text String, tokens TokenArray, cursor TokenIndex) returns LspAnswer
+	module function definitionInTheCorpus(corpus LspCorpus, text String, tokens TokenArray, cursor ElementIndex) returns LspAnswer
 		let declFile = try lspDeclaringFileOfTheCursor(corpus, text: text, tokens: tokens, keywords: self.keywords, cursor: cursor) otherwise return LspAnswer.nothing()
 		return self.definitionInAnotherFile(declFile, name: lspTokenAt(tokens, index: cursor).value)
 	end 'definitionInTheCorpus'

@@ -10,16 +10,16 @@ test 'a fault stops the debugger first and, resumed, reaches the program with th
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let stops = eventsOfKind(events, kind: StopEventName)
 
-	Expect.equal(stops.count() as AssertedInt, expected: 1, message: "⭐ THE DEBUGGER SEES THE FAULT FIRST. A fault reaches the debugger before it reaches the program, so the `{RunCommand}` answers a stop the reader can look around from; a session that reported none passed the fault straight through and left nothing to inspect. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(stops.count(), expected: 1, message: "⭐ THE DEBUGGER SEES THE FAULT FIRST. A fault reaches the debugger before it reaches the program, so the `{RunCommand}` answers a stop the reader can look around from; a session that reported none passed the fault straight through and left nothing to inspect. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let stopped = eventAt(stops, index: 0)
 	Expect.equal(textOf(stopped, node: stopped.root, key: ReasonKey), expected: FaultStopReason, message: "a stop at a fault is reported `{FaultStopReason}`, never as a breakpoint or a step. {said}")
 
 	let crashes = eventsOfKind(events, kind: CrashEventName)
-	Expect.equal(crashes.count() as AssertedInt, expected: 1, message: "resumed, a fault is terminal: the program ends, and it ends as a crash rather than as an exit. It printed: {renderedRows(eventKinds(events))}. {said}")
-	Expect.equal(eventsOfKind(events, kind: ExitEventName).count() as AssertedInt, expected: 0, message: "a program that faulted was also reported as having exited, so a reader cannot tell a clean end from a fault. {said}")
+	Expect.equal(crashes.count(), expected: 1, message: "resumed, a fault is terminal: the program ends, and it ends as a crash rather than as an exit. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(eventsOfKind(events, kind: ExitEventName).count(), expected: 0, message: "a program that faulted was also reported as having exited, so a reader cannot tell a clean end from a fault. {said}")
 
 	let crashed = eventAt(crashes, index: 0)
-	Expect.equal(hexValue(textOf(crashed, node: crashed.root, key: StatusKey)) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "⭐⭐ THE SECOND HALF, AND THE ONE THAT SAYS THE FAULT WAS ONLY BORROWED. Once the debugger resumes, the fault must arrive at the program exactly as it would have with nothing attached — so the status reported here is the status the same image answers undebugged. A different status means the debugger swallowed the fault and reported an ending of its own devising, and the program's own handler never ran. {said}")
-	Expect.equal(session.exitCode() as AssertedInt, expected: FaultedSessionExitCode, message: "a debuggee crash is a failed session, so the driver must exit {FaultedSessionExitCode}. {said}")
+	Expect.equal(hexValue(textOf(crashed, node: crashed.root, key: StatusKey)), expected: undebugged.exitCode() as SidecarNumber, message: "⭐⭐ THE SECOND HALF, AND THE ONE THAT SAYS THE FAULT WAS ONLY BORROWED. Once the debugger resumes, the fault must arrive at the program exactly as it would have with nothing attached — so the status reported here is the status the same image answers undebugged. A different status means the debugger swallowed the fault and reported an ending of its own devising, and the program's own handler never ran. {said}")
+	Expect.equal(session.exitCode(), expected: FaultedSessionExitCode, message: "a debuggee crash is a failed session, so the driver must exit {FaultedSessionExitCode}. {said}")
 end 'a fault stops the debugger first and, resumed, reaches the program with the status the program answers undebugged'

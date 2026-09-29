@@ -874,7 +874,7 @@ function getTotal() returns Integer
 end 'getTotal'
 
 function setScore(index Integer, value Integer)
-	try scores.set(index, value: value) otherwise panic("test invariant: set OOB")
+	try scores.set(index as ElementIndex, value: value) otherwise panic("test invariant: set OOB")
 end 'setScore'
 
 function main() returns ExitCode
@@ -894,8 +894,8 @@ typealias Integer = int(i64.min to i64.max)
 var counters = [0, 0, 0]
 
 function increment(index Integer)
-	let current = try counters.get(index) otherwise 0
-	try counters.set(index, value: current + 1) otherwise panic("test invariant: set OOB")
+	let current = try counters.get(index as ElementIndex) otherwise 0
+	try counters.set(index as ElementIndex, value: current + 1) otherwise panic("test invariant: set OOB")
 end 'increment'
 
 function total() returns Integer
@@ -1729,7 +1729,7 @@ function main() returns ExitCode
 	b = expose()
 	let k = callThunk(function() gives size(b))
 	let n = grow(b)
-	return (A.count() + k + n) as ExitCode
+	return ((A.count() as Integer) + k + n) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -1805,7 +1805,7 @@ function main() returns ExitCode
 		b = expose()
 	end 'sometimes'
 	let n = grow(b)
-	return (A.count() + n) as ExitCode
+	return ((A.count() as Integer) + n) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -1842,7 +1842,7 @@ function main() returns ExitCode
 		b = expose()
 	end 'each'
 	let n = grow(b)
-	return (A.count() + n) as ExitCode
+	return ((A.count() as Integer) + n) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -3186,7 +3186,7 @@ let sharedEmptyBits = Bits.create()
 
 function withRootBits(base Bits, bits Integer) returns Bits
 	var out = Bits.create()
-	out.push(base.count() + bits)
+	out.push((base.count() as Integer) + bits)
 	return out
 end 'withRootBits'
 

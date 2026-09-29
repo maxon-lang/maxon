@@ -11,7 +11,7 @@ end 'MapError'
 // Occupied entries. An entry needs a slot, so this is bounded by the table's capacity and carries the
 // capacity's bound for the reason stated once on `TableCapacity`: 2^62 is the last capacity a doubling
 // from 16 can mint.
-public typealias EntryCount = int(0 to 4611686018427387904)
+public typealias EntryCount = int(0 to 4611686018427387904) implements ElementIndex
 
 // The slot vocabulary is `helpers/hashtable/slotScan.maxon`'s, shared with `Set`: `SlotState`,
 // `TableSlotIndex`, `TableCapacity` and the `findNextOccupied` scan both iterators advance through.
@@ -133,10 +133,10 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 			tombstones = tombstones - 1
 		end 'one_tombstone_fewer'
 
-		try keys.set(slotIndex, value: key) otherwise panic("Map.insertAtSlot: keys.set OOB — slot from the probe is always in-bounds")
-		try values.set(slotIndex, value: value) otherwise panic("Map.insertAtSlot: values.set OOB — slot from the probe is always in-bounds")
-		try states.set(slotIndex, value: SlotState.Occupied) otherwise panic("Map.insertAtSlot: states.set OOB — slot from the probe is always in-bounds")
-		try hashes.set(slotIndex, value: hash) otherwise panic("Map.insertAtSlot: hashes.set OOB — slot from the probe is always in-bounds")
+		try keys.set(slotIndex as ElementIndex, value: key) otherwise panic("Map.insertAtSlot: keys.set OOB — slot from the probe is always in-bounds")
+		try values.set(slotIndex as ElementIndex, value: value) otherwise panic("Map.insertAtSlot: values.set OOB — slot from the probe is always in-bounds")
+		try states.set(slotIndex as ElementIndex, value: SlotState.Occupied) otherwise panic("Map.insertAtSlot: states.set OOB — slot from the probe is always in-bounds")
+		try hashes.set(slotIndex as ElementIndex, value: hash) otherwise panic("Map.insertAtSlot: hashes.set OOB — slot from the probe is always in-bounds")
 		count = count + 1
 	end 'insertAtSlot'
 
@@ -151,7 +151,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 
 		// ONE read of the slot answers both questions the write needs — is the key already here, and is
 		// the vacancy a tombstone this insert takes back (see `tombstones`).
-		let state = try states.get(slotIndex) otherwise panic("Map.insert: states.get OOB — slot from findSlot is always in-bounds")
+		let state = try states.get(slotIndex as ElementIndex) otherwise panic("Map.insert: states.get OOB — slot from findSlot is always in-bounds")
 
 		if stateIsOccupied(state) 'found'
 			throw MapError.keyAlreadyExists
@@ -168,10 +168,10 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 
 		let hash = key.hash()
 		let slotIndex = try findSlot(key, hash: hash) otherwise panic("Map.upsert: findSlot named no slot — ensureCapacity established capacity > 0, which is the only condition findSlot throws on")
-		let state = try states.get(slotIndex) otherwise panic("Map.upsert: states.get OOB — slot from findSlot is always in-bounds")
+		let state = try states.get(slotIndex as ElementIndex) otherwise panic("Map.upsert: states.get OOB — slot from findSlot is always in-bounds")
 
 		if stateIsOccupied(state) 'found'
-			try values.set(slotIndex, value: value) otherwise panic("Map.upsert: values.set OOB — slot from findSlot is always in-bounds")
+			try values.set(slotIndex as ElementIndex, value: value) otherwise panic("Map.upsert: values.set OOB — slot from findSlot is always in-bounds")
 			return
 		end 'found'
 
@@ -185,7 +185,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 		let slotIndex = try findSlot(key, hash: key.hash())
 
 		if slotHoldsKey(slotIndex) 'found'
-			return try values.get(slotIndex) otherwise panic("Map.get: values.get OOB — slot from findSlot is always in-bounds")
+			return try values.get(slotIndex as ElementIndex) otherwise panic("Map.get: values.get OOB — slot from findSlot is always in-bounds")
 		end 'found'
 
 		throw MapError.keyNotFound
@@ -208,7 +208,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 			// hash-guard only runs inside findSlot's Occupied branch.
 			try keys.clearSlot(slotIndex as ElementIndex) otherwise panic("Map.remove: keys.clearSlot OOB — slot from findSlot is always in-bounds")
 			try values.clearSlot(slotIndex as ElementIndex) otherwise panic("Map.remove: values.clearSlot OOB — slot from findSlot is always in-bounds")
-			try states.set(slotIndex, value: SlotState.Deleted) otherwise panic("Map.remove: states.set OOB — slot from findSlot is always in-bounds")
+			try states.set(slotIndex as ElementIndex, value: SlotState.Deleted) otherwise panic("Map.remove: states.set OOB — slot from findSlot is always in-bounds")
 			count = count - 1
 			tombstones = tombstones + 1
 			return true
@@ -267,7 +267,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 		var probes = 0
 
 		while probes < capacity 'probe'
-			let state = try states.get(index) otherwise SlotState.Empty
+			let state = try states.get(index as ElementIndex) otherwise SlotState.Empty
 
 			let isEmpty = match state 'se1'
 				Empty gives true
@@ -306,10 +306,10 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 			if isOccupied 'check_key'
 				// Skip the full key.equals() unless the cached hash matches — this
 				// is the hot-path win for string-keyed maps.
-				let slotHash = try hashes.get(index) otherwise hash
+				let slotHash = try hashes.get(index as ElementIndex) otherwise hash
 
 				if slotHash == hash 'hash_match'
-					if let existing = try keys.get(index) 'get_existing'
+					if let existing = try keys.get(index as ElementIndex) 'get_existing'
 						if existing == key 'found'
 							return index
 						end 'found'
@@ -338,7 +338,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	// a miss, and it is exact because the vacancy findSlot hands back is always Empty or a
 	// tombstone. It reads the same `states` cache line the probe just touched.
 	function slotHoldsKey(slotIndex TableSlotIndex) returns bool
-		return stateIsOccupied(try states.get(slotIndex) otherwise panic("Map.slotHoldsKey: states.get OOB — slot from findSlot is always in-bounds"))
+		return stateIsOccupied(try states.get(slotIndex as ElementIndex) otherwise panic("Map.slotHoldsKey: states.get OOB — slot from findSlot is always in-bounds"))
 	end 'slotHoldsKey'
 
 	function stateIsOccupied(state SlotState) returns bool
@@ -422,7 +422,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 				end 'skip_hash'
 
 				var index = (spreadHash(hash) and mask) as TableSlotIndex
-				var currentState = try states.get(index) otherwise SlotState.Empty
+				var currentState = try states.get(index as ElementIndex) otherwise SlotState.Empty
 				var isNotEmpty = match currentState 'ns1'
 					Empty gives false
 					Occupied gives true
@@ -431,7 +431,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 
 				while isNotEmpty 'find_slot'
 					index = (index + 1) and mask
-					currentState = try states.get(index) otherwise SlotState.Empty
+					currentState = try states.get(index as ElementIndex) otherwise SlotState.Empty
 					isNotEmpty = match currentState 'ns2'
 						Empty gives false
 						Occupied gives true
@@ -467,8 +467,8 @@ public type MapIterator uses Key, Value implements Iterator with Entry where Key
 	end 'create'
 
 	public function current() returns Entry
-		let k = try keys.get(iterIndex) otherwise panic("MapIterator.current: invariant violated — slot not populated")
-		let v = try values.get(iterIndex) otherwise panic("MapIterator.current: invariant violated — slot not populated")
+		let k = try keys.get(iterIndex as ElementIndex) otherwise panic("MapIterator.current: invariant violated — slot not populated")
+		let v = try values.get(iterIndex as ElementIndex) otherwise panic("MapIterator.current: invariant violated — slot not populated")
 		return (k, v)
 	end 'current'
 

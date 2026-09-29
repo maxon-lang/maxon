@@ -12,7 +12,8 @@ cluster**, a user-perceived character: `"é👍🏽".count()` is 2, although it 
 Positions are `StringIndex` values, which carry both a grapheme index and a byte position so stepping
 never rescans the string.
 
-`String` implements `Hashable`, `Equatable`, `Iterable` (over `Character`) and `Cloneable`.
+`String` implements `Hashable`, `Equatable`, `Comparable` (byte order, a shorter prefix first), `Iterable`
+(over `Character`) and `Cloneable`.
 
 ```maxon
 function main() returns ExitCode

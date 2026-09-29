@@ -82,14 +82,14 @@
 
 // name -> position in the function array. Unique by construction: `FunctionNameIndex.create` refuses a
 // duplicate rather than resolving one.
-export typealias FuncIndexByName = Map with (ByteArray, FuncIndex)
+export typealias FuncIndexByName = Map with (ByteArray, ElementIndex)
 
 // The index, or the position of the function whose name collided with an earlier one. A union rather than
 // a throw, so `build`'s caller decides whether a duplicate is ITS refusal to raise — see `build`.
 // ⚠ `module`, not `export`: nothing outside `Compiler/IR/` reaches this result, and `checkUnusedExports`
 // (E3093) refuses an export nothing reads.
 module union FunctionNameIndexBuild
-	duplicateAt(laterIndex FuncIndex)
+	duplicateAt(laterIndex ElementIndex)
 	built(index FunctionNameIndex)
 end 'FunctionNameIndexBuild'
 
@@ -124,7 +124,7 @@ export type FunctionNameIndex
 	//
 	// ⚠ **THIS IS NOT A SECOND TIE-BREAK POLICY, WHICH IS THE WHOLE POINT OF THE HEADER'S FIRST PARAGRAPH.**
 	// There is still exactly one walk, one collision test and NO resolution of a tie — the two constructors
-	// differ only in who is told. A caller that hand-rolled its own `Map with (ByteArray, FuncIndex)` to get
+	// differ only in who is told. A caller that hand-rolled its own `Map with (ByteArray, ElementIndex)` to get
 	// a non-throwing build would have been the eleventh such map and the third tie-break, which is what this
 	// exists to prevent.
 	module static function build(functions IrFunctionArray) returns FunctionNameIndexBuild
@@ -185,7 +185,7 @@ end 'FunctionNameIndex'
 // definition trades this refusal for a silent miscompile — `print("x")` would bind to the author's
 // declaration instead of the runtime's `__print_string`, which knows the String record's layout. So the
 // compile is refused at the duplicate and no binary is produced.
-function refuseDuplicateFunctionName(functions IrFunctionArray, project Project, laterIndex FuncIndex) throws CompileError
+function refuseDuplicateFunctionName(functions IrFunctionArray, project Project, laterIndex ElementIndex) throws CompileError
 	let later = try functions.get(laterIndex) otherwise panic("refuseDuplicateFunctionName: functions.get OOB at the index the caller's own loop just read")
 	let earlier = earlierFunctionNamed(functions, name: later.name, before: laterIndex)
 	let name = String.from(later.name)
@@ -226,7 +226,7 @@ end 'refuseDuplicateFunctionName'
 //
 // Linear, and that costs nothing: it runs at most once per compile, on a path whose next act is to refuse
 // the compile or panic.
-function earlierFunctionNamed(functions IrFunctionArray, name ByteArray, before FuncIndex) returns IrFunction
+function earlierFunctionNamed(functions IrFunctionArray, name ByteArray, before ElementIndex) returns IrFunction
 	for i in 0 upto before 'eachEarlier'
 		let candidate = try functions.get(i) otherwise panic("earlierFunctionNamed: functions.get OOB at {i}, below an index the caller already read")
 

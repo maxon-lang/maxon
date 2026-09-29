@@ -140,7 +140,7 @@ export type TypeNameInterner
 	// returning the renumbering from each source id to the id it was assigned in `self`.
 	export function foldInto(source TypeNameInterner) returns TypeIdRemap
 		var mapping = TypeNameIdArray.create()
-		mapping.reserve(source.table.count() as ElementIndex)
+		mapping.reserve(source.table.count())
 
 		for srcId in 0 upto source.table.count() 'each'
 			mapping.push(self.table.internFrom(source.table, id: srcId))
@@ -199,7 +199,7 @@ export type TypeIdRemap
 			return id
 		end 'belowTheRenumbering'
 
-		return try self.names.get(id - self.namesBase) otherwise panic("TypeIdRemap.applyName: id {id} is past the {self.names.count()} names this remap renumbers from {self.namesBase}")
+		return try self.names.get((id - self.namesBase) as ElementIndex) otherwise panic("TypeIdRemap.applyName: id {id} is past the {self.names.count()} names this remap renumbers from {self.namesBase}")
 	end 'applyName'
 
 	export function applyInstance(id GenericInstanceId) returns GenericInstanceId

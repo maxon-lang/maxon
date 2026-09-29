@@ -47,15 +47,13 @@ typealias LengthFloors = Array with LengthFloor
 
 let NoLengthFloor = -1 as LengthFloor
 
-typealias RecordSlot = int(0 to u64.max)
+typealias RecordSlot = int(0 to u64.max) implements ElementIndex
 typealias RecordSlotColumn = Array with RecordSlot
 
-// A position in the fact arena `EstablishedState` keeps every block's run in.
-typealias FactIndex = int(0 to u64.max)
-typealias FactIndexColumn = Array with FactIndex
+typealias FactIndexColumn = Array with ElementIndex
 
 // One past the ordinal of a variable-index bound guard, so a column's own zero is `NoBound`.
-typealias BoundLink = int(0 to u64.max)
+typealias BoundLink = int(0 to u64.max) implements ElementIndex
 typealias BoundLinkColumn = Array with BoundLink
 
 let NoBound = 0 as BoundLink
@@ -183,7 +181,7 @@ type EstablishedFunction
 		end 'eachBlock'
 	end 'gather'
 
-	function recordBound(record ValueId, index ValueId, elsePosition BlockRefIndex)
+	function recordBound(record ValueId, index ValueId, elsePosition ElementIndex)
 		self.boundRecord.push(record)
 		self.boundElsePosition.push(elsePosition)
 		self.boundNext.push(self.firstBoundOn(index))
@@ -194,14 +192,14 @@ type EstablishedFunction
 		return try self.boundHead.get(index) otherwise panic("foldEstablishedGuards: index {index} is outside the column sized by valueBound")
 	end 'firstBoundOn'
 
-	function positionOf(blockId BlockId) returns BlockRefIndex
+	function positionOf(blockId BlockId) returns ElementIndex
 		return try self.byId.get(blockId) otherwise panic("foldEstablishedGuards: block {blockId} is a branch target of this function but is not in its blockRefs")
 	end 'positionOf'
 
 	// Whether the element store at `position` on `record` at the variable `index` lies on the proceed arm
 	// of a bound guard on that record and index: an arm that dominates the store and is entered from
 	// nowhere else, so every path to the store passes the test.
-	function storeIsBounded(position BlockRefIndex, record ValueId, index ValueId) returns bool
+	function storeIsBounded(position ElementIndex, record ValueId, index ValueId) returns bool
 		var link = self.firstBoundOn(index)
 
 		while link != NoBound 'eachBoundOnTheIndex'
@@ -211,13 +209,13 @@ type EstablishedFunction
 				return true
 			end 'found'
 
-			link = try self.boundNext.get(ordinal) otherwise panic("foldEstablishedGuards: boundNext.get OOB at {ordinal}")
+			link = try self.boundNext.get(ordinal as ElementIndex) otherwise panic("foldEstablishedGuards: boundNext.get OOB at {ordinal}")
 		end 'eachBoundOnTheIndex'
 
 		return false
 	end 'storeIsBounded'
 
-	function boundProceedArmAdmits(ordinal BoundLink, record ValueId, position BlockRefIndex) returns bool
+	function boundProceedArmAdmits(ordinal BoundLink, record ValueId, position ElementIndex) returns bool
 		if (try self.boundRecord.get(ordinal) otherwise panic("foldEstablishedGuards: boundRecord.get OOB at {ordinal}")) != record 'anotherRecord'
 			return false
 		end 'anotherRecord'
@@ -269,7 +267,7 @@ end 'RecordIndex'
 // ══════════════════════════════════════════════════════════════════════════
 
 // Push the facts at `position`'s exit to its successors. Answers whether a successor's in-state moved.
-function transferBlock(module StdModule, func IrFunction, analysis EstablishedFunction, position BlockRefIndex, scratch EstablishedScratch) returns bool
+function transferBlock(module StdModule, func IrFunction, analysis EstablishedFunction, position ElementIndex, scratch EstablishedScratch) returns bool
 	let block = module.blockAtPosition(func, position: position)
 	runBlockOps(module, block: block, position: position, analysis: analysis, scratch: scratch)
 
@@ -277,7 +275,7 @@ function transferBlock(module StdModule, func IrFunction, analysis EstablishedFu
 		var moved = false
 
 		for k in 0 upto analysis.tree.succ.degree(position as CsrIndex) 'eachSuccessor'
-			if scratch.state.meet(analysis.tree.succ.neighbour(position as CsrIndex, k: k) as BlockRefIndex, edge: scratch.plainEdge) 'changed'
+			if scratch.state.meet(analysis.tree.succ.neighbour(position as CsrIndex, k: k), edge: scratch.plainEdge) 'changed'
 				moved = true
 			end 'changed'
 		end 'eachSuccessor'
@@ -299,7 +297,7 @@ end 'transferBlock'
 
 // Load the block's in-state into the row and run its ops over it, leaving the row at the terminator and
 // `scratch.success` naming the bounded accessor whose flag the terminator may test.
-function runBlockOps(module StdModule, block IrBlock, position BlockRefIndex, analysis EstablishedFunction, scratch EstablishedScratch)
+function runBlockOps(module StdModule, block IrBlock, position ElementIndex, analysis EstablishedFunction, scratch EstablishedScratch)
 	scratch.state.loadRow(position)
 	scratch.success.forget()
 
@@ -351,7 +349,7 @@ end 'constantIndexFloor'
 
 // Whether a storing op is a plain element store that lands inside a buffer: a constant slot, or a
 // variable one whose index a dominating bound guard admitted. Every other storing op may reach a header.
-function storeKeepsEveryFact(op StdOp, position BlockRefIndex, analysis EstablishedFunction, scratch EstablishedScratch) returns bool
+function storeKeepsEveryFact(op StdOp, position ElementIndex, analysis EstablishedFunction, scratch EstablishedScratch) returns bool
 	classifyStoreOperands(op, store: scratch.store)
 
 	if not scratch.store.isStore() or not elementStoreCannotAliasARecordField(analysis.reader, addrId: scratch.store.addrId, out: scratch.slot) 'notAnElementSlot'
@@ -429,7 +427,7 @@ end 'shapeFactOf'
 // ══════════════════════════════════════════════════════════════════════════
 
 // Decide the guard closing `position` against the facts at its terminator.
-function decideAtBlock(module StdModule, func IrFunction, analysis EstablishedFunction, position BlockRefIndex, scratch EstablishedScratch)
+function decideAtBlock(module StdModule, func IrFunction, analysis EstablishedFunction, position ElementIndex, scratch EstablishedScratch)
 	let block = module.blockAtPosition(func, position: position)
 	runBlockOps(module, block: block, position: position, analysis: analysis, scratch: scratch)
 
@@ -596,46 +594,46 @@ type EstablishedState
 		return Self{reached: BoolArray.create(), runStart: FactIndexColumn.create(), runCount: FactIndexColumn.create(), factSlot: RecordSlotColumn.create(), factBits: ShapeFacts.create(), factFloor: LengthFloors.create(), rowShape: ShapeFacts.create(), rowFloor: LengthFloors.create(), rowLive: RecordSlotColumn.create()}
 	end 'create'
 
-	function begin(blockCount BlockRefIndex, recordCount RecordSlot)
-		self.reached.refill(blockCount as ElementIndex, value: false)
-		self.runStart.refill(blockCount as ElementIndex, value: 0)
-		self.runCount.refill(blockCount as ElementIndex, value: 0)
+	function begin(blockCount ElementIndex, recordCount RecordSlot)
+		self.reached.refill(blockCount, value: false)
+		self.runStart.refill(blockCount, value: 0)
+		self.runCount.refill(blockCount, value: 0)
 		self.factSlot.clear()
 		self.factBits.clear()
 		self.factFloor.clear()
-		self.rowShape.refill(recordCount as ElementIndex, value: NoShapeFact)
-		self.rowFloor.refill(recordCount as ElementIndex, value: NoLengthFloor)
+		self.rowShape.refill(recordCount, value: NoShapeFact)
+		self.rowFloor.refill(recordCount, value: NoLengthFloor)
 		self.rowLive.clear()
 
 		// The entry is reached with no facts.
 		try self.reached.set(StdEntryBlockPosition, value: true) otherwise panic("foldEstablishedGuards: reached.set OOB at the entry block")
 	end 'begin'
 
-	function isReached(position BlockRefIndex) returns bool
+	function isReached(position ElementIndex) returns bool
 		return try self.reached.get(position) otherwise panic("foldEstablishedGuards: reached.get OOB at {position}")
 	end 'isReached'
 
-	function runStartOf(position BlockRefIndex) returns FactIndex
+	function runStartOf(position ElementIndex) returns ElementIndex
 		return try self.runStart.get(position) otherwise panic("foldEstablishedGuards: runStart.get OOB at {position}")
 	end 'runStartOf'
 
-	function runEndOf(position BlockRefIndex) returns FactIndex
+	function runEndOf(position ElementIndex) returns ElementIndex
 		return self.runStartOf(position) + (try self.runCount.get(position) otherwise panic("foldEstablishedGuards: runCount.get OOB at {position}"))
 	end 'runEndOf'
 
-	function factSlotAt(at FactIndex) returns RecordSlot
+	function factSlotAt(at ElementIndex) returns RecordSlot
 		return try self.factSlot.get(at) otherwise panic("foldEstablishedGuards: factSlot.get OOB at {at}")
 	end 'factSlotAt'
 
-	function factBitsAt(at FactIndex) returns ShapeFactBits
+	function factBitsAt(at ElementIndex) returns ShapeFactBits
 		return try self.factBits.get(at) otherwise panic("foldEstablishedGuards: factBits.get OOB at {at}")
 	end 'factBitsAt'
 
-	function factFloorAt(at FactIndex) returns LengthFloor
+	function factFloorAt(at ElementIndex) returns LengthFloor
 		return try self.factFloor.get(at) otherwise panic("foldEstablishedGuards: factFloor.get OOB at {at}")
 	end 'factFloorAt'
 
-	function writeFact(at FactIndex, slot RecordSlot, bits ShapeFactBits, floor LengthFloor)
+	function writeFact(at ElementIndex, slot RecordSlot, bits ShapeFactBits, floor LengthFloor)
 		try self.factSlot.set(at, value: slot) otherwise panic("foldEstablishedGuards: factSlot.set OOB at {at}")
 		try self.factBits.set(at, value: bits) otherwise panic("foldEstablishedGuards: factBits.set OOB at {at}")
 		try self.factFloor.set(at, value: floor) otherwise panic("foldEstablishedGuards: factFloor.set OOB at {at}")
@@ -649,7 +647,7 @@ type EstablishedState
 
 	// A block is loaded only after an edge reached it: a reverse-postorder walk transfers a
 	// predecessor of every block but the entry before the block itself.
-	function loadRow(position BlockRefIndex)
+	function loadRow(position ElementIndex)
 		self.clearRow()
 
 		if not self.isReached(position) 'unreached'
@@ -704,7 +702,7 @@ type EstablishedState
 	end 'rowFloorUnder'
 
 	// Meet the row, plus what `edge` establishes, into `into`'s in-state. Answers whether it moved.
-	function meet(into BlockRefIndex, edge EdgeFacts) returns bool
+	function meet(into ElementIndex, edge EdgeFacts) returns bool
 		if not self.isReached(into) 'firstEdgeIn'
 			self.arrive(into, edge: edge)
 			return true
@@ -740,8 +738,8 @@ type EstablishedState
 
 	// The first edge into `into` writes its run: the row's facts, each with what `edge` establishes for
 	// its slot on top, and the edge's fact alone where the row holds none for that slot.
-	function arrive(into BlockRefIndex, edge EdgeFacts)
-		let start = self.factSlot.count() as FactIndex
+	function arrive(into ElementIndex, edge EdgeFacts)
+		let start = self.factSlot.count()
 		var edgeSlotIsLive = false
 
 		for i in 0 upto self.rowLive.count() 'eachLive'
@@ -756,7 +754,7 @@ type EstablishedState
 
 		try self.reached.set(into, value: true) otherwise panic("foldEstablishedGuards: reached.set OOB at {into}")
 		try self.runStart.set(into, value: start) otherwise panic("foldEstablishedGuards: runStart.set OOB at {into}")
-		try self.runCount.set(into, value: (self.factSlot.count() as FactIndex) - start) otherwise panic("foldEstablishedGuards: runCount.set OOB at {into}")
+		try self.runCount.set(into, value: (self.factSlot.count()) - start) otherwise panic("foldEstablishedGuards: runCount.set OOB at {into}")
 	end 'arrive'
 end 'EstablishedState'
 

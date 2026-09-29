@@ -49,9 +49,9 @@ test 'a client that counts lines and columns from zero is answered in its own co
 	try dapRunSession(session, completing: "complete")
 
 	try Expect.isTrue(dapBreakpointVerified(session.placed, index: 0), message: "a breakpoint on zero-based line {printedAt} names the fixture's `{ZeroBasedPrintAnchor}` line and must verify; it answered {dapDescribed(session.placed)}")
-	try Expect.equal(dapBreakpointLine(session.placed, index: 0) as AssertedInt, expected: printedAt as AssertedInt, message: "the verified breakpoint is reported on the line the client asked for, counted the client's way")
+	try Expect.equal(dapBreakpointLine(session.placed, index: 0), expected: printedAt as DapNumber, message: "the verified breakpoint is reported on the line the client asked for, counted the client's way")
 	try Expect.equal(session.stopReason, expected: BreakpointReason, message: "the breakpoint on zero-based line {printedAt} must stop the program")
-	try Expect.equal(dapFrameNumberAt(session.frameLines, frame: 0) as AssertedInt, expected: printedAt as AssertedInt, message: "a client that said `linesStartAt1: false` reads every line it is sent as counted from zero")
-	try Expect.equal(dapFrameNumberAt(session.frameLines, frame: ZeroBasedCallerFrame) as AssertedInt, expected: (calledAt - OneBasedOffset) as AssertedInt, message: "the caller frame's line is its call's, counted from zero")
-	try Expect.equal(dapFrameNumberAt(session.frameColumns, frame: ZeroBasedCallerFrame) as AssertedInt, expected: callColumn as AssertedInt, message: "a client that said `columnsStartAt1: false` reads every column it is sent as counted from zero")
+	try Expect.equal(dapFrameNumberAt(session.frameLines, frame: 0), expected: printedAt as DapNumber, message: "a client that said `linesStartAt1: false` reads every line it is sent as counted from zero")
+	try Expect.equal(dapFrameNumberAt(session.frameLines, frame: ZeroBasedCallerFrame), expected: (calledAt - OneBasedOffset) as DapNumber, message: "the caller frame's line is its call's, counted from zero")
+	try Expect.equal(dapFrameNumberAt(session.frameColumns, frame: ZeroBasedCallerFrame), expected: callColumn, message: "a client that said `columnsStartAt1: false` reads every column it is sent as counted from zero")
 end 'a client that counts lines and columns from zero is answered in its own count'

@@ -275,15 +275,19 @@ export type LibraryFacts
 		return Self.create(self.libraryFunctions, unreachable: self.unreachable, substrateEntries: self.substrateEntries, runtimeTier: self.runtimeTier, unreachedRuntimeTier: unreached, compilerCalledTier: self.compilerCalledTier, substrateNodes: self.substrateNodes)
 	end 'withCompilerCalledTierUnreached'
 
+	// Asked right after `SemanticCheck.resolveOverloadedCalls` and not by `deriveLibraryFacts`: before
+	// resolution a call to an overloaded name carries the first member's name, so a forwarding
+	// overload would hide its sibling's entry.
 	export function withSubstrateEntriesOf(module MaxonModule) returns LibraryFacts
 		let entries = stdlibSubstrateEntries(module, stdlibNames: self.substrateNodes, unreachable: self.unreachable)
 		return Self.create(self.libraryFunctions, unreachable: self.unreachable, substrateEntries: entries, runtimeTier: self.runtimeTier, unreachedRuntimeTier: self.unreachedRuntimeTier, compilerCalledTier: self.compilerCalledTier, substrateNodes: self.substrateNodes)
 	end 'withSubstrateEntriesOf'
 end 'LibraryFacts'
 
-// ⭐ DERIVE BOTH FACTS. Runs once per compile, right after the module is merged and before any pass that
-// reads either of them — and before `DeadGlobalElimination.liveGlobalLabels`, which is the earliest
-// reader (`Compiler.compileToCodeResult`).
+// ⭐ DERIVE THE REACH FACTS, all but `substrateEntries` (see `withSubstrateEntriesOf`). Runs once
+// per compile, right after the module is merged and before any pass that reads them — and before
+// `DeadGlobalElimination.liveGlobalLabels`, which is the earliest reader
+// (`Compiler.compileToCodeResult`).
 //
 // It takes `signatures` for one thing: the functions a top-level initializer calls. Those calls are
 // made by `__module_init`, which does not exist yet at this point and is called by the entry stub
@@ -820,12 +824,12 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 	while true 'seedRounds'
 		drainReachableWorklist(module, project: project, signatures: signatures, seedConformers: seedConformers, byName: byName, reached: reached, worklist: worklist, names: names, witnessInterfaces: witnessInterfaces, witnessInterfaceOrder: witnessInterfaceOrder, creditedServices: creditedServices)
 
-		if interfacesSeeded == witnessInterfaceOrder.count() 'noInterfaceLeftToSeed'
+		if interfacesSeeded == witnessInterfaceOrder.count() as FieldIndex 'noInterfaceLeftToSeed'
 			break
 		end 'noInterfaceLeftToSeed'
 
-		while interfacesSeeded < witnessInterfaceOrder.count() 'eachNewlyNamedInterface'
-			let interfaceName = try witnessInterfaceOrder.get(interfacesSeeded) otherwise panic("reachableMaxonFunctionNames: witnessInterfaceOrder.get OOB at {interfacesSeeded} despite the loop guard")
+		while interfacesSeeded < witnessInterfaceOrder.count() as FieldIndex 'eachNewlyNamedInterface'
+			let interfaceName = try witnessInterfaceOrder.get(interfacesSeeded as ElementIndex) otherwise panic("reachableMaxonFunctionNames: witnessInterfaceOrder.get OOB at {interfacesSeeded} despite the loop guard")
 			interfacesSeeded = interfacesSeeded + 1
 
 			for conformerName in seedConformers 'eachSeededConformer'
@@ -1195,16 +1199,10 @@ module function markReachable(name ByteArray, project Project, byName FuncIndexB
 	// `__paramDefault#f#<member suffix>#2`. So a helper name standing in this walk denotes a SET exactly as
 	// its base does, and it is handled here rather than in a second reader for that reason.
 	//
-	// ⛔ **THE MISS WAS SILENT FOR EVERY OVERLOAD SET WHOSE FIRST MEMBER HAPPENS TO DEFAULT SOMETHING, WHICH
-	// IS WHY IT SURVIVED W74.** The first declaration of a name KEEPS its source spelling
-	// (`Parser.declaredParamDefaultHelperName`), so ITS helper is named by the swept name and this walk found
-	// it; every later member's helper is named by the member's mangled registration name and nothing marked
-	// it. MEASURED at `stdlib/Testing.maxon`'s listing, on three programs differing only in one argument's
-	// type: `Expect.equal(5, expected: 5)` compiles (the `AssertedInt` arm is declared first), while
-	// `Expect.equal(true, expected: true)` and `Expect.equal("x", expected: "x")` are
-	// `requireUnreachableLibraryStayedDead` panics naming that member's own helper — the two derivations
-	// disagreeing over an ordinary CALL edge, with no data edge anywhere near it. Supplying the argument
-	// (`message: "m"`) compiles either way, since then no helper is minted at all.
+	// ⚠ The first declaration of a name keeps its source spelling
+	// (`Parser.declaredParamDefaultHelperName`), so only its helper is named by the swept name; every
+	// later member's helper carries that member's mangled registration name and is marked only by this
+	// arm.
 	//
 	// ⚠ **THE SHORT-CIRCUIT SIDE OWES NOTHING HERE, and that is an argument rather than an omission.**
 	// `nameReachesStdlib` asks whether user code crosses into stdlib at all, and a helper call is only ever
@@ -1881,7 +1879,7 @@ function stdlibSubstrateEntries(module MaxonModule, stdlibNames ByteArrayArray, 
 		nodeOf.upsert(try stdlibNames.get(i) otherwise panic("stdlibSubstrateEntries: stdlibNames.get({i}) OOB below its own count()"), value: i)
 	end 'index'
 
-	var state = SubstrateFixpoint.overNodes(nodeCount)
+	var state = SubstrateFixpoint.overNodes(nodeCount as CsrIndex)
 
 	for func in module.functions 'eachFunc'
 		if unreachable.contains(func.name) 'notInTheProgram'
@@ -1967,7 +1965,7 @@ type SubstrateFixpoint
 			return
 		end 'keepTheIncumbent'
 
-		self.mark(node, seedIndex: self.seedEntries.count())
+		self.mark(node, seedIndex: self.seedEntries.count() as CsrIndex)
 		self.seedEntries.push(entry)
 	end 'seed'
 
@@ -1988,11 +1986,11 @@ type SubstrateFixpoint
 	// entry. A reverse BFS over the CSR adjacency — each node enters the worklist once (the marking IS the
 	// visited test) and each edge is walked once, for O(nodes + edges).
 	function propagateToCallers()
-		let callersOf = buildCsr(self.edgeCallee, to: self.edgeCaller, nodeCount: self.marked.count())
+		let callersOf = buildCsr(self.edgeCallee, to: self.edgeCaller, nodeCount: self.marked.count() as CsrIndex)
 		var head = 0 as CsrIndex
 
-		while head < self.worklist.count() 'drain'
-			let node = try self.worklist.get(head) otherwise panic("SubstrateFixpoint.propagateToCallers: worklist.get({head}) below its own count()")
+		while head < self.worklist.count() as CsrIndex 'drain'
+			let node = try self.worklist.get(head as ElementIndex) otherwise panic("SubstrateFixpoint.propagateToCallers: worklist.get({head}) below its own count()")
 			head = head + 1
 			let seedIndex = try self.seedOf.get(node) otherwise panic("SubstrateFixpoint.propagateToCallers: seedOf.get({node}) outside the node space")
 

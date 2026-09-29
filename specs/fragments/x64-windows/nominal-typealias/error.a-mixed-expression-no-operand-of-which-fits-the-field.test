@@ -1,0 +1,21 @@
+// Test: error.a-mixed-expression-no-operand-of-which-fits-the-field
+typealias Small = int(0 to 10)
+typealias BlockId = Small
+typealias VarId = Small
+
+type Holder
+	export var block as BlockId
+
+	static function create(v VarId, w VarId) returns Self
+		return Self{block: v + w}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(3, w: 4)
+	print("{h.block}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:10:15: cannot assign a value of type 'VarId' to field 'block' of 'Holder', which holds 'BlockId'

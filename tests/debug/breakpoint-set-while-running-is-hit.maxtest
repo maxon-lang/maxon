@@ -14,21 +14,21 @@ test 'a breakpoint armed while the program is running is placed, and the next co
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
-	Expect.atLeast(eventsOfKind(events, kind: TimeoutEventName).count() as AssertedInt, than: 1, message: "the `{RunCommand}` with nothing armed must answer a `{TimeoutEventName}` and leave the program running — that running program is what this case then arms a breakpoint into. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.atLeast(eventsOfKind(events, kind: TimeoutEventName).count(), than: 1, message: "the `{RunCommand}` with nothing armed must answer a `{TimeoutEventName}` and leave the program running — that running program is what this case then arms a breakpoint into. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let armings = eventsOfKind(events, kind: BreakpointEventName)
-	Expect.equal(armings.count() as AssertedInt, expected: 1, message: "`{BreakCommand}` after a timeout printed no `{BreakpointEventName}` event. {said}")
+	Expect.equal(armings.count(), expected: 1, message: "`{BreakCommand}` after a timeout printed no `{BreakpointEventName}` event. {said}")
 
 	let armed = eventAt(armings, index: 0)
 	Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: SetAction, message: "⭐⭐ THE PROGRAM IS RUNNING AND IS NOT STOPPED AT ANYTHING. A `{BreakCommand}` here is served by the driver out of process, which writes the byte into the running program's code without stopping it at all, and it must report `{SetAction}` — a driver that answered anything else is one that can only be spoken to at a stop. {said}")
 
 	let stops = eventsOfKind(events, kind: StopEventName)
-	Expect.atLeast(stops.count() as AssertedInt, than: 1, message: "⛔ A SUCCESSFUL WRITE IS NOT A PLACED BREAKPOINT. The loop reaches the anchored line again within its own sleep interval, so a breakpoint written into running code must be HIT. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.atLeast(stops.count(), than: 1, message: "⛔ A SUCCESSFUL WRITE IS NOT A PLACED BREAKPOINT. The loop reaches the anchored line again within its own sleep interval, so a breakpoint written into running code must be HIT. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let stopped = eventAt(stops, index: 0)
 	Expect.equal(textOf(stopped, node: stopped.root, key: FunctionKey), expected: TickFunctionName, message: "the stop does not name the function the anchored line is in. {said}")
-	Expect.equal(numberOf(stopped, node: stopped.root, key: LineKey) as AssertedInt, expected: tickLine as AssertedInt, message: "the stop is not on the anchored line. {said}")
+	Expect.equal(numberOf(stopped, node: stopped.root, key: LineKey), expected: tickLine as EventNumber, message: "the stop is not on the anchored line. {said}")
 	Expect.equal(textOf(stopped, node: stopped.root, key: ReasonKey), expected: BreakpointStopReason, message: "the stop must be reported as a `{BreakpointStopReason}`. {said}")
-	Expect.equal(eventsOfKind(events, kind: CrashEventName).count() as AssertedInt, expected: 0, message: "⛔ THE BYTE IS WRITTEN INTO CODE A MACHINE IS EXECUTING. A program that faulted is one whose instruction stream was cut in the middle. {said}")
-	Expect.equal(session.exitCode() as AssertedInt, expected: TimedOutSessionExitCode, message: "the first `{RunCommand}` timed out, so the session is a failed one however well the rest of it went. {said}")
+	Expect.equal(eventsOfKind(events, kind: CrashEventName).count(), expected: 0, message: "⛔ THE BYTE IS WRITTEN INTO CODE A MACHINE IS EXECUTING. A program that faulted is one whose instruction stream was cut in the middle. {said}")
+	Expect.equal(session.exitCode(), expected: TimedOutSessionExitCode, message: "the first `{RunCommand}` timed out, so the session is a failed one however well the rest of it went. {said}")
 end 'a breakpoint armed while the program is running is placed, and the next continue stops on it'

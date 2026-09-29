@@ -76,7 +76,7 @@ bound, the buffer load, the element load and the edge to the continuation. No `[
 `__im_empty` block, no `cmpRegImm32 …, 0` on the loaded element.
 ```maxon
 typealias Word = int(i64.min to i64.max)
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 typealias WordArray = Array with Word
 
 function pick(a WordArray, i Idx) returns Word
@@ -144,7 +144,7 @@ that is the runtime's job: the stamp says the element owes a drop, so the guard 
 takes the slow arm. Sabotage — stamping this site trivial — stores over four Strings nobody releases,
 and the leak gate answers exit 101.
 ```maxon
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 typealias Names = Array with String
 
 function relabel(a Names, i Idx)
@@ -206,7 +206,7 @@ String field keeps it, and the Strings the direct `set` overwrites are still des
 101).
 ```maxon
 typealias Word = int(i64.min to i64.max)
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 
 type Bag uses Element
 	typealias Items = Array with Element

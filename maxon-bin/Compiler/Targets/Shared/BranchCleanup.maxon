@@ -110,14 +110,14 @@ end 'cleanUpFunctionBranches'
 
 // The "no such block" answer for a column indexed by local: one past every valid local, so it can
 // never collide with a real answer.
-function noSuchLocal(topo FuncTopology) returns CfgIndex
+function noSuchLocal(topo FuncTopology) returns ElementIndex
 	return topo.numBlocks
 end 'noSuchLocal'
 
 // A local where a block may have none to answer.
 union OptionalLocal
 	none
-	at(index CfgIndex)
+	at(index ElementIndex)
 end 'OptionalLocal'
 
 // The local a block's terminator branches to unconditionally — `unconditionalBranchTargetOf`, the
@@ -165,7 +165,7 @@ function resolveJumpChains(module TargetModule, topo FuncTopology) returns CfgIn
 
 	let unresolved = noSuchLocal(topo)
 	var resolved = CfgIndexArray.create()
-	resolved.refill(blockCount as ElementIndex, value: unresolved)
+	resolved.refill(blockCount, value: unresolved)
 	var onPath = BoolArray.create()
 	onPath.resize(blockCount)
 	var path = CfgIndexArray.create()
@@ -223,7 +223,7 @@ end 'resolveJumpChains'
 // "No body ops" is the whole test, and after `applyAllocation` it means what it says: a `critsplit`
 // block that received this edge's parallel copies holds them as body ops and is refused here, while
 // one that received none is genuinely empty. See this file's header.
-function emptyJumpTargetOf(module TargetModule, topo FuncTopology, local CfgIndex) returns CfgIndex
+function emptyJumpTargetOf(module TargetModule, topo FuncTopology, local ElementIndex) returns ElementIndex
 	let block = blockAt(module, topo: topo, local: local)
 
 	if block.opRefs.count() > 0 or block.hasCondBranchOp() 'carriesWork'
@@ -260,7 +260,7 @@ function threadResolvedEdges(module TargetModule, topo FuncTopology, resolved Cf
 
 	for local in 0 upto topo.numBlocks 'eachPred'
 		for k in 0 upto topo.succ.degree(local) 'eachSucc'
-			let succ = topo.succ.neighbour(local, k: k) as CfgIndex
+			let succ = topo.succ.neighbour(local, k: k)
 			let alreadyListed = try seen.get(succ) otherwise panic("threadResolvedEdges: seen.get OOB at {succ}")
 
 			if alreadyListed 'duplicateEdge'
@@ -341,7 +341,7 @@ function dropUnreachableBlocks(module TargetModule, func IrFunction, topo FuncTo
 end 'dropUnreachableBlocks'
 
 // Mark a block reachable and queue it, once. Both columns are the caller's.
-function markReachable(reachable BoolArray, stack CfgIndexArray, local CfgIndex)
+function markReachable(reachable BoolArray, stack CfgIndexArray, local ElementIndex)
 	let seenBefore = try reachable.get(local) otherwise panic("markReachable: reachable.get OOB at {local}")
 
 	if seenBefore 'alreadySeen'
@@ -373,7 +373,7 @@ function sinkColdBlocks(module TargetModule, func IrFunction)
 	var hot = BlockRefArray.create()
 	var cold = BlockRefArray.create()
 	let blockCount = func.blockRefs.count()
-	var unitStart = 0 as CfgIndex
+	var unitStart = 0 as ElementIndex
 	var unitIsCold = true
 
 	for i in 0 upto blockCount 'eachBlock'
@@ -400,7 +400,7 @@ function sinkColdBlocks(module TargetModule, func IrFunction)
 end 'sinkColdBlocks'
 
 // Append the block refs at positions `from` through `through` of `func`'s current list to `into`.
-function pushBlockRange(func IrFunction, from CfgIndex, through CfgIndex, into BlockRefArray)
+function pushBlockRange(func IrFunction, from ElementIndex, through ElementIndex, into BlockRefArray)
 	for i in from to through 'eachRef'
 		into.push(try func.blockRefs.get(i) otherwise panic("pushBlockRange: blockRefs.get OOB at {i}"))
 	end 'eachRef'
@@ -460,7 +460,7 @@ function rotateLoops(module TargetModule, func IrFunction)
 	var member = LoopMembership.create()
 
 	for h in loops.headers 'eachLoop'
-		planLoopRotation(module, topo: topo, loops: loops, member: member, plan: plan, header: h as CfgIndex)
+		planLoopRotation(module, topo: topo, loops: loops, member: member, plan: plan, header: h)
 	end 'eachLoop'
 
 	if not plan.recordedAny 'nothingMoved'
@@ -472,7 +472,7 @@ end 'rotateLoops'
 
 // Plan one loop's rotation: nothing for the entry (the prologue goes there, so it stays first) or for
 // a loop with no hot unconditional latch.
-function planLoopRotation(module TargetModule, topo FuncTopology, loops NaturalLoops, member LoopMembership, plan RotationPlan, header CfgIndex)
+function planLoopRotation(module TargetModule, topo FuncTopology, loops NaturalLoops, member LoopMembership, plan RotationPlan, header ElementIndex)
 	if header == 0 'entryIsTheHeader'
 		return
 	end 'entryIsTheHeader'
@@ -484,7 +484,7 @@ function planLoopRotation(module TargetModule, topo FuncTopology, loops NaturalL
 end 'planLoopRotation'
 
 // With the latch known: collect the loop, walk the chain, and record it behind the latch if admitted.
-function planChainAfterLatch(module TargetModule, topo FuncTopology, loops NaturalLoops, member LoopMembership, plan RotationPlan, header CfgIndex, latch CfgIndex)
+function planChainAfterLatch(module TargetModule, topo FuncTopology, loops NaturalLoops, member LoopMembership, plan RotationPlan, header ElementIndex, latch ElementIndex)
 	loops.collect(topo.pred, header: header as CsrIndex, into: member)
 
 	match headerChainEnd(module, topo: topo, loops: loops, member: member, plan: plan, header: header, latch: latch) 'chain'
@@ -495,12 +495,12 @@ end 'planChainAfterLatch'
 
 // The physically last latch of `header`'s loop that is hot and closes the loop with the ISA's
 // unconditional branch, read off the finder's bucket for that header.
-function lastHotLatchOf(module TargetModule, topo FuncTopology, loops NaturalLoops, header CfgIndex) returns OptionalLocal
+function lastHotLatchOf(module TargetModule, topo FuncTopology, loops NaturalLoops, header ElementIndex) returns OptionalLocal
 	var found = false
-	var last = 0 as CfgIndex
+	var last = 0 as ElementIndex
 
 	for k in 0 upto loops.latches.degree(header as CsrIndex) 'eachLatch'
-		let tail = loops.latches.neighbour(header as CsrIndex, k: k) as CfgIndex
+		let tail = loops.latches.neighbour(header as CsrIndex, k: k)
 
 		if not isHotLatchOf(module, topo: topo, tail: tail, header: header) 'notAJumpLatch'
 			continue
@@ -517,7 +517,7 @@ end 'lastHotLatchOf'
 
 // Whether `tail` is a hot block whose terminator is the ISA's unconditional branch to `header`. A
 // tail reaching the header through its conditional branch has nothing a fall-through could replace.
-function isHotLatchOf(module TargetModule, topo FuncTopology, tail CfgIndex, header CfgIndex) returns bool
+function isHotLatchOf(module TargetModule, topo FuncTopology, tail ElementIndex, header ElementIndex) returns bool
 	let block = blockAt(module, topo: topo, local: tail)
 
 	if block.heat == BlockHeat.cold 'coldTail'
@@ -532,7 +532,7 @@ end 'isHotLatchOf'
 
 // The last block of `header`'s chain — the first block along it with a hot exit edge, admitted by
 // `admitChainEnd` — or `none` when the loop is refused (see `rotateLoops`).
-function headerChainEnd(module TargetModule, topo FuncTopology, loops NaturalLoops, member LoopMembership, plan RotationPlan, header CfgIndex, latch CfgIndex) returns OptionalLocal
+function headerChainEnd(module TargetModule, topo FuncTopology, loops NaturalLoops, member LoopMembership, plan RotationPlan, header ElementIndex, latch ElementIndex) returns OptionalLocal
 	var cur = header
 
 	while cur < topo.numBlocks 'walk'
@@ -548,10 +548,10 @@ function headerChainEnd(module TargetModule, topo FuncTopology, loops NaturalLoo
 
 		var hasHotExit = false
 		var hotInLoopSucc = noSuchLocal(topo)
-		var hotInLoopSuccCount = 0 as CfgIndex
+		var hotInLoopSuccCount = 0 as ElementIndex
 
 		for k in 0 upto topo.succ.degree(cur as CsrIndex) 'eachSucc'
-			let succ = topo.succ.neighbour(cur as CsrIndex, k: k) as CfgIndex
+			let succ = topo.succ.neighbour(cur as CsrIndex, k: k)
 
 			// A cold arm beside the chain is not a layout constraint: it is already sunk, and control
 			// that takes it comes back by branch.
@@ -559,7 +559,7 @@ function headerChainEnd(module TargetModule, topo FuncTopology, loops NaturalLoo
 				continue
 			end 'coldArm'
 
-			if not member.contains(succ as CsrIndex) 'hotExit'
+			if not member.contains(succ) 'hotExit'
 				hasHotExit = true
 			end 'hotExit' else if succ != hotInLoopSucc 'newInLoopSucc'
 				// Both arms naming one block is one successor, not two.
@@ -590,7 +590,7 @@ end 'headerChainEnd'
 // The exit test found: `chainEnd` ends the chain when the rotation PAYS — the two shapes `rotateLoops`
 // states — and the glue rule holds. A block whose hot exit is not a conditional branch's (an
 // unconditional exit, a jump table) has no test to make the back branch.
-function admitChainEnd(module TargetModule, topo FuncTopology, loops NaturalLoops, member LoopMembership, header CfgIndex, latch CfgIndex, chainEnd CfgIndex) returns OptionalLocal
+function admitChainEnd(module TargetModule, topo FuncTopology, loops NaturalLoops, member LoopMembership, header ElementIndex, latch ElementIndex, chainEnd ElementIndex) returns OptionalLocal
 	let block = blockAt(module, topo: topo, local: chainEnd)
 
 	if not block.hasCondBranchOp() 'noExitTest'
@@ -619,7 +619,7 @@ end 'admitChainEnd'
 // header, which precedes it), and in the stacked shape — a latch that is another chain's end — the
 // outer loop's exit cannot equal its `latch + 1`, which is the inner body, a member. The equality
 // already places `latch + 1` inside the function, so the bucket read is in range.
-function exitFallsThroughAfterInversion(module TargetModule, topo FuncTopology, loops NaturalLoops, latch CfgIndex, chainEnd CfgIndex, condTarget CfgIndex) returns bool
+function exitFallsThroughAfterInversion(module TargetModule, topo FuncTopology, loops NaturalLoops, latch ElementIndex, chainEnd ElementIndex, condTarget ElementIndex) returns bool
 	if condTarget != latch + 1 or loops.latches.degree(condTarget as CsrIndex) > 0 'exitNotNextAfterTheMove'
 		return false
 	end 'exitNotNextAfterTheMove'
@@ -633,7 +633,7 @@ end 'exitFallsThroughAfterInversion'
 // The glue rule: the block before the header and the chain's last block both carry a terminator op,
 // so neither relies on falling into the block the rotation takes away from it. `header` is never the
 // entry, so `header - 1` is a block.
-function hasGlueAround(module TargetModule, topo FuncTopology, header CfgIndex, chainEnd CfgIndex) returns bool
+function hasGlueAround(module TargetModule, topo FuncTopology, header ElementIndex, chainEnd ElementIndex) returns bool
 	return blockAt(module, topo: topo, local: header - 1).hasTerminatorOp() and blockAt(module, topo: topo, local: chainEnd).hasTerminatorOp()
 end 'hasGlueAround'
 
@@ -645,7 +645,7 @@ type RotationPlan
 	var chainStartAfter as CfgIndexArray
 	var chainEndAfter as CfgIndexArray
 	var claimed as BoolArray
-	var noChain as CfgIndex
+	var noChain as ElementIndex
 
 	// Exported because a bare field is private to the TYPE (E3014); `rotateLoops` reads it.
 	export var recordedAny = false
@@ -653,22 +653,22 @@ type RotationPlan
 	static function create(topo FuncTopology) returns RotationPlan
 		let noChain = noSuchLocal(topo)
 		var chainStartAfter = CfgIndexArray.create()
-		chainStartAfter.refill(topo.numBlocks as ElementIndex, value: noChain)
+		chainStartAfter.refill(topo.numBlocks, value: noChain)
 		var chainEndAfter = CfgIndexArray.create()
-		chainEndAfter.refill(topo.numBlocks as ElementIndex, value: noChain)
+		chainEndAfter.refill(topo.numBlocks, value: noChain)
 		var claimed = BoolArray.create()
 		claimed.resize(topo.numBlocks)
 		return Self{chainStartAfter: chainStartAfter, chainEndAfter: chainEndAfter, claimed: claimed, noChain: noChain}
 	end 'create'
 
-	function isClaimed(local CfgIndex) returns bool
+	function isClaimed(local ElementIndex) returns bool
 		return try self.claimed.get(local) otherwise panic("RotationPlan.isClaimed: claimed.get OOB at {local}")
 	end 'isClaimed'
 
 	// Record the run `header..chainEnd` behind `latch`. A latch closes exactly one loop, so a second
 	// chain behind one is a broken premise; recorded anyway it would strand the first chain's claimed
 	// blocks and surface only as `layout`'s count panic, far from the cause.
-	function record(header CfgIndex, chainEnd CfgIndex, latch CfgIndex)
+	function record(header ElementIndex, chainEnd ElementIndex, latch ElementIndex)
 		let prior = try self.chainStartAfter.get(latch) otherwise panic("RotationPlan.record: chainStartAfter.get OOB at {latch}")
 
 		if prior != self.noChain 'latchAlreadyCarriesAChain'
@@ -724,7 +724,7 @@ type RotationPlan
 	end 'layout'
 
 	// Append `local`'s block, and queue the chain recorded behind it, if any, to be laid down next.
-	function layBlockAndOpenItsChain(topo FuncTopology, local CfgIndex, laid BlockRefArray, pendingNext CfgIndexArray, pendingEnd CfgIndexArray)
+	function layBlockAndOpenItsChain(topo FuncTopology, local ElementIndex, laid BlockRefArray, pendingNext CfgIndexArray, pendingEnd CfgIndexArray)
 		laid.push(try topo.blockRefByLocal.get(local) otherwise panic("RotationPlan.layBlockAndOpenItsChain: blockRefByLocal.get OOB at {local}"))
 		let chainStart = try self.chainStartAfter.get(local) otherwise panic("RotationPlan.layBlockAndOpenItsChain: chainStartAfter.get OOB at {local}")
 
@@ -757,7 +757,7 @@ end 'elideFallthroughBranches'
 // One block's elision, against the id of the block that will be laid down immediately after it.
 // A terminator that is not the ISA's unconditional branch — a `ret`, a multiway jump table, an
 // op-less `dead` slot — carries nothing to elide.
-function elideBranchInto(module TargetModule, blockRef BlockRef, nextId BlockId)
+function elideBranchInto(module TargetModule, blockRef ElementIndex, nextId BlockId)
 	let block = try module.blocks.get(blockRef) otherwise panic("elideBranchInto: blockRef {blockRef} not in module.blocks")
 
 	match unconditionalBranchTargetOf(module, block: block) 'terminator'
@@ -767,7 +767,7 @@ function elideBranchInto(module TargetModule, blockRef BlockRef, nextId BlockId)
 end 'elideBranchInto'
 
 // The two transforms, with the terminator's target in hand.
-function elideAgainstNext(module TargetModule, blockRef BlockRef, elseTarget BlockId, nextId BlockId)
+function elideAgainstNext(module TargetModule, blockRef ElementIndex, elseTarget BlockId, nextId BlockId)
 	if elseTarget == nextId 'fallsIntoElse'
 		// TRANSFORM 1. Whether or not the block also has a conditional branch: that branch names the
 		// then-edge and is untouched, and the else-edge is now the fall-through it always was in the
@@ -795,7 +795,7 @@ end 'elideAgainstNext'
 //
 // Whether it TARGETS the next block is decided where the op is read, so the branch is dereferenced
 // exactly once — see `invertCondBranchOntoElse`.
-function invertibleCondBranchIn(module TargetModule, blockRef BlockRef) returns CondBranch
+function invertibleCondBranchIn(module TargetModule, blockRef ElementIndex) returns CondBranch
 	let block = try module.blocks.get(blockRef) otherwise panic("invertibleCondBranchIn: blockRef {blockRef} not in module.blocks")
 	let bodyCount = block.opRefs.count()
 
@@ -809,7 +809,7 @@ function invertibleCondBranchIn(module TargetModule, blockRef BlockRef) returns 
 end 'invertibleCondBranchIn'
 
 // Invert the block's conditional branch onto the else target, and delete the terminator if it did.
-function invertBranchAndElide(module TargetModule, blockRef BlockRef, condOpIndex OpIndex, nextId BlockId, elseTarget BlockId)
+function invertBranchAndElide(module TargetModule, blockRef ElementIndex, condOpIndex ElementIndex, nextId BlockId, elseTarget BlockId)
 	if invertCondBranchOntoElse(module, blockRef: blockRef, condOpIndex: condOpIndex, nextId: nextId, elseTarget: elseTarget) 'inverted'
 		elideTerminatorIn(module, blockRef: blockRef)
 	end 'inverted'
@@ -820,7 +820,7 @@ end 'invertBranchAndElide'
 //
 // The block is read for the target and let go before the write: `module.blocks.get` hands back a
 // borrow of `module`, and `module.ops.set` writes that same storage (E3070).
-function invertCondBranchOntoElse(module TargetModule, blockRef BlockRef, condOpIndex OpIndex, nextId BlockId, elseTarget BlockId) returns bool
+function invertCondBranchOntoElse(module TargetModule, blockRef ElementIndex, condOpIndex ElementIndex, nextId BlockId, elseTarget BlockId) returns bool
 	let op = try module.ops.get(condOpIndex) otherwise panic("invertCondBranchOntoElse: conditional branch op {condOpIndex} not in module.ops")
 	let thenTarget = condBranchTargetOf(op, block: try module.blocks.get(blockRef) otherwise panic("invertCondBranchOntoElse: blockRef {blockRef} not in module.blocks"))
 
@@ -848,7 +848,7 @@ end 'invertCondBranchOntoElse'
 // ONTO A FALL-THROUGH. Either edge could already exceed that reach before this pass — the then-edge
 // rode the same field — so the exposure is swapped rather than widened, and `arm64PatchBranch19`
 // still refuses an out-of-reach displacement loudly.
-function invertedCondBranchOnto(op TargetOp, targetBlockId BlockId, condOpIndex OpIndex) returns TargetOp
+function invertedCondBranchOnto(op TargetOp, targetBlockId BlockId, condOpIndex ElementIndex) returns TargetOp
 	return match op 'cond'
 		jcc(cond, _) gives TargetOp.jcc(invertX64Cond(cond), targetBlockId: targetBlockId)
 		arm64CondBranch(cond, _) gives TargetOp.arm64CondBranch(invertArm64Cond(cond), targetBlockId: targetBlockId)
@@ -864,7 +864,7 @@ end 'invertedCondBranchOnto'
 // function-chunk emitters and the Target printer already emit nothing for a block that has no
 // terminator OP. The branch itself is left where it lies in `module.ops`: nothing walks that array
 // linearly, and rewriting every later op index to close the hole would cost far more than the word.
-function elideTerminatorIn(module TargetModule, blockRef BlockRef)
+function elideTerminatorIn(module TargetModule, blockRef ElementIndex)
 	var block = try module.blocks.get(blockRef) otherwise panic("elideTerminatorIn: blockRef {blockRef} not in module.blocks")
 	block.terminator = Terminator.fallthrough
 end 'elideTerminatorIn'

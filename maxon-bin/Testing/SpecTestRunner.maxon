@@ -258,7 +258,7 @@ export typealias MmAllocIdMap = Map with (MmAllocId, MmAllocId)
 
 // The offset for a file whose line numbers ARE the fragment's — every single-file test, where the
 // compiled file IS the fragment. Named because it is a real value in the mapping, not an absence.
-let NoLineOffset = 0 as LineIndex
+let NoLineOffset = 0 as ElementIndex
 
 // The fragment directory a /specs expectation NAMES — the generic, target-free form, which every
 // ```maxoncstderr block in the corpus is authored with and the only form this runner has to
@@ -1967,14 +1967,14 @@ end 'specFilePaths'
 // test directory's top level carries an empty prefix.
 type FragmentPathMapping
 	export let compiledPath as String
-	export let lineOffset as LineIndex
+	export let lineOffset as ElementIndex
 
 	// The whole token a match is replaced by — `<dir>/<fragment>` — built ONCE at staging rather than
 	// re-joined at each of `rewriteDiagnosticLine`'s five replacement sites, which would be five places
 	// free to disagree about whether the directory rides.
 	export let replacementToken as String
 
-	static function create(compiledPath String, lineOffset LineIndex, sourceDirPrefix String) returns FragmentPathMapping
+	static function create(compiledPath String, lineOffset ElementIndex, sourceDirPrefix String) returns FragmentPathMapping
 		return Self{compiledPath: compiledPath, lineOffset: lineOffset, replacementToken: "{sourceDirPrefix}{FragmentPathToken}"}
 	end 'create'
 end 'FragmentPathMapping'
@@ -4904,7 +4904,7 @@ function locateSectionPayloads(payloads ByteArrayArray, actual ByteArray, sectio
 
 	for (iter, payload) in payloads.withIterator() 'eachPayload'
 		match findByteRun(actual, needle: payload, from: searchFrom) 'located'
-			found(offset) then searchFrom = offset + payload.count()
+			found(offset) then searchFrom = offset + payload.count() as ByteOffset
 			absent then return TestOutcome.fail("{sectionName} does not hold payload {iter.index() + 1} of {payloads.count()} at or after byte {searchFrom}\n    expected ({payload.count()} bytes): {formatHexBytes(payload)}\n    actual   ({actual.count()} bytes): {formatHexBytes(actual)}")
 		end 'located'
 	end 'eachPayload'
@@ -5138,7 +5138,7 @@ end 'referencePathMapping'
 //
 // With no offset the path is all that moves, and a whole-text replace does it — that is every
 // single-file test.
-function rewriteDiagnosticPaths(text String, path String, lineOffset LineIndex, token String) returns String
+function rewriteDiagnosticPaths(text String, path String, lineOffset ElementIndex, token String) returns String
 	if lineOffset == NoLineOffset 'linesAlreadyMatch'
 		return text.replace(path, with: token)
 	end 'linesAlreadyMatch'
@@ -5159,7 +5159,7 @@ end 'rewriteDiagnosticPaths'
 // does not have the expected shape falls back to replacing the path and nothing else: a line that
 // names the file without a `line:col` has no line number to renumber, and guessing one is worse
 // than leaving it.
-function rewriteDiagnosticLine(line String, path String, lineOffset LineIndex, token String) returns String
+function rewriteDiagnosticLine(line String, path String, lineOffset ElementIndex, token String) returns String
 	if not line.contains(path) 'noPath'
 		return line
 	end 'noPath'

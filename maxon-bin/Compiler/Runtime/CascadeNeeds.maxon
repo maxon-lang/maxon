@@ -57,10 +57,7 @@ end 'CascadeNode'
 
 export typealias CascadeNodeArray = Array with CascadeNode
 
-// A position in `CascadeWorklist.nodes` — the dense key the pending queue and the by-symbol index both
-// address nodes by, so neither holds a second copy of a node.
-export typealias CascadeNodeIndex = int(0 to u64.max)
-export typealias CascadeNodeIndexArray = Array with CascadeNodeIndex
+export typealias CascadeNodeIndexArray = Array with ElementIndex
 typealias CascadeNodeIndexBucketMap = Map with (ByteArray, CascadeNodeIndexArray)
 
 // The needed-symbol set a closure is closing — `RuntimeUsage.neededDestructors` or its
@@ -86,7 +83,7 @@ export type CascadeWorklist
 	// FIFO of node positions discovered but not yet expanded; `head` is the read cursor. Never
 	// compacted — `head` only advances and `pending` only grows, so a node's position is stable.
 	var pending as CascadeNodeIndexArray
-	var head as CascadeNodeIndex
+	var head as ElementIndex
 
 	// Parallel to `nodes`: already queued? This is what makes termination STRUCTURAL rather than
 	// argued — a node enters `pending` at most once, so the drain is bounded by the node count no
@@ -152,7 +149,7 @@ export type CascadeWorklist
 		return try self.nodes.get(at) otherwise panic("CascadeWorklist.take: nodes.get({at}) OOB — pending holds only registered positions")
 	end 'take'
 
-	function enqueue(at CascadeNodeIndex)
+	function enqueue(at ElementIndex)
 		let queued = try self.pushed.get(at) otherwise panic("CascadeWorklist.enqueue: pushed.get({at}) OOB — parallel to nodes")
 
 		if queued 'already'

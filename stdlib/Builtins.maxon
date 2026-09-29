@@ -630,8 +630,8 @@ function __float_magnitudeBitsFromText(text String, startAt ParsedInt) returns _
 	// --- PHASE 1: the MANTISSA, up to the `e`/`E` (or the end of the text) ---
 	var pi = startAt
 
-	while pi < bytes.count() 'mantissa'
-		let b = try bytes.get(pi) otherwise panic("__float_magnitudeBitsFromText: pi < bytes.count() by loop guard but get({pi}) failed")
+	while pi < bytes.count() as ParsedInt 'mantissa'
+		let b = try bytes.get(pi as ElementIndex) otherwise panic("__float_magnitudeBitsFromText: pi < bytes.count() by loop guard but get({pi}) failed")
 
 		if b == '_' 'skipUnderscore'
 			pi = pi + 1
@@ -732,13 +732,13 @@ function __float_magnitudeBitsFromText(text String, startAt ParsedInt) returns _
 	var sciExp = 0
 	var sciExpNeg = false
 
-	if pi < bytes.count() 'hasExponent'
+	if pi < bytes.count() as ParsedInt 'hasExponent'
 		pi = pi + 1
 
 		// The exponent's own sign — `1.5e+2` and `1.5e-2` are both admitted, unlike the MANTISSA's
 		// leading `+` (see `__float_bitsFromText`'s header for why the two positions differ).
-		if pi < bytes.count() 'peekSign'
-			let signByte = try bytes.get(pi) otherwise panic("__float_magnitudeBitsFromText.peekSign: pi < bytes.count() just checked but get({pi}) failed")
+		if pi < bytes.count() as ParsedInt 'peekSign'
+			let signByte = try bytes.get(pi as ElementIndex) otherwise panic("__float_magnitudeBitsFromText.peekSign: pi < bytes.count() just checked but get({pi}) failed")
 
 			if signByte == '-' 'negSign'
 				sciExpNeg = true
@@ -748,8 +748,8 @@ function __float_magnitudeBitsFromText(text String, startAt ParsedInt) returns _
 			end 'posSign'
 		end 'peekSign'
 
-		while pi < bytes.count() 'expDigits'
-			let b = try bytes.get(pi) otherwise panic("__float_magnitudeBitsFromText: pi < bytes.count() by loop guard but get({pi}) failed")
+		while pi < bytes.count() as ParsedInt 'expDigits'
+			let b = try bytes.get(pi as ElementIndex) otherwise panic("__float_magnitudeBitsFromText: pi < bytes.count() by loop guard but get({pi}) failed")
 
 			if b == '_' 'skipExpUnderscore'
 				pi = pi + 1
@@ -819,7 +819,7 @@ end '__float_magnitudeBitsFromText'
 // `droppedNonZeroDigit` is the STICKY BIT: true iff a non-zero digit was dropped past
 // `__SignificantDigitBudget`. The round-trip caller passes false — its candidate is at most 17 digits and
 // nothing was dropped — and the scanner passes what it saw.
-function __float_bitsFromDecimal(significandDigits ParsedIntArray, totalExp DecimalPointScale, sigDigits DigitCount, droppedNonZeroDigit bool) returns __FloatTextResult
+function __float_bitsFromDecimal(significandDigits ParsedIntArray, totalExp DecimalPointScale, sigDigits ElementIndex, droppedNonZeroDigit bool) returns __FloatTextResult
 	// `significandDigits` holds exactly `sigDigits` digits and its leading one is non-zero (leading
 	// zeros are skipped by the scanner), so the value lies in [10^m, 10^(m+1)) and `m` is EXACTLY
 	// floor(log10(value)) — not an estimate. It is exact for the TRUE value too, dropped digits and
@@ -1038,9 +1038,8 @@ typealias BigBitDelta = int(-4608 to 4608)
 // exponent being printed. Bounded by the decimal guards to 1091 — the same figure `__MaxBigLimbs` is
 // derived from, and it is quoted rather than re-derived for exactly that reason.
 //
-// ⚠ It is NOT the alias for a digit COUNT, a field WIDTH or an index into a digit string, all of
-// which briefly rode here because the range happened to fit. `DigitCount` is those, and the split is
-// the difference between a name that says what a number MEANS and one that says what it fits in.
+// ⚠ It is NOT the alias for a digit COUNT, a field WIDTH or an index into a digit string: those are
+// `ElementIndex`.
 //
 // ⭐ **THE 1091 IS THE ENFORCEMENT NOW, NOT JUST THE PROSE.** The widest exponent any site here can
 // ask for is the denominator's, `-totalExp` at `__float_bitsFromDecimal`, and the decimal guards
@@ -1049,16 +1048,6 @@ typealias BigBitDelta = int(-4608 to 4608)
 // strides are single digits. The narrow upper is what makes each of those doors refuse a value that
 // overshoots the derivation, which a full-width one could not.
 typealias DecimalScaleExponent = int(0 to 1091)
-
-// How many digits: a significant-digit count, a zero-padded field width, a repeat count, or an index
-// into a `DigitString`. Bounded in practice by `__SignificantDigitBudget`.
-//
-// The digits live in a `DigitString` — one array, whose count is a signed machine word — so no
-// honest count, width or index into one reaches `i64.max`, let alone past it. In practice
-// `__SignificantDigitBudget` bounds the counts far below that, but a field WIDTH is program-written
-// (`"{x:08}"`, up to `u32.max`) and shares this alias, so the container's own limit is the honest
-// bound rather than the budget.
-typealias DigitCount = int(0 to u64.max)
 
 // -1, 0 or 1 as the left magnitude is below, equal to, or above the right.
 typealias MagnitudeOrder = int(-1 to 1)
@@ -1313,7 +1302,7 @@ function __bigToDecimalDigits(limbs ParsedIntArray) returns DigitString
 end '__bigToDecimalDigits'
 
 // How many decimal digits `value` (0 to 10^9 - 1) needs, at least one.
-function __decimalWidthOf(value ParsedInt) returns DigitCount
+function __decimalWidthOf(value ParsedInt) returns ElementIndex
 	var width = 1
 	var remaining = value / 10
 
@@ -1328,7 +1317,7 @@ end '__decimalWidthOf'
 // Append `value` as exactly `width` decimal digits, zero-padded on the left. Digits fall out
 // least-significant first, so they are gathered and then emitted in reverse — which also keeps every
 // divisor a LITERAL ten, and so keeps the whole routine free of a can-throw division.
-function __appendDecimalGroup(digits DigitString, value ParsedInt, width DigitCount)
+function __appendDecimalGroup(digits DigitString, value ParsedInt, width ElementIndex)
 	var reversed = DigitString.create()
 	var remaining = value
 
@@ -1385,14 +1374,14 @@ function __bigShiftLeft(limbs ParsedIntArray, bits BigBitCount)
 		// The fill value is never read, and that is still checkable: the loops below WRITE every slot this
 		// widens to — `moveUp` covers [wholeLimbs, usedBefore + wholeLimbs) and `clearVacated` covers
 		// [0, wholeLimbs). So `growFilled` is `resize` here, minus the hole in the rule.
-		limbs.growFilled((usedBefore + wholeLimbs) as ElementIndex, value: 0)
+		limbs.growFilled((usedBefore as BigBitCount + wholeLimbs) as ElementIndex, value: 0)
 
 		var src = usedBefore
 
 		while src > 0 'moveUp'
 			src = src - 1
 			let limb = try limbs.get(src) otherwise panic("__bigShiftLeft: src < usedBefore <= count() but get({src}) failed")
-			try limbs.set(src + wholeLimbs, value: limb) otherwise panic("__bigShiftLeft: resize sized for src + wholeLimbs but set({src + wholeLimbs}) failed")
+			try limbs.set((src as BigBitCount + wholeLimbs) as ElementIndex, value: limb) otherwise panic("__bigShiftLeft: resize sized for src + wholeLimbs but set({src as BigBitCount + wholeLimbs}) failed")
 		end 'moveUp'
 
 		var vacated = 0
@@ -1570,7 +1559,7 @@ function __float_exactDigits(magnitude ParsedInt) returns __ScaledDigits
 	// value = 0.<exactDigits> × 10^scale. Trailing zeros carry no information and are dropped, which
 	// leaves `scale` untouched (it counts from the FRONT).
 	let scale = exactDigits.count() + pointExponent
-	return __ScaledDigits.create(__withoutTrailingZeros(exactDigits), scale: scale)
+	return __ScaledDigits.create(__withoutTrailingZeros(exactDigits), scale: scale as DecimalPointScale)
 end '__float_exactDigits'
 
 // The decimal text of the double `bits` encodes: the shortest string that reads back as the same
@@ -1640,7 +1629,7 @@ function __shortestRoundTrip(digits DigitString, scale DecimalPointScale, target
 		// the digits keep growing until the rounding falls back inside the range, and the 17-digit
 		// candidate always does. `malformed` keeps its own arm and stays a genuine invariant: it
 		// describes TEXT, and no text is involved here.
-		match __float_bitsFromDecimal(__bigFromDigits(candidate.digits), totalExp: candidate.scale - candidate.digits.count(), sigDigits: candidate.digits.count(), droppedNonZeroDigit: false) 'probeRead'
+		match __float_bitsFromDecimal(__bigFromDigits(candidate.digits), totalExp: candidate.scale - candidate.digits.count() as DecimalPointScale, sigDigits: candidate.digits.count(), droppedNonZeroDigit: false) 'probeRead'
 			bits(value) then readBack = value
 			overflow then continue
 			malformed then panic("__shortestRoundTrip: the {candidate.digits.count()}-digit candidate at scale {candidate.scale} is not a number, but it is a rounded prefix of a real double's own expansion and no text was involved — the digit search and the converter have diverged")
@@ -1674,7 +1663,7 @@ typealias DecimalPointScale = int(i64.min to i64.max)
 
 // `digits` correctly rounded to `kept` significant digits, round-half-EVEN — the rule that makes the
 // result the NEAREST `kept`-digit decimal, which is what makes testing only this candidate sound.
-function __roundedToLength(digits DigitString, kept DigitCount, scale DecimalPointScale) returns __ScaledDigits
+function __roundedToLength(digits DigitString, kept ElementIndex, scale DecimalPointScale) returns __ScaledDigits
 	if kept >= digits.count() 'wholeString'
 		// A fresh array, not `digits` itself: the result OWNS its digits, and `digits` is borrowed from
 		// the caller — handing a borrowed aggregate to a consuming position would leave the field
@@ -1682,7 +1671,7 @@ function __roundedToLength(digits DigitString, kept DigitCount, scale DecimalPoi
 		return __ScaledDigits.create(digits.clone(), scale: scale)
 	end 'wholeString'
 
-	var prefix = try digits.slice(0, endIndex: kept as ElementIndex) otherwise panic("__roundedToLength: kept < digits.count() by the guard above but slice(0, {kept}) failed")
+	var prefix = try digits.slice(0, endIndex: kept) otherwise panic("__roundedToLength: kept < digits.count() by the guard above but slice(0, {kept}) failed")
 
 	if not __roundsUp(digits, kept: kept) 'roundDown'
 		return __ScaledDigits.create(__withoutTrailingZeros(prefix), scale: scale)
@@ -1708,7 +1697,7 @@ end '__roundedToLength'
 
 // Does the tail past `kept` digits round the prefix UP? Above half rounds up, below half rounds
 // down, and an exact half goes to the even last kept digit.
-function __roundsUp(digits DigitString, kept DigitCount) returns bool
+function __roundsUp(digits DigitString, kept ElementIndex) returns bool
 	let first = try digits.get(kept) otherwise panic("__roundsUp: kept < digits.count() by caller's guard but get({kept}) failed")
 
 	if first != __HalfwayDigit 'notHalfway'
@@ -1777,17 +1766,17 @@ function __fixedDisplay(digits DigitString, scale DecimalPointScale) returns Str
 		return "0.{__repeatedText(__ZeroDigitText, count: (-scale) as RepeatCount)}{__digitText(digits)}"
 	end 'leadingZeros'
 
-	if scale >= digits.count() 'trailingZeros'
-		return "{__digitText(digits)}{__repeatedText(__ZeroDigitText, count: (scale - digits.count()) as RepeatCount)}"
+	if scale >= digits.count() as DecimalPointScale 'trailingZeros'
+		return "{__digitText(digits)}{__repeatedText(__ZeroDigitText, count: (scale - digits.count() as DecimalPointScale) as RepeatCount)}"
 	end 'trailingZeros'
 
-	return "{__digitText(__digitSlice(digits, start: 0, endIndex: scale as DigitCount))}.{__digitText(__digitSlice(digits, start: scale as DigitCount, endIndex: digits.count()))}"
+	return "{__digitText(__digitSlice(digits, start: 0, endIndex: scale as ElementIndex))}.{__digitText(__digitSlice(digits, start: scale as ElementIndex, endIndex: digits.count()))}"
 end '__fixedDisplay'
 
 // A slice of a digit string whose bounds the caller has already established. Named so the four
 // display sites do not each carry their own `otherwise panic`.
-function __digitSlice(digits DigitString, start DigitCount, endIndex DigitCount) returns DigitString
-	return try digits.slice(start as ElementIndex, endIndex: endIndex as ElementIndex) otherwise panic("__digitSlice: [{start}, {endIndex}) is not inside a {digits.count()}-digit string — the caller's bound is wrong")
+function __digitSlice(digits DigitString, start ElementIndex, endIndex ElementIndex) returns DigitString
+	return try digits.slice(start, endIndex: endIndex) otherwise panic("__digitSlice: [{start}, {endIndex}) is not inside a {digits.count()}-digit string — the caller's bound is wrong")
 end '__digitSlice'
 
 // How many times a fill unit is repeated: a run of zeros inside a number, or the padding of a
@@ -1927,7 +1916,7 @@ end '__floatIsNan'
 // straddle one, so a whole number comes back without one and needs the suffix; every other shape
 // already carries a point (a `scale <= 0` value is written `0.<zeros><digits>`).
 function __float_fixedText(digits DigitString, scale DecimalPointScale) returns String
-	if scale >= digits.count() 'wholeNumber'
+	if scale >= digits.count() as DecimalPointScale 'wholeNumber'
 		return "{__fixedDisplay(digits, scale: scale)}{__FloatFractionSuffix}"
 	end 'wholeNumber'
 
@@ -2014,7 +2003,7 @@ function __float_roundedToDecimals(magnitude ParsedInt, precision DecimalPrecisi
 		return __zeroScaledDigits()
 	end 'atTheLastPlace'
 
-	return __roundedToLength(exact.digits, kept: cut as DigitCount, scale: exact.scale)
+	return __roundedToLength(exact.digits, kept: cut as ElementIndex, scale: exact.scale)
 end '__float_roundedToDecimals'
 
 // Zero, scaled so `__fixedPrecisionText` finds its one digit entirely LEFT of the point — which is
@@ -2030,7 +2019,7 @@ end '__zeroScaledDigits'
 function __fixedPrecisionText(rounded __ScaledDigits, precision DecimalPrecision) returns String
 	let written = __fixedDisplay(rounded.digits, scale: rounded.scale)
 
-	if rounded.scale >= rounded.digits.count() 'noFractionWritten'
+	if rounded.scale >= rounded.digits.count() as DecimalPointScale 'noFractionWritten'
 		if precision == 0 'wholeNumber'
 			return written
 		end 'wholeNumber'
@@ -2038,7 +2027,7 @@ function __fixedPrecisionText(rounded __ScaledDigits, precision DecimalPrecision
 		return "{written}.{__repeatedText(__ZeroDigitText, count: precision as RepeatCount)}"
 	end 'noFractionWritten'
 
-	let placesWritten = rounded.digits.count() - rounded.scale
+	let placesWritten = rounded.digits.count() as DecimalPointScale - rounded.scale
 	return "{written}{__repeatedText(__ZeroDigitText, count: ((precision as DecimalPointScale) - placesWritten) as RepeatCount)}"
 end '__fixedPrecisionText'
 

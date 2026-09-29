@@ -80,7 +80,7 @@ function main() returns ExitCode
 	// Runtime-valued, so neither the call nor the branch folds away and the panic path
 	// survives into the emitted code where the golden can record it. A spec case runs with
 	// no arguments, so this is 1.
-	return tail(CommandLine.args().count())
+	return tail(CommandLine.args().count() as Count)
 end 'main'
 ```
 ```exitcode

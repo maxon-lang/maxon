@@ -177,14 +177,14 @@ function rungsNode(doc JsonDoc, results RungResultArray, trend LoggedMemory, byt
 	return doc.add(JsonNode.arrayNode(items))
 end 'rungsNode'
 
-function addMemoryDeltas(doc JsonDoc, keys StringArray, children JsonNodeIdArray, result RungResult, rung LadderIndex, trend LoggedMemory, bytes ByteDelta)
+function addMemoryDeltas(doc JsonDoc, keys StringArray, children JsonNodeIdArray, result RungResult, rung ElementIndex, trend LoggedMemory, bytes ByteDelta)
 	match trend 'm'
 		absent then return
 		present(_, _, _, allocs, loggedBytes) then addLoggedDeltas(doc, keys: keys, children: children, result: result, rung: rung, loggedAllocs: allocs, loggedBytes: loggedBytes, bytes: bytes)
 	end 'm'
 end 'addMemoryDeltas'
 
-function addLoggedDeltas(doc JsonDoc, keys StringArray, children JsonNodeIdArray, result RungResult, rung LadderIndex, loggedAllocs AllocCountArray, loggedBytes ByteCountArray, bytes ByteDelta)
+function addLoggedDeltas(doc JsonDoc, keys StringArray, children JsonNodeIdArray, result RungResult, rung ElementIndex, loggedAllocs AllocCountArray, loggedBytes ByteCountArray, bytes ByteDelta)
 	let beforeAllocs = try loggedAllocs.get(rung) otherwise 'notLogged'
 		// This run climbed further than the logged one. The extra rungs have no past, and saying so by
 		// omission is exactly right.

@@ -232,7 +232,7 @@ end 'main'
 42
 ```
 
-When `// --- file:` markers are present, each section is written to a separate temporary file during compilation. The files are compiled together as a multi-file project. Error messages in `maxoncstderr` blocks use just the filename (not the full path):
+When `// --- file:` markers are present, each section is written to a separate temporary file during compilation. The files are compiled together as a multi-file project. Error messages in `maxoncstderr` blocks name the location as `<fragment>:line:column`, whichever file it is in:
 
 ```maxon
 // --- file: helper.maxon
@@ -246,7 +246,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: main.maxon:2:10: function 'privateHelper' is not exported
+error E3008: <fragment>:2:10: function 'privateHelper' is not exported
 ```
 
 When no `// --- file:` markers are present, behavior is unchanged (single-file test).

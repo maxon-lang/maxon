@@ -440,7 +440,7 @@ function main() returns ExitCode
 	let popped = try arr.remove(arr.count() - 1) otherwise 'err'
 		return 99
 	end 'err'
-	return arr.count() + popped.id - popped.id
+	return (arr.count() as Integer) + popped.id - popped.id
 end 'main'
 ```
 ```exitcode
@@ -623,7 +623,7 @@ function main() returns ExitCode
 	let removed = try arr.remove(1) otherwise 'err'
 		return 99
 	end 'err'
-	return removed.n + arr.count()
+	return removed.n + (arr.count() as Integer)
 end 'main'
 ```
 ```exitcode

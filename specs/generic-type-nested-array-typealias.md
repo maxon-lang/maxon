@@ -1741,7 +1741,7 @@ releases both. A missing retain frees it twice; an unpaired one leaks it.
 <!-- test: push-borrowed-opaque-element-takes-a-reference -->
 ```maxon
 typealias ExitCode = int(0 to 125)
-typealias Count = int(0 to u64.max)
+typealias Count = int(0 to u64.max) implements ElementIndex
 
 type Container uses Element
 	typealias ElementArray = Array with Element
@@ -1904,7 +1904,7 @@ gap that made the old case uncallable, and it is a TYPE gap rather than an owner
 <!-- test: push-for-element-into-second-opaque-array -->
 ```maxon
 typealias ExitCode = int(0 to 125)
-typealias Count = int(0 to u64.max)
+typealias Count = int(0 to u64.max) implements ElementIndex
 
 type Container uses Element
 	export typealias ElementArray = Array with Element
@@ -2924,7 +2924,7 @@ records rather than one, and a doubled release faults on the poison byte.
 <!-- test: a-borrowed-opaque-element-forwarded-to-a-storing-sibling-is-referenced -->
 ```maxon
 typealias ExitCode = int(0 to 125)
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 
 type GHolder uses T
 	typealias TArray = Array with T

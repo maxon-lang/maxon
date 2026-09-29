@@ -532,7 +532,7 @@ end 'over'
 function main() returns ExitCode
 	var a = WideArray.create()
 	a.push(7)
-	return over(a.count())
+	return over(a.count() as Wide)
 end 'main'
 ```
 ```exitcode
@@ -558,7 +558,7 @@ end 'over'
 function main() returns ExitCode
 	var a = WideArray.create()
 	a.push(7)
-	let n = a.count()
+	let n = a.count() as Wide
 	return over(n)
 end 'main'
 ```

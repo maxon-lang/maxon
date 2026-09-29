@@ -16,7 +16,7 @@ test 'a program that does not compile is refused and leaves no build'
 	let staged = stageCase(CompileErrorCaseLabel, fixture: BrokenFixtureName)
 	let run = runProgram(staged, program: stagedMain(staged))
 
-	let observedExit = run.exitCode() as AssertedInt
+	let observedExit = run.exitCode()
 	Expect.equal(observedExit, expected: 1, message: "`maxon {ExecuteCommandName}` did not fail for a program that does not compile. It said: {run.stdout}{run.stderr}")
 
 	let observedStdout = withoutCarriageReturns(run.stdout)
@@ -24,6 +24,6 @@ test 'a program that does not compile is refused and leaves no build'
 
 	Expect.contains(withoutCarriageReturns(run.stderr), needle: DiagnosticWord, message: "the refusal said nothing on stderr, so nothing tells the caller why their program did not run")
 
-	let leftBehind = slotExecutables(staged).count() as AssertedInt
+	let leftBehind = slotExecutables(staged).count()
 	Expect.equal(leftBehind, expected: 0, message: "a failed compile left a binary under {staged.cache.toString()}. Whatever is there is not a build of this program, and a later run that found it would run it.")
 end 'a program that does not compile is refused and leaves no build'

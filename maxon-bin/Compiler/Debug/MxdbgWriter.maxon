@@ -224,7 +224,7 @@ export type MxdbgWriter
 				self.stringPool.push(b)
 			end 'eachByte'
 
-			let slice = MxdbgPoolSlice.create(offset, length: (self.stringPool.count() - offset) as MxdbgIndex)
+			let slice = MxdbgPoolSlice.create(offset, length: self.stringPool.count() as MxdbgIndex - offset)
 			self.interned.upsert(text, value: slice)
 
 			return slice
@@ -304,7 +304,7 @@ export type MxdbgWriter
 	end 'addConstantWord'
 
 	export function addInlineRange(codeStart MxdbgCodeOffset, codeEnd MxdbgCodeOffset, site MxdbgIndex)
-		if site >= self.inlineSites.count() 'noSuchSite'
+		if site >= self.inlineSites.count() as MxdbgIndex 'noSuchSite'
 			panic("MxdbgWriter.addInlineRange: range [0x{codeStart:x}, 0x{codeEnd:x}) names site {site} of {self.inlineSites.count()} — every site is added before the ranges under it")
 		end 'noSuchSite'
 
@@ -547,14 +547,14 @@ export type MxdbgWriter
 	end 'firstRowAtOrPast'
 
 	function requireAggregateWindowFits(local MxdbgLocalRecord, at ElementIndex)
-		let described = try self.types.get(local.typeId as ElementIndex) otherwise panic("MxdbgWriter: local {at} is a folded aggregate of type {local.typeId}, which is past this file's {self.types.count()} type records")
+		let described = try self.types.get(local.typeId) otherwise panic("MxdbgWriter: local {at} is a folded aggregate of type {local.typeId}, which is past this file's {self.types.count()} type records")
 		let words = mxdbgFoldedAggregateWordCount(described.kind, fieldCount: described.fieldCount)
 
 		if words == 0 'notAnAggregateType'
 			panic("MxdbgWriter: local {at} is a folded aggregate described as '{String.from(self.poolBytes(described.name))}', a {mxdbgTypeKindName(described.kind)} — only a struct and a union have fields for the constant words to belong to")
 		end 'notAnAggregateType'
 
-		if local.locValue < 0 or (local.locValue as MxdbgIndex) + words > self.constWords.count() 'windowPastTheSection'
+		if local.locValue < 0 or (local.locValue as MxdbgIndex) + words > self.constWords.count() as MxdbgIndex 'windowPastTheSection'
 			panic("MxdbgWriter: local {at} names constant words [{local.locValue}, {local.locValue} + {words}), which is outside the {self.constWords.count()} this file holds — a reader would fold whatever followed the section into the value")
 		end 'windowPastTheSection'
 	end 'requireAggregateWindowFits'

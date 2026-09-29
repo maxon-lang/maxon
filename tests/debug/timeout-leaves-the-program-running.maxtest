@@ -11,15 +11,15 @@ test 'a timed-out run leaves the program running, and the session close still re
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
-	Expect.equal(eventsOfKind(events, kind: TimeoutEventName).count() as AssertedInt, expected: 1, message: "the `{RunCommand}` must answer one `{TimeoutEventName}` over a program that never stops and never ends. It printed: {renderedRows(eventKinds(events))}. {said}")
-	Expect.equal(eventsOfKind(events, kind: ExitEventName).count() as AssertedInt, expected: 0, message: "a timeout is not an exit — a session that gave up waiting must not claim the program ended. {said}")
+	Expect.equal(eventsOfKind(events, kind: TimeoutEventName).count(), expected: 1, message: "the `{RunCommand}` must answer one `{TimeoutEventName}` over a program that never stops and never ends. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(eventsOfKind(events, kind: ExitEventName).count(), expected: 0, message: "a timeout is not an exit — a session that gave up waiting must not claim the program ended. {said}")
 
 	let stops = eventsOfKind(events, kind: StopEventName)
-	Expect.equal(stops.count() as AssertedInt, expected: 1, message: "⭐⭐ THE PROOF THAT THE TIMEOUT DID NOT KILL ANYTHING. A `{PauseCommand}` answered AFTER a `{TimeoutEventName}` is a live process the driver still holds: the session is in its running state, where the driver is watching for a stop, and `{ContinueCommand}` would re-wait. A dead debuggee answers nothing at all. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(stops.count(), expected: 1, message: "⭐⭐ THE PROOF THAT THE TIMEOUT DID NOT KILL ANYTHING. A `{PauseCommand}` answered AFTER a `{TimeoutEventName}` is a live process the driver still holds: the session is in its running state, where the driver is watching for a stop, and `{ContinueCommand}` would re-wait. A dead debuggee answers nothing at all. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let stopped = eventAt(stops, index: 0)
 	Expect.equal(textOf(stopped, node: stopped.root, key: ReasonKey), expected: PauseStopReason, message: "the stop after the timeout is the pause that was asked for. {said}")
-	Expect.equal(session.exitCode() as AssertedInt, expected: TimedOutSessionExitCode, message: "a session that timed out at any point is a failed one. {said}")
+	Expect.equal(session.exitCode(), expected: TimedOutSessionExitCode, message: "a session that timed out at any point is a failed one. {said}")
 
 	var reaped = true
 

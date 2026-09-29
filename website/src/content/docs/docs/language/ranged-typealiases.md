@@ -73,13 +73,58 @@ end 'main'
 - Casting a value to its own alias is **E3010** (`unneeded cast: 'Age' already fits in 'Age'`).
 - A value with **no** alias fits any alias of its kind: a literal, a counted-loop counter, a `var`
   initialized from a literal, the raw value of a payload-free enum case. A named value also fits an
-  unnamed slot. Only two *different* names conflict.
+  unnamed slot. Two *different* names conflict unless one implements the other (next section).
 - The same alias name declared over the same range in two files is one type.
+- An `Array` is indexed by the standard library's `ElementIndex`: `get`, `set` and `resize` take one and
+  `count()` returns one. The index must be an `ElementIndex` or an alias that implements it; any other
+  alias, or a non-integer such as a `String`, is **E3005** — cast it, or declare it `implements ElementIndex`.
+  A program's own array record that declares `get`, `set` or `resize` with a first parameter that is not an
+  integer alias has an ordinary method: the call is served from that declaration, not the array surface.
 
 **`return` converts.** `return x` in a function declared `returns T` behaves as `return x as T` — the one
 implicit conversion between aliases. A widening return emits no check, a narrowing one keeps its check,
 and `main` may return any integer alias without spelling `ExitCode`. A different struct, a union where a
 scalar is declared, or a lossy float where an integer is declared is still refused.
+
+## Subtypes With `implements`
+
+A ranged alias may name a parent alias after its range. It is then a **subtype** of the parent, and of every
+alias the parent implements:
+
+```maxon
+typealias BlockId = int(0 to u64.max) implements ElementIndex
+typealias LoopHead = int(0 to u64.max) implements BlockId
+typealias VarId = int(0 to u64.max) implements ElementIndex
+typealias Row = int(0 to 1000)
+typealias RowArray = Array with Row
+
+function takesBlock(b BlockId) returns BlockId
+	return b
+end 'takesBlock'
+
+function main() returns ExitCode
+	var rows = RowArray.create()
+	rows.push(4)
+	rows.push(9)
+	let head = 1 as LoopHead
+	let r = try rows.get(head) otherwise 0    // a LoopHead is an ElementIndex
+	print("{r} {takesBlock(head)}\n")          // 9 1
+	// takesBlock(3 as VarId)                 // E3005: expected 'BlockId', got 'VarId'
+	return 0
+end 'main'
+```
+
+- A subtype goes wherever an ancestor is declared, with no cast. Casting it to an ancestor is **E3010**.
+- The relation is one way: an ancestor value needs a cast to become the subtype, and that cast keeps its
+  run-time range check. Two subtypes of one parent are two different types.
+- The subtype's range lies inside the parent's, over the same primitive and signedness (**E3178**). Its own
+  range is what its values are checked against.
+- A parent is a ranged typealias (**E2003** otherwise), and may be qualified (`typealias Id = int(0 to 9)
+  implements shapes.Index`). A chain that returns to itself is **E3091**.
+- `implements` applies to `int` and `float` ranges. An alias of an alias, `typealias X = Y`, is **E2015**.
+
+**Joins.** The arms of a `match` or a ternary that give two different aliases have the type of their nearest
+common ancestor; arms with no common ancestor are refused.
 
 ## Construction
 
@@ -119,8 +164,16 @@ Write `value as Alias` to convert a value of another alias.
 ## Arithmetic
 
 Arithmetic keeps the alias of its operands. Two operands of one alias give that alias; an unnamed operand
-(a literal, a loop counter) adopts the named one; two different aliases are **E3005** until one side is
-cast. The same rule governs comparisons. A shift takes the alias of its left operand.
+(a literal, a loop counter) adopts the named one, and so does an ancestor (`block + offset` over a
+`BlockId` and an `ElementIndex` is a `BlockId`); two aliases with no common ancestor are **E3005** until
+one side is cast. The same rule governs comparisons. A shift takes the alias of its left operand.
+
+Two subtypes of one parent make a *mixed* expression. It lands in any destination one of its operands'
+aliases satisfies — a parameter, a field, an `otherwise` or `match` merge — computed into a temporary of the
+destination's alias, so the result is range-checked there. Anywhere else its type is the operands' nearest
+common ancestor, and a diagnostic names that ancestor. At an overloaded call each operand's alias counts:
+`show(block + varId)` against `show(b BlockId)` and `show(v VarId)` is **E3007**, and the candidate list
+names the aliases (`Candidates: (b BlockId), (v VarId)`).
 Negating a signed alias keeps the alias; negating an unsigned one gives an unnamed value.
 
 ```maxon

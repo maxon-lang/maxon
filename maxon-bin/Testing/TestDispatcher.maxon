@@ -62,33 +62,19 @@ let MaxonTestEntryFileName = "__maxon_test_entry.maxon"
 // sentence naming the limit rather than a range violation inside generated text nobody wrote.
 let MaxTestsPerRun = 1000000
 
-// A test's position in the WHOLE run. This — never its prose name — is what the binary reports and what a
-// selection names, so no author-controlled text ever reaches the wire and no test can forge another's
-// report by being called something.
-//
-// ⚠ **WIDE, WITH THE CEILING ENFORCED AT THE ONE PLACE INDICES ARE MINTED (`groupTestsByFile`)** — the
-// arrangement `Parser.ParamCount` and `StdDialect.MaxAbiArgs` already have, and for the same reason: a
-// ranged alias's bounds must be literals, so a narrow alias here would be `MaxTestsPerRun` written down a
-// second time, free to drift from the one the generated source carries.
-export typealias TestRunIndex = int(0 to u64.max)
-
 // A list of run indices — what a `--select=` value is rendered from, and what one process launch is
 // asked to run. Its own alias because the ORDER is the run's declaration order rather than an
 // incidental one: it is what the report reads back, index for index.
-export typealias TestRunIndexArray = Array with TestRunIndex
-
-// How many test FILES one run compiles dispatchers for. Its own alias because it is the ordinal that makes
-// a runner name unique, not a loop counter.
-typealias TestFileOrdinal = int(0 to u64.max)
+export typealias TestRunIndexArray = Array with ElementIndex
 
 // A discovered test paired with its position in the whole run. The pair rather than a bare index because
 // the generated call needs the symbol and the generated guard needs the index, and splitting them across
 // two parallel arrays is one fact stored twice.
 export type IndexedTest
-	export let index as TestRunIndex
+	export let index as ElementIndex
 	export let test as DiscoveredTest
 
-	export static function create(index TestRunIndex, test DiscoveredTest) returns IndexedTest
+	export static function create(index ElementIndex, test DiscoveredTest) returns IndexedTest
 		return Self{index: index, test: test}
 	end 'create'
 end 'IndexedTest'
@@ -201,7 +187,7 @@ export function groupTestsByFile(tests DiscoveredTestArray) returns TestFileGrou
 
 	// The group the PREVIOUS test landed in. 0 before there is one, which names no group and so takes the
 	// scan — see `groupHoldsFile`, which answers FALSE for an ordinal nothing occupies.
-	var recent = 0 as TestFileOrdinal
+	var recent = 0 as ElementIndex
 
 	for (testCursor, test) in tests.withIterator() 'eachTest'
 		let ordinal = groupOrdinalFor(groups, file: test.file, recent: recent)
@@ -210,7 +196,7 @@ export function groupTestsByFile(tests DiscoveredTestArray) returns TestFileGrou
 		// MUTATED in place rather than assembled and then pushed, which is what makes this ONE pass: a
 		// member is appended the moment it is read, in the order it was read.
 		var group = try groups.get(ordinal) otherwise panic("groupTestsByFile: ordinal {ordinal} names no group — `groupOrdinalFor` either found one or appended one, so it cannot hand back a position nothing occupies")
-		group.tests.push(IndexedTest.create(testCursor.index() as TestRunIndex, test: test))
+		group.tests.push(IndexedTest.create(testCursor.index(), test: test))
 	end 'eachTest'
 
 	return groups
@@ -223,20 +209,20 @@ end 'groupTestsByFile'
 // ⚠ **`recent` BUYS THE COST AND NEVER THE ANSWER** (see the caller's header). A run of tests from one file
 // answers here in one comparison; a file transition falls through to the scan, which is right whether or
 // not the roster arrived grouped.
-function groupOrdinalFor(groups TestFileGroupArray, file FilePath, recent TestFileOrdinal) returns TestFileOrdinal
+function groupOrdinalFor(groups TestFileGroupArray, file FilePath, recent ElementIndex) returns ElementIndex
 	if groupHoldsFile(groups, ordinal: recent, file: file) 'theSameFileAsTheTestBefore'
 		return recent
 	end 'theSameFileAsTheTestBefore'
 
 	for (groupCursor, group) in groups.withIterator() 'eachGroup'
 		if group.file.equals(file) 'thisFile'
-			return groupCursor.index() as TestFileOrdinal
+			return groupCursor.index()
 		end 'thisFile'
 	end 'eachGroup'
 
 	// The ORDINAL is the group's position, which is what makes the runner name unique — see
 	// `MaxonTestFileRunnerPrefix`.
-	let ordinal = groups.count() as TestFileOrdinal
+	let ordinal = groups.count()
 	groups.push(TestFileGroup.create(file, runnerName: "{MaxonTestFileRunnerPrefix}{ordinal}", tests: IndexedTestArray.create()))
 	return ordinal
 end 'groupOrdinalFor'
@@ -244,7 +230,7 @@ end 'groupOrdinalFor'
 // Does the group at `ordinal` cover `file`? FALSE for an ordinal naming no group, which is what the FIRST
 // test of a run asks — an absent group is "not this file" rather than an error, because the caller's next
 // move is the scan either way.
-function groupHoldsFile(groups TestFileGroupArray, ordinal TestFileOrdinal, file FilePath) returns bool
+function groupHoldsFile(groups TestFileGroupArray, ordinal ElementIndex, file FilePath) returns bool
 	let group = try groups.get(ordinal) otherwise return false
 	return group.file.equals(file)
 end 'groupHoldsFile'

@@ -526,11 +526,13 @@ An explicit `try` covers its own target call only. A throwing call in that targe
 separate call, so its foreign error goes to the test body's implied handler.
 ```maxon
 // --- file: suite.maxtest
+typealias Tally = int(i64.min to i64.max)
+
 enum ApiError implements Error
 	notFound
 end 'ApiError'
 
-function count(hit bool) returns AssertedInt throws ApiError
+function count(hit bool) returns Tally throws ApiError
 	if not hit 'miss'
 		throw ApiError.notFound
 	end 'miss'
@@ -557,11 +559,13 @@ division. The throwing call that is an OPERAND of that division is a separate ca
 error goes to the test body's implied handler.
 ```maxon
 // --- file: suite.maxtest
+typealias Tally = int(i64.min to i64.max)
+
 enum ApiError implements Error
 	notFound
 end 'ApiError'
 
-function count(hit bool) returns AssertedInt throws ApiError
+function count(hit bool) returns Tally throws ApiError
 	if not hit 'miss'
 		throw ApiError.notFound
 	end 'miss'
@@ -569,7 +573,7 @@ function count(hit bool) returns AssertedInt throws ApiError
 	return 12
 end 'count'
 
-function divisor() returns AssertedInt
+function divisor() returns Tally
 	return 4
 end 'divisor'
 
@@ -602,7 +606,7 @@ test 'counts up from a peeked bound'
 		total = total + i
 	end 'each'
 
-	Expect.equal(total as AssertedInt, expected: 5)
+	Expect.equal(total, expected: 5)
 end 'counts up from a peeked bound'
 
 // --- file: main.maxon
@@ -643,7 +647,7 @@ test 'counts up from an awaited bound'
 		total = total + i
 	end 'each'
 
-	Expect.equal(total as AssertedInt, expected: 9)
+	Expect.equal(total, expected: 9)
 end 'counts up from an awaited bound'
 
 // --- file: main.maxon
@@ -735,7 +739,7 @@ test 'walks the chosen items'
 		total = total + x
 	end 'each'
 
-	Expect.equal(total as AssertedInt, expected: 3)
+	Expect.equal(total, expected: 3)
 end 'walks the chosen items'
 
 // --- file: main.maxon
@@ -774,7 +778,7 @@ end 'last'
 
 test 'iterates a range built from throwing bounds'
 	let it = try (first(true) upto last(true)).createIterator()
-	Expect.equal(it.current() as AssertedInt, expected: 2)
+	Expect.equal(it.current(), expected: 2)
 end 'iterates a range built from throwing bounds'
 
 // --- file: main.maxon
@@ -808,7 +812,7 @@ test 'counts up from a stored level'
 		total = total + i
 	end 'each'
 
-	Expect.equal(total as AssertedInt, expected: 5)
+	Expect.equal(total, expected: 5)
 end 'counts up from a stored level'
 
 // --- file: main.maxon
@@ -835,7 +839,7 @@ test 'an empty traversal runs no trips'
 		total = total + value
 	end 'each'
 
-	Expect.equal(total as AssertedInt, expected: 0)
+	Expect.equal(total, expected: 0)
 end 'an empty traversal runs no trips'
 
 // --- file: main.maxon
@@ -862,7 +866,7 @@ test 'an empty parenthesized traversal runs no trips'
 		total = total + value
 	end 'each'
 
-	Expect.equal(total as AssertedInt, expected: 0)
+	Expect.equal(total, expected: 0)
 end 'an empty parenthesized traversal runs no trips'
 
 // --- file: main.maxon
@@ -901,7 +905,7 @@ test 'counts up from a cast bound'
 		total = total + i
 	end 'each'
 
-	Expect.equal(total as AssertedInt, expected: 9)
+	Expect.equal(total, expected: 9)
 end 'counts up from a cast bound'
 
 // --- file: main.maxon
@@ -1019,7 +1023,7 @@ end 'items'
 
 test 'rebrands the fetched items'
 	let s = try (items(true) as Scores) otherwise Scores.create()
-	Expect.equal(s.count() as AssertedInt, expected: 2)
+	Expect.equal(s.count(), expected: 2)
 end 'rebrands the fetched items'
 
 // --- file: main.maxon
@@ -1044,7 +1048,7 @@ typealias Wide = int(-1000000000000 to 1000000000000)
 test 'divides by a counted value'
 	let d = IntArray.create().count()
 	let n = try ((8 / d) as Wide) otherwise 5
-	Expect.equal(n as AssertedInt, expected: 5)
+	Expect.equal(n, expected: 5)
 end 'divides by a counted value'
 
 // --- file: main.maxon
@@ -1072,7 +1076,7 @@ test 'an empty rebranded traversal runs no trips'
 		total = total + x
 	end 'each'
 
-	Expect.equal(total as AssertedInt, expected: 0)
+	Expect.equal(total, expected: 0)
 end 'an empty rebranded traversal runs no trips'
 
 // --- file: main.maxon

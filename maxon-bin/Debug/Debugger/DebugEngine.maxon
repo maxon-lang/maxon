@@ -540,7 +540,7 @@ export type DebugEngine implements DebugMemory
 		let start = address - self.cacheBase
 
 		for i in 0 upto length 'eachByte'
-			taken.push(try self.cacheBytes.get(start + (i as DebugAddress)) otherwise panic("DebugEngine.slicedCache: the caller asked a span the cache was just proven to hold"))
+			taken.push(try self.cacheBytes.get((start + (i as DebugAddress)) as ElementIndex) otherwise panic("DebugEngine.slicedCache: the caller asked a span the cache was just proven to hold"))
 		end 'eachByte'
 
 		return taken
@@ -574,7 +574,7 @@ export type DebugEngine implements DebugMemory
 
 		for breakpoint in self.breakpoints 'eachBreakpoint'
 			if breakpoint.address >= address and breakpoint.address < address + (bytes.count() as DebugAddress) 'insideTheWindow'
-				try held.set(breakpoint.address - address, value: breakpoint.originalByte) otherwise panic("DebugEngine.holdInCache: the planted address was just proven to be inside the window")
+				try held.set((breakpoint.address - address) as ElementIndex, value: breakpoint.originalByte) otherwise panic("DebugEngine.holdInCache: the planted address was just proven to be inside the window")
 			end 'insideTheWindow'
 		end 'eachBreakpoint'
 

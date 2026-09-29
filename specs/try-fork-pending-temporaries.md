@@ -84,7 +84,7 @@ end 'Conf'
 function main() returns ExitCode
 	var c = Conf.create(3)
 	c.argv.push("a")
-	return c.argv.count() + c.n as ExitCode
+	return (c.argv.count() as ExitCode) + c.n as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -259,7 +259,7 @@ function consume(argv StrArray, n Integer) returns Integer throws Boom
 	if n > 100 'big'
 		throw Boom.bad
 	end 'big'
-	return argv.count() + n
+	return (argv.count() as Integer) + n
 end 'consume'
 
 function run(n Integer) returns Integer throws Boom
@@ -299,7 +299,7 @@ function consume(argv StrArray, n Integer) returns Integer throws Boom
 	if n > 100 'big'
 		throw Boom.bad
 	end 'big'
-	return argv.count() + n
+	return (argv.count() as Integer) + n
 end 'consume'
 
 function run(limit Integer) returns Integer
